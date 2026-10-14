@@ -28,7 +28,7 @@ export function buildRunArgs(entry, projectRoot, {task, mode, sessionId, model})
     args.push('--resume-chat', sessionId);
   }
   if (model != null && model !== '') {
-    if (typeof model !== 'string' || !/^[\w./:-]{1,120}$/.test(model)) throw new TypeError('Invalid model argument');
+    if (typeof model !== 'string' || !/^[\w./:+-]{1,200}$/.test(model)) throw new TypeError('Invalid model argument');
     args.push('--model', model);
   }
   args.push('--', task);

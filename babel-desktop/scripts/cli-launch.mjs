@@ -4,6 +4,7 @@ import {dirname, isAbsolute, join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {bundledEnvironment} from '../app/native/runtime.mjs';
 import {resolvePackagedEngine} from '../app/native/engine-manager.mjs';
+import {applyProviderRoute} from '../app/native/provider-routing.mjs';
 
 const runtime = dirname(fileURLToPath(import.meta.url));
 const args = process.argv.slice(2);
@@ -32,6 +33,8 @@ try {
   entryPath = bundledEntry;
 }
 
-const child = spawn(nodeExe, [entryPath, ...args], {env: bundledEnvironment(profile), stdio: 'inherit', windowsHide: true, shell: false});
+const env=bundledEnvironment(profile);
+applyProviderRoute(env,env.BABEL_CONFIG_DIR);
+const child = spawn(nodeExe, [entryPath, ...args], {env, stdio: 'inherit', windowsHide: true, shell: false});
 child.on('error', error => { console.error(`Babel CLI could not start: ${error.message}`); process.exitCode = 1; });
 child.on('close', code => { process.exitCode = code ?? 1; });

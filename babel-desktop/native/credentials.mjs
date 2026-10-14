@@ -9,7 +9,7 @@ const PROVIDERS = Object.freeze({
   deepseek: 'DEEPSEEK_API_KEY',
   deepinfra: 'DEEPINFRA_API_KEY',
   openrouter: 'OPENROUTER_API_KEY',
-  opencode: 'OPENCODE_API_KEY',
+  'opencode-go': 'BABEL_OPENCODE_GO_API_KEY',
   ollama: null,
 });
 const FILE_LIMIT = 256 * 1024;

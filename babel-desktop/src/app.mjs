@@ -1,43 +1,39 @@
-import { escapeHtml, contextPercent, normalizeEvent, rememberChange, sessionIdFromResult, validPreview, absorbFileChange, reviewFromResult, liveModelFromResult, liveRequestTokens, toolsFromResult, verifiedStatus } from './core.mjs';
+import { escapeHtml, contextPercent, normalizeEvent, rememberChange, sessionIdFromResult, absorbFileChange, reviewFromResult, liveModelFromResult, liveRequestTokens, toolsFromResult, verifiedStatus } from './core.mjs';
 import { icon } from './icons.mjs';
-import { MODE_OPTIONS, MODEL_OPTIONS, TOOL_OPTIONS, FINDINGS, SOLUTIONS, PREVIEW_FILES, createReference, REFERENCE_PROMPT, REFERENCE_INTRO, REFERENCE_SUMMARY, REFERENCE_TOOLS } from './fixtures.mjs';
+const MODE_OPTIONS=[{id:'chat',label:'Chat',description:'Coding tasks'},{id:'plan',label:'Plan',description:'Read-only planning'},{id:'deep',label:'Deep',description:'Governed workflow'}];
 
 const LOGO = '__LOGO__';
-const STORAGE_KEY = 'babel-north-star-preview-v1';
+const native = window.babelDesktop;
 const $ = selector => document.querySelector(selector);
 const e = escapeHtml;
-let saved = null;
-try { const text = localStorage.getItem(STORAGE_KEY); if (text && text.length < 3000000) saved = JSON.parse(text); } catch {}
-let state = validPreview(saved) ? saved : createReference();
-state.model = MODEL_OPTIONS.includes(state.model) ? state.model : MODEL_OPTIONS[0];
-let transport = 'preview';
+let state={version:1,mode:'chat',model:'',sessions:[{id:'new',title:'New session',messages:[]}],activeId:'new'};
+const transport='live';
 let showAllSessions = false;
 let sessionsVisibleLimit = 8;
 let expandedFolders = new Set(['.']);
 let expandedTools = new Set();
 let activeFile = '';
-let files = structuredClone(PREVIEW_FILES);
-let projectName = 'babel';
-let tools = Object.fromEntries(TOOL_OPTIONS.map(t => [t, true]));
+let files = [];
+let projectName = 'Open a project';
+
 let activeRun = null;
 let toastTimer;
 let focusBeforeDialog = null;
 let nativeInfo = null;
+let connectionError = '';
+let connecting = false;
 let liveModel = '';
 let liveTokens = null;
 let changedFiles = [];
 let updatePhase = '';
 let savedSessionList = {offset: 0, total: 0, limit: 30};
 let configuredRouteLabel = '';
-const native = window.babelDesktop;
-const id = () => crypto.randomUUID ? crypto.randomUUID() : `preview-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+let configuredRoute = null;
+let providerCatalog = [];
+const id = () => crypto.randomUUID ? crypto.randomUUID() : `session-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 const activeSession = () => state.sessions.find(s => s.id === state.activeId) ?? state.sessions[0];
 
-function persist() {
-  if (transport !== 'preview') return;
-  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }
-  catch { toast('Preview history could not be saved in this browser.'); }
-}
+function persist() { /* Durable sessions are owned by the CLI. */ }
 function toast(message) {
   const target = $('#toast');
   target.textContent = message;
@@ -50,7 +46,7 @@ function setMode(mode) {
   if (!MODE_OPTIONS.some(m => m.id === mode)) return;
   if (activeRun) { toast('Wait for the active response before changing modes.'); return; }
   state.mode = mode; persist(); renderControls();
-  announce(`${mode} mode selected${transport === 'preview' ? ' in preview' : ''}.`);
+  announce(`${mode} mode selected.`);
 }
 function renderTabs() {
   $('#top-tabs').innerHTML = MODE_OPTIONS.map(m => `<button class="top-tab ${state.mode === m.id ? 'active' : ''}" data-action="mode" data-mode="${m.id}" aria-pressed="${state.mode === m.id}" title="${m.label} · ${m.description} (Alt+${MODE_OPTIONS.indexOf(m)+1})"><span class="tab-bracket">[ </span>${m.label}<span class="tab-bracket"> ]</span></button>`).join('');
@@ -58,28 +54,31 @@ function renderTabs() {
 function renderControls() {
   renderTabs();
   $('#mode-controls').innerHTML = MODE_OPTIONS.map(m => `<button class="mode-option ${state.mode === m.id ? 'selected' : ''}" data-action="mode" data-mode="${m.id}" aria-pressed="${state.mode === m.id}" ${activeRun ? 'disabled' : ''}><span class="radio-dot"></span><span class="mode-name">${m.label}</span><span class="mode-description">${m.description}</span></button>`).join('');
-  const liveModelLabel = liveModel || configuredRouteLabel || 'Configured route';
-  const models = transport === 'preview' ? MODEL_OPTIONS : [liveModelLabel];
-  $('#model-controls').innerHTML = models.map(m => `<button class="model-option ${(transport === 'live' || state.model === m) ? 'selected' : ''}" data-action="model" data-model="${e(m)}" aria-pressed="${transport === 'live' || state.model === m}" ${transport === 'live' ? 'disabled' : ''} title="${transport === 'preview' ? 'Reference model option; no provider is connected' : 'Change the effective route in Configure provider; tool toggles do not grant permissions'}"><span class="radio-dot"></span>${e(m)}</button>`).join('');
-  $('.more-models').hidden = transport === 'live';
+  const selected=providerCatalog.flatMap(provider=>provider.routes??[]).find(route=>route.id===(state.model||configuredRoute?.model));
+  const liveModelLabel = liveModel || selected?.label || configuredRouteLabel || 'Choose provider';
+  const liveRoutes = providerCatalog.find(p=>p.id===configuredRoute?.provider)?.routes?.filter(route=>route.enabled!==false) ?? [];
+  const models=liveRoutes.length?liveRoutes:[{id:'',label:configuredRouteLabel||'Choose provider and models'}];
+  $('#model-controls').innerHTML = models.map(m => `<button class="model-option ${(transport === 'live' ? (state.model || configuredRoute?.model)===m.id : state.model===m.id) ? 'selected' : ''}" data-action="model" data-model="${e(m.id)}" aria-pressed="${(state.model || configuredRoute?.model)===m.id}" ${activeRun ? 'disabled' : ''}><span class="radio-dot"></span>${e(m.label)}</button>`).join('');
+  $('.more-models').hidden = false;
+  $('.more-models').textContent = native ? 'Manage provider and models' : 'More models…';
   $('.preview-model-dot').style.background = transport === 'live' ? 'var(--muted)' : '';
-  $('#top-model').textContent = transport === 'preview' ? state.model : liveModelLabel;
-  $('#tool-controls').innerHTML = TOOL_OPTIONS.map(t => `<button class="tool-toggle" role="switch" aria-checked="${transport === 'preview' && tools[t]}" aria-label="${e(t)}${transport === 'preview' ? ' preview state' : ' controlled by Babel'}" data-action="tool" data-tool="${e(t)}" ${transport === 'live' ? 'disabled' : ''} title="${transport === 'preview' ? 'Visual preview only; this is not an execution permission' : 'Babel decides which tools run for this task'}"><span class="status-dot"></span><span>${e(t)}</span><span class="tool-on"><span class="status-dot"></span>${transport === 'live' ? 'CLI' : tools[t] ? 'On' : 'Off'}</span></button>`).join('');
-  const percent = transport === 'preview' ? contextPercent(42318,112000) : null;
+  $('#top-model').textContent = liveModelLabel;
+  $('#tool-controls').innerHTML='<p class="fine-print">Babel requests approval for file changes and commands. Actual tool activity appears in each conversation.</p>';
+  const percent = null;
   $('#top-context').textContent = percent == null ? '—' : `${percent}%`;
   $('#context-value').textContent = percent == null ? '—' : `${percent}%`;
   $('#context-fill').style.width = percent == null ? '0%' : `${percent}%`;
-  $('#context-meter').setAttribute('aria-label', transport === 'preview' ? 'Reference context usage' : 'Context usage not reported by CLI');
+  $('#context-meter').setAttribute('aria-label', 'Context usage not reported by CLI');
   if (percent == null) $('#context-meter').removeAttribute('aria-valuenow'); else $('#context-meter').setAttribute('aria-valuenow',String(percent));
-  $('#token-count').textContent = transport === 'preview' ? '42,318 / 112,000 tokens' : (liveTokens == null ? 'Not reported by CLI' : `${Number(liveTokens).toLocaleString('en-US')} tokens in the latest request`);
-  $('#preview-badge').textContent = transport === 'preview' ? 'REFERENCE PREVIEW' : 'BABEL CLI';
+  $('#token-count').textContent=liveTokens==null?'Not reported by CLI':`${Number(liveTokens).toLocaleString('en-US')} tokens in the latest request`;
+  $('#preview-badge').textContent = 'BABEL CLI';
   renderRuntime();
   renderStatus();
 }
 function shortSha(sha) { return typeof sha === 'string' && sha ? sha.slice(0, 12) : 'unknown'; }
 function runtimeUpdateText(update) {
   const u = update ?? {state:'unchecked'};
-  const name = u.channel === 'release' ? 'Release' : u.channel === 'preview' ? 'Preview' : u.channel === 'stable' ? 'Stable' : u.channel === 'development' ? 'Source' : 'Update';
+  const name = u.channel === 'release' ? 'Release' : u.channel === 'preview' ? 'Development' : u.channel === 'stable' ? 'Stable' : u.channel === 'development' ? 'Source' : 'Update';
   if (u.state === 'available') return `${name}: update available · ${shortSha(u.availableSha)}`;
   if (u.state === 'current') return `${name}: up to date (checked)`;
   if (u.state === 'checking') return `${name}: checking…`;
@@ -117,7 +116,7 @@ function renderRuntime() {
     runtimeRow('Provider', engine.readiness?.provider ?? 'unknown'),
     runtimeRow('Docker', engine.readiness?.docker ?? 'unknown'),
     runtimeRow('Readiness', engine.readiness?.ready ? 'Ready' : 'Not ready'),
-    runtimeRow('Update channel', update.channel === 'preview' ? 'development preview' : update.channel === 'stable' ? 'stable release' : (update.channel ?? 'not set')),
+    runtimeRow('Update channel', update.channel === 'preview' ? 'development build' : update.channel === 'stable' ? 'stable release' : (update.channel ?? 'not set')),
     runtimeRow('Update', runtimeUpdateText(update), update.state === 'available' ? 'warn' : ''),
     runtimeRow('Effective route', configuredRouteLabel || 'Not configured'),
     nativeInfo?.remoteBridge ? runtimeRow('Remote bridge', nativeInfo.remoteBridge.running ? `Active on ${nativeInfo.remoteBridge.url ?? 'loopback'}` : `Stopped (${nativeInfo.remoteBridge.state})`) : '',
@@ -133,21 +132,22 @@ function renderRuntime() {
 }
 function executionBlocked() {
   // A slow or rejected native handshake cannot admit synthetic preview tasks.
-  if (native && !nativeInfo) return true;
-  return nativeInfo?.packaged === true &&
-    (transport !== 'live' || nativeInfo.diagnostics?.ready !== true);
+  if (!native || !nativeInfo || connecting) return true;
+  if(native && !nativeInfo.ready)return true;
+  if(!configuredRoute)return true;
+  return nativeInfo?.packaged === true && nativeInfo.diagnostics?.ready !== true;
 }
 function renderStatus(status) {
   const msg = activeSession().messages.filter(m => m.role === 'assistant').at(-1);
   const s = status ?? (activeRun ? 'running' : msg?.status ?? 'ready');
-  const names = {running:transport === 'preview' ? 'Previewing' : 'Running',failed:'Failed',blocked:'Blocked',cancelled:'Stopped',complete:transport === 'preview' ? 'Preview' : 'Verified',no_change:'No change',unverified:'Unverified',ready:transport === 'preview' ? 'Preview' : 'Ready'};
-  $('#main-status').textContent = names[s] ?? (transport === 'preview' ? 'Preview' : 'Ready');
+  const names={running:'Running',failed:'Failed',blocked:'Blocked',cancelled:'Stopped',complete:'Verified',no_change:'No change',unverified:'Unverified',ready:'Ready'};
+  $('#main-status').textContent = !activeRun&&executionBlocked() ? (!nativeInfo&&!connectionError&&native?'Connecting':'Setup required') : names[s] ?? 'Ready';
   $('#main-status-dot').className = `status-dot ${['failed','blocked'].includes(s) ? s : ''}`;
   $('.status-main').className = `status-main ${['failed','blocked'].includes(s) ? s : ''}`;
   const changedNote = transport === 'live' && changedFiles.length ? ` ${changedFiles.length} changed file${changedFiles.length === 1 ? '' : 's'}.` : '';
   const liveRunning = activeRun?.stopping ? 'Stopping the Babel CLI.' : (messageHasWork(msg) ? `Babel CLI is working on this task.${changedNote}` : 'Starting the Babel CLI.');
-  const detail = transport === 'preview' ? (s === 'running' ? 'Simulated stream · no provider call.' : s === 'failed' ? 'Example failure · no tools executed.' : s === 'cancelled' ? 'Preview stream stopped.' : 'Sample session · no engine connected.') : s === 'running' ? liveRunning : s === 'unverified' ? 'Run ended; verification not established.' : s === 'failed' ? 'See the run details in the conversation.' : s === 'blocked' ? 'Babel is waiting for a decision.' : `Connected to the Babel CLI.${changedNote}`;
-  $('#status-detail').textContent = executionBlocked() ? (transport !== 'live' ? 'Connect to the Babel CLI to browse saved history or run tasks.' : 'Saved history is available. Recheck execution setup before running tasks.') : detail;
+  const detail=s==='running'?liveRunning:s==='unverified'?'Run ended; verification not established.':s==='failed'?'See the run details in the conversation.':s==='blocked'?'Babel is waiting for a decision.':`Connected to the Babel CLI.${changedNote}`;
+  $('#status-detail').textContent = executionBlocked() ? !nativeInfo ? connectionError || (native?'Connecting to the Babel harness…':'Open the installed Babel Desktop app to run tasks.') : !nativeInfo.ready ? 'Open a project to begin. Saved sessions remain available.' : !configuredRoute?'Choose a provider and default model to begin.':nativeInfo.diagnostics?.error || 'Runtime setup needs attention. Open Setup to see what is missing.' : detail;
   $('#send-button').disabled = Boolean(activeRun) || executionBlocked();
   $('#composer-input').disabled = Boolean(activeRun);
   $('.stop-button').hidden = !activeRun;
@@ -156,7 +156,7 @@ function renderStatus(status) {
 function renderSessions() {
   const cap = showAllSessions ? state.sessions.length : Math.max(sessionsVisibleLimit, 8);
   const visible = state.sessions.slice(0, cap);
-  $('#sessions').innerHTML = visible.map(s => `<button class="session-button ${s.id === state.activeId ? 'active' : ''}" data-action="session" data-id="${e(s.id)}" aria-current="${s.id === state.activeId ? 'page' : 'false'}" title="${e(s.title)}${transport === 'preview' ? ' · local preview' : ' · one-shot run history'}"><span>${e(s.title)}</span></button>`).join('');
+  $('#sessions').innerHTML = visible.map(s => `<button class="session-button ${s.id === state.activeId ? 'active' : ''}" data-action="session" data-id="${e(s.id)}" aria-current="${s.id === state.activeId ? 'page' : 'false'}" title="${e(s.title)}${' · Babel session'}"><span>${e(s.title)}</span></button>`).join('');
   const moreOnDisk=savedSessionList.total > state.sessions.filter(s => s.saved).length;
   const canExpandLocal=state.sessions.length > visible.length;
   $('#show-more').hidden = !moreOnDisk && !canExpandLocal && !showAllSessions;
@@ -178,12 +178,6 @@ function renderTree() {
 }
 function toolRows(rows) {
   return `<div class="tool-feed">${rows.map(t => `<div class="tool-item"><button class="tool-row ${e(t.status)}" data-action="expand-tool" data-id="${e(t.id)}" aria-expanded="${expandedTools.has(t.id)}" title="Expand ${e(t.label)}">${icon('chevron')}<span class="tool-label">${t.action ? `<span class="tool-action">${e(t.action)}</span><span class="tool-path">${e(t.path)}</span>` : `<span class="tool-path">${e(t.label)}</span>`}</span><span class="tool-meta"><span>${e(t.meta ?? (t.status === 'running' ? 'running...' : ''))}</span>${t.duration ? `<span class="duration-dot">•</span><span class="duration">${e(t.duration)}</span>` : ''}</span><span class="tool-status ${e(t.status)}">${t.status === 'complete' ? icon('check') : t.status === 'failed' ? icon('close') : ''}</span></button>${expandedTools.has(t.id) ? `<pre class="tool-detail">${e(t.detail ?? 'No additional output was reported.')}</pre>` : ''}</div>`).join('')}</div>`;
-}
-function card(title, symbol, items) {
-  return `<section class="result-card"><h3 class="card-title">${icon(symbol)}${e(title)}</h3><ol>${items.map(x=>`<li>${e(x)}</li>`).join('')}</ol></section>`;
-}
-function referenceMarkup() {
-  return `<article class="message user-message"><div class="message-label">YOU</div><div class="message-body message-text">${e(REFERENCE_PROMPT)}</div></article><article class="message assistant-message reference-answer"><img class="assistant-avatar" src="${LOGO}" alt=""><div class="message-label">BABEL</div><div class="message-body"><div class="message-text">${e(REFERENCE_INTRO)}</div>${toolRows(REFERENCE_TOOLS)}<div class="message-text">${e(REFERENCE_SUMMARY)}</div>${card('KEY FINDINGS','info',FINDINGS)}${card('PROPOSED SOLUTION','wrench',SOLUTIONS)}<p class="closing-message">Would you like me to implement this now?</p></div></article>`;
 }
 function messageHasWork(message) {
   if (!message) return false;
@@ -213,9 +207,9 @@ function assistantBody(m) {
 function messageMarkup(m, index) {
   if (m.role === 'user') return `<article class="message user-message"><div class="message-label">YOU</div><div class="message-body message-text">${e(m.text)}</div></article>`;
   const approval = m.pendingApproval ? `<div class="approval-card"><p>${e(m.pendingApproval)}</p><div class="dialog-actions"><button class="button primary" data-action="approve-run">Allow</button><button class="button" data-action="deny-run">Deny</button></div></div>` : '';
-  const review = m.review?.reasons?.length ? card(m.review.title || 'REVIEW', 'info', m.review.reasons) : '';
+  const review = m.review?.reasons?.length ? `<section class="approval-card"><strong>${e(m.review.title || 'REVIEW')}</strong><ul>${m.review.reasons.map(reason=>`<li>${e(reason)}</li>`).join('')}</ul></section>` : '';
   const evidence = m.result && ['failed','blocked','unverified'].includes(m.status) ? `<details class="raw-result"><summary>CLI result / evidence</summary><pre class="tool-detail">${e(JSON.stringify(m.result,null,2))}</pre></details>` : '';
-  return `<article class="message assistant-message"><img class="assistant-avatar" src="${LOGO}" alt=""><div class="message-label">BABEL</div><div class="message-body">${assistantBody(m)}${review}${approval}${m.status && m.status !== 'running' ? `<div class="message-status ${e(m.status)}">${transport === 'preview' ? 'PREVIEW · ' : ''}${e(({complete:'Response complete',no_change:'No change required',failed:'Run failed',blocked:'Approval or environment action required',cancelled:'Response stopped',unverified:'Run ended · not verified'})[m.status] ?? m.status)}</div>` : ''}${evidence}</div><div class="message-actions"><button data-action="copy-message" data-index="${index}">${icon('copy')} Copy</button></div></article>`;
+  return `<article class="message assistant-message"><img class="assistant-avatar" src="${LOGO}" alt=""><div class="message-label">BABEL</div><div class="message-body">${assistantBody(m)}${review}${approval}${m.status && m.status !== 'running' ? `<div class="message-status ${e(m.status)}">${''}${e(({complete:'Response complete',no_change:'No change required',failed:'Run failed',blocked:'Approval or environment action required',cancelled:'Response stopped',unverified:'Run ended · not verified'})[m.status] ?? m.status)}</div>` : ''}${evidence}</div><div class="message-actions"><button data-action="copy-message" data-index="${index}">${icon('copy')} Copy</button></div></article>`;
 }
 function renderConversation(forceBottom = false, reset = false) {
   const scroller = $('#conversation');
@@ -223,11 +217,11 @@ function renderConversation(forceBottom = false, reset = false) {
   const previousTop = scroller.scrollTop;
   const session = activeSession();
   if (!session.fixture && session.messages.length === 0) {
-    scroller.innerHTML = `<div class="empty-state"><img src="${LOGO}" alt=""><h1>Run. Verify. Understand.</h1><p>${transport === 'preview' ? 'A clear view of your agent’s work.<br>Start a conversation to try the North Star interface.' : 'Babel CLI is connected.<br>Send a task and the reply, tool rows, and status fill in here.'}</p><div class="empty-actions"><button data-action="draft" data-text="Investigate the review timeout behavior.">Investigate a problem</button><button data-action="draft" data-text="Review the current project architecture.">Explore the project</button></div><div class="preview-note">${icon('info')}${transport === 'preview' ? 'Interactive preview · no model or tool execution' : 'Live session · Babel CLI owns the work'}</div></div>`;
+    scroller.innerHTML = `<div class="empty-state"><img src="${LOGO}" alt=""><h1>Run. Verify. Understand.</h1><p>${nativeInfo?.ready?'Send a task to Babel.<br>Responses, tool activity, and verification appear here.':'Open a project and choose your provider to begin.'}</p><div class="empty-actions"><button data-action="draft" data-text="Investigate the review timeout behavior.">Investigate a problem</button><button data-action="draft" data-text="Review the current project architecture.">Explore the project</button></div><div class="preview-note">${icon('info')}${'Babel CLI · permissions and verification built in'}</div></div>`;
   } else {
     const viewingOlder=(session.history?.olderOffset ?? 0) > 0;
     const historyBanner=session.history?.hasOlder || viewingOlder ? `<div class="history-banner"><p class="muted">Showing ${session.messages.length} of ${session.history.totalMessages ?? 'unknown'} messages.</p><div class="dialog-actions">${session.history?.hasOlder ? '<button class="button" data-action="load-older-messages">Load earlier messages</button>' : ''}${viewingOlder ? '<button class="button" data-action="load-latest-messages">Return to latest messages</button>' : ''}</div></div>` : (session.history?.tailOnly || session.history?.oversize ? `<p class="fine-print history-banner">Large saved transcript · showing the latest bounded tail window only.</p>` : (session.history?.outcomesBounded ? `<p class="fine-print history-banner">Terminal outcomes unavailable for this bounded session-events file; assistant status may stay unverified.</p>` : ''));
-    scroller.innerHTML = `${historyBanner}${session.fixture ? referenceMarkup() : ''}${session.messages.map(messageMarkup).join('')}`;
+    scroller.innerHTML = `${historyBanner}${session.messages.map(messageMarkup).join('')}`;
   }
   if (reset) scroller.scrollTop = 0;
   else if (forceBottom || atBottom) scroller.scrollTop = scroller.scrollHeight;
@@ -237,6 +231,7 @@ function renderAll(reset = false) {
   renderSessions(); renderTree(); renderControls(); renderConversation(false,reset); updateClock();
 }
 function newSession() {
+  if(activeRun){toast('Stop or wait for the active run before starting a new session.');return;}
   const session = {id:id(),title:'New session',messages:[]};
   state.sessions.unshift(session);
   if (state.sessions.length > 60) state.sessions.pop();
@@ -264,53 +259,58 @@ $('#dialog').addEventListener('close',()=>focusBeforeDialog?.focus?.());
 $('#dialog').addEventListener('click',ev=>{if(ev.target === $('#dialog')) { const r=ev.target.getBoundingClientRect(); if(ev.clientX<r.left||ev.clientX>r.right||ev.clientY<r.top||ev.clientY>r.bottom) closeDialog(); }});
 
 function connectionDialog() {
-  if(nativeInfo?.packaged){
-    const d=nativeInfo.diagnostics;
-    openDialog('BABEL SETUP',`<p>Babel Desktop includes its CLI, Node runtime, and prompt assets. Choose a project when you are ready.</p><div class="settings-row"><span>Bundled runtime</span><span>${nativeInfo.officialCliReady?'Available':'Missing files — extract the complete ZIP again'}</span></div><div class="settings-row"><span>Provider</span><span>${d?.provider==='configured'?'Credential present; authentication unverified':'No cloud credential detected; local routes use CLI configuration'}</span></div><div class="settings-row"><span>Docker / safe_repo</span><span>${d?.docker==='available'?'Available':'Unavailable — start Docker before running tasks'}</span></div><div class="settings-row"><span>Project</span><span>${e(nativeInfo.projectName??'Not selected')}</span></div><h3>FIRST LAUNCH</h3><p>Choose a supported provider and save its API key using <strong>Configure provider</strong>. The default destination is Babel's private profile, not the project repository.</p><pre>${e(nativeInfo.configDirectory??'Configuration directory unavailable')}</pre><p>Other supported provider settings belong in the same file. Credential-free local providers do not need a cloud key; Babel validates the selected route when a task starts. Model reference controls do not configure a provider. Desktop does not import credentials from other apps or checkouts. Environment credentials you explicitly supply are also accepted by Babel.</p><p>Install and start Docker separately. The default <code>safe_repo</code> profile requires it; Desktop does not start Docker or switch to unrestricted host execution.</p>${d?.error?`<p>${e(d.error)}</p>`:''}<div class="dialog-actions"><button class="button" data-action="refresh-diagnostics">Recheck setup</button><button class="button" data-action="configure-provider">Configure provider</button><button class="button" data-action="open-project">Open project</button><button class="button primary" data-action="use-live" ${nativeInfo.ready?'':'disabled'}>Use Babel Harness</button></div><p class="fine-print">Diagnostics make no model calls. A present credential has not been authenticated. See INSTALL.md and use Babel Harness.cmd doctor --json for local details.</p>`);
-    return;
-  }
-  openDialog('BABEL CONNECTION',`<div class="connection-label">${icon('terminal')}${transport === 'preview' ? 'Reference preview' : 'Babel CLI'}</div><p>${transport === 'preview' ? 'This is a working UI preview, not a running agent. The initial conversation, model names, tool activity, and token count reproduce the supplied reference.' : 'Tasks run through the Babel CLI. Replies, tool rows, and status on this screen come from that run.'}</p><p>${native ? 'Startup uses the sibling babel-cli build when that file exists. Open a project, then send a task. Another CLI entry is an advanced setting.' : 'The browser preview has no access to your CLI. Use the Electron app for a live run. No keys are requested or stored here.'}</p>${nativeInfo ? `<div class="settings-row"><span>Official CLI</span><span class="muted">${nativeInfo.officialCliReady === true ? e(nativeInfo.officialCliLabel || 'babel-cli/dist/index.js') : nativeInfo.officialCliReady === false ? 'Not built' : 'Not reported'}</span></div><div class="settings-row"><span>CLI</span><span class="muted">${e(nativeInfo.cliName ?? 'Not selected')}</span></div><div class="settings-row"><span>Project</span><span class="muted">${e(nativeInfo.projectName ?? 'Not selected')}</span></div>` : ''}<div class="dialog-actions">${native ? `<button class="button" data-action="choose-cli">Advanced: other CLI</button><button class="button" data-action="configure-provider">Configure provider</button><button class="button" data-action="open-project">Open project</button><button class="button primary" data-action="use-live" ${nativeInfo?.ready ? '' : 'disabled'}>Use Babel Harness</button>` : '<button class="button primary" data-action="close-dialog">Continue preview</button>'}</div><p class="fine-print">File changes and commands follow Babel's own approval rules. Allow or deny them in this window. Stop ends the current run.</p>`);
+  const d=nativeInfo?.diagnostics;
+  openDialog('BABEL SETUP',`<p>Open a project, choose a provider and models, then send your first task.</p>
+    ${runtimeRow('Harness',nativeInfo?.officialCliReady?'Available':'Connecting or unavailable')}
+    ${runtimeRow('Project',nativeInfo?.projectName??'Not selected')}
+    ${runtimeRow('Provider',configuredRouteLabel||'Not selected')}
+    ${runtimeRow('Docker',d?.docker==='available'?'Running':'Start Docker Desktop to run tasks safely')}
+    ${d?.error||connectionError?`<p class="provider-error">${e(d?.error||connectionError)}</p>`:''}
+    <div class="dialog-actions"><button class="button" data-action="open-project">Open project</button><button class="button" data-action="configure-provider">Choose provider and models</button><button class="button" data-action="refresh-diagnostics">Recheck setup</button><button class="button primary" data-action="use-live">Done</button></div>
+    <details><summary>Runtime details</summary><p>File changes and commands follow Babel’s approval rules. Stop cancels the active run. Credential presence does not establish authentication.</p><pre>${e(nativeInfo?.configDirectory??'')}</pre></details>`);
 }
 async function providerCredentialsDialog() {
-  if(!native) {toast('Configure credentials in the installed or source Electron application.');return;}
-  const hasProject=Boolean(nativeInfo?.projectName);
-  const projectOption=hasProject?'<option value="project">Selected project .env (explicit opt-in)</option>':'';
-  let providers=[];
-  let currentRoute=null;
-  try {
-    providers=await native.listQualifiedProviders();
-    currentRoute=await native.readProviderRoute();
-  } catch(error) {
-    toast(String(error?.message ?? 'Provider catalog unavailable.'));
-    return;
-  }
-  const providerOptions=providers.map(entry=>`<option value="${e(entry.id)}">${e(entry.label)}${entry.local?' (local)':''}</option>`).join('');
-  const selectedProvider=currentRoute?.provider ?? providers[0]?.id ?? 'deepseek';
-  const routeOptions=(providers.find(entry=>entry.id===selectedProvider)?.routes ?? []).map(route=>`<option value="${e(route.id)}">${e(route.label)}</option>`).join('');
-  const selectedModel=currentRoute?.model ?? providers.find(entry=>entry.id===selectedProvider)?.routes?.[0]?.id ?? '';
-  openDialog('CONFIGURE AI PROVIDER',`<p>1. Select a qualified provider. 2. Enter an API key when required. 3. Choose a model route. 4. Save privately by default.</p>
-    <label class="credential-label" for="credential-provider">Provider</label>
-    <select class="credential-control" id="credential-provider">${providerOptions}</select>
-    <label class="credential-label" for="credential-model">Model route</label>
-    <select class="credential-control" id="credential-model">${routeOptions}</select>
-    <label class="credential-label" for="credential-key">API key</label>
-    <input class="credential-control" id="credential-key" type="password" autocomplete="new-password" spellcheck="false" autocapitalize="off" placeholder="Required when adding a new cloud credential">
-    <label class="credential-label" for="credential-scope">Save to</label>
-    <select class="credential-control" id="credential-scope">
-      <option value="private">Private Babel profile (recommended)</option>
-      ${projectOption}
-    </select>
-    <p class="fine-print">Credential-present is not authentication. Existing keys are never overwritten; leave the key blank to change only the route. Project storage is refused unless .env is Git-ignored and untracked.</p>
-    <div class="dialog-actions"><button class="button primary" data-action="save-provider-credential">Save provider route</button><button class="button" data-action="close-dialog">Cancel</button></div>`,'#credential-provider');
-  const providerSelect=$('#credential-provider');
-  const modelSelect=$('#credential-model');
-  if(providerSelect) providerSelect.value=selectedProvider;
-  if(modelSelect && selectedModel) modelSelect.value=selectedModel;
-  providerSelect?.addEventListener('change',()=>{
-    const spec=providers.find(entry=>entry.id===providerSelect.value);
-    if(!modelSelect || !spec) return;
-    modelSelect.innerHTML=spec.routes.map(route=>`<option value="${e(route.id)}">${e(route.label)}</option>`).join('');
+  if(!native){toast('Open Babel Desktop to configure a provider.');return;}
+  let providers,currentRoute;
+  try {providers=await native.listQualifiedProviders();currentRoute=await native.readProviderRoute();}
+  catch(error){toast(error.message||'Provider catalog is unavailable.');return;}
+  const selectedProvider=currentRoute?.provider??providers[0]?.id;
+  const options=providers.map(spec=>`<option value="${e(spec.id)}">${e(spec.label)}</option>`).join('');
+  openDialog('PROVIDERS AND MODELS',`<p>Choose a provider, enable the models you want to use, and set a default.</p>
+    <label class="credential-label" for="credential-provider">Provider</label><select class="credential-control" id="credential-provider">${options}</select>
+    <label class="credential-label" for="credential-key">API key</label><input class="credential-control" id="credential-key" type="password" autocomplete="new-password" spellcheck="false" placeholder="Leave blank to keep your saved key">
+    <p class="fine-print" id="provider-key-hint">Keys stay in your private Babel profile. They are never sent to the renderer after saving.</p>
+    <div class="dialog-actions"><button class="button" data-action="refresh-models" id="refresh-models">Refresh available models</button></div>
+    <label class="credential-label" for="credential-model">Default model</label><select class="credential-control" id="credential-model"></select>
+    <label class="credential-label" for="model-search">Enabled models</label><input class="credential-control" id="model-search" type="search" placeholder="Search models">
+    <div id="enabled-models" class="enabled-model-list"></div>
+    <p id="provider-error" class="provider-error" role="alert"></p>
+    <details><summary>Credential storage</summary><label class="credential-label" for="credential-scope">Save to</label><select class="credential-control" id="credential-scope"><option value="private">Private Babel profile</option>${nativeInfo?.projectName?'<option value="project">Selected project (Git-ignored .env only)</option>':''}</select><p class="fine-print">Existing credentials are retained when the key field is blank. Project storage is optional and requires an ignored, untracked file.</p></details>
+    <div class="dialog-actions provider-save-actions"><button class="button primary" data-action="save-provider-credential">Save provider</button><button class="button" data-action="close-dialog">Cancel</button></div>`,'#credential-provider');
+  const providerSelect=$('#credential-provider'),modelSelect=$('#credential-model');
+  providerSelect.value=selectedProvider;
+  const renderModels=()=>{
+    const spec=providers.find(spec=>spec.id===providerSelect.value);
+    const routes=spec?.routes??[];
+    const defaultId=currentRoute?.provider===spec?.id?currentRoute.model:spec?.defaultModel??routes.find(route=>route.enabled!==false)?.id??routes[0]?.id;
+    modelSelect.innerHTML=routes.map(route=>`<option value="${e(route.id)}">${e(route.label)}</option>`).join('');
+    if(defaultId)modelSelect.value=defaultId;
+    $('#enabled-models').innerHTML=routes.map(route=>`<label class="enabled-model" data-model-label="${e((route.label+' '+route.id).toLowerCase())}"><input type="checkbox" value="${e(route.id)}" ${route.enabled!==false||route.id===defaultId?'checked':''}><span>${e(route.label)}<small>${e(route.modelId??route.id)}</small></span></label>`).join('')||'<p class="fine-print">Refresh available models to load this provider’s catalog.</p>';
+    $('#credential-key').disabled=spec?.requiresApiKey===false;
+    $('#provider-key-hint').textContent=spec?.local?'Connect to Ollama on this computer and refresh its installed models.':'Leave the key blank to keep an existing saved credential. Keys are stored privately.';
+    $('#provider-error').textContent='';
+    $('#refresh-models').disabled=!native.refreshModels||!['openrouter','opencode-go','ollama'].includes(spec?.id);
+  };
+  providerSelect.addEventListener('change',()=>{$('#credential-key').value='';currentRoute=null;renderModels();});
+  modelSelect.addEventListener('change',()=>{const box=[...$('#enabled-models').querySelectorAll('input')].find(box=>box.value===modelSelect.value);if(box)box.checked=true;});
+  $('#model-search').addEventListener('input',ev=>{const query=ev.target.value.toLowerCase();for(const row of $('#enabled-models').querySelectorAll('label'))row.hidden=!row.dataset.modelLabel.includes(query);});
+  $('#refresh-models').addEventListener('click',async ev=>{
+    const button=ev.currentTarget;button.disabled=true;button.textContent='Loading models…';
+    try {await native.refreshModels(providerSelect.value);providers=await native.listQualifiedProviders();renderModels();}
+    catch(error){$('#provider-error').textContent=error.message||'Could not refresh models. Retry when connected.';}
+    finally{button.textContent='Refresh available models';button.disabled=false;}
   });
+  renderModels();
 }
 async function saveProviderFromDialog(button) {
   const keyInput=$('#credential-key');
@@ -321,34 +321,37 @@ async function saveProviderFromDialog(button) {
   keyInput.value=''; // Clear the DOM before crossing the narrow native bridge.
   button.disabled=true;
   try {
-    const result=await native.saveProviderRoute({provider,apiKey,scope,model});
+    const result=await native.saveProviderRoute({provider,apiKey,scope,model,enabledModels:[...document.querySelectorAll('#enabled-models input:checked')].map(input=>input.value)});
     const route=result?.route ?? {provider, model};
+    configuredRoute=route;state.model=route.model;
     configuredRouteLabel=`${route.provider} · ${route.model}`;
+    try { providerCatalog=await native.listQualifiedProviders(); } catch {}
     nativeInfo=await native.refreshDiagnostics();
     closeDialog();
     toast(result.credentialUpdated ? 'Credential and route saved.' : 'Provider route saved.');
     renderControls();
   } catch(error) {
-    toast('Credential setup: '+String(error?.message??'could not save safely'));
+    const target=$('#provider-error');if(target)target.textContent=String(error?.message??'Could not save provider.');else toast('Provider setup failed.');
   } finally {
     button.disabled=false;
   }
 }
 
 function settingsDialog() {
-  const remote=nativeInfo?.remoteBridge;
-  const remoteSection=transport==='live' && remote ? `<h3>REMOTE BRIDGE</h3><p class="muted">Starts a loopback Babel remote serve session for phone access. This is separate from the Desktop chat transcript (sharedSession remains false).</p><div class="settings-row"><span>Status</span><span class="muted">${remote.running ? `Running · ${e(remote.url ?? '')}` : e(remote.state)}</span></div><div class="dialog-actions">${remote.running ? '<button class="button danger" data-action="stop-remote-bridge">Stop remote bridge</button>' : '<button class="button" data-action="start-remote-bridge">Start remote bridge</button>'}</div>` : '';
-  openDialog('SETTINGS',`<h3>WORKSPACE</h3><div class="settings-row"><span>Provider credentials</span><button class="button" data-action="configure-provider">Configure provider</button></div><div class="settings-row"><span>Runtime</span><button class="button" data-action="connection">${transport === 'preview' ? 'Reference preview' : 'Babel CLI'} ${icon('arrow')}</button></div>${remoteSection}<div class="settings-row"><span>Visual reference</span><span class="muted">BabelTuiNorthStar.png</span></div><div class="settings-row"><label><input id="reduce-motion" type="checkbox" ${document.body.classList.contains('reduce-motion') ? 'checked' : ''}> Reduce motion</label><span class="muted">Interface animations</span></div><h3>KEYBOARD</h3><div class="settings-row"><span>Send message</span><code>Ctrl + Enter</code></div><div class="settings-row"><span>Newline</span><code>Shift + Enter</code></div><div class="settings-row"><span>Search sessions and files</span><code>Ctrl + K</code></div><div class="settings-row"><span>New session</span><code>Ctrl + Alt + N</code></div><div class="settings-row"><span>Switch Chat / Plan / Deep</span><code>Alt + 1 / 2 / 3</code></div>${transport === 'preview' ? '<h3>PREVIEW</h3><p class="muted">Preview conversations are stored only in this browser. They are not Babel runtime sessions.</p><div class="dialog-actions"><button class="button" data-action="error-demo">Show error state</button><button class="button danger" data-action="reset-preview">Reset preview history</button></div>' : ''}`);
-  $('#reduce-motion').addEventListener('change',ev=>{document.body.classList.toggle('reduce-motion',ev.target.checked);try{localStorage.setItem('babel-preview-motion',ev.target.checked?'reduce':'normal');}catch{}});
+  openDialog('SETTINGS',`<div class="settings-row"><span>Provider and models</span><button class="button" data-action="configure-provider">Manage</button></div>
+    <div class="settings-row"><span>Runtime setup</span><button class="button" data-action="connection">Open setup</button></div>
+    <div class="settings-row"><label><input id="reduce-motion" type="checkbox" ${document.body.classList.contains('reduce-motion')?'checked':''}> Reduce motion</label></div>
+    <h3>KEYBOARD</h3><div class="settings-row"><span>Send message</span><code>Ctrl + Enter</code></div><div class="settings-row"><span>Search sessions and files</span><code>Ctrl + K</code></div><div class="settings-row"><span>New session</span><code>Ctrl + Alt + N</code></div><div class="settings-row"><span>Switch Chat / Plan / Deep</span><code>Alt + 1 / 2 / 3</code></div>
+    ${nativeInfo?.remoteBridge?`<details><summary>Remote access</summary><p>Loopback access uses a separate CLI session.</p><div class="dialog-actions"><button class="button" data-action="${nativeInfo.remoteBridge.running?'stop':'start'}-remote-bridge">${nativeInfo.remoteBridge.running?'Stop':'Start'} remote bridge</button></div></details>`:''}`);
+  $('#reduce-motion').addEventListener('change',ev=>{document.body.classList.toggle('reduce-motion',ev.target.checked);try{localStorage.setItem('babel-motion',ev.target.checked?'reduce':'normal');}catch{}});
 }
-function modelsDialog() {
-  if (transport === 'live') {
-    openDialog('MODEL ROUTE',`<p class="muted">Live runs use the configured Desktop provider route. Tool toggles are reference-only and do not grant permissions.</p><div class="settings-row"><span>Effective route</span><span class="muted">${e(configuredRouteLabel || 'Not configured')}</span></div><div class="dialog-actions"><button class="button primary" data-action="configure-provider">Configure provider</button><button class="button" data-action="close-dialog">Close</button></div>`);
-    return;
-  }
-  openDialog('MODEL',`<p class="muted">These options reproduce the North Star reference. Selecting one changes the preview, not a provider configuration.</p><div class="search-results">${MODEL_OPTIONS.map(m=>`<button class="search-result" data-action="select-dialog-model" data-model="${e(m)}"><span class="radio-dot"></span>${e(m)}<small>${state.model===m?'Selected':'Reference option'}</small></button>`).join('')}</div><p class="fine-print">The native adapter intentionally defers model routing to your existing Babel configuration.</p>`);
+function modelsDialog(){providerCredentialsDialog();}
+function flattenFiles(nodes,parent='') {
+  return nodes.flatMap(node=>{
+    const path=parent?`${parent}/${node.name}`:node.name;
+    return node.type==='folder'?flattenFiles(node.children??[],path):[{name:node.name,path}];
+  });
 }
-function flattenFiles(nodes,parent='') { return nodes.flatMap(n=>{const p=parent?`${parent}/${n.name}`:n.name;return n.type==='folder'?flattenFiles(n.children??[],p):[{name:n.name,path:p}];}); }
 function searchDialog() {
   openDialog('SEARCH',`<input class="search-input" id="search-input" type="search" placeholder="Search sessions and files..." aria-label="Search sessions and files" autocomplete="off"><div id="search-results" class="search-results"></div><p class="fine-print">Searches visible session titles and loaded project file names.</p>`,'#search-input');
   const update = ()=>{
@@ -364,7 +367,7 @@ async function openFile(path) {
     try { const r = await native.readFile(path); openDialog(path,`<div class="file-info"><span>READ-ONLY</span><span>${r.truncated ? 'Truncated to 256 KB' : 'Project file'}</span></div><pre>${e(r.text)}</pre>`); }
     catch(err){openDialog('FILE UNAVAILABLE',`<p>${e(err.message)}</p>`);}
   } else {
-    openDialog(path,`<div class="file-info"><span>REFERENCE PREVIEW</span><span>No repository file was read</span></div><p>This file is represented in the North Star project tree. Its actual contents are not bundled with the visual reference.</p><pre>${e(path)}\n\nOpen the native application and connect a project\nto inspect real files in this panel.</pre>`);
+    toast('Open a project in Babel Desktop to inspect files.');
   }
 }
 async function toggleFolder(path) {
@@ -386,7 +389,7 @@ function settleTools(message, status) {
     tool.meta = '';
   }
 }
-function stopPreview() {
+function stopRun() {
   if (!activeRun) return;
   if (transport === 'live') {
     native?.cancel?.();
@@ -400,7 +403,7 @@ function stopPreview() {
   }
   clearInterval(activeRun.timer);
   activeRun.message.status='cancelled';activeRun=null;
-  persist();renderConversation();renderControls();announce('Preview response stopped.');$('#composer-input').focus();
+  persist();renderConversation();renderControls();announce('Babel run stopped.');$('#composer-input').focus();
 }
 function appendNote(message, extra) {
   const line = String(extra ?? '').slice(0, 4000);
@@ -434,31 +437,25 @@ function upsertLiveTool(message, tool) {
 async function sendMessage() {
   const input=$('#composer-input');const text=input.value.trim();
   if(!text||activeRun)return;
-  if(executionBlocked()){toast('Recheck execution setup before running tasks. Saved history is still available.');return;}
+  if(executionBlocked()){connectionDialog();return;}
   if(text.length>24000){toast('Please keep a single message under 24,000 characters.');return;}
   const session=activeSession();
-  if(session.messages.length>145){toast('Start a new session to keep this preview responsive.');return;}
+  if(session.messages.length>145){toast('Start a new session when this conversation reaches the display limit.');return;}
   session.messages.push({role:'user',text});
   if(session.title==='New session'||session.title==='New read-only run') session.title=text.length>27?text.slice(0,27)+'...':text;
   const message={role:'assistant',text:'',status:'running',tools:[],blocks:[]};session.messages.push(message);
   input.value='';resizeComposer();
   const runId=id();activeRun={runId,sessionId:session.id,mode:state.mode,message,timer:null};
-  renderSessions();renderConversation(true);renderControls();announce(transport==='preview'?'Preview response started.':'Babel run requested.');
+  renderSessions();renderConversation(true);renderControls();announce('Babel run requested.');
   if(transport==='live') {
     try {
-      const result=await native.run({runId,task:text,mode:state.mode,...(state.mode==='chat'&&session.babelSessionId?{sessionId:session.babelSessionId}:{})});
+      const result=await native.run({runId,task:text,mode:state.mode,...((state.model||configuredRoute?.model)?{model:state.model||configuredRoute.model}:{}),...(state.mode==='chat'&&session.babelSessionId?{sessionId:session.babelSessionId}:{})});
       if(!result.started && activeRun?.runId===runId){message.status='cancelled';message.text='Run was not started. No model call was made.';activeRun=null;renderConversation();renderControls();}
     } catch(err){if(activeRun?.runId===runId){message.status='failed';message.text=err.message;activeRun=null;renderConversation();renderControls();}}
     return;
   }
-  const response = `This is the interactive North Star preview. Your message is saved in this browser, and the ${state.mode.charAt(0).toUpperCase()+state.mode.slice(1)} controls are working.\n\nNo model was called and no repository files were read or changed. The live desktop adapter hands requests to the existing Babel CLI rather than implementing another agent.\n\nYou can switch sessions, expand the reference tool rows, browse the project tree, or open Settings to inspect the connection boundary.`;
-  let pos=0;
-  activeRun.timer=setInterval(()=>{
-    pos+=12;message.text=response.slice(0,pos);
-    if(pos>=response.length){clearInterval(activeRun.timer);message.status='complete';activeRun=null;persist();renderControls();announce('Preview response complete.');}
-    if(state.activeId===session.id)renderConversation();
-  },24);
 }
+
 function handleNativeEvent(packet) {
   if(!activeRun||packet.runId!==activeRun.runId)return;
   const run=activeRun;const message=run.message;
@@ -547,15 +544,24 @@ async function runUpdateCli() {
 async function chooseProject() {
   if(!native){connectionDialog();return;}
   if(activeRun){toast('Wait for the active run before switching projects.');return;}
-  try{nativeInfo=await native.chooseProject();if(nativeInfo)connectionDialog();}catch(err){toast(err.message);}
+  try{
+    const info=await native.chooseProject();if(!info)return;
+    const changed=info.projectRoot!==nativeInfo?.projectRoot || info.projectName!==nativeInfo?.projectName;
+    nativeInfo=info;
+    if(changed)await enableLive();
+    renderControls();connectionDialog();
+  }catch(err){toast(err.message);}
 }
 async function enableLive() {
-  if(!native||!nativeInfo?.ready||activeRun)return;
-  const nextFiles=await native.listDirectory('.');
-  transport='live';state={version:1,mode:'chat',model:'',sessions:[],activeId:''};
+  if(!native||!nativeInfo||activeRun)return;
+  connecting=true;
+  try{
+  state={version:1,mode:'chat',model:'',sessions:[],activeId:''};
   liveModel='';liveTokens=null;changedFiles=[];
-  files=nextFiles;projectName=nativeInfo.projectName;expandedFolders=new Set(['.']);
+  files=[];projectName=nativeInfo.projectName || 'Open a project';expandedFolders=new Set(['.']);
   closeDialog();newSession();
+  files=nativeInfo.projectName ? await native.listDirectory('.') : [];
+  renderTree();
   try {
     const saved = await native.listSessions({limit: savedSessionList.limit, offset: 0});
     savedSessionList={offset: saved.offset ?? 0, total: saved.total ?? saved.sessions?.length ?? 0, limit: saved.limit ?? 30};
@@ -563,13 +569,16 @@ async function enableLive() {
       if (state.sessions.some(session => session.babelSessionId === item.id)) continue;
       state.sessions.push({ id: id(), title: item.title || 'Saved chat', messages: [], babelSessionId: item.id, saved: true, messageCount: item.messages });
     }
-    try {
-      const route=await native.readProviderRoute();
-      if(route) configuredRouteLabel=`${route.provider} · ${route.model}`;
-    } catch { /* optional */ }
-    renderSessions();
   } catch { /* A missing runs directory leaves the new session in place. */ }
+  configuredRoute=null;configuredRouteLabel='';providerCatalog=[];
+  try {
+    const route=await native.readProviderRoute();
+    if(route){configuredRoute=route;state.model=route.model;configuredRouteLabel=`${route.provider} · ${route.model}`;}
+    if(native.listQualifiedProviders)providerCatalog=await native.listQualifiedProviders();
+  } catch {toast('Provider settings could not be loaded. Open Providers and models to retry.');}
+  renderSessions();renderControls();
   announce('Babel CLI connected.');
+  }finally{connecting=false;renderControls();}
 }
 function mapLoadedMessages(messages) {
   return (messages ?? []).map(message => message.role === 'assistant'
@@ -615,14 +624,15 @@ async function loadMoreSavedSessions() {
   renderSessions();
 }
 $('.skip-link').addEventListener('click',event=>{event.preventDefault();$('#composer-input').focus();});
-function updateClock(){ $('#clock').textContent=transport==='preview'&&state.activeId==='reference'?'10:24 AM':new Date().toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'}); }
+function updateClock(){ $('#clock').textContent=new Date().toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'}); }
 
 $('#quick-actions').innerHTML = [['new-session','new','New session'],['open-file','file','Open file'],['search','search','Search'],['run-tests','test','Run tests'],['git-status','git','Git status'],['settings','settings','Settings']].map(([action,symbol,label])=>`<button class="quick-action" data-action="${action}">${icon(symbol)}<span>${label}</span></button>`).join('');
 document.addEventListener('click',async event=>{
   const button=event.target.closest('button[data-action]'); if(!button||button.disabled)return;
   const a=button.dataset.action;
+  if(a==='refresh-models')return;
   if(a==='mode')setMode(button.dataset.mode);
-  else if(a==='model'||a==='select-dialog-model'){if(activeRun){toast('Wait for the active response before changing models.');return;}if(transport==='preview'&&MODEL_OPTIONS.includes(button.dataset.model)){state.model=button.dataset.model;persist();renderControls();if(a==='select-dialog-model')closeDialog();}}
+  else if(a==='model'||a==='select-dialog-model'){if(activeRun){toast('Wait for the active response before changing models.');return;}if(native){if(button.dataset.model){state.model=button.dataset.model;liveModel='';renderControls();}else providerCredentialsDialog();}}
   else if(a==='models')modelsDialog();
   else if(a==='new-session')newSession();
   else if(a==='session'||a==='search-session'){
@@ -640,15 +650,14 @@ document.addEventListener('click',async event=>{
   else if(a==='file'||a==='search-file')await openFile(button.dataset.path);
   else if(a==='open-file'||a==='search')searchDialog();
   else if(a==='expand-tool'){const key=button.dataset.id;const top=$('#conversation').scrollTop;if(expandedTools.has(key))expandedTools.delete(key);else expandedTools.add(key);renderConversation();$('#conversation').scrollTop=top;document.querySelector(`[data-action="expand-tool"][data-id="${CSS.escape(key)}"]`)?.focus({preventScroll:true});}
-  else if(a==='tool'&&transport==='preview'){tools[button.dataset.tool]=!tools[button.dataset.tool];renderControls();toast('Preview state only. No execution permissions changed.');}
-  else if(a==='run-tests')draft('Run the project tests and summarize the results.');
-  else if(a==='git-status')draft('Inspect the Git status and summarize the current changes.');
+  else if(a==='run-tests'){draft('Run the project tests and summarize the results.');await sendMessage();}
+  else if(a==='git-status'){draft('Inspect the Git status and summarize the current changes.');await sendMessage();}
   else if(a==='draft')draft(button.dataset.text);
   else if(a==='settings')settingsDialog();
   else if(a==='connection')connectionDialog();
   else if(a==='configure-provider')providerCredentialsDialog();
   else if(a==='save-provider-credential')await saveProviderFromDialog(button);
-  else if(a==='refresh-diagnostics'){try{nativeInfo=await native.refreshDiagnostics();renderControls();connectionDialog();}catch(err){toast(err.message);}}
+  else if(a==='refresh-diagnostics'){try{nativeInfo=await native.refreshDiagnostics();connectionError='';await enableLive();renderControls();connectionDialog();}catch(err){connectionError='Connection failed. Recheck setup after repairing the installation.';renderControls();connectionDialog();}}
   else if(a==='check-update')await checkForUpdates();
   else if(a==='update-cli')await runUpdateCli();
   else if(a==='open-project')await chooseProject();
@@ -656,14 +665,12 @@ document.addEventListener('click',async event=>{
   else if(a==='use-live'){try{await enableLive();}catch(err){toast(err.message);}}
   else if(a==='close-dialog')closeDialog();
   else if(a==='approve-run'||a==='deny-run'){if(activeRun){activeRun.message.pendingApproval='';renderConversation();}await native?.decide?.(a==='approve-run'?'allow_once':'deny');}
-  else if(a==='stop')stopPreview();
+  else if(a==='stop')stopRun();
   else if(a==='toggle-left')$('.workspace').classList.toggle('show-left');
   else if(a==='toggle-right')$('.workspace').classList.toggle('show-right');
   else if(a==='copy-message'){try{await navigator.clipboard.writeText(activeSession().messages[Number(button.dataset.index)]?.text??'');toast('Message copied.');}catch{toast('Clipboard unavailable. Select and copy the message text.');}}
-  else if(a==='reset-preview'){if(activeRun){toast('Stop the preview response first.');return;}state=createReference();files=structuredClone(PREVIEW_FILES);expandedTools.clear();expandedFolders=new Set(['.']);tools=Object.fromEntries(TOOL_OPTIONS.map(t=>[t,true]));persist();closeDialog();renderAll(true);toast('Reference preview restored.');}
-  else if(a==='error-demo'){if(activeRun){toast('Stop the preview response first.');return;}activeSession().messages.push({role:'assistant',text:'Example error state — the tool could not complete.\n\nThis is a visual fixture, not an actual tool failure. No files were changed.',status:'failed',tools:[{id:id(),label:'preview · test runner',status:'failed',meta:'failed',detail:'Demonstration only. Connect Babel to display real failure details.'}]});closeDialog();persist();renderConversation(true);renderControls();}
-  else if(a==='about')openDialog('ABOUT BABEL',`<div class="about-brand"><img src="${LOGO}" alt=""><div><h3>BABEL</h3><p class="muted">Run. Verify. Understand.</p></div></div><p>The North Star, made interactive. A focused desktop surface for inspectable, verifiable agent work.</p><p class="muted">This build preserves the reference layout, branding, execution rows, and control hierarchy. Babel remains the only execution engine.</p><div class="dialog-actions"><button class="button" data-action="connection">Connection details</button><button class="button" data-action="settings">Settings</button></div>`);
-  else if(a==='repo'){if(native){await native.openRepository();}else{openDialog('BABEL REPOSITORY','<p>The canonical source repository is:</p><p><a href="https://github.com/gthgomez/Babel" target="_blank" rel="noopener noreferrer">github.com/gthgomez/Babel</a></p><p class="fine-print">The source package delivered with this preview is separate. No upstream files were changed.</p>');}}
+  else if(a==='about')openDialog('ABOUT BABEL',`<div class="about-brand"><img src="${LOGO}" alt=""><div><h3>BABEL</h3><p class="muted">Run. Verify. Understand.</p></div></div><p>A desktop workspace for the Babel coding-agent harness.</p><p class="muted">Babel CLI runs each task, requests approvals, and reports its verification results here.</p><div class="dialog-actions"><button class="button" data-action="connection">Connection details</button><button class="button" data-action="settings">Settings</button></div>`);
+  else if(a==='repo'){if(native){await native.openRepository();}else{openDialog('BABEL REPOSITORY','<p>The canonical source repository is:</p><p><a href="https://github.com/gthgomez/Babel" target="_blank" rel="noopener noreferrer">github.com/gthgomez/Babel</a></p><p class="fine-print">Open the repository to read the source and documentation.</p>');}}
 });
 $('#composer-form').addEventListener('submit',ev=>{ev.preventDefault();sendMessage();});
 $('#composer-input').addEventListener('input',resizeComposer);
@@ -674,10 +681,10 @@ document.addEventListener('keydown',ev=>{
   else if(ev.altKey&&['1','2','3'].includes(ev.key)&&!$('#dialog').open){ev.preventDefault();setMode(MODE_OPTIONS[Number(ev.key)-1].id);}
   else if(ev.key==='Escape'&&!$('#dialog').open){$('.workspace').classList.remove('show-left','show-right');}
 });
-try{if(localStorage.getItem('babel-preview-motion')==='reduce')document.body.classList.add('reduce-motion');}catch{}
-if(native){native.getInfo().then(info=>{
-  nativeInfo=info;renderControls();
-  if(info?.packaged){state={version:1,mode:'chat',model:'',sessions:[],activeId:''};files=[];newSession();connectionDialog();}
-}).catch(error=>toast(`Connection unavailable: ${error.message}`));native.onEvent(handleNativeEvent);native.onUpdateEvent?.(event=>{updatePhase=`${event.phase}: ${event.status}`;renderRuntime();});}
+try{if(localStorage.getItem('babel-motion')==='reduce')document.body.classList.add('reduce-motion');}catch{}
+if(native){native.getInfo().then(async info=>{
+  nativeInfo=info;await enableLive();renderControls();
+  if(!info?.ready)connectionDialog();
+}).catch(()=>{connectionError='Harness connection failed. Open Setup and recheck the installation.';renderControls();connectionDialog();});native.onEvent(handleNativeEvent);native.onUpdateEvent?.(event=>{updatePhase=`${event.phase}: ${event.status}`;renderRuntime();});}
 setInterval(updateClock,30000);
 renderAll(true);

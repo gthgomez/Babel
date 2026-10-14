@@ -1,12 +1,35 @@
 // License: Apache-2.0
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtempSync, mkdirSync, writeFileSync, rmSync} from 'node:fs';
-import {dirname, join} from 'node:path';
+import {mkdtempSync, mkdirSync, writeFileSync, rmSync,readFileSync} from 'node:fs';
+import {dirname, join,isAbsolute} from 'node:path';
+import {fileURLToPath} from 'node:url';
+import {Script} from 'node:vm';
+import {bundledEnvironment} from '../native/runtime.mjs';
+import {applyProviderRoute,saveProviderRoute} from '../native/provider-routing.mjs';
 import {tmpdir} from 'node:os';
 import {resolvePackagedEngine, buildInstallId, writeActiveEngine, installDir} from '../native/engine-manager.mjs';
 
 const SHA = 'c'.repeat(40);
+
+test('actual installed launcher consumes the same saved provider/default/private policy as Desktop',()=>{
+  const profile=mkdtempSync(join(tmpdir(),'babel-launch-route-'));
+  try{
+    const config=join(profile,'engine','config');
+    saveProviderRoute({configDirectory:config,provider:'opencode-go',model:'opencode-go/deepseek-v4.1-flash'});
+    const scriptUrl=new URL('../scripts/cli-launch.mjs',import.meta.url).href;
+    const source=readFileSync(new URL(scriptUrl),'utf8').replace(/^import .*;\r?\n/gm,'').replaceAll('import.meta.url','scriptUrl');
+    let launch;
+    new Script(source).runInNewContext({scriptUrl,dirname,join,isAbsolute,fileURLToPath,resolvePackagedEngine,
+      bundledEnvironment:userData=>bundledEnvironment(userData,{APPDATA:profile}),applyProviderRoute,
+      process:{argv:['node','launcher',`--profile-dir=${profile}`,'doctor','--json'],env:{APPDATA:profile}},
+      spawn:(exe,args,options)=>{launch={exe,args,options};return {on(){}};},console});
+    assert.equal(launch.options.env.BABEL_DESKTOP_PROVIDER,'opencode-go');
+    assert.equal(launch.options.env.BABEL_DESKTOP_MODEL_ROUTE,'opencode-go/deepseek-v4.1-flash');
+    assert.equal(launch.options.env.BABEL_MODEL_POLICY_PATH,join(config,'model-policy.json'));
+    assert.deepEqual(Array.from(launch.args).slice(1),['doctor','--json']);
+  }finally{rmSync(profile,{recursive:true,force:true});}
+});
 
 /** Mirrors production `scripts/cli-launch.mjs` entry selection (no child spawn). */
 function selectPackagedCliEntry({userData, resourcesPath, bundled}) {

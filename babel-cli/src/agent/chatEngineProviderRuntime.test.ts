@@ -6,11 +6,31 @@ import {
 } from '../modelPolicy.js'
 import {
   resolveChatFallbackOrFail,
+  resolveChatDeliberationRunner,
+  resolveChatSynthesisRunner,
   synthesizeChatAnswer,
   type ChatFallbackInput,
   type ChatProviderRunner,
 } from './chatEngineProviderRuntime.js'
 import type { ChatUsageScope } from './chatEngineProviderAccounting.js'
+
+test('both real Go chat factories use a saved provider key and preserve explicit helper choice',async(t)=>{
+  const {mkdtemp,writeFile,rm}=await import('node:fs/promises')
+  const {join}=await import('node:path')
+  const {tmpdir}=await import('node:os')
+  const {OpenCodeGoBudget}=await import('../runners/openCodeGoBudget.js')
+  const dir=await mkdtemp(join(tmpdir(),'babel-go-chat-key-'))
+  t.after(()=>rm(dir,{recursive:true,force:true}))
+  const helper=join(dir,'reject.cjs');await writeFile(helper,'process.exit(17)\n')
+  const prior=process.env['BABEL_OPENCODE_GO_HELPER'];process.env['BABEL_OPENCODE_GO_HELPER']=helper
+  t.after(()=>{if(prior===undefined)delete process.env['BABEL_OPENCODE_GO_HELPER'];else process.env['BABEL_OPENCODE_GO_HELPER']=prior})
+  const policy={provider:'opencode-go',providerModelId:'deepseek-v4.1-flash'} as ResolvedModelPolicy
+  const options={budget:new OpenCodeGoBudget({statePath:join(dir,'budget.json'),jobId:'synthetic-chat',limitUsd:1}),env:{BABEL_OPENCODE_GO_API_KEY:'synthetic'}}
+  for(const factory of [resolveChatDeliberationRunner,resolveChatSynthesisRunner]){
+    assert.doesNotThrow(()=>factory(null,policy,options))
+    assert.throws(()=>factory(null,policy,{...options,credentialSource:'opencode-auth-helper'}),/credential resolution failed/)
+  }
+})
 
 function fallbackInput(
   overrides: Partial<ChatFallbackInput> = {},

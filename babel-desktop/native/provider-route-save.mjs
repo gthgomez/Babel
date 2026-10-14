@@ -7,7 +7,7 @@ import {qualifiedProviders, saveProviderRoute, validateProviderRoute} from './pr
  */
 export async function saveDesktopProviderRoute({options, configDirectory, preferences, savePreferences}) {
   if (!options || typeof options !== 'object') throw new Error('Invalid provider route request.');
-  const route = validateProviderRoute(options);
+  const route = validateProviderRoute(options,configDirectory);
   const scope = options.scope ?? 'private';
   const apiKey = typeof options.apiKey === 'string' ? options.apiKey : '';
   if ((scope !== 'private' && scope !== 'project') || (apiKey && !options.scope)) {
@@ -23,7 +23,7 @@ export async function saveDesktopProviderRoute({options, configDirectory, prefer
   if (apiKey) saveProviderCredential({
     provider: route.provider, apiKey, scope, configDirectory, projectRoot: preferences.projectRoot,
   });
-  saveProviderRoute({configDirectory, ...route});
+  saveProviderRoute({configDirectory, ...route,enabledModels:options.enabledModels});
   const previousRoot = preferences.projectCredentialRoot;
   preferences.projectCredentialRoot = scope === 'project' ? preferences.projectRoot : null;
   try { await savePreferences(); }

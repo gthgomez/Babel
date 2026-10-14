@@ -101,7 +101,7 @@ const PROVIDER_SPECS: Readonly<Record<ProviderId, ProviderSpec>> = Object.freeze
   // Explicit Go transport; authority checks do not establish native budget/platform readiness.
   'opencode-go': {
     id: 'opencode-go',
-    credentialEnvVar: null,
+    credentialEnvVar: 'BABEL_OPENCODE_GO_API_KEY',
     protocol: 'openai_compatible',
     requiresCredential: true,
     operations: ['structured', 'raw', 'raw_stream', 'native_tool_stream'],

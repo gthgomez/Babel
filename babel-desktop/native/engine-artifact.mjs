@@ -207,7 +207,7 @@ export async function resolvePreviewCandidate(currentSourceSha) {
     channel: 'preview',
     currentSha: currentSourceSha,
     availableSha: sha,
-    detail: `Development preview ${sha.slice(0, 12)} · unsigned source build`,
+    detail: `Development build ${sha.slice(0, 12)} · unsigned source build`,
     candidate: {sourceSha: sha, tarballUrl: `https://codeload.github.com/${EXPECTED_ORIGIN}/tar.gz/${sha}`},
   };
 }

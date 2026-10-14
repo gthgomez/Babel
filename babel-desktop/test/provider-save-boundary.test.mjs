@@ -55,7 +55,7 @@ test('invalid model is rejected before any credential file mutation', async () =
   const config = mkdtempSync(join(tmpdir(), 'babel-provider-boundary-'));
   try {
     await assert.rejects(
-      () => save({configDirectory: config, provider: 'deepseek', model: 'deepseek-v4-flash', apiKey: FIXTURE_VALUE, scope: 'private'}),
+      () => save({configDirectory: config, provider: 'deepseek', model: 'unknown-model', apiKey: FIXTURE_VALUE, scope: 'private'}),
       /not supported/,
     );
     assert.equal(existsSync(join(config, '.env')), false);
@@ -77,13 +77,13 @@ test('route-only save succeeds when private credential already exists', async ()
   }
 });
 
-test('opencode route persists without deepseek provider alias', async () => {
+test('Go route persists with its own credential namespace', async () => {
   const config = mkdtempSync(join(tmpdir(), 'babel-provider-opencode-'));
   try {
-    saveProviderCredential({provider: 'opencode', apiKey: FIXTURE_VALUE, scope: 'private', configDirectory: config});
-    saveProviderRoute({configDirectory: config, provider: 'opencode', model: 'ox-alpha-free'});
-    assert.deepEqual(readProviderRoute(config), {provider: 'opencode', model: 'ox-alpha-free'});
-    assert.match(readFileSync(join(config, '.env'), 'utf8'), /^OPENCODE_API_KEY=/);
+    saveProviderCredential({provider: 'opencode-go', apiKey: FIXTURE_VALUE, scope: 'private', configDirectory: config});
+    saveProviderRoute({configDirectory: config, provider: 'opencode-go', model: 'opencode-go/deepseek-v4.1-flash'});
+    assert.deepEqual(readProviderRoute(config), {provider: 'opencode-go', model: 'opencode-go/deepseek-v4.1-flash'});
+    assert.match(readFileSync(join(config, '.env'), 'utf8'), /^BABEL_OPENCODE_GO_API_KEY=/);
   } finally {
     rmSync(config, {recursive: true, force: true});
   }

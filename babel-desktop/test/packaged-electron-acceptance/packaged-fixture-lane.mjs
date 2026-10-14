@@ -18,6 +18,11 @@ export async function writePackagedAcceptanceProfile(profile) {
   const runsRoot = join(profile, 'engine', 'state', 'runs', 'chat-sessions', HISTORY_SESSION_ID);
   await mkdir(projectRoot, {recursive: true});
   await mkdir(runsRoot, {recursive: true});
+  const configRoot=join(profile,'engine','config');
+  await mkdir(configRoot,{recursive:true});
+  await writeFile(join(configRoot,'desktop-model-catalog.json'),JSON.stringify({models:[{
+    id:'ollama/local-fixture',modelId:'local-fixture',provider:'ollama',label:'Local acceptance fixture',enabled:false,
+  }]})+'\n','utf8');
   await writeFile(join(projectRoot, 'README.md'), '# Packaged acceptance fixture\n', 'utf8');
   const lines = [];
   lines.push(JSON.stringify({role: 'user', content: 'PACKAGED-HISTORY-FIXTURE'}));

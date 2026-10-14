@@ -15,7 +15,7 @@ export async function diagnoseRuntime(runtime, {env, cwd}) {
   if (!runtime.ready) return {...prerequisiteStatus(null), error:'Bundled runtime files are missing. Extract the complete ZIP again.'};
   return new Promise(resolve => {
     execFile(runtime.executable, [runtime.path, 'doctor', '--json'], {
-      cwd, env, windowsHide:true, timeout:8000, maxBuffer:256 * 1024,
+      cwd, env, windowsHide:true, timeout:30000, maxBuffer:256 * 1024,
     }, (error, stdout) => {
       try {
         const report = JSON.parse(stdout);

@@ -18,5 +18,6 @@ test('portable bundle has no external resource or unfilled template dependency',
  assert.doesNotMatch(html,/__(?:LOGO|MENU|PLUS|CHEVRON|STOP|CLOSE|SETTINGS)__|\/\*(?:SCRIPT|STYLES)\*\//);
  assert.doesNotMatch(html,/<(?:script|link|img)[^>]+(?:src|href)=["']https?:/);
  assert.ok(html.includes("connect-src 'none'"));
- assert.ok(html.includes('REFERENCE PREVIEW'));
+ assert.ok(html.includes('BABEL CLI'));
+ assert.doesNotMatch(html,/REFERENCE PREVIEW|This is the interactive North Star preview|42,318 \/ 112,000/);
 });
