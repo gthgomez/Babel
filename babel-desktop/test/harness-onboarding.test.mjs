@@ -5,6 +5,30 @@ import {readFileSync} from 'node:fs';
 import {chromium} from 'playwright';
 const html = readFileSync(new URL('../dist/index.html', import.meta.url), 'utf8');
 
+test('Setup Done and Recheck preserve the active same-project mode and completed transcript',async()=>{
+  const browser=await chromium.launch({headless:true});
+  try{
+    const page=await browser.newPage();const errors=[];page.on('pageerror',error=>errors.push(error.message));
+    await page.evaluate(()=>{
+      const info=()=>({packaged:true,ready:true,projectName:'fixture',projectRoot:'C:/fixture',diagnostics:{ready:true}});
+      window.babelDesktop={getInfo:async()=>info(),refreshDiagnostics:async()=>info(),listDirectory:async()=>[],listSessions:async()=>({sessions:[]}),readProviderRoute:async()=>({provider:'openrouter',model:'fixture-route'}),onEvent:callback=>window.__emit=callback,run:async request=>{window.__run=request.runId;return {started:true};}};
+    });
+    await page.setContent(html);await page.waitForFunction(()=>!document.querySelector('#send-button').disabled);
+    await page.locator('.top-tab[data-mode="deep"]').click();await page.locator('#composer-input').fill('Keep this completed Deep task');await page.keyboard.press('Control+Enter');
+    await page.waitForFunction(()=>Boolean(window.__run));
+    await page.evaluate(()=>{const runId=window.__run;window.__emit({runId,kind:'event',event:{type:'assistant_chunk',chunk:'Completed answer to retain.'}});window.__emit({runId,kind:'event',event:{type:'run_complete',result:{terminal_outcome:'VERIFIED_COMPLETE'}}});window.__emit({runId,kind:'exit',code:0});});
+    for(const action of ['use-live','refresh-diagnostics']){
+      await page.locator('#preview-badge').click();await page.locator(`#dialog [data-action="${action}"]`).click();
+      if(action==='refresh-diagnostics')await page.locator('#dialog [data-action="use-live"]').click();
+      await page.locator('#dialog').waitFor({state:'hidden'});
+      assert.equal(await page.locator('.top-tab[data-mode="deep"]').getAttribute('aria-pressed'),'true');
+      assert.match(await page.locator('#conversation').innerText(),/Completed answer to retain/);
+      assert.equal(await page.locator('.session-button').count(),1);
+    }
+    assert.deepEqual(errors,[]);
+  }finally{await browser.close();}
+});
+
 test('first project onboarding loads its files and switching roots starts a new CLI chat',async()=>{
   const browser=await chromium.launch({headless:true});
   try{

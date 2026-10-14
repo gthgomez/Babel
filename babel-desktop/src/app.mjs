@@ -22,6 +22,8 @@ let focusBeforeDialog = null;
 let nativeInfo = null;
 let connectionError = '';
 let connecting = false;
+let connectionInitialized = false;
+let connectedProjectRoot;
 let liveModel = '';
 let liveTokens = null;
 let changedFiles = [];
@@ -543,6 +545,7 @@ async function runUpdateCli() {
 }
 async function chooseProject() {
   if(!native){connectionDialog();return;}
+  if(connecting){toast('Wait for the project to finish loading before switching projects.');return;}
   if(activeRun){toast('Wait for the active run before switching projects.');return;}
   try{
     const info=await native.chooseProject();if(!info)return;
@@ -553,7 +556,9 @@ async function chooseProject() {
   }catch(err){toast(err.message);}
 }
 async function enableLive() {
-  if(!native||!nativeInfo||activeRun)return;
+  if(!native||!nativeInfo||activeRun||connecting){closeDialog();return;}
+  const projectRoot=nativeInfo.projectRoot??nativeInfo.projectName??null;
+  if(connectionInitialized&&projectRoot===connectedProjectRoot){closeDialog();renderControls();return;}
   connecting=true;
   try{
   state={version:1,mode:'chat',model:'',sessions:[],activeId:''};
@@ -577,6 +582,7 @@ async function enableLive() {
     if(native.listQualifiedProviders)providerCatalog=await native.listQualifiedProviders();
   } catch {toast('Provider settings could not be loaded. Open Providers and models to retry.');}
   renderSessions();renderControls();
+  connectedProjectRoot=projectRoot;connectionInitialized=true;
   announce('Babel CLI connected.');
   }finally{connecting=false;renderControls();}
 }
