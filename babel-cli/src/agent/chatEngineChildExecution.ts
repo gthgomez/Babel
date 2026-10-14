@@ -73,9 +73,11 @@ export interface ChatSubAgentToolLogEntry {
   verified?: boolean;
   mutation_paths?: string[];
   effect_status?: MutationEffectStatus;
+  effect_scope?: import('./mutationTools.js').MutationEffectScope;
 }
 
 export interface ChatEngineChildExecutionHost {
+  invalidateRepositoryContext: (paths: readonly string[], reason: string) => void;
   readonly executionProfile?: 'chat' | 'plan' | 'deep';
   isolationBrokerFlags?: () => ReturnType<typeof import('./chatEngineIsolationFlags.js').resolveIsolationBrokerFlags>;
   _turnIndex: number;
@@ -387,6 +389,7 @@ export async function executeSubAgentAction(
     }> => {
       // Mutation sub-agent path (W2.1: git worktree + write_scope allowlist)
       if (mutationEnabled) {
+        const useWorktree = writeScope.length > 0 && process.env["BABEL_IMPLEMENT_WORKTREE"] !== "0";
         try {
           // M3: the start callback runs inside the run-scoped child context so
           // a throwing callback unwinds with the scope and cannot leak.
@@ -397,9 +400,6 @@ export async function executeSubAgentAction(
           // Prefer implement-worktree isolation when write_scope is declared.
           // Empty write_scope still routes through the legacy in-tree loop so
           // read-only mutation attempts get the existing "no write scope" error.
-          const useWorktree =
-            writeScope.length > 0 &&
-            process.env["BABEL_IMPLEMENT_WORKTREE"] !== "0";
           if (useWorktree) {
             host.persistToolStartedAtExecutorDispatch(action, meta);
             const implResult = await runImplementWorktreeAgent(
@@ -470,7 +470,7 @@ export async function executeSubAgentAction(
             // R0-7: a child that resolves after the parent moved must not
             // install evidence, invalidate verifier authority, or spend the
             // current task's budget. Visible as historical evidence only.
-            if (childResultIsStale(implResult.changedFiles.length)) {
+            if (childResultIsStale(0)) {
               return host.settleStaleChildResult(
                 tool,
                 target,
@@ -498,22 +498,13 @@ export async function executeSubAgentAction(
             const details = clean
               ? `${implResult.stepsExecuted} steps, ${confirmedChanges.length} changed, attribution=${attribution} (worktree ${implResult.worktree.name})`
               : `failed: ${implResult.error || "unknown error"}, attribution=${attribution}`;
-            if (clean && confirmedChanges.length > 0) {
-              host.workingState = applyWorkingStateEvent(host.workingState, {
-                type: "mutation",
-                path: confirmedChanges[0]!.path,
-                fingerprint: operationFingerprint(
-                  chatActionToolName(action),
-                  action,
-                ),
-              });
-            }
             host.toolCallLog.push({
               tool,
               target,
               detail: details,
               index: meta.index,
               exit_code: clean ? 0 : 1,
+              effect_scope: "isolated_child",
               ...(clean ? {} : { error: implResult.error || attribution }),
               ...(clean && confirmedChanges.length > 0
                 ? {
@@ -545,6 +536,10 @@ export async function executeSubAgentAction(
               `status: ${clean ? (attribution === "child_noop" ? "noop" : "success") : "failed"}`,
               `attribution: ${attribution}`,
               `isolation: git_worktree`,
+              `incorporation: not_applied_to_parent`,
+              `parent_dispatch_revision: ${dispatchRevisionHash}`,
+              `child_base_sha: ${implResult.baseSha ?? 'unknown'}`,
+              `candidate_postimages: ${JSON.stringify(implResult.changedFiles.map(file => ({ path: file.path, before_hash: file.before_hash, after_hash: file.after_hash })))}`,
               `child_spec: ${specReceipt}`,
               `worktree: ${implResult.worktree.path}`,
               `write_scope: ${implResult.writeScope.join(", ") || "(none)"}`,
@@ -665,6 +660,7 @@ export async function executeSubAgentAction(
             detail: details,
             index: meta.index,
             exit_code: clean ? 0 : 1,
+            effect_scope: "parent_candidate",
             ...(clean ? {} : { error: mutResult.error || attribution }),
             ...(uncertainPaths.length > 0
               ? { effect_status: "indeterminate" as const, mutation_paths: affectedPaths }
@@ -689,6 +685,7 @@ export async function executeSubAgentAction(
             );
           }
           if (affectedPaths.length > 0) {
+            host.invalidateRepositoryContext(affectedPaths, "child mutation changed the parent candidate");
             // R0-11: the in-tree mutation lane writes directly into the PARENT
             // candidate. A prior green parent verifier receipt is revision-
             // bound to the parent's earlier mutation scope; it must not remain
@@ -750,6 +747,10 @@ export async function executeSubAgentAction(
             );
           }
           const errMsg = err instanceof Error ? err.message : String(err);
+          if (!useWorktree) {
+            host.invalidateRepositoryContext([], "unresolved in-tree child effect");
+            invalidateVerifierLedger(host as never, "unresolved in-tree child effect");
+          }
           const attribution = classifySubagentFailure({
             success: false,
             error: errMsg,
@@ -764,6 +765,7 @@ export async function executeSubAgentAction(
             // A mutation child may throw after partial effects. Absence of a
             // settled result is not evidence that the parent tree is unchanged.
             effect_status: "indeterminate",
+            effect_scope: useWorktree ? "isolated_child" : "parent_candidate",
             index: meta.index,
             exit_code: 1,
           });

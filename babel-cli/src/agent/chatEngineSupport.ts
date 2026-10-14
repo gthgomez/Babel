@@ -14,11 +14,31 @@ import type { ToolCallRequest, ToolContext, ToolResult } from '../localTools.js'
 import {
   formatChatToolObservation,
   mapChatLspActionToToolRequest,
+  ChatToolActionSchema,
   type ChatMessage,
   type ChatToolAction,
 } from './chatToolDefinitions.js';
 import { isConfirmedMutation, type MutationEffectStatus } from './mutationTools.js';
 import { normalizeModelToolName } from './canonicalToolMapping.js';
+import { invalidateReadCacheForPath } from './codingLoop/index.js';
+import type { ChatEngineActionExecutorHost } from './chatEngineContracts.js';
+
+/** Drop read evidence for observed paths, or all reads for an unknown shell footprint. */
+export function invalidateChatPathReads(
+  host: Pick<ChatEngineActionExecutorHost, 'readCache' | 'fullReadCounts' | 'readCacheKey'>,
+  paths: readonly string[],
+): void {
+  if (paths.length === 0) {
+    host.readCache.clear();
+    host.fullReadCounts.clear();
+    return;
+  }
+  for (const path of paths) {
+    const key = host.readCacheKey(path);
+    invalidateReadCacheForPath(host.readCache, key);
+    host.fullReadCounts.delete(key);
+  }
+}
 
 /**
  * Pin BABEL_PROJECT_ROOT for the duration of a tool action (P2.4).
@@ -83,7 +103,9 @@ export function nativeToolUseToChatAction(
   if (canonicalName === 'finish') {
     return { type: 'finish' };
   }
-  return { type: canonicalName as ChatToolAction['type'], ...input } as ChatToolAction;
+  // The provider's advertised tool name owns identity. Input fields cannot
+  // replace it, and incomplete arguments must fail before action dispatch.
+  return ChatToolActionSchema.parse({ ...input, type: canonicalName });
 }
 
 /**
@@ -528,6 +550,7 @@ export type CompactConversationState = {
     tool: string;
     error?: string;
     effect_status?: MutationEffectStatus;
+    effect_scope?: import('./mutationTools.js').MutationEffectScope;
     mutation_paths?: string[];
   }>;
   lastVerifierReceipt: { command: string; exit_code: number } | null;
@@ -559,6 +582,7 @@ export function compactHeuristicConversation(state: CompactConversationState): v
     tool: e.tool,
     error: e.error,
     effectStatus: e.effect_status,
+    effectScope: e.effect_scope,
     mutationPaths: e.mutation_paths,
   })).length;
   const b3VerifierInfo = state.lastVerifierReceipt

@@ -222,6 +222,7 @@ export function computeToolsBeforeFirstWrite(
     tool: string;
     error?: string;
     effect_status?: import('./mutationTools.js').MutationEffectStatus;
+    effect_scope?: import('./mutationTools.js').MutationEffectScope;
   }>,
 ): number {
   for (let i = 0; i < toolCalls.length; i++) {

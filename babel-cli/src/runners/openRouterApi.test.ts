@@ -5,6 +5,24 @@ import { z } from 'zod'
 import { OpenRouterApiRunner } from './openRouterApi.js'
 
 const originalFetch = globalThis.fetch
+
+test('OpenRouter carries reported billing through buffered and native streaming receivers', async () => {
+  const model = 'deepseek/deepseek-v4.1-flash'
+  const usage = { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15, cost: 0.0031 }
+  for (const mode of ['buffered', 'native', 'structured_stream']) {
+    globalThis.fetch = (async () => mode !== 'buffered'
+      ? new Response(`data: ${JSON.stringify({ model, provider: 'FixtureProvider', choices: [{ delta: { content: mode === 'native' ? 'fixture' : '{"ok":true}' }, finish_reason: 'stop' }], usage })}\n\ndata: [DONE]\n\n`, { headers: { 'content-type': 'text/event-stream' } })
+      : new Response(JSON.stringify({ model, provider: 'FixtureProvider', choices: [{ message: { content: '{"ok":true}' } }], usage }))) as typeof fetch
+    const runner = new OpenRouterApiRunner(model, { maxTokens: 100 }, { env: { OPENROUTER_API_KEY: 'synthetic-fixture-key' } })
+    if (mode === 'native') {
+      for await (const _event of runner.executeWithToolsStream([{ role: 'user', content: 'Reply' }], [])) { /* consume actual receiver */ }
+    } else await runner.execute('Reply', z.object({ ok: z.literal(true) }), mode === 'structured_stream' ? { onChunk: () => {} } : undefined)
+    assert.equal(runner.getLastInvocationMetadata()?.estimated_cost_usd, 0.0031)
+    assert.equal(runner.getLastInvocationMetadata()?.cost_precision, 'exact')
+    assert.equal(runner.getLastInvocationMetadata()?.observed_model_id, model)
+    assert.equal(runner.getLastInvocationMetadata()?.total_tokens, 15)
+  }
+})
 const originalRoutingEnv = {
   allowFallbacks: process.env['BABEL_OPENROUTER_ALLOW_FALLBACKS'],
   requireParameters: process.env['BABEL_OPENROUTER_REQUIRE_PARAMETERS'],

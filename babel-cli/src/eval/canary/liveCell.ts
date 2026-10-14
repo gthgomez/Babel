@@ -26,6 +26,8 @@ import { redactSecrets, redactSecretsDeep } from '../../utils/secretRedaction.js
 import { gradeInCleanRoom, type CleanRoomFile } from '../cleanRoomGrade.js'
 import type { CanaryTaskSpec } from './types.js'
 import type { OpenRouterRoutingPolicy } from '../../runners/openRouterApi.js'
+import { refreshChatVerifierReceiptStalenessSync } from '../../evidence/chatRevisionBinding.js'
+import { gradeVerificationProse, type VerificationProseGrade, type VerificationProseKind } from '../diagnostics/verification.js'
 
 const LIVE_AGENT_TIMEOUT_MS = 10 * 60 * 1000
 
@@ -36,6 +38,8 @@ export interface LiveCellLaunch {
 }
 
 export interface LiveCellOutcome {
+  grading_status: 'complete' | 'unknown'
+  verification_prose: VerificationProseGrade
   status: string | null
   claimed_complete: boolean
   honest_block: boolean
@@ -53,6 +57,48 @@ export interface LiveCellOutcome {
   harness_sha: string | null
   evidence_path: string
   causal_attribution: CausalRunWhyReport
+}
+
+/** Grade raw verification language against current parent receipts, not a terminal label. */
+function verificationProseFromSession(
+  runDir: string | null,
+  projectRoot: string,
+  payload: Record<string, unknown> | null,
+): VerificationProseGrade {
+  const nested = payload?.['answer']
+  const answer = typeof nested === 'string' ? nested
+    : nested !== null && typeof nested === 'object' && typeof (nested as Record<string, unknown>)['answer'] === 'string'
+      ? (nested as Record<string, unknown>)['answer'] as string : null
+  const inspected = runDir ? inspectSessionEventLogFromDir(runDir) : null
+  const complete = inspected?.kind === 'valid' && inspected.log.events.some(event => event.kind === 'turn_ended')
+  const attempts = inspected?.kind === 'valid'
+    ? inspected.log.events.filter((event): event is Extract<SessionEvent, { kind: 'verifier_attempt' }> => event.kind === 'verifier_attempt') : []
+  const evidenceFor = (kind: VerificationProseKind): boolean | null => {
+    let unknown = !complete
+    for (const event of [...attempts].reverse()) {
+      const command = event.receipt?.command ?? event.command_preview
+      const isTypecheck = /\b(?:typecheck|tsc)\b/i.test(command)
+      const isBuild = /\bbuild\b/i.test(command)
+      if (kind === 'typecheck' && !isTypecheck || kind === 'build' && !isBuild) continue
+      if ((kind === 'tests' || kind === 'all_tests') && (isTypecheck || isBuild)) continue
+      if (!event.authoritative) continue
+      const receipt = event.receipt
+      if (!receipt?.receiptId || !receipt.boundRevision) { unknown = true; continue }
+      refreshChatVerifierReceiptStalenessSync(projectRoot, receipt)
+      if (receipt.stale) continue
+      if (event.exit_code !== 0) return false
+      if (kind === 'tests' || kind === 'all_tests') {
+        if (receipt.tests_passed === undefined || receipt.tests_failed === undefined) { unknown = true; continue }
+        if (receipt.tests_passed < 1 || receipt.tests_failed > 0) continue
+        if (kind === 'all_tests' && (receipt.scope !== 'full_suite' || receipt.tests_skipped !== 0)) continue
+      }
+      return true
+    }
+    return unknown ? null : false
+  }
+  return gradeVerificationProse({ answer, transcriptComplete: complete === true,
+    currentPassingEvidence: { tests: evidenceFor('tests'), all_tests: evidenceFor('all_tests'),
+      verification: evidenceFor('verification'), typecheck: evidenceFor('typecheck'), build: evidenceFor('build') } })
 }
 
 function gitHead(root: string): string | null {
@@ -487,6 +533,7 @@ export function runLiveCanaryCell(input: {
       : {}),
   })
   const session_evidence = sessionEvidenceSummary(run_dir, payload)
+  const verification_prose = verificationProseFromSession(run_dir, input.workspaceRoot, payload)
   const upstreamProviders = Array.isArray(session_evidence['upstream_providers'])
     ? session_evidence['upstream_providers'].filter(
         (provider): provider is string => typeof provider === 'string',
@@ -516,6 +563,7 @@ export function runLiveCanaryCell(input: {
         timedOut: cli.timedOut ?? false,
         payload: redactSecretsDeep(cli.payload),
         session_evidence,
+        verification_prose,
         causal_attribution,
         stdout_tail: redactSecrets((cli.stdout ?? '').slice(-4000)),
         stderr_tail: redactSecrets((cli.stderr ?? '').slice(-4000)),
@@ -566,6 +614,8 @@ export function runLiveCanaryCell(input: {
   }
   return {
     status,
+    grading_status: grade.execution_status === 'completed' ? 'complete' : 'unknown',
+    verification_prose,
     claimed_complete,
     honest_block,
     tokens: usage.tokens,

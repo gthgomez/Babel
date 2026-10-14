@@ -90,6 +90,8 @@ export interface ImplementWorktreeAgentResult {
   summary: string;
   writeScope: string[];
   worktree: WorktreeInfo;
+  /** Observed committed base of the isolated workspace, distinct from parent dirty state. */
+  baseSha?: string;
   /** True when parent `git status --porcelain` is unchanged by the child run. */
   parentTreeClean: boolean;
   parentStatusBefore: string;
@@ -354,6 +356,7 @@ export async function runImplementWorktreeAgent(
   const parentStatusBefore = gitPorcelainStatus(projectRoot, worktreeControl);
   const name = worktreeNameForAgent(spec.id);
   let worktree: WorktreeInfo;
+  let baseSha: string | undefined;
   try {
     worktree = createWorktree(name, {
       projectRoot,
@@ -365,6 +368,10 @@ export async function runImplementWorktreeAgent(
         : {}),
       ...(options.abortSignal ? { abortSignal: options.abortSignal } : {}),
     });
+    const base = spawnSync('git', ['rev-parse', 'HEAD'], {
+      cwd: worktree.path, encoding: 'utf8', timeout: 4000, windowsHide: true,
+    });
+    if (base.status === 0 && /^[0-9a-f]{40,64}$/i.test(base.stdout.trim())) baseSha = base.stdout.trim();
     const afterSetupLimiter = setupBudgetController.limiter();
     setupBudgetController.dispose();
     if (options.abortSignal?.aborted || afterSetupLimiter) {
@@ -541,6 +548,7 @@ export async function runImplementWorktreeAgent(
     summary,
     writeScope: scopeValidation.normalizedScope,
     worktree,
+    ...(baseSha ? { baseSha } : {}),
     parentTreeClean,
     parentStatusBefore,
     parentStatusAfter,

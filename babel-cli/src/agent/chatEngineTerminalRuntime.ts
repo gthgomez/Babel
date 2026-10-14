@@ -766,6 +766,7 @@ export function assembleChatResult(
             target: t.target,
             error: t.error,
             effectStatus: t.effect_status,
+            effectScope: t.effect_scope,
             mutationPaths: t.mutation_paths,
           }),
         )

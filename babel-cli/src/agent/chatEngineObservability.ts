@@ -126,6 +126,7 @@ export type ToolCallLogEntry = {
   stderr?: string;
   verified?: boolean;
   effect_status?: MutationEffectStatus;
+  effect_scope?: import('./mutationTools.js').MutationEffectScope;
   mutation_paths?: string[];
 };
 
@@ -142,6 +143,7 @@ export type ExportedToolCall = {
   turn?: number;
   exit_code?: number;
   effect_status?: MutationEffectStatus;
+  effect_scope?: import('./mutationTools.js').MutationEffectScope;
   mutation_paths?: string[];
 };
 
@@ -257,6 +259,7 @@ export function exportToolCallsWithTurns(
     if (entry.error !== undefined) out.error = entry.error;
     if (entry.exit_code !== undefined) out.exit_code = entry.exit_code;
     if (entry.effect_status !== undefined) out.effect_status = entry.effect_status;
+    if (entry.effect_scope !== undefined) out.effect_scope = entry.effect_scope;
     if (entry.mutation_paths !== undefined) out.mutation_paths = [...entry.mutation_paths];
     if (turn !== undefined) out.turn = turn;
     return out;

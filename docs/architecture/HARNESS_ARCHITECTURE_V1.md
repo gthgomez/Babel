@@ -165,7 +165,7 @@ Maturity labels: **IMPLEMENTED** | **PARTIAL** | **PROTOTYPE** | **PLANNED** | *
 | **Owner** | Workspace controllers |
 | **Sources** | `services/workspaceTransactions.ts`, `services/worktreeSafety.ts` |
 | **Maturity** | **IMPLEMENTED** for file writes; shell mutations weaker |
-| **Gaps** | Shell-side-effect transactions incomplete |
+| **Gaps** | Shell-side-effect transactions incomplete; `worktreeSafety` refuses destructive restoration/deletion without exclusive writer evidence, preserving current bytes and snapshots with an explicit failed rollback rather than asserting shared-writer atomicity |
 | **Target** | All reconcilable mutations revision-linked |
 
 ### 7. Independent Verifier Kernel

@@ -223,6 +223,7 @@ export function sampleFromToolLog(input: {
     error?: string;
     detail?: string;
     effect_status?: MutationEffectStatus;
+    effect_scope?: import('./mutationTools.js').MutationEffectScope;
     mutation_paths?: string[];
   }>;
   answer?: string;
@@ -234,12 +235,14 @@ export function sampleFromToolLog(input: {
     tool: tc.tool,
     error: tc.error,
     effectStatus: tc.effect_status,
+    effectScope: tc.effect_scope,
     mutationPaths: tc.mutation_paths,
   })).length;
   const tools_before_first_write = computeToolsBeforeFirstWrite(
     input.toolCalls.map((tc) => ({
       tool: tc.tool,
       ...(tc.error !== undefined ? { error: tc.error } : {}),
+      ...(tc.effect_scope !== undefined ? { effect_scope: tc.effect_scope } : {}),
       ...(tc.effect_status !== undefined ? { effect_status: tc.effect_status } : {}),
     })),
   );
@@ -279,6 +282,7 @@ export function sampleFromHarnessPayload(
         error?: string;
         detail?: string;
         effect_status?: MutationEffectStatus;
+        effect_scope?: import('./mutationTools.js').MutationEffectScope;
         mutation_paths?: string[];
       }>)
     : [];
@@ -286,6 +290,7 @@ export function sampleFromHarnessPayload(
     tool: tc.tool,
     error: tc.error,
     effectStatus: tc.effect_status,
+    effectScope: tc.effect_scope,
     mutationPaths: tc.mutation_paths,
   })).length;
   const write_count =
@@ -299,6 +304,7 @@ export function sampleFromHarnessPayload(
     toolCalls.map((tc) => ({
       tool: tc.tool,
       ...(tc.error !== undefined ? { error: tc.error } : {}),
+      ...(tc.effect_scope !== undefined ? { effect_scope: tc.effect_scope } : {}),
       ...(tc.effect_status !== undefined ? { effect_status: tc.effect_status } : {}),
     })),
   );

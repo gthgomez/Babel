@@ -7,6 +7,17 @@ import {
 } from './toolCallExport.js';
 
 void describe('computeToolCallAggregates', () => {
+  void it('counts only explicitly incorporated child effects and retains scope in export', () => {
+    const log = ['parent_candidate', 'isolated_child', 'unknown'].map((scope, index) => ({
+      tool: 'sub_agent', target: 'child', index,
+      effect_status: 'confirmed_change' as const,
+      effect_scope: scope as 'parent_candidate' | 'isolated_child' | 'unknown',
+      mutation_paths: ['src/result.ts'],
+    }));
+    assert.equal(computeToolCallAggregates(log).write_count, 1);
+    assert.deepEqual(enrichToolCallLog(log, new Map()).map(row => row.effect_scope), ['parent_candidate', 'isolated_child', 'unknown']);
+    assert.equal(computeToolCallAggregates([{ tool: 'sub_agent', effect_status: 'confirmed_change' }]).write_count, 0);
+  });
   void it('returns zeros for an empty log', () => {
     const result = computeToolCallAggregates([]);
     assert.deepEqual(result, {

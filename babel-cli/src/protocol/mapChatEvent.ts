@@ -34,6 +34,7 @@ export function mapChatEventToTurnStreamEvent(event: ChatEvent): TurnStreamEvent
         ...(event.detail !== undefined ? { detail: event.detail } : {}),
         ...(event.error !== undefined ? { error: event.error } : {}),
         ...(event.exitCode !== undefined ? { exitCode: event.exitCode } : {}),
+        ...(event.effect_scope !== undefined ? { effect_scope: event.effect_scope } : {}),
         ...(event.effect_status !== undefined ? { effect_status: event.effect_status } : {}),
         ...(event.mutation_paths !== undefined ? { mutation_paths: event.mutation_paths } : {}),
       };

@@ -235,7 +235,7 @@ test('I06: apply_patch scope checks parsed targets, not staging path', async () 
       ].join('\n'),
     }, { type: 'finish', summary: 'done', verification: [] }],
   })
-  assert.equal(allowed.success, true)
+  assert.equal(allowed.success, true, allowed.error ?? allowed.attribution)
 })
 
 test('I08: daemon crash recovery requires explicit recovery instead of silent requeue', () => {

@@ -20,6 +20,8 @@ export interface ChatResponse {
   openrouter_metadata?: OpenRouterResponseMetadata;
   choices?: ChatChoice[];
   usage?: {
+    /** OpenRouter's charged account cost; validate at the metadata boundary. */
+    cost?: unknown;
     prompt_tokens?: number;
     completion_tokens?: number;
     total_tokens?: number;
@@ -118,6 +120,13 @@ export function buildInvocationMetadata(
     completionTokens,
   });
   const router = routerMetadataProvenance(routerMetadata);
+  // https://openrouter.ai/docs/cookbook/administration/usage-accounting
+  // OpenRouter documents usage.cost as the actual charge. Preserve missing
+  // costs as estimates/unknown; malformed reported costs cannot downgrade to
+  // a seemingly complete estimate. Other provider contracts are unchanged.
+  const hasReportedCost = provider === 'openrouter' && usage?.cost !== undefined && usage.cost !== null;
+  const reportedCost = typeof usage?.cost === 'number' && Number.isFinite(usage.cost) && usage.cost >= 0
+    ? usage.cost : null;
   const reasoningTokens =
     normalizeTokenCount(usage?.reasoning_tokens) ??
     normalizeTokenCount(usage?.completion_tokens_details?.reasoning_tokens);
@@ -156,8 +165,8 @@ export function buildInvocationMetadata(
     completion_tokens: completionTokens,
     total_tokens: totalTokens,
     actual_reasoning_tokens: reasoningTokens,
-    estimated_cost_usd: estimate.estimatedCostUsd,
-    cost_precision: estimate.precision,
+    estimated_cost_usd: hasReportedCost ? reportedCost : estimate.estimatedCostUsd,
+    cost_precision: hasReportedCost ? reportedCost === null ? 'unknown' : 'exact' : estimate.precision,
     pricing_source_url: estimate.pricingSourceUrl,
     pricing_verified_at: estimate.pricingVerifiedAt,
     input_cost_per_1m: estimate.inputCostPer1M,

@@ -35,6 +35,8 @@ export interface CleanRoomGradeInput {
 }
 
 export interface CleanRoomGradeResult {
+  /** A missing/terminated grader is not an observed oracle failure. */
+  execution_status?: 'completed' | 'not_started' | 'timed_out' | 'unknown'
   hidden_ok: boolean
   exit_code: number
   stdout: string
@@ -109,6 +111,10 @@ export function gradeInCleanRoom(input: CleanRoomGradeInput): CleanRoomGradeResu
     const stderr = result.stderr ?? ''
     const exit = typeof result.status === 'number' ? result.status : 1
     return {
+      execution_status: result.error
+        ? (result.error as NodeJS.ErrnoException).code === 'ETIMEDOUT' ? 'timed_out'
+          : ['ENOENT', 'EACCES', 'ENOEXEC', 'ENOTDIR'].includes((result.error as NodeJS.ErrnoException).code ?? '') ? 'not_started' : 'unknown'
+        : typeof result.status === 'number' ? 'completed' : 'unknown',
       hidden_ok: exit === 0,
       exit_code: exit,
       stdout,

@@ -10,7 +10,7 @@
  * must accept that name alongside shell_exec / test_run.
  */
 
-/** Direct file-mutation tools (not sub_agent — that uses detail-string parsing). */
+/** Direct file-mutation tools; child effects require explicit parent scope. */
 export const DIRECT_MUTATION_TOOLS = [
   'write_file',
   'file_write',
@@ -27,6 +27,20 @@ export type MutationEffectStatus =
   | 'confirmed_no_change'
   | 'indeterminate'
   | 'not_applicable';
+
+/** Workspace affected by an observed tool effect; independent of effect certainty. */
+export type MutationEffectScope = 'parent_candidate' | 'isolated_child' | 'unknown';
+
+/** Only explicitly scoped child effects belong to the current parent candidate. */
+export function isConfirmedParentChildMutation(input: {
+  tool: string;
+  error?: string | null | undefined;
+  effect_status?: MutationEffectStatus | undefined;
+  effect_scope?: MutationEffectScope | undefined;
+}): boolean {
+  return input.tool === 'sub_agent' && input.error !== 'blocked'
+    && input.effect_status === 'confirmed_change' && input.effect_scope === 'parent_candidate';
+}
 
 export interface MutationEffectAssessment {
   status: MutationEffectStatus;
@@ -206,8 +220,10 @@ export function isConfirmedMutation(input: {
   error?: string | null | undefined;
   effectStatus?: MutationEffectStatus | undefined;
   mutationPaths?: readonly string[] | undefined;
+  effectScope?: MutationEffectScope | undefined;
 }): boolean {
   if (input.effectStatus !== 'confirmed_change' || input.error === 'blocked') return false;
+  if (input.tool === 'sub_agent') return input.effectScope === 'parent_candidate';
   if (isConfirmedDirectMutation(input.tool, input.error, input.effectStatus)) return true;
   // A verified workspace effect is truthful even when the executor cannot
   // enumerate every affected path.  Paths drive changed-file projection only;
@@ -222,11 +238,13 @@ export function confirmedMutationPaths(input: {
   error?: string | null | undefined;
   effectStatus?: MutationEffectStatus | undefined;
   mutationPaths?: readonly string[] | undefined;
+  effectScope?: MutationEffectScope | undefined;
 }): string[] {
   if (!isConfirmedMutation({
     tool: input.tool,
     error: input.error,
     effectStatus: input.effectStatus,
+    effectScope: input.effectScope,
     mutationPaths: input.mutationPaths,
   })) return [];
   if (input.mutationPaths && input.mutationPaths.length > 0) {

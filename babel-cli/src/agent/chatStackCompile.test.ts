@@ -505,7 +505,16 @@ describe("compileChatStack with real project root", () => {
 
 
 describe('automatic instruction credential admission', () => {
-  it('does not follow an in-project instruction symlink into a credential store', () => {
+  it('refuses a non-file automatic instruction target without reading nested content', () => {
+    const root = mkdtempSync(join(tmpdir(), 'babel-stack-nonfile-instruction-'))
+    try {
+      mkdirSync(join(root, '.git'))
+      mkdirSync(join(root, 'AGENTS.md'))
+      writeFileSync(join(root, 'AGENTS.md', 'nested.txt'), 'NONFILE_INSTRUCTION_SENTINEL')
+      assert.throws(() => compileChatStack({ projectRoot: root, babelRoot: root }), /required_instruction_read_failed/)
+    } finally { rmSync(root, { recursive: true, force: true }) }
+  })
+  it('does not follow an in-project instruction symlink into a credential store', t => {
     const root = mkdtempSync(join(tmpdir(), 'babel-stack-credential-link-'))
     const previous = process.env['BABEL_USER_CONTEXT']
     process.env['BABEL_USER_CONTEXT'] = join(root, 'absent-context.md')
@@ -513,7 +522,16 @@ describe('automatic instruction credential admission', () => {
       mkdirSync(join(root, '.git'))
       const canary = 'SYNTHETIC_STACK_CREDENTIAL_CANARY'
       writeFileSync(join(root, '.env'), canary)
-      symlinkSync(join(root, '.env'), join(root, 'AGENTS.md'), 'file')
+      try {
+        symlinkSync(join(root, '.env'), join(root, 'AGENTS.md'), 'file')
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code
+        if (process.platform === 'win32' && ['EPERM', 'EACCES', 'ENOTSUP'].includes(code ?? '') && process.env['BABEL_REQUIRE_SYMLINK_FIXTURE'] !== '1') {
+          t.skip('File symlink creation unavailable on this Windows host; real symlink rejection remains unqualified here')
+          return
+        }
+        throw error
+      }
       const stack = compileChatStack({ projectRoot: root, babelRoot: root })
       assert.equal(stack.system_context.includes(canary), false)
       assert.equal(stack.selected_entries.some(entry => entry.path === join(root, 'AGENTS.md')), false)

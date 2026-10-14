@@ -77,6 +77,7 @@ export function updateStallState(
     target: string;
     error?: string;
     effect_status?: MutationEffectStatus;
+    effect_scope?: import('./mutationTools.js').MutationEffectScope;
     mutation_paths?: string[];
   }>,
   turnIndex: number,
@@ -101,6 +102,7 @@ export function updateStallState(
       tool: tc.tool,
       error: tc.error,
       effectStatus: tc.effect_status,
+      effectScope: tc.effect_scope,
       mutationPaths: tc.mutation_paths,
     }),
   );
@@ -112,6 +114,7 @@ export function updateStallState(
       tool: tc.tool,
       error: tc.error,
       effectStatus: tc.effect_status,
+      effectScope: tc.effect_scope,
       mutationPaths: tc.mutation_paths,
     })) {
       next.turnsSinceLastWrite = 0;

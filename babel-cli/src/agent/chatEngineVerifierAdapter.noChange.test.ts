@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { spawnSync } from 'node:child_process'
 import * as fs from 'node:fs'
 import { syncBuiltinESMExports } from 'node:module'
-import { after, describe, mock, test } from 'node:test'
+import { after, describe, mock, test, type TestContext } from 'node:test'
 
 import { captureChatVerifierReceipt, shouldReuseCachedVerifierReceipt } from './chatEngineVerifierAdapter.js'
 import {
@@ -23,34 +23,51 @@ function project(): string {
   return root
 }
 
-test('credential mutation scope refuses lexical and physical targets before content reads', async () => {
-  const root = project()
-  const aliasRoot = project()
-  writeFileSync(join(root, '.env'), 'SYNTHETIC_CANARY')
-  writeFileSync(join(aliasRoot, '.env'), 'SYNTHETIC_CANARY')
-  symlinkSync(join(aliasRoot, '.env'), join(aliasRoot, 'ordinary.txt'))
+function createFileSymlink(t: TestContext, target: string, path: string): boolean {
+  try { symlinkSync(target, path, 'file'); return true } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code
+    if (process.platform === 'win32' && ['EPERM', 'EACCES', 'ENOTSUP'].includes(code ?? '') && process.env['BABEL_REQUIRE_SYMLINK_FIXTURE'] !== '1') {
+      t.skip('Windows file symlink creation unavailable; physical target rejection remains unqualified here')
+      return false
+    }
+    throw error
+  }
+}
+
+async function assertNoCredentialContentReads(projectRoot: string, mutation: string): Promise<void> {
   const mutableFs = (fs as unknown as { default: typeof fs }).default
   const originalRead = mutableFs.readFileSync
   const originalOpen = mutableFs.openSync
   let contentReads = 0
   mock.method(mutableFs, 'readFileSync', (...args: Parameters<typeof originalRead>) => {
-    if ([root, aliasRoot].some((fixture) => String(args[0]).startsWith(fixture))) contentReads++
+    if (String(args[0]).startsWith(projectRoot)) contentReads++
     return originalRead(...args)
   })
   mock.method(mutableFs, 'openSync', (...args: Parameters<typeof originalOpen>) => {
-    if ([root, aliasRoot].some((fixture) => String(args[0]).startsWith(fixture))) contentReads++
+    if (String(args[0]).startsWith(projectRoot)) contentReads++
     return originalOpen(...args)
   })
   syncBuiltinESMExports()
   try {
-    for (const [projectRoot, mutation] of [[root, '.env'], [aliasRoot, 'ordinary.txt']] as const) {
-      assert.equal(await captureChatVerifierReceipt({
+    assert.equal(await captureChatVerifierReceipt({
         projectRoot, command: 'npm test', exitCode: 0, summary: 'green',
         mutationPaths: [mutation], stdout: '# tests 1\n# skipped 0',
-      }) === null, true)
-    }
+    }) === null, true)
     assert.equal(contentReads, 0)
   } finally { mock.restoreAll(); syncBuiltinESMExports() }
+}
+
+test('credential mutation scope refuses lexical targets before content reads', async () => {
+  const root = project()
+  writeFileSync(join(root, '.env'), 'SYNTHETIC_CANARY')
+  await assertNoCredentialContentReads(root, '.env')
+})
+
+test('credential mutation scope refuses physical aliases before content reads', async t => {
+  const root = project()
+  writeFileSync(join(root, '.env'), 'SYNTHETIC_CANARY')
+  if (!createFileSymlink(t, join(root, '.env'), join(root, 'ordinary.txt'))) return
+  await assertNoCredentialContentReads(root, 'ordinary.txt')
 })
 
 function initializeGit(root: string): void {
@@ -276,11 +293,11 @@ describe('complete fresh proof beyond the cache discovery file limit', { concurr
     assert.equal(refreshChatVerifierReceiptStalenessSync(root, receipt)?.stale, true)
   })
 
-  test('a symlink after41 ordinary files cannot gain fresh proof trust', async () => {
+  test('a symlink after41 ordinary files cannot gain fresh proof trust', async t => {
     const root = largeProject()
     const outside = project()
     writeFileSync(join(outside, 'input.txt'), 'outside baseline\n')
-    symlinkSync(join(outside, 'input.txt'), join(root, 'zz-link.txt'), 'file')
+    if (!createFileSymlink(t, join(outside, 'input.txt'), join(root, 'zz-link.txt'))) return
     initializeGit(root)
     assert.equal(await captureChatVerifierReceipt(freshLargeInput(root)) === null, true)
   })

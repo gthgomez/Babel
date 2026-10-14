@@ -116,6 +116,7 @@ export type TurnStreamEvent =
       error?: string;
       exitCode?: number;
       effect_status?: MutationEffectStatus;
+      effect_scope?: import('../agent/mutationTools.js').MutationEffectScope;
       mutation_paths?: string[];
     }
   | { type: 'thought'; text: string }

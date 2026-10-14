@@ -60,6 +60,8 @@ const MANAGED_ENV = [
   'BABEL_AUTONOMY_LEASE',
   'BABEL_EXECUTION_PROFILE',
   'BABEL_ALLOW_HOST_FALLBACK',
+  'BABEL_DRY_RUN',
+  'BABEL_DRY_RUN_SOURCE',
 ] as const;
 
 const FIXTURE_POLICY: ResolvedModelPolicy = {
@@ -105,6 +107,8 @@ before(() => {
   });
   process.env['BABEL_EXECUTION_PROFILE'] = 'dev_local';
   process.env['BABEL_ALLOW_HOST_FALLBACK'] = '1';
+  process.env['BABEL_DRY_RUN'] = 'false';
+  process.env['BABEL_DRY_RUN_SOURCE'] = 'session';
 });
 
 after(() => {

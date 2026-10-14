@@ -21,6 +21,8 @@ import { join } from 'node:path';
 
 import { ChatEngine } from './chatEngine.js';
 import { WorkspaceTransactionManager } from '../services/workspaceTransactions.js';
+import { hasAnyWrites, currentTurnHasMutation } from './chatEngineCriticBudget.js';
+import { getChatTaskTune, type ChatTaskClass } from '../config/chatTaskClass.js';
 
 const MODEL = 'deepseek-v4-flash';
 
@@ -33,6 +35,8 @@ const MANAGED_ENV = [
   'BABEL_ALLOW_HOST_FALLBACK',
   'BABEL_LITE_OFFLINE',
   'BABEL_IMPLEMENT_WORKTREE',
+  'BABEL_DRY_RUN',
+  'BABEL_DRY_RUN_SOURCE',
 ] as const;
 
 let envSnapshot: Record<string, string | undefined> = {};
@@ -60,6 +64,8 @@ before(() => {
   process.env['BABEL_EXECUTION_PROFILE'] = 'dev_local';
   process.env['BABEL_ALLOW_HOST_FALLBACK'] = '1';
   process.env['BABEL_LITE_OFFLINE'] = '1';
+  process.env['BABEL_DRY_RUN'] = 'false';
+  process.env['BABEL_DRY_RUN_SOURCE'] = 'session';
 });
 
 after(() => {
@@ -92,7 +98,7 @@ function createGitProject(): string {
 
 interface EngineInternals {
   lastVerifierReceipt: { command: string; exit_code: number; stale?: boolean; staleReason?: string } | null;
-  executedVerifierLedger: Array<{ stale?: boolean; staleReason?: string }>;
+  executedVerifierLedger: Array<{ command?: string; exit_code?: number; summary?: string; stale?: boolean; staleReason?: string }>;
   abortController: AbortController;
   toolCallLog: Array<{ tool: string; mutation_paths?: string[]; effect_status?: string }>;
   executeOneAction: (
@@ -111,12 +117,13 @@ function seedGreenReceipt(engine: ChatEngine): void {
     exit_code: 0,
     stale: false,
   } as never;
-  internals.executedVerifierLedger = [{ stale: false }];
+  internals.executedVerifierLedger = [{ command: 'npm test', exit_code: 0, summary: 'fixture historical receipt', stale: false }];
 }
 
 async function dispatchMutationChild(
   engine: ChatEngine,
   root: string,
+  callbacks: { onSubAgentStart?: () => void } = {},
 ): Promise<{ observation: string }> {
   const internals = engine as unknown as EngineInternals;
   const result = await internals.executeOneAction(
@@ -129,13 +136,95 @@ async function dispatchMutationChild(
       projectRoot: root,
       signal: internals.abortController.signal,
     },
-    {},
+    callbacks,
     { index: 0, idempotencyKey: 'call-0' },
   );
   return { observation: result.observation };
 }
 
 describe('R0-11 child mutation vs parent verifier freshness', () => {
+  test('inline child mutation renews a parent read exhausted at the full-read limit', async () => {
+    const root = createGitProject();
+    process.env['BABEL_IMPLEMENT_WORKTREE'] = '0';
+    try {
+      writeFileSync(join(root, 'src/result.txt'), 'OLD_CHILD_CONTENT\n');
+      for (const args of [['add', 'src/result.txt'], ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-qm', 'seed read target']]) {
+        assert.equal(spawnSync('git', args, { cwd: root, encoding: 'utf8' }).status, 0);
+      }
+      const engine = new ChatEngine({ task: 'Update the result under src', projectRoot: root, model: MODEL });
+      const internals = engine as unknown as EngineInternals & { taskClass: ChatTaskClass; readCache: { clear(): void } };
+      const context = { agentId: 'parent', runId: 'parent', runDir: root, babelRoot: root, projectRoot: root, signal: internals.abortController.signal };
+      const read = () => internals.executeOneAction({ type: 'read_file', path: 'src/result.txt' }, context, {}, { index: 1 });
+      for (let index = 0; index < getChatTaskTune(internals.taskClass).maxFullReadsPerFile; index++) {
+        internals.readCache.clear(); // Exercise real reads after cache eviction.
+        assert.match((await read()).observation, /OLD_CHILD_CONTENT/);
+      }
+      assert.match((await read()).observation, /read limit|full.read|already.*read/i);
+      await dispatchMutationChild(engine, root);
+      const expected = readFileSync(join(root, 'src/result.txt'), 'utf8');
+      assert.notEqual(expected, 'OLD_CHILD_CONTENT\n');
+      const refreshed = await read();
+      assert.ok(refreshed.observation.includes(expected.trim()), 'changed parent bytes must reach the next read');
+      assert.doesNotMatch(refreshed.observation, /read limit|already.*read/i);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+  test('changed isolated child is historical after parent revision moves', async () => {
+    const root = createGitProject();
+    process.env['BABEL_IMPLEMENT_WORKTREE'] = '1';
+    try {
+      const engine = new ChatEngine({ task: 'parent task', projectRoot: root, model: MODEL });
+      const internals = engine as unknown as EngineInternals;
+      await internals.executeOneAction({ type: 'write_file', path: 'src/main.ts', content: 'export const n = 2;\n' },
+        { agentId: 'parent', runId: 'parent', runDir: root, babelRoot: root, projectRoot: root, signal: internals.abortController.signal }, {}, { index: 1, idempotencyKey: 'seed-parent' });
+      const { observation } = await dispatchMutationChild(engine, root, {
+        onSubAgentStart: () => writeFileSync(join(root, 'src/main.ts'), 'export const n = 3;\n'),
+      });
+      assert.match(observation, /superseded|stale/i);
+      assert.equal(internals.toolCallLog.filter(row => (row as {effect_scope?: string}).effect_scope === 'isolated_child').length, 0);
+      assert.equal(readFileSync(join(root, 'src/main.ts'), 'utf8'), 'export const n = 3;\n');
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+  test('dirty parent dispatch revision is distinct from actual committed child base', async () => {
+    const root = createGitProject();
+    process.env['BABEL_IMPLEMENT_WORKTREE'] = '1';
+    try {
+      const base = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' });
+      assert.equal(base.status, 0);
+      const engine = new ChatEngine({ task: 'parent task', projectRoot: root, model: MODEL });
+      const internals = engine as unknown as EngineInternals;
+      await internals.executeOneAction({ type: 'write_file', path: 'src/main.ts', content: 'export const n = 2;\n' },
+        { agentId: 'parent', runId: 'parent', runDir: root, babelRoot: root, projectRoot: root, signal: internals.abortController.signal }, {}, { index: 1, idempotencyKey: 'seed-parent' });
+      const { observation } = await dispatchMutationChild(engine, root);
+      assert.match(observation, /parent_dispatch_revision: [0-9a-f]+/);
+      assert.ok(observation.includes(`child_base_sha: ${base.stdout.trim()}`));
+      assert.doesNotMatch(observation, /parent_base_revision:/);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+  test('isolated artifact application is a separately authorized parent transaction requiring fresh verification', async () => {
+    const root = createGitProject();
+    process.env['BABEL_IMPLEMENT_WORKTREE'] = '1';
+    try {
+      const engine = new ChatEngine({ task: 'Apply the result to src and run node --test fixture.test.mjs before completing', projectRoot: root, model: MODEL });
+      seedGreenReceipt(engine);
+      const { observation } = await dispatchMutationChild(engine, root);
+      const worktree = observation.match(/^worktree: (.+)$/m)?.[1];
+      assert.ok(worktree, 'the child reports its unapplied artifact workspace');
+      const content = readFileSync(join(worktree, 'src/result.txt'), 'utf8');
+      const internals = engine as unknown as EngineInternals;
+      assert.equal(hasAnyWrites(internals.toolCallLog as never), false);
+      assert.equal(internals.lastVerifierReceipt?.stale, false);
+      const context = { agentId: 'parent', runId: 'parent-promotion', runDir: root, babelRoot: root, projectRoot: root, signal: internals.abortController.signal };
+      await internals.executeOneAction({ type: 'write_file', path: 'src/result.txt', content }, context, {}, { index: 1, idempotencyKey: 'parent-apply' });
+      assert.equal(readFileSync(join(root, 'src/result.txt'), 'utf8'), content);
+      assert.equal(internals.lastVerifierReceipt?.stale, true);
+      assert.equal(hasAnyWrites(internals.toolCallLog as never), true);
+      writeFileSync(join(root, 'fixture.test.mjs'), `import assert from 'node:assert/strict'; import { readFileSync } from 'node:fs'; assert.equal(readFileSync('src/result.txt', 'utf8'), ${JSON.stringify(content)});`);
+      const verification = await internals.executeOneAction({ type: 'run_command', command: 'node --test fixture.test.mjs' }, context, {}, { index: 2, idempotencyKey: 'parent-verify' });
+      assert.equal(internals.lastVerifierReceipt?.command, 'node --test fixture.test.mjs', verification.observation);
+      assert.equal(internals.lastVerifierReceipt?.exit_code, 0);
+      assert.equal(internals.lastVerifierReceipt?.stale ?? false, false);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
   test('an unresolved failed child write invalidates parent verification without confirmed-change evidence', async () => {
     const root = createGitProject();
     process.env['BABEL_IMPLEMENT_WORKTREE'] = '0';
@@ -265,6 +354,10 @@ describe('R0-11 child mutation vs parent verifier freshness', () => {
 
       await dispatchMutationChild(engine, root);
       const internals = engine as unknown as EngineInternals;
+      assert.equal(hasAnyWrites(internals.toolCallLog as never), false, 'isolated effects are not parent writes');
+      assert.equal(currentTurnHasMutation(internals.toolCallLog as never, 0), false, 'isolated effects are not parent progress');
+      assert.equal((internals.toolCallLog.at(-1) as any)?.effect_scope, 'isolated_child');
+      assert.equal(internals.getParityRuntime().sessionEvents.events.filter(e => e.kind === 'mutation_batch').length, 0);
       assert.equal(
         internals.lastVerifierReceipt?.stale ?? false,
         false,
