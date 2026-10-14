@@ -26,10 +26,31 @@ import {
   type CriticRunner,
 } from './chatEngineCriticBudget.js';
 import { OpenRouterApiRunner } from '../runners/openRouterApi.js';
+import {DeepSeekApiRunner} from '../runners/deepSeekApi.js';
+import {DeepInfraApiRunner} from '../runners/deepInfraApi.js';
+import {OllamaApiRunner} from '../runners/ollamaApi.js';
 import type { RunnerCallbacks } from '../runners/base.js';
 
 const EXACT_GLM_MODEL = 'z-ai/glm-5.3-flash';
 const GLM_BACKEND_KEY = 'glm-5.3-flash';
+
+test('both critic transports honor explicit providers despite ambient remote credentials', () => {
+  const names=['OPENROUTER_API_KEY','DEEPSEEK_API_KEY','DEEPINFRA_API_KEY'];
+  const prior=Object.fromEntries(names.map(name=>[name,process.env[name]]));
+  process.env['OPENROUTER_API_KEY']='synthetic';process.env['DEEPSEEK_API_KEY']='sk-synthetic';process.env['DEEPINFRA_API_KEY']='synthetic';
+  const noFallback=():CriticRunner=>{throw new Error('Cross-provider fallback is forbidden');};
+  try {
+    for(const factory of [resolveOrCreateCriticRunner,resolveOrCreateCriticProRunner]){
+      const direct=factory('deepseek-v4-flash',null,noFallback,'deepseek').runner;
+      assert.ok(direct instanceof DeepSeekApiRunner);
+      const local=factory('qwen3:latest',null,noFallback,'ollama').runner;
+      assert.ok(local instanceof OllamaApiRunner);
+      const cloud=factory('Qwen/Qwen3-32B',null,noFallback,'deepinfra').runner;
+      assert.ok(cloud instanceof DeepInfraApiRunner);
+      assert.ok(!(cloud instanceof OpenRouterApiRunner));
+    }
+  } finally {for(const name of names)restoreEnv(name,prior[name]);}
+});
 
 function restoreEnv(key: string, value: string | undefined): void {
   if (value === undefined) delete process.env[key];

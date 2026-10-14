@@ -681,6 +681,10 @@ export async function* resolveChatFallbackOrFail(
     yield input.failed(err.message)
     return null
   }
+  if (process.env['BABEL_DESKTOP_PROVIDER']) {
+    yield input.failed(`${err.message} [LIVE_MODEL_POLICY] The selected Desktop route failed; automatic provider or model substitution is disabled. Retry or choose another enabled model in Settings.`)
+    return null
+  }
   if (input.modelPolicy?.provider === 'opencode-go') {
     yield input.failed(`${err.message} [LIVE_MODEL_POLICY] exact Go route refuses provider substitution`)
     return null

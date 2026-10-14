@@ -32,6 +32,24 @@ import {
   resolveCompactionModelId,
 } from './chatCompaction.js';
 
+it('provider-bound compaction refuses ambient OpenRouter fallback without an admitted summarizer', async () => {
+  const previousKey=process.env['OPENROUTER_API_KEY'];
+  const previousFetch=globalThis.fetch;
+  let requests=0;
+  process.env['OPENROUTER_API_KEY']='synthetic';
+  globalThis.fetch=(async()=>{requests++;throw new Error('External dispatch is forbidden');}) as typeof fetch;
+  try {
+    const strategy=new LLMSummarizeCompaction();
+    const options:CompactionOptions={model:'deepseek-v4.1-flash',maxTokens:100,allowAmbientProvider:false};
+    assert.equal(strategy.canApply(makeLongConversation(5),10000,100,options),false);
+    await assert.rejects(()=>strategy.compact(makeLongConversation(5),options));
+    assert.equal(requests,0);
+  } finally {
+    if(previousKey===undefined)delete process.env['OPENROUTER_API_KEY'];else process.env['OPENROUTER_API_KEY']=previousKey;
+    globalThis.fetch=previousFetch;
+  }
+});
+
 // ─── Fixtures ──────────────────────────────────────────────────────────────
 
 function makeMessages(overrides?: Partial<ChatMessage>[]): ChatMessage[] {

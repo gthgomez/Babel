@@ -100,6 +100,10 @@ export type { TargetModel };
 // Async-local scope prevents concurrent runs from changing one another's route.
 const pipelineModelRoute = new AsyncLocalStorage<{model:string; allowExpensive?:boolean}>();
 
+export function getPipelineSelectedModel(): string | undefined {
+  return pipelineModelRoute.getStore()?.model;
+}
+
 function explicitModelTier(model: string, liveOnly: boolean, allowExpensive = false): TierSpec {
   if (liveOnly) assertLiveModelId(model, 'live pipeline selection');
   const resolved = resolveModelByKey({key:model, liveOnly, allowExpensive, bindStagesToSelectedModel:true});
@@ -118,8 +122,8 @@ function explicitModelTier(model: string, liveOnly: boolean, allowExpensive = fa
 }
 
 export async function withPipelineModelRoute<T>(model: string, run: () => Promise<T>, options: {liveOnly?: boolean; allowExpensive?: boolean} = {}): Promise<T> {
-  explicitModelTier(model, options.liveOnly ?? process.env['BABEL_PIPELINE_V9_OFFLINE'] !== '1', options.allowExpensive);
-  return pipelineModelRoute.run({model, ...(options.allowExpensive !== undefined ? {allowExpensive:options.allowExpensive} : {})}, run);
+  const tier = explicitModelTier(model, options.liveOnly ?? process.env['BABEL_PIPELINE_V9_OFFLINE'] !== '1', options.allowExpensive);
+  return pipelineModelRoute.run({model:tier.backendKey ?? model, ...(options.allowExpensive !== undefined ? {allowExpensive:options.allowExpensive} : {})}, run);
 }
 
 // ─── Waterfall telemetry ──────────────────────────────────────────────────────

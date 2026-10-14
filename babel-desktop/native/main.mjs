@@ -12,7 +12,7 @@ import {resolveOfficialCli,bundledEnvironment} from './runtime.mjs';
 import {diagnoseRuntime} from './diagnostics.mjs';
 import {hasProviderCredential, saveProviderCredential} from './credentials.mjs';
 import {saveDesktopProviderRoute} from './provider-route-save.mjs';
-import {applyProjectCredentialScope} from './childEnv.mjs';
+import {applyProjectCredentialScope,applySelectedModelEnvironment} from './childEnv.mjs';
 import {resolveEngineIdentity} from './identity.mjs';
 import {createGitRunner,createStepRunner,inspectDevelopmentCheckout,planDevelopmentUpdate,precheckSafety,resolveNpmInvocation,runDevelopmentUpdate,runDevelopmentRebuild,compareReleaseVersion,EXPECTED_ORIGIN} from './updater.mjs';
 import {parseBuildMetadata} from './identity.mjs';
@@ -394,11 +394,12 @@ async function start(){
     const unavailableMode=modeUnavailableReason(runRequest.mode,route.provider);
     if(unavailableMode)throw new Error(unavailableMode);
     const models=qualifiedProviders(runtimeEnvironment().BABEL_CONFIG_DIR).find(p=>p.id===route.provider)?.routes??[];
-    if(!models.some(model=>model.id===runRequest.model&&model.enabled!==false))throw new Error('The selected model is disabled or belongs to another provider. Choose an enabled model.');
+    const selectedModel=models.find(model=>model.id===runRequest.model&&model.enabled!==false);
+    if(!selectedModel)throw new Error('The selected model is disabled or belongs to another provider. Choose an enabled model.');
     buildRunArgs(cliEntry, preferences.projectRoot, runRequest);
     const consent = await withNativeDialog(() => dialog.showMessageBox(window, {type:'question', title:'Run with your existing Babel CLI?', message:`Start a ${request.mode} run with Babel?`, detail:`Project: ${preferences.projectRoot}\nCLI: ${cliEntry}\n\nTask: ${request.task.slice(0,1200)}${request.task.length>1200?'…':''}\n\nBabel may read and change files in this project, run commands, and send project content to your configured model provider. Approvals appear in this window. Stop ends the run.`, buttons:['Cancel','Run Babel'], defaultId:0, cancelId:0, noLink:true}));
     if (consent.response !== 1) return {started:false};
-    runner = new BabelChild({executable:officialRuntime().executable, entry:cliEntry, projectRoot:preferences.projectRoot, env:runtimeEnvironment(), inheritEnv:false});
+    runner = new BabelChild({executable:officialRuntime().executable, entry:cliEntry, projectRoot:preferences.projectRoot, env:applySelectedModelEnvironment(runtimeEnvironment(),selectedModel), inheritEnv:false});
     runner.start(runRequest, packet => {if(window&&!window.isDestroyed()) window.webContents.send('babel:event', packet);});
     return {started:true};
     }finally{runAdmission=false;}

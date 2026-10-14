@@ -86,6 +86,8 @@ export interface CompactionOptions {
   signal?: AbortSignal;
   /** Optional injected summarization provider (selected route; no ambient fallback). */
   summarizationProvider?: LlmCompactionProvider;
+  /** Provider-aware Chat callers require an admitted route and forbid ambient fallback. */
+  allowAmbientProvider?: boolean;
   /** Bounded provider lifecycle receipts for the summarizer inference. */
   callbacks?: RunnerCallbacks;
   /** Billed inference usage is recorded even if its summary is later discarded. */
@@ -407,11 +409,12 @@ export class LLMSummarizeCompaction implements CompactionStrategy {
    * to another provider's API. Returns null when no coherent target exists;
    * the caller then falls back to heuristic truncation instead of guessing.
    */
-  private resolveCompactionTarget(options: { model?: string }): {
+  private resolveCompactionTarget(options: { model?: string; allowAmbientProvider?: boolean }): {
     apiKey: string;
     baseUrl: string;
     model: string;
   } | null {
+    if (options.allowAmbientProvider === false) return null;
     const { baseUrl } = this.resolveCompactionConfig();
     const isAnthropic = baseUrl.includes('anthropic.com');
 

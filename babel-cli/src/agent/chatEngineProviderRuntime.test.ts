@@ -66,6 +66,29 @@ test('stops obsolete provider work without emitting another task terminal', asyn
   assert.deepEqual(await stream.next(), { done: true, value: null })
 })
 
+test('Desktop keeps every selected provider route after a retryable first-turn error', async () => {
+  const previousProvider=process.env['BABEL_DESKTOP_PROVIDER']
+  try {
+    for(const provider of ['deepseek','openrouter','opencode-go','deepinfra','ollama']) {
+      process.env['BABEL_DESKTOP_PROVIDER']=provider
+      const stream=resolveChatFallbackOrFail(fallbackInput({
+        err:new Error('provider HTTP 503'),
+        options:{model:'deepseek-v4-pro'},
+        modelPolicy:{provider,providerModelId:'deepseek-v4-pro'} as ResolvedModelPolicy,
+        tryFailover:()=>{throw new Error('Automatic model substitution was considered')},
+        resolveFallback:()=>{throw new Error('Another provider was considered')},
+      }))
+      const first=await stream.next()
+      assert.ok(!first.done)
+      assert.equal(first.value?.type,'failed')
+      if(first.value?.type==='failed')assert.match(first.value.error,/selected Desktop route/)
+      assert.deepEqual(await stream.next(),{done:true,value:null})
+    }
+  } finally {
+    if(previousProvider===undefined)delete process.env['BABEL_DESKTOP_PROVIDER'];else process.env['BABEL_DESKTOP_PROVIDER']=previousProvider
+  }
+})
+
 test('preserves cancellation and rejects fallback on output truncation', async () => {
   const cancelled = resolveChatFallbackOrFail(
     fallbackInput({

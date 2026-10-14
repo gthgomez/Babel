@@ -81,6 +81,7 @@ export function resolveChatModelPolicy(options: ChatModelPolicyOptions): {
   const policy = requestedModelIsBackendKey
     ? resolveModelByKey({
         key: requestedBackendKey!,
+        bindStagesToSelectedModel: true,
         ...(explicitOpenCodeRequest || explicitGoRequest || desktopProvider === 'deepseek' || desktopProvider === 'deepinfra'
           ? {}
           : { liveOnly: !offline }),
