@@ -1190,7 +1190,16 @@ export class ChatEngine {
       abortController: this.abortController,
       turnTimeoutMs: TURN_TIMEOUT_MS,
       ...(this.modelPolicy?.providerModelId
-        ? { primaryModel: this.modelPolicy.providerModelId, primaryProvider: this.modelPolicy.provider }
+        ? {
+            primaryModel: this.modelPolicy.providerModelId,
+            // Offline CLI compatibility keeps its injected/cached critic. Desktop
+            // (including local Ollama), live calls and Go still bind the provider.
+            ...(!isOfflineChatMode() || process.env['BABEL_DESKTOP_IPC'] === '1' ||
+                Boolean(process.env['BABEL_DESKTOP_PROVIDER']) ||
+                this.modelPolicy.provider === 'opencode-go'
+              ? { primaryProvider: this.modelPolicy.provider }
+              : {}),
+          }
         : {}),
       resolveDeliberationRunner: () => this.resolveDeliberationRunner(),
       providerCallbacks: this.providerRetryCallbacks({
