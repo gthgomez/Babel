@@ -27,7 +27,9 @@ export function runInstalledDoctor(options: {
   const dockerReady = options.dockerProbe ? options.dockerProbe() :
     spawnSync('docker', ['info', '--format', '{{.ServerVersion}}'], { timeout: 3000, stdio: 'ignore', env }).status === 0
   const image=env['BABEL_BENCHMARK_DOCKER_IMAGE']?.trim()
-  const imageReady=Boolean(dockerReady&&image&&(options.imageProbe?options.imageProbe(image):probeInstalledSandboxImage(image,{env})))
+  const imageReady=Boolean(dockerReady&&image&&(options.imageProbe?options.imageProbe(image):probeInstalledSandboxImage(image,{
+    env,execute:(_binary,args,settings)=>spawnSync('docker',args,settings),
+  })))
   const checks: Check[] = [
     { id: 'node', status: nodeReady ? 'ok' : 'fail', message: `Node ${process.versions.node}; requires ^22.19.0 or ^24.13.1` },
     { id: 'resources', status: existsSync(join(paths.resourceRoot, 'prompt_catalog.yaml')) ? 'ok' : 'fail', message: paths.resourceRoot },

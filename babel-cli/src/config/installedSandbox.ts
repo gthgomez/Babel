@@ -1,18 +1,19 @@
 // License: Apache-2.0
-import {spawnSync} from 'node:child_process';
 import {randomUUID} from 'node:crypto';
 
 type DockerResult={status:number|null;stdout?:string|Buffer;error?:unknown};
-type DockerExecute=(binary:string,args:string[],options:{env:NodeJS.ProcessEnv;shell:false;windowsHide:true;encoding:'utf8';timeout:number;maxBuffer:number})=>DockerResult;
+type DockerExecute=(binary:'docker',args:string[],options:{env:NodeJS.ProcessEnv;shell:false;windowsHide:true;encoding:'utf8';timeout:number;maxBuffer:number})=>DockerResult;
 
 /** Check execution prerequisites without mounting a project or passing provider credentials. */
-export function probeInstalledSandboxImage(image:string|undefined,options:{env?:NodeJS.ProcessEnv;execute?:DockerExecute}={}):boolean{
+export function probeInstalledSandboxImage(image:string|undefined,options:{env?:NodeJS.ProcessEnv;execute:DockerExecute}):boolean{
   if(typeof image!=='string'||!image.length||image.length>512||image.includes('://')||!/^[a-z0-9][a-z0-9._/:@-]*$/i.test(image))return false;
   const source=options.env??process.env,env:NodeJS.ProcessEnv={};
   for(const name of ['PATH','SystemRoot','WINDIR','HOME','USERPROFILE','APPDATA','LOCALAPPDATA','TEMP','TMP','DOCKER_HOST','DOCKER_CONTEXT','DOCKER_CONFIG','DOCKER_TLS_VERIFY','DOCKER_CERT_PATH']){
     if(source[name]!==undefined)env[name]=source[name];
   }
-  const execute:DockerExecute=options.execute??((binary,args,settings)=>spawnSync(binary,args,settings));
+  // Installed diagnostics owns the registered host-process boundary. This
+  // capability probe only constructs fixed Docker requests through that port.
+  const execute=options.execute;
   const run=(args:string[],timeout:number)=>execute('docker',args,{env,shell:false,windowsHide:true,encoding:'utf8',timeout,maxBuffer:256*1024});
   try{
     const inspected=run(['image','inspect','--format','{{json .}}','--',image],3000);
