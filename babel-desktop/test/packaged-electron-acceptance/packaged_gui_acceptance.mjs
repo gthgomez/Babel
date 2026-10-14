@@ -208,8 +208,8 @@ async function main() {
     if (info.ready !== true || info.projectName !== 'acceptance-project') {
       throw new Error(`fixture project not connected (ready=${info.ready}, project=${info.projectName})`);
     }
-    if (info.engine?.readiness?.ready !== true) {
-      throw new Error('engine.readiness.ready must be true with bundled CLI and fixture project');
+    if (info.engine?.readiness?.ready !== (info.diagnostics?.ready === true)) {
+      throw new Error('engine.readiness.ready must match verified execution prerequisites for the connected fixture project');
     }
     checks.push('fixture-backed project connects with truthful ready state (no model run)');
     journeys.project = {status: 'executed', transport: 'preload IPC getInfo + listDirectory'};

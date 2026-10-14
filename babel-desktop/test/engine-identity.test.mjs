@@ -39,6 +39,15 @@ test('normalizeUpdate never reports current/available without a check', () => {
   assert.equal(normalizeUpdate({state:'available', availableSha:'x'}).availableSha, null);
 });
 
+test('packaged Runtime readiness requires both a selected project and verified prerequisites',()=>{
+  for(const diagnostics of [null,{ready:false,docker:'available',sandboxImage:'unavailable'}]){
+    const result=resolveEngineIdentity({isPackaged:true,ready:true,diagnostics,readText:()=>{throw new Error('Fixture has no package metadata');}});
+    assert.equal(result.readiness.ready,false);
+  }
+  assert.equal(resolveEngineIdentity({isPackaged:true,ready:true,diagnostics:{ready:true},readText:()=>{throw new Error('Fixture has no package metadata');}}).readiness.ready,true);
+  assert.equal(resolveEngineIdentity({isPackaged:true,ready:false,diagnostics:{ready:true},readText:()=>{throw new Error('Fixture has no package metadata');}}).readiness.ready,false);
+});
+
 test('resolveEngineIdentity reports packaged provenance from BUILD.json', () => {
   const resourcesPath = resolve('app', 'resources');
   const files = new Map([

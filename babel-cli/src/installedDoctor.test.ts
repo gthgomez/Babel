@@ -5,6 +5,12 @@ import { join } from 'node:path'
 import { it } from 'node:test'
 import { runInstalledDoctor, installedSetupChecklist, supportsInstalledNode } from './installedDoctor.js'
 
+it('does not report a usable execution environment from a healthy daemon alone',()=>{
+  const result=runInstalledDoctor({env:{},dockerProbe:()=>true})
+  assert.equal(result.status,'fail')
+  assert.equal(result.checks.find(check=>check.id==='sandbox_image')?.status,'fail')
+})
+
 it('requires unflagged WASM support and the Node 24 Unicode deletion fix', () => {
   for (const version of ['20.19.0', '22.18.0', '23.11.0', '24.0.0', '24.4.9', '24.5.0', '24.12.0', '24.13.0', '25.0.0', '25.4.0', '26.0.0']) assert.equal(supportsInstalledNode(version), false, version)
   for (const version of ['22.19.0', '22.23.3', '24.13.1', '24.14.0', '24.19.0']) assert.equal(supportsInstalledNode(version), true, version)
@@ -18,7 +24,7 @@ it('diagnoses an installed user without contributor files or all provider creden
     const paths = { packageRoot: root, resourceRoot: join(root, 'resources'), isInstalled: true,
       userConfigRoot: join(root, 'config'), userStateRoot: join(root, 'state'),
       userCacheRoot: join(root, 'cache'), targetProjectRoot: root }
-    const result = runInstalledDoctor({ paths, env: { OPENROUTER_API_KEY: 'doctor-secret-sentinel' }, dockerProbe: () => true })
+    const result = runInstalledDoctor({ paths, env: { OPENROUTER_API_KEY: 'doctor-secret-sentinel',BABEL_BENCHMARK_DOCKER_IMAGE:`sha256:${'a'.repeat(64)}` }, dockerProbe: () => true,imageProbe:()=>true })
     assert.equal(result.status, 'ok')
     assert.equal(result.checks.find(c => c.id === 'provider')?.status, 'ok')
     assert.doesNotMatch(JSON.stringify(result), /doctor-secret-sentinel|workspace-map|pwsh|sibling/)

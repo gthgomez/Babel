@@ -7,6 +7,7 @@ import {bundledEnvironment} from '../app/native/runtime.mjs';
 import {resolvePackagedEngine} from '../app/native/engine-manager.mjs';
 import {applyCliCredentialScope} from '../app/native/childEnv.mjs';
 import {parsePreferences} from '../app/native/security.mjs';
+import {applySandboxEnvironment} from '../app/native/sandbox-setup.mjs';
 
 const runtime = dirname(fileURLToPath(import.meta.url));
 const args = process.argv.slice(2);
@@ -46,6 +47,7 @@ try {
   }
 } catch { /* An absent or unsafe preference file never grants project credential access. */ }
 applyCliCredentialScope(env,{args,cwd:process.cwd(),preferences,configDirectory:env.BABEL_CONFIG_DIR});
+applySandboxEnvironment(env,preferences);
 const child = spawn(nodeExe, [entryPath, ...args], {env, stdio: 'inherit', windowsHide: true, shell: false});
 child.on('error', error => { console.error(`Babel CLI could not start: ${error.message}`); process.exitCode = 1; });
 child.on('close', code => { process.exitCode = code ?? 1; });

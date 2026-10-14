@@ -8,6 +8,7 @@ import {fileURLToPath,pathToFileURL} from 'node:url';
 import vm from 'node:vm';
 import * as childEnvironment from '../native/childEnv.mjs';
 import {parsePreferences} from '../native/security.mjs';
+import {applySandboxEnvironment} from '../native/sandbox-setup.mjs';
 
 const projectA=resolve(tmpdir(),'babel-scope-project-a');
 const projectB=resolve(tmpdir(),'babel-scope-project-b');
@@ -22,7 +23,7 @@ function launcherEnvironment(args,preferences,{unsafe=false}={}) {
     dirname,join,isAbsolute,resolve,fileURLToPath,console,
     readFileSync:()=>JSON.stringify(preferences),
     lstatSync:()=>({isFile:()=>true,isSymbolicLink:()=>unsafe,nlink:1,size:100}),
-    parsePreferences,
+    parsePreferences,applySandboxEnvironment,
     bundledEnvironment:()=>({BABEL_CONFIG_DIR:join(profile,'missing-config'),BABEL_PROJECT_CREDENTIALS_DIR:projectA}),
     resolvePackagedEngine:()=>({ready:true,path:'synthetic-entry'}),
     applyProviderRoute:env=>env,
@@ -41,4 +42,11 @@ test('installed launcher strips ambient project scope and restores only a matchi
   assert.equal(launcherEnvironment(['deep','another-project','Public task'],{projectRoot:projectB,projectCredentialRoot:projectB}).BABEL_PROJECT_CREDENTIALS_DIR,undefined);
   assert.equal(launcherEnvironment(['run','--',`--project-root=${projectA}`],preferences).BABEL_PROJECT_CREDENTIALS_DIR,undefined);
   assert.equal(launcherEnvironment(['run','--project-root',projectA],preferences,{unsafe:true}).BABEL_PROJECT_CREDENTIALS_DIR,undefined);
+});
+
+
+test('actual installed launcher applies the saved immutable sandbox image',()=>{
+  const image='sha256:'+'a'.repeat(64);
+  assert.equal(launcherEnvironment(['doctor'],{sandboxImage:image,sandboxImageReference:'custom:v1'}).BABEL_BENCHMARK_DOCKER_IMAGE,image);
+  assert.equal(launcherEnvironment(['doctor'],{sandboxImage:'--unsafe'}).BABEL_BENCHMARK_DOCKER_IMAGE,undefined);
 });

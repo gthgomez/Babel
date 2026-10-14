@@ -5,6 +5,43 @@ import {readFileSync} from 'node:fs';
 import {chromium} from 'playwright';
 const html = readFileSync(new URL('../dist/index.html', import.meta.url), 'utf8');
 
+test('Setup prepares or validates a sandbox and keeps execution blocked after a failed check',async()=>{
+  const browser=await chromium.launch({headless:true});
+  try{
+    const page=await browser.newPage();
+    await page.evaluate(()=>{
+      window.__sandboxReady=false;window.__setupCalls=[];
+      const info=()=>({packaged:true,ready:true,officialCliReady:true,projectName:'fixture',projectRoot:'C:/fixture',sandbox:{reference:window.__sandboxReady?'custom:v1':null},diagnostics:{ready:window.__sandboxReady,docker:'available',sandboxImage:window.__sandboxReady?'available':'unavailable'}});
+      window.babelDesktop={getInfo:async()=>info(),listDirectory:async()=>[],listSessions:async()=>({sessions:[]}),readProviderRoute:async()=>({provider:'openrouter',model:'fixture-route'}),onEvent(){},
+        configureSandbox:async options=>{window.__setupCalls.push(options);if(!options.prepareRecommended&&options.reference!=='custom:v1')throw new Error('Sandbox image is not available locally.');await new Promise(resolve=>window.__finishSetup=resolve);window.__sandboxReady=true;return info();}};
+    });
+    page.setDefaultTimeout(5000);
+    await page.setContent(html);await page.waitForFunction(()=>document.querySelector('#preview-badge').textContent==='BABEL CLI');await page.locator('#preview-badge').click();
+    assert.equal(await page.locator('#send-button').isDisabled(),true);
+    await page.getByText('Use an existing local image',{exact:true}).click();
+    await page.getByLabel('Existing sandbox image',{exact:true}).fill('missing:v1');
+    await page.getByRole('button',{name:'Validate and use image',exact:true}).click();
+    await page.locator('#sandbox-status').filter({hasText:'not available locally'}).waitFor();
+    assert.equal(await page.locator('#send-button').isDisabled(),true);
+    await page.getByRole('button',{name:'Prepare recommended image',exact:true}).click();
+    await page.waitForFunction(()=>typeof window.__finishSetup==='function');
+    assert.equal(await page.locator('[data-action="save-sandbox"]').isDisabled(),true);
+    assert.match(await page.locator('#sandbox-status').innerText(),/Downloading/);
+    await page.evaluate(()=>window.__finishSetup());
+    await page.locator('#sandbox-status').filter({hasText:'Sandbox verified'}).waitFor();
+    await page.getByRole('button',{name:'Done',exact:true}).click();
+    await page.waitForFunction(()=>!document.querySelector('#send-button').disabled);
+    await page.locator('#preview-badge').click();
+    await page.getByText('Use an existing local image',{exact:true}).click();
+    await page.getByLabel('Existing sandbox image',{exact:true}).fill('custom:v1');
+    await page.getByRole('button',{name:'Validate and use image',exact:true}).click();
+    await page.waitForFunction(()=>window.__setupCalls.length===3);
+    await page.evaluate(()=>window.__finishSetup());
+    await page.locator('#sandbox-status').filter({hasText:'Sandbox verified'}).waitFor();
+    assert.deepEqual(await page.evaluate(()=>window.__setupCalls),[{reference:'missing:v1',prepareRecommended:false},{prepareRecommended:true},{reference:'custom:v1',prepareRecommended:false}]);
+  }finally{await browser.close();}
+});
+
 test('Go permits Chat and explains unavailable pipeline modes before sending',async()=>{
   const browser=await chromium.launch({headless:true});
   try{

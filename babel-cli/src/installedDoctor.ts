@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { resolveRuntimePaths } from './config/runtimePaths.js'
 import { listProviderSpecs } from './runners/providerRegistry.js'
+import {probeInstalledSandboxImage} from './config/installedSandbox.js'
 
 type Check = { id: string; status: 'ok' | 'warn' | 'fail'; message: string }
 
@@ -17,6 +18,7 @@ export function runInstalledDoctor(options: {
   env?: NodeJS.ProcessEnv
   strict?: boolean
   dockerProbe?: () => boolean
+  imageProbe?: (image:string) => boolean
 } = {}): { status: 'ok' | 'warn' | 'fail'; kind: string; paths: ReturnType<typeof resolveRuntimePaths>; checks: Check[] } {
   const env = options.env ?? process.env
   const paths = options.paths ?? resolveRuntimePaths(env)
@@ -24,6 +26,8 @@ export function runInstalledDoctor(options: {
   const configured = listProviderSpecs().filter(p => p.authorityConformance === 'certified' && p.credentialEnvVar && env[p.credentialEnvVar]?.trim()).map(p => p.id)
   const dockerReady = options.dockerProbe ? options.dockerProbe() :
     spawnSync('docker', ['info', '--format', '{{.ServerVersion}}'], { timeout: 3000, stdio: 'ignore', env }).status === 0
+  const image=env['BABEL_BENCHMARK_DOCKER_IMAGE']?.trim()
+  const imageReady=Boolean(dockerReady&&image&&(options.imageProbe?options.imageProbe(image):probeInstalledSandboxImage(image,{env})))
   const checks: Check[] = [
     { id: 'node', status: nodeReady ? 'ok' : 'fail', message: `Node ${process.versions.node}; requires ^22.19.0 or ^24.13.1` },
     { id: 'resources', status: existsSync(join(paths.resourceRoot, 'prompt_catalog.yaml')) ? 'ok' : 'fail', message: paths.resourceRoot },
@@ -33,6 +37,9 @@ export function runInstalledDoctor(options: {
     { id: 'docker', status: dockerReady ? 'ok' : 'fail', message: dockerReady ?
       'Docker server available; required by the default safe_repo execution profile.' :
       'Docker server unavailable; safe_repo requires Docker. Start Docker before executing tasks; no fallback is enabled.' },
+    { id:'sandbox_image',status:imageReady?'ok':'fail',message:imageReady?
+      'Configured Linux amd64 sandbox image runs shell and Git. Project-specific test tools must also be included.':
+      'Sandbox image unavailable or unusable. In Desktop Setup prepare the recommended image or validate an existing image. CLI users configure BABEL_BENCHMARK_DOCKER_IMAGE; host fallback is not enabled.' },
   ]
   return { status: checks.some(c => c.status === 'fail' || (options.strict && c.status === 'warn')) ? 'fail' :
     checks.some(c => c.status === 'warn') ? 'warn' : 'ok', kind: 'installed_user', paths, checks }
@@ -48,6 +55,6 @@ export function installedSetupChecklist(options: { paths?: ReturnType<typeof res
     { step: 'diagnose_installation', command: 'babel-agent doctor --json' },
     { step: 'preview_project_context', command: 'babel-agent context preview @file README.md --json', note: 'Run inside your target project, with an existing file.' },
     { step: 'configure_provider', command: 'babel-agent doctor', note: `Create ${envFile} yourself and set one supported credential (${credentialEnvVars.join(', ')}), or configure a local Ollama model. Diagnostics never send provider requests.` },
-    { step: 'start_safe_execution', command: 'babel-agent interactive', note: 'The default safe_repo profile requires a running Docker server.' },
+    { step: 'start_safe_execution', command: 'babel-agent interactive', note: 'The default safe_repo profile requires Docker plus a usable BABEL_BENCHMARK_DOCKER_IMAGE. Desktop Setup can prepare and save the recommended image.' },
   ], next_command: 'babel-agent doctor --json', mutates_workspace: false, remote_side_effects: false }
 }

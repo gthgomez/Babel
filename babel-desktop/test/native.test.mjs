@@ -139,7 +139,7 @@ test('native origin admits only the packaged application document',async()=>{
 });
 test('native preferences contain only absolute UI connection paths',async()=>{
  const {parsePreferences}=await load('security');assert.equal(typeof parsePreferences,'function');
- assert.deepEqual(parsePreferences({cliEntry:join(tmpdir(),'index.js'),projectRoot:tmpdir(),apiKey:'never persisted'}),{cliEntry:join(tmpdir(),'index.js'),projectRoot:tmpdir(),projectCredentialRoot:null});
- assert.deepEqual(parsePreferences({cliEntry:'relative.js',projectRoot:[],projectCredentialRoot:'relative'}),{cliEntry:null,projectRoot:null,projectCredentialRoot:null});
+ assert.deepEqual(parsePreferences({cliEntry:join(tmpdir(),'index.js'),projectRoot:tmpdir(),apiKey:'never persisted'}),{cliEntry:join(tmpdir(),'index.js'),projectRoot:tmpdir(),projectCredentialRoot:null,sandboxImage:null,sandboxImageReference:null});
+ assert.deepEqual(parsePreferences({cliEntry:'relative.js',projectRoot:[],projectCredentialRoot:'relative'}),{cliEntry:null,projectRoot:null,projectCredentialRoot:null,sandboxImage:null,sandboxImageReference:null});
  assert.equal(parsePreferences({projectRoot:tmpdir(),projectCredentialRoot:tmpdir()}).projectCredentialRoot,tmpdir());
 });
