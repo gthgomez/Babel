@@ -1079,7 +1079,10 @@ export function resolveCompactionSummarizationProvider(input: {
 }): LlmCompactionProvider | null {
   const explicitKey = process.env['BABEL_COMPACTION_API_KEY']?.trim();
   const explicitBase = process.env['BABEL_COMPACTION_API_BASE']?.trim();
-  if (explicitKey && explicitBase) {
+  // Bootstrap may reload auxiliary overrides from a private profile after the
+  // launcher sanitizes its environment. Desktop routes use only their admitted
+  // provider endpoint and credential, including after that bootstrap.
+  if (!process.env['BABEL_DESKTOP_PROVIDER'] && explicitKey && explicitBase) {
     return {
       apiKey: explicitKey,
       baseUrl: explicitBase,

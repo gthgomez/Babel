@@ -5,6 +5,30 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { resolveChatModelPolicy } from './chatModelPolicy.js'
 
+test('profiled CLI rejects enabled models belonging to another provider', async (t) => {
+  const routing = await import(new URL('../../../babel-desktop/native/provider-routing.mjs', import.meta.url).href)
+  const config = await mkdtemp(join(tmpdir(), 'babel-desktop-provider-boundary-'))
+  t.after(() => rm(config, { recursive: true, force: true }))
+  const names = ['BABEL_MODEL_POLICY_PATH', 'BABEL_CONFIG_DIR', 'BABEL_DESKTOP_PROVIDER', 'BABEL_DESKTOP_MODEL_ROUTE', 'BABEL_OFFLINE', 'BABEL_LITE_OFFLINE']
+  const prior = Object.fromEntries(names.map(name => [name, process.env[name]]))
+  t.after(() => { for (const name of names) { if (prior[name] === undefined) delete process.env[name]; else process.env[name] = prior[name] } })
+  delete process.env['BABEL_OFFLINE']
+  const routes = [['deepinfra', 'qwen3'], ['deepseek', 'deepseek-v4-pro'], ['opencode-go', 'opencode-go/deepseek-v4.1-flash'], ['openrouter', 'deepseek-v4-pro-openrouter']] as const
+  for (const [provider, model] of routes) routing.saveProviderRoute({ configDirectory: config, provider, model, enabledModels: [model] })
+  for (const [provider, model] of routes) {
+    routing.saveProviderRoute({ configDirectory: config, provider, model, enabledModels: [model] })
+    routing.applyProviderRoute(process.env, config)
+    assert.equal(resolveChatModelPolicy({ model }).policy.provider, provider)
+    for (const [otherProvider, otherModel] of routes) {
+      // Bare DeepSeek names are documented OpenRouter aliases in its profile.
+      if (otherProvider !== provider && !(provider === 'openrouter' && otherProvider === 'deepseek')) {
+        assert.throws(() => resolveChatModelPolicy({ model: otherModel }), /selected provider/)
+      }
+    }
+  }
+  assert.equal(resolveChatModelPolicy({ model: 'deepseek-v4-pro' }).policy.provider, 'openrouter')
+})
+
 test('Desktop discovery and saves resolve through the actual Chat policy with exact identity',async(t)=>{
   const routing=await import(new URL('../../../babel-desktop/native/provider-routing.mjs',import.meta.url).href)
   const config=await mkdtemp(join(tmpdir(),'babel-desktop-chat-policy-'))

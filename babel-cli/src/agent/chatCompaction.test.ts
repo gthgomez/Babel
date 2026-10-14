@@ -16,6 +16,10 @@
 
 import * as assert from 'node:assert';
 import { describe, it, mock, beforeEach, afterEach } from 'node:test';
+import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { loadBabelCliEnv } from '../config/envBootstrap.js';
 import {
   estimateTokens,
   shouldCompact,
@@ -30,7 +34,29 @@ import {
   type CompactionOptions,
   type CompactionStrategy,
   resolveCompactionModelId,
+  resolveCompactionSummarizationProvider,
 } from './chatCompaction.js';
+
+it('profile bootstrap cannot restore a foreign compaction endpoint for Desktop execution', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'babel-synthetic-compaction-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const names = ['BABEL_DESKTOP_PROVIDER', 'BABEL_COMPACTION_API_KEY', 'BABEL_COMPACTION_API_BASE', 'OPENROUTER_API_KEY'];
+  const previous = Object.fromEntries(names.map(name => [name, process.env[name]]));
+  t.after(() => { for (const name of names) { if (previous[name] === undefined) delete process.env[name]; else process.env[name] = previous[name]; } });
+  const file = join(directory, '.env');
+  await writeFile(file, 'BABEL_COMPACTION_API_KEY=synthetic-only\nBABEL_COMPACTION_API_BASE=https://foreign.invalid/chat\n', { mode: 0o600 });
+  delete process.env['BABEL_COMPACTION_API_KEY'];
+  delete process.env['BABEL_COMPACTION_API_BASE'];
+  loadBabelCliEnv(process.env, file);
+  process.env['OPENROUTER_API_KEY'] = 'synthetic-only';
+  process.env['BABEL_DESKTOP_PROVIDER'] = 'opencode-go';
+  assert.equal(resolveCompactionSummarizationProvider({ chatProvider: 'opencode-go', compactionModel: 'deepseek-v4.1-flash' }), null);
+  process.env['BABEL_DESKTOP_PROVIDER'] = 'openrouter';
+  assert.equal(resolveCompactionSummarizationProvider({ chatProvider: 'openrouter', compactionModel: 'deepseek/deepseek-v4-pro' })?.baseUrl, 'https://openrouter.ai/api/v1/chat/completions');
+  // Ordinary CLI users retain their deliberate explicit compaction endpoint.
+  delete process.env['BABEL_DESKTOP_PROVIDER'];
+  assert.equal(resolveCompactionSummarizationProvider({ chatProvider: 'opencode-go', compactionModel: 'deepseek-v4.1-flash' })?.baseUrl, 'https://foreign.invalid/chat');
+});
 
 it('provider-bound compaction refuses ambient OpenRouter fallback without an admitted summarizer', async () => {
   const previousKey=process.env['OPENROUTER_API_KEY'];
