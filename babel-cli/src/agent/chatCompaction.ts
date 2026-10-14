@@ -691,6 +691,7 @@ export class LLMSummarizeCompaction implements CompactionStrategy {
     try {
       const response = await fetch(baseUrl, {
         method: 'POST',
+        redirect: process.env['BABEL_DESKTOP_PROVIDER'] ? 'error' : 'follow',
         signal: controller.signal,
         headers: {
           'Authorization': `Bearer ${apiKey}`,
@@ -835,6 +836,7 @@ export class LLMSummarizeCompaction implements CompactionStrategy {
     try {
       const response = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
+        redirect: process.env['BABEL_DESKTOP_PROVIDER'] ? 'error' : 'follow',
         signal: controller.signal,
         headers: {
           'x-api-key': apiKey,

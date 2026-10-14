@@ -28,7 +28,9 @@ function resolveOllamaTokens(): number {
 
 export class OllamaApiRunner extends DeepInfraApiRunner {
   protected override get apiUrl(): string {
-    const base = process.env['BABEL_OLLAMA_BASE_URL'] ?? 'http://localhost:11434/v1';
+    const base = process.env['BABEL_DESKTOP_PROVIDER']
+      ? 'http://127.0.0.1:11434/v1'
+      : process.env['BABEL_OLLAMA_BASE_URL'] ?? 'http://localhost:11434/v1';
     return `${base.replace(/\/$/, '')}/chat/completions`;
   }
 

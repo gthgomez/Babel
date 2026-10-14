@@ -256,9 +256,9 @@ export class DeepInfraApiRunner implements LlmRunner {
     return getStreamMaxRetries();
   }
 
-  /** Per-transport redirect policy; generic API transports retain fetch defaults. */
+  /** Desktop requests stay on the admitted endpoint; ordinary CLI keeps legacy defaults. */
   protected getRequestRedirect(): FetchRedirectPolicy {
-    return 'follow';
+    return process.env['BABEL_DESKTOP_PROVIDER'] ? 'error' : 'follow';
   }
 
   /** Dispatch unchanged by default; specialized transports may gate every request. */
