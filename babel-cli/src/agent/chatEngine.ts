@@ -679,6 +679,8 @@ export class ChatEngine {
   /** Implementor: hard plan mode blocks mutations. */
   private hardPlanMode = false;
   private planHandoff: ChatPlanExecuteHandoff | null = null;
+  /** Once the plan→execute handoff is injected, it is not re-injected. */
+  planHandoffInjected = false;
   private forceMutateTurnsOverride: number | null = null;
   private operatorMode: ChatOperatorMode = "default";
   private _lastPhase: ChatPhase | null = null;

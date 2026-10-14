@@ -487,6 +487,42 @@ describe('S01/#211 informational Chat requests receive no generated edit mandate
     assert.match(handoff!.content, /IMPLEMENT mode/);
   });
 
+  it('defers a plan→execute handoff past a read-only first turn', async () => {
+    const target = makeTarget();
+    const readOnlyTask = 'Investigate the example repo for the current TUI Code.';
+    const engine = makeEngine(readOnlyTask, target.targetRoot, {
+      planHandoff: createChatPlanExecuteHandoff({ planBody: '1. Inspect\n2. Fix' }),
+    });
+    installCapturingRunner(engine, []);
+
+    const conversations = (): Array<{ role: string; content: string }> =>
+      (engine as unknown as { conversation: Array<{ role: string; content: string }> }).conversation;
+
+    await runChatEngineOnce({
+      task: readOnlyTask,
+      target,
+      engine,
+      preflightContext: '',
+      useStreaming: true,
+    });
+    assert.ok(
+      !conversations().some((message) => message.content.includes('[Plan → Execute handoff]')),
+      'the handoff must not be injected into a read-only turn',
+    );
+
+    await runChatEngineOnce({
+      task: 'Fix the failing unit test in src/app.ts.',
+      target,
+      engine,
+      preflightContext: '',
+      useStreaming: true,
+    });
+    assert.ok(
+      conversations().some((message) => message.content.includes('[Plan → Execute handoff]')),
+      'the deferred handoff must be injected on the next executable turn',
+    );
+  });
+
   it('streaming and callback preparation agree on operation and prompts', async () => {
     const task = 'can you investigate the example repo for the current TUI Code?';
 

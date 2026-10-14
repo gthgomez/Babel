@@ -398,12 +398,18 @@ export function compileChatStack(options: CompileChatStackOptions): ChatCompiled
     }
   }
 
-  const requiredSections = sections.filter(({ entry }) => entry.id.startsWith('identity:'));
+  // Only the governing (nearest) AGENTS.md is atomic/required. Accumulated
+  // ancestor fragments are optional, so a repository whose combined instruction
+  // text exceeds the budget degrades by omitting ancestors instead of failing
+  // closed on the whole stack.
+  const requiredSections = sections.filter(({ entry }) =>
+    entry.id === 'identity:agents' || entry.id === 'identity:default');
   const requiredText = requiredSections.map(({ content }) => content).join('\n\n');
   // Required AGENTS policy is never prefix-packed. Optional sources are each
   // admitted whole or omitted; continue after an omission to try later inputs.
   const optionalSections = sections
-    .filter(({ entry }) => !entry.id.startsWith('identity:'))
+    .filter(({ entry }) =>
+      entry.id !== 'identity:agents' && entry.id !== 'identity:default')
     .sort((left, right) => {
       const priority = (id: string): number =>
         id.startsWith('identity:') ? 0 :
@@ -419,12 +425,12 @@ export function compileChatStack(options: CompileChatStackOptions): ChatCompiled
   if (requiredText.length > budget) {
     throw new Error('required_instruction_exceeds_prompt_budget');
   } else {
-    const includedOptional: string[] = [];
+    const includedOptional: Array<{ id: string; content: string }> = [];
     let usedChars = requiredText.length;
     for (const { entry, content } of optionalSections) {
       const separator = usedChars > 0 ? 2 : 0;
       if (content.length + separator <= budget - usedChars) {
-        includedOptional.push(content);
+        includedOptional.push({ id: entry.id, content });
         usedChars += separator + content.length;
         content_disposition.push({
           id: entry.id,
@@ -453,7 +459,18 @@ export function compileChatStack(options: CompileChatStackOptions): ChatCompiled
         });
       }
     }
-    system_context = [requiredText, ...includedOptional].filter(Boolean).join('\n\n');
+    // Preserve repository-root → nearest ordering: accumulated ancestor identity
+    // fragments render before the required governing file, which renders before
+    // the remaining optional context.
+    const ancestorIdentity = includedOptional
+      .filter((item) => item.id.startsWith('identity:'))
+      .map((item) => item.content);
+    const otherOptional = includedOptional
+      .filter((item) => !item.id.startsWith('identity:'))
+      .map((item) => item.content);
+    system_context = [...ancestorIdentity, requiredText, ...otherOptional]
+      .filter(Boolean)
+      .join('\n\n');
     for (const { entry, content } of requiredSections) {
       content_disposition.push({
         id: entry.id,

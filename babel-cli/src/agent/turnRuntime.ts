@@ -205,8 +205,11 @@ export function beginUserSubmission(input: BeginUserSubmissionInput): TurnRuntim
         consecutiveNonMutatingShells: prev.consecutiveNonMutatingShells,
         toolsWithoutWrite: prev.toolsWithoutWrite,
         midLoopCriticFired: prev.midLoopCriticFired,
-        budgetExceeded: prev.budgetExceeded,
-        budgetLastChanceDone: prev.budgetLastChanceDone,
+        // A read-only status presentation must not inherit a task-terminal
+        // budget flag: that would label the status answer budget_exhausted
+        // instead of reporting the live objective. Progress counters are kept.
+        budgetExceeded: statusPresentation ? false : prev.budgetExceeded,
+        budgetLastChanceDone: statusPresentation ? false : prev.budgetLastChanceDone,
         restrictToolsNextTurn: prev.restrictToolsNextTurn,
       }
     : emptyTurnCounters();

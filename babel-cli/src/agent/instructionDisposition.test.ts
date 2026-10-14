@@ -210,6 +210,37 @@ describe('delivered project instructions', () => {
     }
   });
 
+  it('omits an oversized ancestor AGENTS.md instead of failing the whole stack', () => {
+    const repo = makeRoot('babel-id-accum-budget-');
+    mkdirSync(join(repo, '.git'), { recursive: true });
+    const pkg = join(repo, 'pkg');
+    mkdirSync(pkg, { recursive: true });
+    writeFileSync(join(repo, 'AGENTS.md'), 'R'.repeat(12_500) + '\nROOT_OVERFLOW\n', 'utf-8');
+    writeFileSync(join(pkg, 'AGENTS.md'), '# Package\nNESTED_REQUIRED\n', 'utf-8');
+    process.env['BABEL_USER_CONTEXT'] = join(repo, 'missing-user-context.md');
+
+    const stack = compileChatStack({
+      projectRoot: pkg,
+      includeDomainSkill: false,
+      promptBudgetChars: 12_000,
+    });
+
+    // The nearest (governing) file is required and delivered; the oversized
+    // ancestor is optional and omitted rather than throwing for the whole stack.
+    assert.match(stack.system_context, /NESTED_REQUIRED/);
+    assert.doesNotMatch(stack.system_context, /ROOT_OVERFLOW/);
+    assert.equal(
+      stack.content_disposition.find((item) => item.id === 'identity:agents')?.status,
+      'included',
+    );
+    const ancestor = stack.selected_entries.find((entry) => entry.path === join(repo, 'AGENTS.md'));
+    assert.ok(ancestor);
+    assert.equal(
+      stack.content_disposition.find((item) => item.id === ancestor!.id)?.status,
+      'omitted',
+    );
+  });
+
   it('records identity:agents on the manifest and reloads it', () => {
     const root = makeRoot('babel-id-resume-');
     const runDir = makeRoot('babel-id-rundir-');
