@@ -4395,6 +4395,9 @@ export class ChatEngine {
     | DeepSeekApiRunner
     | OllamaApiRunner
     | OpenRouterApiRunner {
+    // Desktop settings admit one primary route. Legacy phase overrides loaded
+    // during CLI bootstrap cannot replace it, including after a task reset.
+    if (process.env["BABEL_DESKTOP_PROVIDER"]) return this.resolveDeliberationRunner();
     const modelName = this.modelPolicy?.provider === "opencode-go" ? undefined : resolvePhaseModelName(this._lastPhase, {
       investigateModel: this.limits.investigateModel,
       mutateModel: this.limits.mutateModel,

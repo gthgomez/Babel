@@ -5,6 +5,39 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { resolveChatModelPolicy } from './chatModelPolicy.js'
 
+test('Desktop investigation and mutation keep the admitted runner across independent tasks', async (t) => {
+  const config = await mkdtemp(join(tmpdir(), 'babel-desktop-phase-boundary-'))
+  t.after(() => rm(config, { recursive: true, force: true }))
+  const settings = {
+    BABEL_STATE_DIR: join(config, 'state'), BABEL_CACHE_DIR: join(config, 'cache'), BABEL_RUNS_DIR: join(config, 'runs'),
+    BABEL_CHAT_INVESTIGATE_MODEL: 'glm-5.3-flash', BABEL_CHAT_MUTATE_MODEL: 'deepseek-v4-pro-openrouter',
+    OPENROUTER_API_KEY: 'synthetic-only', DEEPINFRA_API_KEY: 'synthetic-only', BABEL_OPENCODE_GO_API_KEY: 'synthetic-only',
+  }
+  const names = [...Object.keys(settings), 'BABEL_MODEL_POLICY_PATH', 'BABEL_CONFIG_DIR', 'BABEL_DESKTOP_PROVIDER', 'BABEL_DESKTOP_MODEL_ROUTE', 'BABEL_OFFLINE', 'BABEL_LITE_OFFLINE']
+  const prior = Object.fromEntries(names.map(name => [name, process.env[name]]))
+  t.after(() => { for (const name of names) { if (prior[name] === undefined) delete process.env[name]; else process.env[name] = prior[name] } })
+  Object.assign(process.env, settings)
+  delete process.env['BABEL_OFFLINE']
+  const routing = await import(new URL('../../../babel-desktop/native/provider-routing.mjs', import.meta.url).href)
+  const { ChatEngine } = await import('./chatEngine.js')
+  const { DeepInfraApiRunner } = await import('../runners/deepInfraApi.js')
+  const admittedRunner = new DeepInfraApiRunner('Qwen/Qwen3-235B-A22B-Instruct-2507', 'DEEPINFRA_API_KEY', {}, { explicitCredential: 'synthetic-only' })
+  await routing.refreshModelCatalog({ configDirectory: config, provider: 'ollama', fetchImpl: async () => ({ ok: true, text: async () => JSON.stringify({ models: [{ name: 'qwen3:latest' }] }) }) })
+  for (const [provider, model] of [['openrouter', 'deepseek-v4-flash-openrouter'], ['deepseek', 'deepseek-v4-pro'], ['deepinfra', 'qwen3'], ['opencode-go', 'opencode-go/deepseek-v4.1-flash'], ['ollama', 'ollama/qwen3:latest']] as const) {
+    routing.saveProviderRoute({ configDirectory: config, provider, model, enabledModels: [model] })
+    routing.applyProviderRoute(process.env, config)
+    const engine = new ChatEngine({ task: 'Inspect the public fixture', projectRoot: config, model, providerRunner: admittedRunner })
+    const routed = engine as unknown as { _lastPhase: string | null; resolveRoutedRunner(): unknown }
+    for (const task of ['Inspect the public fixture', 'Explain the next independent fixture']) {
+      engine.applyUserSubmission({ userInput: task, continueTask: false })
+      for (const phase of [null, 'investigate', 'mutate']) {
+        routed._lastPhase = phase
+        assert.equal(routed.resolveRoutedRunner(), admittedRunner, `${provider} ${phase} ${task}`)
+      }
+    }
+  }
+})
+
 test('profiled CLI rejects enabled models belonging to another provider', async (t) => {
   const routing = await import(new URL('../../../babel-desktop/native/provider-routing.mjs', import.meta.url).href)
   const config = await mkdtemp(join(tmpdir(), 'babel-desktop-provider-boundary-'))
