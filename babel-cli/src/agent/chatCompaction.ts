@@ -1065,6 +1065,7 @@ export class CompactionManager {
 /**
  * Resolve the model ID for the compaction summarizer (H1 provider-aware).
  * Priority: explicit override > BABEL_COMPACTION_MODEL > providerModelId > default.
+ * Desktop-profile execution pins the admitted current provider model, including CLI overrides.
  * Never pass a bare model-family label (e.g. "DeepSeek") as the API model id.
  */
 /**
@@ -1120,6 +1121,7 @@ export function resolveCompactionModelId(input: {
   providerModelId?: string | null;
   family?: string | null;
 }): string {
+  if (process.env['BABEL_DESKTOP_PROVIDER'] && input.providerModelId?.trim()) return input.providerModelId.trim();
   if (input.explicitModel && input.explicitModel.trim()) {
     return input.explicitModel.trim();
   }

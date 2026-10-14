@@ -150,6 +150,19 @@ export function saveProviderRoute({configDirectory, provider, model,enabledModel
   return route;
 }
 
+/** Bind auxiliary calls to the validated provider model ID for this run. */
+export function applySelectedModelEnvironment(env, model) {
+  if (!model || typeof model.modelId !== 'string' || !/^[\w./:+-]{1,200}$/.test(model.modelId)) throw new TypeError('A qualified provider model ID is required');
+  env.BABEL_COMPACTION_MODEL=model.modelId;
+  env.BABEL_DIFF_CRITIC_MODEL=model.modelId;
+  env.BABEL_DIFF_CRITIC_PRO_MODEL=model.modelId;
+  // Auxiliary credentials/endpoints cannot override the selected provider.
+  delete env.BABEL_COMPACTION_API_KEY;
+  delete env.BABEL_COMPACTION_API_BASE;
+  return env;
+}
+
+
 /** Apply route env overrides for the CLI child without exposing secrets. */
 export function applyProviderRoute(env, configDirectory) {
   const route = readProviderRoute(configDirectory);
@@ -158,6 +171,9 @@ export function applyProviderRoute(env, configDirectory) {
   const policyPath=join(resolve(configDirectory),'model-policy.json');
   if(existsSync(policyPath))env.BABEL_MODEL_POLICY_PATH=policyPath;
   const spec = DESKTOP_ROUTE_CATALOG[route.provider];
+  const selectedModel=qualifiedProviders(configDirectory).find(p=>p.id===route.provider)?.routes.find(m=>m.id===route.model);
+  if(!selectedModel)throw new Error('The saved model route is unavailable. Choose a model in Settings.');
+  applySelectedModelEnvironment(env,selectedModel);
   if (route.provider==='openrouter') {
     env.BABEL_LITE_OFFLINE = '0';
     const entry=qualifiedProviders(configDirectory).find(p=>p.id===route.provider).routes.find(m=>m.id===route.model);

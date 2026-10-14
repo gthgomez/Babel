@@ -106,6 +106,8 @@ test('native startup is a real harness and provider save makes the selected rout
     await page.getByRole('button',{name:'Save provider',exact:true}).click();
     await page.locator('#dialog').waitFor({state:'hidden'});
     await page.locator('#composer-input').fill('Read README.md and answer hello.');
+    // A queued dialog close event must not steal focus after typing has begun.
+    await page.evaluate(()=>document.querySelector('#dialog').dispatchEvent(new Event('close')));
     await page.keyboard.press('Control+Enter');
     assert.deepEqual(errors,[]);
     await page.waitForFunction(()=>window.__runs.length===1);

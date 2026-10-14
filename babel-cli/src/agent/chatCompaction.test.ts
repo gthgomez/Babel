@@ -50,6 +50,14 @@ it('provider-bound compaction refuses ambient OpenRouter fallback without an adm
   }
 });
 
+it('profiled CLI compaction follows the current model instead of the saved default',()=>{
+  const previousProvider=process.env['BABEL_DESKTOP_PROVIDER'];
+  const previousModel=process.env['BABEL_COMPACTION_MODEL'];
+  process.env['BABEL_DESKTOP_PROVIDER']='openrouter';process.env['BABEL_COMPACTION_MODEL']='deepseek/deepseek-v4-pro';
+  try {assert.equal(resolveCompactionModelId({explicitModel:'deepseek/deepseek-v4-pro',providerModelId:'deepseek/deepseek-v4-flash-0731'}),'deepseek/deepseek-v4-flash-0731');}
+  finally {if(previousProvider===undefined)delete process.env['BABEL_DESKTOP_PROVIDER'];else process.env['BABEL_DESKTOP_PROVIDER']=previousProvider;if(previousModel===undefined)delete process.env['BABEL_COMPACTION_MODEL'];else process.env['BABEL_COMPACTION_MODEL']=previousModel;}
+});
+
 // ─── Fixtures ──────────────────────────────────────────────────────────────
 
 function makeMessages(overrides?: Partial<ChatMessage>[]): ChatMessage[] {

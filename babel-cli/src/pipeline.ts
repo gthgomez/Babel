@@ -799,6 +799,8 @@ export async function runBabelPipeline(
   task: string,
   options: PipelineOptions = {},
 ): Promise<PipelineResult> {
+  const profileModel = process.env['BABEL_DESKTOP_PROVIDER'] ? process.env['BABEL_DESKTOP_MODEL_ROUTE'] : undefined;
+  if (!options.modelOverride && profileModel) options = {...options,modelOverride:profileModel};
   if (options.modelOverride) {
     return withPipelineModelRoute(options.modelOverride, () => runBabelPipelineLocal(task, options), {
       ...(options.allowExpensive !== undefined ? {allowExpensive:options.allowExpensive} : {}),

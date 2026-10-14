@@ -259,7 +259,11 @@ function openDialog(title,content,focusSelector) {
   if (focusSelector) $(focusSelector)?.focus();
 }
 function closeDialog() { if ($('#dialog').open) $('#dialog').close(); }
-$('#dialog').addEventListener('close',()=>focusBeforeDialog?.focus?.());
+$('#dialog').addEventListener('close',()=>{
+  const dialog=$('#dialog'),active=document.activeElement;
+  if(dialog.open)return;
+  if(active===document.body||dialog.contains(active))focusBeforeDialog?.focus?.();
+});
 $('#dialog').addEventListener('click',ev=>{if(ev.target === $('#dialog')) { const r=ev.target.getBoundingClientRect(); if(ev.clientX<r.left||ev.clientX>r.right||ev.clientY<r.top||ev.clientY>r.bottom) closeDialog(); }});
 
 function connectionDialog() {

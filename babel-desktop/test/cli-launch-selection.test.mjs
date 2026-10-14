@@ -12,6 +12,27 @@ import {resolvePackagedEngine, buildInstallId, writeActiveEngine, installDir} fr
 
 const SHA = 'c'.repeat(40);
 
+test('installed launcher pins both critic tiers and excludes inherited summarizer credentials',()=>{
+  const profile=mkdtempSync(join(tmpdir(),'babel-launch-aux-'));
+  try {
+    const config=join(profile,'engine','config');
+    const scriptUrl=new URL('../scripts/cli-launch.mjs',import.meta.url).href;
+    const source=readFileSync(new URL(scriptUrl),'utf8').replace(/^import .*;\r?\n/gm,'').replaceAll('import.meta.url','scriptUrl');
+    for(const [provider,model,modelId] of [['openrouter','deepseek-v4-flash-openrouter','deepseek/deepseek-v4-flash-0731'],['opencode-go','opencode-go/deepseek-v4.1-flash','deepseek-v4.1-flash']]) {
+      saveProviderRoute({configDirectory:config,provider,model,enabledModels:[model]});
+      const inherited={APPDATA:profile,BABEL_COMPACTION_API_KEY:'synthetic',BABEL_COMPACTION_API_BASE:'https://other.invalid',BABEL_DIFF_CRITIC_PRO_MODEL:'disabled-model'};
+      let launch;
+      new Script(source).runInNewContext({scriptUrl,dirname,join,isAbsolute,fileURLToPath,resolvePackagedEngine,
+        bundledEnvironment:userData=>bundledEnvironment(userData,inherited),applyProviderRoute,
+        process:{argv:['node','launcher',`--profile-dir=${profile}`,'doctor'],env:inherited},
+        spawn:(exe,args,options)=>{launch={exe,args,options};return {on(){}};},console});
+      for(const key of ['BABEL_COMPACTION_MODEL','BABEL_DIFF_CRITIC_MODEL','BABEL_DIFF_CRITIC_PRO_MODEL'])assert.equal(launch.options.env[key],modelId);
+      assert.equal(launch.options.env.BABEL_COMPACTION_API_KEY,undefined);
+      if(provider!=='openrouter')assert.equal(launch.options.env.BABEL_COMPACTION_API_BASE,undefined);
+    }
+  }finally{rmSync(profile,{recursive:true,force:true});}
+});
+
 test('actual installed launcher consumes the same saved provider/default/private policy as Desktop',()=>{
   const profile=mkdtempSync(join(tmpdir(),'babel-launch-route-'));
   try{

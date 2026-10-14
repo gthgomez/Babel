@@ -18,17 +18,7 @@
  */
 import {applyProviderRoute} from './provider-routing.mjs';
 
-/** Bind auxiliary calls to the validated provider model ID for this run. */
-export function applySelectedModelEnvironment(env, model) {
-  if (!model || typeof model.modelId !== 'string' || !/^[\w./:+-]{1,200}$/.test(model.modelId)) throw new TypeError('A qualified provider model ID is required');
-  env.BABEL_COMPACTION_MODEL=model.modelId;
-  env.BABEL_DIFF_CRITIC_MODEL=model.modelId;
-  env.BABEL_DIFF_CRITIC_PRO_MODEL=model.modelId;
-  // Auxiliary credentials/endpoints cannot override the selected provider.
-  delete env.BABEL_COMPACTION_API_KEY;
-  delete env.BABEL_COMPACTION_API_BASE;
-  return env;
-}
+export {applySelectedModelEnvironment} from './provider-routing.mjs';
 
 export function applyProjectCredentialScope(env, {projectCredentialRoot = null, projectRoot = null, configDirectory = null} = {}) {
   delete env.BABEL_PROJECT_CREDENTIALS_DIR;

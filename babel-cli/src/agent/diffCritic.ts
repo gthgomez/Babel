@@ -89,6 +89,7 @@ export function isDiffCriticEnabled(): boolean {
 }
 
 export function resolveDiffCriticModel(primaryModel?: string): string {
+  if (process.env['BABEL_DESKTOP_PROVIDER'] && primaryModel?.trim()) return primaryModel.trim();
   const fromEnv = process.env['BABEL_DIFF_CRITIC_MODEL']?.trim();
   // Certification runs pin GLM end-to-end. An operator-provided critic model
   // must not silently turn that run into a mixed-model experiment.
@@ -100,6 +101,7 @@ export function resolveDiffCriticModel(primaryModel?: string): string {
 
 /** Pro / second-tier critic model (SWE hard cells). */
 export function resolveDiffCriticProModel(primaryModel?: string): string {
+  if (process.env['BABEL_DESKTOP_PROVIDER'] && primaryModel?.trim()) return primaryModel.trim();
   const fromEnv = process.env['BABEL_DIFF_CRITIC_PRO_MODEL']?.trim();
   if (primaryModel?.trim() === LIVE_OPENROUTER_MODEL_ID) return primaryModel.trim();
   if (fromEnv) return fromEnv;

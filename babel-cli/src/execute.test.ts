@@ -237,12 +237,20 @@ test('request-scoped model controls every stage with no disabled fallback', asyn
 test('unsupported pipeline selection rejects before daemon or provider dispatch', async () => {
   const {runBabelPipeline} = await import('./pipeline.js');
   const previousFetch = globalThis.fetch;
+  const previousProvider=process.env['BABEL_DESKTOP_PROVIDER'];
+  const previousModel=process.env['BABEL_DESKTOP_MODEL_ROUTE'];
   let requests = 0;
   globalThis.fetch = (async () => { requests++; throw new Error('No external request is allowed'); }) as typeof fetch;
   try {
     await assert.rejects(() => runBabelPipeline('public fixture', {modelOverride:'opencode-go/deepseek-v4.1-flash'}), /unapproved live model|not supported/);
+    process.env['BABEL_DESKTOP_PROVIDER']='opencode-go';process.env['BABEL_DESKTOP_MODEL_ROUTE']='opencode-go/deepseek-v4.1-flash';
+    await assert.rejects(() => runBabelPipeline('public fixture'), /unapproved live model|not supported/);
     assert.equal(requests, 0);
-  } finally { globalThis.fetch = previousFetch; }
+  } finally {
+    globalThis.fetch = previousFetch;
+    if(previousProvider===undefined)delete process.env['BABEL_DESKTOP_PROVIDER'];else process.env['BABEL_DESKTOP_PROVIDER']=previousProvider;
+    if(previousModel===undefined)delete process.env['BABEL_DESKTOP_MODEL_ROUTE'];else process.env['BABEL_DESKTOP_MODEL_ROUTE']=previousModel;
+  }
 });
 
 test('unknown live model overrides fail closed before the stage waterfall', async () => {

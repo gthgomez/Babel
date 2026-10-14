@@ -30,11 +30,23 @@ import {
   parseDiffCriticVerdict,
   runDiffCritic,
   runHeuristicDiffCritic,
+  resolveDiffCriticModel,
+  resolveDiffCriticProModel,
   shouldEscalateCriticToPro,
   SWE_DIFF_CRITIC_PASS_CONFIDENCE_THRESHOLD,
   toCriticReceipt,
   type DiffCriticInput,
 } from './diffCritic.js';
+
+test('profiled CLI model overrides pin both critic phases to the admitted current model',()=>{
+  const names=['BABEL_DESKTOP_PROVIDER','BABEL_DIFF_CRITIC_MODEL','BABEL_DIFF_CRITIC_PRO_MODEL'];
+  const prior=Object.fromEntries(names.map(name=>[name,process.env[name]]));
+  process.env['BABEL_DESKTOP_PROVIDER']='openrouter';process.env['BABEL_DIFF_CRITIC_MODEL']='deepseek/deepseek-v4-pro';process.env['BABEL_DIFF_CRITIC_PRO_MODEL']='disabled-model';
+  try {
+    assert.equal(resolveDiffCriticModel('deepseek/deepseek-v4-flash-0731'),'deepseek/deepseek-v4-flash-0731');
+    assert.equal(resolveDiffCriticProModel('deepseek/deepseek-v4-flash-0731'),'deepseek/deepseek-v4-flash-0731');
+  }finally{for(const name of names){if(prior[name]===undefined)delete process.env[name];else process.env[name]=prior[name];}}
+});
 
 // ─── A09-class fixtures (from live evidence + SWE gold) ──────────────
 
