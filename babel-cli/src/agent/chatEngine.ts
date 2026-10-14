@@ -2891,6 +2891,13 @@ export class ChatEngine {
     this.budgetLastChanceDone = runtime.budgetLastChanceDone;
     this.restrictToolsNextTurn = runtime.restrictToolsNextTurn;
 
+    if (runtime.presentationOnly) {
+      // A read-only status view must not surface the prior task's terminal
+      // budget limiter in its run-allowance receipt.
+      this.terminatingLimiter = null;
+      this.terminalLimiterReason = null;
+    }
+
     const continuationScopeUnavailable =
       input.continueTask === true &&
       !runtime.continuedTask &&

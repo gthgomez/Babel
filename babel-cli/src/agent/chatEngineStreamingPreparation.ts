@@ -102,7 +102,7 @@ export async function prepareStreamingSubmission(
       content: formatPlanHandoffUserMessage(host.planHandoff),
     });
     host.policyEventLog.record({
-      at_turn: 0,
+      at_turn: host._turnIndex,
       kind: "progress_policy",
       detail: `plan_execute_handoff:${host.planHandoff.planId}`,
     });
