@@ -139,3 +139,89 @@ test('model and projectRoot are recorded on snapshot for turn_started truth', ()
   assert.equal(next.projectRoot, '<BABEL_REPO_ROOT>');
   assert.equal(next.taskIntent, 'execute');
 });
+
+test('status question is a read-only presentation that preserves the objective', () => {
+  const prev = snapshot({
+    submissionIndex: 3,
+    taskText: 'fix the failing authentication test',
+    durableObjective: 'fix the failing authentication test',
+    taskIntent: 'execute',
+    stickyIntent: 'execute',
+    effectiveOperation: 'MUTATING',
+    taskClass: 'general_swe',
+    writeCount: 2,
+    gateStrikes: 1,
+  });
+
+  const next = beginUserSubmission({
+    userInput: 'status?',
+    projectRoot: '/repo',
+    classifyIntent: classify, // legacy classifier would say 'execute' for 'status?'
+    previous: prev,
+  });
+
+  assert.equal(next.presentationOnly, true);
+  assert.equal(next.effectiveOperation, 'READ_ONLY');
+  assert.equal(next.taskIntent, 'explain');
+  assert.equal(next.durableObjective, 'fix the failing authentication test');
+  // Prior counters/state preserved so progress is not lost on a status query.
+  assert.equal(next.continuedTask, true);
+  assert.equal(next.writeCount, 2);
+  assert.equal(next.gateStrikes, 1);
+  assert.equal(next.taskClass, 'general_swe');
+  // The task's sticky intent survives so a later continue resumes the real task.
+  assert.equal(next.stickyIntent, 'execute');
+});
+
+test('an explicit or gestured continue after a status presentation resumes the mutating task', () => {
+  const prev = snapshot({
+    taskText: 'fix the failing test',
+    durableObjective: 'fix the failing test',
+    effectiveOperation: 'MUTATING',
+    stickyIntent: 'execute',
+  });
+  const status = beginUserSubmission({
+    userInput: 'status?',
+    projectRoot: '/repo',
+    classifyIntent: classify,
+    previous: prev,
+  });
+  assert.equal(status.effectiveOperation, 'READ_ONLY');
+
+  const resumed = beginUserSubmission({
+    userInput: 'continue',
+    projectRoot: '/repo',
+    continueTask: true,
+    classifyIntent: classify,
+    previous: status,
+  });
+  assert.equal(resumed.effectiveOperation, 'MUTATING');
+  assert.equal(resumed.taskIntent, 'execute');
+  assert.equal(resumed.durableObjective, 'fix the failing test');
+
+  const gestured = beginUserSubmission({
+    userInput: 'continue',
+    projectRoot: '/repo',
+    classifyIntent: classify,
+    previous: status,
+  });
+  assert.equal(gestured.effectiveOperation, 'MUTATING');
+  assert.equal(gestured.taskIntent, 'execute');
+});
+
+test('an explicit CHANGE operation overrides status presentation', () => {
+  const prev = snapshot({
+    taskText: 'fix the failing test',
+    durableObjective: 'fix the failing test',
+    effectiveOperation: 'MUTATING',
+  });
+  const next = beginUserSubmission({
+    userInput: 'status?',
+    projectRoot: '/repo',
+    operation: 'CHANGE',
+    classifyIntent: classify,
+    previous: prev,
+  });
+  assert.equal(next.presentationOnly, undefined);
+  assert.equal(next.effectiveOperation, 'MUTATING');
+});

@@ -62,6 +62,12 @@ export interface TurnRuntimeSnapshot extends TurnRuntimeCounters {
   stickyIntent: TurnTaskIntent | null;
   /** Whether this submission continued prior task counter state. */
   continuedTask: boolean;
+  /**
+   * True for a read-only status presentation of a live task. The submission is
+   * read-only, but an explicit or gesture continuation after it resumes the
+   * objective's real (possibly mutating) operation, not this read-only view.
+   */
+  presentationOnly?: boolean;
   model?: string;
   projectRoot: string;
   /** Accepted objective. Continuation and status questions do not replace it. */
@@ -155,11 +161,24 @@ export function beginUserSubmission(input: BeginUserSubmissionInput): TurnRuntim
     && !amendment;
   const submissionIndex = (prev?.submissionIndex ?? 0) + 1;
 
+  // P-A: a status question is a READ-ONLY presentation of the live objective.
+  // It must not inherit the prior submission's mutation operation (which would
+  // classify it `execute` and inject a mutation mandate) while the objective is
+  // preserved. It keeps the durable objective and prior counters so a later
+  // explicit `continue` can still resume the task. An explicit CHANGE wins.
+  const statusPresentation = statusQuestion && input.operation !== 'CHANGE';
+
   const taskShape = resolveTaskShape(taskText, input.operation);
   const effectiveOperation: TaskOperation =
-    carryOperation && prev
-      ? prev.effectiveOperation ?? prev.taskShape?.operation ?? resolveTaskShape(prev.taskText).operation
-      : taskShape.operation;
+    statusPresentation
+      ? 'READ_ONLY'
+      : carryOperation && prev
+        // A continuation after a status presentation resumes the objective's
+        // real operation, not the read-only presentation's operation.
+        ? prev.presentationOnly
+          ? prev.taskShape?.operation ?? resolveTaskShape(prev.taskText).operation
+          : prev.effectiveOperation ?? prev.taskShape?.operation ?? resolveTaskShape(prev.taskText).operation
+        : taskShape.operation;
 
   const taskIntent: TurnTaskIntent =
     effectiveOperation === 'READ_ONLY' ? 'explain'
@@ -176,7 +195,7 @@ export function beginUserSubmission(input: BeginUserSubmissionInput): TurnRuntim
       });
 
   const gatePolicy = getChatTaskTune(taskClass).verificationPolicy;
-  const counters = continueTask && prev
+  const counters = (continueTask || statusPresentation) && prev
     ? {
         writeCount: prev.writeCount,
         gateStrikes: prev.gateStrikes,
@@ -202,8 +221,11 @@ export function beginUserSubmission(input: BeginUserSubmissionInput): TurnRuntim
     taskShape,
     effectiveOperation,
     gatePolicy,
-    stickyIntent: taskIntent,
-    continuedTask: continueTask,
+    // A status presentation keeps the task's sticky intent so a later explicit
+    // `continue` resumes the real task rather than the read-only presentation.
+    stickyIntent: statusPresentation && prev ? prev.stickyIntent ?? prev.taskIntent : taskIntent,
+    continuedTask: continueTask || statusPresentation,
+    ...(statusPresentation ? { presentationOnly: true } : {}),
     projectRoot: input.projectRoot,
     ...(input.model !== undefined ? { model: input.model } : {}),
     ...counters,
