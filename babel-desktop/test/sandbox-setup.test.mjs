@@ -5,6 +5,11 @@ import {parsePreferences} from '../native/security.mjs';
 
 const id=`sha256:${'a'.repeat(64)}`;
 const inspect={Id:id,Os:'linux',Architecture:'amd64'};
+test('setup rejects successful no-op entrypoints and unrelated output',async()=>{
+  for(const stdout of ['', 'container started\n', 'git version 2.39.5\n']){
+    await assert.rejects(()=>configureSandboxImage({reference:'custom:v1',execute:async(_binary,args)=>({stdout:args[0]==='image'?JSON.stringify(inspect):stdout})}),/verification failed/);
+  }
+});
 
 test('a non-forwarding image entrypoint cannot be bypassed by setup validation',async()=>{
   await assert.rejects(()=>configureSandboxImage({reference:'custom:v1',execute:async(_binary,args)=>{
@@ -26,7 +31,8 @@ test('preparation pulls only the fixed digest and verifies platform/tools before
     calls.push({binary,args,options});
     assert.equal(binary,'docker');assert.equal(options.shell,false);
     assert.ok(options.timeout>0&&options.timeout<=300000);assert.ok(options.maxBuffer<=256*1024);
-    return {stdout:args[0]==='image'?JSON.stringify(inspect):''};
+    return {stdout:args[0]==='image'?JSON.stringify(inspect):args[0]==='run'?
+      `container started\n${args.at(-2)==='git'?'git version 2.39.5':args.at(-1).match(/babel-sandbox-[a-f0-9-]{36}/)?.[0]}\n`:''};
   };
   const result=await configureSandboxImage({prepareRecommended:true,execute});
   assert.equal(calls[0].args[0],'pull');assert.equal(calls[0].args.at(-1),RECOMMENDED_IMAGE);

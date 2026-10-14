@@ -20,13 +20,16 @@ export function probeInstalledSandboxImage(image:string|undefined,options:{env?:
     if(inspected.error||inspected.status!==0)return false;
     const record=JSON.parse(String(inspected.stdout??'')) as {Id?:unknown;Os?:unknown;Architecture?:unknown};
     if(record.Os!=='linux'||record.Architecture!=='amd64'||typeof record.Id!=='string'||!/^sha256:[a-f0-9]{64}$/.test(record.Id))return false;
-    for(const command of [['git','--version'],['/bin/sh','-lc','git --version >/dev/null']]){
+    const marker=`babel-sandbox-${randomUUID()}`;
+    for(const command of [['git','--version'],['/bin/sh','-lc',`git --version >/dev/null && printf '%s\\n' '${marker}'`]]){
       const containerName=`babel-doctor-${randomUUID()}`;
       try{
         const probe=run(['run','--rm',`--name=${containerName}`,'--network=none','--read-only','--cap-drop=ALL','--security-opt=no-new-privileges',
           '--pids-limit=64','--memory=256m','--cpus=1','--user=65534:65534','--tmpfs=/tmp:rw,nosuid,size=32m',
           '--env=HOME=/tmp',record.Id,...command],5000);
         if(probe.error||probe.status!==0)return false;
+        const lines=String(probe.stdout??'').split(/\r?\n/);
+        if(command[0]==='git'?!lines.some(line=>/^git version \d+\.\d+(?:\.[0-9A-Za-z]+)*$/.test(line)):!lines.includes(marker))return false;
       }finally{
         // Client timeout does not terminate the daemon-owned container.
         try{run(['rm','--force',containerName],1500);}catch{}

@@ -3,6 +3,12 @@ import assert from 'node:assert/strict';
 import {probeInstalledSandboxImage} from './installedSandbox.js';
 
 const id=`sha256:${'b'.repeat(64)}`;
+test('doctor rejects successful no-op entrypoints and unrelated output',()=>{
+  for(const stdout of ['', 'container started\n', 'git version 2.39.5\n']){
+    assert.equal(probeInstalledSandboxImage(id,{execute:(_binary,args)=>({status:0,stdout:args[0]==='image'?JSON.stringify({Id:id,Os:'linux',Architecture:'amd64'}):stdout})}),false);
+  }
+});
+
 test('doctor rejects an image whose configured entrypoint cannot execute commands',()=>{
   assert.equal(probeInstalledSandboxImage(id,{execute:(_binary,args)=>({status:args[0]==='run'&&!args.some(arg=>arg.startsWith('--entrypoint'))?1:0,stdout:JSON.stringify({Id:id,Os:'linux',Architecture:'amd64'})})}),false);
 });
@@ -18,13 +24,15 @@ test('installed image probe verifies local linux amd64 shell and Git without mou
     calls.push({args,options});
     assert.equal(options.shell,false);assert.ok(options.timeout<=8000);
     assert.equal(options.env.OPENROUTER_API_KEY,undefined);
-    return {status:0,stdout:args[0]==='image'?JSON.stringify({Id:id,Os:'linux',Architecture:'amd64'}):'',stderr:''};
+    return {status:0,stdout:args[0]==='image'?JSON.stringify({Id:id,Os:'linux',Architecture:'amd64'}):args[0]==='run'?
+      `container started\n${args.at(-2)==='git'?'git version 2.39.5':args.at(-1)!.match(/babel-sandbox-[a-f0-9-]{36}/)?.[0]}\n`:'',stderr:''};
   };
   assert.equal(probeInstalledSandboxImage(id,{execute,env:{OPENROUTER_API_KEY:'synthetic',PATH:'fixture'}}),true);
   assert.equal(calls.length,5);
   assert.ok(calls[1]!.args.includes('--network=none'));assert.ok(calls[1]!.args.includes('--read-only'));
   assert.ok(!calls[1]!.args.some(arg=>arg.startsWith('--entrypoint')));assert.ok(calls[1]!.args.includes(id));
-  assert.deepEqual(calls[1]!.args.slice(-2),['git','--version']);assert.deepEqual(calls[3]!.args.slice(-3),['/bin/sh','-lc','git --version >/dev/null']);
+  assert.deepEqual(calls[1]!.args.slice(-2),['git','--version']);assert.deepEqual(calls[3]!.args.slice(-3,-1),['/bin/sh','-lc']);
+  assert.match(calls[3]!.args.at(-1)!,/^git --version >\/dev\/null && printf '%s\\n' 'babel-sandbox-[a-f0-9-]{36}'$/);
   assert.ok(!calls[1]!.args.includes('-v'));
   assert.deepEqual(calls[2]!.args,['rm','--force',calls[1]!.args.find(arg=>arg.startsWith('--name='))!.slice(7)]);
 });

@@ -50,15 +50,20 @@ export async function configureSandboxImage({reference,prepareRecommended=false,
   const probe=prepareRecommended
     ? 'git --version >/dev/null && node --version >/dev/null && npm --version >/dev/null'
     : 'git --version >/dev/null';
+  const marker=`babel-sandbox-${randomUUID()}`;
   try{
     // Preserve ENTRYPOINT just like project execution. Check direct Git as well
     // as shell dispatch; overriding it could certify an unusable custom image.
-    for(const command of [['git','--version'],['/bin/sh','-lc',probe]]){
+    for(const command of [['git','--version'],['/bin/sh','-lc',`${probe} && printf '%s\\n' '${marker}'`]]){
       const containerName=`babel-setup-${randomUUID()}`;
       try{
-        await run(['run','--rm',`--name=${containerName}`,'--network=none','--read-only','--cap-drop=ALL','--security-opt=no-new-privileges',
+        const result=await run(['run','--rm',`--name=${containerName}`,'--network=none','--read-only','--cap-drop=ALL','--security-opt=no-new-privileges',
           '--pids-limit=64','--memory=256m','--cpus=1','--user=65534:65534','--tmpfs=/tmp:rw,nosuid,size=32m',
           '--env=HOME=/tmp','--env=NPM_CONFIG_UPDATE_NOTIFIER=false',record.Id,...command],10000);
+        const lines=String(result.stdout??'').split(/\r?\n/);
+        if(command[0]==='git'?!lines.some(line=>/^git version \d+\.\d+(?:\.[0-9A-Za-z]+)*$/.test(line)):!lines.includes(marker)){
+          throw new Error('Sandbox command output did not confirm execution.');
+        }
       }finally{
         // Client timeout does not stop its daemon-owned container.
         try{await run(['rm','--force',containerName],5000);}catch{}
