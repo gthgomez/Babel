@@ -3,6 +3,14 @@ import assert from 'node:assert/strict';
 
 const load = () => import('../src/core.mjs').catch(() => ({}));
 
+test('provider mode support is explicit and unsupported pipeline routes are blocked', async () => {
+  const {modeUnavailableReason} = await load();
+  for(const provider of ['openrouter','opencode-go','ollama','deepseek','deepinfra']) {
+    assert.equal(modeUnavailableReason('chat',provider),'');
+    for(const mode of ['plan','deep']) assert.equal(Boolean(modeUnavailableReason(mode,provider)),provider !== 'openrouter');
+  }
+});
+
 test('HTML renderer escapes untrusted model content', async () => {
   const { escapeHtml } = await load();
   assert.equal(typeof escapeHtml, 'function', 'escapeHtml must exist');

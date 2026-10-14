@@ -1,3 +1,4 @@
+import {modeUnavailableReason} from '../src/core.mjs';
 import {app,BrowserWindow,dialog,ipcMain,protocol,session,shell} from 'electron';
 import {readFileSync} from 'node:fs';
 import {readFile,writeFile,rename,mkdir,stat,realpath} from 'node:fs/promises';
@@ -390,6 +391,8 @@ async function start(){
       runRequest.model = route.model;
     }
     if(!route)throw new Error('Choose a provider and default model in Settings before sending a task.');
+    const unavailableMode=modeUnavailableReason(runRequest.mode,route.provider);
+    if(unavailableMode)throw new Error(unavailableMode);
     const models=qualifiedProviders(runtimeEnvironment().BABEL_CONFIG_DIR).find(p=>p.id===route.provider)?.routes??[];
     if(!models.some(model=>model.id===runRequest.model&&model.enabled!==false))throw new Error('The selected model is disabled or belongs to another provider. Choose an enabled model.');
     buildRunArgs(cliEntry, preferences.projectRoot, runRequest);

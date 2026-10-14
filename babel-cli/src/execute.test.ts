@@ -10,7 +10,7 @@
 
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { z } from 'zod';
@@ -26,6 +26,7 @@ import {
   isStructuredOutputFailure,
   resetOfflineQaCallCount,
   runWithFallback,
+  withPipelineModelRoute,
   runWaterfallForSchemaFailureTest,
 } from './execute.js';
 import type { RunOptions, PipelineStage } from './execute.js';
@@ -194,6 +195,54 @@ test('explicit GLM stage policy uses the exact OpenRouter route', async () => {
     if (previousKey === undefined) delete process.env['OPENROUTER_API_KEY'];
     else process.env['OPENROUTER_API_KEY'] = previousKey;
   }
+});
+
+test('request-scoped model controls every stage with no disabled fallback', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-selected-route-'));
+  const config = JSON.parse(readFileSync(new URL('../../config/model-policy.json', import.meta.url), 'utf8'));
+  for (const [key, entry] of Object.entries(config.models) as [string, { enabled: boolean }][]) entry.enabled = key === 'deepseek-v4-pro-openrouter';
+  const policyPath = join(root, 'model-policy.json');
+  writeFileSync(policyPath, JSON.stringify(config));
+  const previousPolicy = process.env['BABEL_MODEL_POLICY_PATH'];
+  const previousKey = process.env['OPENROUTER_API_KEY'];
+  const previousFetch = globalThis.fetch;
+  const requests: string[] = [];
+  process.env['BABEL_MODEL_POLICY_PATH'] = policyPath;
+  process.env['OPENROUTER_API_KEY'] = 'synthetic';
+  globalThis.fetch = (async (url, init) => {
+    assert.match(String(url), /^https:\/\/openrouter.ai\//);
+    requests.push(JSON.parse(String(init?.body)).model);
+    const content = requests.length === 3 ? '{"wrong":true}' : '{"ok":true}';
+    return new Response(`data: ${JSON.stringify({model:'deepseek/deepseek-v4-pro',choices:[{delta:{content}}]})}\n\ndata: [DONE]\n\n`, {status:200});
+  }) as typeof fetch;
+  try {
+    await withPipelineModelRoute('deepseek-v4-pro-openrouter', async () => {
+      for (const stage of ['orchestrator','planning','qa','executor'] as const) {
+        assert.deepEqual(await runWithFallback('respond', z.object({ok:z.literal(true)}), {stage, liveOnly:true}), {ok:true});
+      }
+      await assert.rejects(() => runWithFallback('respond', z.object({ok:z.literal(true)}), {model:'deepseek-v4-flash-openrouter',liveOnly:true}), /selected pipeline model/);
+    });
+    assert.deepEqual(requests, Array(5).fill('deepseek/deepseek-v4-pro'));
+    await assert.rejects(() => withPipelineModelRoute('opencode-go/deepseek-v4.1-flash', async () => { throw new Error('must not enter'); }), /unapproved live model|not supported/);
+    assert.equal(requests.length, 5);
+    await assert.rejects(() => runWithFallback('respond', z.object({ok:z.literal(true)}), {model:'deepseek-v4-flash-openrouter',stage:'executor',liveOnly:true}), /disabled/);
+  } finally {
+    globalThis.fetch = previousFetch;
+    if(previousPolicy === undefined) delete process.env['BABEL_MODEL_POLICY_PATH']; else process.env['BABEL_MODEL_POLICY_PATH']=previousPolicy;
+    if(previousKey === undefined) delete process.env['OPENROUTER_API_KEY']; else process.env['OPENROUTER_API_KEY']=previousKey;
+    rmSync(root, {recursive:true,force:true});
+  }
+});
+
+test('unsupported pipeline selection rejects before daemon or provider dispatch', async () => {
+  const {runBabelPipeline} = await import('./pipeline.js');
+  const previousFetch = globalThis.fetch;
+  let requests = 0;
+  globalThis.fetch = (async () => { requests++; throw new Error('No external request is allowed'); }) as typeof fetch;
+  try {
+    await assert.rejects(() => runBabelPipeline('public fixture', {modelOverride:'opencode-go/deepseek-v4.1-flash'}), /unapproved live model|not supported/);
+    assert.equal(requests, 0);
+  } finally { globalThis.fetch = previousFetch; }
 });
 
 test('unknown live model overrides fail closed before the stage waterfall', async () => {

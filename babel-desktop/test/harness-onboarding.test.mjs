@@ -5,6 +5,24 @@ import {readFileSync} from 'node:fs';
 import {chromium} from 'playwright';
 const html = readFileSync(new URL('../dist/index.html', import.meta.url), 'utf8');
 
+test('Go permits Chat and explains unavailable pipeline modes before sending',async()=>{
+  const browser=await chromium.launch({headless:true});
+  try{
+    const page=await browser.newPage();
+    await page.evaluate(()=>{
+      window.babelDesktop={getInfo:async()=>({ready:true,projectRoot:'C:/fixture',projectName:'fixture'}),listDirectory:async()=>[],listSessions:async()=>({sessions:[]}),readProviderRoute:async()=>({provider:'opencode-go',model:'opencode-go/deepseek-v4.1-flash'}),onEvent:()=>{},run:async()=>{window.__requests=(window.__requests??0)+1;return {started:true};}};
+    });
+    await page.setContent(html);await page.waitForFunction(()=>!document.querySelector('#send-button').disabled);
+    for(const mode of ['plan','deep']) {
+      assert.equal(await page.locator(`.top-tab[data-mode="${mode}"]`).isDisabled(),true);
+      assert.match(await page.locator(`.top-tab[data-mode="${mode}"]`).getAttribute('title'),/Use Chat/);
+    }
+    await page.keyboard.press('Alt+3');
+    assert.equal(await page.locator('.top-tab[data-mode="chat"]').getAttribute('aria-pressed'),'true');
+    assert.equal(await page.evaluate(()=>window.__requests??0),0);
+  }finally{await browser.close();}
+});
+
 test('Setup Done and Recheck preserve the active same-project mode and completed transcript',async()=>{
   const browser=await chromium.launch({headless:true});
   try{

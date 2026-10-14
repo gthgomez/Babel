@@ -73,14 +73,13 @@ export { clearRoutingCache };
 import {
   assertLiveModelId,
   LIVE_OPENROUTER_BACKEND_KEY,
-  resolveOpenRouterDeepSeekBackendKey,
   resolveModelByKey,
-  resolveModelPolicyBackendKey,
   resolveStagePolicyRoutes,
   type ResolvedModelPolicyEntry,
 } from './modelPolicy.js';
 import { loadModelPolicyConfig } from './modelPolicy.js';
 import { randomUUID } from 'node:crypto';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import {
   globalCostTracker,
   type UsageAttribution,
@@ -96,6 +95,32 @@ import {
 import { redactSecrets } from './utils/redaction.js';
 
 export type { TargetModel };
+
+// Each pipeline owns its selection, including validator and schema-repair calls.
+// Async-local scope prevents concurrent runs from changing one another's route.
+const pipelineModelRoute = new AsyncLocalStorage<{model:string; allowExpensive?:boolean}>();
+
+function explicitModelTier(model: string, liveOnly: boolean, allowExpensive = false): TierSpec {
+  if (liveOnly) assertLiveModelId(model, 'live pipeline selection');
+  const resolved = resolveModelByKey({key:model, liveOnly, allowExpensive, bindStagesToSelectedModel:true});
+  if (!['openrouter', 'deepseek', 'deepinfra'].includes(resolved.provider)) {
+    throw new Error(`Provider "${resolved.provider}" is not supported in Plan or Deep. Use Chat mode.`);
+  }
+  return {
+    kind:'api', name:resolved.resolvedBackendKey, provider:resolved.provider,
+    backendKey:resolved.resolvedBackendKey,
+    factory:resolved.provider === 'openrouter'
+      ? () => new OpenRouterApiRunner(resolved.providerModelId)
+      : resolved.provider === 'deepseek'
+        ? () => new DeepSeekApiRunner(resolved.providerModelId)
+        : () => new DeepInfraApiRunner(resolved.providerModelId),
+  };
+}
+
+export async function withPipelineModelRoute<T>(model: string, run: () => Promise<T>, options: {liveOnly?: boolean; allowExpensive?: boolean} = {}): Promise<T> {
+  explicitModelTier(model, options.liveOnly ?? process.env['BABEL_PIPELINE_V9_OFFLINE'] !== '1', options.allowExpensive);
+  return pipelineModelRoute.run({model, ...(options.allowExpensive !== undefined ? {allowExpensive:options.allowExpensive} : {})}, run);
+}
 
 // ─── Waterfall telemetry ──────────────────────────────────────────────────────
 
@@ -1401,45 +1426,15 @@ export async function runWithFallback<T>(
     EvidenceBundle.inMemory(options.schemaName ?? 'schema-failure');
   const liveOnly =
     options.liveOnly ?? process.env['BABEL_PIPELINE_V9_OFFLINE'] !== '1';
-  let waterfall = resolveWaterfall(options.stage, options.mode, liveOnly);
-  if (options.fallbackPolicy === 'primary_only') {
-    waterfall = waterfall.slice(0, 1);
+  const selectedRoute = pipelineModelRoute.getStore();
+  if (selectedRoute && options.model && options.model !== selectedRoute.model) {
+    throw new Error('A stage cannot override the selected pipeline model.');
   }
-
-  // Per-agent model override: when an explicit backend key is provided,
-  // bypass the stage-based waterfall and create a single-tier waterfall
-  // with a direct runner for that model.
-  if (options.model) {
-    if (liveOnly) {
-      assertLiveModelId(options.model, 'live model override');
-    }
-    const { config } = loadModelPolicyConfig();
-    const routedModel = liveOnly
-      ? resolveOpenRouterDeepSeekBackendKey(options.model) ?? options.model
-      : options.model;
-    const backendKey = resolveModelPolicyBackendKey(routedModel);
-    const backend = backendKey ? config.models?.[backendKey] : undefined;
-    if (backendKey && backend) {
-      const resolved = resolveModelByKey({ key: backendKey, liveOnly });
-      const factory =
-        backend.provider === 'deepseek'
-          ? () => new DeepSeekApiRunner(backend.model_id)
-          : backend.provider === 'openrouter'
-            ? () => new OpenRouterApiRunner(backend.model_id)
-            : () => new DeepInfraApiRunner(backend.model_id);
-      waterfall = [
-        {
-          kind: 'api',
-          name: backendKey,
-          provider: resolved.provider,
-          backendKey,
-          factory,
-        },
-      ];
-    }
-    // Live model overrides are validated above and must resolve to an
-    // approved route; they cannot silently fall through to another model.
-  }
+  const explicitModel = selectedRoute?.model ?? options.model;
+  let waterfall = explicitModel
+    ? [explicitModelTier(explicitModel, liveOnly, selectedRoute?.allowExpensive)]
+    : resolveWaterfall(options.stage, options.mode, liveOnly);
+  if (options.fallbackPolicy === 'primary_only') waterfall = waterfall.slice(0, 1);
   if (liveOnly) {
     waterfall = waterfall.filter(
       (tier) =>

@@ -53,7 +53,7 @@ export class BabelChild {
     const decoder = new JsonlDecoder(event => send({kind:'event',event}), report);
     const child = spawn(this.executable, args, {
       cwd: this.projectRoot, shell: false, windowsHide: true,
-      stdio: ['pipe','pipe','pipe'], env: {...(this.inheritEnv ? process.env : {}), ...this.env, BABEL_DESKTOP_IPC:'1'}
+      stdio: ['pipe','pipe','pipe'], env: {...(this.inheritEnv ? process.env : {}), ...this.env, BABEL_DESKTOP_IPC:'1', BABEL_DAEMON_ENABLED:'false'}
     });
     this.#child = child;
     child.stdout.on('data', chunk => {

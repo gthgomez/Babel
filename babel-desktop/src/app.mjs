@@ -1,4 +1,4 @@
-import { escapeHtml, contextPercent, normalizeEvent, rememberChange, sessionIdFromResult, absorbFileChange, reviewFromResult, liveModelFromResult, liveRequestTokens, toolsFromResult, verifiedStatus } from './core.mjs';
+import { escapeHtml, contextPercent, normalizeEvent, rememberChange, sessionIdFromResult, absorbFileChange, reviewFromResult, liveModelFromResult, liveRequestTokens, toolsFromResult, verifiedStatus, modeUnavailableReason } from './core.mjs';
 import { icon } from './icons.mjs';
 const MODE_OPTIONS=[{id:'chat',label:'Chat',description:'Coding tasks'},{id:'plan',label:'Plan',description:'Read-only planning'},{id:'deep',label:'Deep',description:'Governed workflow'}];
 
@@ -46,16 +46,18 @@ function toast(message) {
 function announce(message) { $('#live-announcement').textContent = message; }
 function setMode(mode) {
   if (!MODE_OPTIONS.some(m => m.id === mode)) return;
+  const unavailable = modeUnavailableReason(mode, configuredRoute?.provider);
+  if (unavailable) { toast(unavailable); return; }
   if (activeRun) { toast('Wait for the active response before changing modes.'); return; }
   state.mode = mode; persist(); renderControls();
   announce(`${mode} mode selected.`);
 }
 function renderTabs() {
-  $('#top-tabs').innerHTML = MODE_OPTIONS.map(m => `<button class="top-tab ${state.mode === m.id ? 'active' : ''}" data-action="mode" data-mode="${m.id}" aria-pressed="${state.mode === m.id}" title="${m.label} · ${m.description} (Alt+${MODE_OPTIONS.indexOf(m)+1})"><span class="tab-bracket">[ </span>${m.label}<span class="tab-bracket"> ]</span></button>`).join('');
+  $('#top-tabs').innerHTML = MODE_OPTIONS.map(m => `<button class="top-tab ${state.mode === m.id ? 'active' : ''}" data-action="mode" data-mode="${m.id}" aria-pressed="${state.mode === m.id}" ${activeRun || modeUnavailableReason(m.id,configuredRoute?.provider) ? 'disabled' : ''} title="${e(modeUnavailableReason(m.id,configuredRoute?.provider) || `${m.label} · ${m.description} (Alt+${MODE_OPTIONS.indexOf(m)+1})`)}"><span class="tab-bracket">[ </span>${m.label}<span class="tab-bracket"> ]</span></button>`).join('');
 }
 function renderControls() {
   renderTabs();
-  $('#mode-controls').innerHTML = MODE_OPTIONS.map(m => `<button class="mode-option ${state.mode === m.id ? 'selected' : ''}" data-action="mode" data-mode="${m.id}" aria-pressed="${state.mode === m.id}" ${activeRun ? 'disabled' : ''}><span class="radio-dot"></span><span class="mode-name">${m.label}</span><span class="mode-description">${m.description}</span></button>`).join('');
+  $('#mode-controls').innerHTML = MODE_OPTIONS.map(m => `<button class="mode-option ${state.mode === m.id ? 'selected' : ''}" data-action="mode" data-mode="${m.id}" aria-pressed="${state.mode === m.id}" ${activeRun || modeUnavailableReason(m.id,configuredRoute?.provider) ? 'disabled' : ''} title="${e(modeUnavailableReason(m.id,configuredRoute?.provider))}"><span class="radio-dot"></span><span class="mode-name">${m.label}</span><span class="mode-description">${m.description}</span></button>`).join('');
   const selected=providerCatalog.flatMap(provider=>provider.routes??[]).find(route=>route.id===(state.model||configuredRoute?.model));
   const liveModelLabel = liveModel || selected?.label || configuredRouteLabel || 'Choose provider';
   const liveRoutes = providerCatalog.find(p=>p.id===configuredRoute?.provider)?.routes?.filter(route=>route.enabled!==false) ?? [];
@@ -326,6 +328,7 @@ async function saveProviderFromDialog(button) {
     const result=await native.saveProviderRoute({provider,apiKey,scope,model,enabledModels:[...document.querySelectorAll('#enabled-models input:checked')].map(input=>input.value)});
     const route=result?.route ?? {provider, model};
     configuredRoute=route;state.model=route.model;
+    if(modeUnavailableReason(state.mode,route.provider)) {state.mode='chat';announce('Chat selected for this provider. Plan and Deep require OpenRouter.');}
     configuredRouteLabel=`${route.provider} · ${route.model}`;
     try { providerCatalog=await native.listQualifiedProviders(); } catch {}
     nativeInfo=await native.refreshDiagnostics();
@@ -437,6 +440,8 @@ function upsertLiveTool(message, tool) {
   message.blocks.push({kind:'tool', tool});
 }
 async function sendMessage() {
+  const unavailableMode=modeUnavailableReason(state.mode,configuredRoute?.provider);
+  if(unavailableMode){toast(unavailableMode);return;}
   const input=$('#composer-input');const text=input.value.trim();
   if(!text||activeRun)return;
   if(executionBlocked()){connectionDialog();return;}

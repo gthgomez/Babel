@@ -81,6 +81,7 @@ test('read-only child transport emits fixture events and rejects concurrent exec
  });
  assert.equal(child.busy,false);
  assert.ok(events.some(p=>p.kind==='event'&&p.event.type==='assistant_chunk'));
+ assert.equal(events.find(p=>p.event?.type==='fixture_environment')?.event.daemonEnabled,'false');
  assert.ok(events.every(p=>p.runId==='test-run'));
  assert.equal(events.at(-1).code,0);
 });

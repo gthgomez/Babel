@@ -713,7 +713,7 @@ function resolveStagePolicies(
       seenBackendKeys.add(resolvedEntry.backendKey);
     }
 
-    if (!seenBackendKeys.has(primaryEntry.backendKey)) {
+    if (primaryEntry.enabled && !seenBackendKeys.has(primaryEntry.backendKey)) {
       orderedBackends.unshift(primaryEntry);
     }
 
@@ -781,6 +781,8 @@ export function resolveModelByKey(options: {
   allowExpensive?: boolean;
   babelRoot?: string;
   liveOnly?: boolean;
+  /** Bind every pipeline phase to this explicit selection instead of stage defaults. */
+  bindStagesToSelectedModel?: boolean;
 }): ResolvedModelPolicy {
   const { path: policyPath, config } = loadModelPolicyConfig(options.babelRoot);
   const hardFail = config.hard_fail_on_unknown_model !== false;
@@ -836,14 +838,14 @@ export function resolveModelByKey(options: {
   }
 
   const stagePolicies =
-    modelKey === LIVE_OPENROUTER_BACKEND_KEY
+    options.bindStagesToSelectedModel === true || modelKey === LIVE_OPENROUTER_BACKEND_KEY
       ? MODEL_POLICY_STAGES.map((stage) => ({
           stage,
           primaryBackendKey: resolvedBackend.backendKey,
           primaryProvider: resolvedBackend.provider,
           primaryProviderModelId: resolvedBackend.providerModelId,
           orderedBackends: [resolvedBackend],
-          selectionReason: 'Exact experimental GLM route is locked across all phases.',
+          selectionReason: 'Explicit model selection is locked across all phases.',
         }))
       : resolveStagePolicies(config, hardFail, options.liveOnly === true);
 

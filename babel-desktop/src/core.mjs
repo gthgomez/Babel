@@ -1,4 +1,9 @@
 /** Pure renderer/transport utilities. No Babel runtime behavior lives here. */
+export function modeUnavailableReason(mode, provider) {
+  if (mode === 'chat') return '';
+  if (!provider) return 'Choose a provider first.';
+  return provider === 'openrouter' ? '' : 'Plan and Deep currently require OpenRouter. Use Chat with this provider.';
+}
 export function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
