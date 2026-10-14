@@ -6,6 +6,13 @@ import {parsePreferences} from '../native/security.mjs';
 const id=`sha256:${'a'.repeat(64)}`;
 const inspect={Id:id,Os:'linux',Architecture:'amd64'};
 
+test('a non-forwarding image entrypoint cannot be bypassed by setup validation',async()=>{
+  await assert.rejects(()=>configureSandboxImage({reference:'custom:v1',execute:async(_binary,args)=>{
+    if(args[0]==='run'&&!args.some(arg=>arg.startsWith('--entrypoint')))throw new Error('Synthetic non-forwarding entrypoint');
+    return {stdout:JSON.stringify(inspect)};
+  }}),/verification failed/);
+});
+
 test('image references reject argument, shell and control-character payloads',()=>{
   for(const value of ['',null,'--help','node:24;echo bad','node:24\nother','node:24 bad','https://registry/node','x'.repeat(513)]){
     assert.throws(()=>validateSandboxImageReference(value));
@@ -25,7 +32,10 @@ test('preparation pulls only the fixed digest and verifies platform/tools before
   assert.equal(calls[0].args[0],'pull');assert.equal(calls[0].args.at(-1),RECOMMENDED_IMAGE);
   const probe=calls.find(call=>call.args[0]==='run');
   assert.ok(probe.args.includes('--network=none'));assert.ok(probe.args.includes('--read-only'));
-  assert.ok(probe.args.includes('--cap-drop=ALL'));assert.ok(probe.args.includes('--entrypoint=/bin/sh'));
+  assert.ok(probe.args.includes('--cap-drop=ALL'));assert.ok(!probe.args.some(arg=>arg.startsWith('--entrypoint')));
+  const probes=calls.filter(call=>call.args[0]==='run');
+  assert.equal(probes.length,2);assert.deepEqual(probes[0].args.slice(-2),['git','--version']);
+  assert.ok(probes[1].args.includes('/bin/sh'));
   assert.ok(probe.args.includes(id));assert.ok(!probe.args.includes('-v'));
   assert.equal(result.sandboxImage,id);assert.equal(result.sandboxImageReference,RECOMMENDED_IMAGE);
 });

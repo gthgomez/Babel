@@ -3,6 +3,9 @@ import assert from 'node:assert/strict';
 import {probeInstalledSandboxImage} from './installedSandbox.js';
 
 const id=`sha256:${'b'.repeat(64)}`;
+test('doctor rejects an image whose configured entrypoint cannot execute commands',()=>{
+  assert.equal(probeInstalledSandboxImage(id,{execute:(_binary,args)=>({status:args[0]==='run'&&!args.some(arg=>arg.startsWith('--entrypoint'))?1:0,stdout:JSON.stringify({Id:id,Os:'linux',Architecture:'amd64'})})}),false);
+});
 test('installed image probe rejects missing/option/shell values before spawning',()=>{
   for(const image of [undefined,'','--help','node:24;echo bad','node:24 bad']){
     assert.equal(probeInstalledSandboxImage(image,{execute:()=>{throw new Error('must not execute');}}),false);
@@ -18,9 +21,10 @@ test('installed image probe verifies local linux amd64 shell and Git without mou
     return {status:0,stdout:args[0]==='image'?JSON.stringify({Id:id,Os:'linux',Architecture:'amd64'}):'',stderr:''};
   };
   assert.equal(probeInstalledSandboxImage(id,{execute,env:{OPENROUTER_API_KEY:'synthetic',PATH:'fixture'}}),true);
-  assert.equal(calls.length,3);
+  assert.equal(calls.length,5);
   assert.ok(calls[1]!.args.includes('--network=none'));assert.ok(calls[1]!.args.includes('--read-only'));
-  assert.ok(calls[1]!.args.includes('--entrypoint=/bin/sh'));assert.ok(calls[1]!.args.includes(id));
+  assert.ok(!calls[1]!.args.some(arg=>arg.startsWith('--entrypoint')));assert.ok(calls[1]!.args.includes(id));
+  assert.deepEqual(calls[1]!.args.slice(-2),['git','--version']);assert.ok(calls[3]!.args.includes('/bin/sh'));
   assert.ok(!calls[1]!.args.includes('-v'));
   assert.deepEqual(calls[2]!.args,['rm','--force',calls[1]!.args.find(arg=>arg.startsWith('--name='))!.slice(7)]);
 });

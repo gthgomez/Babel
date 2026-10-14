@@ -50,16 +50,20 @@ export async function configureSandboxImage({reference,prepareRecommended=false,
   const probe=prepareRecommended
     ? 'git --version >/dev/null && node --version >/dev/null && npm --version >/dev/null'
     : 'git --version >/dev/null';
-  const containerName=`babel-setup-${randomUUID()}`;
   try{
-    await run(['run','--rm',`--name=${containerName}`,'--network=none','--read-only','--cap-drop=ALL','--security-opt=no-new-privileges',
-      '--pids-limit=64','--memory=256m','--cpus=1','--user=65534:65534','--tmpfs=/tmp:rw,nosuid,size=32m',
-      '--env=HOME=/tmp','--env=NPM_CONFIG_UPDATE_NOTIFIER=false','--entrypoint=/bin/sh',record.Id,'-c',probe],10000);
+    // Preserve ENTRYPOINT just like project execution. Check direct Git as well
+    // as shell dispatch; overriding it could certify an unusable custom image.
+    for(const command of [['git','--version'],['/bin/sh','-c',probe]]){
+      const containerName=`babel-setup-${randomUUID()}`;
+      try{
+        await run(['run','--rm',`--name=${containerName}`,'--network=none','--read-only','--cap-drop=ALL','--security-opt=no-new-privileges',
+          '--pids-limit=64','--memory=256m','--cpus=1','--user=65534:65534','--tmpfs=/tmp:rw,nosuid,size=32m',
+          '--env=HOME=/tmp','--env=NPM_CONFIG_UPDATE_NOTIFIER=false',record.Id,...command],10000);
+      }finally{
+        // Client timeout does not stop its daemon-owned container.
+        try{await run(['rm','--force',containerName],5000);}catch{}
+      }
+    }
   }catch{throw new Error(prepareRecommended?'Sandbox tool verification failed. The recommended image must run shell, Git, Node and npm.':'Sandbox tool verification failed. The image must run /bin/sh and Git; include the tools your project tests require.');}
-  finally{
-    // Killing a timed-out Docker client does not stop its container. Remove only
-    // this probe's random, application-owned name; --rm may already have done so.
-    try{await run(['rm','--force',containerName],5000);}catch{}
-  }
   return {sandboxImage:record.Id,sandboxImageReference:image};
 }
