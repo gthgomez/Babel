@@ -227,6 +227,34 @@ function readInstructionFile(
   return null;
 }
 
+/**
+ * All applicable instruction files for `names`, ordered repository-root first
+ * so a repository-wide rule precedes a nearer (leaf) override. Nested files are
+ * accumulated rather than replacing an ancestor (Codex-compatible inheritance);
+ * previously the first (nearest) match silently suppressed every ancestor.
+ */
+function readInstructionFiles(
+  projectRoot: string,
+  babelRoot: string,
+  names: readonly string[],
+  required = false,
+): ReadContent[] {
+  const roots = instructionIntakeRoots(projectRoot, babelRoot);
+  // instructionIntakeRoots is nearest-first; reverse for root-first precedence.
+  const found: ReadContent[] = [];
+  for (const root of [...roots].reverse()) {
+    const content = firstExisting(root, [...names], required, roots);
+    if (content) found.push(content);
+  }
+  return found;
+}
+
+/** Stable, unique id for an accumulated identity fragment (nearest keeps the canonical id). */
+function identityFragmentId(projectRoot: string, path: string, nearest: boolean): string {
+  if (nearest) return 'identity:agents';
+  return `identity:agents:${relative(projectRoot, path).replace(/\\/g, '/')}`;
+}
+
 /** User-wide context. Override with BABEL_USER_CONTEXT in tests. */
 export function resolveUserContextPath(env: NodeJS.ProcessEnv = process.env): string {
   const override = env['BABEL_USER_CONTEXT']?.trim();
@@ -308,15 +336,24 @@ export function compileChatStack(options: CompileChatStackOptions): ChatCompiled
     sections.push({ entry: entries[entries.length - 1]!, content });
   };
 
-  // Repository authority is atomic: a selected AGENTS.md is read completely or
-  // stack construction fails. CLAUDE.md is not an instruction source.
-  const identity = readInstructionFile(projectRoot, babelRoot, IDENTITY_CANDIDATES, true);
-  if (identity) {
-    push(
-      { id: 'identity:agents', layer: 'identity', path: identity.path },
-      identity.content,
-      identity,
-    );
+  // Repository authority is atomic: every selected AGENTS.md is read completely
+  // or stack construction fails. Applicable files are accumulated repository-root
+  // first (lower precedence) with the nearest file last (canonical id) so a
+  // nested package inherits its ancestors instead of suppressing them.
+  // CLAUDE.md is not an instruction source.
+  const identityFiles = readInstructionFiles(projectRoot, babelRoot, IDENTITY_CANDIDATES, true);
+  if (identityFiles.length > 0) {
+    identityFiles.forEach((file, index) => {
+      push(
+        {
+          id: identityFragmentId(projectRoot, file.path, index === identityFiles.length - 1),
+          layer: 'identity',
+          path: file.path,
+        },
+        file.content,
+        file,
+      );
+    });
   } else {
     push(
       { id: 'identity:default', layer: 'identity', path: '(builtin)' },
@@ -361,12 +398,18 @@ export function compileChatStack(options: CompileChatStackOptions): ChatCompiled
     }
   }
 
-  const requiredSections = sections.filter(({ entry }) => entry.id.startsWith('identity:'));
+  // Only the governing (nearest) AGENTS.md is atomic/required. Accumulated
+  // ancestor fragments are optional, so a repository whose combined instruction
+  // text exceeds the budget degrades by omitting ancestors instead of failing
+  // closed on the whole stack.
+  const requiredSections = sections.filter(({ entry }) =>
+    entry.id === 'identity:agents' || entry.id === 'identity:default');
   const requiredText = requiredSections.map(({ content }) => content).join('\n\n');
   // Required AGENTS policy is never prefix-packed. Optional sources are each
   // admitted whole or omitted; continue after an omission to try later inputs.
   const optionalSections = sections
-    .filter(({ entry }) => !entry.id.startsWith('identity:'))
+    .filter(({ entry }) =>
+      entry.id !== 'identity:agents' && entry.id !== 'identity:default')
     .sort((left, right) => {
       const priority = (id: string): number =>
         id.startsWith('identity:') ? 0 :
@@ -382,12 +425,12 @@ export function compileChatStack(options: CompileChatStackOptions): ChatCompiled
   if (requiredText.length > budget) {
     throw new Error('required_instruction_exceeds_prompt_budget');
   } else {
-    const includedOptional: string[] = [];
+    const includedOptional: Array<{ id: string; content: string }> = [];
     let usedChars = requiredText.length;
     for (const { entry, content } of optionalSections) {
       const separator = usedChars > 0 ? 2 : 0;
       if (content.length + separator <= budget - usedChars) {
-        includedOptional.push(content);
+        includedOptional.push({ id: entry.id, content });
         usedChars += separator + content.length;
         content_disposition.push({
           id: entry.id,
@@ -416,7 +459,18 @@ export function compileChatStack(options: CompileChatStackOptions): ChatCompiled
         });
       }
     }
-    system_context = [requiredText, ...includedOptional].filter(Boolean).join('\n\n');
+    // Preserve repository-root → nearest ordering: accumulated ancestor identity
+    // fragments render before the required governing file, which renders before
+    // the remaining optional context.
+    const ancestorIdentity = includedOptional
+      .filter((item) => item.id.startsWith('identity:'))
+      .map((item) => item.content);
+    const otherOptional = includedOptional
+      .filter((item) => !item.id.startsWith('identity:'))
+      .map((item) => item.content);
+    system_context = [...ancestorIdentity, requiredText, ...otherOptional]
+      .filter(Boolean)
+      .join('\n\n');
     for (const { entry, content } of requiredSections) {
       content_disposition.push({
         id: entry.id,

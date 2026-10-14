@@ -244,6 +244,27 @@ describe('Live monomorphic ChatEngine loop', () => {
     assert.ok(cancelled && cancelled.kind === 'tool_cancelled');
     assert.equal(cancelled.recovery_state, 'TOOL_NOT_STARTED');
   });
+
+  test('a reused engine recomputes the hard-plan gate from a prepared plan profile', () => {
+    const engine = new ChatEngine({
+      task: 'do not write in plan mode',
+      projectRoot,
+      model: 'deepseek-v4-flash',
+    });
+    const gate = (): boolean => (engine as unknown as { hardPlanMode: boolean }).hardPlanMode;
+    const profile = (): string => (engine as unknown as { executionProfile: string }).executionProfile;
+
+    assert.equal(gate(), false);
+    assert.equal(profile(), 'chat');
+
+    engine.applyTurnPreparation({ task: 'plan the change', executionProfile: 'plan' });
+    assert.equal(profile(), 'plan');
+    assert.equal(gate(), true, 'a reused engine prepared with the plan profile must block mutations');
+
+    engine.applyTurnPreparation({ task: 'implement the change', executionProfile: 'chat' });
+    assert.equal(gate(), false);
+  });
+
   test('tool cycle records progress + tool_result events on live engine', async () => {
     const engine = new ChatEngine({
       task: 'inspect file',

@@ -658,6 +658,8 @@ export interface ChatEngineStreamingLoopHost {
   readonly parity: ParityRuntime
   readonly parseChatTurnLenient: (rawText: string) => ChatTurn
   readonly planHandoff: ChatPlanExecuteHandoff | null
+  /** Set once the plan→execute handoff has been injected for this engine. */
+  planHandoffInjected: boolean
   readonly policyEventLog: PolicyEventLog
   readonly prepareP11ContextCheckpointCandidate: (route: {
     tool_profile: string

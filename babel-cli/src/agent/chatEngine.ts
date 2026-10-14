@@ -442,7 +442,7 @@ export class ChatEngine {
   private conversation: ChatMessage[] = [];
   private readonly services: ChatEngineServices;
   private readonly executorKernel: ExecutorKernel;
-  private readonly executionProfile: ChatExecutionProfile;
+  private executionProfile: ChatExecutionProfile;
   private abortController: AbortController;
   private engineRunId: string;
   private options: ChatEngineOptions;
@@ -679,6 +679,8 @@ export class ChatEngine {
   /** Implementor: hard plan mode blocks mutations. */
   private hardPlanMode = false;
   private planHandoff: ChatPlanExecuteHandoff | null = null;
+  /** Once the plan→execute handoff is injected, it is not re-injected. */
+  planHandoffInjected = false;
   private forceMutateTurnsOverride: number | null = null;
   private operatorMode: ChatOperatorMode = "default";
   private _lastPhase: ChatPhase | null = null;
@@ -2889,6 +2891,13 @@ export class ChatEngine {
     this.budgetLastChanceDone = runtime.budgetLastChanceDone;
     this.restrictToolsNextTurn = runtime.restrictToolsNextTurn;
 
+    if (runtime.presentationOnly) {
+      // A read-only status view must not surface the prior task's terminal
+      // budget limiter in its run-allowance receipt.
+      this.terminatingLimiter = null;
+      this.terminalLimiterReason = null;
+    }
+
     const continuationScopeUnavailable =
       input.continueTask === true &&
       !runtime.continuedTask &&
@@ -3010,8 +3019,42 @@ export class ChatEngine {
         runtime.taskText,
         this.activePlaybook,
       );
+      // S02/#312: re-read instruction files at the fresh-task boundary. The stack
+      // was compiled at construction; a same-root AGENTS.md/ENGINEERING.md edit
+      // since then must reach task B. Explicit continuation keeps the in-flight
+      // stack so instructions cannot change in the middle of a task.
+      const recompileOptions = { ...this.options };
+      delete recompileOptions.compiledChatStack;
+      this.options = {
+        ...this.options,
+        compiledChatStack: resolveChatInstructionContext(recompileOptions),
+      };
       // System prompt may embed class/playbook hints — rebuild next LLM call.
       this.clearSystemPromptCache();
+      if (this.parity?.liveAuthority) {
+        try {
+          refreshEngineInstructionManifest({
+            parity: this.parity,
+            options: this.options,
+            taskClass: this.taskClass,
+            executionProfile: this.executionProfile,
+            engineRunDir: this.engineRunDir,
+          });
+        } catch (err) {
+          // Best-effort telemetry: a failure must not fail the turn.
+          try {
+            this.policyEventLog.record({
+              at_turn: this._turnIndex,
+              kind: "progress_policy",
+              detail: `instruction_manifest_refresh_failed: ${
+                err instanceof Error ? err.message : String(err)
+              }`,
+            });
+          } catch {
+            /* telemetry must not fail the turn */
+          }
+        }
+      }
     }
 
     if (continuationScopeUnavailable) {
@@ -3137,6 +3180,21 @@ export class ChatEngine {
       autoClassify: true,
       operation: preparation.operation,
     });
+    // S02/#313: a reused engine replaced executionProfile above, so the derived
+    // hard-plan gate (computed once at construction) is stale. Keep the readonly
+    // profile field in step with the active options and recompute the gate from
+    // the same inputs the constructor uses.
+    if (preparation.executionProfile !== undefined) {
+      this.executionProfile = preparation.executionProfile;
+    }
+    this.hardPlanMode =
+      this.executionProfile === "plan" ||
+      this.options.hardPlanMode === true ||
+      operatorModeIsHardPlan(this.operatorMode);
+    if (this.planHandoff) {
+      // Implement handoff exits the hard-plan mutation block.
+      this.hardPlanMode = false;
+    }
     // Reused TUI engines start a new task/context. Do not let a previous
     // task's read dedupe suppress evidence in the new request.
     this.resetReadInjectionContext();

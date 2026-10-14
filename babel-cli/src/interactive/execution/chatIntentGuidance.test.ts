@@ -29,6 +29,7 @@ import type {
 } from '../../runners/base.js';
 import type { AgentTargetContext } from '../../services/targetResolver.js';
 import { runChatEngineOnce } from './chatCore.js';
+import { createChatPlanExecuteHandoff } from '../../agent/planExecuteMode.js';
 
 const MODEL = 'deepseek-v4-flash';
 
@@ -422,6 +423,104 @@ describe('S01/#211 informational Chat requests receive no generated edit mandate
     assertNoEditMandate(captures[0]!, 'audit');
     assert.ok(captures[0]!.tools, 'capture the actual provider tool projection');
     assertReadOnlyProjection(captures[0]!, 'audit');
+  });
+
+  it('READ_ONLY submission receives no plan→execute handoff', async () => {
+    const target = makeTarget();
+    const captures: Capture[] = [];
+    const task = 'Investigate the example repo for the current TUI Code.';
+    let engine: ChatEngine | undefined;
+
+    await runChatEngineOnce({
+      task,
+      target,
+      preflightContext: '',
+      useStreaming: true,
+      engineFactory: (options) => {
+        engine = makeEngine(task, target.targetRoot, {
+          ...options,
+          planHandoff: createChatPlanExecuteHandoff({ planBody: '1. Inspect\n2. Report' }),
+        });
+        installCapturingRunner(engine, captures);
+        return engine;
+      },
+    });
+
+    assert.equal(engine!.getTurnRuntimeSnapshot()?.effectiveOperation, 'READ_ONLY');
+    const conversation = (engine as unknown as {
+      conversation: Array<{ role: string; content: string }>;
+    }).conversation;
+    assert.ok(
+      !conversation.some((message) => message.content.includes('[Plan → Execute handoff]')),
+      'a READ_ONLY submission must not carry IMPLEMENT-mode handoff guidance',
+    );
+  });
+
+  it('execute submission still receives the operator plan→execute handoff', async () => {
+    const target = makeTarget();
+    const captures: Capture[] = [];
+    const task = 'Fix the failing unit test in src/app.ts.';
+    let engine: ChatEngine | undefined;
+
+    await runChatEngineOnce({
+      task,
+      target,
+      preflightContext: '',
+      useStreaming: true,
+      engineFactory: (options) => {
+        engine = makeEngine(task, target.targetRoot, {
+          ...options,
+          planHandoff: createChatPlanExecuteHandoff({ planBody: '1. Inspect\n2. Fix' }),
+        });
+        installCapturingRunner(engine, captures);
+        return engine;
+      },
+    });
+
+    const conversation = (engine as unknown as {
+      conversation: Array<{ role: string; content: string }>;
+    }).conversation;
+    const handoff = conversation.find((message) =>
+      message.content.includes('[Plan → Execute handoff]'),
+    );
+    assert.ok(handoff, 'an execute submission keeps the operator handoff');
+    assert.match(handoff!.content, /IMPLEMENT mode/);
+  });
+
+  it('defers a plan→execute handoff past a read-only first turn', async () => {
+    const target = makeTarget();
+    const readOnlyTask = 'Investigate the example repo for the current TUI Code.';
+    const engine = makeEngine(readOnlyTask, target.targetRoot, {
+      planHandoff: createChatPlanExecuteHandoff({ planBody: '1. Inspect\n2. Fix' }),
+    });
+    installCapturingRunner(engine, []);
+
+    const conversations = (): Array<{ role: string; content: string }> =>
+      (engine as unknown as { conversation: Array<{ role: string; content: string }> }).conversation;
+
+    await runChatEngineOnce({
+      task: readOnlyTask,
+      target,
+      engine,
+      preflightContext: '',
+      useStreaming: true,
+    });
+    assert.ok(
+      !conversations().some((message) => message.content.includes('[Plan → Execute handoff]')),
+      'the handoff must not be injected into a read-only turn',
+    );
+
+    await runChatEngineOnce({
+      task: 'Fix the failing unit test in src/app.ts.',
+      target,
+      engine,
+      preflightContext: '',
+      useStreaming: true,
+    });
+    assert.ok(
+      conversations().some((message) => message.content.includes('[Plan → Execute handoff]')),
+      'the deferred handoff must be injected on the next executable turn',
+    );
   });
 
   it('streaming and callback preparation agree on operation and prompts', async () => {

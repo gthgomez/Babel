@@ -108,3 +108,25 @@ test('P0-C: continueTask keeps limits class sticky with prior taskClass', () => 
   assert.equal(cont.continuedTask, true);
   assert.equal(cont.taskClass, first.taskClass);
 });
+
+test('status? after a mutation submission is a read-only presentation, not execute', () => {
+  const engine = new ChatEngine({
+    task: 'fix the failing authentication test',
+    projectRoot: process.cwd(),
+  });
+  engine.applyUserSubmission({
+    userInput: 'fix the failing authentication test',
+    taskIntent: 'execute',
+  });
+  (engine as unknown as { writeCount: number }).writeCount = 3;
+
+  const status = engine.applyUserSubmission({ userInput: 'status?' });
+
+  assert.equal(status.effectiveOperation, 'READ_ONLY');
+  assert.equal(status.taskIntent, 'explain');
+  assert.equal(status.presentationOnly, true);
+  assert.equal(status.durableObjective, 'fix the failing authentication test');
+  assert.equal(status.continuedTask, true);
+  // Progress is preserved across the read-only status query.
+  assert.equal(engine.getWriteCount(), 3);
+});

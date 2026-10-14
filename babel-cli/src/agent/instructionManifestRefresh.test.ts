@@ -83,4 +83,50 @@ describe('#216(#4) reused-engine manifest refresh', () => {
       'same root must refresh to the same delivered digest',
     );
   });
+
+  it('re-reads a same-root AGENTS.md at a fresh submission boundary', () => {
+    process.env['BABEL_RUNS_DIR'] = makeRoot('babel-refresh-runs-');
+    const root = makeRoot('babel-refresh-content-');
+    writeAgents(root, 'NONCE_V1');
+    const engine = new ChatEngine({ task: 'same root', projectRoot: root });
+    const before = engine
+      .getInstructionManifest()!
+      .fragments.find((f) => f.rule_id === 'identity:agents');
+    assert.ok(before);
+
+    writeAgents(root, 'NONCE_V2');
+    engine.applyUserSubmission({ userInput: 'same root again' });
+
+    const after = engine
+      .getInstructionManifest()!
+      .fragments.find((f) => f.rule_id === 'identity:agents');
+    assert.ok(after);
+    assert.equal(after!.source, before!.source, 'same path');
+    assert.notEqual(after!.source_hash, before!.source_hash, 'content change must be observed');
+    assert.notEqual(after!.delivered_content_digest, before!.delivered_content_digest);
+    assert.match(after!.content_preview ?? '', /NONCE_V2/);
+  });
+
+  it('keeps the in-flight stack across an explicit continuation', () => {
+    process.env['BABEL_RUNS_DIR'] = makeRoot('babel-refresh-runs-');
+    const root = makeRoot('babel-refresh-cont-');
+    writeAgents(root, 'NONCE_V1');
+    const engine = new ChatEngine({ task: 'same root', projectRoot: root });
+    engine.applyUserSubmission({ userInput: 'first task' });
+    const before = engine
+      .getInstructionManifest()!
+      .fragments.find((f) => f.rule_id === 'identity:agents');
+
+    writeAgents(root, 'NONCE_V2');
+    engine.applyUserSubmission({ userInput: 'continue', continueTask: true });
+
+    const after = engine
+      .getInstructionManifest()!
+      .fragments.find((f) => f.rule_id === 'identity:agents');
+    assert.equal(
+      after!.source_hash,
+      before!.source_hash,
+      'continuation must not swap instructions mid-task',
+    );
+  });
 });

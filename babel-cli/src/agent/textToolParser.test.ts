@@ -7,6 +7,8 @@ import {
   TEXT_TOOL_ARGUMENT_SHAPES,
   TEXT_TOOL_NAMES,
   TEXT_TOOL_PROTOCOL_SECTION,
+  isUnresolvedTextToolAttempt,
+  buildTextToolProtocolRejectMessage,
 } from './textToolParser.js';
 
 test('text protocol manual documents every parser tool and its accepted fields', () => {
@@ -28,12 +30,6 @@ test('documented text-tool shapes produce the corresponding supported actions', 
     ['glob', 'pattern: **/*.ts'],
     ['run_command', 'command: node "scripts/test runner.mjs" --name "happy path"'],
     ['finish', ''],
-    ['think', 'thought: inspect the current implementation'],
-    ['ask', 'question: Which runtime should be supported?'],
-    ['remember', 'key: package_manager\nvalue: npm'],
-    ['recall', 'key: package_manager'],
-    ['check', 'file_path: src/app.ts'],
-    ['plan', 'steps:\n  inspect\n  verify'],
   ];
 
   for (const [name, fields] of examples) {
@@ -42,6 +38,20 @@ test('documented text-tool shapes produce the corresponding supported actions', 
     assert.equal(parsed.type, 'tool_calls', name);
     assert.equal(parsed.actions?.length, 1, name);
     assert.equal(parsed.actions?.[0]?.type, name, name);
+  }
+});
+
+test('retired tools are no longer advertised or parsed into actions', () => {
+  for (const name of ['think', 'ask', 'remember', 'recall', 'check', 'plan']) {
+    assert.equal(TEXT_TOOL_NAMES.has(name), false, `${name} must not be advertised`);
+    assert.equal(
+      Object.prototype.hasOwnProperty.call(TEXT_TOOL_ARGUMENT_SHAPES, name),
+      false,
+      `${name} must not be documented`,
+    );
+    assert.doesNotMatch(TEXT_TOOL_PROTOCOL_SECTION, new RegExp(`- ${name}:`), name);
+    const parsed = parseTextToolTurn(`[TOOL:${name}]\nkey: value`);
+    assert.equal(parsed.type, 'completion', `${name} must not become an action`);
   }
 });
 
@@ -69,6 +79,20 @@ test('scoped text manual omits disallowed tools and irrelevant usage guidance', 
   assert.match(writeOnly, /multi-line field/);
   assert.match(writeOnly, /\[TOOL:write_file\]/);
   assert.doesNotMatch(writeOnly, /\[TOOL:read_file\]|run_command|shell operators/);
+});
+
+test('scoped run_command manual reflects the read-only verifier constraint', () => {
+  const unrestricted = buildTextToolProtocolSection(['read_file', 'run_command']);
+  assert.doesNotMatch(unrestricted, /exact foreground commands/);
+
+  const restricted = buildTextToolProtocolSection(
+    ['read_file', 'run_command'],
+    ['npm test', 'npm run typecheck'],
+  );
+  assert.match(restricted, /exact foreground commands/);
+  assert.match(restricted, /`npm test`/);
+  assert.match(restricted, /`npm run typecheck`/);
+  assert.match(restricted, /Background and detached execution are not available/);
 });
 
 // ─── read_file ────────────────────────────────────────────────────────────────
@@ -335,181 +359,21 @@ test('[ANSWER] after tool blocks does not prevent tool extraction', () => {
   assert.equal(result.actions?.length, 1);
 });
 
-// ─── New tools ──────────────────────────────────────────────────────────────
+// ─── Unresolved text-tool attempts ────────────────────────────────────────────
 
-test('parses [TOOL:think] with thought text', () => {
-  const input = '[TOOL:think]\nthought: The bug is a null reference in auth.';
-  const result = parseTextToolTurn(input);
-
-  assert.equal(result.type, 'tool_calls');
-  assert.equal(result.actions?.length, 1);
-  assert.equal(result.actions![0]!.type, 'think');
-  assert.equal((result.actions![0] as any).thought, 'The bug is a null reference in auth.');
+test('isUnresolvedTextToolAttempt flags marker-without-action replies', () => {
+  assert.equal(isUnresolvedTextToolAttempt('[TOOL:read_file]\npath: x'), false);
+  assert.equal(isUnresolvedTextToolAttempt('[TOOL:unknown_tool]\nparam: value'), true);
+  assert.equal(isUnresolvedTextToolAttempt('[TOOL:think]\nthought: hmm'), true);
+  assert.equal(isUnresolvedTextToolAttempt('The answer is 42.'), false);
+  assert.equal(isUnresolvedTextToolAttempt('[ANSWER]\nAll done.'), false);
+  assert.equal(isUnresolvedTextToolAttempt(''), false);
 });
 
-test('parses [TOOL:think] with multi-line thought', () => {
-  const input = [
-    '[TOOL:think]',
-    'thought:',
-    '  First, I need to check the auth guard.',
-    '  The null reference is likely on line 42.',
-  ].join('\n');
-  const result = parseTextToolTurn(input);
-
-  assert.equal(result.type, 'tool_calls');
-  assert.equal(result.actions?.length, 1);
-  assert.equal((result.actions![0] as any).thought, 'First, I need to check the auth guard.\nThe null reference is likely on line 42.');
-});
-
-test('parses [TOOL:ask] with question', () => {
-  const input = '[TOOL:ask]\nquestion: Should I use npm or pnpm?';
-  const result = parseTextToolTurn(input);
-
-  assert.equal(result.type, 'tool_calls');
-  assert.equal(result.actions?.length, 1);
-  assert.equal(result.actions![0]!.type, 'ask');
-  assert.equal((result.actions![0] as any).question, 'Should I use npm or pnpm?');
-});
-
-test('parses [TOOL:remember] with key and multi-line value', () => {
-  const input = [
-    '[TOOL:remember]',
-    'key: project_config',
-    'value:',
-    '  Framework: React 18',
-    '  Package manager: npm',
-  ].join('\n');
-  const result = parseTextToolTurn(input);
-
-  assert.equal(result.type, 'tool_calls');
-  assert.equal(result.actions?.length, 1);
-  assert.equal(result.actions![0]!.type, 'remember');
-  assert.equal((result.actions![0] as any).key, 'project_config');
-  assert.equal(
-    (result.actions![0] as any).value,
-    'Framework: React 18\nPackage manager: npm',
-  );
-});
-
-test('parses [TOOL:recall] with key', () => {
-  const input = '[TOOL:recall]\nkey: project_config';
-  const result = parseTextToolTurn(input);
-
-  assert.equal(result.type, 'tool_calls');
-  assert.equal(result.actions?.length, 1);
-  assert.equal(result.actions![0]!.type, 'recall');
-  assert.equal((result.actions![0] as any).key, 'project_config');
-});
-
-test('parses [TOOL:check] with file_path', () => {
-  const input = '[TOOL:check]\nfile_path: src/utils/validator.ts';
-  const result = parseTextToolTurn(input);
-
-  assert.equal(result.type, 'tool_calls');
-  assert.equal(result.actions?.length, 1);
-  assert.equal(result.actions![0]!.type, 'check');
-  assert.equal((result.actions![0] as any).file_path, 'src/utils/validator.ts');
-});
-
-test('parses [TOOL:plan] with multi-line steps', () => {
-  const input = [
-    '[TOOL:plan]',
-    'steps:',
-    '  1. Read the current auth middleware',
-    '  2. Identify the null reference',
-    '  3. Apply the fix',
-  ].join('\n');
-  const result = parseTextToolTurn(input);
-
-  assert.equal(result.type, 'tool_calls');
-  assert.equal(result.actions?.length, 1);
-  assert.equal(result.actions![0]!.type, 'plan');
-  assert.equal(
-    (result.actions![0] as any).steps,
-    '1. Read the current auth middleware\n2. Identify the null reference\n3. Apply the fix',
-  );
-});
-
-// ─── New tool required param missing ────────────────────────────────────────
-
-test('think with missing thought param still produces action (lenient)', () => {
-  const input = [
-    '[TOOL:think]',
-    'wrong_key: some text',
-    '',
-    '[TOOL:grep]',
-    'pattern: TODO',
-  ].join('\n');
-  const result = parseTextToolTurn(input);
-
-  // Lenient: think always produces a valid action with default thought
-  assert.equal(result.type, 'tool_calls');
-  assert.equal(result.actions?.length, 2);
-  assert.equal(result.actions![0]!.type, 'think');
-  assert.equal((result.actions![0] as any).thought, '(thinking)');
-  assert.equal(result.actions![1]!.type, 'grep');
-});
-
-test('ask with missing question param still produces ask action (lenient)', () => {
-  const input = '[TOOL:ask]\nother: junk';
-  const result = parseTextToolTurn(input);
-
-  // Lenient: ask always produces a valid action with a default question
-  assert.equal(result.type, 'tool_calls');
-  assert.equal(result.actions![0]!.type, 'ask');
-  assert.equal((result.actions![0] as any).question, 'What should I do next?');
-});
-
-test('remember with missing key or value is skipped gracefully', () => {
-  const input = '[TOOL:remember]\nkey: my_key';
-  const result = parseTextToolTurn(input);
-
-  assert.equal(result.type, 'completion');
-});
-
-test('recall with missing key is skipped gracefully', () => {
-  const input = '[TOOL:recall]';
-  const result = parseTextToolTurn(input);
-
-  assert.equal(result.type, 'completion');
-});
-
-test('check with missing file_path is skipped gracefully', () => {
-  const input = '[TOOL:check]\nother: junk';
-  const result = parseTextToolTurn(input);
-
-  assert.equal(result.type, 'completion');
-});
-
-test('plan with missing steps is skipped gracefully', () => {
-  const input = '[TOOL:plan]\nother: junk';
-  const result = parseTextToolTurn(input);
-
-  assert.equal(result.type, 'completion');
-});
-
-// ─── Multi-tool with new tools ─────────────────────────────────────────────
-
-test('parses multiple tool blocks mixing old and new tools', () => {
-  const input = [
-    '[TOOL:think]',
-    'thought: I need to investigate the auth module.',
-    '',
-    '[TOOL:read_file]',
-    'path: src/auth.ts',
-    '',
-    '[TOOL:grep]',
-    'pattern: null',
-    'path: src/auth.ts',
-    '',
-    '[TOOL:finish]',
-  ].join('\n');
-  const result = parseTextToolTurn(input);
-
-  assert.equal(result.type, 'tool_calls');
-  assert.equal(result.actions?.length, 4);
-  assert.equal(result.actions![0]!.type, 'think');
-  assert.equal(result.actions![1]!.type, 'read_file');
-  assert.equal(result.actions![2]!.type, 'grep');
-  assert.equal(result.actions![3]!.type, 'finish');
+test('buildTextToolProtocolRejectMessage names the executable tools', () => {
+  const message = buildTextToolProtocolRejectMessage();
+  assert.match(message, /not a valid tool call/);
+  for (const name of TEXT_TOOL_NAMES) {
+    assert.ok(message.includes(name), name);
+  }
 });
