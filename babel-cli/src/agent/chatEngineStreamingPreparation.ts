@@ -90,8 +90,11 @@ export async function prepareStreamingSubmission(
       role: "user",
       content: host.options.intentPlanUserMessage,
     });
-  // Implementor: inject plan→execute handoff once at first user message of session.
-  if (host.planHandoff && host._turnIndex === 0) {
+  // Implementor: inject plan→execute handoff once at first user message of
+  // session. Like the intent-plan guidance above, it must never reach a
+  // READ_ONLY submission: an inspection-only request and controller-generated
+  // IMPLEMENT-mode guidance must not coexist.
+  if (host.planHandoff && host._turnIndex === 0 && !isReadOnlyInspection) {
     host.conversation.push({
       role: "user",
       content: formatPlanHandoffUserMessage(host.planHandoff),

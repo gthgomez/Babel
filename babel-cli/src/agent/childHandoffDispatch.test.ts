@@ -386,4 +386,21 @@ describe('mandatory delegation envelope survives caller instructions', () => {
       requestedMutation: false, requestedWriteScope: [], instructions: null, parentModel: null,
     }), /required_instruction_exceeds_prompt_budget/);
   });
+  test('child envelope honors an explicit parent-class budget', () => {
+    const root = mkdtempSync(join(tmpdir(), 'babel-child-budget-'));
+    roots.push(root);
+    writeFileSync(join(root, 'AGENTS.md'), 'rule '.repeat(100) + '\nENOUGH_RULE\n');
+    // A small (interactive) budget rejects rules the SWE default would accept.
+    assert.throws(() => buildDelegatedChildEnvelope({
+      task: 'Inspect', projectRoot: root, parentReadOnly: false,
+      requestedMutation: false, requestedWriteScope: [], instructions: null, parentModel: null,
+      promptBudgetChars: 100,
+    }), /required_instruction_exceeds_prompt_budget/);
+    const built = buildDelegatedChildEnvelope({
+      task: 'Inspect', projectRoot: root, parentReadOnly: false,
+      requestedMutation: false, requestedWriteScope: [], instructions: null, parentModel: null,
+      promptBudgetChars: 12_000,
+    });
+    assert.match(built.envelope, /ENOUGH_RULE/);
+  });
 });

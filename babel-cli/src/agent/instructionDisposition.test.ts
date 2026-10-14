@@ -174,6 +174,42 @@ describe('delivered project instructions', () => {
     assert.doesNotMatch(withParent.system_context, /NESTED_SHOULD_NOT_LOAD/);
   });
 
+  it('accumulates repository-root and nested AGENTS.md instead of suppressing the ancestor', () => {
+    const repo = makeRoot('babel-id-accum-');
+    // A git root bounds the intake walk so the repo-root file is reachable.
+    mkdirSync(join(repo, '.git'), { recursive: true });
+    const pkg = join(repo, 'packages', 'api');
+    mkdirSync(pkg, { recursive: true });
+    writeFileSync(join(repo, 'AGENTS.md'), '# Repo Instructions\nREPO_ROOT_RULE\n', 'utf-8');
+    writeFileSync(join(pkg, 'AGENTS.md'), '# Package Instructions\nNESTED_PACKAGE_RULE\n', 'utf-8');
+    process.env['BABEL_USER_CONTEXT'] = join(repo, 'missing-user-context.md');
+
+    const stack = compileChatStack({ projectRoot: pkg, includeDomainSkill: false });
+
+    // Both fragments are delivered: repo root first (lower precedence), nearest last.
+    assert.match(stack.system_context, /REPO_ROOT_RULE/);
+    assert.match(stack.system_context, /NESTED_PACKAGE_RULE/);
+    assert.ok(
+      stack.system_context.indexOf('REPO_ROOT_RULE') < stack.system_context.indexOf('NESTED_PACKAGE_RULE'),
+      'repository-root rule must precede the nested package rule',
+    );
+
+    const identityEntries = stack.selected_entries.filter((entry) => entry.layer === 'identity');
+    assert.equal(identityEntries.length, 2);
+    const nearest = identityEntries.find((entry) => entry.id === 'identity:agents');
+    assert.equal(nearest?.path, join(pkg, 'AGENTS.md'));
+    const ancestor = identityEntries.find((entry) => entry.path === join(repo, 'AGENTS.md'));
+    assert.ok(ancestor && ancestor.id.startsWith('identity:agents:'), 'ancestor keeps a distinct id');
+
+    for (const entry of identityEntries) {
+      assert.equal(
+        stack.content_disposition.find((item) => item.id === entry.id)?.status,
+        'included',
+        entry.id,
+      );
+    }
+  });
+
   it('records identity:agents on the manifest and reloads it', () => {
     const root = makeRoot('babel-id-resume-');
     const runDir = makeRoot('babel-id-rundir-');

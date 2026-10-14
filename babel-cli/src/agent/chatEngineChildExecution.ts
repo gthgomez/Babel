@@ -1,5 +1,5 @@
 import { isAbsolute, join, relative, resolve } from "node:path";
-import { compileChatStack } from "./chatStackCompile.js";
+import { compileChatStack, resolveStackBudgetForClass } from "./chatStackCompile.js";
 import { globalCostTracker } from "../services/costTracker.js";
 import { applyWorkingStateEvent } from "./codingLoop/index.js";
 import {
@@ -173,6 +173,8 @@ export function buildDelegatedChildEnvelope(input: {
   parentModel: string | null;
   model?: string | null;
   maxRounds?: number | null;
+  /** Parent task-class stack budget; children must not silently use the SWE default. */
+  promptBudgetChars?: number | null;
 }): { envelope: string; mutationEnabled: boolean; writeScope: string[]; spec: EffectiveChildSpec } {
   const spec = resolveChildSpec({
     mutation: input.requestedMutation,
@@ -188,6 +190,9 @@ export function buildDelegatedChildEnvelope(input: {
     projectRoot: input.projectRoot,
     task: input.task,
     includeDomainSkill: false,
+    ...(input.promptBudgetChars != null
+      ? { promptBudgetChars: input.promptBudgetChars }
+      : {}),
   }).system_context;
   const envelope = [
     "MANDATORY DELEGATION ENVELOPE",
@@ -293,6 +298,9 @@ export async function executeSubAgentAction(
     parentModel: host.modelPolicy?.providerModelId ?? null,
     model: (action as { model?: string }).model ?? null,
     maxRounds: (action as { max_rounds?: number }).max_rounds ?? null,
+    promptBudgetChars: resolveStackBudgetForClass(
+      (host as { lastTurnRuntime?: { taskClass?: string } }).lastTurnRuntime?.taskClass,
+    ),
   });
   const spec = delegated.spec;
   const mutationEnabled = delegated.mutationEnabled;

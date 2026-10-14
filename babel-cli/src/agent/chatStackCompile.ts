@@ -227,6 +227,34 @@ function readInstructionFile(
   return null;
 }
 
+/**
+ * All applicable instruction files for `names`, ordered repository-root first
+ * so a repository-wide rule precedes a nearer (leaf) override. Nested files are
+ * accumulated rather than replacing an ancestor (Codex-compatible inheritance);
+ * previously the first (nearest) match silently suppressed every ancestor.
+ */
+function readInstructionFiles(
+  projectRoot: string,
+  babelRoot: string,
+  names: readonly string[],
+  required = false,
+): ReadContent[] {
+  const roots = instructionIntakeRoots(projectRoot, babelRoot);
+  // instructionIntakeRoots is nearest-first; reverse for root-first precedence.
+  const found: ReadContent[] = [];
+  for (const root of [...roots].reverse()) {
+    const content = firstExisting(root, [...names], required, roots);
+    if (content) found.push(content);
+  }
+  return found;
+}
+
+/** Stable, unique id for an accumulated identity fragment (nearest keeps the canonical id). */
+function identityFragmentId(projectRoot: string, path: string, nearest: boolean): string {
+  if (nearest) return 'identity:agents';
+  return `identity:agents:${relative(projectRoot, path).replace(/\\/g, '/')}`;
+}
+
 /** User-wide context. Override with BABEL_USER_CONTEXT in tests. */
 export function resolveUserContextPath(env: NodeJS.ProcessEnv = process.env): string {
   const override = env['BABEL_USER_CONTEXT']?.trim();
@@ -308,15 +336,24 @@ export function compileChatStack(options: CompileChatStackOptions): ChatCompiled
     sections.push({ entry: entries[entries.length - 1]!, content });
   };
 
-  // Repository authority is atomic: a selected AGENTS.md is read completely or
-  // stack construction fails. CLAUDE.md is not an instruction source.
-  const identity = readInstructionFile(projectRoot, babelRoot, IDENTITY_CANDIDATES, true);
-  if (identity) {
-    push(
-      { id: 'identity:agents', layer: 'identity', path: identity.path },
-      identity.content,
-      identity,
-    );
+  // Repository authority is atomic: every selected AGENTS.md is read completely
+  // or stack construction fails. Applicable files are accumulated repository-root
+  // first (lower precedence) with the nearest file last (canonical id) so a
+  // nested package inherits its ancestors instead of suppressing them.
+  // CLAUDE.md is not an instruction source.
+  const identityFiles = readInstructionFiles(projectRoot, babelRoot, IDENTITY_CANDIDATES, true);
+  if (identityFiles.length > 0) {
+    identityFiles.forEach((file, index) => {
+      push(
+        {
+          id: identityFragmentId(projectRoot, file.path, index === identityFiles.length - 1),
+          layer: 'identity',
+          path: file.path,
+        },
+        file.content,
+        file,
+      );
+    });
   } else {
     push(
       { id: 'identity:default', layer: 'identity', path: '(builtin)' },
