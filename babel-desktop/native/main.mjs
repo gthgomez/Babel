@@ -10,6 +10,7 @@ import {listDirectory,readProjectFile} from './workspace.mjs';
 import {APP_URL,REPOSITORY_URL,isAppUrl,parsePreferences} from './security.mjs';
 import {resolveOfficialCli,bundledEnvironment} from './runtime.mjs';
 import {diagnoseRuntime} from './diagnostics.mjs';
+import {applySandboxEnvironment,configureSandboxImage,RECOMMENDED_IMAGE} from './sandbox-setup.mjs';
 import {hasProviderCredential, saveProviderCredential} from './credentials.mjs';
 import {saveDesktopProviderRoute} from './provider-route-save.mjs';
 import {applyProjectCredentialScope,applySelectedModelEnvironment} from './childEnv.mjs';
@@ -38,7 +39,8 @@ function runtimeEnvironment() {
   const profile=join(app.getPath('userData'),'engine','config');
   const env=app.isPackaged?bundledEnvironment(app.getPath('userData')):{...process.env,ELECTRON_RUN_AS_NODE:'1',BABEL_CONFIG_DIR:profile};
   // Project keys are never loaded merely because a repository contains .env.
-  return applyProjectCredentialScope(env,{projectCredentialRoot:preferences.projectCredentialRoot,projectRoot:preferences.projectRoot,configDirectory:profile});
+  applyProjectCredentialScope(env,{projectCredentialRoot:preferences.projectCredentialRoot,projectRoot:preferences.projectRoot,configDirectory:profile});
+  return applySandboxEnvironment(env,preferences);
 }
 let diagnostics=null;
 let window=null;
@@ -67,7 +69,7 @@ else {
 }
 async function savePreferences(){
   await mkdir(dirname(preferencePath),{recursive:true});
-  // UI paths only: never API credentials, agent messages, or authoritative sessions.
+  // Non-secret UI/runtime preferences only: never keys, messages or sessions.
   const next=`${preferencePath}.next`;
   await writeFile(next,JSON.stringify(parsePreferences(preferences)),{mode:0o600});
   await rename(next,preferencePath);
@@ -102,6 +104,7 @@ async function getInfo(){
     packaged:app.isPackaged,
     diagnostics,
     engine,
+    sandbox:{image:runtimeEnvironment().BABEL_BENCHMARK_DOCKER_IMAGE??null,reference:preferences.sandboxImageReference??runtimeEnvironment().BABEL_BENCHMARK_DOCKER_IMAGE??null,recommended:RECOMMENDED_IMAGE},
     configDirectory:runtimeEnvironment().BABEL_CONFIG_DIR,
     projectCredentialsSelected:preferences.projectCredentialRoot===preferences.projectRoot && Boolean(preferences.projectRoot),
     remoteBridge:remoteBridge
@@ -187,6 +190,15 @@ async function start(){
   session.defaultSession.setPermissionCheckHandler(()=>false);
   handle('babel:get-info',getInfo);
   handle('babel:refresh-diagnostics',async()=>{assertIdle();diagnostics=null;return getInfo();});
+  handle('babel:configure-sandbox',async options=>withConnectionChange(async()=>{
+    if(!options||typeof options!=='object')throw new Error('Invalid sandbox setup request.');
+    const configured=await configureSandboxImage({reference:options.reference,prepareRecommended:options.prepareRecommended??false});
+    const previous={sandboxImage:preferences.sandboxImage,sandboxImageReference:preferences.sandboxImageReference};
+    Object.assign(preferences,configured);
+    try{await savePreferences();}catch(error){Object.assign(preferences,previous);throw error;}
+    diagnostics=null;
+    return getInfo();
+  }));
   handle('babel:check-cli-update',async()=>{
     assertIdle();
     if(app.isPackaged) return checkPackagedUpdate();
@@ -382,7 +394,7 @@ async function start(){
     if(!(await getInfo()).ready)throw new Error('The selected Babel CLI or project is no longer available');
     if(app.isPackaged){
       diagnostics=await diagnoseRuntime(officialRuntime(),{env:runtimeEnvironment(),cwd:app.getPath('userData')});
-      if(!diagnostics.ready)throw new Error('Execution prerequisites are missing or unverified. Open Connection, check runtime files and start Docker, then recheck setup.');
+      if(!diagnostics.ready)throw new Error('Execution prerequisites are missing or unverified. Open Setup, start Docker Desktop and prepare or validate a sandbox image, then recheck setup.');
     }
     // Validate before presenting consent; renderer cannot provide arbitrary flags.
     const route = readProviderRoute(runtimeEnvironment().BABEL_CONFIG_DIR);

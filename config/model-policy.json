@@ -131,7 +131,7 @@
       "notes": [
         "Not a default family or stage route; use the exact backend key.",
         "No model or provider fallback. Other Go models remain unqualified for Chat.",
-        "Native durable reservations fail closed on Windows; registration does not establish an executable product path.",
+        "Chat requires a caller-owned durable budget; Desktop and the installed CLI use SQLite reservations on Windows.",
         "Pricing/context/output metadata is not independently established for this Go route."
       ]
     },

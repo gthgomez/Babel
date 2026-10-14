@@ -22,6 +22,8 @@ let focusBeforeDialog = null;
 let nativeInfo = null;
 let connectionError = '';
 let connecting = false;
+let sandboxBusy = false;
+let sandboxStatus = '';
 let connectionInitialized = false;
 let connectedProjectRoot;
 let liveModel = '';
@@ -119,6 +121,7 @@ function renderRuntime() {
     runtimeRow('Execution profile', engine.executionProfile ?? 'unknown'),
     runtimeRow('Provider', engine.readiness?.provider ?? 'unknown'),
     runtimeRow('Docker', engine.readiness?.docker ?? 'unknown'),
+    runtimeRow('Sandbox image', engine.readiness?.sandboxImage ?? 'unknown'),
     runtimeRow('Readiness', engine.readiness?.ready ? 'Ready' : 'Not ready'),
     runtimeRow('Update channel', update.channel === 'preview' ? 'development build' : update.channel === 'stable' ? 'stable release' : (update.channel ?? 'not set')),
     runtimeRow('Update', runtimeUpdateText(update), update.state === 'available' ? 'warn' : ''),
@@ -136,7 +139,7 @@ function renderRuntime() {
 }
 function executionBlocked() {
   // A slow or rejected native handshake cannot admit synthetic preview tasks.
-  if (!native || !nativeInfo || connecting) return true;
+  if (!native || !nativeInfo || connecting || sandboxBusy) return true;
   if(native && !nativeInfo.ready)return true;
   if(!configuredRoute)return true;
   return nativeInfo?.packaged === true && nativeInfo.diagnostics?.ready !== true;
@@ -273,9 +276,26 @@ function connectionDialog() {
     ${runtimeRow('Project',nativeInfo?.projectName??'Not selected')}
     ${runtimeRow('Provider',configuredRouteLabel||'Not selected')}
     ${runtimeRow('Docker',d?.docker==='available'?'Running':'Start Docker Desktop to run tasks safely')}
+    ${runtimeRow('Sandbox',d?.sandboxImage==='available'?'Verified':'Prepare an image before running tasks')}
+    <p class="fine-print">The recommended Linux image includes Git, Node 24 and npm. Preparing it downloads Docker image layers and may take several minutes. Other projects may need an image with their own test tools.</p>
+    <div class="dialog-actions"><button class="button" data-action="prepare-sandbox" ${sandboxBusy?'disabled':''}>Prepare recommended image</button></div>
+    <details><summary>Use an existing local image</summary><label class="credential-label" for="sandbox-image">Existing sandbox image</label><input class="credential-control" id="sandbox-image" spellcheck="false" value="${e(nativeInfo?.sandbox?.reference??'')}" ${sandboxBusy?'disabled':''}><div class="dialog-actions"><button class="button" data-action="save-sandbox" ${sandboxBusy?'disabled':''}>Validate and use image</button></div><p class="fine-print">Validation runs an isolated shell and Git check without mounting your project. The verified image is saved for Desktop and Babel Harness.cmd.</p></details>
+    <p id="sandbox-status" class="fine-print" role="status">${e(sandboxStatus)}</p>
     ${d?.error||connectionError?`<p class="provider-error">${e(d?.error||connectionError)}</p>`:''}
     <div class="dialog-actions"><button class="button" data-action="open-project">Open project</button><button class="button" data-action="configure-provider">Choose provider and models</button><button class="button" data-action="refresh-diagnostics">Recheck setup</button><button class="button primary" data-action="use-live">Done</button></div>
     <details><summary>Runtime details</summary><p>File changes and commands follow Babel’s approval rules. Stop cancels the active run. Credential presence does not establish authentication.</p><pre>${e(nativeInfo?.configDirectory??'')}</pre></details>`);
+  if(sandboxBusy)$('#dialog-content').querySelectorAll('button').forEach(button=>button.disabled=true);
+}
+async function configureSandboxFromDialog(prepareRecommended){
+  if(!native||sandboxBusy||activeRun||connecting)return;
+  const options=prepareRecommended?{prepareRecommended:true}:{reference:$('#sandbox-image')?.value.trim(),prepareRecommended:false};
+  sandboxBusy=true;sandboxStatus=prepareRecommended?'Downloading and verifying the recommended image…':'Verifying the local image…';
+  renderControls();connectionDialog();
+  try{
+    nativeInfo=await native.configureSandbox(options);
+    connectionError='';sandboxStatus='Sandbox verified and saved. Desktop and the installed CLI use the same image.';
+  }catch(error){sandboxStatus=String(error?.message??'Sandbox setup failed. Start Docker Desktop and try again.');}
+  finally{sandboxBusy=false;renderControls();connectionDialog();}
 }
 async function providerCredentialsDialog() {
   if(!native){toast('Open Babel Desktop to configure a provider.');return;}
@@ -673,6 +693,8 @@ document.addEventListener('click',async event=>{
   else if(a==='settings')settingsDialog();
   else if(a==='connection')connectionDialog();
   else if(a==='configure-provider')providerCredentialsDialog();
+  else if(a==='prepare-sandbox')await configureSandboxFromDialog(true);
+  else if(a==='save-sandbox')await configureSandboxFromDialog(false);
   else if(a==='save-provider-credential')await saveProviderFromDialog(button);
   else if(a==='refresh-diagnostics'){try{nativeInfo=await native.refreshDiagnostics();connectionError='';await enableLive();renderControls();connectionDialog();}catch(err){connectionError='Connection failed. Recheck setup after repairing the installation.';renderControls();connectionDialog();}}
   else if(a==='check-update')await checkForUpdates();

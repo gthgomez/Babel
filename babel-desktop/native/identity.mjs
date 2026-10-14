@@ -121,9 +121,10 @@ export function resolveEngineIdentity(options = {}) {
     source,
     executionProfile,
     readiness: {
-      ready: Boolean(ready),
+      ready: Boolean(ready&&(!isPackaged||diagnostics?.ready===true)),
       provider: diagnostics?.provider ?? 'unknown',
       docker: diagnostics?.docker ?? 'unknown',
+      sandboxImage:diagnostics?.sandboxImage??'unknown',
     },
     update: normalizeUpdate(update),
   };
