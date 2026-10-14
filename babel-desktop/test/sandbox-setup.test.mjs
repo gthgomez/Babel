@@ -35,7 +35,7 @@ test('preparation pulls only the fixed digest and verifies platform/tools before
   assert.ok(probe.args.includes('--cap-drop=ALL'));assert.ok(!probe.args.some(arg=>arg.startsWith('--entrypoint')));
   const probes=calls.filter(call=>call.args[0]==='run');
   assert.equal(probes.length,2);assert.deepEqual(probes[0].args.slice(-2),['git','--version']);
-  assert.ok(probes[1].args.includes('/bin/sh'));
+  assert.equal(probes[1].args.at(-3),'/bin/sh');assert.equal(probes[1].args.at(-2),'-lc');
   assert.ok(probe.args.includes(id));assert.ok(!probe.args.includes('-v'));
   assert.equal(result.sandboxImage,id);assert.equal(result.sandboxImageReference,RECOMMENDED_IMAGE);
 });

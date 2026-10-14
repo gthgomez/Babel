@@ -53,7 +53,7 @@ export async function configureSandboxImage({reference,prepareRecommended=false,
   try{
     // Preserve ENTRYPOINT just like project execution. Check direct Git as well
     // as shell dispatch; overriding it could certify an unusable custom image.
-    for(const command of [['git','--version'],['/bin/sh','-c',probe]]){
+    for(const command of [['git','--version'],['/bin/sh','-lc',probe]]){
       const containerName=`babel-setup-${randomUUID()}`;
       try{
         await run(['run','--rm',`--name=${containerName}`,'--network=none','--read-only','--cap-drop=ALL','--security-opt=no-new-privileges',

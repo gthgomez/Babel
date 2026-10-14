@@ -19,7 +19,7 @@ export function probeInstalledSandboxImage(image:string|undefined,options:{env?:
     if(inspected.error||inspected.status!==0)return false;
     const record=JSON.parse(String(inspected.stdout??'')) as {Id?:unknown;Os?:unknown;Architecture?:unknown};
     if(record.Os!=='linux'||record.Architecture!=='amd64'||typeof record.Id!=='string'||!/^sha256:[a-f0-9]{64}$/.test(record.Id))return false;
-    for(const command of [['git','--version'],['/bin/sh','-c','git --version >/dev/null']]){
+    for(const command of [['git','--version'],['/bin/sh','-lc','git --version >/dev/null']]){
       const containerName=`babel-doctor-${randomUUID()}`;
       try{
         const probe=run(['run','--rm',`--name=${containerName}`,'--network=none','--read-only','--cap-drop=ALL','--security-opt=no-new-privileges',

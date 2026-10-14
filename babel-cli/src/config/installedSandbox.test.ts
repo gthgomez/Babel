@@ -24,7 +24,7 @@ test('installed image probe verifies local linux amd64 shell and Git without mou
   assert.equal(calls.length,5);
   assert.ok(calls[1]!.args.includes('--network=none'));assert.ok(calls[1]!.args.includes('--read-only'));
   assert.ok(!calls[1]!.args.some(arg=>arg.startsWith('--entrypoint')));assert.ok(calls[1]!.args.includes(id));
-  assert.deepEqual(calls[1]!.args.slice(-2),['git','--version']);assert.ok(calls[3]!.args.includes('/bin/sh'));
+  assert.deepEqual(calls[1]!.args.slice(-2),['git','--version']);assert.deepEqual(calls[3]!.args.slice(-3),['/bin/sh','-lc','git --version >/dev/null']);
   assert.ok(!calls[1]!.args.includes('-v'));
   assert.deepEqual(calls[2]!.args,['rm','--force',calls[1]!.args.find(arg=>arg.startsWith('--name='))!.slice(7)]);
 });
