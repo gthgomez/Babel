@@ -1,6 +1,7 @@
 import { OpenCodeGoBudget, OpenCodeGoBudgetError } from './openCodeGoBudget.js'
 import type { ResolvedExecutionEnvelope } from '../intelligence/types.js'
 import { randomUUID } from 'node:crypto'
+import {usesDesktopResolvedCredentials} from '../config/desktopCredentialScope.js'
 import type { ZodType } from 'zod'
 
 import type {
@@ -143,7 +144,8 @@ export class OpenCodeGoApiRunner extends DeepInfraApiRunner {
       throw new OpenCodeGoError('MODEL_UNAVAILABLE', `OpenCode Go does not allow model "${model}".`)
     }
     if (model === 'deepseek-v4.1-flash' && !options.budget) throw new OpenCodeGoBudgetError()
-    const credentialSource = options.credentialSource ?? (options.explicitCredential ? 'explicit-test' :
+    const nativeResolved=(usesDesktopResolvedCredentials(process.env)||usesDesktopResolvedCredentials(options.env??{}))&&options.credentialSource!=='explicit-test'
+    const credentialSource = nativeResolved?'network-secret':options.credentialSource ?? (options.explicitCredential ? 'explicit-test' :
       (options.env ?? process.env)['BABEL_OPENCODE_GO_API_KEY']?.trim() ? 'network-secret' : 'opencode-auth-helper')
     const resolvedCredential = credentialSource === 'network-secret' ? undefined : options.resolvedCredential?.trim()
     const resolution = resolvedCredential

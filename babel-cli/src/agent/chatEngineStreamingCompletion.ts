@@ -18,6 +18,7 @@ import {
 import { recordProgressRecovery } from "./sessionEvents.js";
 import { reconcileStreamedAnswer } from "./chatEngineStreamingProtocol.js";
 import { recordChatHarnessFeedback } from "./chatHarnessFeedback.js";
+import {PROJECT_REQUIRED_MESSAGE,conversationScopeRequiredReport} from './chatToolScopeAdmission.js';
 
 /** Resolve completion gates and settle one completed streaming turn. */
 export async function* settleStreamingCompletion(input: {
@@ -42,6 +43,23 @@ export async function* settleStreamingCompletion(input: {
     turn,
   } = input;
   let turnSpan: Span | null = input.turnSpan;
+  // Project completion recovery cannot acquire authority or evidence for a
+  // conversation. Settle the real admission boundary without further inference.
+  if(host.options.executionScope?.kind==='conversation'){
+    endSpan(turnSpan,SpanStatusCode.OK);
+    if(!host.isSubmissionCurrent(submissionGeneration))return 'done';
+    if(host.options.operation==='CHANGE'){
+      host.conversation.push({role:'assistant',content:PROJECT_REQUIRED_MESSAGE});
+      yield host.streamDone(PROJECT_REQUIRED_MESSAGE,{blockedReport:conversationScopeRequiredReport()});
+    }else{
+      const delta=reconcileStreamedAnswer(streamedAnswerForTurn,answer);
+      if(delta!==null)yield {type:'answer_chunk',text:delta};
+      if(!host.isSubmissionCurrent(submissionGeneration))return 'done';
+      host.conversation.push({role:'assistant',content:answer});
+      yield host.streamDone(answer);
+    }
+    return 'done';
+  }
   // Execution gate: buffer streaming answer until gate check passes
   const gateResult = host.evaluateCompletionGate(
     turnResult,

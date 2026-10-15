@@ -74,6 +74,7 @@ import {
 } from './childSpec.js'
 import { confirmedMutationPaths } from './mutationTools.js'
 import { detectAndBuildBlockedReport } from './chatEngineSupport.js'
+import type { ThreadTerminalResponse } from './threadEventLog.js'
 
 /** Immutable terminal inputs plus the mutable evidence objects used by existing finalizers. */
 export interface ChatTerminalSnapshot {
@@ -133,6 +134,7 @@ export interface ChatTerminalEffects {
     outcome: TerminalOutcome | undefined,
     status: ChatResult['status'],
     reason: TerminalReason | undefined,
+    response?: ThreadTerminalResponse,
   ) => void
   storeTelemetry: (record: ChatTurnTelemetryRecord | null) => void
   setLimiter: (limiter: ChatRunLimiter, reason: string) => void
@@ -255,7 +257,7 @@ export function completeChatStream(
         ? 'budget_exhausted'
         : 'completed',
   })
-  effects.finalizeTurn(terminal.outcome, terminal.status, terminalReason)
+  effects.finalizeTurn(terminal.outcome, terminal.status, terminalReason, {kind:'answer',content:answer})
   const finalizedTelemetry =
     snapshot.presentation.currentTurnTelemetry?.finalize({
       turnId: String(snapshot.context.turnId ?? snapshot.context.turnIndex),
@@ -333,7 +335,7 @@ export function failChatStream(
     status: 'failed',
   })
   const runAllowance = assembleChatRunAllowance(input, terminal.status)
-  effects.finalizeTurn(terminal.outcome, terminal.status, terminalReason)
+  effects.finalizeTurn(terminal.outcome, terminal.status, terminalReason, {kind:'error',content:error})
   const finalizedTelemetry =
     snapshot.presentation.currentTurnTelemetry?.finalize({
       turnId: String(snapshot.context.turnId ?? snapshot.context.turnIndex),
@@ -677,7 +679,8 @@ export function assembleChatResult(
   if (!superseded) {
     effects.settleActiveExecution()
     // AC3 choke point: memory + disk (idempotent if streamDone already finalized)
-    effects.finalizeTurn(terminal.outcome, terminal.status, terminalReason)
+    effects.finalizeTurn(terminal.outcome, terminal.status, terminalReason,
+      answer === undefined ? undefined : {kind:finalStatus === 'failed' ? 'error' : 'answer',content:answer})
   }
 
   const runAllowance = assembleChatRunAllowance(
@@ -757,7 +760,7 @@ export function assembleChatResult(
   // Event log disk flush is owned solely by finalizeParityTurn / checkpointParityEventLog
 
   // Propose BABEL.md learnings after successful runs with writes only.
-  if (terminal.status === 'completed' && snapshot.outcome.writeCount > 0) {
+  if (terminal.status === 'completed' && snapshot.outcome.writeCount > 0 && snapshot.context.options.projectRoot) {
     try {
       const changed = snapshot.evidence.observability.toolCallLog
         .flatMap((t) =>

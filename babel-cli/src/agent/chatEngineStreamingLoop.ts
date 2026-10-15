@@ -87,6 +87,7 @@ import {
 import { nativeToolUseToChatAction } from "./chatEngineSupport.js";
 import { isReadOnlyChat } from "./chatReadOnly.js";
 import { availableChatTools } from "./chatToolAvailability.js";
+import {PROJECT_REQUIRED_MESSAGE,conversationProjectRequiredReport} from './chatToolScopeAdmission.js';
 
 import type { ChatEngineStreamingLoopHost } from "./chatEngineContracts.js";
 export type { ChatEngineStreamingLoopHost } from "./chatEngineContracts.js";
@@ -103,12 +104,14 @@ export class ChatEngineStreamingLoop {
     userInput: string,
     taskIntent?: TaskIntent,
     submitOpts?: SubmitMessageOptions,
+    objective?: import('./chatEngineObjectiveAdmission.js').PreparedObjectiveSubmission,
   ): AsyncGenerator<ChatEvent, void, undefined> {
     const prepared = await prepareStreamingSubmission(
       this.host,
       userInput,
       taskIntent,
       submitOpts,
+      objective,
     );
     if (prepared.halted) {
       if (prepared.haltEvent) yield prepared.haltEvent;
@@ -305,7 +308,7 @@ export class ChatEngineStreamingLoop {
         this.host.parity.contextCheckpoint !== undefined;
       const usageScope = {
         taskOwnerId: this.host.taskAllowance?.taskOwnerId ?? null,
-        projectRoot: realpathSync(this.host.options.projectRoot),
+        ...(this.host.options.projectRoot?{projectRoot:realpathSync(this.host.options.projectRoot)}:{}),
         accountingEpoch: globalCostTracker.getAccountingEpoch(),
         turnId: this.host.parity.turnId,
         chargeId: null as string | null,
@@ -543,14 +546,14 @@ export class ChatEngineStreamingLoop {
         }
       } else if (useNativeTools) {
         const nextTools = this.host.nextTurnToolPolicy();
-        const restrictTools = nextTools.restrict && !isReadOnlyChat() && !isReadOnlyInspection;
+        const restrictTools = this.host.options.executionScope?.kind!=='conversation'&&nextTools.restrict && !isReadOnlyChat() && !isReadOnlyInspection;
         const toolDefs = availableChatTools(
           restrictTools
             ? this.host.services.tools.buildRestrictedDefinitions(
                 nextTools.mode === "full" ? "act_or_verify" : nextTools.mode,
               )
             : this.host.services.tools.buildDefinitions(),
-          { operation: effectiveOperation,
+          { executionScope:this.host.options.executionScope,operation: effectiveOperation,
           requiredVerifiers: isReadOnlyInspection ? this.host.getResolvedRequiredVerifiers() : [],
           hostFallbackAllowed: this.host.isolationBrokerFlags().hostFallbackAllowed });
         const nativeActions: ChatToolAction[] = [];
@@ -1493,6 +1496,14 @@ export class ChatEngineStreamingLoop {
         this.host._streamNativeToolCallIds = [];
         this.host._activeToolBatchId = null;
 
+        if(this.host.options.executionScope?.kind==='conversation'){
+          endSpan(_turnSpan,SpanStatusCode.OK);
+          _turnSpan=null;
+          yield this.host.streamDone(PROJECT_REQUIRED_MESSAGE,{
+            blockedReport:conversationProjectRequiredReport(this.host.toolCallLog.slice(this.host._turnToolCallLogStart)),
+          });
+          return;
+        }
         // A repeated path can still yield new ranges or changed content. Only
         // consider legacy stall escalation after the durable receipt sees no delta.
         const stallIntervention = cycleReceipt?.hasDelta

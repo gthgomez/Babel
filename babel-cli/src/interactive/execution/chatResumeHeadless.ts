@@ -3,6 +3,8 @@ import { existsSync } from 'node:fs';
 import { ChatEngine, type ChatEngineOptions } from '../../agent/chatEngine.js';
 import { loadThreadEventLogFromDir, validateRepoIdentityOnResume } from '../../agent/threadEventLog.js';
 import { chatSessionDir, transcriptPath } from '../../cli/runsLayout.js';
+import {assertConversationRestoreScope,normalizeChatExecutionScope,requireProjectRoot} from '../../agent/chatExecutionScope.js';
+import {recoverCheckpointArtifacts} from '../../agent/liveSessionBridge.js';
 
 const SESSION_ID = /^[\w-]{1,80}$/;
 
@@ -26,12 +28,12 @@ export async function openResumedChatEngine(
   if (!existsSync(transcriptPath(sessionId))) {
     throw new Error(`Chat session ${sessionId} has no transcript to resume. Start a new session.`);
   }
-  const identity = validateRepoIdentityOnResume(
-    loadThreadEventLogFromDir(chatSessionDir(sessionId)),
-    options.projectRoot,
-  );
-  if (!identity.ok) {
-    throw new Error(`Cannot resume chat session ${sessionId}: ${identity.reason}`);
+  recoverCheckpointArtifacts(chatSessionDir(sessionId));
+  const log=loadThreadEventLogFromDir(chatSessionDir(sessionId));
+  assertConversationRestoreScope(log,options);
+  if(normalizeChatExecutionScope(options).kind==='project'){
+    const identity = validateRepoIdentityOnResume(log,requireProjectRoot(options));
+    if (!identity.ok)throw new Error(`Cannot resume chat session ${sessionId}: ${identity.reason}`);
   }
   return ChatEngine.restore(sessionId, options);
 }

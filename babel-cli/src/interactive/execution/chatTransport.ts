@@ -84,6 +84,7 @@ export async function beginProtocolTurn(
   message: string,
 ): Promise<ProtocolTurnSession | null> {
   if (!isProtocolClientEnabled()) return null;
+  if(typeof engine.getExecutionScope==='function'&&engine.getExecutionScope().kind==='conversation')throw new Error('CONVERSATION_PROTOCOL_UNSUPPORTED: This protocol requires a project binding; use the direct chat controller.');
   const threadId = getEngineThreadId(engine);
   if (!threadId) return null;
   ensureThread(threadId);

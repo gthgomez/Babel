@@ -10,6 +10,22 @@ import { DeepSeekApiRunner } from './deepSeekApi.js';
 import { OpenRouterApiRunner } from './openRouterApi.js';
 import { OllamaApiRunner } from './ollamaApi.js';
 import { LLMSummarizeCompaction } from '../agent/chatCompaction.js';
+import {OpenCodeGoApiRunner} from './openCodeGoApi.js';
+import {OpenCodeGoCredentialError} from './openCodeGoCredential.js';
+
+test('native-resolved Go runner rejects stale helper cache after credential removal',()=>{
+  assert.throws(()=>new OpenCodeGoApiRunner('mimo-v2.5',{}, {env:{BABEL_DESKTOP_IPC:'1',BABEL_DESKTOP_CREDENTIALS_RESOLVED:'1'},credentialSource:'opencode-auth-helper',resolvedCredential:'synthetic-stale-helper-cache'}),OpenCodeGoCredentialError,'DESKTOP_REMOVED_GO_HELPER_FALLBACK');
+  assert.throws(()=>new OpenCodeGoApiRunner('mimo-v2.5',{}, {env:{BABEL_DESKTOP_IPC:'1',BABEL_DESKTOP_CREDENTIALS_RESOLVED:'1'},credentialSource:'opencode-auth-helper',resolvedCredential:'synthetic-stale-helper-cache',explicitCredential:'synthetic-unused-argument'}),OpenCodeGoCredentialError,'DESKTOP_REMOVED_GO_HELPER_FALLBACK');
+});
+
+test('a Go runner options environment cannot mask native process credential ownership',()=>{
+  const names=['BABEL_DESKTOP_IPC','BABEL_DESKTOP_CREDENTIALS_RESOLVED'];
+  const previous=names.map(name=>process.env[name]);
+  try{
+    for(const name of names)process.env[name]='1';
+    assert.throws(()=>new OpenCodeGoApiRunner('mimo-v2.5',{}, {env:{},credentialSource:'opencode-auth-helper',resolvedCredential:'synthetic-stale-helper-cache'}),OpenCodeGoCredentialError,'DESKTOP_REMOVED_GO_HELPER_FALLBACK');
+  }finally{for(const [index,name] of names.entries()){if(previous[index]===undefined)delete process.env[name];else process.env[name]=previous[index];}}
+});
 
 test('Desktop local Ollama ignores a remote endpoint restored by profile bootstrap', async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'babel-synthetic-ollama-'));

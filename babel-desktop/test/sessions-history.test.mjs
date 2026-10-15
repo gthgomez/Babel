@@ -30,9 +30,9 @@ test('unknown truncated legacy ordinals cannot borrow early terminal evidence', 
     await writeFile(join(session, 'transcript.jsonl'), lines.join('\n') + '\n');
     await writeFile(join(session, 'session-events.jsonl'), JSON.stringify({kind: 'turn_ended', turn_id: 1, outcome: 'VERIFIED_COMPLETE'}) + '\n');
     const opened = await readSavedChat(join(root, 'babel-desktop'), 'chat-truncated', {runsDir: join(root, 'runs')});
-    assert.equal(opened.history.tailOnly, true);
+    assert.equal(opened.history.tailOnly, false);
     assert.equal(opened.history.hasOlder, false);
-    assert.equal(opened.history.totalMessages, null);
+    assert.equal(opened.history.totalMessages, 14);
     assert.equal(opened.messages.find(message => message.text === 'assistant-40')?.status, 'unverified');
     assert.equal(opened.messages.find(message => message.text === 'Inline terminal')?.status, 'no_change');
   } finally { await rm(root, {recursive: true, force: true}); }
@@ -76,7 +76,7 @@ test('scanTranscriptHead uses the first user message for title, not the tail win
   assert.notEqual(tail.messages.find(message => message.role === 'user')?.text, 'TRUE-FIRST-TITLE');
 });
 
-test('ordinal session outcomes map event turn_id without transcript turn_id in the latest tail window', async () => {
+test('legacy message positions cannot acquire journal turn identities', async () => {
   const root = await mkdtemp(join(tmpdir(), 'babel-sessions-ordinal-'));
   const desktop = join(root, 'babel-desktop');
   const session = join(root, 'runs', 'chat-sessions', 'chat-ordinal');
@@ -106,18 +106,18 @@ test('ordinal session outcomes map event turn_id without transcript turn_id in t
   const globalMessage11 = tail.messages[1];
   assert.equal(globalMessage11?.role, 'assistant');
   assert.equal(globalMessage11?.text, 'assistant-6');
-  assert.equal(globalMessage11?.status, 'complete');
+  assert.equal(globalMessage11?.status, 'unverified');
   const visibleIndex11 = tail.messages[11];
   assert.equal(visibleIndex11?.text, 'assistant-11');
   assert.equal(visibleIndex11?.status, 'unverified');
   const older = await readSavedChat(desktop, 'chat-ordinal', {runsDir: join(root, 'runs'), olderOffset: 150});
   const turnOneAssistant = older.messages.find(message => message.text === 'assistant-1');
-  assert.equal(turnOneAssistant?.status, 'failed');
+  assert.equal(turnOneAssistant?.status, 'unverified');
   assertNoOverlap(tail.messages, older.messages);
   await rm(root, {recursive: true, force: true});
 });
 
-test('ordinal session outcomes fall back to ordered events when turn_id is absent from events', async () => {
+test('journal outcomes without identities cannot certify matching message counts', async () => {
   const root = await mkdtemp(join(tmpdir(), 'babel-sessions-ordinal-ordered-'));
   const desktop = join(root, 'babel-desktop');
   const session = join(root, 'runs', 'chat-sessions', 'chat-ordered');
@@ -139,7 +139,7 @@ test('ordinal session outcomes fall back to ordered events when turn_id is absen
   ].join('\n') + '\n');
   const opened = await readSavedChat(desktop, 'chat-ordered', {runsDir: join(root, 'runs')});
   const lastAssistant = opened.messages.filter(message => message.role === 'assistant').at(-1);
-  assert.equal(lastAssistant?.status, 'complete');
+  assert.equal(lastAssistant?.status, 'unverified');
   await rm(root, {recursive: true, force: true});
 });
 
@@ -176,9 +176,34 @@ test('oversize malformed unicode and partial-line transcripts remain discoverabl
   assert.equal(listed.sessions[0].oversize, true);
   assert.match(listed.sessions[0].title, /Оversize-unicode-title/);
   const opened = await readSavedChat(desktop, 'chat-big', {runsDir: join(root, 'runs')});
-  assert.equal(opened.history.tailOnly, true);
+  assert.equal(opened.history.tailOnly, false);
   assert.ok(opened.messages.some(message => message.text === 'TAIL-MARKER-OVERSIZE-FINAL-LINE'));
   await rm(root, {recursive: true, force: true});
+});
+
+test('large transcripts page the entire retained archive with bounded message windows',async()=>{
+  const root=await mkdtemp(join(tmpdir(),'babel-history-full-'));
+  const session=join(root,'runs','chat-sessions','large');
+  try{
+    await mkdir(session,{recursive:true});
+    const lines=Array.from({length:160},(_,index)=>JSON.stringify({role:index%2?'assistant':'user',content:`message-${index}:`+'🙂'.repeat(14000),turn_id:`turn-${Math.floor(index/2)}`}));
+    await writeFile(join(session,'transcript.jsonl'),lines.join('\n')+'\n');
+    await writeFile(join(session,'session-events.jsonl'),JSON.stringify({kind:'turn_ended',turn_id:'turn-0',outcome:'VERIFIED_COMPLETE'})+'\n');
+    const options={runsDir:join(root,'runs')};
+    const latest=await readSavedChat(root,'large',options);
+    assert.equal(latest.history.oversize,true);
+    assert.equal(latest.history.totalMessages,160);
+    assert.equal(latest.history.hasOlder,true);
+    assert.equal(latest.messages.length,150);
+    assert.ok(latest.messages[0].text.startsWith('message-10:'));
+    const earlier=await readSavedChat(root,'large',{...options,olderOffset:150});
+    assert.equal(earlier.messages.length,10);
+    assert.ok(earlier.messages[0].text.startsWith('message-0:'));
+    assert.equal(earlier.messages[1].status,'complete');
+    assertNoOverlap(latest.messages,earlier.messages);
+    await assert.rejects(()=>readSavedChat(root,'large',{...options,messageLimit:1000000}),/limit/i);
+    await assert.rejects(()=>readSavedChat(root,'large',{...options,olderOffset:1.5}),/offset/i);
+  }finally{await rm(root,{recursive:true,force:true});}
 });
 
 test('readSavedChat pages earlier windows without duplicating the tail', async () => {

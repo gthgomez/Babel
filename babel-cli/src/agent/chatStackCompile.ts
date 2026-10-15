@@ -7,6 +7,7 @@
  */
 
 import { createHash } from 'node:crypto';
+import {normalizeChatExecutionScope,type ChatExecutionScope} from './chatExecutionScope.js';
 import { isCredentialTargetPath } from './autonomyEnforcement.js';
 import { existsSync, lstatSync, readFileSync, realpathSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
@@ -63,11 +64,12 @@ export interface ChatCompiledStack {
   estimated_tokens: number;
   /** The prompt budget is measured in JavaScript UTF-16 code units. */
   budget_unit: 'utf16_code_units';
-  project_root: string;
+  project_root: string | null;
 }
 
 export interface CompileChatStackOptions {
-  projectRoot: string;
+  projectRoot: string | null;
+  executionScope?: ChatExecutionScope;
   /** Repo root that holds AGENTS.md / ENGINEERING.md when different from project. */
   babelRoot?: string;
   task?: string;
@@ -317,7 +319,9 @@ function hashContent(content: string): string {
  * Does not load planner or QA deep stages.
  */
 export function compileChatStack(options: CompileChatStackOptions): ChatCompiledStack {
-  const projectRoot = resolve(options.projectRoot);
+  const scope=normalizeChatExecutionScope(options);
+  const projectRoot=scope.kind==='project'?resolve(scope.projectRoot):null;
+  if(!projectRoot&&(options.babelRoot||options.memoryContext))throw new Error('Conflicting project context in conversation scope');
   const babelRoot = options.babelRoot ? resolve(options.babelRoot) : projectRoot;
   const budget = options.promptBudgetChars ?? 24_000;
   const entries: ChatStackEntry[] = [];
@@ -341,12 +345,12 @@ export function compileChatStack(options: CompileChatStackOptions): ChatCompiled
   // first (lower precedence) with the nearest file last (canonical id) so a
   // nested package inherits its ancestors instead of suppressing them.
   // CLAUDE.md is not an instruction source.
-  const identityFiles = readInstructionFiles(projectRoot, babelRoot, IDENTITY_CANDIDATES, true);
+  const identityFiles = projectRoot&&babelRoot ? readInstructionFiles(projectRoot, babelRoot, IDENTITY_CANDIDATES, true) : [];
   if (identityFiles.length > 0) {
     identityFiles.forEach((file, index) => {
       push(
         {
-          id: identityFragmentId(projectRoot, file.path, index === identityFiles.length - 1),
+          id: identityFragmentId(projectRoot!, file.path, index === identityFiles.length - 1),
           layer: 'identity',
           path: file.path,
         },
@@ -357,11 +361,11 @@ export function compileChatStack(options: CompileChatStackOptions): ChatCompiled
   } else {
     push(
       { id: 'identity:default', layer: 'identity', path: '(builtin)' },
-      '# Identity\nYou are Babel — a collaborative senior engineer.\n',
+      '# Identity\nYou are Babel — a collaborative senior engineer.\n'+(!projectRoot?'Conversation only: no project is selected or authorized. Do not claim to inspect files, execute commands or change a workspace. Request an explicit project selection when needed.\n':''),
     );
   }
 
-  const engineering = readInstructionFile(projectRoot, babelRoot, ENGINEERING_CANDIDATES);
+  const engineering = projectRoot&&babelRoot ? readInstructionFile(projectRoot, babelRoot, ENGINEERING_CANDIDATES) : null;
   if (engineering) {
     push(
       { id: 'project:engineering', layer: 'project', path: engineering.path },
@@ -370,7 +374,7 @@ export function compileChatStack(options: CompileChatStackOptions): ChatCompiled
     );
   }
 
-  const userContext = tryRead(resolveUserContextPath(), false);
+  const userContext = projectRoot ? tryRead(resolveUserContextPath(), false) : null;
   if (userContext) {
     push(
       { id: 'user:context', layer: 'project', path: userContext.path },

@@ -1,4 +1,5 @@
 import { join } from 'node:path';
+import {assertTaskAttemptBinding} from './taskObjectiveLifecycle.js';
 import { type ToolEffectClass } from '../executor/contracts.js';
 import { createBdnsObservationBus } from '../diagnostics/bdns/observationBus.js';
 import { PROVIDER_IDS } from '../runners/providerRegistry.js';
@@ -150,6 +151,7 @@ export function parseSessionEventLog(
     if (ev.kind === 'user_submitted' && ev.continued_task !== undefined && typeof ev.continued_task !== 'boolean') {
       throw new Error(`Invalid session event at line ${index + 1}: continued_task must be a boolean`)
     }
+    if(ev.kind==='user_submitted')assertTaskAttemptBinding(ev);
     const effectClasses: ToolEffectClass[] = [
       'read_only', 'idempotent', 'reconcilable_mutation',
       'non_idempotent_local_effect', 'external_side_effect',

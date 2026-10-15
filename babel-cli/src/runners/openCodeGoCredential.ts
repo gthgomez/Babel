@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import {usesDesktopResolvedCredentials} from '../config/desktopCredentialScope.js'
 
 /** Explicit credential sources accepted by the OpenCode Go transport. */
 export type OpenCodeGoCredentialSource = 'opencode-auth-helper' | 'explicit-test' | 'network-secret'
@@ -82,7 +83,7 @@ function firstExistingHelperPath(
 export function resolveOpenCodeGoCredential(
   options: OpenCodeGoCredentialResolverOptions,
 ): OpenCodeGoCredentialResolution {
-  if (options.source === 'network-secret') {
+  if (options.source === 'network-secret'||(options.source!=='explicit-test'&&(usesDesktopResolvedCredentials(process.env)||usesDesktopResolvedCredentials(options.env??{})))) {
     const credential = (options.env ?? process.env)['BABEL_OPENCODE_GO_API_KEY']?.trim()
     if (!credential) throw new OpenCodeGoCredentialError('network-secret', {
       helperPresent: false, exitCode: 'UNKNOWN', stderrPresent: false, timedOut: false,

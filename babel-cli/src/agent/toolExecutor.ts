@@ -1,3 +1,4 @@
+import {getExecutionContext} from './executionContext.js';
 /**
  * Tool executor lane — maps normalized `AgentAction` values to `executeTool` calls.
  *
@@ -755,6 +756,9 @@ export async function executeActionWithPolicy(
     lockContext?: FileLockContext | undefined;
   } = {},
 ): Promise<PolicyGatedExecutionResult> {
+  if(getExecutionContext()?.executionScope?.kind==='conversation'||getExecutionContext()?.root===null){
+    return {action,terminal:true,results:[policyBlockedToolResult(action,'deny','PROJECT_REQUIRED: Conversation scope grants no tool effects')],policyDecision:'deny',policyBlocked:true};
+  }
   // Capture task identity before any asynchronous policy/approval/executor
   // suspension. A completion from a retired task cannot hand certification
   // to a later task that reuses the same engine run id.

@@ -224,6 +224,7 @@ describe('U1.4 compileChatStackForRun budget selection', () => {
       task: 'fix',
     });
 
+    assert.ok(stack.project_root);
     assert.ok(stack.project_root.includes('my-project'));
   });
 });

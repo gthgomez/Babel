@@ -14,5 +14,5 @@
       "src/add.ts": "sim-hash-add-fixed"
     }
   },
-  "notes": "Mirrors CompletionDecision from executor/contracts.ts; live path uses createExecutorKernel().completion.decide."
+  "notes": "Simulated target CompletionDecision, not an observed live acceptance. The live kernel additionally requires owned current criterion evidence; coarse fixture proof alone is rejected. Trusted binding, execution and publication remain incomplete."
 }

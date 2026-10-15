@@ -101,6 +101,55 @@ test('private profile keys load without automatically reading selected project f
   } finally { rmSync(root, {recursive:true, force:true}); }
 });
 
+test('conversation bootstrap ignores opted-in project and legacy package credentials',()=>{
+  const root=mkdtempSync(join(tmpdir(),'babel-conversation-bootstrap-'));
+  const configDir=join(root,'private');mkdirSync(configDir);
+  writeFileSync(join(configDir,'.env'),'BABEL_ENV=test\n',{mode:0o600});
+  const env:NodeJS.ProcessEnv={BABEL_CONFIG_DIR:configDir,BABEL_PROJECT_CREDENTIALS_DIR:join(root,'must-not-inspect'),BABEL_LEGACY_CLI_ENV:'1'};
+  try{
+    const result=loadBabelCliEnv(env,undefined,{executionScope:'conversation'});
+    assert.equal(result.loaded,true);
+    assert.equal(env['BABEL_ENV'],'test');
+  }finally{rmSync(root,{recursive:true,force:true});}
+});
+
+test('native-resolved Desktop credentials never reload private, project or legacy dotenv state',()=>{
+  const root=mkdtempSync(join(tmpdir(),'babel-resolved-credentials-'));
+  const configDir=join(root,'private');mkdirSync(configDir);
+  const file=join(configDir,'.env');
+  writeFileSync(file,'OPENROUTER_API_KEY=syntheticRemovedCredential\nDEEPSEEK_API_KEY=syntheticOtherProvider\nBABEL_ROOT=untrusted-legacy-value\n',{mode:0o600});
+  try{
+    for(const executionScope of ['project','conversation'] as const){
+      const env:NodeJS.ProcessEnv={BABEL_CONFIG_DIR:configDir,BABEL_DESKTOP_IPC:'1',BABEL_DESKTOP_CREDENTIALS_RESOLVED:'1',BABEL_PROJECT_CREDENTIALS_DIR:join(root,'must-not-inspect'),BABEL_LEGACY_CLI_ENV:'1'};
+      const result=loadBabelCliEnv(env,undefined,{executionScope});
+      assert.equal(result.loaded,false,'DESKTOP_CREDENTIAL_DOTENV_RELOADED');
+      assert.equal(result.envFileExists,null,'skipped legacy file presence is unknown');
+      assert.equal(result.skipped,'desktop_resolved_credentials');
+      assert.equal(env['OPENROUTER_API_KEY']===undefined,true,'removed native key must remain absent');
+      assert.equal(env['DEEPSEEK_API_KEY']===undefined,true,'unselected provider must remain absent');
+      assert.equal(env['BABEL_ROOT']===undefined,true,'legacy policy values must remain absent');
+      assert.deepEqual(getEnvFileKeysNotActiveInProcess(env,file),[],'resolved credentials must not trigger legacy-file probes');
+      assert.equal(loadOptedInProjectCredentials(env),false,'native resolution must not reopen project credentials');
+      assert.equal(loadBabelCliEnv(env,file).loaded,false,'explicit file callers cannot resurrect a removed key');
+    }
+  }finally{rmSync(root,{recursive:true,force:true});}
+});
+
+test('native credential resolution requires both exact host markers and preserves its selected value',()=>{
+  const root=mkdtempSync(join(tmpdir(),'babel-resolved-marker-'));
+  const file=join(root,'.env');writeFileSync(file,'BABEL_ENV=fixture-file\n',{mode:0o600});
+  try{
+    for(const markers of [{},{BABEL_DESKTOP_IPC:'1'},{BABEL_DESKTOP_CREDENTIALS_RESOLVED:'1'},{BABEL_DESKTOP_IPC:'1',BABEL_DESKTOP_CREDENTIALS_RESOLVED:'true'},{BABEL_DESKTOP_IPC:'true',BABEL_DESKTOP_CREDENTIALS_RESOLVED:'1'}]){
+      const env:NodeJS.ProcessEnv={...markers};
+      assert.equal(loadBabelCliEnv(env,file).loaded,true);
+      assert.equal(env['BABEL_ENV']==='fixture-file',true);
+    }
+    const env:NodeJS.ProcessEnv={BABEL_DESKTOP_IPC:'1',BABEL_DESKTOP_CREDENTIALS_RESOLVED:'1',OPENROUTER_API_KEY:'fixture-native'};
+    assert.equal(loadBabelCliEnv(env,file).loaded,false,'DESKTOP_CREDENTIAL_DOTENV_RELOADED');
+    assert.equal(env['OPENROUTER_API_KEY']==='fixture-native',true,'native selected value must remain intact');
+  }finally{rmSync(root,{recursive:true,force:true});}
+});
+
 test('project credential opt-in only reads certified key names from Git-ignored .env', () => {
   const root = mkdtempSync(join(tmpdir(), 'babel-project-credentials-'));
   try {

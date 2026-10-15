@@ -144,7 +144,7 @@ export class ChatEngineTaskAllowance {
     }
   }
 
-  createTaskAllowance(): ChatTaskAllowanceSnapshot {
+  createTaskAllowance(limits=this.host.limits): ChatTaskAllowanceSnapshot {
     return {
       schemaVersion: 2,
       taskOwnerId: randomUUID(),
@@ -153,9 +153,9 @@ export class ChatEngineTaskAllowance {
         grantId: randomUUID(),
         revision: 0,
         provenance: "chat-engine-initial",
-        costCap: allowanceCostCap(this.host.limits.maxCostUsd),
-        wallCapMs: this.host.limits.maxWallMs,
-        turnCap: this.host.limits.maxTurns,
+        costCap: allowanceCostCap(limits.maxCostUsd),
+        wallCapMs: limits.maxWallMs,
+        turnCap: limits.maxTurns,
       },
       consumed: {
         costUsd: 0,
@@ -401,7 +401,7 @@ function isPersistedTurnRuntime(value: unknown): value is TurnRuntimeSnapshot {
     (candidate.taskIntent !== "execute" &&
       candidate.taskIntent !== "explain") ||
     typeof candidate.taskClass !== "string" ||
-    typeof candidate.projectRoot !== "string" ||
+    (typeof candidate.projectRoot !== "string" && !(candidate.projectRoot===null&&typeof candidate.executionScope==='object'&&candidate.executionScope!==null&&'kind' in candidate.executionScope&&candidate.executionScope.kind==='conversation')) ||
     (candidate.stickyIntent !== null &&
       candidate.stickyIntent !== "execute" &&
       candidate.stickyIntent !== "explain") ||
@@ -425,6 +425,7 @@ export function parseTaskAllowance(
   if (value === null || typeof value !== "object") return null;
   const candidate = value as Record<string, unknown>;
   if (candidate["schemaVersion"] !== 2) return null;
+  if(candidate['acceptedTaskId']!==undefined&&(typeof candidate['acceptedTaskId']!=='string'||!candidate['acceptedTaskId']))return null;
   if (
     typeof candidate["taskOwnerId"] !== "string" ||
     candidate["taskOwnerId"].length === 0 ||
@@ -491,6 +492,7 @@ export function parseTaskAllowance(
   if (accountingFaults === null) return null;
   const parsed: ChatTaskAllowanceSnapshot = {
     schemaVersion: 2,
+    ...(candidate['acceptedTaskId']!==undefined?{acceptedTaskId:candidate['acceptedTaskId'] as string}:{}),
     taskOwnerId: candidate["taskOwnerId"],
     accountingEpoch: candidate["accountingEpoch"],
     grant: {

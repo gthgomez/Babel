@@ -39,6 +39,7 @@ import {
   serializeThreadEventLog,
   persistThreadEventLog,
   type ThreadEventLog,
+  type ThreadTerminalResponse,
 } from './threadEventLog.js';
 import {
   createSessionEventLog,
@@ -91,11 +92,14 @@ import {
   writeCheckpointJournal,
   INSTRUCTION_MANIFEST_FILENAME,
   TASK_CONTRACT_FILENAME,
+  TASK_MODE_HISTORY_FILENAME,
+  assertAuthorityModeHistory,
   LIVE_SESSION_SNAPSHOT_FILENAME,
 } from './liveSessionBridge.js';
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, writeFileSync, copyFileSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
+import {assertObjectiveLifecycle,TASK_OBJECTIVE_LIFECYCLE_FILENAME,type TaskAttemptBinding} from './taskObjectiveLifecycle.js';
 import { renameCheckpointSync, type AtomicCheckpointRenameOptions } from '../utils/atomicCheckpointFile.js';
 
 
@@ -163,13 +167,18 @@ export function parityOnUserTurn(
     task: string;
     model: string;
     provider: string;
-    projectRoot: string;
+    projectRoot: string | null;
+    executionScope?: import('./chatExecutionScope.js').ChatExecutionScope;
     policyPreset?: string;
     verifier?: string;
     taskClass?: string;
     gatePolicy?: string;
     submissionIndex?: number;
     continuedTask?: boolean;
+    requestedOperation?: import('../config/chatTaskClass.js').RequestedTaskOperation;
+    requestedTaskIntent?: import('./turnRuntime.js').TurnTaskIntent;
+    requestedContinueTask?: boolean;
+    taskAttempt?: TaskAttemptBinding;
   },
 ): void {
   rt.loop = reduceAgentLoop(rt.loop, { type: 'user_turn', task: input.task }).state;
@@ -180,12 +189,17 @@ export function parityOnUserTurn(
     model: input.model,
     provider: input.provider,
     projectRoot: input.projectRoot,
+    ...(input.executionScope?{executionScope:input.executionScope}:{}),
     policyPreset: input.policyPreset ?? 'workspace_write',
     ...(input.verifier !== undefined ? { verifier: input.verifier } : {}),
     ...(input.taskClass !== undefined ? { taskClass: input.taskClass } : {}),
     ...(input.gatePolicy !== undefined ? { gatePolicy: input.gatePolicy } : {}),
     ...(input.submissionIndex !== undefined ? { submissionIndex: input.submissionIndex } : {}),
     ...(input.continuedTask !== undefined ? { continuedTask: input.continuedTask } : {}),
+    ...(input.requestedOperation !== undefined ? { requestedOperation: input.requestedOperation } : {}),
+    ...(input.requestedTaskIntent !== undefined ? { requestedTaskIntent: input.requestedTaskIntent } : {}),
+    ...(input.requestedContinueTask !== undefined ? { requestedContinueTask: input.requestedContinueTask } : {}),
+    ...input.taskAttempt,
   });
   // W2 PR-E dual-write: session event mirrors user submission.
   recordUserSubmitted(rt.sessionEvents, {
@@ -193,7 +207,9 @@ export function parityOnUserTurn(
     task: input.task,
     model: input.model,
     provider: input.provider,
-    projectRoot: input.projectRoot,
+    ...(input.projectRoot!==null?{projectRoot:input.projectRoot}:{}),
+    ...(input.executionScope?{executionScope:input.executionScope}:{}),
+    ...input.taskAttempt,
     ...(input.taskClass !== undefined ? { taskClass: input.taskClass } : {}),
     ...(input.continuedTask !== undefined ? { continuedTask: input.continuedTask } : {}),
   });
@@ -966,6 +982,7 @@ export function parityEndTurn(
   outcome: TerminalOutcome | undefined,
   status: string,
   reason?: TerminalReason,
+  response?: ThreadTerminalResponse,
 ): void {
   const terminal = projectChatTerminal({
     ...(outcome !== undefined ? { outcome } : {}),
@@ -1016,7 +1033,7 @@ export function parityEndTurn(
     parityReduce(rt, event);
   }
   if (rt.turnId) {
-    endTurn(rt.eventLog, rt.turnId, terminal.outcome, terminal.status, reason);
+    endTurn(rt.eventLog, rt.turnId, terminal.outcome, terminal.status, reason, response);
     // W2 PR-E: only one turn_ended per turn_id in session log.
     const already = rt.sessionEvents.events.some(
       (e) => e.kind === 'turn_ended' && e.turn_id === rt.turnId,
@@ -1043,8 +1060,9 @@ export async function finalizeParityTurn(
   outcome: TerminalOutcome | undefined,
   status: string,
   reason?: TerminalReason,
+  response?: ThreadTerminalResponse,
 ): Promise<void> {
-  parityEndTurn(rt, outcome, status, reason);
+  parityEndTurn(rt, outcome, status, reason, response);
   parityPersistLiveSession(rt, runDir);
   await persistThreadEventLog(runDir, rt.eventLog);
   flushSessionEventsRequired(rt, runDir, `finalize:${outcome}`);
@@ -1142,8 +1160,9 @@ export function finalizeParityTurnSync(
   outcome: TerminalOutcome | undefined,
   status: string,
   reason?: TerminalReason,
+  response?: ThreadTerminalResponse,
 ): void {
-  parityEndTurn(rt, outcome, status, reason);
+  parityEndTurn(rt, outcome, status, reason, response);
   parityPersistLiveSession(rt, runDir);
   persistThreadEventLog(runDir, rt.eventLog).catch((err) => {
     reportEventLogPersistFailure(`finalize:${outcome}`, err);
@@ -1180,17 +1199,27 @@ export function checkpointParityEventLog(rt: ParityRuntime, runDir: string): voi
  * - Batch sidecars removed after rollback, retained with journal if rollback is blocked
  * - Receipt is `blocked` with no child artifacts marked `committed`
  */
+export interface StrictCheckpointOptions {
+  /** A prospective allowance belongs to this same accepted task generation. */
+  taskAllowance?: import('./chatEngineContracts.js').ChatTaskAllowanceSnapshot;
+  injectCommitFailureAfter?: number;
+  renameOptions?: AtomicCheckpointRenameOptions;
+  unlinkCheckpoint?: typeof unlinkSync;
+  /** P05 owner fence checked at the authority-bearing rename boundary. */
+  assertOwnerCurrent?: () => void;
+}
+
+/** Awaitable compatibility facade over the same synchronous journal transaction. */
 export async function checkpointParityEventLogStrict(
+  rt:ParityRuntime,runDir:string,options?:StrictCheckpointOptions,
+):Promise<PersistenceReceipt>{return checkpointParityEventLogStrictSync(rt,runDir,options);}
+
+/** Synchronous callers receive a receipt only after the full strict batch commits. */
+export function checkpointParityEventLogStrictSync(
   rt: ParityRuntime,
   runDir: string,
-  options?: {
-    injectCommitFailureAfter?: number;
-    renameOptions?: AtomicCheckpointRenameOptions;
-    unlinkCheckpoint?: typeof unlinkSync;
-    /** P05 owner fence checked at the authority-bearing rename boundary. */
-    assertOwnerCurrent?: () => void;
-  },
-): Promise<PersistenceReceipt> {
+  options?: StrictCheckpointOptions,
+): PersistenceReceipt {
   const initialEventsCount = rt.sessionEvents.events.length;
   const initialNextSeq = rt.sessionEvents.nextSeq;
   const initialFlushedThroughSeq = rt.sessionEvents.flushedThroughSeq;
@@ -1234,6 +1263,8 @@ export async function checkpointParityEventLogStrict(
     });
 
     if (!rt.liveAuthority) throw new Error('live authority is missing');
+    assertAuthorityModeHistory(rt.liveAuthority);
+    assertObjectiveLifecycle(rt.liveAuthority,rt.liveAuthority.taskObjectiveLifecycle,{thread:rt.eventLog,session:rt.sessionEvents});
 
     const projectedLive = projectFromDurableSession({
       sessionLog: rt.sessionEvents,
@@ -1278,6 +1309,15 @@ export async function checkpointParityEventLogStrict(
             filename: CONTEXT_CHECKPOINT_FILENAME,
             content: JSON.stringify(rt.contextCheckpoint, null, 2),
           }]
+        : []),
+      ...(rt.liveAuthority.taskModeHistory
+        ? [{kind:'authority' as const,filename:TASK_MODE_HISTORY_FILENAME,content:JSON.stringify(rt.liveAuthority.taskModeHistory,null,2)}]
+        : []),
+      ...(rt.liveAuthority.taskObjectiveLifecycle
+        ? [{kind:'authority' as const,filename:TASK_OBJECTIVE_LIFECYCLE_FILENAME,content:JSON.stringify(rt.liveAuthority.taskObjectiveLifecycle,null,2)}]
+        : []),
+      ...(options?.taskAllowance
+        ? [{kind:'authority' as const,filename:'task-budget.json',content:JSON.stringify(options.taskAllowance)}]
         : []),
     ];
 

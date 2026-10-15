@@ -7,6 +7,13 @@ import {classifyOrigin, parseBuildMetadata, describeSource, normalizeUpdate, res
 const SHA_A = 'a'.repeat(40);
 const SHA_B = 'b'.repeat(40);
 
+test('packaged conversation readiness does not assert Docker or sandbox readiness',()=>{
+ const result=resolveEngineIdentity({isPackaged:true,ready:true,requiresSandbox:false,diagnostics:null,readText:()=>{throw new Error('Fixture metadata unavailable');}});
+ assert.equal(result.readiness.ready,true);
+ assert.equal(result.readiness.docker,'unknown');
+ assert.equal(result.readiness.sandboxImage,'unknown');
+});
+
 test('classifyOrigin distinguishes packaged, official, advanced and missing', () => {
   assert.equal(classifyOrigin({isPackaged:true, advancedEntry:false, officialReady:true}), 'bundled');
   assert.equal(classifyOrigin({isPackaged:true, advancedEntry:true, officialReady:true}), 'bundled');

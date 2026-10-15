@@ -86,6 +86,8 @@ export async function allocateThreadViaProtocol(
   options: ChatEngineOptions,
 ): Promise<string | null> {
   if (!isProtocolClientEnabled()) return null;
+  if(options.executionScope?.kind==='conversation')return null; // This legacy protocol method requires a project binding.
+  if(options.projectRoot===null)throw new Error('PROJECT_REQUIRED: Protocol thread creation requires an explicit project');
 
   const client = getProtocolClient();
   const created = await client.threadCreate({

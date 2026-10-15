@@ -1,6 +1,8 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { isAbsolute, resolve } from 'node:path';
 import { JsonlDecoder } from './stream.mjs';
+import {scopedApproval,scopedApprovalReply} from '../src/core.mjs';
+import {applyExecutionScopeEnvironment} from './childEnv.mjs';
 
 /** The effective execution profile the Desktop launches the CLI with. */
 export const EXECUTION_PROFILE = 'safe_repo';
@@ -17,11 +19,14 @@ function terminateChildTree(child) {
 }
 
 /** No shell, interpolated command, automatic approval, or invented runtime flag. */
-export function buildRunArgs(entry, projectRoot, {task, mode, sessionId, model}) {
-  if (typeof entry !== 'string' || !isAbsolute(entry) || typeof projectRoot !== 'string' || !isAbsolute(projectRoot)) throw new TypeError('CLI and project paths must be absolute');
+export function buildRunArgs(entry, projectRoot, {task, mode, sessionId, model,executionScope}) {
+  const conversation=executionScope?.kind==='conversation';
+  if(executionScope!==undefined&&!['project','conversation'].includes(executionScope?.kind))throw new TypeError('Invalid execution scope');
+  if (typeof entry !== 'string' || !isAbsolute(entry) || (conversation?projectRoot!==null:typeof projectRoot !== 'string' || !isAbsolute(projectRoot))) throw new TypeError('An absolute CLI and explicit execution scope are required');
+  if(conversation&&mode!=='chat')throw new TypeError('Select a project before using this execution mode');
   if (typeof task !== 'string' || !task.trim() || task.length > 24000 || task.includes('\0')) throw new TypeError('Invalid task text');
   if (!['chat', 'plan', 'deep'].includes(mode)) throw new TypeError('Invalid Babel mode');
-  const args = [entry, 'run', '--mode', mode, '--project-root', projectRoot,
+  const args = [entry, 'run', '--mode', mode, ...(conversation?['--execution-scope','conversation']:['--project-root',projectRoot]),
     '--output-format', 'stream-json', '--execution-profile', EXECUTION_PROFILE];
   if (sessionId != null && sessionId !== '') {
     if (typeof sessionId !== 'string' || !/^[\w-]{1,80}$/.test(sessionId)) throw new TypeError('Invalid chat session id');
@@ -38,11 +43,16 @@ export function buildRunArgs(entry, projectRoot, {task, mode, sessionId, model})
 /** Owns one child process, not a Babel runtime or an agent/session store. */
 export class BabelChild {
   #child = null;
-  constructor({executable, entry, projectRoot, env = {}, inheritEnv = true}) {
+  #approval = null;
+  #runId = null;
+  #approvalClosed = true;
+  constructor({executable, entry, projectRoot,launchDirectory, env = {}, inheritEnv = true}) {
     if (!isAbsolute(executable)) throw new TypeError('The Node executable must be absolute');
-    this.executable = executable; this.entry = entry; this.projectRoot = projectRoot; this.env = env; this.inheritEnv = inheritEnv;
+    if(projectRoot===null&&(typeof launchDirectory!=='string'||!isAbsolute(launchDirectory)))throw new TypeError('Conversation launch directory must be explicit and absolute');
+    this.executable = executable; this.entry = entry; this.projectRoot = projectRoot; this.launchDirectory=projectRoot??launchDirectory;this.env = env; this.inheritEnv = inheritEnv;
   }
   get busy() { return this.#child !== null; }
+  get awaitingApproval() { return !this.#approvalClosed && Boolean(this.#approval && Date.parse(this.#approval.expires_at)>Date.now()); }
   start(request, onPacket) {
     if (this.busy) throw new Error('A Babel child is already running');
     if (typeof request.runId !== 'string' || !/^[\w-]{1,100}$/.test(request.runId)) throw new TypeError('Invalid run ID');
@@ -50,10 +60,21 @@ export class BabelChild {
     const send = packet => onPacket({runId: request.runId, ...packet});
     let stderr = ''; let stderrBytes = 0; let stdoutBytes = 0; let displayLimited = false; let errors = 0;
     const report = error => { if (errors++ < 8) send({kind:'transport-error',error}); };
-    const decoder = new JsonlDecoder(event => send({kind:'event',event}), report);
+    this.#approval=null;this.#runId=request.runId;this.#approvalClosed=false;
+    const decoder = new JsonlDecoder(event => {
+      if(event.type==='approval.required'&&!this.#approvalClosed){
+        const binding=scopedApproval(event.item?.approval);
+        this.#approval=binding?.run_id===request.runId?binding:null;
+      }
+      if(['run_complete','run_error','turn.completed','turn.failed','cancelled'].includes(event.type)){this.#approval=null;this.#approvalClosed=true;}
+      send({kind:'event',event});
+    }, report);
     const child = spawn(this.executable, args, {
-      cwd: this.projectRoot, shell: false, windowsHide: true,
-      stdio: ['pipe','pipe','pipe'], env: {...(this.inheritEnv ? process.env : {}), ...this.env, BABEL_DESKTOP_IPC:'1', BABEL_DAEMON_ENABLED:'false'}
+      cwd: this.launchDirectory, shell: false, windowsHide: true,
+      stdio: ['pipe','pipe','pipe'], env: applyExecutionScopeEnvironment({
+        ...(this.inheritEnv ? process.env : {}), ...this.env,
+        BABEL_DESKTOP_IPC:'1', BABEL_DESKTOP_RUN_ID:request.runId, BABEL_DAEMON_ENABLED:'false',
+      },request.executionScope)
     });
     this.#child = child;
     child.stdout.on('data', chunk => {
@@ -73,16 +94,19 @@ export class BabelChild {
     child.on('close', (code, signal) => {
       decoder.end();
       this.#child = null;
+      this.#approval=null;this.#runId=null;this.#approvalClosed=true;
       // stderr may contain provider diagnostics. Never forward raw stderr, environment,
       // keys, or credentials into the renderer. The CLI's structured error is preferred.
       send({kind:'exit', code, signal, diagnosticAvailable:stderr.length > 0, displayLimited});
       stderr = '';
     });
   }
-  reply(decision) {
-    if (!this.#child?.stdin || this.#child.stdin.destroyed) return;
-    if (decision !== 'allow_once' && decision !== 'deny') return;
-    this.#child.stdin.write(`${JSON.stringify({ decision })}\n`);
+  reply(request) {
+    if (this.#approvalClosed || !this.#child?.stdin || this.#child.stdin.destroyed || request?.runId!==this.#runId) return false;
+    const reply=scopedApprovalReply(request,this.#approval);
+    if(!reply)return false;
+    this.#approval=null;
+    try{this.#child.stdin.write(`${JSON.stringify(reply)}\n`);return true;}catch{return false;}
   }
   whenIdle(callback) {
     if (typeof callback !== 'function') return;
@@ -90,6 +114,8 @@ export class BabelChild {
     this.#child.once('close', callback);
   }
   cancel() {
+    this.#approval=null;
+    this.#approvalClosed=true;
     const child = this.#child;
     if (!child || child.desktopCancelling) return;
     child.desktopCancelling = true;

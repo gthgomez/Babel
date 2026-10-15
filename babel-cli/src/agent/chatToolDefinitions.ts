@@ -284,7 +284,7 @@ export function mapChatActionToAgentAction(action: ChatToolAction): AgentAction 
 // ─── Prompt Builders ──────────────────────────────────────────────────────
 
 export interface ChatSystemPromptOptions {
-  projectRoot: string;
+  projectRoot: string | null;
   systemContext?: string;
   /** When true, instruct the model to use native function calling (no JSON envelope). */
   nativeTools?: boolean;
@@ -328,8 +328,9 @@ export function buildChatSystemPrompt(options: ChatSystemPromptOptions): string 
   }
 
   if (options.systemContext) sections.push(`## Project Context\n${options.systemContext}`);
-  sections.push(`Current working directory: ${options.projectRoot}`, `Project: ${targetBasename(options.projectRoot)}`);
-  if (!options.textTools && Object.keys(readMcpServers()).length > 0) {
+  if(options.projectRoot)sections.push(`Current working directory: ${options.projectRoot}`, `Project: ${targetBasename(options.projectRoot)}`);
+  else sections.push('Scope: conversation only. No project directory or project effects are authorized. Ask the user to select a project when needed.');
+  if (options.projectRoot && !options.textTools && Object.keys(readMcpServers()).length > 0) {
     sections.push('Configured MCP servers are available through the MCP tool definitions.');
   }
   return sections.join('\n\n');
