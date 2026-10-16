@@ -35,6 +35,15 @@ function command(binary, args, options = {}) {
   return result
 }
 function npm(args, options = {}) { return command(process.execPath, [npmCli, ...args], { timeout: 300000, ...options }) }
+function installArtifact(artifact) {
+  const result = npm(['install', '--prefix', prefix, '--omit=dev', '--no-audit', '--no-fund', artifact])
+  assert.doesNotMatch(result.stdout + '\n' + result.stderr,
+    /deprecated node-domexception|install-scripts[^\n]*protobufjs/i,
+    'Production installation emitted a retired dependency warning')
+  for (const name of ['node-domexception', 'protobufjs']) {
+    assert.ok(!existsSync(join(prefix, 'node_modules', name)), `Unexpected production dependency: ${name}`)
+  }
+}
 const installed = join(prefix, 'node_modules', ...pkg.name.split('/'))
 const bin = join(installed, pkg.bin['babel-agent'])
 const cli = (args, options = {}) => command(process.execPath, [bin, ...args], { env: guardedEnv, ...options })
@@ -118,7 +127,7 @@ try {
   verifyConsumerContents(identity.manifest)
   writeFileSync(join(output, 'manifest.json'), JSON.stringify({...identity, consumerNode: process.version, consumerPlatform: process.platform, consumerArch: process.arch}, null, 2) + '\n')
   writeFileSync(join(output, 'SHA256SUMS'), `${identity.sha256}  ${identity.tarball}\n`)
-  npm(['install', '--prefix', prefix, '--omit=dev', '--no-audit', '--no-fund', artifact])
+  installArtifact(artifact)
   assert.ok(!existsSync(join(prefix, 'node_modules/tsx')), 'No development runner installed')
   const original = treeDigest(installed)
   readonly(installed, true)
@@ -215,7 +224,7 @@ try {
   npm(['uninstall', '--prefix', prefix, '--no-audit', '--no-fund', pkg.name])
   assert.ok(!existsSync(installed))
   assert.equal(readFileSync(join(env.BABEL_CONFIG_DIR, 'runtime-flags.json'), 'utf8'), saved)
-  npm(['install', '--prefix', prefix, '--omit=dev', '--no-audit', '--no-fund', artifact])
+  installArtifact(artifact)
   assert.equal(cli(['--version']).stdout.trim(), pkg.version)
   assert.equal(readFileSync(join(env.BABEL_CONFIG_DIR, 'runtime-flags.json'), 'utf8'), saved)
   assert.deepEqual(readdirSync(project).sort(), ['.babel_history', 'README.md'].filter(path => existsSync(join(project, path))).sort(), JSON.stringify({ phase: 'after reinstall', fixtureBeforeCleanup, remaining: fixtureSnapshot() }))
