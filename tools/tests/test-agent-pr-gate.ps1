@@ -31,6 +31,44 @@ $otherHead = 'b' * 40
 $policyArgs = @{ TargetSha = $head; AuthorityEvent = 'pull_request'; AuthorityWorkflowName = 'Public Release Gate' }
 
 try {
+  # Exercise the same ancestry/policy decision called by the gate. The live
+  # baseRefOid alone says nothing about whether the candidate includes main.
+  $gateModule = Get-Module 'agent-pr-gate-common'
+  & $gateModule {
+    $script:integrationCalls = @()
+    $script:integrationBase = 'c' * 40
+    $script:integrationMainPaths = @('scripts/agent-pr-gate.ps1')
+    $script:integrationHeadPaths = @('docs/example.md')
+    $script:integrationFailure = ''
+    function script:Invoke-AgentGit {
+      param($GitPath, $RepoRoot, $Arguments)
+      $script:integrationCalls += ($Arguments -join ' ')
+      if ($Arguments[0] -eq 'merge-base') {
+        return @{ exitCode = $(if ($script:integrationFailure -eq 'merge-base') { 1 } else { 0 }); text = $script:integrationBase }
+      }
+      $paths = if ($Arguments[-1].EndsWith('a' * 40)) { $script:integrationMainPaths } else { $script:integrationHeadPaths }
+      return @{ exitCode = $(if ($script:integrationFailure -eq 'diff') { 1 } else { 0 }); output = @($paths) }
+    }
+  }
+  $integrationArgs = @{ GitPath = 'fixture'; RepoRoot = '.'; OriginMain = ('a' * 40); ReviewedHead = ('b' * 40) }
+  $disjoint = Get-AgentBaseIntegrationState @integrationArgs -Strict $false
+  Assert-AgentGateTest ($disjoint.available -and -not $disjoint.baseFresh -and $disjoint.baseAllowed -and $disjoint.integrationClear) 'nonstrict stale disjoint branches must be evaluated and allowed'
+  Assert-AgentGateTest ((& $gateModule { $script:integrationCalls.Count }) -eq 3) 'stale ancestry must trigger both diffs'
+  $strictStale = Get-AgentBaseIntegrationState @integrationArgs -Strict $true
+  Assert-AgentGateTest (-not $strictStale.baseAllowed) 'strict policy must reject actual stale ancestry even with disjoint changes'
+  & $gateModule { $script:integrationHeadPaths = @('scripts/agent-pr-gate.ps1') }
+  $overlap = Get-AgentBaseIntegrationState @integrationArgs -Strict $false
+  Assert-AgentGateTest (-not $overlap.integrationClear -and $overlap.overlap.Count -eq 1) 'sensitive overlap must block under nonstrict policy'
+  foreach ($failure in @('merge-base', 'diff')) {
+    & $gateModule { param($Failure) $script:integrationFailure = $Failure } $failure
+    $unreadable = Get-AgentBaseIntegrationState @integrationArgs -Strict $false
+    Assert-AgentGateTest (-not $unreadable.available -and -not $unreadable.integrationClear) 'missing ancestry/diff evidence must not count as clear'
+  }
+  & $gateModule { $script:integrationFailure = ''; $script:integrationBase = 'a' * 40; $script:integrationCalls = @() }
+  $fresh = Get-AgentBaseIntegrationState @integrationArgs -Strict $true
+  Assert-AgentGateTest ($fresh.baseFresh -and $fresh.baseAllowed -and $fresh.integrationClear) 'unchanged main ancestry must pass'
+  Assert-AgentGateTest ((& $gateModule { $script:integrationCalls.Count }) -eq 1) 'fresh ancestry needs no overlap diffs'
+
   # Expected SHA-256 values come from JavaScript .sort().join('\n') in the worker.
   $mixedCaseNumstat = @("1`t0`tZ.ts", "1`t0`ta.ts")
   Assert-AgentGateTest ((Get-AgentNumstatDigest $mixedCaseNumstat) -ceq 'e4b6c598e11f6ff1acc0f3c719385aa1e121381fab46faa7b4810c59b28c4df2') 'numstat ordering must match JavaScript for mixed-case paths'

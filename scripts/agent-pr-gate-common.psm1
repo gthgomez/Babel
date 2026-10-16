@@ -304,7 +304,9 @@ function Test-AgentPathMatchesPolicyPrefixes {
     $candidate = [string]$prefix
     if ([string]::IsNullOrWhiteSpace($candidate)) { continue }
     $trimmed = $candidate.TrimEnd('/')
-    if ($normalized -ieq $trimmed -or $normalized.StartsWith("$trimmed/", [StringComparison]::OrdinalIgnoreCase)) { return $true }
+    # The policy contains directory prefixes AND file stems such as
+    # scripts/agent-pr-gate (covering .ps1 and -common.psm1).
+    if ($normalized -ieq $trimmed -or $normalized.StartsWith($candidate, [StringComparison]::OrdinalIgnoreCase)) { return $true }
   }
   return $false
 }
@@ -333,6 +335,9 @@ function Get-AgentStaleMainIntegrationOverlap {
   if (-not (Test-AgentShaValue $mergeBase)) {
     return [pscustomobject]@{ available = $false; overlap = @(); error = 'merge_base_unavailable' }
   }
+  if ([string]::Equals($mergeBase, $OriginMain, [StringComparison]::OrdinalIgnoreCase)) {
+    return [pscustomobject]@{ available = $true; baseFresh = $true; mergeBase = $mergeBase; overlap = @(); error = '' }
+  }
   $mainDiff = Invoke-AgentGit -GitPath $GitPath -RepoRoot $RepoRoot -Arguments @('diff', '--name-only', "$mergeBase..$OriginMain")
   $headDiff = Invoke-AgentGit -GitPath $GitPath -RepoRoot $RepoRoot -Arguments @('diff', '--name-only', "$mergeBase..$ReviewedHead")
   if ($mainDiff.exitCode -ne 0 -or $headDiff.exitCode -ne 0) {
@@ -353,7 +358,31 @@ function Get-AgentStaleMainIntegrationOverlap {
     'tools/ci-merge-lane'
   ) + @($policy.installerSensitivePrefixes)
   $riskyOverlap = @($overlap | Where-Object { Test-AgentPathMatchesPolicyPrefixes -Path $_ -Prefixes $sensitivePrefixes })
-  return [pscustomobject]@{ available = $true; overlap = @($riskyOverlap); error = '' }
+  return [pscustomobject]@{ available = $true; baseFresh = $false; mergeBase = $mergeBase; overlap = @($riskyOverlap); error = '' }
+}
+
+function Get-AgentBaseIntegrationState {
+  param(
+    [Parameter(Mandatory = $true)][string]$GitPath,
+    [Parameter(Mandatory = $true)][string]$RepoRoot,
+    [Parameter(Mandatory = $true)][string]$OriginMain,
+    [Parameter(Mandatory = $true)][string]$ReviewedHead,
+    [Parameter(Mandatory = $true)][bool]$Strict
+  )
+  # Freshness is an ancestry fact; strictness only decides whether a stale
+  # but disjoint candidate is permitted. Missing evidence never means clear.
+  try {
+    $overlap = Get-AgentStaleMainIntegrationOverlap -GitPath $GitPath -RepoRoot $RepoRoot -OriginMain $OriginMain -ReviewedHead $ReviewedHead
+  } catch {
+    $overlap = [pscustomobject]@{ available = $false; overlap = @(); error = 'integration_evidence_unavailable' }
+  }
+  $fresh = $overlap.available -and $overlap.baseFresh
+  return [pscustomobject]@{
+    available = $overlap.available; baseFresh = $fresh
+    baseAllowed = $overlap.available -and ((-not $Strict) -or $fresh)
+    integrationClear = $overlap.available -and ($fresh -or $overlap.overlap.Count -eq 0)
+    overlap = @($overlap.overlap); error = $overlap.error
+  }
 }
 
 function Get-AgentRiskLane {
@@ -462,4 +491,4 @@ function Get-AgentReviewPolicyVerdict {
   }
 }
 
-Export-ModuleMember -Function ConvertTo-AgentCheckObservation, Get-AgentObservationTimestamp, Resolve-AgentRequiredCheck, Resolve-AgentReviewThreadPages, Test-AgentIndependentReviewReceipt, Get-AgentIndependentReviewReceiptHash, Get-AgentReviewPolicyVerdict, Test-AgentShaValue, Get-AgentNumstatDigest, Get-AgentExactDiffCoverage, Test-AgentPathMatchesPolicyPrefixes, Get-AgentStaleMainIntegrationOverlap, Get-AgentRiskLane, Get-AgentMinimumReviewCount, Test-AgentAutonomousReviewEvidence, Test-AgentControllerReviewEvidenceBundle, Test-AgentIndependentReviewEvidenceV3, Test-AgentHostReviewBundleV3, Get-AgentPropertyNames, Get-AgentRequiredCheckAuthority, Test-AgentEvidenceTransportStub, Get-AgentEvidenceTransportError, Get-AgentIndependentReviewSummary, Select-AgentHostReviewBundle
+Export-ModuleMember -Function ConvertTo-AgentCheckObservation, Get-AgentObservationTimestamp, Resolve-AgentRequiredCheck, Resolve-AgentReviewThreadPages, Test-AgentIndependentReviewReceipt, Get-AgentIndependentReviewReceiptHash, Get-AgentReviewPolicyVerdict, Test-AgentShaValue, Get-AgentNumstatDigest, Get-AgentExactDiffCoverage, Test-AgentPathMatchesPolicyPrefixes, Get-AgentStaleMainIntegrationOverlap, Get-AgentBaseIntegrationState, Get-AgentRiskLane, Get-AgentMinimumReviewCount, Test-AgentAutonomousReviewEvidence, Test-AgentControllerReviewEvidenceBundle, Test-AgentIndependentReviewEvidenceV3, Test-AgentHostReviewBundleV3, Get-AgentPropertyNames, Get-AgentRequiredCheckAuthority, Test-AgentEvidenceTransportStub, Get-AgentEvidenceTransportError, Get-AgentIndependentReviewSummary, Select-AgentHostReviewBundle

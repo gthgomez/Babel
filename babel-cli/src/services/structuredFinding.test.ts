@@ -13,6 +13,7 @@ import {
   verifyFindingStatically,
   verifyFindingAgainstSnapshot,
   corroborateFindings,
+  projectFindingReview,
 } from './findingVerifier.js';
 
 test('structuredFinding: generates distinct instance IDs and stable semantic fingerprints', () => {
@@ -26,6 +27,7 @@ test('structuredFinding: generates distinct instance IDs and stable semantic fin
     line: 42,
     claim: 'Race condition when dequeuing empty items concurrently',
     defectClass: 'race_condition',
+    symbol: 'dequeue', behavior: 'concurrent empty dequeue races',
   });
 
   const f2 = createStructuredFinding({
@@ -38,6 +40,7 @@ test('structuredFinding: generates distinct instance IDs and stable semantic fin
     line: 42,
     claim: 'Different wording for the exact same race condition in queue',
     defectClass: 'race_condition',
+    symbol: 'dequeue', behavior: 'concurrent empty dequeue races',
   });
 
   // Different instance IDs (different execution and claim text)
@@ -49,6 +52,37 @@ test('structuredFinding: generates distinct instance IDs and stable semantic fin
   // Deduplication collapses them into 1
   const deduped = deduplicateFindings([f1, f2]);
   assert.equal(deduped.length, 1);
+});
+
+test('canonical review exposes unresolved findings without calling location checks confirmation', () => {
+  const finding = createStructuredFinding({ candidateDigest: 'a'.repeat(64), executionId: 'review',
+    reviewerId: 'reviewer', category: 'security', severity: 'P1', path: 'unspecified', claim: 'possible authorization bypass' });
+  const result = projectFindingReview({ verdict: 'APPROVE', uncertain: false }, [{ ...finding, verification_status: 'LOCATION_INVALID' }]);
+  assert.equal(result.verdict, 'BLOCK');
+  assert.match(result.blocking_findings[0]!, /LOCATION_INVALID.*semantic validation unavailable/);
+  const locationOnly = projectFindingReview({ verdict: 'BLOCK', uncertain: false }, [{ ...finding, verification_status: 'LOCATION_VALID' }]);
+  assert.match(locationOnly.blocking_findings[0]!, /LOCATION_VALID.*semantic validation unavailable/);
+  assert.doesNotMatch(locationOnly.blocking_findings[0]!, /CONFIRMED|REPRODUCED/);
+  assert.equal(projectFindingReview({ verdict: 'BLOCK', uncertain: true }, []).verdict, 'BLOCK');
+});
+
+test('finding identity preserves distinct bugs and path case while surviving line shifts', () => {
+  const input = { candidateDigest: 'a'.repeat(64), executionId: 'first', reviewerId: 'reviewer',
+    category: 'correctness' as const, severity: 'P1' as const, path: 'src/Queue.ts',
+    symbol: 'dequeue', defectClass: 'empty_queue', behavior: 'throws when queue is empty',
+    line: 10, claim: 'src/Queue.ts:10 throws on empty queue' };
+  const first = createStructuredFinding(input);
+  const moved = createStructuredFinding({ ...input, candidateDigest: 'b'.repeat(64), executionId: 'second',
+    line: 30, claim: 'src/Queue.ts:30 throws on empty queue' });
+  assert.equal(first.finding_fingerprint, moved.finding_fingerprint);
+  assert.notEqual(first.finding_instance_id, moved.finding_instance_id);
+  assert.notEqual(first.finding_fingerprint, createStructuredFinding({ ...input, path: 'src/queue.ts' }).finding_fingerprint);
+  assert.notEqual(first.finding_fingerprint, createStructuredFinding({ ...input, behavior: 'drops the next queued item' }).finding_fingerprint);
+  const { symbol: _symbol, defectClass: _class, behavior: _behavior, ...noIdentity } = input;
+  assert.equal(deduplicateFindings([createStructuredFinding(noIdentity),
+    createStructuredFinding({ ...noIdentity, claim: 'src/Queue.ts:10 drops another item' })]).length, 2);
+  assert.equal(deduplicateFindings([createStructuredFinding({ ...noIdentity, claim: 'src/Queue.ts:10 rejects localhost:80' }),
+    createStructuredFinding({ ...noIdentity, claim: 'src/Queue.ts:10 rejects localhost:443' })]).length, 2);
 });
 
 test('structuredFinding: parseFindingFromModelClaim extracts location without synthesizing scope[0]', () => {
@@ -79,6 +113,8 @@ test('structuredFinding: parseFindingFromModelClaim extracts location without sy
   const p3 = parseFindingFromModelClaim('General code quality issue without specified file', scope);
   assert.equal(p3.path, 'unspecified');
   assert.equal(p3.line, undefined);
+  assert.equal(parseFindingFromModelClaim('src/A.ts:2 fails', ['src/a.ts', 'src/A.ts']).path, 'src/A.ts');
+  assert.equal(parseFindingFromModelClaim('src/a.ts.backup:2 fails', ['src/a.ts']).path, 'unspecified');
 });
 
 test('findingVerifier: rejects hallucinated files or out-of-bounds lines statically and validates real locations', () => {
@@ -156,6 +192,8 @@ test('findingVerifier: corroborateFindings upgrades findings identified by multi
     path: 'src/auth.ts',
     line: 10,
     claim: 'Missing token verification in auth header',
+    defectClass: 'missing_signature_verification',
+    symbol: 'authenticate', behavior: 'missing signature verification',
   });
   f1.verification_status = 'LOCATION_VALID';
 
@@ -168,6 +206,8 @@ test('findingVerifier: corroborateFindings upgrades findings identified by multi
     path: 'src/auth.ts',
     line: 10,
     claim: 'Authentication header lacks signature verification',
+    defectClass: 'missing_signature_verification',
+    symbol: 'authenticate', behavior: 'missing signature verification',
   });
   f2.verification_status = 'LOCATION_VALID';
 
@@ -191,4 +231,19 @@ test('findingVerifier: verifyFindingAgainstSnapshot fails closed with LOCATION_I
   const verified = verifyFindingAgainstSnapshot(f, '/nonexistent/root');
   assert.equal(verified.verification_status, 'LOCATION_INVALID');
   assert.match(verified.evidence_refs?.[0] ?? '', /path_not_in_candidate_scope/);
+});
+
+test('location verification preserves real source directories and rejects malformed ranges', t => {
+  const root = join(tmpdir(), `babel-source-location-${Date.now()}`);
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  mkdirSync(join(root, 'source', 'source'), { recursive: true });
+  writeFileSync(join(root, 'source', 'source', 'a.ts'), 'export const value = 1;\n');
+  const input = { candidateDigest: 'a'.repeat(64), executionId: 'test', reviewerId: 'reviewer',
+    category: 'correctness' as const, severity: 'P1' as const, path: 'source/a.ts', claim: 'source/a.ts has a defect' };
+  const verify = (line: number, end_line?: number) => verifyFindingAgainstSnapshot(
+    createStructuredFinding({ ...input, line, ...(end_line !== undefined ? { end_line } : {}) }), root, ['source/a.ts']);
+  assert.equal(verify(1).verification_status, 'LOCATION_VALID');
+  assert.equal(verify(0).verification_status, 'LOCATION_INVALID');
+  assert.equal(verify(1, 999).verification_status, 'LOCATION_INVALID');
+  assert.equal(verify(2, 1).verification_status, 'LOCATION_INVALID');
 });

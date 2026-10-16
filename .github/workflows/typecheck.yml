@@ -97,9 +97,30 @@ jobs:
       - name: Non-PR metadata applicability
         if: github.event_name != 'pull_request'
         run: echo 'PR metadata fixtures not applicable to this non-PR event'
+  dependency-preflight:
+    name: dependency-preflight
+    needs:
+      - detect-scope
+    if: needs.detect-scope.outputs.full == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: '22.19.0'
+      - name: Verify dependency preflight toolchain
+        shell: bash
+        run: |
+          test "$(node --version)" = 'v22.19.0'
+          test "$(npm --version)" = '10.9.3'
+      - name: Clean install with canonical npm 10
+        run: npm ci --ignore-scripts
+        working-directory: babel-cli
   native-rg:
     needs:
       - detect-scope
+      - dependency-preflight
     if: needs.detect-scope.outputs.full == 'true'
     name: native-rg (${{ matrix.os }})
     strategy:
@@ -133,6 +154,7 @@ jobs:
   desktop-tests:
     needs:
       - detect-scope
+      - dependency-preflight
     if: needs.detect-scope.outputs.full == 'true'
     name: desktop-tests (${{ matrix.os }})
     strategy:
@@ -159,6 +181,7 @@ jobs:
   architecture-regressions:
     needs:
       - detect-scope
+      - dependency-preflight
     if: needs.detect-scope.outputs.full == 'true'
     name: architecture-regressions (${{ matrix.os }})
     strategy:
@@ -224,6 +247,7 @@ jobs:
   package-components:
     needs:
       - detect-scope
+      - dependency-preflight
     if: needs.detect-scope.outputs.full == 'true'
     name: package-components (${{ matrix.os }})
     strategy:
@@ -357,6 +381,7 @@ jobs:
     runs-on: ubuntu-latest
     needs:
       - detect-scope
+      - dependency-preflight
       - fast-validation
       - security
       - public-content-policy
@@ -400,6 +425,7 @@ jobs:
   installer-lifecycle:
     needs:
       - detect-scope
+      - dependency-preflight
     if: github.event_name == 'push' || needs.detect-scope.outputs.installer == 'true'
     name: installer-lifecycle
     runs-on: windows-latest
@@ -488,6 +514,7 @@ jobs:
     runs-on: windows-latest
     needs:
       - detect-scope
+      - dependency-preflight
       - fast-validation
       - security
       - public-content-policy
@@ -532,6 +559,7 @@ jobs:
   platform-core:
     needs:
       - detect-scope
+      - dependency-preflight
     if: needs.detect-scope.outputs.full == 'true'
     name: platform-core (${{ matrix.os }})
     strategy:
@@ -643,6 +671,7 @@ jobs:
   harness-runtime:
     needs:
       - detect-scope
+      - dependency-preflight
     if: needs.detect-scope.outputs.full == 'true'
     name: harness-runtime (${{ matrix.os }})
     strategy:
@@ -748,6 +777,7 @@ jobs:
   chat-truth:
     needs:
       - detect-scope
+      - dependency-preflight
     if: needs.detect-scope.outputs.full == 'true'
     name: chat-truth (${{ matrix.os }})
     strategy:
@@ -852,6 +882,7 @@ jobs:
   remote-ui-browser:
     needs:
       - detect-scope
+      - dependency-preflight
     if: needs.detect-scope.outputs.full == 'true'
     name: remote-ui-browser
     runs-on: ubuntu-latest
@@ -913,6 +944,7 @@ jobs:
   windows-policy:
     needs:
       - detect-scope
+      - dependency-preflight
     if: needs.detect-scope.outputs.full == 'true'
     name: windows-policy
     runs-on: windows-latest
@@ -968,6 +1000,7 @@ jobs:
   docker-smoke:
     needs:
       - detect-scope
+      - dependency-preflight
     if: needs.detect-scope.outputs.full == 'true'
     name: docker-smoke
     runs-on: ubuntu-latest
@@ -1056,6 +1089,7 @@ jobs:
   unit-shards:
     needs:
       - detect-scope
+      - dependency-preflight
     if: needs.detect-scope.outputs.full == 'true'
     name: unit-shards (${{ matrix.os }}, ${{ matrix.shard }})
     strategy:
@@ -1139,6 +1173,7 @@ jobs:
   consumer-candidate:
     needs:
       - detect-scope
+      - dependency-preflight
     if: needs.detect-scope.outputs.full == 'true'
     name: Build immutable npm candidate
     runs-on: ubuntu-latest
@@ -1173,6 +1208,7 @@ jobs:
   consumer-build-toolchains:
     needs:
       - detect-scope
+      - dependency-preflight
     if: needs.detect-scope.outputs.full == 'true'
     name: Retained consumer build toolchain (${{ matrix.os }}, Node ${{ matrix.node }})
     strategy:

@@ -43,6 +43,11 @@ throw 'Candidate-controlled launcher must never execute.'
 $ghScript = @'
 param([Parameter(ValueFromRemainingArguments = $true)][string[]]$GhArguments)
 Add-Content -LiteralPath $env:BABEL_MERGE_TEST_GH_LOG -Value ($GhArguments -join ' ')
+if ($GhArguments[0] -eq 'api' -and $env:BABEL_MERGE_TEST_NONSTRICT -eq '1') {
+  if ($GhArguments[1] -like '*rulesets?*') { Write-Output '[{"id":1,"name":"protect-main","enforcement":"active"}]' }
+  else { Write-Output '{"rules":[{"type":"required_status_checks","parameters":{"strict_required_status_checks_policy":false}}]}' }
+  exit 0
+}
 if ($GhArguments.Count -lt 3 -or $GhArguments -notcontains '--repo' -or $GhArguments -notcontains 'gthgomez/Babel') { exit 9 }
 if ($GhArguments[0] -eq 'pr' -and $GhArguments[1] -eq 'view') {
   if ($GhArguments -contains 'baseRefOid' -and $GhArguments -notcontains 'state,headRefOid,baseRefOid,isDraft,mergeable,mergeStateStatus') {
@@ -186,6 +191,12 @@ try {
   $stale.baseRefOid = $otherHead
   $changedBase = Invoke-MergeFixture -GateJson $ready -ViewJson ($stale | ConvertTo-Json -Compress)
   Assert-MergeTest ($changedBase.exitCode -ne 0 -and @($changedBase.json.blockers) -contains 'pr_base_mismatch') 'moved PR base must block'
+  try {
+    $env:BABEL_MERGE_TEST_NONSTRICT = '1'
+    $changedNonstrictBase = Invoke-MergeFixture -GateJson $ready -ViewJson ($stale | ConvertTo-Json -Compress)
+    Assert-MergeTest ($changedNonstrictBase.exitCode -ne 0 -and @($changedNonstrictBase.json.blockers) -contains 'pr_base_mismatch') 'base movement after nonstrict qualification must require requalification'
+    Assert-MergeTest (-not $changedNonstrictBase.gh.Contains('pr merge')) 'stale nonstrict qualification must never reach merge'
+  } finally { Remove-Item Env:BABEL_MERGE_TEST_NONSTRICT -ErrorAction SilentlyContinue }
 
   foreach ($scenario in @(
       @{ Name = 'closed'; Change = @{ state = 'CLOSED' }; Blocker = 'pr_not_open' },
