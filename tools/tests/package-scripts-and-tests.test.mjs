@@ -11,6 +11,14 @@ const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'));
 const workflowPath = join(repoRoot, '.github/workflows/typecheck.yml');
 const workflowYaml = readFileSync(workflowPath, 'utf8');
 
+test('production install excludes the deprecated DOMException shim and protobuf postinstall dependency', () => {
+  const lock = JSON.parse(readFileSync(join(babelCliDir, 'package-lock.json'), 'utf8'));
+  const unwanted = Object.entries(lock.packages).filter(([path, entry]) =>
+    entry.dev !== true && /(?:^|\/)node_modules\/(?:node-domexception|protobufjs)$/.test(path))
+    .map(([path]) => path);
+  assert.deepEqual(unwanted, [], 'Production consumers must not need the obsolete shim or protobuf install-script approval');
+});
+
 /**
  * Shell-style tokenizer supporting single/double quotes and whitespace splitting.
  */
