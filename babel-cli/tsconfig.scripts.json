@@ -9,6 +9,7 @@
     "scripts/build_historical_calibration.ts",
     "scripts/run_chat_calibration.ts",
     "../tools/babel-pr-review.mts",
+    "../tools/babel-pr-repair.mts",
     "../tools/babel-chat-review-worker.mts"
   ]
 }

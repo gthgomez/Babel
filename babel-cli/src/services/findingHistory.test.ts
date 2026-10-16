@@ -1,7 +1,11 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { execFileSync } from 'node:child_process'
+import { mkdtempSync, writeFileSync, renameSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { createStructuredFinding } from './structuredFinding.js'
-import { reconcileFindingHistory } from './findingHistory.js'
+import { reconcileFindingHistory, readFindingDependencyChanges } from './findingHistory.js'
 import { parseBabelReviewAdjudication } from './babelReviewAdjudication.js'
 
 const first = createStructuredFinding({ candidateDigest: 'a'.repeat(64), executionId: 'first', reviewerId: 'reviewer',
@@ -20,6 +24,25 @@ test('revision history retains immutable observations and never infers fixed fro
   assert.equal(next.defects[0]!.observations.length, 2)
   assert.equal(original.defects[0]!.observations.length, 1)
   assert.equal(reconcileFindingHistory({ ...candidate, findings: [], previous: next }).defects[0]!.state, 'not_observed')
+})
+
+test('actual Git rename includes the removed dependency path for invalidation', t => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-finding-rename-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const git = (args: string[]) => execFileSync('git', ['-C', root, '-c', 'user.name=Babel test',
+    '-c', 'user.email=babel-test@example.invalid', '-c', `core.hooksPath=${join(root, 'no-hooks')}`, ...args],
+  { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, GIT_NO_REPLACE_OBJECTS: '1' } })
+  git(['init', '--quiet'])
+  writeFileSync(join(root, 'old.ts'), 'export const value = 1;\n')
+  git(['add', 'old.ts'])
+  git(['commit', '--quiet', '-m', 'initial fixture'])
+  const before = git(['rev-parse', 'HEAD']).trim()
+  renameSync(join(root, 'old.ts'), join(root, 'new.ts'))
+  git(['add', '--all'])
+  git(['commit', '--quiet', '-m', 'rename dependency'])
+  const head = git(['rev-parse', 'HEAD']).trim()
+  assert.match(git(['diff', '--name-status', before, head]), /^R100/)
+  assert.deepEqual(readFindingDependencyChanges(git, before, head).sort(), ['new.ts', 'old.ts'])
 })
 
 test('operator dismissals keep reasons/evidence and reopen when dependencies change', () => {

@@ -15,9 +15,9 @@ import { acquireBabelReviewLease, atomicReviewJson, babelReviewVersion, findPubl
 import { evaluateReviewCoverage } from '../babel-cli/src/services/reviewCoverage.js'
 import { computeIndependenceClass } from '../babel-cli/src/services/reviewIndependence.js'
 import { buildVerifiedReviewFindings, projectFindingReview } from '../babel-cli/src/services/findingVerifier.js'
-import { applyFindingAssessments, validateFindingValidationArtifact } from '../babel-cli/src/services/babelFindingValidation.js'
+import { applyFindingAssessments, validateFindingValidationArtifact, restoreCanonicalFindingReview } from '../babel-cli/src/services/babelFindingValidation.js'
 import { StructuredFindingSchema } from '../babel-cli/src/services/structuredFinding.js'
-import { FindingHistorySchema, reconcileFindingHistory } from '../babel-cli/src/services/findingHistory.js'
+import { FindingHistorySchema, reconcileFindingHistory, readFindingDependencyChanges } from '../babel-cli/src/services/findingHistory.js'
 import { readBabelReviewAdjudications } from '../babel-cli/src/services/babelReviewAdjudication.js'
 
 import { collectCandidateEnvelope } from '../babel-cli/src/services/candidateCollector.js'
@@ -162,17 +162,11 @@ for (const number of prs) {
           if (!/^[a-f0-9-]{36}$/.test(executionId)) throw new Error('CACHED_EXECUTION_ID_INVALID')
           if (authorityRuntime && executionId !== authorityRuntime.executionId) throw new Error('CACHED_EXECUTION_AUTHORITY_MISMATCH')
           const artifact = validateBabelReviewArtifact(JSON.parse(readFileSync(join(jobDir!, `${model}-${executionId}.json`), 'utf8')), { executionId, model, scope })
-          let findings = buildVerifiedReviewFindings({ candidateDigest: key,
-            executionId, reviewerId: `babel-chat-${model}-${executionId}`, scope: candidate.scope,
-            snapshotRoot: join(state, 'snapshots', executionId), verdict: artifact.verdict })
-          if (findings.length) {
-            const validation = JSON.parse(readFileSync(join(jobDir!, `${model}-${executionId}-validation.json`), 'utf8'))
-            const validationId = validation.execution_id
-            if (typeof validationId !== 'string' || !/^[a-f0-9-]{36}$/.test(validationId) || validationId === executionId) throw new Error('CACHED_VALIDATION_EXECUTION_INVALID')
-            findings = applyFindingAssessments(findings, validateFindingValidationArtifact(validation, { executionId: validationId, model, findings }),
-              join(state, 'snapshots', validationId), validationId)
-          }
-          const canonical = projectFindingReview(artifact.verdict, findings)
+          const validationPath = join(jobDir!, `${model}-${executionId}-validation.json`)
+          const canonical = restoreCanonicalFindingReview({ candidateDigest: key, executionId, model, scope: candidate.scope,
+            verdict: artifact.verdict, snapshotRootForExecution: id => join(state, 'snapshots', id),
+            ...(existsSync(validationPath) ? { validationArtifact: JSON.parse(readFileSync(validationPath, 'utf8')) } : {}),
+          }).review
           if (canonical.verdict !== cached.reviews[0].verdict || JSON.stringify(canonical.findings) !== JSON.stringify(cached.reviews[0].findings) || JSON.stringify(canonical.blocking_findings) !== JSON.stringify(cached.reviews[0].blocking_findings)) throw new Error('CACHED_ARTIFACT_MISMATCH')
           return cached
         } catch {
@@ -282,7 +276,7 @@ for (const number of prs) {
     let changedPaths: string[] = []
     let comparisonAvailable = true
     if (previousHistory && previousHistory.head_sha !== pr.headRefOid) {
-      try { changedPaths = git(['diff', '--no-ext-diff', '--no-textconv', '--name-only', previousHistory.head_sha, pr.headRefOid]).trim().split(/\r?\n/).filter(Boolean) }
+      try { changedPaths = readFindingDependencyChanges(git, previousHistory.head_sha, pr.headRefOid) }
       catch {
         comparisonAvailable = false
         // Unknown dependency movement cannot preserve a dismissal as current.

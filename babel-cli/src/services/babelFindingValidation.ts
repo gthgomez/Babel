@@ -5,6 +5,7 @@ import { parseBabelReviewJson } from './babelChatReview.js'
 import { validateBabelReviewCalls } from './babelReviewObserver.js'
 import { safeReviewPath } from './babelReviewSnapshot.js'
 import type { StructuredFinding } from './structuredFinding.js'
+import { buildVerifiedReviewFindings, projectFindingReview } from './findingVerifier.js'
 
 const assessmentSchema = z.object({
   finding_instance_id: z.string().regex(/^[a-f0-9]{64}$/),
@@ -15,6 +16,26 @@ const assessmentSchema = z.object({
 }).strict()
 const validationSchema = z.object({ assessments: z.array(assessmentSchema).max(200) }).strict()
 export type FindingAssessment = z.infer<typeof assessmentSchema>
+
+/** One restoration path for review caches and repair consumers. Neither may
+ * compare decorated canonical findings against the unvalidated model strings. */
+export function restoreCanonicalFindingReview(input: {
+  candidateDigest: string; executionId: string; model: string; scope: string[];
+  verdict: { verdict: 'APPROVE' | 'BLOCK'; uncertain: boolean; findings: string[]; blocking_findings: string[] };
+  snapshotRootForExecution: (executionId: string) => string; validationArtifact?: unknown;
+}): { findings: StructuredFinding[]; review: ReturnType<typeof projectFindingReview> } {
+  let findings = buildVerifiedReviewFindings({ candidateDigest: input.candidateDigest, executionId: input.executionId,
+    reviewerId: `babel-chat-${input.model}-${input.executionId}`, scope: input.scope,
+    snapshotRoot: input.snapshotRootForExecution(input.executionId), verdict: input.verdict })
+  if (findings.length) {
+    const validationId = z.object({ execution_id: z.string().regex(/^[a-f0-9-]{36}$/) }).passthrough().parse(input.validationArtifact).execution_id
+    if (validationId === input.executionId) throw new Error('VALIDATION_EXECUTION_NOT_INDEPENDENT')
+    const assessments = validateFindingValidationArtifact(input.validationArtifact,
+      { executionId: validationId, model: input.model, findings })
+    findings = applyFindingAssessments(findings, assessments, input.snapshotRootForExecution(validationId), validationId)
+  }
+  return { findings, review: projectFindingReview(input.verdict, findings) }
+}
 
 /** Fresh read-only validation can support a claim, never claim test execution. */
 export function findingValidationPrompt(): string {

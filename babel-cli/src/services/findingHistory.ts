@@ -15,6 +15,12 @@ export const FindingHistorySchema = z.object({
 }).strict()
 export type FindingHistory = z.infer<typeof FindingHistorySchema>
 
+/** Include deleted and added paths for renames; NUL preserves literal names. */
+export function readFindingDependencyChanges(git: (args: string[]) => string, previousHead: string, head: string): string[] {
+  if (![previousHead, head].every(value => /^[a-f0-9]{40}$/.test(value))) throw new Error('FINDING_HISTORY_HEAD_INVALID')
+  return git(['diff', '--no-ext-diff', '--no-textconv', '--no-renames', '--name-only', '-z', previousHead, head]).split('\0').filter(Boolean)
+}
+
 /** Advisory revision history, never merge authority. Missing observations are
  * not proof of a repair; operator dispositions retain their limited authority. */
 export function reconcileFindingHistory(input: {
