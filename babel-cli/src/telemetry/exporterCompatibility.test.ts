@@ -1,11 +1,19 @@
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import test from 'node:test'
-import { SimpleSpanProcessor } from '@opentelemetry/sdk-trace-base'
-import { NodeTracerProvider } from '@opentelemetry/sdk-trace-node'
-import { createLangfuseExporter } from '../services/langfuseExporter.js'
+import { prepareSyntheticProviderFixture, removeSyntheticProviderFixture } from '../testinfra/synthetic-provider-fixture.mjs'
 
 test('OTLP and Langfuse adapter export a real span as JSON to an isolated loopback collector', { timeout: 10_000 }, async t => {
+  const fixture = prepareSyntheticProviderFixture()
+  const previousEnv = process.env
+  process.env = fixture.env
+  t.after(() => {
+    process.env = previousEnv
+    removeSyntheticProviderFixture(fixture.root)
+  })
+  const { SimpleSpanProcessor } = await import('@opentelemetry/sdk-trace-base')
+  const { NodeTracerProvider } = await import('@opentelemetry/sdk-trace-node')
+  const { createLangfuseExporter } = await import('../services/langfuseExporter.js')
   let received: { path: string | undefined; authorized: boolean; contentType: string | undefined; body: string } | undefined
   const server = createServer((request, response) => {
     let body = ''

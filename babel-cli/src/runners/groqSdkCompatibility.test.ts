@@ -1,7 +1,16 @@
 import assert from 'node:assert/strict'
-import test from 'node:test'
+import test, { after, before } from 'node:test'
 import { z } from 'zod'
-import { GroqApiRunner } from './groqApi.js'
+import { prepareSyntheticProviderFixture, removeSyntheticProviderFixture } from '../testinfra/synthetic-provider-fixture.mjs'
+import type { GroqApiRunner } from './groqApi.js'
+
+const fixture = prepareSyntheticProviderFixture()
+const previousEnv = process.env
+before(() => { process.env = fixture.env })
+after(() => {
+  process.env = previousEnv
+  removeSyntheticProviderFixture(fixture.root)
+})
 
 /** Exercise the real SDK through native fetch, without allowing a network request. */
 async function withResponse<T>(content: unknown, status: number, run: (runner: GroqApiRunner) => Promise<T>): Promise<T> {
@@ -20,6 +29,7 @@ async function withResponse<T>(content: unknown, status: number, run: (runner: G
     return new Response(JSON.stringify(content), { status, headers: { 'content-type': 'application/json' } })
   }
   try {
+    const { GroqApiRunner } = await import('./groqApi.js')
     const runner = new GroqApiRunner({ explicitCredential: 'synthetic-offline-credential', modelId: 'synthetic-model', maxTokens: 64 })
     const result = await run(runner)
     assert.equal(requests, 1)
