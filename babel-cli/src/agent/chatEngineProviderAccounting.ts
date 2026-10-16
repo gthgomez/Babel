@@ -45,7 +45,7 @@ export type ChatUsageScope = {
 export interface ChatProviderRetryHost {
   readonly conversation: unknown[];
   readonly engineRunDir: string;
-  readonly options: { projectRoot: string; task: string };
+  readonly options: { projectRoot: string | null; task: string };
   readonly parity: ParityRuntime;
   readonly taskAllowance: { taskOwnerId: string } | null;
   readonly _turnIndex: number;
@@ -214,7 +214,7 @@ export function buildProviderRetryCallbacks(host: ChatProviderRetryHost, context
           contextTruncated: context.contextTruncated ?? null,
         });
         const routeReceipt = buildModelRouteReceipt({
-          projectRef: hashRouteReference(host.options.projectRoot),
+          projectRef: hashRouteReference(host.options.projectRoot??'scope:conversation'),
           taskRef: hashRouteReference(host.options.task),
           runRef: hashRouteReference(host.engineRunDir),
           contractRef: context.contractRef ?? 'chat',
@@ -392,7 +392,7 @@ export function buildProviderRetryCallbacks(host: ChatProviderRetryHost, context
         if (!host.parity.turnId) return;
         const observedRouteReceipt = startedInvocation
           ? buildModelRouteReceipt({
-              projectRef: hashRouteReference(host.options.projectRoot),
+              projectRef: hashRouteReference(host.options.projectRoot??'scope:conversation'),
               taskRef: hashRouteReference(host.options.task),
               runRef: hashRouteReference(host.engineRunDir),
               contractRef: context.contractRef ?? 'chat',
@@ -659,8 +659,7 @@ export function trackRunnerUsage(
           : host.taskAllowance
           ? {
               taskOwnerId: host.taskAllowance.taskOwnerId,
-              projectRoot: realpathSync(host.options.projectRoot),
-              projectRootVersion: 1,
+              ...(host.options.projectRoot?{projectRoot:realpathSync(host.options.projectRoot),projectRootVersion:1 as const}:{}),
               chargeId: host.pendingUsageChargeId ?? randomUUID(),
             }
           : undefined,

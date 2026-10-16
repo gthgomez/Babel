@@ -62,6 +62,8 @@ export interface TurnRuntimeSnapshot extends TurnRuntimeCounters {
   stickyIntent: TurnTaskIntent | null;
   /** Whether this submission continued prior task counter state. */
   continuedTask: boolean;
+  /** Objective linkage is independent from per-attempt counter isolation. */
+  objectiveContinuation?: boolean;
   /**
    * True for a read-only status presentation of a live task. The submission is
    * read-only, but an explicit or gesture continuation after it resumes the
@@ -69,7 +71,8 @@ export interface TurnRuntimeSnapshot extends TurnRuntimeCounters {
    */
   presentationOnly?: boolean;
   model?: string;
-  projectRoot: string;
+  projectRoot: string | null;
+  executionScope?: import('./chatExecutionScope.js').ChatExecutionScope;
   /** Accepted objective. Continuation and status questions do not replace it. */
   durableObjective?: string;
   /** Ordered amendments applied after the objective. */
@@ -78,7 +81,8 @@ export interface TurnRuntimeSnapshot extends TurnRuntimeCounters {
 
 export interface BeginUserSubmissionInput {
   userInput: string;
-  projectRoot: string;
+  projectRoot: string | null;
+  executionScope?: import('./chatExecutionScope.js').ChatExecutionScope;
   model?: string;
   /** Explicit intent override from the caller. */
   taskIntent?: TurnTaskIntent;
@@ -91,6 +95,13 @@ export interface BeginUserSubmissionInput {
   /** Classifier when taskIntent is omitted. */
   classifyIntent: (text: string) => TurnTaskIntent;
   previous?: TurnRuntimeSnapshot | null;
+}
+
+export type UserSubmissionInput = Pick<BeginUserSubmissionInput,'userInput'|'taskIntent'|'continueTask'|'operation'>;
+export interface PreparedUserSubmission {
+  input: UserSubmissionInput;
+  runtime: TurnRuntimeSnapshot;
+  objectiveDisposition: 'initial'|'preserve'|'replace';
 }
 
 export function emptyTurnCounters(): TurnRuntimeCounters {
@@ -168,7 +179,9 @@ export function beginUserSubmission(input: BeginUserSubmissionInput): TurnRuntim
   // explicit `continue` can still resume the task. An explicit CHANGE wins.
   const statusPresentation = statusQuestion && input.operation !== 'CHANGE';
 
-  const taskShape = resolveTaskShape(taskText, input.operation);
+  const taskShape = carryOperation && prev?.taskShape
+    ? prev.taskShape
+    : resolveTaskShape(taskText, input.operation);
   const effectiveOperation: TaskOperation =
     statusPresentation
       ? 'READ_ONLY'
@@ -228,8 +241,10 @@ export function beginUserSubmission(input: BeginUserSubmissionInput): TurnRuntim
     // `continue` resumes the real task rather than the read-only presentation.
     stickyIntent: statusPresentation && prev ? prev.stickyIntent ?? prev.taskIntent : taskIntent,
     continuedTask: continueTask || statusPresentation,
+    objectiveContinuation: continueTask || continuationGesture || statusQuestion || amendment,
     ...(statusPresentation ? { presentationOnly: true } : {}),
     projectRoot: input.projectRoot,
+    ...(input.executionScope?{executionScope:input.executionScope}:{}),
     ...(input.model !== undefined ? { model: input.model } : {}),
     ...counters,
   };

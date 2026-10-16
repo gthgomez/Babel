@@ -1,0 +1,108 @@
+import { realpathSync, statSync } from 'node:fs'
+import { isAbsolute } from 'node:path'
+import { sha256Canonical } from '../acceptance/canonical.js'
+import { validateTaskContractV1ForCompletion, type TaskContractV1 } from '../agent/taskContract.js'
+import { EvidenceGraph, evaluateCompletionGateV1, type CompletionEvaluationV1 } from '../evidence/evidenceGraph.js'
+import { createTrustedExecutionSupervisorV1, type TrustedExecutionAuthorityV1 } from './trustedExecutionSupervisor.js'
+
+/** An opaque read capability; a serialized or caller-made copy has no authority. */
+export interface CriterionCompletionContextV1 {
+  readonly schema_version: 1
+  readonly kind: 'criterion-completion:v1'
+}
+export interface CriterionCompletionOwnerV1 {
+  contract: TaskContractV1 | undefined
+  runId: string
+  projectRoot: string | null
+}
+export interface CriterionCompletionRequestV1 {
+  context: CriterionCompletionContextV1
+  contract: TaskContractV1
+  run_id: string
+  project_root: string
+}
+export interface CriterionCompletionServiceV1 {
+  readonly context: CriterionCompletionContextV1
+  currentRequest(): CriterionCompletionRequestV1 | undefined
+}
+interface CompletionAuthority {
+  readOwner: () => CriterionCompletionOwnerV1
+  epoch?: string
+  graph: EvidenceGraph
+  supervisor: TrustedExecutionAuthorityV1
+}
+const contexts = new WeakMap<object, CompletionAuthority>()
+
+/** Compose per-engine authority without accepting a graph or producer assertions. */
+export function createCriterionCompletionServiceV1(
+  readOwner: () => CriterionCompletionOwnerV1,
+): CriterionCompletionServiceV1 {
+  const context: CriterionCompletionContextV1 = Object.freeze({ schema_version: 1, kind: 'criterion-completion:v1' })
+  contexts.set(context, { readOwner, graph: new EvidenceGraph(), supervisor: createTrustedExecutionSupervisorV1() })
+  return Object.freeze({
+    context,
+    currentRequest(): CriterionCompletionRequestV1 | undefined {
+      try {
+        const owner = readOwner()
+        return owner.contract && owner.projectRoot
+          ? Object.freeze({ context, contract: owner.contract, run_id: owner.runId, project_root: owner.projectRoot })
+          : undefined
+      } catch { return undefined }
+    },
+  })
+}
+
+function unknown(code: string, contract?: TaskContractV1): CompletionEvaluationV1 {
+  return {
+    status: 'UNKNOWN', verified: false, satisfied_requirements: [],
+    missing_requirements: Array.isArray(contract?.acceptance)
+      ? contract.acceptance.filter(item => item.required).map(item => item.id) : [],
+    errors: [code],
+  }
+}
+
+/** Resolve the owned context and delegate criterion truth to the existing V1 oracle. */
+export function evaluateCriterionCompletionV1(
+  request?: CriterionCompletionRequestV1,
+): CompletionEvaluationV1 {
+  try {
+    if (!request || typeof request.context !== 'object' || request.context === null)
+      return unknown('acceptance_context_missing')
+    const authority = contexts.get(request.context)
+    if (!authority) return unknown('acceptance_context_untrusted')
+    const owner = authority.readOwner()
+    if (!request.contract || validateTaskContractV1ForCompletion(request.contract).length ||
+      !request.contract.frozen || !owner.contract || !owner.contract.frozen ||
+      validateTaskContractV1ForCompletion(owner.contract).length)
+      return unknown('acceptance_contract_invalid')
+    if (sha256Canonical(owner.contract) !== sha256Canonical(request.contract))
+      return unknown('acceptance_head_mismatch', request.contract)
+    if (!request.run_id || owner.runId !== request.run_id)
+      return unknown('acceptance_run_mismatch', request.contract)
+    if (!owner.projectRoot || !isAbsolute(owner.projectRoot) ||
+      !request.project_root || !isAbsolute(request.project_root))
+      return unknown('acceptance_project_unavailable', request.contract)
+    const root = realpathSync.native(owner.projectRoot)
+    const requestedRoot = realpathSync.native(request.project_root)
+    const physicalRoot = statSync(root)
+    if ((process.platform === 'win32' ? root.toLowerCase() !== requestedRoot.toLowerCase() : root !== requestedRoot) ||
+      !physicalRoot.isDirectory())
+      return unknown('acceptance_project_mismatch', request.contract)
+    const epoch = sha256Canonical({ contract: request.contract.contract_hash, run: owner.runId,
+      root, device: physicalRoot.dev, inode: physicalRoot.ino })
+    if (authority.epoch !== epoch) {
+      authority.epoch = epoch
+      authority.graph = new EvidenceGraph()
+      authority.supervisor = createTrustedExecutionSupervisorV1()
+    }
+    // No old Chat receipt is promoted into this graph. Trusted dispatch and
+    // durable capture will populate it in the following execution unit.
+    return evaluateCompletionGateV1({
+      contract: owner.contract, graph: authority.graph, repository: root,
+      candidate_sha: 'unobserved', run_id: owner.runId,
+      trusted_execution: authority.supervisor.read, project_root: root,
+    })
+  } catch {
+    return unknown('acceptance_context_unavailable')
+  }
+}

@@ -1,4 +1,5 @@
 import type { FailureCapsuleV1 } from './taskContract.js'
+import type {ChatExecutionScope} from './chatExecutionScope.js'
 import type {
   RecoveryCandidateBinding,
   ReadInjectionCache,
@@ -88,6 +89,7 @@ export interface ChatAllowanceGrant {
 export interface ChatTaskAllowanceSnapshot {
   schemaVersion: 2
   taskOwnerId: string
+  acceptedTaskId?: string
   accountingEpoch: string
   grant: {
     grantId: string
@@ -154,11 +156,15 @@ export interface ChatEngineOptions {
   /** Immutable policy for a trusted embedded provider, never model-supplied. */
   providerPolicy?: ResolvedModelPolicy
   task: string
-  projectRoot: string
+  projectRoot: string | null
+  executionScope?: ChatExecutionScope
   runId?: string
   /** Existing P05 durable owner/fencing authority supplied by the host. */
   admissionStore?: AdmissionStore
   resumeExisting?: boolean
+  /** Retained sources exist even when a legacy session has no saved authority.
+   * Requires source reconciliation before a mode checkpoint; grants no effects. */
+  retainedHistory?: boolean
   systemContext?: string
   /** Appended system prompt fragments (plugins, skills, project memory).
    *  Injected after the base system prompt for layered context assembly. */
@@ -227,7 +233,8 @@ export interface ChatEngineTurnPreparation {
   task: string
   operation?: RequestedTaskOperation | undefined
   compiledChatStack?: ChatCompiledStack | undefined
-  projectRoot?: string | undefined
+  projectRoot?: string | null | undefined
+  executionScope?: ChatExecutionScope | undefined
   instructionRoot?: string | undefined
   systemContext?: string | undefined
   appendSystemPrompt?: string | undefined
@@ -553,6 +560,7 @@ export interface ChatEngineStreamingLoopHost {
     taskIntent?: TaskIntent
     continueTask?: boolean
   }) => TurnRuntimeSnapshot
+  readonly admitUserSubmission: (input:import('./turnRuntime.js').UserSubmissionInput,route:{model:string;provider:string},objective?:import('./chatEngineObjectiveAdmission.js').PreparedObjectiveSubmission)=>import('./chatEngineObjectiveAdmission.js').ObjectiveAdmissionResult
   readonly assertNativeRequestMatchesDurable: (
     outbound: readonly ProviderMessage[],
     systemPrompt: string,

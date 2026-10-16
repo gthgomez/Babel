@@ -1,7 +1,6 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { isAbsolute, resolve } from 'node:path';
 
-const LISTENING_RE = /Babel Remote listening on http:\/\/127\.0\.0\.1:(\d+)/;
 const DEFAULT_READY_TIMEOUT_MS = 30_000;
 const STOP_GRACE_MS = 2_000;
 
@@ -96,22 +95,19 @@ export class RemoteBridgeChild {
     });
     this.#child = child;
 
-    let listenPort = port;
-    const onStdout = chunk => {
-      const text = chunk.toString('utf8');
-      if (typeof onLine === 'function') onLine({stream: 'stdout', text});
-      const match = text.match(LISTENING_RE);
-      if (match?.[1]) listenPort = Number(match[1]);
-    };
-    const onStderr = chunk => {
-      if (typeof onLine === 'function') onLine({stream: 'stderr', text: chunk.toString('utf8')});
-    };
+    const listenPort = port;
+    let stdoutSeen=false,stderrSeen=false;
+    // A credential-bearing child may include secrets in either stream. Drain
+    // both without retaining or forwarding payloads; expose bounded facts only.
+    const diagnostic=code=>{if(typeof onLine==='function')onLine({stream:'status',phase:'remote_start',code,diagnosticAvailable:true,text:'Remote bridge startup output is withheld because it may contain sensitive diagnostics.'});};
+    const onStdout = () => {if(!stdoutSeen){stdoutSeen=true;diagnostic('REMOTE_STDOUT_AVAILABLE');}};
+    const onStderr = () => {if(!stderrSeen){stderrSeen=true;diagnostic('REMOTE_STDERR_AVAILABLE');}};
     child.stdout.on('data', onStdout);
     child.stderr.on('data', onStderr);
 
     const earlyExit = new Promise((_, reject) => {
-      child.once('error', error => {
-        reject(new Error(`Could not start remote bridge: ${error.message}`));
+      child.once('error', () => {
+        reject(new Error('Could not start the remote bridge. Check the selected CLI and local execution prerequisites.'));
       });
       child.once('close', (code, signal) => {
         reject(new Error(`Remote bridge exited before ready (code=${code ?? 'null'}, signal=${signal ?? 'null'})`));
@@ -138,6 +134,7 @@ export class RemoteBridgeChild {
       });
       this.#state = 'ready';
       this.#port = listenPort;
+      if(typeof onLine==='function')onLine({stream:'status',phase:'remote_start',code:'REMOTE_READY',diagnosticAvailable:stdoutSeen||stderrSeen,text:'Remote bridge is ready on the requested loopback port.'});
       return {port: listenPort, url: `http://127.0.0.1:${listenPort}`, uiPath: '/ui'};
     } catch (error) {
       if (generation === this.#generation) {
@@ -149,6 +146,7 @@ export class RemoteBridgeChild {
     } finally {
       child.stdout.off('data', onStdout);
       child.stderr.off('data', onStderr);
+      child.stdout.resume();child.stderr.resume();
     }
   }
 

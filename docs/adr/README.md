@@ -19,6 +19,7 @@ last_verified: 2026-07-21
 | [ADR-011](ADR-011-embedding-decision.md) | Local Vector Embeddings Decision | Accepted | 2026-07-05 |
 | [ADR-012](ADR-012-canonical-harness-architecture-v1.md) | Canonical Harness Architecture v1 | Accepted | 2026-08-03 |
 | [ADR-013](ADR-013-h7-model-path-experimental-deferral.md) | Defer H7 same-model LLM factorial experimental gates | Accepted | 2026-08-06 |
+| [ADR-016](ADR-016-desktop-session-lifecycle.md) | Desktop session lifecycle and transport migration | Accepted for incremental implementation | 2026-10-15 |
 
 ## Status Convention
 

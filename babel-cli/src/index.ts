@@ -1,9 +1,13 @@
 #!/usr/bin/env node
 
 import { loadBabelCliEnv } from './config/envBootstrap.js';
+import {conversationScopeRequested} from './config/conversationScope.js';
+import {desktopCapabilities,isDesktopCapabilityProbe} from './config/desktopCapabilities.js';
 
-loadBabelCliEnv();
-process.env['BABEL_ENV_LOADED'] = 'true';
+if(!isDesktopCapabilityProbe(process.argv)){
+  loadBabelCliEnv(process.env,undefined,{executionScope:conversationScopeRequested(process.argv)?'conversation':'project'});
+  process.env['BABEL_ENV_LOADED'] = 'true';
+}
 
 import { Command } from 'commander';
 
@@ -19,6 +23,10 @@ import { registerRemoteCommands } from './commands/remoteCommands.js';
 import { registerWorkflowCommands } from './commands/workflowCommands.js';
 
 export function runCli(argv: string[] = process.argv) {
+  if(isDesktopCapabilityProbe(argv)){
+    process.stdout.write(JSON.stringify(desktopCapabilities())+'\n');
+    return;
+  }
   if (argv[1]) {
     const filename = argv[1].split(/[\\/]/).pop()?.toLowerCase();
     if (filename === 'bl.js' || filename === 'bl') {

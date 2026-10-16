@@ -22,6 +22,8 @@ import { deepFreeze } from "../acceptance/freeze.js";
 import { redactSecrets } from "../utils/redaction.js";
 
 export const TASK_CONTRACT_VERSION = 1 as const;
+/** Hash-bound lifecycle marker shared by lineage validation and its owner. */
+export const OBJECTIVE_LIFECYCLE_REF = 'task-objective-lifecycle:v1';
 
 export type TaskClass =
   | "general_swe"

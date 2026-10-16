@@ -10,6 +10,16 @@ test('provider mode support is explicit and unsupported pipeline routes are bloc
     for(const mode of ['plan','deep']) assert.equal(Boolean(modeUnavailableReason(mode,provider)),provider !== 'openrouter');
   }
 });
+test('conversation mode admits Chat and explains project-only mode prerequisites',async()=>{
+ const {modeUnavailableReason}=await load();
+ assert.equal(modeUnavailableReason('chat','openrouter','conversation'),'');
+ for(const mode of ['plan','deep'])assert.match(modeUnavailableReason(mode,'openrouter','conversation'),/project/i);
+});
+test('only an explicit native conversation binding removes project prerequisites',async()=>{
+ const {isConversationOnlyConnection}=await load();
+ for(const info of [null,{}, {projectRoot:null},{projectName:'project'},{projectRoot:null,projectAuthority:{scope:'conversation'}},{projectRoot:'/project',projectAuthority:{scope:'conversation',trusted:false,identity:null}}])assert.equal(isConversationOnlyConnection(info),false);
+ assert.equal(isConversationOnlyConnection({projectRoot:null,projectAuthority:{scope:'conversation',trusted:false,identity:null}}),true);
+});
 
 test('HTML renderer escapes untrusted model content', async () => {
   const { escapeHtml } = await load();
@@ -63,7 +73,7 @@ test('assistant stream and error events are normalized without prose parsing', a
   const {absorbFileChange,reviewFromResult,liveModelFromResult,liveRequestTokens,toolsFromResult,verifiedStatus}=await load();
   const edit=absorbFileChange([{id:'t1',action:'edit',path:'src/app.ts',status:'running',meta:''}],{path:'src/app.ts',additions:4,deletions:1});
   assert.equal(edit.meta,'+4 -1');
-  assert.equal(edit.status,'complete');
+  assert.equal(edit.status,'running');
   assert.equal(absorbFileChange([],{path:'../secret',additions:1,deletions:0}),null);
   assert.equal(reviewFromResult({answer:{facts:['parsed prose']}}),null);
   assert.deepEqual(reviewFromResult({critic_receipt:{verdict:'reject',reasons:['wrong file']}}).reasons,['wrong file']);
@@ -79,6 +89,20 @@ test('assistant stream and error events are normalized without prose parsing', a
   assert.equal(verifiedStatus('no_change',true),'no_change');
   assert.equal(normalizeEvent({type:'tool.completed',item:{id:'t1',tool:'file_read',target:'README.md',exit_code:0}}).meta,'exit 0');
   assert.equal(normalizeEvent({type:'thought',line:'looking'}).kind,'thought');
+});
+
+test('terminal tool receipts preserve distinct call IDs and honor failure evidence',async()=>{
+  const {toolsFromResult}=await load();
+  const pending={id:'first',action:'run',path:'npm test',status:'unverified'};
+  const rows=toolsFromResult({toolCalls:[
+    {toolCallId:'first',tool:'shell',target:'npm test',exit_code:1},
+    {toolCallId:'second',tool:'shell',target:'npm test',exit_code:0},
+  ]},[pending]);
+  assert.equal(rows.length,2);
+  assert.equal(rows[0].id,'first');
+  assert.equal(rows[0].status,'failed');
+  assert.equal(rows[1].id,'second');
+  assert.equal(rows[1].status,'complete');
 });
 test('preview storage schema rejects malformed history', async () => {
   const { validPreview } = await load();

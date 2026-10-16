@@ -26,6 +26,7 @@ It **does** freeze expected semantics before all runtime wiring exists, and exer
 | Portion | Live runtime? | Notes |
 |---------|---------------|--------|
 | Mode policies, kernel completion decide, effect classification, structured verifier parse | **Live** (conformance tests import `babel-cli` modules) | No external model |
+| Positive verified execute completion | **Target** | The fixture below is simulated. Live kernel conformance rejects its coarse proof without owned current criterion evidence; trusted binding/execution/publication is incomplete. V1 evaluator positives use constructed evidence, not a live verifier spawn. |
 | Episode event sequence, task contract, patch/revision artifacts | **Simulated fixtures** | Represent target episode shape; not produced by a live controller run |
 | Stale-receipt honesty + Chat revision recheck | **Live** | Gate rejects `stale: true`; Chat binds `boundRevision` and rechecks hashes at finalize |
 | Narrow-vs-broad verifier coverage | **Live** | Structural identity + Chat honesty `verifier_scope`; full covers targeted, not reverse |

@@ -5,6 +5,10 @@
 
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { loadThreadEventLogFromDir } from './threadEventLog.js';
+import { projectChatArchive } from './chatArchiveProjection.js';
+import { retainedLegacyArchive } from './chatArchiveLegacy.js';
+import { writeCheckpointFileSync } from '../utils/atomicCheckpointFile.js';
 import type { ChatMessage } from './chatToolDefinitions.js';
 import { DeepInfraApiRunner } from '../runners/deepInfraApi.js';
 import { DeepSeekApiRunner } from '../runners/deepSeekApi.js';
@@ -1059,15 +1063,19 @@ export function makeChatRunner(
 
 // ─── Transcript persistence ──────────────────────────────────────────────
 
-/** Best-effort transcript persistence to disk.
+/** Atomically derive the archive from canonical history when available.
  *  Extracted from ChatEngine.persistTranscript to keep chatEngine.ts under size ratchet. */
 export async function persistTranscriptToDisk(
   runDir: string,
   conversation: ChatMessage[],
 ): Promise<void> {
-  const { writeFile, mkdir } = await import('node:fs/promises');
-  const { join } = await import('node:path');
-  await mkdir(runDir, { recursive: true });
-  const lines = conversation.map((m) => JSON.stringify(m)).join('\n') + '\n';
-  await writeFile(join(runDir, 'transcript.jsonl'), lines, 'utf-8');
+  // No await before replacement: fire-and-forget callers cannot leave an older
+  // asynchronous writer racing a later turn. Invalid canonical logs reject;
+  // only an absent log may use the legacy context fallback.
+  const log = loadThreadEventLogFromDir(runDir);
+  const archivePath = join(runDir, 'transcript.jsonl');
+  const legacy = retainedLegacyArchive(archivePath, log ? new Set(log.events.map(event => event.event_id)) : undefined);
+  const archive = log === null ? conversation : [...legacy, ...projectChatArchive(log)];
+  const lines = archive.map((m) => JSON.stringify(m)).join('\n') + '\n';
+  writeCheckpointFileSync(archivePath, lines);
 }

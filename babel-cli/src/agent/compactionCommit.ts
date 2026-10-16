@@ -551,12 +551,14 @@ function appendRetainedWorkingSet(
       eventIds.push(appendThreadEvent(threadLog, {
         kind: 'user_message',
         turn_id: turnId,
+        context_copy: true,
         content: item.content,
       }).event_id);
     } else if (item.kind === 'assistant_message') {
       eventIds.push(appendThreadEvent(threadLog, {
         kind: 'assistant_message',
         turn_id: turnId,
+        context_copy: true,
         content: item.content,
         ...(item.name !== undefined ? { name: item.name } : {}),
         ...(item.provenance !== undefined ? { provenance: item.provenance } : {}),
@@ -566,6 +568,7 @@ function appendRetainedWorkingSet(
       eventIds.push(appendThreadEvent(threadLog, {
         kind: 'assistant_tool_calls',
         turn_id: turnId,
+        context_copy: true,
         content: item.content,
         tool_calls: item.tool_calls,
       }).event_id);
@@ -573,6 +576,7 @@ function appendRetainedWorkingSet(
       eventIds.push(appendThreadEvent(threadLog, {
         kind: 'tool_result',
         turn_id: turnId,
+        context_copy: true,
         tool_call_id: item.tool_call_id,
         tool_name: item.tool_name,
         content: item.content,

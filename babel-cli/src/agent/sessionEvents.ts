@@ -18,6 +18,7 @@ import type { WorkingState } from './codingLoop/workingState.js';
 import { createBdnsObservationBus } from '../diagnostics/bdns/observationBus.js';
 import type { BdnsObservation } from '../diagnostics/bdns/types.js';
 import { type ProviderId } from '../runners/providerRegistry.js';
+import {assertTaskAttemptBinding} from './taskObjectiveLifecycle.js';
 import { type ContextManifestV1 } from './contextManifest.js';
 import { type ModelRouteReceiptV1 } from './modelRouteReceipt.js';
 import { type ProviderFailureReceiptV1 } from '../runners/providerFailureReceipt.js';
@@ -267,6 +268,11 @@ export function appendSessionEvent(
   const { kind: _k, turn_id: _t, ...rest } = event;
   const full = { ...rest, ...base } as SessionEvent;
   log.events.push(full);
+  if(!log.deferObservations)publishSessionObservation(log,full);
+  return full;
+}
+
+function publishSessionObservation(log:SessionEventLog,full:SessionEvent):void{
   const observation = {
     schemaVersion: 1 as const,
     source: 'canonical' as const,
@@ -281,28 +287,41 @@ export function appendSessionEvent(
   };
   log.observationBus?.publish(observation);
   sessionEventObservationBus.publish(observation);
-  return full;
+}
+
+/** Publish only the newly committed generation; discarded staging is silent. */
+export function publishDeferredSessionObservations(log:SessionEventLog,fromSeq:number):void{
+  delete log.deferObservations;
+  for(const event of log.events)if(event.seq>=fromSeq)publishSessionObservation(log,event);
 }
 
 export function recordUserSubmitted(
   log: SessionEventLog,
   input: {
     turn_id: string;
+    task_id?:string;
+    contract_id?:string;
+    contract_hash?:string;
+    attempt_id?:string;
     task: string;
     model?: string;
     provider?: string;
     projectRoot?: string;
+    executionScope?: import('./chatExecutionScope.js').ChatExecutionScope;
     taskClass?: string;
     continuedTask?: boolean;
   },
 ): SessionEvent {
+  assertTaskAttemptBinding(input);
   return appendSessionEvent(log, {
     kind: 'user_submitted',
+    ...(input.task_id!==undefined?{task_id:input.task_id,contract_id:input.contract_id!,contract_hash:input.contract_hash!,attempt_id:input.attempt_id!}:{}),
     turn_id: input.turn_id,
     task_preview: input.task.slice(0, 500),
     ...(input.model !== undefined ? { model: input.model } : {}),
     ...(input.provider !== undefined ? { provider: input.provider } : {}),
     ...(input.projectRoot !== undefined ? { project_root: input.projectRoot } : {}),
+    ...(input.executionScope?{execution_scope:input.executionScope}:{}),
     ...(input.taskClass !== undefined ? { task_class: input.taskClass } : {}),
     ...(input.continuedTask !== undefined ? { continued_task: input.continuedTask } : {}),
   });

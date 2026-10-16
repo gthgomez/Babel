@@ -47,7 +47,8 @@ import {
   prepareRendererTurn,
   type ProtocolTurnSession,
 } from './chatTransport.js'
-import type { BabelMode, SessionDescriptor } from '../../executor/contracts.js'
+import type { BabelMode, ExecutionSessionDescriptor } from '../../executor/contracts.js'
+import {normalizeChatExecutionScope,type ChatExecutionScope} from '../../agent/chatExecutionScope.js'
 import { buildPreparedTurn } from '../../executor/modeAdapters.js'
 import {
   createRuntimeCoordinator,
@@ -119,7 +120,8 @@ export function getLastChatCompiledStack(): ChatCompiledStack | null {
 
 /** Compile and attach the smallest chat instruction stack. */
 export function compileChatStackForRun(input: {
-  projectRoot: string;
+  projectRoot: string | null;
+  executionScope?: ChatExecutionScope;
   task: string;
   model?: string;
   babelRoot?: string;
@@ -132,6 +134,7 @@ export function compileChatStackForRun(input: {
   const budget = resolveStackBudgetForClass(taskClass);
   const stack = compileChatStack({
     projectRoot: input.projectRoot,
+    ...(input.executionScope ? {executionScope:input.executionScope} : {}),
     task: input.task,
     promptBudgetChars: budget,
     ...(input.model !== undefined ? { modelId: input.model } : {}),
@@ -663,7 +666,8 @@ export async function runChatEngineOnce(input: {
   operation?: RequestedTaskOperation;
   /** Trusted instructions may come from outside the reviewed source snapshot. */
   instructionRoot?: string;
-  target: AgentTargetContext;
+  target: AgentTargetContext | null;
+  executionScope?: ChatExecutionScope;
   systemContext?: string;
   model?: string;
   modelTier?: string;
@@ -685,9 +689,12 @@ export async function runChatEngineOnce(input: {
   /** P03: inject the shared runtime coordinator (surfaces / deterministic tests). */
   coordinator?: RuntimeCoordinator;
 }): Promise<ChatResult> {
+  const scope=normalizeChatExecutionScope({projectRoot:input.target?.targetRoot??null,executionScope:input.executionScope});
+  const projectRoot=scope.kind==='project'?scope.projectRoot:null;
+  if(scope.kind==='conversation'&&(input.instructionRoot||input.systemContext||input.preflightContext))throw new Error('Conflicting project context in conversation scope');
   const factory = input.engineFactory ?? defaultEngineFactory;
   const preflightContext =
-    input.preflightContext ?? (await gatherChatPreflightContext(input.target.targetRoot));
+    projectRoot ? input.preflightContext ?? (await gatherChatPreflightContext(projectRoot)) : undefined;
 
   // S01/#211: resolve the effective contract ONCE from the existing TaskShape
   // machinery. Preparation, prompt compilation and limits all consume this
@@ -703,7 +710,8 @@ export async function runChatEngineOnce(input: {
 
   // Smallest compiled chat stack (identity / project / safety / provider / verifier)
   const chatStack = compileChatStackForRun({
-    projectRoot: input.instructionRoot ?? input.target.targetRoot,
+    projectRoot: input.instructionRoot ?? projectRoot,
+    ...(scope.kind==='conversation'?{executionScope:scope}:{}),
     task: input.task,
     taskClass: resolvedTaskClass,
     ...(input.model !== undefined ? { model: input.model } : {}),
@@ -728,7 +736,8 @@ export async function runChatEngineOnce(input: {
       ...(input.operation ? { operation: input.operation } : {}),
       compiledChatStack: chatStack,
       ...(input.instructionRoot ? { instructionRoot: input.instructionRoot } : {}),
-      projectRoot: input.target.targetRoot,
+      projectRoot,
+      executionScope:scope,
       ...(input.systemContext ? { systemContext: input.systemContext } : {}),
       ...(input.appendSystemPrompt ? { appendSystemPrompt: input.appendSystemPrompt } : {}),
       ...(preflightContext ? { preflightContext } : {}),
@@ -738,7 +747,7 @@ export async function runChatEngineOnce(input: {
       maxTurns: limits.maxTurns,
       maxConversationMessages: limits.maxConversationMessages,
       maxEstimatedTokens: limits.maxEstimatedTokens,
-      workspaceRoot: input.target.workspaceRoot ?? null,
+      workspaceRoot: input.target?.workspaceRoot ?? null,
       ...(intentPlanUserMessage ? { intentPlanUserMessage } : {}),
       ...(input.executionProfile ? { executionProfile: input.executionProfile } : {}),
       ...(input.runtimeMode ? { runtimeMode: input.runtimeMode } : {}),
@@ -749,7 +758,8 @@ export async function runChatEngineOnce(input: {
       task: input.task,
       ...(input.operation ? { operation: input.operation } : {}),
       compiledChatStack: chatStack,
-      projectRoot: input.target.targetRoot,
+      projectRoot,
+      executionScope:scope,
       instructionRoot: input.instructionRoot,
       ...(input.systemContext ? { systemContext: input.systemContext } : {}),
       ...(input.appendSystemPrompt ? { appendSystemPrompt: input.appendSystemPrompt } : {}),
@@ -769,10 +779,10 @@ export async function runChatEngineOnce(input: {
     try {
       const taskContract = engine.getTaskContract();
       if (taskContract) {
-        const revision = await runGitCommandAsync(['rev-parse', 'HEAD'], input.target.targetRoot, { timeoutMs: 2_000 });
+        const revision = projectRoot ? await runGitCommandAsync(['rev-parse', 'HEAD'], projectRoot, { timeoutMs: 2_000 }) : null;
         acceptanceBundle = prepareAcceptanceRecording({
           taskContract,
-          ...(revision.status === 0 && revision.stdout.trim() ? { baselineGitHead: revision.stdout.trim() } : {}),
+          ...(revision?.status === 0 && revision.stdout.trim() ? { baselineGitHead: revision.stdout.trim() } : {}),
         });
       }
     } catch {
@@ -822,10 +832,10 @@ export async function runChatEngineOnce(input: {
   const coordinator = input.coordinator ?? createRuntimeCoordinator();
   let execution: RuntimeExecution | null = null;
   if (isRuntimeCoordinatorEnabled()) {
-    const descriptor: SessionDescriptor = {
+    const descriptor: ExecutionSessionDescriptor = {
       schemaVersion: 1,
       threadId: threadId ?? '',
-      projectRoot: input.target.targetRoot,
+      ...(scope.kind==='conversation'?{projectRoot:null,executionScope:scope}:{projectRoot:scope.projectRoot}),
       mode: input.mode ?? 'chat',
       provider: 'default',
       model: input.model ?? 'default',
@@ -1068,7 +1078,8 @@ export function buildChatRunPayload(
   context: {
     task: string;
     project?: string;
-    projectRoot: string;
+    projectRoot: string | null;
+    executionScope?: ChatExecutionScope;
     workspaceRoot?: string | null;
     model?: string;
     modelTier?: string;
@@ -1125,7 +1136,7 @@ export function buildChatRunPayload(
     },
     task: context.task,
     ...(context.project !== undefined ? { project: context.project } : {}),
-    projectRoot: context.projectRoot,
+    ...(context.projectRoot!==null?{projectRoot:context.projectRoot}:{}),
     usageSummary: result.usage,
     sessionLoopSteps: [],
     lite: true,
@@ -1136,6 +1147,8 @@ export function buildChatRunPayload(
   }) as unknown as Record<string, unknown>;
 
   payload['command'] = 'run';
+  payload['project_root'] = context.projectRoot;
+  payload['execution_scope'] = normalizeChatExecutionScope(context);
   payload['mode'] = 'chat';
   payload['checks'] = ['chat engine path'];
   // Ensure terminal_outcome is always visible on the run payload when known.
@@ -1589,7 +1602,8 @@ export async function runCliChatTask(input: {
   task: string;
   instructionRoot?: string;
   project?: string;
-  projectRoot: string;
+  projectRoot: string | null;
+  executionScope?: ChatExecutionScope;
   workspaceRoot?: string | null;
   model?: string;
   modelTier?: string;
@@ -1603,16 +1617,18 @@ export async function runCliChatTask(input: {
   sessionId?: string;
 }): Promise<{ payload: Record<string, unknown>; exitCode: number }> {
   const outputFormat = input.outputFormat ?? 'text';
-  const target = resolveAgentTarget({
+  const scope=normalizeChatExecutionScope(input);
+  if(scope.kind==='conversation'&&(input.project||input.workspaceRoot||input.instructionRoot))throw new Error('Conflicting project context in conversation scope');
+  const target = scope.kind==='project'?resolveAgentTarget({
     ...(input.project !== undefined ? { project: input.project } : {}),
-    projectRoot: input.projectRoot,
+    projectRoot: scope.projectRoot,
     ...(input.workspaceRoot ? { namedProjectRoot: input.workspaceRoot } : {}),
-  });
+  }):null;
 
-  const systemContext = await loadProjectSessionIdentity(
-    input.instructionRoot ?? input.projectRoot,
-    input.instructionRoot ?? input.workspaceRoot ?? target.workspaceRoot,
-  );
+  const systemContext = scope.kind==='project'?await loadProjectSessionIdentity(
+    input.instructionRoot ?? scope.projectRoot,
+    input.instructionRoot ?? input.workspaceRoot ?? target?.workspaceRoot,
+  ):undefined;
 
   const useConversational = shouldUseConversationalRenderer(outputFormat);
   const convRenderer = useConversational ? new ConversationalRenderer() : null;
@@ -1626,6 +1642,7 @@ export async function runCliChatTask(input: {
     ? await openResumedChatEngine(input.sessionId, {
         task: input.task,
         projectRoot: input.projectRoot,
+        executionScope:scope,
         ...(input.workspaceRoot ? { workspaceRoot: input.workspaceRoot } : {}),
         ...(input.model !== undefined ? { model: input.model } : {}),
         runtimeMode,
@@ -1636,7 +1653,8 @@ export async function runCliChatTask(input: {
     task: input.task,
     ...(input.instructionRoot ? { instructionRoot: input.instructionRoot } : {}),
     target,
-    systemContext,
+    executionScope:scope,
+    ...(systemContext?{systemContext}:{}),
     taskIntent: resolvedIntent,
     ...(input.model !== undefined ? { model: input.model } : {}),
     ...(input.modelTier !== undefined ? { modelTier: input.modelTier } : {}),
@@ -1647,7 +1665,7 @@ export async function runCliChatTask(input: {
     ...(input.engineFactory ? { engineFactory: input.engineFactory } : {}),
     ...(input.executionProfile ? { executionProfile: input.executionProfile } : {}),
     runtimeMode,
-  });
+  }).finally(()=>resumedEngine?.closeAdmissionStore());
 
   if (result.runDir !== undefined) {
     try {
@@ -1665,7 +1683,8 @@ export async function runCliChatTask(input: {
     task: input.task,
     ...(input.project !== undefined ? { project: input.project } : {}),
     projectRoot: input.projectRoot,
-    workspaceRoot: input.workspaceRoot ?? target.workspaceRoot,
+    executionScope:scope,
+    workspaceRoot: input.workspaceRoot ?? target?.workspaceRoot ?? null,
     ...(input.model !== undefined ? { model: input.model } : {}),
     ...(input.modelTier !== undefined ? { modelTier: input.modelTier } : {}),
   }, { taskIntent: resolvedIntent });

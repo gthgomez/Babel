@@ -6,11 +6,11 @@ import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 const load = (name) => import(`../native/${name}.mjs`).catch(() => ({}));
 
-test('closing the window quits even while a run is busy',async()=>{
+test('closing an idle window quits while a busy window requires a choice',async()=>{
  const {decideWindowClose,decideLastWindow,CLOSE_GRACE_MS}=await load('lifecycle');
  assert.equal(decideWindowClose({busy:false,closing:false}),'close');
- assert.equal(decideWindowClose({busy:true,closing:false}),'cancel-then-close');
- assert.equal(decideWindowClose({busy:true,closing:true}),'close');
+ assert.equal(decideWindowClose({busy:true,closing:false}),'ask');
+ assert.equal(decideWindowClose({busy:true,closing:true}),'wait');
  assert.equal(decideLastWindow(),'quit');
  assert.equal(CLOSE_GRACE_MS>1500,true);
 });
@@ -55,6 +55,24 @@ test('child arguments cannot turn task text into options or shell commands',asyn
  assert.throws(()=>buildRunArgs(entry,root,{task:'hello',mode:'chat',sessionId:'../chat'}));
  assert.throws(()=>buildRunArgs(entry,root,{task:'hello',mode:'invented'}));
  assert.throws(()=>buildRunArgs(entry,root,{task:'',mode:'chat'}));
+});
+
+test('conversation child requires an explicit empty project binding and administrative launch directory',async()=>{
+ const {buildRunArgs,BabelChild}=await load('child');
+ const entry=fileURLToPath(new URL('./fixture-cli.mjs',import.meta.url));
+ const request={runId:'conversation-fixture',task:'Hello',mode:'chat',executionScope:{kind:'conversation'}};
+ const args=buildRunArgs(entry,null,request);
+ assert.equal(args[args.indexOf('--execution-scope')+1],'conversation');
+ assert.equal(args.includes('--project-root'),false);
+ assert.throws(()=>buildRunArgs(entry,null,{...request,executionScope:undefined}));
+ assert.throws(()=>buildRunArgs(entry,tmpdir(),request));
+ assert.throws(()=>buildRunArgs(entry,null,{...request,mode:'deep'}));
+ assert.throws(()=>new BabelChild({executable:process.execPath,entry,projectRoot:null}));
+ const packets=[];
+ const child=new BabelChild({executable:process.execPath,entry,projectRoot:null,launchDirectory:tmpdir(),env:{BABEL_PROJECT_ROOT:'ambient',BABEL_ALLOWED_ROOTS:'ambient',BABEL_PROJECT_CREDENTIALS_DIR:'ambient',BABEL_LEGACY_CLI_ENV:'1'},inheritEnv:false});
+ await new Promise((resolve,reject)=>{child.start(request,packet=>{packets.push(packet);if(packet.kind==='exit')resolve();});setTimeout(()=>reject(new Error('fixture did not settle')),5000).unref();});
+ assert.ok(packets.some(packet=>packet.kind==='event'));
+ assert.equal(packets.find(packet=>packet.event?.type==='fixture_scope')?.event.projectAuthorityPresent,false);
 });
 test('workspace reader rejects traversal, secrets, binary files and symlink escape',async()=>{
  const {listDirectory,readProjectFile}=await load('workspace');assert.equal(typeof readProjectFile,'function');
@@ -109,7 +127,7 @@ test('saved chats are read from Babel session transcripts only',async()=>{
  assert.equal(opened.messages[1].status,'unverified');
  await writeFile(join(session,'session-events.jsonl'),`${JSON.stringify({kind:'turn_ended',turn_id:'1',outcome:'VERIFIED_COMPLETE',status:'ok'})}\n${JSON.stringify({kind:'turn_ended',turn_id:'2',outcome:'AGENT_FAILURE',status:'failed'})}\n`);
  const withOutcomes=await readSavedChat(desktop,'chat-abc123');
- assert.equal(withOutcomes.messages[1].status,'complete');
+ assert.equal(withOutcomes.messages[1].status,'unverified');
  assert.equal(withOutcomes.messages.length,3);
  await assert.rejects(()=>readSavedChat(desktop,'../chat-abc123'));
  await rm(root,{recursive:true,force:true});

@@ -80,6 +80,10 @@ export interface SessionEventBase {
 export type SessionEvent =
   | (SessionEventBase & {
       kind: 'user_submitted';
+      task_id?:string;
+      contract_id?:string;
+      contract_hash?:string;
+      attempt_id?:string;
       task_preview: string;
       model?: string;
       provider?: string;
@@ -438,6 +442,8 @@ export interface SessionEventLog {
   flushedThroughSeq: number;
   /** Runtime-only bounded observation bus; never serialized into the durable log. */
   observationBus?: BdnsObservationBus<SessionEvent>;
+  /** Prospective checkpoint events become observable only after commit. */
+  deferObservations?: boolean;
 }
 
 export type SessionEventLogLoadResult =

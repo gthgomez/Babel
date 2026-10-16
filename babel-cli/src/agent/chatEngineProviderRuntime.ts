@@ -460,6 +460,7 @@ export interface ChatDeliberationInput {
   tools: ChatEngineServices['tools']
   takeToolPolicy: () => NextTurnToolPolicy
   acceptedOperation?: TaskOperation | undefined
+  executionScope?: import('./chatExecutionScope.js').ChatExecutionScope | undefined
   hostFallbackAllowed?: boolean | undefined
   requiredVerifierCommands?: readonly string[]
   systemPrompt: (mode: 'native' | 'text') => string
@@ -494,14 +495,14 @@ export async function deliberateChatTurn(
     )
   if (useNativeTools && typeof runner.executeWithToolsStream === 'function') {
     const nextTools = input.takeToolPolicy()
-    const restrictTools = nextTools.restrict && !isReadOnlyChat() && input.acceptedOperation !== 'READ_ONLY'
+    const restrictTools = input.executionScope?.kind!=='conversation'&&nextTools.restrict && !isReadOnlyChat() && input.acceptedOperation !== 'READ_ONLY'
     const toolDefs = availableChatTools(
       restrictTools
         ? input.tools.buildRestrictedDefinitions(
             nextTools.mode === 'full' ? 'act_or_verify' : nextTools.mode,
           )
         : input.tools.buildDefinitions(),
-      { operation: input.acceptedOperation,
+      { executionScope:input.executionScope,operation: input.acceptedOperation,
       requiredVerifiers: input.requiredVerifierCommands,
       hostFallbackAllowed: input.hostFallbackAllowed })
     const nativeActions: ChatToolAction[] = []

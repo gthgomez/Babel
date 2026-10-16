@@ -105,7 +105,7 @@ export interface CommandDigestInput {
   readonly mode: BabelMode;
   readonly resolvedOperationPolicy: unknown;
   readonly taskShapeClass: string;
-  readonly targetRoot: string;
+  readonly targetRoot: string | null;
   readonly offeredToolSchemaVersion: string;
   readonly contextSnapshotId: string;
   /** Canonical encoding of the admitted command + facts. */
