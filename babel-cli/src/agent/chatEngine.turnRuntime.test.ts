@@ -63,13 +63,13 @@ test('getTurnRuntimeSnapshot reflects live writeCount after mutation', () => {
   assert.equal(snap!.projectRoot, process.cwd());
 });
 
-test('resyncTurnStateAfterBranch zeros writeCount on runtime snapshot', () => {
+test('resyncTurnStateAfterBranch drops the old task runtime and clears writeCount', () => {
   const engine = new ChatEngine({ task: 't', projectRoot: process.cwd() });
   engine.applyUserSubmission({ userInput: 't' });
   (engine as unknown as { writeCount: number }).writeCount = 4;
   engine.resyncTurnStateAfterBranch();
   assert.equal(engine.getWriteCount(), 0);
-  assert.equal(engine.getTurnRuntimeSnapshot()?.writeCount, 0);
+  assert.equal(engine.getTurnRuntimeSnapshot(), null);
 });
 
 test('P0-C: isolated submission reloads limits for new task class', () => {

@@ -81,6 +81,28 @@ test('OpenCode Go reads opaque network secret only with explicit source', () => 
   assert.throws(() => resolveOpenCodeGoCredential({ source: 'network-secret', env: { OPENCODE_API_KEY: 'ignored-synthetic' }, execFileSyncImpl: (() => { throw new Error('must not invoke helper') }) as never }), OpenCodeGoCredentialError)
 })
 
+test('native-resolved Go credentials cannot fall back to a helper after removal',()=>{
+  let helperProbes=0
+  const options={source:'opencode-auth-helper' as const,env:{BABEL_DESKTOP_IPC:'1',BABEL_DESKTOP_CREDENTIALS_RESOLVED:'1'},helperPath:'C:\\synthetic\\retained-helper.js',existsSyncImpl:()=>{helperProbes++;return true},execFileSyncImpl:(()=>'synthetic-retained-helper') as never}
+  assert.throws(()=>resolveOpenCodeGoCredential(options),OpenCodeGoCredentialError,'DESKTOP_REMOVED_GO_HELPER_FALLBACK')
+  assert.equal(helperProbes,0,'removed key must not probe another credential source')
+  const selected=resolveOpenCodeGoCredential({...options,env:{...options.env,BABEL_OPENCODE_GO_API_KEY:'synthetic-native-go'}})
+  assert.equal(selected.credential==='synthetic-native-go',true)
+  assert.equal(selected.credentialSource,'network-secret')
+  assert.equal(helperProbes,0)
+})
+
+test('a local resolver environment cannot mask native process credential ownership',()=>{
+  const names=['BABEL_DESKTOP_IPC','BABEL_DESKTOP_CREDENTIALS_RESOLVED']
+  const previous=names.map(name=>process.env[name])
+  let helperProbes=0
+  try{
+    for(const name of names)process.env[name]='1'
+    assert.throws(()=>resolveOpenCodeGoCredential({source:'opencode-auth-helper',env:{},helperPath:'C:\\synthetic\\retained-helper.js',existsSyncImpl:()=>{helperProbes++;return true},execFileSyncImpl:(()=>'synthetic-retained-helper') as never}),OpenCodeGoCredentialError,'DESKTOP_REMOVED_GO_HELPER_FALLBACK')
+    assert.equal(helperProbes,0)
+  }finally{for(const [index,name] of names.entries()){if(previous[index]===undefined)delete process.env[name];else process.env[name]=previous[index]}}
+})
+
 const networkSecretHelper = fileURLToPath(new URL('../../../tools/opencode-go-network-secret-helper.cjs', import.meta.url))
 const helperFailure = 'OpenCode Go network-secret placeholder unavailable or invalid.\n'
 

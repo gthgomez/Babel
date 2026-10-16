@@ -1,3 +1,6 @@
+import {configureCredentialProtection} from '../native/credentials.mjs';
+import {fixtureProtection} from './credential-fixture.mjs';
+configureCredentialProtection(fixtureProtection);
 // License: Apache-2.0 — see LICENSE
 // Real registered callback/import evidence with isolated Electron lifecycle bindings.
 import test from 'node:test';
@@ -18,7 +21,7 @@ async function registeredHandler(source, config, channel = 'babel:save-provider-
     return `(${callback}\n})`;
   });
   const bindings = {
-    assertIdle() {}, runtimeEnvironment: () => ({BABEL_CONFIG_DIR: config}),
+    credentialRequestContext:async()=>({}), assertIdle() {}, runtimeEnvironment: () => ({BABEL_CONFIG_DIR: config}),
     preferences: {projectRoot: null, projectCredentialRoot: null},
     savePreferences: async () => {}, diagnostics: null,
     connectionChangeBusy: false, runAdmission: false, runner: null, remoteBridge: null, updateBusy: false,

@@ -1,3 +1,6 @@
+import {configureCredentialProtection} from '../native/credentials.mjs';
+import {fixtureProtection} from './credential-fixture.mjs';
+configureCredentialProtection(fixtureProtection);
 // License: Apache-2.0
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -71,7 +74,7 @@ test('route-only save succeeds when private credential already exists', async ()
     saveProviderCredential({provider: 'deepseek', apiKey: FIXTURE_VALUE, scope: 'private', configDirectory: config});
     const {route} = await save({configDirectory: config, provider: 'deepseek', model: 'deepseek-v4-pro', apiKey: '', scope: 'private'});
     assert.deepEqual(route, {provider: 'deepseek', model: 'deepseek-v4-pro'});
-    assert.equal(readFileSync(join(config, '.env'), 'utf8').match(/DEEPSEEK_API_KEY=/g)?.length, 1);
+    assert.equal(readFileSync(join(config, 'desktop-credentials.json'), 'utf8').includes(FIXTURE_VALUE), false);
   } finally {
     rmSync(config, {recursive: true, force: true});
   }
@@ -83,7 +86,7 @@ test('Go route persists with its own credential namespace', async () => {
     saveProviderCredential({provider: 'opencode-go', apiKey: FIXTURE_VALUE, scope: 'private', configDirectory: config});
     saveProviderRoute({configDirectory: config, provider: 'opencode-go', model: 'opencode-go/deepseek-v4.1-flash'});
     assert.deepEqual(readProviderRoute(config), {provider: 'opencode-go', model: 'opencode-go/deepseek-v4.1-flash'});
-    assert.match(readFileSync(join(config, '.env'), 'utf8'), /^BABEL_OPENCODE_GO_API_KEY=/);
+    assert.equal(Object.hasOwn(JSON.parse(readFileSync(join(config, 'desktop-credentials.json'), 'utf8')).entries, 'opencode-go'), true);
   } finally {
     rmSync(config, {recursive: true, force: true});
   }

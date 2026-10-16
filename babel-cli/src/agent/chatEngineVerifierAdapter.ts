@@ -5,10 +5,12 @@ import { createHash } from 'node:crypto';
 import { realpathSync } from 'node:fs';
 import path from 'node:path';
 import { isCredentialTargetPath } from './autonomyEnforcement.js';
+import { requireProjectRoot, type ChatScopeInput } from './chatExecutionScope.js';
 
 import {
   bindChatVerifierReceipt,
   evaluateChatVerifierReceiptCurrencySync,
+  refreshChatVerifierReceiptStalenessSync,
   toExecutorVerifierReceipt,
   type BoundChatVerifierReceipt,
 } from '../evidence/chatRevisionBinding.js';
@@ -33,6 +35,22 @@ import {
 } from './completionGatePolicy.js';
 
 export { parseExecutedTestCounts };
+
+/** Recheck current receipt inputs before completion, retaining project-scope denial. */
+export function refreshChatCompletionVerifierCurrency(
+  scope: ChatScopeInput,
+  hasMutation: boolean,
+  lastReceipt: BoundChatVerifierReceipt | null,
+  ledger: readonly BoundChatVerifierReceipt[],
+): void {
+  if (scope.projectRoot) {
+    const root = requireProjectRoot(scope);
+    refreshChatVerifierReceiptStalenessSync(root, lastReceipt);
+    for (const receipt of ledger) refreshChatVerifierReceiptStalenessSync(root, receipt);
+  } else if (hasMutation || lastReceipt || ledger.length) {
+    throw new Error('PROJECT_REQUIRED: Conversation cannot certify project effects');
+  }
+}
 
 export function resolveEngineRequiredVerifiers(input: {
   task: string;

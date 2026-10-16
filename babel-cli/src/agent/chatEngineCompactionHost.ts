@@ -97,7 +97,7 @@ export async function runChatEngineCompactionFor(
   const compactionTurnId = engine.parity.turnId;
   const usageScope: {
     taskOwnerId: string | null;
-    projectRoot: string;
+    projectRoot?: string;
     accountingEpoch: string;
     turnId: string | null;
     chargeId: string | null;
@@ -108,7 +108,7 @@ export async function runChatEngineCompactionFor(
     ownerGeneration: number;
   } = {
     taskOwnerId: compactionOwnerId,
-    projectRoot: realpathSync(engine.options.projectRoot),
+    ...(engine.options.projectRoot?{projectRoot:realpathSync(engine.options.projectRoot)}:{}),
     accountingEpoch: compactionEpoch,
     turnId: compactionTurnId,
     chargeId: null as string | null,

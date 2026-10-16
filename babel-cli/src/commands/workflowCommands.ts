@@ -75,6 +75,8 @@ import { exitCodeFromOutcome } from '../cli/userFacingStatus.js';
 import type { TerminalOutcome } from '../schemas/agentContracts.js';
 import { validateRuntimeEnvForCommand } from './coreCommands.js';
 import { applyRunCommandEnvFlags } from './runCommandEnv.js';
+import {resolveRunScope} from '../config/conversationScope.js';
+import {withProjectRootEnv} from './projectRootEnv.js';
 import {
   assertEnvFileActiveForPipelineCommand,
   formatEnvFileInactiveMessage,
@@ -747,39 +749,6 @@ async function withExecutionProfileEnv<T>(
       delete process.env['BABEL_EXECUTION_PROFILE'];
     } else {
       process.env['BABEL_EXECUTION_PROFILE'] = previousProfile;
-    }
-  }
-}
-
-async function withProjectRootEnv<T>(
-  projectRoot: string | undefined,
-  allowedRoots: string[],
-  fn: () => Promise<T>,
-): Promise<T> {
-  if (!projectRoot) {
-    return fn();
-  }
-
-  const previousProjectRoot = process.env['BABEL_PROJECT_ROOT'];
-  const previousAllowedRoots = process.env['BABEL_ALLOWED_ROOTS'];
-  process.env['BABEL_PROJECT_ROOT'] = projectRoot;
-  if (allowedRoots.length > 0) {
-    process.env['BABEL_ALLOWED_ROOTS'] = allowedRoots.join(',');
-  }
-
-  try {
-    return await fn();
-  } finally {
-    if (previousProjectRoot === undefined) {
-      delete process.env['BABEL_PROJECT_ROOT'];
-    } else {
-      process.env['BABEL_PROJECT_ROOT'] = previousProjectRoot;
-    }
-
-    if (previousAllowedRoots === undefined) {
-      delete process.env['BABEL_ALLOWED_ROOTS'];
-    } else {
-      process.env['BABEL_ALLOWED_ROOTS'] = previousAllowedRoots;
     }
   }
 }
@@ -1952,6 +1921,7 @@ Notes:
       'Attach this run to a specific Local Mode learning root',
     )
     .option('--project-root <path>', 'Explicit project root for arbitrary approved workspace repos')
+    .option('--execution-scope <scope>', 'Explicit project or conversation scope; conversation grants no project tools')
     .option(
       '--orchestrator <version>',
       'Advanced: override orchestrator contract version (default v9)',
@@ -2037,6 +2007,7 @@ Notes:
           showModelPolicy?: boolean;
           sessionId?: string;
           resumeChat?: string;
+          executionScope?: string;
           sessionStartPath?: string;
           localLearningRoot?: string;
           projectRoot?: string;
@@ -2061,6 +2032,14 @@ Notes:
           useChatPipeline?: boolean;
         },
       ) => {
+        let conversationOnly=false;
+        try{conversationOnly=resolveRunScope(options)==='conversation';}
+        catch(error){
+          const message=error instanceof Error?error.message:'Invalid execution scope';
+          if(options.json||options.outputFormat&&options.outputFormat!=='text')writeJson(buildRunCommandFailurePayload({status:'EXECUTOR_HALTED',message}));
+          else console.error(`Babel: ${message}`);
+          process.exitCode=1;return;
+        }
         if (process.env['BABEL_LITE_WORKER_CHAIN'] === '1') {
           try {
             const liteOptions: LiteCommandOptions = {};
@@ -2099,9 +2078,9 @@ Notes:
         }
 
         const isStructuredOutput = outputFormat !== 'text';
-        const resolvedProject = options.project ?? detectProjectFromCwd() ?? undefined;
+        const resolvedProject = conversationOnly?undefined:options.project ?? detectProjectFromCwd() ?? undefined;
         validateRuntimeEnvForCommand({ json: isManualMode || isStructuredOutput });
-        const shouldUseReadOnlyQuestionPath = shouldUseReadOnlyRunQuestionPath({
+        const shouldUseReadOnlyQuestionPath = !conversationOnly&&shouldUseReadOnlyRunQuestionPath({
           task,
           explicitMode: isExplicitModeArg(),
           hasAllowedTools: options.allowedTools !== undefined,
@@ -2163,7 +2142,7 @@ Notes:
           }
         }
 
-        if (resolvedProjectRoot === undefined) {
+        if (!conversationOnly&&resolvedProjectRoot === undefined) {
           const target = resolveAgentTarget({
             ...(resolvedProject !== undefined ? { project: resolvedProject } : {}),
           });
@@ -2171,7 +2150,7 @@ Notes:
           resolvedWorkspaceRoot = target.workspaceRoot;
         }
 
-        if (!existsSync(resolvedProjectRoot)) {
+        if (!conversationOnly&&!existsSync(resolvedProjectRoot!)) {
           const message = `Resolved target root does not exist: ${resolvedProjectRoot}`;
           if (isStructuredOutput) {
             if (outputFormat === 'stream-json') {
@@ -2511,12 +2490,13 @@ Notes:
               allowedTools,
               disallowedTools,
               () =>
-                withProjectRootEnv(resolvedProjectRoot, resolvedAllowedRoots, () =>
+                withProjectRootEnv(conversationOnly?null:resolvedProjectRoot, resolvedAllowedRoots, () =>
                   withMutedConsole(() =>
                     runCliChatTask({
                       task,
                       ...(resolvedProject !== undefined ? { project: resolvedProject } : {}),
-                      projectRoot: resolvedProjectRoot!,
+                      projectRoot: conversationOnly?null:resolvedProjectRoot!,
+                      ...(conversationOnly?{executionScope:{kind:'conversation' as const}}:{}),
                       ...(resolvedWorkspaceRoot !== null
                         ? { workspaceRoot: resolvedWorkspaceRoot }
                         : {}),

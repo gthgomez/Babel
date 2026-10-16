@@ -48,7 +48,7 @@ def main():
         assert 'SHOULD NOT APPEAR' not in page.locator('#conversation').inner_text()
         assert 'Streamed fixture text.' in page.locator('#conversation').inner_text()
         emit(run_id,kind='event',event={'type':'run_complete','result':{}})
-        assert page.locator('#main-status').inner_text()=='Running'
+        assert page.locator('#main-status').inner_text()=='Finishing'
         assert page.locator('#send-button').is_disabled()
         emit(run_id,kind='exit',code=0)
         assert page.locator('#main-status').inner_text()=='Unverified'

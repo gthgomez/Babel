@@ -7,7 +7,8 @@
  * the renderer: preparation output must not depend on how it is displayed.
  */
 
-import type { BabelMode, SessionDescriptor } from './contracts.js';
+import type { BabelMode, ExecutionSessionDescriptor } from './contracts.js';
+import type {ChatExecutionScope} from '../agent/chatExecutionScope.js';
 
 /** Which controller actually owns execution for a mode. */
 export type ModeControllerKind = 'chat_engine' | 'v9_pipeline' | 'none';
@@ -98,19 +99,21 @@ export interface PreparedTurn {
   mode: BabelMode;
   controller: ModeControllerKind;
   task: string;
-  projectRoot: string;
+  projectRoot: string | null;
+  executionScope?: ChatExecutionScope;
   provider: string;
   model: string;
   policyProfile: string;
 }
 
-export function buildPreparedTurn(descriptor: SessionDescriptor): PreparedTurn {
+export function buildPreparedTurn(descriptor: ExecutionSessionDescriptor): PreparedTurn {
   return {
     threadId: descriptor.threadId,
     mode: descriptor.mode,
     controller: resolveModeCapability(descriptor.mode).controller,
     task: descriptor.task ?? `Session ${descriptor.threadId}`,
     projectRoot: descriptor.projectRoot,
+    ...('executionScope' in descriptor ? {executionScope:descriptor.executionScope} : {}),
     provider: descriptor.provider,
     model: descriptor.model,
     policyProfile: descriptor.policyProfile,

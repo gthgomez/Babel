@@ -6,6 +6,7 @@
 import { existsSync } from 'node:fs';
 
 import { ChatEngine } from '../agent/chatEngine.js';
+import {readLegacyTranscriptForContext} from '../agent/chatArchiveLegacy.js';
 import { chatSessionDir, openSessionAdmissionStore, transcriptPath } from '../cli/runsLayout.js';
 import {
   hydrateResumedThreadToScreen,
@@ -26,7 +27,6 @@ import type { ReplContext } from './context.js';
 import {
   hydrateReplTurnsFromCells,
   hydrateReplTurnsFromChatTranscript,
-  parseChatTranscriptFile,
 } from './chatTranscriptHydration.js';
 
 export interface ResumeChatSessionResult {
@@ -263,8 +263,9 @@ export async function resumeChatSession(
       ) {
         throw err;
       }
-      engine = new ChatEngine({ ...resumeOptions, runId: sessionId });
-      engine.replaceConversation(parseChatTranscriptFile(txPath));
+      const messages = readLegacyTranscriptForContext(txPath);
+      engine = createEngineFromThreadCells(sessionId,resumeOptions,[]);
+      engine.replaceConversation(messages);
     }
     // Attach event log if it lands after transcript restore
     const lateLog = loadThreadEventLogFromDir(chatSessionDir(sessionId));

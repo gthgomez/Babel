@@ -4,6 +4,10 @@ import { describe, it } from 'node:test';
 import { rewriteArgv } from './argv.js';
 
 describe('rewriteArgv', () => {
+  it('keeps execution scope and resume identity separate from the task',()=>{
+    const args=['node','babel','run','--mode','chat','--execution-scope','conversation','--resume-chat','session-123','--','Hello again'];
+    assert.deepEqual(rewriteArgv(args),args);
+  });
   it('preserves execution profile values for run commands', () => {
     assert.deepEqual(
       rewriteArgv([

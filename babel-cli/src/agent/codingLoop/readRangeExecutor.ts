@@ -1,3 +1,4 @@
+import {requireProjectRoot} from '../chatExecutionScope.js';
 /**
  * read_range executor path — extracted from chatEngineActionExecutor.ts to
  * stay under the repo's 2,000-line file-size ratchet (same pattern as the
@@ -37,7 +38,7 @@ export async function executeReadRangeAction(
   ctx: ReadRangeActionContext,
 ): Promise<{ index: number; observation: string }> {
   const { host, action, tool, target, toolId, meta } = ctx;
-  const rPath = resolveChatRangePath(host.options.projectRoot, action.file_path);
+  const rPath = resolveChatRangePath(requireProjectRoot(host.options), action.file_path);
   const rContent = await readFile(rPath, "utf-8");
   // R0-8: the read is a suspension point; a superseded submission must not
   // append its result for the new task.
@@ -101,7 +102,7 @@ export async function executeReadRangeAction(
     const discrimination = isDiscriminatingInspectionEvidence(
       host.workingState,
       action,
-      recoveryTargetIdentity(host.options.projectRoot, action.file_path),
+      recoveryTargetIdentity(requireProjectRoot(host.options), action.file_path),
       host.workingState.recoveryGate ? host.currentRecoveryBinding() : null,
       evaluated.window.lines.join("\n").trim()
         ? createHash("sha256").update(evaluated.window.lines.join("\n")).digest("hex")

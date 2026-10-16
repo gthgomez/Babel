@@ -21,7 +21,7 @@ export async function saveDesktopProviderRoute({options, configDirectory, prefer
     configDirectory, provider: route.provider, scope, projectRoot: preferences.projectRoot,
   })) throw new Error('Enter a provider API key or keep the existing saved credential.');
   if (apiKey) saveProviderCredential({
-    provider: route.provider, apiKey, scope, configDirectory, projectRoot: preferences.projectRoot,
+    provider: route.provider, apiKey, scope, configDirectory, projectRoot: preferences.projectRoot, operation:options.credentialOperation??'add',
   });
   saveProviderRoute({configDirectory, ...route,enabledModels:options.enabledModels});
   const previousRoot = preferences.projectCredentialRoot;

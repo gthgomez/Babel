@@ -6,6 +6,7 @@ import { runGitCommand } from '../utils/gitExec.js';
 import { listProviderSpecs } from '../runners/providerRegistry.js';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {usesDesktopResolvedCredentials} from './desktopCredentialScope.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -55,6 +56,7 @@ function gitAllowsIgnoredProjectEnv(root: string): boolean {
 
 /** Never auto-load project .env: only a trusted client may opt in for one root. */
 export function loadOptedInProjectCredentials(env: NodeJS.ProcessEnv): boolean {
+  if(usesDesktopResolvedCredentials(env))return false;
   const selectedRoot = env['BABEL_PROJECT_CREDENTIALS_DIR'];
   if (!selectedRoot) return false;
   if (!isAbsolute(selectedRoot)) throw new Error('Project credential root must be absolute');
@@ -93,16 +95,22 @@ export function loadOptedInProjectCredentials(env: NodeJS.ProcessEnv): boolean {
 export function loadBabelCliEnv(
   env: NodeJS.ProcessEnv = process.env,
   envFilePath?: string,
+  options:{executionScope?:'project'|'conversation'}={},
 ): {
   envFilePath: string;
-  envFileExists: boolean;
+  envFileExists: boolean | null;
   loaded: boolean;
+  skipped?: 'desktop_resolved_credentials';
 } {
   const privatePath = envFilePath ?? resolvePrivateCredentialEnvPath(env);
-  if (envFilePath === undefined) loadOptedInProjectCredentials(env);
+  if(usesDesktopResolvedCredentials(env)){
+    envFileLoadAttempted=true;envFileLoaded=false;
+    return {envFilePath:privatePath,envFileExists:null,loaded:false,skipped:'desktop_resolved_credentials'};
+  }
+  if (envFilePath === undefined && options.executionScope!=='conversation') loadOptedInProjectCredentials(env);
   const files = envFilePath !== undefined ? [envFilePath] : [
     privatePath,
-    ...(env['BABEL_LEGACY_CLI_ENV'] === '1' && !resolveRuntimePaths(env).isInstalled ? [resolve(BABEL_CLI_PACKAGE_ROOT, '.env')] : []),
+    ...(options.executionScope!=='conversation' && env['BABEL_LEGACY_CLI_ENV'] === '1' && !resolveRuntimePaths(env).isInstalled ? [resolve(BABEL_CLI_PACKAGE_ROOT, '.env')] : []),
   ];
   let loaded = false;
   let found = false;
@@ -136,6 +144,7 @@ export function getEnvFileKeysNotActiveInProcess(
   env: NodeJS.ProcessEnv = process.env,
   envFilePath: string = resolvePrivateCredentialEnvPath(env),
 ): string[] {
+  if(usesDesktopResolvedCredentials(env))return [];
   if (!existsSync(envFilePath)) {
     return [];
   }

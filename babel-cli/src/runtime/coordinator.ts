@@ -18,7 +18,7 @@
 import { randomUUID } from 'node:crypto';
 
 import type { ChatEvent } from '../agent/chatEngine.js';
-import type { BabelMode, SessionDescriptor } from '../executor/contracts.js';
+import type { BabelMode, ExecutionSessionDescriptor } from '../executor/contracts.js';
 import {
   buildPreparedTurn,
   resolveModeCapability,
@@ -216,7 +216,7 @@ export function createRuntimeCoordinator(
   return {
     version: RUNTIME_COORDINATOR_VERSION,
     capabilities: capabilityFor,
-    prepare(descriptor: SessionDescriptor): PreparedTurn {
+    prepare(descriptor: ExecutionSessionDescriptor): PreparedTurn {
       return buildPreparedTurn(descriptor);
     },
     beginTurn,

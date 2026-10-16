@@ -2,8 +2,10 @@ import type { ToolDefinition } from '../runners/base.js'
 import type { TaskOperation } from '../config/chatTaskClass.js'
 import { filterChatToolNamesForTask } from './chatReadOnly.js'
 import { canUseChatLsp } from './chatLspPolicy.js'
+import type {ChatExecutionScope} from './chatExecutionScope.js'
 
 export interface ChatToolAvailability {
+  executionScope?: ChatExecutionScope | undefined
   operation?: TaskOperation | undefined
   requiredVerifiers?: readonly string[] | undefined
   hostFallbackAllowed?: boolean | undefined
@@ -12,6 +14,7 @@ export interface ChatToolAvailability {
 
 /** Project task scope and host-process authority into every model protocol. */
 export function availableChatToolNames(names: readonly string[], policy: ChatToolAvailability): string[] {
+  if(policy.executionScope?.kind==='conversation')return []
   const env = policy.env ?? process.env
   const taskNames = filterChatToolNamesForTask(names, policy.operation, policy.requiredVerifiers ?? [], env)
   const allowLsp = canUseChatLsp({ hostFallbackAllowed: policy.hostFallbackAllowed === true,

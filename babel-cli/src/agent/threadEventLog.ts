@@ -7,14 +7,21 @@
  */
 
 import { createHash, randomUUID } from 'node:crypto';
+import {normalizeChatExecutionScope} from './chatExecutionScope.js';
 import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import type { ProviderMessage, ProviderToolCall } from '../runners/base.js';
 import type { ContextCheckpointV1 } from '../runtime/contextCheckpoints.js';
 import type { TerminalOutcome } from '../schemas/agentContracts.js';
 import { writeCheckpointFileSync } from '../utils/atomicCheckpointFile.js';
+import {assertTaskAttemptBinding,type TaskAttemptBinding} from './taskObjectiveLifecycle.js';
+import {isTaskAcceptanceDescriptor,type TaskAcceptanceDescriptorV1} from './taskAcceptanceRevision.js';
+import {sha256Canonical} from '../acceptance/canonical.js';
 
 export const THREAD_EVENT_LOG_VERSION = 1 as const;
+
+/** Presentation evidence only; never reconstructed as provider context or authority. */
+export type ThreadTerminalResponse = { kind: 'answer' | 'error'; content: string };
 
 /** A present-but-invalid durable log must never be downgraded to legacy resume. */
 export class ThreadEventLogRestoreError extends Error {
@@ -27,6 +34,8 @@ export class ThreadEventLogRestoreError extends Error {
 }
 
 export type ThreadEventKind =
+  | 'task_acceptance_amended'
+  | 'task_attempt_admitted'
   | 'turn_started'
   | 'user_message'
   | 'assistant_message'
@@ -49,15 +58,20 @@ export interface ThreadEventBase {
   seq: number;
   ts: string;
   kind: ThreadEventKind;
+  /** Compaction reconstruction copy; the original archive event remains retained. */
+  context_copy?: true;
 }
 
 export type ThreadEvent =
+  | (ThreadEventBase & TaskAttemptBinding & {kind:'task_acceptance_amended';submission_event_id:string;admission_event_id:string;input_digest:string;result_contract_id:string;result_contract_hash:string;descriptor_digest:string;descriptor:TaskAcceptanceDescriptorV1})
+  | (ThreadEventBase & TaskAttemptBinding & {kind:'task_attempt_admitted';submission_event_id:string;input_digest:string})
   | (ThreadEventBase & {
       kind: 'turn_started';
       task: string;
       model: string;
       provider: string;
-      projectRoot: string;
+      projectRoot: string | null;
+      executionScope?: import('./chatExecutionScope.js').ChatExecutionScope;
       policyPreset: string;
       verifier?: string;
       /** P0-C: effective chat task class for this submission (budgets / gates). */
@@ -68,10 +82,18 @@ export type ThreadEvent =
       submissionIndex?: number;
       /** P0-C: whether counters continued from prior task. */
       continuedTask?: boolean;
+      /** Accepted host inputs, distinct from derived status/counter policy. */
+      requestedOperation?: import('../config/chatTaskClass.js').RequestedTaskOperation;
+      requestedTaskIntent?: import('./turnRuntime.js').TurnTaskIntent;
+      requestedContinueTask?: boolean;
+      task_id?:string;
+      contract_id?:string;
+      contract_hash?:string;
+      attempt_id?:string;
       /** Durable ownership generation used to fence stale compaction. */
       ownership_generation?: number;
     })
-  | (ThreadEventBase & { kind: 'user_message'; content: string })
+  | (ThreadEventBase & { kind: 'user_message'; content: string; name?: string; provenance?: 'controller' | 'model' | 'mixed'; authoritative?: boolean })
   | (ThreadEventBase & {
       kind: 'assistant_message';
       content: string;
@@ -132,6 +154,7 @@ export type ThreadEvent =
       /** D03: structured terminal reason survives thread-log persistence/replay. */
       reason_code?: string;
       cause_class?: string | null;
+      response?: ThreadTerminalResponse;
     })
   | (ThreadEventBase & {
       kind: 'repo_identity';
@@ -153,7 +176,8 @@ export interface TurnSnapshot {
   turn_id: string;
   model: string;
   provider: string;
-  projectRoot: string;
+  projectRoot: string | null;
+  executionScope?: import('./chatExecutionScope.js').ChatExecutionScope;
   policyPreset: string;
   verifier?: string;
   outcome?: TerminalOutcome;
@@ -215,15 +239,25 @@ export function startTurn(
     task: string;
     model: string;
     provider: string;
-    projectRoot: string;
+    projectRoot: string | null;
+    executionScope?: import('./chatExecutionScope.js').ChatExecutionScope;
     policyPreset: string;
     verifier?: string;
     taskClass?: string;
     gatePolicy?: string;
     submissionIndex?: number;
     continuedTask?: boolean;
+    requestedOperation?: import('../config/chatTaskClass.js').RequestedTaskOperation;
+    requestedTaskIntent?: import('./turnRuntime.js').TurnTaskIntent;
+    requestedContinueTask?: boolean;
+    task_id?:string;
+    contract_id?:string;
+    contract_hash?:string;
+    attempt_id?:string;
   },
 ): string {
+  assertTaskAttemptBinding(input);
+  if(input.projectRoot===null||input.executionScope)normalizeChatExecutionScope(input);
   const turnId = randomUUID();
   const priorGenerations = log.events
     .filter((event): event is Extract<ThreadEvent, { kind: 'turn_started' }> => event.kind === 'turn_started')
@@ -236,14 +270,20 @@ export function startTurn(
     model: input.model,
     provider: input.provider,
     projectRoot: input.projectRoot,
+    ...(input.executionScope?{executionScope:input.executionScope}:{}),
     policyPreset: input.policyPreset,
     ...(input.verifier !== undefined ? { verifier: input.verifier } : {}),
     ...(input.taskClass !== undefined ? { taskClass: input.taskClass } : {}),
     ...(input.gatePolicy !== undefined ? { gatePolicy: input.gatePolicy } : {}),
     ...(input.submissionIndex !== undefined ? { submissionIndex: input.submissionIndex } : {}),
     ...(input.continuedTask !== undefined ? { continuedTask: input.continuedTask } : {}),
+    ...(input.requestedOperation !== undefined ? { requestedOperation: input.requestedOperation } : {}),
+    ...(input.requestedTaskIntent !== undefined ? { requestedTaskIntent: input.requestedTaskIntent } : {}),
+    ...(input.requestedContinueTask !== undefined ? { requestedContinueTask: input.requestedContinueTask } : {}),
+    ...(input.task_id!==undefined?{task_id:input.task_id,contract_id:input.contract_id!,contract_hash:input.contract_hash!,attempt_id:input.attempt_id!}:{}),
     ownership_generation: ownershipGeneration,
   });
+  if(input.projectRoot!==null){
   const rootFingerprint = repoRootFingerprint(input.projectRoot);
   appendThreadEvent(log, {
     kind: 'repo_identity',
@@ -253,10 +293,12 @@ export function startTurn(
       ? { rootDevice: rootFingerprint.device, rootInode: rootFingerprint.inode }
       : {}),
   });
+  }
   appendThreadEvent(log, {
     kind: 'user_message',
     turn_id: turnId,
     content: input.task,
+    name: 'user_input',
   });
   return turnId;
 }
@@ -267,12 +309,14 @@ export function endTurn(
   outcome: TerminalOutcome | undefined,
   status: string,
   reason?: { code: string; cause_class: string | null },
+  response?: ThreadTerminalResponse,
 ): void {
   appendThreadEvent(log, {
     kind: 'turn_ended',
     turn_id: turnId,
     ...(outcome !== undefined ? { outcome } : {}),
     status,
+    ...(response !== undefined ? { response } : {}),
     ...(reason !== undefined
       ? { reason_code: reason.code, cause_class: reason.cause_class }
       : {}),
@@ -317,11 +361,15 @@ export function recordUserMessage(
   log: ThreadEventLog,
   turnId: string,
   content: string,
+  options: { name?: string; provenance?: 'controller' | 'model' | 'mixed'; authoritative?: boolean } = {},
 ): void {
   appendThreadEvent(log, {
     kind: 'user_message',
     turn_id: turnId,
     content,
+    ...(options.name !== undefined ? {name:options.name} : {}),
+    ...(options.provenance !== undefined ? {provenance:options.provenance} : {}),
+    ...(options.authoritative !== undefined ? {authoritative:options.authoritative} : {}),
   });
 }
 
@@ -783,6 +831,7 @@ export function latestTurnSnapshot(log: ThreadEventLog): TurnSnapshot | null {
     model: started.model,
     provider: started.provider,
     projectRoot: started.projectRoot,
+    ...(started.executionScope?{executionScope:started.executionScope}:{}),
     policyPreset: started.policyPreset,
     ...(started.verifier !== undefined ? { verifier: started.verifier } : {}),
     ...(ended ? { outcome: ended.outcome } : {}),
@@ -848,6 +897,7 @@ function assertThreadEventLog(data: unknown): asserts data is ThreadEventLog {
     const timestamp = requireNonEmptyString(event, 'ts', `Thread event ${index}`);
     if (!Number.isFinite(Date.parse(timestamp))) throw new Error(`Thread event ${index} has invalid timestamp`);
     const kind = requireNonEmptyString(event, 'kind', `Thread event ${index}`);
+    if (event['context_copy'] !== undefined && event['context_copy'] !== true) throw new Error(`Thread event ${index} has invalid context-copy provenance`);
     assertThreadEventPayload(event, kind, index);
   }
 }
@@ -855,13 +905,30 @@ function assertThreadEventLog(data: unknown): asserts data is ThreadEventLog {
 function assertThreadEventPayload(event: Record<string, unknown>, kind: string, index: number): void {
   const context = `Thread event ${index}`;
   switch (kind) {
+    case 'task_acceptance_amended':
+      assertTaskAttemptBinding(event);
+      for(const key of ['task_id','contract_id','contract_hash','attempt_id','submission_event_id','admission_event_id','input_digest','result_contract_id','result_contract_hash','descriptor_digest'])requireNonEmptyString(event,key,context);
+      if(!/^[0-9a-f]{32,64}$/.test(String(event['result_contract_hash'])))throw new Error(`${context} has invalid acceptance result`);
+      if(!isTaskAcceptanceDescriptor(event['descriptor'])||event['descriptor_digest']!==sha256Canonical(event['descriptor']))throw new Error(`${context} has invalid acceptance descriptor`);
+      return;
+    case 'task_attempt_admitted':
+      assertTaskAttemptBinding(event);
+      for(const key of ['task_id','contract_id','contract_hash','attempt_id','submission_event_id','input_digest'])requireNonEmptyString(event,key,context);
+      if(!/^[0-9a-f]{64}$/.test(String(event['input_digest']))||event['context_copy'])throw new Error(`${context} has invalid task attempt admission`);
+      return;
     case 'turn_started':
-      for (const key of ['task', 'model', 'provider', 'projectRoot', 'policyPreset']) {
+      assertTaskAttemptBinding(event);
+      for (const key of ['task', 'model', 'provider', 'policyPreset']) {
         requireString(event, key, context);
       }
+      if(event['projectRoot']!==null)requireString(event,'projectRoot',context);
+      else if(!event['executionScope']||typeof event['executionScope']!=='object'||(event['executionScope'] as {kind?:unknown}).kind!=='conversation')throw new Error(`${context} requires explicit conversation scope`);
       for (const key of ['verifier', 'taskClass', 'gatePolicy']) requireOptionalString(event, key, context);
       requireOptionalInteger(event, 'submissionIndex', context);
       requireOptionalBoolean(event, 'continuedTask', context);
+      if(event['requestedOperation']!==undefined&&!['AUTO','READ_ONLY','CHANGE'].includes(event['requestedOperation'] as string))throw new Error(`${context} has invalid requestedOperation`);
+      if(event['requestedTaskIntent']!==undefined&&!['execute','explain'].includes(event['requestedTaskIntent'] as string))throw new Error(`${context} has invalid requestedTaskIntent`);
+      requireOptionalBoolean(event, 'requestedContinueTask', context);
       requireOptionalInteger(event, 'ownership_generation', context);
       return;
     case 'user_message':
@@ -921,6 +988,11 @@ function assertThreadEventPayload(event: Record<string, unknown>, kind: string, 
       }
       return;
     case 'turn_ended':
+      if (event['response'] !== undefined) {
+        const response = requireRecord(event['response'], `${context} response`);
+        if (response['kind'] !== 'answer' && response['kind'] !== 'error') throw new Error(`${context} has invalid response kind`);
+        requireString(response, 'content', `${context} response`);
+      }
       if (event['outcome'] !== undefined) {
         if (typeof event['outcome'] !== 'string' || !TERMINAL_OUTCOMES.has(event['outcome'] as TerminalOutcome)) {
           throw new Error(`${context} has invalid terminal outcome`);

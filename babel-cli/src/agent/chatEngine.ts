@@ -1,3 +1,6 @@
+import {normalizeChatExecutionScope,requireProjectRoot,assertConversationRestoreScope} from './chatExecutionScope.js';
+import {providerMessagesToChatMessages,legacyArchiveToChatMessages} from './providerMessagesToChatMessages.js';
+import {retainedLegacyArchive} from './chatArchiveLegacy.js';
 /**
  * ChatEngine — unified conversational agent loop for Babel chat mode.
  * Chat investigates and executes; deep mode remains the governed pipeline.
@@ -105,6 +108,7 @@ import {
   initLiveAuthorityOnEngine,
   projectEngineLiveSession,
   refreshEngineInstructionManifest,
+  refreshRestoredEngineMode,
   restoreEngineSessionEvents,
   engineCanMutateKey,
 } from "./chatEngineLiveSession.js";
@@ -206,7 +210,6 @@ import {
 import {
   evaluateChatCompletionProof,
   mutationPathsFromSessionEvents,
-  refreshChatVerifierReceiptStalenessSync,
   toGateToolLog,
   type BoundChatVerifierReceipt,
 } from "../evidence/chatRevisionBinding.js";
@@ -405,11 +408,17 @@ import {
   prepareKernelVerifierInput,
   resolveEngineRequiredVerifiers,
   restorePersistedVerifierEvidence,
+  refreshChatCompletionVerifierCurrency,
 } from "./chatEngineVerifierAdapter.js";
 import {
   beginUserSubmission,
+  emptyTurnCounters,
   type TurnRuntimeSnapshot,
 } from "./turnRuntime.js";
+import {restoreTurnRuntime} from './restoreTurnRuntime.js';
+import {admitObjectiveSubmission,prepareObjectiveSubmission,type PreparedObjectiveSubmission,type ObjectiveAdmissionHost,type ObjectiveAdmissionResult} from './chatEngineObjectiveAdmission.js';
+import type { CriterionCompletionServiceV1 } from '../authority/criterionCompletion.js';
+import {requiresObjectiveLifecycle,activeObjectiveSessionLog,activeAcceptanceSessionLog} from './taskObjectiveLifecycle.js';
 
 import { admitProjectContentRead, isReadOnlyChat } from "./chatReadOnly.js";
 
@@ -441,7 +450,8 @@ export class ChatEngine {
   // conversation store and Markdown flattening buildChatTurnPrompt.
   private conversation: ChatMessage[] = [];
   private readonly services: ChatEngineServices;
-  private readonly executorKernel: ExecutorKernel;
+  private readonly criterionCompletion: CriterionCompletionServiceV1 | undefined;
+  private executorKernel: ExecutorKernel;
   private executionProfile: ChatExecutionProfile;
   private abortController: AbortController;
   private engineRunId: string;
@@ -516,6 +526,7 @@ export class ChatEngine {
   private taskClass: ChatTaskClass;
   /** W0.3: last user-submission runtime (counters re-synced from live fields). */
   private lastTurnRuntime: TurnRuntimeSnapshot | null = null;
+  private objectiveAdmissionBlocked=false;
   /** Discovered project test commands for gate rejection hints. */
   private discoveredTestCommands: DiscoveredTestCommand[] = [];
   /** Crash-safe patch persistence: write-through after each successful mutation. */
@@ -865,6 +876,9 @@ export class ChatEngine {
     this.taskAllowanceOwner.markChildBudgetExhausted(limiter, reason);
   }
   constructor(options: ChatEngineOptions) {
+    const scope=normalizeChatExecutionScope(options);
+    options={...options,executionScope:scope,projectRoot:scope.kind==="project"?scope.projectRoot:null};
+    if(scope.kind==="conversation"&&(options.instructionRoot||options.workspaceRoot||options.compiledChatStack?.project_root))throw new Error("Conflicting project context in conversation scope");
     options = { ...options, compiledChatStack: resolveChatInstructionContext(options) };
     this.options = options;
     this.ownerAccounting = new ChatEngineOwnerAccounting(
@@ -924,6 +938,11 @@ export class ChatEngine {
     this.engineRunId = options.runId ?? allocateThreadId();
     // definite assignment: engineRunId set immediately above
     this.parity = createParityRuntime(this.engineRunId);
+    this.criterionCompletion = this.services.acceptance?.createCompletionService(() => ({
+      contract: this.parity.liveAuthority?.taskContract,
+      runId: this.engineRunId,
+      projectRoot: this.options.projectRoot ?? null,
+    }));
     if (options.admissionStore)
       this.parity.admissionStore = options.admissionStore;
     this.runtimeInvariants = new RuntimeInvariantRegistry(
@@ -943,9 +962,12 @@ export class ChatEngine {
       this.compactionManager = new CompactionManager();
     }
     mkdirSync(this.engineRunDir, { recursive: true });
-    const persistedTaskBudget = options.resumeExisting
+    if(options.resumeExisting){recoverCheckpointArtifacts(this.engineRunDir);this.parity.liveAuthority=loadLiveSessionAuthorityStrict(this.engineRunDir);}
+    let persistedTaskBudget = options.resumeExisting
       ? this.readPersistedTaskBudget(this.engineRunDir)
       : null;
+    const acceptedContract=this.parity.liveAuthority?.taskContract;
+    if(acceptedContract&&persistedTaskBudget&&(persistedTaskBudget.acceptedTaskId!==undefined||requiresObjectiveLifecycle(acceptedContract))&&persistedTaskBudget.acceptedTaskId!==acceptedContract.task_id)persistedTaskBudget=null;
     const chargeFilesValid =
       !options.resumeExisting || this.restoreOwnerCharges(this.engineRunDir);
     if (options.resumeExisting)
@@ -958,12 +980,17 @@ export class ChatEngine {
     this.persistTaskCostBaseline();
 
     if (options.resumeExisting) {
-      this.parity.liveAuthority = loadLiveSessionAuthorityStrict(
-        this.engineRunDir,
-      );
-      this.parity.authoritySession = restoreAuthoritySession({
-        repoRoot: options.projectRoot,
+      if(!this.parity.liveAuthority)throw new Error('OBJECTIVE_AUTHORITY_MISSING');
+      if(options.executionProfile===undefined){
+        this.executionProfile=this.parity.liveAuthority.taskContract.mode;
+        this.executorKernel=createExecutorKernel(this.executionProfile,this.services);
+      }
+      if(options.projectRoot)this.parity.authoritySession = restoreAuthoritySession({
+        repoRoot: requireProjectRoot(options),
         persistPath: join(this.engineRunDir, AUTHORITY_SESSION_FILENAME),
+      });
+      if(this.parity.liveAuthority.taskContract.mode!==this.executionProfile)refreshRestoredEngineMode({
+        parity:this.parity,options,taskClass:this.taskClass,executionProfile:this.executionProfile,engineRunDir:this.engineRunDir,
       });
     } else
       initLiveAuthorityOnEngine({
@@ -981,7 +1008,7 @@ export class ChatEngine {
 
     // R9: Initialize verifier guard — track hashes of verifier dependency
     // files so tampering can be detected and flagged in real-time.
-    this.initializeVerifierGuard();
+    if(options.projectRoot)this.initializeVerifierGuard();
 
     // Playbook selection still drives the todo gate. Its prose is not copied
     // into the prompt; project instructions come from AGENTS.md and ENGINEERING.md.
@@ -1007,8 +1034,8 @@ export class ChatEngine {
         getChatTaskTune(this.taskClass).forceMutateTurns,
         options.planHandoff,
       );
-      // Implement handoff exits hard-plan mutation block.
-      this.hardPlanMode = false;
+      // A handoff cannot override an explicitly selected read-only Plan lane.
+      this.hardPlanMode = this.executionProfile === "plan";
     }
 
     // Resolve model policy for provider selection.
@@ -1067,9 +1094,7 @@ export class ChatEngine {
       };
     }
     // Discover project test commands for verification gate hints.
-    this.discoveredTestCommands = discoverProjectTestCommands(
-      this.options.projectRoot,
-    );
+    this.discoveredTestCommands = this.options.projectRoot ? discoverProjectTestCommands(requireProjectRoot(this.options)) : [];
     // Repetition loop detector: safety net for text-tools path gemma loops.
     this.repetitionDetector = new RepetitionDetector();
     // Tier A5: Observation tail buffer sized from env.
@@ -1103,7 +1128,7 @@ export class ChatEngine {
         );
         if (paths.length > 0) {
           currentWorkspaceRevisionHash = RevisionManager.computeRevisionSync(
-            this.options.projectRoot,
+            requireProjectRoot(this.options),
             paths,
           ).compositeTreeHash;
         }
@@ -1169,7 +1194,7 @@ export class ChatEngine {
       this.isSubmissionCurrent(ownerGeneration);
     const usageScope = {
       taskOwnerId: this.taskAllowance?.taskOwnerId ?? null,
-      projectRoot: realpathSync(this.options.projectRoot),
+      ...(this.options.projectRoot?{projectRoot:realpathSync(requireProjectRoot(this.options))}:{}),
       accountingEpoch: globalCostTracker.getAccountingEpoch(),
       turnId: this.parity.turnId,
       chargeId: null as string | null,
@@ -1179,7 +1204,7 @@ export class ChatEngine {
     return {
       toolCallLog,
       conversation,
-      projectRoot: this.options.projectRoot,
+      projectRoot: requireProjectRoot(this.options),
       task: this.options.task,
       lastVerifierReceipt: this.lastVerifierReceipt
         ? { ...this.lastVerifierReceipt }
@@ -1250,6 +1275,7 @@ export class ChatEngine {
     taskIntent: TaskIntent,
     opts?: { terminal?: boolean },
   ): Promise<"allow" | "reject" | "block"> {
+    if(this.options.executionScope?.kind==='conversation')return 'allow'; // No project effects or diff exist; completion honesty still runs.
     const criticSpan = this.currentTurnTelemetry?.startCriticSpan();
     const ownerGeneration = this.activeSubmissionGeneration;
     const conversationStart = this.conversation.length;
@@ -1362,7 +1388,7 @@ export class ChatEngine {
     const state = {
       toolCallLog: this.toolCallLog,
       conversation: this.conversation,
-      projectRoot: this.options.projectRoot,
+      projectRoot: requireProjectRoot(this.options),
       task: this.options.task,
       midLoopCriticFired: this.midLoopCriticFired,
       lastCriticReceipt: this.lastCriticReceipt,
@@ -1390,7 +1416,7 @@ export class ChatEngine {
     errors?: string[];
   } {
     return evaluateChatCompletionProof({
-      projectRoot: this.options.projectRoot,
+      projectRoot: requireProjectRoot(this.options),
       hasMutation,
       verifierTampered: this.verifierTampered,
       receipt: this.lastVerifierReceipt,
@@ -1400,7 +1426,7 @@ export class ChatEngine {
   }
 
   private readCacheKey(filePath: string): string {
-    return normalizeReadCacheKey(filePath, this.options.projectRoot);
+    return normalizeReadCacheKey(filePath, requireProjectRoot(this.options));
   }
 
   private noteToolForReadThrash(
@@ -1796,7 +1822,7 @@ export class ChatEngine {
     // Packet B1: refresh the repo map for this turn (cheap once the per-file
     // tag cache is warm; nulled by runPostEditStaticCheck on writes).
     // A superseded submission must not publish its map into the new task.
-    if (this.repoMapCache === null) {
+    if (this.options.projectRoot && this.repoMapCache === null) {
       this.repoMapInvalidated = false;
       const map = await this.generateRepoMap(userInput);
       if (this.isSubmissionCurrent(generation) && this.repoMapCache === null && !this.repoMapInvalidated) {
@@ -2165,12 +2191,19 @@ export class ChatEngine {
     // claim, never `activeAdmissionClaim` — during task replacement that slot
     // belongs to the successor, and settling it would record a false terminal
     // for a command that is still executing (stripping its install authority).
-    const claim = this.admitCurrentSubmission(submissionGeneration, userInput);
+    const objective = prepareObjectiveSubmission(this as unknown as ObjectiveAdmissionHost, {
+      userInput,
+      ...(taskIntent !== undefined ? {taskIntent} : {}),
+      ...(submitOpts?.continueTask !== undefined ? {continueTask:submitOpts.continueTask} : {}),
+    });
+    const claim = this.admitCurrentSubmission(submissionGeneration, userInput, {
+      taskId: objective.taskId, taskClass: objective.submission.runtime.taskClass,
+    });
     try {
       yield* this.submitMessageStreamLoop(userInput, taskIntent, {
         ...submitOpts,
         submissionGeneration,
-      });
+      }, objective);
     } finally {
       this.settleClaimOnExit(claim);
     }
@@ -2180,11 +2213,13 @@ export class ChatEngine {
     userInput: string,
     taskIntent?: TaskIntent,
     submitOpts?: SubmitMessageOptions,
+    objective?: PreparedObjectiveSubmission,
   ): AsyncGenerator<ChatEvent, void, undefined> {
     yield* this.streamingLoop.submitMessageStreamLoop(
       userInput,
       taskIntent,
       submitOpts,
+      objective,
     );
   }
 
@@ -2299,6 +2334,9 @@ export class ChatEngine {
   getTaskContract() {
     return this.parity.liveAuthority?.taskContract ?? null;
   }
+  getExecutionScope() {
+    return normalizeChatExecutionScope(this.options);
+  }
   getLiveSession(c?: {
     turns?: number;
     tokens?: number;
@@ -2318,10 +2356,13 @@ export class ChatEngine {
   }
   /** H4: isolation + dirty-tree flags for the capability broker. */
   private isolationBrokerFlags() {
-    return resolveIsolationBrokerFlags(this.options.projectRoot);
+    return this.options.projectRoot ? resolveIsolationBrokerFlags(requireProjectRoot(this.options)) : {isolationRequired:false,isolationAvailable:false,hostFallbackAllowed:false,dirtyTree:false};
   }
   restoreEventLog(log: import("./threadEventLog.js").ThreadEventLog): void {
+    const restoredRuntime = restoreTurnRuntime(log);
     this.parity.eventLog = log;
+    this.lastTurnRuntime = restoredRuntime;
+    Object.assign(this, emptyTurnCounters());
     this.clearVerifierEvidenceState();
     const lastTurn = [...log.events]
       .reverse()
@@ -2339,8 +2380,9 @@ export class ChatEngine {
       log,
       runDir: options?.runDir ?? this.engineRunDir,
     });
-    this.restorePersistedVerifierEvidence(log);
-    this.restoreRecoveryWorkingState(log);
+    const taskLog=activeObjectiveSessionLog(log,this.parity.liveAuthority?.taskObjectiveLifecycle);
+    this.restorePersistedVerifierEvidence(activeAcceptanceSessionLog(log,this.parity.liveAuthority?.taskObjectiveLifecycle));
+    this.restoreRecoveryWorkingState(taskLog,activeAcceptanceSessionLog(log,this.parity.liveAuthority?.taskObjectiveLifecycle));
     const repairGuidance = resumedToolRecoveryGuidance(
       this.parity.sessionEvents,
     );
@@ -2395,7 +2437,7 @@ export class ChatEngine {
       return false;
     }
     const target =
-      recoveryTargetIdentity(this.options.projectRoot, rawTarget) ?? undefined;
+      recoveryTargetIdentity(requireProjectRoot(this.options), rawTarget) ?? undefined;
     this.workingState = applyWorkingStateEvent(this.workingState, {
       type: "localization_update",
       localization: beginLocalizationCall(localization, target),
@@ -2415,13 +2457,13 @@ export class ChatEngine {
     const localization = this.workingState.localization;
     if (!localization || localization.phase !== "LOCALIZE_FAILURE") return;
     const target =
-      recoveryTargetIdentity(this.options.projectRoot, input.rawTarget) ??
+      recoveryTargetIdentity(requireProjectRoot(this.options), input.rawTarget) ??
       undefined;
     const withCandidates =
       input.tool === "glob" && input.succeeded && input.pattern && input.content
         ? discoverTestCandidates(
             localization,
-            this.options.projectRoot,
+            requireProjectRoot(this.options),
             input.pattern,
             input.content,
           )
@@ -2429,7 +2471,7 @@ export class ChatEngine {
     const updated = finishLocalizationCall(withCandidates, {
       type: input.tool,
       succeeded: input.succeeded,
-      projectRoot: this.options.projectRoot,
+      projectRoot: requireProjectRoot(this.options),
       ...(target ? { target } : {}),
       ...(input.content !== undefined ? { content: input.content } : {}),
       ...(input.startLine !== undefined ? { startLine: input.startLine } : {}),
@@ -2467,7 +2509,7 @@ export class ChatEngine {
     this.persistRecoveryWorkingState();
   }
 
-  private restoreRecoveryWorkingState(log: SessionEventLog): void {
+  private restoreRecoveryWorkingState(log: SessionEventLog, certificationLog:SessionEventLog=log): void {
     const latestSnapshot = [...log.events]
       .reverse()
       .find((event) => event.kind === "working_state_snapshot");
@@ -2513,6 +2555,8 @@ export class ChatEngine {
     ) {
       const restored = restoreWorkingStateSnapshot(latestSnapshot.state);
       if (restored) {
+        if (restored.lastVerifier && !certificationLog.events.some(event=>event.event_id===latestSnapshot.event_id))
+          restored.lastVerifier.fresh=false;
         this.workingState = restored;
         return;
       }
@@ -2551,11 +2595,11 @@ export class ChatEngine {
   }
 
   public getResolvedRequiredVerifiers(): string[] {
-    return resolveEngineRequiredVerifiers({
+    return [...new Set([...(this.parity.liveAuthority?.taskContract.verifier_requirements ?? []),...resolveEngineRequiredVerifiers({
       task: this.options.task,
       projectTestCommands: this.discoveredTestCommands.map((e) => e.command),
       requiredVerifierCommands: this.options.requiredVerifierCommands ?? null,
-    });
+    })])];
   }
 
   private clearVerifierEvidenceState(): void {
@@ -2640,15 +2684,8 @@ export class ChatEngine {
     requestedOutcome: TerminalOutcome | "PLAN_COMPLETE",
     hasMutation: boolean,
   ) {
-    refreshChatVerifierReceiptStalenessSync(
-      this.options.projectRoot,
-      this.lastVerifierReceipt,
-    );
-    for (const receipt of this.executedVerifierLedger)
-      refreshChatVerifierReceiptStalenessSync(
-        this.options.projectRoot,
-        receipt,
-      );
+    refreshChatCompletionVerifierCurrency(this.options, hasMutation,
+      this.lastVerifierReceipt, this.executedVerifierLedger);
     const verifierInput = this.buildVerifierInput();
 
     return this.executorKernel.completion.decide({
@@ -2661,6 +2698,7 @@ export class ChatEngine {
       verifierEvidenceErrors: verifierInput.verifierEvidenceErrors,
       requiredVerifierCommands: verifierInput.requiredVerifierCommands,
       toolCallLog: toGateToolLog(this.toolCallLog),
+      acceptance: this.criterionCompletion?.currentRequest(),
       ...(this.lastVerifierReceipt?.boundRevision
         ? { workspaceRevision: this.lastVerifierReceipt.boundRevision }
         : {}),
@@ -2806,23 +2844,7 @@ export class ChatEngine {
     this._turnIndex = 0;
     this._logIndexToTurn.clear();
     // W0.3: branch resync drops task-scoped runtime (counters already zeroed).
-    if (this.lastTurnRuntime) {
-      this.lastTurnRuntime = {
-        ...this.lastTurnRuntime,
-        writeCount: 0,
-        gateStrikes: 0,
-        criticStrikes: 0,
-        turnsWithoutWrite: 0,
-        consecutiveReadOnlyTools: 0,
-        consecutiveNonMutatingShells: 0,
-        toolsWithoutWrite: 0,
-        midLoopCriticFired: false,
-        budgetExceeded: false,
-        budgetLastChanceDone: false,
-        restrictToolsNextTurn: false,
-        continuedTask: false,
-      };
-    }
+    this.lastTurnRuntime = null;
   }
 
   /**
@@ -2835,8 +2857,9 @@ export class ChatEngine {
       threadId: this.parity.eventLog.thread_id ?? this.engineRunId,
       turnId: this.parity.turnId,
       root: this.options.projectRoot,
+      ...(this.options.executionScope?{executionScope:this.options.executionScope}:{}),
       approvalSession: getChatApprovalSession(),
-      indexWritePolicy: "allow",
+      indexWritePolicy: this.options.projectRoot ? "allow" : "deny",
     };
   }
 
@@ -2846,16 +2869,12 @@ export class ChatEngine {
    * satisfy a later completion gate. Pass continueTask: true for explicit
    * continuation (sticky intent + preserved counters).
    */
-  applyUserSubmission(input: {
-    userInput: string;
-    taskIntent?: TaskIntent;
-    continueTask?: boolean;
-    operation?: RequestedTaskOperation;
-  }): TurnRuntimeSnapshot {
+  prepareUserSubmission(input: import('./turnRuntime.js').UserSubmissionInput): import('./turnRuntime.js').PreparedUserSubmission {
     const previous = this.snapshotPreviousForBegin();
     const runtime = beginUserSubmission({
       userInput: input.userInput,
       projectRoot: this.options.projectRoot,
+      ...(this.options.executionScope?{executionScope:this.options.executionScope}:{}),
       operation: input.operation ?? this.options.operation,
       ...(this.options.model !== undefined
         ? { model: this.options.model }
@@ -2869,10 +2888,44 @@ export class ChatEngine {
       classifyIntent: (text) => ChatEngine.classifyChatTaskIntent(text),
       previous,
     });
+    return {input:{...input},runtime,objectiveDisposition:previous===null?'initial':runtime.objectiveContinuation?'preserve':'replace'};
+  }
+
+  private resolveSubmissionLimits(runtime:TurnRuntimeSnapshot):ChatEngineLimits {
+    const limits=resolveChatEngineLimits({...this.options,...(this.limits.costBudget?{costBudget:this.limits.costBudget}:{})},undefined,{taskClass:runtime.taskClass,taskText:runtime.taskText});
+    return this.modelPolicy?.provider==='openrouter'&&this.modelPolicy.providerModelId===LIVE_OPENROUTER_MODEL_ID?{...limits,investigateModel:LIVE_OPENROUTER_MODEL_ID,mutateModel:LIVE_OPENROUTER_MODEL_ID}:limits;
+  }
+
+  prepareSubmissionAllowance(prepared:import('./turnRuntime.js').PreparedUserSubmission,taskId:string):ChatTaskAllowanceSnapshot {
+    const preserve=prepared.objectiveDisposition==='preserve';
+    const allowance=preserve?this.getTaskAllowanceSnapshot():this.taskAllowanceOwner.createTaskAllowance(this.resolveSubmissionLimits(prepared.runtime));
+    if(!allowance||preserve&&this.taskCostScopeUnavailable)throw new Error('OBJECTIVE_BUDGET_UNAVAILABLE: Reconcile the retained task allowance before continuing');
+    const accountingFaults=structuredClone([...this.ownerAccountingFaults.values()].flat());
+    return {...allowance,acceptedTaskId:taskId,lastTurnRuntime:prepared.runtime,...(accountingFaults.length?{accountingFaults}:{})};
+  }
+
+  applyUserSubmission(input: import('./turnRuntime.js').UserSubmissionInput): TurnRuntimeSnapshot {
+    return this.applyPreparedUserSubmission(this.prepareUserSubmission(input));
+  }
+
+  admitUserSubmission(input:import('./turnRuntime.js').UserSubmissionInput,route:{model:string;provider:string},objective?:PreparedObjectiveSubmission):ObjectiveAdmissionResult {
+    return admitObjectiveSubmission(this as unknown as ObjectiveAdmissionHost,input,route,objective);
+  }
+
+  /** Install one prepared snapshot; durable admission may precede this step. */
+  applyPreparedUserSubmission(prepared: import('./turnRuntime.js').PreparedUserSubmission,accepted?:{allowance:ChatTaskAllowanceSnapshot;acceptanceChanged?:boolean;compiledChatStack?:import('./chatStackCompile.js').ChatCompiledStack}): TurnRuntimeSnapshot {
+    const {input,runtime}=prepared;
+
+    if (accepted?.acceptanceChanged) {
+      this.clearVerifierEvidenceState();
+      this.lastCriticReceipt = null;
+      if (this.workingState.lastVerifier) this.workingState.lastVerifier.fresh = false;
+      retireLiveCertificationForRun(this.engineRunId);
+    }
 
     const previousTask = this.options.task;
     const previousClass = this.taskClass;
-    this.options = { ...this.options, task: runtime.taskText };
+    this.options = { ...this.options, task: runtime.taskText,...(accepted?.compiledChatStack?{compiledChatStack:accepted.compiledChatStack}:{}) };
     this.taskClass = runtime.taskClass;
     if (previousTask !== runtime.taskText || previousClass !== runtime.taskClass
       || this.lastTurnRuntime?.effectiveOperation !== runtime.effectiveOperation) {
@@ -2975,44 +3028,8 @@ export class ChatEngine {
       this.stallState = createStallDetector();
       this.repetitionDetector.reset();
       // Budgets follow the new task class (not the previous submission's class).
-      this.limits = resolveChatEngineLimits(
-        {
-          ...(this.options.maxTurns !== undefined
-            ? { maxTurns: this.options.maxTurns }
-            : {}),
-          ...(this.options.maxConversationMessages !== undefined
-            ? { maxConversationMessages: this.options.maxConversationMessages }
-            : {}),
-          ...(this.options.maxEstimatedTokens !== undefined
-            ? { maxEstimatedTokens: this.options.maxEstimatedTokens }
-            : {}),
-          ...(this.options.maxTokensPerRound !== undefined
-            ? { maxTokensPerRound: this.options.maxTokensPerRound }
-            : {}),
-          ...(this.options.maxWallMs !== undefined
-            ? { maxWallMs: this.options.maxWallMs }
-            : {}),
-          ...(this.options.maxCostUsd !== undefined
-            ? { maxCostUsd: this.options.maxCostUsd }
-            : {}),
-          ...(this.limits.costBudget
-            ? { costBudget: this.limits.costBudget }
-            : {}),
-        },
-        undefined,
-        { taskClass: runtime.taskClass, taskText: runtime.taskText },
-      );
-      if (
-        this.modelPolicy?.provider === "openrouter" &&
-        this.modelPolicy.providerModelId === LIVE_OPENROUTER_MODEL_ID
-      ) {
-        this.limits = {
-          ...this.limits,
-          investigateModel: LIVE_OPENROUTER_MODEL_ID,
-          mutateModel: LIVE_OPENROUTER_MODEL_ID,
-        };
-      }
-      this.startIndependentTaskCostScope();
+      this.limits = this.resolveSubmissionLimits(runtime);
+      if(!accepted)this.startIndependentTaskCostScope();
       // Playbook / todo gate re-evaluate for the new task text.
       this.activePlaybook = selectPlaybookForChatTask(runtime.taskText) ?? null;
       this.requireTodoBeforeMutate = shouldRequireTodoPlan(
@@ -3027,11 +3044,11 @@ export class ChatEngine {
       delete recompileOptions.compiledChatStack;
       this.options = {
         ...this.options,
-        compiledChatStack: resolveChatInstructionContext(recompileOptions),
+        compiledChatStack: accepted?.compiledChatStack??resolveChatInstructionContext(recompileOptions),
       };
       // System prompt may embed class/playbook hints — rebuild next LLM call.
       this.clearSystemPromptCache();
-      if (this.parity?.liveAuthority) {
+      if (!accepted&&this.parity?.liveAuthority) {
         try {
           refreshEngineInstructionManifest({
             parity: this.parity,
@@ -3065,6 +3082,11 @@ export class ChatEngine {
         "Cannot restore durable task cost scope for explicit continuation.";
     }
 
+    if(accepted){
+      this.taskAllowance=accepted.allowance;
+      this.taskCostBaselineUsd=accepted.allowance.taskCostBaselineUsd;
+      this.activeExecutionCheckpointMs=null;
+    }
     this.lastTurnRuntime = runtime;
     this.persistTaskCostBaseline();
     this.policyEventLog.record({
@@ -3146,7 +3168,19 @@ export class ChatEngine {
       nextOptions.executionProfile = preparation.executionProfile;
     if (preparation.runtimeMode !== undefined)
       nextOptions.runtimeMode = preparation.runtimeMode;
-    this.options = { ...nextOptions, compiledChatStack: resolveChatInstructionContext(nextOptions) };
+    if(preparation.executionScope)nextOptions.executionScope=preparation.executionScope;
+    else if(preparation.projectRoot!==undefined){
+      if(preparation.projectRoot===null)throw new Error('An explicit conversation scope is required');
+      nextOptions.executionScope={kind:'project',projectRoot:preparation.projectRoot};
+    }
+    const preparedScope=normalizeChatExecutionScope(nextOptions);
+    if(preparedScope.kind!==normalizeChatExecutionScope(this.options).kind)throw new Error('SESSION_REBIND_REQUIRED: Execution scope changes require an explicit verified rebind');
+    nextOptions.executionScope=preparedScope;
+    const preparedOptions = { ...nextOptions, compiledChatStack: resolveChatInstructionContext(nextOptions) };
+    if(preparation.executionProfile!==undefined&&this.parity.liveAuthority?.taskContract.mode!==preparation.executionProfile)refreshEngineInstructionManifest({
+      parity:this.parity,options:preparedOptions,taskClass:resolveChatTaskClass({taskText:preparation.task,autoClassify:true,operation:preparation.operation}),executionProfile:preparation.executionProfile,engineRunDir:this.engineRunDir,
+    });
+    this.options = preparedOptions;
     if (preparation.intentPlanUserMessage !== undefined) {
       this.options.intentPlanUserMessage = preparation.intentPlanUserMessage;
     } else {
@@ -3186,14 +3220,15 @@ export class ChatEngine {
     // the same inputs the constructor uses.
     if (preparation.executionProfile !== undefined) {
       this.executionProfile = preparation.executionProfile;
+      this.executorKernel = createExecutorKernel(this.executionProfile, this.services);
     }
     this.hardPlanMode =
       this.executionProfile === "plan" ||
       this.options.hardPlanMode === true ||
       operatorModeIsHardPlan(this.operatorMode);
     if (this.planHandoff) {
-      // Implement handoff exits the hard-plan mutation block.
-      this.hardPlanMode = false;
+      // Retained implementation handoffs never grant effects to a Plan turn.
+      this.hardPlanMode = this.executionProfile === "plan";
     }
     // Reused TUI engines start a new task/context. Do not let a previous
     // task's read dedupe suppress evidence in the new request.
@@ -3238,7 +3273,8 @@ export class ChatEngine {
    * Reads `{runs}/chat-sessions/{engineRunId}/transcript.jsonl` via runsLayout,
    * parses each line as a JSON ChatMessage, and returns a ready-to-use engine
    * whose conversation history is pre-populated. No new system prompt is
-   * injected — the transcript already contains it.
+   * injected into canonical restores. Provider context is reconstructed from
+   * the durable log; transcript-only sessions retain the legacy fallback.
    *
    * The restored engine reuses the original `engineRunId` so that subsequent
    * `persistTranscript()` calls append to the same session directory.
@@ -3250,13 +3286,6 @@ export class ChatEngine {
     engineRunId: string,
     options: ChatEngineOptions,
   ): Promise<ChatEngine> {
-    const transcriptPath = layoutTranscriptPath(engineRunId);
-    const { readFile } = await import("node:fs/promises");
-    const content = await readFile(transcriptPath, "utf-8");
-    const messages: ChatMessage[] = content
-      .split("\n")
-      .filter((line) => line.trim() !== "")
-      .map((line) => JSON.parse(line));
     const sessionDir = chatSessionDir(engineRunId);
     // R1 durability (6b-1): recover an interrupted checkpoint batch BEFORE any
     // durable artifact is read. A merely staged/abandoned artifact is NEVER
@@ -3268,16 +3297,19 @@ export class ChatEngine {
     // source). Idempotent no-op without a journal; a malformed journal fails
     // closed (CHECKPOINT_JOURNAL_INVALID) here rather than after partial reads.
     recoverCheckpointArtifacts(sessionDir);
+    const threadLog=loadThreadEventLogFromDir(sessionDir);
+    assertConversationRestoreScope(threadLog,options);
+    const legacyArchive = retainedLegacyArchive(layoutTranscriptPath(engineRunId),threadLog ? new Set(threadLog.events.map(event => event.event_id)) : undefined,{allowMissing:threadLog!==null});
     const sessionLog = loadSessionEventLogForResume(sessionDir, engineRunId);
     const engine = new ChatEngine({
       ...options,
       runId: engineRunId,
       resumeExisting: true,
     });
-    engine.conversation = messages;
-    const threadLog = loadThreadEventLogFromDir(sessionDir);
     if (threadLog) {
       engine.restoreEventLog(threadLog);
+    } else {
+      engine.conversation = legacyArchiveToChatMessages(legacyArchive,{includeSystem:true});
     }
     // Load durable observation membership before session-event restore; the
     // restore re-persists the snapshot from this membership.
@@ -3287,6 +3319,13 @@ export class ChatEngine {
     // owner recovery + installed-lineage validation + independent observation
     // re-authorization. A checkpoint that cannot prove all three stays inert.
     engine.hydrateInstalledContextAuthority(sessionDir);
+    if (threadLog) {
+      const context = engine.getProviderConversation();
+      const legacy = context.some(message => message.name === 'compaction_capsule') ? [] : legacyArchiveToChatMessages(legacyArchive);
+      engine.conversation = [...legacy, ...providerMessagesToChatMessages(context)];
+      const recoveryGuidance = resumedToolRecoveryGuidance(engine.parity.sessionEvents);
+      if (recoveryGuidance) engine.conversation.push({role:'system',content:recoveryGuidance});
+    }
     engine.clearVerifierEvidenceState();
     engine.cachedSystemPromptLegacy = null;
     engine.cachedSystemPromptNative = null;
@@ -3328,10 +3367,12 @@ export class ChatEngine {
   private admitCurrentSubmission(
     submissionGeneration: number,
     userInput: string,
+    objective?: {taskId:string;taskClass:ChatTaskClass},
   ): ChatEngineAdmissionClaim | null {
     return this.p11Authority.admitCurrentSubmission(
       submissionGeneration,
       userInput,
+      objective,
     );
   }
 
@@ -3395,10 +3436,19 @@ export class ChatEngine {
       runDir: this.engineRunDir,
       babelRoot: process.env["BABEL_ROOT"] ?? process.cwd(),
       signal: this.abortController.signal,
-      projectRoot: this.options.projectRoot,
+      ...(this.options.projectRoot?{projectRoot:requireProjectRoot(this.options)}:{}),
       sessionId: this.engineRunId,
       ...(this.parity.turnId ? { turnId: this.parity.turnId } : {}),
     };
+    if(this.options.executionScope?.kind==='conversation'){
+      const observations:string[]=[];
+      for(const [index,action] of actions.entries()){
+        if(!this.isSubmissionCurrent(ownerGeneration))break;
+        const result=await this.executeOneAction(action,toolContext,callbacks,{index,ownerGeneration,idempotencyKey:this._streamNativeToolCallIds[index]??`tool_call_${this._turnIndex}_${index}`});
+        observations.push(result.observation);
+      }
+      return {observations:observations.join('\n\n'),observationList:observations,count:observations.length};
+    }
     // Order-preserving batches (only consecutive reads may parallelize).
     const batches = planToolBatches(
       orderChatToolActions(
@@ -3716,7 +3766,7 @@ export class ChatEngine {
       if (raw.length === 0) return null;
       // Session mutation batches may carry absolute or repo-relative paths;
       // RevisionManager requires canonical repository-relative paths.
-      const root = resolve(this.options.projectRoot);
+      const root = resolve(requireProjectRoot(this.options));
       const relativePaths: string[] = [];
       for (const candidate of raw) {
         const absolute = isAbsolute(candidate)
@@ -3729,7 +3779,7 @@ export class ChatEngine {
       const unique = [...new Set(relativePaths)].sort();
       if (unique.length === 0) return null;
       return RevisionManager.computeRevisionSync(
-        this.options.projectRoot,
+        requireProjectRoot(this.options),
         unique,
       ).compositeTreeHash;
     } catch {
@@ -3817,7 +3867,7 @@ export class ChatEngine {
       readCacheKey: path => this.readCacheKey(path) }, paths);
     if (paths.length === 0) invalidateRepoMapCache();
     for (const path of paths) {
-      invalidateRepoMapFile(resolve(this.options.projectRoot, path));
+      invalidateRepoMapFile(resolve(requireProjectRoot(this.options), path));
     }
     this.repoMapCache = null;
     this.repoMapInvalidated = true;
@@ -3830,7 +3880,7 @@ export class ChatEngine {
     // Existing post-edit callers are mutation notifications too. Keep that
     // contract while sharing the boundary with shell/child/failed settlements.
     this.invalidateRepositoryContext([filePath], "post-edit notification");
-    return runPostEditStaticCheckFn(filePath, this.options.projectRoot);
+    return runPostEditStaticCheckFn(filePath, requireProjectRoot(this.options));
   }
 
   /**
@@ -3841,7 +3891,7 @@ export class ChatEngine {
    */
   private async generateRepoMap(userInput?: string): Promise<string> {
     return buildChatEngineRepoMapPreamble(
-      this.options.projectRoot,
+      requireProjectRoot(this.options),
       this.conversation,
       this.limits.maxEstimatedTokens,
       userInput,
@@ -3912,6 +3962,7 @@ export class ChatEngine {
     const operation = this.lastTurnRuntime?.effectiveOperation
       ?? resolveTaskShape(this.options.task, this.options.operation).operation;
     const toolDefs = availableChatTools(this.services.tools.buildDefinitions(), {
+      executionScope:this.options.executionScope,
       operation,
       requiredVerifiers: this.getResolvedRequiredVerifiers(),
       hostFallbackAllowed: this.isolationBrokerFlags().hostFallbackAllowed,
@@ -4158,6 +4209,7 @@ export class ChatEngine {
       tools: this.services.tools,
       takeToolPolicy: () => this.nextTurnToolPolicy(),
       acceptedOperation: this.getTurnRuntimeSnapshot()?.effectiveOperation,
+      executionScope:this.options.executionScope,
       requiredVerifierCommands: this.getResolvedRequiredVerifiers(),
       hostFallbackAllowed: this.isolationBrokerFlags().hostFallbackAllowed,
       systemPrompt: (mode) => this.getOrBuildSystemPrompt(mode),
@@ -4230,7 +4282,7 @@ export class ChatEngine {
       ?? resolveTaskShape(this.options.task, this.options.operation).operation;
     const availableToolNames = availableChatToolNames(
       [...this.services.tools.buildDefinitions().map(tool => tool.function.name), ...TEXT_TOOL_NAMES],
-      { operation, requiredVerifiers: operation === "READ_ONLY" ? this.getResolvedRequiredVerifiers() : [],
+      { executionScope:this.options.executionScope, operation, requiredVerifiers: operation === "READ_ONLY" ? this.getResolvedRequiredVerifiers() : [],
         hostFallbackAllowed: this.isolationBrokerFlags().hostFallbackAllowed },
     );
     const systemCtx = [this.options.systemContext, this.options.compiledChatStack?.system_context]
@@ -4241,7 +4293,7 @@ export class ChatEngine {
       textTools,
       availableToolNames,
       availableToolDefinitions: availableChatTools(this.services.tools.buildDefinitions(), {
-        operation, requiredVerifiers: this.getResolvedRequiredVerifiers(),
+        executionScope:this.options.executionScope, operation, requiredVerifiers: this.getResolvedRequiredVerifiers(),
         hostFallbackAllowed: this.isolationBrokerFlags().hostFallbackAllowed,
       }),
       executionFirst: isMutationExecutionTask(
@@ -4303,7 +4355,7 @@ export class ChatEngine {
   private initializeVerifierGuard(): void {
     initializeVerifierDependencyHashes(
       this.options.task,
-      this.options.projectRoot,
+      requireProjectRoot(this.options),
       this.verifierDependencyHashes,
     );
   }
@@ -4317,7 +4369,7 @@ export class ChatEngine {
     };
     const warning = checkVerifierTamperFn(
       filePath,
-      this.options.projectRoot,
+      requireProjectRoot(this.options),
       state,
     );
     this.verifierTampered = state.verifierTampered;
@@ -4440,7 +4492,7 @@ export class ChatEngine {
   }
 
   private async hashFilePath(filePath: string): Promise<string> {
-    const admitted = admitProjectContentRead(this.options.projectRoot, filePath);
+    const admitted = admitProjectContentRead(requireProjectRoot(this.options), filePath);
     if (!admitted.ok) return "";
     try {
       return this.hashContent(await readFile(admitted.target, "utf-8"));
@@ -4550,7 +4602,7 @@ export class ChatEngine {
   ): ChatUsageScope {
     return {
       taskOwnerId: this.taskAllowance?.taskOwnerId ?? null,
-      projectRoot: realpathSync(this.options.projectRoot),
+      ...(this.options.projectRoot?{projectRoot:realpathSync(requireProjectRoot(this.options))}:{}),
       accountingEpoch: globalCostTracker.getAccountingEpoch(),
       turnId: this.parity.turnId,
       chargeId: null,
@@ -4619,13 +4671,14 @@ export class ChatEngine {
         decideCompletion: (requested, hasMutation) =>
           this.decideCompletion(requested, hasMutation),
         settleActiveExecution: () => this.settleActiveExecutionForTerminal(),
-        finalizeTurn: (outcome, status, reason) =>
+        finalizeTurn: (outcome, status, reason, response) =>
           finalizeParityTurnSync(
             this.parity,
             this.engineRunDir,
             outcome,
             status,
             reason,
+            response,
           ),
         storeTelemetry: (record) => {
           this.lastTurnTelemetry = record;

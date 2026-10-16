@@ -12,15 +12,18 @@ function partsOf(relative) {
   if (parts.some(p => p === '..' || denied(p))) throw new Error('This path is outside the permitted file-viewing scope');
   return parts;
 }
-async function resolveScoped(root, relative) {
+export async function resolveScoped(root, relative, {allowMissing = false} = {}) {
   if (typeof root !== 'string' || !path.isAbsolute(root)) throw new Error('Select a project first');
   const base = await realpath(root);
   let target = base;
+  let missing = false;
   for (const part of partsOf(relative)) {
     target = path.join(target,part);
-    if ((await lstat(target)).isSymbolicLink()) throw new Error('Linked paths are not opened by the file viewer');
+    if(missing)continue;
+    try{if ((await lstat(target)).isSymbolicLink()) throw new Error('Linked paths are not opened by the file viewer');}
+    catch(error){if(allowMissing&&error.code==='ENOENT')missing=true;else throw error;}
   }
-  const canonical = await realpath(target);
+  const canonical = missing ? target : await realpath(target);
   const relation = path.relative(base,canonical);
   if (relation === '..' || relation.startsWith(`..${path.sep}`) || path.isAbsolute(relation)) throw new Error('Path escapes the selected project');
   return canonical;
@@ -45,6 +48,7 @@ export async function readProjectFile(root, relative) {
     const {bytesRead} = await handle.read(bytes,0,bytes.length,0);
     const content = bytes.subarray(0,bytesRead);
     if (content.includes(0)) throw new Error('Binary files are not shown in the text viewer');
-    return {text:content.toString('utf8'),truncated:stat.size>bytesRead};
+    const text=content.toString('utf8');
+    return {text,truncated:stat.size>bytesRead,validUtf8:Buffer.from(text,'utf8').equals(content)};
   } finally { await handle.close(); }
 }

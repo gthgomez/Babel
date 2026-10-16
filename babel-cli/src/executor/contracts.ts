@@ -1,4 +1,5 @@
 import type { TerminalOutcome } from '../schemas/agentContracts.js'
+import type { CriterionCompletionRequestV1 } from '../authority/criterionCompletion.js'
 
 /** Version of the shared executor contracts persisted in session metadata. */
 export const EXECUTOR_CONTRACT_VERSION = 'executor-contract-v1' as const
@@ -34,6 +35,12 @@ export interface SessionDescriptor {
   contractVersion: string
   task?: string
 }
+
+/** In-process conversation descriptor; legacy project protocol stays unchanged. */
+export type ExecutionSessionDescriptor = SessionDescriptor | (Omit<SessionDescriptor, 'projectRoot'> & {
+  projectRoot: null
+  executionScope: {kind:'conversation'}
+})
 
 /** Classification used to decide whether an interrupted effect is safe to reconcile. */
 export type ToolEffectClass =
@@ -120,6 +127,8 @@ export interface ExecutorCompletionInput {
     mutation_paths?: string[]
   }[]
   proof?: { compliant: boolean; errors?: string[] }
+  /** Opaque per-engine authority plus the current accepted task/run/project. */
+  acceptance?: CriterionCompletionRequestV1 | undefined
   workspaceRevision?: WorkspaceRevisionIdentity
   evidenceRefs?: string[]
 }

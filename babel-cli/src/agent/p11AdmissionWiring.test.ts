@@ -291,7 +291,7 @@ test('fresh production path: admit → durable owner → currentP11Owner resolve
   });
 });
 
-test('a real submission admits the command before execution and settles it at termination', async () => {
+test('a real submission admits the command before execution and settles it at termination', async (t) => {
   await withRunsDir(async () => {
     const runId = 'p11-submission-e2e';
     const projectRoot = makeProjectRoot();
@@ -302,6 +302,7 @@ test('a real submission admits the command before execution and settles it at te
     let engine: ChatEngine | undefined;
     try {
       engine = submittingEngine(runId, projectRoot, store);
+      const prepare = t.mock.method(engine, 'prepareUserSubmission', engine.prepareUserSubmission.bind(engine));
       const events = [];
       for await (const event of engine.submitMessageStream('Answer in one short sentence.')) {
         events.push(event);
@@ -320,6 +321,19 @@ test('a real submission admits the command before execution and settles it at te
       assert.ok(mode.providerCalls >= 1, 'the turn really executed');
 
       assert.equal(internals(engine).currentP11Owner(), null, 'no live claim after settlement');
+      const firstTaskId = engine.getTaskContract()!.task_id;
+      for await (const _event of engine.submitMessageStream('Explain the fixture architecture.')) { /* drain */ }
+      const secondTaskId = engine.getTaskContract()!.task_id;
+      assert.equal(prepare.mock.callCount(), 2, 'prepare each submission exactly once');
+      assert.notEqual(secondTaskId, firstTaskId);
+      const database = new DatabaseSync(store.dbPath, { readOnly: true });
+      try {
+        const rows = database.prepare('SELECT input_json FROM admission ORDER BY rowid').all();
+        const commands = rows.map(row => JSON.parse(String(row['input_json'])) as { taskId: string; taskShapeClass: string });
+        assert.equal(commands[0]!.taskId, firstTaskId, 'first command binds its accepted objective');
+        assert.equal(commands[1]!.taskId, secondTaskId, 'next command binds its new objective');
+        assert.equal(commands[1]!.taskShapeClass, engine.getTurnRuntimeSnapshot()!.taskClass);
+      } finally { database.close(); }
     } finally {
       globalThis.fetch = originalFetch;
       engine?.closeAdmissionStore();

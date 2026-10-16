@@ -4,9 +4,11 @@
  */
 
 import { createHash } from 'node:crypto';
+import {sha256Canonical} from '../acceptance/canonical.js';
 import type { ParityRuntime } from './chatEngineParityBridge.js';
-import { assertSessionEventRecoveryReconciliationCausality, assertSessionEventToolLifecycleCausalities, assertSessionEventCompactionLifecycleCausality, type SessionEvent, type SessionEventLog } from './sessionEvents.js';
-import type { ThreadEvent, ThreadEventLog } from './threadEventLog.js';
+import { assertSessionEventRecoveryReconciliationCausality, assertSessionEventToolLifecycleCausalities, assertSessionEventCompactionLifecycleCausality,createSessionEventLog,loadSessionEventLogIfPresentForResume,loadSessionEventLogForResume, type SessionEvent, type SessionEventLog } from './sessionEvents.js';
+import {loadThreadEventLogFromDir,type ThreadEvent,type ThreadEventLog} from './threadEventLog.js';
+import {assertConversationRestoreScope} from './chatExecutionScope.js';
 import type { LiveSessionV1 } from './liveSession.js';
 import {
   resolveLiveSessionAuthority,
@@ -15,11 +17,14 @@ import {
   loadLiveSessionAuthorityStrict,
   projectFromDurableSession,
   persistLiveSessionSnapshot,
+  loadLiveSessionSnapshot,
   recoverCheckpointArtifacts,
   canMutateWithIdempotencyKey,
   type LiveSessionAuthority,
 } from './liveSessionBridge.js';
-import { paritySettleInterruptedOnResume } from './chatEngineParityBridge.js';
+import { paritySettleInterruptedOnResume,checkpointParityEventLogStrictSync } from './chatEngineParityBridge.js';
+import {reviseTaskModeCompanion} from './taskModeRevision.js';
+import {advanceObjectiveMode} from './taskObjectiveLifecycle.js';
 import { loadProjectSessionIdentityDispositionSync } from '../interactive/identity.js';
 import { AUTHORITY_SESSION_FILENAME, establishAuthoritySession } from '../authority/sessionContext.js';
 import {
@@ -28,11 +33,15 @@ import {
 } from '../authority/taskClarity.js';
 import { join } from 'node:path';
 import type { ChatCompiledStack } from './chatStackCompile.js';
+import type {ChatExecutionScope} from './chatExecutionScope.js';
 
 /** Minimal options slice — avoids circular import with chatEngine.ts. */
 export interface LiveAuthorityOptionsSlice {
-  projectRoot: string;
+  projectRoot: string | null;
+  executionScope?: ChatExecutionScope;
   task: string;
+  resumeExisting?: boolean;
+  retainedHistory?: boolean;
   instructionRoot?: string;
   workspaceRoot?: string | null;
   model?: string;
@@ -42,6 +51,8 @@ export interface LiveAuthorityOptionsSlice {
 }
 
 export interface RefreshableAuthorityInput {
+  taskId?:string;
+  objectiveLifecycle?:boolean;
   parity: ParityRuntime;
   options: LiveAuthorityOptionsSlice;
   taskClass: string;
@@ -59,11 +70,11 @@ export interface RefreshableAuthorityInput {
  * delivered. Call this from the turn-preparation path (see the report: the call
  * site lives in the reserved `chatEngine.ts`) to keep the manifest current.
  *
- * The frozen `taskContract` is intentionally preserved for the run; only the
- * instruction manifest and its compiled stack are recomputed here. When no
- * authority exists yet (construction) the full authority is returned.
+ * Same-mode refresh preserves the frozen contract. A requested supported mode
+ * creates a linked immutable revision with the same objective and acceptance,
+ * committed with its manifest/history through the existing strict journal.
  */
-export function refreshEngineInstructionManifest(
+export function prepareEngineInstructionAuthority(
   input: RefreshableAuthorityInput,
 ): LiveSessionAuthority {
   const mode =
@@ -77,13 +88,16 @@ export function refreshEngineInstructionManifest(
   // manifest reports delivered files. Candidate-controlled target instructions
   // are never read when a trusted instructionRoot is set.
   const identityRoot = input.options.instructionRoot ?? input.options.projectRoot;
-  const identity = loadProjectSessionIdentityDispositionSync(
+  const identity = identityRoot ? loadProjectSessionIdentityDispositionSync(
     identityRoot,
     input.options.instructionRoot ?? input.options.workspaceRoot ?? null,
-  );
-  const resolved = resolveLiveSessionAuthority({
+  ) : {fragments:[]};
+  return resolveLiveSessionAuthority({
     mode,
+    ...(input.taskId?{taskId:input.taskId}:{}),
+    ...(input.objectiveLifecycle?{objectiveLifecycle:true}:{}),
     projectRoot: input.options.projectRoot,
+    ...(input.options.executionScope?{executionScope:input.options.executionScope}:{}),
     ...(input.options.instructionRoot ? { instructionRoot: input.options.instructionRoot } : {}),
     task: input.options.task,
     ...(input.options.compiledChatStack ? { compiledChatStack: input.options.compiledChatStack } : {}),
@@ -95,6 +109,10 @@ export function refreshEngineInstructionManifest(
       : [],
     systemContextFragments: identity.fragments,
   });
+}
+
+export function refreshEngineInstructionManifest(input:RefreshableAuthorityInput):LiveSessionAuthority{
+  const resolved=prepareEngineInstructionAuthority(input),mode=resolved.taskContract.mode;
   const current = input.parity.liveAuthority;
   const authority: LiveSessionAuthority = current
     ? {
@@ -103,18 +121,65 @@ export function refreshEngineInstructionManifest(
         ...(resolved.chatStack ? { chatStack: resolved.chatStack } : {}),
       }
     : resolved;
+  if(current&&current.taskContract.mode!==mode){
+    const revised=reviseTaskModeCompanion(current.taskContract,mode,current.taskModeHistory??{schema_version:1,revisions:[current.taskContract]});
+    if(input.options.resumeExisting===true||input.options.retainedHistory===true)hydrateRetainedModeSources(input);
+    authority.taskContract=revised.contract;
+    authority.taskModeHistory=revised.history;
+    if(current.taskObjectiveLifecycle)authority.taskObjectiveLifecycle=advanceObjectiveMode(current.taskObjectiveLifecycle,{taskContract:authority.taskContract,taskModeHistory:authority.taskModeHistory});
+    input.parity.liveAuthority=authority;
+    const receipt=checkpointParityEventLogStrictSync(input.parity,input.engineRunDir);
+    if(receipt.status!=='committed'){
+      input.parity.liveAuthority=current;
+      throw new Error('MODE_TRANSITION_NOT_COMMITTED: The prior mode is retained; repair session storage before retrying');
+    }
+    return authority;
+  }
   input.parity.liveAuthority = authority;
   persistLiveSessionAuthority(input.engineRunDir, authority);
   return authority;
 }
 
 export function initLiveAuthorityOnEngine(input: RefreshableAuthorityInput): void {
-    input.parity.authoritySession = establishAuthoritySession({
+    if(input.options.projectRoot)input.parity.authoritySession = establishAuthoritySession({
       repoRoot: input.options.projectRoot,
       persistPath: join(input.engineRunDir, AUTHORITY_SESSION_FILENAME),
     });
+    else delete input.parity.authoritySession;
     refreshEngineInstructionManifest(input);
     refreshTaskAuthorityGate(input.parity, input.options.task);
+}
+
+function retainCompleteLog<T extends {events:unknown[]}>(current:T,durable:T):T{
+  for(let index=0;index<Math.min(current.events.length,durable.events.length);index++)if(sha256Canonical(current.events[index])!==sha256Canonical(durable.events[index]))throw new Error('MODE_HISTORY_DIVERGED: Reconcile retained session history before changing modes');
+  return current.events.length>=durable.events.length?current:durable;
+}
+
+/** Every retained-mode checkpoint uses complete compatible sources, including a
+ * delayed selection after a cells/legacy resume. Pending live appends survive.
+ */
+export function hydrateRetainedModeSources(input:RefreshableAuthorityInput):void{
+  const thread=loadThreadEventLogFromDir(input.engineRunDir);
+  if(!thread)throw new Error('MODE_HISTORY_SOURCE_MISSING: Reopen this legacy session in its prior mode; a mode change requires its retained canonical history');
+  assertConversationRestoreScope(thread,input.options);
+  if(thread.thread_id!==input.parity.eventLog.thread_id)throw new Error('MODE_HISTORY_DIVERGED: Retained thread identity does not match');
+  // A newly forked thread has no accepted turn yet. Missing is valid only for
+  // that empty canonical generation; existing or malformed logs still validate.
+  const session=thread.events.length===0&&input.parity.sessionEvents.events.length===0
+    ?loadSessionEventLogIfPresentForResume(input.engineRunDir,thread.thread_id)??createSessionEventLog(thread.thread_id)
+    :loadSessionEventLogForResume(input.engineRunDir,thread.thread_id);
+  const retainedThread=retainCompleteLog(input.parity.eventLog,thread),retainedSession=retainCompleteLog(input.parity.sessionEvents,session);
+  // Durable logs own event data; staging and subscribers belong to this runtime.
+  input.parity.eventLog=retainedThread;input.parity.sessionEvents={...retainedSession,
+    ...(input.parity.sessionEvents.observationBus?{observationBus:input.parity.sessionEvents.observationBus}:{}),
+    ...(input.parity.sessionEvents.deferObservations?{deferObservations:true}:{}),
+  };
+  input.parity.authorizedObservationIds=new Set([...(input.parity.authorizedObservationIds??[]),...(loadLiveSessionSnapshot(input.engineRunDir)?.authorized_observation_ids??[])]);
+}
+
+/** A cold selection uses the same guard as a later resumed-mode preparation. */
+export function refreshRestoredEngineMode(input:RefreshableAuthorityInput):void{
+  refreshEngineInstructionManifest({...input,options:{...input.options,resumeExisting:true}});
 }
 
 function looksLikeClarificationAnswer(

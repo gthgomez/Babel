@@ -12,6 +12,11 @@ import {
   threadStoreExists,
 } from './threadStore.js';
 import { allocateThreadId } from './threadIds.js';
+import {chatSessionDir,chatSessionsDir} from '../../cli/runsLayout.js';
+import {mkdirSync} from 'node:fs';
+import {createThreadEventLog,loadThreadEventLogFromDir,persistThreadEventLog} from '../../agent/threadEventLog.js';
+import {recoverCheckpointArtifacts} from '../../agent/liveSessionBridge.js';
+import {recordTaskContinuityReset} from '../../agent/restoreTurnRuntime.js';
 
 function findCellIndex(cells: HistoryCellRecord[], cellId: string): number {
   return cells.findIndex((cell) => cell.cell_id === cellId);
@@ -55,6 +60,16 @@ export async function forkThread(
   }
 
   const newThreadId = options.newThreadId ?? allocateThreadId();
+  if(!/^[\w-]{1,80}$/.test(newThreadId))throw new Error('Invalid fork destination id');
+  if(threadStoreExists(newThreadId))throw new Error('Fork destination already exists');
+  // Claim the canonical destination exclusively before modifying either store.
+  // Headless sessions need not have HistoryCells; even an empty directory or a
+  // concurrent claimant must never be overwritten by this fork.
+  mkdirSync(chatSessionsDir(),{recursive:true});
+  try{mkdirSync(chatSessionDir(newThreadId));}catch(error){
+    if((error as NodeJS.ErrnoException).code==='EEXIST')throw new Error('Fork destination already exists');
+    throw error;
+  }
   const copied = sourceCells.slice(0, endIndex + 1).map((record) => ({
     ...structuredClone(record),
     thread_id: newThreadId,
@@ -67,6 +82,9 @@ export async function forkThread(
   });
   await replaceThreadRecords(newThreadId, copied);
   setThreadBranchMeta(newThreadId, sourceThreadId, upToCellId);
+  // Copied cells are conversation context, never the source's execution proof.
+  // Establish this new thread's empty canonical history before it can resume.
+  await persistThreadEventLog(chatSessionDir(newThreadId),createThreadEventLog(newThreadId));
 
   return {
     new_thread_id: newThreadId,
@@ -100,6 +118,12 @@ export async function rewindThread(threadId: string, afterCellId: string): Promi
 
   const kept = cells.slice(0, endIndex + 1);
   const truncated = cells.length - kept.length;
+  if(truncated>0){
+    const runDir=chatSessionDir(threadId);
+    recoverCheckpointArtifacts(runDir);
+    const log=loadThreadEventLogFromDir(runDir);
+    if(log){recordTaskContinuityReset(log);await persistThreadEventLog(runDir,log);}
+  }
   await replaceThreadRecords(threadId, kept);
 
   return {

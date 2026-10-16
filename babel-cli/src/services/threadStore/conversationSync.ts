@@ -6,10 +6,17 @@
 import type { ChatMessage } from '../../agent/chatToolDefinitions.js';
 import { ChatEngine, type ChatEngineOptions } from '../../agent/chatEngine.js';
 import type { ProviderMessage } from '../../runners/base.js';
+import { providerMessagesToChatMessages } from '../../agent/providerMessagesToChatMessages.js';
+export { providerMessagesToChatMessages } from '../../agent/providerMessagesToChatMessages.js';
 import {
   rebuildProviderMessagesFromEvents,
+  loadThreadEventLogFromDir,
   type ThreadEventLog,
 } from '../../agent/threadEventLog.js';
+import {chatSessionDir} from '../../cli/runsLayout.js';
+import {existsSync} from 'node:fs';
+import {join} from 'node:path';
+import {recoverCheckpointArtifacts,loadLiveSessionAuthorityStrict,INSTRUCTION_MANIFEST_FILENAME,TASK_CONTRACT_FILENAME,TASK_MODE_HISTORY_FILENAME} from '../../agent/liveSessionBridge.js';
 // re-export for callers
 export type { ThreadEventLog };
 import type {
@@ -30,23 +37,6 @@ export function cellsToChatMessages(records: HistoryCellRecord[]): ChatMessage[]
     }
   }
   return messages;
-}
-
-/** Convert ProviderMessage[] into legacy ChatMessage[] for replaceConversation. */
-export function providerMessagesToChatMessages(
-  messages: ProviderMessage[],
-): ChatMessage[] {
-  return messages.map((m) => {
-    const base: ChatMessage = {
-      role: m.role,
-      content: m.content,
-    };
-    if (m.name) base.name = m.name;
-    if (m.provenance) base.provenance = m.provenance;
-    if (m.authoritative !== undefined) base.authoritative = m.authoritative;
-    if (m.compactionCandidate) base.compactionCandidate = true;
-    return base;
-  });
 }
 
 /**
@@ -85,8 +75,28 @@ export function resyncEngineToThreadCells(
   engine: ChatEngine,
   records: HistoryCellRecord[],
 ): void {
-  applyCellsToChatEngine(engine, records);
-  engine.resyncTurnStateAfterBranch();
+  try{
+    const log=loadThreadEventLogFromDir(chatSessionDir(engine.getEngineRunId()));
+    if(log)engine.restoreEventLog(log);
+    applyCellsToChatEngine(engine, records);
+  }finally{engine.resyncTurnStateAfterBranch();}
+}
+
+/** Inspect existing authority before any constructor can replace its artifacts. */
+function constructResumedEngine(threadId:string,options:ChatEngineOptions):ChatEngine{
+  const runDir=chatSessionDir(threadId);recoverCheckpointArtifacts(runDir);
+  if([INSTRUCTION_MANIFEST_FILENAME,TASK_CONTRACT_FILENAME,TASK_MODE_HISTORY_FILENAME].some(name=>existsSync(join(runDir,name)))){
+    const retained=loadLiveSessionAuthorityStrict(runDir);
+    const engine=new ChatEngine({...options,runtimeMode:options.runtimeMode??'direct',runId:threadId,resumeExisting:true,executionProfile:options.executionProfile??retained.taskContract.mode});
+    // Accepted intent comes from canonical history, independently of whether
+    // the accounting checkpoint is available. A bare continuation must not
+    // acquire a fresh objective/allowance because its budget could not restore.
+    const log=loadThreadEventLogFromDir(runDir);
+    if(log)engine.restoreEventLog(log);
+    return engine;
+  }
+  const engine=new ChatEngine({...options,runtimeMode:options.runtimeMode??'direct',retainedHistory:true});
+  engine.assignRunId(threadId);return engine;
 }
 
 /** Create a ChatEngine from thread-store cells (no transcript.jsonl required). */
@@ -95,8 +105,7 @@ export function createEngineFromThreadCells(
   options: ChatEngineOptions,
   records: HistoryCellRecord[],
 ): ChatEngine {
-  const engine = new ChatEngine({ ...options, runtimeMode: options.runtimeMode ?? 'direct' });
-  engine.assignRunId(threadId);
+  const engine = constructResumedEngine(threadId,options);
   applyCellsToChatEngine(engine, records);
   return engine;
 }
@@ -110,8 +119,7 @@ export function createEngineFromEventLog(
   log: ThreadEventLog,
   systemPrompt?: string,
 ): ChatEngine {
-  const engine = new ChatEngine({ ...options, runtimeMode: options.runtimeMode ?? 'direct' });
-  engine.assignRunId(log.thread_id);
+  const engine = constructResumedEngine(log.thread_id,options);
   applyEventLogToChatEngine(engine, log, {
     ...(systemPrompt !== undefined ? { systemPrompt } : {}),
   });

@@ -1,3 +1,4 @@
+import {requireProjectRoot} from '../chatExecutionScope.js';
 /**
  * apply_patch executor path — extracted from chatEngineActionExecutor.ts to
  * stay under the repo's 2,000-line file-size ratchet (packet D1).
@@ -69,7 +70,7 @@ export async function executeGovernedApplyPatchAction(
   const gov: GovernedApplyPatchResult = await governedApplyPatch(
     { patch: patchText },
     {
-      projectRoot: host.options.projectRoot,
+      projectRoot: requireProjectRoot(host.options),
       context: toolContext,
       preset: "workspace_write",
       executor: defaultToolExecutor,
@@ -154,7 +155,7 @@ export async function executeGovernedApplyPatchAction(
   }
   if (gov.exit_code === 0 && patchEffect.status === "confirmed_change") {
     const { adds, dels } = countPatchStats(patchText);
-    const edit = actualRecoveryEdit(action, host.options.projectRoot);
+    const edit = actualRecoveryEdit(action, requireProjectRoot(host.options));
     host.workingState = applyWorkingStateEvent(host.workingState, {
       type: "mutation",
       path: primaryPath,

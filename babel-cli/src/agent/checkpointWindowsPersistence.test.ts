@@ -15,7 +15,7 @@ import { persistThreadEventLog, recordAssistantMessage, serializeThreadEventLog,
 // kills that exact process; no exception or graceful cleanup simulates death.
 test('actual process kills preserve a coherent checkpoint generation across publication boundaries', { timeout: 240_000 }, async () => {
   const require = createRequire(import.meta.url)
-  for (const phase of ['prepare', 'partial', 'install', 'commit', 'restore']) {
+  for (const phase of ['prepare', 'partial', 'install', 'history', 'commit', 'restore']) {
     const { root, runtime } = fixture()
     const ready = join(root, 'kill-ready')
     const expected = join(root, 'expected-next.json')
@@ -43,6 +43,7 @@ const root = ${JSON.stringify(root)};
 const phase = ${JSON.stringify(phase)};
 const runtime = createParityRuntime('fixture-thread');
 runtime.liveAuthority = resolveLiveSessionAuthority({ mode: 'chat', projectRoot: root, task: 'checkpoint fixture' });
+runtime.liveAuthority.taskModeHistory = { schema_version: 1, revisions: [runtime.liveAuthority.taskContract] };
 runtime.contextCheckpoint = (${installableContext.toString()})(runtime.eventLog.thread_id);
 runtime.contextCheckpoint = { ...runtime.contextCheckpoint, checkpointId: 'checkpoint-test-2' };
 recordAssistantMessage(runtime.eventLog, 'turn', 'next durable generation');
@@ -62,7 +63,7 @@ fs.renameSync = function(source, destination) {
     return result;
   }
   renames++;
-  if ((phase === 'partial' && renames === 2) || (phase === 'install' && String(destination).endsWith('context-checkpoint.json')) || (phase === 'restore' && renames === 4)) park();
+  if ((phase === 'partial' && renames === 2) || (phase === 'install' && String(destination).endsWith('context-checkpoint.json')) || (phase === 'history' && String(destination).endsWith('task-mode-history.json')) || (phase === 'restore' && renames === 4)) park();
   return result;
 };
 syncBuiltinESMExports();
@@ -103,6 +104,7 @@ function fixture() {
   const root = mkdtempSync(join(tmpdir(), 'babel-windows-checkpoint-'))
   const runtime = createParityRuntime('fixture-thread')
   runtime.liveAuthority = resolveLiveSessionAuthority({ mode: 'chat', projectRoot: root, task: 'checkpoint fixture' })
+  runtime.liveAuthority.taskModeHistory = { schema_version: 1, revisions: [runtime.liveAuthority.taskContract] }
   return { root, runtime }
 }
 

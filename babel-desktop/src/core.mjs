@@ -1,6 +1,19 @@
 /** Pure renderer/transport utilities. No Babel runtime behavior lives here. */
-export function modeUnavailableReason(mode, provider) {
+export function hydrateArchivedMessage(message) {
+  const base={...message,archiveIndex:message.messageIndex};
+  if(message.role==='user'&&!message.activity)return base;
+  const tools=Array.isArray(message.tools)?message.tools:[];
+  const blocks=message.activity?.kind==='context'||message.activity?.kind==='model_candidate'
+    ? [{kind:'note',label:message.activity.label,text:message.text}]
+    : [...(message.activity?.kind==='tools'?(message.assistantText?[{kind:'text',text:message.assistantText}]:[]):[{kind:'text',text:message.text}]),...tools.map(tool=>({kind:'tool',tool}))];
+  return {...base,role:'assistant',status:message.activity?null:message.status??'unverified',tools,blocks};
+}
+export function isConversationOnlyConnection(info) {
+  return info?.projectRoot===null&&info?.projectAuthority?.scope==='conversation'&&info.projectAuthority.identity===null&&info.projectAuthority.trusted===false;
+}
+export function modeUnavailableReason(mode, provider,scope='project') {
   if (mode === 'chat') return '';
+  if(scope==='conversation')return 'Select and authorize a project before using Plan or Deep.';
   if (!provider) return 'Choose a provider first.';
   return provider === 'openrouter' ? '' : 'Plan and Deep currently require OpenRouter. Use Chat with this provider.';
 }
@@ -37,6 +50,23 @@ export function sessionIdFromResult(result) {
   const id = result?.session_id;
   return typeof id === 'string' && /^[\w-]{1,80}$/.test(id) ? id : '';
 }
+/** Versioned operation identity from the CLI; legacy approvals stay read-only. */
+export function scopedApproval(value) {
+  if(!value||typeof value!=='object'||Array.isArray(value)||value.schemaVersion!==2)return null;
+  for(const field of ['request_id','thread_id','turn_id'])if(typeof value[field]!=='string'||! /^[\w.:-]{1,200}$/.test(value[field]))return null;
+  if(typeof value.run_id!=='string'||! /^[\w-]{1,100}$/.test(value.run_id)||
+    typeof value.operation_digest!=='string'||! /^[a-f0-9]{64}$/.test(value.operation_digest)||
+    typeof value.expires_at!=='string'||value.expires_at.length>40||!Number.isFinite(Date.parse(value.expires_at)))return null;
+  return {schemaVersion:2,request_id:value.request_id,thread_id:value.thread_id,turn_id:value.turn_id,
+    operation_digest:value.operation_digest,run_id:value.run_id,expires_at:value.expires_at};
+}
+export function scopedApprovalReply(value,expected,now=Date.now()) {
+  if(!value||typeof value!=='object'||Array.isArray(value))return null;
+  const actual=scopedApproval(value?.approval),binding=scopedApproval(expected);
+  if(!actual||!binding||!['allow_once','deny'].includes(value.decision)||!Number.isFinite(now)||now>=Date.parse(binding.expires_at))return null;
+  if(!Object.keys(binding).every(key=>actual[key]===binding[key]))return null;
+  return {decision:value.decision,approval:actual};
+}
 export function presentTool(tool, target) {
   const name = String(tool ?? '').toLowerCase();
   const path = String(target ?? tool ?? 'tool');
@@ -57,7 +87,7 @@ export function absorbFileChange(tools, item) {
   const existing = (Array.isArray(tools) ? tools : []).find(tool => tool.action === 'edit' && tool.path === path);
   if (existing) {
     existing.meta = meta;
-    if (existing.status === 'running') existing.status = 'complete';
+    // A changed file proves a change was observed, not that its tool finished.
     return existing;
   }
   return { id: `file:${path}`, action: 'edit', path, label: `edit ${path}`, status: 'complete', detail: '', meta };
@@ -95,11 +125,14 @@ export function toolsFromResult(result, existing) {
     const row = {
       id: String(call.toolCallId || `${presented.action}:${presented.path}`),
       ...presented,
-      status: typeof call.error === 'string' && call.error ? 'failed' : 'complete',
+      status: (typeof call.error === 'string' && call.error) || (Number.isInteger(call.exit_code) && call.exit_code !== 0) ? 'failed' : 'complete',
       detail: String(call.detail || call.error || '').slice(0, 4000),
       meta: '',
     };
-    if (have.some(tool => tool.id === row.id || sameWork(tool, row))) continue;
+    const previous = have.find(tool => tool.id === row.id);
+    if (previous && ['complete','failed'].includes(previous.status)) continue;
+    // Legacy records without IDs can only be matched by their displayed work.
+    if (!call.toolCallId && have.some(tool => sameWork(tool, row))) continue;
     if (have.length + rows.length >= 100) break;
     rows.push(row);
     have.push(row);
@@ -147,7 +180,11 @@ export function normalizeEvent(event) {
   if (event.type === 'assistant_chunk' && typeof event.chunk === 'string') return {kind:'delta',text:event.chunk};
   if (event.type === 'thought' && typeof event.line === 'string') return {kind:'thought',text:event.line};
   if (event.type === 'run_start' || event.type === 'turn.started') return {kind:'start', model: typeof event.model === 'string' ? event.model : ''};
-  if (event.type === 'approval.required') return {kind:'approval', text:String(event.message ?? 'Babel is waiting for approval.'), raw:event};
+  if (event.type === 'approval.required') {
+    const item=event.item ?? {};
+    const bounded=value=>typeof value==='string'&&value.length<=250000&&!value.includes('\0')?value:'';
+    return {kind:'approval', text:String(event.message ?? 'Babel is waiting for approval.'), command:bounded(item.command), cwd:bounded(item.cwd), details:bounded(item.details), approval:scopedApproval(item.approval), raw:event};
+  }
   if (event.type === 'tool.started' || event.type === 'tool.completed' || event.type === 'tool.failed') {
     const item = event.item ?? {};
     const presented = presentTool(item.tool, item.target);

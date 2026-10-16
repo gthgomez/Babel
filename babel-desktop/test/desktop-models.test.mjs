@@ -46,8 +46,9 @@ test('public model discovery supports tool-capable choices and exact CLI policy 
     await routing.refreshModelCatalog({configDirectory:config,provider:'openrouter',fetchImpl});
     const model=qualifiedProviders(config).find(p=>p.id==='openrouter').routes.find(m=>m.id==='deepseek-v4-pro-openrouter');
     assert.ok(model);assert.equal(model.modelId,'deepseek/deepseek-v4-pro');
-    assert.ok(!qualifiedProviders(config).flatMap(p=>p.routes).some(m=>m.id==='openrouter/vendor/tool-model'));
-    assert.ok(!qualifiedProviders(config).flatMap(p=>p.routes).some(m=>m.id==='openrouter/vendor/text-only'));
+    const discovered=qualifiedProviders(config).flatMap(p=>p.routes);
+    assert.equal(discovered.find(m=>m.id==='openrouter/vendor/tool-model').qualification,'unverified');
+    assert.equal(discovered.find(m=>m.id==='openrouter/vendor/text-only').capabilities.tools,false);
     saveProviderRoute({configDirectory:config,provider:'openrouter',model:model.id,enabledModels:[model.id]});
     const policy=JSON.parse(readFileSync(join(config,'model-policy.json'),'utf8'));
     assert.equal(policy.models[model.id].provider,'openrouter');
