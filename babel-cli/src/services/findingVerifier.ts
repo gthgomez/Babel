@@ -82,14 +82,22 @@ export function buildVerifiedReviewFindings(input: {
   scope: string[]; snapshotRoot: string;
   verdict: { findings: string[]; blocking_findings: string[] };
 }): StructuredFinding[] {
-  return [...new Set([...input.verdict.blocking_findings, ...input.verdict.findings])].map(claim => {
-    const blocking = input.verdict.blocking_findings.includes(claim);
+  const blockingClaims = new Set(input.verdict.blocking_findings.map(claim => claim.trim()));
+  return [...new Set([...blockingClaims, ...input.verdict.findings.map(claim => claim.trim())])].map(claim => {
+    if (!claim) throw new Error('FINDING_CLAIM_EMPTY');
+    const blocking = blockingClaims.has(claim);
     const parsed = parseFindingFromModelClaim(claim, input.scope);
     return verifyFindingAgainstSnapshot(createStructuredFinding({
       candidateDigest: input.candidateDigest, executionId: input.executionId, reviewerId: input.reviewerId,
       ...parsed, severity: blocking ? 'P1' : 'P2', claim, recommended_blocking: blocking,
     }), input.snapshotRoot, input.scope);
   });
+}
+
+/** A blocked result with no actionable claim needs a new complete review,
+ * rather than a repair or indefinite reuse of the same cached uncertainty. */
+export function requiresFreshCompleteReview(review: { verdict: 'APPROVE' | 'BLOCK'; blocking_findings: string[] }): boolean {
+  return review.verdict === 'BLOCK' && review.blocking_findings.length === 0;
 }
 
 /** Project canonical status into the existing wire format, retaining unresolved

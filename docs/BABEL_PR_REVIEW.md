@@ -59,6 +59,8 @@ proof. The worker cannot build or run tests; `REPRODUCED` requires separately
 obtained actual execution evidence. An inconclusive or mislocated serious claim
 remains visible and blocking. Refuting findings alone does not turn a previous
 BLOCK or uncertain review into approval; a fresh complete review is required.
+On the next review invocation, a cached BLOCK with no actionable blockers is
+retained as evidence but bypassed for reuse so that fresh review can run.
 
 The extra process runs only for findings, sequentially after the initial review.
 Its calls, failures, usage, and source assessments remain in private artifacts and

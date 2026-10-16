@@ -338,14 +338,14 @@ function Get-AgentStaleMainIntegrationOverlap {
   if ([string]::Equals($mergeBase, $OriginMain, [StringComparison]::OrdinalIgnoreCase)) {
     return [pscustomobject]@{ available = $true; baseFresh = $true; mergeBase = $mergeBase; overlap = @(); error = '' }
   }
-  $mainDiff = Invoke-AgentGit -GitPath $GitPath -RepoRoot $RepoRoot -Arguments @('diff', '--name-only', "$mergeBase..$OriginMain")
-  $headDiff = Invoke-AgentGit -GitPath $GitPath -RepoRoot $RepoRoot -Arguments @('diff', '--name-only', "$mergeBase..$ReviewedHead")
+  $mainDiff = Invoke-AgentGit -GitPath $GitPath -RepoRoot $RepoRoot -Arguments @('diff', '--no-ext-diff', '--no-textconv', '--no-renames', '--name-only', '-z', "$mergeBase..$OriginMain")
+  $headDiff = Invoke-AgentGit -GitPath $GitPath -RepoRoot $RepoRoot -Arguments @('diff', '--no-ext-diff', '--no-textconv', '--no-renames', '--name-only', '-z', "$mergeBase..$ReviewedHead")
   if ($mainDiff.exitCode -ne 0 -or $headDiff.exitCode -ne 0) {
     return [pscustomobject]@{ available = $false; overlap = @(); error = 'diff_unavailable' }
   }
-  $mainPaths = @($mainDiff.output | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+  $mainPaths = @(([string]$mainDiff.text -split "`0") | Where-Object { $_.Length -gt 0 })
   $headPathSet = @{}
-  foreach ($path in @($headDiff.output | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })) {
+  foreach ($path in @(([string]$headDiff.text -split "`0") | Where-Object { $_.Length -gt 0 })) {
     $headPathSet[$path.Replace('\', '/')] = $true
   }
   $overlap = @($mainPaths | Where-Object { $headPathSet.ContainsKey($_.Replace('\', '/')) })

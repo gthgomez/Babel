@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createStructuredFinding } from './structuredFinding.js'
-import { buildVerifiedReviewFindings } from './findingVerifier.js'
+import { buildVerifiedReviewFindings, requiresFreshCompleteReview } from './findingVerifier.js'
 import { applyFindingAssessments, parseFindingValidation, findingValidationPrompt, validateFindingValidationArtifact, restoreCanonicalFindingReview } from './babelFindingValidation.js'
 
 const finding = createStructuredFinding({ candidateDigest: 'a'.repeat(64), executionId: 'original',
@@ -47,6 +47,7 @@ test('cache and repair restore the same canonical blockers and exclude refuted-o
     const canonical = restoreCanonicalFindingReview(input).review
     assert.equal(canonical.verdict, 'BLOCK')
     assert.equal(canonical.blocking_findings.length, disposition === 'refuted' ? 0 : 1)
+    assert.equal(requiresFreshCompleteReview(canonical), disposition === 'refuted')
     assert.match(canonical.findings[0]!, new RegExp(disposition === 'supported' ? 'SOURCE_SUPPORTED' : disposition === 'refuted' ? 'SOURCE_REFUTED' : 'INCONCLUSIVE'))
     assert.throws(() => restoreCanonicalFindingReview({ ...input, candidateDigest: 'b'.repeat(64) }), /SCOPE_MISMATCH/)
     assert.throws(() => restoreCanonicalFindingReview({ ...input, validationArtifact: { ...validationArtifact, execution_id: originalId } }), /NOT_INDEPENDENT/)

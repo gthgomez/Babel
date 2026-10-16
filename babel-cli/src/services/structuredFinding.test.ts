@@ -14,6 +14,7 @@ import {
   verifyFindingAgainstSnapshot,
   corroborateFindings,
   projectFindingReview,
+  buildVerifiedReviewFindings,
 } from './findingVerifier.js';
 
 test('structuredFinding: generates distinct instance IDs and stable semantic fingerprints', () => {
@@ -52,6 +53,18 @@ test('structuredFinding: generates distinct instance IDs and stable semantic fin
   // Deduplication collapses them into 1
   const deduped = deduplicateFindings([f1, f2]);
   assert.equal(deduped.length, 1);
+});
+
+test('canonical observations deduplicate whitespace variants without losing blocking status', t => {
+  const root = join(tmpdir(), `babel-finding-duplicates-${Date.now()}`);
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  mkdirSync(join(root, 'source', 'src'), { recursive: true });
+  writeFileSync(join(root, 'source', 'src', 'a.ts'), 'throw new Error("empty");\n');
+  const findings = buildVerifiedReviewFindings({ candidateDigest: 'a'.repeat(64), executionId: 'review', reviewerId: 'reviewer',
+    scope: ['src/a.ts'], snapshotRoot: root,
+    verdict: { blocking_findings: ['src/a.ts:1 throws on empty input'], findings: [' src/a.ts:1 throws on empty input ', '\tsrc/a.ts:1 throws on empty input'] } });
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0]!.policy_blocking, true);
 });
 
 test('canonical review exposes unresolved findings without calling location checks confirmation', () => {

@@ -14,7 +14,7 @@ import type { HostReviewCandidate, HostReviewExecutionResult, HostReviewHandoffV
 import { acquireBabelReviewLease, atomicReviewJson, babelReviewVersion, findPublishedBabelReview, publicBabelReviewHandoff, validateBabelReviewArtifact, validateBabelReviewCache } from '../babel-cli/src/services/babelReviewQueue.js'
 import { evaluateReviewCoverage } from '../babel-cli/src/services/reviewCoverage.js'
 import { computeIndependenceClass } from '../babel-cli/src/services/reviewIndependence.js'
-import { buildVerifiedReviewFindings, projectFindingReview } from '../babel-cli/src/services/findingVerifier.js'
+import { buildVerifiedReviewFindings, projectFindingReview, requiresFreshCompleteReview } from '../babel-cli/src/services/findingVerifier.js'
 import { applyFindingAssessments, validateFindingValidationArtifact, restoreCanonicalFindingReview } from '../babel-cli/src/services/babelFindingValidation.js'
 import { StructuredFindingSchema } from '../babel-cli/src/services/structuredFinding.js'
 import { FindingHistorySchema, reconcileFindingHistory, readFindingDependencyChanges } from '../babel-cli/src/services/findingHistory.js'
@@ -168,6 +168,7 @@ for (const number of prs) {
             ...(existsSync(validationPath) ? { validationArtifact: JSON.parse(readFileSync(validationPath, 'utf8')) } : {}),
           }).review
           if (canonical.verdict !== cached.reviews[0].verdict || JSON.stringify(canonical.findings) !== JSON.stringify(cached.reviews[0].findings) || JSON.stringify(canonical.blocking_findings) !== JSON.stringify(cached.reviews[0].blocking_findings)) throw new Error('CACHED_ARTIFACT_MISMATCH')
+          if (requiresFreshCompleteReview(canonical)) throw new Error('CACHED_REVIEW_REQUIRES_FRESH_PASS')
           return cached
         } catch {
           // Invalid/stale cache never creates approval. Retain the rejection
