@@ -726,6 +726,8 @@ const HOST_PROCESS_SURFACE = new Set([
   'agent/implementWorktreeAgent.ts',
   'bridge/sessionRunner.ts',
   'cli/helpers.ts',
+  // Same Node executable and original CLI argv; only redirects startup warnings.
+  'cli/interactiveWarningRoute.ts',
   'config/benchmarkContainer.ts',
   'daemon/client.ts',
   'doctor.ts',

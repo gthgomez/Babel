@@ -21,10 +21,13 @@ if (!existsSync(distEntry)) {
   process.exit(1);
 }
 
-if (existsSync(envBootstrapEntry)) {
-  await import(pathToFileURL(envBootstrapEntry).href);
-}
+const { routeInteractiveWarnings } = await import(pathToFileURL(resolve(__dirname, '../dist/cli/interactiveWarningRoute.js')).href);
+if (!(await routeInteractiveWarnings())) {
+  if (existsSync(envBootstrapEntry)) {
+    await import(pathToFileURL(envBootstrapEntry).href);
+  }
 
-const { runCli } = await import(pathToFileURL(distEntry).href);
-// Node retains a Unix npm symlink's executable name in argv[1].
-if (!process.argv[1]?.endsWith('babel.js')) runCli();
+  const { runCli } = await import(pathToFileURL(distEntry).href);
+  // Node retains a Unix npm symlink's executable name in argv[1].
+  if (!process.argv[1]?.endsWith('babel.js')) runCli();
+}

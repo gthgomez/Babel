@@ -28,7 +28,10 @@ import {
   renderModelWhy,
   resolveModelSnapshot,
   resetModelSnapshotCache,
+  renderAvailableModelsTable,
 } from './modelDetail.js';
+import { formatModelPricing } from './modelCatalog.js';
+import { wrapPrefixedBlock } from '../../ui/textLayout.js';
 import { loadInspectBundle, buildInspectRunView } from '../../inspect/loaders.js';
 import { renderInspectRun } from '../../ui/inspection.js';
 import {
@@ -328,19 +331,16 @@ export function handleModel(ctx: ReplContext, args: string[]): void {
         : '';
       console.log(
         primary(
-          `\n  Model set to ${accentBright(resolved.resolvedBackendKey)}${aliasSuffix} ${muted(`(approx. $${resolved.approximateCostPerRunUsd?.toFixed(4)}/run)`)}`,
+          `\n  Model set to ${accentBright(resolved.resolvedBackendKey)}${aliasSuffix} (active · ${resolved.provider})`,
         ),
       );
+      const selected = getAvailableModels().find((m) => m.key === resolved.resolvedBackendKey);
+      if (selected) console.log(`  ${formatModelPricing(selected.entry)}`);
       if (keyWarnings.length > 0) {
         console.log(warning(`  ⚠ ${keyWarnings.join('. ')}.`));
       }
     } catch {
-      const available = getAvailableModels()
-        .map(
-          (m) =>
-            `    - ${accentBright(m.key)}: ${muted(`$${m.entry.estimated_cost_per_1m_output}/M`)}`,
-        )
-        .join('\n');
+      const available = renderAvailableModelsTable(getAvailableModels(), ctx.state.model);
       console.log(accentBright(`\n  Invalid model: "${requested}". Available backends:`));
       console.log(available);
     }
@@ -358,12 +358,9 @@ export function handleModel(ctx: ReplContext, args: string[]): void {
     // Show current model first, then available backends
     if (ctx.state.model) {
       const detail = ctx.state.resolvedModelId ? ` (${ctx.state.resolvedModelId})` : '';
-      const cost = ctx.state.approximateCostPerRunUsd
-        ? ` · ~$${ctx.state.approximateCostPerRunUsd.toFixed(4)}/run`
-        : '';
       console.log(
         primary(
-          `\n  Current model: ${accentBright(ctx.state.model)}${muted(detail)}${muted(cost)}`,
+          `\n  Current model: ${accentBright(ctx.state.model)}${muted(detail)} (active)`,
         ),
       );
     } else {
@@ -378,16 +375,15 @@ export function handleModel(ctx: ReplContext, args: string[]): void {
         console.log(muted('\n  No model set — using auto (route-selected default)'));
       }
     }
-    console.log(primary('\n  Available Models:'));
-    const available = getAvailableModels()
-      .map(
-        (m) =>
-          `    - ${accentBright(padRight(m.key, 12))} ${muted(`$${padRight((m.entry.estimated_cost_per_1m_output ?? 0).toString(), 6)}/M`)}${m.entry.selection_reason ? `  ${muted(m.entry.selection_reason)}` : ''}`,
-      )
-      .join('\n');
+    const activeKey = ctx.state.model ?? resolveModelSnapshot(undefined)?.policy.resolvedBackendKey;
+    const available = renderAvailableModelsTable(getAvailableModels(), activeKey);
     const aliases = Object.keys(MODEL_ALIASES)
       .sort()
-      .map((a) => `    - ${accentBright(padRight(a, 12))} ${muted(`alias`)}`)
+      .map((a) => {
+        const target = resolveModelAlias(a)?.resolvedKey;
+        const effective = target && !isOfflineChatMode() ? resolveOpenRouterDeepSeekBackendKey(target) ?? target : target;
+        return wrapPrefixedBlock(`${a} → ${effective ?? 'unavailable'}`, { firstPrefix: '    ', continuationPrefix: '      ', width: Math.max(12, getTerminalWidth() - 1) }).join('\n');
+      })
       .join('\n');
     console.log(available);
     console.log(primary('\n  Model Aliases:'));

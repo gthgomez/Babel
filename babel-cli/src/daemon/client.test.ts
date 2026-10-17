@@ -30,8 +30,9 @@ it('stops the real auto-spawned daemon when the REPL exits', { timeout: 20000 },
     delete env.BABEL_TEST
     const { stdout } = await promisify(execFile)(process.execPath,
       ['--import', 'tsx', '--input-type=module', '-e', script], { env, timeout: 15000 })
-    pid = Number(stdout.match(/Auto-spawned daemon ready\. PID: (\d+)/)?.[1])
+    pid = Number(stdout.match(/OWNED_PID=(\d+)/)?.[1])
     assert.ok(pid > 0, stdout)
+    assert.doesNotMatch(stdout, /\[daemon\]|Auto-spawned daemon/)
     assert.match(stdout, /Babel session ended/)
     assert.throws(() => process.kill(pid!, 0), /ESRCH/)
   } finally {

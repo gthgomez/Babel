@@ -3,7 +3,7 @@
   "algorithm": "sha256",
   "purpose": "drift_detection_not_authorization",
   "normalization": "utf8_crlf_to_lf",
-  "policy_bundle_id": "53e95204d27bbd6ae7bfe79cc3df2754cf2375e9cc9d8e79954fe77aa47941d8",
+  "policy_bundle_id": "211c77e3ee81dd4761a9a4e63487c2f70bf1931c27e534355b3b09432bd2155c",
   "files": {
     ".github/workflows/public-pr-metadata.yml": "67e630d700055533ee77157ed05fc347161c7c041e35151f2652ffd9b9973023",
     ".github/workflows/publish-npm.yml": "54036b704d59e513cbbb981efa00e82121e40871d6dfe789c8636bd0159f8c9e",
@@ -18,7 +18,7 @@
     "babel-cli/src/authority/capabilities.ts": "746d740d626c08a18257956aabf66c5b6ed5c0b44f2c548ea8e8c71845a869e4",
     "babel-cli/src/authority/ciRepair.ts": "61a946b6de150809b6ab60ff75f63c6611651997434a66b83e0fa9f631e6065a",
     "babel-cli/src/authority/commandDecoder.ts": "26b4299618952b6c2892ea1a02143a34767b652d90dcf7b7a4e2185523b303e8",
-    "babel-cli/src/authority/commandSpec.test.ts": "d8c7f3f4152a54828a9d5c32ac8e4c58e7c36eb25dc43fd0b3109a9a836c1723",
+    "babel-cli/src/authority/commandSpec.test.ts": "ba0f23ff8cf1a33521f2cf8291a3d10f954d49c7862e4db44d327495b9a047c5",
     "babel-cli/src/authority/commandSpec.ts": "74852c8619236b4eaabdee49f9d75a32ca1e20500b6714d10a40568c505b3877",
     "babel-cli/src/authority/convergence-integrity.regression-gate.test.ts": "7c80ed633d94f05c006d18fe3195fe21caf863d97c0b6fef33eeeb6e1e4c06d4",
     "babel-cli/src/authority/convergence-parser.regression-gate.test.ts": "57bfd75d9255634883d02f951e50fea01717c2b9dd4a3293e88921158bb51ead",

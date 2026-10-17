@@ -22,6 +22,8 @@ import type { BackgroundTaskState } from "./backgroundTaskProgress.js";
  * State object for the status bar displayed between REPL turns.
  */
 export interface StatusBarState {
+  /** Existing accounting receipts contain charges with unknown prices. */
+  hasUnknownCost?: boolean;
   /** Active model name (e.g. "DeepSeek v4 Flash") */
   model: string;
   /** Active model ID for context limit lookup (e.g. "deepseek-v4-flash") */
@@ -357,13 +359,13 @@ export function renderStatusBar(state: StatusBarState): string {
   if (policy.showSessionTokens) {
     rightParts.push({
       slot: "sessionTokens",
-      text: muted(`${state.totalTokens.toLocaleString()} tok`),
+      text: muted(`session ${state.totalTokens.toLocaleString('en-US')} tok`),
     });
   }
   if (policy.showCost) {
     rightParts.push({
       slot: "cost",
-      text: muted(`$${state.totalCost.toFixed(4)}`),
+      text: muted(state.hasUnknownCost ? 'session cost unavailable' : `session est. $${state.totalCost.toFixed(4)}`),
     });
   }
   if (policy.showTurn) {
@@ -387,7 +389,7 @@ export function renderStatusBar(state: StatusBarState): string {
   const minLeft = 4;
   const protectRateLimit = rateAttention !== "none";
   const preferredMaxRight = Math.max(
-    8,
+    contextMeter && rateAttention === 'none' ? visibleLength(contextMeter) : 8,
     width - visibleLength(left) - minSpacing,
   );
   let right = applyAttentionPreemption(

@@ -1,6 +1,6 @@
 import { FrameScheduler } from './frameScheduler.js'
 import { canUseCursorRewrite } from './cursorRewritePolicy.js'
-import { stripAnsi, truncate } from './theme.js'
+import { stripAnsi, truncate, visibleLength } from './theme.js'
 
 export type ThinkingExitReason = 'stream' | 'tool' | 'end'
 
@@ -40,17 +40,26 @@ export interface ThinkingHudComposeResult {
  * so CUU cannot accumulate blank rows.
  */
 export function composeThinkingHud(input: ThinkingHudComposeInput): ThinkingHudComposeResult {
+  const width = Math.max(8, input.columns - 1)
+  const fit = (line: string): string => {
+    if (visibleLength(line) <= width) return line
+    const hint = ' · Ctrl+C cancel'
+    if (line.includes('Ctrl+C cancel') && width >= 28) {
+      return truncate(line.replace(/\s*·?\s*Ctrl\+C cancel\)?/, ''), width - hint.length) + hint
+    }
+    return truncate(line, width)
+  }
   if (!canUseCursorRewrite()) {
     const compact = input.overlayLines
       .map((line) => stripAnsi(line).replace(/\s+/g, ' ').trim())
       .filter(Boolean)
       .join(' · ')
     const combined = compact ? `${input.indicatorLine}  ${compact}` : input.indicatorLine
-    const fitted = truncate(combined, Math.max(8, input.columns))
+    const fitted = fit(combined)
     return { output: `\r\x1b[K${fitted}`, showingOverlayLines: 0 }
   }
 
-  let output = `\r\x1b[K${input.indicatorLine}`
+  let output = `\r\x1b[K${fit(input.indicatorLine)}`
   if (input.overlayLines.length > 0) {
     for (const line of input.overlayLines) {
       const fitted = truncate(stripAnsi(line), Math.max(1, input.columns - 2))

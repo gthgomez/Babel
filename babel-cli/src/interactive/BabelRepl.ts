@@ -169,7 +169,7 @@ export class BabelRepl {
     this.rl = createPromptInputAdapter({
       input: process.stdin,
       output: process.stdout,
-      prompt: dim('› '),
+      prompt: 'Input › ',
       historySize: 100,
       completer: (line: string) => buildReplCompleter(this)(line),
       history: savedHistory,

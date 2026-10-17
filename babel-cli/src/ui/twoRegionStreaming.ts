@@ -81,6 +81,7 @@ export class TwoRegionStreaming {
    * or the prefix is re-printed on every markdown rewrite.
    */
   private graduatedCount = 0;
+  private deferGraduation = false;
   /** Terminal mutations deferred while a foreign surface owns presentation. */
   private presentationDirty = false;
   private unregisterPresentationResume: (() => void) | null = null;
@@ -198,7 +199,7 @@ export class TwoRegionStreaming {
       this.deferPresentationReconcile();
       return;
     }
-    const targetGraduated = Math.max(0, this.lines.length - this.streamingRows);
+    const targetGraduated = this.deferGraduation ? 0 : Math.max(0, this.lines.length - this.streamingRows);
 
     // Grow graduation monotonically — never re-write already graduated lines.
     while (this.graduatedCount < targetGraduated) {
@@ -319,12 +320,10 @@ export class TwoRegionStreaming {
 
     const remaining = this.lines.slice(this.graduatedCount);
     this._clearStreamingRows();
-    if (remaining.length > 0) {
-      this.buf.moveCursor(this.streamingTop, 1);
-      for (const line of remaining) {
-        this.buf.write(`${line}\n`);
-      }
-    }
+    // A following preview will clear every streaming row. Sealed generations
+    // must graduate above that region, not into the rows about to be reused.
+    for (const line of remaining) this._writeToScrollback(line);
+    this.buf.moveCursor(this.streamingTop, 1);
     this.lines = [];
     this.graduatedCount = 0;
   }
@@ -334,11 +333,12 @@ export class TwoRegionStreaming {
    *
    * Recalculates the streaming area position and re-renders.
    */
-  onResize(newHeight: number, newWidth: number): void {
+  onResize(newHeight: number, newWidth: number, options: { allowHardware?: boolean } = {}): void {
     if (!this._isActive) return;
 
     const oldStreamingTop = this.streamingTop;
     const oldRows = this.streamingRows; // capture before mutation
+    const wasHardware = !this.fallbackMode;
     const widthChanged = newWidth > 0 && newWidth !== this.terminalWidth;
     this.terminalHeight = newHeight;
     if (newWidth > 0) {
@@ -350,7 +350,7 @@ export class TwoRegionStreaming {
     this.streamingBottom = newHeight;
     // Decide the logical mode before checking the fence. The terminal update
     // may be deferred, but the replay must use the latest dimensions.
-    this.fallbackMode = !this.useHardwareScroll || newHeight < MIN_TERMINAL_HEIGHT;
+    this.fallbackMode = options.allowHardware === false || !this.useHardwareScroll || newHeight < MIN_TERMINAL_HEIGHT;
 
     if (isRendererPresentationSuspended()) {
       this.deferPresentationReconcile();
@@ -358,6 +358,13 @@ export class TwoRegionStreaming {
     }
 
     if (this.fallbackMode) {
+      if (wasHardware) {
+        // Remove the mutable preview before returning terminal ownership to
+        // append-only output. Finalization will commit the source exactly once.
+        for (let row = Math.min(oldStreamingTop, newHeight); row <= Math.min(oldStreamingTop + oldRows - 1, newHeight); row++) {
+          this.buf.writeLine(row, 1, '');
+        }
+      }
       this.buf.resetScrollRegion();
       return;
     }
@@ -369,7 +376,7 @@ export class TwoRegionStreaming {
 
     // Clear old streaming area rows to prevent ghost text when the
     // streaming area position has moved.
-    if (oldStreamingTop !== this.streamingTop && oldStreamingTop > 0) {
+    if (wasHardware && oldStreamingTop !== this.streamingTop && oldStreamingTop > 0) {
       for (let r = oldStreamingTop; r < oldStreamingTop + oldRows && r <= this.terminalHeight; r++) {
         this.buf.writeLine(r, 1, '');
       }
@@ -391,9 +398,12 @@ export class TwoRegionStreaming {
    * each structural rewrite used to re-split the full message and dump
    * the overflow prefix into scrollback again.
    */
-  replaceStreamingContent(text: string): void {
+  replaceStreamingContent(text: string, options: { deferGraduation?: boolean } = {}): void {
     if (!this._isActive || this.fallbackMode) return;
 
+    // A live Markdown snapshot may change row counts anywhere after wrapping,
+    // table sizing or resize. Keep it mutable until the generation is sealed.
+    this.deferGraduation = options.deferGraduation ?? false;
     this.lines = text ? text.split('\n') : [];
     // Keep graduatedCount — only newly overflowed indices are written.
     if (this.graduatedCount > this.lines.length) {
@@ -533,6 +543,13 @@ export class TwoRegionStreaming {
     }
   }
 
+  /** Complete transcript lines belong above the mutable assistant preview. */
+  writeCommittedLines(text: string): void {
+    const lines = text.split('\n');
+    if (lines.at(-1) === '') lines.pop();
+    for (const line of lines) this._writeToScrollback(line);
+  }
+
   /** Clear every row of the hardware streaming window. */
   private _clearStreamingRows(): void {
     if (isRendererPresentationSuspended()) {
@@ -576,11 +593,12 @@ export class TwoRegionStreaming {
       visual.push(...wrapText(line, wrapWidth));
     }
 
+    const preview = this.deferGraduation ? visual.slice(-availableRows) : visual;
     this.buf.beginFrame();
     try {
       for (let i = 0; i < availableRows; i++) {
         const row = startRow + i;
-        const line = i < visual.length ? visual[i]! : '';
+        const line = i < preview.length ? preview[i]! : '';
         this.buf.writeLine(row, 1, line);
       }
     } finally {
