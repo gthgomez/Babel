@@ -292,7 +292,7 @@ export function applyWorkingStateEvent(state: WorkingState, event: WorkingStateE
       const gate = next.recoveryGate
       const loc = next.localization
       const p = event.provenance
-      const candidate = loc?.candidates.find(c => c.path === p.target && c.source === 'import_call')
+      const candidate = loc?.candidates.find(c => c.path === p.target && (c.source === 'import_call' || c.source === 'file_read'))
       const key = gate ? recoveryEvidenceKey(p, gate.failureSignature) : ''
       if (gate?.binding && gate.satisfied && !gate.planAdmitted && !gate.permitConsumed &&
           loc?.phase === 'localized' && loc.acceptedPath === p.target && loc.calls <= 4 && loc.rounds <= 2 &&
@@ -437,6 +437,7 @@ export function formatWorkingStateBlock(state: WorkingState): string {
       `  recovery_gate: ${state.recoveryGate.satisfied ? 'evidence_satisfied' : 'evidence_required'}`,
       `  recovery_failure: ${yamlIdentity(state.recoveryGate.failureSignature)}`,
       `  recovery_revision: ${yamlIdentity(state.recoveryGate.binding?.workspaceRevision ?? '')}`,
+      `  recovery_criterion_id: ${yamlIdentity(state.lastVerifier?.identity ?? '')}`,
       `  recovery_evidence: ${yamlScalar(state.recoveryGate.requiredEvidence)}`,
       `  recovery_observation_keys: ${yamlList(observationIds, 4)}`,
       `  recovery_plan: ${state.recoveryGate.planAdmitted ? 'admitted' : 'required'}`,
@@ -451,6 +452,7 @@ export function formatWorkingStateBlock(state: WorkingState): string {
       `  localization_candidates: ${yamlList(state.localization.candidates.map((candidate) => candidate.path), 4)}`,
       `  localization_test_hints: ${yamlList(state.localization.testHints, 4)}`,
       `  localization_import_candidates: ${yamlList((state.localization.importCandidates ?? []).map(candidate => `${candidate.path}:${candidate.relation}`), 4)}`,
+      '  localization_guidance: Read the diagnostic test candidate first, then only the implementation or data-file dependency established by its failing assertion. Unrelated reads consume the two-scope allowance. Repair that target and rerun the verifier before investigating another failure.',
     )
   }
   if (state.lastVerifier && !state.lastVerifier.fresh) {
@@ -582,7 +584,7 @@ export function restoreWorkingStateSnapshot(value: unknown): WorkingState | null
         !Array.isArray(loc.candidates) || loc.candidates.length > 8 ||
         loc.candidates.some((item) => !item || typeof item.path !== 'string' || typeof item.relation !== 'string') ||
         (loc.importCandidates !== undefined && (!Array.isArray(loc.importCandidates) || loc.importCandidates.length > 4 ||
-          loc.importCandidates.some(item => !item || item.source !== 'import_call' || typeof item.path !== 'string' ||
+          loc.importCandidates.some(item => !item || !['import_call', 'file_read'].includes(item.source) || typeof item.path !== 'string' ||
             typeof item.relation !== 'string' || typeof item.fromTestPath !== 'string'))) ||
         !loc.binding || loc.binding.schemaVersion !== 1 ||
         typeof loc.binding.workspaceRevision !== 'string' || !loc.binding.workspaceRevision ||

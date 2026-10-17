@@ -6,12 +6,13 @@ import { recoveryTargetIdentity } from './recoveryIdentity.js'
 export interface TestImportCandidate {
   path: string
   relation: string
-  source: 'import_call'
+  source: 'import_call' | 'file_read'
   fromTestPath: string
 }
 
-function program(content: string): Program | null {
+function completeRead(content: string): string | null {
   if (content.length > 256_000) return null
+  if (/^\[Showing lines /m.test(content)) return null
   // Sandbox full reads carry sequential line numbers. Any header means the
   // lexical context is incomplete (line/byte cap or offset), so fail closed.
   if (/^\s*\d+│/.test(content)) {
@@ -25,7 +26,13 @@ function program(content: string): Program | null {
     }
     content = decoded.join('\n')
   }
-  try { return parse(content, { ecmaVersion: 'latest', sourceType: 'module', locations: true }) } catch { return null }
+  return content
+}
+
+function program(content: string): Program | null {
+  const complete = completeRead(content)
+  if (complete === null) return null
+  try { return parse(complete, { ecmaVersion: 'latest', sourceType: 'module', locations: true }) } catch { return null }
 }
 
 /** Bounded traversal of parser-produced syntax only; no regex fallback. */
@@ -80,7 +87,7 @@ export function proposeTestImports(input: {
   let assertionCalls = syntax.filter((n): n is CallExpression => n.type === 'CallExpression' &&
     n.callee.type === 'MemberExpression' && !n.callee.computed && n.callee.object.type === 'Identifier' &&
     assertions.has(n.callee.object.name) && !shadowed.has(n.callee.object.name) &&
-    n.callee.property.type === 'Identifier' && ['equal', 'strictEqual', 'deepEqual', 'deepStrictEqual', 'ok', 'throws', 'rejects'].includes(n.callee.property.name))
+    n.callee.property.type === 'Identifier' && ['equal', 'strictEqual', 'deepEqual', 'deepStrictEqual', 'ok', 'throws', 'rejects', 'match', 'doesNotMatch'].includes(n.callee.property.name))
   if (input.line !== undefined && input.column !== undefined) {
     const line = input.line, column = input.column - 1
     assertionCalls = assertionCalls.filter(n => n.loc &&
@@ -89,10 +96,43 @@ export function proposeTestImports(input: {
   }
   // Without a unique diagnostic assertion, unrelated imports cannot become scope.
   if (assertionCalls.length !== 1) return []
-  const called = new Set(assertionCalls.flatMap(n => n.arguments.flatMap(a => nodes(a)))
+  const assertion = assertionCalls[0]!
+  if (assertion.arguments.some(a => a.type === 'SpreadElement')) return []
+  const method = assertion.callee.type === 'MemberExpression' && assertion.callee.property.type === 'Identifier'
+    ? assertion.callee.property.name : ''
+  // Optional messages format diagnostics; they do not establish the assertion's
+  // tested dependency. throws/rejects overload their second argument as a message.
+  const operands = assertion.arguments.slice(0, ['ok', 'throws', 'rejects'].includes(method) ? 1 : 2)
+  const assertionNodes = operands.flatMap(a => nodes(a))
+  const called = new Set(assertionNodes
     .filter((n): n is CallExpression => n.type === 'CallExpression' && n.callee.type === 'Identifier')
     .map(n => n.callee.type === 'Identifier' ? n.callee.name : ''))
   const result: TestImportCandidate[] = []
+  const fileReaders = new Set(imports.filter(n => n.source.value === 'node:fs').flatMap(n =>
+    n.specifiers.filter(s => s.type === 'ImportSpecifier' && s.imported.type === 'Identifier' &&
+      s.imported.name === 'readFileSync').map(s => s.local.name)))
+  // Only the standard unshadowed URL constructor and a static, contained text
+  // read in the failing assertion establish a data-file dependency.
+  const urlShadowed = shadowed.has('URL') || importNames.has('URL') || moduleNodes.some(n =>
+    (n.type === 'VariableDeclarator' && nodes(n.id).some(p => p.type === 'Identifier' && p.name === 'URL')) ||
+    ((n.type === 'FunctionDeclaration' || n.type === 'ClassDeclaration') && n.id?.name === 'URL') ||
+    (n.type === 'AssignmentExpression' && nodes(n.left).some(p => p.type === 'Identifier' && p.name === 'URL')))
+  if (!urlShadowed) for (const call of assertionNodes) {
+    if (call.type !== 'CallExpression' || call.callee.type !== 'Identifier' ||
+        !fileReaders.has(call.callee.name) || shadowed.has(call.callee.name) || call.arguments.length !== 2 ||
+        call.arguments[1]?.type !== 'Literal' || !['utf8', 'utf-8'].includes(String(call.arguments[1].value))) continue
+    const url = call.arguments[0]
+    if (url?.type !== 'NewExpression' || url.callee.type !== 'Identifier' || url.callee.name !== 'URL' || url.arguments.length !== 2) continue
+    const [literal, base] = url.arguments
+    if (literal?.type !== 'Literal' || typeof literal.value !== 'string' ||
+        !/^\.\/[A-Za-z0-9_./-]+$/.test(literal.value) || literal.value.split('/').includes('..') ||
+        base?.type !== 'MemberExpression' || base.computed || base.property.type !== 'Identifier' || base.property.name !== 'url' ||
+        base.object.type !== 'MetaProperty' || base.object.meta.name !== 'import' || base.object.property.name !== 'meta') continue
+    const target = recoveryTargetIdentity(input.projectRoot, posix.join(posix.dirname(input.testPath), literal.value))
+    if (!target || target === input.testPath) continue
+    try { if (!statSync(posix.join(input.projectRoot.replaceAll('\\', '/'), target)).isFile()) continue } catch { continue }
+    result.push({path: target, relation: 'readFileSync', source: 'file_read', fromTestPath: input.testPath})
+  }
   for (const declaration of imports) {
     const path = declaration.source.value
     if (typeof path !== 'string' || !path.startsWith('./') || path.split('/').includes('..') || !/\.[cm]?js$/.test(path)) continue
@@ -110,7 +150,8 @@ export function proposeTestImports(input: {
 }
 
 /** A proposed import needs a fresh read of its actual exported function declaration. */
-export function corroboratesTestImport(content: string, symbol: string): boolean {
+export function corroboratesTestImport(content: string, symbol: string, source: TestImportCandidate['source'] = 'import_call'): boolean {
+  if (source === 'file_read') return completeRead(content) !== null
   const ast = program(content)
   return ast?.body.some(n => n.type === 'ExportNamedDeclaration' && n.declaration &&
     ((n.declaration.type === 'FunctionDeclaration' && n.declaration.id?.name === symbol) ||

@@ -29,3 +29,8 @@ export function describeNativeToolRejection(input: {
     replay: 'Use synthetic values of the recorded types; original argument values are intentionally not retained.',
   }
 }
+
+/** Only sanitized controller diagnostics enter the next provider request. */
+export function nativeSchemaRepairFeedback(rejection: Record<string, unknown>): string {
+  return `Native tool schema correction: the entire previous batch was rejected without execution. ${JSON.stringify({tool:rejection.tool,issues:rejection.issues})}. Submit valid arguments using the advertised tool schema; do not repeat the malformed call. For str_replace, provide file_path, the exact existing old_str and new_str; use write_file with complete content when appropriate. No missing argument was inferred and no action was dispatched.`
+}

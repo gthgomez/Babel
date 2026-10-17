@@ -1284,6 +1284,12 @@ export class ChatEngine {
     taskIntent: TaskIntent,
     ownerGeneration?: number,
   ): Promise<ChatResult | null> {
+    if (reason.startsWith('COST_ACCOUNTING_INCOMPLETE:')) {
+      if (ownerGeneration !== undefined && !this.isSubmissionCurrent(ownerGeneration)) return null;
+      this.budgetExceeded = false;
+      this.policyEventLog.record({at_turn:this._turnIndex,kind:'progress_policy',detail:reason.slice(0,200)});
+      return this.buildResult('failed',callbacks,reason,undefined,undefined,undefined,ownerGeneration);
+    }
     // Tier A2: Record budget kill event
     this.policyEventLog.record({
       at_turn: this._turnIndex,
@@ -1531,7 +1537,7 @@ export class ChatEngine {
   } {
     if (this.taskCostScopeUnavailable || !this.taskAllowance) {
       const reason =
-        "Cannot restore durable task cost scope for resumed run; refusing a fresh allowance.";
+        "COST_ACCOUNTING_INCOMPLETE: Cannot restore durable task cost scope for resumed run; refusing a fresh allowance.";
       this.terminatingLimiter = "cost";
       this.terminalLimiterReason = reason;
       return { ok: false, reason, limiter: "cost" };
@@ -1563,7 +1569,7 @@ export class ChatEngine {
       (costSummary.estimateComplete ?? costSummary.costComplete) === false
     ) {
       const reason =
-        "Task cost is incomplete because a provider charge has unknown pricing; refusing paid dispatch under a finite dollar cap.";
+        "COST_ACCOUNTING_INCOMPLETE: Task cost is incomplete because a provider charge has unknown pricing or usage; refusing paid dispatch under a finite dollar cap.";
       this.terminatingLimiter = "cost";
       this.terminalLimiterReason = reason;
       return { ok: false, reason, limiter: "cost" };
@@ -2456,7 +2462,7 @@ export class ChatEngine {
       updated.observationDigest &&
       this.workingState.recoveryGate
     ) {
-      const imported = updated.candidates.some(candidate => candidate.path === updated.acceptedPath && candidate.source === 'import_call');
+      const imported = updated.candidates.some(candidate => candidate.path === updated.acceptedPath && (candidate.source === 'import_call' || candidate.source === 'file_read'));
       if (imported) {
         this.workingState = applyWorkingStateEvent(this.workingState, {
           type: 'localization_import_evidence',
@@ -3453,7 +3459,11 @@ export class ChatEngine {
         const containsSubAgent = batch.indices.some(
           (index) => actions[index]?.type === "sub_agent",
         );
-        if (containsSubAgent) {
+        // Recovery reads share a bounded, ordered evidence state. A later
+        // admission cannot exhaust it before earlier reads have settled.
+        const recoveryLocalization = this.workingState.localization;
+        if (containsSubAgent || (recoveryLocalization &&
+            (recoveryLocalization.phase !== "localized" || recoveryLocalization.importCandidates?.length))) {
           for (const index of batch.indices) {
             if (
               this._cancelled ||

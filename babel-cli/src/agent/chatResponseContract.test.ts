@@ -81,7 +81,8 @@ test(`response contract ${scenario} settles without speculative continuation`, a
       } else {
         if (this.turns > (scenario === 'deferred_choice' ? 3 : 2))
           throw new Error('A valid final answer must not prompt speculative continuation')
-        yield { type: 'text_delta', text: scenario === 'json_format' ? '```json\n' + payload + '```' : clarification }
+        for (const text of scenario === 'json_format' ? ['```json\n', payload, '```'] : [clarification])
+          yield { type: 'text_delta', text }
         yield { type: 'done', finishReason: 'stop' }
       }
     }
@@ -89,7 +90,8 @@ test(`response contract ${scenario} settles without speculative continuation`, a
   const task = scenario === 'json_format' ? 'Read example.js. Return only a JSON object with exactly the value key.' : 'Make this better.'
   const runner = new Runner()
   const engine = new ChatEngine({ task, projectRoot: root, model: 'deepseek-v4-flash', providerRunner: runner, maxTurns: 5 })
-  const result = await engine.submitMessage(task, {})
+  let streamedAnswer=''
+  const result = await engine.submitMessage(task, {onAnswerChunk:chunk=>{streamedAnswer+=chunk}})
   assert.equal(result.answer, scenario === 'json_format' ? payload : clarification)
   assert.equal(runner.turns, scenario === 'deferred_choice' ? 3 : 2)
   if (scenario === 'deferred_choice') {
@@ -97,7 +99,10 @@ test(`response contract ${scenario} settles without speculative continuation`, a
     assert.equal(result.status, 'blocked')
     assert.equal(verifiers, 1, JSON.stringify(result.toolCalls))
     assert.equal(result.toolCalls?.find(call => call.tool === 'test_run')?.effect_status, 'indeterminate', JSON.stringify(result.toolCalls))
-  } else assert.deepEqual(JSON.parse(result.answer), { value: 1 })
+  } else {
+    assert.deepEqual(JSON.parse(result.answer), { value: 1 })
+    assert.equal(streamedAnswer,payload,'fragmented native previews settle exactly once as the bare JSON payload')
+  }
   assert.equal(mutations, 0)
   assert.equal(readFileSync(join(root, 'example.js'), 'utf8'), source)
 })

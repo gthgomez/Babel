@@ -1,8 +1,14 @@
-/** Apply only an explicit current-user output contract; never extract or invent data. */
-export function normalizeChatAnswer(answer: string, userInput: string): string {
+/** Only authentic current-user prose can impose a bare JSON answer contract. */
+export function requestedChatJsonKind(userInput: string): 'object' | 'array' | null {
   const request = userInput.replace(/```[\s\S]*?```/g, '').replace(/^\s*>.*$/gm, '')
     .replace(/["“][^"”]*["”]/g, '')
   const kind = /\b(?:return|respond|reply|output)\s+(?:with\s+)?only\s+(?:a\s+)?(?:valid\s+)?JSON\s+(object|array)\b/i.exec(request)?.[1]?.toLowerCase()
+  return kind === 'object' || kind === 'array' ? kind : null
+}
+
+/** Apply only an explicit current-user output contract; never extract or invent data. */
+export function normalizeChatAnswer(answer: string, userInput: string): string {
+  const kind = requestedChatJsonKind(userInput)
   if (!kind) return answer
   const fence = /^\s*```(?:json)?[ \t]*\r?\n([\s\S]*?)\r?\n```\s*$/i.exec(answer)
   if (!fence?.[1] || fence[1].includes('```')) return answer

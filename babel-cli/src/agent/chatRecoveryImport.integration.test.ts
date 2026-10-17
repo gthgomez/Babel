@@ -12,7 +12,14 @@ import {recoveryObservationId} from './codingLoop/recoveryPlan.js'
 import {SafeExecutor} from '../sandbox.js'
 import {resetDockerAvailabilityCache,setDockerAvailableForTest} from '../config/benchmarkContainer.js'
 
-test('real recovery dispatch links the failed assertion to its implementation and verifies the scoped repair', async t => {
+const fixtures = [
+  {name:'named import',path:'math.js',testPath:'math.test.js',label:'addition',source:'export function add(a,b) { return a-b; }\n',old:'return a-b;',replacement:'return a+b;',
+    testSource:"import test from 'node:test'; import assert from 'node:assert/strict'; import {add} from './math.js'; test('addition',()=>{assert.equal(add(2,3),5);assert.equal(add(0,7),7)});\n"},
+  {name:'static stylesheet read',path:'styles.css',testPath:'style.test.js',label:'busy style',source:'.status { display: inline-flex; }\n',old:'.status { display: inline-flex; }',replacement:'.status { display: inline-flex; }\n.status-busy { opacity: 0.6; }',
+    testSource:"import test from 'node:test'; import assert from 'node:assert/strict'; import {readFileSync} from 'node:fs'; test('busy style',()=>assert.match(readFileSync(new URL('./styles.css',import.meta.url),'utf8'),/\\.status-busy\\s*\\{[^}]*opacity\\s*:\\s*0?\\.6/s));\n"},
+]
+
+for (const fixture of fixtures) test(`real recovery dispatch links the failed assertion through its ${fixture.name} and verifies the scoped repair`, async t => {
   const storage=mkdtempSync(join(tmpdir(),'babel-recovery-import-'))
   const root=join(storage,'project'), runDir=join(storage,'runtime')
   mkdirSync(root);mkdirSync(runDir)
@@ -22,43 +29,50 @@ test('real recovery dispatch links the failed assertion to its implementation an
   process.env['BABEL_EXECUTION_PROFILE']='safe_repo';process.env['BABEL_BENCHMARK_DOCKER_IMAGE']='synthetic/recovery-import:unit'
   delete process.env['BABEL_DOCKER_DISABLE'];delete process.env['BABEL_ALLOW_HOST_FALLBACK'];delete process.env['BABEL_BENCHMARK_DOCKER_EXTRA_ARGS']
   setDockerAvailableForTest(true)
-  const source='export function add(a,b) { return a-b; }\n'
-  const testSource="import test from 'node:test'; import assert from 'node:assert/strict'; import {add} from './math.js'; test('addition',()=>{assert.equal(add(2,3),5);assert.equal(add(0,7),7)});\n"
-  writeFileSync(join(root,'math.js'),source);writeFileSync(join(root,'math.test.js'),testSource)
+  const {source,testSource}=fixture
+  writeFileSync(join(root,fixture.path),source);writeFileSync(join(root,fixture.testPath),testSource)
   writeFileSync(join(root,'package.json'),'{"type":"module","scripts":{"test":"node --test"}}\n')
-  for(const args of [['init','-q'],['add','--','math.js','math.test.js','package.json'],['-c','user.name=Fixture','-c','user.email=fixture@example.test','commit','-qm','fixture']])
+  for(const args of [['init','-q'],['add','--',fixture.path,fixture.testPath,'package.json'],['-c','user.name=Fixture','-c','user.email=fixture@example.test','commit','-qm','fixture']])
     execFileSync('git',args,{cwd:root,windowsHide:true}) // disposable fixture; every failure throws
   let verifiers=0
   const childEnv={...process.env};delete childEnv['NODE_TEST_CONTEXT']
   t.mock.method(SafeExecutor.prototype,'testRunAsync',async()=>{
     verifiers++
-    try{return {exit_code:0,stdout:execFileSync(process.execPath,['--test','math.test.js'],{cwd:root,env:childEnv,encoding:'utf8',windowsHide:true}),stderr:''}}
+    try{return {exit_code:0,stdout:execFileSync(process.execPath,['--test',fixture.testPath],{cwd:root,env:childEnv,encoding:'utf8',windowsHide:true}),stderr:''}}
     catch(error){const e=error as {status:number;stdout:string;stderr:string};return {exit_code:e.status,stdout:String(e.stdout),stderr:String(e.stderr)}}
   })
   const engine=new ChatEngine({task:'Fix the failing tests. Preserve tests and package metadata.',projectRoot:root})
-  const probe=engine as unknown as {workingState:WorkingState;lastVerifierReceipt:{exit_code:number;stale:boolean}|null;executeOneAction:(action:ChatToolAction,context:ToolContext,callbacks:object,meta:{index:number;ownerGeneration:number})=>Promise<{observation:string}>}
+  const probe=engine as unknown as {workingState:WorkingState;lastVerifierReceipt:{exit_code:number;stale:boolean}|null;executeActions:(actions:ChatToolAction[],callbacks:object)=>Promise<unknown>;executeOneAction:(action:ChatToolAction,context:ToolContext,callbacks:object,meta:{index:number;ownerGeneration:number})=>Promise<{observation:string}>}
   const context:ToolContext={agentId:'test',runId:'test',runDir,babelRoot:root,projectRoot:root}
   let index=0
   const run=(action:ChatToolAction)=>probe.executeOneAction(action,context,{}, {index:index++,ownerGeneration:0})
   // Ordinary journeys inspect first. Pre-failure cached reads cannot stand in
   // for the controller's required fresh post-failure observations.
-  await run({type:'read_file',path:'math.test.js'})
-  await run({type:'read_file',path:'math.js'})
+  await run({type:'read_file',path:fixture.testPath})
+  await run({type:'read_file',path:fixture.path})
   await run({type:'test_run',command:'npm test'})
   assert.equal(probe.lastVerifierReceipt?.exit_code,1)
-  await run({type:'read_file',path:'math.test.js'})
-  assert.deepEqual(probe.workingState.recoveryGate?.failingTargets,['math.test.js'])
-  assert.equal(probe.workingState.localization?.importCandidates?.[0]?.path,'math.js')
-  await run({type:'read_file',path:'math.js'})
+  // Three ordinary reads in one model turn must not poison the first two
+  // recovery observations when the third exceeds the localization scope cap.
+  await probe.executeActions([{type:'read_file',path:fixture.testPath},{type:'read_file',path:fixture.path},{type:'read_file',path:'package.json'}],{})
   const gate=probe.workingState.recoveryGate!
-  assert.ok(gate.failingTargets?.includes('math.js'))
+  assert.ok(gate.failingTargets?.includes(fixture.path))
   assert.equal(gate.observedKeys?.length,2)
   const plan={schemaVersion:1 as const,failureSignature:gate.failureSignature,workspaceRevision:gate.binding!.workspaceRevision,
-    hypothesisClass:'logic' as const,targetIdentities:['math.js'],actionFamily:'str_replace' as const,criterionId:'npm test',supportingObservationIds:gate.observedKeys!.map(recoveryObservationId)}
-  const mutation=await run({type:'str_replace',file_path:'math.js',old_str:'return a-b;',new_str:'return a+b;',repair_plan:plan})
+    hypothesisClass:'logic' as const,targetIdentities:[fixture.path],actionFamily:'str_replace' as const,criterionId:'npm test',supportingObservationIds:gate.observedKeys!.map(recoveryObservationId)}
+  const wrongCriterion=await run({type:'str_replace',file_path:fixture.path,old_str:fixture.old,new_str:fixture.replacement,repair_plan:{...plan,criterionId:fixture.label}})
+  assert.match(wrongCriterion.observation,/criterion_identity_mismatch/)
+  assert.match(wrongCriterion.observation,/criterion_id_expected="npm test"/)
+  assert.equal(readFileSync(join(root,fixture.path),'utf8'),source)
+  assert.notEqual(probe.workingState.recoveryGate?.permitConsumed,true)
+  const wrongTarget=await run({type:'str_replace',file_path:fixture.path,old_str:fixture.old,new_str:fixture.replacement,repair_plan:{...plan,targetIdentities:[`${fixture.path}:symbol`]}})
+  assert.match(wrongTarget.observation,/target_identity_mismatch/)
+  assert.ok(wrongTarget.observation.includes(`target_identities_expected=${JSON.stringify([fixture.path])}`))
+  assert.equal(readFileSync(join(root,fixture.path),'utf8'),source)
+  const mutation=await run({type:'str_replace',file_path:fixture.path,old_str:fixture.old,new_str:fixture.replacement,repair_plan:plan})
   assert.doesNotMatch(mutation.observation,/RECOVERY_(?:PLAN|EVIDENCE|CANDIDATE).*REQUIRED|isolation_unavailable/)
-  assert.equal(readFileSync(join(root,'math.js'),'utf8'),source.replace('a-b','a+b'))
-  assert.equal(readFileSync(join(root,'math.test.js'),'utf8'),testSource)
+  assert.equal(readFileSync(join(root,fixture.path),'utf8'),source.replace(fixture.old,fixture.replacement))
+  assert.equal(readFileSync(join(root,fixture.testPath),'utf8'),testSource)
   assert.equal(probe.workingState.recoveryGate?.permitConsumed,true)
   await run({type:'test_run',command:'npm test'})
   assert.equal(verifiers,2)

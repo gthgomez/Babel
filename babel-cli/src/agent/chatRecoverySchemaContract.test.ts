@@ -15,13 +15,14 @@ test('native recovery proposals advertise the same evidence and scope boundaries
     const tool = buildChatToolDefinitions().find(tool => tool.function.name === name)
     assert.ok(tool)
     const properties = tool.function.parameters.properties as Record<string, {
-      properties?: Record<string, { minItems?: number; maxItems?: number; items?: { minLength?: number; maxLength?: number } }>
+      properties?: Record<string, { description?: string; minItems?: number; maxItems?: number; items?: { minLength?: number; maxLength?: number } }>
     }>
     const plan = properties.repair_plan?.properties
     assert.ok(plan)
     assert.deepEqual([plan.supportingObservationIds?.minItems, plan.supportingObservationIds?.maxItems], [1, 8])
     assert.deepEqual([plan.supportingObservationIds?.items?.minLength, plan.supportingObservationIds?.items?.maxLength], [16, 16])
     assert.deepEqual([plan.targetIdentities?.minItems, plan.targetIdentities?.maxItems], [1, 4])
+    assert.match(plan.criterionId?.description ?? '', /exact verifier command/)
   }
   for (const length of [0, 15, 17])
     assert.equal(RecoveryPlanProposalSchema.safeParse({ ...proposal, supportingObservationIds: ['a'.repeat(length)] }).success, false)
@@ -38,4 +39,10 @@ test('empty recovery evidence directs inspection instead of inventing observatio
   assert.match(context, /recovery_observation_keys: \[\]/)
   assert.match(context, /No admissible observation IDs exist yet/)
   assert.match(context, /reread the failing assertion and relevant source after the failed verifier/)
+})
+
+test('recovery context names the exact verifier criterion separately from its assertion label', () => {
+  let state=applyWorkingStateEvent(createWorkingState('repair'),{type:'verifier',identity:'npm test',exitCode:1,summary:'addition failed'})
+  state=applyWorkingStateEvent(state,{type:'recovery_gate',failureSignature:'addition',requiredEvidence:'inspect'})
+  assert.match(formatWorkingStateBlock(state),/recovery_criterion_id: "npm test"/)
 })

@@ -12,7 +12,7 @@ export interface LocalizationCandidate {
   column?: number
   /** Diagnostic token that must occur in inspected source. */
   relation: string
-  source: 'structured_location' | 'test_identity' | 'diagnostic_symbol' | 'import_call'
+  source: 'structured_location' | 'test_identity' | 'diagnostic_symbol' | 'import_call' | 'file_read'
   fromTestPath?: string
 }
 
@@ -151,7 +151,7 @@ export function finishLocalizationCall(
   if (state.phase !== 'LOCALIZE_FAILURE' && !(state.phase === 'localized' && state.importCandidates?.length)) return state
   const target = action.target ?? ''
   let candidate: LocalizationCandidate | undefined = state.phase === 'localized'
-    ? state.importCandidates?.find(item => item.path === target && corroboratesTestImport(action.content ?? '', item.relation))
+    ? state.importCandidates?.find(item => item.path === target && corroboratesTestImport(action.content ?? '', item.relation, item.source))
     : state.candidates.find((item) => item.path === target)
   // Search output proposes a location; a bounded file read corroborates it.
   const contentBearing = action.type === 'read_file' || action.type === 'read_range'
@@ -166,10 +166,12 @@ export function finishLocalizationCall(
       }
     } catch { /* missing or replaced path stays unlocalized */ }
   }
-  const related = candidate && contentBearing && action.succeeded && content.trim().length > 0 &&
-    (candidate.source !== 'import_call' || action.type === 'read_file') &&
-    (candidate.source !== 'import_call' || (action.projectRoot && recoveryTargetIdentity(action.projectRoot, target) === target)) &&
-    new RegExp(`(?<![\\w$])${escapeRegExp(candidate.relation)}(?![\\w$])`, 'i').test(content) &&
+  const bridgeCandidate = candidate?.source === 'import_call' || candidate?.source === 'file_read'
+  const related = candidate && contentBearing && action.succeeded && action.content !== undefined &&
+    (candidate.source === 'file_read' || content.trim().length > 0) &&
+    (!bridgeCandidate || action.type === 'read_file') &&
+    (!bridgeCandidate || (action.projectRoot && recoveryTargetIdentity(action.projectRoot, target) === target)) &&
+    (candidate.source === 'file_read' || new RegExp(`(?<![\\w$])${escapeRegExp(candidate.relation)}(?![\\w$])`, 'i').test(content)) &&
     (!candidate.line || (
       (action.startLine ?? 1) <= candidate.line &&
       (action.startLine ?? 1) + content.split(/\r?\n/).length - 1 >= candidate.line

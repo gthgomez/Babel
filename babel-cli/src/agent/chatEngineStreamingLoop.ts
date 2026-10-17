@@ -13,13 +13,14 @@ import {
 } from "./chatEngineStreamingPreparation.js";
 import { finalizeStreamingTurnLimit } from "./chatEngineStreamingFinalizer.js";
 import { settleStreamingCompletion } from "./chatEngineStreamingCompletion.js";
-import { normalizeChatAnswer } from './chatResponseContract.js';
+import { normalizeChatAnswer, requestedChatJsonKind } from './chatResponseContract.js';
 import { recordChatHarnessFeedback } from "./chatHarnessFeedback.js";
 import { realpathSync, writeFileSync } from "node:fs";
 import { join } from 'node:path';
-import { describeNativeToolRejection } from './nativeToolRejection.js';
+import { describeNativeToolRejection, nativeSchemaRepairFeedback } from './nativeToolRejection.js';
 import { unsupportedTestClaim, responseEvidenceCorrection, responseVerifierFacts } from './chatResponseEvidence.js';
 import { refreshChatVerifierReceiptStalenessSync } from '../evidence/chatRevisionBinding.js';
+import type { ChatUsageScope } from './chatEngineProviderAccounting.js';
 
 import { trace, SpanStatusCode, type Span } from "@opentelemetry/api";
 import { endSpan } from "../telemetry/tracing.js";
@@ -137,6 +138,8 @@ export class ChatEngineStreamingLoop {
     // Bounded once-per-submission repair for an unrecognized text tool call.
     let textToolProtocolRepairUsed = false;
     let responseEvidenceRepairUsed = false;
+    let nativeSchemaRepairUsed = false;
+    const bufferContractAnswer = requestedChatJsonKind(userInput) !== null;
     refreshChatVerifierReceiptStalenessSync(this.host.options.projectRoot, this.host.lastVerifierReceipt);
     recordChatHarnessFeedback(this.host, `Verification evidence at submission start: ${responseVerifierFacts(this.host.lastVerifierReceipt)} Never infer test execution from reading source. Preserve the requested answer format.`);
 
@@ -311,7 +314,7 @@ export class ChatEngineStreamingLoop {
       }
       const hadInstalledP11Context =
         this.host.parity.contextCheckpoint !== undefined;
-      const usageScope = {
+      const usageScope: ChatUsageScope = {
         taskOwnerId: this.host.taskAllowance?.taskOwnerId ?? null,
         projectRoot: realpathSync(this.host.options.projectRoot),
         accountingEpoch: globalCostTracker.getAccountingEpoch(),
@@ -564,13 +567,19 @@ export class ChatEngineStreamingLoop {
         const nativeActions: ChatToolAction[] = [];
         const nativeToolCallIds: string[] = [];
         const seenToolCallIds = new Set<string>();
+        const receivedToolCallIds = new Set<string>();
         let nativeProtocolInvalid = false;
         let nativeRejectionCode = 'unknown';
-        const decodeNativeCall = (event: { id: string; name: string; input: Record<string, unknown> }): ChatToolAction => {
+        const nativeRejectionState: {current: Record<string, unknown> | null} = {current:null};
+        let nativeStreamExhausted = false;
+        let nativeIdentityNormalized = false;
+        const decodeNativeCall = (event: { id: string; name: string; input: Record<string, unknown> }): ChatToolAction | null => {
           try {
-            if (typeof event.id !== "string" || event.id.trim().length === 0 || seenToolCallIds.has(event.id)) {
+            if (typeof event.id !== "string" || event.id.trim().length === 0 || receivedToolCallIds.has(event.id)) {
               throw new Error("NATIVE_TOOL_CALL_ID_INVALID");
             }
+            receivedToolCallIds.add(event.id);
+            if (nativeProtocolInvalid) return null;
             return nativeToolUseToChatAction(event.name, event.input);
           } catch (error) {
             nativeProtocolInvalid = true;
@@ -578,22 +587,25 @@ export class ChatEngineStreamingLoop {
               ? (error as { issues: Array<{ code: string; path: PropertyKey[] }> }).issues
                 .map(issue => ({ code: issue.code, path: issue.path.map(String) })) : [];
             nativeRejectionCode = issues.length ? 'arguments_schema_invalid' : 'call_identity_invalid';
-            writeFileSync(join(this.host.engineRunDir, 'native-tool-rejection.json'),
-              JSON.stringify(describeNativeToolRejection({ turn: this.host._turnIndex,
+            nativeRejectionState.current = describeNativeToolRejection({ turn: this.host._turnIndex,
                 id: event.id, name: event.name, input: event.input,
-                issues, reason: nativeRejectionCode }), null, 2));
-            throw new Error("NATIVE_TOOL_PROTOCOL_INVALID");
+                issues, reason: nativeRejectionCode });
+            writeFileSync(join(this.host.engineRunDir, 'native-tool-rejection.json'), JSON.stringify(nativeRejectionState.current, null, 2));
+            // Exhaust the same generator: its final usage and identity checks
+            // may occur after tool_use/done. No rejected-batch action executes.
+            return null;
           }
         };
         const settleUnexecutedNativeCalls = (): ChatEvent[] => nativeActions.map((action, index) => {
           const toolCallId = nativeToolCallIds[index]!;
           const tool = chatActionToolName(action);
           const target = chatActionTarget(action);
+          const error = nativeProtocolInvalid ? "native_tool_protocol_invalid" : "provider_stream_failed";
           this.host.toolCallLog.push({ toolCallId, tool, target, index,
-            error: "provider_stream_failed", exit_code: 1, effect_status: "not_applicable",
-            detail: "Provider stream failed before executor dispatch; action was not executed." });
+            error, exit_code: 1, effect_status: "not_applicable",
+            detail: "Native batch rejected before executor dispatch; action was not executed." });
           return { type: "tool_failed", toolCallId, tool, target,
-            error: "provider_stream_failed", exitCode: 1, effect_status: "not_applicable" };
+            error, exitCode: 1, effect_status: "not_applicable" };
         });
         let answerText = "";
         let nativeFinishReason: string | undefined;
@@ -632,14 +644,16 @@ export class ChatEngineStreamingLoop {
               case "text_delta":
                 this.host.currentTurnTelemetry?.markFirstToken();
                 answerText += event.text;
-                yield { type: "answer_chunk", text: event.text };
+                if (!bufferContractAnswer) yield { type: "answer_chunk", text: event.text };
                 break;
               case "thought_delta":
                 this.host.currentTurnTelemetry?.markFirstToken();
                 yield { type: "thought", text: event.text };
                 break;
               case "tool_use": {
+                if (event.idWasNormalized) nativeIdentityNormalized = true;
                 const action = decodeNativeCall(event);
+                if (!action) break;
                 nativeActions.push(action);
                 nativeToolCallIds.push(
                   canonicalizeToolCallId(
@@ -678,8 +692,14 @@ export class ChatEngineStreamingLoop {
           );
           this.host.trackRunnerUsage(runner, usageScope);
           if (!this.host.isSubmissionCurrent(submissionGeneration)) return;
+          nativeStreamExhausted = true;
+          if (nativeRejectionState.current && nativeIdentityNormalized) {
+            nativeRejectionState.current.provider_call_id_normalized = true;
+            writeFileSync(join(this.host.engineRunDir, 'native-tool-rejection.json'), JSON.stringify(nativeRejectionState.current, null, 2));
+          }
+          if (nativeProtocolInvalid) throw new Error("NATIVE_TOOL_PROTOCOL_INVALID");
           this.host._streamNativeToolCallIds = nativeToolCallIds;
-          streamedAnswerForTurn = answerText;
+          streamedAnswerForTurn = bufferContractAnswer ? "" : answerText;
           turnResult = nativeTurnFromStream({
             answerText,
             actions: nativeActions,
@@ -701,9 +721,27 @@ export class ChatEngineStreamingLoop {
             yield* settleUnexecutedNativeCalls();
             endSpan(_turnSpan, SpanStatusCode.ERROR);
             _turnSpan = null;
+            const cancelled = this.host.emitCancelledIfOperatorAbort(err);
+            if (cancelled) { yield cancelled; return; }
+            const owner = this.host.taskAllowance?.taskOwnerId;
+            const metadata = usageScope.usageMetadata;
+            if (nativeStreamExhausted && !nativeIdentityNormalized && nativeRejectionCode === 'arguments_schema_invalid' &&
+                !nativeSchemaRepairUsed && nativeRejectionState.current && nativeFinishReason === 'tool_calls' &&
+                !this.host.abortController.signal.aborted && owner &&
+                metadata?.prompt_tokens != null && metadata.completion_tokens != null &&
+                globalCostTracker.getTaskSummary(owner).costComplete === true && this.host.checkBudgets(true).ok) {
+              nativeSchemaRepairUsed = true;
+              recordChatHarnessFeedback(this.host, nativeSchemaRepairFeedback(nativeRejectionState.current));
+              continue;
+            }
             yield this.host.streamFailed(nativeProtocolInvalid
               ? `NATIVE_TOOL_PROTOCOL_INVALID: ${nativeRejectionCode}; no action was dispatched. See native-tool-rejection.json.`
               : "Native stream failed after announcing tools; no action was dispatched.");
+            return;
+          }
+          if (nativeSchemaRepairUsed) {
+            endSpan(_turnSpan, SpanStatusCode.ERROR); _turnSpan = null;
+            yield this.host.streamFailed(err?.message ?? String(err));
             return;
           }
           const admissionRecovery =
@@ -752,6 +790,8 @@ export class ChatEngineStreamingLoop {
           nativeActions.length = 0;
           nativeToolCallIds.length = 0;
           seenToolCallIds.clear();
+          receivedToolCallIds.clear();
+          nativeIdentityNormalized = false;
           answerText = "";
           nativeFinishReason = undefined;
           this.host.assertNativeRequestMatchesDurable(
@@ -787,14 +827,16 @@ export class ChatEngineStreamingLoop {
                 case "text_delta":
                   this.host.currentTurnTelemetry?.markFirstToken();
                   answerText += event.text;
-                  yield { type: "answer_chunk", text: event.text };
+                  if (!bufferContractAnswer) yield { type: "answer_chunk", text: event.text };
                   break;
                 case "thought_delta":
                   this.host.currentTurnTelemetry?.markFirstToken();
                   yield { type: "thought", text: event.text };
                   break;
                 case "tool_use": {
+                  if (event.idWasNormalized) nativeIdentityNormalized = true;
                   const action = decodeNativeCall(event);
+                  if (!action) break;
                   nativeActions.push(action);
                   nativeToolCallIds.push(
                     canonicalizeToolCallId(
@@ -833,8 +875,9 @@ export class ChatEngineStreamingLoop {
             );
             this.host.trackRunnerUsage(fb, usageScope);
             if (!this.host.isSubmissionCurrent(submissionGeneration)) return;
+            if (nativeProtocolInvalid) throw new Error("NATIVE_TOOL_PROTOCOL_INVALID");
             this.host._streamNativeToolCallIds = nativeToolCallIds;
-            streamedAnswerForTurn = answerText;
+            streamedAnswerForTurn = bufferContractAnswer ? "" : answerText;
             turnResult = nativeTurnFromStream({
               answerText,
               actions: nativeActions,

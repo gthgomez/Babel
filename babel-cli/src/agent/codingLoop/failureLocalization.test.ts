@@ -81,6 +81,30 @@ test('import bridge evidence cannot reopen consumed permits or accept stale, rep
   assert.deepEqual(applyWorkingStateEvent(exhausted,{type:'localization_import_evidence',provenance}).recoveryGate,state.recoveryGate)
 })
 
+test('a failed stylesheet assertion requires both fresh full reads before admitting its exact data file', () => {
+  const root=mkdtempSync(join(tmpdir(),'babel-css-localize-'))
+  try {
+    const source="import test from 'node:test';import assert from 'node:assert/strict';import {readFileSync} from 'node:fs';test('busy style',()=>assert.match(readFileSync(new URL('./styles.css',import.meta.url),'utf8'),/opacity/));"
+    writeFileSync(join(root,'render.test.js'),source);writeFileSync(join(root,'styles.css'),'.status {}')
+    const candidates=captureLocalizationCandidates({projectRoot:root,tool:'test_run',command:'npm test',stderr:'',
+      stdout:`✖ busy style (1ms)\nAssertionError [ERR_ASSERTION]: The input did not match\n    at TestContext.<anonymous> (file:///app/render.test.js:1:${source.indexOf('assert.match')+1})`})
+    let loc=advanceFailureLocalization(startFailureLocalization('red',binding,candidates),
+      {type:'read_file',target:'render.test.js',content:source,succeeded:true,projectRoot:root})
+    assert.equal(loc.importCandidates?.[0]?.source,'file_read')
+    const partial=advanceFailureLocalization(loc,{type:'read_range',target:'styles.css',content:'.status {}',succeeded:true,projectRoot:root})
+    assert.notEqual(partial.acceptedPath,'styles.css')
+    loc=advanceFailureLocalization(loc,{type:'read_file',target:'styles.css',content:'1│.status {}',succeeded:true,projectRoot:root})
+    assert.equal(loc.acceptedPath,'styles.css');assert.equal(loc.rounds,2)
+    let state=applyWorkingStateEvent(createWorkingState('repair'),{type:'recovery_gate',failureSignature:'red',binding,requiredEvidence:'inspect',failingTargets:['render.test.js']})
+    state=applyWorkingStateEvent(state,{type:'add_evidence',evidence:'fresh test',discriminating:true,
+      provenance:{tool:'read_file',target:'render.test.js',failureSignature:'red',binding,observationDigest:'test'}})
+    state=applyWorkingStateEvent(state,{type:'localization_update',localization:loc})
+    const admitted=applyWorkingStateEvent(state,{type:'localization_import_evidence',provenance:{tool:'read_file',target:'styles.css',failureSignature:'red',binding,observationDigest:loc.observationDigest!}})
+    assert.deepEqual(admitted.recoveryGate?.failingTargets,['render.test.js','styles.css'])
+    assert.equal(admitted.recoveryGate?.observedKeys?.length,2)
+  } finally {rmSync(root,{recursive:true,force:true})}
+})
+
 test('Node assertion labels and sandbox file URLs corroborate the actual test read', () => {
   const root = mkdtempSync(join(tmpdir(), 'babel-node-assert-'))
   try {

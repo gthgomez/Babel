@@ -45,6 +45,40 @@ test('test claims distinguish execution, freshness, result and scope', () => {
     assert.equal(unsupportedTestClaim(text, null), false, text)
 })
 
+test('explicit targeted test reports retain their selectors without certifying the whole suite', () => {
+  for(const command of ['npm test -- math.test.js','node --test math.test.js','pytest tests/math.py','go test ./math','cargo test addition']) {
+    const green={command,exit_code:0,authority:true,stale:false,scope:'targeted',tests_total:1,tests_skipped:0}
+    assert.equal(unsupportedTestClaim(`I ran \`${command}\`.`,green),false,command)
+    assert.equal(unsupportedTestClaim(`\`${command}\` passed.`,green),false,command)
+    assert.equal(unsupportedTestClaim(`I ran \`${command}\`; it failed.`,{...green,exit_code:1}),false,command)
+    assert.equal(unsupportedTestClaim(`\`${command}\` passed.`,{...green,exit_code:1}),true,command)
+    assert.equal(unsupportedTestClaim(`\`${command}\` passed.`,{...green,stale:true}),true,command)
+    assert.equal(unsupportedTestClaim('All tests passed.',green),true,command)
+  }
+  const receipt={command:'npm test -- math.test.js',exit_code:0,authority:true,stale:false,scope:'targeted',tests_total:1}
+  assert.equal(unsupportedTestClaim('I ran `npm test -- other.test.js`.',receipt),true)
+  assert.equal(unsupportedTestClaim('`npm test` passed.',receipt),true)
+})
+
+test('bare targeted reports preserve selectors and separate prose success from filename periods', () => {
+  for(const command of ['npm test -- math.test.js','node --test math.test.js','pytest tests/math.py','go test ./math','cargo test addition']) {
+    const green={command,exit_code:0,authority:true,stale:false,scope:'targeted',tests_total:1,tests_skipped:0}
+    for(const text of [`I ran ${command}.`,`${command} passed.`,`I ran ${command} and it failed.`])
+      assert.equal(unsupportedTestClaim(text,green),false,text)
+    for(const text of [`${command} passed.`,`I ran ${command}.`]) {
+      assert.equal(unsupportedTestClaim(text,null),true,text)
+      assert.equal(unsupportedTestClaim(text,{...green,command:command.replace(/math|addition/g,'different')}),true,text)
+    }
+    for(const text of [`I ran ${command} successfully.`,`I ran \`${command}\` successfully.`,`${command} passed.`])
+      assert.equal(unsupportedTestClaim(text,{...green,exit_code:1}),true,text)
+  }
+  const command='pytest -k "with tax" tests/passed.test.py';
+  const receipt={command,exit_code:0,authority:true,stale:false,scope:'targeted',tests_total:1,tests_skipped:0};
+  assert.equal(unsupportedTestClaim(`I ran ${command} and it passed.`,receipt),false);
+  assert.equal(unsupportedTestClaim(`I ran ${command} and it passed.`,{...receipt,exit_code:1}),true);
+  assert.equal(unsupportedTestClaim('I ran npm test and it failed.',{...receipt,command:'npm test',exit_code:1}),false);
+})
+
 for (const scenario of ['correction', 'repeated', 'exact_json'] as const)
 test(`response evidence ${scenario}: preserve useful answers without requiring effects`, async t => {
   const root = mkdtempSync(join(tmpdir(), 'chat-response-evidence-'))

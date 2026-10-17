@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { applyWorkingStateEvent, createWorkingState, formatWorkingStateBlock, recordControllerRecoveryStrategy, restoreWorkingStateSnapshot } from './workingState.js'
-import { actualRecoveryEdit, admitRecoveryPlan, recoveryObservationId } from './recoveryPlan.js'
+import { actualRecoveryEdit, admitRecoveryPlan, formatRecoveryPlanRejection, recoveryObservationId } from './recoveryPlan.js'
 import { createSessionEventLog, parseSessionEventLog, recordWorkingStateSnapshot, serializeSessionEventLog } from '../sessionEvents.js'
 import { ChatToolActionSchema, buildChatToolDefinitions } from '../chatToolDefinitions.js'
 import { parseTextToolTurn } from '../textToolParser.js'
@@ -77,6 +77,31 @@ test('controller admits only a scoped plan backed by the observed candidate', ()
     const denied = admitRecoveryPlan(state, { ...proposal(state), ...altered } as ReturnType<typeof proposal>, changedEdit, binding)
     assert.equal(denied.admitted, false, JSON.stringify(altered))
   }
+})
+
+test('a test label cannot replace the exact verifier criterion and the rejection identifies that mismatch', () => {
+  const state = readyState()
+  const rejected = admitRecoveryPlan(state, {...proposal(state),criterionId:'parser adds values'},changedEdit,binding)
+  assert.equal(rejected.admitted,false)
+  assert.equal(rejected.reason,'criterion_identity_mismatch')
+  assert.equal(rejected.state,state,'a rejected proposal consumes no evidence or mutation permit')
+  assert.equal(admitRecoveryPlan(state,proposal(state),changedEdit,binding).admitted,true)
+})
+
+test('rejected recovery fields identify their exact mismatch without consuming the permit', () => {
+  const state=readyState()
+  for(const [alteration,reason] of [
+    [{failureSignature:'wrong'},'failure_signature_mismatch'],
+    [{workspaceRevision:'wrong'},'workspace_revision_mismatch'],
+    [{targetIdentities:['src/parser.ts:parse']},'target_identity_mismatch'],
+    [{actionFamily:'write_file'},'action_family_mismatch'],
+  ] as const) {
+    const rejected=admitRecoveryPlan(state,{...proposal(state),...alteration},changedEdit,binding)
+    assert.equal(rejected.reason,reason);assert.equal(rejected.state,state)
+    assert.match(formatRecoveryPlanRejection(state,reason,changedEdit),new RegExp(reason))
+  }
+  assert.match(formatRecoveryPlanRejection(state,'target_identity_mismatch',changedEdit),/target_identities_expected=\["src\/parser.ts"\]/)
+  assert.match(formatRecoveryPlanRejection({...state,recoveryGate:{...state.recoveryGate!,permitConsumed:true}}),/Rerun the verifier/)
 })
 
 test('rendered recovery identities round-trip without truncation while prose stays bounded', () => {
