@@ -1,8 +1,12 @@
 import assert from 'node:assert/strict';
 import { resolve } from 'node:path';
 import test from 'node:test';
+import childProcess from 'node:child_process';
+import { syncBuiltinESMExports } from 'node:module';
 
 import {
+  BENCHMARK_RUNTIME_INVENTORY_COMMANDS,
+  inspectBenchmarkContainerRuntime,
   buildBenchmarkContainerCommand,
   evaluateGovernedIsolation,
   formatBenchmarkRuntimeInventoryPromptLines,
@@ -17,6 +21,30 @@ import {
   shouldUseDockerSandbox,
   getDockerUnavailableReason,
 } from './benchmarkContainer.js';
+
+test('default runtime inventory accepts its own C++ command and probes Docker', (t) => {
+  let calls = 0;
+  t.mock.method(childProcess, 'spawnSync', (_command: string, args: readonly string[]) => {
+    calls++;
+    assert.ok(args.includes('--pull=never'), 'inventory must not download an image');
+    const stdout = BENCHMARK_RUNTIME_INVENTORY_COMMANDS.map(command => `${command}\tavailable\t/usr/bin/${command}`).join('\n');
+    return { pid: 1, output: ['', stdout, ''], stdout, stderr: '', status: 0, signal: null };
+  });
+  syncBuiltinESMExports();
+  try {
+    const inventory = inspectBenchmarkContainerRuntime('synthetic/default-command-inventory:unit');
+    assert.equal(inventory.status, 'available', inventory.stderr);
+    assert.equal(calls, 1);
+    assert.equal(inventory.commands.find(entry => entry.command === 'g++')?.available, true);
+    assert.match(formatBenchmarkRuntimeInventoryPromptLines(inventory, ['node', 'cat']).join('\n'), /Linux Docker shell/);
+    const rejected = inspectBenchmarkContainerRuntime('synthetic/invalid-command:unit', ['node; touch unwanted']);
+    assert.equal(rejected.status, 'unavailable');
+    assert.equal(calls, 1, 'unsafe command must be rejected before Docker');
+  } finally {
+    t.mock.restoreAll();
+    syncBuiltinESMExports();
+  }
+});
 import {
   BABEL_CONTAINER_EMPTY_HOOKS_DIR,
   BABEL_CONTAINER_NO_EDITOR,

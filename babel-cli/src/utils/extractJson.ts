@@ -42,11 +42,37 @@ function stripAnsi(text: string): string {
  * Strips single-line (`//`) and multi-line (slash-asterisk ... asterisk-slash)
  * comments from text. Used as a pre-pass before the balanced-brace walker so
  * that inline comments inside JSON-like blocks don't confuse brace/string parsing.
+ * Comment markers inside JSON strings are data and must remain byte-identical.
  */
 function stripComments(text: string): string {
-  return text
-    .replace(/\/\/.*$/gm, '') // single-line comments
-    .replace(/\/\*[\s\S]*?\*\//g, ''); // multi-line comments
+  const output: string[] = [];
+  let inString = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i]!;
+    if (inString) {
+      output.push(ch);
+      if (ch === '\\' && i + 1 < text.length) {
+        output.push(text[++i]!);
+      } else if (ch === '"') {
+        inString = false;
+      }
+    } else if (ch === '"') {
+      inString = true;
+      output.push(ch);
+    } else if (ch === '/' && text[i + 1] === '/') {
+      output.push(' ');
+      while (i + 1 < text.length && !/[\r\n]/.test(text[i + 1]!)) i++;
+    } else if (ch === '/' && text[i + 1] === '*') {
+      // A space prevents invalid tokens such as 1/* comment */2 becoming 12.
+      output.push(' ');
+      i += 2;
+      while (i < text.length && !(text[i] === '*' && text[i + 1] === '/')) i++;
+      i++;
+    } else {
+      output.push(ch);
+    }
+  }
+  return output.join('');
 }
 
 // ─── Balanced brace walker ────────────────────────────────────────────────────

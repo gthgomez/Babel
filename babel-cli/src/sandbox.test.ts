@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, readFileSync, symlinkSync, writeFileSync, rmSync } from 'node:fs';
 import test from 'node:test';
+import childProcess from 'node:child_process';
+import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -281,6 +283,50 @@ test('shellExec rejects working directories outside the project root', () => {
     const result = executor.shellExec('node -v', fixture.outsideRoot, 5_000);
     expectPolicyDenial(result, 'path_jail_rejected');
   } finally {
+    fixture.cleanup();
+  }
+});
+
+test('safe_repo Docker cwd support does not add virtual file-write aliases', (t) => {
+  const fixture = makeFixture();
+  const names = ['BABEL_EXECUTION_PROFILE', 'BABEL_BENCHMARK_DOCKER_IMAGE', 'BABEL_DOCKER_DISABLE', 'BABEL_ALLOW_HOST_FALLBACK'] as const;
+  const previous = names.map(name => [name, process.env[name]] as const);
+  let calls = 0;
+  t.mock.method(childProcess, 'spawnSync', (command: string, args: readonly string[]) => {
+    calls++;
+    assert.equal(command, 'docker');
+    assert.equal(args[args.indexOf('-w') + 1], '/app');
+    return { pid: 1, output: ['', 'cwd probe', ''], stdout: 'cwd probe', stderr: '', status: 0, signal: null };
+  });
+  syncBuiltinESMExports();
+  try {
+    process.env['BABEL_EXECUTION_PROFILE'] = 'safe_repo';
+    process.env['BABEL_BENCHMARK_DOCKER_IMAGE'] = 'synthetic/sandbox:unit';
+    delete process.env['BABEL_DOCKER_DISABLE'];
+    delete process.env['BABEL_ALLOW_HOST_FALLBACK'];
+    setDockerAvailableForTest(true);
+    const executor = new SafeExecutor(fixture.projectRoot);
+    writeFileSync(join(fixture.projectRoot, 'AGENTS.md'), 'protected sentinel');
+    const blocked = executor.fileWrite('/app/AGENTS.md', 'changed');
+    assert.notEqual(blocked.exit_code, 0, 'virtual file targets must not bypass upstream policy/transaction paths');
+    assert.equal(readFileSync(join(fixture.projectRoot, 'AGENTS.md'), 'utf8'), 'protected sentinel');
+    assert.throws(() => executor.resolveSafe('/app'));
+    assert.throws(() => executor.resolveSafe('/app/../outside.txt'));
+    const cwdProbe = executor.shellExec('echo cwd', '/app', 5_000);
+    assert.equal(cwdProbe.exit_code, 0, cwdProbe.stderr);
+    assert.equal(calls, 1);
+    const traversal = executor.shellExec('echo cwd', '/app/../outside.txt', 5_000);
+    assert.notEqual(traversal.exit_code, 0);
+    assert.equal(calls, 1, 'cwd traversal must not spawn');
+    setDockerAvailableForTest(false);
+    assert.throws(() => executor.resolveSafe('/app'));
+    assert.notEqual(executor.shellExec('echo cwd', '/app', 5_000).exit_code, 0);
+    assert.equal(calls, 1, 'absent Docker must not map cwd or spawn');
+  } finally {
+    for (const [name, value] of previous) { if (value === undefined) delete process.env[name]; else process.env[name] = value; }
+    resetDockerAvailabilityCache();
+    t.mock.restoreAll();
+    syncBuiltinESMExports();
     fixture.cleanup();
   }
 });

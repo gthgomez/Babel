@@ -5,10 +5,44 @@ import type { ToolCallRequest } from '../localTools.js';
 import {
   buildExecutorTurnPromptLegacy,
   classifyRunnerExhaustionHaltTag,
+  isSameRecoverableCommandRetry,
   shouldForceRecoverableCommandRerun,
   summarizeFileReadForExecutor,
   type PendingRecoverableCommandRetry,
 } from './executorHelpers.js';
+
+test('successful equivalent content inspection can settle a failed Windows read in Docker', () => {
+  const pending: PendingRecoverableCommandRetry = { tool: 'shell_exec', command: 'type "math.js"', failedStep: 4, patchedTargetKeys: new Set(['math.js']) };
+  const replacement: ToolCallRequest = { tool: 'shell_exec', command: 'cat ./math.js' };
+  assert.equal(isSameRecoverableCommandRetry(replacement, pending), true);
+  assert.equal(shouldForceRecoverableCommandRerun(pending, replacement, null).force, false);
+});
+
+test('content-read recovery cannot settle a different target, option, directory, or verifier', () => {
+  const pending: PendingRecoverableCommandRetry = { tool: 'shell_exec', command: 'type "math.js"', failedStep: 4, patchedTargetKeys: new Set(['math.js']) };
+  for (const req of [
+    { tool: 'shell_exec', command: 'cat other.js' },
+    { tool: 'shell_exec', command: 'cat -n math.js' },
+    { tool: 'shell_exec', command: 'cat math.js', working_directory: 'other' },
+    { tool: 'test_run', command: 'node --test' },
+  ] satisfies ToolCallRequest[]) {
+    assert.equal(isSameRecoverableCommandRetry(req, pending), false);
+    assert.equal(shouldForceRecoverableCommandRerun(pending, req, null).force, true);
+  }
+});
+
+test('read alias recovery never equates shell syntax with a literal filename', () => {
+  for (const [original, replacement] of [
+    ['cat ">result"', 'cat >result'],
+    ['type "math*.js"', 'cat math*.js'],
+    ['type "$HOME"', 'cat "$HOME"'],
+    ['type "math.js"', 'cat math.js\n'],
+    ['type "math.js"', 'cat math.js; true'],
+  ]) {
+    const pending: PendingRecoverableCommandRetry = { tool: 'shell_exec', command: original!, failedStep: 4, patchedTargetKeys: new Set(['math.js']) };
+    assert.equal(isSameRecoverableCommandRetry({ tool: 'shell_exec', command: replacement! }, pending), false);
+  }
+});
 
 function pendingRetry(
   patchedTargetKeys: string[] = ['compress.c'],

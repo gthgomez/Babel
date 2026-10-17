@@ -155,10 +155,9 @@ const NO_WRITE_PATTERN =
   /\b(read[- ]only|do not edit|do not modify|do not write|do not apply|without editing|without applying|without changes|no file changes|no writes?|don't edit|don't modify|don't apply)\b/i;
 const ASK_PATTERN =
   /\b(ask|explain|summarize|what|why|how|read[- ]only|do not edit|do not modify|without editing|without changes)\b/i;
-/** Returns true when every NO_WRITE_PATTERN match in the task is a file-specific
- *  constraint (e.g. "Do not modify src/dirty.txt"), meaning the task should NOT
- *  be treated as globally read-only. */
-function everyNoWriteMatchIsFileSpecific(task: string): boolean {
+/** Each prohibition must name one artifact, by path or a determinate phrase.
+ * Mixed naming styles must have the same meaning as a single naming style. */
+function everyNoWriteMatchIsScoped(task: string): boolean {
   const globalNoWriteRx = new RegExp(NO_WRITE_PATTERN.source, 'gi');
   const matches = [...task.matchAll(globalNoWriteRx)];
   if (matches.length === 0) {
@@ -166,11 +165,34 @@ function everyNoWriteMatchIsFileSpecific(task: string): boolean {
   }
   const FILE_PATH_AFTER_RE =
     /^\s*['"]?((?:[A-Za-z]:[\\/])?[A-Za-z0-9_.-]+(?:[\\/][A-Za-z0-9_.-]+)*\.[A-Za-z0-9_-]{1,12})['"]?/i;
-  // Each NO_WRITE match must be immediately followed by a file path to count as file-specific
   return matches.every((match) => {
     const afterMatch = task.slice((match.index ?? 0) + match[0].length).slice(0, 80);
-    return FILE_PATH_AFTER_RE.test(afterMatch);
+    if (/^\s*(?:the|this|that|its)\s+(?:(?:entire|whole)\s+)?file[\s_-]+system\b/i.test(afterMatch)) return false;
+    return FILE_PATH_AFTER_RE.test(afterMatch) || DETERMINATE_ARTIFACT_AFTER_RE.test(afterMatch);
   });
+}
+/** A determinate artifact prohibition names ONE artifact without a path or
+ *  extension, e.g. "do not modify the test file". Such a constraint scopes a
+ *  single artifact; it must not turn the whole task read-only. Plurals such as
+ *  "the files" are deliberately excluded. */
+const DETERMINATE_ARTIFACT_AFTER_RE =
+  /^\s*(?:the|this|that|its)\s+(?:[A-Za-z0-9_.-]+\s+){0,3}(?:file|test|spec|fixture|module|script|manifest)\b(?![-_])/i;
+
+/** True when a mutation instruction survives outside the prohibition clauses.
+ *  A standalone prohibition ("Do not modify the test file.") must stay read-only;
+ *  a prohibition that accompanies a separate implementation request must not
+ *  suppress the task's write intent. */
+function hasMutationInstructionOutsideProhibition(task: string): boolean {
+  // Remove the complete prohibited clause, including its target: words such
+  // as "update" in "the update script" are not positive instructions.
+  const sentenceEnd = String.raw`(?:\.(?=\s|$)|[;!?\r\n]|$)`;
+  const remainder = task.replace(
+    new RegExp(`${NO_WRITE_PATTERN.source}[\\s\\S]*?${sentenceEnd}`, 'gi'),
+    ' ',
+  );
+  // A report mentioning "the fix" also does not authorize implementation.
+  const mutationRequest = /^(?:(?:can|could|would)\s+you\s+|i\s+(?:want|need)\s+you\s+to\s+)?(?:please\s+)?(?:fix|repair|apply|update|edit|modify|change|implement|write|create|delete|remove)\b/i;
+  return remainder.split(/\.(?=\s|$)|[;!?\r\n]/).some((clause) => mutationRequest.test(clause.trim()));
 }
 const PLAN_PATTERN = /\b(plan|design|approach|compare|implementation path|migration plan)\b/i;
 const EXPLICIT_PLAN_PATTERN =
@@ -203,7 +225,11 @@ export function inferIntentContract(
   const requestedVerb = options.requestedVerb;
   const noWriteRequested =
     options.forceNoWrite === true ||
-    (NO_WRITE_PATTERN.test(normalizedTask) && !everyNoWriteMatchIsFileSpecific(normalizedTask));
+    (NO_WRITE_PATTERN.test(normalizedTask) &&
+      !(
+        everyNoWriteMatchIsScoped(normalizedTask) &&
+        hasMutationInstructionOutsideProhibition(normalizedTask)
+      ));
   const startsWithMutation = DIRECT_MUTATION_PATTERN.test(normalizedTask);
   const hasMutationWord = MUTATION_PATTERN.test(normalizedTask);
   const recommendationReadOnly =

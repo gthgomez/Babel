@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
+import { resetDockerAvailabilityCache, setDockerAvailableForTest } from '../config/benchmarkContainer.js';
 
 import type { SwePlan } from '../schemas/agentContracts.js';
 import {
@@ -36,6 +37,22 @@ function basePlan(): SwePlan {
     out_of_scope: [],
   };
 }
+
+test('synthesized file verification targets Linux when Docker runs on a Windows host', () => {
+  const previous = { image: process.env['BABEL_BENCHMARK_DOCKER_IMAGE'], profile: process.env['BABEL_EXECUTION_PROFILE'] };
+  setDockerAvailableForTest(true);
+  process.env['BABEL_BENCHMARK_DOCKER_IMAGE'] = 'synthetic/fixture:unit';
+  process.env['BABEL_EXECUTION_PROFILE'] = 'safe_repo';
+  try {
+    const result = injectVerificationStepsIntoPlan(basePlan(), 'Write the requested source file.', null);
+    assert.deepEqual(result.commands, ['cat src/math.js']);
+  } finally {
+    for (const [key, value] of [['BABEL_BENCHMARK_DOCKER_IMAGE', previous.image], ['BABEL_EXECUTION_PROFILE', previous.profile]] as const) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+    resetDockerAvailabilityCache();
+  }
+});
 
 test('extractRequiredVerifierCommandsFromTask parses run-before-completing wording', () => {
   const commands = extractRequiredVerifierCommandsFromTask(

@@ -1790,7 +1790,13 @@ export class SafeExecutor {
     // ── CWD safety ───────────────────────────────────────────────────────────
     let safeCwd: string;
     try {
-      safeCwd = this.resolveSafe(cwd);
+      // /app describes the container's cwd, not a model-facing file alias.
+      // File targets must retain their upstream policy/transaction identity.
+      const canonicalCwd = cwd.trim().replace(/\\/g, '/');
+      const projectCwd = /^\/app(?:\/|$)/i.test(canonicalCwd) && shouldUseDockerSandbox()
+        ? `/project${canonicalCwd.slice('/app'.length)}`
+        : cwd;
+      safeCwd = this.resolveSafe(projectCwd);
     } catch (err) {
       const denied = maybePolicyDeniedResult(err, toolName, [cwd]);
       if (denied) return denied;
