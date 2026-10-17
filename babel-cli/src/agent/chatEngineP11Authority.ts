@@ -556,6 +556,7 @@ export class ChatEngineP11Authority {
             scope: verifierReceipt.scope ?? 'unknown',
             stale: receiptStale,
             bound_revision: verifierReceipt.boundRevision?.compositeTreeHash ?? null,
+            current_for_bound_scope: currency ? !currency.stale : null,
             exit_code: verifierReceipt.exit_code,
           },
         ]

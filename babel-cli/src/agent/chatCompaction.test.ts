@@ -56,6 +56,8 @@ it('profile bootstrap cannot restore a foreign compaction endpoint for Desktop e
   // Ordinary CLI users retain their deliberate explicit compaction endpoint.
   delete process.env['BABEL_DESKTOP_PROVIDER'];
   assert.equal(resolveCompactionSummarizationProvider({ chatProvider: 'opencode-go', compactionModel: 'deepseek-v4.1-flash' })?.baseUrl, 'https://foreign.invalid/chat');
+  assert.equal(resolveCompactionSummarizationProvider({ pinSelection: true, chatProvider: 'openrouter', compactionModel: 'selected-model' })?.baseUrl, 'https://openrouter.ai/api/v1/chat/completions');
+  assert.equal(resolveCompactionSummarizationProvider({ pinSelection: true, chatProvider: 'opencode-go', compactionModel: 'selected-model' }), null);
 });
 
 it('provider-bound compaction refuses ambient OpenRouter fallback without an admitted summarizer', async () => {
@@ -82,6 +84,11 @@ it('profiled CLI compaction follows the current model instead of the saved defau
   process.env['BABEL_DESKTOP_PROVIDER']='openrouter';process.env['BABEL_COMPACTION_MODEL']='deepseek/deepseek-v4-pro';
   try {assert.equal(resolveCompactionModelId({explicitModel:'deepseek/deepseek-v4-pro',providerModelId:'deepseek/deepseek-v4-flash-0731'}),'deepseek/deepseek-v4-flash-0731');}
   finally {if(previousProvider===undefined)delete process.env['BABEL_DESKTOP_PROVIDER'];else process.env['BABEL_DESKTOP_PROVIDER']=previousProvider;if(previousModel===undefined)delete process.env['BABEL_COMPACTION_MODEL'];else process.env['BABEL_COMPACTION_MODEL']=previousModel;}
+});
+
+it('explicit single-model selection pins compaction despite a different configured model', () => {
+  assert.equal(resolveCompactionModelId({ pinSelection: true, explicitModel: 'other',
+    providerModelId: 'selected-model' }), 'selected-model');
 });
 
 // ─── Fixtures ──────────────────────────────────────────────────────────────

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test, type TestContext } from 'node:test'
@@ -102,6 +102,32 @@ function terminalInput(t: TestContext): ChatTerminalInput {
     },
   }
 }
+
+test('an implementation narrowed to read-only cannot declare no-change success without acceptance evidence', t => {
+  const input = terminalInput(t)
+  input.snapshot.context.options.task = 'Make the formatter emit accessible markup.'
+  input.snapshot.outcome.readOnly = true
+  input.snapshot.outcome.hasMutation = false
+  input.snapshot.outcome.lastVerifierReceipt = null
+  const event = completeChatStream(input, 'I will update the implementation.')
+  assert.equal(existsSync(join(input.snapshot.context.engineRunDir, 'transcript.jsonl')), true)
+  assert.equal(event.type, 'done')
+  if (event.type === 'done') assert.notEqual(event.outcome, 'NO_CHANGE_REQUIRED')
+})
+
+test('an accounting stop is not projected as measured budget exhaustion', t => {
+  const input = terminalInput(t)
+  input.snapshot.outcome.budgetExceeded = true
+  input.snapshot.outcome.terminatingLimiter = 'child_exhaustion'
+  input.snapshot.outcome.terminalLimiterReason = 'COST_ACCOUNTING_INCOMPLETE: unresolved charge'
+  const event = completeChatStream(input, 'Spending stopped until accounting is reconciled.')
+  assert.equal(event.type, 'done')
+  if (event.type === 'done') {
+    assert.equal(event.outcome, 'INFRA_FAILURE')
+    assert.equal(event.reason_code, 'cost_accounting_incomplete')
+    assert.equal(event.status, 'failed')
+  }
+})
 
 test('keeps a read-only hard-cap outcome coherent with its structured budget reason', (t) => {
   const input = terminalInput(t)

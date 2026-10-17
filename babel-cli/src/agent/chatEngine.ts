@@ -1194,6 +1194,7 @@ export class ChatEngine {
       ...(this.modelPolicy?.providerModelId
         ? {
             primaryModel: this.modelPolicy.providerModelId,
+            pinSelectedModel: this.options.model !== undefined || this.options.providerPolicy !== undefined,
             // Offline CLI compatibility keeps its injected/cached critic. Desktop
             // (including local Ollama), live calls and Go still bind the provider.
             ...(!isOfflineChatMode() || process.env['BABEL_DESKTOP_IPC'] === '1' ||
@@ -4462,7 +4463,8 @@ export class ChatEngine {
     | OpenRouterApiRunner {
     // Desktop settings admit one primary route. Legacy phase overrides loaded
     // during CLI bootstrap cannot replace it, including after a task reset.
-    if (process.env["BABEL_DESKTOP_PROVIDER"]) return this.resolveDeliberationRunner();
+    if (process.env["BABEL_DESKTOP_PROVIDER"] || this.options.model !== undefined || this.options.providerPolicy !== undefined)
+      return this.resolveDeliberationRunner();
     const modelName = this.modelPolicy?.provider === "opencode-go" ? undefined : resolvePhaseModelName(this._lastPhase, {
       investigateModel: this.limits.investigateModel,
       mutateModel: this.limits.mutateModel,

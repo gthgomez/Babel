@@ -88,7 +88,7 @@ import {
   compileIntentPlan,
   formatIntentPlanUserMessage,
 } from '../../agent/intentCompiler.js';
-import { outcomeFromReasonCode, persistIntentPlan, persistTranscriptToDisk } from '../../agent/chatEngineObservability.js';
+import { outcomeFromReasonCode, persistIntentPlan } from '../../agent/chatEngineObservability.js';
 import { openResumedChatEngine } from './chatResumeHeadless.js';
 import {
   compileChatStack,
@@ -1090,8 +1090,8 @@ export function buildChatRunPayload(
         case 'NEEDS_HUMAN_DECISION': return 'BLOCKED' as const;
         case 'BUDGET_EXHAUSTED': return 'BUDGET_EXCEEDED' as const;
         case 'CANCELLED': return 'NEEDS_MORE_CONTEXT' as const;
-        case 'INFRA_FAILURE': return 'NEEDS_MORE_CONTEXT' as const;
-        case 'AGENT_FAILURE': return 'NEEDS_MORE_CONTEXT' as const;
+        case 'INFRA_FAILURE': return 'BLOCKED' as const;
+        case 'AGENT_FAILURE': return 'BLOCKED' as const;
       }
     }
     // Legacy fallback for test fixtures without outcome
@@ -1137,6 +1137,13 @@ export function buildChatRunPayload(
 
   payload['command'] = 'run';
   payload['mode'] = 'chat';
+  // Chat has its own durable records; inherited Ask paths are not evidence.
+  const evidence = payload['evidence'] as Record<string, unknown>;
+  evidence['artifacts'] = result.runDir ? [
+    'thread_events.json', 'chat_causal_evidence.json', 'context-checkpoint.json',
+    'transcript.jsonl', 'policy-events.jsonl',
+    'native-tool-rejection.json',
+  ].map(name => path.join(result.runDir!, name)).filter(file => fs.existsSync(file)) : [];
   payload['checks'] = ['chat engine path'];
   // Ensure terminal_outcome is always visible on the run payload when known.
   if (result.outcome !== undefined) {
@@ -1649,13 +1656,7 @@ export async function runCliChatTask(input: {
     runtimeMode,
   });
 
-  if (result.runDir !== undefined) {
-    try {
-      await persistTranscriptToDisk(result.runDir, result.conversation);
-    } catch {
-      // The turn result still stands. The next resume reports a missing transcript.
-    }
-  }
+  // The engine owns durable transcript settlement before yielding terminal.
 
   if (outputFormat === 'text') {
     finishConversationalRenderer(convRenderer, result, preRunCost);

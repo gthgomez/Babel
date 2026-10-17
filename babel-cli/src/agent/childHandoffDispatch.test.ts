@@ -47,7 +47,7 @@ type SubAgentToolLogEntry = {
 
 async function dispatchSubAgent(
   task: string,
-  action: Partial<ChatToolAction> = {},
+  action: Partial<ChatToolAction> | ((engine: ChatEngine) => Partial<ChatToolAction>) = {},
   capturePrompt?: (prompt: string) => void,
   childLane?: ChatEngineOptions['testChildLaneOverrides'],
 ): Promise<{ engine: ChatEngine; observation: string; entry: SubAgentToolLogEntry }> {
@@ -76,7 +76,7 @@ async function dispatchSubAgent(
     toolCallLog: SubAgentToolLogEntry[];
   };
   const result = await internals.executeOneAction(
-    { type: 'sub_agent', task, mutation: false, ...action } as ChatToolAction,
+    { type: 'sub_agent', task, mutation: false, ...(typeof action === 'function' ? action(engine) : action) } as ChatToolAction,
     {
       agentId: 'test-parent',
       runId: 'test-parent',
@@ -288,14 +288,27 @@ describe('S02/#212 production dispatch — child conclusion reaches the parent t
 
 describe('S03/#213 production dispatch — resolved spec reaches the child', () => {
   test('read-only dispatch resolves and reports requested vs effective options', async () => {
-    const { observation } = await dispatchSubAgent('Research the codebase', {
+    let selectedModel = '';
+    const { observation } = await dispatchSubAgent('Research the codebase', engine => ({
       max_rounds: 7,
       instructions: 'INSTRUCTION_SENTINEL_S03',
-      model: 'scout',
-    } as Partial<ChatToolAction>);
+      model: selectedModel = (engine as unknown as { modelPolicy: { resolvedBackendKey: string } }).modelPolicy.resolvedBackendKey,
+    }) as Partial<ChatToolAction>);
     assert.match(observation, /child_spec: .*rounds=7\(honored\)/);
-    assert.match(observation, /model=scout\(override\)/);
+    assert.ok(observation.includes(`model=${selectedModel}(override)`));
     assert.match(observation, /instructions=forwarded/);
+  });
+
+  test('a tool-selected different model is refused before any child runner executes', async () => {
+    let calls = 0;
+    const { observation, entry } = await dispatchSubAgent('Research the codebase', { model: 'scout' } as Partial<ChatToolAction>,
+      undefined, { useDeterministicMock: false, actionResolver: async () => {
+        calls++;
+        return [{ type: 'finish', summary: 'unexpected', verification: [] }];
+      } });
+    assert.match(observation, /CHILD_MODEL_OVERRIDE_DENIED/);
+    assert.equal(entry.exit_code, 1);
+    assert.equal(calls, 0);
   });
 
   test('read-only dispatch clamps an over-limit max_rounds with a visible reason', async () => {

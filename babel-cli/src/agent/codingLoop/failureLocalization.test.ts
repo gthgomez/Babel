@@ -15,6 +15,66 @@ const binding = {
   repositoryIdentity: '/repo', workspaceRevision: 'rev',
 }
 
+test('Node assertion labels and sandbox file URLs corroborate the actual test read', () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-node-assert-'))
+  try {
+    const content = "import { test } from 'node:test'\ntest('adds numbers', () => { assert.equal(add(2, 3), 5) })\n"
+    writeFileSync(join(root, 'math.test.js'), content)
+    const candidates = captureLocalizationCandidates({ projectRoot: root, tool: 'test_run', command: 'npm test',
+      stdout: "✖ adds numbers (1ms)\nAssertionError [ERR_ASSERTION]: Expected values to be strictly equal\n    at TestContext.<anonymous> (file:///app/math.test.js:2:39)", stderr: '' })
+    assert.equal(candidates[0]?.path, 'math.test.js')
+    const state = advanceFailureLocalization(startFailureLocalization('red', binding, candidates), {
+      type: 'read_file', target: 'math.test.js', content, succeeded: true,
+    })
+    assert.equal(state.phase, 'localized')
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
+
+test('a production throw uses its stack function rather than the caller test label', () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-production-throw-'))
+  try {
+    const content = 'export function add(a,b) {\n throw new TypeError("bad")\n}\n'
+    writeFileSync(join(root, 'math.js'), content)
+    const candidates = captureLocalizationCandidates({ projectRoot: root, tool: 'test_run', command: 'npm test',
+      stdout: '✖ adds numbers (1ms)\nTypeError: bad\n    at add (file:///app/math.js:2:3)', stderr: '' })
+    const state = advanceFailureLocalization(startFailureLocalization('red', binding, candidates), {
+      type: 'read_file', target: 'math.js', content, succeeded: true,
+    })
+    assert.equal(state.phase, 'localized')
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
+
+test('a diagnostic symbol is not corroborated by a substring in a different identifier', () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-symbol-boundary-'))
+  try {
+    const content = 'export function address() {}\n'
+    writeFileSync(join(root, 'math.js'), content)
+    const candidates = captureLocalizationCandidates({ projectRoot: root, tool: 'test_run', command: 'npm test',
+      stdout: '✖ adds numbers (1ms)\nTypeError: bad\n    at add (file:///app/math.js:1:3)', stderr: '' })
+    const state = advanceFailureLocalization(startFailureLocalization('red', binding, candidates), {
+      type: 'read_file', target: 'math.js', content, succeeded: true,
+    })
+    assert.equal(state.phase, 'LOCALIZE_FAILURE')
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
+
+test('test labels and filename hints retain token boundaries while punctuation is literal', () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-test-label-boundary-'))
+  try {
+    for (const [relation, content, expected] of [
+      ['add', "test('address validation', () => {})", 'LOCALIZE_FAILURE'],
+      ['adds numbers?', "test('adds numbers?', () => {})", 'localized'],
+    ]) {
+      writeFileSync(join(root, 'add.test.js'), content!)
+      const candidate = { path: 'add.test.js', relation: relation!, source: 'test_identity' as const }
+      const state = advanceFailureLocalization(startFailureLocalization('red', binding, [candidate]), {
+        type: 'read_file', target: 'add.test.js', content: content!, succeeded: true,
+      })
+      assert.equal(state.phase, expected)
+    }
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
+
 test('captured stack location is only a candidate until a related content read', () => {
   const root = mkdtempSync(join(tmpdir(), 'babel-localize-stack-'))
   try {

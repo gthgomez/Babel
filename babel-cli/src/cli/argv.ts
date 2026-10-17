@@ -73,6 +73,7 @@ const VALUE_OPTIONS = new Set([
   '--model-tier',
   '--output-format',
   '--session-id',
+  '--resume-chat',
   '--session-start-path',
   '--local-learning-root',
   '--orchestrator',

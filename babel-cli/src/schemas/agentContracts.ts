@@ -997,6 +997,8 @@ export const TerminalReasonCodeSchema = z.enum([
   'unsupported_operation',
   'cancelled',
   'budget_exhausted',
+  'cost_accounting_incomplete',
+  'native_tool_protocol_invalid',
   'unknown',
 ]);
 export type TerminalReasonCode = z.infer<typeof TerminalReasonCodeSchema>;

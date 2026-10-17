@@ -14,7 +14,9 @@ import {
 import { finalizeStreamingTurnLimit } from "./chatEngineStreamingFinalizer.js";
 import { settleStreamingCompletion } from "./chatEngineStreamingCompletion.js";
 import { recordChatHarnessFeedback } from "./chatHarnessFeedback.js";
-import { realpathSync } from "node:fs";
+import { realpathSync, writeFileSync } from "node:fs";
+import { join } from 'node:path';
+import { describeNativeToolRejection } from './nativeToolRejection.js';
 
 import { trace, SpanStatusCode, type Span } from "@opentelemetry/api";
 import { endSpan } from "../telemetry/tracing.js";
@@ -557,14 +559,23 @@ export class ChatEngineStreamingLoop {
         const nativeToolCallIds: string[] = [];
         const seenToolCallIds = new Set<string>();
         let nativeProtocolInvalid = false;
+        let nativeRejectionCode = 'unknown';
         const decodeNativeCall = (event: { id: string; name: string; input: Record<string, unknown> }): ChatToolAction => {
           try {
             if (typeof event.id !== "string" || event.id.trim().length === 0 || seenToolCallIds.has(event.id)) {
               throw new Error("NATIVE_TOOL_CALL_ID_INVALID");
             }
             return nativeToolUseToChatAction(event.name, event.input);
-          } catch {
+          } catch (error) {
             nativeProtocolInvalid = true;
+            const issues = error && typeof error === 'object' && 'issues' in error
+              ? (error as { issues: Array<{ code: string; path: PropertyKey[] }> }).issues
+                .map(issue => ({ code: issue.code, path: issue.path.map(String) })) : [];
+            nativeRejectionCode = issues.length ? 'arguments_schema_invalid' : 'call_identity_invalid';
+            writeFileSync(join(this.host.engineRunDir, 'native-tool-rejection.json'),
+              JSON.stringify(describeNativeToolRejection({ turn: this.host._turnIndex,
+                id: event.id, name: event.name, input: event.input,
+                issues, reason: nativeRejectionCode }), null, 2));
             throw new Error("NATIVE_TOOL_PROTOCOL_INVALID");
           }
         };
@@ -685,7 +696,7 @@ export class ChatEngineStreamingLoop {
             endSpan(_turnSpan, SpanStatusCode.ERROR);
             _turnSpan = null;
             yield this.host.streamFailed(nativeProtocolInvalid
-              ? "Native stream contained invalid arguments or call identities; no action was dispatched."
+              ? `NATIVE_TOOL_PROTOCOL_INVALID: ${nativeRejectionCode}; no action was dispatched. See native-tool-rejection.json.`
               : "Native stream failed after announcing tools; no action was dispatched.");
             return;
           }

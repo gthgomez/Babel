@@ -1,3 +1,5 @@
+import { isScopedEditObject } from '../config/chatTaskClass.js';
+
 export type LiteFullSelectedLane =
   | 'lite_ask'
   | 'lite_plan'
@@ -163,20 +165,16 @@ function everyNoWriteMatchIsScoped(task: string): boolean {
   if (matches.length === 0) {
     return false;
   }
-  const FILE_PATH_AFTER_RE =
-    /^\s*['"]?((?:[A-Za-z]:[\\/])?[A-Za-z0-9_.-]+(?:[\\/][A-Za-z0-9_.-]+)*\.[A-Za-z0-9_-]{1,12})['"]?/i;
   return matches.every((match) => {
-    const afterMatch = task.slice((match.index ?? 0) + match[0].length).slice(0, 80);
-    if (/^\s*(?:the|this|that|its)\s+(?:(?:entire|whole)\s+)?file[\s_-]+system\b/i.test(afterMatch)) return false;
-    return FILE_PATH_AFTER_RE.test(afterMatch) || DETERMINATE_ARTIFACT_AFTER_RE.test(afterMatch);
+    const object = task.slice((match.index ?? 0) + match[0].length)
+      .split(/\.(?=\s|$)|[;!?\r\n]/, 1)[0]!.trim();
+    return isScopedEditObject(object);
   });
 }
 /** A determinate artifact prohibition names ONE artifact without a path or
  *  extension, e.g. "do not modify the test file". Such a constraint scopes a
  *  single artifact; it must not turn the whole task read-only. Plurals such as
  *  "the files" are deliberately excluded. */
-const DETERMINATE_ARTIFACT_AFTER_RE =
-  /^\s*(?:the|this|that|its)\s+(?:[A-Za-z0-9_.-]+\s+){0,3}(?:file|test|spec|fixture|module|script|manifest)\b(?![-_])/i;
 
 /** True when a mutation instruction survives outside the prohibition clauses.
  *  A standalone prohibition ("Do not modify the test file.") must stay read-only;

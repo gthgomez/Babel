@@ -27,6 +27,17 @@ export type RoundsClampReason =
 export type InstructionsDisposition = 'forwarded' | 'absent';
 export type ModelDisposition = 'override' | 'parent_default';
 
+/** Tool-controlled delegation cannot change the controller-selected route. */
+export function resolveInheritedChildModel(
+  selected: { resolvedBackendKey: string; provider: string; providerModelId: string },
+  requested?: string | null,
+): string {
+  if (requested && requested !== selected.resolvedBackendKey && requested !== selected.providerModelId) {
+    throw new Error('CHILD_MODEL_OVERRIDE_DENIED: child must inherit the selected model')
+  }
+  return selected.resolvedBackendKey
+}
+
 export interface ResolveChildSpecInput {
   mutation: boolean;
   writeScope: string[];

@@ -358,10 +358,15 @@ export class ChatEngineTaskAllowance {
   }
 
   markChildBudgetExhausted(limiter: ChildBudgetLimiter, reason: string): void {
+    const owner = this.host.taskAllowance?.taskOwnerId;
+    if (limiter === 'cost' && owner && globalCostTracker.getTaskSummary(owner).costComplete === false) {
+      reason = 'COST_ACCOUNTING_INCOMPLETE: spending stopped because settled usage or pricing is incomplete; the cap is not proven exhausted';
+    }
     this.host.budgetExceeded = true;
     this.host.budgetLastChanceDone = true;
     this.host.terminatingLimiter = "child_exhaustion";
-    this.host.terminalLimiterReason = `Inherited child ${limiter} allowance exhausted: ${reason}`;
+    this.host.terminalLimiterReason = reason.startsWith('COST_ACCOUNTING_INCOMPLETE:')
+      ? reason : `Inherited child ${limiter} allowance exhausted: ${reason}`;
   }
 }
 

@@ -52,13 +52,14 @@ export function captureLocalizationCandidates(input: {
       if (!statSync(join(input.projectRoot, path)).isFile()) continue
     } catch { continue }
     const frame = new RegExp(`\\bat\\s+([A-Za-z_$][\\w.$]*)\\s+\\([^\\n]*${escapeRegExp(basename(path))}:\\d+:\\d+\\)`).exec(raw)
-    const relation = diagnosticToken(failure.message) ?? frame?.[1]?.split('.').at(-1) ??
+    const testLocation = /\.(?:test|spec)\.[cm]?[jt]sx?$/i.test(path)
+    const relation = (testLocation ? failure.test : null) ?? diagnosticToken(failure.message) ?? frame?.[1]?.split('.').at(-1) ??
       (failure.test && /[A-Za-z_$][\w$]{2,}/.test(failure.test) ? failure.test : null)
     if (!relation) continue
     candidates.push({
       path, relation,
       ...(failure.line && Number.isSafeInteger(failure.line) ? { line: failure.line } : {}),
-      source: failure.test ? 'test_identity' : 'structured_location',
+      source: testLocation && failure.test ? 'test_identity' : 'structured_location',
     })
   }
   // Node's parser currently recognizes JavaScript frames. Keep TypeScript and
@@ -158,7 +159,7 @@ export function finishLocalizationCall(
     } catch { /* missing or replaced path stays unlocalized */ }
   }
   const related = candidate && contentBearing && action.succeeded && content.trim().length > 0 &&
-    new RegExp(`\\b${escapeRegExp(candidate.relation)}\\b`, 'i').test(content) &&
+    new RegExp(`(?<![\\w$])${escapeRegExp(candidate.relation)}(?![\\w$])`, 'i').test(content) &&
     (!candidate.line || (
       (action.startLine ?? 1) <= candidate.line &&
       (action.startLine ?? 1) + content.split(/\r?\n/).length - 1 >= candidate.line

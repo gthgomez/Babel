@@ -231,3 +231,11 @@ describe('S03/#213 T05 — stable delegation identity and attempt isolation', ()
     assert.equal(id, deriveChildDelegationId(base));
   });
 });
+import { resolveInheritedChildModel } from './childSpec.js'
+
+test('selected route inherits its backend key and refuses model-controlled overrides', () => {
+  const selected = { resolvedBackendKey: 'glm-flash', provider: 'openrouter', providerModelId: 'z-ai/glm-flash' }
+  assert.equal(resolveInheritedChildModel(selected), 'glm-flash')
+  assert.equal(resolveInheritedChildModel(selected, 'z-ai/glm-flash'), 'glm-flash')
+  assert.throws(() => resolveInheritedChildModel(selected, 'other-provider-model'), /OVERRIDE_DENIED/)
+})

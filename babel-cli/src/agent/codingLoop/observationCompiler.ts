@@ -283,12 +283,14 @@ function parseTsc(text: string): CompiledFailure[] {
 function parseNodeTrace(text: string): CompiledFailure[] {
   const loc = /^\s*at\s+.+\((\S+\.[cm]?js):(\d+):(\d+)\)/m.exec(text)
     ?? /^\s*at\s+(\S+\.[cm]?js):(\d+):(\d+)/m.exec(text)
-  const err = /^(?:Error|TypeError|ReferenceError|AssertionError):\s*(.+)$/m.exec(text)
+  const err = /^\s*(?:error:\s*['"]?)?(?:Error|TypeError|ReferenceError|AssertionError)(?:\s+\[[A-Z_]+\])?:\s*(.+)$/m.exec(text)
+  const testName = /^\s*(?:✖|not ok\s+\d+\s*[-:]?)\s+(.+?)(?:\s+\([\d.]+m?s\))?\s*$/m.exec(text)?.[1]
   if (!loc && !err) return []
   return [
     {
       ...(loc?.[1] ? { file: loc[1] } : {}),
       ...(loc?.[2] ? { line: Number(loc[2]) } : {}),
+      ...(testName ? { test: testName } : {}),
       message: err?.[1]?.trim() ?? 'node runtime error',
       parser: 'node_trace',
     },

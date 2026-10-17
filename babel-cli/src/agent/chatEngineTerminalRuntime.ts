@@ -50,7 +50,7 @@ import {
   observabilityResultFields,
   outcomeFromReasonCode,
   persistPolicyEventsJsonl,
-  persistTranscriptToDisk,
+  persistChatTranscript,
   stashEngineFingerprint,
   type ObservabilityHandles,
 } from './chatEngineObservability.js'
@@ -74,6 +74,7 @@ import {
 } from './childSpec.js'
 import { confirmedMutationPaths } from './mutationTools.js'
 import { detectAndBuildBlockedReport } from './chatEngineSupport.js'
+import { classifyChatTaskIntent } from './chatEngineTaskIntent.js'
 
 /** Immutable terminal inputs plus the mutable evidence objects used by existing finalizers. */
 export interface ChatTerminalSnapshot {
@@ -179,6 +180,12 @@ export function completeChatStream(
     hasMutation,
     planMode: snapshot.context.executionProfile === 'plan',
   })
+  if (requestedOutcome === 'NO_CHANGE_REQUIRED' &&
+      classifyChatTaskIntent(snapshot.context.options.task) === 'execute' &&
+      !(snapshot.outcome.lastVerifierReceipt?.exit_code === 0 &&
+        snapshot.outcome.lastVerifierReceipt.stale === false)) {
+    requestedOutcome = 'NEEDS_HUMAN_DECISION'
+  }
   const planCompletion =
     snapshot.context.executionProfile === 'plan' &&
     !extra?.blockedReport &&
@@ -256,6 +263,7 @@ export function completeChatStream(
         : 'completed',
   })
   effects.finalizeTurn(terminal.outcome, terminal.status, terminalReason)
+  persistChatTranscript(snapshot.context.engineRunDir, snapshot.presentation.conversation)
   const finalizedTelemetry =
     snapshot.presentation.currentTurnTelemetry?.finalize({
       turnId: String(snapshot.context.turnId ?? snapshot.context.turnIndex),
@@ -334,6 +342,7 @@ export function failChatStream(
   })
   const runAllowance = assembleChatRunAllowance(input, terminal.status)
   effects.finalizeTurn(terminal.outcome, terminal.status, terminalReason)
+  persistChatTranscript(snapshot.context.engineRunDir, snapshot.presentation.conversation)
   const finalizedTelemetry =
     snapshot.presentation.currentTurnTelemetry?.finalize({
       turnId: String(snapshot.context.turnId ?? snapshot.context.turnIndex),
@@ -360,6 +369,7 @@ export function failChatStream(
 export function cancelChatStream(input: ChatTerminalInput): ChatEvent {
   const { snapshot, effects } = input
   effects.settleActiveExecution()
+  persistChatTranscript(snapshot.context.engineRunDir, snapshot.presentation.conversation)
   const finalizedTelemetry =
     snapshot.presentation.currentTurnTelemetry?.finalize({
       turnId: String(snapshot.context.turnId ?? snapshot.context.turnIndex),
@@ -389,6 +399,9 @@ export function resolveChatTerminalReason(
 ): TerminalReason | undefined {
   const { snapshot, effects } = input
   if (explicit) return explicit
+  if (snapshot.outcome.terminalLimiterReason?.startsWith('COST_ACCOUNTING_INCOMPLETE:')) {
+    return { code: 'cost_accounting_incomplete', cause_class: 'harness' }
+  }
   if (blockedReport?.reason_code !== undefined) {
     return {
       code: blockedReport.reason_code,
@@ -742,12 +755,11 @@ export function assembleChatResult(
     ...observabilityResultFields(snapshot.evidence.observability),
   }
 
-  // Persist conversation transcript to disk for session resume.
-  // Write is fire-and-forget — failure must not block the turn result.
-  persistTranscriptToDisk(
+  // Settle the compatibility projection synchronously before returning.
+  persistChatTranscript(
     snapshot.context.engineRunDir,
     result.conversation,
-  ).catch(() => {})
+  )
 
   // Tier A2: Persist policy event log alongside transcript (sync — no exit race)
   persistPolicyEventsJsonl(

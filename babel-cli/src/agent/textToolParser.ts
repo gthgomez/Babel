@@ -43,6 +43,8 @@ export const CHAT_BEHAVIORAL_CONTRACT = [
   '- Inspect the request and relevant context before acting.',
   '- Answer directly when the available evidence is enough; make edits only when the request needs a change.',
   '- For changes, make focused edits, verify with relevant evidence when available, and report results honestly.',
+  '- Before a repair, inspect the relevant README/project contract as well as source and tests. Derive acceptance cases from documented behavior, not just the currently failing test. Verify those cases with permitted tools; report unverified requirements as partial.',
+  '- Ground each material behavioral claim in the actual source or an observed probe. Optional edge-case or bug claims need the same evidence; omit unsupported extras rather than inventing failures. Honor requested output formats.',
   '- Only fresh, executed passing verifier evidence for the current revision counts as verification; simulated, stale, failed, or missing results do not.',
   '- Follow repository instructions and granted scope; tool availability does not grant authorization.',
 ].join('\n');
