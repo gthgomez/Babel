@@ -68,6 +68,13 @@ test('buildSweTask: includes the VERIFICATION RULE section', async () => {
   );
 });
 
+test('buildSweTask: does not prescribe nonexistent npm test as an uncertainty fallback', async () => {
+  const { buildSweTask } = await import('../pipeline/sweTask.js');
+  const result = buildSweTask(minimalManifest(), 'Fix math.js so math.test.js passes.', [], undefined);
+  assert.doesNotMatch(result, /If you are unsure which verifier to use, include a test_run: npm test step/);
+  assert.match(result, /Do not invent npm test when package\.json has no test script/);
+});
+
 test('buildSweTask: includes the TOOL USAGE RULES section', async () => {
   const { buildSweTask } = await import('../pipeline/sweTask.js');
   const result = buildSweTask(minimalManifest(), 'test task', [], undefined);
