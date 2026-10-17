@@ -358,7 +358,11 @@ try {
   Add-AgentCheck -Name 'EXPECTED_BASE_BRANCH' -Passed ($prAvailable -and [string]::Equals($prBaseBranch, $ExpectedBaseBranch, [StringComparison]::OrdinalIgnoreCase)) -Blocker 'unexpected_pr_base_branch'
   $integrationOverlap = Get-AgentBaseIntegrationState -GitPath $GitPath -RepoRoot $resolvedRepoRoot -OriginMain $originMain -ReviewedHead $reviewedHead -Strict $strictBaseFreshness
   $baseFresh = $integrationOverlap.baseFresh
-  Add-AgentCheck -Name 'BASE_NOT_INVALIDATED' -Passed $integrationOverlap.baseAllowed -Blocker 'pr_base_sha_is_stale'
+  $baseMetadataCurrent = (-not $strictBaseFreshness) -or (
+    (Test-AgentShaValue $prBase) -and (Test-AgentShaValue $originMain) -and
+    [string]::Equals($prBase, $originMain, [StringComparison]::OrdinalIgnoreCase)
+  )
+  Add-AgentCheck -Name 'BASE_NOT_INVALIDATED' -Passed ($integrationOverlap.baseAllowed -and $baseMetadataCurrent) -Blocker 'pr_base_sha_is_stale'
   Add-AgentCheck -Name 'STALE_BASE_INTEGRATION_CLEAR' -Passed $integrationOverlap.integrationClear -Blocker 'merge_integration_overlap_requires_qualification'
   if (-not $integrationOverlap.available) { $warnings += ('stale_base_overlap:' + $integrationOverlap.error) }
   Add-AgentCheck -Name 'NO_CROSS_REPO' -Passed ($prAvailable -and (-not [bool]$prView.isCrossRepository)) -Blocker 'cross_repository_pr'
