@@ -2374,7 +2374,7 @@ export class ChatEngine {
     rawTarget: string,
   ): boolean {
     const localization = this.workingState.localization;
-    if (!localization || localization.phase === "localized") return true;
+    if (!localization || (localization.phase === "localized" && !localization.importCandidates?.length)) return true;
     if (
       localization.phase === "exhausted" ||
       localization.calls >= 4 ||
@@ -2414,7 +2414,14 @@ export class ChatEngine {
     pattern?: string;
   }): void {
     const localization = this.workingState.localization;
-    if (!localization || localization.phase !== "LOCALIZE_FAILURE") return;
+    if (!localization || (localization.phase !== "LOCALIZE_FAILURE" &&
+        !(localization.phase === "localized" && localization.importCandidates?.length))) return;
+    const current = this.currentRecoveryBinding();
+    if (!current || !sameRecoveryBinding(localization.binding, current)) {
+      this.workingState = applyWorkingStateEvent(this.workingState, { type: 'recovery_candidate_drift' });
+      this.persistRecoveryWorkingState();
+      return;
+    }
     const target =
       recoveryTargetIdentity(this.options.projectRoot, input.rawTarget) ??
       undefined;
@@ -2442,9 +2449,24 @@ export class ChatEngine {
     if (
       updated.phase === "localized" &&
       updated.acceptedPath &&
+      updated.acceptedPath === target && input.succeeded &&
+      (input.tool === 'read_file' || input.tool === 'read_range') &&
+      input.content !== undefined &&
+      updated.observationDigest === createHash('sha256').update(input.content).digest('hex') &&
       updated.observationDigest &&
       this.workingState.recoveryGate
     ) {
+      const imported = updated.candidates.some(candidate => candidate.path === updated.acceptedPath && candidate.source === 'import_call');
+      if (imported) {
+        this.workingState = applyWorkingStateEvent(this.workingState, {
+          type: 'localization_import_evidence',
+          provenance: { tool: input.tool, target: updated.acceptedPath,
+            failureSignature: updated.failureSignature, binding: updated.binding,
+            observationDigest: updated.observationDigest },
+        });
+        this.persistRecoveryWorkingState();
+        return;
+      }
       this.workingState = {
         ...this.workingState,
         recoveryGate: {

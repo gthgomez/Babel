@@ -290,6 +290,7 @@ function parseNodeTrace(text: string): CompiledFailure[] {
     {
       ...(loc?.[1] ? { file: loc[1] } : {}),
       ...(loc?.[2] ? { line: Number(loc[2]) } : {}),
+      ...(loc?.[3] ? { column: Number(loc[3]) } : {}),
       ...(testName ? { test: testName } : {}),
       message: err?.[1]?.trim() ?? 'node runtime error',
       parser: 'node_trace',

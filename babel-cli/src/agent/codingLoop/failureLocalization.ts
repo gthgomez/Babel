@@ -4,13 +4,16 @@ import { createHash } from 'node:crypto'
 import { parseStructuredFailures } from './observationCompiler.js'
 import { recoveryTargetIdentity } from './recoveryIdentity.js'
 import type { RecoveryCandidateBinding } from './workingState.js'
+import { proposeTestImports, corroboratesTestImport, type TestImportCandidate } from './testImportBridge.js'
 
 export interface LocalizationCandidate {
   path: string
   line?: number
+  column?: number
   /** Diagnostic token that must occur in inspected source. */
   relation: string
-  source: 'structured_location' | 'test_identity' | 'diagnostic_symbol'
+  source: 'structured_location' | 'test_identity' | 'diagnostic_symbol' | 'import_call'
+  fromTestPath?: string
 }
 
 export interface FailureLocalization {
@@ -24,6 +27,7 @@ export interface FailureLocalization {
   inspected: string[]
   acceptedPath?: string
   observationDigest?: string
+  importCandidates?: TestImportCandidate[]
 }
 
 const MAX_CALLS = 4
@@ -59,6 +63,7 @@ export function captureLocalizationCandidates(input: {
     candidates.push({
       path, relation,
       ...(failure.line && Number.isSafeInteger(failure.line) ? { line: failure.line } : {}),
+      ...(failure.column && Number.isSafeInteger(failure.column) ? { column: failure.column } : {}),
       source: testLocation && failure.test ? 'test_identity' : 'structured_location',
     })
   }
@@ -130,7 +135,8 @@ export function discoverTestCandidates(
 
 /** Count the attempt before dispatch, so failed/cancelled calls retain budget. */
 export function beginLocalizationCall(state: FailureLocalization, target?: string): FailureLocalization {
-  if (state.phase !== 'LOCALIZE_FAILURE') return state
+  if (state.phase !== 'LOCALIZE_FAILURE' && !(state.phase === 'localized' && state.importCandidates?.length)) return state
+  if (state.calls >= MAX_CALLS || state.rounds >= MAX_ROUNDS) return state
   const calls = state.calls + 1
   const inspected = target && !state.inspected.includes(target) ? [...state.inspected, target] : state.inspected
   const rounds = inspected.length
@@ -142,13 +148,15 @@ export function finishLocalizationCall(
   state: FailureLocalization,
   action: { type: string; target?: string; content?: string; succeeded: boolean; startLine?: number; projectRoot?: string },
 ): FailureLocalization {
-  if (state.phase !== 'LOCALIZE_FAILURE') return state
+  if (state.phase !== 'LOCALIZE_FAILURE' && !(state.phase === 'localized' && state.importCandidates?.length)) return state
   const target = action.target ?? ''
-  let candidate = state.candidates.find((item) => item.path === target)
+  let candidate: LocalizationCandidate | undefined = state.phase === 'localized'
+    ? state.importCandidates?.find(item => item.path === target && corroboratesTestImport(action.content ?? '', item.relation))
+    : state.candidates.find((item) => item.path === target)
   // Search output proposes a location; a bounded file read corroborates it.
   const contentBearing = action.type === 'read_file' || action.type === 'read_range'
   const content = action.content ?? ''
-  if (!candidate && contentBearing && action.succeeded && action.projectRoot && target &&
+  if (!candidate && state.phase === 'LOCALIZE_FAILURE' && contentBearing && action.succeeded && action.projectRoot && target &&
       recoveryTargetIdentity(action.projectRoot, target) === target) {
     try {
       if (statSync(join(action.projectRoot, target)).isFile()) {
@@ -159,6 +167,8 @@ export function finishLocalizationCall(
     } catch { /* missing or replaced path stays unlocalized */ }
   }
   const related = candidate && contentBearing && action.succeeded && content.trim().length > 0 &&
+    (candidate.source !== 'import_call' || action.type === 'read_file') &&
+    (candidate.source !== 'import_call' || (action.projectRoot && recoveryTargetIdentity(action.projectRoot, target) === target)) &&
     new RegExp(`(?<![\\w$])${escapeRegExp(candidate.relation)}(?![\\w$])`, 'i').test(content) &&
     (!candidate.line || (
       (action.startLine ?? 1) <= candidate.line &&
@@ -168,14 +178,17 @@ export function finishLocalizationCall(
     return {
       ...state, phase: 'localized',
       candidates: candidate && !state.candidates.some((item) => item.path === candidate.path)
-        ? [...state.candidates, candidate].slice(0, 8) : state.candidates,
+        ? [candidate, ...state.candidates].slice(0, 8) : state.candidates,
       acceptedPath: target,
       observationDigest: createHash('sha256').update(content).digest('hex'),
+      importCandidates: candidate?.source === 'test_identity' && action.type === 'read_file' && action.projectRoot && (action.startLine ?? 1) === 1
+        ? proposeTestImports({content, testPath: target, testName: candidate.relation, projectRoot: action.projectRoot,
+          ...(candidate.line ? {line: candidate.line} : {}), ...(candidate.column ? {column: candidate.column} : {})}) : [],
     }
   }
   return {
     ...state,
-    phase: state.calls >= MAX_CALLS || state.rounds >= MAX_ROUNDS ? 'exhausted' : 'LOCALIZE_FAILURE',
+    phase: state.calls >= MAX_CALLS || state.rounds >= MAX_ROUNDS ? 'exhausted' : state.phase,
   }
 }
 

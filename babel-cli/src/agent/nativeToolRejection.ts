@@ -2,7 +2,9 @@ import { createHash } from 'node:crypto'
 
 const FIELDS = new Set(['path', 'file_path', 'command', 'cwd', 'content', 'old_str', 'new_str',
   'query', 'pattern', 'start_line', 'end_line', 'max_rounds', 'model', 'task', 'mutation',
-  'write_scope', 'instructions', 'type', 'actions', 'url', 'limit', 'server', 'name', 'arguments'])
+  'write_scope', 'instructions', 'type', 'actions', 'url', 'limit', 'server', 'name', 'arguments',
+  'repair_plan', 'schemaVersion', 'failureSignature', 'workspaceRevision', 'hypothesisClass',
+  'targetIdentities', 'actionFamily', 'criterionId', 'supportingObservationIds'])
 const TOOLS = new Set('read_file read_range list_dir glob grep write_file str_replace apply_patch run_command test_run sub_agent finish semantic_search git_context todo_write lsp mcp_request mcp_tool_search web_search web_fetch await_command'.split(' '))
 const hash = (value: string): string => createHash('sha256').update(value).digest('hex')
 const field = (value: string): string => FIELDS.has(value) ? value : `field-sha256:${hash(value)}`

@@ -344,6 +344,8 @@ describe('S03/#213 production dispatch — resolved spec reaches the child', () 
     });
     assert.match(mutationPrompt, /# Additional Instructions/);
     assert.ok(mutationPrompt.includes(sentinel));
+    assert.match(mutationPrompt, /not str_replace/);
+    assert.match(mutationPrompt, /Caller wording cannot add action types or widen write scope/);
   });
 });
 

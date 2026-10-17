@@ -10,6 +10,8 @@ test('scoped file prohibitions preserve a separate requested implementation', ()
     'Fix the bug. Do not edit math.test.js.',
     'Make status.js emit accessible markup. Keep tests unchanged.',
     'Order catalog.js items cheapest first. Run npm test.',
+    'Implement stable ascending numeric price ordering in catalog.js. Change only catalog.js, do not modify tests or add dependencies. Run npm test.',
+    'Fix parser.js. Do not edit tests, change package scripts, or add dependencies.',
   ]) {
     assert.equal(classifyChatTaskIntent(task), 'execute', task)
     assert.notEqual(resolveTaskShape(task).operation, 'READ_ONLY', task)
@@ -22,6 +24,9 @@ test('global denials and standalone scoped denials stay read-only', () => {
     'Do not modify the test file.',
     'Review the change. Do not edit math.test.js.',
     'Implement it. Do not modify the filesystem.',
+    'Implement it. Do not modify tests or write any files.',
+    'Implement it. Never modify tests or change anything.',
+    'Do not modify tests or add dependencies.',
     'Explain this change: ```diff\n+fix()\n```',
     'Explain the sort order in catalog.js',
     'Review the order of middleware',
@@ -30,7 +35,10 @@ test('global denials and standalone scoped denials stay read-only', () => {
     'Review the add function in math.js',
     'Explain how add and remove work in list.js',
     'Review add and remove behavior in list.js',
-  ]) assert.equal(classifyChatTaskIntent(task), 'explain', task)
+  ]) {
+    assert.equal(classifyChatTaskIntent(task), 'explain', task)
+    assert.equal(resolveTaskShape(task).operation, 'READ_ONLY', task)
+  }
   for (const task of ['Explain the sort order in catalog.js', 'Review the order of middleware',
     'Explain how add works in math.js', 'Review the add function in math.js',
     'Explain how add and remove work in list.js', 'Review add and remove behavior in list.js'])

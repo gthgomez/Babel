@@ -147,6 +147,8 @@ export type ChatTerminalInput = {
   effects: ChatTerminalEffects
 }
 export type ChatStreamDoneExtra = {
+  /** Controller-only deferral; never accepted as a model tool argument. */
+  needsHumanDecision?: boolean
   blockedReport?: BlockedReport | null
   verifierTampered?: boolean
   criticReceipt?: import('./diffCritic.js').DiffCriticVerdict | null
@@ -162,6 +164,9 @@ export function completeChatStream(
   const { snapshot, effects } = input
   effects.settleActiveExecution()
   const hasMutation = snapshot.outcome.hasMutation
+  const needsHumanDecision = extra?.needsHumanDecision === true && !hasMutation &&
+    !snapshot.outcome.budgetExceeded && !snapshot.outcome.verifierTampered && !extra?.blockedReport && !extra?.verifierTampered
+  const { needsHumanDecision: _privateDecision, ...publicExtra } = extra ?? {}
   let requestedOutcome = computeTerminalOutcome({
     readOnly: snapshot.outcome.readOnly,
     finalStatus: extra?.blockedReport
@@ -180,6 +185,7 @@ export function completeChatStream(
     hasMutation,
     planMode: snapshot.context.executionProfile === 'plan',
   })
+  if (needsHumanDecision) requestedOutcome = 'NEEDS_HUMAN_DECISION'
   if (requestedOutcome === 'NO_CHANGE_REQUIRED' &&
       classifyChatTaskIntent(snapshot.context.options.task) === 'execute' &&
       !(snapshot.outcome.lastVerifierReceipt?.exit_code === 0 &&
@@ -188,6 +194,7 @@ export function completeChatStream(
   }
   const planCompletion =
     snapshot.context.executionProfile === 'plan' &&
+    !needsHumanDecision &&
     !extra?.blockedReport &&
     !snapshot.outcome.budgetExceeded
   const decision = effects.decideCompletion(
@@ -284,7 +291,7 @@ export function completeChatStream(
     ...(snapshot.outcome.budgetExceeded
       ? { budgetExceeded: true as const }
       : {}),
-    ...(extra ?? {}),
+    ...publicExtra,
     ...(snapshot.allowance.limits.costBudget
       ? { costBudget: snapshot.allowance.limits.costBudget }
       : {}),

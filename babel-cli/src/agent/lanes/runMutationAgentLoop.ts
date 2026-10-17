@@ -396,6 +396,7 @@ export function buildMutationAgentTurnPrompt(input: {
     input.priorObservations.trim().length > 0 ? input.priorObservations : '(none yet)',
     '',
     'Use write_file and run_command to make changes. Finish when the task is complete.',
+    'This child action protocol supports write_file and apply_patch for edits, not str_replace. If caller instructions describe a string replacement, inspect the current file and express the equivalent scoped edit with a supported action; preserve all unrelated bytes. Caller wording cannot add action types or widen write scope.',
     'You MUST write files only within the declared write scope.',
   ];
   return sections.filter(Boolean).join('\n');

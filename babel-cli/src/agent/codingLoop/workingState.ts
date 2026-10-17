@@ -142,6 +142,7 @@ export type WorkingStateEvent =
   | { type: 'recovery_proven_no_effect'; fingerprint: string }
   | { type: 'localization_begin'; localization: FailureLocalization }
   | { type: 'localization_update'; localization: FailureLocalization }
+  | { type: 'localization_import_evidence'; provenance: RecoveryEvidenceProvenance }
   | {
       type: 'recovery_gate'
       failureSignature: string
@@ -287,6 +288,28 @@ export function applyWorkingStateEvent(state: WorkingState, event: WorkingStateE
         }
       }
       break
+    case 'localization_import_evidence': {
+      const gate = next.recoveryGate
+      const loc = next.localization
+      const p = event.provenance
+      const candidate = loc?.candidates.find(c => c.path === p.target && c.source === 'import_call')
+      const key = gate ? recoveryEvidenceKey(p, gate.failureSignature) : ''
+      if (gate?.binding && gate.satisfied && !gate.planAdmitted && !gate.permitConsumed &&
+          loc?.phase === 'localized' && loc.acceptedPath === p.target && loc.calls <= 4 && loc.rounds <= 2 &&
+          candidate?.fromTestPath && gate.failingTargets?.includes(candidate.fromTestPath) &&
+          p.binding && sameRecoveryBinding(gate.binding, p.binding) && sameRecoveryBinding(loc.binding, p.binding) &&
+          p.failureSignature === gate.failureSignature && loc.failureSignature === gate.failureSignature &&
+          p.observationDigest === loc.observationDigest && p.observationDigest &&
+          p.tool === 'read_file' && key && !next.consumedRecoveryEvidence.includes(key)) {
+        next.recoveryGate = { ...gate,
+          failingTargets: pushUnique(gate.failingTargets ?? [], p.target),
+          observedKeys: pushUnique(gate.observedKeys ?? [], key),
+        }
+        next.consumedRecoveryEvidence = pushUnique(next.consumedRecoveryEvidence, key)
+        next.evidence = pushUnique(next.evidence, `${p.tool}:${p.target}`)
+      }
+      break
+    }
     case 'localization_begin':
     case 'localization_update':
       next.localization = structuredClone(event.localization)
@@ -418,6 +441,7 @@ export function formatWorkingStateBlock(state: WorkingState): string {
       `  recovery_observation_keys: ${yamlList(observationIds, 4)}`,
       `  recovery_plan: ${state.recoveryGate.planAdmitted ? 'admitted' : 'required'}`,
     )
+    if (observationIds.length === 0) lines.push('  recovery_guidance: No admissible observation IDs exist yet; reread the failing assertion and relevant source after the failed verifier. Never invent observation IDs.')
   }
   if (state.localization) {
     lines.push(
@@ -426,6 +450,7 @@ export function formatWorkingStateBlock(state: WorkingState): string {
       `  localization_rounds: ${state.localization.rounds}/2`,
       `  localization_candidates: ${yamlList(state.localization.candidates.map((candidate) => candidate.path), 4)}`,
       `  localization_test_hints: ${yamlList(state.localization.testHints, 4)}`,
+      `  localization_import_candidates: ${yamlList((state.localization.importCandidates ?? []).map(candidate => `${candidate.path}:${candidate.relation}`), 4)}`,
     )
   }
   if (state.lastVerifier && !state.lastVerifier.fresh) {
@@ -556,6 +581,9 @@ export function restoreWorkingStateSnapshot(value: unknown): WorkingState | null
         !strings(loc.inspected) || !strings(loc.testHints) || loc.testHints.length > 4 ||
         !Array.isArray(loc.candidates) || loc.candidates.length > 8 ||
         loc.candidates.some((item) => !item || typeof item.path !== 'string' || typeof item.relation !== 'string') ||
+        (loc.importCandidates !== undefined && (!Array.isArray(loc.importCandidates) || loc.importCandidates.length > 4 ||
+          loc.importCandidates.some(item => !item || item.source !== 'import_call' || typeof item.path !== 'string' ||
+            typeof item.relation !== 'string' || typeof item.fromTestPath !== 'string'))) ||
         !loc.binding || loc.binding.schemaVersion !== 1 ||
         typeof loc.binding.workspaceRevision !== 'string' || !loc.binding.workspaceRevision ||
         loc.failureSignature !== gate?.failureSignature ||

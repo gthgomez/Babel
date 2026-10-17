@@ -420,15 +420,29 @@ const SEQUENCED_MUTATION_SOURCE =
 // Protecting these inputs is compatible with a production repair. Admit only
 // a complete known object list: unknown objects or trailing qualifications
 // remain global denials. This never supplies positive mutation intent.
-const PROTECTED_EDIT_OBJECT = '(?:(?:the|any|our|your|this|that)\\s+)?(?:tests?(?:\\s+file)?|test\\s+suite|package\\s+scripts?|unrelated\\s+files?|[`"\\\']?[\\w./\\\\-]+\\.[A-Za-z0-9_-]{1,12}[`"\\\']?)';
+const PROTECTED_EDIT_OBJECT = '(?:(?:the|any|our|your|this|that)\\s+)?(?:tests?(?:\\s+file)?|test\\s+suite|package\\s+scripts?|dependencies|unrelated\\s+files?|[`"\\\']?[\\w./\\\\-]+\\.[A-Za-z0-9_-]{1,12}[`"\\\']?)';
 const PROTECTED_EDIT_OBJECT_LIST = new RegExp(
-  `^${PROTECTED_EDIT_OBJECT}(?:${COORD_SEPARATOR}${PROTECTED_EDIT_OBJECT})*$`, 'i',
+  `^${PROTECTED_EDIT_OBJECT}(?:${COORD_SEPARATOR}(?:${READ_ONLY_VERB_SOURCE}\\s+)?${PROTECTED_EDIT_OBJECT})*$`, 'i',
 );
 
 /** One object recognizer shared by Chat and Deep prohibition parsing. */
 export function isScopedEditObject(object: string): boolean {
   return PROTECTED_EDIT_OBJECT_LIST.test(object) ||
     /^(?:the|this|that|its)\s+(?!.*\b(?:filesystem|file[\s_-]+system|entire|whole)\b)(?:[A-Za-z0-9_.-]+\s+){0,3}(?:file|test|spec|fixture|module|script|manifest)(?:\s+in\s+[`"']?[\w./\\-]+\.[A-Za-z0-9_-]{1,12}[`"']?)?$/i.test(object);
+}
+
+/** Negated object/verb lists cannot supply a later positive mutation verb. */
+function stripScopedEditProhibitions(text: string): string {
+  let result = text;
+  for (const directive of text.matchAll(new RegExp(READ_ONLY_DIRECTIVE_SOURCE, 'gi'))) {
+    const afterVerb = directive.index + directive[0].length;
+    const clause = text.slice(afterVerb).split(/\.(?=\s|$)|[;!?\r\n]/, 1)[0]!;
+    if (!isScopedEditObject(clause.trim())) continue;
+    const end = afterVerb + clause.length;
+    // Preserve offsets while consuming every prohibited verb in this clause.
+    result = result.slice(0, directive.index) + ' '.repeat(end - directive.index) + result.slice(end);
+  }
+  return result;
 }
 
 /** Explicit no-edit language, independent of topic nouns such as "patch" or "fix". */
@@ -478,7 +492,7 @@ export function analyzeTaskShape(taskText: string): TaskShape {
   // "never patch X, but implement Y" mutating while "review; do not fix" stays
   // read-only.
   const mutationScope = stripInformationalFrames(
-    stripPathLikeTokens(stripFencedCodeBodies(t)),
+    stripPathLikeTokens(stripScopedEditProhibitions(stripFencedCodeBodies(t))),
   );
   const positiveMutationScope = mutationScope.replace(
     new RegExp(READ_ONLY_DIRECTIVE_SOURCE, 'gi'),

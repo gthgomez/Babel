@@ -13,6 +13,7 @@ import {
 } from "./chatEngineStreamingPreparation.js";
 import { finalizeStreamingTurnLimit } from "./chatEngineStreamingFinalizer.js";
 import { settleStreamingCompletion } from "./chatEngineStreamingCompletion.js";
+import { normalizeChatAnswer } from './chatResponseContract.js';
 import { recordChatHarnessFeedback } from "./chatHarnessFeedback.js";
 import { realpathSync, writeFileSync } from "node:fs";
 import { join } from 'node:path';
@@ -1815,7 +1816,7 @@ export class ChatEngineStreamingLoop {
       }
 
       if (turnResult.type === "completion") {
-        const answer = turnResult.answer;
+        const answer = normalizeChatAnswer(turnResult.answer, userInput);
 
         if (this.host.parity.turnId) {
           this.host.services.conversation.recordAssistantMessage(
@@ -1937,7 +1938,7 @@ export class ChatEngineStreamingLoop {
         const disposition = yield* settleStreamingCompletion({
           host: this.host,
           answer,
-          turnResult,
+          turnResult: { ...turnResult, answer },
           effectiveExecutePolicy,
           effectiveIntent,
           submissionGeneration,

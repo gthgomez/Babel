@@ -71,6 +71,7 @@ test('controller admits only a scoped plan backed by the observed candidate', ()
     { targetIdentities: ['src/other.ts'] },
     { criterionId: 'different test' },
     { supportingObservationIds: ['invented'] },
+    { supportingObservationIds: ['0123456789abcdef'] },
     { actionFamily: 'write_file' },
   ]) {
     const denied = admitRecoveryPlan(state, { ...proposal(state), ...altered } as ReturnType<typeof proposal>, changedEdit, binding)

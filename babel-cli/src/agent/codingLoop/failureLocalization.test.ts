@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { advanceFailureLocalization, captureLocalizationCandidates, captureLocalizationTestHints, discoverTestCandidates, startFailureLocalization } from './failureLocalization.js'
 import { captureChatVerifierReceipt } from '../chatEngineVerifierAdapter.js'
-import { applyWorkingStateEvent, createWorkingState, restoreWorkingStateSnapshot } from './workingState.js'
+import { applyWorkingStateEvent, createWorkingState, restoreWorkingStateSnapshot, type RecoveryEvidenceProvenance } from './workingState.js'
 import { createSessionEventLog, parseSessionEventLog, recordWorkingStateSnapshot, serializeSessionEventLog } from '../sessionEvents.js'
 import { ingestVerifierResult } from './chatBindings.js'
 
@@ -14,6 +14,72 @@ const binding = {
   schemaVersion: 1 as const, taskId: 'task', contractHash: 'contract',
   repositoryIdentity: '/repo', workspaceRevision: 'rev',
 }
+
+test('a named failing test can localize its called relative import after both content reads', () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-import-recovery-'))
+  try {
+    const testSource = "import {test} from 'node:test'; import assert from 'node:assert/strict'; import {add} from './math.js'; test('addition',()=>{assert.equal(add(2,3),5);assert.equal(add(0,7),7)});"
+    const source = 'export function add(a,b) { return a-b }'
+    writeFileSync(join(root, 'math.test.js'), testSource)
+    writeFileSync(join(root, 'math.js'), source)
+    const candidates = [{path: 'math.test.js', relation: 'addition', source: 'test_identity' as const, line:1, column:testSource.indexOf('assert.equal')+1}]
+    let state = advanceFailureLocalization(startFailureLocalization('red', binding, candidates), {
+      type: 'read_file', target: 'math.test.js', content: testSource, succeeded: true, projectRoot: root,
+    })
+    assert.equal(state.acceptedPath, 'math.test.js')
+    const rangeOnly = advanceFailureLocalization(state, {
+      type:'read_range',target:'math.js',content:'export function add(a,b) { return a-b }',
+      startLine:2,succeeded:true,projectRoot:root,
+    })
+    assert.notEqual(rangeOnly.acceptedPath,'math.js','partial lexical context cannot corroborate an import')
+    const atCapacity = advanceFailureLocalization({...state,candidates:[...state.candidates,
+      ...Array.from({length:7},(_,i)=>({path:`other${i}.js`,relation:'other',source:'structured_location' as const}))]}, {
+      type:'read_file',target:'math.js',content:source,succeeded:true,projectRoot:root,
+    })
+    assert.equal(atCapacity.candidates.length,8)
+    assert.ok(atCapacity.candidates.some(candidate=>candidate.path===atCapacity.acceptedPath))
+    state = advanceFailureLocalization(state, {
+      type: 'read_file', target: 'math.js', content: source, succeeded: true, projectRoot: root,
+    })
+    assert.equal(state.acceptedPath, 'math.js')
+    assert.equal(state.calls, 2)
+    assert.equal(state.rounds, 2)
+  } finally { rmSync(root, {recursive:true, force:true}) }
+})
+
+test('import bridge evidence cannot reopen consumed permits or accept stale, repeated or unrelated observations', () => {
+  const localized = {
+    ...startFailureLocalization('red', binding, [
+      {path:'math.test.js',relation:'addition',source:'test_identity' as const},
+      {path:'math.js',relation:'add',source:'import_call' as const,fromTestPath:'math.test.js'},
+    ]),
+    phase:'localized' as const, calls:2,rounds:2,acceptedPath:'math.js',observationDigest:'fresh-source',
+  }
+  let state = applyWorkingStateEvent(createWorkingState('repair'), {
+    type:'recovery_gate',failureSignature:'red',binding,requiredEvidence:'inspect',failingTargets:['math.test.js'],
+  })
+  state = applyWorkingStateEvent(state,{type:'add_evidence',evidence:'read test',discriminating:true,
+    provenance:{tool:'read_file',target:'math.test.js',failureSignature:'red',binding,observationDigest:'fresh-test'}})
+  state = applyWorkingStateEvent(state,{type:'localization_update',localization:localized})
+  const provenance:RecoveryEvidenceProvenance = {tool:'read_file',target:'math.js',failureSignature:'red',binding,observationDigest:'fresh-source'}
+  const accepted = applyWorkingStateEvent(state,{type:'localization_import_evidence',provenance})
+  assert.deepEqual(accepted.recoveryGate?.failingTargets,['math.test.js','math.js'])
+  assert.equal(accepted.recoveryGate?.observedKeys?.length,2)
+  assert.equal(applyWorkingStateEvent(accepted,{type:'localization_import_evidence',provenance}).recoveryGate?.observedKeys?.length,2)
+  for (const alteration of [
+    {tool:'read_range'}, {failureSignature:'other'}, {target:'unrelated.js'}, {observationDigest:'old'},
+    {binding:{...binding,workspaceRevision:'stale'}},
+  ]) {
+    const rejected=applyWorkingStateEvent(state,{type:'localization_import_evidence',provenance:{...provenance,...alteration}})
+    assert.deepEqual(rejected.recoveryGate,state.recoveryGate)
+  }
+  for (const flags of [{permitConsumed:true},{planAdmitted:true}]) {
+    const locked={...state,recoveryGate:{...state.recoveryGate!,...flags}}
+    assert.deepEqual(applyWorkingStateEvent(locked,{type:'localization_import_evidence',provenance}).recoveryGate,locked.recoveryGate)
+  }
+  const exhausted={...state,localization:{...localized,phase:'exhausted' as const}}
+  assert.deepEqual(applyWorkingStateEvent(exhausted,{type:'localization_import_evidence',provenance}).recoveryGate,state.recoveryGate)
+})
 
 test('Node assertion labels and sandbox file URLs corroborate the actual test read', () => {
   const root = mkdtempSync(join(tmpdir(), 'babel-node-assert-'))

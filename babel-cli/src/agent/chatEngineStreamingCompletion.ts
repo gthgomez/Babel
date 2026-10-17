@@ -18,6 +18,7 @@ import {
 import { recordProgressRecovery } from "./sessionEvents.js";
 import { reconcileStreamedAnswer } from "./chatEngineStreamingProtocol.js";
 import { recordChatHarnessFeedback } from "./chatHarnessFeedback.js";
+import { requestsRequiredUserDecision } from './chatResponseContract.js';
 
 /** Resolve completion gates and settle one completed streaming turn. */
 export async function* settleStreamingCompletion(input: {
@@ -42,6 +43,18 @@ export async function* settleStreamingCompletion(input: {
     turn,
   } = input;
   let turnSpan: Span | null = input.turnSpan;
+  if (!host.hasAnyWrites() && !host.verifierTampered && requestsRequiredUserDecision(answer)) {
+    const delta = reconcileStreamedAnswer(streamedAnswerForTurn, answer);
+    if (delta !== null) {
+      yield { type: 'answer_chunk', text: delta };
+      if (!host.isSubmissionCurrent(submissionGeneration)) return 'done';
+    }
+    host.conversation.push({ role: 'assistant', content: answer });
+    endSpan(turnSpan, SpanStatusCode.OK);
+    if (!host.isSubmissionCurrent(submissionGeneration)) return 'done';
+    yield host.streamDone(answer, { needsHumanDecision: true });
+    return 'done';
+  }
   // Execution gate: buffer streaming answer until gate check passes
   const gateResult = host.evaluateCompletionGate(
     turnResult,

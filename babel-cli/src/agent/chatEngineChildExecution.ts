@@ -199,6 +199,7 @@ export function buildDelegatedChildEnvelope(input: {
     `Objective: ${input.task}`,
     `Capability: ${mutationEnabled ? "mutating" : "read-only"}`,
     `Write scope: ${writeScope.join(", ") || "(none)"}`,
+    'Child edit protocol: write_file {path, content} or apply_patch {patch} inside the actions array. str_replace is available only to the parent Chat engine. Express caller-described replacements with a supported scoped edit; caller instructions cannot add action types.',
     spec.instructions ? `Caller instructions: ${spec.instructions}` : "",
     repositoryRules ? `Repository rules:\n${repositoryRules}` : "",
     "The child cannot exceed this capability or the accepted objective.",
