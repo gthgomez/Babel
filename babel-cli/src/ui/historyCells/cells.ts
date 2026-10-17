@@ -77,7 +77,11 @@ function wrapPrefixedBody(
 ): string[] {
   if (width <= 0) return [];
   const header = `  ${accentBright(padRight(label, USER_PREFIX_COLS))}`;
-  const renderedBody = mode === 'rich' ? renderMarkdown(body) : body;
+  // Markdown reserves one right-margin column; the outer cell owns that margin
+  // and the speaker prefix, so give both layouts the same content width.
+  const renderedBody = mode === 'rich'
+    ? renderMarkdown(body, Math.max(1, width - BODY_INDENT.length + 1))
+    : body;
   const lines = wrapPrefixedBlock(renderedBody, {
     firstPrefix: header,
     continuationPrefix: BODY_INDENT,

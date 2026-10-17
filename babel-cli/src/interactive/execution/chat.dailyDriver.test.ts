@@ -239,7 +239,7 @@ describe('executeChatTask daily-driver outcomes', { concurrency: 1 }, () => {
       });
       assert.equal(ctx.isRunning, false);
       assert.equal(ctx.lastAssistantAnswer, 'follow-up ok');
-      assert.match(logs.text(), /Complete/);
+      assert.match(logs.text(), /Response complete/);
       assert.doesNotMatch(logs.text(), /REVIEW_KIND:/);
     } finally {
       logs.restore();

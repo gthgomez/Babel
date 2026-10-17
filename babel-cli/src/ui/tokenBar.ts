@@ -151,7 +151,7 @@ export function renderTokenBar(
   const label = modelLabel ?? formatTokenCount(usedTokens);
 
   if (unknown || percent === null) {
-    return `${label}  ${muted('ctx ?')}`;
+    return `${label}  ${muted('context unavailable')}`;
   }
 
   const bar = buildBar(usedTokens, contextLimit, barChars, tier);

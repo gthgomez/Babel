@@ -68,7 +68,7 @@ describe('PR-A Certification: Multi-Model Telemetry Audit', () => {
     assert.ok(plain.includes('25%'), `Expected 25% for 50k in 200k window, got: ${plain}`);
   });
 
-  test('unknown active context renders [ctx ?] without fabricating numbers', () => {
+  test('unknown active context renders [context unavailable] without fabricating numbers', () => {
     const state: StatusBarState = {
       model: 'Custom Model',
       modelId: 'unknown-custom-model',
@@ -85,7 +85,7 @@ describe('PR-A Certification: Multi-Model Telemetry Audit', () => {
     const rendered = renderStatusBar(state);
     const plain = stripAnsi(rendered);
 
-    assert.ok(plain.includes('[ctx ?]'), `Expected [ctx ?] when activeContext is unknown, got: ${plain}`);
+    assert.ok(plain.includes('[context unavailable]'), `Expected [context unavailable] when activeContext is unknown, got: ${plain}`);
   });
 
   test('model switch updates context limit lookup truthfully', () => {

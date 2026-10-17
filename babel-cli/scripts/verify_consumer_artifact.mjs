@@ -105,8 +105,13 @@ async function tui() {
     assert.ok(sent, 'TUI advertised startup before exit was sent')
     assert.match(transcript, /session ended/i)
     assert.match(transcript, /Docker server (?:available|unavailable)/)
-    const daemonPid = Number(transcript.match(/Auto-spawned daemon ready\. PID: (\d+)/)?.[1])
-    assert.ok(daemonPid > 0, 'Production installed startup spawned its own daemon: ' + transcript)
+    assert.doesNotMatch(transcript, /Auto-spawn(?:ing|ed) daemon|\[preamble-budget\]/,
+      'Startup diagnostics must not enter the conversation')
+    const diagnostics = readFileSync(join(env.BABEL_STATE_DIR, 'diagnostics', `interactive-${child.pid}.jsonl`), 'utf8')
+      .trim().split(/\r?\n/).map(line => JSON.parse(line))
+    const ready = diagnostics.find(entry => entry.channel === 'status' && /Auto-spawned daemon ready\. PID: \d+/.test(entry.message))
+    const daemonPid = Number(ready?.message.match(/PID: (\d+)/)?.[1])
+    assert.ok(daemonPid > 0, 'Production installed startup recorded its own ready daemon')
     assert.throws(() => process.kill(daemonPid, 0), /ESRCH/, 'Owned daemon exited before successful UI termination')
     records.push({ check: 'TUI start/doctor/exit and owned daemon cleanup', status: 'pass', transport: 'pipes; PTY qualification separately recorded' })
   } finally { clearTimeout(timer); child.kill() }
