@@ -3,9 +3,9 @@ import { randomUUID } from 'node:crypto';
 import { isAbsolute, resolve } from 'node:path';
 
 // The listen host is configuration-derived (`BABEL_BRIDGE_HOST` may be
-// `localhost` or `::1`) while the socket itself always binds 127.0.0.1, so the
-// announcement is matched on any loopback spelling.
-const LISTENING_RE = /Babel Remote listening on http:\/\/(?:127\.0\.0\.1|localhost|\[?::1\]?):(\d+)/;
+// `localhost`, `LocalHost` or `::1`) while the socket itself always binds
+// 127.0.0.1, so the announcement is matched on any loopback spelling.
+const LISTENING_RE = /Babel Remote listening on http:\/\/(?:127\.0\.0\.1|localhost|\[?::1\]?):(\d+)/i;
 const DEFAULT_READY_TIMEOUT_MS = 30_000;
 const STOP_GRACE_MS = 2_000;
 
@@ -50,16 +50,16 @@ function bridgeHealthPayload(value) {
  * started.
  *
  * The instance label is the strong identity: the host injects it into the
- * child's environment and the bridge echoes it, so an unrelated (or stale)
- * loopback server is never adopted as the bridge. A peer that predates the
- * label is accepted only when this launch's own child announced a listener for
- * the port being probed — never from an arbitrary HTTP success.
+ * child's environment and the bridge echoes it. A peer that predates the label
+ * is accepted only when this launch's own child announced a loopback listener
+ * — the bridge prints that only after a successful bind — and never from an
+ * arbitrary HTTP success on the port.
  */
-function healthBelongsToLaunch(payload, instance, announcedPort, probedPort) {
+function healthBelongsToLaunch(payload, instance, announcedPort) {
   if (!payload) return false;
   const echoed = payload.instance;
   if (typeof echoed === 'string' && echoed.length > 0) return echoed === instance;
-  return announcedPort !== null && announcedPort === probedPort;
+  return announcedPort !== null;
 }
 
 async function waitForOwnedBridgeHealth({port, instance, readAnnouncedPort, timeoutMs}) {
@@ -73,7 +73,7 @@ async function waitForOwnedBridgeHealth({port, instance, readAnnouncedPort, time
       });
       if (response.ok) {
         const payload = bridgeHealthPayload(await response.json().catch(() => null));
-        if (healthBelongsToLaunch(payload, instance, announcedPort, probedPort)) return probedPort;
+        if (healthBelongsToLaunch(payload, instance, announcedPort)) return probedPort;
       }
     } catch {
       /* retry until deadline */

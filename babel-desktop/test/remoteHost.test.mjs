@@ -148,9 +148,10 @@ test('a bridge-shaped peer is not adopted when this launch announced nothing', a
   }
 });
 
-test('a fragmented announcement on an aliased loopback host still reaches ready', async () => {
+test('a fragmented, mixed-case aliased announcement still reaches ready', async () => {
   // Guards the pre-instance-label path: the announcement may be split across
-  // pipe writes and may name a loopback alias while the socket binds 127.0.0.1.
+  // pipe writes and may name a loopback alias in any case while the socket
+  // binds 127.0.0.1.
   const peer = responder(JSON.stringify({ok: true, protocol: 'adr-010'}));
   const port = await listenOn(peer);
   const child = scriptedChild();
@@ -163,7 +164,7 @@ test('a fragmented announcement on an aliased loopback host still reaches ready'
   });
   try {
     const started = bridge.start({port, readyTimeoutMs: 5000});
-    const line = `Babel Remote listening on http://localhost:${port}\n`;
+    const line = `Babel Remote listening on http://LocalHost:${port}\n`;
     child.stdout.emit('data', Buffer.from(line.slice(0, 21)));
     child.stdout.emit('data', Buffer.from(line.slice(21)));
     await started;
