@@ -274,20 +274,24 @@ for (const number of prs) {
     if (sourceVersion() !== version) throw new Error('TRUSTED_REVIEW_SOURCE_CHANGED')
     const historyPath = join(state, 'finding-history', createHash('sha256').update(JSON.stringify([repository, number])).digest('hex') + '.json')
     const previousHistory = existsSync(historyPath) ? FindingHistorySchema.parse(JSON.parse(readFileSync(historyPath, 'utf8'))) : undefined
-    let changedPaths: string[] = []
     let comparisonAvailable = true
-    if (previousHistory && previousHistory.head_sha !== pr.headRefOid) {
-      try { changedPaths = readFindingDependencyChanges(git, previousHistory.head_sha, pr.headRefOid) }
-      catch {
-        comparisonAvailable = false
-        // Unknown dependency movement cannot preserve a dismissal as current.
-        changedPaths = previousHistory.defects.flatMap(item => item.resolution?.dependency_paths ?? [])
+    const changesByHead = new Map<string, string[] | undefined>()
+    const changedPathsFromHead = (head: string): string[] | undefined => {
+      if (head === pr.headRefOid) return []
+      if (!changesByHead.has(head)) {
+        try { changesByHead.set(head, readFindingDependencyChanges(git, head, pr.headRefOid)) }
+        catch {
+          comparisonAvailable = false
+          changesByHead.set(head, undefined)
+        }
       }
+      return changesByHead.get(head)
     }
+    const changedPaths = previousHistory ? changedPathsFromHead(previousHistory.head_sha) ?? [] : []
     const adjudications = readBabelReviewAdjudications(state)
     const findings = reviews.flatMap(review => StructuredFindingSchema.array().parse(JSON.parse(readFileSync(join(jobDir!, `${review.reviews[0].reviewer_model}-findings.json`), 'utf8'))))
     const history = reconcileFindingHistory({ repository, prNumber: number, headSha: pr.headRefOid, findings,
-      ...(previousHistory ? { previous: previousHistory } : {}), changedPaths, adjudications: adjudications.records })
+      ...(previousHistory ? { previous: previousHistory } : {}), changedPaths, changedPathsFromHead, adjudications: adjudications.records })
     atomicReviewJson(join(jobDir, 'finding-history.json'), { history, comparison_available: comparisonAvailable, invalid_adjudications: adjudications.invalid_records })
     atomicReviewJson(historyPath, history)
     const handoff: HostReviewHandoffV2 = { ...reviews[0]!, controller_run_id: key }

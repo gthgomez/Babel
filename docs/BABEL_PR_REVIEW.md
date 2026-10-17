@@ -79,10 +79,19 @@ The host-side `tools/babel-pr-adjudicate.mts` records may add optional
 `state` (`fixed`, `not_reproduced`, `pre_existing`, or `dismissed`), a `reason`,
 `dependency_paths`, and optional `supersedes_defect_id`. These remain explicitly
 `operator_recorded_not_independently_verified`, with their evidence references.
+Labels appended after a review bind to recorded observation/head pairs and keep
+their original revision. Legacy observations without those bindings are not
+assigned an invented revision. Dependency comparisons use the disposition's
+revision; replaying its label cannot clear a reopening.
 Dependency changes reopen dispositions and preserve their reasons; unavailable
 comparison evidence cannot preserve them as current. Supersession links do not
 erase observations or merge distinct bugs. History is advisory and grants no
 merge authority.
+
+The private history additions are a risky format extension for strict older
+readers. On rollback, preserve and archive the active history before starting a
+new timeline under the restored source; do not rewrite old observations or
+reuse newer cached review evidence.
 
 ## Benchmark and CI limits
 
