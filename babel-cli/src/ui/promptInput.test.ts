@@ -455,6 +455,15 @@ describe('PromptInput', () => {
   // ── Submit Flow ─────────────────────────────────────────────────────────
 
   describe('submit flow', () => {
+    it('clears submitted text before callbacks and preserves history', () => {
+      let draftAtSubmit = 'unset';
+      const input = createTestInput({ onSubmit: () => { draftAtSubmit = input.getState().text; } });
+      type(input, 'a submitted request');
+      input.handleKey(key('enter'));
+      assert.equal(draftAtSubmit, '');
+      assert.equal(input.getState().text, '');
+      assert.equal(input.getHistory()[0], 'a submitted request');
+    });
     it('Enter on last line at end submits', () => {
       let submittedText = '';
       const input = createTestInput({

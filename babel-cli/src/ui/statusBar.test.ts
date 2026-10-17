@@ -424,7 +424,7 @@ describe('Acceptance Tests T17–T20: Status Bar Refinements', () => {
     assert.ok(!plain.includes('100%'), 'Must NOT calculate 100% from cumulative tokens');
   });
 
-  it('T19b: When active context telemetry is missing, renders [ctx ?] and NEVER falls back to totalTokens', () => {
+  it('T19b: When active context telemetry is missing, renders [context unavailable] and NEVER falls back to totalTokens', () => {
     const result = renderStatusBar(
       defaultState({
         modelId: 'deepseek-v4-flash',
@@ -434,7 +434,7 @@ describe('Acceptance Tests T17–T20: Status Bar Refinements', () => {
       }),
     );
     const plain = stripAnsi(result);
-    assert.ok(plain.includes('[ctx ?]'), `Expected [ctx ?] when activeContextTokens is missing, got: ${plain}`);
+    assert.ok(plain.includes('[context unavailable]'), `Expected [context unavailable] when activeContextTokens is missing, got: ${plain}`);
     assert.ok(!plain.includes('100%'), 'Must NOT calculate 100% from cumulative tokens');
     assert.ok(!plain.includes('200%'), 'Must NOT calculate from cumulative tokens');
   });
@@ -447,7 +447,7 @@ describe('Acceptance Tests T17–T20: Status Bar Refinements', () => {
     assert.equal(lines.length, 1);
   });
 
-  it('T21: Turn 1 provider usage followed by Turn 2 failure before provider request renders [ctx ?]', () => {
+  it('T21: Turn 1 provider usage followed by Turn 2 failure before provider request renders [context unavailable]', () => {
     // Turn 1 completed with active provider telemetry
     let turn1State = defaultState({
       modelId: 'deepseek-v4-flash',
@@ -467,7 +467,7 @@ describe('Acceptance Tests T17–T20: Status Bar Refinements', () => {
       width: 100,
     });
     let plain2 = stripAnsi(renderStatusBar(turn2State));
-    assert.ok(plain2.includes('[ctx ?]'), `Expected [ctx ?] for turn 2 without provider request, got: ${plain2}`);
+    assert.ok(plain2.includes('[context unavailable]'), `Expected [context unavailable] for turn 2 without provider request, got: ${plain2}`);
     assert.ok(!plain2.includes('17%'));
   });
 
@@ -615,7 +615,7 @@ describe('status bar — explicit field shedding', () => {
       ),
     );
     assert.ok(unknownModel.includes('mystery-local'));
-    assert.ok(unknownModel.includes('[ctx ?]'));
+    assert.ok(unknownModel.includes('[context unavailable]'));
     assert.ok(!unknownModel.includes('%'));
 
     const unknownActive = firstLine(
@@ -628,7 +628,7 @@ describe('status bar — explicit field shedding', () => {
         }),
       ),
     );
-    assert.ok(unknownActive.includes('[ctx ?]'));
+    assert.ok(unknownActive.includes('[context unavailable]'));
     assert.ok(!unknownActive.includes('%'));
   });
 
@@ -672,7 +672,7 @@ describe('status bar — explicit field shedding', () => {
     );
     assert.equal(line.length, 60);
     assert.ok(line.includes('anthropic') || line.includes('…'));
-    assert.ok(line.includes('[ctx ?]') || line.includes('ctx'));
+    assert.ok(line.includes('[context unavailable]') || line.includes('context'));
   });
 });
 
@@ -1032,7 +1032,7 @@ describe('status bar — attention-preemption policy', () => {
     }
 
     function hasIntactContext(line: string): boolean {
-      return /\[\s*.+\s+\d+%\s*\]/.test(line) || line.includes('[ctx ?]');
+      return /\[\s*.+\s+\d+%\s*\]/.test(line) || line.includes('[context unavailable]');
     }
 
     function hasIntactRateLimit(line: string): boolean {

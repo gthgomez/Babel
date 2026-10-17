@@ -40,6 +40,7 @@ import { sanitizeLlmOutput, sanitizeCodeLine, encodeHyperlink } from './sanitize
 import { isTreeSitterAvailable, highlightWithTreeSitter } from './treeSitterHighlight.js';
 import { renderContentAwareTable, type MarkdownTableRow } from './tables.js';
 import { scanFenceLine, type OpenFence } from './markdownFenceScanner.js';
+import { wrapPrefixedBlock } from './textLayout.js';
 const HAS_COLOR = supportsColor();
 const ANSI_ITALIC_OPEN = '\x1b[3m';
 const ANSI_ITALIC_CLOSE = '\x1b[23m';
@@ -1411,7 +1412,7 @@ export function highlightCodeBlocks(text: string): string {
  * nested formatting, tables, and all standard markdown features correctly —
  * unlike the previous regex line-scanner.
  *
- * When NO_COLOR is set, returns text unchanged.
+ * NO_COLOR preserves the same Markdown layout without ANSI styling.
  */
 /** Quick check for markdown syntax characters before invoking
  *  the full lexer. Returns false for plain text with no formatting. */
@@ -1429,40 +1430,41 @@ function hasMarkdownSyntax(text: string): boolean {
 const mdRenderCache = new Map<string, string>();
 const MD_CACHE_MAX = 128;
 
-export function renderMarkdown(text: string): string {
+export function renderMarkdown(text: string, width = getTerminalWidth()): string {
   // Check cache first (must happen before the HAS_COLOR/sanitize path so
   // we can serve cached results even when color is disabled)
-  const cached = mdRenderCache.get(text);
+  const cacheKey = `${width}\u0000${text}`;
+  const cached = mdRenderCache.get(cacheKey);
   if (cached !== undefined) return cached;
 
   if (!text) return '';
 
   // Sanitize LLM-produced text against terminal escape injection
   const safe = sanitizeLlmOutput(text);
-  if (!HAS_COLOR) return safe;
+  // Both the prose and Markdown paths share the same bounded cache.
+  if (mdRenderCache.size >= MD_CACHE_MAX) {
+    const oldest = mdRenderCache.keys().next().value;
+    if (oldest !== undefined) mdRenderCache.delete(oldest);
+  }
 
   // Fast-path — skip lexer for text with no markdown syntax
   if (!hasMarkdownSyntax(safe)) {
-    mdRenderCache.set(text, safe);
-    return safe;
+    const wrapped = wrapProse(safe, width);
+    mdRenderCache.set(cacheKey, wrapped);
+    return wrapped;
   }
 
   const tokens = marked.lexer(safe);
   const blocks: string[] = [];
 
   for (const token of tokens) {
-    const rendered = renderBlockToken(token);
+    const rendered = renderBlockToken(token, width);
     if (rendered) blocks.push(rendered);
   }
 
   const result = blocks.join('\n\n');
 
-  // Evict oldest if cache is full
-  if (mdRenderCache.size >= MD_CACHE_MAX) {
-    const firstKey = mdRenderCache.keys().next().value;
-    if (firstKey !== undefined) mdRenderCache.delete(firstKey);
-  }
-  mdRenderCache.set(text, result);
+  mdRenderCache.set(cacheKey, result);
   return result;
 }
 
@@ -1473,28 +1475,35 @@ export function clearMdRenderCache(): void {
 
 type MdTableRow = { tokens: any[] };
 
-function renderBlockToken(token: MdToken): string {
+function wrapProse(text: string, width: number, prefix = '', continuation = ''): string {
+  return wrapPrefixedBlock(text, { firstPrefix: prefix, continuationPrefix: continuation,
+    width: Math.max(8, width - 1), longTokenPolicy: 'hard-wrap' }).join('\n');
+}
+
+function renderBlockToken(token: MdToken, width = getTerminalWidth()): string {
   switch (token.type) {
     case 'heading':
-      return renderHeading(token as any);
+      return wrapProse(renderHeading(token as any), width);
     case 'paragraph':
-      return renderParagraph(token as any);
+      return wrapProse(renderParagraph(token as any), width);
     case 'code':
       return renderCodeBlock(token as any);
     case 'list':
-      return renderList(token as any);
+      return renderList(token as any, width);
     case 'blockquote':
-      return renderBlockquote(token as any);
+      return renderBlockquote(token as any, width);
     case 'hr':
-      return dim('─'.repeat(getTerminalWidth()));
+      return dim('─'.repeat(Math.max(1, width - 1)));
     case 'space':
+    case 'def':
+    case 'checkbox': // Task items supply one checkbox beside their list marker.
       return '';
     case 'table':
-      return renderTable(token as any);
+      return renderTable(token as any, width);
     default: {
       if ('tokens' in token && Array.isArray(token['tokens'])) {
         return (token as any).tokens
-          .map((t: MdToken) => renderBlockToken(t))
+          .map((t: MdToken) => renderBlockToken(t, width))
           .filter(Boolean)
           .join('\n');
       }
@@ -1520,43 +1529,53 @@ function renderCodeBlock(token: MdTokens['Code']): string {
   return lines
     .map((line: string) => {
       if (knownLang) return '  ' + highlightLine(line, lang.toLowerCase());
-      if (lang) return '  ' + dim(line);
+      if (lang) return '  ' + primary(line);
       return '  ' + line;
     })
     .join('\n');
 }
 
-function renderList(token: MdTokens['List']): string {
+function renderList(token: MdTokens['List'], width = getTerminalWidth()): string {
   const lines: string[] = [];
   let itemNum = token.start || 1;
   for (const item of token.items) {
     const prefix = token.ordered ? dim(`${itemNum}.`) : dim('·');
-    const content = renderInlineTokens(item.tokens);
-    const out = `  ${prefix} ${content}`;
-    lines.push(out);
-    if (token.ordered) itemNum++;
+    const marker = `  ${prefix} `;
+    const indent = ' '.repeat(token.ordered ? String(itemNum).length + 4 : 4);
+    const checkbox = item.task ? (item.checked ? '[x] ' : '[ ] ') : '';
+    let markerWritten = false;
     for (const subToken of item.tokens) {
       if (subToken.type === 'list') {
-        const subLines = renderList(subToken as any).split('\n');
-        for (const sl of subLines) lines.push('    ' + sl);
+        if (!markerWritten) { lines.push(marker.trimEnd()); markerWritten = true; }
+        const subLines = renderList(subToken as any, width - indent.length).split('\n');
+        for (const sl of subLines) lines.push(indent + sl);
+      } else {
+        const body = subToken.type === 'text' || subToken.type === 'paragraph'
+          ? renderInlineTokens(subToken.tokens ?? [subToken]) : renderBlockToken(subToken, width - indent.length);
+        if (!body) continue;
+        const prefix = markerWritten ? indent : marker;
+        const content = (markerWritten ? '' : checkbox) + body;
+        if (subToken.type === 'code') {
+          lines.push(...content.split('\n').map((line: string, index: number) => (index === 0 ? prefix : indent) + line));
+        } else lines.push(wrapProse(content, width, prefix, indent));
+        markerWritten = true;
       }
     }
+    if (token.ordered) itemNum++;
   }
   return lines.join('\n');
 }
 
-function renderBlockquote(token: MdTokens['Blockquote']): string {
+function renderBlockquote(token: MdTokens['Blockquote'], width: number): string {
   const content = token.tokens
-    .map((t: MdToken) => renderBlockToken(t))
+    .map((t: MdToken) => renderBlockToken(t, Math.max(1, width - 4)))
     .filter(Boolean)
     .join('\n');
-  return content
-    .split('\n')
-    .map((line: string) => `  ${dim('│')} ${dim(line)}`)
-    .join('\n');
+  const prefix = `  ${dim('│')} `;
+  return wrapProse(content, width, prefix, prefix);
 }
 
-function renderTable(token: MdTokens['Table']): string {
+function renderTable(token: MdTokens['Table'], width: number): string {
   if (!token.rows?.length && !token.header?.length) return '';
   const headers = (token.header || []).map((cell: any) =>
     stripAnsi(renderInlineTokens(cell.tokens)).trim(),
@@ -1564,7 +1583,7 @@ function renderTable(token: MdTokens['Table']): string {
   const rows: MarkdownTableRow[] = (token.rows || []).map((row: any) => ({
     cells: row.map((cell: any) => stripAnsi(renderInlineTokens(cell.tokens)).trim()),
   }));
-  return renderContentAwareTable(headers, rows);
+  return renderContentAwareTable(headers, rows, { width });
 }
 
 // ─── Inline token rendering ─────────────────────────────────────────────────
@@ -1577,12 +1596,16 @@ function renderInlineTokens(tokens: InlineToken[]): string {
 
 function renderInlineToken(token: InlineToken): string {
   switch (token.type) {
+    case 'checkbox':
+      return '';
     case 'text':
-      return (token as any).text;
+      return (token as any).tokens ? renderInlineTokens((token as any).tokens) : (token as any).text;
+    case 'paragraph':
+      return renderInlineTokens((token as any).tokens);
     case 'strong':
       return bold(renderInlineTokens((token as any).tokens));
     case 'em':
-      return ANSI_ITALIC_OPEN + renderInlineTokens((token as any).tokens) + ANSI_ITALIC_CLOSE;
+      return HAS_COLOR ? ANSI_ITALIC_OPEN + renderInlineTokens((token as any).tokens) + ANSI_ITALIC_CLOSE : renderInlineTokens((token as any).tokens);
     case 'del':
       return dim(renderInlineTokens((token as any).tokens));
     case 'codespan':

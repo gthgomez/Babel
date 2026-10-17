@@ -194,7 +194,7 @@ export function renderCompactTokenBar(
 ): string {
   const { tier, percent, unknown } = classifyUtilization(usedTokens, contextLimit, hasExplicitActiveContext);
   if (unknown || percent === null) {
-    return `[ctx ?]`;
+    return `[context unavailable]`;
   }
   const bar = buildBar(usedTokens, contextLimit, barChars, tier);
   return `[${bar} ${percent.toString().padStart(3)}%]`;

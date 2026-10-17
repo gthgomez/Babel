@@ -257,7 +257,6 @@ import { captureSessionEventAppendFailure } from "./sessionEventDiagnostics.js";
 import { buildChatEngineRepoMapPreamble } from "./repoMapPreamble.js";
 import { runChatEngineCompactionFor } from "./chatEngineCompactionHost.js";
 import {
-  describePreambleBudget,
   enforcePreambleBudget,
 } from "./preambleBudget.js";
 import { invalidateRepoMapFile, invalidateRepoMapCache } from "../services/repoMap/graph.js";
@@ -401,6 +400,7 @@ import {
 
 import { RepetitionDetector } from "./repetitionDetector.js";
 import { captureThought } from "./thoughtCapture.js";
+import { persistPreambleBudget } from "./preambleBudgetDiagnostics.js";
 import {
   prepareKernelVerifierInput,
   resolveEngineRequiredVerifiers,
@@ -4283,9 +4283,7 @@ export class ChatEngine {
           contextWindowTokens: this.limits.maxEstimatedTokens,
         });
         if (enforced.map) systemContent += "\n\n" + enforced.map;
-        console.error(
-          `[preamble-budget] ${JSON.stringify(describePreambleBudget(enforced))}`,
-        );
+        persistPreambleBudget(this.engineRunDir, enforced);
       }
 
     }

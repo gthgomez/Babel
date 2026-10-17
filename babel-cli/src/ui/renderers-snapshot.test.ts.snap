@@ -15,7 +15,7 @@
   "status bar no cost": "Claude Sonnet 4.6                                                               \n",
   "status bar w40": "deepseek-v4-flash                       \n",
   "status bar w60": "deepseek-v4-flash                                           \n",
-  "status bar failed bg": "Claude Opus 4.8 · plan                         $1.2345  ◌ Indexing 45% 567/1234  [████████████ 100%]\n",
+  "status bar failed bg": "Claude Opus 4.8 · plan             session est. $1.2345  ◌ Background: Indexing  [████████████ 100%]\n",
   "chat user": "  YOU    Hello Babel, can you help me refactor this code?",
   "chat assistant plain": "  BABEL  Sure, I can help you refactor that code. Please share the current\n         implementation.",
   "chat assistant markdown": "  BABEL  Here is how you refactor:\n         \n           const x = 1;\n         \n         Let me know if you need more help.",

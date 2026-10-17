@@ -139,7 +139,7 @@ export function renderBackgroundTaskFooter(tasks: BackgroundTaskState[], width: 
   // Status indicator
   if (first.status === 'running') {
     parts.push(accent(RUNNING_SPINNER));
-    parts.push(first.label);
+    parts.push(`Background: ${first.label}`);
 
     if (first.progress !== undefined) {
       // Determinate
@@ -237,7 +237,7 @@ export function renderBackgroundTaskProgress(
           ? success(COMPLETED_MARK)
           : error(FAILED_MARK);
 
-    const label = bold(task.label);
+    const label = bold(`Background: ${task.label}`);
 
     if (expanded) {
       if (task.status === 'running' && task.progress !== undefined) {
@@ -253,9 +253,8 @@ export function renderBackgroundTaskProgress(
         lines.push(`${indicator} ${label}  ${meta}`);
       } else if (task.status === 'running') {
         // Indeterminate
-        const bar = renderIndeterminateBar(PROGRESS_BAR_WIDTH);
-        const elapsed = task.elapsedMs !== undefined ? muted(formatDuration(task.elapsedMs)) : '';
-        lines.push(`${indicator} ${label}  ${bar}  ${elapsed}`);
+        const elapsed = task.elapsedMs !== undefined ? muted(`elapsed ${formatDuration(task.elapsedMs)}`) : '';
+        lines.push(`${indicator} ${label}  ${muted('in progress')}  ${elapsed}`);
       } else if (task.status === 'completed') {
         const elapsed = task.elapsedMs !== undefined ? muted(formatDuration(task.elapsedMs)) : '';
         lines.push(`${indicator} ${label}  ${dim('completed')}  ${elapsed}`);

@@ -1,8 +1,5 @@
 import type { ChatPhase } from "../agent/chatPhaseNudge.js";
-import { getMotionMode, shimmerText } from "./motion.js";
-import { dim, muted, warning } from "./theme.js";
-
-const STALL_THRESHOLD_MS = 3_000;
+import { primary, muted } from "./theme.js";
 
 export interface ConversationLivenessSnapshot {
   elapsedMs: number;
@@ -42,23 +39,10 @@ export function formatConversationThinkingStatus(input: {
   stallMs: number;
   snapshot: ConversationLivenessSnapshot;
 }): { indicator: string; timer: string } {
-  const thinkingLabel = shimmerText("Thinking…", getMotionMode());
-  let indicator = dim(
-    `${input.spinner} ${thinkingLabel} [${input.snapshot.phase}]`,
-  );
-  if (input.stallMs > STALL_THRESHOLD_MS) {
-    const intensity = Math.min((input.stallMs - STALL_THRESHOLD_MS) / 2_000, 1);
-    if (intensity > 0.6) indicator = warning(indicator);
-    else if (intensity > 0.3) {
-      indicator = `${dim(input.spinner)} ${warning(thinkingLabel)}`;
-    }
-  }
   return {
-    indicator,
+    indicator: primary(`${input.spinner} Thinking… [${input.snapshot.phase}]`),
     timer: muted(
-      `(${Math.floor(input.snapshot.elapsedMs / 1_000)}s · model idle ${Math.floor(
-        input.snapshot.modelIdleMs / 1_000,
-      )}s)`,
+      `(response ${Math.floor(input.snapshot.elapsedMs / 1_000)}s · Ctrl+C cancel)`,
     ),
   };
 }

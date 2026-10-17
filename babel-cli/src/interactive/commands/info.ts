@@ -81,11 +81,6 @@ export function handleStatus(ctx: ReplContext, _args: string[]): void {
   } else if (ctx.state.resolvedModelId) {
     console.log(`    ${muted(padRight('Route', 10))} ${muted(ctx.state.resolvedModelId)}`);
   }
-  if (ctx.state.approximateCostPerRunUsd !== undefined) {
-    console.log(
-      `    ${muted(padRight('Cost', 10))} ${muted(`$${ctx.state.approximateCostPerRunUsd.toFixed(4)} / run`)}`,
-    );
-  }
   console.log(
     `    ${muted(padRight('Verbose', 10))} ${ctx.verboseMode ? accentBright('on') : muted('off')}\n`,
   );

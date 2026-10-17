@@ -11,6 +11,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ipcRequest } from './ipc.js';
+import { attachDaemonDiagnosticStream, createDaemonStartupDiagnostics } from './diagnosticStream.js';
 import {
   DAEMON_PID_FILE,
   DAEMON_AUTO_SPAWN_TIMEOUT_MS,
@@ -39,12 +40,15 @@ export async function pingDaemon(): Promise<DaemonPingResult> {
 
 let spawnPromise: Promise<void> | null = null;
 let ownedDaemon: ChildProcess | null = null;
+export interface DaemonClientOptions {
+  onDiagnostic?: (channel: 'stdout' | 'stderr' | 'status', message: string) => void;
+}
 
 /**
  * Ensure the daemon is running. If not, spawn it and wait for readiness.
  * Idempotent — concurrent callers share the same spawn promise.
  */
-export async function ensureDaemon(): Promise<void> {
+export async function ensureDaemon(options: DaemonClientOptions = {}): Promise<void> {
   // Fast path: already running
   try {
     await pingDaemon();
@@ -55,7 +59,7 @@ export async function ensureDaemon(): Promise<void> {
 
   // Serialize spawn attempts
   if (!spawnPromise) {
-    spawnPromise = daemonAutoSpawn();
+    spawnPromise = daemonAutoSpawn(options);
   }
   try {
     await spawnPromise;
@@ -67,7 +71,7 @@ export async function ensureDaemon(): Promise<void> {
 /**
  * Spawn the daemon as a child process and poll until it responds to ping.
  */
-export async function daemonAutoSpawn(): Promise<void> {
+export async function daemonAutoSpawn(options: DaemonClientOptions = {}): Promise<void> {
   // Check if already running (race condition guard)
   try {
     await pingDaemon();
@@ -77,7 +81,11 @@ export async function daemonAutoSpawn(): Promise<void> {
   }
 
   const daemonMain = resolveDaemonMain();
-  console.log(`[daemon] Auto-spawning daemon: ${daemonMain}`);
+  const diagnostic = options.onDiagnostic ?? ((channel: string, message: string) => {
+    (channel === 'stderr' ? process.stderr : process.stdout).write(message.endsWith('\n') ? message : message + '\n');
+  });
+  const startupDiagnostics = createDaemonStartupDiagnostics(diagnostic);
+  diagnostic('status', `[daemon] Auto-spawning daemon: ${daemonMain}`);
 
   const isBun = typeof (process as any).versions?.bun !== 'undefined';
   const execPath = isBun ? 'bun' : process.execPath;
@@ -93,16 +101,16 @@ export async function daemonAutoSpawn(): Promise<void> {
   ownedDaemon = child;
   child.once('exit', () => { if (ownedDaemon === child) ownedDaemon = null; });
 
-  // Forward daemon stdout/stderr to parent for visibility
-  child.stdout?.on('data', (data: Buffer) => {
-    process.stdout.write(data);
-  });
-  child.stderr?.on('data', (data: Buffer) => {
-    process.stderr.write(data);
-  });
+  if (options.onDiagnostic) {
+    attachDaemonDiagnosticStream(child.stdout, 'stdout', startupDiagnostics.receive);
+    attachDaemonDiagnosticStream(child.stderr, 'stderr', startupDiagnostics.receive);
+  } else {
+    child.stdout?.on('data', (data: Buffer) => process.stdout.write(data));
+    child.stderr?.on('data', (data: Buffer) => process.stderr.write(data));
+  }
 
   child.on('error', (err) => {
-    console.error(`[daemon] Failed to spawn daemon process: ${err.message}`);
+    startupDiagnostics.receive('stderr', `[daemon] Failed to spawn daemon process: ${err.message}`);
   });
 
   // Poll until daemon responds
@@ -115,15 +123,14 @@ export async function daemonAutoSpawn(): Promise<void> {
     // Check if child process died
     if (child.exitCode !== null) {
       throw new Error(
-        `Daemon process exited with code ${child.exitCode} during startup. ` +
-          `Check daemon output above for errors.`,
+        startupDiagnostics.failureMessage(`Daemon process exited with code ${child.exitCode} during startup.`),
       );
     }
 
     try {
       const ping = await pingDaemon();
       if (ping.alive && ping.version === DAEMON_PROTOCOL_VERSION) {
-        console.log(`[daemon] Auto-spawned daemon ready. PID: ${ping.pid}`);
+        diagnostic('status', `[daemon] Auto-spawned daemon ready. PID: ${ping.pid}`);
         return;
       }
     } catch {
@@ -132,8 +139,7 @@ export async function daemonAutoSpawn(): Promise<void> {
   }
 
   throw new Error(
-    `Daemon failed to start within ${DAEMON_AUTO_SPAWN_TIMEOUT_MS}ms. ` +
-      `Last status: ${lastError || 'unknown'}`,
+    startupDiagnostics.failureMessage(`Daemon failed to start within ${DAEMON_AUTO_SPAWN_TIMEOUT_MS}ms. Last status: ${lastError || 'unknown'}`),
   );
 }
 

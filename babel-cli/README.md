@@ -150,6 +150,39 @@ node .\babel-cli\dist\index.js plan "Split the auth module safely"
 node .\babel-cli\dist\index.js deep "Harden the migration path and verify it"
 ```
 
+Interactive output distinguishes the response from background work. `Response
+complete` means the answer has finished; `Background: Indexing workspace` can
+continue independently. Response timers measure the current turn. Usage beside
+the answer covers that turn; footer totals are labeled `session`. Displayed
+costs are token-based estimates, not billing receipts; incomplete price data
+renders as `session cost unavailable`. `context
+unavailable` means active-context telemetry or the model limit is missing.
+
+The `Input ›` composer starts empty after submission. Up recalls history;
+Ctrl+C cancels an active request. On terminals without a mutable preview,
+incomplete Markdown blocks are buffered under `Receiving response…` and committed
+once when their structure is known. Terminals with scroll regions show a mutable
+tail, which enters scrollback when the generation finishes. If a resize makes
+that preview unavailable, Babel buffers the generation until completion or until
+the preview fits again; it never appends raw Markdown preview bytes.
+
+`/model` marks the active backend, shows alias destinations, and labels input and
+output prices in USD per million tokens. Prices come from policy; a configured
+zero rate does not establish that billing is free. Credential presence does not
+establish service availability. Use `/model show`, `/model why`, or `/model health`
+for routing and operational details.
+
+Preamble-budget diagnostics are retained as `preamble-budget.json` in the run
+bundle. Interactive daemon diagnostics go to `diagnostics/interactive-<pid>.jsonl`
+under the user state directory (`~/.babel`, or `BABEL_STATE_DIR`). The installed
+interactive launcher redirects Node warnings to `diagnostics/node-warnings-<pid>.log`
+before importing the runtime. For direct `node dist/index.js interactive` runs,
+Node's `--redirect-warnings=<file>` flag provides the same warning separation.
+Diagnostic files stay separate from the conversation; startup failures appear as
+failed background tasks with the diagnostic location.
+If the warning log directory is unavailable, startup continues using Node's
+stderr warning output and reports a `Warning diagnostics` background failure.
+
 `setup --json` still reports missing setup pieces. `context preview` remains a
 safe no-mutation probe. Neither replaces starting a chat session.
 

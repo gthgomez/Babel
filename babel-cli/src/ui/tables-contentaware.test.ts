@@ -53,9 +53,9 @@ test('renderContentAwareTable produces columnar output with headers and data', (
   assert.ok(output.includes('PASS'));
 });
 
-test('renderContentAwareTable returns empty string for empty input', () => {
+test('renderContentAwareTable returns no empty table but preserves supplied headers', () => {
   assert.equal(renderContentAwareTable([], []), '');
-  assert.equal(renderContentAwareTable(['Col'], []), '');
+  assert.match(renderContentAwareTable(['Col'], []), /Col/);
 });
 
 test('renderContentAwareTable handles single row tables', () => {

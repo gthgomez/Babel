@@ -268,7 +268,7 @@ export function buildReviewCard(input: ReviewCardInput): ReviewCard {
   const title =
     isVerificationNotApplicable &&
     (kind === 'COMPLETE_UNVERIFIED' || kind === 'VERIFIED_COMPLETE')
-      ? 'Complete'
+      ? 'Response complete'
       : TITLES[kind];
 
   const lines: string[] = [];
@@ -325,16 +325,16 @@ export function buildReviewCard(input: ReviewCardInput): ReviewCard {
   if (hasRealCost || hasRealTokens) {
     const bits: string[] = [];
     if (hasRealCost) bits.push(`$${input.costUsd!.toFixed(4)} this turn`);
-    if (hasRealTokens) bits.push(`${input.tokens} tok${hasRealCost ? '' : ' this turn'}`);
+    if (hasRealTokens) bits.push(`${input.tokens!.toLocaleString('en-US')} tok${hasRealCost ? '' : ' this turn'}`);
     const sessionTokens = input.sessionTokens;
     if (
       hasRealTokens &&
       sessionTokens !== undefined &&
       sessionTokens > (input.tokens ?? 0)
     ) {
-      bits.push(`(session ${sessionTokens})`);
+      bits.push(`(session ${sessionTokens.toLocaleString('en-US')})`);
     }
-    lines.push(`${dim('Cost')}  ${bits.join('  ')}`);
+    lines.push(`${muted('Cost estimate / usage')}  ${bits.join('  ')}`);
   }
 
   const actions = getContextualNextActions(kind, input).filter((action) => {

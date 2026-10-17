@@ -6,7 +6,9 @@ import {
   getTerminalWidth,
   getEffectiveTerminalWidth,
   formatOverflow,
+  visibleLength,
 } from './theme.js';
+import { wrapPrefixedBlock } from './textLayout.js';
 
 export interface LabeledRow {
   label: string;
@@ -136,12 +138,12 @@ export interface MarkdownTableRow {
 export function renderContentAwareTable(
   headers: string[],
   rows: MarkdownTableRow[],
-  options: CheckRowsOptions = {},
+  options: CheckRowsOptions & { width?: number } = {},
 ): string {
-  const width = getEffectiveTerminalWidth();
+  const width = options.width ?? getEffectiveTerminalWidth();
 
   if (width < TABLE_COLUMNAR_THRESHOLD) {
-    return renderTableAsKeyValue(headers, rows, options);
+    return renderTableAsKeyValue(headers, rows, options, width);
   }
   return renderTableAsColumns(headers, rows, options, width);
 }
@@ -155,7 +157,7 @@ function renderTableAsColumns(
 ): string {
   const indent = options.indent ?? '  ';
   const colCount = headers.length;
-  if (colCount === 0 || rows.length === 0) return '';
+  if (colCount === 0) return '';
 
   // Calculate column widths: allocate proportionally
   // Narrative columns (wider text) get more space; compact columns get less
@@ -163,8 +165,8 @@ function renderTableAsColumns(
 
   // Compute natural widths based on content
   const naturalWidths: number[] = headers.map((h, i) => {
-    const headerLen = h.length;
-    const maxCellLen = Math.max(...rows.map((r) => (r.cells[i] ?? '').length));
+    const headerLen = visibleLength(h);
+    const maxCellLen = Math.max(0, ...rows.map((r) => visibleLength(r.cells[i] ?? '')));
     return Math.max(headerLen, maxCellLen);
   });
 
@@ -180,10 +182,25 @@ function renderTableAsColumns(
   });
 
   const lines: string[] = [];
+  if (colWidths.reduce((sum, size) => sum + size, 0) > availableWidth) {
+    return renderTableAsKeyValue(headers, rows, options, width);
+  }
+  const paintRow = (values: string[], style: (text: string) => string): void => {
+    const wrapped = headers.map((_, i) => wrapPrefixedBlock(values[i] ?? '', {
+      firstPrefix: '', continuationPrefix: '', width: colWidths[i]!,
+    }));
+    const height = Math.max(1, ...wrapped.map((cell) => cell.length));
+    for (let row = 0; row < height; row++) {
+      const cells = wrapped.map((cell, i) => {
+        const text = cell[row] ?? '';
+        return text + ' '.repeat(Math.max(0, colWidths[i]! - visibleLength(text)));
+      });
+      lines.push(indent + style(cells.join(' │ ')));
+    }
+  };
 
   // Header row
-  const headerCells = headers.map((h, i) => h.padEnd(colWidths[i]!).slice(0, colWidths[i]!));
-  lines.push(`${indent}${bold(headerCells.join(' │ '))}`);
+  paintRow(headers, bold);
 
   // Separator
   const sepCells = colWidths.map((w) => '─'.repeat(w!));
@@ -191,11 +208,7 @@ function renderTableAsColumns(
 
   // Data rows
   for (const row of rows) {
-    const cells = row.cells.map((cell, i) => {
-      const text = String(cell ?? '');
-      return text.padEnd(colWidths[i]!).slice(0, colWidths[i]!);
-    });
-    lines.push(`${indent}${cells.join(' │ ')}`);
+    paintRow(row.cells.map((cell) => String(cell ?? '')), (text) => text);
   }
 
   return lines.join('\n');
@@ -206,29 +219,29 @@ function renderTableAsKeyValue(
   headers: string[],
   rows: MarkdownTableRow[],
   options: CheckRowsOptions,
+  width: number,
 ): string {
   const indent = options.indent ?? '  ';
-  const width = getEffectiveTerminalWidth();
-  const valueWidth = Math.max(20, width - indent.length - 2);
 
   const lines: string[] = [];
+  if (rows.length === 0) {
+    return wrapPrefixedBlock(headers.join(' · '), { firstPrefix: indent, continuationPrefix: indent, width: Math.max(1, width - 1) }).join('\n');
+  }
 
   for (let ri = 0; ri < rows.length; ri++) {
     const row = rows[ri]!;
     if (ri > 0) {
-      lines.push(muted(`${indent}${'─'.repeat(Math.min(40, width - indent.length))}`));
+      lines.push(muted(`${indent}${'─'.repeat(Math.max(0, Math.min(40, width - indent.length - 1)))}`));
     }
     for (let ci = 0; ci < headers.length; ci++) {
       const label = bold(headers[ci]!);
       const value = String(row.cells[ci] ?? '');
-      const valueLines = formatOverflow(value, valueWidth, options.overflow ?? 'wrap');
-      if (valueLines.length === 1) {
-        lines.push(`${indent}${label}: ${primary(valueLines[0]!)}`);
+      const prefix = `${indent}${label}: `;
+      if (visibleLength(prefix) < width - 8) {
+        lines.push(...wrapPrefixedBlock(primary(value), { firstPrefix: prefix, continuationPrefix: indent + '  ', width: Math.max(1, width - 1) }));
       } else {
-        lines.push(`${indent}${label}:`);
-        for (const vLine of valueLines) {
-          lines.push(`${indent}  ${primary(vLine)}`);
-        }
+        lines.push(...wrapPrefixedBlock(label + ':', { firstPrefix: indent, continuationPrefix: indent, width: Math.max(1, width - 1) }));
+        lines.push(...wrapPrefixedBlock(primary(value), { firstPrefix: indent + '  ', continuationPrefix: indent + '  ', width: Math.max(1, width - 1) }));
       }
     }
   }

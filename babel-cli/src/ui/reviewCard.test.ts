@@ -204,8 +204,8 @@ describe('review card — truthful terminal states', () => {
     assert.match(text, /Summary/);
     assert.match(text, /Patched the login timeout/);
     assert.match(text, /\$0\.0013 this turn/);
-    assert.match(text, /9286 tok/);
-    assert.match(text, /\(session 44682\)/);
+    assert.match(text, /9,286 tok/);
+    assert.match(text, /\(session 44,682\)/);
   });
 
   it('T16b: Read-only query with verificationApplicability: not_applicable displays clean Complete title', () => {
@@ -215,9 +215,9 @@ describe('review card — truthful terminal states', () => {
       changedFiles: [],
       verificationApplicability: 'not_applicable',
     });
-    assert.equal(card.title, 'Complete');
+    assert.equal(card.title, 'Response complete');
     const text = stripAnsi(card.body);
-    assert.match(text, /Complete/);
+    assert.match(text, /Response complete/);
     assert.doesNotMatch(text, /Complete — unverified/);
     assert.doesNotMatch(text, /Not run — not verified/);
     assert.doesNotMatch(text, /\[D\] Diff/);

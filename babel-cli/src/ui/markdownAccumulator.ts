@@ -35,10 +35,12 @@ import { TableHoldbackScanner } from './tableHoldback.js';
 const HAS_COLOR = supportsColor();
 
 /** How structural restyles are turned into terminal writes. */
-export type AccumulatorPaintPolicy = 'csi' | 'append-only';
+export type AccumulatorPaintPolicy = 'csi' | 'append-only' | 'stable' | 'snapshot';
 
 export class MarkdownAccumulator {
   private fullText = '';
+  private pendingSource = '';
+  private settled = false;
   private lastRendered = '';
   private lastTotalLines = 0;
 
@@ -517,6 +519,19 @@ export class MarkdownAccumulator {
    * Returns delta to append, or '' if nothing held.
    */
   finalize(renderFn: (text: string) => string): string {
+    if (this.settled) return '';
+    this.settled = true;
+    if (this._paintPolicy === 'stable') {
+      const tail = renderFn(this.pendingSource).trimEnd();
+      this.pendingSource = '';
+      this.lastRendered += tail;
+      this.lastTotalLines = this._logicalLineCount(this.lastRendered);
+      return tail;
+    }
+    if (this._paintPolicy === 'snapshot') {
+      this.lastRendered = renderFn(this.fullText);
+      return this.lastRendered;
+    }
     if (!this.fullText) return '';
     if (!this._adaptiveTableHold && this._tableHeldLines === 0 && !this._tableScanner.shouldHold()) {
       return '';
@@ -545,9 +560,46 @@ export class MarkdownAccumulator {
    * @returns The delta output to write, or '' if nothing new to show
    */
   feed(chunk: string, renderFn: (text: string) => string): string {
-    if (!chunk) return '';
+    if (!chunk || this.settled) return '';
 
     this.fullText += chunk;
+    if (this._paintPolicy === 'snapshot') {
+      // Wake the coalescer; render the latest snapshot once per paint batch.
+      return chunk;
+    }
+    if (this._paintPolicy === 'stable') {
+      // Never expose speculative raw Markdown in an append-only terminal.
+      // Keep the final block mutable (paragraph/setext heading, loose list,
+      // open fence or table). Only earlier complete blocks may enter history.
+      this.pendingSource += chunk;
+      if (!chunk.includes('\n')) return '';
+      const tokens = marked.lexer(this.pendingSource);
+      let lastBlock = tokens.length - 1;
+      while (lastBlock >= 0 && tokens[lastBlock]?.type === 'space') lastBlock--;
+      if (lastBlock <= 0) return '';
+      const stableLength = tokens.slice(0, lastBlock).reduce((n, token) => n + token.raw.length, 0);
+      // Marked normalizes CRLF/CR before computing token.raw. Map its offset
+      // back to the original source, including CRLF split between feeds.
+      let sourceEnd = 0;
+      for (let normalized = 0; normalized < stableLength && sourceEnd < this.pendingSource.length; normalized++) {
+        if (this.pendingSource[sourceEnd] === '\r' && this.pendingSource[sourceEnd + 1] === '\n') sourceEnd++;
+        sourceEnd++;
+      }
+      const stable = this.pendingSource.slice(0, sourceEnd);
+      // Reference definitions may arrive after the prose that uses them.
+      // An append-only terminal cannot repair an already committed reference.
+      for (let opening = stable.indexOf('['); opening >= 0;) {
+        const closing = stable.indexOf(']', opening + 1);
+        if (closing < 0 || stable[closing + 1] !== '(') return '';
+        opening = stable.indexOf('[', closing + 1);
+      }
+      this.pendingSource = this.pendingSource.slice(sourceEnd);
+      const rendered = renderFn(stable).trimEnd();
+      const delta = rendered ? rendered + '\n\n' : '';
+      this.lastRendered += delta;
+      this.lastTotalLines = this._logicalLineCount(this.lastRendered);
+      return delta;
+    }
 
     // Detect if we are currently inside an unclosed fenced code block.
     // Uses line-based scanning to track fence open/close state, avoiding the
@@ -651,7 +703,11 @@ export class MarkdownAccumulator {
    * Used by hardware two-region streaming to replace the streaming area
    * when a delta embeds cursor-up rewrite sequences.
    */
-  getRenderedText(): string {
+  getRenderedText(renderFn?: (text: string) => string): string {
+    if (this._paintPolicy === 'snapshot' && renderFn) {
+      this.lastRendered = renderFn(this.fullText);
+      this.lastTotalLines = this._logicalLineCount(this.lastRendered);
+    }
     return this.lastRendered;
   }
 
@@ -668,6 +724,10 @@ export class MarkdownAccumulator {
    *   the accumulator has no text
    */
   reflow(width: number, renderFn: (text: string) => string): string {
+    if (this._paintPolicy === 'stable') {
+      this._terminalWidth = width;
+      return ''; // Committed scrollback belongs to the terminal, never replay it.
+    }
     if (!this.fullText) return '';
 
     const prevWidth = this._terminalWidth;
@@ -706,6 +766,8 @@ export class MarkdownAccumulator {
   /** Reset the accumulator for a new conversation. */
   reset(): void {
     this.fullText = '';
+    this.pendingSource = '';
+    this.settled = false;
     this.lastRendered = '';
     this._lastStructuralAnsi = '';
     this.lastTotalLines = 0;

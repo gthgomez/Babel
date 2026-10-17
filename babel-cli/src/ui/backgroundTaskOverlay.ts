@@ -23,7 +23,7 @@ import { getEffectiveTerminalWidth } from './theme.js';
  */
 export function renderBackgroundTaskOverlay(width?: number): string | null {
   const tasks = backgroundTaskRegistry.getAllTasks();
-  const activeCount = tasks.filter((t) => t.status === 'running').length;
+  const activeCount = tasks.filter((t) => t.status !== 'completed').length;
   if (activeCount === 0) return null;
 
   const w = width ?? getEffectiveTerminalWidth();

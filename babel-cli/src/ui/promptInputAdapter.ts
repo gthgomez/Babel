@@ -27,7 +27,7 @@ import {
   getComposerQueueSnapshot,
 } from './composerQueue.js';
 import { OutputBuffer } from './outputBuffer.js';
-import { supportsColor } from './theme.js';
+import { supportsColor, stripAnsi } from './theme.js';
 import { isLegacyWindowsConsole } from './terminalProbe.js';
 import { handleInteractiveInterrupt } from './interruptHost.js';
 import type { KeyEvent } from './keyInput.js';
@@ -203,7 +203,7 @@ class PromptInputAdapterImpl implements PromptInputAdapter {
     onVoiceToggle?: () => boolean;
     presentationTarget?: PromptInputPresentationTarget;
   }) {
-    this.currentPrompt = config.prompt ?? '› ';
+    this.currentPrompt = !config.prompt || stripAnsi(config.prompt) === '› ' ? 'Input › ' : config.prompt;
     this.completer = config.completer;
     this.historySnapshot = config.history ?? [];
     this.vimMode = config.vimMode ?? false;
@@ -408,6 +408,7 @@ class PromptInputAdapterImpl implements PromptInputAdapter {
   setPrompt(prompt: string): void {
     this.currentPrompt = prompt;
     this.internalRl.setPrompt(prompt);
+    this.promptInput?.setPrompt(prompt);
   }
 
   pause(): this {

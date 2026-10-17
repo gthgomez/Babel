@@ -192,6 +192,8 @@ describe('PromptInputAdapter API', () => {
       adapter.setPrompt('❯');
       // _prompt is the internal getter matching readline's _prompt
       assert.equal((adapter as any)._prompt, '❯');
+      const input = (adapter as any).getPromptInput() as import('./promptInput.js').PromptInput;
+      assert.match(input.getView({ x: 0, y: 0, width: 40, height: 4 }).rows[0] ?? '', /❯/);
     });
   });
 

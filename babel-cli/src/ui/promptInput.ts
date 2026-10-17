@@ -477,6 +477,13 @@ export class PromptInput {
     };
   }
 
+  /** Update the visible composer label and its cursor offset together. */
+  setPrompt(prompt: string): void {
+    this.config.prompt = prompt;
+    this.promptLen = visibleLength(prompt);
+    if (this.active) this.render();
+  }
+
   /** Set the text buffer (e.g., for restoring a draft). */
   setText(text: string): void {
     this.lines = text.split("\n");
@@ -1976,6 +1983,8 @@ export class PromptInput {
       this.render();
     } else {
       this.deactivate();
+      // The printed submission is history; the next activation is a new draft.
+      this.clear();
     }
 
     // Fire config onSubmit first
