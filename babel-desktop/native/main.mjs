@@ -5,7 +5,7 @@ import {readFile,writeFile,rename,mkdir,stat,realpath} from 'node:fs/promises';
 import {basename,dirname,join,isAbsolute} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {BabelChild,buildRunArgs,EXECUTION_PROFILE} from './child.mjs';
-import {RemoteBridgeChild} from './remoteHost.mjs';
+import {RemoteBridgeChild,releaseBridgeIfCurrent} from './remoteHost.mjs';
 import {listDirectory,readProjectFile} from './workspace.mjs';
 import {APP_URL,REPOSITORY_URL,isAppUrl,parsePreferences} from './security.mjs';
 import {resolveOfficialCli,bundledEnvironment} from './runtime.mjs';
@@ -374,11 +374,12 @@ async function start(){
     if(!preferences.projectRoot)throw new Error('Open a project first');
     const port=Number(options?.port??4545);
     if(!Number.isInteger(port)||port<1024||port>65535)throw new Error('Invalid remote bridge port');
-    remoteBridge=new RemoteBridgeChild({executable:officialRuntime().executable,entry:cliEntry,projectRoot:preferences.projectRoot,env:runtimeEnvironment(),inheritEnv:false});
+    const bridge=new RemoteBridgeChild({executable:officialRuntime().executable,entry:cliEntry,projectRoot:preferences.projectRoot,env:runtimeEnvironment(),inheritEnv:false});
+    remoteBridge=bridge;
     try{
-      return await remoteBridge.start({port,onLine:({stream,text})=>{if(window&&!window.isDestroyed())window.webContents.send('babel:remote-log',{stream,text});}});
+      return await bridge.start({port,onLine:({stream,text})=>{if(window&&!window.isDestroyed())window.webContents.send('babel:remote-log',{stream,text});}});
     }catch(error){
-      remoteBridge=null;
+      remoteBridge=releaseBridgeIfCurrent(remoteBridge,bridge);
       throw error;
     }
   });
