@@ -235,3 +235,17 @@ test('resolveDailyProfile honors BABEL_DAILY_PROFILE=terminal', () => {
     }
   }
 });
+test('inferIntentContract: a determinate artifact prohibition does not suppress an implementation task', () => {
+  const scoped = inferIntentContract(
+    'The test in math.test.js fails because add() returns the wrong value. Fix the implementation in math.js so every test passes. Do not modify the test file.',
+  );
+  assert.equal(scoped.no_write_requested, false);
+  assert.equal(scoped.task_kind, 'implementation');
+  assert.equal(scoped.write_intent, true);
+});
+
+test('inferIntentContract: a standalone determinate prohibition stays read-only', () => {
+  const standalone = inferIntentContract('Do not modify the test file.');
+  assert.equal(standalone.no_write_requested, true);
+  assert.equal(standalone.write_intent, false);
+});
