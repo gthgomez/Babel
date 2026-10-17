@@ -215,6 +215,13 @@ export class BridgeServer {
   private _port = DEFAULT_BRIDGE_PORT;
   readonly protocolGateway: ProtocolGateway;
   private readonly listenHost = '127.0.0.1';
+  /**
+   * Per-launch instance label supplied by the owning host (Desktop). Echoed on
+   * /health so a host can prove the responder is the child it started rather
+   * than any other loopback server on the same port. It is not a credential
+   * and grants no authority.
+   */
+  private readonly bridgeInstance = (process.env['BABEL_BRIDGE_INSTANCE'] ?? '').trim();
   readonly wsTickets = new WsTicketStore();
   readonly devicePairing: DevicePairingService;
 
@@ -362,6 +369,7 @@ export class BridgeServer {
         ok: true,
         bind: `${this.listenHost}:${this._port}`,
         protocol: 'adr-010',
+        ...(this.bridgeInstance ? { instance: this.bridgeInstance } : {}),
       });
       return;
     }
