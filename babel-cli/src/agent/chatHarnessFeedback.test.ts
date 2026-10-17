@@ -48,7 +48,7 @@ function installFeedbackSensitiveScript(engine: ChatEngine) {
     ) {
       const request = messages ?? []
       requests.push(request.map(message => ({ ...message })))
-      const hasControllerFeedback = request.some(message => message.name === 'harness_feedback')
+      const hasControllerFeedback = request.some(message => message.name === 'harness_feedback' && !message.content.startsWith('Verification evidence at submission start:'))
       calls += 1
 
       if (!hasControllerFeedback) {
@@ -152,12 +152,12 @@ test('rejected native completion feedback is controller-owned, durable, and chan
   assert.equal(done.toolCalls?.filter(call => ['write_file', 'str_replace', 'apply_patch'].includes(call.tool)).length, 0)
 
   const visibleFeedback = runner.requests.flatMap(messages =>
-    messages.filter(message => message.name === 'harness_feedback'))
-  assert.equal(runner.requests[0]?.some(message => message.name === 'harness_feedback'), false,
+    messages.filter(message => message.name === 'harness_feedback' && !message.content.startsWith('Verification evidence at submission start:')))
+  assert.equal(runner.requests[0]?.some(message => message.name === 'harness_feedback' && !message.content.startsWith('Verification evidence at submission start:')), false,
     'the first request contains no synthetic controller rejection feedback')
-  assert.equal(runner.requests[1]?.some(message => message.name === 'harness_feedback'), true,
+  assert.equal(runner.requests[1]?.some(message => message.name === 'harness_feedback' && !message.content.startsWith('Verification evidence at submission start:')), true,
     'the rejected completion causes feedback before the next tool decision')
-  assert.equal(runner.requests[2]?.some(message => message.name === 'harness_feedback'), true,
+  assert.equal(runner.requests[2]?.some(message => message.name === 'harness_feedback' && !message.content.startsWith('Verification evidence at submission start:')), true,
     'feedback remains in context after the inspection result')
   assert.ok(visibleFeedback.length > 0, 'the subsequent native provider request sees gate feedback')
   for (const message of visibleFeedback) {

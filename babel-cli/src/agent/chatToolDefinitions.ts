@@ -1072,7 +1072,7 @@ function buildAllChatToolDefinitions(): ToolDefinition[] {
       type: 'function',
       function: {
         name: 'sub_agent',
-        description: 'Spawn a sub-agent for an investigation or mutation. Children are sequential. For edits set mutation=true and concrete write_scope; mutation=false is read-only regardless of instructions. Child edit formats are write_file and apply_patch; str_replace is a parent Chat tool, not a child action. Prefer a direct edit for a small already-localized change. Children inherit the selected model.',
+        description: 'Spawn a sub-agent for an investigation or mutation. Children run sequentially. For edits set mutation=true and concrete write_scope; mutation=false is read-only regardless of instructions. Child edit formats are write_file and apply_patch; str_replace is a parent Chat tool, not a child action. Prefer a direct edit for a small already-localized change. Children inherit the selected model.',
         parameters: {
           type: 'object',
           properties: {

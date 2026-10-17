@@ -100,12 +100,12 @@ function makeFixture(): string {
   );
   writeFileSync(
     join(root, 'verify.mjs'),
-    "import { readFileSync } from 'node:fs';\nconst s = readFileSync(new URL('./parser.ts', import.meta.url), 'utf8');\nprocess.exit(s.includes('+ Number(parts[1])') ? 0 : 1);\n",
+    "import { readFileSync } from 'node:fs';\nimport { test } from 'node:test';\nimport assert from 'node:assert/strict';\nconst s = readFileSync(new URL('./parser.ts', import.meta.url), 'utf8');\ntest('the operator is repaired', () => assert.ok(s.includes('+ Number(parts[1])')));\n",
     'utf8',
   );
   writeFileSync(
     join(root, 'package.json'),
-    `${JSON.stringify({ name: 'fixture', private: true, scripts: { test: 'node verify.mjs' } })}\n`,
+    `${JSON.stringify({ name: 'fixture', private: true, scripts: { test: 'node --test --test-reporter=tap verify.mjs' } })}\n`,
     'utf8',
   );
   return root;
@@ -120,7 +120,8 @@ describe('write + authoritative verifier settles exactly once', { concurrency: f
   test('a successful npm test after str_replace binds a receipt and completes without protocol corruption', async () => {
     const root = makeFixture();
     const runId = 'verifier-loop-regression';
-    process.env['BABEL_RUNS_DIR'] = join(root, 'runs');
+    const runtime = mkdtempSync(join(tmpdir(), 'babel-verifier-loop-runtime-'));
+    process.env['BABEL_RUNS_DIR'] = join(runtime, 'runs');
     const originalFetch = globalThis.fetch;
 
     const toolNames: Array<string | null> = ['read_file', 'str_replace', 'run_command', null];
@@ -181,8 +182,11 @@ describe('write + authoritative verifier settles exactly once', { concurrency: f
         events.push(event);
       }
       const terminal = events.at(-1);
-      assert.equal(terminal?.type, 'done', 'the write+verify loop terminates instead of aborting');
+      assert.equal(terminal?.type, 'done', `the write+verify loop terminates instead of aborting: ${JSON.stringify(terminal)}`);
       assert.equal(readFileSync(join(root, 'parser.ts'), 'utf8').includes('+ Number(parts[1])'), true);
+      const receipt=(engine as unknown as {lastVerifierReceipt:{stale:boolean;tests_total:number}|null}).lastVerifierReceipt;
+      assert.equal(receipt?.stale,false);
+      assert.equal(receipt?.tests_total,1);
 
       const sessionEvents = readSessionEvents(runId);
       const verifierTerminals = sessionEvents.filter(
@@ -200,6 +204,7 @@ describe('write + authoritative verifier settles exactly once', { concurrency: f
     } finally {
       globalThis.fetch = originalFetch;
       rmSync(root, { recursive: true, force: true });
+      rmSync(runtime, { recursive: true, force: true });
     }
   });
 });

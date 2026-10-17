@@ -6,6 +6,7 @@
  */
 
 import { mkdirSync, writeFileSync } from 'node:fs'
+import { stripVTControlCharacters } from 'node:util'
 import { isAbsolute, join, normalize, relative, resolve, sep } from 'node:path'
 
 export const OBSERVATION_HEAD_CHARS = 1800
@@ -172,7 +173,7 @@ export function parseStructuredFailures(
   tool?: string,
   command?: string,
 ): FailureParseResult {
-  const text = `${stdout}\n${stderr}`
+  const text = stripVTControlCharacters(`${stdout}\n${stderr}`)
   const cmd = `${tool ?? ''} ${command ?? ''}`
 
   const jest = parseJestVitest(text)
@@ -281,7 +282,7 @@ function parseTsc(text: string): CompiledFailure[] {
 }
 
 function parseNodeTrace(text: string): CompiledFailure[] {
-  const loc = /^\s*at\s+.+\((\S+\.[cm]?js):(\d+):(\d+)\)/m.exec(text)
+  const loc = /^\s*(?:at\s+)?[^\s()]+\s+\((\S+\.[cm]?js):(\d+):(\d+)\)/m.exec(text)
     ?? /^\s*at\s+(\S+\.[cm]?js):(\d+):(\d+)/m.exec(text)
   const err = /^\s*(?:error:\s*['"]?)?(?:Error|TypeError|ReferenceError|AssertionError)(?:\s+\[[A-Z_]+\])?:\s*(.+)$/m.exec(text)
   const testName = /^\s*(?:✖|not ok\s+\d+\s*[-:]?)\s+(.+?)(?:\s+\([\d.]+m?s\))?\s*$/m.exec(text)?.[1]

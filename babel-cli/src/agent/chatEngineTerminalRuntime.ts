@@ -75,6 +75,9 @@ import {
 import { confirmedMutationPaths } from './mutationTools.js'
 import { detectAndBuildBlockedReport } from './chatEngineSupport.js'
 import { classifyChatTaskIntent } from './chatEngineTaskIntent.js'
+import { isSessionEventPersistenceFailure } from './sessionEventDiagnostics.js'
+import { hasInspectedNoChangeEvidence } from './completionGatePolicy.js'
+import { refreshChatVerifierReceiptStalenessSync } from '../evidence/chatRevisionBinding.js'
 
 /** Immutable terminal inputs plus the mutable evidence objects used by existing finalizers. */
 export interface ChatTerminalSnapshot {
@@ -87,6 +90,7 @@ export interface ChatTerminalSnapshot {
     turnIndex: number
     turnId: string | null
     taskContract: TaskContractV1 | undefined
+    acceptedOperation?: import('../config/chatTaskClass.js').TaskOperation | undefined
   }
   outcome: {
     hasMutation: boolean
@@ -155,6 +159,20 @@ export type ChatStreamDoneExtra = {
   reason?: TerminalReason
 }
 
+/** Inspection can prove no change is needed; zero writes alone cannot. */
+function normalizeInspectedNoChange(snapshot: ChatTerminalSnapshot, outcome: TerminalOutcome): TerminalOutcome {
+  const implementation = snapshot.context.acceptedOperation !== undefined
+    ? snapshot.context.acceptedOperation !== 'READ_ONLY'
+    : classifyChatTaskIntent(snapshot.context.options.task) === 'execute'
+  if (outcome === 'NO_CHANGE_REQUIRED' && implementation)
+    refreshChatVerifierReceiptStalenessSync(snapshot.context.options.projectRoot, snapshot.outcome.lastVerifierReceipt)
+  const verifier = snapshot.outcome.lastVerifierReceipt
+  return outcome === 'NO_CHANGE_REQUIRED' && implementation &&
+    !hasInspectedNoChangeEvidence(snapshot.evidence.observability.toolCallLog) &&
+    !(verifier?.authority === true && verifier.exit_code === 0 && verifier.stale === false)
+    ? 'AGENT_FAILURE' : outcome
+}
+
 /** Finalize a completed stream through the kernel decision and durable parity owner. */
 export function completeChatStream(
   input: ChatTerminalInput,
@@ -186,12 +204,7 @@ export function completeChatStream(
     planMode: snapshot.context.executionProfile === 'plan',
   })
   if (needsHumanDecision) requestedOutcome = 'NEEDS_HUMAN_DECISION'
-  if (requestedOutcome === 'NO_CHANGE_REQUIRED' &&
-      classifyChatTaskIntent(snapshot.context.options.task) === 'execute' &&
-      !(snapshot.outcome.lastVerifierReceipt?.exit_code === 0 &&
-        snapshot.outcome.lastVerifierReceipt.stale === false)) {
-    requestedOutcome = 'NEEDS_HUMAN_DECISION'
-  }
+  requestedOutcome = normalizeInspectedNoChange(snapshot, requestedOutcome)
   const planCompletion =
     snapshot.context.executionProfile === 'plan' &&
     !needsHumanDecision &&
@@ -348,7 +361,13 @@ export function failChatStream(
     status: 'failed',
   })
   const runAllowance = assembleChatRunAllowance(input, terminal.status)
-  effects.finalizeTurn(terminal.outcome, terminal.status, terminalReason)
+  try {
+    effects.finalizeTurn(terminal.outcome, terminal.status, terminalReason)
+  } catch (failure) {
+    // A broken primary log cannot certify completion. Still deliver its
+    // explicit failed event; never suppress an unrelated finalization error.
+    if (!isSessionEventPersistenceFailure(error) || !isSessionEventPersistenceFailure(failure)) throw failure
+  }
   persistChatTranscript(snapshot.context.engineRunDir, snapshot.presentation.conversation)
   const finalizedTelemetry =
     snapshot.presentation.currentTurnTelemetry?.finalize({
@@ -615,6 +634,7 @@ export function assembleChatResult(
       hasMutation,
       planMode: snapshot.context.executionProfile === 'plan',
     })
+    outcome = normalizeInspectedNoChange(snapshot, outcome)
   }
   const planCompletion =
     snapshot.context.executionProfile === 'plan' && finalStatus === 'completed'

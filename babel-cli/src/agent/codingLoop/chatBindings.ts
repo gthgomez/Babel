@@ -103,24 +103,26 @@ export function ingestVerifierResult(input: {
           ...(trustedTargets.length > 0 ? { failingTargets: trustedTargets } : {}),
           hypothesisAtFailure: state.currentHypothesis,
         })
-        if (trustedTargets.length === 0 && input.recoveryBinding && input.recoveryProjectRoot) {
-          state = applyWorkingStateEvent(state, {
+        if (input.recoveryBinding && input.recoveryProjectRoot) {
+          const candidates = captureLocalizationCandidates({
+            projectRoot: input.recoveryProjectRoot, stdout: input.stdout,
+            stderr: input.stderr, tool: input.tool, command: input.target,
+          })
+          // A prior edit must not hide a remaining assertion's dependency.
+          // Preserve direct recovery for an already implicated non-test target.
+          if (trustedTargets.length === 0 || candidates.some(candidate => candidate.source === 'test_identity')) {
+            state = applyWorkingStateEvent(state, {
             type: 'localization_begin',
             localization: startFailureLocalization(
               failureSignature,
               input.recoveryBinding,
-              captureLocalizationCandidates({
-                projectRoot: input.recoveryProjectRoot,
-                stdout: input.stdout,
-                stderr: input.stderr,
-                tool: input.tool,
-                command: input.target,
-              }),
+              candidates,
               captureLocalizationTestHints({
                 stdout: input.stdout, stderr: input.stderr, tool: input.tool, command: input.target,
               }),
             ),
-          })
+            })
+          }
         }
       }
     }

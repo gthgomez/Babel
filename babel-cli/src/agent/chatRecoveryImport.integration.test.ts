@@ -7,7 +7,8 @@ import {execFileSync} from 'node:child_process'
 import {ChatEngine} from './chatEngine.js'
 import type {ChatToolAction} from './chatToolDefinitions.js'
 import type {ToolContext} from '../localTools.js'
-import type {WorkingState} from './codingLoop/workingState.js'
+import {createWorkingState,type WorkingState} from './codingLoop/workingState.js'
+import {ingestVerifierResult} from './codingLoop/chatBindings.js'
 import {recoveryObservationId} from './codingLoop/recoveryPlan.js'
 import {SafeExecutor} from '../sandbox.js'
 import {resetDockerAvailabilityCache,setDockerAvailableForTest} from '../config/benchmarkContainer.js'
@@ -19,7 +20,21 @@ const fixtures = [
     testSource:"import test from 'node:test'; import assert from 'node:assert/strict'; import {readFileSync} from 'node:fs'; test('busy style',()=>assert.match(readFileSync(new URL('./styles.css',import.meta.url),'utf8'),/\\.status-busy\\s*\\{[^}]*opacity\\s*:\\s*0?\\.6/s));\n"},
 ]
 
-for (const fixture of fixtures) test(`real recovery dispatch links the failed assertion through its ${fixture.name} and verifies the scoped repair`, async t => {
+test('an earlier mutation preserves direct non-test recovery without assertion localization',t=>{
+  const root=mkdtempSync(join(tmpdir(),'babel-direct-recovery-'))
+  t.after(()=>rmSync(root,{recursive:true,force:true}))
+  writeFileSync(join(root,'source.ts'),'export const count: string = 1;\n')
+  const state=createWorkingState('Fix the type error')
+  state.lastMutation={path:'source.ts',at:1,fingerprint:'fixture-prior-edit'}
+  const result=ingestVerifierResult({state,tool:'test_run',target:'npm run typecheck',exitCode:1,
+    stdout:'',stderr:"source.ts(1,14): error TS2322: Type 'number' is not assignable to type 'string'.",
+    summary:'typecheck failed',recoveryProjectRoot:root,recoveryBinding:{schemaVersion:1,taskId:'fixture-task',contractHash:'fixture-contract',repositoryIdentity:'fixture-repo',workspaceRevision:'fixture-revision'}})
+  assert.ok(result.state.recoveryGate?.failingTargets?.includes('source.ts'))
+  assert.equal(result.state.recoveryGate?.satisfied,false,'the prior edit alone is not fresh recovery evidence')
+  assert.equal(result.state.localization,undefined,'preserve direct recovery for an already implicated non-test target')
+})
+
+for (const fixture of fixtures) for (const priorMutation of [false,true]) test(`real recovery dispatch links the failed assertion through its ${fixture.name}${priorMutation ? ' after an earlier mutation' : ''} and verifies the scoped repair`, async t => {
   const storage=mkdtempSync(join(tmpdir(),'babel-recovery-import-'))
   const root=join(storage,'project'), runDir=join(storage,'runtime')
   mkdirSync(root);mkdirSync(runDir)
@@ -32,13 +47,14 @@ for (const fixture of fixtures) test(`real recovery dispatch links the failed as
   const {source,testSource}=fixture
   writeFileSync(join(root,fixture.path),source);writeFileSync(join(root,fixture.testPath),testSource)
   writeFileSync(join(root,'package.json'),'{"type":"module","scripts":{"test":"node --test"}}\n')
-  for(const args of [['init','-q'],['add','--',fixture.path,fixture.testPath,'package.json'],['-c','user.name=Fixture','-c','user.email=fixture@example.test','commit','-qm','fixture']])
+  if(priorMutation)writeFileSync(join(root,'preparation.js'),'export const prepared = false;\n')
+  for(const args of [['init','-q'],['add','--',fixture.path,fixture.testPath,'package.json',...(priorMutation?['preparation.js']:[])],['-c','user.name=Fixture','-c','user.email=fixture@example.test','commit','-qm','fixture']])
     execFileSync('git',args,{cwd:root,windowsHide:true}) // disposable fixture; every failure throws
   let verifiers=0
   const childEnv={...process.env};delete childEnv['NODE_TEST_CONTEXT']
   t.mock.method(SafeExecutor.prototype,'testRunAsync',async()=>{
     verifiers++
-    try{return {exit_code:0,stdout:execFileSync(process.execPath,['--test',fixture.testPath],{cwd:root,env:childEnv,encoding:'utf8',windowsHide:true}),stderr:''}}
+    try{return {exit_code:0,stdout:execFileSync(process.execPath,['--test','--test-reporter=tap',fixture.testPath],{cwd:root,env:childEnv,encoding:'utf8',windowsHide:true}),stderr:''}}
     catch(error){const e=error as {status:number;stdout:string;stderr:string};return {exit_code:e.status,stdout:String(e.stdout),stderr:String(e.stderr)}}
   })
   const engine=new ChatEngine({task:'Fix the failing tests. Preserve tests and package metadata.',projectRoot:root})
@@ -46,6 +62,9 @@ for (const fixture of fixtures) test(`real recovery dispatch links the failed as
   const context:ToolContext={agentId:'test',runId:'test',runDir,babelRoot:root,projectRoot:root}
   let index=0
   const run=(action:ChatToolAction)=>probe.executeOneAction(action,context,{}, {index:index++,ownerGeneration:0})
+  // An earlier valid edit must not prevent localizing the remaining failure
+  // in a different implementation/data file. This is the installed C1 branch.
+  if(priorMutation)await run({type:'write_file',path:'preparation.js',content:'export const prepared = true;\n'})
   // Ordinary journeys inspect first. Pre-failure cached reads cannot stand in
   // for the controller's required fresh post-failure observations.
   await run({type:'read_file',path:fixture.testPath})
@@ -57,6 +76,8 @@ for (const fixture of fixtures) test(`real recovery dispatch links the failed as
   await probe.executeActions([{type:'read_file',path:fixture.testPath},{type:'read_file',path:fixture.path},{type:'read_file',path:'package.json'}],{})
   const gate=probe.workingState.recoveryGate!
   assert.ok(gate.failingTargets?.includes(fixture.path))
+  assert.ok(!gate.failingTargets?.includes('package.json'),'an unrelated read cannot broaden repair scope')
+  if(priorMutation)assert.ok(gate.failingTargets?.includes('preparation.js'),'retain the previously implicated edit target')
   assert.equal(gate.observedKeys?.length,2)
   const plan={schemaVersion:1 as const,failureSignature:gate.failureSignature,workspaceRevision:gate.binding!.workspaceRevision,
     hypothesisClass:'logic' as const,targetIdentities:[fixture.path],actionFamily:'str_replace' as const,criterionId:'npm test',supportingObservationIds:gate.observedKeys!.map(recoveryObservationId)}

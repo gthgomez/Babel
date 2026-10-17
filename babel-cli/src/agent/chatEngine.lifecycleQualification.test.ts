@@ -561,11 +561,9 @@ describe('ChatEngine lifecycle and crash qualification', { concurrency: false },
       assert.ok(events.some((event) => event.type === 'tool_start'), `the injected runner must reach tool dispatch: ${JSON.stringify(events)}`);
       const terminal = events.find((event) => event.type === 'failed' || event.type === 'done');
       assert.ok(terminal, `persistence failure must reach a terminal outcome: ${JSON.stringify(events)}`);
-      if (terminal?.type === 'done') {
-        assert.notEqual(terminal.outcome, 'VERIFIED_COMPLETE', `persistence failure fabricated success: ${JSON.stringify(events)}`);
-        assert.notEqual(terminal.outcome, 'NO_CHANGE_REQUIRED', `persistence failure fabricated success: ${JSON.stringify(events)}`);
-        assert.ok(terminal.blockedReport, `blocked terminal must retain a diagnostic report: ${JSON.stringify(events)}`);
-      }
+      assert.equal(terminal.type, 'failed', 'an unavailable primary log must explicitly fail the stream');
+      assert.ok(!events.some(event => event.type === 'tool_complete'), 'no tool effect crosses the failed durable boundary');
+      assert.match(terminal.error, /session event persistence failed/, 'the failed event retains the primary-log error');
       assert.equal(engine.getParityRuntime().sessionEvents.events.some((event) => event.kind === 'tool_completed'), false);
     } finally {
       fixture.cleanup();

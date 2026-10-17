@@ -401,7 +401,7 @@ function stripInformationalFrames(text: string): string {
 const NOUN_GUARD_PREFIX =
   '(?<!\\b(?:this|that|the|these|those|a|an|any|your|my|our|their|its|said|such|same|net)\\s)';
 const GUARDED_MUTATION_VERBS =
-  `${NOUN_GUARD_PREFIX}(?:change|patch|fix|update|repair|optimize|bump|convert|migrate)`;
+  `${NOUN_GUARD_PREFIX}(?:change|patch|fix|update|repair|resolve|optimize|bump|convert|migrate)`;
 const MUTATION_VERB_SOURCE =
   `implement|create|write|refactor|apply|modify|edit|add|replace|rename|${GUARDED_MUTATION_VERBS}`;
 const DESTRUCTIVE_VERB_SOURCE = 'delete|remove|rm|drop|erase|unlink';
@@ -460,15 +460,22 @@ export function hasExplicitEditDenial(taskText: string): boolean {
 
 /** An explanation/review topic is not an imperative, even if named add/fix. */
 export function isReadOnlyTaskFrame(taskText: string): boolean {
-  const prose = stripFencedCodeBodies(taskText);
+  const prose = stripInformationalFrames(stripFencedCodeBodies(taskText));
   if (!/^\s*(?:explain|describe|summarize|review|audit|what|why|how)\b/i.test(prose)) return false;
   // Bare coordinated names ("explain add and remove behavior") are topics.
   // A separate imperative, an immediate "review and fix", or an explicit
   // object after the paired verb is needed to leave the read-only frame.
   const verbs = `(?:${READ_ONLY_VERB_SOURCE}|make|order|sort)`;
   const directive = new RegExp(
-    `(?:\\b(?:then|afterwards)\\s+|[.;!?\\r\\n]\\s*|^\\s*(?:review|audit)\\s+and\\s+)(?:please\\s+)?${verbs}\\b|\\band\\s+${verbs}\\s+(?:it|this|that|the|a|an)\\b`, 'i');
-  return !directive.test(prose);
+    `(?:\\b(?:then|afterwards)\\s+|[.;!?\\r\\n]\\s*|^\\s*(?:review|audit)\\s+and\\s+)(?:please\\s+)?${verbs}\\b|\\band\\s+${verbs}\\s+(?:it|this|that|the|a|an|any|all)\\b`, 'i');
+  if (directive.test(prose)) return false;
+  // Coordinated API names remain topics. A repair predicate with its own
+  // ordinary object ("and fix bugs", "and repair parser.js") is an action.
+  const topicName = '[A-Za-z_$][\\w$]*';
+  const topicList = new RegExp(`^\\s*(?:explain|describe|summarize|review|audit|what|why|how)\\s+(?:how\\s+)?${topicName}(?:\\s*(?:,|and|or)\\s*${topicName})+\\s+(?:behavior|semantics|work|operations?|functions?|methods?|apis?)\\b`, 'i');
+  const coordinatedEdit = new RegExp(`\\band\\s+(?:please\\s+)?(?:${MUTATION_VERB_SOURCE}|${DESTRUCTIVE_VERB_SOURCE}|make|order|sort)\\s+\\S+`, 'i');
+  const topic = topicList.exec(prose);
+  return !coordinatedEdit.test(topic ? prose.slice(topic[0].length) : prose);
 }
 
 /**

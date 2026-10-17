@@ -145,8 +145,10 @@ describe('budgetKillPolicy', () => {
       new URL('./chatEngineStreamingLoop.ts', import.meta.url),
       'utf8',
     );
-    assert.match(src, /evaluateTokenExplosionAfterTurn/);
-    const callSites = [...src.matchAll(/evaluateTokenExplosionAfterTurn\s*\(/g)];
+    assert.match(src, /settleStreamingTokenExplosion/);
+    const helper = readFileSync(new URL('./chatEngineStreamingTokenLimit.ts', import.meta.url), 'utf8');
+    assert.match(helper, /evaluateTokenExplosionAfterTurn/);
+    const callSites = [...src.matchAll(/settleStreamingTokenExplosion\s*\(/g)];
     assert.ok(
       callSites.length >= 1,
       'streaming loop must call the end-of-turn evaluator',

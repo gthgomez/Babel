@@ -2178,6 +2178,10 @@ export class ChatEngine {
         ...submitOpts,
         submissionGeneration,
       });
+    } catch (error) {
+      if (!this.isSubmissionCurrent(submissionGeneration)) return;
+      const captured = captureSessionEventAppendFailure(error, this.engineRunDir);
+      yield this.streamFailed(captured?.operatorMessage ?? (error instanceof Error ? error.message : String(error)));
     } finally {
       this.settleClaimOnExit(claim);
     }
@@ -2477,7 +2481,7 @@ export class ChatEngine {
         ...this.workingState,
         recoveryGate: {
           ...this.workingState.recoveryGate,
-          failingTargets: [updated.acceptedPath],
+          failingTargets: [...new Set([...(this.workingState.recoveryGate.failingTargets ?? []), updated.acceptedPath])],
         },
       };
       this.workingState = applyWorkingStateEvent(this.workingState, {
@@ -4611,6 +4615,7 @@ export class ChatEngine {
           turnIndex: this._turnIndex,
           turnId: this.parity.turnId,
           taskContract: this.parity.liveAuthority?.taskContract,
+          acceptedOperation: this.lastTurnRuntime?.effectiveOperation ?? this.lastTurnRuntime?.taskShape?.operation,
         },
         outcome: {
           hasMutation: this.hasAnyWrites(),

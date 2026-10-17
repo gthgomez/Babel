@@ -422,6 +422,7 @@ export function formatWorkingStateBlock(state: WorkingState): string {
       `${state.lastVerifier.identity} exit=${state.lastVerifier.exitCode} fresh=${state.lastVerifier.fresh} ${state.lastVerifier.summary}`,
     ) : 'none'}`,
     ...(state.lastVerifier ? [`  last_verifier_identity: ${yamlIdentity(state.lastVerifier.identity)}`] : []),
+    ...(state.lastVerifier?.exitCode === 0 ? ['  acceptance_review: A green verifier covers its executed cases, not every requirement. Compare the implemented behavior with the user request and available project contract; check uncovered requirements with permitted tools, and report unverified requirements as partial. Do not substitute passing incidental tests for the requested outcome.'] : []),
     `  failure_surface: ${state.failureSurface ? state.failureSurface.kind : 'none'}`,
     `  failure_causality: ${state.failureSurface?.causality ?? 'unknown'}`,
     `  baseline_failure_signature: ${state.baselineFailureSignature ? yamlIdentity(state.baselineFailureSignature) : 'none'}`,

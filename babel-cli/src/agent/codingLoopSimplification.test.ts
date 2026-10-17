@@ -263,11 +263,12 @@ describe('ordinary coding-loop behaviors', () => {
       writeFileSync(join(root, 'verify.mjs'), [
         "import assert from 'node:assert/strict';",
         "import { readFileSync } from 'node:fs';",
-        "assert.match(readFileSync('parser.ts', 'utf8'), /a \\+ b/);",
+        "import { test } from 'node:test';",
+        "test('addition is already implemented', () => assert.match(readFileSync('parser.ts', 'utf8'), /a \\+ b/));",
       ].join('\n') + '\n');
       writeFileSync(join(root, 'package.json'), JSON.stringify({
         name: 'coding-loop-green-nochange-fixture', private: true,
-        scripts: { test: 'node verify.mjs' },
+        scripts: { test: 'node --test --test-reporter=tap verify.mjs' },
       }));
       initializeGitFixture(root);
       const task = 'Fix add so it returns the sum of its arguments; run `npm test` before finishing.';

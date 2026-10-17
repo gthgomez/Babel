@@ -1,3 +1,4 @@
+import { stripVTControlCharacters } from 'node:util'
 import { statSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import { createHash } from 'node:crypto'
@@ -48,7 +49,7 @@ export function captureLocalizationCandidates(input: {
 }): LocalizationCandidate[] {
   const parsed = parseStructuredFailures(input.stdout, input.stderr, input.tool, input.command)
   const candidates: LocalizationCandidate[] = []
-  const raw = `${input.stdout}\n${input.stderr}`
+  const raw = stripVTControlCharacters(`${input.stdout}\n${input.stderr}`)
   for (const failure of parsed.failures.slice(0, 8)) {
     const path = failure.file ? recoveryTargetIdentity(input.projectRoot, failure.file) : null
     if (!path) continue
@@ -69,7 +70,7 @@ export function captureLocalizationCandidates(input: {
   }
   // Node's parser currently recognizes JavaScript frames. Keep TypeScript and
   // Windows drive frames as bounded candidates here; they still need a read.
-  const frames = /^\s*at\s+([A-Za-z_$][\w.$]*)\s+\(([^()\r\n]+\.[cm]?[jt]sx?):(\d+):(\d+)\)/gm
+  const frames = /^\s*(?:at\s+)?([A-Za-z_$][\w.$]*)\s+\(([^()\r\n]+\.[cm]?[jt]sx?):(\d+):(\d+)\)/gm
   let frameMatch: RegExpExecArray | null
   while ((frameMatch = frames.exec(raw)) !== null && candidates.length < 8) {
     const symbol = frameMatch[1]?.split('.').at(-1)
