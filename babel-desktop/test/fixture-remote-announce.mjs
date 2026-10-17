@@ -31,7 +31,14 @@ server.listen(requested, '127.0.0.1', () => {
 });
 
 const shutdown = () => {
-  server.close(() => process.exit(0));
+  // Teardown must be immediate: a keep-alive socket left by the host's readiness
+  // probe would otherwise keep this process (and the host's test run) alive.
+  try {
+    server.closeAllConnections?.();
+  } catch {
+    /* ignore */
+  }
+  process.exit(0);
 };
 process.on('SIGTERM', shutdown);
 process.on('SIGINT', shutdown);

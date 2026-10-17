@@ -1,6 +1,7 @@
 // License: Apache-2.0 - see LICENSE
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {spawn} from 'node:child_process';
 import {EventEmitter} from 'node:events';
 import {createServer} from 'node:http';
 import {tmpdir} from 'node:os';
@@ -19,6 +20,26 @@ test('RemoteBridgeChild exposes stopped lifecycle state before start', () => {
   assert.equal(bridge.state, 'stopped');
   assert.equal(bridge.running, false);
   assert.throws(() => buildRemoteServeArgs(entry, root, {port: 80}), /Invalid remote listen port/);
+});
+
+test('the silent fixture exits when the host terminates it', async () => {
+  // A fixture that ignored the host's termination would keep the whole test run
+  // alive on POSIX, where the host sends SIGTERM rather than force-killing it.
+  const child = spawn(process.execPath, [join(here, 'fixture-remote-silent.mjs')], {
+    stdio: 'ignore',
+    windowsHide: true,
+  });
+  try {
+    const exited = new Promise(resolve => child.once('exit', (code, signal) => resolve({code, signal})));
+    child.kill();
+    const outcome = await Promise.race([
+      exited,
+      new Promise(resolve => setTimeout(() => resolve('still running'), 5000)),
+    ]);
+    assert.notEqual(outcome, 'still running', 'the fixture must exit on the host signal');
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+  }
 });
 
 // ── Fixtures ──────────────────────────────────────────────────────────────
