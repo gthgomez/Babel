@@ -13,9 +13,13 @@ import { createHostReviewController } from '../babel-cli/src/services/hostReview
 import type { HostReviewCandidate, HostReviewExecutionResult, HostReviewHandoffV2 } from '../babel-cli/src/services/hostReviewController.js'
 import { acquireBabelReviewLease, atomicReviewJson, babelReviewVersion, findPublishedBabelReview, publicBabelReviewHandoff, validateBabelReviewArtifact, validateBabelReviewCache } from '../babel-cli/src/services/babelReviewQueue.js'
 import { evaluateReviewCoverage } from '../babel-cli/src/services/reviewCoverage.js'
-import { computeIndependenceClass, evaluateEnsembleIndependence, evaluateReviewerIndependence } from '../babel-cli/src/services/reviewIndependence.js'
-import { createStructuredFinding, parseFindingFromModelClaim } from '../babel-cli/src/services/structuredFinding.js'
-import { verifyFindingAgainstSnapshot, corroborateFindings } from '../babel-cli/src/services/findingVerifier.js'
+import { computeIndependenceClass } from '../babel-cli/src/services/reviewIndependence.js'
+import { buildVerifiedReviewFindings, projectFindingReview, requiresFreshCompleteReview } from '../babel-cli/src/services/findingVerifier.js'
+import { applyFindingAssessments, validateFindingValidationArtifact, restoreCanonicalFindingReview } from '../babel-cli/src/services/babelFindingValidation.js'
+import { StructuredFindingSchema } from '../babel-cli/src/services/structuredFinding.js'
+import { FindingHistorySchema, reconcileFindingHistory, readFindingDependencyChanges } from '../babel-cli/src/services/findingHistory.js'
+import { readBabelReviewAdjudications } from '../babel-cli/src/services/babelReviewAdjudication.js'
+
 import { collectCandidateEnvelope } from '../babel-cli/src/services/candidateCollector.js'
 
 const args = process.argv.slice(2)
@@ -158,7 +162,13 @@ for (const number of prs) {
           if (!/^[a-f0-9-]{36}$/.test(executionId)) throw new Error('CACHED_EXECUTION_ID_INVALID')
           if (authorityRuntime && executionId !== authorityRuntime.executionId) throw new Error('CACHED_EXECUTION_AUTHORITY_MISMATCH')
           const artifact = validateBabelReviewArtifact(JSON.parse(readFileSync(join(jobDir!, `${model}-${executionId}.json`), 'utf8')), { executionId, model, scope })
-          if (artifact.verdict.verdict !== cached.reviews[0].verdict || JSON.stringify(artifact.verdict.findings) !== JSON.stringify(cached.reviews[0].findings) || JSON.stringify(artifact.verdict.blocking_findings) !== JSON.stringify(cached.reviews[0].blocking_findings)) throw new Error('CACHED_ARTIFACT_MISMATCH')
+          const validationPath = join(jobDir!, `${model}-${executionId}-validation.json`)
+          const canonical = restoreCanonicalFindingReview({ candidateDigest: key, executionId, model, scope: candidate.scope,
+            verdict: artifact.verdict, snapshotRootForExecution: id => join(state, 'snapshots', id),
+            ...(existsSync(validationPath) ? { validationArtifact: JSON.parse(readFileSync(validationPath, 'utf8')) } : {}),
+          }).review
+          if (canonical.verdict !== cached.reviews[0].verdict || JSON.stringify(canonical.findings) !== JSON.stringify(cached.reviews[0].findings) || JSON.stringify(canonical.blocking_findings) !== JSON.stringify(cached.reviews[0].blocking_findings)) throw new Error('CACHED_ARTIFACT_MISMATCH')
+          if (requiresFreshCompleteReview(canonical)) throw new Error('CACHED_REVIEW_REQUIRES_FRESH_PASS')
           return cached
         } catch {
           // Invalid/stale cache never creates approval. Retain the rejection
@@ -184,14 +194,15 @@ for (const number of prs) {
           if (Array.isArray(rawPayload['tool_calls'])) {
             for (const tc of rawPayload['tool_calls'] as Record<string, unknown>[]) {
               const args = (tc['arguments'] || tc['args']) as Record<string, unknown> | undefined
+              const targetPath = tc['path'] || args?.['path'] || args?.['file'] || args?.['target']
               toolTraces.push({
                 tool: String(tc['tool'] || tc['name'] || 'unknown'),
-                targetPath: (tc['path'] || args?.['path'] || args?.['file'] || args?.['target']) as string | undefined,
-                args,
+                ...(typeof targetPath === 'string' ? { targetPath } : {}),
+                ...(args ? { args } : {}),
               })
             }
           }
-          const diffTotalLines = snapshot.diff ? snapshot.diff.split(/\r?\n/).length : undefined
+          const diffTotalLines = readFileSync(join(snapshot.root, 'changes.diff'), 'utf8').split(/\r?\n/).length
           const coverageReceipt = evaluateReviewCoverage({
             scope: candidate.scope,
             toolTraces,
@@ -218,30 +229,32 @@ for (const number of prs) {
           })
           atomicReviewJson(join(jobDir!, `${model}-independence.json`), { computed_class: indClass, evaluated_at: new Date().toISOString() })
 
-          const verifiedFindings = []
-          for (const finding of [...artifact.verdict.blocking_findings, ...artifact.verdict.findings]) {
-            const isBlocking = artifact.verdict.blocking_findings.includes(finding)
-            const parsed = parseFindingFromModelClaim(finding, candidate.scope)
-            const sf = createStructuredFinding({
-              candidateDigest: key,
-              executionId: request.execution_id,
-              reviewerId: `babel-chat-${model}-${request.execution_id}`,
-              category: parsed.category,
-              severity: isBlocking ? 'P1' : 'P2',
-              path: parsed.path,
-              line: parsed.line,
-              end_line: parsed.end_line,
-              claim: finding,
-              recommended_blocking: isBlocking,
-            })
-            const verified = verifyFindingAgainstSnapshot(sf, snapshot.root, candidate.scope)
-            verifiedFindings.push(verified)
-          }
+          let verifiedFindings = buildVerifiedReviewFindings({ candidateDigest: key,
+            executionId: request.execution_id, reviewerId: `babel-chat-${model}-${request.execution_id}`,
+            scope: candidate.scope, snapshotRoot: snapshot.root, verdict: artifact.verdict })
+          // Retain raw structural evidence even if the independent pass fails.
           atomicReviewJson(join(jobDir!, `${model}-findings.json`), verifiedFindings)
+          if (verifiedFindings.length) {
+            const validationSnapshot = collectBabelReviewSnapshot({ repoRoot, base: pr.baseRefOid, head: pr.headRefOid, state, task })
+            if (validationSnapshot.numstatDigest !== candidate.diff_numstat_digest || JSON.stringify(validationSnapshot.scope) !== JSON.stringify(scope)) throw new Error('VALIDATION_SNAPSHOT_SCOPE_MISMATCH')
+            atomicReviewJson(join(validationSnapshot.root, 'finding-validation.json'), verifiedFindings)
+            const validationRun = await launchBabelReviewChild({ source: validationSnapshot.root, trustedRoot,
+              output: join(jobDir!, `${model}-${request.execution_id}-validation.json`), runs: join(jobDir!, 'validation-runs'),
+              model, purpose: 'finding_validation', worker: join(trustedRoot, 'tools/babel-chat-review-worker.mts'),
+              tsx: join(trustedRoot, 'babel-cli/node_modules/tsx/dist/cli.mjs'),
+              onSpawn: pid => lease!.child(pid, validationSnapshot.id), onExit: () => lease!.childExited(validationSnapshot.id),
+              ...(authorityRuntime ? { hostLifetime: authorityRuntime.hostLifetime, authority: authorityRuntime.monitor, candidate: authorityRuntime.candidate } : {}),
+            })
+            if (validationRun.exitCode !== 0 || validationRun.timedOut || validationRun.terminalCause !== 'worker_exit') throw new Error('FINDING_VALIDATION_FAILED')
+            const assessments = validateFindingValidationArtifact(validationRun.artifact, { executionId: validationSnapshot.id, model, findings: verifiedFindings })
+            verifiedFindings = applyFindingAssessments(verifiedFindings, assessments, validationSnapshot.root, validationSnapshot.id)
+            atomicReviewJson(join(jobDir!, `${model}-findings.json`), verifiedFindings)
+          }
+          const canonical = projectFindingReview(artifact.verdict, verifiedFindings)
 
           return { ...request, status: 'COMPLETED', reviewed_candidate: { ...candidate }, reviewer_id: `babel-chat-${model}-${request.execution_id}`, review_provider: 'opencode-go', reviewer_model: model, reviewed_at: new Date().toISOString(), scope,
-            verdict: artifact.verdict.verdict, findings: artifact.verdict.findings, blocking_findings: artifact.verdict.blocking_findings, isolation: request.required_isolation, usage: artifact.usage,
-            tool_traces: toolTraces, changes_diff_fully_read: coverageReceipt.diff_coverage_ratio >= 1.0,
+            ...canonical, isolation: request.required_isolation, usage: artifact.usage,
+            tool_traces: toolTraces, changes_diff_fully_read: (coverageReceipt.diff_coverage_ratio ?? 0) >= 1.0,
             harness: { name: 'babel', mode: 'chat', version, source_sha: trustedSha, execution_id: request.execution_id } }
         },
       } })
@@ -250,8 +263,7 @@ for (const number of prs) {
       atomicReviewJson(cachedPath, handoff)
       return validated
     }))
-    // Wait for both children to settle before releasing the lease or throwing,
-    // so a fast failure in one review never orphans the other paid child.
+    // Settle every configured review before releasing the lease or throwing.
     const rejected = settled.find(result => result.status === 'rejected')
     if (rejected) throw rejected.reason
     const reviews = settled.map(result => (result as PromiseFulfilledResult<HostReviewHandoffV2>).value)
@@ -260,7 +272,29 @@ for (const number of prs) {
     const fresh = readPr(number)
     if (fresh.state !== 'OPEN' || fresh.headRefOid !== pr.headRefOid || fresh.baseRefOid !== pr.baseRefOid) throw new Error('REVIEW_SUPERSEDED')
     if (sourceVersion() !== version) throw new Error('TRUSTED_REVIEW_SOURCE_CHANGED')
-    const handoff = { ...reviews[0]!, controller_run_id: key, reviews: reviews.flatMap(r => r.reviews) }
+    const historyPath = join(state, 'finding-history', createHash('sha256').update(JSON.stringify([repository, number])).digest('hex') + '.json')
+    const previousHistory = existsSync(historyPath) ? FindingHistorySchema.parse(JSON.parse(readFileSync(historyPath, 'utf8'))) : undefined
+    let comparisonAvailable = true
+    const changesByHead = new Map<string, string[] | undefined>()
+    const changedPathsFromHead = (head: string): string[] | undefined => {
+      if (head === pr.headRefOid) return []
+      if (!changesByHead.has(head)) {
+        try { changesByHead.set(head, readFindingDependencyChanges(git, head, pr.headRefOid)) }
+        catch {
+          comparisonAvailable = false
+          changesByHead.set(head, undefined)
+        }
+      }
+      return changesByHead.get(head)
+    }
+    const changedPaths = previousHistory ? changedPathsFromHead(previousHistory.head_sha) ?? [] : []
+    const adjudications = readBabelReviewAdjudications(state)
+    const findings = reviews.flatMap(review => StructuredFindingSchema.array().parse(JSON.parse(readFileSync(join(jobDir!, `${review.reviews[0].reviewer_model}-findings.json`), 'utf8'))))
+    const history = reconcileFindingHistory({ repository, prNumber: number, headSha: pr.headRefOid, findings,
+      ...(previousHistory ? { previous: previousHistory } : {}), changedPaths, changedPathsFromHead, adjudications: adjudications.records })
+    atomicReviewJson(join(jobDir, 'finding-history.json'), { history, comparison_available: comparisonAvailable, invalid_adjudications: adjudications.invalid_records })
+    atomicReviewJson(historyPath, history)
+    const handoff: HostReviewHandoffV2 = { ...reviews[0]!, controller_run_id: key }
     atomicReviewJson(join(jobDir, 'handoff.json'), handoff)
     let publishedComment: string | null = null
     if (options.has('--publish')) {

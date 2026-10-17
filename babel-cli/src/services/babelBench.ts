@@ -10,10 +10,6 @@ export const MINIMUM_BENCHMARK_PROMOTION_SIZE = 10;
 /** Reviewer-facing fixture with NO ground truth or answer keys. */
 export interface ReviewerFixture {
   id: string;
-  name: string;
-  category: BenchmarkCategory;
-  difficulty: BenchmarkDifficulty;
-  split: BenchmarkSplit;
   files: Record<string, string>;
   candidateDiff: string;
   scope: string[];
@@ -30,6 +26,10 @@ export interface EvaluatorAnswerKey {
 }
 
 export interface BabelBenchFixture extends ReviewerFixture {
+  name: string;
+  category: BenchmarkCategory;
+  difficulty: BenchmarkDifficulty;
+  split: BenchmarkSplit;
   groundTruth: {
     hasDefect: boolean;
     expectedVerdict: 'APPROVE' | 'BLOCK';
@@ -40,8 +40,14 @@ export interface BabelBenchFixture extends ReviewerFixture {
 }
 
 export function extractReviewerFixture(fixture: BabelBenchFixture): ReviewerFixture {
-  const { groundTruth: _gt, ...reviewerSafe } = fixture;
-  return reviewerSafe;
+  // Allowlist the entire payload: future evaluator fields must not leak.
+  // Content identity excludes labels and answer keys. Copies prevent a
+  // reviewer from mutating the evaluator's fixture.
+  const files = Object.fromEntries(Object.entries(fixture.files).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0));
+  const scope = [...fixture.scope];
+  const candidateDiff = fixture.candidateDiff;
+  const id = createHash('sha256').update(JSON.stringify({ files, candidateDiff, scope })).digest('hex');
+  return { id, files, candidateDiff, scope };
 }
 
 export function extractAnswerKey(fixture: BabelBenchFixture): EvaluatorAnswerKey {
@@ -486,7 +492,7 @@ export function compareShadowReviewer(
  * Ensures the reviewer function only receives ReviewerFixture (no ground truth).
  */
 export async function runBabelBench(
-  reviewer: (fixture: ReviewerFixture | BabelBenchFixture) => Promise<'APPROVE' | 'BLOCK'>,
+  reviewer: (fixture: ReviewerFixture) => Promise<'APPROVE' | 'BLOCK'>,
   options: {
     modelName: string;
     fixtures?: BabelBenchFixture[];

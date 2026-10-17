@@ -26,7 +26,7 @@ const MAX_REVIEW_CHILD_TIMEOUT_MS = 1_800_000;
  * fall back to the purpose default; an ambient variable can never make the
  * review unbounded.
  */
-export function reviewChildProcessTimeoutMs(purpose: 'review' | 'repair_proposal' = 'review', parent: NodeJS.ProcessEnv = process.env): number {
+export function reviewChildProcessTimeoutMs(purpose: 'review' | 'repair_proposal' | 'finding_validation' = 'review', parent: NodeJS.ProcessEnv = process.env): number {
   const fallback = purpose === 'repair_proposal' ? 3_050_000 : 1_260_000;
   const raw = parent['BABEL_REVIEW_CHILD_TIMEOUT_MS'];
   if (!raw || !/^\d+$/.test(raw)) return fallback;
@@ -35,7 +35,7 @@ export function reviewChildProcessTimeoutMs(purpose: 'review' | 'repair_proposal
 }
 
 /** Construct a fresh child environment; never forward GitHub or ambient provider keys. */
-export function babelReviewChildEnv(input: { source: string; trustedRoot: string; output: string; runs: string; model: string; purpose?: 'review' | 'repair_proposal' }, parent: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+export function babelReviewChildEnv(input: { source: string; trustedRoot: string; output: string; runs: string; model: string; purpose?: 'review' | 'repair_proposal' | 'finding_validation' }, parent: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   const purpose = input.purpose ?? 'review';
   for (const key of ['PATH', 'Path', 'SystemRoot', 'WINDIR', 'ComSpec', 'PATHEXT', 'TEMP', 'TMP', 'HOME', 'USERPROFILE', 'HOMEDRIVE', 'HOMEPATH', 'APPDATA', 'LOCALAPPDATA']) {
@@ -86,7 +86,7 @@ export interface LaunchBabelReviewChildInput {
   output: string;
   runs: string;
   model: string;
-  purpose?: 'review' | 'repair_proposal';
+  purpose?: 'review' | 'repair_proposal' | 'finding_validation';
   worker: string;
   tsx: string;
   /** Legacy finite timeout. Ignored when a typed hostLifetime is supplied. */

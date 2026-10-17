@@ -8,13 +8,15 @@ import { isOpenCodeGoModel } from '../babel-cli/src/runners/openCodeGoApi.js';
 import { babelReviewModelPolicy, babelReviewPrompt, parseBabelChatVerdict, BABEL_REVIEWER_PERSONA, buildBabelDogfoodReviewPrompt } from '../babel-cli/src/services/babelChatReview.js';
 import { ObservedBabelReviewRunner, parseObservedBabelReviewAnswer, validateBabelReviewCalls } from '../babel-cli/src/services/babelReviewObserver.js';
 import { babelRepairPrompt, parseBabelRepairProposal } from '../babel-cli/src/services/babelReviewRepair.js';
+import { findingValidationPrompt, parseFindingValidation } from '../babel-cli/src/services/babelFindingValidation.js';
+import { StructuredFindingSchema } from '../babel-cli/src/services/structuredFinding.js';
 
 const source = process.env['BABEL_PROJECT_ROOT'];
 const trustedRoot = process.env['BABEL_ROOT'];
 const output = process.env['BABEL_REVIEW_OUTPUT'];
 const model = process.env['BABEL_REVIEW_MODEL'];
 const purpose = process.env['BABEL_REVIEW_PURPOSE'] ?? 'review';
-if (!['review', 'repair_proposal'].includes(purpose)) throw new Error('REVIEW_PURPOSE_INVALID');
+if (!['review', 'repair_proposal', 'finding_validation'].includes(purpose)) throw new Error('REVIEW_PURPOSE_INVALID');
 if (!source || !trustedRoot || !output || !model || !/^[a-zA-Z0-9_.-]+$/.test(model)) throw new Error('REVIEW_LAUNCH_INVALID');
 if (process.env['GH_TOKEN'] || process.env['GITHUB_TOKEN'] || process.env['BABEL_EXECUTION_PROFILE'] !== 'read_only_audit') throw new Error('REVIEW_CHILD_CAPABILITY_INVALID');
 const manifest = JSON.parse(readFileSync(join(source, 'review-manifest.json'), 'utf8')) as { scope: string[]; execution_id: string };
@@ -38,15 +40,18 @@ try {
     engineFactory: options => engine ??= new ChatEngine({
       ...options,
       runId: manifest.execution_id,
-      ...(runner ? { providerRunner: runner, providerPolicy: babelReviewModelPolicy(model, trustedRoot) } : {}),
+      ...(runner && isOpenCodeGoModel(model) ? { providerRunner: runner, providerPolicy: babelReviewModelPolicy(model, trustedRoot) } : {}),
       appendSystemPrompt: reviewSystemPrompt,
     }),
   });
   const repair = purpose === 'repair_proposal';
-  const parseAnswer = (payload: Record<string, unknown>) => isOpenCode
-    ? parseObservedBabelReviewAnswer(calls, model, () => repair ? parseBabelRepairProposal(payload, manifest.scope) : parseBabelChatVerdict(payload, manifest.scope))
+  const validation = purpose === 'finding_validation';
+  const findings = validation ? StructuredFindingSchema.array().max(200).parse(JSON.parse(readFileSync(join(source, 'finding-validation.json'), 'utf8'))) : [];
+  const parse = (payload: Record<string, unknown>) => validation ? parseFindingValidation(payload, findings)
     : repair ? parseBabelRepairProposal(payload, manifest.scope) : parseBabelChatVerdict(payload, manifest.scope);
-  let result = await run(repair ? babelRepairPrompt(manifest.scope) : buildBabelDogfoodReviewPrompt(manifest.scope));
+  const parseAnswer = (payload: Record<string, unknown>) => isOpenCode
+    ? parseObservedBabelReviewAnswer(calls, model, () => parse(payload)) : parse(payload);
+  let result = await run(validation ? findingValidationPrompt() : repair ? babelRepairPrompt(manifest.scope) : buildBabelDogfoodReviewPrompt(manifest.scope));
   attempts.push(result.payload);
   persist({ status: 'cli_completed', payload: result.payload, attempts, cli_exit_code: result.exitCode });
   let parsed;
@@ -55,7 +60,9 @@ try {
     if (!(error instanceof SyntaxError)) throw error;
     // One format-only repair in the same reviewer session. Preserve the failed
     // answer and do not turn a model's blocker into an approval mechanically.
-    result = await run(repair
+    result = await run(validation
+      ? 'Restate your existing assessments as exactly one JSON object with assessments. Preserve every finding ID, disposition, reason, exact source excerpt and uncertainty. No Markdown or additional characters.'
+      : repair
       ? 'Restate your existing repair proposal as exactly one JSON object with summary and edits. Preserve the exact replacement strings. No Markdown, prose, backticks, or additional characters.'
       : 'Restate your existing review as exactly one JSON object with verdict, uncertain, reviewed_files, findings, blocking_findings. Preserve your findings and uncertainty. No Markdown, prose, backticks, or additional characters.');
     attempts.push(result.payload);
@@ -63,7 +70,7 @@ try {
     parsed = parseAnswer(result.payload);
   }
   if (isOpenCode) validateBabelReviewCalls(calls, model);
-  persist({ status: repair ? 'repair_proposal_completed' : 'review_completed', payload: result.payload, attempts, ...(repair ? { proposal: parsed } : { verdict: parsed }) });
+  persist({ status: validation ? 'finding_validation_completed' : repair ? 'repair_proposal_completed' : 'review_completed', payload: result.payload, attempts, ...(validation ? { assessments: parsed } : repair ? { proposal: parsed } : { verdict: parsed }) });
 } catch (error) {
   // Preserve all partial CLI/provider artifacts without exposing error payloads.
   const prior = JSON.parse(readFileSync(output, 'utf8')) as Record<string, unknown>;

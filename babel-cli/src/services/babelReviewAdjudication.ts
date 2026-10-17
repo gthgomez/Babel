@@ -24,6 +24,12 @@ export const BabelReviewAdjudicationInput = z.object({
   candidate: z.object({ repository: z.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/), pr_number: z.number().int().positive(), base_sha: sha, head_sha: sha }).strict(),
   subject: z.object({ kind: z.enum(['finding', 'missed_defect']), id: z.string().regex(/^[a-f0-9]{64}$/) }).strict(),
   outcome: z.enum(['confirmed', 'false_positive', 'missed_defect', 'inconclusive']),
+  defect_lifecycle: z.object({
+    state: z.enum(['fixed', 'not_reproduced', 'pre_existing', 'dismissed']),
+    reason: z.string().min(1).max(2000),
+    dependency_paths: z.array(z.string().refine(safeReviewPath)).min(1).max(100),
+    supersedes_defect_id: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  }).strict().optional(),
   evidence: z.array(z.object({ kind: z.enum(['test', 'reproduction', 'diff', 'review', 'merge', 'artifact']), ref: reference }).strict()).min(1).max(30),
   links: z.object({
     repair_execution_id: identifier.optional(), repair_head_sha: sha.optional(),

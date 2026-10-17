@@ -17,7 +17,7 @@ export function summarizeBabelReviews(artifacts: Row[], adjudications: unknown[]
     item.runs++
     const status = String(artifact['status'] ?? 'unknown')
     const verdict = artifact['verdict'] as Row | undefined
-    if (status === 'review_completed' || status === 'repair_proposal_completed') {
+    if (status === 'review_completed' || status === 'repair_proposal_completed' || status === 'finding_validation_completed') {
       item.completed++
       if (verdict?.['verdict'] === 'APPROVE') item.approvals++
       if (verdict?.['verdict'] === 'BLOCK') item.blocks++

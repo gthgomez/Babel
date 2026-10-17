@@ -23,6 +23,19 @@ test('separates pending and unknown status from failures and leaves unknown cost
   assert.equal(result.models['mimo-v2.5']?.estimated_cost_usd_total, null);
 });
 
+test('source validation is completed work with observed usage, not an extra approval', () => {
+  const result = summarizeBabelReviews([{ harness: 'babel', mode: 'chat', model: 'mimo-v2.5',
+    purpose: 'finding_validation', status: 'finding_validation_completed',
+    calls: [{ elapsed_ms: 5, metadata: { prompt_tokens: 30, completion_tokens: 10 } }] }]);
+  const model = result.models['mimo-v2.5']!;
+  assert.equal(model.completed, 1);
+  assert.equal(model.approvals, 0);
+  assert.equal(model.unknown_status, 0);
+  assert.equal(model.input_tokens_observed, 30);
+  assert.equal(model.estimated_cost_usd_total, null);
+  assert.equal(result.quality.recall, null);
+});
+
 test('estimates are not billed costs and unknown retry usage is retained', () => {
   const result = summarizeBabelReviews([{ harness: 'babel', mode: 'chat', model: 'longcat-2.0', status: 'review_completed', calls: [
     { status: 'failed', retry_reason: 'transient_before_output', metadata: { prompt_tokens: -1, completion_tokens: null, estimated_cost_usd: null } },

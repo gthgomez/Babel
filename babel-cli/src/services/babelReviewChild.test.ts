@@ -63,6 +63,17 @@ test('repair children keep generous repair budget and respect parent overrides',
   assert.equal(overridden['BABEL_CHAT_MAX_TURNS'], '200');
 });
 
+test('finding validation has a separate purpose and the same read-only capability boundary', () => {
+  const env = babelReviewChildEnv({ source: '/snapshot', trustedRoot: '/trusted', output: '/out', runs: '/runs',
+    model: 'mimo-v2.5', purpose: 'finding_validation' }, { PATH: '/bin', GH_TOKEN: 'synthetic', OPENAI_API_KEY: 'synthetic' });
+  assert.equal(env['BABEL_REVIEW_PURPOSE'], 'finding_validation');
+  assert.equal(env['BABEL_EXECUTION_PROFILE'], 'read_only_audit');
+  assert.equal(env['GH_TOKEN'], undefined);
+  assert.equal(env['OPENAI_API_KEY'], undefined);
+  assert.deepEqual(JSON.parse(env['BABEL_ALLOWED_TOOLS']!), ['file_read', 'directory_list', 'grep', 'glob']);
+  assert.ok(JSON.parse(env['BABEL_DISALLOWED_TOOLS']!).includes('test_run'));
+});
+
 test('normal investigate sessions keep enforce-mode stall policy outside trusted review children', () => {
   const env = { BABEL_CHAT_TASK_CLASS: 'investigate' };
   assert.equal(resolvePolicyMode('stall_kill', 'investigate', env), 'enforce');
