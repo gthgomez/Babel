@@ -17,6 +17,8 @@ import { recordChatHarnessFeedback } from "./chatHarnessFeedback.js";
 import { realpathSync, writeFileSync } from "node:fs";
 import { join } from 'node:path';
 import { describeNativeToolRejection } from './nativeToolRejection.js';
+import { unsupportedTestClaim, responseEvidenceCorrection, responseVerifierFacts } from './chatResponseEvidence.js';
+import { refreshChatVerifierReceiptStalenessSync } from '../evidence/chatRevisionBinding.js';
 
 import { trace, SpanStatusCode, type Span } from "@opentelemetry/api";
 import { endSpan } from "../telemetry/tracing.js";
@@ -133,6 +135,9 @@ export class ChatEngineStreamingLoop {
     let sameRouteTransportRetryUsed = false;
     // Bounded once-per-submission repair for an unrecognized text tool call.
     let textToolProtocolRepairUsed = false;
+    let responseEvidenceRepairUsed = false;
+    refreshChatVerifierReceiptStalenessSync(this.host.options.projectRoot, this.host.lastVerifierReceipt);
+    recordChatHarnessFeedback(this.host, `Verification evidence at submission start: ${responseVerifierFacts(this.host.lastVerifierReceipt)} Never infer test execution from reading source. Preserve the requested answer format.`);
 
     for (let turn = 0; turn < maxTurns; turn++) {
       // R0-8: a superseded generator must stop before it executes another
@@ -1820,27 +1825,6 @@ export class ChatEngineStreamingLoop {
           );
         }
 
-        // R1: Check for BLOCKED declaration before the gate — the agent may
-        // declare BLOCKED even though no writes were made.
-        const blockedReport = this.host.detectAndBuildBlockedReport(answer);
-        if (blockedReport) {
-          const blockedDelta = reconcileStreamedAnswer(
-            streamedAnswerForTurn,
-            answer,
-          );
-          if (blockedDelta !== null) {
-            yield { type: "answer_chunk", text: blockedDelta };
-            if (!this.host.isSubmissionCurrent(submissionGeneration)) return;
-          }
-          this.host.conversation.push({ role: "assistant", content: answer });
-          _turnSpan.setAttribute("babel.chat.blocked", "true");
-          endSpan(_turnSpan, SpanStatusCode.OK);
-          _turnSpan = null;
-          if (!this.host.isSubmissionCurrent(submissionGeneration)) return;
-          yield this.host.streamDone(answer, { blockedReport });
-          return;
-        }
-
         // R11: Per-round token ceiling — must run BEFORE any continuation
         // mechanism (text-only guard, prefers-patch refusal). Both of those
         // `continue` the loop and would otherwise starve this cost terminal:
@@ -1880,6 +1864,45 @@ export class ChatEngineStreamingLoop {
               ? { verifierTampered: true as const }
               : {}),
           });
+          return;
+        }
+
+        // Clarifications and BLOCKED replies must obey the same evidence rules.
+        refreshChatVerifierReceiptStalenessSync(this.host.options.projectRoot, this.host.lastVerifierReceipt);
+        for (const receipt of this.host.executedVerifierLedger)
+          refreshChatVerifierReceiptStalenessSync(this.host.options.projectRoot, receipt);
+        if (unsupportedTestClaim(answer, this.host.lastVerifierReceipt, this.host.executedVerifierLedger)) {
+          this.host.conversation.push({ role: 'assistant', content: answer });
+          endSpan(_turnSpan, SpanStatusCode.ERROR);
+          _turnSpan = null;
+          if (responseEvidenceRepairUsed) {
+            yield this.host.streamFailed('RESPONSE_EVIDENCE_INVALID: repeated test claims lack corresponding execution evidence.');
+            return;
+          }
+          responseEvidenceRepairUsed = true;
+          recordChatHarnessFeedback(this.host, responseEvidenceCorrection(this.host.lastVerifierReceipt));
+          yield { type: 'thought', text: '[Correcting an unsupported test-result claim]' };
+          continue;
+        }
+
+        // R1: Check for BLOCKED declaration before the gate — the agent may
+        // declare BLOCKED even though no writes were made.
+        const blockedReport = this.host.detectAndBuildBlockedReport(answer);
+        if (blockedReport) {
+          const blockedDelta = reconcileStreamedAnswer(
+            streamedAnswerForTurn,
+            answer,
+          );
+          if (blockedDelta !== null) {
+            yield { type: "answer_chunk", text: blockedDelta };
+            if (!this.host.isSubmissionCurrent(submissionGeneration)) return;
+          }
+          this.host.conversation.push({ role: "assistant", content: answer });
+          _turnSpan.setAttribute("babel.chat.blocked", "true");
+          endSpan(_turnSpan, SpanStatusCode.OK);
+          _turnSpan = null;
+          if (!this.host.isSubmissionCurrent(submissionGeneration)) return;
+          yield this.host.streamDone(answer, { blockedReport });
           return;
         }
 

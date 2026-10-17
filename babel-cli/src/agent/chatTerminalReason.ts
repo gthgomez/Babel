@@ -90,6 +90,10 @@ const GUIDANCE: Record<TerminalReasonCode, TerminalReasonGuidance> = {
     message: 'A tool request could not be validated; no action was dispatched',
     nextActions: ['Inspect diagnostics', 'Retry the task with a valid tool request'],
   },
+  response_evidence_invalid: {
+    message: 'The answer repeatedly claimed test results without matching evidence',
+    nextActions: ['Inspect response diagnostics', 'Retry with an evidence-grounded answer'],
+  },
   unknown: {
     message: 'Cause was not established',
     nextActions: ['Inspect diagnostics — cause was not established'],
@@ -154,6 +158,9 @@ export function terminalReasonFromFailureText(
   error: string | null | undefined,
 ): TerminalReason | undefined {
   if (!error) return undefined;
+  if (/RESPONSE_EVIDENCE_INVALID/.test(error)) {
+    return { code: 'response_evidence_invalid', cause_class: 'model' };
+  }
   if (/NATIVE_TOOL_PROTOCOL_INVALID/.test(error)) {
     return { code: 'native_tool_protocol_invalid', cause_class: null };
   }

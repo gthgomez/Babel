@@ -828,6 +828,7 @@ export function outcomeFromReasonCode(
 ): TerminalOutcome | undefined {
   switch (code) {
     case 'native_tool_protocol_invalid':
+    case 'response_evidence_invalid':
       return 'AGENT_FAILURE';
     case 'cost_accounting_incomplete':
       return 'INFRA_FAILURE';

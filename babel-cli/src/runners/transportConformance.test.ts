@@ -38,6 +38,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { createExecutorKernel } from '../executor/kernel.js';
+import { SafeExecutor } from '../sandbox.js';
+import { resetDockerAvailabilityCache, setDockerAvailableForTest } from '../config/benchmarkContainer.js';
 import type { ToolContext } from '../localTools.js';
 import {
   getProviderSpec,
@@ -443,7 +445,36 @@ test('transport: authority certification is derived from structural evidence', (
 
 // ─── Kernel dispatcher: every effectful ToolCallRequest hits the boundary ────
 
-test('transport: kernel dispatcher routes every effectful ToolCallRequest through the authority boundary', async () => {
+test('transport: kernel dispatcher routes every effectful ToolCallRequest through the authority boundary', async (t) => {
+  // Exercise authorization after a synthetic, available isolation boundary.
+  // No Docker container or effect may actually execute in this conformance test.
+  const names = ['BABEL_EXECUTION_PROFILE', 'BABEL_BENCHMARK_DOCKER_IMAGE',
+    'BABEL_DOCKER_DISABLE', 'BABEL_ALLOW_HOST_FALLBACK', 'BABEL_BENCHMARK_DOCKER_EXTRA_ARGS'] as const;
+  const previous = names.map(name => [name, process.env[name]] as const);
+  let effects = 0;
+  const reads: string[] = [];
+  const unexpectedEffect = () => { effects++; throw new Error('Unexpected effect behind denied authority'); };
+  t.mock.method(SafeExecutor.prototype, 'shellExec', unexpectedEffect);
+  t.mock.method(SafeExecutor.prototype, 'shellExecAsync', async () => unexpectedEffect());
+  t.mock.method(SafeExecutor.prototype, 'fileWrite', unexpectedEffect);
+  t.mock.method(SafeExecutor.prototype, 'fileRead', (target: string) => {
+    reads.push(target);
+    return { exit_code: 1, stdout: '', stderr: 'ENOENT: synthetic target does not exist' };
+  });
+  t.after(() => {
+    for (const [name, value] of previous) {
+      if (value === undefined) delete process.env[name]; else process.env[name] = value;
+    }
+    resetDockerAvailabilityCache();
+    assert.equal(effects, 0, 'denied requests must never reach an effect executor');
+    assert.deepEqual(reads, ['babel-transport-conformance-no-such-file.tmp'], 'only the allowed probe reaches the read executor');
+  });
+  process.env['BABEL_EXECUTION_PROFILE'] = 'safe_repo';
+  process.env['BABEL_BENCHMARK_DOCKER_IMAGE'] = 'synthetic/transport-conformance:unit';
+  delete process.env['BABEL_DOCKER_DISABLE'];
+  delete process.env['BABEL_ALLOW_HOST_FALLBACK'];
+  delete process.env['BABEL_BENCHMARK_DOCKER_EXTRA_ARGS'];
+  setDockerAvailableForTest(true);
   const kernel = createExecutorKernel('chat');
   let seq = 0;
   const freshCtx = (): ToolContext => ({

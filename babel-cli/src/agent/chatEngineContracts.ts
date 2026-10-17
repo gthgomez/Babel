@@ -642,6 +642,7 @@ export interface ChatEngineStreamingLoopHost {
   lastRequestModelId: string | null
   lastRequestPromptTokens: number | null
   readonly lastVerifierReceipt: BoundChatVerifierReceipt | null
+  readonly executedVerifierLedger: BoundChatVerifierReceipt[]
   readonly limits: ChatEngineLimits
   readonly logicalTurnToolPolicy: import('./codingLoop/index.js').OneShotPolicySnapshot<
     import('./codingLoop/index.js').NextTurnToolPolicy

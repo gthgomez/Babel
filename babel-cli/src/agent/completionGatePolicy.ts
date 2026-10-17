@@ -766,7 +766,7 @@ function isAuthoritativeReceipt(entry: VerifierEvidence): boolean {
  * requires a parsed executed-test count. Family keys stay unchanged:
  * `test:unit` is not collapsed into `npm-test`.
  */
-function strictCountPolicy(command: string): 'count_free' | 'requires_executed_count' {
+export function strictCountPolicy(command: string): 'count_free' | 'requires_executed_count' {
   const identity = analyzeVerifierIdentity(command);
   if (!identity || identity.scope === 'unknown') return 'requires_executed_count';
   if (identity.family === 'tsc' || identity.family === 'tsc-b') return 'count_free';
