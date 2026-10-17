@@ -336,7 +336,8 @@ function formatRollbackOutcome(rollback: PatchRollbackOutcome): string {
  * targets, and presenting it as batch evidence let a patch that left a file
  * modified classify as `confirmed_no_change`. An unresolved effect is kept: it
  * can never be read as "no change", and withholding it would hide a partial
- * rollback from the caller.
+ * rollback from the caller. Note such a transaction is still scoped to the one
+ * dispatched target — it is evidence of an unknown effect, not batch coverage.
  */
 function batchScopedEffectTransaction(
   dispatch: PolicyGatedExecutionResult | null | undefined,

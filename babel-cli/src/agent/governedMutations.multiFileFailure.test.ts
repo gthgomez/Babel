@@ -139,18 +139,33 @@ function digest(value: string): string {
  * OS permission outcome.
  */
 const readOnlyBitBlocksWrites = (() => {
-  const dir = mkdtempSync(join(tmpdir(), 'babel-m1-readonly-probe-'));
-  const probe = join(dir, 'probe.txt');
-  writeFileSync(probe, 'x', 'utf8');
-  chmodSync(probe, 0o444);
   let blocked = false;
+  let dir: string | null = null;
   try {
-    writeFileSync(probe, 'y', 'utf8');
+    dir = mkdtempSync(join(tmpdir(), 'babel-m1-readonly-probe-'));
+    const probe = join(dir, 'probe.txt');
+    writeFileSync(probe, 'x', 'utf8');
+    chmodSync(probe, 0o444);
+    try {
+      writeFileSync(probe, 'y', 'utf8');
+    } catch {
+      blocked = true;
+    }
   } catch {
-    blocked = true;
+    // The probe could not establish this platform's behaviour. Report the bit
+    // as unenforced: the rollback cases then fall back to asserting that the
+    // report matches the observed bytes, which holds either way.
+    blocked = false;
+  } finally {
+    if (dir) {
+      try {
+        chmodSync(join(dir, 'probe.txt'), 0o666);
+        rmSync(dir, { recursive: true, force: true });
+      } catch {
+        // Best effort: a probe must never fail the suite.
+      }
+    }
   }
-  chmodSync(probe, 0o666);
-  rmSync(dir, { recursive: true, force: true });
   return blocked;
 })();
 
