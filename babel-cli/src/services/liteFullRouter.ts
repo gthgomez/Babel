@@ -184,6 +184,7 @@ function hasDeterminateArtifactProhibition(task: string): boolean {
   if (matches.length === 0) return false;
   return matches.every((match) => {
     const afterMatch = task.slice((match.index ?? 0) + match[0].length).slice(0, 80);
+    if (/^\s*(?:the|this|that|its)\s+file\s+system\b/i.test(afterMatch)) return false;
     return DETERMINATE_ARTIFACT_AFTER_RE.test(afterMatch);
   });
 }
@@ -193,8 +194,16 @@ function hasDeterminateArtifactProhibition(task: string): boolean {
  *  a prohibition that accompanies a separate implementation request must not
  *  suppress the task's write intent. */
 function hasMutationInstructionOutsideProhibition(task: string): boolean {
-  const remainder = task.replace(new RegExp(NO_WRITE_PATTERN.source, 'gi'), ' ');
-  return MUTATION_PATTERN.test(remainder);
+  // Remove the complete prohibited clause, including its target: words such
+  // as "update" in "the update script" are not positive instructions.
+  const sentenceEnd = String.raw`(?:\.(?=\s|$)|[;!?\r\n]|$)`;
+  const remainder = task.replace(
+    new RegExp(`${NO_WRITE_PATTERN.source}[\\s\\S]*?${sentenceEnd}`, 'gi'),
+    ' ',
+  );
+  // A report mentioning "the fix" also does not authorize implementation.
+  const mutationRequest = /^(?:(?:can|could|would)\s+you\s+|i\s+(?:want|need)\s+you\s+to\s+)?(?:please\s+)?(?:fix|repair|apply|update|edit|modify|change|implement|write|create|delete|remove)\b/i;
+  return remainder.split(/\.(?=\s|$)|[;!?\r\n]/).some((clause) => mutationRequest.test(clause.trim()));
 }
 const PLAN_PATTERN = /\b(plan|design|approach|compare|implementation path|migration plan)\b/i;
 const EXPLICIT_PLAN_PATTERN =
@@ -228,9 +237,8 @@ export function inferIntentContract(
   const noWriteRequested =
     options.forceNoWrite === true ||
     (NO_WRITE_PATTERN.test(normalizedTask) &&
-      !everyNoWriteMatchIsFileSpecific(normalizedTask) &&
       !(
-        hasDeterminateArtifactProhibition(normalizedTask) &&
+        (everyNoWriteMatchIsFileSpecific(normalizedTask) || hasDeterminateArtifactProhibition(normalizedTask)) &&
         hasMutationInstructionOutsideProhibition(normalizedTask)
       ));
   const startsWithMutation = DIRECT_MUTATION_PATTERN.test(normalizedTask);

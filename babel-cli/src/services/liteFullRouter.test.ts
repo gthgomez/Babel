@@ -249,3 +249,34 @@ test('inferIntentContract: a standalone determinate prohibition stays read-only'
   assert.equal(standalone.no_write_requested, true);
   assert.equal(standalone.write_intent, false);
 });
+
+test('inferIntentContract: prohibited artifact names and report nouns never authorize writes', () => {
+  for (const task of [
+    'Do not modify the update script.',
+    'Do not modify the repair module.',
+    'Do not modify the file for the update.',
+    'Do not modify the script in config.update.js.',
+    'Report the fix. Do not modify the test file.',
+    'Explain the repair. Do not modify the test file.',
+    'Do not modify the file system. Fix the bug.',
+    'Do not modify the test file or implement the update.',
+    'Do not modify src/update.js.',
+  ]) {
+    const intent = inferIntentContract(task);
+    assert.equal(intent.no_write_requested, true, task);
+    assert.equal(intent.write_intent, false, task);
+  }
+});
+
+test('inferIntentContract: independent implementation survives scoped prohibitions in either order', () => {
+  for (const task of [
+    'Do not modify the update script. Fix src/main.js.',
+    'Fix src/main.js. Do not modify the update script.',
+    'Do not modify the script in config.update.js. Please fix src/main.js.',
+    'Do not modify src/update.js. Fix src/main.js.',
+  ]) {
+    const intent = inferIntentContract(task);
+    assert.equal(intent.no_write_requested, false, task);
+    assert.equal(intent.write_intent, true, task);
+  }
+});
