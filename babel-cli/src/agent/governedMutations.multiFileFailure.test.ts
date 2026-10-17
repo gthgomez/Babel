@@ -132,6 +132,28 @@ function digest(value: string): string {
   return createHash('sha256').update(value, 'utf8').digest('hex');
 }
 
+/**
+ * Whether this process actually enforces the read-only bit when writing (a
+ * privileged process can write straight through it). Probed once so the
+ * rollback-failure cases assert the reporting contract instead of assuming an
+ * OS permission outcome.
+ */
+const readOnlyBitBlocksWrites = (() => {
+  const dir = mkdtempSync(join(tmpdir(), 'babel-m1-readonly-probe-'));
+  const probe = join(dir, 'probe.txt');
+  writeFileSync(probe, 'x', 'utf8');
+  chmodSync(probe, 0o444);
+  let blocked = false;
+  try {
+    writeFileSync(probe, 'y', 'utf8');
+  } catch {
+    blocked = true;
+  }
+  chmodSync(probe, 0o666);
+  rmSync(dir, { recursive: true, force: true });
+  return blocked;
+})();
+
 function tmpRoot(prefix: string): string {
   return mkdtempSync(join(tmpdir(), prefix));
 }
@@ -180,8 +202,10 @@ interface FaultScript {
    * `throw` — the executor raises after (or before) its own write, the way a
    * real dispatch fault (timeout / transport error) reaches the governed loop.
    * `reject` — the executor returns a nonzero result without writing.
+   * `fail_after_write` — the executor writes, then reports failure, so the
+   * failing file has an observed effect and its own cleanup runs.
    */
-  fault: 'throw' | 'reject';
+  fault: 'throw' | 'reject' | 'fail_after_write';
   /** For `throw`: perform the file write before raising. */
   writeBeforeFault?: boolean;
   /** Runs after each successful write (external interference hook). */
@@ -244,8 +268,18 @@ function scriptedExecutor(projectRoot: string, script: FaultScript) {
           results: [{ exit_code: 1, stdout: '', stderr: 'injected dispatch rejection' }],
         };
       }
-      if (script.writeBeforeFault) await base.execute(action, context, budget);
+      if (script.fault === 'fail_after_write' || script.writeBeforeFault) {
+        await base.execute(action, context, budget);
+        script.onAfterWrite?.(writes, resolve(projectRoot, action.path));
+      }
       captureAtFault(action.path);
+      if (script.fault === 'fail_after_write') {
+        return {
+          action,
+          terminal: false,
+          results: [{ exit_code: 1, stdout: '', stderr: 'injected failure after write' }],
+        };
+      }
       throw new Error('injected executor failure');
     },
   };
@@ -326,7 +360,7 @@ describe('governedApplyPatch multi-file failure and rollback integrity', { concu
       // Truthful failure result; never a pre-dispatch claim after an observed write.
       assert.equal(result.exit_code, 1);
       assert.equal(result.policyBlocked, false);
-      assert.notEqual(result.preDispatchNoEffect, true);
+      assert.equal(result.preDispatchNoEffect, false);
       assert.match(result.observation, /Rolled back 1 file\(s\)/);
       assert.equal(result.mutationReceipt, undefined, 'a rolled-back batch retains no committed receipt');
 
@@ -361,7 +395,7 @@ describe('governedApplyPatch multi-file failure and rollback integrity', { concu
       assert.equal(atFault[file2]?.bytes, FILE2_PATCHED, 'second file had an effect before throwing');
 
       assert.equal(result.exit_code, 1);
-      assert.notEqual(result.preDispatchNoEffect, true);
+      assert.equal(result.preDispatchNoEffect, false);
       assert.equal(result.mutationReceipt, undefined);
       assert.equal(snapshot(file1).bytes, FILE1_ORIGINAL, 'earlier owned write must be restored');
       assert.equal(snapshot(file2).bytes, FILE2_ORIGINAL, 'failing file effect must be restored');
@@ -387,7 +421,7 @@ describe('governedApplyPatch multi-file failure and rollback integrity', { concu
       assert.deepEqual(script.dispatched, ['file1.txt', 'file2.txt']);
       assert.equal(result.exit_code, 1);
       assert.equal(result.policyBlocked, false);
-      assert.notEqual(result.preDispatchNoEffect, true);
+      assert.equal(result.preDispatchNoEffect, false);
       assert.match(result.observation, /Rolled back 1 file\(s\)/);
       assert.equal(snapshot(file1).bytes, FILE1_ORIGINAL);
       assert.equal(snapshot(file2).bytes, FILE2_ORIGINAL);
@@ -425,13 +459,25 @@ describe('governedApplyPatch multi-file failure and rollback integrity', { concu
       );
 
       assert.equal(result.exit_code, 1);
-      assert.notEqual(result.preDispatchNoEffect, true);
-      // Independently observed: file1 was NOT restored and still holds the
-      // patch's bytes; the earlier write is not silently claimed as reverted.
-      assert.equal(snapshot(file1).bytes, FILE1_PATCHED);
+      assert.equal(result.preDispatchNoEffect, false);
       assert.equal(snapshot(seeded.file2).bytes, FILE2_ORIGINAL);
-      assert.ok(result.observation.includes('file1.txt'), 'unrestored path must be named');
-      assert.doesNotMatch(result.observation, /Rolled back 1 file\(s\)/);
+
+      // The report must match what is actually on disk, whatever this platform
+      // does with the read-only bit.
+      const observed = snapshot(file1).bytes;
+      if (observed === FILE1_PATCHED) {
+        assert.ok(result.observation.includes('file1.txt'), 'unrestored path must be named');
+        assert.doesNotMatch(result.observation, /Rolled back 1 file\(s\)/);
+        assert.match(result.observation, /Not restored/);
+      } else {
+        assert.equal(observed, FILE1_ORIGINAL);
+        assert.match(result.observation, /Rolled back 1 file\(s\)/);
+      }
+      if (readOnlyBitBlocksWrites) {
+        // The restore write itself failed; the earlier write is not silently
+        // claimed as reverted.
+        assert.equal(observed, FILE1_PATCHED, 'the restore write must have failed here');
+      }
       // A batch that left a modified file must not classify as zero-effect.
       assert.equal(classifyAsCaller(result).status, 'indeterminate');
       assertNoDanglingEffectIntent(root);
@@ -465,7 +511,7 @@ describe('governedApplyPatch multi-file failure and rollback integrity', { concu
       );
 
       assert.equal(result.exit_code, 1);
-      assert.notEqual(result.preDispatchNoEffect, true);
+      assert.equal(result.preDispatchNoEffect, false);
       assert.match(result.observation, /Rolled back 1 file\(s\)/);
       assert.equal(snapshot(file1).kind, 'missing', 'created file must be removed, not emptied');
       assert.equal(snapshot(file2).bytes, FILE2_ORIGINAL);
@@ -500,7 +546,7 @@ describe('governedApplyPatch multi-file failure and rollback integrity', { concu
       );
 
       assert.equal(result.exit_code, 1);
-      assert.notEqual(result.preDispatchNoEffect, true);
+      assert.equal(result.preDispatchNoEffect, false);
       // Independently observed: the newer external bytes survive untouched,
       // and the batch does not claim a clean restoration of file1.
       assert.equal(snapshot(file1).bytes, FILE1_EXTERNAL);
@@ -545,12 +591,60 @@ describe('governedApplyPatch multi-file failure and rollback integrity', { concu
       assert.equal(result.exit_code, 1);
       assert.equal(result.policyBlocked, false);
       // A write was observed on disk: never claim the pre-dispatch state.
-      assert.notEqual(result.preDispatchNoEffect, true);
+      assert.equal(result.preDispatchNoEffect, false);
       assert.match(result.observation, /MUTATION_POSTIMAGE_NOT_CONFIRMED/);
       assert.equal(classifyAsCaller(result).status, 'indeterminate');
       assertNoDanglingEffectIntent(root);
       assert.equal(snapshot(file2).bytes, FILE2_ORIGINAL);
     } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('8. reports the failing file when its own cleanup leaves it modified', async () => {
+    // The failing dispatch's cleanup runs inside the executor and its failure
+    // is swallowed there. The governed result must still name a file left
+    // holding this patch's bytes instead of reporting a silent rollback.
+    resetCircuitBreaker();
+    const root = tmpRoot('babel-m1-failing-file-residual-');
+    let file2 = '';
+    try {
+      const seeded = seedTwoFiles(root);
+      file2 = seeded.file2;
+      const script = scriptedExecutor(root, {
+        faultAt: 2,
+        fault: 'fail_after_write',
+        onAfterWrite: (writeIndex, absolutePath) => {
+          if (writeIndex !== 2) return;
+          assert.equal(absolutePath, file2);
+          // The failing dispatch's own pre-image restore can no longer write.
+          chmodSync(file2, 0o444);
+        },
+      });
+
+      const result = await governedApplyPatch(
+        { patch: TWO_FILE_PATCH },
+        { projectRoot: root, context: ctx(root), executor: script.executor },
+      );
+
+      assert.equal(result.exit_code, 1);
+      assert.equal(result.preDispatchNoEffect, false);
+      assert.equal(snapshot(seeded.file1).bytes, FILE1_ORIGINAL, 'earlier owned write restored');
+
+      const observed = snapshot(file2).bytes;
+      if (readOnlyBitBlocksWrites) {
+        assert.equal(observed, FILE2_PATCHED, 'the failing file stays modified');
+        assert.ok(result.observation.includes(file2), 'the failing file must be named');
+        assert.match(result.observation, /Not restored/);
+        assert.equal(result.effectTransaction?.status, 'rollback_failed');
+      } else {
+        assert.equal(observed, FILE2_ORIGINAL);
+        assert.doesNotMatch(result.observation, /Not restored/);
+      }
+      assert.equal(classifyAsCaller(result).status, 'indeterminate');
+      assertNoDanglingEffectIntent(root);
+    } finally {
+      if (file2 && existsSync(file2)) chmodSync(file2, 0o666);
       rmSync(root, { recursive: true, force: true });
     }
   });

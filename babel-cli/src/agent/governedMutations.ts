@@ -334,14 +334,20 @@ function formatRollbackOutcome(rollback: PatchRollbackOutcome): string {
  * A failure result may only carry effect-transaction evidence that covers the
  * whole patch. A per-file dispatch transaction proves nothing about the other
  * targets, and presenting it as batch evidence let a patch that left a file
- * modified classify as `confirmed_no_change`.
+ * modified classify as `confirmed_no_change`. An unresolved effect is kept: it
+ * can never be read as "no change", and withholding it would hide a partial
+ * rollback from the caller.
  */
 function batchScopedEffectTransaction(
   dispatch: PolicyGatedExecutionResult | null | undefined,
   batchPaths: string[],
 ): PolicyGatedExecutionResult['effectTransaction'] {
   const transaction = dispatch?.effectTransaction;
-  if (!transaction || batchPaths.length === 0) return undefined;
+  if (!transaction) return undefined;
+  if (transaction.status === 'rollback_failed' || transaction.status === 'reconcile_needed') {
+    return transaction;
+  }
+  if (batchPaths.length === 0) return undefined;
   const covered = new Set(transaction.paths.map((path) => resolve(path)));
   return batchPaths.every((path) => covered.has(resolve(path))) ? transaction : undefined;
 }
@@ -459,6 +465,27 @@ export async function governedApplyPatch(
     );
   }
 
+  /**
+   * Report the failing dispatch target's own residual state. Earlier files are
+   * covered by rollbackWrittenPaths; the failing file is cleaned up inside the
+   * executor, so its outcome is observed here instead of assumed — a swallow
+   * there must not turn a file left holding this patch's bytes into silence.
+   */
+  const dispatchTargetResidual = async (target: string): Promise<string> => {
+    const preImage = createdPaths.has(target) ? null : (contents.get(target) ?? null);
+    let current: string | null;
+    try {
+      current = await readFile(target, 'utf-8');
+    } catch {
+      current = null;
+    }
+    if (current === preImage) return '';
+    if (current === writtenContents.get(target)) {
+      return `\n\nNot restored: ${target}: the failing dispatch's write is still on disk`;
+    }
+    return `\n\nState unknown: ${target}: bytes match neither the pre-image nor this patch's write`;
+  };
+
   // Phase C: dispatch each file's new content through the write_file gate,
   // identically to str_replace writes. Each file is re-validated under its
   // write lock before dispatch.
@@ -564,8 +591,12 @@ export async function governedApplyPatch(
           );
           const observation =
             `### apply_patch ${result.path}\nError: ${message}` +
-            formatRollbackOutcome(rollback);
-          throw Object.assign(new Error(message), {
+            formatRollbackOutcome(rollback) +
+            (await dispatchTargetResidual(absolutePath));
+          // Preserve the original error identity; only attach the structured
+          // governed failure the caller reads.
+          const failureError = dispatchError instanceof Error ? dispatchError : new Error(message);
+          throw Object.assign(failureError, {
             governedPatchFailure: {
               observation,
               exit_code: 1,
@@ -623,6 +654,7 @@ export async function governedApplyPatch(
             );
             observation += formatRollbackOutcome(rollback);
           }
+          observation += await dispatchTargetResidual(absolutePath);
           const effectTransaction = batchScopedEffectTransaction(dispatch, absolutePaths);
           throw Object.assign(new Error(stderr), {
             governedPatchFailure: {
