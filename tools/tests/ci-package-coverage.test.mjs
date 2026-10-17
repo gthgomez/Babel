@@ -79,6 +79,42 @@ test('both protected platform checks depend on package and architecture coverage
   }
 });
 
+test('clean dependency preflight gates full workloads without gating security checks', () => {
+  const preflight = workflow.jobs['dependency-preflight'];
+  assert.ok(preflight);
+  assert.deepEqual(preflight.needs, ['detect-scope']);
+  assert.equal(preflight.if, "needs.detect-scope.outputs.full == 'true'");
+  assert.equal(preflight['continue-on-error'], undefined);
+  assert.ok(preflight.steps.some(step => step.with?.['node-version'] === '22.19.0'));
+  assert.ok(preflight.steps.some(step => step.run === 'npm ci --ignore-scripts' && step['working-directory'] === 'babel-cli'));
+  for (const [name, job] of Object.entries(workflow.jobs)) {
+    if (name === 'dependency-preflight' || !job.needs?.includes('detect-scope')) continue;
+    if (name === 'fast-validation') continue;
+    assert.ok(job.needs.includes('dependency-preflight'), `${name} must wait for clean install`);
+  }
+  for (const name of ['security', 'public-content-policy', 'policy-integrity', 'public-pr-metadata-tests']) {
+    assert.ok(!workflow.jobs[name].needs?.includes('dependency-preflight'), `${name} must run even if install fails`);
+  }
+});
+
+test('protected guards reject failed preflight even when every expensive job skips', () => {
+  for (const name of ['linux-validation', 'windows-portability']) {
+    const job = workflow.jobs[name];
+    for (const result of ['failure', 'cancelled', 'skipped', null]) {
+      const dependencies = Object.fromEntries(job.needs.map(dependency => [dependency, { result: 'skipped' }]));
+      for (const dependency of ['detect-scope', 'fast-validation', 'security', 'public-content-policy', 'policy-integrity', 'public-pr-metadata-tests']) {
+        dependencies[dependency] = { result: 'success' };
+      }
+      dependencies['dependency-preflight'] = { result };
+      const observed = spawnSync('pwsh', ['-NoProfile', '-Command', job.steps[0].run], {
+        env: { ...process.env, NEEDS_JSON: JSON.stringify(dependencies), MERGE_LANE: 'full' }, encoding: 'utf8', timeout: 15000,
+      });
+      assert.ifError(observed.error);
+      assert.notEqual(observed.status, 0, `${name}: preflight ${result} cannot accept skipped coverage`);
+    }
+  }
+});
+
 test('real protected-job dependency guards reject failure, cancellation, skipped and missing results', () => {
   for (const name of ['linux-validation', 'windows-portability']) {
     const guard = workflow.jobs[name].steps[0];

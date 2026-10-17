@@ -39,11 +39,12 @@ test('required stable platform names are explicit fail-closed aggregates', () =>
   }
 });
 
-test('hosted workloads wait only for lane classification, not for each other', () => {
+test('hosted workloads wait only for lane classification and install preflight, not for each other', () => {
+  assert.deepEqual(workflow.jobs['dependency-preflight'].needs, ['detect-scope']);
   for (const name of ['architecture-regressions', 'package-components', 'unit-shards', 'docker-smoke', 'platform-core', 'harness-runtime', 'chat-truth', 'remote-ui-browser', 'windows-policy']) {
     const job = workflow.jobs[name];
     assert.ok(job, `Missing ${name}`);
-    assert.deepEqual(job.needs, ['detect-scope'], `${name} must not serialize behind another workload`);
+    assert.deepEqual(job.needs, ['detect-scope', 'dependency-preflight'], `${name} must not serialize behind another workload`);
     assert.equal(job['continue-on-error'], undefined);
     assert.ok(['ubuntu-latest', 'windows-latest', '${{ matrix.os }}'].includes(job['runs-on']));
     assert.equal(job.permissions, undefined, 'Job must inherit contents:read');
@@ -221,10 +222,10 @@ test('all nine retained build and consumer rows bind the same independent archiv
 test('heavy jobs wait for the merge lane and the installer is not on every pull request', () => {
   const slow = ['native-rg','desktop-tests','architecture-regressions','package-components','platform-core','harness-runtime','chat-truth','remote-ui-browser','windows-policy','docker-smoke','unit-shards','consumer-candidate','consumer-build-toolchains'];
   for (const name of slow) {
-    assert.deepEqual(workflow.jobs[name].needs, ['detect-scope'], name);
+    assert.deepEqual(workflow.jobs[name].needs, ['detect-scope', 'dependency-preflight'], name);
     assert.equal(workflow.jobs[name].if, "needs.detect-scope.outputs.full == 'true'", name);
   }
-  assert.deepEqual(workflow.jobs['installer-lifecycle'].needs, ['detect-scope']);
+  assert.deepEqual(workflow.jobs['installer-lifecycle'].needs, ['detect-scope', 'dependency-preflight']);
   assert.equal(workflow.jobs['installer-lifecycle'].if, "github.event_name == 'push' || needs.detect-scope.outputs.installer == 'true'");
   for (const always of ['security','public-content-policy','policy-integrity','public-pr-metadata-tests','fast-validation']) {
     assert.equal(workflow.jobs[always].if, undefined, always);

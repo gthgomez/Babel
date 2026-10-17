@@ -74,11 +74,14 @@ describe('ADR-010 bridge gateway', () => {
   let capturedMessage = '';
   let tmp: string;
   let prevRuns: string | undefined;
+  let prevInstance: string | undefined;
 
   before(async () => {
     tmp = mkdtempSync(join(tmpdir(), 'babel-remote-'));
     prevRuns = process.env['BABEL_RUNS_DIR'];
     process.env['BABEL_RUNS_DIR'] = tmp;
+    prevInstance = process.env['BABEL_BRIDGE_INSTANCE'];
+    process.env['BABEL_BRIDGE_INSTANCE'] = 'gateway-test-instance';
     server = new BridgeServer({
       port: PORT,
       authToken: TOKEN,
@@ -116,6 +119,8 @@ describe('ADR-010 bridge gateway', () => {
     await server.stop();
     if (prevRuns === undefined) delete process.env['BABEL_RUNS_DIR'];
     else process.env['BABEL_RUNS_DIR'] = prevRuns;
+    if (prevInstance === undefined) delete process.env['BABEL_BRIDGE_INSTANCE'];
+    else process.env['BABEL_BRIDGE_INSTANCE'] = prevInstance;
     rmSync(tmp, { recursive: true, force: true });
   });
 
@@ -146,6 +151,9 @@ describe('ADR-010 bridge gateway', () => {
     assert.equal(json['ok'], true);
     assert.equal(json['protocol'], 'adr-010');
     assert.match(String(json['bind']), /127\.0\.0\.1/);
+    // The host's per-launch instance label is echoed so a host can tell its own
+    // child apart from any other loopback server on the same port.
+    assert.equal(json['instance'], 'gateway-test-instance');
   });
 
   it('rejects origin that is not allowlisted', async () => {
