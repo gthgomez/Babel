@@ -47,7 +47,11 @@ import {
   parityRecordToolBatch,
   paritySettleProposeTools,
   paritySettleUnexecutedTools,
+  parityOnCancel,
+  parityOnBudgetExhausted,
+  finalizeParityTurn,
 } from './chatEngineParityBridge.js';
+import { loadEpisodeEventLogFromDir } from '../evidence/episodeStream.js';
 import {
   deriveSubagentApprovalSession,
   createApprovalSession,
@@ -591,10 +595,72 @@ describe('Live resume via event log', () => {
       const ended = loaded.events.filter((e) => e.kind === 'turn_ended');
       assert.ok(ended.length >= 1);
       assert.equal(ended[ended.length - 1]!.outcome, 'CANCELLED');
+      const cancelledTurn = engine.getParityRuntime().turnId!;
+      const session = loadSessionEventLogFromDir(sessionDir);
+      const episode = loadEpisodeEventLogFromDir(sessionDir);
+      assert.ok(session);
+      assert.ok(episode);
+      assert.equal(session.events.filter((e) => e.kind === 'turn_ended' && e.turn_id === cancelledTurn).length, 1);
+      assert.equal(episode.events.filter((e) => e.type === 'turn_ended' && e.turnId === cancelledTurn).length, 1);
+
+      const resumed = createParityRuntime(loaded.thread_id);
+      resumed.eventLog = loaded;
+      resumed.sessionEvents = session;
+      resumed.episodeStream = episode;
+      resumed.turnId = cancelledTurn;
+      await finalizeParityTurn(resumed, sessionDir, 'VERIFIED_COMPLETE', 'completed');
+      parityOnUserTurn(resumed, {
+        task: 'inspect another file', model: 'deepseek-v4-flash', provider: 'deepseek', projectRoot: root,
+      });
+      const nextTurn = resumed.turnId!;
+      await finalizeParityTurn(resumed, sessionDir, 'NO_CHANGE_REQUIRED', 'completed');
+      const threadAfter = loadThreadEventLogFromDir(sessionDir)!;
+      const sessionAfter = loadSessionEventLogFromDir(sessionDir)!;
+      const episodeAfter = loadEpisodeEventLogFromDir(sessionDir)!;
+      for (const turn of [cancelledTurn, nextTurn]) {
+        assert.equal(threadAfter.events.filter((e) => e.kind === 'turn_ended' && e.turn_id === turn).length, 1);
+        assert.equal(sessionAfter.events.filter((e) => e.kind === 'turn_ended' && e.turn_id === turn).length, 1);
+        assert.equal(episodeAfter.events.filter((e) => e.type === 'turn_ended' && e.turnId === turn).length, 1);
+      }
+      const cancelledEnd = sessionAfter.events.find((e) => e.kind === 'turn_ended' && e.turn_id === cancelledTurn);
+      assert.ok(cancelledEnd?.kind === 'turn_ended');
+      assert.equal(cancelledEnd.outcome, 'CANCELLED');
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  for (const kind of ['cancel', 'budget'] as const) {
+    test(`preclosed ${kind} terminal fills session and episode without replacing first outcome`, async () => {
+      const root = mkdtempSync(join(tmpdir(), 'babel-preclosed-terminal-'));
+      try {
+        const rt = createParityRuntime(`preclosed-${kind}`);
+        parityOnUserTurn(rt, { task: 'inspect', model: 'deepseek-v4-flash', provider: 'deepseek', projectRoot: root });
+        if (kind === 'cancel') parityOnCancel(rt);
+        else parityOnBudgetExhausted(rt, 'fixture budget exhausted');
+        const first = rt.eventLog.events.find((e) => e.kind === 'turn_ended')!;
+        assert.equal(first.kind, 'turn_ended');
+        // A later completion callback must not replace the already sealed terminal.
+        await finalizeParityTurn(rt, root, 'VERIFIED_COMPLETE', 'completed', { code: 'unknown', cause_class: null });
+        await finalizeParityTurn(rt, root, 'VERIFIED_COMPLETE', 'completed');
+        const thread = loadThreadEventLogFromDir(root)!;
+        const session = loadSessionEventLogFromDir(root)!;
+        const episode = loadEpisodeEventLogFromDir(root)!;
+        const threadEnds = thread.events.filter((e) => e.kind === 'turn_ended');
+        const sessionEnds = session.events.filter((e) => e.kind === 'turn_ended');
+        const episodeEnds = episode.events.filter((e) => e.type === 'turn_ended');
+        assert.equal(threadEnds.length, 1);
+        assert.equal(sessionEnds.length, 1);
+        assert.equal(episodeEnds.length, 1);
+        assert.equal(sessionEnds[0]!.outcome, first.outcome);
+        assert.equal(sessionEnds[0]!.status, first.status);
+        assert.equal(sessionEnds[0]!.reason_code, first.reason_code);
+        assert.equal(episodeEnds[0]!.payload.outcome, first.outcome);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+  }
 });
 
 describe('Live subagent scope ceiling', () => {
