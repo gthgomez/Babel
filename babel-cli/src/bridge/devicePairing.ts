@@ -192,6 +192,11 @@ export class DevicePairingService {
     return loadStore().devices.filter((d) => !d.revoked);
   }
 
+  isDeviceAuthorized(deviceId: string): boolean {
+    const store = loadStore();
+    return store.devices.some((d) => d.deviceId === deviceId && !d.revoked);
+  }
+
   revokeDevice(deviceId: string): boolean {
     const store = loadStore();
     const device = store.devices.find((d) => d.deviceId === deviceId);

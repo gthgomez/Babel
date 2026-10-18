@@ -8,9 +8,11 @@
   const threadInput = byId('thread-id');
   const transcript = byId('transcript');
 
+  const LEASE_RENEW_MS = 10000;
   const memory = {
     token: '',
     pairedDevice: false,
+    clientId: null,
     sessionId: '',
     threadId: '',
     turnId: null,
@@ -18,6 +20,8 @@
     lastCommandId: '',
     lastMessage: '',
     controlEpoch: null,
+    controlExpiresAtMs: null,
+    leaseRenewTimer: null,
     authKind: 'none',
   };
 
@@ -57,7 +61,7 @@
       dot.className = 'status-dot ' + String(host).toLowerCase();
     });
     const authed = memory.token || memory.pairedDevice;
-    const canMutate = authed && (memory.authKind === 'host' || memory.controlEpoch !== null);
+    const canMutate = authed && (memory.authKind === 'host' || (memory.controlEpoch !== null && memory.clientId));
     byId('create').disabled = !authed;
     byId('resume').disabled = !authed;
     byId('send').disabled = !S.canSendTurn(thread, turn) || !canMutate || sendInFlight;
@@ -101,13 +105,61 @@
       credentials: 'include',
       body: JSON.stringify({ jsonrpc: '2.0', id: id || Date.now(), method: method, params: rpcParams(params) }),
     });
-    if (!response.ok) throw new Error('rpc ' + response.status);
     const payload = await response.json();
     const classified = S.classifyRpcResponse(payload);
-    if (classified.kind === 'rejected' || classified.kind === 'malformed') {
-      throw new Error(classified.message || 'rpc error');
+    if (classified.kind === 'malformed') throw new Error('rpc malformed');
+    if (!response.ok && classified.kind !== 'rejected') throw new Error('rpc ' + response.status);
+    return { payload: payload, classified: classified };
+  }
+
+  function clearControlLease(reason) {
+    memory.controlEpoch = null;
+    memory.controlExpiresAtMs = null;
+    if (memory.leaseRenewTimer) clearInterval(memory.leaseRenewTimer);
+    memory.leaseRenewTimer = null;
+    if (reason) appendEvent({ type: 'connection', error: reason });
+  }
+
+  function startLeaseRenewal() {
+    if (memory.leaseRenewTimer) clearInterval(memory.leaseRenewTimer);
+    if (memory.authKind !== 'paired' || memory.controlEpoch === null || !memory.threadId) return;
+    memory.leaseRenewTimer = setInterval(function () {
+      rpc('control.renew', { thread_id: memory.threadId, control_epoch: memory.controlEpoch }).then(function (res) {
+        if (res.classified.kind === 'success' && res.payload.result) {
+          memory.controlExpiresAtMs = res.payload.result.expires_at_ms;
+        } else {
+          clearControlLease('Control lease expired or was lost.');
+          renderChrome();
+        }
+      }).catch(function () {
+        clearControlLease('Control lease renewal failed.');
+        renderChrome();
+      });
+    }, LEASE_RENEW_MS);
+  }
+
+  async function syncControlLeaseFromHost() {
+    if (!memory.threadId || memory.authKind !== 'paired' || !memory.clientId) {
+      clearControlLease();
+      return;
     }
-    return payload;
+    try {
+      const res = await rpc('control.status', { thread_id: memory.threadId });
+      if (res.classified.kind !== 'success' || !res.payload.result) {
+        clearControlLease();
+        return;
+      }
+      const st = res.payload.result;
+      if (st.held && st.holder_client_id === memory.clientId && typeof st.epoch === 'number') {
+        memory.controlEpoch = st.epoch;
+        memory.controlExpiresAtMs = st.expires_at_ms || null;
+        startLeaseRenewal();
+      } else {
+        clearControlLease();
+      }
+    } catch (error) {
+      clearControlLease();
+    }
   }
 
   async function refreshAuthSession() {
@@ -117,8 +169,10 @@
     if (json.ok && json.auth === 'paired_device') {
       memory.pairedDevice = true;
       memory.authKind = 'paired';
+      memory.clientId = json.deviceId ? 'device:' + json.deviceId : null;
     } else if (json.ok && json.auth === 'host') {
       memory.authKind = 'host';
+      memory.clientId = 'host:session';
     }
   }
 
@@ -126,7 +180,10 @@
     if (!memory.threadId) return;
     try {
       const result = await rpc('control.acquire', { thread_id: memory.threadId, force: false });
-      memory.controlEpoch = result.result && result.result.epoch;
+      if (result.classified.kind !== 'success' || !result.payload.result) throw new Error('acquire failed');
+      memory.controlEpoch = result.payload.result.epoch;
+      memory.controlExpiresAtMs = result.payload.result.expires_at_ms || null;
+      startLeaseRenewal();
       R.setText(byId('action-state'), 'Remote control acquired');
       R.setText(byId('action-detail'), 'This device may send prompts and approvals until the lease expires.');
     } catch (error) {
@@ -225,7 +282,7 @@
       R.setText(byId('action-detail'), 'Create or resume a thread to begin.');
       try {
         const catalog = await rpc('remote.catalog', {});
-        const sessions = (catalog.result && catalog.result.sessions) || [];
+        const sessions = (catalog.payload.result && catalog.payload.result.sessions) || [];
         if (sessions.length && byId('thread-id')) {
           byId('thread-id').placeholder = sessions.length + ' session(s) on host';
         }
@@ -251,20 +308,13 @@
           project_root: rootEl.value,
           session_id: memory.sessionId,
         });
-        if (resumed.error) throw new Error(resumed.error.message);
+        if (resumed.classified.kind !== 'success') throw new Error('resume rejected');
         const history = await rpc('history.lookup', { thread_id: memory.threadId });
-        if (history.error) throw new Error(history.error.message);
-        const cells = (history.result && history.result.cells) || [];
+        if (history.classified.kind !== 'success') throw new Error('history rejected');
+        const cells = (history.payload.result && history.payload.result.cells) || [];
         transcript.textContent = '';
         cells.forEach(function (cell) { appendEvent({ type: cell.kind || 'cell', text: JSON.stringify(cell.payload || {}) }); });
-        if (memory.authKind === 'paired') {
-          const status = await rpc('control.status', { thread_id: memory.threadId });
-          if (status.result && status.result.held && status.result.epoch) {
-            memory.controlEpoch = status.result.epoch;
-          } else {
-            memory.controlEpoch = null;
-          }
-        }
+        await syncControlLeaseFromHost();
         thread = transition('thread', thread, 'ready');
       }
       host = transition('host', host, 'open');
@@ -283,7 +333,9 @@
       thread = transition('thread', thread, 'create');
       const sessionId = await ensureSession();
       const result = await rpc('thread.create', { project_root: rootEl.value, session_id: sessionId });
-      memory.threadId = result.result && result.result.thread_id;
+      if (result.classified.kind !== 'success') throw new Error('thread.create rejected');
+      memory.threadId = result.payload.result && result.payload.result.thread_id;
+      clearControlLease();
       threadInput.value = memory.threadId || '';
       thread = transition('thread', thread, 'ready');
       await observeThread();
@@ -295,15 +347,17 @@
     try {
       thread = transition('thread', thread, 'resume');
       memory.threadId = threadInput.value;
+      clearControlLease();
       const sessionId = await ensureSession();
       const result = await rpc('thread.resume', {
         thread_id: memory.threadId,
         project_root: rootEl.value,
         session_id: sessionId,
       });
-      if (result.error) throw new Error(result.error.message);
+      if (result.classified.kind !== 'success') throw new Error('thread.resume rejected');
       thread = transition('thread', thread, 'ready');
       await observeThread();
+      await syncControlLeaseFromHost();
     } catch (error) { thread = transition('thread', thread, 'fail'); appendEvent({ type: 'failed', error: 'Thread resume failed.' }); }
     renderChrome();
   }
@@ -322,8 +376,16 @@
       thread = transition('thread', thread, 'submit');
       renderChrome();
       const result = await rpc('turn.submit', { thread_id: memory.threadId, message: message, command_id: commandId });
-      if (result.error) throw new Error(result.error.message);
-      memory.turnId = result.result.turn_id;
+      if (result.classified.kind === 'rejected') {
+        const msg = result.classified.message || '';
+        if (msg.indexOf('lease') !== -1 || msg.indexOf('epoch') !== -1) clearControlLease('Lost control lease before submit completed.');
+        const decision = S.reconcileAfterSubmitFailure({ responseSettled: true, commandId: commandId, hostReachable: host === 'ONLINE' });
+        turn = transition('turn', turn, 'fail');
+        appendEvent({ type: 'failed', error: 'Submit rejected: ' + msg + ' (' + decision.ambiguity + ').' });
+        return;
+      }
+      if (result.classified.kind !== 'success') throw new Error('submit ambiguous');
+      memory.turnId = result.payload.result.turn_id;
       turn = transition('turn', turn, 'ack');
     } catch (error) {
       const decision = S.reconcileAfterSubmitFailure({ responseSettled: false, commandId: commandId, hostReachable: host === 'ONLINE' });
@@ -345,21 +407,31 @@
     if (!memory.pendingApproval || approval !== 'PENDING') return;
     approval = transition('approval', approval, decision === 'allow_once' ? 'allow' : 'deny');
     renderChrome();
-    const result = await rpc('approval.decide', {
-      approval_id: memory.pendingApproval.approval_id,
-      decision: decision,
-      thread_id: memory.pendingApproval.thread_id || memory.threadId,
-      turn_id: String(memory.pendingApproval.turn_id || memory.turnId || ''),
-      operation_digest: memory.pendingApproval.operation_digest,
-    });
-    if (result.error) {
+    try {
+      const result = await rpc('approval.decide', {
+        approval_id: memory.pendingApproval.approval_id,
+        decision: decision,
+        thread_id: memory.pendingApproval.thread_id || memory.threadId,
+        turn_id: String(memory.pendingApproval.turn_id || memory.turnId || ''),
+        operation_digest: memory.pendingApproval.operation_digest,
+      });
+      if (result.classified.kind === 'rejected') {
+        const msg = result.classified.message || 'rejected';
+        if (msg.indexOf('lease') !== -1 || msg.indexOf('epoch') !== -1) clearControlLease('Lost control lease during approval.');
+        approval = transition('approval', approval, msg.indexOf('expired') !== -1 ? 'expire' : 'stale');
+        appendEvent({ type: 'failed', error: msg });
+      } else if (result.classified.kind === 'success') {
+        approval = transition('approval', approval, 'resolve');
+        memory.pendingApproval = null;
+        thread = transition('thread', thread, 'running');
+        appendEvent({ type: 'permission', role: 'system', text: decision === 'allow_once' ? 'ALLOW ONCE recorded.' : 'DENY recorded. No mutation was performed.' });
+      } else {
+        approval = transition('approval', approval, 'stale');
+        appendEvent({ type: 'failed', error: 'Approval response was ambiguous.' });
+      }
+    } catch (error) {
       approval = transition('approval', approval, 'stale');
-      appendEvent({ type: 'failed', error: result.error.message });
-    } else {
-      approval = transition('approval', approval, 'resolve');
-      memory.pendingApproval = null;
-      thread = transition('thread', thread, 'running');
-      appendEvent({ type: 'permission', role: 'system', text: decision === 'allow_once' ? 'ALLOW ONCE recorded.' : 'DENY recorded. No mutation was performed.' });
+      appendEvent({ type: 'failed', error: 'Approval request failed before a definitive host response.' });
     }
     renderChrome();
   }
@@ -377,20 +449,20 @@
     byId('refresh-files').onclick = async function () {
       try {
         const result = await rpc('workspace.changes', { thread_id: memory.threadId });
-        const files = (result.result && result.result.files) || [];
+        const files = (result.payload.result && result.payload.result.files) || [];
         R.renderFiles(files);
       } catch (error) { appendEvent({ type: 'failed', error: 'Changed files unavailable.' }); }
     };
     byId('refresh-diff').onclick = async function () {
       try {
         const result = await rpc('workspace.changes', { thread_id: memory.threadId });
-        R.setText(byId('diff'), result.result && result.result.diff || 'No diff available.');
+        R.setText(byId('diff'), result.payload.result && result.payload.result.diff || 'No diff available.');
       } catch (error) { appendEvent({ type: 'failed', error: 'Diff unavailable.' }); }
     };
     byId('refresh-verification').onclick = async function () {
       try {
         const result = await rpc('verification.lookup', { thread_id: memory.threadId });
-        const snapshot = result.result || { status: 'NOT_VERIFIED', reason: 'No verification recorded.' };
+        const snapshot = result.payload.result || { status: 'NOT_VERIFIED', reason: 'No verification recorded.' };
         R.setVerification(snapshot);
       } catch (error) { appendEvent({ type: 'failed', error: 'Verification unavailable.' }); }
     };

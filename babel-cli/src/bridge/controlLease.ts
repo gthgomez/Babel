@@ -1,6 +1,7 @@
 /**
  * Per-thread control lease with monotonic fencing epochs.
  * One holder may issue mutating remote RPCs while the lease is valid.
+ * Committed epoch counters never decrease across release, expiry, or revocation.
  */
 
 export const DEFAULT_CONTROL_LEASE_TTL_MS = 30_000;
@@ -16,12 +17,15 @@ export interface ControlLeaseRecord {
 export type ControlLeaseError =
   | 'lease_required'
   | 'stale_epoch'
+  | 'epoch_required'
   | 'held_by_other'
   | 'not_holder'
   | 'unknown_thread';
 
 export class ControlLeaseRegistry {
   private readonly leases = new Map<string, ControlLeaseRecord>();
+  /** Highest epoch ever committed for a thread (never decremented). */
+  private readonly committedEpoch = new Map<string, number>();
   private readonly ttlMs: number;
 
   constructor(options?: { ttlMs?: number }) {
@@ -33,15 +37,27 @@ export class ControlLeaseRegistry {
     holderClientId?: string;
     epoch?: number;
     expiresAtMs?: number;
+    committed_epoch?: number;
   } {
     const rec = this.getValid(threadId);
-    if (!rec) return { held: false };
-    return {
+    const committed = this.committedEpoch.get(threadId);
+    if (!rec) {
+      return committed !== undefined ? { held: false, committed_epoch: committed } : { held: false };
+    }
+    const out: {
+      held: boolean;
+      holderClientId?: string;
+      epoch?: number;
+      expiresAtMs?: number;
+      committed_epoch?: number;
+    } = {
       held: true,
       holderClientId: rec.holderClientId,
       epoch: rec.epoch,
       expiresAtMs: rec.expiresAtMs,
     };
+    if (committed !== undefined) out.committed_epoch = committed;
+    return out;
   }
 
   acquire(input: {
@@ -53,9 +69,12 @@ export class ControlLeaseRegistry {
     if (existing && existing.holderClientId !== input.clientId) {
       if (!input.force) return { ok: false, error: 'held_by_other' };
     }
-    const epoch = existing && existing.holderClientId === input.clientId
-      ? existing.epoch
-      : (existing?.epoch ?? 0) + 1;
+    if (existing && existing.holderClientId === input.clientId && !input.force) {
+      existing.expiresAtMs = Date.now() + this.ttlMs;
+      this.leases.set(input.threadId, existing);
+      return { ok: true, epoch: existing.epoch, expiresAtMs: existing.expiresAtMs };
+    }
+    const epoch = this.bumpCommittedEpoch(input.threadId);
     const expiresAtMs = Date.now() + this.ttlMs;
     this.leases.set(input.threadId, {
       threadId: input.threadId,
@@ -93,14 +112,12 @@ export class ControlLeaseRegistry {
     return { ok: true };
   }
 
-  /**
-   * Host-local bearer clients may auto-bind when no remote holder exists.
-   */
   authorizeMutation(input: {
     threadId: string;
     clientId: string;
     controlEpoch?: number;
     allowHostAutoAcquire: boolean;
+    requireExplicitEpoch: boolean;
   }): { ok: true; epoch: number } | { ok: false; error: ControlLeaseError } {
     const rec = this.getValid(input.threadId);
     if (!rec) {
@@ -114,7 +131,15 @@ export class ControlLeaseRegistry {
     if (rec.holderClientId !== input.clientId) {
       return { ok: false, error: 'held_by_other' };
     }
-    if (input.controlEpoch !== undefined && input.controlEpoch !== rec.epoch) {
+    if (input.requireExplicitEpoch && input.controlEpoch === undefined) {
+      return { ok: false, error: 'epoch_required' };
+    }
+    if (input.controlEpoch === undefined) {
+      rec.expiresAtMs = Date.now() + this.ttlMs;
+      this.leases.set(input.threadId, rec);
+      return { ok: true, epoch: rec.epoch };
+    }
+    if (input.controlEpoch !== rec.epoch) {
       return { ok: false, error: 'stale_epoch' };
     }
     rec.expiresAtMs = Date.now() + this.ttlMs;
@@ -124,8 +149,16 @@ export class ControlLeaseRegistry {
 
   fenceDevice(deviceClientId: string): void {
     for (const [threadId, rec] of this.leases) {
-      if (rec.holderClientId === deviceClientId) this.leases.delete(threadId);
+      if (rec.holderClientId === deviceClientId) {
+        this.leases.delete(threadId);
+      }
     }
+  }
+
+  private bumpCommittedEpoch(threadId: string): number {
+    const next = (this.committedEpoch.get(threadId) ?? 0) + 1;
+    this.committedEpoch.set(threadId, next);
+    return next;
   }
 
   private getValid(threadId: string): ControlLeaseRecord | undefined {

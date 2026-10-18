@@ -175,7 +175,10 @@ export class ProtocolGateway {
         },
       };
     }
-    const leaseDenied = this.enforceControlLease
+    const clientKind = dispatchContext?.client.authKind;
+    const mustCheckLease =
+      this.enforceControlLease || clientKind === 'paired_device';
+    const leaseDenied = mustCheckLease
       ? this.assertControlLeaseForMutation(parsed, dispatchContext)
       : null;
     if (leaseDenied) return leaseDenied;
@@ -236,15 +239,24 @@ export class ProtocolGateway {
     if (!threadId) return controlError(id, 'invalid_request', 'thread_id is required');
 
     if (method === 'control.status') {
+      const st = this.controlLeases.status(threadId);
       return {
         jsonrpc: '2.0',
         id: id ?? 0,
-        result: this.controlLeases.status(threadId),
+        result: {
+          held: st.held,
+          holder_client_id: st.holderClientId,
+          epoch: st.epoch,
+          expires_at_ms: st.expiresAtMs,
+          committed_epoch: st.committed_epoch,
+        },
       };
     }
 
     if (method === 'control.acquire') {
-      const force = record.force === true;
+      const force =
+        record.force === true &&
+        (client.authKind === 'host_bearer' || client.authKind === 'query_bearer');
       const acquired = this.controlLeases.acquire({
         threadId,
         clientId: client.clientId,
@@ -318,18 +330,25 @@ export class ProtocolGateway {
     if (!threadId) return null;
     const allowHostAutoAcquire =
       client.authKind === 'host_bearer' || client.authKind === 'query_bearer';
+    const requireExplicitEpoch = client.authKind === 'paired_device';
     const leaseInput: {
       threadId: string;
       clientId: string;
       allowHostAutoAcquire: boolean;
+      requireExplicitEpoch: boolean;
       controlEpoch?: number;
     } = {
       threadId,
       clientId: client.clientId,
       allowHostAutoAcquire,
+      requireExplicitEpoch,
     };
-    if (params && typeof params.control_epoch === 'number') {
-      leaseInput.controlEpoch = params.control_epoch;
+    const rawEpoch = params?.control_epoch;
+    if (rawEpoch !== undefined && rawEpoch !== null) {
+      if (typeof rawEpoch !== 'number' || !Number.isFinite(rawEpoch)) {
+        return controlError(parsed.id ?? null, 'stale_epoch', 'control_epoch must be a finite number');
+      }
+      leaseInput.controlEpoch = rawEpoch;
     }
     const authorized = this.controlLeases.authorizeMutation(leaseInput);
     if (!authorized.ok) {
@@ -339,7 +358,11 @@ export class ProtocolGateway {
         `control lease denied: ${authorized.error}`,
       );
     }
-    if (params && params.control_epoch === undefined) {
+    if (
+      params &&
+      params.control_epoch === undefined &&
+      (client.authKind === 'host_bearer' || client.authKind === 'query_bearer')
+    ) {
       params.control_epoch = authorized.epoch;
     }
     return null;

@@ -115,6 +115,18 @@ describe('Bridge pairing integration', () => {
       headers: { Cookie: cookie },
     });
     assert.equal(adminAttempt.statusCode, 401);
+
+    for (const adminPath of [
+      ['POST', '/pair/approve', JSON.stringify({ challenge_id: challenge.challengeId })],
+      ['GET', '/pair/devices', undefined],
+    ] as const) {
+      const attempt = await httpRequest(`http://127.0.0.1:${PORT}${adminPath[1]}`, {
+        method: adminPath[0],
+        headers: { Cookie: cookie, ...(adminPath[2] ? { 'Content-Type': 'application/json' } : {}) },
+        ...(adminPath[2] ? { body: adminPath[2] } : {}),
+      });
+      assert.equal(attempt.statusCode, 401);
+    }
   });
 
   it('requires control.acquire for paired-device mutations', async () => {
@@ -142,7 +154,7 @@ describe('Bridge pairing integration', () => {
 
     const sessionRes = await httpRequest(`http://127.0.0.1:${PORT}/sessions`, {
       method: 'POST',
-      headers: { Cookie: cookie },
+      headers: { Cookie: cookie, Origin: 'http://127.0.0.1' },
       body: JSON.stringify({ projectRoot: tmp }),
     });
     assert.equal(sessionRes.statusCode, 201);
@@ -150,7 +162,7 @@ describe('Bridge pairing integration', () => {
 
     const createRpc = await httpRequest(`http://127.0.0.1:${PORT}/rpc`, {
       method: 'POST',
-      headers: { Cookie: cookie },
+      headers: { Cookie: cookie, Origin: 'http://127.0.0.1' },
       body: JSON.stringify({
         jsonrpc: '2.0',
         id: 1,
@@ -164,7 +176,7 @@ describe('Bridge pairing integration', () => {
 
     const denied = await httpRequest(`http://127.0.0.1:${PORT}/rpc`, {
       method: 'POST',
-      headers: { Cookie: cookie },
+      headers: { Cookie: cookie, Origin: 'http://127.0.0.1' },
       body: JSON.stringify({
         jsonrpc: '2.0',
         id: 2,

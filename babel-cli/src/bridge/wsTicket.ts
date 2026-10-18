@@ -77,11 +77,20 @@ export class WsTicketStore {
     };
   }
 
+  revokeForDevice(deviceId: string): void {
+    for (const [token, stored] of this.tickets) {
+      if (stored.deviceId === deviceId) {
+        this.tickets.delete(token);
+      }
+    }
+  }
+
   consume(input: {
     ticket: string | undefined;
     sessionId: string;
     threadId?: string;
     now?: number;
+    deviceAuthorized?: (deviceId: string) => boolean;
   }): { ok: true; value: ConsumedWsTicket } | { ok: false; error: TicketConsumeError } {
     if (!input.ticket) return { ok: false, error: 'missing' };
     const now = input.now ?? Date.now();
@@ -97,6 +106,14 @@ export class WsTicketStore {
     }
     if (input.threadId !== undefined && stored.threadId !== input.threadId) {
       return { ok: false, error: 'scope_mismatch' };
+    }
+    if (
+      stored.deviceId &&
+      input.deviceAuthorized &&
+      !input.deviceAuthorized(stored.deviceId)
+    ) {
+      this.tickets.delete(input.ticket);
+      return { ok: false, error: 'unknown' };
     }
     stored.consumed = true;
     return {

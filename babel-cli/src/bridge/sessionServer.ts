@@ -620,6 +620,7 @@ export class BridgeServer {
         return;
       }
       this.protocolGateway.controlLeases.fenceDevice(`device:${deviceId}`);
+      this.wsTickets.revokeForDevice(deviceId);
       this.closeDeviceSockets(deviceId);
       jsonResponse(res, 200, { ok: true, deviceId });
       return;
@@ -857,6 +858,7 @@ export class BridgeServer {
       const consumed = this.wsTickets.consume({
         ticket: ticketValue,
         sessionId,
+        deviceAuthorized: (deviceId) => this.devicePairing.isDeviceAuthorized(deviceId),
       });
       if (!consumed.ok) {
         const status = consumed.error === 'missing' || consumed.error === 'unknown' ? 401 : 403;
@@ -940,6 +942,13 @@ export class BridgeServer {
       transport instanceof WebSocketTransport && subscribedThreadId
         ? this.protocolGateway.subscribe(
             (payload) => {
+              if (
+                pairedDeviceId &&
+                !this.devicePairing.isDeviceAuthorized(pairedDeviceId)
+              ) {
+                transport.close();
+                return;
+              }
               transport.sendText(payload);
             },
             { threadId: subscribedThreadId },
@@ -951,6 +960,17 @@ export class BridgeServer {
         this.registerDeviceSocket(pairedDeviceId, () => transport.close());
       }
       transport.onText((payload) => {
+        if (wsClient.deviceId && !this.devicePairing.isDeviceAuthorized(wsClient.deviceId)) {
+          transport.sendText(
+            JSON.stringify({
+              jsonrpc: '2.0',
+              id: null,
+              error: { code: -32001, message: 'Device authorization revoked' },
+            }),
+          );
+          transport.close();
+          return;
+        }
         const parsed = parseProtocolRequest(payload);
         const method = parsed && typeof parsed.method === 'string' ? parsed.method : '';
         if (subscribedThreadId) {

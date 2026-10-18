@@ -8,8 +8,11 @@ Status: living document for the remote implementation campaign. **Qualified** me
 | 3 | Admin routes host-bearer only | Tested | `bridgePairing.integration.test.ts` |
 | 3 | Paired CSRF / Origin on mutations | Tested | `remoteSecurity.gateway.test.ts` |
 | 3 | Device session disk persistence | Tested | `devicePairing.test.ts`, `remoteSecurity.gateway.test.ts` |
-| 4 | Control lease enforced (no prod bypass) | Tested | `remoteSecurity.gateway.test.ts` (`remote.capabilities`), default `enforceControlLease` on `BridgeServer` |
-| 4 | WS ticket binds client + lease on WS RPC | Tested | `wsTicket.test.ts`, gateway tests |
+| 4 | Control lease enforced (no prod bypass) | Tested | Paired clients always lease-gated; `remote.capabilities`; no env bypass |
+| 4 | Monotonic epoch fencing | Tested | `controlLease.test.ts`, `remoteSecurity.gateway.test.ts` |
+| 4 | WS ticket binds client + lease on WS RPC | Tested | `remoteControlWs.gateway.test.ts`, `wsTicket.test.ts` |
+| 4 | Paired force-acquire blocked | Tested | `remoteControlWs.gateway.test.ts` |
+| 6 | PWA lease renewal + holder identity | Implemented | `remote-ui/app.js` (renew timer, `holder_client_id` check); UI not browser-qualified |
 | 4 | Live revoke closes paired sockets | Implemented | `sessionServer.ts`; revocation auth test in `remoteSecurity.gateway.test.ts` |
 | 4 | Stale epoch / command_id integrity | Tested | `remoteSecurity.gateway.test.ts`, `protocolGateway.test.ts` |
 | 4 | Stale approval digest / replay | Tested | `remoteApproval.test.ts`, `remoteSecurity.gateway.test.ts` |

@@ -15,6 +15,13 @@ const THREAD_SCOPED_METHODS = new Set<BabelProtocolMethod>([
   'approval.decide',
 ]);
 
+const CONTROL_METHODS = new Set([
+  'control.status',
+  'control.acquire',
+  'control.renew',
+  'control.release',
+]);
+
 const SESSION_SCOPED_METHODS = new Set<BabelProtocolMethod>(['thread.create', 'thread.resume']);
 
 function threadIdFromParams(params: unknown): string | undefined {
@@ -44,10 +51,18 @@ export function authorizeThreadScopedWsRpc(
   if (!parsed || typeof parsed.method !== 'string') {
     return { ok: false, message: 'Invalid JSON-RPC request' };
   }
-  const method = parsed.method as BabelProtocolMethod;
+  const method = parsed.method as BabelProtocolMethod | string;
   const params = (parsed as { params?: unknown }).params;
 
-  if (SESSION_SCOPED_METHODS.has(method)) {
+  if (CONTROL_METHODS.has(method)) {
+    const threadId = threadIdFromParams(params);
+    if (!threadId || threadId !== context.subscribedThreadId) {
+      return { ok: false, message: 'control RPC thread_id must match the WebSocket ticket thread' };
+    }
+    return { ok: true };
+  }
+
+  if (SESSION_SCOPED_METHODS.has(method as BabelProtocolMethod)) {
     const sessionId = sessionIdFromParams(params);
     if (!sessionId || sessionId !== context.bridgeSessionId) {
       return { ok: false, message: 'session_id must match the WebSocket bridge session' };
@@ -61,7 +76,7 @@ export function authorizeThreadScopedWsRpc(
     return { ok: true };
   }
 
-  if (THREAD_SCOPED_METHODS.has(method)) {
+  if (THREAD_SCOPED_METHODS.has(method as BabelProtocolMethod)) {
     const threadId = threadIdFromParams(params);
     if (!threadId || threadId !== context.subscribedThreadId) {
       return { ok: false, message: 'RPC thread_id must match the WebSocket ticket thread' };
