@@ -75,7 +75,10 @@ import {
 import { confirmedMutationPaths } from './mutationTools.js'
 import { detectAndBuildBlockedReport } from './chatEngineSupport.js'
 import type { ThreadTerminalResponse } from './threadEventLog.js'
-import type { FinalizeParityTurnExtras } from './chatEngineParityBridge.js'
+import type {
+  FinalizeParityTurnExtras,
+  FinalizeParityTurnResult,
+} from './chatEngineParityBridge.js'
 import { classifyChatTaskIntent } from './chatEngineTaskIntent.js'
 import { isSessionEventPersistenceFailure } from './sessionEventDiagnostics.js'
 import { hasInspectedNoChangeEvidence } from './completionGatePolicy.js'
@@ -145,7 +148,7 @@ export interface ChatTerminalEffects {
     reason: TerminalReason | undefined,
     response?: ThreadTerminalResponse,
     extras?: FinalizeParityTurnExtras,
-  ) => boolean
+  ) => FinalizeParityTurnResult
   storeTelemetry: (record: ChatTurnTelemetryRecord | null) => void
   setLimiter: (limiter: ChatRunLimiter, reason: string) => void
   setBudgetExceeded: () => void
@@ -287,7 +290,7 @@ export function completeChatStream(
         ? 'budget_exhausted'
         : 'completed',
   })
-  const durableOk = effects.finalizeTurn(
+  const finalizeResult = effects.finalizeTurn(
     terminal.outcome,
     terminal.status,
     terminalReason,
@@ -297,7 +300,7 @@ export function completeChatStream(
     },
     { completionDecision: completionDecisionPayload },
   )
-  if (!durableOk) {
+  if (!finalizeResult.committed) {
     return failChatStream(input, SESSION_EVENT_PERSISTENCE_FINALIZE_MESSAGE)
   }
   persistChatTranscript(snapshot.context.engineRunDir, snapshot.presentation.conversation)
@@ -738,11 +741,11 @@ export function assembleChatResult(
     status: finalStatus,
   })
 
-  let durableOk = true
+  let finalizeResult: FinalizeParityTurnResult = { committed: true }
   if (!superseded) {
     effects.settleActiveExecution()
     // AC3 choke point: memory + disk (idempotent if streamDone already finalized)
-    durableOk = effects.finalizeTurn(
+    finalizeResult = effects.finalizeTurn(
       terminal.outcome,
       terminal.status,
       terminalReason,
@@ -765,8 +768,8 @@ export function assembleChatResult(
   )
 
   const result: ChatResult = {
-    status: durableOk ? terminal.status : 'failed',
-    ...(durableOk
+    status: finalizeResult.committed ? terminal.status : 'failed',
+    ...(finalizeResult.committed
       ? terminal.outcome !== undefined
         ? { outcome: terminal.outcome }
         : {}

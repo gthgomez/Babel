@@ -30,17 +30,18 @@ const result = spawnSync('npm', ['run', rawScript], {
   shell: false,
 })
 
-const tap = `${result.stdout ?? ''}${result.stderr ?? ''}`
+const tap = result.stdout ?? ''
 writeFileSync(tapPath, tap, 'utf8')
-process.stdout.write(result.stdout ?? '')
+process.stdout.write(tap)
 process.stderr.write(result.stderr ?? '')
 
 const inventory = parseRequiredTapInventory(tap, suite)
+const childFailed = (result.status ?? 0) !== 0
 const failed =
+  childFailed ||
   inventory.status === 'failed' ||
   inventory.failed > 0 ||
-  inventory.status !== 'complete' ||
-  inventory.errors.length > 0
+  (inventory.status !== 'complete' && inventory.errors.length > 0)
 
 if (failed) {
   console.error(

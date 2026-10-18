@@ -32,7 +32,7 @@ export function captureRequiredTapSelection(suite, artifactDirectory) {
   if (!['chat-truth', 'harness-runtime'].includes(suite)) {
     throw new Error(`Unsupported required TAP suite: ${suite}`)
   }
-  const command = packageJson.scripts?.[`test:${suite}`]
+  const command = packageJson.scripts?.[`test:${suite}:raw`]
   const marker = ' --test '
   if (typeof command !== 'string' || !command.includes(marker)) {
     throw new Error(`test:${suite} must contain an explicit --test file list`)

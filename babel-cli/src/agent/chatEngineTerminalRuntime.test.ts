@@ -94,7 +94,7 @@ function terminalInput(t: TestContext): ChatTerminalInput {
         policyVersion: 'fixture',
       }),
       settleActiveExecution: () => {},
-      finalizeTurn: () => true,
+      finalizeTurn: () => ({ committed: true }),
       storeTelemetry: (record) => {
         snapshot.presentation.lastTurnTelemetry = record
       },
@@ -145,10 +145,25 @@ test('keeps a read-only hard-cap outcome coherent with its structured budget rea
 
 test('success stream downgrades when durable session flush fails at finalization', (t) => {
   const input = terminalInput(t)
-  input.effects.finalizeTurn = () => false
+  input.effects.finalizeTurn = () => ({ committed: false })
   const event = completeChatStream(input, 'would-be success answer')
   assert.equal(event.type, 'failed')
   assert.match(event.error ?? '', /session event persistence failed/)
+})
+
+test('secondary artifact failure keeps stream and callback aligned with committed terminal', (t) => {
+  const input = terminalInput(t)
+  input.snapshot.context.acceptedOperation = 'READ_ONLY'
+  input.effects.finalizeTurn = () => ({ committed: true, secondaryArtifactFailure: true })
+  const stream = completeChatStream(input, 'Here is the requested inventory.')
+  assert.equal(stream.type, 'done')
+  if (stream.type === 'done') {
+    assert.equal(stream.status, 'completed')
+    assert.equal(stream.outcome, 'NO_CHANGE_REQUIRED')
+  }
+  const callback = assembleChatResult(input, 'completed', {}, 'Here is the requested inventory.')
+  assert.equal(callback.status, 'completed')
+  assert.equal(callback.outcome, 'NO_CHANGE_REQUIRED')
 })
 
 test('terminal owner persists the exact displayed response before finalization', (t) => {
@@ -156,7 +171,7 @@ test('terminal owner persists the exact displayed response before finalization',
   let response: unknown
   input.effects.finalizeTurn = (_outcome, _status, _reason, value) => {
     response = value
-    return true
+    return { committed: true }
   }
   completeChatStream(input, 'Controller-selected visible response')
   assert.deepEqual(response, {kind:'answer',content:'Controller-selected visible response'})
@@ -333,7 +348,7 @@ test('typed context preparation failure survives terminal persistence and stream
   let persisted: unknown[] = []
   input.effects.finalizeTurn = (...args) => {
     persisted = args
-    return true
+    return { committed: true }
   }
   const event = failChatStream(input, 'Snapshot unavailable: input exceeds the size cap', {
     code: 'context_preparation_failed', cause_class: 'harness', detail: 'workspace_revision',

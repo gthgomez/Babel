@@ -168,6 +168,19 @@ export type FinalizeParityTurnExtras = {
   completionDecision?: ParityCompletionDecisionPayload;
 };
 
+/** Primary session flush is the commit point; secondary projection may fail afterward. */
+export type FinalizeParityTurnResult = {
+  committed: boolean;
+  secondaryArtifactFailure?: boolean;
+};
+
+const PARITY_FINALIZE_COMMITTED: FinalizeParityTurnResult = { committed: true };
+const PARITY_FINALIZE_PRIMARY_FAILED: FinalizeParityTurnResult = { committed: false };
+
+function parityFinalizeSecondaryArtifactWarning(): FinalizeParityTurnResult {
+  return { committed: true, secondaryArtifactFailure: true };
+}
+
 const TERMINAL_PERSISTENCE_FAILURE_REASON: TerminalReason = {
   code: 'unknown',
   cause_class: 'harness',
@@ -1125,7 +1138,7 @@ export async function finalizeParityTurn(
   response?: ThreadTerminalResponse,
   extras?: FinalizeParityTurnExtras,
 ): Promise<void> {
-  const durableOk = finalizeParityTurnSync(
+  const finalizeResult = finalizeParityTurnSync(
     rt,
     runDir,
     outcome,
@@ -1134,7 +1147,7 @@ export async function finalizeParityTurn(
     response,
     extras,
   );
-  if (!durableOk) {
+  if (!finalizeResult.committed) {
     throw new Error('SESSION_EVENT_PERSISTENCE_BOUNDARY_FAILED');
   }
 }
@@ -1292,7 +1305,8 @@ function correctParityTerminalPersistenceFailure(
 
 /**
  * Fire-and-forget finalize for sync call sites (streamDone/cancel/buildResult).
- * Returns false when required session-event evidence could not be flushed.
+ * Primary failure: session evidence could not be flushed. Secondary failure:
+ * terminal session is committed but live-session projection artifacts failed.
  */
 export function finalizeParityTurnSync(
   rt: ParityRuntime,
@@ -1302,19 +1316,22 @@ export function finalizeParityTurnSync(
   reason?: TerminalReason,
   response?: ThreadTerminalResponse,
   extras?: FinalizeParityTurnExtras,
-): boolean {
+): FinalizeParityTurnResult {
   const turnId = rt.turnId;
   if (turnId && rt.terminalPersistCommittedTurnId === turnId) {
     if (!tryPersistParityLiveSessionArtifacts(rt, runDir)) {
-      return false;
+      persistThreadEventLog(runDir, rt.eventLog).catch((err) => {
+        reportEventLogPersistFailure(`finalize-repair:${outcome}`, err);
+      });
+      return parityFinalizeSecondaryArtifactWarning();
     }
     persistThreadEventLog(runDir, rt.eventLog).catch((err) => {
       reportEventLogPersistFailure(`finalize-repair:${outcome}`, err);
     });
-    return true;
+    return PARITY_FINALIZE_COMMITTED;
   }
   if (rt.sessionPersistenceBoundaryFailed) {
-    return false;
+    return PARITY_FINALIZE_PRIMARY_FAILED;
   }
   parityEndTurn(rt, outcome, status, reason, response);
   if (extras?.completionDecision && turnId) {
@@ -1331,7 +1348,7 @@ export function finalizeParityTurnSync(
   } catch {
     correctParityTerminalPersistenceFailure(rt, runDir, `finalize-sync:${outcome}`);
     rt.sessionPersistenceBoundaryFailed = true;
-    return false;
+    return PARITY_FINALIZE_PRIMARY_FAILED;
   }
   if (turnId) {
     rt.terminalPersistCommittedTurnId = turnId;
@@ -1348,12 +1365,12 @@ export function finalizeParityTurnSync(
     persistThreadEventLog(runDir, rt.eventLog).catch((err) => {
       reportEventLogPersistFailure(`finalize:${outcome}`, err);
     });
-    return false;
+    return parityFinalizeSecondaryArtifactWarning();
   }
   persistThreadEventLog(runDir, rt.eventLog).catch((err) => {
     reportEventLogPersistFailure(`finalize:${outcome}`, err);
   });
-  return true;
+  return PARITY_FINALIZE_COMMITTED;
 }
 
 /**

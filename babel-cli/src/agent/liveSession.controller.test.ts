@@ -66,6 +66,11 @@ import {
   finalizeParityTurnSync,
   checkpointParityEventLog,
 } from './chatEngineParityBridge.js';
+import {
+  assembleChatResult,
+  completeChatStream,
+  type ChatTerminalInput,
+} from './chatEngineTerminalRuntime.js';
 import { withAcceptanceCriteria } from './taskContract.js';
 import {
   buildLiveGoldenEpisode,
@@ -291,7 +296,7 @@ describe('H2 ChatEngine resume + LiveSession projection', () => {
     writeFileSync(eventPath, '');
     unlinkSync(eventPath);
     mkdirSync(eventPath);
-    const durableOk = finalizeParityTurnSync(
+    const finalizeResult = finalizeParityTurnSync(
       rt,
       runDir,
       'VERIFIED_COMPLETE',
@@ -309,7 +314,7 @@ describe('H2 ChatEngine resume + LiveSession projection', () => {
         },
       },
     );
-    assert.equal(durableOk, false);
+    assert.equal(finalizeResult.committed, false);
     assert.equal(rt.sessionPersistenceBoundaryFailed, true);
     assert.equal(existsSync(join(runDir, LIVE_SESSION_SNAPSHOT_FILENAME)), false);
     const ended = rt.sessionEvents.events.filter((e) => e.kind === 'turn_ended');
@@ -357,7 +362,7 @@ describe('H2 ChatEngine resume + LiveSession projection', () => {
     writeFileSync(eventPath, '');
     unlinkSync(eventPath);
     mkdirSync(eventPath);
-    const durableOk = finalizeParityTurnSync(
+    const finalizeResult = finalizeParityTurnSync(
       rt,
       runDir,
       'VERIFIED_COMPLETE',
@@ -375,7 +380,7 @@ describe('H2 ChatEngine resume + LiveSession projection', () => {
         },
       },
     );
-    assert.equal(durableOk, false);
+    assert.equal(finalizeResult.committed, false);
     rmSync(eventPath, { recursive: true, force: true });
     checkpointParityEventLog(rt, runDir);
     const eq = resumeEquivalenceFromDisk(runDir);
@@ -418,7 +423,7 @@ describe('H2 ChatEngine resume + LiveSession projection', () => {
     writeFileSync(snapPath, '{}');
     unlinkSync(snapPath);
     mkdirSync(snapPath);
-    const firstOk = finalizeParityTurnSync(
+    const firstResult = finalizeParityTurnSync(
       rt,
       runDir,
       'VERIFIED_COMPLETE',
@@ -427,7 +432,8 @@ describe('H2 ChatEngine resume + LiveSession projection', () => {
       undefined,
       { completionDecision },
     );
-    assert.equal(firstOk, false);
+    assert.equal(firstResult.committed, true);
+    assert.equal(firstResult.secondaryArtifactFailure, true);
     assert.equal(rt.terminalPersistCommittedTurnId, rt.turnId);
     assert.notEqual(rt.sessionPersistenceBoundaryFailed, true);
     const diskLog = loadSessionEventLogFromDir(runDir);
@@ -444,7 +450,7 @@ describe('H2 ChatEngine resume + LiveSession projection', () => {
     assert.ok(statSync(snapPath).isDirectory());
 
     rmSync(snapPath, { recursive: true, force: true });
-    const repairOk = finalizeParityTurnSync(
+    const repairResult = finalizeParityTurnSync(
       rt,
       runDir,
       'VERIFIED_COMPLETE',
@@ -453,7 +459,8 @@ describe('H2 ChatEngine resume + LiveSession projection', () => {
       undefined,
       { completionDecision },
     );
-    assert.equal(repairOk, true);
+    assert.equal(repairResult.committed, true);
+    assert.equal(repairResult.secondaryArtifactFailure, undefined);
     assert.ok(existsSync(snapPath));
     const eq = resumeEquivalenceFromDisk(runDir);
     assert.ok(eq.ok, eq.mismatches.join(','));
@@ -465,6 +472,68 @@ describe('H2 ChatEngine resume + LiveSession projection', () => {
     });
     engine2.restoreSessionEventsFromDir(runDir);
     assert.equal(engine2.getLiveSession().terminal?.outcome, 'VERIFIED_COMPLETE');
+  });
+
+  it('stream and callback surfaces agree with durable terminal after snapshot fault', () => {
+    const engine = new ChatEngine({
+      task: 'stream snapshot fault',
+      projectRoot: process.cwd(),
+    });
+    const runDir = (engine as unknown as { engineRunDir: string }).engineRunDir;
+    const runId = (engine as unknown as { engineRunId: string }).engineRunId;
+    const rt = engine.getParityRuntime();
+    parityOnUserTurn(rt, {
+      task: 'stream snapshot fault',
+      model: 'test-model',
+      provider: 'test-provider',
+      projectRoot: process.cwd(),
+    });
+    const snapPath = join(runDir, LIVE_SESSION_SNAPSHOT_FILENAME);
+    writeFileSync(snapPath, '{}');
+    unlinkSync(snapPath);
+    mkdirSync(snapPath);
+    const input = (engine as unknown as { terminalRuntimeInput(): ChatTerminalInput }).terminalRuntimeInput();
+    input.snapshot.context.acceptedOperation = 'READ_ONLY';
+    const stream = completeChatStream(input, 'Inventory complete.');
+    assert.equal(stream.type, 'done');
+    assert.ok(stream.type === 'done');
+    const terminalOutcome = stream.outcome;
+    assert.equal(stream.status, 'completed');
+    assert.ok(terminalOutcome);
+    const diskAfterStream = loadSessionEventLogFromDir(runDir);
+    assert.ok(diskAfterStream);
+    const endedAfterStream = diskAfterStream!.events.filter((e) => e.kind === 'turn_ended');
+    assert.equal(endedAfterStream[endedAfterStream.length - 1]?.outcome, terminalOutcome);
+    assert.ok(
+      diskAfterStream!.events.some(
+        (e) =>
+          e.kind === 'policy_intervened' &&
+          e.action === 'terminal_projection_failed',
+      ),
+    );
+    const callback = assembleChatResult(input, 'completed', {}, 'Inventory complete.');
+    assert.equal(callback.status, 'completed');
+    assert.equal(callback.outcome, terminalOutcome);
+    const diskAfterCallback = loadSessionEventLogFromDir(runDir);
+    assert.ok(diskAfterCallback);
+    const endedAfterCallback = diskAfterCallback!.events.filter((e) => e.kind === 'turn_ended');
+    assert.equal(endedAfterCallback.length, endedAfterStream.length);
+    assert.equal(
+      endedAfterCallback[endedAfterCallback.length - 1]?.outcome,
+      terminalOutcome,
+    );
+    rmSync(snapPath, { recursive: true, force: true });
+    finalizeParityTurnSync(rt, runDir, terminalOutcome, stream.status);
+    const eq = resumeEquivalenceFromDisk(runDir);
+    assert.ok(eq.ok, eq.mismatches.join(','));
+    const engine2 = new ChatEngine({
+      task: 'placeholder',
+      projectRoot: process.cwd(),
+      runId,
+      resumeExisting: true,
+    });
+    engine2.restoreSessionEventsFromDir(runDir);
+    assert.equal(engine2.getLiveSession().terminal?.outcome, terminalOutcome);
   });
 
   it('production finalize aligns session frontier and survives idempotent repeat finalize', () => {
@@ -489,7 +558,7 @@ describe('H2 ChatEngine resume + LiveSession projection', () => {
       evidenceRefs: [],
       policyVersion: 'fixture',
     };
-    const firstOk = finalizeParityTurnSync(
+    const firstResult = finalizeParityTurnSync(
       rt,
       runDir,
       'VERIFIED_COMPLETE',
@@ -498,7 +567,7 @@ describe('H2 ChatEngine resume + LiveSession projection', () => {
       undefined,
       { completionDecision },
     );
-    assert.equal(firstOk, true);
+    assert.equal(firstResult.committed, true);
     assert.equal(rt.terminalPersistCommittedTurnId, rt.turnId);
     const diskLog = loadSessionEventLogFromDir(runDir);
     assert.ok(diskLog);
@@ -511,7 +580,7 @@ describe('H2 ChatEngine resume + LiveSession projection', () => {
     assert.equal(diskLog!.flushedThroughSeq, lastSeq);
 
     const diskBytesBeforeRepeat = readFileSync(join(runDir, SESSION_EVENTS_FILENAME), 'utf8');
-    const secondOk = finalizeParityTurnSync(
+    const secondResult = finalizeParityTurnSync(
       rt,
       runDir,
       'VERIFIED_COMPLETE',
@@ -520,7 +589,7 @@ describe('H2 ChatEngine resume + LiveSession projection', () => {
       undefined,
       { completionDecision },
     );
-    assert.equal(secondOk, true);
+    assert.equal(secondResult.committed, true);
     assert.notEqual(rt.sessionPersistenceBoundaryFailed, true);
     assert.equal(
       readFileSync(join(runDir, SESSION_EVENTS_FILENAME), 'utf8'),
