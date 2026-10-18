@@ -33,6 +33,9 @@ function canonicalOwnedFixtureRoot(prefix: string): string {
 const sourceScript = fileURLToPath(new URL('./ownedFileAssertion.windows.ps1', import.meta.url))
 const oracleScript = fileURLToPath(new URL('../../dist/authority/ownedFileAssertion.windows.ps1', import.meta.url))
 const nativeOnly = { skip: process.platform !== 'win32' ? 'Windows NTFS native boundary; other platforms remain unsupported' : false }
+const NATIVE_CHILD_PROBE_TIMEOUT_MS = 15_000
+/** Single child compiles the oracle once, then runs all 52 matrix cases on Windows CI. */
+const NATIVE_MATRIX_PROBE_TIMEOUT_MS = 60_000
 
 test('the CLI build carries the exact owned native script without a source fallback', () => {
   assert.equal(existsSync(oracleScript), true, 'dist/authority/ownedFileAssertion.windows.ps1 must be produced by npm run build (copy_playbooks)')
@@ -43,12 +46,13 @@ function nativeChild(
   script: string,
   args: string[],
   mode: NativeChildMode = 'probe',
+  timeoutMs: number = NATIVE_CHILD_PROBE_TIMEOUT_MS,
 ) {
   const env = { ...getSafeEnv(process.env), PSModulePath: join(dirname(host), 'Modules'),
     POWERSHELL_TELEMETRY_OPTOUT: '1', POWERSHELL_UPDATECHECK: 'Off', DOTNET_CLI_HOME: root,
     DOTNET_SKIP_FIRST_TIME_EXPERIENCE: '1', DOTNET_NOLOGO: '1' }
   const child = spawnSync(host, ['-NoLogo', '-NoProfile', '-NonInteractive', '-File', script, ...args],
-    { cwd: root, env, encoding: 'utf8', timeout: 15000, maxBuffer: 4096, windowsHide: true })
+    { cwd: root, env, encoding: 'utf8', timeout: timeoutMs, maxBuffer: 4096, windowsHide: true })
   if (child.error) {
     assert.fail(`native PowerShell spawn failed: ${child.error.message}`)
   }
@@ -134,7 +138,7 @@ foreach ($case in $cases) {
 [Console]::Out.WriteLine('{"cases":' + $cases.Count + ',"failures":' + $failures + '}')
 if ($failures) { exit 1 }
 `)
-  const child = nativeChild(root, probe, ['-OracleScript', oracleScript, '-Matrix', matrix])
+  const child = nativeChild(root, probe, ['-OracleScript', oracleScript, '-Matrix', matrix], 'probe', NATIVE_MATRIX_PROBE_TIMEOUT_MS)
   const output = JSON.parse(child.stdout) as { cases: number; failures: number }
   assert.equal(output.cases, cases.length)
   assert.equal(output.failures, 0)
