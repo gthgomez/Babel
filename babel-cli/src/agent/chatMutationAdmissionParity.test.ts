@@ -38,16 +38,49 @@ if (!isSyntheticProviderFixtureReady()) {
   const { executeActionWithPolicy } = await import('./toolExecutor.js')
   const { governedStrReplace, governedApplyPatch } = await import('./governedMutations.js')
   const { resolveIsolationBrokerFlags } = await import('./chatEngineIsolationFlags.js')
+  const { decodeTaskGitOutput, decodeTaskGitRootOutput } = await import('./taskMutationOwnership.js')
 
-  function fixture(t: TestContext, subdirectory = false, selectedAlias = false) {
-    const repository = mkdtempSync(join(tmpdir(), 'babel-owned-edits-'))
+  test('Git path decoding distinguishes malformed bytes from a valid replacement character', () => {
+    assert.equal(decodeTaskGitOutput(Buffer.from('?? \uFFFD.txt\0')), '?? \uFFFD.txt\0')
+    assert.equal(decodeTaskGitOutput(Buffer.from([0x3f, 0x3f, 0x20, 0xff, 0x2e, 0x74, 0x78, 0x74, 0])), null)
+  })
+
+  test('Git root decoding preserves pathname whitespace and embedded newlines', () => {
+    assert.equal(decodeTaskGitRootOutput(Buffer.from('/tmp/repo \t\n')), '/tmp/repo \t')
+    assert.equal(decodeTaskGitRootOutput(Buffer.from('/tmp/repo\nname \n')), '/tmp/repo\nname ')
+    assert.equal(decodeTaskGitRootOutput(Buffer.from('/tmp/repo\n')), '/tmp/repo')
+    assert.equal(decodeTaskGitRootOutput(Buffer.from('/tmp/repo\n\n')), '/tmp/repo\n')
+    assert.equal(decodeTaskGitRootOutput(Buffer.from('D:/repo \r\n')), process.platform === 'win32' ? 'D:/repo ' : 'D:/repo \r')
+  })
+
+  test('POSIX repository roots ending in whitespace preserve consecutive writes', async t => {
+    if (process.platform === 'win32') { t.skip('POSIX whitespace-suffixed root identity'); return }
+    const f = fixture(t, false, false, 'repository ')
+    assert.equal((await f.write('one\n')).policyBlocked, false)
+    assert.equal((await f.replace('one', 'two')).policyBlocked, false)
+    assert.equal(readFileSync(join(f.root, 'notes.txt'), 'utf8'), 'two\n')
+  })
+
+  test('invalid POSIX filename bytes cannot impersonate a task-owned Unicode filename', async t => {
+    if (process.platform === 'win32') { t.skip('Windows filenames cannot carry raw invalid UTF-8 bytes'); return }
+    const f = fixture(t)
+    assert.equal((await f.writePath('\uFFFD.txt', 'owned\n')).policyBlocked, false)
+    writeFileSync(Buffer.concat([Buffer.from(`${f.root}/`), Buffer.from([0xff]), Buffer.from('.txt')]), 'external\n')
+    assert.equal((await f.write('overwrite\n')).policyBlocked, true)
+    assert.equal(readFileSync(join(f.root, 'notes.txt'), 'utf8'), 'before\n')
+  })
+
+  function fixture(t: TestContext, subdirectory = false, selectedAlias = false, repositoryName?: string) {
+    const temporaryRoot = mkdtempSync(join(tmpdir(), 'babel-owned-edits-'))
+    const repository = repositoryName ? join(temporaryRoot, repositoryName) : temporaryRoot
+    if (repositoryName) mkdirSync(repository)
     const physicalRoot = subdirectory ? join(repository, 'package') : repository
     if (subdirectory) mkdirSync(physicalRoot)
     const root = selectedAlias ? `${repository}-selected` : physicalRoot
     if (selectedAlias) symlinkSync(physicalRoot, root, process.platform === 'win32' ? 'junction' : 'dir')
     t.after(() => {
       if (selectedAlias) rmSync(root, { recursive: true, force: true })
-      rmSync(repository, { recursive: true, force: true })
+      rmSync(temporaryRoot, { recursive: true, force: true })
     })
     const git = (...args: string[]) => execFileSync('git', args, { cwd: repository, windowsHide: true })
     git('init', '-q')

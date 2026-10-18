@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { isUtf8 } from 'node:buffer'
 import { spawnSync } from 'node:child_process'
 import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, realpathSync } from 'node:fs'
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path'
@@ -14,6 +15,17 @@ export interface TaskWorkspaceChangeClassification {
 interface TaskPostImage {
   readonly digest: string
   readonly mode: number
+}
+
+/** Decode Git path output without changing valid filename identities. */
+export function decodeTaskGitOutput(output: Uint8Array): string | null {
+  return isUtf8(output) ? Buffer.from(output).toString('utf8') : null
+}
+
+/** Decode the repository-root line emitted by Git. */
+export function decodeTaskGitRootOutput(output: Uint8Array): string | null {
+  const text = decodeTaskGitOutput(output)
+  return text === null ? null : text.replace(process.platform === 'win32' ? /\r?\n$/ : /\n$/, '')
 }
 
 /** Task-local post-images are evidence of ownership, never authority to write. */
@@ -76,7 +88,7 @@ export class TaskMutationOwnership {
     }
     if (!this.isCurrent) return { ...result, unverifiablePaths: ['<retired-owner>'] }
     const git = (args: string[]) => spawnSync('git', args, {
-      cwd: this.root, encoding: 'utf8', timeout: 5000, maxBuffer: 1024 * 1024,
+      cwd: this.root, timeout: 5000, maxBuffer: 1024 * 1024,
       windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
     })
     const rootResult = git(['rev-parse', '--show-toplevel'])
@@ -84,8 +96,11 @@ export class TaskMutationOwnership {
     if (rootResult.status !== 0 || status.status !== 0 || status.error || rootResult.error) {
       return { ...result, unverifiablePaths: ['<git-status>'] }
     }
-    const gitRoot = rootResult.stdout.trim()
-    const records = status.stdout.split('\0')
+    const rootOutput = decodeTaskGitRootOutput(rootResult.stdout)
+    const statusOutput = decodeTaskGitOutput(status.stdout)
+    if (rootOutput === null || statusOutput === null) return { ...result, unverifiablePaths: ['<git-status>'] }
+    const gitRoot = rootOutput
+    const records = statusOutput.split('\0')
     if (records.pop() !== '') return { ...result, unverifiablePaths: ['<truncated-status>'] }
     for (let index = 0; index < records.length; index++) {
       const record = records[index]!
