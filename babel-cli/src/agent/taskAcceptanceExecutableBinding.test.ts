@@ -3,12 +3,14 @@ import test from 'node:test'
 import { resolveLiveSessionAuthority } from './liveSessionBridge.js'
 import {
   bindExecutableVerifiersToTaskAcceptance,
+  commandsMatchForExecutableBinding,
   criterionExplicitlyNamesTrustedCommand,
+  extractPositiveCommandSuccessCriterion,
   mergeTrustedVerifierCommands,
 } from './taskAcceptanceExecutableBinding.js'
 import { inferTaskAcceptance } from './taskAcceptanceMeaning.js'
 
-test('trusted verifier commands bind only when the criterion explicitly names the command', () => {
+test('binds a clearly accepted positive command-success criterion with exact argv', () => {
   const task = [
     'Fix the parser bug.',
     'Requirements:',
@@ -25,6 +27,47 @@ test('trusted verifier commands bind only when the criterion explicitly names th
   assert.deepEqual(contract.acceptance[0]!.verification.argv, ['test'])
 })
 
+test('negated command-success assertions do not bind', () => {
+  assert.equal(
+    criterionExplicitlyNamesTrustedCommand('npm test must FAIL for invalid input', 'npm test'),
+    false,
+  )
+})
+
+test('compound obligations do not bind on command mention alone', () => {
+  assert.equal(
+    criterionExplicitlyNamesTrustedCommand(
+      'npm test must pass AND UI show new button',
+      'npm test',
+    ),
+    false,
+  )
+})
+
+test('coverage argv weakening does not bind to trusted npm test', () => {
+  assert.equal(
+    criterionExplicitlyNamesTrustedCommand('npm test -- --coverage passes', 'npm test'),
+    false,
+  )
+  assert.equal(commandsMatchForExecutableBinding('npm test -- --coverage', 'npm test'), false)
+})
+
+test('script-prefix alias does not bind to npm test', () => {
+  assert.equal(commandsMatchForExecutableBinding('npm run test', 'npm test'), false)
+  assert.equal(
+    criterionExplicitlyNamesTrustedCommand('npm run test must pass', 'npm test'),
+    false,
+  )
+})
+
+test('substring command mention without positive-success grammar does not bind', () => {
+  assert.equal(extractPositiveCommandSuccessCriterion('parser tests must pass'), null)
+  assert.equal(
+    criterionExplicitlyNamesTrustedCommand('fix the parser and run tests', 'npm test'),
+    false,
+  )
+})
+
 test('vague acceptance prose does not bind to a discovered project test command', () => {
   const meaning = inferTaskAcceptance([
     'Fix the parser.',
@@ -38,17 +81,6 @@ test('vague acceptance prose does not bind to a discovered project test command'
     defaultWorkingDirectory: '.',
   })
   assert.ok(bound.criteria[0]!.verification.verifier_id.startsWith('meaning:'))
-})
-
-test('keyword overlap alone never authorizes binding', () => {
-  assert.equal(
-    criterionExplicitlyNamesTrustedCommand('parser tests must pass', 'npm test'),
-    false,
-  )
-  assert.equal(
-    criterionExplicitlyNamesTrustedCommand('fix the parser and run tests', 'npm test'),
-    false,
-  )
 })
 
 test('inferred-only acceptance stays meaning-bound without trusted executable commands', () => {

@@ -228,7 +228,7 @@ const VERIFY_MJS = renderParserVerifierScript();
 const PARSER_FIX_WITH_FROZEN_ACCEPTANCE = [
   'Investigate why parser_test fails and fix it.',
   'Requirements:',
-  '- `npm test` passes after the parser fix.',
+  '- `npm test` passes.',
 ].join('\n');
 
 function makeFixture(): Fixture {

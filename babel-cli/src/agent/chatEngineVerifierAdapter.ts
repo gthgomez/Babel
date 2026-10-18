@@ -180,14 +180,23 @@ function toRepositoryRelativePaths(
   return [...new Set(out)].sort();
 }
 
-/** Replace the latest ledger entry for a structural verifier identity. */
+/** Ledger slot identity: command fingerprint plus governed execution context. */
+export function verifierReceiptLedgerKey(receipt: BoundChatVerifierReceipt): string {
+  const commandKey = verifierReceiptIdentityKey(receipt.command);
+  const cwd = receipt.working_directory ?? '@unset';
+  const env = receipt.environment_policy ?? '@unset';
+  const target = receipt.target ?? '';
+  return `${commandKey}::cwd=${cwd}::env=${env}::target=${target}`;
+}
+
+/** Replace the latest ledger entry for one execution-context identity. */
 export function upsertVerifierReceipt(
   ledger: BoundChatVerifierReceipt[],
   receipt: BoundChatVerifierReceipt,
 ): void {
-  const receiptKey = verifierReceiptIdentityKey(receipt.command);
+  const receiptKey = verifierReceiptLedgerKey(receipt);
   const existingIndex = ledger.findIndex(
-    (entry) => verifierReceiptIdentityKey(entry.command) === receiptKey,
+    (entry) => verifierReceiptLedgerKey(entry) === receiptKey,
   );
   if (existingIndex >= 0) ledger[existingIndex] = receipt;
   else ledger.push(receipt);
