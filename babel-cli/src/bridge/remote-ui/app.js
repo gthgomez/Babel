@@ -515,10 +515,12 @@
       memoryHasToken: function () { return Boolean(memory.token) || memory.pairedDevice; },
       send: send,
       stop: stop,
+      decide: decide,
       configureTest: function (patch) {
         if (patch && patch.host !== undefined) host = patch.host;
         if (patch && patch.thread !== undefined) thread = patch.thread;
         if (patch && patch.turn !== undefined) turn = patch.turn;
+        if (patch && patch.approval !== undefined) approval = patch.approval;
         if (patch && patch.memory) Object.assign(memory, patch.memory);
       },
     };

@@ -210,6 +210,28 @@ export class DevicePairingService {
     return true;
   }
 
+  /**
+   * Test/diagnostic: expire one paired HTTP session without revoking the device.
+   * The session cookie becomes invalid while `isDeviceAuthorized(deviceId)` stays true.
+   */
+  expirePairedSessionByToken(sessionToken: string): boolean {
+    let session = this.sessions.get(sessionToken);
+    if (!session) {
+      for (const persisted of loadPersistedSessions()) {
+        if (persisted.sessionToken === sessionToken) {
+          session = persisted;
+          this.sessions.set(sessionToken, persisted);
+          break;
+        }
+      }
+    }
+    if (!session) return false;
+    session.expiresAtMs = Date.now() - 1_000;
+    this.sessions.set(session.sessionToken, session);
+    savePersistedSessions(this.sessions.values());
+    return true;
+  }
+
   verifySessionToken(token: string): { ok: true; deviceId: string } | { ok: false } {
     let session = this.sessions.get(token);
     if (!session) {

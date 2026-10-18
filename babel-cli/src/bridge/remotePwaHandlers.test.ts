@@ -13,10 +13,11 @@ async function loadPwaApp(): Promise<{
     canCancelTurn: (turn: string) => boolean;
   };
   BabelRemoteApp: {
-    getState: () => { thread: string; turn: string };
+    getState: () => { thread: string; turn: string; approval: string };
     configureTest: (patch: Record<string, unknown>) => void;
     send: () => Promise<void>;
     stop: () => Promise<void>;
+    decide: (decision: string) => Promise<void>;
   };
   setRpc: (
     fn: (method: string) => Promise<{ payload: unknown; classified: { kind: string; message?: string } }>,
@@ -76,10 +77,11 @@ async function loadPwaApp(): Promise<{
       canCancelTurn: (turn: string) => boolean;
     },
     BabelRemoteApp: win['BabelRemoteApp'] as {
-      getState: () => { thread: string; turn: string };
+      getState: () => { thread: string; turn: string; approval: string };
       configureTest: (patch: Record<string, unknown>) => void;
       send: () => Promise<void>;
       stop: () => Promise<void>;
+      decide: (decision: string) => Promise<void>;
     },
     setRpc: (fn) => {
       win['__babelRemoteRpc'] = fn;
@@ -141,5 +143,38 @@ describe('PWA production handlers', () => {
     const state = ctx.BabelRemoteApp.getState();
     assert.equal(state.turn, 'STREAMING');
     assert.equal(ctx.BabelRemoteState.canCancelTurn(state.turn), true);
+  });
+
+  it('marks approval stale after a settled decide rejection', async () => {
+    const ctx = await loadPwaApp();
+    ctx.BabelRemoteApp.configureTest({
+      host: 'ONLINE',
+      thread: 'WAITING_APPROVAL',
+      turn: 'STREAMING',
+      approval: 'PENDING',
+      memory: {
+        pairedDevice: true,
+        authKind: 'paired',
+        clientId: 'device:test',
+        threadId: 'thr-test',
+        controlEpoch: 1,
+        pendingApproval: {
+          approval_id: 'appr-1',
+          thread_id: 'thr-test',
+          turn_id: '1',
+          operation_digest: 'abc',
+        },
+      },
+    });
+    ctx.setRpc(async (method) => {
+      assert.equal(method, 'approval.decide');
+      return {
+        payload: { jsonrpc: '2.0', id: 3, error: { code: -32001, message: 'stale approval' } },
+        classified: { kind: 'rejected', message: 'stale approval' },
+      };
+    });
+    await ctx.BabelRemoteApp.decide('allow_once');
+    const state = ctx.BabelRemoteApp.getState();
+    assert.equal(state.approval, 'STALE');
   });
 });

@@ -50,6 +50,22 @@ describe('DevicePairingService', () => {
     assert.equal(verified.ok, true);
   });
 
+  it('expires a paired session without revoking the device', () => {
+    const pairing = new DevicePairingService('expire-secret');
+    const challenge = pairing.createChallenge();
+    pairing.requestPairing(challenge.challengeId, 'ExpireMe');
+    const approved = pairing.approveChallenge(challenge.challengeId);
+    assert.equal(approved.ok, true);
+    if (!approved.ok) return;
+    const session = pairing.exchangeChallenge(challenge.challengeId);
+    assert.equal(session.ok, true);
+    if (!session.ok) return;
+    assert.equal(pairing.isDeviceAuthorized(approved.device.deviceId), true);
+    assert.equal(pairing.expirePairedSessionByToken(session.session.sessionToken), true);
+    assert.equal(pairing.verifySessionToken(session.session.sessionToken).ok, false);
+    assert.equal(pairing.isDeviceAuthorized(approved.device.deviceId), true);
+  });
+
   it('revokes a device and invalidates sessions', () => {
     const pairing = new DevicePairingService('test-secret-2');
     const challenge = pairing.createChallenge();

@@ -99,6 +99,15 @@ export interface BridgeServerOptions {
    * Set false only in isolated unit tests — never in `babel remote serve`.
    */
   enforceControlLease?: boolean;
+  /**
+   * Narrow HTTP principal barriers for regression tests (never set in production serve).
+   */
+  httpPrincipalTestHooks?: BridgeHttpPrincipalTestHooks;
+}
+
+/** Test-only hooks for post-initial-auth / pre-body-read synchronization. */
+export interface BridgeHttpPrincipalTestHooks {
+  afterInitialPrincipalAuthenticated?: (scope: 'mint' | 'rpc') => void | Promise<void>;
 }
 
 interface ParsedUrl {
@@ -297,6 +306,10 @@ export class BridgeServer {
 
     return new Promise<void>((resolve, reject) => {
       this.server.on('listening', () => {
+        const bound = this.server.address();
+        if (bound && typeof bound === 'object' && bound.port > 0) {
+          this._port = bound.port;
+        }
         // Persist config with the actual auth token
         const config = loadBridgeConfig();
         if (!config.authToken || config.authToken !== this.authToken) {
@@ -323,6 +336,8 @@ export class BridgeServer {
    * Stop the server and clean up all sessions.
    */
   async stop(): Promise<void> {
+    if (!this._started) return;
+
     // Close all WebSocket transports
     for (const transport of this.wsTransports.values()) {
       transport.close();
@@ -337,8 +352,15 @@ export class BridgeServer {
     // stopped bridge leaks no SQLite ownership into a later start.
     closeProtocolHostState(this.protocolGateway.host);
 
+    if (typeof this.server.closeAllConnections === 'function') {
+      this.server.closeAllConnections();
+    }
+
     return new Promise<void>((resolve) => {
-      this.server.close(() => resolve());
+      this.server.close(() => {
+        this._started = false;
+        resolve();
+      });
     });
   }
 
@@ -659,7 +681,9 @@ export class BridgeServer {
       errorResponse(res, authBefore.status, authBefore.message);
       return;
     }
-    const body = await readLimitedBody(req, 64 * 1024);
+    const bodyPromise = readLimitedBody(req, 64 * 1024);
+    await this.options.httpPrincipalTestHooks?.afterInitialPrincipalAuthenticated?.('mint');
+    const body = await bodyPromise;
     if (!body.ok) {
       errorResponse(res, 413, body.error);
       return;
@@ -688,21 +712,14 @@ export class BridgeServer {
       errorResponse(res, status, `ticket mint denied: ${owned.error}`);
       return;
     }
-    const principalAfter = resolveBridgeClientContext(
+    const principalAfter = this.resolvePrincipalAfterBody(
       req,
-      this.authToken,
       parsedUrl,
-      this.devicePairing,
+      principalBefore,
+      'mint',
+      res,
     );
-    if (!bridgeClientPrincipalMatches(principalBefore, principalAfter)) {
-      errorResponse(res, 401, 'Authentication expired or changed during request');
-      return;
-    }
-    const authAfter = validateAuthenticatedClient(principalAfter, this.devicePairing);
-    if (!authAfter.ok) {
-      errorResponse(res, authAfter.status, authAfter.message);
-      return;
-    }
+    if (!principalAfter) return;
     const minted = this.wsTickets.mint({
       sessionId: parsed.session_id,
       threadId: parsed.thread_id,
@@ -741,6 +758,48 @@ export class BridgeServer {
     return this.deviceSocketClosers.get(deviceId)?.size ?? 0;
   }
 
+  /** @internal Extension point for gateway tests that simulate pre-fix principal races. */
+  protected resolvePrincipalAfterBody(
+    req: IncomingMessage,
+    parsedUrl: ParsedUrl | null,
+    principalBefore: BridgeClientContext,
+    scope: 'mint' | 'rpc',
+    res: ServerResponse,
+  ): BridgeClientContext | null {
+    const principalAfter = resolveBridgeClientContext(
+      req,
+      this.authToken,
+      parsedUrl,
+      this.devicePairing,
+    );
+    if (!bridgeClientPrincipalMatches(principalBefore, principalAfter)) {
+      if (scope === 'mint') {
+        errorResponse(res, 401, 'Authentication expired or changed during request');
+      } else {
+        jsonResponse(res, 401, {
+          jsonrpc: '2.0',
+          id: null,
+          error: { code: -32001, message: 'Authentication expired or changed during request' },
+        });
+      }
+      return null;
+    }
+    const authAfter = validateAuthenticatedClient(principalAfter, this.devicePairing);
+    if (!authAfter.ok) {
+      if (scope === 'mint') {
+        errorResponse(res, authAfter.status, authAfter.message);
+      } else {
+        jsonResponse(res, authAfter.status, {
+          jsonrpc: '2.0',
+          id: null,
+          error: { code: -32001, message: authAfter.message },
+        });
+      }
+      return null;
+    }
+    return principalAfter;
+  }
+
   private async handleRpc(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const parsedUrl = parseRequestUrl(req);
     const principalBefore = resolveBridgeClientContext(
@@ -758,7 +817,9 @@ export class BridgeServer {
       });
       return;
     }
-    const body = await readLimitedBody(req);
+    const bodyPromise = readLimitedBody(req);
+    await this.options.httpPrincipalTestHooks?.afterInitialPrincipalAuthenticated?.('rpc');
+    const body = await bodyPromise;
     if (!body.ok) {
       jsonResponse(res, 413, {
         jsonrpc: '2.0',
@@ -767,29 +828,8 @@ export class BridgeServer {
       });
       return;
     }
-    const principalAfter = resolveBridgeClientContext(
-      req,
-      this.authToken,
-      parsedUrl,
-      this.devicePairing,
-    );
-    if (!bridgeClientPrincipalMatches(principalBefore, principalAfter)) {
-      jsonResponse(res, 401, {
-        jsonrpc: '2.0',
-        id: null,
-        error: { code: -32001, message: 'Authentication expired or changed during request' },
-      });
-      return;
-    }
-    const authAfter = validateAuthenticatedClient(principalAfter, this.devicePairing);
-    if (!authAfter.ok) {
-      jsonResponse(res, authAfter.status, {
-        jsonrpc: '2.0',
-        id: null,
-        error: { code: -32001, message: authAfter.message },
-      });
-      return;
-    }
+    const principalAfter = this.resolvePrincipalAfterBody(req, parsedUrl, principalBefore, 'rpc', res);
+    if (!principalAfter) return;
     const response = await this.protocolGateway.dispatch(body.body, { client: principalAfter });
     jsonResponse(res, 200, response);
   }
