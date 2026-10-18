@@ -5,7 +5,7 @@ import {
 } from './completionGatePolicy.js'
 import type { AcceptanceRequirementV1, AcceptanceRequirementType } from './taskContract.js'
 import type { AcceptanceMeaningSource, TaskAcceptanceMeaning } from './taskAcceptanceMeaning.js'
-import { analyzeVerifierIdentity } from '../services/verifierIdentity.js'
+import { analyzeVerifierIdentity, satisfiesVerifierRequirement } from '../services/verifierIdentity.js'
 
 function isUnresolvedCriterion(criterion: AcceptanceRequirementV1): boolean {
   return (
@@ -16,6 +16,67 @@ function isUnresolvedCriterion(criterion: AcceptanceRequirementV1): boolean {
 
 export const ACCEPTANCE_EXECUTABLE_BINDING_REF = 'task-acceptance-executable-binding:v1'
 
+const VAGUE_ACCEPTANCE_TOKENS = new Set([
+  'fix',
+  'parser',
+  'test',
+  'tests',
+  'suite',
+  'project',
+  'pass',
+  'passes',
+  'green',
+  'verify',
+  'requirements',
+  'requirement',
+  'acceptance',
+])
+
+function normalizeCommandText(command: string): string {
+  return command.trim().replace(/\s+/g, ' ').toLowerCase()
+}
+
+function quotedCommandsInDescription(description: string): string[] {
+  const out: string[] = []
+  for (const match of description.matchAll(/`([^`]+)`/g)) {
+    const quoted = match[1]?.trim()
+    if (quoted) out.push(normalizeCommandText(quoted))
+  }
+  return out
+}
+
+/**
+ * True only when the criterion text explicitly names this trusted command (or a
+ * quoted/backtick form). Vague words like "tests", "parser", or "fix" never bind.
+ */
+export function criterionExplicitlyNamesTrustedCommand(
+  description: string,
+  command: string,
+): boolean {
+  const normalizedCommand = normalizeCommandText(command)
+  if (!normalizedCommand) return false
+
+  const normalizedDescription = description.toLowerCase()
+  if (normalizedDescription.includes(normalizedCommand)) return true
+
+  for (const quoted of quotedCommandsInDescription(description)) {
+    if (quoted === normalizedCommand) return true
+    if (satisfiesVerifierRequirement(normalizedCommand, quoted)) return true
+    if (satisfiesVerifierRequirement(quoted, normalizedCommand)) return true
+  }
+
+  // Reject criteria whose only overlap with the command is vague vocabulary.
+  const descWords = normalizedDescription
+    .replace(/[^a-z0-9]+/g, ' ')
+    .split(/\s+/)
+    .filter(Boolean)
+  if (descWords.every((word) => VAGUE_ACCEPTANCE_TOKENS.has(word) || word.length < 3)) {
+    return false
+  }
+
+  return false
+}
+
 function requirementTypeForCommand(command: string): AcceptanceRequirementType {
   const identity = analyzeVerifierIdentity(command)
   const lower = command.toLowerCase()
@@ -24,30 +85,6 @@ function requirementTypeForCommand(command: string): AcceptanceRequirementType {
   if (/\bbuild\b/.test(lower)) return 'build'
   if (identity?.family.includes('test') || /\btest\b/.test(lower)) return 'unit_test'
   return 'custom'
-}
-
-function normalizedWords(text: string): string[] {
-  return text.toLowerCase().replace(/[^a-z0-9]+/g, ' ').split(/\s+/).filter(Boolean)
-}
-
-/** Whether observable prose plausibly refers to this trusted verifier command. */
-export function criterionDescriptionMatchesTrustedCommand(
-  description: string,
-  command: string,
-): boolean {
-  const desc = normalizedWords(description)
-  const cmd = command.toLowerCase()
-  if (desc.some((word) => cmd.includes(word) && word.length >= 3)) return true
-  const identity = analyzeVerifierIdentity(command)
-  if (identity?.family === 'npm-test' || /\btest\b/.test(cmd)) {
-    return desc.some((word) =>
-      ['test', 'tests', 'suite', 'parser', 'npm'].includes(word),
-    )
-  }
-  if (/\bbuild\b/.test(cmd)) return desc.includes('build')
-  if (/\blint\b/.test(cmd)) return desc.includes('lint')
-  if (/typecheck|tsc\b/.test(cmd)) return desc.includes('typecheck') || desc.includes('types')
-  return false
 }
 
 function materializeExecutableVerification(
@@ -99,15 +136,10 @@ function pickTrustedCommand(
   if (!source || source.status !== 'explicit') return null
 
   const matches = commands.filter((command) =>
-    criterionDescriptionMatchesTrustedCommand(criterion.description, command),
+    criterionExplicitlyNamesTrustedCommand(criterion.description, command),
   )
-  if (matches.length === 1) return matches[0]!
-  if (matches.length > 1) return null
-
-  const explicitCriteria = explicitOnly.filter((item) => item.status === 'explicit')
-  if (explicitCriteria.length === 1 && commands.length === 1) return commands[0]!
-
-  return null
+  if (matches.length !== 1) return null
+  return matches[0]!
 }
 
 /**
@@ -167,3 +199,6 @@ export function mergeTrustedVerifierCommands(input: {
     ),
   ]
 }
+
+/** @deprecated Use criterionExplicitlyNamesTrustedCommand */
+export const criterionDescriptionMatchesTrustedCommand = criterionExplicitlyNamesTrustedCommand

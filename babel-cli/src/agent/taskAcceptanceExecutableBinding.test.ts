@@ -1,14 +1,18 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { resolveLiveSessionAuthority } from './liveSessionBridge.js'
-import { bindExecutableVerifiersToTaskAcceptance, mergeTrustedVerifierCommands } from './taskAcceptanceExecutableBinding.js'
+import {
+  bindExecutableVerifiersToTaskAcceptance,
+  criterionExplicitlyNamesTrustedCommand,
+  mergeTrustedVerifierCommands,
+} from './taskAcceptanceExecutableBinding.js'
 import { inferTaskAcceptance } from './taskAcceptanceMeaning.js'
 
-test('trusted verifier commands bind explicit criteria before contract freeze', () => {
+test('trusted verifier commands bind only when the criterion explicitly names the command', () => {
   const task = [
     'Fix the parser bug.',
     'Requirements:',
-    '- The project test suite passes.',
+    '- `npm test` must pass.',
   ].join('\n')
   const contract = resolveLiveSessionAuthority({
     mode: 'chat',
@@ -19,6 +23,32 @@ test('trusted verifier commands bind explicit criteria before contract freeze', 
   assert.equal(contract.acceptance.length, 1)
   assert.equal(contract.acceptance[0]!.verification.verifier_id, 'verifier:npm')
   assert.deepEqual(contract.acceptance[0]!.verification.argv, ['test'])
+})
+
+test('vague acceptance prose does not bind to a discovered project test command', () => {
+  const meaning = inferTaskAcceptance([
+    'Fix the parser.',
+    'Requirements:',
+    '- The project test suite passes.',
+  ].join('\n'))
+  assert.equal(meaning.unresolved, false)
+  const bound = bindExecutableVerifiersToTaskAcceptance({
+    meaning,
+    trustedVerifierCommands: ['npm test'],
+    defaultWorkingDirectory: '.',
+  })
+  assert.ok(bound.criteria[0]!.verification.verifier_id.startsWith('meaning:'))
+})
+
+test('keyword overlap alone never authorizes binding', () => {
+  assert.equal(
+    criterionExplicitlyNamesTrustedCommand('parser tests must pass', 'npm test'),
+    false,
+  )
+  assert.equal(
+    criterionExplicitlyNamesTrustedCommand('fix the parser and run tests', 'npm test'),
+    false,
+  )
 })
 
 test('inferred-only acceptance stays meaning-bound without trusted executable commands', () => {
