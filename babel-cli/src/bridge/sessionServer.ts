@@ -49,11 +49,14 @@ import { writeRemoteUiResponse } from './remoteUiAssets.js';
 import { WsTicketStore } from './wsTicket.js';
 import type { ProtocolHostState } from '../protocol/client/host.js';
 import { closeProtocolHostState } from '../protocol/client/host.js';
-import {
-  DevicePairingService,
-  REMOTE_PAIRING_COOKIE,
-} from './devicePairing.js';
+import { DevicePairingService, REMOTE_PAIRING_COOKIE } from './devicePairing.js';
 import { authorizeThreadScopedWsRpc } from './wsRpcAuthorization.js';
+import {
+  isBridgeClientAuthenticated,
+  isBridgeHostAdminAuthenticated,
+  resolveBridgeClientContext,
+} from './bridgeClientAuth.js';
+import { writePairUiResponse } from './pairUiAssets.js';
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
@@ -113,40 +116,13 @@ function matchSessionPath(pathname: string): string | null {
 
 // ─── Authentication ────────────────────────────────────────────────────────────
 
-function pairingCookieToken(req: IncomingMessage): string | undefined {
-  const raw = req.headers['cookie'];
-  if (!raw || typeof raw !== 'string') return undefined;
-  for (const part of raw.split(';')) {
-    const trimmed = part.trim();
-    if (trimmed.startsWith(`${REMOTE_PAIRING_COOKIE}=`)) {
-      return decodeURIComponent(trimmed.slice(REMOTE_PAIRING_COOKIE.length + 1));
-    }
-  }
-  return undefined;
-}
-
 function isAuthenticated(
   req: IncomingMessage,
   authToken: string,
   parsedUrl?: ParsedUrl | null,
   pairing?: DevicePairingService,
 ): boolean {
-  // Check Authorization header first
-  const headerToken = extractBearerToken(req.headers['authorization']);
-  if (headerToken && verifyToken(headerToken, authToken)) return true;
-
-  const cookieToken = pairingCookieToken(req);
-  if (cookieToken && pairing?.verifySessionToken(cookieToken).ok) return true;
-
-  // Check query parameter
-  if (parsedUrl) {
-    const queryToken = extractQueryToken(
-      new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`),
-    );
-    if (queryToken && verifyToken(queryToken, authToken)) return true;
-  }
-
-  return false;
+  return isBridgeClientAuthenticated(req, authToken, parsedUrl, pairing);
 }
 
 // ─── CORS helpers ──────────────────────────────────────────────────────────────
@@ -249,6 +225,7 @@ export class BridgeServer {
       this.options.protocolGateway ??
       new ProtocolGateway({
         allowedWorkspaceRoot: this.options.allowedWorkspaceRoot ?? process.cwd(),
+        enforceControlLease: process.env['BABEL_REMOTE_CONTROL_LEASE'] !== '0',
         ...(this.options.engineFactory
           ? { engineFactory: this.options.engineFactory }
           : {}),
@@ -377,6 +354,36 @@ export class BridgeServer {
     if ((pathname === '/ui' || pathname.startsWith('/ui/')) && req.method === 'GET') {
       if (writeRemoteUiResponse(pathname, res)) return;
       errorResponse(res, 404, 'Not found');
+      return;
+    }
+
+    if ((pathname === '/pair' || pathname === '/pair/') && req.method === 'GET') {
+      if (writePairUiResponse(res)) return;
+      errorResponse(res, 404, 'Not found');
+      return;
+    }
+
+    if (pathname === '/auth/session' && req.method === 'GET') {
+      setCorsHeaders(res, req.headers['origin'], this.allowedOrigins);
+      const client = resolveBridgeClientContext(
+        req,
+        this.authToken,
+        parsedUrl,
+        this.devicePairing,
+      );
+      if (client.authKind === 'paired_device' && client.deviceId) {
+        jsonResponse(res, 200, {
+          ok: true,
+          auth: 'paired_device',
+          deviceId: client.deviceId,
+        });
+        return;
+      }
+      if (client.authKind === 'host_bearer' || client.authKind === 'query_bearer') {
+        jsonResponse(res, 200, { ok: true, auth: 'host' });
+        return;
+      }
+      jsonResponse(res, 200, { ok: false, auth: 'none' });
       return;
     }
 
@@ -526,8 +533,8 @@ export class BridgeServer {
       return;
     }
 
-    if (!isAuthenticated(req, this.authToken, parsedUrl, this.devicePairing)) {
-      errorResponse(res, 401, 'Unauthorized');
+    if (!isBridgeHostAdminAuthenticated(req, this.authToken, parsedUrl)) {
+      errorResponse(res, 401, 'Host administrator authentication required');
       return;
     }
 
@@ -581,6 +588,7 @@ export class BridgeServer {
         errorResponse(res, 404, 'Device not found');
         return;
       }
+      this.protocolGateway.controlLeases.fenceDevice(`device:${deviceId}`);
       jsonResponse(res, 200, { ok: true, deviceId });
       return;
     }
@@ -637,7 +645,13 @@ export class BridgeServer {
       });
       return;
     }
-    const response = await this.protocolGateway.dispatch(body.body);
+    const client = resolveBridgeClientContext(
+      req,
+      this.authToken,
+      parseRequestUrl(req),
+      this.devicePairing,
+    );
+    const response = await this.protocolGateway.dispatch(body.body, { client });
     jsonResponse(res, 200, response);
   }
 

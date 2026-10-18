@@ -10,12 +10,15 @@
 
   const memory = {
     token: '',
+    pairedDevice: false,
     sessionId: '',
     threadId: '',
     turnId: null,
     pendingApproval: null,
     lastCommandId: '',
     lastMessage: '',
+    controlEpoch: null,
+    authKind: 'none',
   };
 
   let host = 'UNKNOWN';
@@ -53,38 +56,93 @@
     document.querySelectorAll('.topbar-status .status-dot, #host-card .status-dot').forEach(function (dot) {
       dot.className = 'status-dot ' + String(host).toLowerCase();
     });
-    byId('create').disabled = !memory.token;
-    byId('resume').disabled = !memory.token;
-    byId('send').disabled = !S.canSendTurn(thread, turn) || !memory.token || sendInFlight;
-    byId('stop').disabled = !S.canCancelTurn(turn);
-    byId('reconnect').disabled = !memory.token;
-    composer.disabled = !memory.token;
-    byId('refresh-files').disabled = !memory.token || !memory.threadId;
-    byId('refresh-diff').disabled = !memory.token || !memory.threadId;
-    byId('refresh-verification').disabled = !memory.token || !memory.threadId;
+    const authed = memory.token || memory.pairedDevice;
+    const canMutate = authed && (memory.authKind === 'host' || memory.controlEpoch !== null);
+    byId('create').disabled = !authed;
+    byId('resume').disabled = !authed;
+    byId('send').disabled = !S.canSendTurn(thread, turn) || !canMutate || sendInFlight;
+    byId('stop').disabled = !S.canCancelTurn(turn) || !canMutate;
+    byId('reconnect').disabled = !authed;
+    byId('take-control').disabled = !authed || !memory.threadId || memory.authKind === 'host';
+    composer.disabled = !canMutate;
+    byId('refresh-files').disabled = !authed || !memory.threadId;
+    byId('refresh-diff').disabled = !authed || !memory.threadId;
+    byId('refresh-verification').disabled = !authed || !memory.threadId;
     R.setText(byId('action-state-badge'), label(turn));
     R.setText(byId('action-state'), byId('action-state').textContent || 'Ready for your next instruction');
-    R.setText(byId('composer-status'), !memory.token ? 'Connect to enable the composer.' : !memory.threadId ? 'Create or resume a thread.' : S.canSendTurn(thread, turn) ? 'Ready to send.' : 'Turn is ' + label(turn).toLowerCase() + '.');
+    const controlCopy = memory.authKind === 'host'
+      ? 'Host administrator session (local control).'
+      : memory.controlEpoch !== null
+        ? 'You hold the control lease for this thread.'
+        : 'View-only until you take control.';
+    R.setText(byId('control-copy'), controlCopy);
+    R.setText(byId('composer-status'), !authed ? 'Connect or complete pairing to enable the composer.' : !canMutate ? controlCopy : !memory.threadId ? 'Create or resume a thread.' : S.canSendTurn(thread, turn) ? 'Ready to send.' : 'Turn is ' + label(turn).toLowerCase() + '.');
     if (approval === 'NONE' || approval === 'RESOLVED' || approval === 'STALE' || approval === 'EXPIRED') byId('approval-card').classList.add('hidden');
   }
 
   function authHeaders() {
-    return { 'Content-Type': 'application/json', Authorization: 'Bearer ' + memory.token };
+    const headers = { 'Content-Type': 'application/json' };
+    if (memory.token) headers.Authorization = 'Bearer ' + memory.token;
+    return headers;
+  }
+
+  function rpcParams(params) {
+    const next = Object.assign({}, params || {});
+    if (memory.controlEpoch !== null && next.control_epoch === undefined) {
+      next.control_epoch = memory.controlEpoch;
+    }
+    return next;
   }
 
   async function rpc(method, params, id) {
     const response = await fetch('/rpc', {
       method: 'POST',
       headers: authHeaders(),
-      body: JSON.stringify({ jsonrpc: '2.0', id: id || Date.now(), method: method, params: params }),
+      credentials: 'include',
+      body: JSON.stringify({ jsonrpc: '2.0', id: id || Date.now(), method: method, params: rpcParams(params) }),
     });
     if (!response.ok) throw new Error('rpc ' + response.status);
-    return response.json();
+    const payload = await response.json();
+    const classified = S.classifyRpcResponse(payload);
+    if (classified.kind === 'rejected' || classified.kind === 'malformed') {
+      throw new Error(classified.message || 'rpc error');
+    }
+    return payload;
+  }
+
+  async function refreshAuthSession() {
+    const response = await fetch('/auth/session', { credentials: 'include' });
+    if (!response.ok) return;
+    const json = await response.json();
+    if (json.ok && json.auth === 'paired_device') {
+      memory.pairedDevice = true;
+      memory.authKind = 'paired';
+    } else if (json.ok && json.auth === 'host') {
+      memory.authKind = 'host';
+    }
+  }
+
+  async function takeControl() {
+    if (!memory.threadId) return;
+    try {
+      const result = await rpc('control.acquire', { thread_id: memory.threadId, force: false });
+      memory.controlEpoch = result.result && result.result.epoch;
+      R.setText(byId('action-state'), 'Remote control acquired');
+      R.setText(byId('action-detail'), 'This device may send prompts and approvals until the lease expires.');
+    } catch (error) {
+      appendEvent({ type: 'failed', error: 'Could not take control. Another client may hold the lease.' });
+    }
+    renderChrome();
   }
 
   async function ensureSession() {
     if (memory.sessionId) return memory.sessionId;
-    const response = await fetch('/sessions', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ projectRoot: rootEl.value }) });
+    const response = await fetch('/sessions', {
+      method: 'POST',
+      headers: authHeaders(),
+      credentials: 'include',
+      body: JSON.stringify({ projectRoot: rootEl.value }),
+    });
     if (!response.ok) throw new Error('session auth failed');
     const json = await response.json();
     if (!json.sessionId) throw new Error('session missing');
@@ -94,7 +152,12 @@
 
   async function mintTicket() {
     const sessionId = await ensureSession();
-    const response = await fetch('/ws/ticket', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ session_id: sessionId, thread_id: memory.threadId }) });
+    const response = await fetch('/ws/ticket', {
+      method: 'POST',
+      headers: authHeaders(),
+      credentials: 'include',
+      body: JSON.stringify({ session_id: sessionId, thread_id: memory.threadId }),
+    });
     if (!response.ok) throw new Error('ticket mint failed');
     return response.json();
   }
@@ -146,11 +209,13 @@
   }
 
   async function connect() {
-    memory.token = tokenEl.value;
+    if (tokenEl.value) memory.token = tokenEl.value;
     tokenEl.value = '';
+    memory.authKind = memory.token ? 'host' : 'none';
     try {
       host = transition('host', host, 'start');
       renderChrome();
+      await refreshAuthSession();
       const health = await fetch('/health');
       const json = await health.json();
       if (!json.ok) throw new Error('health');
@@ -177,19 +242,37 @@
       if (host === 'ONLINE') host = transition('host', host, 'close');
       if (host === 'UNKNOWN' || host === 'OFFLINE') host = transition('host', host, 'start');
       renderChrome();
+      await refreshAuthSession();
       await observeThread();
       if (memory.threadId) {
         thread = transition('thread', thread, 'recover');
-        await rpc('thread.resume', { thread_id: memory.threadId, project_root: rootEl.value });
+        const resumed = await rpc('thread.resume', {
+          thread_id: memory.threadId,
+          project_root: rootEl.value,
+          session_id: memory.sessionId,
+        });
+        if (resumed.error) throw new Error(resumed.error.message);
         const history = await rpc('history.lookup', { thread_id: memory.threadId });
+        if (history.error) throw new Error(history.error.message);
         const cells = (history.result && history.result.cells) || [];
         transcript.textContent = '';
         cells.forEach(function (cell) { appendEvent({ type: cell.kind || 'cell', text: JSON.stringify(cell.payload || {}) }); });
+        if (memory.authKind === 'paired') {
+          const status = await rpc('control.status', { thread_id: memory.threadId });
+          if (status.result && status.result.held && status.result.epoch) {
+            memory.controlEpoch = status.result.epoch;
+          } else {
+            memory.controlEpoch = null;
+          }
+        }
         thread = transition('thread', thread, 'ready');
       }
       host = transition('host', host, 'open');
     } catch (error) {
-      host = transition('host', host, 'health_fail');
+      const recovery = S.reconcileAfterProtocolError({ host: host, activeTurn: turn !== 'IDLE' && turn !== 'COMPLETED' });
+      host = recovery.host;
+      if (recovery.turn !== 'UNCHANGED') turn = recovery.turn;
+      if (recovery.thread !== 'UNCHANGED') thread = recovery.thread;
       appendEvent({ type: 'connection', error: 'Reconnect failed. The state remains fail-closed.' });
     }
     renderChrome();
@@ -283,6 +366,7 @@
 
   function installNormalHandlers() {
     byId('connect').onclick = connect;
+    byId('take-control').onclick = takeControl;
     byId('reconnect').onclick = reconnect;
     byId('create').onclick = createThread;
     byId('resume').onclick = resumeThread;
@@ -358,8 +442,18 @@
       return;
     }
     installNormalHandlers();
+    await refreshAuthSession();
+    if (memory.pairedDevice) {
+      host = transition('host', host, 'open');
+      R.setText(byId('action-state'), 'Paired device session');
+      R.setText(byId('action-detail'), 'Cookie authentication restored. Connect workspace to continue.');
+      renderChrome();
+    }
     if ('serviceWorker' in navigator) navigator.serviceWorker.register('/ui/sw.js', { scope: '/ui/' }).catch(function () { /* optional install */ });
-    window.BabelRemoteApp = { getState: function () { return { host: host, thread: thread, turn: turn, approval: approval }; }, memoryHasToken: function () { return Boolean(memory.token); } };
+    window.BabelRemoteApp = {
+      getState: function () { return { host: host, thread: thread, turn: turn, approval: approval }; },
+      memoryHasToken: function () { return Boolean(memory.token) || memory.pairedDevice; },
+    };
   }
 
   boot().catch(function () {

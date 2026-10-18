@@ -28,7 +28,13 @@ export function resolveRemoteUiDir(): string {
 
 export function remoteUiFileForPath(pathname: string): { file: string; contentType: string } | null {
   const raw = pathname === '/ui' || pathname === '/ui/' ? '/ui/index.html' : pathname;
-  if (!isRemoteUiShellPath(raw) && raw !== '/ui/index.html') return null;
+  if (
+    !isRemoteUiShellPath(raw) &&
+    raw !== '/ui/index.html' &&
+    raw !== '/ui/pair.js'
+  ) {
+    return null;
+  }
   const relative = raw.replace(/^\/ui\/?/, '') || 'index.html';
   if (relative.includes('..') || normalize(relative) !== relative) return null;
   const dir = resolveRemoteUiDir();
