@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test, { type TestContext } from 'node:test'
 import { spawn, execFileSync } from 'node:child_process'
-import { chmodSync, linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -39,11 +39,16 @@ if (!isSyntheticProviderFixtureReady()) {
   const { governedStrReplace, governedApplyPatch } = await import('./governedMutations.js')
   const { resolveIsolationBrokerFlags } = await import('./chatEngineIsolationFlags.js')
 
-  function fixture(t: TestContext, subdirectory = false) {
+  function fixture(t: TestContext, subdirectory = false, selectedAlias = false) {
     const repository = mkdtempSync(join(tmpdir(), 'babel-owned-edits-'))
-    const root = subdirectory ? join(repository, 'package') : repository
-    if (subdirectory) mkdirSync(root)
-    t.after(() => rmSync(repository, { recursive: true, force: true }))
+    const physicalRoot = subdirectory ? join(repository, 'package') : repository
+    if (subdirectory) mkdirSync(physicalRoot)
+    const root = selectedAlias ? `${repository}-selected` : physicalRoot
+    if (selectedAlias) symlinkSync(physicalRoot, root, process.platform === 'win32' ? 'junction' : 'dir')
+    t.after(() => {
+      if (selectedAlias) rmSync(root, { recursive: true, force: true })
+      rmSync(repository, { recursive: true, force: true })
+    })
     const git = (...args: string[]) => execFileSync('git', args, { cwd: repository, windowsHide: true })
     git('init', '-q')
     git('config', 'user.name', 'Fixture')
@@ -143,6 +148,24 @@ if (!isSyntheticProviderFixtureReady()) {
     assert.equal((await f.deleteNotes()).results[0]?.exit_code, 0)
     assert.equal((await f.write('recreated\n')).results[0]?.exit_code, 0)
     assert.equal(readFileSync(join(f.root, 'notes.txt'), 'utf8'), 'recreated\n')
+  })
+
+  test('an explicitly selected repository junction preserves consecutive owned writes', async t => {
+    const f = fixture(t, false, true)
+    assert.equal((await f.write('one\n')).policyBlocked, false)
+    assert.equal((await f.write('two\n')).policyBlocked, false)
+    assert.equal((await f.replace('two', 'three')).policyBlocked, false)
+    assert.equal(readFileSync(join(f.repository, 'notes.txt'), 'utf8'), 'three\n')
+  })
+
+  test('retargeting the selected repository junction does not transfer ownership', async t => {
+    const f = fixture(t, false, true)
+    assert.equal((await f.write('owned\n')).policyBlocked, false)
+    const external = fixture(t)
+    rmSync(f.root, { recursive: true, force: true })
+    symlinkSync(external.root, f.root, process.platform === 'win32' ? 'junction' : 'dir')
+    assert.equal((await f.write('overwrite\n')).policyBlocked, true)
+    assert.equal(readFileSync(join(external.root, 'notes.txt'), 'utf8'), 'before\n')
   })
 
   test('fresh task isolation retires old ownership while explicit continuation preserves it', async t => {

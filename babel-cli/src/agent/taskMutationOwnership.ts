@@ -21,8 +21,10 @@ export class TaskMutationOwnership {
   private readonly postImages = new Map<string, TaskPostImage>()
   private active = true
   readonly root: string
+  private readonly selectedRoot: string
 
   constructor(root: string, readonly ownerId: string, private readonly parent?: TaskMutationOwnership) {
+    this.selectedRoot = resolve(root)
     this.root = realpathSync(root)
   }
 
@@ -113,12 +115,21 @@ export class TaskMutationOwnership {
   }
 
   private key(path: string): string {
-    const absolute = resolve(path)
+    const absolute = this.canonicalPath(path)
     return process.platform === 'win32' ? absolute.toLowerCase() : absolute
   }
 
-  private admitPath(path: string): string | null {
+  /** Normalize only the explicitly selected root alias, never project symlinks. */
+  private canonicalPath(path: string): string {
     const absolute = resolve(path)
+    const rel = relative(this.selectedRoot, absolute)
+    return rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel)
+      ? resolve(this.root, rel) : absolute
+  }
+
+  private admitPath(path: string): string | null {
+    if (!this.matchesRoot(this.selectedRoot)) return null
+    const absolute = this.canonicalPath(path)
     const rel = relative(this.root, absolute)
     if (!rel || rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)
       || isCredentialTargetPath(absolute)) return null
