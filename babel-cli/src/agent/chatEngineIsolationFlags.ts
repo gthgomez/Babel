@@ -9,6 +9,7 @@
 
 import { evaluateGovernedIsolation } from '../config/benchmarkContainer.js';
 import { detectWorkingTreeDirty } from './capabilityBroker.js';
+import { getExecutionContext } from './executionContext.js';
 
 export interface IsolationBrokerFlags {
   isolationRequired: boolean;
@@ -32,6 +33,12 @@ export function resolveIsolationBrokerFlags(projectRoot: string): IsolationBroke
   const isolationAvailable = d.kind === 'docker';
   const hostFallbackAllowed = d.kind === 'host_escalated' || d.kind === 'host_profile';
   const gitDirty = detectWorkingTreeDirty(projectRoot);
+  const ownership = getExecutionContext()?.mutationOwnership;
+  const changes = gitDirty && ownership?.matchesRoot(projectRoot)
+    ? ownership.classifyChanges() : null;
+  const unexpectedDirty = changes
+    ? changes.unexpectedPaths.length > 0 || changes.unverifiablePaths.length > 0
+    : gitDirty;
   const enforceClean =
     process.env['BABEL_REQUIRE_CLEAN_TREE'] === '1' || isolationRequired;
   const dirtyTree =
@@ -39,7 +46,7 @@ export function resolveIsolationBrokerFlags(projectRoot: string): IsolationBroke
       ? true
       : process.env['BABEL_DIRTY_TREE'] === '0'
         ? false
-        : enforceClean && gitDirty;
+        : enforceClean && (process.env['BABEL_REQUIRE_CLEAN_TREE'] === '1' ? gitDirty : unexpectedDirty);
   return {
     isolationRequired,
     isolationAvailable,

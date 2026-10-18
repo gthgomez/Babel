@@ -12,6 +12,7 @@
 
 import { spawnSync } from 'node:child_process';
 import { resolveIsolationBrokerFlags } from './chatEngineIsolationFlags.js';
+import { runWithTaskMutationWorkspace } from './executionContext.js';
 import {
   copyFileSync,
   existsSync,
@@ -448,6 +449,7 @@ export async function runImplementWorktreeAgent(
   let mutation: MutationAgentLoopResult;
   try {
     mutation = await runWithProjectRoot(worktree.path, () =>
+      runWithTaskMutationWorkspace(worktree.path, spec.id, () =>
       runMutationAgentLoop({
         agentId: spec.id,
         task: spec.task,
@@ -469,7 +471,7 @@ export async function runImplementWorktreeAgent(
           ? { inheritedAllowance: options.inheritedAllowance }
           : {}),
         ...(options.onUsageRecorded ? { onUsageRecorded: options.onUsageRecorded } : {}),
-      }),
+      })),
     );
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
