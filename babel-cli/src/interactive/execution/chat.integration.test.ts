@@ -12,6 +12,7 @@ import type { AgentTargetContext } from '../../services/targetResolver.js';
 import { executeChatTask } from './chat.js';
 import { OpenCodeGoApiRunner } from '../../runners/openCodeGoApi.js';
 import { babelReviewModelPolicy } from '../../services/babelChatReview.js';
+import { initMinimalGitProject, mkExternalRunsDir } from '../../testUtils/chatAdmissionFixture.js';
 
 const EMPTY_USAGE = globalCostTracker.getSessionSummary();
 
@@ -235,13 +236,15 @@ test('executeChatTask creates new engine when ctx.chatEngine is undefined', asyn
 
 test('executeChatTask forwards the truthful runtime mode into provider-bound prompts', async () => {
   const root = mkdtempSync(join(tmpdir(), 'babel-chat-entry-mode-'));
-  const runsDir = join(root, 'runs');
-  mkdirSync(runsDir);
+  initMinimalGitProject(root);
+  const runsDir = mkExternalRunsDir('babel-chat-entry-mode-runs-');
   const originalFetch = globalThis.fetch;
   const originalCi = process.env['CI'];
   const originalNoColor = process.env['NO_COLOR'];
   const originalProfile = process.env['BABEL_EXECUTION_PROFILE'];
   const originalReadOnly = process.env['BABEL_READ_ONLY'];
+  const originalRunsDir = process.env['BABEL_RUNS_DIR'];
+  process.env['BABEL_RUNS_DIR'] = runsDir;
   const stdout = process.stdout as { isTTY?: boolean };
   const originalIsTTY = stdout.isTTY;
   const prompts: string[] = [];
@@ -291,15 +294,18 @@ test('executeChatTask forwards the truthful runtime mode into provider-bound pro
     globalThis.fetch = originalFetch;
     if (originalIsTTY === undefined) delete stdout.isTTY;
     else stdout.isTTY = originalIsTTY;
+    ctx.chatEngine?.closeAdmissionStore?.();
     for (const [key, value] of [
       ['CI', originalCi],
       ['NO_COLOR', originalNoColor],
       ['BABEL_EXECUTION_PROFILE', originalProfile],
       ['BABEL_READ_ONLY', originalReadOnly],
+      ['BABEL_RUNS_DIR', originalRunsDir],
     ] as const) {
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
     }
+    rmSync(runsDir, { recursive: true, force: true });
     rmSync(root, { recursive: true, force: true });
   }
 });

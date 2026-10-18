@@ -21,6 +21,7 @@ const allowedNames = new Set([
   'XDG_STATE_HOME', 'XDG_CACHE_HOME', 'BABEL_ROOT', 'BABEL_CONFIG_DIR',
   'BABEL_STATE_DIR', 'BABEL_CACHE_DIR', 'BABEL_RUNS_DIR', 'BABEL_PROJECT_ROOT',
   'BABEL_OPENCODE_GO_HELPER', 'OPENROUTER_API_KEY', 'DEEPSEEK_API_KEY',
+  'BABEL_LIVE', 'BABEL_HEADLESS', 'BABEL_EXECUTION_PROFILE',
   fixtureKey, 'NODE_TEST_CONTEXT', 'NODE_TEST_WORKER_ID', 'FORCE_COLOR',
 ])
 
@@ -55,8 +56,11 @@ export function prepareSyntheticProviderFixture() {
   const systemRoot = process.platform === 'win32'
     ? process.env['SystemRoot'] ?? process.env['SYSTEMROOT'] ?? 'C:\\Windows'
     : undefined
+  const pathParts = [dirname(process.execPath)]
+  if (systemRoot) pathParts.push(join(systemRoot, 'System32'))
+  else pathParts.push('/usr/bin', '/bin')
   const env = {
-    PATH: [dirname(process.execPath), ...(systemRoot ? [join(systemRoot, 'System32')] : [])].join(delimiter),
+    PATH: pathParts.join(delimiter),
     HOME: join(root, 'home'), USERPROFILE: join(root, 'home'),
     APPDATA: join(root, 'config'), LOCALAPPDATA: join(root, 'state'),
     XDG_CONFIG_HOME: join(root, 'config'), XDG_STATE_HOME: join(root, 'state'),

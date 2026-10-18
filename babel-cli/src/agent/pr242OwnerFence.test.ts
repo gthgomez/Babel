@@ -11,6 +11,8 @@ import { createWorkingState } from './codingLoop/workingState.js'
 import { parseLeaseJson } from '../authority/lease.js'
 import { attachSessionAdmissionStore } from '../interactive/execution/chatTransport.js'
 
+const fixtureEngines: ChatEngine[] = []
+
 function project() {
   const root = mkdtempSync(join(tmpdir(), 'babel-pr242-owner-'))
   const git = (args: string[]) => {
@@ -36,6 +38,14 @@ async function withFixture(run: (root: string) => Promise<void>) {
   try {
     await run(root)
   } finally {
+    while (fixtureEngines.length > 0) {
+      const chat = fixtureEngines.pop()
+      try {
+        chat?.closeAdmissionStore()
+      } catch {
+        /* Windows may already have released the store */
+      }
+    }
     if (priorRuns === undefined) delete process.env['BABEL_RUNS_DIR']
     else process.env['BABEL_RUNS_DIR'] = priorRuns
     if (priorBudget === undefined) delete process.env['BABEL_CHAT_MAX_COST']
@@ -63,6 +73,7 @@ function engine(root: string, onDispatch: () => void, maxCostUsd?: number) {
   })
   ;(result as unknown as { shouldUseNativeTools: () => boolean }).shouldUseNativeTools = () => true
   attachSessionAdmissionStore(result)
+  fixtureEngines.push(result)
   return result
 }
 

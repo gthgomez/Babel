@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, realpathSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { executeTool } from '../localTools.js'
@@ -25,7 +25,13 @@ test('Git tool binds concurrent explicit nested roots from an unrelated cwd and 
     assert.equal(result.exit_code, 0)
     const data = JSON.parse(result.stdout)
     assert.equal(data.branch, repos[i]!.name)
-    assert.equal(data.repositoryRoot.replaceAll('\\', '/').toLowerCase(), repos[i]!.dir.replaceAll('\\', '/').toLowerCase())
+    assert.ok(data.repositoryRoot, 'repositoryRoot must be present for an in-repo fixture')
+    const expectedRoot = realpathSync.native?.(repos[i]!.dir) ?? realpathSync(repos[i]!.dir)
+    const actualRoot = realpathSync.native?.(data.repositoryRoot) ?? realpathSync(data.repositoryRoot)
+    assert.equal(
+      actualRoot.replaceAll('\\', '/').toLowerCase(),
+      expectedRoot.replaceAll('\\', '/').toLowerCase(),
+    )
     assert.equal(data.head, repos[i]!.head)
     assert.match(data.diff, /ui.ts/)
     assert.doesNotMatch(data.diff, /other.ts/)
