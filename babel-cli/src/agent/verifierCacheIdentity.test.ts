@@ -256,6 +256,108 @@ describe('verifier cache executions follow argv identity', { concurrency: false 
     rmSync(configDir, { recursive: true, force: true });
   });
 
+  function harness() {
+    const engine = new ChatEngine({ task: 'verify the fixture', projectRoot: root });
+    const host = engine as unknown as {
+      executeOneAction: (...args: unknown[]) => Promise<{ observation: string }>;
+      lastVerifierReceipt: Awaited<ReturnType<typeof bindChatVerifierReceipt>> | null;
+      executedVerifierLedger: unknown[];
+      verifierReceiptCache: Map<string, { receipt: Awaited<ReturnType<typeof bindChatVerifierReceipt>> }>;
+      workingState: unknown;
+    };
+    const terminals: unknown[][] = [];
+    let index = 0;
+    const run = (action: Record<string, unknown>) => host.executeOneAction(
+      action,
+      { runId: 'verifier-denial', agentId: 'test-agent', projectRoot: root, babelRoot: root, runDir: configDir },
+      { onToolComplete: (...args: unknown[]) => { terminals.push(args); } },
+      { index: index++, ownerGeneration: 0 },
+    );
+    const log = join(tmpdir(), `babel-verifier-argv-log-${root.split(/[\\/]/).at(-1)}`);
+    const executions = () => existsSync(log)
+      ? readFileSync(log, 'utf8').trim().split(/\r?\n/).filter(Boolean).length
+      : 0;
+    return { host, run, terminals, executions };
+  }
+
+  test('sandbox cwd denials cannot replace actual green evidence or poison recovery before cached replay', async () => {
+    const { host, run, terminals, executions } = harness();
+    await run({ type: 'write_file', path: join(root, 'fixture.txt'), content: 'updated\n' });
+    await run({ type: 'test_run', command: 'npm test' });
+    assert.equal(host.lastVerifierReceipt?.exit_code, 0);
+    const receipt = host.lastVerifierReceipt;
+    const ledger = JSON.stringify(host.executedVerifierLedger);
+    const state = JSON.stringify(host.workingState);
+    for (const type of ['test_run', 'run_command']) {
+      const denied = await run({ type, command: 'npm test', cwd: join(root, '..', 'outside-project') });
+      assert.match(denied.observation, /Path traversal denied/);
+      assert.equal(host.lastVerifierReceipt, receipt);
+      assert.equal(JSON.stringify(host.executedVerifierLedger), ledger);
+      assert.equal(JSON.stringify(host.workingState), state);
+      assert.equal(executions(), 1, 'denied cwd must never start a verifier process');
+    }
+    const replay = await run({ type: 'test_run', command: 'npm test' });
+    assert.match(replay.observation, /Verifier result unchanged/);
+    assert.equal(host.lastVerifierReceipt, receipt);
+    assert.equal(JSON.stringify(host.executedVerifierLedger), ledger);
+    assert.equal(executions(), 1);
+    assert.equal(terminals.length, 5, 'each action settles exactly once');
+  });
+
+  test('a cwd denial without prior evidence cannot mint a verifier receipt', async () => {
+    process.env['BABEL_LIVE'] = 'true';
+    refreshDryRunState();
+    const { host, run, terminals, executions } = harness();
+    const state = JSON.stringify(host.workingState);
+    const denied = await run({ type: 'test_run', command: 'npm test', cwd: join(root, '..', 'outside-project') });
+    assert.match(denied.observation, /Path traversal denied/);
+    assert.equal(host.lastVerifierReceipt, null);
+    assert.deepEqual(host.executedVerifierLedger, []);
+    assert.equal(JSON.stringify(host.workingState), state);
+    assert.equal(executions(), 0);
+    assert.equal(terminals.length, 1);
+  });
+
+  test('requesting previous green A cannot erase genuinely executed red B or its cached failure', async () => {
+    const { host, run, executions } = harness();
+    const recorder = join(root, 'record-argv.mjs');
+    writeFileSync(recorder, readFileSync(recorder, 'utf8') + "\nif (process.argv.includes('--fail')) process.exit(1);\n");
+    await run({ type: 'write_file', path: join(root, 'fixture.txt'), content: 'updated\n' });
+    await run({ type: 'test_run', command: 'npm test' });
+    await run({ type: 'test_run', command: 'npm test -- --fail' });
+    const red = host.lastVerifierReceipt;
+    assert.equal(red?.exit_code, 1);
+    const ledger = JSON.stringify(host.executedVerifierLedger);
+    const greenReplay = await run({ type: 'test_run', command: 'npm test' });
+    // An active recovery gate may reject the request before cache lookup.
+    // Either way, an old green observation cannot settle the actual red B.
+    assert.match(greenReplay.observation, /RECOVERY_|Verifier result unchanged/);
+    assert.equal(host.lastVerifierReceipt, red);
+    assert.equal(JSON.stringify(host.executedVerifierLedger), ledger);
+    const redReplay = await run({ type: 'test_run', command: 'npm test -- --fail' });
+    assert.match(redReplay.observation, /RECOVERY_|Verifier result unchanged/);
+    assert.equal(host.lastVerifierReceipt, red);
+    assert.equal([...host.verifierReceiptCache.values()].find(v => v.receipt.command === 'npm test -- --fail')?.receipt, red);
+    assert.equal(executions(), 2);
+  });
+
+  test('newer executed red replaces an older green for the same cache identity', async () => {
+    const { host, run, executions } = harness();
+    await run({ type: 'write_file', path: join(root, 'fixture.txt'), content: 'updated\n' });
+    await run({ type: 'test_run', command: 'npm test' });
+    assert.equal(host.lastVerifierReceipt?.exit_code, 0);
+    const recorder = join(root, 'record-argv.mjs');
+    writeFileSync(recorder, readFileSync(recorder, 'utf8') + '\nprocess.exit(1);\n');
+    await run({ type: 'test_run', command: 'npm test' });
+    const red = host.lastVerifierReceipt;
+    assert.equal(red?.exit_code, 1);
+    const replay = await run({ type: 'test_run', command: 'npm test' });
+    assert.match(replay.observation, /RECOVERY_|Verifier result unchanged/);
+    assert.equal(host.lastVerifierReceipt, red);
+    assert.equal([...host.verifierReceiptCache.values()].find(v => v.receipt.command === 'npm test')?.receipt, red);
+    assert.equal(executions(), 2);
+  });
+
   test('distinct quoted commands execute separately and an identical command is reused', async () => {
     const log = join(tmpdir(), `babel-verifier-argv-log-${root.split(/[\\/]/).at(-1)}`);
     const lines = (): string[] => existsSync(log)
