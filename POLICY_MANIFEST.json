@@ -3,7 +3,7 @@
   "algorithm": "sha256",
   "purpose": "drift_detection_not_authorization",
   "normalization": "utf8_crlf_to_lf",
-  "policy_bundle_id": "e5481317d4f6fa37904b470c1eb34e5ceb49a0a5d4b063eba1f7b7b928eb657d",
+  "policy_bundle_id": "9fe8893623abe503a0c38b083332fec88f307cc97a324648248831c676d20468",
   "files": {
     ".github/workflows/public-pr-metadata.yml": "67e630d700055533ee77157ed05fc347161c7c041e35151f2652ffd9b9973023",
     ".github/workflows/publish-npm.yml": "54036b704d59e513cbbb981efa00e82121e40871d6dfe789c8636bd0159f8c9e",
@@ -24,6 +24,9 @@
     "babel-cli/src/authority/convergence-parser.regression-gate.test.ts": "57bfd75d9255634883d02f951e50fea01717c2b9dd4a3293e88921158bb51ead",
     "babel-cli/src/authority/criterionCompletion.test.ts": "eb629c096081c502b131e576c19d14ee353d5fa9c0aa57df6f201aa7b259ac14",
     "babel-cli/src/authority/criterionCompletion.ts": "000aa6bbd930d3322adbbaef46e610fe5ced723b8488c3395b264348f8e7ac86",
+    "babel-cli/src/authority/criterionExecutionPublisher.test.ts": "0f0fb17da2315cba5ea19187ed5c1b4fcf8345e2173a04f4429fd8efc1de669a",
+    "babel-cli/src/authority/criterionExecutionPublisher.ts": "20a1faff0779df77faa5292b5c5380ca7b37f6ee6a3579ea324869d8d6038d9b",
+    "babel-cli/src/authority/criterionVerifierDispatch.ts": "e18330e3cb82e1a7014edd33ff856d0d07f97ad322d1c0554bb95b94aaa821dc",
     "babel-cli/src/authority/gitCommand.ts": "36ca808e4b8c4b3f7e7dc0caf422ffef8c6c4263a045eaf3eb954929cfd1aa81",
     "babel-cli/src/authority/governanceReconcile.ts": "617c1e5b8d999374d9d4ab131d6bb30aba252eb59949e7eb8a5ad0cc494e0cee",
     "babel-cli/src/authority/governanceRestore.test.ts": "8296a3f9c5cc198c6002a01f732283bee095ce482eb7579daed763b46ae0793a",
@@ -139,7 +142,7 @@
     "tools/babel-pr-orchestrate-opencode.mts": "52b030c4ada9940ad8290872d453ef518bc5989475095787cc21ee579b62cf29",
     "tools/babel-pr-orchestrate.mts": "e2b8f541f807e5e7544534a3eb5804ec14395b05a6fc97a813c82269f7fc32a0",
     "tools/host-review-worker.mts": "751b80e69888ec098ff2e190bf487f1962bbb104ea87d7494b68e654009b336a",
-    "tools/policy-integrity-manifest.mjs": "947f9bbff8750325ff1fac30ccedf895ff37469e511e760c9986e74742f3ff93",
+    "tools/policy-integrity-manifest.mjs": "432a00777b13fe31afa947119635138b35f7695915606014fe66a5984d46d71a",
     "tools/resolve-release-tag.mjs": "9b5f769ed1b49c3f829c9a4e4b9a982803ead642180a3941559967bd0f4347e2"
   }
 }
