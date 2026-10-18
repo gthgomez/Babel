@@ -30,6 +30,9 @@ export interface SessionState {
   pendingPlanBody?: string;
   costTotals: {
     totalCostUSD: number;
+    knownCostUSD?: number;
+    estimatedCostUSD?: number;
+    costEstimates?: import('../services/costTracker.js').CostEstimateSource[];
     completeCostUSD?: number | null;
     unknownChargeCount?: number;
     totalInputTokens: number;

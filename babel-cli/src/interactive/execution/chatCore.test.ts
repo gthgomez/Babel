@@ -785,3 +785,44 @@ describe('buildChatRunPayload blocked-evidence gate (R0-A/R0-F)', () => {
     assert.equal(payload['blocked_report'], undefined);
   });
 });
+
+test('context refusal CLI text and JSON preserve unresolved charges and useful recovery', async () => {
+  const { formatRunResultHuman } = await import('../../cli/structuredOutput.js')
+  const result: ChatResult = { ...failedResult('Could not prepare context: workspace snapshot unavailable.'),
+    outcome: 'BLOCKED_POLICY', reason_code: 'context_preparation_failed', cause_class: 'harness',
+    usage: { ...EMPTY_USAGE, totalCostUSD: 0.039075115852, completeCostUSD: null, costComplete: false, unknownChargeCount: 1, totalTokens: 3162714 },
+  }
+  const payload = buildChatRunPayload(result, { task: 'Critique current app', projectRoot: '/fixture/current-app' })
+  const restored = JSON.parse(JSON.stringify(payload))
+  assert.equal(restored.reason_code, 'context_preparation_failed')
+  assert.equal(restored.cause_class, 'harness')
+  assert.equal(restored.usage.completeCostUSD, null)
+  const human = formatRunResultHuman(payload)
+  assert.match(human, /known subtotal/)
+  assert.match(human, /1 unresolved charge/)
+  assert.match(human, /--project-root/)
+})
+
+
+test('CLI coverage counts successful source reads without claiming a rendered UI critique', async () => {
+  const { formatRunResultHuman } = await import('../../cli/structuredOutput.js')
+  const result = { ...completedResult('Source findings only.'), toolCalls: [
+    { tool: 'read_range', target: 'ui.tsx', exit_code: 0 },
+    { tool: 'read_file', target: 'missing.tsx', exit_code: 1 },
+    { tool: 'list_dir', target: 'src', exit_code: 0 },
+  ] } as ChatResult
+  const payload = buildChatRunPayload(result, { task: 'Critique UI', projectRoot: '/fixture/current-app' })
+  assert.deepEqual(payload['inspection_coverage'], { basis: 'recorded_tool_results', source_reads: 1, visual_checks: 'not_established', completeness: 'not_established' })
+  assert.match(formatRunResultHuman(payload), /Visual checks: not established/)
+})
+
+
+test('stream fallback preserves tool exit state for coverage when no aggregate tool log is delivered', async () => {
+  const events: ChatEvent[] = [
+    { type: 'tool_complete', tool: 'read_range', target: 'ui.tsx', exitCode: 0 },
+    { type: 'done', answer: 'Source observation delivered.', usage: EMPTY_USAGE },
+  ]
+  const result = await consumeChatStream((async function* () { yield* events })(), null)
+  const payload = buildChatRunPayload(result, { task: 'Critique UI', projectRoot: '/fixture/current-app' })
+  assert.equal((payload['inspection_coverage'] as { source_reads: number }).source_reads, 1)
+})

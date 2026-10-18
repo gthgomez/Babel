@@ -185,7 +185,7 @@ describe('review card — truthful terminal states', () => {
     assert.doesNotMatch(text, /^Summary$/m);
     assert.doesNotMatch(text, /A few things I/);
     assert.match(text, /\$0\.0010 this turn/);
-    assert.match(text, /50 tok/);
+    assert.match(text, /50 cumulative tokens/);
     assert.doesNotMatch(text, /session/);
   });
 
@@ -204,7 +204,7 @@ describe('review card — truthful terminal states', () => {
     assert.match(text, /Summary/);
     assert.match(text, /Patched the login timeout/);
     assert.match(text, /\$0\.0013 this turn/);
-    assert.match(text, /9,286 tok/);
+    assert.match(text, /9,286 cumulative tokens/);
     assert.match(text, /\(session 44,682\)/);
   });
 

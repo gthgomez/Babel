@@ -1,3 +1,5 @@
+import type { TerminalReasonCode, TerminalReasonCauseClass } from '../schemas/agentContracts.js';
+import { terminalReasonGuidance } from '../agent/chatTerminalReason.js';
 import { existsSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import type { SessionEvent, SessionEventLog } from "../agent/sessionEvents.js";
@@ -61,6 +63,8 @@ export interface CausalRunWhyReport {
   run_dir?: string;
   session_id?: string;
   terminal_outcome: string | null;
+  reason_code?: TerminalReasonCode;
+  cause_class?: TerminalReasonCauseClass;
   event_count: number;
   lifecycle: {
     inference_count: number;
@@ -607,6 +611,11 @@ export function buildCausalAttributionReport(input: {
   const terminal = [...events]
     .reverse()
     .find((event) => event.kind === "turn_ended");
+  if (!input.loadError && terminal?.kind === 'turn_ended' && terminal.reason_code === 'context_preparation_failed' && terminal.cause_class === 'harness') {
+    attribution = { ...attribution, family: 'harness', code: terminal.reason_code,
+      confidence: 'high', model_blame_permitted: false,
+      evidence: ['Durable terminal reason records a context preparation refusal by the harness.'] };
+  }
   return {
     schema_version: 1,
     kind: "babel_causal_attribution_report",
@@ -616,6 +625,8 @@ export function buildCausalAttributionReport(input: {
       ? { session_id: input.log.session_id }
       : {}),
     terminal_outcome: terminal?.kind === "turn_ended" ? terminal.outcome ?? null : null,
+    ...(terminal?.kind === 'turn_ended' && terminal.reason_code !== undefined ? { reason_code: terminal.reason_code } : {}),
+    ...(terminal?.kind === 'turn_ended' && terminal.cause_class !== undefined ? { cause_class: terminal.cause_class } : {}),
     event_count: events.length,
     lifecycle: {
       inference_count: inputs.length,
@@ -671,6 +682,10 @@ export function formatCausalAttributionHuman(
     `  inferences=${report.lifecycle.inference_count} results_delivered=${report.lifecycle.delivered_result_count} results_failed=${report.lifecycle.failed_result_count}`,
     `  tools=${report.lifecycle.tool_proposal_count} terminals=${report.lifecycle.tool_terminal_count} mutations=${report.lifecycle.mutation_count} verifiers=${report.lifecycle.verifier_count}`,
   ];
+  if (report.reason_code === 'context_preparation_failed') {
+    const guidance = terminalReasonGuidance(report.reason_code);
+    lines.push('', guidance.message, ...guidance.nextActions);
+  }
   if (attribution.evidence.length > 0) {
     lines.push(
       "",

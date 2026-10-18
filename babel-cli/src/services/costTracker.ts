@@ -165,6 +165,13 @@ export interface CostEstimateSource {
   pricingVerifiedAt: string | null;
 }
 
+function validEstimateSource(source: CostEstimateSource): boolean {
+  return !!source && source.basis === 'published_usage_estimate' &&
+    ['exact', 'conservative', 'unknown'].includes(source.precision) &&
+    (source.pricingSourceUrl === null || typeof source.pricingSourceUrl === 'string') &&
+    (source.pricingVerifiedAt === null || typeof source.pricingVerifiedAt === 'string');
+}
+
 /** Preserve legacy accounting values without reinterpreting them as Go invoices. */
 function receiptAllowanceCost(receipt: ChargeReceipt): number | null {
   return receipt.costEstimate ? receipt.estimatedCostUSD ?? null : receipt.knownCostUSD;
@@ -177,10 +184,7 @@ function validReceiptCost(receipt: ChargeReceipt): boolean {
   if (!receipt.costEstimate) return receipt.estimatedCostUSD === undefined;
   const source = receipt.costEstimate;
   return receipt.provider === 'opencode-go' && receipt.knownCostUSD === null &&
-    validCost(receipt.estimatedCostUSD) && source.basis === 'published_usage_estimate' &&
-    ['exact', 'conservative', 'unknown'].includes(source.precision) &&
-    (source.pricingSourceUrl === null || typeof source.pricingSourceUrl === 'string') &&
-    (source.pricingVerifiedAt === null || typeof source.pricingVerifiedAt === 'string') &&
+    validCost(receipt.estimatedCostUSD) && validEstimateSource(source) &&
     (receipt.estimatedCostUSD === null ? source.precision === 'unknown' : source.precision !== 'unknown');
 }
 
@@ -194,17 +198,17 @@ function uniqueEstimateSources(sources: CostEstimateSource[]): CostEstimateSourc
 function projectGoEstimates(summary: SessionUsageSummary, receipts: readonly ChargeReceipt[]): SessionUsageSummary {
   const goReceipts = receipts.filter((receipt) => receipt.provider === 'opencode-go');
   const modelSources = Object.values(summary.modelBreakdown).flatMap((model) => model.costEstimates ?? []);
-  if (goReceipts.length === 0 && modelSources.length === 0) return summary;
+  const modelEstimate = Object.values(summary.modelBreakdown).reduce((sum, model) => sum + (model.estimatedCostUSD ?? 0), 0);
+  if (goReceipts.length === 0 && modelSources.length === 0 && modelEstimate === 0) return summary;
   const sources = uniqueEstimateSources([...modelSources, ...goReceipts.map((receipt) => receipt.costEstimate ?? {
     basis: 'published_usage_estimate' as const, precision: 'unknown' as const,
     pricingSourceUrl: null, pricingVerifiedAt: null,
   })]);
   const receiptEstimate = goReceipts.reduce((sum, receipt) => sum + (receiptAllowanceCost(receipt) ?? 0), 0);
-  const modelEstimate = Object.values(summary.modelBreakdown).reduce((sum, model) => sum + (model.estimatedCostUSD ?? 0), 0);
   // Model evidence covers only unattributed calls; receipts cover owned calls.
   const estimate = receiptEstimate + modelEstimate;
   for (const [modelId, model] of Object.entries(summary.modelBreakdown)) {
-    if (model.costEstimates?.length || goReceipts.some((receipt) => receipt.modelId === modelId) ||
+    if ((model.estimatedCostUSD ?? 0) > 0 || model.costEstimates?.length || goReceipts.some((receipt) => receipt.modelId === modelId) ||
         (modelId === '__restored__' && goReceipts.length > 0)) model.completeCostUSD = null;
   }
   return { ...summary, knownCostUSD: Math.max(0, summary.totalCostUSD - estimate),
@@ -525,6 +529,9 @@ export class CostTracker {
   /** Restore cost state from a saved session (resume). */
   public restoreSessionCost(totals: {
     totalCostUSD: number;
+    knownCostUSD?: number;
+    estimatedCostUSD?: number;
+    costEstimates?: CostEstimateSource[];
     totalInputTokens: number;
     totalOutputTokens: number;
     totalTokens: number;
@@ -536,21 +543,26 @@ export class CostTracker {
     // A persisted snapshot cannot supersede receipts already seen in this process.
     if (Object.keys(this.sessionUsage).length > 0 || this.sessionTotalCost !== 0 ||
         this.sessionUnknownCharges !== 0) return;
-    this.sessionTotalCost = totals.totalCostUSD;
-    if (typeof totals.projectSessionId === 'string' && totals.projectSessionId.length > 0) {
-      this.projectSessionId = totals.projectSessionId;
+    if (totals.estimatedCostUSD !== undefined &&
+        (!Number.isFinite(totals.estimatedCostUSD) || totals.estimatedCostUSD < 0 ||
+         totals.estimatedCostUSD - totals.totalCostUSD > 1e-9 ||
+         (totals.knownCostUSD !== undefined && (!Number.isFinite(totals.knownCostUSD) || totals.knownCostUSD < 0 ||
+          Math.abs(totals.knownCostUSD + totals.estimatedCostUSD - totals.totalCostUSD) > 1e-9)))) {
+      throw new Error('Invalid saved session estimate decomposition');
     }
-    this.sessionUnknownCharges = totals.unknownChargeCount ?? 0;
+    if (totals.costEstimates !== undefined && (!Array.isArray(totals.costEstimates) || !totals.costEstimates.every(validEstimateSource))) {
+      throw new Error('Invalid saved session estimate provenance');
+    }
     const chargeIds = totals.accountedChargeIds;
-    this.restoredSessionChargeIds = Array.isArray(chargeIds) &&
+    const restoredIds = Array.isArray(chargeIds) &&
       chargeIds.every((id) => typeof id === 'string' && id.length > 0) &&
       new Set(chargeIds).size === chargeIds.length
       ? new Set(chargeIds) : null;
     const observations = totals.chargeObservations;
-    this.restoredSessionObservations = this.restoredSessionChargeIds && Array.isArray(observations) &&
-      observations.length === this.restoredSessionChargeIds.size &&
+    const restoredObservations = restoredIds && Array.isArray(observations) &&
+      observations.length === restoredIds.size &&
       observations.every((receipt) => receipt?.attribution &&
-        this.restoredSessionChargeIds!.has(receipt.attribution.chargeId) &&
+        restoredIds.has(receipt.attribution.chargeId) &&
         typeof receipt.modelId === 'string' && receipt.modelId.length > 0 &&
         (receipt.provider === undefined || receipt.provider === null ||
           (typeof receipt.provider === 'string' && receipt.provider.length > 0)) &&
@@ -559,6 +571,15 @@ export class CostTracker {
         validReceiptCost(receipt)) &&
       new Set(observations.map((receipt) => receipt.attribution.chargeId)).size === observations.length
       ? new Map(observations.map((receipt) => [receipt.attribution.chargeId, receipt])) : null;
+    const receiptEstimate = [...(restoredObservations?.values() ?? [])].reduce((sum, receipt) =>
+      sum + (receipt.provider === 'opencode-go' ? receiptAllowanceCost(receipt) ?? 0 : 0), 0);
+    const residualEstimate = totals.estimatedCostUSD === undefined ? undefined : totals.estimatedCostUSD - receiptEstimate;
+    if (residualEstimate !== undefined && residualEstimate < -1e-9) throw new Error('Saved session estimate disagrees with receipts');
+    this.sessionTotalCost = totals.totalCostUSD;
+    if (typeof totals.projectSessionId === 'string' && totals.projectSessionId.length > 0) this.projectSessionId = totals.projectSessionId;
+    this.sessionUnknownCharges = totals.unknownChargeCount ?? 0;
+    this.restoredSessionChargeIds = restoredIds;
+    this.restoredSessionObservations = restoredObservations;
     this.sessionProjectionComplete = this.restoredSessionObservations !== null;
     // Best-effort: reconstruct a synthetic usage entry so getSessionSummary() returns non-zero
     if (totals.totalTokens > 0 || totals.totalCostUSD > 0 || this.sessionUnknownCharges > 0) {
@@ -566,6 +587,8 @@ export class CostTracker {
         inputTokens: totals.totalInputTokens,
         outputTokens: totals.totalOutputTokens,
         costUSD: totals.totalCostUSD,
+        ...(residualEstimate !== undefined ? { estimatedCostUSD: Math.max(0, residualEstimate) } : {}),
+        ...(totals.costEstimates ? { costEstimates: uniqueEstimateSources(totals.costEstimates) } : {}),
         unknownChargeCount: this.sessionUnknownCharges,
         completeCostUSD: this.sessionUnknownCharges === 0 ? totals.totalCostUSD : null,
         // Cache fields set to 0 since they can't be recovered from a previous session

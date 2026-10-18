@@ -156,7 +156,7 @@ function readGitHead(projectRoot: string): string | null {
  * tracked paths, malformed enumeration, unsafe types and exceeded bounds make
  * the repository capture unavailable before input content is opened.
  */
-function readGitTree(projectRoot: string): string | null {
+function readGitTree(projectRoot: string, onCaptureFailure?: (reason: string) => void): string | null {
   try {
     const gitRoot = fs.realpathSync.native(execFileSync("git", ["rev-parse", "--show-toplevel"], {
       cwd: projectRoot, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
@@ -205,7 +205,7 @@ function readGitTree(projectRoot: string): string | null {
       else requiredPaths.push(relative);
     }
     const physical = captureVerifierInputClosure(root, true, requiredPaths);
-    if (physical.mode !== "bound") return null;
+    if (physical.mode !== "bound") { onCaptureFailure?.(physical.reason); return null; }
     return hashFileContent(canonicalJsonForHash({
       method: "physical-worktree-v1", root, index,
       excludedDirectories: [...INPUT_CLOSURE_SKIP_DIRS].sort(),
@@ -408,6 +408,7 @@ function computeRevision(
   options: {
     scope_kind?: "files" | "repository";
     git_binding?: GitBindingModeV1;
+    onCaptureFailure?: (reason: string) => void;
   } = {},
 ): WorkspaceRevision {
   const scopeKind = options.scope_kind ?? "files";
@@ -444,7 +445,7 @@ function computeRevision(
       }
     }
   } else {
-    const treeHash = readGitTree(projectRoot);
+    const treeHash = readGitTree(projectRoot, options.onCaptureFailure);
     if (!treeHash && gitBinding === "required")
       throw new Error("Required Git tree cannot be established.");
     // Optional callers retain an explicitly unknown revision, never a reusable
@@ -551,6 +552,7 @@ export class RevisionManager {
     options?: {
       scope_kind?: "files" | "repository";
       git_binding?: GitBindingModeV1;
+      onCaptureFailure?: (reason: string) => void;
     },
   ): WorkspaceRevision {
     return computeRevision(projectRoot, touchedFiles, options);
@@ -562,6 +564,7 @@ export class RevisionManager {
     options?: {
       scope_kind?: "files" | "repository";
       git_binding?: GitBindingModeV1;
+      onCaptureFailure?: (reason: string) => void;
     },
   ): Promise<WorkspaceRevision> {
     return computeRevision(projectRoot, touchedFiles, options);

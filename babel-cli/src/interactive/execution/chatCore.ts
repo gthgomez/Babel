@@ -1,3 +1,5 @@
+import { chatInspectionCoverage } from '../../agent/chatInspectionCoverage.js';
+import { terminalReasonGuidance } from '../../agent/chatTerminalReason.js';
 // ─── Chat Core ──────────────────────────────────────────────────────────────
 // Shared chat execution primitives used by REPL (executeChatTask) and CLI
 // one-shot paths. Dependency-injectable for integration tests.
@@ -439,6 +441,7 @@ export async function consumeChatStream(
           target: event.target,
           ...(event.detail !== undefined ? { detail: event.detail } : {}),
           ...(event.error !== undefined ? { error: event.error } : {}),
+          ...(event.exitCode !== undefined ? { exit_code: event.exitCode } : {}),
           ...(event.effect_scope !== undefined ? { effect_scope: event.effect_scope } : {}),
           ...(event.effect_status !== undefined ? { effect_status: event.effect_status } : {}),
           ...(event.mutation_paths !== undefined ? { mutation_paths: [...event.mutation_paths] } : {}),
@@ -1137,6 +1140,7 @@ export function buildChatRunPayload(
 
   payload['command'] = 'run';
   payload['mode'] = 'chat';
+  payload['inspection_coverage'] = chatInspectionCoverage(result.toolCalls);
   // Chat has its own durable records; inherited Ask paths are not evidence.
   const evidence = payload['evidence'] as Record<string, unknown>;
   evidence['artifacts'] = result.runDir ? [
@@ -1156,6 +1160,7 @@ export function buildChatRunPayload(
   // D03: carry the structured terminal reason alongside the outcome.
   if (result.reason_code !== undefined) {
     payload['reason_code'] = result.reason_code;
+    if (result.reason_code === 'context_preparation_failed') payload['next'] = terminalReasonGuidance(result.reason_code).nextActions;
   }
   if (result.cause_class !== undefined) {
     payload['cause_class'] = result.cause_class;

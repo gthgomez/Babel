@@ -390,7 +390,7 @@ export class ConversationalRenderer extends BaseRenderer {
   private _tick(): void {
     if (this.paused || this._pausedTicks || this.outputBroken || isRendererPresentationSuspended()) return;
     if (this._state === 'streaming' && this._bufferingAnswer) {
-      const hud = composeThinkingHud({ indicatorLine: `  Receiving response… (response ${Math.floor((Date.now() - this.startTime) / 1000)}s · Ctrl+C cancel)`,
+      const hud = composeThinkingHud({ indicatorLine: `  Receiving response… (elapsed ${Math.floor((Date.now() - this.startTime) / 1000)}s · Ctrl+C cancel)`,
         overlayLines: [], columns: OutputBuffer.getTerminalSize().cols, previousOverlayLines: 0 });
       safeStdoutWrite(hud.output);
       return;
@@ -906,7 +906,7 @@ export class ConversationalRenderer extends BaseRenderer {
     for (const group of groups) {
       const formatted = formatToolGroupSummary(group, this.verboseMode);
       if (this.isTTY) {
-        this._writeTranscript(`\r${formatted}\n`);
+        this._writeTranscript(`${formatted}\n`);
         this._pushLinesToScrollback(formatted);
       } else {
         this._writeTranscript(`${formatted}\n`);
@@ -957,11 +957,7 @@ export class ConversationalRenderer extends BaseRenderer {
       // emit \r\x1b[K and erase the freshly-printed tool call indicator.
       this._pendingToolCallLines++;
       const label = conversationalToolLabel(tool, target);
-      if (this._pendingToolExecutions.length === 0) {
-        safeStdoutWrite(`\n  ${dim('○')} ${label}`);
-      } else {
-        safeStdoutWrite(`\r  ${dim('○')} ${label}`);
-      }
+      this._writeTranscript(`\n  ${muted('○')} ${label}\n`);
     }
     if (isA11yMode()) {
       a11yToolEvent(tool, target);
@@ -1028,7 +1024,7 @@ export class ConversationalRenderer extends BaseRenderer {
           hasUnknowns: classification.status === 'unknown',
         };
         const formatted = formatToolGroupSummary(group, true);
-        this._writeTranscript(`\r${formatted}\n`);
+        this._writeTranscript(`${formatted}\n`);
         this._pushLinesToScrollback(formatted);
       } else if (isIntervention) {
         this._flushPendingToolExecutions();
@@ -1041,14 +1037,14 @@ export class ConversationalRenderer extends BaseRenderer {
           hasUnknowns: false,
         };
         const formatted = formatToolGroupSummary(group, false);
-        this._writeTranscript(`\r${formatted}\n`);
+        this._writeTranscript(`${formatted}\n`);
         this._pushLinesToScrollback(formatted);
       } else {
         this._pendingToolExecutions.push(summary);
       }
     } else {
-      const detailStr = detail ? ` (${detail})` : '';
-      const line = `[${formatElapsed(Date.now() - this.startTime)}] ${pending.tool} ${pending.target}${detailStr}`;
+      const detailStr = [detail, error].filter(Boolean).join('; ');
+      const line = `[${formatElapsed(Date.now() - this.startTime)}] ${pending.tool} ${pending.target} — ${classification.status}${exitCode !== undefined ? ` (exit ${exitCode})` : ''}${detailStr ? `: ${detailStr}` : ''}`;
       this._writeTranscript(`${line}\n`);
       this._pushLinesToScrollback(line);
     }
@@ -1145,7 +1141,7 @@ export class ConversationalRenderer extends BaseRenderer {
     if (this.isTTY && this._state === 'thinking') this._leaveThinking('stream');
     const elapsed = formatElapsed(Date.now() - this.startTime);
     if (this.isTTY) {
-      let output = `\n  ${dim('·')} ${muted(`Response time ${elapsed}`)}`;
+      let output = `\n  ${dim('·')} ${muted(`Elapsed ${elapsed}`)}`;
       if (this.toolCallCount > 0) {
         output += `  ${dim('·')} ${this.toolCallCount} tool call${this.toolCallCount !== 1 ? 's' : ''}`;
       }
@@ -1422,15 +1418,6 @@ export class ConversationalRenderer extends BaseRenderer {
     this.paused = false;
     this.disableRawMode();
     if (this.isTTY) {
-      // Show keyboard hint footer if any tool calls were made
-      if (this.toolCallCount > 0) {
-        // Build keybinding hints from available actions
-        const hints: string[] = ['[Esc] cancel'];
-        if (this.thoughtText) hints.push('[T] thought');
-        if (this._checkpointAvailable) hints.push('[Ctrl+R] restore checkpoint');
-        hints.push('[Ctrl+C] stop');
-        this._writeCommitted(`\n  ${dim(hints.join('  '))}\n`);
-      }
       this._writeCommitted('\n\x1b[?25h');
     }
     this.destroy();

@@ -832,6 +832,7 @@ export function outcomeFromReasonCode(
       return 'AGENT_FAILURE';
     case 'cost_accounting_incomplete':
       return 'INFRA_FAILURE';
+    case 'context_preparation_failed':
     case 'recovery_exhausted':
     case 'localization_exhausted':
     case 'permission_denied':

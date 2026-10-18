@@ -22,6 +22,9 @@ export function updateCostTotals(ctx: ReplContext): void {
   const summary = globalCostTracker.getSessionSummary();
   ctx.state.costTotals = {
     totalCostUSD: summary.totalCostUSD,
+    ...(summary.knownCostUSD !== undefined ? { knownCostUSD: summary.knownCostUSD } : {}),
+    ...(summary.estimatedCostUSD !== undefined ? { estimatedCostUSD: summary.estimatedCostUSD } : {}),
+    ...(summary.costEstimates !== undefined ? { costEstimates: summary.costEstimates } : {}),
     completeCostUSD: summary.completeCostUSD ?? null,
     unknownChargeCount: summary.unknownChargeCount ?? 0,
     totalInputTokens: summary.totalInputTokens,
@@ -92,9 +95,13 @@ export function restoreSessionState(ctx: ReplContext, saved: SessionState): void
   if (saved.costTotals) {
     globalCostTracker.restoreSessionCost(saved.costTotals);
   }
-  const costText = saved.costTotals?.unknownChargeCount
-    ? `$${(saved.costTotals.totalCostUSD ?? 0).toFixed(4)} known subtotal; ${saved.costTotals.unknownChargeCount} unpriced charge(s)`
-    : `$${(saved.costTotals?.totalCostUSD ?? 0).toFixed(4)} cumulative cost`;
+  const summary = globalCostTracker.getSessionSummary();
+  const costText = [
+    `$${(summary.knownCostUSD ?? summary.totalCostUSD).toFixed(4)} known subtotal`,
+    ...(summary.estimatedCostUSD ? [`$${summary.estimatedCostUSD.toFixed(4)} usage estimate`] : []),
+    ...(summary.unknownChargeCount ? [`${summary.unknownChargeCount} unpriced charge(s)`] : []),
+    ...(summary.completeCostUSD === null ? ['cost incomplete'] : []),
+  ].join('; ');
   console.log(`\n  Session restored — ${saved.turnCount ?? 0} turns, ${costText}.\n`);
 }
 

@@ -96,6 +96,8 @@ export interface CompactionOptions {
     modelId: string;
     inputTokens: number | null;
     outputTokens: number | null;
+    provider?: ProviderId;
+    reportedCostUsd?: number;
   }) => void;
 }
 
@@ -711,7 +713,7 @@ export class LLMSummarizeCompaction implements CompactionStrategy {
 
       const data = (await response.json()) as {
         choices?: Array<{ message?: { content?: string } }>;
-        usage?: { prompt_tokens?: number; completion_tokens?: number };
+        usage?: { prompt_tokens?: number; completion_tokens?: number; cost?: number };
         model?: string;
       };
       phase('first_byte');
@@ -720,6 +722,9 @@ export class LLMSummarizeCompaction implements CompactionStrategy {
         modelId: typeof data.model === 'string' ? data.model : model,
         inputTokens: data.usage?.prompt_tokens ?? null,
         outputTokens: data.usage?.completion_tokens ?? null,
+        provider,
+        ...(typeof data.usage?.cost === 'number' && Number.isFinite(data.usage.cost) && data.usage.cost >= 0
+          ? { reportedCostUsd: data.usage.cost } : {}),
       });
 
       const summary = data?.choices?.[0]?.message?.content ?? '';
@@ -866,6 +871,7 @@ export class LLMSummarizeCompaction implements CompactionStrategy {
         modelId: typeof data.model === 'string' ? data.model : model,
         inputTokens: data.usage?.input_tokens ?? null,
         outputTokens: data.usage?.output_tokens ?? null,
+        provider: 'anthropic',
       });
 
       const summary =

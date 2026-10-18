@@ -1195,3 +1195,57 @@ describe('H1 compaction lifecycle result', () => {
     assert.deepEqual(host.conversation, [{ role: 'user', content: 'still small' }]);
   });
 });
+
+
+describe('compaction capture admission and rollback', () => {
+  for (const phase of ['prepare', 'commit', 'persist'] as const) {
+    it(`preserves resumable history when capture refuses at ${phase}`, async () => {
+      const prior: ChatMessage[] = [
+        { role: 'system', content: 'Inspect the current app.' },
+        { role: 'user', content: 'Inspect the current app.' },
+        { role: 'assistant', content: 'Retained source evidence. '.repeat(100) },
+      ]
+      const threadLog = createThreadEventLog()
+      const turnId = startTurn(threadLog, { task: 'Inspect the current app.', model: 'm', provider: 'deepinfra', projectRoot: tmpdir(), policyPreset: 'chat' })
+      recordUserMessage(threadLog, turnId, prior[1]!.content)
+      recordAssistantMessage(threadLog, turnId, prior[2]!.content)
+      const original = serializeThreadEventLog(threadLog)
+      const sessionLog = createSessionEventLog()
+      let summarized = 0
+      let captureCurrent = true
+      let persisted = original
+      const host: ChatEngineCompactionHost = {
+        conversation: prior, options: { task: 'Inspect the current app.', model: 'm' },
+        limits: { maxEstimatedTokens: 128_000 }, abortSignal: new AbortController().signal,
+        writeCount: 0, turnIndex: 1, toolCallLog: [], progress: { receipts: [], consecutiveNoProgress: 0 },
+        threadLog, sessionLog, turnId, shouldUseTextTools: () => false,
+        compactHeuristic: () => { throw new Error('must not use a fallback after capture refusal') },
+        checkpoint: async () => {
+          persisted = serializeThreadEventLog(threadLog)
+          if (phase === 'persist') captureCurrent = false
+        }, reserveTokens: 0, textToolsReserve: 0,
+        resolveModel: () => 'm', shouldCompactByTokens: () => true, estimateTokens,
+        forceCompaction: true,
+        prepareContextGuard: () => {
+          if (phase === 'prepare') throw new Error('snapshot unavailable: size cap')
+          return () => captureCurrent
+        },
+        compactionManager: { compactWithResult: async () => {
+          summarized++
+          if (phase === 'commit') captureCurrent = false // Physical inputs or admitted owner changed during summarization.
+          return { messages: [prior[0]!, prior[1]!, { role: 'assistant', name: 'compaction_summary', content: 'Candidate summary.', provenance: 'model', authoritative: false }],
+            strategy: 'llm-summarize', tokensBefore: 1000, tokensAfter: 100, changed: true, status: 'applied', strategyErrors: [] }
+        } },
+      }
+      if (phase === 'prepare') await assert.rejects(runChatEngineCompaction(host), /snapshot unavailable/)
+      else assert.equal(await runChatEngineCompaction(host), null, 'commit refusal retains the original full-history authority')
+      assert.equal(summarized, phase === 'prepare' ? 0 : 1)
+      assert.deepEqual(host.conversation, prior)
+      assert.equal(serializeThreadEventLog(threadLog), original)
+      assert.equal(persisted, original, 'rollback must restore the durable resumable history')
+      const restored = parseThreadEventLog(original)
+      assert.ok(restored.events.some(event => event.kind === 'assistant_message' && event.content.includes('Retained source evidence')))
+      assert.equal(sessionLog.events.some(event => event.kind === 'compaction_committed'), false)
+    })
+  }
+})

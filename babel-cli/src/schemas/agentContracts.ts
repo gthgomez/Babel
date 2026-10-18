@@ -1000,6 +1000,7 @@ export const TerminalReasonCodeSchema = z.enum([
   'cost_accounting_incomplete',
   'native_tool_protocol_invalid',
   'response_evidence_invalid',
+  'context_preparation_failed',
   'unknown',
 ]);
 export type TerminalReasonCode = z.infer<typeof TerminalReasonCodeSchema>;

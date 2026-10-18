@@ -158,6 +158,7 @@ function formatExpandedItem(
 
   const errSuffix = cls.isFailure && item.error ? ` (${item.error})` : "";
   const rawLine = `  ${icon} ${dim(item.tool)} ${primary(item.target)} — ${statusText}${errSuffix}`;
+  if (cls.isFailure || cls.isBlocked || cls.availability === "unavailable") return rawLine;
   if (visibleLength(rawLine) > termWidth) {
     const staticLen = visibleLength(
       `  ${icon} ${dim(item.tool)}  — ${statusText}${errSuffix}`,

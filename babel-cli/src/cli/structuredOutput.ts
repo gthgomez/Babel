@@ -1,3 +1,5 @@
+import { formatChatInspectionCoverage } from '../agent/chatInspectionCoverage.js';
+import { formatUsageCost } from './usageCost.js';
 import type { BabelEventBus, PipelineResult } from '../pipeline.js';
 import type { ValidMode } from './constants.js';
 import type { BabelRuntimeEvent } from '../runtime/protocol.js';
@@ -208,7 +210,7 @@ export interface LiteOutputContext extends RunOutputContext {
   routeDecision?: LiteRouteMetadata;
 }
 
-export interface LiteUsagePayload {
+export interface LiteUsagePayload extends Pick<SessionUsageSummary, 'unknownChargeCount' | 'completeCostUSD' | 'costComplete' | 'knownCostUSD' | 'estimatedCostUSD'> {
   totalCostUSD: number;
   totalInputTokens: number;
   totalOutputTokens: number;
@@ -1010,25 +1012,6 @@ export function buildAskResultPayload(input: {
   };
 }
 
-function formatCost(cost: number): string {
-  return `$${cost.toFixed(6)}`;
-}
-
-function formatUsageLine(usage: LiteUsagePayload): string {
-  if (usage.totalTokens <= 0) {
-    return 'No usage data available';
-  }
-  const base = `Tokens: ${usage.totalTokens} (${formatCost(usage.totalCostUSD)})`;
-  if (!usage.cost_ledger_path) {
-    return base;
-  }
-  return `${base}${`\nCost details: ${usage.cost_ledger_path}`}`;
-}
-
-function formatWorkPath(path: string): string {
-  return path.replace(/_/g, ' ').replace(/\b\w/g, (character) => character.toUpperCase());
-}
-
 function formatProviderRecovery(schemaRetries: number, recovered: boolean): string | null {
   // Hide retry counts from user output — schema repair is a backend concern.
   // Only surface when unusually high (>3 retries) as a muted note.
@@ -1210,12 +1193,18 @@ function firstNextStep(
 function extractUsage(payload: Record<string, unknown>): LiteUsagePayload | null {
   const usage = asRecord(payload['usage']);
   const totalTokens = typeof usage['totalTokens'] === 'number' ? usage['totalTokens'] : 0;
-  const totalCostUSD = typeof usage['totalCostUSD'] === 'number' ? usage['totalCostUSD'] : 0;
-  if (totalTokens <= 0 && totalCostUSD <= 0) {
+  const totalCostUSD = typeof usage['totalCostUSD'] === 'number' ? usage['totalCostUSD'] : Number.NaN;
+  const unknownChargeCount = typeof usage['unknownChargeCount'] === 'number' ? usage['unknownChargeCount'] : undefined;
+  if (totalTokens <= 0 && totalCostUSD <= 0 && !(unknownChargeCount && unknownChargeCount > 0)) {
     return null;
   }
   return {
     totalCostUSD,
+    ...(typeof usage['knownCostUSD'] === 'number' ? { knownCostUSD: usage['knownCostUSD'] } : {}),
+    ...(typeof usage['estimatedCostUSD'] === 'number' ? { estimatedCostUSD: usage['estimatedCostUSD'] } : {}),
+    ...(unknownChargeCount !== undefined ? { unknownChargeCount } : {}),
+    ...(usage['completeCostUSD'] === null || typeof usage['completeCostUSD'] === 'number' ? { completeCostUSD: usage['completeCostUSD'] as number | null } : {}),
+    ...(typeof usage['costComplete'] === 'boolean' ? { costComplete: usage['costComplete'] } : {}),
     totalInputTokens: typeof usage['totalInputTokens'] === 'number' ? usage['totalInputTokens'] : 0,
     totalOutputTokens:
       typeof usage['totalOutputTokens'] === 'number' ? usage['totalOutputTokens'] : 0,
@@ -1382,17 +1371,21 @@ function formatEvidence(payload: Record<string, unknown>): string[] {
   const evidence = asRecord(payload['evidence']);
   const lines: string[] = [];
   const runDir = asString(payload['run_dir']) ?? asString(evidence['run_dir']);
+  const coverage = asRecord(payload['inspection_coverage']);
+  if (coverage['basis'] === 'recorded_tool_results' && typeof coverage['source_reads'] === 'number') {
+    lines.push(`- ${formatChatInspectionCoverage({ basis: 'recorded_tool_results', source_reads: coverage['source_reads'], visual_checks: 'not_established', completeness: 'not_established' })}`);
+  }
   const supportPath = asString(payload['support_path']) ?? asString(evidence['support_path']);
   const usage = extractUsage(payload);
   const usageSuffix =
-    usage && usage.totalTokens > 0
-      ? ` — ${usage.totalTokens.toLocaleString('en-US')} tokens, ${formatCost(usage.totalCostUSD)}`
+    usage && (usage.totalTokens > 0 || (usage.unknownChargeCount ?? 0) > 0)
+      ? ` — ${usage.totalTokens.toLocaleString('en-US')} cumulative tokens, ${formatUsageCost(usage)}`
       : '';
   if (runDir) {
     lines.push(`- Run: ${info(runDir)}${usageSuffix}`);
-  } else if (usage && usage.totalTokens > 0) {
+  } else if (usage && (usage.totalTokens > 0 || (usage.unknownChargeCount ?? 0) > 0)) {
     lines.push(
-      `- Usage: ${usage.totalTokens.toLocaleString('en-US')} tokens, ${formatCost(usage.totalCostUSD)}`,
+      `- Usage: ${usage.totalTokens.toLocaleString('en-US')} cumulative tokens, ${formatUsageCost(usage)}`,
     );
   }
   if (supportPath && supportPath !== runDir) {
