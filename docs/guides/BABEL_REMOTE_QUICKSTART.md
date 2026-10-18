@@ -26,7 +26,7 @@ Revoke devices with `DELETE /pair/devices/<deviceId>` (bearer required).
 2. Create or resume a thread with **`session_id`** set to that transport session id (required for WebSocket tickets).
 3. Mint `POST /ws/ticket` with `{ session_id, thread_id }`, then open `WS /ws?sessionId=…&ticket=…`.
 4. List host sessions: JSON-RPC `remote.catalog`.
-5. **Take control** (paired clients): JSON-RPC `control.acquire` with `thread_id`, then include `control_epoch` on `turn.submit`, `turn.cancel`, and `approval.decide`. Host bearer sessions auto-bind when no remote holder exists. Disable lease enforcement with `BABEL_REMOTE_CONTROL_LEASE=0`.
+5. **Take control** (paired clients): JSON-RPC `control.acquire` with `thread_id`, then include `control_epoch` on `turn.submit`, `turn.cancel`, and `approval.decide`. Host bearer sessions auto-bind when no remote holder exists. `remote.capabilities` reports whether exclusive remote control is enforced (always on `babel remote serve`).
 
 ## Verification status (this repository)
 

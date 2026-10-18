@@ -62,12 +62,12 @@ describe('Bridge pairing integration', () => {
     tmp = mkdtempSync(join(tmpdir(), 'babel-bridge-pair-'));
     prevHome = process.env['HOME'];
     process.env['HOME'] = tmp;
-    process.env['BABEL_REMOTE_CONTROL_LEASE'] = '1';
     server = new BridgeServer({
       port: PORT,
       authToken: TOKEN,
       allowedWorkspaceRoot: tmp,
       allowedOrigins: ['http://127.0.0.1:*', 'http://localhost:*'],
+      enforceControlLease: true,
     });
     await server.start(PORT);
   });
@@ -76,7 +76,6 @@ describe('Bridge pairing integration', () => {
     await server.stop();
     if (prevHome === undefined) delete process.env['HOME'];
     else process.env['HOME'] = prevHome;
-    delete process.env['BABEL_REMOTE_CONTROL_LEASE'];
     rmSync(tmp, { recursive: true, force: true });
   });
 

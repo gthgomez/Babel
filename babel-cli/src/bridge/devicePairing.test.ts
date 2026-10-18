@@ -37,6 +37,19 @@ describe('DevicePairingService', () => {
     assert.equal(pairing.exchangeChallenge(challenge.challengeId).ok, false);
   });
 
+  it('persists device sessions across service restart', () => {
+    const pairing = new DevicePairingService('persist-secret');
+    const challenge = pairing.createChallenge();
+    pairing.requestPairing(challenge.challengeId, 'Persist');
+    pairing.approveChallenge(challenge.challengeId);
+    const session = pairing.exchangeChallenge(challenge.challengeId);
+    assert.equal(session.ok, true);
+    if (!session.ok) return;
+    const reloaded = new DevicePairingService('persist-secret');
+    const verified = reloaded.verifySessionToken(session.session.sessionToken);
+    assert.equal(verified.ok, true);
+  });
+
   it('revokes a device and invalidates sessions', () => {
     const pairing = new DevicePairingService('test-secret-2');
     const challenge = pairing.createChallenge();

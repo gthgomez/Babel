@@ -20,6 +20,8 @@ export interface ConsumedWsTicket {
   sessionId: string;
   threadId: string;
   mintedAt: number;
+  clientId: string;
+  deviceId?: string;
 }
 
 export type TicketConsumeError =
@@ -36,6 +38,8 @@ interface StoredTicket {
   mintedAt: number;
   expiresAt: number;
   consumed: boolean;
+  clientId: string;
+  deviceId?: string;
 }
 
 export class WsTicketStore {
@@ -46,6 +50,8 @@ export class WsTicketStore {
   mint(input: {
     sessionId: string;
     threadId: string;
+    clientId: string;
+    deviceId?: string;
     now?: number;
   }): MintedWsTicket {
     const now = input.now ?? Date.now();
@@ -58,6 +64,8 @@ export class WsTicketStore {
       mintedAt: now,
       expiresAt,
       consumed: false,
+      clientId: input.clientId,
+      ...(input.deviceId !== undefined ? { deviceId: input.deviceId } : {}),
     });
     this.gc(now);
     return {
@@ -97,6 +105,8 @@ export class WsTicketStore {
         sessionId: stored.sessionId,
         threadId: stored.threadId,
         mintedAt: stored.mintedAt,
+        clientId: stored.clientId,
+        ...(stored.deviceId !== undefined ? { deviceId: stored.deviceId } : {}),
       },
     };
   }

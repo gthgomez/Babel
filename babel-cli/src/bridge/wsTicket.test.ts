@@ -7,7 +7,12 @@ describe('WsTicketStore', () => {
   it('accepts a fresh ticket and rejects missing, bad, expired, replayed, and scope-mismatched tickets', () => {
     const store = new WsTicketStore(1_000);
     const now = 1_000_000;
-    const minted = store.mint({ sessionId: 'sess-a', threadId: 'thr-a', now });
+    const minted = store.mint({
+      sessionId: 'sess-a',
+      threadId: 'thr-a',
+      clientId: 'host:test',
+      now,
+    });
     assert.ok(minted.ticket.length > 16);
     assert.equal(minted.session_id, 'sess-a');
 
@@ -22,7 +27,12 @@ describe('WsTicketStore', () => {
     assert.equal(expired.ok, false);
     if (!expired.ok) assert.equal(expired.error, 'expired');
 
-    const fresh = store.mint({ sessionId: 'sess-a', threadId: 'thr-a', now });
+    const fresh = store.mint({
+      sessionId: 'sess-a',
+      threadId: 'thr-a',
+      clientId: 'host:test',
+      now,
+    });
     const mismatch = store.consume({
       ticket: fresh.ticket,
       sessionId: 'sess-b',

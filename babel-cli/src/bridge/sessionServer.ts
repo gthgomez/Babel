@@ -26,7 +26,7 @@
  *   - Origins: bridge.json allowedOrigins (defaults to ['http://localhost:*'])
  */
 
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 
 import type {
@@ -44,11 +44,16 @@ import {
 import { computeWsAcceptKey, createTransport, WebSocketTransport } from './transport.js';
 import { sessionRunner } from './sessionRunner.js';
 import { assertLoopbackBind } from './bindGuard.js';
-import { ProtocolGateway, originAllowed, readLimitedBody } from './protocolGateway.js';
+import {
+  ProtocolGateway,
+  REMOTE_MUTATING_RPC_METHODS,
+  originAllowed,
+  readLimitedBody,
+} from './protocolGateway.js';
 import { writeRemoteUiResponse } from './remoteUiAssets.js';
 import { WsTicketStore } from './wsTicket.js';
 import type { ProtocolHostState } from '../protocol/client/host.js';
-import { closeProtocolHostState } from '../protocol/client/host.js';
+import { closeProtocolHostState, parseProtocolRequest } from '../protocol/client/host.js';
 import { DevicePairingService, REMOTE_PAIRING_COOKIE } from './devicePairing.js';
 import { authorizeThreadScopedWsRpc } from './wsRpcAuthorization.js';
 import {
@@ -57,7 +62,8 @@ import {
   resolveBridgeClientContext,
 } from './bridgeClientAuth.js';
 import { writePairUiResponse } from './pairUiAssets.js';
-
+import { pairedDeviceMutationOriginOk } from './bridgeMutationPolicy.js';
+import type { BridgeClientContext } from './bridgeClientAuth.js';
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
 export interface BridgeServerOptions {
@@ -86,6 +92,11 @@ export interface BridgeServerOptions {
   onSessionCreated?: (session: BridgeSession) => void;
   /** Injected pairing service (tests). */
   devicePairing?: DevicePairingService;
+  /**
+   * Enforce per-thread control leases for remote mutations (default true).
+   * Set false only in isolated unit tests — never in `babel remote serve`.
+   */
+  enforceControlLease?: boolean;
 }
 
 interface ParsedUrl {
@@ -204,6 +215,9 @@ export class BridgeServer {
   /** Active WebSocket transports keyed by session ID. */
   private wsTransports = new Map<string, BridgeTransport>();
 
+  /** Live sockets for immediate revocation of paired devices. */
+  private readonly deviceSocketClosers = new Map<string, Set<() => void>>();
+
   /** Generation counter per session — prevents stale transport onClose from destroying the active router. */
   private transportGenerations = new Map<string, number>();
 
@@ -221,11 +235,12 @@ export class BridgeServer {
         'http://localhost:*',
         'https://localhost:*',
       ];
+    const enforceControlLease = this.options.enforceControlLease !== false;
     this.protocolGateway =
       this.options.protocolGateway ??
       new ProtocolGateway({
         allowedWorkspaceRoot: this.options.allowedWorkspaceRoot ?? process.cwd(),
-        enforceControlLease: process.env['BABEL_REMOTE_CONTROL_LEASE'] !== '0',
+        enforceControlLease,
         ...(this.options.engineFactory
           ? { engineFactory: this.options.engineFactory }
           : {}),
@@ -404,6 +419,22 @@ export class BridgeServer {
     if (!isAuthenticated(req, this.authToken, parsedUrl, this.devicePairing)) {
       setCorsHeaders(res, req.headers['origin'], this.allowedOrigins);
       errorResponse(res, 401, 'Unauthorized — provide a valid Bearer token');
+      return;
+    }
+
+    const mutationClient = resolveBridgeClientContext(
+      req,
+      this.authToken,
+      parsedUrl,
+      this.devicePairing,
+    );
+    if (
+      req.method !== 'GET' &&
+      req.method !== 'HEAD' &&
+      !pairedDeviceMutationOriginOk(req, mutationClient, this.allowedOrigins)
+    ) {
+      setCorsHeaders(res, req.headers['origin'], this.allowedOrigins);
+      errorResponse(res, 403, 'Origin not allowed for paired-device mutation');
       return;
     }
 
@@ -589,6 +620,7 @@ export class BridgeServer {
         return;
       }
       this.protocolGateway.controlLeases.fenceDevice(`device:${deviceId}`);
+      this.closeDeviceSockets(deviceId);
       jsonResponse(res, 200, { ok: true, deviceId });
       return;
     }
@@ -628,11 +660,42 @@ export class BridgeServer {
       errorResponse(res, status, `ticket mint denied: ${owned.error}`);
       return;
     }
+    const client = resolveBridgeClientContext(
+      req,
+      this.authToken,
+      parseRequestUrl(req),
+      this.devicePairing,
+    );
     const minted = this.wsTickets.mint({
       sessionId: parsed.session_id,
       threadId: parsed.thread_id,
+      clientId: client.clientId,
+      ...(client.deviceId !== undefined ? { deviceId: client.deviceId } : {}),
     });
     jsonResponse(res, 200, minted);
+  }
+
+  private registerDeviceSocket(deviceId: string, closer: () => void): void {
+    let set = this.deviceSocketClosers.get(deviceId);
+    if (!set) {
+      set = new Set();
+      this.deviceSocketClosers.set(deviceId, set);
+    }
+    set.add(closer);
+  }
+
+  private unregisterDeviceSocket(deviceId: string, closer: () => void): void {
+    const set = this.deviceSocketClosers.get(deviceId);
+    if (!set) return;
+    set.delete(closer);
+    if (set.size === 0) this.deviceSocketClosers.delete(deviceId);
+  }
+
+  private closeDeviceSockets(deviceId: string): void {
+    const set = this.deviceSocketClosers.get(deviceId);
+    if (!set) return;
+    for (const closer of set) closer();
+    this.deviceSocketClosers.delete(deviceId);
   }
 
   private async handleRpc(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -789,6 +852,7 @@ export class BridgeServer {
       process.env['BABEL_REMOTE_ALLOW_LEGACY_WS_BEARER'] === '1';
 
     let subscribedThreadId: string | undefined;
+    let wsClient: BridgeClientContext = { authKind: 'none', clientId: 'anonymous' };
     if (ticketValue) {
       const consumed = this.wsTickets.consume({
         ticket: ticketValue,
@@ -801,9 +865,18 @@ export class BridgeServer {
         return;
       }
       subscribedThreadId = consumed.value.threadId;
+      wsClient = {
+        authKind: consumed.value.deviceId ? 'paired_device' : 'host_bearer',
+        clientId: consumed.value.clientId,
+        ...(consumed.value.deviceId !== undefined
+          ? { deviceId: consumed.value.deviceId }
+          : {}),
+      };
     } else if (legacyBearer && headerToken && verifyToken(headerToken, this.authToken)) {
       // Compatibility path: header bearer only. No thread-scoped events.
       subscribedThreadId = undefined;
+      const digest = createHash('sha256').update(headerToken).digest('base64url');
+      wsClient = { authKind: 'host_bearer', clientId: `host:${digest}` };
     } else {
       socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
       socket.destroy();
@@ -861,6 +934,8 @@ export class BridgeServer {
     const generation = (this.transportGenerations.get(sessionId) ?? 0) + 1;
     this.transportGenerations.set(sessionId, generation);
 
+    const pairedDeviceId = wsClient.deviceId;
+
     const unsub =
       transport instanceof WebSocketTransport && subscribedThreadId
         ? this.protocolGateway.subscribe(
@@ -872,7 +947,12 @@ export class BridgeServer {
         : () => {};
 
     if (transport instanceof WebSocketTransport) {
+      if (pairedDeviceId) {
+        this.registerDeviceSocket(pairedDeviceId, () => transport.close());
+      }
       transport.onText((payload) => {
+        const parsed = parseProtocolRequest(payload);
+        const method = parsed && typeof parsed.method === 'string' ? parsed.method : '';
         if (subscribedThreadId) {
           const allowed = authorizeThreadScopedWsRpc(payload, {
             bridgeSessionId: sessionId,
@@ -888,8 +968,20 @@ export class BridgeServer {
             );
             return;
           }
+        } else if (REMOTE_MUTATING_RPC_METHODS.has(method)) {
+          transport.sendText(
+            JSON.stringify({
+              jsonrpc: '2.0',
+              id: parsed && 'id' in parsed ? parsed.id : null,
+              error: {
+                code: -32001,
+                message: 'Mutating RPC requires a thread-scoped WebSocket ticket',
+              },
+            }),
+          );
+          return;
         }
-        void this.protocolGateway.dispatch(payload).then((response) => {
+        void this.protocolGateway.dispatch(payload, { client: wsClient }).then((response) => {
           transport.sendText(JSON.stringify(response));
         });
       });
@@ -900,6 +992,9 @@ export class BridgeServer {
     const closeGeneration = generation;
     transport.onClose?.((_reason?: string) => {
       if (this.transportGenerations.get(sessionId) !== closeGeneration) return;
+      if (pairedDeviceId) {
+        this.unregisterDeviceSocket(pairedDeviceId, () => transport.close());
+      }
       unsub();
       this.wsTransports.delete(sessionId);
       this.transportGenerations.delete(sessionId);

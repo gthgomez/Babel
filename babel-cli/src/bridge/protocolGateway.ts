@@ -25,11 +25,13 @@ import type { BridgeClientContext } from './bridgeClientAuth.js';
 
 export const MAX_RPC_BYTES = 2 * 1024 * 1024;
 
-const MUTATING_METHODS = new Set([
+export const REMOTE_MUTATING_RPC_METHODS = new Set([
   'turn.submit',
   'turn.cancel',
   'approval.decide',
 ]);
+
+const MUTATING_METHODS = REMOTE_MUTATING_RPC_METHODS;
 
 export interface ProtocolDispatchContext {
   client: BridgeClientContext;
@@ -134,6 +136,19 @@ export class ProtocolGateway {
           jsonrpc: '2.0',
           id: parsedId ?? 0,
           result: catalog,
+        };
+      }
+      if (envelope.method === 'remote.capabilities') {
+        parsedId =
+          typeof envelope.id === 'string' || typeof envelope.id === 'number' ? envelope.id : null;
+        return {
+          jsonrpc: '2.0',
+          id: parsedId ?? 0,
+          result: {
+            control_lease_enforced: this.enforceControlLease,
+            exclusive_remote_control: this.enforceControlLease,
+            host_auto_control_bind: true,
+          },
         };
       }
       if (typeof envelope.method === 'string' && envelope.method.startsWith('control.')) {

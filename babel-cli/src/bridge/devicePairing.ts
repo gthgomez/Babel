@@ -35,6 +35,34 @@ interface PairingStoreFile {
   devices: PairedDevice[];
 }
 
+interface DeviceSessionsFile {
+  sessions: DeviceSession[];
+}
+
+function deviceSessionsPath(): string {
+  return join(pairingDir(), 'device-sessions.json');
+}
+
+function loadPersistedSessions(): DeviceSession[] {
+  const path = deviceSessionsPath();
+  if (!existsSync(path)) return [];
+  try {
+    const parsed = JSON.parse(readFileSync(path, 'utf8')) as DeviceSessionsFile;
+    return Array.isArray(parsed.sessions) ? parsed.sessions : [];
+  } catch {
+    return [];
+  }
+}
+
+function savePersistedSessions(sessions: Iterable<DeviceSession>): void {
+  const dir = pairingDir();
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  const list = [...sessions].filter((s) => s.expiresAtMs > Date.now());
+  writeFileSync(deviceSessionsPath(), JSON.stringify({ sessions: list }, null, 2), {
+    mode: 0o600,
+  });
+}
+
 const CHALLENGE_TTL_MS = 5 * 60 * 1000;
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
@@ -75,6 +103,17 @@ export class DevicePairingService {
 
   constructor(sessionSecret: string) {
     this.sessionSecret = sessionSecret;
+    const now = Date.now();
+    for (const session of loadPersistedSessions()) {
+      if (session.expiresAtMs <= now) continue;
+      this.sessions.set(session.sessionToken, session);
+    }
+    savePersistedSessions(this.sessions.values());
+  }
+
+  private rememberSession(session: DeviceSession): void {
+    this.sessions.set(session.sessionToken, session);
+    savePersistedSessions(this.sessions.values());
   }
 
   createChallenge(): PairingChallenge {
@@ -144,7 +183,7 @@ export class DevicePairingService {
     const expiresAtMs = Date.now() + SESSION_TTL_MS;
     const sessionToken = signSession(device.deviceId, expiresAtMs, this.sessionSecret);
     const session: DeviceSession = { sessionToken, deviceId: device.deviceId, expiresAtMs };
-    this.sessions.set(sessionToken, session);
+    this.rememberSession(session);
     this.challenges.delete(challengeId);
     return { ok: true, session };
   }
@@ -162,13 +201,24 @@ export class DevicePairingService {
     for (const [token, session] of this.sessions) {
       if (session.deviceId === deviceId) this.sessions.delete(token);
     }
+    savePersistedSessions(this.sessions.values());
     return true;
   }
 
   verifySessionToken(token: string): { ok: true; deviceId: string } | { ok: false } {
-    const session = this.sessions.get(token);
+    let session = this.sessions.get(token);
+    if (!session) {
+      for (const persisted of loadPersistedSessions()) {
+        if (persisted.sessionToken === token) {
+          session = persisted;
+          this.sessions.set(token, persisted);
+          break;
+        }
+      }
+    }
     if (!session || session.expiresAtMs < Date.now()) {
       this.sessions.delete(token);
+      savePersistedSessions(this.sessions.values());
       return { ok: false };
     }
     const expected = signSession(session.deviceId, session.expiresAtMs, this.sessionSecret);
