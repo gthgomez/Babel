@@ -6,7 +6,7 @@
 
 import * as assert from 'node:assert';
 import { describe, it, before, after } from 'node:test';
-import { mkdtempSync, mkdirSync, rmSync, existsSync, readFileSync, writeFileSync, unlinkSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, existsSync, readFileSync, writeFileSync, unlinkSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { ChatEngine } from './chatEngine.js';
@@ -392,7 +392,82 @@ describe('H2 ChatEngine resume + LiveSession projection', () => {
     assert.equal(engine2.getLiveSession().terminal?.outcome, 'INFRA_FAILURE');
   });
 
-  it('production finalize aligns session frontier and survives repeated finalize fault', () => {
+  it('production finalize commits session evidence before snapshot fault and repairs on retry', () => {
+    const engine = new ChatEngine({
+      task: 'snapshot fault resume',
+      projectRoot: process.cwd(),
+    });
+    const runDir = (engine as unknown as { engineRunDir: string }).engineRunDir;
+    const runId = (engine as unknown as { engineRunId: string }).engineRunId;
+    const rt = engine.getParityRuntime();
+    parityOnUserTurn(rt, {
+      task: 'snapshot fault resume',
+      model: 'test-model',
+      provider: 'test-provider',
+      projectRoot: process.cwd(),
+    });
+    const completionDecision = {
+      requestedOutcome: 'VERIFIED_COMPLETE',
+      finalOutcome: 'VERIFIED_COMPLETE',
+      allowed: true,
+      reason: 'fixture gate',
+      evidenceRefs: [],
+      policyVersion: 'fixture',
+    };
+    const snapPath = join(runDir, LIVE_SESSION_SNAPSHOT_FILENAME);
+    writeFileSync(snapPath, '{}');
+    unlinkSync(snapPath);
+    mkdirSync(snapPath);
+    const firstOk = finalizeParityTurnSync(
+      rt,
+      runDir,
+      'VERIFIED_COMPLETE',
+      'completed',
+      undefined,
+      undefined,
+      { completionDecision },
+    );
+    assert.equal(firstOk, false);
+    assert.equal(rt.terminalPersistCommittedTurnId, rt.turnId);
+    assert.notEqual(rt.sessionPersistenceBoundaryFailed, true);
+    const diskLog = loadSessionEventLogFromDir(runDir);
+    assert.ok(diskLog);
+    const ended = diskLog!.events.filter((e) => e.kind === 'turn_ended');
+    assert.equal(ended[ended.length - 1]?.outcome, 'VERIFIED_COMPLETE');
+    assert.ok(
+      diskLog!.events.some(
+        (e) =>
+          e.kind === 'policy_intervened' &&
+          e.action === 'terminal_projection_failed',
+      ),
+    );
+    assert.ok(statSync(snapPath).isDirectory());
+
+    rmSync(snapPath, { recursive: true, force: true });
+    const repairOk = finalizeParityTurnSync(
+      rt,
+      runDir,
+      'VERIFIED_COMPLETE',
+      'completed',
+      undefined,
+      undefined,
+      { completionDecision },
+    );
+    assert.equal(repairOk, true);
+    assert.ok(existsSync(snapPath));
+    const eq = resumeEquivalenceFromDisk(runDir);
+    assert.ok(eq.ok, eq.mismatches.join(','));
+    const engine2 = new ChatEngine({
+      task: 'placeholder',
+      projectRoot: process.cwd(),
+      runId,
+      resumeExisting: true,
+    });
+    engine2.restoreSessionEventsFromDir(runDir);
+    assert.equal(engine2.getLiveSession().terminal?.outcome, 'VERIFIED_COMPLETE');
+  });
+
+  it('production finalize aligns session frontier and survives idempotent repeat finalize', () => {
     const engine = new ChatEngine({
       task: 'prod finalize frontier',
       projectRoot: process.cwd(),

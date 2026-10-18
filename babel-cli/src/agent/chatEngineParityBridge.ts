@@ -1211,7 +1211,7 @@ function appendParityBudgetSnapshot(rt: ParityRuntime): void {
   });
 }
 
-/** Project and persist authority + live snapshot from the current in-memory logs. */
+/** Project live session in memory and persist authority + snapshot to disk. */
 function persistParityLiveSessionArtifacts(rt: ParityRuntime, runDir: string): void {
   if (rt.sessionEvents.events.length === 0) return;
   if (rt.liveAuthority) {
@@ -1225,6 +1225,34 @@ function persistParityLiveSessionArtifacts(rt: ParityRuntime, runDir: string): v
   });
   rt.liveSession = live;
   persistLiveSessionSnapshot(runDir, live);
+}
+
+function tryPersistParityLiveSessionArtifacts(rt: ParityRuntime, runDir: string): boolean {
+  try {
+    persistParityLiveSessionArtifacts(rt, runDir);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Record secondary projection failure without mutating committed terminal session evidence. */
+function recordSecondaryTerminalArtifactFailure(
+  rt: ParityRuntime,
+  runDir: string,
+  turnId: string,
+  context: string,
+): void {
+  recordPolicyIntervened(rt.sessionEvents, turnId, {
+    source: 'persistence',
+    action: 'terminal_projection_failed',
+    detail: context.slice(0, 500),
+  });
+  try {
+    flushSessionEventsRequired(rt, runDir, `secondary-artifact:${context}`);
+  } catch {
+    /* primary terminal evidence remains authoritative */
+  }
 }
 
 /** H2: dual-write budget + project LiveSession + persist authority/snapshot. */
@@ -1277,6 +1305,12 @@ export function finalizeParityTurnSync(
 ): boolean {
   const turnId = rt.turnId;
   if (turnId && rt.terminalPersistCommittedTurnId === turnId) {
+    if (!tryPersistParityLiveSessionArtifacts(rt, runDir)) {
+      return false;
+    }
+    persistThreadEventLog(runDir, rt.eventLog).catch((err) => {
+      reportEventLogPersistFailure(`finalize-repair:${outcome}`, err);
+    });
     return true;
   }
   if (rt.sessionPersistenceBoundaryFailed) {
@@ -1299,13 +1333,26 @@ export function finalizeParityTurnSync(
     rt.sessionPersistenceBoundaryFailed = true;
     return false;
   }
-  persistParityLiveSessionArtifacts(rt, runDir);
-  persistThreadEventLog(runDir, rt.eventLog).catch((err) => {
-    reportEventLogPersistFailure(`finalize:${outcome}`, err);
-  });
   if (turnId) {
     rt.terminalPersistCommittedTurnId = turnId;
   }
+  if (!tryPersistParityLiveSessionArtifacts(rt, runDir)) {
+    if (turnId) {
+      recordSecondaryTerminalArtifactFailure(
+        rt,
+        runDir,
+        turnId,
+        `finalize-sync:${outcome}`,
+      );
+    }
+    persistThreadEventLog(runDir, rt.eventLog).catch((err) => {
+      reportEventLogPersistFailure(`finalize:${outcome}`, err);
+    });
+    return false;
+  }
+  persistThreadEventLog(runDir, rt.eventLog).catch((err) => {
+    reportEventLogPersistFailure(`finalize:${outcome}`, err);
+  });
   return true;
 }
 
