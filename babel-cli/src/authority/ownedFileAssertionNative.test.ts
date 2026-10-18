@@ -15,11 +15,20 @@ import {
 
 const host = 'C:/Program Files/PowerShell/7/pwsh.exe'
 
-/** NTFS oracle rejects 8.3 path segments containing '~' (common under %TEMP% on CI). */
-function nativeQualificationDir(prefix: string): string {
+/**
+ * Physically canonical fixture roots for positive native qualification.
+ * RootParts rejects '~' (8.3 aliases); %TEMP% on Actions often starts as RUNNER~1\...
+ * Intentional unsupported roots in the matrix still pass raw strings via options.root.
+ */
+function canonicalOwnedFixtureRoot(prefix: string): string {
   const created = mkdtempSync(join(tmpdir(), prefix))
   if (process.platform !== 'win32') return created
-  return realpathSync.native?.(created) ?? realpathSync(created)
+  const canonical = realpathSync.native(created)
+  assert.ok(
+    !canonical.split(/[/\\]/).some(part => part.includes('~')),
+    `owned fixture root must not contain 8.3 aliases rejected by the oracle: ${canonical}`,
+  )
+  return canonical
 }
 const sourceScript = fileURLToPath(new URL('./ownedFileAssertion.windows.ps1', import.meta.url))
 const oracleScript = fileURLToPath(new URL('../../dist/authority/ownedFileAssertion.windows.ps1', import.meta.url))
@@ -50,8 +59,8 @@ function nativeChild(
 
 test('native boundary preserves literal, encoding, size, alias and malformed manifest refusals', nativeOnly, t => {
   assert.equal(process.platform, 'win32', 'This test qualifies Windows NTFS only')
-  const root = nativeQualificationDir('babel-native-matrix-')
-  const outside = nativeQualificationDir('babel-native-matrix-outside-')
+  const root = canonicalOwnedFixtureRoot('babel-native-matrix-')
+  const outside = canonicalOwnedFixtureRoot('babel-native-matrix-outside-')
   t.after(() => rmSync(root, { recursive: true, force: true }))
   t.after(() => rmSync(outside, { recursive: true, force: true }))
   const cases: Array<{ root: string; manifest: string; hash: string; status: string; reason?: string }> = []
@@ -136,7 +145,7 @@ if ($failures) { exit 1 }
 
 test('local Windows native oracle performs an actual red edit green data check', nativeOnly, t => {
   assert.equal(process.platform, 'win32', 'This test qualifies Windows NTFS only')
-  const root = nativeQualificationDir('babel-native-oracle-')
+  const root = canonicalOwnedFixtureRoot('babel-native-oracle-')
   t.after(() => rmSync(root, { recursive: true, force: true }))
   const manifest = parseOwnedFileAssertionV1({ schema_version: 1, kind: 'owned_file_assertion_v1',
     operation: 'utf8_equals', candidate_path: 'output.txt', expected: 'required\n' })
@@ -175,8 +184,8 @@ for (const mode of ['watch_control', 'watch_native_control', 'hardlink', 'rename
   }
   test(scenarios[mode]!, nativeOnly, t => {
     assert.equal(process.platform, 'win32', 'This test qualifies Windows NTFS only')
-    const root = nativeQualificationDir('babel-native-race-')
-    const outside = nativeQualificationDir('babel-native-outside-')
+    const root = canonicalOwnedFixtureRoot('babel-native-race-')
+    const outside = canonicalOwnedFixtureRoot('babel-native-outside-')
     t.after(() => rmSync(root, { recursive: true, force: true }))
     t.after(() => rmSync(outside, { recursive: true, force: true }))
     mkdirSync(join(root, 'sub'))

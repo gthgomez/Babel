@@ -83,16 +83,22 @@ function spawnInstrumentedExecutable(
   extraEnv: Record<string, string | undefined> = {},
 ) {
   const hookPath = childStartupHookPath(hookKind)
+  const hookImport = pathToFileURL(hookPath).href
   const env = {
     ...process.env,
     CI: '1',
     BABEL_SKIP_RESUME_PICKER: '1',
     BABEL_SKIP_KG_INDEX: '1',
-    NODE_OPTIONS: `--import=${pathToFileURL(hookPath).href}`,
     BABEL_ENV_LOADED: undefined,
     ...extraEnv,
   }
-  return spawnSync(qualification.execPath, [...nodeWasmArgs, entry, ...args], {
+  return spawnSync(qualification.execPath, [
+    ...nodeWasmArgs,
+    '--import',
+    hookImport,
+    entry,
+    ...args,
+  ], {
     cwd: packageRoot,
     encoding: 'utf8',
     env,
