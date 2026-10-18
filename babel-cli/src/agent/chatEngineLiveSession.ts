@@ -47,6 +47,7 @@ export interface LiveAuthorityOptionsSlice {
   model?: string;
   maxTurns?: number;
   requiredVerifierCommands?: readonly string[] | null;
+  projectTestCommands?: readonly string[] | null;
   compiledChatStack?: ChatCompiledStack;
 }
 
@@ -107,6 +108,9 @@ export function prepareEngineInstructionAuthority(
     verifierRequirements: input.options.requiredVerifierCommands
       ? [...input.options.requiredVerifierCommands]
       : [],
+    ...(input.options.projectTestCommands && input.options.projectTestCommands.length > 0
+      ? { projectTestCommands: [...input.options.projectTestCommands] }
+      : {}),
     systemContextFragments: identity.fragments,
   });
 }

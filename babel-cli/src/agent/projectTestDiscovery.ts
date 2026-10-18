@@ -34,7 +34,7 @@ export function testCommandsFromPackageJson(
     if (typeof command === 'string' && command.trim()) {
       if (name === 'test' || /\btest\b/.test(name)) {
         out.push({
-          command: `npm run ${name}`,
+          command: name === 'test' ? 'npm test' : `npm run ${name}`,
           source: `package.json scripts.${name}`,
         });
       }

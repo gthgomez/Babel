@@ -15,7 +15,7 @@ describe('projectTestDiscovery', () => {
         scripts: { test: 'jest', build: 'tsc' },
       });
       assert.equal(cmds.length, 1);
-      assert.equal(cmds[0]!.command, 'npm run test');
+      assert.equal(cmds[0]!.command, 'npm test');
       assert.match(cmds[0]!.source, /package.json/);
     });
 

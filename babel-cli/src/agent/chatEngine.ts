@@ -963,6 +963,9 @@ export class ChatEngine {
       this.compactionManager = new CompactionManager();
     }
     mkdirSync(this.engineRunDir, { recursive: true });
+    this.discoveredTestCommands = this.options.projectRoot
+      ? discoverProjectTestCommands(requireProjectRoot(this.options))
+      : [];
     if(options.resumeExisting){recoverCheckpointArtifacts(this.engineRunDir);this.parity.liveAuthority=loadLiveSessionAuthorityStrict(this.engineRunDir);}
     let persistedTaskBudget = options.resumeExisting
       ? this.readPersistedTaskBudget(this.engineRunDir)
@@ -996,7 +999,10 @@ export class ChatEngine {
     } else
       initLiveAuthorityOnEngine({
         parity: this.parity,
-        options,
+        options: {
+          ...options,
+          projectTestCommands: this.discoveredTestCommands.map((entry) => entry.command),
+        },
         taskClass: this.taskClass,
         executionProfile: this.executionProfile,
         engineRunDir: this.engineRunDir,
@@ -1094,8 +1100,7 @@ export class ChatEngine {
         maxConversationMessages: 8,
       };
     }
-    // Discover project test commands for verification gate hints.
-    this.discoveredTestCommands = this.options.projectRoot ? discoverProjectTestCommands(requireProjectRoot(this.options)) : [];
+    // discoveredTestCommands initialized before live authority freeze (see constructor).
     // Repetition loop detector: safety net for text-tools path gemma loops.
     this.repetitionDetector = new RepetitionDetector();
     // Tier A5: Observation tail buffer sized from env.
@@ -2696,6 +2701,7 @@ export class ChatEngine {
       this.criterionCompletion?.refreshPrivateEvidence({
         proof,
         receipt: this.lastVerifierReceipt,
+        receipts: this.executedVerifierLedger,
         candidate_sha: this.criterionCandidateRevisionSha(),
         has_mutation: hasMutation,
       })

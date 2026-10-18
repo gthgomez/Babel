@@ -1,0 +1,43 @@
+import assert from 'node:assert/strict'
+import test from 'node:test'
+import { resolveLiveSessionAuthority } from './liveSessionBridge.js'
+import { bindExecutableVerifiersToTaskAcceptance, mergeTrustedVerifierCommands } from './taskAcceptanceExecutableBinding.js'
+import { inferTaskAcceptance } from './taskAcceptanceMeaning.js'
+
+test('trusted verifier commands bind explicit criteria before contract freeze', () => {
+  const task = [
+    'Fix the parser bug.',
+    'Requirements:',
+    '- The project test suite passes.',
+  ].join('\n')
+  const contract = resolveLiveSessionAuthority({
+    mode: 'chat',
+    task,
+    projectRoot: '/tmp/project',
+    projectTestCommands: ['npm test'],
+  }).taskContract
+  assert.equal(contract.acceptance.length, 1)
+  assert.equal(contract.acceptance[0]!.verification.verifier_id, 'verifier:npm')
+  assert.deepEqual(contract.acceptance[0]!.verification.argv, ['test'])
+})
+
+test('inferred-only acceptance stays meaning-bound without trusted executable commands', () => {
+  const meaning = inferTaskAcceptance('The startup must succeed without Docker.')
+  const bound = bindExecutableVerifiersToTaskAcceptance({
+    meaning,
+    trustedVerifierCommands: mergeTrustedVerifierCommands({ projectTestCommands: ['npm test'] }),
+    defaultWorkingDirectory: '.',
+  })
+  assert.ok(bound.criteria[0]!.verification.verifier_id.startsWith('meaning:'))
+})
+
+test('unresolved acceptance is not upgraded by trusted verifiers alone', () => {
+  const meaning = inferTaskAcceptance('Investigate why parser_test fails and fix it.')
+  assert.equal(meaning.unresolved, true)
+  const bound = bindExecutableVerifiersToTaskAcceptance({
+    meaning,
+    trustedVerifierCommands: ['npm test'],
+    defaultWorkingDirectory: '.',
+  })
+  assert.equal(bound.criteria[0]!.verification.verifier_id.startsWith('meaning:'), true)
+})

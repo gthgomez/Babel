@@ -6,6 +6,7 @@ import {
   type TaskContractV1, type AcceptanceRequirementV1,
 } from './taskContract.js'
 import { ACCEPTANCE_MEANING_REF, inferTaskAcceptance, type AcceptanceMeaningSource } from './taskAcceptanceMeaning.js'
+import { bindExecutableVerifiersToTaskAcceptance } from './taskAcceptanceExecutableBinding.js'
 import { isAmendmentPrompt, isStatusPrompt } from './turnRuntime.js'
 
 export const ACCEPTANCE_AMENDMENT_REF = `user:task-${'acceptance-amendment:v1'}` as const
@@ -65,7 +66,11 @@ export function createTaskAcceptanceRevision(
     if (!isLegacyAcceptancePlaceholder(current) || source.userInput !== current.user_request)
       throw new Error('TASK_ACCEPTANCE_INITIALIZATION_UNAVAILABLE')
   } else if (!isAcceptanceAddition(source.userInput)) return null
-  const meaning = inferTaskAcceptance(source.userInput)
+  const meaning = bindExecutableVerifiersToTaskAcceptance({
+    meaning: inferTaskAcceptance(source.userInput),
+    trustedVerifierCommands: current.verifier_requirements,
+    defaultWorkingDirectory: '.',
+  })
   if (meaning.unresolved)
     throw new Error('TASK_ACCEPTANCE_AMENDMENT_UNSUPPORTED: State the additional observable requirement explicitly')
   const previousDescriptions = new Set(kind === 'initialize' ? [] : current.acceptance_criteria)

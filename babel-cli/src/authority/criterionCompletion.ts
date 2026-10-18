@@ -25,7 +25,8 @@ export interface CriterionCompletionRequestV1 {
 }
 export interface CriterionPrivateEvidenceRefreshV1 {
   proof: { compliant: boolean }
-  receipt: BoundChatVerifierReceipt | null
+  receipt?: BoundChatVerifierReceipt | null
+  receipts?: readonly BoundChatVerifierReceipt[] | null
   candidate_sha: string | null
   has_mutation: boolean
 }
@@ -88,7 +89,8 @@ export function createCriterionCompletionServiceV1(
           projectRoot: root,
           candidateSha: input.candidate_sha,
           proof: input.proof,
-          receipt: input.receipt,
+          ...(input.receipt !== undefined ? { receipt: input.receipt } : {}),
+          ...(input.receipts !== undefined ? { receipts: input.receipts } : {}),
           hasMutation: input.has_mutation,
         })
         if (published) authority.candidateSha = published

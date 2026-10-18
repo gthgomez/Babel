@@ -18,6 +18,18 @@ function receiptVerifierId(receipt: BoundChatVerifierReceipt): string | undefine
   return receipt.verifier_id ?? receipt.verifierId
 }
 
+function governedExecutionMetadataMatches(
+  receipt: BoundChatVerifierReceipt,
+  required: VerificationSpecV1,
+): boolean {
+  for (const field of ['working_directory', 'environment_policy', 'target'] as const) {
+    if (required[field] === undefined) continue
+    const actual = receipt[field]
+    if (actual === undefined || actual !== required[field]) return false
+  }
+  return true
+}
+
 function frozenExecutableArgv(required: VerificationSpecV1): string[] | null {
   if (!required.argv || required.argv.length === 0) return null
   return required.executable_id
@@ -53,6 +65,7 @@ export function chatReceiptDispatchesToRequirement(
       })
       if (required.command_hash !== bound) return false
     }
+    if (!governedExecutionMetadataMatches(receipt, required)) return false
     return satisfiesVerifierRequirement(expectedArgv.join(' '), receipt.command)
   }
 
@@ -68,19 +81,28 @@ export function buildCriterionReceiptEvidenceData(
   if (!chatReceiptDispatchesToRequirement(receipt, requirement)) return null
   const required = requirement.verification
   const expectedArgv = frozenExecutableArgv(required)
+  if (!governedExecutionMetadataMatches(receipt, required)) return null
   return {
     ...bound,
     verifier_id: required.verifier_id,
     verifier_spec_hash: sha256Canonical(required),
     ...(required.command_hash !== undefined ? { command_hash: required.command_hash } : {}),
     ...(required.executable_id !== undefined ? { executable_id: required.executable_id } : {}),
-    ...(required.working_directory !== undefined
-      ? { working_directory: required.working_directory }
-      : {}),
-    ...(required.environment_policy !== undefined
-      ? { environment_policy: required.environment_policy }
-      : {}),
-    ...(required.target !== undefined ? { target: required.target } : {}),
+    ...(receipt.working_directory !== undefined
+      ? { working_directory: receipt.working_directory }
+      : required.working_directory !== undefined
+        ? { working_directory: required.working_directory }
+        : {}),
+    ...(receipt.environment_policy !== undefined
+      ? { environment_policy: receipt.environment_policy }
+      : required.environment_policy !== undefined
+        ? { environment_policy: required.environment_policy }
+        : {}),
+    ...(receipt.target !== undefined
+      ? { target: receipt.target }
+      : required.target !== undefined
+        ? { target: required.target }
+        : {}),
     ...(required.argv ? { argv: [...required.argv] } : {}),
   }
 }

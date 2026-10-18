@@ -103,45 +103,54 @@ export function publishCriterionEvidenceFromChatExecution(input: {
   projectRoot: string
   candidateSha: string | null
   proof: { compliant: boolean }
-  receipt: BoundChatVerifierReceipt | null
+  receipt?: BoundChatVerifierReceipt | null
+  receipts?: readonly BoundChatVerifierReceipt[] | null
   hasMutation: boolean
 }): string | null {
+  const ledger = [
+    ...(input.receipts ?? []),
+    ...(input.receipt ? [input.receipt] : []),
+  ].filter((entry, index, all) => all.indexOf(entry) === index)
   if (
     !input.proof.compliant ||
     !input.hasMutation ||
     !input.candidateSha ||
-    !input.receipt ||
-    input.receipt.exit_code !== 0
+    ledger.length === 0
   ) {
     return null
   }
   const repository = realpathSync.native(input.projectRoot)
-  const revisionSha = resolveGovernedCriterionCandidateRevisionSha(
-    repository,
-    input.receipt,
-  )
-  if (!revisionSha || input.candidateSha !== revisionSha) return null
-  const bound = toRevisionBoundReceipt(input.receipt)
-  if (!bound || bound.exitCode !== 0 || bound.stale === true) return null
-
   const required = input.contract.acceptance.filter(item => item.required)
   if (required.length === 0) return null
 
   const nodes: EvidenceNode[] = []
+  let revisionSha: string | null = null
   for (const requirement of required) {
-    if (!chatReceiptDispatchesToRequirement(input.receipt, requirement)) return null
+    const receipt = ledger.find((entry) =>
+      chatReceiptDispatchesToRequirement(entry, requirement),
+    )
+    if (!receipt) return null
+    const candidateRevision = resolveGovernedCriterionCandidateRevisionSha(
+      repository,
+      receipt,
+    )
+    if (!candidateRevision || input.candidateSha !== candidateRevision) return null
+    const bound = toRevisionBoundReceipt(receipt)
+    if (!bound || bound.exitCode !== 0 || bound.stale === true) return null
+    revisionSha = candidateRevision
     const node = buildCriterionReceiptNode({
       requirement,
       bound,
-      receipt: input.receipt,
+      receipt,
       repository,
       runId: input.runId,
       contract: input.contract,
-      candidateSha: revisionSha,
+      candidateSha: candidateRevision,
     })
     if (!node) return null
     nodes.push(node)
   }
+  if (!revisionSha) return null
 
   ensureGovernedVerifierAssignment({
     supervisor: input.supervisor,

@@ -49,6 +49,12 @@ export type BoundChatVerifierReceipt = {
   authority?: boolean;
   capturedAt?: number;
   argv?: string[];
+  /** Physical working directory the verifier ran in (repository-relative when possible). */
+  working_directory?: string;
+  /** Execution-environment fingerprint or frozen policy token at capture time. */
+  environment_policy?: string;
+  /** Target selector/path when the verifier was targeted (not full suite). */
+  target?: string;
   /**
    * H5: verifier scope. Must be preserved into completion promotion —
    * never silently upgraded from targeted → full_suite.
@@ -91,6 +97,11 @@ export async function bindChatVerifierReceipt(input: {
     executable: string;
     args: string[];
   } | null;
+  execution?: {
+    working_directory?: string;
+    environment_policy?: string;
+    target?: string;
+  } | null;
 }): Promise<BoundChatVerifierReceipt> {
   const boundRevision = await RevisionManager.computeRevision(
     input.projectRoot,
@@ -127,6 +138,13 @@ export async function bindChatVerifierReceipt(input: {
           argv: [input.structured.executable, ...input.structured.args],
         }
       : {}),
+    ...(input.execution?.working_directory !== undefined
+      ? { working_directory: input.execution.working_directory }
+      : {}),
+    ...(input.execution?.environment_policy !== undefined
+      ? { environment_policy: input.execution.environment_policy }
+      : {}),
+    ...(input.execution?.target !== undefined ? { target: input.execution.target } : {}),
   };
 }
 

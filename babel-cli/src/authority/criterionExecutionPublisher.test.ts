@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test, { type TestContext } from 'node:test'
@@ -35,6 +35,11 @@ function npmTestRequirement(id: string, description: string) {
   }
 }
 
+const GOVERNED_EXECUTION = {
+  working_directory: '.',
+  environment_policy: 'host-process',
+} as const
+
 async function npmTestReceipt(root: string, mutationPaths: string[]) {
   return bindChatVerifierReceipt({
     projectRoot: root,
@@ -48,6 +53,7 @@ async function npmTestReceipt(root: string, mutationPaths: string[]) {
       executable: 'npm',
       args: ['test'],
     },
+    execution: GOVERNED_EXECUTION,
   })
 }
 
@@ -136,6 +142,53 @@ test('an unrelated green verifier cannot manufacture criterion evidence', async 
     has_mutation: true,
   })
   assert.equal(evaluateCriterionCompletionV1(request).verified, false)
+})
+
+test('two distinct governed verifiers can satisfy separate required criteria', async t => {
+  const { root, service, request } = await fixtureWithAcceptance(t, [
+    npmTestRequirement('acceptance:npm', 'npm test passes'),
+    {
+      id: 'acceptance:build',
+      description: 'npm run build passes',
+      type: 'build' as const,
+      required: true,
+      verification_strategy: 'Run npm run build.',
+      verification: {
+        kind: 'build',
+        verifier_id: 'verifier:npm',
+        executable_id: 'npm',
+        argv: ['run', 'build'],
+        command_hash: sha256Canonical({ executable_id: 'npm', argv: ['run', 'build'] }),
+        working_directory: '.',
+        environment_policy: 'host-process',
+      },
+    },
+  ])
+  const testReceipt = await npmTestReceipt(root, ['parser.ts'])
+  const buildReceipt = await bindChatVerifierReceipt({
+    projectRoot: root,
+    command: 'npm run build',
+    exit_code: 0,
+    summary: 'ok',
+    mutationPaths: ['parser.ts'],
+    structured: {
+      verifierId: 'verifier:npm',
+      authoritySource: 'built_in_runner',
+      executable: 'npm',
+      args: ['run', 'build'],
+    },
+    execution: GOVERNED_EXECUTION,
+  })
+  assert.ok(testReceipt && buildReceipt)
+  const { RevisionManager } = await import('../evidence/revisionBoundReceipt.js')
+  const candidate = RevisionManager.computeRevisionSync(root, ['parser.ts']).compositeTreeHash
+  service.refreshPrivateEvidence({
+    proof: { compliant: true },
+    receipts: [testReceipt, buildReceipt],
+    candidate_sha: candidate,
+    has_mutation: true,
+  })
+  assert.equal(evaluateCriterionCompletionV1(request).verified, true)
 })
 
 test('multiple required criteria require every frozen check to have executed', async t => {
@@ -274,6 +327,44 @@ test('post-verification workspace drift fails recheck even with a prior green re
     proof: { compliant: true },
     receipt,
     candidate_sha: atVerify,
+    has_mutation: true,
+  })
+  assert.equal(evaluateCriterionCompletionV1(request).verified, false)
+})
+
+test('wrong working directory metadata cannot satisfy a frozen cwd-bound criterion', async t => {
+  const { root, service, request } = await fixtureWithAcceptance(t, [
+    {
+      ...npmTestRequirement('acceptance:npm', 'npm test passes'),
+      verification: {
+        ...npmTestRequirement('acceptance:npm', 'npm test passes').verification,
+        working_directory: 'subdir',
+        environment_policy: 'host-process',
+      },
+    },
+  ])
+  mkdirSync(join(root, 'subdir'), { recursive: true })
+  const receipt = await bindChatVerifierReceipt({
+    projectRoot: root,
+    command: 'npm test',
+    exit_code: 0,
+    summary: 'ok',
+    mutationPaths: ['parser.ts'],
+    structured: {
+      verifierId: NPM_VERIFIER_ID,
+      authoritySource: 'built_in_runner',
+      executable: 'npm',
+      args: ['test'],
+    },
+    execution: { working_directory: '.', environment_policy: 'host-process' },
+  })
+  assert.ok(receipt)
+  const { RevisionManager } = await import('../evidence/revisionBoundReceipt.js')
+  const candidate = RevisionManager.computeRevisionSync(root, ['parser.ts']).compositeTreeHash
+  service.refreshPrivateEvidence({
+    proof: { compliant: true },
+    receipt,
+    candidate_sha: candidate,
     has_mutation: true,
   })
   assert.equal(evaluateCriterionCompletionV1(request).verified, false)

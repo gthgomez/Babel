@@ -73,6 +73,11 @@ export async function captureChatVerifierReceipt(input: {
   allowRepositoryScopeForRedRecovery?: boolean;
   /** Explicit no-patch route for a successful verifier after inspected no-change. */
   allowRepositoryScopeForGreenNoChange?: boolean;
+  execution?: {
+    working_directory?: string;
+    environment_policy?: string;
+    target?: string;
+  };
 }): Promise<BoundChatVerifierReceipt | null> {
   if (!isAuthoritativeVerifierCommand(input.command)) return null;
   const parsed = parseStructuredVerifierCommand(input.command, {
@@ -130,6 +135,7 @@ export async function captureChatVerifierReceipt(input: {
         executable: parsed.executable,
         args: parsed.args,
       },
+      ...(input.execution ? { execution: input.execution } : {}),
     });
     receipt.inputClosure = inputClosure;
     const counts = parseExecutedTestCounts(
@@ -257,6 +263,15 @@ export async function captureAndRecordVerifierReceipt(input: {
   simulated?: boolean;
 }): Promise<BoundChatVerifierReceipt | null> {
   if (input.simulated === true) return null;
+  const identity =
+    input.cacheIdentity ??
+    resolveVerifierCacheIdentity({
+      projectRoot: input.projectRoot,
+      command: input.command,
+    });
+  const relativeCwd =
+    path.relative(input.projectRoot, identity.cwd).replaceAll('\\', '/') || '.';
+  const commandIdentity = analyzeVerifierIdentity(input.command);
   const receipt = await captureChatVerifierReceipt({
     projectRoot: input.projectRoot,
     command: input.command,
@@ -271,6 +286,13 @@ export async function captureAndRecordVerifierReceipt(input: {
     ...(input.allowRepositoryScopeForGreenNoChange !== undefined
       ? { allowRepositoryScopeForGreenNoChange: input.allowRepositoryScopeForGreenNoChange }
       : {}),
+    execution: {
+      working_directory: relativeCwd,
+      environment_policy: 'host-process',
+      ...(commandIdentity?.scope === 'targeted' && commandIdentity.targetSelectors.length > 0
+        ? { target: commandIdentity.targetSelectors.join(',') }
+        : {}),
+    },
   });
   if (!receipt) return null;
   const caveats = verifierEvidenceCaveats(receipt);
@@ -286,12 +308,6 @@ export async function captureAndRecordVerifierReceipt(input: {
     ...(input.toolCallId !== undefined ? { tool_call_id: input.toolCallId } : {}),
     receipt,
   });
-  const identity =
-    input.cacheIdentity ??
-    resolveVerifierCacheIdentity({
-      projectRoot: input.projectRoot,
-      command: input.command,
-    });
   input.cache.set(identity.key, {
     receipt,
     writeCountAtCache: input.writeCount,

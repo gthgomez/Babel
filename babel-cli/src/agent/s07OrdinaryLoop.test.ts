@@ -224,6 +224,13 @@ const HOSTILE_TEXT = [
  */
 const VERIFY_MJS = renderParserVerifierScript();
 
+/** Explicit observable acceptance plus discovered npm test binds before freeze. */
+const PARSER_FIX_WITH_FROZEN_ACCEPTANCE = [
+  'Investigate why parser_test fails and fix it.',
+  'Requirements:',
+  '- The project test suite passes.',
+].join('\n');
+
 function makeFixture(): Fixture {
   const root = mkdtempSync(join(tmpdir(), 'babel-s07-project-'));
   writeFileSync(join(root, 'parser.ts'), PARSER_BUGGY, 'utf8');
@@ -913,7 +920,7 @@ describe('S07 ordinary-loop qualification', { concurrency: false }, () => {
   test('Scenario 3 — mixed inspect+mutate: investigation, then an authorized scoped fix', async () => {
     const fixture = makeFixture();
     try {
-      const task = 'Investigate why parser_test fails and fix it.';
+      const task = PARSER_FIX_WITH_FROZEN_ACCEPTANCE;
       const o = await driveLoop(fixture, task, [
         [{ type: 'tool_use', id: 'r1', name: 'read_file', input: { path: 'parser.test.ts' } }, { type: 'done', finishReason: 'tool_calls' }],
         [{ type: 'tool_use', id: 'r2', name: 'read_file', input: { path: 'parser.ts' } }, { type: 'done', finishReason: 'tool_calls' }],
@@ -928,10 +935,25 @@ describe('S07 ordinary-loop qualification', { concurrency: false }, () => {
       assert.ok(o.mutationBatches >= 1, 'mutation is durably recorded');
       assert.notEqual(o.outcome, 'NO_CHANGE_REQUIRED', 'a real mutation is not reported as no-change');
       assert.ok(!o.progressInterventions.includes('terminal_blocked'), 'no false recovery terminal');
-      assert.equal(o.outcome, 'UNVERIFIED_PATCH', 'unresolved acceptance meaning stays fail-closed despite a green verifier');
+      assert.equal(o.outcome, 'VERIFIED_COMPLETE', 'explicit bound acceptance with a green npm test completes');
       assert.equal(o.reasonCode, undefined, 'a green verifier never claims verification_failed');
       assert.equal(o.durableCompletionOutcome, o.outcome, 'durable completion decision agrees with emitted outcome');
       assert.equal(o.status, 'completed', `mutation loop completes honestly: ${o.answer}`);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  test('Scenario 3b — implicit acceptance without explicit criteria stays unverified despite a green verifier', async () => {
+    const fixture = makeFixture();
+    try {
+      const task = 'Investigate why parser_test fails and fix it.';
+      const o = await driveLoop(fixture, task, [
+        [{ type: 'tool_use', id: 'w1', name: 'str_replace', input: { file_path: 'parser.ts', old_str: 'return Number(parts[0]) - Number(parts[1]);', new_str: 'return Number(parts[0]) + Number(parts[1]);' } }, { type: 'done', finishReason: 'tool_calls' }],
+        [{ type: 'tool_use', id: 'v1', name: 'run_command', input: { command: 'npm test' } }, { type: 'done', finishReason: 'tool_calls' }],
+        [{ type: 'text_delta', text: 'Fixed parser.ts and npm test passed.' }, { type: 'done', finishReason: 'stop' }],
+      ]);
+      assert.equal(o.outcome, 'UNVERIFIED_PATCH', 'unresolved acceptance meaning stays fail-closed despite a green verifier');
     } finally {
       fixture.cleanup();
     }

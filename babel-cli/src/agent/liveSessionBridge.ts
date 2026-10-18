@@ -18,6 +18,10 @@ import {
 import { randomUUID } from 'node:crypto';
 import {normalizeChatExecutionScope} from './chatExecutionScope.js';
 import {inferTaskAcceptance} from './taskAcceptanceMeaning.js';
+import {
+  bindExecutableVerifiersToTaskAcceptance,
+  mergeTrustedVerifierCommands,
+} from './taskAcceptanceExecutableBinding.js';
 import { join } from 'node:path';
 import {
   buildInstructionManifestV1,
@@ -265,6 +269,8 @@ export function resolveLiveSessionAuthority(input: {
   compiledChatStack?: ChatCompiledStack;
   modelId?: string;
   verifierRequirements?: string[];
+  /** Trusted discovered project test commands (e.g. package.json scripts). */
+  projectTestCommands?: string[];
   maxTurns?: number;
   objectiveLifecycle?: boolean;
   protectedPaths?: string[];
@@ -325,7 +331,14 @@ export function resolveLiveSessionAuthority(input: {
     ],
   });
 
-  const meaning = inferTaskAcceptance(input.task);
+  const meaning = bindExecutableVerifiersToTaskAcceptance({
+    meaning: inferTaskAcceptance(input.task),
+    trustedVerifierCommands: mergeTrustedVerifierCommands({
+      requiredVerifierCommands: input.verifierRequirements ?? [],
+      projectTestCommands: input.projectTestCommands ?? [],
+    }),
+    ...(input.projectRoot ? { defaultWorkingDirectory: '.' } : {}),
+  });
   const contract = freezeTaskContract(
     buildTaskContractV1({
       mode: input.mode,
