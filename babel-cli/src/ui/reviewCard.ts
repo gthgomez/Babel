@@ -41,8 +41,12 @@ export interface ReviewCardInput {
   /** Full assistant transcript; used to detect duplicated ReviewCard summaries. */
   transcriptAnswer?: string | undefined;
   costUsd?: number | undefined;
+  /** Number of unpriced/unknown charges in this turn or session. */
+  unknownChargeCount?: number | undefined;
   /** Billed tokens for the same scope as `costUsd` (this turn). */
   tokens?: number | undefined;
+  /** Active context window tokens for the latest invocation (distinct from cumulative turn tokens). */
+  activeContextTokens?: number | undefined;
   /** Session-cumulative billed tokens. Shown only when larger than `tokens`. */
   sessionTokens?: number | undefined;
   mutated?: boolean | undefined;
@@ -266,10 +270,12 @@ export function buildReviewCard(input: ReviewCardInput): ReviewCard {
         !input.mutated));
 
   const title =
-    isVerificationNotApplicable &&
-    (kind === 'COMPLETE_UNVERIFIED' || kind === 'VERIFIED_COMPLETE')
-      ? 'Response complete'
-      : TITLES[kind];
+    input.reasonCode === 'context_installation_blocked'
+      ? 'Context installation blocked'
+      : isVerificationNotApplicable &&
+          (kind === 'COMPLETE_UNVERIFIED' || kind === 'VERIFIED_COMPLETE')
+        ? 'Response complete'
+        : TITLES[kind];
 
   const lines: string[] = [];
   lines.push(paintTitle(kind, title, isVerificationNotApplicable));
@@ -321,11 +327,28 @@ export function buildReviewCard(input: ReviewCardInput): ReviewCard {
   }
 
   const hasRealCost = input.costUsd !== undefined && input.costUsd > 0;
+  const hasUnknownCharges = input.unknownChargeCount !== undefined && input.unknownChargeCount > 0;
   const hasRealTokens = input.tokens !== undefined && input.tokens > 0;
-  if (hasRealCost || hasRealTokens) {
+  if (hasRealCost || hasUnknownCharges || hasRealTokens) {
     const bits: string[] = [];
-    if (hasRealCost) bits.push(`$${input.costUsd!.toFixed(4)} this turn`);
-    if (hasRealTokens) bits.push(`${input.tokens!.toLocaleString('en-US')} tok${hasRealCost ? '' : ' this turn'}`);
+    if (hasRealCost && hasUnknownCharges) {
+      bits.push(`known $${input.costUsd!.toFixed(4)} this turn (+${input.unknownChargeCount} unpriced)`);
+    } else if (hasRealCost) {
+      bits.push(`$${input.costUsd!.toFixed(4)} this turn`);
+    } else if (hasUnknownCharges) {
+      bits.push(`cost incomplete (+${input.unknownChargeCount} unpriced)`);
+    }
+    if (hasRealTokens) {
+      bits.push(`${input.tokens!.toLocaleString('en-US')} tok${hasRealCost || hasUnknownCharges ? '' : ' this turn'}`);
+    }
+    if (
+      hasRealTokens &&
+      input.activeContextTokens !== undefined &&
+      input.activeContextTokens > 0 &&
+      input.tokens! > input.activeContextTokens
+    ) {
+      bits.push(`(context ${input.activeContextTokens.toLocaleString('en-US')} tok)`);
+    }
     const sessionTokens = input.sessionTokens;
     if (
       hasRealTokens &&

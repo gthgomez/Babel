@@ -96,6 +96,7 @@ export interface CompactionOptions {
     modelId: string;
     inputTokens: number | null;
     outputTokens: number | null;
+    reportedCostUsd?: number | null;
   }) => void;
 }
 
@@ -711,15 +712,23 @@ export class LLMSummarizeCompaction implements CompactionStrategy {
 
       const data = (await response.json()) as {
         choices?: Array<{ message?: { content?: string } }>;
-        usage?: { prompt_tokens?: number; completion_tokens?: number };
+        usage?: { prompt_tokens?: number; completion_tokens?: number; cost?: number };
         model?: string;
       };
       phase('first_byte');
+      const reportedCostUsd =
+        provider === 'openrouter' &&
+        typeof data.usage?.cost === 'number' &&
+        Number.isFinite(data.usage.cost) &&
+        data.usage.cost >= 0
+          ? data.usage.cost
+          : null;
       onUsageRecorded?.({
         inferenceId,
         modelId: typeof data.model === 'string' ? data.model : model,
         inputTokens: data.usage?.prompt_tokens ?? null,
         outputTokens: data.usage?.completion_tokens ?? null,
+        reportedCostUsd,
       });
 
       const summary = data?.choices?.[0]?.message?.content ?? '';

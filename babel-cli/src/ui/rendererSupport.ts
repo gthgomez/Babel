@@ -254,7 +254,7 @@ export function renderErrorBox(
   const lines: string[] = [top];
 
   // Header
-  lines.push(`│ ${error('✖ Error')}${' '.repeat(boxWidth - 11)}│`);
+  lines.push(`│ ${error('✖ Error')}${' '.repeat(Math.max(0, boxWidth - 10))}│`);
 
   // Message (word-wrapped to fit using visible-length-aware wrapping)
   const wrappedLines = wrapText(message, boxWidth - 4);
@@ -286,7 +286,7 @@ export function renderErrorBox(
 
   // Dismiss hint
   lines.push(`│${' '.repeat(boxWidth - 2)}│`);
-  lines.push(`│ ${dim('Press Enter to continue')}${' '.repeat(boxWidth - 25)}│`);
+  lines.push(`│ ${dim('Press Enter to continue')}${' '.repeat(Math.max(0, boxWidth - 26))}│`);
   lines.push(bottom);
 
   return lines;

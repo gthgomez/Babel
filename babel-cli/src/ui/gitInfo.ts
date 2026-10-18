@@ -28,11 +28,13 @@ export interface GitInfo {
 }
 
 let cachedInfo: GitInfo | null = null;
+let cachedCwd: string | undefined;
 let cacheTimestamp = 0;
 
-function runGit(args: string[]): string | null {
+function runGit(args: string[], cwd?: string): string | null {
   try {
     return execSync(`git ${args.join(' ')}`, {
+      ...(cwd ? { cwd } : {}),
       encoding: 'utf8',
       timeout: 2000,
       stdio: ['ignore', 'pipe', 'ignore'],
@@ -48,17 +50,18 @@ function runGit(args: string[]): string | null {
  * Safe to call from the REPL loop — subsequent calls within the TTL window
  * return the cached result instantly.
  */
-export function getGitInfo(): GitInfo {
+export function getGitInfo(cwd?: string): GitInfo {
   const now = Date.now();
-  if (cachedInfo && now - cacheTimestamp < CACHE_TTL_MS) {
+  if (cachedInfo && cachedCwd === cwd && now - cacheTimestamp < CACHE_TTL_MS) {
     return cachedInfo;
   }
 
-  const branch = runGit(['rev-parse', '--abbrev-ref', 'HEAD']);
-  const status = runGit(['status', '--porcelain']);
+  const branch = runGit(['rev-parse', '--abbrev-ref', 'HEAD'], cwd);
+  const status = runGit(['status', '--porcelain'], cwd);
   const dirty = status !== null && status.length > 0;
 
   cachedInfo = { branch, dirty };
+  cachedCwd = cwd;
   cacheTimestamp = now;
   return cachedInfo;
 }
@@ -66,5 +69,6 @@ export function getGitInfo(): GitInfo {
 /** Clear the git info cache. Useful for testing. */
 export function clearGitCache(): void {
   cachedInfo = null;
+  cachedCwd = undefined;
   cacheTimestamp = 0;
 }

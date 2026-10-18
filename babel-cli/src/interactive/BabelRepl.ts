@@ -730,10 +730,11 @@ export class BabelRepl {
 
   // ── Target resolution ────────────────────────────────────────────────────
 
-  resolveCurrentTarget(): AgentTargetContext {
+  resolveCurrentTarget(task?: string): AgentTargetContext {
     return resolveAgentTarget({
       ...(this.state.project !== undefined ? { project: this.state.project } : {}),
       ...(this.targetOverrideRoot ? { projectRoot: this.targetOverrideRoot } : {}),
+      ...(task !== undefined ? { task } : {}),
     });
   }
 

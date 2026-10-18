@@ -831,6 +831,7 @@ export function outcomeFromReasonCode(
     case 'response_evidence_invalid':
       return 'AGENT_FAILURE';
     case 'cost_accounting_incomplete':
+    case 'context_installation_blocked':
       return 'INFRA_FAILURE';
     case 'recovery_exhausted':
     case 'localization_exhausted':

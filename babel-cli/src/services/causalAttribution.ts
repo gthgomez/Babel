@@ -570,6 +570,54 @@ export function buildCausalAttributionReport(input: {
   });
   const evidenceComplete =
     input.log !== null && !input.loadError && inputReferencesResolvable;
+  const terminal = [...events]
+    .reverse()
+    .find(
+      (event): event is Extract<SessionEvent, { kind: "turn_ended" }> =>
+        event.kind === "turn_ended",
+    );
+  const completion = [...events]
+    .reverse()
+    .find(
+      (
+        event,
+      ): event is Extract<SessionEvent, { kind: "completion_decision" }> =>
+        event.kind === "completion_decision",
+    );
+  const terminalSummary = completion?.reason;
+  const lastCompactionCommitted = [...events]
+    .reverse()
+    .find(
+      (
+        event,
+      ): event is Extract<SessionEvent, { kind: "compaction_committed" }> =>
+        event.kind === "compaction_committed",
+    );
+  const hasPostCompactionDispatch =
+    lastCompactionCommitted !== undefined &&
+    events.some(
+      (event) =>
+        event.kind === "model_input_receipt" &&
+        event.seq > lastCompactionCommitted.seq,
+    );
+  const hasInstalledContextCheckpoint =
+    input.runDir === undefined ||
+    existsSync(join(input.runDir, "context-checkpoint.json"));
+  const postCompactionCheckpointInstallFailed =
+    lastCompactionCommitted !== undefined &&
+    terminal?.status === "failed" &&
+    !hasPostCompactionDispatch &&
+    !hasInstalledContextCheckpoint &&
+    !providerPhase &&
+    !failedResult &&
+    !missingResult;
+  const contextInstallationBlocked =
+    terminal?.reason_code === "context_installation_blocked" ||
+    completion?.reason_code === "context_installation_blocked" ||
+    /P11 context installation was blocked|uninstalled compaction capsule cannot authorize provider dispatch|uncommitted compaction candidate cannot authorize provider dispatch/i.test(
+      terminalSummary ?? "",
+    ) ||
+    postCompactionCheckpointInstallFailed;
   let attribution = attributeCausalFailure({
     information_existed:
       input.facts?.information_existed ?? (inputs.length > 0 ? true : null),
@@ -590,12 +638,27 @@ export function buildCausalAttributionReport(input: {
               : "provider_error",
         }
       : {}),
-    ...(failedResult || missingResult
-      ? { harness_failure: "result_not_delivered" }
-      : {}),
+    ...(contextInstallationBlocked
+      ? { harness_failure: "context_installation_blocked" }
+      : failedResult || missingResult
+        ? { harness_failure: "result_not_delivered" }
+        : {}),
     ...(environmentFailure ? { environment_failure: environmentFailure } : {}),
     ...(budgetFailure ? { budget_failure: "budget_exhausted" } : {}),
   });
+  if (contextInstallationBlocked) {
+    const extraEvidence =
+      terminalSummary ??
+      (postCompactionCheckpointInstallFailed
+        ? "compaction_committed without installed context-checkpoint.json before turn_ended(failed)"
+        : undefined);
+    if (extraEvidence) {
+      attribution = {
+        ...attribution,
+        evidence: [...attribution.evidence, extraEvidence],
+      };
+    }
+  }
   if (!inputReferencesResolvable) {
     attribution = {
       ...attribution,
@@ -604,9 +667,6 @@ export function buildCausalAttributionReport(input: {
       ],
     };
   }
-  const terminal = [...events]
-    .reverse()
-    .find((event) => event.kind === "turn_ended");
   return {
     schema_version: 1,
     kind: "babel_causal_attribution_report",

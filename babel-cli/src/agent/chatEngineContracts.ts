@@ -636,6 +636,8 @@ export interface ChatEngineStreamingLoopHost {
   ) => Promise<boolean>
   /** Structured diagnostic from the most recent refused P11 install (codes only). */
   p11InstallBlock: { code: string; details: string[] } | null
+  /** True when compaction was needed this turn but skipped because P11 sources were unavailable. */
+  compactionBlockedByP11?: boolean
   investigateSoftNudgeDone: boolean
   readonly isSubmissionCurrent: (ownerGeneration: number) => boolean
   readonly lastCriticReceipt: DiffCriticVerdict | null

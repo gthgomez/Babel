@@ -1,3 +1,4 @@
+import { basename } from 'node:path';
 import { renderOperatorHeader, renderPlanModeWarning } from '../../ui/renderers.js';
 import { describeVisibleMode } from '../types.js';
 import { muted, humanizeModelId } from '../../ui/theme.js';
@@ -35,10 +36,11 @@ export function renderTurnStatusBar(ctx: ReplContext): void {
   }
   const activeTasks = backgroundTaskRegistry.getAllTasks().filter((t) => t.status !== 'completed');
   const taskStates = activeTasks.length > 0 ? activeTasks.map((t) => toTaskState(t)) : undefined;
+  const targetRoot = ctx.lastTargetRoot ?? ctx.state.lastRunTargetRoot ?? ctx.state.projectRoot;
   let gitBranch: string | null = null;
   let gitDirty = false;
   try {
-    const git = getGitInfo();
+    const git = getGitInfo(targetRoot);
     gitBranch = git.branch;
     gitDirty = git.dirty;
   } catch {
@@ -49,12 +51,13 @@ export function renderTurnStatusBar(ctx: ReplContext): void {
     model: humanizeModelId(resolveStatusBarModelLabel(ctx.state.model)),
     ...(ctx.state.resolvedModelId !== undefined ? { modelId: ctx.state.resolvedModelId } : {}),
     mode: describeVisibleMode(ctx.state.mode).toLowerCase(),
-    project: ctx.state.project ?? 'global',
+    project: ctx.state.project ?? (targetRoot ? basename(targetRoot) : 'global'),
     activeContext: ctx.activeContext ?? null,
     activeContextTokens: ctx.activeContext?.tokens ?? ctx.lastTurnActiveContextTokens ?? undefined,
     totalTokens: ctx.state.costTotals.totalTokens,
     totalCost: ctx.state.costTotals.totalCostUSD,
     hasUnknownCost: (ctx.state.costTotals.unknownChargeCount ?? 0) > 0 || ctx.state.costTotals.completeCostUSD === null,
+    unknownChargeCount: ctx.state.costTotals.unknownChargeCount ?? 0,
     turnCount: ctx.turnCounter,
     status: ctx.state.lastRunUserStatus ?? 'ready',
     gitBranch,

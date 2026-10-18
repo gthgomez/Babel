@@ -557,6 +557,8 @@ export class ChatEngine {
   private p11ObservationCaptureIssues: string[] = [];
   /** P11 install diagnostics: structured block reason of the last refused install. */
   p11InstallBlock: { code: string; details: string[] } | null = null;
+  /** True when compaction was needed this turn but skipped because P11 sources were unavailable. */
+  compactionBlockedByP11 = false;
   /** Soft investigate-budget one-shot latch (synced via explore fuse state). */
   private investigateSoftNudgeDone = false;
   /** Cumulative exploration tools across the entire session (never resets).

@@ -390,7 +390,14 @@ export class ConversationalRenderer extends BaseRenderer {
   private _tick(): void {
     if (this.paused || this._pausedTicks || this.outputBroken || isRendererPresentationSuspended()) return;
     if (this._state === 'streaming' && this._bufferingAnswer) {
-      const hud = composeThinkingHud({ indicatorLine: `  Receiving response… (response ${Math.floor((Date.now() - this.startTime) / 1000)}s · Ctrl+C cancel)`,
+      const snap = this._liveness.snapshot(this.startTime);
+      const totalSec = Math.floor(snap.elapsedMs / 1000);
+      const reqSec = Math.floor(snap.modelIdleMs / 1000);
+      const timerText =
+        snap.modelIdleMs >= 1000 && snap.elapsedMs - snap.modelIdleMs >= 5000
+          ? `response ${totalSec}s · req ${reqSec}s · Ctrl+C cancel`
+          : `response ${totalSec}s · Ctrl+C cancel`;
+      const hud = composeThinkingHud({ indicatorLine: `  Receiving response… (${timerText})`,
         overlayLines: [], columns: OutputBuffer.getTerminalSize().cols, previousOverlayLines: 0 });
       safeStdoutWrite(hud.output);
       return;
@@ -906,7 +913,7 @@ export class ConversationalRenderer extends BaseRenderer {
     for (const group of groups) {
       const formatted = formatToolGroupSummary(group, this.verboseMode);
       if (this.isTTY) {
-        this._writeTranscript(`\r${formatted}\n`);
+        this._writeTranscript(`\r\x1b[K${formatted}\x1b[K\n`);
         this._pushLinesToScrollback(formatted);
       } else {
         this._writeTranscript(`${formatted}\n`);
@@ -956,11 +963,13 @@ export class ConversationalRenderer extends BaseRenderer {
       // but if the tick fires between the write and the increment it would
       // emit \r\x1b[K and erase the freshly-printed tool call indicator.
       this._pendingToolCallLines++;
-      const label = conversationalToolLabel(tool, target);
+      const cols = OutputBuffer.getTerminalSize().cols || 80;
+      const maxTargetLen = Math.max(8, Math.min(50, cols - 20));
+      const label = conversationalToolLabel(tool, target, maxTargetLen);
       if (this._pendingToolExecutions.length === 0) {
-        safeStdoutWrite(`\n  ${dim('○')} ${label}`);
+        safeStdoutWrite(`\n  ${dim('○')} ${label}\x1b[K`);
       } else {
-        safeStdoutWrite(`\r  ${dim('○')} ${label}`);
+        safeStdoutWrite(`\r\x1b[K  ${dim('○')} ${label}\x1b[K`);
       }
     }
     if (isA11yMode()) {
@@ -1028,7 +1037,7 @@ export class ConversationalRenderer extends BaseRenderer {
           hasUnknowns: classification.status === 'unknown',
         };
         const formatted = formatToolGroupSummary(group, true);
-        this._writeTranscript(`\r${formatted}\n`);
+        this._writeTranscript(`\r\x1b[K${formatted}\x1b[K\n`);
         this._pushLinesToScrollback(formatted);
       } else if (isIntervention) {
         this._flushPendingToolExecutions();
@@ -1041,7 +1050,7 @@ export class ConversationalRenderer extends BaseRenderer {
           hasUnknowns: false,
         };
         const formatted = formatToolGroupSummary(group, false);
-        this._writeTranscript(`\r${formatted}\n`);
+        this._writeTranscript(`\r\x1b[K${formatted}\x1b[K\n`);
         this._pushLinesToScrollback(formatted);
       } else {
         this._pendingToolExecutions.push(summary);
@@ -1422,14 +1431,14 @@ export class ConversationalRenderer extends BaseRenderer {
     this.paused = false;
     this.disableRawMode();
     if (this.isTTY) {
-      // Show keyboard hint footer if any tool calls were made
+      // Show post-run keyboard hint footer only when actionable keys remain after stop()
       if (this.toolCallCount > 0) {
-        // Build keybinding hints from available actions
-        const hints: string[] = ['[Esc] cancel'];
+        const hints: string[] = [];
         if (this.thoughtText) hints.push('[T] thought');
         if (this._checkpointAvailable) hints.push('[Ctrl+R] restore checkpoint');
-        hints.push('[Ctrl+C] stop');
-        this._writeCommitted(`\n  ${dim(hints.join('  '))}\n`);
+        if (hints.length > 0) {
+          this._writeCommitted(`\n  ${dim(hints.join('  '))}\n`);
+        }
       }
       this._writeCommitted('\n\x1b[?25h');
     }

@@ -405,7 +405,89 @@ export function validateSessionRun(
       },
     }
   }
-  return validateSessionEventLog(inspected.log, runDir)
+  const baseResult = validateSessionEventLog(inspected.log, runDir)
+  const crossFindings: SessionRunValidatorFinding[] = []
+
+  const causalEvidencePath = join(runDir, 'chat_causal_evidence.json')
+  if (existsSync(causalEvidencePath)) {
+    try {
+      const parsed = JSON.parse(readFileSync(causalEvidencePath, 'utf8')) as {
+        tool_lifecycle?: {
+          consistency?: string
+          contradiction_count?: number
+          contradictions?: Array<{
+            tool_call_id?: string
+            tool_name?: string
+            reason?: string
+          }>
+        }
+      }
+      if (
+        parsed.tool_lifecycle?.consistency === 'contradictory' ||
+        (typeof parsed.tool_lifecycle?.contradiction_count === 'number' &&
+          parsed.tool_lifecycle.contradiction_count > 0)
+      ) {
+        const count =
+          parsed.tool_lifecycle?.contradiction_count ??
+          parsed.tool_lifecycle?.contradictions?.length ??
+          1
+        crossFindings.push({
+          invariant: 'cross_artifact_tool_lifecycle_consistency',
+          explanation: `chat_causal_evidence.json reports ${count} tool lifecycle contradiction(s) between session-events.jsonl and executed tool results`,
+        })
+      }
+    } catch {
+      // Ignore unreadable optional sidecar.
+    }
+  }
+
+  if (crossFindings.length === 0) {
+    const threadEventsPath = join(runDir, 'thread_events.json')
+    if (existsSync(threadEventsPath)) {
+      try {
+        const parsed = JSON.parse(readFileSync(threadEventsPath, 'utf8')) as {
+          events?: Array<{
+            kind?: string
+            tool_call_id?: string
+            tool_name?: string
+            exit_code?: number
+          }>
+        }
+        const succeededIds = new Set<string>()
+        for (const ev of parsed.events ?? []) {
+          if (ev.kind === 'tool_result' && ev.exit_code === 0 && typeof ev.tool_call_id === 'string') {
+            succeededIds.add(ev.tool_call_id)
+          }
+        }
+        for (const ev of inspected.log.events) {
+          if (
+            ev.kind === 'tool_cancelled' &&
+            ev.recovery_state === 'TOOL_NOT_STARTED' &&
+            succeededIds.has(ev.tool_call_id)
+          ) {
+            crossFindings.push(
+              finding(
+                'cross_artifact_tool_lifecycle_consistency',
+                `Tool ${ev.tool_name} (${ev.tool_call_id}) was journaled as tool_cancelled(TOOL_NOT_STARTED) in session-events.jsonl but recorded exit_code=0 in thread_events.json`,
+                ev,
+              ),
+            )
+          }
+        }
+      } catch {
+        // Ignore unreadable optional sidecar.
+      }
+    }
+  }
+
+  if (crossFindings.length > 0) {
+    return {
+      ...baseResult,
+      status: 'FAIL',
+      findings: [...baseResult.findings, ...crossFindings],
+    }
+  }
+  return baseResult
 }
 
 export function formatSessionRunValidatorText(result: SessionRunValidatorResult): string {

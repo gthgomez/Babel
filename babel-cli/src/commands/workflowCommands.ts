@@ -223,6 +223,7 @@ async function runDeepCommand(taskParts: string[], options: DeepCommandOptions):
   } else {
     const target = resolveAgentTarget({
       ...(resolvedProject !== undefined ? { project: resolvedProject } : {}),
+      task,
     });
     resolvedProjectRoot = target.targetRoot;
     resolvedWorkspaceRoot = target.workspaceRoot;
@@ -1192,6 +1193,7 @@ async function runLiteCommand(
     const target = resolveAgentTarget({
       ...(resolvedProject !== undefined ? { project: resolvedProject } : {}),
       ...(options.projectRoot !== undefined ? { projectRoot: options.projectRoot } : {}),
+      task,
     });
     resolvedProjectRoot = target.targetRoot;
     resolvedWorkspaceRoot = target.workspaceRoot;
@@ -2166,6 +2168,7 @@ Notes:
         if (resolvedProjectRoot === undefined) {
           const target = resolveAgentTarget({
             ...(resolvedProject !== undefined ? { project: resolvedProject } : {}),
+            task,
           });
           resolvedProjectRoot = target.targetRoot;
           resolvedWorkspaceRoot = target.workspaceRoot;

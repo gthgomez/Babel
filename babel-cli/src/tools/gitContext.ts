@@ -1,5 +1,5 @@
-import { existsSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { existsSync, statSync } from 'node:fs';
+import { dirname, isAbsolute, relative, resolve } from 'node:path';
 import { runGitCommand } from '../utils/gitExec.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -49,6 +49,48 @@ function isGitRepo(cwd: string): boolean {
   return existsSync(gitDir);
 }
 
+function resolveEffectiveGitTarget(
+  projectRoot: string,
+  inputPath?: string,
+): { repoRoot: string; relativePath: string | undefined } {
+  const baseRoot = resolve(projectRoot);
+  if (!inputPath || !inputPath.trim()) {
+    return { repoRoot: baseRoot, relativePath: undefined };
+  }
+  const candidate = resolve(baseRoot, inputPath);
+  const relToBase = relative(baseRoot, candidate);
+  if (!relToBase || relToBase.startsWith('..') || isAbsolute(relToBase)) {
+    return { repoRoot: baseRoot, relativePath: inputPath };
+  }
+
+  let cursor = candidate;
+  try {
+    if (existsSync(cursor) && !statSync(cursor).isDirectory()) {
+      cursor = dirname(cursor);
+    }
+  } catch {
+    cursor = dirname(candidate);
+  }
+
+  while (cursor !== baseRoot) {
+    if (existsSync(cursor) && isGitRepo(cursor)) {
+      const relInNested = relative(cursor, candidate);
+      return {
+        repoRoot: cursor,
+        relativePath:
+          relInNested && relInNested !== '.' && !relInNested.startsWith('..')
+            ? relInNested
+            : undefined,
+      };
+    }
+    const parent = dirname(cursor);
+    if (parent === cursor) break;
+    cursor = parent;
+  }
+
+  return { repoRoot: baseRoot, relativePath: inputPath };
+}
+
 function parsePorcelain(stdout: string): GitFileStatus[] {
   if (!stdout) return [];
   return stdout
@@ -91,11 +133,11 @@ function formatFilesHuman(files: GitFileStatus[]): string {
 }
 
 /**
- * Gather git context for the current project root.
+ * Gather git context for the current project root (or a nested git repository when input.path targets one).
  * Non-mutating — runs read-only git commands (status, diff).
  */
 export function gitContext(projectRoot: string, input: GitContextInput = {}): GitContextResult {
-  const root = resolve(projectRoot);
+  const { repoRoot: root, relativePath } = resolveEffectiveGitTarget(projectRoot, input.path);
   const inRepo = isGitRepo(root);
 
   const emptyResult: GitContextResult = {
@@ -115,12 +157,14 @@ export function gitContext(projectRoot: string, input: GitContextInput = {}): Gi
   emptyResult.branch = branch;
 
   // Get status
-  const statusResult = runGit(['status', '--porcelain'], root);
+  const statusArgs = ['status', '--porcelain'];
+  if (relativePath) statusArgs.push('--', relativePath);
+  const statusResult = runGit(statusArgs, root);
   const files = parsePorcelain(statusResult.stdout);
 
   // Get diff stat
   const statArgs = ['diff', '--stat', '--ignore-submodules'];
-  if (input.path) statArgs.push('--', input.path);
+  if (relativePath) statArgs.push('--', relativePath);
   const statResult = runGit(statArgs, root);
   const diffStat = statResult.exitCode === 0 ? statResult.stdout : '';
 
@@ -132,7 +176,7 @@ export function gitContext(projectRoot: string, input: GitContextInput = {}): Gi
 
   if (format === 'diff') {
     const diffArgs = ['diff', '--ignore-submodules', '--no-color'];
-    if (input.path) diffArgs.push('--', input.path);
+    if (relativePath) diffArgs.push('--', relativePath);
     const diffResult = runGit(diffArgs, root);
     if (diffResult.exitCode === 0) {
       const lines = diffResult.stdout.split('\n');
@@ -205,8 +249,9 @@ export function formatGitContextHuman(
  */
 export async function handleGitContextTool(
   input: GitContextInput & { output_format?: 'text' | 'json' },
+  explicitProjectRoot?: string,
 ): Promise<{ exit_code: number; stdout: string; stderr: string }> {
-  const projectRoot = process.env['BABEL_PROJECT_ROOT'] ?? process.cwd();
+  const projectRoot = explicitProjectRoot ?? process.env['BABEL_PROJECT_ROOT'] ?? process.cwd();
 
   try {
     const result = gitContext(projectRoot, input);

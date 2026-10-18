@@ -39,10 +39,17 @@ export function formatConversationThinkingStatus(input: {
   stallMs: number;
   snapshot: ConversationLivenessSnapshot;
 }): { indicator: string; timer: string } {
+  const totalSec = Math.floor(input.snapshot.elapsedMs / 1_000);
+  const reqSec = Math.floor(input.snapshot.modelIdleMs / 1_000);
+  const showReqTimer =
+    input.snapshot.modelIdleMs >= 1_000 &&
+    input.snapshot.elapsedMs - input.snapshot.modelIdleMs >= 5_000;
   return {
     indicator: primary(`${input.spinner} Thinking… [${input.snapshot.phase}]`),
     timer: muted(
-      `(response ${Math.floor(input.snapshot.elapsedMs / 1_000)}s · Ctrl+C cancel)`,
+      showReqTimer
+        ? `(response ${totalSec}s · req ${reqSec}s · Ctrl+C cancel)`
+        : `(response ${totalSec}s · Ctrl+C cancel)`,
     ),
   };
 }

@@ -276,6 +276,26 @@ function addInspectCommonOptions(command: Command): Command {
     .option("--project <name>", "Filter latest run pointer by project");
 }
 
+function mergeParentInspectOptions<
+  T extends { run?: string; project?: string; last?: boolean; json?: boolean },
+>(options: T, command?: Command): T {
+  const selfOpts = (command?.opts?.() ?? {}) as Partial<T>;
+  const parentOpts = (command?.parent?.opts?.() ?? {}) as Partial<T>;
+  const run = options.run ?? selfOpts.run ?? parentOpts.run;
+  const project = options.project ?? selfOpts.project ?? parentOpts.project;
+  const last =
+    options.last === true || selfOpts.last === true || parentOpts.last === true;
+  const json =
+    options.json === true || selfOpts.json === true || parentOpts.json === true;
+  return {
+    ...options,
+    ...(run !== undefined ? { run } : {}),
+    ...(project !== undefined ? { project } : {}),
+    ...(last ? { last: true } : {}),
+    ...(json ? { json: true } : {}),
+  };
+}
+
 function renderInspectView(
   kind: "run" | "summary" | "stack" | "manifest" | "outcome",
   runDir: string,
@@ -649,8 +669,9 @@ addInspectCommonOptions(
             last?: boolean;
             json?: boolean;
           },
+          command: Command,
         ) => {
-          handleProofReport(runArg, options);
+          handleProofReport(runArg, mergeParentInspectOptions(options, command));
         },
       ),
   );
@@ -669,13 +690,7 @@ addInspectCommonOptions(
           options: { run?: string; project?: string; json?: boolean },
           command: Command,
         ) => {
-          handleWhyInspection(runArg, {
-            ...options,
-            json:
-              options.json === true ||
-              command.opts().json === true ||
-              command.parent?.opts().json === true,
-          });
+          handleWhyInspection(runArg, mergeParentInspectOptions(options, command));
         },
       ),
   );
@@ -689,8 +704,9 @@ addInspectCommonOptions(
         async (
           runArg: string | undefined,
           options: { run?: string; project?: string },
+          command: Command,
         ) => {
-          handleInspectMode("run", runArg, options);
+          handleInspectMode("run", runArg, mergeParentInspectOptions(options, command));
         },
       ),
   );
@@ -704,8 +720,9 @@ addInspectCommonOptions(
         async (
           runArg: string | undefined,
           options: { run?: string; project?: string },
+          command: Command,
         ) => {
-          handleInspectMode("summary", runArg, options);
+          handleInspectMode("summary", runArg, mergeParentInspectOptions(options, command));
         },
       ),
   );
@@ -720,17 +737,19 @@ addInspectCommonOptions(
         async (
           runArg: string | undefined,
           options: { run?: string; project?: string; json?: boolean },
+          command: Command,
         ) => {
+          const merged = mergeParentInspectOptions(options, command);
           const runDir = resolveInspectRunDir({
-            run: options.run ?? runArg ?? "latest",
-            project: options.project,
+            run: merged.run ?? runArg ?? "latest",
+            project: merged.project,
             babelRunsDir: BABEL_RUNS_DIR,
           });
           const bundle = await loadBdnsDiagnosticBundle(runDir);
           printJsonOrHuman(
             bundle,
             formatBdnsDiagnosticHuman(bundle),
-            options.json === true,
+            merged.json === true,
           );
         },
       ),
@@ -748,10 +767,12 @@ addInspectCommonOptions(
         async (
           runArg: string | undefined,
           options: { run?: string; project?: string; json?: boolean },
+          command: Command,
         ) => {
+          const merged = mergeParentInspectOptions(options, command);
           const runDir = resolveInspectRunDir({
-            run: options.run ?? runArg ?? "latest",
-            project: options.project,
+            run: merged.run ?? runArg ?? "latest",
+            project: merged.project,
             babelRunsDir: BABEL_RUNS_DIR,
           });
           const bundle = readAcceptanceArtifacts(runDir);
@@ -759,14 +780,14 @@ addInspectCommonOptions(
             printJsonOrHuman(
               { status: "missing", runDir },
               `No Acceptance V0 recording found for ${runDir}`,
-              options.json === true,
+              merged.json === true,
             );
             return;
           }
           printJsonOrHuman(
             bundle,
             `Acceptance V0 recording for ${runDir}\n${JSON.stringify(bundle, null, 2)}`,
-            options.json === true,
+            merged.json === true,
           );
         },
       ),
@@ -781,8 +802,9 @@ addInspectCommonOptions(
         async (
           runArg: string | undefined,
           options: { run?: string; project?: string },
+          command: Command,
         ) => {
-          handleInspectMode("stack", runArg, options);
+          handleInspectMode("stack", runArg, mergeParentInspectOptions(options, command));
         },
       ),
   );
@@ -796,8 +818,9 @@ addInspectCommonOptions(
         async (
           runArg: string | undefined,
           options: { run?: string; project?: string },
+          command: Command,
         ) => {
-          handleInspectMode("manifest", runArg, options);
+          handleInspectMode("manifest", runArg, mergeParentInspectOptions(options, command));
         },
       ),
   );
@@ -811,8 +834,9 @@ addInspectCommonOptions(
         async (
           runArg: string | undefined,
           options: { run?: string; project?: string },
+          command: Command,
         ) => {
-          handleInspectMode("outcome", runArg, options);
+          handleInspectMode("outcome", runArg, mergeParentInspectOptions(options, command));
         },
       ),
   );
@@ -829,13 +853,15 @@ addInspectCommonOptions(
         (
           runArg: string | undefined,
           options: { run?: string; project?: string; json?: boolean },
+          command: Command,
         ) => {
           try {
-            const requested = options.run ?? runArg ?? "latest";
+            const merged = mergeParentInspectOptions(options, command);
+            const requested = merged.run ?? runArg ?? "latest";
             const result = validateSessionRun(requested, {
-              ...(options.project ? { project: options.project } : {}),
+              ...(merged.project ? { project: merged.project } : {}),
             });
-            if (options.json) {
+            if (merged.json) {
               process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
             } else {
               process.stdout.write(

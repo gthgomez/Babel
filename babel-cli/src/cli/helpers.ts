@@ -104,19 +104,109 @@ function resolveCanonicalDirName(name: string): string {
   return name;
 }
 
+interface WorkspaceCatalogProductEntry {
+  id?: string;
+  path?: string;
+  lifecycle?: string;
+  aliases?: string[];
+}
+
+function isInsideRoot(root: string, candidate: string): boolean {
+  const rel = relative(resolvePath(root), resolvePath(candidate));
+  return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel);
+}
+
+function resolveUmbrellaChildProjectRoot(currentRoot: string, projectName: string): string | null {
+  const requestedLower = projectName.trim().toLowerCase();
+  const canonicalLower = resolveCanonicalDirName(projectName.trim()).toLowerCase();
+  if (!requestedLower) return null;
+
+  const directCandidate = resolvePath(currentRoot, projectName);
+  if (isInsideRoot(currentRoot, directCandidate) && existsSync(directCandidate) && hasProjectMarker(directCandidate)) {
+    return directCandidate;
+  }
+
+  const catalogPath = join(currentRoot, 'config', 'workspace-products.json');
+  if (existsSync(catalogPath)) {
+    try {
+      const parsed = JSON.parse(readFileSync(catalogPath, 'utf-8')) as {
+        products?: WorkspaceCatalogProductEntry[];
+      };
+      const products = Array.isArray(parsed.products) ? parsed.products : [];
+      const matches = products.filter((entry) => {
+        if (!entry || typeof entry.path !== 'string' || !entry.path.trim()) return false;
+        const idLower = typeof entry.id === 'string' ? entry.id.toLowerCase() : '';
+        const baseLower = basename(entry.path).toLowerCase();
+        const aliases = Array.isArray(entry.aliases)
+          ? entry.aliases.filter((a): a is string => typeof a === 'string').map((a) => a.toLowerCase())
+          : [];
+        return (
+          idLower === requestedLower ||
+          idLower === canonicalLower ||
+          baseLower === requestedLower ||
+          baseLower === canonicalLower ||
+          aliases.includes(requestedLower) ||
+          aliases.includes(canonicalLower)
+        );
+      });
+      matches.sort((a, b) => (a.lifecycle === 'active' ? -1 : 1) - (b.lifecycle === 'active' ? -1 : 1));
+      for (const match of matches) {
+        const resolved = resolvePath(currentRoot, match.path!);
+        if (isInsideRoot(currentRoot, resolved) && existsSync(resolved)) {
+          return resolved;
+        }
+      }
+    } catch {
+      // Ignore malformed workspace catalog and fall back to convention scan.
+    }
+  }
+
+  try {
+    const topEntries = readdirSync(currentRoot, { withFileTypes: true });
+    for (const entry of topEntries) {
+      if (!entry.isDirectory() || !entry.name.startsWith('Project_')) continue;
+      const domainDir = join(currentRoot, entry.name);
+      let children;
+      try {
+        children = readdirSync(domainDir, { withFileTypes: true });
+      } catch {
+        continue;
+      }
+      for (const child of children) {
+        if (!child.isDirectory()) continue;
+        const childLower = child.name.toLowerCase();
+        if (childLower === requestedLower || childLower === canonicalLower) {
+          const candidate = join(domainDir, child.name);
+          if (hasProjectMarker(candidate)) {
+            return candidate;
+          }
+        }
+      }
+    }
+  } catch {
+    // Ignore unreadable directories.
+  }
+
+  return null;
+}
+
 /**
- * Resolve an explicit existing path or the named current project.
- * Semantic catalog IDs do not imply sibling repositories or private workspace roots.
+ * Resolve an explicit existing path, the named current project, or a child project
+ * within an umbrella workspace root.
+ * Semantic catalog IDs do not imply sibling repositories outside the current root.
  */
-export function resolveProjectRoot(projectName: string): string | null {
+export function resolveProjectRoot(projectName: string, cwd = process.cwd()): string | null {
   if (!projectName) return null;
   if (isAbsolute(projectName) && existsSync(projectName)) return projectName;
-  const currentRoot = process.cwd();
+  const currentRoot = resolvePath(cwd);
   const currentName = basename(currentRoot).toLowerCase();
-  return currentName === projectName.toLowerCase() ||
+  if (
+    currentName === projectName.toLowerCase() ||
     currentName === resolveCanonicalDirName(projectName).toLowerCase()
-    ? currentRoot
-    : null;
+  ) {
+    return currentRoot;
+  }
+  return resolveUmbrellaChildProjectRoot(currentRoot, projectName);
 }
 
 /**

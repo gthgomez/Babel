@@ -321,7 +321,18 @@ export async function executeChatTask(
           ? 'not_applicable'
           : undefined,
       costUsd: perRunCost,
+      ...((postRunUsage.unknownChargeCount ?? 0) > 0
+        ? {
+            unknownChargeCount: Math.max(
+              1,
+              (postRunUsage.unknownChargeCount ?? 0) - (preRunUsage.unknownChargeCount ?? 0),
+            ),
+          }
+        : {}),
       tokens: perRunTokens,
+      ...(ctx.lastTurnActiveContextTokens !== null && ctx.lastTurnActiveContextTokens > 0
+        ? { activeContextTokens: ctx.lastTurnActiveContextTokens }
+        : {}),
       sessionTokens: postRunUsage.totalTokens,
       transcriptAnswer: result.answer ?? '',
       sessionConsistencyFailure: isSessionConsistencyFailureMessage(result.answer),

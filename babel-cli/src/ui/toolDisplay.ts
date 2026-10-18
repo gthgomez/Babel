@@ -20,10 +20,18 @@ export const TOOL_LABELS: Record<string, string> = {
   test_run: 'Testing',
   verifier: 'Verifying',
   mcp_request: 'Calling',
+  read_range: 'Reading',
+  todo_write: 'Updating plan',
+  git_context: 'Inspecting git',
 };
 
-export function conversationalToolLabel(tool: string, target: string): string {
+export function conversationalToolLabel(
+  tool: string,
+  target: string,
+  maxTargetLen = 50,
+): string {
   const verb = TOOL_LABELS[tool] ?? tool;
-  const short = target.length > 50 ? target.slice(0, 47) + '…' : target;
+  const cap = Math.max(8, maxTargetLen);
+  const short = target.length > cap ? `${target.slice(0, Math.max(1, cap - 1))}…` : target;
   return `${verb} ${dim(short)}`;
 }

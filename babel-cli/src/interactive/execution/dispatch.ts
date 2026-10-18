@@ -49,7 +49,7 @@ export async function executeTask(
     const resolvedTask = explicitDailyCommand
       ? explicitDailyCommand.task
       : Turn.resolveInteractiveTask(ctx, input);
-    const currentTarget = ctx.resolveCurrentTarget();
+    const currentTarget = ctx.resolveCurrentTarget(resolvedTask);
     ctx.scheduleIndexWarmup(currentTarget.targetRoot);
     const target =
       Turn.isFollowUpInput(ctx, input) && !ctx.targetOverrideRoot && ctx.lastTargetRoot

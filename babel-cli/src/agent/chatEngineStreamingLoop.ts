@@ -227,6 +227,7 @@ export class ChatEngineStreamingLoop {
       // Compact if needed; user-visible notice via stream event
       const compactionSpan =
         this.host.currentTurnTelemetry?.startCompactionSpan();
+      this.host.compactionBlockedByP11 = false;
       const compactInfo = await this.host.compactIfNeeded(
         undefined,
         false,
@@ -399,7 +400,7 @@ export class ChatEngineStreamingLoop {
       if (!this.host.isSubmissionCurrent(submissionGeneration)) return;
       if (
         !p11ContextInstalled &&
-        (hadInstalledP11Context || pendingCapsuleAuthority)
+        (hadInstalledP11Context || pendingCapsuleAuthority || this.host.compactionBlockedByP11)
       ) {
         // Structured refusal diagnostic: surface WHY the install was blocked
         // (reason code + bounded details from the rejecting boundary) so a
@@ -412,7 +413,9 @@ export class ChatEngineStreamingLoop {
         yield this.host.streamFailed(
           hadInstalledP11Context
             ? `P11 context installation was blocked; the previous context generation remains authoritative and provider dispatch was refused.${blockSuffix}`
-            : `P11 context installation was blocked; this turn committed a compaction capsule that no installed context root authorizes, so provider dispatch was refused.${blockSuffix}`,
+            : pendingCapsuleAuthority
+              ? `P11 context installation was blocked; this turn committed a compaction capsule that no installed context root authorizes, so provider dispatch was refused.${blockSuffix}`
+              : `P11 context installation was blocked; compaction could not be committed because no installed context root can authorize compacted history, so provider dispatch was refused.${blockSuffix}`,
         );
         return;
       }

@@ -24,6 +24,8 @@ import type { BackgroundTaskState } from "./backgroundTaskProgress.js";
 export interface StatusBarState {
   /** Existing accounting receipts contain charges with unknown prices. */
   hasUnknownCost?: boolean;
+  /** Number of unpriced/unknown charge observations when hasUnknownCost is true. */
+  unknownChargeCount?: number;
   /** Active model name (e.g. "DeepSeek v4 Flash") */
   model: string;
   /** Active model ID for context limit lookup (e.g. "deepseek-v4-flash") */
@@ -363,9 +365,14 @@ export function renderStatusBar(state: StatusBarState): string {
     });
   }
   if (policy.showCost) {
+    const costLabel = state.hasUnknownCost
+      ? state.totalCost > 0
+        ? `session known $${state.totalCost.toFixed(4)} (${state.unknownChargeCount ?? 1} unpriced)`
+        : 'session cost unavailable'
+      : `session est. $${state.totalCost.toFixed(4)}`;
     rightParts.push({
       slot: "cost",
-      text: muted(state.hasUnknownCost ? 'session cost unavailable' : `session est. $${state.totalCost.toFixed(4)}`),
+      text: muted(costLabel),
     });
   }
   if (policy.showTurn) {

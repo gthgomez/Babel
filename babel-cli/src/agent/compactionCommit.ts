@@ -1029,7 +1029,11 @@ export interface ChatEngineCompactionHost {
   /** Provider lifecycle callbacks for the LLM summarizer inference. */
   providerCallbacks?: RunnerCallbacks;
   onCompactionUsage?: (usage: {
-    inferenceId: string; modelId: string; inputTokens: number | null; outputTokens: number | null;
+    inferenceId: string;
+    modelId: string;
+    inputTokens: number | null;
+    outputTokens: number | null;
+    reportedCostUsd?: number | null;
   }) => void;
   shouldUseTextTools: () => boolean;
   compactHeuristic: () => void;
@@ -1046,6 +1050,13 @@ export interface ChatEngineCompactionHost {
   /** Admission recovery may request one bounded compaction even before the normal token trigger. */
   forceCompaction?: boolean;
   isOwnerCurrent?: () => boolean;
+  /**
+   * Optional preflight check ensuring P11 context installation can authorize
+   * a newly committed compaction capsule before making a compaction LLM call
+   * or mutating durable thread/session logs.
+   */
+  canCommitCompactionCapsule?: () => boolean;
+  onCompactionBlockedByAuthority?: () => void;
   /**
    * Packet A5: when provided, every compaction attempt emits a strict
    * `context.condensation.started` / `completed` fact pair through this
@@ -1254,6 +1265,10 @@ export async function runChatEngineCompaction(
     tokenTriggered ||
     tokenEstimate > host.limits.maxEstimatedTokens - reserve;
   const ownerIsCurrent = (): boolean => !host.isOwnerCurrent || host.isOwnerCurrent();
+  if (compactionNeeded && host.canCommitCompactionCapsule && !host.canCommitCompactionCapsule()) {
+    host.onCompactionBlockedByAuthority?.();
+    return null;
+  }
   // ── Packet A5: condensation-as-event emission (strict started/completed) ──
   const condensation = host.condensationFacts;
   let condensationId = '';

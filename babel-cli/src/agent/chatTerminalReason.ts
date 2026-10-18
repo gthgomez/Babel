@@ -86,6 +86,13 @@ const GUIDANCE: Record<TerminalReasonCode, TerminalReasonGuidance> = {
     message: 'Cost accounting is incomplete; spending stopped before the cap could be evaluated',
     nextActions: ['Inspect usage and pricing diagnostics', 'Reconcile unknown charges before continuing'],
   },
+  context_installation_blocked: {
+    message: 'Context checkpoint installation was blocked because the workspace snapshot could not be captured',
+    nextActions: [
+      'Run Babel inside the target repository or pass --project <name>',
+      'Inspect workspace capture diagnostics',
+    ],
+  },
   native_tool_protocol_invalid: {
     message: 'A tool request could not be validated; no action was dispatched',
     nextActions: ['Inspect diagnostics', 'Retry the task with a valid tool request'],
@@ -163,6 +170,13 @@ export function terminalReasonFromFailureText(
   }
   if (/NATIVE_TOOL_PROTOCOL_INVALID/.test(error)) {
     return { code: 'native_tool_protocol_invalid', cause_class: null };
+  }
+  if (
+    /P11 context installation was blocked|uninstalled compaction capsule cannot authorize provider dispatch|uncommitted compaction candidate cannot authorize provider dispatch/i.test(
+      error,
+    )
+  ) {
+    return { code: 'context_installation_blocked', cause_class: 'harness' };
   }
   if (isProviderOutputLimitText(error) || isBudgetErrorText(error)) {
     return { code: 'budget_exhausted', cause_class: 'harness' };

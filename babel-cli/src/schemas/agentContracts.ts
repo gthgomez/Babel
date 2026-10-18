@@ -998,6 +998,7 @@ export const TerminalReasonCodeSchema = z.enum([
   'cancelled',
   'budget_exhausted',
   'cost_accounting_incomplete',
+  'context_installation_blocked',
   'native_tool_protocol_invalid',
   'response_evidence_invalid',
   'unknown',

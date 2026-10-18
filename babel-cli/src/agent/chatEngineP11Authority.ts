@@ -421,16 +421,20 @@ export class ChatEngineP11Authority {
     }
   }
 
+  private lastWorkspaceCaptureFailureReason: string | null = null;
+
   private currentP11Workspace(): ReturnType<typeof RevisionManager.computeRevisionSync> | null {
     try {
       const workspace = RevisionManager.computeRevisionSync(this.host.options.projectRoot, [], {
         scope_kind: 'repository',
         git_binding: 'optional',
       });
+      this.lastWorkspaceCaptureFailureReason = workspace.captureFailureReason ?? null;
       // Optional capture returns unknown provenance when physical proof fails.
       // Its nonce digest cannot authorize current workspace or coverage refs.
       return workspace.gitCommitHash ? workspace : null;
     } catch {
+      this.lastWorkspaceCaptureFailureReason = 'Workspace revision computation threw an error';
       return null;
     }
   }
@@ -628,9 +632,13 @@ export class ChatEngineP11Authority {
     this.host.p11InstallBlock = null;
     const sources = this.host.buildP11Sources(routeOverride);
     if (!sources) {
+      const workspace = this.currentP11Workspace();
       const missing = [
         !this.host.parity.liveAuthority ? 'live_authority' : null,
-        !this.currentP11Workspace() ? 'workspace_revision' : null,
+        !workspace ? 'workspace_revision' : null,
+        !workspace && this.lastWorkspaceCaptureFailureReason
+          ? `workspace_revision_reason: ${this.lastWorkspaceCaptureFailureReason}`
+          : null,
         !this.host.taskAllowance ? 'task_allowance' : null,
         !(routeOverride ?? null) ? 'route_identity' : null,
       ].filter((item): item is string => item !== null);

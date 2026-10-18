@@ -103,7 +103,7 @@ export interface ReplContext {
   settleShellTurn?(outcome?: string, sourceEpoch?: number): void;
   clearHostedShell?(): void;
   withExclusiveTerminal?<T>(reason: string, work: () => Promise<T>): Promise<T>;
-  resolveCurrentTarget(): AgentTargetContext;
+  resolveCurrentTarget(task?: string): AgentTargetContext;
   scheduleIndexWarmup(projectRoot: string): void;
   exit(): void;
 }

@@ -695,6 +695,7 @@ export class ChatEngineActionExecutor {
             maxFullReads: maxFull,
           })
         ) {
+          this.host.persistToolStartedAtExecutorDispatch(action, meta);
           this.host.dedupeHitCount++;
           this.host.noteToolForReadThrash(tool);
           this.host.toolCallLog.push({
@@ -733,6 +734,7 @@ export class ChatEngineActionExecutor {
           contextEpoch: this.host.readContextEpoch,
         });
         if (fullDecision.skip) {
+          this.host.persistToolStartedAtExecutorDispatch(action, meta);
           const cached = this.host.readCache.get(fullDecision.cacheKey);
           const secs = cached
             ? Math.round((Date.now() - cached.timestamp) / 1000)
@@ -1112,6 +1114,7 @@ export class ChatEngineActionExecutor {
 
       // ── B1: todo_write — merge-patch task list ─────────────────────
       if (action.type === "todo_write") {
+        this.host.persistToolStartedAtExecutorDispatch(action, meta);
         for (const item of action.todos) {
           this.host.todos.set(item.id, {
             content: item.content,

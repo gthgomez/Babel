@@ -77,6 +77,12 @@ export interface ChatEngineCompactionBinding {
   /** Exact native POST JSON for compaction admission (live deliberation runner). */
   buildNativeCompactionAdmissionWireBody(): string;
   resolveDeliberationRunnerForCompaction(): unknown;
+  buildP11Sources?: (routeOverride?: {
+    compiled_request_identity: string;
+    tool_profile: string;
+    model_route: string;
+  }) => unknown;
+  compactionBlockedByP11?: boolean;
 }
 
 export async function runChatEngineCompactionFor(
@@ -177,6 +183,7 @@ export async function runChatEngineCompactionFor(
         attribution,
         usage.inputTokens !== null && usage.outputTokens !== null,
         usageScope.provider ?? null,
+        usage.reportedCostUsd ?? null,
       );
       if (update.kind === 'conflict') {
         engine.recordOwnerAccountingFault(
@@ -234,6 +241,26 @@ export async function runChatEngineCompactionFor(
     textToolsReserve: 1024,
     forceCompaction,
     isOwnerCurrent: () => engine.isSubmissionCurrent(ownerGeneration),
+    canCommitCompactionCapsule: () => {
+      if (
+        engine.shouldUseTextTools() ||
+        !engine.parity.liveAuthority ||
+        !engine.taskAllowance ||
+        typeof engine.buildP11Sources !== 'function'
+      ) {
+        return true;
+      }
+      return (
+        engine.buildP11Sources({
+          compiled_request_identity: 'compaction-preflight',
+          tool_profile: 'native-tools',
+          model_route: 'compaction-preflight',
+        }) !== null
+      );
+    },
+    onCompactionBlockedByAuthority: () => {
+      engine.compactionBlockedByP11 = true;
+    },
     resolveModel: input => resolveCompactionModelId({ ...input,
       pinSelection: engine.options.model !== undefined || engine.options.providerPolicy !== undefined }),
     shouldCompactByTokens: parityShouldCompact,

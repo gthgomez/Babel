@@ -217,7 +217,9 @@ export function projectTurnViewState(
   // Derive review card title
   let cardTitle = 'In Progress';
   if (isTerminal) {
-    if (terminalOutcome === 'CANCELLED') {
+    if (terminalReasonCode === 'context_installation_blocked') {
+      cardTitle = 'Context installation blocked';
+    } else if (terminalOutcome === 'CANCELLED') {
       cardTitle = 'Cancelled';
     } else if (terminalOutcome === 'VERIFIED_COMPLETE') {
       cardTitle = 'Verified complete';

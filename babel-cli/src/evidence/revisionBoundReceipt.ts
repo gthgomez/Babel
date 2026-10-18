@@ -20,6 +20,8 @@ export interface WorkspaceRevision {
   scope?: RevisionScopeV1;
   /** A null Git hash is valid only when this mode is explicitly optional. */
   gitBinding?: GitBindingModeV1;
+  /** Non-secret diagnostic reason when physical repository capture could not bind. */
+  captureFailureReason?: string;
 }
 
 export interface RevisionBoundReceipt {
@@ -56,6 +58,7 @@ export const WorkspaceRevisionSchema = z
     capturedAt: z.number().int().finite().nonnegative(),
     scope: scopeSchema,
     gitBinding: z.enum(["required", "optional"]),
+    captureFailureReason: z.string().min(1).optional(),
   })
   .strict();
 
@@ -156,7 +159,7 @@ function readGitHead(projectRoot: string): string | null {
  * tracked paths, malformed enumeration, unsafe types and exceeded bounds make
  * the repository capture unavailable before input content is opened.
  */
-function readGitTree(projectRoot: string): string | null {
+function readGitTreeWithReason(projectRoot: string): { treeHash: string | null; reason?: string } {
   try {
     const gitRoot = fs.realpathSync.native(execFileSync("git", ["rev-parse", "--show-toplevel"], {
       cwd: projectRoot, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
@@ -164,7 +167,9 @@ function readGitTree(projectRoot: string): string | null {
     }).trim());
     const root = fs.realpathSync.native(projectRoot);
     const prefix = path.relative(gitRoot, root);
-    if (path.isAbsolute(prefix) || prefix === ".." || prefix.startsWith(`..${path.sep}`)) return null;
+    if (path.isAbsolute(prefix) || prefix === ".." || prefix.startsWith(`..${path.sep}`)) {
+      return { treeHash: null, reason: "Project root is outside the Git repository root" };
+    }
     const scopePath = prefix ? `:(top,literal)${prefix.split(path.sep).join("/")}` : ".";
     // -v records skip-worktree / assume-unchanged as metadata; -z preserves
     // literal names, including newlines. Neither status nor flags select bytes.
@@ -172,17 +177,23 @@ function readGitTree(projectRoot: string): string | null {
       cwd: gitRoot, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
       timeout: 10_000, maxBuffer: INPUT_CLOSURE_MAX_BYTES, windowsHide: true,
     });
-    if (index && !index.endsWith("\0")) return null;
+    if (index && !index.endsWith("\0")) {
+      return { treeHash: null, reason: "Git index enumeration was truncated or malformed" };
+    }
     const requiredPaths: string[] = [];
     const missing: string[] = [];
     const seen = new Set<string>();
     for (const record of index.split("\0").filter(Boolean)) {
       const match = /^([A-Za-z?]) ([0-7]{6}) ([0-9a-f]{40}) 0\t([\s\S]+)$/.exec(record);
-      if (!match) return null;
+      if (!match) {
+        return { treeHash: null, reason: "Git index contains an unmerged or non-standard entry" };
+      }
       const absolute = path.resolve(gitRoot, match[4]!);
       const relative = assertProjectRelativePath(root, path.relative(root, absolute));
       if (seen.has(relative) || isCredentialTargetPath(relative) ||
-        relative.split("/").some(part => INPUT_CLOSURE_SKIP_DIRS.has(part))) return null;
+        relative.split("/").some(part => INPUT_CLOSURE_SKIP_DIRS.has(part))) {
+        return { treeHash: null, reason: "Git index contains an excluded or credential path" };
+      }
       seen.add(relative);
       // Admit tracked ancestors before the independent reader accesses bytes.
       let candidate = root;
@@ -197,22 +208,28 @@ function readGitTree(projectRoot: string): string | null {
             absent = true;
             break;
           }
-          return null;
+          return { treeHash: null, reason: "Tracked path could not be stat-checked" };
         }
-        if (i < parts.length - 1 && !stats.isDirectory()) return null;
+        if (i < parts.length - 1 && !stats.isDirectory()) {
+          return { treeHash: null, reason: "Tracked ancestor is not a directory" };
+        }
       }
       if (absent) missing.push(relative);
       else requiredPaths.push(relative);
     }
     const physical = captureVerifierInputClosure(root, true, requiredPaths);
-    if (physical.mode !== "bound") return null;
-    return hashFileContent(canonicalJsonForHash({
-      method: "physical-worktree-v1", root, index,
-      excludedDirectories: [...INPUT_CLOSURE_SKIP_DIRS].sort(),
-      digests: physical.digests, missing: missing.sort(),
-    }));
+    if (physical.mode !== "bound") {
+      return { treeHash: null, reason: physical.reason };
+    }
+    return {
+      treeHash: hashFileContent(canonicalJsonForHash({
+        method: "physical-worktree-v1", root, index,
+        excludedDirectories: [...INPUT_CLOSURE_SKIP_DIRS].sort(),
+        digests: physical.digests, missing: missing.sort(),
+      })),
+    };
   } catch {
-    return null;
+    return { treeHash: null, reason: "Git repository tree capture failed" };
   }
 }
 
@@ -424,6 +441,7 @@ function computeRevision(
       "Revision-bound file scope must not be empty; use scope_kind=repository explicitly.",
     );
   const fileHashes: Record<string, string> = Object.create(null);
+  let captureFailureReason: string | undefined;
   if (scope.kind === "files") {
     if (scope.paths.some(isCredentialTargetPath))
       throw new Error("Revision scope includes a credential path.");
@@ -444,12 +462,16 @@ function computeRevision(
       }
     }
   } else {
-    const treeHash = readGitTree(projectRoot);
+    const tree = readGitTreeWithReason(projectRoot);
+    const treeHash = tree.treeHash;
     if (!treeHash && gitBinding === "required")
       throw new Error("Required Git tree cannot be established.");
     // Optional callers retain an explicitly unknown revision, never a reusable
     // content proof. A valid HEAD alone cannot certify failed physical capture.
-    if (!treeHash) gitCommitHash = null;
+    if (!treeHash) {
+      gitCommitHash = null;
+      captureFailureReason = tree.reason;
+    }
     fileHashes["<repository>"] = treeHash ?? hashFileContent(`unverified-contents:${crypto.randomUUID()}`);
   }
   return {
@@ -459,6 +481,7 @@ function computeRevision(
     capturedAt: Date.now(),
     scope,
     gitBinding,
+    ...(captureFailureReason ? { captureFailureReason } : {}),
   };
 }
 
