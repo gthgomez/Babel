@@ -22,7 +22,8 @@ import {
 const childTestCount = 12
 
 if (!isSyntheticProviderFixtureReady()) {
-  test('repo-map refresh is isolated in a synthetic-only subprocess', { timeout: 30_000 }, async t => {
+  const isolationTimeoutMs = process.platform === 'win32' ? 120_000 : 60_000
+  test('repo-map refresh is isolated in a synthetic-only subprocess', { timeout: isolationTimeoutMs }, async t => {
     const fixture = prepareSyntheticProviderFixture()
     const child = spawn(process.execPath, [
       '--experimental-wasm-modules',

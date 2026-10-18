@@ -24,8 +24,19 @@ function nativeChild(root: string, script: string, args: string[]) {
     DOTNET_SKIP_FIRST_TIME_EXPERIENCE: '1', DOTNET_NOLOGO: '1' }
   const child = spawnSync(host, ['-NoLogo', '-NoProfile', '-NonInteractive', '-File', script, ...args],
     { cwd: root, env, encoding: 'utf8', timeout: 15000, maxBuffer: 4096, windowsHide: true })
-  assert.equal(Boolean(child.error), false)
-  assert.equal(Boolean(child.stderr), false)
+  if (child.error) {
+    assert.fail(`native PowerShell spawn failed: ${child.error.message}`)
+  }
+  assert.equal(
+    child.status,
+    0,
+    `native PowerShell exit ${child.status ?? 'unknown'}\nstderr:\n${child.stderr}\nstdout:\n${child.stdout}`,
+  )
+  assert.equal(
+    child.stderr ?? '',
+    '',
+    `native PowerShell stderr must be empty:\n${child.stderr}`,
+  )
   assert.ok(child.stdout.length < 1024)
   return child
 }
