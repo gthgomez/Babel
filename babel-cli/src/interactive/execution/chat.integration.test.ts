@@ -47,6 +47,7 @@ function createMockEngine(
     },
     cancel: () => undefined,
     abortTurn: () => undefined,
+    getTaskAllowanceSnapshot: () => null,
   } as unknown as ChatEngine;
 }
 
@@ -441,6 +442,7 @@ test('executeChatTask renders recovery-exhaustion guidance in the TUI card', asy
         },
         cancel: () => undefined,
         abortTurn: () => undefined,
+        getTaskAllowanceSnapshot: () => null,
       } as unknown as ChatEngine;
 
       try {

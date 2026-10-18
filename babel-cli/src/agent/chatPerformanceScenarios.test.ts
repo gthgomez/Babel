@@ -284,20 +284,19 @@ describe('PR-B: Chat Performance & Telemetry Certification', () => {
 
     const mockEngine = {
       submitMessageStream: async function* () {
-      yield { type: 'thinking' };
-      yield { type: 'answer_chunk', text: 'Inspected target files.' };
-      yield {
-        type: 'done',
-        answer: 'Inspected target files.',
-        usage: EMPTY_USAGE,
-        outcome: 'NO_CHANGE_REQUIRED',
-        turnTelemetry: mockTelemetry,
-      };
+        yield { type: 'thinking' };
+        yield { type: 'answer_chunk', text: 'Inspected target files.' };
+        yield {
+          type: 'done',
+          answer: 'Inspected target files.',
+          usage: EMPTY_USAGE,
+          outcome: 'NO_CHANGE_REQUIRED',
+          turnTelemetry: mockTelemetry,
+        };
       },
       cancel: () => undefined,
       abortTurn: () => undefined,
-      getEngineRunId: () => 'perf-mock-run',
-      attachAdmissionStore: () => undefined,
+      getTaskAllowanceSnapshot: () => null,
     } as unknown as ChatEngine;
 
     await executeChatTask(ctx, 'inspect repo structure', 'inspect repo structure', target, undefined, {

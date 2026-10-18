@@ -5,6 +5,11 @@ import { createVirtualCellGrid } from './observe/virtualCellGrid.js'
 import { OutputBuffer } from './outputBuffer.js'
 import { resetTerminalProbe } from './terminalProbe.js'
 
+/** Join wrapped grid rows for assertions without losing tokens split across lines. */
+function normalizedReplayText(rows: string[]): string {
+  return rows.join(' ').replace(/\s+/g, ' ').trim()
+}
+
 for (const width of [40, 80, 100, 160]) {
   test(`tool cells keep long starts, short summaries and errors separate at ${width} columns`, () => {
     const columns = Object.getOwnPropertyDescriptor(process.stdout, 'columns')
@@ -28,7 +33,7 @@ for (const width of [40, 80, 100, 160]) {
       assert.ok(summary >= 0, rows.join('\n'))
       assert.match(rows[summary]!, /Read 1 file$/)
       assert.doesNotMatch(rows.join('\n'), /\[Esc\] cancel|\[Ctrl\+C\] stop/)
-      assert.match(rows.join(''), /start_line out of range/)
+      assert.match(normalizedReplayText(rows), /start_line out of range/)
     } finally {
       renderer.stop(); process.stdout.write = write
       if (columns) Object.defineProperty(process.stdout, 'columns', columns)

@@ -93,6 +93,7 @@ function createMockEngine(events: ChatEvent[], finalResult: ChatResult): ChatEng
     cancel: () => undefined,
     getConversation: () => [],
     getActivePlaybook: () => null,
+    getTaskAllowanceSnapshot: () => null,
   } as unknown as ChatEngine;
 }
 
@@ -219,6 +220,7 @@ describe('PR-A Certification: Cancellation Lifecycle & Invariants', () => {
       },
       getConversation: () => [],
       getActivePlaybook: () => null,
+      getTaskAllowanceSnapshot: () => null,
     } as unknown as ChatEngine;
 
     try {
