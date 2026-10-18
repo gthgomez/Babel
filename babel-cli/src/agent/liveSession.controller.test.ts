@@ -523,7 +523,10 @@ describe('H2 ChatEngine resume + LiveSession projection', () => {
       terminalOutcome,
     );
     rmSync(snapPath, { recursive: true, force: true });
-    finalizeParityTurnSync(rt, runDir, terminalOutcome, stream.status);
+    if (!terminalOutcome) {
+      assert.fail('stream fixture must expose a terminal outcome');
+    }
+    finalizeParityTurnSync(rt, runDir, terminalOutcome, 'completed');
     const eq = resumeEquivalenceFromDisk(runDir);
     assert.ok(eq.ok, eq.mismatches.join(','));
     const engine2 = new ChatEngine({
