@@ -121,6 +121,42 @@ describe('PR-D: Daily-Driver Visual Polish & Tool Presentation', () => {
     }
   });
 
+  test('responsive widths: failure rows wrap without truncating terminal error evidence', () => {
+    const sentinel = 'SENTINEL_ERROR_EVIDENCE_WRAP_REGRESSION_XYZ';
+    const errorTools: ToolExecutionSummary[] = [
+      {
+        tool: 'write_file',
+        target:
+          'packages/some-deeply-nested-package/src/components/veryLongFilenameForTestingResponsiveColumns.ts',
+        exitCode: 1,
+        error: `detail prefix. ${sentinel}`,
+      },
+    ];
+
+    for (const width of [60, 150]) {
+      const rendered = renderToolExecutionTrail(errorTools, false, width);
+      const plain = stripAnsi(rendered);
+      assert.ok(
+        plain.includes(sentinel),
+        `full error evidence must survive wrapping at width ${width}`,
+      );
+      const lines = rendered.split('\n');
+      assert.ok(lines.length > 1 || visibleLength(rendered) > width / 2,
+        'narrow width should wrap long failure evidence across physical rows');
+      for (const line of lines) {
+        assert.ok(
+          visibleLength(line) <= width,
+          `Failure row length ${visibleLength(line)} exceeded width ${width}: "${line}"`,
+        );
+      }
+      const lastLine = lines.at(-1) ?? '';
+      assert.ok(
+        stripAnsi(lastLine).includes(sentinel) || plain.endsWith(sentinel),
+        'error evidence must remain visible on a trailing physical row',
+      );
+    }
+  });
+
   test('production integration: ConversationalRenderer accumulates and collapses N > 1 consecutive tool calls into a single group summary line', async () => {
     const { ConversationalRenderer } = await import('./waterfall.js');
     const chunks: string[] = [];

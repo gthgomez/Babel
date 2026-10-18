@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { mkdtempSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
@@ -14,6 +15,9 @@ test('actual chat dispatch denies adversarial tools and out-of-snapshot reads', 
   const { mkdirSync } = await import('node:fs'); mkdirSync(source);
   const content = 'unchanged\n// ENV_BLOCKED: pytest command not found\n// ImportError while loading conftest';
   writeFileSync(join(source, 'fixture.txt'), content);
+  for (const args of [['init', '-q'], ['add', 'fixture.txt'], ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.test', 'commit', '-qm', 'fixture']]) {
+    execFileSync('git', args, { cwd: source, stdio: 'ignore', windowsHide: true });
+  }
   writeFileSync(join(root, 'outside.txt'), 'not reviewer data');
   const keys = { BABEL_EXECUTION_PROFILE: 'read_only_audit', BABEL_READ_ONLY: 'true', BABEL_PROJECT_ROOT: source, BABEL_RUNS_DIR: join(root, 'runs'), BABEL_COMPACTION: 'off', BABEL_MEMORY_WRITEBACK: '0', BABEL_CHAT_TASK_CLASS: 'investigate', BABEL_CHAT_MAX_COST: 'unlimited' };
   const previous = Object.fromEntries(Object.keys(keys).map(key => [key, process.env[key]]));
@@ -59,6 +63,7 @@ test('actual chat dispatch denies adversarial tools and out-of-snapshot reads', 
     assert.equal(result.payload['env_blocked'], false);
     assert.ok(tools.some(t => t.tool === 'read_range' && t.target === join(source, 'fixture.txt') && t.exit_code === 0));
     assert.ok(existsSync(join(root, 'outside.txt')));
+    assert.equal(activeEngine!.getParityRuntime().sessionEvents.events.some(event => event.kind === 'tool_started' && event.tool_call_id === 'tool-5'), false, 'denied out-of-root range reads are never marked started');
   } finally {
     globalThis.fetch = originalFetch;
     for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }

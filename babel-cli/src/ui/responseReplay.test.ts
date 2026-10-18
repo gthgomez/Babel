@@ -272,7 +272,7 @@ for (const hardware of ['0', '1']) {
         } finally { release(); }
         if (!stopWhileFenced) { renderer.onSummary(); renderer.stop(); }
         const text = visible();
-        assert.match(text, /Alpha before the boundary\..*Pending Alpha\..*Beta after the boundary\..*Pending Beta\..*Response time/);
+        assert.match(text, /Alpha before the boundary\..*Pending Alpha\..*Beta after the boundary\..*Pending Beta\..*Elapsed/);
         for (const phrase of ['Alpha before the boundary.', 'Pending Alpha.', 'Beta after the boundary.', 'Pending Beta.']) {
           assert.equal(text.split(phrase).length - 1, 1, text);
         }
@@ -347,6 +347,6 @@ test('a tool-only completion retains transcript and response metadata', () => {
     const id = renderer.onToolCallStart('read_file', 'meta.ts');
     renderer.onToolCallComplete(id, undefined, 'Synthetic tool-only failure', 1);
     renderer.onSummary(); renderer.stop();
-    assert.match(visible(), /meta\.ts.*Response time/);
+    assert.match(visible(), /meta\.ts.*Elapsed/);
   });
 });

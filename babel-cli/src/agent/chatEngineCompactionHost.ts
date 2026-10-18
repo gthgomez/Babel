@@ -45,6 +45,7 @@ export interface ChatEngineCompactionBinding {
   lastLogicalRequestId: string | null;
   pendingParentRequestId: string | null;
   apiTokenCount: number;
+  prepareCompactionGuard(): () => boolean;
   isSubmissionCurrent(generation: number): boolean;
   shouldUseTextTools(): boolean;
   compactConversation(): void;
@@ -176,7 +177,8 @@ export async function runChatEngineCompactionFor(
         null,
         attribution,
         usage.inputTokens !== null && usage.outputTokens !== null,
-        usageScope.provider ?? null,
+        usage.provider ?? usageScope.provider ?? null,
+        usage.reportedCostUsd,
       );
       if (update.kind === 'conflict') {
         engine.recordOwnerAccountingFault(
@@ -233,6 +235,7 @@ export async function runChatEngineCompactionFor(
     reserveTokens: DEFAULT_COMPACTION_CONFIG.reserveTokens,
     textToolsReserve: 1024,
     forceCompaction,
+    prepareContextGuard: () => engine.prepareCompactionGuard(),
     isOwnerCurrent: () => engine.isSubmissionCurrent(ownerGeneration),
     resolveModel: input => resolveCompactionModelId({ ...input,
       pinSelection: engine.options.model !== undefined || engine.options.providerPolicy !== undefined }),

@@ -1,3 +1,4 @@
+import { chatInspectionCoverage } from '../../agent/chatInspectionCoverage.js';
 // ─── Chat Task Execution ────────────────────────────────────────────────────
 // Extracted from interactive.ts — direct chat execution via ChatEngine.
 // No waterfall, no pipeline, no Zod. Streams the model's response and tool
@@ -312,6 +313,8 @@ export async function executeChatTask(
       },
     ]);
 
+    const costOwnerId = ctx.chatEngine?.getTaskAllowanceSnapshot()?.taskOwnerId;
+    const taskUsage = costOwnerId ? globalCostTracker.getTaskSummary(costOwnerId) : null;
     const review = renderProjectedReviewCard(projectedState, {
       verificationPolicy: activeProfile ? getChatTaskTune(activeProfile).verificationPolicy : undefined,
       verificationApplicability:
@@ -320,10 +323,16 @@ export async function executeChatTask(
         (activeProfile === 'quick_inspect' || activeProfile === 'investigate')
           ? 'not_applicable'
           : undefined,
-      costUsd: perRunCost,
-      tokens: perRunTokens,
+      costUsd: taskUsage?.knownCostUSD ?? taskUsage?.totalCostUSD ?? perRunCost,
+      estimatedCostUsd: taskUsage?.estimatedCostUSD,
+      unknownChargeCount: taskUsage?.unknownChargeCount,
+      costComplete: taskUsage?.costComplete,
+      usageScope: taskUsage ? 'task' : 'turn',
+      inspectionCoverage: activeProfile === 'investigate' || activeProfile === 'quick_inspect' ? chatInspectionCoverage(result.toolCalls) : undefined,
+      tokens: taskUsage?.totalTokens ?? perRunTokens,
       sessionTokens: postRunUsage.totalTokens,
-      transcriptAnswer: result.answer ?? '',
+      summary: result.reason_code === 'context_preparation_failed' ? result.answer : undefined,
+      transcriptAnswer: result.reason_code === 'context_preparation_failed' ? '' : result.answer ?? '',
       sessionConsistencyFailure: isSessionConsistencyFailureMessage(result.answer),
     });
 
@@ -347,6 +356,8 @@ export async function executeChatTask(
           perRunCost,
           changedFiles,
         });
+        convRenderer.stop();
+      } else if (result.reason_code === 'context_preparation_failed') {
         convRenderer.stop();
       } else {
         convRenderer.fail(new Error(result.answer || review.title));

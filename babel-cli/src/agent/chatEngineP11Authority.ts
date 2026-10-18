@@ -6,9 +6,10 @@ import {
   resolveObservation,
   type ObservationRefV1,
 } from '../evidence/observationStore.js';
+import { ContextPreparationError } from './chatContextFailure.js';
 import { RevisionManager } from '../evidence/revisionBoundReceipt.js';
 import { evaluateChatVerifierReceiptCurrencySync } from '../evidence/chatRevisionBinding.js';
-import { canonicalizeContained } from '../bridge/workspaceBound.js';
+import { canonicalizeContained, isPathInsideRoot } from '../bridge/workspaceBound.js';
 import type { ChatEngineOptions, ChatTaskAllowanceSnapshot } from './chatEngine.js';
 import type { ChatExecutionProfile } from './chatEngineServices.js';
 import type { ChatTaskClass } from '../config/chatTaskClass.js';
@@ -421,11 +422,15 @@ export class ChatEngineP11Authority {
     }
   }
 
+  private workspaceCaptureFailure = 'Git revision or physical input capture unavailable';
+
   private currentP11Workspace(): ReturnType<typeof RevisionManager.computeRevisionSync> | null {
+    this.workspaceCaptureFailure = 'Git revision or physical input capture unavailable';
     try {
       const workspace = RevisionManager.computeRevisionSync(this.host.options.projectRoot, [], {
         scope_kind: 'repository',
         git_binding: 'optional',
+        onCaptureFailure: reason => { this.workspaceCaptureFailure = reason; },
       });
       // Optional capture returns unknown provenance when physical proof fails.
       // Its nonce digest cannot authorize current workspace or coverage refs.
@@ -433,6 +438,25 @@ export class ChatEngineP11Authority {
     } catch {
       return null;
     }
+  }
+
+  /** Capture before summarization; recheck the same owner and physical bytes at commit. */
+  prepareCompactionGuard(): () => boolean {
+    if (isPathInsideRoot(this.host.options.projectRoot, this.host.engineRunDir)) {
+      throw new ContextPreparationError(this.host.options.projectRoot, 'runtime_evidence_overlap',
+        'runtime evidence changes the captured repository; set BABEL_RUNS_DIR to a directory outside the selected project before retrying', this.host.engineRunDir);
+    }
+    const workspace = this.currentP11Workspace();
+    if (!workspace) throw new ContextPreparationError(this.host.options.projectRoot,
+      'workspace_revision', `workspace snapshot unavailable (${this.workspaceCaptureFailure})`, this.host.engineRunDir);
+    const owner = this.currentP11Owner();
+    if (!owner) throw new ContextPreparationError(this.host.options.projectRoot,
+      'owner_unavailable', 'context owner unavailable', this.host.engineRunDir);
+    return () => {
+      const currentOwner = this.currentP11Owner();
+      if (!currentOwner || currentOwner.generation !== owner.generation || currentOwner.token !== owner.token) return false;
+      return this.currentP11Workspace()?.compositeTreeHash === workspace.compositeTreeHash;
+    };
   }
 
   captureP11Observation(
@@ -634,7 +658,9 @@ export class ChatEngineP11Authority {
         !this.host.taskAllowance ? 'task_allowance' : null,
         !(routeOverride ?? null) ? 'route_identity' : null,
       ].filter((item): item is string => item !== null);
-      this.noteP11InstallBlock('sources_unavailable', missing);
+      this.noteP11InstallBlock('sources_unavailable', [...missing,
+        ...(missing.includes('workspace_revision') ? [`workspace_capture: ${this.workspaceCaptureFailure}`] : []),
+      ]);
       return false;
     }
     // A5 fence: the claimed owner is THIS engine's own admitted identity

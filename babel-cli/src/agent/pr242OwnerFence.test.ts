@@ -9,6 +9,9 @@ import type { RunnerCallbacks, RunnerInvocationMetadata } from '../runners/base.
 import { ChatEngine } from './chatEngine.js'
 import { createWorkingState } from './codingLoop/workingState.js'
 import { parseLeaseJson } from '../authority/lease.js'
+import { attachSessionAdmissionStore } from '../interactive/execution/chatTransport.js'
+
+const fixtureEngines: ChatEngine[] = []
 
 function project() {
   const root = mkdtempSync(join(tmpdir(), 'babel-pr242-owner-'))
@@ -27,17 +30,27 @@ function project() {
 
 async function withFixture(run: (root: string) => Promise<void>) {
   const root = project()
+  const runsRoot = mkdtempSync(join(tmpdir(), 'babel-pr242-runs-'))
   const priorRuns = process.env['BABEL_RUNS_DIR']
   const priorBudget = process.env['BABEL_CHAT_MAX_COST']
-  process.env['BABEL_RUNS_DIR'] = join(root, 'runs')
+  process.env['BABEL_RUNS_DIR'] = runsRoot
   process.env['BABEL_CHAT_MAX_COST'] = 'unlimited'
   try {
     await run(root)
   } finally {
+    while (fixtureEngines.length > 0) {
+      const chat = fixtureEngines.pop()
+      try {
+        chat?.closeAdmissionStore()
+      } catch {
+        /* Windows may already have released the store */
+      }
+    }
     if (priorRuns === undefined) delete process.env['BABEL_RUNS_DIR']
     else process.env['BABEL_RUNS_DIR'] = priorRuns
     if (priorBudget === undefined) delete process.env['BABEL_CHAT_MAX_COST']
     else process.env['BABEL_CHAT_MAX_COST'] = priorBudget
+    rmSync(runsRoot, { recursive: true, force: true })
     rmSync(root, { recursive: true, force: true })
   }
 }
@@ -59,7 +72,18 @@ function engine(root: string, onDispatch: () => void, maxCostUsd?: number) {
     ...(maxCostUsd !== undefined ? { maxCostUsd } : {}),
   })
   ;(result as unknown as { shouldUseNativeTools: () => boolean }).shouldUseNativeTools = () => true
+  attachSessionAdmissionStore(result)
+  fixtureEngines.push(result)
   return result
+}
+
+function primeAdmission(chat: ChatEngine, userInput: string) {
+  chat.applyUserSubmission({ userInput })
+  const internal = chat as unknown as {
+    activeSubmissionGeneration: number
+    p11Authority: { admitCurrentSubmission: (generation: number, input: string) => unknown }
+  }
+  assert.ok(internal.p11Authority.admitCurrentSubmission(internal.activeSubmissionGeneration, userInput))
 }
 
 test('a stale compaction continuation preserves successor conversation', async () => {
@@ -79,6 +103,7 @@ test('a stale compaction continuation preserves successor conversation', async (
       { role: 'system', content: 'Task A system' },
       { role: 'user', content: 'Task A marker' },
     ]
+    primeAdmission(chat, 'Task A marker')
     let calls = 0
     mutable.compactionManager = {
       compactWithResult: async (messages: unknown[]) => {
@@ -163,6 +188,7 @@ test('compaction settlement preserves the observed provider when refining its pe
     globalCostTracker.resetSession()
     try {
       const chat = engine(root, () => {}, 1)
+      primeAdmission(chat, 'compaction settlement fixture')
       const owner = chat.getTaskAllowanceSnapshot()!.taskOwnerId
       const internal = chat as unknown as {
         activeSubmissionGeneration: number
@@ -1238,9 +1264,7 @@ test("compaction attribution honors explicit omission for a different inference 
     globalCostTracker.resetSession();
     try {
       const chat = engine(root, () => {});
-      chat.applyUserSubmission({
-        userInput: "Compaction attribution identity",
-      });
+      primeAdmission(chat, 'Compaction attribution identity');
       const owner = chat.getTaskAllowanceSnapshot()!.taskOwnerId;
       const internal = chat as unknown as {
         activeSubmissionGeneration: number;

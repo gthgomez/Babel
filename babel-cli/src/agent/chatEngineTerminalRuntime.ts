@@ -318,6 +318,7 @@ export function completeChatStream(
 export function failChatStream(
   input: ChatTerminalInput,
   error: string,
+  explicitReason?: import('./chatTerminalReason.js').TerminalReason,
 ): ChatEvent {
   const { snapshot, effects } = input
   effects.settleActiveExecution()
@@ -342,7 +343,7 @@ export function failChatStream(
   // make the model-visible outcome less truthful.
   const classifiedOutcome = classifyFailureText(error) ?? limiterOutcome
   const terminalReason =
-    terminalReasonFromFailureText(error) ??
+    explicitReason ?? terminalReasonFromFailureText(error) ??
     resolveChatTerminalReason(input, classifiedOutcome)
   // R0-9: status/outcome/reason_code/cause_class must form one coherent tuple.
   // The typed reason is the single authority; when it maps to an outcome, that

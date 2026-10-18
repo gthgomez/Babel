@@ -100,3 +100,32 @@ describe('D03 reviewCard reason-first guidance', () => {
     assert.doesNotMatch(legacy.body, /No progress after recovery/);
   });
 });
+
+
+test('context failure guidance retains known subtotal and unresolved accounting with cumulative usage', () => {
+  const card = buildReviewCard({ outcome: 'BLOCKED_POLICY', status: 'blocked', reasonCode: 'context_preparation_failed',
+    causeClass: 'harness', costUsd: 0.039075115852, unknownChargeCount: 1, usageScope: 'task', tokens: 3162714 })
+  assert.match(card.body, /snapshot|context authority/)
+  assert.match(card.body, /--project-root/)
+  assert.match(card.body, /0.0391 known subtotal this task/)
+  assert.match(card.body, /1 unresolved charge/)
+  assert.match(card.body, /3,162,714 cumulative tokens/)
+  assert.doesNotMatch(card.body, /Unknown failure|Retry$/)
+})
+
+
+test('missing subtotal is unavailable rather than zero and incomplete scope stays qualified', () => {
+  const missing = buildReviewCard({ outcome: 'BLOCKED_POLICY', unknownChargeCount: 1, tokens: 10 })
+  assert.doesNotMatch(missing.body, /\$0.0000/)
+  assert.match(missing.body, /cost unavailable/i)
+  const incomplete = buildReviewCard({ outcome: 'BLOCKED_POLICY', costUsd: 0.0391, costComplete: false })
+  assert.match(incomplete.body, /known subtotal/)
+  assert.match(incomplete.body, /cost incomplete/)
+})
+
+test('published usage estimates remain separate from known task charges', () => {
+  const card = buildReviewCard({ outcome: 'BLOCKED_POLICY', costUsd: 0, estimatedCostUsd: 0.01, costComplete: false })
+  assert.match(card.body, /0.0000 known subtotal/)
+  assert.match(card.body, /0.0100 usage estimate/)
+  assert.doesNotMatch(card.body, /0.0100 known/)
+})

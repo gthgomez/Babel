@@ -399,7 +399,8 @@ export class ChatEngineStreamingLoop {
       if (!this.host.isSubmissionCurrent(submissionGeneration)) return;
       if (
         !p11ContextInstalled &&
-        (hadInstalledP11Context || pendingCapsuleAuthority)
+        (hadInstalledP11Context || pendingCapsuleAuthority ||
+          (this.host.parity.admissionStore && this.host.p11InstallBlock?.details.includes('workspace_revision')))
       ) {
         // Structured refusal diagnostic: surface WHY the install was blocked
         // (reason code + bounded details from the rejecting boundary) so a
@@ -410,9 +411,8 @@ export class ChatEngineStreamingLoop {
           ? ` (install block: ${block.code}${block.details.length > 0 ? `: ${block.details.join('; ')}` : ''})`
           : '';
         yield this.host.streamFailed(
-          hadInstalledP11Context
-            ? `P11 context installation was blocked; the previous context generation remains authoritative and provider dispatch was refused.${blockSuffix}`
-            : `P11 context installation was blocked; this turn committed a compaction capsule that no installed context root authorizes, so provider dispatch was refused.${blockSuffix}`,
+          `Could not prepare context: workspace snapshot or context authority unavailable. Project: ${this.host.options.projectRoot}. Select the intended repository with --project-root and inspect the run evidence before retrying.${blockSuffix}`,
+          { code: 'context_preparation_failed', cause_class: 'harness', ...(block ? { detail: block.code } : {}) },
         );
         return;
       }

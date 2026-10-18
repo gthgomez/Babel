@@ -94,6 +94,10 @@ const GUIDANCE: Record<TerminalReasonCode, TerminalReasonGuidance> = {
     message: 'The answer repeatedly claimed test results without matching evidence',
     nextActions: ['Inspect response diagnostics', 'Retry with an evidence-grounded answer'],
   },
+  context_preparation_failed: {
+    message: 'Could not prepare context: workspace snapshot or context authority unavailable',
+    nextActions: ['Select the intended repository with --project-root', 'Inspect run evidence and resolve the snapshot prerequisite before retrying'],
+  },
   unknown: {
     message: 'Cause was not established',
     nextActions: ['Inspect diagnostics — cause was not established'],
@@ -158,6 +162,10 @@ export function terminalReasonFromFailureText(
   error: string | null | undefined,
 ): TerminalReason | undefined {
   if (!error) return undefined;
+  // Compatibility for durable failures recorded before the typed producer.
+  if (/^P11 context installation was blocked;|^Could not prepare context:|^An uninstalled compaction capsule cannot authorize provider dispatch\./.test(error)) {
+    return { code: 'context_preparation_failed', cause_class: 'harness' };
+  }
   if (/RESPONSE_EVIDENCE_INVALID/.test(error)) {
     return { code: 'response_evidence_invalid', cause_class: 'model' };
   }

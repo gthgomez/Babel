@@ -1207,3 +1207,26 @@ describe('compaction preserves state', () => {
     }
   });
 });
+
+
+it('OpenRouter compaction carries reported cost including a valid zero to the settlement callback', async () => {
+  const originalFetch = globalThis.fetch
+  try {
+    for (const reported of [0.002, 0, undefined]) {
+      let observed: CompactionOptions['onUsageRecorded'] extends ((usage: infer U) => void) | undefined ? U | undefined : never
+      globalThis.fetch = async () => new Response(JSON.stringify({
+        choices: [{ message: { content: 'KEY_DECISIONS:\n- Retain source evidence.' } }],
+        model: 'deepseek/deepseek-v4-flash-0731',
+        usage: { prompt_tokens: 100, completion_tokens: 10, ...(reported !== undefined ? { cost: reported } : {}) },
+      }))
+      await new LLMSummarizeCompaction().compact(makeLongConversation(10), {
+        model: 'deepseek/deepseek-v4-flash-0731', maxTokens: 1000, targetTokens: 100,
+        allowAmbientProvider: false,
+        summarizationProvider: { apiKey: 'fixture-only', baseUrl: 'https://openrouter.ai/api/v1/chat/completions', defaultModel: 'deepseek/deepseek-v4-flash-0731' },
+        onUsageRecorded: usage => { observed = usage },
+      })
+      assert.equal(observed?.reportedCostUsd, reported)
+      assert.equal(observed?.provider, 'openrouter')
+    }
+  } finally { globalThis.fetch = originalFetch }
+})

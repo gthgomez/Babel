@@ -113,6 +113,7 @@ function createInstantEngine(chat: ChatResult): ChatEngine {
     },
     abortTurn: () => undefined,
     cancel: () => undefined,
+    getTaskAllowanceSnapshot: () => null,
   } as unknown as ChatEngine;
 }
 
@@ -144,6 +145,7 @@ function createCancellableEngine(): { engine: ChatEngine; started: () => boolean
     cancel: () => {
       release?.();
     },
+    getTaskAllowanceSnapshot: () => null,
   } as unknown as ChatEngine;
   return { engine, started: () => started };
 }

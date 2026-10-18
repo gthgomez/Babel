@@ -18,6 +18,8 @@ import {
   truncate,
   visibleLength,
   getEffectiveTerminalWidth,
+  stripAnsi,
+  wrapText,
 } from "./theme.js";
 import {
   classifyToolPresentation,
@@ -158,6 +160,14 @@ function formatExpandedItem(
 
   const errSuffix = cls.isFailure && item.error ? ` (${item.error})` : "";
   const rawLine = `  ${icon} ${dim(item.tool)} ${primary(item.target)} — ${statusText}${errSuffix}`;
+  const preserveEvidence =
+    cls.isFailure || cls.isBlocked || cls.availability === "unavailable";
+
+  if (preserveEvidence) {
+    if (visibleLength(rawLine) <= termWidth) return rawLine;
+    return wrapText(stripAnsi(rawLine), termWidth).join("\n");
+  }
+
   if (visibleLength(rawLine) > termWidth) {
     const staticLen = visibleLength(
       `  ${icon} ${dim(item.tool)}  — ${statusText}${errSuffix}`,

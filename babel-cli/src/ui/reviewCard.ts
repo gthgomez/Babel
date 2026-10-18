@@ -1,3 +1,4 @@
+import { formatChatInspectionCoverage, type ChatInspectionCoverage } from '../agent/chatInspectionCoverage.js';
 /**
  * Truthful operator-facing completion / review card for chat-mode TUI.
  * Never paints unverified or failed verification as verified success.
@@ -41,7 +42,12 @@ export interface ReviewCardInput {
   /** Full assistant transcript; used to detect duplicated ReviewCard summaries. */
   transcriptAnswer?: string | undefined;
   costUsd?: number | undefined;
-  /** Billed tokens for the same scope as `costUsd` (this turn). */
+  unknownChargeCount?: number | undefined;
+  costComplete?: boolean | undefined;
+  estimatedCostUsd?: number | undefined;
+  usageScope?: 'turn' | 'task' | undefined;
+  inspectionCoverage?: ChatInspectionCoverage | undefined;
+  /** Billed tokens for the same declared usageScope as `costUsd`. */
   tokens?: number | undefined;
   /** Session-cumulative billed tokens. Shown only when larger than `tokens`. */
   sessionTokens?: number | undefined;
@@ -265,8 +271,9 @@ export function buildReviewCard(input: ReviewCardInput): ReviewCard {
         files.length === 0 &&
         !input.mutated));
 
-  const title =
-    isVerificationNotApplicable &&
+  const title = input.reasonCode === 'context_preparation_failed'
+    ? 'Context preparation blocked'
+    : isVerificationNotApplicable &&
     (kind === 'COMPLETE_UNVERIFIED' || kind === 'VERIFIED_COMPLETE')
       ? 'Response complete'
       : TITLES[kind];
@@ -306,6 +313,8 @@ export function buildReviewCard(input: ReviewCardInput): ReviewCard {
     }
   }
 
+  if (input.inspectionCoverage) lines.push(formatChatInspectionCoverage(input.inspectionCoverage));
+
   const summaryText = resolveReviewSummary(input);
   if (summaryText) {
     lines.push(dim('Summary'));
@@ -320,12 +329,21 @@ export function buildReviewCard(input: ReviewCardInput): ReviewCard {
     lines.push(`  ${reasonText}`);
   }
 
-  const hasRealCost = input.costUsd !== undefined && input.costUsd > 0;
+  const costAvailable = input.costUsd !== undefined && Number.isFinite(input.costUsd) && input.costUsd >= 0;
+  const hasRealCost = costAvailable && input.costUsd! > 0;
   const hasRealTokens = input.tokens !== undefined && input.tokens > 0;
-  if (hasRealCost || hasRealTokens) {
+  const unknownCharges = input.unknownChargeCount ?? 0;
+  const usageScope = input.usageScope ?? 'turn';
+  const hasEstimate = Number.isFinite(input.estimatedCostUsd) && (input.estimatedCostUsd ?? 0) > 0;
+  const costIncomplete = unknownCharges > 0 || input.costComplete === false || hasEstimate;
+  if (hasRealCost || hasRealTokens || costIncomplete) {
     const bits: string[] = [];
-    if (hasRealCost) bits.push(`$${input.costUsd!.toFixed(4)} this turn`);
-    if (hasRealTokens) bits.push(`${input.tokens!.toLocaleString('en-US')} tok${hasRealCost ? '' : ' this turn'}`);
+    if (costAvailable && (hasRealCost || costIncomplete)) bits.push(`$${input.costUsd!.toFixed(4)}${costIncomplete ? ` known subtotal this ${usageScope}` : ` this ${usageScope}`}`);
+    else if (costIncomplete) bits.push('cost unavailable');
+    if (hasEstimate) bits.push(`$${input.estimatedCostUsd!.toFixed(4)} usage estimate this ${usageScope}`);
+    if (unknownCharges > 0) bits.push(`${unknownCharges} unresolved charge${unknownCharges === 1 ? '' : 's'}`);
+    else if (costIncomplete) bits.push('cost incomplete');
+    if (hasRealTokens) bits.push(`${input.tokens!.toLocaleString('en-US')} cumulative tokens this ${usageScope}`);
     const sessionTokens = input.sessionTokens;
     if (
       hasRealTokens &&
@@ -334,7 +352,7 @@ export function buildReviewCard(input: ReviewCardInput): ReviewCard {
     ) {
       bits.push(`(session ${sessionTokens.toLocaleString('en-US')})`);
     }
-    lines.push(`${muted('Cost estimate / usage')}  ${bits.join('  ')}`);
+    lines.push(`${muted('Cost / cumulative usage')}  ${bits.join('  ')}`);
   }
 
   const actions = getContextualNextActions(kind, input).filter((action) => {

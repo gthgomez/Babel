@@ -42,7 +42,7 @@ export function formatConversationThinkingStatus(input: {
   return {
     indicator: primary(`${input.spinner} Thinking… [${input.snapshot.phase}]`),
     timer: muted(
-      `(response ${Math.floor(input.snapshot.elapsedMs / 1_000)}s · Ctrl+C cancel)`,
+      `(elapsed ${Math.floor(input.snapshot.elapsedMs / 1_000)}s · Ctrl+C cancel)`,
     ),
   };
 }

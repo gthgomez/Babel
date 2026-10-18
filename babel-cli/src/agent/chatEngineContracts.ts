@@ -361,6 +361,7 @@ export type ChatEvent =
         target: string
         detail?: string
         error?: string
+        exit_code?: number
         effect_status?: MutationEffectStatus
         effect_scope?: import('./mutationTools.js').MutationEffectScope
         mutation_paths?: string[]
@@ -409,6 +410,7 @@ export type ChatEvent =
         target: string
         detail?: string
         error?: string
+        exit_code?: number
         effect_status?: MutationEffectStatus
         effect_scope?: import('./mutationTools.js').MutationEffectScope
         mutation_paths?: string[]
@@ -468,6 +470,7 @@ export interface ChatResult {
     target: string
     detail?: string
     error?: string
+    exit_code?: number
     effect_status?: MutationEffectStatus
     effect_scope?: import('./mutationTools.js').MutationEffectScope
     mutation_paths?: string[]
@@ -730,7 +733,7 @@ export interface ChatEngineStreamingLoopHost {
     answer: string,
     extra?: ChatStreamDoneExtra,
   ) => ChatEvent
-  readonly streamFailed: (error: string) => ChatEvent
+  readonly streamFailed: (error: string, reason?: import('./chatTerminalReason.js').TerminalReason) => ChatEvent
   readonly synthesizeAnswer: (
     toolObservations: string,
     callbacks: ChatCallbacks,

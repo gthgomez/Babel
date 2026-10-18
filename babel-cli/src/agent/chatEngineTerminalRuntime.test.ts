@@ -270,3 +270,20 @@ test(`no-change currency is checked before ${surface} normalization: changed=${c
     assembleChatResult(input,'completed',{},'No change required.')
   assert.equal('outcome' in result?result.outcome:undefined,changed?'AGENT_FAILURE':'NO_CHANGE_REQUIRED')
 })
+
+
+test('typed context preparation failure survives terminal persistence and stream projection', t => {
+  const input = terminalInput(t)
+  let persisted: unknown[] = []
+  input.effects.finalizeTurn = (...args) => { persisted = args }
+  const event = failChatStream(input, 'Snapshot unavailable: input exceeds the size cap', {
+    code: 'context_preparation_failed', cause_class: 'harness', detail: 'workspace_revision',
+  })
+  assert.equal(event.type, 'failed')
+  if (event.type !== 'failed') return
+  assert.equal(event.outcome, 'BLOCKED_POLICY')
+  assert.equal(event.reason_code, 'context_preparation_failed')
+  assert.equal(event.cause_class, 'harness')
+  assert.equal(persisted[0], 'BLOCKED_POLICY')
+  assert.deepEqual(persisted[2], { code: 'context_preparation_failed', cause_class: 'harness', detail: 'workspace_revision' })
+})

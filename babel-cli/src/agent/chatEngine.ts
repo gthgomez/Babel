@@ -255,6 +255,7 @@ import type { AdmissionStore } from "../runtime/admission.js";
 
 import { captureSessionEventAppendFailure } from "./sessionEventDiagnostics.js";
 import { buildChatEngineRepoMapPreamble } from "./repoMapPreamble.js";
+import { ContextPreparationError } from './chatContextFailure.js';
 import { runChatEngineCompactionFor } from "./chatEngineCompactionHost.js";
 import {
   enforcePreambleBudget,
@@ -2181,7 +2182,7 @@ export class ChatEngine {
     } catch (error) {
       if (!this.isSubmissionCurrent(submissionGeneration)) return;
       const captured = captureSessionEventAppendFailure(error, this.engineRunDir);
-      yield this.streamFailed(captured?.operatorMessage ?? (error instanceof Error ? error.message : String(error)));
+      yield this.streamFailed(captured?.operatorMessage ?? (error instanceof Error ? error.message : String(error)), error instanceof ContextPreparationError ? error.reason : undefined);
     } finally {
       this.settleClaimOnExit(claim);
     }
@@ -2709,8 +2710,8 @@ export class ChatEngine {
   private streamDone(answer: string, extra?: ChatStreamDoneExtra): ChatEvent {
     return completeChatStream(this.terminalRuntimeInput(), answer, extra);
   }
-  private streamFailed(error: string): ChatEvent {
-    return failChatStream(this.terminalRuntimeInput(), error);
+  private streamFailed(error: string, reason?: import('./chatTerminalReason.js').TerminalReason): ChatEvent {
+    return failChatStream(this.terminalRuntimeInput(), error, reason);
   }
   private streamCancelled(): ChatEvent {
     return cancelChatStream(this.terminalRuntimeInput());
@@ -3978,6 +3979,10 @@ export class ChatEngine {
       systemPrompt,
       { stream: true },
     );
+  }
+
+  prepareCompactionGuard(): () => boolean {
+    return this.p11Authority.prepareCompactionGuard();
   }
 
   /** H1 compaction: delegates to runChatEngineCompaction (atomic commit path). */

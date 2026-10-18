@@ -729,8 +729,8 @@ test('non-compacting turns: dispatch identical to the pre-fix rebuild, install p
       );
       assert.match(
         String(blocked.last?.['error'] ?? ''),
-        /P11 context installation was blocked/,
-        'the refusal must name the P11 install failure',
+        /Could not prepare context:/,
+        'the refusal must name the context preparation failure',
       );
       assert.equal(
         provider.bodies.length,
@@ -920,8 +920,8 @@ test('negative control: install unavailable in a compacting turn fails closed, n
       );
       assert.match(
         String(outcome.last?.['error'] ?? ''),
-        /P11 context installation was blocked/,
-        'the refusal must name the P11 install failure',
+        /Could not prepare context:/,
+        'the refusal must name the context preparation failure',
       );
       assert.equal(capture.dispatches.length, 0, 'no provider dispatch may happen');
       assert.equal(provider.bodies.length, 0, 'no serialized request may leave the process');
@@ -965,7 +965,7 @@ test('negative control: install unavailable in a compacting turn fails closed, n
         'failed',
         'a compacting iteration whose install fails must refuse even with A in memory',
       );
-      assert.match(String(outcome.last?.['error'] ?? ''), /P11 context installation was blocked/);
+      assert.match(String(outcome.last?.['error'] ?? ''), /Could not prepare context:/);
       assert.equal(
         capture.dispatches.length,
         1,

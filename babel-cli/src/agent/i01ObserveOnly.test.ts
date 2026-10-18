@@ -20,6 +20,7 @@ import { runCliChatTask } from '../interactive/execution/chatCore.js';
 import { OpenCodeGoApiRunner } from '../runners/openCodeGoApi.js';
 import { babelReviewModelPolicy } from '../services/babelChatReview.js';
 import { resolveInvestigateHardCapObserveOnly } from './chatZeroWritePolicy.js';
+import { initMinimalGitProject } from '../testUtils/chatAdmissionFixture.js';
 
 const HARD_CAP = 12;
 
@@ -39,6 +40,7 @@ function makeI01Harness(readMode: 'novel' | 'unchanged' = 'novel'): I01Harness {
   for (let i = 1; i <= 60; i++) {
     writeFileSync(join(source, `fixture-${i}.txt`), 'fixture line\n');
   }
+  initMinimalGitProject(source);
   mkdirSync(join(root, 'runs'));
   const keys: Record<string, string> = {
     BABEL_EXECUTION_PROFILE: 'read_only_audit',

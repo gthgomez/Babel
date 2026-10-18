@@ -781,4 +781,6 @@ const HOST_PROCESS_SURFACE = new Set([
   'tools/auditUiTool.ts',
   'tools/mcpTransport.ts',
   'tools/ripgrep.ts',
+  // Test fixture helper: fixed-argument git init for P11/admission integration tests.
+  'testUtils/chatAdmissionFixture.ts',
 ]);
