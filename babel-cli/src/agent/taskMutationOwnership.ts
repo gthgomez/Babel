@@ -11,9 +11,14 @@ export interface TaskWorkspaceChangeClassification {
   unverifiablePaths: string[]
 }
 
+interface TaskPostImage {
+  readonly digest: string
+  readonly mode: number
+}
+
 /** Task-local post-images are evidence of ownership, never authority to write. */
 export class TaskMutationOwnership {
-  private readonly postImages = new Map<string, string>()
+  private readonly postImages = new Map<string, TaskPostImage>()
   private active = true
   readonly root: string
 
@@ -39,11 +44,12 @@ export class TaskMutationOwnership {
     if (!this.isCurrent || tx.status !== 'committed' || tx.verified === false) return
     for (const [path, digest] of Object.entries(tx.postBatchHash)) {
       const admitted = this.admitPath(path)
-      if (admitted && this.currentDigest(admitted) === digest) this.postImages.set(this.key(admitted), digest)
+      const image = admitted ? this.currentPostImage(admitted) : null
+      if (admitted && image?.digest === digest) this.postImages.set(this.key(admitted), image)
     }
   }
 
-  snapshot(paths: readonly string[]): ReadonlyMap<string, string> {
+  snapshot(paths: readonly string[]): ReadonlyMap<string, TaskPostImage> {
     return new Map(paths.flatMap(path => {
       const key = this.key(path)
       const digest = this.postImages.get(key)
@@ -52,7 +58,7 @@ export class TaskMutationOwnership {
   }
 
   /** A failed multi-file helper may restore earlier writes outside the executor. */
-  restore(snapshot: ReadonlyMap<string, string>, paths: readonly string[]): void {
+  restore(snapshot: ReadonlyMap<string, TaskPostImage>, paths: readonly string[]): void {
     if (!this.isCurrent) return
     for (const path of paths) {
       const key = this.key(path)
@@ -97,9 +103,10 @@ export class TaskMutationOwnership {
         continue
       }
       const admitted = this.admitPath(path)
-      const digest = admitted ? this.currentDigest(admitted) : null
-      if (digest === null) result.unverifiablePaths.push(path)
-      else if (digest === this.postImages.get(this.key(path))) result.taskOwnedPaths.push(path)
+      const image = admitted ? this.currentPostImage(admitted) : null
+      const expected = this.postImages.get(this.key(path))!
+      if (image === null) result.unverifiablePaths.push(path)
+      else if (image.digest === expected.digest && image.mode === expected.mode) result.taskOwnedPaths.push(path)
       else result.unexpectedPaths.push(path)
     }
     return result
@@ -124,7 +131,7 @@ export class TaskMutationOwnership {
     } catch { return null }
   }
 
-  private currentDigest(path: string): string | null {
+  private currentPostImage(path: string): TaskPostImage | null {
     let descriptor: number | undefined
     try {
       const before = lstatSync(path)
@@ -135,15 +142,16 @@ export class TaskMutationOwnership {
       // this ownership check to open and hash an unrelated credential target.
       if (!opened.isFile() || opened.nlink !== 1 || before.dev !== opened.dev
         || before.ino !== opened.ino || before.size !== opened.size
-        || before.mtimeMs !== opened.mtimeMs || before.ctimeMs !== opened.ctimeMs) return null
+        || before.mtimeMs !== opened.mtimeMs || before.ctimeMs !== opened.ctimeMs
+        || before.mode !== opened.mode) return null
       const content = readFileSync(descriptor)
       const after = fstatSync(descriptor)
       if (opened.size !== after.size || opened.mtimeMs !== after.mtimeMs
-        || opened.ctimeMs !== after.ctimeMs || after.nlink !== 1) return null
-      return createHash('sha256').update(content).digest('hex')
+        || opened.ctimeMs !== after.ctimeMs || after.nlink !== 1 || opened.mode !== after.mode) return null
+      return { digest: createHash('sha256').update(content).digest('hex'), mode: after.mode & 0o7777 }
     } catch (error) {
       return (error as NodeJS.ErrnoException).code === 'ENOENT'
-        ? WorkspaceTransactionManager.missingPathDigest() : null
+        ? { digest: WorkspaceTransactionManager.missingPathDigest(), mode: 0 } : null
     } finally {
       if (descriptor !== undefined) closeSync(descriptor)
     }

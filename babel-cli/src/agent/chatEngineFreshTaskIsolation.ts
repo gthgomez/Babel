@@ -78,8 +78,12 @@ export function isolateEngineForFreshUserSubmission(
   },
 ): void {
   retireLiveCertificationForRun(host.engineRunId)
-  host.taskMutationOwnership?.retire()
-  host.taskMutationOwnership = null
+  // Submission counters reset even for natural-language continuation/amendment.
+  // Ownership follows the durable objective, not those per-submission counters.
+  if (!runtime.objectiveContinuation) {
+    host.taskMutationOwnership?.retire()
+    host.taskMutationOwnership = null
+  }
   host.progressController.resetTaskLocal()
   host.taskCostScopeUnavailable = false
   host.criticRepairCostCapUsd = null

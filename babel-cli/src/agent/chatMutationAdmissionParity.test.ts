@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict'
 import test, { type TestContext } from 'node:test'
 import { spawn, execFileSync } from 'node:child_process'
-import { linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { AgentAction } from './actions.js'
 import type { ToolContext } from '../localTools.js'
@@ -173,6 +173,49 @@ if (!isSyntheticProviderFixtureReady()) {
     const last = await f.write('four\n')
     assert.equal(last.policyBlocked, false, last.results[0]?.stderr)
     assert.equal(readFileSync(join(f.root, 'notes.txt'), 'utf8'), 'four\n')
+  })
+
+  for (const gesture of ['continue', 'also update the second note']) {
+    test(`objective continuation preserves owned edits: ${gesture}`, async t => {
+      const f = fixture(t)
+      const engine = new ChatEngine({ task: 'Edit notes.txt', projectRoot: f.root, model: 'glm-5.3-flash' })
+      t.after(() => engine.closeAdmissionStore())
+      const submit = (userInput: string) => {
+        const prepared = engine.prepareUserSubmission({ userInput })
+        const allowance = engine.prepareSubmissionAllowance(prepared, 'fixture-task')
+        engine.applyPreparedUserSubmission(prepared, { allowance })
+        return prepared
+      }
+      submit('Edit notes.txt')
+      const scope = () => (engine as unknown as { buildBaseExecutionContext(): ExecutionContext }).buildBaseExecutionContext()
+      const write = (content: string) => runWithExecutionContext(scope(), () => executeActionWithPolicy(
+        { type: 'write_file', path: 'notes.txt', content }, 'workspace_write', f.context,
+        { executor: f.executor, ...resolveIsolationBrokerFlags(f.root) },
+      ))
+      assert.equal((await write('owned\n')).results[0]?.exit_code, 0)
+      const owner = scope().mutationOwnership
+      const next = submit(gesture)
+      assert.equal(next.objectiveDisposition, 'preserve')
+      assert.equal(next.runtime.continuedTask, false)
+      assert.equal(scope().mutationOwnership, owner)
+      assert.equal((await write('continued\n')).policyBlocked, false)
+      assert.equal(readFileSync(join(f.root, 'notes.txt'), 'utf8'), 'continued\n')
+    })
+  }
+
+  test('external permission changes do not inherit task-owned content admission', async t => {
+    const f = fixture(t)
+    assert.equal((await f.write('owned\n')).policyBlocked, false)
+    const path = join(f.root, 'notes.txt')
+    const before = statSync(path).mode
+    // Windows supports the read-only bit; POSIX also reports executable drift.
+    chmodSync(path, process.platform === 'win32' ? 0o444 : (before & 0o777) ^ 0o111)
+    try {
+      assert.notEqual(statSync(path).mode, before)
+      assert.deepEqual(f.ownership()?.classifyChanges().unexpectedPaths.map(value => relative(path, value)), [''])
+      assert.equal((await f.write('overwrite\n')).policyBlocked, true)
+      assert.equal(readFileSync(path, 'utf8'), 'owned\n')
+    } finally { chmodSync(path, before) }
   })
 
   for (const tool of ['write', 'replace', 'patch'] as const) {
