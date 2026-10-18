@@ -539,6 +539,15 @@ export function rebuildProviderMessagesFromEvents(
     }
   }
 
+  // This replaceable advisory is context, not a model reply to continue.
+  // A trailing assistant snapshot can become a native completion prefill.
+  // Keep its existing role/provenance without interleaving a tool-call cycle.
+  const workingStateIndex = messages.findIndex((message) => message.name === 'working_state');
+  if (workingStateIndex >= 0) {
+    const [workingState] = messages.splice(workingStateIndex, 1);
+    const historyStart = messages.findIndex((message) => message.role !== 'system');
+    messages.splice(historyStart < 0 ? messages.length : historyStart, 0, workingState!);
+  }
   return messages;
 }
 

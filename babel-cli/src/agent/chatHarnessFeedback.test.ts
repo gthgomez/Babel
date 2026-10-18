@@ -5,10 +5,59 @@ import { join } from 'node:path'
 import { after, before, test } from 'node:test'
 
 import { ChatEngine, type ChatEvent } from './chatEngine.js'
-import { rebuildProviderMessagesFromEvents, type ThreadEvent } from './threadEventLog.js'
+import {
+  appendThreadEvent, createThreadEventLog, recordAssistantMessage,
+  recordAssistantToolCalls, recordToolResult, recordUserMessage,
+  rebuildProviderMessagesFromEvents, type ThreadEvent,
+} from './threadEventLog.js'
 import type { ProviderMessage } from '../runners/base.js'
 
 const roots: string[] = []
+
+for (const compacted of [false, true]) {
+  test(`working-state context preserves tool cycles without a trailing assistant prefill (compacted=${compacted})`, () => {
+    const log = createThreadEventLog('advisory-placement')
+    if (compacted) {
+      appendThreadEvent(log, {
+        kind: 'compaction_capsule', turn_id: 'turn-1', content: 'Accepted task and policy',
+        preserved_tool_call_ids: [],
+      })
+    }
+    const metadata = { name: 'working_state', provenance: 'mixed' as const, authoritative: false }
+    recordUserMessage(log, 'turn-1', 'Implement and verify the requested change.')
+    recordAssistantMessage(log, 'turn-1', 'OLDER_SNAPSHOT', metadata)
+    const initial = rebuildProviderMessagesFromEvents(log, { systemPrompt: 'Controller policy' })
+    assert.equal(initial.at(-1)?.role, 'user')
+    for (const tool of ['read_file', 'test_run']) {
+      recordAssistantToolCalls(log, 'turn-1', 'Using tools', [{
+        id: tool, type: 'function', function: { name: tool, arguments: '{}' },
+      }])
+      recordToolResult(log, 'turn-1', {
+        tool_call_id: tool, tool_name: tool, content: `${tool}: successful`, exit_code: 0,
+      })
+    }
+    const boundary = log.events.at(-1)!.seq
+    recordAssistantMessage(log, 'turn-1', 'CURRENT_SNAPSHOT', metadata)
+    const durable = JSON.stringify(log)
+    const messages = rebuildProviderMessagesFromEvents(log, { systemPrompt: 'Controller policy' })
+    assert.equal(JSON.stringify(log), durable, 'projection cannot rewrite durable history')
+    const snapshots = messages.filter(message => message.name === 'working_state')
+    assert.deepEqual(snapshots, [{ role: 'assistant', content: 'CURRENT_SNAPSHOT', ...metadata }])
+    const contextIndex = messages.indexOf(snapshots[0]!)
+    assert.ok(messages.slice(0, contextIndex).every(message => message.role === 'system'))
+    assert.equal(messages[contextIndex + 1]?.role, 'user')
+    assert.deepEqual(messages.slice(contextIndex + 1).map(message => [message.role, message.content]), [
+      ['user', 'Implement and verify the requested change.'],
+      ['assistant', 'Using tools'], ['tool', 'read_file: successful'],
+      ['assistant', 'Using tools'], ['tool', 'test_run: successful'],
+    ])
+    assert.deepEqual(messages.filter(message => message.tool_calls).flatMap(message => message.tool_calls!.map(call => call.id)), ['read_file', 'test_run'])
+    assert.deepEqual(messages.filter(message => message.role === 'tool').map(message => message.tool_call_id), ['read_file', 'test_run'])
+    assert.equal(messages.at(-1)?.role, 'tool')
+    assert.deepEqual(rebuildProviderMessagesFromEvents(JSON.parse(durable), { systemPrompt: 'Controller policy' }), messages)
+    assert.equal(rebuildProviderMessagesFromEvents(log, { upToSeq: boundary }).find(message => message.name === 'working_state')?.content, 'OLDER_SNAPSHOT')
+  })
+}
 const managedEnv = ['BABEL_CHAT_MAX_COST', 'BABEL_RUNS_DIR', 'BABEL_CONFIG_DIR', 'BABEL_STATE_DIR', 'BABEL_CACHE_DIR'] as const
 let previousEnv: Record<string, string | undefined> = {}
 

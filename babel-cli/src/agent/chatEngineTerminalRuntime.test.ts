@@ -238,6 +238,17 @@ test('stream and callback use the same inspected no-change evidence rule', t => 
   if(stream.type==='done') assert.equal(stream.outcome,'NO_CHANGE_REQUIRED')
 })
 
+test('callback projection preserves an already canonical no-change terminal', t => {
+  const input = terminalInput(t)
+  input.snapshot.context.options.task = 'Replay the completed canonical task.'
+  input.snapshot.context.acceptedOperation = 'MUTATING'
+  const result = assembleChatResult(input, 'completed', {}, 'Complete.', undefined, 'NO_CHANGE_REQUIRED')
+  assert.equal(result.status, 'completed')
+  assert.equal(result.outcome, 'NO_CHANGE_REQUIRED')
+  assert.equal(assembleChatResult(input, 'completed', {}, 'Complete.').outcome, 'AGENT_FAILURE',
+    'missing canonical evidence still fails when computing a new outcome')
+})
+
 
 for (const surface of ['stream','callback'] as const) for (const changed of [false,true])
 test(`no-change currency is checked before ${surface} normalization: changed=${changed}`, async t => {

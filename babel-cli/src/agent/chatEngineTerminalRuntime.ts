@@ -634,7 +634,9 @@ export function assembleChatResult(
       hasMutation,
       planMode: snapshot.context.executionProfile === 'plan',
     })
-    outcome = normalizeInspectedNoChange(snapshot, outcome)
+    // The stream owner already normalized a supplied canonical terminal.
+    // Only infer evidence here when callback assembly computes the outcome.
+    if (knownOutcome === undefined) outcome = normalizeInspectedNoChange(snapshot, outcome)
   }
   const planCompletion =
     snapshot.context.executionProfile === 'plan' && finalStatus === 'completed'
