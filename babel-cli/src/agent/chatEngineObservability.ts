@@ -3,7 +3,8 @@
  * Keeps size pressure off chatEngine.ts — prefer growing this module.
  */
 
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, mkdirSync, writeFileSync } from 'node:fs';
+import { parseThreadEventLog, rebuildProviderMessagesFromEvents } from './threadEventLog.js';
 import { join } from 'node:path';
 import type { ChatMessage } from './chatToolDefinitions.js';
 import { DeepInfraApiRunner } from '../runners/deepInfraApi.js';
@@ -826,6 +827,11 @@ export function outcomeFromReasonCode(
   code: TerminalReasonCode | undefined,
 ): TerminalOutcome | undefined {
   switch (code) {
+    case 'native_tool_protocol_invalid':
+    case 'response_evidence_invalid':
+      return 'AGENT_FAILURE';
+    case 'cost_accounting_incomplete':
+      return 'INFRA_FAILURE';
     case 'recovery_exhausted':
     case 'localization_exhausted':
     case 'permission_denied':
@@ -1065,9 +1071,24 @@ export async function persistTranscriptToDisk(
   runDir: string,
   conversation: ChatMessage[],
 ): Promise<void> {
-  const { writeFile, mkdir } = await import('node:fs/promises');
-  const { join } = await import('node:path');
-  await mkdir(runDir, { recursive: true });
+  persistChatTranscript(runDir, conversation);
+}
+
+/** Single terminal writer; canonical native history wins over adapter state. */
+export function persistChatTranscript(runDir: string, fallback: ChatMessage[]): void {
+  const eventPath = join(runDir, 'thread_events.json');
+  const conversation = existsSync(eventPath)
+    ? rebuildProviderMessagesFromEvents(parseThreadEventLog(readFileSync(eventPath, 'utf8')))
+      .filter(message => message.role !== 'system')
+    : fallback;
+  mkdirSync(runDir, { recursive: true });
   const lines = conversation.map((m) => JSON.stringify(m)).join('\n') + '\n';
-  await writeFile(join(runDir, 'transcript.jsonl'), lines, 'utf-8');
+  writeFileSync(join(runDir, 'transcript.jsonl'), lines, 'utf-8');
+}
+
+/** Compatibility projection for CLI/UI consumers, never a resume authority. */
+export function readChatTranscript(runDir: string | undefined): ChatMessage[] {
+  if (!runDir || !existsSync(join(runDir, 'transcript.jsonl'))) return [];
+  return readFileSync(join(runDir, 'transcript.jsonl'), 'utf8').split('\n')
+    .filter(Boolean).map(line => JSON.parse(line) as ChatMessage);
 }

@@ -32,6 +32,7 @@ import type { ExploreFuseResult } from './chatZeroWritePolicy.js'
 import type { PolicyEventLog } from './policyEventLog.js'
 import type { TerminalReason } from './chatTerminalReason.js'
 import type { ObservabilityHandles } from './chatEngineObservability.js'
+import type { ChatStreamDoneExtra } from './chatEngineTerminalRuntime.js'
 
 import type { RepetitionDetector } from './repetitionDetector.js'
 /** Public chat submission, event, and result contracts. */
@@ -642,6 +643,7 @@ export interface ChatEngineStreamingLoopHost {
   lastRequestModelId: string | null
   lastRequestPromptTokens: number | null
   readonly lastVerifierReceipt: BoundChatVerifierReceipt | null
+  readonly executedVerifierLedger: BoundChatVerifierReceipt[]
   readonly limits: ChatEngineLimits
   readonly logicalTurnToolPolicy: import('./codingLoop/index.js').OneShotPolicySnapshot<
     import('./codingLoop/index.js').NextTurnToolPolicy
@@ -726,12 +728,7 @@ export interface ChatEngineStreamingLoopHost {
   readonly streamCancelled: () => ChatEvent
   readonly streamDone: (
     answer: string,
-    extra?: {
-      blockedReport?: BlockedReport | null
-      verifierTampered?: boolean
-      criticReceipt?: DiffCriticVerdict | null
-      reason?: TerminalReason
-    },
+    extra?: ChatStreamDoneExtra,
   ) => ChatEvent
   readonly streamFailed: (error: string) => ChatEvent
   readonly synthesizeAnswer: (

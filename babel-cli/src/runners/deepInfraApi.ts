@@ -1825,6 +1825,7 @@ export class DeepInfraApiRunner implements LlmRunner {
         const seenToolIds = new Set<string>();
         for (const [callIndex, acc] of pendingToolCalls) {
           let callId = acc.id.trim();
+          const idWasNormalized = callId !== acc.id || !callId || seenToolIds.has(callId);
           if (!callId || seenToolIds.has(callId)) {
             const baseId = `tool_call_${callIndex}`;
             let suffix = 0;
@@ -1889,7 +1890,7 @@ export class DeepInfraApiRunner implements LlmRunner {
             };
             return;
           }
-          yield { type: 'tool_use', id: callId, name: acc.name, input };
+          yield { type: 'tool_use', id: callId, name: acc.name, input, ...(idWasNormalized ? {idWasNormalized:true as const} : {}) };
         }
         yield { type: 'done', finishReason: finishReason ?? 'tool_calls' };
       } else {

@@ -1076,6 +1076,7 @@ export class CompactionManager {
  * ambient OpenRouter/DeepInfra keys.
  */
 export function resolveCompactionSummarizationProvider(input: {
+  pinSelection?: boolean;
   chatProvider?: string | null;
   compactionModel: string;
 }): LlmCompactionProvider | null {
@@ -1084,7 +1085,7 @@ export function resolveCompactionSummarizationProvider(input: {
   // Bootstrap may reload auxiliary overrides from a private profile after the
   // launcher sanitizes its environment. Desktop routes use only their admitted
   // provider endpoint and credential, including after that bootstrap.
-  if (!process.env['BABEL_DESKTOP_PROVIDER'] && explicitKey && explicitBase) {
+  if (!input.pinSelection && !process.env['BABEL_DESKTOP_PROVIDER'] && explicitKey && explicitBase) {
     return {
       apiKey: explicitKey,
       baseUrl: explicitBase,
@@ -1122,10 +1123,12 @@ export function resolveCompactionSummarizationProvider(input: {
 }
 
 export function resolveCompactionModelId(input: {
+  pinSelection?: boolean;
   explicitModel?: string | null;
   providerModelId?: string | null;
   family?: string | null;
 }): string {
+  if (input.pinSelection && input.providerModelId?.trim()) return input.providerModelId.trim();
   if (process.env['BABEL_DESKTOP_PROVIDER'] && input.providerModelId?.trim()) return input.providerModelId.trim();
   if (input.explicitModel && input.explicitModel.trim()) {
     return input.explicitModel.trim();

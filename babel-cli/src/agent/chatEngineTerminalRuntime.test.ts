@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, existsSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test, type TestContext } from 'node:test'
@@ -12,6 +12,7 @@ import { TurnRoutingReceiptLog } from './turnRoutingReceipt.js'
 import { ChatTurnTelemetryCollector } from './chatTurnTelemetry.js'
 import {
   cancelChatStream,
+  assembleChatResult,
   completeChatStream,
   failChatStream,
   type ChatTerminalInput,
@@ -103,6 +104,32 @@ function terminalInput(t: TestContext): ChatTerminalInput {
   }
 }
 
+test('an implementation narrowed to read-only cannot declare no-change success without acceptance evidence', t => {
+  const input = terminalInput(t)
+  input.snapshot.context.options.task = 'Make the formatter emit accessible markup.'
+  input.snapshot.outcome.readOnly = true
+  input.snapshot.outcome.hasMutation = false
+  input.snapshot.outcome.lastVerifierReceipt = null
+  const event = completeChatStream(input, 'I will update the implementation.')
+  assert.equal(existsSync(join(input.snapshot.context.engineRunDir, 'transcript.jsonl')), true)
+  assert.equal(event.type, 'done')
+  if (event.type === 'done') assert.equal(event.outcome, 'AGENT_FAILURE')
+})
+
+test('an accounting stop is not projected as measured budget exhaustion', t => {
+  const input = terminalInput(t)
+  input.snapshot.outcome.budgetExceeded = true
+  input.snapshot.outcome.terminatingLimiter = 'child_exhaustion'
+  input.snapshot.outcome.terminalLimiterReason = 'COST_ACCOUNTING_INCOMPLETE: unresolved charge'
+  const event = completeChatStream(input, 'Spending stopped until accounting is reconciled.')
+  assert.equal(event.type, 'done')
+  if (event.type === 'done') {
+    assert.equal(event.outcome, 'INFRA_FAILURE')
+    assert.equal(event.reason_code, 'cost_accounting_incomplete')
+    assert.equal(event.status, 'failed')
+  }
+})
+
 test('keeps a read-only hard-cap outcome coherent with its structured budget reason', (t) => {
   const input = terminalInput(t)
   input.snapshot.outcome.terminatingLimiter = 'turns'
@@ -174,4 +201,72 @@ test('reports the cancelled turn telemetry and clears a prior record when no col
   assert.ok(withoutCollector.type === 'cancelled')
   assert.equal(withoutCollector.turnTelemetry, undefined)
   assert.equal(input.snapshot.presentation.lastTurnTelemetry, null)
+})
+
+test('failed persistence emits a failure while successful completion still requires its durable terminal', t => {
+  const input = terminalInput(t)
+  input.effects.finalizeTurn = () => { throw new Error('session event persistence failed: fixture primary unavailable') }
+  const failed = failChatStream(input, 'session event persistence failed: fixture primary unavailable')
+  assert.equal(failed.type, 'failed')
+  if (failed.type === 'failed') assert.match(failed.error, /session event persistence failed/)
+  assert.throws(() => completeChatStream(input, 'Finished.'), /session event persistence failed/)
+  assert.throws(() => failChatStream(input, 'unrelated failure'), /session event persistence failed/)
+  input.effects.finalizeTurn = () => { throw new Error('unrelated finalizer bug') }
+  assert.throws(() => failChatStream(input, 'session event persistence failed: fixture'), /unrelated finalizer bug/)
+})
+
+test('a current read-only submission does not inherit the initial task change classification', t => {
+  const input = terminalInput(t)
+  input.snapshot.context.options.task = 'Fix the original bug.'
+  input.snapshot.context.acceptedOperation = 'READ_ONLY'
+  const result = completeChatStream(input, 'Here is the requested inventory.')
+  assert.equal(result.type, 'done')
+  if (result.type === 'done') assert.equal(result.outcome, 'NO_CHANGE_REQUIRED')
+})
+
+
+test('stream and callback use the same inspected no-change evidence rule', t => {
+  const input = terminalInput(t)
+  input.snapshot.context.options.task = 'Fix the missing behavior.'
+  input.snapshot.context.acceptedOperation = 'MUTATING'
+  const callback = () => assembleChatResult(input,'completed',{},'The task is complete.')
+  assert.equal(callback().outcome,'AGENT_FAILURE')
+  input.snapshot.evidence.observability.toolCallLog.push({tool:'read_file',target:'source.js',index:0,exit_code:0,detail:'The requested behavior is present.'})
+  assert.equal(callback().outcome,'NO_CHANGE_REQUIRED')
+  const stream = completeChatStream(input,'The behavior is already present.')
+  assert.equal(stream.type,'done')
+  if(stream.type==='done') assert.equal(stream.outcome,'NO_CHANGE_REQUIRED')
+})
+
+test('callback projection preserves an already canonical no-change terminal', t => {
+  const input = terminalInput(t)
+  input.snapshot.context.options.task = 'Replay the completed canonical task.'
+  input.snapshot.context.acceptedOperation = 'MUTATING'
+  const result = assembleChatResult(input, 'completed', {}, 'Complete.', undefined, 'NO_CHANGE_REQUIRED')
+  assert.equal(result.status, 'completed')
+  assert.equal(result.outcome, 'NO_CHANGE_REQUIRED')
+  assert.equal(assembleChatResult(input, 'completed', {}, 'Complete.').outcome, 'AGENT_FAILURE',
+    'missing canonical evidence still fails when computing a new outcome')
+})
+
+
+for (const surface of ['stream','callback'] as const) for (const changed of [false,true])
+test(`no-change currency is checked before ${surface} normalization: changed=${changed}`, async t => {
+  const input=terminalInput(t)
+  const projectRoot=mkdtempSync(join(tmpdir(),'babel-nochange-currency-'))
+  t.after(()=>rmSync(projectRoot,{recursive:true,force:true}))
+  writeFileSync(join(projectRoot,'source.js'),'export const value = 1;\n')
+  const {captureChatVerifierReceipt}=await import('./chatEngineVerifierAdapter.js')
+  const receipt=await captureChatVerifierReceipt({projectRoot,command:'npm test',exitCode:0,
+    summary:'fixture green',mutationPaths:['source.js'],stdout:'# tests 1\n# pass 1\n# fail 0\n'})
+  assert.ok(receipt)
+  assert.equal(receipt.stale,false)
+  input.snapshot.context.options.projectRoot=projectRoot
+  input.snapshot.context.options.task='Fix source.js.'
+  input.snapshot.context.acceptedOperation='MUTATING'
+  input.snapshot.outcome.lastVerifierReceipt=receipt
+  if(changed)writeFileSync(join(projectRoot,'source.js'),'export const value = 2;\n')
+  const result=surface==='stream'?completeChatStream(input,'No change required.'):
+    assembleChatResult(input,'completed',{},'No change required.')
+  assert.equal('outcome' in result?result.outcome:undefined,changed?'AGENT_FAILURE':'NO_CHANGE_REQUIRED')
 })

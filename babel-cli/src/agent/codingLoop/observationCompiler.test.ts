@@ -196,3 +196,26 @@ describe('observation compiler (shipped formatChatToolObservation path)', () => 
     assert.equal(ts.failures[0]?.line, 12)
   })
 })
+
+test('Node 22 TAP stack frames retain failure location and column without an at prefix', () => {
+  const stdout = [
+    'TAP version 13',
+    'not ok 1 - busy style',
+    '  ---',
+    '  error: |-',
+    '    The input did not match the regular expression.',
+    '  code: ERR_ASSERTION',
+    '  stack: |-',
+    '    TestContext.<anonymous> (file:///tmp/babel-tap/style.test.js:3:127)',
+    '    Test.runInAsyncScope (node:async_hooks:214:14)',
+    '  ...',
+  ].join('\n')
+  const compiled = compileObservation({tool:'test_run',target:'npm test',exitCode:1,
+    stdout:'\u001b[31m'+stdout+'\u001b[0m',stderr:''})
+  assert.equal(compiled.parserName,'node_trace')
+  assert.equal(compiled.failures[0]?.file,'file:///tmp/babel-tap/style.test.js')
+  assert.equal(compiled.failures[0]?.line,3)
+  assert.equal(compiled.failures[0]?.column,127)
+  assert.equal(compiled.failures[0]?.test,'busy style')
+  assert.match(compiled.stdoutHead,/\u001b\[31m/,'raw presentation retains the captured evidence')
+})

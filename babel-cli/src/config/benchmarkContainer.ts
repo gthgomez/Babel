@@ -488,7 +488,7 @@ export function inspectBenchmarkContainerRuntime(
   // Defense-in-depth: validate every command name before passing it to
   // /bin/sh -lc.  The list is currently hardcoded, but this guard prevents
   // injection if it ever becomes dynamic.
-  const COMMAND_NAME_RE = /^[a-zA-Z0-9._-]+$/;
+  const COMMAND_NAME_RE = /^[a-zA-Z0-9._+-]+$/;
   for (const cmd of commands) {
     if (!COMMAND_NAME_RE.test(cmd)) {
       return {
@@ -522,7 +522,7 @@ export function inspectBenchmarkContainerRuntime(
 
   const result = spawnSync(
     'docker',
-    ['run', '--rm', '--network', 'none', image, '/bin/sh', '-lc', script],
+    ['run', '--rm', '--pull=never', '--network', 'none', image, '/bin/sh', '-lc', script],
     {
       encoding: 'utf-8',
       timeout: 120_000,
@@ -628,9 +628,11 @@ export function formatBenchmarkRuntimeInventoryPromptLines(
   inventory: BenchmarkRuntimeInventory,
   allowedCommandBases: readonly string[],
 ): string[] {
+  const executionEnvironment = 'Execution environment: Linux Docker shell at /app. Host Windows paths/preflight do not select shell syntax; use cat for file content, not Windows type.';
   if (inventory.status !== 'available') {
     return [
       `Benchmark runtime inventory: unavailable for image ${inventory.dockerImage || '<none>'}.`,
+      executionEnvironment,
       `Inventory error: ${(inventory.stderr || 'unknown failure').trim().slice(0, 240)}`,
       'Do not assume optional runtime tools exist. Prefer source-only/file_write solutions and use executor errors as evidence if a command fails.',
     ];
@@ -649,6 +651,7 @@ export function formatBenchmarkRuntimeInventoryPromptLines(
 
   return [
     `Benchmark runtime inventory for Docker image ${inventory.dockerImage}:`,
+    executionEnvironment,
     `  - usable command bases: ${usable.length > 0 ? usable.join(', ') : '(none)'}`,
     `  - missing in container: ${missing.length > 0 ? missing.join(', ') : '(none)'}`,
     `  - present but not executor-allowlisted: ${blocked.length > 0 ? blocked.join(', ') : '(none)'}`,

@@ -337,8 +337,10 @@ test('R1 repair plan rejects a repeated edit and admits one changed scoped edit'
   }
 });
 
-test('R1 resume restores bound evidence and refuses a newer unbound red verifier', () => {
-  const engine = new ChatEngine({ task: 'repair parser', projectRoot: process.cwd() });
+test('R1 resume restores bound evidence and refuses a newer unbound red verifier', (t) => {
+  const fixture = recoveryInspectionFixture();
+  t.after(() => fixture.cleanup());
+  const { engine } = fixture;
   const binding = (engine as any).currentRecoveryBinding();
   assert.ok(binding);
   let state = applyWorkingStateEvent(createWorkingState('repair parser'), {
@@ -369,8 +371,10 @@ test('R1 resume restores bound evidence and refuses a newer unbound red verifier
   assert.equal((engine as any).workingState.recoveryGate.binding, undefined);
 });
 
-test('R1 cold resume respects fresh and continued task boundaries without an early snapshot flush', () => {
-  const engine = new ChatEngine({ task: 'repair parser', projectRoot: process.cwd() });
+test('R1 cold resume respects fresh and continued task boundaries without an early snapshot flush', (t) => {
+  const fixture = recoveryInspectionFixture();
+  t.after(() => fixture.cleanup());
+  const { engine } = fixture;
   const binding = (engine as any).currentRecoveryBinding();
   assert.ok(binding);
   let state = applyWorkingStateEvent(createWorkingState('repair parser'), {

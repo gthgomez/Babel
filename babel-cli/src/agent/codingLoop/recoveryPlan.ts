@@ -13,12 +13,12 @@ import {
 
 export const RecoveryPlanProposalSchema = z.object({
   schemaVersion: z.literal(1),
-  failureSignature: z.string().min(1),
-  workspaceRevision: z.string().min(1),
+  failureSignature: z.string().min(1).describe('Copy working_state.recovery_failure exactly.'),
+  workspaceRevision: z.string().min(1).describe('Copy working_state.recovery_revision exactly.'),
   hypothesisClass: z.enum(['logic', 'data_flow', 'interface', 'test_expectation', 'configuration']),
-  targetIdentities: z.array(z.string().min(1)).min(1).max(4),
-  actionFamily: z.enum(['write_file', 'str_replace', 'apply_patch']),
-  criterionId: z.string().min(1),
+  targetIdentities: z.array(z.string().min(1)).min(1).max(4).describe('Exact repository-relative file paths changed by this edit, without :symbol suffixes. Every path must be a current failing target.'),
+  actionFamily: z.enum(['write_file', 'str_replace', 'apply_patch']).describe('Must equal the concrete edit tool used by this call.'),
+  criterionId: z.string().min(1).describe('Copy the exact verifier command/identity from working_state.recovery_criterion_id (also last_verifier_identity). Do not use the test name, assertion label, or failure parser name.'),
   supportingObservationIds: z.array(z.string().length(16)).min(1).max(8),
 })
 
@@ -92,13 +92,15 @@ export function admitRecoveryPlan(
     return { admitted: false, state, reason: 'unbound_or_missing_plan' }
   }
   const plan = parsed.data
-  if (plan.failureSignature !== gate.failureSignature ||
-      plan.workspaceRevision !== gate.binding.workspaceRevision ||
-      plan.criterionId !== state.lastVerifier?.identity ||
-      plan.actionFamily !== actual.actionFamily ||
-      !sameTargets(plan.targetIdentities, actual.targetIdentities) ||
-      plan.targetIdentities.some((target) => !targetMatchesGate(target, gate.failingTargets))) {
-    return { admitted: false, state, reason: 'plan_does_not_match_candidate_or_edit' }
+  if (plan.criterionId !== state.lastVerifier?.identity) {
+    return { admitted: false, state, reason: 'criterion_identity_mismatch' }
+  }
+  if (plan.failureSignature !== gate.failureSignature) return { admitted: false, state, reason: 'failure_signature_mismatch' }
+  if (plan.workspaceRevision !== gate.binding.workspaceRevision) return { admitted: false, state, reason: 'workspace_revision_mismatch' }
+  if (plan.actionFamily !== actual.actionFamily) return { admitted: false, state, reason: 'action_family_mismatch' }
+  if (!sameTargets(plan.targetIdentities, actual.targetIdentities)) return { admitted: false, state, reason: 'target_identity_mismatch' }
+  if (plan.targetIdentities.some((target) => !targetMatchesGate(target, gate.failingTargets))) {
+    return { admitted: false, state, reason: 'target_outside_failure_scope' }
   }
   const known = new Set((gate.observedKeys ?? []).map(recoveryObservationId))
   if (plan.supportingObservationIds.some((id) => !known.has(id)) ||
@@ -126,4 +128,22 @@ export function admitRecoveryPlan(
     admitted: true,
     state: applyWorkingStateEvent(state, { type: 'recovery_plan_admitted', plan: admittedPlan }),
   }
+}
+
+/** Controller facts explain a rejected proposal without changing its authority. */
+export function formatRecoveryPlanRejection(state: WorkingState, reason?: string, actual?: ActualRecoveryEdit | null): string {
+  if (state.recoveryGate?.permitConsumed || state.recoveryGate?.planAdmitted) return 'The one-use recovery plan is consumed. Rerun the verifier before proposing another repair.'
+  if (reason === 'criterion_identity_mismatch') {
+    const expected = state.lastVerifier?.identity
+    if (!expected) return 'criterion_identity_mismatch: no authoritative verifier identity is available; rerun the verifier before proposing a repair.'
+    return `criterion_identity_mismatch criterion_id_expected=${JSON.stringify(expected)}. Copy that exact verifier command into repair_plan.criterionId, not the test label. Changing edit tools or delegating cannot bypass this gate.`
+  }
+  if (reason === 'target_identity_mismatch' && actual) return `target_identity_mismatch target_identities_expected=${JSON.stringify(actual.targetIdentities)}. Copy the exact repository-relative file paths into repair_plan.targetIdentities, without :symbol suffixes. This does not admit a path outside the failing scope.`
+  if (reason === 'failure_signature_mismatch') return 'failure_signature_mismatch: copy recovery_failure exactly into repair_plan.failureSignature.'
+  if (reason === 'workspace_revision_mismatch') return 'workspace_revision_mismatch: copy recovery_revision exactly into repair_plan.workspaceRevision.'
+  if (reason === 'action_family_mismatch') return `action_family_mismatch: repair_plan.actionFamily must equal the actual edit tool ${actual?.actionFamily ?? '(write_file, str_replace or apply_patch)'}.`
+  if (reason === 'target_outside_failure_scope') return 'target_outside_failure_scope: repair only a target corroborated by the current failing assertion and fresh source read. Rerun the verifier before investigating another failure.'
+  if (reason === 'unsupported_observation') return 'unsupported_observation: copy only the exact current recovery_observation_keys into supportingObservationIds, without duplicates or invented IDs.'
+  if (reason === 'repeated_failed_edit' || reason === 'repeated_plan_or_edit') return `${reason}: repeating the same edit or changing hypothesis text does not establish a different repair.`
+  return 'Submit a concrete write_file, str_replace or apply_patch with a scoped repair_plan supported by current observation IDs and the actual edit. Copy recovery_criterion_id exactly; shell commands and delegation cannot bypass this gate.'
 }

@@ -153,3 +153,9 @@ export function captureSessionEventAppendFailure(
     diagnosticPath,
   }
 }
+
+/** Only the canonical strict primary-log flush uses this error prefix. */
+export function isSessionEventPersistenceFailure(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : error;
+  return typeof message === 'string' && message.startsWith('session event persistence failed: ');
+}

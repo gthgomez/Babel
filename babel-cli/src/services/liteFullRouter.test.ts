@@ -235,3 +235,53 @@ test('resolveDailyProfile honors BABEL_DAILY_PROFILE=terminal', () => {
     }
   }
 });
+test('inferIntentContract: a determinate artifact prohibition does not suppress an implementation task', () => {
+  const scoped = inferIntentContract(
+    'The test in math.test.js fails because add() returns the wrong value. Fix the implementation in math.js so every test passes. Do not modify the test file.',
+  );
+  assert.equal(scoped.no_write_requested, false);
+  assert.equal(scoped.task_kind, 'implementation');
+  assert.equal(scoped.write_intent, true);
+});
+
+test('inferIntentContract: a standalone determinate prohibition stays read-only', () => {
+  const standalone = inferIntentContract('Do not modify the test file.');
+  assert.equal(standalone.no_write_requested, true);
+  assert.equal(standalone.write_intent, false);
+});
+
+test('inferIntentContract: prohibited artifact names and report nouns never authorize writes', () => {
+  for (const task of [
+    'Do not modify the update script.',
+    'Do not modify the repair module.',
+    'Do not modify the file for the update.',
+    'Do not modify the script in config.update.js.',
+    'Report the fix. Do not modify the test file.',
+    'Explain the repair. Do not modify the test file.',
+    'Do not modify the file system. Fix the bug.',
+    'Do not modify the file-system. Fix src/main.js.',
+    'Do not modify the file_system. Fix src/main.js.',
+    'Do not modify the entire file system. Fix src/main.js.',
+    'Do not modify the test file or implement the update.',
+    'Do not modify src/update.js.',
+  ]) {
+    const intent = inferIntentContract(task);
+    assert.equal(intent.no_write_requested, true, task);
+    assert.equal(intent.write_intent, false, task);
+  }
+});
+
+test('inferIntentContract: independent implementation survives scoped prohibitions in either order', () => {
+  for (const task of [
+    'Do not modify the update script. Fix src/main.js.',
+    'Fix src/main.js. Do not modify the update script.',
+    'Do not modify the script in config.update.js. Please fix src/main.js.',
+    'Do not modify src/update.js. Fix src/main.js.',
+    'Fix src/main.js. Do not modify src/config.js. Do not modify the test file.',
+    'Do not modify the test file. Fix src/main.js. Do not modify src/config.js.',
+  ]) {
+    const intent = inferIntentContract(task);
+    assert.equal(intent.no_write_requested, false, task);
+    assert.equal(intent.write_intent, true, task);
+  }
+});

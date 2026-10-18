@@ -434,17 +434,11 @@ describe('D01/D02 effective-operation policy', () => {
       'review this code: ```typescript\nconst x = 1;\n```',
     ];
     for (const prompt of prompts) {
-      // The legacy text-intent classifier still says `execute`; TaskShape is
-      // authoritative and says READ_ONLY. Finalization must follow TaskShape.
+      // Finalization follows the accepted operation regardless of legacy intent.
       assert.equal(
         analyzeTaskShape(prompt).operation,
         'READ_ONLY',
         `shape READ_ONLY for "${prompt}"`,
-      );
-      assert.equal(
-        ChatEngine.classifyChatTaskIntent(prompt),
-        'execute',
-        `legacy intent execute for "${prompt}"`,
       );
       assert.equal(
         runtimeFor(prompt).effectiveOperation,

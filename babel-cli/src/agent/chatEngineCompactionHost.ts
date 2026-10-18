@@ -115,12 +115,14 @@ export async function runChatEngineCompactionFor(
     ownerGeneration,
   };
   const compactionModelId = resolveCompactionModelId({
+    pinSelection: engine.options.model !== undefined || engine.options.providerPolicy !== undefined,
     ...(engine.modelPolicy?.providerModelId
       ? { providerModelId: engine.modelPolicy.providerModelId }
       : {}),
     ...(engine.modelPolicy?.family ? { family: engine.modelPolicy.family } : {}),
   });
   const summarizationProvider = resolveCompactionSummarizationProvider({
+    pinSelection: engine.options.model !== undefined || engine.options.providerPolicy !== undefined,
     chatProvider: engine.modelPolicy?.provider ?? null,
     compactionModel: compactionModelId,
   });
@@ -232,7 +234,8 @@ export async function runChatEngineCompactionFor(
     textToolsReserve: 1024,
     forceCompaction,
     isOwnerCurrent: () => engine.isSubmissionCurrent(ownerGeneration),
-    resolveModel: resolveCompactionModelId,
+    resolveModel: input => resolveCompactionModelId({ ...input,
+      pinSelection: engine.options.model !== undefined || engine.options.providerPolicy !== undefined }),
     shouldCompactByTokens: parityShouldCompact,
     estimateTokens,
     serializeNativeProviderRequestBody: () =>

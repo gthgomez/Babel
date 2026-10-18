@@ -5,6 +5,7 @@ import type {
   ToolResult,
 } from "../localTools.js";
 import { executeActionWithPolicy } from "../agent/toolExecutor.js";
+import { evaluateGovernedIsolation } from '../config/benchmarkContainer.js';
 import type { AgentAction } from "../agent/actions.js";
 
 import {
@@ -236,10 +237,22 @@ export function createExecutorKernel(
             stderr: "plan_read_only: mutation tools are denied in Plan mode at the executor kernel boundary.",
           };
         }
+        // The authority gate must see the same runtime boundary the sandbox
+        // will enforce. Omitted facts mean unavailable, even with Docker ready.
+        const isolation = evaluateGovernedIsolation(
+          process.env['BABEL_EXECUTION_PROFILE'],
+          process.env['BABEL_BENCHMARK_DOCKER_IMAGE'] ?? null,
+        );
         const result = await executeActionWithPolicy(
           requestToAgentAction(request),
           "workspace_write",
           context,
+          {
+            mode,
+            isolationRequired: isolation.kind !== 'host_profile',
+            isolationAvailable: isolation.kind === 'docker',
+            hostFallbackAllowed: isolation.kind === 'host_escalated' || isolation.kind === 'host_profile',
+          },
         );
         const last = result.results[result.results.length - 1];
         return {

@@ -1029,6 +1029,8 @@ async function runWaterfall<T>(
               chargeId: dispatchedChargeId ?? `${usageAttribution.taskOwnerId}:${label}:${++usageAttempt}:${randomUUID()}`,
             }
           : undefined,
+        true,
+        metadata.provider,
       );
       if (update.kind === 'conflict') throw new Error(`Delegated charge conflict: ${update.reason}`);
       if (update.kind === 'inserted' || update.kind === 'refined') onUsageRecorded?.(metadata);

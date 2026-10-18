@@ -10,7 +10,7 @@ import {
   buildReadOnlyChildResult,
   renderReadOnlyChildResultSection,
 } from "./childConclusion.js";
-import { formatChildSpecReceipt, resolveChildSpec, type EffectiveChildSpec } from "./childSpec.js";
+import { formatChildSpecReceipt, resolveChildSpec, resolveInheritedChildModel, type EffectiveChildSpec } from "./childSpec.js";
 import { recordMutationBatch, operationFingerprint } from "./sessionEvents.js";
 import { getChatApprovalSession } from "./chatApproval.js";
 import { deriveSubagentApprovalSession } from "./approvalRequests.js";
@@ -199,6 +199,7 @@ export function buildDelegatedChildEnvelope(input: {
     `Objective: ${input.task}`,
     `Capability: ${mutationEnabled ? "mutating" : "read-only"}`,
     `Write scope: ${writeScope.join(", ") || "(none)"}`,
+    'Child edit protocol: write_file {path, content} or apply_patch {patch} inside the actions array. str_replace is available only to the parent Chat engine. Express caller-described replacements with a supported scoped edit; caller instructions cannot add action types.',
     spec.instructions ? `Caller instructions: ${spec.instructions}` : "",
     repositoryRules ? `Repository rules:\n${repositoryRules}` : "",
     "The child cannot exceed this capability or the accepted objective.",
@@ -264,6 +265,19 @@ export async function executeSubAgentAction(
   if (action.type !== "sub_agent")
     throw new Error("executeSubAgentAction requires a sub_agent action");
 
+  let childModel = (action as { model?: string }).model ?? null;
+  if (host.modelPolicy) {
+    try {
+      childModel = resolveInheritedChildModel(host.modelPolicy, childModel);
+    } catch {
+      host.toolCallLog.push({ tool, target, index: meta.index,
+        ...(meta.idempotencyKey ? { toolCallId: meta.idempotencyKey } : {}),
+        exit_code: 1, error: 'CHILD_MODEL_OVERRIDE_DENIED', effect_status: 'not_applicable',
+        detail: 'No child was dispatched; the tool cannot replace the selected model.' });
+      return { index: meta.index, observation: 'CHILD_MODEL_OVERRIDE_DENIED: no child was dispatched; inherit the selected model.' };
+    }
+  }
+
   const executionEnvelope: ChildExecutionEnvelope = input.executionEnvelope ?? {
     ...host.isolationBrokerFlags?.(),
     mode: host.executionProfile ?? 'chat',
@@ -295,8 +309,8 @@ export async function executeSubAgentAction(
     requestedMutation: (action as { mutation?: boolean }).mutation === true,
     requestedWriteScope: (action as { write_scope?: string[] }).write_scope ?? [],
     instructions: (action as { instructions?: string }).instructions ?? null,
-    parentModel: host.modelPolicy?.providerModelId ?? null,
-    model: (action as { model?: string }).model ?? null,
+    parentModel: host.modelPolicy?.resolvedBackendKey ?? null,
+    model: (action as { model?: string }).model ? childModel : null,
     maxRounds: (action as { max_rounds?: number }).max_rounds ?? null,
     promptBudgetChars: resolveStackBudgetForClass(
       (host as { lastTurnRuntime?: { taskClass?: string } }).lastTurnRuntime?.taskClass,
@@ -323,7 +337,9 @@ export async function executeSubAgentAction(
   if (mutationAllowance) {
     const inheritedLimiter = inheritedChildBudgetLimiter(mutationAllowance);
     if (inheritedLimiter) {
-      const reason = `child was not started: inherited ${inheritedLimiter} allowance already exhausted`;
+      const reason = mutationAllowance.accountingComplete === false && inheritedLimiter === 'cost'
+        ? 'COST_ACCOUNTING_INCOMPLETE: child was not started because its parent has unresolved usage; remaining spend is unknown'
+        : `child was not started: inherited ${inheritedLimiter} allowance already exhausted`;
       host.markChildBudgetExhausted(inheritedLimiter, reason);
       const rejected = host.settleInheritedBudgetRejectedChild(
         action,

@@ -1194,6 +1194,7 @@ export class ChatEngine {
       ...(this.modelPolicy?.providerModelId
         ? {
             primaryModel: this.modelPolicy.providerModelId,
+            pinSelectedModel: this.options.model !== undefined || this.options.providerPolicy !== undefined,
             // Offline CLI compatibility keeps its injected/cached critic. Desktop
             // (including local Ollama), live calls and Go still bind the provider.
             ...(!isOfflineChatMode() || process.env['BABEL_DESKTOP_IPC'] === '1' ||
@@ -1283,6 +1284,12 @@ export class ChatEngine {
     taskIntent: TaskIntent,
     ownerGeneration?: number,
   ): Promise<ChatResult | null> {
+    if (reason.startsWith('COST_ACCOUNTING_INCOMPLETE:')) {
+      if (ownerGeneration !== undefined && !this.isSubmissionCurrent(ownerGeneration)) return null;
+      this.budgetExceeded = false;
+      this.policyEventLog.record({at_turn:this._turnIndex,kind:'progress_policy',detail:reason.slice(0,200)});
+      return this.buildResult('failed',callbacks,reason,undefined,undefined,undefined,ownerGeneration);
+    }
     // Tier A2: Record budget kill event
     this.policyEventLog.record({
       at_turn: this._turnIndex,
@@ -1530,7 +1537,7 @@ export class ChatEngine {
   } {
     if (this.taskCostScopeUnavailable || !this.taskAllowance) {
       const reason =
-        "Cannot restore durable task cost scope for resumed run; refusing a fresh allowance.";
+        "COST_ACCOUNTING_INCOMPLETE: Cannot restore durable task cost scope for resumed run; refusing a fresh allowance.";
       this.terminatingLimiter = "cost";
       this.terminalLimiterReason = reason;
       return { ok: false, reason, limiter: "cost" };
@@ -1562,7 +1569,7 @@ export class ChatEngine {
       (costSummary.estimateComplete ?? costSummary.costComplete) === false
     ) {
       const reason =
-        "Task cost is incomplete because a provider charge has unknown pricing; refusing paid dispatch under a finite dollar cap.";
+        "COST_ACCOUNTING_INCOMPLETE: Task cost is incomplete because a provider charge has unknown pricing or usage; refusing paid dispatch under a finite dollar cap.";
       this.terminatingLimiter = "cost";
       this.terminalLimiterReason = reason;
       return { ok: false, reason, limiter: "cost" };
@@ -2171,6 +2178,10 @@ export class ChatEngine {
         ...submitOpts,
         submissionGeneration,
       });
+    } catch (error) {
+      if (!this.isSubmissionCurrent(submissionGeneration)) return;
+      const captured = captureSessionEventAppendFailure(error, this.engineRunDir);
+      yield this.streamFailed(captured?.operatorMessage ?? (error instanceof Error ? error.message : String(error)));
     } finally {
       this.settleClaimOnExit(claim);
     }
@@ -2373,7 +2384,7 @@ export class ChatEngine {
     rawTarget: string,
   ): boolean {
     const localization = this.workingState.localization;
-    if (!localization || localization.phase === "localized") return true;
+    if (!localization || (localization.phase === "localized" && !localization.importCandidates?.length)) return true;
     if (
       localization.phase === "exhausted" ||
       localization.calls >= 4 ||
@@ -2413,7 +2424,14 @@ export class ChatEngine {
     pattern?: string;
   }): void {
     const localization = this.workingState.localization;
-    if (!localization || localization.phase !== "LOCALIZE_FAILURE") return;
+    if (!localization || (localization.phase !== "LOCALIZE_FAILURE" &&
+        !(localization.phase === "localized" && localization.importCandidates?.length))) return;
+    const current = this.currentRecoveryBinding();
+    if (!current || !sameRecoveryBinding(localization.binding, current)) {
+      this.workingState = applyWorkingStateEvent(this.workingState, { type: 'recovery_candidate_drift' });
+      this.persistRecoveryWorkingState();
+      return;
+    }
     const target =
       recoveryTargetIdentity(this.options.projectRoot, input.rawTarget) ??
       undefined;
@@ -2441,14 +2459,29 @@ export class ChatEngine {
     if (
       updated.phase === "localized" &&
       updated.acceptedPath &&
+      updated.acceptedPath === target && input.succeeded &&
+      (input.tool === 'read_file' || input.tool === 'read_range') &&
+      input.content !== undefined &&
+      updated.observationDigest === createHash('sha256').update(input.content).digest('hex') &&
       updated.observationDigest &&
       this.workingState.recoveryGate
     ) {
+      const imported = updated.candidates.some(candidate => candidate.path === updated.acceptedPath && (candidate.source === 'import_call' || candidate.source === 'file_read'));
+      if (imported) {
+        this.workingState = applyWorkingStateEvent(this.workingState, {
+          type: 'localization_import_evidence',
+          provenance: { tool: input.tool, target: updated.acceptedPath,
+            failureSignature: updated.failureSignature, binding: updated.binding,
+            observationDigest: updated.observationDigest },
+        });
+        this.persistRecoveryWorkingState();
+        return;
+      }
       this.workingState = {
         ...this.workingState,
         recoveryGate: {
           ...this.workingState.recoveryGate,
-          failingTargets: [updated.acceptedPath],
+          failingTargets: [...new Set([...(this.workingState.recoveryGate.failingTargets ?? []), updated.acceptedPath])],
         },
       };
       this.workingState = applyWorkingStateEvent(this.workingState, {
@@ -3430,7 +3463,11 @@ export class ChatEngine {
         const containsSubAgent = batch.indices.some(
           (index) => actions[index]?.type === "sub_agent",
         );
-        if (containsSubAgent) {
+        // Recovery reads share a bounded, ordered evidence state. A later
+        // admission cannot exhaust it before earlier reads have settled.
+        const recoveryLocalization = this.workingState.localization;
+        if (containsSubAgent || (recoveryLocalization &&
+            (recoveryLocalization.phase !== "localized" || recoveryLocalization.importCandidates?.length))) {
           for (const index of batch.indices) {
             if (
               this._cancelled ||
@@ -4462,7 +4499,8 @@ export class ChatEngine {
     | OpenRouterApiRunner {
     // Desktop settings admit one primary route. Legacy phase overrides loaded
     // during CLI bootstrap cannot replace it, including after a task reset.
-    if (process.env["BABEL_DESKTOP_PROVIDER"]) return this.resolveDeliberationRunner();
+    if (process.env["BABEL_DESKTOP_PROVIDER"] || this.options.model !== undefined || this.options.providerPolicy !== undefined)
+      return this.resolveDeliberationRunner();
     const modelName = this.modelPolicy?.provider === "opencode-go" ? undefined : resolvePhaseModelName(this._lastPhase, {
       investigateModel: this.limits.investigateModel,
       mutateModel: this.limits.mutateModel,
@@ -4577,6 +4615,7 @@ export class ChatEngine {
           turnIndex: this._turnIndex,
           turnId: this.parity.turnId,
           taskContract: this.parity.liveAuthority?.taskContract,
+          acceptedOperation: this.lastTurnRuntime?.effectiveOperation ?? this.lastTurnRuntime?.taskShape?.operation,
         },
         outcome: {
           hasMutation: this.hasAnyWrites(),
