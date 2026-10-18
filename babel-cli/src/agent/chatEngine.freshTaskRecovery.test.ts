@@ -593,22 +593,27 @@ test('R1 no-target test name needs a bounded glob followed by a corroborating re
 });
 
 test('R1 exhausted localization blocks another search and reports a typed reason', async () => {
-  const engine = new ChatEngine({ task: 'repair parser', projectRoot: process.cwd() });
+  const fixture = recoveryInspectionFixture();
+  const { engine, context } = fixture;
   const binding = (engine as any).currentRecoveryBinding();
   assert.ok(binding);
   (engine as any).workingState = applyWorkingStateEvent(createWorkingState('repair parser'), {
     type: 'localization_begin',
     localization: { ...startFailureLocalization('red', binding, []), calls: 4, phase: 'exhausted' },
   });
+  try {
   const result = await (engine as any).executeOneAction(
     { type: 'glob', pattern: '**/*.ts' },
-    { agentId: 'test', runId: 'test', runDir: process.cwd(), babelRoot: process.cwd() },
+    context,
     {}, { index: 0, ownerGeneration: 0 },
   );
   assert.match(result.observation, /LOCALIZATION_EXHAUSTED/);
   const report = (engine as any).buildVerifierBlockedReport('not localized');
   assert.equal(report.reason_code, 'localization_exhausted');
   assert.match(report.checked[0].finding, /4 inspection call/);
+  } finally {
+    fixture.cleanup();
+  }
 });
 
 test('#216 [REPRODUCTION] fresh submission must not inherit task-local recovery punishment', () => {

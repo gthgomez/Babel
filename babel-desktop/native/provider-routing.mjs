@@ -3,7 +3,8 @@
 import {existsSync, mkdirSync, readFileSync, renameSync, writeFileSync, lstatSync} from 'node:fs';
 import {dirname, join, resolve} from 'node:path';
 import {randomUUID} from 'node:crypto';
-import {DESKTOP_ROUTE_CATALOG, listDesktopProviderDescriptors, normalizeProviderRoute,defaultModelPolicy,MODEL_ID_PATTERN} from './desktop-route-catalog.mjs';
+import {DESKTOP_ROUTE_CATALOG, listDesktopProviderDescriptors, normalizeProviderRoute,defaultModelPolicy} from './desktop-route-catalog.mjs';
+import {MODEL_CATALOG_ENDPOINTS,parseModelCatalog} from './model-catalog.mjs';
 
 const ROUTE_FILE = 'desktop-routing.json';
 const CATALOG_BYTE_LIMIT=4*1024*1024;
@@ -35,6 +36,16 @@ function writePrivateJson(path,value){
 
 export function qualifiedProviders(configDirectory=null) {
   const providers=listDesktopProviderDescriptors(cachedModels(configDirectory));
+  const catalog=readCatalogCache(configDirectory);
+  for(const provider of providers){
+    provider.catalog=catalog.providers?.[provider.id]??{status:'bundled',fetchedAt:null};
+    if(catalog.schemaVersion!==undefined&&catalog.schemaVersion!==1){
+      provider.catalog={status:'incompatible',fetchedAt:null};
+      for(const route of provider.routes){route.selectable=false;route.unavailableReason='This catalog needs a newer Babel version. Existing history remains readable.';}
+    }else if(provider.catalog.status==='fresh'&&Date.now()-Date.parse(provider.catalog.fetchedAt)>86400000){
+      provider.catalog={...provider.catalog,status:'stale'};
+    }
+  }
   if(configDirectory){
     try {
       const saved=JSON.parse(readFileSync(routingPath(configDirectory),'utf8'));
@@ -49,38 +60,51 @@ export function qualifiedProviders(configDirectory=null) {
   return providers;
 }
 export function cachedModels(configDirectory){
-  if(!configDirectory)return [];
-  try {const path=join(resolve(configDirectory),'desktop-model-catalog.json');const info=lstatSync(path);if(!info.isFile()||info.isSymbolicLink()||info.size>4*1024*1024)return [];const data=JSON.parse(readFileSync(path,'utf8'));return Array.isArray(data.models)?data.models:[];}catch{return [];}
+  const models=readCatalogCache(configDirectory).models;
+  return Array.isArray(models)?models:[];
 }
-/** Public metadata only. Fixed hosts, bounded data, no credentials or inference. */
-export async function refreshModelCatalog({configDirectory,provider,fetchImpl=fetch}={}) {
-  const endpoints={openrouter:'https://openrouter.ai/api/v1/models','opencode-go':'https://opencode.ai/zen/go/v1/models',ollama:'http://127.0.0.1:11434/api/tags'};
-  const endpoint=endpoints[provider];
-  if(!endpoint)throw new Error('This provider uses the bundled CLI model catalog.');
-  const response=await fetchImpl(endpoint,{headers:{Accept:'application/json'},redirect:'error',signal:AbortSignal.timeout(15000)});
-  if(!response.ok)throw new Error(`Model catalog request failed (HTTP ${response.status}). Check your connection and retry.`);
-  const text=await readCatalogBody(response);
-  let data;try{data=JSON.parse(text);}catch{throw new Error('Provider returned an invalid model catalog.');}
-  const entries=provider==='ollama'?data.models:data.data;
-  if(!Array.isArray(entries)||entries.length>5000)throw new Error('Provider returned an invalid model catalog.');
-  const qualified=listDesktopProviderDescriptors().find(spec=>spec.id===provider)?.routes??[];
-  const discovered=[];
-  for(const entry of entries){
-    const modelId=provider==='ollama'?entry.name:entry.id;
-    if(typeof modelId!=='string'||!MODEL_ID_PATTERN.test(modelId))continue;
-    if(provider==='openrouter'&&!entry.supported_parameters?.includes('tools'))continue;
-    const existing=qualified.find(route=>route.modelId===modelId);
-    // Public availability is not harness qualification. Keep exact CLI backend keys.
-    if(provider!=='ollama'&&!existing)continue;
-    const price=name=>{const value=Number(entry.pricing?.[name]);return Number.isFinite(value)&&value>=0?value*1e6:undefined;};
-    discovered.push({id:existing?.id??`${provider}/${modelId}`,modelId,provider,label:typeof entry.name==='string'?entry.name.slice(0,160):modelId,enabled:existing?.enabled??false,
-      ...(Number.isSafeInteger(entry.context_length)&&entry.context_length>0?{contextWindow:entry.context_length}:{}),inputPrice:price('prompt'),outputPrice:price('completion')});
-  }
+function readCatalogCache(configDirectory){
+  if(!configDirectory)return {};
+  try {const path=join(resolve(configDirectory),'desktop-model-catalog.json');const info=lstatSync(path);if(!info.isFile()||info.isSymbolicLink()||info.nlink>1||info.size>CATALOG_BYTE_LIMIT)return {};const data=JSON.parse(readFileSync(path,'utf8'));return data&&typeof data==='object'&&!Array.isArray(data)?data:{};}catch{return {};}
+}
+/** Fixed official metadata endpoints only; never makes an inference request. */
+export async function refreshModelCatalog({configDirectory,provider,credential,fetchImpl=fetch}={}) {
+  const endpoint=MODEL_CATALOG_ENDPOINTS[provider];
+  if(!endpoint)throw new Error('Select a supported provider catalog.');
+  if(typeof configDirectory!=='string'||!configDirectory)throw new Error('Configuration directory is unavailable.');
   const dir=resolve(configDirectory);mkdirSync(dir,{recursive:true,mode:0o700});
   if(lstatSync(dir).isSymbolicLink())throw new Error('Configuration directory is unsafe.');
   const path=join(dir,'desktop-model-catalog.json');
-  const models=[...cachedModels(dir).filter(model=>model.provider!==provider),...discovered];
-  writePrivateJson(path,{models,updatedAt:new Date().toISOString()});
+  if(existsSync(path)){
+    const info=lstatSync(path);
+    if(!info.isFile()||info.isSymbolicLink()||info.nlink>1||info.size>CATALOG_BYTE_LIMIT)throw new Error('The catalog cache is unsafe or too large. Existing data was preserved.');
+    try{JSON.parse(readFileSync(path,'utf8'));}catch{throw new Error('The catalog cache is invalid. Existing data was preserved.');}
+  }
+  const previous=readCatalogCache(dir),fetchedAt=new Date().toISOString();
+  if(previous.schemaVersion!==undefined&&previous.schemaVersion!==1)throw new Error('This catalog needs a newer Babel version. No data was changed.');
+  const known=listDesktopProviderDescriptors().find(spec=>spec.id===provider)?.routes??[];
+  let discovered;
+  try{
+    const headers={Accept:'application/json'};
+    if(provider==='deepseek'&&typeof credential==='string'&&credential&&!/[\r\n\0]/.test(credential))headers.Authorization=`Bearer ${credential}`;
+    const response=await fetchImpl(endpoint,{headers,redirect:'error',signal:AbortSignal.timeout(15000)});
+    if(!response.ok)throw new Error(response.status===401?'Catalog authentication is required. Save a credential for this provider.':`Model catalog request failed (HTTP ${response.status}). Check your connection and retry.`);
+    const text=await readCatalogBody(response);
+    let data;try{data=JSON.parse(text);}catch{throw new Error('Provider returned an invalid model catalog.');}
+    discovered=parseModelCatalog(provider,data,known,fetchedAt);
+  }catch(error){
+    // Never retain raw fetch errors or provider response bodies in diagnostics/cache.
+    if(previous.models)writePrivateJson(path,{...previous,providers:{...previous.providers,[provider]:{...previous.providers?.[provider],status:'cached',lastAttemptAt:fetchedAt}}});
+    if(error instanceof Error&&/^(Provider returned|Provider model catalog|Model catalog request|Catalog authentication)/.test(error.message))throw error;
+    throw new Error('Model catalog refresh failed. Cached choices are retained; check your connection and retry.');
+  }
+  const discoveredIds=new Set(discovered.map(model=>model.modelId));
+  const oldModels=new Map([...known,...(previous.models??[]).filter(model=>model.provider===provider)].map(model=>[model.id,model]));
+  const removed=[...oldModels.values()].filter(model=>!discoveredIds.has(model.modelId)).map(model=>({...model,selectable:false,unavailableReason:'This model is no longer listed by the provider.',accountAvailability:'unavailable'}));
+  const models=[...(previous.models??[]).filter(model=>model.provider!==provider),...discovered,...removed];
+  const next={...previous,schemaVersion:1,models,providers:{...previous.providers,[provider]:{status:'fresh',source:endpoint,fetchedAt}},updatedAt:fetchedAt};
+  if(Buffer.byteLength(JSON.stringify(next,null,2))+1>CATALOG_BYTE_LIMIT)throw new Error('Provider model catalog exceeded the size limit.');
+  writePrivateJson(path,next);
   return qualifiedProviders(dir).find(spec=>spec.id===provider);
 }
 
@@ -111,6 +135,12 @@ export function readProviderRoute(configDirectory) {
 
 export function validateProviderRoute({provider, model,enabledModels} = {},configDirectory=null) {
   const extra=cachedModels(configDirectory),route=normalizeProviderRoute({provider, model},extra);
+  const bundled=defaultModelPolicy();
+  const catalogAccepted=extra.some(entry=>
+    entry.id===route.model&&entry.provider===provider&&entry.selectable!==false&&entry.adapterSupport!=='unsupported');
+  if(!bundled.models?.[route.model]&&!catalogAccepted)throw new Error(`Model route "${route.model}" is not supported for ${DESKTOP_ROUTE_CATALOG[provider]?.label ?? provider}. Refresh models and select one.`);
+  const available=qualifiedProviders(configDirectory).find(spec=>spec.id===provider)?.routes.find(entry=>entry.id===model);
+  if(available?.selectable===false)throw new Error(available.unavailableReason||'This model is unavailable.');
   if(enabledModels!==undefined){
     if(!Array.isArray(enabledModels)||!enabledModels.length||enabledModels.length>1000||!enabledModels.includes(route.model))throw new Error('The default model must be enabled.');
     for(const id of enabledModels)normalizeProviderRoute({provider,model:id},extra);
@@ -136,7 +166,8 @@ export function saveProviderRoute({configDirectory, provider, model,enabledModel
   const policyPath=join(dir,'model-policy.json');
   if(existsSync(policyPath)){const info=lstatSync(policyPath);if(!info.isFile()||info.isSymbolicLink()||info.nlink>1||info.size>4*1024*1024)throw new Error('Model policy is unsafe.');policy=JSON.parse(readFileSync(policyPath,'utf8'));if(!policy.models||typeof policy.models!=='object')throw new Error('Model policy is invalid.');}
   for(const descriptor of listDesktopProviderDescriptors(extra))for(const entry of descriptor.routes){
-    if(!policy.models[entry.id])policy.models[entry.id]={provider:entry.provider,model_id:entry.modelId,tier:'standard',enabled:false,native_tool_use:true,
+    if(entry.selectable===false)continue;
+    if(!policy.models[entry.id])policy.models[entry.id]={provider:entry.provider,model_id:entry.modelId,tier:'standard',enabled:false,native_tool_use:entry.capabilities?.tools===true,
       ...(Number.isFinite(entry.contextWindow)?{context_window:entry.contextWindow}:{}),
       ...(Number.isFinite(entry.inputPrice)?{estimated_cost_per_1m_input:entry.inputPrice}:{}),
       ...(Number.isFinite(entry.outputPrice)?{estimated_cost_per_1m_output:entry.outputPrice}:{})};

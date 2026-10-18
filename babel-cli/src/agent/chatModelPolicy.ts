@@ -84,11 +84,21 @@ export function resolveChatModelPolicy(options: ChatModelPolicyOptions): {
     provider: requestedBackendEntry.provider,
     providerModelId: requestedBackendEntry.model_id,
   });
+  // Desktop Settings pins provider + route key in policy. Catalog discovery stays
+  // unverified; that admission is separate from the live DeepSeek/OpenRouter gate.
+  const explicitDesktopRoute =
+    Boolean(desktopProvider && desktopModel && requestedBackendKey) &&
+    requestedBackendKey === desktopModel &&
+    requestedBackendEntry?.provider === desktopProvider;
   const policy = requestedModelIsBackendKey
     ? resolveModelByKey({
         key: requestedBackendKey!,
         bindStagesToSelectedModel: true,
-        ...(explicitOpenCodeRequest || explicitGoRequest || desktopProvider === 'deepseek' || desktopProvider === 'deepinfra'
+        ...(explicitOpenCodeRequest ||
+        explicitGoRequest ||
+        desktopProvider === 'deepseek' ||
+        desktopProvider === 'deepinfra' ||
+        explicitDesktopRoute
           ? {}
           : { liveOnly: !offline }),
         ...policyRootOptions,

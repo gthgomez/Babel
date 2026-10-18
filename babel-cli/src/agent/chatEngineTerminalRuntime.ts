@@ -74,10 +74,18 @@ import {
 } from './childSpec.js'
 import { confirmedMutationPaths } from './mutationTools.js'
 import { detectAndBuildBlockedReport } from './chatEngineSupport.js'
+import type { ThreadTerminalResponse } from './threadEventLog.js'
+import type {
+  FinalizeParityTurnExtras,
+  FinalizeParityTurnResult,
+} from './chatEngineParityBridge.js'
 import { classifyChatTaskIntent } from './chatEngineTaskIntent.js'
 import { isSessionEventPersistenceFailure } from './sessionEventDiagnostics.js'
 import { hasInspectedNoChangeEvidence } from './completionGatePolicy.js'
 import { refreshChatVerifierReceiptStalenessSync } from '../evidence/chatRevisionBinding.js'
+
+export const SESSION_EVENT_PERSISTENCE_FINALIZE_MESSAGE =
+  'session event persistence failed before terminal evidence could be durably recorded'
 
 /** Immutable terminal inputs plus the mutable evidence objects used by existing finalizers. */
 export interface ChatTerminalSnapshot {
@@ -138,7 +146,9 @@ export interface ChatTerminalEffects {
     outcome: TerminalOutcome | undefined,
     status: ChatResult['status'],
     reason: TerminalReason | undefined,
-  ) => void
+    response?: ThreadTerminalResponse,
+    extras?: FinalizeParityTurnExtras,
+  ) => FinalizeParityTurnResult
   storeTelemetry: (record: ChatTurnTelemetryRecord | null) => void
   setLimiter: (limiter: ChatRunLimiter, reason: string) => void
   setBudgetExceeded: () => void
@@ -164,7 +174,7 @@ function normalizeInspectedNoChange(snapshot: ChatTerminalSnapshot, outcome: Ter
   const implementation = snapshot.context.acceptedOperation !== undefined
     ? snapshot.context.acceptedOperation !== 'READ_ONLY'
     : classifyChatTaskIntent(snapshot.context.options.task) === 'execute'
-  if (outcome === 'NO_CHANGE_REQUIRED' && implementation)
+  if (outcome === 'NO_CHANGE_REQUIRED' && implementation && snapshot.context.options.projectRoot)
     refreshChatVerifierReceiptStalenessSync(snapshot.context.options.projectRoot, snapshot.outcome.lastVerifierReceipt)
   const verifier = snapshot.outcome.lastVerifierReceipt
   return outcome === 'NO_CHANGE_REQUIRED' && implementation &&
@@ -235,21 +245,19 @@ export function completeChatStream(
       ? outcomeFromReasonCode(terminalReason.code)
       : undefined
   const outcome = reasonOutcome ?? decisionOutcome
-  {
-    recordChatCompletionDecisionOnce(input, {
-      requestedOutcome: decision.requestedOutcome,
-      finalOutcome: outcome,
-      allowed: decision.allowed,
-      reason: decision.reason,
-      evidenceRefs: decision.evidenceRefs,
-      policyVersion: decision.policyVersion,
-      ...(terminalReason !== undefined
-        ? {
-            reasonCode: terminalReason.code,
-            causeClass: terminalReason.cause_class,
-          }
-        : {}),
-    })
+  const completionDecisionPayload = {
+    requestedOutcome: decision.requestedOutcome,
+    finalOutcome: outcome,
+    allowed: decision.allowed,
+    reason: decision.reason,
+    evidenceRefs: decision.evidenceRefs,
+    policyVersion: decision.policyVersion,
+    ...(terminalReason !== undefined
+      ? {
+          reasonCode: terminalReason.code,
+          causeClass: terminalReason.cause_class,
+        }
+      : {}),
   }
   // P0-E: attach shadow later-succeeded summary before export (idempotent with buildResult).
   // P0-F: wire the derived OutcomeDimensions — the real receipt (its `stale`
@@ -282,7 +290,19 @@ export function completeChatStream(
         ? 'budget_exhausted'
         : 'completed',
   })
-  effects.finalizeTurn(terminal.outcome, terminal.status, terminalReason)
+  const finalizeResult = effects.finalizeTurn(
+    terminal.outcome,
+    terminal.status,
+    terminalReason,
+    {
+      kind: 'answer',
+      content: answer,
+    },
+    { completionDecision: completionDecisionPayload },
+  )
+  if (!finalizeResult.committed) {
+    return failChatStream(input, SESSION_EVENT_PERSISTENCE_FINALIZE_MESSAGE)
+  }
   persistChatTranscript(snapshot.context.engineRunDir, snapshot.presentation.conversation)
   const finalizedTelemetry =
     snapshot.presentation.currentTurnTelemetry?.finalize({
@@ -363,7 +383,10 @@ export function failChatStream(
   })
   const runAllowance = assembleChatRunAllowance(input, terminal.status)
   try {
-    effects.finalizeTurn(terminal.outcome, terminal.status, terminalReason)
+    effects.finalizeTurn(terminal.outcome, terminal.status, terminalReason, {
+      kind: 'error',
+      content: error,
+    })
   } catch (failure) {
     // A broken primary log cannot certify completion. Still deliver its
     // explicit failed event; never suppress an unrelated finalization error.
@@ -673,22 +696,23 @@ export function assembleChatResult(
     (terminalReason?.code && terminalReason.code !== 'verification_failed'
       ? outcomeFromReasonCode(terminalReason.code)
       : undefined) ?? authoritativeOutcome
-  if (kernelDecision && !superseded) {
-    recordChatCompletionDecisionOnce(input, {
-      requestedOutcome: kernelDecision.requestedOutcome,
-      finalOutcome: authoritativeOutcome ?? kernelDecision.finalOutcome,
-      allowed: kernelDecision.allowed,
-      reason: kernelDecision.reason,
-      evidenceRefs: kernelDecision.evidenceRefs,
-      policyVersion: kernelDecision.policyVersion,
-      ...(terminalReason !== undefined
-        ? {
-            reasonCode: terminalReason.code,
-            causeClass: terminalReason.cause_class,
-          }
-        : {}),
-    })
-  }
+  const completionDecisionPayload =
+    kernelDecision && !superseded
+      ? {
+          requestedOutcome: kernelDecision.requestedOutcome,
+          finalOutcome: authoritativeOutcome ?? kernelDecision.finalOutcome,
+          allowed: kernelDecision.allowed,
+          reason: kernelDecision.reason,
+          evidenceRefs: kernelDecision.evidenceRefs,
+          policyVersion: kernelDecision.policyVersion,
+          ...(terminalReason !== undefined
+            ? {
+                reasonCode: terminalReason.code,
+                causeClass: terminalReason.cause_class,
+              }
+            : {}),
+        }
+      : undefined
 
   // P0-E: if any kill-switch ran in shadow mode, record whether the task
   // later succeeded (mutation / coding-task gate) for precision/recall.
@@ -717,10 +741,24 @@ export function assembleChatResult(
     status: finalStatus,
   })
 
+  let finalizeResult: FinalizeParityTurnResult = { committed: true }
   if (!superseded) {
     effects.settleActiveExecution()
     // AC3 choke point: memory + disk (idempotent if streamDone already finalized)
-    effects.finalizeTurn(terminal.outcome, terminal.status, terminalReason)
+    finalizeResult = effects.finalizeTurn(
+      terminal.outcome,
+      terminal.status,
+      terminalReason,
+      answer === undefined
+        ? undefined
+        : {
+            kind: finalStatus === 'failed' ? 'error' : 'answer',
+            content: answer,
+          },
+      completionDecisionPayload
+        ? { completionDecision: completionDecisionPayload }
+        : undefined,
+    )
   }
 
   const runAllowance = assembleChatRunAllowance(
@@ -730,8 +768,12 @@ export function assembleChatResult(
   )
 
   const result: ChatResult = {
-    status: terminal.status,
-    ...(terminal.outcome !== undefined ? { outcome: terminal.outcome } : {}),
+    status: finalizeResult.committed ? terminal.status : 'failed',
+    ...(finalizeResult.committed
+      ? terminal.outcome !== undefined
+        ? { outcome: terminal.outcome }
+        : {}
+      : { outcome: 'INFRA_FAILURE' as const }),
     ...(kernelDecision?.finalOutcome === 'PLAN_COMPLETE'
       ? { planOutcome: 'PLAN_COMPLETE' as const }
       : {}),
@@ -799,7 +841,7 @@ export function assembleChatResult(
   // Event log disk flush is owned solely by finalizeParityTurn / checkpointParityEventLog
 
   // Propose BABEL.md learnings after successful runs with writes only.
-  if (terminal.status === 'completed' && snapshot.outcome.writeCount > 0) {
+  if (terminal.status === 'completed' && snapshot.outcome.writeCount > 0 && snapshot.context.options.projectRoot) {
     try {
       const changed = snapshot.evidence.observability.toolCallLog
         .flatMap((t) =>

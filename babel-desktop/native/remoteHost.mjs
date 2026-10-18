@@ -157,11 +157,25 @@ export class RemoteBridgeChild {
 
     let announcedPort = null;
     let stdoutBuffer = '';
+    let stdoutSeen = false;
+    let stderrSeen = false;
+    const diagnostic = code => {
+      if (typeof onLine === 'function') {
+        onLine({
+          stream: 'status',
+          phase: 'remote_start',
+          code,
+          diagnosticAvailable: true,
+          text: 'Remote bridge startup output is withheld because it may contain sensitive diagnostics.',
+        });
+      }
+    };
     const onStdout = chunk => {
       const text = chunk.toString('utf8');
-      if (typeof onLine === 'function') onLine({stream: 'stdout', text});
-      // Reassemble lines: one pipe write may split the announcement, and a
-      // missed announcement must not be what decides readiness.
+      if (!stdoutSeen) {
+        stdoutSeen = true;
+        diagnostic('REMOTE_STDOUT_AVAILABLE');
+      }
       stdoutBuffer += text;
       const lines = stdoutBuffer.split('\n');
       stdoutBuffer = lines.pop() ?? '';
@@ -170,15 +184,18 @@ export class RemoteBridgeChild {
         if (match?.[1]) announcedPort = Number(match[1]);
       }
     };
-    const onStderr = chunk => {
-      if (typeof onLine === 'function') onLine({stream: 'stderr', text: chunk.toString('utf8')});
+    const onStderr = () => {
+      if (!stderrSeen) {
+        stderrSeen = true;
+        diagnostic('REMOTE_STDERR_AVAILABLE');
+      }
     };
     child.stdout.on('data', onStdout);
     child.stderr.on('data', onStderr);
 
     const earlyExit = new Promise((_, reject) => {
-      child.once('error', error => {
-        reject(new Error(`Could not start remote bridge: ${error.message}`));
+      child.once('error', () => {
+        reject(new Error('Could not start the remote bridge. Check the selected CLI and local execution prerequisites.'));
       });
       child.once('close', (code, signal) => {
         reject(new Error(`Remote bridge exited before ready (code=${code ?? 'null'}, signal=${signal ?? 'null'})`));
@@ -212,6 +229,15 @@ export class RemoteBridgeChild {
       });
       this.#state = 'ready';
       this.#port = readyPort;
+      if (typeof onLine === 'function') {
+        onLine({
+          stream: 'status',
+          phase: 'remote_start',
+          code: 'REMOTE_READY',
+          diagnosticAvailable: stdoutSeen || stderrSeen,
+          text: 'Remote bridge is ready on the requested loopback port.',
+        });
+      }
       return {port: readyPort, url: `http://127.0.0.1:${readyPort}`, uiPath: '/ui'};
     } catch (error) {
       if (generation === this.#generation) {
@@ -223,6 +249,7 @@ export class RemoteBridgeChild {
     } finally {
       child.stdout.off('data', onStdout);
       child.stderr.off('data', onStderr);
+      child.stdout.resume();child.stderr.resume();
     }
   }
 

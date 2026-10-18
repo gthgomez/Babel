@@ -1,3 +1,4 @@
+import {requireProjectRoot} from './chatExecutionScope.js';
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { compileChatStack, resolveStackBudgetForClass } from "./chatStackCompile.js";
 import { globalCostTracker } from "../services/costTracker.js";
@@ -304,7 +305,7 @@ export async function executeSubAgentAction(
       ?.effectiveOperation === "READ_ONLY";
   const delegated = buildDelegatedChildEnvelope({
     task: host.options.task,
-    projectRoot: host.options.projectRoot,
+    projectRoot: requireProjectRoot(host.options),
     parentReadOnly,
     requestedMutation: (action as { mutation?: boolean }).mutation === true,
     requestedWriteScope: (action as { write_scope?: string[] }).write_scope ?? [],
@@ -438,7 +439,7 @@ export async function executeSubAgentAction(
                   : {}),
               },
               {
-                projectRoot: host.options.projectRoot,
+                projectRoot: requireProjectRoot(host.options),
                 runDir: childRunDir,
                 abortSignal: childController.signal,
                 cleanupWorktree: false,
@@ -584,7 +585,7 @@ export async function executeSubAgentAction(
             agentId: subId,
             task: action.task,
             executionEnvelope,
-            projectRoot: host.options.projectRoot,
+            projectRoot: requireProjectRoot(host.options),
             writeScope,
             additionalInstructions: childEnvelope,
             ...(host.options.workspaceRoot
@@ -846,7 +847,7 @@ export async function executeSubAgentAction(
         const subResult = await runReadOnlyAgentLoop({
           verb: "ask",
           task: action.task,
-          projectRoot: host.options.projectRoot,
+          projectRoot: requireProjectRoot(host.options),
           additionalInstructions: childEnvelope,
           seedPaths: [],
           toolContext: {

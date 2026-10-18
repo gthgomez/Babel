@@ -10,6 +10,9 @@ import { PolicyEventLog } from './policyEventLog.js'
 import { createSessionEventLog } from './sessionEvents.js'
 import { TurnRoutingReceiptLog } from './turnRoutingReceipt.js'
 import { ChatTurnTelemetryCollector } from './chatTurnTelemetry.js'
+import { buildTaskContractV1, freezeTaskContract } from './taskContract.js'
+import { createCriterionCompletionServiceV1 } from '../authority/criterionCompletion.js'
+import { createExecutorKernel } from '../executor/kernel.js'
 import {
   cancelChatStream,
   assembleChatResult,
@@ -91,7 +94,7 @@ function terminalInput(t: TestContext): ChatTerminalInput {
         policyVersion: 'fixture',
       }),
       settleActiveExecution: () => {},
-      finalizeTurn: () => {},
+      finalizeTurn: () => ({ committed: true }),
       storeTelemetry: (record) => {
         snapshot.presentation.lastTurnTelemetry = record
       },
@@ -138,6 +141,74 @@ test('keeps a read-only hard-cap outcome coherent with its structured budget rea
   assert.equal(event.outcome, 'BUDGET_EXHAUSTED')
   assert.equal(event.status, 'budget_exhausted')
   assert.equal(event.reason_code, 'budget_exhausted')
+})
+
+test('success stream downgrades when durable session flush fails at finalization', (t) => {
+  const input = terminalInput(t)
+  input.effects.finalizeTurn = () => ({ committed: false })
+  const event = completeChatStream(input, 'would-be success answer')
+  assert.equal(event.type, 'failed')
+  assert.match(event.error ?? '', /session event persistence failed/)
+})
+
+test('secondary artifact failure keeps stream and callback aligned with committed terminal', (t) => {
+  const input = terminalInput(t)
+  input.snapshot.context.acceptedOperation = 'READ_ONLY'
+  input.effects.finalizeTurn = () => ({ committed: true, secondaryArtifactFailure: true })
+  const stream = completeChatStream(input, 'Here is the requested inventory.')
+  assert.equal(stream.type, 'done')
+  if (stream.type === 'done') {
+    assert.equal(stream.status, 'completed')
+    assert.equal(stream.outcome, 'NO_CHANGE_REQUIRED')
+  }
+  const callback = assembleChatResult(input, 'completed', {}, 'Here is the requested inventory.')
+  assert.equal(callback.status, 'completed')
+  assert.equal(callback.outcome, 'NO_CHANGE_REQUIRED')
+})
+
+test('terminal owner persists the exact displayed response before finalization', (t) => {
+  const input = terminalInput(t)
+  let response: unknown
+  input.effects.finalizeTurn = (_outcome, _status, _reason, value) => {
+    response = value
+    return { committed: true }
+  }
+  completeChatStream(input, 'Controller-selected visible response')
+  assert.deepEqual(response, {kind:'answer',content:'Controller-selected visible response'})
+  failChatStream(input, 'Safe typed transport error')
+  assert.deepEqual(response, {kind:'error',content:'Safe typed transport error'})
+})
+
+test('the terminal owner cannot certify a generic green hint without criterion evidence', t => {
+  const input = terminalInput(t)
+  const root = input.snapshot.context.options.projectRoot!
+  const contract = freezeTaskContract(buildTaskContractV1({
+    mode: 'chat', user_request: 'Write the required output.',
+    acceptance: [{ id: 'output', description: 'Output matches the required value.',
+      type: 'custom', required: true, verification_strategy: 'Independent output check.',
+      verification: { kind: 'custom', verifier_id: 'fixture:output' } }],
+  }))
+  input.snapshot.context.taskContract = contract
+  input.snapshot.outcome.hasMutation = true
+  input.snapshot.outcome.readOnly = false
+  // Deliberately only a coarse hint, not an executed/strict criterion receipt.
+  input.snapshot.outcome.lastVerifierReceipt = { command: 'npm test', exit_code: 0, summary: 'Fixture hint' }
+  const service = createCriterionCompletionServiceV1(() => ({ contract, runId: 'fixture', projectRoot: root }))
+  const kernel = createExecutorKernel('chat')
+  let decisions = 0
+  input.effects.decideCompletion = (requested, hasMutation) => {
+    decisions++
+    assert.equal(requested, 'VERIFIED_COMPLETE')
+    return kernel.completion.decide({
+      mode: 'chat', requestedOutcome: requested, hasWrite: hasMutation,
+      verificationPolicy: 'none', toolCallLog: [], proof: { compliant: true },
+      acceptance: service.currentRequest(),
+    })
+  }
+  const event = completeChatStream(input, 'The response is finished.')
+  assert.ok(event.type === 'done')
+  assert.equal(event.outcome, 'UNVERIFIED_PATCH')
+  assert.equal(decisions, 1)
 })
 
 test('keeps plan completion separate from executor verified completion', (t) => {
@@ -275,7 +346,10 @@ test(`no-change currency is checked before ${surface} normalization: changed=${c
 test('typed context preparation failure survives terminal persistence and stream projection', t => {
   const input = terminalInput(t)
   let persisted: unknown[] = []
-  input.effects.finalizeTurn = (...args) => { persisted = args }
+  input.effects.finalizeTurn = (...args) => {
+    persisted = args
+    return { committed: true }
+  }
   const event = failChatStream(input, 'Snapshot unavailable: input exceeds the size cap', {
     code: 'context_preparation_failed', cause_class: 'harness', detail: 'workspace_revision',
   })

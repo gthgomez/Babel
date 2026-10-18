@@ -1,3 +1,6 @@
+import {configureCredentialProtection} from '../native/credentials.mjs';
+import {fixtureProtection} from './credential-fixture.mjs';
+configureCredentialProtection(fixtureProtection);
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdtempSync, mkdirSync, readFileSync, writeFileSync, symlinkSync, statSync, rmSync, existsSync} from 'node:fs';
@@ -30,11 +33,11 @@ test('private profile is the default; the target project is never touched',()=>{
     const project=makeGitProject(root);
     const result=saveProviderCredential({provider:'deepseek',apiKey:FIXTURE_VALUE,configDirectory:config,projectRoot:project});
     assert.deepEqual(result,{provider:'deepseek',scope:'private',configured:true});
-    assert.match(readFileSync(join(config,'.env'),'utf8'),/^DEEPSEEK_API_KEY=/);
-    assert.equal(statSync(join(config,'.env')).mode & 0o777,process.platform==='win32'?statSync(join(config,'.env')).mode & 0o777:0o600);
-    assert.throws(()=>saveProviderCredential({provider:'deepseek',apiKey:FIXTURE_VALUE,configDirectory:config}),/already has a setting/);
+    assert.equal(readFileSync(join(config,'desktop-credentials.json'),'utf8').includes(FIXTURE_VALUE),false);
+    assert.equal(statSync(join(config,'desktop-credentials.json')).mode & 0o777,process.platform==='win32'?statSync(join(config,'desktop-credentials.json')).mode & 0o777:0o600);
+    assert.throws(()=>saveProviderCredential({provider:'deepseek',apiKey:FIXTURE_VALUE,configDirectory:config}),/already has a setting|Migrate/);
     assert.doesNotThrow(()=>saveProviderCredential({provider:'openrouter',apiKey:FIXTURE_VALUE,configDirectory:config}));
-    assert.equal(readFileSync(join(config,'.env'),'utf8').split('=')[0],'DEEPSEEK_API_KEY');
+    assert.equal(existsSync(join(config,'.env')),false);
     assert.equal(credentialProviders().includes('anthropic'),false);
     assert.throws(()=>saveProviderCredential({provider:'anthropic',apiKey:FIXTURE_VALUE,configDirectory:config}),/supported/);
   } finally {rmSync(root,{recursive:true,force:true});}
@@ -106,9 +109,9 @@ test('a preexisting private key file is preserved on refusal and writes use a lo
     mkdirSync(config);
     const file=join(config,'.env');
     writeFileSync(file,'# existing\nOPENROUTER_API_KEY=existingSyntheticValue\n',{mode:0o600});
-    assert.throws(()=>saveProviderCredential({provider:'openrouter',apiKey:FIXTURE_VALUE,configDirectory:config}),/already has a setting/);
+    assert.throws(()=>saveProviderCredential({provider:'openrouter',apiKey:FIXTURE_VALUE,configDirectory:config}),/already has a setting|Migrate/);
     assert.match(readFileSync(file,'utf8'),/^# existing/);
-    writeFileSync(file+'.babel-lock','');
+    writeFileSync(join(config,'desktop-credentials.json.babel-lock'),'');
     assert.throws(()=>saveProviderCredential({provider:'deepseek',apiKey:FIXTURE_VALUE,configDirectory:config}),/already running/);
   } finally {rmSync(root,{recursive:true,force:true});}
 });

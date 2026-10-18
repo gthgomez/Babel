@@ -140,11 +140,13 @@ export async function runInstalledMechanics(packageRoot, projectRoot) {
       event.tool === 'str_replace' && /denied|blocked|read.only|not authorized/i.test(event.error ?? event.detail ?? '')),
       'denial must be visible, not inferred solely from unchanged bytes')
 
-    const fixTask = 'Investigate why parser_test fails and fix it.'
-    const fixing = create(fixTask)
-    const repair = (messages) => {
-      // The synthetic provider proposes from the ordinary advertised context.
-      // It never inspects private engine state or injects controller evidence.
+    const implicitFixTask = 'Investigate why parser_test fails and fix it.'
+    const explicitFixTask = [
+      implicitFixTask,
+      'Requirements:',
+      '- `npm test` passes.',
+    ].join('\n')
+    const repairScript = (messages) => {
       const state = [...messages].reverse().find((message) =>
         typeof message.content === 'string' && message.content.includes('<!-- BABEL_WORKING_STATE -->'))?.content
       assert.ok(state)
@@ -167,9 +169,19 @@ export async function runInstalledMechanics(packageRoot, projectRoot) {
         },
       })
     }
-    const repaired = await drive(fixing, fixTask, [read('fix-read'), verify('red'),
+    const redGreenRepairScript = [
+      read('fix-read'), verify('red'),
       read('repair-source'), tool('repair-assertion', 'read_file', { path: 'verify.mjs' }),
-      repair, verify('green', 'test_run'), answer('Fixed the parser; npm test passed.')])
+      repairScript, verify('green', 'test_run'), answer('Fixed the parser; npm test passed.'),
+    ]
+    const implicitOnly = create(implicitFixTask)
+    const implicitRepair = await drive(implicitOnly, implicitFixTask, redGreenRepairScript)
+    assert.equal(implicitRepair.terminal.outcome, 'UNVERIFIED_PATCH',
+      'implicit acceptance meaning stays fail-closed despite a green verifier')
+    writeFileSync(join(fixture, 'parser.mjs'), buggy)
+
+    const fixing = create(explicitFixTask)
+    const repaired = await drive(fixing, explicitFixTask, redGreenRepairScript)
     const diagnosticCodes = (call) => {
       // Publish only fixed diagnostic labels; never tool text, paths, prompts or credentials.
       const detail = `${call.error ?? ''} ${call.detail ?? ''}`
@@ -195,8 +207,8 @@ export async function runInstalledMechanics(packageRoot, projectRoot) {
       receipt: fixing.lastVerifierReceipt }))
     assert.equal(repaired.terminal.outcome, 'VERIFIED_COMPLETE')
 
-    const cancelledEngine = create(fixTask)
-    const cancelled = await drive(cancelledEngine, fixTask, [read('cancel-read'),
+    const cancelledEngine = create(explicitFixTask)
+    const cancelled = await drive(cancelledEngine, explicitFixTask, [read('cancel-read'),
       replace('cancel-write', 'a + b', 'a - b'), verify('cancel-red'), read('cancel-late')],
     (event, index) => { if (index === 3 && event.type === 'tool_use') cancelledEngine.cancel() })
     assert.equal(cancelled.terminal.type, 'cancelled')
@@ -234,7 +246,8 @@ export async function runInstalledMechanics(packageRoot, projectRoot) {
       outcome: result.terminal.outcome ?? null, providerCalls: result.calls,
       durableEvents: result.durable.length })
     return { fixtureRoot: fixtureOwner, execution: 'explicit dev_local fixture lease; actual local npm test; HTTP blocked by caller',
-      inspect: evidence(inspected), denied: evidence(denied), repair: evidence(repaired),
+      inspect: evidence(inspected), denied: evidence(denied),
+      implicitRepair: evidence(implicitRepair), repair: evidence(repaired),
       verifierExitCodes: verifiers.map((call) => call.exit_code), cancel: evidence(cancelled),
       freshTask: evidence(fresh), resume: evidence(afterResume) }
   } finally {

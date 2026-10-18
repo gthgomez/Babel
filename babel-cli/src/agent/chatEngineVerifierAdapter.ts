@@ -5,10 +5,12 @@ import { createHash } from 'node:crypto';
 import { realpathSync } from 'node:fs';
 import path from 'node:path';
 import { isCredentialTargetPath } from './autonomyEnforcement.js';
+import { requireProjectRoot, type ChatScopeInput } from './chatExecutionScope.js';
 
 import {
   bindChatVerifierReceipt,
   evaluateChatVerifierReceiptCurrencySync,
+  refreshChatVerifierReceiptStalenessSync,
   toExecutorVerifierReceipt,
   type BoundChatVerifierReceipt,
 } from '../evidence/chatRevisionBinding.js';
@@ -34,6 +36,22 @@ import {
 
 export { parseExecutedTestCounts };
 
+/** Recheck current receipt inputs before completion, retaining project-scope denial. */
+export function refreshChatCompletionVerifierCurrency(
+  scope: ChatScopeInput,
+  hasMutation: boolean,
+  lastReceipt: BoundChatVerifierReceipt | null,
+  ledger: readonly BoundChatVerifierReceipt[],
+): void {
+  if (scope.projectRoot) {
+    const root = requireProjectRoot(scope);
+    refreshChatVerifierReceiptStalenessSync(root, lastReceipt);
+    for (const receipt of ledger) refreshChatVerifierReceiptStalenessSync(root, receipt);
+  } else if (hasMutation || lastReceipt || ledger.length) {
+    throw new Error('PROJECT_REQUIRED: Conversation cannot certify project effects');
+  }
+}
+
 export function resolveEngineRequiredVerifiers(input: {
   task: string;
   projectTestCommands?: readonly string[] | null;
@@ -55,6 +73,11 @@ export async function captureChatVerifierReceipt(input: {
   allowRepositoryScopeForRedRecovery?: boolean;
   /** Explicit no-patch route for a successful verifier after inspected no-change. */
   allowRepositoryScopeForGreenNoChange?: boolean;
+  execution?: {
+    working_directory?: string;
+    environment_policy?: string;
+    target?: string;
+  };
 }): Promise<BoundChatVerifierReceipt | null> {
   if (!isAuthoritativeVerifierCommand(input.command)) return null;
   const parsed = parseStructuredVerifierCommand(input.command, {
@@ -112,6 +135,7 @@ export async function captureChatVerifierReceipt(input: {
         executable: parsed.executable,
         args: parsed.args,
       },
+      ...(input.execution ? { execution: input.execution } : {}),
     });
     receipt.inputClosure = inputClosure;
     const counts = parseExecutedTestCounts(
@@ -156,14 +180,23 @@ function toRepositoryRelativePaths(
   return [...new Set(out)].sort();
 }
 
-/** Replace the latest ledger entry for a structural verifier identity. */
+/** Ledger slot identity: command fingerprint plus governed execution context. */
+export function verifierReceiptLedgerKey(receipt: BoundChatVerifierReceipt): string {
+  const commandKey = verifierReceiptIdentityKey(receipt.command);
+  const cwd = receipt.working_directory ?? '@unset';
+  const env = receipt.environment_policy ?? '@unset';
+  const target = receipt.target ?? '';
+  return `${commandKey}::cwd=${cwd}::env=${env}::target=${target}`;
+}
+
+/** Replace the latest ledger entry for one execution-context identity. */
 export function upsertVerifierReceipt(
   ledger: BoundChatVerifierReceipt[],
   receipt: BoundChatVerifierReceipt,
 ): void {
-  const receiptKey = verifierReceiptIdentityKey(receipt.command);
+  const receiptKey = verifierReceiptLedgerKey(receipt);
   const existingIndex = ledger.findIndex(
-    (entry) => verifierReceiptIdentityKey(entry.command) === receiptKey,
+    (entry) => verifierReceiptLedgerKey(entry) === receiptKey,
   );
   if (existingIndex >= 0) ledger[existingIndex] = receipt;
   else ledger.push(receipt);
@@ -239,6 +272,15 @@ export async function captureAndRecordVerifierReceipt(input: {
   simulated?: boolean;
 }): Promise<BoundChatVerifierReceipt | null> {
   if (input.simulated === true) return null;
+  const identity =
+    input.cacheIdentity ??
+    resolveVerifierCacheIdentity({
+      projectRoot: input.projectRoot,
+      command: input.command,
+    });
+  const relativeCwd =
+    path.relative(input.projectRoot, identity.cwd).replaceAll('\\', '/') || '.';
+  const commandIdentity = analyzeVerifierIdentity(input.command);
   const receipt = await captureChatVerifierReceipt({
     projectRoot: input.projectRoot,
     command: input.command,
@@ -253,6 +295,13 @@ export async function captureAndRecordVerifierReceipt(input: {
     ...(input.allowRepositoryScopeForGreenNoChange !== undefined
       ? { allowRepositoryScopeForGreenNoChange: input.allowRepositoryScopeForGreenNoChange }
       : {}),
+    execution: {
+      working_directory: relativeCwd,
+      environment_policy: 'host-process',
+      ...(commandIdentity?.scope === 'targeted' && commandIdentity.targetSelectors.length > 0
+        ? { target: commandIdentity.targetSelectors.join(',') }
+        : {}),
+    },
   });
   if (!receipt) return null;
   const caveats = verifierEvidenceCaveats(receipt);
@@ -268,12 +317,6 @@ export async function captureAndRecordVerifierReceipt(input: {
     ...(input.toolCallId !== undefined ? { tool_call_id: input.toolCallId } : {}),
     receipt,
   });
-  const identity =
-    input.cacheIdentity ??
-    resolveVerifierCacheIdentity({
-      projectRoot: input.projectRoot,
-      command: input.command,
-    });
   input.cache.set(identity.key, {
     receipt,
     writeCountAtCache: input.writeCount,

@@ -1,4 +1,5 @@
 import { resolveClassCGateDecision } from "./autonomyEnforcement.js";
+import {requireProjectRoot,denyConversationAction} from './chatToolScopeAdmission.js';
 import { evaluatePlanThenExecuteGate } from "./planThenExecute.js";
 import { evaluateHardPlanModeGate } from "./planExecuteMode.js";
 import { evaluatePhaseToolGate } from "./phaseToolPolicy.js";
@@ -57,6 +58,7 @@ import {
 import { governedStrReplace } from "./governedMutations.js";
 import { executeGovernedApplyPatchAction } from "./codingLoop/applyPatchExecutor.js";
 import { executeReadRangeAction } from "./codingLoop/readRangeExecutor.js";
+import { executeTodoWriteAction } from "./codingLoop/todoWriteExecutor.js";
 import { recordMutationBatch, operationFingerprint } from "./sessionEvents.js";
 import {
   remoteMcpFailClosedObservation,
@@ -160,6 +162,7 @@ export class ChatEngineActionExecutor {
     // R0-10: a throwing presentation callback must not unwind settlement or
     // duplicate execution truth. All callbacks below are the safe wrappers.
     callbacks = wrapPresentationCallbacks(callbacks);
+    if(this.host.options.executionScope?.kind==='conversation')return denyConversationAction(this.host,action,callbacks,meta.index,meta.ownerGeneration);
     // R0-7/R0-8: the submission that owns this action. Captured once, before
     // any await, so a tool/child that settles after the engine is superseded
     // is recognised as stale instead of being applied to the new task.
@@ -180,7 +183,7 @@ export class ChatEngineActionExecutor {
     const tool = chatActionToolName(action);
     const target = chatActionTarget(action);
     const toolId = callbacks.onToolStart?.(tool, target) ?? -1;
-    const restoreProjectRoot = pinProjectRootEnv(this.host.options.projectRoot);
+    const restoreProjectRoot = pinProjectRootEnv(requireProjectRoot(this.host.options));
     const toolStart = performance.now();
 
     try {
@@ -311,7 +314,7 @@ export class ChatEngineActionExecutor {
         (action.type === "write_file" ||
           action.type === "str_replace" ||
           action.type === "apply_patch")
-          ? actualRecoveryEdit(action, this.host.options.projectRoot)
+          ? actualRecoveryEdit(action, requireProjectRoot(this.host.options))
           : null;
       let admittedThisAction = false;
       let recoveryPlanRejection: string | undefined;
@@ -661,7 +664,7 @@ export class ChatEngineActionExecutor {
         const requestedPath =
           action.type === "read_file" ? action.path : action.file_path;
         const admitted = admitProjectContentRead(
-          this.host.options.projectRoot,
+          requireProjectRoot(this.host.options),
           requestedPath,
         );
         if (!admitted.ok) {
@@ -683,7 +686,7 @@ export class ChatEngineActionExecutor {
       }
       if (action.type === "read_file") {
         if (isReadOnlyChat())
-          resolveChatRangePath(this.host.options.projectRoot, action.path);
+          resolveChatRangePath(requireProjectRoot(this.host.options), action.path);
         const pathKey = this.host.readCacheKey(action.path);
         const maxFull = getChatTaskTune(
           this.host.taskClass,
@@ -768,7 +771,7 @@ export class ChatEngineActionExecutor {
             new_str: action.new_str,
           },
           {
-            projectRoot: this.host.options.projectRoot,
+            projectRoot: requireProjectRoot(this.host.options),
             context: toolContext,
             preset: "workspace_write",
             executor: defaultToolExecutor,
@@ -874,7 +877,7 @@ export class ChatEngineActionExecutor {
           if (strReplaceEffect.status === "confirmed_change") {
             const edit = actualRecoveryEdit(
               action,
-              this.host.options.projectRoot,
+              requireProjectRoot(this.host.options),
             );
             this.host.workingState = applyWorkingStateEvent(
               this.host.workingState,
@@ -1003,7 +1006,7 @@ export class ChatEngineActionExecutor {
         this.host.fullReadCounts.delete(
           this.host.readCacheKey(gov.absolutePath),
         );
-        const edit = actualRecoveryEdit(action, this.host.options.projectRoot);
+        const edit = actualRecoveryEdit(action, requireProjectRoot(this.host.options));
         this.host.workingState = applyWorkingStateEvent(
           this.host.workingState,
           {
@@ -1112,38 +1115,21 @@ export class ChatEngineActionExecutor {
 
       // ── B1: todo_write — merge-patch task list ─────────────────────
       if (action.type === "todo_write") {
-        for (const item of action.todos) {
-          this.host.todos.set(item.id, {
-            content: item.content,
-            status: item.status,
-          });
-        }
-        const formattedTodos = [...this.host.todos.entries()]
-          .map(([id, t]) => `- [${t.status}] ${t.content} (${id})`)
-          .join("\n");
-        this.host.toolCallLog.push({
+        return executeTodoWriteAction({
+          host: this.host,
+          action,
           tool,
           target,
-          detail: `${this.host.todos.size} todos`,
-          index: meta.index,
-          exit_code: 0,
-        });
-        callbacks?.onToolComplete?.(
           toolId,
-          `${this.host.todos.size} todos`,
-          undefined,
-          0,
-        );
-        return {
-          index: meta.index,
-          observation: `### todo_write\nexit_code: 0\n\`\`\`\n${formattedTodos}\n\`\`\``,
-        };
+          meta,
+          callbacks,
+        });
       }
 
       // Background shell — handlers in chatBackgroundShell.ts (size ratchet)
       if (action.type === "await_command") {
         return executeAwaitCommandAction(action, {
-          projectRoot: this.host.options.projectRoot,
+          projectRoot: requireProjectRoot(this.host.options),
           tool,
           target,
           toolId,
@@ -1161,7 +1147,7 @@ export class ChatEngineActionExecutor {
       }
       if (action.type === "run_command" && action.background === true) {
         return executeBackgroundRunCommandAction(action, {
-          projectRoot: this.host.options.projectRoot,
+          projectRoot: requireProjectRoot(this.host.options),
           tool,
           target,
           toolId,
@@ -1242,7 +1228,7 @@ export class ChatEngineActionExecutor {
         target
       ) {
         const cacheIdentity = resolveVerifierCacheIdentity({
-          projectRoot: this.host.options.projectRoot,
+          projectRoot: requireProjectRoot(this.host.options),
           command: target,
           ...(action.cwd !== undefined ? { cwd: action.cwd } : {}),
         });
@@ -1253,7 +1239,7 @@ export class ChatEngineActionExecutor {
           cachedVerifier.envKey === cacheIdentity.envKey &&
           cachedVerifier.writeCountAtCache === this.host.writeCount &&
           shouldReuseCachedVerifierReceipt(
-            this.host.options.projectRoot,
+            requireProjectRoot(this.host.options),
             cachedVerifier.receipt,
           )
         ) {
@@ -1588,7 +1574,7 @@ export class ChatEngineActionExecutor {
           this.host.fullReadCounts.delete(this.host.readCacheKey(action.path));
           const edit = actualRecoveryEdit(
             action,
-            this.host.options.projectRoot,
+            requireProjectRoot(this.host.options),
           );
           this.host.workingState = applyWorkingStateEvent(
             this.host.workingState,
@@ -1615,7 +1601,7 @@ export class ChatEngineActionExecutor {
           callbacks.onFileChanged?.(path, adds, dels, action.patch);
           const edit = actualRecoveryEdit(
             action,
-            this.host.options.projectRoot,
+            requireProjectRoot(this.host.options),
           );
           this.host.workingState = applyWorkingStateEvent(
             this.host.workingState,
@@ -1673,7 +1659,7 @@ export class ChatEngineActionExecutor {
           > = null;
           try {
             receipt = await captureAndRecordVerifierReceipt({
-              projectRoot: this.host.options.projectRoot,
+              projectRoot: requireProjectRoot(this.host.options),
               command: target,
               exitCode: lastResult.exit_code,
               simulated: lastResult.simulated === true,
@@ -1698,7 +1684,7 @@ export class ChatEngineActionExecutor {
               cache: this.host.verifierReceiptCache,
               writeCount: this.host.writeCount,
               cacheIdentity: resolveVerifierCacheIdentity({
-                projectRoot: this.host.options.projectRoot,
+                projectRoot: requireProjectRoot(this.host.options),
                 command: target,
                 ...((action.type === "run_command" || action.type === "test_run") &&
                   action.cwd !== undefined
@@ -1765,7 +1751,7 @@ export class ChatEngineActionExecutor {
               stderr: lastResult.stderr,
               summary: receipt.summary ?? String(lastResult.exit_code),
               verifierId: target,
-              recoveryProjectRoot: this.host.options.projectRoot,
+              recoveryProjectRoot: requireProjectRoot(this.host.options),
               ...(recoveryBinding ? { recoveryBinding } : {}),
               ...(receipt.boundRevision?.compositeTreeHash
                 ? {
@@ -1897,7 +1883,7 @@ export class ChatEngineActionExecutor {
             this.host.workingState,
             action,
             recoveryTargetIdentity(
-              this.host.options.projectRoot,
+              requireProjectRoot(this.host.options),
               "path" in action && typeof action.path === "string"
                 ? action.path
                 : "",

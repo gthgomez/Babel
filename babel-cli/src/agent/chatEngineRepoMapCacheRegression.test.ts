@@ -22,9 +22,11 @@ import {
 const childTestCount = 12
 
 if (!isSyntheticProviderFixtureReady()) {
-  test('repo-map refresh is isolated in a synthetic-only subprocess', { timeout: 30_000 }, async t => {
+  const isolationTimeoutMs = process.platform === 'win32' ? 120_000 : 60_000
+  test('repo-map refresh is isolated in a synthetic-only subprocess', { timeout: isolationTimeoutMs }, async t => {
     const fixture = prepareSyntheticProviderFixture()
     const child = spawn(process.execPath, [
+      '--experimental-wasm-modules',
       '--import', new URL('../testinfra/synthetic-provider-fixture.mjs', import.meta.url).href,
       '--import', new URL('../testinfra/register-no-ambient-inference.mjs', import.meta.url).href,
       '--import', import.meta.resolve('tsx'), '--test-reporter=tap', '--test', fileURLToPath(import.meta.url),

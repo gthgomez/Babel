@@ -6,7 +6,6 @@ import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { createRequire } from 'node:module'
 import test from 'node:test'
-
 const script = fileURLToPath(new URL('../../scripts/summarize_required_tap.mjs', import.meta.url))
 
 type TapSummary = {
@@ -254,3 +253,4 @@ test('attempted failure with missing TAP still invokes the real summarizer and e
   assert.equal(result.status, 1)
   assert.ok(result.summary.errors.includes('missing_full_tap'))
 }))
+

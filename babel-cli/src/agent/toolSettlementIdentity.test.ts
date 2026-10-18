@@ -382,14 +382,20 @@ describe('settlement identity — positional settleCallIds invariant', { concurr
       // and the shell is denied before it can stay in flight for the abort.
       const task = 'Fix the verifier and run npm test.';
       const engine = makeEngine(root, runId, task);
-      const abortTimer = setTimeout(() => engine.abortTurn(), 600);
       const events: ChatEvent[] = [];
+      let abortTimer: ReturnType<typeof setTimeout> | undefined;
       try {
         for await (const event of engine.submitMessageStream(task)) {
           events.push(event);
+          if (event.type === 'tool_start') {
+            const announced = events.filter((entry) => entry.type === 'tool_start').length;
+            if (announced === 3 && abortTimer === undefined) {
+              abortTimer = setTimeout(() => engine.abortTurn(), 100);
+            }
+          }
         }
       } finally {
-        clearTimeout(abortTimer);
+        if (abortTimer !== undefined) clearTimeout(abortTimer);
       }
 
       const starts = startEvents(events);

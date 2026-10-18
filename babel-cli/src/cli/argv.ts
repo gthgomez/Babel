@@ -78,6 +78,8 @@ const VALUE_OPTIONS = new Set([
   '--local-learning-root',
   '--orchestrator',
   '--execution-profile',
+  '--execution-scope',
+  '--resume-chat',
   '--project-root',
   '--log-file',
   '--lock',

@@ -30,7 +30,8 @@ test('actual Node reporter binds skipped leaf source and reason to the required 
     const childEnv = {...process.env, BABEL_TAP_EXECUTION_PATH:join(output,'execution.json')}
     delete childEnv.NODE_TEST_CONTEXT
     delete childEnv.NODE_TEST_WORKER_ID
-    const run = spawnSync(process.execPath, ['--test', '--test-reporter='+reporter, path], {
+    const tsx = fileURLToPath(new URL('../../babel-cli/node_modules/tsx/dist/cli.mjs', import.meta.url))
+    const run = spawnSync(process.execPath, [tsx, '--test', '--test-reporter='+reporter, path], {
       cwd:root, encoding:'utf8', timeout:30000, env:childEnv,
     })
     assert.equal(run.status, 0, run.stderr)

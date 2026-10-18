@@ -13,7 +13,7 @@
  */
 
 import type { ChatEvent, TaskIntent } from '../agent/chatEngine.js';
-import type { BabelMode, SessionDescriptor } from '../executor/contracts.js';
+import type { BabelMode, ExecutionSessionDescriptor } from '../executor/contracts.js';
 import type {
   ModeCapability,
   ModeControllerKind,
@@ -83,7 +83,7 @@ export interface RuntimeCoordinator {
   /** Mode capability for the current surface (P02 semantics, unchanged). */
   capabilities(mode: BabelMode): ModeCapability;
   /** Build a `PreparedTurn` from a durable descriptor (P02 reuse). */
-  prepare(descriptor: SessionDescriptor): PreparedTurn;
+  prepare(descriptor: ExecutionSessionDescriptor): PreparedTurn;
   /** Bind exactly one adapter to a turn. Throws on unsupported/owned turns. */
   beginTurn(request: RuntimeTurnRequest): RuntimeExecution;
   /** Single-use stream from the owning adapter. */

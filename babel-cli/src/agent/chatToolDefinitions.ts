@@ -31,6 +31,7 @@ import type { ToolCallRequest } from '../localTools.js';
 import { targetBasename } from '../services/targetResolver.js';
 import { trimForPrompt } from '../services/liteProjectContext.js';
 import { normalizeModelToolName } from './canonicalToolMapping.js';
+import { conversationHasUncommittedCompactionCandidate } from './compactionCandidateGuard.js';
 import { RecoveryPlanProposalSchema } from './codingLoop/recoveryPlan.js';
 import {
   compileObservation,
@@ -284,7 +285,7 @@ export function mapChatActionToAgentAction(action: ChatToolAction): AgentAction 
 // ─── Prompt Builders ──────────────────────────────────────────────────────
 
 export interface ChatSystemPromptOptions {
-  projectRoot: string;
+  projectRoot: string | null;
   systemContext?: string;
   /** When true, instruct the model to use native function calling (no JSON envelope). */
   nativeTools?: boolean;
@@ -328,8 +329,9 @@ export function buildChatSystemPrompt(options: ChatSystemPromptOptions): string 
   }
 
   if (options.systemContext) sections.push(`## Project Context\n${options.systemContext}`);
-  sections.push(`Current working directory: ${options.projectRoot}`, `Project: ${targetBasename(options.projectRoot)}`);
-  if (!options.textTools && Object.keys(readMcpServers()).length > 0) {
+  if(options.projectRoot)sections.push(`Current working directory: ${options.projectRoot}`, `Project: ${targetBasename(options.projectRoot)}`);
+  else sections.push('Scope: conversation only. No project directory or project effects are authorized. Ask the user to select a project when needed.');
+  if (options.projectRoot && !options.textTools && Object.keys(readMcpServers()).length > 0) {
     sections.push('Configured MCP servers are available through the MCP tool definitions.');
   }
   return sections.join('\n\n');
@@ -385,14 +387,7 @@ export interface ChatTurnPromptOptions {
 }
 
 export function buildChatTurnPrompt(options: ChatTurnPromptOptions): string {
-  if (options.conversation.some((message) => message.compactionCandidate === true ||
-      (message.name === 'compaction_summary' && (message.role !== 'assistant' ||
-        message.provenance !== 'model' || message.authoritative !== false)) ||
-      (message.name === 'compaction_capsule' && (message.role !== 'system' ||
-        message.provenance !== 'controller' || message.authoritative !== true)) ||
-      (message.role === 'system' && (message.name === 'compaction_summary' ||
-        message.provenance === 'model' || message.provenance === 'mixed' ||
-        message.authoritative === false)))) {
+  if (conversationHasUncommittedCompactionCandidate(options.conversation)) {
     throw new Error('Uncommitted compaction candidate cannot enter a provider prompt');
   }
   const sections: string[] = [];

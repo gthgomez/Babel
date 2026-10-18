@@ -26,7 +26,8 @@ export interface ExecutionContext {
   readonly threadId: string;
   readonly turnId: string | null;
   /** Effective project root for this execution. */
-  readonly root: string;
+  readonly root: string | null;
+  readonly executionScope?: import('./chatExecutionScope.js').ChatExecutionScope;
   /** Frozen-for-this-execution approval session (reference; mutated in place by decisions). */
   readonly approvalSession?: ApprovalSessionState;
   readonly indexWritePolicy: IndexWritePolicy;

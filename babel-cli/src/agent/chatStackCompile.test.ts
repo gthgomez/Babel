@@ -375,6 +375,7 @@ describe("compileChatStack shape invariants", () => {
       task: "fix",
     });
 
+    assert.ok(stack.project_root);
     assert.ok(stack.project_root.includes("tmp"));
     assert.ok(stack.project_root.includes("test"));
   });

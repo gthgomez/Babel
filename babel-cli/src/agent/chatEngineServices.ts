@@ -30,10 +30,14 @@ import {
   normalizeModelToolName,
 } from "./canonicalToolMapping.js";
 import { createToolExecutor, type ToolExecutor } from "./toolExecutor.js";
+import { createCriterionCompletionServiceV1 } from '../authority/criterionCompletion.js';
 
 export type ChatExecutionProfile = "chat" | "plan" | "deep";
 
 export interface ChatEngineServices {
+  readonly acceptance?: {
+    createCompletionService: typeof createCriterionCompletionServiceV1;
+  };
   readonly conversation: {
     buildSystemPrompt: (options: ChatSystemPromptOptions) => string;
     buildTurnPrompt: (options: ChatTurnPromptOptions) => string;
@@ -61,6 +65,7 @@ export interface ChatEngineServices {
 /** Create the shared service graph used by every execution profile. */
 export function createChatEngineServices(): ChatEngineServices {
   return {
+    acceptance: { createCompletionService: createCriterionCompletionServiceV1 },
     conversation: {
       buildSystemPrompt: buildChatSystemPrompt,
       buildTurnPrompt: buildChatTurnPrompt,

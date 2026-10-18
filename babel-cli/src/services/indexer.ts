@@ -31,6 +31,26 @@ export interface SearchHit {
   snippet?: string;
 }
 
+function semanticSearchContentExcerpt(content: string, query: string): string | undefined {
+  const trimmed = content.trim();
+  if (!trimmed) return undefined;
+  const terms = query
+    .trim()
+    .split(/\s+/)
+    .filter((term) => term.length > 0);
+  const lower = trimmed.toLowerCase();
+  for (const term of terms) {
+    const idx = lower.indexOf(term.toLowerCase());
+    if (idx < 0) continue;
+    const start = Math.max(0, idx - 24);
+    const end = Math.min(trimmed.length, idx + term.length + 48);
+    const excerpt = trimmed.slice(start, end).replace(/\s+/g, ' ').trim();
+    if (excerpt.length > 0) return excerpt;
+  }
+  const fallback = trimmed.replace(/\s+/g, ' ').slice(0, 96).trim();
+  return fallback.length > 0 ? fallback : undefined;
+}
+
 export interface RepoMapEntry {
   path: string;
   extension: string;
@@ -606,12 +626,19 @@ export class SemanticIndexer {
   public search(query: string, limit = 5): SearchHit[] {
     const hits = this.fts.search(query, Math.max(1, limit));
 
-    return hits.map((hit: FtsSearchHit) => ({
-      id: hit.path,
-      name: hit.name,
-      score: hit.score,
-      ...(hit.snippet !== undefined ? { snippet: hit.snippet } : {}),
-    }));
+    return hits.map((hit: FtsSearchHit) => {
+      let snippet = hit.snippet;
+      if (snippet === undefined) {
+        const content = this.fts.getContent(hit.path);
+        if (content) snippet = semanticSearchContentExcerpt(content, query);
+      }
+      return {
+        id: hit.path,
+        name: hit.name,
+        score: hit.score,
+        ...(snippet !== undefined ? { snippet } : {}),
+      };
+    });
   }
 
   /**
@@ -655,10 +682,27 @@ export class SemanticIndexer {
       const fileIds = vectorHits.map((h) => h.fileId);
       const idToPath = fts.resolveFilePaths(fileIds);
 
+      const ftsSnippets = new Map(
+        this.search(query, Math.max(limit, vectorHits.length * 4)).map((hit) => [
+          hit.id,
+          hit.snippet,
+        ]),
+      );
       return vectorHits
         .map((hit) => {
           const file = idToPath.get(hit.fileId);
-          return file ? { id: file.path, name: file.name, score: hit.score } : null;
+          if (!file) return null;
+          let snippet = ftsSnippets.get(file.path);
+          if (snippet === undefined) {
+            const content = fts.getContent(file.path);
+            if (content) snippet = semanticSearchContentExcerpt(content, query);
+          }
+          return {
+            id: file.path,
+            name: file.name,
+            score: hit.score,
+            ...(snippet !== undefined ? { snippet } : {}),
+          };
         })
         .filter((hit): hit is SearchHit => hit !== null);
     } catch {

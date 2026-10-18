@@ -1,27 +1,33 @@
 import {modeUnavailableReason} from '../src/core.mjs';
-import {app,BrowserWindow,dialog,ipcMain,protocol,session,shell} from 'electron';
+import {app,BrowserWindow,clipboard,dialog,ipcMain,protocol,session,shell,Tray,Menu,safeStorage} from 'electron';
+import {writeClipboardText} from './clipboard.mjs';
 import {readFileSync} from 'node:fs';
 import {readFile,writeFile,rename,mkdir,stat,realpath} from 'node:fs/promises';
 import {basename,dirname,join,isAbsolute} from 'node:path';
 import {fileURLToPath} from 'node:url';
+import {randomUUID} from 'node:crypto';
 import {BabelChild,buildRunArgs,EXECUTION_PROFILE} from './child.mjs';
 import {RemoteBridgeChild,releaseBridgeIfCurrent} from './remoteHost.mjs';
 import {listDirectory,readProjectFile} from './workspace.mjs';
+import {readProjectDiff} from './project-diff.mjs';
+import {ProjectAuthority,inspectProjectIdentity} from './project-authority.mjs';
 import {APP_URL,REPOSITORY_URL,isAppUrl,parsePreferences} from './security.mjs';
 import {resolveOfficialCli,bundledEnvironment} from './runtime.mjs';
 import {diagnoseRuntime} from './diagnostics.mjs';
 import {applySandboxEnvironment,configureSandboxImage,RECOMMENDED_IMAGE} from './sandbox-setup.mjs';
-import {hasProviderCredential, saveProviderCredential} from './credentials.mjs';
+import {configureCredentialProtection,hasProviderCredential,saveProviderCredential,providerCredentialStatus,removeProviderCredential,migrateProviderCredential} from './credentials.mjs';
 import {saveDesktopProviderRoute} from './provider-route-save.mjs';
-import {applyProjectCredentialScope,applySelectedModelEnvironment} from './childEnv.mjs';
+import {assertCredentialEngineCapability} from './credential-engine.mjs';
+import {applyProjectCredentialScope,applySelectedModelEnvironment,applyOwnedCliCredentialEnvironment} from './childEnv.mjs';
 import {resolveEngineIdentity} from './identity.mjs';
 import {createGitRunner,createStepRunner,inspectDevelopmentCheckout,planDevelopmentUpdate,precheckSafety,resolveNpmInvocation,runDevelopmentUpdate,runDevelopmentRebuild,compareReleaseVersion,EXPECTED_ORIGIN} from './updater.mjs';
 import {parseBuildMetadata} from './identity.mjs';
 import {readActiveEngine, writeActiveEngine} from './engine-manager.mjs';
 import {checkPackagedCliUpdate, installPreviewSourceBuild, installStableReleaseArchive, resolveBundledNpmCli} from './engine-artifact.mjs';
 import {qualifiedProviders, readProviderRoute, saveProviderRoute, validateProviderRoute,refreshModelCatalog} from './provider-routing.mjs';
-import {listSavedChats,readSavedChat} from './sessions.mjs';
-import {CLOSE_GRACE_MS,decideLastWindow,decideWindowClose} from './lifecycle.mjs';
+import {listSavedChats,readSavedChat,searchSavedChats,readSavedMessage} from './sessions.mjs';
+import {ComposerDraftStore,composerDraftScope} from './composer-drafts.mjs';
+import {CLOSE_GRACE_MS,decideLastWindow,decideWindowClose,createCloseRequest} from './lifecycle.mjs';
 
 const packageRoot=dirname(dirname(fileURLToPath(import.meta.url)));
 const profileArgument=process.argv.find(arg=>arg.startsWith('--profile-dir='));
@@ -35,21 +41,41 @@ function bundledBuildRecord(){
   if(!app.isPackaged)return null;
   try{return parseBuildMetadata(readFileSync(join(process.resourcesPath,'..','BUILD.json'),'utf8'));}catch{return null;}
 }
-function runtimeEnvironment() {
+function runtimeEnvironment({credentials=false}={}) {
   const profile=join(app.getPath('userData'),'engine','config');
   const env=app.isPackaged?bundledEnvironment(app.getPath('userData')):{...process.env,ELECTRON_RUN_AS_NODE:'1',BABEL_CONFIG_DIR:profile};
   // Project keys are never loaded merely because a repository contains .env.
   applyProjectCredentialScope(env,{projectCredentialRoot:preferences.projectCredentialRoot,projectRoot:preferences.projectRoot,configDirectory:profile});
+  if(credentials)applyOwnedCliCredentialEnvironment(env,{configDirectory:profile,projectCredentialRoot:preferences.projectCredentialRoot,projectRoot:preferences.projectRoot});
   return applySandboxEnvironment(env,preferences);
+}
+async function ownedCliEnvironment(){
+  await assertCredentialEngineCapability({...officialRuntime(),path:activeCliEntry()});
+  const root=preferences.projectRoot;
+  if(root&&preferences.projectCredentialRoot===root){
+    const admission=await projectAuthority.admit(root);
+    if(preferences.projectRoot!==root||!projectAuthority.isCurrent(admission))throw new Error('Project authority changed before credential resolution.');
+  }
+  return runtimeEnvironment({credentials:true});
 }
 let diagnostics=null;
 let window=null;
+let tray=null;
+let backgroundStatus='Babel is working';
 let closingWindow=false;
 let closeFinished=false;
+let finishingClose=false;
+let composerDrafts=null;
+let draftCloseRequest=null;
+let draftCloseReady=false;
 let preferences={cliEntry:null,projectRoot:null,projectCredentialRoot:null};
 let runner=null;
+let projectAuthority=null;
+let runAuthority=null;
 let remoteBridge=null;
 let runAdmission=false;
+let runAdmissionEpoch=0;
+let remoteAdmissionEpoch=0;
 let dialogBusy=false;
 let updateBusy=false;
 let connectionChangeBusy=false;
@@ -61,8 +87,8 @@ protocol.registerSchemesAsPrivileged([{scheme:'babel',privileges:{standard:true,
 const singleInstance=app.requestSingleInstanceLock();
 if(!singleInstance) app.quit();
 else {
-  app.on('second-instance',()=>{if(window){if(window.isMinimized())window.restore();window.focus();}});
-  app.whenReady().then(start).catch(error=>{
+  app.on('second-instance',showWindow);
+  app.whenReady().then(()=>{configureCredentialProtection(safeStorage);return start();}).catch(error=>{
     dialog.showErrorBox('Babel Desktop could not start',error.message);
     app.quit();
   });
@@ -85,18 +111,24 @@ async function getInfo(){
   const official=officialRuntime();
   const cliEntry=activeCliEntry();
   let ready=false;
-  try{ready=Boolean(cliEntry&&preferences.projectRoot&&(await stat(cliEntry)).isFile()&&(await stat(preferences.projectRoot)).isDirectory());}catch{}
-  if(app.isPackaged&&!diagnostics)diagnostics=await diagnoseRuntime(official,{env:runtimeEnvironment(),cwd:app.getPath('userData')});
+  let scope={scope:preferences.projectRoot?'project':'conversation',trusted:false,identity:null,reason:null};
+  try{scope=await projectAuthority.inspect(preferences.projectRoot);}catch{scope.reason='Project identity is unavailable. Select and verify the project again.';}
+  try{ready=Boolean(cliEntry&&(!preferences.projectRoot||scope.trusted)&&(await stat(cliEntry)).isFile());}catch{}
+  if(app.isPackaged&&preferences.projectRoot&&!diagnostics){
+    try{diagnostics=await diagnoseRuntime(official,{env:await ownedCliEnvironment(),cwd:app.getPath('userData')});}
+    catch{diagnostics={ready:false,provider:'unavailable',error:'Credential storage or project authority is unavailable. Review provider settings and project trust.'};}
+  }
   const engine=resolveEngineIdentity({
     isPackaged:app.isPackaged,resourcesPath:process.resourcesPath,desktopVersion:app.getVersion(),
     cliEntry,official,advancedEntry:Boolean(!app.isPackaged&&preferences.cliEntry),ready,
-    executionProfile:EXECUTION_PROFILE,diagnostics,update:cliUpdate,
+    executionProfile:EXECUTION_PROFILE,diagnostics,update:cliUpdate,requiresSandbox:Boolean(preferences.projectRoot),
   });
   if(official.engineId&&official.engineId!=='bundled') engine.activeEngineId=official.engineId;
   return {
     cliName:cliEntry?basename(cliEntry):null,
     projectName:preferences.projectRoot?basename(preferences.projectRoot):null,
     projectRoot:preferences.projectRoot,
+    projectAuthority:scope,
     ready,
     officialCliLabel:official.label,
     officialCliReady:official.ready,
@@ -118,6 +150,21 @@ async function getInfo(){
         }
       : {running:false,state:'stopped',port:null,url:null,blocksLocalRuns:false,sharedSession:false},
   };
+}
+const credentialBindings=new Map();
+async function credentialRequestContext(options,bound=false){
+  if(!options||typeof options!=='object'||!['private','project'].includes(options.scope))throw new Error('Select an explicit credential destination.');
+  const context={provider:options.provider,scope:options.scope,configDirectory:runtimeEnvironment().BABEL_CONFIG_DIR,projectRoot:preferences.projectRoot};
+  const generation=projectAuthority.generation;
+  if(bound){
+    const previous=credentialBindings.get(options.binding);
+    if(!previous||previous.provider!==context.provider||previous.scope!==context.scope||previous.configDirectory!==context.configDirectory||previous.projectRoot!==context.projectRoot||previous.generation!==generation)throw new Error('Credential destination changed. Reopen provider settings and retry.');
+  }
+  if(context.scope==='project'){
+    const admission=await projectAuthority.admit(context.projectRoot);
+    if(preferences.projectRoot!==context.projectRoot||generation!==projectAuthority.generation||!projectAuthority.isCurrent(admission))throw new Error('Project authority changed. Reopen provider settings and retry.');
+  }
+  return context;
 }
 function validateSender(event){
   if(!window||window.isDestroyed()||event.sender!==window.webContents||event.senderFrame!==window.webContents.mainFrame||!isAppUrl(event.senderFrame.url)) throw new Error('Rejected an untrusted desktop request');
@@ -184,11 +231,20 @@ async function start(){
   try{
     if((await stat(preferencePath)).size<16384) preferences=parsePreferences(JSON.parse(await readFile(preferencePath,'utf8')));
   }catch{/* Missing/invalid UI preferences never block startup. */}
+  projectAuthority=await ProjectAuthority.open(join(app.getPath('userData'),'project-authority.json'));
   const html=await readFile(join(packageRoot,'dist','index.html'),'utf8');
   protocol.handle('babel',request=>isAppUrl(request.url)?new Response(html,{headers:{'Content-Type':'text/html; charset=utf-8','X-Content-Type-Options':'nosniff'}}):new Response('Not found',{status:404}));
   session.defaultSession.setPermissionRequestHandler((_contents,_permission,callback)=>callback(false));
   session.defaultSession.setPermissionCheckHandler(()=>false);
   handle('babel:get-info',getInfo);
+  handle('babel:copy-text',text=>writeClipboardText(clipboard,text));
+  composerDrafts=new ComposerDraftStore(app.getPath('userData'));
+  handle('babel:read-composer-drafts',()=>composerDrafts.read(composerDraftScope(preferences.projectRoot)));
+  handle('babel:write-composer-drafts',request=>composerDrafts.write(composerDraftScope(preferences.projectRoot),request));
+  handle('babel:complete-draft-close',request=>{
+    if(!draftCloseRequest||request?.token!==draftCloseRequest.token)return {accepted:false};
+    draftCloseRequest.finish(request.saved===true);return {accepted:true};
+  });
   handle('babel:refresh-diagnostics',async()=>{assertIdle();diagnostics=null;return getInfo();});
   handle('babel:configure-sandbox',async options=>withConnectionChange(async()=>{
     if(!options||typeof options!=='object')throw new Error('Invalid sandbox setup request.');
@@ -303,8 +359,30 @@ async function start(){
   handle('babel:list-qualified-providers',()=>qualifiedProviders(runtimeEnvironment().BABEL_CONFIG_DIR));
   handle('babel:refresh-models',provider=>withConnectionChange(()=>refreshModelCatalog({provider,configDirectory:runtimeEnvironment().BABEL_CONFIG_DIR})));
   handle('babel:read-provider-route',()=>readProviderRoute(runtimeEnvironment().BABEL_CONFIG_DIR));
+  handle('babel:provider-credential-status',async options=>{
+    assertIdle();
+    const context=await credentialRequestContext(options);
+    const status=providerCredentialStatus(context);
+    const binding=randomUUID();
+    credentialBindings.clear();credentialBindings.set(binding,{...context,generation:projectAuthority.generation});
+    return {...status,binding};
+  });
+  handle('babel:remove-provider-credential',async options=>{
+    return withConnectionChange(async()=>{
+      const context=await credentialRequestContext(options,true);
+      const result=removeProviderCredential(context);diagnostics=null;return result;
+    });
+  });
+  handle('babel:migrate-provider-credential',async options=>{
+    return withConnectionChange(async()=>{
+      const context=await credentialRequestContext({...options,scope:'private'},true);
+      if(options?.confirm!==true)throw new Error('Confirm retention of the legacy plaintext recovery file.');
+      const result=migrateProviderCredential({...context,confirm:true});diagnostics=null;return result;
+    });
+  });
   handle('babel:save-provider-route',async options=>{
     return withConnectionChange(async()=>{
+    if(options?.apiKey || options?.scope==='project')await credentialRequestContext(options,Boolean(options?.apiKey));
     const result=await saveDesktopProviderRoute({
       options, configDirectory:runtimeEnvironment().BABEL_CONFIG_DIR, preferences, savePreferences,
     });
@@ -320,6 +398,7 @@ async function start(){
     if(options.scope==='project'&&!preferences.projectRoot) {
       throw new Error('Select a project before choosing project-local credentials.');
     }
+    if(options.apiKey || options.scope==='project')await credentialRequestContext(options,Boolean(options.apiKey));
     const configDirectory=runtimeEnvironment().BABEL_CONFIG_DIR;
     const route=validateProviderRoute({provider:options.provider, model:options.model},configDirectory);
     const descriptor=qualifiedProviders().find(entry=>entry.id===route.provider);
@@ -334,7 +413,7 @@ async function start(){
     if(requiresKey && apiKey) {
       result=saveProviderCredential({
         provider:route.provider, apiKey, scope:options.scope,
-        configDirectory, projectRoot:preferences.projectRoot,
+        configDirectory, projectRoot:preferences.projectRoot,operation:options.credentialOperation??'add',
       });
     }
     saveProviderRoute({configDirectory, ...route});
@@ -351,69 +430,121 @@ async function start(){
     if(!selection.canceled){preferences.projectRoot=await realpath(selection.filePaths[0]);await savePreferences();}
     return getInfo();
   })));
+  handle('babel:trust-project',()=>withNativeDialog(()=>withConnectionChange(async()=>{
+    const root=preferences.projectRoot;
+    const generation=projectAuthority.generation;
+    const identity=await inspectProjectIdentity(root);
+    const consent=await dialog.showMessageBox(window,{type:'question',title:'Trust this project?',message:'Allow Babel to work in this exact project?',detail:`${identity.root}\n${identity.branch?`Branch: ${identity.branch}\n`:''}\nBabel can read project content, send it to your selected provider, change files and run routine checks under CLI policy. Consequential operations retain their approvals. Trust is remembered for this directory and repository identity until you revoke it.`,buttons:['Cancel','Trust project'],defaultId:0,cancelId:0,noLink:true});
+    if(consent.response===1)await projectAuthority.grant(root,identity,generation);
+    return getInfo();
+  })));
+  handle('babel:revoke-project-trust',async()=>{
+    if(!preferences.projectRoot)throw new Error('No project is selected.');
+    const revocation=projectAuthority.revoke(preferences.projectRoot);
+    runAdmissionEpoch++;
+    remoteAdmissionEpoch++;
+    runAuthority=null;
+    runner?.cancel();remoteBridge?.stop();remoteBridge=null;
+    try{await revocation;}catch{throw new Error('Project access stopped in this app, but revocation could not be saved. Retry before reopening Babel.');}
+    return getInfo();
+  });
   handle('babel:list-sessions',options=>listSavedChats(packageRoot,{
     runsDir:runtimeEnvironment().BABEL_RUNS_DIR,
     limit:Number(options?.limit) > 0 ? Number(options.limit) : undefined,
     offset:Number(options?.offset) >= 0 ? Number(options.offset) : undefined,
   }));
+  let historySearchActive=false;
+  handle('babel:read-session-message',request=>readSavedMessage(packageRoot,request?.sessionId,request?.messageIndex,{runsDir:runtimeEnvironment().BABEL_RUNS_DIR,charOffset:request?.charOffset,sourceEventId:request?.sourceEventId}));
+  handle('babel:search-sessions',async query=>{
+    if(historySearchActive)throw new Error('History search is already running.');
+    historySearchActive=true;
+    try{return await searchSavedChats(packageRoot,query,{runsDir:runtimeEnvironment().BABEL_RUNS_DIR});}
+    finally{historySearchActive=false;}
+  });
   handle('babel:open-session',(id, options)=>readSavedChat(packageRoot,id,{
     runsDir:runtimeEnvironment().BABEL_RUNS_DIR,
     olderOffset:Number(options?.olderOffset) >= 0 ? Number(options.olderOffset) : undefined,
     messageLimit:Number(options?.messageLimit) > 0 ? Number(options.messageLimit) : undefined,
   }));
-  handle('babel:list-directory',relative=>listDirectory(preferences.projectRoot,relative));
-  handle('babel:read-file',relative=>readProjectFile(preferences.projectRoot,relative));
+  const withProjectAccess=async operation=>{
+    const admission=await projectAuthority.admit(preferences.projectRoot);
+    const result=await operation(admission.identity.root);
+    const current=await projectAuthority.admit(preferences.projectRoot);
+    if(!projectAuthority.isCurrent(admission)||current.identity.id!==admission.identity.id)throw new Error('Project authority changed during the request.');
+    return result;
+  };
+  handle('babel:list-directory',relative=>withProjectAccess(root=>listDirectory(root,relative)));
+  handle('babel:read-file',relative=>withProjectAccess(root=>readProjectFile(root,relative)));
+  handle('babel:read-diff',relative=>withProjectAccess(root=>readProjectDiff(root,relative,{cacheDirectory:join(app.getPath('userData'),'diff-cache')})));
   handle('babel:open-repository',()=>shell.openExternal(REPOSITORY_URL));
-  handle('babel:decide',decision=>{if(runner)runner.reply(decision);return true;});
-  handle('babel:cancel',()=>{runner?.cancel();return true;});
-  handle('babel:start-remote-bridge',async options=>{
-    assertIdle();
+  handle('babel:decide',async reply=>{
+    if(!runAuthority||!projectAuthority.isCurrent(runAuthority))return {accepted:false};
+    try{const current=await projectAuthority.admit(preferences.projectRoot);if(current.identity.id!==runAuthority?.identity.id||!projectAuthority.isCurrent(runAuthority))return {accepted:false};}catch{return {accepted:false};}
+    const accepted=runner?.reply(reply)===true;
+    if(accepted){backgroundStatus='Babel is working';try{updateTray();}catch{}}
+    return {accepted};
+  });
+  handle('babel:cancel',()=>{runAdmissionEpoch++;runner?.cancel();return true;});
+  handle('babel:start-remote-bridge',options=>withConnectionChange(async()=>{
+    const admissionEpoch=remoteAdmissionEpoch;
     if(remoteBridge?.running)throw new Error('The loopback remote bridge is already running');
     const cliEntry=activeCliEntry();
     if(!cliEntry)throw new Error(app.isPackaged?'Bundled CLI or Node is missing.':'Build or select the official Babel CLI first');
     if(!preferences.projectRoot)throw new Error('Open a project first');
+    const admission=await projectAuthority.admit(preferences.projectRoot);
     const port=Number(options?.port??4545);
     if(!Number.isInteger(port)||port<1024||port>65535)throw new Error('Invalid remote bridge port');
-    const bridge=new RemoteBridgeChild({executable:officialRuntime().executable,entry:cliEntry,projectRoot:preferences.projectRoot,env:runtimeEnvironment(),inheritEnv:false});
+    if(admissionEpoch!==remoteAdmissionEpoch||!projectAuthority.isCurrent(admission))throw new Error('Remote startup was cancelled.');
+    const childEnvironment=await ownedCliEnvironment();
+    if(admissionEpoch!==remoteAdmissionEpoch||!projectAuthority.isCurrent(admission))throw new Error('Remote startup was cancelled.');
+    const bridge=new RemoteBridgeChild({executable:officialRuntime().executable,entry:cliEntry,projectRoot:admission.identity.root,env:childEnvironment,inheritEnv:false});
     remoteBridge=bridge;
     try{
-      return await bridge.start({port,onLine:({stream,text})=>{if(window&&!window.isDestroyed())window.webContents.send('babel:remote-log',{stream,text});}});
+      const result=await bridge.start({port,onLine:({stream,text,phase,code,diagnosticAvailable})=>{if(window&&!window.isDestroyed())window.webContents.send('babel:remote-log',{stream,text,phase,code,diagnosticAvailable});}});
+      if(!projectAuthority.isCurrent(admission)||remoteBridge!==bridge){bridge.stop();throw new Error('Project trust or connection changed while starting remote access.');}
+      return result;
     }catch(error){
       remoteBridge=releaseBridgeIfCurrent(remoteBridge,bridge);
       throw error;
     }
-  });
-  handle('babel:stop-remote-bridge',()=>{remoteBridge?.stop();remoteBridge=null;return {stopped:true};});
+  }));
+  handle('babel:stop-remote-bridge',()=>{remoteAdmissionEpoch++;remoteBridge?.stop();remoteBridge=null;return {stopped:true};});
   handle('babel:run',async request=>{
     assertIdle();
     runAdmission=true;
+    const admissionEpoch=runAdmissionEpoch;
     try{
     if(!request||typeof request!=='object'||typeof request.runId!=='string'||!/^[\w-]{1,100}$/.test(request.runId))throw new Error('Invalid run request');
     const cliEntry=activeCliEntry();
     if(!cliEntry)throw new Error(app.isPackaged?'Bundled CLI or Node is missing. Extract the complete ZIP again.':'The official Babel CLI is not built. Build babel-cli/dist/index.js, or choose another entry from Advanced.');
-    if(!preferences.projectRoot)throw new Error('Open a project first');
+    const conversationOnly=!preferences.projectRoot;
+    if(!conversationOnly)await projectAuthority.admit(preferences.projectRoot);
     if(!(await getInfo()).ready)throw new Error('The selected Babel CLI or project is no longer available');
-    if(app.isPackaged){
-      diagnostics=await diagnoseRuntime(officialRuntime(),{env:runtimeEnvironment(),cwd:app.getPath('userData')});
+    if(app.isPackaged&&!conversationOnly){
+      diagnostics=await diagnoseRuntime(officialRuntime(),{env:await ownedCliEnvironment(),cwd:app.getPath('userData')});
       if(!diagnostics.ready)throw new Error('Execution prerequisites are missing or unverified. Open Setup, start Docker Desktop and prepare or validate a sandbox image, then recheck setup.');
     }
-    // Validate before presenting consent; renderer cannot provide arbitrary flags.
+    // Validate native-bound scope and route before spawning; no arbitrary flags.
     const route = readProviderRoute(runtimeEnvironment().BABEL_CONFIG_DIR);
-    const runRequest = {...request};
+    const runRequest = {...request,executionScope:conversationOnly?{kind:'conversation'}:{kind:'project',projectRoot:preferences.projectRoot}};
     if (route?.model && !runRequest.model) {
       runRequest.model = route.model;
     }
     if(!route)throw new Error('Choose a provider and default model in Settings before sending a task.');
-    const unavailableMode=modeUnavailableReason(runRequest.mode,route.provider);
+    const unavailableMode=modeUnavailableReason(runRequest.mode,route.provider,conversationOnly?'conversation':'project');
     if(unavailableMode)throw new Error(unavailableMode);
     const models=qualifiedProviders(runtimeEnvironment().BABEL_CONFIG_DIR).find(p=>p.id===route.provider)?.routes??[];
     const selectedModel=models.find(model=>model.id===runRequest.model&&model.enabled!==false);
     if(!selectedModel)throw new Error('The selected model is disabled or belongs to another provider. Choose an enabled model.');
+    if(selectedModel.selectable===false)throw new Error(selectedModel.unavailableReason||'The selected model is unavailable. Choose another model in Settings.');
     buildRunArgs(cliEntry, preferences.projectRoot, runRequest);
-    const consent = await withNativeDialog(() => dialog.showMessageBox(window, {type:'question', title:'Run with your existing Babel CLI?', message:`Start a ${request.mode} run with Babel?`, detail:`Project: ${preferences.projectRoot}\nCLI: ${cliEntry}\n\nTask: ${request.task.slice(0,1200)}${request.task.length>1200?'…':''}\n\nBabel may read and change files in this project, run commands, and send project content to your configured model provider. Approvals appear in this window. Stop ends the run.`, buttons:['Cancel','Run Babel'], defaultId:0, cancelId:0, noLink:true}));
-    if (consent.response !== 1) return {started:false};
-    runner = new BabelChild({executable:officialRuntime().executable, entry:cliEntry, projectRoot:preferences.projectRoot, env:applySelectedModelEnvironment(runtimeEnvironment(),selectedModel), inheritEnv:false});
-    runner.start(runRequest, packet => {if(window&&!window.isDestroyed()) window.webContents.send('babel:event', packet);});
+    const childEnvironment=applySelectedModelEnvironment(await ownedCliEnvironment(),selectedModel);
+    runAuthority=conversationOnly?null:await projectAuthority.admit(preferences.projectRoot);
+    if(admissionEpoch!==runAdmissionEpoch){runAuthority=null;return {started:false};}
+    runner = new BabelChild({executable:officialRuntime().executable, entry:cliEntry, projectRoot:runAuthority?.identity.root??null,launchDirectory:app.getPath('userData'), env:childEnvironment, inheritEnv:false});
+    backgroundStatus='Babel is working';
+    runner.start(runRequest, handleBabelPacket);
+    try{updateTray();}catch{ /* Tray refresh cannot invalidate an already admitted run. */ }
     return {started:true};
     }finally{runAdmission=false;}
   });
@@ -427,15 +558,32 @@ function createWindow(){
   window.webContents.on('will-navigate',event=>event.preventDefault());
   window.webContents.on('will-attach-webview',event=>event.preventDefault());
   window.on('ready-to-show',()=>window.show());
+  const requestClose=createCloseRequest({
+    ask:async()=>{
+      if(dialogBusy)return 'cancel';
+      if(updateBusy||connectionChangeBusy||runAdmission){
+        await withNativeDialog(()=>dialog.showMessageBox(window,{type:'info',title:'Babel is finishing setup',message:'Wait for setup or the update to finish before closing Babel.',buttons:['Keep open'],noLink:true}));
+        return 'cancel';
+      }
+      const answer=await withNativeDialog(()=>dialog.showMessageBox(window,{type:'question',title:'Active Babel work',message:'What should happen to the active work?',detail:'Keep working leaves this owned runtime running with a tray control to reopen or stop it. Local work cannot continue while the computer is asleep or shut down. Stop and quit requests cancellation; interrupted effects may need review when you reopen.',buttons:['Keep open','Keep working in background','Stop and quit'],defaultId:0,cancelId:0,noLink:true}));
+      return ['cancel','background','stop'][answer.response]??'cancel';
+    },
+    background:()=>{ensureTray();window.hide();},
+    stopAndClose:stopThenClose,
+    onError:()=>{showWindow();dialog.showErrorBox('Babel could not finish closing','Review the window and active work before retrying the close action.');},
+  });
   window.on('close',event=>{
-    const decision=decideWindowClose({busy:busy(),closing:closingWindow});
-    if(decision==='cancel-then-close'){
+    if(!draftCloseReady){
       event.preventDefault();
-      closingWindow=true;
-      runner?.cancel();
-      const timer=setTimeout(finishClosingWindow,CLOSE_GRACE_MS);
-      if(runner?.busy) runner.whenIdle(()=>{clearTimeout(timer);finishClosingWindow();});
-      else {clearTimeout(timer);finishClosingWindow();}
+      if(!draftCloseRequest)void flushComposerBeforeClose().then(saved=>{if(saved&&window&&!window.isDestroyed()){draftCloseReady=true;window.close();}}).catch(()=>showWindow());
+      return;
+    }
+    draftCloseReady=false;
+    const decision=decideWindowClose({busy:busy(),closing:closingWindow});
+    if(decision==='wait'){event.preventDefault();return;}
+    if(decision==='ask'){
+      event.preventDefault();
+      void requestClose();
       return;
     }
     runner?.cancel();
@@ -445,11 +593,81 @@ function createWindow(){
   window.on('closed',()=>{window=null;});
   window.loadURL(APP_URL);
 }
-function finishClosingWindow(){
-  if(closeFinished)return;
-  closeFinished=true;
-  if(window&&!window.isDestroyed())window.destroy();
-  app.quit();
+function showWindow(){
+  if(!window||window.isDestroyed())return;
+  window.show();if(window.isMinimized())window.restore();window.focus();
 }
-app.on('before-quit',()=>{runner?.cancel();remoteBridge?.stop();});
+function updateTray(){
+  if(!tray||tray.isDestroyed())return;
+  tray.setToolTip(backgroundStatus);
+  tray.setContextMenu(Menu.buildFromTemplate([
+    {label:backgroundStatus,enabled:false},
+    {label:'Open Babel',click:showWindow},
+    {label:'Stop work and quit',enabled:Boolean(runner?.busy||remoteBridge?.running),click:stopThenClose},
+    {label:'Quit Babel',enabled:!busy(),click:()=>{if(busy())showWindow();else stopThenClose();}},
+  ]));
+}
+function ensureTray(){
+  if(!tray||tray.isDestroyed()){
+    tray=new Tray(join(packageRoot,'assets','babel-mark.png'));
+    tray.on('click',showWindow);tray.on('balloon-click',showWindow);
+  }
+  updateTray();
+}
+function handleBabelPacket(packet){
+  // Notification or renderer failures cannot take down the owned child runtime.
+  try{if(window&&!window.isDestroyed()&&!window.webContents.isDestroyed())window.webContents.send('babel:event',packet);}catch{}
+  const kind=packet.event?.type;
+  const attention=kind==='approval.required'&&runner?.awaitingApproval?'Babel needs approval':packet.kind==='exit'?'Babel run ended · open to review':null;
+  if(attention){
+    backgroundStatus=attention;
+    try{
+      updateTray();
+      if(tray&&!tray.isDestroyed()&&window&&!window.isDestroyed()&&!window.isVisible()&&process.platform==='win32')tray.displayBalloon({title:'Babel',content:attention,iconType:'info'});
+    }catch{ /* Optional desktop attention must not interrupt task execution. */ }
+  }
+}
+async function stopThenClose(){
+  if(closingWindow)return false;
+  if(updateBusy||connectionChangeBusy||runAdmission){showWindow();return false;}
+  closingWindow=true;
+  runner?.cancel();remoteBridge?.stop();
+  await new Promise(resolve=>{
+    const timer=setTimeout(resolve,CLOSE_GRACE_MS);
+    if(runner?.busy)runner.whenIdle(()=>{clearTimeout(timer);resolve();});
+    else{clearTimeout(timer);resolve();}
+  });
+  return finishClosingWindow();
+}
+async function flushComposerBeforeClose(){
+  if(!window||window.isDestroyed())return true;
+  if(draftCloseRequest)return false;
+  const token=randomUUID();
+  const saved=await new Promise(resolve=>{
+    const timer=setTimeout(()=>{draftCloseRequest=null;resolve(false);},10000);
+    draftCloseRequest={token,finish:value=>{clearTimeout(timer);draftCloseRequest=null;resolve(value);}};
+    try{window.webContents.send('babel:prepare-draft-close',token);}catch{draftCloseRequest.finish(false);}
+  });
+  if(saved){await composerDrafts?.whenIdle();return true;}
+  if(!window||window.isDestroyed())return false;
+  const answer=await withNativeDialog(()=>dialog.showMessageBox(window,{type:'warning',title:'Drafts are not saved',message:'The latest composer drafts could not be saved.',detail:'Keep Babel open to copy or recover the text. Quitting now may lose unsaved text; previously saved chats and drafts remain on disk.',buttons:['Keep open','Quit without unsaved drafts'],defaultId:0,cancelId:0,noLink:true}));
+  return answer.response===1;
+}
+async function finishClosingWindow(){
+  if(closeFinished)return true;
+  if(finishingClose)return false;
+  finishingClose=true;
+  try{
+    if(!await flushComposerBeforeClose()){closingWindow=false;showWindow();return false;}
+    closeFinished=true;
+    if(window&&!window.isDestroyed())window.destroy();
+    app.quit();
+    return true;
+  }catch{closingWindow=false;showWindow();return false;}
+  finally{finishingClose=false;}
+}
+app.on('before-quit',event=>{
+  if(!closeFinished&&window&&!window.isDestroyed()){event.preventDefault();window.close();return;}
+  runner?.cancel();remoteBridge?.stop();tray?.destroy();tray=null;
+});
 app.on('window-all-closed',()=>{if(decideLastWindow()==='quit')app.quit();});

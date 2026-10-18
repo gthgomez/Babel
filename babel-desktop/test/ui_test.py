@@ -20,13 +20,14 @@ def main():
         assert page.locator('#send-button').is_disabled()
         assert 'installed Babel Desktop' in page.locator('#status-detail').inner_text()
         checks.append('browser-only view cannot execute or fabricate a conversation')
-        page.locator('.top-tab[data-mode="plan"]').click()
-        assert page.locator('.mode-option[data-mode="plan"]').get_attribute('aria-pressed') == 'true'
-        page.locator('.mode-option[data-mode="deep"]').click()
-        assert page.locator('.top-tab[data-mode="deep"]').get_attribute('aria-pressed') == 'true'
+        for mode, shortcut in [('plan', 'Alt+2'), ('deep', 'Alt+3')]:
+            assert page.locator(f'.top-tab[data-mode="{mode}"]').is_disabled()
+            assert page.locator(f'.mode-option[data-mode="{mode}"]').is_disabled()
+            page.keyboard.press(shortcut)
+            assert page.locator('.top-tab[data-mode="chat"]').get_attribute('aria-pressed') == 'true'
         page.keyboard.press('Alt+1')
         assert page.locator('.top-tab[data-mode="chat"]').get_attribute('aria-pressed') == 'true'
-        checks.append('modes and keyboard shortcuts remain synchronized')
+        checks.append('unsupported modes fail closed without a configured native provider')
         page.locator('#composer-input').fill('Test <img src=x onerror="window.INJECTED=true">')
         page.keyboard.press('Shift+Enter')
         page.keyboard.type('Second line')

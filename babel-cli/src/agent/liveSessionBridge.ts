@@ -16,6 +16,12 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { randomUUID } from 'node:crypto';
+import {normalizeChatExecutionScope} from './chatExecutionScope.js';
+import {inferTaskAcceptance} from './taskAcceptanceMeaning.js';
+import {
+  bindExecutableVerifiersToTaskAcceptance,
+  mergeTrustedVerifierCommands,
+} from './taskAcceptanceExecutableBinding.js';
 import { join } from 'node:path';
 import {
   buildInstructionManifestV1,
@@ -33,6 +39,7 @@ import {
 } from './liveSession.js';
 import {
   loadSessionEventLogFromDir,
+  loadSessionEventLogForResume,
   recordBudgetSnapshot,
   type SessionEventLog,
 } from './sessionEvents.js';
@@ -49,10 +56,13 @@ import {
   type TaskContractV1,
 } from './taskContract.js';
 import type { BabelMode } from '../executor/contracts.js';
+import {validateTaskModeCompanion,MODE_REVISION_HISTORY_REF,type TaskModeHistory} from './taskModeRevision.js';
+import {assertObjectiveLifecycle,activeObjectiveSessionLog,activeAcceptanceSessionLog,TASK_OBJECTIVE_LIFECYCLE_FILENAME,OBJECTIVE_LIFECYCLE_REF,type TaskObjectiveLifecycleV1} from './taskObjectiveLifecycle.js';
 import { renameCheckpointSync, writeCheckpointFileSync, type AtomicCheckpointRenameOptions } from '../utils/atomicCheckpointFile.js';
 
 export const INSTRUCTION_MANIFEST_FILENAME = 'instruction-manifest.json';
 export const TASK_CONTRACT_FILENAME = 'task-contract.json';
+export const TASK_MODE_HISTORY_FILENAME = 'task-mode-history.json';
 export const LIVE_SESSION_SNAPSHOT_FILENAME = 'live-session-snapshot.json';
 export const CHECKPOINT_JOURNAL_FILENAME = 'live-session-checkpoint.journal.json';
 
@@ -149,7 +159,39 @@ export function recoverCheckpointArtifacts(runDir: string, renameOptions?: Atomi
 export interface LiveSessionAuthority {
   instructionManifest: InstructionManifestV1;
   taskContract: TaskContractV1;
+  taskModeHistory?: TaskModeHistory;
+  taskObjectiveLifecycle?: TaskObjectiveLifecycleV1;
   chatStack?: ChatCompiledStack;
+}
+
+/** Mode-derived authority is unusable without its complete original ceiling. */
+export function assertAuthorityModeHistory(authority:LiveSessionAuthority):void{
+  const history=authority.taskModeHistory;
+  if(history===undefined){
+    if(authority.taskContract.provenance.source==='taskModeRevision'||authority.taskContract.provenance.records.some(record=>record.kind==='risk_analysis'&&record.ref===MODE_REVISION_HISTORY_REF))throw new LiveSessionAuthorityError('MODE_HISTORY_MISSING','The retained mode revision requires its matching history');
+    return;
+  }
+  if(validateTaskModeCompanion(authority.taskContract,history).length||history.schema_version===2&&!authority.taskContract.provenance.records.some(record=>record.ref===OBJECTIVE_LIFECYCLE_REF))throw new LiveSessionAuthorityError('MODE_HISTORY_INVALID','The retained mode history is invalid or unsupported and cannot authorize execution');
+}
+
+function loadAuthorityModeHistory(runDir:string,authority:LiveSessionAuthority):LiveSessionAuthority{
+  const path=join(runDir,TASK_MODE_HISTORY_FILENAME);
+  if(existsSync(path)){
+    try{authority.taskModeHistory=JSON.parse(readFileSync(path,'utf8')) as TaskModeHistory;}
+    catch{throw new LiveSessionAuthorityError('MODE_HISTORY_INVALID','The retained mode history is corrupt and cannot authorize execution');}
+  }
+  assertAuthorityModeHistory(authority);
+  const lifecyclePath=join(runDir,TASK_OBJECTIVE_LIFECYCLE_FILENAME);
+  if(existsSync(lifecyclePath)){
+    try{authority.taskObjectiveLifecycle=JSON.parse(readFileSync(lifecyclePath,'utf8')) as TaskObjectiveLifecycleV1;}
+    catch{throw new LiveSessionAuthorityError('OBJECTIVE_LIFECYCLE_INVALID','The objective lifecycle is corrupt');}
+  }
+  try{
+    const thread=authority.taskObjectiveLifecycle?loadThreadEventLogFromDir(runDir):null;
+    if(authority.taskObjectiveLifecycle&&!thread)throw new Error('Canonical objective attempts are missing');
+    assertObjectiveLifecycle(authority,authority.taskObjectiveLifecycle,thread?{thread,session:loadSessionEventLogForResume(runDir,thread.thread_id)}:undefined);
+  }catch{throw new LiveSessionAuthorityError('OBJECTIVE_LIFECYCLE_INVALID','The objective lifecycle or its canonical attempt binding is missing, invalid or unsupported');}
+  return authority;
 }
 
 export class LiveSessionAuthorityError extends Error {
@@ -212,7 +254,9 @@ function identityFragmentPrecedence(fragment: IdentityDeliveredFragment): Instru
 
 export function resolveLiveSessionAuthority(input: {
   mode: BabelMode;
-  projectRoot: string;
+  taskId?: string;
+  projectRoot: string | null;
+  executionScope?: import('./chatExecutionScope.js').ChatExecutionScope;
   /**
    * Trusted instruction root. When set, compiler selection is scoped to it so
    * candidate-controlled target instructions do not appear as manifest
@@ -225,7 +269,10 @@ export function resolveLiveSessionAuthority(input: {
   compiledChatStack?: ChatCompiledStack;
   modelId?: string;
   verifierRequirements?: string[];
+  /** Trusted discovered project test commands (e.g. package.json scripts). */
+  projectTestCommands?: string[];
   maxTurns?: number;
+  objectiveLifecycle?: boolean;
   protectedPaths?: string[];
   /**
    * Delivered session-identity fragments (from the identity reader). When
@@ -235,7 +282,11 @@ export function resolveLiveSessionAuthority(input: {
    */
   systemContextFragments?: readonly IdentityDeliveredFragment[];
 }): LiveSessionAuthority {
+  const scope=normalizeChatExecutionScope(input);
+  if(scope.kind==='conversation'&&(input.instructionRoot||(input.compiledChatStack&&input.compiledChatStack.project_root!==null)))throw new Error('Conflicting project context in conversation authority');
   const chatStack = input.compiledChatStack ?? compileChatStack({
+    // Trusted instructionRoot may intentionally differ from the execution root.
+    ...(scope.kind==='conversation'?{executionScope:scope}:{}),
     projectRoot: input.instructionRoot ?? input.projectRoot,
     task: input.task,
     promptBudgetChars: resolveStackBudgetForClass(input.taskClass),
@@ -280,21 +331,28 @@ export function resolveLiveSessionAuthority(input: {
     ],
   });
 
+  const meaning = bindExecutableVerifiersToTaskAcceptance({
+    meaning: inferTaskAcceptance(input.task),
+    trustedVerifierCommands: mergeTrustedVerifierCommands({
+      requiredVerifierCommands: input.verifierRequirements ?? [],
+      projectTestCommands: input.projectTestCommands ?? [],
+    }),
+    ...(input.projectRoot ? { defaultWorkingDirectory: '.' } : {}),
+  });
   const contract = freezeTaskContract(
     buildTaskContractV1({
       mode: input.mode,
+      task_id:input.taskId??`task:${randomUUID()}`,
       user_request: input.task,
       task_class:
         (input.taskClass as TaskContractV1['task_class'] | undefined) ?? 'unknown',
-      acceptance_criteria: [
-        'Task acceptance criteria as stated in the user request',
-      ],
+      acceptance: meaning.criteria,
       non_goals: ['Do not expand scope beyond the user request'],
       protected_paths: input.protectedPaths ?? ['.env', '.git'],
       verifier_requirements: input.verifierRequirements ?? [],
       ...(input.maxTurns !== undefined ? { max_turns: input.maxTurns } : {}),
       allowed_effects:
-        input.mode === 'plan'
+        scope.kind==='conversation' ? [] : input.mode === 'plan'
           ? ['read_only']
           : [
               'read_only',
@@ -303,6 +361,7 @@ export function resolveLiveSessionAuthority(input: {
               'non_idempotent_local_effect',
             ],
       source: 'liveSessionBridge.resolveLiveSessionAuthority',
+      provenance:[...meaning.provenance,...(input.objectiveLifecycle?[{kind:'risk_analysis' as const,ref:OBJECTIVE_LIFECYCLE_REF}]:[])],
     }),
   );
 
@@ -314,9 +373,15 @@ export function persistLiveSessionAuthority(
   runDir: string,
   authority: LiveSessionAuthority,
 ): void {
+  assertAuthorityModeHistory(authority);
+  const semanticHistory=authority.taskObjectiveLifecycle?.objectives.some(objective=>objective.taskModeHistory?.schema_version===2);
+  const semanticThread=semanticHistory?loadThreadEventLogFromDir(runDir):null;
+  assertObjectiveLifecycle(authority,authority.taskObjectiveLifecycle,semanticThread?{thread:semanticThread,session:loadSessionEventLogForResume(runDir,semanticThread.thread_id)}:undefined);
   mkdirSync(runDir, { recursive: true });
   writeJsonAtomic(join(runDir, INSTRUCTION_MANIFEST_FILENAME), authority.instructionManifest);
   writeJsonAtomic(join(runDir, TASK_CONTRACT_FILENAME), authority.taskContract);
+  if(authority.taskModeHistory)writeJsonAtomic(join(runDir,TASK_MODE_HISTORY_FILENAME),authority.taskModeHistory);
+  if(authority.taskObjectiveLifecycle)writeJsonAtomic(join(runDir,TASK_OBJECTIVE_LIFECYCLE_FILENAME),authority.taskObjectiveLifecycle);
 }
 
 export function loadLiveSessionAuthority(
@@ -330,7 +395,7 @@ export function loadLiveSessionAuthority(
       readFileSync(manPath, 'utf-8'),
     ) as InstructionManifestV1;
     const taskContract = JSON.parse(readFileSync(tcPath, 'utf-8')) as TaskContractV1;
-    return { instructionManifest, taskContract };
+    return loadAuthorityModeHistory(runDir,{ instructionManifest, taskContract });
   } catch {
     return null;
   }
@@ -371,7 +436,7 @@ export function loadLiveSessionAuthorityStrict(runDir: string): LiveSessionAutho
       'Instruction manifest and task contract modes do not match',
     )
   }
-  return { instructionManifest, taskContract }
+  return loadAuthorityModeHistory(runDir,{ instructionManifest, taskContract })
 }
 
 /**
@@ -429,8 +494,8 @@ export function projectFromDurableSession(input: {
   workspaceRevision?: string;
   authorizedObservationIds?: readonly string[];
 }): LiveSessionV1 {
-  return projectLiveSession({
-    sessionLog: input.sessionLog,
+  const project=(sessionLog:SessionEventLog)=>projectLiveSession({
+    sessionLog,
     ...(input.threadLog ? { threadLog: input.threadLog } : {}),
     ...(input.authority?.instructionManifest
       ? { instructionManifest: input.authority.instructionManifest }
@@ -443,6 +508,14 @@ export function projectFromDurableSession(input: {
       ? { authorizedObservationIds: input.authorizedObservationIds }
       : {}),
   });
+  const live=project(input.sessionLog),lifecycle=input.authority?.taskObjectiveLifecycle;
+  if(!lifecycle)return live;
+  const taskLive=project(activeObjectiveSessionLog(input.sessionLog,lifecycle));
+  const acceptanceLive=project(activeAcceptanceSessionLog(input.sessionLog,lifecycle));
+  // Uncertain historical effects still require reconciliation across objectives.
+  const result={...taskLive,active_task:input.authority!.taskContract.user_request,tools:live.tools,verifier:acceptanceLive.verifier};
+  if(acceptanceLive.terminal)result.terminal=acceptanceLive.terminal;else delete result.terminal;
+  return result;
 }
 
 /** Persist a projected live-session snapshot for operator inspection. */

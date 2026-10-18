@@ -135,6 +135,7 @@ export class ChatEngineP11Authority {
   admitCurrentSubmission(
     submissionGeneration: number,
     userInput: string,
+    objective?: {taskId:string;taskClass:ChatTaskClass},
   ): ChatEngineAdmissionClaim | null {
     const store = this.host.parity.admissionStore;
     if (!store) return null;
@@ -171,15 +172,15 @@ export class ChatEngineP11Authority {
       const decision = store.admitCommand({
         digestInput: {
           threadId,
-          taskId: this.host.parity.liveAuthority?.taskContract.task_id ?? this.host.engineRunId,
+          taskId: objective?.taskId ?? this.host.parity.liveAuthority?.taskContract.task_id ?? this.host.engineRunId,
           commandId,
           mode: this.host.executionProfile,
           resolvedOperationPolicy: {
-            taskClass: this.host.taskClass,
+            taskClass: objective?.taskClass ?? this.host.taskClass,
             executionProfile: this.host.executionProfile,
             hardPlanMode: this.host.options.hardPlanMode === true,
           },
-          taskShapeClass: this.host.taskClass,
+          taskShapeClass: objective?.taskClass ?? this.host.taskClass,
           targetRoot: this.host.options.projectRoot,
           offeredToolSchemaVersion: CHAT_ADMISSION_TOOL_SCHEMA_VERSION,
           contextSnapshotId: commandId,
@@ -404,6 +405,7 @@ export class ChatEngineP11Authority {
   }
 
   currentRecoveryBinding(): RecoveryCandidateBinding | null {
+    if(!this.host.options.projectRoot)return null;
     try {
       const root = canonicalizeContained(this.host.options.projectRoot);
       const revision = recoveryWorkspaceRevision(root);
@@ -425,6 +427,7 @@ export class ChatEngineP11Authority {
   private workspaceCaptureFailure = 'Git revision or physical input capture unavailable';
 
   private currentP11Workspace(): ReturnType<typeof RevisionManager.computeRevisionSync> | null {
+    if (!this.host.options.projectRoot) return null;
     this.workspaceCaptureFailure = 'Git revision or physical input capture unavailable';
     try {
       const workspace = RevisionManager.computeRevisionSync(this.host.options.projectRoot, [], {
@@ -442,15 +445,20 @@ export class ChatEngineP11Authority {
 
   /** Capture before summarization; recheck the same owner and physical bytes at commit. */
   prepareCompactionGuard(): () => boolean {
-    if (isPathInsideRoot(this.host.options.projectRoot, this.host.engineRunDir)) {
-      throw new ContextPreparationError(this.host.options.projectRoot, 'runtime_evidence_overlap',
+    const projectRoot = this.host.options.projectRoot;
+    if (!projectRoot) {
+      throw new ContextPreparationError('', 'workspace_revision',
+        `workspace snapshot unavailable (${this.workspaceCaptureFailure})`, this.host.engineRunDir);
+    }
+    if (isPathInsideRoot(projectRoot, this.host.engineRunDir)) {
+      throw new ContextPreparationError(projectRoot, 'runtime_evidence_overlap',
         'runtime evidence changes the captured repository; set BABEL_RUNS_DIR to a directory outside the selected project before retrying', this.host.engineRunDir);
     }
     const workspace = this.currentP11Workspace();
-    if (!workspace) throw new ContextPreparationError(this.host.options.projectRoot,
+    if (!workspace) throw new ContextPreparationError(projectRoot,
       'workspace_revision', `workspace snapshot unavailable (${this.workspaceCaptureFailure})`, this.host.engineRunDir);
     const owner = this.currentP11Owner();
-    if (!owner) throw new ContextPreparationError(this.host.options.projectRoot,
+    if (!owner) throw new ContextPreparationError(projectRoot,
       'owner_unavailable', 'context owner unavailable', this.host.engineRunDir);
     return () => {
       const currentOwner = this.currentP11Owner();
@@ -565,10 +573,10 @@ export class ChatEngineP11Authority {
     // receipt's own bound revision scope is recomputed here; only a receipt
     // whose bound scope still matches the live workspace is treated as live.
     const verifierReceipt = this.host.lastVerifierReceipt;
-    const currency = evaluateChatVerifierReceiptCurrencySync(
+    const currency = this.host.options.projectRoot ? evaluateChatVerifierReceiptCurrencySync(
       this.host.options.projectRoot,
       verifierReceipt,
-    );
+    ) : null;
     const receiptStale = currency
       ? currency.stale
       : verifierReceipt?.stale === true;

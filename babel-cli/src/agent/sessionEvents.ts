@@ -18,6 +18,7 @@ import type { WorkingState } from './codingLoop/workingState.js';
 import { createBdnsObservationBus } from '../diagnostics/bdns/observationBus.js';
 import type { BdnsObservation } from '../diagnostics/bdns/types.js';
 import { type ProviderId } from '../runners/providerRegistry.js';
+import {assertTaskAttemptBinding} from './taskObjectiveLifecycle.js';
 import { type ContextManifestV1 } from './contextManifest.js';
 import { type ModelRouteReceiptV1 } from './modelRouteReceipt.js';
 import { type ProviderFailureReceiptV1 } from '../runners/providerFailureReceipt.js';
@@ -267,6 +268,11 @@ export function appendSessionEvent(
   const { kind: _k, turn_id: _t, ...rest } = event;
   const full = { ...rest, ...base } as SessionEvent;
   log.events.push(full);
+  if(!log.deferObservations)publishSessionObservation(log,full);
+  return full;
+}
+
+function publishSessionObservation(log:SessionEventLog,full:SessionEvent):void{
   const observation = {
     schemaVersion: 1 as const,
     source: 'canonical' as const,
@@ -281,28 +287,41 @@ export function appendSessionEvent(
   };
   log.observationBus?.publish(observation);
   sessionEventObservationBus.publish(observation);
-  return full;
+}
+
+/** Publish only the newly committed generation; discarded staging is silent. */
+export function publishDeferredSessionObservations(log:SessionEventLog,fromSeq:number):void{
+  delete log.deferObservations;
+  for(const event of log.events)if(event.seq>=fromSeq)publishSessionObservation(log,event);
 }
 
 export function recordUserSubmitted(
   log: SessionEventLog,
   input: {
     turn_id: string;
+    task_id?:string;
+    contract_id?:string;
+    contract_hash?:string;
+    attempt_id?:string;
     task: string;
     model?: string;
     provider?: string;
     projectRoot?: string;
+    executionScope?: import('./chatExecutionScope.js').ChatExecutionScope;
     taskClass?: string;
     continuedTask?: boolean;
   },
 ): SessionEvent {
+  assertTaskAttemptBinding(input);
   return appendSessionEvent(log, {
     kind: 'user_submitted',
+    ...(input.task_id!==undefined?{task_id:input.task_id,contract_id:input.contract_id!,contract_hash:input.contract_hash!,attempt_id:input.attempt_id!}:{}),
     turn_id: input.turn_id,
     task_preview: input.task.slice(0, 500),
     ...(input.model !== undefined ? { model: input.model } : {}),
     ...(input.provider !== undefined ? { provider: input.provider } : {}),
     ...(input.projectRoot !== undefined ? { project_root: input.projectRoot } : {}),
+    ...(input.executionScope?{execution_scope:input.executionScope}:{}),
     ...(input.taskClass !== undefined ? { task_class: input.taskClass } : {}),
     ...(input.continuedTask !== undefined ? { continued_task: input.continuedTask } : {}),
   });
@@ -759,6 +778,77 @@ export function recordTurnEnded(
       ? { reason_code: input.reason.code, cause_class: input.reason.cause_class }
       : {}),
   });
+}
+
+function recomputeSessionNextSeq(log: SessionEventLog): void {
+  const last = log.events[log.events.length - 1];
+  log.nextSeq = last ? last.seq + 1 : 0;
+}
+
+/** Renumber not-yet-flushed events so seq stays contiguous after durable prefix. */
+export function recompactSessionEventTail(log: SessionEventLog): void {
+  let next = log.flushedThroughSeq + 1;
+  for (const event of log.events) {
+    if (event.seq > log.flushedThroughSeq) {
+      event.seq = next;
+      next += 1;
+    }
+  }
+  log.nextSeq = next;
+}
+
+/** Roll back terminal finalize staging that never durably committed. */
+export function stripPreDurableFinalizeStaging(
+  log: SessionEventLog,
+  turnId: string,
+): void {
+  const before = log.events.length;
+  log.events = log.events.filter((event) => {
+    if (event.seq <= log.flushedThroughSeq) return true;
+    if (event.kind === 'completion_decision' && event.turn_id === turnId) return false;
+    if (event.kind === 'budget_snapshot') return false;
+    return true;
+  });
+  if (log.events.length === before) return;
+  recompactSessionEventTail(log);
+}
+
+/** Remove in-memory completion decisions for a turn (pre-durable rollback only). */
+export function stripCompletionDecisionsForTurn(
+  log: SessionEventLog,
+  turnId: string,
+): void {
+  const before = log.events.length;
+  log.events = log.events.filter(
+    (event) =>
+      !(
+        event.kind === 'completion_decision' &&
+        event.turn_id === turnId &&
+        event.seq > log.flushedThroughSeq
+      ),
+  );
+  if (log.events.length === before) return;
+  recompactSessionEventTail(log);
+}
+
+/** Correct the latest session turn_ended when terminal settlement could not durably commit. */
+export function amendLatestTurnEndedForTurn(
+  log: SessionEventLog,
+  turnId: string,
+  input: { outcome: TerminalOutcome; status: string; reason: TerminalReason },
+): boolean {
+  for (let i = log.events.length - 1; i >= 0; i -= 1) {
+    const event = log.events[i];
+    if (event?.kind === 'turn_ended' && event.turn_id === turnId) {
+      if (event.seq <= log.flushedThroughSeq) return false;
+      event.outcome = input.outcome;
+      event.status = input.status;
+      event.reason_code = input.reason.code;
+      event.cause_class = input.reason.cause_class;
+      return true;
+    }
+  }
+  return false;
 }
 
 export function recordPolicyIntervened(

@@ -109,6 +109,11 @@ function currentApprovalTurnId(): string {
 }
 
 function effectiveApprovalRoot(): string {
+  const context=getExecutionContext();
+  if(context){
+    if(context.executionScope?.kind==='conversation'||context.root===null)throw new Error('PROJECT_REQUIRED: Conversation scope cannot authorize project effects');
+    return context.root;
+  }
   return (
     getExecutionContext()?.root ?? process.env['BABEL_PROJECT_ROOT'] ?? process.cwd()
   );
@@ -223,10 +228,14 @@ export async function requestChatActionApproval(action: AgentAction): Promise<bo
     if (desktopApprovalEnabled()) {
       const allowed = await waitForDesktopApproval({
         command: commandForAction(action),
+        cwd,
+        details: JSON.stringify(action, null, 2),
         reason: req.reason,
+        request: req,
       });
-      applyApprovalDecision(session, req, allowed ? 'allow_once' : 'deny');
-      return allowed;
+      const granted = allowed && liveStillMatches();
+      applyApprovalDecision(session, req, granted ? 'allow_once' : 'deny');
+      return granted;
     }
     const res = resolveApprovalHeadless(session, req);
     return res.decision !== 'deny';
@@ -338,10 +347,14 @@ export async function requestMcpApproval(action: ChatToolAction): Promise<boolea
     if (desktopApprovalEnabled() && liveStillMatches()) {
       const allowed = await waitForDesktopApproval({
         command: `mcp:${server}`,
+        cwd,
+        details: JSON.stringify(action, null, 2),
         reason: req.reason,
+        request: req,
       });
-      applyApprovalDecision(session, req, allowed ? 'allow_once' : 'deny');
-      return allowed;
+      const granted = allowed && liveStillMatches();
+      applyApprovalDecision(session, req, granted ? 'allow_once' : 'deny');
+      return granted;
     }
     return resolveApprovalHeadless(session, req).decision !== 'deny';
   }

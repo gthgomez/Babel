@@ -314,7 +314,7 @@ Language: **MUST** / **MUST NOT** / **SHOULD** / **MAY** / **OWNS** / **SUPERSED
 
 | Outcome | Propose | Authorize | Mutation | Evidence |
 |---------|---------|-----------|----------|----------|
-| `VERIFIED_COMPLETE` | Model / controller request | Kernel + honesty + proof | Yes (execute) | Authoritative green verifier + writes where required |
+| `VERIFIED_COMPLETE` | Model / controller request | Kernel + honesty + proof + owned criterion evaluation | Yes (execute) | Current frozen acceptance head and trusted evidence for every required criterion, plus coarse verifier/write gates |
 | `UNVERIFIED_PATCH` | Default done / downgrade | Kernel | Yes | Done without green authoritative verifier |
 | `BLOCKED_EXTERNAL` | Controllers | Controllers | Possible prior | Env/toolchain |
 | `BLOCKED_POLICY` | Gates/critic/stall | Controllers | Possible prior | Policy kill |
@@ -342,7 +342,7 @@ Do not claim cross-surface support beyond the Chat path until the H3 parity exit
 ### Current three-part reality (do not collapse)
 
 1. **Chat completion honesty gate** — mid-loop refuse/continue/block (`completionGatePolicy.ts`).
-2. **Shared kernel decision** — accept/downgrade `VERIFIED_COMPLETE` (`kernel.ts` `decideCompletion`).
+2. **Shared kernel decision** — accept/downgrade `VERIFIED_COMPLETE` (`kernel.ts` `decideCompletion`). Coarse honesty and proof alone cannot certify completion: the kernel also requires the current frozen acceptance contract and a private criterion context tied to the live engine run and physical project. Missing or unsupported evidence downgrades to `UNVERIFIED_PATCH`.
 3. **Pipeline required-verifier demotion** — post-run plan vs tool log (`requiredVerifierContract.ts`).
 
 ### Also present
@@ -353,6 +353,8 @@ Do not claim cross-surface support beyond the Chat path until the H3 parity exit
 | R9 dependency integrity hash | **IMPLEMENTED** (detect + escalate) |
 | Chat revision-bound receipts (`chatRevisionBinding` + finalize recheck) | **IMPLEMENTED** |
 | Chat evidence graph on proof (`evaluateEvidenceSync`) | **IMPLEMENTED** |
+| Owned criterion context at the shared kernel (`criterionCompletion.ts`) | **PARTIAL** — fail-closed Chat handoff and current-owner checks are implemented. Trusted binding, actual dispatch and durable graph publication remain incomplete; the private graph is empty, so required criteria cannot currently obtain verified execute completion. Existing V1 evaluator positive fixtures do not establish a live execution path. |
+| Owned literal-file oracle | **UNACCEPTED PROTOTYPE** — the Node path-based reader has reproduced parent/ABA privacy races and must not be connected to trusted verification. A Windows handle-rooted replacement is under qualification. Neither result is criterion authority. Binding, frozen interpreter/definition closure, governed dispatch and durable publication remain incomplete; see [remaining work](../roadmaps/DESKTOP-REMAINING-WORK.md). |
 | Structural verifier identity + directional coverage | **IMPLEMENTED** (pipeline + Chat honesty via `verifierIdentity.ts`) |
 | Multi-verifier collection coverage matching | **IMPLEMENTED** (`areAllRequiredVerifiersSatisfied` in `completionGatePolicy.ts`) |
 | Chat honesty required-command scope | **IMPLEMENTED** (`verifier_scope` when full required / targeted actual) |

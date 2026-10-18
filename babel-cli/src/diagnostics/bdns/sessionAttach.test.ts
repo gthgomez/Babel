@@ -36,7 +36,7 @@ test('attaches a session-owned BDNS runtime after canonical flush without delayi
       provider: 'test-provider',
       projectRoot: runDir,
     })
-    assert.equal(finalizeParityTurnSync(rt, runDir, 'CANCELLED', 'cancelled'), undefined)
+    assert.equal(finalizeParityTurnSync(rt, runDir, 'CANCELLED', 'cancelled').committed, true)
     await persistenceStarted
     let persistenceCompleted = false
     const pending = waitForBdnsSession(rt.sessionEvents.session_id).then(() => { persistenceCompleted = true })

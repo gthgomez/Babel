@@ -75,6 +75,7 @@ function defaultGit(args, cwd) {
  * @param {{ready:boolean,label:string|null,source:string|null}} [options.official]
  * @param {boolean} [options.advancedEntry]
  * @param {boolean} [options.ready] whether the current connection is executable
+ * @param {boolean} [options.requiresSandbox] whether this scope admits project tools
  * @param {string} [options.executionProfile]
  * @param {object|null} [options.diagnostics]
  * @param {object} [options.update]
@@ -85,7 +86,7 @@ export function resolveEngineIdentity(options = {}) {
   const {
     isPackaged = false, resourcesPath = '', desktopVersion = '', cliEntry = null,
     official = {ready:false, label:null, source:null}, advancedEntry = false,
-    ready = false, executionProfile = 'safe_repo', diagnostics = null, update = {},
+    ready = false, executionProfile = 'safe_repo', diagnostics = null, update = {},requiresSandbox=true,
     readText = defaultReadText, git = defaultGit,
   } = options;
   const origin = classifyOrigin({isPackaged, advancedEntry, officialReady: Boolean(official.ready)});
@@ -121,7 +122,7 @@ export function resolveEngineIdentity(options = {}) {
     source,
     executionProfile,
     readiness: {
-      ready: Boolean(ready&&(!isPackaged||diagnostics?.ready===true)),
+      ready: Boolean(ready&&(!isPackaged||!requiresSandbox||diagnostics?.ready===true)),
       provider: diagnostics?.provider ?? 'unknown',
       docker: diagnostics?.docker ?? 'unknown',
       sandboxImage:diagnostics?.sandboxImage??'unknown',

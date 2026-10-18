@@ -97,6 +97,20 @@ function writeThreadIdentity(sessionDir: string, sessionId: string, projectRoot:
   persistThreadEventLog(sessionDir, log);
 }
 
+test('canonical display archive cannot enter the REPL transcript-only fallback after log loss',async()=>{
+  const fixture=withTempRunsDir(),targetRoot=mkdtempSync(join(tmpdir(),'babel-archive-fallback-'))
+  const ctx=makeResumeCtx(makeTarget(targetRoot))
+  try {
+    const sessionId='orphan-canonical-archive'
+    const directory=writeTranscript(fixture.root,sessionId,'fixture')
+    writeFileSync(join(directory,'transcript.jsonl'),JSON.stringify({role:'assistant',content:'Unaccepted archive candidate',archive_source:'thread_events',archive_kind:'model_candidate',source_event_id:'orphan-event'})+'\n')
+    const result=await resumeChatSession(ctx,sessionId,{confirmUnknownIdentity:true})
+    assert.equal(result.ok,false,'CANONICAL_ARCHIVE_CONTEXT_ACCEPTED')
+    assert.equal(ctx.chatEngine,undefined)
+    assert.equal(getOpenAdmissionStoreCount(),0,'rejected archive fallback releases admission ownership')
+  }finally{ctx.chatEngine?.closeAdmissionStore();fixture.cleanup();rmSync(targetRoot,{recursive:true,force:true})}
+})
+
 test('D04 resume seam identity', { concurrency: false }, async (t) => {
   await t.test('verified thread-log identity resumes without degraded flag', async () => {
     const fixture = withTempRunsDir();

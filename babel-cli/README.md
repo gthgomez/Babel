@@ -211,6 +211,19 @@ node --env-file=.\babel-cli\.env .\babel-cli\dist\index.js run --project example
 
 The older `babel-cli/.env` is not automatically loaded. Existing contributor setups can temporarily opt in with `BABEL_LEGACY_CLI_ENV=1` while migrating secrets to private configuration. A target project's `.env` is **never loaded automatically**: after explicitly choosing project-local storage in Desktop, only authority-certified provider key names are loaded from a Git-ignored, untracked project `.env`. CLI-only project opt-in is available through `BABEL_PROJECT_CREDENTIALS_DIR=<absolute project root>`; do not set it for untrusted repositories.
 
+Desktop can resolve the selected credential destination in its native process
+before launching the owned CLI. When it supplies both internal markers
+`BABEL_DESKTOP_IPC=1` and `BABEL_DESKTOP_CREDENTIALS_RESOLVED=1`, CLI bootstrap
+skips private, project and legacy dotenv loading and inactive-file probes.
+OpenCode Go also refuses helper or cached-helper fallback for that handoff.
+This keeps removed or replaced credentials from returning through retained
+legacy files. Standalone CLI credential precedence remains unchanged.
+
+`node ./dist/index.js --desktop-capabilities` returns local compatibility
+metadata before credential bootstrap or provider execution. The sole-option
+probe advertises `credentialEnvironment: "native-resolved-v1"`; Desktop must
+reject an incompatible CLI before handing it protected credentials.
+
 The provider registry owns canonical provider IDs, protocols, and credential
 variable names. The credential hub resolves keys only at transport boundaries,
 while `ProviderEngine` selects the protocol-specific runner body. This keeps
@@ -314,6 +327,16 @@ node dist/index.js create vite-react ./scratch/hello-web
 `onboard-project` writes a report under `runs/onboarding/` and recommends an execution profile plus likely install/build/test commands. It writes `PROJECT_CONTEXT.md` only when `--write-project-context` is explicitly provided.
 
 ## Recovery surfaces
+
+Chat/Plan transitions in the shared ChatEngine retain one task identity and the accepted objective, verifier requirements, budgets and original effect ceiling. Each mode change creates a linked frozen contract revision; its manifest, head contract and versioned `task-mode-history.json` commit through the existing checkpoint journal. A failed publication retains the prior generation. Missing, malformed or newer lineage cannot authorize a derived head. Legacy archives remain readable, but execution admission and mode changes require retained canonical history; missing sources are never replaced with empty logs. A Plan-only objective cannot gain implementation authority from a mode selection. Deep requires its real controller and is not a ChatEngine mode alias.
+
+Independent Chat submissions receive separate task identities, including repeated requests with identical text. Status, continuation and amendments retain the current objective. Admission commits the frozen authority, retained earlier objectives, canonical turn/attempt binding and task allowance together before provider or tool execution. Prior verification remains historical; uncertain earlier tool effects still require reconciliation. A continuation retains its objective allowance, and an incompatible or missing budget cannot silently reset it.
+
+Initial acceptance capture distinguishes explicit requirements, proposed inferred meaning and unresolved meaning. Additive amendments create frozen revisions linked to their canonical accepted input, preserving the original goal, required checks and execution ceiling. Exact legacy placeholders can be initialized from the original canonical request and accepted additions; missing sources cannot authorize migration. Acceptance changes retire previous completion receipts while retaining the archive. Version 2 mode history and canonical acceptance-amendment events require a compatible runtime; older readers reject them. Capture does not itself verify a requirement. Shared completion requires current, authority-owned criterion evidence; supported verifier binding/execution, full Deep handoff and Desktop task/queue presentation remain separate implementation work.
+
+Within an `Also`, `Additionally` or `And` continuation, only standalone supported status forms are exempt from acceptance capture. Unsupported or mixed prose requires clarification; a question mark alone cannot discard a potential requirement.
+
+A response can finish while its task remains unverified. Historical or generic test receipts do not establish criterion coverage, and missing trusted evidence cannot be bypassed by a permissive verification policy. The current criterion service has no execution evidence until the supported binding and dispatch path is implemented.
 
 - `babel checkpoint list|inspect|restore` works against run-local checkpoints.
 - `file_write` checkpoints restore captured target files; `shell_exec` and `test_run` checkpoints restore bounded filesystem diffs while skipping cache/dependency/secret paths.

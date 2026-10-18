@@ -555,7 +555,7 @@ test("golden negative: isolation-unavailable matches live H13 fail-closed decisi
   }
 });
 
-test("live kernel accepts golden-shaped verified completion with proof", () => {
+test("live kernel rejects coarse golden proof without owned criterion evidence", () => {
   const decision = createExecutorKernel("chat").completion.decide({
     mode: "chat",
     requestedOutcome: "VERIFIED_COMPLETE",
@@ -578,8 +578,9 @@ test("live kernel accepts golden-shaped verified completion with proof", () => {
     proof: { compliant: true },
     evidenceRefs: ["golden-receipt-final", "mutation-batch-2"],
   });
-  assert.equal(decision.finalOutcome, "VERIFIED_COMPLETE");
-  assert.equal(decision.allowed, true);
+  assert.equal(decision.finalOutcome, "UNVERIFIED_PATCH");
+  assert.equal(decision.allowed, false);
+  assert.equal(decision.reason, "completion_downgraded:acceptance_unknown");
   assert.equal(decision.policyVersion, EXECUTOR_CONTRACT_VERSION);
 });
 

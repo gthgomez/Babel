@@ -1,6 +1,7 @@
 // License: Apache-2.0
 import {mkdir, writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
+import {inspectProjectIdentity} from '../../native/project-authority.mjs';
 
 export const MISSING_INSTALL_ID = 'acceptance-missing-install';
 export const HISTORY_SESSION_ID = 'packaged-history';
@@ -34,6 +35,13 @@ export async function writePackagedAcceptanceProfile(profile) {
     cliEntry: null,
     projectRoot,
     projectCredentialRoot: null,
+  }) + '\n', 'utf8');
+  const identity = await inspectProjectIdentity(projectRoot);
+  // Preauthorized installed-profile fixture only — does not exercise the user-grant UI.
+  await writeFile(join(profile, 'project-authority.json'), JSON.stringify({
+    schemaVersion: 1,
+    revision: 1,
+    grants: [{ identity, revision: 1, grantedAt: new Date().toISOString(), fixture: 'packaged-preauthorized-grant' }],
   }) + '\n', 'utf8');
   await writeFile(join(profile, 'engine', 'active-engine.json'), JSON.stringify({id: MISSING_INSTALL_ID, channelPreference: 'stable'}) + '\n', 'utf8');
   return {projectRoot, runsRoot, missingInstallId: MISSING_INSTALL_ID};

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { evaluateCriterionCompletionV1 } from '../authority/criterionCompletion.js';
 import type {
   ToolCallRequest,
   ToolContext,
@@ -178,7 +179,9 @@ function decideCompletion(input: ExecutorCompletionInput): CompletionDecision {
     executedVerifierLedger: input.executedVerifierLedger ?? null,
     verifierEvidenceErrors: input.verifierEvidenceErrors ?? null,
   });
-  const verified = input.proof?.compliant === true && gate.allow;
+  const acceptance = input.requestedOutcome === 'VERIFIED_COMPLETE'
+    ? evaluateCriterionCompletionV1(input.acceptance) : undefined;
+  const verified = input.proof?.compliant === true && gate.allow && acceptance?.verified === true;
   const finalOutcome: TerminalOutcome =
     input.requestedOutcome === "VERIFIED_COMPLETE" && verified
       ? "VERIFIED_COMPLETE"
@@ -193,7 +196,7 @@ function decideCompletion(input: ExecutorCompletionInput): CompletionDecision {
     reason: verified
       ? "proof_carrying_completion_accepted"
       : input.requestedOutcome === "VERIFIED_COMPLETE"
-        ? `completion_downgraded:${input.proof && !input.proof.compliant ? "evidence_incomplete" : rejectionReason(gate.reason)}`
+        ? `completion_downgraded:${input.proof && !input.proof.compliant ? "evidence_incomplete" : !gate.allow ? rejectionReason(gate.reason) : `acceptance_${acceptance?.status.toLowerCase() ?? 'unknown'}`}`
         : "non_verified_terminal_preserved",
     ...(input.workspaceRevision
       ? { workspaceRevision: input.workspaceRevision }

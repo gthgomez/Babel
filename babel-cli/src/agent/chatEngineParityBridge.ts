@@ -32,6 +32,7 @@ import {
   createThreadEventLog,
   startTurn,
   endTurn,
+  amendLatestTurnEndedForTurn as amendThreadTurnEndedForTurn,
   recordAssistantToolCalls,
   recordToolResult,
   rebuildProviderMessagesFromEvents,
@@ -40,6 +41,7 @@ import {
   persistThreadEventLog,
   type ThreadEvent,
   type ThreadEventLog,
+  type ThreadTerminalResponse,
 } from './threadEventLog.js';
 import {
   createSessionEventLog,
@@ -53,6 +55,11 @@ import {
   recordRecoveredOutcomeReconciled,
   recordToolTerminal,
   recordTurnEnded,
+  recordPolicyIntervened,
+  recordCompletionDecision,
+  stripCompletionDecisionsForTurn,
+  stripPreDurableFinalizeStaging,
+  amendLatestTurnEndedForTurn as amendSessionTurnEndedForTurn,
   flushSessionEventLogStrict,
   SESSION_EVENTS_FILENAME,
   serializeSessionEventLog,
@@ -92,11 +99,14 @@ import {
   writeCheckpointJournal,
   INSTRUCTION_MANIFEST_FILENAME,
   TASK_CONTRACT_FILENAME,
+  TASK_MODE_HISTORY_FILENAME,
+  assertAuthorityModeHistory,
   LIVE_SESSION_SNAPSHOT_FILENAME,
 } from './liveSessionBridge.js';
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, writeFileSync, copyFileSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
+import {assertObjectiveLifecycle,TASK_OBJECTIVE_LIFECYCLE_FILENAME,type TaskAttemptBinding} from './taskObjectiveLifecycle.js';
 import { renameCheckpointSync, type AtomicCheckpointRenameOptions } from '../utils/atomicCheckpointFile.js';
 
 
@@ -131,7 +141,50 @@ export interface ParityRuntime {
   authorizedObservationIds?: Set<string>;
   /** P05 durable owner record; injected by the authorized host, never created here. */
   admissionStore?: AdmissionStore;
+  /** Set when a required session-events flush failed at an effect boundary. */
+  sessionPersistenceBoundaryFailed?: boolean;
+  /** Turn whose terminal session evidence was durably flushed (idempotent finalize). */
+  terminalPersistCommittedTurnId?: string | null;
 }
+
+export type ParityCompletionDecisionPayload = {
+  requestedOutcome: string;
+  finalOutcome: string;
+  allowed: boolean;
+  reason: string;
+  evidenceRefs: string[];
+  policyVersion: string;
+  reasonCode?: import('../schemas/agentContracts.js').TerminalReasonCode;
+  causeClass?:
+    | 'model'
+    | 'provider'
+    | 'environment'
+    | 'harness'
+    | 'verification'
+    | null;
+};
+
+export type FinalizeParityTurnExtras = {
+  completionDecision?: ParityCompletionDecisionPayload;
+};
+
+/** Primary session flush is the commit point; secondary projection may fail afterward. */
+export type FinalizeParityTurnResult = {
+  committed: boolean;
+  secondaryArtifactFailure?: boolean;
+};
+
+const PARITY_FINALIZE_COMMITTED: FinalizeParityTurnResult = { committed: true };
+const PARITY_FINALIZE_PRIMARY_FAILED: FinalizeParityTurnResult = { committed: false };
+
+function parityFinalizeSecondaryArtifactWarning(): FinalizeParityTurnResult {
+  return { committed: true, secondaryArtifactFailure: true };
+}
+
+const TERMINAL_PERSISTENCE_FAILURE_REASON: TerminalReason = {
+  code: 'unknown',
+  cause_class: 'harness',
+};
 
 export interface PersistenceReceipt {
   status: 'committed' | 'blocked'
@@ -164,13 +217,18 @@ export function parityOnUserTurn(
     task: string;
     model: string;
     provider: string;
-    projectRoot: string;
+    projectRoot: string | null;
+    executionScope?: import('./chatExecutionScope.js').ChatExecutionScope;
     policyPreset?: string;
     verifier?: string;
     taskClass?: string;
     gatePolicy?: string;
     submissionIndex?: number;
     continuedTask?: boolean;
+    requestedOperation?: import('../config/chatTaskClass.js').RequestedTaskOperation;
+    requestedTaskIntent?: import('./turnRuntime.js').TurnTaskIntent;
+    requestedContinueTask?: boolean;
+    taskAttempt?: TaskAttemptBinding;
   },
 ): void {
   rt.loop = reduceAgentLoop(rt.loop, { type: 'user_turn', task: input.task }).state;
@@ -181,12 +239,17 @@ export function parityOnUserTurn(
     model: input.model,
     provider: input.provider,
     projectRoot: input.projectRoot,
+    ...(input.executionScope?{executionScope:input.executionScope}:{}),
     policyPreset: input.policyPreset ?? 'workspace_write',
     ...(input.verifier !== undefined ? { verifier: input.verifier } : {}),
     ...(input.taskClass !== undefined ? { taskClass: input.taskClass } : {}),
     ...(input.gatePolicy !== undefined ? { gatePolicy: input.gatePolicy } : {}),
     ...(input.submissionIndex !== undefined ? { submissionIndex: input.submissionIndex } : {}),
     ...(input.continuedTask !== undefined ? { continuedTask: input.continuedTask } : {}),
+    ...(input.requestedOperation !== undefined ? { requestedOperation: input.requestedOperation } : {}),
+    ...(input.requestedTaskIntent !== undefined ? { requestedTaskIntent: input.requestedTaskIntent } : {}),
+    ...(input.requestedContinueTask !== undefined ? { requestedContinueTask: input.requestedContinueTask } : {}),
+    ...input.taskAttempt,
   });
   // W2 PR-E dual-write: session event mirrors user submission.
   recordUserSubmitted(rt.sessionEvents, {
@@ -194,7 +257,9 @@ export function parityOnUserTurn(
     task: input.task,
     model: input.model,
     provider: input.provider,
-    projectRoot: input.projectRoot,
+    ...(input.projectRoot!==null?{projectRoot:input.projectRoot}:{}),
+    ...(input.executionScope?{executionScope:input.executionScope}:{}),
+    ...input.taskAttempt,
     ...(input.taskClass !== undefined ? { taskClass: input.taskClass } : {}),
     ...(input.continuedTask !== undefined ? { continuedTask: input.continuedTask } : {}),
   });
@@ -340,7 +405,11 @@ export function paritySettleProposeTools(
     proposed += 1;
   }
   if (runDir) {
-    flushSessionEventsRequired(rt, runDir, 'settle-propose');
+    try {
+      flushSessionEventsRequired(rt, runDir, 'settle-propose');
+    } catch {
+      rt.sessionPersistenceBoundaryFailed = true;
+    }
   }
   return { proposed, skipped };
 }
@@ -366,7 +435,14 @@ export function paritySettleToolStarted(
     ...(tool.batch_id !== undefined ? { batch_id: tool.batch_id } : {}),
     ...(tool.target_summary !== undefined ? { target_summary: tool.target_summary } : {}),
   });
-  if (runDir) flushSessionEventsRequired(rt, runDir, 'settle-start');
+  if (runDir) {
+    try {
+      flushSessionEventsRequired(rt, runDir, 'settle-start');
+    } catch {
+      rt.sessionPersistenceBoundaryFailed = true;
+      return false;
+    }
+  }
   return true;
 }
 
@@ -984,6 +1060,7 @@ export function parityEndTurn(
   outcome: TerminalOutcome | undefined,
   status: string,
   reason?: TerminalReason,
+  response?: ThreadTerminalResponse,
 ): void {
   const terminal = projectChatTerminal({
     ...(outcome !== undefined ? { outcome } : {}),
@@ -995,6 +1072,10 @@ export function parityEndTurn(
       ? { status: status as ChatStatus }
       : {}),
   });
+  // Idempotent only after durable terminal settlement (streamDone + buildResult).
+  if (rt.turnId && rt.terminalPersistCommittedTurnId === rt.turnId) {
+    return;
+  }
   // Thread and session terminals settle independently; cancellation can seal
   // the thread before this finalization choke point records the session event.
   const existingTerminal = rt.turnId ? rt.eventLog.events.find(
@@ -1038,7 +1119,7 @@ export function parityEndTurn(
     parityReduce(rt, event);
   }
   if (rt.turnId) {
-    endTurn(rt.eventLog, rt.turnId, terminal.outcome, terminal.status, reason);
+    endTurn(rt.eventLog, rt.turnId, terminal.outcome, terminal.status, reason, response);
     recordSessionTerminalOnce(rt, terminal.outcome, terminal.status, reason);
   }
 }
@@ -1054,11 +1135,21 @@ export async function finalizeParityTurn(
   outcome: TerminalOutcome | undefined,
   status: string,
   reason?: TerminalReason,
+  response?: ThreadTerminalResponse,
+  extras?: FinalizeParityTurnExtras,
 ): Promise<void> {
-  parityEndTurn(rt, outcome, status, reason);
-  parityPersistLiveSession(rt, runDir);
-  await persistThreadEventLog(runDir, rt.eventLog);
-  flushSessionEventsRequired(rt, runDir, `finalize:${outcome}`);
+  const finalizeResult = finalizeParityTurnSync(
+    rt,
+    runDir,
+    outcome,
+    status,
+    reason,
+    response,
+    extras,
+  );
+  if (!finalizeResult.committed) {
+    throw new Error('SESSION_EVENT_PERSISTENCE_BOUNDARY_FAILED');
+  }
 }
 
 function reportEventLogPersistFailure(context: string, err: unknown): void {
@@ -1121,10 +1212,8 @@ function flushEpisodeStreamBestEffort(
   }
 }
 
-/** H2: dual-write budget + project LiveSession + persist authority/snapshot. */
-function parityPersistLiveSession(rt: ParityRuntime, runDir: string): void {
-  // A compatibility runtime with no session events must not overwrite a
-  // previously durable projection with an empty one.
+/** Append terminal budget evidence to the in-memory session log (caller must flush). */
+function appendParityBudgetSnapshot(rt: ParityRuntime): void {
   if (rt.sessionEvents.events.length === 0) return;
   const turnsUsed = rt.sessionEvents.events.filter(
     (e) => e.kind === 'user_submitted',
@@ -1133,6 +1222,11 @@ function parityPersistLiveSession(rt: ParityRuntime, runDir: string): void {
     turns_used: turnsUsed,
     turns_remaining: null,
   });
+}
+
+/** Project live session in memory and persist authority + snapshot to disk. */
+function persistParityLiveSessionArtifacts(rt: ParityRuntime, runDir: string): void {
+  if (rt.sessionEvents.events.length === 0) return;
   if (rt.liveAuthority) {
     persistLiveSessionAuthority(runDir, rt.liveAuthority);
   }
@@ -1146,20 +1240,137 @@ function parityPersistLiveSession(rt: ParityRuntime, runDir: string): void {
   persistLiveSessionSnapshot(runDir, live);
 }
 
-/** Fire-and-forget finalize for sync call sites (streamDone/cancel/buildResult). */
+function tryPersistParityLiveSessionArtifacts(rt: ParityRuntime, runDir: string): boolean {
+  try {
+    persistParityLiveSessionArtifacts(rt, runDir);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Record secondary projection failure without mutating committed terminal session evidence. */
+function recordSecondaryTerminalArtifactFailure(
+  rt: ParityRuntime,
+  runDir: string,
+  turnId: string,
+  context: string,
+): void {
+  recordPolicyIntervened(rt.sessionEvents, turnId, {
+    source: 'persistence',
+    action: 'terminal_projection_failed',
+    detail: context.slice(0, 500),
+  });
+  try {
+    flushSessionEventsRequired(rt, runDir, `secondary-artifact:${context}`);
+  } catch {
+    /* primary terminal evidence remains authoritative */
+  }
+}
+
+/** H2: dual-write budget + project LiveSession + persist authority/snapshot. */
+function parityPersistLiveSession(rt: ParityRuntime, runDir: string): void {
+  appendParityBudgetSnapshot(rt);
+  persistParityLiveSessionArtifacts(rt, runDir);
+}
+
+function correctParityTerminalPersistenceFailure(
+  rt: ParityRuntime,
+  runDir: string,
+  context: string,
+): void {
+  const turnId = rt.turnId;
+  if (!turnId) return;
+  if (rt.terminalPersistCommittedTurnId === turnId) return;
+  stripPreDurableFinalizeStaging(rt.sessionEvents, turnId);
+  recordPolicyIntervened(rt.sessionEvents, turnId, {
+    source: 'persistence',
+    action: 'terminal_settlement_failed',
+    detail: context.slice(0, 500),
+  });
+  const corrected = {
+    outcome: 'INFRA_FAILURE' as TerminalOutcome,
+    status: 'failed',
+    reason: TERMINAL_PERSISTENCE_FAILURE_REASON,
+  };
+  amendSessionTurnEndedForTurn(rt.sessionEvents, turnId, corrected);
+  amendThreadTurnEndedForTurn(rt.eventLog, turnId, corrected);
+  parityReduce(rt, { type: 'infra_failure', reason: corrected.status });
+  try {
+    flushSessionEventsRequired(rt, runDir, `corrective:${context}`);
+  } catch {
+    /* best-effort corrective flush */
+  }
+}
+
+/**
+ * Fire-and-forget finalize for sync call sites (streamDone/cancel/buildResult).
+ * Primary failure: session evidence could not be flushed. Secondary failure:
+ * terminal session is committed but live-session projection artifacts failed.
+ */
 export function finalizeParityTurnSync(
   rt: ParityRuntime,
   runDir: string,
   outcome: TerminalOutcome | undefined,
   status: string,
   reason?: TerminalReason,
-): void {
-  parityEndTurn(rt, outcome, status, reason);
-  parityPersistLiveSession(rt, runDir);
+  response?: ThreadTerminalResponse,
+  extras?: FinalizeParityTurnExtras,
+): FinalizeParityTurnResult {
+  const turnId = rt.turnId;
+  if (turnId && rt.terminalPersistCommittedTurnId === turnId) {
+    if (!tryPersistParityLiveSessionArtifacts(rt, runDir)) {
+      persistThreadEventLog(runDir, rt.eventLog).catch((err) => {
+        reportEventLogPersistFailure(`finalize-repair:${outcome}`, err);
+      });
+      return parityFinalizeSecondaryArtifactWarning();
+    }
+    persistThreadEventLog(runDir, rt.eventLog).catch((err) => {
+      reportEventLogPersistFailure(`finalize-repair:${outcome}`, err);
+    });
+    return PARITY_FINALIZE_COMMITTED;
+  }
+  if (rt.sessionPersistenceBoundaryFailed) {
+    return PARITY_FINALIZE_PRIMARY_FAILED;
+  }
+  parityEndTurn(rt, outcome, status, reason, response);
+  if (extras?.completionDecision && turnId) {
+    const already = rt.sessionEvents.events.some(
+      (event) => event.kind === 'completion_decision' && event.turn_id === turnId,
+    );
+    if (!already) {
+      recordCompletionDecision(rt.sessionEvents, turnId, extras.completionDecision);
+    }
+  }
+  appendParityBudgetSnapshot(rt);
+  try {
+    flushSessionEventsRequired(rt, runDir, `finalize-sync:${outcome}`);
+  } catch {
+    correctParityTerminalPersistenceFailure(rt, runDir, `finalize-sync:${outcome}`);
+    rt.sessionPersistenceBoundaryFailed = true;
+    return PARITY_FINALIZE_PRIMARY_FAILED;
+  }
+  if (turnId) {
+    rt.terminalPersistCommittedTurnId = turnId;
+  }
+  if (!tryPersistParityLiveSessionArtifacts(rt, runDir)) {
+    if (turnId) {
+      recordSecondaryTerminalArtifactFailure(
+        rt,
+        runDir,
+        turnId,
+        `finalize-sync:${outcome}`,
+      );
+    }
+    persistThreadEventLog(runDir, rt.eventLog).catch((err) => {
+      reportEventLogPersistFailure(`finalize:${outcome}`, err);
+    });
+    return parityFinalizeSecondaryArtifactWarning();
+  }
   persistThreadEventLog(runDir, rt.eventLog).catch((err) => {
     reportEventLogPersistFailure(`finalize:${outcome}`, err);
   });
-  flushSessionEventsRequired(rt, runDir, `finalize-sync:${outcome}`);
+  return PARITY_FINALIZE_COMMITTED;
 }
 
 /**
@@ -1167,11 +1378,12 @@ export function finalizeParityTurnSync(
  * Use after tool batches that continue the loop.
  */
 export function checkpointParityEventLog(rt: ParityRuntime, runDir: string): void {
-  parityPersistLiveSession(rt, runDir);
+  appendParityBudgetSnapshot(rt);
+  flushSessionEventsRequired(rt, runDir, 'checkpoint');
+  persistParityLiveSessionArtifacts(rt, runDir);
   persistThreadEventLog(runDir, rt.eventLog).catch((err) => {
     reportEventLogPersistFailure('checkpoint', err);
   });
-  flushSessionEventsRequired(rt, runDir, 'checkpoint');
 }
 
 /**
@@ -1191,17 +1403,27 @@ export function checkpointParityEventLog(rt: ParityRuntime, runDir: string): voi
  * - Batch sidecars removed after rollback, retained with journal if rollback is blocked
  * - Receipt is `blocked` with no child artifacts marked `committed`
  */
+export interface StrictCheckpointOptions {
+  /** A prospective allowance belongs to this same accepted task generation. */
+  taskAllowance?: import('./chatEngineContracts.js').ChatTaskAllowanceSnapshot;
+  injectCommitFailureAfter?: number;
+  renameOptions?: AtomicCheckpointRenameOptions;
+  unlinkCheckpoint?: typeof unlinkSync;
+  /** P05 owner fence checked at the authority-bearing rename boundary. */
+  assertOwnerCurrent?: () => void;
+}
+
+/** Awaitable compatibility facade over the same synchronous journal transaction. */
 export async function checkpointParityEventLogStrict(
+  rt:ParityRuntime,runDir:string,options?:StrictCheckpointOptions,
+):Promise<PersistenceReceipt>{return checkpointParityEventLogStrictSync(rt,runDir,options);}
+
+/** Synchronous callers receive a receipt only after the full strict batch commits. */
+export function checkpointParityEventLogStrictSync(
   rt: ParityRuntime,
   runDir: string,
-  options?: {
-    injectCommitFailureAfter?: number;
-    renameOptions?: AtomicCheckpointRenameOptions;
-    unlinkCheckpoint?: typeof unlinkSync;
-    /** P05 owner fence checked at the authority-bearing rename boundary. */
-    assertOwnerCurrent?: () => void;
-  },
-): Promise<PersistenceReceipt> {
+  options?: StrictCheckpointOptions,
+): PersistenceReceipt {
   const initialEventsCount = rt.sessionEvents.events.length;
   const initialNextSeq = rt.sessionEvents.nextSeq;
   const initialFlushedThroughSeq = rt.sessionEvents.flushedThroughSeq;
@@ -1245,6 +1467,8 @@ export async function checkpointParityEventLogStrict(
     });
 
     if (!rt.liveAuthority) throw new Error('live authority is missing');
+    assertAuthorityModeHistory(rt.liveAuthority);
+    assertObjectiveLifecycle(rt.liveAuthority,rt.liveAuthority.taskObjectiveLifecycle,{thread:rt.eventLog,session:rt.sessionEvents});
 
     const projectedLive = projectFromDurableSession({
       sessionLog: rt.sessionEvents,
@@ -1289,6 +1513,15 @@ export async function checkpointParityEventLogStrict(
             filename: CONTEXT_CHECKPOINT_FILENAME,
             content: JSON.stringify(rt.contextCheckpoint, null, 2),
           }]
+        : []),
+      ...(rt.liveAuthority.taskModeHistory
+        ? [{kind:'authority' as const,filename:TASK_MODE_HISTORY_FILENAME,content:JSON.stringify(rt.liveAuthority.taskModeHistory,null,2)}]
+        : []),
+      ...(rt.liveAuthority.taskObjectiveLifecycle
+        ? [{kind:'authority' as const,filename:TASK_OBJECTIVE_LIFECYCLE_FILENAME,content:JSON.stringify(rt.liveAuthority.taskObjectiveLifecycle,null,2)}]
+        : []),
+      ...(options?.taskAllowance
+        ? [{kind:'authority' as const,filename:'task-budget.json',content:JSON.stringify(options.taskAllowance)}]
         : []),
     ];
 

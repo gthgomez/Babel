@@ -170,6 +170,32 @@ describe('verifier execution identity preserves argument semantics', () => {
     );
   });
 
+  test('the execution ledger keeps distinct cwd and environment contexts separately', () => {
+    const ledger: Array<{ command: string; working_directory?: string; environment_policy?: string }> = [];
+    upsertVerifierReceipt(ledger as never, {
+      command: 'npm test',
+      working_directory: '.',
+      environment_policy: 'host-process',
+    } as never);
+    upsertVerifierReceipt(ledger as never, {
+      command: 'npm test',
+      working_directory: 'pkg',
+      environment_policy: 'host-process',
+    } as never);
+    upsertVerifierReceipt(ledger as never, {
+      command: 'npm test',
+      working_directory: '.',
+      environment_policy: 'env-alt',
+    } as never);
+    assert.equal(ledger.length, 3);
+    upsertVerifierReceipt(ledger as never, {
+      command: 'npm test',
+      working_directory: '.',
+      environment_policy: 'host-process',
+    } as never);
+    assert.equal(ledger.length, 3, 'same context updates in place');
+  });
+
   test('the execution ledger keeps distinct-argument receipts separately', () => {
     const ledger: Array<{ command: string } & Record<string, unknown>> = [];
     upsertVerifierReceipt(ledger as never, { command: 'pytest -m slow' } as never);

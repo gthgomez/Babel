@@ -106,6 +106,22 @@ test("executor kernel downgrades verified completion until proof is complete", (
   assert.equal(decision.allowed, false);
 });
 
+for (const mode of ['chat', 'deep'] as const) {
+  test(`${mode} cannot certify coarse proof without trusted criterion evidence`, () => {
+    const decision = createExecutorKernel(mode).completion.decide({
+      mode,
+      requestedOutcome: 'VERIFIED_COMPLETE',
+      hasWrite: true,
+      verificationPolicy: 'none',
+      toolCallLog: [],
+      proof: { compliant: true },
+    });
+    assert.equal(decision.finalOutcome, 'UNVERIFIED_PATCH');
+    assert.equal(decision.allowed, false);
+    assert.match(decision.reason, /acceptance/);
+  });
+}
+
 test("plan kernel denies mutation tools at the shared dispatch boundary", async () => {
   const kernel = createExecutorKernel("plan");
   const result = await kernel.tools.execute(

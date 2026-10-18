@@ -26,3 +26,12 @@ cpSync(srcDir, distDir, {
   },
 });
 console.log(`copy_playbooks: copied *.json → ${distDir}`);
+
+// Carry the owned data-only native oracle with the compiled CLI. This is an
+// asset copy, not runtime selection or trusted-verifier activation: callers
+// must still qualify and freeze their complete host/compiler dependency closure.
+const oracleSource = resolve(packageRoot, 'src', 'authority', 'ownedFileAssertion.windows.ps1');
+const oracleDestination = resolve(packageRoot, 'dist', 'authority', 'ownedFileAssertion.windows.ps1');
+mkdirSync(dirname(oracleDestination), { recursive: true });
+cpSync(oracleSource, oracleDestination);
+console.log('copy_playbooks: copied owned native oracle asset');

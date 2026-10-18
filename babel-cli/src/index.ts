@@ -1,58 +1,28 @@
 #!/usr/bin/env node
 
-import { loadBabelCliEnv } from './config/envBootstrap.js';
+import { dispatchExecutableCli } from './cliEntryDispatch.js';
 
-loadBabelCliEnv();
-process.env['BABEL_ENV_LOADED'] = 'true';
+type CliMain = typeof import('./cliMain.js');
 
-import { Command } from 'commander';
+let cliMainPromise: Promise<CliMain> | null = null;
 
-import { rewriteArgv } from './cli/argv.js';
-import { isDeprecatedSurfaceCommand, printDeprecatedSurfaceAndExit } from './cli/deprecation.js';
-import {
-  applyProgramMetadata,
-  applyUserFocusedHelpTiers,
-  registerCoreCommands,
-} from './commands/coreCommands.js';
-import { registerProjectCommands } from './commands/projectCommands.js';
-import { registerRemoteCommands } from './commands/remoteCommands.js';
-import { registerWorkflowCommands } from './commands/workflowCommands.js';
+function loadCliMain(): Promise<CliMain> {
+  if (!cliMainPromise) cliMainPromise = import('./cliMain.js');
+  return cliMainPromise;
+}
 
-export function runCli(argv: string[] = process.argv) {
-  if (argv[1]) {
-    const filename = argv[1].split(/[\\/]/).pop()?.toLowerCase();
-    if (filename === 'bl.js' || filename === 'bl') {
-      printDeprecatedSurfaceAndExit('bl');
-    }
-    if (filename === 'babel-lite.js' || filename === 'babel-lite') {
-      printDeprecatedSurfaceAndExit('babel-lite');
-    }
-  }
+export async function runCli(argv: string[] = process.argv): Promise<void> {
+  return (await loadCliMain()).runCli(argv);
+}
 
-  const program = new Command();
-  applyProgramMetadata(program);
-  registerCoreCommands(program);
-  registerProjectCommands(program);
-  registerWorkflowCommands(program);
-  registerRemoteCommands(program);
-  applyUserFocusedHelpTiers(program);
-
-  const rewrittenArgv = rewriteArgv(argv);
-  const surfaceCommand = rewrittenArgv[2];
-  if (typeof surfaceCommand === 'string' && isDeprecatedSurfaceCommand(surfaceCommand)) {
-    printDeprecatedSurfaceAndExit(surfaceCommand);
-  }
-  program.parse(rewrittenArgv);
+export async function startCli(argv: string[] = process.argv): Promise<void> {
+  return (await loadCliMain()).startCli(argv);
 }
 
 const isMain =
   process.argv[1] &&
-  (process.argv[1].endsWith('babel.js') ||
-    process.argv[1].endsWith('babel-lite.js') ||
-    process.argv[1].endsWith('bl.js') ||
-    process.argv[1].endsWith('index.js') ||
-    process.argv[1].endsWith('index.ts'));
+  (process.argv[1].endsWith('index.js') || process.argv[1].endsWith('index.ts'));
 
 if (isMain) {
-  runCli();
+  await dispatchExecutableCli();
 }

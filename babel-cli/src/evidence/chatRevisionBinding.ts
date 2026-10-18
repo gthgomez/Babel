@@ -20,6 +20,7 @@ import { EvidenceGraph } from './evidenceGraph.js';
 import { independentVerifierProofErrors } from './independentVerifier.js';
 import { discoverVerifierInputClosure } from './revisionBoundReceipt.js';
 import { analyzeVerifierIdentity } from '../services/verifierIdentity.js';
+import { realpathSync } from 'node:fs';
 import {
   compareRevisions,
   RevisionManager,
@@ -48,6 +49,12 @@ export type BoundChatVerifierReceipt = {
   authority?: boolean;
   capturedAt?: number;
   argv?: string[];
+  /** Physical working directory the verifier ran in (repository-relative when possible). */
+  working_directory?: string;
+  /** Execution-environment fingerprint or frozen policy token at capture time. */
+  environment_policy?: string;
+  /** Target selector/path when the verifier was targeted (not full suite). */
+  target?: string;
   /**
    * H5: verifier scope. Must be preserved into completion promotion —
    * never silently upgraded from targeted → full_suite.
@@ -90,6 +97,11 @@ export async function bindChatVerifierReceipt(input: {
     executable: string;
     args: string[];
   } | null;
+  execution?: {
+    working_directory?: string;
+    environment_policy?: string;
+    target?: string;
+  } | null;
 }): Promise<BoundChatVerifierReceipt> {
   const boundRevision = await RevisionManager.computeRevision(
     input.projectRoot,
@@ -126,6 +138,13 @@ export async function bindChatVerifierReceipt(input: {
           argv: [input.structured.executable, ...input.structured.args],
         }
       : {}),
+    ...(input.execution?.working_directory !== undefined
+      ? { working_directory: input.execution.working_directory }
+      : {}),
+    ...(input.execution?.environment_policy !== undefined
+      ? { environment_policy: input.execution.environment_policy }
+      : {}),
+    ...(input.execution?.target !== undefined ? { target: input.execution.target } : {}),
   };
 }
 
@@ -210,6 +229,56 @@ export function evaluateChatVerifierReceiptCurrencySync(
     return null;
   }
   return compareRevisions(revision, fresh);
+}
+
+/**
+ * Recompute the governed candidate revision at completion time (mutation scope plus
+ * verifier input closure embedded in the receipt). Returns null when the receipt is
+ * not a current green binding — never trusts a previously recorded hash alone.
+ */
+export function resolveGovernedCriterionCandidateRevisionSha(
+  projectRoot: string,
+  receipt: BoundChatVerifierReceipt | null | undefined,
+): string | null {
+  if (!receipt || receipt.exit_code !== 0) return null;
+  if (receipt.stale === true) return null;
+
+  const currency = evaluateChatVerifierReceiptCurrencySync(projectRoot, receipt);
+  if (currency?.stale) return null;
+
+  const bound = toRevisionBoundReceipt(receipt);
+  if (!bound || bound.exitCode !== 0 || bound.stale === true) return null;
+
+  const repository = realpathSync.native(projectRoot);
+  const stale = RevisionManager.isReceiptStaleSync(bound, repository);
+  if (stale.stale) return null;
+
+  const revision = receipt.boundRevision;
+  if (!revision?.compositeTreeHash) return null;
+
+  const scope = revision.scope;
+  let fresh: WorkspaceRevision;
+  try {
+    if (scope?.kind === 'repository') {
+      fresh = RevisionManager.computeRevisionSync(projectRoot, [], {
+        scope_kind: 'repository',
+        git_binding: revision.gitBinding ?? 'required',
+      });
+    } else {
+      const paths =
+        scope?.kind === 'files'
+          ? scope.paths
+          : Object.keys(revision.fileHashes).sort();
+      if (paths.length === 0) return null;
+      fresh = RevisionManager.computeRevisionSync(projectRoot, paths, {
+        ...(revision.gitBinding ? { git_binding: revision.gitBinding } : {}),
+      });
+    }
+  } catch {
+    return null;
+  }
+  if (fresh.compositeTreeHash !== revision.compositeTreeHash) return null;
+  return fresh.compositeTreeHash;
 }
 
 /**

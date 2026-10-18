@@ -31,6 +31,7 @@ export function parseRequiredTapInventory(tap, suite) {
   if (tapHeaderIndexes.length !== 1) errors.push('missing_or_duplicate_tap_version_13')
   const outcomes = []
   const parents = new Map()
+  const subtestStartLine = new Map()
   let nextParentId = 1
 
   for (let index = 0; index < lines.length; index++) {
@@ -39,7 +40,9 @@ export function parseRequiredTapInventory(tap, suite) {
     if (header) {
       const depth = header[1].length
       for (const prior of parents.keys()) if (prior >= depth) parents.delete(prior)
+      for (const prior of subtestStartLine.keys()) if (prior >= depth) subtestStartLine.delete(prior)
       parents.set(depth, { id: nextParentId++, name: header[2].trim() })
+      subtestStartLine.set(depth, index)
       continue
     }
 
@@ -66,8 +69,13 @@ export function parseRequiredTapInventory(tap, suite) {
     }
 
     if (kind !== 'test' && kind !== 'suite') {
-      errors.push(`outcome_${outcome[3]}_missing_or_invalid_type`)
-      continue
+      const start = subtestStartLine.get(depth) ?? index
+      let nestedSubtest = false
+      for (let scan = start + 1; scan < index; scan++) {
+        const nested = /^(\s*)# Subtest:/.exec(lines[scan])
+        if (nested && nested[1].length > depth) nestedSubtest = true
+      }
+      kind = nestedSubtest ? 'suite' : 'test'
     }
     const path = [...parents.entries()]
       .filter(([parentDepth]) => parentDepth < depth)

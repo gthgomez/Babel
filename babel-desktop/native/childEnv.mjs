@@ -17,9 +17,16 @@
  * @returns {NodeJS.ProcessEnv} the same env object, for convenience
  */
 import {applyProviderRoute} from './provider-routing.mjs';
+import {applyNativeCredentialEnvironment,assertStandaloneCredentialCompatibility} from './credentials.mjs';
 import {isAbsolute,resolve} from 'node:path';
 
 export {applySelectedModelEnvironment} from './provider-routing.mjs';
+
+/** Conversation authority comes from its explicit CLI argument, never ambient roots. */
+export function applyExecutionScopeEnvironment(env,scope) {
+  if(scope?.kind==='conversation')for(const name of ['BABEL_PROJECT_ROOT','BABEL_ALLOWED_ROOTS','BABEL_PROJECT_CREDENTIALS_DIR','BABEL_LEGACY_CLI_ENV'])delete env[name];
+  return env;
+}
 
 export function applyProjectCredentialScope(env, {projectCredentialRoot = null, projectRoot = null, configDirectory = null} = {}) {
   delete env.BABEL_PROJECT_CREDENTIALS_DIR;
@@ -50,5 +57,13 @@ export function applyCliCredentialScope(env, {args = [], cwd = process.cwd(), pr
   const projectRoot = valid && (explicitRoot || (!namedProject&&cwdUnambiguous)) ? resolve(cwd,requested) : null;
   const opted = preferences.projectCredentialRoot;
   const projectCredentialRoot = typeof opted==='string' && isAbsolute(opted) ? resolve(opted) : null;
-  return applyProjectCredentialScope(env,{projectRoot,projectCredentialRoot,configDirectory});
+  applyProjectCredentialScope(env,{projectRoot,projectCredentialRoot,configDirectory});
+  if(configDirectory)assertStandaloneCredentialCompatibility(configDirectory);
+  return env;
+}
+
+/** Main-process opt-in only. Node launchers cannot unlock Electron safeStorage. */
+export function applyOwnedCliCredentialEnvironment(env,{configDirectory,projectRoot=null,projectCredentialRoot=null}={}) {
+  return applyNativeCredentialEnvironment(env,{provider:env.BABEL_DESKTOP_PROVIDER??'ollama',configDirectory,
+    scope:projectRoot&&projectCredentialRoot===projectRoot?'project':'private',projectRoot});
 }

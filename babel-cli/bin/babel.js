@@ -6,28 +6,22 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-const distEntry = resolve(__dirname, '../dist/index.js');
-const envBootstrapEntry = resolve(__dirname, '../dist/config/envBootstrap.js');
+const dispatchEntry = resolve(__dirname, '../dist/cliEntryDispatch.js');
 const [major, minor, patch] = process.versions.node.split('.').map(Number);
 if (!((major === 22 && minor >= 19) || (major === 24 && (minor > 13 || (minor === 13 && patch >= 1))))) {
   console.error('[babel-agent] Node ^22.19.0 or ^24.13.1 is required.');
   process.exit(1);
 }
 
-if (!existsSync(distEntry)) {
+if (!existsSync(dispatchEntry)) {
   console.error(
-    `[babel] Missing build output at "${distEntry}". Run "npm --prefix .\\babel-cli run build" from the repo root first.`,
+    `[babel] Missing build output at "${dispatchEntry}". Run "npm --prefix .\\babel-cli run build" from the repo root first.`,
   );
   process.exit(1);
 }
 
 const { routeInteractiveWarnings } = await import(pathToFileURL(resolve(__dirname, '../dist/cli/interactiveWarningRoute.js')).href);
 if (!(await routeInteractiveWarnings())) {
-  if (existsSync(envBootstrapEntry)) {
-    await import(pathToFileURL(envBootstrapEntry).href);
-  }
-
-  const { runCli } = await import(pathToFileURL(distEntry).href);
-  // Node retains a Unix npm symlink's executable name in argv[1].
-  if (!process.argv[1]?.endsWith('babel.js')) runCli();
+  const { dispatchExecutableCli } = await import(pathToFileURL(dispatchEntry).href);
+  await dispatchExecutableCli();
 }

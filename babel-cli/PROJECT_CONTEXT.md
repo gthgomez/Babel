@@ -41,6 +41,8 @@ explain Babel stack assembly. Consumer-local instructions remain external inputs
 |---------|----------------------------|
 | Daily loop | `agent/chatEngine.ts`, `interactive/execution/chatCore.ts` |
 | Completion honesty | `agent/completionGatePolicy.ts`, `executor/kernel.ts` |
+| Current criterion authority (partial; no execution publisher yet) | `authority/criterionCompletion.ts`, `agent/chatEngineServices.ts` |
+| Owned literal-file oracle backend (no criterion authority) | `authority/ownedFileAssertion.ts`, `authority/credentialPath.ts` |
 | Terminal outcomes | `schemas/agentContracts.ts` (`TerminalOutcome`), `agent/chatEngineObservability.ts` |
 | Mode policy / effects | `executor/contracts.ts` |
 | Governed pipeline | `pipeline.ts`, `pipeline/executorLoop.ts` |

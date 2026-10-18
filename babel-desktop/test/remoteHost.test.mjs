@@ -6,6 +6,8 @@ import {EventEmitter} from 'node:events';
 import {createServer} from 'node:http';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
+import {mkdtempSync, writeFileSync, rmSync} from 'node:fs';
+import {createServer as createNetServer} from 'node:net';
 import {fileURLToPath} from 'node:url';
 import {RemoteBridgeChild, buildRemoteServeArgs} from '../native/remoteHost.mjs';
 
@@ -20,6 +22,56 @@ test('RemoteBridgeChild exposes stopped lifecycle state before start', () => {
   assert.equal(bridge.state, 'stopped');
   assert.equal(bridge.running, false);
   assert.throws(() => buildRemoteServeArgs(entry, root, {port: 80}), /Invalid remote listen port/);
+});
+
+test('remote startup diagnostics never forward child stdout or stderr payloads', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-remote-safe-diagnostics-'));
+  const reservation = createNetServer();
+  await new Promise(resolve => reservation.listen(0, '127.0.0.1', resolve));
+  const port = reservation.address().port;
+  await new Promise(resolve => reservation.close(resolve));
+  const entry = join(root, 'fixture.mjs');
+  writeFileSync(entry, `import {createServer} from 'node:http';
+const key=process.env.DEEPSEEK_API_KEY;
+const port=Number(process.argv[process.argv.indexOf('--port')+1]);
+for(let i=0;i<32;i++){process.stdout.write('startup '+key+String.fromCharCode(27)+'[31m\\n');process.stderr.write('diagnostic '+key+String.fromCharCode(27)+'[31m\\n');}
+process.stdout.write('Babel Remote listening on http://127.0.0.1:'+port+'\\n');
+createServer((request,response)=>{response.writeHead(200,{'content-type':'application/json'});response.end(JSON.stringify({ok:true,instance:process.env.BABEL_BRIDGE_INSTANCE}));}).listen(port,'127.0.0.1');`);
+  const env = {};
+  for (const name of ['PATH', 'SystemRoot', 'WINDIR', 'COMSPEC', 'PATHEXT', 'TEMP', 'TMP']) {
+    if (process.env[name]) env[name] = process.env[name];
+  }
+  Object.assign(env, {
+    HOME: root,
+    USERPROFILE: root,
+    APPDATA: root,
+    LOCALAPPDATA: root,
+    DEEPSEEK_API_KEY: 'fixture-sensitive',
+  });
+  const bridge = new RemoteBridgeChild({
+    executable: process.execPath,
+    entry,
+    projectRoot: root,
+    env,
+    inheritEnv: false,
+  });
+  const lines = [];
+  try {
+    const result = await bridge.start({
+      port,
+      onLine: line => lines.push(line),
+      readyTimeoutMs: 5000,
+    });
+    assert.equal(result.port, port);
+    assert.equal(bridge.state, 'ready');
+    assert.equal(JSON.stringify(lines).includes('fixture-sensitive'), false, 'Remote IPC exposed a synthetic credential');
+    assert.equal(JSON.stringify(lines).includes('\\u001b'), false, 'Remote IPC exposed child control characters');
+    assert.equal(lines.length <= 3, true, 'Remote diagnostics were not bounded');
+    assert.equal(lines.some(line => line.diagnosticAvailable === true), true);
+  } finally {
+    bridge.stop();
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test('the silent fixture exits when the host terminates it', async () => {
@@ -84,7 +136,9 @@ function scriptedChild() {
   // can never signal a real (unrelated) process tree.
   child.pid = 0;
   child.stdout = new EventEmitter();
+  child.stdout.resume = () => {};
   child.stderr = new EventEmitter();
+  child.stderr.resume = () => {};
   child.killed = false;
   child.kill = () => {
     child.killed = true;

@@ -8,7 +8,7 @@ const packageJson = JSON.parse(readFileSync(new URL('../../package.json', import
 const workflow = readFileSync(new URL('../../../.github/workflows/typecheck.yml', import.meta.url), 'utf8')
 
 test('required Chat truth selection includes focused accounting, Chronicle and boundary regressions on both hosts', () => {
-  const selector = packageJson.scripts['test:chat-truth'] as string
+  const selector = packageJson.scripts['test:chat-truth:raw'] as string
   const files = new Set(selector.slice(selector.indexOf(' --test ') + 8).trim().split(/\s+/))
   for (const required of [
     'src/agent/chatAllowanceAccounting.test.ts',

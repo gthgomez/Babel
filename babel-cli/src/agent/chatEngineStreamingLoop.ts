@@ -51,6 +51,10 @@ import {
   type ChatTurn,
 } from "./chatToolDefinitions.js";
 import {
+  conversationHasUncommittedCompactionCandidate,
+  stripUncommittedCompactionCandidates,
+} from "./compactionCandidateGuard.js";
+import {
   parityRecordToolBatch,
   paritySettleProposeTools,
   parityArbitrateCycle,
@@ -94,6 +98,7 @@ import {
 import { nativeToolUseToChatAction } from "./chatEngineSupport.js";
 import { isReadOnlyChat } from "./chatReadOnly.js";
 import { availableChatTools } from "./chatToolAvailability.js";
+import {PROJECT_REQUIRED_MESSAGE,conversationProjectRequiredReport} from './chatToolScopeAdmission.js';
 
 import type { ChatEngineStreamingLoopHost } from "./chatEngineContracts.js";
 export type { ChatEngineStreamingLoopHost } from "./chatEngineContracts.js";
@@ -110,12 +115,14 @@ export class ChatEngineStreamingLoop {
     userInput: string,
     taskIntent?: TaskIntent,
     submitOpts?: SubmitMessageOptions,
+    objective?: import('./chatEngineObjectiveAdmission.js').PreparedObjectiveSubmission,
   ): AsyncGenerator<ChatEvent, void, undefined> {
     const prepared = await prepareStreamingSubmission(
       this.host,
       userInput,
       taskIntent,
       submitOpts,
+      objective,
     );
     if (prepared.halted) {
       if (prepared.haltEvent) yield prepared.haltEvent;
@@ -141,7 +148,9 @@ export class ChatEngineStreamingLoop {
     let responseEvidenceRepairUsed = false;
     let nativeProtocolRepairUsed = false;
     const bufferContractAnswer = requestedChatJsonKind(userInput) !== null;
-    refreshChatVerifierReceiptStalenessSync(this.host.options.projectRoot, this.host.lastVerifierReceipt);
+    if (this.host.options.projectRoot) {
+      refreshChatVerifierReceiptStalenessSync(this.host.options.projectRoot, this.host.lastVerifierReceipt);
+    }
     recordChatHarnessFeedback(this.host, `Verification evidence at submission start: ${responseVerifierFacts(this.host.lastVerifierReceipt)} Never infer test execution from reading source. Preserve the requested answer format.`);
 
     for (let turn = 0; turn < maxTurns; turn++) {
@@ -258,24 +267,9 @@ export class ChatEngineStreamingLoop {
       );
 
       if (
-        this.host.conversation.some(
-          (message) =>
-            message.compactionCandidate === true ||
-            (message.name === "compaction_summary" &&
-              (message.role !== "assistant" ||
-                message.provenance !== "model" ||
-                message.authoritative !== false)) ||
-            (message.name === "compaction_capsule" &&
-              (message.role !== "system" ||
-                message.provenance !== "controller" ||
-                message.authoritative !== true)) ||
-            (message.role === "system" &&
-              (message.name === "compaction_summary" ||
-                message.provenance === "model" ||
-                message.provenance === "mixed" ||
-                message.authoritative === false)),
-        )
+        conversationHasUncommittedCompactionCandidate(this.host.conversation)
       ) {
+        stripUncommittedCompactionCandidates(this.host.conversation);
         yield this.host.streamFailed(
           "An uncommitted compaction candidate cannot authorize provider dispatch.",
         );
@@ -317,7 +311,7 @@ export class ChatEngineStreamingLoop {
         this.host.parity.contextCheckpoint !== undefined;
       const usageScope: ChatUsageScope = {
         taskOwnerId: this.host.taskAllowance?.taskOwnerId ?? null,
-        projectRoot: realpathSync(this.host.options.projectRoot),
+        ...(this.host.options.projectRoot?{projectRoot:realpathSync(this.host.options.projectRoot)}:{}),
         accountingEpoch: globalCostTracker.getAccountingEpoch(),
         turnId: this.host.parity.turnId,
         chargeId: null as string | null,
@@ -397,8 +391,19 @@ export class ChatEngineStreamingLoop {
       // R0-8/R1: a superseded submission must not finalize the live turn as
       // failed nor dispatch a provider request for the new owner.
       if (!this.host.isSubmissionCurrent(submissionGeneration)) return;
+      const conversationOnly =
+        this.host.options.executionScope?.kind === 'conversation' && !this.host.options.projectRoot;
+      const missingWorkspaceOnly =
+        conversationOnly &&
+        !hadInstalledP11Context &&
+        !pendingCapsuleAuthority &&
+        Boolean(
+          this.host.parity.admissionStore &&
+            this.host.p11InstallBlock?.details.includes('workspace_revision'),
+        );
       if (
         !p11ContextInstalled &&
+        !missingWorkspaceOnly &&
         (hadInstalledP11Context || pendingCapsuleAuthority ||
           (this.host.parity.admissionStore && this.host.p11InstallBlock?.details.includes('workspace_revision')))
       ) {
@@ -555,14 +560,14 @@ export class ChatEngineStreamingLoop {
         }
       } else if (useNativeTools) {
         const nextTools = this.host.nextTurnToolPolicy();
-        const restrictTools = nextTools.restrict && !isReadOnlyChat() && !isReadOnlyInspection;
+        const restrictTools = this.host.options.executionScope?.kind!=='conversation'&&nextTools.restrict && !isReadOnlyChat() && !isReadOnlyInspection;
         const toolDefs = availableChatTools(
           restrictTools
             ? this.host.services.tools.buildRestrictedDefinitions(
                 nextTools.mode === "full" ? "act_or_verify" : nextTools.mode,
               )
             : this.host.services.tools.buildDefinitions(),
-          { operation: effectiveOperation,
+          { executionScope:this.host.options.executionScope,operation: effectiveOperation,
           requiredVerifiers: isReadOnlyInspection ? this.host.getResolvedRequiredVerifiers() : [],
           hostFallbackAllowed: this.host.isolationBrokerFlags().hostFallbackAllowed });
         const nativeActions: ChatToolAction[] = [];
@@ -1219,10 +1224,22 @@ export class ChatEngineStreamingLoop {
           );
         }
 
+        if (this.host.parity.sessionPersistenceBoundaryFailed) {
+          endSpan(_turnSpan, SpanStatusCode.ERROR);
+          _turnSpan = null;
+          if (!this.host.isSubmissionCurrent(submissionGeneration)) return;
+          yield this.host.streamFailed(
+            "session event persistence failed before tool dispatch could be durably recorded",
+          );
+          return;
+        }
+
         const subAgentEvents: ChatEvent[] = [];
 
-        const { observations, observationList } =
-          await this.host.executeActions(
+        let observations = "";
+        let observationList: string[] = [];
+        try {
+          const executed = await this.host.executeActions(
             turnResult.actions,
             {
               onToolStart: (_tool, _target) => {
@@ -1265,6 +1282,24 @@ export class ChatEngineStreamingLoop {
             },
             submissionGeneration,
           );
+          observations = executed.observations;
+          observationList = executed.observationList;
+        } catch (err: unknown) {
+          const message = err instanceof Error ? err.message : String(err);
+          if (
+            message === "SESSION_EVENT_PERSISTENCE_BOUNDARY_FAILED" ||
+            this.host.parity.sessionPersistenceBoundaryFailed
+          ) {
+            endSpan(_turnSpan, SpanStatusCode.ERROR);
+            _turnSpan = null;
+            if (!this.host.isSubmissionCurrent(submissionGeneration)) return;
+            yield this.host.streamFailed(
+              "session event persistence failed before tool dispatch could be durably recorded",
+            );
+            return;
+          }
+          throw err;
+        }
 
         // R0-8: tools are a suspension point. If the submission was superseded
         // while they ran, stop before mutating the new owner's state or
@@ -1555,6 +1590,14 @@ export class ChatEngineStreamingLoop {
         this.host._streamNativeToolCallIds = [];
         this.host._activeToolBatchId = null;
 
+        if(this.host.options.executionScope?.kind==='conversation'){
+          endSpan(_turnSpan,SpanStatusCode.OK);
+          _turnSpan=null;
+          yield this.host.streamDone(PROJECT_REQUIRED_MESSAGE,{
+            blockedReport:conversationProjectRequiredReport(this.host.toolCallLog.slice(this.host._turnToolCallLogStart)),
+          });
+          return;
+        }
         // A repeated path can still yield new ranges or changed content. Only
         // consider legacy stall escalation after the durable receipt sees no delta.
         const stallIntervention = cycleReceipt?.hasDelta
@@ -1914,9 +1957,14 @@ export class ChatEngineStreamingLoop {
         }
 
         // Clarifications and BLOCKED replies must obey the same evidence rules.
-        refreshChatVerifierReceiptStalenessSync(this.host.options.projectRoot, this.host.lastVerifierReceipt);
-        for (const receipt of this.host.executedVerifierLedger)
-          refreshChatVerifierReceiptStalenessSync(this.host.options.projectRoot, receipt);
+        if (this.host.options.projectRoot) {
+      refreshChatVerifierReceiptStalenessSync(this.host.options.projectRoot, this.host.lastVerifierReceipt);
+    }
+        if (this.host.options.projectRoot) {
+          for (const receipt of this.host.executedVerifierLedger) {
+            refreshChatVerifierReceiptStalenessSync(this.host.options.projectRoot, receipt);
+          }
+        }
         if (unsupportedTestClaim(answer, this.host.lastVerifierReceipt, this.host.executedVerifierLedger)) {
           this.host.conversation.push({ role: 'assistant', content: answer });
           endSpan(_turnSpan, SpanStatusCode.ERROR);

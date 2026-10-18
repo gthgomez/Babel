@@ -6,8 +6,6 @@ import type {
 } from "./chatEngine.js";
 import type { TaskOperation } from "../config/chatTaskClass.js";
 import { formatPlanHandoffUserMessage } from "./planExecuteMode.js";
-import { evaluateSubmitTaskAuthorityHalt } from "./chatEngineLiveSession.js";
-import { parityOnUserTurn } from "./chatEngineParityBridge.js";
 import { recordUserMessage } from "./threadEventLog.js";
 import { ChatTurnTelemetryCollector } from "./chatTurnTelemetry.js";
 
@@ -19,6 +17,7 @@ export async function ensureRepositoryContext(
   host: ChatEngineStreamingLoopHost,
   submissionGeneration: number,
 ): Promise<void> {
+  if(host.options.executionScope?.kind==='conversation')return;
   if (host.repoMapCache !== null) {
     host.repoMapInvalidated = false;
     return;
@@ -48,6 +47,7 @@ export async function prepareStreamingSubmission(
   userInput: string,
   taskIntent?: TaskIntent,
   submitOpts?: SubmitMessageOptions,
+  objective?: import('./chatEngineObjectiveAdmission.js').PreparedObjectiveSubmission,
 ) {
   // R0-7/R0-8: every submission owns a distinct generation. The non-stream
   // adapter supplies the generation it already incremented; a direct
@@ -65,14 +65,18 @@ export async function prepareStreamingSubmission(
   host.lastRequestPromptTokens = null;
   host.lastRequestCompletionTokens = null;
   host.lastRequestModelId = null;
+  const modelName=host.modelPolicy?.providerModelId??host.options.model??host.modelPolicy?.family??'unknown';
+  const providerName=host.modelPolicy?.provider??(modelName.toLowerCase().includes('deepseek')?'deepseek':modelName.toLowerCase().includes('ollama')?'ollama':'deepinfra');
   // W0.3: fresh TurnRuntime per user submission (isolate counters by default).
-  const runtime = host.applyUserSubmission({
+  const admission = host.admitUserSubmission({
     userInput,
     ...(taskIntent !== undefined ? { taskIntent } : {}),
     ...(submitOpts?.continueTask !== undefined
       ? { continueTask: submitOpts.continueTask }
       : {}),
-  });
+  },{model:modelName,provider:providerName},objective);
+  if(admission.status==='halted')return {halted:true,haltEvent:admission.haltEvent} as const;
+  const runtime=admission.runtime;
   // Accepted host operation (AUTO falls back to task shape) narrows tools and
   // completion behavior. It grants no execution authority; profile/lease and
   // action admission remain independent. Unknown old snapshots fail closed.
@@ -123,36 +127,7 @@ export async function prepareStreamingSubmission(
     ? "execute"
     : "explain";
 
-  const authorityHalt = evaluateSubmitTaskAuthorityHalt(host.parity, userInput);
-  if (authorityHalt) return { halted: true, haltEvent: authorityHalt } as const;
-
-  // P1: open parity turn (loop + durable event log)
-  // Record the resolved provider/model, not the backend shorthand supplied
-  // by the caller. This is the first durable route fact for exact-lock runs;
-  // later runner metadata records what was actually sent and observed.
-  const modelName =
-    host.modelPolicy?.providerModelId ??
-    host.options.model ??
-    host.modelPolicy?.family ??
-    "unknown";
-  const providerName =
-    host.modelPolicy?.provider ??
-    (modelName.toLowerCase().includes("deepseek")
-      ? "deepseek"
-      : modelName.toLowerCase().includes("ollama")
-        ? "ollama"
-        : "deepinfra");
-  parityOnUserTurn(host.parity, {
-    task: userInput,
-    model: modelName,
-    provider: providerName,
-    projectRoot: host.options.projectRoot,
-    policyPreset: "workspace_write",
-    taskClass: runtime.taskClass,
-    gatePolicy: runtime.gatePolicy ?? host.gatePolicy ?? "required",
-    submissionIndex: runtime.submissionIndex,
-    continuedTask: runtime.continuedTask,
-  });
+  // Admission already committed this exact canonical turn and task/attempt binding.
   if (
     host.options.intentPlanUserMessage &&
     !isReadOnlyInspection &&
@@ -162,6 +137,7 @@ export async function prepareStreamingSubmission(
       host.parity.eventLog,
       host.parity.turnId,
       host.options.intentPlanUserMessage,
+      {name:'intent_plan',provenance:'controller',authoritative:false},
     );
   }
   // S04/#214 C1: the turn's execution context is scoped per step by

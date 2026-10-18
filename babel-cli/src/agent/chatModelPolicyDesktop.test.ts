@@ -71,10 +71,56 @@ test('Desktop discovery and saves resolve through the actual Chat policy with ex
   const prior=Object.fromEntries(names.map(name=>[name,process.env[name]]))
   t.after(()=>{for(const name of names){if(prior[name]===undefined)delete process.env[name];else process.env[name]=prior[name]}})
   delete process.env['BABEL_OFFLINE']
-  await routing.refreshModelCatalog({configDirectory:config,provider:'openrouter',fetchImpl:async()=>({ok:true,text:async()=>JSON.stringify({data:[{id:'deepseek/deepseek-v4-pro',supported_parameters:['tools']},{id:'vendor/unqualified',supported_parameters:['tools']}]})})})
-  assert.throws(()=>routing.saveProviderRoute({configDirectory:config,provider:'openrouter',model:'openrouter/vendor/unqualified'}),/not supported/)
+  const { parseModelCatalog } = await import(new URL('../../../babel-desktop/native/model-catalog.mjs', import.meta.url).href)
+  const catalogPayload = {
+    data: [
+      { id: 'deepseek/deepseek-v4-pro', supported_parameters: ['tools'] },
+      {
+        id: 'vendor/new-code',
+        architecture: { input_modalities: ['text'], output_modalities: ['text'] },
+        supported_parameters: ['tools'],
+      },
+      { id: 'vendor/embedding', architecture: { input_modalities: ['text'], output_modalities: ['embeddings'] } },
+    ],
+  }
+  const fetchedAt = new Date().toISOString()
+  const parsedEntries = parseModelCatalog('openrouter', catalogPayload, [], fetchedAt)
+  const discoveredCode = parsedEntries.find((entry: { modelId: string }) => entry.modelId === 'vendor/new-code')
+  const discoveredEmbedding = parsedEntries.find((entry: { modelId: string }) => entry.modelId === 'vendor/embedding')
+  assert.ok(discoveredCode)
+  assert.equal(discoveredCode.qualification, 'unverified')
+  assert.equal(discoveredCode.selectable, true)
+  assert.ok(discoveredEmbedding)
+  assert.equal(discoveredEmbedding.selectable, false)
+  await routing.refreshModelCatalog({
+    configDirectory: config,
+    provider: 'openrouter',
+    fetchImpl: async () => ({ ok: true, text: async () => JSON.stringify(catalogPayload) }),
+  })
+  routing.saveProviderRoute({
+    configDirectory: config,
+    provider: 'openrouter',
+    model: discoveredCode!.id,
+    enabledModels: [discoveredCode!.id],
+  })
+  assert.throws(
+    () => routing.saveProviderRoute({ configDirectory: config, provider: 'openrouter', model: discoveredEmbedding!.id }),
+    /text conversation/i,
+  )
+  assert.throws(
+    () => routing.saveProviderRoute({ configDirectory: config, provider: 'openrouter', model: 'openrouter/not-in-catalog' }),
+    /not supported/,
+  )
   await routing.refreshModelCatalog({configDirectory:config,provider:'ollama',fetchImpl:async()=>({ok:true,text:async()=>JSON.stringify({models:[{name:'qwen3:latest'},{name:'MyModel:latest'}]})})})
-  for(const [provider,key,model] of [['opencode-go','opencode-go/deepseek-v4.1-flash','deepseek-v4.1-flash'],['openrouter','deepseek-v4-pro-openrouter','deepseek/deepseek-v4-pro'],['deepinfra','qwen3','Qwen/Qwen3-235B-A22B-Instruct-2507'],['deepseek','deepseek-v4-pro','deepseek-v4-pro'],['ollama','ollama/qwen3:latest','qwen3:latest'],['ollama','ollama/MyModel:latest','MyModel:latest']] as const){
+  for (const [provider, key, model] of [
+    ['opencode-go', 'opencode-go/deepseek-v4.1-flash', 'deepseek-v4.1-flash'],
+    ['openrouter', 'deepseek-v4-pro-openrouter', 'deepseek/deepseek-v4-pro'],
+    ['openrouter', discoveredCode!.id, 'vendor/new-code'],
+    ['deepinfra', 'qwen3', 'Qwen/Qwen3-235B-A22B-Instruct-2507'],
+    ['deepseek', 'deepseek-v4-pro', 'deepseek-v4-pro'],
+    ['ollama', 'ollama/qwen3:latest', 'qwen3:latest'],
+    ['ollama', 'ollama/MyModel:latest', 'MyModel:latest'],
+  ] as const) {
     routing.saveProviderRoute({configDirectory:config,provider,model:key,enabledModels:[key]})
     const policyPath=join(config,'model-policy.json')
     const policy=JSON.parse(await readFile(policyPath,'utf8'))

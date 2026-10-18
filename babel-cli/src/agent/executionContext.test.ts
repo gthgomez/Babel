@@ -269,7 +269,7 @@ describe('S04/#214 T5 — grants/revocation bind to the right turn and operation
       const live = approvalOperationFromAgentAction(action, {
         thread_id: 'T',
         turn_id: getExecutionContext()!.turnId!,
-        cwd: getExecutionContext()!.root,
+        cwd: getExecutionContext()!.root ?? assert.fail('fixture requires a project root'),
       });
       assert.equal(operationDigestMatches(digest1, live), true);
     });
@@ -278,7 +278,7 @@ describe('S04/#214 T5 — grants/revocation bind to the right turn and operation
       const otherTurn = approvalOperationFromAgentAction(action, {
         thread_id: 'T',
         turn_id: getExecutionContext()!.turnId!,
-        cwd: getExecutionContext()!.root,
+        cwd: getExecutionContext()!.root ?? assert.fail('fixture requires a project root'),
       });
       assert.equal(operationDigestMatches(digest1, otherTurn), false, 'turn must bind the digest');
     });

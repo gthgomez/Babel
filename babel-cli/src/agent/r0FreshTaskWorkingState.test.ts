@@ -29,7 +29,7 @@ import { tmpdir } from 'node:os';
 
 import { ChatEngine, type ChatEvent } from './chatEngine.js';
 import type { ToolStreamEvent } from '../runners/base.js';
-import { renderParserVerifierScript } from './codingLoop/parserOracle.js';
+import { PARSER_FIXTURE_NPM_TEST, renderParserVerifierScript } from './codingLoop/parserOracle.js';
 import {
   DEFAULT_FAILURE_CLASS_BUDGETS,
   type FailureClassBudgets,
@@ -105,7 +105,7 @@ function makeFixture(): { root: string; cleanup(): void } {
   writeFileSync(join(root, 'verify.mjs'), renderParserVerifierScript(), 'utf8');
   writeFileSync(
     join(root, 'package.json'),
-    `${JSON.stringify({ name: 'r0-ws-fixture', private: true, scripts: { test: 'node verify.mjs' } }, null, 2)}\n`,
+    `${JSON.stringify({ name: 'r0-ws-fixture', private: true, scripts: { test: PARSER_FIXTURE_NPM_TEST } }, null, 2)}\n`,
     'utf8',
   );
   return { root, cleanup: () => rmSync(root, { recursive: true, force: true }) };
