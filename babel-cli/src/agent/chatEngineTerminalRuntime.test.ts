@@ -93,7 +93,7 @@ function terminalInput(t: TestContext): ChatTerminalInput {
         policyVersion: 'fixture',
       }),
       settleActiveExecution: () => {},
-      finalizeTurn: () => {},
+      finalizeTurn: () => true,
       storeTelemetry: (record) => {
         snapshot.presentation.lastTurnTelemetry = record
       },
@@ -116,10 +116,21 @@ test('keeps a read-only hard-cap outcome coherent with its structured budget rea
   assert.equal(event.reason_code, 'budget_exhausted')
 })
 
+test('success stream downgrades when durable session flush fails at finalization', (t) => {
+  const input = terminalInput(t)
+  input.effects.finalizeTurn = () => false
+  const event = completeChatStream(input, 'would-be success answer')
+  assert.equal(event.type, 'failed')
+  assert.match(event.error ?? '', /session event persistence failed/)
+})
+
 test('terminal owner persists the exact displayed response before finalization', (t) => {
   const input = terminalInput(t)
   let response: unknown
-  input.effects.finalizeTurn = (_outcome, _status, _reason, value) => { response = value }
+  input.effects.finalizeTurn = (_outcome, _status, _reason, value) => {
+    response = value
+    return true
+  }
   completeChatStream(input, 'Controller-selected visible response')
   assert.deepEqual(response, {kind:'answer',content:'Controller-selected visible response'})
   failChatStream(input, 'Safe typed transport error')

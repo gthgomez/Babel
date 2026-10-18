@@ -6,7 +6,7 @@
 
 import * as assert from 'node:assert';
 import { describe, it, before, after } from 'node:test';
-import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, existsSync, readFileSync, writeFileSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { ChatEngine } from './chatEngine.js';
@@ -267,12 +267,36 @@ describe('H2 ChatEngine resume + LiveSession projection', () => {
       provider: 'test-provider',
       projectRoot: root,
     });
-    assert.throws(
-      () => paritySettleProposeTools(rt, [{ id: 'call-1', name: 'write_file' }], invalidRunDir),
-      /session event persistence failed/,
-    );
+    paritySettleProposeTools(rt, [{ id: 'call-1', name: 'write_file' }], invalidRunDir);
+    assert.equal(rt.sessionPersistenceBoundaryFailed, true);
     assert.equal(existsSync(join(invalidRunDir, SESSION_EVENTS_FILENAME)), false);
     assert.throws(() => flushSessionEventLogStrict(invalidRunDir, rt.sessionEvents));
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it('success-path finalization reports session flush failure without durable ok', () => {
+    const root = mkdtempSync(join(tmpdir(), 'babel-session-finalize-success-'));
+    const runDir = join(root, 'run');
+    mkdirSync(runDir);
+    const rt = createParityRuntime('flush-finalize-success');
+    parityOnUserTurn(rt, {
+      task: 'finalize flush',
+      model: 'test-model',
+      provider: 'test-provider',
+      projectRoot: root,
+    });
+    const eventPath = join(runDir, SESSION_EVENTS_FILENAME);
+    writeFileSync(eventPath, '');
+    unlinkSync(eventPath);
+    mkdirSync(eventPath);
+    const durableOk = finalizeParityTurnSync(
+      rt,
+      runDir,
+      'VERIFIED_COMPLETE',
+      'completed',
+    );
+    assert.equal(durableOk, false);
+    assert.equal(rt.sessionPersistenceBoundaryFailed, true);
     rmSync(root, { recursive: true, force: true });
   });
 

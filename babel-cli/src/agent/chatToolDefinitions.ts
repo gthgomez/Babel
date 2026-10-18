@@ -31,6 +31,7 @@ import type { ToolCallRequest } from '../localTools.js';
 import { targetBasename } from '../services/targetResolver.js';
 import { trimForPrompt } from '../services/liteProjectContext.js';
 import { normalizeModelToolName } from './canonicalToolMapping.js';
+import { conversationHasUncommittedCompactionCandidate } from './compactionCandidateGuard.js';
 import { RecoveryPlanProposalSchema } from './codingLoop/recoveryPlan.js';
 import {
   compileObservation,
@@ -386,14 +387,7 @@ export interface ChatTurnPromptOptions {
 }
 
 export function buildChatTurnPrompt(options: ChatTurnPromptOptions): string {
-  if (options.conversation.some((message) => message.compactionCandidate === true ||
-      (message.name === 'compaction_summary' && (message.role !== 'assistant' ||
-        message.provenance !== 'model' || message.authoritative !== false)) ||
-      (message.name === 'compaction_capsule' && (message.role !== 'system' ||
-        message.provenance !== 'controller' || message.authoritative !== true)) ||
-      (message.role === 'system' && (message.name === 'compaction_summary' ||
-        message.provenance === 'model' || message.provenance === 'mixed' ||
-        message.authoritative === false)))) {
+  if (conversationHasUncommittedCompactionCandidate(options.conversation)) {
     throw new Error('Uncommitted compaction candidate cannot enter a provider prompt');
   }
   const sections: string[] = [];

@@ -15,6 +15,25 @@ test('plain-text npm test passes binds with suffix-anchored grammar', () => {
   assert.equal(criterionExplicitlyNamesTrustedCommand('npm test must pass', 'npm test'), true)
 })
 
+test('backtick success tail is fully anchored with no extra obligations', () => {
+  assert.equal(
+    criterionExplicitlyNamesTrustedCommand('`npm test` must pass.', 'npm test'),
+    true,
+  )
+  assert.equal(
+    extractPositiveCommandSuccessCriterion('`npm test` plus UI checks must pass'),
+    null,
+  )
+  assert.equal(
+    extractPositiveCommandSuccessCriterion('`npm test` with coverage must pass'),
+    null,
+  )
+  assert.equal(
+    criterionExplicitlyNamesTrustedCommand('`npm test` plus UI checks must pass', 'npm test'),
+    false,
+  )
+})
+
 test('binds a clearly accepted positive command-success criterion with exact argv', () => {
   const task = [
     'Fix the parser bug.',
@@ -46,6 +65,25 @@ test('compound obligations do not bind on command mention alone', () => {
       'npm test must pass AND UI show new button',
       'npm test',
     ),
+    false,
+  )
+})
+
+test('backtick criteria reject extra obligations before a trailing success tail', () => {
+  assert.equal(
+    extractPositiveCommandSuccessCriterion('`npm test` plus UI checks must pass'),
+    null,
+  )
+  assert.equal(
+    criterionExplicitlyNamesTrustedCommand('`npm test` plus UI checks must pass', 'npm test'),
+    false,
+  )
+  assert.equal(
+    extractPositiveCommandSuccessCriterion('`npm test` with coverage must pass'),
+    null,
+  )
+  assert.equal(
+    criterionExplicitlyNamesTrustedCommand('`npm test` with coverage must pass', 'npm test'),
     false,
   )
 })

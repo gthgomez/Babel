@@ -76,6 +76,9 @@ import { confirmedMutationPaths } from './mutationTools.js'
 import { detectAndBuildBlockedReport } from './chatEngineSupport.js'
 import type { ThreadTerminalResponse } from './threadEventLog.js'
 
+export const SESSION_EVENT_PERSISTENCE_FINALIZE_MESSAGE =
+  'session event persistence failed before terminal evidence could be durably recorded'
+
 /** Immutable terminal inputs plus the mutable evidence objects used by existing finalizers. */
 export interface ChatTerminalSnapshot {
   context: {
@@ -135,7 +138,7 @@ export interface ChatTerminalEffects {
     status: ChatResult['status'],
     reason: TerminalReason | undefined,
     response?: ThreadTerminalResponse,
-  ) => void
+  ) => boolean
   storeTelemetry: (record: ChatTurnTelemetryRecord | null) => void
   setLimiter: (limiter: ChatRunLimiter, reason: string) => void
   setBudgetExceeded: () => void
@@ -257,7 +260,13 @@ export function completeChatStream(
         ? 'budget_exhausted'
         : 'completed',
   })
-  effects.finalizeTurn(terminal.outcome, terminal.status, terminalReason, {kind:'answer',content:answer})
+  const durableOk = effects.finalizeTurn(terminal.outcome, terminal.status, terminalReason, {
+    kind: 'answer',
+    content: answer,
+  })
+  if (!durableOk) {
+    return failChatStream(input, SESSION_EVENT_PERSISTENCE_FINALIZE_MESSAGE)
+  }
   const finalizedTelemetry =
     snapshot.presentation.currentTurnTelemetry?.finalize({
       turnId: String(snapshot.context.turnId ?? snapshot.context.turnIndex),
@@ -335,7 +344,10 @@ export function failChatStream(
     status: 'failed',
   })
   const runAllowance = assembleChatRunAllowance(input, terminal.status)
-  effects.finalizeTurn(terminal.outcome, terminal.status, terminalReason, {kind:'error',content:error})
+  effects.finalizeTurn(terminal.outcome, terminal.status, terminalReason, {
+    kind: 'error',
+    content: error,
+  })
   const finalizedTelemetry =
     snapshot.presentation.currentTurnTelemetry?.finalize({
       turnId: String(snapshot.context.turnId ?? snapshot.context.turnIndex),
@@ -676,11 +688,21 @@ export function assembleChatResult(
     status: finalStatus,
   })
 
+  let durableOk = true
   if (!superseded) {
     effects.settleActiveExecution()
     // AC3 choke point: memory + disk (idempotent if streamDone already finalized)
-    effects.finalizeTurn(terminal.outcome, terminal.status, terminalReason,
-      answer === undefined ? undefined : {kind:finalStatus === 'failed' ? 'error' : 'answer',content:answer})
+    durableOk = effects.finalizeTurn(
+      terminal.outcome,
+      terminal.status,
+      terminalReason,
+      answer === undefined
+        ? undefined
+        : {
+            kind: finalStatus === 'failed' ? 'error' : 'answer',
+            content: answer,
+          },
+    )
   }
 
   const runAllowance = assembleChatRunAllowance(
@@ -690,8 +712,12 @@ export function assembleChatResult(
   )
 
   const result: ChatResult = {
-    status: terminal.status,
-    ...(terminal.outcome !== undefined ? { outcome: terminal.outcome } : {}),
+    status: durableOk ? terminal.status : 'failed',
+    ...(durableOk
+      ? terminal.outcome !== undefined
+        ? { outcome: terminal.outcome }
+        : {}
+      : { outcome: 'INFRA_FAILURE' as const }),
     ...(kernelDecision?.finalOutcome === 'PLAN_COMPLETE'
       ? { planOutcome: 'PLAN_COMPLETE' as const }
       : {}),

@@ -44,6 +44,10 @@ import {
   type ChatTurn,
 } from "./chatToolDefinitions.js";
 import {
+  conversationHasUncommittedCompactionCandidate,
+  stripUncommittedCompactionCandidates,
+} from "./compactionCandidateGuard.js";
+import {
   parityRecordToolBatch,
   paritySettleProposeTools,
   parityArbitrateCycle,
@@ -249,33 +253,14 @@ export class ChatEngineStreamingLoop {
       );
 
       if (
-        this.host.conversation.some(
-          (message) =>
-            message.compactionCandidate === true ||
-            (message.name === "compaction_summary" &&
-              (message.role !== "assistant" ||
-                message.provenance !== "model" ||
-                message.authoritative !== false)) ||
-            (message.name === "compaction_capsule" &&
-              (message.role !== "system" ||
-                message.provenance !== "controller" ||
-                message.authoritative !== true)) ||
-            (message.role === "system" &&
-              (message.name === "compaction_summary" ||
-                message.provenance === "model" ||
-                message.provenance === "mixed" ||
-                message.authoritative === false)),
-        )
+        conversationHasUncommittedCompactionCandidate(this.host.conversation)
       ) {
-        this.host.revertObjectiveAuthorityAdmission();
-        this.host.clearObjectiveAuthorityAdmissionRollback();
+        stripUncommittedCompactionCandidates(this.host.conversation);
         yield this.host.streamFailed(
           "An uncommitted compaction candidate cannot authorize provider dispatch.",
         );
         return;
       }
-
-      this.host.clearObjectiveAuthorityAdmissionRollback();
 
       const runner = this.host.resolveRoutedRunner();
       const useNativeTools = this.host.shouldUseNativeTools(runner);

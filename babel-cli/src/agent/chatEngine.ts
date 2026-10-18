@@ -528,8 +528,6 @@ export class ChatEngine {
   /** W0.3: last user-submission runtime (counters re-synced from live fields). */
   private lastTurnRuntime: TurnRuntimeSnapshot | null = null;
   private objectiveAdmissionBlocked=false;
-  private objectiveAuthorityAdmissionRollback: ParityRuntime["liveAuthority"] | null =
-    null;
   /** Discovered project test commands for gate rejection hints. */
   private discoveredTestCommands: DiscoveredTestCommand[] = [];
   /** Crash-safe patch persistence: write-through after each successful mutation. */
@@ -2925,25 +2923,6 @@ export class ChatEngine {
 
   admitUserSubmission(input:import('./turnRuntime.js').UserSubmissionInput,route:{model:string;provider:string},objective?:PreparedObjectiveSubmission):ObjectiveAdmissionResult {
     return admitObjectiveSubmission(this as unknown as ObjectiveAdmissionHost,input,route,objective);
-  }
-
-  captureObjectiveAuthorityAdmissionRollback(): void {
-    const authority = this.parity.liveAuthority;
-    this.objectiveAuthorityAdmissionRollback = authority
-      ? structuredClone(authority)
-      : null;
-  }
-
-  revertObjectiveAuthorityAdmission(): void {
-    if (this.objectiveAuthorityAdmissionRollback) {
-      this.parity.liveAuthority = structuredClone(
-        this.objectiveAuthorityAdmissionRollback,
-      );
-    }
-  }
-
-  clearObjectiveAuthorityAdmissionRollback(): void {
-    this.objectiveAuthorityAdmissionRollback = null;
   }
 
   /** Install one prepared snapshot; durable admission may precede this step. */

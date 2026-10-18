@@ -574,9 +574,6 @@ export interface ChatEngineStreamingLoopHost {
   readonly buildGateRejectUserMessage: () => string
   readonly buildRejectionMessage: () => string
   readonly buildTamperBlockedReport: () => BlockedReport
-  readonly captureObjectiveAuthorityAdmissionRollback: () => void
-  readonly clearObjectiveAuthorityAdmissionRollback: () => void
-  readonly revertObjectiveAuthorityAdmission: () => void
   readonly buildTextToolResults: (startIndex: number) => string
   readonly buildVerifierBlockedReport: (reason: string) => BlockedReport
   readonly checkBudgets: (skipTurnLimit?: boolean) => {

@@ -16,9 +16,19 @@ function isUnresolvedCriterion(criterion: AcceptanceRequirementV1): boolean {
 
 export const ACCEPTANCE_EXECUTABLE_BINDING_REF = 'task-acceptance-executable-binding:v1'
 
-/** Suffix-only positive success tail (command is everything before this). */
+/** Positive success tail matched as the entire remainder (no leading obligations). */
 const POSITIVE_SUCCESS_SUFFIX =
   /(?:must\s+|shall\s+)?(?:pass|passes|succeed|succeeds|exit(?:s)?(?:\s+with)?(?:\s+code)?\s*0)\.?$/i
+
+const FULLY_ANCHORED_POSITIVE_SUCCESS_TAIL = new RegExp(
+  `^${POSITIVE_SUCCESS_SUFFIX.source}$`,
+  'i',
+)
+
+function isFullyAnchoredPositiveSuccessTail(text: string): boolean {
+  const trimmed = text.trim()
+  return trimmed.length > 0 && FULLY_ANCHORED_POSITIVE_SUCCESS_TAIL.test(trimmed)
+}
 
 const COMPOUND_OR_NEGATED_RE =
   /\b(?:and|or|but|unless|except|when|if|not|fail|fails|failing|failed|error|errors|invalid|broken|red)\b/i
@@ -59,7 +69,7 @@ function splitCommandAndSuccessTail(text: string): { command: string; tail: stri
   if (!match) return null
   const command = match[1]!.trim()
   const tail = match[2]!.trim()
-  if (!command || !POSITIVE_SUCCESS_SUFFIX.test(tail)) return null
+  if (!command || !isFullyAnchoredPositiveSuccessTail(tail)) return null
   return { command, tail }
 }
 
@@ -67,11 +77,11 @@ export function extractPositiveCommandSuccessCriterion(description: string): str
   const trimmed = description.trim()
   if (!trimmed || COMPOUND_OR_NEGATED_RE.test(trimmed)) return null
 
-  const backtick = trimmed.match(/^`([^`]+)`\s+([\s\S]+)$/)
+  const backtick = trimmed.match(
+    new RegExp(`^\`([^\`]+)\`\\s+(${FULLY_ANCHORED_POSITIVE_SUCCESS_TAIL.source})$`, 'i'),
+  )
   if (backtick) {
     const inner = backtick[1]!.trim()
-    const rest = backtick[2]!.trim()
-    if (!POSITIVE_SUCCESS_SUFFIX.test(rest)) return null
     if (!isAuthoritativeVerifierCommand(inner)) return null
     return inner
   }

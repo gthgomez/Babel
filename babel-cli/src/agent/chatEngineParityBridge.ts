@@ -1166,7 +1166,21 @@ function parityPersistLiveSession(rt: ParityRuntime, runDir: string): void {
   persistLiveSessionSnapshot(runDir, live);
 }
 
-/** Fire-and-forget finalize for sync call sites (streamDone/cancel/buildResult). */
+function terminalAllowsMissingSessionFlush(
+  status: string,
+  outcome: TerminalOutcome | undefined,
+): boolean {
+  return (
+    status === 'failed' ||
+    status === 'cancelled' ||
+    outcome === 'CANCELLED'
+  );
+}
+
+/**
+ * Fire-and-forget finalize for sync call sites (streamDone/cancel/buildResult).
+ * Returns false when required session-event evidence could not be flushed.
+ */
 export function finalizeParityTurnSync(
   rt: ParityRuntime,
   runDir: string,
@@ -1174,19 +1188,24 @@ export function finalizeParityTurnSync(
   status: string,
   reason?: TerminalReason,
   response?: ThreadTerminalResponse,
-): void {
+): boolean {
   parityEndTurn(rt, outcome, status, reason, response);
   parityPersistLiveSession(rt, runDir);
   persistThreadEventLog(runDir, rt.eventLog).catch((err) => {
     reportEventLogPersistFailure(`finalize:${outcome}`, err);
   });
   if (rt.sessionPersistenceBoundaryFailed) {
-    return;
+    return false;
   }
   try {
     flushSessionEventsRequired(rt, runDir, `finalize-sync:${outcome}`);
+    return true;
   } catch {
     rt.sessionPersistenceBoundaryFailed = true;
+    if (terminalAllowsMissingSessionFlush(status, outcome)) {
+      return false;
+    }
+    return false;
   }
 }
 
