@@ -4,7 +4,7 @@
  * thread event log, approvals, provider budget/failover.
  */
 
-import type { TerminalOutcome } from '../schemas/agentContracts.js';
+import { FailureDomainSchema, TerminalReasonCodeSchema, type TerminalOutcome } from '../schemas/agentContracts.js';
 import { classifyPolicySource, type TerminalReason } from './chatTerminalReason.js';
 import { projectChatTerminal, type ChatStatus } from './chatFailureClassification.js';
 import { classifyToolEffect } from '../executor/contracts.js';
@@ -38,6 +38,7 @@ import {
   THREAD_EVENT_LOG_FILENAME,
   serializeThreadEventLog,
   persistThreadEventLog,
+  type ThreadEvent,
   type ThreadEventLog,
 } from './threadEventLog.js';
 import {
@@ -961,6 +962,23 @@ export function parityArbitrateCycle(input: {
   };
 }
 
+function recordSessionTerminalOnce(
+  rt: ParityRuntime,
+  outcome: TerminalOutcome | undefined,
+  status: string,
+  reason?: TerminalReason,
+): void {
+  if (!rt.turnId || rt.sessionEvents.events.some(
+    (event) => event.kind === 'turn_ended' && event.turn_id === rt.turnId,
+  )) return;
+  recordTurnEnded(rt.sessionEvents, {
+    turn_id: rt.turnId,
+    ...(outcome !== undefined ? { outcome } : {}),
+    status,
+    ...(reason !== undefined ? { reason } : {}),
+  });
+}
+
 export function parityEndTurn(
   rt: ParityRuntime,
   outcome: TerminalOutcome | undefined,
@@ -977,13 +995,17 @@ export function parityEndTurn(
       ? { status: status as ChatStatus }
       : {}),
   });
-  // Idempotent: streamDone + buildResult both call this when submitMessage wraps stream.
-  if (
-    rt.turnId &&
-    rt.eventLog.events.some(
-      (e) => e.kind === 'turn_ended' && e.turn_id === rt.turnId,
-    )
-  ) {
+  // Thread and session terminals settle independently; cancellation can seal
+  // the thread before this finalization choke point records the session event.
+  const existingTerminal = rt.turnId ? rt.eventLog.events.find(
+    (event): event is Extract<ThreadEvent, { kind: 'turn_ended' }> =>
+      event.kind === 'turn_ended' && event.turn_id === rt.turnId,
+  ) : undefined;
+  if (existingTerminal) {
+    const code = TerminalReasonCodeSchema.safeParse(existingTerminal.reason_code);
+    const cause = FailureDomainSchema.nullable().safeParse(existingTerminal.cause_class ?? null);
+    recordSessionTerminalOnce(rt, existingTerminal.outcome, existingTerminal.status,
+      code.success && cause.success ? { code: code.data, cause_class: cause.data } : undefined);
     return;
   }
   if (terminal.outcome !== undefined) {
@@ -1017,18 +1039,7 @@ export function parityEndTurn(
   }
   if (rt.turnId) {
     endTurn(rt.eventLog, rt.turnId, terminal.outcome, terminal.status, reason);
-    // W2 PR-E: only one turn_ended per turn_id in session log.
-    const already = rt.sessionEvents.events.some(
-      (e) => e.kind === 'turn_ended' && e.turn_id === rt.turnId,
-    );
-    if (!already) {
-      recordTurnEnded(rt.sessionEvents, {
-        turn_id: rt.turnId,
-        ...(terminal.outcome !== undefined ? { outcome: terminal.outcome } : {}),
-        status: terminal.status,
-        ...(reason !== undefined ? { reason } : {}),
-      });
-    }
+    recordSessionTerminalOnce(rt, terminal.outcome, terminal.status, reason);
   }
 }
 
