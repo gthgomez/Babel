@@ -34,6 +34,44 @@ export function collectPushCandidates(records, root, remote) {
   return [...commits]
 }
 
+function changedFilesForCommits(root, commits) {
+  const files = new Set()
+  for (const sha of commits) {
+    const parents = git(root, ['rev-list', '--parents', '-n', '1', sha]).trim().split(/\s+/).slice(1)
+    if (!parents.length) {
+      for (const path of git(root, ['ls-tree', '-r', '--name-only', '-z', sha]).split('\0').filter(Boolean)) {
+        files.add(path)
+      }
+      continue
+    }
+    for (const path of git(root, ['diff-tree', '--no-commit-id', '--name-only', '-r', sha]).split('\n').filter(Boolean)) {
+      files.add(path)
+    }
+  }
+  return files
+}
+
+function coveredPolicyPaths(root) {
+  const manifest = JSON.parse(readFileSync(join(root, 'POLICY_MANIFEST.json'), 'utf8'))
+  if (!manifest.files || typeof manifest.files !== 'object') {
+    throw new Error('policy manifest unreadable')
+  }
+  return new Set(Object.keys(manifest.files))
+}
+
+/** Fail fast when a push touches manifest-covered sources but POLICY_MANIFEST.json is stale. */
+function assertPolicyManifestVerifiedWhenCovered(root, commits, tools) {
+  const covered = coveredPolicyPaths(root)
+  const changed = changedFilesForCommits(root, commits)
+  if (![...changed].some((path) => covered.has(path))) return
+  run(
+    process.execPath,
+    [join(tools, 'policy-integrity-manifest.mjs'), 'verify', '--repo-root', root],
+    root,
+    'policy integrity (covered-path push guard)',
+  )
+}
+
 function run(binary, args, root, label, timeout = 120000) {
   const r = spawnSync(binary, args, { cwd: root, encoding: 'utf8', windowsHide: true,
     timeout, maxBuffer: 16 * 1024 * 1024 })
@@ -59,6 +97,7 @@ export function validatePushCandidates(records, root, remote) {
   const commits = collectPushCandidates(records, root, remote)
   if (!commits.length) return
   const tools = dirname(fileURLToPath(import.meta.url))
+  assertPolicyManifestVerifiedWhenCovered(root, commits, tools)
   const scratch = mkdtempSync(join(tmpdir(), 'babel-push-check-'))
   try {
     const scanner = spawnSync('gitleaks', ['version'], { encoding: 'utf8', windowsHide: true })

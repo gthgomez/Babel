@@ -3,7 +3,7 @@
   "algorithm": "sha256",
   "purpose": "drift_detection_not_authorization",
   "normalization": "utf8_crlf_to_lf",
-  "policy_bundle_id": "0068e36d6c7fd955e730af135996dbb97c075a660a961f5718ce0ddca8b5f883",
+  "policy_bundle_id": "d29f45321ac4a95559694cbf5751c4c08f7476b8b570135140b144183ebdc298",
   "files": {
     ".github/workflows/public-pr-metadata.yml": "67e630d700055533ee77157ed05fc347161c7c041e35151f2652ffd9b9973023",
     ".github/workflows/publish-npm.yml": "54036b704d59e513cbbb981efa00e82121e40871d6dfe789c8636bd0159f8c9e",
@@ -39,7 +39,7 @@
     "babel-cli/src/authority/ownedFileAssertion.test.ts": "a6f989f04a75416ec0e6ec4da806f2e40f6f34d2cd43d0df1404198cc82f0cb2",
     "babel-cli/src/authority/ownedFileAssertion.ts": "9bec8a1eba2d122863cc1e009c8d74e394242ecf43748f1edf4090531eb47a92",
     "babel-cli/src/authority/ownedFileAssertion.windows.ps1": "7e5a5f8ed5564f451dda9420e9642a8ee7d491601d98fe7e2100428711406671",
-    "babel-cli/src/authority/ownedFileAssertionNative.test.ts": "0841ef4b2725672b730333ea0cda881b95addc01e1b0623bf1ff8d39fc58298c",
+    "babel-cli/src/authority/ownedFileAssertionNative.test.ts": "c778ea9281e73bbb4216e9334d68136c771e64ecaf32c918e1ee1fa35876e921",
     "babel-cli/src/authority/patchTargets.test.ts": "40dcad9cd26a93a860ac437d9567b63e143c2071d06192a1d3814a6e914a4e05",
     "babel-cli/src/authority/patchTargets.ts": "c8a643feb4add33437e08dd691f461474c1025faf9d08d037b16d8536a06e345",
     "babel-cli/src/authority/pdp.ts": "9052279572a512e512b562312270266896a40f11b58b0ef7db2104ac45bab5fa",
