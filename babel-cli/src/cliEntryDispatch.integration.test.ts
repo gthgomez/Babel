@@ -60,43 +60,46 @@ function resolveQualificationNodeExec(): { execPath: string; versionLabel: strin
 
 const qualification = resolveQualificationNodeExec()
 
-function spawnWithQualifyingNode(entry: string, args: string[], env: Record<string, string | undefined> = {}) {
+function childStartupHookPath(kind: 'env_loaded' | 'capability_canary'): string {
+  const probeDir = mkdtempSync(join(tmpdir(), 'babel-entry-probe-'))
+  const hookPath = join(probeDir, 'entry-probe-hook.mjs')
+  const body =
+    kind === 'env_loaded'
+      ? `process.on('exit', () => {
+  process.stdout.write('\\n__CHILD_ENV_LOADED__:' + (process.env.BABEL_ENV_LOADED ?? 'unset') + '\\n');
+});`
+      : `process.on('exit', () => {
+  process.stderr.write('__CHILD_ENV_LOADED__:' + (process.env.BABEL_ENV_LOADED ?? 'unset') + '\\n');
+  process.stderr.write('__CHILD_CANARY__:' + (process.env.BABEL_CAPABILITY_PROBE_CANARY ?? 'unset') + '\\n');
+});`
+  writeFileSync(hookPath, body, 'utf8')
+  return hookPath
+}
+
+function spawnInstrumentedExecutable(
+  entry: string,
+  args: string[],
+  hookKind: 'env_loaded' | 'capability_canary',
+  extraEnv: Record<string, string | undefined> = {},
+) {
+  const hookPath = childStartupHookPath(hookKind)
+  const env = {
+    ...process.env,
+    CI: '1',
+    BABEL_SKIP_RESUME_PICKER: '1',
+    BABEL_SKIP_KG_INDEX: '1',
+    NODE_OPTIONS: `--import=${hookPath}`,
+    BABEL_ENV_LOADED: undefined,
+    ...extraEnv,
+  }
   return spawnSync(qualification.execPath, [...nodeWasmArgs, entry, ...args], {
     cwd: packageRoot,
     encoding: 'utf8',
-    env: {
-      ...process.env,
-      CI: '1',
-      BABEL_SKIP_RESUME_PICKER: '1',
-      BABEL_SKIP_KG_INDEX: '1',
-      ...env,
-    },
+    env,
     maxBuffer: 8 * 1024 * 1024,
     timeout: 90_000,
     windowsHide: true,
   })
-}
-
-function envLoadedViaExecutableEntry(entry: string): boolean {
-  const probeDir = mkdtempSync(join(tmpdir(), 'babel-entry-probe-'))
-  const hookPath = join(probeDir, 'entry-probe-hook.mjs')
-  writeFileSync(
-    hookPath,
-    `process.on('exit', () => {
-  if (process.env.BABEL_ENTRY_PROBE === '1') {
-    process.stdout.write('\\n__BABEL_PROBE__:' + (process.env.BABEL_ENV_LOADED ?? 'missing') + '\\n');
-  }
-});`,
-    'utf8',
-  )
-  const child = spawnWithQualifyingNode(entry, ['--help'], {
-    BABEL_ENTRY_PROBE: '1',
-    NODE_OPTIONS: `--import=${hookPath}`,
-    BABEL_ENV_LOADED: undefined,
-  })
-  if ((child.status ?? 1) !== 0) return false
-  const marker = String(child.stdout).match(/__BABEL_PROBE__:(.+)/)?.[1]?.trim()
-  return marker === 'true'
 }
 
 function requireQualifyingRuntime(t: { diagnostic: (message: string) => void }) {
@@ -111,69 +114,91 @@ function requireQualifyingRuntime(t: { diagnostic: (message: string) => void }) 
   assert.equal(existsSync(distIndex), true, 'dist build required for entry dispatch tests')
 }
 
-test('bin/babel.js dispatches through startCli on normal startup', (t) => {
-  requireQualifyingRuntime(t)
-  const help = spawnWithQualifyingNode(binEntry, ['--help'])
-  assert.equal(help.error, undefined, help.stderr)
-  assert.equal(help.status, 0, help.stderr)
-  assert.equal(envLoadedViaExecutableEntry(binEntry), true, 'bin/babel.js must initialize env via startCli')
-})
-
-test('unix npm-style symlink name dispatches through startCli on normal startup', (t) => {
-  requireQualifyingRuntime(t)
-  const linkDir = mkdtempSync(join(tmpdir(), 'babel-cli-bin-link-'))
-  const symlinkEntry = join(linkDir, 'babel-agent')
-  symlinkSync(binEntry, symlinkEntry)
-  const help = spawnWithQualifyingNode(symlinkEntry, ['--help'])
-  assert.equal(help.error, undefined, help.stderr)
-  assert.equal(help.status, 0, help.stderr)
-  assert.equal(
-    envLoadedViaExecutableEntry(symlinkEntry),
-    true,
-    'npm-style symlink must initialize env via startCli (argv[1] does not end with babel.js)',
-  )
-})
-
-test('executable entries keep desktop capability probe before env bootstrap', (t) => {
-  requireQualifyingRuntime(t)
-  const linkDir = mkdtempSync(join(tmpdir(), 'babel-cli-probe-link-'))
-  const symlinkEntry = join(linkDir, 'babel-harness')
-  symlinkSync(binEntry, symlinkEntry)
-  const probe = spawnSync(
-    qualification.execPath,
-    [
-      '--input-type=module',
-      '-e',
-      `import { spawnSync } from 'node:child_process';
-const entry = ${JSON.stringify(symlinkEntry)};
-const credentials = ${JSON.stringify(join(packageRoot, 'must-not-inspect-credentials'))};
-process.env.BABEL_PROJECT_CREDENTIALS_DIR = credentials;
-process.env.BABEL_LEGACY_CLI_ENV = '1';
-const child = spawnSync(${JSON.stringify(qualification.execPath)}, ['--experimental-wasm-modules', entry, '--desktop-capabilities'], {
-  cwd: ${JSON.stringify(packageRoot)},
-  encoding: 'utf8',
-  env: process.env,
-});
-let capabilities;
-try { capabilities = JSON.parse(child.stdout); } catch {}
-if (process.env.BABEL_ENV_LOADED !== undefined) process.exit(9);
-if ((child.status ?? 1) !== 0 || capabilities?.schemaVersion !== 1) {
-  process.stderr.write(child.stderr ?? '');
-  process.stderr.write(child.stdout ?? '');
-  process.exit(8);
+function childEnvLoadedMarker(stdout: string): string | undefined {
+  return String(stdout).match(/__CHILD_ENV_LOADED__:(.+)/)?.[1]?.trim()
 }
-process.exit(0);`,
-    ],
-    { cwd: packageRoot, encoding: 'utf8', env: process.env, maxBuffer: 1024 * 1024, timeout: 30_000, windowsHide: true },
-  )
-  assert.equal(probe.error, undefined, probe.stderr)
-  assert.equal(probe.status, 0, probe.stderr || probe.stdout)
+
+function parseCapabilityChild(stderr: string): { envLoaded: string; canary: string } {
+  const envLoaded = stderr.match(/__CHILD_ENV_LOADED__:(.+)/)?.[1]?.trim()
+  const canary = stderr.match(/__CHILD_CANARY__:(.+)/)?.[1]?.trim()
+  assert.equal(typeof envLoaded, 'string', 'child must report env bootstrap instrumentation')
+  assert.equal(typeof canary, 'string', 'child must report capability canary instrumentation')
+  return { envLoaded: envLoaded!, canary: canary! }
+}
+
+for (const [label, entryResolver] of [
+  ['bin/babel.js', () => binEntry],
+  ['npm-style symlink', () => {
+    const linkDir = mkdtempSync(join(tmpdir(), 'babel-cli-bin-link-'))
+    const link = join(linkDir, 'babel-agent')
+    symlinkSync(binEntry, link)
+    return link
+  }],
+] as const) {
+  test(`${label} dispatches through startCli on normal startup`, (t) => {
+    requireQualifyingRuntime(t)
+    const entry = entryResolver()
+    const child = spawnInstrumentedExecutable(entry, ['--help'], 'env_loaded')
+    assert.equal(child.error, undefined, child.stderr)
+    assert.equal(child.status, 0, child.stderr)
+    assert.equal(childEnvLoadedMarker(child.stdout), 'true', `${label} child must set BABEL_ENV_LOADED via startCli`)
+  })
+
+  test(`${label} keeps desktop capability probe before env bootstrap in the child`, (t) => {
+    requireQualifyingRuntime(t)
+    const entry = entryResolver()
+    const credentialsDir = join(packageRoot, 'must-not-inspect-credentials')
+    const configDir = mkdtempSync(join(tmpdir(), 'babel-entry-config-'))
+    writeFileSync(
+      join(configDir, '.env'),
+      'BABEL_CAPABILITY_PROBE_CANARY=synthetic-legacy-value\n',
+      { mode: 0o600 },
+    )
+    const child = spawnInstrumentedExecutable(entry, ['--desktop-capabilities'], 'capability_canary', {
+      BABEL_CONFIG_DIR: configDir,
+      BABEL_PROJECT_CREDENTIALS_DIR: credentialsDir,
+      BABEL_LEGACY_CLI_ENV: '1',
+      BABEL_CAPABILITY_PROBE_CANARY: undefined,
+    })
+    assert.equal(child.error, undefined, child.stderr)
+    assert.equal(child.status, 0, child.stderr || child.stdout)
+    const instrumentation = parseCapabilityChild(child.stderr)
+    assert.equal(instrumentation.envLoaded, 'unset', 'capability probe must not set BABEL_ENV_LOADED in child')
+    assert.equal(instrumentation.canary, 'unset', 'capability probe must not load credential bootstrap in child')
+    let capabilities: unknown
+    try {
+      capabilities = JSON.parse(String(child.stdout).trim())
+    } catch {
+      assert.fail(`capability stdout must be JSON: ${child.stdout}`)
+    }
+    assert.deepEqual(capabilities, { schemaVersion: 1, credentialEnvironment: 'native-resolved-v1' })
+  })
+}
+
+test('direct dist/index.js entry uses startCli when invoked as main', (t) => {
+  requireQualifyingRuntime(t)
+  const child = spawnInstrumentedExecutable(distIndex, ['--help'], 'env_loaded')
+  assert.equal(child.error, undefined, child.stderr)
+  assert.equal(child.status, 0, child.stderr)
+  assert.equal(childEnvLoadedMarker(child.stdout), 'true', 'dist/index.js child must set BABEL_ENV_LOADED via startCli')
 })
 
-test('direct dist/index.js entry still uses startCli when invoked as main', (t) => {
+test('direct dist/index.js capability probe stays early in the child', (t) => {
   requireQualifyingRuntime(t)
-  const help = spawnWithQualifyingNode(distIndex, ['--help'])
-  assert.equal(help.error, undefined, help.stderr)
-  assert.equal(help.status, 0, help.stderr)
-  assert.equal(envLoadedViaExecutableEntry(distIndex), true, 'dist/index.js main entry must load env via startCli')
+  const configDir = mkdtempSync(join(tmpdir(), 'babel-index-config-'))
+  writeFileSync(
+    join(configDir, '.env'),
+    'BABEL_CAPABILITY_PROBE_CANARY=synthetic-legacy-value\n',
+    { mode: 0o600 },
+  )
+  const child = spawnInstrumentedExecutable(distIndex, ['--desktop-capabilities'], 'capability_canary', {
+    BABEL_CONFIG_DIR: configDir,
+    BABEL_PROJECT_CREDENTIALS_DIR: join(packageRoot, 'must-not-inspect-credentials'),
+    BABEL_LEGACY_CLI_ENV: '1',
+    BABEL_CAPABILITY_PROBE_CANARY: undefined,
+  })
+  assert.equal(child.status, 0, child.stderr || child.stdout)
+  const instrumentation = parseCapabilityChild(child.stderr)
+  assert.equal(instrumentation.envLoaded, 'unset')
+  assert.equal(instrumentation.canary, 'unset')
 })

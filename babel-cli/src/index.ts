@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { desktopCapabilities, isDesktopCapabilityProbe } from './config/desktopCapabilities.js';
+import { dispatchExecutableCli } from './cliEntryDispatch.js';
 
 type CliMain = typeof import('./cliMain.js');
 
@@ -24,9 +24,5 @@ const isMain =
   (process.argv[1].endsWith('index.js') || process.argv[1].endsWith('index.ts'));
 
 if (isMain) {
-  if (isDesktopCapabilityProbe(process.argv)) {
-    process.stdout.write(JSON.stringify(desktopCapabilities()) + '\n');
-  } else {
-    await startCli();
-  }
+  await dispatchExecutableCli();
 }
