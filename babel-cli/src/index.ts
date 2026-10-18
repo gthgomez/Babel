@@ -21,11 +21,7 @@ export async function startCli(argv: string[] = process.argv): Promise<void> {
 
 const isMain =
   process.argv[1] &&
-  (process.argv[1].endsWith('babel.js') ||
-    process.argv[1].endsWith('babel-lite.js') ||
-    process.argv[1].endsWith('bl.js') ||
-    process.argv[1].endsWith('index.js') ||
-    process.argv[1].endsWith('index.ts'));
+  (process.argv[1].endsWith('index.js') || process.argv[1].endsWith('index.ts'));
 
 if (isMain) {
   if (isDesktopCapabilityProbe(process.argv)) {

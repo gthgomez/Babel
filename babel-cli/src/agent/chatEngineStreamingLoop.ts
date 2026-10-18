@@ -393,9 +393,17 @@ export class ChatEngineStreamingLoop {
       if (!this.host.isSubmissionCurrent(submissionGeneration)) return;
       const conversationOnly =
         this.host.options.executionScope?.kind === 'conversation' && !this.host.options.projectRoot;
+      const missingWorkspaceOnly =
+        conversationOnly &&
+        !hadInstalledP11Context &&
+        !pendingCapsuleAuthority &&
+        Boolean(
+          this.host.parity.admissionStore &&
+            this.host.p11InstallBlock?.details.includes('workspace_revision'),
+        );
       if (
         !p11ContextInstalled &&
-        !conversationOnly &&
+        !missingWorkspaceOnly &&
         (hadInstalledP11Context || pendingCapsuleAuthority ||
           (this.host.parity.admissionStore && this.host.p11InstallBlock?.details.includes('workspace_revision')))
       ) {

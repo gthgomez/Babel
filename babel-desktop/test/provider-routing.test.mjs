@@ -4,6 +4,7 @@ import {mkdtempSync, rmSync, readFileSync, writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {applyProviderRoute, qualifiedProviders, readProviderRoute, saveProviderRoute, validateProviderRoute} from '../native/provider-routing.mjs';
+import {parseModelCatalog} from '../native/model-catalog.mjs';
 import {buildRunArgs} from '../native/child.mjs';
 
 test('Desktop supports certified Go and rejects stale unqualified Zen selections', () => {
@@ -65,6 +66,24 @@ test('provider route is persisted and applied to child env for all supported pro
   assert.equal(env.BABEL_DESKTOP_PROVIDER, 'opencode-go');
   assert.equal(env.BABEL_DESKTOP_MODEL_ROUTE, 'opencode-go/deepseek-v4.1-flash');
 
+  rmSync(config, {recursive: true, force: true});
+});
+
+test('discovered catalog routes stay selectable when parseModelCatalog marks enabled false', () => {
+  const config = mkdtempSync(join(tmpdir(), 'babel-route-discovered-'));
+  const fetchedAt = new Date().toISOString();
+  const discovered = parseModelCatalog('openrouter', {
+    data: [{id: 'vendor/new-code', name: 'Vendor New Code'}],
+  }, [], fetchedAt);
+  assert.equal(discovered.length, 1);
+  assert.equal(discovered[0].enabled, false);
+  assert.equal(discovered[0].qualification, 'unverified');
+  writeFileSync(join(config, 'desktop-model-catalog.json'), JSON.stringify({
+    schemaVersion: 1,
+    models: discovered,
+  }));
+  const route = validateProviderRoute({provider: 'openrouter', model: 'openrouter/vendor/new-code'}, config);
+  assert.equal(route.model, 'openrouter/vendor/new-code');
   rmSync(config, {recursive: true, force: true});
 });
 

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // License: Apache-2.0 - see LICENSE
 import { spawnSync } from 'node:child_process'
+import { existsSync } from 'node:fs'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -29,17 +30,38 @@ const executionPath = resolve(artifactDir, 'execution.json')
 
 captureRequiredTapSelection(suite, artifactDir)
 
-const npmBin = process.platform === 'win32' ? 'npm.cmd' : 'npm'
-const result = spawnSync(npmBin, ['run', '--silent', rawScript], {
-  cwd: cliRoot,
-  encoding: 'utf8',
-  env: {
-    ...process.env,
-    BABEL_TAP_EXECUTION_PATH: executionPath,
-  },
-  maxBuffer: 64 * 1024 * 1024,
-  shell: false,
-})
+const tapEnv = {
+  ...process.env,
+  BABEL_TAP_EXECUTION_PATH: executionPath,
+}
+const npmCli = process.env.npm_execpath
+const result =
+  process.platform === 'win32'
+    ? (() => {
+        if (!npmCli || !existsSync(npmCli)) {
+          return {
+            stdout: '',
+            stderr: 'Required TAP runner needs npm_execpath on Windows (invoke via npm run).\n',
+            status: 1,
+            error: undefined,
+            signal: null,
+          }
+        }
+        return spawnSync(process.execPath, [npmCli, 'run', '--silent', rawScript], {
+          cwd: cliRoot,
+          encoding: 'utf8',
+          env: tapEnv,
+          maxBuffer: 64 * 1024 * 1024,
+          shell: false,
+        })
+      })()
+    : spawnSync('npm', ['run', '--silent', rawScript], {
+        cwd: cliRoot,
+        encoding: 'utf8',
+        env: tapEnv,
+        maxBuffer: 64 * 1024 * 1024,
+        shell: false,
+      })
 
 const gate = requiredTapSuiteGate(suite, result.stdout, {
   error: result.error,

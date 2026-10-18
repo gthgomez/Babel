@@ -27,7 +27,6 @@ if (!(await routeInteractiveWarnings())) {
     await import(pathToFileURL(envBootstrapEntry).href);
   }
 
-  const { runCli } = await import(pathToFileURL(distEntry).href);
-  // Node retains a Unix npm symlink's executable name in argv[1].
-  if (!process.argv[1]?.endsWith('babel.js')) await runCli();
+  const { startCli } = await import(pathToFileURL(distEntry).href);
+  await startCli();
 }
