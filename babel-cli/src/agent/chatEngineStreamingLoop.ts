@@ -391,8 +391,11 @@ export class ChatEngineStreamingLoop {
       // R0-8/R1: a superseded submission must not finalize the live turn as
       // failed nor dispatch a provider request for the new owner.
       if (!this.host.isSubmissionCurrent(submissionGeneration)) return;
+      const conversationOnly =
+        this.host.options.executionScope?.kind === 'conversation' && !this.host.options.projectRoot;
       if (
         !p11ContextInstalled &&
+        !conversationOnly &&
         (hadInstalledP11Context || pendingCapsuleAuthority ||
           (this.host.parity.admissionStore && this.host.p11InstallBlock?.details.includes('workspace_revision')))
       ) {

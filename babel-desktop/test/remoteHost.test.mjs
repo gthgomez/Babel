@@ -136,7 +136,9 @@ function scriptedChild() {
   // can never signal a real (unrelated) process tree.
   child.pid = 0;
   child.stdout = new EventEmitter();
+  child.stdout.resume = () => {};
   child.stderr = new EventEmitter();
+  child.stderr.resume = () => {};
   child.killed = false;
   child.kill = () => {
     child.killed = true;

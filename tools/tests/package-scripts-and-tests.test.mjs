@@ -414,7 +414,7 @@ export const SPECIALIZED_LANES = {
       'src/interactive/testing/simulatedTtyInteractive.test.ts',
       'src/interactive/projection/turnViewProjector.test.ts',
     ],
-    command: 'npm run test:harness-runtime',
+    command: 'npm run test:harness-runtime:raw',
     loader: 'tsx',
     environment: 'node',
     osCoverage: ['ubuntu-latest', 'windows-latest'],
@@ -558,6 +558,17 @@ export function validateTestClassification(allTests, unitInventorySet, specializ
     return new RegExp(reStr);
   }
 
+  function resolveNpmScriptDefinition(scriptName, pkgScripts) {
+    const def = pkgScripts[scriptName];
+    if (!def) return null;
+    const tapWrapper = def.match(/run_required_tap_suite\.mjs\s+(chat-truth|harness-runtime)\b/);
+    if (tapWrapper) {
+      const raw = pkgScripts[`test:${tapWrapper[1]}:raw`];
+      if (raw) return raw;
+    }
+    return def;
+  }
+
   function scriptCoversFile(scriptDef, file) {
     if (!scriptDef) return false;
     if (scriptDef.includes(file)) return true;
@@ -574,11 +585,15 @@ export function validateTestClassification(allTests, unitInventorySet, specializ
 
   function jobExecutesCommand(jobBlock, scriptName) {
     const lines = jobBlock.split(/\r?\n/);
-    const targetPattern = new RegExp(`\\bnpm run ${scriptName}\\b`);
+    const scriptNames = scriptName.endsWith(':raw')
+      ? [scriptName, scriptName.replace(/:raw$/, '')]
+      : [scriptName];
     for (const rawLine of lines) {
       const line = rawLine.trim();
       if (!line || /^\s*(?:-\s*run:\s*)?#/.test(line)) continue;
-      if (targetPattern.test(line)) {
+      for (const candidate of scriptNames) {
+        const targetPattern = new RegExp(`\\bnpm run ${candidate}\\b`);
+        if (!targetPattern.test(line)) continue;
         if (/\becho\s+.*npm run\b/.test(line) || /^\s*(?:-\s*run:\s*)?echo\b/.test(line)) continue;
         if (/\|\|\s*true\b|\|\|\s*exit 0\b/.test(line)) continue;
         return true;
@@ -617,7 +632,7 @@ export function validateTestClassification(allTests, unitInventorySet, specializ
           } else {
             commandsToCheck.add(cmd);
             const scriptName = cmd.replace(/^npm run\s+/, '').trim();
-            const scriptDef = pkgScripts[scriptName];
+            const scriptDef = resolveNpmScriptDefinition(scriptName, pkgScripts);
             if (!scriptDef) {
               errors.push(`Lane '${lane}' command '${cmd}' (script '${scriptName}') for file '${file}' is missing from package.json scripts`);
             } else if (!scriptCoversFile(scriptDef, file)) {
@@ -632,7 +647,7 @@ export function validateTestClassification(allTests, unitInventorySet, specializ
       } else {
         commandsToCheck.add(entry.command);
         const scriptName = entry.command.replace(/^npm run\s+/, '').trim();
-        const scriptDef = pkgScripts[scriptName];
+        const scriptDef = resolveNpmScriptDefinition(scriptName, pkgScripts);
         if (!scriptDef) {
           errors.push(`Lane '${lane}' command '${entry.command}' (script '${scriptName}') is missing from package.json scripts`);
         } else {

@@ -13,7 +13,8 @@
         "Native Windows SQLite boundary",
         "Actual Windows SQLite reservation contract",
         "Windows-only process qualification",
-        "Windows helper diagnostic"
+        "Windows helper diagnostic",
+        "Windows NTFS native boundary; other platforms remain unsupported"
       ],
       "rationale": "The complementary Windows lane executes these native Windows contracts.",
       "suites": [
@@ -60,6 +61,15 @@
         "src/agent/windowsProcessQualification.test.ts": [
           "Windows executes spaced .exe, .cmd, and .bat paths with exact child argv and cwd",
           "Windows foreground shell preserves the same command identity for sync and async execution"
+        ],
+        "src/authority/ownedFileAssertionNative.test.ts": [
+          "native boundary preserves literal, encoding, size, alias and malformed manifest refusals",
+          "local Windows native oracle performs an actual red edit green data check",
+          "outside watcher detects a real ordinary reader",
+          "outside watcher detects the actual native oracle reader",
+          "native hardlink refusal does not request outside data access",
+          "native parent rename and ABA races cannot read outside bytes",
+          "native attribute-only reparse races cannot read outside bytes"
         ],
         "src/services/reviewProcessContainment.test.ts": [
           "Windows assignment failures retain only bounded helper stage diagnostics"

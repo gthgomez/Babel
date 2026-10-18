@@ -8,7 +8,7 @@ if(!isSyntheticProviderFixtureReady()){
   test('project-free engine runs inside a synthetic-only subprocess',async t=>{
     const fixture=prepareSyntheticProviderFixture()
     try{
-      const child=spawn(process.execPath,['--import',new URL('../testinfra/synthetic-provider-fixture.mjs',import.meta.url).href,'--import',import.meta.resolve('tsx'),'--test-reporter=tap','--test',fileURLToPath(import.meta.url)],{cwd:fixture.cwd,env:fixture.env,windowsHide:true,stdio:['ignore','pipe','pipe']})
+      const child=spawn(process.execPath,['--experimental-wasm-modules','--import',new URL('../testinfra/synthetic-provider-fixture.mjs',import.meta.url).href,'--import',import.meta.resolve('tsx'),'--test-reporter=tap','--test',fileURLToPath(import.meta.url)],{cwd:fixture.cwd,env:fixture.env,windowsHide:true,stdio:['ignore','pipe','pipe']})
       let output=''
       child.stdout.on('data',chunk=>{output+=String(chunk)})
       child.stderr.on('data',chunk=>{output+=String(chunk)})
@@ -114,8 +114,11 @@ if(!isSyntheticProviderFixtureReady()){
   })
   test('headless ChatCore uses the same conversation scope without target resolution',async t=>{
     const {runCliChatTask}=await import('../interactive/execution/chatCore.js')
-    const priorFetch=globalThis.fetch
-    t.after(()=>{globalThis.fetch=priorFetch})
+    const priorFetch=globalThis.fetch,priorLive=process.env['BABEL_LIVE'],priorHeadless=process.env['BABEL_HEADLESS'],priorProfile=process.env['BABEL_EXECUTION_PROFILE']
+    process.env['BABEL_LIVE']='1'
+    process.env['BABEL_HEADLESS']='1'
+    process.env['BABEL_EXECUTION_PROFILE']='safe_repo'
+    t.after(()=>{globalThis.fetch=priorFetch;if(priorLive===undefined)delete process.env['BABEL_LIVE'];else process.env['BABEL_LIVE']=priorLive;if(priorHeadless===undefined)delete process.env['BABEL_HEADLESS'];else process.env['BABEL_HEADLESS']=priorHeadless;if(priorProfile===undefined)delete process.env['BABEL_EXECUTION_PROFILE'];else process.env['BABEL_EXECUTION_PROFILE']=priorProfile})
     let calls=0
     globalThis.fetch=(async(_input,init)=>{
       calls++;assert.ok(calls<=2)
@@ -123,14 +126,16 @@ if(!isSyntheticProviderFixtureReady()){
       if(calls===2)assert.ok(body.messages.some((message:{role:string;content:string})=>message.role==='assistant'&&message.content.includes('Hello through ChatCore.')),'CORE_RESTORE_MISSING_ASSISTANT')
       return new Response(`data: ${JSON.stringify({model:'z-ai/glm-5.3-flash',choices:[{delta:{content:'Hello through ChatCore.'},finish_reason:'stop'}],usage:{prompt_tokens:10,completion_tokens:5}})}\n\ndata: [DONE]\n\n`,{headers:{'content-type':'text/event-stream'}})
     }) as typeof fetch
-    const result=await runCliChatTask({task:'Hello',projectRoot:null,executionScope:{kind:'conversation'},model:'glm-5.3-flash',outputFormat:'stream-json'})
+    const result=await runCliChatTask({task:'Hello',projectRoot:null,executionScope:{kind:'conversation'},model:'glm-5.3-flash',outputFormat:'json'})
     assert.equal(result.exitCode,0,'CORE_TURN_FAILED')
-    assert.equal((result.payload['answer'] as {answer:string}).answer,'Hello through ChatCore.','CORE_ANSWER_MISMATCH')
+    const answerPayload=result.payload['answer'] as {answer:string}|string
+    const answerText=typeof answerPayload==='string'?answerPayload:answerPayload.answer
+    assert.equal(answerText,'Hello through ChatCore.','CORE_ANSWER_MISMATCH')
     assert.equal(result.payload['project_root'],null)
     assert.equal(calls,1,'CORE_CALL_COUNT')
     const sessionId=result.payload['session_id']
     assert.equal(typeof sessionId,'string')
-    const resumed=await runCliChatTask({task:'Hello again',projectRoot:null,executionScope:{kind:'conversation'},model:'glm-5.3-flash',outputFormat:'stream-json',sessionId:sessionId as string})
+    const resumed=await runCliChatTask({task:'Hello again',projectRoot:null,executionScope:{kind:'conversation'},model:'glm-5.3-flash',outputFormat:'json',sessionId:sessionId as string})
     assert.equal(resumed.exitCode,0,'CORE_RESUME_FAILED')
     assert.equal(resumed.payload['session_id'],sessionId)
     assert.equal(calls,2)
@@ -184,10 +189,12 @@ if(!isSyntheticProviderFixtureReady()){
   test('run command admits an explicit conversation without ambient target or Docker',async t=>{
     const {Command}=await import('commander')
     const {registerWorkflowCommands}=await import('../commands/workflowCommands.js')
-    const priorFetch=globalThis.fetch,priorRoot=process.env['BABEL_PROJECT_ROOT'],priorExit=process.exitCode
+    const priorFetch=globalThis.fetch,priorRoot=process.env['BABEL_PROJECT_ROOT'],priorExit=process.exitCode,priorLive=process.env['BABEL_LIVE'],priorProfile=process.env['BABEL_EXECUTION_PROFILE']
+    process.env['BABEL_LIVE']='1'
+    process.env['BABEL_EXECUTION_PROFILE']='safe_repo'
     process.env['BABEL_PROJECT_ROOT']=join(process.cwd(),'ambient-must-not-inspect')
     let calls=0
-    t.after(()=>{globalThis.fetch=priorFetch;process.exitCode=priorExit;if(priorRoot===undefined)delete process.env['BABEL_PROJECT_ROOT'];else process.env['BABEL_PROJECT_ROOT']=priorRoot})
+    t.after(()=>{globalThis.fetch=priorFetch;process.exitCode=priorExit;if(priorRoot===undefined)delete process.env['BABEL_PROJECT_ROOT'];else process.env['BABEL_PROJECT_ROOT']=priorRoot;if(priorLive===undefined)delete process.env['BABEL_LIVE'];else process.env['BABEL_LIVE']=priorLive;if(priorProfile===undefined)delete process.env['BABEL_EXECUTION_PROFILE'];else process.env['BABEL_EXECUTION_PROFILE']=priorProfile})
     globalThis.fetch=(async(_input,init)=>{
       calls++;assert.equal(calls,1)
       assert.equal(process.env['BABEL_PROJECT_ROOT'],undefined)
@@ -196,7 +203,7 @@ if(!isSyntheticProviderFixtureReady()){
       return new Response(`data: ${JSON.stringify({model:'z-ai/glm-5.3-flash',choices:[{delta:{content:'Hello through run command.'},finish_reason:'stop'}],usage:{prompt_tokens:10,completion_tokens:5}})}\n\ndata: [DONE]\n\n`,{headers:{'content-type':'text/event-stream'}})
     }) as typeof fetch
     const program=new Command().exitOverride();registerWorkflowCommands(program)
-    await program.parseAsync(['run','--mode','chat','--execution-scope','conversation','--model','glm-5.3-flash','--output-format','json','--','Hello'],{from:'user'})
+    await program.parseAsync(['run','--mode','chat','--execution-scope','conversation','--model','glm-5.3-flash','--execution-profile','safe_repo','--output-format','json','--','Hello'],{from:'user'})
     assert.equal(calls,1)
     assert.equal(process.exitCode??0,0)
     assert.equal(process.env['BABEL_PROJECT_ROOT'],join(process.cwd(),'ambient-must-not-inspect'))

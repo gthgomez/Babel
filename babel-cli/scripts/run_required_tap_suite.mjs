@@ -29,7 +29,8 @@ const executionPath = resolve(artifactDir, 'execution.json')
 
 captureRequiredTapSelection(suite, artifactDir)
 
-const result = spawnSync('npm', ['run', '--silent', rawScript], {
+const npmBin = process.platform === 'win32' ? 'npm.cmd' : 'npm'
+const result = spawnSync(npmBin, ['run', '--silent', rawScript], {
   cwd: cliRoot,
   encoding: 'utf8',
   env: {
@@ -47,25 +48,43 @@ const gate = requiredTapSuiteGate(suite, result.stdout, {
 })
 
 writeFileSync(tapPath, gate.tap, 'utf8')
-process.stdout.write(gate.tap)
-process.stderr.write(result.stderr ?? '')
 
-if (gate.failed) {
-  if (gate.childSpawnError) {
-    console.error(`${suite} TAP gate: child spawn error: ${gate.childSpawnError.message}`)
+function finish(exitCode) {
+  const stderrChunk = result.stderr ?? ''
+  if (stderrChunk) {
+    process.stderr.write(stderrChunk)
   }
-  if (gate.childSignal) {
-    console.error(`${suite} TAP gate: child terminated by signal ${gate.childSignal}`)
+
+  if (gate.failed) {
+    if (gate.childSpawnError) {
+      console.error(`${suite} TAP gate: child spawn error: ${gate.childSpawnError.message}`)
+    }
+    if (gate.childSignal) {
+      console.error(`${suite} TAP gate: child terminated by signal ${gate.childSignal}`)
+    }
+    if (gate.childExitCode !== 0 && gate.childExitCode != null) {
+      console.error(`${suite} TAP gate: child exit code ${gate.childExitCode}`)
+    } else if (gate.childExitCode == null && !gate.childSignal && !gate.childSpawnError) {
+      console.error(`${suite} TAP gate: child exit code missing`)
+    }
+    console.error(
+      `${suite} TAP gate: status=${gate.inventory.status} failed=${gate.inventory.failed} errors=${gate.inventory.errors.join(',')}`,
+    )
   }
-  if (gate.childExitCode !== 0 && gate.childExitCode != null) {
-    console.error(`${suite} TAP gate: child exit code ${gate.childExitCode}`)
-  } else if (gate.childExitCode == null && !gate.childSignal && !gate.childSpawnError) {
-    console.error(`${suite} TAP gate: child exit code missing`)
+
+  const tapChunk = gate.tap
+  const setExit = () => {
+    process.exitCode = exitCode
   }
-  console.error(
-    `${suite} TAP gate: status=${gate.inventory.status} failed=${gate.inventory.failed} errors=${gate.inventory.errors.join(',')}`,
-  )
-  process.exit(1)
+  if (!tapChunk) {
+    setExit()
+    return
+  }
+  process.stdout.write(tapChunk, 'utf8', setExit)
 }
 
-process.exit(0)
+if (gate.failed) {
+  finish(1)
+} else {
+  finish(0)
+}

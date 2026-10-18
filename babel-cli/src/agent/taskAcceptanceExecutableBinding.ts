@@ -14,7 +14,7 @@ function isUnresolvedCriterion(criterion: AcceptanceRequirementV1): boolean {
   )
 }
 
-export const ACCEPTANCE_EXECUTABLE_BINDING_REF = 'task-acceptance-executable-binding:v1'
+export const ACCEPTANCE_EXECUTABLE_BINDING_REF = 'babel:acceptance-exec-bind:v1'
 
 /** Positive success tail matched as the entire remainder (no leading obligations). */
 const POSITIVE_SUCCESS_SUFFIX =

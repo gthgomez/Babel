@@ -3368,8 +3368,16 @@ export class ChatEngine {
     engine.hydrateInstalledContextAuthority(sessionDir);
     if (threadLog) {
       const context = engine.getProviderConversation();
-      const legacy = context.some(message => message.name === 'compaction_capsule') ? [] : legacyArchiveToChatMessages(legacyArchive);
-      engine.conversation = [...legacy, ...providerMessagesToChatMessages(context)];
+      const providerChat = providerMessagesToChatMessages(context);
+      const providerAssistant = new Set(
+        providerChat.filter(message => message.role === 'assistant').map(message => message.content),
+      );
+      const legacy = context.some(message => message.name === 'compaction_capsule')
+        ? []
+        : legacyArchiveToChatMessages(legacyArchive).filter(
+            message => !(message.role === 'assistant' && providerAssistant.has(message.content)),
+          );
+      engine.conversation = [...legacy, ...providerChat];
       const recoveryGuidance = resumedToolRecoveryGuidance(engine.parity.sessionEvents);
       if (recoveryGuidance) engine.conversation.push({role:'system',content:recoveryGuidance});
     }

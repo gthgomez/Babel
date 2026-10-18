@@ -713,8 +713,8 @@ export async function runChatEngineOnce(input: {
 
   // Smallest compiled chat stack (identity / project / safety / provider / verifier)
   const chatStack = compileChatStackForRun({
-    projectRoot: input.instructionRoot ?? projectRoot,
-    ...(scope.kind==='conversation'?{executionScope:scope}:{}),
+    projectRoot: scope.kind === 'project' ? (input.instructionRoot ?? scope.projectRoot) : null,
+    executionScope: scope,
     task: input.task,
     taskClass: resolvedTaskClass,
     ...(input.model !== undefined ? { model: input.model } : {}),

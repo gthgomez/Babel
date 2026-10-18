@@ -19,9 +19,13 @@ export default async function* requiredTapReporter(source) {
         if (selected.has(name)) {
           const sha256 = createHash('sha256').update(readFileSync(path)).digest('hex')
           files.set(name, sha256)
-          if (event.data.details?.type === 'test' && event.data.skip) {
-            skips.push({ path: name, sha256, name: event.data.name,
-              reason: typeof event.data.skip === 'string' ? event.data.skip : 'unspecified' })
+          if (event.data.skip) {
+            skips.push({
+              path: name,
+              sha256,
+              name: event.data.name,
+              reason: typeof event.data.skip === 'string' ? event.data.skip : 'unspecified',
+            })
           }
         }
       }

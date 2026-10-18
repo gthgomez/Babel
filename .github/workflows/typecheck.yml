@@ -734,7 +734,13 @@ jobs:
         working-directory: babel-cli
         run: |
           New-Item -ItemType Directory -Force artifacts/harness-runtime | Out-Null
-          Copy-Item -Force ../artifacts/harness-runtime/full.tap artifacts/harness-runtime/full.tap
+          $canonical = 'artifacts/harness-runtime/full.tap'
+          $tee = '../artifacts/harness-runtime/full.tap'
+          if (Test-Path -LiteralPath $canonical) {
+            Copy-Item -Force $canonical $tee
+          } elseif (Test-Path -LiteralPath $tee) {
+            Copy-Item -Force $tee $canonical
+          }
           exit $LASTEXITCODE
       - name: Summarize harness runtime TAP (Linux)
         if: >-
@@ -839,7 +845,13 @@ jobs:
         working-directory: babel-cli
         run: |
           New-Item -ItemType Directory -Force artifacts/chat-truth | Out-Null
-          Copy-Item -Force ../artifacts/chat-truth/full.tap artifacts/chat-truth/full.tap
+          $canonical = 'artifacts/chat-truth/full.tap'
+          $tee = '../artifacts/chat-truth/full.tap'
+          if (Test-Path -LiteralPath $canonical) {
+            Copy-Item -Force $canonical $tee
+          } elseif (Test-Path -LiteralPath $tee) {
+            Copy-Item -Force $tee $canonical
+          }
           exit $LASTEXITCODE
       - name: Summarize Chat truth TAP (Linux)
         if: >-
@@ -1139,6 +1151,9 @@ jobs:
       - name: Install dependencies
         run: npm ci --ignore-scripts
         working-directory: babel-cli
+      - name: Build CLI for dist-backed integration probes
+        run: npm run build
+        working-directory: babel-cli
       - name: Run complete unit shard
         id: unit_shard
         shell: pwsh
@@ -1154,7 +1169,13 @@ jobs:
         working-directory: babel-cli
         run: |
           New-Item -ItemType Directory -Force artifacts/ci-unit | Out-Null
-          Copy-Item -Force ../artifacts/ci-unit/full.tap artifacts/ci-unit/full.tap
+          $canonical = 'artifacts/ci-unit/full.tap'
+          $tee = '../artifacts/ci-unit/full.tap'
+          if (Test-Path -LiteralPath $canonical) {
+            Copy-Item -Force $canonical $tee
+          } elseif (Test-Path -LiteralPath $tee) {
+            Copy-Item -Force $tee $canonical
+          }
           exit $LASTEXITCODE
       - name: Validate complete unit TAP inventory
         if: always() && steps.unit_shard.outcome != 'skipped' && steps.unit_shard.outcome != ''

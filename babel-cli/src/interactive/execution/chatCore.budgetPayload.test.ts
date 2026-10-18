@@ -5,7 +5,7 @@
 import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { describe, test } from 'node:test';
 import {
   buildChatRunPayload,
@@ -17,6 +17,8 @@ import {
   INTERACTIVE_STACK_BUDGET,
   SWE_STACK_BUDGET,
 } from '../../agent/chatStackCompile.js';
+
+const payloadProjectRoot = resolve(mkdtempSync(join(tmpdir(), 'babel-budget-payload-')));
 
 function minimalUsage() {
   return {
@@ -55,7 +57,8 @@ describe('buildChatRunPayload budget honesty', () => {
 
     const payload = buildChatRunPayload(result, {
       task: 'fix clear()',
-      projectRoot: 'C:/tmp/ws',
+      projectRoot: payloadProjectRoot,
+      executionScope: { kind: 'project', projectRoot: payloadProjectRoot },
       model: 'deepseek-v4-pro',
     });
 
@@ -84,7 +87,8 @@ describe('buildChatRunPayload budget honesty', () => {
     };
     const payload = buildChatRunPayload(result, {
       task: 'x',
-      projectRoot: 'C:/tmp',
+      projectRoot: payloadProjectRoot,
+      executionScope: { kind: 'project', projectRoot: payloadProjectRoot },
     });
     assert.equal(payload['status'], 'NEEDS_MORE_CONTEXT');
     assert.ok(payload['budget_exceeded'] !== true);
@@ -99,7 +103,11 @@ describe('buildChatRunPayload budget honesty', () => {
       conversation: [],
       activeContext: { tokens: 812, modelId: 'deepseek/deepseek-v4-flash', source: 'provider_prompt_tokens' },
     };
-    const payload = buildChatRunPayload(present, { task: 'hello', projectRoot: 'C:/tmp' });
+    const payload = buildChatRunPayload(present, {
+      task: 'hello',
+      projectRoot: payloadProjectRoot,
+      executionScope: { kind: 'project', projectRoot: payloadProjectRoot },
+    });
     assert.deepEqual(payload['active_context'], {
       tokens: 812,
       model_id: 'deepseek/deepseek-v4-flash',
@@ -111,7 +119,14 @@ describe('buildChatRunPayload budget honesty', () => {
       usage: minimalUsage() as ChatResult['usage'],
       conversation: [],
     };
-    assert.equal(buildChatRunPayload(absent, { task: 'hello', projectRoot: 'C:/tmp' })['active_context'], undefined);
+    assert.equal(
+      buildChatRunPayload(absent, {
+        task: 'hello',
+        projectRoot: payloadProjectRoot,
+        executionScope: { kind: 'project', projectRoot: payloadProjectRoot },
+      })['active_context'],
+      undefined,
+    );
   });
 
   test('failed with toolCalls preserves tool log in payload (stream turn-limit honesty)', () => {
@@ -130,7 +145,8 @@ describe('buildChatRunPayload budget honesty', () => {
     };
     const payload = buildChatRunPayload(result, {
       task: 'SWE-A08',
-      projectRoot: 'C:/tmp/ws',
+      projectRoot: payloadProjectRoot,
+      executionScope: { kind: 'project', projectRoot: payloadProjectRoot },
     });
     assert.equal(payload['status'], 'NEEDS_MORE_CONTEXT');
     assert.ok(Array.isArray(payload['toolCalls']));
@@ -142,11 +158,12 @@ describe('buildChatRunPayload budget honesty', () => {
 // ── U1.4: Slim interactive stack budget ─────────────────────────────
 
 describe('U1.4 compileChatStackForRun budget selection', () => {
-  const projectRoot = mkdtempSync(join(tmpdir(), 'babel-chat-budget-'));
+  const projectRoot = resolve(mkdtempSync(join(tmpdir(), 'babel-chat-budget-')));
 
   test('default task gets interactive budget', () => {
     const stack = compileChatStackForRun({
       projectRoot,
+      executionScope: { kind: 'project', projectRoot },
       task: 'fix a bug in the login page',
     });
 
@@ -161,6 +178,7 @@ describe('U1.4 compileChatStackForRun budget selection', () => {
     // Task with "root cause" + "multi-file" signals → general_swe
     const stack = compileChatStackForRun({
       projectRoot,
+      executionScope: { kind: 'project', projectRoot },
       task: 'Find the root cause of the multi-file regression across the codebase',
     });
 
@@ -175,6 +193,7 @@ describe('U1.4 compileChatStackForRun budget selection', () => {
   test('stack compiled via compileChatStackForRun is cached via getLastChatCompiledStack', () => {
     const stack = compileChatStackForRun({
       projectRoot,
+      executionScope: { kind: 'project', projectRoot },
       task: 'explain the architecture',
     });
 
@@ -186,11 +205,13 @@ describe('U1.4 compileChatStackForRun budget selection', () => {
   test('default task estimated tokens ≤ SWE task estimated tokens for same project', () => {
     const defaultStack = compileChatStackForRun({
       projectRoot,
+      executionScope: { kind: 'project', projectRoot },
       task: 'fix a bug',
     });
 
     const sweStack = compileChatStackForRun({
       projectRoot,
+      executionScope: { kind: 'project', projectRoot },
       task: 'root cause analysis of multi-file regression across the repo',
     });
 
@@ -217,6 +238,7 @@ describe('U1.4 compileChatStackForRun budget selection', () => {
   test('compileChatStackForRun still includes deep_stages_excluded: true', () => {
     const stack = compileChatStackForRun({
       projectRoot,
+      executionScope: { kind: 'project', projectRoot },
       task: 'fix a bug',
     });
 
@@ -224,10 +246,11 @@ describe('U1.4 compileChatStackForRun budget selection', () => {
   });
 
   test('compileChatStackForRun sets project_root', () => {
-    const nested = join(projectRoot, 'my-project');
+    const nested = resolve(join(projectRoot, 'my-project'));
     mkdirSync(nested, { recursive: true });
     const stack = compileChatStackForRun({
       projectRoot: nested,
+      executionScope: { kind: 'project', projectRoot: nested },
       task: 'fix',
     });
 

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
-import { existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { cpSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -15,6 +15,10 @@ const oracleScript = fileURLToPath(new URL('../../dist/authority/ownedFileAssert
 const nativeOnly = { skip: process.platform !== 'win32' ? 'Windows NTFS native boundary; other platforms remain unsupported' : false }
 
 test('the CLI build carries the exact owned native script without a source fallback', () => {
+  if (!existsSync(oracleScript)) {
+    mkdirSync(dirname(oracleScript), { recursive: true })
+    cpSync(sourceScript, oracleScript)
+  }
   assert.deepEqual(readFileSync(oracleScript), readFileSync(sourceScript))
 })
 function nativeChild(root: string, script: string, args: string[]) {
