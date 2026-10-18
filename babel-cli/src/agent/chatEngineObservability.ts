@@ -4,7 +4,6 @@
  */
 
 import { existsSync, readFileSync, mkdirSync, writeFileSync } from 'node:fs';
-import { parseThreadEventLog, rebuildProviderMessagesFromEvents } from './threadEventLog.js';
 import { join } from 'node:path';
 import { loadThreadEventLogFromDir } from './threadEventLog.js';
 import { projectChatArchive } from './chatArchiveProjection.js';
@@ -1087,16 +1086,18 @@ export async function persistTranscriptToDisk(
   writeCheckpointFileSync(archivePath, lines);
 }
 
-/** Single terminal writer; canonical native history wins over adapter state. */
+/** Single terminal writer; canonical thread-event archive wins over adapter state. */
 export function persistChatTranscript(runDir: string, fallback: ChatMessage[]): void {
-  const eventPath = join(runDir, 'thread_events.json');
-  const conversation = existsSync(eventPath)
-    ? rebuildProviderMessagesFromEvents(parseThreadEventLog(readFileSync(eventPath, 'utf8')))
-      .filter(message => message.role !== 'system')
-    : fallback;
+  const log = loadThreadEventLogFromDir(runDir);
+  const archivePath = join(runDir, 'transcript.jsonl');
+  const legacy = retainedLegacyArchive(
+    archivePath,
+    log ? new Set(log.events.map((event) => event.event_id)) : undefined,
+  );
+  const archive = log === null ? fallback : [...legacy, ...projectChatArchive(log)];
   mkdirSync(runDir, { recursive: true });
-  const lines = conversation.map((m) => JSON.stringify(m)).join('\n') + '\n';
-  writeFileSync(join(runDir, 'transcript.jsonl'), lines, 'utf-8');
+  const lines = archive.map((m) => JSON.stringify(m)).join('\n') + '\n';
+  writeCheckpointFileSync(archivePath, lines);
 }
 
 /** Compatibility projection for CLI/UI consumers, never a resume authority. */

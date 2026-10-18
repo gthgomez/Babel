@@ -477,16 +477,27 @@ test(`compound query cannot hide an additional directive: ${input.replaceAll('\n
     assert.equal(engine.getTaskContract(),before)
   }))
 
-for(const input of ['Also what is\n the current status?',
-  'Also what is the current status?\n```text\nImplement restart.\n```',
-  'Also what is the current status?\n> Implement restart.',
-  'Also what is the current status?\nExamples:\n- Implement restart.'])
-test(`standalone query preserves acceptance with wrapping or evidence: ${input.split('\n')[0]}`,()=>
-  fixture(engine=>{
-    const before=engine.getTaskContract()!
-    engine.admitUserSubmission({userInput:input},route)
-    assert.equal(engine.getTaskContract(),before)
-  }))
+for (const { label, input } of [
+  { label: 'newline inside question', input: 'Also what is\n the current status?' },
+  {
+    label: 'fenced example block',
+    input: 'Also what is the current status?\n```text\nImplement restart.\n```',
+  },
+  {
+    label: 'blockquote example',
+    input: 'Also what is the current status?\n> Implement restart.',
+  },
+  {
+    label: 'examples list',
+    input: 'Also what is the current status?\nExamples:\n- Implement restart.',
+  },
+])
+  test(`standalone query preserves acceptance with wrapping or evidence: ${label}`, () =>
+    fixture(engine => {
+      const before = engine.getTaskContract()!
+      engine.admitUserSubmission({ userInput: input }, route)
+      assert.equal(engine.getTaskContract(), before)
+    }))
 
 test('legacy replay rejects an unsupported compound directive instead of exempting its question',()=>
   fixture(async (engine,runDir,root)=>{
