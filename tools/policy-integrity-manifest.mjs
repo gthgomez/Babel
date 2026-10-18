@@ -44,6 +44,8 @@ const coveredPaths = [
   "babel-cli/src/authority/ownedFileAssertion.ts",
   "babel-cli/src/authority/ownedFileAssertion.windows.ps1",
   "babel-cli/src/authority/ownedFileAssertionNative.test.ts",
+  "babel-cli/src/authority/nativeChildExpectations.test.ts",
+  "babel-cli/src/authority/nativeChildExpectations.ts",
   "babel-cli/src/authority/patchTargets.test.ts",
   "babel-cli/src/authority/patchTargets.ts",
   "babel-cli/src/authority/pdp.ts",
