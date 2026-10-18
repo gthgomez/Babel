@@ -164,6 +164,41 @@ describe('Remote security and failure gateway', () => {
     assert.equal(result.exclusive_remote_control, true);
   });
 
+  it('ignores paired force-acquire while another client holds the lease', async () => {
+    const cookieA = await pairPhone('force-a');
+    const cookieB = await pairPhone('force-b');
+    const sessionRes = await httpRequest(`http://127.0.0.1:${PORT}/sessions`, {
+      method: 'POST',
+      headers: { Cookie: cookieA, Origin: ORIGIN },
+      body: JSON.stringify({ projectRoot: tmp }),
+    });
+    const sessionId = (JSON.parse(sessionRes.body) as { sessionId: string }).sessionId;
+    const created = await rpc(
+      { cookie: cookieA },
+      'thread.create',
+      { project_root: tmp, session_id: sessionId },
+      10,
+    );
+    const threadId = (created.result as { thread_id: string }).thread_id;
+    const authA = JSON.parse(
+      (await httpRequest(`http://127.0.0.1:${PORT}/auth/session`, { headers: { Cookie: cookieA } })).body,
+    ) as { deviceId: string };
+    const held = await rpc({ cookie: cookieA }, 'control.acquire', { thread_id: threadId }, 11);
+    assert.ok(held.result);
+    const displaced = await rpc(
+      { cookie: cookieB },
+      'control.acquire',
+      { thread_id: threadId, force: true },
+      12,
+    );
+    const err = displaced.error as { data?: { control_error?: string } } | undefined;
+    assert.equal(err?.data?.control_error, 'held_by_other');
+    const status = await rpc({ cookie: cookieA }, 'control.status', { thread_id: threadId }, 13);
+    const st = status.result as { holder_client_id?: string; held?: boolean };
+    assert.equal(st.held, true);
+    assert.equal(st.holder_client_id, `device:${authA.deviceId}`);
+  });
+
   it('rejects paired-device RPC without allowed Origin (CSRF)', async () => {
     const cookie = await pairPhone('csrf-phone');
     const res = await httpRequest(`http://127.0.0.1:${PORT}/rpc`, {

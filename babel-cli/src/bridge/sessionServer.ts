@@ -667,6 +667,10 @@ export class BridgeServer {
       parseRequestUrl(req),
       this.devicePairing,
     );
+    if (client.deviceId && !this.devicePairing.isDeviceAuthorized(client.deviceId)) {
+      errorResponse(res, 403, 'Device authorization revoked');
+      return;
+    }
     const minted = this.wsTickets.mint({
       sessionId: parsed.session_id,
       threadId: parsed.thread_id,

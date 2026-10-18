@@ -72,6 +72,28 @@ describe('ControlLeaseRegistry', () => {
     assert.equal(missing.error, 'epoch_required');
   });
 
+  it('expires lease without renewal (background suspend) and requires re-acquire', async () => {
+    const leases = new ControlLeaseRegistry({ ttlMs: 40 });
+    const acquired = leases.acquire({ threadId: 'thr-bg', clientId: 'device:pwa' });
+    assert.equal(acquired.ok, true);
+    if (!acquired.ok) return;
+    await new Promise((resolve) => setTimeout(resolve, 55));
+    const expired = leases.authorizeMutation({
+      threadId: 'thr-bg',
+      clientId: 'device:pwa',
+      controlEpoch: acquired.epoch,
+      allowHostAutoAcquire: false,
+      requireExplicitEpoch: true,
+    });
+    assert.equal(expired.ok, false);
+    if (expired.ok) return;
+    assert.equal(expired.error, 'lease_required');
+    const reacquired = leases.acquire({ threadId: 'thr-bg', clientId: 'device:pwa' });
+    assert.equal(reacquired.ok, true);
+    if (!reacquired.ok) return;
+    assert.equal(reacquired.epoch, acquired.epoch + 1);
+  });
+
   it('auto-acquires for host-local clients when no lease exists', () => {
     const leases = new ControlLeaseRegistry();
     const ok = leases.authorizeMutation({

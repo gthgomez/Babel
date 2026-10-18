@@ -467,6 +467,19 @@
       } catch (error) { appendEvent({ type: 'failed', error: 'Verification unavailable.' }); }
     };
     rootEl.oninput = renderChrome;
+    document.addEventListener('visibilitychange', function () {
+      if (document.visibilityState === 'visible') {
+        void syncControlLeaseFromHost().then(function () { renderChrome(); });
+      }
+    });
+    window.addEventListener('focus', function () {
+      if (memory.controlEpoch !== null && memory.authKind === 'paired') {
+        void rpc('control.renew', { thread_id: memory.threadId, control_epoch: memory.controlEpoch }).then(function (res) {
+          if (res.classified.kind !== 'success') clearControlLease('Control lease lost while backgrounded.');
+          renderChrome();
+        }).catch(function () { clearControlLease('Control lease renewal failed after resume.'); renderChrome(); });
+      }
+    });
     renderChrome();
   }
 
