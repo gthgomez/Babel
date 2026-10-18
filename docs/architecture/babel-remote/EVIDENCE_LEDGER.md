@@ -11,13 +11,14 @@ Status: living document for the remote implementation campaign. **Qualified** me
 | 4 | Control lease enforced (no prod bypass) | Tested | Paired clients always lease-gated; `remote.capabilities`; no env bypass |
 | 4 | Monotonic epoch fencing | Tested | `controlLease.test.ts`, `remoteSecurity.gateway.test.ts` |
 | 4 | WS ticket binds client + lease on WS RPC | Tested | `remoteControlWs.gateway.test.ts`, `wsTicket.test.ts` |
-| 4 | Paired force-acquire blocked | Tested | `remoteControlWs.gateway.test.ts` |
-| 6 | PWA lease renewal + holder identity | Implemented | `remote-ui/app.js` (renew timer, `holder_client_id` check); UI not browser-qualified |
-| 4 | Live revoke closes paired sockets | Implemented | `sessionServer.ts`; revocation auth test in `remoteSecurity.gateway.test.ts` |
+| 4 | Paired force-acquire blocked | Tested | `remoteControlWs.gateway.test.ts`, `remoteSecurity.gateway.test.ts` |
+| 5 | PWA lease renewal + foreground resume | Tested | `remote-ui/app.js` (interval + visibility/focus); `controlLease.test.ts` (expiry without renew) |
+| 5 | PWA settled RPC rejection vs UNKNOWN | Tested | `remoteUiPolicy.test.ts`, `remote-ui/app.js` submit path |
+| 4 | Revoke: no WS fan-out / ticket mint | Tested | `remoteRevokeFanout.gateway.test.ts`, `remoteControlWs.gateway.test.ts`, `sessionServer.ts` |
 | 4 | Stale epoch / command_id integrity | Tested | `remoteSecurity.gateway.test.ts`, `protocolGateway.test.ts` |
 | 4 | Stale approval digest / replay | Tested | `remoteApproval.test.ts`, `remoteSecurity.gateway.test.ts` |
 | 2 | Desktop ↔ phone single owner | Not implemented | Desktop `sharedSession: false` unchanged |
 | 6 | External harness adapters | Stub only | `harnessAdapterContract.ts` |
 | — | Physical phone + Tailscale | Not qualified | Owner checklist in `BABEL_REMOTE_QUICKSTART.md` |
 
-**Last tested commit:** update on each push to `cursor/babel-remote-phase1-pairing-0634`.
+**Last tested commit:** `e845606c` on `cursor/babel-remote-phase1-pairing-0634`.
