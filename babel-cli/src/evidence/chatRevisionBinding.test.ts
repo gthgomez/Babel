@@ -11,6 +11,7 @@ import {
   evaluateChatEvidenceGraph,
   mutationPathsFromSessionEvents,
   refreshChatVerifierReceiptStalenessSync,
+  resolveGovernedCriterionCandidateRevisionSha,
   revisionBindingProofErrors,
   toExecutorVerifierReceipt,
   toRevisionBoundReceipt,
@@ -77,6 +78,10 @@ describe('chatRevisionBinding', () => {
       assert.strictEqual(honesty.allow, false);
       assert.strictEqual(honesty.reason, 'verifier_stale');
       assert.ok(revisionBindingProofErrors(receipt).some((e) => /stale/.test(e)));
+      assert.strictEqual(
+        resolveGovernedCriterionCandidateRevisionSha(tempDir, receipt),
+        null,
+      );
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
     }

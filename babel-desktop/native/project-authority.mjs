@@ -109,9 +109,20 @@ export class ProjectAuthority {
   }
   revoke(root){
     this.#epoch++;
-    this.#fenced.add(rootKey(root));
+    const immediate=rootKey(root);
+    if(immediate)this.#fenced.add(immediate);
     return this.#serialize(async()=>{
-      await this.#persist({...this.#state,revision:this.#state.revision+1,grants:this.#state.grants.filter(item=>rootKey(item.identity.root)!==rootKey(root))});
+      let identity=null;
+      try{identity=await inspectProjectIdentity(root);}catch{/* path may be invalid; still fence immediate key */}
+      const canonical=identity?rootKey(identity.root):null;
+      if(canonical)this.#fenced.add(canonical);
+      const grants=identity
+        ?this.#state.grants.filter(item=>!sameIdentity(item.identity,identity))
+        :this.#state.grants.filter(item=>{
+            const stored=rootKey(item.identity.root);
+            return stored!==immediate&&stored!==canonical;
+          });
+      await this.#persist({...this.#state,revision:this.#state.revision+1,grants});
       return {revoked:true};
     });
   }

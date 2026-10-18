@@ -368,7 +368,7 @@ describe('ordinary coding-loop behaviors', () => {
       assert.equal(readFileSync(join(root, 'left.ts'), 'utf8'), 'export const left = 1;\n');
       assert.equal(readFileSync(join(root, 'right.ts'), 'utf8'), 'export const right = 1;\n');
       assert.ok(runner.calls() >= 4 && runner.calls() <= 6, 'the local task stays inside its explicit turn ceiling');
-      assert.equal(terminal(events).outcome, 'VERIFIED_COMPLETE');
+      assert.equal(terminal(events).outcome, 'UNVERIFIED_PATCH', 'unresolved acceptance meaning cannot earn criterion verification from npm test alone');
       for (const optionalTool of ['sub_agent', 'web_search', 'web_fetch']) {
         assert.ok(runner.requests[0]?.toolNames.includes(optionalTool), `${optionalTool} is available for this task`);
       }
@@ -420,7 +420,7 @@ describe('ordinary coding-loop behaviors', () => {
         assert.equal(runner.requests[0]?.toolChoice, 'auto');
         assert.equal(readFileSync(join(root, 'version.txt'), 'utf8'), 'version=9.9.9\n');
         assert.ok(events.some((event) => event.type === 'tool_start' && event.tool === 'web_search'));
-        assert.equal(terminal(events).outcome, 'VERIFIED_COMPLETE');
+        assert.equal(terminal(events).outcome, 'UNVERIFIED_PATCH');
       } finally {
         globalThis.fetch = nativeFetch;
       }

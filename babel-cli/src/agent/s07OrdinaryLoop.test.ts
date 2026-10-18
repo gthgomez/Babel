@@ -928,7 +928,7 @@ describe('S07 ordinary-loop qualification', { concurrency: false }, () => {
       assert.ok(o.mutationBatches >= 1, 'mutation is durably recorded');
       assert.notEqual(o.outcome, 'NO_CHANGE_REQUIRED', 'a real mutation is not reported as no-change');
       assert.ok(!o.progressInterventions.includes('terminal_blocked'), 'no false recovery terminal');
-      assert.equal(o.outcome, 'VERIFIED_COMPLETE', 'an authoritative current verifier earns verified completion');
+      assert.equal(o.outcome, 'UNVERIFIED_PATCH', 'unresolved acceptance meaning stays fail-closed despite a green verifier');
       assert.equal(o.reasonCode, undefined, 'a green verifier never claims verification_failed');
       assert.equal(o.durableCompletionOutcome, o.outcome, 'durable completion decision agrees with emitted outcome');
       assert.equal(o.status, 'completed', `mutation loop completes honestly: ${o.answer}`);
@@ -1074,7 +1074,7 @@ describe('S07 ordinary-loop qualification', { concurrency: false }, () => {
       assert.ok(targetedRead, 'the targeted read executed');
       assert.equal(targetedRead?.error, undefined, 'the targeted read was not blocked');
 
-      assert.equal(o.outcome, 'VERIFIED_COMPLETE', 'the loop recovers and earns verified completion');
+      assert.equal(o.outcome, 'UNVERIFIED_PATCH', 'criterion completion remains unverified until acceptance is explicit and bound');
       assert.ok(
         !o.progressInterventions.includes('terminal_blocked'),
         'a useful targeted read is not punished with a terminal read-thrash stop',
@@ -1151,7 +1151,7 @@ describe('S07 ordinary-loop qualification', { concurrency: false }, () => {
       assert.equal(verifiers[2]?.error, undefined, 'the distinct second repair has a green verifier');
       assert.equal(readFileSync(join(fixture.root, 'parser.ts'), 'utf8').includes('Number(parts[0]) + Number(parts[1])'), true);
       assert.equal(o.toolCalls.filter((call) => call.tool === 'str_replace' && !call.error).length, 3);
-      assert.equal(o.outcome, 'VERIFIED_COMPLETE');
+      assert.equal(o.outcome, 'UNVERIFIED_PATCH');
       assert.equal(o.status, 'completed');
     } finally {
       fixture.cleanup();

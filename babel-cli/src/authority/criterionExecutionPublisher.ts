@@ -1,17 +1,20 @@
 import { realpathSync } from 'node:fs'
 import { buildAgentEndpointV1 } from '../agent/agentEndpoint.js'
-import { sha256Canonical } from '../acceptance/canonical.js'
 import type { TaskContractV1 } from '../agent/taskContract.js'
 import {
+  resolveGovernedCriterionCandidateRevisionSha,
   toRevisionBoundReceipt,
   type BoundChatVerifierReceipt,
 } from '../evidence/chatRevisionBinding.js'
-import { RevisionManager } from '../evidence/revisionBoundReceipt.js'
 import {
   EvidenceGraph,
   type EvidenceNode,
 } from '../evidence/evidenceGraph.js'
 import type { TrustedExecutionAuthorityV1 } from './trustedExecutionSupervisor.js'
+import {
+  buildCriterionReceiptEvidenceData,
+  chatReceiptDispatchesToRequirement,
+} from './criterionVerifierDispatch.js'
 
 export const CHAT_CRITERION_VERIFIER_ENDPOINT_ID = 'verifier:chat-governed'
 
@@ -51,27 +54,22 @@ function ensureGovernedVerifierAssignment(input: {
   })
 }
 
-function verificationSpecHash(requirement: TaskContractV1['acceptance'][number]): string {
-  return sha256Canonical(requirement.verification)
-}
-
 function buildCriterionReceiptNode(input: {
   requirement: TaskContractV1['acceptance'][number]
   bound: ReturnType<typeof toRevisionBoundReceipt>
+  receipt: BoundChatVerifierReceipt
   repository: string
   runId: string
   contract: TaskContractV1
   candidateSha: string
 }): EvidenceNode | null {
   if (!input.bound) return null
-  const data: Record<string, unknown> = {
-    ...input.bound,
-    verifier_id: input.requirement.verification.verifier_id,
-    verifier_spec_hash: verificationSpecHash(input.requirement),
-    ...(input.requirement.verification.command_hash !== undefined
-      ? { command_hash: input.requirement.verification.command_hash }
-      : {}),
-  }
+  const data = buildCriterionReceiptEvidenceData(
+    input.requirement,
+    input.bound,
+    input.receipt,
+  )
+  if (!data) return null
   return {
     id: `criterion:${input.requirement.id}`,
     type: 'verifier_receipt',
@@ -117,28 +115,39 @@ export function publishCriterionEvidenceFromChatExecution(input: {
   ) {
     return null
   }
+  const repository = realpathSync.native(input.projectRoot)
+  const revisionSha = resolveGovernedCriterionCandidateRevisionSha(
+    repository,
+    input.receipt,
+  )
+  if (!revisionSha || input.candidateSha !== revisionSha) return null
   const bound = toRevisionBoundReceipt(input.receipt)
   if (!bound || bound.exitCode !== 0 || bound.stale === true) return null
-  const repository = realpathSync.native(input.projectRoot)
-  const revisionSha = bound.boundRevision.compositeTreeHash
-  if (!revisionSha || input.candidateSha !== revisionSha) return null
-  const stale = RevisionManager.isReceiptStaleSync(bound, repository)
-  if (stale.stale) return null
-  ensureGovernedVerifierAssignment({
-    supervisor: input.supervisor,
-    runId: input.runId,
-    contract: input.contract,
-  })
-  for (const requirement of input.contract.acceptance.filter(item => item.required)) {
+
+  const required = input.contract.acceptance.filter(item => item.required)
+  if (required.length === 0) return null
+
+  const nodes: EvidenceNode[] = []
+  for (const requirement of required) {
+    if (!chatReceiptDispatchesToRequirement(input.receipt, requirement)) return null
     const node = buildCriterionReceiptNode({
       requirement,
       bound,
+      receipt: input.receipt,
       repository,
       runId: input.runId,
       contract: input.contract,
       candidateSha: revisionSha,
     })
-    if (node) input.graph.addNode(node)
+    if (!node) return null
+    nodes.push(node)
   }
+
+  ensureGovernedVerifierAssignment({
+    supervisor: input.supervisor,
+    runId: input.runId,
+    contract: input.contract,
+  })
+  for (const node of nodes) input.graph.addNode(node)
   return revisionSha
 }

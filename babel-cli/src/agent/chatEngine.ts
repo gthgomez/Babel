@@ -210,6 +210,7 @@ import {
 import {
   evaluateChatCompletionProof,
   mutationPathsFromSessionEvents,
+  resolveGovernedCriterionCandidateRevisionSha,
   toGateToolLog,
   type BoundChatVerifierReceipt,
 } from "../evidence/chatRevisionBinding.js";
@@ -3764,20 +3765,17 @@ export class ChatEngine {
    * has no mutation scope yet (nothing to compare). Never invents a revision
    * authority — this is the same computation the completion gate performs.
    */
-  /**
-   * Revision hash for criterion publication: prefer the bound revision on a
-   * current green verifier receipt (includes verifier input closure), not the
-   * narrower mutation-batch scope alone.
-   */
+  /** Live recheck of mutation + verifier-input-closure revision at completion. */
   private criterionCandidateRevisionSha(): string | null {
-    const receipt = this.lastVerifierReceipt;
-    if (
-      receipt &&
-      receipt.exit_code === 0 &&
-      receipt.stale !== true &&
-      receipt.boundRevision?.compositeTreeHash
-    ) {
-      return receipt.boundRevision.compositeTreeHash;
+    try {
+      const root = requireProjectRoot(this.options);
+      const rechecked = resolveGovernedCriterionCandidateRevisionSha(
+        root,
+        this.lastVerifierReceipt,
+      );
+      if (rechecked) return rechecked;
+    } catch {
+      /* fail closed */
     }
     return this.currentCandidateRevisionHash();
   }

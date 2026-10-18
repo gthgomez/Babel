@@ -3,15 +3,58 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test, { type TestContext } from 'node:test'
+import { sha256Canonical } from '../acceptance/canonical.js'
 import { inferTaskAcceptance } from '../agent/taskAcceptanceMeaning.js'
 import { buildTaskContractV1, freezeTaskContract } from '../agent/taskContract.js'
-import { bindChatVerifierReceipt } from '../evidence/chatRevisionBinding.js'
+import {
+  bindChatVerifierReceipt,
+  resolveGovernedCriterionCandidateRevisionSha,
+} from '../evidence/chatRevisionBinding.js'
 import {
   createCriterionCompletionServiceV1,
   evaluateCriterionCompletionV1,
 } from './criterionCompletion.js'
 
-async function fixture(t: TestContext) {
+const NPM_VERIFIER_ID = 'verifier:npm'
+const NPM_ARGV = ['test']
+
+function npmTestRequirement(id: string, description: string) {
+  return {
+    id,
+    description,
+    type: 'unit_test' as const,
+    required: true,
+    verification_strategy: 'Run npm test on the fixture.',
+    verification: {
+      kind: 'unit_test',
+      verifier_id: NPM_VERIFIER_ID,
+      executable_id: 'npm',
+      argv: NPM_ARGV,
+      command_hash: sha256Canonical({ executable_id: 'npm', argv: NPM_ARGV }),
+    },
+  }
+}
+
+async function npmTestReceipt(root: string, mutationPaths: string[]) {
+  return bindChatVerifierReceipt({
+    projectRoot: root,
+    command: 'npm test',
+    exit_code: 0,
+    summary: 'ok',
+    mutationPaths,
+    structured: {
+      verifierId: NPM_VERIFIER_ID,
+      authoritySource: 'built_in_runner',
+      executable: 'npm',
+      args: ['test'],
+    },
+  })
+}
+
+async function fixtureWithAcceptance(
+  t: TestContext,
+  acceptance: ReturnType<typeof buildTaskContractV1>['acceptance'],
+) {
   const root = mkdtempSync(join(tmpdir(), 'babel-criterion-publish-'))
   t.after(() => rmSync(root, { recursive: true, force: true }))
   writeFileSync(join(root, 'parser.ts'), 'export const v = 1;\n')
@@ -19,27 +62,22 @@ async function fixture(t: TestContext) {
     join(root, 'package.json'),
     JSON.stringify({ name: 'fixture', scripts: { test: 'node -e "process.exit(0)"' } }),
   )
-  const task = 'Investigate why parser_test fails and fix it.'
   const contract = freezeTaskContract(buildTaskContractV1({
     mode: 'chat',
-    user_request: task,
-    acceptance: inferTaskAcceptance(task).criteria,
+    user_request: 'Fix the fixture and run npm test.',
+    acceptance,
   }))
   const owner = { contract, runId: 'publish-run', projectRoot: root }
   const service = createCriterionCompletionServiceV1(() => owner)
-  const receipt = await bindChatVerifierReceipt({
-    projectRoot: root,
-    command: 'npm test',
-    exit_code: 0,
-    summary: 'ok',
-    mutationPaths: ['parser.ts'],
-  })
+  const receipt = await npmTestReceipt(root, ['parser.ts'])
   assert.ok(receipt)
-  return { root, owner, service, receipt, request: service.currentRequest()! }
+  return { root, service, receipt, request: service.currentRequest()! }
 }
 
-test('governed chat execution publishes private criterion evidence at current revision', async t => {
-  const { root, service, receipt, request } = await fixture(t)
+test('governed chat execution publishes criterion evidence only for dispatched frozen checks', async t => {
+  const { root, service, receipt, request } = await fixtureWithAcceptance(t, [
+    npmTestRequirement('acceptance:npm', 'npm test passes'),
+  ])
   const { RevisionManager } = await import('../evidence/revisionBoundReceipt.js')
   const candidate = RevisionManager.computeRevisionSync(root, ['parser.ts']).compositeTreeHash
   service.refreshPrivateEvidence({
@@ -53,8 +91,88 @@ test('governed chat execution publishes private criterion evidence at current re
   assert.equal(result.status, 'VERIFIED')
 })
 
+test('unresolved inferred acceptance stays fail-closed despite a green npm test receipt', async t => {
+  const task = 'Investigate why parser_test fails and fix it.'
+  const meaning = inferTaskAcceptance(task)
+  assert.equal(meaning.unresolved, true)
+  const { root, service, receipt, request } = await fixtureWithAcceptance(t, meaning.criteria)
+  const { RevisionManager } = await import('../evidence/revisionBoundReceipt.js')
+  const candidate = RevisionManager.computeRevisionSync(root, ['parser.ts']).compositeTreeHash
+  service.refreshPrivateEvidence({
+    proof: { compliant: true },
+    receipt,
+    candidate_sha: candidate,
+    has_mutation: true,
+  })
+  const result = evaluateCriterionCompletionV1(request)
+  assert.equal(result.verified, false)
+  assert.equal(result.status, 'UNVERIFIED')
+})
+
+test('an unrelated green verifier cannot manufacture criterion evidence', async t => {
+  const { root, service, request } = await fixtureWithAcceptance(t, [
+    npmTestRequirement('acceptance:npm', 'npm test passes'),
+  ])
+  const lint = await bindChatVerifierReceipt({
+    projectRoot: root,
+    command: 'npm run lint',
+    exit_code: 0,
+    summary: 'ok',
+    mutationPaths: ['parser.ts'],
+    structured: {
+      verifierId: 'verifier:npm',
+      authoritySource: 'built_in_runner',
+      executable: 'npm',
+      args: ['run', 'lint'],
+    },
+  })
+  assert.ok(lint)
+  const { RevisionManager } = await import('../evidence/revisionBoundReceipt.js')
+  const candidate = RevisionManager.computeRevisionSync(root, ['parser.ts']).compositeTreeHash
+  service.refreshPrivateEvidence({
+    proof: { compliant: true },
+    receipt: lint,
+    candidate_sha: candidate,
+    has_mutation: true,
+  })
+  assert.equal(evaluateCriterionCompletionV1(request).verified, false)
+})
+
+test('multiple required criteria require every frozen check to have executed', async t => {
+  const { root, service, request } = await fixtureWithAcceptance(t, [
+    npmTestRequirement('acceptance:npm', 'npm test passes'),
+    {
+      id: 'acceptance:build',
+      description: 'npm run build passes',
+      type: 'build' as const,
+      required: true,
+      verification_strategy: 'Run npm run build.',
+      verification: {
+        kind: 'build',
+        verifier_id: 'verifier:npm',
+        executable_id: 'npm',
+        argv: ['run', 'build'],
+        command_hash: sha256Canonical({ executable_id: 'npm', argv: ['run', 'build'] }),
+      },
+    },
+  ])
+  const receipt = await npmTestReceipt(root, ['parser.ts'])
+  assert.ok(receipt)
+  const { RevisionManager } = await import('../evidence/revisionBoundReceipt.js')
+  const candidate = RevisionManager.computeRevisionSync(root, ['parser.ts']).compositeTreeHash
+  service.refreshPrivateEvidence({
+    proof: { compliant: true },
+    receipt,
+    candidate_sha: candidate,
+    has_mutation: true,
+  })
+  assert.equal(evaluateCriterionCompletionV1(request).verified, false)
+})
+
 test('non-compliant proof refresh does not publish criterion evidence', async t => {
-  const { root, service, receipt, request } = await fixture(t)
+  const { root, service, receipt, request } = await fixtureWithAcceptance(t, [
+    npmTestRequirement('acceptance:npm', 'npm test passes'),
+  ])
   const { RevisionManager } = await import('../evidence/revisionBoundReceipt.js')
   const candidateSha = RevisionManager.computeRevisionSync(root, ['parser.ts']).compositeTreeHash
   service.refreshPrivateEvidence({
@@ -67,14 +185,18 @@ test('non-compliant proof refresh does not publish criterion evidence', async t 
 })
 
 test('missing governed refresh leaves criterion evidence unverified', async t => {
-  const { request } = await fixture(t)
+  const { request } = await fixtureWithAcceptance(t, [
+    npmTestRequirement('acceptance:npm', 'npm test passes'),
+  ])
   const result = evaluateCriterionCompletionV1(request)
   assert.equal(result.verified, false)
   assert.equal(result.status, 'UNVERIFIED')
 })
 
 test('stale or mismatched revision cannot populate the private graph', async t => {
-  const { root, service, receipt, request } = await fixture(t)
+  const { root, service, receipt, request } = await fixtureWithAcceptance(t, [
+    npmTestRequirement('acceptance:npm', 'npm test passes'),
+  ])
   const { RevisionManager } = await import('../evidence/revisionBoundReceipt.js')
   const candidate = RevisionManager.computeRevisionSync(root, ['parser.ts']).compositeTreeHash
   service.refreshPrivateEvidence({
@@ -95,7 +217,9 @@ test('stale or mismatched revision cannot populate the private graph', async t =
 })
 
 test('publisher binds receipt revision when candidate matches verifier closure scope', async t => {
-  const { root, owner, service, request } = await fixture(t)
+  const { root, service, request } = await fixtureWithAcceptance(t, [
+    npmTestRequirement('acceptance:npm', 'npm test passes'),
+  ])
   const { RevisionManager } = await import('../evidence/revisionBoundReceipt.js')
   writeFileSync(join(root, 'extra.mjs'), 'export const x = 1;\n')
   const mutationOnly = RevisionManager.computeRevisionSync(root, ['parser.ts']).compositeTreeHash
@@ -106,6 +230,12 @@ test('publisher binds receipt revision when candidate matches verifier closure s
     exit_code: 0,
     summary: 'ok',
     mutationPaths: ['extra.mjs', 'parser.ts'],
+    structured: {
+      verifierId: NPM_VERIFIER_ID,
+      authoritySource: 'built_in_runner',
+      executable: 'npm',
+      args: ['test'],
+    },
   })
   assert.ok(receipt)
   service.refreshPrivateEvidence({
@@ -124,14 +254,47 @@ test('publisher binds receipt revision when candidate matches verifier closure s
   assert.equal(evaluateCriterionCompletionV1(request).verified, true)
 })
 
+test('post-verification workspace drift fails recheck even with a prior green receipt hash', async t => {
+  const { root, service, receipt, request } = await fixtureWithAcceptance(t, [
+    npmTestRequirement('acceptance:npm', 'npm test passes'),
+  ])
+  const { RevisionManager } = await import('../evidence/revisionBoundReceipt.js')
+  const atVerify = RevisionManager.computeRevisionSync(root, ['parser.ts']).compositeTreeHash
+  assert.equal(resolveGovernedCriterionCandidateRevisionSha(root, receipt), atVerify)
+  service.refreshPrivateEvidence({
+    proof: { compliant: true },
+    receipt,
+    candidate_sha: atVerify,
+    has_mutation: true,
+  })
+  assert.equal(evaluateCriterionCompletionV1(request).verified, true)
+  writeFileSync(join(root, 'parser.ts'), 'export const v = 99;\n')
+  assert.equal(resolveGovernedCriterionCandidateRevisionSha(root, receipt), null)
+  service.refreshPrivateEvidence({
+    proof: { compliant: true },
+    receipt,
+    candidate_sha: atVerify,
+    has_mutation: true,
+  })
+  assert.equal(evaluateCriterionCompletionV1(request).verified, false)
+})
+
 test('failed verifier execution cannot publish passing criterion evidence', async t => {
-  const { root, service, request } = await fixture(t)
+  const { root, service, request } = await fixtureWithAcceptance(t, [
+    npmTestRequirement('acceptance:npm', 'npm test passes'),
+  ])
   const failed = await bindChatVerifierReceipt({
     projectRoot: root,
     command: 'npm test',
     exit_code: 1,
     summary: 'failed',
     mutationPaths: ['parser.ts'],
+    structured: {
+      verifierId: NPM_VERIFIER_ID,
+      authoritySource: 'built_in_runner',
+      executable: 'npm',
+      args: ['test'],
+    },
   })
   assert.ok(failed)
   const { RevisionManager } = await import('../evidence/revisionBoundReceipt.js')

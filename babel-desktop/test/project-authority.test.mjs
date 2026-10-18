@@ -50,6 +50,29 @@ test('directory replacement and changed confirmation identity never inherit trus
   }finally{await rm(dir,{recursive:true,force:true});}
 });
 
+test('revoking through an alias removes the canonical grant and denies both paths',async()=>{
+  const {ProjectAuthority,inspectProjectIdentity}=await load();
+  const dir=await mkdtemp(join(tmpdir(),'babel-authority-alias-revoke-'));
+  try{
+    const canonical=join(dir,'canonical'),alias=join(dir,'alias');
+    await mkdir(canonical);
+    await symlink(canonical,alias,process.platform==='win32'?'junction':'dir');
+    const authority=await ProjectAuthority.open(join(dir,'authority.json'));
+    const identity=await inspectProjectIdentity(alias);
+    assert.equal(identity.root,await (await import('node:fs/promises')).realpath(canonical));
+    await authority.grant(alias,identity);
+    const admission=await authority.admit(alias);
+    assert.equal(authority.isCurrent(admission),true);
+    const revoked=authority.revoke(alias);
+    assert.equal(authority.isCurrent(admission),false,'revocation fences before durable removal');
+    await revoked;
+    await assert.rejects(()=>authority.admit(alias),/trust/i);
+    await assert.rejects(()=>authority.admit(canonical),/trust/i);
+    assert.equal((await authority.inspect(canonical)).trusted,false);
+    assert.equal((await (await ProjectAuthority.open(join(dir,'authority.json'))).inspect(alias)).trusted,false);
+  }finally{await rm(dir,{recursive:true,force:true});}
+});
+
 test('a selected path replaced by a link cannot inherit a different trusted directory',async()=>{
   const {ProjectAuthority,inspectProjectIdentity}=await load();
   const dir=await mkdtemp(join(tmpdir(),'babel-authority-rebind-'));
@@ -60,10 +83,12 @@ test('a selected path replaced by a link cannot inherit a different trusted dire
     await authority.grant(other,await inspectProjectIdentity(other));
     await rename(selected,join(dir,'previous'));
     await symlink(other,selected,process.platform==='win32'?'junction':'dir');
-    await assert.rejects(()=>authority.admit(selected),/changed|identity/i);
+    const linkedAdmission=await authority.admit(other);
+    assert.equal(authority.isCurrent(linkedAdmission),true,'the explicitly granted directory stays trusted before revocation');
     await authority.revoke(selected);
-    await assert.rejects(()=>authority.admit(selected),/changed|identity/i);
-    assert.equal((await authority.inspect(other)).trusted,true,'revoking the old selection does not revoke a different explicit grant');
+    await assert.rejects(()=>authority.admit(selected),/trust|changed|identity/i);
+    await assert.rejects(()=>authority.admit(other),/trust/i);
+    assert.equal((await authority.inspect(other)).trusted,false,'revocation uses canonical identity and removes the grant for the linked directory');
   }finally{await rm(dir,{recursive:true,force:true});}
 });
 

@@ -20,6 +20,7 @@ import { EvidenceGraph } from './evidenceGraph.js';
 import { independentVerifierProofErrors } from './independentVerifier.js';
 import { discoverVerifierInputClosure } from './revisionBoundReceipt.js';
 import { analyzeVerifierIdentity } from '../services/verifierIdentity.js';
+import { realpathSync } from 'node:fs';
 import {
   compareRevisions,
   RevisionManager,
@@ -210,6 +211,56 @@ export function evaluateChatVerifierReceiptCurrencySync(
     return null;
   }
   return compareRevisions(revision, fresh);
+}
+
+/**
+ * Recompute the governed candidate revision at completion time (mutation scope plus
+ * verifier input closure embedded in the receipt). Returns null when the receipt is
+ * not a current green binding — never trusts a previously recorded hash alone.
+ */
+export function resolveGovernedCriterionCandidateRevisionSha(
+  projectRoot: string,
+  receipt: BoundChatVerifierReceipt | null | undefined,
+): string | null {
+  if (!receipt || receipt.exit_code !== 0) return null;
+  if (receipt.stale === true) return null;
+
+  const currency = evaluateChatVerifierReceiptCurrencySync(projectRoot, receipt);
+  if (currency?.stale) return null;
+
+  const bound = toRevisionBoundReceipt(receipt);
+  if (!bound || bound.exitCode !== 0 || bound.stale === true) return null;
+
+  const repository = realpathSync.native(projectRoot);
+  const stale = RevisionManager.isReceiptStaleSync(bound, repository);
+  if (stale.stale) return null;
+
+  const revision = receipt.boundRevision;
+  if (!revision?.compositeTreeHash) return null;
+
+  const scope = revision.scope;
+  let fresh: WorkspaceRevision;
+  try {
+    if (scope?.kind === 'repository') {
+      fresh = RevisionManager.computeRevisionSync(projectRoot, [], {
+        scope_kind: 'repository',
+        git_binding: revision.gitBinding ?? 'required',
+      });
+    } else {
+      const paths =
+        scope?.kind === 'files'
+          ? scope.paths
+          : Object.keys(revision.fileHashes).sort();
+      if (paths.length === 0) return null;
+      fresh = RevisionManager.computeRevisionSync(projectRoot, paths, {
+        ...(revision.gitBinding ? { git_binding: revision.gitBinding } : {}),
+      });
+    }
+  } catch {
+    return null;
+  }
+  if (fresh.compositeTreeHash !== revision.compositeTreeHash) return null;
+  return fresh.compositeTreeHash;
 }
 
 /**
