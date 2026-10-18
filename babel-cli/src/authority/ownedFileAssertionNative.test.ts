@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
-import { existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -14,6 +14,13 @@ import {
 } from './nativeChildExpectations.js'
 
 const host = 'C:/Program Files/PowerShell/7/pwsh.exe'
+
+/** NTFS oracle rejects 8.3 path segments containing '~' (common under %TEMP% on CI). */
+function nativeQualificationDir(prefix: string): string {
+  const created = mkdtempSync(join(tmpdir(), prefix))
+  if (process.platform !== 'win32') return created
+  return realpathSync.native?.(created) ?? realpathSync(created)
+}
 const sourceScript = fileURLToPath(new URL('./ownedFileAssertion.windows.ps1', import.meta.url))
 const oracleScript = fileURLToPath(new URL('../../dist/authority/ownedFileAssertion.windows.ps1', import.meta.url))
 const nativeOnly = { skip: process.platform !== 'win32' ? 'Windows NTFS native boundary; other platforms remain unsupported' : false }
@@ -43,8 +50,8 @@ function nativeChild(
 
 test('native boundary preserves literal, encoding, size, alias and malformed manifest refusals', nativeOnly, t => {
   assert.equal(process.platform, 'win32', 'This test qualifies Windows NTFS only')
-  const root = mkdtempSync(join(tmpdir(), 'babel-native-matrix-'))
-  const outside = mkdtempSync(join(tmpdir(), 'babel-native-matrix-outside-'))
+  const root = nativeQualificationDir('babel-native-matrix-')
+  const outside = nativeQualificationDir('babel-native-matrix-outside-')
   t.after(() => rmSync(root, { recursive: true, force: true }))
   t.after(() => rmSync(outside, { recursive: true, force: true }))
   const cases: Array<{ root: string; manifest: string; hash: string; status: string; reason?: string }> = []
@@ -129,7 +136,7 @@ if ($failures) { exit 1 }
 
 test('local Windows native oracle performs an actual red edit green data check', nativeOnly, t => {
   assert.equal(process.platform, 'win32', 'This test qualifies Windows NTFS only')
-  const root = mkdtempSync(join(tmpdir(), 'babel-native-oracle-'))
+  const root = nativeQualificationDir('babel-native-oracle-')
   t.after(() => rmSync(root, { recursive: true, force: true }))
   const manifest = parseOwnedFileAssertionV1({ schema_version: 1, kind: 'owned_file_assertion_v1',
     operation: 'utf8_equals', candidate_path: 'output.txt', expected: 'required\n' })
@@ -168,8 +175,8 @@ for (const mode of ['watch_control', 'watch_native_control', 'hardlink', 'rename
   }
   test(scenarios[mode]!, nativeOnly, t => {
     assert.equal(process.platform, 'win32', 'This test qualifies Windows NTFS only')
-    const root = mkdtempSync(join(tmpdir(), 'babel-native-race-'))
-    const outside = mkdtempSync(join(tmpdir(), 'babel-native-outside-'))
+    const root = nativeQualificationDir('babel-native-race-')
+    const outside = nativeQualificationDir('babel-native-outside-')
     t.after(() => rmSync(root, { recursive: true, force: true }))
     t.after(() => rmSync(outside, { recursive: true, force: true }))
     mkdirSync(join(root, 'sub'))

@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process'
 import { existsSync, mkdtempSync, readdirSync, symlinkSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import test from 'node:test'
 
 const packageRoot = fileURLToPath(new URL('..', import.meta.url))
@@ -88,7 +88,7 @@ function spawnInstrumentedExecutable(
     CI: '1',
     BABEL_SKIP_RESUME_PICKER: '1',
     BABEL_SKIP_KG_INDEX: '1',
-    NODE_OPTIONS: `--import=${hookPath}`,
+    NODE_OPTIONS: `--import=${pathToFileURL(hookPath).href}`,
     BABEL_ENV_LOADED: undefined,
     ...extraEnv,
   }
