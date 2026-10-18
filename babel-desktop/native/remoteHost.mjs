@@ -1,6 +1,11 @@
 import { spawn, spawnSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { isAbsolute, resolve } from 'node:path';
 
+// The listen host is configuration-derived (`BABEL_BRIDGE_HOST` may be
+// `localhost`, `LocalHost` or `::1`) while the socket itself always binds
+// 127.0.0.1, so the announcement is matched on any loopback spelling.
+const LISTENING_RE = /Babel Remote listening on http:\/\/(?:127\.0\.0\.1|localhost|\[?::1\]?):(\d+)/i;
 const DEFAULT_READY_TIMEOUT_MS = 30_000;
 const STOP_GRACE_MS = 2_000;
 
@@ -34,19 +39,59 @@ export function buildRemoteServeArgs(entry, projectRoot, {port = 4545} = {}) {
   return [entry, 'remote', 'serve', '--port', String(listenPort), '--project', projectRoot];
 }
 
-async function waitForBridgeHealth(port, {timeoutMs = DEFAULT_READY_TIMEOUT_MS} = {}) {
+/** Payload of a Babel bridge /health response, or null when it is not one. */
+function bridgeHealthPayload(value) {
+  if (!value || typeof value !== 'object') return null;
+  return value.ok === true ? value : null;
+}
+
+/**
+ * Decide whether an observed /health response belongs to the child this host
+ * started.
+ *
+ * The instance label is the strong identity: the host injects it into the
+ * child's environment and the bridge echoes it. A peer that predates the label
+ * is accepted only when this launch's own child announced a loopback listener
+ * — the bridge prints that only after a successful bind — and never from an
+ * arbitrary HTTP success on the port.
+ */
+function healthBelongsToLaunch(payload, instance, announcedPort) {
+  if (!payload) return false;
+  const echoed = payload.instance;
+  if (typeof echoed === 'string' && echoed.length > 0) return echoed === instance;
+  return announcedPort !== null;
+}
+
+async function waitForOwnedBridgeHealth({port, instance, readAnnouncedPort, timeoutMs}) {
   const deadline = Date.now() + timeoutMs;
-  const url = `http://127.0.0.1:${port}/health`;
   while (Date.now() < deadline) {
+    const announcedPort = readAnnouncedPort();
+    const probedPort = announcedPort ?? port;
     try {
-      const response = await fetch(url, {signal: AbortSignal.timeout(1500)});
-      if (response.ok) return true;
+      const response = await fetch(`http://127.0.0.1:${probedPort}/health`, {
+        signal: AbortSignal.timeout(1500),
+      });
+      if (response.ok) {
+        const payload = bridgeHealthPayload(await response.json().catch(() => null));
+        if (healthBelongsToLaunch(payload, instance, announcedPort)) return probedPort;
+      }
     } catch {
       /* retry until deadline */
     }
     await new Promise(resolve => setTimeout(resolve, 200));
   }
-  return false;
+  return null;
+}
+
+/**
+ * Identity-guarded release for a caller-held bridge reference.
+ *
+ * A start that is superseded while it suspends rejects later; releasing the
+ * reference unconditionally would then drop a newer bridge that a successor
+ * attempt already owns, orphaning its child and leaving its port bound.
+ */
+export function releaseBridgeIfCurrent(current, candidate) {
+  return current === candidate ? null : current;
 }
 
 /**
@@ -59,13 +104,21 @@ export class RemoteBridgeChild {
   #generation = 0;
   #stopTimer = null;
 
-  constructor({executable, entry, projectRoot, env = {}, inheritEnv = true}) {
+  /**
+   * @param {object} options
+   * @param {typeof spawn} [options.spawnChild] Process factory. Defaults to the
+   *   real `spawn`; tests inject a scripted child so ownership rules (state,
+   *   port, timers, close wiring) can be exercised deterministically without
+   *   racing a real process exit.
+   */
+  constructor({executable, entry, projectRoot, env = {}, inheritEnv = true, spawnChild = spawn}) {
     if (!isAbsolute(executable)) throw new TypeError('The Node executable must be absolute');
     this.executable = executable;
     this.entry = entry;
     this.projectRoot = projectRoot;
     this.env = env;
     this.inheritEnv = inheritEnv;
+    this.spawnChild = spawnChild;
   }
 
   get state() {
@@ -86,22 +139,57 @@ export class RemoteBridgeChild {
     this.#state = 'starting';
     this.#port = port;
 
-    const child = spawn(this.executable, buildRemoteServeArgs(this.entry, this.projectRoot, {port}), {
+    const instance = randomUUID();
+    const child = this.spawnChild(this.executable, buildRemoteServeArgs(this.entry, this.projectRoot, {port}), {
       cwd: this.projectRoot,
       shell: false,
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe'],
-      env: {...(this.inheritEnv ? process.env : {}), ...this.env, BABEL_DESKTOP_IPC: '1'},
+      env: {
+        ...(this.inheritEnv ? process.env : {}),
+        ...this.env,
+        BABEL_DESKTOP_IPC: '1',
+        // Per-launch identity the bridge echoes on /health. Not a credential.
+        BABEL_BRIDGE_INSTANCE: instance,
+      },
     });
     this.#child = child;
 
-    const listenPort = port;
-    let stdoutSeen=false,stderrSeen=false;
-    // A credential-bearing child may include secrets in either stream. Drain
-    // both without retaining or forwarding payloads; expose bounded facts only.
-    const diagnostic=code=>{if(typeof onLine==='function')onLine({stream:'status',phase:'remote_start',code,diagnosticAvailable:true,text:'Remote bridge startup output is withheld because it may contain sensitive diagnostics.'});};
-    const onStdout = () => {if(!stdoutSeen){stdoutSeen=true;diagnostic('REMOTE_STDOUT_AVAILABLE');}};
-    const onStderr = () => {if(!stderrSeen){stderrSeen=true;diagnostic('REMOTE_STDERR_AVAILABLE');}};
+    let announcedPort = null;
+    let stdoutBuffer = '';
+    let stdoutSeen = false;
+    let stderrSeen = false;
+    const diagnostic = code => {
+      if (typeof onLine === 'function') {
+        onLine({
+          stream: 'status',
+          phase: 'remote_start',
+          code,
+          diagnosticAvailable: true,
+          text: 'Remote bridge startup output is withheld because it may contain sensitive diagnostics.',
+        });
+      }
+    };
+    const onStdout = chunk => {
+      const text = chunk.toString('utf8');
+      if (!stdoutSeen) {
+        stdoutSeen = true;
+        diagnostic('REMOTE_STDOUT_AVAILABLE');
+      }
+      stdoutBuffer += text;
+      const lines = stdoutBuffer.split('\n');
+      stdoutBuffer = lines.pop() ?? '';
+      for (const candidate of [...lines, stdoutBuffer]) {
+        const match = candidate.match(LISTENING_RE);
+        if (match?.[1]) announcedPort = Number(match[1]);
+      }
+    };
+    const onStderr = () => {
+      if (!stderrSeen) {
+        stderrSeen = true;
+        diagnostic('REMOTE_STDERR_AVAILABLE');
+      }
+    };
     child.stdout.on('data', onStdout);
     child.stderr.on('data', onStderr);
 
@@ -115,14 +203,21 @@ export class RemoteBridgeChild {
     });
 
     try {
-      const ready = await Promise.race([
-        waitForBridgeHealth(listenPort, {timeoutMs: readyTimeoutMs}).then(ok => {
-          if (!ok) throw new Error(`Remote bridge did not become ready on port ${listenPort}`);
-          return true;
+      const readyPort = await Promise.race([
+        waitForOwnedBridgeHealth({
+          port,
+          instance,
+          readAnnouncedPort: () => announcedPort,
+          timeoutMs: readyTimeoutMs,
         }),
         earlyExit,
       ]);
-      if (!ready || generation !== this.#generation) {
+      if (readyPort === null) {
+        throw new Error(
+          `Remote bridge did not report readiness for this launch within ${readyTimeoutMs}ms`,
+        );
+      }
+      if (generation !== this.#generation) {
         throw new Error('Remote bridge start was superseded');
       }
       child.removeAllListeners('close');
@@ -133,9 +228,17 @@ export class RemoteBridgeChild {
         this.#state = 'stopped';
       });
       this.#state = 'ready';
-      this.#port = listenPort;
-      if(typeof onLine==='function')onLine({stream:'status',phase:'remote_start',code:'REMOTE_READY',diagnosticAvailable:stdoutSeen||stderrSeen,text:'Remote bridge is ready on the requested loopback port.'});
-      return {port: listenPort, url: `http://127.0.0.1:${listenPort}`, uiPath: '/ui'};
+      this.#port = readyPort;
+      if (typeof onLine === 'function') {
+        onLine({
+          stream: 'status',
+          phase: 'remote_start',
+          code: 'REMOTE_READY',
+          diagnosticAvailable: stdoutSeen || stderrSeen,
+          text: 'Remote bridge is ready on the requested loopback port.',
+        });
+      }
+      return {port: readyPort, url: `http://127.0.0.1:${readyPort}`, uiPath: '/ui'};
     } catch (error) {
       if (generation === this.#generation) {
         this.#state = 'failed';
@@ -155,27 +258,30 @@ export class RemoteBridgeChild {
       clearTimeout(this.#stopTimer);
       this.#stopTimer = null;
     }
-    if (!this.#child) {
+    const child = this.#child;
+    if (!child) {
       this.#state = 'stopped';
       this.#port = null;
       return;
     }
     this.#state = 'stopping';
     this.#generation += 1;
-    const child = this.#child;
     terminateChildTree(child);
-    this.#stopTimer = setTimeout(() => {
+    const timer = setTimeout(() => {
       try {
         child.kill('SIGKILL');
       } catch {
         /* already exited */
       }
     }, STOP_GRACE_MS);
+    this.#stopTimer = timer;
     child.once('close', () => {
-      if (this.#stopTimer) {
-        clearTimeout(this.#stopTimer);
-        this.#stopTimer = null;
-      }
+      // This child's own escalation timer is always mine to clear; the shared
+      // bridge state is not. A successor may already own the bridge, so this
+      // late close must not reset its child, port, state or timer.
+      clearTimeout(timer);
+      if (this.#stopTimer === timer) this.#stopTimer = null;
+      if (this.#child !== child) return;
       this.#resetChild();
       this.#state = 'stopped';
     });

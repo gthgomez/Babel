@@ -329,7 +329,7 @@ Your JSON output MUST include a "thinking" field. Use this field to:
     '    WRONG: Step 1: file_write target: hello.txt, Step 2: file_read target: hello.txt',
     '           (verification AFTER write does not count — must be BEFORE)',
     '',
-    '  If you are unsure which verifier to use, include a test_run: npm test step.',
+    '  Do not invent npm test when package.json has no test script. For an existing .test.js fixture, use node --test; otherwise inspect the project for a real verifier.',
     '  If you cannot determine ANY verifier, set plan_type to EVIDENCE_REQUEST instead.',
     '  Do NOT skip this rule even for trivial single-file tasks.',
     '  Plans without a verification step will be REJECTED by the executor safety gate.',

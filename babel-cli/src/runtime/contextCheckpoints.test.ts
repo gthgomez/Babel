@@ -402,6 +402,14 @@ test('a fresh capture of a changed revision reports no verifier match', () => {
   assert.equal(population.workspace_matches_verifier_revision, false);
 });
 
+test('scope-aware verifier currency is distinct from cross-scope hash equality', () => {
+  const sources = completeSources();
+  sources.receipts = sources.receipts.map(receipt => ({ ...receipt, current_for_bound_scope: true }));
+  const population = mapCheckpointRequiredState(sources);
+  assert.equal(population.workspace_matches_verifier_revision, false);
+  assert.equal(population.verifier_current_for_bound_scope, true);
+});
+
 test('a revision with a null capture epoch is relabelled, not a fresh capture', () => {
   const population = mapCheckpointRequiredState(
     completeSources({

@@ -11,7 +11,7 @@
  */
 
 import assert from 'node:assert/strict';
-import { describe, test } from 'node:test';
+import { after, describe, test } from 'node:test';
 import {
   ChatTurnTelemetryCollector,
   computeIntervalUnionDuration,
@@ -24,16 +24,46 @@ import type { ReplContext } from '../interactive/context.js';
 import type { AgentTargetContext } from '../services/targetResolver.js';
 import { ChatEngine, type ChatEvent } from './chatEngine.js';
 import { globalCostTracker } from '../services/costTracker.js';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import {
+  initMinimalGitProject,
+  mkExternalRunsDir,
+  snapshotChatAdmissionEnv,
+} from '../testUtils/chatAdmissionFixture.js';
 
 const EMPTY_USAGE = globalCostTracker.getSessionSummary();
+const admissionEnv = snapshotChatAdmissionEnv();
+
+after(() => {
+  for (const root of perfRoots) rmSync(root, { recursive: true, force: true });
+  for (const runsRoot of perfRunsRoots) rmSync(runsRoot, { recursive: true, force: true });
+  admissionEnv.restore();
+});
+
+const perfRoots: string[] = [];
+const perfRunsRoots: string[] = [];
 
 function makeTarget(root = process.cwd()): AgentTargetContext {
+  const targetRoot = root === process.cwd()
+    ? (() => {
+        const dir = mkdtempSync(join(tmpdir(), 'babel-perf-proj-'));
+        perfRoots.push(dir);
+        initMinimalGitProject(dir);
+        const runsRoot = mkExternalRunsDir('babel-perf-runs-');
+        perfRunsRoots.push(runsRoot);
+        process.env['BABEL_RUNS_DIR'] = runsRoot;
+        process.env['BABEL_CHAT_MAX_COST'] = 'unlimited';
+        return dir;
+      })()
+    : root;
   return {
-    targetRoot: root,
+    targetRoot,
     workspaceRoot: null,
     project: null,
     source: 'cwd',
-    cwd: root,
+    cwd: targetRoot,
   };
 }
 
@@ -252,18 +282,22 @@ describe('PR-B: Chat Performance & Telemetry Certification', () => {
       cumulativeSessionTokens: 350,
     };
 
-    const mockEngine = Object.create(ChatEngine.prototype) as ChatEngine;
-    mockEngine.submitMessageStream = async function* () {
-      yield { type: 'thinking' };
-      yield { type: 'answer_chunk', text: 'Inspected target files.' };
-      yield {
-        type: 'done',
-        answer: 'Inspected target files.',
-        usage: EMPTY_USAGE,
-        outcome: 'NO_CHANGE_REQUIRED',
-        turnTelemetry: mockTelemetry,
-      };
-    };
+    const mockEngine = {
+      submitMessageStream: async function* () {
+        yield { type: 'thinking' };
+        yield { type: 'answer_chunk', text: 'Inspected target files.' };
+        yield {
+          type: 'done',
+          answer: 'Inspected target files.',
+          usage: EMPTY_USAGE,
+          outcome: 'NO_CHANGE_REQUIRED',
+          turnTelemetry: mockTelemetry,
+        };
+      },
+      cancel: () => undefined,
+      abortTurn: () => undefined,
+      getTaskAllowanceSnapshot: () => null,
+    } as unknown as ChatEngine;
 
     await executeChatTask(ctx, 'inspect repo structure', 'inspect repo structure', target, undefined, {
       engineFactory: () => mockEngine,

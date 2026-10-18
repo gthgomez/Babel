@@ -780,24 +780,55 @@ export function recordTurnEnded(
   });
 }
 
-/** Remove in-memory completion decisions for a turn (pre-durable rollback). */
+function recomputeSessionNextSeq(log: SessionEventLog): void {
+  const last = log.events[log.events.length - 1];
+  log.nextSeq = last ? last.seq + 1 : 0;
+}
+
+/** Renumber not-yet-flushed events so seq stays contiguous after durable prefix. */
+export function recompactSessionEventTail(log: SessionEventLog): void {
+  let next = log.flushedThroughSeq + 1;
+  for (const event of log.events) {
+    if (event.seq > log.flushedThroughSeq) {
+      event.seq = next;
+      next += 1;
+    }
+  }
+  log.nextSeq = next;
+}
+
+/** Roll back terminal finalize staging that never durably committed. */
+export function stripPreDurableFinalizeStaging(
+  log: SessionEventLog,
+  turnId: string,
+): void {
+  const before = log.events.length;
+  log.events = log.events.filter((event) => {
+    if (event.seq <= log.flushedThroughSeq) return true;
+    if (event.kind === 'completion_decision' && event.turn_id === turnId) return false;
+    if (event.kind === 'budget_snapshot') return false;
+    return true;
+  });
+  if (log.events.length === before) return;
+  recompactSessionEventTail(log);
+}
+
+/** Remove in-memory completion decisions for a turn (pre-durable rollback only). */
 export function stripCompletionDecisionsForTurn(
   log: SessionEventLog,
   turnId: string,
 ): void {
   const before = log.events.length;
   log.events = log.events.filter(
-    (event) => !(event.kind === 'completion_decision' && event.turn_id === turnId),
+    (event) =>
+      !(
+        event.kind === 'completion_decision' &&
+        event.turn_id === turnId &&
+        event.seq > log.flushedThroughSeq
+      ),
   );
   if (log.events.length === before) return;
-  for (let i = 0; i < log.events.length; i += 1) {
-    log.events[i]!.seq = i;
-  }
-  log.nextSeq = log.events.length;
-  const lastSeq = log.events.length > 0 ? log.events[log.events.length - 1]!.seq : -1;
-  if (log.flushedThroughSeq > lastSeq) {
-    log.flushedThroughSeq = lastSeq;
-  }
+  recompactSessionEventTail(log);
 }
 
 /** Correct the latest session turn_ended when terminal settlement could not durably commit. */
@@ -809,6 +840,7 @@ export function amendLatestTurnEndedForTurn(
   for (let i = log.events.length - 1; i >= 0; i -= 1) {
     const event = log.events[i];
     if (event?.kind === 'turn_ended' && event.turn_id === turnId) {
+      if (event.seq <= log.flushedThroughSeq) return false;
       event.outcome = input.outcome;
       event.status = input.status;
       event.reason_code = input.reason.code;

@@ -38,6 +38,7 @@ export function isInfrastructureErrorText(error: string): boolean {
   return (
     NETWORK_CODE_RE.test(error) ||
     /runtime-invariant/i.test(error) ||
+    /Native stream failed after announcing tools/i.test(error) ||
     /socket hang up|connection reset|fetch failed|undici|network (?:error|timeout)|broken pipe/i.test(error) ||
     /provider (?:startup|stream) idle|idle timeout|request deadline|request timeout|timeout exceeded/i.test(error) ||
     /stream closed before terminal|malformed sse|provider stream error|finish_reason: error/i.test(error) ||

@@ -745,19 +745,8 @@ export function parseChatTurn(rawText: string): ChatTurn {
 // ─── Native Tool Definitions ───────────────────────────────────────────────
 
 const RECOVERY_PLAN_PARAMETER = {
-  type: 'object',
+  ...z.toJSONSchema(RecoveryPlanProposalSchema, { target: 'draft-7' }),
   description: 'Required after a failed repair: cite the current failure, revision, inspected observation IDs, verifier criterion, scoped targets, and proposed strategy. The controller validates it against the actual edit.',
-  properties: {
-    schemaVersion: { type: 'number', enum: [1] },
-    failureSignature: { type: 'string' },
-    workspaceRevision: { type: 'string' },
-    hypothesisClass: { type: 'string', enum: ['logic', 'data_flow', 'interface', 'test_expectation', 'configuration'] },
-    targetIdentities: { type: 'array', items: { type: 'string' } },
-    actionFamily: { type: 'string', enum: ['write_file', 'str_replace', 'apply_patch'] },
-    criterionId: { type: 'string' },
-    supportingObservationIds: { type: 'array', items: { type: 'string' } },
-  },
-  required: ['schemaVersion', 'failureSignature', 'workspaceRevision', 'hypothesisClass', 'targetIdentities', 'actionFamily', 'criterionId', 'supportingObservationIds'],
 } as const;
 
 /**
@@ -1078,7 +1067,7 @@ function buildAllChatToolDefinitions(): ToolDefinition[] {
       type: 'function',
       function: {
         name: 'sub_agent',
-        description: 'Spawn a sub-agent for an investigation or mutation. Delegated children are scheduled sequentially in this release (see #214); set mutation to true for write access. Optional model override for per-agent model selection.',
+        description: 'Spawn a sub-agent for an investigation or mutation. Children run sequentially. For edits set mutation=true and concrete write_scope; mutation=false is read-only regardless of instructions. Child edit formats are write_file and apply_patch; str_replace is a parent Chat tool, not a child action. Prefer a direct edit for a small already-localized change. Children inherit the selected model.',
         parameters: {
           type: 'object',
           properties: {
@@ -1095,7 +1084,7 @@ function buildAllChatToolDefinitions(): ToolDefinition[] {
             },
             model: {
               type: 'string',
-              description: 'Model backend key override (e.g. "deepseek-v4-pro", "scout", "deepseek-v4-flash"). When omitted, uses the parent\'s provider model.',
+              description: 'Optional assertion of the selected parent backend/model. A different model is rejected before dispatch; omit to inherit the exact selected route.',
             },
             max_rounds: {
               type: 'number',

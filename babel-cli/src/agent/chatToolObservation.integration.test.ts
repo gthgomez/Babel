@@ -50,6 +50,12 @@ for (const entrypoint of ['submitMessage', 'submitMessageStream'] as const) {
       }
       const error = results.find(message => message.tool_call_id === ids[2])
       assert.match(error?.content ?? '', /start_line \(999\) exceeds file length \(650\)/)
+      const sessions = engine.getParityRuntime().sessionEvents.events
+      for (const id of ids) {
+        assert.equal(sessions.filter(event => event.kind === 'tool_started' && event.tool_call_id === id).length, 1)
+        assert.equal(sessions.filter(event => event.kind === 'tool_cancelled' && event.tool_call_id === id).length, 0)
+        assert.equal(sessions.filter(event => (event.kind === 'tool_completed' || event.kind === 'tool_failed') && event.tool_call_id === id).length, 1)
+      }
       const durable = engine.getParityEventLog().events.filter(event => event.kind === 'tool_result')
       for (const message of results) assert.equal(durable.find(event => event.tool_call_id === message.tool_call_id)?.content, message.content)
       assert.equal(durable.find(event => event.tool_call_id === ids[2])?.exit_code, 1)

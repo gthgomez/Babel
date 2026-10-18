@@ -1,20 +1,22 @@
 import assert from 'node:assert/strict'
 import test, { type TestContext } from 'node:test'
 import { spawn } from 'node:child_process'
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import type { OpenCodeGoBudget } from '../runners/openCodeGoBudget.js'
 import {
-  isSyntheticProviderFixtureReady, prepareSyntheticProviderFixture,
-  removeSyntheticProviderFixture, summarizeSyntheticProviderOutput,
+    isSyntheticProviderFixtureReady, prepareSyntheticProviderFixture,
+    removeSyntheticProviderFixture, summarizeSyntheticProviderOutput,
 } from '../testinfra/synthetic-provider-fixture.mjs'
+import { initMinimalGitProject, mkExternalRunsDir } from '../testUtils/chatAdmissionFixture.js'
 
 if (!isSyntheticProviderFixtureReady()) {
   test('ordinary no-change admission contracts execute in a synthetic-only subprocess', async t => {
     const fixture = prepareSyntheticProviderFixture()
     const child = spawn(process.execPath, [
+      '--experimental-wasm-modules',
       '--import', new URL('../testinfra/synthetic-provider-fixture.mjs', import.meta.url).href,
       '--import', import.meta.resolve('tsx'), '--test-reporter=tap', '--test', fileURLToPath(import.meta.url),
     ], { cwd: fixture.cwd, env: fixture.env, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
@@ -48,9 +50,8 @@ if (!isSyntheticProviderFixtureReady()) {
       model: 'z-ai/glm-5.3-flash', endpoint: 'https://openrouter.ai/api/v1/chat/completions' },
   ] as const
 
-  function fixture(t: TestContext) {
-    const root = mkdtempSync(join(tmpdir(), 'babel-admission-'))
-    const keys = ['BABEL_LIVE', 'BABEL_HEADLESS', 'BABEL_READ_ONLY', 'BABEL_EXECUTION_PROFILE']
+  function fixture(t: TestContext, options: { physicalRoot?: 'git_workspace' | 'plain' | 'git_case' } = {}) {
+    const keys = ['BABEL_LIVE', 'BABEL_HEADLESS', 'BABEL_READ_ONLY', 'BABEL_EXECUTION_PROFILE', 'BABEL_RUNS_DIR']
     const prior = new Map(keys.map(key => [key, process.env[key]]))
     const priorFetch = globalThis.fetch
     t.after(() => {
@@ -64,6 +65,38 @@ if (!isSyntheticProviderFixtureReady()) {
     process.env['BABEL_HEADLESS'] = '1'
     process.env['BABEL_EXECUTION_PROFILE'] = 'safe_repo'
     delete process.env['BABEL_READ_ONLY']
+
+    if (isSyntheticProviderFixtureReady()) {
+      const workspace = process.env['BABEL_PROJECT_ROOT']
+      assert.ok(workspace, 'synthetic fixture must expose BABEL_PROJECT_ROOT')
+      const fixtureRoot = process.env['BABEL_SYNTHETIC_PROVIDER_FIXTURE_ROOT']
+      assert.ok(fixtureRoot, 'synthetic fixture must expose BABEL_SYNTHETIC_PROVIDER_FIXTURE_ROOT')
+      const root = options.physicalRoot === 'git_workspace'
+        ? workspace
+        : options.physicalRoot === 'git_case'
+          ? (() => {
+              const dir = mkdtempSync(join(fixtureRoot, 'tmp', 'babel-admission-git-'))
+              initMinimalGitProject(dir)
+              return dir
+            })()
+          : mkdtempSync(join(fixtureRoot, 'tmp', 'babel-admission-'))
+      const target = join(root, 'fixture.txt')
+      writeFileSync(target, 'unchanged\n')
+      if (options.physicalRoot !== 'git_workspace') {
+        t.after(() => {
+          rmSync(root, { recursive: true, force: true })
+        })
+      }
+      return { root, target }
+    }
+
+    const root = mkdtempSync(join(tmpdir(), 'babel-admission-'))
+    initMinimalGitProject(root)
+    const runsDir = mkExternalRunsDir('babel-admission-runs-')
+    process.env['BABEL_RUNS_DIR'] = runsDir
+    t.after(() => {
+      rmSync(runsDir, { recursive: true, force: true })
+    })
     const target = join(root, 'fixture.txt')
     writeFileSync(target, 'unchanged\n')
     return { root, target }
@@ -85,7 +118,7 @@ if (!isSyntheticProviderFixtureReady()) {
 
   for (const route of routes) {
     test(`${route.name}: ordinary prepared no-change task denies native write without an injected read-only flag`, async t => {
-      const { root, target } = fixture(t)
+      const { root, target } = fixture(t, { physicalRoot: 'git_workspace' })
       const bodies: Array<{ messages?: Array<{ role: string; tool_call_id?: string; content: string }> }> = []
       globalThis.fetch = (async (input, init) => {
         if (String(input) !== route.endpoint) throw new Error('unexpected synthetic route')
@@ -118,7 +151,7 @@ if (!isSyntheticProviderFixtureReady()) {
     })
 
     test(`${route.name}: a fresh mutating task does not inherit the prior read-only admission`, async t => {
-      const { root, target } = fixture(t)
+      const { root, target } = fixture(t, { physicalRoot: 'plain' })
       let primaryCalls = 0
       globalThis.fetch = (async (input, init) => {
         if (String(input) !== route.endpoint) throw new Error('unexpected synthetic route')

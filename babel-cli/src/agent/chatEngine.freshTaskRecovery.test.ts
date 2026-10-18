@@ -337,8 +337,10 @@ test('R1 repair plan rejects a repeated edit and admits one changed scoped edit'
   }
 });
 
-test('R1 resume restores bound evidence and refuses a newer unbound red verifier', () => {
-  const engine = new ChatEngine({ task: 'repair parser', projectRoot: process.cwd() });
+test('R1 resume restores bound evidence and refuses a newer unbound red verifier', (t) => {
+  const fixture = recoveryInspectionFixture();
+  t.after(() => fixture.cleanup());
+  const { engine } = fixture;
   const binding = (engine as any).currentRecoveryBinding();
   assert.ok(binding);
   let state = applyWorkingStateEvent(createWorkingState('repair parser'), {
@@ -369,8 +371,10 @@ test('R1 resume restores bound evidence and refuses a newer unbound red verifier
   assert.equal((engine as any).workingState.recoveryGate.binding, undefined);
 });
 
-test('R1 cold resume respects fresh and continued task boundaries without an early snapshot flush', () => {
-  const engine = new ChatEngine({ task: 'repair parser', projectRoot: process.cwd() });
+test('R1 cold resume respects fresh and continued task boundaries without an early snapshot flush', (t) => {
+  const fixture = recoveryInspectionFixture();
+  t.after(() => fixture.cleanup());
+  const { engine } = fixture;
   const binding = (engine as any).currentRecoveryBinding();
   assert.ok(binding);
   let state = applyWorkingStateEvent(createWorkingState('repair parser'), {
@@ -419,6 +423,8 @@ test('R1 snapshot persistence failure blocks mutation without running the shell'
 test('R1 red command without verifier receipt closes recovery until a bound rerun', async () => {
   const root = mkdtempSync(join(tmpdir(), 'babel-r1-unbound-red-'));
   const marker = join(root, 'blocked.txt');
+  writeFileSync(join(root, 'red.cjs'), 'process.exit(1)\n');
+  writeFileSync(join(root, 'write-marker.cjs'), "require('node:fs').writeFileSync('blocked.txt', 'executed')\n");
   const envKeys = ['BABEL_BENCHMARK_AUTO_APPROVE', 'BABEL_BENCHMARK_MODE', 'BABEL_AUTONOMY_LEASE', 'BABEL_EXECUTION_PROFILE', 'BABEL_ALLOW_HOST_FALLBACK', 'BABEL_DRY_RUN', 'BABEL_DRY_RUN_SOURCE'] as const;
   const prior = Object.fromEntries(envKeys.map((key) => [key, process.env[key]]));
   try {
@@ -431,7 +437,7 @@ test('R1 red command without verifier receipt closes recovery until a bound reru
     });
     process.env['BABEL_EXECUTION_PROFILE'] = 'dev_local';
     process.env['BABEL_ALLOW_HOST_FALLBACK'] = '1';
-    const engine = new ChatEngine({ task: 'repair parser', projectRoot: process.cwd() });
+    const engine = new ChatEngine({ task: 'repair parser', projectRoot: root });
     process.env['BABEL_DRY_RUN'] = 'false';
     process.env['BABEL_DRY_RUN_SOURCE'] = 'session';
     (engine as any).workingState = applyWorkingStateEvent(createWorkingState('repair parser'), {
@@ -439,13 +445,15 @@ test('R1 red command without verifier receipt closes recovery until a bound reru
     });
     const context = { agentId: 'test', runId: 'test', runDir: root, babelRoot: root };
     const red = await (engine as any).executeOneAction(
-      { type: 'run_command', command: 'node -e "process.exit(1)"' },
+      { type: 'run_command', command: 'node red.cjs' },
       context, {}, { index: 0, ownerGeneration: 0 },
     );
+    assert.match(red.observation, /exit_code: 1/);
+    assert.doesNotMatch(red.observation, /\[sandbox\] Command rejected/);
     assert.equal((engine as any).workingState.recoveryGate?.satisfied, false, red.observation);
     assert.equal((engine as any).workingState.recoveryGate?.binding, undefined);
     const blocked = await (engine as any).executeOneAction(
-      { type: 'run_command', command: `node -e "require('fs').writeFileSync('${marker.replaceAll('\\', '/')}', 'executed')"` },
+      { type: 'run_command', command: 'node write-marker.cjs' },
       context, {}, { index: 1, ownerGeneration: 0 },
     );
     assert.match(blocked.observation, /RECOVERY_CANDIDATE_DRIFT|RECOVERY_EVIDENCE_REQUIRED/);

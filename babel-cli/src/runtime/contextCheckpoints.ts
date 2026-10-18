@@ -128,6 +128,8 @@ export interface LiveOperationalSourcesV1 {
     scope: string;
     stale: boolean;
     bound_revision: string | null;
+    /** Recomputed by the verifier owner in the receipt's own revision scope. */
+    current_for_bound_scope?: boolean | null;
     /** Settled process exit of the verification run; null when unknown. */
     exit_code?: number | null;
   }>;
@@ -178,6 +180,8 @@ export interface CheckpointPopulationV1 {
    * verifier bound revision. Equality never substitutes for capture freshness.
    */
   workspace_matches_verifier_revision: boolean;
+  /** Scope-aware currency; unlike hash equality this compares like inputs. */
+  verifier_current_for_bound_scope?: boolean | null;
   installation_blocked_on: readonly string[];
   /** Detached full observation refs retained by the prepared checkpoint. */
   observation_manifest: readonly ObservationRefV1[];
@@ -896,6 +900,7 @@ export function mapCheckpointRequiredState(
     errors,
     workspace_revision_current: workspaceCaptureFresh,
     workspace_matches_verifier_revision: workspaceMatchesVerifierRevision,
+    verifier_current_for_bound_scope: sources.receipts.at(-1)?.current_for_bound_scope ?? null,
     installation_blocked_on: CONTEXT_CHECKPOINT_INSTALL_BLOCKED_ON,
     observation_manifest: observationManifest,
     install_authorized:

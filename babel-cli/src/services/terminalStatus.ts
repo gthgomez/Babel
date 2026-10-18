@@ -377,6 +377,11 @@ export function resolveTerminalStatus(input: TerminalStatusInput): TerminalStatu
   if (status === 'ROLLBACK_APPLIED' || evidence.includes('rollback_applied')) {
     return 'ROLLBACK_APPLIED';
   }
+  // Earlier tool failures remain in the log for diagnosis. They must not
+  // replace the current cause when the runner cannot produce another turn.
+  if (condition.startsWith('All runner tiers failed to produce a valid executor turn.')) {
+    return 'EXECUTOR_HALTED';
+  }
   if (status === 'AMBIGUOUS_LITERAL_BINDING' || evidence.includes('ambiguous_literal_binding')) {
     return 'AMBIGUOUS_LITERAL_BINDING';
   }

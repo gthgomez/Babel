@@ -24,6 +24,32 @@ function failedShell(command: string): ToolCallLog {
   };
 }
 
+test('runner exhaustion remains the terminal cause after an earlier command failure', () => {
+  for (const command of ['cat missing.js', 'node --test']) {
+    const summary = buildTerminalStatusSummary({
+      status: 'EXECUTOR_HALTED',
+      condition: 'All runner tiers failed to produce a valid executor turn. Last error: invalid json',
+      toolCallLog: [failedShell(command)],
+    });
+    assert.equal(summary.status, 'EXECUTOR_HALTED');
+    assert.match(summary.condition_summary ?? '', /All runner tiers failed/);
+    assert.equal(summary.failed_command, command);
+  }
+});
+
+test('runner exhaustion preserves rollback failure and actual command failure precedence', () => {
+  assert.equal(resolveTerminalStatus({
+    status: 'EXECUTOR_HALTED',
+    condition: 'All runner tiers failed to produce a valid executor turn. Last error: invalid json',
+    rollbackMode: 'rollback_failed',
+  }), 'ROLLBACK_FAILED');
+  assert.equal(resolveTerminalStatus({
+    status: 'EXECUTOR_HALTED',
+    condition: '[SHELL_COMMAND_FAILED] command exited with code 1',
+    toolCallLog: [failedShell('cat missing.js')],
+  }), 'SHELL_COMMAND_FAILED');
+});
+
 test('terminal status precedence keeps exact and ambiguous failures specific', () => {
   assert.equal(
     resolveTerminalStatus({

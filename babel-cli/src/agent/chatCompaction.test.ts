@@ -56,6 +56,8 @@ it('profile bootstrap cannot restore a foreign compaction endpoint for Desktop e
   // Ordinary CLI users retain their deliberate explicit compaction endpoint.
   delete process.env['BABEL_DESKTOP_PROVIDER'];
   assert.equal(resolveCompactionSummarizationProvider({ chatProvider: 'opencode-go', compactionModel: 'deepseek-v4.1-flash' })?.baseUrl, 'https://foreign.invalid/chat');
+  assert.equal(resolveCompactionSummarizationProvider({ pinSelection: true, chatProvider: 'openrouter', compactionModel: 'selected-model' })?.baseUrl, 'https://openrouter.ai/api/v1/chat/completions');
+  assert.equal(resolveCompactionSummarizationProvider({ pinSelection: true, chatProvider: 'opencode-go', compactionModel: 'selected-model' }), null);
 });
 
 it('provider-bound compaction refuses ambient OpenRouter fallback without an admitted summarizer', async () => {
@@ -82,6 +84,11 @@ it('profiled CLI compaction follows the current model instead of the saved defau
   process.env['BABEL_DESKTOP_PROVIDER']='openrouter';process.env['BABEL_COMPACTION_MODEL']='deepseek/deepseek-v4-pro';
   try {assert.equal(resolveCompactionModelId({explicitModel:'deepseek/deepseek-v4-pro',providerModelId:'deepseek/deepseek-v4-flash-0731'}),'deepseek/deepseek-v4-flash-0731');}
   finally {if(previousProvider===undefined)delete process.env['BABEL_DESKTOP_PROVIDER'];else process.env['BABEL_DESKTOP_PROVIDER']=previousProvider;if(previousModel===undefined)delete process.env['BABEL_COMPACTION_MODEL'];else process.env['BABEL_COMPACTION_MODEL']=previousModel;}
+});
+
+it('explicit single-model selection pins compaction despite a different configured model', () => {
+  assert.equal(resolveCompactionModelId({ pinSelection: true, explicitModel: 'other',
+    providerModelId: 'selected-model' }), 'selected-model');
 });
 
 // ─── Fixtures ──────────────────────────────────────────────────────────────
@@ -1200,3 +1207,26 @@ describe('compaction preserves state', () => {
     }
   });
 });
+
+
+it('OpenRouter compaction carries reported cost including a valid zero to the settlement callback', async () => {
+  const originalFetch = globalThis.fetch
+  try {
+    for (const reported of [0.002, 0, undefined]) {
+      let observed: CompactionOptions['onUsageRecorded'] extends ((usage: infer U) => void) | undefined ? U | undefined : never
+      globalThis.fetch = async () => new Response(JSON.stringify({
+        choices: [{ message: { content: 'KEY_DECISIONS:\n- Retain source evidence.' } }],
+        model: 'deepseek/deepseek-v4-flash-0731',
+        usage: { prompt_tokens: 100, completion_tokens: 10, ...(reported !== undefined ? { cost: reported } : {}) },
+      }))
+      await new LLMSummarizeCompaction().compact(makeLongConversation(10), {
+        model: 'deepseek/deepseek-v4-flash-0731', maxTokens: 1000, targetTokens: 100,
+        allowAmbientProvider: false,
+        summarizationProvider: { apiKey: 'fixture-only', baseUrl: 'https://openrouter.ai/api/v1/chat/completions', defaultModel: 'deepseek/deepseek-v4-flash-0731' },
+        onUsageRecorded: usage => { observed = usage },
+      })
+      assert.equal(observed?.reportedCostUsd, reported)
+      assert.equal(observed?.provider, 'openrouter')
+    }
+  } finally { globalThis.fetch = originalFetch }
+})

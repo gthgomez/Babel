@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs';
+import { existsSync, realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { runGitCommand } from '../utils/gitExec.js';
 
@@ -16,6 +16,8 @@ export interface GitContextInput {
 export interface GitContextResult {
   /** Current branch name */
   branch: string;
+  repositoryRoot: string | null;
+  head: string | null;
   /** Whether we're in a git repository */
   inRepo: boolean;
   /** File status entries */
@@ -100,6 +102,8 @@ export function gitContext(projectRoot: string, input: GitContextInput = {}): Gi
 
   const emptyResult: GitContextResult = {
     branch: 'unknown',
+    repositoryRoot: null,
+    head: null,
     inRepo: false,
     files: [],
     diffStat: '',
@@ -113,6 +117,22 @@ export function gitContext(projectRoot: string, input: GitContextInput = {}): Gi
   const branchResult = runGit(['rev-parse', '--abbrev-ref', 'HEAD'], root);
   const branch = branchResult.exitCode === 0 ? branchResult.stdout : 'unknown';
   emptyResult.branch = branch;
+  const identity = runGit(['rev-parse', '--show-toplevel', 'HEAD'], root);
+  const [repositoryRoot, head] = identity.exitCode === 0 ? identity.stdout.split(/\r?\n/) : [];
+  emptyResult.repositoryRoot = repositoryRoot
+    ? (() => {
+        try {
+          return realpathSync.native(repositoryRoot);
+        } catch {
+          try {
+            return realpathSync(repositoryRoot);
+          } catch {
+            return repositoryRoot;
+          }
+        }
+      })()
+    : null;
+  emptyResult.head = head ?? null;
 
   // Get status
   const statusResult = runGit(['status', '--porcelain'], root);
@@ -147,6 +167,8 @@ export function gitContext(projectRoot: string, input: GitContextInput = {}): Gi
 
   return {
     branch,
+    repositoryRoot: emptyResult.repositoryRoot,
+    head: emptyResult.head,
     inRepo,
     files,
     diffStat,
@@ -167,7 +189,10 @@ export function formatGitContextHuman(
   }
 
   const format = input.format ?? 'summary';
-  const lines: string[] = [`Branch: ${result.branch}`];
+  const lines: string[] = [
+    `Repository: ${result.repositoryRoot ?? 'unknown'}`,
+    `Branch: ${result.branch}${result.head ? ` @ ${result.head.slice(0, 12)}` : ''}`,
+  ];
 
   if (format === 'files') {
     const fileOutput = formatFilesHuman(result.files);
@@ -205,8 +230,8 @@ export function formatGitContextHuman(
  */
 export async function handleGitContextTool(
   input: GitContextInput & { output_format?: 'text' | 'json' },
+  projectRoot = process.env['BABEL_PROJECT_ROOT'] ?? process.cwd(),
 ): Promise<{ exit_code: number; stdout: string; stderr: string }> {
-  const projectRoot = process.env['BABEL_PROJECT_ROOT'] ?? process.cwd();
 
   try {
     const result = gitContext(projectRoot, input);
@@ -215,6 +240,8 @@ export async function handleGitContextTool(
       input.output_format === 'json'
         ? JSON.stringify({
             branch: result.branch,
+            repositoryRoot: result.repositoryRoot,
+            head: result.head,
             inRepo: result.inRepo,
             files: result.files,
             diffStat: result.diffStat,

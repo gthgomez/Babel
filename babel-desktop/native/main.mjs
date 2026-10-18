@@ -7,7 +7,7 @@ import {basename,dirname,join,isAbsolute} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {randomUUID} from 'node:crypto';
 import {BabelChild,buildRunArgs,EXECUTION_PROFILE} from './child.mjs';
-import {RemoteBridgeChild} from './remoteHost.mjs';
+import {RemoteBridgeChild,releaseBridgeIfCurrent} from './remoteHost.mjs';
 import {listDirectory,readProjectFile} from './workspace.mjs';
 import {readProjectDiff} from './project-diff.mjs';
 import {ProjectAuthority,inspectProjectIdentity} from './project-authority.mjs';
@@ -504,7 +504,7 @@ async function start(){
       if(!projectAuthority.isCurrent(admission)||remoteBridge!==bridge){bridge.stop();throw new Error('Project trust or connection changed while starting remote access.');}
       return result;
     }catch(error){
-      remoteBridge=null;
+      remoteBridge=releaseBridgeIfCurrent(remoteBridge,bridge);
       throw error;
     }
   }));

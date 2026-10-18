@@ -8,8 +8,22 @@
 import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { recordInteractiveDiagnostic, interactiveDiagnosticPath } from '../ui/interactiveDiagnostics.js';
+import { backgroundTaskRegistry } from '../services/backgroundTaskRegistry.js';
+import { redactSecrets } from '../utils/redaction.js';
+import { sanitizeLlmOutput } from '../ui/sanitize.js';
+import { getWarningRouteFailure } from '../cli/interactiveWarningRoute.js';
 
 let pendingWarmup: Promise<unknown> | undefined;
+
+/** Keep an actionable, redacted failure even when the diagnostic sink is unavailable. */
+export function reportWarmupFailure(task: string, err: unknown): void {
+  const message = err instanceof Error ? err.message : String(err);
+  const persisted = recordInteractiveDiagnostic('startup-error', message);
+  backgroundTaskRegistry.fail(task, persisted
+    ? `Unavailable. Diagnostics: ${interactiveDiagnosticPath()}`
+    : `Unavailable: ${sanitizeLlmOutput(redactSecrets(message))} (diagnostic log unavailable)`);
+}
 
 /** Wait for warmup and stop its owned daemon before interactive exit. */
 export async function stopReplWarmup(): Promise<void> {
@@ -38,12 +52,17 @@ function resolveCompiledDist(): string | null {
 
 /**
  * Fire-and-forget warmup tasks for interactive sessions.
- * Never throws — failures are logged to stderr only.
+ * Never throws — diagnostics go to private files; failures get a scoped status.
  */
 export function warmReplRuntime(): void {
+  const warningFailure = getWarningRouteFailure();
+  if (warningFailure) {
+    const warningTask = backgroundTaskRegistry.register('Warning diagnostics');
+    backgroundTaskRegistry.fail(warningTask, warningFailure);
+  }
   const dist = resolveCompiledDist();
   if (!dist && process.env['NODE_ENV'] !== 'test') {
-    console.error(
+    recordInteractiveDiagnostic('startup',
       '[babel] Tip: run "npm --prefix babel-cli run build" for faster REPL startup (compiled dist missing).',
     );
   }
@@ -52,12 +71,9 @@ export function warmReplRuntime(): void {
     return;
   }
 
+  const task = backgroundTaskRegistry.register('Daemon startup');
   pendingWarmup = import('../daemon/client.js')
-    .then(({ ensureDaemon }) => ensureDaemon())
-    .catch((err: unknown) => {
-      const message = err instanceof Error ? err.message : String(err);
-      if (process.env['BABEL_DAEMON_WARM_QUIET'] !== '1') {
-        console.error(`[babel] Daemon warmup skipped: ${message}`);
-      }
-    });
+    .then(({ ensureDaemon }) => ensureDaemon({ onDiagnostic: recordInteractiveDiagnostic }))
+    .then(() => backgroundTaskRegistry.complete(task))
+    .catch((err: unknown) => reportWarmupFailure(task, err));
 }

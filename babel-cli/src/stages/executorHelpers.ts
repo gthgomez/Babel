@@ -19,6 +19,7 @@ import { maxAttemptsForRepairMode } from '../services/repairGovernance.js';
 import type { AttemptSafetySummary, ProjectSafetySnapshot } from '../services/terminalStatus.js';
 import type { WorktreeRollbackSummary, WorktreeSafetySummary } from '../services/worktreeSafety.js';
 import type { AutonomousRepairProofTimeline } from '../services/autonomousRepairProofEvidence.js';
+import { parseCommandArgv } from '../utils/commandArgv.js';
 
 export function isWithinProjectRootPath(projectRoot: string, candidatePath: string): boolean {
   const root = resolve(projectRoot);
@@ -106,10 +107,30 @@ export function isSameRecoverableCommandRetry(
   req: ToolCallRequest,
   pending: PendingRecoverableCommandRetry,
 ): boolean {
-  return (
-    (req.tool === 'shell_exec' || req.tool === 'test_run') &&
-    normalizeRetryCommand(req.command) === normalizeRetryCommand(pending.command)
-  );
+  if (req.tool !== 'shell_exec' && req.tool !== 'test_run') return false;
+  const projectRoot = getExecutorProjectRoot() ?? process.cwd();
+  const requestedCwd = resolve(projectRoot, req.working_directory ?? '.');
+  const pendingCwd = resolve(projectRoot, pending.workingDirectory ?? '.');
+  if (requestedCwd !== pendingCwd) return false;
+  // A successful platform-correct replacement of a simple file inspection
+  // settles that inspection. Never force the unavailable alias after a patch.
+  const readTarget = (command: string): string | null => {
+    try {
+      // Alias equivalence is deliberately narrower than shell execution. Even
+      // quoted glob, expansion, escape or redirection characters are excluded:
+      // argv parsing alone cannot prove their shell meaning is identical.
+      if (!/^(?:cat|type)[ \t]+(?:[A-Za-z0-9_./:-]+|"[A-Za-z0-9_./: -]+"|'[A-Za-z0-9_./: -]+')[ \t]*$/i.test(command)) return null;
+      const argv = parseCommandArgv(command);
+      if (argv.length !== 2 || !/^(?:cat|type)$/i.test(argv[0]!) || argv[1]!.startsWith('-')) return null;
+      return resolve(requestedCwd, argv[1]!);
+    } catch { return null; }
+  };
+  if (req.tool === 'shell_exec' && pending.tool === 'shell_exec') {
+    const requestedRead = readTarget(req.command);
+    const pendingRead = readTarget(pending.command);
+    if (requestedRead !== null && pendingRead !== null) return requestedRead === pendingRead;
+  }
+  return normalizeRetryCommand(req.command) === normalizeRetryCommand(pending.command);
 }
 
 export function shouldForceRecoverableCommandRerun(

@@ -1,3 +1,20 @@
+import { WORKING_STATE_MARKER } from './codingLoop/workingState.js';
+
+/** Hold only the canonical top-level controller prefix, including split deltas. */
+export function withholdNativeControllerText(text: string): boolean {
+  const prefix = text.trimStart();
+  return WORKING_STATE_MARKER.startsWith(prefix) || prefix.startsWith(WORKING_STATE_MARKER);
+}
+
+/** Examples and a literal marker are data; an actual reserved block is not an answer. */
+export function isNativeControllerCompletion(text: string): boolean {
+  const prefix = text.trimStart();
+  return prefix.startsWith(WORKING_STATE_MARKER) &&
+    /^\r?\nworking_state:\r?\n[ \t]+goal:/.test(prefix.slice(WORKING_STATE_MARKER.length));
+}
+
+export const NATIVE_CONTROLLER_PROTOCOL_CORRECTION = 'Native protocol correction: controller working state is reference context, not an answer or a tool call. Use the advertised native tools when action is needed, or answer the user directly. Do not copy controller blocks or serialize tool calls as text. No tool call was executed from that text.';
+
 /** Ensure provider tool-call IDs are non-empty and unique within a turn. */
 export function canonicalizeToolCallId(
   event: { id?: string },

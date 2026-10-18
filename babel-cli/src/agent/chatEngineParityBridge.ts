@@ -4,7 +4,7 @@
  * thread event log, approvals, provider budget/failover.
  */
 
-import type { TerminalOutcome } from '../schemas/agentContracts.js';
+import { FailureDomainSchema, TerminalReasonCodeSchema, type TerminalOutcome } from '../schemas/agentContracts.js';
 import { classifyPolicySource, type TerminalReason } from './chatTerminalReason.js';
 import { projectChatTerminal, type ChatStatus } from './chatFailureClassification.js';
 import { classifyToolEffect } from '../executor/contracts.js';
@@ -39,6 +39,7 @@ import {
   THREAD_EVENT_LOG_FILENAME,
   serializeThreadEventLog,
   persistThreadEventLog,
+  type ThreadEvent,
   type ThreadEventLog,
   type ThreadTerminalResponse,
 } from './threadEventLog.js';
@@ -57,6 +58,7 @@ import {
   recordPolicyIntervened,
   recordCompletionDecision,
   stripCompletionDecisionsForTurn,
+  stripPreDurableFinalizeStaging,
   amendLatestTurnEndedForTurn as amendSessionTurnEndedForTurn,
   flushSessionEventLogStrict,
   SESSION_EVENTS_FILENAME,
@@ -1023,6 +1025,23 @@ export function parityArbitrateCycle(input: {
   };
 }
 
+function recordSessionTerminalOnce(
+  rt: ParityRuntime,
+  outcome: TerminalOutcome | undefined,
+  status: string,
+  reason?: TerminalReason,
+): void {
+  if (!rt.turnId || rt.sessionEvents.events.some(
+    (event) => event.kind === 'turn_ended' && event.turn_id === rt.turnId,
+  )) return;
+  recordTurnEnded(rt.sessionEvents, {
+    turn_id: rt.turnId,
+    ...(outcome !== undefined ? { outcome } : {}),
+    status,
+    ...(reason !== undefined ? { reason } : {}),
+  });
+}
+
 export function parityEndTurn(
   rt: ParityRuntime,
   outcome: TerminalOutcome | undefined,
@@ -1042,6 +1061,19 @@ export function parityEndTurn(
   });
   // Idempotent only after durable terminal settlement (streamDone + buildResult).
   if (rt.turnId && rt.terminalPersistCommittedTurnId === rt.turnId) {
+    return;
+  }
+  // Thread and session terminals settle independently; cancellation can seal
+  // the thread before this finalization choke point records the session event.
+  const existingTerminal = rt.turnId ? rt.eventLog.events.find(
+    (event): event is Extract<ThreadEvent, { kind: 'turn_ended' }> =>
+      event.kind === 'turn_ended' && event.turn_id === rt.turnId,
+  ) : undefined;
+  if (existingTerminal) {
+    const code = TerminalReasonCodeSchema.safeParse(existingTerminal.reason_code);
+    const cause = FailureDomainSchema.nullable().safeParse(existingTerminal.cause_class ?? null);
+    recordSessionTerminalOnce(rt, existingTerminal.outcome, existingTerminal.status,
+      code.success && cause.success ? { code: code.data, cause_class: cause.data } : undefined);
     return;
   }
   if (terminal.outcome !== undefined) {
@@ -1075,18 +1107,7 @@ export function parityEndTurn(
   }
   if (rt.turnId) {
     endTurn(rt.eventLog, rt.turnId, terminal.outcome, terminal.status, reason, response);
-    // W2 PR-E: only one turn_ended per turn_id in session log.
-    const already = rt.sessionEvents.events.some(
-      (e) => e.kind === 'turn_ended' && e.turn_id === rt.turnId,
-    );
-    if (!already) {
-      recordTurnEnded(rt.sessionEvents, {
-        turn_id: rt.turnId,
-        ...(terminal.outcome !== undefined ? { outcome: terminal.outcome } : {}),
-        status: terminal.status,
-        ...(reason !== undefined ? { reason } : {}),
-      });
-    }
+    recordSessionTerminalOnce(rt, terminal.outcome, terminal.status, reason);
   }
 }
 
@@ -1178,10 +1199,8 @@ function flushEpisodeStreamBestEffort(
   }
 }
 
-/** H2: dual-write budget + project LiveSession + persist authority/snapshot. */
-function parityPersistLiveSession(rt: ParityRuntime, runDir: string): void {
-  // A compatibility runtime with no session events must not overwrite a
-  // previously durable projection with an empty one.
+/** Append terminal budget evidence to the in-memory session log (caller must flush). */
+function appendParityBudgetSnapshot(rt: ParityRuntime): void {
   if (rt.sessionEvents.events.length === 0) return;
   const turnsUsed = rt.sessionEvents.events.filter(
     (e) => e.kind === 'user_submitted',
@@ -1190,6 +1209,11 @@ function parityPersistLiveSession(rt: ParityRuntime, runDir: string): void {
     turns_used: turnsUsed,
     turns_remaining: null,
   });
+}
+
+/** Project and persist authority + live snapshot from the current in-memory logs. */
+function persistParityLiveSessionArtifacts(rt: ParityRuntime, runDir: string): void {
+  if (rt.sessionEvents.events.length === 0) return;
   if (rt.liveAuthority) {
     persistLiveSessionAuthority(runDir, rt.liveAuthority);
   }
@@ -1203,6 +1227,12 @@ function parityPersistLiveSession(rt: ParityRuntime, runDir: string): void {
   persistLiveSessionSnapshot(runDir, live);
 }
 
+/** H2: dual-write budget + project LiveSession + persist authority/snapshot. */
+function parityPersistLiveSession(rt: ParityRuntime, runDir: string): void {
+  appendParityBudgetSnapshot(rt);
+  persistParityLiveSessionArtifacts(rt, runDir);
+}
+
 function correctParityTerminalPersistenceFailure(
   rt: ParityRuntime,
   runDir: string,
@@ -1210,7 +1240,8 @@ function correctParityTerminalPersistenceFailure(
 ): void {
   const turnId = rt.turnId;
   if (!turnId) return;
-  stripCompletionDecisionsForTurn(rt.sessionEvents, turnId);
+  if (rt.terminalPersistCommittedTurnId === turnId) return;
+  stripPreDurableFinalizeStaging(rt.sessionEvents, turnId);
   recordPolicyIntervened(rt.sessionEvents, turnId, {
     source: 'persistence',
     action: 'terminal_settlement_failed',
@@ -1244,11 +1275,14 @@ export function finalizeParityTurnSync(
   response?: ThreadTerminalResponse,
   extras?: FinalizeParityTurnExtras,
 ): boolean {
+  const turnId = rt.turnId;
+  if (turnId && rt.terminalPersistCommittedTurnId === turnId) {
+    return true;
+  }
   if (rt.sessionPersistenceBoundaryFailed) {
     return false;
   }
   parityEndTurn(rt, outcome, status, reason, response);
-  const turnId = rt.turnId;
   if (extras?.completionDecision && turnId) {
     const already = rt.sessionEvents.events.some(
       (event) => event.kind === 'completion_decision' && event.turn_id === turnId,
@@ -1257,6 +1291,7 @@ export function finalizeParityTurnSync(
       recordCompletionDecision(rt.sessionEvents, turnId, extras.completionDecision);
     }
   }
+  appendParityBudgetSnapshot(rt);
   try {
     flushSessionEventsRequired(rt, runDir, `finalize-sync:${outcome}`);
   } catch {
@@ -1264,7 +1299,7 @@ export function finalizeParityTurnSync(
     rt.sessionPersistenceBoundaryFailed = true;
     return false;
   }
-  parityPersistLiveSession(rt, runDir);
+  persistParityLiveSessionArtifacts(rt, runDir);
   persistThreadEventLog(runDir, rt.eventLog).catch((err) => {
     reportEventLogPersistFailure(`finalize:${outcome}`, err);
   });
@@ -1279,11 +1314,12 @@ export function finalizeParityTurnSync(
  * Use after tool batches that continue the loop.
  */
 export function checkpointParityEventLog(rt: ParityRuntime, runDir: string): void {
-  parityPersistLiveSession(rt, runDir);
+  appendParityBudgetSnapshot(rt);
+  flushSessionEventsRequired(rt, runDir, 'checkpoint');
+  persistParityLiveSessionArtifacts(rt, runDir);
   persistThreadEventLog(runDir, rt.eventLog).catch((err) => {
     reportEventLogPersistFailure('checkpoint', err);
   });
-  flushSessionEventsRequired(rt, runDir, 'checkpoint');
 }
 
 /**

@@ -6,6 +6,7 @@ import type {
 import {
   canonicalizeToolCallId,
   reconcileStreamedAnswer,
+  withholdNativeControllerText, isNativeControllerCompletion, NATIVE_CONTROLLER_PROTOCOL_CORRECTION,
 } from "./chatEngineStreamingProtocol.js";
 import {
   ensureRepositoryContext,
@@ -13,8 +14,14 @@ import {
 } from "./chatEngineStreamingPreparation.js";
 import { finalizeStreamingTurnLimit } from "./chatEngineStreamingFinalizer.js";
 import { settleStreamingCompletion } from "./chatEngineStreamingCompletion.js";
+import { normalizeChatAnswer, requestedChatJsonKind } from './chatResponseContract.js';
 import { recordChatHarnessFeedback } from "./chatHarnessFeedback.js";
-import { realpathSync } from "node:fs";
+import { realpathSync, writeFileSync } from "node:fs";
+import { join } from 'node:path';
+import { describeNativeToolRejection, nativeSchemaRepairFeedback } from './nativeToolRejection.js';
+import { unsupportedTestClaim, responseEvidenceCorrection, responseVerifierFacts } from './chatResponseEvidence.js';
+import { refreshChatVerifierReceiptStalenessSync } from '../evidence/chatRevisionBinding.js';
+import type { ChatUsageScope } from './chatEngineProviderAccounting.js';
 
 import { trace, SpanStatusCode, type Span } from "@opentelemetry/api";
 import { endSpan } from "../telemetry/tracing.js";
@@ -76,7 +83,7 @@ import {
 } from "./chatPhaseNudge.js";
 import { isConfirmedMutation, isConfirmedParentChildMutation } from "./mutationTools.js";
 
-import { evaluateTokenExplosionAfterTurn } from "./budgetKillPolicy.js";
+import { settleStreamingTokenExplosion } from "./chatEngineStreamingTokenLimit.js";
 import {
   attachTerminalReason,
   buildPolicyTerminalBlockedReport,
@@ -138,6 +145,13 @@ export class ChatEngineStreamingLoop {
     let sameRouteTransportRetryUsed = false;
     // Bounded once-per-submission repair for an unrecognized text tool call.
     let textToolProtocolRepairUsed = false;
+    let responseEvidenceRepairUsed = false;
+    let nativeProtocolRepairUsed = false;
+    const bufferContractAnswer = requestedChatJsonKind(userInput) !== null;
+    if (this.host.options.projectRoot) {
+      refreshChatVerifierReceiptStalenessSync(this.host.options.projectRoot, this.host.lastVerifierReceipt);
+    }
+    recordChatHarnessFeedback(this.host, `Verification evidence at submission start: ${responseVerifierFacts(this.host.lastVerifierReceipt)} Never infer test execution from reading source. Preserve the requested answer format.`);
 
     for (let turn = 0; turn < maxTurns; turn++) {
       // R0-8: a superseded generator must stop before it executes another
@@ -295,7 +309,7 @@ export class ChatEngineStreamingLoop {
       }
       const hadInstalledP11Context =
         this.host.parity.contextCheckpoint !== undefined;
-      const usageScope = {
+      const usageScope: ChatUsageScope = {
         taskOwnerId: this.host.taskAllowance?.taskOwnerId ?? null,
         ...(this.host.options.projectRoot?{projectRoot:realpathSync(this.host.options.projectRoot)}:{}),
         accountingEpoch: globalCostTracker.getAccountingEpoch(),
@@ -379,7 +393,8 @@ export class ChatEngineStreamingLoop {
       if (!this.host.isSubmissionCurrent(submissionGeneration)) return;
       if (
         !p11ContextInstalled &&
-        (hadInstalledP11Context || pendingCapsuleAuthority)
+        (hadInstalledP11Context || pendingCapsuleAuthority ||
+          (this.host.parity.admissionStore && this.host.p11InstallBlock?.details.includes('workspace_revision')))
       ) {
         // Structured refusal diagnostic: surface WHY the install was blocked
         // (reason code + bounded details from the rejecting boundary) so a
@@ -390,9 +405,8 @@ export class ChatEngineStreamingLoop {
           ? ` (install block: ${block.code}${block.details.length > 0 ? `: ${block.details.join('; ')}` : ''})`
           : '';
         yield this.host.streamFailed(
-          hadInstalledP11Context
-            ? `P11 context installation was blocked; the previous context generation remains authoritative and provider dispatch was refused.${blockSuffix}`
-            : `P11 context installation was blocked; this turn committed a compaction capsule that no installed context root authorizes, so provider dispatch was refused.${blockSuffix}`,
+          `Could not prepare context: workspace snapshot or context authority unavailable. Project: ${this.host.options.projectRoot}. Select the intended repository with --project-root and inspect the run evidence before retrying.${blockSuffix}`,
+          { code: 'context_preparation_failed', cause_class: 'harness', ...(block ? { detail: block.code } : {}) },
         );
         return;
       }
@@ -548,30 +562,56 @@ export class ChatEngineStreamingLoop {
         const nativeActions: ChatToolAction[] = [];
         const nativeToolCallIds: string[] = [];
         const seenToolCallIds = new Set<string>();
+        const receivedToolCallIds = new Set<string>();
         let nativeProtocolInvalid = false;
-        const decodeNativeCall = (event: { id: string; name: string; input: Record<string, unknown> }): ChatToolAction => {
+        let nativeRejectionCode = 'unknown';
+        const nativeRejectionState: {current: Record<string, unknown> | null} = {current:null};
+        let nativeStreamExhausted = false;
+        let nativeIdentityNormalized = false;
+        const decodeNativeCall = (event: { id: string; name: string; input: Record<string, unknown> }): ChatToolAction | null => {
           try {
-            if (typeof event.id !== "string" || event.id.trim().length === 0 || seenToolCallIds.has(event.id)) {
+            if (typeof event.id !== "string" || event.id.trim().length === 0 || receivedToolCallIds.has(event.id)) {
               throw new Error("NATIVE_TOOL_CALL_ID_INVALID");
             }
+            receivedToolCallIds.add(event.id);
+            if (nativeProtocolInvalid) return null;
             return nativeToolUseToChatAction(event.name, event.input);
-          } catch {
+          } catch (error) {
             nativeProtocolInvalid = true;
-            throw new Error("NATIVE_TOOL_PROTOCOL_INVALID");
+            const issues = error && typeof error === 'object' && 'issues' in error
+              ? (error as { issues: Array<{ code: string; path: PropertyKey[] }> }).issues
+                .map(issue => ({ code: issue.code, path: issue.path.map(String) })) : [];
+            nativeRejectionCode = issues.length ? 'arguments_schema_invalid' : 'call_identity_invalid';
+            nativeRejectionState.current = describeNativeToolRejection({ turn: this.host._turnIndex,
+                id: event.id, name: event.name, input: event.input,
+                issues, reason: nativeRejectionCode });
+            writeFileSync(join(this.host.engineRunDir, 'native-tool-rejection.json'), JSON.stringify(nativeRejectionState.current, null, 2));
+            // Exhaust the same generator: its final usage and identity checks
+            // may occur after tool_use/done. No rejected-batch action executes.
+            return null;
           }
         };
         const settleUnexecutedNativeCalls = (): ChatEvent[] => nativeActions.map((action, index) => {
           const toolCallId = nativeToolCallIds[index]!;
           const tool = chatActionToolName(action);
           const target = chatActionTarget(action);
+          const error = nativeProtocolInvalid ? "native_tool_protocol_invalid" : "provider_stream_failed";
           this.host.toolCallLog.push({ toolCallId, tool, target, index,
-            error: "provider_stream_failed", exit_code: 1, effect_status: "not_applicable",
-            detail: "Provider stream failed before executor dispatch; action was not executed." });
+            error, exit_code: 1, effect_status: "not_applicable",
+            detail: "Native batch rejected before executor dispatch; action was not executed." });
           return { type: "tool_failed", toolCallId, tool, target,
-            error: "provider_stream_failed", exitCode: 1, effect_status: "not_applicable" };
+            error, exitCode: 1, effect_status: "not_applicable" };
         });
         let answerText = "";
+        let visibleNativeAnswerLength = 0;
         let nativeFinishReason: string | undefined;
+        const canRepairNativeProtocol = (finishReason: string): boolean => {
+          const owner = this.host.taskAllowance?.taskOwnerId, metadata = usageScope.usageMetadata;
+          if (!owner || metadata?.prompt_tokens == null || metadata.completion_tokens == null) return false;
+          return nativeStreamExhausted && !nativeIdentityNormalized && !nativeProtocolRepairUsed &&
+            nativeFinishReason === finishReason && !this.host.abortController.signal.aborted &&
+            globalCostTracker.getTaskSummary(owner).costComplete === true && this.host.checkBudgets(true).ok;
+        };
         const systemPrompt = this.host.getOrBuildSystemPrompt("native");
 
         this.host.assertNativeRequestMatchesDurable(
@@ -607,14 +647,19 @@ export class ChatEngineStreamingLoop {
               case "text_delta":
                 this.host.currentTurnTelemetry?.markFirstToken();
                 answerText += event.text;
-                yield { type: "answer_chunk", text: event.text };
+                if (!bufferContractAnswer && !withholdNativeControllerText(answerText)) {
+                  yield { type: "answer_chunk", text: answerText.slice(visibleNativeAnswerLength) };
+                  visibleNativeAnswerLength = answerText.length;
+                }
                 break;
               case "thought_delta":
                 this.host.currentTurnTelemetry?.markFirstToken();
                 yield { type: "thought", text: event.text };
                 break;
               case "tool_use": {
+                if (event.idWasNormalized) nativeIdentityNormalized = true;
                 const action = decodeNativeCall(event);
+                if (!action) break;
                 nativeActions.push(action);
                 nativeToolCallIds.push(
                   canonicalizeToolCallId(
@@ -653,8 +698,28 @@ export class ChatEngineStreamingLoop {
           );
           this.host.trackRunnerUsage(runner, usageScope);
           if (!this.host.isSubmissionCurrent(submissionGeneration)) return;
+          nativeStreamExhausted = true;
+          if (nativeRejectionState.current && nativeIdentityNormalized) {
+            nativeRejectionState.current.provider_call_id_normalized = true;
+            writeFileSync(join(this.host.engineRunDir, 'native-tool-rejection.json'), JSON.stringify(nativeRejectionState.current, null, 2));
+          }
+          if (nativeProtocolInvalid) throw new Error("NATIVE_TOOL_PROTOCOL_INVALID");
+          if (nativeActions.length === 0 && isNativeControllerCompletion(answerText)) {
+            writeFileSync(join(this.host.engineRunDir,'native-completion-rejection.json'),JSON.stringify({reason:'controller_state_in_answer',turn:this.host._turnIndex,finishReason:nativeFinishReason,sha256:createHash('sha256').update(answerText).digest('hex'),bytes:Buffer.byteLength(answerText)}));
+            endSpan(_turnSpan, SpanStatusCode.ERROR); _turnSpan = null;
+            const cancelled = this.host.emitCancelledIfOperatorAbort(new Error('NATIVE_TOOL_PROTOCOL_INVALID'));
+            if (cancelled) { yield cancelled; return; }
+            if (yield* settleStreamingTokenExplosion(this.host, effectiveIntent, submissionGeneration, _turnSpan, false)) return;
+            if (receivedToolCallIds.size === 0 && canRepairNativeProtocol('stop')) {
+              nativeProtocolRepairUsed = true;
+              recordChatHarnessFeedback(this.host,NATIVE_CONTROLLER_PROTOCOL_CORRECTION);
+              continue;
+            }
+            yield this.host.streamFailed(`NATIVE_TOOL_PROTOCOL_INVALID: internal controller completion; finish_reason=${nativeFinishReason ?? 'unknown'}.`);
+            return;
+          }
           this.host._streamNativeToolCallIds = nativeToolCallIds;
-          streamedAnswerForTurn = answerText;
+          streamedAnswerForTurn = answerText.slice(0,visibleNativeAnswerLength);
           turnResult = nativeTurnFromStream({
             answerText,
             actions: nativeActions,
@@ -676,9 +741,23 @@ export class ChatEngineStreamingLoop {
             yield* settleUnexecutedNativeCalls();
             endSpan(_turnSpan, SpanStatusCode.ERROR);
             _turnSpan = null;
+            const cancelled = this.host.emitCancelledIfOperatorAbort(err);
+            if (cancelled) { yield cancelled; return; }
+            if (yield* settleStreamingTokenExplosion(this.host, effectiveIntent, submissionGeneration, _turnSpan, false)) return;
+            if (nativeRejectionCode === 'arguments_schema_invalid' && nativeRejectionState.current && canRepairNativeProtocol('tool_calls')) {
+              nativeProtocolRepairUsed = true;
+              recordChatHarnessFeedback(this.host, nativeSchemaRepairFeedback(nativeRejectionState.current));
+              continue;
+            }
             yield this.host.streamFailed(nativeProtocolInvalid
-              ? "Native stream contained invalid arguments or call identities; no action was dispatched."
+              ? `NATIVE_TOOL_PROTOCOL_INVALID: ${nativeRejectionCode}; no action was dispatched. See native-tool-rejection.json.`
               : "Native stream failed after announcing tools; no action was dispatched.");
+            return;
+          }
+          if (nativeProtocolRepairUsed || isNativeControllerCompletion(answerText)) {
+            endSpan(_turnSpan, SpanStatusCode.ERROR); _turnSpan = null;
+            const cancelled = this.host.emitCancelledIfOperatorAbort(err);
+            yield cancelled ?? this.host.streamFailed(isNativeControllerCompletion(answerText) ? 'NATIVE_TOOL_PROTOCOL_INVALID: interrupted internal controller completion.' : err?.message ?? String(err));
             return;
           }
           const admissionRecovery =
@@ -727,7 +806,10 @@ export class ChatEngineStreamingLoop {
           nativeActions.length = 0;
           nativeToolCallIds.length = 0;
           seenToolCallIds.clear();
+          receivedToolCallIds.clear();
+          nativeIdentityNormalized = false;
           answerText = "";
+          visibleNativeAnswerLength = 0;
           nativeFinishReason = undefined;
           this.host.assertNativeRequestMatchesDurable(
             providerMessages,
@@ -762,14 +844,19 @@ export class ChatEngineStreamingLoop {
                 case "text_delta":
                   this.host.currentTurnTelemetry?.markFirstToken();
                   answerText += event.text;
-                  yield { type: "answer_chunk", text: event.text };
+                  if (!bufferContractAnswer && !withholdNativeControllerText(answerText)) {
+                    yield { type: "answer_chunk", text: answerText.slice(visibleNativeAnswerLength) };
+                    visibleNativeAnswerLength = answerText.length;
+                  }
                   break;
                 case "thought_delta":
                   this.host.currentTurnTelemetry?.markFirstToken();
                   yield { type: "thought", text: event.text };
                   break;
                 case "tool_use": {
+                  if (event.idWasNormalized) nativeIdentityNormalized = true;
                   const action = decodeNativeCall(event);
+                  if (!action) break;
                   nativeActions.push(action);
                   nativeToolCallIds.push(
                     canonicalizeToolCallId(
@@ -808,8 +895,10 @@ export class ChatEngineStreamingLoop {
             );
             this.host.trackRunnerUsage(fb, usageScope);
             if (!this.host.isSubmissionCurrent(submissionGeneration)) return;
+            if (nativeProtocolInvalid) throw new Error("NATIVE_TOOL_PROTOCOL_INVALID");
+            if (nativeActions.length === 0 && isNativeControllerCompletion(answerText)) throw new Error('NATIVE_TOOL_PROTOCOL_INVALID: internal controller completion from fallback.');
             this.host._streamNativeToolCallIds = nativeToolCallIds;
-            streamedAnswerForTurn = answerText;
+            streamedAnswerForTurn = answerText.slice(0,visibleNativeAnswerLength);
             turnResult = nativeTurnFromStream({
               answerText,
               actions: nativeActions,
@@ -826,13 +915,25 @@ export class ChatEngineStreamingLoop {
               fbStart,
               fbEnd,
             );
+            const cancelled = this.host.emitCancelledIfOperatorAbort(fbErr);
+            if (cancelled) {
+              yield* settleUnexecutedNativeCalls();
+              endSpan(_turnSpan, SpanStatusCode.ERROR); _turnSpan = null;
+              yield cancelled; return;
+            }
             if (nativeProtocolInvalid || nativeToolCallIds.length > 0) {
               yield* settleUnexecutedNativeCalls();
               endSpan(_turnSpan, SpanStatusCode.ERROR);
               _turnSpan = null;
               yield this.host.streamFailed(nativeProtocolInvalid
-                ? "Native fallback contained invalid arguments or call identities; no action was dispatched."
-                : "Native fallback failed after announcing tools; no action was dispatched.");
+                ? "NATIVE_TOOL_PROTOCOL_INVALID: fallback contained invalid arguments or call identities; no action was dispatched."
+                : "Native stream failed after announcing tools on fallback; no action was dispatched.");
+              return;
+            }
+            if (isNativeControllerCompletion(answerText)) {
+              endSpan(_turnSpan, SpanStatusCode.ERROR); _turnSpan = null;
+              if (yield* settleStreamingTokenExplosion(this.host, effectiveIntent, submissionGeneration, _turnSpan, false)) return;
+              yield this.host.streamFailed('NATIVE_TOOL_PROTOCOL_INVALID: internal controller completion from fallback.');
               return;
             }
             // If tools still fail, degrade to raw-text (buffered — the lenient
@@ -1029,44 +1130,7 @@ export class ChatEngineStreamingLoop {
         turnResult = this.host.parseChatTurnLenient(rawText);
       }
 
-      // Item 7: end-of-turn token explosion on stream path (after LLM usage tracked)
-      const streamExplosion = evaluateTokenExplosionAfterTurn({
-        tokensAtTurnStart: this.host.apiTokenCountAtTurnStart,
-        tokensNow: this.host.apiTokenCount,
-        maxTokensPerRound: this.host.limits.maxTokensPerRound,
-        hasAnyWrites: this.host.hasAnyWrites(),
-      });
-      if (streamExplosion.abort) {
-        // Tier A2: Record token explosion event before aborting
-        recordPolicyEvent(
-          this.host.policyEventLog,
-          this.host._turnIndex,
-          "token_explosion",
-          `tokens_this_turn=${streamExplosion.tokensThisTurn}`,
-        );
-        endSpan(_turnSpan, SpanStatusCode.OK);
-        _turnSpan = null;
-        // R0-8: a superseded generator must not install a terminal limiter on
-        // the task that now owns the engine.
-        if (!this.host.isSubmissionCurrent(submissionGeneration)) return;
-        this.host.terminatingLimiter = "tokens";
-        this.host.terminalLimiterReason = `Token explosion with zero mutations: ${streamExplosion.tokensThisTurn} tokens this turn (ceiling ${this.host.limits.maxTokensPerRound}).`;
-        if (!this.host.isSubmissionCurrent(submissionGeneration)) return;
-        const kill = await this.host.handleBudgetKill(
-          this.host.terminalLimiterReason,
-          { onThought: () => {} },
-          effectiveIntent,
-          submissionGeneration,
-        );
-        if (!kill || !this.host.isSubmissionCurrent(submissionGeneration))
-          return;
-        yield this.host.streamDone(kill.answer, {
-          ...(kill.blockedReport ? { blockedReport: kill.blockedReport } : {}),
-          ...(kill.criticReceipt ? { criticReceipt: kill.criticReceipt } : {}),
-          ...(kill.verifierTampered ? { verifierTampered: true as const } : {}),
-        });
-        return;
-      }
+      if (yield* settleStreamingTokenExplosion(this.host, effectiveIntent, submissionGeneration, _turnSpan)) return;
 
       if (turnResult.type === "tool_calls" && turnResult.actions.length > 0) {
         if (turnResult.thinking) {
@@ -1088,7 +1152,7 @@ export class ChatEngineStreamingLoop {
               role: "assistant",
               content: turnResult.thinking,
             });
-            _turnSpan.setAttribute("babel.chat.blocked", "true");
+            _turnSpan?.setAttribute("babel.chat.blocked", "true");
             endSpan(_turnSpan, SpanStatusCode.OK);
             _turnSpan = null;
             if (!this.host.isSubmissionCurrent(submissionGeneration)) return;
@@ -1396,7 +1460,7 @@ export class ChatEngineStreamingLoop {
         // turn, accelerate intervention regardless of write-stall count.
         const tamperEscalation = this.host.applyTamperEscalation();
         if (tamperEscalation === "__TAMPER_AUTO_BLOCKED__") {
-          _turnSpan.setAttribute("babel.chat.tamper_blocked", "true");
+          _turnSpan?.setAttribute("babel.chat.tamper_blocked", "true");
           endSpan(_turnSpan, SpanStatusCode.OK);
           _turnSpan = null;
           const tamperAnswer = await this.host
@@ -1822,14 +1886,14 @@ export class ChatEngineStreamingLoop {
           this.host.policyEventLog,
         );
 
-        _turnSpan.setAttribute("babel.chat.turn", `${turn + 1}:tool_calls`);
+        _turnSpan?.setAttribute("babel.chat.turn", `${turn + 1}:tool_calls`);
         endSpan(_turnSpan, SpanStatusCode.OK);
         _turnSpan = null;
         continue;
       }
 
       if (turnResult.type === "completion") {
-        const answer = turnResult.answer;
+        const answer = normalizeChatAnswer(turnResult.answer, userInput);
 
         if (this.host.parity.turnId) {
           this.host.services.conversation.recordAssistantMessage(
@@ -1839,27 +1903,6 @@ export class ChatEngineStreamingLoop {
           );
         }
 
-        // R1: Check for BLOCKED declaration before the gate — the agent may
-        // declare BLOCKED even though no writes were made.
-        const blockedReport = this.host.detectAndBuildBlockedReport(answer);
-        if (blockedReport) {
-          const blockedDelta = reconcileStreamedAnswer(
-            streamedAnswerForTurn,
-            answer,
-          );
-          if (blockedDelta !== null) {
-            yield { type: "answer_chunk", text: blockedDelta };
-            if (!this.host.isSubmissionCurrent(submissionGeneration)) return;
-          }
-          this.host.conversation.push({ role: "assistant", content: answer });
-          _turnSpan.setAttribute("babel.chat.blocked", "true");
-          endSpan(_turnSpan, SpanStatusCode.OK);
-          _turnSpan = null;
-          if (!this.host.isSubmissionCurrent(submissionGeneration)) return;
-          yield this.host.streamDone(answer, { blockedReport });
-          return;
-        }
-
         // R11: Per-round token ceiling — must run BEFORE any continuation
         // mechanism (text-only guard, prefers-patch refusal). Both of those
         // `continue` the loop and would otherwise starve this cost terminal:
@@ -1867,7 +1910,7 @@ export class ChatEngineStreamingLoop {
         // immediately instead of being re-queried.
         const tokenCeilingBlocked = this.host.checkPerRoundTokenCeiling(false);
         if (tokenCeilingBlocked) {
-          _turnSpan.setAttribute("babel.chat.token_ceiling_blocked", "true");
+          _turnSpan?.setAttribute("babel.chat.token_ceiling_blocked", "true");
           endSpan(_turnSpan, SpanStatusCode.OK);
           _turnSpan = null;
           this.host.conversation.push({ role: "assistant", content: answer });
@@ -1902,6 +1945,50 @@ export class ChatEngineStreamingLoop {
           return;
         }
 
+        // Clarifications and BLOCKED replies must obey the same evidence rules.
+        if (this.host.options.projectRoot) {
+      refreshChatVerifierReceiptStalenessSync(this.host.options.projectRoot, this.host.lastVerifierReceipt);
+    }
+        if (this.host.options.projectRoot) {
+          for (const receipt of this.host.executedVerifierLedger) {
+            refreshChatVerifierReceiptStalenessSync(this.host.options.projectRoot, receipt);
+          }
+        }
+        if (unsupportedTestClaim(answer, this.host.lastVerifierReceipt, this.host.executedVerifierLedger)) {
+          this.host.conversation.push({ role: 'assistant', content: answer });
+          endSpan(_turnSpan, SpanStatusCode.ERROR);
+          _turnSpan = null;
+          if (responseEvidenceRepairUsed) {
+            yield this.host.streamFailed('RESPONSE_EVIDENCE_INVALID: repeated test claims lack corresponding execution evidence.');
+            return;
+          }
+          responseEvidenceRepairUsed = true;
+          recordChatHarnessFeedback(this.host, responseEvidenceCorrection(this.host.lastVerifierReceipt));
+          yield { type: 'thought', text: '[Correcting an unsupported test-result claim]' };
+          continue;
+        }
+
+        // R1: Check for BLOCKED declaration before the gate — the agent may
+        // declare BLOCKED even though no writes were made.
+        const blockedReport = this.host.detectAndBuildBlockedReport(answer);
+        if (blockedReport) {
+          const blockedDelta = reconcileStreamedAnswer(
+            streamedAnswerForTurn,
+            answer,
+          );
+          if (blockedDelta !== null) {
+            yield { type: "answer_chunk", text: blockedDelta };
+            if (!this.host.isSubmissionCurrent(submissionGeneration)) return;
+          }
+          this.host.conversation.push({ role: "assistant", content: answer });
+          _turnSpan?.setAttribute("babel.chat.blocked", "true");
+          endSpan(_turnSpan, SpanStatusCode.OK);
+          _turnSpan = null;
+          if (!this.host.isSubmissionCurrent(submissionGeneration)) return;
+          yield this.host.streamDone(answer, { blockedReport });
+          return;
+        }
+
         // Text-tool protocol: a reply that contains a [TOOL:] marker but no
         // recognized tool is not a valid final answer. Feed it back once so the
         // model can correct the call instead of terminating with raw marker text.
@@ -1916,7 +2003,7 @@ export class ChatEngineStreamingLoop {
             this.host,
             buildTextToolProtocolRejectMessage(),
           );
-          _turnSpan.setAttribute("babel.chat.text_tool_protocol_repair", true);
+          _turnSpan?.setAttribute("babel.chat.text_tool_protocol_repair", true);
           endSpan(_turnSpan, SpanStatusCode.OK);
           _turnSpan = null;
           yield {
@@ -1933,7 +2020,7 @@ export class ChatEngineStreamingLoop {
         const disposition = yield* settleStreamingCompletion({
           host: this.host,
           answer,
-          turnResult,
+          turnResult: { ...turnResult, answer },
           effectiveExecutePolicy,
           effectiveIntent,
           submissionGeneration,

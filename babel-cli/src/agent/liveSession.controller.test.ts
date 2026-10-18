@@ -327,7 +327,7 @@ describe('H2 ChatEngine resume + LiveSession projection', () => {
       false,
     );
     rmSync(eventPath, { recursive: true, force: true });
-    flushSessionEventLogStrict(runDir, rt.sessionEvents);
+    checkpointParityEventLog(rt, runDir);
     const diskLog = loadSessionEventLogFromDir(runDir);
     assert.ok(diskLog);
     const diskEnded = diskLog!.events.filter((e) => e.kind === 'turn_ended');
@@ -339,12 +339,13 @@ describe('H2 ChatEngine resume + LiveSession projection', () => {
     rmSync(root, { recursive: true, force: true });
   });
 
-  it('disk resume after final-flush failure projects infra terminal truth', () => {
+  it('production checkpoint recovers durable infra terminal after flush fault removal', () => {
     const engine = new ChatEngine({
       task: 'finalize flush resume',
       projectRoot: process.cwd(),
     });
     const runDir = (engine as unknown as { engineRunDir: string }).engineRunDir;
+    const runId = (engine as unknown as { engineRunId: string }).engineRunId;
     const rt = engine.getParityRuntime();
     parityOnUserTurn(rt, {
       task: 'finalize flush resume',
@@ -376,20 +377,96 @@ describe('H2 ChatEngine resume + LiveSession projection', () => {
     );
     assert.equal(durableOk, false);
     rmSync(eventPath, { recursive: true, force: true });
-    flushSessionEventLogStrict(runDir, rt.sessionEvents);
-    persistThreadEventLog(runDir, rt.eventLog);
-    if (rt.liveAuthority) {
-      persistLiveSessionAuthority(runDir, rt.liveAuthority);
-      const live = projectFromDurableSession({
-        sessionLog: rt.sessionEvents,
-        threadLog: rt.eventLog,
-        authority: rt.liveAuthority,
-      });
-      persistLiveSessionSnapshot(runDir, live);
-    }
+    checkpointParityEventLog(rt, runDir);
     const eq = resumeEquivalenceFromDisk(runDir);
     assert.ok(eq.ok, eq.mismatches.join(','));
     assert.equal(eq.live?.terminal?.outcome, 'INFRA_FAILURE');
+
+    const engine2 = new ChatEngine({
+      task: 'placeholder',
+      projectRoot: process.cwd(),
+      runId,
+      resumeExisting: true,
+    });
+    engine2.restoreSessionEventsFromDir(runDir);
+    assert.equal(engine2.getLiveSession().terminal?.outcome, 'INFRA_FAILURE');
+  });
+
+  it('production finalize aligns session frontier and survives repeated finalize fault', () => {
+    const engine = new ChatEngine({
+      task: 'prod finalize frontier',
+      projectRoot: process.cwd(),
+    });
+    const runDir = (engine as unknown as { engineRunDir: string }).engineRunDir;
+    const runId = (engine as unknown as { engineRunId: string }).engineRunId;
+    const rt = engine.getParityRuntime();
+    parityOnUserTurn(rt, {
+      task: 'prod finalize frontier',
+      model: 'test-model',
+      provider: 'test-provider',
+      projectRoot: process.cwd(),
+    });
+    const completionDecision = {
+      requestedOutcome: 'VERIFIED_COMPLETE',
+      finalOutcome: 'VERIFIED_COMPLETE',
+      allowed: true,
+      reason: 'fixture gate',
+      evidenceRefs: [],
+      policyVersion: 'fixture',
+    };
+    const firstOk = finalizeParityTurnSync(
+      rt,
+      runDir,
+      'VERIFIED_COMPLETE',
+      'completed',
+      undefined,
+      undefined,
+      { completionDecision },
+    );
+    assert.equal(firstOk, true);
+    assert.equal(rt.terminalPersistCommittedTurnId, rt.turnId);
+    const diskLog = loadSessionEventLogFromDir(runDir);
+    assert.ok(diskLog);
+    assert.ok(diskLog!.events.some((e) => e.kind === 'budget_snapshot'));
+    assert.ok(diskLog!.events.some((e) => e.kind === 'completion_decision'));
+    const ended = diskLog!.events.filter((e) => e.kind === 'turn_ended');
+    assert.equal(ended[ended.length - 1]?.outcome, 'VERIFIED_COMPLETE');
+    const lastSeq = diskLog!.events[diskLog!.events.length - 1]!.seq;
+    assert.equal(rt.sessionEvents.flushedThroughSeq, lastSeq);
+    assert.equal(diskLog!.flushedThroughSeq, lastSeq);
+
+    const diskBytesBeforeRepeat = readFileSync(join(runDir, SESSION_EVENTS_FILENAME), 'utf8');
+    const secondOk = finalizeParityTurnSync(
+      rt,
+      runDir,
+      'VERIFIED_COMPLETE',
+      'completed',
+      undefined,
+      undefined,
+      { completionDecision },
+    );
+    assert.equal(secondOk, true);
+    assert.notEqual(rt.sessionPersistenceBoundaryFailed, true);
+    assert.equal(
+      readFileSync(join(runDir, SESSION_EVENTS_FILENAME), 'utf8'),
+      diskBytesBeforeRepeat,
+      'idempotent repeat finalize must not rewrite durable session evidence',
+    );
+    const diskAfterRepeat = loadSessionEventLogFromDir(runDir);
+    assert.ok(diskAfterRepeat);
+    const endedAfter = diskAfterRepeat!.events.filter((e) => e.kind === 'turn_ended');
+    assert.equal(endedAfter[endedAfter.length - 1]?.outcome, 'VERIFIED_COMPLETE');
+
+    const eq = resumeEquivalenceFromDisk(runDir);
+    assert.ok(eq.ok, eq.mismatches.join(','));
+    const engine2 = new ChatEngine({
+      task: 'placeholder',
+      projectRoot: process.cwd(),
+      runId,
+      resumeExisting: true,
+    });
+    engine2.restoreSessionEventsFromDir(runDir);
+    assert.equal(engine2.getLiveSession().terminal?.outcome, 'VERIFIED_COMPLETE');
   });
 
   it('disk resume equivalence of projected LiveSession', () => {

@@ -47,6 +47,7 @@ for (const scenario of [
           process.exit(77);
         };`);
       const child = spawnSync(process.execPath, [
+        '--experimental-wasm-modules',
         '--import', new URL('../testinfra/synthetic-provider-fixture.mjs', import.meta.url).href,
         '--import', import.meta.resolve('tsx'),
         '--import', pathToFileURL(preload).href,

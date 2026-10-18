@@ -1,3 +1,5 @@
+import { chatInspectionCoverage } from '../../agent/chatInspectionCoverage.js';
+import { terminalReasonGuidance } from '../../agent/chatTerminalReason.js';
 // ─── Chat Core ──────────────────────────────────────────────────────────────
 // Shared chat execution primitives used by REPL (executeChatTask) and CLI
 // one-shot paths. Dependency-injectable for integration tests.
@@ -89,7 +91,7 @@ import {
   compileIntentPlan,
   formatIntentPlanUserMessage,
 } from '../../agent/intentCompiler.js';
-import { outcomeFromReasonCode, persistIntentPlan, persistTranscriptToDisk } from '../../agent/chatEngineObservability.js';
+import { outcomeFromReasonCode, persistIntentPlan } from '../../agent/chatEngineObservability.js';
 import { openResumedChatEngine } from './chatResumeHeadless.js';
 import {
   compileChatStack,
@@ -442,6 +444,7 @@ export async function consumeChatStream(
           target: event.target,
           ...(event.detail !== undefined ? { detail: event.detail } : {}),
           ...(event.error !== undefined ? { error: event.error } : {}),
+          ...(event.exitCode !== undefined ? { exit_code: event.exitCode } : {}),
           ...(event.effect_scope !== undefined ? { effect_scope: event.effect_scope } : {}),
           ...(event.effect_status !== undefined ? { effect_status: event.effect_status } : {}),
           ...(event.mutation_paths !== undefined ? { mutation_paths: [...event.mutation_paths] } : {}),
@@ -1101,8 +1104,8 @@ export function buildChatRunPayload(
         case 'NEEDS_HUMAN_DECISION': return 'BLOCKED' as const;
         case 'BUDGET_EXHAUSTED': return 'BUDGET_EXCEEDED' as const;
         case 'CANCELLED': return 'NEEDS_MORE_CONTEXT' as const;
-        case 'INFRA_FAILURE': return 'NEEDS_MORE_CONTEXT' as const;
-        case 'AGENT_FAILURE': return 'NEEDS_MORE_CONTEXT' as const;
+        case 'INFRA_FAILURE': return 'BLOCKED' as const;
+        case 'AGENT_FAILURE': return 'BLOCKED' as const;
       }
     }
     // Legacy fallback for test fixtures without outcome
@@ -1150,6 +1153,14 @@ export function buildChatRunPayload(
   payload['project_root'] = context.projectRoot;
   payload['execution_scope'] = normalizeChatExecutionScope(context);
   payload['mode'] = 'chat';
+  payload['inspection_coverage'] = chatInspectionCoverage(result.toolCalls);
+  // Chat has its own durable records; inherited Ask paths are not evidence.
+  const evidence = payload['evidence'] as Record<string, unknown>;
+  evidence['artifacts'] = result.runDir ? [
+    'thread_events.json', 'chat_causal_evidence.json', 'context-checkpoint.json',
+    'transcript.jsonl', 'policy-events.jsonl',
+    'native-tool-rejection.json',
+  ].map(name => path.join(result.runDir!, name)).filter(file => fs.existsSync(file)) : [];
   payload['checks'] = ['chat engine path'];
   // Ensure terminal_outcome is always visible on the run payload when known.
   if (result.outcome !== undefined) {
@@ -1162,6 +1173,7 @@ export function buildChatRunPayload(
   // D03: carry the structured terminal reason alongside the outcome.
   if (result.reason_code !== undefined) {
     payload['reason_code'] = result.reason_code;
+    if (result.reason_code === 'context_preparation_failed') payload['next'] = terminalReasonGuidance(result.reason_code).nextActions;
   }
   if (result.cause_class !== undefined) {
     payload['cause_class'] = result.cause_class;
@@ -1667,13 +1679,7 @@ export async function runCliChatTask(input: {
     runtimeMode,
   }).finally(()=>resumedEngine?.closeAdmissionStore());
 
-  if (result.runDir !== undefined) {
-    try {
-      await persistTranscriptToDisk(result.runDir, result.conversation);
-    } catch {
-      // The turn result still stands. The next resume reports a missing transcript.
-    }
-  }
+  // The engine owns durable transcript settlement before yielding terminal.
 
   if (outputFormat === 'text') {
     finishConversationalRenderer(convRenderer, result, preRunCost);

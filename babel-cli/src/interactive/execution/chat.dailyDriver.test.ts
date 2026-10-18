@@ -113,6 +113,7 @@ function createInstantEngine(chat: ChatResult): ChatEngine {
     },
     abortTurn: () => undefined,
     cancel: () => undefined,
+    getTaskAllowanceSnapshot: () => null,
   } as unknown as ChatEngine;
 }
 
@@ -144,6 +145,7 @@ function createCancellableEngine(): { engine: ChatEngine; started: () => boolean
     cancel: () => {
       release?.();
     },
+    getTaskAllowanceSnapshot: () => null,
   } as unknown as ChatEngine;
   return { engine, started: () => started };
 }
@@ -239,7 +241,7 @@ describe('executeChatTask daily-driver outcomes', { concurrency: 1 }, () => {
       });
       assert.equal(ctx.isRunning, false);
       assert.equal(ctx.lastAssistantAnswer, 'follow-up ok');
-      assert.match(logs.text(), /Complete/);
+      assert.match(logs.text(), /Response complete/);
       assert.doesNotMatch(logs.text(), /REVIEW_KIND:/);
     } finally {
       logs.restore();

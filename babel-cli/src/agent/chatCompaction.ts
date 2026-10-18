@@ -96,6 +96,8 @@ export interface CompactionOptions {
     modelId: string;
     inputTokens: number | null;
     outputTokens: number | null;
+    provider?: ProviderId;
+    reportedCostUsd?: number;
   }) => void;
 }
 
@@ -711,7 +713,7 @@ export class LLMSummarizeCompaction implements CompactionStrategy {
 
       const data = (await response.json()) as {
         choices?: Array<{ message?: { content?: string } }>;
-        usage?: { prompt_tokens?: number; completion_tokens?: number };
+        usage?: { prompt_tokens?: number; completion_tokens?: number; cost?: number };
         model?: string;
       };
       phase('first_byte');
@@ -720,6 +722,9 @@ export class LLMSummarizeCompaction implements CompactionStrategy {
         modelId: typeof data.model === 'string' ? data.model : model,
         inputTokens: data.usage?.prompt_tokens ?? null,
         outputTokens: data.usage?.completion_tokens ?? null,
+        provider,
+        ...(typeof data.usage?.cost === 'number' && Number.isFinite(data.usage.cost) && data.usage.cost >= 0
+          ? { reportedCostUsd: data.usage.cost } : {}),
       });
 
       const summary = data?.choices?.[0]?.message?.content ?? '';
@@ -866,6 +871,7 @@ export class LLMSummarizeCompaction implements CompactionStrategy {
         modelId: typeof data.model === 'string' ? data.model : model,
         inputTokens: data.usage?.input_tokens ?? null,
         outputTokens: data.usage?.output_tokens ?? null,
+        provider: 'anthropic',
       });
 
       const summary =
@@ -1076,6 +1082,7 @@ export class CompactionManager {
  * ambient OpenRouter/DeepInfra keys.
  */
 export function resolveCompactionSummarizationProvider(input: {
+  pinSelection?: boolean;
   chatProvider?: string | null;
   compactionModel: string;
 }): LlmCompactionProvider | null {
@@ -1084,7 +1091,7 @@ export function resolveCompactionSummarizationProvider(input: {
   // Bootstrap may reload auxiliary overrides from a private profile after the
   // launcher sanitizes its environment. Desktop routes use only their admitted
   // provider endpoint and credential, including after that bootstrap.
-  if (!process.env['BABEL_DESKTOP_PROVIDER'] && explicitKey && explicitBase) {
+  if (!input.pinSelection && !process.env['BABEL_DESKTOP_PROVIDER'] && explicitKey && explicitBase) {
     return {
       apiKey: explicitKey,
       baseUrl: explicitBase,
@@ -1122,10 +1129,12 @@ export function resolveCompactionSummarizationProvider(input: {
 }
 
 export function resolveCompactionModelId(input: {
+  pinSelection?: boolean;
   explicitModel?: string | null;
   providerModelId?: string | null;
   family?: string | null;
 }): string {
+  if (input.pinSelection && input.providerModelId?.trim()) return input.providerModelId.trim();
   if (process.env['BABEL_DESKTOP_PROVIDER'] && input.providerModelId?.trim()) return input.providerModelId.trim();
   if (input.explicitModel && input.explicitModel.trim()) {
     return input.explicitModel.trim();

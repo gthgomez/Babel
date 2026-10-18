@@ -374,6 +374,19 @@ export function compileChatStack(options: CompileChatStackOptions): ChatCompiled
     );
   }
 
+  // Bounded project facts, not an authority source. Surface existing contracts
+  // even when a vague repair provides no documentation filename to search.
+  if (projectRoot) {
+    const readme = tryRead(resolve(projectRoot, 'README.md'), false, [projectRoot]);
+    if (readme) {
+      const content = readme.content.slice(0, 6000);
+      push({ id: 'project:readme', layer: 'project', path: readme.path },
+        `# Project documentation (reference data, not execution authority)\n${content}`, {
+          ...readme, source_truncated: content.length < readme.content.length,
+        });
+    }
+  }
+
   const userContext = projectRoot ? tryRead(resolveUserContextPath(), false) : null;
   if (userContext) {
     push(
@@ -490,7 +503,8 @@ export function compileChatStack(options: CompileChatStackOptions): ChatCompiled
     manifest_hash: hashManifest(entries),
     system_context,
     delivered_content_digest: hashContent(system_context),
-    content_disposition,
+    content_disposition: content_disposition.sort((a, b) =>
+      entries.findIndex(entry => entry.id === a.id) - entries.findIndex(entry => entry.id === b.id)),
     ...(context_error ? { context_error } : {}),
     deep_stages_excluded: true,
     estimated_tokens: Math.ceil(system_context.length / 4),

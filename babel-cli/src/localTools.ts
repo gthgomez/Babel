@@ -1307,14 +1307,14 @@ const EXECUTOR_TOOL_DEFINITIONS = [
     dryRunBehavior: 'live',
     policyTags: ['search', 'read', 'git'],
     input: { required: [], optional: ['format', 'path', 'max_lines'] },
-    handler: (req) => {
+    handler: (req, context) => {
       const typedReq = req as Extract<ToolCallRequest, { tool: 'git_context' }>;
       return handleGitContextTool({
         ...(typedReq.format !== undefined ? { format: typedReq.format } : {}),
         ...(typedReq.path !== undefined ? { path: typedReq.path } : {}),
         ...(typedReq.max_lines !== undefined ? { max_lines: typedReq.max_lines } : {}),
         ...(typedReq.output_format !== undefined ? { output_format: typedReq.output_format } : {}),
-      });
+      }, getExecutorProjectRoot(context.projectRoot));
     },
   },
   {

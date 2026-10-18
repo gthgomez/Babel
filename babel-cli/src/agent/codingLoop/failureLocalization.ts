@@ -1,16 +1,20 @@
+import { stripVTControlCharacters } from 'node:util'
 import { statSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import { createHash } from 'node:crypto'
 import { parseStructuredFailures } from './observationCompiler.js'
 import { recoveryTargetIdentity } from './recoveryIdentity.js'
 import type { RecoveryCandidateBinding } from './workingState.js'
+import { proposeTestImports, corroboratesTestImport, type TestImportCandidate } from './testImportBridge.js'
 
 export interface LocalizationCandidate {
   path: string
   line?: number
+  column?: number
   /** Diagnostic token that must occur in inspected source. */
   relation: string
-  source: 'structured_location' | 'test_identity' | 'diagnostic_symbol'
+  source: 'structured_location' | 'test_identity' | 'diagnostic_symbol' | 'import_call' | 'file_read'
+  fromTestPath?: string
 }
 
 export interface FailureLocalization {
@@ -24,6 +28,7 @@ export interface FailureLocalization {
   inspected: string[]
   acceptedPath?: string
   observationDigest?: string
+  importCandidates?: TestImportCandidate[]
 }
 
 const MAX_CALLS = 4
@@ -44,7 +49,7 @@ export function captureLocalizationCandidates(input: {
 }): LocalizationCandidate[] {
   const parsed = parseStructuredFailures(input.stdout, input.stderr, input.tool, input.command)
   const candidates: LocalizationCandidate[] = []
-  const raw = `${input.stdout}\n${input.stderr}`
+  const raw = stripVTControlCharacters(`${input.stdout}\n${input.stderr}`)
   for (const failure of parsed.failures.slice(0, 8)) {
     const path = failure.file ? recoveryTargetIdentity(input.projectRoot, failure.file) : null
     if (!path) continue
@@ -52,18 +57,20 @@ export function captureLocalizationCandidates(input: {
       if (!statSync(join(input.projectRoot, path)).isFile()) continue
     } catch { continue }
     const frame = new RegExp(`\\bat\\s+([A-Za-z_$][\\w.$]*)\\s+\\([^\\n]*${escapeRegExp(basename(path))}:\\d+:\\d+\\)`).exec(raw)
-    const relation = diagnosticToken(failure.message) ?? frame?.[1]?.split('.').at(-1) ??
+    const testLocation = /\.(?:test|spec)\.[cm]?[jt]sx?$/i.test(path)
+    const relation = (testLocation ? failure.test : null) ?? diagnosticToken(failure.message) ?? frame?.[1]?.split('.').at(-1) ??
       (failure.test && /[A-Za-z_$][\w$]{2,}/.test(failure.test) ? failure.test : null)
     if (!relation) continue
     candidates.push({
       path, relation,
       ...(failure.line && Number.isSafeInteger(failure.line) ? { line: failure.line } : {}),
-      source: failure.test ? 'test_identity' : 'structured_location',
+      ...(failure.column && Number.isSafeInteger(failure.column) ? { column: failure.column } : {}),
+      source: testLocation && failure.test ? 'test_identity' : 'structured_location',
     })
   }
   // Node's parser currently recognizes JavaScript frames. Keep TypeScript and
   // Windows drive frames as bounded candidates here; they still need a read.
-  const frames = /^\s*at\s+([A-Za-z_$][\w.$]*)\s+\(([^()\r\n]+\.[cm]?[jt]sx?):(\d+):(\d+)\)/gm
+  const frames = /^\s*(?:at\s+)?([A-Za-z_$][\w.$]*)\s+\(([^()\r\n]+\.[cm]?[jt]sx?):(\d+):(\d+)\)/gm
   let frameMatch: RegExpExecArray | null
   while ((frameMatch = frames.exec(raw)) !== null && candidates.length < 8) {
     const symbol = frameMatch[1]?.split('.').at(-1)
@@ -129,7 +136,8 @@ export function discoverTestCandidates(
 
 /** Count the attempt before dispatch, so failed/cancelled calls retain budget. */
 export function beginLocalizationCall(state: FailureLocalization, target?: string): FailureLocalization {
-  if (state.phase !== 'LOCALIZE_FAILURE') return state
+  if (state.phase !== 'LOCALIZE_FAILURE' && !(state.phase === 'localized' && state.importCandidates?.length)) return state
+  if (state.calls >= MAX_CALLS || state.rounds >= MAX_ROUNDS) return state
   const calls = state.calls + 1
   const inspected = target && !state.inspected.includes(target) ? [...state.inspected, target] : state.inspected
   const rounds = inspected.length
@@ -141,13 +149,15 @@ export function finishLocalizationCall(
   state: FailureLocalization,
   action: { type: string; target?: string; content?: string; succeeded: boolean; startLine?: number; projectRoot?: string },
 ): FailureLocalization {
-  if (state.phase !== 'LOCALIZE_FAILURE') return state
+  if (state.phase !== 'LOCALIZE_FAILURE' && !(state.phase === 'localized' && state.importCandidates?.length)) return state
   const target = action.target ?? ''
-  let candidate = state.candidates.find((item) => item.path === target)
+  let candidate: LocalizationCandidate | undefined = state.phase === 'localized'
+    ? state.importCandidates?.find(item => item.path === target && corroboratesTestImport(action.content ?? '', item.relation, item.source))
+    : state.candidates.find((item) => item.path === target)
   // Search output proposes a location; a bounded file read corroborates it.
   const contentBearing = action.type === 'read_file' || action.type === 'read_range'
   const content = action.content ?? ''
-  if (!candidate && contentBearing && action.succeeded && action.projectRoot && target &&
+  if (!candidate && state.phase === 'LOCALIZE_FAILURE' && contentBearing && action.succeeded && action.projectRoot && target &&
       recoveryTargetIdentity(action.projectRoot, target) === target) {
     try {
       if (statSync(join(action.projectRoot, target)).isFile()) {
@@ -157,8 +167,12 @@ export function finishLocalizationCall(
       }
     } catch { /* missing or replaced path stays unlocalized */ }
   }
-  const related = candidate && contentBearing && action.succeeded && content.trim().length > 0 &&
-    new RegExp(`\\b${escapeRegExp(candidate.relation)}\\b`, 'i').test(content) &&
+  const bridgeCandidate = candidate?.source === 'import_call' || candidate?.source === 'file_read'
+  const related = candidate && contentBearing && action.succeeded && action.content !== undefined &&
+    (candidate.source === 'file_read' || content.trim().length > 0) &&
+    (!bridgeCandidate || action.type === 'read_file') &&
+    (!bridgeCandidate || (action.projectRoot && recoveryTargetIdentity(action.projectRoot, target) === target)) &&
+    (candidate.source === 'file_read' || new RegExp(`(?<![\\w$])${escapeRegExp(candidate.relation)}(?![\\w$])`, 'i').test(content)) &&
     (!candidate.line || (
       (action.startLine ?? 1) <= candidate.line &&
       (action.startLine ?? 1) + content.split(/\r?\n/).length - 1 >= candidate.line
@@ -167,14 +181,17 @@ export function finishLocalizationCall(
     return {
       ...state, phase: 'localized',
       candidates: candidate && !state.candidates.some((item) => item.path === candidate.path)
-        ? [...state.candidates, candidate].slice(0, 8) : state.candidates,
+        ? [candidate, ...state.candidates].slice(0, 8) : state.candidates,
       acceptedPath: target,
       observationDigest: createHash('sha256').update(content).digest('hex'),
+      importCandidates: candidate?.source === 'test_identity' && action.type === 'read_file' && action.projectRoot && (action.startLine ?? 1) === 1
+        ? proposeTestImports({content, testPath: target, testName: candidate.relation, projectRoot: action.projectRoot,
+          ...(candidate.line ? {line: candidate.line} : {}), ...(candidate.column ? {column: candidate.column} : {})}) : [],
     }
   }
   return {
     ...state,
-    phase: state.calls >= MAX_CALLS || state.rounds >= MAX_ROUNDS ? 'exhausted' : 'LOCALIZE_FAILURE',
+    phase: state.calls >= MAX_CALLS || state.rounds >= MAX_ROUNDS ? 'exhausted' : state.phase,
   }
 }
 

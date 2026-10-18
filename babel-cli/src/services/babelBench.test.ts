@@ -129,7 +129,7 @@ test('babelBench: computeBabelBenchMetrics correctly derives North Star KPIs', (
 test('babelBench: runBabelBench executes benchmark against reviewer function', async () => {
   // Perfect reviewer (looks up canonical fixture by id without relying on leaked groundTruth in input)
   const perfectReviewer = async (f: { id: string }) => {
-    const fixture = CANONICAL_BENCHMARK_FIXTURES.find((c) => c.id === f.id);
+    const fixture = CANONICAL_BENCHMARK_FIXTURES.find((c) => extractReviewerFixture(c).id === f.id);
     return fixture!.groundTruth.expectedVerdict;
   };
 
@@ -221,12 +221,33 @@ test('babelBench: extractReviewerFixture strips groundTruth to prevent prompt le
   assert.equal('groundTruth' in reviewerSafe, false);
   assert.ok(reviewerSafe.candidateDiff.length > 0);
   assert.ok(reviewerSafe.scope.length > 0);
-  assert.equal(reviewerSafe.id, f.id);
+  assert.match(reviewerSafe.id, /^[a-f0-9]{64}$/);
+  assert.notEqual(reviewerSafe.id, f.id);
 
   const answerKey = extractAnswerKey(f);
   assert.equal(answerKey.fixtureId, f.id);
   assert.equal(answerKey.expectedVerdict, f.groundTruth.expectedVerdict);
   assert.equal(answerKey.antiLeakageHash, f.groundTruth.antiLeakageHash);
+});
+
+test('babelBench: serialized reviewer input is an allowlist independent of evaluator labels', () => {
+  for (const fixture of CANONICAL_BENCHMARK_FIXTURES) {
+    const renamed = {
+      ...fixture,
+      id: 'answer-hint', name: 'THIS CASE HAS A BUG', category: 'clean_control' as const,
+      difficulty: 'hard' as const, split: 'canary' as const,
+      futureAnswerField: { hasDefect: true },
+    };
+    const original = extractReviewerFixture(fixture);
+    assert.deepEqual(Object.keys(JSON.parse(JSON.stringify(original))).sort(),
+      ['candidateDiff', 'files', 'id', 'scope']);
+    assert.deepEqual(extractReviewerFixture(renamed), original);
+  }
+});
+
+test('babelBench: reviewer failure cannot be recorded as a clean approval', async () => {
+  await assert.rejects(runBabelBench(async () => { throw new Error('review unavailable'); },
+    { modelName: 'unavailable-reviewer' }), /review unavailable/);
 });
 
 test('babelBench: all 10 canonical fixtures have valid SHA-256 anti-leakage hashes', () => {

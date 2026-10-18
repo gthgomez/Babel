@@ -16,9 +16,26 @@ import { BabelRepl } from '../BabelRepl.js';
 import { executeChatTask } from './chat.js';
 import { stripAnsi } from '../../ui/theme.js';
 import { globalCostTracker } from '../../services/costTracker.js';
+import { updateCostTotals, restoreSessionState } from '../session.js';
 import type { AgentTargetContext } from '../../services/targetResolver.js';
 
 const roots: string[] = [];
+test('session projection and restored banner preserve known charges separately from estimates', t => {
+  const summary = { totalCostUSD: 0.01, knownCostUSD: 0, estimatedCostUSD: 0.01, completeCostUSD: null,
+    costComplete: false, unknownChargeCount: 0, totalTokens: 10, totalInputTokens: 10, totalOutputTokens: 0, modelBreakdown: {} };
+  t.mock.method(globalCostTracker, 'getSessionSummary', () => summary);
+  t.mock.method(globalCostTracker, 'restoreSessionCost', () => undefined);
+  const logs: string[] = [];
+  t.mock.method(console, 'log', (text: string) => logs.push(text));
+  const ctx = makeReplContext();
+  updateCostTotals(ctx);
+  assert.equal(ctx.state.costTotals.knownCostUSD, 0);
+  assert.equal(ctx.state.costTotals.estimatedCostUSD, 0.01);
+  restoreSessionState(ctx, ctx.state);
+  assert.match(logs.join('\n'), /0.0000 known subtotal/);
+  assert.match(logs.join('\n'), /0.0100 usage estimate/);
+  assert.doesNotMatch(logs.join('\n'), /0.0100 known subtotal/);
+});
 after(() => {
   for (const root of roots) rmSync(root, { recursive: true, force: true });
 });
@@ -68,6 +85,7 @@ describe('review card usage scope', () => {
 
     let streamedDone = false;
     const mockEngine = {
+      getTaskAllowanceSnapshot: () => null,
       submitMessageStream: async function* (): AsyncGenerator<ChatEvent> {
         yield { type: 'thinking' } as ChatEvent;
         if (!streamedDone) {
@@ -108,10 +126,10 @@ describe('review card usage scope', () => {
     }
 
     const out = stripAnsi(logs.join('\n'));
-    assert.match(out, /50 tok/, `expected per-turn token delta on the card, got:\n${out.slice(-800)}`);
+    assert.match(out, /50 cumulative tokens this turn/, `expected per-turn token delta on the card, got:\n${out.slice(-800)}`);
     assert.doesNotMatch(
       out,
-      /1550 tok/,
+      /1,550 cumulative tokens this turn/,
       `session-cumulative tokens must not appear as the card's token figure:\n${out.slice(-800)}`,
     );
   });
@@ -124,6 +142,7 @@ describe('review card usage scope', () => {
       "I'm ready to help. What would you like me to work on? I can investigate code.";
 
     const mockEngine = {
+      getTaskAllowanceSnapshot: () => null,
       submitMessageStream: async function* (): AsyncGenerator<ChatEvent> {
         yield { type: 'thinking' } as ChatEvent;
         yield { type: 'answer_chunk', text: answer } as ChatEvent;

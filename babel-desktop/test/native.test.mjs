@@ -40,6 +40,13 @@ test('remote serve arguments stay absolute and loopback-scoped',async()=>{
  assert.deepEqual(args,[entry,'remote','serve','--port','4545','--project',root]);
  assert.throws(()=>buildRemoteServeArgs('relative',root));
 });
+test('a superseded start cannot clear a newer remote bridge reference',async()=>{
+ const {releaseBridgeIfCurrent}=await load('remoteHost');assert.equal(typeof releaseBridgeIfCurrent,'function');
+ const obsolete={id:'obsolete'};const successor={id:'successor'};
+ assert.equal(releaseBridgeIfCurrent(obsolete,obsolete),null);
+ assert.equal(releaseBridgeIfCurrent(successor,obsolete),successor);
+ assert.equal(releaseBridgeIfCurrent(null,obsolete),null);
+});
 test('child arguments cannot turn task text into options or shell commands',async()=>{
  const {buildRunArgs}=await load('child');assert.equal(typeof buildRunArgs,'function');
  const entry=join(tmpdir(),'Babel Space','index.js');const root=join(tmpdir(),'project space');

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { describe, it } from 'node:test';
@@ -127,6 +127,56 @@ describe('mapAgentActionToToolCalls', () => {
 });
 
 describe('createToolExecutor', () => {
+  for (const action of [
+    { type: 'test_run', command: 'npm test' },
+    { type: 'run_command', command: 'npm test' },
+  ] satisfies AgentAction[]) {
+    it(`preserves a structured sandbox denial through ${action.type} policy settlement`, async () => {
+      const denied: ToolResult = {
+        exit_code: 1,
+        stdout: '',
+        stderr: 'Path traversal denied',
+        denial: {
+          category: 'sandbox_policy', reason_code: 'PATH_TRAVERSAL_DENIED',
+          message: 'Path traversal denied', tool: action.type,
+          active_mode: null, required_mode: null, evidence: null,
+        },
+      };
+      const projectRoot = mkdtempSync(join(tmpdir(), 'babel-denied-dispatch-'));
+      try {
+        const result = await executeActionWithPolicy(action, 'workspace_write', {
+          ...context, projectRoot, babelRoot: projectRoot,
+        }, {
+          isolationAvailable: true,
+          executor: createToolExecutor({ executeTool: async () => denied }),
+        });
+        assert.equal(result.policyBlocked, true);
+        assert.equal(result.policyDecision, 'deny');
+        assert.equal(result.results[0], denied, 'retain the original typed diagnostic');
+      } finally {
+        rmSync(projectRoot, { recursive: true, force: true });
+      }
+    });
+
+    it(`keeps an executed ${action.type} failure distinct from a sandbox denial`, async () => {
+      const failed: ToolResult = { exit_code: 1, stdout: '', stderr: 'Path traversal denied' };
+      const projectRoot = mkdtempSync(join(tmpdir(), 'babel-failed-dispatch-'));
+      try {
+        const result = await executeActionWithPolicy(action, 'workspace_write', {
+          ...context, projectRoot, babelRoot: projectRoot,
+        }, {
+          isolationAvailable: true,
+          executor: createToolExecutor({ executeTool: async () => failed }),
+        });
+        assert.equal(result.policyBlocked, false, 'stderr text must never establish a policy denial');
+        assert.equal(result.policyDecision, 'allow');
+        assert.equal(result.results[0], failed);
+      } finally {
+        rmSync(projectRoot, { recursive: true, force: true });
+      }
+    });
+  }
+
   it('executes mapped tool calls in order', async () => {
     const calls: ToolCallRequest[] = [];
     const executor = createToolExecutor({

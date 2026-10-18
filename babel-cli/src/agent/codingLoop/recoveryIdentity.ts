@@ -3,11 +3,19 @@ import { canonicalizeContained } from '../../bridge/workspaceBound.js'
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { RevisionManager } from '../../evidence/revisionBoundReceipt.js'
+import { fileURLToPath } from 'node:url'
 
 /** Resolve through the existing path-containment primitive before reduction. */
 export function recoveryTargetIdentity(projectRoot: string, target: string): string | null {
   if (!target.trim() || target.includes('\0')) return null
   try {
+    // safe_repo's fixed /app mount names the same contained candidate tree.
+    // Reject traversal before URL parsing can normalize it away.
+    const decoded = decodeURIComponent(target)
+    if (decoded.split(/[\\/]/).includes('..')) return null
+    if (decoded.startsWith('file:///app/')) target = decoded.slice('file:///app/'.length)
+    else if (decoded.startsWith('/app/')) target = decoded.slice('/app/'.length)
+    else if (target.startsWith('file:')) target = fileURLToPath(target)
     const root = canonicalizeContained(projectRoot)
     const absolute = canonicalizeContained(isAbsolute(target) ? target : resolve(root, target))
     const within = relative(root, absolute)

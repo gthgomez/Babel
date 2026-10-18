@@ -220,7 +220,7 @@ describe('Acceptance Tests T1–T5: Telemetry Truthfulness', () => {
     const limit = getContextLimit('some-totally-unknown-model-xyz');
     assert.equal(limit.tokens, 0);
     const bar = renderCompactTokenBar(10_000, limit.tokens);
-    assert.equal(bar, '[ctx ?]');
+    assert.equal(bar, '[context unavailable]');
   });
 
   it('T4: Model switch within session resolves active model capability', () => {

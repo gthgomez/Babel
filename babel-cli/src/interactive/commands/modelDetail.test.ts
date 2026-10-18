@@ -614,12 +614,12 @@ test('models table: only explicit zero renders as $0/M; missing cost renders n/a
   ] as { key: string; entry: ModelPolicyModelEntry }[];
   const output = renderAvailableModelsTable(models);
   const lines = output.split('\n');
-  const paid = lines.find((l) => l.includes('paid-model'))!;
-  const free = lines.find((l) => l.includes('free-model'))!;
-  const mystery = lines.find((l) => l.includes('mystery-model'))!;
+  const paid = lines.slice(lines.findIndex((l) => l.includes('paid-model')) + 1, lines.findIndex((l) => l.includes('free-model'))).join(' ');
+  const free = lines.slice(lines.findIndex((l) => l.includes('free-model')) + 1, lines.findIndex((l) => l.includes('mystery-model'))).join(' ');
+  const mystery = lines.slice(lines.findIndex((l) => l.includes('mystery-model')) + 1, -2).join(' ');
   assert.match(paid, /\$25\/M/);
   assert.match(free, /\$0\/M/, 'an explicitly zero cost is a fact and may render as $0/M');
-  assert.match(mystery, /n\/a/);
+  assert.match(mystery, /Output unknown/);
   assert.ok(!mystery.includes('$0'), 'missing cost must never display as $0');
 });
 
@@ -642,13 +642,14 @@ test('model detail: production resolver shape (per-run estimate with no per-M in
   assert.doesNotMatch(output, /\$0\.0000\/run/);
   assert.doesNotMatch(output, /~\$0/);
   assert.match(output, /cost unknown/);
-  // With at least one published per-M cost, the per-run estimate is a fact.
+  // Per-million pricing alone cannot establish a per-run workload assumption.
   const withCost = {
     source: 'auto' as const,
     offline: false,
     policy: makePolicy({ approximateCostPerRunUsd: 0.0004, estimatedCostPer1MOutput: 0.18 }),
   };
-  assert.match(renderModelDetail(withCost), /~\$0\.0004\/run/);
+  assert.doesNotMatch(renderModelDetail(withCost), /\/run/);
+  assert.match(renderModelDetail(withCost), /\$0\.18\/M out/);
 });
 
 // ── Finding E: provider / gateway / upstream terminology is precise ─────────

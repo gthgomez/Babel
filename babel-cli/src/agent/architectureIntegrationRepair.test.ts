@@ -137,15 +137,12 @@ test('I03: repeated Chat preamble budget uses resident history not apiTokenCount
   const tokenUsage = engine as unknown as { apiTokenCount: number }
   const mapBudgets: number[] = []
   const priorErr = console.error
+  let preambleTerminalWrites = 0
   console.error = (msg: unknown, ...rest: unknown[]) => {
     const text = [msg, ...rest].map(String).join(' ')
     const marker = '[preamble-budget] '
     if (text.includes(marker)) {
-      const jsonStart = text.indexOf('{', text.indexOf(marker))
-      if (jsonStart >= 0) {
-        const parsed = JSON.parse(text.slice(jsonStart)) as { maxMapTokens?: number }
-        if (typeof parsed.maxMapTokens === 'number') mapBudgets.push(parsed.maxMapTokens)
-      }
+      preambleTerminalWrites++
     }
     priorErr(msg, ...rest)
   }
@@ -155,6 +152,8 @@ test('I03: repeated Chat preamble budget uses resident history not apiTokenCount
       '## Project map (fixture)\n- src/seed.ts\n'
     host.repoMapCache = mapRound1
     host.getOrBuildSystemPrompt('legacy')
+    const diagnosticPath = join((engine as unknown as { engineRunDir: string }).engineRunDir, 'preamble-budget.json')
+    mapBudgets.push(JSON.parse(readFileSync(diagnosticPath, 'utf8')).maxMapTokens)
     tokenUsage.apiTokenCount = 400_000
     host.repoMapCache = null
     const mapRound2 =
@@ -163,6 +162,8 @@ test('I03: repeated Chat preamble budget uses resident history not apiTokenCount
     host.repoMapCache = mapRound2
     ;(engine as { clearSystemPromptCache(): void }).clearSystemPromptCache()
     host.getOrBuildSystemPrompt('legacy')
+    mapBudgets.push(JSON.parse(readFileSync(diagnosticPath, 'utf8')).maxMapTokens)
+    assert.equal(preambleTerminalWrites, 0)
     assert.equal(mapBudgets.length, 2)
     assert.equal(mapBudgets[0], mapBudgets[1])
     assert.notEqual(

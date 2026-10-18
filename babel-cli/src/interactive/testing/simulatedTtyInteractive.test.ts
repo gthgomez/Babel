@@ -102,6 +102,7 @@ function createPtyMockEngine(events: ChatEvent[], finalResult: ChatResult): Chat
     cancel: () => undefined,
     getConversation: () => [],
     getActivePlaybook: () => null,
+    getTaskAllowanceSnapshot: () => null,
   } as unknown as ChatEngine;
 }
 
@@ -217,6 +218,7 @@ describe('PR-76 SIMULATED_TTY: In-Process Terminal Contract Certification', () =
       },
       getConversation: () => [],
       getActivePlaybook: () => null,
+      getTaskAllowanceSnapshot: () => null,
     } as unknown as ChatEngine;
 
     ctx.chatEngine = mockEngine;

@@ -37,6 +37,7 @@ import { recoveryTargetIdentity } from "./codingLoop/recoveryIdentity.js";
 import {
   actualRecoveryEdit,
   admitRecoveryPlan,
+  formatRecoveryPlanRejection,
 } from "./codingLoop/recoveryPlan.js";
 import {
   mapChatActionToAgentAction,
@@ -315,6 +316,7 @@ export class ChatEngineActionExecutor {
           ? actualRecoveryEdit(action, requireProjectRoot(this.host.options))
           : null;
       let admittedThisAction = false;
+      let recoveryPlanRejection: string | undefined;
       if (
         recoveryGate?.satisfied &&
         mutationAttempt &&
@@ -322,14 +324,13 @@ export class ChatEngineActionExecutor {
         currentBinding &&
         !driftedCandidate
       ) {
-        const proposal =
-          "repair_plan" in action ? action.repair_plan : undefined;
         const admission = admitRecoveryPlan(
           this.host.workingState,
-          proposal,
+          "repair_plan" in action ? action.repair_plan : undefined,
           proposedEdit,
           currentBinding,
         );
+        recoveryPlanRejection = admission.reason;
         if (admission.admitted) {
           this.host.workingState = admission.state;
           recoveryGate = this.host.workingState.recoveryGate;
@@ -374,7 +375,7 @@ export class ChatEngineActionExecutor {
             : equivalentRedMutation
               ? "The proposed edit repeats the failed operation."
               : planRequired
-                ? "Submit a scoped repair plan supported by current observation IDs and the actual edit."
+                ? formatRecoveryPlanRejection(this.host.workingState, recoveryPlanRejection, proposedEdit)
                 : recoveryGate.requiredEvidence,
         ].join(" ");
         this.host.toolCallLog.push({

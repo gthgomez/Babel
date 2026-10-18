@@ -1,8 +1,53 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { SafeExecutor } from '../sandbox.js';
+import { resetDockerAvailabilityCache, setDockerAvailableForTest } from '../config/benchmarkContainer.js';
 
 import { classifyToolEffect, modePolicyFor } from "./contracts.js";
 import { createExecutorKernel } from "./kernel.js";
+
+test('kernel passes actual isolation facts to authority without allowing absent isolation', async (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'kernel-isolation-'));
+  const names = ['BABEL_EXECUTION_PROFILE', 'BABEL_BENCHMARK_DOCKER_IMAGE', 'BABEL_DOCKER_DISABLE', 'BABEL_ALLOW_HOST_FALLBACK', 'BABEL_LIVE', 'BABEL_DRY_RUN'] as const;
+  const previous = names.map(name => [name, process.env[name]] as const);
+  let calls = 0;
+  t.mock.method(SafeExecutor.prototype, 'testRunAsync', async () => {
+    calls++;
+    return { exit_code: 0, stdout: 'sandbox reached', stderr: '' };
+  });
+  try {
+    process.env['BABEL_EXECUTION_PROFILE'] = 'safe_repo';
+    process.env['BABEL_BENCHMARK_DOCKER_IMAGE'] = 'synthetic/kernel:unit';
+    process.env['BABEL_LIVE'] = 'true';
+    process.env['BABEL_DRY_RUN'] = 'false';
+    delete process.env['BABEL_DOCKER_DISABLE'];
+    delete process.env['BABEL_ALLOW_HOST_FALLBACK'];
+    setDockerAvailableForTest(true);
+    const kernel = createExecutorKernel('deep');
+    const context = { agentId: 'kernel-isolation', runId: 'kernel-isolation', babelRoot: root, projectRoot: root };
+    const allowed = await kernel.tools.execute({ tool: 'test_run', command: 'node --test' }, context);
+    assert.equal(allowed.exit_code, 0, allowed.stderr);
+    assert.equal(calls, 1);
+    delete process.env['BABEL_BENCHMARK_DOCKER_IMAGE'];
+    const denied = await kernel.tools.execute({ tool: 'test_run', command: 'node --test' }, context);
+    assert.equal(denied.exit_code, 1);
+    assert.match(denied.stderr ?? '', /DENY_CAPABILITY_CONSTRAINT|isolation_unavailable/);
+    assert.equal(calls, 1, 'absent image must not reach executor');
+    process.env['BABEL_BENCHMARK_DOCKER_IMAGE'] = 'synthetic/kernel:unit';
+    setDockerAvailableForTest(false);
+    const noDocker = await kernel.tools.execute({ tool: 'test_run', command: 'node --test' }, context);
+    assert.equal(noDocker.exit_code, 1);
+    assert.equal(calls, 1, 'absent Docker must not reach executor');
+  } finally {
+    for (const [name, value] of previous) { if (value === undefined) delete process.env[name]; else process.env[name] = value; }
+    resetDockerAvailabilityCache();
+    t.mock.restoreAll();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test("mode policy preserves distinct chat, plan, and deep controllers", () => {
   assert.equal(modePolicyFor("chat").mutationPolicy, "normal");

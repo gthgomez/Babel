@@ -401,7 +401,7 @@ function stripInformationalFrames(text: string): string {
 const NOUN_GUARD_PREFIX =
   '(?<!\\b(?:this|that|the|these|those|a|an|any|your|my|our|their|its|said|such|same|net)\\s)';
 const GUARDED_MUTATION_VERBS =
-  `${NOUN_GUARD_PREFIX}(?:change|patch|fix|update|repair|optimize|bump|convert|migrate)`;
+  `${NOUN_GUARD_PREFIX}(?:change|patch|fix|update|repair|resolve|optimize|bump|convert|migrate)`;
 const MUTATION_VERB_SOURCE =
   `implement|create|write|refactor|apply|modify|edit|add|replace|rename|${GUARDED_MUTATION_VERBS}`;
 const DESTRUCTIVE_VERB_SOURCE = 'delete|remove|rm|drop|erase|unlink';
@@ -420,10 +420,30 @@ const SEQUENCED_MUTATION_SOURCE =
 // Protecting these inputs is compatible with a production repair. Admit only
 // a complete known object list: unknown objects or trailing qualifications
 // remain global denials. This never supplies positive mutation intent.
-const PROTECTED_EDIT_OBJECT = '(?:(?:the|any|our|your)\\s+)?(?:tests?|test\\s+suite|package\\s+scripts?|unrelated\\s+files?)';
+const PROTECTED_EDIT_OBJECT = '(?:(?:the|any|our|your|this|that)\\s+)?(?:tests?(?:\\s+file)?|test\\s+suite|package\\s+scripts?|dependencies|unrelated\\s+files?|[`"\\\']?[\\w./\\\\-]+\\.[A-Za-z0-9_-]{1,12}[`"\\\']?)';
 const PROTECTED_EDIT_OBJECT_LIST = new RegExp(
-  `^${PROTECTED_EDIT_OBJECT}(?:${COORD_SEPARATOR}${PROTECTED_EDIT_OBJECT})*$`, 'i',
+  `^${PROTECTED_EDIT_OBJECT}(?:${COORD_SEPARATOR}(?:${READ_ONLY_VERB_SOURCE}\\s+)?${PROTECTED_EDIT_OBJECT})*$`, 'i',
 );
+
+/** One object recognizer shared by Chat and Deep prohibition parsing. */
+export function isScopedEditObject(object: string): boolean {
+  return PROTECTED_EDIT_OBJECT_LIST.test(object) ||
+    /^(?:the|this|that|its)\s+(?!.*\b(?:filesystem|file[\s_-]+system|entire|whole)\b)(?:[A-Za-z0-9_.-]+\s+){0,3}(?:file|test|spec|fixture|module|script|manifest)(?:\s+in\s+[`"']?[\w./\\-]+\.[A-Za-z0-9_-]{1,12}[`"']?)?$/i.test(object);
+}
+
+/** Negated object/verb lists cannot supply a later positive mutation verb. */
+function stripScopedEditProhibitions(text: string): string {
+  let result = text;
+  for (const directive of text.matchAll(new RegExp(READ_ONLY_DIRECTIVE_SOURCE, 'gi'))) {
+    const afterVerb = directive.index + directive[0].length;
+    const clause = text.slice(afterVerb).split(/\.(?=\s|$)|[;!?\r\n]/, 1)[0]!;
+    if (!isScopedEditObject(clause.trim())) continue;
+    const end = afterVerb + clause.length;
+    // Preserve offsets while consuming every prohibited verb in this clause.
+    result = result.slice(0, directive.index) + ' '.repeat(end - directive.index) + result.slice(end);
+  }
+  return result;
+}
 
 /** Explicit no-edit language, independent of topic nouns such as "patch" or "fix". */
 export function hasExplicitEditDenial(taskText: string): boolean {
@@ -432,10 +452,30 @@ export function hasExplicitEditDenial(taskText: string): boolean {
   for (const directive of evidence.matchAll(new RegExp(READ_ONLY_DIRECTIVE_SOURCE, 'gi'))) {
     if (/^(?:read-?only|dry-?run)$/i.test(directive[0])) return true;
     const objectClause = evidence.slice(directive.index + directive[0].length)
-      .split(/[.;!?\r\n]/, 1)[0]!.trim();
-    if (!PROTECTED_EDIT_OBJECT_LIST.test(objectClause)) return true;
+      .split(/\.(?=\s|$)|[;!?\r\n]/, 1)[0]!.trim();
+    if (!isScopedEditObject(objectClause)) return true;
   }
   return false;
+}
+
+/** An explanation/review topic is not an imperative, even if named add/fix. */
+export function isReadOnlyTaskFrame(taskText: string): boolean {
+  const prose = stripInformationalFrames(stripFencedCodeBodies(taskText));
+  if (!/^\s*(?:explain|describe|summarize|review|audit|what|why|how)\b/i.test(prose)) return false;
+  // Bare coordinated names ("explain add and remove behavior") are topics.
+  // A separate imperative, an immediate "review and fix", or an explicit
+  // object after the paired verb is needed to leave the read-only frame.
+  const verbs = `(?:${READ_ONLY_VERB_SOURCE}|make|order|sort)`;
+  const directive = new RegExp(
+    `(?:\\b(?:then|afterwards)\\s+|[.;!?\\r\\n]\\s*|^\\s*(?:review|audit)\\s+and\\s+)(?:please\\s+)?${verbs}\\b|\\band\\s+${verbs}\\s+(?:it|this|that|the|a|an|any|all)\\b`, 'i');
+  if (directive.test(prose)) return false;
+  // Coordinated API names remain topics. A repair predicate with its own
+  // ordinary object ("and fix bugs", "and repair parser.js") is an action.
+  const topicName = '[A-Za-z_$][\\w$]*';
+  const topicList = new RegExp(`^\\s*(?:explain|describe|summarize|review|audit|what|why|how)\\s+(?:how\\s+)?${topicName}(?:\\s*(?:,|and|or)\\s*${topicName})+\\s+(?:behavior|semantics|work|operations?|functions?|methods?|apis?)\\b`, 'i');
+  const coordinatedEdit = new RegExp(`\\band\\s+(?:please\\s+)?(?:${MUTATION_VERB_SOURCE}|${DESTRUCTIVE_VERB_SOURCE}|make|order|sort)\\s+\\S+`, 'i');
+  const topic = topicList.exec(prose);
+  return !coordinatedEdit.test(topic ? prose.slice(topic[0].length) : prose);
 }
 
 /**
@@ -459,18 +499,21 @@ export function analyzeTaskShape(taskText: string): TaskShape {
   // "never patch X, but implement Y" mutating while "review; do not fix" stays
   // read-only.
   const mutationScope = stripInformationalFrames(
-    stripPathLikeTokens(stripFencedCodeBodies(t)),
+    stripPathLikeTokens(stripScopedEditProhibitions(stripFencedCodeBodies(t))),
   );
   const positiveMutationScope = mutationScope.replace(
     new RegExp(READ_ONLY_DIRECTIVE_SOURCE, 'gi'),
     ' ',
   );
-  const hasMutation =
+  const hasMutationTokens =
+    /^(?:(?:can|could|would)\s+you\s+|please\s+)?(?:make|order|sort)\b/i.test(positiveMutationScope.trim()) ||
+    /\b(?:and|then)\s+(?:make|order|sort)\s+(?:this|it|the|[\w-]+\s+(?:by|from))\b/i.test(positiveMutationScope) ||
     new RegExp(`\\b(clean\\s*up\\s+and\\s+delete|${MUTATION_VERB_SOURCE})\\b`, 'i').test(
       positiveMutationScope,
     ) ||
     (!hasReadOnlyDirective &&
       new RegExp(`\\b(?:${DESTRUCTIVE_VERB_SOURCE})\\b`, 'i').test(positiveMutationScope));
+  const hasMutation = hasMutationTokens && !isReadOnlyTaskFrame(t);
 
   // 3. Exploratory keywords (find, scan, list, check, explain, analyze, review, compare)
   const hasExploratory =

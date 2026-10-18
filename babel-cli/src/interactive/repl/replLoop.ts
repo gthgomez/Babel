@@ -93,12 +93,12 @@ export async function runReplLoop(ctx: ReplContext, deps: ReplLoopDeps): Promise
       },
       clearComposer: () => {
         setAdapterDraft(ctx, '');
-        ctx.rl.setPrompt(dim('› '));
+        ctx.rl.setPrompt('Input › ');
       },
       cancelPaste: () => {
         ctx.inPaste = false;
         ctx.pasteBuffer = [];
-        ctx.rl.setPrompt(dim('› '));
+        ctx.rl.setPrompt('Input › ');
         OutputBuffer.getInstance().write(muted('\n  Paste cancelled.\n'));
       },
       declineOverlay: () => {
@@ -153,7 +153,7 @@ export async function runReplLoop(ctx: ReplContext, deps: ReplLoopDeps): Promise
     if (ctx.inPaste) {
       if (line.trim() === '```') {
         ctx.inPaste = false;
-        ctx.rl.setPrompt(dim('› '));
+        ctx.rl.setPrompt('Input › ');
         const fullInput = ctx.pasteBuffer.join('\n').trim();
         ctx.pasteBuffer = [];
         if (!fullInput) {

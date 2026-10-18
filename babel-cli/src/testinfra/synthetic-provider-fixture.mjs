@@ -1,5 +1,6 @@
 /** Synthetic provider tests use a fresh process; no host credentials enter it. */
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, delimiter, isAbsolute, join, relative, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
@@ -20,6 +21,7 @@ const allowedNames = new Set([
   'XDG_STATE_HOME', 'XDG_CACHE_HOME', 'BABEL_ROOT', 'BABEL_CONFIG_DIR',
   'BABEL_STATE_DIR', 'BABEL_CACHE_DIR', 'BABEL_RUNS_DIR', 'BABEL_PROJECT_ROOT',
   'BABEL_OPENCODE_GO_HELPER', 'OPENROUTER_API_KEY', 'DEEPSEEK_API_KEY',
+  'BABEL_LIVE', 'BABEL_HEADLESS', 'BABEL_EXECUTION_PROFILE',
   fixtureKey, 'NODE_TEST_CONTEXT', 'NODE_TEST_WORKER_ID', 'FORCE_COLOR',
 ])
 
@@ -37,6 +39,24 @@ export function summarizeSyntheticProviderOutput(output, code) {
   })
 }
 
+/** Resolve the host Git executable directory for isolated child PATH (Windows only). */
+function resolveHostGitDir() {
+  if (process.platform !== 'win32') return null
+  try {
+    const output = execFileSync('where.exe', ['git'], { encoding: 'utf8', windowsHide: true }).trim()
+    const candidate = output
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .find((line) => /\\git\.exe$/i.test(line)) ?? output.split(/\r?\n/)[0]?.trim()
+    if (!candidate) return null
+    const dir = dirname(candidate)
+    if (!isAbsolute(dir) || !existsSync(join(dir, 'git.exe'))) return null
+    return dir
+  } catch {
+    return null
+  }
+}
+
 /** Build an allowlisted environment without copying or enumerating host secrets. */
 export function prepareSyntheticProviderFixture() {
   const root = mkdtempSync(join(tmpdir(), 'babel-synthetic-provider-'))
@@ -44,13 +64,26 @@ export function prepareSyntheticProviderFixture() {
   for (const name of ['home', 'config', 'state', 'cache', 'runs', 'tmp', 'workspace']) {
     mkdirSync(join(root, name))
   }
+  const workspace = join(root, 'workspace')
+  execFileSync('git', ['init', '-q'], { cwd: workspace, windowsHide: true })
+  execFileSync('git', ['config', 'user.email', 'fixture@example.test'], { cwd: workspace, windowsHide: true })
+  execFileSync('git', ['config', 'user.name', 'Fixture'], { cwd: workspace, windowsHide: true })
+  execFileSync('git', ['commit', '-q', '--allow-empty', '-m', 'fixture'], { cwd: workspace, windowsHide: true })
   const helper = join(root, 'auth-helper.cjs')
   writeFileSync(helper, helperBytes)
   const systemRoot = process.platform === 'win32'
     ? process.env['SystemRoot'] ?? process.env['SYSTEMROOT'] ?? 'C:\\Windows'
     : undefined
+  const pathParts = [dirname(process.execPath)]
+  if (systemRoot) {
+    pathParts.push(join(systemRoot, 'System32'))
+    const gitDir = resolveHostGitDir()
+    if (gitDir) pathParts.push(gitDir)
+  } else {
+    pathParts.push('/usr/bin', '/bin')
+  }
   const env = {
-    PATH: [dirname(process.execPath), ...(systemRoot ? [join(systemRoot, 'System32')] : [])].join(delimiter),
+    PATH: pathParts.join(delimiter),
     HOME: join(root, 'home'), USERPROFILE: join(root, 'home'),
     APPDATA: join(root, 'config'), LOCALAPPDATA: join(root, 'state'),
     XDG_CONFIG_HOME: join(root, 'config'), XDG_STATE_HOME: join(root, 'state'),

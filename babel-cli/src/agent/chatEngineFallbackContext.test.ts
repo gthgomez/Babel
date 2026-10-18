@@ -103,8 +103,10 @@ for (const route of ['ordinary_raw', 'legacy_fallback', 'native_downgrade', 'go_
     const events = []
     const announced: string[] = []
     const settled: string[] = []
+    let failureReason: string | undefined
     for await (const event of engine.submitMessageStream('Inspect GOAL_SENTINEL; preserve USER_SENTINEL', 'explain')) {
       events.push(event.type)
+      if (event.type === 'failed') failureReason = event.reason_code
       if (event.type === 'tool_start') {
         assert.ok(event.toolCallId)
         announced.push(event.toolCallId)
@@ -127,11 +129,15 @@ for (const route of ['ordinary_raw', 'legacy_fallback', 'native_downgrade', 'go_
       return
     }
     if (runner.invalidNativeInput) {
+      assert.equal(failureReason, 'native_tool_protocol_invalid')
       assert.ok(events.includes('failed'), 'invalid native calls fail before any executor dispatch or protocol retry')
       assert.equal(events.includes('tool_complete'), false)
       assert.equal(runner.nativeFailures, 1)
       assert.equal(runner.bodies.length, 0)
       assert.deepEqual(settled, announced)
+      const rejection = JSON.parse(readFileSync(join((engine as unknown as { engineRunDir: string }).engineRunDir, 'native-tool-rejection.json'), 'utf8'))
+      assert.equal(rejection.dispatched, false)
+      assert.equal(rejection.reason, route === 'invalid_arguments' ? 'arguments_schema_invalid' : 'call_identity_invalid')
       return
     }
     if (route === 'go_refusal') {

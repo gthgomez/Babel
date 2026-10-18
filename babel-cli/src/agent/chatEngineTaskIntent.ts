@@ -1,5 +1,6 @@
 /** Task-text intent policy, separate from submission and completion authority. */
 import type { TaskIntent } from './chatEngineContracts.js'
+import { hasExplicitEditDenial, analyzeTaskShape, isReadOnlyTaskFrame } from '../config/chatTaskClass.js'
 
 const PUNCTUATION_ONLY_TURN_RE = /^[\s\p{P}\p{S}\p{C}]*$/u
 
@@ -31,16 +32,18 @@ export function classifyChatTaskIntent(task: string): TaskIntent {
   // content (a pasted snippet, diff, or a path named "repair"/"write") is
   // never mutation authority, and "fix this without editing files" routes to
   // explain rather than execute.
-  if (
-    /\b(without\s+(editing|modifying|changing|writing|touching)|read[- ]only|do\s+not\s+(edit|modify|change|write|delete|remove))\b/i.test(
-      task,
-    )
-  )
-    return 'explain'
+  if (hasExplicitEditDenial(task)) return 'explain'
+  // Classify user prose only. Code/diffs and prohibited clauses are evidence,
+  // never positive authority (including a standalone scoped prohibition).
+  task = task.replace(/```[\s\S]*?(?:```|$)/g, ' ')
+    .replace(/\b(?:do\s+not|don't|never)\s+(?:edit|modify|change|write|delete|remove)[\s\S]*?(?:\.(?=\s|$)|[;!?\r\n]|$)/gi, ' ')
+  if (!task.trim()) return 'explain'
+  if (isReadOnlyTaskFrame(task)) return 'explain'
+  if (analyzeTaskShape(task).operation !== 'READ_ONLY') return 'execute'
+  if (/\b(?:without\s+(?:editing|modifying|changing|writing)|do\s+not|don't|never)\b/i.test(task)) return 'explain'
+  if (/^\s*(?:explain|describe|summarize|review|audit)\b/i.test(task)) return 'explain'
 
   // Explicit markdown fenced code blocks or diff/patch snippets → execute
-  if (/```(?:diff|patch|javascript|typescript|python|go|rust)\b/.test(task))
-    return 'execute'
 
   // Review/audit prompts are read-only even when their evidence contains
   // mutation-shaped words such as "repair" in a path or diff description.

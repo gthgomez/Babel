@@ -3,7 +3,7 @@
  */
 
 import type { ChatEvent, ChatResult } from '../../agent/chatEngine.js';
-import { computeTerminalOutcome, outcomeFromReasonCode } from '../../agent/chatEngineObservability.js';
+import { computeTerminalOutcome, outcomeFromReasonCode, readChatTranscript } from '../../agent/chatEngineObservability.js';
 import type { TurnRoutingReceipt } from '../../agent/turnRoutingReceipt.js';
 import type { BlockedReport, TerminalOutcome } from '../../schemas/agentContracts.js';
 import type { SessionUsageSummary } from '../../services/costTracker.js';
@@ -269,7 +269,7 @@ export function terminalResultFromDoneEvent(
     ...(terminal.outcome !== undefined ? { outcome: terminal.outcome } : {}),
     answer,
     usage,
-    conversation: [],
+    conversation: readChatTranscript(runDir),
     ...(toolCalls ? { toolCalls } : {}),
     ...(runDir ? { runDir } : {}),
     ...(verifierReceipt ? { verifierReceipt } : {}),

@@ -94,6 +94,17 @@ test('credential resolvers see only the synthetic helper and fresh home', async 
   assert.ok(!result.diagnostic.includes('synthetic-router-credential'))
 })
 
+test('fixture child PATH can invoke git for physical capture helpers', async () => {
+  const result = await captureSyntheticChild(`
+    import { execFileSync } from 'node:child_process'
+    const version = execFileSync('git', ['--version'], { encoding: 'utf8' }).trim()
+    if (!version.startsWith('git version')) throw new Error('GIT_UNAVAILABLE')
+    console.log('git available in child')
+  `)
+  assert.equal(result.code, 0, result.output)
+  assert.ok(result.output.includes('git available in child'))
+})
+
 test('fixture blocks fetch and alternate HTTP/socket dispatch before provider imports', async () => {
   const result = await captureSyntheticChild(`
     import assert from 'node:assert/strict'

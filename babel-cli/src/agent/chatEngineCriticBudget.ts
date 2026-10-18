@@ -498,6 +498,7 @@ export interface AsymmetricCriticState {
   turnTimeoutMs: number;
   /** Primary implementor model; keeps the critic on the fixed campaign model. */
   primaryModel?: string;
+  pinSelectedModel?: boolean;
   /** Transport identity survives secondary model resolution; never infer it from a name. */
   primaryProvider?: string;
   resolveDeliberationRunner: () => CriticRunner;
@@ -565,7 +566,7 @@ export async function runAsymmetricDiffCritic(
     const mutationTargets = mutationTargetsFromLog(state.toolCallLog);
     const collected = collectWorkspacePatch(state.projectRoot, { mutationTargets });
 
-    const modelId = state.primaryProvider === 'opencode-go'
+    const modelId = state.pinSelectedModel || state.primaryProvider === 'opencode-go'
       ? state.primaryModel ?? '' : resolveDiffCriticModel(state.primaryModel);
     const flashResolved = resolveOrCreateCriticRunner(
       modelId,
@@ -576,7 +577,7 @@ export async function runAsymmetricDiffCritic(
     state.criticRunner = flashResolved.cache;
     const runner = flashResolved.runner;
 
-    const proModelId = state.primaryProvider === 'opencode-go'
+    const proModelId = state.pinSelectedModel || state.primaryProvider === 'opencode-go'
       ? state.primaryModel ?? '' : resolveDiffCriticProModel(state.primaryModel);
     const sweTier = isSweCriticTierEnabled() || isSweChatProfileEnabled();
     state.onThought?.('[Diff critic: reviewing patch vs task…]');

@@ -201,6 +201,30 @@ function makeSseResponse(sseLines: string[]): Response {
   return new Response(data, { status: 200 });
 }
 
+for (const scenario of ['unchanged', 'trimmed', 'missing', 'duplicate'] as const) {
+  test(`DeepSeek native raw ${scenario} IDs retain normalization provenance`, async () => {
+    const { DeepSeekApiRunner } = await import('./deepSeekApi.js');
+    const rawId = scenario === 'missing' ? '' : scenario === 'duplicate' ? 'valid-call' : scenario === 'trimmed' ? ' rejected-call ' : 'rejected-call';
+    globalThis.fetch = (async () => makeSseResponse([
+      `data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [
+        { index: 0, id: 'valid-call', type: 'function', function: { name: 'read_file', arguments: '{"path":"fixture.txt"}' } },
+        { index: 1, id: rawId, type: 'function', function: { name: 'str_replace', arguments: '{"file_path":"fixture.txt","new_str":"fixture"}' } },
+      ] }, finish_reason: 'tool_calls' }], usage: { prompt_tokens: 20, completion_tokens: 10, total_tokens: 30 } })}`,
+      'data: [DONE]',
+    ])) as typeof fetch;
+    const runner = new DeepSeekApiRunner('deepseek-v4-flash', {explicitCredential: 'sk-fixture-only-no-network', env: {}});
+    const calls = [];
+    for await (const event of runner.executeWithToolsStream([{role: 'user', content: 'fixture'}], [])) {
+      if (event.type === 'tool_use') calls.push(event);
+    }
+    assert.equal(calls.length, 2);
+    assert.equal(calls[0]!.idWasNormalized, undefined);
+    assert.equal(calls[1]!.idWasNormalized, scenario === 'unchanged' ? undefined : true);
+    assert.notEqual(calls[0]!.id, calls[1]!.id);
+    assert.equal(runner.getLastInvocationMetadata()?.total_tokens, 30, 'draining still settles provider usage');
+  });
+}
+
 test('DeepSeek API runner executeWithToolsStream yields tool_use for native tool calls', async () => {
   process.env['DEEPSEEK_API_KEY'] = 'sk-test-key';
   const { DeepSeekApiRunner } = await import('./deepSeekApi.js');

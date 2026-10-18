@@ -1032,9 +1032,7 @@ export interface ChatEngineCompactionHost {
   turnId: string | null;
   /** Provider lifecycle callbacks for the LLM summarizer inference. */
   providerCallbacks?: RunnerCallbacks;
-  onCompactionUsage?: (usage: {
-    inferenceId: string; modelId: string; inputTokens: number | null; outputTokens: number | null;
-  }) => void;
+  onCompactionUsage?: import('./chatCompaction.js').CompactionOptions['onUsageRecorded'];
   shouldUseTextTools: () => boolean;
   compactHeuristic: () => void;
   checkpoint: () => Promise<void>;
@@ -1049,6 +1047,8 @@ export interface ChatEngineCompactionHost {
   estimateTokens: (messages: ChatMessage[]) => number;
   /** Admission recovery may request one bounded compaction even before the normal token trigger. */
   forceCompaction?: boolean;
+  /** Throws before paid work; validates capture/owner again before durable pruning. */
+  prepareContextGuard?: () => (() => boolean);
   isOwnerCurrent?: () => boolean;
   /**
    * Packet A5: when provided, every compaction attempt emits a strict
@@ -1258,6 +1258,8 @@ export async function runChatEngineCompaction(
     tokenTriggered ||
     tokenEstimate > host.limits.maxEstimatedTokens - reserve;
   const ownerIsCurrent = (): boolean => !host.isOwnerCurrent || host.isOwnerCurrent();
+  if (!ownerIsCurrent()) return null;
+  const contextStillCurrent = compactionNeeded ? host.prepareContextGuard?.() : undefined;
   // ── Packet A5: condensation-as-event emission (strict started/completed) ──
   const condensation = host.condensationFacts;
   let condensationId = '';
@@ -1328,12 +1330,13 @@ export async function runChatEngineCompaction(
           return true;
         },
         blockOnPersistFailure: true,
-        isOwnerCurrent: ownsConversation,
+        isOwnerCurrent: () => ownsConversation() && (!contextStillCurrent || contextStillCurrent()),
         validateCommit: () => {
           const afterRequest = serializedProviderRequestForAdmission(host);
           const tokensBeforeCommit = host.estimateTokens(prior);
           const tokensAfterCommit = host.estimateTokens(host.conversation);
           return ownsConversation()
+            && (!contextStillCurrent || contextStillCurrent())
             && retainedTaskIsPresent(host)
             && compactionCommitAcceptsSerializedRequest(
               host,
@@ -1448,10 +1451,11 @@ export async function runChatEngineCompaction(
               return true;
             },
             blockOnPersistFailure: true,
-            isOwnerCurrent: ownerIsCurrent,
+            isOwnerCurrent: () => ownerIsCurrent() && (!contextStillCurrent || contextStillCurrent()),
             validateCommit: () => {
               const afterRequest = serializedProviderRequestForAdmission(host);
               return ownerIsCurrent()
+                && (!contextStillCurrent || contextStillCurrent())
                 && retainedTaskIsPresent(host)
                 && compactionCommitAcceptsSerializedRequest(
                   host,

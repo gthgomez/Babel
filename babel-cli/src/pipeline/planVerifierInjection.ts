@@ -3,6 +3,7 @@ import { join } from 'node:path';
 
 import type { ActionStep, SwePlan } from '../schemas/agentContracts.js';
 import { isVerifierCommand } from '../services/terminalStatus.js';
+import { shouldUseDockerSandbox } from '../config/benchmarkContainer.js';
 
 function splitCommandList(raw: string): string[] {
   return raw
@@ -154,7 +155,7 @@ function synthContentReadCommand(target: string): string {
   // On Windows: `type file`; elsewhere: `cat file`.
   // No quotes — cmd.exe /c type resolves the filename relative to the working
   // directory, and quoting interferes with argument parsing through spawn.
-  const cmd = process.platform === 'win32' ? 'type' : 'cat';
+  const cmd = process.platform === 'win32' && !shouldUseDockerSandbox() ? 'type' : 'cat';
   // Normalize backslashes to forward slashes to avoid triggering the shell
   // operator check in sandbox.ts (backslash is a path separator on Windows,
   // not a shell metacharacter).

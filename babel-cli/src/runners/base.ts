@@ -394,7 +394,7 @@ export interface ToolDefinition {
 export type ToolStreamEvent =
   | { type: 'text_delta'; text: string }
   | { type: 'thought_delta'; text: string }
-  | { type: 'tool_use'; id: string; name: string; input: Record<string, unknown> }
+  | { type: 'tool_use'; id: string; name: string; input: Record<string, unknown>; idWasNormalized?: true }
   | { type: 'done'; finishReason: string }
   | { type: 'error'; message: string };
 

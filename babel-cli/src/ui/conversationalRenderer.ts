@@ -15,7 +15,6 @@ import { RawModeManager } from './rawMode.js';
 import { KeybindingManager } from './keybindings.js';
 import { FrameScheduler } from './frameScheduler.js';
 import { composeThinkingHud, leaveThinking, type ThinkingExitReason } from './thinkingState.js';
-import { canUseCursorRewrite } from './cursorRewritePolicy.js';
 import { MarkdownAccumulator } from './markdownAccumulator.js';
 import { renderBackgroundTaskOverlay } from './backgroundTaskOverlay.js';
 import { ScrollbackBuffer } from './scrollback.js';
@@ -23,9 +22,11 @@ import { ScreenManager } from './screenManager.js';
 import { OutputBuffer } from './outputBuffer.js';
 import { isA11yMode, a11yToolEvent } from './a11y.js';
 import { ChunkCoalescer } from './chunkCoalescer.js';
+import { recordInteractiveDiagnostic } from './interactiveDiagnostics.js';
+import { ConversationPresentation } from './conversationPresentation.js';
+import { isRendererPresentationSuspended } from './rendererFence.js';
 import { TwoRegionStreaming } from './twoRegionStreaming.js';
 import { AgentStreamManager, type AgentStreamEvent } from './agentProgress.js';
-import { getMotionMode, MotionMode } from './motion.js';
 import { renderUnseenDividerPill } from './unseenDivider.js';
 import { StateStore, createTuiStore, type TuiMutation, type TuiState } from './stateMutationBus.js';
 import { HistoryCellViewport, HistoryTranscript } from './historyCells/index.js';
@@ -129,6 +130,22 @@ export class ConversationalRenderer extends BaseRenderer {
   private _cellViewport: HistoryCellViewport;
   /** Buffer for accumulating consecutive tool execution summaries to group them into N-item lines. */
   private _pendingToolExecutions: ToolExecutionSummary[] = [];
+  private _bufferingAnswer = false;
+  private readonly _presentation = new ConversationPresentation();
+
+  private _writeCommitted(text: string): boolean {
+    let accepted = !this.outputBroken;
+    this._presentation.run(() => { accepted = safeStdoutWrite(text); });
+    return accepted;
+  }
+
+  private _writeTranscript(text: string): void {
+    const region = this._twoRegion;
+    this._presentation.run(() => {
+      if (region?.isHardwareMode) region.writeCommittedLines(text);
+      else safeStdoutWrite(text);
+    });
+  }
 
   /** Sync a subset of renderer instance fields from the StateStore.
    *  Fields synced: paused, thoughtCollapsed, thoughtText.
@@ -186,14 +203,25 @@ export class ConversationalRenderer extends BaseRenderer {
         // Case-3 cursor-up rewrite deltas through writeStreaming() appends
         // another copy of the answer (and the CSI itself) into the line
         // buffer — the Windows Terminal smear/reprint bug.
-        if (this._twoRegion?.isHardwareMode) {
-          this._twoRegion.replaceStreamingContent(this._mdAccumulator.getRenderedText());
+        if (this._mdAccumulator.paintPolicy === 'snapshot') {
+          const region = this._twoRegion;
+          const rendered = this._mdAccumulator.getRenderedText(renderMarkdown);
+          this._presentation.preview(() => region?.replaceStreamingContent(rendered, { deferGraduation: true }));
+          // A short terminal temporarily has no mutable region. Wakeup bytes
+          // are source, not append deltas; keep the snapshot until finalization.
           return;
         }
-        this._writeOutput(batch);
+        const clearHud = this._bufferingAnswer;
+        this._presentation.run(() => {
+          if (clearHud) safeStdoutWrite('\r\x1b[K');
+          this._writeOutput(batch);
+        });
         this._pushLinesToScrollback(batch);
+        if (this._bufferingAnswer) this._tick();
       },
-      16, // 16ms batch window (~60 FPS)
+      { batchWindowMs: 16, logLatency: false, onMetrics: (metrics) => {
+        if (process.env['BABEL_STREAM_LATENCY'] === '1') recordInteractiveDiagnostic('stream-latency', JSON.stringify(metrics));
+      } },
     );
     this._agentStreams = new AgentStreamManager();
     this._cancelCallback = null;
@@ -311,10 +339,20 @@ export class ConversationalRenderer extends BaseRenderer {
     if (!this.isTTY || this.outputBroken) return;
     if (this.paused) return;
 
+    const snapshot = this._mdAccumulator.paintPolicy === 'snapshot';
+    // Stable prefixes have already left the source buffer: they must be
+    // painted, not discarded. Snapshot wakeups can safely be replaced.
+    if (snapshot) this._chunkCoalescer.drain();
+    else this._chunkCoalescer.flush();
+    clearMdRenderCache();
+
     this._mdAccumulator.setViewportHeight(height);
     this._mdAccumulator.setTerminalWidth(width);
     this._cellViewport.setWidth(width);
     this._syncCellViewport();
+    // Update geometry even before the first answer/paint. A stable turn must
+    // never promote its already-committed history into a mutable snapshot.
+    this._twoRegion?.onResize(height, width, { allowHardware: snapshot });
 
     if (this.screenManager) {
       this.screenManager.refreshDimensions();
@@ -328,34 +366,19 @@ export class ConversationalRenderer extends BaseRenderer {
       return;
     }
 
-    const oldLines = this._mdAccumulator.totalLines;
-    if (oldLines <= 0) return;
-
-    this._chunkCoalescer.drain();
-    clearMdRenderCache();
-
-    if (this._twoRegion) {
-      this._twoRegion.onResize(height, width);
-    }
-
     if (this._twoRegion?.isHardwareMode) {
+      if (this._bufferingAnswer) safeStdoutWrite('\r\x1b[K');
+      this._bufferingAnswer = false;
       const reflowedHw = this._mdAccumulator.reflow(width, renderMarkdown);
-      if (reflowedHw) this._twoRegion.replaceStreamingContent(reflowedHw);
+      if (reflowedHw) this._twoRegion.replaceStreamingContent(reflowedHw, { deferGraduation: true });
       return;
     }
-
-    if (!canUseCursorRewrite()) {
-      // ConPTY cannot apply CUU/ED. Keep already-emitted cells; future wraps
-      // use the updated width. Do not desync lastRendered via a silent reflow.
-      return;
+    if (snapshot) {
+      this._bufferingAnswer = true;
+      this._registerThinkingTicker();
+      this._tick();
     }
-
-    const reflowed = this._mdAccumulator.reflow(width, renderMarkdown);
-    if (!reflowed) return;
-
-    const viewportRows = height;
-    const cursorUp = Math.min(oldLines, Math.max(1, viewportRows - 1));
-    safeStdoutWrite(`\x1b[${cursorUp}A\x1b[J${reflowed}`);
+    // Committed fallback cells belong to terminal scrollback; never replay.
   }
 
   /** Fix 1+3: FrameScheduler tick — updates live elapsed time + spinner.
@@ -365,7 +388,13 @@ export class ConversationalRenderer extends BaseRenderer {
    *  Fix: Skip tick when tool call indicators are visible to prevent
    *  \r\x1b[K from erasing active tool call lines. */
   private _tick(): void {
-    if (this.paused || this.outputBroken) return;
+    if (this.paused || this._pausedTicks || this.outputBroken || isRendererPresentationSuspended()) return;
+    if (this._state === 'streaming' && this._bufferingAnswer) {
+      const hud = composeThinkingHud({ indicatorLine: `  Receiving response… (elapsed ${Math.floor((Date.now() - this.startTime) / 1000)}s · Ctrl+C cancel)`,
+        overlayLines: [], columns: OutputBuffer.getTerminalSize().cols, previousOverlayLines: 0 });
+      safeStdoutWrite(hud.output);
+      return;
+    }
     if (this._state !== 'thinking') return;
     if (this._pendingToolCallLines > 0) return;
     this._spinnerFrame = (this._spinnerFrame + 1) % SPINNER_FRAMES.length;
@@ -382,7 +411,7 @@ export class ConversationalRenderer extends BaseRenderer {
   /** Render the live thinking/progress line with optional bg task row below.
    *  All writes are batched into a single safeStdoutWrite call per frame. */
   private _writeThinkingLine(): void {
-    if (!this.isTTY) return;
+    if (!this.isTTY || isRendererPresentationSuspended()) return;
     const spinner = SPINNER_FRAMES[this._spinnerFrame] ?? '◐';
     const stallMs = Date.now() - this._lastActivityTime;
     const { indicator, timer } = formatConversationThinkingStatus({
@@ -425,7 +454,7 @@ export class ConversationalRenderer extends BaseRenderer {
    *  Always clears the thinking spinner line, then any _showingOverlayLines, before subsequent writes. */
   private _leaveThinking(reason: ThinkingExitReason): void {
     const result = leaveThinking({ state: this._state, reason, isTTY: this.isTTY === true, overlayLines: this._showingOverlayLines,
-      write: safeStdoutWrite, transition: (state) => { this._state = state; this._store?.dispatch({ type: 'state:transition', to: state }); }, unregisterTick: this._unregisterTick });
+      write: (text) => this._writeCommitted(text), transition: (state) => { this._state = state; this._store?.dispatch({ type: 'state:transition', to: state }); }, unregisterTick: this._unregisterTick });
     this._state = result.state; this._showingOverlayLines = result.overlayLines; this._unregisterTick = result.unregisterTick;
   }
 
@@ -463,6 +492,7 @@ export class ConversationalRenderer extends BaseRenderer {
   }
 
   override enableRawMode(): void {
+    if (this._state === 'done' || this._state === 'failed') return;
     if (!this.ownsInput) return;
     if (this._rawMode.isActive) return;
     this._rawMode.enable((event) => {
@@ -607,8 +637,9 @@ export class ConversationalRenderer extends BaseRenderer {
   override resumeTicks(): void {
     super.resumeTicks();
     this._twoRegion?.reconcileAfterExclusiveSurface();
-    if (this._twoRegion?.isHardwareMode) {
-      this._twoRegion.replaceStreamingContent(this._mdAccumulator.getRenderedText());
+    this._presentation.flush();
+    if (this._twoRegion?.isHardwareMode && this._mdAccumulator.totalBytes > 0) {
+      this._twoRegion.replaceStreamingContent(this._mdAccumulator.getRenderedText(renderMarkdown), { deferGraduation: true });
     }
   }
 
@@ -667,7 +698,7 @@ export class ConversationalRenderer extends BaseRenderer {
   private _flushAgentStreams(): void {
     const lines = this._agentStreams.drain();
     for (const line of lines) {
-      safeStdoutWrite(line + '\n');
+      this._writeTranscript(line + '\n');
       this._pushLinesToScrollback(line);
     }
   }
@@ -724,6 +755,8 @@ export class ConversationalRenderer extends BaseRenderer {
    *   (end of turn), graduate and drop the hardware region.
    */
   finalizeAnswerStream(persistHardwareRegion = false): void {
+    if (this._bufferingAnswer && this.isTTY) this._writeCommitted('\r\x1b[K');
+    this._bufferingAnswer = false;
     const hasStream =
       this._currentGenerationHasStream ||
       this._mdAccumulator.totalBytes > 0 ||
@@ -733,8 +766,29 @@ export class ConversationalRenderer extends BaseRenderer {
       this._syncCellViewport();
       if (this.isTTY) {
         const held = this._mdAccumulator.finalize(renderMarkdown);
-        if (held) this._chunkCoalescer.push(held);
-        this._chunkCoalescer.flush();
+        if (this._mdAccumulator.paintPolicy === 'snapshot') {
+          this._chunkCoalescer.drain();
+          const region = this._twoRegion;
+          // Capture the settled generation, not the live accumulator or region
+          // lines. Later generations may advance while a foreign surface owns
+          // the terminal; their presentation must not overwrite this boundary.
+          this._presentation.run(() => {
+            if (region?.isHardwareMode) region.replaceStreamingContent(held, { deferGraduation: true });
+            else if (held) this._writeOutput(held);
+            if (persistHardwareRegion) {
+              if (!region?.isHardwareMode && held && !held.endsWith('\n')) safeStdoutWrite('\n');
+              region?.beginNewStreamingMessage();
+            } else region?.commitStreaming();
+          });
+          if (held) this._pushLinesToScrollback(held);
+        } else {
+          if (held) this._chunkCoalescer.push(held);
+          this._chunkCoalescer.flush();
+        }
+        if (persistHardwareRegion && !this._twoRegion?.isHardwareMode &&
+            this._mdAccumulator.totalBytes > 0 && !this._mdAccumulator.getRenderedText().endsWith('\n')) {
+          if (this._mdAccumulator.paintPolicy !== 'snapshot') this._writeCommitted('\n');
+        }
       }
       this._mdAccumulator.reset();
       this._currentGenerationHasStream = false;
@@ -742,15 +796,25 @@ export class ConversationalRenderer extends BaseRenderer {
         // Generation/tool seam: the next segment must start from a clean
         // live buffer so answers never concatenate across boundaries.
         this.answerChunks = [];
-        if (this._twoRegion?.isHardwareMode) this._twoRegion.beginNewStreamingMessage();
+        if (this._mdAccumulator.paintPolicy !== 'snapshot') {
+          const region = this._twoRegion;
+          this._presentation.run(() => region?.beginNewStreamingMessage());
+        }
       } else {
         // End of turn: keep the settled text readable via getAnswerText() /
         // getTranscript(). Further assistant writes are already forbidden by
         // _turnMetadataStarted, and the hardware region graduates.
-        if (this._twoRegion?.isHardwareMode) this._twoRegion.commitStreaming();
+        if (this._mdAccumulator.paintPolicy !== 'snapshot') {
+          const region = this._twoRegion;
+          this._presentation.run(() => region?.commitStreaming());
+        }
       }
     } else if (this.isTTY) {
       this._chunkCoalescer.flush();
+      if (!persistHardwareRegion) {
+        const region = this._twoRegion;
+        this._presentation.run(() => region?.commitStreaming());
+      }
     }
   }
 
@@ -793,7 +857,7 @@ export class ConversationalRenderer extends BaseRenderer {
     this._store?.dispatch({ type: 'answer:chunk', text: chunk });
     // Clear "Thinking…" on first chunk (length is now 1 after push)
     if (this.answerChunks.length === 1 && this.isTTY) {
-      safeStdoutWrite('\r\x1b[K');
+      this._writeCommitted('\r\x1b[K');
     }
     if (this.isTTY) {
       // Use incremental markdown rendering — only emit the delta
@@ -801,8 +865,18 @@ export class ConversationalRenderer extends BaseRenderer {
       // Deltas are batched through ChunkCoalescer for 16ms windows,
       // reducing terminal writes by 10-30× with no visible latency.
       const delta = this._mdAccumulator.feed(chunk, renderMarkdown);
-      if (delta) {
+      if (this._mdAccumulator.paintPolicy === 'snapshot' && !this._twoRegion?.isHardwareMode) {
+        this._bufferingAnswer = true;
+        this._registerThinkingTicker();
+        this._tick();
+      } else if (delta) {
+        if (this._bufferingAnswer) this._writeCommitted('\r\x1b[K');
+        this._bufferingAnswer = false;
         this._chunkCoalescer.push(delta);
+      } else if (this._mdAccumulator.paintPolicy === 'stable') {
+        this._bufferingAnswer = true;
+        this._registerThinkingTicker();
+        this._tick();
       }
     }
   }
@@ -832,10 +906,10 @@ export class ConversationalRenderer extends BaseRenderer {
     for (const group of groups) {
       const formatted = formatToolGroupSummary(group, this.verboseMode);
       if (this.isTTY) {
-        safeStdoutWrite(`\r${formatted}\n`);
+        this._writeTranscript(`${formatted}\n`);
         this._pushLinesToScrollback(formatted);
       } else {
-        safeStdoutWrite(`${formatted}\n`);
+        this._writeTranscript(`${formatted}\n`);
         this._pushLinesToScrollback(formatted);
       }
     }
@@ -883,11 +957,7 @@ export class ConversationalRenderer extends BaseRenderer {
       // emit \r\x1b[K and erase the freshly-printed tool call indicator.
       this._pendingToolCallLines++;
       const label = conversationalToolLabel(tool, target);
-      if (this._pendingToolExecutions.length === 0) {
-        safeStdoutWrite(`\n  ${dim('○')} ${label}`);
-      } else {
-        safeStdoutWrite(`\r  ${dim('○')} ${label}`);
-      }
+      this._writeTranscript(`\n  ${muted('○')} ${label}\n`);
     }
     if (isA11yMode()) {
       a11yToolEvent(tool, target);
@@ -954,7 +1024,7 @@ export class ConversationalRenderer extends BaseRenderer {
           hasUnknowns: classification.status === 'unknown',
         };
         const formatted = formatToolGroupSummary(group, true);
-        safeStdoutWrite(`\r${formatted}\n`);
+        this._writeTranscript(`${formatted}\n`);
         this._pushLinesToScrollback(formatted);
       } else if (isIntervention) {
         this._flushPendingToolExecutions();
@@ -967,15 +1037,15 @@ export class ConversationalRenderer extends BaseRenderer {
           hasUnknowns: false,
         };
         const formatted = formatToolGroupSummary(group, false);
-        safeStdoutWrite(`\r${formatted}\n`);
+        this._writeTranscript(`${formatted}\n`);
         this._pushLinesToScrollback(formatted);
       } else {
         this._pendingToolExecutions.push(summary);
       }
     } else {
-      const detailStr = detail ? ` (${detail})` : '';
-      const line = `[${formatElapsed(Date.now() - this.startTime)}] ${pending.tool} ${pending.target}${detailStr}`;
-      safeStdoutWrite(`${line}\n`);
+      const detailStr = [detail, error].filter(Boolean).join('; ');
+      const line = `[${formatElapsed(Date.now() - this.startTime)}] ${pending.tool} ${pending.target} — ${classification.status}${exitCode !== undefined ? ` (exit ${exitCode})` : ''}${detailStr ? `: ${detailStr}` : ''}`;
+      this._writeTranscript(`${line}\n`);
       this._pushLinesToScrollback(line);
     }
   }
@@ -1003,7 +1073,7 @@ export class ConversationalRenderer extends BaseRenderer {
       if (additions > 0) parts.push(success(`+${additions}`));
       if (deletions > 0) parts.push(error(`-${deletions}`));
       const mainLine = `  ${dim('└')} ${hyperlinkFile(filePath, info(filePath))} ${parts.join(' ')}`;
-      safeStdoutWrite(`${mainLine}\n`);
+      this._writeTranscript(`${mainLine}\n`);
       this._pushLinesToScrollback(mainLine);
 
       // Render inline unified diff content if available
@@ -1055,7 +1125,7 @@ export class ConversationalRenderer extends BaseRenderer {
           diffOut.push(`  ${dim('... (' + (allLines.length - maxLines) + ' more lines)')}`);
         }
         const fullDiff = diffOut.join('\n');
-        safeStdoutWrite(fullDiff + '\n');
+        this._writeTranscript(fullDiff + '\n');
         this._pushLinesToScrollback(fullDiff);
       }
     }
@@ -1063,19 +1133,20 @@ export class ConversationalRenderer extends BaseRenderer {
 
   /** End of run — elapsed/tool-count only. Turn cost lives on the ReviewCard. */
   onSummary({ costUSD: _costUSD, perRunCost: _perRunCost }: SummaryOptions = {}): void {
+    if (this._turnMetadataStarted) return;
     this.finalizeAnswerStream(false);
     this._flushPendingToolExecutions();
     if (this.outputBroken) return;
     this._turnMetadataStarted = true;
-    if (this.isTTY) safeStdoutWrite('\r\x1b[K');
+    if (this.isTTY && this._state === 'thinking') this._leaveThinking('stream');
     const elapsed = formatElapsed(Date.now() - this.startTime);
     if (this.isTTY) {
-      let output = `\n  ${dim('·')} ${muted(elapsed)}`;
+      let output = `\n  ${dim('·')} ${muted(`Elapsed ${elapsed}`)}`;
       if (this.toolCallCount > 0) {
         output += `  ${dim('·')} ${this.toolCallCount} tool call${this.toolCallCount !== 1 ? 's' : ''}`;
       }
       output += '\n';
-      safeStdoutWrite(output);
+      this._writeCommitted(output);
       this._pushLinesToScrollback(output);
     }
   }
@@ -1175,7 +1246,7 @@ export class ConversationalRenderer extends BaseRenderer {
       const body = message ? dim(` - ${message}`) : dim(` (Score: ${score})`);
 
       const line = `  ${dim('↳')} ${title} Progress/Recovery${body}`;
-      safeStdoutWrite(`${line}\n`);
+      this._writeTranscript(`${line}\n`);
       this._pushLinesToScrollback(line);
     }
   }
@@ -1190,7 +1261,7 @@ export class ConversationalRenderer extends BaseRenderer {
     this._recordActivity();
     const line = message?.trim() || '[Context compacted…]';
     const display = this.isTTY ? dim(`  ${line}`) : `  ${line}`;
-    safeStdoutWrite(`${display}\n`);
+    this._writeTranscript(`${display}\n`);
     this._pushLinesToScrollback(`  ${line}`);
   }
 
@@ -1254,11 +1325,9 @@ export class ConversationalRenderer extends BaseRenderer {
     this._subAgents.clear();
     this._showingOverlayLines = 0;
 
-    // Configure shimmer on the markdown accumulator based on motion mode
-    const motionMode = getMotionMode();
-    this._mdAccumulator.setShimmerEnabled(motionMode === MotionMode.Animated);
-
-    this._mdAccumulator.setPaintPolicy(canUseCursorRewrite() ? 'csi' : 'append-only');
+    // Answers become permanent scrollback. Animation belongs only to the HUD.
+    this._mdAccumulator.setShimmerEnabled(false);
+    this._mdAccumulator.setPaintPolicy('stable');
 
     // Set viewport dimensions for cursor-up clamping and CJK-aware
     // visual line counting in the markdown accumulator.
@@ -1278,6 +1347,7 @@ export class ConversationalRenderer extends BaseRenderer {
       this._twoRegion = new TwoRegionStreaming();
       const size = OutputBuffer.getTerminalSize();
       this._twoRegion.setup(size.rows, undefined, size.cols);
+      this._mdAccumulator.setPaintPolicy(this._twoRegion.isHardwareMode ? 'snapshot' : 'stable');
     }
 
     if (this.isTTY) {
@@ -1326,7 +1396,8 @@ export class ConversationalRenderer extends BaseRenderer {
     if (this._chunkCoalescer) { this._chunkCoalescer.dispose(); }
 
     if (this._twoRegion) {
-      this._twoRegion.teardown();
+      const region = this._twoRegion;
+      this._presentation.run(() => region.teardown());
       this._twoRegion = null;
       this._writeOutput = safeStdoutWrite;
     }
@@ -1347,16 +1418,7 @@ export class ConversationalRenderer extends BaseRenderer {
     this.paused = false;
     this.disableRawMode();
     if (this.isTTY) {
-      // Show keyboard hint footer if any tool calls were made
-      if (this.toolCallCount > 0) {
-        // Build keybinding hints from available actions
-        const hints: string[] = ['[Esc] cancel'];
-        if (this.thoughtText) hints.push('[T] thought');
-        if (this._checkpointAvailable) hints.push('[Ctrl+R] restore checkpoint');
-        hints.push('[Ctrl+C] stop');
-        safeStdoutWrite(`\n  ${dim(hints.join('  '))}\n`);
-      }
-      safeStdoutWrite('\n\x1b[?25h');
+      this._writeCommitted('\n\x1b[?25h');
     }
     this.destroy();
   }
@@ -1368,6 +1430,8 @@ export class ConversationalRenderer extends BaseRenderer {
   cancelRun(): void {
     this._flushPendingToolExecutions();
     if (this.outputBroken) return;
+    this.finalizeAnswerStream(false);
+    this._turnMetadataStarted = true;
     if (this._state === 'thinking') {
       this._leaveThinking('end');
     }
@@ -1377,14 +1441,14 @@ export class ConversationalRenderer extends BaseRenderer {
       this._chunkCoalescer.flush();
       this._chunkCoalescer.dispose();
     }
-    if (this.isTTY) safeStdoutWrite('\r\x1b[K');
     if (this._unregisterTick) {
       this._unregisterTick();
       this._unregisterTick = null;
     }
     FrameScheduler.getInstance().setComponentPermanentDirty('thinking-spinner', false);
     if (this._twoRegion) {
-      this._twoRegion.teardown();
+      const region = this._twoRegion;
+      this._presentation.run(() => region.teardown());
     }
     this.stop();
   }
@@ -1393,6 +1457,8 @@ export class ConversationalRenderer extends BaseRenderer {
   fail(error?: unknown): void {
     this._flushPendingToolExecutions();
     if (this.outputBroken) return;
+    this.finalizeAnswerStream(false);
+    this._turnMetadataStarted = true;
     if (this._state === 'thinking') {
       this._leaveThinking('end');
     }
@@ -1406,7 +1472,6 @@ export class ConversationalRenderer extends BaseRenderer {
       this._chunkCoalescer.flush();
       this._chunkCoalescer.dispose();
     }
-    if (this.isTTY) safeStdoutWrite('\r\x1b[K');
     // Unregister tick immediately so spinner doesn't overwrite error
     if (this._unregisterTick) {
       this._unregisterTick();
@@ -1417,13 +1482,14 @@ export class ConversationalRenderer extends BaseRenderer {
     // Tear down two-region streaming before writing error so DECSTBM
     // doesn't constrain the error box positioning.
     if (this._twoRegion) {
-      this._twoRegion.teardown();
+      const region = this._twoRegion;
+      this._presentation.run(() => region.teardown());
     }
 
     // Render a styled error box with context-sensitive details.
     const width = Math.min(getEffectiveTerminalWidth(), 80);
     const lines = renderErrorBox(message, error, width);
-    safeStdoutWrite(`\n${lines.join('\n')}\n`);
+    this._writeCommitted(`\n${lines.join('\n')}\n`);
     for (const line of lines) {
       this._pushLinesToScrollback(line);
     }

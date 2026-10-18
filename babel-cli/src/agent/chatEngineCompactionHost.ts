@@ -45,6 +45,7 @@ export interface ChatEngineCompactionBinding {
   lastLogicalRequestId: string | null;
   pendingParentRequestId: string | null;
   apiTokenCount: number;
+  prepareCompactionGuard(): () => boolean;
   isSubmissionCurrent(generation: number): boolean;
   shouldUseTextTools(): boolean;
   compactConversation(): void;
@@ -115,12 +116,14 @@ export async function runChatEngineCompactionFor(
     ownerGeneration,
   };
   const compactionModelId = resolveCompactionModelId({
+    pinSelection: engine.options.model !== undefined || engine.options.providerPolicy !== undefined,
     ...(engine.modelPolicy?.providerModelId
       ? { providerModelId: engine.modelPolicy.providerModelId }
       : {}),
     ...(engine.modelPolicy?.family ? { family: engine.modelPolicy.family } : {}),
   });
   const summarizationProvider = resolveCompactionSummarizationProvider({
+    pinSelection: engine.options.model !== undefined || engine.options.providerPolicy !== undefined,
     chatProvider: engine.modelPolicy?.provider ?? null,
     compactionModel: compactionModelId,
   });
@@ -174,7 +177,8 @@ export async function runChatEngineCompactionFor(
         null,
         attribution,
         usage.inputTokens !== null && usage.outputTokens !== null,
-        usageScope.provider ?? null,
+        usage.provider ?? usageScope.provider ?? null,
+        usage.reportedCostUsd,
       );
       if (update.kind === 'conflict') {
         engine.recordOwnerAccountingFault(
@@ -231,8 +235,10 @@ export async function runChatEngineCompactionFor(
     reserveTokens: DEFAULT_COMPACTION_CONFIG.reserveTokens,
     textToolsReserve: 1024,
     forceCompaction,
+    prepareContextGuard: () => engine.prepareCompactionGuard(),
     isOwnerCurrent: () => engine.isSubmissionCurrent(ownerGeneration),
-    resolveModel: resolveCompactionModelId,
+    resolveModel: input => resolveCompactionModelId({ ...input,
+      pinSelection: engine.options.model !== undefined || engine.options.providerPolicy !== undefined }),
     shouldCompactByTokens: parityShouldCompact,
     estimateTokens,
     serializeNativeProviderRequestBody: () =>

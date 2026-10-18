@@ -27,6 +27,7 @@ import {
   compileIntentPlanUserMessage,
   runChatEngineOnce,
 } from './chatCore.js';
+import { initMinimalGitProject } from '../../testUtils/chatAdmissionFixture.js';
 
 type WireMessage = {
   role: string;
@@ -139,6 +140,7 @@ describe('chat preparation parity (actual provider-bound request)', () => {
     const source = join(root, 'source');
     mkdirSync(source);
     writeFileSync(join(source, 'src-chart.ts'), 'export function density() { return 0 }\n');
+    initMinimalGitProject(source);
     const runsDir = join(root, 'runs');
     mkdirSync(runsDir);
 

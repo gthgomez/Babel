@@ -77,11 +77,11 @@ export function extractPositiveCommandSuccessCriterion(description: string): str
   const trimmed = description.trim()
   if (!trimmed || COMPOUND_OR_NEGATED_RE.test(trimmed)) return null
 
-  const backtick = trimmed.match(
-    new RegExp(`^\`([^\`]+)\`\\s+(${FULLY_ANCHORED_POSITIVE_SUCCESS_TAIL.source})$`, 'i'),
-  )
+  const backtick = trimmed.match(/^`([^`]+)`\s+([\s\S]+)$/)
   if (backtick) {
     const inner = backtick[1]!.trim()
+    const rest = backtick[2]!.trim()
+    if (!isFullyAnchoredPositiveSuccessTail(rest)) return null
     if (!isAuthoritativeVerifierCommand(inner)) return null
     return inner
   }

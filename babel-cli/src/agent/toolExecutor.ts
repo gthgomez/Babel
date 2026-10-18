@@ -1307,13 +1307,17 @@ export async function executeActionWithPolicy(
       }
     }
 
-    const toolFailed = execution.results.some((result) => result.exit_code !== 0);
+    // A sandbox denial is a blocked invocation, not an executed command's
+    // failure. Preserve that boundary after reconciling any opened effects so
+    // callers cannot turn a pre-spawn denial into authoritative verifier data.
+    const toolDenied = execution.results.some((result) => result.denial !== undefined);
+    const toolFailed = toolDenied || execution.results.some((result) => result.exit_code !== 0);
 
     if (toolFailed) {
       if (effectIntent && context.runDir) {
         recordEffectTerminal(context.runDir, effectIntent, {
           status: 'failed',
-          error: 'tool returned a nonzero exit code',
+          error: toolDenied ? 'tool execution denied' : 'tool returned a nonzero exit code',
         });
       }
       if (effectTx) {
@@ -1345,8 +1349,8 @@ export async function executeActionWithPolicy(
       }
       return {
         ...execution,
-        policyDecision,
-        policyBlocked: false,
+        policyDecision: toolDenied ? 'deny' : policyDecision,
+        policyBlocked: toolDenied,
         ...(effectTx ? { effectTransaction: effectTx } : {}),
       };
     }

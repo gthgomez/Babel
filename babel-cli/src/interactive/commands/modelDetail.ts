@@ -27,6 +27,7 @@ import { getProviderCredentialStatus } from '../../runners/credentialHub.js';
 import { redactSecrets } from '../../utils/redaction.js';
 import { getRecentRuns } from '../utils.js';
 import { accentBright, muted, padRight, warning } from '../../ui/theme.js';
+import { formatModelCatalog } from './modelCatalog.js';
 
 /** Resolved model identity plus where the choice came from. */
 export interface ModelSnapshot {
@@ -579,14 +580,7 @@ export function renderModelDetail(snapshot: ModelSnapshot): string {
   if (policy.nativeToolUse) contextParts.push('native tools');
   lines.push(`    ${muted(padRight('Context', 10))} ${contextParts.join(' · ')}`);
   const costParts: string[] = [];
-  // The per-run estimate is derived from the per-M costs; when the policy
-  // publishes neither, the resolver's ~$0.0000/run default is a fabricated
-  // zero, not a fact — unknown cost stays unknown.
-  const hasPublishedCost =
-    policy.estimatedCostPer1MInput !== undefined || policy.estimatedCostPer1MOutput !== undefined;
-  if (policy.approximateCostPerRunUsd !== undefined && hasPublishedCost) {
-    costParts.push(`~$${policy.approximateCostPerRunUsd.toFixed(4)}/run`);
-  }
+  // Publish token units; a per-run estimate needs workload assumptions.
   if (policy.estimatedCostPer1MInput !== undefined) {
     costParts.push(`$${policy.estimatedCostPer1MInput}/M in`);
   }
@@ -625,16 +619,7 @@ export function renderModelDetail(snapshot: ModelSnapshot): string {
 /** Compact backend/price table shared with `/policy` and `babel models list`. */
 export function renderAvailableModelsTable(
   models: { key: string; entry: ModelPolicyModelEntry }[] = getAvailableModels(),
+  activeKey?: string,
 ): string {
-  const lines: string[] = [];
-  lines.push(`  ${accentBright('Available Models:')}`);
-  for (const m of models) {
-    const cost = m.entry.estimated_cost_per_1m_output;
-    // Unknown cost stays unknown — only an explicit 0 renders as $0/M.
-    const costText = cost === undefined ? 'n/a' : `$${cost}/M`;
-    lines.push(
-      `    ${accentBright(padRight(m.key, 12))} ${muted(padRight(costText, 10))}${m.entry.selection_reason ? `  ${muted(m.entry.selection_reason)}` : ''}`,
-    );
-  }
-  return lines.join('\n');
+  return formatModelCatalog(models, { activeKey });
 }

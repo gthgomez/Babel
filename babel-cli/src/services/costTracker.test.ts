@@ -101,6 +101,56 @@ test('unattributed Go usage retains its estimate basis in session and project su
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+for (const mixed of [false, true]) {
+  test(`cold session restore preserves unowned Go estimates without double counting owned receipts (mixed=${mixed})`, () => {
+    const tracker = new CostTracker();
+    tracker.trackUsage('deepseek-v4.1-flash', 1000, 2000, null, null, undefined, true, 'opencode-go');
+    if (mixed) tracker.settleUsage('deepseek-v4.1-flash', 1000, 2000, null, null,
+      { taskOwnerId: 'go', chargeId: 'owned' }, true, 'opencode-go');
+    if (mixed) tracker.settleUsage('fixture-priced', 10, 1, null, null,
+      { taskOwnerId: 'known', chargeId: 'reported' }, true, 'fixture-provider', 0.01);
+    const summary = tracker.getSessionSummary();
+    const resumed = new CostTracker();
+    resumed.restoreSessionCost({ ...summary, accountedChargeIds: tracker.getSessionChargeIds(), chargeObservations: tracker.getSessionChargeObservations() });
+    const restored = resumed.getSessionSummary();
+    assert.equal(restored.totalCostUSD, summary.totalCostUSD);
+    assert.equal(restored.knownCostUSD, summary.knownCostUSD);
+    assert.equal(restored.estimatedCostUSD, summary.estimatedCostUSD);
+    assert.deepEqual(restored.costEstimates, summary.costEstimates);
+    assert.equal(restored.completeCostUSD, null);
+    assert.equal(restored.unknownChargeCount, summary.unknownChargeCount);
+    if (mixed) {
+      const receipts = tracker.getTaskChargeObservations('go');
+      resumed.restoreTaskUsage('go', { totalCostUSD: tracker.getTaskSummary('go').totalCostUSD,
+        chargeIds: ['owned'], unknownChargeCount: 0, chargeObservations: receipts });
+      assert.equal(resumed.settleUsage('deepseek-v4.1-flash', 1000, 2000, null, null,
+        { taskOwnerId: 'go', chargeId: 'owned' }, true, 'opencode-go').kind, 'duplicate');
+      assert.equal(resumed.getSessionSummary().totalCostUSD, summary.totalCostUSD);
+      assert.equal(resumed.getSessionSummary().estimatedCostUSD, summary.estimatedCostUSD);
+    }
+  });
+}
+
+test('contradictory saved estimates fail before mutating session accounting', () => {
+  for (const estimatedCostUSD of [-1, Number.NaN, 2]) {
+    const tracker = new CostTracker();
+    assert.throws(() => tracker.restoreSessionCost({ totalCostUSD: 1, estimatedCostUSD,
+      totalInputTokens: 10, totalOutputTokens: 1, totalTokens: 11 }), /estimate/);
+    assert.equal(tracker.getSessionSummary().totalCostUSD, 0);
+  }
+});
+
+test('saved estimate without provenance stays incomplete and accepts grouping roundoff', () => {
+  const tracker = new CostTracker();
+  tracker.restoreSessionCost({ totalCostUSD: 0.6, knownCostUSD: 0, estimatedCostUSD: 0.6000000000000001,
+    totalInputTokens: 10, totalOutputTokens: 1, totalTokens: 11 });
+  const summary = tracker.getSessionSummary();
+  assert.equal(summary.knownCostUSD, 0);
+  assert.equal(summary.completeCostUSD, null);
+  assert.equal(summary.modelBreakdown['__restored__']!.completeCostUSD, null);
+  assert.deepEqual(summary.costEstimates, [], 'absent pricing provenance is never invented');
+});
+
 test('CostTracker prices the observed Go provider and retains cache usage through durable settlement', () => {
   const tracker = new CostTracker();
   const attribution = { taskOwnerId: 'go-task', chargeId: 'go-attempt' };

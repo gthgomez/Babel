@@ -1,6 +1,7 @@
-import { existsSync, lstatSync, readFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
-import type { StructuredFinding } from './structuredFinding.js';
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { createStructuredFinding, parseFindingFromModelClaim, type StructuredFinding } from './structuredFinding.js';
+import { safeReviewPath } from './babelReviewSnapshot.js';
 
 export interface FindingVerificationOptions {
   snapshotRoot: string;
@@ -11,11 +12,12 @@ export function verifyFindingStatically(
   finding: StructuredFinding,
   options: FindingVerificationOptions,
 ): StructuredFinding {
-  const normPath = finding.location.path.replace(/\\/g, '/').replace(/^source\//, '');
-  const normScope = options.scope.map((p) => p.replace(/\\/g, '/').replace(/^source\//, ''));
+  const path = finding.location.path.replace(/\\/g, '/');
+  const normScope = options.scope.map((p) => p.replace(/\\/g, '/'));
+  const normPath = normScope.includes(path) ? path : path.startsWith('source/') && normScope.includes(path.slice(7)) ? path.slice(7) : path;
 
   // 1. Verify that the file belongs to the candidate scope
-  if (normPath === 'unspecified' || !normScope.includes(normPath)) {
+  if (normPath === 'unspecified' || !safeReviewPath(normPath) || !normScope.includes(normPath)) {
     return {
       ...finding,
       verification_status: 'LOCATION_INVALID',
@@ -25,7 +27,7 @@ export function verifyFindingStatically(
   }
 
   // 2. Verify file exists in inert snapshot
-  const diskPath = join(options.snapshotRoot, normPath.startsWith('source/') ? normPath : `source/${normPath}`);
+  const diskPath = join(options.snapshotRoot, 'source', normPath);
   const directPath = join(options.snapshotRoot, normPath);
   const targetPath = existsSync(diskPath) ? diskPath : existsSync(directPath) ? directPath : null;
 
@@ -39,11 +41,13 @@ export function verifyFindingStatically(
   }
 
   // 3. Verify line bounds if line is specified
-  if (finding.location.line) {
+  if (finding.location.line !== undefined || finding.location.end_line !== undefined) {
     try {
       const content = readFileSync(targetPath, 'utf8');
       const lines = content.split(/\r?\n/);
-      if (finding.location.line > lines.length) {
+      const line = finding.location.line;
+      if (line === undefined || !Number.isInteger(line) || line < 1 || line > lines.length ||
+          (finding.location.end_line !== undefined && (!Number.isInteger(finding.location.end_line) || finding.location.end_line < line || finding.location.end_line > lines.length))) {
         return {
           ...finding,
           verification_status: 'LOCATION_INVALID',
@@ -70,6 +74,48 @@ export function verifyFindingStatically(
     verification_source: 'static_snapshot_verification',
     evidence_refs: [`location_valid:static_location_verified:${normPath}:${finding.location.line ?? 1}`],
   };
+}
+
+/** Canonical findings used by both a fresh result and cache verification. */
+export function buildVerifiedReviewFindings(input: {
+  candidateDigest: string; executionId: string; reviewerId: string;
+  scope: string[]; snapshotRoot: string;
+  verdict: { findings: string[]; blocking_findings: string[] };
+}): StructuredFinding[] {
+  const blockingClaims = new Set(input.verdict.blocking_findings.map(claim => claim.trim()));
+  return [...new Set([...blockingClaims, ...input.verdict.findings.map(claim => claim.trim())])].map(claim => {
+    if (!claim) throw new Error('FINDING_CLAIM_EMPTY');
+    const blocking = blockingClaims.has(claim);
+    const parsed = parseFindingFromModelClaim(claim, input.scope);
+    return verifyFindingAgainstSnapshot(createStructuredFinding({
+      candidateDigest: input.candidateDigest, executionId: input.executionId, reviewerId: input.reviewerId,
+      ...parsed, severity: blocking ? 'P1' : 'P2', claim, recommended_blocking: blocking,
+    }), input.snapshotRoot, input.scope);
+  });
+}
+
+/** A blocked result with no actionable claim needs a new complete review,
+ * rather than a repair or indefinite reuse of the same cached uncertainty. */
+export function requiresFreshCompleteReview(review: { verdict: 'APPROVE' | 'BLOCK'; blocking_findings: string[] }): boolean {
+  return review.verdict === 'BLOCK' && review.blocking_findings.length === 0;
+}
+
+/** Project canonical status into the existing wire format, retaining unresolved
+ * claims. Structural invalidity does not establish that a serious claim is false. */
+export function projectFindingReview(
+  raw: { verdict: 'APPROVE' | 'BLOCK'; uncertain: boolean },
+  findings: StructuredFinding[],
+): { verdict: 'APPROVE' | 'BLOCK'; findings: string[]; blocking_findings: string[] } {
+  const projected = findings.map(finding => {
+    const semantic = ['SOURCE_SUPPORTED', 'SOURCE_REFUTED', 'REPRODUCED', 'CONFIRMED', 'REJECTED_FALSE_POSITIVE'].includes(finding.verification_status);
+    return { finding, text: `[${finding.verification_status}${semantic ? '' : '; semantic validation unavailable'}] ${finding.claim}` };
+  });
+  const blocking = projected.filter(({ finding }) => finding.policy_blocking &&
+    !['SOURCE_REFUTED', 'REJECTED_FALSE_POSITIVE', 'SUPERSEDED', 'DUPLICATE'].includes(finding.verification_status));
+  // A refutation alone does not turn the original review's BLOCK/uncertainty
+  // into approval. A fresh complete review is needed for that decision.
+  return { verdict: raw.verdict === 'BLOCK' || raw.uncertain || blocking.length ? 'BLOCK' : 'APPROVE',
+    findings: projected.map(item => item.text), blocking_findings: blocking.map(item => item.text) };
 }
 
 export function verifyFindingAgainstSnapshot(

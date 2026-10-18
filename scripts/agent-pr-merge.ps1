@@ -247,7 +247,9 @@ try {
   $mergeState = [string](Get-BabelJsonProperty -Object $view -Name 'mergeStateStatus')
   if ($liveState -ne 'OPEN') { $viewBlockers += 'pr_not_open' }
   if (-not [string]::Equals($liveHead, [string]$ReviewedHeadSha, [StringComparison]::OrdinalIgnoreCase)) { $viewBlockers += 'pr_head_mismatch' }
-  if ($strictFreshness -and -not [string]::Equals([string](Get-BabelJsonProperty -Object $view -Name 'baseRefOid'), $resolvedBaseSha, [StringComparison]::OrdinalIgnoreCase)) { $viewBlockers += 'pr_base_mismatch' }
+  # Even nonstrict/disjoint qualification binds the base observed by the
+  # audit. A later base advance requires a new integration check.
+  if (-not [string]::Equals([string](Get-BabelJsonProperty -Object $view -Name 'baseRefOid'), $resolvedBaseSha, [StringComparison]::OrdinalIgnoreCase)) { $viewBlockers += 'pr_base_mismatch' }
   if ($isDraft -ne $false) { $viewBlockers += 'pr_is_draft' }
   if ($mergeable -ne 'MERGEABLE') { $viewBlockers += 'pr_not_mergeable' }
   if ($mergeState -ne 'CLEAN') { $viewBlockers += 'pr_merge_state_not_clean' }

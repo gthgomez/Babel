@@ -356,20 +356,15 @@ try {
   Add-AgentCheck -Name 'PR_HEAD_REVIEWED' -Passed ((Test-AgentShaValue $reviewedHead) -and [string]::Equals($reviewedHead, $prHead, [StringComparison]::OrdinalIgnoreCase)) -Blocker 'reviewed_head_does_not_match_pr_head'
   Add-AgentCheck -Name 'LOCAL_HEAD_MATCH' -Passed ((Test-AgentShaValue $localHead) -and [string]::Equals($localHead, $reviewedHead, [StringComparison]::OrdinalIgnoreCase)) -Blocker 'local_head_differs_from_reviewed_head'
   Add-AgentCheck -Name 'EXPECTED_BASE_BRANCH' -Passed ($prAvailable -and [string]::Equals($prBaseBranch, $ExpectedBaseBranch, [StringComparison]::OrdinalIgnoreCase)) -Blocker 'unexpected_pr_base_branch'
-  $baseFresh = (-not $strictBaseFreshness) -or (
-    (Test-AgentShaValue $originMain) -and (Test-AgentShaValue $prBase) -and
-    [string]::Equals($originMain, $prBase, [StringComparison]::OrdinalIgnoreCase)
+  $integrationOverlap = Get-AgentBaseIntegrationState -GitPath $GitPath -RepoRoot $resolvedRepoRoot -OriginMain $originMain -ReviewedHead $reviewedHead -Strict $strictBaseFreshness
+  $baseFresh = $integrationOverlap.baseFresh
+  $baseMetadataCurrent = (-not $strictBaseFreshness) -or (
+    (Test-AgentShaValue $prBase) -and (Test-AgentShaValue $originMain) -and
+    [string]::Equals($prBase, $originMain, [StringComparison]::OrdinalIgnoreCase)
   )
-  Add-AgentCheck -Name 'BASE_NOT_INVALIDATED' -Passed $baseFresh -Blocker 'pr_base_sha_is_stale'
-  $integrationOverlap = [pscustomobject]@{ available = $false; overlap = @(); error = 'not_evaluated' }
-  if ($prAvailable -and -not $strictBaseFreshness -and -not $baseFresh) {
-    $integrationOverlap = Get-AgentStaleMainIntegrationOverlap -GitPath $GitPath -RepoRoot $resolvedRepoRoot -OriginMain $originMain -ReviewedHead $reviewedHead
-    $overlapClear = $integrationOverlap.available -and $integrationOverlap.overlap.Count -eq 0
-    Add-AgentCheck -Name 'STALE_BASE_INTEGRATION_CLEAR' -Passed $overlapClear -Blocker 'merge_integration_overlap_requires_qualification'
-    if (-not $integrationOverlap.available) { $warnings += ('stale_base_overlap:' + $integrationOverlap.error) }
-  } else {
-    Add-AgentCheck -Name 'STALE_BASE_INTEGRATION_CLEAR' -Passed $true
-  }
+  Add-AgentCheck -Name 'BASE_NOT_INVALIDATED' -Passed ($integrationOverlap.baseAllowed -and $baseMetadataCurrent) -Blocker 'pr_base_sha_is_stale'
+  Add-AgentCheck -Name 'STALE_BASE_INTEGRATION_CLEAR' -Passed $integrationOverlap.integrationClear -Blocker 'merge_integration_overlap_requires_qualification'
+  if (-not $integrationOverlap.available) { $warnings += ('stale_base_overlap:' + $integrationOverlap.error) }
   Add-AgentCheck -Name 'NO_CROSS_REPO' -Passed ($prAvailable -and (-not [bool]$prView.isCrossRepository)) -Blocker 'cross_repository_pr'
   Add-AgentCheck -Name 'PR_OPEN' -Passed ($prAvailable -and [string]$prView.state -eq 'OPEN') -Blocker 'pr_not_open'
   Add-AgentCheck -Name 'NO_DRAFT' -Passed ($prAvailable -and -not [bool]$prView.isDraft) -Blocker 'pr_is_draft'

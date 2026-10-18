@@ -24,6 +24,8 @@ export interface InheritedChildAllowance {
   costBaselineUsd: number;
   /** Maximum additional owner-ledger cost available; null = unlimited. */
   remainingCostUsd: number | null;
+  /** Missing pricing/usage is not a measured exhausted cap. */
+  accountingComplete?: boolean;
   /** Absolute deadline inherited from the parent; null = no wall deadline. */
   deadlineAtMs: number | null;
   /** Child-local round cap, already clamped by the parent. */
@@ -67,6 +69,8 @@ export function deriveChildAllowance(input: {
       : {}),
     costBaselineUsd: globalCost,
     remainingCostUsd,
+    accountingComplete: !!input.parentTaskOwnerId &&
+      globalCostTracker.getTaskSummary(input.parentTaskOwnerId).costComplete !== false,
     deadlineAtMs,
     maxRounds: Math.max(1, Math.trunc(input.childMaxRounds)),
   };

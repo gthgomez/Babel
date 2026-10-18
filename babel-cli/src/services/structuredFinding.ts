@@ -19,6 +19,8 @@ export type VerificationStatus =
   | 'UNVERIFIED'
   | 'LOCATION_VALID'
   | 'LOCATION_INVALID'
+  | 'SOURCE_SUPPORTED'
+  | 'SOURCE_REFUTED'
   | 'CONFIRMED'
   | 'REPRODUCED'
   | 'CORROBORATED'
@@ -27,36 +29,16 @@ export type VerificationStatus =
   | 'DUPLICATE'
   | 'SUPERSEDED';
 
-export interface FindingLocation {
-  path: string;
-  line?: number;
-  end_line?: number;
-  symbol?: string;
-}
-
-export interface StructuredFinding {
-  schema_version: 2;
-  finding_instance_id: string;
-  finding_fingerprint: string;
-  category: FindingCategory;
-  severity: FindingSeverity;
-  confidence: FindingConfidence;
-  location: FindingLocation;
-  claim: string;
-  proposed_reproduction?: string;
-  reviewer_id: string;
-  recommended_blocking: boolean;
-  policy_blocking: boolean;
-  verification_status: VerificationStatus;
-  verification_source?: string;
-  evidence_refs?: string[];
-  created_at: string;
-}
+export type StructuredFinding = z.infer<typeof StructuredFindingSchema>;
+export type FindingLocation = StructuredFinding['location'];
 
 export const StructuredFindingSchema = z.object({
   schema_version: z.literal(2).default(2),
   finding_instance_id: z.string().regex(/^[a-f0-9]{64}$/),
   finding_fingerprint: z.string().regex(/^[a-f0-9]{64}$/),
+  fingerprint_version: z.literal(2).optional(),
+  defect_class: z.string().min(1).optional(),
+  behavior: z.string().min(1).optional(),
   category: z.enum([
     'correctness',
     'security',
@@ -85,6 +67,8 @@ export const StructuredFindingSchema = z.object({
     'UNVERIFIED',
     'LOCATION_VALID',
     'LOCATION_INVALID',
+    'SOURCE_SUPPORTED',
+    'SOURCE_REFUTED',
     'CONFIRMED',
     'REPRODUCED',
     'CORROBORATED',
@@ -113,13 +97,21 @@ export function computeFindingFingerprint(input: {
   path: string;
   lineSpan?: string | undefined;
   defectClass?: string | undefined;
+  symbol?: string | undefined;
+  behavior?: string | undefined;
+  claim?: string | undefined;
 }): string {
-  const normPath = input.path.replace(/\\/g, '/').toLowerCase();
+  const normPath = input.path.replace(/\\/g, '/');
+  // Explicit symbol + behavior survives moved lines. Without a semantic
+  // identity, preserve distinct claims rather than collapsing nearby bugs.
+  const escapedPath = normPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const claim = input.claim?.replace(new RegExp(`${escapedPath}:\\d+(?:-\\d+)?\\b`, 'g'), normPath).replace(/\s+/g, ' ').trim();
   const payload = [
     input.category,
     normPath,
-    input.lineSpan ?? '',
+    input.symbol ?? '',
     input.defectClass ?? '',
+    input.behavior ?? claim ?? input.lineSpan ?? '',
   ];
   return createHash('sha256').update(JSON.stringify(payload)).digest('hex');
 }
@@ -140,11 +132,12 @@ export function createStructuredFinding(input: {
   recommended_blocking?: boolean;
   policy_blocking?: boolean;
   defectClass?: string;
+  behavior?: string;
   now?: string;
 }): StructuredFinding {
   const now = input.now ?? new Date().toISOString();
-  const normPath = input.path.replace(/\\/g, '/').replace(/^source\//, '');
-  const lineSpan = input.line ? `${input.line}-${input.end_line ?? input.line}` : undefined;
+  const normPath = input.path.replace(/\\/g, '/');
+  const lineSpan = input.line !== undefined ? `${input.line}-${input.end_line ?? input.line}` : undefined;
 
   const instanceId = computeFindingInstanceId({
     candidateDigest: input.candidateDigest,
@@ -158,6 +151,9 @@ export function createStructuredFinding(input: {
     path: normPath,
     lineSpan,
     defectClass: input.defectClass,
+    symbol: input.symbol,
+    behavior: input.behavior,
+    claim: input.claim,
   });
 
   const recBlocking = input.recommended_blocking ?? (input.severity === 'P0' || input.severity === 'P1');
@@ -167,13 +163,16 @@ export function createStructuredFinding(input: {
     schema_version: 2,
     finding_instance_id: instanceId,
     finding_fingerprint: fingerprint,
+    fingerprint_version: 2,
+    ...(input.defectClass ? { defect_class: input.defectClass } : {}),
+    ...(input.behavior ? { behavior: input.behavior } : {}),
     category: input.category,
     severity: input.severity,
     confidence: input.confidence ?? 'high',
     location: {
       path: normPath,
-      ...(input.line ? { line: input.line } : {}),
-      ...(input.end_line ? { end_line: input.end_line } : {}),
+      ...(input.line !== undefined ? { line: input.line } : {}),
+      ...(input.end_line !== undefined ? { end_line: input.end_line } : {}),
       ...(input.symbol ? { symbol: input.symbol } : {}),
     },
     claim: input.claim,
@@ -189,6 +188,8 @@ export function createStructuredFinding(input: {
 const VERIFICATION_PRECEDENCE: Record<VerificationStatus, number> = {
   REPRODUCED: 6,
   CORROBORATED: 5,
+  SOURCE_SUPPORTED: 4,
+  SOURCE_REFUTED: 0,
   CONFIRMED: 4,
   LOCATION_VALID: 3,
   UNVERIFIED: 2,
@@ -205,7 +206,7 @@ export function parseFindingFromModelClaim(
 ): { path: string; line?: number; end_line?: number; category: FindingCategory } {
   for (const file of candidateScope) {
     const escaped = file.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const regex = new RegExp(`(?:^|[\\s\`"'(])(?:\\.\\/|\\.\\\\)?(${escaped})(?::(\\d+)(?:-(\\d+))?|\\s+line\\s+(\\d+))?`, 'i');
+    const regex = new RegExp(`(?:^|[\\s\`"'(])(?:\\.\\/|\\.\\\\)?(${escaped})(?=$|[\\s:\`"'(),;\\]])(?::(\\d+)(?:-(\\d+))?|\\s+line\\s+(\\d+))?`);
     const match = regex.exec(claim);
     if (match) {
       const line = match[2] ? Number(match[2]) : match[4] ? Number(match[4]) : undefined;

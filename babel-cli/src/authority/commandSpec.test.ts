@@ -726,6 +726,8 @@ const HOST_PROCESS_SURFACE = new Set([
   'agent/implementWorktreeAgent.ts',
   'bridge/sessionRunner.ts',
   'cli/helpers.ts',
+  // Same Node executable and original CLI argv; only redirects startup warnings.
+  'cli/interactiveWarningRoute.ts',
   'config/benchmarkContainer.ts',
   'daemon/client.ts',
   'doctor.ts',
@@ -779,4 +781,6 @@ const HOST_PROCESS_SURFACE = new Set([
   'tools/auditUiTool.ts',
   'tools/mcpTransport.ts',
   'tools/ripgrep.ts',
+  // Test fixture helper: fixed-argument git init for P11/admission integration tests.
+  'testUtils/chatAdmissionFixture.ts',
 ]);

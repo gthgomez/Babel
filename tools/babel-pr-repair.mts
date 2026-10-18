@@ -10,6 +10,7 @@ import { launchBabelReviewChild } from '../babel-cli/src/services/babelReviewChi
 import { validateBabelReviewCalls } from '../babel-cli/src/services/babelReviewObserver.js'
 import { applyBabelRepairProposal, parseBabelRepairProposal, repairGit, recordBabelRepairAttempt, selectBabelRepairAttempt, validateBabelAppliedRepair, validateBabelRepairSnapshot } from '../babel-cli/src/services/babelReviewRepair.js'
 import type { HostReviewCandidate, HostReviewHandoffV2 } from '../babel-cli/src/services/hostReviewController.js'
+import { restoreCanonicalFindingReview } from '../babel-cli/src/services/babelFindingValidation.js'
 
 const args = process.argv.slice(2)
 const options = new Map<string, string>()
@@ -48,7 +49,13 @@ for (const review of handoff.reviews) {
   validateBabelReviewCache({ ...handoff, reviews: [review] }, { candidate, model: review.reviewer_model, round: handoff.controller_run_id, version: review.harness?.version || '', sourceSha: review.harness?.source_sha || '' })
   if (!/^[a-f0-9-]{36}$/.test(review.execution_id)) throw new Error('REPAIR_INVALID_REVIEW_EXECUTION')
   const artifact = validateBabelReviewArtifact(JSON.parse(readFileSync(join(dirname(handoffPath), `${review.reviewer_model}-${review.execution_id}.json`), 'utf8')), { executionId: review.execution_id, model: review.reviewer_model, scope })
-  if (artifact.verdict.verdict !== review.verdict || JSON.stringify(artifact.verdict.blocking_findings) !== JSON.stringify(review.blocking_findings)) throw new Error('REPAIR_REVIEW_ARTIFACT_MISMATCH')
+  const validationPath = join(dirname(handoffPath), `${review.reviewer_model}-${review.execution_id}-validation.json`)
+  const canonical = restoreCanonicalFindingReview({ candidateDigest: handoff.controller_run_id,
+    executionId: review.execution_id, model: review.reviewer_model, scope, verdict: artifact.verdict,
+    snapshotRootForExecution: id => join(state, 'snapshots', id),
+    ...(existsSync(validationPath) ? { validationArtifact: JSON.parse(readFileSync(validationPath, 'utf8')) } : {}),
+  }).review
+  if (canonical.verdict !== review.verdict || JSON.stringify(canonical.findings) !== JSON.stringify(review.findings) || JSON.stringify(canonical.blocking_findings) !== JSON.stringify(review.blocking_findings)) throw new Error('REPAIR_REVIEW_ARTIFACT_MISMATCH')
 }
 const findings = handoff.reviews.filter(r => r.verdict === 'BLOCK').flatMap(r => r.blocking_findings)
 if (!findings.length) throw new Error('REPAIR_ACTIONABLE_FINDINGS_REQUIRED')

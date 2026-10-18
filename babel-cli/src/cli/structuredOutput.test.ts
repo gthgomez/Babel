@@ -441,7 +441,7 @@ describe('Babel Lite result output', () => {
     assert.match(human, /^Babel Ask Ready/);
     assert.match(human, /Answer:/);
     assert.match(human, /Fix the API route/);
-    assert.match(human, /Run: .* — 150 tokens, \$0\.012300/);
+    assert.match(human, /Run: .* — 150 cumulative tokens, \$0\.012300/);
   });
 
   it('adds cost ledger path to Lite usage and human output when present', () => {
@@ -462,7 +462,7 @@ describe('Babel Lite result output', () => {
 
     assert.equal(payload.usage.cost_ledger_path, join(result.runDir, 'cost_ledger.json'));
     const human = stripAnsi(formatLiteResultHuman(payload));
-    assert.match(human, /150 tokens, \$0\.012300/);
+    assert.match(human, /150 cumulative tokens, \$0\.012300/);
     assert.doesNotMatch(human, /Cost ledger:/);
   });
 
@@ -525,7 +525,7 @@ describe('Babel Lite result output', () => {
     };
 
     const human = stripAnsi(formatRunResultHuman(payload));
-    assert.match(human, /Evidence:\n- Run: .* — 1,326 tokens, \$0\.001024/);
+    assert.match(human, /Evidence:\n- Run: .* — 1,326 cumulative tokens, \$0\.001024/);
     assert.doesNotMatch(human, /Cost ledger:/);
   });
 
@@ -1161,3 +1161,19 @@ describe('makeRunStreamEvent', () => {
     assert.match(result.stderr, /BROKEN_PIPE_NDJSON_OK/);
   });
 });
+
+
+it('human output never substitutes zero for a missing subtotal', () => {
+  const human = stripAnsi(formatRunResultHuman({ command: 'run', mode: 'chat', status: 'BLOCKED',
+    answer: { answer: 'Snapshot unavailable.' }, usage: { totalTokens: 10 } }))
+  assert.match(human, /cost unavailable/)
+  assert.doesNotMatch(human, /\$0.000000/)
+})
+
+it('human output separates published usage estimates from known charges', () => {
+  const human = stripAnsi(formatRunResultHuman({ command: 'run', mode: 'chat', status: 'BLOCKED', answer: { answer: 'Blocked.' },
+    usage: { totalTokens: 10, totalCostUSD: 0.01, knownCostUSD: 0, estimatedCostUSD: 0.01, costComplete: false } }))
+  assert.match(human, /0.000000 known subtotal/)
+  assert.match(human, /0.010000 usage estimate/)
+  assert.doesNotMatch(human, /0.010000 known/)
+})

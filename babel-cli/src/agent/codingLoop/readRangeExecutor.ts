@@ -28,7 +28,7 @@ export interface ReadRangeActionContext {
   tool: string;
   target: string;
   toolId: number;
-  meta: { index: number };
+  meta: { index: number; idempotencyKey?: string };
   ownerGeneration: number;
   callbacks: ChatCallbacks;
 }
@@ -39,6 +39,7 @@ export async function executeReadRangeAction(
 ): Promise<{ index: number; observation: string }> {
   const { host, action, tool, target, toolId, meta } = ctx;
   const rPath = resolveChatRangePath(requireProjectRoot(host.options), action.file_path);
+  host.persistToolStartedAtExecutorDispatch(action, meta);
   const rContent = await readFile(rPath, "utf-8");
   // R0-8: the read is a suspension point; a superseded submission must not
   // append its result for the new task.

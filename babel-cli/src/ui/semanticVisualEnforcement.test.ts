@@ -95,11 +95,11 @@ describe('token-bar tiers do not reuse execution-error paint', () => {
     assert.equal(child.stdout, 'ok');
   });
 
-  it('keeps unknown limits as ctx ? rather than a fabricated percent', () => {
+  it('labels unknown context without a fabricated percent', () => {
     const bar = renderTokenBar(12_000, 0);
     const compact = renderCompactTokenBar(12_000, 0);
-    assert.match(stripAnsi(bar), /ctx \?/);
-    assert.equal(compact, '[ctx ?]');
+    assert.match(stripAnsi(bar), /context unavailable/);
+    assert.equal(compact, '[context unavailable]');
     assert.doesNotMatch(stripAnsi(bar), /\d+%/);
   });
 });
@@ -129,7 +129,7 @@ describe('review-card tones stay truthful', () => {
     assert.equal(card.looksLikeVerifiedSuccess, false);
     assert.equal(looksLikeVerifiedSuccess(card.kind), false);
     const plain = stripAnsi(card.body);
-    assert.match(plain, /Complete/);
+    assert.match(plain, /Response complete/);
     assert.doesNotMatch(plain, /Verified complete/);
     const child = runColored(`
       import { presentChatReview } from './src/ui/reviewCard.ts';
@@ -139,9 +139,9 @@ describe('review-card tones stay truthful', () => {
         changedFiles: [],
         verificationPolicy: 'not_applicable',
       });
-      if (!card.body.includes(success('✓ Complete'))) { console.error('missing success title'); process.exit(2); }
-      if (muted('✓ Complete') === success('✓ Complete')) { console.error('color helpers collapsed'); process.exit(3); }
-      if (card.body.includes(muted('✓ Complete'))) { console.error('used muted paint'); process.exit(4); }
+      if (!card.body.includes(success('✓ Response complete'))) { console.error('missing success title'); process.exit(2); }
+      if (muted('✓ Response complete') === success('✓ Response complete')) { console.error('color helpers collapsed'); process.exit(3); }
+      if (card.body.includes(muted('✓ Response complete'))) { console.error('used muted paint'); process.exit(4); }
       process.stdout.write('ok');
     `);
     assert.equal(child.status, 0, child.stderr || child.stdout);

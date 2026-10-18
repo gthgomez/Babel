@@ -216,6 +216,13 @@ function classifyRecovery(input: {
   const fieldHas = (pattern: RegExp, ...fs: (string | undefined | null)[]): boolean =>
     fs.some((f) => typeof f === 'string' && pattern.test(f));
 
+  if (fieldHas(/repository root changed|repository identity|physical identity cannot be established/i,
+    terminalReason, executionCondition, String(input.terminal?.['error'] ?? ''))) {
+    return { classification: 'requires_user_decision', retryable: false,
+      reason: 'Open the session in its original repository or start a new session in this repository.',
+      nextCommand: 'babel run "<task>" --mode chat' };
+  }
+
   // (1) User-decision checks — approval, permission, ambiguous contracts
   if (
     fieldHas(

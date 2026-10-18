@@ -20,10 +20,10 @@ function git(root: string, args: string[]): void {
   execFileSync('git', args, { cwd: root, stdio: 'ignore', windowsHide: true })
 }
 
-function fixture(t: TestContext, committed = true) {
+function fixture(t: TestContext, committed = true, runInside = false) {
   const root = mkdtempSync(join(tmpdir(), 'babel-p11-capture-truth-'))
   const projectRoot = join(root, 'project')
-  const runDir = join(root, 'run')
+  const runDir = join(runInside ? projectRoot : root, 'run')
   mkdirSync(projectRoot)
   mkdirSync(runDir)
   writeFileSync(join(projectRoot, 'source.ts'), 'export const value = 1\n')
@@ -147,4 +147,41 @@ test('non-Git workspace cannot become complete workspace authority', async t => 
   assert.equal(authority.currentRecoveryBinding() === null, true)
   assert.equal(await authority.installP11ContextCheckpoint(route), false)
   assert.equal(host.p11InstallBlock?.code, 'sources_unavailable')
+})
+
+// Capture guards must fail before a summarizer can spend or prune history.
+test('compaction capture guard rejects an umbrella but accepts its explicit nested repository', t => {
+  const { projectRoot, authority, host } = fixture(t)
+  const nested = join(projectRoot, 'products', 'current-app')
+  mkdirSync(nested, { recursive: true })
+  writeFileSync(join(nested, 'ui.ts'), 'export const ui = 1\n')
+  git(nested, ['init', '-q'])
+  git(nested, ['add', 'ui.ts'])
+  git(nested, ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.test', 'commit', '-qm', 'nested'])
+  const large = join(projectRoot, 'unrelated.apk')
+  writeFileSync(large, '')
+  truncateSync(large, 1_000_001)
+  assert.throws(() => authority.prepareCompactionGuard(), /snapshot unavailable.*size cap/i)
+  host.options.projectRoot = nested
+  const validate = authority.prepareCompactionGuard()
+  assert.equal(validate(), true)
+  writeFileSync(join(nested, 'ui.ts'), 'export const ui = 2\n')
+  assert.equal(validate(), false, 'a changed physical revision cannot accept a prepared compaction')
+})
+
+test('compaction capture guard rejects a superseded owner', t => {
+  const { authority, host } = fixture(t)
+  const validate = authority.prepareCompactionGuard()
+  assert.equal(validate(), true)
+  host.activeAdmissionClaim!.settled = true
+  assert.equal(validate(), false)
+})
+
+test('compaction rejects self-observing runtime evidence before summarization', t => {
+  const { authority, host, projectRoot } = fixture(t, true, true)
+  const before = RevisionManager.computeRevisionSync(projectRoot, [], { scope_kind: 'repository' })
+  writeFileSync(join(host.engineRunDir, 'usage.json'), '{"reportedCost":0.001}')
+  const after = RevisionManager.computeRevisionSync(projectRoot, [], { scope_kind: 'repository' })
+  assert.notEqual(before.compositeTreeHash, after.compositeTreeHash, 'runtime evidence changes the selected physical revision')
+  assert.throws(() => authority.prepareCompactionGuard(), /BABEL_RUNS_DIR.*outside/i)
 })

@@ -22,6 +22,10 @@ import type { BackgroundTaskState } from "./backgroundTaskProgress.js";
  * State object for the status bar displayed between REPL turns.
  */
 export interface StatusBarState {
+  /** Existing accounting receipts contain charges with unknown prices. */
+  hasUnknownCost?: boolean;
+  unknownChargeCount?: number | undefined;
+  estimatedCost?: number | undefined;
   /** Active model name (e.g. "DeepSeek v4 Flash") */
   model: string;
   /** Active model ID for context limit lookup (e.g. "deepseek-v4-flash") */
@@ -357,13 +361,17 @@ export function renderStatusBar(state: StatusBarState): string {
   if (policy.showSessionTokens) {
     rightParts.push({
       slot: "sessionTokens",
-      text: muted(`${state.totalTokens.toLocaleString()} tok`),
+      text: muted(`session ${state.totalTokens.toLocaleString('en-US')} tok`),
     });
   }
   if (policy.showCost) {
     rightParts.push({
       slot: "cost",
-      text: muted(`$${state.totalCost.toFixed(4)}`),
+      text: muted(state.hasUnknownCost
+        ? state.totalCost > 0
+          ? `session known $${state.totalCost.toFixed(4)}; ${(state.unknownChargeCount ?? 0) > 0 ? `${state.unknownChargeCount} unresolved` : 'cost incomplete'}`
+          : `session cost unavailable${(state.unknownChargeCount ?? 0) > 0 ? `; ${state.unknownChargeCount} unresolved` : ''}`
+        : `session est. $${state.totalCost.toFixed(4)}`) + muted(Number.isFinite(state.estimatedCost) && (state.estimatedCost ?? 0) > 0 ? `; $${state.estimatedCost!.toFixed(4)} usage estimate` : ''),
     });
   }
   if (policy.showTurn) {
@@ -387,7 +395,7 @@ export function renderStatusBar(state: StatusBarState): string {
   const minLeft = 4;
   const protectRateLimit = rateAttention !== "none";
   const preferredMaxRight = Math.max(
-    8,
+    contextMeter && rateAttention === 'none' ? visibleLength(contextMeter) : 8,
     width - visibleLength(left) - minSpacing,
   );
   let right = applyAttentionPreemption(

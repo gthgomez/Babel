@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { extractJson } from './extractJson.js';
+import { extractAllJson, extractJson } from './extractJson.js';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -17,6 +17,38 @@ function throws(raw: string): Error {
     return e as Error;
   }
 }
+
+describe('JSON extraction preserves string contents', () => {
+  const values = [
+    { type: 'tool_call', tool: 'file_write', content: '// Source comment\nexport const value = 1;\n' },
+    { content: '/* source comment with {braces} */\nconst value = "quoted";\n' },
+    { url: 'https://example.test/path', pattern: 'a/*b*/c', tail: 'kept' },
+    { content: 'const path = "C:\\source\\file"; // keep \\"quotes\\"\n' },
+  ];
+  for (const [index, value] of values.entries()) {
+    for (const wrap of [false, true]) {
+      it(`preserves source data ${index + 1}, wrapped=${wrap}`, () => {
+        const json = JSON.stringify(value);
+        const raw = wrap ? `<|tool_start|>\n${json}\n<|tool_end|>` : json;
+        assert.deepEqual(extractJson(raw), value);
+        assert.deepEqual(extractAllJson(raw), [value]);
+      });
+    }
+  }
+
+  it('ignores actual comments without stripping comment markers inside strings', () => {
+    const raw = '// Ignore {noise}\n{\n/* Ignore a "quote" and } */\n"url":"https://example.test",\n// Ignore [noise]\n"content":"/* kept */"\n}';
+    const expected = { url: 'https://example.test', content: '/* kept */' };
+    assert.deepEqual(extractJson(raw), expected);
+    assert.deepEqual(extractAllJson(raw), [expected]);
+  });
+
+  it('does not join invalid tokens across a comment', () => {
+    const raw = '{"value":1/* separator */2}';
+    assert.throws(() => extractJson(raw), /No valid JSON found/);
+    assert.deepEqual(extractAllJson(raw), []);
+  });
+});
 
 // ─── Pass 1: Markdown fence extraction ───────────────────────────────────────
 

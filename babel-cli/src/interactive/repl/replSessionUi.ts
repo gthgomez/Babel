@@ -29,7 +29,11 @@ export function printIdleHeader(ctx: ReplContext): void {
 }
 
 export function renderTurnStatusBar(ctx: ReplContext): void {
-  const activeTasks = backgroundTaskRegistry.getActiveTasks();
+  if (ctx.shellHost) {
+    ctx.shellHost.invalidate('turn-status');
+    return;
+  }
+  const activeTasks = backgroundTaskRegistry.getAllTasks().filter((t) => t.status !== 'completed');
   const taskStates = activeTasks.length > 0 ? activeTasks.map((t) => toTaskState(t)) : undefined;
   let gitBranch: string | null = null;
   let gitDirty = false;
@@ -49,7 +53,10 @@ export function renderTurnStatusBar(ctx: ReplContext): void {
     activeContext: ctx.activeContext ?? null,
     activeContextTokens: ctx.activeContext?.tokens ?? ctx.lastTurnActiveContextTokens ?? undefined,
     totalTokens: ctx.state.costTotals.totalTokens,
-    totalCost: ctx.state.costTotals.totalCostUSD,
+    totalCost: ctx.state.costTotals.knownCostUSD ?? ctx.state.costTotals.totalCostUSD,
+    estimatedCost: ctx.state.costTotals.estimatedCostUSD,
+    hasUnknownCost: (ctx.state.costTotals.unknownChargeCount ?? 0) > 0 || ctx.state.costTotals.completeCostUSD === null,
+    unknownChargeCount: ctx.state.costTotals.unknownChargeCount,
     turnCount: ctx.turnCounter,
     status: ctx.state.lastRunUserStatus ?? 'ready',
     gitBranch,
@@ -68,5 +75,5 @@ export function renderTurnStatusBar(ctx: ReplContext): void {
     barState.routingLabel = ctx.lastRoutingLabel;
   }
 
-  OutputBuffer.getInstance().write(renderStatusBar(barState));
+  OutputBuffer.getInstance().write(muted('Session summary at prompt\n') + renderStatusBar(barState));
 }
