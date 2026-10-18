@@ -56,6 +56,8 @@ import type { ToolResult } from '../localTools.js';
 import {
   PARSER_ORACLE_CASES,
   evaluateParserModule,
+  PARSER_FIXTURE_NPM_TEST,
+  PARSER_FIXTURE_VERIFY_NODE_ARGS,
   renderParserVerifierScript,
 } from './codingLoop/parserOracle.js';
 import { recoveryObservationId } from './codingLoop/recoveryPlan.js';
@@ -230,7 +232,7 @@ function makeFixture(): Fixture {
   writeFileSync(join(root, 'verify.mjs'), VERIFY_MJS, 'utf8');
   writeFileSync(
     join(root, 'package.json'),
-    `${JSON.stringify({ name: 's07-fixture', private: true, scripts: { test: 'node verify.mjs' } }, null, 2)}\n`,
+    `${JSON.stringify({ name: 's07-fixture', private: true, scripts: { test: PARSER_FIXTURE_NPM_TEST } }, null, 2)}\n`,
     'utf8',
   );
   return {
@@ -839,7 +841,7 @@ describe('S07 Scenario 3 — behavioral parser oracle', { concurrency: false }, 
       writeFileSync(join(root, 'parser.ts'), PARSER_BUGGY, 'utf8');
       writeFileSync(join(root, 'verify.mjs'), VERIFY_MJS, 'utf8');
 
-      const result = spawnSync(process.execPath, ['verify.mjs'], {
+      const result = spawnSync(process.execPath, [...PARSER_FIXTURE_VERIFY_NODE_ARGS], {
         cwd: root,
         encoding: 'utf8',
       });

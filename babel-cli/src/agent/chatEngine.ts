@@ -2687,6 +2687,18 @@ export class ChatEngine {
     refreshChatCompletionVerifierCurrency(this.options, hasMutation,
       this.lastVerifierReceipt, this.executedVerifierLedger);
     const verifierInput = this.buildVerifierInput();
+    const proof =
+      requestedOutcome === "VERIFIED_COMPLETE"
+        ? this.buildCompletionProof(hasMutation)
+        : { compliant: false, errors: ["requested outcome was not verified"] };
+    if (requestedOutcome === 'VERIFIED_COMPLETE') {
+      this.criterionCompletion?.refreshPrivateEvidence({
+        proof,
+        receipt: this.lastVerifierReceipt,
+        candidate_sha: this.criterionCandidateRevisionSha(),
+        has_mutation: hasMutation,
+      })
+    }
 
     return this.executorKernel.completion.decide({
       mode: this.executionProfile,
@@ -2702,13 +2714,7 @@ export class ChatEngine {
       ...(this.lastVerifierReceipt?.boundRevision
         ? { workspaceRevision: this.lastVerifierReceipt.boundRevision }
         : {}),
-      proof:
-        requestedOutcome === "VERIFIED_COMPLETE"
-          ? this.buildCompletionProof(hasMutation)
-          : {
-              compliant: false,
-              errors: ["requested outcome was not verified"],
-            },
+      proof,
     });
   }
   private streamDone(answer: string, extra?: ChatStreamDoneExtra): ChatEvent {
@@ -3758,6 +3764,24 @@ export class ChatEngine {
    * has no mutation scope yet (nothing to compare). Never invents a revision
    * authority — this is the same computation the completion gate performs.
    */
+  /**
+   * Revision hash for criterion publication: prefer the bound revision on a
+   * current green verifier receipt (includes verifier input closure), not the
+   * narrower mutation-batch scope alone.
+   */
+  private criterionCandidateRevisionSha(): string | null {
+    const receipt = this.lastVerifierReceipt;
+    if (
+      receipt &&
+      receipt.exit_code === 0 &&
+      receipt.stale !== true &&
+      receipt.boundRevision?.compositeTreeHash
+    ) {
+      return receipt.boundRevision.compositeTreeHash;
+    }
+    return this.currentCandidateRevisionHash();
+  }
+
   private currentCandidateRevisionHash(): string | null {
     try {
       const raw = mutationPathsFromSessionEvents(

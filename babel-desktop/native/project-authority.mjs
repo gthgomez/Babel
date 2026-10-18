@@ -26,7 +26,8 @@ async function git(root,args){
 export async function inspectProjectIdentity(root){
   if(typeof root!=='string'||!isAbsolute(root)||root.includes('\0'))throw new Error('Select an absolute project directory.');
   const directory=await directoryIdentity(root);
-  if(rootKey(root)!==rootKey(directory.path))throw new Error('Selected project path changed physical identity. Select the canonical project again.');
+  const selectedPhysical=await realpath(root);
+  if(rootKey(selectedPhysical)!==rootKey(directory.path))throw new Error('Selected project path changed physical identity. Select the canonical project again.');
   let repository=null,branch=null,head=null;
   try{
     const result=await git(directory.path,['rev-parse','--path-format=absolute','--show-toplevel','--absolute-git-dir','--git-common-dir']);

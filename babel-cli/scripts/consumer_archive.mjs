@@ -20,7 +20,7 @@ export function verifyConsumerArchive({ archive, manifest, expectedDigest, expec
 export function verifyConsumerContents(manifest) {
   const files = manifest.map(file => file.path)
   for (const path of files) {
-    assert.match(path, /^(?:package\.json|README\.md|LICENSE|bin\/babel\.js|dist\/.*\.js|dist\/voice\/(?:audio-capture|vad)-worker\.mjs|dist\/services\/playbooks\/.*\.json|resources\/.*)$/)
+    assert.match(path, /^(?:package\.json|README\.md|LICENSE|bin\/babel\.js|dist\/.*\.js|dist\/authority\/ownedFileAssertion\.windows\.ps1|dist\/voice\/(?:audio-capture|vad)-worker\.mjs|dist\/services\/playbooks\/.*\.json|resources\/.*)$/)
     assert.doesNotMatch(path, /(?:^|\/)(?:\.env[^/]*|node_modules|runs|cache|logs|testinfra|__snapshots__)(?:\/|$)|\.test\.js$|\.(?:map|ts|sqlite|log|tgz)$/)
     assert.ok(!path.split('/').includes('..') && !path.includes('\\'), 'Unsafe package path')
   }

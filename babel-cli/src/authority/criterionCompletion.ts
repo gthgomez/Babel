@@ -3,6 +3,8 @@ import { isAbsolute } from 'node:path'
 import { sha256Canonical } from '../acceptance/canonical.js'
 import { validateTaskContractV1ForCompletion, type TaskContractV1 } from '../agent/taskContract.js'
 import { EvidenceGraph, evaluateCompletionGateV1, type CompletionEvaluationV1 } from '../evidence/evidenceGraph.js'
+import type { BoundChatVerifierReceipt } from '../evidence/chatRevisionBinding.js'
+import { publishCriterionEvidenceFromChatExecution } from './criterionExecutionPublisher.js'
 import { createTrustedExecutionSupervisorV1, type TrustedExecutionAuthorityV1 } from './trustedExecutionSupervisor.js'
 
 /** An opaque read capability; a serialized or caller-made copy has no authority. */
@@ -21,15 +23,25 @@ export interface CriterionCompletionRequestV1 {
   run_id: string
   project_root: string
 }
+export interface CriterionPrivateEvidenceRefreshV1 {
+  proof: { compliant: boolean }
+  receipt: BoundChatVerifierReceipt | null
+  candidate_sha: string | null
+  has_mutation: boolean
+}
+
 export interface CriterionCompletionServiceV1 {
   readonly context: CriterionCompletionContextV1
   currentRequest(): CriterionCompletionRequestV1 | undefined
+  /** Chat-only: populate the private graph from governed execution before kernel evaluate. */
+  refreshPrivateEvidence(input: CriterionPrivateEvidenceRefreshV1): void
 }
 interface CompletionAuthority {
   readOwner: () => CriterionCompletionOwnerV1
   epoch?: string
   graph: EvidenceGraph
   supervisor: TrustedExecutionAuthorityV1
+  candidateSha?: string | undefined
 }
 const contexts = new WeakMap<object, CompletionAuthority>()
 
@@ -48,6 +60,39 @@ export function createCriterionCompletionServiceV1(
           ? Object.freeze({ context, contract: owner.contract, run_id: owner.runId, project_root: owner.projectRoot })
           : undefined
       } catch { return undefined }
+    },
+    refreshPrivateEvidence(input: CriterionPrivateEvidenceRefreshV1): void {
+      if (!input.proof.compliant) return
+      const authority = contexts.get(context)
+      if (!authority) return
+      try {
+        const owner = authority.readOwner()
+        if (!owner.contract || !owner.projectRoot || !owner.contract.frozen) return
+        const root = realpathSync.native(owner.projectRoot)
+        const physicalRoot = statSync(root)
+        const epoch = sha256Canonical({ contract: owner.contract.contract_hash, run: owner.runId,
+          root, device: physicalRoot.dev, inode: physicalRoot.ino })
+        if (authority.epoch !== epoch) {
+          authority.epoch = epoch
+          authority.graph = new EvidenceGraph()
+          authority.supervisor = createTrustedExecutionSupervisorV1()
+          delete authority.candidateSha
+        }
+        authority.graph = new EvidenceGraph()
+        delete authority.candidateSha
+        const published = publishCriterionEvidenceFromChatExecution({
+          graph: authority.graph,
+          supervisor: authority.supervisor,
+          contract: owner.contract,
+          runId: owner.runId,
+          projectRoot: root,
+          candidateSha: input.candidate_sha,
+          proof: input.proof,
+          receipt: input.receipt,
+          hasMutation: input.has_mutation,
+        })
+        if (published) authority.candidateSha = published
+      } catch { /* fail closed: leave graph empty */ }
     },
   })
 }
@@ -94,12 +139,12 @@ export function evaluateCriterionCompletionV1(
       authority.epoch = epoch
       authority.graph = new EvidenceGraph()
       authority.supervisor = createTrustedExecutionSupervisorV1()
+      delete authority.candidateSha
     }
-    // No old Chat receipt is promoted into this graph. Trusted dispatch and
-    // durable capture will populate it in the following execution unit.
+    const candidateSha = authority.candidateSha ?? 'unobserved'
     return evaluateCompletionGateV1({
       contract: owner.contract, graph: authority.graph, repository: root,
-      candidate_sha: 'unobserved', run_id: owner.runId,
+      candidate_sha: candidateSha, run_id: owner.runId,
       trusted_execution: authority.supervisor.read, project_root: root,
     })
   } catch {

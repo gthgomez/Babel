@@ -3,6 +3,9 @@
  * U1.4: Slim interactive stack budget tests.
  */
 import assert from 'node:assert/strict';
+import { mkdirSync, mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, test } from 'node:test';
 import {
   buildChatRunPayload,
@@ -139,9 +142,11 @@ describe('buildChatRunPayload budget honesty', () => {
 // ── U1.4: Slim interactive stack budget ─────────────────────────────
 
 describe('U1.4 compileChatStackForRun budget selection', () => {
+  const projectRoot = mkdtempSync(join(tmpdir(), 'babel-chat-budget-'));
+
   test('default task gets interactive budget', () => {
     const stack = compileChatStackForRun({
-      projectRoot: 'C:/tmp/test',
+      projectRoot,
       task: 'fix a bug in the login page',
     });
 
@@ -155,7 +160,7 @@ describe('U1.4 compileChatStackForRun budget selection', () => {
   test('general_swe task gets SWE budget (via text classification)', () => {
     // Task with "root cause" + "multi-file" signals → general_swe
     const stack = compileChatStackForRun({
-      projectRoot: 'C:/tmp/test',
+      projectRoot,
       task: 'Find the root cause of the multi-file regression across the codebase',
     });
 
@@ -169,7 +174,7 @@ describe('U1.4 compileChatStackForRun budget selection', () => {
 
   test('stack compiled via compileChatStackForRun is cached via getLastChatCompiledStack', () => {
     const stack = compileChatStackForRun({
-      projectRoot: 'C:/tmp/test',
+      projectRoot,
       task: 'explain the architecture',
     });
 
@@ -180,12 +185,12 @@ describe('U1.4 compileChatStackForRun budget selection', () => {
 
   test('default task estimated tokens ≤ SWE task estimated tokens for same project', () => {
     const defaultStack = compileChatStackForRun({
-      projectRoot: 'C:/tmp/test',
+      projectRoot,
       task: 'fix a bug',
     });
 
     const sweStack = compileChatStackForRun({
-      projectRoot: 'C:/tmp/test',
+      projectRoot,
       task: 'root cause analysis of multi-file regression across the repo',
     });
 
@@ -211,7 +216,7 @@ describe('U1.4 compileChatStackForRun budget selection', () => {
 
   test('compileChatStackForRun still includes deep_stages_excluded: true', () => {
     const stack = compileChatStackForRun({
-      projectRoot: 'C:/tmp/test',
+      projectRoot,
       task: 'fix a bug',
     });
 
@@ -219,8 +224,10 @@ describe('U1.4 compileChatStackForRun budget selection', () => {
   });
 
   test('compileChatStackForRun sets project_root', () => {
+    const nested = join(projectRoot, 'my-project');
+    mkdirSync(nested, { recursive: true });
     const stack = compileChatStackForRun({
-      projectRoot: 'C:/tmp/my-project',
+      projectRoot: nested,
       task: 'fix',
     });
 

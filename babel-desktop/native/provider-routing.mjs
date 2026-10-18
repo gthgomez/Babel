@@ -135,6 +135,8 @@ export function readProviderRoute(configDirectory) {
 
 export function validateProviderRoute({provider, model,enabledModels} = {},configDirectory=null) {
   const extra=cachedModels(configDirectory),route=normalizeProviderRoute({provider, model},extra);
+  const bundled=defaultModelPolicy();
+  if(!bundled.models?.[route.model])throw new Error(`Model route "${route.model}" is not supported for ${DESKTOP_ROUTE_CATALOG[provider]?.label ?? provider}. Refresh models and select one.`);
   const available=qualifiedProviders(configDirectory).find(spec=>spec.id===provider)?.routes.find(entry=>entry.id===model);
   if(available?.selectable===false)throw new Error(available.unavailableReason||'This model is unavailable.');
   if(enabledModels!==undefined){

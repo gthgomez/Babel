@@ -91,6 +91,15 @@ export async function evaluateParserModule(modulePath: string): Promise<ParserOr
   return evaluateParserOracle(loaded.parseExpression as (input: string) => unknown);
 }
 
+/** `package.json` test script for parser.ts behavioral fixtures (Node type stripping). */
+export const PARSER_FIXTURE_NPM_TEST = 'node --experimental-strip-types verify.mjs';
+
+/** argv for spawning `verify.mjs` directly in process tests. */
+export const PARSER_FIXTURE_VERIFY_NODE_ARGS = [
+  '--experimental-strip-types',
+  'verify.mjs',
+] as const;
+
 /**
  * Render the fixture verifier script that the authoritative `npm test` command
  * executes. It imports the fixture parser and applies the shared case list,
