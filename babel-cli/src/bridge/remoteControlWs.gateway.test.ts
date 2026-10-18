@@ -348,7 +348,13 @@ describe('Remote control WebSocket gateway', () => {
       `http://127.0.0.1:${PORT}/ws?sessionId=${encodeURIComponent(sessionId)}&ticket=${encodeURIComponent(ticket)}`,
       {
         method: 'GET',
-        headers: { Origin: ORIGIN, Upgrade: 'websocket', Connection: 'Upgrade', 'Sec-WebSocket-Key': 'dGhlIHNhbXBsZSBub25jZQ==', 'Sec-WebSocket-Version': '13' },
+        headers: {
+          Origin: ORIGIN,
+          Upgrade: 'websocket',
+          Connection: 'Upgrade',
+          'Sec-WebSocket-Key': Buffer.from('babel-remote-ws-upgrade-test-nonce').toString('base64'),
+          'Sec-WebSocket-Version': '13',
+        },
       },
     );
     assert.notEqual(wsUpgrade.statusCode, 101);
