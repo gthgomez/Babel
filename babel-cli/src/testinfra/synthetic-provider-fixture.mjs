@@ -1,6 +1,6 @@
 /** Synthetic provider tests use a fresh process; no host credentials enter it. */
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, delimiter, isAbsolute, join, relative, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
@@ -39,6 +39,24 @@ export function summarizeSyntheticProviderOutput(output, code) {
   })
 }
 
+/** Resolve the host Git executable directory for isolated child PATH (Windows only). */
+function resolveHostGitDir() {
+  if (process.platform !== 'win32') return null
+  try {
+    const output = execFileSync('where.exe', ['git'], { encoding: 'utf8', windowsHide: true }).trim()
+    const candidate = output
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .find((line) => /\\git\.exe$/i.test(line)) ?? output.split(/\r?\n/)[0]?.trim()
+    if (!candidate) return null
+    const dir = dirname(candidate)
+    if (!isAbsolute(dir) || !existsSync(join(dir, 'git.exe'))) return null
+    return dir
+  } catch {
+    return null
+  }
+}
+
 /** Build an allowlisted environment without copying or enumerating host secrets. */
 export function prepareSyntheticProviderFixture() {
   const root = mkdtempSync(join(tmpdir(), 'babel-synthetic-provider-'))
@@ -57,8 +75,13 @@ export function prepareSyntheticProviderFixture() {
     ? process.env['SystemRoot'] ?? process.env['SYSTEMROOT'] ?? 'C:\\Windows'
     : undefined
   const pathParts = [dirname(process.execPath)]
-  if (systemRoot) pathParts.push(join(systemRoot, 'System32'))
-  else pathParts.push('/usr/bin', '/bin')
+  if (systemRoot) {
+    pathParts.push(join(systemRoot, 'System32'))
+    const gitDir = resolveHostGitDir()
+    if (gitDir) pathParts.push(gitDir)
+  } else {
+    pathParts.push('/usr/bin', '/bin')
+  }
   const env = {
     PATH: pathParts.join(delimiter),
     HOME: join(root, 'home'), USERPROFILE: join(root, 'home'),
