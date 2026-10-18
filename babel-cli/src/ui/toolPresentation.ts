@@ -18,6 +18,8 @@ import {
   truncate,
   visibleLength,
   getEffectiveTerminalWidth,
+  stripAnsi,
+  wrapText,
 } from "./theme.js";
 import {
   classifyToolPresentation,
@@ -158,7 +160,7 @@ function formatExpandedItem(
 
   const errSuffix = cls.isFailure && item.error ? ` (${item.error})` : "";
   const rawLine = `  ${icon} ${dim(item.tool)} ${primary(item.target)} — ${statusText}${errSuffix}`;
-  if (cls.isFailure || cls.isBlocked || cls.availability === "unavailable") return rawLine;
+  let line = rawLine;
   if (visibleLength(rawLine) > termWidth) {
     const staticLen = visibleLength(
       `  ${icon} ${dim(item.tool)}  — ${statusText}${errSuffix}`,
@@ -166,11 +168,14 @@ function formatExpandedItem(
     const budget = Math.max(4, termWidth - staticLen);
     const truncatedTarget = truncate(item.target, budget);
     const fittedLine = `  ${icon} ${dim(item.tool)} ${primary(truncatedTarget)} — ${statusText}${errSuffix}`;
-    return visibleLength(fittedLine) > termWidth
-      ? truncate(fittedLine, termWidth)
-      : fittedLine;
+    line =
+      visibleLength(fittedLine) > termWidth ? truncate(fittedLine, termWidth) : fittedLine;
   }
-  return rawLine;
+  if (visibleLength(line) <= termWidth) return line;
+  const plain = stripAnsi(line);
+  const wrapped = wrapText(plain, termWidth);
+  if (wrapped.length <= 1) return line;
+  return wrapped.join("\n");
 }
 
 export function formatToolGroupSummary(

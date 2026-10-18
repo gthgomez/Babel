@@ -1,4 +1,5 @@
 /** Synthetic provider tests use a fresh process; no host credentials enter it. */
+import { execFileSync } from 'node:child_process'
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, delimiter, isAbsolute, join, relative, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -44,6 +45,11 @@ export function prepareSyntheticProviderFixture() {
   for (const name of ['home', 'config', 'state', 'cache', 'runs', 'tmp', 'workspace']) {
     mkdirSync(join(root, name))
   }
+  const workspace = join(root, 'workspace')
+  execFileSync('git', ['init', '-q'], { cwd: workspace, windowsHide: true })
+  execFileSync('git', ['config', 'user.email', 'fixture@example.test'], { cwd: workspace, windowsHide: true })
+  execFileSync('git', ['config', 'user.name', 'Fixture'], { cwd: workspace, windowsHide: true })
+  execFileSync('git', ['commit', '-q', '--allow-empty', '-m', 'fixture'], { cwd: workspace, windowsHide: true })
   const helper = join(root, 'auth-helper.cjs')
   writeFileSync(helper, helperBytes)
   const systemRoot = process.platform === 'win32'

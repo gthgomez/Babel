@@ -200,7 +200,7 @@ describe('buildSmallFixLitePayload', () => {
       assert.match(human, /Verified:\n- npm test: passed/);
       assert.match(human, /Recovery:\n- Undo: babel undo/);
       assert.match(human, new RegExp(`Run: ${runDir.replace(/\\/g, '\\\\')}`));
-      assert.match(human, /28 tokens/);
+      assert.match(human, /28 cumulative tokens/);
       assert.doesNotMatch(human, /Cost ledger:/);
       assert.match(
         human,
@@ -344,7 +344,7 @@ describe('buildSmallFixLitePayload', () => {
       assert.match(human, /Verified:\n- npm test: failed/);
       assert.doesNotMatch(human, /Recovery:/);
       assert.doesNotMatch(human, /Complete/);
-      assert.match(human, /12 tokens, \$0\.007000/);
+      assert.match(human, /12 cumulative tokens, \$0\.007000/);
       assert.doesNotMatch(human, /Cost ledger:/);
     } finally {
       rmSync(runDir, { recursive: true, force: true });

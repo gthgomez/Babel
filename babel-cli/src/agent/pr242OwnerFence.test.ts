@@ -27,9 +27,10 @@ function project() {
 
 async function withFixture(run: (root: string) => Promise<void>) {
   const root = project()
+  const runsRoot = mkdtempSync(join(tmpdir(), 'babel-pr242-runs-'))
   const priorRuns = process.env['BABEL_RUNS_DIR']
   const priorBudget = process.env['BABEL_CHAT_MAX_COST']
-  process.env['BABEL_RUNS_DIR'] = join(root, 'runs')
+  process.env['BABEL_RUNS_DIR'] = runsRoot
   process.env['BABEL_CHAT_MAX_COST'] = 'unlimited'
   try {
     await run(root)
@@ -38,6 +39,7 @@ async function withFixture(run: (root: string) => Promise<void>) {
     else process.env['BABEL_RUNS_DIR'] = priorRuns
     if (priorBudget === undefined) delete process.env['BABEL_CHAT_MAX_COST']
     else process.env['BABEL_CHAT_MAX_COST'] = priorBudget
+    rmSync(runsRoot, { recursive: true, force: true })
     rmSync(root, { recursive: true, force: true })
   }
 }

@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs';
+import { existsSync, realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { runGitCommand } from '../utils/gitExec.js';
 
@@ -119,7 +119,19 @@ export function gitContext(projectRoot: string, input: GitContextInput = {}): Gi
   emptyResult.branch = branch;
   const identity = runGit(['rev-parse', '--show-toplevel', 'HEAD'], root);
   const [repositoryRoot, head] = identity.exitCode === 0 ? identity.stdout.split(/\r?\n/) : [];
-  emptyResult.repositoryRoot = repositoryRoot ?? null;
+  emptyResult.repositoryRoot = repositoryRoot
+    ? (() => {
+        try {
+          return realpathSync.native(repositoryRoot);
+        } catch {
+          try {
+            return realpathSync(repositoryRoot);
+          } catch {
+            return repositoryRoot;
+          }
+        }
+      })()
+    : null;
   emptyResult.head = head ?? null;
 
   // Get status
