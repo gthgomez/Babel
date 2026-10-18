@@ -46,6 +46,7 @@ import {
   parseChatTurnLenient,
 } from "./chatEngineHelpers.js";
 import { classifyChatTaskIntent } from "./chatEngineTaskIntent.js";
+import { isolateEngineForFreshUserSubmission } from "./chatEngineFreshTaskIsolation.js";
 import { resolveChatInstructionContext } from "./chatInstructionContext.js";
 import { retireLiveCertificationForRun } from "./toolExecutor.js";
 import { TEXT_TOOL_NAMES } from "./textToolParser.js";
@@ -3003,122 +3004,11 @@ export class ChatEngine {
       !runtime.continuedTask &&
       this.taskCostScopeUnavailable;
     if (!runtime.continuedTask && !continuationScopeUnavailable) {
-      retireLiveCertificationForRun(this.engineRunId);
-      // A fresh submission starts a new enforcement scope. The global tracker
-      // is intentionally preserved for session/accounting views.
-      //
-      // S06 cross-task integration: reset ONLY task-local progress punishment
-      // (level/score/strikes/streak/signals). Do not recreate the controller and
-      // do not blank environment/provider capability health: a DEGRADED
-      // capability persists across submissions and is recoverable only via
-      // recordSuccess on a genuinely successful operation. Recreating the
-      // controller here would silently revert DEGRADED capabilities to
-      // AVAILABLE and would also discard task-local punishment on explicit
-      // `continueTask`.
-      this.progressController.resetTaskLocal();
-      this.taskCostScopeUnavailable = false;
-      this.criticRepairCostCapUsd = null;
-      this.postWriteRepairWallCapMs = null;
-      this.postWriteRepairRestrict = false;
-      this.terminatingLimiter = null;
-      this.terminalLimiterReason = null;
-      this.clearVerifierEvidenceState();
-      // R0-1: a fresh submission owns its own WorkingState. Task A's goal,
-      // hypothesis, evidence, files of interest, mutation attribution, verifier
-      // receipt, failure surface, repair diagnosis, invalidated assumptions and
-      // next experiment must not seed task B's reasoning or the working-state
-      // block injected into task B's provider prompt. The previous block only
-      // set a goal when `workingState.goal` was empty, so task A's goal survived
-      // and task B never received its own. Explicit continuation (`continuedTask`)
-      // preserves the current state by construction; this reset lives only in the
-      // fresh-task branch. Historical durable logs are untouched.
-      this.workingState = createWorkingState(runtime.taskText.slice(0, 240));
-      // P11 exact observations and the installed generation are task-scoped.
-      // A fresh task may not recall or checkpoint evidence captured under a
-      // prior task owner, even when the physical observation bytes remain.
-      this.p11ObservationRefs = [];
-      this.p11ObservationCaptureIssues = [];
-      this.p11InstallBlock = null;
-      delete this.parity.contextCheckpoint;
-      // R0-1: failure-class budgets are task-scoped. A fresh task must not
-      // inherit budgets already consumed by the previous task; recreate the
-      // tracker from the live contract at the same fresh-task boundary.
-      this.failureBudgetTracker = createFailureBudgetTrackerFromContract(
-        this.parity.liveAuthority?.taskContract,
+      isolateEngineForFreshUserSubmission(
+        this as unknown as import('./chatEngineFreshTaskIsolation.js').FreshTaskIsolationHost,
+        runtime,
+        accepted,
       );
-      // R0 Scenario 8: a fresh submission must not inherit the previous task's
-      // in-memory mutation/tool-call ownership. hasAnyWrites() and
-      // currentTurnHasMutation() read toolCallLog, so leaving task A's confirmed
-      // write in place projects task B from task A's patch (UNVERIFIED_PATCH
-      // instead of NO_CHANGE_REQUIRED). This drops only in-memory task-local
-      // evidence; task A's physical on-disk changes remain visible, exactly as
-      // resyncTurnStateAfterBranch treats a discarded branch.
-      this.toolCallLog = [];
-      this._turnToolCallLogStart = 0;
-      this._logIndexToTurn.clear();
-      // Cancellation state belongs to the previous submission. submitMessageStream
-      // also clears it, but the direct applyUserSubmission seam must be
-      // self-consistent.
-      this._cancelled = false;
-      // A red verifier in task A must not keep reopening investigation tools, and
-      // a one-shot investigate soft nudge must not stay latched for task B.
-      this.lastVerifierFailed = false;
-      this.investigateSoftNudgeDone = false;
-      // Child delegation attempt identity and phase routing are task-local.
-      this.childAttempts.clear();
-      this._lastPhase = null;
-      // Plan handoff force-mutate elevation must not leak into an unrelated task.
-      this.forceMutateTurnsOverride = null;
-      // P0-C: prior task exploration / stall state must not bias a new submission.
-      this.fullReadCounts.clear();
-      this.cumulativeExplorationTools = 0;
-      this.stallState = createStallDetector();
-      this.repetitionDetector.reset();
-      // Budgets follow the new task class (not the previous submission's class).
-      this.limits = this.resolveSubmissionLimits(runtime);
-      if(!accepted)this.startIndependentTaskCostScope();
-      // Playbook / todo gate re-evaluate for the new task text.
-      this.activePlaybook = selectPlaybookForChatTask(runtime.taskText) ?? null;
-      this.requireTodoBeforeMutate = shouldRequireTodoPlan(
-        runtime.taskText,
-        this.activePlaybook,
-      );
-      // S02/#312: re-read instruction files at the fresh-task boundary. The stack
-      // was compiled at construction; a same-root AGENTS.md/ENGINEERING.md edit
-      // since then must reach task B. Explicit continuation keeps the in-flight
-      // stack so instructions cannot change in the middle of a task.
-      const recompileOptions = { ...this.options };
-      delete recompileOptions.compiledChatStack;
-      this.options = {
-        ...this.options,
-        compiledChatStack: accepted?.compiledChatStack??resolveChatInstructionContext(recompileOptions),
-      };
-      // System prompt may embed class/playbook hints — rebuild next LLM call.
-      this.clearSystemPromptCache();
-      if (!accepted&&this.parity?.liveAuthority) {
-        try {
-          refreshEngineInstructionManifest({
-            parity: this.parity,
-            options: this.options,
-            taskClass: this.taskClass,
-            executionProfile: this.executionProfile,
-            engineRunDir: this.engineRunDir,
-          });
-        } catch (err) {
-          // Best-effort telemetry: a failure must not fail the turn.
-          try {
-            this.policyEventLog.record({
-              at_turn: this._turnIndex,
-              kind: "progress_policy",
-              detail: `instruction_manifest_refresh_failed: ${
-                err instanceof Error ? err.message : String(err)
-              }`,
-            });
-          } catch {
-            /* telemetry must not fail the turn */
-          }
-        }
-      }
     }
 
     if (continuationScopeUnavailable) {

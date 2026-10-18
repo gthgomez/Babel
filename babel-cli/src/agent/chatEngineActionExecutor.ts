@@ -58,6 +58,7 @@ import {
 import { governedStrReplace } from "./governedMutations.js";
 import { executeGovernedApplyPatchAction } from "./codingLoop/applyPatchExecutor.js";
 import { executeReadRangeAction } from "./codingLoop/readRangeExecutor.js";
+import { executeTodoWriteAction } from "./codingLoop/todoWriteExecutor.js";
 import { recordMutationBatch, operationFingerprint } from "./sessionEvents.js";
 import {
   remoteMcpFailClosedObservation,
@@ -1114,32 +1115,15 @@ export class ChatEngineActionExecutor {
 
       // ── B1: todo_write — merge-patch task list ─────────────────────
       if (action.type === "todo_write") {
-        for (const item of action.todos) {
-          this.host.todos.set(item.id, {
-            content: item.content,
-            status: item.status,
-          });
-        }
-        const formattedTodos = [...this.host.todos.entries()]
-          .map(([id, t]) => `- [${t.status}] ${t.content} (${id})`)
-          .join("\n");
-        this.host.toolCallLog.push({
+        return executeTodoWriteAction({
+          host: this.host,
+          action,
           tool,
           target,
-          detail: `${this.host.todos.size} todos`,
-          index: meta.index,
-          exit_code: 0,
-        });
-        callbacks?.onToolComplete?.(
           toolId,
-          `${this.host.todos.size} todos`,
-          undefined,
-          0,
-        );
-        return {
-          index: meta.index,
-          observation: `### todo_write\nexit_code: 0\n\`\`\`\n${formattedTodos}\n\`\`\``,
-        };
+          meta,
+          callbacks,
+        });
       }
 
       // Background shell — handlers in chatBackgroundShell.ts (size ratchet)

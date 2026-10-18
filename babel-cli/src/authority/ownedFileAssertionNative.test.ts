@@ -8,6 +8,10 @@ import { fileURLToPath } from 'node:url'
 import test from 'node:test'
 import { getSafeEnv } from '../utils/safeEnv.js'
 import { parseOwnedFileAssertionV1 } from './ownedFileAssertion.js'
+import {
+  assertNativeChildExit,
+  type NativeChildMode,
+} from './nativeChildExpectations.js'
 
 const host = 'C:/Program Files/PowerShell/7/pwsh.exe'
 const sourceScript = fileURLToPath(new URL('./ownedFileAssertion.windows.ps1', import.meta.url))
@@ -18,7 +22,12 @@ test('the CLI build carries the exact owned native script without a source fallb
   assert.equal(existsSync(oracleScript), true, 'dist/authority/ownedFileAssertion.windows.ps1 must be produced by npm run build (copy_playbooks)')
   assert.deepEqual(readFileSync(oracleScript), readFileSync(sourceScript))
 })
-function nativeChild(root: string, script: string, args: string[]) {
+function nativeChild(
+  root: string,
+  script: string,
+  args: string[],
+  mode: NativeChildMode = 'probe',
+) {
   const env = { ...getSafeEnv(process.env), PSModulePath: join(dirname(host), 'Modules'),
     POWERSHELL_TELEMETRY_OPTOUT: '1', POWERSHELL_UPDATECHECK: 'Off', DOTNET_CLI_HOME: root,
     DOTNET_SKIP_FIRST_TIME_EXPERIENCE: '1', DOTNET_NOLOGO: '1' }
@@ -27,17 +36,8 @@ function nativeChild(root: string, script: string, args: string[]) {
   if (child.error) {
     assert.fail(`native PowerShell spawn failed: ${child.error.message}`)
   }
-  assert.equal(
-    child.status,
-    0,
-    `native PowerShell exit ${child.status ?? 'unknown'}\nstderr:\n${child.stderr}\nstdout:\n${child.stdout}`,
-  )
-  assert.equal(
-    child.stderr ?? '',
-    '',
-    `native PowerShell stderr must be empty:\n${child.stderr}`,
-  )
-  assert.ok(child.stdout.length < 1024)
+  assertNativeChildExit(mode, child.status, child.stderr ?? '', child.stdout ?? '')
+  assert.ok((child.stdout ?? '').length < 1024)
   return child
 }
 
@@ -140,7 +140,7 @@ test('local Windows native oracle performs an actual red edit green data check',
   const run = () => {
     // Explicit system host is local qualification, never production fallback.
     const child = nativeChild(root, oracleScript,
-      ['-ProjectRoot', root, '-ManifestPath', manifestPath, '-ManifestHash', hash])
+      ['-ProjectRoot', root, '-ManifestPath', manifestPath, '-ManifestHash', hash], 'oracle')
     const output = JSON.parse(child.stdout) as { status: string; reason_code: string; candidate_sha256?: string }
     assert.match(output.reason_code, /^[a-z0-9_]+$/)
     return { exit: child.status, output }
@@ -148,7 +148,7 @@ test('local Windows native oracle performs an actual red edit green data check',
   writeFileSync(join(root, 'output.txt'), 'wrong\n')
   const red = run()
   assert.equal(red.output.status, 'failed', red.output.reason_code)
-  assert.equal(red.exit, 1)
+  assert.equal(red.exit, 1, 'red control must observe oracle exit 1 before stdout assertions')
   writeFileSync(join(root, 'output.txt'), 'required\n')
   const green = run()
   assert.equal(green.output.status, 'passed', green.output.reason_code)
