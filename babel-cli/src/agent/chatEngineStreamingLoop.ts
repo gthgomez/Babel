@@ -267,11 +267,15 @@ export class ChatEngineStreamingLoop {
                 message.authoritative === false)),
         )
       ) {
+        this.host.revertObjectiveAuthorityAdmission();
+        this.host.clearObjectiveAuthorityAdmissionRollback();
         yield this.host.streamFailed(
           "An uncommitted compaction candidate cannot authorize provider dispatch.",
         );
         return;
       }
+
+      this.host.clearObjectiveAuthorityAdmissionRollback();
 
       const runner = this.host.resolveRoutedRunner();
       const useNativeTools = this.host.shouldUseNativeTools(runner);
@@ -1160,10 +1164,22 @@ export class ChatEngineStreamingLoop {
           );
         }
 
+        if (this.host.parity.sessionPersistenceBoundaryFailed) {
+          endSpan(_turnSpan, SpanStatusCode.ERROR);
+          _turnSpan = null;
+          if (!this.host.isSubmissionCurrent(submissionGeneration)) return;
+          yield this.host.streamFailed(
+            "session event persistence failed before tool dispatch could be durably recorded",
+          );
+          return;
+        }
+
         const subAgentEvents: ChatEvent[] = [];
 
-        const { observations, observationList } =
-          await this.host.executeActions(
+        let observations = "";
+        let observationList: string[] = [];
+        try {
+          const executed = await this.host.executeActions(
             turnResult.actions,
             {
               onToolStart: (_tool, _target) => {
@@ -1206,6 +1222,24 @@ export class ChatEngineStreamingLoop {
             },
             submissionGeneration,
           );
+          observations = executed.observations;
+          observationList = executed.observationList;
+        } catch (err: unknown) {
+          const message = err instanceof Error ? err.message : String(err);
+          if (
+            message === "SESSION_EVENT_PERSISTENCE_BOUNDARY_FAILED" ||
+            this.host.parity.sessionPersistenceBoundaryFailed
+          ) {
+            endSpan(_turnSpan, SpanStatusCode.ERROR);
+            _turnSpan = null;
+            if (!this.host.isSubmissionCurrent(submissionGeneration)) return;
+            yield this.host.streamFailed(
+              "session event persistence failed before tool dispatch could be durably recorded",
+            );
+            return;
+          }
+          throw err;
+        }
 
         // R0-8: tools are a suspension point. If the submission was superseded
         // while they ran, stop before mutating the new owner's state or

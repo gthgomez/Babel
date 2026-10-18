@@ -67,6 +67,7 @@ export async function prepareStreamingSubmission(
   host.lastRequestModelId = null;
   const modelName=host.modelPolicy?.providerModelId??host.options.model??host.modelPolicy?.family??'unknown';
   const providerName=host.modelPolicy?.provider??(modelName.toLowerCase().includes('deepseek')?'deepseek':modelName.toLowerCase().includes('ollama')?'ollama':'deepinfra');
+  host.captureObjectiveAuthorityAdmissionRollback();
   // W0.3: fresh TurnRuntime per user submission (isolate counters by default).
   const admission = host.admitUserSubmission({
     userInput,

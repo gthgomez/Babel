@@ -16,8 +16,9 @@ function isUnresolvedCriterion(criterion: AcceptanceRequirementV1): boolean {
 
 export const ACCEPTANCE_EXECUTABLE_BINDING_REF = 'task-acceptance-executable-binding:v1'
 
-const POSITIVE_SUCCESS_TAIL =
-  /^(?:must\s+|shall\s+)?(?:pass|passes|succeed|succeeds|exit(?:s)?(?:\s+with)?(?:\s+code)?\s*0)\.?$/i
+/** Suffix-only positive success tail (command is everything before this). */
+const POSITIVE_SUCCESS_SUFFIX =
+  /(?:must\s+|shall\s+)?(?:pass|passes|succeed|succeeds|exit(?:s)?(?:\s+with)?(?:\s+code)?\s*0)\.?$/i
 
 const COMPOUND_OR_NEGATED_RE =
   /\b(?:and|or|but|unless|except|when|if|not|fail|fails|failing|failed|error|errors|invalid|broken|red)\b/i
@@ -53,25 +54,33 @@ export function commandsMatchForExecutableBinding(
  * Extract a single command with supported positive-success semantics only.
  * Returns null for negated, compound, conditional, or non-success assertions.
  */
+function splitCommandAndSuccessTail(text: string): { command: string; tail: string } | null {
+  const match = text.trim().match(new RegExp(`^([\\s\\S]+?)\\s+(${POSITIVE_SUCCESS_SUFFIX.source})$`, 'i'))
+  if (!match) return null
+  const command = match[1]!.trim()
+  const tail = match[2]!.trim()
+  if (!command || !POSITIVE_SUCCESS_SUFFIX.test(tail)) return null
+  return { command, tail }
+}
+
 export function extractPositiveCommandSuccessCriterion(description: string): string | null {
   const trimmed = description.trim()
   if (!trimmed || COMPOUND_OR_NEGATED_RE.test(trimmed)) return null
 
-  const backtick = trimmed.match(/^`([^`]+)`\s+(.+)$/s)
+  const backtick = trimmed.match(/^`([^`]+)`\s+([\s\S]+)$/)
   if (backtick) {
-    const command = backtick[1]!.trim()
-    const tail = backtick[2]!.trim()
-    if (!POSITIVE_SUCCESS_TAIL.test(tail)) return null
-    return command
+    const inner = backtick[1]!.trim()
+    const rest = backtick[2]!.trim()
+    if (!POSITIVE_SUCCESS_SUFFIX.test(rest)) return null
+    if (!isAuthoritativeVerifierCommand(inner)) return null
+    return inner
   }
 
-  const plain = trimmed.match(/^(.+?)\s+(.+)$/s)
+  const plain = splitCommandAndSuccessTail(trimmed)
   if (!plain) return null
-  const command = plain[1]!.trim()
-  const tail = plain[2]!.trim()
-  if (!POSITIVE_SUCCESS_TAIL.test(tail)) return null
-  if (command.includes('`')) return null
-  return command
+  if (plain.command.includes('`')) return null
+  if (!isAuthoritativeVerifierCommand(plain.command)) return null
+  return plain.command
 }
 
 /**

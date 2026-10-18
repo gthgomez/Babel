@@ -134,6 +134,8 @@ export interface ParityRuntime {
   authorizedObservationIds?: Set<string>;
   /** P05 durable owner record; injected by the authorized host, never created here. */
   admissionStore?: AdmissionStore;
+  /** Set when a required session-events flush failed at an effect boundary. */
+  sessionPersistenceBoundaryFailed?: boolean;
 }
 
 export interface PersistenceReceipt {
@@ -355,7 +357,11 @@ export function paritySettleProposeTools(
     proposed += 1;
   }
   if (runDir) {
-    flushSessionEventsRequired(rt, runDir, 'settle-propose');
+    try {
+      flushSessionEventsRequired(rt, runDir, 'settle-propose');
+    } catch {
+      rt.sessionPersistenceBoundaryFailed = true;
+    }
   }
   return { proposed, skipped };
 }
@@ -381,7 +387,14 @@ export function paritySettleToolStarted(
     ...(tool.batch_id !== undefined ? { batch_id: tool.batch_id } : {}),
     ...(tool.target_summary !== undefined ? { target_summary: tool.target_summary } : {}),
   });
-  if (runDir) flushSessionEventsRequired(rt, runDir, 'settle-start');
+  if (runDir) {
+    try {
+      flushSessionEventsRequired(rt, runDir, 'settle-start');
+    } catch {
+      rt.sessionPersistenceBoundaryFailed = true;
+      return false;
+    }
+  }
   return true;
 }
 
@@ -1167,7 +1180,14 @@ export function finalizeParityTurnSync(
   persistThreadEventLog(runDir, rt.eventLog).catch((err) => {
     reportEventLogPersistFailure(`finalize:${outcome}`, err);
   });
-  flushSessionEventsRequired(rt, runDir, `finalize-sync:${outcome}`);
+  if (rt.sessionPersistenceBoundaryFailed) {
+    return;
+  }
+  try {
+    flushSessionEventsRequired(rt, runDir, `finalize-sync:${outcome}`);
+  } catch {
+    rt.sessionPersistenceBoundaryFailed = true;
+  }
 }
 
 /**

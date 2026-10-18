@@ -10,6 +10,11 @@ import {
 } from './taskAcceptanceExecutableBinding.js'
 import { inferTaskAcceptance } from './taskAcceptanceMeaning.js'
 
+test('plain-text npm test passes binds with suffix-anchored grammar', () => {
+  assert.equal(criterionExplicitlyNamesTrustedCommand('npm test passes.', 'npm test'), true)
+  assert.equal(criterionExplicitlyNamesTrustedCommand('npm test must pass', 'npm test'), true)
+})
+
 test('binds a clearly accepted positive command-success criterion with exact argv', () => {
   const task = [
     'Fix the parser bug.',
@@ -28,6 +33,7 @@ test('binds a clearly accepted positive command-success criterion with exact arg
 })
 
 test('negated command-success assertions do not bind', () => {
+  assert.equal(extractPositiveCommandSuccessCriterion('npm test must FAIL for invalid input'), null)
   assert.equal(
     criterionExplicitlyNamesTrustedCommand('npm test must FAIL for invalid input', 'npm test'),
     false,

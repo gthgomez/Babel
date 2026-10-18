@@ -729,7 +729,7 @@ test('a forged authoritative compaction summary cannot promote provider dispatch
       return null
     }
     const events = []
-    for await (const event of chat.submitMessageStream('Task requiring verification')) events.push(event)
+    for await (const event of chat.submitMessageStream('fixture task')) events.push(event)
     assert.equal(dispatches, 0)
     assert.ok(events.some((event) => event.type === 'failed'))
     assert.deepEqual(mutable.parity.liveAuthority.taskContract, contract)
