@@ -364,4 +364,37 @@ describe('Remote control WebSocket gateway', () => {
     });
     assert.equal(rpcAfter.statusCode, 401);
   });
+
+  it('unregisters paired device socket closers after each transport closes', async () => {
+    const cookie = await pairCookie('ws-churn');
+    const auth = JSON.parse(
+      (
+        await httpRequest(`http://127.0.0.1:${PORT}/auth/session`, {
+          headers: { Cookie: cookie },
+        })
+      ).body,
+    ) as { deviceId: string };
+    const { sessionId, threadId } = await setupThread(cookie);
+    let peak = 0;
+    for (let i = 0; i < 5; i++) {
+      const ticket = await mintTicket(cookie, sessionId, threadId);
+      const ws = await wsConnect(
+        `/ws?sessionId=${encodeURIComponent(sessionId)}&ticket=${encodeURIComponent(ticket)}`,
+      );
+      peak = Math.max(peak, server.testDeviceSocketCloserCount(auth.deviceId));
+      ws.close();
+      await new Promise((resolve) => setTimeout(resolve, 80));
+    }
+    assert.ok(peak <= 1, `socket closer registry grew to ${peak}`);
+    const ticket = await mintTicket(cookie, sessionId, threadId);
+    await wsConnect(
+      `/ws?sessionId=${encodeURIComponent(sessionId)}&ticket=${encodeURIComponent(ticket)}`,
+    );
+    assert.equal(server.testDeviceSocketCloserCount(auth.deviceId), 1);
+    await httpRequest(`http://127.0.0.1:${PORT}/pair/devices/${auth.deviceId}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${TOKEN}` },
+    });
+    assert.equal(server.testDeviceSocketCloserCount(auth.deviceId), 0);
+  });
 });

@@ -24,7 +24,7 @@
     SUBMITTING: ['ack', 'fail', 'unknown'],
     ACKNOWLEDGED: ['stream', 'complete', 'fail', 'cancel'],
     STREAMING: ['complete', 'fail', 'cancel'],
-    CANCELLING: ['complete', 'fail', 'unknown'],
+    CANCELLING: ['complete', 'fail', 'unknown', 'recover'],
     COMPLETED: ['submit'],
     FAILED: ['submit'],
     UNKNOWN: ['recover', 'fail', 'complete'],
@@ -70,6 +70,7 @@
       if (event === 'complete') return 'COMPLETED';
       if (event === 'fail') return 'FAILED';
       if (event === 'unknown') return 'UNKNOWN';
+      if (event === 'recover') return 'STREAMING';
       return 'STREAMING';
     }
     if (event === 'pending') return 'PENDING';
@@ -88,6 +89,16 @@
 
   function canCancelTurn(turn) {
     return turn === 'ACKNOWLEDGED' || turn === 'STREAMING' || turn === 'SUBMITTING';
+  }
+
+  function reconcileAfterCancelRejection(input) {
+    if (!input.hostReachable) {
+      return { turn: 'UNKNOWN', ambiguity: 'host_unavailable' };
+    }
+    if (input.responseSettled) {
+      return { turn: 'STREAMING', ambiguity: 'rejected' };
+    }
+    return { turn: 'UNKNOWN', ambiguity: 'ambiguous_network' };
   }
 
   function reconcileAfterSubmitFailure(input) {
@@ -136,6 +147,7 @@
     canSendTurn: canSendTurn,
     canCancelTurn: canCancelTurn,
     reconcileAfterSubmitFailure: reconcileAfterSubmitFailure,
+    reconcileAfterCancelRejection: reconcileAfterCancelRejection,
     reconcileAfterProtocolError: reconcileAfterProtocolError,
     classifyRpcResponse: classifyRpcResponse,
   };

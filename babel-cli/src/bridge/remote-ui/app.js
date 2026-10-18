@@ -99,6 +99,9 @@
   }
 
   async function rpc(method, params, id) {
+    if (typeof window.__babelRemoteRpc === 'function') {
+      return window.__babelRemoteRpc(method, params, id);
+    }
     const response = await fetch('/rpc', {
       method: 'POST',
       headers: authHeaders(),
@@ -381,6 +384,7 @@
         if (msg.indexOf('lease') !== -1 || msg.indexOf('epoch') !== -1) clearControlLease('Lost control lease before submit completed.');
         const decision = S.reconcileAfterSubmitFailure({ responseSettled: true, commandId: commandId, hostReachable: host === 'ONLINE' });
         turn = transition('turn', turn, 'fail');
+        thread = transition('thread', thread, 'ready');
         appendEvent({ type: 'failed', error: 'Submit rejected: ' + msg + ' (' + decision.ambiguity + ').' });
         return;
       }
@@ -399,8 +403,32 @@
 
   async function stop() {
     if (!S.canCancelTurn(turn)) return;
-    try { turn = transition('turn', turn, 'cancel'); renderChrome(); await rpc('turn.cancel', { thread_id: memory.threadId }); }
-    catch (error) { turn = transition('turn', turn, 'fail'); appendEvent({ type: 'failed', error: 'Cancel status unknown.' }); renderChrome(); }
+    turn = transition('turn', turn, 'cancel');
+    renderChrome();
+    try {
+      const result = await rpc('turn.cancel', { thread_id: memory.threadId });
+      if (result.classified.kind === 'rejected') {
+        const msg = result.classified.message || 'rejected';
+        if (msg.indexOf('lease') !== -1 || msg.indexOf('epoch') !== -1) clearControlLease('Lost control lease before cancel completed.');
+        const decision = S.reconcileAfterCancelRejection({ responseSettled: true, hostReachable: host === 'ONLINE' });
+        turn = transition('turn', turn, decision.turn === 'STREAMING' ? 'recover' : 'fail');
+        appendEvent({ type: 'failed', error: 'Cancel rejected: ' + msg + ' (' + decision.ambiguity + ').' });
+        renderChrome();
+        return;
+      }
+      if (result.classified.kind !== 'success') {
+        const decision = S.reconcileAfterCancelRejection({ responseSettled: false, hostReachable: host === 'ONLINE' });
+        turn = transition('turn', turn, decision.turn === 'UNKNOWN' ? 'unknown' : 'fail');
+        appendEvent({ type: 'failed', error: 'Cancel status ' + decision.ambiguity + '.' });
+        renderChrome();
+        return;
+      }
+    } catch (error) {
+      const decision = S.reconcileAfterCancelRejection({ responseSettled: false, hostReachable: host === 'ONLINE' });
+      turn = transition('turn', turn, decision.turn === 'UNKNOWN' ? 'unknown' : 'fail');
+      appendEvent({ type: 'failed', error: 'Cancel status ' + decision.ambiguity + '.' });
+    }
+    renderChrome();
   }
 
   async function decide(decision) {
@@ -480,6 +508,20 @@
         }).catch(function () { clearControlLease('Control lease renewal failed after resume.'); renderChrome(); });
       }
     });
+    window.BabelRemoteApp = {
+      getState: function () {
+        return { host: host, thread: thread, turn: turn, approval: approval, sendInFlight: sendInFlight };
+      },
+      memoryHasToken: function () { return Boolean(memory.token) || memory.pairedDevice; },
+      send: send,
+      stop: stop,
+      configureTest: function (patch) {
+        if (patch && patch.host !== undefined) host = patch.host;
+        if (patch && patch.thread !== undefined) thread = patch.thread;
+        if (patch && patch.turn !== undefined) turn = patch.turn;
+        if (patch && patch.memory) Object.assign(memory, patch.memory);
+      },
+    };
     renderChrome();
   }
 
@@ -535,10 +577,6 @@
       renderChrome();
     }
     if ('serviceWorker' in navigator) navigator.serviceWorker.register('/ui/sw.js', { scope: '/ui/' }).catch(function () { /* optional install */ });
-    window.BabelRemoteApp = {
-      getState: function () { return { host: host, thread: thread, turn: turn, approval: approval }; },
-      memoryHasToken: function () { return Boolean(memory.token) || memory.pairedDevice; },
-    };
   }
 
   boot().catch(function () {

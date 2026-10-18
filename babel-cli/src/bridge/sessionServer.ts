@@ -57,8 +57,10 @@ import { closeProtocolHostState, parseProtocolRequest } from '../protocol/client
 import { DevicePairingService, REMOTE_PAIRING_COOKIE } from './devicePairing.js';
 import { authorizeThreadScopedWsRpc } from './wsRpcAuthorization.js';
 import {
+  bridgeClientPrincipalMatches,
   isBridgeClientAuthenticated,
   isBridgeHostAdminAuthenticated,
+  isBridgeRequestAuthenticated,
   resolveBridgeClientContext,
 } from './bridgeClientAuth.js';
 import { writePairUiResponse } from './pairUiAssets.js';
@@ -133,7 +135,20 @@ function isAuthenticated(
   parsedUrl?: ParsedUrl | null,
   pairing?: DevicePairingService,
 ): boolean {
-  return isBridgeClientAuthenticated(req, authToken, parsedUrl, pairing);
+  return isBridgeRequestAuthenticated(req, authToken, parsedUrl, pairing);
+}
+
+function validateAuthenticatedClient(
+  client: BridgeClientContext,
+  pairing: DevicePairingService,
+): { ok: true } | { ok: false; status: number; message: string } {
+  if (!isBridgeClientAuthenticated(client)) {
+    return { ok: false, status: 401, message: 'Authentication required' };
+  }
+  if (client.deviceId && !pairing.isDeviceAuthorized(client.deviceId)) {
+    return { ok: false, status: 403, message: 'Device authorization revoked' };
+  }
+  return { ok: true };
 }
 
 // ─── CORS helpers ──────────────────────────────────────────────────────────────
@@ -632,6 +647,18 @@ export class BridgeServer {
   // ── Session endpoints ─────────────────────────────────────────────────────
 
   private async handleMintTicket(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const parsedUrl = parseRequestUrl(req);
+    const principalBefore = resolveBridgeClientContext(
+      req,
+      this.authToken,
+      parsedUrl,
+      this.devicePairing,
+    );
+    const authBefore = validateAuthenticatedClient(principalBefore, this.devicePairing);
+    if (!authBefore.ok) {
+      errorResponse(res, authBefore.status, authBefore.message);
+      return;
+    }
     const body = await readLimitedBody(req, 64 * 1024);
     if (!body.ok) {
       errorResponse(res, 413, body.error);
@@ -661,21 +688,27 @@ export class BridgeServer {
       errorResponse(res, status, `ticket mint denied: ${owned.error}`);
       return;
     }
-    const client = resolveBridgeClientContext(
+    const principalAfter = resolveBridgeClientContext(
       req,
       this.authToken,
-      parseRequestUrl(req),
+      parsedUrl,
       this.devicePairing,
     );
-    if (client.deviceId && !this.devicePairing.isDeviceAuthorized(client.deviceId)) {
-      errorResponse(res, 403, 'Device authorization revoked');
+    if (!bridgeClientPrincipalMatches(principalBefore, principalAfter)) {
+      errorResponse(res, 401, 'Authentication expired or changed during request');
+      return;
+    }
+    const authAfter = validateAuthenticatedClient(principalAfter, this.devicePairing);
+    if (!authAfter.ok) {
+      errorResponse(res, authAfter.status, authAfter.message);
       return;
     }
     const minted = this.wsTickets.mint({
       sessionId: parsed.session_id,
       threadId: parsed.thread_id,
-      clientId: client.clientId,
-      ...(client.deviceId !== undefined ? { deviceId: client.deviceId } : {}),
+      clientId: principalAfter.clientId,
+      authKind: principalAfter.authKind,
+      ...(principalAfter.deviceId !== undefined ? { deviceId: principalAfter.deviceId } : {}),
     });
     jsonResponse(res, 200, minted);
   }
@@ -703,7 +736,28 @@ export class BridgeServer {
     this.deviceSocketClosers.delete(deviceId);
   }
 
+  /** Test-only: count registered socket closers for a paired device. */
+  testDeviceSocketCloserCount(deviceId: string): number {
+    return this.deviceSocketClosers.get(deviceId)?.size ?? 0;
+  }
+
   private async handleRpc(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const parsedUrl = parseRequestUrl(req);
+    const principalBefore = resolveBridgeClientContext(
+      req,
+      this.authToken,
+      parsedUrl,
+      this.devicePairing,
+    );
+    const authBefore = validateAuthenticatedClient(principalBefore, this.devicePairing);
+    if (!authBefore.ok) {
+      jsonResponse(res, authBefore.status, {
+        jsonrpc: '2.0',
+        id: null,
+        error: { code: -32001, message: authBefore.message },
+      });
+      return;
+    }
     const body = await readLimitedBody(req);
     if (!body.ok) {
       jsonResponse(res, 413, {
@@ -713,13 +767,30 @@ export class BridgeServer {
       });
       return;
     }
-    const client = resolveBridgeClientContext(
+    const principalAfter = resolveBridgeClientContext(
       req,
       this.authToken,
-      parseRequestUrl(req),
+      parsedUrl,
       this.devicePairing,
     );
-    const response = await this.protocolGateway.dispatch(body.body, { client });
+    if (!bridgeClientPrincipalMatches(principalBefore, principalAfter)) {
+      jsonResponse(res, 401, {
+        jsonrpc: '2.0',
+        id: null,
+        error: { code: -32001, message: 'Authentication expired or changed during request' },
+      });
+      return;
+    }
+    const authAfter = validateAuthenticatedClient(principalAfter, this.devicePairing);
+    if (!authAfter.ok) {
+      jsonResponse(res, authAfter.status, {
+        jsonrpc: '2.0',
+        id: null,
+        error: { code: -32001, message: authAfter.message },
+      });
+      return;
+    }
+    const response = await this.protocolGateway.dispatch(body.body, { client: principalAfter });
     jsonResponse(res, 200, response);
   }
 
@@ -871,8 +942,19 @@ export class BridgeServer {
         return;
       }
       subscribedThreadId = consumed.value.threadId;
+      if (!isBridgeClientAuthenticated({
+        authKind: consumed.value.authKind,
+        clientId: consumed.value.clientId,
+        ...(consumed.value.deviceId !== undefined
+          ? { deviceId: consumed.value.deviceId }
+          : {}),
+      })) {
+        socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
+        socket.destroy();
+        return;
+      }
       wsClient = {
-        authKind: consumed.value.deviceId ? 'paired_device' : 'host_bearer',
+        authKind: consumed.value.authKind,
         clientId: consumed.value.clientId,
         ...(consumed.value.deviceId !== undefined
           ? { deviceId: consumed.value.deviceId }
@@ -959,9 +1041,13 @@ export class BridgeServer {
           )
         : () => {};
 
+    const closeBoundSocket = (): void => {
+      transport.close();
+    };
+
     if (transport instanceof WebSocketTransport) {
       if (pairedDeviceId) {
-        this.registerDeviceSocket(pairedDeviceId, () => transport.close());
+        this.registerDeviceSocket(pairedDeviceId, closeBoundSocket);
       }
       transport.onText((payload) => {
         if (wsClient.deviceId && !this.devicePairing.isDeviceAuthorized(wsClient.deviceId)) {
@@ -1015,10 +1101,10 @@ export class BridgeServer {
 
     const closeGeneration = generation;
     transport.onClose?.((_reason?: string) => {
-      if (this.transportGenerations.get(sessionId) !== closeGeneration) return;
       if (pairedDeviceId) {
-        this.unregisterDeviceSocket(pairedDeviceId, () => transport.close());
+        this.unregisterDeviceSocket(pairedDeviceId, closeBoundSocket);
       }
+      if (this.transportGenerations.get(sessionId) !== closeGeneration) return;
       unsub();
       this.wsTransports.delete(sessionId);
       this.transportGenerations.delete(sessionId);

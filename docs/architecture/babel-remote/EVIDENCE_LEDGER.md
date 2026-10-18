@@ -21,4 +21,4 @@ Status: living document for the remote implementation campaign. **Qualified** me
 | 6 | External harness adapters | Stub only | `harnessAdapterContract.ts` |
 | — | Physical phone + Tailscale | Not qualified | Owner checklist in `BABEL_REMOTE_QUICKSTART.md` |
 
-**Last tested commit:** `e845606c` on `cursor/babel-remote-phase1-pairing-0634`.
+**Last tested commit:** update after re-review correction push on `cursor/babel-remote-phase1-pairing-0634`.

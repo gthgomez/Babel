@@ -78,13 +78,34 @@ export function resolveBridgeClientContext(
   return { authKind: 'none', clientId: 'anonymous' };
 }
 
-export function isBridgeClientAuthenticated(
+export function isBridgeClientAuthenticated(client: BridgeClientContext): boolean {
+  if (client.authKind === 'none') return false;
+  if (client.authKind === 'paired_device') {
+    return typeof client.deviceId === 'string' && client.deviceId.length > 0;
+  }
+  return client.authKind === 'host_bearer' || client.authKind === 'query_bearer';
+}
+
+export function bridgeClientPrincipalMatches(
+  a: BridgeClientContext,
+  b: BridgeClientContext,
+): boolean {
+  return (
+    a.authKind === b.authKind &&
+    a.clientId === b.clientId &&
+    a.deviceId === b.deviceId
+  );
+}
+
+export function isBridgeRequestAuthenticated(
   req: IncomingMessage,
   authToken: string,
   parsedUrl?: ParsedUrl | null,
   pairing?: DevicePairingService,
 ): boolean {
-  return resolveBridgeClientContext(req, authToken, parsedUrl, pairing).authKind !== 'none';
+  return isBridgeClientAuthenticated(
+    resolveBridgeClientContext(req, authToken, parsedUrl, pairing),
+  );
 }
 
 /** Host administration (pairing challenge, approve, device list) requires host bearer, not a paired cookie. */

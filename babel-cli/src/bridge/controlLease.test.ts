@@ -94,6 +94,14 @@ describe('ControlLeaseRegistry', () => {
     assert.equal(reacquired.epoch, acquired.epoch + 1);
   });
 
+  it('does not persist committed epoch across registry instances (no cross-restart fencing)', () => {
+    const first = new ControlLeaseRegistry();
+    first.acquire({ threadId: 'thr-restart', clientId: 'device:a' });
+    assert.equal(first.status('thr-restart').committed_epoch, 1);
+    const second = new ControlLeaseRegistry();
+    assert.equal(second.status('thr-restart').committed_epoch, undefined);
+  });
+
   it('auto-acquires for host-local clients when no lease exists', () => {
     const leases = new ControlLeaseRegistry();
     const ok = leases.authorizeMutation({

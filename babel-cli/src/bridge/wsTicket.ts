@@ -5,6 +5,8 @@
 
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 
+import type { BridgeAuthKind } from './bridgeClientAuth.js';
+
 export const WS_TICKET_TTL_MS = 30_000;
 export const WS_TICKET_BYTES = 32;
 
@@ -21,6 +23,7 @@ export interface ConsumedWsTicket {
   threadId: string;
   mintedAt: number;
   clientId: string;
+  authKind: BridgeAuthKind;
   deviceId?: string;
 }
 
@@ -39,6 +42,7 @@ interface StoredTicket {
   expiresAt: number;
   consumed: boolean;
   clientId: string;
+  authKind: BridgeAuthKind;
   deviceId?: string;
 }
 
@@ -51,6 +55,7 @@ export class WsTicketStore {
     sessionId: string;
     threadId: string;
     clientId: string;
+    authKind: BridgeAuthKind;
     deviceId?: string;
     now?: number;
   }): MintedWsTicket {
@@ -65,6 +70,7 @@ export class WsTicketStore {
       expiresAt,
       consumed: false,
       clientId: input.clientId,
+      authKind: input.authKind,
       ...(input.deviceId !== undefined ? { deviceId: input.deviceId } : {}),
     });
     this.gc(now);
@@ -115,6 +121,15 @@ export class WsTicketStore {
       this.tickets.delete(input.ticket);
       return { ok: false, error: 'unknown' };
     }
+    if (
+      stored.authKind === 'none' ||
+      (stored.authKind === 'paired_device' && !stored.deviceId) ||
+      ((stored.authKind === 'host_bearer' || stored.authKind === 'query_bearer') &&
+        !stored.clientId.startsWith('host:'))
+    ) {
+      this.tickets.delete(input.ticket);
+      return { ok: false, error: 'unknown' };
+    }
     stored.consumed = true;
     return {
       ok: true,
@@ -123,6 +138,7 @@ export class WsTicketStore {
         threadId: stored.threadId,
         mintedAt: stored.mintedAt,
         clientId: stored.clientId,
+        authKind: stored.authKind,
         ...(stored.deviceId !== undefined ? { deviceId: stored.deviceId } : {}),
       },
     };

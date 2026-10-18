@@ -188,3 +188,86 @@ describe('Bridge pairing integration', () => {
     assert.equal(deniedBody.error?.data?.control_error, 'lease_required');
   });
 });
+
+describe('Bridge pairing lease invariants', () => {
+  const PORT = 14656;
+  const TOKEN = 'pairing-lease-bypass-token-value';
+  let server: BridgeServer;
+  let tmp: string;
+  let prevHome: string | undefined;
+
+  before(async () => {
+    tmp = mkdtempSync(join(tmpdir(), 'babel-bridge-pair-lease-'));
+    prevHome = process.env['HOME'];
+    process.env['HOME'] = tmp;
+    server = new BridgeServer({
+      port: PORT,
+      authToken: TOKEN,
+      allowedWorkspaceRoot: tmp,
+      allowedOrigins: ['http://127.0.0.1:*'],
+      enforceControlLease: false,
+    });
+    await server.start(PORT);
+  });
+
+  after(async () => {
+    await server.stop();
+    if (prevHome === undefined) delete process.env['HOME'];
+    else process.env['HOME'] = prevHome;
+    rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it('still requires paired-device control lease when enforceControlLease is false', async () => {
+    const challengeRes = await httpRequest(`http://127.0.0.1:${PORT}/pair/challenge`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${TOKEN}` },
+    });
+    const challenge = JSON.parse(challengeRes.body) as { challengeId: string };
+    await httpRequest(`http://127.0.0.1:${PORT}/pair/request`, {
+      method: 'POST',
+      headers: { Origin: 'http://127.0.0.1' },
+      body: JSON.stringify({ challenge_id: challenge.challengeId, device_label: 'Bypass phone' }),
+    });
+    await httpRequest(`http://127.0.0.1:${PORT}/pair/approve`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${TOKEN}` },
+      body: JSON.stringify({ challenge_id: challenge.challengeId }),
+    });
+    const statusRes = await httpRequest(
+      `http://127.0.0.1:${PORT}/pair/status?challenge_id=${encodeURIComponent(challenge.challengeId)}`,
+      { headers: { Origin: 'http://127.0.0.1' } },
+    );
+    const cookie = statusRes.headers['set-cookie'];
+    assert.ok(cookie);
+    const sessionRes = await httpRequest(`http://127.0.0.1:${PORT}/sessions`, {
+      method: 'POST',
+      headers: { Cookie: cookie, Origin: 'http://127.0.0.1' },
+      body: JSON.stringify({ projectRoot: tmp }),
+    });
+    const session = JSON.parse(sessionRes.body) as { sessionId: string };
+    const createRpc = await httpRequest(`http://127.0.0.1:${PORT}/rpc`, {
+      method: 'POST',
+      headers: { Cookie: cookie, Origin: 'http://127.0.0.1' },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'thread.create',
+        params: { project_root: tmp, session_id: session.sessionId },
+      }),
+    });
+    const threadId = (JSON.parse(createRpc.body) as { result: { thread_id: string } }).result.thread_id;
+    const denied = await httpRequest(`http://127.0.0.1:${PORT}/rpc`, {
+      method: 'POST',
+      headers: { Cookie: cookie, Origin: 'http://127.0.0.1' },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 2,
+        method: 'turn.submit',
+        params: { thread_id: threadId, message: 'hello', command_id: 'pair-bypass-1' },
+      }),
+    });
+    const deniedBody = JSON.parse(denied.body) as { error?: { data?: { control_error?: string } } };
+    const controlError = deniedBody.error?.data?.control_error;
+    assert.ok(controlError === 'lease_required' || controlError === 'epoch_required');
+  });
+});
