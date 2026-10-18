@@ -160,7 +160,14 @@ function formatExpandedItem(
 
   const errSuffix = cls.isFailure && item.error ? ` (${item.error})` : "";
   const rawLine = `  ${icon} ${dim(item.tool)} ${primary(item.target)} — ${statusText}${errSuffix}`;
-  let line = rawLine;
+  const preserveEvidence =
+    cls.isFailure || cls.isBlocked || cls.availability === "unavailable";
+
+  if (preserveEvidence) {
+    if (visibleLength(rawLine) <= termWidth) return rawLine;
+    return wrapText(stripAnsi(rawLine), termWidth).join("\n");
+  }
+
   if (visibleLength(rawLine) > termWidth) {
     const staticLen = visibleLength(
       `  ${icon} ${dim(item.tool)}  — ${statusText}${errSuffix}`,
@@ -168,14 +175,11 @@ function formatExpandedItem(
     const budget = Math.max(4, termWidth - staticLen);
     const truncatedTarget = truncate(item.target, budget);
     const fittedLine = `  ${icon} ${dim(item.tool)} ${primary(truncatedTarget)} — ${statusText}${errSuffix}`;
-    line =
-      visibleLength(fittedLine) > termWidth ? truncate(fittedLine, termWidth) : fittedLine;
+    return visibleLength(fittedLine) > termWidth
+      ? truncate(fittedLine, termWidth)
+      : fittedLine;
   }
-  if (visibleLength(line) <= termWidth) return line;
-  const plain = stripAnsi(line);
-  const wrapped = wrapText(plain, termWidth);
-  if (wrapped.length <= 1) return line;
-  return wrapped.join("\n");
+  return rawLine;
 }
 
 export function formatToolGroupSummary(

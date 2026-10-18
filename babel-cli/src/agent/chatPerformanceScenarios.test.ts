@@ -27,13 +27,19 @@ import { globalCostTracker } from '../services/costTracker.js';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { initMinimalGitProject, mkExternalRunsDir } from '../testUtils/chatAdmissionFixture.js';
+import {
+  initMinimalGitProject,
+  mkExternalRunsDir,
+  snapshotChatAdmissionEnv,
+} from '../testUtils/chatAdmissionFixture.js';
 
 const EMPTY_USAGE = globalCostTracker.getSessionSummary();
+const admissionEnv = snapshotChatAdmissionEnv();
 
 after(() => {
   for (const root of perfRoots) rmSync(root, { recursive: true, force: true });
   for (const runsRoot of perfRunsRoots) rmSync(runsRoot, { recursive: true, force: true });
+  admissionEnv.restore();
 });
 
 const perfRoots: string[] = [];

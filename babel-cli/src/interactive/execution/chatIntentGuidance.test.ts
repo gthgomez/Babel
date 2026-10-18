@@ -30,7 +30,11 @@ import type {
 import type { AgentTargetContext } from '../../services/targetResolver.js';
 import { runChatEngineOnce } from './chatCore.js';
 import { createChatPlanExecuteHandoff } from '../../agent/planExecuteMode.js';
-import { initMinimalGitProject, mkExternalRunsDir } from '../../testUtils/chatAdmissionFixture.js';
+import {
+  initMinimalGitProject,
+  mkExternalRunsDir,
+  snapshotChatAdmissionEnv,
+} from '../../testUtils/chatAdmissionFixture.js';
 
 const MODEL = 'deepseek-v4-flash';
 
@@ -38,6 +42,7 @@ type Capture = { messages: ProviderMessage[]; tools?: ToolDefinition[] };
 
 const roots: string[] = [];
 const runsRoots: string[] = [];
+const admissionEnv = snapshotChatAdmissionEnv();
 
 function makeTarget(): AgentTargetContext {
   const root = mkdtempSync(join(tmpdir(), 'babel-intent-guidance-'));
@@ -183,6 +188,7 @@ const READ_ONLY_PROBES: ReadonlyArray<{ label: string; task: string }> = [
 after(() => {
   for (const root of roots) rmSync(root, { recursive: true, force: true });
   for (const runsRoot of runsRoots) rmSync(runsRoot, { recursive: true, force: true });
+  admissionEnv.restore();
 });
 
 describe('S01/#211 informational Chat requests receive no generated edit mandate', () => {
