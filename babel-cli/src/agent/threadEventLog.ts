@@ -323,6 +323,29 @@ export function endTurn(
   });
 }
 
+/** Correct the latest thread turn_ended when terminal settlement could not durably commit. */
+export function amendLatestTurnEndedForTurn(
+  log: ThreadEventLog,
+  turnId: string,
+  input: {
+    outcome: TerminalOutcome;
+    status: string;
+    reason: { code: string; cause_class: string | null };
+  },
+): boolean {
+  for (let i = log.events.length - 1; i >= 0; i -= 1) {
+    const event = log.events[i];
+    if (event?.kind === 'turn_ended' && event.turn_id === turnId) {
+      event.outcome = input.outcome;
+      event.status = input.status;
+      event.reason_code = input.reason.code;
+      event.cause_class = input.reason.cause_class;
+      return true;
+    }
+  }
+  return false;
+}
+
 export function recordAssistantToolCalls(
   log: ThreadEventLog,
   turnId: string,

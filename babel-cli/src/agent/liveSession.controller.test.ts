@@ -49,6 +49,8 @@ import {
   resumeEquivalenceFromDisk,
   projectFromDurableSession,
   loadLiveSessionAuthority,
+  persistLiveSessionAuthority,
+  persistLiveSessionSnapshot,
 } from './liveSessionBridge.js';
 import {
   canMutateWithIdempotencyKey,
@@ -294,10 +296,100 @@ describe('H2 ChatEngine resume + LiveSession projection', () => {
       runDir,
       'VERIFIED_COMPLETE',
       'completed',
+      undefined,
+      undefined,
+      {
+        completionDecision: {
+          requestedOutcome: 'VERIFIED_COMPLETE',
+          finalOutcome: 'VERIFIED_COMPLETE',
+          allowed: true,
+          reason: 'fixture gate',
+          evidenceRefs: [],
+          policyVersion: 'fixture',
+        },
+      },
     );
     assert.equal(durableOk, false);
     assert.equal(rt.sessionPersistenceBoundaryFailed, true);
+    assert.equal(existsSync(join(runDir, LIVE_SESSION_SNAPSHOT_FILENAME)), false);
+    const ended = rt.sessionEvents.events.filter((e) => e.kind === 'turn_ended');
+    assert.ok(ended.length >= 1);
+    assert.equal(ended[ended.length - 1]?.outcome, 'INFRA_FAILURE');
+    assert.ok(
+      rt.sessionEvents.events.some(
+        (e) =>
+          e.kind === 'policy_intervened' &&
+          e.action === 'terminal_settlement_failed',
+      ),
+    );
+    assert.equal(
+      rt.sessionEvents.events.some((e) => e.kind === 'completion_decision'),
+      false,
+    );
+    rmSync(eventPath, { recursive: true, force: true });
+    flushSessionEventLogStrict(runDir, rt.sessionEvents);
+    const diskLog = loadSessionEventLogFromDir(runDir);
+    assert.ok(diskLog);
+    const diskEnded = diskLog!.events.filter((e) => e.kind === 'turn_ended');
+    assert.equal(diskEnded[diskEnded.length - 1]?.outcome, 'INFRA_FAILURE');
+    assert.equal(
+      diskLog!.events.some((e) => e.kind === 'completion_decision'),
+      false,
+    );
     rmSync(root, { recursive: true, force: true });
+  });
+
+  it('disk resume after final-flush failure projects infra terminal truth', () => {
+    const engine = new ChatEngine({
+      task: 'finalize flush resume',
+      projectRoot: process.cwd(),
+    });
+    const runDir = (engine as unknown as { engineRunDir: string }).engineRunDir;
+    const rt = engine.getParityRuntime();
+    parityOnUserTurn(rt, {
+      task: 'finalize flush resume',
+      model: 'test-model',
+      provider: 'test-provider',
+      projectRoot: process.cwd(),
+    });
+    const eventPath = join(runDir, SESSION_EVENTS_FILENAME);
+    writeFileSync(eventPath, '');
+    unlinkSync(eventPath);
+    mkdirSync(eventPath);
+    const durableOk = finalizeParityTurnSync(
+      rt,
+      runDir,
+      'VERIFIED_COMPLETE',
+      'completed',
+      undefined,
+      undefined,
+      {
+        completionDecision: {
+          requestedOutcome: 'VERIFIED_COMPLETE',
+          finalOutcome: 'VERIFIED_COMPLETE',
+          allowed: true,
+          reason: 'fixture gate',
+          evidenceRefs: [],
+          policyVersion: 'fixture',
+        },
+      },
+    );
+    assert.equal(durableOk, false);
+    rmSync(eventPath, { recursive: true, force: true });
+    flushSessionEventLogStrict(runDir, rt.sessionEvents);
+    persistThreadEventLog(runDir, rt.eventLog);
+    if (rt.liveAuthority) {
+      persistLiveSessionAuthority(runDir, rt.liveAuthority);
+      const live = projectFromDurableSession({
+        sessionLog: rt.sessionEvents,
+        threadLog: rt.eventLog,
+        authority: rt.liveAuthority,
+      });
+      persistLiveSessionSnapshot(runDir, live);
+    }
+    const eq = resumeEquivalenceFromDisk(runDir);
+    assert.ok(eq.ok, eq.mismatches.join(','));
+    assert.equal(eq.live?.terminal?.outcome, 'INFRA_FAILURE');
   });
 
   it('disk resume equivalence of projected LiveSession', () => {

@@ -4702,7 +4702,7 @@ export class ChatEngine {
         decideCompletion: (requested, hasMutation) =>
           this.decideCompletion(requested, hasMutation),
         settleActiveExecution: () => this.settleActiveExecutionForTerminal(),
-        finalizeTurn: (outcome, status, reason, response) =>
+        finalizeTurn: (outcome, status, reason, response, extras) =>
           finalizeParityTurnSync(
             this.parity,
             this.engineRunDir,
@@ -4710,6 +4710,7 @@ export class ChatEngine {
             status,
             reason,
             response,
+            extras,
           ),
         storeTelemetry: (record) => {
           this.lastTurnTelemetry = record;

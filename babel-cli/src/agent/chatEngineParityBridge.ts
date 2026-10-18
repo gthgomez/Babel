@@ -32,6 +32,7 @@ import {
   createThreadEventLog,
   startTurn,
   endTurn,
+  amendLatestTurnEndedForTurn as amendThreadTurnEndedForTurn,
   recordAssistantToolCalls,
   recordToolResult,
   rebuildProviderMessagesFromEvents,
@@ -53,6 +54,10 @@ import {
   recordRecoveredOutcomeReconciled,
   recordToolTerminal,
   recordTurnEnded,
+  recordPolicyIntervened,
+  recordCompletionDecision,
+  stripCompletionDecisionsForTurn,
+  amendLatestTurnEndedForTurn as amendSessionTurnEndedForTurn,
   flushSessionEventLogStrict,
   SESSION_EVENTS_FILENAME,
   serializeSessionEventLog,
@@ -136,7 +141,35 @@ export interface ParityRuntime {
   admissionStore?: AdmissionStore;
   /** Set when a required session-events flush failed at an effect boundary. */
   sessionPersistenceBoundaryFailed?: boolean;
+  /** Turn whose terminal session evidence was durably flushed (idempotent finalize). */
+  terminalPersistCommittedTurnId?: string | null;
 }
+
+export type ParityCompletionDecisionPayload = {
+  requestedOutcome: string;
+  finalOutcome: string;
+  allowed: boolean;
+  reason: string;
+  evidenceRefs: string[];
+  policyVersion: string;
+  reasonCode?: import('../schemas/agentContracts.js').TerminalReasonCode;
+  causeClass?:
+    | 'model'
+    | 'provider'
+    | 'environment'
+    | 'harness'
+    | 'verification'
+    | null;
+};
+
+export type FinalizeParityTurnExtras = {
+  completionDecision?: ParityCompletionDecisionPayload;
+};
+
+const TERMINAL_PERSISTENCE_FAILURE_REASON: TerminalReason = {
+  code: 'unknown',
+  cause_class: 'harness',
+};
 
 export interface PersistenceReceipt {
   status: 'committed' | 'blocked'
@@ -1007,13 +1040,8 @@ export function parityEndTurn(
       ? { status: status as ChatStatus }
       : {}),
   });
-  // Idempotent: streamDone + buildResult both call this when submitMessage wraps stream.
-  if (
-    rt.turnId &&
-    rt.eventLog.events.some(
-      (e) => e.kind === 'turn_ended' && e.turn_id === rt.turnId,
-    )
-  ) {
+  // Idempotent only after durable terminal settlement (streamDone + buildResult).
+  if (rt.turnId && rt.terminalPersistCommittedTurnId === rt.turnId) {
     return;
   }
   if (terminal.outcome !== undefined) {
@@ -1074,11 +1102,20 @@ export async function finalizeParityTurn(
   status: string,
   reason?: TerminalReason,
   response?: ThreadTerminalResponse,
+  extras?: FinalizeParityTurnExtras,
 ): Promise<void> {
-  parityEndTurn(rt, outcome, status, reason, response);
-  parityPersistLiveSession(rt, runDir);
-  await persistThreadEventLog(runDir, rt.eventLog);
-  flushSessionEventsRequired(rt, runDir, `finalize:${outcome}`);
+  const durableOk = finalizeParityTurnSync(
+    rt,
+    runDir,
+    outcome,
+    status,
+    reason,
+    response,
+    extras,
+  );
+  if (!durableOk) {
+    throw new Error('SESSION_EVENT_PERSISTENCE_BOUNDARY_FAILED');
+  }
 }
 
 function reportEventLogPersistFailure(context: string, err: unknown): void {
@@ -1166,15 +1203,32 @@ function parityPersistLiveSession(rt: ParityRuntime, runDir: string): void {
   persistLiveSessionSnapshot(runDir, live);
 }
 
-function terminalAllowsMissingSessionFlush(
-  status: string,
-  outcome: TerminalOutcome | undefined,
-): boolean {
-  return (
-    status === 'failed' ||
-    status === 'cancelled' ||
-    outcome === 'CANCELLED'
-  );
+function correctParityTerminalPersistenceFailure(
+  rt: ParityRuntime,
+  runDir: string,
+  context: string,
+): void {
+  const turnId = rt.turnId;
+  if (!turnId) return;
+  stripCompletionDecisionsForTurn(rt.sessionEvents, turnId);
+  recordPolicyIntervened(rt.sessionEvents, turnId, {
+    source: 'persistence',
+    action: 'terminal_settlement_failed',
+    detail: context.slice(0, 500),
+  });
+  const corrected = {
+    outcome: 'INFRA_FAILURE' as TerminalOutcome,
+    status: 'failed',
+    reason: TERMINAL_PERSISTENCE_FAILURE_REASON,
+  };
+  amendSessionTurnEndedForTurn(rt.sessionEvents, turnId, corrected);
+  amendThreadTurnEndedForTurn(rt.eventLog, turnId, corrected);
+  parityReduce(rt, { type: 'infra_failure', reason: corrected.status });
+  try {
+    flushSessionEventsRequired(rt, runDir, `corrective:${context}`);
+  } catch {
+    /* best-effort corrective flush */
+  }
 }
 
 /**
@@ -1188,25 +1242,36 @@ export function finalizeParityTurnSync(
   status: string,
   reason?: TerminalReason,
   response?: ThreadTerminalResponse,
+  extras?: FinalizeParityTurnExtras,
 ): boolean {
+  if (rt.sessionPersistenceBoundaryFailed) {
+    return false;
+  }
   parityEndTurn(rt, outcome, status, reason, response);
+  const turnId = rt.turnId;
+  if (extras?.completionDecision && turnId) {
+    const already = rt.sessionEvents.events.some(
+      (event) => event.kind === 'completion_decision' && event.turn_id === turnId,
+    );
+    if (!already) {
+      recordCompletionDecision(rt.sessionEvents, turnId, extras.completionDecision);
+    }
+  }
+  try {
+    flushSessionEventsRequired(rt, runDir, `finalize-sync:${outcome}`);
+  } catch {
+    correctParityTerminalPersistenceFailure(rt, runDir, `finalize-sync:${outcome}`);
+    rt.sessionPersistenceBoundaryFailed = true;
+    return false;
+  }
   parityPersistLiveSession(rt, runDir);
   persistThreadEventLog(runDir, rt.eventLog).catch((err) => {
     reportEventLogPersistFailure(`finalize:${outcome}`, err);
   });
-  if (rt.sessionPersistenceBoundaryFailed) {
-    return false;
+  if (turnId) {
+    rt.terminalPersistCommittedTurnId = turnId;
   }
-  try {
-    flushSessionEventsRequired(rt, runDir, `finalize-sync:${outcome}`);
-    return true;
-  } catch {
-    rt.sessionPersistenceBoundaryFailed = true;
-    if (terminalAllowsMissingSessionFlush(status, outcome)) {
-      return false;
-    }
-    return false;
-  }
+  return true;
 }
 
 /**

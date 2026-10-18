@@ -780,6 +780,45 @@ export function recordTurnEnded(
   });
 }
 
+/** Remove in-memory completion decisions for a turn (pre-durable rollback). */
+export function stripCompletionDecisionsForTurn(
+  log: SessionEventLog,
+  turnId: string,
+): void {
+  const before = log.events.length;
+  log.events = log.events.filter(
+    (event) => !(event.kind === 'completion_decision' && event.turn_id === turnId),
+  );
+  if (log.events.length === before) return;
+  for (let i = 0; i < log.events.length; i += 1) {
+    log.events[i]!.seq = i;
+  }
+  log.nextSeq = log.events.length;
+  const lastSeq = log.events.length > 0 ? log.events[log.events.length - 1]!.seq : -1;
+  if (log.flushedThroughSeq > lastSeq) {
+    log.flushedThroughSeq = lastSeq;
+  }
+}
+
+/** Correct the latest session turn_ended when terminal settlement could not durably commit. */
+export function amendLatestTurnEndedForTurn(
+  log: SessionEventLog,
+  turnId: string,
+  input: { outcome: TerminalOutcome; status: string; reason: TerminalReason },
+): boolean {
+  for (let i = log.events.length - 1; i >= 0; i -= 1) {
+    const event = log.events[i];
+    if (event?.kind === 'turn_ended' && event.turn_id === turnId) {
+      event.outcome = input.outcome;
+      event.status = input.status;
+      event.reason_code = input.reason.code;
+      event.cause_class = input.reason.cause_class;
+      return true;
+    }
+  }
+  return false;
+}
+
 export function recordPolicyIntervened(
   log: SessionEventLog,
   turnId: string,

@@ -75,6 +75,7 @@ import {
 import { confirmedMutationPaths } from './mutationTools.js'
 import { detectAndBuildBlockedReport } from './chatEngineSupport.js'
 import type { ThreadTerminalResponse } from './threadEventLog.js'
+import type { FinalizeParityTurnExtras } from './chatEngineParityBridge.js'
 
 export const SESSION_EVENT_PERSISTENCE_FINALIZE_MESSAGE =
   'session event persistence failed before terminal evidence could be durably recorded'
@@ -138,6 +139,7 @@ export interface ChatTerminalEffects {
     status: ChatResult['status'],
     reason: TerminalReason | undefined,
     response?: ThreadTerminalResponse,
+    extras?: FinalizeParityTurnExtras,
   ) => boolean
   storeTelemetry: (record: ChatTurnTelemetryRecord | null) => void
   setLimiter: (limiter: ChatRunLimiter, reason: string) => void
@@ -213,21 +215,19 @@ export function completeChatStream(
       ? outcomeFromReasonCode(terminalReason.code)
       : undefined
   const outcome = reasonOutcome ?? decisionOutcome
-  {
-    recordChatCompletionDecisionOnce(input, {
-      requestedOutcome: decision.requestedOutcome,
-      finalOutcome: outcome,
-      allowed: decision.allowed,
-      reason: decision.reason,
-      evidenceRefs: decision.evidenceRefs,
-      policyVersion: decision.policyVersion,
-      ...(terminalReason !== undefined
-        ? {
-            reasonCode: terminalReason.code,
-            causeClass: terminalReason.cause_class,
-          }
-        : {}),
-    })
+  const completionDecisionPayload = {
+    requestedOutcome: decision.requestedOutcome,
+    finalOutcome: outcome,
+    allowed: decision.allowed,
+    reason: decision.reason,
+    evidenceRefs: decision.evidenceRefs,
+    policyVersion: decision.policyVersion,
+    ...(terminalReason !== undefined
+      ? {
+          reasonCode: terminalReason.code,
+          causeClass: terminalReason.cause_class,
+        }
+      : {}),
   }
   // P0-E: attach shadow later-succeeded summary before export (idempotent with buildResult).
   // P0-F: wire the derived OutcomeDimensions — the real receipt (its `stale`
@@ -260,10 +260,16 @@ export function completeChatStream(
         ? 'budget_exhausted'
         : 'completed',
   })
-  const durableOk = effects.finalizeTurn(terminal.outcome, terminal.status, terminalReason, {
-    kind: 'answer',
-    content: answer,
-  })
+  const durableOk = effects.finalizeTurn(
+    terminal.outcome,
+    terminal.status,
+    terminalReason,
+    {
+      kind: 'answer',
+      content: answer,
+    },
+    { completionDecision: completionDecisionPayload },
+  )
   if (!durableOk) {
     return failChatStream(input, SESSION_EVENT_PERSISTENCE_FINALIZE_MESSAGE)
   }
@@ -644,22 +650,23 @@ export function assembleChatResult(
     (terminalReason?.code && terminalReason.code !== 'verification_failed'
       ? outcomeFromReasonCode(terminalReason.code)
       : undefined) ?? authoritativeOutcome
-  if (kernelDecision && !superseded) {
-    recordChatCompletionDecisionOnce(input, {
-      requestedOutcome: kernelDecision.requestedOutcome,
-      finalOutcome: authoritativeOutcome ?? kernelDecision.finalOutcome,
-      allowed: kernelDecision.allowed,
-      reason: kernelDecision.reason,
-      evidenceRefs: kernelDecision.evidenceRefs,
-      policyVersion: kernelDecision.policyVersion,
-      ...(terminalReason !== undefined
-        ? {
-            reasonCode: terminalReason.code,
-            causeClass: terminalReason.cause_class,
-          }
-        : {}),
-    })
-  }
+  const completionDecisionPayload =
+    kernelDecision && !superseded
+      ? {
+          requestedOutcome: kernelDecision.requestedOutcome,
+          finalOutcome: authoritativeOutcome ?? kernelDecision.finalOutcome,
+          allowed: kernelDecision.allowed,
+          reason: kernelDecision.reason,
+          evidenceRefs: kernelDecision.evidenceRefs,
+          policyVersion: kernelDecision.policyVersion,
+          ...(terminalReason !== undefined
+            ? {
+                reasonCode: terminalReason.code,
+                causeClass: terminalReason.cause_class,
+              }
+            : {}),
+        }
+      : undefined
 
   // P0-E: if any kill-switch ran in shadow mode, record whether the task
   // later succeeded (mutation / coding-task gate) for precision/recall.
@@ -702,6 +709,9 @@ export function assembleChatResult(
             kind: finalStatus === 'failed' ? 'error' : 'answer',
             content: answer,
           },
+      completionDecisionPayload
+        ? { completionDecision: completionDecisionPayload }
+        : undefined,
     )
   }
 
