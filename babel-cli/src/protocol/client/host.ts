@@ -24,7 +24,10 @@ import {
   inspectThreadRepoIdentityOnHydration,
   RepoIdentityMismatchError,
 } from '../../services/threadStore/sessionHydration.js';
-import { conflictingPersistedCommandCodeNativeOwner } from '../../bridge/remoteCatalog.js';
+import {
+  commandCodeNativeOwnershipViolation,
+  withSerializedCommandCodeNativeBinding,
+} from '../../bridge/remoteCatalog.js';
 import {
   allocateThreadId,
   ensureThread,
@@ -433,28 +436,45 @@ export async function handleProtocolRequest(
         }
         const threadId = allocateThreadId();
         const descriptor = descriptorFromCreate(threadId, { ...params, project_root: projectRoot });
+        const persistThread = (): JsonRpcResponse => {
+          ensureThread(threadId, { project_root: descriptor.projectRoot });
+          writeSessionDescriptor(descriptor);
+          state.descriptors.set(threadId, descriptor);
+          const result: ThreadCreateResult = { thread_id: threadId };
+          return { jsonrpc: '2.0', id, result };
+        };
         if (
           descriptor.harness_adapter_id === 'command-code' &&
           descriptor.harness_native_session_id
         ) {
-          const conflict = await conflictingPersistedCommandCodeNativeOwner(
-            state,
+          return await withSerializedCommandCodeNativeBinding(
             descriptor.projectRoot,
             descriptor.harness_native_session_id,
+            async () => {
+              const violation = await commandCodeNativeOwnershipViolation(
+                state,
+                descriptor.projectRoot,
+                descriptor.harness_native_session_id!,
+              );
+              if (violation === 'corrupt') {
+                return errorResponse(
+                  id,
+                  BabelProtocolErrorCode.INVALID_PARAMS,
+                  'Multiple persisted Babel threads own this Command Code native session',
+                );
+              }
+              if (violation === 'conflict') {
+                return errorResponse(
+                  id,
+                  BabelProtocolErrorCode.INVALID_PARAMS,
+                  'Another Babel thread already owns this Command Code native session',
+                );
+              }
+              return persistThread();
+            },
           );
-          if (conflict) {
-            return errorResponse(
-              id,
-              BabelProtocolErrorCode.INVALID_PARAMS,
-              'Another Babel thread already owns this Command Code native session',
-            );
-          }
         }
-        ensureThread(threadId, { project_root: descriptor.projectRoot });
-        writeSessionDescriptor(descriptor);
-        state.descriptors.set(threadId, descriptor);
-        const result: ThreadCreateResult = { thread_id: threadId };
-        return { jsonrpc: '2.0', id, result };
+        return persistThread();
       }
       case 'thread.resume': {
         const params = request.params;

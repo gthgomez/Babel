@@ -72,8 +72,95 @@ function isPersistedNativeOwner(threadId: string, nativeId: string): boolean {
 
 const NATIVE_OWNER_KEY_SEP = '\u0000';
 
+const commandCodeNativeBindingQueues = new Map<string, Promise<void>>();
+
 function nativeOwnerCompositeKey(projectRoot: string, nativeId: string): string {
   return `${canonicalCommandCodeProjectRoot(projectRoot)}${NATIVE_OWNER_KEY_SEP}${nativeId}`;
+}
+
+/** Serialize conflict-check and persistence for one canonical project + native session id. */
+export async function withSerializedCommandCodeNativeBinding<T>(
+  projectRoot: string,
+  nativeSessionId: string,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const key = nativeOwnerCompositeKey(projectRoot, nativeSessionId);
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const prev = commandCodeNativeBindingQueues.get(key) ?? Promise.resolve();
+  commandCodeNativeBindingQueues.set(key, prev.then(() => gate));
+  await prev;
+  try {
+    return await fn();
+  } finally {
+    release();
+  }
+}
+
+export type CommandCodeNativeOwnershipViolation = 'none' | 'conflict' | 'corrupt';
+
+type CommandCodeNativeDescriptor = {
+  harness_adapter_id?: string;
+  harness_native_session_id?: string;
+  projectRoot: string;
+};
+
+function matchesCommandCodeNativeBinding(
+  descriptor: CommandCodeNativeDescriptor,
+  projectRoot: string,
+  nativeSessionId: string,
+): boolean {
+  if (descriptor.harness_adapter_id !== 'command-code') return false;
+  if (descriptor.harness_native_session_id !== nativeSessionId) return false;
+  return nativeOwnerCompositeKey(descriptor.projectRoot, nativeSessionId) ===
+    nativeOwnerCompositeKey(projectRoot, nativeSessionId);
+}
+
+/** All persisted thread ids bound to the same canonical project + native id. */
+export async function listPersistedCommandCodeNativeOwnerThreadIds(
+  state: ProtocolHostState,
+  projectRoot: string,
+  nativeSessionId: string,
+): Promise<string[]> {
+  const found: string[] = [];
+  const seen = new Set<string>();
+  const consider = (threadId: string, descriptor: CommandCodeNativeDescriptor) => {
+    if (!matchesCommandCodeNativeBinding(descriptor, projectRoot, nativeSessionId)) return;
+    if (!isPersistedNativeOwner(threadId, nativeSessionId)) return;
+    if (seen.has(threadId)) return;
+    seen.add(threadId);
+    found.push(threadId);
+  };
+  for (const [threadId, descriptor] of state.descriptors) {
+    consider(threadId, descriptor);
+  }
+  const threads = await listThreads({ limit: 500 });
+  for (const row of threads) {
+    if (seen.has(row.thread_id)) continue;
+    const persisted = loadSessionDescriptor(row.thread_id);
+    if (!persisted) continue;
+    consider(row.thread_id, persisted);
+  }
+  return found.sort();
+}
+
+export async function commandCodeNativeOwnershipViolation(
+  state: ProtocolHostState,
+  projectRoot: string,
+  nativeSessionId: string,
+  exceptThreadId?: string,
+): Promise<CommandCodeNativeOwnershipViolation> {
+  const owners = await listPersistedCommandCodeNativeOwnerThreadIds(
+    state,
+    projectRoot,
+    nativeSessionId,
+  );
+  const others = exceptThreadId ? owners.filter((id) => id !== exceptThreadId) : owners;
+  if (others.length === 0) return 'none';
+  if (others.length > 1) return 'corrupt';
+  return 'conflict';
 }
 
 function splitNativeOwnerCompositeKey(key: string): { projectKey: string; nativeId: string } {
@@ -141,10 +228,16 @@ export async function indexCommandCodeNativeOwners(
 ): Promise<Map<string, string>> {
   const candidates = await loadCommandCodeNativeOwnerCandidates(state);
   const owners = new Map<string, string>();
-  for (const [key, candidate] of candidates) {
+  for (const [key] of candidates) {
     const { projectKey, nativeId } = splitNativeOwnerCompositeKey(key);
     if (!workspaceRootMatches(projectKey, registeredWorkspaceRoot)) continue;
-    owners.set(nativeId, candidate.threadId);
+    const persisted = await listPersistedCommandCodeNativeOwnerThreadIds(
+      state,
+      projectKey,
+      nativeId,
+    );
+    if (persisted.length !== 1) continue;
+    owners.set(nativeId, persisted[0]!);
   }
   return owners;
 }
@@ -154,8 +247,13 @@ export async function findCanonicalCommandCodeNativeOwnerForProject(
   projectRoot: string,
   nativeSessionId: string,
 ): Promise<string | undefined> {
-  const candidates = await loadCommandCodeNativeOwnerCandidates(state);
-  return candidates.get(nativeOwnerCompositeKey(projectRoot, nativeSessionId))?.threadId;
+  const persisted = await listPersistedCommandCodeNativeOwnerThreadIds(
+    state,
+    projectRoot,
+    nativeSessionId,
+  );
+  if (persisted.length !== 1) return undefined;
+  return persisted[0];
 }
 
 /** Returns an existing persisted owner for the same canonical project + native id, if any. */
@@ -165,11 +263,20 @@ export async function conflictingPersistedCommandCodeNativeOwner(
   nativeSessionId: string,
   exceptThreadId?: string,
 ): Promise<string | undefined> {
-  const candidates = await loadCommandCodeNativeOwnerCandidates(state);
-  const owner = candidates.get(nativeOwnerCompositeKey(projectRoot, nativeSessionId));
-  if (!owner || !owner.persisted) return undefined;
-  if (exceptThreadId && owner.threadId === exceptThreadId) return undefined;
-  return owner.threadId;
+  const violation = await commandCodeNativeOwnershipViolation(
+    state,
+    projectRoot,
+    nativeSessionId,
+    exceptThreadId,
+  );
+  if (violation === 'none') return undefined;
+  const owners = await listPersistedCommandCodeNativeOwnerThreadIds(
+    state,
+    projectRoot,
+    nativeSessionId,
+  );
+  const others = exceptThreadId ? owners.filter((id) => id !== exceptThreadId) : owners;
+  return others[0];
 }
 
 export interface RemoteCatalogResult {
