@@ -2,17 +2,17 @@
  * Authoritative remote session catalog derived from the protocol host and thread store.
  */
 
-import { realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import type { ProtocolHostState } from '../protocol/client/host.js';
 import { listThreads, loadSessionDescriptor } from '../services/threadStore/index.js';
 import type { CommandCodeAcpRuntimeRegistry } from './commandCodeAcpRuntime.js';
-import { isPathInsideRoot } from './workspaceBound.js';
+import { canonicalizeContained, isPathInsideRoot } from './workspaceBound.js';
 
+/** Same canonical project identity as gateway `workspaceBound.canonicalizeContained`. */
 export function canonicalCommandCodeProjectRoot(projectRoot: string): string {
   try {
-    return realpathSync(resolve(projectRoot));
+    return canonicalizeContained(resolve(projectRoot));
   } catch {
     return resolve(projectRoot);
   }

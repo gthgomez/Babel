@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
 import { request, type IncomingMessage } from 'node:http';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { after, before, describe, it } from 'node:test';
 
@@ -17,6 +17,11 @@ import {
 import { CommandCodeAcpRuntimeRegistry } from './commandCodeAcpRuntime.js';
 import { BridgeServer } from './sessionServer.js';
 import { ensureThread, writeSessionDescriptor } from '../services/threadStore/index.js';
+import {
+  canonicalCommandCodeProjectRoot,
+  listPersistedCommandCodeNativeOwnerThreadIds,
+} from './remoteCatalog.js';
+import { canonicalizeContained } from './workspaceBound.js';
 
 const TOKEN = 'cc-open-sidefx-token';
 const ORIGIN = 'http://127.0.0.1';
@@ -400,13 +405,31 @@ describe('harness.command_code.open side effects', () => {
     const nativeId = 'sess_fixture_dual_open_corrupt';
     const t1 = 'thread-dual-open-a';
     const t2 = 'thread-dual-open-b';
+    const canonicalProject = canonicalCommandCodeProjectRoot(tmp);
+    const gatewayCanonical = canonicalizeContained(resolve(tmp));
+    assert.equal(
+      canonicalProject,
+      gatewayCanonical,
+      `canonical project identity diverged (catalogLen=${canonicalProject.length} gatewayLen=${gatewayCanonical.length} platform=${process.platform})`,
+    );
     const host = server.protocolGateway.host;
     for (const threadId of [t1, t2]) {
-      const descriptor = commandCodeDescriptor(threadId, tmp, nativeId);
-      ensureThread(threadId, { project_root: tmp });
+      const descriptor = commandCodeDescriptor(threadId, canonicalProject, nativeId);
+      ensureThread(threadId, { project_root: canonicalProject });
       writeSessionDescriptor(descriptor);
       host.descriptors.set(threadId, descriptor);
+      assert.equal(
+        canonicalCommandCodeProjectRoot(descriptor.projectRoot),
+        canonicalProject,
+        `persisted owner project_root must match canonical project (thread=${threadId})`,
+      );
     }
+    const persistedOwners = await listPersistedCommandCodeNativeOwnerThreadIds(
+      host,
+      canonicalProject,
+      nativeId,
+    );
+    assert.deepEqual(persistedOwners, [t1, t2].sort());
     await rpc(port, fullDesktopHeaders(), 'control.acquire', { thread_id: t1, force: false }, 60);
     const beforeOpen = registry.openSavedSessionCalls;
     const beforeEnsure = registry.ensureSessionCalls;
@@ -417,7 +440,7 @@ describe('harness.command_code.open side effects', () => {
       'harness.command_code.open',
       {
         thread_id: t1,
-        project_root: tmp,
+        project_root: canonicalProject,
         harness_native_session_id: nativeId,
       },
       61,
