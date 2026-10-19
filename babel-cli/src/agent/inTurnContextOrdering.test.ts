@@ -750,8 +750,13 @@ test('non-compacting turns: dispatch identical to the pre-fix rebuild, install p
     assert.equal(getOpenAdmissionStoreCount(), 0);
   });
 
-  // (2b) Install never available on a capsule-less session: dispatch proceeds
-  // exactly as before the ordering fix (root-less rebuild, no refusal).
+  // (2b) Install unavailable on a capsule-less session: a governed turn whose
+  // required context root cannot be prepared or durably installed must fail
+  // closed. This is an intentional contract change from the earlier ordering
+  // fix (which dispatched root-less): unavailable repository coverage alone is
+  // no longer a refusal — V2 conversation continuation installs and dispatches
+  // (contextPreparation.integration.test.ts) — but a genuine install failure is
+  // never treated as an implicit root-less fallback mode.
   await withRunsDir(async () => {
     const runId = 't5-no-install-ever';
     const projectRoot = makeProjectRoot();
@@ -768,21 +773,19 @@ test('non-compacting turns: dispatch identical to the pre-fix rebuild, install p
       const restoreSources = blockP11Install(engine);
       const first = await submit(engine, TURN1_TASK);
       restoreSources();
-      assert.equal(first.error, null, `no-install turn must not throw: ${first.error}`);
+      assert.equal(first.error, null, `blocked install must fail closed, not throw: ${first.error}`);
       assert.equal(
         first.last?.type,
-        'done',
-        'a capsule-less turn dispatches even without install (unchanged)',
+        'failed',
+        'a governed turn with no installable context root refuses dispatch',
       );
-      const dispatch = capture.dispatches[0];
-      assert.ok(dispatch);
-      const entry = capture.rebuilds.find((candidate) => candidate.messages === dispatch.messages);
-      assert.ok(entry);
-      assert.equal(
-        entry.root,
-        null,
-        'no installed root: the rebuild stays root-less exactly as before',
+      assert.match(
+        String(first.last?.['error'] ?? ''),
+        /Could not prepare context:/,
+        'the refusal must name the context preparation failure',
       );
+      assert.equal(capture.dispatches.length, 0, 'no provider dispatch may happen without a root');
+      assert.equal(provider.bodies.length, 0, 'no serialized request may leave the process');
       assert.equal(readCheckpoint(runId), null, 'no checkpoint may install');
     } finally {
       globalThis.fetch = originalFetch;
