@@ -65,9 +65,23 @@ type BudgetHarness = {
   limits: ChatEngineLimits;
   criticRepairCostCapUsd: number | null;
   postWriteRepairWallCapMs: number | null;
+  postWriteRepairRestrict: boolean;
   criticStrikes: number;
   _sessionStartTime: number;
   taskClass: string;
+  lastVerifierFailed: boolean;
+  lastCriticReceipt: { verdict: string } | null;
+  currentTurnHasMutation: () => boolean;
+  shouldRestrictToolsThisTurn: () => boolean;
+  conversation: Array<{ role: string; content: string }>;
+  progressController: {
+    InterventionLevel: string;
+    scoreTurn: (
+      signals: string[],
+      textOnlyTurn: boolean,
+      gateStrikes: number,
+    ) => unknown;
+  };
   taskAllowance: {
     taskOwnerId: string;
     consumed: { activeWallMs: number };
@@ -409,6 +423,9 @@ describe('PRODUCTION PATH: ChatEngine.checkBudgets / repair budgets', () => {
     });
     h._sessionStartTime = Date.now() - 1_000;
     h.criticStrikes = 0;
+    // Finding 1: entering the repair window requires evidence of repair.
+    h.currentTurnHasMutation = () => true;
+    h.lastVerifierFailed = true;
     assert.equal(h.limits.costBudget?.explicitCostCeiling, true);
     h.applyPostWriteRepairBudget();
     assert.equal(h.criticRepairCostCapUsd, 10.0);
@@ -471,6 +488,9 @@ describe('PRODUCTION PATH: ChatEngine.checkBudgets / repair budgets', () => {
     });
     h._sessionStartTime = Date.now() - 1_000;
     h.criticStrikes = 0;
+    // Finding 1: entering the repair window requires evidence of repair.
+    h.currentTurnHasMutation = () => true;
+    h.lastVerifierFailed = true;
     // Wall long-task is on; cost ceiling is not explicit unless maxCostUsd was passed.
     h.applyPostWriteRepairBudget();
     // Wall should not shrink (cap stays at session wall).
@@ -480,6 +500,124 @@ describe('PRODUCTION PATH: ChatEngine.checkBudgets / repair budgets', () => {
       h.criticRepairCostCapUsd != null && h.criticRepairCostCapUsd <= 1.0 + 0.75 + 1e-9,
       `long-task wall must not disable cost-repair; cap=${h.criticRepairCostCapUsd}`,
     );
+  });
+
+  // ─── finding 1: repair budget on evidence of repair/non-progress ─────────
+  const repairNudges = (h: BudgetHarness): number =>
+    h.conversation.filter((m) => m.content.includes('post-write repair window')).length;
+
+  it('first successful write keeps the granted allowance (no wall/cost shrink, no nudge)', () => {
+    const engine = makeEngine({ maxCostUsd: 10.0, maxWallMs: 600_000 });
+    const h = harness(engine);
+    globalCostTracker.resetSession();
+    assert.ok(h.taskAllowance);
+    globalCostTracker.restoreTaskUsage(h.taskAllowance.taskOwnerId, {
+      totalCostUSD: 1.0,
+      chargeIds: [],
+    });
+    h._sessionStartTime = Date.now() - 1_000;
+    // A confirmed write happened this turn, but nothing failed and the model is
+    // still making progress.
+    h.currentTurnHasMutation = () => true;
+    h.lastVerifierFailed = false;
+    h.lastCriticReceipt = null;
+    const nudgesBefore = repairNudges(h);
+
+    h.applyPostWriteRepairBudget();
+
+    assert.equal(h.postWriteRepairWallCapMs, null, 'wall must not shrink on a productive write');
+    assert.equal(h.criticRepairCostCapUsd, null, 'cost must not shrink on a productive write');
+    assert.equal(h.postWriteRepairRestrict, false, 'no repair latch on a productive write');
+    assert.equal(repairNudges(h), nudgesBefore, 'no repair nudge may be injected');
+  });
+
+  it('productive multi-file implementation keeps investigation tools available', () => {
+    const engine = makeEngine({ maxCostUsd: 10.0, maxWallMs: 600_000 });
+    const h = harness(engine);
+    globalCostTracker.resetSession();
+    h.currentTurnHasMutation = () => true;
+    h.lastVerifierFailed = false;
+    h.lastCriticReceipt = null;
+
+    h.applyPostWriteRepairBudget();
+
+    assert.equal(
+      h.shouldRestrictToolsThisTurn(),
+      false,
+      'investigation tools must stay available after a productive write',
+    );
+    assert.equal(h.postWriteRepairRestrict, false);
+  });
+
+  it('current failed verifier enters a bounded repair window', () => {
+    const engine = makeEngine({ maxCostUsd: 10.0, maxWallMs: 600_000 });
+    const h = harness(engine);
+    globalCostTracker.resetSession();
+    h.currentTurnHasMutation = () => true;
+    h.lastVerifierFailed = true;
+
+    h.applyPostWriteRepairBudget();
+
+    assert.ok(h.postWriteRepairWallCapMs != null, 'a failed verifier must enter repair');
+    assert.ok(
+      h.postWriteRepairWallCapMs! <= h.limits.maxWallMs,
+      'the repair cap may never exceed the granted wall',
+    );
+    assert.equal(h.postWriteRepairRestrict, true);
+  });
+
+  it('repeated non-progress intervention enters the repair window', () => {
+    const engine = makeEngine({ maxCostUsd: 10.0, maxWallMs: 600_000 });
+    const h = harness(engine);
+    globalCostTracker.resetSession();
+    for (let i = 0; i < 9; i++) h.progressController.scoreTurn([], false, 0);
+    assert.equal(h.progressController.InterventionLevel, 'last_chance_repair');
+    h.currentTurnHasMutation = () => true;
+    h.lastVerifierFailed = false;
+
+    h.applyPostWriteRepairBudget();
+
+    assert.ok(h.postWriteRepairWallCapMs != null, 'non-progress intervention must enter repair');
+  });
+
+  it('an old failure after recorded progress does not re-enter the window', () => {
+    const engine = makeEngine({ maxCostUsd: 10.0, maxWallMs: 600_000 });
+    const h = harness(engine);
+    globalCostTracker.resetSession();
+    h.currentTurnHasMutation = () => true;
+    h.lastVerifierFailed = true;
+    h.applyPostWriteRepairBudget();
+    const entered = h.postWriteRepairWallCapMs;
+    assert.ok(entered != null);
+
+    // Progress: a later green verifier clears the failure and the model keeps
+    // writing productively. No second window may open.
+    h.lastVerifierFailed = false;
+    h.progressController.scoreTurn(['production_mutation', 'verifier_advanced'], false, 0);
+    h.applyPostWriteRepairBudget();
+    assert.equal(h.postWriteRepairWallCapMs, entered, 'progress must not open a second window');
+
+    // A stale failure that resurfaces still cannot renew the entered window.
+    h.lastVerifierFailed = true;
+    h.applyPostWriteRepairBudget();
+    assert.equal(h.postWriteRepairWallCapMs, entered, 'an old failure must not renew the window');
+  });
+
+  it('the repair cap is not renewed by repeated triggers and nudges exactly once', () => {
+    const engine = makeEngine({ maxCostUsd: 10.0, maxWallMs: 600_000 });
+    const h = harness(engine);
+    globalCostTracker.resetSession();
+    h.currentTurnHasMutation = () => true;
+    h.lastVerifierFailed = true;
+    const nudgesBefore = repairNudges(h);
+
+    h.applyPostWriteRepairBudget();
+    const entered = h.postWriteRepairWallCapMs;
+    h.applyPostWriteRepairBudget();
+    h.applyPostWriteRepairBudget();
+
+    assert.equal(h.postWriteRepairWallCapMs, entered, 'repeated triggers must not renew the cap');
+    assert.equal(repairNudges(h) - nudgesBefore, 1, 'exactly one repair nudge may be injected');
   });
 });
 

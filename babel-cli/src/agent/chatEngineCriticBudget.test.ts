@@ -22,6 +22,7 @@ import {
   resolveOrCreateCriticProRunner,
   resolveOrCreateCriticRunner,
   runAsymmetricDiffCritic,
+  shouldEnterRepairBudget,
   type AsymmetricCriticState,
   type CriticRunner,
 } from './chatEngineCriticBudget.js';
@@ -446,5 +447,57 @@ describe('long-running autonomy cost cap truth (Astra Probe P08)', () => {
     assert.equal(repairWall.ok, false);
     assert.equal(repairWall.limiter, 'wall_repair');
     assert.match(repairWall.reason!, /\[wall_repair\]/);
+  });
+});
+
+describe('finding 1: entering the post-write repair window requires evidence', () => {
+  const base = {
+    hasMutation: true,
+    currentVerifierFailed: false,
+    criticRejected: false,
+    intervention: 'none' as const,
+  };
+
+  test('a successful write alone does not enter repair', () => {
+    assert.equal(shouldEnterRepairBudget({ ...base }), false);
+  });
+
+  test('no mutation never enters repair even with a failure signal', () => {
+    assert.equal(
+      shouldEnterRepairBudget({ ...base, hasMutation: false, currentVerifierFailed: true }),
+      false,
+    );
+    assert.equal(
+      shouldEnterRepairBudget({
+        ...base,
+        hasMutation: false,
+        intervention: 'terminal_blocked',
+      }),
+      false,
+    );
+  });
+
+  test('a current failed verifier enters repair', () => {
+    assert.equal(
+      shouldEnterRepairBudget({ ...base, currentVerifierFailed: true }),
+      true,
+    );
+  });
+
+  test('a real critic rejection enters repair', () => {
+    assert.equal(shouldEnterRepairBudget({ ...base, criticRejected: true }), true);
+  });
+
+  test('only last_chance_repair/terminal_blocked interventions enter repair', () => {
+    for (const intervention of ['nudge', 'restricted_tools'] as const) {
+      assert.equal(
+        shouldEnterRepairBudget({ ...base, intervention }),
+        false,
+        `${intervention} must not enter the bounded repair window`,
+      );
+    }
+    for (const intervention of ['last_chance_repair', 'terminal_blocked'] as const) {
+      assert.equal(shouldEnterRepairBudget({ ...base, intervention }), true);
+    }
   });
 });

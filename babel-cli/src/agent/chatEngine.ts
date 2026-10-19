@@ -387,6 +387,7 @@ import {
   computeCriticRepairCostCap,
   computePostWriteRepairWallMs,
   buildPostWriteRepairMessage,
+  shouldEnterRepairBudget,
   type AsymmetricCriticState,
   type CriticRunner,
 } from "./chatEngineCriticBudget.js";
@@ -1672,6 +1673,20 @@ export class ChatEngine {
     if (this.postWriteRepairWallCapMs != null) return;
     // Only for execute-style classes that must verify (not pure investigate).
     if (this.taskClass === "investigate") return;
+    // Finding 1: enter the bounded repair window only on evidence of repair or
+    // non-progress. A confirmed write alone is not evidence — a productive
+    // multi-file implementation keeps its granted allowance instead of being
+    // cut to a repair window after the first edit.
+    if (
+      !shouldEnterRepairBudget({
+        hasMutation: this.currentTurnHasMutation(),
+        currentVerifierFailed: this.lastVerifierFailed,
+        criticRejected: this.lastCriticReceipt?.verdict === "reject",
+        intervention: this.progressController.InterventionLevel,
+      })
+    ) {
+      return;
+    }
 
     const elapsedMs = this.currentTaskActiveWallMs();
     // An explicitly authorized long-task run keeps its full wall: the
