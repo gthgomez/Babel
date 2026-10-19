@@ -155,3 +155,32 @@ test('an isolation permission denial does not by itself degrade a family', async
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('two competing dispatched requests cannot both acquire the same probe', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-cap-race-'));
+  try {
+    const engine = new ChatEngine({ task: 'List the project tree', projectRoot: root });
+    const pc = progress(engine);
+    pc.recordFailure({ tool: 'run_command', commandSnippet: RECURSIVE.command, exitCode: 1, capabilityFailure: true });
+    pc.recordFailure({ tool: 'run_command', commandSnippet: RECURSIVE.command, exitCode: 1, capabilityFailure: true });
+    assert.equal(pc.getCapabilityState('shell.recursive_enumeration'), 'DEGRADED');
+
+    const ctx = { agentId: 'test', runId: 'test', runDir: root, babelRoot: root, projectRoot: root };
+    // The probe check is synchronous and precedes the first await in the
+    // run_command dispatch path, so both requests observe DEGRADED and race for
+    // the single reservation. Exactly one may win.
+    const [first, second] = await Promise.all([
+      (engine as any).executeOneAction({ ...RECURSIVE }, ctx, {}, { index: 0 }),
+      (engine as any).executeOneAction({ ...RECURSIVE }, ctx, {}, { index: 1 }),
+    ]);
+    const suppressed = [first.observation, second.observation].filter((o) => SUPPRESSED.test(o));
+    assert.equal(suppressed.length, 1, 'exactly one competing request wins the single probe');
+
+    const consumed = pc
+      .getConsumedCapabilityRecoveryProbes()
+      .filter((key) => key.startsWith('shell.recursive_enumeration\u0000'));
+    assert.equal(consumed.length, 1, 'only one probe key is consumed by the race');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
