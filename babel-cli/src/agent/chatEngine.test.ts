@@ -239,17 +239,23 @@ describe('ChatEngine recursive shell degradation & suppression loop', () => {
     };
 
     const ctx = { agentId: 'test', runId: 'test', runDir: '/tmp', babelRoot: '/tmp' };
+    const pc = (engine as any).progressController;
 
-    // Tool call 1: fails -> records failure -> SUSPECT
-    const res1 = await (engine as any).executeOneAction(action, ctx, {}, { index: 0, subAgentCounter: 0 });
-    assert.ok(res1.observation.includes('exit_code: 1') || res1.observation.includes('Cannot find path') || res1.observation.includes('non_existent'));
+    // Only genuine capability failures degrade the family. An isolation or
+    // permission denial is a diagnostic outcome, not a capability failure, so
+    // the DEGRADED precondition is established with real capability failures.
+    pc.recordFailure({ tool: 'run_command', commandSnippet: action.command, exitCode: 1 });
+    pc.recordFailure({ tool: 'run_command', commandSnippet: action.command, exitCode: 1 });
+    assert.equal(pc.getCapabilityState('shell.recursive_enumeration'), 'DEGRADED');
 
-    // Tool call 2: fails -> records failure -> DEGRADED
-    const res2 = await (engine as any).executeOneAction(action, ctx, {}, { index: 1, subAgentCounter: 0 });
-    assert.equal((engine as any).progressController.getCapabilityState('shell.recursive_enumeration'), 'DEGRADED');
+    // First attempt after degradation is the one bounded recovery probe: it
+    // reaches dispatch rather than being suppressed forever.
+    const probe = await (engine as any).executeOneAction(action, ctx, {}, { index: 0, subAgentCounter: 0 });
+    assert.doesNotMatch(probe.observation, /Recursive shell command suppressed/);
 
-    // Tool call 3: equivalent recursive command -> pre-execution interception blocks executor!
-    const res3 = await (engine as any).executeOneAction(action, ctx, {}, { index: 2, subAgentCounter: 0 });
+    // The probe is consumed, so the next equivalent recursive command is
+    // intercepted before the executor with the list_dir advisory.
+    const res3 = await (engine as any).executeOneAction(action, ctx, {}, { index: 1, subAgentCounter: 0 });
     assert.ok(res3.observation.includes('[BABEL ADVISORY] Recursive shell command suppressed'));
     assert.ok(res3.observation.includes('list_dir'));
   });

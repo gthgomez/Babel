@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import * as assert from "node:assert";
-import { ProgressController } from "./progressController.js";
+import { ProgressController, classifyCapabilityFailure } from "./progressController.js";
 
 describe("ProgressController", () => {
   it("should start at none and accumulate strikes to escalate levels", () => {
@@ -279,5 +279,123 @@ describe("ConversationalRenderer - ProgressRecovery", () => {
     renderer.onProgressRecovery("terminal_blocked", "test", 5, "ENV_BLOCKED");
 
     assert.ok(true);
+  });
+});
+
+describe("ProgressController capability failure classification", () => {
+  it("classifies each outcome, letting explicit signals win over inference", () => {
+    const cases: Array<[Parameters<typeof classifyCapabilityFailure>[0], string]> = [
+      [{ tool: "run_command", exitCode: 1 }, "capability"],
+      [{ tool: "run_command", exitCode: 1, stderr: "permission denied" }, "permission"],
+      [{ tool: "run_command", exitCode: 1, policyBlocked: true }, "permission"],
+      [{ tool: "run_command", exitCode: 1, stderr: "bash: foo: command not found" }, "bad_command"],
+      [{ tool: "read_file", exitCode: 1, stderr: "ENOENT: no such file or directory" }, "missing_target"],
+      [{ tool: "run_command", exitCode: 0 }, "empty_success"],
+      [{ tool: "run_command", exitCode: 1, cancelled: true }, "cancelled"],
+      [{ tool: "run_command", exitCode: 1, signal: "SIGTERM" }, "cancelled"],
+      [{ tool: "run_command" }, "ambiguous"],
+      [{ tool: "run_command", exitCode: 1, stderr: "command not found", outcome: "capability" }, "capability"],
+    ];
+    for (const [sig, expected] of cases) {
+      assert.strictEqual(classifyCapabilityFailure(sig), expected, JSON.stringify(sig));
+    }
+  });
+
+  it("does not degrade a family for permission, cancellation, missing-target, bad-command or ambiguity", () => {
+    const sigs: Parameters<ProgressController["recordFailure"]>[0][] = [
+      { tool: "run_command", commandSnippet: "ls -R", exitCode: 1, stderr: "permission denied" },
+      { tool: "run_command", commandSnippet: "ls -R", exitCode: 1, cancelled: true },
+      { tool: "run_command", commandSnippet: "ls -R", exitCode: 1, stderr: "ENOENT: no such file or directory" },
+      { tool: "run_command", commandSnippet: "ls -R", exitCode: 1, stderr: "command not found" },
+      { tool: "run_command", commandSnippet: "ls -R", exitCode: 1, policyBlocked: true },
+      { tool: "run_command", commandSnippet: "ls -R", exitCode: 0 },
+    ];
+    for (const sig of sigs) {
+      const pc = new ProgressController();
+      const first = pc.recordFailure(sig);
+      const second = pc.recordFailure(sig);
+      assert.notStrictEqual(second.outcome, "capability", JSON.stringify(sig));
+      assert.strictEqual(first.state, "AVAILABLE", JSON.stringify(sig));
+      assert.strictEqual(second.state, "AVAILABLE");
+      assert.strictEqual(pc.getCapabilityState("shell.recursive_enumeration"), "AVAILABLE");
+      assert.strictEqual(pc.getDegradedCapabilities().length, 0);
+    }
+  });
+
+  it("still degrades recursive enumeration after two genuine capability failures", () => {
+    const pc = new ProgressController();
+    pc.recordFailure({ tool: "run_command", commandSnippet: "ls -R", exitCode: 1 });
+    const second = pc.recordFailure({ tool: "run_command", commandSnippet: "ls -R", exitCode: 1 });
+    assert.strictEqual(second.outcome, "capability");
+    assert.strictEqual(second.state, "DEGRADED");
+    assert.strictEqual(pc.getCapabilityState("shell.recursive_enumeration"), "DEGRADED");
+  });
+
+  it("restores availability on a successful probe", () => {
+    const pc = new ProgressController();
+    pc.recordFailure({ tool: "run_command", commandSnippet: "ls -R", exitCode: 1 });
+    pc.recordFailure({ tool: "run_command", commandSnippet: "ls -R", exitCode: 1 });
+    assert.strictEqual(pc.getCapabilityState("shell.recursive_enumeration"), "DEGRADED");
+    pc.recordSuccess("shell.recursive_enumeration");
+    assert.strictEqual(pc.getCapabilityState("shell.recursive_enumeration"), "AVAILABLE");
+    assert.strictEqual(pc.getDegradedCapabilities().length, 0);
+  });
+});
+
+describe("ProgressController bounded recovery probe", () => {
+  const scope = (
+    over: Partial<{ capability: string; taskId: string; environmentIdentity: string }> = {},
+  ) => ({
+    capability: "shell.recursive_enumeration",
+    taskId: "task-1",
+    environmentIdentity: "env-a",
+    ...over,
+  });
+
+  it("admits exactly one probe per capability/task/environment and refuses a repeat", () => {
+    const pc = new ProgressController();
+    assert.strictEqual(pc.admitCapabilityRecoveryProbe(scope()), true);
+    assert.strictEqual(pc.admitCapabilityRecoveryProbe(scope()), false);
+    assert.strictEqual(pc.hasConsumedCapabilityRecoveryProbe(scope()), true);
+  });
+
+  it("fail-closes on empty key parts and refuses a spoofed environment identity", () => {
+    const pc = new ProgressController();
+    pc.setTrustedEnvironmentIdentity("env-a");
+    assert.strictEqual(pc.admitCapabilityRecoveryProbe(scope({ capability: "" })), false);
+    assert.strictEqual(pc.admitCapabilityRecoveryProbe(scope({ taskId: "  " })), false);
+    assert.strictEqual(pc.admitCapabilityRecoveryProbe(scope({ environmentIdentity: "" })), false);
+    assert.strictEqual(pc.admitCapabilityRecoveryProbe(scope({ environmentIdentity: "model-supplied" })), false);
+    assert.strictEqual(pc.hasConsumedCapabilityRecoveryProbe(scope({ environmentIdentity: "model-supplied" })), false);
+    assert.strictEqual(pc.admitCapabilityRecoveryProbe(scope()), true);
+  });
+
+  it("lets only one of two concurrent contenders win the same key", () => {
+    const pc = new ProgressController();
+    const results = [pc.admitCapabilityRecoveryProbe(scope()), pc.admitCapabilityRecoveryProbe(scope())];
+    assert.deepStrictEqual(results, [true, false]);
+  });
+
+  it("consumes the reservation even when the probe throws, and never re-arms on restore or task reset", () => {
+    const pc = new ProgressController();
+    assert.strictEqual(pc.admitCapabilityRecoveryProbe(scope()), true);
+    const snap = pc.snapshot();
+    const restored = new ProgressController();
+    restored.restore(snap);
+    assert.strictEqual(restored.admitCapabilityRecoveryProbe(scope()), false);
+    assert.strictEqual(restored.hasConsumedCapabilityRecoveryProbe(scope()), true);
+    restored.resetTaskLocal();
+    assert.strictEqual(restored.hasConsumedCapabilityRecoveryProbe(scope()), true);
+  });
+
+  it("re-arms for a new task and for a genuinely changed trusted environment", () => {
+    const pc = new ProgressController();
+    pc.setTrustedEnvironmentIdentity("env-a");
+    assert.strictEqual(pc.admitCapabilityRecoveryProbe(scope()), true);
+    assert.strictEqual(pc.admitCapabilityRecoveryProbe(scope()), false);
+    assert.strictEqual(pc.admitCapabilityRecoveryProbe(scope({ taskId: "task-2" })), true);
+    pc.setTrustedEnvironmentIdentity("env-b");
+    assert.strictEqual(pc.admitCapabilityRecoveryProbe(scope({ environmentIdentity: "env-b" })), true);
+    assert.strictEqual(pc.admitCapabilityRecoveryProbe(scope({ environmentIdentity: "env-b" })), false);
   });
 });

@@ -91,6 +91,52 @@ it('explicit single-model selection pins compaction despite a different configur
     providerModelId: 'selected-model' }), 'selected-model');
 });
 
+it('resolves an aligned direct-DeepSeek compaction route and never borrows another provider key', () => {
+  const names = ['DEEPSEEK_API_KEY', 'OPENROUTER_API_KEY', 'DEEPINFRA_API_KEY', 'ANTHROPIC_API_KEY', 'BABEL_COMPACTION_API_KEY', 'BABEL_COMPACTION_API_BASE', 'BABEL_DESKTOP_PROVIDER'] as const;
+  const previous = Object.fromEntries(names.map((name) => [name, process.env[name]]));
+  try {
+    for (const name of names) delete process.env[name];
+    // No aligned credential: refuse (heuristic-only) rather than guess.
+    assert.equal(resolveCompactionSummarizationProvider({ chatProvider: 'deepseek', compactionModel: 'deepseek-v4-pro' }), null);
+    // An ambient OpenRouter key must not be borrowed for a direct DeepSeek route.
+    process.env['OPENROUTER_API_KEY'] = 'synthetic-openrouter';
+    assert.equal(resolveCompactionSummarizationProvider({ chatProvider: 'deepseek', compactionModel: 'deepseek-v4-pro' }), null);
+    // The aligned DeepSeek credential resolves its own endpoint and model.
+    process.env['DEEPSEEK_API_KEY'] = 'synthetic-deepseek';
+    const resolved = resolveCompactionSummarizationProvider({ chatProvider: 'deepseek', compactionModel: 'deepseek-v4-pro' });
+    assert.equal(resolved?.baseUrl, 'https://api.deepseek.com/v1/chat/completions');
+    assert.equal(resolved?.defaultModel, 'deepseek-v4-pro');
+    // Explicit-only routes still refuse ambient fallback.
+    assert.equal(resolveCompactionSummarizationProvider({ chatProvider: 'opencode-go', compactionModel: 'deepseek-v4.1-flash' }), null);
+  } finally {
+    for (const name of names) { if (previous[name] === undefined) delete process.env[name]; else process.env[name] = previous[name]; }
+  }
+});
+
+it('attributes a DeepSeek summarizer inference to the deepseek provider identity', async (t) => {
+  const previousFetch = globalThis.fetch;
+  const recorded: Array<{ provider?: string; modelId: string }> = [];
+  globalThis.fetch = (async () => new Response(JSON.stringify({
+    choices: [{ message: { content: 'STRUCTURED SUMMARY' } }],
+    usage: { prompt_tokens: 11, completion_tokens: 7 },
+    model: 'deepseek-v4-pro',
+  }), { status: 200, headers: { 'content-type': 'application/json' } })) as typeof fetch;
+  t.after(() => { globalThis.fetch = previousFetch; });
+  try {
+    const strategy = new LLMSummarizeCompaction();
+    const options: CompactionOptions = {
+      model: 'deepseek-v4-pro', maxTokens: 100, targetTokens: 60, allowAmbientProvider: false,
+      summarizationProvider: { apiKey: 'synthetic-only', baseUrl: 'https://api.deepseek.com/v1/chat/completions', defaultModel: 'deepseek-v4-pro' },
+      onUsageRecorded: (usage) => recorded.push({ ...(usage.provider !== undefined ? { provider: usage.provider } : {}), modelId: usage.modelId }),
+    };
+    assert.equal(strategy.canApply(makeLongConversation(6), 10000, 100, options), true);
+    await strategy.compact(makeLongConversation(6), options);
+    assert.equal(recorded.length, 1);
+    assert.equal(recorded[0]?.provider, 'deepseek');
+    assert.equal(recorded[0]?.modelId, 'deepseek-v4-pro');
+  } finally { globalThis.fetch = previousFetch; }
+});
+
 // ─── Fixtures ──────────────────────────────────────────────────────────────
 
 function makeMessages(overrides?: Partial<ChatMessage>[]): ChatMessage[] {
