@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import { resolve } from 'node:path';
 import { describe, it } from 'node:test';
 
 import {
@@ -49,19 +50,20 @@ describe('openCodeAcpPermission', () => {
   });
 
   it('resolves relative workdir against session cwd and accepts cmd alias', () => {
-    const shell = effectiveShellExecution({ cmd: 'echo hi', workdir: 'child' }, '/project/root');
+    const sessionCwd = '/project/root';
+    const expectedResolvedCwd = resolve(sessionCwd, 'child');
+    const shell = effectiveShellExecution({ cmd: 'echo hi', workdir: 'child' }, sessionCwd);
     assert.ok(shell);
     assert.equal(shell.command, 'echo hi');
-    assert.match(shell.effectiveCwd, /\/project\/root\/child$/);
+    assert.equal(shell.effectiveCwd, expectedResolvedCwd);
     const action = permissionActionFromAcpParams(
       { title: 'shell', toolCall: { kind: 'shell', rawInput: { cmd: 'echo hi', workdir: 'child' } } },
-      '/project/root',
+      sessionCwd,
     );
     if (action?.type !== 'ask_approval') throw new Error('expected approval');
     if (action.requested_action.type !== 'run_command') throw new Error('expected run_command');
     assert.equal(action.requested_action.command, 'echo hi');
-    assert.ok(action.requested_action.cwd);
-    assert.match(action.requested_action.cwd, /\/project\/root\/child$/);
+    assert.equal(action.requested_action.cwd, expectedResolvedCwd);
   });
 
   it('binds distinct structured tool operations from v1 rawInput', () => {
