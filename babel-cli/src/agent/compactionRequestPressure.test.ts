@@ -1,13 +1,14 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { CompactionManager, HeuristicTruncationStrategy, LLMSummarizeCompaction, estimateTokens, type ChatMessage } from './chatCompaction.js'
-import { prepareProviderRequest } from '../runners/preparedProviderRequest.js'
+import { prepareProviderRequest, PreparedRequestAdmissionError } from '../runners/preparedProviderRequest.js'
 import { deriveCompactionRecoveryPressure, rebuildTextRecoveryRequest } from './compactionRequestPressure.js'
 import { runChatEngineCompaction, type ChatEngineCompactionHost } from './compactionCommit.js'
 import { createThreadEventLog, startTurn, recordUserMessage, recordAssistantMessage,
   rebuildProviderMessagesFromEvents } from './threadEventLog.js'
 import { createSessionEventLog } from './sessionEvents.js'
 import { CondensationFactEmitter } from '../services/condensationFacts.js'
+import { recoverStreamingRequestAdmission } from './chatEngineRequestRecovery.js'
 
 test('request overflow recovers removable history below the routine history threshold', async () => {
   const messages = Array.from({ length: 8 }, (_, index) => ({
@@ -235,3 +236,43 @@ test('text recovery preserves mandatory system content and all request policy fi
     contextLimitTokens: 1000, reservedCompletionTokens: 512 } })
   assert.equal(rebuildTextRecoveryRequest(deriveCompactionRecoveryPressure(unsupported)!, 'replacement'), null)
 })
+
+test('streaming recovery leaves ordinary transport errors and unknown capacity unclassified', async () => {
+  const unknown = prepareProviderRequest({ body: JSON.stringify({ messages: [] }), mode: 'native',
+    provider: 'synthetic', requestedModelId: 'synthetic-model', contextLimitTokens: null, reservedCompletionTokens: 16 })
+  for (const error of [new Error('transport reset'), new PreparedRequestAdmissionError(unknown)]) {
+    const recovery = recoverStreamingRequestAdmission({
+      recoverPreparedRequestAdmission: async () => null,
+      isSubmissionCurrent: () => true,
+      emitCancelledIfOperatorAbort: () => assert.fail('ordinary errors retain their existing handler'),
+      streamFailed: () => assert.fail('unknown capacity cannot be reported as a proved deficit'),
+    }, error, 1, () => assert.fail('ordinary errors retain their tracing owner'))
+    assert.deepEqual(await recovery.next(), { done: true, value: 'unhandled' })
+  }
+})
+
+for (const state of ['superseded', 'cancelled', 'recovered'] as const) {
+  test(`streaming recovery preserves ${state} ownership and event ordering`, async () => {
+    const request = prepareProviderRequest({ body: JSON.stringify({ messages: [] }), mode: 'native',
+      provider: 'synthetic', requestedModelId: 'synthetic-model', contextLimitTokens: 1, reservedCompletionTokens: 16 })
+    let stops = 0
+    const info = { mode: 'heuristic' as const, beforeMessages: 8, afterMessages: 4, message: 'compacted' }
+    const recovery = recoverStreamingRequestAdmission({
+      recoverPreparedRequestAdmission: async () => state === 'cancelled' ? null : info,
+      isSubmissionCurrent: () => state !== 'superseded',
+      emitCancelledIfOperatorAbort: () => ({ type: 'cancelled' }),
+      streamFailed: () => assert.fail('cancelled or superseded work cannot become capacity failure'),
+    }, new PreparedRequestAdmissionError(request), 1, () => { stops++ })
+    const first = await recovery.next()
+    if (state === 'superseded') {
+      assert.deepEqual(first, { done: true, value: 'stopped' })
+      assert.equal(stops, 1)
+    } else {
+      assert.equal(first.done, false)
+      if (first.done) return
+      assert.equal(first.value.type, state === 'cancelled' ? 'cancelled' : 'context_compacted')
+      assert.equal(stops, state === 'cancelled' ? 1 : 0, 'terminal tracing closes before its event is yielded')
+      assert.deepEqual(await recovery.next(), { done: true, value: state === 'cancelled' ? 'stopped' : 'recovered' })
+    }
+  })
+}
