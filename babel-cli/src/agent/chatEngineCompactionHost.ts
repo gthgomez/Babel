@@ -24,6 +24,8 @@ import {
 } from './compactionCommit.js';
 import { captureUsageAttribution } from './chatEngineProviderAccounting.js';
 import { globalCostTracker } from '../services/costTracker.js';
+import type { CompactionRecoveryPressure } from './compactionRequestPressure.js';
+import { rebuildTextRecoveryRequest } from './compactionRequestPressure.js';
 
 /** Minimal ChatEngine surface required to run H1 compaction. */
 export interface ChatEngineCompactionBinding {
@@ -51,6 +53,9 @@ export interface ChatEngineCompactionBinding {
   compactConversation(): void;
   getOrBuildSystemPrompt(mode: 'native' | 'legacy' | 'text'): string;
   services: {
+    conversation: {
+      buildTurnPrompt(options: import('./chatToolDefinitions.js').ChatTurnPromptOptions): string;
+    };
     tools: {
       buildDefinitions(): import('../runners/base.js').ToolDefinition[];
       buildRestrictedDefinitions(
@@ -86,6 +91,7 @@ export async function runChatEngineCompactionFor(
     callbacks?: ChatCallbacks;
     forceCompaction?: boolean;
     ownerGeneration?: number;
+    recoveryPressure?: CompactionRecoveryPressure;
   },
 ): Promise<ContextCompactedInfo | null> {
   const callbacks = input.callbacks;
@@ -128,7 +134,8 @@ export async function runChatEngineCompactionFor(
     compactionModel: compactionModelId,
   });
   const deliberationRunner = engine.resolveDeliberationRunnerForCompaction();
-  const runnerReserved = (
+  const runnerReserved = input.recoveryPressure?.textRequest
+    ? input.recoveryPressure.reservedCompletionTokens : (
     deliberationRunner as { getNativeRequestReservedCompletionTokens?: () => number | null }
   ).getNativeRequestReservedCompletionTokens?.() ?? null;
   const host: ChatEngineCompactionHost = {
@@ -235,14 +242,26 @@ export async function runChatEngineCompactionFor(
     reserveTokens: DEFAULT_COMPACTION_CONFIG.reserveTokens,
     textToolsReserve: 1024,
     forceCompaction,
+    ...(input.recoveryPressure ? { recoveryPressure: input.recoveryPressure } : {}),
     prepareContextGuard: () => engine.prepareCompactionGuard(),
     isOwnerCurrent: () => engine.isSubmissionCurrent(ownerGeneration),
     resolveModel: input => resolveCompactionModelId({ ...input,
       pinSelection: engine.options.model !== undefined || engine.options.providerPolicy !== undefined }),
     shouldCompactByTokens: parityShouldCompact,
     estimateTokens,
-    serializeNativeProviderRequestBody: () =>
-      engine.buildNativeCompactionAdmissionWireBody(),
+    serializeNativeProviderRequestBody: (conversation = host.conversation) => {
+      if (!input.recoveryPressure?.textRequest) return engine.buildNativeCompactionAdmissionWireBody();
+      const textTools = engine.shouldUseTextTools();
+      const prompt = engine.services.conversation.buildTurnPrompt({
+        conversation,
+        task: engine.options.task,
+        nativeTools: false,
+        textTools,
+      });
+      // Unknown text envelopes cannot qualify by probing a different native body.
+      return rebuildTextRecoveryRequest(input.recoveryPressure, prompt)
+        ?? input.recoveryPressure.textRequest.body;
+    },
   };
   if (engine.compactionManager) host.compactionManager = engine.compactionManager;
   if (engine.condensationFacts) host.condensationFacts = engine.condensationFacts;
@@ -250,8 +269,8 @@ export async function runChatEngineCompactionFor(
   if (!engine.isSubmissionCurrent(ownerGeneration)) return null;
   engine.conversation = host.conversation;
   if (!result) return null;
-  if (engine.lastLogicalRequestId !== null) {
-    engine.pendingParentRequestId = engine.lastLogicalRequestId;
+  if (input.recoveryPressure || engine.lastLogicalRequestId !== null) {
+    engine.pendingParentRequestId = input.recoveryPressure?.requestId ?? engine.lastLogicalRequestId;
   }
   engine.resetReadInjectionContext();
   const info: ContextCompactedInfo = {

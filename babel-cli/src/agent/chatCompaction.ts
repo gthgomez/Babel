@@ -31,6 +31,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { RunnerCallbacks } from '../runners/base.js';
 import type { ProviderId } from '../runners/providerRegistry.js';
+import type { CompactionRecoveryPressure } from './compactionRequestPressure.js';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -53,12 +54,14 @@ export interface ChatMessage {
 }
 
 export type CompactionTriggerReason =
+  | 'request_overflow'
   | 'force'
   | 'token_threshold'
   | 'reserve_headroom';
 
 /** Shared trigger/eligibility contract between the outer gate and strategies. */
 export interface CompactionRequestContext {
+  recoveryPressure?: CompactionRecoveryPressure;
   reason: CompactionTriggerReason;
   /** History-only estimate at the outer trigger. */
   historyTokenEstimate: number;
@@ -108,6 +111,7 @@ function strategyHistoryEligible(
 ): boolean {
   const ctx = options?.requestContext;
   if (ctx?.compactionRequested) {
+    if (ctx.recoveryPressure && ctx.recoveryPressure.requiredReductionTokens > 0) return true;
     return estimatedTokens > ctx.eligibilityTokenCap;
   }
   return estimatedTokens > maxTokens;
@@ -517,7 +521,13 @@ export class LLMSummarizeCompaction implements CompactionStrategy {
     // Do not swallow errors into a compaction_fallback annotation — that blocks
     // the manager chain and was the pre-H1 defect path.
     try {
-      const targetTokens = options.targetTokens ?? this.maxSummaryTokens;
+      const pressure = options.requestContext?.recoveryPressure;
+      // The final serialized-request validator remains authoritative: message
+      // estimates only size the attempt and cannot prove that fixed overhead fits.
+      const targetTokens = pressure
+        ? Math.max(1, Math.min(options.targetTokens ?? this.maxSummaryTokens,
+            estimateTokens(toCompact) - pressure.requiredReductionTokens))
+        : options.targetTokens ?? this.maxSummaryTokens;
       const summaryResult = await this.callCompactionApi(toCompact, targetTokens, options);
 
       const summaryMessage: ChatMessage = {
@@ -609,13 +619,14 @@ export class LLMSummarizeCompaction implements CompactionStrategy {
     const prompt = buildCompactionPrompt(toCompact, targetTokens);
 
     if (isAnthropic) {
-      return this.callAnthropicApi(prompt, model, apiKey, signal, options.callbacks, options.onUsageRecorded);
+      return this.callAnthropicApi(prompt, model, apiKey, targetTokens, signal, options.callbacks, options.onUsageRecorded);
     }
     return this.callOpenAiCompatibleApi(
       prompt,
       model,
       apiKey,
       baseUrl,
+      targetTokens,
       signal,
       options.callbacks,
       options.onUsageRecorded,
@@ -630,6 +641,7 @@ export class LLMSummarizeCompaction implements CompactionStrategy {
     model: string,
     apiKey: string,
     baseUrl: string,
+    targetTokens: number,
     signal?: AbortSignal,
     callbacks?: RunnerCallbacks,
     onUsageRecorded?: CompactionOptions['onUsageRecorded'],
@@ -650,7 +662,7 @@ export class LLMSummarizeCompaction implements CompactionStrategy {
     const inferenceId = randomUUID();
     const requestBody = {
       model,
-      max_tokens: this.maxSummaryTokens,
+      max_tokens: Math.max(1, Math.min(this.maxSummaryTokens, targetTokens)),
       temperature: 0.3,
       messages: [
         {
@@ -785,6 +797,7 @@ export class LLMSummarizeCompaction implements CompactionStrategy {
     prompt: string,
     model: string,
     apiKey: string,
+    targetTokens: number,
     signal?: AbortSignal,
     callbacks?: RunnerCallbacks,
     onUsageRecorded?: CompactionOptions['onUsageRecorded'],
@@ -803,7 +816,7 @@ export class LLMSummarizeCompaction implements CompactionStrategy {
     const inferenceId = randomUUID();
     const requestBody = {
       model,
-      max_tokens: this.maxSummaryTokens,
+      max_tokens: Math.max(1, Math.min(this.maxSummaryTokens, targetTokens)),
       temperature: 0.3,
       system: 'You are a precise conversation summarizer. Output only the structured summary with no additional commentary.',
       messages: [{ role: 'user', content: prompt }],

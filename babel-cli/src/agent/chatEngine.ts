@@ -106,6 +106,7 @@ import {
 } from "./chatCompaction.js";
 import type { CondensationFactChannel } from "../services/condensationFacts.js";
 import { PreparedRequestAdmissionError } from "../runners/preparedProviderRequest.js";
+import { deriveCompactionRecoveryPressure } from './compactionRequestPressure.js';
 import {
   initLiveAuthorityOnEngine,
   projectEngineLiveSession,
@@ -3966,11 +3967,13 @@ export class ChatEngine {
     callbacks?: ChatCallbacks,
     forceCompaction = false,
     ownerGeneration = this.activeSubmissionGeneration,
+    recoveryPressure?: import('./compactionRequestPressure.js').CompactionRecoveryPressure,
   ): Promise<ContextCompactedInfo | null> {
     return runChatEngineCompactionFor(this as unknown as import("./chatEngineCompactionHost.js").ChatEngineCompactionBinding, {
       ...(callbacks !== undefined ? { callbacks } : {}),
       forceCompaction,
       ownerGeneration,
+      ...(recoveryPressure ? { recoveryPressure } : {}),
     });
   }
 
@@ -3980,10 +3983,13 @@ export class ChatEngine {
     ownerGeneration = this.activeSubmissionGeneration,
   ): Promise<ContextCompactedInfo | null> {
     if (!(error instanceof PreparedRequestAdmissionError)) return null;
+    if (!this.isSubmissionCurrent(ownerGeneration)) return null;
     if (this.preparedAdmissionCompactionAttempts >= 1) return null;
+    const recoveryPressure = deriveCompactionRecoveryPressure(error.request);
+    if (!recoveryPressure || !this.isSubmissionCurrent(ownerGeneration)) return null;
     this.preparedAdmissionCompactionAttempts += 1;
     this.pendingParentRequestId = error.request.request_id;
-    return this.compactIfNeeded(undefined, true, ownerGeneration);
+    return this.compactIfNeeded(undefined, true, ownerGeneration, recoveryPressure);
   }
 
   private compactConversation(): void {

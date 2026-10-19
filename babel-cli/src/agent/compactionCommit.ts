@@ -11,7 +11,7 @@
 
 import { createHash, randomUUID } from 'node:crypto';
 import type { ChatMessage } from './chatCompaction.js';
-import { estimateTokens, resolveCompactionModelId } from './chatCompaction.js';
+import { CompactionManager, HeuristicTruncationStrategy, estimateTokens, resolveCompactionModelId } from './chatCompaction.js';
 import type { ProviderToolCall, RunnerCallbacks } from '../runners/base.js';
 import { LIVE_OPENROUTER_MODEL_ID } from '../modelPolicy.js';
 import {
@@ -46,6 +46,7 @@ import {
 import type { ToolDefinition } from '../runners/base.js';
 import { buildOpenAiCompatibleNativeWireBody } from '../runners/openAiCompatibleNativeWire.js';
 import { mapProviderMessages } from '../runners/providerResponseStream.js';
+import type { CompactionRecoveryPressure } from './compactionRequestPressure.js';
 
 export type CompactionCommitStatus =
   | 'committed'
@@ -97,7 +98,7 @@ export interface CompactionCommitInput {
   /** Ownership fence checked before any live or durable mutation. */
   isOwnerCurrent?: () => boolean;
   /** Synchronous acceptance check after event append, before persistence. */
-  validateCommit?: () => boolean;
+  validateCommit?: (conversation: ChatMessage[]) => boolean;
 }
 
 export interface CompactionCommitResult {
@@ -825,7 +826,7 @@ export async function commitCompaction(
       tokens_after: tokensAfter,
       status: 'committed',
     }).event_id);
-    if (input.validateCommit && !input.validateCommit()) {
+    if (input.validateCommit && !input.validateCommit(conversation)) {
       rollbackLocalEvents();
       return {
         status: 'noop',
@@ -1047,6 +1048,7 @@ export interface ChatEngineCompactionHost {
   estimateTokens: (messages: ChatMessage[]) => number;
   /** Admission recovery may request one bounded compaction even before the normal token trigger. */
   forceCompaction?: boolean;
+  recoveryPressure?: CompactionRecoveryPressure;
   /** Throws before paid work; validates capture/owner again before durable pruning. */
   prepareContextGuard?: () => (() => boolean);
   isOwnerCurrent?: () => boolean;
@@ -1067,7 +1069,7 @@ export interface ChatEngineCompactionHost {
    * When set, admission uses the same native wire body the Chat runner would
    * POST (messages, system prompt, tools), not message-only JSON.
    */
-  serializeNativeProviderRequestBody?: () => string;
+  serializeNativeProviderRequestBody?: (conversation?: ChatMessage[]) => string;
 }
 
 export interface ChatEngineCompactInfo {
@@ -1101,8 +1103,8 @@ function retainedTaskIsPresent(host: ChatEngineCompactionHost): boolean {
     .some((message) => message.content?.includes(host.options.task));
 }
 
-function serializedProviderRequestForAdmission(host: ChatEngineCompactionHost): string {
-  return host.serializeNativeProviderRequestBody?.() ?? serializedProviderRequest(host.threadLog);
+function serializedProviderRequestForAdmission(host: ChatEngineCompactionHost, conversation?: ChatMessage[]): string {
+  return host.serializeNativeProviderRequestBody?.(conversation) ?? serializedProviderRequest(host.threadLog);
 }
 
 export function resolveCompactionAdmissionContext(
@@ -1128,7 +1130,16 @@ export function resolveCompactionAdmissionContext(
       : caps.maxOutputTokens > 0
         ? caps.maxOutputTokens
         : harnessReserve;
-  return { contextWindowTokens, reservedCompletionTokens };
+  return {
+    contextWindowTokens: host.recoveryPressure
+      ? Math.min(contextWindowTokens, host.recoveryPressure.contextLimitTokens,
+          ...[host.modelPolicy?.contextWindow, host.modelPolicy?.contextLimit]
+            .filter((limit): limit is number => typeof limit === 'number' && limit > 0))
+      : contextWindowTokens,
+    reservedCompletionTokens: host.recoveryPressure
+      ? Math.max(reservedCompletionTokens, host.recoveryPressure.reservedCompletionTokens)
+      : reservedCompletionTokens,
+  };
 }
 
 /** Provider admission model id — matches live native runner pinning (providerModelId first). */
@@ -1254,17 +1265,18 @@ export async function runChatEngineCompaction(
     ? host.textToolsReserve
     : host.reserveTokens;
   const compactionNeeded =
+    host.recoveryPressure !== undefined ||
     host.forceCompaction === true ||
     tokenTriggered ||
     tokenEstimate > host.limits.maxEstimatedTokens - reserve;
-  const ownerIsCurrent = (): boolean => !host.isOwnerCurrent || host.isOwnerCurrent();
+  const ownerIsCurrent = (): boolean => !host.abortSignal.aborted && (!host.isOwnerCurrent || host.isOwnerCurrent());
   if (!ownerIsCurrent()) return null;
   const contextStillCurrent = compactionNeeded ? host.prepareContextGuard?.() : undefined;
   // ── Packet A5: condensation-as-event emission (strict started/completed) ──
   const condensation = host.condensationFacts;
   let condensationId = '';
   const beginCondensationFact = (tokensBefore: number): void => {
-    if (!condensation) return;
+    if (!condensation || condensationId !== '') return;
     condensationId = randomUUID();
     const started = condensation.emitter.begin({
       compactionId: condensationId,
@@ -1313,7 +1325,7 @@ export async function runChatEngineCompaction(
       // Started only once pruning is known to have changed the context: a
       // noop never mints a started fact, so no spurious gap is possible.
       beginCondensationFact(host.estimateTokens(prior));
-      const beforeRequest = serializedProviderRequestForAdmission(host);
+      const beforeRequest = serializedProviderRequestForAdmission(host, prior);
       const committed = await commitCompaction({
         strategyMessages: host.conversation.map((message) => ({ ...message })),
         priorConversation: prior,
@@ -1331,8 +1343,8 @@ export async function runChatEngineCompaction(
         },
         blockOnPersistFailure: true,
         isOwnerCurrent: () => ownsConversation() && (!contextStillCurrent || contextStillCurrent()),
-        validateCommit: () => {
-          const afterRequest = serializedProviderRequestForAdmission(host);
+        validateCommit: (conversation) => {
+          const afterRequest = serializedProviderRequestForAdmission(host, conversation);
           const tokensBeforeCommit = host.estimateTokens(prior);
           const tokensAfterCommit = host.estimateTokens(host.conversation);
           return ownsConversation()
@@ -1372,7 +1384,10 @@ export async function runChatEngineCompaction(
     }
   };
 
-  if (host.compactionManager) {
+  // Disabling paid summarization must still permit deficit-driven recovery.
+  const compactionManager = host.compactionManager ?? (host.recoveryPressure
+    ? new CompactionManager([new HeuristicTruncationStrategy()]) : undefined);
+  if (compactionManager) {
     if (compactionNeeded) {
       if (!ownerIsCurrent()) return null;
       try {
@@ -1380,14 +1395,16 @@ export async function runChatEngineCompaction(
           host.modelPolicy?.providerModelId === LIVE_OPENROUTER_MODEL_ID;
         const eligibilityTokenCap = Math.max(
           0,
-          host.limits.maxEstimatedTokens - reserve,
+          host.recoveryPressure
+            ? tokenEstimate - host.recoveryPressure.requiredReductionTokens
+            : host.limits.maxEstimatedTokens - reserve,
         );
-        const compactionReason = host.forceCompaction === true
+        const compactionReason = host.recoveryPressure ? 'request_overflow' : host.forceCompaction === true
           ? 'force'
           : tokenTriggered
             ? 'token_threshold'
             : 'reserve_headroom';
-        const mgr = await host.compactionManager.compactWithResult(host.conversation, {
+        const compactionOptions: import('./chatCompaction.js').CompactionOptions = {
           allowAmbientProvider: false,
           model: host.resolveModel({
             ...(host.modelPolicy?.providerModelId
@@ -1402,6 +1419,7 @@ export async function runChatEngineCompaction(
           }),
           maxTokens: host.limits.maxEstimatedTokens,
           requestContext: {
+            ...(host.recoveryPressure ? { recoveryPressure: host.recoveryPressure } : {}),
             reason: compactionReason,
             historyTokenEstimate: tokenEstimate,
             eligibilityTokenCap,
@@ -1414,7 +1432,8 @@ export async function runChatEngineCompaction(
           ...(host.summarizationProvider
             ? { summarizationProvider: host.summarizationProvider }
             : {}),
-        });
+        };
+        let mgr = await compactionManager.compactWithResult(host.conversation, compactionOptions);
         if (!ownerIsCurrent()) return null;
         if (!mgr.changed && (mgr.status === 'noop' || mgr.status === 'cannot_fit')) {
           await applyHeuristic();
@@ -1432,7 +1451,7 @@ export async function runChatEngineCompaction(
           }
           return null;
         }
-        if (mgr.changed) {
+        while (mgr.changed) {
           beginCondensationFact(mgr.tokensBefore);
           const beforeRequest = serializedProviderRequestForAdmission(host);
           commit = await commitCompaction({
@@ -1452,8 +1471,8 @@ export async function runChatEngineCompaction(
             },
             blockOnPersistFailure: true,
             isOwnerCurrent: () => ownerIsCurrent() && (!contextStillCurrent || contextStillCurrent()),
-            validateCommit: () => {
-              const afterRequest = serializedProviderRequestForAdmission(host);
+            validateCommit: (conversation) => {
+              const afterRequest = serializedProviderRequestForAdmission(host, conversation);
               return ownerIsCurrent()
                 && (!contextStillCurrent || contextStillCurrent())
                 && retainedTaskIsPresent(host)
@@ -1467,7 +1486,16 @@ export async function runChatEngineCompaction(
             },
           });
           if (commit.status !== 'committed') {
-            if (commit.status === 'noop') return null;
+            if (commit.status === 'noop') {
+              if (!ownerIsCurrent() || (contextStillCurrent && !contextStillCurrent())) return null;
+              if (!host.recoveryPressure || strategyToCompactMode(mgr.strategy) !== 'llm') return null;
+              // Validation rolled back the summary. Try one unpaid candidate;
+              // its heuristic strategy cannot re-enter this LLM-only fallback.
+              mgr = await new CompactionManager([new HeuristicTruncationStrategy()])
+                .compactWithResult(host.conversation, compactionOptions);
+              if (!ownerIsCurrent()) return null;
+              continue;
+            }
             throw new CompactionPersistenceError(
               commit.error ?? 'Compaction persistence failed',
             )
@@ -1477,6 +1505,7 @@ export async function runChatEngineCompaction(
           host.conversation = commit.conversation;
           mode = strategyToCompactMode(commit.strategy);
           changed = true;
+          break;
         }
       } catch (error) {
         if (error instanceof CompactionPersistenceError) throw error
