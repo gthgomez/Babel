@@ -12,6 +12,10 @@ import {
   REMOTE_UI_FIXTURE_SCENARIOS,
   startRemoteUiFixtureServer,
 } from '../bridge/remoteUiFixture.js';
+import {
+  createDeterministicBridgeEngineFactory,
+  isDeterministicBridgeEngineEnabled,
+} from '../bridge/deterministicBridgeEngine.js';
 import { executeSharedProtocolHostRun } from '../bridge/sharedProtocolHostRun.js';
 
 export function registerRemoteCommands(program: Command): void {
@@ -76,6 +80,9 @@ export function registerRemoteCommands(program: Command): void {
           'https://localhost:*',
           ...extraOrigins,
         ],
+        ...(isDeterministicBridgeEngineEnabled()
+          ? { engineFactory: createDeterministicBridgeEngineFactory() }
+          : {}),
         ...(desktopControllerClientId && desktopControllerProofKey
           ? { desktopControllerClientId, desktopControllerProofKey }
           : {}),
@@ -154,7 +161,7 @@ export function registerRemoteCommands(program: Command): void {
         },
         write,
       );
-      process.exit(code);
+      process.exitCode = code;
     });
 
   remote

@@ -78,7 +78,19 @@ export class SharedProtocolRun {
         const binding = scopedApproval(event.item.approval);
         this.#approval = binding?.run_id === request.runId ? binding : this.#approval;
       }
+      if (event.type === 'approval.reconciled' && event.item?.approval && !this.#approvalClosed) {
+        const binding = scopedApproval(event.item.approval);
+        if (binding?.run_id === request.runId) this.#approval = binding;
+      }
+      if (event.type === 'control.rejected' || event.type === 'transport.disconnected') {
+        send({kind: 'event', event});
+        return;
+      }
       if (['run_complete', 'run_error', 'turn.completed', 'turn.failed', 'cancelled', 'emergency_stop'].includes(event.type)) {
+        if (event.type === 'run_error' && transportLost) {
+          send({kind: 'event', event});
+          return;
+        }
         turnSettled = true;
         this.#approval = null;
         this.#approvalClosed = true;

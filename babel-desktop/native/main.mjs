@@ -523,6 +523,9 @@ async function start(){
     if(!Number.isInteger(port)||port<1024||port>65535)throw new Error('Invalid remote bridge port');
     if(admissionEpoch!==remoteAdmissionEpoch||!projectAuthority.isCurrent(admission))throw new Error('Remote startup was cancelled.');
     const childEnvironment=await ownedCliEnvironment();
+    if (process.env.BABEL_BRIDGE_DETERMINISTIC_ENGINE === '1') {
+      childEnvironment.BABEL_BRIDGE_DETERMINISTIC_ENGINE = '1';
+    }
     if(admissionEpoch!==remoteAdmissionEpoch||!projectAuthority.isCurrent(admission))throw new Error('Remote startup was cancelled.');
     const bridge=new RemoteBridgeChild({executable:officialRuntime().executable,entry:cliEntry,projectRoot:admission.identity.root,env:childEnvironment,inheritEnv:false});
     remoteBridge=bridge;
@@ -570,6 +573,9 @@ async function start(){
     if(selectedModel.selectable===false)throw new Error(selectedModel.unavailableReason||'The selected model is unavailable. Choose another model in Settings.');
     buildRunArgs(cliEntry, preferences.projectRoot, runRequest);
     const childEnvironment=applySelectedModelEnvironment(await ownedCliEnvironment(),selectedModel);
+    if (process.env.BABEL_BRIDGE_DETERMINISTIC_ENGINE === '1') {
+      childEnvironment.BABEL_BRIDGE_DETERMINISTIC_ENGINE = '1';
+    }
     runAuthority=conversationOnly?null:await projectAuthority.admit(preferences.projectRoot);
     if(admissionEpoch!==runAdmissionEpoch){runAuthority=null;return {started:false};}
     const sharedBridge=remoteBridge?.state==='ready'&&remoteBridge.sharedSession&&remoteBridge.port&&remoteBridge.desktopClientId;

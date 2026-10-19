@@ -297,6 +297,62 @@
     renderChrome();
   }
 
+  async function reconcileAuthoritativeTaskState() {
+    if (!memory.threadId) return;
+    try {
+      const catalog = await rpc('remote.catalog', {});
+      if (catalog.classified.kind === 'success') {
+        const sessions = (catalog.payload.result && catalog.payload.result.sessions) || [];
+        const row = sessions.find(function (item) { return item.thread_id === memory.threadId; });
+        if (row) {
+          if (row.active_turn) {
+            turn = transition('turn', turn, 'stream');
+            thread = transition('thread', thread, 'running');
+          } else if (row.status === 'waiting_approval') {
+            thread = transition('thread', thread, 'waiting_approval');
+          }
+        }
+      }
+    } catch (catalogError) { /* catalog is optional during reconnect */ }
+    try {
+      const lookup = await rpc('approval.lookup', {
+        thread_id: memory.threadId,
+        ...(memory.turnId !== undefined && memory.turnId !== null
+          ? { turn_id: String(memory.turnId) }
+          : {}),
+      });
+      if (lookup.classified.kind !== 'success') return;
+      const pending = ((lookup.payload.result && lookup.payload.result.pending) || []).find(function (item) {
+        return item.state === 'pending';
+      });
+      if (!pending) {
+        if (approval === 'PENDING') approval = transition('approval', approval, 'expire');
+        return;
+      }
+      memory.pendingApproval = {
+        approval_id: pending.approval_id,
+        thread_id: pending.thread_id,
+        turn_id: pending.turn_id,
+        operation_digest: pending.operation_digest,
+      };
+      approval = transition('approval', approval, 'pending');
+      thread = transition('thread', thread, 'waiting_approval');
+      R.renderApproval({
+        actionType: pending.command || 'approval',
+        command: pending.command,
+        cwd: pending.cwd,
+        targetPath: '',
+        digest: pending.operation_digest,
+      });
+      appendEvent({ type: 'permission', role: 'system', text: 'Pending approval reconciled from host without resubmitting the task.' });
+    } catch (lookupError) {
+      if (turn === 'STREAMING' || turn === 'ACKNOWLEDGED') {
+        turn = transition('turn', turn, 'unknown');
+        appendEvent({ type: 'connection', error: 'Active turn state is UNKNOWN until the host confirms pending work.' });
+      }
+    }
+  }
+
   async function reconnect() {
     try {
       if (host === 'ONLINE') host = transition('host', host, 'close');
@@ -318,6 +374,7 @@
         transcript.textContent = '';
         cells.forEach(function (cell) { appendEvent({ type: cell.kind || 'cell', text: JSON.stringify(cell.payload || {}) }); });
         await syncControlLeaseFromHost();
+        await reconcileAuthoritativeTaskState();
         thread = transition('thread', thread, 'ready');
       }
       host = transition('host', host, 'open');
@@ -523,6 +580,8 @@
         if (patch && patch.approval !== undefined) approval = patch.approval;
         if (patch && patch.memory) Object.assign(memory, patch.memory);
       },
+      reconnect: reconnect,
+      reconcileAuthoritativeTaskState: reconcileAuthoritativeTaskState,
     };
     renderChrome();
   }

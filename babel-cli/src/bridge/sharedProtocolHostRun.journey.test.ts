@@ -179,7 +179,12 @@ describe('shared protocol host-run production journeys', () => {
   }
 
   it('two-turn desktop host-run keeps thread_id and exposes thread to paired PWA catalog', async () => {
-    const first = await runHostTurn({ task: 'turn one shared owner', runId: 'journey-1' });
+    const route = { provider: 'openrouter', model: 'fixture-model' };
+    const first = await runHostTurn({
+      task: 'turn one shared owner',
+      runId: 'journey-1',
+      ...route,
+    });
     assert.equal(first.code, 0);
     const complete = first.events.find((e) => e.type === 'run_complete') as {
       result?: { session_id?: string };
@@ -205,6 +210,8 @@ describe('shared protocol host-run production journeys', () => {
       task: 'turn two same thread',
       runId: 'journey-2',
       resumeThreadId: threadId,
+      provider: 'openrouter',
+      model: 'fixture-model',
     });
     assert.equal(second.code, 0);
     const secondComplete = second.events.find((e) => e.type === 'run_complete') as {

@@ -215,12 +215,19 @@ describe('shared host-run remote lease fencing', () => {
 
     stdin.write(`${JSON.stringify({ decision: 'cancel' })}\n`);
     await new Promise((resolve) => setTimeout(resolve, 400));
-    const cancelErrors = events.filter((e) => e.type === 'run_error');
-    assert.ok(cancelErrors.length > 0, 'ordinary cancel must be rejected while remote holds lease');
+    const cancelRejections = events.filter((e) => e.type === 'control.rejected');
+    assert.ok(cancelRejections.length > 0, 'ordinary cancel must be rejected while remote holds lease');
     assert.equal(
       events.some((e) => e.type === 'cancelled'),
       false,
       'ordinary cancel must not report success while remote holds lease',
+    );
+    assert.equal(
+      events.some(
+        (e) => e.type === 'run_error' && String((e as { error?: string }).error).includes('Cancel'),
+      ),
+      false,
+      'rejected cancel must not terminate the desktop task presentation',
     );
 
     stdin.write(
@@ -228,7 +235,7 @@ describe('shared host-run remote lease fencing', () => {
     );
     await new Promise((resolve) => setTimeout(resolve, 200));
     assert.ok(
-      events.filter((e) => e.type === 'run_error').length >= 2,
+      events.filter((e) => e.type === 'control.rejected').length >= 2,
       'desktop approval must be rejected while remote holds lease',
     );
 
@@ -236,7 +243,13 @@ describe('shared host-run remote lease fencing', () => {
       `${JSON.stringify({ decision: 'emergency_admin_stop', host_emergency_token: 'wrong-token' })}\n`,
     );
     await new Promise((resolve) => setTimeout(resolve, 200));
-    assert.ok(events.some((e) => e.type === 'run_error' && String((e as { error?: string }).error).includes('emergency')));
+    assert.ok(
+      events.some(
+        (e) =>
+          e.type === 'control.rejected' &&
+          String((e as { error?: string }).error).includes('emergency'),
+      ),
+    );
 
     stdin.write(
       `${JSON.stringify({ decision: 'emergency_admin_stop', host_emergency_token: TOKEN })}\n`,

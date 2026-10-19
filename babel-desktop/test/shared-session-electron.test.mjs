@@ -67,33 +67,18 @@ if (argv[0] === '--desktop-capabilities') {
 }
 const remoteIdx = argv.indexOf('remote');
 const remoteSub = remoteIdx >= 0 ? argv[remoteIdx + 1] : '';
-if (remoteIdx >= 0 && remoteSub === 'serve') {
-  appendFileSync(hostRunReceipt, 'serve\\n');
+if (remoteIdx >= 0 && (remoteSub === 'serve' || remoteSub === 'host-run')) {
+  appendFileSync(hostRunReceipt, remoteSub + '\\n');
   const child = spawn(process.execPath, ['--experimental-wasm-modules', dist, ...argv], {
     cwd: process.cwd(),
-    stdio: 'inherit',
+    stdio: remoteSub === 'host-run' ? ['pipe', 'pipe', 'inherit'] : 'inherit',
     env: process.env,
   });
+  if (remoteSub === 'host-run' && child.stdout) {
+    child.stdout.on('data', (chunk) => process.stdout.write(chunk));
+    if (child.stdin) process.stdin.pipe(child.stdin);
+  }
   child.on('exit', (code, signal) => process.exit(code ?? (signal ? 1 : 0)));
-} else if (remoteIdx >= 0 && remoteSub === 'host-run') {
-  appendFileSync(hostRunReceipt, 'host-run\\n');
-  const resumeIdx = argv.indexOf('--resume-thread');
-  const sessionId =
-    resumeIdx >= 0 && typeof argv[resumeIdx + 1] === 'string'
-      ? argv[resumeIdx + 1]
-      : 'electron-fixture-thread';
-  process.stdout.write(JSON.stringify({ type: 'run_start' }) + '\\n');
-  process.stdout.write(
-    JSON.stringify({
-      type: 'run_complete',
-      result: {
-        session_id: sessionId,
-        answer: 'fixture shared-session turn',
-        terminal_outcome: 'COMPLETED',
-      },
-    }) + '\\n',
-  );
-  process.exit(0);
 } else if (argv.includes('run')) {
   writeFileSync(legacyRunReceipt, 'legacy-run');
   process.stdout.write(JSON.stringify({ type: 'run_start' }) + '\\n');
@@ -123,6 +108,7 @@ if (remoteIdx >= 0 && remoteSub === 'serve') {
 
     const env = { ...process.env };
     env.BABEL_RUNS_DIR = join(profile, 'engine', 'state', 'runs');
+    env.BABEL_BRIDGE_DETERMINISTIC_ENGINE = '1';
 
     const launchArgs = [bootstrap, `--profile-dir=${profile}`];
     if (process.platform === 'linux' && !process.env.DISPLAY) {
@@ -146,9 +132,10 @@ if (remoteIdx >= 0 && remoteSub === 'serve') {
     const authority = await page.evaluate(() => window.babelDesktop.trustProject());
     assert.equal(authority.projectAuthority.trusted, true);
 
-    await page.evaluate(async () => {
-      await window.babelDesktop.startRemoteBridge({ port: 4551 });
-    });
+    const bridgePort = 4600 + Math.floor(Math.random() * 400);
+    await page.evaluate(async (port) => {
+      await window.babelDesktop.startRemoteBridge({ port });
+    }, bridgePort);
     await assertEventually(async () => {
       const info = await page.evaluate(() => window.babelDesktop.getInfo());
       return info.remoteBridge?.sharedSession === true && info.remoteBridge?.state === 'ready';

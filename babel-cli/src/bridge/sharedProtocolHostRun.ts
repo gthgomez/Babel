@@ -173,6 +173,83 @@ export function mapPermissionRequest(
   };
 }
 
+function normalizeRouteToken(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function requestedRoute(options: SharedProtocolHostRunOptions): {
+  provider?: string;
+  model?: string;
+} {
+  const provider =
+    options.provider ?? process.env['BABEL_DESKTOP_PROVIDER'] ?? process.env['BABEL_PROVIDER'];
+  const model =
+    options.model ??
+    process.env['BABEL_DESKTOP_MODEL_ROUTE'] ??
+    process.env['BABEL_MODEL'];
+  return {
+    ...(typeof provider === 'string' && provider ? { provider } : {}),
+    ...(typeof model === 'string' && model ? { model } : {}),
+  };
+}
+
+export function assertResumeRouteCompatible(
+  saved: { provider?: string; model?: string },
+  requested: { provider?: string; model?: string },
+): void {
+  if (requested.provider !== undefined && saved.provider !== undefined) {
+    if (normalizeRouteToken(requested.provider) !== normalizeRouteToken(saved.provider)) {
+      throw new Error(
+        'The requested provider does not match this conversation. Start a new conversation to change provider.',
+      );
+    }
+  }
+  if (requested.model !== undefined && saved.model !== undefined) {
+    if (normalizeRouteToken(requested.model) !== normalizeRouteToken(saved.model)) {
+      throw new Error(
+        'The requested model does not match this conversation. Start a new conversation to change model.',
+      );
+    }
+  }
+}
+
+function writeControlRejected(write: NdjsonWriter, operation: string, error: string): void {
+  write({ type: 'control.rejected', operation, error });
+}
+
+async function lookupAuthoritativePendingApproval(
+  client: HttpProtocolClient,
+  threadId: string,
+  runId: string,
+  turnId?: string,
+): Promise<Record<string, unknown> | null> {
+  const result = await client.call<
+    'approval.lookup',
+    { thread_id: string; turn_id?: string },
+    { pending: Array<Record<string, unknown>> }
+  >('approval.lookup', {
+    thread_id: threadId,
+    ...(turnId ? { turn_id: turnId } : {}),
+  });
+  const record = result.pending.find((item) => item.state === 'pending');
+  if (!record) return null;
+  const mapped = mapPermissionRequest(
+    {
+      approval_id: String(record.approval_id ?? ''),
+      thread_id: String(record.thread_id ?? ''),
+      turn_id: String(record.turn_id ?? ''),
+      operation_digest: String(record.operation_digest ?? ''),
+      expires_at: String(record.expires_at ?? ''),
+      ...(typeof record.command === 'string' ? { command: record.command } : {}),
+      ...(typeof record.cwd === 'string' ? { cwd: record.cwd } : {}),
+      ...(typeof record.reason === 'string' ? { reason: record.reason } : {}),
+    },
+    runId,
+  );
+  const item = mapped?.item as { approval?: Record<string, unknown> } | undefined;
+  return item?.approval ?? null;
+}
+
 /** Run one shared-host chat turn to completion. Returns process exit code. */
 export async function executeSharedProtocolHostRun(
   options: SharedProtocolHostRunOptions,
@@ -218,18 +295,17 @@ export async function executeSharedProtocolHostRun(
   }
 
   try {
-    if (
-      threadId &&
-      (options.model !== undefined || options.provider !== undefined)
-    ) {
-      throw new Error(
-        'Resumed shared threads keep their existing route; change the model in Settings only when starting a new conversation.',
-      );
-    }
-
     const transportSessionId = await client.createTransportSession(options.projectRoot);
     if (threadId) {
-      await client.call('thread.resume', { thread_id: threadId, session_id: transportSessionId });
+      const resumed = await client.call<
+        'thread.resume',
+        { thread_id: string; session_id: string },
+        { thread_id: string; provider?: string; model?: string }
+      >('thread.resume', { thread_id: threadId, session_id: transportSessionId });
+      const savedRoute: { provider?: string; model?: string } = {};
+      if (resumed.provider) savedRoute.provider = resumed.provider;
+      if (resumed.model) savedRoute.model = resumed.model;
+      assertResumeRouteCompatible(savedRoute, requestedRoute(options));
     } else {
       const provider =
         options.provider ?? process.env['BABEL_DESKTOP_PROVIDER'] ?? process.env['BABEL_PROVIDER'];
@@ -277,10 +353,11 @@ export async function executeSharedProtocolHostRun(
                   : '';
               const expected = loadHostEmergencyBearerToken();
               if (!expected || token !== expected) {
-                write({
-                  type: 'run_error',
-                  error: 'Host emergency stop was rejected (invalid admin token)',
-                });
+                writeControlRejected(
+                  write,
+                  'emergency_admin_stop',
+                  'Host emergency stop was rejected (invalid admin token)',
+                );
                 return;
               }
               try {
@@ -308,13 +385,55 @@ export async function executeSharedProtocolHostRun(
                 await cancelTurnDesktop(client, activeThreadId, controlEpoch);
                 write({ type: 'cancelled' });
               } catch (error) {
-                write({
-                  type: 'run_error',
-                  error:
-                    error instanceof Error
-                      ? error.message
-                      : 'Cancel was rejected by the shared protocol host',
-                });
+                writeControlRejected(
+                  write,
+                  'cancel',
+                  error instanceof Error
+                    ? error.message
+                    : 'Cancel was rejected by the shared protocol host',
+                );
+              }
+              return;
+            }
+            if (msg.decision === 'reconcile_pending_approval') {
+              try {
+                const turnHint =
+                  pendingApproval && typeof pendingApproval.turn_id === 'string'
+                    ? pendingApproval.turn_id
+                    : undefined;
+                const authoritative = await lookupAuthoritativePendingApproval(
+                  client,
+                  activeThreadId,
+                  options.runId,
+                  turnHint,
+                );
+                if (!authoritative) {
+                  writeControlRejected(
+                    write,
+                    'reconcile_pending_approval',
+                    'No pending approval remains on the shared protocol host',
+                  );
+                  return;
+                }
+                pendingApproval = authoritative;
+                const remapped = mapPermissionRequest(
+                  {
+                    approval_id: String(authoritative.request_id),
+                    thread_id: String(authoritative.thread_id),
+                    turn_id: String(authoritative.turn_id),
+                    operation_digest: String(authoritative.operation_digest),
+                    expires_at: String(authoritative.expires_at),
+                  },
+                  options.runId,
+                );
+                if (remapped) write(remapped);
+                write({ type: 'approval.reconciled', item: { approval: authoritative } });
+              } catch (error) {
+                writeControlRejected(
+                  write,
+                  'reconcile_pending_approval',
+                  error instanceof Error ? error.message : 'Approval reconciliation failed',
+                );
               }
               return;
             }
@@ -328,10 +447,11 @@ export async function executeSharedProtocolHostRun(
                 binding.operation_digest === expected.operation_digest &&
                 binding.run_id === expected.run_id;
               if (!matches) {
-                write({
-                  type: 'run_error',
-                  error: 'Approval decision did not match the pending request',
-                });
+                writeControlRejected(
+                  write,
+                  'approval',
+                  'Approval decision did not match the pending request',
+                );
                 return;
               }
               try {
@@ -345,13 +465,13 @@ export async function executeSharedProtocolHostRun(
                 });
                 pendingApproval = null;
               } catch (error) {
-                write({
-                  type: 'run_error',
-                  error:
-                    error instanceof Error
-                      ? error.message
-                      : 'Approval decision was rejected by the shared protocol host',
-                });
+                writeControlRejected(
+                  write,
+                  'approval',
+                  error instanceof Error
+                    ? error.message
+                    : 'Approval decision was rejected by the shared protocol host',
+                );
               }
             }
           } catch {
@@ -367,69 +487,75 @@ export async function executeSharedProtocolHostRun(
         write({ type: 'cancelled' });
         return 0;
       } catch (error) {
-        write({
-          type: 'run_error',
-          error: error instanceof Error ? error.message : 'Cancel was rejected',
-        });
-        return 1;
+        writeControlRejected(
+          write,
+          'cancel',
+          error instanceof Error ? error.message : 'Cancel was rejected',
+        );
+        return 0;
       }
     }
 
-    const ticketRes = await (options.fetchImpl ?? fetch)(`${baseUrl}/ws/ticket`, {
-      method: 'POST',
-      headers: { ...headers, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ session_id: transportSessionId, thread_id: threadId }),
-    });
-    const ticketBody = (await ticketRes.json()) as { ticket?: string };
-    if (!ticketRes.ok || !ticketBody.ticket) {
-      throw new Error('Failed to mint WebSocket ticket');
-    }
+    const openTurnSocket = async (): Promise<WebSocket> => {
+      const ticket = await (options.fetchImpl ?? fetch)(`${baseUrl}/ws/ticket`, {
+        method: 'POST',
+        headers: { ...headers, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: transportSessionId, thread_id: threadId }),
+      });
+      const ticketBody = (await ticket.json()) as { ticket?: string };
+      if (!ticket.ok || !ticketBody.ticket) {
+        throw new Error('Failed to mint WebSocket ticket');
+      }
+      const socket = new WebSocketCtor(
+        `ws://127.0.0.1:${options.port}/ws?sessionId=${encodeURIComponent(transportSessionId)}&ticket=${encodeURIComponent(ticketBody.ticket)}`,
+      );
+      await new Promise<void>((resolve, reject) => {
+        socket.addEventListener('open', () => resolve());
+        socket.addEventListener('error', () => reject(new Error('WebSocket connection failed')));
+      });
+      return socket;
+    };
 
-    ws = new WebSocketCtor(
-      `ws://127.0.0.1:${options.port}/ws?sessionId=${encodeURIComponent(transportSessionId)}&ticket=${encodeURIComponent(ticketBody.ticket)}`,
-    );
-    await new Promise<void>((resolve, reject) => {
-      ws!.addEventListener('open', () => resolve());
-      ws!.addEventListener('error', () => reject(new Error('WebSocket connection failed')));
-    });
-
-    const turnDone = new Promise<void>((resolve, reject) => {
-      const onMessage = (event: MessageEvent) => {
-        try {
-          const message = JSON.parse(String(event.data)) as Record<string, unknown>;
-          if (message.method === 'turn.event') {
-            const params = message.params as Record<string, unknown> | undefined;
-            const ev = params?.event as Record<string, unknown> | undefined;
-            if (ev) {
-              const mapped = mapTurnEventToStream(ev, threadId);
-              if (mapped) write(mapped);
-              if (['done', 'failed', 'cancelled'].includes(String(ev.type))) {
-                turnSettled = true;
-                resolve();
+    const attachTurnObserver = (socket: WebSocket): Promise<void> =>
+      new Promise<void>((resolve) => {
+        const onMessage = (event: MessageEvent) => {
+          try {
+            const message = JSON.parse(String(event.data)) as Record<string, unknown>;
+            if (message.method === 'turn.event') {
+              const params = message.params as Record<string, unknown> | undefined;
+              const ev = params?.event as Record<string, unknown> | undefined;
+              if (ev) {
+                const mapped = mapTurnEventToStream(ev, threadId);
+                if (mapped) write(mapped);
+                if (['done', 'failed', 'cancelled'].includes(String(ev.type))) {
+                  turnSettled = true;
+                  resolve();
+                }
               }
+            } else if (message.method === 'permission.request') {
+              const params = message.params as Record<string, unknown>;
+              const mapped = mapPermissionRequest(params, options.runId);
+              if (mapped?.item && typeof mapped.item === 'object') {
+                const item = mapped.item as { approval?: Record<string, unknown> };
+                if (item.approval) pendingApproval = item.approval;
+              }
+              if (mapped) write(mapped);
             }
-          } else if (message.method === 'permission.request') {
-            const params = message.params as Record<string, unknown>;
-            const mapped = mapPermissionRequest(params, options.runId);
-            if (mapped?.item && typeof mapped.item === 'object') {
-              const item = mapped.item as { approval?: Record<string, unknown> };
-              if (item.approval) pendingApproval = item.approval;
-            }
-            if (mapped) write(mapped);
+          } catch {
+            /* ignore malformed frames */
           }
-        } catch {
-          /* ignore malformed frames */
-        }
-      };
-      const onClose = () => {
-        if (!turnSettled) {
-          transportClosedUnexpectedly = true;
-          reject(new Error('Transport closed before turn settled'));
-        }
-      };
-      ws!.addEventListener('message', onMessage as EventListener);
-      ws!.addEventListener('close', onClose as EventListener);
-    });
+        };
+        const onClose = () => {
+          if (!turnSettled) {
+            transportClosedUnexpectedly = true;
+            resolve();
+          }
+        };
+        socket.addEventListener('message', onMessage as EventListener);
+        socket.addEventListener('close', onClose as EventListener);
+      });
+
+    ws = await openTurnSocket();
 
     if (abort()) {
       try {
@@ -437,14 +563,16 @@ export async function executeSharedProtocolHostRun(
         write({ type: 'cancelled' });
         return 0;
       } catch (error) {
-        write({
-          type: 'run_error',
-          error: error instanceof Error ? error.message : 'Cancel was rejected',
-        });
-        return 1;
+        writeControlRejected(
+          write,
+          'cancel',
+          error instanceof Error ? error.message : 'Cancel was rejected',
+        );
+        return 0;
       }
     }
 
+    let turnDone = attachTurnObserver(ws);
     await client.call('turn.submit', {
       thread_id: threadId,
       message: options.task,
@@ -453,18 +581,61 @@ export async function executeSharedProtocolHostRun(
     });
 
     await turnDone;
-    if (transportClosedUnexpectedly) {
-      if (pendingApproval) {
+
+    while (transportClosedUnexpectedly && !turnSettled) {
+      const turnHint =
+        pendingApproval && typeof pendingApproval.turn_id === 'string'
+          ? pendingApproval.turn_id
+          : undefined;
+      const authoritative = await lookupAuthoritativePendingApproval(
+        client,
+        threadId,
+        options.runId,
+        turnHint,
+      );
+      if (authoritative) {
+        pendingApproval = authoritative;
         write({
           type: 'approval.pending',
-          message: 'Approval is still pending after transport loss; reconnect before deciding.',
-          item: { approval: pendingApproval },
+          message:
+            'Approval is still pending after transport loss; reconcile before deciding.',
+          item: { approval: authoritative },
+          authoritative: true,
         });
+        const remapped = mapPermissionRequest(
+          {
+            approval_id: String(authoritative.request_id),
+            thread_id: String(authoritative.thread_id),
+            turn_id: String(authoritative.turn_id),
+            operation_digest: String(authoritative.operation_digest),
+            expires_at: String(authoritative.expires_at),
+          },
+          options.runId,
+        );
+        if (remapped) write(remapped);
       }
-      write({ type: 'run_error', error: 'Shared protocol transport lost before turn settled' });
-      return 1;
+      write({
+        type: 'transport.disconnected',
+        recoverable: Boolean(authoritative),
+        message:
+          'Shared protocol transport lost; observation paused without resubmitting the task.',
+      });
+      if (!authoritative) {
+        write({ type: 'run_error', error: 'Shared protocol transport lost before turn settled' });
+        return 1;
+      }
+      transportClosedUnexpectedly = false;
+      try {
+        ws?.close();
+      } catch {
+        /* ignore */
+      }
+      ws = await openTurnSocket();
+      turnDone = attachTurnObserver(ws);
+      await turnDone;
     }
-    return 0;
+
+    return turnSettled ? 0 : 1;
   } catch (err) {
     if (!turnSettled) {
       write({

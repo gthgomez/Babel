@@ -95,6 +95,7 @@ test('sample turn.event notification has no id field', () => {
 test('catalog method names match expected set', () => {
   assert.deepEqual([...BABEL_PROTOCOL_METHODS].sort(), [
     'approval.decide',
+    'approval.lookup',
     'history.lookup',
     'thread.create',
     'thread.resume',

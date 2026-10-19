@@ -172,6 +172,12 @@ jobs:
       - name: Install desktop dependencies
         run: npm ci
         working-directory: babel-desktop
+      - name: Install Electron runtime for desktop IPC regressions
+        run: node node_modules/electron/install.js
+        working-directory: babel-desktop
+      - name: Build babel-cli for shared-protocol desktop tests
+        run: npm ci --ignore-scripts && npm run build
+        working-directory: babel-cli
       - name: Install Playwright Chromium for packaged driver contract
         run: npx playwright install --with-deps chromium
         working-directory: babel-desktop

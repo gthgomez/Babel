@@ -49,6 +49,7 @@ import type {
   TurnEventParams,
   TurnSubmitResult,
   ApprovalDecideResult,
+  ApprovalLookupResult,
   WorkspaceChangesResult,
   VerificationLookupResult,
 } from '../types.js';
@@ -399,7 +400,34 @@ export async function handleProtocolRequest(
           thread_id: threadId,
           turn_count: report.turnCount,
           restore: report,
+          provider: descriptor.provider,
+          model: descriptor.model,
         };
+        return { jsonrpc: '2.0', id, result };
+      }
+      case 'approval.lookup': {
+        const params = request.params;
+        if (!params?.thread_id) {
+          return errorResponse(id, BabelProtocolErrorCode.INVALID_PARAMS, 'thread_id is required');
+        }
+        const pending = state.approvalBroker
+          .listPending(params.thread_id)
+          .filter((record) => record.state === 'pending')
+          .filter((record) =>
+            params.turn_id === undefined ? true : record.turn_id === params.turn_id,
+          )
+          .map((record) => ({
+            approval_id: record.approval_id,
+            thread_id: record.thread_id,
+            turn_id: record.turn_id,
+            operation_digest: record.digest,
+            expires_at: new Date(record.expires_at).toISOString(),
+            state: record.state,
+            cwd: record.operation.canonical_cwd,
+            reason: 'Remote consequential action requires ALLOW_ONCE or DENY',
+            ...(record.operation.command ? { command: record.operation.command } : {}),
+          }));
+        const result: ApprovalLookupResult = { pending };
         return { jsonrpc: '2.0', id, result };
       }
       case 'turn.submit': {
