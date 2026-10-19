@@ -107,7 +107,12 @@ export function assertBranchPriorGateComplete(root, remote = 'origin', deps = {}
   const runs = []
   for (let page = 1; page <= 5; page += 1) {
     const payload = ghGet(repo, { branch, per_page: '100', page: String(page) })
-    const batch = Array.isArray(payload.workflow_runs) ? payload.workflow_runs : []
+    if (!payload || typeof payload !== 'object' || !Array.isArray(payload.workflow_runs)) {
+      throw new Error(
+        '[pre-push] branch gate preflight: malformed Public Release Gate workflow run list from GitHub',
+      )
+    }
+    const batch = payload.workflow_runs
     runs.push(...batch)
     if (batch.length < 100) break
     const hasHead = batch.some((run) => run.head_sha === publishedHeadSha)

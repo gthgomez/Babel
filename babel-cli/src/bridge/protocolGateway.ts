@@ -20,7 +20,7 @@ import { originAllowed as originAllowedStructured } from './originPolicy.js';
 import { ThreadOwnershipRegistry, type ThreadOwnershipError } from './threadOwnership.js';
 import { loadSessionDescriptor } from '../services/threadStore/sessionDescriptor.js';
 import { threadStoreExists } from '../services/threadStore/threadStore.js';
-import { buildRemoteCatalog, findCanonicalCommandCodeNativeOwner } from './remoteCatalog.js';
+import { buildRemoteCatalog, findCanonicalCommandCodeNativeOwnerForProject } from './remoteCatalog.js';
 import { buildRemoteHarnessCapabilities } from './harnessAdapterRegistry.js';
 import type { CommandCodeAcpRuntimeRegistry } from './commandCodeAcpRuntime.js';
 import { ControlLeaseRegistry } from './controlLease.js';
@@ -347,7 +347,11 @@ export class ProtocolGateway {
         },
       };
     }
-    const ownerForNative = findCanonicalCommandCodeNativeOwner(this.host, nativeId);
+    const ownerForNative = await findCanonicalCommandCodeNativeOwnerForProject(
+      this.host,
+      canonicalRoot,
+      nativeId,
+    );
     if (ownerForNative && ownerForNative !== threadId) {
       return {
         jsonrpc: '2.0',

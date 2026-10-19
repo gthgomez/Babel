@@ -112,6 +112,8 @@ export function applyAcpReplayUpdate(
   }
 
   if (kind === 'tool_call' || kind === 'tool_call_update') {
+    delete accumulator.openAssistantMessageKey;
+    delete accumulator.openUserMessageKey;
     const toolCallId = String(body.toolCallId ?? body.title ?? `tool-${accumulator.chunkSeq++}`);
     const cellId = stableReplayCellId(nativeSessionId, `tool:${toolCallId}`);
     const existing = accumulator.cells.get(cellId);

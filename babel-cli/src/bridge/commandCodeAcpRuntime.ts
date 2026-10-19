@@ -42,6 +42,10 @@ export interface CommandCodeRuntimeSession {
   /** Last cumulative session cost observed from ACP usage updates (USD when known). */
   sessionCumulativeCostUSD?: number;
   sessionCostCurrencyKnown?: boolean;
+  /** True after session/load completed for a saved native session. */
+  restoredFromNativeLoad?: boolean;
+  /** True once ensureSession finished (load or session/new). */
+  initializationComplete?: boolean;
 }
 
 interface ProjectRuntime {
@@ -51,6 +55,7 @@ interface ProjectRuntime {
   runtimeInstanceId: number;
   sessions: Map<string, CommandCodeRuntimeSession>;
   nativeOwners: Map<string, string>;
+  sessionInit: Map<string, Promise<CommandCodeRuntimeSession>>;
   starting: Promise<ProjectRuntime> | null;
 }
 
@@ -168,6 +173,7 @@ export class CommandCodeAcpRuntimeRegistry {
       runtimeInstanceId,
       sessions: new Map(),
       nativeOwners: new Map(),
+      sessionInit: new Map(),
       starting: null,
     };
     return runtime;
@@ -258,8 +264,26 @@ export class CommandCodeAcpRuntimeRegistry {
       throw new Error('COMMAND_CODE_SESSION_ADAPTER_MISMATCH');
     }
     const runtime = await this.projectRuntime(descriptor.projectRoot);
+    const ready = runtime.sessions.get(descriptor.threadId);
+    if (ready?.initializationComplete) return ready;
+
+    const inflight = runtime.sessionInit.get(descriptor.threadId);
+    if (inflight) return inflight;
+
+    const work = this.ensureSessionInner(runtime, descriptor);
+    runtime.sessionInit.set(descriptor.threadId, work);
+    void work.finally(() => {
+      runtime.sessionInit.delete(descriptor.threadId);
+    });
+    return work;
+  }
+
+  private async ensureSessionInner(
+    runtime: ProjectRuntime,
+    descriptor: SessionDescriptor,
+  ): Promise<CommandCodeRuntimeSession> {
     const existing = runtime.sessions.get(descriptor.threadId);
-    if (existing) return existing;
+    if (existing?.initializationComplete) return existing;
 
     const codec = runtime.transport.negotiatedCodec();
     if (!codec) throw new Error('COMMAND_CODE_ACP_NOT_NEGOTIATED');
@@ -298,6 +322,8 @@ export class CommandCodeAcpRuntimeRegistry {
           mcpServers,
         });
         sessionRecord.replayCapture = false;
+        sessionRecord.restoredFromNativeLoad = true;
+        sessionRecord.initializationComplete = true;
         if (sessionRecord.pendingCancel && sessionRecord.nativeSessionId) {
           runtime.transport.notify('session/cancel', { sessionId: sessionRecord.nativeSessionId });
         }
@@ -315,6 +341,7 @@ export class CommandCodeAcpRuntimeRegistry {
       this.claimNativeSession(runtime, sessionId, descriptor.threadId);
       descriptor.harness_native_session_id = sessionId;
       descriptor.harness_process_generation = runtime.runtimeInstanceId;
+      sessionRecord.initializationComplete = true;
       return sessionRecord;
     } catch (error) {
       runtime.sessions.delete(descriptor.threadId);
@@ -359,6 +386,9 @@ export class CommandCodeAcpRuntimeRegistry {
       const next = result.nextCursor;
       cursor = typeof next === 'string' && next.length > 0 ? next : undefined;
       if (!cursor) break;
+    }
+    if (cursor) {
+      throw new Error('COMMAND_CODE_SESSION_LIST_INCOMPLETE');
     }
     return collected;
   }

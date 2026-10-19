@@ -60,18 +60,23 @@ async function handleSessionNew(id, params) {
 
 function handleSessionLoad(id, params) {
   const sessionId = String(params.sessionId ?? '');
-  if (!sessions.has(sessionId)) {
-    sessions.set(sessionId, { cwd: params.cwd, messages: [], permissionDone: false });
-  }
-  sessionUpdate(sessionId, 'user_message_chunk', {
-    messageId: 'hist-user-1',
-    content: { type: 'text', text: 'fixture:user-history' },
-  });
-  sessionUpdate(sessionId, 'agent_message_chunk', {
-    messageId: 'hist-assistant-1',
-    content: { type: 'text', text: 'fixture:history-replay' },
-  });
-  write({ jsonrpc: '2.0', id, result: { sessionId } });
+  const delayMs = Number(process.env.BABEL_COMMAND_CODE_FIXTURE_LOAD_DELAY_MS ?? 0);
+  const finish = () => {
+    if (!sessions.has(sessionId)) {
+      sessions.set(sessionId, { cwd: params.cwd, messages: [], permissionDone: false });
+    }
+    sessionUpdate(sessionId, 'user_message_chunk', {
+      messageId: 'hist-user-1',
+      content: { type: 'text', text: 'fixture:user-history' },
+    });
+    sessionUpdate(sessionId, 'agent_message_chunk', {
+      messageId: 'hist-assistant-1',
+      content: { type: 'text', text: 'fixture:history-replay' },
+    });
+    write({ jsonrpc: '2.0', id, result: { sessionId } });
+  };
+  if (delayMs > 0) setTimeout(finish, delayMs);
+  else finish();
 }
 
 function handleSessionList(id, params) {

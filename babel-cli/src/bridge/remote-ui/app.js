@@ -440,6 +440,10 @@
       if (host === 'UNKNOWN' || host === 'OFFLINE') host = transition('host', host, 'start');
       renderChrome();
       await refreshAuthSession();
+      const health = await fetch('/health');
+      const healthJson = await health.json();
+      if (!healthJson.ok) throw new Error('health');
+      if (host === 'RECONNECTING' || host === 'CONNECTING') host = transition('host', host, 'open');
       await observeThread();
       if (memory.threadId) {
         thread = transition('thread', thread, 'recover');
@@ -495,7 +499,17 @@
           if (result.classified.kind !== 'success') throw new Error('thread.create rejected');
           memory.threadId = result.payload.result && result.payload.result.thread_id;
         }
-        await syncControlLeaseFromHost();
+        if (memory.authKind === 'paired') {
+          const acquired = await rpc('control.acquire', { thread_id: memory.threadId, force: false });
+          if (acquired.classified.kind !== 'success' || !acquired.payload.result) {
+            throw new Error('control.acquire rejected before open');
+          }
+          memory.controlEpoch = acquired.payload.result.epoch;
+          memory.controlExpiresAtMs = acquired.payload.result.expires_at_ms || null;
+          startLeaseRenewal();
+        } else {
+          await syncControlLeaseFromHost();
+        }
         const opened = await rpc('harness.command_code.open', {
           thread_id: memory.threadId,
           project_root: rootEl.value,
@@ -509,7 +523,6 @@
         if (result.classified.kind !== 'success') throw new Error('thread.create rejected');
         memory.threadId = result.payload.result && result.payload.result.thread_id;
       }
-      clearControlLease();
       threadInput.value = memory.threadId || '';
       thread = transition('thread', thread, 'ready');
       await observeThread();
@@ -706,6 +719,7 @@
         if (patch && patch.memory) Object.assign(memory, patch.memory);
       },
       reconnect: reconnect,
+      observeThread: observeThread,
       reconcileAuthoritativeTaskState: reconcileAuthoritativeTaskState,
     };
     renderChrome();

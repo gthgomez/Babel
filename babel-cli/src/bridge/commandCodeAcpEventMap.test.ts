@@ -56,6 +56,38 @@ describe('commandCodeAcpEventMap', () => {
     assert.equal(state.lastCumulativeCostUSD, 0.15);
   });
 
+  it('treats USD cumulative usage as incomplete when session baseline is unknown', () => {
+    const state: AcpTurnMapState = {
+      textBuffer: [],
+      terminalEmitted: false,
+      promptAdmitted: true,
+    };
+    mapCommandCodeAcpUpdate(
+      { sessionUpdate: 'usage_update', cost: { amount: 10.05, currency: 'USD' } },
+      state,
+      1,
+    );
+    assert.equal(state.usage?.costComplete, false);
+    assert.equal(state.usage?.unknownChargeCount, 1);
+  });
+
+  it('treats EUR cumulative usage as unknown USD cost', () => {
+    const state: AcpTurnMapState = {
+      textBuffer: [],
+      terminalEmitted: false,
+      promptAdmitted: true,
+      sessionCostBaselineUSD: 0,
+    };
+    mapCommandCodeAcpUpdate(
+      { sessionUpdate: 'usage_update', cost: { amount: 0.15, currency: 'EUR' } },
+      state,
+      1,
+    );
+    assert.equal(state.usage?.costComplete, false);
+    assert.equal(state.usage?.unknownChargeCount, 1);
+    assert.equal(state.lastCumulativeCostUSD, undefined);
+  });
+
   it('maps failed tool_call_update to tool_failed', () => {
     const state = { textBuffer: [], terminalEmitted: false, promptAdmitted: true };
     const events = mapCommandCodeAcpUpdate(

@@ -61,4 +61,32 @@ describe('commandCodeAcpReplay', () => {
     assert.equal(cells.length, 1);
     assert.equal((cells[0]?.payload as { message: string }).message, 'hello world');
   });
+
+  it('does not merge assistant prose across an intervening tool call', () => {
+    const acc = createCommandCodeReplayAccumulator();
+    const native = 'sess_native_3';
+    applyAcpReplayUpdate(
+      acc,
+      { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'before ' } },
+      'thread-3',
+      native,
+    );
+    applyAcpReplayUpdate(
+      acc,
+      { sessionUpdate: 'tool_call', toolCallId: 'tool-1', title: 'run' },
+      'thread-3',
+      native,
+    );
+    applyAcpReplayUpdate(
+      acc,
+      { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'after' } },
+      'thread-3',
+      native,
+    );
+    const cells = finalizeReplayCells(acc);
+    const assistant = cells.filter((cell) => cell.kind === 'assistant_message');
+    assert.equal(assistant.length, 2);
+    assert.equal((assistant[0]?.payload as { message: string }).message, 'before ');
+    assert.equal((assistant[1]?.payload as { message: string }).message, 'after');
+  });
 });

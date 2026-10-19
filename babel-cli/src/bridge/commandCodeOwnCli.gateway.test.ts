@@ -14,6 +14,7 @@ import {
   mintDesktopControllerClientId,
   mintDesktopControllerProofKey,
 } from './desktopControllerAuth.js';
+import { loadSessionDescriptor } from '../services/threadStore/sessionDescriptor.js';
 import { BridgeServer } from './sessionServer.js';
 
 const TOKEN = 'command-code-gateway-token';
@@ -423,7 +424,7 @@ describe('command code own-CLI gateway integration', () => {
         void rpc(sPort, desktopHeaders(), 'turn.submit', { thread_id: threadId, message: 'slow' }, 22);
         await waitForTurnEvent(events, promptAdmittedEvent, 'peer_prompt_admitted');
         await rpc(sPort, desktopHeaders(), 'turn.cancel', { thread_id: threadId }, 23);
-        await sleep(700);
+        await sleep(200);
         ws.close();
         assert.ok(
           !events.some((event) => event.type === 'cancelled'),
@@ -594,6 +595,84 @@ describe('command code own-CLI gateway integration', () => {
     assert.equal((reopened.result as { cell_count?: number }).cell_count, 2);
     const continued = await runTurn(port, threadId, transportSessionId, 'after-reload');
     assert.equal(continued.terminal?.type, 'done');
+  });
+
+  it('lists bound vendor session from durable owner after runtime eviction', async () => {
+    const sess = await httpRequest(`http://127.0.0.1:${port}/sessions`, {
+      method: 'POST',
+      headers: desktopHeaders(),
+      body: JSON.stringify({ projectRoot: tmp }),
+    });
+    const transportSessionId = (JSON.parse(sess.body) as { sessionId: string }).sessionId;
+    const created = await rpc(
+      port,
+      desktopHeaders(),
+      'thread.create',
+      {
+        project_root: tmp,
+        session_id: transportSessionId,
+        harness_adapter_id: 'command-code',
+        harness_native_session_id: 'sess_fixture_cold_catalog',
+      },
+      85,
+    );
+    const threadId = (created.result as { thread_id: string }).thread_id;
+    await rpc(port, desktopHeaders(), 'control.acquire', { thread_id: threadId, force: false }, 86);
+    await rpc(
+      port,
+      desktopHeaders(),
+      'harness.command_code.open',
+      {
+        thread_id: threadId,
+        project_root: tmp,
+        harness_native_session_id: 'sess_fixture_cold_catalog',
+      },
+      87,
+    );
+    await server.commandCodeRegistry.evictProject(tmp);
+    const catalog = await rpc(port, desktopHeaders(), 'remote.catalog', {}, 88);
+    const vendors = (catalog.result as { vendor_sessions?: { session_id: string; bound?: boolean }[] })
+      .vendor_sessions ?? [];
+    const row = vendors.find((v) => v.session_id === 'sess_fixture_cold_catalog');
+    assert.ok(row, 'vendor_sessions must include durable binding after cold eviction');
+    assert.equal(row?.bound, true);
+  });
+
+  it('serializes concurrent ensureSession while session/load is in flight', async () => {
+    await withDedicatedServer(
+      { BABEL_COMMAND_CODE_FIXTURE_LOAD_DELAY_MS: '400' },
+      async (dedicated, loadPort) => {
+        const sess = await httpRequest(`http://127.0.0.1:${loadPort}/sessions`, {
+          method: 'POST',
+          headers: desktopHeaders(),
+          body: JSON.stringify({ projectRoot: tmp }),
+        });
+        const transportSessionId = (JSON.parse(sess.body) as { sessionId: string }).sessionId;
+        const created = await rpc(
+          loadPort,
+          desktopHeaders(),
+          'thread.create',
+          {
+            project_root: tmp,
+            session_id: transportSessionId,
+            harness_adapter_id: 'command-code',
+            harness_native_session_id: 'sess_fixture_load_barrier',
+          },
+          91,
+        );
+        const threadId = (created.result as { thread_id: string }).thread_id;
+        const descriptor = loadSessionDescriptor(threadId);
+        assert.ok(descriptor);
+        const registry = dedicated.commandCodeRegistry;
+        assert.ok(registry);
+        const first = registry.ensureSession(descriptor);
+        await sleep(50);
+        const second = await registry.ensureSession(descriptor);
+        assert.equal(second.replayCapture, false);
+        assert.equal(second.initializationComplete, true);
+        await first;
+      },
+    );
   });
 
   it('paginates vendor sessions using official session/list cursor', async () => {

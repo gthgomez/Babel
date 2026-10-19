@@ -74,7 +74,7 @@ async function rpc(
   return JSON.parse(res.body) as Record<string, unknown>;
 }
 
-describe('Command Code PWA vendor open (browser e2e)', () => {
+describe('Command Code PWA cold restart journey (browser e2e)', () => {
   let server: BridgeServer;
   let tmp: string;
   let prevRuns: string | undefined;
@@ -123,7 +123,7 @@ describe('Command Code PWA vendor open (browser e2e)', () => {
     rmSync(tmp, { recursive: true, force: true });
   });
 
-  it('picker → create/open shows replayed history in DOM before continuing', async () => {
+  it('catalog picker → open/history → reconnect → immediate continue on same native session', async () => {
     const nativeId = 'sess_fixture_preload';
     const sess = await httpRequest(`http://127.0.0.1:${PORT}/sessions`, {
       method: 'POST',
@@ -144,20 +144,13 @@ describe('Command Code PWA vendor open (browser e2e)', () => {
     );
     const seedThread = (created.result as { thread_id: string }).thread_id;
     await rpc('control.acquire', { thread_id: seedThread, force: false }, 2, headers());
-    const opened = await rpc(
+    await rpc(
       'harness.command_code.open',
-      {
-        thread_id: seedThread,
-        project_root: tmp,
-        harness_native_session_id: nativeId,
-      },
+      { thread_id: seedThread, project_root: tmp, harness_native_session_id: nativeId },
       3,
       headers(),
     );
-    assert.ok(!opened.error, JSON.stringify(opened.error));
-    const history = await rpc('history.lookup', { thread_id: seedThread }, 4, headers());
-    const cells = (history.result as { cells?: unknown[] }).cells ?? [];
-    assert.ok(cells.length >= 2, 'RPC precheck must load replay cells before DOM leg');
+    await server.commandCodeRegistry.evictProject(tmp);
 
     const { chromium } = await import('playwright');
     const browser = await chromium.launch({ headless: true });
@@ -180,20 +173,21 @@ describe('Command Code PWA vendor open (browser e2e)', () => {
           transportSessionId: string;
         }) => {
           const host = globalThis as typeof globalThis & {
-            runCommandCodePwaVendorOpenDomLeg: (input: {
+            runCommandCodePwaColdRestartJourney: (input: {
               token: string;
               root: string;
               nativeId: string;
               seedThread: string;
               transportSessionId: string;
             }) => Promise<{
-              threadId: string;
-              historyDomHasReplay: boolean;
-              thread: string;
+              pickerFromCatalog: boolean;
               resumedSameThread: boolean;
+              continuationSeen: boolean;
+              staleLeak: boolean;
+              historyBeforePrompt: string;
             }>;
           };
-          return host.runCommandCodePwaVendorOpenDomLeg(input);
+          return host.runCommandCodePwaColdRestartJourney(input);
         },
         {
           token: TOKEN,
@@ -203,9 +197,11 @@ describe('Command Code PWA vendor open (browser e2e)', () => {
           transportSessionId,
         },
       );
-      assert.ok(result.threadId, 'create thread must bind a thread id');
-      assert.ok(result.historyDomHasReplay, 'transcript must show replayed vendor history before prompt');
-      assert.equal(result.resumedSameThread, true, 'picker must resume canonical thread');
+      assert.equal(result.pickerFromCatalog, true);
+      assert.ok(result.historyBeforePrompt.includes('fixture:history-replay'));
+      assert.equal(result.resumedSameThread, true);
+      assert.equal(result.continuationSeen, true);
+      assert.equal(result.staleLeak, false);
     } finally {
       await browser.close();
     }

@@ -155,13 +155,17 @@ function mapSessionUpdateBody(
             ? nested.cost.currency
             : undefined;
       const usdKnown = currency === 'USD';
-      state.lastCumulativeCostUSD = amount;
+      if (usdKnown) {
+        state.lastCumulativeCostUSD = amount;
+      }
+      const baselineKnown = state.sessionCostBaselineUSD !== undefined;
       const baseline = state.sessionCostBaselineUSD ?? 0;
-      const delta = usdKnown ? Math.max(0, amount - baseline) : 0;
+      const delta = usdKnown && baselineKnown ? Math.max(0, amount - baseline) : 0;
+      const costComplete = usdKnown && baselineKnown;
       state.usage = {
         totalCostUSD: usdKnown ? delta : 0,
-        costComplete: usdKnown,
-        unknownChargeCount: usdKnown ? 0 : 1,
+        costComplete,
+        unknownChargeCount: costComplete ? 0 : 1,
         totalInputTokens: 0,
         totalOutputTokens: 0,
         totalTokens: 0,
@@ -170,7 +174,7 @@ function mapSessionUpdateBody(
             inputTokens: 0,
             outputTokens: 0,
             costUSD: usdKnown ? delta : 0,
-            unknownChargeCount: usdKnown ? 0 : 1,
+            unknownChargeCount: costComplete ? 0 : 1,
           },
         },
       };

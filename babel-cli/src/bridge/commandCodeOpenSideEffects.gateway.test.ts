@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
 import { request, type IncomingMessage } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -223,5 +223,142 @@ describe('harness.command_code.open side effects', () => {
     );
     assert.ok(denied.error);
     assert.equal(registry.openSavedSessionCalls, before);
+  });
+
+  it('rejects open with project_root mismatch and zero registry calls', async () => {
+    const subA = join(tmp, 'workspace-a');
+    const subB = join(tmp, 'workspace-b');
+    mkdirSync(subA, { recursive: true });
+    mkdirSync(subB, { recursive: true });
+    const sess = await httpRequest(`http://127.0.0.1:${port}/sessions`, {
+      method: 'POST',
+      headers: fullDesktopHeaders(),
+      body: JSON.stringify({ projectRoot: subA }),
+    });
+    const transportSessionId = (JSON.parse(sess.body) as { sessionId: string }).sessionId;
+    const created = await rpc(
+      port,
+      fullDesktopHeaders(),
+      'thread.create',
+      {
+        project_root: subA,
+        session_id: transportSessionId,
+        harness_adapter_id: 'command-code',
+        harness_native_session_id: 'sess_fixture_cross_root',
+      },
+      20,
+    );
+    const threadId = (created.result as { thread_id: string }).thread_id;
+    await rpc(port, fullDesktopHeaders(), 'control.acquire', { thread_id: threadId, force: false }, 21);
+    const before = registry.openSavedSessionCalls;
+    const denied = await rpc(
+      port,
+      fullDesktopHeaders(),
+      'harness.command_code.open',
+      {
+        thread_id: threadId,
+        project_root: subB,
+        harness_native_session_id: 'sess_fixture_cross_root',
+      },
+      22,
+    );
+    assert.ok(denied.error);
+    assert.equal(registry.openSavedSessionCalls, before);
+  });
+
+  it('rejects open while turn is active with zero registry calls', async () => {
+    const sess = await httpRequest(`http://127.0.0.1:${port}/sessions`, {
+      method: 'POST',
+      headers: fullDesktopHeaders(),
+      body: JSON.stringify({ projectRoot: tmp }),
+    });
+    const transportSessionId = (JSON.parse(sess.body) as { sessionId: string }).sessionId;
+    const created = await rpc(
+      port,
+      fullDesktopHeaders(),
+      'thread.create',
+      {
+        project_root: tmp,
+        session_id: transportSessionId,
+        harness_adapter_id: 'command-code',
+        harness_native_session_id: 'sess_fixture_active_turn',
+      },
+      30,
+    );
+    const threadId = (created.result as { thread_id: string }).thread_id;
+    await rpc(port, fullDesktopHeaders(), 'control.acquire', { thread_id: threadId, force: false }, 31);
+    server.protocolGateway.host.activeTurns.set(threadId, {
+      turnId: 1,
+      generation: 1,
+      cancelRequested: false,
+      scheduled: true,
+      settled: false,
+    });
+    const before = registry.openSavedSessionCalls;
+    const denied = await rpc(
+      port,
+      fullDesktopHeaders(),
+      'harness.command_code.open',
+      {
+        thread_id: threadId,
+        project_root: tmp,
+        harness_native_session_id: 'sess_fixture_active_turn',
+      },
+      32,
+    );
+    assert.ok(denied.error);
+    assert.equal(registry.openSavedSessionCalls, before);
+    server.protocolGateway.host.activeTurns.delete(threadId);
+  });
+
+  it('rejects open when native session belongs to another thread with zero registry calls', async () => {
+    const sess = await httpRequest(`http://127.0.0.1:${port}/sessions`, {
+      method: 'POST',
+      headers: fullDesktopHeaders(),
+      body: JSON.stringify({ projectRoot: tmp }),
+    });
+    const transportSessionId = (JSON.parse(sess.body) as { sessionId: string }).sessionId;
+    const owner = await rpc(
+      port,
+      fullDesktopHeaders(),
+      'thread.create',
+      {
+        project_root: tmp,
+        session_id: transportSessionId,
+        harness_adapter_id: 'command-code',
+        harness_native_session_id: 'sess_fixture_owner_a',
+      },
+      40,
+    );
+    const ownerThread = (owner.result as { thread_id: string }).thread_id;
+    const other = await rpc(
+      port,
+      fullDesktopHeaders(),
+      'thread.create',
+      {
+        project_root: tmp,
+        session_id: transportSessionId,
+        harness_adapter_id: 'command-code',
+        harness_native_session_id: 'sess_fixture_owner_b',
+      },
+      41,
+    );
+    const otherThread = (other.result as { thread_id: string }).thread_id;
+    await rpc(port, fullDesktopHeaders(), 'control.acquire', { thread_id: otherThread, force: false }, 42);
+    const before = registry.openSavedSessionCalls;
+    const denied = await rpc(
+      port,
+      fullDesktopHeaders(),
+      'harness.command_code.open',
+      {
+        thread_id: otherThread,
+        project_root: tmp,
+        harness_native_session_id: 'sess_fixture_owner_a',
+      },
+      43,
+    );
+    assert.ok(denied.error);
+    assert.equal(registry.openSavedSessionCalls, before);
+    assert.notEqual(ownerThread, otherThread);
   });
 });

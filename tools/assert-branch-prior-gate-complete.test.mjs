@@ -73,6 +73,24 @@ describe('assert-branch-prior-gate-complete', () => {
     assert.equal(verdict.allow, true)
   })
 
+  it('fails closed when GitHub workflow run payload is malformed', () => {
+    const root = process.cwd()
+    assert.throws(() =>
+      assertBranchPriorGateComplete(root, 'origin', {
+        git: (r, args) => {
+          if (args[0] === 'symbolic-ref') return 'cursor/test-branch'
+          if (args[0] === 'fetch') return ''
+          if (args[0] === 'rev-parse' && args[1] === 'origin/cursor/test-branch') {
+            return 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef'
+          }
+          if (args[0] === 'remote') return 'git@github.com:gthgomez/Babel.git'
+          throw new Error('unexpected git ' + args.join(' '))
+        },
+        ghGet: () => ({}),
+      }),
+    )
+  })
+
   it('fails closed on detached HEAD', () => {
     const root = process.cwd()
     assert.throws(() =>

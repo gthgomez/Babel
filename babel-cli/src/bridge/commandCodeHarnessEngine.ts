@@ -68,11 +68,17 @@ export function createCommandCodeHarnessEngine(options: CommandCodeHarnessEngine
       return;
     }
 
+    let sessionCostBaselineUSD: number | undefined;
+    if (session.sessionCostCurrencyKnown && session.sessionCumulativeCostUSD !== undefined) {
+      sessionCostBaselineUSD = session.sessionCumulativeCostUSD;
+    } else if (!session.restoredFromNativeLoad) {
+      sessionCostBaselineUSD = 0;
+    }
     const turnState: AcpTurnMapState = {
       textBuffer: [],
       terminalEmitted: false,
       promptAdmitted: false,
-      sessionCostBaselineUSD: session.sessionCumulativeCostUSD ?? 0,
+      ...(sessionCostBaselineUSD !== undefined ? { sessionCostBaselineUSD } : {}),
     };
     session.turnState = turnState;
     session.pendingEvents = [];
@@ -186,6 +192,8 @@ export function createCommandCodeHarnessEngine(options: CommandCodeHarnessEngine
       if (turnState.lastCumulativeCostUSD !== undefined) {
         session.sessionCumulativeCostUSD = turnState.lastCumulativeCostUSD;
         session.sessionCostCurrencyKnown = true;
+      } else if (turnState.usage && !turnState.usage.costComplete) {
+        session.sessionCostCurrencyKnown = false;
       }
       registry.clearCancelPending(descriptor);
     }
