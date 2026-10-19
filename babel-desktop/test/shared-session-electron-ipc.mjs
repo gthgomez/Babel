@@ -4,6 +4,12 @@
  * inside page.evaluate before reading properties.
  */
 
+/** Synchronous probe: preload exposed trustProject before first IPC trust call. */
+export const EVAL_RENDERER_PRELOAD_READY = () => {
+  const bd = window.babelDesktop;
+  return typeof bd?.trustProject === 'function';
+};
+
 /** Trust project; returns normalized authority snapshot for assertions. */
 export const EVAL_TRUST_PROJECT = async () => {
   const bd = window.babelDesktop;

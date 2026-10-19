@@ -37,6 +37,74 @@ export interface SharedProtocolHostRunOptions {
   emergencyObservationDeadlineMs?: number;
   /** Active-turn reconcile passes without terminal before observation fails closed (default 12). */
   emergencyObservationPassLimit?: number;
+  /**
+   * Clock for emergency-observation deadlines and per-op RPC timers only.
+   * Production uses wall time; tests may inject a manual scheduler without changing timeout policy.
+   */
+  emergencyObservationClock?: SharedProtocolHostRunClock;
+}
+
+/** Wall-clock and timers used for post-emergency-ACK observation bounds. */
+export interface SharedProtocolHostRunClock {
+  now(): number;
+  setTimeout(callback: () => void, delayMs: number): unknown;
+  clearTimeout(handle: unknown): void;
+}
+
+export const realSharedProtocolHostRunClock: SharedProtocolHostRunClock = {
+  now: () => Date.now(),
+  setTimeout: (callback, delayMs) => setTimeout(callback, delayMs),
+  clearTimeout: (handle) => {
+    clearTimeout(handle as ReturnType<typeof setTimeout>);
+  },
+};
+
+type ManualEmergencyTimer = { id: number; at: number; callback: () => void };
+
+/**
+ * Deterministic emergency-observation clock for tests. Time advances only via `advance`.
+ */
+export function createManualSharedProtocolHostRunClock(initialNow = 1_000_000): {
+  clock: SharedProtocolHostRunClock;
+  advance: (deltaMs: number) => Promise<void>;
+} {
+  let nowMs = initialNow;
+  let nextTimerId = 1;
+  const timers = new Map<number, ManualEmergencyTimer>();
+
+  const drainDueTimers = (): void => {
+    for (;;) {
+      const due = [...timers.values()]
+        .filter((entry) => entry.at <= nowMs)
+        .sort((a, b) => a.at - b.at);
+      if (due.length === 0) return;
+      for (const entry of due) {
+        timers.delete(entry.id);
+        entry.callback();
+      }
+    }
+  };
+
+  const clock: SharedProtocolHostRunClock = {
+    now: () => nowMs,
+    setTimeout: (callback, delayMs) => {
+      const id = nextTimerId++;
+      timers.set(id, { id, at: nowMs + delayMs, callback });
+      return id;
+    },
+    clearTimeout: (handle) => {
+      timers.delete(handle as number);
+    },
+  };
+
+  const advance = async (deltaMs: number): Promise<void> => {
+    nowMs += deltaMs;
+    drainDueTimers();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    drainDueTimers();
+  };
+
+  return { clock, advance };
 }
 
 type NdjsonWriter = (event: Record<string, unknown>) => void;
@@ -487,8 +555,9 @@ export async function executeSharedProtocolHostRun(
   const emergencyTerminalObservationLimit = options.emergencyObservationPassLimit ?? 12;
   const observationRpcTimeoutMs = options.observationRpcTimeoutMs ?? 4_000;
   const emergencyObservationDeadlineMs = options.emergencyObservationDeadlineMs ?? 15_000;
+  const emergencyClock = options.emergencyObservationClock ?? realSharedProtocolHostRunClock;
   let emergencyObservationDeadlineAt = 0;
-  let emergencyObservationDeadlineTimer: ReturnType<typeof setTimeout> | null = null;
+  let emergencyObservationDeadlineTimer: unknown = null;
   let emergencyObservationScopeEpoch = 0;
   const EMERGENCY_OBSERVATION_TIMEOUT_MESSAGE =
     'Emergency stop observation timed out before authoritative terminal was available';
@@ -649,8 +718,8 @@ export async function executeSharedProtocolHostRun(
     };
 
     const clearEmergencyObservationTimers = (): void => {
-      if (emergencyObservationDeadlineTimer) {
-        clearTimeout(emergencyObservationDeadlineTimer);
+      if (emergencyObservationDeadlineTimer !== null) {
+        emergencyClock.clearTimeout(emergencyObservationDeadlineTimer);
         emergencyObservationDeadlineTimer = null;
       }
     };
@@ -683,7 +752,7 @@ export async function executeSharedProtocolHostRun(
 
     const remainingEmergencyObservationMs = (): number => {
       if (emergencyObservationDeadlineAt === 0) return emergencyObservationDeadlineMs;
-      return Math.max(0, emergencyObservationDeadlineAt - Date.now());
+      return Math.max(0, emergencyObservationDeadlineAt - emergencyClock.now());
     };
 
     const fireEmergencyObservationDeadline = (epoch: number): void => {
@@ -705,7 +774,7 @@ export async function executeSharedProtocolHostRun(
       if (emergencyObservationDeadlineTimer) return;
       emergencyObservationScopeEpoch += 1;
       const epoch = emergencyObservationScopeEpoch;
-      emergencyObservationDeadlineTimer = setTimeout(
+      emergencyObservationDeadlineTimer = emergencyClock.setTimeout(
         () => fireEmergencyObservationDeadline(epoch),
         emergencyObservationDeadlineMs,
       );
@@ -736,7 +805,7 @@ export async function executeSharedProtocolHostRun(
         );
       };
       scopeSignal.addEventListener('abort', linkScopeAbort, { once: true });
-      let perOpTimer: ReturnType<typeof setTimeout> | null = null;
+      let perOpTimer: unknown = null;
       if (emergencyStopAcknowledged) {
         const perOpMs = Math.min(
           observationRpcTimeoutMs,
@@ -746,7 +815,7 @@ export async function executeSharedProtocolHostRun(
           scopeSignal.removeEventListener('abort', linkScopeAbort);
           throw new Error(EMERGENCY_OBSERVATION_TIMEOUT_MESSAGE);
         }
-        perOpTimer = setTimeout(() => {
+        perOpTimer = emergencyClock.setTimeout(() => {
           emergencyHostRunTrace('rpc_timeout', { label, observationRpcTimeoutMs: perOpMs });
           opAbort.abort(new Error(`${label} observation RPC timed out after ${perOpMs}ms`));
         }, perOpMs);
@@ -759,7 +828,7 @@ export async function executeSharedProtocolHostRun(
         }
         return value;
       } finally {
-        if (perOpTimer) clearTimeout(perOpTimer);
+        if (perOpTimer !== null) emergencyClock.clearTimeout(perOpTimer);
         scopeSignal.removeEventListener('abort', linkScopeAbort);
       }
     };
@@ -786,7 +855,9 @@ export async function executeSharedProtocolHostRun(
             emergencyHostRunTrace('await_turn_observation_budget_expired', { stage });
             return;
           }
-          await new Promise((resolve) => setTimeout(resolve, 25));
+          await new Promise((resolve) => {
+            emergencyClock.setTimeout(() => resolve(undefined), 25);
+          });
         }
         emergencyHostRunTrace('await_turn_observation_emergency_short_circuit', {
           stage,
@@ -801,7 +872,7 @@ export async function executeSharedProtocolHostRun(
 
     const beginEmergencyObservationWindow = (): void => {
       if (emergencyObservationDeadlineAt === 0) {
-        emergencyObservationDeadlineAt = Date.now() + emergencyObservationDeadlineMs;
+        emergencyObservationDeadlineAt = emergencyClock.now() + emergencyObservationDeadlineMs;
       }
       armEmergencyObservationDeadline();
     };
@@ -809,7 +880,7 @@ export async function executeSharedProtocolHostRun(
     const emergencyObservationBudgetExpired = (): boolean => {
       if (!emergencyStopAcknowledged || emergencyObservationDeadlineAt === 0) return false;
       if (runObservationScope.signal.aborted) return true;
-      if (Date.now() < emergencyObservationDeadlineAt) return false;
+      if (emergencyClock.now() < emergencyObservationDeadlineAt) return false;
       fireEmergencyObservationDeadline(emergencyObservationScopeEpoch);
       return true;
     };
@@ -1265,8 +1336,8 @@ export async function executeSharedProtocolHostRun(
     }
     return terminalExitCode ?? 1;
   } finally {
-    if (emergencyObservationDeadlineTimer) {
-      clearTimeout(emergencyObservationDeadlineTimer);
+    if (emergencyObservationDeadlineTimer !== null) {
+      emergencyClock.clearTimeout(emergencyObservationDeadlineTimer);
       emergencyObservationDeadlineTimer = null;
     }
     emergencyHostRunTrace('finally_cleanup', { turnSettled, terminalExitCode });
