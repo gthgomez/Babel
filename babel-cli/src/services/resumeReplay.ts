@@ -43,6 +43,7 @@ import type {
   RuntimeFactV1,
 } from '../runtime/events.js';
 import {
+  contextCheckpointVersion,
   validateContextCheckpointInstalledLineage,
   validateContextCheckpoint,
   type ContextCheckpointLineageEvidenceV1,
@@ -383,10 +384,14 @@ export function resumeCapsuleContext(
   lineageEvidence?: ContextCheckpointLineageEvidenceV1,
   authorizedObservationIds?: readonly string[],
 ): ResumeCapsuleContextResultV1 {
-  if (capsule.schema_version === 2 && authorizedObservationIds === undefined) {
+  const version = contextCheckpointVersion(capsule);
+  if (version === null) {
+    return { status: 'blocked', checkpointId: capsule?.checkpointId ?? null, reasons: ['invalid_schema'] };
+  }
+  if (version === 2 && authorizedObservationIds === undefined) {
     return { status: 'blocked', checkpointId: capsule.checkpointId, reasons: ['observation_membership_unavailable'] };
   }
-  const reasons = capsule.schema_version === 2
+  const reasons = version === 2
     ? validateContextCheckpoint(capsule, {
         requireInstalledLineage: true,
         ...(lineageEvidence !== undefined ? { lineageEvidence } : {}),

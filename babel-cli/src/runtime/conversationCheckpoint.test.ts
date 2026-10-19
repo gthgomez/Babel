@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { sha256Canonical } from '../acceptance/canonical.js'
-import { resumeCapsuleContext } from '../services/resumeReplay.js'
+import { reconstructPreCompactionView, resumeCapsuleContext } from '../services/resumeReplay.js'
+import { CondensationFactEmitter } from '../services/condensationFacts.js'
 import {
   prepareContextCheckpoint,
   prepareConversationCheckpoint,
@@ -134,14 +135,45 @@ for (const [label, mutation] of [
     delete value['purpose']
     delete value['repository_coverage']
   }],
+  ['relabeled population with conversation rows', (value: Record<string, unknown>) => {
+    value['schema_version'] = 1
+    delete value['purpose']
+    delete value['repository_coverage']
+    const population = value['population'] as Record<string, unknown>
+    population['schema_version'] = 1
+  }],
 ] as const) test(`conversation replay rejects ${label} before legacy projection`, () => {
   const checkpoint = structuredClone(prepared()) as unknown as Record<string, unknown>
   mutation(checkpoint)
   // Leave the original digest and independently supplied lineage untouched:
   // changing a version must never select a weaker legacy validation path.
   const capsule = checkpoint as unknown as ContextCheckpoint
-  assert.equal(resumeCapsuleContext(capsule, lineageEvidence).status, 'blocked')
-  assert.equal(resumeCapsuleContext(capsule, lineageEvidence, []).status, 'blocked')
+  for (const membership of [undefined, []] as const) {
+    const result = resumeCapsuleContext(capsule, lineageEvidence, membership)
+    assert.equal(result.status, 'blocked')
+    if (result.status === 'blocked') assert.ok(result.reasons.includes('invalid_schema'))
+  }
+})
+
+test('pre-compaction reconstruction keeps version rejection at the capsule boundary', () => {
+  const checkpoint = prepared()
+  let sequence = 0
+  const emitter = new CondensationFactEmitter(
+    { threadId: owner.threadId, runId: 'conversation-replay' }, () => ++sequence,
+    () => '2026-10-18T00:00:00.000Z',
+  )
+  const started = emitter.begin({ compactionId: 'replay', path: 'chat_engine_inline', countBefore: 100 })
+  const completed = emitter.complete({ compactionId: 'replay', countAfter: 10,
+    prunedMessageRanges: [{ from: 0, to: 1 }], capsuleCheckpointId: checkpoint.checkpointId })
+  assert.ok(started && completed)
+  const facts = [started, completed]
+  const valid = reconstructPreCompactionView(facts, 'replay', checkpoint, lineageEvidence, [])
+  assert.equal(valid.status, 'ready')
+  if (valid.status === 'ready') assert.equal(valid.capsule?.status, 'ready')
+  const tampered = { ...checkpoint, schema_version: 3 } as unknown as ContextCheckpoint
+  const invalid = reconstructPreCompactionView(facts, 'replay', tampered, lineageEvidence, [])
+  assert.equal(invalid.status, 'ready')
+  if (invalid.status === 'ready') assert.equal(invalid.capsule?.status, 'blocked')
 })
 
 for (const [label, mutation] of [

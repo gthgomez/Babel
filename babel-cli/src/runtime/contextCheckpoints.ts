@@ -1087,20 +1087,33 @@ function conversationStateIsPresent(checkpoint: Omit<ContextCheckpointV2, 'check
     && values('instructions_route').includes(`route:${route.model_route}`);
 }
 
+/** Identify supported formats without admitting conversation records as legacy snapshots. */
+export function contextCheckpointVersion(value: unknown): 1 | 2 | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const checkpoint = value as Record<string, unknown>;
+  if (checkpoint['schema_version'] === 2) return 2;
+  if (checkpoint['schema_version'] !== 1 || 'purpose' in checkpoint || 'repository_coverage' in checkpoint) return null;
+  const population = checkpoint['population'];
+  if (!population || typeof population !== 'object' || Array.isArray(population)) return null;
+  const record = population as Record<string, unknown>;
+  if (record['schema_version'] !== 1 || !Array.isArray(record['rows'])) return null;
+  if (record['rows'].some(row => !row || typeof row !== 'object' || row.id === 'repository_coverage')) return null;
+  return 1;
+}
+
 function checkpointSchemaIsValid(checkpoint: ContextCheckpoint): boolean {
+  if (contextCheckpointVersion(checkpoint) === null) return false;
   const population = checkpoint.population;
   if (!population || !Array.isArray(population.rows)) return false;
   if (population.rows.some(row => !row || typeof row !== 'object' || !Array.isArray(row.value_refs))) return false;
   if (checkpoint.schema_version === 1) {
     const workspace = checkpoint.workspace;
-    return !('purpose' in checkpoint) && !('repository_coverage' in checkpoint)
-      && population.schema_version === 1 && population.workspace_revision_current === true
+    return population.workspace_revision_current === true
       && workspace !== null && workspace?.capture_complete === true
       && workspace.capture_provenance === 'current_capture'
       && typeof workspace.current_snapshot_revision === 'string'
       && typeof workspace.capture_epoch === 'string'
-      && population.rows.some(row => row.id === 'workspace_snapshot' && row.present && row.constraint_satisfied)
-      && !population.rows.some(row => row.id === 'repository_coverage');
+      && population.rows.some(row => row.id === 'workspace_snapshot' && row.present && row.constraint_satisfied);
   }
   if (checkpoint.schema_version !== 2) return false;
   const coverage = checkpoint.repository_coverage;
