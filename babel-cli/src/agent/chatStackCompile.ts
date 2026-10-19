@@ -415,18 +415,19 @@ export function compileChatStack(options: CompileChatStackOptions): ChatCompiled
     }
   }
 
-  // Only the governing (nearest) AGENTS.md is atomic/required. Accumulated
-  // ancestor fragments are optional, so a repository whose combined instruction
-  // text exceeds the budget degrades by omitting ancestors instead of failing
-  // closed on the whole stack.
-  const requiredSections = sections.filter(({ entry }) =>
-    entry.id === 'identity:agents' || entry.id === 'identity:default');
+  // Repository authority is atomic across every selected identity source: each
+  // applicable AGENTS.md (repository-root ancestors included) plus the builtin
+  // default identity is delivered in full, or the compile fails visibly before
+  // provider dispatch. Mandatory identity text is never prefix-packed, omitted
+  // or demoted to make room for optional context. Ancestor fragments are still
+  // rendered repository-root first (lower precedence) with the nearest file
+  // last, so a nested package inherits its ancestors without overriding them.
+  const requiredSections = sections.filter(({ entry }) => entry.layer === 'identity');
   const requiredText = requiredSections.map(({ content }) => content).join('\n\n');
-  // Required AGENTS policy is never prefix-packed. Optional sources are each
-  // admitted whole or omitted; continue after an omission to try later inputs.
+  // Optional sources are each admitted whole or omitted; continue after an
+  // omission to try later inputs.
   const optionalSections = sections
-    .filter(({ entry }) =>
-      entry.id !== 'identity:agents' && entry.id !== 'identity:default')
+    .filter(({ entry }) => entry.layer !== 'identity')
     .sort((left, right) => {
       const priority = (id: string): number =>
         id.startsWith('identity:') ? 0 :
@@ -476,16 +477,10 @@ export function compileChatStack(options: CompileChatStackOptions): ChatCompiled
         });
       }
     }
-    // Preserve repository-root → nearest ordering: accumulated ancestor identity
-    // fragments render before the required governing file, which renders before
-    // the remaining optional context.
-    const ancestorIdentity = includedOptional
-      .filter((item) => item.id.startsWith('identity:'))
-      .map((item) => item.content);
-    const otherOptional = includedOptional
-      .filter((item) => !item.id.startsWith('identity:'))
-      .map((item) => item.content);
-    system_context = [...ancestorIdentity, requiredText, ...otherOptional]
+    // requiredText already renders every identity fragment repository-root first
+    // (lower precedence) with the nearest file last; optional context follows.
+    const otherOptional = includedOptional.map((item) => item.content);
+    system_context = [requiredText, ...otherOptional]
       .filter(Boolean)
       .join('\n\n');
     for (const { entry, content } of requiredSections) {
