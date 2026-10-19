@@ -39,6 +39,9 @@ export interface CommandCodeRuntimeSession {
   replayCapture: boolean;
   replayAccumulator: CommandCodeReplayAccumulator;
   pendingCancel: boolean;
+  /** Last cumulative session cost observed from ACP usage updates (USD when known). */
+  sessionCumulativeCostUSD?: number;
+  sessionCostCurrencyKnown?: boolean;
 }
 
 interface ProjectRuntime {
@@ -287,20 +290,14 @@ export class CommandCodeAcpRuntimeRegistry {
         this.claimNativeSession(runtime, descriptor.harness_native_session_id, descriptor.threadId);
         sessionRecord.nativeSessionId = descriptor.harness_native_session_id;
         runtime.sessions.set(descriptor.threadId, sessionRecord);
-        const replayPrefix = `cc-replay:${descriptor.harness_native_session_id}:`;
-        const hasPersistedReplay = loadThreadCells(descriptor.threadId).some((cell) =>
-          cell.cell_id.startsWith(replayPrefix),
-        );
-        if (!hasPersistedReplay) {
-          sessionRecord.replayCapture = true;
-          const mcpServers: unknown[] = [];
-          await runtime.transport.call('session/load', {
-            sessionId: descriptor.harness_native_session_id,
-            cwd: runtime.projectRoot,
-            mcpServers,
-          });
-          sessionRecord.replayCapture = false;
-        }
+        sessionRecord.replayCapture = true;
+        const mcpServers: unknown[] = [];
+        await runtime.transport.call('session/load', {
+          sessionId: descriptor.harness_native_session_id,
+          cwd: runtime.projectRoot,
+          mcpServers,
+        });
+        sessionRecord.replayCapture = false;
         if (sessionRecord.pendingCancel && sessionRecord.nativeSessionId) {
           runtime.transport.notify('session/cancel', { sessionId: sessionRecord.nativeSessionId });
         }
@@ -336,11 +333,18 @@ export class CommandCodeAcpRuntimeRegistry {
     const codec = runtime.transport.negotiatedCodec();
     if (!codec?.session.list) return [];
     const collected: Array<{ sessionId: string; title?: string }> = [];
-    let nextCursor: string | undefined;
+    let cursor: string | undefined;
+    const seenCursors = new Set<string>();
     for (let page = 0; page < 20; page += 1) {
+      if (cursor) {
+        if (seenCursors.has(cursor)) {
+          throw new Error('COMMAND_CODE_SESSION_LIST_CURSOR_REPEATED');
+        }
+        seenCursors.add(cursor);
+      }
       const result = await runtime.transport.call('session/list', {
         cwd: runtime.projectRoot,
-        ...(nextCursor ? { nextCursor } : {}),
+        ...(cursor ? { cursor } : {}),
       });
       const sessions = result.sessions;
       if (Array.isArray(sessions)) {
@@ -352,9 +356,9 @@ export class CommandCodeAcpRuntimeRegistry {
           collected.push({ sessionId, ...(typeof title === 'string' ? { title } : {}) });
         }
       }
-      const cursor = result.nextCursor;
-      nextCursor = typeof cursor === 'string' && cursor.length > 0 ? cursor : undefined;
-      if (!nextCursor) break;
+      const next = result.nextCursor;
+      cursor = typeof next === 'string' && next.length > 0 ? next : undefined;
+      if (!cursor) break;
     }
     return collected;
   }

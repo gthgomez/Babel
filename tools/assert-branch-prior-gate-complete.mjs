@@ -46,7 +46,7 @@ function resolveGithubRepo(root, remote, gitFn) {
   }
 }
 
-export function evaluatePublishedHeadGate(workflowRuns, publishedHeadSha) {
+export function evaluatePublishedHeadGate(workflowRuns, publishedHeadSha, options = {}) {
   const matching = workflowRuns.filter(
     (run) =>
       run.head_sha === publishedHeadSha &&
@@ -54,7 +54,13 @@ export function evaluatePublishedHeadGate(workflowRuns, publishedHeadSha) {
         run.name === PUBLIC_RELEASE_GATE_WORKFLOW_NAME),
   )
   if (matching.length === 0) {
-    return { allow: true, reason: 'no Public Release Gate run for published head' }
+    if (options.branchHasAnyGateRuns === false) {
+      return { allow: true, reason: 'no prior Public Release Gate on branch (first publication)' }
+    }
+    return {
+      allow: false,
+      reason: `no Public Release Gate run found for published head ${publishedHeadSha.slice(0, 7)}`,
+    }
   }
   const active = matching.filter((run) => run.status !== 'completed')
   if (active.length > 0) {
@@ -98,9 +104,21 @@ export function assertBranchPriorGateComplete(root, remote = 'origin', deps = {}
   gitFn(root, ['fetch', remote, branch])
   const publishedHeadSha = gitFn(root, ['rev-parse', `${remote}/${branch}`])
 
-  const payload = ghGet(repo, { branch, per_page: '30' })
-  const runs = Array.isArray(payload.workflow_runs) ? payload.workflow_runs : []
-  const verdict = evaluatePublishedHeadGate(runs, publishedHeadSha)
+  const runs = []
+  for (let page = 1; page <= 5; page += 1) {
+    const payload = ghGet(repo, { branch, per_page: '100', page: String(page) })
+    const batch = Array.isArray(payload.workflow_runs) ? payload.workflow_runs : []
+    runs.push(...batch)
+    if (batch.length < 100) break
+    const hasHead = batch.some((run) => run.head_sha === publishedHeadSha)
+    if (hasHead) break
+  }
+  const branchHasAnyGateRuns = runs.some(
+    (run) =>
+      run.workflow_id === PUBLIC_RELEASE_GATE_WORKFLOW_ID ||
+      run.name === PUBLIC_RELEASE_GATE_WORKFLOW_NAME,
+  )
+  const verdict = evaluatePublishedHeadGate(runs, publishedHeadSha, { branchHasAnyGateRuns })
   if (!verdict.allow) {
     throw new Error(`[pre-push] branch ${branch} ${verdict.reason}`)
   }

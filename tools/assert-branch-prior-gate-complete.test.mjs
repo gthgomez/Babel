@@ -57,12 +57,19 @@ describe('assert-branch-prior-gate-complete', () => {
     assert.equal(verdict.allow, true)
   })
 
-  it('ignores unrelated workflow runs on the same branch', () => {
+  it('fails closed when only unrelated workflow runs exist for the published head', () => {
     const sha = 'abc123'
     const verdict = evaluatePublishedHeadGate(
       [{ id: 1, status: 'in_progress', head_sha: sha, workflow_id: 999, name: 'Auxiliary' }],
       sha,
+      { branchHasAnyGateRuns: true },
     )
+    assert.equal(verdict.allow, false)
+  })
+
+  it('allows first publication when the branch has no Public Release Gate history', () => {
+    const sha = 'abc123'
+    const verdict = evaluatePublishedHeadGate([], sha, { branchHasAnyGateRuns: false })
     assert.equal(verdict.allow, true)
   })
 

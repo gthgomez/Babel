@@ -41,4 +41,24 @@ describe('commandCodeAcpReplay', () => {
     );
     assert.equal(finalizeReplayCells(again)[0]?.cell_id, cells[0]?.cell_id);
   });
+
+  it('merges consecutive assistant chunks without messageId into one cell', () => {
+    const acc = createCommandCodeReplayAccumulator();
+    const native = 'sess_native_2';
+    applyAcpReplayUpdate(
+      acc,
+      { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'hello ' } },
+      'thread-2',
+      native,
+    );
+    applyAcpReplayUpdate(
+      acc,
+      { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'world' } },
+      'thread-2',
+      native,
+    );
+    const cells = finalizeReplayCells(acc);
+    assert.equal(cells.length, 1);
+    assert.equal((cells[0]?.payload as { message: string }).message, 'hello world');
+  });
 });

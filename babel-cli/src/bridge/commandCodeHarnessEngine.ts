@@ -72,6 +72,7 @@ export function createCommandCodeHarnessEngine(options: CommandCodeHarnessEngine
       textBuffer: [],
       terminalEmitted: false,
       promptAdmitted: false,
+      sessionCostBaselineUSD: session.sessionCumulativeCostUSD ?? 0,
     };
     session.turnState = turnState;
     session.pendingEvents = [];
@@ -182,6 +183,10 @@ export function createCommandCodeHarnessEngine(options: CommandCodeHarnessEngine
     } finally {
       session.permissionBinding = null;
       turnState.promptAdmitted = false;
+      if (turnState.lastCumulativeCostUSD !== undefined) {
+        session.sessionCumulativeCostUSD = turnState.lastCumulativeCostUSD;
+        session.sessionCostCurrencyKnown = true;
+      }
       registry.clearCancelPending(descriptor);
     }
   };

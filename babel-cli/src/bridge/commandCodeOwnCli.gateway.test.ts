@@ -511,6 +511,120 @@ describe('command code own-CLI gateway integration', () => {
     assert.equal((open2.result as { cell_count?: number }).cell_count, 2);
   });
 
+  it('rejects harness.command_code.open when native id does not match canonical binding', async () => {
+    const sess = await httpRequest(`http://127.0.0.1:${port}/sessions`, {
+      method: 'POST',
+      headers: desktopHeaders(),
+      body: JSON.stringify({ projectRoot: tmp }),
+    });
+    const transportSessionId = (JSON.parse(sess.body) as { sessionId: string }).sessionId;
+    const created = await rpc(
+      port,
+      desktopHeaders(),
+      'thread.create',
+      {
+        project_root: tmp,
+        session_id: transportSessionId,
+        harness_adapter_id: 'command-code',
+        harness_native_session_id: 'sess_fixture_preload',
+      },
+      64,
+    );
+    const threadId = (created.result as { thread_id: string }).thread_id;
+    await rpc(port, desktopHeaders(), 'control.acquire', { thread_id: threadId, force: false }, 65);
+    const denied = await rpc(
+      port,
+      desktopHeaders(),
+      'harness.command_code.open',
+      {
+        thread_id: threadId,
+        project_root: tmp,
+        harness_native_session_id: 'sess_fixture_other',
+      },
+      66,
+    );
+    assert.ok(denied.error);
+  });
+
+  it('reloads saved session after project runtime eviction', async () => {
+    const sess = await httpRequest(`http://127.0.0.1:${port}/sessions`, {
+      method: 'POST',
+      headers: desktopHeaders(),
+      body: JSON.stringify({ projectRoot: tmp }),
+    });
+    const transportSessionId = (JSON.parse(sess.body) as { sessionId: string }).sessionId;
+    const created = await rpc(
+      port,
+      desktopHeaders(),
+      'thread.create',
+      {
+        project_root: tmp,
+        session_id: transportSessionId,
+        harness_adapter_id: 'command-code',
+        harness_native_session_id: 'sess_fixture_reload',
+      },
+      167,
+    );
+    const threadId = (created.result as { thread_id: string }).thread_id;
+    await rpc(port, desktopHeaders(), 'control.acquire', { thread_id: threadId, force: false }, 168);
+    await rpc(
+      port,
+      desktopHeaders(),
+      'harness.command_code.open',
+      {
+        thread_id: threadId,
+        project_root: tmp,
+        harness_native_session_id: 'sess_fixture_reload',
+      },
+      169,
+    );
+    await server.commandCodeRegistry.evictProject(tmp);
+    await rpc(port, desktopHeaders(), 'control.acquire', { thread_id: threadId, force: false }, 170);
+    const reopened = await rpc(
+      port,
+      desktopHeaders(),
+      'harness.command_code.open',
+      {
+        thread_id: threadId,
+        project_root: tmp,
+        harness_native_session_id: 'sess_fixture_reload',
+      },
+      171,
+    );
+    assert.equal((reopened.result as { cell_count?: number }).cell_count, 2);
+    const continued = await runTurn(port, threadId, transportSessionId, 'after-reload');
+    assert.equal(continued.terminal?.type, 'done');
+  });
+
+  it('paginates vendor sessions using official session/list cursor', async () => {
+    await withDedicatedServer(
+      { BABEL_COMMAND_CODE_FIXTURE_LIST_PAGE_SIZE: '1' },
+      async (dedicated, listPort) => {
+        const sess = await httpRequest(`http://127.0.0.1:${listPort}/sessions`, {
+          method: 'POST',
+          headers: desktopHeaders(),
+          body: JSON.stringify({ projectRoot: tmp }),
+        });
+        const transportSessionId = (JSON.parse(sess.body) as { sessionId: string }).sessionId;
+        for (const rpcId of [80, 81]) {
+          const created = await rpc(
+            listPort,
+            desktopHeaders(),
+            'thread.create',
+            { project_root: tmp, session_id: transportSessionId, harness_adapter_id: 'command-code' },
+            rpcId,
+          );
+          const threadId = (created.result as { thread_id: string }).thread_id;
+          await rpc(listPort, desktopHeaders(), 'control.acquire', { thread_id: threadId, force: false }, rpcId + 10);
+          await runTurn(listPort, threadId, transportSessionId, `seed-${rpcId}`);
+        }
+        const catalog = await rpc(listPort, desktopHeaders(), 'remote.catalog', {}, 90);
+        const vendors = (catalog.result as { vendor_sessions?: { session_id: string }[] }).vendor_sessions ?? [];
+        assert.ok(vendors.length >= 2, 'expected paginated session/list to return every vendor session');
+      },
+    );
+  });
+
   it('cancels a slow turn then continues on the same native session', async () => {
     await withDedicatedServer({ BABEL_COMMAND_CODE_FIXTURE_SLOW: '1' }, async (dedicated, sPort) => {
       const sess = await httpRequest(`http://127.0.0.1:${sPort}/sessions`, {
@@ -531,8 +645,12 @@ describe('command code own-CLI gateway integration', () => {
       void rpc(sPort, desktopHeaders(), 'turn.submit', { thread_id: threadId, message: 'slow-cancel' }, 72);
       await sleep(80);
       await rpc(sPort, desktopHeaders(), 'turn.cancel', { thread_id: threadId }, 73);
-      await sleep(700);
+      await sleep(50);
       const after = await runTurn(sPort, threadId, transportSessionId, 'after-cancel');
+      assert.ok(
+        !String((after.terminal as { answer?: string }).answer ?? '').includes('slow-cancel'),
+        'next turn must not include prior cancelled prompt output',
+      );
       assert.equal(after.terminal?.type, 'done');
     });
   });

@@ -3,7 +3,7 @@
  */
 
 import type { ProtocolHostState } from '../protocol/client/host.js';
-import { listThreads } from '../services/threadStore/index.js';
+import { listThreads, loadSessionDescriptor } from '../services/threadStore/index.js';
 import type { CommandCodeAcpRuntimeRegistry } from './commandCodeAcpRuntime.js';
 import { isPathInsideRoot } from './workspaceBound.js';
 
@@ -55,8 +55,50 @@ export function findCanonicalCommandCodeNativeOwner(
 ): string | undefined {
   for (const [threadId, descriptor] of state.descriptors) {
     if (descriptor.harness_native_session_id === nativeSessionId) return threadId;
+    const persisted = loadSessionDescriptor(threadId);
+    if (persisted?.harness_native_session_id === nativeSessionId) return threadId;
   }
   return undefined;
+}
+
+/** Durable + in-memory native session ownership for catalog binding. */
+export async function indexCommandCodeNativeOwners(
+  state: ProtocolHostState,
+): Promise<Map<string, string>> {
+  const owners = new Map<string, string>();
+  const claim = (nativeId: string, threadId: string) => {
+    const existing = owners.get(nativeId);
+    if (!existing) {
+      owners.set(nativeId, threadId);
+      return;
+    }
+    if (existing === threadId) return;
+    const existingPersisted = loadSessionDescriptor(existing);
+    const incomingPersisted = loadSessionDescriptor(threadId);
+    if (incomingPersisted?.harness_native_session_id === nativeId) {
+      owners.set(nativeId, threadId);
+      return;
+    }
+    if (existingPersisted?.harness_native_session_id !== nativeId) {
+      owners.set(nativeId, threadId);
+    }
+  };
+  for (const [threadId, descriptor] of state.descriptors) {
+    if (descriptor.harness_native_session_id) {
+      claim(descriptor.harness_native_session_id, threadId);
+    }
+  }
+  const threads = await listThreads({ limit: 500 });
+  for (const row of threads) {
+    const persisted = loadSessionDescriptor(row.thread_id);
+    if (
+      persisted?.harness_adapter_id === 'command-code' &&
+      persisted.harness_native_session_id
+    ) {
+      claim(persisted.harness_native_session_id, row.thread_id);
+    }
+  }
+  return owners;
 }
 
 export interface RemoteCatalogResult {
@@ -159,12 +201,7 @@ export async function buildRemoteCatalog(input: {
   }
 
   const sessions = [...byId.values()].sort((a, b) => b.updated_at - a.updated_at);
-  const nativeOwners = new Map<string, string>();
-  for (const [threadId, descriptor] of input.state.descriptors) {
-    if (descriptor.harness_native_session_id) {
-      nativeOwners.set(descriptor.harness_native_session_id, threadId);
-    }
-  }
+  const nativeOwners = await indexCommandCodeNativeOwners(input.state);
   let vendor_sessions: RemoteVendorSessionEntry[] | undefined;
   if (input.commandCodeRegistry) {
     try {

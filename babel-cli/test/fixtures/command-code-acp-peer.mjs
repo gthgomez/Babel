@@ -75,18 +75,23 @@ function handleSessionLoad(id, params) {
 }
 
 function handleSessionList(id, params) {
-  const page = Number(params?.page ?? 0);
-  const all = [...sessions.keys()].map((sessionId) => ({ sessionId, title: 'fixture' }));
+  const all = [...sessions.keys()].map((sessionId) => ({
+    sessionId,
+    title: 'fixture',
+    cwd: sessions.get(sessionId)?.cwd,
+  }));
   const pageSize = Number(process.env.BABEL_COMMAND_CODE_FIXTURE_LIST_PAGE_SIZE ?? 0);
   if (pageSize > 0) {
+    const cursorRaw = params?.cursor;
+    const page = cursorRaw !== undefined && cursorRaw !== null ? Number(cursorRaw) : 0;
     const slice = all.slice(page * pageSize, (page + 1) * pageSize);
-    const next = (page + 1) * pageSize < all.length ? String(page + 1) : undefined;
+    const nextPage = (page + 1) * pageSize < all.length ? String(page + 1) : undefined;
     write({
       jsonrpc: '2.0',
       id,
       result: {
         sessions: slice,
-        ...(next ? { nextCursor: next } : {}),
+        ...(nextPage ? { nextCursor: nextPage } : {}),
       },
     });
     return;
@@ -161,8 +166,8 @@ async function handleSessionPrompt(id, params) {
     await new Promise((r) => setTimeout(r, 500));
   }
 
-  const active = activePromptBySession.get(sessionId);
-  if (!active || active.aborted) {
+  const activeAfterSlow = activePromptBySession.get(sessionId);
+  if (!activeAfterSlow || activeAfterSlow.aborted || activeAfterSlow.id !== id) {
     settlePrompt(sessionId, id, 'cancelled');
     return;
   }
@@ -171,6 +176,12 @@ async function handleSessionPrompt(id, params) {
   sessionUpdate(sessionId, 'agent_message_chunk', {
     content: { type: 'text', text: chunk },
   });
+
+  const activeBeforeSettle = activePromptBySession.get(sessionId);
+  if (!activeBeforeSettle || activeBeforeSettle.aborted || activeBeforeSettle.id !== id) {
+    settlePrompt(sessionId, id, 'cancelled');
+    return;
+  }
 
   settlePrompt(sessionId, id, 'end_turn');
 }

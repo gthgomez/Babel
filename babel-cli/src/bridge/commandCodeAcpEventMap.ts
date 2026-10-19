@@ -8,6 +8,9 @@ export interface AcpTurnMapState {
   /** True while the active turn's session/prompt is in flight. */
   promptAdmitted: boolean;
   usage?: SessionUsageSummary;
+  /** Session cumulative USD at turn start (for delta usage_update mapping). */
+  sessionCostBaselineUSD?: number;
+  lastCumulativeCostUSD?: number;
 }
 
 /** Normalize official ACP session/update params to an internal update body. */
@@ -84,8 +87,18 @@ function mapSessionUpdateBody(
     if (status === 'completed' || status === 'succeeded') {
       return [{ type: 'tool_complete', tool, target }];
     }
-    if (status === 'failed' || status === 'error' || status === 'cancelled') {
-      return [{ type: 'tool_complete', tool, target }];
+    if (status === 'failed' || status === 'error') {
+      return [
+        {
+          type: 'tool_failed',
+          tool,
+          target,
+          error: typeof body.message === 'string' ? body.message : `Command Code tool ${status}`,
+        },
+      ];
+    }
+    if (status === 'cancelled') {
+      return [{ type: 'tool_failed', tool, target, error: 'Command Code tool cancelled' }];
     }
     return [{ type: 'tool_start', tool, target }];
   }
@@ -141,9 +154,12 @@ function mapSessionUpdateBody(
           : typeof nested?.cost?.currency === 'string'
             ? nested.cost.currency
             : undefined;
-      const usdKnown = !currency || currency === 'USD';
+      const usdKnown = currency === 'USD';
+      state.lastCumulativeCostUSD = amount;
+      const baseline = state.sessionCostBaselineUSD ?? 0;
+      const delta = usdKnown ? Math.max(0, amount - baseline) : 0;
       state.usage = {
-        totalCostUSD: usdKnown ? amount : 0,
+        totalCostUSD: usdKnown ? delta : 0,
         costComplete: usdKnown,
         unknownChargeCount: usdKnown ? 0 : 1,
         totalInputTokens: 0,
@@ -153,7 +169,7 @@ function mapSessionUpdateBody(
           'command-code-acp': {
             inputTokens: 0,
             outputTokens: 0,
-            costUSD: usdKnown ? amount : 0,
+            costUSD: usdKnown ? delta : 0,
             unknownChargeCount: usdKnown ? 0 : 1,
           },
         },

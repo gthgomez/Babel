@@ -495,6 +495,7 @@
           if (result.classified.kind !== 'success') throw new Error('thread.create rejected');
           memory.threadId = result.payload.result && result.payload.result.thread_id;
         }
+        await syncControlLeaseFromHost();
         const opened = await rpc('harness.command_code.open', {
           thread_id: memory.threadId,
           project_root: rootEl.value,
