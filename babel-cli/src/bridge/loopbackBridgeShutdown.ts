@@ -5,42 +5,35 @@
 
 import type { BridgeServer } from './sessionServer.js';
 
-const SHUTDOWN_BUDGET_MS = 8_000;
-
 /**
- * Keep the CLI process alive until SIGINT/SIGTERM, then stop the owned server
- * within a bounded budget and exit (turn cancellation is owned by sessionRunner).
+ * Keep the CLI process alive until SIGINT/SIGTERM, then stop the owned server.
+ * Uses process.exitCode only (no process.exit) so architectural exit budgets stay clean.
  */
 export async function awaitLoopbackBridgeUntilSignal(server: BridgeServer): Promise<void> {
   let shuttingDown = false;
+  let releaseHold: (() => void) | null = null;
+  const hold = new Promise<void>((resolve) => {
+    releaseHold = resolve;
+  });
 
-  const finish = async (_signal: NodeJS.Signals) => {
+  const finish = async () => {
     if (shuttingDown) return;
     shuttingDown = true;
-    const forceTimer = setTimeout(() => {
-      process.exitCode = 1;
-      process.exit(1);
-    }, SHUTDOWN_BUDGET_MS);
     try {
       await server.stop();
-      clearTimeout(forceTimer);
       process.exitCode = 0;
-      process.exit(0);
     } catch {
-      clearTimeout(forceTimer);
       process.exitCode = 1;
-      process.exit(1);
     }
+    releaseHold?.();
   };
 
   process.once('SIGINT', () => {
-    void finish('SIGINT');
+    void finish();
   });
   process.once('SIGTERM', () => {
-    void finish('SIGTERM');
+    void finish();
   });
 
-  await new Promise<void>(() => {
-    /* held open by the listening server until a signal arrives */
-  });
+  await hold;
 }

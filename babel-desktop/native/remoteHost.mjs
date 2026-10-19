@@ -11,32 +11,29 @@ const LISTENING_RE =
 const DEFAULT_READY_TIMEOUT_MS = 30_000;
 const STOP_GRACE_MS = 2_000;
 
+/** Tree-kill owned children: POSIX process group when pid>0; always signal the direct child handle. */
 function terminateChildTree(child) {
-  if (!child?.pid) return;
-  if (process.platform === 'win32') {
+  if (!child) return;
+  const pid = child.pid;
+  if (process.platform === 'win32' && typeof pid === 'number' && pid > 0) {
     const windowsRoot = process.env.SystemRoot || process.env.WINDIR || 'C:\\Windows';
     const taskkillPath = resolve(windowsRoot, 'System32', 'taskkill.exe');
     try {
-      spawnSync(taskkillPath, ['/pid', String(child.pid), '/T', '/F'], {windowsHide: true, stdio: 'ignore', timeout: 1500});
+      spawnSync(taskkillPath, ['/pid', String(pid), '/T', '/F'], {windowsHide: true, stdio: 'ignore', timeout: 1500});
     } catch {
       /* close handler still reports exit */
     }
+  } else if (process.platform !== 'win32' && typeof pid === 'number' && pid > 0) {
     try {
-      child.kill();
+      process.kill(-pid, 'SIGTERM');
     } catch {
-      /* already exited */
+      /* group may already be gone */
     }
-    return;
-  }
-  try {
-    process.kill(-child.pid, 'SIGTERM');
-  } catch {
-    /* group may already be gone */
-  }
-  try {
-    process.kill(-child.pid, 'SIGKILL');
-  } catch {
-    /* group may already be gone */
+    try {
+      process.kill(-pid, 'SIGKILL');
+    } catch {
+      /* group may already be gone */
+    }
   }
   try {
     child.kill('SIGKILL');

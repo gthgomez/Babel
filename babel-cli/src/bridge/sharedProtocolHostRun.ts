@@ -527,6 +527,8 @@ export async function executeSharedProtocolHostRun(
                   options.fetchImpl,
                 );
                 write({ type: 'emergency_stop' });
+                turnSettled = true;
+                terminalExitCode = 0;
               } catch (error) {
                 write({
                   type: 'run_error',
