@@ -8,12 +8,14 @@ import { fileURLToPath } from 'node:url';
 import { existsSync } from 'node:fs';
 import { _electron } from 'playwright';
 import { saveProviderRoute } from '../native/provider-routing.mjs';
+import { APP_URL } from '../native/security.mjs';
 import { parseSharedSessionTrace } from './shared-session-electron-trace.mjs';
 import {
   EVAL_GET_REMOTE_BRIDGE,
   EVAL_RUN_SHARED_TURN,
   EVAL_START_REMOTE_BRIDGE,
   EVAL_STOP_REMOTE_BRIDGE,
+  EVAL_RENDERER_PRELOAD_READY,
   EVAL_TRUST_PROJECT,
 } from './shared-session-electron-ipc.mjs';
 import { buildDesktopCliShimEntrySource } from './shared-protocol-shim-import.mjs';
@@ -251,7 +253,12 @@ test('shared-session Electron run uses host-run child and preserves thread acros
     markStage('after-electron.launch', { ok: true });
 
     const page = await bounded(application.firstWindow(), 20_000, 'firstWindow');
-    await bounded(page.waitForLoadState('domcontentloaded'), 20_000, 'renderer:domcontentloaded');
+    await bounded(page.waitForURL(APP_URL, { timeout: 20_000 }), 20_000, 'renderer:app-url');
+    await bounded(
+      page.waitForFunction(EVAL_RENDERER_PRELOAD_READY, null, { timeout: 20_000 }),
+      20_000,
+      'renderer:preload-ready',
+    );
     markStage('renderer:ready', { url: page.url() });
 
     await bounded(
