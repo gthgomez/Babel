@@ -310,15 +310,53 @@
             thread = transition('thread', thread, 'running');
           } else if (row.status === 'waiting_approval') {
             thread = transition('thread', thread, 'waiting_approval');
-          } else if (!row.active_turn && (row.status === 'completed' || row.status === 'failed')) {
-            turn = transition('turn', turn, row.status === 'failed' ? 'fail' : 'complete');
-            thread = transition('thread', thread, row.status === 'failed' ? 'fail' : 'ready');
-            if (approval === 'PENDING') approval = transition('approval', approval, 'expire');
-            memory.turnId = null;
           }
         }
       }
     } catch (catalogError) { /* catalog is optional during reconnect */ }
+    if (memory.threadId && memory.turnId !== null && memory.turnId !== undefined && turn === 'STREAM') {
+      try {
+        const history = await rpc('history.lookup', {
+          thread_id: memory.threadId,
+          turn_id: memory.turnId,
+          limit: 1,
+        });
+        if (history.classified.kind === 'success') {
+          const terminal = history.payload.result && history.payload.result.turn_terminal;
+          if (terminal && terminal.turn_id === memory.turnId) {
+            if (terminal.event_type === 'cancelled') {
+              turn = transition('turn', turn, 'cancel');
+              thread = transition('thread', thread, 'ready');
+            } else if (terminal.event_type === 'failed') {
+              turn = transition('turn', turn, 'fail');
+              thread = transition('thread', thread, 'fail');
+            } else if (terminal.event_type === 'done') {
+              const outcome = terminal.fixture_execution
+                ? 'UNVERIFIED_PATCH'
+                : (terminal.outcome || 'UNVERIFIED_PATCH');
+              if (outcome === 'CANCELLED') {
+                turn = transition('turn', turn, 'cancel');
+                thread = transition('thread', thread, 'ready');
+              } else if (
+                outcome === 'VERIFIED_COMPLETE' ||
+                outcome === 'NO_CHANGE_REQUIRED' ||
+                outcome === 'UNVERIFIED_PATCH'
+              ) {
+                turn = transition('turn', turn, 'complete');
+                thread = transition('thread', thread, 'ready');
+              } else {
+                turn = transition('turn', turn, 'fail');
+                thread = transition('thread', thread, 'fail');
+              }
+            }
+            if (turn !== 'STREAM') {
+              if (approval === 'PENDING') approval = transition('approval', approval, 'expire');
+              memory.turnId = null;
+            }
+          }
+        }
+      } catch (historyError) { /* history terminal is optional during reconnect */ }
+    }
     try {
       const lookup = await rpc('approval.lookup', {
         thread_id: memory.threadId,

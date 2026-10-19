@@ -396,6 +396,9 @@ export type ChatEvent =
       turnTelemetry?: ChatTurnTelemetryRecord
       costBudget?: ChatEngineLimits['costBudget']
       runAllowance?: ChatEngineRunAllowanceReport
+      /** Test-owned acceptance bridge marks fixture execution (not production verified). */
+      fixture_execution?: boolean
+      fixture_kind?: string
       /** D03: structured terminal reason code (additive; outcome unchanged). */
       reason_code?: TerminalReasonCode
       cause_class?:

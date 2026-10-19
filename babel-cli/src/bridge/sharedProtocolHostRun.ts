@@ -14,7 +14,7 @@ import {
 } from './desktopControllerAuth.js';
 import { HttpProtocolClient } from './httpProtocolClient.js';
 import type { RemoteCatalogResult } from './remoteCatalog.js';
-import type { HistoryLookupResult } from '../protocol/types.js';
+import type { HistoryLookupResult, TurnTerminalRecord } from '../protocol/types.js';
 
 export interface SharedProtocolHostRunOptions {
   port: number;
@@ -316,15 +316,69 @@ async function lookupCatalogSession(
   return { status: row.status, active_turn: row.active_turn };
 }
 
-/** Reconcile a settled turn from catalog/history when the live socket missed the terminal event. */
+async function resolveAuthoritativeTerminalOutcome(
+  client: HttpProtocolClient,
+  threadId: string,
+  terminal: TurnTerminalRecord,
+): Promise<string> {
+  if (terminal.fixture_execution) return 'UNVERIFIED_PATCH';
+  if (terminal.event_type === 'cancelled') return 'CANCELLED';
+  if (terminal.event_type === 'failed') {
+    return terminal.outcome ?? 'AGENT_FAILURE';
+  }
+  const outcome = terminal.outcome;
+  if (!outcome) return 'UNVERIFIED_PATCH';
+  if (outcome === 'VERIFIED_COMPLETE') {
+    const verification = await client.call<
+      'verification.lookup',
+      { thread_id: string },
+      { has_machine_evidence: boolean }
+    >('verification.lookup', { thread_id: threadId });
+    return verification.has_machine_evidence ? 'VERIFIED_COMPLETE' : 'UNVERIFIED_PATCH';
+  }
+  return outcome;
+}
+
+async function mapAuthoritativeTerminalToStream(
+  client: HttpProtocolClient,
+  threadId: string,
+  terminal: TurnTerminalRecord,
+): Promise<Record<string, unknown>> {
+  if (terminal.event_type === 'cancelled') {
+    return { type: 'cancelled' };
+  }
+  if (terminal.event_type === 'failed') {
+    return {
+      type: 'run_error',
+      error: terminal.error ?? 'Turn failed on the shared protocol host',
+    };
+  }
+  const terminalOutcome = await resolveAuthoritativeTerminalOutcome(client, threadId, terminal);
+  return {
+    type: 'run_complete',
+    result: {
+      session_id: threadId,
+      answer: terminal.answer ?? '',
+      ...(terminal.usage ? { usage: terminal.usage } : {}),
+      terminal_outcome: terminalOutcome,
+      user_status: terminal.status ?? 'completed',
+      reconciled_from_host: true,
+      ...(terminal.fixture_execution ? { fixture_execution: true } : {}),
+      ...(terminal.fixture_kind ? { fixture_kind: terminal.fixture_kind } : {}),
+    },
+  };
+}
+
+/** Reconcile a settled turn from persisted terminal evidence when the live socket missed the event. */
 export async function reconcileTerminalTurnFromHost(
   client: HttpProtocolClient,
   threadId: string,
   submittedTurnId?: number,
 ): Promise<Record<string, unknown> | null> {
+  if (submittedTurnId === undefined) return null;
   const row = await lookupCatalogSession(client, threadId);
-  if (!row || row.active_turn) return null;
-  if (row.status === 'waiting_approval' || row.status === 'running') return null;
+  if (row?.active_turn) return null;
+  if (row && (row.status === 'running' || row.status === 'waiting_approval')) return null;
 
   const history = await client.call<
     'history.lookup',
@@ -332,31 +386,12 @@ export async function reconcileTerminalTurnFromHost(
     HistoryLookupResult
   >('history.lookup', {
     thread_id: threadId,
-    ...(submittedTurnId !== undefined ? { turn_id: submittedTurnId } : {}),
+    turn_id: submittedTurnId,
     limit: 200,
   });
-  const assistant = [...history.cells]
-    .reverse()
-    .find((cell) => cell.kind === 'assistant_message' && cell.lifecycle === 'committed');
-  const answer =
-    assistant &&
-    typeof (assistant.payload as { message?: string }).message === 'string'
-      ? (assistant.payload as { message: string }).message
-      : '';
-
-  if (row.status === 'failed') {
-    return { type: 'run_error', error: 'Turn failed on the shared protocol host' };
-  }
-  return {
-    type: 'run_complete',
-    result: {
-      session_id: threadId,
-      answer,
-      terminal_outcome: 'VERIFIED_COMPLETE',
-      user_status: 'completed',
-      reconciled_from_host: true,
-    },
-  };
+  const terminal = history.turn_terminal;
+  if (!terminal || terminal.turn_id !== submittedTurnId) return null;
+  return await mapAuthoritativeTerminalToStream(client, threadId, terminal);
 }
 
 /** Run one shared-host chat turn to completion. Returns process exit code. */
@@ -623,6 +658,19 @@ export async function executeSharedProtocolHostRun(
       return socket;
     };
 
+    const writeStreamEvent = (mapped: Record<string, unknown> | null): boolean => {
+      if (!mapped) return false;
+      const isTerminal = ['run_complete', 'run_error', 'cancelled'].includes(String(mapped.type));
+      if (isTerminal) {
+        if (turnSettled) return true;
+        write(mapped);
+        turnSettled = true;
+        return true;
+      }
+      write(mapped);
+      return false;
+    };
+
     const attachTurnObserver = (socket: WebSocket): Promise<void> =>
       new Promise<void>((resolve) => {
         const onMessage = (event: MessageEvent) => {
@@ -632,12 +680,8 @@ export async function executeSharedProtocolHostRun(
               const params = message.params as Record<string, unknown> | undefined;
               const ev = params?.event as Record<string, unknown> | undefined;
               if (ev) {
-                const mapped = mapTurnEventToStream(ev, threadId);
-                if (mapped) write(mapped);
-                if (['done', 'failed', 'cancelled'].includes(String(ev.type))) {
-                  turnSettled = true;
-                  resolve();
-                }
+                const settled = writeStreamEvent(mapTurnEventToStream(ev, threadId));
+                if (settled) resolve();
               }
             } else if (message.method === 'permission.request') {
               const params = message.params as Record<string, unknown>;
@@ -713,12 +757,13 @@ export async function executeSharedProtocolHostRun(
         options.runId,
         turnHint,
       );
+      if (turnSettled) break;
       const terminal = await reconcileTerminalTurnFromHost(client, threadId, submittedTurnId);
-      if (terminal) {
-        write(terminal);
-        turnSettled = true;
+      if (terminal && !turnSettled) {
+        writeStreamEvent(terminal);
         break;
       }
+      if (turnSettled) break;
       const catalogRow = await lookupCatalogSession(client, threadId);
       const recoverable = Boolean(authoritative) || catalogRow?.active_turn === true;
       if (authoritative) {

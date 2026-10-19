@@ -141,6 +141,8 @@ export type TurnStreamEvent =
       /** D03: structured terminal reason code. */
       reason_code?: TerminalReasonCode;
       cause_class?: 'model' | 'provider' | 'environment' | 'harness' | 'verification' | null;
+      fixture_execution?: boolean;
+      fixture_kind?: string;
     }
   | {
       type: 'failed';
@@ -279,10 +281,28 @@ export interface TurnCancelResult {
   cancelled: boolean;
 }
 
+/** Authoritative persisted terminal for one turn (not catalog idle/running). */
+export interface TurnTerminalRecord {
+  turn_id: number;
+  event_type: 'done' | 'failed' | 'cancelled';
+  answer?: string;
+  error?: string;
+  status?: string;
+  outcome?: string;
+  reason_code?: string;
+  cause_class?: string | null;
+  fixture_execution?: boolean;
+  fixture_kind?: string;
+  usage?: TurnUsageSummary;
+  recorded_at: string;
+}
+
 export interface HistoryLookupResult {
   cells: HistoryCellRecord[];
   cursor?: string;
   has_more?: boolean;
+  /** Present when `turn_id` is requested and a terminal record exists for that turn. */
+  turn_terminal?: TurnTerminalRecord | null;
 }
 
 export interface ApprovalDecideResult {

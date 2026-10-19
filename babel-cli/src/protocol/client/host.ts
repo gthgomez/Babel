@@ -98,6 +98,8 @@ export interface ProtocolHostState {
   verificationByThread: Map<string, VerificationEvidence>;
   /** Durable-state restore outcome recorded at thread.resume time. */
   restoreReports: Map<string, RestoreReport>;
+  /** Authoritative terminal records keyed by `${thread_id}:${turn_id}`. */
+  turnTerminals: Map<string, import('../types.js').TurnTerminalRecord>;
   /** P03: shared lifecycle facade that owns controller dispatch per turn. */
   coordinator: RuntimeCoordinator;
   /**
@@ -129,9 +131,62 @@ export function createProtocolHostState(options: {
     approvalBroker: new RemoteApprovalBroker(),
     verificationByThread: new Map(),
     restoreReports: new Map(),
+    turnTerminals: new Map(),
     coordinator: options.coordinator ?? createRuntimeCoordinator(),
     admissionStores: new Map(),
   };
+}
+
+function turnTerminalStorageKey(threadId: string, turnId: number): string {
+  return `${threadId}:${turnId}`;
+}
+
+function recordTurnTerminalFromChatEvent(
+  state: ProtocolHostState,
+  threadId: string,
+  turnId: number,
+  event: ChatEvent,
+): void {
+  const recorded_at = new Date().toISOString();
+  const key = turnTerminalStorageKey(threadId, turnId);
+  if (event.type === 'done') {
+    state.turnTerminals.set(key, {
+      turn_id: turnId,
+      event_type: 'done',
+      answer: event.answer,
+      ...(event.status !== undefined ? { status: event.status } : {}),
+      ...(event.outcome !== undefined ? { outcome: event.outcome } : {}),
+      ...(event.reason_code !== undefined ? { reason_code: event.reason_code } : {}),
+      ...(event.cause_class !== undefined ? { cause_class: event.cause_class } : {}),
+      ...(event.fixture_execution === true ? { fixture_execution: true } : {}),
+      ...(typeof event.fixture_kind === 'string' ? { fixture_kind: event.fixture_kind } : {}),
+      usage: event.usage,
+      recorded_at,
+    });
+    return;
+  }
+  if (event.type === 'failed') {
+    state.turnTerminals.set(key, {
+      turn_id: turnId,
+      event_type: 'failed',
+      error: event.error,
+      ...(event.status !== undefined ? { status: event.status } : {}),
+      ...(event.outcome !== undefined ? { outcome: event.outcome } : {}),
+      ...(event.reason_code !== undefined ? { reason_code: event.reason_code } : {}),
+      ...(event.cause_class !== undefined ? { cause_class: event.cause_class } : {}),
+      recorded_at,
+    });
+    return;
+  }
+  if (event.type === 'cancelled') {
+    state.turnTerminals.set(key, {
+      turn_id: turnId,
+      event_type: 'cancelled',
+      outcome: event.outcome ?? 'CANCELLED',
+      ...(event.status !== undefined ? { status: event.status } : {}),
+      recorded_at,
+    });
+  }
 }
 
 function modeExecutionProfile(mode: BabelMode): 'chat' | 'plan' | 'deep' {
@@ -600,6 +655,9 @@ export async function handleProtocolRequest(
             let runtimeExecution: RuntimeExecution | null = null;
             const emitEvents = async (events: AsyncIterable<ChatEvent>): Promise<void> => {
               for await (const event of events) {
+                if (event.type === 'done' || event.type === 'failed' || event.type === 'cancelled') {
+                  recordTurnTerminalFromChatEvent(state, params.thread_id, turnId, event);
+                }
                 const mapped = mapChatEventToTurnStreamEvent(event);
                 if (!mapped) continue;
                 try {
@@ -763,6 +821,11 @@ export async function handleProtocolRequest(
           cells: slice,
           has_more: slice.length < filtered.length,
         };
+        if (params.turn_id !== undefined) {
+          result.turn_terminal =
+            state.turnTerminals.get(turnTerminalStorageKey(params.thread_id, params.turn_id)) ??
+            null;
+        }
         // Provide the next-page cursor when there are more results
         if (result.has_more && slice.length > 0) {
           result.cursor = slice[slice.length - 1]?.cell_id ?? '';

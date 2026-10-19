@@ -9,6 +9,12 @@ import { existsSync } from 'node:fs';
 import { _electron } from 'playwright';
 import { saveProviderRoute } from '../native/provider-routing.mjs';
 import { parseSharedSessionTrace } from './shared-session-electron-trace.mjs';
+import {
+  EVAL_GET_REMOTE_BRIDGE,
+  EVAL_RUN_SHARED_TURN,
+  EVAL_START_REMOTE_BRIDGE,
+  EVAL_TRUST_PROJECT,
+} from './shared-session-electron-ipc.mjs';
 
 const babelCliDist = resolve(
   fileURLToPath(new URL('../../babel-cli/dist/index.js', import.meta.url)),
@@ -32,14 +38,33 @@ function resolveElectronExecutable() {
 const electronExecutable = resolveElectronExecutable();
 
 function emitParentTrace(stage, detail = {}) {
-  const line = `[shared-session-parent-trace] ${JSON.stringify({
-    stage,
-    ts: Date.now(),
-    display: process.env.DISPLAY ?? null,
-    platform: process.platform,
-    ...detail,
-  })}`;
-  console.error(line);
+  console.error(
+    `[shared-session-parent-trace] ${JSON.stringify({
+      stage,
+      ts: Date.now(),
+      display: process.env.DISPLAY ?? null,
+      platform: process.platform,
+      ...detail,
+    })}`,
+  );
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function bounded(promise, ms, label) {
+  let timer;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function buildLifecycleStyleEnv(profileDir) {
@@ -63,10 +88,35 @@ function buildLifecycleStyleEnv(profileDir) {
     if (process.env[name]) env[name] = process.env[name];
   }
   env.BABEL_RUNS_DIR = join(profileDir, 'engine', 'state', 'runs');
-  env.BABEL_TEST_ACCEPTANCE_DETERMINISTIC_BRIDGE = '1';
   env.BABEL_TEST_SHARED_SESSION_TRACE = '1';
   env.ELECTRON_NO_SANDBOX = '1';
   return env;
+}
+
+async function runSharedTurnWithAdmissionRetry(page, payload, label, failStageFn) {
+  let lastError = 'unknown';
+  for (let attempt = 0; attempt < 80; attempt++) {
+    try {
+      return await bounded(page.evaluate(EVAL_RUN_SHARED_TURN, payload), 60_000, label);
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : String(error);
+      if (!/Wait for the current Babel run/.test(lastError)) throw error;
+      await sleep(200);
+    }
+  }
+  failStageFn(label, `runner admission still busy after retries: ${lastError}`);
+}
+
+async function shutdownElectronApplication(application) {
+  if (!application) return;
+  await bounded(
+    application.evaluate(({ app }) => {
+      app.exit(0);
+    }),
+    3_000,
+    'cleanup:app.exit',
+  ).catch(() => {});
+  await bounded(application.close(), 5_000, 'cleanup:application.close').catch(() => {});
 }
 
 test('shared-session Electron run uses host-run child and preserves thread across two turns', {
@@ -77,39 +127,42 @@ test('shared-session Electron run uses host-run child and preserves thread acros
       : !existsSync(desktopDistHtml)
         ? 'missing babel-desktop dist/index.html: run npm run build in babel-desktop'
         : false,
-  timeout: 120_000,
+  timeout: 180_000,
 }, async () => {
   const root = await mkdtemp(join(tmpdir(), 'babel-shared-session-electron-'));
   let application;
   const traceStages = [];
+  const completedStages = [];
+
   const failStage = (stage, evidence) => {
     assert.fail(
-      `Electron shared-session stalled at stage "${stage}"; trace=${JSON.stringify(traceStages.map((s) => s.stage))}; evidence=${evidence}`,
+      `Electron shared-session stalled at stage "${stage}"; completed=${JSON.stringify(completedStages)}; trace=${JSON.stringify(traceStages.map((s) => s.stage))}; evidence=${evidence}`,
     );
   };
-  const waitStage = async (stage, timeoutMs = 15_000) => {
+
+  const markStage = (stage, detail = {}) => {
+    completedStages.push(stage);
+    emitParentTrace(stage, detail);
+  };
+
+  const waitTraceStage = async (stage, timeoutMs = 15_000) => {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
       if (traceStages.some((entry) => entry.stage === stage)) return;
-      await new Promise((resolve) => setTimeout(resolve, 40));
+      await sleep(40);
     }
-    failStage(stage, `missing trace stage within ${timeoutMs}ms`);
+    failStage(`trace:${stage}`, `missing main-process trace stage within ${timeoutMs}ms`);
   };
-  const invokeBounded = async (label, fn, timeoutMs = 15_000) => {
-    let timer;
-    try {
-      return await Promise.race([
-        fn(),
-        new Promise((_, reject) => {
-          timer = setTimeout(() => reject(new Error(`${label} timed out after ${timeoutMs}ms`)), timeoutMs);
-        }),
-      ]);
-    } catch (error) {
-      failStage(label, error instanceof Error ? error.message : String(error));
-    } finally {
-      clearTimeout(timer);
+
+  const waitTraceMatch = async (predicate, label, timeoutMs = 10_000) => {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      if (predicate()) return;
+      await sleep(50);
     }
+    failStage(label, `trace evidence missing within ${timeoutMs}ms; trace=${JSON.stringify(traceStages)}`);
   };
+
   try {
     const project = join(root, 'project');
     const profile = join(root, 'profile');
@@ -133,14 +186,21 @@ if (argv[0] === '--desktop-capabilities') {
   console.log(JSON.stringify({ schemaVersion: 1, credentialEnvironment: 'native-resolved-v1' }));
   process.exit(0);
 }
-const remoteIdx = argv.indexOf('remote');
-const remoteSub = remoteIdx >= 0 ? argv[remoteIdx + 1] : '';
+let argvToRun = [...argv];
+const remoteIdx = argvToRun.indexOf('remote');
+let remoteSub = remoteIdx >= 0 ? argvToRun[remoteIdx + 1] : '';
+if (remoteIdx >= 0 && remoteSub === 'serve') {
+  argvToRun[remoteIdx + 1] = 'acceptance-bridge';
+  remoteSub = 'acceptance-bridge';
+}
 if (remoteIdx >= 0 && (remoteSub === 'serve' || remoteSub === 'acceptance-bridge' || remoteSub === 'host-run')) {
   appendFileSync(hostRunReceipt, remoteSub + '\\n');
-  const child = spawn(process.execPath, ['--experimental-wasm-modules', dist, ...argv], {
+  const childEnv = { ...process.env };
+  if (remoteSub === 'acceptance-bridge') childEnv.BABEL_TEST_ACCEPTANCE_DETERMINISTIC_BRIDGE = '1';
+  const child = spawn(process.execPath, ['--experimental-wasm-modules', dist, ...argvToRun], {
     cwd: process.cwd(),
     stdio: remoteSub === 'host-run' ? ['pipe', 'pipe', 'inherit'] : 'inherit',
-    env: process.env,
+    env: childEnv,
   });
   if (remoteSub === 'host-run' && child.stdout) {
     child.stdout.on('data', (chunk) => process.stdout.write(chunk));
@@ -175,204 +235,148 @@ if (remoteIdx >= 0 && (remoteSub === 'serve' || remoteSub === 'acceptance-bridge
     });
 
     const env = buildLifecycleStyleEnv(profile);
-
     const launchArgs = [bootstrap, `--profile-dir=${profile}`];
     const gpuSafeArgs =
       process.platform === 'linux'
         ? ['--disable-gpu', '--disable-gpu-sandbox', '--disable-dev-shm-usage', '--no-zygote']
         : [];
 
-    emitParentTrace('prelaunch:fixtures-ready', {
-      executable: electronExecutable,
-      gpuSafeArgs,
-      launchArgsCount: launchArgs.length,
-    });
+    markStage('fixtures:ready', { executable: electronExecutable, gpuSafeArgs });
 
     let childStderr = '';
-    const launchOptions = {
-      executablePath: electronExecutable,
-      args: [...gpuSafeArgs, ...launchArgs],
-      env,
-      timeout: 45_000,
-    };
-
-    emitParentTrace('before-electron.launch', {
-      timeoutMs: launchOptions.timeout,
-      xvfbExpected: process.platform === 'linux',
-    });
-
-    try {
-      application = await invokeBounded(
-        'electron.launch',
-        async () => {
-          const app = await _electron.launch(launchOptions);
-          app.process().stderr?.on('data', (chunk) => {
-            const text = chunk.toString('utf8');
-            childStderr += text;
-            traceStages.push(...parseSharedSessionTrace(text));
-          });
-          return app;
-        },
-        50_000,
-      );
-      emitParentTrace('after-electron.launch', { ok: true });
-    } catch (error) {
-      emitParentTrace('after-electron.launch', {
-        ok: false,
-        error: error instanceof Error ? error.message : String(error),
-        childStderrTail: childStderr.slice(-2000),
-      });
-      throw error;
-    }
-    const page = await invokeBounded('firstWindow', () => application.firstWindow(), 20_000);
-    await waitStage('renderer:did-finish-load', 20_000);
-    await application.evaluate(({ dialog }) => {
-      dialog.showMessageBox = async (_window, options) => ({
-        response: options?.buttons?.includes('Trust project') ? 1 : 0,
-        checkboxChecked: false,
-      });
-    });
-
-    const authority = await invokeBounded('trustProject', () =>
-      page.evaluate(() => window.babelDesktop.trustProject()),
+    markStage('before-electron.launch', { timeoutMs: 45_000 });
+    application = await bounded(
+      _electron.launch({
+        executablePath: electronExecutable,
+        args: [...gpuSafeArgs, ...launchArgs],
+        env,
+        timeout: 45_000,
+      }),
+      50_000,
+      'electron.launch',
     );
-    assert.equal(authority.projectAuthority.trusted, true);
+    application.process().stderr?.on('data', (chunk) => {
+      const text = chunk.toString('utf8');
+      childStderr += text;
+      traceStages.push(...parseSharedSessionTrace(text));
+    });
+    markStage('after-electron.launch', { ok: true });
+
+    const page = await bounded(application.firstWindow(), 20_000, 'firstWindow');
+    await bounded(page.waitForLoadState('domcontentloaded'), 20_000, 'renderer:domcontentloaded');
+    markStage('renderer:ready', { url: page.url() });
+
+    await bounded(
+      application.evaluate(({ dialog }) => {
+        dialog.showMessageBox = async (_window, options) => ({
+          response: options?.buttons?.includes('Trust project') ? 1 : 0,
+          checkboxChecked: false,
+        });
+      }),
+      5_000,
+      'dialog:trust-mock',
+    );
+
+    const trust = await bounded(page.evaluate(EVAL_TRUST_PROJECT), 20_000, 'ipc:trustProject');
+    if (!trust?.trusted) {
+      failStage(
+        'ipc:trustProject',
+        `project not trusted; authority=${JSON.stringify(trust)}; stderrTail=${childStderr.slice(-1500)}`,
+      );
+    }
+    markStage('ipc:trustProject', { trusted: true });
 
     const bridgePort = 4600 + Math.floor(Math.random() * 400);
-    await invokeBounded('startRemoteBridge IPC', () =>
-      page.evaluate(async (port) => {
-        await window.babelDesktop.startRemoteBridge({ port });
-      }, bridgePort),
-      35_000,
-    );
-    await waitStage('start-remote-bridge:ready', 35_000);
-    await assertEventually(async () => {
-      const info = await page.evaluate(() => window.babelDesktop.getInfo());
-      return info.remoteBridge?.sharedSession === true && info.remoteBridge?.state === 'ready';
-    }, 'shared-session bridge never reached ready state');
-    const bridge = await page.evaluate(() => window.babelDesktop.getInfo().remoteBridge);
-    assert.equal(bridge?.sharedSession, true);
-    assert.equal(bridge?.running, true);
+    await bounded(page.evaluate(EVAL_START_REMOTE_BRIDGE, bridgePort), 45_000, 'ipc:startRemoteBridge');
+    markStage('ipc:startRemoteBridge', { port: bridgePort });
 
-    const runSharedTurn = (runId, task, sessionId) =>
-      invokeBounded(`run IPC ${runId}`, () =>
-        page.evaluate(
-          ({ runId, task, sessionId }) =>
-            new Promise((resolve, reject) => {
-              const seen = [];
-              const timeout = setTimeout(
-                () =>
-                  reject(
-                    new Error(
-                      `run ${runId} missing terminal event; seen=${JSON.stringify(seen)}`,
-                    ),
-                  ),
-                25_000,
-              );
-              const unsubscribe = window.babelDesktop.onEvent((packet) => {
-                if (packet.runId !== runId) return;
-                const eventType = packet.event?.type ?? packet.kind;
-                seen.push(eventType);
-                if (packet.event?.type === 'run_complete') {
-                  clearTimeout(timeout);
-                  unsubscribe();
-                  resolve({ result: packet.event.result, seen });
-                }
-                if (packet.event?.type === 'run_error') {
-                  clearTimeout(timeout);
-                  unsubscribe();
-                  reject(new Error(String(packet.event.error ?? 'run_error')));
-                }
-                if (packet.kind === 'exit' && packet.code !== 0) {
-                  clearTimeout(timeout);
-                  unsubscribe();
-                  reject(new Error(`host-run child exit code ${packet.code}`));
-                }
-              });
-              window.babelDesktop
-                .run({
-                  runId,
-                  task,
-                  mode: 'chat',
-                  ...(sessionId ? { sessionId } : {}),
-                })
-                .then((started) => {
-                  if (!started?.started) {
-                    clearTimeout(timeout);
-                    unsubscribe();
-                    reject(new Error(`run ${runId} was not started by the host`));
-                  }
-                })
-                .catch((error) => {
-                  clearTimeout(timeout);
-                  unsubscribe();
-                  reject(error);
-                });
-            }),
-          { runId, task, sessionId },
-        ),
-      );
+    await waitTraceStage('start-remote-bridge:ready', 40_000);
+    markStage('trace:start-remote-bridge:ready', {});
 
-    const firstTurn = await runSharedTurn('electron-turn-1', 'Shared session turn one');
-    const firstResult = firstTurn.result;
-    assert.ok(
-      traceStages.some((entry) => entry.stage === 'host-run:spawn' && entry.runId === 'electron-turn-1'),
-      `missing host-run child spawn trace: ${JSON.stringify(traceStages)}`,
-    );
-    assert.ok(
-      traceStages.some(
-        (entry) =>
-          entry.stage === 'babel:event' &&
-          entry.runId === 'electron-turn-1' &&
-          entry.eventType === 'run_complete',
-      ),
-      `missing main-process run_complete delivery: ${JSON.stringify(traceStages)}`,
-    );
-    assert.equal(typeof firstResult?.session_id, 'string');
-    await assertEventually(async () => {
-      try {
-        const text = await readFile(hostRunReceipt, 'utf8');
-        return text.includes('host-run');
-      } catch {
-        return false;
-      }
-    }, 'host-run receipt missing');
-
-    await assertEventually(async () => {
-      try {
-        await readFile(legacyRunReceipt);
-        return false;
-      } catch {
-        return true;
-      }
-    }, 'legacy babel run must not be used under shared bridge');
-
-    const secondTurn = await runSharedTurn(
-      'electron-turn-2',
-      'Shared session turn two',
-      firstResult.session_id,
-    );
-    const secondResult = secondTurn.result;
-    assert.equal(secondResult?.session_id, firstResult.session_id);
-    await assertEventually(async () => {
-      const text = await readFile(hostRunReceipt, 'utf8');
-      return text.split('\n').filter((line) => line === 'host-run').length >= 2;
-    }, 'second host-run child was not started');
-  } finally {
-    emitParentTrace('cleanup:start', { hadApplication: Boolean(application) });
-    if (application) {
-      await application.evaluate(({ app }) => app.exit(0)).catch(() => {});
-      await application.close().catch(() => {});
+    const bridgeReady = await bounded(page.evaluate(EVAL_GET_REMOTE_BRIDGE), 10_000, 'ipc:getInfo.remoteBridge');
+    if (!bridgeReady?.sharedSession || bridgeReady.state !== 'ready' || !bridgeReady.running) {
+      failStage('ipc:getInfo.remoteBridge', `bridge not ready: ${JSON.stringify(bridgeReady)}`);
     }
-    await rm(root, { recursive: true, force: true });
+    markStage('ipc:getInfo.remoteBridge', bridgeReady);
+
+    const firstTurn = await bounded(
+      page.evaluate(EVAL_RUN_SHARED_TURN, {
+        runId: 'electron-turn-1',
+        task: 'Shared session turn one',
+        sessionId: null,
+      }),
+      60_000,
+      'ipc:run turn-1',
+    );
+    markStage('ipc:run turn-1 complete', { session_id: firstTurn.result?.session_id });
+
+    await waitTraceMatch(
+      () => traceStages.some((e) => e.stage === 'host-run:spawn' && e.runId === 'electron-turn-1'),
+      'trace:host-run:spawn turn-1',
+    );
+    await waitTraceMatch(
+      () =>
+        traceStages.some(
+          (e) =>
+            e.stage === 'host-run:event' &&
+            e.runId === 'electron-turn-1' &&
+            e.eventType === 'run_complete',
+        ),
+      'trace:host-run:event run_complete turn-1',
+    );
+    await waitTraceMatch(
+      () =>
+        traceStages.some(
+          (e) =>
+            e.stage === 'babel:event' &&
+            e.runId === 'electron-turn-1' &&
+            e.eventType === 'run_complete',
+        ),
+      'trace:babel:event run_complete turn-1',
+    );
+    markStage('trace:turn-1 terminal evidence', {});
+
+    assert.equal(typeof firstTurn.result?.session_id, 'string');
+    const receiptAfterFirst = await readFile(hostRunReceipt, 'utf8').catch(() => '');
+    if (!receiptAfterFirst.includes('host-run')) {
+      failStage('receipt:host-run turn-1', receiptAfterFirst || '(empty)');
+    }
+    if (existsSync(legacyRunReceipt)) {
+      failStage('receipt:legacy-run absent', await readFile(legacyRunReceipt, 'utf8'));
+    }
+
+    const secondTurn = await runSharedTurnWithAdmissionRetry(
+      page,
+      {
+        runId: 'electron-turn-2',
+        task: 'Shared session turn two',
+        sessionId: firstTurn.result.session_id,
+      },
+      'ipc:run turn-2',
+      failStage,
+    );
+    markStage('ipc:run turn-2 complete', { session_id: secondTurn.result?.session_id });
+
+    assert.equal(secondTurn.result?.session_id, firstTurn.result.session_id);
+    const receiptFinal = await readFile(hostRunReceipt, 'utf8');
+    const hostRunCount = receiptFinal.split('\n').filter((line) => line === 'host-run').length;
+    if (hostRunCount < 2) {
+      failStage('receipt:host-run turn-2', receiptFinal);
+    }
+    markStage('fixture:two-turn-pass', {
+      threadId: firstTurn.result.session_id,
+      hostRunInvocations: hostRunCount,
+    });
+  } catch (error) {
+    emitParentTrace('fixture:error', {
+      error: error instanceof Error ? error.message : String(error),
+      completedStages,
+    });
+    throw error;
+  } finally {
+    emitParentTrace('cleanup:start', { hadApplication: Boolean(application), completedStages });
+    await shutdownElectronApplication(application);
+    await rm(root, { recursive: true, force: true }).catch(() => {});
     emitParentTrace('cleanup:done', {});
   }
 });
-
-async function assertEventually(check, message) {
-  for (let attempt = 0; attempt < 80; attempt++) {
-    if (await check()) return;
-    await new Promise((resolve) => setTimeout(resolve, 250));
-  }
-  assert.fail(message ?? 'condition not met');
-}

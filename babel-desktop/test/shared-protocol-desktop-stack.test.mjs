@@ -52,7 +52,6 @@ async function runTurn({ bridge, entry, projectRoot, config, runId, task, sessio
     env: {
       BABEL_CONFIG_DIR: config,
       ELECTRON_RUN_AS_NODE: '1',
-      BABEL_TEST_ACCEPTANCE_DETERMINISTIC_BRIDGE: '1',
     },
     inheritEnv: false,
   });
@@ -109,14 +108,21 @@ import { appendFileSync } from 'node:fs';
 const dist = ${JSON.stringify(babelCliDist)};
 const receipt = ${JSON.stringify(receipt)};
 const argv = process.argv.slice(2);
-const remoteIdx = argv.indexOf('remote');
-const remoteSub = remoteIdx >= 0 ? argv[remoteIdx + 1] : '';
+let argvToRun = [...argv];
+const remoteIdx = argvToRun.indexOf('remote');
+let remoteSub = remoteIdx >= 0 ? argvToRun[remoteIdx + 1] : '';
+if (remoteIdx >= 0 && remoteSub === 'serve') {
+  argvToRun[remoteIdx + 1] = 'acceptance-bridge';
+  remoteSub = 'acceptance-bridge';
+}
 if (remoteIdx >= 0 && (remoteSub === 'serve' || remoteSub === 'acceptance-bridge' || remoteSub === 'host-run')) {
   appendFileSync(receipt, remoteSub + '\\n');
-  const child = spawn(process.execPath, ['--experimental-wasm-modules', dist, ...argv], {
+  const childEnv = { ...process.env };
+  if (remoteSub === 'acceptance-bridge') childEnv.BABEL_TEST_ACCEPTANCE_DETERMINISTIC_BRIDGE = '1';
+  const child = spawn(process.execPath, ['--experimental-wasm-modules', dist, ...argvToRun], {
     cwd: process.cwd(),
     stdio: remoteSub === 'host-run' ? ['pipe', 'pipe', 'pipe'] : 'inherit',
-    env: process.env,
+    env: childEnv,
   });
   if (remoteSub === 'host-run') {
     child.stdout?.on('data', (c) => process.stdout.write(c));
@@ -143,7 +149,6 @@ if (remoteIdx >= 0 && (remoteSub === 'serve' || remoteSub === 'acceptance-bridge
       env: {
         BABEL_CONFIG_DIR: config,
         ELECTRON_RUN_AS_NODE: '1',
-        BABEL_TEST_ACCEPTANCE_DETERMINISTIC_BRIDGE: '1',
       },
       inheritEnv: false,
     });

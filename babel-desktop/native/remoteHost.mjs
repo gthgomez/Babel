@@ -184,16 +184,10 @@ export class RemoteBridgeChild {
     this.#sharedSession = useSharedSession;
     this.#desktopClientId = controllerId;
     this.#desktopProofKey = proofKey;
-    const useAcceptanceBridge = this.env.BABEL_TEST_ACCEPTANCE_DETERMINISTIC_BRIDGE === '1';
-    const serveCliArgs = useAcceptanceBridge
-      ? buildAcceptanceBridgeArgs(this.entry, this.projectRoot, {
-          port,
-          sharedSession: useSharedSession,
-        })
-      : buildRemoteServeArgs(this.entry, this.projectRoot, {
-          port,
-          sharedSession: useSharedSession,
-        });
+    const serveCliArgs = buildRemoteServeArgs(this.entry, this.projectRoot, {
+      port,
+      sharedSession: useSharedSession,
+    });
     const child = this.spawnChild(
       this.executable,
       productionNodeCliArgv(this.entry, serveCliArgs.slice(1)),
@@ -215,7 +209,6 @@ export class RemoteBridgeChild {
               BABEL_BRIDGE_DESKTOP_PROOF_KEY: proofKey,
             }
           : {}),
-        ...(useAcceptanceBridge ? { BABEL_TEST_ACCEPTANCE_DETERMINISTIC_BRIDGE: '1' } : {}),
       },
     },
     );
