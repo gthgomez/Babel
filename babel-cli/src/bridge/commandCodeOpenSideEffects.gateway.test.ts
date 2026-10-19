@@ -1,0 +1,227 @@
+import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { request, type IncomingMessage } from 'node:http';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { after, before, describe, it } from 'node:test';
+
+import type { SessionDescriptor } from '../executor/contracts.js';
+import {
+  computeDesktopControllerProof,
+  DESKTOP_CLIENT_ID_HEADER,
+  DESKTOP_PROOF_HEADER,
+  mintDesktopControllerClientId,
+  mintDesktopControllerProofKey,
+} from './desktopControllerAuth.js';
+import { CommandCodeAcpRuntimeRegistry } from './commandCodeAcpRuntime.js';
+import { BridgeServer } from './sessionServer.js';
+
+const TOKEN = 'cc-open-sidefx-token';
+const ORIGIN = 'http://127.0.0.1';
+const PEER = fileURLToPath(new URL('../../test/fixtures/command-code-acp-peer.mjs', import.meta.url));
+const VERSION_FIXTURE = fileURLToPath(
+  new URL('../../test/fixtures/command-code-version.mjs', import.meta.url),
+);
+
+class OpenInvocationRegistry extends CommandCodeAcpRuntimeRegistry {
+  openSavedSessionCalls = 0;
+
+  override async openSavedSession(descriptor: SessionDescriptor): Promise<{ cell_count: number }> {
+    this.openSavedSessionCalls += 1;
+    return super.openSavedSession(descriptor);
+  }
+}
+
+function httpRequest(
+  url: string,
+  options: {
+    method?: string;
+    headers?: Record<string, string>;
+    body?: string;
+  } = {},
+): Promise<{ statusCode: number; body: string }> {
+  return new Promise((resolve, reject) => {
+    const parsed = new URL(url);
+    const req = request(
+      {
+        hostname: parsed.hostname,
+        port: parsed.port,
+        path: parsed.pathname + parsed.search,
+        method: options.method ?? 'GET',
+        headers: { 'Content-Type': 'application/json', ...options.headers },
+      },
+      (res: IncomingMessage) => {
+        let body = '';
+        res.on('data', (chunk: Buffer) => {
+          body += chunk.toString('utf8');
+        });
+        res.on('end', () => resolve({ statusCode: res.statusCode ?? 0, body }));
+      },
+    );
+    req.on('error', reject);
+    if (options.body) req.write(options.body);
+    req.end();
+  });
+}
+
+async function rpc(
+  rpcPort: number,
+  headers: Record<string, string>,
+  method: string,
+  params: Record<string, unknown>,
+  id = 1,
+): Promise<Record<string, unknown>> {
+  const res = await httpRequest(`http://127.0.0.1:${rpcPort}/rpc`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ jsonrpc: '2.0', id, method, params }),
+  });
+  return JSON.parse(res.body) as Record<string, unknown>;
+}
+
+describe('harness.command_code.open side effects', () => {
+  let server: BridgeServer;
+  let registry: OpenInvocationRegistry;
+  let port = 0;
+  let tmp = '';
+  let prevRuns: string | undefined;
+  let prevCliExecutable: string | undefined;
+  const desktopId = mintDesktopControllerClientId();
+  const desktopProofKey = mintDesktopControllerProofKey();
+
+  function desktopOnlyHeaders(): Record<string, string> {
+    return {
+      [DESKTOP_CLIENT_ID_HEADER]: desktopId,
+      [DESKTOP_PROOF_HEADER]: computeDesktopControllerProof(desktopProofKey, desktopId),
+      Origin: ORIGIN,
+    };
+  }
+
+  function fullDesktopHeaders(): Record<string, string> {
+    return {
+      Authorization: `Bearer ${TOKEN}`,
+      ...desktopOnlyHeaders(),
+    };
+  }
+
+  before(async () => {
+    tmp = mkdtempSync(join(tmpdir(), 'babel-cc-open-fx-'));
+    prevRuns = process.env['BABEL_RUNS_DIR'];
+    prevCliExecutable = process.env['BABEL_COMMAND_CODE_CLI_EXECUTABLE'];
+    process.env['BABEL_RUNS_DIR'] = tmp;
+    process.env['BABEL_COMMAND_CODE_CLI_EXECUTABLE'] = VERSION_FIXTURE;
+    registry = new OpenInvocationRegistry({
+      testLaunch: { command: process.execPath, args: [PEER] },
+    });
+    server = new BridgeServer({
+      authToken: TOKEN,
+      allowedWorkspaceRoot: tmp,
+      allowedOrigins: ['http://127.0.0.1:*', 'http://localhost:*'],
+      enforceControlLease: true,
+      desktopControllerClientId: desktopId,
+      desktopControllerProofKey: desktopProofKey,
+      commandCodeRegistry: registry,
+      commandCodeTestLaunch: { command: process.execPath, args: [PEER] },
+      commandCodeInstallProbe: async () => ({
+        state: 'verified' as const,
+        executable: VERSION_FIXTURE,
+        version: '1.0.0',
+      }),
+    });
+    await server.start(0);
+    port = server.port;
+  });
+
+  after(async () => {
+    await server.stop();
+    if (prevRuns === undefined) delete process.env['BABEL_RUNS_DIR'];
+    else process.env['BABEL_RUNS_DIR'] = prevRuns;
+    if (prevCliExecutable === undefined) delete process.env['BABEL_COMMAND_CODE_CLI_EXECUTABLE'];
+    else process.env['BABEL_COMMAND_CODE_CLI_EXECUTABLE'] = prevCliExecutable;
+    rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it('denies open with stale control_epoch and does not invoke registry openSavedSession', async () => {
+    const sess = await httpRequest(`http://127.0.0.1:${port}/sessions`, {
+      method: 'POST',
+      headers: fullDesktopHeaders(),
+      body: JSON.stringify({ projectRoot: tmp }),
+    });
+    const transportSessionId = (JSON.parse(sess.body) as { sessionId: string }).sessionId;
+    const created = await rpc(
+      port,
+      fullDesktopHeaders(),
+      'thread.create',
+      {
+        project_root: tmp,
+        session_id: transportSessionId,
+        harness_adapter_id: 'command-code',
+        harness_native_session_id: 'sess_fixture_preload',
+      },
+      1,
+    );
+    const threadId = (created.result as { thread_id: string }).thread_id;
+    const acquired = await rpc(
+      port,
+      desktopOnlyHeaders(),
+      'control.acquire',
+      { thread_id: threadId, force: false },
+      2,
+    );
+    const epoch = (acquired.result as { epoch?: number }).epoch;
+    assert.ok(typeof epoch === 'number');
+    const before = registry.openSavedSessionCalls;
+    const denied = await rpc(
+      port,
+      desktopOnlyHeaders(),
+      'harness.command_code.open',
+      {
+        thread_id: threadId,
+        project_root: tmp,
+        harness_native_session_id: 'sess_fixture_preload',
+        control_epoch: epoch + 99,
+      },
+      4,
+    );
+    assert.ok(denied.error, 'expected stale_epoch denial');
+    assert.equal(registry.openSavedSessionCalls, before);
+  });
+
+  it('rejects mismatched native id with zero registry openSavedSession calls', async () => {
+    const sess = await httpRequest(`http://127.0.0.1:${port}/sessions`, {
+      method: 'POST',
+      headers: fullDesktopHeaders(),
+      body: JSON.stringify({ projectRoot: tmp }),
+    });
+    const transportSessionId = (JSON.parse(sess.body) as { sessionId: string }).sessionId;
+    const created = await rpc(
+      port,
+      fullDesktopHeaders(),
+      'thread.create',
+      {
+        project_root: tmp,
+        session_id: transportSessionId,
+        harness_adapter_id: 'command-code',
+        harness_native_session_id: 'sess_fixture_sidefx_a',
+      },
+      10,
+    );
+    const threadId = (created.result as { thread_id: string }).thread_id;
+    await rpc(port, fullDesktopHeaders(), 'control.acquire', { thread_id: threadId, force: false }, 11);
+    const before = registry.openSavedSessionCalls;
+    const denied = await rpc(
+      port,
+      fullDesktopHeaders(),
+      'harness.command_code.open',
+      {
+        thread_id: threadId,
+        project_root: tmp,
+        harness_native_session_id: 'sess_fixture_sidefx_b',
+      },
+      12,
+    );
+    assert.ok(denied.error);
+    assert.equal(registry.openSavedSessionCalls, before);
+  });
+});
