@@ -60,12 +60,13 @@
         </dl>
         <details id="auth-card" class="auth-panel">
           <summary>Connection settings</summary>
-          <p class="muted">The bearer token stays in memory for this page only. Reload requires re-authentication.</p>
-          <label for="token">Bearer token</label>
+          <p class="muted">Prefer device pairing (host-generated link). Host administrators may paste a bearer token; paired devices use a secure cookie.</p>
+          <label for="token">Bearer token (host admin)</label>
           <input id="token" type="password" autocomplete="off" spellcheck="false"/>
           <label for="root">Workspace root</label>
           <input id="root" autocomplete="off" placeholder="registered host workspace"/>
-          <div class="button-row"><button id="connect" class="button button-primary" type="button">Connect</button><button id="create" class="button" type="button" disabled>Create thread</button><button id="resume" class="button" type="button" disabled>Resume thread</button></div>
+          <div class="button-row"><button id="connect" class="button button-primary" type="button">Connect</button><button id="take-control" class="button" type="button" disabled>Take control</button><button id="create" class="button" type="button" disabled>Create thread</button><button id="resume" class="button" type="button" disabled>Resume thread</button></div>
+          <p id="control-copy" class="muted">Viewing does not grant mutation rights. Take control before sending prompts or approvals.</p>
           <label for="thread-id">Known thread id</label>
           <input id="thread-id" autocomplete="off"/>
         </details>

@@ -6,6 +6,7 @@
     "src/runners/groqApi.js",
     "src/taskCompletion.js",
     "src/bridge/remote-ui/app.js",
+    "src/bridge/remote-ui/pair.js",
     "src/bridge/remote-ui/render.js",
     "src/bridge/remote-ui/state.js",
     "src/bridge/remote-ui/sw.js",

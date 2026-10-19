@@ -8,14 +8,21 @@
   const threadInput = byId('thread-id');
   const transcript = byId('transcript');
 
+  const LEASE_RENEW_MS = 10000;
   const memory = {
     token: '',
+    pairedDevice: false,
+    clientId: null,
     sessionId: '',
     threadId: '',
     turnId: null,
     pendingApproval: null,
     lastCommandId: '',
     lastMessage: '',
+    controlEpoch: null,
+    controlExpiresAtMs: null,
+    leaseRenewTimer: null,
+    authKind: 'none',
   };
 
   let host = 'UNKNOWN';
@@ -53,38 +60,149 @@
     document.querySelectorAll('.topbar-status .status-dot, #host-card .status-dot').forEach(function (dot) {
       dot.className = 'status-dot ' + String(host).toLowerCase();
     });
-    byId('create').disabled = !memory.token;
-    byId('resume').disabled = !memory.token;
-    byId('send').disabled = !S.canSendTurn(thread, turn) || !memory.token || sendInFlight;
-    byId('stop').disabled = !S.canCancelTurn(turn);
-    byId('reconnect').disabled = !memory.token;
-    composer.disabled = !memory.token;
-    byId('refresh-files').disabled = !memory.token || !memory.threadId;
-    byId('refresh-diff').disabled = !memory.token || !memory.threadId;
-    byId('refresh-verification').disabled = !memory.token || !memory.threadId;
+    const authed = memory.token || memory.pairedDevice;
+    const canMutate = authed && (memory.authKind === 'host' || (memory.controlEpoch !== null && memory.clientId));
+    byId('create').disabled = !authed;
+    byId('resume').disabled = !authed;
+    byId('send').disabled = !S.canSendTurn(thread, turn) || !canMutate || sendInFlight;
+    byId('stop').disabled = !S.canCancelTurn(turn) || !canMutate;
+    byId('reconnect').disabled = !authed;
+    byId('take-control').disabled = !authed || !memory.threadId || memory.authKind === 'host';
+    composer.disabled = !canMutate;
+    byId('refresh-files').disabled = !authed || !memory.threadId;
+    byId('refresh-diff').disabled = !authed || !memory.threadId;
+    byId('refresh-verification').disabled = !authed || !memory.threadId;
     R.setText(byId('action-state-badge'), label(turn));
     R.setText(byId('action-state'), byId('action-state').textContent || 'Ready for your next instruction');
-    R.setText(byId('composer-status'), !memory.token ? 'Connect to enable the composer.' : !memory.threadId ? 'Create or resume a thread.' : S.canSendTurn(thread, turn) ? 'Ready to send.' : 'Turn is ' + label(turn).toLowerCase() + '.');
+    const controlCopy = memory.authKind === 'host'
+      ? 'Host administrator session (local control).'
+      : memory.controlEpoch !== null
+        ? 'You hold the control lease for this thread.'
+        : 'View-only until you take control.';
+    R.setText(byId('control-copy'), controlCopy);
+    R.setText(byId('composer-status'), !authed ? 'Connect or complete pairing to enable the composer.' : !canMutate ? controlCopy : !memory.threadId ? 'Create or resume a thread.' : S.canSendTurn(thread, turn) ? 'Ready to send.' : 'Turn is ' + label(turn).toLowerCase() + '.');
     if (approval === 'NONE' || approval === 'RESOLVED' || approval === 'STALE' || approval === 'EXPIRED') byId('approval-card').classList.add('hidden');
   }
 
   function authHeaders() {
-    return { 'Content-Type': 'application/json', Authorization: 'Bearer ' + memory.token };
+    const headers = { 'Content-Type': 'application/json' };
+    if (memory.token) headers.Authorization = 'Bearer ' + memory.token;
+    return headers;
+  }
+
+  function rpcParams(params) {
+    const next = Object.assign({}, params || {});
+    if (memory.controlEpoch !== null && next.control_epoch === undefined) {
+      next.control_epoch = memory.controlEpoch;
+    }
+    return next;
   }
 
   async function rpc(method, params, id) {
+    if (typeof window.__babelRemoteRpc === 'function') {
+      return window.__babelRemoteRpc(method, params, id);
+    }
     const response = await fetch('/rpc', {
       method: 'POST',
       headers: authHeaders(),
-      body: JSON.stringify({ jsonrpc: '2.0', id: id || Date.now(), method: method, params: params }),
+      credentials: 'include',
+      body: JSON.stringify({ jsonrpc: '2.0', id: id || Date.now(), method: method, params: rpcParams(params) }),
     });
-    if (!response.ok) throw new Error('rpc ' + response.status);
-    return response.json();
+    const payload = await response.json();
+    const classified = S.classifyRpcResponse(payload);
+    if (classified.kind === 'malformed') throw new Error('rpc malformed');
+    if (!response.ok && classified.kind !== 'rejected') throw new Error('rpc ' + response.status);
+    return { payload: payload, classified: classified };
+  }
+
+  function clearControlLease(reason) {
+    memory.controlEpoch = null;
+    memory.controlExpiresAtMs = null;
+    if (memory.leaseRenewTimer) clearInterval(memory.leaseRenewTimer);
+    memory.leaseRenewTimer = null;
+    if (reason) appendEvent({ type: 'connection', error: reason });
+  }
+
+  function startLeaseRenewal() {
+    if (memory.leaseRenewTimer) clearInterval(memory.leaseRenewTimer);
+    if (memory.authKind !== 'paired' || memory.controlEpoch === null || !memory.threadId) return;
+    memory.leaseRenewTimer = setInterval(function () {
+      rpc('control.renew', { thread_id: memory.threadId, control_epoch: memory.controlEpoch }).then(function (res) {
+        if (res.classified.kind === 'success' && res.payload.result) {
+          memory.controlExpiresAtMs = res.payload.result.expires_at_ms;
+        } else {
+          clearControlLease('Control lease expired or was lost.');
+          renderChrome();
+        }
+      }).catch(function () {
+        clearControlLease('Control lease renewal failed.');
+        renderChrome();
+      });
+    }, LEASE_RENEW_MS);
+  }
+
+  async function syncControlLeaseFromHost() {
+    if (!memory.threadId || memory.authKind !== 'paired' || !memory.clientId) {
+      clearControlLease();
+      return;
+    }
+    try {
+      const res = await rpc('control.status', { thread_id: memory.threadId });
+      if (res.classified.kind !== 'success' || !res.payload.result) {
+        clearControlLease();
+        return;
+      }
+      const st = res.payload.result;
+      if (st.held && st.holder_client_id === memory.clientId && typeof st.epoch === 'number') {
+        memory.controlEpoch = st.epoch;
+        memory.controlExpiresAtMs = st.expires_at_ms || null;
+        startLeaseRenewal();
+      } else {
+        clearControlLease();
+      }
+    } catch (error) {
+      clearControlLease();
+    }
+  }
+
+  async function refreshAuthSession() {
+    const response = await fetch('/auth/session', { credentials: 'include' });
+    if (!response.ok) return;
+    const json = await response.json();
+    if (json.ok && json.auth === 'paired_device') {
+      memory.pairedDevice = true;
+      memory.authKind = 'paired';
+      memory.clientId = json.deviceId ? 'device:' + json.deviceId : null;
+    } else if (json.ok && json.auth === 'host') {
+      memory.authKind = 'host';
+      memory.clientId = 'host:session';
+    }
+  }
+
+  async function takeControl() {
+    if (!memory.threadId) return;
+    try {
+      const result = await rpc('control.acquire', { thread_id: memory.threadId, force: false });
+      if (result.classified.kind !== 'success' || !result.payload.result) throw new Error('acquire failed');
+      memory.controlEpoch = result.payload.result.epoch;
+      memory.controlExpiresAtMs = result.payload.result.expires_at_ms || null;
+      startLeaseRenewal();
+      R.setText(byId('action-state'), 'Remote control acquired');
+      R.setText(byId('action-detail'), 'This device may send prompts and approvals until the lease expires.');
+    } catch (error) {
+      appendEvent({ type: 'failed', error: 'Could not take control. Another client may hold the lease.' });
+    }
+    renderChrome();
   }
 
   async function ensureSession() {
     if (memory.sessionId) return memory.sessionId;
-    const response = await fetch('/sessions', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ projectRoot: rootEl.value }) });
+    const response = await fetch('/sessions', {
+      method: 'POST',
+      headers: authHeaders(),
+      credentials: 'include',
+      body: JSON.stringify({ projectRoot: rootEl.value }),
+    });
     if (!response.ok) throw new Error('session auth failed');
     const json = await response.json();
     if (!json.sessionId) throw new Error('session missing');
@@ -94,7 +212,12 @@
 
   async function mintTicket() {
     const sessionId = await ensureSession();
-    const response = await fetch('/ws/ticket', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ session_id: sessionId, thread_id: memory.threadId }) });
+    const response = await fetch('/ws/ticket', {
+      method: 'POST',
+      headers: authHeaders(),
+      credentials: 'include',
+      body: JSON.stringify({ session_id: sessionId, thread_id: memory.threadId }),
+    });
     if (!response.ok) throw new Error('ticket mint failed');
     return response.json();
   }
@@ -146,11 +269,13 @@
   }
 
   async function connect() {
-    memory.token = tokenEl.value;
+    if (tokenEl.value) memory.token = tokenEl.value;
     tokenEl.value = '';
+    memory.authKind = memory.token ? 'host' : 'none';
     try {
       host = transition('host', host, 'start');
       renderChrome();
+      await refreshAuthSession();
       const health = await fetch('/health');
       const json = await health.json();
       if (!json.ok) throw new Error('health');
@@ -160,7 +285,7 @@
       R.setText(byId('action-detail'), 'Create or resume a thread to begin.');
       try {
         const catalog = await rpc('remote.catalog', {});
-        const sessions = (catalog.result && catalog.result.sessions) || [];
+        const sessions = (catalog.payload.result && catalog.payload.result.sessions) || [];
         if (sessions.length && byId('thread-id')) {
           byId('thread-id').placeholder = sessions.length + ' session(s) on host';
         }
@@ -177,19 +302,30 @@
       if (host === 'ONLINE') host = transition('host', host, 'close');
       if (host === 'UNKNOWN' || host === 'OFFLINE') host = transition('host', host, 'start');
       renderChrome();
+      await refreshAuthSession();
       await observeThread();
       if (memory.threadId) {
         thread = transition('thread', thread, 'recover');
-        await rpc('thread.resume', { thread_id: memory.threadId, project_root: rootEl.value });
+        const resumed = await rpc('thread.resume', {
+          thread_id: memory.threadId,
+          project_root: rootEl.value,
+          session_id: memory.sessionId,
+        });
+        if (resumed.classified.kind !== 'success') throw new Error('resume rejected');
         const history = await rpc('history.lookup', { thread_id: memory.threadId });
-        const cells = (history.result && history.result.cells) || [];
+        if (history.classified.kind !== 'success') throw new Error('history rejected');
+        const cells = (history.payload.result && history.payload.result.cells) || [];
         transcript.textContent = '';
         cells.forEach(function (cell) { appendEvent({ type: cell.kind || 'cell', text: JSON.stringify(cell.payload || {}) }); });
+        await syncControlLeaseFromHost();
         thread = transition('thread', thread, 'ready');
       }
       host = transition('host', host, 'open');
     } catch (error) {
-      host = transition('host', host, 'health_fail');
+      const recovery = S.reconcileAfterProtocolError({ host: host, activeTurn: turn !== 'IDLE' && turn !== 'COMPLETED' });
+      host = recovery.host;
+      if (recovery.turn !== 'UNCHANGED') turn = recovery.turn;
+      if (recovery.thread !== 'UNCHANGED') thread = recovery.thread;
       appendEvent({ type: 'connection', error: 'Reconnect failed. The state remains fail-closed.' });
     }
     renderChrome();
@@ -200,7 +336,9 @@
       thread = transition('thread', thread, 'create');
       const sessionId = await ensureSession();
       const result = await rpc('thread.create', { project_root: rootEl.value, session_id: sessionId });
-      memory.threadId = result.result && result.result.thread_id;
+      if (result.classified.kind !== 'success') throw new Error('thread.create rejected');
+      memory.threadId = result.payload.result && result.payload.result.thread_id;
+      clearControlLease();
       threadInput.value = memory.threadId || '';
       thread = transition('thread', thread, 'ready');
       await observeThread();
@@ -212,15 +350,17 @@
     try {
       thread = transition('thread', thread, 'resume');
       memory.threadId = threadInput.value;
+      clearControlLease();
       const sessionId = await ensureSession();
       const result = await rpc('thread.resume', {
         thread_id: memory.threadId,
         project_root: rootEl.value,
         session_id: sessionId,
       });
-      if (result.error) throw new Error(result.error.message);
+      if (result.classified.kind !== 'success') throw new Error('thread.resume rejected');
       thread = transition('thread', thread, 'ready');
       await observeThread();
+      await syncControlLeaseFromHost();
     } catch (error) { thread = transition('thread', thread, 'fail'); appendEvent({ type: 'failed', error: 'Thread resume failed.' }); }
     renderChrome();
   }
@@ -239,8 +379,17 @@
       thread = transition('thread', thread, 'submit');
       renderChrome();
       const result = await rpc('turn.submit', { thread_id: memory.threadId, message: message, command_id: commandId });
-      if (result.error) throw new Error(result.error.message);
-      memory.turnId = result.result.turn_id;
+      if (result.classified.kind === 'rejected') {
+        const msg = result.classified.message || '';
+        if (msg.indexOf('lease') !== -1 || msg.indexOf('epoch') !== -1) clearControlLease('Lost control lease before submit completed.');
+        const decision = S.reconcileAfterSubmitFailure({ responseSettled: true, commandId: commandId, hostReachable: host === 'ONLINE' });
+        turn = transition('turn', turn, 'fail');
+        thread = transition('thread', thread, 'ready');
+        appendEvent({ type: 'failed', error: 'Submit rejected: ' + msg + ' (' + decision.ambiguity + ').' });
+        return;
+      }
+      if (result.classified.kind !== 'success') throw new Error('submit ambiguous');
+      memory.turnId = result.payload.result.turn_id;
       turn = transition('turn', turn, 'ack');
     } catch (error) {
       const decision = S.reconcileAfterSubmitFailure({ responseSettled: false, commandId: commandId, hostReachable: host === 'ONLINE' });
@@ -254,35 +403,70 @@
 
   async function stop() {
     if (!S.canCancelTurn(turn)) return;
-    try { turn = transition('turn', turn, 'cancel'); renderChrome(); await rpc('turn.cancel', { thread_id: memory.threadId }); }
-    catch (error) { turn = transition('turn', turn, 'fail'); appendEvent({ type: 'failed', error: 'Cancel status unknown.' }); renderChrome(); }
+    turn = transition('turn', turn, 'cancel');
+    renderChrome();
+    try {
+      const result = await rpc('turn.cancel', { thread_id: memory.threadId });
+      if (result.classified.kind === 'rejected') {
+        const msg = result.classified.message || 'rejected';
+        if (msg.indexOf('lease') !== -1 || msg.indexOf('epoch') !== -1) clearControlLease('Lost control lease before cancel completed.');
+        const decision = S.reconcileAfterCancelRejection({ responseSettled: true, hostReachable: host === 'ONLINE' });
+        turn = transition('turn', turn, decision.turn === 'STREAMING' ? 'recover' : 'fail');
+        appendEvent({ type: 'failed', error: 'Cancel rejected: ' + msg + ' (' + decision.ambiguity + ').' });
+        renderChrome();
+        return;
+      }
+      if (result.classified.kind !== 'success') {
+        const decision = S.reconcileAfterCancelRejection({ responseSettled: false, hostReachable: host === 'ONLINE' });
+        turn = transition('turn', turn, decision.turn === 'UNKNOWN' ? 'unknown' : 'fail');
+        appendEvent({ type: 'failed', error: 'Cancel status ' + decision.ambiguity + '.' });
+        renderChrome();
+        return;
+      }
+    } catch (error) {
+      const decision = S.reconcileAfterCancelRejection({ responseSettled: false, hostReachable: host === 'ONLINE' });
+      turn = transition('turn', turn, decision.turn === 'UNKNOWN' ? 'unknown' : 'fail');
+      appendEvent({ type: 'failed', error: 'Cancel status ' + decision.ambiguity + '.' });
+    }
+    renderChrome();
   }
 
   async function decide(decision) {
     if (!memory.pendingApproval || approval !== 'PENDING') return;
     approval = transition('approval', approval, decision === 'allow_once' ? 'allow' : 'deny');
     renderChrome();
-    const result = await rpc('approval.decide', {
-      approval_id: memory.pendingApproval.approval_id,
-      decision: decision,
-      thread_id: memory.pendingApproval.thread_id || memory.threadId,
-      turn_id: String(memory.pendingApproval.turn_id || memory.turnId || ''),
-      operation_digest: memory.pendingApproval.operation_digest,
-    });
-    if (result.error) {
+    try {
+      const result = await rpc('approval.decide', {
+        approval_id: memory.pendingApproval.approval_id,
+        decision: decision,
+        thread_id: memory.pendingApproval.thread_id || memory.threadId,
+        turn_id: String(memory.pendingApproval.turn_id || memory.turnId || ''),
+        operation_digest: memory.pendingApproval.operation_digest,
+      });
+      if (result.classified.kind === 'rejected') {
+        const msg = result.classified.message || 'rejected';
+        if (msg.indexOf('lease') !== -1 || msg.indexOf('epoch') !== -1) clearControlLease('Lost control lease during approval.');
+        approval = transition('approval', approval, msg.indexOf('expired') !== -1 ? 'expire' : 'stale');
+        appendEvent({ type: 'failed', error: msg });
+      } else if (result.classified.kind === 'success') {
+        approval = transition('approval', approval, 'resolve');
+        memory.pendingApproval = null;
+        thread = transition('thread', thread, 'running');
+        appendEvent({ type: 'permission', role: 'system', text: decision === 'allow_once' ? 'ALLOW ONCE recorded.' : 'DENY recorded. No mutation was performed.' });
+      } else {
+        approval = transition('approval', approval, 'stale');
+        appendEvent({ type: 'failed', error: 'Approval response was ambiguous.' });
+      }
+    } catch (error) {
       approval = transition('approval', approval, 'stale');
-      appendEvent({ type: 'failed', error: result.error.message });
-    } else {
-      approval = transition('approval', approval, 'resolve');
-      memory.pendingApproval = null;
-      thread = transition('thread', thread, 'running');
-      appendEvent({ type: 'permission', role: 'system', text: decision === 'allow_once' ? 'ALLOW ONCE recorded.' : 'DENY recorded. No mutation was performed.' });
+      appendEvent({ type: 'failed', error: 'Approval request failed before a definitive host response.' });
     }
     renderChrome();
   }
 
   function installNormalHandlers() {
     byId('connect').onclick = connect;
+    byId('take-control').onclick = takeControl;
     byId('reconnect').onclick = reconnect;
     byId('create').onclick = createThread;
     byId('resume').onclick = resumeThread;
@@ -293,24 +477,53 @@
     byId('refresh-files').onclick = async function () {
       try {
         const result = await rpc('workspace.changes', { thread_id: memory.threadId });
-        const files = (result.result && result.result.files) || [];
+        const files = (result.payload.result && result.payload.result.files) || [];
         R.renderFiles(files);
       } catch (error) { appendEvent({ type: 'failed', error: 'Changed files unavailable.' }); }
     };
     byId('refresh-diff').onclick = async function () {
       try {
         const result = await rpc('workspace.changes', { thread_id: memory.threadId });
-        R.setText(byId('diff'), result.result && result.result.diff || 'No diff available.');
+        R.setText(byId('diff'), result.payload.result && result.payload.result.diff || 'No diff available.');
       } catch (error) { appendEvent({ type: 'failed', error: 'Diff unavailable.' }); }
     };
     byId('refresh-verification').onclick = async function () {
       try {
         const result = await rpc('verification.lookup', { thread_id: memory.threadId });
-        const snapshot = result.result || { status: 'NOT_VERIFIED', reason: 'No verification recorded.' };
+        const snapshot = result.payload.result || { status: 'NOT_VERIFIED', reason: 'No verification recorded.' };
         R.setVerification(snapshot);
       } catch (error) { appendEvent({ type: 'failed', error: 'Verification unavailable.' }); }
     };
     rootEl.oninput = renderChrome;
+    document.addEventListener('visibilitychange', function () {
+      if (document.visibilityState === 'visible') {
+        void syncControlLeaseFromHost().then(function () { renderChrome(); });
+      }
+    });
+    window.addEventListener('focus', function () {
+      if (memory.controlEpoch !== null && memory.authKind === 'paired') {
+        void rpc('control.renew', { thread_id: memory.threadId, control_epoch: memory.controlEpoch }).then(function (res) {
+          if (res.classified.kind !== 'success') clearControlLease('Control lease lost while backgrounded.');
+          renderChrome();
+        }).catch(function () { clearControlLease('Control lease renewal failed after resume.'); renderChrome(); });
+      }
+    });
+    window.BabelRemoteApp = {
+      getState: function () {
+        return { host: host, thread: thread, turn: turn, approval: approval, sendInFlight: sendInFlight };
+      },
+      memoryHasToken: function () { return Boolean(memory.token) || memory.pairedDevice; },
+      send: send,
+      stop: stop,
+      decide: decide,
+      configureTest: function (patch) {
+        if (patch && patch.host !== undefined) host = patch.host;
+        if (patch && patch.thread !== undefined) thread = patch.thread;
+        if (patch && patch.turn !== undefined) turn = patch.turn;
+        if (patch && patch.approval !== undefined) approval = patch.approval;
+        if (patch && patch.memory) Object.assign(memory, patch.memory);
+      },
+    };
     renderChrome();
   }
 
@@ -358,8 +571,14 @@
       return;
     }
     installNormalHandlers();
+    await refreshAuthSession();
+    if (memory.pairedDevice) {
+      host = transition('host', host, 'open');
+      R.setText(byId('action-state'), 'Paired device session');
+      R.setText(byId('action-detail'), 'Cookie authentication restored. Connect workspace to continue.');
+      renderChrome();
+    }
     if ('serviceWorker' in navigator) navigator.serviceWorker.register('/ui/sw.js', { scope: '/ui/' }).catch(function () { /* optional install */ });
-    window.BabelRemoteApp = { getState: function () { return { host: host, thread: thread, turn: turn, approval: approval }; }, memoryHasToken: function () { return Boolean(memory.token); } };
   }
 
   boot().catch(function () {

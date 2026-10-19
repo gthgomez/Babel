@@ -5,6 +5,8 @@
 
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 
+import type { BridgeAuthKind } from './bridgeClientAuth.js';
+
 export const WS_TICKET_TTL_MS = 30_000;
 export const WS_TICKET_BYTES = 32;
 
@@ -20,6 +22,9 @@ export interface ConsumedWsTicket {
   sessionId: string;
   threadId: string;
   mintedAt: number;
+  clientId: string;
+  authKind: BridgeAuthKind;
+  deviceId?: string;
 }
 
 export type TicketConsumeError =
@@ -36,6 +41,9 @@ interface StoredTicket {
   mintedAt: number;
   expiresAt: number;
   consumed: boolean;
+  clientId: string;
+  authKind: BridgeAuthKind;
+  deviceId?: string;
 }
 
 export class WsTicketStore {
@@ -46,6 +54,9 @@ export class WsTicketStore {
   mint(input: {
     sessionId: string;
     threadId: string;
+    clientId: string;
+    authKind: BridgeAuthKind;
+    deviceId?: string;
     now?: number;
   }): MintedWsTicket {
     const now = input.now ?? Date.now();
@@ -58,6 +69,9 @@ export class WsTicketStore {
       mintedAt: now,
       expiresAt,
       consumed: false,
+      clientId: input.clientId,
+      authKind: input.authKind,
+      ...(input.deviceId !== undefined ? { deviceId: input.deviceId } : {}),
     });
     this.gc(now);
     return {
@@ -69,11 +83,20 @@ export class WsTicketStore {
     };
   }
 
+  revokeForDevice(deviceId: string): void {
+    for (const [token, stored] of this.tickets) {
+      if (stored.deviceId === deviceId) {
+        this.tickets.delete(token);
+      }
+    }
+  }
+
   consume(input: {
     ticket: string | undefined;
     sessionId: string;
     threadId?: string;
     now?: number;
+    deviceAuthorized?: (deviceId: string) => boolean;
   }): { ok: true; value: ConsumedWsTicket } | { ok: false; error: TicketConsumeError } {
     if (!input.ticket) return { ok: false, error: 'missing' };
     const now = input.now ?? Date.now();
@@ -90,6 +113,23 @@ export class WsTicketStore {
     if (input.threadId !== undefined && stored.threadId !== input.threadId) {
       return { ok: false, error: 'scope_mismatch' };
     }
+    if (
+      stored.deviceId &&
+      input.deviceAuthorized &&
+      !input.deviceAuthorized(stored.deviceId)
+    ) {
+      this.tickets.delete(input.ticket);
+      return { ok: false, error: 'unknown' };
+    }
+    if (
+      stored.authKind === 'none' ||
+      (stored.authKind === 'paired_device' && !stored.deviceId) ||
+      ((stored.authKind === 'host_bearer' || stored.authKind === 'query_bearer') &&
+        !stored.clientId.startsWith('host:'))
+    ) {
+      this.tickets.delete(input.ticket);
+      return { ok: false, error: 'unknown' };
+    }
     stored.consumed = true;
     return {
       ok: true,
@@ -97,6 +137,9 @@ export class WsTicketStore {
         sessionId: stored.sessionId,
         threadId: stored.threadId,
         mintedAt: stored.mintedAt,
+        clientId: stored.clientId,
+        authKind: stored.authKind,
+        ...(stored.deviceId !== undefined ? { deviceId: stored.deviceId } : {}),
       },
     };
   }

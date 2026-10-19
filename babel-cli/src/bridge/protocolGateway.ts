@@ -20,8 +20,22 @@ import { originAllowed as originAllowedStructured } from './originPolicy.js';
 import { ThreadOwnershipRegistry, type ThreadOwnershipError } from './threadOwnership.js';
 import { threadStoreExists } from '../services/threadStore/threadStore.js';
 import { buildRemoteCatalog } from './remoteCatalog.js';
+import { ControlLeaseRegistry } from './controlLease.js';
+import type { BridgeClientContext } from './bridgeClientAuth.js';
 
 export const MAX_RPC_BYTES = 2 * 1024 * 1024;
+
+export const REMOTE_MUTATING_RPC_METHODS = new Set([
+  'turn.submit',
+  'turn.cancel',
+  'approval.decide',
+]);
+
+const MUTATING_METHODS = REMOTE_MUTATING_RPC_METHODS;
+
+export interface ProtocolDispatchContext {
+  client: BridgeClientContext;
+}
 
 export type JsonRpcNotificationHandler = (payload: string) => void;
 
@@ -38,16 +52,20 @@ function notificationThreadId(notification: object): string | undefined {
 export class ProtocolGateway {
   readonly host: ProtocolHostState;
   readonly threadOwnership = new ThreadOwnershipRegistry();
+  readonly controlLeases = new ControlLeaseRegistry();
   private readonly registeredWorkspaceRoot: string;
+  private readonly enforceControlLease: boolean;
   private subscribers = new Set<GatewaySubscriber>();
 
   constructor(options: {
     allowedWorkspaceRoot: string;
     engineFactory?: ProtocolHostState['engineFactory'];
     remoteSurface?: boolean;
+    enforceControlLease?: boolean;
   }) {
     const allowedRoot = options.allowedWorkspaceRoot;
     this.registeredWorkspaceRoot = canonicalizeContained(resolve(allowedRoot));
+    this.enforceControlLease = options.enforceControlLease === true;
     this.host = createProtocolHostState({
       executeWithoutNotifications: true,
       projectRootGuard: (projectRoot) => assertAllowedProjectRoot(projectRoot, allowedRoot),
@@ -89,7 +107,10 @@ export class ProtocolGateway {
     }
   }
 
-  async dispatch(raw: string): Promise<JsonRpcResponse> {
+  async dispatch(
+    raw: string,
+    dispatchContext?: ProtocolDispatchContext,
+  ): Promise<JsonRpcResponse> {
     if (Buffer.byteLength(raw, 'utf8') > MAX_RPC_BYTES) {
       return {
         jsonrpc: '2.0',
@@ -117,6 +138,29 @@ export class ProtocolGateway {
           result: catalog,
         };
       }
+      if (envelope.method === 'remote.capabilities') {
+        parsedId =
+          typeof envelope.id === 'string' || typeof envelope.id === 'number' ? envelope.id : null;
+        return {
+          jsonrpc: '2.0',
+          id: parsedId ?? 0,
+          result: {
+            control_lease_enforced: this.enforceControlLease,
+            exclusive_remote_control: this.enforceControlLease,
+            host_auto_control_bind: true,
+          },
+        };
+      }
+      if (typeof envelope.method === 'string' && envelope.method.startsWith('control.')) {
+        parsedId =
+          typeof envelope.id === 'string' || typeof envelope.id === 'number' ? envelope.id : null;
+        return this.dispatchControlRpc(
+          envelope.method,
+          (envelope as { params?: unknown }).params,
+          parsedId,
+          dispatchContext,
+        );
+      }
     } catch {
       /* fall through to standard parse */
     }
@@ -131,6 +175,14 @@ export class ProtocolGateway {
         },
       };
     }
+    const clientKind = dispatchContext?.client.authKind;
+    const mustCheckLease =
+      this.enforceControlLease || clientKind === 'paired_device';
+    const leaseDenied = mustCheckLease
+      ? this.assertControlLeaseForMutation(parsed, dispatchContext)
+      : null;
+    if (leaseDenied) return leaseDenied;
+
     const response = await handleProtocolRequest(
       parsed as BabelProtocolRequest,
       this.host,
@@ -168,6 +220,152 @@ export class ProtocolGateway {
   /** Test helper: drive fan-out with a crafted notification. */
   emitNotification(notification: object): void {
     this.fanout(notification);
+  }
+
+  private dispatchControlRpc(
+    method: string,
+    params: unknown,
+    id: string | number | null,
+    dispatchContext?: ProtocolDispatchContext,
+  ): JsonRpcResponse {
+    const client = dispatchContext?.client;
+    if (!client || client.authKind === 'none') {
+      return controlError(id, 'unauthorized', 'Authentication required');
+    }
+    const record = params && typeof params === 'object'
+      ? (params as Record<string, unknown>)
+      : {};
+    const threadId = typeof record.thread_id === 'string' ? record.thread_id : '';
+    if (!threadId) return controlError(id, 'invalid_request', 'thread_id is required');
+
+    if (method === 'control.status') {
+      const st = this.controlLeases.status(threadId);
+      return {
+        jsonrpc: '2.0',
+        id: id ?? 0,
+        result: {
+          held: st.held,
+          holder_client_id: st.holderClientId,
+          epoch: st.epoch,
+          expires_at_ms: st.expiresAtMs,
+          committed_epoch: st.committed_epoch,
+        },
+      };
+    }
+
+    if (method === 'control.acquire') {
+      const force =
+        record.force === true &&
+        (client.authKind === 'host_bearer' || client.authKind === 'query_bearer');
+      const acquired = this.controlLeases.acquire({
+        threadId,
+        clientId: client.clientId,
+        force,
+      });
+      if (!acquired.ok) {
+        return controlError(id, acquired.error, `control acquire failed: ${acquired.error}`);
+      }
+      return {
+        jsonrpc: '2.0',
+        id: id ?? 0,
+        result: {
+          epoch: acquired.epoch,
+          expires_at_ms: acquired.expiresAtMs,
+          holder_client_id: client.clientId,
+        },
+      };
+    }
+
+    if (method === 'control.renew') {
+      const epoch = typeof record.control_epoch === 'number' ? record.control_epoch : NaN;
+      if (!Number.isFinite(epoch)) {
+        return controlError(id, 'invalid_request', 'control_epoch is required');
+      }
+      const renewed = this.controlLeases.renew({
+        threadId,
+        clientId: client.clientId,
+        epoch,
+      });
+      if (!renewed.ok) {
+        return controlError(id, renewed.error, `control renew failed: ${renewed.error}`);
+      }
+      return {
+        jsonrpc: '2.0',
+        id: id ?? 0,
+        result: { expires_at_ms: renewed.expiresAtMs },
+      };
+    }
+
+    if (method === 'control.release') {
+      const epoch = typeof record.control_epoch === 'number' ? record.control_epoch : NaN;
+      if (!Number.isFinite(epoch)) {
+        return controlError(id, 'invalid_request', 'control_epoch is required');
+      }
+      const released = this.controlLeases.release({
+        threadId,
+        clientId: client.clientId,
+        epoch,
+      });
+      if (!released.ok) {
+        return controlError(id, released.error, `control release failed: ${released.error}`);
+      }
+      return { jsonrpc: '2.0', id: id ?? 0, result: { ok: true } };
+    }
+
+    return controlError(id, 'method_not_found', `Unknown control method ${method}`);
+  }
+
+  private assertControlLeaseForMutation(
+    parsed: BabelProtocolRequest,
+    dispatchContext?: ProtocolDispatchContext,
+  ): JsonRpcResponse | null {
+    if (!MUTATING_METHODS.has(parsed.method)) return null;
+    const client = dispatchContext?.client;
+    if (!client || client.authKind === 'none') {
+      return controlError(parsed.id ?? null, 'unauthorized', 'Authentication required');
+    }
+    const params = (parsed as unknown as { params?: Record<string, unknown> }).params;
+    const threadId =
+      params && typeof params.thread_id === 'string' ? params.thread_id : '';
+    if (!threadId) return null;
+    const allowHostAutoAcquire =
+      client.authKind === 'host_bearer' || client.authKind === 'query_bearer';
+    const requireExplicitEpoch = client.authKind === 'paired_device';
+    const leaseInput: {
+      threadId: string;
+      clientId: string;
+      allowHostAutoAcquire: boolean;
+      requireExplicitEpoch: boolean;
+      controlEpoch?: number;
+    } = {
+      threadId,
+      clientId: client.clientId,
+      allowHostAutoAcquire,
+      requireExplicitEpoch,
+    };
+    const rawEpoch = params?.control_epoch;
+    if (rawEpoch !== undefined && rawEpoch !== null) {
+      if (typeof rawEpoch !== 'number' || !Number.isFinite(rawEpoch)) {
+        return controlError(parsed.id ?? null, 'stale_epoch', 'control_epoch must be a finite number');
+      }
+      leaseInput.controlEpoch = rawEpoch;
+    }
+    const authorized = this.controlLeases.authorizeMutation(leaseInput);
+    if (!authorized.ok) {
+      return controlError(
+        parsed.id ?? null,
+        authorized.error,
+        `control lease denied: ${authorized.error}`,
+      );
+    }
+    if (
+      params &&
+      params.control_epoch === undefined &&
+      (client.authKind === 'host_bearer' || client.authKind === 'query_bearer')
+    ) {
+      params.control_epoch = authorized.epoch;
+    }
+    return null;
   }
 
   authorizeTicketMint(input: {
@@ -215,6 +413,22 @@ export function readLimitedBody(
       finish({ ok: false, error: err.message });
     });
   });
+}
+
+function controlError(
+  id: string | number | null,
+  code: string,
+  message: string,
+): JsonRpcResponse {
+  return {
+    jsonrpc: '2.0',
+    id,
+    error: {
+      code: BabelProtocolErrorCode.INVALID_REQUEST,
+      message,
+      data: { control_error: code },
+    },
+  };
 }
 
 export function originAllowed(

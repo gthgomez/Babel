@@ -26,7 +26,7 @@
  *   - Origins: bridge.json allowedOrigins (defaults to ['http://localhost:*'])
  */
 
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 
 import type {
@@ -44,17 +44,28 @@ import {
 import { computeWsAcceptKey, createTransport, WebSocketTransport } from './transport.js';
 import { sessionRunner } from './sessionRunner.js';
 import { assertLoopbackBind } from './bindGuard.js';
-import { ProtocolGateway, originAllowed, readLimitedBody } from './protocolGateway.js';
+import {
+  ProtocolGateway,
+  REMOTE_MUTATING_RPC_METHODS,
+  originAllowed,
+  readLimitedBody,
+} from './protocolGateway.js';
 import { writeRemoteUiResponse } from './remoteUiAssets.js';
 import { WsTicketStore } from './wsTicket.js';
 import type { ProtocolHostState } from '../protocol/client/host.js';
-import { closeProtocolHostState } from '../protocol/client/host.js';
-import {
-  DevicePairingService,
-  REMOTE_PAIRING_COOKIE,
-} from './devicePairing.js';
+import { closeProtocolHostState, parseProtocolRequest } from '../protocol/client/host.js';
+import { DevicePairingService, REMOTE_PAIRING_COOKIE } from './devicePairing.js';
 import { authorizeThreadScopedWsRpc } from './wsRpcAuthorization.js';
-
+import {
+  bridgeClientPrincipalMatches,
+  isBridgeClientAuthenticated,
+  isBridgeHostAdminAuthenticated,
+  isBridgeRequestAuthenticated,
+  resolveBridgeClientContext,
+} from './bridgeClientAuth.js';
+import { writePairUiResponse } from './pairUiAssets.js';
+import { pairedDeviceMutationOriginOk } from './bridgeMutationPolicy.js';
+import type { BridgeClientContext } from './bridgeClientAuth.js';
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
 export interface BridgeServerOptions {
@@ -83,6 +94,20 @@ export interface BridgeServerOptions {
   onSessionCreated?: (session: BridgeSession) => void;
   /** Injected pairing service (tests). */
   devicePairing?: DevicePairingService;
+  /**
+   * Enforce per-thread control leases for remote mutations (default true).
+   * Set false only in isolated unit tests — never in `babel remote serve`.
+   */
+  enforceControlLease?: boolean;
+  /**
+   * Narrow HTTP principal barriers for regression tests (never set in production serve).
+   */
+  httpPrincipalTestHooks?: BridgeHttpPrincipalTestHooks;
+}
+
+/** Test-only hooks for post-initial-auth / pre-body-read synchronization. */
+export interface BridgeHttpPrincipalTestHooks {
+  afterInitialPrincipalAuthenticated?: (scope: 'mint' | 'rpc') => void | Promise<void>;
 }
 
 interface ParsedUrl {
@@ -113,40 +138,26 @@ function matchSessionPath(pathname: string): string | null {
 
 // ─── Authentication ────────────────────────────────────────────────────────────
 
-function pairingCookieToken(req: IncomingMessage): string | undefined {
-  const raw = req.headers['cookie'];
-  if (!raw || typeof raw !== 'string') return undefined;
-  for (const part of raw.split(';')) {
-    const trimmed = part.trim();
-    if (trimmed.startsWith(`${REMOTE_PAIRING_COOKIE}=`)) {
-      return decodeURIComponent(trimmed.slice(REMOTE_PAIRING_COOKIE.length + 1));
-    }
-  }
-  return undefined;
-}
-
 function isAuthenticated(
   req: IncomingMessage,
   authToken: string,
   parsedUrl?: ParsedUrl | null,
   pairing?: DevicePairingService,
 ): boolean {
-  // Check Authorization header first
-  const headerToken = extractBearerToken(req.headers['authorization']);
-  if (headerToken && verifyToken(headerToken, authToken)) return true;
+  return isBridgeRequestAuthenticated(req, authToken, parsedUrl, pairing);
+}
 
-  const cookieToken = pairingCookieToken(req);
-  if (cookieToken && pairing?.verifySessionToken(cookieToken).ok) return true;
-
-  // Check query parameter
-  if (parsedUrl) {
-    const queryToken = extractQueryToken(
-      new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`),
-    );
-    if (queryToken && verifyToken(queryToken, authToken)) return true;
+function validateAuthenticatedClient(
+  client: BridgeClientContext,
+  pairing: DevicePairingService,
+): { ok: true } | { ok: false; status: number; message: string } {
+  if (!isBridgeClientAuthenticated(client)) {
+    return { ok: false, status: 401, message: 'Authentication required' };
   }
-
-  return false;
+  if (client.deviceId && !pairing.isDeviceAuthorized(client.deviceId)) {
+    return { ok: false, status: 403, message: 'Device authorization revoked' };
+  }
+  return { ok: true };
 }
 
 // ─── CORS helpers ──────────────────────────────────────────────────────────────
@@ -228,6 +239,9 @@ export class BridgeServer {
   /** Active WebSocket transports keyed by session ID. */
   private wsTransports = new Map<string, BridgeTransport>();
 
+  /** Live sockets for immediate revocation of paired devices. */
+  private readonly deviceSocketClosers = new Map<string, Set<() => void>>();
+
   /** Generation counter per session — prevents stale transport onClose from destroying the active router. */
   private transportGenerations = new Map<string, number>();
 
@@ -245,10 +259,12 @@ export class BridgeServer {
         'http://localhost:*',
         'https://localhost:*',
       ];
+    const enforceControlLease = this.options.enforceControlLease !== false;
     this.protocolGateway =
       this.options.protocolGateway ??
       new ProtocolGateway({
         allowedWorkspaceRoot: this.options.allowedWorkspaceRoot ?? process.cwd(),
+        enforceControlLease,
         ...(this.options.engineFactory
           ? { engineFactory: this.options.engineFactory }
           : {}),
@@ -290,6 +306,10 @@ export class BridgeServer {
 
     return new Promise<void>((resolve, reject) => {
       this.server.on('listening', () => {
+        const bound = this.server.address();
+        if (bound && typeof bound === 'object' && bound.port > 0) {
+          this._port = bound.port;
+        }
         // Persist config with the actual auth token
         const config = loadBridgeConfig();
         if (!config.authToken || config.authToken !== this.authToken) {
@@ -316,6 +336,8 @@ export class BridgeServer {
    * Stop the server and clean up all sessions.
    */
   async stop(): Promise<void> {
+    if (!this._started) return;
+
     // Close all WebSocket transports
     for (const transport of this.wsTransports.values()) {
       transport.close();
@@ -330,8 +352,15 @@ export class BridgeServer {
     // stopped bridge leaks no SQLite ownership into a later start.
     closeProtocolHostState(this.protocolGateway.host);
 
+    if (typeof this.server.closeAllConnections === 'function') {
+      this.server.closeAllConnections();
+    }
+
     return new Promise<void>((resolve) => {
-      this.server.close(() => resolve());
+      this.server.close(() => {
+        this._started = false;
+        resolve();
+      });
     });
   }
 
@@ -380,6 +409,36 @@ export class BridgeServer {
       return;
     }
 
+    if ((pathname === '/pair' || pathname === '/pair/') && req.method === 'GET') {
+      if (writePairUiResponse(res)) return;
+      errorResponse(res, 404, 'Not found');
+      return;
+    }
+
+    if (pathname === '/auth/session' && req.method === 'GET') {
+      setCorsHeaders(res, req.headers['origin'], this.allowedOrigins);
+      const client = resolveBridgeClientContext(
+        req,
+        this.authToken,
+        parsedUrl,
+        this.devicePairing,
+      );
+      if (client.authKind === 'paired_device' && client.deviceId) {
+        jsonResponse(res, 200, {
+          ok: true,
+          auth: 'paired_device',
+          deviceId: client.deviceId,
+        });
+        return;
+      }
+      if (client.authKind === 'host_bearer' || client.authKind === 'query_bearer') {
+        jsonResponse(res, 200, { ok: true, auth: 'host' });
+        return;
+      }
+      jsonResponse(res, 200, { ok: false, auth: 'none' });
+      return;
+    }
+
     if (pathname.startsWith('/pair')) {
       void this.handlePairingRoute(req, res, parsedUrl);
       return;
@@ -397,6 +456,22 @@ export class BridgeServer {
     if (!isAuthenticated(req, this.authToken, parsedUrl, this.devicePairing)) {
       setCorsHeaders(res, req.headers['origin'], this.allowedOrigins);
       errorResponse(res, 401, 'Unauthorized — provide a valid Bearer token');
+      return;
+    }
+
+    const mutationClient = resolveBridgeClientContext(
+      req,
+      this.authToken,
+      parsedUrl,
+      this.devicePairing,
+    );
+    if (
+      req.method !== 'GET' &&
+      req.method !== 'HEAD' &&
+      !pairedDeviceMutationOriginOk(req, mutationClient, this.allowedOrigins)
+    ) {
+      setCorsHeaders(res, req.headers['origin'], this.allowedOrigins);
+      errorResponse(res, 403, 'Origin not allowed for paired-device mutation');
       return;
     }
 
@@ -526,8 +601,8 @@ export class BridgeServer {
       return;
     }
 
-    if (!isAuthenticated(req, this.authToken, parsedUrl, this.devicePairing)) {
-      errorResponse(res, 401, 'Unauthorized');
+    if (!isBridgeHostAdminAuthenticated(req, this.authToken, parsedUrl)) {
+      errorResponse(res, 401, 'Host administrator authentication required');
       return;
     }
 
@@ -581,6 +656,9 @@ export class BridgeServer {
         errorResponse(res, 404, 'Device not found');
         return;
       }
+      this.protocolGateway.controlLeases.fenceDevice(`device:${deviceId}`);
+      this.wsTickets.revokeForDevice(deviceId);
+      this.closeDeviceSockets(deviceId);
       jsonResponse(res, 200, { ok: true, deviceId });
       return;
     }
@@ -591,7 +669,21 @@ export class BridgeServer {
   // ── Session endpoints ─────────────────────────────────────────────────────
 
   private async handleMintTicket(req: IncomingMessage, res: ServerResponse): Promise<void> {
-    const body = await readLimitedBody(req, 64 * 1024);
+    const parsedUrl = parseRequestUrl(req);
+    const principalBefore = resolveBridgeClientContext(
+      req,
+      this.authToken,
+      parsedUrl,
+      this.devicePairing,
+    );
+    const authBefore = validateAuthenticatedClient(principalBefore, this.devicePairing);
+    if (!authBefore.ok) {
+      errorResponse(res, authBefore.status, authBefore.message);
+      return;
+    }
+    const bodyPromise = readLimitedBody(req, 64 * 1024);
+    await this.options.httpPrincipalTestHooks?.afterInitialPrincipalAuthenticated?.('mint');
+    const body = await bodyPromise;
     if (!body.ok) {
       errorResponse(res, 413, body.error);
       return;
@@ -620,15 +712,114 @@ export class BridgeServer {
       errorResponse(res, status, `ticket mint denied: ${owned.error}`);
       return;
     }
+    const principalAfter = this.resolvePrincipalAfterBody(
+      req,
+      parsedUrl,
+      principalBefore,
+      'mint',
+      res,
+    );
+    if (!principalAfter) return;
     const minted = this.wsTickets.mint({
       sessionId: parsed.session_id,
       threadId: parsed.thread_id,
+      clientId: principalAfter.clientId,
+      authKind: principalAfter.authKind,
+      ...(principalAfter.deviceId !== undefined ? { deviceId: principalAfter.deviceId } : {}),
     });
     jsonResponse(res, 200, minted);
   }
 
+  private registerDeviceSocket(deviceId: string, closer: () => void): void {
+    let set = this.deviceSocketClosers.get(deviceId);
+    if (!set) {
+      set = new Set();
+      this.deviceSocketClosers.set(deviceId, set);
+    }
+    set.add(closer);
+  }
+
+  private unregisterDeviceSocket(deviceId: string, closer: () => void): void {
+    const set = this.deviceSocketClosers.get(deviceId);
+    if (!set) return;
+    set.delete(closer);
+    if (set.size === 0) this.deviceSocketClosers.delete(deviceId);
+  }
+
+  private closeDeviceSockets(deviceId: string): void {
+    const set = this.deviceSocketClosers.get(deviceId);
+    if (!set) return;
+    for (const closer of set) closer();
+    this.deviceSocketClosers.delete(deviceId);
+  }
+
+  /** Test-only: count registered socket closers for a paired device. */
+  testDeviceSocketCloserCount(deviceId: string): number {
+    return this.deviceSocketClosers.get(deviceId)?.size ?? 0;
+  }
+
+  /** @internal Extension point for gateway tests that simulate pre-fix principal races. */
+  protected resolvePrincipalAfterBody(
+    req: IncomingMessage,
+    parsedUrl: ParsedUrl | null,
+    principalBefore: BridgeClientContext,
+    scope: 'mint' | 'rpc',
+    res: ServerResponse,
+  ): BridgeClientContext | null {
+    const principalAfter = resolveBridgeClientContext(
+      req,
+      this.authToken,
+      parsedUrl,
+      this.devicePairing,
+    );
+    if (!bridgeClientPrincipalMatches(principalBefore, principalAfter)) {
+      if (scope === 'mint') {
+        errorResponse(res, 401, 'Authentication expired or changed during request');
+      } else {
+        jsonResponse(res, 401, {
+          jsonrpc: '2.0',
+          id: null,
+          error: { code: -32001, message: 'Authentication expired or changed during request' },
+        });
+      }
+      return null;
+    }
+    const authAfter = validateAuthenticatedClient(principalAfter, this.devicePairing);
+    if (!authAfter.ok) {
+      if (scope === 'mint') {
+        errorResponse(res, authAfter.status, authAfter.message);
+      } else {
+        jsonResponse(res, authAfter.status, {
+          jsonrpc: '2.0',
+          id: null,
+          error: { code: -32001, message: authAfter.message },
+        });
+      }
+      return null;
+    }
+    return principalAfter;
+  }
+
   private async handleRpc(req: IncomingMessage, res: ServerResponse): Promise<void> {
-    const body = await readLimitedBody(req);
+    const parsedUrl = parseRequestUrl(req);
+    const principalBefore = resolveBridgeClientContext(
+      req,
+      this.authToken,
+      parsedUrl,
+      this.devicePairing,
+    );
+    const authBefore = validateAuthenticatedClient(principalBefore, this.devicePairing);
+    if (!authBefore.ok) {
+      jsonResponse(res, authBefore.status, {
+        jsonrpc: '2.0',
+        id: null,
+        error: { code: -32001, message: authBefore.message },
+      });
+      return;
+    }
+    const bodyPromise = readLimitedBody(req);
+    await this.options.httpPrincipalTestHooks?.afterInitialPrincipalAuthenticated?.('rpc');
+    const body = await bodyPromise;
     if (!body.ok) {
       jsonResponse(res, 413, {
         jsonrpc: '2.0',
@@ -637,7 +828,9 @@ export class BridgeServer {
       });
       return;
     }
-    const response = await this.protocolGateway.dispatch(body.body);
+    const principalAfter = this.resolvePrincipalAfterBody(req, parsedUrl, principalBefore, 'rpc', res);
+    if (!principalAfter) return;
+    const response = await this.protocolGateway.dispatch(body.body, { client: principalAfter });
     jsonResponse(res, 200, response);
   }
 
@@ -775,10 +968,12 @@ export class BridgeServer {
       process.env['BABEL_REMOTE_ALLOW_LEGACY_WS_BEARER'] === '1';
 
     let subscribedThreadId: string | undefined;
+    let wsClient: BridgeClientContext = { authKind: 'none', clientId: 'anonymous' };
     if (ticketValue) {
       const consumed = this.wsTickets.consume({
         ticket: ticketValue,
         sessionId,
+        deviceAuthorized: (deviceId) => this.devicePairing.isDeviceAuthorized(deviceId),
       });
       if (!consumed.ok) {
         const status = consumed.error === 'missing' || consumed.error === 'unknown' ? 401 : 403;
@@ -787,9 +982,29 @@ export class BridgeServer {
         return;
       }
       subscribedThreadId = consumed.value.threadId;
+      if (!isBridgeClientAuthenticated({
+        authKind: consumed.value.authKind,
+        clientId: consumed.value.clientId,
+        ...(consumed.value.deviceId !== undefined
+          ? { deviceId: consumed.value.deviceId }
+          : {}),
+      })) {
+        socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
+        socket.destroy();
+        return;
+      }
+      wsClient = {
+        authKind: consumed.value.authKind,
+        clientId: consumed.value.clientId,
+        ...(consumed.value.deviceId !== undefined
+          ? { deviceId: consumed.value.deviceId }
+          : {}),
+      };
     } else if (legacyBearer && headerToken && verifyToken(headerToken, this.authToken)) {
       // Compatibility path: header bearer only. No thread-scoped events.
       subscribedThreadId = undefined;
+      const digest = createHash('sha256').update(headerToken).digest('base64url');
+      wsClient = { authKind: 'host_bearer', clientId: `host:${digest}` };
     } else {
       socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
       socket.destroy();
@@ -847,18 +1062,47 @@ export class BridgeServer {
     const generation = (this.transportGenerations.get(sessionId) ?? 0) + 1;
     this.transportGenerations.set(sessionId, generation);
 
+    const pairedDeviceId = wsClient.deviceId;
+
     const unsub =
       transport instanceof WebSocketTransport && subscribedThreadId
         ? this.protocolGateway.subscribe(
             (payload) => {
+              if (
+                pairedDeviceId &&
+                !this.devicePairing.isDeviceAuthorized(pairedDeviceId)
+              ) {
+                transport.close();
+                return;
+              }
               transport.sendText(payload);
             },
             { threadId: subscribedThreadId },
           )
         : () => {};
 
+    const closeBoundSocket = (): void => {
+      transport.close();
+    };
+
     if (transport instanceof WebSocketTransport) {
+      if (pairedDeviceId) {
+        this.registerDeviceSocket(pairedDeviceId, closeBoundSocket);
+      }
       transport.onText((payload) => {
+        if (wsClient.deviceId && !this.devicePairing.isDeviceAuthorized(wsClient.deviceId)) {
+          transport.sendText(
+            JSON.stringify({
+              jsonrpc: '2.0',
+              id: null,
+              error: { code: -32001, message: 'Device authorization revoked' },
+            }),
+          );
+          transport.close();
+          return;
+        }
+        const parsed = parseProtocolRequest(payload);
+        const method = parsed && typeof parsed.method === 'string' ? parsed.method : '';
         if (subscribedThreadId) {
           const allowed = authorizeThreadScopedWsRpc(payload, {
             bridgeSessionId: sessionId,
@@ -874,8 +1118,20 @@ export class BridgeServer {
             );
             return;
           }
+        } else if (REMOTE_MUTATING_RPC_METHODS.has(method)) {
+          transport.sendText(
+            JSON.stringify({
+              jsonrpc: '2.0',
+              id: parsed && 'id' in parsed ? parsed.id : null,
+              error: {
+                code: -32001,
+                message: 'Mutating RPC requires a thread-scoped WebSocket ticket',
+              },
+            }),
+          );
+          return;
         }
-        void this.protocolGateway.dispatch(payload).then((response) => {
+        void this.protocolGateway.dispatch(payload, { client: wsClient }).then((response) => {
           transport.sendText(JSON.stringify(response));
         });
       });
@@ -885,6 +1141,9 @@ export class BridgeServer {
 
     const closeGeneration = generation;
     transport.onClose?.((_reason?: string) => {
+      if (pairedDeviceId) {
+        this.unregisterDeviceSocket(pairedDeviceId, closeBoundSocket);
+      }
       if (this.transportGenerations.get(sessionId) !== closeGeneration) return;
       unsub();
       this.wsTransports.delete(sessionId);

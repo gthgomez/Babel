@@ -7,7 +7,13 @@ describe('WsTicketStore', () => {
   it('accepts a fresh ticket and rejects missing, bad, expired, replayed, and scope-mismatched tickets', () => {
     const store = new WsTicketStore(1_000);
     const now = 1_000_000;
-    const minted = store.mint({ sessionId: 'sess-a', threadId: 'thr-a', now });
+    const minted = store.mint({
+      sessionId: 'sess-a',
+      threadId: 'thr-a',
+      clientId: 'host:test',
+      authKind: 'host_bearer',
+      now,
+    });
     assert.ok(minted.ticket.length > 16);
     assert.equal(minted.session_id, 'sess-a');
 
@@ -22,7 +28,13 @@ describe('WsTicketStore', () => {
     assert.equal(expired.ok, false);
     if (!expired.ok) assert.equal(expired.error, 'expired');
 
-    const fresh = store.mint({ sessionId: 'sess-a', threadId: 'thr-a', now });
+    const fresh = store.mint({
+      sessionId: 'sess-a',
+      threadId: 'thr-a',
+      clientId: 'host:test',
+      authKind: 'host_bearer',
+      now,
+    });
     const mismatch = store.consume({
       ticket: fresh.ticket,
       sessionId: 'sess-b',
@@ -47,5 +59,20 @@ describe('WsTicketStore', () => {
     const replay = store.consume({ ticket: fresh.ticket, sessionId: 'sess-a', now });
     assert.equal(replay.ok, false);
     if (!replay.ok) assert.equal(replay.error, 'replayed');
+  });
+
+  it('rejects tickets without explicit host or paired authority', () => {
+    const store = new WsTicketStore(1_000);
+    const now = 2_000_000;
+    const anonymous = store.mint({
+      sessionId: 'sess-z',
+      threadId: 'thr-z',
+      clientId: 'anonymous',
+      authKind: 'none',
+      now,
+    });
+    const badConsume = store.consume({ ticket: anonymous.ticket, sessionId: 'sess-z', now });
+    assert.equal(badConsume.ok, false);
+    if (!badConsume.ok) assert.equal(badConsume.error, 'unknown');
   });
 });
