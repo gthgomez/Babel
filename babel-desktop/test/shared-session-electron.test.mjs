@@ -31,6 +31,44 @@ function resolveElectronExecutable() {
 
 const electronExecutable = resolveElectronExecutable();
 
+function emitParentTrace(stage, detail = {}) {
+  const line = `[shared-session-parent-trace] ${JSON.stringify({
+    stage,
+    ts: Date.now(),
+    display: process.env.DISPLAY ?? null,
+    platform: process.platform,
+    ...detail,
+  })}`;
+  console.error(line);
+}
+
+function buildLifecycleStyleEnv(profileDir) {
+  const env = {};
+  for (const name of [
+    'PATH',
+    'SystemRoot',
+    'WINDIR',
+    'TEMP',
+    'TMP',
+    'LOCALAPPDATA',
+    'APPDATA',
+    'USERPROFILE',
+    'HOME',
+    'COMSPEC',
+    'PATHEXT',
+    'DISPLAY',
+    'WAYLAND_DISPLAY',
+    'XAUTHORITY',
+  ]) {
+    if (process.env[name]) env[name] = process.env[name];
+  }
+  env.BABEL_RUNS_DIR = join(profileDir, 'engine', 'state', 'runs');
+  env.BABEL_TEST_ACCEPTANCE_DETERMINISTIC_BRIDGE = '1';
+  env.BABEL_TEST_SHARED_SESSION_TRACE = '1';
+  env.ELECTRON_NO_SANDBOX = '1';
+  return env;
+}
+
 test('shared-session Electron run uses host-run child and preserves thread across two turns', {
   skip: !electronExecutable
     ? 'missing Electron binary: run npm install in babel-desktop or set BABEL_TEST_ELECTRON_EXECUTABLE'
@@ -136,35 +174,56 @@ if (remoteIdx >= 0 && (remoteSub === 'serve' || remoteSub === 'acceptance-bridge
       model: 'deepseek-v4-pro-openrouter',
     });
 
-    const env = { ...process.env };
-    env.BABEL_RUNS_DIR = join(profile, 'engine', 'state', 'runs');
-    env.BABEL_TEST_ACCEPTANCE_DETERMINISTIC_BRIDGE = '1';
-    env.BABEL_TEST_SHARED_SESSION_TRACE = '1';
-    env.ELECTRON_NO_SANDBOX = '1';
+    const env = buildLifecycleStyleEnv(profile);
 
     const launchArgs = [bootstrap, `--profile-dir=${profile}`];
     const gpuSafeArgs =
       process.platform === 'linux'
         ? ['--disable-gpu', '--disable-gpu-sandbox', '--disable-dev-shm-usage', '--no-zygote']
         : [];
-    if (process.platform === 'linux' && !process.env.DISPLAY) {
-      gpuSafeArgs.unshift('--ozone-platform=headless');
-    }
 
-    application = await invokeBounded(
-      'electron.launch',
-      () =>
-        _electron.launch({
-          executablePath: electronExecutable,
-          args: [...gpuSafeArgs, ...launchArgs],
-          env,
-          timeout: 45_000,
-        }),
-      50_000,
-    );
-    application.process().stderr?.on('data', (chunk) => {
-      traceStages.push(...parseSharedSessionTrace(chunk.toString('utf8')));
+    emitParentTrace('prelaunch:fixtures-ready', {
+      executable: electronExecutable,
+      gpuSafeArgs,
+      launchArgsCount: launchArgs.length,
     });
+
+    let childStderr = '';
+    const launchOptions = {
+      executablePath: electronExecutable,
+      args: [...gpuSafeArgs, ...launchArgs],
+      env,
+      timeout: 45_000,
+    };
+
+    emitParentTrace('before-electron.launch', {
+      timeoutMs: launchOptions.timeout,
+      xvfbExpected: process.platform === 'linux',
+    });
+
+    try {
+      application = await invokeBounded(
+        'electron.launch',
+        async () => {
+          const app = await _electron.launch(launchOptions);
+          app.process().stderr?.on('data', (chunk) => {
+            const text = chunk.toString('utf8');
+            childStderr += text;
+            traceStages.push(...parseSharedSessionTrace(text));
+          });
+          return app;
+        },
+        50_000,
+      );
+      emitParentTrace('after-electron.launch', { ok: true });
+    } catch (error) {
+      emitParentTrace('after-electron.launch', {
+        ok: false,
+        error: error instanceof Error ? error.message : String(error),
+        childStderrTail: childStderr.slice(-2000),
+      });
+      throw error;
+    }
     const page = await invokeBounded('firstWindow', () => application.firstWindow(), 20_000);
     await waitStage('renderer:did-finish-load', 20_000);
     await application.evaluate(({ dialog }) => {
@@ -300,11 +359,13 @@ if (remoteIdx >= 0 && (remoteSub === 'serve' || remoteSub === 'acceptance-bridge
       return text.split('\n').filter((line) => line === 'host-run').length >= 2;
     }, 'second host-run child was not started');
   } finally {
+    emitParentTrace('cleanup:start', { hadApplication: Boolean(application) });
     if (application) {
       await application.evaluate(({ app }) => app.exit(0)).catch(() => {});
       await application.close().catch(() => {});
     }
     await rm(root, { recursive: true, force: true });
+    emitParentTrace('cleanup:done', {});
   }
 });
 
