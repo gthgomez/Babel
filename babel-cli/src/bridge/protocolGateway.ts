@@ -20,7 +20,7 @@ import { originAllowed as originAllowedStructured } from './originPolicy.js';
 import { ThreadOwnershipRegistry, type ThreadOwnershipError } from './threadOwnership.js';
 import { loadSessionDescriptor } from '../services/threadStore/sessionDescriptor.js';
 import { threadStoreExists } from '../services/threadStore/threadStore.js';
-import { buildRemoteCatalog, findCanonicalCommandCodeNativeOwnerForProject } from './remoteCatalog.js';
+import { buildRemoteCatalog, commandCodeOpenNativeAuthority } from './remoteCatalog.js';
 import { buildRemoteHarnessCapabilities } from './harnessAdapterRegistry.js';
 import type { CommandCodeAcpRuntimeRegistry } from './commandCodeAcpRuntime.js';
 import { ControlLeaseRegistry } from './controlLease.js';
@@ -347,18 +347,39 @@ export class ProtocolGateway {
         },
       };
     }
-    const ownerForNative = await findCanonicalCommandCodeNativeOwnerForProject(
+    const openAuthority = await commandCodeOpenNativeAuthority(
       this.host,
       canonicalRoot,
       nativeId,
+      threadId,
     );
-    if (ownerForNative && ownerForNative !== threadId) {
+    if (openAuthority === 'corrupt') {
+      return {
+        jsonrpc: '2.0',
+        id: parsedId ?? 0,
+        error: {
+          code: BabelProtocolErrorCode.INVALID_PARAMS,
+          message: 'Multiple persisted Babel threads own this Command Code native session',
+        },
+      };
+    }
+    if (openAuthority === 'conflict') {
       return {
         jsonrpc: '2.0',
         id: parsedId ?? 0,
         error: {
           code: BabelProtocolErrorCode.INVALID_PARAMS,
           message: 'Another Babel thread already owns this Command Code native session',
+        },
+      };
+    }
+    if (openAuthority === 'none') {
+      return {
+        jsonrpc: '2.0',
+        id: parsedId ?? 0,
+        error: {
+          code: BabelProtocolErrorCode.INVALID_PARAMS,
+          message: 'No persisted canonical owner for this Command Code native session',
         },
       };
     }

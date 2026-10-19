@@ -256,6 +256,26 @@ export async function findCanonicalCommandCodeNativeOwnerForProject(
   return persisted[0];
 }
 
+export type CommandCodeOpenNativeAuthority = 'ok' | 'corrupt' | 'conflict' | 'none';
+
+/** Authorize harness.command_code.open: one persisted owner must equal threadId. */
+export async function commandCodeOpenNativeAuthority(
+  state: ProtocolHostState,
+  projectRoot: string,
+  nativeSessionId: string,
+  threadId: string,
+): Promise<CommandCodeOpenNativeAuthority> {
+  const owners = await listPersistedCommandCodeNativeOwnerThreadIds(
+    state,
+    projectRoot,
+    nativeSessionId,
+  );
+  if (owners.length > 1) return 'corrupt';
+  if (owners.length === 0) return 'none';
+  if (owners[0] !== threadId) return 'conflict';
+  return 'ok';
+}
+
 /** Returns an existing persisted owner for the same canonical project + native id, if any. */
 export async function conflictingPersistedCommandCodeNativeOwner(
   state: ProtocolHostState,

@@ -16,6 +16,7 @@ import {
 } from './desktopControllerAuth.js';
 import { CommandCodeAcpRuntimeRegistry } from './commandCodeAcpRuntime.js';
 import { BridgeServer } from './sessionServer.js';
+import { ensureThread, writeSessionDescriptor } from '../services/threadStore/index.js';
 
 const TOKEN = 'cc-open-sidefx-token';
 const ORIGIN = 'http://127.0.0.1';
@@ -26,11 +27,44 @@ const VERSION_FIXTURE = fileURLToPath(
 
 class OpenInvocationRegistry extends CommandCodeAcpRuntimeRegistry {
   openSavedSessionCalls = 0;
+  ensureSessionCalls = 0;
+  persistReplayHistoryCalls = 0;
+
+  override async ensureSession(descriptor: SessionDescriptor) {
+    this.ensureSessionCalls += 1;
+    return super.ensureSession(descriptor);
+  }
+
+  override persistReplayHistory(descriptor: SessionDescriptor): void {
+    this.persistReplayHistoryCalls += 1;
+    super.persistReplayHistory(descriptor);
+  }
 
   override async openSavedSession(descriptor: SessionDescriptor): Promise<{ cell_count: number }> {
     this.openSavedSessionCalls += 1;
     return super.openSavedSession(descriptor);
   }
+}
+
+function commandCodeDescriptor(
+  threadId: string,
+  projectRoot: string,
+  nativeId: string,
+): SessionDescriptor {
+  return {
+    schemaVersion: 1,
+    threadId,
+    projectRoot,
+    mode: 'chat',
+    provider: 'default',
+    model: 'default',
+    policyProfile: 'safe_repo',
+    createdAt: new Date().toISOString(),
+    kernelVersion: 'executor-kernel-v1',
+    contractVersion: 'executor-contract-v1',
+    harness_adapter_id: 'command-code',
+    harness_native_session_id: nativeId,
+  };
 }
 
 function httpRequest(
@@ -360,6 +394,40 @@ describe('harness.command_code.open side effects', () => {
     assert.ok(denied.error);
     assert.equal(registry.openSavedSessionCalls, before);
     assert.notEqual(ownerThread, otherThread);
+  });
+
+  it('rejects open when dual persisted owners corrupt canonical authority with zero registry effects', async () => {
+    const nativeId = 'sess_fixture_dual_open_corrupt';
+    const t1 = 'thread-dual-open-a';
+    const t2 = 'thread-dual-open-b';
+    const host = server.protocolGateway.host;
+    for (const threadId of [t1, t2]) {
+      const descriptor = commandCodeDescriptor(threadId, tmp, nativeId);
+      ensureThread(threadId, { project_root: tmp });
+      writeSessionDescriptor(descriptor);
+      host.descriptors.set(threadId, descriptor);
+    }
+    await rpc(port, fullDesktopHeaders(), 'control.acquire', { thread_id: t1, force: false }, 60);
+    const beforeOpen = registry.openSavedSessionCalls;
+    const beforeEnsure = registry.ensureSessionCalls;
+    const beforeReplay = registry.persistReplayHistoryCalls;
+    const denied = await rpc(
+      port,
+      fullDesktopHeaders(),
+      'harness.command_code.open',
+      {
+        thread_id: t1,
+        project_root: tmp,
+        harness_native_session_id: nativeId,
+      },
+      61,
+    );
+    assert.ok(denied.error, 'expected corrupt dual-owner open denial');
+    const message = (denied.error as { message?: string }).message ?? '';
+    assert.match(message, /Multiple persisted/i);
+    assert.equal(registry.openSavedSessionCalls, beforeOpen);
+    assert.equal(registry.ensureSessionCalls, beforeEnsure);
+    assert.equal(registry.persistReplayHistoryCalls, beforeReplay);
   });
 
   it('rejects thread.create alias for an already-owned persisted native session', async () => {

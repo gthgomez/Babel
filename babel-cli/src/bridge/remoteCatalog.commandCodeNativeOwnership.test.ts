@@ -8,6 +8,7 @@ import { createProtocolHostState } from '../protocol/client/host.js';
 import type { SessionDescriptor } from '../executor/contracts.js';
 import {
   commandCodeNativeOwnershipViolation,
+  commandCodeOpenNativeAuthority,
   conflictingPersistedCommandCodeNativeOwner,
   findCanonicalCommandCodeNativeOwnerForProject,
   listPersistedCommandCodeNativeOwnerThreadIds,
@@ -70,6 +71,8 @@ describe('command-code native ownership (persisted bindings)', () => {
     assert.deepEqual(owners, [t1, t2].sort());
     assert.equal(await commandCodeNativeOwnershipViolation(state, tmp, nativeId), 'corrupt');
     assert.equal(await findCanonicalCommandCodeNativeOwnerForProject(state, tmp, nativeId), undefined);
+    assert.equal(await commandCodeOpenNativeAuthority(state, tmp, nativeId, t1), 'corrupt');
+    assert.equal(await commandCodeOpenNativeAuthority(state, tmp, nativeId, t2), 'corrupt');
   });
 
   it('detects conflict when excluding one of two persisted owners', async () => {
@@ -87,6 +90,20 @@ describe('command-code native ownership (persisted bindings)', () => {
     assert.equal(await commandCodeNativeOwnershipViolation(state, tmp, nativeId, t2), 'conflict');
     assert.equal(await conflictingPersistedCommandCodeNativeOwner(state, tmp, nativeId, t1), t2);
     assert.equal(await conflictingPersistedCommandCodeNativeOwner(state, tmp, nativeId, t2), t1);
+    assert.equal(await commandCodeOpenNativeAuthority(state, tmp, nativeId, t1), 'corrupt');
+  });
+
+  it('authorizes open only for the unique persisted owner thread', async () => {
+    const state = createProtocolHostState();
+    const nativeId = 'sess_fixture_open_authority';
+    const ownerId = 'thread-open-owner';
+    const otherId = 'thread-open-other';
+    const descriptor = commandCodeDescriptor(ownerId, tmp, nativeId);
+    ensureThread(ownerId, { project_root: tmp });
+    writeSessionDescriptor(descriptor);
+    state.descriptors.set(ownerId, descriptor);
+    assert.equal(await commandCodeOpenNativeAuthority(state, tmp, nativeId, ownerId), 'ok');
+    assert.equal(await commandCodeOpenNativeAuthority(state, tmp, nativeId, otherId), 'conflict');
   });
 
   it('keeps distinct canonical projects independent for the same native id', async () => {
