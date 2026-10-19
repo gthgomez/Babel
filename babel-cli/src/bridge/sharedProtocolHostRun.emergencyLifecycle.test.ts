@@ -1706,6 +1706,9 @@ describe('shared host-run emergency observation errors (mocked authoritative bac
         (event) => event.type === 'cancelled',
         'authoritative_cancelled_before_observation_deadline',
       );
+      // Frozen manual clock owns waitForTurnObservation's 25ms poll sleep; advance one tick
+      // after authoritative cancelled so the helper can exit before awaiting runPromise.
+      await advanceEmergencyClock(25);
 
       const code = await Promise.race([
         runPromise,
