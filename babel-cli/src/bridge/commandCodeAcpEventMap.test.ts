@@ -1,39 +1,48 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { mapCommandCodeAcpUpdate } from './commandCodeAcpEventMap.js';
+import { mapCommandCodeAcpUpdate, normalizeAcpSessionUpdate } from './commandCodeAcpEventMap.js';
 
 describe('commandCodeAcpEventMap', () => {
-  it('maps official v2 agent_message_chunk updates', () => {
-    const state = { textBuffer: [], terminalEmitted: false };
+  it('normalizes canonical string sessionUpdate discriminators', () => {
+    const body = normalizeAcpSessionUpdate({
+      sessionUpdate: 'agent_message_chunk',
+      content: [{ type: 'text', text: 'hello' }],
+    });
+    assert.equal(body?.sessionUpdateKind, 'agent_message_chunk');
+  });
+
+  it('maps canonical v1 agent_message_chunk updates', () => {
+    const state = { textBuffer: [], terminalEmitted: false, promptAdmitted: true };
     const events = mapCommandCodeAcpUpdate(
       {
-        sessionUpdate: {
-          type: 'agent_message_chunk',
-          content: { type: 'text', text: 'hello' },
-        },
+        sessionUpdate: 'agent_message_chunk',
+        content: [{ type: 'text', text: 'hello' }],
       },
       state,
-      2,
+      1,
     );
     assert.equal(events.length, 1);
     assert.equal(events[0]?.type, 'answer_chunk');
-    assert.equal((events[0] as { text: string }).text, 'hello');
   });
 
-  it('does not fabricate zero usage or completed on unknown idle stop reason', () => {
-    const state = { textBuffer: ['x'], terminalEmitted: false };
+  it('ignores startup idle end_turn before prompt admission', () => {
+    const state = { textBuffer: [], terminalEmitted: false, promptAdmitted: false };
     const events = mapCommandCodeAcpUpdate(
-      { sessionUpdate: { type: 'state_update', state: 'idle', stopReason: 'max_tokens' } },
+      { sessionUpdate: 'state_update', state: 'idle', stopReason: 'end_turn' },
       state,
-      2,
+      1,
+    );
+    assert.equal(events.length, 0);
+  });
+
+  it('fails closed on admitted idle without assistant content', () => {
+    const state = { textBuffer: [], terminalEmitted: false, promptAdmitted: true };
+    const events = mapCommandCodeAcpUpdate(
+      { sessionUpdate: 'state_update', state: 'idle', stopReason: 'end_turn' },
+      state,
+      1,
     );
     assert.equal(events[0]?.type, 'failed');
-    const unknown = mapCommandCodeAcpUpdate(
-      { sessionUpdate: { type: 'state_update', state: 'idle' } },
-      { textBuffer: [], terminalEmitted: false },
-      2,
-    );
-    assert.equal(unknown.length, 0);
   });
 });

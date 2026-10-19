@@ -1,7 +1,9 @@
 import { ChatEngine } from '../agent/chatEngine.js';
+import type { ChatEvent } from '../agent/chatEngineContracts.js';
 import type { SessionDescriptor } from '../executor/contracts.js';
 import { writeSessionDescriptor } from '../services/threadStore/sessionDescriptor.js';
 import { getRemoteSurface } from './remoteApproval.js';
+import { mapPromptTerminalFromStopReason, type AcpTurnMapState } from './commandCodeAcpEventMap.js';
 import type { CommandCodeAcpRuntimeRegistry } from './commandCodeAcpRuntime.js';
 
 export interface CommandCodeHarnessEngineOptions {
@@ -9,7 +11,11 @@ export interface CommandCodeHarnessEngineOptions {
   registry: CommandCodeAcpRuntimeRegistry;
 }
 
-const TURN_WAIT_MS = Number(process.env['BABEL_COMMAND_CODE_TURN_WAIT_MS'] ?? 8_000);
+function* drainPendingEvents(session: { pendingEvents: ChatEvent[] }): Generator<ChatEvent, void, void> {
+  while (session.pendingEvents.length > 0) {
+    yield session.pendingEvents.shift()!;
+  }
+}
 
 export function createCommandCodeHarnessEngine(options: CommandCodeHarnessEngineOptions): ChatEngine {
   const registry = options.registry;
@@ -23,9 +29,11 @@ export function createCommandCodeHarnessEngine(options: CommandCodeHarnessEngine
   engine.assignRunId(descriptor.threadId);
 
   let cancelRequested = false;
+  let cancelNotified = false;
 
   engine.submitMessageStream = async function* (message: string) {
     cancelRequested = false;
+    cancelNotified = false;
     const surface = getRemoteSurface();
     if (!surface) {
       yield { type: 'failed', error: 'Command Code harness requires remote approval surface' };
@@ -33,7 +41,17 @@ export function createCommandCodeHarnessEngine(options: CommandCodeHarnessEngine
     }
 
     const session = await registry.ensureSession(descriptor);
-    session.turnState = { textBuffer: [], terminalEmitted: false };
+    for (const replay of session.replayEvents) {
+      yield replay;
+    }
+    session.replayEvents = [];
+
+    const turnState: AcpTurnMapState = {
+      textBuffer: [],
+      terminalEmitted: false,
+      promptAdmitted: false,
+    };
+    session.turnState = turnState;
     session.pendingEvents = [];
     session.permissionBinding = {
       threadId: surface.threadId,
@@ -46,19 +64,29 @@ export function createCommandCodeHarnessEngine(options: CommandCodeHarnessEngine
     try {
       writeSessionDescriptor(descriptor);
       const transport = registry.transportForThread(descriptor);
+      const codec = transport.negotiatedCodec();
+      if (!codec) {
+        yield { type: 'failed', error: 'Command Code ACP not negotiated' };
+        return;
+      }
 
-      await transport.call('session/prompt', {
-        sessionId: session.nativeSessionId,
-        prompt: [{ type: 'text', text: message }],
-      });
+      turnState.promptAdmitted = true;
+      let promptResult: Record<string, unknown> | undefined;
+      const promptDone = transport
+        .call('session/prompt', {
+          sessionId: session.nativeSessionId,
+          prompt: [{ type: 'text', text: message }],
+          ...(codec.protocolVersion === 1 ? { mcpServers: [] } : {}),
+        })
+        .then((result) => {
+          promptResult = result;
+        });
 
       yield { type: 'thinking' };
 
       let settled = false;
-      const deadline = Date.now() + TURN_WAIT_MS;
-      while (!settled && Date.now() < deadline) {
-        while (session.pendingEvents.length > 0) {
-          const event = session.pendingEvents.shift()!;
+      while (!settled) {
+        for (const event of drainPendingEvents(session)) {
           yield event;
           if (event.type === 'done' || event.type === 'failed' || event.type === 'cancelled') {
             settled = true;
@@ -66,29 +94,48 @@ export function createCommandCodeHarnessEngine(options: CommandCodeHarnessEngine
           }
         }
         if (settled) break;
-        if (cancelRequested) {
+
+        if (cancelRequested && !cancelNotified) {
           registry.requestCancel(descriptor);
+          cancelNotified = true;
         }
+
         if (session.processDead) {
           yield { type: 'failed', error: 'Command Code ACP process exited during turn' };
           return;
         }
-        await new Promise<void>((resolve) => {
-          session.wake = resolve;
-          setTimeout(resolve, 20);
-        });
-        session.wake = null;
-      }
-      if (!settled) {
-        yield {
-          type: 'failed',
-          error: cancelRequested
-            ? 'Cancel was requested but no authoritative terminal was observed'
-            : 'Timed out waiting for Command Code turn terminal',
-        };
+
+        const raced = await Promise.race([
+          promptDone.then(() => 'prompt' as const),
+          new Promise<'tick'>((resolve) => setTimeout(() => resolve('tick'), 20)),
+        ]);
+        if (raced === 'prompt') {
+          await promptDone;
+          await new Promise<void>((resolve) => setTimeout(resolve, 30));
+          for (const event of drainPendingEvents(session)) {
+            yield event;
+            if (event.type === 'done' || event.type === 'failed' || event.type === 'cancelled') {
+              settled = true;
+            }
+          }
+          if (!settled && !turnState.terminalEmitted) {
+            const stopReason =
+              typeof promptResult?.stopReason === 'string' ? promptResult.stopReason : 'end_turn';
+            for (const event of mapPromptTerminalFromStopReason(
+              turnState,
+              codec.protocolVersion,
+              stopReason,
+            )) {
+              yield event;
+              settled = true;
+            }
+          }
+          break;
+        }
       }
     } finally {
       session.permissionBinding = null;
+      turnState.promptAdmitted = false;
     }
   };
 
@@ -96,7 +143,10 @@ export function createCommandCodeHarnessEngine(options: CommandCodeHarnessEngine
     cancelRequested = true;
     const session = registry.getBoundSession(descriptor);
     session?.wake?.();
-    registry.requestCancel(descriptor);
+    if (!cancelNotified) {
+      registry.requestCancel(descriptor);
+      cancelNotified = true;
+    }
   };
 
   return engine;

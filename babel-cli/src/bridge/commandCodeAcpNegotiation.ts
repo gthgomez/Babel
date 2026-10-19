@@ -1,5 +1,5 @@
 /**
- * ACP wire negotiation outcomes (v1 stable, v2 draft). Installed vendor version is not asserted here.
+ * ACP wire negotiation (v1 stable baseline; v2 draft optional). No installed vendor version is asserted.
  */
 
 export const ACP_SUPPORTED_PROTOCOL_VERSIONS = [1, 2] as const;
@@ -12,6 +12,7 @@ export interface AcpNegotiatedSessionCapabilities {
   list: boolean;
   prompt: boolean;
   cancel: boolean;
+  modelSelection: boolean;
 }
 
 export interface AcpNegotiatedCodec {
@@ -20,37 +21,46 @@ export interface AcpNegotiatedCodec {
   session: AcpNegotiatedSessionCapabilities;
 }
 
+function parseV1Capabilities(result: Record<string, unknown>): AcpNegotiatedSessionCapabilities {
+  const agentCapabilities = result.agentCapabilities as Record<string, unknown> | undefined;
+  const loadSession = agentCapabilities?.loadSession === true;
+  const sessionCapabilities = agentCapabilities?.sessionCapabilities as
+    | { resume?: unknown; list?: unknown }
+    | undefined;
+  return {
+    baselineSession: true,
+    prompt: true,
+    cancel: true,
+    load: loadSession,
+    resume: sessionCapabilities?.resume !== undefined,
+    list: sessionCapabilities?.list !== undefined,
+    modelSelection: false,
+  };
+}
+
+function parseV2Capabilities(result: Record<string, unknown>): AcpNegotiatedSessionCapabilities {
+  const session = (result.capabilities as { session?: unknown } | undefined)?.session;
+  if (session === undefined || session === null) {
+    throw new Error('ACP_V2_MISSING_SESSION_CAPABILITY');
+  }
+  return {
+    baselineSession: true,
+    prompt: true,
+    cancel: true,
+    load: false,
+    resume: true,
+    list: true,
+    modelSelection: false,
+  };
+}
+
 export function parseInitializeResult(result: Record<string, unknown>): AcpNegotiatedCodec {
   const protocolVersion = result.protocolVersion;
   if (protocolVersion !== 1 && protocolVersion !== 2) {
     throw new Error(`ACP_UNSUPPORTED_PROTOCOL_VERSION:${String(protocolVersion)}`);
   }
   const version = protocolVersion as AcpProtocolVersion;
-  const caps =
-    version === 2
-      ? (result.capabilities as { session?: unknown } | undefined)?.session
-      : (result.agentCapabilities as { session?: unknown } | undefined)?.session;
-  const sessionCaps =
-    caps === undefined || caps === null
-      ? {
-          baselineSession: false,
-          resume: false,
-          load: false,
-          list: false,
-          prompt: false,
-          cancel: false,
-        }
-      : {
-          baselineSession: true,
-          resume: true,
-          load: version === 1,
-          list: true,
-          prompt: true,
-          cancel: true,
-        };
-  if (!sessionCaps.baselineSession) {
-    throw new Error('ACP_AGENT_MISSING_SESSION_SURFACE');
-  }
+  const session = version === 1 ? parseV1Capabilities(result) : parseV2Capabilities(result);
   const agentInfo =
     version === 2
       ? (result.info as { name?: string; version?: string } | undefined)
@@ -58,7 +68,7 @@ export function parseInitializeResult(result: Record<string, unknown>): AcpNegot
   return {
     protocolVersion: version,
     ...(agentInfo ? { agentInfo } : {}),
-    session: sessionCaps,
+    session,
   };
 }
 

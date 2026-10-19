@@ -5,7 +5,7 @@ import { resolve } from 'node:path';
 import type { ChatEvent } from '../agent/chatEngineContracts.js';
 import type { SessionDescriptor } from '../executor/contracts.js';
 import { mapCommandCodeAcpUpdate, type AcpTurnMapState } from './commandCodeAcpEventMap.js';
-import { probeCommandCodeInstallation } from './commandCodeCliDiscovery.js';
+import { probeCommandCodeInstallation, type CommandCodeInstallProbe } from './commandCodeCliDiscovery.js';
 import { permissionActionFromAcpParams, selectAllowOnceOptionId } from './commandCodeAcpPermission.js';
 import { CommandCodeAcpTransport } from './commandCodeAcpTransport.js';
 import type { RemoteApprovalBroker } from './remoteApproval.js';
@@ -28,6 +28,8 @@ export interface CommandCodeRuntimeSession {
   permissionBinding: CommandCodeTurnPermissionBinding | null;
   turnState: AcpTurnMapState;
   processDead: boolean;
+  replayEvents: ChatEvent[];
+  replayCapture: boolean;
 }
 
 interface ProjectRuntime {
@@ -50,6 +52,8 @@ export interface CommandCodeAcpRuntimeRegistryOptions {
   hostScopeId?: string;
   /** Test-only: injected ACP child launch (never read from ambient production env). */
   testLaunch?: CommandCodeAcpLaunchOverride;
+  /** Test-only: replaces installation probe (does not select production launch binary). */
+  installProbe?: () => Promise<CommandCodeInstallProbe>;
 }
 
 let nextRuntimeInstanceId = 1;
@@ -57,12 +61,14 @@ let nextRuntimeInstanceId = 1;
 export class CommandCodeAcpRuntimeRegistry {
   private readonly hostScopeId: string;
   private readonly testLaunch: CommandCodeAcpLaunchOverride | undefined;
+  private readonly installProbe: (() => Promise<CommandCodeInstallProbe>) | undefined;
   private readonly projects = new Map<string, ProjectRuntime>();
   private readonly projectStarts = new Map<string, Promise<ProjectRuntime>>();
 
   constructor(options?: CommandCodeAcpRuntimeRegistryOptions) {
     this.hostScopeId = options?.hostScopeId ?? randomUUID();
     this.testLaunch = options?.testLaunch;
+    this.installProbe = options?.installProbe;
   }
 
   private projectKey(hostScopeId: string, projectRoot: string): string {
@@ -95,7 +101,9 @@ export class CommandCodeAcpRuntimeRegistry {
   }
 
   private async createProjectRuntime(projectRoot: string, key: string): Promise<ProjectRuntime> {
-    const probe = await probeCommandCodeInstallation();
+    const probe = this.installProbe
+      ? await this.installProbe()
+      : await probeCommandCodeInstallation();
     if (probe.state !== 'verified' || !probe.executable) {
       throw new Error('COMMAND_CODE_UNAVAILABLE');
     }
@@ -157,8 +165,13 @@ export class CommandCodeAcpRuntimeRegistry {
     if (!session) return;
     const codec = runtime.transport.negotiatedCodec();
     if (!codec) return;
-    for (const event of mapCommandCodeAcpUpdate(update.update, session.turnState, codec.protocolVersion)) {
-      session.pendingEvents.push(event);
+    const events = mapCommandCodeAcpUpdate(update.update, session.turnState, codec.protocolVersion);
+    for (const event of events) {
+      if (session.replayCapture) {
+        session.replayEvents.push(event);
+      } else {
+        session.pendingEvents.push(event);
+      }
     }
     session.wake?.();
   }
@@ -222,6 +235,8 @@ export class CommandCodeAcpRuntimeRegistry {
     const codec = runtime.transport.negotiatedCodec();
     if (!codec) throw new Error('COMMAND_CODE_ACP_NOT_NEGOTIATED');
 
+    assertCommandCodeProfilesSupported(descriptor, codec);
+
     const placeholder: CommandCodeRuntimeSession = {
       threadId: descriptor.threadId,
       nativeSessionId: descriptor.harness_native_session_id ?? '',
@@ -230,41 +245,64 @@ export class CommandCodeAcpRuntimeRegistry {
       pendingEvents: [],
       wake: null,
       permissionBinding: null,
-      turnState: { textBuffer: [], terminalEmitted: false },
+      turnState: { textBuffer: [], terminalEmitted: false, promptAdmitted: false },
       processDead: false,
+      replayEvents: [],
+      replayCapture: false,
     };
-    runtime.sessions.set(descriptor.threadId, placeholder);
 
-    if (descriptor.harness_native_session_id) {
-      this.claimNativeSession(runtime, descriptor.harness_native_session_id, descriptor.threadId);
-      placeholder.nativeSessionId = descriptor.harness_native_session_id;
-      const resumeParams: Record<string, unknown> = {
-        sessionId: descriptor.harness_native_session_id,
+    try {
+      if (descriptor.harness_native_session_id) {
+        this.claimNativeSession(runtime, descriptor.harness_native_session_id, descriptor.threadId);
+        placeholder.nativeSessionId = descriptor.harness_native_session_id;
+        runtime.sessions.set(descriptor.threadId, placeholder);
+        placeholder.replayCapture = true;
+        const mcpServers: unknown[] = [];
+        if (codec.protocolVersion === 1 && codec.session.load) {
+          await runtime.transport.call('session/load', {
+            sessionId: descriptor.harness_native_session_id,
+            cwd: runtime.projectRoot,
+            mcpServers,
+          });
+        } else if (codec.protocolVersion === 2 && codec.session.resume) {
+          await runtime.transport.call('session/resume', {
+            sessionId: descriptor.harness_native_session_id,
+            cwd: runtime.projectRoot,
+            replayFrom: { type: 'start' },
+          });
+        } else if (codec.session.resume) {
+          await runtime.transport.call('session/resume', {
+            sessionId: descriptor.harness_native_session_id,
+            cwd: runtime.projectRoot,
+            mcpServers,
+          });
+        }
+        placeholder.replayCapture = false;
+        return placeholder;
+      }
+
+      runtime.sessions.set(descriptor.threadId, placeholder);
+      const created = await runtime.transport.call('session/new', {
         cwd: runtime.projectRoot,
-      };
-      if (codec.protocolVersion === 2 && codec.session.resume) {
-        resumeParams.replayFrom = { type: 'start' };
-      }
-      if (codec.protocolVersion === 1 && codec.session.load) {
-        await runtime.transport.call('session/load', {
-          sessionId: descriptor.harness_native_session_id,
-          cwd: runtime.projectRoot,
-        });
-      }
-      const resumed = await runtime.transport.call('session/resume', resumeParams);
-      placeholder.nativeSessionId = String(resumed.sessionId ?? descriptor.harness_native_session_id);
-      this.claimNativeSession(runtime, placeholder.nativeSessionId, descriptor.threadId);
+        mcpServers: [],
+      });
+      const sessionId = String(created.sessionId ?? '');
+      if (!sessionId) throw new Error('COMMAND_CODE_SESSION_NEW_MISSING_ID');
+      placeholder.nativeSessionId = sessionId;
+      this.claimNativeSession(runtime, sessionId, descriptor.threadId);
+      descriptor.harness_native_session_id = sessionId;
+      descriptor.harness_process_generation = runtime.runtimeInstanceId;
       return placeholder;
+    } catch (error) {
+      runtime.sessions.delete(descriptor.threadId);
+      if (descriptor.harness_native_session_id) {
+        const owner = runtime.nativeOwners.get(descriptor.harness_native_session_id);
+        if (owner === descriptor.threadId) {
+          runtime.nativeOwners.delete(descriptor.harness_native_session_id);
+        }
+      }
+      throw error;
     }
-
-    const created = await runtime.transport.call('session/new', { cwd: runtime.projectRoot });
-    const sessionId = String(created.sessionId ?? '');
-    if (!sessionId) throw new Error('COMMAND_CODE_SESSION_NEW_MISSING_ID');
-    placeholder.nativeSessionId = sessionId;
-    this.claimNativeSession(runtime, sessionId, descriptor.threadId);
-    descriptor.harness_native_session_id = sessionId;
-    descriptor.harness_process_generation = runtime.runtimeInstanceId;
-    return placeholder;
   }
 
   async listSessions(projectRoot: string): Promise<Array<{ sessionId: string; title?: string }>> {
@@ -315,6 +353,7 @@ export class CommandCodeAcpRuntimeRegistry {
       await runtime.transport?.stop();
     }
     this.projects.clear();
+    this.projectStarts.clear();
   }
 
   async evictProject(projectRoot: string): Promise<void> {
@@ -327,4 +366,17 @@ export class CommandCodeAcpRuntimeRegistry {
 }
 
 /** @deprecated Use per-bridge registry from sessionServer. Tests may still construct directly. */
+function assertCommandCodeProfilesSupported(
+  descriptor: SessionDescriptor,
+  codec: { session: { modelSelection: boolean } },
+): void {
+  const model = descriptor.harness_model_profile ?? descriptor.model;
+  const provider = descriptor.harness_provider_profile ?? descriptor.provider;
+  const nonDefaultModel = model && model !== 'default';
+  const nonDefaultProvider = provider && provider !== 'default';
+  if ((nonDefaultModel || nonDefaultProvider) && !codec.session.modelSelection) {
+    throw new Error('COMMAND_CODE_PROFILE_SELECTION_UNSUPPORTED');
+  }
+}
+
 export const globalCommandCodeAcpRuntime = new CommandCodeAcpRuntimeRegistry();

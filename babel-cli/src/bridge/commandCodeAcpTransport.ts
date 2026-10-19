@@ -106,7 +106,7 @@ export class CommandCodeAcpTransport {
       this.onProcessExit?.({ code, signal });
     });
     let negotiated: AcpNegotiatedCodec | null = null;
-    for (const version of [2, 1] as const) {
+    for (const version of [1, 2] as const) {
       try {
         const result = await this.call('initialize', buildInitializeParams(version));
         negotiated = parseInitializeResult(result);
@@ -188,7 +188,7 @@ export class CommandCodeAcpTransport {
       const timer = setTimeout(() => {
         this.pending.delete(requestId);
         reject(new Error(`COMMAND_CODE_ACP_RPC_TIMEOUT:${method}`));
-      }, this.options.rpcTimeoutMs ?? 30_000);
+      }, method === 'session/prompt' ? 600_000 : this.options.rpcTimeoutMs ?? 30_000);
       this.pending.set(requestId, { resolve, reject, timer });
       this.child!.stdin.write(line);
     });

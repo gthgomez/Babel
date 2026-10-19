@@ -122,6 +122,8 @@ export interface BridgeServerOptions {
   commandCodeRegistry?: CommandCodeAcpRuntimeRegistry;
   /** Test-only injected ACP peer launch (never set on production serve). */
   commandCodeTestLaunch?: CommandCodeAcpLaunchOverride;
+  /** Test-only installation probe override (does not select production ACP binary). */
+  commandCodeInstallProbe?: () => Promise<import('./commandCodeCliDiscovery.js').CommandCodeInstallProbe>;
   /** Test-only: PATH probe executable for Command Code CLI version check. */
   commandCodeProbeExecutable?: string;
 }
@@ -279,6 +281,9 @@ export class BridgeServer {
         hostScopeId: this.bridgeInstance || randomUUID(),
         ...(this.options.commandCodeTestLaunch
           ? { testLaunch: this.options.commandCodeTestLaunch }
+          : {}),
+        ...(this.options.commandCodeInstallProbe
+          ? { installProbe: this.options.commandCodeInstallProbe }
           : {}),
       });
     this.protocolGateway =

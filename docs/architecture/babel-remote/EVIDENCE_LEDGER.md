@@ -18,10 +18,10 @@ Status: living document for the remote implementation campaign. **Qualified** me
 | 4 | Stale epoch / command_id integrity | Tested | `remoteSecurity.gateway.test.ts`, `protocolGateway.test.ts` |
 | 4 | Stale approval digest / replay | Tested | `remoteApproval.test.ts`, `remoteSecurity.gateway.test.ts` |
 | 2 | Desktop ↔ phone single owner | Not qualified | Production IPC + `remote host-run` path in progress; phone E2E pending |
-| 6 | Command Code own-CLI ACP adapter (managed subprocess) | Tested (deterministic fake peer) | `commandCodeOwnCli.gateway.test.ts`, `commandCodeAcpTransport` + `harnessEngineFactory`; **not** live installed `cmd`/`cmdc` qualification |
+| 6 | Command Code own-CLI ACP adapter (managed subprocess) | Tested (strict ACP-shaped fake peer) | `commandCodeOwnCli.gateway.test.ts`, `commandCodeAcpEventMap.test.ts`, `commandCodeAcpPermission.test.ts`; official `sessionUpdate` / `session/cancel` notification / permission `outcome` discriminator; **not** live installed `cmd`/`cmdc` qualification |
 | 6 | Other external harness adapters (OpenCode, AGY, Claude, Codex) | Stub only | `harnessAdapterRegistry.ts` campaign stubs |
 | — | Physical phone + Tailscale | Not qualified | Owner checklist in `BABEL_REMOTE_QUICKSTART.md` |
 
-**Last tested commit:** `c6feaa3e` — `npm --prefix babel-cli run typecheck`, `npm --prefix babel-cli run build`, `node --import tsx --test src/bridge/commandCode*.test.ts src/bridge/harnessAdapterRegistry.test.ts` (11 tests).
+**Last tested commit:** `ed130e79` — `npm --prefix babel-cli run typecheck`, `node --import tsx --test src/bridge/commandCode*.test.ts src/bridge/harnessAdapterRegistry.test.ts`, `node --test tools/assert-branch-prior-gate-complete.test.mjs`.
 
 **Owner deferred after merge:** physical ROG14/phone remote journey; live Command Code login/provider on host; Windows `cmdc` path smoke against installed binary.

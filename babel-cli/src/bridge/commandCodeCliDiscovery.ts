@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { lstatSync, realpathSync } from 'node:fs';
-import { isAbsolute, resolve } from 'node:path';
+import { isAbsolute, resolve, sep } from 'node:path';
 
 export type CommandCodeInstallState = 'missing' | 'unverified' | 'verified';
 
@@ -40,19 +40,51 @@ function reviewerEnvironment(pathEnv: string | undefined): NodeJS.ProcessEnv {
   return env;
 }
 
+function pathDirectoryIsProjectLocal(directory: string): boolean {
+  try {
+    const canonicalDir = realpathSync(resolve(directory));
+    const cwd = realpathSync(process.cwd());
+    return canonicalDir === cwd || canonicalDir.startsWith(`${cwd}${sep}`);
+  } catch {
+    return true;
+  }
+}
+
 /** Resolve a Command Code CLI binary on PATH without granting it controller authority. */
 export function resolveCommandCodeExecutable(pathEnv: string | undefined = process.env.PATH): string | undefined {
   const override = process.env['BABEL_COMMAND_CODE_CLI_EXECUTABLE']?.trim();
   if (override) return override;
 
   if (process.platform === 'win32') {
-    for (const name of WIN32_EXECUTABLE_CANDIDATES) {
-      if (name) return name;
+    const pathValue = pathEnv ?? process.env.PATH ?? '';
+    for (const directory of pathValue.split(';')) {
+      if (!directory || directory === '.' || !isAbsolute(directory)) continue;
+      if (pathDirectoryIsProjectLocal(directory)) continue;
+      for (const name of WIN32_EXECUTABLE_CANDIDATES) {
+        const candidate = resolve(directory, `${name}.exe`);
+        try {
+          const target = realpathSync(candidate);
+          const stat = lstatSync(target);
+          if (!stat.isFile()) continue;
+          return target;
+        } catch {
+          const candidateNoExt = resolve(directory, name);
+          try {
+            const target = realpathSync(candidateNoExt);
+            const stat = lstatSync(target);
+            if (!stat.isFile()) continue;
+            return target;
+          } catch {
+            /* try next */
+          }
+        }
+      }
     }
     return undefined;
   }
   for (const directory of (pathEnv ?? '').split(':')) {
-    if (!directory || !isAbsolute(directory)) continue;
+    if (!directory || directory === '.' || !isAbsolute(directory)) continue;
+    if (pathDirectoryIsProjectLocal(directory)) continue;
     for (const name of POSIX_EXECUTABLE_CANDIDATES) {
       const candidate = resolve(directory, name);
       try {
@@ -121,7 +153,6 @@ function parseVersion(stdout: string, stderr: string): string | undefined {
 
 /**
  * Probe local Command Code CLI installation. Never performs paid/provider calls.
- * Tests may set `BABEL_COMMAND_CODE_PROBE_EXECUTABLE` to a fixture script (see gateway tests).
  */
 export async function probeCommandCodeInstallation(options?: {
   pathEnv?: string;
@@ -129,8 +160,7 @@ export async function probeCommandCodeInstallation(options?: {
 }): Promise<CommandCodeInstallProbe> {
   const pathEnv = options?.pathEnv;
 
-  const probeOverride = process.env['BABEL_COMMAND_CODE_PROBE_EXECUTABLE']?.trim();
-  const executable = probeOverride || resolveCommandCodeExecutable(pathEnv);
+  const executable = resolveCommandCodeExecutable(pathEnv);
   if (!executable) return { state: 'missing' };
 
   const spawnFn =

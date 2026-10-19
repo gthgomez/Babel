@@ -67,7 +67,7 @@ let port = 0;
 let tmp = '';
 let tmpB = '';
 let prevRuns: string | undefined;
-let prevProbe: string | undefined;
+let prevCliExecutable: string | undefined;
 const desktopId = mintDesktopControllerClientId();
 const desktopProofKey = mintDesktopControllerProofKey();
 
@@ -157,6 +157,14 @@ async function runTurn(
   return terminal ? { events, terminal } : { events };
 }
 
+function verifiedInstallProbe() {
+  return Promise.resolve({
+    state: 'verified' as const,
+    executable: VERSION_FIXTURE,
+    version: '1.0.0',
+  });
+}
+
 function makeServer(launchEnv?: NodeJS.ProcessEnv): BridgeServer {
   return new BridgeServer({
     authToken: TOKEN,
@@ -165,6 +173,7 @@ function makeServer(launchEnv?: NodeJS.ProcessEnv): BridgeServer {
     enforceControlLease: true,
     desktopControllerClientId: desktopId,
     desktopControllerProofKey: desktopProofKey,
+    commandCodeInstallProbe: verifiedInstallProbe,
     commandCodeTestLaunch: {
       command: process.execPath,
       args: [PEER],
@@ -178,9 +187,9 @@ describe('command code own-CLI gateway integration', () => {
     tmp = mkdtempSync(join(tmpdir(), 'babel-cc-gw-a-'));
     tmpB = mkdtempSync(join(tmpdir(), 'babel-cc-gw-b-'));
     prevRuns = process.env['BABEL_RUNS_DIR'];
-    prevProbe = process.env['BABEL_COMMAND_CODE_PROBE_EXECUTABLE'];
+    prevCliExecutable = process.env['BABEL_COMMAND_CODE_CLI_EXECUTABLE'];
     process.env['BABEL_RUNS_DIR'] = tmp;
-    process.env['BABEL_COMMAND_CODE_PROBE_EXECUTABLE'] = VERSION_FIXTURE;
+    process.env['BABEL_COMMAND_CODE_CLI_EXECUTABLE'] = VERSION_FIXTURE;
     server = makeServer();
     await server.start(0);
     port = server.port;
@@ -190,8 +199,8 @@ describe('command code own-CLI gateway integration', () => {
     await server.stop();
     if (prevRuns === undefined) delete process.env['BABEL_RUNS_DIR'];
     else process.env['BABEL_RUNS_DIR'] = prevRuns;
-    if (prevProbe === undefined) delete process.env['BABEL_COMMAND_CODE_PROBE_EXECUTABLE'];
-    else process.env['BABEL_COMMAND_CODE_PROBE_EXECUTABLE'] = prevProbe;
+    if (prevCliExecutable === undefined) delete process.env['BABEL_COMMAND_CODE_CLI_EXECUTABLE'];
+    else process.env['BABEL_COMMAND_CODE_CLI_EXECUTABLE'] = prevCliExecutable;
     rmSync(tmp, { recursive: true, force: true });
     rmSync(tmpB, { recursive: true, force: true });
   });
@@ -226,12 +235,39 @@ describe('command code own-CLI gateway integration', () => {
     await rpc(port, desktopHeaders(), 'control.acquire', { thread_id: threadId, force: false }, 3);
     const first = await runTurn(port, threadId, transportSessionId, 'hello command code');
     assert.equal(first.terminal?.type, 'done');
+    assert.match(String((first.terminal as { answer?: string }).answer ?? ''), /fixture:hello command code/);
     const catalog = await rpc(port, desktopHeaders(), 'remote.catalog', {}, 4);
     const row = (catalog.result as { sessions: { thread_id: string; harness_native_session_id?: string }[] })
       .sessions.find((s) => s.thread_id === threadId);
     assert.ok(row?.harness_native_session_id);
     const second = await runTurn(port, threadId, transportSessionId, 'second turn');
     assert.equal(second.terminal?.type, 'done');
+    assert.match(String((second.terminal as { answer?: string }).answer ?? ''), /fixture:second turn/);
+  });
+
+  it('ignores session/new startup idle before prompt admission', async () => {
+    const idleServer = makeServer({ BABEL_COMMAND_CODE_FIXTURE_STARTUP_IDLE: '1' });
+    await idleServer.start(0);
+    const iPort = idleServer.port;
+    const sess = await httpRequest(`http://127.0.0.1:${iPort}/sessions`, {
+      method: 'POST',
+      headers: desktopHeaders(),
+      body: JSON.stringify({ projectRoot: tmp }),
+    });
+    const transportSessionId = (JSON.parse(sess.body) as { sessionId: string }).sessionId;
+    const created = await rpc(
+      iPort,
+      desktopHeaders(),
+      'thread.create',
+      { project_root: tmp, session_id: transportSessionId, harness_adapter_id: 'command-code' },
+      40,
+    );
+    const threadId = (created.result as { thread_id: string }).thread_id;
+    await rpc(iPort, desktopHeaders(), 'control.acquire', { thread_id: threadId, force: false }, 41);
+    const turn = await runTurn(iPort, threadId, transportSessionId, 'hello command code');
+    assert.equal(turn.terminal?.type, 'done');
+    assert.match(String((turn.terminal as { answer?: string }).answer ?? ''), /fixture:hello command code/);
+    await idleServer.stop();
   });
 
   it('maps ACP permission prompts through approval.decide on a dedicated peer env', async () => {
