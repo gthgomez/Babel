@@ -37,6 +37,13 @@ export interface SharedProtocolHostRunOptions {
   emergencyObservationDeadlineMs?: number;
   /** Active-turn reconcile passes without terminal before observation fails closed (default 12). */
   emergencyObservationPassLimit?: number;
+  /**
+   * Test seam: after emergency ACK, apply `observationRpcTimeoutMs` only to this
+   * observation label (e.g. `approval.lookup`). Setup phases (ticket, reopen,
+   * terminal reconcile) run without the per-op timer so fixtures can isolate the
+   * target hang from transport setup latency.
+   */
+  emergencyPerOpRpcTimeoutOnlyForLabel?: string;
 }
 
 type NdjsonWriter = (event: Record<string, unknown>) => void;
@@ -738,18 +745,23 @@ export async function executeSharedProtocolHostRun(
       scopeSignal.addEventListener('abort', linkScopeAbort, { once: true });
       let perOpTimer: ReturnType<typeof setTimeout> | null = null;
       if (emergencyStopAcknowledged) {
-        const perOpMs = Math.min(
-          observationRpcTimeoutMs,
-          remainingEmergencyObservationMs() || observationRpcTimeoutMs,
-        );
-        if (perOpMs <= 0) {
-          scopeSignal.removeEventListener('abort', linkScopeAbort);
-          throw new Error(EMERGENCY_OBSERVATION_TIMEOUT_MESSAGE);
+        const perOpTimeoutLabel = options.emergencyPerOpRpcTimeoutOnlyForLabel;
+        const applyPerOpTimeout =
+          perOpTimeoutLabel === undefined || perOpTimeoutLabel === label;
+        if (applyPerOpTimeout) {
+          const perOpMs = Math.min(
+            observationRpcTimeoutMs,
+            remainingEmergencyObservationMs() || observationRpcTimeoutMs,
+          );
+          if (perOpMs <= 0) {
+            scopeSignal.removeEventListener('abort', linkScopeAbort);
+            throw new Error(EMERGENCY_OBSERVATION_TIMEOUT_MESSAGE);
+          }
+          perOpTimer = setTimeout(() => {
+            emergencyHostRunTrace('rpc_timeout', { label, observationRpcTimeoutMs: perOpMs });
+            opAbort.abort(new Error(`${label} observation RPC timed out after ${perOpMs}ms`));
+          }, perOpMs);
         }
-        perOpTimer = setTimeout(() => {
-          emergencyHostRunTrace('rpc_timeout', { label, observationRpcTimeoutMs: perOpMs });
-          opAbort.abort(new Error(`${label} observation RPC timed out after ${perOpMs}ms`));
-        }, perOpMs);
       }
       try {
         const value = await fn(opAbort.signal);

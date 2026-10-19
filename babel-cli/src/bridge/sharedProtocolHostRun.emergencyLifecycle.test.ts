@@ -166,6 +166,15 @@ async function waitForRpcCounter(
   );
 }
 
+function withDelayedWsTicket(delayMs: number, baseFetch: typeof fetch): typeof fetch {
+  return async (input, init) => {
+    if (String(input).includes('/ws/ticket')) {
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+    return baseFetch(input, init);
+  };
+}
+
 function wrapFetchForSettledCatalogAfterEmergency(
   baseFetch: typeof fetch,
   emergencyAcked: () => boolean,
@@ -908,10 +917,9 @@ describe('shared host-run emergency observation errors (mocked authoritative bac
             }
           } as typeof WebSocket,
           observationRpcTimeoutMs: 25,
-          // Stage-barrier budget: long enough for reconnect + approval.lookup under CI load;
-          // per-op RPC timeout (25ms) still exercises abort, not this overall window.
-          emergencyObservationDeadlineMs: 1_500,
+          emergencyObservationDeadlineMs: 500,
           emergencyObservationPassLimit: 4,
+          emergencyPerOpRpcTimeoutOnlyForLabel: 'approval.lookup',
         },
         (event) => {
           gate.write(event);
@@ -952,6 +960,223 @@ describe('shared host-run emergency observation errors (mocked authoritative bac
       assert.equal(gate.events.some((e) => e.type === 'cancelled'), false);
       assert.equal(approvalCounters.aborted, 1);
       assert.equal(approvalCounters.completed, 0);
+      assert.ok(
+        gate.events.some(
+          (e) =>
+            e.type === 'run_error' &&
+            String((e as { error?: string }).error).includes('approval.lookup'),
+        ),
+      );
+    } finally {
+      await server.stop();
+      rmSync(tmp, { recursive: true, force: true });
+      delete process.env['BABEL_CONFIG_DIR'];
+      delete process.env['BABEL_RUNS_DIR'];
+    }
+  });
+
+  it('times out ws transport reopen before approval.lookup when ticket setup is delayed without label isolation', async () => {
+    const tmp = mkdtempSync(join(tmpdir(), 'babel-emergency-approval-ticket-race-'));
+    const configDir = join(tmp, 'config');
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(join(configDir, 'bridge.json'), JSON.stringify({ authToken: TOKEN }), 'utf8');
+    process.env['BABEL_CONFIG_DIR'] = configDir;
+    process.env['BABEL_RUNS_DIR'] = tmp;
+
+    const server = new BridgeServer({
+      authToken: TOKEN,
+      allowedWorkspaceRoot: tmp,
+      allowedOrigins: ['http://127.0.0.1:*', 'http://localhost:*'],
+      enforceControlLease: true,
+      desktopControllerClientId: desktopId,
+      desktopControllerProofKey: desktopProofKey,
+      engineFactory: (descriptor) => {
+        const engine = new ChatEngine({
+          task: 'approval-ticket-race',
+          projectRoot: descriptor.projectRoot,
+          executionProfile: 'chat',
+        });
+        engine.submitMessageStream = async function* () {
+          yield { type: 'thinking' };
+          await new Promise<void>(() => {
+            /* never settles */
+          });
+        } as ChatEngine['submitMessageStream'];
+        return engine;
+      },
+    });
+    await server.start(0);
+    const port = server.port;
+
+    let emergencyAcked = false;
+    const primarySocketHolder = createPrimarySocketHolder();
+    const approvalCounters = createRpcOpCounters();
+    const baseFetch = globalThis.fetch.bind(globalThis);
+    const fetchImpl = hangRpcWhenEmergency(
+      () => emergencyAcked,
+      'approval.lookup',
+      withDelayedWsTicket(50, baseFetch),
+      approvalCounters,
+    );
+
+    const gate = createHostRunEventGate();
+    const stdin = new PassThrough();
+    try {
+      const runPromise = executeSharedProtocolHostRun(
+        {
+          port,
+          projectRoot: tmp,
+          task: 'approval ticket race',
+          runId: 'emergency-approval-ticket-race',
+          desktopClientId: desktopId,
+          desktopProofKey,
+          stdin,
+          fetchImpl,
+          WebSocketImpl: makeTrackingWebSocket(primarySocketHolder),
+          observationRpcTimeoutMs: 25,
+          emergencyObservationDeadlineMs: 500,
+          emergencyObservationPassLimit: 4,
+        },
+        (event) => {
+          gate.write(event);
+          if (event.type === 'emergency_stop') {
+            emergencyAcked = true;
+            closePrimarySocket(primarySocketHolder);
+          }
+        },
+      );
+
+      await gate.waitFor((event) => event.type === 'run_start', 'run_start');
+      await gate.waitFor((event) => event.type === 'thought', 'turn_stream_active');
+      stdin.write(
+        `${JSON.stringify({ decision: 'emergency_admin_stop', host_emergency_token: TOKEN })}\n`,
+      );
+      await gate.waitFor((event) => event.type === 'emergency_stop', 'emergency_stop');
+      await gate.waitFor((event) => event.type === 'run_error', 'ws_reopen_timeout_run_error');
+
+      const code = await Promise.race([
+        runPromise,
+        new Promise<number>((_, reject) =>
+          setTimeout(() => reject(new Error('host-run hung on ticket race')), 3_000),
+        ),
+      ]);
+
+      assert.equal(code, 1);
+      assert.equal(approvalCounters.reached, 0);
+      assert.equal(approvalCounters.aborted, 0);
+      assert.equal(gate.events.some((e) => e.type === 'cancelled'), false);
+      assert.ok(
+        gate.events.some(
+          (e) =>
+            e.type === 'run_error' &&
+            String((e as { error?: string }).error).includes('ws transport reopen'),
+        ),
+      );
+    } finally {
+      await server.stop();
+      rmSync(tmp, { recursive: true, force: true });
+      delete process.env['BABEL_CONFIG_DIR'];
+      delete process.env['BABEL_RUNS_DIR'];
+    }
+  });
+
+  it('still reaches approval.lookup hang when ticket setup is delayed but per-op timeout is label-isolated', async () => {
+    const tmp = mkdtempSync(join(tmpdir(), 'babel-emergency-approval-ticket-isolated-'));
+    const configDir = join(tmp, 'config');
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(join(configDir, 'bridge.json'), JSON.stringify({ authToken: TOKEN }), 'utf8');
+    process.env['BABEL_CONFIG_DIR'] = configDir;
+    process.env['BABEL_RUNS_DIR'] = tmp;
+
+    const server = new BridgeServer({
+      authToken: TOKEN,
+      allowedWorkspaceRoot: tmp,
+      allowedOrigins: ['http://127.0.0.1:*', 'http://localhost:*'],
+      enforceControlLease: true,
+      desktopControllerClientId: desktopId,
+      desktopControllerProofKey: desktopProofKey,
+      engineFactory: (descriptor) => {
+        const engine = new ChatEngine({
+          task: 'approval-ticket-isolated',
+          projectRoot: descriptor.projectRoot,
+          executionProfile: 'chat',
+        });
+        engine.submitMessageStream = async function* () {
+          yield { type: 'thinking' };
+          await new Promise<void>(() => {
+            /* never settles */
+          });
+        } as ChatEngine['submitMessageStream'];
+        return engine;
+      },
+    });
+    await server.start(0);
+    const port = server.port;
+
+    let emergencyAcked = false;
+    const primarySocketHolder = createPrimarySocketHolder();
+    const approvalCounters = createRpcOpCounters();
+    const baseFetch = globalThis.fetch.bind(globalThis);
+    const fetchImpl = hangRpcWhenEmergency(
+      () => emergencyAcked,
+      'approval.lookup',
+      withDelayedWsTicket(50, baseFetch),
+      approvalCounters,
+    );
+
+    const gate = createHostRunEventGate();
+    const stdin = new PassThrough();
+    try {
+      const runPromise = executeSharedProtocolHostRun(
+        {
+          port,
+          projectRoot: tmp,
+          task: 'approval ticket isolated',
+          runId: 'emergency-approval-ticket-isolated',
+          desktopClientId: desktopId,
+          desktopProofKey,
+          stdin,
+          fetchImpl,
+          WebSocketImpl: makeTrackingWebSocket(primarySocketHolder),
+          observationRpcTimeoutMs: 25,
+          emergencyObservationDeadlineMs: 500,
+          emergencyObservationPassLimit: 4,
+          emergencyPerOpRpcTimeoutOnlyForLabel: 'approval.lookup',
+        },
+        (event) => {
+          gate.write(event);
+          if (event.type === 'emergency_stop') {
+            emergencyAcked = true;
+            closePrimarySocket(primarySocketHolder);
+          }
+        },
+      );
+
+      await gate.waitFor((event) => event.type === 'run_start', 'run_start');
+      await gate.waitFor((event) => event.type === 'thought', 'turn_stream_active');
+      stdin.write(
+        `${JSON.stringify({ decision: 'emergency_admin_stop', host_emergency_token: TOKEN })}\n`,
+      );
+      await gate.waitFor((event) => event.type === 'emergency_stop', 'emergency_stop');
+      await waitForRpcCounter(
+        approvalCounters,
+        'reached',
+        1,
+        'approval.lookup hang with delayed ticket',
+      );
+      await gate.waitFor((event) => event.type === 'run_error', 'observation_run_error');
+
+      const code = await Promise.race([
+        runPromise,
+        new Promise<number>((_, reject) =>
+          setTimeout(() => reject(new Error('host-run hung on isolated ticket delay')), 3_000),
+        ),
+      ]);
+
+      assert.equal(code, 1);
+      assert.equal(approvalCounters.aborted, 1);
+      assert.equal(approvalCounters.completed, 0);
+      assert.equal(gate.events.some((e) => e.type === 'cancelled'), false);
       assert.ok(
         gate.events.some(
           (e) =>
