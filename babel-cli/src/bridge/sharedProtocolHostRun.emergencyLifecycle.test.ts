@@ -75,6 +75,43 @@ function createHostRunEventGate() {
   return { events, write, waitFor };
 }
 
+function destroyStdin(stdin: PassThrough): void {
+  try {
+    stdin.end();
+  } catch {
+    /* ignore */
+  }
+  try {
+    stdin.destroy();
+  } catch {
+    /* ignore */
+  }
+}
+
+async function stopBridgeServer(server: BridgeServer): Promise<void> {
+  try {
+    await server.stop();
+  } catch {
+    /* ignore */
+  }
+}
+
+async function cleanupOwnedEmergencyFixture(
+  server: BridgeServer,
+  tmp: string,
+  stdin?: PassThrough,
+): Promise<void> {
+  if (stdin) destroyStdin(stdin);
+  await stopBridgeServer(server);
+  try {
+    rmSync(tmp, { recursive: true, force: true });
+  } catch {
+    /* ignore */
+  }
+  delete process.env['BABEL_CONFIG_DIR'];
+  delete process.env['BABEL_RUNS_DIR'];
+}
+
 type RpcOpCounters = { reached: number; aborted: number; completed: number };
 
 function createRpcOpCounters(): RpcOpCounters {
@@ -176,6 +213,66 @@ function withDelayedWsTicket(delayMs: number, baseFetch: typeof fetch): typeof f
     }
     return baseFetch(input, init);
   };
+}
+
+function withWsTicketCallCounter(baseFetch: typeof fetch): {
+  fetchImpl: typeof fetch;
+  waitForTicketCalls: (expected: number, label: string) => Promise<void>;
+} {
+  let ticketCalls = 0;
+  const fetchImpl = async (input, init) => {
+    if (String(input).includes('/ws/ticket')) {
+      ticketCalls += 1;
+    }
+    return baseFetch(input, init);
+  };
+  const waitForTicketCalls = async (expected: number, label: string): Promise<void> => {
+    const deadline = Date.now() + 5_000;
+    while (Date.now() < deadline && ticketCalls < expected) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.equal(
+      ticketCalls,
+      expected,
+      `Timed out waiting for ws ticket calls (${label}: ${ticketCalls}, expected ${expected})`,
+    );
+  };
+  return { fetchImpl, waitForTicketCalls };
+}
+
+function withPostEmergencyCatalogCompletionBarrier(
+  emergencyAcked: () => boolean,
+  baseFetch: typeof fetch,
+): {
+  fetchImpl: typeof fetch;
+  waitForCompletedCatalogFetches: (expected: number, label: string) => Promise<void>;
+} {
+  let completedCatalogFetches = 0;
+  const fetchImpl = async (input, init) => {
+    const url = String(input);
+    const body = typeof init?.body === 'string' ? init.body : '';
+    if (emergencyAcked() && url.includes('/rpc') && body.includes('"remote.catalog"')) {
+      const response = await baseFetch(input, init);
+      completedCatalogFetches += 1;
+      return response;
+    }
+    return baseFetch(input, init);
+  };
+  const waitForCompletedCatalogFetches = async (
+    expected: number,
+    label: string,
+  ): Promise<void> => {
+    const deadline = Date.now() + 5_000;
+    while (Date.now() < deadline && completedCatalogFetches < expected) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.equal(
+      completedCatalogFetches,
+      expected,
+      `Timed out waiting for post-emergency catalog fetches (${label}: ${completedCatalogFetches}, expected ${expected})`,
+    );
+  };
+  return { fetchImpl, waitForCompletedCatalogFetches };
 }
 
 function wrapFetchForSettledCatalogAfterEmergency(
@@ -349,6 +446,7 @@ describe('shared host-run emergency stop lifecycle', { concurrency: 1 }, () => {
 
   it('observes persisted cancelled terminal and releases active turn after emergency ack', async () => {
     const stdin = new PassThrough();
+    try {
     const gate = createHostRunEventGate();
     const runPromise = executeSharedProtocolHostRun(
       {
@@ -402,10 +500,14 @@ describe('shared host-run emergency stop lifecycle', { concurrency: 1 }, () => {
 
     const row = await hostCatalogRow(port, desktopId, desktopProofKey, session.thread_id);
     assert.equal(row?.active_turn, false);
+    } finally {
+      destroyStdin(stdin);
+    }
   });
 
   it('rejects invalid emergency token without emergency ack or terminal settlement', async () => {
     const stdin = new PassThrough();
+    try {
     const events: Record<string, unknown>[] = [];
     const runPromise = executeSharedProtocolHostRun(
       {
@@ -439,6 +541,9 @@ describe('shared host-run emergency stop lifecycle', { concurrency: 1 }, () => {
       ),
     ]);
     assert.equal(code, 0);
+    } finally {
+      destroyStdin(stdin);
+    }
   });
 
   it('preserves authoritative failure when the turn fails before emergency ack', async () => {
@@ -466,6 +571,7 @@ describe('shared host-run emergency stop lifecycle', { concurrency: 1 }, () => {
     port = server.port;
 
     const stdin = new PassThrough();
+    try {
     const events: Record<string, unknown>[] = [];
     const code = await executeSharedProtocolHostRun(
       {
@@ -489,6 +595,9 @@ describe('shared host-run emergency stop lifecycle', { concurrency: 1 }, () => {
     assert.ok(events.some((e) => e.type === 'run_error'));
     assert.equal(events.some((e) => e.type === 'emergency_stop'), false);
     assert.equal(events.filter((e) => e.type === 'cancelled').length, 0);
+    } finally {
+      destroyStdin(stdin);
+    }
   });
 });
 
@@ -530,7 +639,9 @@ describe('shared host-run emergency observation errors (mocked authoritative bac
     const port = server.port;
 
     const stdin = new PassThrough();
-    const events: Record<string, unknown>[] = [];
+    const primarySocketHolder = createPrimarySocketHolder();
+    try {
+    const gate = createHostRunEventGate();
     const runPromise = executeSharedProtocolHostRun(
       {
         port,
@@ -540,20 +651,21 @@ describe('shared host-run emergency observation errors (mocked authoritative bac
         desktopClientId: desktopId,
         desktopProofKey,
         stdin,
-        WebSocketImpl: class extends WebSocket {
-          constructor(url: string | URL, protocols?: string | string[]) {
-            super(url, protocols);
-            this.addEventListener('open', () => setTimeout(() => this.close(), 5));
-          }
-        } as typeof WebSocket,
+        WebSocketImpl: makeTrackingWebSocket(primarySocketHolder),
         emergencyObservationPassLimit: 2,
         emergencyObservationDeadlineMs: 3_000,
         observationRpcTimeoutMs: 500,
       },
-      (event) => events.push(event),
+      (event) => {
+        gate.write(event);
+        if (event.type === 'emergency_stop') {
+          closePrimarySocket(primarySocketHolder);
+        }
+      },
     );
 
-    await new Promise((resolve) => setTimeout(resolve, 250));
+    await gate.waitFor((event) => event.type === 'run_start', 'run_start');
+    await gate.waitFor((event) => event.type === 'thought', 'turn_stream_active');
     stdin.write(
       `${JSON.stringify({ decision: 'emergency_admin_stop', host_emergency_token: TOKEN })}\n`,
     );
@@ -565,6 +677,7 @@ describe('shared host-run emergency observation errors (mocked authoritative bac
       ),
     ]);
 
+    const events = gate.events;
     assert.equal(code, 1);
     assert.ok(events.some((e) => e.type === 'emergency_stop'));
     assert.equal(events.some((e) => e.type === 'cancelled'), false);
@@ -577,9 +690,9 @@ describe('shared host-run emergency observation errors (mocked authoritative bac
           ),
       ),
     );
-
-    await server.stop();
-    rmSync(tmp, { recursive: true, force: true });
+    } finally {
+      await cleanupOwnedEmergencyFixture(server, tmp, stdin);
+    }
   });
 
   it('preserves unrelated failed events after emergency ack', async () => {
@@ -618,7 +731,8 @@ describe('shared host-run emergency observation errors (mocked authoritative bac
     const failurePort = serverWithFailure.port;
 
     const stdin = new PassThrough();
-    const events: Record<string, unknown>[] = [];
+    try {
+    const gate = createHostRunEventGate();
     const runPromise = executeSharedProtocolHostRun(
       {
         port: failurePort,
@@ -629,10 +743,11 @@ describe('shared host-run emergency observation errors (mocked authoritative bac
         desktopProofKey,
         stdin,
       },
-      (event) => events.push(event),
+      gate.write,
     );
 
-    await new Promise((resolve) => setTimeout(resolve, 200));
+    await gate.waitFor((event) => event.type === 'run_start', 'run_start');
+    await gate.waitFor((event) => event.type === 'thought', 'turn_stream_active');
     stdin.write(
       `${JSON.stringify({ decision: 'emergency_admin_stop', host_emergency_token: TOKEN })}\n`,
     );
@@ -644,6 +759,7 @@ describe('shared host-run emergency observation errors (mocked authoritative bac
       ),
     ]);
 
+    const events = gate.events;
     assert.equal(code, 1);
     assert.ok(events.some((e) => e.type === 'emergency_stop'));
     assert.ok(
@@ -654,9 +770,9 @@ describe('shared host-run emergency observation errors (mocked authoritative bac
       ),
     );
     assert.equal(events.filter((e) => e.type === 'cancelled').length, 0);
-
-    await serverWithFailure.stop();
-    rmSync(tmp, { recursive: true, force: true });
+    } finally {
+      await cleanupOwnedEmergencyFixture(serverWithFailure, tmp, stdin);
+    }
   });
 
   it('finalizes and wakes the observer when post-ack reconciliation throws', async () => {
@@ -706,7 +822,9 @@ describe('shared host-run emergency observation errors (mocked authoritative bac
     };
 
     const stdin = new PassThrough();
-    const events: Record<string, unknown>[] = [];
+    const primarySocketHolder = createPrimarySocketHolder();
+    try {
+    const gate = createHostRunEventGate();
     const runPromise = executeSharedProtocolHostRun(
       {
         port,
@@ -717,18 +835,19 @@ describe('shared host-run emergency observation errors (mocked authoritative bac
         desktopProofKey,
         stdin,
         fetchImpl,
-        WebSocketImpl: class extends WebSocket {
-          constructor(url: string | URL, protocols?: string | string[]) {
-            super(url, protocols);
-            this.addEventListener('open', () => setTimeout(() => this.close(), 5));
-          }
-        } as typeof WebSocket,
+        WebSocketImpl: makeTrackingWebSocket(primarySocketHolder),
         observationRpcTimeoutMs: 500,
       },
-      (event) => events.push(event),
+      (event) => {
+        gate.write(event);
+        if (event.type === 'emergency_stop') {
+          closePrimarySocket(primarySocketHolder);
+        }
+      },
     );
 
-    await new Promise((resolve) => setTimeout(resolve, 200));
+    await gate.waitFor((event) => event.type === 'run_start', 'run_start');
+    await gate.waitFor((event) => event.type === 'thought', 'turn_stream_active');
     stdin.write(
       `${JSON.stringify({ decision: 'emergency_admin_stop', host_emergency_token: TOKEN })}\n`,
     );
@@ -740,6 +859,7 @@ describe('shared host-run emergency observation errors (mocked authoritative bac
       ),
     ]);
 
+    const events = gate.events;
     assert.equal(code, 1);
     assert.ok(
       events.some(
@@ -749,9 +869,9 @@ describe('shared host-run emergency observation errors (mocked authoritative bac
       ),
     );
     assert.equal(events.some((e) => e.type === 'cancelled'), false);
-
-    await server.stop();
-    rmSync(tmp, { recursive: true, force: true });
+    } finally {
+      await cleanupOwnedEmergencyFixture(server, tmp, stdin);
+    }
   });
 
   it('fails closed on a never-resolving observation RPC and wakes waiters without cancelled', async () => {
@@ -804,7 +924,8 @@ describe('shared host-run emergency observation errors (mocked authoritative bac
     };
 
     const stdin = new PassThrough();
-    const events: Record<string, unknown>[] = [];
+    try {
+    const gate = createHostRunEventGate();
     const runPromise = executeSharedProtocolHostRun(
       {
         port,
@@ -818,14 +939,13 @@ describe('shared host-run emergency observation errors (mocked authoritative bac
         observationRpcTimeoutMs: 200,
         emergencyObservationDeadlineMs: 5_000,
       },
-      (event) => events.push(event),
+      gate.write,
     );
 
-    const deadline = Date.now() + 10_000;
-    while (Date.now() < deadline) {
-      if (events.some((e) => e.type === 'thought' || e.type === 'thinking')) break;
-      await new Promise((resolve) => setTimeout(resolve, 25));
-    }
+    await gate.waitFor(
+      (event) => event.type === 'thought' || event.type === 'thinking',
+      'turn_stream_active',
+    );
     hangLookup = true;
     stdin.write(
       `${JSON.stringify({ decision: 'emergency_admin_stop', host_emergency_token: TOKEN })}\n`,
@@ -838,6 +958,7 @@ describe('shared host-run emergency observation errors (mocked authoritative bac
       ),
     ]);
 
+    const events = gate.events;
     assert.equal(code, 1);
     assert.ok(events.some((e) => e.type === 'emergency_stop'));
     assert.equal(events.some((e) => e.type === 'cancelled'), false);
@@ -851,9 +972,9 @@ describe('shared host-run emergency observation errors (mocked authoritative bac
             )),
       ),
     );
-
-    await server.stop();
-    rmSync(tmp, { recursive: true, force: true });
+    } finally {
+      await cleanupOwnedEmergencyFixture(server, tmp, stdin);
+    }
   });
 
   it('fails closed when approval.lookup never resolves after emergency ack', async () => {
@@ -974,14 +1095,11 @@ describe('shared host-run emergency observation errors (mocked authoritative bac
         ),
       );
     } finally {
-      await server.stop();
-      rmSync(tmp, { recursive: true, force: true });
-      delete process.env['BABEL_CONFIG_DIR'];
-      delete process.env['BABEL_RUNS_DIR'];
+      await cleanupOwnedEmergencyFixture(server, tmp, stdin);
     }
   });
 
-  it('times out ws transport reopen before approval.lookup when ticket setup is delayed without label isolation', async () => {
+  it('times out ws transport reopen before approval.lookup when recovery ticket is pending (manual observation clock)', async () => {
     const tmp = mkdtempSync(join(tmpdir(), 'babel-emergency-approval-ticket-race-'));
     const configDir = join(tmp, 'config');
     mkdirSync(configDir, { recursive: true });
@@ -1018,12 +1136,21 @@ describe('shared host-run emergency observation errors (mocked authoritative bac
     const primarySocketHolder = createPrimarySocketHolder();
     const approvalCounters = createRpcOpCounters();
     const baseFetch = globalThis.fetch.bind(globalThis);
+    const ticketCounter = withWsTicketCallCounter(
+      withDelayedWsTicket(50, baseFetch),
+    );
+    const catalogBarrier = withPostEmergencyCatalogCompletionBarrier(
+      () => emergencyAcked,
+      ticketCounter.fetchImpl,
+    );
     const fetchImpl = hangRpcWhenEmergency(
       () => emergencyAcked,
       'approval.lookup',
-      withDelayedWsTicket(50, baseFetch),
+      catalogBarrier.fetchImpl,
       approvalCounters,
     );
+    const { clock: emergencyObservationClock, advance: advanceEmergencyClock } =
+      createManualSharedProtocolHostRunClock();
 
     const gate = createHostRunEventGate();
     const stdin = new PassThrough();
@@ -1042,6 +1169,7 @@ describe('shared host-run emergency observation errors (mocked authoritative bac
           observationRpcTimeoutMs: 25,
           emergencyObservationDeadlineMs: 500,
           emergencyObservationPassLimit: 4,
+          emergencyObservationClock,
         },
         (event) => {
           gate.write(event);
@@ -1058,6 +1186,12 @@ describe('shared host-run emergency observation errors (mocked authoritative bac
         `${JSON.stringify({ decision: 'emergency_admin_stop', host_emergency_token: TOKEN })}\n`,
       );
       await gate.waitFor((event) => event.type === 'emergency_stop', 'emergency_stop');
+      await catalogBarrier.waitForCompletedCatalogFetches(
+        1,
+        'immediate post-ack terminal reconcile catalog',
+      );
+      await ticketCounter.waitForTicketCalls(2, 'recovery ws ticket pending');
+      await advanceEmergencyClock(30);
       await gate.waitFor((event) => event.type === 'run_error', 'ws_reopen_timeout_run_error');
 
       const code = await Promise.race([
@@ -1079,10 +1213,7 @@ describe('shared host-run emergency observation errors (mocked authoritative bac
         ),
       );
     } finally {
-      await server.stop();
-      rmSync(tmp, { recursive: true, force: true });
-      delete process.env['BABEL_CONFIG_DIR'];
-      delete process.env['BABEL_RUNS_DIR'];
+      await cleanupOwnedEmergencyFixture(server, tmp, stdin);
     }
   });
 
@@ -1194,10 +1325,7 @@ describe('shared host-run emergency observation errors (mocked authoritative bac
         ),
       );
     } finally {
-      await server.stop();
-      rmSync(tmp, { recursive: true, force: true });
-      delete process.env['BABEL_CONFIG_DIR'];
-      delete process.env['BABEL_RUNS_DIR'];
+      await cleanupOwnedEmergencyFixture(server, tmp, stdin);
     }
   });
 
@@ -1309,10 +1437,7 @@ describe('shared host-run emergency observation errors (mocked authoritative bac
       assert.equal(approvalCounters.completed, 0);
       assert.equal(gate.events.some((e) => e.type === 'cancelled'), false);
     } finally {
-      await server.stop();
-      rmSync(tmp, { recursive: true, force: true });
-      delete process.env['BABEL_CONFIG_DIR'];
-      delete process.env['BABEL_RUNS_DIR'];
+      await cleanupOwnedEmergencyFixture(server, tmp, stdin);
     }
   });
 
@@ -1437,10 +1562,7 @@ describe('shared host-run emergency observation errors (mocked authoritative bac
       assert.equal(gate.events.some((e) => e.type === 'cancelled'), false);
       assert.ok(gate.events.some((e) => e.type === 'run_error'));
     } finally {
-      await server.stop();
-      rmSync(tmp, { recursive: true, force: true });
-      delete process.env['BABEL_CONFIG_DIR'];
-      delete process.env['BABEL_RUNS_DIR'];
+      await cleanupOwnedEmergencyFixture(server, tmp, stdin);
     }
   });
 
@@ -1465,47 +1587,53 @@ describe('shared host-run emergency observation errors (mocked authoritative bac
     const port = server.port;
 
     const stdin = new PassThrough();
-    const events: Record<string, unknown>[] = [];
-    const runPromise = executeSharedProtocolHostRun(
-      {
-        port,
-        projectRoot: tmp,
-        task: 'terminal race',
-        runId: 'emergency-terminal-race',
-        desktopClientId: desktopId,
-        desktopProofKey,
-        stdin,
-        WebSocketImpl: class extends WebSocket {
-          constructor(url: string | URL, protocols?: string | string[]) {
-            super(url, protocols);
-            this.addEventListener('open', () => setTimeout(() => this.close(), 5));
-          }
-        } as typeof WebSocket,
-        emergencyObservationDeadlineMs: 2_000,
-        observationRpcTimeoutMs: 500,
-      },
-      (event) => events.push(event),
-    );
+    try {
+      const gate = createHostRunEventGate();
+      const { clock: emergencyObservationClock } = createManualSharedProtocolHostRunClock();
+      let disconnectInitialTransport = false;
+      const runPromise = executeSharedProtocolHostRun(
+        {
+          port,
+          projectRoot: tmp,
+          task: 'terminal race',
+          runId: 'emergency-terminal-race',
+          desktopClientId: desktopId,
+          desktopProofKey,
+          stdin,
+          WebSocketImpl: makeDisconnectFirstOpenWebSocket(() => disconnectInitialTransport),
+          emergencyObservationClock,
+          emergencyObservationDeadlineMs: 2_000,
+          observationRpcTimeoutMs: 500,
+        },
+        gate.write,
+      );
 
-    await new Promise((resolve) => setTimeout(resolve, 200));
-    stdin.write(
-      `${JSON.stringify({ decision: 'emergency_admin_stop', host_emergency_token: TOKEN })}\n`,
-    );
+      await gate.waitFor((event) => event.type === 'run_start', 'run_start');
+      await gate.waitFor((event) => event.type === 'thought', 'turn_stream_active');
+      disconnectInitialTransport = true;
+      stdin.write(
+        `${JSON.stringify({ decision: 'emergency_admin_stop', host_emergency_token: TOKEN })}\n`,
+      );
+      await gate.waitFor((event) => event.type === 'emergency_stop', 'emergency_stop');
+      await gate.waitFor(
+        (event) => event.type === 'cancelled',
+        'authoritative_cancelled_before_observation_deadline',
+      );
 
-    const code = await Promise.race([
-      runPromise,
-      new Promise<number>((_, reject) =>
-        setTimeout(() => reject(new Error('host-run hung on terminal race')), 10_000),
-      ),
-    ]);
+      const code = await Promise.race([
+        runPromise,
+        new Promise<number>((_, reject) =>
+          setTimeout(() => reject(new Error('host-run hung on terminal race')), 10_000),
+        ),
+      ]);
 
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    assert.equal(code, 0);
-    assert.equal(events.filter((e) => e.type === 'cancelled').length, 1);
-    assert.equal(events.filter((e) => e.type === 'run_error').length, 0);
-
-    await server.stop();
-    rmSync(tmp, { recursive: true, force: true });
+      const events = gate.events;
+      assert.equal(code, 0);
+      assert.equal(events.filter((e) => e.type === 'cancelled').length, 1);
+      assert.equal(events.filter((e) => e.type === 'run_error').length, 0);
+    } finally {
+      await cleanupOwnedEmergencyFixture(server, tmp, stdin);
+    }
   });
 
   it('fails closed when history.lookup never resolves after emergency ack', async () => {
@@ -1613,10 +1741,7 @@ describe('shared host-run emergency observation errors (mocked authoritative bac
           String((historyRunError as { error?: string }).error).includes('history.lookup'),
       );
     } finally {
-      await server.stop();
-      rmSync(tmp, { recursive: true, force: true });
-      delete process.env['BABEL_CONFIG_DIR'];
-      delete process.env['BABEL_RUNS_DIR'];
+      await cleanupOwnedEmergencyFixture(server, tmp, stdin);
     }
   });
 
@@ -1761,10 +1886,7 @@ describe('shared host-run emergency observation errors (mocked authoritative bac
           ),
       );
     } finally {
-      await server.stop();
-      rmSync(tmp, { recursive: true, force: true });
-      delete process.env['BABEL_CONFIG_DIR'];
-      delete process.env['BABEL_RUNS_DIR'];
+      await cleanupOwnedEmergencyFixture(server, tmp, stdin);
     }
   });
 
@@ -1861,10 +1983,7 @@ describe('shared host-run emergency observation errors (mocked authoritative bac
         ),
       );
     } finally {
-      await server.stop();
-      rmSync(tmp, { recursive: true, force: true });
-      delete process.env['BABEL_CONFIG_DIR'];
-      delete process.env['BABEL_RUNS_DIR'];
+      await cleanupOwnedEmergencyFixture(server, tmp, stdin);
     }
   });
 
@@ -1978,10 +2097,7 @@ describe('shared host-run emergency observation errors (mocked authoritative bac
       assert.equal(gate.events.filter((e) => e.type === 'cancelled').length, 0);
       assert.equal(gate.events.filter((e) => e.type === 'run_error').length, 1);
     } finally {
-      await server.stop();
-      rmSync(tmp, { recursive: true, force: true });
-      delete process.env['BABEL_CONFIG_DIR'];
-      delete process.env['BABEL_RUNS_DIR'];
+      await cleanupOwnedEmergencyFixture(server, tmp, stdin);
     }
   });
 
@@ -2121,10 +2237,7 @@ describe('shared host-run emergency observation errors (mocked authoritative bac
           'exactly one terminal stream event',
         );
       } finally {
-        await server.stop();
-        rmSync(tmp, { recursive: true, force: true });
-        delete process.env['BABEL_CONFIG_DIR'];
-        delete process.env['BABEL_RUNS_DIR'];
+        await cleanupOwnedEmergencyFixture(server, tmp, stdin);
       }
     });
   }
