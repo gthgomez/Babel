@@ -165,6 +165,46 @@ function verifiedInstallProbe() {
   });
 }
 
+const PROMPT_ADMITTED_MARKER = 'fixture:prompt-admitted';
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitForTurnEvent(
+  events: Record<string, unknown>[],
+  predicate: (event: Record<string, unknown>) => boolean,
+  label: string,
+  timeoutMs = 15_000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (events.some(predicate)) return;
+    await sleep(20);
+  }
+  throw new Error(`Timed out waiting for turn event: ${label}`);
+}
+
+function promptAdmittedEvent(event: Record<string, unknown>): boolean {
+  return (
+    event.type === 'answer_chunk' &&
+    String((event as { text?: string }).text ?? '').includes(PROMPT_ADMITTED_MARKER)
+  );
+}
+
+async function withDedicatedServer(
+  launchEnv: NodeJS.ProcessEnv | undefined,
+  run: (dedicated: BridgeServer, dedicatedPort: number) => Promise<void>,
+): Promise<void> {
+  const dedicated = makeServer(launchEnv);
+  await dedicated.start(0);
+  try {
+    await run(dedicated, dedicated.port);
+  } finally {
+    await dedicated.stop();
+  }
+}
+
 function makeServer(launchEnv?: NodeJS.ProcessEnv): BridgeServer {
   return new BridgeServer({
     authToken: TOKEN,
@@ -246,103 +286,151 @@ describe('command code own-CLI gateway integration', () => {
   });
 
   it('ignores session/new startup idle before prompt admission', async () => {
-    const idleServer = makeServer({ BABEL_COMMAND_CODE_FIXTURE_STARTUP_IDLE: '1' });
-    await idleServer.start(0);
-    const iPort = idleServer.port;
-    const sess = await httpRequest(`http://127.0.0.1:${iPort}/sessions`, {
-      method: 'POST',
-      headers: desktopHeaders(),
-      body: JSON.stringify({ projectRoot: tmp }),
+    await withDedicatedServer({ BABEL_COMMAND_CODE_FIXTURE_STARTUP_IDLE: '1' }, async (idleServer, iPort) => {
+      const sess = await httpRequest(`http://127.0.0.1:${iPort}/sessions`, {
+        method: 'POST',
+        headers: desktopHeaders(),
+        body: JSON.stringify({ projectRoot: tmp }),
+      });
+      const transportSessionId = (JSON.parse(sess.body) as { sessionId: string }).sessionId;
+      const created = await rpc(
+        iPort,
+        desktopHeaders(),
+        'thread.create',
+        { project_root: tmp, session_id: transportSessionId, harness_adapter_id: 'command-code' },
+        40,
+      );
+      const threadId = (created.result as { thread_id: string }).thread_id;
+      await rpc(iPort, desktopHeaders(), 'control.acquire', { thread_id: threadId, force: false }, 41);
+      const turn = await runTurn(iPort, threadId, transportSessionId, 'hello command code');
+      assert.equal(turn.terminal?.type, 'done');
+      assert.match(String((turn.terminal as { answer?: string }).answer ?? ''), /fixture:hello command code/);
     });
-    const transportSessionId = (JSON.parse(sess.body) as { sessionId: string }).sessionId;
-    const created = await rpc(
-      iPort,
-      desktopHeaders(),
-      'thread.create',
-      { project_root: tmp, session_id: transportSessionId, harness_adapter_id: 'command-code' },
-      40,
-    );
-    const threadId = (created.result as { thread_id: string }).thread_id;
-    await rpc(iPort, desktopHeaders(), 'control.acquire', { thread_id: threadId, force: false }, 41);
-    const turn = await runTurn(iPort, threadId, transportSessionId, 'hello command code');
-    assert.equal(turn.terminal?.type, 'done');
-    assert.match(String((turn.terminal as { answer?: string }).answer ?? ''), /fixture:hello command code/);
-    await idleServer.stop();
   });
 
   it('maps ACP permission prompts through approval.decide on a dedicated peer env', async () => {
-    const permissionServer = makeServer({ BABEL_COMMAND_CODE_FIXTURE_PERMISSION: '1' });
-    await permissionServer.start(0);
-    const pPort = permissionServer.port;
-    const sess = await httpRequest(`http://127.0.0.1:${pPort}/sessions`, {
-      method: 'POST',
-      headers: desktopHeaders(),
-      body: JSON.stringify({ projectRoot: tmp }),
+    await withDedicatedServer({ BABEL_COMMAND_CODE_FIXTURE_PERMISSION: '1' }, async (permissionServer, pPort) => {
+      const sess = await httpRequest(`http://127.0.0.1:${pPort}/sessions`, {
+        method: 'POST',
+        headers: desktopHeaders(),
+        body: JSON.stringify({ projectRoot: tmp }),
+      });
+      const transportSessionId = (JSON.parse(sess.body) as { sessionId: string }).sessionId;
+      const created = await rpc(
+        pPort,
+        desktopHeaders(),
+        'thread.create',
+        { project_root: tmp, session_id: transportSessionId, harness_adapter_id: 'command-code' },
+        10,
+      );
+      const threadId = (created.result as { thread_id: string }).thread_id;
+      await rpc(pPort, desktopHeaders(), 'control.acquire', { thread_id: threadId, force: false }, 11);
+      const turn = await runTurn(pPort, threadId, transportSessionId, 'needs approval', { approve: true });
+      assert.equal(turn.terminal?.type, 'done');
     });
-    const transportSessionId = (JSON.parse(sess.body) as { sessionId: string }).sessionId;
-    const created = await rpc(
-      pPort,
-      desktopHeaders(),
-      'thread.create',
-      { project_root: tmp, session_id: transportSessionId, harness_adapter_id: 'command-code' },
-      10,
+  });
+
+  it('preserves pending cancel through session startup without peer prompt admission', async () => {
+    await withDedicatedServer(
+      { BABEL_COMMAND_CODE_FIXTURE_DEFER_SESSION_NEW_MS: '400' },
+      async (dedicated, sPort) => {
+        const sess = await httpRequest(`http://127.0.0.1:${sPort}/sessions`, {
+          method: 'POST',
+          headers: desktopHeaders(),
+          body: JSON.stringify({ projectRoot: tmp }),
+        });
+        const transportSessionId = (JSON.parse(sess.body) as { sessionId: string }).sessionId;
+        const created = await rpc(
+          sPort,
+          desktopHeaders(),
+          'thread.create',
+          { project_root: tmp, session_id: transportSessionId, harness_adapter_id: 'command-code' },
+          24,
+        );
+        const threadId = (created.result as { thread_id: string }).thread_id;
+        await rpc(sPort, desktopHeaders(), 'control.acquire', { thread_id: threadId, force: false }, 25);
+        const ticketRes = await httpRequest(`http://127.0.0.1:${sPort}/ws/ticket`, {
+          method: 'POST',
+          headers: { ...desktopHeaders(), 'Content-Type': 'application/json' },
+          body: JSON.stringify({ session_id: transportSessionId, thread_id: threadId }),
+        });
+        const ticketBody = JSON.parse(ticketRes.body) as { ticket?: string };
+        const ws = new WebSocket(
+          `ws://127.0.0.1:${sPort}/ws?sessionId=${encodeURIComponent(transportSessionId)}&ticket=${encodeURIComponent(ticketBody.ticket ?? '')}`,
+        );
+        await new Promise<void>((resolve, reject) => {
+          ws.once('open', () => resolve());
+          ws.once('error', reject);
+        });
+        const events: Record<string, unknown>[] = [];
+        ws.on('message', (raw) => {
+          const frame = JSON.parse(raw.toString()) as { method?: string; params?: Record<string, unknown> };
+          if (frame.method === 'turn.event' && frame.params?.event) {
+            events.push(frame.params.event as Record<string, unknown>);
+          }
+        });
+        void rpc(sPort, desktopHeaders(), 'turn.submit', { thread_id: threadId, message: 'startup-cancel' }, 26);
+        await rpc(sPort, desktopHeaders(), 'turn.cancel', { thread_id: threadId }, 27);
+        await waitForTurnEvent(events, (event) => event.type === 'cancelled', 'startup_cancelled');
+        ws.close();
+        assert.equal(events.some((event) => promptAdmittedEvent(event)), false);
+      },
     );
-    const threadId = (created.result as { thread_id: string }).thread_id;
-    await rpc(pPort, desktopHeaders(), 'control.acquire', { thread_id: threadId, force: false }, 11);
-    const turn = await runTurn(pPort, threadId, transportSessionId, 'needs approval', { approve: true });
-    assert.equal(turn.terminal?.type, 'done');
-    await permissionServer.stop();
   });
 
   it('does not fabricate cancelled without authoritative peer terminal', async () => {
-    const slowServer = makeServer({
-      BABEL_COMMAND_CODE_FIXTURE_SLOW: '1',
-      BABEL_COMMAND_CODE_FIXTURE_NO_CANCEL_TERMINAL: '1',
-    });
-    await slowServer.start(0);
-    const sPort = slowServer.port;
-    const sess = await httpRequest(`http://127.0.0.1:${sPort}/sessions`, {
-      method: 'POST',
-      headers: desktopHeaders(),
-      body: JSON.stringify({ projectRoot: tmp }),
-    });
-    const transportSessionId = (JSON.parse(sess.body) as { sessionId: string }).sessionId;
-    const created = await rpc(
-      sPort,
-      desktopHeaders(),
-      'thread.create',
-      { project_root: tmp, session_id: transportSessionId, harness_adapter_id: 'command-code' },
-      20,
+    await withDedicatedServer(
+      {
+        BABEL_COMMAND_CODE_FIXTURE_SLOW: '1',
+        BABEL_COMMAND_CODE_FIXTURE_NO_CANCEL_TERMINAL: '1',
+      },
+      async (dedicated, sPort) => {
+        const sess = await httpRequest(`http://127.0.0.1:${sPort}/sessions`, {
+          method: 'POST',
+          headers: desktopHeaders(),
+          body: JSON.stringify({ projectRoot: tmp }),
+        });
+        const transportSessionId = (JSON.parse(sess.body) as { sessionId: string }).sessionId;
+        const created = await rpc(
+          sPort,
+          desktopHeaders(),
+          'thread.create',
+          { project_root: tmp, session_id: transportSessionId, harness_adapter_id: 'command-code' },
+          20,
+        );
+        const threadId = (created.result as { thread_id: string }).thread_id;
+        await rpc(sPort, desktopHeaders(), 'control.acquire', { thread_id: threadId, force: false }, 21);
+        const ticketRes = await httpRequest(`http://127.0.0.1:${sPort}/ws/ticket`, {
+          method: 'POST',
+          headers: { ...desktopHeaders(), 'Content-Type': 'application/json' },
+          body: JSON.stringify({ session_id: transportSessionId, thread_id: threadId }),
+        });
+        const ticketBody = JSON.parse(ticketRes.body) as { ticket?: string };
+        const ws = new WebSocket(
+          `ws://127.0.0.1:${sPort}/ws?sessionId=${encodeURIComponent(transportSessionId)}&ticket=${encodeURIComponent(ticketBody.ticket ?? '')}`,
+        );
+        await new Promise<void>((resolve, reject) => {
+          ws.once('open', () => resolve());
+          ws.once('error', reject);
+        });
+        const events: Record<string, unknown>[] = [];
+        ws.on('message', (raw) => {
+          const frame = JSON.parse(raw.toString()) as { method?: string; params?: Record<string, unknown> };
+          if (frame.method === 'turn.event' && frame.params?.event) {
+            events.push(frame.params.event as Record<string, unknown>);
+          }
+        });
+        void rpc(sPort, desktopHeaders(), 'turn.submit', { thread_id: threadId, message: 'slow' }, 22);
+        await waitForTurnEvent(events, promptAdmittedEvent, 'peer_prompt_admitted');
+        await rpc(sPort, desktopHeaders(), 'turn.cancel', { thread_id: threadId }, 23);
+        await sleep(700);
+        ws.close();
+        assert.ok(
+          !events.some((event) => event.type === 'cancelled'),
+          'must not invent cancelled without peer terminal',
+        );
+      },
     );
-    const threadId = (created.result as { thread_id: string }).thread_id;
-    await rpc(sPort, desktopHeaders(), 'control.acquire', { thread_id: threadId, force: false }, 21);
-    const ticketRes = await httpRequest(`http://127.0.0.1:${sPort}/ws/ticket`, {
-      method: 'POST',
-      headers: { ...desktopHeaders(), 'Content-Type': 'application/json' },
-      body: JSON.stringify({ session_id: transportSessionId, thread_id: threadId }),
-    });
-    const ticketBody = JSON.parse(ticketRes.body) as { ticket?: string };
-    const ws = new WebSocket(
-      `ws://127.0.0.1:${sPort}/ws?sessionId=${encodeURIComponent(transportSessionId)}&ticket=${encodeURIComponent(ticketBody.ticket ?? '')}`,
-    );
-    await new Promise<void>((resolve, reject) => {
-      ws.once('open', () => resolve());
-      ws.once('error', reject);
-    });
-    const events: Record<string, unknown>[] = [];
-    ws.on('message', (raw) => {
-      const frame = JSON.parse(raw.toString()) as { method?: string; params?: Record<string, unknown> };
-      if (frame.method === 'turn.event' && frame.params?.event) {
-        events.push(frame.params.event as Record<string, unknown>);
-      }
-    });
-    void rpc(sPort, desktopHeaders(), 'turn.submit', { thread_id: threadId, message: 'slow' }, 22);
-    await new Promise((r) => setTimeout(r, 80));
-    await rpc(sPort, desktopHeaders(), 'turn.cancel', { thread_id: threadId }, 23);
-    await new Promise((r) => setTimeout(r, 200));
-    ws.close();
-    assert.ok(!events.some((e) => e.type === 'cancelled'), 'must not invent cancelled without peer terminal');
-    await slowServer.stop();
   });
 
   it('lists bound vendor sessions with canonical thread ownership', async () => {
@@ -424,31 +512,29 @@ describe('command code own-CLI gateway integration', () => {
   });
 
   it('cancels a slow turn then continues on the same native session', async () => {
-    const slowServer = makeServer({ BABEL_COMMAND_CODE_FIXTURE_SLOW: '1' });
-    await slowServer.start(0);
-    const sPort = slowServer.port;
-    const sess = await httpRequest(`http://127.0.0.1:${sPort}/sessions`, {
-      method: 'POST',
-      headers: desktopHeaders(),
-      body: JSON.stringify({ projectRoot: tmp }),
+    await withDedicatedServer({ BABEL_COMMAND_CODE_FIXTURE_SLOW: '1' }, async (dedicated, sPort) => {
+      const sess = await httpRequest(`http://127.0.0.1:${sPort}/sessions`, {
+        method: 'POST',
+        headers: desktopHeaders(),
+        body: JSON.stringify({ projectRoot: tmp }),
+      });
+      const transportSessionId = (JSON.parse(sess.body) as { sessionId: string }).sessionId;
+      const created = await rpc(
+        sPort,
+        desktopHeaders(),
+        'thread.create',
+        { project_root: tmp, session_id: transportSessionId, harness_adapter_id: 'command-code' },
+        70,
+      );
+      const threadId = (created.result as { thread_id: string }).thread_id;
+      await rpc(sPort, desktopHeaders(), 'control.acquire', { thread_id: threadId, force: false }, 71);
+      void rpc(sPort, desktopHeaders(), 'turn.submit', { thread_id: threadId, message: 'slow-cancel' }, 72);
+      await sleep(80);
+      await rpc(sPort, desktopHeaders(), 'turn.cancel', { thread_id: threadId }, 73);
+      await sleep(700);
+      const after = await runTurn(sPort, threadId, transportSessionId, 'after-cancel');
+      assert.equal(after.terminal?.type, 'done');
     });
-    const transportSessionId = (JSON.parse(sess.body) as { sessionId: string }).sessionId;
-    const created = await rpc(
-      sPort,
-      desktopHeaders(),
-      'thread.create',
-      { project_root: tmp, session_id: transportSessionId, harness_adapter_id: 'command-code' },
-      70,
-    );
-    const threadId = (created.result as { thread_id: string }).thread_id;
-    await rpc(sPort, desktopHeaders(), 'control.acquire', { thread_id: threadId, force: false }, 71);
-    void rpc(sPort, desktopHeaders(), 'turn.submit', { thread_id: threadId, message: 'slow-cancel' }, 72);
-    await new Promise((r) => setTimeout(r, 80));
-    await rpc(sPort, desktopHeaders(), 'turn.cancel', { thread_id: threadId }, 73);
-    await new Promise((r) => setTimeout(r, 700));
-    const after = await runTurn(sPort, threadId, transportSessionId, 'after-cancel');
-    assert.equal(after.terminal?.type, 'done');
-    await slowServer.stop();
   });
 
   it('executes a turn in an isolated workspace B child', async () => {
@@ -462,24 +548,27 @@ describe('command code own-CLI gateway integration', () => {
       commandCodeTestLaunch: { command: process.execPath, args: [PEER] },
     });
     await serverB.start(0);
-    const portB = serverB.port;
-    const headers = desktopHeaders();
-    const sessB = await httpRequest(`http://127.0.0.1:${portB}/sessions`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ projectRoot: tmpB }),
-    });
-    const sessionB = (JSON.parse(sessB.body) as { sessionId: string }).sessionId;
-    const createdB = await rpc(
-      portB,
-      headers,
-      'thread.create',
-      { project_root: tmpB, session_id: sessionB, harness_adapter_id: 'command-code' },
-      30,
-    );
-    const threadB = (createdB.result as { thread_id: string }).thread_id;
-    const turn = await runTurn(portB, threadB, sessionB, 'workspace-b');
-    assert.equal(turn.terminal?.type, 'done');
-    await serverB.stop();
+    try {
+      const portB = serverB.port;
+      const headers = desktopHeaders();
+      const sessB = await httpRequest(`http://127.0.0.1:${portB}/sessions`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ projectRoot: tmpB }),
+      });
+      const sessionB = (JSON.parse(sessB.body) as { sessionId: string }).sessionId;
+      const createdB = await rpc(
+        portB,
+        headers,
+        'thread.create',
+        { project_root: tmpB, session_id: sessionB, harness_adapter_id: 'command-code' },
+        30,
+      );
+      const threadB = (createdB.result as { thread_id: string }).thread_id;
+      const turn = await runTurn(portB, threadB, sessionB, 'workspace-b');
+      assert.equal(turn.terminal?.type, 'done');
+    } finally {
+      await serverB.stop();
+    }
   });
 });

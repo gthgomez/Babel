@@ -45,7 +45,11 @@ function handleInitialize(id, params) {
   });
 }
 
-function handleSessionNew(id, params) {
+async function handleSessionNew(id, params) {
+  const deferMs = Number(process.env.BABEL_COMMAND_CODE_FIXTURE_DEFER_SESSION_NEW_MS ?? 0);
+  if (deferMs > 0) {
+    await new Promise((resolve) => setTimeout(resolve, deferMs));
+  }
   const sessionId = `sess_fixture_${nextSession++}`;
   sessions.set(sessionId, { cwd: params.cwd, messages: [], permissionDone: false });
   write({ jsonrpc: '2.0', id, result: { sessionId } });
@@ -117,6 +121,10 @@ async function handleSessionPrompt(id, params) {
       : String(params.text ?? '');
   session.messages.push(text);
   activePromptBySession.set(sessionId, { id, aborted: false });
+
+  sessionUpdate(sessionId, 'agent_message_chunk', {
+    content: { type: 'text', text: 'fixture:prompt-admitted' },
+  });
 
   sessionUpdate(sessionId, 'state_update', { state: 'running' });
 
@@ -211,7 +219,7 @@ rl.on('line', (line) => {
       handleInitialize(id, params ?? {});
       break;
     case 'session/new':
-      handleSessionNew(id, params ?? {});
+      void handleSessionNew(id, params ?? {});
       break;
     case 'session/load':
       handleSessionLoad(id, params ?? {});
