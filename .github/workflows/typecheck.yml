@@ -181,13 +181,13 @@ jobs:
       - name: Install Playwright Chromium for packaged driver contract
         run: npx playwright install --with-deps chromium
         working-directory: babel-desktop
-      - name: Run desktop regressions
-        run: |
-          if [ "${{ runner.os }}" = "Linux" ]; then
-            xvfb-run -a -s "-screen 0 1280x1024x24" npm run test
-          else
-            npm run test
-          fi
+      - name: Run desktop regressions (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: xvfb-run -a -s "-screen 0 1280x1024x24" npm run test
+        working-directory: babel-desktop
+      - name: Run desktop regressions (Windows)
+        if: matrix.os == 'windows-latest'
+        run: npm run test
         working-directory: babel-desktop
   architecture-regressions:
     needs:

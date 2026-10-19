@@ -48,11 +48,20 @@ function workspaceLabel(projectRoot: string): string {
   return parts[parts.length - 1] ?? projectRoot;
 }
 
+function threadHasPersistedTerminal(state: ProtocolHostState, threadId: string): boolean {
+  const prefix = `${threadId}:`;
+  for (const key of state.turnTerminals.keys()) {
+    if (key.startsWith(prefix)) return true;
+  }
+  return false;
+}
+
 function sessionStatus(
   state: ProtocolHostState,
   threadId: string,
 ): RemoteSessionStatus {
   if (state.activeTurns.has(threadId)) return 'running';
+  if (threadHasPersistedTerminal(state, threadId)) return 'completed';
   const engine = state.engines.get(threadId);
   if (engine) return 'idle';
   const report = state.restoreReports.get(threadId);

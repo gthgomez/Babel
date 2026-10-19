@@ -20,7 +20,7 @@
     FAILED: ['create', 'resume'],
   };
   const TURN = {
-    IDLE: ['submit'],
+    IDLE: ['submit', 'complete'],
     SUBMITTING: ['ack', 'fail', 'unknown'],
     ACKNOWLEDGED: ['stream', 'complete', 'fail', 'cancel'],
     STREAMING: ['complete', 'fail', 'cancel'],
