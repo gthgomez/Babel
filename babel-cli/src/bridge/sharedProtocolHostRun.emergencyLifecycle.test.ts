@@ -72,15 +72,23 @@ function createHostRunEventGate() {
   return { events, write, waitFor };
 }
 
-function hangRpcWhenEmergency(
-  emergencyAcked: () => boolean,
+type RpcOpCounters = { reached: number; aborted: number; completed: number };
+
+function createRpcOpCounters(): RpcOpCounters {
+  return { reached: 0, aborted: 0, completed: 0 };
+}
+
+function createAbortAwareRpcHang(
   rpcMethod: string,
+  whenHang: () => boolean,
+  counters: RpcOpCounters,
   baseFetch: typeof fetch,
 ): typeof fetch {
   return async (input, init) => {
     const url = String(input);
     const body = typeof init?.body === 'string' ? init.body : '';
-    if (emergencyAcked() && url.includes('/rpc') && body.includes(`"${rpcMethod}"`)) {
+    if (whenHang() && url.includes('/rpc') && body.includes(`"${rpcMethod}"`)) {
+      counters.reached += 1;
       await new Promise<void>((_resolve, reject) => {
         const signal = init?.signal;
         if (!signal) {
@@ -88,29 +96,91 @@ function hangRpcWhenEmergency(
           return;
         }
         if (signal.aborted) {
+          counters.aborted += 1;
           reject(signal.reason ?? new Error('aborted'));
           return;
         }
         signal.addEventListener(
           'abort',
           () => {
+            counters.aborted += 1;
             reject(signal.reason ?? new Error('aborted'));
           },
           { once: true },
         );
+      });
+      counters.completed += 1;
+    }
+    return baseFetch(input, init);
+  };
+}
+
+function hangRpcWhenEmergency(
+  emergencyAcked: () => boolean,
+  rpcMethod: string,
+  baseFetch: typeof fetch,
+  counters?: RpcOpCounters,
+): typeof fetch {
+  const stats = counters ?? createRpcOpCounters();
+  return createAbortAwareRpcHang(rpcMethod, emergencyAcked, stats, baseFetch);
+}
+
+function wrapFetchForSettledCatalogAfterEmergency(
+  baseFetch: typeof fetch,
+  emergencyAcked: () => boolean,
+  threadId: string,
+): typeof fetch {
+  return async (input, init) => {
+    const body = typeof init?.body === 'string' ? init.body : '';
+    if (emergencyAcked() && body.includes('"remote.catalog"')) {
+      const response = await baseFetch(input, init);
+      const payload = (await response.json()) as {
+        result?: { sessions?: Array<Record<string, unknown>> };
+      };
+      if (payload.result?.sessions) {
+        payload.result.sessions = payload.result.sessions.map((session) => {
+          if (threadId !== '*' && session.thread_id !== threadId) return session;
+          return {
+            ...session,
+            status: 'completed',
+            active_turn: false,
+            active_turn_id: undefined,
+          };
+        });
+      }
+      return new Response(JSON.stringify({ jsonrpc: '2.0', id: 1, result: payload.result }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
       });
     }
     return baseFetch(input, init);
   };
 }
 
+function makeDisconnectFirstOpenWebSocket(armed: () => boolean): typeof WebSocket {
+  let opens = 0;
+  return class extends WebSocket {
+    constructor(url: string | URL, protocols?: string | string[]) {
+      super(url, protocols);
+      this.addEventListener('open', () => {
+        opens += 1;
+        if (opens === 1 && armed()) {
+          this.close();
+        }
+      });
+    }
+  } as typeof WebSocket;
+}
+
 function makeRecoveryStallWebSocket(stallRecoveryConnect: () => boolean): typeof WebSocket {
   const RealWebSocket = WebSocket;
+  let openCount = 0;
   const RecoveryStallWebSocket = function (
     url: string | URL,
     protocols?: string | string[],
   ): WebSocket {
-    if (stallRecoveryConnect()) {
+    openCount += 1;
+    if (stallRecoveryConnect() && openCount > 1) {
       return {
         addEventListener() {},
         removeEventListener() {},
@@ -767,100 +837,207 @@ describe('shared host-run emergency observation errors (mocked authoritative bac
     const port = server.port;
 
     let emergencyAcked = false;
+    let primarySocket: WebSocket | null = null;
+    const approvalCounters = createRpcOpCounters();
     const baseFetch = globalThis.fetch.bind(globalThis);
-    const fetchImpl: typeof fetch = async (input, init) => {
-      const url = String(input);
-      const body = typeof init?.body === 'string' ? init.body : '';
-      if (
-        emergencyAcked &&
-        url.includes('/rpc') &&
-        body.includes('approval.lookup')
-      ) {
-        await new Promise<void>((_resolve, reject) => {
-          const signal = init?.signal;
-          if (!signal) {
-            reject(new Error('approval.lookup missing abort signal'));
-            return;
-          }
-          if (signal.aborted) {
-            reject(signal.reason ?? new Error('aborted'));
-            return;
-          }
-          signal.addEventListener(
-            'abort',
-            () => {
-              reject(signal.reason ?? new Error('aborted'));
-            },
-            { once: true },
-          );
-        });
-      }
-      return baseFetch(input, init);
-    };
+    const fetchImpl = hangRpcWhenEmergency(
+      () => emergencyAcked,
+      'approval.lookup',
+      baseFetch,
+      approvalCounters,
+    );
 
+    const gate = createHostRunEventGate();
     const stdin = new PassThrough();
-    const events: Record<string, unknown>[] = [];
-    const runPromise = executeSharedProtocolHostRun(
-      {
-        port,
-        projectRoot: tmp,
-        task: 'approval hang',
-        runId: 'emergency-approval-hang',
-        desktopClientId: desktopId,
-        desktopProofKey,
-        stdin,
-        fetchImpl,
-        WebSocketImpl: class extends WebSocket {
-          constructor(url: string | URL, protocols?: string | string[]) {
-            super(url, protocols);
-            this.addEventListener('open', () => setTimeout(() => this.close(), 5));
+    try {
+      const runPromise = executeSharedProtocolHostRun(
+        {
+          port,
+          projectRoot: tmp,
+          task: 'approval hang',
+          runId: 'emergency-approval-hang',
+          desktopClientId: desktopId,
+          desktopProofKey,
+          stdin,
+          fetchImpl,
+          WebSocketImpl: class extends WebSocket {
+            constructor(url: string | URL, protocols?: string | string[]) {
+              super(url, protocols);
+              primarySocket = this;
+            }
+          } as typeof WebSocket,
+          observationRpcTimeoutMs: 25,
+          emergencyObservationDeadlineMs: 75,
+          emergencyObservationPassLimit: 4,
+        },
+        (event) => {
+          gate.write(event);
+          if (event.type === 'emergency_stop') {
+            emergencyAcked = true;
+            setTimeout(() => {
+              try {
+                primarySocket?.close();
+              } catch {
+                /* ignore */
+              }
+            }, 5);
           }
-        } as typeof WebSocket,
-        observationRpcTimeoutMs: 25,
-        emergencyObservationDeadlineMs: 75,
-        emergencyObservationPassLimit: 4,
-      },
-      (event) => {
-        events.push(event);
-        if (event.type === 'emergency_stop') emergencyAcked = true;
-      },
-    );
+        },
+      );
 
-    const thinkingDeadline = Date.now() + 5_000;
-    while (Date.now() < thinkingDeadline) {
-      if (events.some((e) => e.type === 'thought' || e.type === 'thinking')) break;
-      await new Promise((resolve) => setTimeout(resolve, 25));
+      await gate.waitFor((event) => event.type === 'run_start', 'run_start');
+      await gate.waitFor((event) => event.type === 'thought', 'turn_stream_active');
+      stdin.write(
+        `${JSON.stringify({ decision: 'emergency_admin_stop', host_emergency_token: TOKEN })}\n`,
+      );
+      await gate.waitFor((event) => event.type === 'emergency_stop', 'emergency_stop');
+      const approvalReachedDeadline = Date.now() + 5_000;
+      while (Date.now() < approvalReachedDeadline && approvalCounters.reached < 1) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      assert.equal(approvalCounters.reached, 1);
+
+      await gate.waitFor((event) => event.type === 'run_error', 'observation_run_error');
+
+      const code = await Promise.race([
+        runPromise,
+        new Promise<number>((_, reject) =>
+          setTimeout(() => reject(new Error('host-run hung on approval.lookup')), 2_000),
+        ),
+      ]);
+
+      assert.equal(code, 1);
+      assert.equal(gate.events.some((e) => e.type === 'cancelled'), false);
+      assert.equal(approvalCounters.aborted, 1);
+      assert.equal(approvalCounters.completed, 0);
+      assert.ok(
+        gate.events.some(
+          (e) =>
+            e.type === 'run_error' &&
+            String((e as { error?: string }).error).includes('approval.lookup'),
+        ),
+      );
+    } finally {
+      await server.stop();
+      rmSync(tmp, { recursive: true, force: true });
+      delete process.env['BABEL_CONFIG_DIR'];
+      delete process.env['BABEL_RUNS_DIR'];
     }
-    stdin.write(
-      `${JSON.stringify({ decision: 'emergency_admin_stop', host_emergency_token: TOKEN })}\n`,
+  });
+
+  it('aborts approval.lookup that started before emergency ack when the observation scope fires', async () => {
+    const tmp = mkdtempSync(join(tmpdir(), 'babel-emergency-approval-pre-ack-'));
+    const configDir = join(tmp, 'config');
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(join(configDir, 'bridge.json'), JSON.stringify({ authToken: TOKEN }), 'utf8');
+    process.env['BABEL_CONFIG_DIR'] = configDir;
+    process.env['BABEL_RUNS_DIR'] = tmp;
+
+    const server = new BridgeServer({
+      authToken: TOKEN,
+      allowedWorkspaceRoot: tmp,
+      allowedOrigins: ['http://127.0.0.1:*', 'http://localhost:*'],
+      enforceControlLease: true,
+      desktopControllerClientId: desktopId,
+      desktopControllerProofKey: desktopProofKey,
+      engineFactory: (descriptor) => {
+        const engine = new ChatEngine({
+          task: 'approval-pre-ack',
+          projectRoot: descriptor.projectRoot,
+          executionProfile: 'chat',
+        });
+        engine.submitMessageStream = async function* () {
+          yield { type: 'thinking' };
+          await new Promise<void>(() => {
+            /* never settles */
+          });
+        } as ChatEngine['submitMessageStream'];
+        return engine;
+      },
+    });
+    await server.start(0);
+    const port = server.port;
+
+    let emergencyAcked = false;
+    const approvalCounters = createRpcOpCounters();
+    const baseFetch = globalThis.fetch.bind(globalThis);
+    const fetchImpl = createAbortAwareRpcHang(
+      'approval.lookup',
+      () => true,
+      approvalCounters,
+      baseFetch,
     );
-    const ackDeadline = Date.now() + 2_000;
-    while (Date.now() < ackDeadline && !emergencyAcked) {
-      await new Promise((resolve) => setTimeout(resolve, 10));
+
+    let primarySocket: WebSocket | null = null;
+    const gate = createHostRunEventGate();
+    const stdin = new PassThrough();
+    try {
+      const runPromise = executeSharedProtocolHostRun(
+        {
+          port,
+          projectRoot: tmp,
+          task: 'approval pre-ack race',
+          runId: 'emergency-approval-pre-ack',
+          desktopClientId: desktopId,
+          desktopProofKey,
+          stdin,
+          fetchImpl,
+          WebSocketImpl: class extends WebSocket {
+            constructor(url: string | URL, protocols?: string | string[]) {
+              super(url, protocols);
+              primarySocket = this;
+            }
+          } as typeof WebSocket,
+          observationRpcTimeoutMs: 25,
+          emergencyObservationDeadlineMs: 75,
+          emergencyObservationPassLimit: 4,
+        },
+        (event) => {
+          gate.write(event);
+          if (event.type === 'emergency_stop') emergencyAcked = true;
+        },
+      );
+
+      await gate.waitFor((event) => event.type === 'run_start', 'run_start');
+      await gate.waitFor((event) => event.type === 'thought', 'turn_stream_active');
+      try {
+        primarySocket?.close();
+      } catch {
+        /* ignore */
+      }
+      const reachedDeadline = Date.now() + 3_000;
+      while (Date.now() < reachedDeadline && approvalCounters.reached < 1) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      assert.equal(approvalCounters.reached, 1);
+      assert.equal(emergencyAcked, false);
+
+      stdin.write(
+        `${JSON.stringify({ decision: 'emergency_admin_stop', host_emergency_token: TOKEN })}\n`,
+      );
+      await gate.waitFor((event) => event.type === 'emergency_stop', 'emergency_stop');
+      await gate.waitFor((event) => event.type === 'run_error', 'observation_run_error');
+
+      const code = await Promise.race([
+        runPromise,
+        new Promise<number>((_, reject) =>
+          setTimeout(
+            () => reject(new Error('host-run hung on pre-ack approval.lookup')),
+            2_000,
+          ),
+        ),
+      ]);
+
+      assert.equal(code, 1);
+      assert.equal(approvalCounters.aborted, 1);
+      assert.equal(approvalCounters.completed, 0);
+      assert.equal(gate.events.some((e) => e.type === 'cancelled'), false);
+    } finally {
+      await server.stop();
+      rmSync(tmp, { recursive: true, force: true });
+      delete process.env['BABEL_CONFIG_DIR'];
+      delete process.env['BABEL_RUNS_DIR'];
     }
-    assert.equal(emergencyAcked, true);
-
-    const code = await Promise.race([
-      runPromise,
-      new Promise<number>((_, reject) =>
-        setTimeout(() => reject(new Error('host-run hung on approval.lookup')), 2_000),
-      ),
-    ]);
-
-    assert.equal(code, 1);
-    assert.equal(events.some((e) => e.type === 'cancelled'), false);
-    assert.ok(
-      events.some(
-        (e) =>
-          e.type === 'run_error' &&
-          (String((e as { error?: string }).error).includes('approval.lookup') ||
-            String((e as { error?: string }).error).includes('observation timed out') ||
-            String((e as { error?: string }).error).includes('observation RPC timed out')),
-      ),
-    );
-
-    await server.stop();
-    rmSync(tmp, { recursive: true, force: true });
   });
 
   it('fails closed when ws ticket mint never completes after emergency ack', async () => {
@@ -897,10 +1074,12 @@ describe('shared host-run emergency observation errors (mocked authoritative bac
     const port = server.port;
 
     let emergencyAcked = false;
+    const ticketCounters = createRpcOpCounters();
     const baseFetch = globalThis.fetch.bind(globalThis);
     const fetchImpl: typeof fetch = async (input, init) => {
       const url = String(input);
       if (emergencyAcked && url.includes('/ws/ticket')) {
+        ticketCounters.reached += 1;
         await new Promise<void>((_resolve, reject) => {
           const signal = init?.signal;
           if (!signal) {
@@ -908,61 +1087,85 @@ describe('shared host-run emergency observation errors (mocked authoritative bac
             return;
           }
           if (signal.aborted) {
+            ticketCounters.aborted += 1;
             reject(signal.reason ?? new Error('aborted'));
             return;
           }
           signal.addEventListener(
             'abort',
             () => {
+              ticketCounters.aborted += 1;
               reject(signal.reason ?? new Error('aborted'));
             },
             { once: true },
           );
         });
+        ticketCounters.completed += 1;
       }
       return baseFetch(input, init);
     };
-
     const gate = createHostRunEventGate();
     const stdin = new PassThrough();
-    const runPromise = executeSharedProtocolHostRun(
-      {
-        port,
-        projectRoot: tmp,
-        task: 'ticket hang',
-        runId: 'emergency-ticket-hang',
-        desktopClientId: desktopId,
-        desktopProofKey,
-        stdin,
-        fetchImpl,
-        WebSocketImpl: makeRecoveryStallWebSocket(() => emergencyAcked),
-        observationRpcTimeoutMs: 25,
-        emergencyObservationDeadlineMs: 75,
-      },
-      (event) => {
-        gate.write(event);
-        if (event.type === 'emergency_stop') emergencyAcked = true;
-      },
-    );
+    let primarySocket: WebSocket | null = null;
+    try {
+      const runPromise = executeSharedProtocolHostRun(
+        {
+          port,
+          projectRoot: tmp,
+          task: 'ticket hang',
+          runId: 'emergency-ticket-hang',
+          desktopClientId: desktopId,
+          desktopProofKey,
+          stdin,
+          fetchImpl,
+          WebSocketImpl: class extends WebSocket {
+            constructor(url: string | URL, protocols?: string | string[]) {
+              super(url, protocols);
+              primarySocket = this;
+            }
+          } as typeof WebSocket,
+          observationRpcTimeoutMs: 25,
+          emergencyObservationDeadlineMs: 75,
+        },
+        (event) => {
+          gate.write(event);
+          if (event.type === 'emergency_stop') {
+            emergencyAcked = true;
+            setTimeout(() => {
+              try {
+                primarySocket?.close();
+              } catch {
+                /* ignore */
+              }
+            }, 5);
+          }
+        },
+      );
 
-    await gate.waitFor((event) => event.type === 'run_start', 'run_start');
-    await gate.waitFor((event) => event.type === 'thought', 'turn_stream_active');
-    stdin.write(
-      `${JSON.stringify({ decision: 'emergency_admin_stop', host_emergency_token: TOKEN })}\n`,
-    );
-    await gate.waitFor((event) => event.type === 'emergency_stop', 'emergency_stop');
-    await gate.waitFor((event) => event.type === 'run_error', 'observation_run_error');
+      await gate.waitFor((event) => event.type === 'run_start', 'run_start');
+      await gate.waitFor((event) => event.type === 'thought', 'turn_stream_active');
+      stdin.write(
+        `${JSON.stringify({ decision: 'emergency_admin_stop', host_emergency_token: TOKEN })}\n`,
+      );
+      await gate.waitFor((event) => event.type === 'emergency_stop', 'emergency_stop');
+      const ticketDeadline = Date.now() + 5_000;
+      while (Date.now() < ticketDeadline && ticketCounters.reached < 1) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      assert.equal(ticketCounters.reached, 1);
+      await gate.waitFor((event) => event.type === 'run_error', 'observation_run_error');
 
-    const code = await runPromise;
+      const code = await runPromise;
 
-    assert.equal(code, 1);
-    assert.equal(gate.events.some((e) => e.type === 'cancelled'), false);
-    assert.ok(gate.events.some((e) => e.type === 'run_error'));
-
-    await server.stop();
-    rmSync(tmp, { recursive: true, force: true });
-    delete process.env['BABEL_CONFIG_DIR'];
-    delete process.env['BABEL_RUNS_DIR'];
+      assert.equal(code, 1);
+      assert.equal(gate.events.some((e) => e.type === 'cancelled'), false);
+      assert.ok(gate.events.some((e) => e.type === 'run_error'));
+    } finally {
+      await server.stop();
+      rmSync(tmp, { recursive: true, force: true });
+      delete process.env['BABEL_CONFIG_DIR'];
+      delete process.env['BABEL_RUNS_DIR'];
+    }
   });
 
   it('preserves authoritative terminal when it arrives before the observation deadline', async () => {
@@ -1063,46 +1266,82 @@ describe('shared host-run emergency observation errors (mocked authoritative bac
     const port = server.port;
 
     let emergencyAcked = false;
+    let primarySocket: WebSocket | null = null;
+    const historyCounters = createRpcOpCounters();
     const baseFetch = globalThis.fetch.bind(globalThis);
-    const fetchImpl = hangRpcWhenEmergency(() => emergencyAcked, 'history.lookup', baseFetch);
+    const fetchImpl = hangRpcWhenEmergency(
+      () => emergencyAcked,
+      'history.lookup',
+      wrapFetchForSettledCatalogAfterEmergency(baseFetch, () => emergencyAcked, '*'),
+      historyCounters,
+    );
     const gate = createHostRunEventGate();
     const stdin = new PassThrough();
-    const runPromise = executeSharedProtocolHostRun(
-      {
-        port,
-        projectRoot: tmp,
-        task: 'history hang',
-        runId: 'emergency-history-hang',
-        desktopClientId: desktopId,
-        desktopProofKey,
-        stdin,
-        fetchImpl,
-        WebSocketImpl: makeRecoveryStallWebSocket(() => emergencyAcked),
-        observationRpcTimeoutMs: 25,
-        emergencyObservationDeadlineMs: 75,
-      },
-      (event) => {
-        gate.write(event);
-        if (event.type === 'emergency_stop') emergencyAcked = true;
-      },
-    );
+    try {
+      const runPromise = executeSharedProtocolHostRun(
+        {
+          port,
+          projectRoot: tmp,
+          task: 'history hang',
+          runId: 'emergency-history-hang',
+          desktopClientId: desktopId,
+          desktopProofKey,
+          stdin,
+          fetchImpl,
+          WebSocketImpl: class extends WebSocket {
+            constructor(url: string | URL, protocols?: string | string[]) {
+              super(url, protocols);
+              primarySocket = this;
+            }
+          } as typeof WebSocket,
+          observationRpcTimeoutMs: 25,
+          emergencyObservationDeadlineMs: 75,
+        },
+        (event) => {
+          gate.write(event);
+          if (event.type === 'emergency_stop') {
+            emergencyAcked = true;
+            setTimeout(() => {
+              try {
+                primarySocket?.close();
+              } catch {
+                /* ignore */
+              }
+            }, 5);
+          }
+        },
+      );
 
-    await gate.waitFor((event) => event.type === 'run_start', 'run_start');
-    await gate.waitFor((event) => event.type === 'thought', 'turn_stream_active');
-    stdin.write(
-      `${JSON.stringify({ decision: 'emergency_admin_stop', host_emergency_token: TOKEN })}\n`,
-    );
-    await gate.waitFor((event) => event.type === 'emergency_stop', 'emergency_stop');
-    await gate.waitFor((event) => event.type === 'run_error', 'observation_run_error');
+      await gate.waitFor((event) => event.type === 'run_start', 'run_start');
+      await gate.waitFor((event) => event.type === 'thought', 'turn_stream_active');
+      stdin.write(
+        `${JSON.stringify({ decision: 'emergency_admin_stop', host_emergency_token: TOKEN })}\n`,
+      );
+      await gate.waitFor((event) => event.type === 'emergency_stop', 'emergency_stop');
+      const historyDeadline = Date.now() + 5_000;
+      while (Date.now() < historyDeadline && historyCounters.reached < 1) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      assert.ok(historyCounters.reached >= 1);
+      await gate.waitFor((event) => event.type === 'run_error', 'observation_run_error');
 
-    const code = await runPromise;
-    assert.equal(code, 1);
-    assert.equal(gate.events.some((e) => e.type === 'cancelled'), false);
-
-    await server.stop();
-    rmSync(tmp, { recursive: true, force: true });
-    delete process.env['BABEL_CONFIG_DIR'];
-    delete process.env['BABEL_RUNS_DIR'];
+      const code = await runPromise;
+      assert.equal(code, 1);
+      assert.ok(historyCounters.aborted >= 1);
+      assert.equal(historyCounters.completed, 0);
+      assert.equal(gate.events.some((e) => e.type === 'cancelled'), false);
+      const historyRunError = gate.events.find((e) => e.type === 'run_error');
+      assert.ok(historyRunError);
+      assert.ok(
+        historyCounters.aborted >= 1 ||
+          String((historyRunError as { error?: string }).error).includes('history.lookup'),
+      );
+    } finally {
+      await server.stop();
+      rmSync(tmp, { recursive: true, force: true });
+      delete process.env['BABEL_CONFIG_DIR'];
+      delete process.env['BABEL_RUNS_DIR'];
+    }
   });
 
   it('fails closed when verification.lookup never resolves after emergency ack', async () => {
@@ -1139,88 +1378,118 @@ describe('shared host-run emergency observation errors (mocked authoritative bac
     const port = server.port;
 
     let emergencyAcked = false;
+    let primarySocket: WebSocket | null = null;
+    const verificationCounters = createRpcOpCounters();
     const baseFetch = globalThis.fetch.bind(globalThis);
     const fetchImpl: typeof fetch = async (input, init) => {
       const url = String(input);
       const body = typeof init?.body === 'string' ? init.body : '';
       if (emergencyAcked && url.includes('/rpc')) {
-        if (body.includes('"remote.catalog"')) {
-          const baseResponse = await baseFetch(input, init);
-          const payload = (await baseResponse.json()) as {
-            result?: { sessions?: Array<Record<string, unknown>> };
-          };
-          if (payload.result?.sessions) {
-            payload.result.sessions = payload.result.sessions.map((session) => ({
-              ...session,
-              active_turn: false,
-            }));
-          }
-          return new Response(JSON.stringify({ jsonrpc: '2.0', id: 1, result: payload.result }), {
-            status: 200,
-            headers: { 'content-type': 'application/json' },
-          });
-        }
         if (body.includes('"history.lookup"')) {
           const params = JSON.parse(body).params as { thread_id: string; turn_id?: number };
+          const turnId = params.turn_id ?? 1;
           return new Response(
             JSON.stringify({
               jsonrpc: '2.0',
               id: 1,
               result: {
                 turn_terminal: {
-                  turn_id: params.turn_id ?? 1,
-                  event_type: 'completed',
+                  turn_id: turnId,
+                  event_type: 'done',
                   outcome: 'VERIFIED_COMPLETE',
                   answer: 'fixture',
+                  status: 'completed',
                 },
               },
             }),
             { status: 200, headers: { 'content-type': 'application/json' } },
           );
         }
-        return hangRpcWhenEmergency(() => true, 'verification.lookup', baseFetch)(input, init);
+        if (body.includes('"verification.lookup"')) {
+          return hangRpcWhenEmergency(
+            () => true,
+            'verification.lookup',
+            wrapFetchForSettledCatalogAfterEmergency(baseFetch, () => true, '*'),
+            verificationCounters,
+          )(input, init);
+        }
+        return wrapFetchForSettledCatalogAfterEmergency(baseFetch, () => emergencyAcked, '*')(
+          input,
+          init,
+        );
       }
       return baseFetch(input, init);
     };
 
     const gate = createHostRunEventGate();
     const stdin = new PassThrough();
-    const runPromise = executeSharedProtocolHostRun(
-      {
-        port,
-        projectRoot: tmp,
-        task: 'verification hang',
-        runId: 'emergency-verification-hang',
-        desktopClientId: desktopId,
-        desktopProofKey,
-        stdin,
-        fetchImpl,
-        WebSocketImpl: makeRecoveryStallWebSocket(() => emergencyAcked),
-        observationRpcTimeoutMs: 25,
-        emergencyObservationDeadlineMs: 75,
-      },
-      (event) => {
-        gate.write(event);
-        if (event.type === 'emergency_stop') emergencyAcked = true;
-      },
-    );
+    try {
+      const runPromise = executeSharedProtocolHostRun(
+        {
+          port,
+          projectRoot: tmp,
+          task: 'verification hang',
+          runId: 'emergency-verification-hang',
+          desktopClientId: desktopId,
+          desktopProofKey,
+          stdin,
+          fetchImpl,
+          WebSocketImpl: class extends WebSocket {
+            constructor(url: string | URL, protocols?: string | string[]) {
+              super(url, protocols);
+              primarySocket = this;
+            }
+          } as typeof WebSocket,
+          observationRpcTimeoutMs: 25,
+          emergencyObservationDeadlineMs: 75,
+        },
+        (event) => {
+          gate.write(event);
+          if (event.type === 'emergency_stop') {
+            emergencyAcked = true;
+            setTimeout(() => {
+              try {
+                primarySocket?.close();
+              } catch {
+                /* ignore */
+              }
+            }, 5);
+          }
+        },
+      );
 
-    await gate.waitFor((event) => event.type === 'run_start', 'run_start');
-    await gate.waitFor((event) => event.type === 'thought', 'turn_stream_active');
-    stdin.write(
-      `${JSON.stringify({ decision: 'emergency_admin_stop', host_emergency_token: TOKEN })}\n`,
-    );
-    await gate.waitFor((event) => event.type === 'emergency_stop', 'emergency_stop');
-    await gate.waitFor((event) => event.type === 'run_error', 'observation_run_error');
+      await gate.waitFor((event) => event.type === 'run_start', 'run_start');
+      await gate.waitFor((event) => event.type === 'thought', 'turn_stream_active');
+      stdin.write(
+        `${JSON.stringify({ decision: 'emergency_admin_stop', host_emergency_token: TOKEN })}\n`,
+      );
+      await gate.waitFor((event) => event.type === 'emergency_stop', 'emergency_stop');
+      const verificationDeadline = Date.now() + 5_000;
+      while (Date.now() < verificationDeadline && verificationCounters.reached < 1) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      assert.ok(verificationCounters.reached >= 1);
+      await gate.waitFor((event) => event.type === 'run_error', 'observation_run_error');
 
-    const code = await runPromise;
-    assert.equal(code, 1);
-    assert.equal(gate.events.some((e) => e.type === 'cancelled'), false);
-
-    await server.stop();
-    rmSync(tmp, { recursive: true, force: true });
-    delete process.env['BABEL_CONFIG_DIR'];
-    delete process.env['BABEL_RUNS_DIR'];
+      const code = await runPromise;
+      assert.equal(code, 1);
+      assert.ok(verificationCounters.aborted >= 1);
+      assert.equal(verificationCounters.completed, 0);
+      assert.equal(gate.events.some((e) => e.type === 'cancelled'), false);
+      const verificationRunError = gate.events.find((e) => e.type === 'run_error');
+      assert.ok(verificationRunError);
+      assert.ok(
+        verificationCounters.aborted >= 1 ||
+          String((verificationRunError as { error?: string }).error).includes(
+            'verification.lookup',
+          ),
+      );
+    } finally {
+      await server.stop();
+      rmSync(tmp, { recursive: true, force: true });
+      delete process.env['BABEL_CONFIG_DIR'];
+      delete process.env['BABEL_RUNS_DIR'];
+    }
   });
 
   it('fails closed when WebSocket open never completes during recovery after emergency ack', async () => {
@@ -1238,49 +1507,89 @@ describe('shared host-run emergency observation errors (mocked authoritative bac
       enforceControlLease: true,
       desktopControllerClientId: desktopId,
       desktopControllerProofKey: desktopProofKey,
-      engineFactory: (descriptor) => cooperativeCancelEngine(descriptor, 'ws-open-hang'),
+      engineFactory: (descriptor) => {
+        const engine = new ChatEngine({
+          task: 'ws-open-hang',
+          projectRoot: descriptor.projectRoot,
+          executionProfile: 'chat',
+        });
+        engine.submitMessageStream = async function* () {
+          yield { type: 'thinking' };
+          await new Promise<void>(() => {
+            /* never settles — avoid competing cancelled terminal */
+          });
+        } as ChatEngine['submitMessageStream'];
+        return engine;
+      },
     });
     await server.start(0);
     const port = server.port;
 
     let emergencyAcked = false;
+    let primarySocket: WebSocket | null = null;
     const gate = createHostRunEventGate();
     const stdin = new PassThrough();
-    const runPromise = executeSharedProtocolHostRun(
-      {
-        port,
-        projectRoot: tmp,
-        task: 'ws open hang',
-        runId: 'emergency-ws-open-hang',
-        desktopClientId: desktopId,
-        desktopProofKey,
-        stdin,
-        WebSocketImpl: makeRecoveryStallWebSocket(() => emergencyAcked),
-        observationRpcTimeoutMs: 25,
-        emergencyObservationDeadlineMs: 75,
-      },
-      (event) => {
-        gate.write(event);
-        if (event.type === 'emergency_stop') emergencyAcked = true;
-      },
-    );
+    try {
+      const runPromise = executeSharedProtocolHostRun(
+        {
+          port,
+          projectRoot: tmp,
+          task: 'ws open hang',
+          runId: 'emergency-ws-open-hang',
+          desktopClientId: desktopId,
+          desktopProofKey,
+          stdin,
+          WebSocketImpl: (() => {
+            const RecoveryStall = makeRecoveryStallWebSocket(() => emergencyAcked);
+            return function (url: string | URL, protocols?: string | string[]) {
+              const socket = new RecoveryStall(url, protocols);
+              primarySocket = socket;
+              return socket;
+            } as unknown as typeof WebSocket;
+          })(),
+          observationRpcTimeoutMs: 25,
+          emergencyObservationDeadlineMs: 75,
+        },
+        (event) => {
+          gate.write(event);
+          if (event.type === 'emergency_stop') {
+            emergencyAcked = true;
+            setTimeout(() => {
+              try {
+                primarySocket?.close();
+              } catch {
+                /* ignore */
+              }
+            }, 5);
+          }
+        },
+      );
 
-    await gate.waitFor((event) => event.type === 'run_start', 'run_start');
-    await gate.waitFor((event) => event.type === 'thought', 'turn_stream_active');
-    stdin.write(
-      `${JSON.stringify({ decision: 'emergency_admin_stop', host_emergency_token: TOKEN })}\n`,
-    );
-    await gate.waitFor((event) => event.type === 'emergency_stop', 'emergency_stop');
-    await gate.waitFor((event) => event.type === 'run_error', 'observation_run_error');
+      await gate.waitFor((event) => event.type === 'run_start', 'run_start');
+      await gate.waitFor((event) => event.type === 'thought', 'turn_stream_active');
+      stdin.write(
+        `${JSON.stringify({ decision: 'emergency_admin_stop', host_emergency_token: TOKEN })}\n`,
+      );
+      await gate.waitFor((event) => event.type === 'emergency_stop', 'emergency_stop');
+      await gate.waitFor((event) => event.type === 'run_error', 'observation_run_error');
 
-    const code = await runPromise;
-    assert.equal(code, 1);
-    assert.equal(gate.events.some((e) => e.type === 'cancelled'), false);
-
-    await server.stop();
-    rmSync(tmp, { recursive: true, force: true });
-    delete process.env['BABEL_CONFIG_DIR'];
-    delete process.env['BABEL_RUNS_DIR'];
+      const code = await runPromise;
+      assert.equal(code, 1);
+      assert.equal(gate.events.some((e) => e.type === 'cancelled'), false);
+      assert.ok(
+        gate.events.some(
+          (e) =>
+            e.type === 'run_error' &&
+            (String((e as { error?: string }).error).includes('ws transport reopen') ||
+              String((e as { error?: string }).error).includes('WebSocket transport observation')),
+        ),
+      );
+    } finally {
+      await server.stop();
+      rmSync(tmp, { recursive: true, force: true });
+      delete process.env['BABEL_CONFIG_DIR'];
+      delete process.env['BABEL_RUNS_DIR'];
+    }
   });
 
   it('does not emit cancelled after observation run_error settles', async () => {
@@ -1317,65 +1626,86 @@ describe('shared host-run emergency observation errors (mocked authoritative bac
     const port = server.port;
 
     let emergencyAcked = false;
+    let primarySocket: WebSocket | null = null;
     const baseFetch = globalThis.fetch.bind(globalThis);
-    const fetchImpl = hangRpcWhenEmergency(() => emergencyAcked, 'history.lookup', baseFetch);
+    const fetchImpl = hangRpcWhenEmergency(
+      () => emergencyAcked,
+      'history.lookup',
+      wrapFetchForSettledCatalogAfterEmergency(baseFetch, () => emergencyAcked, '*'),
+    );
     const gate = createHostRunEventGate();
     const stdin = new PassThrough();
-    const runPromise = executeSharedProtocolHostRun(
-      {
-        port,
-        projectRoot: tmp,
-        task: 'no late cancel',
-        runId: 'emergency-no-late-cancel',
-        desktopClientId: desktopId,
-        desktopProofKey,
-        stdin,
-        fetchImpl,
-        WebSocketImpl: makeRecoveryStallWebSocket(() => emergencyAcked),
-        observationRpcTimeoutMs: 25,
-        emergencyObservationDeadlineMs: 75,
-      },
-      (event) => {
-        gate.write(event);
-        if (event.type === 'emergency_stop') emergencyAcked = true;
-      },
-    );
+    try {
+      const runPromise = executeSharedProtocolHostRun(
+        {
+          port,
+          projectRoot: tmp,
+          task: 'no late cancel',
+          runId: 'emergency-no-late-cancel',
+          desktopClientId: desktopId,
+          desktopProofKey,
+          stdin,
+          fetchImpl,
+          WebSocketImpl: class extends WebSocket {
+            constructor(url: string | URL, protocols?: string | string[]) {
+              super(url, protocols);
+              primarySocket = this;
+            }
+          } as typeof WebSocket,
+          observationRpcTimeoutMs: 25,
+          emergencyObservationDeadlineMs: 75,
+        },
+        (event) => {
+          gate.write(event);
+          if (event.type === 'emergency_stop') {
+            emergencyAcked = true;
+            setTimeout(() => {
+              try {
+                primarySocket?.close();
+              } catch {
+                /* ignore */
+              }
+            }, 5);
+          }
+        },
+      );
 
-    await gate.waitFor((event) => event.type === 'run_start', 'run_start');
-    await gate.waitFor((event) => event.type === 'thought', 'turn_stream_active');
-    stdin.write(
-      `${JSON.stringify({ decision: 'emergency_admin_stop', host_emergency_token: TOKEN })}\n`,
-    );
-    await gate.waitFor((event) => event.type === 'emergency_stop', 'emergency_stop');
-    await gate.waitFor((event) => event.type === 'run_error', 'observation_run_error');
+      await gate.waitFor((event) => event.type === 'run_start', 'run_start');
+      await gate.waitFor((event) => event.type === 'thought', 'turn_stream_active');
+      stdin.write(
+        `${JSON.stringify({ decision: 'emergency_admin_stop', host_emergency_token: TOKEN })}\n`,
+      );
+      await gate.waitFor((event) => event.type === 'emergency_stop', 'emergency_stop');
+      await gate.waitFor((event) => event.type === 'run_error', 'observation_run_error');
 
-    const code = await runPromise;
-    assert.equal(code, 1);
-    const runErrorCount = gate.events.filter((e) => e.type === 'run_error').length;
-    const cancelledCount = gate.events.filter((e) => e.type === 'cancelled').length;
-    assert.equal(runErrorCount, 1);
-    assert.equal(cancelledCount, 0);
+      const code = await runPromise;
+      assert.equal(code, 1);
+      const runErrorCount = gate.events.filter((e) => e.type === 'run_error').length;
+      const cancelledCount = gate.events.filter((e) => e.type === 'cancelled').length;
+      assert.equal(runErrorCount, 1);
+      assert.equal(cancelledCount, 0);
 
-    await new Promise<void>((resolve, reject) => {
-      let ticks = 0;
-      const pump = () => {
-        ticks += 1;
-        if (ticks >= 64) {
-          resolve();
-          return;
-        }
+      await new Promise<void>((resolve, reject) => {
+        let ticks = 0;
+        const pump = () => {
+          ticks += 1;
+          if (ticks >= 64) {
+            resolve();
+            return;
+          }
+          setImmediate(pump);
+        };
         setImmediate(pump);
-      };
-      setImmediate(pump);
-      setTimeout(() => reject(new Error('late-cancel drain timed out')), 5_000);
-    });
+        setTimeout(() => reject(new Error('late-cancel drain timed out')), 5_000);
+      });
 
-    assert.equal(gate.events.filter((e) => e.type === 'cancelled').length, 0);
-    assert.equal(gate.events.filter((e) => e.type === 'run_error').length, 1);
-
-    await server.stop();
-    rmSync(tmp, { recursive: true, force: true });
-    delete process.env['BABEL_CONFIG_DIR'];
-    delete process.env['BABEL_RUNS_DIR'];
+      assert.equal(gate.events.filter((e) => e.type === 'cancelled').length, 0);
+      assert.equal(gate.events.filter((e) => e.type === 'run_error').length, 1);
+    } finally {
+      await server.stop();
+      rmSync(tmp, { recursive: true, force: true });
+      delete process.env['BABEL_CONFIG_DIR'];
+      delete process.env['BABEL_RUNS_DIR'];
+    }
   });
 });
