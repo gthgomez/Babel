@@ -11,7 +11,7 @@ import {normalizeChatExecutionScope} from './chatExecutionScope.js';
 import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import type { ProviderMessage, ProviderToolCall } from '../runners/base.js';
-import type { ContextCheckpointV1 } from '../runtime/contextCheckpoints.js';
+import type { ContextCheckpoint } from '../runtime/contextCheckpoints.js';
 import type { TerminalOutcome } from '../schemas/agentContracts.js';
 import { writeCheckpointFileSync } from '../utils/atomicCheckpointFile.js';
 import {assertTaskAttemptBinding,type TaskAttemptBinding} from './taskObjectiveLifecycle.js';
@@ -428,7 +428,7 @@ export function rebuildProviderMessagesFromEvents(
     systemPrompt?: string;
     upToSeq?: number;
     /** Production reconstruction must name the durably installed context root. */
-    installedContextCheckpoint?: ContextCheckpointV1;
+    installedContextCheckpoint?: ContextCheckpoint;
   } = {},
 ): ProviderMessage[] {
   const events =
@@ -626,7 +626,7 @@ function isCurrentCompactionGeneration(
   event: Extract<ThreadEvent, { kind: 'compaction_capsule' }>,
   currentOwnershipGeneration: number,
   currentOwnerTurnId: string | undefined,
-  installedContextCheckpoint?: ContextCheckpointV1,
+  installedContextCheckpoint?: ContextCheckpoint,
 ): boolean {
   if (installedContextCheckpoint !== undefined) {
     const lineage = installedContextCheckpoint.installed_lineage;

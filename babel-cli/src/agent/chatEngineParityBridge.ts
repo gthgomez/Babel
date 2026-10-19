@@ -86,7 +86,7 @@ import {
   type FailoverDecision,
 } from './providerCapabilities.js';
 import type { PolicyEvent } from './policyEventLog.js';
-import type { ContextCheckpointV1 } from '../runtime/contextCheckpoints.js';
+import type { ContextCheckpoint } from '../runtime/contextCheckpoints.js';
 import type { AdmissionStore } from '../runtime/admission.js';
 import {
   dualWriteBudgetSnapshot,
@@ -136,7 +136,7 @@ export interface ParityRuntime {
   /** H2: last projected LiveSession (rebuilt on resume). */
   liveSession?: import('./liveSession.js').LiveSessionV1;
   /** P11: the last fully prepared context generation installed atomically. */
-  contextCheckpoint?: ContextCheckpointV1;
+  contextCheckpoint?: ContextCheckpoint;
   /** Independent durable session membership for model-readable observations. */
   authorizedObservationIds?: Set<string>;
   /** P05 durable owner record; injected by the authorized host, never created here. */

@@ -7,9 +7,8 @@ import {
   type ObservationRefV1,
 } from '../evidence/observationStore.js';
 import { ContextPreparationError } from './chatContextFailure.js';
-import { RevisionManager } from '../evidence/revisionBoundReceipt.js';
 import { evaluateChatVerifierReceiptCurrencySync } from '../evidence/chatRevisionBinding.js';
-import { canonicalizeContained, isPathInsideRoot } from '../bridge/workspaceBound.js';
+import { canonicalizeContained } from '../bridge/workspaceBound.js';
 import type { ChatEngineOptions, ChatTaskAllowanceSnapshot } from './chatEngine.js';
 import type { ChatExecutionProfile } from './chatEngineServices.js';
 import type { ChatTaskClass } from '../config/chatTaskClass.js';
@@ -18,14 +17,14 @@ import type { ChatToolAction } from './chatToolDefinitions.js';
 import { chatActionToolName } from './chatToolDefinitions.js';
 import {
   installContextCheckpoint,
-  prepareContextCheckpoint,
+  prepareConversationCheckpoint,
   validateContextCheckpoint,
   type ContextCheckpointLineageEvidenceV1,
-  type ContextCheckpointV1,
+  type ContextCheckpoint,
   type ContextCheckpointInstalledLineageV1,
   type ContextCheckpointOwnerV1,
   type ContextCheckpointPreparationInputV1,
-  type ContextCheckpointPreparationResultV1,
+  type ContextCheckpointPreparationResult,
   type LiveOperationalSourcesV1,
 } from '../runtime/contextCheckpoints.js';
 import type { AdmissionStore } from '../runtime/admission.js';
@@ -378,7 +377,7 @@ export class ChatEngineP11Authority {
 
   /**
    * R1/T5: side-effect-free candidate of THIS turn's context checkpoint.
-   * `prepareContextCheckpoint` is documented as detached — preparation never
+   * `prepareConversationCheckpoint` is detached — preparation never
    * installs — so the candidate only roots the pre-install rebuild that
    * computes this turn's compiled request identity. It never dispatches on its
    * own: only `installP11ContextCheckpoint` swaps the durable authority, and it
@@ -390,7 +389,7 @@ export class ChatEngineP11Authority {
   prepareP11ContextCheckpointCandidate(route: {
     tool_profile: string;
     model_route: string;
-  }): ContextCheckpointPreparationResultV1 | null {
+  }): ContextCheckpointPreparationResult | null {
     // A5 fence (same as install): the candidate is rooted in THIS engine's own
     // admitted identity — never a synthetic owner.
     const owner = this.currentP11Owner();
@@ -400,7 +399,7 @@ export class ChatEngineP11Authority {
       compiled_request_identity: PENDING_COMPILED_REQUEST_IDENTITY,
     });
     if (!sources) return null;
-    const prepared = prepareContextCheckpoint(this.p11CheckpointPreparationInput(owner, sources));
+    const prepared = prepareConversationCheckpoint(this.p11CheckpointPreparationInput(owner, sources));
     return prepared.status === 'prepared' ? prepared : null;
   }
 
@@ -424,46 +423,15 @@ export class ChatEngineP11Authority {
     }
   }
 
-  private workspaceCaptureFailure = 'Git revision or physical input capture unavailable';
-
-  private currentP11Workspace(): ReturnType<typeof RevisionManager.computeRevisionSync> | null {
-    if (!this.host.options.projectRoot) return null;
-    this.workspaceCaptureFailure = 'Git revision or physical input capture unavailable';
-    try {
-      const workspace = RevisionManager.computeRevisionSync(this.host.options.projectRoot, [], {
-        scope_kind: 'repository',
-        git_binding: 'optional',
-        onCaptureFailure: reason => { this.workspaceCaptureFailure = reason; },
-      });
-      // Optional capture returns unknown provenance when physical proof fails.
-      // Its nonce digest cannot authorize current workspace or coverage refs.
-      return workspace.gitCommitHash ? workspace : null;
-    } catch {
-      return null;
-    }
-  }
-
-  /** Capture before summarization; recheck the same owner and physical bytes at commit. */
+  /** Conversation recovery is fenced by admitted ownership, never repository capture. */
   prepareCompactionGuard(): () => boolean {
-    const projectRoot = this.host.options.projectRoot;
-    if (!projectRoot) {
-      throw new ContextPreparationError('', 'workspace_revision',
-        `workspace snapshot unavailable (${this.workspaceCaptureFailure})`, this.host.engineRunDir);
-    }
-    if (isPathInsideRoot(projectRoot, this.host.engineRunDir)) {
-      throw new ContextPreparationError(projectRoot, 'runtime_evidence_overlap',
-        'runtime evidence changes the captured repository; set BABEL_RUNS_DIR to a directory outside the selected project before retrying', this.host.engineRunDir);
-    }
-    const workspace = this.currentP11Workspace();
-    if (!workspace) throw new ContextPreparationError(projectRoot,
-      'workspace_revision', `workspace snapshot unavailable (${this.workspaceCaptureFailure})`, this.host.engineRunDir);
     const owner = this.currentP11Owner();
-    if (!owner) throw new ContextPreparationError(projectRoot,
+    if (!owner) throw new ContextPreparationError(this.host.options.projectRoot ?? '',
       'owner_unavailable', 'context owner unavailable', this.host.engineRunDir);
     return () => {
       const currentOwner = this.currentP11Owner();
       if (!currentOwner || currentOwner.generation !== owner.generation || currentOwner.token !== owner.token) return false;
-      return this.currentP11Workspace()?.compositeTreeHash === workspace.compositeTreeHash;
+      return true;
     };
   }
 
@@ -476,7 +444,6 @@ export class ChatEngineP11Authority {
     const taskId = this.host.parity.liveAuthority?.taskContract.task_id ?? this.host.engineRunId;
     const operationId = meta.idempotencyKey;
     const turnId = this.host.parity.turnId ?? `turn-${this.host._turnIndex}`;
-    const workspace = this.currentP11Workspace();
     const logEntry = [...this.host.toolCallLog]
       .reverse()
       .find((entry) => entry.index === meta.index && entry.tool === chatActionToolName(action));
@@ -500,12 +467,6 @@ export class ChatEngineP11Authority {
           policy_version: 'babel-chat-model-readable-v1',
           redaction_policy_version: 'babel-chat-redaction-v1',
         },
-        ...(workspace
-          ? {
-              snapshot_ref: workspace.compositeTreeHash,
-              coverage_ref: workspace.compositeTreeHash,
-            }
-          : {}),
         ...(previousObservation ? { previous_observation: previousObservation } : {}),
       },
       {
@@ -533,7 +494,6 @@ export class ChatEngineP11Authority {
     routeOverride?: NonNullable<LiveOperationalSourcesV1['route']>,
   ): LiveOperationalSourcesV1 | null {
     const authority = this.host.parity.liveAuthority;
-    const workspace = this.currentP11Workspace();
     const allowance = this.host.taskAllowance;
     const latestInput = [...this.host.parity.sessionEvents.events]
       .reverse()
@@ -547,7 +507,7 @@ export class ChatEngineP11Authority {
           }
         : null
     );
-    if (!authority || !workspace || !allowance || !route) {
+    if (!authority || !allowance || !route) {
       return null;
     }
     const interrupted = interruptedToolRecoveries(this.host.parity.sessionEvents).map((item) => ({
@@ -606,13 +566,7 @@ export class ChatEngineP11Authority {
         contract_hash: authority.taskContract.contract_hash,
       },
       working_state: workingState,
-      workspace: {
-        current_snapshot_revision: workspace.compositeTreeHash,
-        capture_complete: true,
-        coverage_ref: workspace.compositeTreeHash,
-        capture_provenance: 'current_capture',
-        capture_epoch: `${workspace.capturedAt}:${workspace.compositeTreeHash}`,
-      },
+      workspace: null,
       receipts,
       budget: {
         owner: allowance.taskOwnerId,
@@ -662,13 +616,10 @@ export class ChatEngineP11Authority {
     if (!sources) {
       const missing = [
         !this.host.parity.liveAuthority ? 'live_authority' : null,
-        !this.currentP11Workspace() ? 'workspace_revision' : null,
         !this.host.taskAllowance ? 'task_allowance' : null,
         !(routeOverride ?? null) ? 'route_identity' : null,
       ].filter((item): item is string => item !== null);
-      this.noteP11InstallBlock('sources_unavailable', [...missing,
-        ...(missing.includes('workspace_revision') ? [`workspace_capture: ${this.workspaceCaptureFailure}`] : []),
-      ]);
+      this.noteP11InstallBlock('sources_unavailable', missing);
       return false;
     }
     // A5 fence: the claimed owner is THIS engine's own admitted identity
@@ -690,7 +641,7 @@ export class ChatEngineP11Authority {
     // Same checkpoint id / epoch / lineage derivation as the R1/T5 candidate
     // prepare (p11CheckpointPreparationInput), now with the REAL compiled
     // request identity computed from this turn's rebuilt messages.
-    const prepared = prepareContextCheckpoint(this.p11CheckpointPreparationInput(owner, sources));
+    const prepared = prepareConversationCheckpoint(this.p11CheckpointPreparationInput(owner, sources));
     if (prepared.status !== 'prepared') {
       this.noteP11InstallBlock('prepare_blocked', [
         ...prepared.reasons,
@@ -807,7 +758,7 @@ export class ChatEngineP11Authority {
     try {
       const checkpoint = JSON.parse(
         readFileSync(checkpointPath, "utf8"),
-      ) as ContextCheckpointV1;
+      ) as ContextCheckpoint;
       const durableOwner =
         this.host.parity.admissionStore?.readOwner(threadId) ?? null;
       const lineageEvidence: ContextCheckpointLineageEvidenceV1 = {

@@ -94,13 +94,7 @@ function sourcesWithManifest(
       unresolved_failures: [],
       next_experiment: 'install through the existing checkpoint transaction',
     },
-    workspace: {
-      current_snapshot_revision: 'snapshot-install-diagnostics',
-      capture_complete: true,
-      coverage_ref: 'coverage-install-diagnostics',
-      capture_provenance: 'current_capture',
-      capture_epoch: 'capture-install-diagnostics',
-    },
+    workspace: null,
     receipts: [
       {
         receipt_id: 'receipt-install-diagnostics',
@@ -146,7 +140,7 @@ interface Harness {
 
 function makeHarness(): Harness {
   const root = mkdtempSync(join(tmpdir(), 'p11-install-diagnostics-'));
-  // A present workspace prerequisite must supply actual physical Git proof.
+  // Keep the Git-project fixture while conversation authority carries no coverage claim.
   writeFileSync(join(root, 'README.md'), 'fixture repository\n');
   execFileSync('git', ['init', '-q'], { cwd: root, windowsHide: true });
   execFileSync('git', ['add', 'README.md'], { cwd: root, windowsHide: true });
@@ -248,8 +242,7 @@ test('sources_unavailable records which prerequisite is missing', async () => {
 test('buildP11Sources-null with authority present names the remaining gaps', async () => {
   const h = makeHarness();
   // Authority exists on the harness parity stub and a route override is
-  // given, so a null from buildP11Sources can only come from the workspace
-  // revision / task allowance prerequisites.
+  // given, so refusal must not invent a repository-capture prerequisite.
   h.setSources(null);
   const installed = await h.authority.installP11ContextCheckpoint({
     compiled_request_identity: 'request-x',
@@ -259,10 +252,11 @@ test('buildP11Sources-null with authority present names the remaining gaps', asy
   assert.equal(installed, false);
   assert.equal(h.host.p11InstallBlock?.code, 'sources_unavailable');
   // The refusal is always recorded; the re-derived gap list is only filled
-  // when one of the known prerequisites (live authority, workspace revision,
-  // task allowance, route identity) is itself absent. A stub that refuses
+  // when one of the known prerequisites (live authority, task allowance,
+  // route identity) is itself absent. A stub that refuses
   // with all prerequisites present yields an empty, non-misleading list.
   assert.ok(Array.isArray(h.host.p11InstallBlock.details));
+  assert.equal(h.host.p11InstallBlock.details.includes('workspace_revision'), false);
   rmSync(h.host.engineRunDir, { recursive: true, force: true });
 });
 

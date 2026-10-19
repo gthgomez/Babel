@@ -6,7 +6,9 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  rmdirSync,
   rmSync,
+  truncateSync,
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
@@ -20,6 +22,8 @@ import type { ChatEvent } from './chatEngine.js';
 import { persistTranscriptToDisk } from './chatEngineObservability.js';
 import { getBackgroundShellJob, killAllBackgroundShells } from './backgroundShell.js';
 import type { ChatMessage } from './chatToolDefinitions.js';
+import { CompactionManager } from './chatCompaction.js';
+import { recordUserMessage } from './threadEventLog.js';
 import type { ResolvedModelPolicy } from '../modelPolicy.js';
 import { buildProviderFailureReceipt } from '../runners/providerFailureReceipt.js';
 import type { RunnerCallbacks } from '../runners/base.js';
@@ -31,6 +35,7 @@ import { chatSessionDir, openSessionAdmissionStore } from '../cli/runsLayout.js'
 import type { AdmissionStore } from '../runtime/admission.js';
 import {
   inspectSessionEventLogFromDir,
+  recordBudgetSnapshot,
   type SessionEvent,
 } from './sessionEvents.js';
 
@@ -153,7 +158,7 @@ function readEvents(runId: string): SessionEvent[] {
   return loaded.kind === 'valid' ? loaded.log.events : [];
 }
 
-/** Compaction installs P11 only when the project has a captured Git commit. */
+/** Selected fixtures also exercise the independent repository-evidence path. */
 function commitCapturedProject(project: string): void {
   writeFileSync(join(project, 'fixture.txt'), 'lifecycle fixture\n');
   for (const args of [
@@ -658,42 +663,248 @@ describe('ChatEngine lifecycle and crash qualification', { concurrency: false },
     }
   });
 
-  test('final prepared-request admission compacts once and retries the rebuilt request', async () => {
+  for (const capture of ['clean', 'empty-env', 'oversized', 'non-git', 'linked', 'runtime-overlap'] as const) {
+    test(`final prepared-request admission compacts once and retries the rebuilt request with ${capture}`, async () => {
+      const fixture = makeFixture();
+      if (capture !== 'non-git') commitCapturedProject(fixture.project);
+      if (capture === 'empty-env') writeFileSync(join(fixture.project, '.env'), '');
+      if (capture === 'oversized') {
+        writeFileSync(join(fixture.project, 'unrelated.apk'), '');
+        truncateSync(join(fixture.project, 'unrelated.apk'), 1_000_001);
+      }
+      let selectedProject = fixture.project;
+      if (capture === 'linked') {
+        selectedProject = join(fixture.root, 'linked');
+        const worktree = spawnSync('git', ['worktree', 'add', '--detach', selectedProject, 'HEAD'], {
+          cwd: fixture.project, windowsHide: true,
+        });
+        assert.equal(worktree.status, 0, worktree.stderr?.toString());
+      }
+      if (capture === 'runtime-overlap') {
+        process.env['BABEL_RUNS_DIR'] = join(fixture.project, 'runtime-runs');
+        mkdirSync(process.env['BABEL_RUNS_DIR'], { recursive: true });
+      }
+      const runId = `prepared-admission-${capture}`;
+      let admissionStore: AdmissionStore | undefined;
+      try {
+        process.env['BABEL_COMPACTION'] = 'off';
+        let recoveryPhase = false;
+        let failedCeiling: number | undefined;
+        let calls = 0;
+        const runner: TestRunner = {
+          async *executeWithToolsStream() {
+            if (!recoveryPhase) {
+              yield { type: 'text_delta', text: 'retained fact: ' + 'synthetic lifecycle evidence. '.repeat(600) };
+              yield { type: 'done', finishReason: 'stop' };
+              return;
+            }
+            calls += 1;
+            const body = engine.buildNativeCompactionAdmissionWireBody();
+            const input = {
+              body, mode: 'native' as const, provider: 'deepinfra',
+              requestedModelId: FIXTURE_PROVIDER_POLICY.providerModelId!,
+              reservedCompletionTokens: fixtureNativeWireHooks.getNativeRequestReservedCompletionTokens(),
+            };
+            if (calls === 1) {
+              const unbounded = prepareProviderRequest({ ...input, contextLimitTokens: null });
+              assert.ok(unbounded.accounting.estimated_total_tokens !== null);
+              failedCeiling = unbounded.accounting.estimated_total_tokens - 2000;
+              const overLimit = prepareProviderRequest({ ...input, contextLimitTokens: failedCeiling,
+                requestId: 'request-over-limit', attemptId: 'attempt-over-limit' });
+              assert.equal(overLimit.admission, 'over_limit');
+              throw new PreparedRequestAdmissionError(overLimit);
+            }
+            assert.ok(failedCeiling !== undefined);
+            const rebuilt = prepareProviderRequest({ ...input, contextLimitTokens: failedCeiling });
+            assert.equal(rebuilt.admission, 'qualified', 'the retry must fit the same ceiling that rejected the first request');
+            yield { type: 'text_delta', text: 'rebuilt request admitted' };
+            yield { type: 'done', finishReason: 'stop' };
+          },
+          async execute() { return { type: 'completion', answer: 'fixture complete' }; },
+          async executeRaw() { return 'fixture complete'; },
+          getLastInvocationMetadata() { return null; },
+          ...fixtureNativeWireHooks,
+        };
+        mkdirSync(fixture.runs, { recursive: true });
+        const opened = openSessionAdmissionStore(runId);
+        if (!opened.ok) throw new Error(opened.detail);
+        admissionStore = opened.store;
+        const engine = makeEngine(selectedProject, runId, runner, {
+          admissionStore,
+          maxConversationMessages: 80,
+          maxEstimatedTokens: 128_000,
+          maxTurns: 16,
+          operation: 'READ_ONLY',
+        });
+        // Accumulate real durable messages: replacing only the live array would
+        // leave the native wire history empty and would not prove request recovery.
+        for (let index = 0; index < 4; index += 1) {
+          const warmup = await collectStream(engine.submitMessageStream(`explain retained facts turn ${index}`, 'explain'));
+          assert.equal(warmup.at(-1)?.type, 'done');
+          assert.equal(warmup.some(event => event.type === 'context_compacted'), false);
+        }
+        recoveryPhase = true;
+
+        const events = await collectStream(engine.submitMessageStream('explain the retained facts', 'explain'));
+        assert.equal(calls, 2, `admission recovery must issue one rebuilt attempt: ${JSON.stringify(events)}`);
+        assert.ok(events.some((event) => event.type === 'context_compacted'));
+        assert.equal(events.filter(event => event.type === 'context_compacted').length, 1);
+        assert.ok(events.some((event) => event.type === 'done' && event.answer.includes('rebuilt request admitted')));
+        const checkpoint = engine.getParityRuntime().contextCheckpoint;
+        assert.equal(checkpoint?.schema_version, 2);
+        assert.equal(checkpoint?.workspace, null);
+        assert.equal(checkpoint?.population.workspace_revision_current, false);
+        assert.ok(checkpoint?.installed_lineage?.compaction_commit_event_id);
+      } finally {
+        admissionStore?.close();
+        fixture.cleanup();
+      }
+    });
+  }
+
+  for (const change of ['replacement', 'in-place edit', 'durable append', 'budget append'] as const) {
+    test(`compaction source continuity handles ${change} during asynchronous summarization`, async () => {
+      const fixture = makeFixture();
+      let admissionStore: AdmissionStore | undefined;
+      try {
+        process.env['BABEL_COMPACTION'] = 'off';
+        mkdirSync(fixture.runs, { recursive: true });
+        const opened = openSessionAdmissionStore(`source-${change.replaceAll(' ', '-')}`);
+        if (!opened.ok) throw new Error(opened.detail);
+        admissionStore = opened.store;
+        let probe = false;
+        let outcome: unknown = 'not-run';
+        let sourceRetained = false;
+        let capsulesAfterProbe = -1;
+        let probes = 0;
+        const replacement: ChatMessage[] = [{ role: 'user', content: 'replacement conversation sentinel' }];
+        const runner: TestRunner = {
+          async *executeWithToolsStream() {
+            if (probe && probes++ === 0) {
+              const internal = engine as unknown as {
+                activeSubmissionGeneration: number;
+                compactIfNeeded: (callbacks: undefined, force: boolean, generation: number) => Promise<unknown>;
+              };
+              outcome = await internal.compactIfNeeded(undefined, true, internal.activeSubmissionGeneration);
+              const live = (engine as unknown as { conversation: ChatMessage[] }).conversation;
+              sourceRetained = change === 'replacement' ? live === replacement
+                : change === 'in-place edit' ? live.some(message => message.content.includes('in-place sentinel'))
+                : engine.getParityEventLog().events.some(event => event.kind === 'user_message' && event.content === 'durable sentinel');
+              capsulesAfterProbe = engine.getParityEventLog().events.filter(event => event.kind === 'compaction_capsule').length;
+            }
+            yield { type: 'text_delta', text: probe ? 'The continuity probe finished.' : 'retained facts '.repeat(700) };
+            yield { type: 'done', finishReason: 'stop' };
+          },
+          async execute() { return { type: 'completion', answer: 'fixture complete' }; },
+          async executeRaw() { return 'fixture complete'; },
+          getLastInvocationMetadata() { return null; },
+          ...fixtureNativeWireHooks,
+        };
+        const engine = makeEngine(fixture.project, `source-${change.replaceAll(' ', '-')}`, runner, {
+          admissionStore, operation: 'READ_ONLY', maxConversationMessages: 80,
+          maxEstimatedTokens: 128_000, maxTurns: 16,
+        });
+        for (let index = 0; index < 4; index++) {
+          const warmup = await collectStream(engine.submitMessageStream(`explain retained facts ${index}`, 'explain'));
+          assert.equal(warmup.at(-1)?.type, 'done');
+        }
+        Object.assign(engine, { compactionManager: new CompactionManager([{
+          name: 'llm-summarize', canApply: () => true,
+          compact: async messages => {
+            await new Promise<void>(resolve => setImmediate(resolve));
+            const parity = engine.getParityRuntime();
+            if (change === 'replacement') engine.replaceConversation(replacement);
+            if (change === 'in-place edit') engine.getConversation()[0]!.content += ' in-place sentinel';
+            if (change === 'durable append') recordUserMessage(parity.eventLog, parity.turnId!, 'durable sentinel');
+            if (change === 'budget append') recordBudgetSnapshot(parity.sessionEvents, parity.turnId, { tokens_used: 10 });
+            return [{ role: 'system', name: 'compaction_summary', content: 'Earlier retained facts.' }, ...messages.slice(-2)];
+          },
+        }]) });
+        probe = true;
+        await collectStream(engine.submitMessageStream('explain the retained facts', 'explain'));
+        assert.ok(probes > 0);
+        if (change === 'budget append') {
+          assert.notEqual(outcome, null, 'ordinary accounting must not block conversation compaction');
+          assert.notEqual(outcome, 'not-run');
+          assert.equal(capsulesAfterProbe, 1);
+        } else {
+          assert.equal(outcome, null, 'foreign conversation changes must invalidate compaction');
+          assert.equal(sourceRetained, true, 'rejecting compaction must preserve the newer source');
+          assert.equal(capsulesAfterProbe, 0, 'a rejected candidate must not leave a capsule');
+        }
+      } finally {
+        admissionStore?.close();
+        fixture.cleanup();
+      }
+    });
+  }
+
+  for (const change of ['persistence failure', 'durable append', 'durable append with persistence failure', 'replacement', 'in-place edit'] as const) test(`inline heuristic rollback preserves the actual engine conversation after ${change}`, async () => {
     const fixture = makeFixture();
-    commitCapturedProject(fixture.project);
     let admissionStore: AdmissionStore | undefined;
     try {
       process.env['BABEL_COMPACTION'] = 'off';
-      let recoveryPhase = false;
-      let failedCeiling: number | undefined;
-      let calls = 0;
+      mkdirSync(fixture.runs, { recursive: true });
+      const runId = 'heuristic-persistence-rollback';
+      const opened = openSessionAdmissionStore(runId);
+      if (!opened.ok) throw new Error(opened.detail);
+      admissionStore = opened.store;
+      let probe = false;
+      let probed = false;
+      let pruned = false;
+      let rejected = false;
+      let sourceRestored = false;
+      let newerWindow = '';
       const runner: TestRunner = {
         async *executeWithToolsStream() {
-          if (!recoveryPhase) {
-            yield { type: 'text_delta', text: 'retained fact: ' + 'synthetic lifecycle evidence. '.repeat(600) };
-            yield { type: 'done', finishReason: 'stop' };
-            return;
+          if (probe && !probed) {
+            probed = true;
+            const internal = engine as unknown as {
+              conversation: ChatMessage[];
+              limits: { maxConversationMessages: number };
+              activeSubmissionGeneration: number;
+              compactConversation: () => void;
+              compactIfNeeded: (callbacks: undefined, force: boolean, generation: number) => Promise<unknown>;
+            };
+            const prior = JSON.stringify(internal.conversation);
+            const compact = internal.compactConversation.bind(engine);
+            internal.compactConversation = () => {
+              compact();
+              pruned = JSON.stringify(internal.conversation) !== prior;
+              if (change !== 'persistence failure') queueMicrotask(() => {
+                if (change.startsWith('durable append')) {
+                  const parity = engine.getParityRuntime();
+                  recordUserMessage(parity.eventLog, parity.turnId!, 'late durable sentinel');
+                } else if (change === 'replacement') {
+                  internal.conversation = [{ role: 'user', content: 'newer replacement sentinel' }];
+                  newerWindow = JSON.stringify(internal.conversation);
+                } else {
+                  internal.conversation.push({ role: 'user', content: 'newer in-place sentinel' });
+                  newerWindow = JSON.stringify(internal.conversation);
+                }
+              });
+            };
+            internal.limits.maxConversationMessages = 4;
+            const eventPath = join(chatSessionDir(runId), 'session-events.jsonl');
+            const priorBytes = readFileSync(eventPath);
+            const failPersistence = change.includes('persistence failure');
+            if (failPersistence) {
+              unlinkSync(eventPath);
+              mkdirSync(eventPath);
+            }
+            try {
+              await internal.compactIfNeeded(undefined, true, internal.activeSubmissionGeneration);
+            } catch {
+              rejected = true;
+            } finally {
+              sourceRestored = JSON.stringify(internal.conversation) === (newerWindow || prior);
+              if (failPersistence) {
+                rmdirSync(eventPath);
+                writeFileSync(eventPath, priorBytes);
+              }
+            }
           }
-          calls += 1;
-          const body = engine.buildNativeCompactionAdmissionWireBody();
-          const input = {
-            body, mode: 'native' as const, provider: 'deepinfra',
-            requestedModelId: FIXTURE_PROVIDER_POLICY.providerModelId!,
-            reservedCompletionTokens: fixtureNativeWireHooks.getNativeRequestReservedCompletionTokens(),
-          };
-          if (calls === 1) {
-            const unbounded = prepareProviderRequest({ ...input, contextLimitTokens: null });
-            assert.ok(unbounded.accounting.estimated_total_tokens !== null);
-            failedCeiling = unbounded.accounting.estimated_total_tokens - 2000;
-            const overLimit = prepareProviderRequest({ ...input, contextLimitTokens: failedCeiling,
-              requestId: 'request-over-limit', attemptId: 'attempt-over-limit' });
-            assert.equal(overLimit.admission, 'over_limit');
-            throw new PreparedRequestAdmissionError(overLimit);
-          }
-          assert.ok(failedCeiling !== undefined);
-          const rebuilt = prepareProviderRequest({ ...input, contextLimitTokens: failedCeiling });
-          assert.equal(rebuilt.admission, 'qualified', 'the retry must fit the same ceiling that rejected the first request');
-          yield { type: 'text_delta', text: 'rebuilt request admitted' };
+          yield { type: 'text_delta', text: probe ? 'The rollback probe finished.' : 'retained facts '.repeat(700) };
           yield { type: 'done', finishReason: 'stop' };
         },
         async execute() { return { type: 'completion', answer: 'fixture complete' }; },
@@ -701,31 +912,21 @@ describe('ChatEngine lifecycle and crash qualification', { concurrency: false },
         getLastInvocationMetadata() { return null; },
         ...fixtureNativeWireHooks,
       };
-      mkdirSync(fixture.runs, { recursive: true });
-      const opened = openSessionAdmissionStore('prepared-admission');
-      if (!opened.ok) throw new Error(opened.detail);
-      admissionStore = opened.store;
-      const engine = makeEngine(fixture.project, 'prepared-admission', runner, {
-        admissionStore,
-        maxConversationMessages: 80,
-        maxEstimatedTokens: 128_000,
-        maxTurns: 16,
-        operation: 'READ_ONLY',
+      const engine = makeEngine(fixture.project, runId, runner, {
+        admissionStore, operation: 'READ_ONLY', maxConversationMessages: 80,
+        maxEstimatedTokens: 128_000, maxTurns: 16,
       });
-      // Accumulate real durable messages: replacing only the live array would
-      // leave the native wire history empty and would not prove request recovery.
-      for (let index = 0; index < 4; index += 1) {
-        const warmup = await collectStream(engine.submitMessageStream(`explain retained facts turn ${index}`, 'explain'));
-        assert.equal(warmup.at(-1)?.type, 'done');
-        assert.equal(warmup.some(event => event.type === 'context_compacted'), false);
+      for (let index = 0; index < 4; index++) await collectStream(engine.submitMessageStream(`explain retained facts ${index}`, 'explain'));
+      probe = true;
+      await collectStream(engine.submitMessageStream('explain the retained facts', 'explain'));
+      assert.equal(probed, true);
+      assert.equal(pruned, true, 'the real inline heuristic must change the live window before the injected failure');
+      assert.equal(rejected, change.includes('persistence failure'), 'actual persistence failures must remain visible');
+      assert.equal(sourceRestored, true, 'restore only the owned window, preserving any newer replacement or in-place edit');
+      assert.equal(engine.getParityEventLog().events.some(event => event.kind === 'compaction_capsule'), false);
+      if (change.startsWith('durable append')) {
+        assert.ok(engine.getParityEventLog().events.some(event => event.kind === 'user_message' && event.content === 'late durable sentinel'));
       }
-      recoveryPhase = true;
-
-      const events = await collectStream(engine.submitMessageStream('explain the retained facts', 'explain'));
-      assert.equal(calls, 2, `admission recovery must issue one rebuilt attempt: ${JSON.stringify(events)}`);
-      assert.ok(events.some((event) => event.type === 'context_compacted'));
-      assert.equal(events.filter(event => event.type === 'context_compacted').length, 1);
-      assert.ok(events.some((event) => event.type === 'done' && event.answer.includes('rebuilt request admitted')));
     } finally {
       admissionStore?.close();
       fixture.cleanup();

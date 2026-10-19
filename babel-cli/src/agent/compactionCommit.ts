@@ -11,6 +11,7 @@
 
 import { createHash, randomUUID } from 'node:crypto';
 import type { ChatMessage } from './chatCompaction.js';
+import { captureCompactionOwnedEvents, type CompactionOwnedEvents } from './compactionSourceContinuity.js';
 import { CompactionManager, HeuristicTruncationStrategy, estimateTokens, resolveCompactionModelId } from './chatCompaction.js';
 import type { ProviderToolCall, RunnerCallbacks } from '../runners/base.js';
 import { LIVE_OPENROUTER_MODEL_ID } from '../modelPolicy.js';
@@ -97,6 +98,8 @@ export interface CompactionCommitInput {
   blockOnPersistFailure?: boolean;
   /** Ownership fence checked before any live or durable mutation. */
   isOwnerCurrent?: () => boolean;
+  /** Live conversation/event source, excluding only immutable owned appends. */
+  isSourceCurrent?: (owned: CompactionOwnedEvents) => boolean;
   /** Synchronous acceptance check after event append, before persistence. */
   validateCommit?: (conversation: ChatMessage[]) => boolean;
 }
@@ -122,6 +125,8 @@ export interface CompactionCommitResult {
    * `status: 'committed'`.
    */
   capsuleCheckpointId?: string;
+  /** Ephemeral source-fence proof for the final host-to-engine assignment. */
+  sourceOwnership?: CompactionOwnedEvents;
   /**
    * Packet A5: inclusive message ranges of the prior conversation replaced by
    * the compacted context. Present only on `status: 'committed'`.
@@ -602,7 +607,10 @@ function ownershipGenerationForTurn(threadLog: ThreadEventLog, turnId: string): 
 export async function commitCompaction(
   input: CompactionCommitInput,
 ): Promise<CompactionCommitResult> {
-  if (input.isOwnerCurrent && !input.isOwnerCurrent()) {
+  let sourceOwnership: CompactionOwnedEvents = { thread: [], session: [] };
+  const isCurrent = (): boolean => (!input.isOwnerCurrent || input.isOwnerCurrent())
+    && (!input.isSourceCurrent || input.isSourceCurrent(sourceOwnership));
+  if (!isCurrent()) {
     return {
       status: 'noop',
       conversation: input.priorConversation.map((message) => ({ ...message })),
@@ -753,7 +761,7 @@ export async function commitCompaction(
   };
 
   try {
-    if (input.isOwnerCurrent && !input.isOwnerCurrent()) {
+    if (!isCurrent()) {
       return {
         status: 'noop',
         conversation: input.priorConversation.map((message) => ({ ...message })),
@@ -826,7 +834,10 @@ export async function commitCompaction(
       tokens_after: tokensAfter,
       status: 'committed',
     }).event_id);
-    if (input.validateCommit && !input.validateCommit(conversation)) {
+    sourceOwnership = captureCompactionOwnedEvents(
+      input.threadLog, input.sessionLog, ownedThreadEventIds, ownedSessionEventIds,
+    );
+    if ((input.validateCommit && !input.validateCommit(conversation)) || !isCurrent()) {
       rollbackLocalEvents();
       return {
         status: 'noop',
@@ -864,7 +875,7 @@ export async function commitCompaction(
 
   if (input.persist) {
     try {
-      if (input.isOwnerCurrent && !input.isOwnerCurrent()) {
+      if (!isCurrent()) {
         rollbackLocalEvents();
         return {
           status: 'noop',
@@ -905,7 +916,7 @@ export async function commitCompaction(
             : 'persist_returned_false_and_rollback_failed',
         };
       }
-      if (input.isOwnerCurrent && !input.isOwnerCurrent()) {
+      if (!isCurrent()) {
         const rollbackPersisted = await rollbackAndPersist();
         if (!rollbackPersisted) {
           return {
@@ -977,6 +988,7 @@ export async function commitCompaction(
     ...(sessionEventId !== undefined ? { sessionEventId } : {}),
     // Packet A5: recoverability pointers for the condensation fact.
     capsuleCheckpointId: operationId,
+    sourceOwnership,
     prunedMessageRanges: [
       { from: 0, to: Math.max(input.priorConversation.length - 1, 0) },
     ],
@@ -1022,6 +1034,7 @@ export interface ChatEngineCompactionHost {
   lastVerifierReceipt?: {
     command: string;
     exit_code: number;
+    stale?: boolean;
     boundRevision?: { compositeTreeHash?: string } | null;
   } | null;
   progress: {
@@ -1052,6 +1065,7 @@ export interface ChatEngineCompactionHost {
   /** Throws before paid work; validates capture/owner again before durable pruning. */
   prepareContextGuard?: () => (() => boolean);
   isOwnerCurrent?: () => boolean;
+  isSourceCurrent?: (owned?: CompactionOwnedEvents) => boolean;
   /**
    * Packet A5: when provided, every compaction attempt emits a strict
    * `context.condensation.started` / `completed` fact pair through this
@@ -1237,13 +1251,12 @@ function operationalStateFor(host: ChatEngineCompactionHost): CompactionOperatio
       ? `${host.lastVerifierReceipt.command}→${host.lastVerifierReceipt.exit_code}`
       : '',
     verifierFreshness: boundRevStr
-      ? `revision=${boundRevStr}`
+      ? `${host.lastVerifierReceipt?.stale ? 'stale' : 'currency_not_established'} bound_revision=${boundRevStr}`
       : host.lastVerifierReceipt
         ? 'unbound'
         : '',
     recentToolResults: host.toolCallLog.slice(-6).map((entry) => `${entry.tool} ${entry.target}`),
     budgetsSummary: `turns=${host.turnIndex} maxTokens=${host.limits.maxEstimatedTokens}`,
-    workspaceRevision: boundRevStr,
   };
 }
 
@@ -1270,7 +1283,8 @@ export async function runChatEngineCompaction(
     tokenTriggered ||
     tokenEstimate > host.limits.maxEstimatedTokens - reserve;
   const ownerIsCurrent = (): boolean => !host.abortSignal.aborted && (!host.isOwnerCurrent || host.isOwnerCurrent());
-  if (!ownerIsCurrent()) return null;
+  const sourceIsCurrent = (owned?: CompactionOwnedEvents): boolean => !host.isSourceCurrent || host.isSourceCurrent(owned);
+  if (!ownerIsCurrent() || !sourceIsCurrent()) return null;
   const contextStillCurrent = compactionNeeded ? host.prepareContextGuard?.() : undefined;
   // ── Packet A5: condensation-as-event emission (strict started/completed) ──
   const condensation = host.condensationFacts;
@@ -1303,7 +1317,7 @@ export async function runChatEngineCompaction(
     if (completed) condensation.emit(completed);
   };
   const applyHeuristic = async (): Promise<void> => {
-    if (!ownerIsCurrent()) return;
+    if (!ownerIsCurrent() || !sourceIsCurrent()) return;
     const prior = host.conversation.map((message) => ({ ...message }));
     const priorFingerprint = JSON.stringify(host.conversation);
     let ownedConversation = host.conversation;
@@ -1314,7 +1328,7 @@ export async function runChatEngineCompaction(
     host.compactHeuristic();
     ownedConversation = host.conversation;
     try {
-      if (!ownerIsCurrent()) {
+      if (!ownerIsCurrent() || !sourceIsCurrent()) {
         restore();
         return;
       }
@@ -1343,6 +1357,7 @@ export async function runChatEngineCompaction(
         },
         blockOnPersistFailure: true,
         isOwnerCurrent: () => ownsConversation() && (!contextStillCurrent || contextStillCurrent()),
+        isSourceCurrent: sourceIsCurrent,
         validateCommit: (conversation) => {
           const afterRequest = serializedProviderRequestForAdmission(host, conversation);
           const tokensBeforeCommit = host.estimateTokens(prior);
@@ -1370,7 +1385,7 @@ export async function runChatEngineCompaction(
         );
       }
       completeCondensationFact(committed);
-      if (!ownsConversation()) return;
+      if (!ownsConversation() || !sourceIsCurrent(committed.sourceOwnership)) return;
       host.conversation = committed.conversation;
       mode = 'heuristic';
       changed = true;
@@ -1389,7 +1404,7 @@ export async function runChatEngineCompaction(
     ? new CompactionManager([new HeuristicTruncationStrategy()]) : undefined);
   if (compactionManager) {
     if (compactionNeeded) {
-      if (!ownerIsCurrent()) return null;
+      if (!ownerIsCurrent() || !sourceIsCurrent()) return null;
       try {
         const exactLockedGlm =
           host.modelPolicy?.providerModelId === LIVE_OPENROUTER_MODEL_ID;
@@ -1434,10 +1449,10 @@ export async function runChatEngineCompaction(
             : {}),
         };
         let mgr = await compactionManager.compactWithResult(host.conversation, compactionOptions);
-        if (!ownerIsCurrent()) return null;
+        if (!ownerIsCurrent() || !sourceIsCurrent()) return null;
         if (!mgr.changed && (mgr.status === 'noop' || mgr.status === 'cannot_fit')) {
           await applyHeuristic();
-          if (!ownerIsCurrent()) return null;
+          if (!ownerIsCurrent() || !sourceIsCurrent(commit?.sourceOwnership)) return null;
           const afterHeuristic = host.conversation.length;
           if (mode != null && changed) {
             return {
@@ -1471,6 +1486,7 @@ export async function runChatEngineCompaction(
             },
             blockOnPersistFailure: true,
             isOwnerCurrent: () => ownerIsCurrent() && (!contextStillCurrent || contextStillCurrent()),
+            isSourceCurrent: sourceIsCurrent,
             validateCommit: (conversation) => {
               const afterRequest = serializedProviderRequestForAdmission(host, conversation);
               return ownerIsCurrent()
@@ -1487,13 +1503,13 @@ export async function runChatEngineCompaction(
           });
           if (commit.status !== 'committed') {
             if (commit.status === 'noop') {
-              if (!ownerIsCurrent() || (contextStillCurrent && !contextStillCurrent())) return null;
+              if (!ownerIsCurrent() || !sourceIsCurrent() || (contextStillCurrent && !contextStillCurrent())) return null;
               if (!host.recoveryPressure || strategyToCompactMode(mgr.strategy) !== 'llm') return null;
               // Validation rolled back the summary. Try one unpaid candidate;
               // its heuristic strategy cannot re-enter this LLM-only fallback.
               mgr = await new CompactionManager([new HeuristicTruncationStrategy()])
                 .compactWithResult(host.conversation, compactionOptions);
-              if (!ownerIsCurrent()) return null;
+              if (!ownerIsCurrent() || !sourceIsCurrent()) return null;
               continue;
             }
             throw new CompactionPersistenceError(
@@ -1501,7 +1517,7 @@ export async function runChatEngineCompaction(
             )
           }
           completeCondensationFact(commit);
-          if (!ownerIsCurrent()) return null;
+          if (!ownerIsCurrent() || !sourceIsCurrent(commit.sourceOwnership)) return null;
           host.conversation = commit.conversation;
           mode = strategyToCompactMode(commit.strategy);
           changed = true;
@@ -1509,11 +1525,12 @@ export async function runChatEngineCompaction(
         }
       } catch (error) {
         if (error instanceof CompactionPersistenceError) throw error
+        if (!ownerIsCurrent() || !sourceIsCurrent()) return null;
         await applyHeuristic();
       }
     }
   } else if (compactionNeeded) {
-    if (!ownerIsCurrent()) return null;
+    if (!ownerIsCurrent() || !sourceIsCurrent()) return null;
     await applyHeuristic();
   }
 

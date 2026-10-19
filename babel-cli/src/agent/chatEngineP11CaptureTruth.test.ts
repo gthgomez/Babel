@@ -65,21 +65,22 @@ function observe(authority: ChatEngineP11Authority): void {
   )
 }
 
-test('successful physical Git capture installs a valid current checkpoint and recovery binding', async t => {
+test('physical recovery proof stays separate from a conversation checkpoint', async t => {
   const { projectRoot, authority, host, parity } = fixture(t)
   const physical = RevisionManager.computeRevisionSync(projectRoot, [], { scope_kind: 'repository', git_binding: 'optional' })
   assert.ok(physical.gitCommitHash)
   const sources = authority.buildP11Sources(route)
-  assert.ok(sources?.workspace)
-  assert.equal(sources.workspace.capture_complete, true)
-  assert.equal(sources.workspace.capture_provenance, 'current_capture')
-  assert.equal(sources.workspace.current_snapshot_revision, physical.compositeTreeHash)
+  assert.ok(sources)
+  assert.equal(sources.workspace, null, 'conversation preparation does not claim repository coverage')
   assert.ok(authority.currentRecoveryBinding())
   observe(authority)
   assert.equal(host.p11ObservationRefs.length, 1)
-  assert.equal(host.p11ObservationRefs[0]!.snapshot_ref, physical.compositeTreeHash)
+  assert.equal(host.p11ObservationRefs[0]!.snapshot_ref, undefined)
+  assert.equal(host.p11ObservationRefs[0]!.coverage_ref, undefined)
   assert.equal(await authority.installP11ContextCheckpoint(route), true, host.p11InstallBlock?.code)
   assert.ok(parity.contextCheckpoint)
+  assert.equal(parity.contextCheckpoint.schema_version, 2)
+  assert.equal(parity.contextCheckpoint.population.workspace_revision_current, false)
   const owner = authority.currentP11Owner()
   assert.ok(owner)
   assert.equal(validateContextCheckpoint(parity.contextCheckpoint, {
@@ -90,7 +91,7 @@ test('successful physical Git capture installs a valid current checkpoint and re
 })
 
 for (const failure of ['oversized input', 'credential metadata', 'unreadable input'] as const) {
-  test(`${failure}: unavailable physical capture cannot replace installed checkpoint or bind recovery`, async t => {
+  test(`${failure}: conversation continues while physical recovery proof stays unavailable`, async t => {
     const { projectRoot, authority, host, parity } = fixture(t)
     assert.equal(await authority.installP11ContextCheckpoint(route), true)
     const previous = parity.contextCheckpoint
@@ -117,40 +118,47 @@ for (const failure of ['oversized input', 'credential metadata', 'unreadable inp
       t.after(() => { mocked.mock.restore(); syncBuiltinESMExports() })
     }
     assert.equal(RevisionManager.computeRevisionSync(projectRoot, [], { scope_kind: 'repository', git_binding: 'optional' }).gitCommitHash, null)
-    assert.equal(authority.buildP11Sources(route) === null, true, 'failed capture must not be labelled complete/current')
+    const sources = authority.buildP11Sources(route)
+    assert.ok(sources)
+    assert.equal(sources.workspace, null, 'failed capture must not be labelled complete/current')
     assert.equal(authority.currentRecoveryBinding() === null, true, 'failed capture must not grant a recovery binding')
     observe(authority)
     assert.equal(host.p11ObservationRefs.length, 1)
     assert.equal(host.p11ObservationRefs[0]!.snapshot_ref, undefined, 'unavailable capture cannot supply a snapshot ref')
     assert.equal(host.p11ObservationRefs[0]!.coverage_ref, undefined, 'unavailable capture cannot supply a coverage ref')
-    assert.equal(authority.prepareP11ContextCheckpointCandidate(route) === null, true)
-    assert.equal(await authority.installP11ContextCheckpoint(route), false)
-    assert.equal(host.p11InstallBlock?.code, 'sources_unavailable')
-    assert.equal(host.p11InstallBlock?.details.includes('workspace_revision'), true)
-    assert.equal(parity.contextCheckpoint, previous, 'failed capture preserves installed authority')
-    assert.equal(createHash('sha256').update(readFileSync(checkpointPath)).digest('hex'), persistedHash, 'failed capture preserves durable authority')
+    assert.equal(authority.prepareP11ContextCheckpointCandidate(route)?.status, 'prepared')
+    assert.equal(await authority.installP11ContextCheckpoint(route), true)
+    assert.equal(host.p11InstallBlock, null)
+    assert.notEqual(parity.contextCheckpoint, previous)
+    assert.equal(parity.contextCheckpoint?.schema_version, 2)
+    assert.equal(parity.contextCheckpoint?.workspace, null)
+    assert.equal(parity.contextCheckpoint?.population.workspace_revision_current, false)
+    assert.deepEqual(parity.contextCheckpoint?.budget, previous.budget, 'conversation continuation cannot renew the allowance')
+    assert.notEqual(createHash('sha256').update(readFileSync(checkpointPath)).digest('hex'), persistedHash, 'the updated observation manifest is durable')
   })
 }
 
-test('unborn Git HEAD cannot become complete workspace authority', async t => {
-  const { authority, host } = fixture(t, false)
-  assert.equal(authority.buildP11Sources(route) === null, true)
+test('unborn Git HEAD supports conversation without complete workspace authority', async t => {
+  const { authority, host, parity } = fixture(t, false)
+  assert.equal(authority.buildP11Sources(route)?.workspace, null)
   assert.equal(authority.currentRecoveryBinding() === null, true)
-  assert.equal(await authority.installP11ContextCheckpoint(route), false)
-  assert.equal(host.p11InstallBlock?.code, 'sources_unavailable')
+  assert.equal(await authority.installP11ContextCheckpoint(route), true)
+  assert.equal(host.p11InstallBlock, null)
+  assert.equal(parity.contextCheckpoint?.population.workspace_revision_current, false)
 })
 
-test('non-Git workspace cannot become complete workspace authority', async t => {
-  const { projectRoot, authority, host } = fixture(t)
+test('non-Git workspace supports conversation without complete workspace authority', async t => {
+  const { projectRoot, authority, host, parity } = fixture(t)
   rmSync(join(projectRoot, '.git'), { recursive: true, force: true })
-  assert.equal(authority.buildP11Sources(route) === null, true)
+  assert.equal(authority.buildP11Sources(route)?.workspace, null)
   assert.equal(authority.currentRecoveryBinding() === null, true)
-  assert.equal(await authority.installP11ContextCheckpoint(route), false)
-  assert.equal(host.p11InstallBlock?.code, 'sources_unavailable')
+  assert.equal(await authority.installP11ContextCheckpoint(route), true)
+  assert.equal(host.p11InstallBlock, null)
+  assert.equal(parity.contextCheckpoint?.population.workspace_revision_current, false)
 })
 
-// Capture guards must fail before a summarizer can spend or prune history.
-test('compaction capture guard rejects an umbrella but accepts its explicit nested repository', t => {
+// Conversation ownership is independent of repository-evidence capture.
+test('conversation guard permits umbrella and nested contexts without certifying physical revisions', t => {
   const { projectRoot, authority, host } = fixture(t)
   const nested = join(projectRoot, 'products', 'current-app')
   mkdirSync(nested, { recursive: true })
@@ -161,15 +169,16 @@ test('compaction capture guard rejects an umbrella but accepts its explicit nest
   const large = join(projectRoot, 'unrelated.apk')
   writeFileSync(large, '')
   truncateSync(large, 1_000_001)
-  assert.throws(() => authority.prepareCompactionGuard(), /snapshot unavailable.*size cap/i)
+  assert.equal(authority.prepareCompactionGuard()(), true)
   host.options.projectRoot = nested
   const validate = authority.prepareCompactionGuard()
   assert.equal(validate(), true)
   writeFileSync(join(nested, 'ui.ts'), 'export const ui = 2\n')
-  assert.equal(validate(), false, 'a changed physical revision cannot accept a prepared compaction')
+  assert.equal(validate(), true, 'physical changes do not rewrite the conversation or create verification proof')
+  assert.equal(authority.buildP11Sources(route)?.workspace, null)
 })
 
-test('compaction capture guard rejects a superseded owner', t => {
+test('conversation compaction guard rejects a superseded owner', t => {
   const { authority, host } = fixture(t)
   const validate = authority.prepareCompactionGuard()
   assert.equal(validate(), true)
@@ -177,11 +186,14 @@ test('compaction capture guard rejects a superseded owner', t => {
   assert.equal(validate(), false)
 })
 
-test('compaction rejects self-observing runtime evidence before summarization', t => {
-  const { authority, host, projectRoot } = fixture(t, true, true)
+test('runtime evidence changes physical capture without blocking conversation ownership', async t => {
+  const { authority, host, projectRoot, parity } = fixture(t, true, true)
   const before = RevisionManager.computeRevisionSync(projectRoot, [], { scope_kind: 'repository' })
   writeFileSync(join(host.engineRunDir, 'usage.json'), '{"reportedCost":0.001}')
   const after = RevisionManager.computeRevisionSync(projectRoot, [], { scope_kind: 'repository' })
   assert.notEqual(before.compositeTreeHash, after.compositeTreeHash, 'runtime evidence changes the selected physical revision')
-  assert.throws(() => authority.prepareCompactionGuard(), /BABEL_RUNS_DIR.*outside/i)
+  assert.equal(authority.prepareCompactionGuard()(), true)
+  assert.equal(await authority.installP11ContextCheckpoint(route), true)
+  assert.equal(parity.contextCheckpoint?.workspace, null)
+  assert.equal(parity.contextCheckpoint?.population.workspace_revision_current, false)
 })

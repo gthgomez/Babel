@@ -120,13 +120,7 @@ function makeHarness(receiptStale: boolean): {
       unresolved_failures: ['verifier receipt is stale'],
       next_experiment: 'rerun the required verifier',
     },
-    workspace: {
-      current_snapshot_revision: 'snapshot-current',
-      capture_complete: true,
-      coverage_ref: 'coverage-current',
-      capture_provenance: 'current_capture',
-      capture_epoch: 'capture-stale-recovery',
-    },
+    workspace: null,
     receipts: [
       {
         receipt_id: 'receipt-stale',

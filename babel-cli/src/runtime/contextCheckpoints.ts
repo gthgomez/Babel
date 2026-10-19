@@ -81,6 +81,7 @@ export type RequiredStateRowIdV1 =
   | 'accepted_goal'
   | 'current_step'
   | 'workspace_snapshot'
+  | 'repository_coverage'
   | 'verification'
   | 'budget'
   | 'pending_operations'
@@ -222,6 +223,22 @@ export interface ContextCheckpointV1 {
   checkpoint_digest: string;
 }
 
+/** Conversation authority carries no claim of whole-repository certification. */
+export interface ContextCheckpointV2 extends Omit<ContextCheckpointV1, 'schema_version' | 'workspace' | 'population'> {
+  schema_version: 2;
+  purpose: 'conversation_continuation';
+  repository_coverage: { status: 'unavailable'; reason: 'not_captured_for_conversation' };
+  workspace: null;
+  population: CheckpointPopulationV2;
+}
+
+export interface CheckpointPopulationV2 extends Omit<CheckpointPopulationV1, 'schema_version'> {
+  schema_version: 2;
+}
+
+export type ContextCheckpoint = ContextCheckpointV1 | ContextCheckpointV2;
+export type CheckpointPopulation = CheckpointPopulationV1 | CheckpointPopulationV2;
+
 export interface ContextCheckpointPreparationInputV1 {
   checkpointId: string;
   owner: ContextCheckpointOwnerV1;
@@ -233,17 +250,19 @@ export interface ContextCheckpointPreparationInputV1 {
   now?: () => string;
 }
 
-export type ContextCheckpointPreparationResultV1 =
+export type ContextCheckpointPreparationResult<T extends ContextCheckpoint = ContextCheckpoint> =
   | {
       status: 'prepared';
-      checkpoint: ContextCheckpointV1;
-      population: CheckpointPopulationV1;
+      checkpoint: T;
+      population: T['population'];
     }
   | {
       status: 'blocked';
-      population: CheckpointPopulationV1;
+      population: T['population'];
       reasons: ContextCheckpointValidationReasonV1[];
     };
+
+export type ContextCheckpointPreparationResultV1 = ContextCheckpointPreparationResult<ContextCheckpointV1>;
 
 export interface ContextCheckpointValidationInputV1 {
   currentOwner?: ContextCheckpointOwnerV1 | null;
@@ -255,13 +274,13 @@ export interface ContextCheckpointValidationInputV1 {
   lineageEvidence?: ContextCheckpointLineageEvidenceV1;
 }
 
-export interface ContextCheckpointValidationResultV1 {
+export interface ContextCheckpointValidationResultV1<T extends ContextCheckpoint = ContextCheckpointV1> {
   status: 'valid' | 'blocked';
-  checkpoint: ContextCheckpointV1;
+  checkpoint: T;
   reasons: ContextCheckpointValidationReasonV1[];
 }
 
-export interface ContextCheckpointInstallInputV1 {
+export interface ContextCheckpointInstallInputV1<T extends ContextCheckpoint = ContextCheckpointV1> {
   currentOwner: ContextCheckpointOwnerV1 | null;
   /** Production callers set this; pure preparation tests may omit it. */
   requireInstalledLineage?: boolean;
@@ -271,7 +290,7 @@ export interface ContextCheckpointInstallInputV1 {
   readCurrentOwner?: () => ContextCheckpointOwnerV1 | null;
   /** Adapter for the existing atomic checkpoint transaction; no second journal. */
   install: (
-    checkpoint: ContextCheckpointV1,
+    checkpoint: T,
     owner: ContextCheckpointOwnerV1,
     assertOwnerCurrent?: () => void,
   ) => void | Promise<void>;
@@ -285,8 +304,8 @@ export type ContextCheckpointInstallResultV1 =
       reasons: ContextCheckpointValidationReasonV1[];
     };
 
-export interface ColdResumeValidationInputV1 {
-  checkpoint: ContextCheckpointV1;
+export interface ColdResumeValidationInputV1<T extends ContextCheckpoint = ContextCheckpointV1> {
+  checkpoint: T;
   currentOwner: ContextCheckpointOwnerV1 | null;
   requestedOwner?: ContextCheckpointOwnerV1;
   authorizedObservationIds?: readonly string[];
@@ -310,10 +329,10 @@ export interface ContextCheckpointLineageEvidenceV1 {
   }>;
 }
 
-export interface ColdResumeValidationResultV1 {
+export interface ColdResumeValidationResultV1<T extends ContextCheckpoint = ContextCheckpointV1> {
   status: 'ready' | 'blocked';
   resumable: boolean;
-  checkpoint: ContextCheckpointV1;
+  checkpoint: T;
   reasons: ContextCheckpointValidationReasonV1[];
 }
 
@@ -502,7 +521,7 @@ function latestCommittedSessionEvent(
  *     caller-supplied authoritative session log.
  */
 export function validateContextCheckpointInstalledLineage(
-  checkpoint: ContextCheckpointV1,
+  checkpoint: ContextCheckpoint,
   evidence?: ContextCheckpointLineageEvidenceV1,
 ): ContextCheckpointValidationReasonV1[] {
   const lineage = checkpoint.installed_lineage;
@@ -615,6 +634,13 @@ function ownersMatch(
 export function mapCheckpointRequiredState(
   sources: LiveOperationalSourcesV1,
 ): CheckpointPopulationV1 {
+  return mapRequiredState(sources, false);
+}
+
+function mapRequiredState(sources: LiveOperationalSourcesV1, conversation: false): CheckpointPopulationV1;
+function mapRequiredState(sources: LiveOperationalSourcesV1, conversation: true): CheckpointPopulationV2;
+function mapRequiredState(sources: LiveOperationalSourcesV1, conversation: boolean): CheckpointPopulation;
+function mapRequiredState(sources: LiveOperationalSourcesV1, conversation: boolean): CheckpointPopulation {
   const rows: RequiredStateRowV1[] = [];
   const errors: string[] = [];
 
@@ -683,7 +709,15 @@ export function mapCheckpointRequiredState(
   const workspaceRelabelled =
     currentRevision !== null &&
     (workspace?.capture_provenance === 'verifier_relabel' || workspace?.capture_epoch === null);
-  if (workspaceCaptureFresh && workspace && currentRevision !== null && captureEpoch !== null) {
+  if (conversation) {
+    rows.push({
+      id: 'repository_coverage', present: workspace === null,
+      source: 'conversation_continuation', value_refs: ['coverage:unavailable'],
+      constraint_satisfied: workspace === null,
+      gap: 'whole-repository coverage was not captured for conversation continuation',
+    });
+    if (workspace !== null) errors.push('repository_coverage: conversation preparation cannot relabel repository proof');
+  } else if (workspaceCaptureFresh && workspace && currentRevision !== null && captureEpoch !== null) {
     rows.push({
       id: 'workspace_snapshot',
       present: true,
@@ -894,12 +928,12 @@ export function mapCheckpointRequiredState(
       : 'populated';
 
   return {
-    schema_version: CONTEXT_CHECKPOINT_POPULATION_SCHEMA_VERSION,
+    schema_version: conversation ? 2 : CONTEXT_CHECKPOINT_POPULATION_SCHEMA_VERSION,
     status,
     rows,
     errors,
-    workspace_revision_current: workspaceCaptureFresh,
-    workspace_matches_verifier_revision: workspaceMatchesVerifierRevision,
+    workspace_revision_current: !conversation && workspaceCaptureFresh,
+    workspace_matches_verifier_revision: !conversation && workspaceMatchesVerifierRevision,
     verifier_current_for_bound_scope: sources.receipts.at(-1)?.current_for_bound_scope ?? null,
     installation_blocked_on: CONTEXT_CHECKPOINT_INSTALL_BLOCKED_ON,
     observation_manifest: observationManifest,
@@ -916,7 +950,7 @@ export function mapCheckpointRequiredState(
  * contract may proceed to the caller's existing atomic checkpoint transaction.
  */
 export function checkpointPopulationAllowsInstall(
-  population: CheckpointPopulationV1,
+  population: CheckpointPopulation,
 ): boolean {
   return population.install_authorized && population.status === 'populated';
 }
@@ -929,7 +963,20 @@ export function checkpointPopulationAllowsInstall(
 export function prepareContextCheckpoint(
   input: ContextCheckpointPreparationInputV1,
 ): ContextCheckpointPreparationResultV1 {
-  const population = mapCheckpointRequiredState(input.sources);
+  return prepareCheckpoint(input, false);
+}
+
+/** Prepare conversation state without capturing or certifying repository bytes. */
+export function prepareConversationCheckpoint(
+  input: ContextCheckpointPreparationInputV1,
+): ContextCheckpointPreparationResult<ContextCheckpointV2> {
+  return prepareCheckpoint(input, true);
+}
+
+function prepareCheckpoint(input: ContextCheckpointPreparationInputV1, conversation: false): ContextCheckpointPreparationResultV1;
+function prepareCheckpoint(input: ContextCheckpointPreparationInputV1, conversation: true): ContextCheckpointPreparationResult<ContextCheckpointV2>;
+function prepareCheckpoint(input: ContextCheckpointPreparationInputV1, conversation: boolean): ContextCheckpointPreparationResult {
+  const population = mapRequiredState(input.sources, conversation);
   const reasons: ContextCheckpointValidationReasonV1[] = [];
   if (input.checkpointId.trim().length === 0) reasons.push('invalid_checkpoint_id');
   if (ownerIssues(input.owner).length > 0) reasons.push('invalid_owner');
@@ -947,8 +994,7 @@ export function prepareContextCheckpoint(
   if (reasons.length > 0) return { status: 'blocked', population, reasons };
 
   const manifest = cloneObservationManifest(population.observation_manifest);
-  const checkpointWithoutDigest = {
-    schema_version: CONTEXT_CHECKPOINT_SCHEMA_VERSION,
+  const common = {
     checkpointId: input.checkpointId,
     threadId: input.owner.threadId,
     sessionId: input.sessionId ?? input.owner.threadId,
@@ -968,12 +1014,6 @@ export function prepareContextCheckpoint(
     budget: input.sources.budget ? { ...input.sources.budget } : null,
     pending: input.sources.pending.map((pending) => ({ ...pending })),
     route: input.sources.route ? { ...input.sources.route } : null,
-    population: {
-      ...population,
-      rows: population.rows.map((row) => ({ ...row, value_refs: [...row.value_refs] })),
-      errors: [...population.errors],
-      observation_manifest: cloneObservationManifest(population.observation_manifest),
-    },
     observation_manifest: manifest,
     observation_manifest_digest: sha256Canonical(manifest),
     installed_lineage: {
@@ -984,6 +1024,25 @@ export function prepareContextCheckpoint(
       thread_event_boundary_seq: input.installedLineage?.thread_event_boundary_seq ?? null,
     },
   };
+  const detachedPopulation = {
+    ...population,
+    rows: population.rows.map(row => ({ ...row, value_refs: [...row.value_refs] })),
+    errors: [...population.errors],
+    observation_manifest: cloneObservationManifest(population.observation_manifest),
+  };
+  const checkpointWithoutDigest = conversation
+    ? { ...common, schema_version: 2 as const, purpose: 'conversation_continuation' as const,
+        repository_coverage: { status: 'unavailable' as const, reason: 'not_captured_for_conversation' as const },
+        workspace: null, population: { ...detachedPopulation, schema_version: 2 as const } }
+    : { ...common, schema_version: CONTEXT_CHECKPOINT_SCHEMA_VERSION,
+        population: { ...detachedPopulation, schema_version: CONTEXT_CHECKPOINT_POPULATION_SCHEMA_VERSION } };
+  if (checkpointWithoutDigest.schema_version === 2 && !conversationStateIsPresent(checkpointWithoutDigest)) {
+    return {
+      status: 'blocked', reasons: ['population_incomplete'],
+      population: { ...population, status: 'blocked', install_authorized: false,
+        errors: [...population.errors, 'conversation_continuation: required operational state is invalid'] },
+    };
+  }
   return {
     status: 'prepared',
     population,
@@ -994,20 +1053,83 @@ export function prepareContextCheckpoint(
   };
 }
 
+function conversationStateIsPresent(checkpoint: Omit<ContextCheckpointV2, 'checkpoint_digest'>): boolean {
+  const nonempty = (value: unknown): value is string => typeof value === 'string' && value.trim().length > 0;
+  const state = checkpoint.workingStateSnapshot?.state;
+  const budget = checkpoint.budget;
+  const route = checkpoint.route;
+  if (!nonempty(checkpoint.taskContractReference) || !state
+    || checkpoint.workingStateSnapshot.authoritative !== false || checkpoint.workingStateSnapshot.provenance !== 'mixed'
+    || typeof state.current_hypothesis !== 'string' || typeof state.next_experiment !== 'string'
+    || !Array.isArray(state.unresolved_failures) || !state.unresolved_failures.every(value => typeof value === 'string')
+    || !budget || !nonempty(budget.owner) || !nonempty(budget.cancellation_owner)
+    || !Number.isFinite(budget.remaining_allowance) || budget.remaining_allowance < 0 || budget.allowance_reset_on_resume === true
+    || !route || !nonempty(route.compiled_request_identity) || !nonempty(route.tool_profile) || !nonempty(route.model_route)
+    || !Array.isArray(checkpoint.pending) || !Array.isArray(checkpoint.receipts)) return false;
+  if (checkpoint.pending.some(item => !item || !nonempty(item.handle_id)
+    || !['operation', 'child'].includes(item.kind) || !['pending', 'indeterminate', 'settled'].includes(item.state))) return false;
+  if (checkpoint.receipts.some(receipt => !receipt || !nonempty(receipt.receipt_id) || !nonempty(receipt.identity)
+    || !nonempty(receipt.scope) || typeof receipt.stale !== 'boolean'
+    || (receipt.bound_revision !== null && typeof receipt.bound_revision !== 'string'))) return false;
+  const population = checkpoint.population;
+  const required = ['accepted_goal', 'current_step', 'repository_coverage', 'verification', 'budget', 'pending_operations', 'instructions_route', 'exact_observations'];
+  if (population.rows.length !== required.length || required.some(id => population.rows.filter(row => row.id === id).length !== 1)
+    || population.rows.some(row => row.present !== true || row.constraint_satisfied !== true)
+    || !Array.isArray(population.errors) || population.errors.length > 0
+    || !Array.isArray(population.installation_blocked_on) || population.installation_blocked_on.length > 0) return false;
+  const values = (id: RequiredStateRowIdV1): readonly string[] => population.rows.find(row => row.id === id)?.value_refs ?? [];
+  return values('accepted_goal').includes(`contract:${checkpoint.taskContractReference}`)
+    && values('budget').includes(`owner:${budget.owner}`)
+    && values('budget').includes(`remaining:${budget.remaining_allowance}`)
+    && values('budget').includes(`cancel_owner:${budget.cancellation_owner}`)
+    && values('instructions_route').includes(`request:${route.compiled_request_identity}`)
+    && values('instructions_route').includes(`tools:${route.tool_profile}`)
+    && values('instructions_route').includes(`route:${route.model_route}`);
+}
+
+function checkpointSchemaIsValid(checkpoint: ContextCheckpoint): boolean {
+  const population = checkpoint.population;
+  if (!population || !Array.isArray(population.rows)) return false;
+  if (population.rows.some(row => !row || typeof row !== 'object' || !Array.isArray(row.value_refs))) return false;
+  if (checkpoint.schema_version === 1) {
+    const workspace = checkpoint.workspace;
+    return !('purpose' in checkpoint) && !('repository_coverage' in checkpoint)
+      && population.schema_version === 1 && population.workspace_revision_current === true
+      && workspace !== null && workspace?.capture_complete === true
+      && workspace.capture_provenance === 'current_capture'
+      && typeof workspace.current_snapshot_revision === 'string'
+      && typeof workspace.capture_epoch === 'string'
+      && population.rows.some(row => row.id === 'workspace_snapshot' && row.present && row.constraint_satisfied)
+      && !population.rows.some(row => row.id === 'repository_coverage');
+  }
+  if (checkpoint.schema_version !== 2) return false;
+  const coverage = checkpoint.repository_coverage;
+  const row = population.rows.filter(entry => entry.id === 'repository_coverage');
+  return checkpoint.purpose === 'conversation_continuation' && checkpoint.workspace === null
+    && conversationStateIsPresent(checkpoint)
+    && coverage?.status === 'unavailable' && coverage.reason === 'not_captured_for_conversation'
+    && population.schema_version === 2 && population.workspace_revision_current === false
+    && population.workspace_matches_verifier_revision === false
+    && !population.rows.some(entry => entry.id === 'workspace_snapshot')
+    && row.length === 1 && row[0]?.present === true && row[0].constraint_satisfied === true
+    && row[0].source === 'conversation_continuation'
+    && row[0].value_refs.length === 1 && row[0].value_refs[0] === 'coverage:unavailable';
+}
+
 /** Validate structure, required state, manifest binding, and an optional owner fence. */
-export function validateContextCheckpoint(
-  checkpoint: ContextCheckpointV1,
+export function validateContextCheckpoint<T extends ContextCheckpoint>(
+  checkpoint: T,
   input: ContextCheckpointValidationInputV1 = {},
-): ContextCheckpointValidationResultV1 {
+): ContextCheckpointValidationResultV1<T> {
   const reasons: ContextCheckpointValidationReasonV1[] = [];
   if (typeof checkpoint !== 'object' || checkpoint === null) {
     return { status: 'blocked', checkpoint, reasons: ['invalid_schema'] };
   }
-  if (checkpoint.schema_version !== CONTEXT_CHECKPOINT_SCHEMA_VERSION) {
+  if (!checkpointSchemaIsValid(checkpoint)) {
     reasons.push('invalid_schema');
   }
   try {
-    const { checkpoint_digest: suppliedDigest, ...checkpointWithoutDigest } = checkpoint as ContextCheckpointV1 & {
+    const { checkpoint_digest: suppliedDigest, ...checkpointWithoutDigest } = checkpoint as ContextCheckpoint & {
       checkpoint_digest?: unknown;
     };
     if (
@@ -1097,9 +1219,9 @@ export function validateContextCheckpoint(
     }
   }
 
-  if (input.authorizedObservationIds !== undefined) {
+  if (manifestIsArray && input.authorizedObservationIds !== undefined) {
     const authorized = new Set(input.authorizedObservationIds);
-    if (checkpoint.observation_manifest.some((observation) => !authorized.has(observation.observation_id))) {
+    if (checkpoint.observation_manifest.some((observation) => !observation || !authorized.has(observation.observation_id))) {
       reasons.push('observation_membership_unavailable');
     }
   }
@@ -1119,9 +1241,9 @@ export function validateContextCheckpoint(
  * port. A stale owner is refused before the port is invoked, and an optional
  * owner re-read closes the normal check-then-commit race at the boundary.
  */
-export async function installContextCheckpoint(
-  preparation: ContextCheckpointPreparationResultV1 | ContextCheckpointV1,
-  input: ContextCheckpointInstallInputV1,
+export async function installContextCheckpoint<T extends ContextCheckpoint>(
+  preparation: ContextCheckpointPreparationResult<T> | T,
+  input: ContextCheckpointInstallInputV1<T>,
 ): Promise<ContextCheckpointInstallResultV1> {
   if ('status' in preparation) {
     if (preparation.status !== 'prepared') {
@@ -1189,9 +1311,9 @@ export async function installContextCheckpoint(
 }
 
 /** Validate that a durable checkpoint may become the cold-resume context. */
-export function validateColdResume(
-  input: ColdResumeValidationInputV1,
-): ColdResumeValidationResultV1 {
+export function validateColdResume<T extends ContextCheckpoint>(
+  input: ColdResumeValidationInputV1<T>,
+): ColdResumeValidationResultV1<T> {
   // Cold resume must prove observation membership independently. Omitting the
   // authorized set defaults to the empty set (fail closed) instead of letting
   // the checkpoint manifest authorize its own observations.

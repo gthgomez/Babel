@@ -19,7 +19,7 @@ import type { ChatEngineServices } from './chatEngineServices.js'
 import type { BoundChatVerifierReceipt } from '../evidence/chatRevisionBinding.js'
 import type { ParityRuntime } from './chatEngineParityBridge.js'
 import type {
-  ContextCheckpointPreparationResultV1,
+  ContextCheckpointPreparationResult,
   LiveOperationalSourcesV1,
 } from '../runtime/contextCheckpoints.js'
 import type { ContextDeliveryMode } from './contextManifest.js'
@@ -677,7 +677,7 @@ export interface ChatEngineStreamingLoopHost {
   readonly prepareP11ContextCheckpointCandidate: (route: {
     tool_profile: string
     model_route: string
-  }) => ContextCheckpointPreparationResultV1 | null
+  }) => ContextCheckpointPreparationResult | null
   preparedAdmissionCompactionAttempts: number
   readonly progressController: ProgressController
   readonly providerRetryCallbacks: (context?: {
