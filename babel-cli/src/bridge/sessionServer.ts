@@ -67,6 +67,7 @@ import { writePairUiResponse } from './pairUiAssets.js';
 import { pairedDeviceMutationOriginOk } from './bridgeMutationPolicy.js';
 import type { BridgeClientContext } from './bridgeClientAuth.js';
 import { acceptanceHealthExtension } from './acceptanceBridge.js';
+import { createHarnessAwareEngineFactory } from './harnessEngineFactory.js';
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
 export interface BridgeServerOptions {
@@ -266,9 +267,8 @@ export class BridgeServer {
       new ProtocolGateway({
         allowedWorkspaceRoot: this.options.allowedWorkspaceRoot ?? process.cwd(),
         enforceControlLease,
-        ...(this.options.engineFactory
-          ? { engineFactory: this.options.engineFactory }
-          : {}),
+        engineFactory:
+          this.options.engineFactory ?? createHarnessAwareEngineFactory(),
       });
     this.devicePairing =
       this.options.devicePairing ?? new DevicePairingService(this.authToken);

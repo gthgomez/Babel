@@ -18,7 +18,10 @@ Status: living document for the remote implementation campaign. **Qualified** me
 | 4 | Stale epoch / command_id integrity | Tested | `remoteSecurity.gateway.test.ts`, `protocolGateway.test.ts` |
 | 4 | Stale approval digest / replay | Tested | `remoteApproval.test.ts`, `remoteSecurity.gateway.test.ts` |
 | 2 | Desktop ↔ phone single owner | Not qualified | Production IPC + `remote host-run` path in progress; phone E2E pending |
-| 6 | External harness adapters | Stub only | `harnessAdapterContract.ts` |
+| 6 | Command Code own-CLI ACP adapter (managed subprocess) | Tested (deterministic fake peer) | `commandCodeOwnCli.gateway.test.ts`, `commandCodeAcpTransport` + `harnessEngineFactory`; **not** live installed `cmd`/`cmdc` qualification |
+| 6 | Other external harness adapters (OpenCode, AGY, Claude, Codex) | Stub only | `harnessAdapterRegistry.ts` campaign stubs |
 | — | Physical phone + Tailscale | Not qualified | Owner checklist in `BABEL_REMOTE_QUICKSTART.md` |
 
-**Last tested commit:** update after re-review correction push on `cursor/babel-remote-phase1-pairing-0634`.
+**Last tested commit:** update after Command Code adapter PR merge (record SHA, `npm --prefix babel-cli run typecheck`, targeted `tsx --test` bridge suite).
+
+**Owner deferred after merge:** physical ROG14/phone remote journey; live Command Code login/provider on host; Windows `cmdc` path smoke against installed binary.

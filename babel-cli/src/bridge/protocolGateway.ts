@@ -20,6 +20,7 @@ import { originAllowed as originAllowedStructured } from './originPolicy.js';
 import { ThreadOwnershipRegistry, type ThreadOwnershipError } from './threadOwnership.js';
 import { threadStoreExists } from '../services/threadStore/threadStore.js';
 import { buildRemoteCatalog } from './remoteCatalog.js';
+import { buildRemoteHarnessCapabilities } from './harnessAdapterRegistry.js';
 import { ControlLeaseRegistry } from './controlLease.js';
 import type { BridgeClientContext } from './bridgeClientAuth.js';
 
@@ -141,6 +142,7 @@ export class ProtocolGateway {
       if (envelope.method === 'remote.capabilities') {
         parsedId =
           typeof envelope.id === 'string' || typeof envelope.id === 'number' ? envelope.id : null;
+        const harness = await buildRemoteHarnessCapabilities();
         return {
           jsonrpc: '2.0',
           id: parsedId ?? 0,
@@ -148,6 +150,7 @@ export class ProtocolGateway {
             control_lease_enforced: this.enforceControlLease,
             exclusive_remote_control: this.enforceControlLease,
             host_auto_control_bind: true,
+            ...harness,
           },
         };
       }

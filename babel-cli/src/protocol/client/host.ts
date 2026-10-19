@@ -58,6 +58,7 @@ import type {
   VerificationLookupResult,
 } from '../types.js';
 import { RemoteApprovalBroker, runOnRemoteSurface } from '../../bridge/remoteApproval.js';
+import { probeCommandCodeInstallation } from '../../bridge/commandCodeCliDiscovery.js';
 import { collectWorkspaceChanges } from '../../bridge/workspaceChanges.js';
 import {
   mapVerificationEvidence,
@@ -232,6 +233,10 @@ function defaultEngineFactory(descriptor: SessionDescriptor): ChatEngine {
 
 function descriptorFromCreate(threadId: string, params: ThreadCreateParams): SessionDescriptor {
   const mode = params.mode ?? 'chat';
+  const harness =
+    params.harness_adapter_id && params.harness_adapter_id !== 'babel-native'
+      ? params.harness_adapter_id
+      : undefined;
   return {
     schemaVersion: 1,
     threadId,
@@ -244,6 +249,16 @@ function descriptorFromCreate(threadId: string, params: ThreadCreateParams): Ses
     kernelVersion: 'executor-kernel-v1',
     contractVersion: 'executor-contract-v1',
     ...(params.task !== undefined ? { task: params.task } : {}),
+    ...(harness ? { harness_adapter_id: harness } : {}),
+    ...(params.harness_native_session_id
+      ? { harness_native_session_id: params.harness_native_session_id }
+      : {}),
+    ...(harness === 'command-code'
+      ? {
+          harness_provider_profile: params.provider ?? process.env['BABEL_PROVIDER'] ?? 'default',
+          harness_model_profile: params.model ?? process.env['BABEL_MODEL'] ?? 'default',
+        }
+      : {}),
   };
 }
 
@@ -389,6 +404,18 @@ export async function handleProtocolRequest(
         const params = request.params;
         if (!params) {
           return errorResponse(id, BabelProtocolErrorCode.INVALID_PARAMS, 'Missing params');
+        }
+        if (params.harness_adapter_id === 'command-code') {
+          const probe = await probeCommandCodeInstallation();
+          if (probe.state !== 'verified') {
+            return errorResponse(
+              id,
+              BabelProtocolErrorCode.MODE_UNSUPPORTED,
+              probe.state === 'missing'
+                ? 'Command Code CLI is not installed on the host.'
+                : 'Command Code CLI installation could not be verified.',
+            );
+          }
         }
         let projectRoot = params.project_root;
         try {

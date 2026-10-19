@@ -21,6 +21,11 @@ export interface ModePolicy {
   completionPolicy: 'executor' | 'plan_artifact' | 'proof_carrying'
 }
 
+/** External harness adapter bound to a protocol-host thread (own-CLI ACP path). */
+export type HarnessAdapterBinding =
+  | 'babel-native'
+  | 'command-code'
+
 /** Durable descriptor sufficient to reconstruct a server-owned session. */
 export interface SessionDescriptor {
   schemaVersion: number
@@ -34,6 +39,15 @@ export interface SessionDescriptor {
   kernelVersion: string
   contractVersion: string
   task?: string
+  /** When set, turns execute through the named harness adapter instead of native ChatEngine. */
+  harness_adapter_id?: HarnessAdapterBinding
+  /** Vendor-native session id (ACP sessionId for Command Code). */
+  harness_native_session_id?: string
+  /** Owned child-process generation for fencing stale controller epochs. */
+  harness_process_generation?: number
+  /** Effective provider/model profile pinned for this harness run. */
+  harness_provider_profile?: string
+  harness_model_profile?: string
 }
 
 /** In-process conversation descriptor; legacy project protocol stays unchanged. */
