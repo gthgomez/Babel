@@ -250,15 +250,21 @@ async function lookupAuthoritativePendingApproval(
   threadId: string,
   runId: string,
   turnId?: string,
+  rpcOptions?: { signal?: AbortSignal },
 ): Promise<Record<string, unknown> | null> {
   const result = await client.call<
     'approval.lookup',
     { thread_id: string; turn_id?: string },
     { pending: Array<Record<string, unknown>> }
-  >('approval.lookup', {
-    thread_id: threadId,
-    ...(turnId ? { turn_id: turnId } : {}),
-  });
+  >(
+    'approval.lookup',
+    {
+      thread_id: threadId,
+      ...(turnId ? { turn_id: turnId } : {}),
+    },
+    Date.now(),
+    rpcOptions,
+  );
   const record = result.pending.find((item) => item.state === 'pending');
   if (!record) return null;
   const mapped = mapPermissionRequest(
@@ -327,10 +333,13 @@ function approvalItemFromAuthoritative(
 async function lookupCatalogSession(
   client: HttpProtocolClient,
   threadId: string,
+  rpcOptions?: { signal?: AbortSignal },
 ): Promise<{ status: string; active_turn: boolean; active_turn_id?: number } | null> {
   const catalog = await client.call<'remote.catalog', Record<string, never>, RemoteCatalogResult>(
     'remote.catalog',
     {},
+    Date.now(),
+    rpcOptions,
   );
   const row = catalog.sessions.find((session) => session.thread_id === threadId);
   if (!row) return null;
@@ -399,9 +408,10 @@ export async function reconcileTerminalTurnFromHost(
   client: HttpProtocolClient,
   threadId: string,
   submittedTurnId?: number,
+  rpcOptions?: { signal?: AbortSignal },
 ): Promise<Record<string, unknown> | null> {
   if (submittedTurnId === undefined) return null;
-  const row = await lookupCatalogSession(client, threadId);
+  const row = await lookupCatalogSession(client, threadId, rpcOptions);
   if (row?.active_turn) {
     if (row.active_turn_id === undefined || row.active_turn_id === submittedTurnId) {
       return null;
@@ -417,11 +427,16 @@ export async function reconcileTerminalTurnFromHost(
     'history.lookup',
     { thread_id: string; turn_id?: number; limit?: number },
     HistoryLookupResult
-  >('history.lookup', {
-    thread_id: threadId,
-    turn_id: submittedTurnId,
-    limit: 200,
-  });
+  >(
+    'history.lookup',
+    {
+      thread_id: threadId,
+      turn_id: submittedTurnId,
+      limit: 200,
+    },
+    Date.now(),
+    rpcOptions,
+  );
   const terminal = history.turn_terminal;
   if (!terminal || terminal.turn_id !== submittedTurnId) return null;
   return await mapAuthoritativeTerminalToStream(client, threadId, terminal);
@@ -464,6 +479,11 @@ export async function executeSharedProtocolHostRun(
   const observationRpcTimeoutMs = options.observationRpcTimeoutMs ?? 4_000;
   const emergencyObservationDeadlineMs = options.emergencyObservationDeadlineMs ?? 15_000;
   let emergencyObservationDeadlineAt = 0;
+  let emergencyObservationScope: AbortController | null = null;
+  let emergencyObservationDeadlineTimer: ReturnType<typeof setTimeout> | null = null;
+  let emergencyObservationScopeEpoch = 0;
+  const EMERGENCY_OBSERVATION_TIMEOUT_MESSAGE =
+    'Emergency stop observation timed out before authoritative terminal was available';
 
   const abort = () => options.signal?.aborted === true || cancelRequested;
 
@@ -540,11 +560,12 @@ export async function executeSharedProtocolHostRun(
       }
     }
 
-    const openTurnSocket = async (): Promise<WebSocket> => {
+    const openTurnSocket = async (opSignal?: AbortSignal): Promise<WebSocket> => {
       const ticket = await (options.fetchImpl ?? fetch)(`${baseUrl}/ws/ticket`, {
         method: 'POST',
         headers: { ...headers, 'Content-Type': 'application/json' },
         body: JSON.stringify({ session_id: transportSessionId, thread_id: threadId }),
+        ...(opSignal ? { signal: opSignal } : {}),
       });
       const ticketBody = (await ticket.json()) as { ticket?: string };
       if (!ticket.ok || !ticketBody.ticket) {
@@ -554,8 +575,39 @@ export async function executeSharedProtocolHostRun(
         `ws://127.0.0.1:${options.port}/ws?sessionId=${encodeURIComponent(transportSessionId)}&ticket=${encodeURIComponent(ticketBody.ticket)}`,
       );
       await new Promise<void>((resolve, reject) => {
-        socket.addEventListener('open', () => resolve());
-        socket.addEventListener('error', () => reject(new Error('WebSocket connection failed')));
+        const cleanup = () => {
+          socket.removeEventListener('open', onOpen);
+          socket.removeEventListener('error', onError);
+          opSignal?.removeEventListener('abort', onAbort);
+        };
+        const onOpen = () => {
+          cleanup();
+          resolve();
+        };
+        const onError = () => {
+          cleanup();
+          reject(new Error('WebSocket connection failed'));
+        };
+        const onAbort = () => {
+          cleanup();
+          try {
+            socket.close();
+          } catch {
+            /* ignore */
+          }
+          reject(
+            opSignal?.reason instanceof Error
+              ? opSignal.reason
+              : new Error('WebSocket observation was aborted'),
+          );
+        };
+        socket.addEventListener('open', onOpen);
+        socket.addEventListener('error', onError);
+        if (opSignal?.aborted) {
+          onAbort();
+          return;
+        }
+        opSignal?.addEventListener('abort', onAbort);
       });
       return socket;
     };
@@ -590,7 +642,10 @@ export async function executeSharedProtocolHostRun(
     const finalizeTerminalObservation = (mapped: Record<string, unknown> | null): void => {
       if (!mapped) return;
       const settled = writeStreamEvent(mapped);
-      if (settled) wakeTurnObserver?.();
+      if (settled) {
+        if (emergencyStopAcknowledged) stopEmergencyObservationScope();
+        wakeTurnObserver?.();
+      }
     };
 
     const finalizeFatalObservationError = (message: string): void => {
@@ -601,20 +656,90 @@ export async function executeSharedProtocolHostRun(
       });
     };
 
-    const runObservationRpc = async <T>(label: string, fn: () => Promise<T>): Promise<T> => {
-      let timer: ReturnType<typeof setTimeout> | undefined;
+    const stopEmergencyObservationScope = (): void => {
+      if (emergencyObservationDeadlineTimer) {
+        clearTimeout(emergencyObservationDeadlineTimer);
+        emergencyObservationDeadlineTimer = null;
+      }
+      emergencyObservationScope = null;
+    };
+
+    const remainingEmergencyObservationMs = (): number => {
+      if (emergencyObservationDeadlineAt === 0) return emergencyObservationDeadlineMs;
+      return Math.max(0, emergencyObservationDeadlineAt - Date.now());
+    };
+
+    const fireEmergencyObservationDeadline = (epoch: number): void => {
+      if (epoch !== emergencyObservationScopeEpoch || turnSettled) return;
+      emergencyHostRunTrace('observation_scope_deadline', { submittedTurnId });
+      finalizeFatalObservationError(EMERGENCY_OBSERVATION_TIMEOUT_MESSAGE);
+      wakeTurnObserverTraced('emergency_scope_deadline');
       try {
-        return await Promise.race([
-          fn(),
-          new Promise<T>((_, reject) => {
-            timer = setTimeout(() => {
-              emergencyHostRunTrace('rpc_timeout', { label, observationRpcTimeoutMs });
-              reject(new Error(`${label} observation RPC timed out after ${observationRpcTimeoutMs}ms`));
-            }, observationRpcTimeoutMs);
-          }),
-        ]);
+        ws?.close();
+      } catch {
+        /* ignore */
+      }
+      emergencyObservationScope?.abort(new Error(EMERGENCY_OBSERVATION_TIMEOUT_MESSAGE));
+    };
+
+    const startEmergencyObservationScope = (): void => {
+      if (emergencyObservationScope) return;
+      emergencyObservationScopeEpoch += 1;
+      const epoch = emergencyObservationScopeEpoch;
+      emergencyObservationScope = new AbortController();
+      emergencyObservationDeadlineTimer = setTimeout(
+        () => fireEmergencyObservationDeadline(epoch),
+        emergencyObservationDeadlineMs,
+      );
+    };
+
+    const emergencyRpcOptions = (opSignal: AbortSignal): { signal: AbortSignal } => ({
+      signal: opSignal,
+    });
+
+    const runEmergencyObservation = async <T>(
+      label: string,
+      fn: (opSignal: AbortSignal) => Promise<T>,
+    ): Promise<T> => {
+      if (!emergencyStopAcknowledged) {
+        return fn(new AbortController().signal);
+      }
+      const scopeSignal = emergencyObservationScope?.signal;
+      if (scopeSignal?.aborted) {
+        throw scopeSignal.reason instanceof Error
+          ? scopeSignal.reason
+          : new Error(EMERGENCY_OBSERVATION_TIMEOUT_MESSAGE);
+      }
+      const opAbort = new AbortController();
+      const linkScopeAbort = () => {
+        opAbort.abort(
+          scopeSignal?.reason instanceof Error
+            ? scopeSignal.reason
+            : new Error(EMERGENCY_OBSERVATION_TIMEOUT_MESSAGE),
+        );
+      };
+      scopeSignal?.addEventListener('abort', linkScopeAbort, { once: true });
+      const perOpMs = Math.min(
+        observationRpcTimeoutMs,
+        remainingEmergencyObservationMs() || observationRpcTimeoutMs,
+      );
+      if (perOpMs <= 0) {
+        throw new Error(EMERGENCY_OBSERVATION_TIMEOUT_MESSAGE);
+      }
+      const perOpTimer = setTimeout(() => {
+        emergencyHostRunTrace('rpc_timeout', { label, observationRpcTimeoutMs: perOpMs });
+        opAbort.abort(new Error(`${label} observation RPC timed out after ${perOpMs}ms`));
+      }, perOpMs);
+      try {
+        const value = await fn(opAbort.signal);
+        if (opAbort.signal.aborted) {
+          const reason = opAbort.signal.reason;
+          throw reason instanceof Error ? reason : new Error(`${label} observation was aborted`);
+        }
+        return value;
       } finally {
-        if (timer) clearTimeout(timer);
+        clearTimeout(perOpTimer);
+        scopeSignal?.removeEventListener('abort', linkScopeAbort);
       }
     };
 
@@ -636,7 +761,7 @@ export async function executeSharedProtocolHostRun(
       }
       if (emergencyStopAcknowledged) {
         while (!turnSettled && !transportClosedUnexpectedly) {
-          if (emergencyObservationBudgetExpired()) {
+          if (emergencyObservationScope?.signal.aborted || emergencyObservationBudgetExpired()) {
             emergencyHostRunTrace('await_turn_observation_budget_expired', { stage });
             return;
           }
@@ -657,14 +782,14 @@ export async function executeSharedProtocolHostRun(
       if (emergencyObservationDeadlineAt === 0) {
         emergencyObservationDeadlineAt = Date.now() + emergencyObservationDeadlineMs;
       }
+      startEmergencyObservationScope();
     };
 
     const emergencyObservationBudgetExpired = (): boolean => {
       if (!emergencyStopAcknowledged || emergencyObservationDeadlineAt === 0) return false;
+      if (emergencyObservationScope?.signal.aborted) return true;
       if (Date.now() < emergencyObservationDeadlineAt) return false;
-      finalizeFatalObservationError(
-        'Emergency stop observation timed out before authoritative terminal was available',
-      );
+      fireEmergencyObservationDeadline(emergencyObservationScopeEpoch);
       return true;
     };
 
@@ -779,8 +904,13 @@ export async function executeSharedProtocolHostRun(
                     if (emergencyObservationBudgetExpired()) {
                       return;
                     }
-                    const terminal = await runObservationRpc('turn terminal reconcile', () =>
-                      reconcileTerminalTurnFromHost(client, activeThreadId, submittedTurnId),
+                    const terminal = await runEmergencyObservation('turn terminal reconcile', (opSignal) =>
+                      reconcileTerminalTurnFromHost(
+                        client,
+                        activeThreadId,
+                        submittedTurnId,
+                        emergencyRpcOptions(opSignal),
+                      ),
                     );
                     if (terminal) finalizeTerminalObservation(terminal);
                     emergencyHostRunTrace('immediate_reconcile_end', {
@@ -956,21 +1086,38 @@ export async function executeSharedProtocolHostRun(
       } catch {
         /* ignore */
       }
-      ws = await openTurnSocket();
+      try {
+        ws = emergencyStopAcknowledged
+          ? await runEmergencyObservation('ws transport reopen', (opSignal) => openTurnSocket(opSignal))
+          : await openTurnSocket();
+      } catch (error) {
+        if (emergencyStopAcknowledged) {
+          finalizeFatalObservationError(
+            error instanceof Error ? error.message : 'WebSocket transport observation failed',
+          );
+          return finalizeHostRunExitCode();
+        }
+        throw error;
+      }
       emergencyHostRunTrace('loop_reattach', { submittedTurnId });
       turnDone = attachTurnObserver(ws);
-      const turnHint =
+      const turnHint: string | undefined =
         pendingApproval && typeof pendingApproval.turn_id === 'string'
           ? pendingApproval.turn_id
           : undefined;
       let authoritative: Record<string, unknown> | null = null;
       try {
-        authoritative = await lookupAuthoritativePendingApproval(
-          client,
-          threadId,
-          options.runId,
-          turnHint,
-        );
+        authoritative = emergencyStopAcknowledged
+          ? await runEmergencyObservation('approval.lookup', (opSignal) =>
+              lookupAuthoritativePendingApproval(
+                client,
+                threadId,
+                options.runId,
+                turnHint,
+                emergencyRpcOptions(opSignal),
+              ),
+            )
+          : await lookupAuthoritativePendingApproval(client, threadId, options.runId, turnHint);
       } catch (error) {
         if (emergencyStopAcknowledged) {
           finalizeFatalObservationError(
@@ -984,8 +1131,13 @@ export async function executeSharedProtocolHostRun(
       let terminal: Record<string, unknown> | null = null;
       try {
         terminal = emergencyStopAcknowledged
-          ? await runObservationRpc('turn terminal reconcile', () =>
-              reconcileTerminalTurnFromHost(client, threadId, submittedTurnId),
+          ? await runEmergencyObservation('turn terminal reconcile', (opSignal) =>
+              reconcileTerminalTurnFromHost(
+                client,
+                threadId,
+                submittedTurnId,
+                emergencyRpcOptions(opSignal),
+              ),
             )
           : await reconcileTerminalTurnFromHost(client, threadId, submittedTurnId);
       } catch (error) {
@@ -1005,7 +1157,9 @@ export async function executeSharedProtocolHostRun(
       let catalogRow: { status: string; active_turn: boolean; active_turn_id?: number } | null = null;
       try {
         catalogRow = emergencyStopAcknowledged
-          ? await runObservationRpc('remote.catalog', () => lookupCatalogSession(client, threadId))
+          ? await runEmergencyObservation('remote.catalog', (opSignal) =>
+              lookupCatalogSession(client, threadId, emergencyRpcOptions(opSignal)),
+            )
           : await lookupCatalogSession(client, threadId);
       } catch (error) {
         if (emergencyStopAcknowledged) {
@@ -1082,6 +1236,11 @@ export async function executeSharedProtocolHostRun(
     }
     return terminalExitCode ?? 1;
   } finally {
+    if (emergencyObservationDeadlineTimer) {
+      clearTimeout(emergencyObservationDeadlineTimer);
+      emergencyObservationDeadlineTimer = null;
+    }
+    emergencyObservationScope = null;
     emergencyHostRunTrace('finally_cleanup', { turnSettled, terminalExitCode });
     closeStdinInterface();
     try {

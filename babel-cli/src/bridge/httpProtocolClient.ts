@@ -62,11 +62,13 @@ export class HttpProtocolClient {
     method: M,
     params: P,
     id: string | number = Date.now(),
+    options?: { signal?: AbortSignal },
   ): Promise<R> {
     const response = await this.fetchImpl(`${this.baseUrl}/rpc`, {
       method: 'POST',
       headers: this.requestHeaders(),
       body: JSON.stringify({ jsonrpc: '2.0', id, method, params }),
+      ...(options?.signal ? { signal: options.signal } : {}),
     });
     const body = (await response.json()) as JsonRpcResponse<R>;
     if (!response.ok || 'error' in body) {

@@ -13,6 +13,7 @@ import { RemoteBridgeChild } from '../native/remoteHost.mjs';
 import { SharedProtocolRun } from '../native/sharedProtocolRun.mjs';
 import { saveProviderRoute, qualifiedProviders, readProviderRoute } from '../native/provider-routing.mjs';
 import { productionNodeCliArgv } from '../native/cli-launch.mjs';
+import { nodeChildSpawnEnvironment } from '../native/spawn-env-floor.mjs';
 import { rmTempDirWithOwnedChildDrain } from './temp-dir-cleanup.mjs';
 
 const babelCliDist = resolve(
@@ -122,11 +123,11 @@ async function runTurn({
     port: bridge.port,
     desktopClientId: bridge.desktopClientId,
     desktopProofKey: bridge.desktopProofKey,
-    env: {
+    env: nodeChildSpawnEnvironment({
       BABEL_CONFIG_DIR: config,
       BABEL_RUNS_DIR: runsDir,
       ELECTRON_RUN_AS_NODE: '1',
-    },
+    }),
     inheritEnv: false,
   });
 
@@ -220,11 +221,11 @@ runDesktopCliShim({
       executable: process.execPath,
       entry,
       projectRoot: project,
-      env: {
+      env: nodeChildSpawnEnvironment({
         BABEL_CONFIG_DIR: config,
         BABEL_RUNS_DIR: runsDir,
         ELECTRON_RUN_AS_NODE: '1',
-      },
+      }),
       inheritEnv: false,
     });
 
