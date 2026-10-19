@@ -15,6 +15,7 @@ function directlyRuns(script, command) {
   const supported = [
     /^npm run test:consumer-artifact -- --archive "\$env:CONSUMER_ARCHIVE" --manifest \.\.\/artifacts\/consumer-candidate\/manifest\.json --expected-sha256 "\$env:CONSUMER_DIGEST" --expected-source "\$env:CONSUMER_SOURCE"$/,
     /^npm run [a-z0-9:-]+(?: -- --test-timeout=[0-9]+)?(?: 2>&1 \| Tee-Object(?: -FilePath)? [a-zA-Z0-9_./-]+)?$/,
+    /^xvfb-run -a -s "[^"]+" npm run test$/,
     /^node scripts\/[a-zA-Z0-9_.-]+\.mjs [a-z0-9-]+$/,
     /^pwsh -NoProfile -ExecutionPolicy Bypass -File tools\/check-harness-architecture\.ps1$/,
     /^New-Item -ItemType Directory -Force (?:\.\.\/)?artifacts\/[a-z0-9-]+ \| Out-Null$/,
@@ -26,9 +27,14 @@ function directlyRuns(script, command) {
   const target = command === 'check-harness-architecture.ps1'
     ? lines.indexOf('pwsh -NoProfile -ExecutionPolicy Bypass -File tools/check-harness-architecture.ps1')
     : lines.findIndex(line => line === command || line.startsWith(command + ' '));
+  const xvfbWrapped =
+    command === 'npm run test' &&
+    lines.length === 1 &&
+    /^xvfb-run -a -s "[^"]+" npm run test$/.test(lines[0]);
+  const runIndex = target >= 0 ? target : xvfbWrapped ? 0 : -1;
   // GitHub's built-in shells retain the final native exit status. A later
   // command would overwrite it and cannot prove the required suite is gated.
-  return target >= 0 && lines.slice(target + 1).every(line => line === 'exit $LASTEXITCODE');
+  return runIndex >= 0 && lines.slice(runIndex + 1).every(line => line === 'exit $LASTEXITCODE');
 }
 
 // Deliberately support explicit hosted labels and the reviewed OS matrix only.

@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {runInNewContext} from 'node:vm';
 import {isAppUrl,APP_URL} from '../native/security.mjs';
+import {extractBusyBinding} from './main-busy-source.mjs';
 
 const source=readFileSync(new URL('../native/main.mjs',import.meta.url),'utf8');
 function sandboxHandler(overrides={}){
@@ -18,8 +19,10 @@ function sandboxHandler(overrides={}){
     savePreferences:async()=>{},getInfo:async()=>({ready:true}),...overrides,
   };
   const registration=source.slice(source.indexOf("  handle('babel:configure-sandbox'"),source.indexOf("  handle('babel:check-cli-update'"));
+  const busyBinding=extractBusyBinding(source);
+  assert.ok(busyBinding,'busy binding must be extractable from main.mjs');
   const declarations=[
-    source.match(/const busy=[^;]+;/)[0],
+    busyBinding,
     source.match(/function validateSender\(event\)\{[\s\S]+?\n\}/)[0],
     source.match(/function handle\(channel,fn\)\{[^\n]+/)[0],
     source.match(/function assertIdle\(\)\{[^\n]+/)[0],

@@ -66,6 +66,7 @@ import {
 import { writePairUiResponse } from './pairUiAssets.js';
 import { pairedDeviceMutationOriginOk } from './bridgeMutationPolicy.js';
 import type { BridgeClientContext } from './bridgeClientAuth.js';
+import { acceptanceHealthExtension } from './acceptanceBridge.js';
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
 export interface BridgeServerOptions {
@@ -103,6 +104,15 @@ export interface BridgeServerOptions {
    * Narrow HTTP principal barriers for regression tests (never set in production serve).
    */
   httpPrincipalTestHooks?: BridgeHttpPrincipalTestHooks;
+  /**
+   * When set, loopback requests carrying `x-babel-desktop-client-id` authenticate as
+   * the Desktop controller without a host bearer (shared protocol-host ownership).
+   */
+  desktopControllerClientId?: string;
+  /** Per-launch desktop controller proof secret (never published to remote UIs). */
+  desktopControllerProofKey?: string;
+  /** Test-only acceptance fixture metadata (never set on ordinary `remote serve`). */
+  acceptanceFixture?: { kind: string; label: string };
 }
 
 /** Test-only hooks for post-initial-auth / pre-body-read synchronization. */
@@ -137,15 +147,6 @@ function matchSessionPath(pathname: string): string | null {
 }
 
 // ─── Authentication ────────────────────────────────────────────────────────────
-
-function isAuthenticated(
-  req: IncomingMessage,
-  authToken: string,
-  parsedUrl?: ParsedUrl | null,
-  pairing?: DevicePairingService,
-): boolean {
-  return isBridgeRequestAuthenticated(req, authToken, parsedUrl, pairing);
-}
 
 function validateAuthenticatedClient(
   client: BridgeClientContext,
@@ -280,6 +281,34 @@ export class BridgeServer {
     );
   }
 
+  private desktopControllerClientId(): string | undefined {
+    const fromOptions = this.options.desktopControllerClientId?.trim();
+    if (fromOptions) return fromOptions;
+    const fromEnv = process.env['BABEL_BRIDGE_DESKTOP_CLIENT_ID']?.trim();
+    return fromEnv || undefined;
+  }
+
+  private desktopControllerProofKey(): string | undefined {
+    const fromOptions = this.options.desktopControllerProofKey?.trim();
+    if (fromOptions) return fromOptions;
+    const fromEnv = process.env['BABEL_BRIDGE_DESKTOP_PROOF_KEY']?.trim();
+    return fromEnv || undefined;
+  }
+
+  private resolveHttpClient(
+    req: IncomingMessage,
+    parsedUrl?: ParsedUrl | null,
+  ): BridgeClientContext {
+    return resolveBridgeClientContext(
+      req,
+      this.authToken,
+      parsedUrl,
+      this.devicePairing,
+      this.desktopControllerClientId(),
+      this.desktopControllerProofKey(),
+    );
+  }
+
   // ── Lifecycle ──────────────────────────────────────────────────────────────
 
   /**
@@ -394,11 +423,14 @@ export class BridgeServer {
     const { pathname } = parsedUrl;
 
     if (pathname === '/health' && req.method === 'GET') {
+      const sharedSession = Boolean(this.desktopControllerClientId());
       jsonResponse(res, 200, {
         ok: true,
         bind: `${this.listenHost}:${this._port}`,
         protocol: 'adr-010',
+        ...(sharedSession ? { shared_session: true } : {}),
         ...(this.bridgeInstance ? { instance: this.bridgeInstance } : {}),
+        ...acceptanceHealthExtension(this.options.acceptanceFixture),
       });
       return;
     }
@@ -417,12 +449,7 @@ export class BridgeServer {
 
     if (pathname === '/auth/session' && req.method === 'GET') {
       setCorsHeaders(res, req.headers['origin'], this.allowedOrigins);
-      const client = resolveBridgeClientContext(
-        req,
-        this.authToken,
-        parsedUrl,
-        this.devicePairing,
-      );
+      const client = this.resolveHttpClient(req, parsedUrl);
       if (client.authKind === 'paired_device' && client.deviceId) {
         jsonResponse(res, 200, {
           ok: true,
@@ -433,6 +460,10 @@ export class BridgeServer {
       }
       if (client.authKind === 'host_bearer' || client.authKind === 'query_bearer') {
         jsonResponse(res, 200, { ok: true, auth: 'host' });
+        return;
+      }
+      if (client.authKind === 'desktop_controller') {
+        jsonResponse(res, 200, { ok: true, auth: 'desktop_controller', clientId: client.clientId });
         return;
       }
       jsonResponse(res, 200, { ok: false, auth: 'none' });
@@ -453,18 +484,22 @@ export class BridgeServer {
     }
 
     // Authenticate all non-OPTIONS requests
-    if (!isAuthenticated(req, this.authToken, parsedUrl, this.devicePairing)) {
+    if (
+      !isBridgeRequestAuthenticated(
+        req,
+        this.authToken,
+        parsedUrl,
+        this.devicePairing,
+        this.desktopControllerClientId(),
+        this.desktopControllerProofKey(),
+      )
+    ) {
       setCorsHeaders(res, req.headers['origin'], this.allowedOrigins);
       errorResponse(res, 401, 'Unauthorized — provide a valid Bearer token');
       return;
     }
 
-    const mutationClient = resolveBridgeClientContext(
-      req,
-      this.authToken,
-      parsedUrl,
-      this.devicePairing,
-    );
+    const mutationClient = this.resolveHttpClient(req, parsedUrl);
     if (
       req.method !== 'GET' &&
       req.method !== 'HEAD' &&
@@ -670,12 +705,7 @@ export class BridgeServer {
 
   private async handleMintTicket(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const parsedUrl = parseRequestUrl(req);
-    const principalBefore = resolveBridgeClientContext(
-      req,
-      this.authToken,
-      parsedUrl,
-      this.devicePairing,
-    );
+    const principalBefore = this.resolveHttpClient(req, parsedUrl);
     const authBefore = validateAuthenticatedClient(principalBefore, this.devicePairing);
     if (!authBefore.ok) {
       errorResponse(res, authBefore.status, authBefore.message);
@@ -766,12 +796,7 @@ export class BridgeServer {
     scope: 'mint' | 'rpc',
     res: ServerResponse,
   ): BridgeClientContext | null {
-    const principalAfter = resolveBridgeClientContext(
-      req,
-      this.authToken,
-      parsedUrl,
-      this.devicePairing,
-    );
+    const principalAfter = this.resolveHttpClient(req, parsedUrl);
     if (!bridgeClientPrincipalMatches(principalBefore, principalAfter)) {
       if (scope === 'mint') {
         errorResponse(res, 401, 'Authentication expired or changed during request');
@@ -802,12 +827,7 @@ export class BridgeServer {
 
   private async handleRpc(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const parsedUrl = parseRequestUrl(req);
-    const principalBefore = resolveBridgeClientContext(
-      req,
-      this.authToken,
-      parsedUrl,
-      this.devicePairing,
-    );
+    const principalBefore = this.resolveHttpClient(req, parsedUrl);
     const authBefore = validateAuthenticatedClient(principalBefore, this.devicePairing);
     if (!authBefore.ok) {
       jsonResponse(res, authBefore.status, {

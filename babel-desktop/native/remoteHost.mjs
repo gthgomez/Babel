@@ -1,33 +1,50 @@
 import { spawn, spawnSync } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { isAbsolute, resolve } from 'node:path';
+import {productionNodeCliArgv} from './cli-launch.mjs';
 
 // The listen host is configuration-derived (`BABEL_BRIDGE_HOST` may be
 // `localhost`, `LocalHost` or `::1`) while the socket itself always binds
 // 127.0.0.1, so the announcement is matched on any loopback spelling.
-const LISTENING_RE = /Babel Remote listening on http:\/\/(?:127\.0\.0\.1|localhost|\[?::1\]?):(\d+)/i;
+const LISTENING_RE =
+  /Babel Remote (?:acceptance bridge )?listening on http:\/\/(?:127\.0\.0\.1|localhost|\[?::1\]?):(\d+)/i;
 const DEFAULT_READY_TIMEOUT_MS = 30_000;
 const STOP_GRACE_MS = 2_000;
 
+/** Tree-kill owned children: POSIX process group when pid>0; always signal the direct child handle. */
 function terminateChildTree(child) {
-  if (process.platform === 'win32' && child.pid) {
+  if (!child) return;
+  const pid = child.pid;
+  if (process.platform === 'win32' && typeof pid === 'number' && pid > 0) {
     const windowsRoot = process.env.SystemRoot || process.env.WINDIR || 'C:\\Windows';
     const taskkillPath = resolve(windowsRoot, 'System32', 'taskkill.exe');
     try {
-      spawnSync(taskkillPath, ['/pid', String(child.pid), '/T', '/F'], {windowsHide: true, stdio: 'ignore', timeout: 1500});
+      spawnSync(taskkillPath, ['/pid', String(pid), '/T', '/F'], {windowsHide: true, stdio: 'ignore', timeout: 1500});
     } catch {
       /* close handler still reports exit */
     }
+  } else if (process.platform !== 'win32' && typeof pid === 'number' && pid > 0) {
+    try {
+      process.kill(-pid, 'SIGTERM');
+    } catch {
+      /* group may already be gone */
+    }
+    try {
+      process.kill(-pid, 'SIGKILL');
+    } catch {
+      /* group may already be gone */
+    }
   }
   try {
-    child.kill();
+    child.kill('SIGKILL');
   } catch {
     /* already exited */
   }
 }
 
 /** Build argv for `babel remote serve` without shell interpolation. */
-export function buildRemoteServeArgs(entry, projectRoot, {port = 4545} = {}) {
+/** Build argv for `babel remote acceptance-bridge` (test-owned deterministic seam). */
+export function buildAcceptanceBridgeArgs(entry, projectRoot, {port = 4545, sharedSession = false} = {}) {
   if (typeof entry !== 'string' || !isAbsolute(entry)) throw new TypeError('CLI entry must be an absolute path');
   if (typeof projectRoot !== 'string' || !isAbsolute(projectRoot)) {
     throw new TypeError('Project root must be an absolute path');
@@ -36,7 +53,23 @@ export function buildRemoteServeArgs(entry, projectRoot, {port = 4545} = {}) {
   if (!Number.isInteger(listenPort) || listenPort < 1024 || listenPort > 65535) {
     throw new TypeError('Invalid remote listen port');
   }
-  return [entry, 'remote', 'serve', '--port', String(listenPort), '--project', projectRoot];
+  const args = [entry, 'remote', 'acceptance-bridge', '--port', String(listenPort), '--project', projectRoot];
+  if (sharedSession) args.push('--shared-session');
+  return args;
+}
+
+export function buildRemoteServeArgs(entry, projectRoot, {port = 4545, sharedSession = false} = {}) {
+  if (typeof entry !== 'string' || !isAbsolute(entry)) throw new TypeError('CLI entry must be an absolute path');
+  if (typeof projectRoot !== 'string' || !isAbsolute(projectRoot)) {
+    throw new TypeError('Project root must be an absolute path');
+  }
+  const listenPort = Number(port);
+  if (!Number.isInteger(listenPort) || listenPort < 1024 || listenPort > 65535) {
+    throw new TypeError('Invalid remote listen port');
+  }
+  const args = [entry, 'remote', 'serve', '--port', String(listenPort), '--project', projectRoot];
+  if (sharedSession) args.push('--shared-session');
+  return args;
 }
 
 /** Payload of a Babel bridge /health response, or null when it is not one. */
@@ -103,6 +136,9 @@ export class RemoteBridgeChild {
   #state = 'stopped';
   #generation = 0;
   #stopTimer = null;
+  #desktopClientId = null;
+  #desktopProofKey = null;
+  #sharedSession = false;
 
   /**
    * @param {object} options
@@ -133,17 +169,48 @@ export class RemoteBridgeChild {
     return this.#port;
   }
 
-  async start({port = 4545, onLine, readyTimeoutMs = DEFAULT_READY_TIMEOUT_MS} = {}) {
+  get sharedSession() {
+    return this.#sharedSession;
+  }
+
+  get desktopClientId() {
+    return this.#desktopClientId;
+  }
+
+  get desktopProofKey() {
+    return this.#desktopProofKey;
+  }
+
+  async start({port = 4545, onLine, readyTimeoutMs = DEFAULT_READY_TIMEOUT_MS, sharedSession = true, desktopClientId} = {}) {
     if (this.running) throw new Error('Remote bridge is already running');
     const generation = ++this.#generation;
     this.#state = 'starting';
     this.#port = port;
 
     const instance = randomUUID();
-    const child = this.spawnChild(this.executable, buildRemoteServeArgs(this.entry, this.projectRoot, {port}), {
+    const useSharedSession = sharedSession === true;
+    const controllerId = useSharedSession
+      ? (typeof desktopClientId === 'string' && desktopClientId.startsWith('desktop:')
+          ? desktopClientId
+          : `desktop:${randomUUID().replace(/-/g, '')}`)
+      : null;
+    const proofKey = useSharedSession ? randomBytes(32).toString('base64url') : null;
+    this.#sharedSession = useSharedSession;
+    this.#desktopClientId = controllerId;
+    this.#desktopProofKey = proofKey;
+    const serveCliArgs = buildRemoteServeArgs(this.entry, this.projectRoot, {
+      port,
+      sharedSession: useSharedSession,
+    });
+    const child = this.spawnChild(
+      this.executable,
+      productionNodeCliArgv(this.entry, serveCliArgs.slice(1)),
+      {
       cwd: this.projectRoot,
       shell: false,
       windowsHide: true,
+      // POSIX: own a process group so stop() can tree-kill shim + acceptance-bridge grandchild.
+      detached: process.platform !== 'win32',
       stdio: ['ignore', 'pipe', 'pipe'],
       env: {
         ...(this.inheritEnv ? process.env : {}),
@@ -151,8 +218,16 @@ export class RemoteBridgeChild {
         BABEL_DESKTOP_IPC: '1',
         // Per-launch identity the bridge echoes on /health. Not a credential.
         BABEL_BRIDGE_INSTANCE: instance,
+        ...(controllerId && proofKey
+          ? {
+              BABEL_BRIDGE_SHARED_SESSION: '1',
+              BABEL_BRIDGE_DESKTOP_CLIENT_ID: controllerId,
+              BABEL_BRIDGE_DESKTOP_PROOF_KEY: proofKey,
+            }
+          : {}),
       },
-    });
+    },
+    );
     this.#child = child;
 
     let announcedPort = null;
@@ -238,7 +313,13 @@ export class RemoteBridgeChild {
           text: 'Remote bridge is ready on the requested loopback port.',
         });
       }
-      return {port: readyPort, url: `http://127.0.0.1:${readyPort}`, uiPath: '/ui'};
+      return {
+        port: readyPort,
+        url: `http://127.0.0.1:${readyPort}`,
+        uiPath: '/ui',
+        sharedSession: useSharedSession,
+        desktopClientId: controllerId,
+      };
     } catch (error) {
       if (generation === this.#generation) {
         this.#state = 'failed';
@@ -251,6 +332,44 @@ export class RemoteBridgeChild {
       child.stderr.off('data', onStderr);
       child.stdout.resume();child.stderr.resume();
     }
+  }
+
+  /**
+   * Wait until the owned bridge child process has exited (close event).
+   * Call after stop(); rejects if the PID is still alive past timeoutMs.
+   */
+  waitForOwnedChildExit(timeoutMs = 8_000) {
+    return new Promise((resolve, reject) => {
+      const child = this.#child;
+      if (!child) {
+        if (this.#state === 'stopping') {
+          reject(
+            new Error(
+              'Remote bridge is stopping but owned child handle is missing (orphan risk)',
+            ),
+          );
+          return;
+        }
+        if (this.#state === 'stopped' || this.#state === 'failed') {
+          resolve({ pid: null, exitCode: 0, signal: null });
+          return;
+        }
+        reject(new Error(`Remote bridge has no owned child while state=${this.#state}`));
+        return;
+      }
+      const pid = child.pid;
+      const timer = setTimeout(() => {
+        reject(
+          new Error(
+            `owned bridge child pid=${pid} did not close stdio within ${timeoutMs}ms (state=${this.#state})`,
+          ),
+        );
+      }, timeoutMs);
+      child.once('close', (exitCode, signal) => {
+        clearTimeout(timer);
+        resolve({ pid, exitCode, signal });
+      });
+    });
   }
 
   stop() {
@@ -268,11 +387,7 @@ export class RemoteBridgeChild {
     this.#generation += 1;
     terminateChildTree(child);
     const timer = setTimeout(() => {
-      try {
-        child.kill('SIGKILL');
-      } catch {
-        /* already exited */
-      }
+      terminateChildTree(child);
     }, STOP_GRACE_MS);
     this.#stopTimer = timer;
     child.once('close', () => {
@@ -290,5 +405,8 @@ export class RemoteBridgeChild {
   #resetChild() {
     this.#child = null;
     this.#port = null;
+    this.#desktopClientId = null;
+    this.#desktopProofKey = null;
+    this.#sharedSession = false;
   }
 }

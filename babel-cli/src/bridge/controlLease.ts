@@ -64,10 +64,18 @@ export class ControlLeaseRegistry {
     threadId: string;
     clientId: string;
     force?: boolean;
+    /** When true, a paired device may take a lease held by a desktop controller. */
+    remotePriorityTakeover?: boolean;
   }): { ok: true; epoch: number; expiresAtMs: number } | { ok: false; error: ControlLeaseError } {
     const existing = this.getValid(input.threadId);
     if (existing && existing.holderClientId !== input.clientId) {
-      if (!input.force) return { ok: false, error: 'held_by_other' };
+      if (!input.force) {
+        const remoteTakeover =
+          input.remotePriorityTakeover === true &&
+          existing.holderClientId.startsWith('desktop:') &&
+          input.clientId.startsWith('device:');
+        if (!remoteTakeover) return { ok: false, error: 'held_by_other' };
+      }
     }
     if (existing && existing.holderClientId === input.clientId && !input.force) {
       existing.expiresAtMs = Date.now() + this.ttlMs;

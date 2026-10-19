@@ -6,7 +6,8 @@ import {EventEmitter} from 'node:events';
 import {createServer} from 'node:http';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {mkdtempSync, writeFileSync, rmSync} from 'node:fs';
+import {mkdtempSync, writeFileSync} from 'node:fs';
+import {rmTempDirWithOwnedChildDrain} from './temp-dir-cleanup.mjs';
 import {createServer as createNetServer} from 'node:net';
 import {fileURLToPath} from 'node:url';
 import {RemoteBridgeChild, buildRemoteServeArgs} from '../native/remoteHost.mjs';
@@ -14,6 +15,45 @@ import {RemoteBridgeChild, buildRemoteServeArgs} from '../native/remoteHost.mjs'
 const here = fileURLToPath(new URL('.', import.meta.url));
 const projectRoot = tmpdir();
 const NOT_OURS = /did not report readiness for this launch/;
+
+/**
+ * Capture the spawned child's process end; do not rely on bridge.#child after failed start
+ * (failed-start clears #child before close). Prefer exit for cleanup: close can lag on piped stdio.
+ */
+function bridgeSpawnWithOwnedExitBarrier(spawnImpl = spawn) {
+  let ownedChildExit = null;
+  const spawnChild = (executable, argv, options) => {
+    const child = spawnImpl(executable, argv, options);
+    child.stdout?.resume?.();
+    child.stderr?.resume?.();
+    ownedChildExit = new Promise((resolve) => {
+      let settled = false;
+      const finish = (exitCode, signal, kind) => {
+        if (settled) return;
+        settled = true;
+        resolve({ exitCode, signal, kind });
+      };
+      child.once('exit', (exitCode, signal) => finish(exitCode, signal, 'exit'));
+      child.once('close', (exitCode, signal) => finish(exitCode, signal, 'close'));
+    });
+    return child;
+  };
+  const waitForOwnedChildExit = async (timeoutMs = 8_000) => {
+    if (!ownedChildExit) {
+      throw new Error('Remote bridge spawnChild was never invoked');
+    }
+    return await Promise.race([
+      ownedChildExit,
+      new Promise((_, reject) => {
+        setTimeout(
+          () => reject(new Error(`owned bridge child did not exit within ${timeoutMs}ms`)),
+          timeoutMs,
+        );
+      }),
+    ]);
+  };
+  return { spawnChild, waitForOwnedChildExit };
+}
 
 test('RemoteBridgeChild exposes stopped lifecycle state before start', () => {
   const entry = join(tmpdir(), 'babel-cli', 'dist', 'index.js');
@@ -48,20 +88,24 @@ createServer((request,response)=>{response.writeHead(200,{'content-type':'applic
     LOCALAPPDATA: root,
     DEEPSEEK_API_KEY: 'fixture-sensitive',
   });
+  const ownedExit = bridgeSpawnWithOwnedExitBarrier();
   const bridge = new RemoteBridgeChild({
     executable: process.execPath,
     entry,
     projectRoot: root,
     env,
     inheritEnv: false,
+    spawnChild: ownedExit.spawnChild,
   });
   const lines = [];
+  let startReachedReady = false;
   try {
     const result = await bridge.start({
       port,
       onLine: line => lines.push(line),
       readyTimeoutMs: 5000,
     });
+    startReachedReady = true;
     assert.equal(result.port, port);
     assert.equal(bridge.state, 'ready');
     assert.equal(JSON.stringify(lines).includes('fixture-sensitive'), false, 'Remote IPC exposed a synthetic credential');
@@ -69,8 +113,11 @@ createServer((request,response)=>{response.writeHead(200,{'content-type':'applic
     assert.equal(lines.length <= 3, true, 'Remote diagnostics were not bounded');
     assert.equal(lines.some(line => line.diagnosticAvailable === true), true);
   } finally {
-    bridge.stop();
-    rmSync(root, { recursive: true, force: true });
+    if (startReachedReady || bridge.state === 'ready' || bridge.state === 'stopping') {
+      bridge.stop();
+    }
+    await ownedExit.waitForOwnedChildExit(8_000);
+    await rmTempDirWithOwnedChildDrain(root);
   }
 });
 

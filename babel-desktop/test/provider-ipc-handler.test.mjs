@@ -10,6 +10,7 @@ import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {runInNewContext} from 'node:vm';
 import {saveProviderCredential} from '../native/credentials.mjs';
+import {extractBusyBinding} from './main-busy-source.mjs';
 const FIXTURE_VALUE = 'BabelTestCredentialPlaceholder0000';
 
 async function registeredHandler(source, config, channel = 'babel:save-provider-credential', lifecycle = {}) {
@@ -27,10 +28,10 @@ async function registeredHandler(source, config, channel = 'babel:save-provider-
     connectionChangeBusy: false, runAdmission: false, runner: null, remoteBridge: null, updateBusy: false,
     ...lifecycle,
   };
-  const busy = source.match(/const busy=([^;]+);/)?.[1];
+  const busyBinding = extractBusyBinding(source);
   const idle = source.match(/function assertIdle\(\)\{[^\n]+\}/)?.[0];
   const connection = source.match(/async function withConnectionChange\(fn\)\{[\s\S]+?\n\}/)?.[0] ?? '';
-  assert.ok(busy && idle);
+  assert.ok(busyBinding && idle);
   for (const match of source.matchAll(/import\s*\{([^}]+)\}\s*from\s*['"]\.\/(credentials|provider-routing|provider-route-save)\.mjs['"]/g)) {
     const module = await import(`../native/${match[2]}.mjs`);
     for (const entry of match[1].split(',')) {
@@ -39,7 +40,7 @@ async function registeredHandler(source, config, channel = 'babel:save-provider-
       bindings[local] = module[exported];
     }
   }
-  const handlers = runInNewContext(`const busy=${busy};\n${idle}\n${connection}\n[${callbacks.join(',')}]`, bindings);
+  const handlers = runInNewContext(`${busyBinding}\n${idle}\n${connection}\n[${callbacks.join(',')}]`, bindings);
   return Array.isArray(channel) ? handlers : handlers[0];
 }
 

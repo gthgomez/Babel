@@ -37,7 +37,8 @@ test('remote serve arguments stay absolute and loopback-scoped',async()=>{
  const {buildRemoteServeArgs}=await load('remoteHost');assert.equal(typeof buildRemoteServeArgs,'function');
  const entry=join(tmpdir(),'Babel Space','index.js');const root=join(tmpdir(),'project space');
  const args=buildRemoteServeArgs(entry,root,{port:4545});
- assert.deepEqual(args,[entry,'remote','serve','--port','4545','--project',root]);
+  assert.deepEqual(args,[entry,'remote','serve','--port','4545','--project',root]);
+  assert.deepEqual(buildRemoteServeArgs(entry,root,{port:4545,sharedSession:true}),[entry,'remote','serve','--port','4545','--project',root,'--shared-session']);
  assert.throws(()=>buildRemoteServeArgs('relative',root));
 });
 test('a superseded start cannot clear a newer remote bridge reference',async()=>{

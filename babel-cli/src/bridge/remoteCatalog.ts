@@ -31,6 +31,8 @@ export interface RemoteSessionEntry {
   preview: string;
   updated_at: number;
   active_turn: boolean;
+  /** Set when `active_turn` is true for the in-flight launch generation. */
+  active_turn_id?: number;
   owned_by_bridge_session?: string;
 }
 
@@ -48,11 +50,20 @@ function workspaceLabel(projectRoot: string): string {
   return parts[parts.length - 1] ?? projectRoot;
 }
 
+function threadHasPersistedTerminal(state: ProtocolHostState, threadId: string): boolean {
+  const prefix = `${threadId}:`;
+  for (const key of state.turnTerminals.keys()) {
+    if (key.startsWith(prefix)) return true;
+  }
+  return false;
+}
+
 function sessionStatus(
   state: ProtocolHostState,
   threadId: string,
 ): RemoteSessionStatus {
   if (state.activeTurns.has(threadId)) return 'running';
+  if (threadHasPersistedTerminal(state, threadId)) return 'completed';
   const engine = state.engines.get(threadId);
   if (engine) return 'idle';
   const report = state.restoreReports.get(threadId);
@@ -75,6 +86,7 @@ export async function buildRemoteCatalog(input: {
   for (const [threadId, descriptor] of input.state.descriptors) {
     if (!workspaceRootMatches(descriptor.projectRoot, root)) continue;
     const owner = input.threadOwner?.(threadId);
+    const launch = input.state.activeTurns.get(threadId);
     byId.set(threadId, {
       thread_id: threadId,
       project_root: descriptor.projectRoot,
@@ -82,7 +94,8 @@ export async function buildRemoteCatalog(input: {
       status: sessionStatus(input.state, threadId),
       preview: descriptor.task?.slice(0, 72) ?? '(active session)',
       updated_at: Date.parse(descriptor.createdAt) || Date.now(),
-      active_turn: input.state.activeTurns.has(threadId),
+      active_turn: Boolean(launch && !launch.settled),
+      ...(launch && !launch.settled ? { active_turn_id: launch.turnId } : {}),
       ...(owner ? { owned_by_bridge_session: owner } : {}),
     });
   }
@@ -100,6 +113,7 @@ export async function buildRemoteCatalog(input: {
       continue;
     }
     const owner = input.threadOwner?.(thread.thread_id);
+    const launch = input.state.activeTurns.get(thread.thread_id);
     byId.set(thread.thread_id, {
       thread_id: thread.thread_id,
       project_root: thread.project_root ?? root,
@@ -107,7 +121,8 @@ export async function buildRemoteCatalog(input: {
       status: sessionStatus(input.state, thread.thread_id),
       preview: thread.preview ?? '(thread store)',
       updated_at: thread.updated_at,
-      active_turn: input.state.activeTurns.has(thread.thread_id),
+      active_turn: Boolean(launch && !launch.settled),
+      ...(launch && !launch.settled ? { active_turn_id: launch.turnId } : {}),
       ...(owner ? { owned_by_bridge_session: owner } : {}),
     });
   }

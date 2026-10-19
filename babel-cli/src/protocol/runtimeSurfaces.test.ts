@@ -55,9 +55,9 @@ test("protocol host stub handles turn.submit with simulated events", async () =>
   assert.strictEqual(notifications[0].params.event.type, "thinking");
   assert.strictEqual(notifications[1].params.event.type, "answer_chunk");
 
-  // Disconnect shouldn't crash the server state
-  const nextTurnId = resolveNextTurnId(threadId); // should be 1 because mock didn't write to DB
-  assert.strictEqual(nextTurnId, 1);
+  // Admitted turn 1 is reserved in durable metadata even when cells are mocked.
+  const nextTurnId = resolveNextTurnId(threadId);
+  assert.strictEqual(nextTurnId, 2);
 });
 
 export async function customIpcRequest(

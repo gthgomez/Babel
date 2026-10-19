@@ -29,6 +29,10 @@ import {
   ensureThread,
   loadSessionDescriptor,
   loadThreadCells,
+  loadTurnTerminalRecord,
+  persistTurnTerminalRecord,
+  resolveLatestTurnIdFromThreadStore,
+  reserveAdmittedTurnId,
   resolveNextTurnId,
   writeSessionDescriptor,
   threadStoreExists,
@@ -49,6 +53,7 @@ import type {
   TurnEventParams,
   TurnSubmitResult,
   ApprovalDecideResult,
+  ApprovalLookupResult,
   WorkspaceChangesResult,
   VerificationLookupResult,
 } from '../types.js';
@@ -97,6 +102,8 @@ export interface ProtocolHostState {
   verificationByThread: Map<string, VerificationEvidence>;
   /** Durable-state restore outcome recorded at thread.resume time. */
   restoreReports: Map<string, RestoreReport>;
+  /** Authoritative terminal records keyed by `${thread_id}:${turn_id}`. */
+  turnTerminals: Map<string, import('../types.js').TurnTerminalRecord>;
   /** P03: shared lifecycle facade that owns controller dispatch per turn. */
   coordinator: RuntimeCoordinator;
   /**
@@ -128,9 +135,80 @@ export function createProtocolHostState(options: {
     approvalBroker: new RemoteApprovalBroker(),
     verificationByThread: new Map(),
     restoreReports: new Map(),
+    turnTerminals: new Map(),
     coordinator: options.coordinator ?? createRuntimeCoordinator(),
     admissionStores: new Map(),
   };
+}
+
+function turnTerminalStorageKey(threadId: string, turnId: number): string {
+  return `${threadId}:${turnId}`;
+}
+
+function recordTurnTerminalFromChatEvent(
+  state: ProtocolHostState,
+  threadId: string,
+  turnId: number,
+  event: ChatEvent,
+): void {
+  const recorded_at = new Date().toISOString();
+  const key = turnTerminalStorageKey(threadId, turnId);
+  let record: import('../types.js').TurnTerminalRecord | null = null;
+  if (event.type === 'done') {
+    record = {
+      turn_id: turnId,
+      event_type: 'done',
+      answer: event.answer,
+      ...(event.status !== undefined ? { status: event.status } : {}),
+      ...(event.outcome !== undefined ? { outcome: event.outcome } : {}),
+      ...(event.reason_code !== undefined ? { reason_code: event.reason_code } : {}),
+      ...(event.cause_class !== undefined ? { cause_class: event.cause_class } : {}),
+      ...(event.fixture_execution === true ? { fixture_execution: true } : {}),
+      ...(typeof event.fixture_kind === 'string' ? { fixture_kind: event.fixture_kind } : {}),
+      usage: event.usage,
+      recorded_at,
+    };
+  } else if (event.type === 'failed') {
+    record = {
+      turn_id: turnId,
+      event_type: 'failed',
+      error: event.error,
+      ...(event.status !== undefined ? { status: event.status } : {}),
+      ...(event.outcome !== undefined ? { outcome: event.outcome } : {}),
+      ...(event.reason_code !== undefined ? { reason_code: event.reason_code } : {}),
+      ...(event.cause_class !== undefined ? { cause_class: event.cause_class } : {}),
+      recorded_at,
+    };
+  } else if (event.type === 'cancelled') {
+    record = {
+      turn_id: turnId,
+      event_type: 'cancelled',
+      outcome: event.outcome ?? 'CANCELLED',
+      ...(event.status !== undefined ? { status: event.status } : {}),
+      recorded_at,
+    };
+  }
+  if (!record) return;
+  state.turnTerminals.set(key, record);
+  try {
+    persistTurnTerminalRecord(threadId, record);
+  } catch {
+    record.durable_persist_failed = true;
+    state.turnTerminals.set(key, record);
+  }
+}
+
+function resolveTurnTerminalRecord(
+  state: ProtocolHostState,
+  threadId: string,
+  turnId: number,
+): import('../types.js').TurnTerminalRecord | null {
+  const key = turnTerminalStorageKey(threadId, turnId);
+  const cached = state.turnTerminals.get(key);
+  if (cached) return cached;
+  const durable = loadTurnTerminalRecord(threadId, turnId);
+  if (durable) state.turnTerminals.set(key, durable);
+  return durable ?? null;
 }
 
 function modeExecutionProfile(mode: BabelMode): 'chat' | 'plan' | 'deep' {
@@ -399,7 +477,34 @@ export async function handleProtocolRequest(
           thread_id: threadId,
           turn_count: report.turnCount,
           restore: report,
+          provider: descriptor.provider,
+          model: descriptor.model,
         };
+        return { jsonrpc: '2.0', id, result };
+      }
+      case 'approval.lookup': {
+        const params = request.params;
+        if (!params?.thread_id) {
+          return errorResponse(id, BabelProtocolErrorCode.INVALID_PARAMS, 'thread_id is required');
+        }
+        const pending = state.approvalBroker
+          .listPending(params.thread_id)
+          .filter((record) => record.state === 'pending')
+          .filter((record) =>
+            params.turn_id === undefined ? true : record.turn_id === params.turn_id,
+          )
+          .map((record) => ({
+            approval_id: record.approval_id,
+            thread_id: record.thread_id,
+            turn_id: record.turn_id,
+            operation_digest: record.digest,
+            expires_at: new Date(record.expires_at).toISOString(),
+            state: record.state,
+            cwd: record.operation.canonical_cwd,
+            reason: 'Remote consequential action requires ALLOW_ONCE or DENY',
+            ...(record.operation.command ? { command: record.operation.command } : {}),
+          }));
+        const result: ApprovalLookupResult = { pending };
         return { jsonrpc: '2.0', id, result };
       }
       case 'turn.submit': {
@@ -528,6 +633,7 @@ export async function handleProtocolRequest(
           );
         }
         const turnId = resolveNextTurnId(params.thread_id);
+        reserveAdmittedTurnId(params.thread_id, turnId);
         const generation = (state.launchCounters.get(params.thread_id) ?? 0) + 1;
         state.launchCounters.set(params.thread_id, generation);
         const launch: ActiveLaunch = {
@@ -572,6 +678,9 @@ export async function handleProtocolRequest(
             let runtimeExecution: RuntimeExecution | null = null;
             const emitEvents = async (events: AsyncIterable<ChatEvent>): Promise<void> => {
               for await (const event of events) {
+                if (event.type === 'done' || event.type === 'failed' || event.type === 'cancelled') {
+                  recordTurnTerminalFromChatEvent(state, params.thread_id, turnId, event);
+                }
                 const mapped = mapChatEventToTurnStreamEvent(event);
                 if (!mapped) continue;
                 try {
@@ -610,18 +719,25 @@ export async function handleProtocolRequest(
                 await emitEvents(engine.submitMessageStream(params.message));
               }
             } catch (err: any) {
-               try {
-                 onNotification?.({
-                   jsonrpc: '2.0',
-                   method: 'turn.event',
-                   params: {
-                     thread_id: params.thread_id,
-                     turn_id: turnId,
-                     seq: seq++,
-                     event: { type: 'failed', error: err.message ?? String(err) }
-                   }
-                 });
-               } catch { /* ignore */ }
+              const failedEvent: ChatEvent = {
+                type: 'failed',
+                error: err instanceof Error ? err.message : String(err),
+              };
+              recordTurnTerminalFromChatEvent(state, params.thread_id, turnId, failedEvent);
+              try {
+                onNotification?.({
+                  jsonrpc: '2.0',
+                  method: 'turn.event',
+                  params: {
+                    thread_id: params.thread_id,
+                    turn_id: turnId,
+                    seq: seq++,
+                    event: { type: 'failed', error: failedEvent.error },
+                  },
+                });
+              } catch {
+                /* ignore */
+              }
             } finally {
               if (runtimeExecution !== null) state.coordinator.settle(runtimeExecution);
               launch.settled = true;
@@ -734,7 +850,11 @@ export async function handleProtocolRequest(
         const result: HistoryLookupResult = {
           cells: slice,
           has_more: slice.length < filtered.length,
+          latest_turn_id: resolveLatestTurnIdFromThreadStore(params.thread_id),
         };
+        if (params.turn_id !== undefined) {
+          result.turn_terminal = resolveTurnTerminalRecord(state, params.thread_id, params.turn_id);
+        }
         // Provide the next-page cursor when there are more results
         if (result.has_more && slice.length > 0) {
           result.cursor = slice[slice.length - 1]?.cell_id ?? '';

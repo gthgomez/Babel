@@ -176,6 +176,7 @@ function renderRuntime() {
     nativeInfo?.remoteBridge ? runtimeRow('Remote bridge', nativeInfo.remoteBridge.running ? `Active on ${nativeInfo.remoteBridge.url ?? 'loopback'}` : `Stopped (${nativeInfo.remoteBridge.state})`) : '',
     nativeInfo?.remoteBridge?.blocksLocalRuns ? '<p class="fine-print">Local Babel runs are paused while the loopback remote bridge is active. Stop the bridge to return to local work.</p>' : '',
     nativeInfo?.remoteBridge && !nativeInfo.remoteBridge.sharedSession ? '<p class="fine-print">Remote access uses a separate CLI session; Desktop does not share one chat transcript with the phone bridge.</p>' : '',
+    nativeInfo?.remoteBridge?.sharedSession ? '<p class="fine-print">Remote access shares this Desktop project session with paired phones on the same loopback protocol host.</p>' : '',
     updatePhase ? `<p class="fine-print">${e(updatePhase)}</p>` : '',
     (update.state === 'error' || update.state === 'unsupported') ? `<p class="fine-print">${e(update.detail)}</p>` : ''
   ].join('');
@@ -205,6 +206,11 @@ function renderStatus(status) {
   $('#send-button').disabled = Boolean(activeRun) || executionBlocked();
   $('#composer-input').disabled = projectSwitching||Boolean(activeRun&&!activeRun.admitted);
   $('.stop-button').hidden = !activeRun;
+  const emergencyHostStop = Boolean(
+    activeRun && nativeInfo?.remoteBridge?.sharedSession && nativeInfo?.remoteBridge?.running,
+  );
+  const emergencyButton = $('.emergency-stop-button');
+  if (emergencyButton) emergencyButton.hidden = !emergencyHostStop;
   if (activeRun) $('.composer-hints').style.display = 'none'; else $('.composer-hints').style.removeProperty('display');
 }
 function renderSessions() {
@@ -550,6 +556,22 @@ function settleTools(message, status) {
     tool.meta = '';
   }
 }
+async function emergencyHostStopRun() {
+  if (!native?.emergencyStopSharedRun || !activeRun) return;
+  const result = await native.emergencyStopSharedRun();
+  if (!result?.accepted) {
+    toast(
+      result?.reason === 'missing_host_token'
+        ? 'Emergency host stop is unavailable (missing bridge admin token).'
+        : 'Emergency host stop was not accepted.',
+    );
+    return;
+  }
+  activeRun.emergencyRequested = true;
+  announce('Emergency host stop requested (local admin).');
+  renderControls();
+}
+
 function stopRun() {
   if (!activeRun) return;
   if (transport === 'live') {
@@ -685,6 +707,28 @@ function handleNativeEvent(packet) {
       if(run.terminalReceived||run.stopping)return;
       message.pendingApproval=ev.text;message.approval=ev.approval?.run_id===run.runId?ev.approval:null;
       message.approvalCommand=ev.command;message.approvalCwd=ev.cwd;message.approvalDetails=ev.details;
+      if(ev.reconciled)appendNote(message,'Approval state was reconciled from the shared protocol host.');
+    }
+    else if(ev.kind==='control'){
+      if(run.terminalReceived)return;
+      appendNote(message, ev.text);
+      message.status='running';
+      if(ev.operation==='cancel'){
+        run.stopping=false;
+        message.stopping=false;
+        message.pendingApproval='';
+        message.approval=null;
+        message.approvalCommand='';
+        message.approvalCwd='';
+        message.approvalDetails='';
+        renderConversation();
+        renderControls();
+      }
+    }
+    else if(ev.kind==='transport'){
+      if(run.terminalReceived)return;
+      appendNote(message, ev.text);
+      if(!ev.recoverable)run.transportError=true;
     }
     else if(ev.kind==='terminal') {
       // Replayed success cannot erase a terminal failure, block or cancellation.
@@ -926,6 +970,7 @@ document.addEventListener('click',async event=>{
     finally{renderConversation();}
   }
   else if(a==='stop')stopRun();
+  else if(a==='emergency-host-stop')void emergencyHostStopRun();
   else if(a==='toggle-left')$('.workspace').classList.toggle('show-left');
   else if(a==='toggle-right')$('.workspace').classList.toggle('show-right');
   else if(a==='copy-message'){try{const message=activeSession().messages[Number(button.dataset.index)];if(!message?.text||message.status==='running')return;if(!native?.copyText)throw new Error('Clipboard unavailable');await native.copyText(message.text);toast('Message copied.');}catch{toast('Clipboard unavailable. Select and copy the message text.');}}

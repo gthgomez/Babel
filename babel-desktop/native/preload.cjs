@@ -42,6 +42,7 @@ contextBridge.exposeInMainWorld('babelDesktop',Object.freeze({
   run:request=>ipcRenderer.invoke('babel:run',request),
   decide:decision=>ipcRenderer.invoke('babel:decide',decision),
   cancel:()=>ipcRenderer.invoke('babel:cancel'),
+  emergencyStopSharedRun:()=>ipcRenderer.invoke('babel:emergency-stop-shared-run'),
   startRemoteBridge:options=>ipcRenderer.invoke('babel:start-remote-bridge',options),
   stopRemoteBridge:()=>ipcRenderer.invoke('babel:stop-remote-bridge'),
   openRepository:()=>ipcRenderer.invoke('babel:open-repository'),
