@@ -25,6 +25,13 @@ export const EVAL_START_REMOTE_BRIDGE = async (port) => {
   return result ?? null;
 };
 
+/** Stop the owned loopback remote bridge from the main process. */
+export const EVAL_STOP_REMOTE_BRIDGE = async () => {
+  const bd = window.babelDesktop;
+  if (!bd?.stopRemoteBridge) throw new Error('babelDesktop.stopRemoteBridge missing');
+  return await bd.stopRemoteBridge();
+};
+
 /** Read remoteBridge slice from getInfo(). */
 export const EVAL_GET_REMOTE_BRIDGE = async () => {
   const bd = window.babelDesktop;

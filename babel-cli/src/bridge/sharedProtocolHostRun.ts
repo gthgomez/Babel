@@ -424,6 +424,8 @@ export async function executeSharedProtocolHostRun(
 
   let threadId = options.resumeThreadId ?? '';
   let turnSettled = false;
+  /** Process exit code from the first terminal stream event (independent of settlement flag). */
+  let terminalExitCode: number | null = null;
   let transportClosedUnexpectedly = false;
   let ws: WebSocket | null = null;
   let cancelRequested = false;
@@ -670,6 +672,14 @@ export async function executeSharedProtocolHostRun(
       return socket;
     };
 
+    const exitCodeForTerminalEvent = (mapped: Record<string, unknown>): number => {
+      const type = String(mapped.type);
+      if (type === 'run_error') return 1;
+      if (type === 'cancelled') return 0;
+      if (type === 'run_complete') return 0;
+      return 1;
+    };
+
     const writeStreamEvent = (mapped: Record<string, unknown> | null): boolean => {
       if (!mapped) return false;
       const isTerminal = ['run_complete', 'run_error', 'cancelled'].includes(String(mapped.type));
@@ -677,10 +687,16 @@ export async function executeSharedProtocolHostRun(
         if (turnSettled) return true;
         write(mapped);
         turnSettled = true;
+        terminalExitCode = exitCodeForTerminalEvent(mapped);
         return true;
       }
       write(mapped);
       return false;
+    };
+
+    const finalizeHostRunExitCode = (): number => {
+      if (terminalExitCode !== null) return terminalExitCode;
+      return turnSettled ? 0 : 1;
     };
 
     const attachTurnObserver = (socket: WebSocket): Promise<void> =>
@@ -815,13 +831,13 @@ export async function executeSharedProtocolHostRun(
           type: 'run_error',
           error: 'Shared protocol transport lost before turn settled',
         });
-        return turnSettled ? 0 : 1;
+        return finalizeHostRunExitCode();
       }
       if (turnSettled) break;
       await turnDone;
     }
 
-    return turnSettled ? 0 : 1;
+    return finalizeHostRunExitCode();
   } catch (err) {
     if (!turnSettled) {
       write({
@@ -829,8 +845,9 @@ export async function executeSharedProtocolHostRun(
         error: err instanceof Error ? err.message : String(err),
       });
       turnSettled = true;
+      terminalExitCode = 1;
     }
-    return turnSettled ? 0 : 1;
+    return terminalExitCode ?? 1;
   } finally {
     closeStdinInterface();
     try {

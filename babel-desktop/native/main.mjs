@@ -551,7 +551,16 @@ async function start(){
       throw error;
     }
   }));
-  handle('babel:stop-remote-bridge',()=>{remoteAdmissionEpoch++;remoteBridge?.stop();remoteBridge=null;return {stopped:true};});
+  handle('babel:stop-remote-bridge',async()=>{
+    remoteAdmissionEpoch++;
+    const bridge=remoteBridge;
+    remoteBridge=null;
+    bridge?.stop();
+    if(bridge){
+      await bridge.waitForOwnedChildExit(8_000);
+    }
+    return {stopped:true};
+  });
   handle('babel:run',async request=>{
     emitSharedSessionTrace('babel:run:begin',{runId:request?.runId});
     assertRunAdmissionIdle();

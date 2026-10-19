@@ -17,6 +17,7 @@ import {
   refuseAcceptanceBridgeUnlessAllowed,
   startAcceptanceBridge,
 } from '../bridge/acceptanceBridge.js';
+import { awaitLoopbackBridgeUntilSignal } from '../bridge/loopbackBridgeShutdown.js';
 import { executeSharedProtocolHostRun } from '../bridge/sharedProtocolHostRun.js';
 
 export function registerRemoteCommands(program: Command): void {
@@ -105,6 +106,7 @@ export function registerRemoteCommands(program: Command): void {
       console.log(`  tailscale serve --bg ${server.port}`);
       console.log('Do not run: tailscale funnel');
       console.log('Ctrl+C to stop. Closing this process stops the gateway; ChatEngine turns are cancelled.');
+      await awaitLoopbackBridgeUntilSignal(server);
     });
 
   remote
@@ -181,6 +183,7 @@ export function registerRemoteCommands(program: Command): void {
         token: server.token,
       });
       console.log('Ctrl+C to stop. This launcher is for acceptance tests only — not production execution.');
+      await awaitLoopbackBridgeUntilSignal(server);
     });
 
   remote

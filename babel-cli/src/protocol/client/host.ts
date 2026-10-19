@@ -32,6 +32,7 @@ import {
   loadTurnTerminalRecord,
   persistTurnTerminalRecord,
   resolveLatestTurnIdFromThreadStore,
+  reserveAdmittedTurnId,
   resolveNextTurnId,
   writeSessionDescriptor,
   threadStoreExists,
@@ -192,7 +193,8 @@ function recordTurnTerminalFromChatEvent(
   try {
     persistTurnTerminalRecord(threadId, record);
   } catch {
-    /* durable write failure must not block live notifications */
+    record.durable_persist_failed = true;
+    state.turnTerminals.set(key, record);
   }
 }
 
@@ -631,6 +633,7 @@ export async function handleProtocolRequest(
           );
         }
         const turnId = resolveNextTurnId(params.thread_id);
+        reserveAdmittedTurnId(params.thread_id, turnId);
         const generation = (state.launchCounters.get(params.thread_id) ?? 0) + 1;
         state.launchCounters.set(params.thread_id, generation);
         const launch: ActiveLaunch = {

@@ -293,8 +293,89 @@ export function ensureThread(threadId: string, meta?: Partial<ThreadMeta>): void
 }
 
 export function resolveNextTurnId(threadId: string): number {
-  const meta = getThreadMeta(threadId);
-  return (meta?.turn_count ?? 0) + 1;
+  const latest = resolveLatestTurnIdFromThreadStore(threadId);
+  return (latest ?? 0) + 1;
+}
+
+/** Reserve a monotonic admitted turn id before cells/terminals land (failures included). */
+export function reserveAdmittedTurnId(threadId: string, turnId: number): void {
+  if (!Number.isInteger(turnId) || turnId < 1) {
+    throw new TypeError('turnId must be a positive integer');
+  }
+  ensureThread(threadId);
+  const db = openMetaDb(threadId);
+  try {
+    const now = Date.now();
+    db.prepare(
+      `UPDATE thread_meta
+          SET turn_count = MAX(turn_count, ?),
+              updated_at = ?
+        WHERE thread_id = ?`,
+    ).run(turnId, now, threadId);
+  } finally {
+    db.close();
+  }
+}
+
+function isPositiveSafeTurnId(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 1 && value <= Number.MAX_SAFE_INTEGER;
+}
+
+export function validateTurnTerminalRecord(
+  parsed: unknown,
+): import('../../protocol/types.js').TurnTerminalRecord | null {
+  if (!parsed || typeof parsed !== 'object') return null;
+  const row = parsed as Record<string, unknown>;
+  if (!isPositiveSafeTurnId(row.turn_id)) return null;
+  const eventType = row.event_type;
+  if (eventType !== 'done' && eventType !== 'failed' && eventType !== 'cancelled') return null;
+  if (typeof row.recorded_at !== 'string' || row.recorded_at.length === 0) return null;
+  if (eventType === 'failed' && typeof row.error !== 'string') return null;
+  if (eventType === 'done' && row.answer !== undefined && typeof row.answer !== 'string') return null;
+  if (row.outcome !== undefined && typeof row.outcome !== 'string') return null;
+  if (row.status !== undefined && typeof row.status !== 'string') return null;
+  return parsed as import('../../protocol/types.js').TurnTerminalRecord;
+}
+
+function stripIncompleteTurnTerminalTail(raw: string): string {
+  if (!raw) return '';
+  const parts = raw.split('\n');
+  if (parts.length > 0 && parts[parts.length - 1] === '' && parts.length > 1) {
+    parts.pop();
+  }
+  while (parts.length > 0) {
+    const last = parts[parts.length - 1] ?? '';
+    if (!last.trim()) {
+      parts.pop();
+      continue;
+    }
+    try {
+      JSON.parse(last);
+      const candidate = parts.join('\n');
+      return candidate.endsWith('\n') ? candidate : `${candidate}\n`;
+    } catch {
+      parts.pop();
+    }
+  }
+  return '';
+}
+
+function parseTurnTerminalFileContents(
+  raw: string,
+): import('../../protocol/types.js').TurnTerminalRecord[] {
+  const sanitized = stripIncompleteTurnTerminalTail(raw);
+  const records: import('../../protocol/types.js').TurnTerminalRecord[] = [];
+  for (const line of sanitized.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    try {
+      const validated = validateTurnTerminalRecord(JSON.parse(trimmed));
+      if (validated) records.push(validated);
+    } catch {
+      /* skip corrupt interior lines */
+    }
+  }
+  return records;
 }
 
 export function appendTurnCells(
@@ -569,27 +650,34 @@ export function persistTurnTerminalRecord(
   threadId: string,
   record: import('../../protocol/types.js').TurnTerminalRecord,
 ): void {
+  const validated = validateTurnTerminalRecord(record);
+  if (!validated) {
+    throw new Error('Refusing to persist invalid turn terminal record');
+  }
   const dir = getThreadDir(threadId);
   mkdirSync(dir, { recursive: true });
-  appendFileSync(join(dir, TURN_TERMINALS_FILE), `${JSON.stringify(record)}\n`, 'utf8');
+  const path = join(dir, TURN_TERMINALS_FILE);
+  let prefix = '';
+  if (existsSync(path)) {
+    const existing = readFileSync(path, 'utf8');
+    prefix = stripIncompleteTurnTerminalTail(existing);
+    if (prefix !== existing) {
+      writeFileSync(path, prefix, 'utf8');
+    }
+  }
+  appendFileSync(path, `${JSON.stringify(validated)}\n`, 'utf8');
 }
 
 export function loadTurnTerminalRecord(
   threadId: string,
   turnId: number,
 ): import('../../protocol/types.js').TurnTerminalRecord | null {
+  if (!isPositiveSafeTurnId(turnId)) return null;
   const path = join(getThreadDir(threadId), TURN_TERMINALS_FILE);
   if (!existsSync(path)) return null;
   let latest: import('../../protocol/types.js').TurnTerminalRecord | null = null;
-  for (const line of readFileSync(path, 'utf8').split('\n')) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-    try {
-      const parsed = JSON.parse(trimmed) as import('../../protocol/types.js').TurnTerminalRecord;
-      if (parsed.turn_id === turnId) latest = parsed;
-    } catch {
-      /* skip corrupt lines */
-    }
+  for (const record of parseTurnTerminalFileContents(readFileSync(path, 'utf8'))) {
+    if (record.turn_id === turnId) latest = record;
   }
   return latest;
 }
@@ -607,17 +695,8 @@ export function resolveLatestTurnIdFromThreadStore(threadId: string): number | n
   }
   const terminalsPath = join(getThreadDir(threadId), TURN_TERMINALS_FILE);
   if (existsSync(terminalsPath)) {
-    for (const line of readFileSync(terminalsPath, 'utf8').split('\n')) {
-      const trimmed = line.trim();
-      if (!trimmed) continue;
-      try {
-        const parsed = JSON.parse(trimmed) as { turn_id?: number };
-        if (typeof parsed.turn_id === 'number') {
-          latest = latest === null ? parsed.turn_id : Math.max(latest, parsed.turn_id);
-        }
-      } catch {
-        /* skip corrupt lines */
-      }
+    for (const record of parseTurnTerminalFileContents(readFileSync(terminalsPath, 'utf8'))) {
+      latest = latest === null ? record.turn_id : Math.max(latest, record.turn_id);
     }
   }
   return latest;

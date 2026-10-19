@@ -12,7 +12,8 @@ const DEFAULT_READY_TIMEOUT_MS = 30_000;
 const STOP_GRACE_MS = 2_000;
 
 function terminateChildTree(child) {
-  if (process.platform === 'win32' && child.pid) {
+  if (!child?.pid) return;
+  if (process.platform === 'win32') {
     const windowsRoot = process.env.SystemRoot || process.env.WINDIR || 'C:\\Windows';
     const taskkillPath = resolve(windowsRoot, 'System32', 'taskkill.exe');
     try {
@@ -20,9 +21,25 @@ function terminateChildTree(child) {
     } catch {
       /* close handler still reports exit */
     }
+    try {
+      child.kill();
+    } catch {
+      /* already exited */
+    }
+    return;
   }
   try {
-    child.kill();
+    process.kill(-child.pid, 'SIGTERM');
+  } catch {
+    /* group may already be gone */
+  }
+  try {
+    process.kill(-child.pid, 'SIGKILL');
+  } catch {
+    /* group may already be gone */
+  }
+  try {
+    child.kill('SIGKILL');
   } catch {
     /* already exited */
   }
@@ -195,6 +212,8 @@ export class RemoteBridgeChild {
       cwd: this.projectRoot,
       shell: false,
       windowsHide: true,
+      // POSIX: own a process group so stop() can tree-kill shim + acceptance-bridge grandchild.
+      detached: process.platform !== 'win32',
       stdio: ['ignore', 'pipe', 'pipe'],
       env: {
         ...(this.inheritEnv ? process.env : {}),
@@ -342,14 +361,10 @@ export class RemoteBridgeChild {
         return;
       }
       const pid = child.pid;
-      if (child.exitCode !== null || child.signalCode !== null) {
-        resolve({ pid, exitCode: child.exitCode ?? 0, signal: child.signalCode });
-        return;
-      }
       const timer = setTimeout(() => {
         reject(
           new Error(
-            `owned bridge child pid=${pid} did not exit within ${timeoutMs}ms (state=${this.#state})`,
+            `owned bridge child pid=${pid} did not close stdio within ${timeoutMs}ms (state=${this.#state})`,
           ),
         );
       }, timeoutMs);
@@ -375,11 +390,7 @@ export class RemoteBridgeChild {
     this.#generation += 1;
     terminateChildTree(child);
     const timer = setTimeout(() => {
-      try {
-        child.kill('SIGKILL');
-      } catch {
-        /* already exited */
-      }
+      terminateChildTree(child);
     }, STOP_GRACE_MS);
     this.#stopTimer = timer;
     child.once('close', () => {

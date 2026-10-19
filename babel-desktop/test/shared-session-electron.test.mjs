@@ -13,8 +13,28 @@ import {
   EVAL_GET_REMOTE_BRIDGE,
   EVAL_RUN_SHARED_TURN,
   EVAL_START_REMOTE_BRIDGE,
+  EVAL_STOP_REMOTE_BRIDGE,
   EVAL_TRUST_PROJECT,
 } from './shared-session-electron-ipc.mjs';
+
+const desktopCliShimRuntime = fileURLToPath(
+  new URL('./desktop-cli-shim-runtime.mjs', import.meta.url),
+);
+
+async function assertLoopbackPortClosed(port, label) {
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/health`, {
+      signal: AbortSignal.timeout(800),
+    });
+    if (response.ok) {
+      throw new Error(`${label}: loopback port ${port} still serves /health after bridge stop`);
+    }
+  } catch (error) {
+    const code = error && typeof error === 'object' ? error.code ?? error.cause?.code : undefined;
+    if (error?.name === 'AbortError' || code === 'ECONNREFUSED') return;
+    throw error;
+  }
+}
 
 const babelCliDist = resolve(
   fileURLToPath(new URL('../../babel-cli/dist/index.js', import.meta.url)),
@@ -176,46 +196,14 @@ test('shared-session Electron run uses host-run child and preserves thread acros
 
     await writeFile(
       entry,
-      `import { spawn } from 'node:child_process';
-import { appendFileSync, writeFileSync } from 'node:fs';
-const dist = ${JSON.stringify(babelCliDist)};
-const argv = process.argv.slice(2);
-const legacyRunReceipt = ${JSON.stringify(legacyRunReceipt)};
-const hostRunReceipt = ${JSON.stringify(hostRunReceipt)};
-if (argv[0] === '--desktop-capabilities') {
-  console.log(JSON.stringify({ schemaVersion: 1, credentialEnvironment: 'native-resolved-v1' }));
-  process.exit(0);
-}
-let argvToRun = [...argv];
-const remoteIdx = argvToRun.indexOf('remote');
-let remoteSub = remoteIdx >= 0 ? argvToRun[remoteIdx + 1] : '';
-if (remoteIdx >= 0 && remoteSub === 'serve') {
-  argvToRun[remoteIdx + 1] = 'acceptance-bridge';
-  remoteSub = 'acceptance-bridge';
-}
-if (remoteIdx >= 0 && (remoteSub === 'serve' || remoteSub === 'acceptance-bridge' || remoteSub === 'host-run')) {
-  appendFileSync(hostRunReceipt, remoteSub + '\\n');
-  const childEnv = { ...process.env };
-  if (remoteSub === 'acceptance-bridge') childEnv.BABEL_TEST_ACCEPTANCE_DETERMINISTIC_BRIDGE = '1';
-  const child = spawn(process.execPath, ['--experimental-wasm-modules', dist, ...argvToRun], {
-    cwd: process.cwd(),
-    stdio: remoteSub === 'host-run' ? ['pipe', 'pipe', 'inherit'] : 'inherit',
-    env: childEnv,
-  });
-  if (remoteSub === 'host-run' && child.stdout) {
-    child.stdout.on('data', (chunk) => process.stdout.write(chunk));
-    if (child.stdin) process.stdin.pipe(child.stdin);
-  }
-  child.on('exit', (code, signal) => process.exit(code ?? (signal ? 1 : 0)));
-} else if (argv.includes('run')) {
-  writeFileSync(legacyRunReceipt, 'legacy-run');
-  process.stdout.write(JSON.stringify({ type: 'run_start' }) + '\\n');
-  process.stdout.write(JSON.stringify({ type: 'run_complete', result: { session_id: 'legacy', answer: 'legacy' } }) + '\\n');
-  process.exit(0);
-} else {
-  console.error('unexpected shim argv', argv);
-  process.exit(2);
-}
+      `import { runDesktopCliShim } from ${JSON.stringify(desktopCliShimRuntime)};
+runDesktopCliShim({
+  dist: ${JSON.stringify(babelCliDist)},
+  argv: process.argv.slice(2),
+  hostRunReceipt: ${JSON.stringify(hostRunReceipt)},
+  legacyRunReceipt: ${JSON.stringify(legacyRunReceipt)},
+  includeDesktopCapabilities: true,
+});
 `,
     );
 
@@ -369,6 +357,15 @@ if (remoteIdx >= 0 && (remoteSub === 'serve' || remoteSub === 'acceptance-bridge
       threadId: firstTurn.result.session_id,
       hostRunInvocations: hostRunCount,
     });
+
+    await bounded(page.evaluate(EVAL_STOP_REMOTE_BRIDGE), 15_000, 'ipc:stopRemoteBridge');
+    markStage('ipc:stopRemoteBridge', { port: bridgePort });
+    const bridgeAfterStop = await bounded(page.evaluate(EVAL_GET_REMOTE_BRIDGE), 10_000, 'ipc:getInfo.afterStop');
+    if (bridgeAfterStop?.running || bridgeAfterStop?.port) {
+      failStage('ipc:getInfo.afterStop', JSON.stringify(bridgeAfterStop));
+    }
+    await bounded(assertLoopbackPortClosed(bridgePort, 'electron-bridge-stop'), 5_000, 'bridge-port-closed');
+    markStage('bridge-port-closed', { port: bridgePort });
   } catch (error) {
     emitParentTrace('fixture:error', {
       error: error instanceof Error ? error.message : String(error),

@@ -13,8 +13,10 @@ export {
   loadTurnTerminalRecord,
   persistTurnTerminalRecord,
   replaceThreadRecords,
+  reserveAdmittedTurnId,
   resolveLatestTurnIdFromThreadStore,
   resolveNextTurnId,
+  validateTurnTerminalRecord,
   setThreadBranchMeta,
   threadStoreExists,
 } from './threadStore.js';

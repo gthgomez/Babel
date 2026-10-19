@@ -295,6 +295,8 @@ export interface TurnTerminalRecord {
   fixture_kind?: string;
   usage?: TurnUsageSummary;
   recorded_at: string;
+  /** Set when in-memory terminal could not be durably appended (recovery must not assume persistence). */
+  durable_persist_failed?: boolean;
 }
 
 export interface HistoryLookupResult {

@@ -18,6 +18,35 @@ import { rmTempDirWithOwnedChildDrain } from './temp-dir-cleanup.mjs';
 const babelCliDist = resolve(
   fileURLToPath(new URL('../../babel-cli/dist/index.js', import.meta.url)),
 );
+const desktopCliShimRuntime = fileURLToPath(
+  new URL('./desktop-cli-shim-runtime.mjs', import.meta.url),
+);
+
+async function assertLoopbackPortClosed(port, label) {
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/health`, {
+      signal: AbortSignal.timeout(800),
+    });
+    if (response.ok) {
+      throw new Error(`${label}: loopback port ${port} still serves /health after bridge stop`);
+    }
+  } catch (error) {
+    const code = error && typeof error === 'object' ? error.code ?? error.cause?.code : undefined;
+    if (error?.name === 'AbortError' || code === 'ECONNREFUSED') return;
+    throw error;
+  }
+}
+
+function assertPidNotAlive(pid, label) {
+  if (pid == null) return;
+  try {
+    process.kill(pid, 0);
+    throw new Error(`${label}: owned pid ${pid} still alive after bridge stop`);
+  } catch (error) {
+    if (error && typeof error === 'object' && error.code === 'ESRCH') return;
+    if (error?.message?.includes('still alive')) throw error;
+  }
+}
 
 const STAGE_BUDGET_MS = {
   'fixture-setup': 5_000,
@@ -25,7 +54,8 @@ const STAGE_BUDGET_MS = {
   'child-spawn': 3_000,
   'terminal-event': 22_000,
   'child-exit': 8_000,
-  'bridge-stop': 5_000,
+  'bridge-stop': 8_000,
+  'bridge-port-closed': 3_000,
   'temp-cleanup': 6_000,
 };
 
@@ -161,36 +191,12 @@ test('desktop stack reaches run_complete through shim and shared bridge (no Elec
         await writeFile(join(project, 'README.md'), '# stack');
         await writeFile(
           entry,
-          `import { spawn } from 'node:child_process';
-import { appendFileSync } from 'node:fs';
-const dist = ${JSON.stringify(babelCliDist)};
-const receipt = ${JSON.stringify(receipt)};
-const argv = process.argv.slice(2);
-let argvToRun = [...argv];
-const remoteIdx = argvToRun.indexOf('remote');
-let remoteSub = remoteIdx >= 0 ? argvToRun[remoteIdx + 1] : '';
-if (remoteIdx >= 0 && remoteSub === 'serve') {
-  argvToRun[remoteIdx + 1] = 'acceptance-bridge';
-  remoteSub = 'acceptance-bridge';
-}
-if (remoteIdx >= 0 && (remoteSub === 'serve' || remoteSub === 'acceptance-bridge' || remoteSub === 'host-run')) {
-  appendFileSync(receipt, remoteSub + '\\n');
-  const childEnv = { ...process.env };
-  if (remoteSub === 'acceptance-bridge') childEnv.BABEL_TEST_ACCEPTANCE_DETERMINISTIC_BRIDGE = '1';
-  const child = spawn(process.execPath, ['--experimental-wasm-modules', dist, ...argvToRun], {
-    cwd: process.cwd(),
-    stdio: remoteSub === 'host-run' ? ['pipe', 'pipe', 'pipe'] : 'inherit',
-    env: childEnv,
-  });
-  if (remoteSub === 'host-run') {
-    child.stdout?.on('data', (c) => process.stdout.write(c));
-    child.stderr?.on('data', (c) => process.stderr.write(c));
-    if (child.stdin) process.stdin.pipe(child.stdin);
-  } else {
-    child.stderr?.on('data', (c) => process.stderr.write(c));
-  }
-  child.on('exit', (code, signal) => process.exit(code ?? (signal ? 1 : 0)));
-} else process.exit(2);
+          `import { runDesktopCliShim } from ${JSON.stringify(desktopCliShimRuntime)};
+runDesktopCliShim({
+  dist: ${JSON.stringify(babelCliDist)},
+  argv: process.argv.slice(2),
+  hostRunReceipt: ${JSON.stringify(receipt)},
+});
 `,
         );
         saveProviderRoute({
@@ -257,6 +263,7 @@ if (remoteIdx >= 0 && (remoteSub === 'serve' || remoteSub === 'acceptance-bridge
     const receiptText = await readFile(receipt, 'utf8');
     assert.ok(receiptText.includes('host-run'));
 
+    const bridgeListenPort = bridge.port;
     bridge.stop();
     const bridgeExit = await bounded(
       bridge.waitForOwnedChildExit(STAGE_BUDGET_MS['bridge-stop']),
@@ -264,6 +271,11 @@ if (remoteIdx >= 0 && (remoteSub === 'serve' || remoteSub === 'acceptance-bridge
     );
     assert.equal(bridge.state, 'stopped', 'owned bridge must reach stopped after child exit');
     assert.equal(bridge.port, null, 'owned bridge must release port after child exit');
+    assertPidNotAlive(bridgeExit.pid, 'bridge-stop');
+    if (bridgeListenPort != null) {
+      await bounded(assertLoopbackPortClosed(bridgeListenPort, 'bridge-stop'), 'bridge-port-closed');
+      mark('bridge-port-closed', { port: bridgeListenPort });
+    }
     mark('bridge-stop', {
       pid: bridgeExit.pid,
       exitCode: bridgeExit.exitCode,

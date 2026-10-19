@@ -10,7 +10,10 @@ import {
   getThreadDir,
   loadTurnTerminalRecord,
   persistTurnTerminalRecord,
+  reserveAdmittedTurnId,
   resolveLatestTurnIdFromThreadStore,
+  resolveNextTurnId,
+  validateTurnTerminalRecord,
 } from './threadStore.js';
 
 describe('durable turn terminal records', () => {
@@ -114,6 +117,67 @@ describe('durable turn terminal records', () => {
     const again = (reread as { result?: { turn_terminal?: { event_type?: string } } }).result
       ?.turn_terminal;
     assert.equal(again?.event_type, 'cancelled');
+  });
+
+  it('allocates monotonic turn ids after terminal-only turns without cells', () => {
+    const threadId = 'chat-terminal-only-ids';
+    persistTurnTerminalRecord(threadId, {
+      turn_id: 1,
+      event_type: 'done',
+      outcome: 'UNVERIFIED_PATCH',
+      recorded_at: '2026-10-19T00:00:00.000Z',
+    });
+    assert.equal(resolveLatestTurnIdFromThreadStore(threadId), 1);
+    assert.equal(resolveNextTurnId(threadId), 2);
+    reserveAdmittedTurnId(threadId, 2);
+    assert.equal(resolveNextTurnId(threadId), 3);
+    persistTurnTerminalRecord(threadId, {
+      turn_id: 2,
+      event_type: 'failed',
+      error: 'second terminal-only turn',
+      recorded_at: '2026-10-19T00:00:01.000Z',
+    });
+    assert.equal(resolveNextTurnId(threadId), 3);
+  });
+
+  it('recovers torn tail lines and reloads later valid terminals', () => {
+    const threadId = 'chat-torn-tail';
+    const dir = getThreadDir(threadId);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, 'turn_terminals.jsonl'),
+      '{"turn_id":1,"event_type":"done","outcome":"UNVERIFIED_PATCH","recorded_at":"t1"}\n' +
+        '{"turn_id":2,"event_type":"failed","error":"partial',
+      'utf8',
+    );
+    persistTurnTerminalRecord(threadId, {
+      turn_id: 2,
+      event_type: 'failed',
+      error: 'repaired turn two',
+      recorded_at: '2026-10-19T00:00:02.000Z',
+    });
+    const loaded = loadTurnTerminalRecord(threadId, 2);
+    assert.ok(loaded);
+    assert.equal(loaded.error, 'repaired turn two');
+  });
+
+  it('rejects invalid terminal records at validation boundary', () => {
+    assert.equal(
+      validateTurnTerminalRecord({
+        turn_id: 1,
+        event_type: 'not-a-terminal',
+        recorded_at: 't',
+      }),
+      null,
+    );
+    assert.equal(
+      validateTurnTerminalRecord({
+        turn_id: 1,
+        event_type: 'failed',
+        recorded_at: 't',
+      }),
+      null,
+    );
   });
 
   it('persists exception failure terminals for exact-turn lookup', () => {
