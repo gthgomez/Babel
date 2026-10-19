@@ -43,6 +43,20 @@ export interface RemoteVendorSessionEntry {
   session_id: string;
   title?: string;
   harness_adapter_id: 'command-code';
+  /** When true, a Babel thread already owns this native session. */
+  bound?: boolean;
+  /** Canonical Babel thread that owns this native session when bound. */
+  canonical_thread_id?: string;
+}
+
+export function findCanonicalCommandCodeNativeOwner(
+  state: ProtocolHostState,
+  nativeSessionId: string,
+): string | undefined {
+  for (const [threadId, descriptor] of state.descriptors) {
+    if (descriptor.harness_native_session_id === nativeSessionId) return threadId;
+  }
+  return undefined;
 }
 
 export interface RemoteCatalogResult {
@@ -145,15 +159,27 @@ export async function buildRemoteCatalog(input: {
   }
 
   const sessions = [...byId.values()].sort((a, b) => b.updated_at - a.updated_at);
+  const nativeOwners = new Map<string, string>();
+  for (const [threadId, descriptor] of input.state.descriptors) {
+    if (descriptor.harness_native_session_id) {
+      nativeOwners.set(descriptor.harness_native_session_id, threadId);
+    }
+  }
   let vendor_sessions: RemoteVendorSessionEntry[] | undefined;
   if (input.commandCodeRegistry) {
     try {
       const listed = await input.commandCodeRegistry.listSessions(root);
-      vendor_sessions = listed.map((row) => ({
-        session_id: row.sessionId,
-        harness_adapter_id: 'command-code',
-        ...(row.title ? { title: row.title } : {}),
-      }));
+      vendor_sessions = listed.map((row) => {
+        const owner = nativeOwners.get(row.sessionId);
+        const entry: RemoteVendorSessionEntry = {
+          session_id: row.sessionId,
+          harness_adapter_id: 'command-code',
+          bound: nativeOwners.has(row.sessionId),
+          ...(row.title ? { title: row.title } : {}),
+        };
+        if (owner) entry.canonical_thread_id = owner;
+        return entry;
+      });
     } catch {
       vendor_sessions = [];
     }

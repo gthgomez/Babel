@@ -272,18 +272,36 @@
     };
   }
 
+  let lastCatalogResult = null;
+
   function refreshVendorSessions(catalogResult) {
     if (!vendorSessionEl) return;
     const harness = harnessEl && harnessEl.value === 'command-code';
     vendorSessionEl.disabled = !harness;
+    const previous = vendorSessionEl.value;
     while (vendorSessionEl.options.length > 1) vendorSessionEl.remove(1);
-    if (!harness || !catalogResult || !Array.isArray(catalogResult.vendor_sessions)) return;
-    catalogResult.vendor_sessions.forEach(function (row) {
+    if (catalogResult) lastCatalogResult = catalogResult;
+    if (!harness || !lastCatalogResult || !Array.isArray(lastCatalogResult.vendor_sessions)) return;
+    lastCatalogResult.vendor_sessions.forEach(function (row) {
       if (!row || !row.session_id) return;
       const opt = document.createElement('option');
       opt.value = row.session_id;
-      opt.textContent = row.title ? row.title + ' (' + row.session_id + ')' : row.session_id;
+      const owned = row.bound && row.canonical_thread_id ? ' [Babel ' + row.canonical_thread_id + ']' : '';
+      opt.textContent = (row.title ? row.title + ' ' : '') + row.session_id + owned;
       vendorSessionEl.appendChild(opt);
+    });
+    if (previous && vendorSessionEl.querySelector('option[value="' + previous + '"]')) {
+      vendorSessionEl.value = previous;
+    }
+  }
+
+  async function renderHistoryCells(threadId) {
+    const history = await rpc('history.lookup', { thread_id: threadId });
+    if (history.classified.kind !== 'success') return;
+    const cells = (history.payload.result && history.payload.result.cells) || [];
+    transcript.textContent = '';
+    cells.forEach(function (cell) {
+      appendEvent({ type: cell.kind || 'cell', text: JSON.stringify(cell.payload || {}) });
     });
   }
 
@@ -457,15 +475,39 @@
       const sessionId = await ensureSession();
       const harness = harnessEl && harnessEl.value ? harnessEl.value : 'babel-native';
       const createParams = { project_root: rootEl.value, session_id: sessionId };
-      if (harness === 'command-code') {
+      if (harness === 'command-code' && vendorSessionEl && vendorSessionEl.value) {
+        const nativeId = vendorSessionEl.value;
+        const selected = (lastCatalogResult && lastCatalogResult.vendor_sessions || []).find(function (row) {
+          return row && row.session_id === nativeId;
+        });
         createParams.harness_adapter_id = 'command-code';
-        if (vendorSessionEl && vendorSessionEl.value) {
-          createParams.harness_native_session_id = vendorSessionEl.value;
+        if (selected && selected.canonical_thread_id) {
+          memory.threadId = selected.canonical_thread_id;
+          const resumed = await rpc('thread.resume', {
+            thread_id: memory.threadId,
+            project_root: rootEl.value,
+            session_id: sessionId,
+          });
+          if (resumed.classified.kind !== 'success') throw new Error('thread.resume rejected');
+        } else {
+          createParams.harness_native_session_id = nativeId;
+          const result = await rpc('thread.create', createParams);
+          if (result.classified.kind !== 'success') throw new Error('thread.create rejected');
+          memory.threadId = result.payload.result && result.payload.result.thread_id;
         }
+        const opened = await rpc('harness.command_code.open', {
+          thread_id: memory.threadId,
+          project_root: rootEl.value,
+          harness_native_session_id: nativeId,
+        });
+        if (opened.classified.kind !== 'success') throw new Error('harness.command_code.open rejected');
+        await renderHistoryCells(memory.threadId);
+      } else {
+        if (harness === 'command-code') createParams.harness_adapter_id = 'command-code';
+        const result = await rpc('thread.create', createParams);
+        if (result.classified.kind !== 'success') throw new Error('thread.create rejected');
+        memory.threadId = result.payload.result && result.payload.result.thread_id;
       }
-      const result = await rpc('thread.create', createParams);
-      if (result.classified.kind !== 'success') throw new Error('thread.create rejected');
-      memory.threadId = result.payload.result && result.payload.result.thread_id;
       clearControlLease();
       threadInput.value = memory.threadId || '';
       thread = transition('thread', thread, 'ready');
@@ -623,6 +665,17 @@
       } catch (error) { appendEvent({ type: 'failed', error: 'Verification unavailable.' }); }
     };
     rootEl.oninput = renderChrome;
+    if (harnessEl) {
+      harnessEl.onchange = async function () {
+        renderChrome();
+        if (harnessEl.value === 'command-code' && (memory.token || memory.pairedDevice)) {
+          try {
+            const catalog = await rpc('remote.catalog', {});
+            if (catalog.classified.kind === 'success') refreshVendorSessions(catalog.payload.result);
+          } catch (catalogError) { /* optional */ }
+        }
+      };
+    }
     document.addEventListener('visibilitychange', function () {
       if (document.visibilityState === 'visible') {
         void syncControlLeaseFromHost().then(function () { renderChrome(); });

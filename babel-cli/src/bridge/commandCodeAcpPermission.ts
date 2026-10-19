@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 import type { AgentAction } from '../agent/actions.js';
 
 function toolCallRecord(params: Record<string, unknown>): Record<string, unknown> | undefined {
@@ -44,10 +46,11 @@ export function permissionActionFromAcpParams(
         ? String((rawInput as { content?: unknown }).content ?? '')
         : '';
     if (!path) return null;
-    const command = `acp:${kind}:${path}${content ? `:${content.length}B` : ''}`;
+    const digest = createHash('sha256').update(content).digest('hex');
+    const command = `acp:${kind}:${path}\n---\n${content}`;
     return {
       type: 'ask_approval',
-      reason: `${title} — ${kind} ${path}${toolCallId ? ` (${toolCallId})` : ''}`,
+      reason: `${title} — ${kind} ${path} [sha256=${digest}]${toolCallId ? ` (${toolCallId})` : ''}`,
       requested_action: { type: 'run_command', command, cwd },
     };
   }
@@ -78,14 +81,6 @@ export function permissionActionFromAcpParams(
     };
   }
 
-  const subject = params.subject as { path?: string } | undefined;
-  if (subject?.path) {
-    return {
-      type: 'ask_approval',
-      reason: title,
-      requested_action: { type: 'read_file', path: subject.path },
-    };
-  }
   return null;
 }
 

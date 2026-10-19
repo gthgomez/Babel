@@ -8,7 +8,8 @@ import { createInterface } from 'node:readline';
 const sessions = new Map();
 let nextSession = 1;
 const permissionWaiters = new Map();
-const pendingPrompts = new Map();
+const activePromptBySession = new Map();
+const settledPromptIds = new Set();
 
 function write(msg) {
   process.stdout.write(`${JSON.stringify(msg)}\n`);
@@ -46,7 +47,7 @@ function handleInitialize(id, params) {
 
 function handleSessionNew(id, params) {
   const sessionId = `sess_fixture_${nextSession++}`;
-  sessions.set(sessionId, { cwd: params.cwd, messages: [], permissionDone: false, cancelled: false });
+  sessions.set(sessionId, { cwd: params.cwd, messages: [], permissionDone: false });
   write({ jsonrpc: '2.0', id, result: { sessionId } });
   if (process.env.BABEL_COMMAND_CODE_FIXTURE_STARTUP_IDLE === '1') {
     sessionUpdate(sessionId, 'state_update', { state: 'idle', stopReason: 'end_turn' });
@@ -56,27 +57,51 @@ function handleSessionNew(id, params) {
 function handleSessionLoad(id, params) {
   const sessionId = String(params.sessionId ?? '');
   if (!sessions.has(sessionId)) {
-    write({ jsonrpc: '2.0', id, error: { code: -32001, message: 'session not found' } });
-    return;
+    sessions.set(sessionId, { cwd: params.cwd, messages: [], permissionDone: false });
   }
   sessionUpdate(sessionId, 'user_message_chunk', {
+    messageId: 'hist-user-1',
     content: { type: 'text', text: 'fixture:user-history' },
   });
   sessionUpdate(sessionId, 'agent_message_chunk', {
+    messageId: 'hist-assistant-1',
     content: { type: 'text', text: 'fixture:history-replay' },
   });
   write({ jsonrpc: '2.0', id, result: { sessionId } });
 }
 
-function handleSessionList(id) {
-  const listed = [...sessions.keys()].map((sessionId) => ({ sessionId, title: 'fixture' }));
-  write({ jsonrpc: '2.0', id, result: { sessions: listed } });
+function handleSessionList(id, params) {
+  const page = Number(params?.page ?? 0);
+  const all = [...sessions.keys()].map((sessionId) => ({ sessionId, title: 'fixture' }));
+  const pageSize = Number(process.env.BABEL_COMMAND_CODE_FIXTURE_LIST_PAGE_SIZE ?? 0);
+  if (pageSize > 0) {
+    const slice = all.slice(page * pageSize, (page + 1) * pageSize);
+    const next = (page + 1) * pageSize < all.length ? String(page + 1) : undefined;
+    write({
+      jsonrpc: '2.0',
+      id,
+      result: {
+        sessions: slice,
+        ...(next ? { nextCursor: next } : {}),
+      },
+    });
+    return;
+  }
+  write({ jsonrpc: '2.0', id, result: { sessions: all } });
 }
 
 function waitForPermissionResponse(requestId) {
   return new Promise((resolve) => {
     permissionWaiters.set(String(requestId), resolve);
   });
+}
+
+function settlePrompt(sessionId, promptId, stopReason) {
+  if (settledPromptIds.has(promptId)) return false;
+  settledPromptIds.add(promptId);
+  activePromptBySession.delete(sessionId);
+  write({ jsonrpc: '2.0', id: promptId, result: { stopReason } });
+  return true;
 }
 
 async function handleSessionPrompt(id, params) {
@@ -91,16 +116,9 @@ async function handleSessionPrompt(id, params) {
       ? String(params.prompt[0].text)
       : String(params.text ?? '');
   session.messages.push(text);
-  pendingPrompts.set(sessionId, id);
+  activePromptBySession.set(sessionId, { id, aborted: false });
 
   sessionUpdate(sessionId, 'state_update', { state: 'running' });
-
-  const honorCancel = process.env.BABEL_COMMAND_CODE_FIXTURE_NO_CANCEL_TERMINAL !== '1';
-  if (session.cancelled && honorCancel) {
-    pendingPrompts.delete(sessionId);
-    write({ jsonrpc: '2.0', id, result: { stopReason: 'cancelled' } });
-    return;
-  }
 
   if (process.env.BABEL_COMMAND_CODE_FIXTURE_PERMISSION === '1' && !session.permissionDone) {
     session.permissionDone = true;
@@ -126,8 +144,7 @@ async function handleSessionPrompt(id, params) {
     });
     const outcome = await waitForPermissionResponse(requestId);
     if (outcome === 'cancelled') {
-      pendingPrompts.delete(sessionId);
-      write({ jsonrpc: '2.0', id, result: { stopReason: 'cancelled' } });
+      settlePrompt(sessionId, id, 'cancelled');
       return;
     }
   }
@@ -136,9 +153,9 @@ async function handleSessionPrompt(id, params) {
     await new Promise((r) => setTimeout(r, 500));
   }
 
-  if (session.cancelled && honorCancel) {
-    pendingPrompts.delete(sessionId);
-    write({ jsonrpc: '2.0', id, result: { stopReason: 'cancelled' } });
+  const active = activePromptBySession.get(sessionId);
+  if (!active || active.aborted) {
+    settlePrompt(sessionId, id, 'cancelled');
     return;
   }
 
@@ -147,20 +164,16 @@ async function handleSessionPrompt(id, params) {
     content: { type: 'text', text: chunk },
   });
 
-  pendingPrompts.delete(sessionId);
-  write({ jsonrpc: '2.0', id, result: { stopReason: 'end_turn' } });
+  settlePrompt(sessionId, id, 'end_turn');
 }
 
 function handleSessionCancelNotification(params) {
   if (process.env.BABEL_COMMAND_CODE_FIXTURE_NO_CANCEL_TERMINAL === '1') return;
   const sessionId = String(params.sessionId ?? '');
-  const session = sessions.get(sessionId);
-  if (session) session.cancelled = true;
-  const pendingId = pendingPrompts.get(sessionId);
-  if (pendingId !== undefined) {
-    pendingPrompts.delete(sessionId);
-    write({ jsonrpc: '2.0', id: pendingId, result: { stopReason: 'cancelled' } });
-  }
+  const active = activePromptBySession.get(sessionId);
+  if (!active) return;
+  active.aborted = true;
+  settlePrompt(sessionId, active.id, 'cancelled');
 }
 
 const rl = createInterface({ input: process.stdin });
@@ -204,7 +217,7 @@ rl.on('line', (line) => {
       handleSessionLoad(id, params ?? {});
       break;
     case 'session/list':
-      handleSessionList(id);
+      handleSessionList(id, params ?? {});
       break;
     case 'session/prompt':
       void handleSessionPrompt(id, params ?? {});

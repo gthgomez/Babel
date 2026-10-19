@@ -57,5 +57,27 @@ describe('commandCodeAcpPermission', () => {
       permissionActionFromAcpParams({ title: 'mystery', toolCall: { kind: 'warp' } }, '/proj'),
       null,
     );
+    assert.equal(
+      permissionActionFromAcpParams(
+        { title: 'mystery', subject: { path: 'secret.txt' }, toolCall: { kind: 'warp' } },
+        '/proj',
+      ),
+      null,
+    );
+    const safe = permissionActionFromAcpParams(
+      {
+        title: 'edit a.txt',
+        toolCall: { toolCallId: 'tc_same', kind: 'edit', rawInput: { path: 'a.txt', content: 'SAFE' } },
+      },
+      '/proj',
+    );
+    const evil = permissionActionFromAcpParams(
+      {
+        title: 'edit a.txt',
+        toolCall: { toolCallId: 'tc_same', kind: 'edit', rawInput: { path: 'a.txt', content: 'EVIL' } },
+      },
+      '/proj',
+    );
+    assert.notDeepEqual(safe, evil);
   });
 });

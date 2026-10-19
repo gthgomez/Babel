@@ -1,7 +1,16 @@
-import { randomUUID } from 'node:crypto';
+import { createHash } from 'node:crypto';
 
-import type { HistoryCellRecord } from '../ui/historyCells/types.js';
+import type { HistoryCellRecord, ToolCallStatus } from '../ui/historyCells/types.js';
 import { normalizeAcpSessionUpdate } from './commandCodeAcpEventMap.js';
+
+export interface CommandCodeReplayAccumulator {
+  cells: Map<string, HistoryCellRecord>;
+  chunkSeq: number;
+}
+
+export function createCommandCodeReplayAccumulator(): CommandCodeReplayAccumulator {
+  return { cells: new Map(), chunkSeq: 0 };
+}
 
 function extractText(content: unknown): string {
   if (!content || typeof content !== 'object') return '';
@@ -13,50 +22,84 @@ function extractText(content: unknown): string {
   return '';
 }
 
-/** Map ACP replay updates into durable history cells (not live turn stream). */
-export function mapAcpReplayToHistoryCell(
+function stableReplayCellId(nativeSessionId: string, suffix: string): string {
+  const hash = createHash('sha256').update(`${nativeSessionId}:${suffix}`).digest('hex').slice(0, 32);
+  return `cc-replay:${nativeSessionId}:${hash}`;
+}
+
+function mapToolStatus(raw: unknown): ToolCallStatus {
+  const status = String(raw ?? 'running');
+  if (status === 'failed' || status === 'error') return 'failed';
+  if (status === 'cancelled') return 'cancelled';
+  if (status === 'completed' || status === 'succeeded') return 'completed';
+  return 'running';
+}
+
+/** Apply one vendor replay update into an idempotent accumulator (stable cell ids). */
+export function applyAcpReplayUpdate(
+  accumulator: CommandCodeReplayAccumulator,
   update: Record<string, unknown>,
   threadId: string,
-): HistoryCellRecord | null {
+  nativeSessionId: string,
+): void {
   const body = normalizeAcpSessionUpdate(update);
-  if (!body) return null;
+  if (!body) return;
   const kind = body.sessionUpdateKind ?? body.type;
   const ts = String(Date.now());
-  const cell_id = randomUUID();
+
   if (kind === 'user_message_chunk' || kind === 'user_message') {
+    const messageId =
+      typeof body.messageId === 'string' ? body.messageId : `user-seq-${accumulator.chunkSeq++}`;
     const text = extractText(body.content ?? body.text);
-    if (!text) return null;
-    return {
+    if (!text) return;
+    const cellId = stableReplayCellId(nativeSessionId, `user:${messageId}`);
+    const existing = accumulator.cells.get(cellId);
+    const merged = existing
+      ? `${(existing.payload as { message: string }).message}${text}`
+      : text;
+    accumulator.cells.set(cellId, {
       schema_version: 1,
-      cell_id,
+      cell_id: cellId,
       thread_id: threadId,
       kind: 'user_message',
       lifecycle: 'committed',
       revision: 1,
       ts,
-      payload: { message: text },
-    };
+      payload: { message: merged },
+    });
+    return;
   }
+
   if (kind === 'agent_message_chunk' || kind === 'agent_message') {
+    const messageId =
+      typeof body.messageId === 'string' ? body.messageId : `assistant-seq-${accumulator.chunkSeq++}`;
     const text = extractText(body.content ?? body.text);
-    if (!text) return null;
-    return {
+    if (!text) return;
+    const cellId = stableReplayCellId(nativeSessionId, `assistant:${messageId}`);
+    const existing = accumulator.cells.get(cellId);
+    const merged = existing
+      ? `${(existing.payload as { message: string }).message}${text}`
+      : text;
+    accumulator.cells.set(cellId, {
       schema_version: 1,
-      cell_id,
+      cell_id: cellId,
       thread_id: threadId,
       kind: 'assistant_message',
       lifecycle: 'committed',
       revision: 1,
       ts,
-      payload: { message: text },
-    };
+      payload: { message: merged },
+    });
+    return;
   }
+
   if (kind === 'tool_call' || kind === 'tool_call_update') {
-    const title = String(body.title ?? body.toolCallId ?? 'tool');
-    const status = String(body.status ?? 'completed');
-    return {
+    const toolCallId = String(body.toolCallId ?? body.title ?? `tool-${accumulator.chunkSeq++}`);
+    const title = String(body.title ?? toolCallId);
+    const cellId = stableReplayCellId(nativeSessionId, `tool:${toolCallId}`);
+    accumulator.cells.set(cellId, {
       schema_version: 1,
-      cell_id,
+      cell_id: cellId,
       thread_id: threadId,
       kind: 'tool_call',
       lifecycle: 'committed',
@@ -64,10 +107,13 @@ export function mapAcpReplayToHistoryCell(
       ts,
       payload: {
         tool: title,
-        target: String(body.toolCallId ?? ''),
-        status: status === 'failed' ? 'failed' : 'completed',
+        target: toolCallId,
+        status: mapToolStatus(body.status),
       },
-    };
+    });
   }
-  return null;
+}
+
+export function finalizeReplayCells(accumulator: CommandCodeReplayAccumulator): HistoryCellRecord[] {
+  return [...accumulator.cells.values()];
 }

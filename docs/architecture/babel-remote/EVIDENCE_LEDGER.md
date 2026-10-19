@@ -22,6 +22,6 @@ Status: living document for the remote implementation campaign. **Qualified** me
 | 6 | Other external harness adapters (OpenCode, AGY, Claude, Codex) | Stub only | `harnessAdapterRegistry.ts` campaign stubs |
 | — | Physical phone + Tailscale | Not qualified | Owner checklist in `BABEL_REMOTE_QUICKSTART.md` |
 
-**Last tested commit:** `27fc93dd` — `npm --prefix babel-cli run typecheck`, explicit `commandCode*.test.ts` gateway/unit files, `commandSpec` hostProcessSurface, `node --test tools/assert-branch-prior-gate-complete.test.mjs`.
+**Last tested commit:** (pending next push) — `npm --prefix babel-cli run typecheck`, `npm --prefix babel-cli run build`, `commandCodeOwnCli.gateway.test.ts` (9 cases), replay/permission/event-map tests, `assert-branch-prior-gate-complete.test.mjs`.
 
 **Owner deferred after merge:** physical ROG14/phone remote journey; live Command Code login/provider on host; Windows `cmdc` path smoke against installed binary.

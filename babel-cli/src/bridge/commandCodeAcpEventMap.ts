@@ -135,12 +135,28 @@ function mapSessionUpdateBody(
           ? nested.used
           : undefined;
     if (typeof amount === 'number') {
+      const currency =
+        typeof topCost?.currency === 'string'
+          ? topCost.currency
+          : typeof nested?.cost?.currency === 'string'
+            ? nested.cost.currency
+            : undefined;
+      const usdKnown = !currency || currency === 'USD';
       state.usage = {
-        totalCostUSD: amount,
+        totalCostUSD: usdKnown ? amount : 0,
+        costComplete: usdKnown,
+        unknownChargeCount: usdKnown ? 0 : 1,
         totalInputTokens: 0,
         totalOutputTokens: 0,
-        totalTokens: typeof used === 'number' ? used : 0,
-        modelBreakdown: {},
+        totalTokens: 0,
+        modelBreakdown: {
+          'command-code-acp': {
+            inputTokens: 0,
+            outputTokens: 0,
+            costUSD: usdKnown ? amount : 0,
+            unknownChargeCount: usdKnown ? 0 : 1,
+          },
+        },
       };
     }
     return [];

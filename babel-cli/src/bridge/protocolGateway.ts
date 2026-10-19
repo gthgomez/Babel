@@ -18,8 +18,9 @@ import { BabelProtocolErrorCode } from '../protocol/types.js';
 import { assertAllowedProjectRoot, canonicalizeContained } from './workspaceBound.js';
 import { originAllowed as originAllowedStructured } from './originPolicy.js';
 import { ThreadOwnershipRegistry, type ThreadOwnershipError } from './threadOwnership.js';
+import { loadSessionDescriptor } from '../services/threadStore/sessionDescriptor.js';
 import { threadStoreExists } from '../services/threadStore/threadStore.js';
-import { buildRemoteCatalog } from './remoteCatalog.js';
+import { buildRemoteCatalog, findCanonicalCommandCodeNativeOwner } from './remoteCatalog.js';
 import { buildRemoteHarnessCapabilities } from './harnessAdapterRegistry.js';
 import type { CommandCodeAcpRuntimeRegistry } from './commandCodeAcpRuntime.js';
 import { ControlLeaseRegistry } from './controlLease.js';
@@ -144,6 +145,83 @@ export class ProtocolGateway {
           jsonrpc: '2.0',
           id: parsedId ?? 0,
           result: catalog,
+        };
+      }
+      if (envelope.method === 'harness.command_code.open') {
+        parsedId =
+          typeof envelope.id === 'string' || typeof envelope.id === 'number' ? envelope.id : null;
+        if (!this.commandCodeRegistry) {
+          return {
+            jsonrpc: '2.0',
+            id: parsedId ?? 0,
+            error: {
+              code: BabelProtocolErrorCode.MODE_UNSUPPORTED,
+              message: 'Command Code harness is not available on this host',
+            },
+          };
+        }
+        const params = ((envelope as { params?: unknown }).params ?? {}) as {
+          project_root?: string;
+          harness_native_session_id?: string;
+          thread_id?: string;
+        };
+        const nativeId = params.harness_native_session_id;
+        if (!nativeId) {
+          return {
+            jsonrpc: '2.0',
+            id: parsedId ?? 0,
+            error: {
+              code: BabelProtocolErrorCode.INVALID_PARAMS,
+              message: 'harness_native_session_id is required',
+            },
+          };
+        }
+        let threadId =
+          params.thread_id ?? findCanonicalCommandCodeNativeOwner(this.host, nativeId);
+        if (!threadId || !threadStoreExists(threadId)) {
+          return {
+            jsonrpc: '2.0',
+            id: parsedId ?? 0,
+            error: {
+              code: BabelProtocolErrorCode.THREAD_NOT_FOUND,
+              message: 'No Babel thread is bound to this Command Code session',
+            },
+          };
+        }
+        const loaded = loadSessionDescriptor(threadId);
+        const descriptor =
+          loaded ??
+          this.host.descriptors.get(threadId) ??
+          null;
+        if (!descriptor || descriptor.harness_adapter_id !== 'command-code') {
+          return {
+            jsonrpc: '2.0',
+            id: parsedId ?? 0,
+            error: {
+              code: BabelProtocolErrorCode.MODE_UNSUPPORTED,
+              message: 'Thread is not a Command Code harness session',
+            },
+          };
+        }
+        const projectRoot = params.project_root ?? descriptor.projectRoot;
+        try {
+          assertAllowedProjectRoot(projectRoot, this.registeredWorkspaceRoot);
+        } catch (err) {
+          return {
+            jsonrpc: '2.0',
+            id: parsedId ?? 0,
+            error: {
+              code: BabelProtocolErrorCode.INVALID_PARAMS,
+              message: err instanceof Error ? err.message : String(err),
+            },
+          };
+        }
+        const bound = { ...descriptor, projectRoot, harness_native_session_id: nativeId };
+        const opened = await this.commandCodeRegistry.openSavedSession(bound);
+        return {
+          jsonrpc: '2.0',
+          id: parsedId ?? 0,
+          result: { thread_id: threadId, cell_count: opened.cell_count },
         };
       }
       if (envelope.method === 'remote.capabilities') {

@@ -21,6 +21,21 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function formatCommandCodePromptError(promptError: unknown): string {
+  const text = promptError instanceof Error ? promptError.message : String(promptError);
+  if (text.includes('COMMAND_CODE_ACP_RPC_TIMEOUT:session/prompt')) {
+    return 'Command Code prompt observation timed out; owned runtime stopped';
+  }
+  if (text.startsWith('COMMAND_CODE_ACP_ERROR:')) {
+    const withoutPrefix = text.slice('COMMAND_CODE_ACP_ERROR:'.length);
+    const codeEnd = withoutPrefix.indexOf(':');
+    const code = codeEnd >= 0 ? withoutPrefix.slice(0, codeEnd) : 'unknown';
+    const message = codeEnd >= 0 ? withoutPrefix.slice(codeEnd + 1) : withoutPrefix;
+    return `Command Code prompt rejected (${code}): ${message}`;
+  }
+  return `Command Code prompt failed: ${text}`;
+}
+
 export function createCommandCodeHarnessEngine(options: CommandCodeHarnessEngineOptions): ChatEngine {
   const registry = options.registry;
   const descriptor = options.descriptor;
@@ -139,10 +154,7 @@ export function createCommandCodeHarnessEngine(options: CommandCodeHarnessEngine
               await sleep(20);
             }
           }
-          yield {
-            type: 'failed',
-            error: 'Command Code prompt observation timed out; runtime stopped',
-          };
+          yield { type: 'failed', error: formatCommandCodePromptError(promptError) };
           return;
         }
 

@@ -345,6 +345,112 @@ describe('command code own-CLI gateway integration', () => {
     await slowServer.stop();
   });
 
+  it('lists bound vendor sessions with canonical thread ownership', async () => {
+    const sess = await httpRequest(`http://127.0.0.1:${port}/sessions`, {
+      method: 'POST',
+      headers: desktopHeaders(),
+      body: JSON.stringify({ projectRoot: tmp }),
+    });
+    const transportSessionId = (JSON.parse(sess.body) as { sessionId: string }).sessionId;
+    const created = await rpc(
+      port,
+      desktopHeaders(),
+      'thread.create',
+      { project_root: tmp, session_id: transportSessionId, harness_adapter_id: 'command-code' },
+      50,
+    );
+    const threadId = (created.result as { thread_id: string }).thread_id;
+    await rpc(port, desktopHeaders(), 'control.acquire', { thread_id: threadId, force: false }, 51);
+    await runTurn(port, threadId, transportSessionId, 'bind native');
+    const catalog = await rpc(port, desktopHeaders(), 'remote.catalog', {}, 52);
+    const nativeId = (
+      catalog.result as { sessions: { thread_id: string; harness_native_session_id?: string }[] }
+    ).sessions.find((row) => row.thread_id === threadId)?.harness_native_session_id;
+    assert.ok(nativeId);
+    const vendor = (
+      catalog.result as {
+        vendor_sessions?: { session_id: string; bound?: boolean; canonical_thread_id?: string }[];
+      }
+    ).vendor_sessions?.find((row) => row.session_id === nativeId);
+    assert.equal(vendor?.bound, true);
+    assert.equal(vendor?.canonical_thread_id, threadId);
+  });
+
+  it('opens saved vendor history idempotently via harness.command_code.open', async () => {
+    const sess = await httpRequest(`http://127.0.0.1:${port}/sessions`, {
+      method: 'POST',
+      headers: desktopHeaders(),
+      body: JSON.stringify({ projectRoot: tmp }),
+    });
+    const transportSessionId = (JSON.parse(sess.body) as { sessionId: string }).sessionId;
+    const created = await rpc(
+      port,
+      desktopHeaders(),
+      'thread.create',
+      {
+        project_root: tmp,
+        session_id: transportSessionId,
+        harness_adapter_id: 'command-code',
+        harness_native_session_id: 'sess_fixture_preload',
+      },
+      60,
+    );
+    const threadId = (created.result as { thread_id: string }).thread_id;
+    await rpc(port, desktopHeaders(), 'control.acquire', { thread_id: threadId, force: false }, 61);
+    const open1 = await rpc(
+      port,
+      desktopHeaders(),
+      'harness.command_code.open',
+      {
+        thread_id: threadId,
+        project_root: tmp,
+        harness_native_session_id: 'sess_fixture_preload',
+      },
+      62,
+    );
+    assert.equal((open1.result as { cell_count?: number }).cell_count, 2);
+    const open2 = await rpc(
+      port,
+      desktopHeaders(),
+      'harness.command_code.open',
+      {
+        thread_id: threadId,
+        project_root: tmp,
+        harness_native_session_id: 'sess_fixture_preload',
+      },
+      63,
+    );
+    assert.equal((open2.result as { cell_count?: number }).cell_count, 2);
+  });
+
+  it('cancels a slow turn then continues on the same native session', async () => {
+    const slowServer = makeServer({ BABEL_COMMAND_CODE_FIXTURE_SLOW: '1' });
+    await slowServer.start(0);
+    const sPort = slowServer.port;
+    const sess = await httpRequest(`http://127.0.0.1:${sPort}/sessions`, {
+      method: 'POST',
+      headers: desktopHeaders(),
+      body: JSON.stringify({ projectRoot: tmp }),
+    });
+    const transportSessionId = (JSON.parse(sess.body) as { sessionId: string }).sessionId;
+    const created = await rpc(
+      sPort,
+      desktopHeaders(),
+      'thread.create',
+      { project_root: tmp, session_id: transportSessionId, harness_adapter_id: 'command-code' },
+      70,
+    );
+    const threadId = (created.result as { thread_id: string }).thread_id;
+    await rpc(sPort, desktopHeaders(), 'control.acquire', { thread_id: threadId, force: false }, 71);
+    void rpc(sPort, desktopHeaders(), 'turn.submit', { thread_id: threadId, message: 'slow-cancel' }, 72);
+    await new Promise((r) => setTimeout(r, 80));
+    await rpc(sPort, desktopHeaders(), 'turn.cancel', { thread_id: threadId }, 73);
+    await new Promise((r) => setTimeout(r, 700));
+    const after = await runTurn(sPort, threadId, transportSessionId, 'after-cancel');
+    assert.equal(after.terminal?.type, 'done');
+    await slowServer.stop();
+  });
+
   it('executes a turn in an isolated workspace B child', async () => {
     const serverB = new BridgeServer({
       authToken: TOKEN,

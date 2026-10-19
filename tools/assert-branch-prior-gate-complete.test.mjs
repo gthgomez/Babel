@@ -1,34 +1,78 @@
 // License: Apache-2.0 — see LICENSE
 import assert from 'node:assert/strict'
-import { spawnSync } from 'node:child_process'
 import { describe, it } from 'node:test'
 
-import { assertBranchPriorGateComplete } from './assert-branch-prior-gate-complete.mjs'
+import {
+  PUBLIC_RELEASE_GATE_WORKFLOW_ID,
+  assertBranchPriorGateComplete,
+  evaluatePublishedHeadGate,
+  parseGithubRepoFromRemote,
+} from './assert-branch-prior-gate-complete.mjs'
 
 describe('assert-branch-prior-gate-complete', () => {
-  it('invokes gh api with GET method', () => {
-    const root = spawnSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8' }).stdout.trim()
-    const branch = spawnSync('git', ['-C', root, 'rev-parse', '--abbrev-ref', 'HEAD'], {
-      encoding: 'utf8',
-    }).stdout.trim()
-    const remoteUrl = spawnSync('git', ['-C', root, 'remote', 'get-url', 'origin'], {
-      encoding: 'utf8',
-    }).stdout.trim()
-    const match = remoteUrl.match(/github\.com[:/](.+?)(?:\.git)?$/i)
-    assert.ok(match)
-    const repo = match[1]
-    const result = spawnSync(
-      'gh',
-      ['api', '--method', 'GET', `repos/${repo}/actions/runs`, '-f', `branch=${branch}`, '-f', 'per_page=1'],
-      { encoding: 'utf8' },
-    )
-    assert.equal(result.status, 0, result.stderr)
-    const payload = JSON.parse(result.stdout)
-    assert.ok(Array.isArray(payload.workflow_runs))
+  it('parses github ssh and https remotes without credentials', () => {
+    assert.equal(parseGithubRepoFromRemote('git@github.com:gthgomez/Babel.git'), 'gthgomez/Babel')
+    assert.equal(parseGithubRepoFromRemote('https://github.com/gthgomez/Babel'), 'gthgomez/Babel')
   })
 
-  it('allows push when latest run is completed', () => {
-    const root = spawnSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8' }).stdout.trim()
-    assertBranchPriorGateComplete(root, 'origin')
+  it('sanitizes embedded credentials on github https remotes', () => {
+    assert.equal(
+      parseGithubRepoFromRemote('https://user:token@github.com/gthgomez/Babel.git'),
+      'gthgomez/Babel',
+    )
+    assert.throws(() => parseGithubRepoFromRemote('https://gitlab.com/gthgomez/Babel.git'))
+  })
+
+  it('blocks when Public Release Gate is in progress for published head', () => {
+    const sha = 'a7f61057b500d4bb8da067bc96c7232486aed3f9'
+    const verdict = evaluatePublishedHeadGate(
+      [
+        {
+          id: 39252099671,
+          status: 'in_progress',
+          head_sha: sha,
+          workflow_id: PUBLIC_RELEASE_GATE_WORKFLOW_ID,
+          name: 'Public Release Gate',
+        },
+      ],
+      sha,
+    )
+    assert.equal(verdict.allow, false)
+  })
+
+  it('allows when Public Release Gate completed for published head', () => {
+    const sha = '9b4a513453cf0814b40df658ca0f13189fcd2004'
+    const verdict = evaluatePublishedHeadGate(
+      [
+        {
+          id: 39250306347,
+          status: 'completed',
+          head_sha: sha,
+          workflow_id: PUBLIC_RELEASE_GATE_WORKFLOW_ID,
+          name: 'Public Release Gate',
+        },
+      ],
+      sha,
+    )
+    assert.equal(verdict.allow, true)
+  })
+
+  it('ignores unrelated workflow runs on the same branch', () => {
+    const sha = 'abc123'
+    const verdict = evaluatePublishedHeadGate(
+      [{ id: 1, status: 'in_progress', head_sha: sha, workflow_id: 999, name: 'Auxiliary' }],
+      sha,
+    )
+    assert.equal(verdict.allow, true)
+  })
+
+  it('fails closed on detached HEAD', () => {
+    const root = process.cwd()
+    assert.throws(() =>
+      assertBranchPriorGateComplete(root, 'origin', {
+        git: () => '',
+        ghGet: () => ({ workflow_runs: [] }),
+      }),
+    )
   })
 })

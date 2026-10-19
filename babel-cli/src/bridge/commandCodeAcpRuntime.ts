@@ -4,10 +4,14 @@ import { resolve } from 'node:path';
 
 import type { ChatEvent } from '../agent/chatEngineContracts.js';
 import type { SessionDescriptor } from '../executor/contracts.js';
-import { appendTurnCells } from '../services/threadStore/threadStore.js';
-import type { HistoryCellRecord } from '../ui/historyCells/types.js';
+import { appendTurnCells, loadThreadCells } from '../services/threadStore/threadStore.js';
 import { mapCommandCodeAcpUpdate, type AcpTurnMapState } from './commandCodeAcpEventMap.js';
-import { mapAcpReplayToHistoryCell } from './commandCodeAcpReplay.js';
+import {
+  applyAcpReplayUpdate,
+  createCommandCodeReplayAccumulator,
+  finalizeReplayCells,
+  type CommandCodeReplayAccumulator,
+} from './commandCodeAcpReplay.js';
 import { probeCommandCodeInstallation, type CommandCodeInstallProbe } from './commandCodeCliDiscovery.js';
 import { permissionActionFromAcpParams, selectAllowOnceOptionId } from './commandCodeAcpPermission.js';
 import { CommandCodeAcpTransport } from './commandCodeAcpTransport.js';
@@ -33,7 +37,7 @@ export interface CommandCodeRuntimeSession {
   processDead: boolean;
   replayEvents: ChatEvent[];
   replayCapture: boolean;
-  replayHistoryCells: HistoryCellRecord[];
+  replayAccumulator: CommandCodeReplayAccumulator;
   pendingCancel: boolean;
 }
 
@@ -182,8 +186,12 @@ export class CommandCodeAcpRuntimeRegistry {
     const codec = runtime.transport.negotiatedCodec();
     if (!codec) return;
     if (session.replayCapture) {
-      const cell = mapAcpReplayToHistoryCell(update.update, session.threadId);
-      if (cell) session.replayHistoryCells.push(cell);
+      applyAcpReplayUpdate(
+        session.replayAccumulator,
+        update.update,
+        session.threadId,
+        session.nativeSessionId,
+      );
       return;
     }
     const events = mapCommandCodeAcpUpdate(update.update, session.turnState, codec.protocolVersion);
@@ -255,7 +263,7 @@ export class CommandCodeAcpRuntimeRegistry {
 
     assertCommandCodeProfilesSupported(descriptor, codec);
 
-    const placeholder: CommandCodeRuntimeSession = {
+    const sessionRecord: CommandCodeRuntimeSession = {
       threadId: descriptor.threadId,
       nativeSessionId: descriptor.harness_native_session_id ?? '',
       projectRoot: runtime.projectRoot,
@@ -267,7 +275,7 @@ export class CommandCodeAcpRuntimeRegistry {
       processDead: false,
       replayEvents: [],
       replayCapture: false,
-      replayHistoryCells: [],
+      replayAccumulator: createCommandCodeReplayAccumulator(),
       pendingCancel: this.pendingThreadCancels.has(descriptor.threadId),
     };
 
@@ -277,34 +285,40 @@ export class CommandCodeAcpRuntimeRegistry {
           throw new Error('COMMAND_CODE_SAVED_SESSION_UNSUPPORTED');
         }
         this.claimNativeSession(runtime, descriptor.harness_native_session_id, descriptor.threadId);
-        placeholder.nativeSessionId = descriptor.harness_native_session_id;
-        runtime.sessions.set(descriptor.threadId, placeholder);
-        placeholder.replayCapture = true;
-        const mcpServers: unknown[] = [];
-        await runtime.transport.call('session/load', {
-          sessionId: descriptor.harness_native_session_id,
-          cwd: runtime.projectRoot,
-          mcpServers,
-        });
-        placeholder.replayCapture = false;
-        if (placeholder.pendingCancel && placeholder.nativeSessionId) {
-          runtime.transport.notify('session/cancel', { sessionId: placeholder.nativeSessionId });
+        sessionRecord.nativeSessionId = descriptor.harness_native_session_id;
+        runtime.sessions.set(descriptor.threadId, sessionRecord);
+        const replayPrefix = `cc-replay:${descriptor.harness_native_session_id}:`;
+        const hasPersistedReplay = loadThreadCells(descriptor.threadId).some((cell) =>
+          cell.cell_id.startsWith(replayPrefix),
+        );
+        if (!hasPersistedReplay) {
+          sessionRecord.replayCapture = true;
+          const mcpServers: unknown[] = [];
+          await runtime.transport.call('session/load', {
+            sessionId: descriptor.harness_native_session_id,
+            cwd: runtime.projectRoot,
+            mcpServers,
+          });
+          sessionRecord.replayCapture = false;
         }
-        return placeholder;
+        if (sessionRecord.pendingCancel && sessionRecord.nativeSessionId) {
+          runtime.transport.notify('session/cancel', { sessionId: sessionRecord.nativeSessionId });
+        }
+        return sessionRecord;
       }
 
-      runtime.sessions.set(descriptor.threadId, placeholder);
+      runtime.sessions.set(descriptor.threadId, sessionRecord);
       const created = await runtime.transport.call('session/new', {
         cwd: runtime.projectRoot,
         mcpServers: [],
       });
       const sessionId = String(created.sessionId ?? '');
       if (!sessionId) throw new Error('COMMAND_CODE_SESSION_NEW_MISSING_ID');
-      placeholder.nativeSessionId = sessionId;
+      sessionRecord.nativeSessionId = sessionId;
       this.claimNativeSession(runtime, sessionId, descriptor.threadId);
       descriptor.harness_native_session_id = sessionId;
       descriptor.harness_process_generation = runtime.runtimeInstanceId;
-      return placeholder;
+      return sessionRecord;
     } catch (error) {
       runtime.sessions.delete(descriptor.threadId);
       if (descriptor.harness_native_session_id) {
@@ -321,18 +335,34 @@ export class CommandCodeAcpRuntimeRegistry {
     const runtime = await this.projectRuntime(projectRoot);
     const codec = runtime.transport.negotiatedCodec();
     if (!codec?.session.list) return [];
-    const result = await runtime.transport.call('session/list', { cwd: runtime.projectRoot });
-    const sessions = result.sessions;
-    if (!Array.isArray(sessions)) return [];
-    return sessions
-      .map((row) => {
-        if (!row || typeof row !== 'object') return null;
-        const sessionId = String((row as { sessionId?: unknown }).sessionId ?? '');
-        if (!sessionId) return null;
-        const title = (row as { title?: unknown }).title;
-        return { sessionId, ...(typeof title === 'string' ? { title } : {}) };
-      })
-      .filter((row): row is { sessionId: string; title?: string } => row !== null);
+    const collected: Array<{ sessionId: string; title?: string }> = [];
+    let nextCursor: string | undefined;
+    for (let page = 0; page < 20; page += 1) {
+      const result = await runtime.transport.call('session/list', {
+        cwd: runtime.projectRoot,
+        ...(nextCursor ? { nextCursor } : {}),
+      });
+      const sessions = result.sessions;
+      if (Array.isArray(sessions)) {
+        for (const row of sessions) {
+          if (!row || typeof row !== 'object') continue;
+          const sessionId = String((row as { sessionId?: unknown }).sessionId ?? '');
+          if (!sessionId) continue;
+          const title = (row as { title?: unknown }).title;
+          collected.push({ sessionId, ...(typeof title === 'string' ? { title } : {}) });
+        }
+      }
+      const cursor = result.nextCursor;
+      nextCursor = typeof cursor === 'string' && cursor.length > 0 ? cursor : undefined;
+      if (!nextCursor) break;
+    }
+    return collected;
+  }
+
+  async openSavedSession(descriptor: SessionDescriptor): Promise<{ cell_count: number }> {
+    await this.ensureSession(descriptor);
+    this.persistReplayHistory(descriptor);
+    return { cell_count: loadThreadCells(descriptor.threadId).length };
   }
 
   getBoundSession(descriptor: SessionDescriptor): CommandCodeRuntimeSession | undefined {
@@ -385,9 +415,13 @@ export class CommandCodeAcpRuntimeRegistry {
 
   persistReplayHistory(descriptor: SessionDescriptor): void {
     const session = this.getBoundSession(descriptor);
-    if (!session || session.replayHistoryCells.length === 0) return;
-    appendTurnCells(descriptor.threadId, 0, session.replayHistoryCells);
-    session.replayHistoryCells = [];
+    if (!session) return;
+    const cells = finalizeReplayCells(session.replayAccumulator);
+    if (cells.length === 0) return;
+    const existingIds = new Set(loadThreadCells(descriptor.threadId).map((cell) => cell.cell_id));
+    const novel = cells.filter((cell) => !existingIds.has(cell.cell_id));
+    if (novel.length === 0) return;
+    appendTurnCells(descriptor.threadId, 0, novel);
   }
 
   async forceStopForThread(descriptor: SessionDescriptor): Promise<void> {
