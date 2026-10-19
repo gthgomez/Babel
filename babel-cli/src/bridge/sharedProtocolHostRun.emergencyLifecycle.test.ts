@@ -10,10 +10,71 @@ import {
   mintDesktopControllerClientId,
   mintDesktopControllerProofKey,
 } from './desktopControllerAuth.js';
+import { HttpProtocolClient } from './httpProtocolClient.js';
 import { BridgeServer } from './sessionServer.js';
 import { executeSharedProtocolHostRun } from './sharedProtocolHostRun.js';
 
 const TOKEN = 'emergency-lifecycle-token';
+
+function cooperativeCancelEngine(descriptor: { projectRoot: string }, taskLabel: string): ChatEngine {
+  const engine = new ChatEngine({
+    task: taskLabel,
+    projectRoot: descriptor.projectRoot,
+    executionProfile: 'chat',
+  });
+  engine.submitMessageStream = async function* () {
+    yield { type: 'thinking' };
+    for (;;) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      const cancelled = (engine as unknown as { _cancelled?: boolean })._cancelled === true;
+      if (cancelled) {
+        yield { type: 'cancelled' };
+        return;
+      }
+    }
+  } as ChatEngine['submitMessageStream'];
+  return engine;
+}
+
+async function hostCatalogRow(
+  port: number,
+  desktopId: string,
+  desktopProofKey: string,
+  threadId: string,
+) {
+  const client = new HttpProtocolClient({
+    baseUrl: `http://127.0.0.1:${port}`,
+    desktopClientId: desktopId,
+    desktopProofKey,
+  });
+  const catalog = await client.call<'remote.catalog', Record<string, never>, { sessions: Array<{
+    thread_id: string;
+    active_turn: boolean;
+    active_turn_id?: number;
+    status: string;
+  }> }>('remote.catalog', {});
+  return catalog.sessions.find((session) => session.thread_id === threadId) ?? null;
+}
+
+async function hostTurnTerminal(
+  port: number,
+  desktopId: string,
+  desktopProofKey: string,
+  threadId: string,
+  turnId: number,
+) {
+  const client = new HttpProtocolClient({
+    baseUrl: `http://127.0.0.1:${port}`,
+    desktopClientId: desktopId,
+    desktopProofKey,
+  });
+  const history = await client.call<
+    'history.lookup',
+    { thread_id: string; turn_id: number; limit: number },
+    { turn_terminal?: { turn_id: number; event_type: string } | null }
+  >('history.lookup', { thread_id: threadId, turn_id: turnId, limit: 50 });
+  return history.turn_terminal ?? null;
+}
 
 describe('shared host-run emergency stop lifecycle', () => {
   let server: BridgeServer;
@@ -42,20 +103,7 @@ describe('shared host-run emergency stop lifecycle', () => {
       enforceControlLease: true,
       desktopControllerClientId: desktopId,
       desktopControllerProofKey: desktopProofKey,
-      engineFactory: (descriptor) => {
-        const engine = new ChatEngine({
-          task: 'emergency-lifecycle',
-          projectRoot: descriptor.projectRoot,
-          executionProfile: 'chat',
-        });
-        engine.submitMessageStream = async function* () {
-          yield { type: 'thinking' };
-          await new Promise<void>(() => {
-            /* hold until host cancels the turn */
-          });
-        } as ChatEngine['submitMessageStream'];
-        return engine;
-      },
+      engineFactory: (descriptor) => cooperativeCancelEngine(descriptor, 'emergency-lifecycle'),
     });
     await server.start(0);
     port = server.port;
@@ -79,28 +127,15 @@ describe('shared host-run emergency stop lifecycle', () => {
     }
   }
 
-  async function waitForEvent(
-    events: Record<string, unknown>[],
-    type: string,
-    timeoutMs = 20_000,
-  ): Promise<void> {
-    const deadline = Date.now() + timeoutMs;
-    while (Date.now() < deadline) {
-      if (events.some((e) => e.type === type)) return;
-      await new Promise((resolve) => setTimeout(resolve, 25));
-    }
-    throw new Error(`timed out waiting for ${type}; saw ${events.map((e) => e.type).join(',')}`);
-  }
-
-  it('completes after emergency ack when the socket closes with no terminal frame', async () => {
+  it('observes persisted cancelled terminal and releases active turn after emergency ack', async () => {
     const stdin = new PassThrough();
     const events: Record<string, unknown>[] = [];
     const runPromise = executeSharedProtocolHostRun(
       {
         port,
         projectRoot: tmp,
-        task: 'hold for emergency close',
-        runId: 'emergency-close',
+        task: 'cooperative cancel',
+        runId: 'emergency-persisted-cancel',
         desktopClientId: desktopId,
         desktopProofKey,
         stdin,
@@ -109,7 +144,7 @@ describe('shared host-run emergency stop lifecycle', () => {
       (event) => events.push(event),
     );
 
-    await waitForEvent(events, 'transport.disconnected');
+    await new Promise((resolve) => setTimeout(resolve, 300));
     stdin.write(
       `${JSON.stringify({ decision: 'emergency_admin_stop', host_emergency_token: TOKEN })}\n`,
     );
@@ -117,48 +152,58 @@ describe('shared host-run emergency stop lifecycle', () => {
     const code = await Promise.race([
       runPromise,
       new Promise<number>((_, reject) =>
-        setTimeout(() => reject(new Error('host-run hung after emergency ack + socket close')), 15_000),
+        setTimeout(() => reject(new Error('host-run hung after emergency ack')), 20_000),
       ),
     ]);
 
     assert.equal(code, 0);
     assert.ok(events.some((e) => e.type === 'emergency_stop'));
-    assert.ok(
-      events.some((e) => e.type === 'cancelled' || e.type === 'run_complete'),
-      'must observe or reconcile a terminal outcome after emergency ack',
+    const cancelled = events.filter((e) => e.type === 'cancelled');
+    assert.equal(cancelled.length, 1, JSON.stringify(events.map((e) => e.type)));
+
+    const client = new HttpProtocolClient({
+      baseUrl: `http://127.0.0.1:${port}`,
+      desktopClientId: desktopId,
+      desktopProofKey,
+    });
+    const catalog = await client.call<'remote.catalog', Record<string, never>, { sessions: Array<{ thread_id: string }> }>(
+      'remote.catalog',
+      {},
     );
+    const threadId = catalog.sessions[0]?.thread_id;
+    assert.ok(threadId);
+    const terminal = await hostTurnTerminal(port, desktopId, desktopProofKey, threadId, 1);
+    assert.equal(terminal?.event_type, 'cancelled');
+    assert.equal(terminal?.turn_id, 1);
+
+    const row = await hostCatalogRow(port, desktopId, desktopProofKey, threadId);
+    assert.equal(row?.active_turn, false);
   });
 
-  it('rejects emergency stop with an invalid host token without settling the turn', async () => {
+  it('rejects invalid emergency token without emergency ack or terminal settlement', async () => {
     const stdin = new PassThrough();
     const events: Record<string, unknown>[] = [];
     const runPromise = executeSharedProtocolHostRun(
       {
         port,
         projectRoot: tmp,
-        task: 'reject bad emergency token',
+        task: 'reject token',
         runId: 'emergency-reject',
         desktopClientId: desktopId,
         desktopProofKey,
         stdin,
-        WebSocketImpl: EarlyCloseWebSocket as typeof WebSocket,
       },
       (event) => events.push(event),
     );
 
-    await waitForEvent(events, 'transport.disconnected');
+    await new Promise((resolve) => setTimeout(resolve, 200));
     stdin.write(
-      `${JSON.stringify({ decision: 'emergency_admin_stop', host_emergency_token: 'not-the-token' })}\n`,
+      `${JSON.stringify({ decision: 'emergency_admin_stop', host_emergency_token: 'wrong' })}\n`,
     );
-    await new Promise((resolve) => setTimeout(resolve, 300));
-    assert.ok(
-      events.some(
-        (e) =>
-          e.type === 'control.rejected' &&
-          String((e as { error?: string }).error).toLowerCase().includes('emergency'),
-      ),
-    );
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    assert.ok(events.some((e) => e.type === 'control.rejected'));
     assert.equal(events.some((e) => e.type === 'emergency_stop'), false);
+    assert.equal(events.some((e) => e.type === 'cancelled'), false);
 
     stdin.write(
       `${JSON.stringify({ decision: 'emergency_admin_stop', host_emergency_token: TOKEN })}\n`,
@@ -166,13 +211,13 @@ describe('shared host-run emergency stop lifecycle', () => {
     const code = await Promise.race([
       runPromise,
       new Promise<number>((_, reject) =>
-        setTimeout(() => reject(new Error('host-run hung after valid emergency')), 15_000),
+        setTimeout(() => reject(new Error('host-run hung after valid emergency')), 20_000),
       ),
     ]);
     assert.equal(code, 0);
   });
 
-  it('preserves a failed terminal outcome when failure arrives before emergency ack', async () => {
+  it('preserves authoritative failure when the turn fails before emergency ack', async () => {
     await server.stop();
     server = new BridgeServer({
       authToken: TOKEN,
@@ -202,7 +247,7 @@ describe('shared host-run emergency stop lifecycle', () => {
       {
         port,
         projectRoot: tmp,
-        task: 'fail fast then emergency',
+        task: 'fail fast',
         runId: 'emergency-after-failure',
         desktopClientId: desktopId,
         desktopProofKey,
@@ -219,30 +264,23 @@ describe('shared host-run emergency stop lifecycle', () => {
     assert.equal(code, 1);
     assert.ok(events.some((e) => e.type === 'run_error'));
     assert.equal(events.some((e) => e.type === 'emergency_stop'), false);
+    assert.equal(events.filter((e) => e.type === 'cancelled').length, 0);
   });
 });
 
-describe('shared host-run emergency stop terminal ordering on live socket', () => {
-  let server: BridgeServer;
-  let tmp: string;
-  let configDir: string;
-  let port = 0;
-  let prevConfigDir: string | undefined;
-  let prevRuns: string | undefined;
+describe('shared host-run emergency observation errors (mocked authoritative backend)', () => {
   const desktopId = mintDesktopControllerClientId();
   const desktopProofKey = mintDesktopControllerProofKey();
 
-  before(async () => {
-    tmp = mkdtempSync(join(tmpdir(), 'babel-emergency-ordering-'));
-    configDir = join(tmp, 'config');
+  it('does not fabricate cancelled when the engine never settles after emergency ack', async () => {
+    const tmp = mkdtempSync(join(tmpdir(), 'babel-emergency-mock-'));
+    const configDir = join(tmp, 'config');
     mkdirSync(configDir, { recursive: true });
     writeFileSync(join(configDir, 'bridge.json'), JSON.stringify({ authToken: TOKEN }), 'utf8');
-    prevConfigDir = process.env['BABEL_CONFIG_DIR'];
-    prevRuns = process.env['BABEL_RUNS_DIR'];
     process.env['BABEL_CONFIG_DIR'] = configDir;
     process.env['BABEL_RUNS_DIR'] = tmp;
 
-    server = new BridgeServer({
+    const server = new BridgeServer({
       authToken: TOKEN,
       allowedWorkspaceRoot: tmp,
       allowedOrigins: ['http://127.0.0.1:*', 'http://localhost:*'],
@@ -251,49 +289,44 @@ describe('shared host-run emergency stop terminal ordering on live socket', () =
       desktopControllerProofKey: desktopProofKey,
       engineFactory: (descriptor) => {
         const engine = new ChatEngine({
-          task: 'emergency-ordering',
+          task: 'never-settles',
           projectRoot: descriptor.projectRoot,
           executionProfile: 'chat',
         });
         engine.submitMessageStream = async function* () {
           yield { type: 'thinking' };
           await new Promise<void>(() => {
-            /* cancelled by emergency */
+            /* ignore cancel — simulates owner still running */
           });
         } as ChatEngine['submitMessageStream'];
         return engine;
       },
     });
     await server.start(0);
-    port = server.port;
-  });
+    const port = server.port;
 
-  after(async () => {
-    await server.stop();
-    if (prevConfigDir === undefined) delete process.env['BABEL_CONFIG_DIR'];
-    else process.env['BABEL_CONFIG_DIR'] = prevConfigDir;
-    if (prevRuns === undefined) delete process.env['BABEL_RUNS_DIR'];
-    else process.env['BABEL_RUNS_DIR'] = prevRuns;
-    rmSync(tmp, { recursive: true, force: true });
-  });
-
-  it('observes cancelled terminal on the socket after emergency ack', async () => {
     const stdin = new PassThrough();
     const events: Record<string, unknown>[] = [];
     const runPromise = executeSharedProtocolHostRun(
       {
         port,
         projectRoot: tmp,
-        task: 'emergency with live socket',
-        runId: 'emergency-live-socket',
+        task: 'still active after ack',
+        runId: 'emergency-still-active',
         desktopClientId: desktopId,
         desktopProofKey,
         stdin,
+        WebSocketImpl: class extends WebSocket {
+          constructor(url: string | URL, protocols?: string | string[]) {
+            super(url, protocols);
+            this.addEventListener('open', () => setTimeout(() => this.close(), 5));
+          }
+        } as typeof WebSocket,
       },
       (event) => events.push(event),
     );
 
-    await new Promise((resolve) => setTimeout(resolve, 400));
+    await new Promise((resolve) => setTimeout(resolve, 250));
     stdin.write(
       `${JSON.stringify({ decision: 'emergency_admin_stop', host_emergency_token: TOKEN })}\n`,
     );
@@ -301,21 +334,36 @@ describe('shared host-run emergency stop terminal ordering on live socket', () =
     const code = await Promise.race([
       runPromise,
       new Promise<number>((_, reject) =>
-        setTimeout(() => reject(new Error('host-run hung waiting for post-emergency terminal')), 15_000),
+        setTimeout(() => reject(new Error('host-run hung with active catalog')), 25_000),
       ),
     ]);
 
-    assert.equal(code, 0);
-    const emergencyIdx = events.findIndex((e) => e.type === 'emergency_stop');
-    const cancelledIdx = events.findIndex((e) => e.type === 'cancelled');
-    assert.ok(emergencyIdx >= 0);
-    assert.ok(cancelledIdx >= 0, JSON.stringify(events.map((e) => e.type)));
-    assert.ok(cancelledIdx >= emergencyIdx, 'terminal must not precede emergency ack on this path');
+    assert.equal(code, 1);
+    assert.ok(events.some((e) => e.type === 'emergency_stop'));
+    assert.equal(events.some((e) => e.type === 'cancelled'), false);
+    assert.ok(
+      events.some(
+        (e) =>
+          e.type === 'run_error' &&
+          String((e as { error?: string }).error).includes(
+            'authoritative turn terminal was not observed',
+          ),
+      ),
+    );
+
+    await server.stop();
+    rmSync(tmp, { recursive: true, force: true });
   });
 
-  it('defers emergency HTTP until after a terminal frame is already on the wire', async () => {
-    await server.stop();
-    server = new BridgeServer({
+  it('preserves unrelated failed events after emergency ack', async () => {
+    const tmp = mkdtempSync(join(tmpdir(), 'babel-emergency-failed-'));
+    const configDir = join(tmp, 'config');
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(join(configDir, 'bridge.json'), JSON.stringify({ authToken: TOKEN }), 'utf8');
+    process.env['BABEL_CONFIG_DIR'] = configDir;
+    process.env['BABEL_RUNS_DIR'] = tmp;
+
+    const serverWithFailure = new BridgeServer({
       authToken: TOKEN,
       allowedWorkspaceRoot: tmp,
       allowedOrigins: ['http://127.0.0.1:*', 'http://localhost:*'],
@@ -324,46 +372,92 @@ describe('shared host-run emergency stop terminal ordering on live socket', () =
       desktopControllerProofKey: desktopProofKey,
       engineFactory: (descriptor) => {
         const engine = new ChatEngine({
-          task: 'complete-before-emergency',
+          task: 'failed-after-ack',
           projectRoot: descriptor.projectRoot,
           executionProfile: 'chat',
         });
         engine.submitMessageStream = async function* () {
-          yield { type: 'answer_chunk', text: 'done' };
-          yield {
-            type: 'done',
-            answer: 'done',
-            status: 'completed',
-            usage: {
-              totalCostUSD: 0,
-              totalInputTokens: 0,
-              totalOutputTokens: 0,
-              totalTokens: 0,
-              modelBreakdown: {},
-            },
-          };
+          yield { type: 'thinking' };
+          for (let i = 0; i < 80; i++) {
+            await new Promise((resolve) => setTimeout(resolve, 20));
+            if ((engine as unknown as { _cancelled?: boolean })._cancelled === true) break;
+          }
+          yield { type: 'failed', error: 'disk corruption unrelated to cancellation' };
         } as ChatEngine['submitMessageStream'];
         return engine;
       },
     });
-    await server.start(0);
-    port = server.port;
+    await serverWithFailure.start(0);
+    const failurePort = serverWithFailure.port;
 
-    let emergencyHttpEntered = false;
-    let releaseEmergencyHttp: (() => void) | undefined;
-    const emergencyHttpGate = new Promise<void>((resolve) => {
-      releaseEmergencyHttp = resolve;
+    const stdin = new PassThrough();
+    const events: Record<string, unknown>[] = [];
+    const runPromise = executeSharedProtocolHostRun(
+      {
+        port: failurePort,
+        projectRoot: tmp,
+        task: 'failed after ack',
+        runId: 'emergency-failed-after-ack',
+        desktopClientId: desktopId,
+        desktopProofKey,
+        stdin,
+      },
+      (event) => events.push(event),
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    stdin.write(
+      `${JSON.stringify({ decision: 'emergency_admin_stop', host_emergency_token: TOKEN })}\n`,
+    );
+
+    const code = await Promise.race([
+      runPromise,
+      new Promise<number>((_, reject) =>
+        setTimeout(() => reject(new Error('host-run hung on failed after ack')), 20_000),
+      ),
+    ]);
+
+    assert.equal(code, 1);
+    assert.ok(events.some((e) => e.type === 'emergency_stop'));
+    assert.ok(
+      events.some(
+        (e) =>
+          e.type === 'run_error' &&
+          String((e as { error?: string }).error).includes('disk corruption'),
+      ),
+    );
+    assert.equal(events.filter((e) => e.type === 'cancelled').length, 0);
+
+    await serverWithFailure.stop();
+    rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it('finalizes and wakes the observer when post-ack reconciliation throws', async () => {
+    const tmp = mkdtempSync(join(tmpdir(), 'babel-emergency-reconcile-'));
+    const configDir = join(tmp, 'config');
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(join(configDir, 'bridge.json'), JSON.stringify({ authToken: TOKEN }), 'utf8');
+    process.env['BABEL_CONFIG_DIR'] = configDir;
+    process.env['BABEL_RUNS_DIR'] = tmp;
+
+    const server = new BridgeServer({
+      authToken: TOKEN,
+      allowedWorkspaceRoot: tmp,
+      allowedOrigins: ['http://127.0.0.1:*', 'http://localhost:*'],
+      enforceControlLease: true,
+      desktopControllerClientId: desktopId,
+      desktopControllerProofKey: desktopProofKey,
+      engineFactory: (descriptor) => cooperativeCancelEngine(descriptor, 'reconcile-error'),
     });
+    await server.start(0);
+    const port = server.port;
+
     const baseFetch = globalThis.fetch.bind(globalThis);
     const fetchImpl: typeof fetch = async (input, init) => {
-      const headers = init?.headers;
-      const auth =
-        headers && typeof headers === 'object' && headers !== null
-          ? String((headers as Record<string, string>)['Authorization'] ?? '')
-          : '';
-      if (auth === `Bearer ${TOKEN}`) {
-        emergencyHttpEntered = true;
-        await emergencyHttpGate;
+      const url = String(input);
+      const body = typeof init?.body === 'string' ? init.body : '';
+      if (url.includes('/rpc') && body.includes('history.lookup')) {
+        throw new Error('catalog lookup failed during emergency reconciliation');
       }
       return baseFetch(input, init);
     };
@@ -374,8 +468,8 @@ describe('shared host-run emergency stop terminal ordering on live socket', () =
       {
         port,
         projectRoot: tmp,
-        task: 'terminal before emergency http',
-        runId: 'terminal-before-emergency-http',
+        task: 'reconcile throws',
+        runId: 'emergency-reconcile-error',
         desktopClientId: desktopId,
         desktopProofKey,
         stdin,
@@ -384,21 +478,28 @@ describe('shared host-run emergency stop terminal ordering on live socket', () =
       (event) => events.push(event),
     );
 
+    await new Promise((resolve) => setTimeout(resolve, 200));
     stdin.write(
       `${JSON.stringify({ decision: 'emergency_admin_stop', host_emergency_token: TOKEN })}\n`,
     );
 
-    const deadline = Date.now() + 15_000;
-    while (Date.now() < deadline) {
-      if (events.some((e) => e.type === 'run_complete')) break;
-      await new Promise((resolve) => setTimeout(resolve, 25));
-    }
-    assert.ok(events.some((e) => e.type === 'run_complete'), 'terminal must arrive before emergency HTTP proceeds');
-    assert.equal(emergencyHttpEntered, true, 'emergency HTTP must be blocked behind the gate');
-    releaseEmergencyHttp?.();
+    const code = await Promise.race([
+      runPromise,
+      new Promise<number>((_, reject) =>
+        setTimeout(() => reject(new Error('host-run hung after reconcile error')), 15_000),
+      ),
+    ]);
 
-    const code = await runPromise;
-    assert.equal(code, 0);
-    assert.equal(events.filter((e) => e.type === 'run_complete').length, 1);
+    assert.equal(code, 1);
+    assert.ok(
+      events.some(
+        (e) =>
+          e.type === 'run_error' &&
+          String((e as { error?: string }).error).includes('catalog lookup failed'),
+      ),
+    );
+
+    await server.stop();
+    rmSync(tmp, { recursive: true, force: true });
   });
 });

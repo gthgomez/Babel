@@ -104,6 +104,10 @@ describe('shared host-run remote lease fencing', () => {
             ...(surface.notify ? { notify: surface.notify } : {}),
           };
           const allowed = await surface.broker.requestAllowOnce(allowInput);
+          if ((engine as unknown as { _cancelled?: boolean })._cancelled === true) {
+            yield { type: 'cancelled' };
+            return;
+          }
           yield {
             type: allowed ? 'done' : 'failed',
             answer: allowed ? 'ok' : undefined,

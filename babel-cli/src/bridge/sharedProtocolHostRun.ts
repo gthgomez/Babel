@@ -436,8 +436,10 @@ export async function executeSharedProtocolHostRun(
   let stdinInterface: Interface | null = null;
   /** Resolves the active turn observer promise (transport loss or external settlement). */
   let wakeTurnObserver: (() => void) | null = null;
-  /** Successful bearer emergency cancel RPC (distinct from stream terminal observation). */
-  let emergencyAdministrativeStopSucceeded = false;
+  /** Bearer emergency cancel RPC succeeded; terminal outcome still requires authoritative evidence. */
+  let emergencyStopAcknowledged = false;
+  let emergencyObservationPasses = 0;
+  const emergencyTerminalObservationLimit = 12;
 
   const abort = () => options.signal?.aborted === true || cancelRequested;
 
@@ -561,6 +563,20 @@ export async function executeSharedProtocolHostRun(
       return turnSettled ? 0 : 1;
     };
 
+    const finalizeTerminalObservation = (mapped: Record<string, unknown> | null): void => {
+      if (!mapped) return;
+      const settled = writeStreamEvent(mapped);
+      if (settled) wakeTurnObserver?.();
+    };
+
+    const finalizeFatalObservationError = (message: string): void => {
+      if (turnSettled) return;
+      finalizeTerminalObservation({
+        type: 'run_error',
+        error: message,
+      });
+    };
+
     const attachTurnObserver = (socket: WebSocket): Promise<void> =>
       new Promise<void>((resolve) => {
         const finishObservation = () => {
@@ -586,17 +602,13 @@ export async function executeSharedProtocolHostRun(
               ) {
                 return;
               }
-              let ev = params?.event as Record<string, unknown> | undefined;
+              const ev = params?.event as Record<string, unknown> | undefined;
               if (ev) {
-                if (
-                  emergencyAdministrativeStopSucceeded &&
-                  !turnSettled &&
-                  ev.type === 'failed'
-                ) {
-                  ev = { type: 'cancelled' };
+                const mapped = mapTurnEventToStream(ev, threadId);
+                if (mapped) {
+                  const settled = writeStreamEvent(mapped);
+                  if (settled) finishObservation();
                 }
-                const settled = writeStreamEvent(mapTurnEventToStream(ev, threadId));
-                if (settled) finishObservation();
               }
             } else if (message.method === 'permission.request') {
               const params = message.params as Record<string, unknown>;
@@ -661,34 +673,33 @@ export async function executeSharedProtocolHostRun(
                   token,
                   options.fetchImpl,
                 );
-                emergencyAdministrativeStopSucceeded = true;
+                emergencyStopAcknowledged = true;
                 write({ type: 'emergency_stop' });
                 if (!turnSettled && submittedTurnId !== undefined) {
-                  for (let attempt = 0; attempt < 12 && !turnSettled; attempt++) {
+                  try {
                     const terminal = await reconcileTerminalTurnFromHost(
                       client,
                       activeThreadId,
                       submittedTurnId,
                     );
-                    if (terminal) {
-                      writeStreamEvent(terminal);
-                      break;
-                    }
-                    await new Promise((resolve) => setTimeout(resolve, 25));
+                    if (terminal) finalizeTerminalObservation(terminal);
+                  } catch (reconcileError) {
+                    finalizeFatalObservationError(
+                      reconcileError instanceof Error
+                        ? reconcileError.message
+                        : 'Emergency stop reconciliation failed',
+                    );
                   }
                 }
-                if (!turnSettled) {
-                  writeStreamEvent({ type: 'cancelled' });
-                }
-                wakeTurnObserver?.();
+                if (!turnSettled) wakeTurnObserver?.();
               } catch (error) {
-                write({
-                  type: 'run_error',
-                  error:
-                    error instanceof Error
-                      ? error.message
-                      : 'Host emergency stop failed',
-                });
+                writeControlRejected(
+                  write,
+                  'emergency_admin_stop',
+                  error instanceof Error
+                    ? error.message
+                    : 'Host emergency stop failed',
+                );
               }
               return;
             }
@@ -785,11 +796,9 @@ export async function executeSharedProtocolHostRun(
               }
             }
           } catch (error) {
-            write({
-              type: 'run_error',
-              error:
-                error instanceof Error ? error.message : 'Host control stdin handling failed',
-            });
+            finalizeFatalObservationError(
+              error instanceof Error ? error.message : 'Host control stdin handling failed',
+            );
           }
         })();
       });
@@ -849,12 +858,28 @@ export async function executeSharedProtocolHostRun(
       if (turnSettled) break;
       const terminal = await reconcileTerminalTurnFromHost(client, threadId, submittedTurnId);
       if (terminal && !turnSettled) {
-        writeStreamEvent(terminal);
+        finalizeTerminalObservation(terminal);
         break;
       }
       if (turnSettled) break;
       const catalogRow = await lookupCatalogSession(client, threadId);
       if (turnSettled) break;
+      if (
+        emergencyStopAcknowledged &&
+        !turnSettled &&
+        submittedTurnId !== undefined &&
+        catalogRow?.active_turn === true &&
+        (catalogRow.active_turn_id === undefined ||
+          catalogRow.active_turn_id === submittedTurnId)
+      ) {
+        emergencyObservationPasses += 1;
+        if (emergencyObservationPasses >= emergencyTerminalObservationLimit) {
+          finalizeFatalObservationError(
+            'Emergency stop was acknowledged but authoritative turn terminal was not observed',
+          );
+          return finalizeHostRunExitCode();
+        }
+      }
       const recoverable = Boolean(authoritative) || catalogRow?.active_turn === true;
       if (authoritative) {
         pendingApproval = authoritative;
@@ -878,10 +903,7 @@ export async function executeSharedProtocolHostRun(
           'Shared protocol transport lost; observation paused without resubmitting the task.',
       });
       if (!recoverable && !turnSettled) {
-        writeStreamEvent({
-          type: 'run_error',
-          error: 'Shared protocol transport lost before turn settled',
-        });
+        finalizeFatalObservationError('Shared protocol transport lost before turn settled');
         return finalizeHostRunExitCode();
       }
       if (turnSettled) break;
@@ -897,6 +919,7 @@ export async function executeSharedProtocolHostRun(
       });
       turnSettled = true;
       terminalExitCode = 1;
+      (wakeTurnObserver as (() => void) | null)?.();
     }
     return terminalExitCode ?? 1;
   } finally {
