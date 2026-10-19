@@ -315,77 +315,41 @@
       }
     } catch (catalogError) { /* catalog is optional during reconnect */ }
     const applyTerminalRecord = function (terminal) {
-      if (!terminal) return;
-      if (terminal.event_type === 'cancelled') {
-        turn = transition('turn', turn, 'cancel');
-        thread = transition('thread', thread, 'ready');
-      } else if (terminal.event_type === 'failed') {
-        turn = transition('turn', turn, 'fail');
-        thread = transition('thread', thread, 'fail');
-      } else if (terminal.event_type === 'done') {
-        const outcome = terminal.fixture_execution
-          ? 'UNVERIFIED_PATCH'
-          : (terminal.outcome || 'UNVERIFIED_PATCH');
-        if (outcome === 'CANCELLED') {
-          turn = transition('turn', turn, 'cancel');
-          thread = transition('thread', thread, 'ready');
-        } else if (
-          outcome === 'VERIFIED_COMPLETE' ||
-          outcome === 'NO_CHANGE_REQUIRED' ||
-          outcome === 'UNVERIFIED_PATCH'
-        ) {
-          turn = transition('turn', turn, 'complete');
-          thread = transition('thread', thread, 'ready');
-        } else {
-          turn = transition('turn', turn, 'fail');
-          thread = transition('thread', thread, 'fail');
-        }
-      }
-      if (turn !== 'STREAM' && turn !== 'IDLE' && turn !== 'UNKNOWN') {
+      const recovered = S.applyTurnTerminalRecovery(terminal);
+      if (!recovered) return;
+      turn = recovered.turn;
+      thread = recovered.thread;
+      if (turn === 'COMPLETED' || turn === 'FAILED') {
         if (approval === 'PENDING') approval = transition('approval', approval, 'expire');
         memory.turnId = null;
       }
     };
-    if (memory.threadId && (turn === 'STREAM' || turn === 'IDLE' || turn === 'UNKNOWN')) {
+    if (memory.threadId && S.turnNeedsTerminalReconcile(turn)) {
       try {
         let turnIdForTerminal = memory.turnId;
-        if (turnIdForTerminal === null || turnIdForTerminal === undefined) {
-          const scan = await rpc('history.lookup', { thread_id: memory.threadId, limit: 200 });
-          if (scan.classified.kind === 'success') {
-            const cells = (scan.payload.result && scan.payload.result.cells) || [];
-            for (let i = 0; i < cells.length; i++) {
-              const candidate = cells[i].turn_id;
-              if (typeof candidate === 'number') {
-                turnIdForTerminal =
-                  turnIdForTerminal === null || turnIdForTerminal === undefined
-                    ? candidate
-                    : Math.max(turnIdForTerminal, candidate);
-              }
+        const scan = await rpc('history.lookup', { thread_id: memory.threadId, limit: 200 });
+        if (scan.classified.kind === 'success') {
+          const latest = scan.payload.result && scan.payload.result.latest_turn_id;
+          if (
+            (turnIdForTerminal === null || turnIdForTerminal === undefined) &&
+            typeof latest === 'number'
+          ) {
+            turnIdForTerminal = latest;
+          }
+        }
+        if (turnIdForTerminal !== null && turnIdForTerminal !== undefined) {
+          const history = await rpc('history.lookup', {
+            thread_id: memory.threadId,
+            turn_id: turnIdForTerminal,
+            limit: 1,
+          });
+          if (history.classified.kind === 'success') {
+            const terminal = history.payload.result && history.payload.result.turn_terminal;
+            if (terminal && terminal.turn_id === turnIdForTerminal) {
+              applyTerminalRecord(terminal);
             }
           }
         }
-        const probeTurnTerminal = async function (turnId) {
-          const history = await rpc('history.lookup', {
-            thread_id: memory.threadId,
-            turn_id: turnId,
-            limit: 1,
-          });
-          if (history.classified.kind !== 'success') return null;
-          const terminal = history.payload.result && history.payload.result.turn_terminal;
-          if (terminal && terminal.turn_id === turnId) return terminal;
-          return null;
-        };
-        let terminalRecord = null;
-        if (turnIdForTerminal !== null && turnIdForTerminal !== undefined) {
-          terminalRecord = await probeTurnTerminal(turnIdForTerminal);
-        }
-        if (!terminalRecord) {
-          for (let probe = 1; probe <= 32; probe++) {
-            terminalRecord = await probeTurnTerminal(probe);
-            if (terminalRecord) break;
-          }
-        }
-        if (terminalRecord) applyTerminalRecord(terminalRecord);
       } catch (historyError) { /* history terminal is optional during reconnect */ }
     }
     try {

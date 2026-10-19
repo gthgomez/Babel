@@ -306,14 +306,18 @@ function approvalItemFromAuthoritative(
 async function lookupCatalogSession(
   client: HttpProtocolClient,
   threadId: string,
-): Promise<{ status: string; active_turn: boolean } | null> {
+): Promise<{ status: string; active_turn: boolean; active_turn_id?: number } | null> {
   const catalog = await client.call<'remote.catalog', Record<string, never>, RemoteCatalogResult>(
     'remote.catalog',
     {},
   );
   const row = catalog.sessions.find((session) => session.thread_id === threadId);
   if (!row) return null;
-  return { status: row.status, active_turn: row.active_turn };
+  return {
+    status: row.status,
+    active_turn: row.active_turn,
+    ...(row.active_turn_id !== undefined ? { active_turn_id: row.active_turn_id } : {}),
+  };
 }
 
 async function resolveAuthoritativeTerminalOutcome(
@@ -377,8 +381,16 @@ export async function reconcileTerminalTurnFromHost(
 ): Promise<Record<string, unknown> | null> {
   if (submittedTurnId === undefined) return null;
   const row = await lookupCatalogSession(client, threadId);
-  if (row?.active_turn) return null;
-  if (row && (row.status === 'running' || row.status === 'waiting_approval')) return null;
+  if (row?.active_turn) {
+    if (row.active_turn_id === undefined || row.active_turn_id === submittedTurnId) {
+      return null;
+    }
+  }
+  if (row && (row.status === 'running' || row.status === 'waiting_approval')) {
+    if (row.active_turn_id === undefined || row.active_turn_id === submittedTurnId) {
+      return null;
+    }
+  }
 
   const history = await client.call<
     'history.lookup',
@@ -678,6 +690,16 @@ export async function executeSharedProtocolHostRun(
             const message = JSON.parse(String(event.data)) as Record<string, unknown>;
             if (message.method === 'turn.event') {
               const params = message.params as Record<string, unknown> | undefined;
+              const eventThreadId = params?.thread_id;
+              const eventTurnId = params?.turn_id;
+              if (eventThreadId !== undefined && String(eventThreadId) !== threadId) return;
+              if (
+                submittedTurnId !== undefined &&
+                eventTurnId !== undefined &&
+                Number(eventTurnId) !== submittedTurnId
+              ) {
+                return;
+              }
               const ev = params?.event as Record<string, unknown> | undefined;
               if (ev) {
                 const settled = writeStreamEvent(mapTurnEventToStream(ev, threadId));
@@ -765,6 +787,7 @@ export async function executeSharedProtocolHostRun(
       }
       if (turnSettled) break;
       const catalogRow = await lookupCatalogSession(client, threadId);
+      if (turnSettled) break;
       const recoverable = Boolean(authoritative) || catalogRow?.active_turn === true;
       if (authoritative) {
         pendingApproval = authoritative;
@@ -787,10 +810,14 @@ export async function executeSharedProtocolHostRun(
         message:
           'Shared protocol transport lost; observation paused without resubmitting the task.',
       });
-      if (!recoverable) {
-        write({ type: 'run_error', error: 'Shared protocol transport lost before turn settled' });
-        return 1;
+      if (!recoverable && !turnSettled) {
+        writeStreamEvent({
+          type: 'run_error',
+          error: 'Shared protocol transport lost before turn settled',
+        });
+        return turnSettled ? 0 : 1;
       }
+      if (turnSettled) break;
       await turnDone;
     }
 
@@ -801,8 +828,9 @@ export async function executeSharedProtocolHostRun(
         type: 'run_error',
         error: err instanceof Error ? err.message : String(err),
       });
+      turnSettled = true;
     }
-    return 1;
+    return turnSettled ? 0 : 1;
   } finally {
     closeStdinInterface();
     try {

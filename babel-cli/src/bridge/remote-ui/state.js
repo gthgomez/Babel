@@ -91,6 +91,45 @@
     return turn === 'ACKNOWLEDGED' || turn === 'STREAMING' || turn === 'SUBMITTING';
   }
 
+  function turnNeedsTerminalReconcile(turn) {
+    return (
+      turn === 'IDLE' ||
+      turn === 'UNKNOWN' ||
+      turn === 'SUBMITTING' ||
+      turn === 'ACKNOWLEDGED' ||
+      turn === 'STREAMING' ||
+      turn === 'CANCELLING'
+    );
+  }
+
+  /** Settled turn/thread targets from authoritative host terminal evidence (not request transitions). */
+  function applyTurnTerminalRecovery(terminal) {
+    if (!terminal) return null;
+    if (terminal.event_type === 'cancelled') {
+      return { turn: 'COMPLETED', thread: 'READY' };
+    }
+    if (terminal.event_type === 'failed') {
+      return { turn: 'FAILED', thread: 'FAILED' };
+    }
+    if (terminal.event_type === 'done') {
+      const outcome = terminal.fixture_execution
+        ? 'UNVERIFIED_PATCH'
+        : (terminal.outcome || 'UNVERIFIED_PATCH');
+      if (outcome === 'CANCELLED') {
+        return { turn: 'COMPLETED', thread: 'READY' };
+      }
+      if (
+        outcome === 'VERIFIED_COMPLETE' ||
+        outcome === 'NO_CHANGE_REQUIRED' ||
+        outcome === 'UNVERIFIED_PATCH'
+      ) {
+        return { turn: 'COMPLETED', thread: 'READY' };
+      }
+      return { turn: 'FAILED', thread: 'FAILED' };
+    }
+    return null;
+  }
+
   function reconcileAfterCancelRejection(input) {
     if (!input.hostReachable) {
       return { turn: 'UNKNOWN', ambiguity: 'host_unavailable' };
@@ -146,6 +185,8 @@
     apply: apply,
     canSendTurn: canSendTurn,
     canCancelTurn: canCancelTurn,
+    turnNeedsTerminalReconcile: turnNeedsTerminalReconcile,
+    applyTurnTerminalRecovery: applyTurnTerminalRecovery,
     reconcileAfterSubmitFailure: reconcileAfterSubmitFailure,
     reconcileAfterCancelRejection: reconcileAfterCancelRejection,
     reconcileAfterProtocolError: reconcileAfterProtocolError,

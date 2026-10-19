@@ -15,6 +15,7 @@ import type { HistoryCellRecord, UserMessagePayload } from '../../ui/historyCell
 import type { ListThreadsOptions, ThreadMeta, TurnBounds } from './types.js';
 
 const CELLS_FILE = 'cells.jsonl';
+const TURN_TERMINALS_FILE = 'turn_terminals.jsonl';
 const META_DB = 'meta.sqlite';
 
 const SCHEMA_SQL = `
@@ -562,6 +563,64 @@ export function setThreadBranchMeta(
   } finally {
     db.close();
   }
+}
+
+export function persistTurnTerminalRecord(
+  threadId: string,
+  record: import('../../protocol/types.js').TurnTerminalRecord,
+): void {
+  const dir = getThreadDir(threadId);
+  mkdirSync(dir, { recursive: true });
+  appendFileSync(join(dir, TURN_TERMINALS_FILE), `${JSON.stringify(record)}\n`, 'utf8');
+}
+
+export function loadTurnTerminalRecord(
+  threadId: string,
+  turnId: number,
+): import('../../protocol/types.js').TurnTerminalRecord | null {
+  const path = join(getThreadDir(threadId), TURN_TERMINALS_FILE);
+  if (!existsSync(path)) return null;
+  let latest: import('../../protocol/types.js').TurnTerminalRecord | null = null;
+  for (const line of readFileSync(path, 'utf8').split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    try {
+      const parsed = JSON.parse(trimmed) as import('../../protocol/types.js').TurnTerminalRecord;
+      if (parsed.turn_id === turnId) latest = parsed;
+    } catch {
+      /* skip corrupt lines */
+    }
+  }
+  return latest;
+}
+
+export function resolveLatestTurnIdFromThreadStore(threadId: string): number | null {
+  let latest: number | null = null;
+  for (const cell of loadThreadCells(threadId)) {
+    if (typeof cell.turn_id === 'number') {
+      latest = latest === null ? cell.turn_id : Math.max(latest, cell.turn_id);
+    }
+  }
+  const meta = getThreadMeta(threadId);
+  if (meta && meta.turn_count > 0) {
+    latest = latest === null ? meta.turn_count : Math.max(latest, meta.turn_count);
+  }
+  const terminalsPath = join(getThreadDir(threadId), TURN_TERMINALS_FILE);
+  if (existsSync(terminalsPath)) {
+    for (const line of readFileSync(terminalsPath, 'utf8').split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      try {
+        const parsed = JSON.parse(trimmed) as { turn_id?: number };
+        if (typeof parsed.turn_id === 'number') {
+          latest = latest === null ? parsed.turn_id : Math.max(latest, parsed.turn_id);
+        }
+      } catch {
+        /* skip corrupt lines */
+      }
+    }
+  }
+  return latest;
 }
 
 export function getThreadBranchMeta(threadId: string): Pick<ThreadMeta, 'thread_id'> & {

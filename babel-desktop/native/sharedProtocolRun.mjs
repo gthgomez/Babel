@@ -177,6 +177,33 @@ export class SharedProtocolRun {
     this.#child.once('close', callback);
   }
 
+  /** End stdin and wait for the owned host-run child; force-terminate after timeoutMs. */
+  disposeOwnedChild(timeoutMs = 8_000) {
+    return new Promise((resolve) => {
+      const child = this.#child;
+      if (!child) {
+        resolve({ forced: false });
+        return;
+      }
+      let forced = false;
+      const timer = setTimeout(() => {
+        forced = true;
+        terminateChildTree(child);
+        resolve({ forced: true });
+      }, timeoutMs);
+      const finish = () => {
+        clearTimeout(timer);
+        resolve({ forced });
+      };
+      try {
+        child.stdin?.end();
+      } catch {
+        /* ignore */
+      }
+      child.once('close', finish);
+    });
+  }
+
   cancel() {
     const child = this.#child;
     if (!child || child.desktopCancelling) return;

@@ -337,6 +337,8 @@ if (remoteIdx >= 0 && (remoteSub === 'serve' || remoteSub === 'acceptance-bridge
     markStage('trace:turn-1 terminal evidence', {});
 
     assert.equal(typeof firstTurn.result?.session_id, 'string');
+    assert.equal(firstTurn.result?.fixture_execution, true, 'deterministic acceptance engine marker');
+    assert.equal(firstTurn.result?.terminal_outcome, 'UNVERIFIED_PATCH');
     const receiptAfterFirst = await readFile(hostRunReceipt, 'utf8').catch(() => '');
     if (!receiptAfterFirst.includes('host-run')) {
       failStage('receipt:host-run turn-1', receiptAfterFirst || '(empty)');

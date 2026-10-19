@@ -301,6 +301,8 @@ export interface HistoryLookupResult {
   cells: HistoryCellRecord[];
   cursor?: string;
   has_more?: boolean;
+  /** Highest known turn index for the thread (cells + durable meta). */
+  latest_turn_id?: number | null;
   /** Present when `turn_id` is requested and a terminal record exists for that turn. */
   turn_terminal?: TurnTerminalRecord | null;
 }

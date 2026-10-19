@@ -29,6 +29,9 @@ import {
   ensureThread,
   loadSessionDescriptor,
   loadThreadCells,
+  loadTurnTerminalRecord,
+  persistTurnTerminalRecord,
+  resolveLatestTurnIdFromThreadStore,
   resolveNextTurnId,
   writeSessionDescriptor,
   threadStoreExists,
@@ -149,8 +152,9 @@ function recordTurnTerminalFromChatEvent(
 ): void {
   const recorded_at = new Date().toISOString();
   const key = turnTerminalStorageKey(threadId, turnId);
+  let record: import('../types.js').TurnTerminalRecord | null = null;
   if (event.type === 'done') {
-    state.turnTerminals.set(key, {
+    record = {
       turn_id: turnId,
       event_type: 'done',
       answer: event.answer,
@@ -162,11 +166,9 @@ function recordTurnTerminalFromChatEvent(
       ...(typeof event.fixture_kind === 'string' ? { fixture_kind: event.fixture_kind } : {}),
       usage: event.usage,
       recorded_at,
-    });
-    return;
-  }
-  if (event.type === 'failed') {
-    state.turnTerminals.set(key, {
+    };
+  } else if (event.type === 'failed') {
+    record = {
       turn_id: turnId,
       event_type: 'failed',
       error: event.error,
@@ -175,18 +177,36 @@ function recordTurnTerminalFromChatEvent(
       ...(event.reason_code !== undefined ? { reason_code: event.reason_code } : {}),
       ...(event.cause_class !== undefined ? { cause_class: event.cause_class } : {}),
       recorded_at,
-    });
-    return;
-  }
-  if (event.type === 'cancelled') {
-    state.turnTerminals.set(key, {
+    };
+  } else if (event.type === 'cancelled') {
+    record = {
       turn_id: turnId,
       event_type: 'cancelled',
       outcome: event.outcome ?? 'CANCELLED',
       ...(event.status !== undefined ? { status: event.status } : {}),
       recorded_at,
-    });
+    };
   }
+  if (!record) return;
+  state.turnTerminals.set(key, record);
+  try {
+    persistTurnTerminalRecord(threadId, record);
+  } catch {
+    /* durable write failure must not block live notifications */
+  }
+}
+
+function resolveTurnTerminalRecord(
+  state: ProtocolHostState,
+  threadId: string,
+  turnId: number,
+): import('../types.js').TurnTerminalRecord | null {
+  const key = turnTerminalStorageKey(threadId, turnId);
+  const cached = state.turnTerminals.get(key);
+  if (cached) return cached;
+  const durable = loadTurnTerminalRecord(threadId, turnId);
+  if (durable) state.turnTerminals.set(key, durable);
+  return durable ?? null;
 }
 
 function modeExecutionProfile(mode: BabelMode): 'chat' | 'plan' | 'deep' {
@@ -696,18 +716,25 @@ export async function handleProtocolRequest(
                 await emitEvents(engine.submitMessageStream(params.message));
               }
             } catch (err: any) {
-               try {
-                 onNotification?.({
-                   jsonrpc: '2.0',
-                   method: 'turn.event',
-                   params: {
-                     thread_id: params.thread_id,
-                     turn_id: turnId,
-                     seq: seq++,
-                     event: { type: 'failed', error: err.message ?? String(err) }
-                   }
-                 });
-               } catch { /* ignore */ }
+              const failedEvent: ChatEvent = {
+                type: 'failed',
+                error: err instanceof Error ? err.message : String(err),
+              };
+              recordTurnTerminalFromChatEvent(state, params.thread_id, turnId, failedEvent);
+              try {
+                onNotification?.({
+                  jsonrpc: '2.0',
+                  method: 'turn.event',
+                  params: {
+                    thread_id: params.thread_id,
+                    turn_id: turnId,
+                    seq: seq++,
+                    event: { type: 'failed', error: failedEvent.error },
+                  },
+                });
+              } catch {
+                /* ignore */
+              }
             } finally {
               if (runtimeExecution !== null) state.coordinator.settle(runtimeExecution);
               launch.settled = true;
@@ -820,11 +847,10 @@ export async function handleProtocolRequest(
         const result: HistoryLookupResult = {
           cells: slice,
           has_more: slice.length < filtered.length,
+          latest_turn_id: resolveLatestTurnIdFromThreadStore(params.thread_id),
         };
         if (params.turn_id !== undefined) {
-          result.turn_terminal =
-            state.turnTerminals.get(turnTerminalStorageKey(params.thread_id, params.turn_id)) ??
-            null;
+          result.turn_terminal = resolveTurnTerminalRecord(state, params.thread_id, params.turn_id);
         }
         // Provide the next-page cursor when there are more results
         if (result.has_more && slice.length > 0) {

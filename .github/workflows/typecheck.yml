@@ -157,6 +157,8 @@ jobs:
       - dependency-preflight
     if: needs.detect-scope.outputs.full == 'true'
     name: desktop-tests (${{ matrix.os }})
+    # Measured local xvfb full suite ~10–15m; cap hung owned-child regressions (fail job, never skip).
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
