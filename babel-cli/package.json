@@ -210,6 +210,7 @@
   "files": [
     "bin/babel.js",
     "dist/**/*.js",
+    "dist/bridge/opencode-acp-source-pin.json",
     "dist/authority/ownedFileAssertion.windows.ps1",
     "dist/voice/audio-capture-worker.mjs",
     "dist/voice/vad-worker.mjs",

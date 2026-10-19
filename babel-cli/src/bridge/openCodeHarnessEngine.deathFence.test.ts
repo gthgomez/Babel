@@ -71,12 +71,15 @@ describe('openCodeHarnessEngine prompt timeout death fence', () => {
 
     const descriptor = harnessDescriptor('thread-opencode-death', tmp, 'opencode');
 
+    const ccDescriptor = harnessDescriptor('thread-cc-isolation', tmp, 'command-code');
+    const ccSession = await ccRegistry.ensureSession(ccDescriptor);
+    assert.equal(ccSession.processDead, false);
+
     const engine = createOpenCodeHarnessEngine({ descriptor, registry });
     const broker = new RemoteApprovalBroker();
     const session = await registry.ensureSession(descriptor);
     assert.equal(session.processDead, false);
 
-    const ccDescriptor = harnessDescriptor('thread-cc-isolation', tmp, 'command-code');
     const started = Date.now();
     const events = await runOnRemoteSurface(
       {
@@ -100,7 +103,6 @@ describe('openCodeHarnessEngine prompt timeout death fence', () => {
     assert.equal(events.at(-1)?.type, 'failed');
     assert.equal(session.processDead, true);
 
-    const ccSession = await ccRegistry.ensureSession(ccDescriptor);
     assert.equal(ccSession.processDead, false);
   });
 });

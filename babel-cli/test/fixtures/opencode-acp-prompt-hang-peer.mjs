@@ -20,6 +20,17 @@ function write(msg) {
 }
 
 const sessions = new Map();
+/** @type {Map<string, { id: unknown; aborted?: boolean }>} */
+const activePromptBySession = new Map();
+
+function settlePrompt(sessionId, id, stopReason) {
+  write({
+    jsonrpc: '2.0',
+    id,
+    result: { stopReason },
+  });
+  activePromptBySession.delete(sessionId);
+}
 
 const rl = createInterface({ input: process.stdin });
 rl.on('line', (line) => {
@@ -32,6 +43,33 @@ rl.on('line', (line) => {
     process.exit(3);
   }
   const { id, method, params } = msg;
+  if (method === 'session/cancel') {
+    if (id !== undefined) return;
+    if (process.env.BABEL_OPENCODE_FIXTURE_IGNORE_CANCEL === '1') {
+      return;
+    }
+    if (process.env.BABEL_OPENCODE_HANG_PEER_TRACE === '1') {
+      process.stderr.write(`${JSON.stringify({ trace: 'session/cancel', params })}\n`);
+    }
+    const sessionId = String(params?.sessionId ?? '');
+    const active = activePromptBySession.get(sessionId);
+    if (!active) return;
+    active.aborted = true;
+    const settleDelayMs = Number(process.env.BABEL_OPENCODE_FIXTURE_CANCEL_SETTLE_DELAY_MS ?? 0);
+    const exitAfterMs = Number(process.env.BABEL_OPENCODE_FIXTURE_EXIT_AFTER_CANCEL_MS ?? 0);
+    const finishCancel = () => {
+      settlePrompt(sessionId, active.id, 'cancelled');
+      if (exitAfterMs > 0) {
+        setTimeout(() => process.exit(0), exitAfterMs);
+      }
+    };
+    if (settleDelayMs > 0) {
+      setTimeout(finishCancel, settleDelayMs);
+    } else {
+      finishCancel();
+    }
+    return;
+  }
   switch (method) {
     case 'initialize':
       write({
@@ -50,9 +88,12 @@ rl.on('line', (line) => {
       write({ jsonrpc: '2.0', id, result: { sessionId } });
       break;
     }
-    case 'session/prompt':
-      // Intentionally never respond — harness RPC timeout must fire.
+    case 'session/prompt': {
+      const sessionId = String(params?.sessionId ?? 'hang-session-1');
+      activePromptBySession.set(sessionId, { id });
+      // Intentionally never respond until cancel/timeout — harness must not fabricate terminal.
       break;
+    }
     default:
       if (id !== undefined) {
         write({ jsonrpc: '2.0', id, error: { code: -32601, message: `unsupported ${method}` } });

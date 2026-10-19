@@ -133,6 +133,8 @@ export interface BridgeServerOptions {
   openCodeRegistry?: OpenCodeAcpRuntimeRegistry;
   openCodeTestLaunch?: OpenCodeAcpLaunchOverride;
   openCodeInstallProbe?: () => Promise<import('./openCodeCliDiscovery.js').OpenCodeInstallProbe>;
+  /** Test-only: injected prompt RPC timeout for OpenCode death-fence gateway proofs. */
+  openCodeTestRpcTimeoutMs?: number;
 }
 
 /** Test-only hooks for post-initial-auth / pre-body-read synchronization. */
@@ -301,6 +303,9 @@ export class BridgeServer {
         ...(this.options.openCodeTestLaunch ? { testLaunch: this.options.openCodeTestLaunch } : {}),
         ...(this.options.openCodeInstallProbe
           ? { installProbe: this.options.openCodeInstallProbe }
+          : {}),
+        ...(this.options.openCodeTestRpcTimeoutMs !== undefined
+          ? { testRpcTimeoutMs: this.options.openCodeTestRpcTimeoutMs }
           : {}),
       });
     this.protocolGateway =

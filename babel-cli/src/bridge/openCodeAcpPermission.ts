@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { isAbsolute, resolve } from 'node:path';
 
 import type { AgentAction } from '../agent/actions.js';
 
@@ -10,6 +11,33 @@ function toolCallRecord(params: Record<string, unknown>): Record<string, unknown
 
 function digestHex(material: string): string {
   return createHash('sha256').update(material).digest('hex');
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === 'string' ? value : undefined;
+}
+
+function absolutePath(path: string, cwd: string): string {
+  return isAbsolute(path) ? path : resolve(cwd, path);
+}
+
+/** Vendor shell rawInput: inject session cwd only when neither cwd nor workdir is set. */
+export function effectiveShellExecution(
+  rawInput: unknown,
+  sessionCwd: string,
+): { command: string; effectiveCwd: string; rawInput: Record<string, unknown> } | null {
+  if (typeof rawInput === 'string') {
+    const command = rawInput.trim();
+    if (!command) return null;
+    return { command, effectiveCwd: sessionCwd, rawInput: { command } };
+  }
+  if (!rawInput || typeof rawInput !== 'object') return null;
+  const input = rawInput as Record<string, unknown>;
+  const command = stringValue(input.command) ?? stringValue(input.cmd);
+  if (!command) return null;
+  const workdir = stringValue(input.workdir) ?? stringValue(input.cwd);
+  const effectiveCwd = workdir ? absolutePath(workdir, sessionCwd) : sessionCwd;
+  return { command, effectiveCwd, rawInput: input };
 }
 
 function diffPreviewMaterial(content: unknown): string | null {
@@ -38,28 +66,97 @@ function diffPreviewMaterial(content: unknown): string | null {
   return parts.sort().join('\n===\n');
 }
 
+function acpToolCallLabel(toolCall: Record<string, unknown> | undefined): string | undefined {
+  return stringValue(toolCall?.name) ?? stringValue(toolCall?.title);
+}
+
+/** Matches pinned OpenCode `canonicalName` V1 aliases (e.g. apply_patch → patch). */
+const ACP_TOOL_V1_ALIASES = new Map<string, string>([
+  ['bash', 'shell'],
+  ['task', 'subagent'],
+  ['apply_patch', 'patch'],
+]);
+
+export function canonicalAcpToolName(toolName: string): string {
+  const lower = toolName.toLocaleLowerCase();
+  return ACP_TOOL_V1_ALIASES.get(lower) ?? lower;
+}
+
+/** Pinned OpenCode emits patch operations as `kind:edit` with `name`/`title: patch` (or `apply_patch`). */
+export function isAcpPatchOperation(
+  kind: string | undefined,
+  toolCall: Record<string, unknown> | undefined,
+): boolean {
+  if (kind === 'patch') return true;
+  const label = acpToolCallLabel(toolCall);
+  if (kind === 'edit' && label && canonicalAcpToolName(label) === 'patch') return true;
+  return false;
+}
+
+/** Non-empty `patchText` string on a structured rawInput object (vendor ToolInput shape). */
+export function verifiedPatchTextRawInput(rawInput: unknown): string | null {
+  if (rawInput === undefined || rawInput === null) return null;
+  if (typeof rawInput !== 'object' || Array.isArray(rawInput)) return null;
+  const patchText = stringValue((rawInput as Record<string, unknown>).patchText);
+  if (patchText === undefined) return null;
+  const trimmed = patchText.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function hasSubstantivePatchRawInput(rawInput: unknown): boolean {
+  return verifiedPatchTextRawInput(rawInput) !== null;
+}
+
+function stableRawInputMaterial(rawInput: unknown): string | null {
+  if (rawInput === undefined) return null;
+  if (typeof rawInput === 'string') return `raw:string:${rawInput}`;
+  if (typeof rawInput === 'object' && rawInput) {
+    try {
+      return `raw:json:${JSON.stringify(rawInput)}`;
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
 function editWriteBindingMaterial(
   kind: string,
   rawInput: unknown,
   toolCall: Record<string, unknown> | undefined,
 ): string | null {
+  const patchOperation = isAcpPatchOperation(kind, toolCall);
+  const bindingKind = patchOperation ? 'patch' : kind;
+  const parts: string[] = [`kind:${bindingKind}`];
+  if (patchOperation && !hasSubstantivePatchRawInput(rawInput)) return null;
+  const rawMaterial = stableRawInputMaterial(rawInput);
+  if (rawMaterial) parts.push(rawMaterial);
   const preview = diffPreviewMaterial(toolCall?.content);
-  if (preview) return preview;
+  if (preview) parts.push(`preview:\n${preview}`);
 
-  if (kind === 'patch') {
-    if (!rawInput || typeof rawInput !== 'object') return null;
-    return `patch:${JSON.stringify(rawInput)}`;
+  if (patchOperation) {
+    if (!rawMaterial || !verifiedPatchTextRawInput(rawInput)) return null;
+    return parts.join('\n');
   }
 
+  if (kind === 'edit' || kind === 'write') {
+    const input = rawInput && typeof rawInput === 'object' ? (rawInput as Record<string, unknown>) : null;
+    const path = input ? stringValue(input.path) ?? stringValue(input.filePath) : undefined;
+    const hasExplicitContent = Boolean(input && 'content' in input);
+    if (!preview && !hasExplicitContent) return null;
+    if (!preview && !path) return null;
+    if (parts.length <= 1) return null;
+    return parts.join('\n');
+  }
+
+  return parts.length > 1 ? parts.join('\n') : null;
+}
+
+function readFilePath(rawInput: unknown): string | null {
   if (!rawInput || typeof rawInput !== 'object') return null;
-  const input = rawInput as { path?: unknown; content?: unknown };
-  const path = typeof input.path === 'string' ? input.path : '';
-  if (!path) return null;
-  if (!('content' in input)) {
-    return null;
-  }
-  const content = typeof input.content === 'string' ? input.content : String(input.content ?? '');
-  return `acp:${kind}:${path}\n---\n${content}`;
+  const input = rawInput as Record<string, unknown>;
+  const path = stringValue(input.path) ?? stringValue(input.filePath);
+  return path ?? null;
 }
 
 /** Returns null when the operation cannot be represented safely (fail closed before broker). */
@@ -79,10 +176,7 @@ export function permissionActionFromAcpParams(
   const rawInput = toolCall?.rawInput ?? toolCall?.input;
 
   if (kind === 'read' || kind === 'read_file') {
-    const path =
-      typeof rawInput === 'object' && rawInput && 'path' in (rawInput as object)
-        ? String((rawInput as { path?: unknown }).path ?? '')
-        : '';
+    const path = readFilePath(rawInput);
     if (!path) return null;
     return {
       type: 'ask_approval',
@@ -94,20 +188,15 @@ export function permissionActionFromAcpParams(
     const material = editWriteBindingMaterial(kind, rawInput, toolCall);
     if (!material) return null;
     const digest = digestHex(material);
-    const pathMatch = material.match(/^acp:(?:edit|write):([^\n]+)/) ?? material.match(/^diff:([^\n]+)/);
-    const pathLabel = pathMatch?.[1] ?? kind;
-    const command = `acp:${kind}:${pathLabel}\n---\n${material}`;
+    const command = `acp:${kind}\n---\n${material}`;
     return {
       type: 'ask_approval',
-      reason: `${title} — ${kind} ${pathLabel} [sha256=${digest}]${toolCallId ? ` (${toolCallId})` : ''}`,
+      reason: `${title} — ${kind} [sha256=${digest}]${toolCallId ? ` (${toolCallId})` : ''}`,
       requested_action: { type: 'run_command', command, cwd },
     };
   }
   if (kind === 'delete') {
-    const path =
-      typeof rawInput === 'object' && rawInput && 'path' in (rawInput as object)
-        ? String((rawInput as { path?: unknown }).path ?? '')
-        : '';
+    const path = readFilePath(rawInput);
     if (!path) return null;
     return {
       type: 'ask_approval',
@@ -115,21 +204,38 @@ export function permissionActionFromAcpParams(
       requested_action: { type: 'run_command', command: `acp:delete:${path}`, cwd },
     };
   }
-  if (kind === 'execute' || kind === 'bash' || kind === 'run_command') {
-    const command =
-      typeof rawInput === 'object' && rawInput && 'command' in (rawInput as object)
-        ? String((rawInput as { command?: unknown }).command ?? '')
-        : typeof rawInput === 'string'
-          ? rawInput
-          : '';
-    if (!command) return null;
+  if (kind === 'execute' || kind === 'bash' || kind === 'run_command' || kind === 'shell') {
+    const shell = effectiveShellExecution(rawInput, cwd);
+    if (!shell) return null;
+    const material = [
+      'shell',
+      `command:${shell.command}`,
+      `effectiveCwd:${shell.effectiveCwd}`,
+      stableRawInputMaterial(shell.rawInput) ?? '',
+    ].join('\n');
+    const digest = digestHex(material);
     return {
       type: 'ask_approval',
-      reason: `${title}${toolCallId ? ` (${toolCallId})` : ''}`,
-      requested_action: { type: 'run_command', command, cwd },
+      reason: `${title}${toolCallId ? ` (${toolCallId})` : ''} [sha256=${digest}]`,
+      requested_action: { type: 'run_command', command: shell.command, cwd: shell.effectiveCwd },
     };
   }
 
+  return null;
+}
+
+export function brokerInputFromPermissionAction(
+  action: AgentAction,
+  sessionCwd: string,
+): { action: AgentAction; cwd: string } | null {
+  if (action.type !== 'ask_approval') return null;
+  const inner = action.requested_action;
+  if (inner.type === 'run_command') {
+    return { action: inner, cwd: inner.cwd ?? sessionCwd };
+  }
+  if (inner.type === 'read_file') {
+    return { action: inner, cwd: sessionCwd };
+  }
   return null;
 }
 

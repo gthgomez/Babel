@@ -14,7 +14,11 @@ import {
   type OpenCodeReplayAccumulator,
 } from './openCodeAcpReplay.js';
 import { probeOpenCodeInstallation, type OpenCodeInstallProbe } from './openCodeCliDiscovery.js';
-import { permissionActionFromAcpParams, selectAllowOnceOptionId } from './openCodeAcpPermission.js';
+import {
+  brokerInputFromPermissionAction,
+  permissionActionFromAcpParams,
+  selectAllowOnceOptionId,
+} from './openCodeAcpPermission.js';
 import { OpenCodeAcpTransport } from './openCodeAcpTransport.js';
 import type { RemoteApprovalBroker } from './remoteApproval.js';
 import { OPENCODE_ACP_LAUNCH_ARGS } from './openCodeAcpContract.js';
@@ -266,13 +270,15 @@ export class OpenCodeAcpRuntimeRegistry {
     const options = Array.isArray(params.options) ? params.options : [];
     const allowOnceId = selectAllowOnceOptionId(options);
     if (!allowOnceId) return { outcome: 'cancelled' };
-    const action = permissionActionFromAcpParams(params, binding.cwd);
-    if (!action) return { outcome: 'cancelled' };
+    const mapped = permissionActionFromAcpParams(params, binding.cwd);
+    if (!mapped) return { outcome: 'cancelled' };
+    const brokerInput = brokerInputFromPermissionAction(mapped, binding.cwd);
+    if (!brokerInput) return { outcome: 'cancelled' };
     const allowed = await binding.broker.requestAllowOnce({
-      action,
+      action: brokerInput.action,
       thread_id: binding.threadId,
       turn_id: binding.turnId,
-      cwd: binding.cwd,
+      cwd: brokerInput.cwd,
       ...(binding.notify ? { notify: binding.notify } : {}),
     });
     if (!allowed) return { outcome: 'cancelled' };

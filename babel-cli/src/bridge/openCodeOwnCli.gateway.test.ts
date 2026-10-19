@@ -109,7 +109,11 @@ async function runTurn(
   transportSessionId: string,
   message: string,
   options?: { approve?: boolean },
-): Promise<{ events: Record<string, unknown>[]; terminal?: Record<string, unknown> }> {
+): Promise<{
+  events: Record<string, unknown>[];
+  terminal?: Record<string, unknown>;
+  permissionRequests: Record<string, unknown>[];
+}> {
   const ticketRes = await httpRequest(`http://127.0.0.1:${rpcPort}/ws/ticket`, {
     method: 'POST',
     headers: { ...desktopHeaders(), 'Content-Type': 'application/json' },
@@ -124,6 +128,7 @@ async function runTurn(
     ws.once('error', reject);
   });
   const events: Record<string, unknown>[] = [];
+  const permissionRequests: Record<string, unknown>[] = [];
   let sawPermission = false;
   ws.on('message', (raw) => {
     const frame = JSON.parse(raw.toString()) as { method?: string; params?: Record<string, unknown> };
@@ -132,6 +137,7 @@ async function runTurn(
     }
     if (frame.method === 'permission.request' && frame.params) {
       sawPermission = true;
+      permissionRequests.push(frame.params);
       if (options?.approve) {
         void rpc(rpcPort, desktopHeaders(), 'approval.decide', {
           thread_id: threadId,
@@ -162,7 +168,7 @@ async function runTurn(
   ws.close();
   const terminal = events.find((e) => e.type === 'done' || e.type === 'failed' || e.type === 'cancelled');
   if (options?.approve) assert.ok(sawPermission, 'expected permission.request notification');
-  return terminal ? { events, terminal } : { events };
+  return terminal ? { events, terminal, permissionRequests } : { events, permissionRequests };
 }
 
 function verifiedInstallProbe() {
@@ -775,6 +781,154 @@ describe('OpenCode own-CLI gateway integration', () => {
         'next turn must not include prior cancelled prompt output',
       );
       ws.close();
+    });
+  });
+
+  it('binds shell permission effective cwd through subprocess peer', async () => {
+    await withDedicatedServer(
+      {
+        BABEL_OPENCODE_FIXTURE_PERMISSION: '1',
+        BABEL_OPENCODE_FIXTURE_PERMISSION_SHAPE: 'shell_cwd',
+        BABEL_OPENCODE_FIXTURE_SHELL_CWD: '/project/a',
+      },
+      async (dedicated, pPort) => {
+        const sess = await httpRequest(`http://127.0.0.1:${pPort}/sessions`, {
+          method: 'POST',
+          headers: desktopHeaders(),
+          body: JSON.stringify({ projectRoot: tmp }),
+        });
+        const transportSessionId = (JSON.parse(sess.body) as { sessionId: string }).sessionId;
+        const created = await rpc(
+          pPort,
+          desktopHeaders(),
+          'thread.create',
+          { project_root: tmp, session_id: transportSessionId, harness_adapter_id: 'opencode' },
+          60,
+        );
+        const threadId = (created.result as { thread_id: string }).thread_id;
+        await rpc(pPort, desktopHeaders(), 'control.acquire', { thread_id: threadId, force: false }, 61);
+        const turn = await runTurn(pPort, threadId, transportSessionId, 'shell cwd a', { approve: true });
+        assert.equal(turn.terminal?.type, 'done');
+        const perm = turn.permissionRequests[0];
+        assert.ok(perm);
+        assert.equal(perm.cwd, '/project/a');
+        assert.equal(perm.command, 'rm -rf output');
+        assert.ok(perm.target_path === '/project/a' || perm.cwd === '/project/a');
+      },
+    );
+    await withDedicatedServer(
+      {
+        BABEL_OPENCODE_FIXTURE_PERMISSION: '1',
+        BABEL_OPENCODE_FIXTURE_PERMISSION_SHAPE: 'shell_cwd',
+        BABEL_OPENCODE_FIXTURE_SHELL_CWD: '/project/b',
+      },
+      async (dedicated, pPort) => {
+        const sess = await httpRequest(`http://127.0.0.1:${pPort}/sessions`, {
+          method: 'POST',
+          headers: desktopHeaders(),
+          body: JSON.stringify({ projectRoot: tmp }),
+        });
+        const transportSessionId = (JSON.parse(sess.body) as { sessionId: string }).sessionId;
+        const created = await rpc(
+          pPort,
+          desktopHeaders(),
+          'thread.create',
+          { project_root: tmp, session_id: transportSessionId, harness_adapter_id: 'opencode' },
+          62,
+        );
+        const threadId = (created.result as { thread_id: string }).thread_id;
+        await rpc(pPort, desktopHeaders(), 'control.acquire', { thread_id: threadId, force: false }, 63);
+        const turn = await runTurn(pPort, threadId, transportSessionId, 'shell cwd b', { approve: true });
+        assert.equal(turn.permissionRequests[0]?.cwd, '/project/b');
+        assert.notEqual(turn.permissionRequests[0]?.operation_digest, undefined);
+      },
+    );
+  });
+
+  it('binds patch rename rawInput with preview through subprocess peer', async () => {
+    const patchA =
+      '*** Begin Patch\n*** Update File: /project/a\n@@\n-x\n+y\n*** End Patch';
+    const patchB =
+      '*** Begin Patch\n*** Update File: /project/b\n@@\n-x\n+y\n*** End Patch';
+    let digestA: string | undefined;
+    await withDedicatedServer(
+      {
+        BABEL_OPENCODE_FIXTURE_PERMISSION: '1',
+        BABEL_OPENCODE_FIXTURE_PERMISSION_SHAPE: 'patch_rename',
+        BABEL_OPENCODE_FIXTURE_PATCH_TEXT: patchA,
+      },
+      async (_dedicated, pPort) => {
+        const sess = await httpRequest(`http://127.0.0.1:${pPort}/sessions`, {
+          method: 'POST',
+          headers: desktopHeaders(),
+          body: JSON.stringify({ projectRoot: tmp }),
+        });
+        const transportSessionId = (JSON.parse(sess.body) as { sessionId: string }).sessionId;
+        const created = await rpc(
+          pPort,
+          desktopHeaders(),
+          'thread.create',
+          { project_root: tmp, session_id: transportSessionId, harness_adapter_id: 'opencode' },
+          64,
+        );
+        const threadId = (created.result as { thread_id: string }).thread_id;
+        await rpc(pPort, desktopHeaders(), 'control.acquire', { thread_id: threadId, force: false }, 65);
+        const turn = await runTurn(pPort, threadId, transportSessionId, 'patch a', { approve: true });
+        digestA = String(turn.permissionRequests[0]?.operation_digest ?? '');
+        assert.match(String(turn.permissionRequests[0]?.command ?? ''), /patchText/);
+      },
+    );
+    await withDedicatedServer(
+      {
+        BABEL_OPENCODE_FIXTURE_PERMISSION: '1',
+        BABEL_OPENCODE_FIXTURE_PERMISSION_SHAPE: 'patch_rename',
+        BABEL_OPENCODE_FIXTURE_PATCH_TEXT: patchB,
+      },
+      async (_dedicated, pPort) => {
+        const sess = await httpRequest(`http://127.0.0.1:${pPort}/sessions`, {
+          method: 'POST',
+          headers: desktopHeaders(),
+          body: JSON.stringify({ projectRoot: tmp }),
+        });
+        const transportSessionId = (JSON.parse(sess.body) as { sessionId: string }).sessionId;
+        const created = await rpc(
+          pPort,
+          desktopHeaders(),
+          'thread.create',
+          { project_root: tmp, session_id: transportSessionId, harness_adapter_id: 'opencode' },
+          66,
+        );
+        const threadId = (created.result as { thread_id: string }).thread_id;
+        await rpc(pPort, desktopHeaders(), 'control.acquire', { thread_id: threadId, force: false }, 67);
+        const turn = await runTurn(pPort, threadId, transportSessionId, 'patch b', { approve: true });
+        const digestB = String(turn.permissionRequests[0]?.operation_digest ?? '');
+        assert.notEqual(digestA, digestB);
+      },
+    );
+  });
+
+  it('preserves prompt response usage tokens through subprocess engine', async () => {
+    await withDedicatedServer({ BABEL_OPENCODE_FIXTURE_PROMPT_USAGE: '1' }, async (dedicated, pPort) => {
+      const sess = await httpRequest(`http://127.0.0.1:${pPort}/sessions`, {
+        method: 'POST',
+        headers: desktopHeaders(),
+        body: JSON.stringify({ projectRoot: tmp }),
+      });
+      const transportSessionId = (JSON.parse(sess.body) as { sessionId: string }).sessionId;
+      const created = await rpc(
+        pPort,
+        desktopHeaders(),
+        'thread.create',
+        { project_root: tmp, session_id: transportSessionId, harness_adapter_id: 'opencode' },
+        68,
+      );
+      const threadId = (created.result as { thread_id: string }).thread_id;
+      await rpc(pPort, desktopHeaders(), 'control.acquire', { thread_id: threadId, force: false }, 69);
+      const turn = await runTurn(pPort, threadId, transportSessionId, 'usage probe');
+      assert.equal(turn.terminal?.type, 'done');
+      const usage = (turn.terminal as { usage?: { totalInputTokens?: number; totalOutputTokens?: number } }).usage;
+      assert.equal(usage?.totalInputTokens, 1200);
+      assert.equal(usage?.totalOutputTokens, 340);
     });
   });
 

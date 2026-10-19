@@ -3,10 +3,10 @@
  *
  * Authoritative behavior: https://opencode.ai/v2/docs/cli/acp
  * Implementation reference (retrievable): anomalyco/opencode @ pin below — see
- * `babel-cli/test/fixtures/opencode-acp-source-pin.json` for paths and revision notes.
+ * `opencode-acp-source-pin.json` (shipped beside compiled contract) for paths and revision notes.
  */
 
-import sourcePin from '../../test/fixtures/opencode-acp-source-pin.json' with { type: 'json' };
+import sourcePin from './opencode-acp-source-pin.json' with { type: 'json' };
 
 /** Git commit + paths used to derive strict test peers and permission binding. */
 export const OPENCODE_ACP_SOURCE_PIN = Object.freeze({

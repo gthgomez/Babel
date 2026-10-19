@@ -61,7 +61,17 @@ async function handleSessionNew(id, params) {
   }
   const sessionId = `sess_fixture_${nextSession++}`;
   sessions.set(sessionId, { cwd: params.cwd, messages: [], permissionDone: false });
-  write({ jsonrpc: '2.0', id, result: { sessionId } });
+  const configOptions = process.env.BABEL_OPENCODE_FIXTURE_CONFIG_OPTIONS === '1'
+    ? [{ id: 'model', value: 'default' }]
+    : undefined;
+  write({
+    jsonrpc: '2.0',
+    id,
+    result: {
+      sessionId,
+      ...(configOptions ? { configOptions } : {}),
+    },
+  });
   if (process.env.BABEL_OPENCODE_FIXTURE_STARTUP_IDLE === '1') {
     sessionUpdate(sessionId, 'state_update', { state: 'idle', stopReason: 'end_turn' });
   }
@@ -127,11 +137,58 @@ function waitForPermissionResponse(requestId) {
   });
 }
 
+function permissionToolCall() {
+  const shape = process.env.BABEL_OPENCODE_FIXTURE_PERMISSION_SHAPE ?? 'execute';
+  if (shape === 'shell_cwd') {
+    const cwd = process.env.BABEL_OPENCODE_FIXTURE_SHELL_CWD ?? '/project/a';
+    return {
+      toolCallId: 'shell_fixture',
+      kind: 'execute',
+      title: 'shell',
+      rawInput: { command: 'rm -rf output', cwd },
+    };
+  }
+  if (shape === 'patch_rename') {
+    const patchText =
+      process.env.BABEL_OPENCODE_FIXTURE_PATCH_TEXT ??
+      '*** Begin Patch\n*** Update File: a\n@@\n-x\n+y\n*** End Patch';
+    return {
+      toolCallId: 'patch_fixture',
+      kind: 'edit',
+      name: 'patch',
+      title: 'patch',
+      rawInput: { patchText },
+      content: [
+        {
+          type: 'diff',
+          path: '/project/dest',
+          oldText: 'x',
+          newText: 'y',
+        },
+      ],
+    };
+  }
+  return {
+    toolCallId: 'tool_fixture_1',
+    kind: 'execute',
+    title: 'run_fixture',
+    rawInput: { command: 'fixture-cmd' },
+  };
+}
+
 function settlePrompt(sessionId, promptId, stopReason) {
   if (settledPromptIds.has(promptId)) return false;
   settledPromptIds.add(promptId);
   activePromptBySession.delete(sessionId);
-  write({ jsonrpc: '2.0', id: promptId, result: { stopReason } });
+  const usage =
+    process.env.BABEL_OPENCODE_FIXTURE_PROMPT_USAGE === '1'
+      ? { inputTokens: 1200, outputTokens: 340, totalTokens: 1540 }
+      : undefined;
+  write({
+    jsonrpc: '2.0',
+    id: promptId,
+    result: { stopReason, ...(usage ? { usage } : {}) },
+  });
   return true;
 }
 
@@ -169,12 +226,7 @@ async function handleSessionPrompt(id, params) {
           { optionId: 'once', kind: 'allow_once', name: 'Allow once' },
           { optionId: 'always', kind: 'allow_always', name: 'Always allow' },
         ],
-        toolCall: {
-          toolCallId: 'tool_fixture_1',
-          kind: 'execute',
-          title: 'run_fixture',
-          rawInput: { command: 'fixture-cmd' },
-        },
+        toolCall: permissionToolCall(),
       },
     });
     const outcome = await waitForPermissionResponse(requestId);
