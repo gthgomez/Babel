@@ -56,6 +56,12 @@ test('assistant stream and error events are normalized without prose parsing', a
   assert.equal(tool.status, 'running');
   assert.equal(normalizeEvent({type:'file.changed',item:{path:'src/app.ts',additions:2,deletions:1}}).action, 'edit');
   assert.equal(normalizeEvent({type:'approval.required',message:'Allow write?'}).kind, 'approval');
+  const reconciled = normalizeEvent({
+    type: 'approval.reconciled',
+    item: { approval: { schemaVersion: 2, request_id: 'appr-1', thread_id: 'thr-1', turn_id: 'turn-1', operation_digest: 'a'.repeat(64), run_id: 'run-1', expires_at: new Date(Date.now() + 60_000).toISOString() }, command: 'rm important-file', cwd: '/fixture', details: 'because' },
+  });
+  assert.equal(reconciled.command, 'rm important-file');
+  assert.equal(reconciled.cwd, '/fixture');
   assert.equal(normalizeEvent({type:'command.started',item:{command:'npm test'}}).action, 'run');
   assert.equal(normalizeEvent({type:'stage',stage_name:'Reviewing'}).text, 'Reviewing');
   const {sessionIdFromResult}=await load();

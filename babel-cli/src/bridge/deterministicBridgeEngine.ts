@@ -1,15 +1,12 @@
 /**
- * Loopback-only deterministic ChatEngine for acceptance tests (no provider calls).
- * Enabled only when `BABEL_BRIDGE_DETERMINISTIC_ENGINE=1` is set on the bridge process.
+ * Deterministic ChatEngine seam injected only by the test-owned acceptance bridge launcher.
+ * Ordinary `babel remote serve` never imports this factory.
  */
 
 import { ChatEngine } from '../agent/chatEngine.js';
+import { ACCEPTANCE_BRIDGE_KIND } from './acceptanceBridge.js';
 import type { SessionDescriptor } from '../executor/contracts.js';
 import type { ProtocolHostState } from '../protocol/client/host.js';
-
-export function isDeterministicBridgeEngineEnabled(): boolean {
-  return process.env['BABEL_BRIDGE_DETERMINISTIC_ENGINE'] === '1';
-}
 
 export function createDeterministicBridgeEngineFactory(): ProtocolHostState['engineFactory'] {
   return (descriptor: SessionDescriptor) => {
@@ -24,6 +21,9 @@ export function createDeterministicBridgeEngineFactory(): ProtocolHostState['eng
       yield {
         type: 'done',
         answer: message.trim() || 'ok',
+        status: 'completed',
+        fixture_execution: true,
+        fixture_kind: ACCEPTANCE_BRIDGE_KIND,
         usage: {
           totalCostUSD: 0,
           totalInputTokens: 0,

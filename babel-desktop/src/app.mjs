@@ -713,6 +713,17 @@ function handleNativeEvent(packet) {
       if(run.terminalReceived)return;
       appendNote(message, ev.text);
       message.status='running';
+      if(ev.operation==='cancel'){
+        run.stopping=false;
+        message.stopping=false;
+        message.pendingApproval='';
+        message.approval=null;
+        message.approvalCommand='';
+        message.approvalCwd='';
+        message.approvalDetails='';
+        renderConversation();
+        renderControls();
+      }
     }
     else if(ev.kind==='transport'){
       if(run.terminalReceived)return;

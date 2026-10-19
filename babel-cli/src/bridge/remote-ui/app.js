@@ -310,6 +310,11 @@
             thread = transition('thread', thread, 'running');
           } else if (row.status === 'waiting_approval') {
             thread = transition('thread', thread, 'waiting_approval');
+          } else if (!row.active_turn && (row.status === 'completed' || row.status === 'failed')) {
+            turn = transition('turn', turn, row.status === 'failed' ? 'fail' : 'complete');
+            thread = transition('thread', thread, row.status === 'failed' ? 'fail' : 'ready');
+            if (approval === 'PENDING') approval = transition('approval', approval, 'expire');
+            memory.turnId = null;
           }
         }
       }

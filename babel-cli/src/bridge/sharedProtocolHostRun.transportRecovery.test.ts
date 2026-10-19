@@ -132,6 +132,13 @@ describe('shared host-run transport recovery with authoritative approval lookup'
     stdin.write(`${JSON.stringify({ decision: 'reconcile_pending_approval' })}\n`);
     await new Promise((resolve) => setTimeout(resolve, 200));
     assert.ok(events.some((e) => e.type === 'approval.reconciled'));
+    const reconciledItem = (
+      events.find((e) => e.type === 'approval.reconciled') as {
+        item?: { command?: string; cwd?: string; approval?: Record<string, unknown> };
+      }
+    )?.item;
+    assert.ok(reconciledItem?.cwd, 'recovered approval must preserve cwd presentation');
+    assert.ok(reconciledItem?.approval?.request_id, 'recovered approval must preserve binding');
 
     const binding = (
       events.find((e) => e.type === 'approval.reconciled') as {

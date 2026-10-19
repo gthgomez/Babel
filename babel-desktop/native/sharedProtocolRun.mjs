@@ -4,6 +4,16 @@ import { JsonlDecoder } from './stream.mjs';
 import {scopedApproval,scopedApprovalReply} from '../src/core.mjs';
 import {productionNodeCliArgv} from './cli-launch.mjs';
 
+const sharedSessionTrace = process.env.BABEL_TEST_SHARED_SESSION_TRACE === '1';
+function emitSharedSessionTrace(stage, detail = {}) {
+  if (!sharedSessionTrace) return;
+  const safe = { stage };
+  for (const key of ['runId', 'eventType', 'kind', 'phase']) {
+    if (detail[key] !== undefined && detail[key] !== null) safe[key] = String(detail[key]);
+  }
+  console.error(`[shared-session-trace] ${JSON.stringify(safe)}`);
+}
+
 function terminateChildTree(child) {
   try { child.kill(); } catch { /* already exited */ }
 }
@@ -70,6 +80,7 @@ export class SharedProtocolRun {
     let turnSettled = false;
     let transportLost = false;
     const decoder = new JsonlDecoder(event => {
+      emitSharedSessionTrace('host-run:event', { runId: request.runId, eventType: event.type });
       if (event.type === 'approval.required' && !this.#approvalClosed) {
         const binding = scopedApproval(event.item?.approval);
         this.#approval = binding?.run_id === request.runId ? binding : null;
@@ -82,8 +93,23 @@ export class SharedProtocolRun {
         const binding = scopedApproval(event.item.approval);
         if (binding?.run_id === request.runId) this.#approval = binding;
       }
-      if (event.type === 'control.rejected' || event.type === 'transport.disconnected') {
-        send({kind: 'event', event});
+      if (event.type === 'control.rejected') {
+        send({ kind: 'event', event });
+        if (
+          event.operation === 'cancel' &&
+          child.stdin &&
+          !child.stdin.destroyed
+        ) {
+          try {
+            child.stdin.write(`${JSON.stringify({ decision: 'reconcile_pending_approval' })}\n`);
+          } catch {
+            /* ignore */
+          }
+        }
+        return;
+      }
+      if (event.type === 'transport.disconnected') {
+        send({ kind: 'event', event });
         return;
       }
       if (['run_complete', 'run_error', 'turn.completed', 'turn.failed', 'cancelled', 'emergency_stop'].includes(event.type)) {
@@ -97,6 +123,7 @@ export class SharedProtocolRun {
       }
       send({kind: 'event', event});
     }, error => send({kind: 'transport-error', error}));
+    emitSharedSessionTrace('host-run:spawn', { runId: request.runId, phase: 'child' });
     const child = spawn(this.executable, args, {
       cwd: this.projectRoot,
       shell: false,

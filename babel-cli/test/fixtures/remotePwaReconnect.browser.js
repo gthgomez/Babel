@@ -25,13 +25,20 @@ window.runRemotePwaReconnectFlow = async function runRemotePwaReconnectFlow({ to
   memory.sessionId = sessionJson.sessionId;
   const created = await rpc('thread.create', { project_root: root, session_id: memory.sessionId }, 1);
   memory.threadId = created.result.thread_id;
-  const submit = await rpc(
+  await rpc(
     'turn.submit',
     { thread_id: memory.threadId, message: 'first turn', command_id: 'pwa-reconnect-1' },
     2,
   );
-  memory.turnId = submit.result.turn_id;
-  await new Promise((r) => setTimeout(r, 300));
+  const deadline = Date.now() + 8000;
+  while (Date.now() < deadline) {
+    const catalog = await rpc('remote.catalog', {}, 90);
+    const row = ((catalog.result && catalog.result.sessions) || []).find(
+      (item) => item.thread_id === memory.threadId,
+    );
+    if (row && !row.active_turn && row.status === 'completed') break;
+    await new Promise((r) => setTimeout(r, 80));
+  }
   const historyBefore = await rpc('history.lookup', { thread_id: memory.threadId }, 3);
   const cellsBefore = (historyBefore.result && historyBefore.result.cells) || [];
   const rootInput = document.getElementById('root');
@@ -40,13 +47,13 @@ window.runRemotePwaReconnectFlow = async function runRemotePwaReconnectFlow({ to
   if (!app || app.fixture) throw new Error('production PWA handlers are not active');
   app.configureTest({
     host: 'ONLINE',
-    thread: 'RUNNING',
-    turn: 'STREAMING',
+    thread: 'READY',
+    turn: 'IDLE',
     memory: {
       token: memory.token,
       sessionId: memory.sessionId,
       threadId: memory.threadId,
-      turnId: memory.turnId,
+      turnId: null,
       authKind: 'host',
     },
   });
@@ -54,17 +61,18 @@ window.runRemotePwaReconnectFlow = async function runRemotePwaReconnectFlow({ to
   const state = app.getState();
   const historyAfter = await rpc('history.lookup', { thread_id: memory.threadId }, 4);
   const cellsAfter = (historyAfter.result && historyAfter.result.cells) || [];
-  const catalog = await rpc('remote.catalog', {}, 5);
-  const row = ((catalog.result && catalog.result.sessions) || []).find(
+  const catalogFinal = await rpc('remote.catalog', {}, 5);
+  const row = ((catalogFinal.result && catalogFinal.result.sessions) || []).find(
     (item) => item.thread_id === memory.threadId,
   );
   return {
     threadId: memory.threadId,
     host: state.host,
     turn: state.turn,
+    thread: state.thread,
     historyCells: cellsAfter.length,
     historyReplayed: cellsAfter.length >= cellsBefore.length,
     catalogStatus: row ? row.status : 'missing',
-    activeTurn: row ? row.active_turn : false,
+    activeTurn: row ? row.active_turn : true,
   };
 };

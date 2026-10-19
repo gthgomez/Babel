@@ -188,7 +188,11 @@ export function normalizeEvent(event) {
   if (event.type === 'approval.pending' || event.type === 'approval.reconciled') {
     const item=event.item ?? {};
     const binding=scopedApproval(item.approval);
-    return {kind:'approval', text:String(event.message ?? 'Approval is still pending on the shared protocol host.'), command:'', cwd:'', details:'', approval:binding, raw:event, reconciled:event.type==='approval.reconciled'};
+    const bounded=value=>typeof value==='string'&&value.length<=250000&&!value.includes('\0')?value:'';
+    const command=bounded(item.command)||bounded(item.approval?.command);
+    const cwd=bounded(item.cwd)||bounded(item.approval?.cwd);
+    const details=bounded(item.details)||bounded(item.approval?.reason);
+    return {kind:'approval', text:String(event.message ?? 'Approval is still pending on the shared protocol host.'), command, cwd, details, approval:binding, raw:event, reconciled:event.type==='approval.reconciled'};
   }
   if (event.type === 'control.rejected') {
     return {kind:'control', text:String(event.error ?? 'Control request was rejected.'), operation:String(event.operation ?? 'control'), raw:event};

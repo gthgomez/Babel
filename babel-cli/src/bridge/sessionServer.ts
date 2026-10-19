@@ -66,6 +66,7 @@ import {
 import { writePairUiResponse } from './pairUiAssets.js';
 import { pairedDeviceMutationOriginOk } from './bridgeMutationPolicy.js';
 import type { BridgeClientContext } from './bridgeClientAuth.js';
+import { acceptanceHealthExtension } from './acceptanceBridge.js';
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
 export interface BridgeServerOptions {
@@ -110,6 +111,8 @@ export interface BridgeServerOptions {
   desktopControllerClientId?: string;
   /** Per-launch desktop controller proof secret (never published to remote UIs). */
   desktopControllerProofKey?: string;
+  /** Test-only acceptance fixture metadata (never set on ordinary `remote serve`). */
+  acceptanceFixture?: { kind: string; label: string };
 }
 
 /** Test-only hooks for post-initial-auth / pre-body-read synchronization. */
@@ -427,6 +430,7 @@ export class BridgeServer {
         protocol: 'adr-010',
         ...(sharedSession ? { shared_session: true } : {}),
         ...(this.bridgeInstance ? { instance: this.bridgeInstance } : {}),
+        ...acceptanceHealthExtension(this.options.acceptanceFixture),
       });
       return;
     }

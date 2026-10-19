@@ -13,6 +13,8 @@ import {
   DESKTOP_PROOF_HEADER,
 } from './desktopControllerAuth.js';
 import { HttpProtocolClient } from './httpProtocolClient.js';
+import type { RemoteCatalogResult } from './remoteCatalog.js';
+import type { HistoryLookupResult } from '../protocol/types.js';
 
 export interface SharedProtocolHostRunOptions {
   port: number;
@@ -120,8 +122,13 @@ function mapTurnEventToStream(
           session_id: threadId,
           answer: event.answer,
           usage: event.usage,
-          terminal_outcome: event.outcome ?? 'COMPLETED',
-          user_status: event.status ?? 'completed',
+          terminal_outcome:
+            event.fixture_execution === true
+              ? 'UNVERIFIED_PATCH'
+              : (event.outcome ?? 'COMPLETED'),
+          user_status: event.fixture_execution === true ? 'fixture' : (event.status ?? 'completed'),
+          ...(event.fixture_execution === true ? { fixture_execution: true } : {}),
+          ...(typeof event.fixture_kind === 'string' ? { fixture_kind: event.fixture_kind } : {}),
         },
       };
     case 'failed':
@@ -246,8 +253,110 @@ async function lookupAuthoritativePendingApproval(
     },
     runId,
   );
-  const item = mapped?.item as { approval?: Record<string, unknown> } | undefined;
-  return item?.approval ?? null;
+  const item = mapped?.item as
+    | {
+        approval?: Record<string, unknown>;
+        command?: string;
+        cwd?: string;
+        details?: string;
+      }
+    | undefined;
+  if (!item?.approval) return null;
+  return {
+    ...item.approval,
+    ...(typeof item.command === 'string' ? { command: item.command } : {}),
+    ...(typeof item.cwd === 'string' ? { cwd: item.cwd } : {}),
+    ...(typeof item.details === 'string' ? { reason: item.details } : {}),
+  };
+}
+
+/** Build broker lookup params preserving authoritative operation presentation. */
+export function permissionParamsFromPendingApproval(
+  authoritative: Record<string, unknown>,
+): Record<string, unknown> {
+  return {
+    approval_id: String(authoritative.request_id),
+    thread_id: String(authoritative.thread_id),
+    turn_id: String(authoritative.turn_id),
+    operation_digest: String(authoritative.operation_digest),
+    expires_at: String(authoritative.expires_at),
+    ...(typeof authoritative.command === 'string' ? { command: authoritative.command } : {}),
+    ...(typeof authoritative.cwd === 'string' ? { cwd: authoritative.cwd } : {}),
+    ...(typeof authoritative.reason === 'string' ? { reason: authoritative.reason } : {}),
+    ...(typeof authoritative.action_type === 'string'
+      ? { action_type: authoritative.action_type }
+      : {}),
+    ...(typeof authoritative.target_path === 'string'
+      ? { target_path: authoritative.target_path }
+      : {}),
+  };
+}
+
+function approvalItemFromAuthoritative(
+  authoritative: Record<string, unknown>,
+): Record<string, unknown> {
+  return {
+    approval: authoritative,
+    ...(typeof authoritative.command === 'string' ? { command: authoritative.command } : {}),
+    ...(typeof authoritative.cwd === 'string' ? { cwd: authoritative.cwd } : {}),
+    ...(typeof authoritative.reason === 'string' ? { details: authoritative.reason } : {}),
+  };
+}
+
+async function lookupCatalogSession(
+  client: HttpProtocolClient,
+  threadId: string,
+): Promise<{ status: string; active_turn: boolean } | null> {
+  const catalog = await client.call<'remote.catalog', Record<string, never>, RemoteCatalogResult>(
+    'remote.catalog',
+    {},
+  );
+  const row = catalog.sessions.find((session) => session.thread_id === threadId);
+  if (!row) return null;
+  return { status: row.status, active_turn: row.active_turn };
+}
+
+/** Reconcile a settled turn from catalog/history when the live socket missed the terminal event. */
+export async function reconcileTerminalTurnFromHost(
+  client: HttpProtocolClient,
+  threadId: string,
+  submittedTurnId?: number,
+): Promise<Record<string, unknown> | null> {
+  const row = await lookupCatalogSession(client, threadId);
+  if (!row || row.active_turn) return null;
+  if (row.status === 'waiting_approval' || row.status === 'running') return null;
+
+  const history = await client.call<
+    'history.lookup',
+    { thread_id: string; turn_id?: number; limit?: number },
+    HistoryLookupResult
+  >('history.lookup', {
+    thread_id: threadId,
+    ...(submittedTurnId !== undefined ? { turn_id: submittedTurnId } : {}),
+    limit: 200,
+  });
+  const assistant = [...history.cells]
+    .reverse()
+    .find((cell) => cell.kind === 'assistant_message' && cell.lifecycle === 'committed');
+  const answer =
+    assistant &&
+    typeof (assistant.payload as { message?: string }).message === 'string'
+      ? (assistant.payload as { message: string }).message
+      : '';
+
+  if (row.status === 'failed') {
+    return { type: 'run_error', error: 'Turn failed on the shared protocol host' };
+  }
+  return {
+    type: 'run_complete',
+    result: {
+      session_id: threadId,
+      answer,
+      terminal_outcome: 'VERIFIED_COMPLETE',
+      user_status: 'completed',
+      reconciled_from_host: true,
+    },
+  };
 }
 
 /** Run one shared-host chat turn to completion. Returns process exit code. */
@@ -274,6 +383,7 @@ export async function executeSharedProtocolHostRun(
   let pendingApproval: Record<string, unknown> | null = null;
   let activeThreadId = threadId;
   let controlEpoch = 0;
+  let submittedTurnId: number | undefined;
   let stdinInterface: Interface | null = null;
 
   const abort = () => options.signal?.aborted === true || cancelRequested;
@@ -417,17 +527,14 @@ export async function executeSharedProtocolHostRun(
                 }
                 pendingApproval = authoritative;
                 const remapped = mapPermissionRequest(
-                  {
-                    approval_id: String(authoritative.request_id),
-                    thread_id: String(authoritative.thread_id),
-                    turn_id: String(authoritative.turn_id),
-                    operation_digest: String(authoritative.operation_digest),
-                    expires_at: String(authoritative.expires_at),
-                  },
+                  permissionParamsFromPendingApproval(authoritative),
                   options.runId,
                 );
                 if (remapped) write(remapped);
-                write({ type: 'approval.reconciled', item: { approval: authoritative } });
+                write({
+                  type: 'approval.reconciled',
+                  item: approvalItemFromAuthoritative(authoritative),
+                });
               } catch (error) {
                 writeControlRejected(
                   write,
@@ -573,16 +680,29 @@ export async function executeSharedProtocolHostRun(
     }
 
     let turnDone = attachTurnObserver(ws);
-    await client.call('turn.submit', {
+    const submitted = await client.call<
+      'turn.submit',
+      { thread_id: string; message: string; control_epoch: number; command_id?: string },
+      { turn_id: number }
+    >('turn.submit', {
       thread_id: threadId,
       message: options.task,
       control_epoch: lease.epoch,
       ...(options.commandId ? { command_id: options.commandId } : {}),
     });
+    submittedTurnId = submitted.turn_id;
 
     await turnDone;
 
     while (transportClosedUnexpectedly && !turnSettled) {
+      transportClosedUnexpectedly = false;
+      try {
+        ws?.close();
+      } catch {
+        /* ignore */
+      }
+      ws = await openTurnSocket();
+      turnDone = attachTurnObserver(ws);
       const turnHint =
         pendingApproval && typeof pendingApproval.turn_id === 'string'
           ? pendingApproval.turn_id
@@ -593,45 +713,39 @@ export async function executeSharedProtocolHostRun(
         options.runId,
         turnHint,
       );
+      const terminal = await reconcileTerminalTurnFromHost(client, threadId, submittedTurnId);
+      if (terminal) {
+        write(terminal);
+        turnSettled = true;
+        break;
+      }
+      const catalogRow = await lookupCatalogSession(client, threadId);
+      const recoverable = Boolean(authoritative) || catalogRow?.active_turn === true;
       if (authoritative) {
         pendingApproval = authoritative;
         write({
           type: 'approval.pending',
           message:
             'Approval is still pending after transport loss; reconcile before deciding.',
-          item: { approval: authoritative },
+          item: approvalItemFromAuthoritative(authoritative),
           authoritative: true,
         });
         const remapped = mapPermissionRequest(
-          {
-            approval_id: String(authoritative.request_id),
-            thread_id: String(authoritative.thread_id),
-            turn_id: String(authoritative.turn_id),
-            operation_digest: String(authoritative.operation_digest),
-            expires_at: String(authoritative.expires_at),
-          },
+          permissionParamsFromPendingApproval(authoritative),
           options.runId,
         );
         if (remapped) write(remapped);
       }
       write({
         type: 'transport.disconnected',
-        recoverable: Boolean(authoritative),
+        recoverable,
         message:
           'Shared protocol transport lost; observation paused without resubmitting the task.',
       });
-      if (!authoritative) {
+      if (!recoverable) {
         write({ type: 'run_error', error: 'Shared protocol transport lost before turn settled' });
         return 1;
       }
-      transportClosedUnexpectedly = false;
-      try {
-        ws?.close();
-      } catch {
-        /* ignore */
-      }
-      ws = await openTurnSocket();
-      turnDone = attachTurnObserver(ws);
       await turnDone;
     }
 

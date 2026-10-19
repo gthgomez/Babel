@@ -182,7 +182,12 @@ jobs:
         run: npx playwright install --with-deps chromium
         working-directory: babel-desktop
       - name: Run desktop regressions
-        run: npm run test
+        run: |
+          if [ "${{ runner.os }}" = "Linux" ]; then
+            xvfb-run -a -s "-screen 0 1280x1024x24" npm run test
+          else
+            npm run test
+          fi
         working-directory: babel-desktop
   architecture-regressions:
     needs:

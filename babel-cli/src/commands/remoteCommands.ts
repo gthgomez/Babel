@@ -13,9 +13,10 @@ import {
   startRemoteUiFixtureServer,
 } from '../bridge/remoteUiFixture.js';
 import {
-  createDeterministicBridgeEngineFactory,
-  isDeterministicBridgeEngineEnabled,
-} from '../bridge/deterministicBridgeEngine.js';
+  printAcceptanceBridgeStartup,
+  refuseAcceptanceBridgeUnlessAllowed,
+  startAcceptanceBridge,
+} from '../bridge/acceptanceBridge.js';
 import { executeSharedProtocolHostRun } from '../bridge/sharedProtocolHostRun.js';
 
 export function registerRemoteCommands(program: Command): void {
@@ -80,9 +81,6 @@ export function registerRemoteCommands(program: Command): void {
           'https://localhost:*',
           ...extraOrigins,
         ],
-        ...(isDeterministicBridgeEngineEnabled()
-          ? { engineFactory: createDeterministicBridgeEngineFactory() }
-          : {}),
         ...(desktopControllerClientId && desktopControllerProofKey
           ? { desktopControllerClientId, desktopControllerProofKey }
           : {}),
@@ -107,6 +105,82 @@ export function registerRemoteCommands(program: Command): void {
       console.log(`  tailscale serve --bg ${server.port}`);
       console.log('Do not run: tailscale funnel');
       console.log('Ctrl+C to stop. Closing this process stops the gateway; ChatEngine turns are cancelled.');
+    });
+
+  remote
+    .command('acceptance-bridge')
+    .description(
+      'Test-owned loopback bridge with a deterministic engine seam (requires BABEL_TEST_ACCEPTANCE_DETERMINISTIC_BRIDGE=1)',
+    )
+    .option('--port <n>', 'Listen port', process.env['BABEL_BRIDGE_PORT'] ?? '4545')
+    .option('--project <dir>', 'Registered workspace root (authorization handle, not a sandbox)')
+    .option(
+      '--origin <url>',
+      'Allowed browser Origin (repeat for Tailscale Serve HTTPS hostname). Loopback HTTP origins are always allowed.',
+      (value: string, previous: string[]) => [...previous, value],
+      [] as string[],
+    )
+    .option('--show-token', 'Print the bearer token (TTY only)')
+    .option(
+      '--shared-session',
+      'Enable loopback Desktop controller identity for CLI/Desktop/PWA single-owner sessions',
+    )
+    .action(async (options: {
+      port?: string;
+      project?: string;
+      origin?: string[];
+      showToken?: boolean;
+      sharedSession?: boolean;
+    }) => {
+      refuseAcceptanceBridgeUnlessAllowed();
+      const listenHost = assertRemoteListenConfig();
+      const workspace = resolve(options.project ?? process.cwd());
+      const port = Number(options.port ?? 4545);
+      if (!Number.isInteger(port) || port < 1024 || port > 65535) {
+        console.error('Invalid --port');
+        process.exitCode = 1;
+        return;
+      }
+      const extraOrigins = (options.origin ?? []).filter((origin) => origin && origin !== '*');
+      const sharedSession =
+        options.sharedSession === true ||
+        process.env['BABEL_BRIDGE_SHARED_SESSION'] === '1';
+      const desktopControllerClientId = sharedSession
+        ? (process.env['BABEL_BRIDGE_DESKTOP_CLIENT_ID']?.trim() ||
+            mintDesktopControllerClientId())
+        : undefined;
+      const desktopControllerProofKey = sharedSession
+        ? (process.env['BABEL_BRIDGE_DESKTOP_PROOF_KEY']?.trim() ||
+            mintDesktopControllerProofKey())
+        : undefined;
+      if (sharedSession && desktopControllerClientId && desktopControllerProofKey) {
+        process.env['BABEL_BRIDGE_DESKTOP_CLIENT_ID'] = desktopControllerClientId;
+        process.env['BABEL_BRIDGE_DESKTOP_PROOF_KEY'] = desktopControllerProofKey;
+        process.env['BABEL_BRIDGE_SHARED_SESSION'] = '1';
+      }
+      const server = await startAcceptanceBridge({
+        port,
+        workspace,
+        allowedOrigins: [
+          'http://127.0.0.1:*',
+          'http://localhost:*',
+          'https://localhost:*',
+          ...extraOrigins,
+        ],
+        sharedSession,
+        ...(desktopControllerClientId && desktopControllerProofKey
+          ? { desktopControllerClientId, desktopControllerProofKey }
+          : {}),
+      });
+      printAcceptanceBridgeStartup({
+        listenHost,
+        port: server.port,
+        workspace,
+        sharedSession,
+        showToken: Boolean(options.showToken && process.stdout.isTTY),
+        token: server.token,
+      });
+      console.log('Ctrl+C to stop. This launcher is for acceptance tests only — not production execution.');
     });
 
   remote

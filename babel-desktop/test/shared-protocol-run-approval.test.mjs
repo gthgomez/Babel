@@ -3,10 +3,12 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm, writeFile, mkdir } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const packageRoot = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const babelRoot = resolve(packageRoot, '..', 'babel-cli');
+const importFromBabelDist = (relativePath) =>
+  import(pathToFileURL(join(babelRoot, 'dist', relativePath)).href);
 
 test('SharedProtocolRun reply accepts broker-shaped approval after host-run NDJSON', {
   timeout: 60_000,
@@ -14,13 +16,13 @@ test('SharedProtocolRun reply accepts broker-shaped approval after host-run NDJS
   const root = await mkdtemp(join(tmpdir(), 'babel-shared-protocol-run-'));
   let server;
   try {
-    const { ChatEngine } = await import(`${babelRoot}/dist/agent/chatEngine.js`);
+    const { ChatEngine } = await importFromBabelDist('agent/chatEngine.js');
     const {
       mintDesktopControllerClientId,
       mintDesktopControllerProofKey,
-    } = await import(`${babelRoot}/dist/bridge/desktopControllerAuth.js`);
-    const { getRemoteSurface } = await import(`${babelRoot}/dist/bridge/remoteApproval.js`);
-    const { BridgeServer } = await import(`${babelRoot}/dist/bridge/sessionServer.js`);
+    } = await importFromBabelDist('bridge/desktopControllerAuth.js');
+    const { getRemoteSurface } = await importFromBabelDist('bridge/remoteApproval.js');
+    const { BridgeServer } = await importFromBabelDist('bridge/sessionServer.js');
     const { SharedProtocolRun } = await import('../native/sharedProtocolRun.mjs');
     const entry = join(babelRoot, 'dist', 'index.js');
 

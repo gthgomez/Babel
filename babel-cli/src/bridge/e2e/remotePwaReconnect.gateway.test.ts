@@ -61,6 +61,7 @@ describe('Babel Remote production PWA reconnect (browser)', () => {
               threadId: string;
               host: string;
               turn: string;
+              thread: string;
               historyCells: number;
               historyReplayed: boolean;
               catalogStatus: string;
@@ -74,8 +75,10 @@ describe('Babel Remote production PWA reconnect (browser)', () => {
       assert.ok(result.threadId);
       assert.ok(result.historyReplayed, 'history.lookup must replay committed cells after reconnect');
       assert.equal(result.host, 'ONLINE');
-      assert.notEqual(result.turn, 'UNKNOWN');
-      assert.ok(['idle', 'running', 'completed', 'waiting_approval'].includes(result.catalogStatus));
+      assert.equal(result.turn, 'COMPLETED', 'reconnect must reconcile authoritative terminal turn state');
+      assert.equal(result.thread, 'READY');
+      assert.equal(result.catalogStatus, 'completed');
+      assert.equal(result.activeTurn, false);
     } finally {
       await browser.close();
     }

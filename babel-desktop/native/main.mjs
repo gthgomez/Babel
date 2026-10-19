@@ -32,6 +32,15 @@ import {CLOSE_GRACE_MS,decideLastWindow,decideWindowClose,createCloseRequest} fr
 import {readBridgeHostAuthToken} from './bridge-host-token.mjs';
 
 const packageRoot=dirname(dirname(fileURLToPath(import.meta.url)));
+const sharedSessionTrace=process.env.BABEL_TEST_SHARED_SESSION_TRACE==='1';
+function emitSharedSessionTrace(stage,detail={}){
+  if(!sharedSessionTrace)return;
+  const safe={stage};
+  for(const key of ['runId','eventType','kind','code','phase','state']){
+    if(detail[key]!==undefined&&detail[key]!==null)safe[key]=String(detail[key]);
+  }
+  console.error(`[shared-session-trace] ${JSON.stringify(safe)}`);
+}
 const profileArgument=process.argv.find(arg=>arg.startsWith('--profile-dir='));
 if(profileArgument){
   const profile=profileArgument.slice('--profile-dir='.length);
@@ -513,6 +522,7 @@ async function start(){
     return {accepted:runner.emergencyAdminStop(token)===true};
   });
   handle('babel:start-remote-bridge',options=>withConnectionChange(async()=>{
+    emitSharedSessionTrace('start-remote-bridge:begin');
     const admissionEpoch=remoteAdmissionEpoch;
     if(remoteBridge?.running)throw new Error('The loopback remote bridge is already running');
     const cliEntry=activeCliEntry();
@@ -523,8 +533,8 @@ async function start(){
     if(!Number.isInteger(port)||port<1024||port>65535)throw new Error('Invalid remote bridge port');
     if(admissionEpoch!==remoteAdmissionEpoch||!projectAuthority.isCurrent(admission))throw new Error('Remote startup was cancelled.');
     const childEnvironment=await ownedCliEnvironment();
-    if (process.env.BABEL_BRIDGE_DETERMINISTIC_ENGINE === '1') {
-      childEnvironment.BABEL_BRIDGE_DETERMINISTIC_ENGINE = '1';
+    if (process.env.BABEL_TEST_ACCEPTANCE_DETERMINISTIC_BRIDGE === '1') {
+      childEnvironment.BABEL_TEST_ACCEPTANCE_DETERMINISTIC_BRIDGE = '1';
     }
     if(admissionEpoch!==remoteAdmissionEpoch||!projectAuthority.isCurrent(admission))throw new Error('Remote startup was cancelled.');
     const bridge=new RemoteBridgeChild({executable:officialRuntime().executable,entry:cliEntry,projectRoot:admission.identity.root,env:childEnvironment,inheritEnv:false});
@@ -536,14 +546,17 @@ async function start(){
         onLine:({stream,text,phase,code,diagnosticAvailable})=>{if(window&&!window.isDestroyed())window.webContents.send('babel:remote-log',{stream,text,phase,code,diagnosticAvailable});},
       });
       if(!projectAuthority.isCurrent(admission)||remoteBridge!==bridge){bridge.stop();throw new Error('Project trust or connection changed while starting remote access.');}
+      emitSharedSessionTrace('start-remote-bridge:ready',{state:bridge.state,phase:String(bridge.port??'')});
       return result;
     }catch(error){
       remoteBridge=releaseBridgeIfCurrent(remoteBridge,bridge);
+      emitSharedSessionTrace('start-remote-bridge:error',{code:error instanceof Error?error.message:'error'});
       throw error;
     }
   }));
   handle('babel:stop-remote-bridge',()=>{remoteAdmissionEpoch++;remoteBridge?.stop();remoteBridge=null;return {stopped:true};});
   handle('babel:run',async request=>{
+    emitSharedSessionTrace('babel:run:begin',{runId:request?.runId});
     assertRunAdmissionIdle();
     runAdmission=true;
     const admissionEpoch=runAdmissionEpoch;
@@ -573,8 +586,8 @@ async function start(){
     if(selectedModel.selectable===false)throw new Error(selectedModel.unavailableReason||'The selected model is unavailable. Choose another model in Settings.');
     buildRunArgs(cliEntry, preferences.projectRoot, runRequest);
     const childEnvironment=applySelectedModelEnvironment(await ownedCliEnvironment(),selectedModel);
-    if (process.env.BABEL_BRIDGE_DETERMINISTIC_ENGINE === '1') {
-      childEnvironment.BABEL_BRIDGE_DETERMINISTIC_ENGINE = '1';
+    if (process.env.BABEL_TEST_ACCEPTANCE_DETERMINISTIC_BRIDGE === '1') {
+      childEnvironment.BABEL_TEST_ACCEPTANCE_DETERMINISTIC_BRIDGE = '1';
     }
     runAuthority=conversationOnly?null:await projectAuthority.admit(preferences.projectRoot);
     if(admissionEpoch!==runAdmissionEpoch){runAuthority=null;return {started:false};}
@@ -601,6 +614,7 @@ async function start(){
     backgroundStatus='Babel is working';
     void runner.start(runRequest, handleBabelPacket);
     try{updateTray();}catch{ /* Tray refresh cannot invalidate an already admitted run. */ }
+    emitSharedSessionTrace('babel:run:started',{runId:runRequest.runId});
     return {started:true};
     }finally{runAdmission=false;}
   });
@@ -613,7 +627,8 @@ function createWindow(){
   window.webContents.setWindowOpenHandler(()=>({action:'deny'}));
   window.webContents.on('will-navigate',event=>event.preventDefault());
   window.webContents.on('will-attach-webview',event=>event.preventDefault());
-  window.on('ready-to-show',()=>window.show());
+  window.on('ready-to-show',()=>{emitSharedSessionTrace('window:ready-to-show');window.show();});
+  window.webContents.on('did-finish-load',()=>emitSharedSessionTrace('renderer:did-finish-load'));
   const requestClose=createCloseRequest({
     ask:async()=>{
       if(dialogBusy)return 'cancel';
@@ -671,6 +686,13 @@ function ensureTray(){
   updateTray();
 }
 function handleBabelPacket(packet){
+  if(packet?.runId){
+    emitSharedSessionTrace('babel:event',{
+      runId:packet.runId,
+      eventType:packet.event?.type,
+      kind:packet.kind,
+    });
+  }
   // Notification or renderer failures cannot take down the owned child runtime.
   try{if(window&&!window.isDestroyed()&&!window.webContents.isDestroyed())window.webContents.send('babel:event',packet);}catch{}
   const kind=packet.event?.type;

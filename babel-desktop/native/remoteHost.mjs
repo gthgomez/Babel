@@ -6,7 +6,8 @@ import {productionNodeCliArgv} from './cli-launch.mjs';
 // The listen host is configuration-derived (`BABEL_BRIDGE_HOST` may be
 // `localhost`, `LocalHost` or `::1`) while the socket itself always binds
 // 127.0.0.1, so the announcement is matched on any loopback spelling.
-const LISTENING_RE = /Babel Remote listening on http:\/\/(?:127\.0\.0\.1|localhost|\[?::1\]?):(\d+)/i;
+const LISTENING_RE =
+  /Babel Remote (?:acceptance bridge )?listening on http:\/\/(?:127\.0\.0\.1|localhost|\[?::1\]?):(\d+)/i;
 const DEFAULT_READY_TIMEOUT_MS = 30_000;
 const STOP_GRACE_MS = 2_000;
 
@@ -28,6 +29,21 @@ function terminateChildTree(child) {
 }
 
 /** Build argv for `babel remote serve` without shell interpolation. */
+/** Build argv for `babel remote acceptance-bridge` (test-owned deterministic seam). */
+export function buildAcceptanceBridgeArgs(entry, projectRoot, {port = 4545, sharedSession = false} = {}) {
+  if (typeof entry !== 'string' || !isAbsolute(entry)) throw new TypeError('CLI entry must be an absolute path');
+  if (typeof projectRoot !== 'string' || !isAbsolute(projectRoot)) {
+    throw new TypeError('Project root must be an absolute path');
+  }
+  const listenPort = Number(port);
+  if (!Number.isInteger(listenPort) || listenPort < 1024 || listenPort > 65535) {
+    throw new TypeError('Invalid remote listen port');
+  }
+  const args = [entry, 'remote', 'acceptance-bridge', '--port', String(listenPort), '--project', projectRoot];
+  if (sharedSession) args.push('--shared-session');
+  return args;
+}
+
 export function buildRemoteServeArgs(entry, projectRoot, {port = 4545, sharedSession = false} = {}) {
   if (typeof entry !== 'string' || !isAbsolute(entry)) throw new TypeError('CLI entry must be an absolute path');
   if (typeof projectRoot !== 'string' || !isAbsolute(projectRoot)) {
@@ -168,10 +184,16 @@ export class RemoteBridgeChild {
     this.#sharedSession = useSharedSession;
     this.#desktopClientId = controllerId;
     this.#desktopProofKey = proofKey;
-    const serveCliArgs = buildRemoteServeArgs(this.entry, this.projectRoot, {
-      port,
-      sharedSession: useSharedSession,
-    });
+    const useAcceptanceBridge = this.env.BABEL_TEST_ACCEPTANCE_DETERMINISTIC_BRIDGE === '1';
+    const serveCliArgs = useAcceptanceBridge
+      ? buildAcceptanceBridgeArgs(this.entry, this.projectRoot, {
+          port,
+          sharedSession: useSharedSession,
+        })
+      : buildRemoteServeArgs(this.entry, this.projectRoot, {
+          port,
+          sharedSession: useSharedSession,
+        });
     const child = this.spawnChild(
       this.executable,
       productionNodeCliArgv(this.entry, serveCliArgs.slice(1)),
@@ -193,6 +215,7 @@ export class RemoteBridgeChild {
               BABEL_BRIDGE_DESKTOP_PROOF_KEY: proofKey,
             }
           : {}),
+        ...(useAcceptanceBridge ? { BABEL_TEST_ACCEPTANCE_DETERMINISTIC_BRIDGE: '1' } : {}),
       },
     },
     );
