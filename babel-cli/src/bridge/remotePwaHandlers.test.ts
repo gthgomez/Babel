@@ -82,6 +82,7 @@ async function loadPwaApp(): Promise<{
       send: () => Promise<void>;
       stop: () => Promise<void>;
       decide: (decision: string) => Promise<void>;
+      reconcileAuthoritativeTaskState: () => Promise<void>;
     },
     setRpc: (fn) => {
       win['__babelRemoteRpc'] = fn;
@@ -143,6 +144,54 @@ describe('PWA production handlers', () => {
     const state = ctx.BabelRemoteApp.getState();
     assert.equal(state.turn, 'STREAMING');
     assert.equal(ctx.BabelRemoteState.canCancelTurn(state.turn), true);
+  });
+
+  it('reconciles expired approval when host reports no pending operation', async () => {
+    const ctx = await loadPwaApp();
+    ctx.BabelRemoteApp.configureTest({
+      host: 'ONLINE',
+      thread: 'WAITING_APPROVAL',
+      turn: 'STREAMING',
+      approval: 'PENDING',
+      memory: {
+        pairedDevice: true,
+        authKind: 'paired',
+        clientId: 'device:test',
+        threadId: 'thr-test',
+        turnId: 1,
+        pendingApproval: {
+          approval_id: 'appr-expired',
+          thread_id: 'thr-test',
+          turn_id: '1',
+          operation_digest: 'abc',
+        },
+      },
+    });
+    ctx.setRpc(async (method) => {
+      if (method === 'remote.catalog') {
+        return {
+          payload: {
+            result: {
+              sessions: [{ thread_id: 'thr-test', status: 'completed', active_turn: false }],
+            },
+          },
+          classified: { kind: 'success' },
+        };
+      }
+      if (method === 'approval.lookup') {
+        return {
+          payload: { result: { pending: [] } },
+          classified: { kind: 'success' },
+        };
+      }
+      throw new Error(`unexpected rpc ${method}`);
+    });
+    const app = ctx.BabelRemoteApp as unknown as {
+      reconcileAuthoritativeTaskState: () => Promise<void>;
+    };
+    await app.reconcileAuthoritativeTaskState();
+    const state = ctx.BabelRemoteApp.getState();
+    assert.equal(state.approval, 'EXPIRED');
   });
 
   it('marks approval stale after a settled decide rejection', async () => {

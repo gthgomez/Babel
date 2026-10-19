@@ -157,6 +157,8 @@ jobs:
       - dependency-preflight
     if: needs.detect-scope.outputs.full == 'true'
     name: desktop-tests (${{ matrix.os }})
+    # Measured local xvfb full suite ~10–15m; cap hung owned-child regressions (fail job, never skip).
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
@@ -172,10 +174,21 @@ jobs:
       - name: Install desktop dependencies
         run: npm ci
         working-directory: babel-desktop
+      - name: Install Electron runtime for desktop IPC regressions
+        run: node node_modules/electron/install.js
+        working-directory: babel-desktop
+      - name: Build babel-cli for shared-protocol desktop tests
+        run: npm ci --ignore-scripts && npm run build
+        working-directory: babel-cli
       - name: Install Playwright Chromium for packaged driver contract
         run: npx playwright install --with-deps chromium
         working-directory: babel-desktop
-      - name: Run desktop regressions
+      - name: Run desktop regressions (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: xvfb-run -a -s "-screen 0 1280x1024x24" npm run test
+        working-directory: babel-desktop
+      - name: Run desktop regressions (Windows)
+        if: matrix.os == 'windows-latest'
         run: npm run test
         working-directory: babel-desktop
   architecture-regressions:

@@ -261,6 +261,7 @@ export class ProtocolGateway {
         threadId,
         clientId: client.clientId,
         force,
+        remotePriorityTakeover: client.authKind === 'paired_device',
       });
       if (!acquired.ok) {
         return controlError(id, acquired.error, `control acquire failed: ${acquired.error}`);
@@ -330,7 +331,8 @@ export class ProtocolGateway {
     if (!threadId) return null;
     const allowHostAutoAcquire =
       client.authKind === 'host_bearer' || client.authKind === 'query_bearer';
-    const requireExplicitEpoch = client.authKind === 'paired_device';
+    const requireExplicitEpoch =
+      client.authKind === 'paired_device' || client.authKind === 'desktop_controller';
     const leaseInput: {
       threadId: string;
       clientId: string;

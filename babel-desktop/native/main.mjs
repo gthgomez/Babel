@@ -7,6 +7,7 @@ import {basename,dirname,join,isAbsolute} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {randomUUID} from 'node:crypto';
 import {BabelChild,buildRunArgs,EXECUTION_PROFILE} from './child.mjs';
+import {SharedProtocolRun} from './sharedProtocolRun.mjs';
 import {RemoteBridgeChild,releaseBridgeIfCurrent} from './remoteHost.mjs';
 import {listDirectory,readProjectFile} from './workspace.mjs';
 import {readProjectDiff} from './project-diff.mjs';
@@ -28,8 +29,18 @@ import {qualifiedProviders, readProviderRoute, saveProviderRoute, validateProvid
 import {listSavedChats,readSavedChat,searchSavedChats,readSavedMessage} from './sessions.mjs';
 import {ComposerDraftStore,composerDraftScope} from './composer-drafts.mjs';
 import {CLOSE_GRACE_MS,decideLastWindow,decideWindowClose,createCloseRequest} from './lifecycle.mjs';
+import {readBridgeHostAuthToken} from './bridge-host-token.mjs';
 
 const packageRoot=dirname(dirname(fileURLToPath(import.meta.url)));
+const sharedSessionTrace=process.env.BABEL_TEST_SHARED_SESSION_TRACE==='1';
+function emitSharedSessionTrace(stage,detail={}){
+  if(!sharedSessionTrace)return;
+  const safe={stage};
+  for(const key of ['runId','eventType','kind','code','phase','state']){
+    if(detail[key]!==undefined&&detail[key]!==null)safe[key]=String(detail[key]);
+  }
+  console.error(`[shared-session-trace] ${JSON.stringify(safe)}`);
+}
 const profileArgument=process.argv.find(arg=>arg.startsWith('--profile-dir='));
 if(profileArgument){
   const profile=profileArgument.slice('--profile-dir='.length);
@@ -81,7 +92,23 @@ let updateBusy=false;
 let connectionChangeBusy=false;
 let cliUpdate={state:'unchecked'};
 let preferencePath;
-const busy=()=>Boolean(runAdmission||runner?.busy||remoteBridge?.running||updateBusy||connectionChangeBusy);
+function remoteBlocksLocalRunAdmission(){
+  return Boolean(remoteBridge?.running&&!remoteBridge?.sharedSession);
+}
+function busy(){
+  return Boolean(
+    runAdmission||
+    runner?.busy||
+    remoteBridge?.running||
+    updateBusy||
+    connectionChangeBusy,
+  );
+}
+function assertRunAdmissionIdle(){
+  if(runAdmission||runner?.busy||remoteBlocksLocalRunAdmission()||updateBusy||connectionChangeBusy){
+    throw new Error('Wait for the current Babel run to finish before starting another.');
+  }
+}
 
 protocol.registerSchemesAsPrivileged([{scheme:'babel',privileges:{standard:true,secure:true,supportFetchAPI:true}}]);
 const singleInstance=app.requestSingleInstanceLock();
@@ -145,10 +172,13 @@ async function getInfo(){
           state:remoteBridge.state,
           port:remoteBridge.port,
           url:remoteBridge.port?`http://127.0.0.1:${remoteBridge.port}`:null,
-          blocksLocalRuns:remoteBridge.state==='ready' || remoteBridge.state==='starting',
-          sharedSession:false,
+          blocksLocalRuns:remoteBridge.sharedSession
+            ? false
+            : remoteBridge.state==='ready' || remoteBridge.state==='starting',
+          sharedSession:Boolean(remoteBridge.sharedSession),
+          desktopClientId:remoteBridge.desktopClientId??null,
         }
-      : {running:false,state:'stopped',port:null,url:null,blocksLocalRuns:false,sharedSession:false},
+      : {running:false,state:'stopped',port:null,url:null,blocksLocalRuns:false,sharedSession:false,desktopClientId:null},
   };
 }
 const credentialBindings=new Map();
@@ -485,7 +515,14 @@ async function start(){
     return {accepted};
   });
   handle('babel:cancel',()=>{runAdmissionEpoch++;runner?.cancel();return true;});
+  handle('babel:emergency-stop-shared-run',()=>{
+    if(!runner||typeof runner.emergencyAdminStop!=='function')return {accepted:false,reason:'not_shared_protocol'};
+    const token=readBridgeHostAuthToken(runtimeEnvironment().BABEL_CONFIG_DIR);
+    if(!token)return {accepted:false,reason:'missing_host_token'};
+    return {accepted:runner.emergencyAdminStop(token)===true};
+  });
   handle('babel:start-remote-bridge',options=>withConnectionChange(async()=>{
+    emitSharedSessionTrace('start-remote-bridge:begin');
     const admissionEpoch=remoteAdmissionEpoch;
     if(remoteBridge?.running)throw new Error('The loopback remote bridge is already running');
     const cliEntry=activeCliEntry();
@@ -500,17 +537,33 @@ async function start(){
     const bridge=new RemoteBridgeChild({executable:officialRuntime().executable,entry:cliEntry,projectRoot:admission.identity.root,env:childEnvironment,inheritEnv:false});
     remoteBridge=bridge;
     try{
-      const result=await bridge.start({port,onLine:({stream,text,phase,code,diagnosticAvailable})=>{if(window&&!window.isDestroyed())window.webContents.send('babel:remote-log',{stream,text,phase,code,diagnosticAvailable});}});
+      const result=await bridge.start({
+        port,
+        sharedSession:true,
+        onLine:({stream,text,phase,code,diagnosticAvailable})=>{if(window&&!window.isDestroyed())window.webContents.send('babel:remote-log',{stream,text,phase,code,diagnosticAvailable});},
+      });
       if(!projectAuthority.isCurrent(admission)||remoteBridge!==bridge){bridge.stop();throw new Error('Project trust or connection changed while starting remote access.');}
+      emitSharedSessionTrace('start-remote-bridge:ready',{state:bridge.state,phase:String(bridge.port??'')});
       return result;
     }catch(error){
       remoteBridge=releaseBridgeIfCurrent(remoteBridge,bridge);
+      emitSharedSessionTrace('start-remote-bridge:error',{code:error instanceof Error?error.message:'error'});
       throw error;
     }
   }));
-  handle('babel:stop-remote-bridge',()=>{remoteAdmissionEpoch++;remoteBridge?.stop();remoteBridge=null;return {stopped:true};});
+  handle('babel:stop-remote-bridge',async()=>{
+    remoteAdmissionEpoch++;
+    const bridge=remoteBridge;
+    remoteBridge=null;
+    bridge?.stop();
+    if(bridge){
+      await bridge.waitForOwnedChildExit(8_000);
+    }
+    return {stopped:true};
+  });
   handle('babel:run',async request=>{
-    assertIdle();
+    emitSharedSessionTrace('babel:run:begin',{runId:request?.runId});
+    assertRunAdmissionIdle();
     runAdmission=true;
     const admissionEpoch=runAdmissionEpoch;
     try{
@@ -541,10 +594,30 @@ async function start(){
     const childEnvironment=applySelectedModelEnvironment(await ownedCliEnvironment(),selectedModel);
     runAuthority=conversationOnly?null:await projectAuthority.admit(preferences.projectRoot);
     if(admissionEpoch!==runAdmissionEpoch){runAuthority=null;return {started:false};}
-    runner = new BabelChild({executable:officialRuntime().executable, entry:cliEntry, projectRoot:runAuthority?.identity.root??null,launchDirectory:app.getPath('userData'), env:childEnvironment, inheritEnv:false});
+    const sharedBridge=remoteBridge?.state==='ready'&&remoteBridge.sharedSession&&remoteBridge.port&&remoteBridge.desktopClientId;
+    if(sharedBridge&&conversationOnly){
+      throw new Error('Shared remote sessions require an open project.');
+    }
+    if(sharedBridge){
+      if(route?.provider) runRequest.provider=route.provider;
+      if(selectedModel?.modelId) runRequest.model=selectedModel.modelId;
+      runner=new SharedProtocolRun({
+        executable:officialRuntime().executable,
+        entry:cliEntry,
+        port:remoteBridge.port,
+        desktopClientId:remoteBridge.desktopClientId,
+        desktopProofKey:remoteBridge.desktopProofKey,
+        projectRoot:runAuthority.identity.root,
+        env:childEnvironment,
+        inheritEnv:false,
+      });
+    }else{
+      runner=new BabelChild({executable:officialRuntime().executable, entry:cliEntry, projectRoot:runAuthority?.identity.root??null,launchDirectory:app.getPath('userData'), env:childEnvironment, inheritEnv:false});
+    }
     backgroundStatus='Babel is working';
-    runner.start(runRequest, handleBabelPacket);
+    void runner.start(runRequest, handleBabelPacket);
     try{updateTray();}catch{ /* Tray refresh cannot invalidate an already admitted run. */ }
+    emitSharedSessionTrace('babel:run:started',{runId:runRequest.runId});
     return {started:true};
     }finally{runAdmission=false;}
   });
@@ -557,7 +630,8 @@ function createWindow(){
   window.webContents.setWindowOpenHandler(()=>({action:'deny'}));
   window.webContents.on('will-navigate',event=>event.preventDefault());
   window.webContents.on('will-attach-webview',event=>event.preventDefault());
-  window.on('ready-to-show',()=>window.show());
+  window.on('ready-to-show',()=>{emitSharedSessionTrace('window:ready-to-show');window.show();});
+  window.webContents.on('did-finish-load',()=>emitSharedSessionTrace('renderer:did-finish-load'));
   const requestClose=createCloseRequest({
     ask:async()=>{
       if(dialogBusy)return 'cancel';
@@ -615,6 +689,13 @@ function ensureTray(){
   updateTray();
 }
 function handleBabelPacket(packet){
+  if(packet?.runId){
+    emitSharedSessionTrace('babel:event',{
+      runId:packet.runId,
+      eventType:packet.event?.type,
+      kind:packet.kind,
+    });
+  }
   // Notification or renderer failures cannot take down the owned child runtime.
   try{if(window&&!window.isDestroyed()&&!window.webContents.isDestroyed())window.webContents.send('babel:event',packet);}catch{}
   const kind=packet.event?.type;

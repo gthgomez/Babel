@@ -26,6 +26,7 @@ export type BabelProtocolMethod =
   | 'turn.cancel'
   | 'history.lookup'
   | 'approval.decide'
+  | 'approval.lookup'
   | 'workspace.changes'
   | 'verification.lookup';
 
@@ -45,6 +46,7 @@ export const BABEL_PROTOCOL_METHODS: readonly BabelProtocolMethod[] = [
   'turn.cancel',
   'history.lookup',
   'approval.decide',
+  'approval.lookup',
   'workspace.changes',
   'verification.lookup',
 ] as const;
@@ -139,6 +141,8 @@ export type TurnStreamEvent =
       /** D03: structured terminal reason code. */
       reason_code?: TerminalReasonCode;
       cause_class?: 'model' | 'provider' | 'environment' | 'harness' | 'verification' | null;
+      fixture_execution?: boolean;
+      fixture_kind?: string;
     }
   | {
       type: 'failed';
@@ -216,6 +220,27 @@ export interface ApprovalDecideParams {
   operation_digest?: string;
 }
 
+export interface ApprovalLookupParams {
+  thread_id: ThreadId;
+  turn_id?: string;
+}
+
+export interface ApprovalLookupPendingRecord {
+  approval_id: string;
+  thread_id: ThreadId;
+  turn_id: string;
+  operation_digest: string;
+  expires_at: string;
+  state: 'pending' | 'consumed' | 'denied' | 'expired' | 'cancelled' | 'stale';
+  command?: string;
+  cwd?: string;
+  reason?: string;
+}
+
+export interface ApprovalLookupResult {
+  pending: ApprovalLookupPendingRecord[];
+}
+
 export interface WorkspaceChangesParams {
   thread_id: ThreadId;
 }
@@ -234,6 +259,9 @@ export interface ThreadResumeResult {
   thread_id: ThreadId;
   /** Highest committed turn index, or 0 for an empty thread. */
   turn_count: number;
+  /** Authoritative saved route for resumed threads (additive for older clients). */
+  provider?: string;
+  model?: string;
   /**
    * What durable state was found and whether execution can resume from it.
    * Additive: older clients ignore it and keep read-only history access.
@@ -253,10 +281,32 @@ export interface TurnCancelResult {
   cancelled: boolean;
 }
 
+/** Authoritative persisted terminal for one turn (not catalog idle/running). */
+export interface TurnTerminalRecord {
+  turn_id: number;
+  event_type: 'done' | 'failed' | 'cancelled';
+  answer?: string;
+  error?: string;
+  status?: string;
+  outcome?: string;
+  reason_code?: string;
+  cause_class?: string | null;
+  fixture_execution?: boolean;
+  fixture_kind?: string;
+  usage?: TurnUsageSummary;
+  recorded_at: string;
+  /** Set when in-memory terminal could not be durably appended (recovery must not assume persistence). */
+  durable_persist_failed?: boolean;
+}
+
 export interface HistoryLookupResult {
   cells: HistoryCellRecord[];
   cursor?: string;
   has_more?: boolean;
+  /** Highest known turn index for the thread (cells + durable meta). */
+  latest_turn_id?: number | null;
+  /** Present when `turn_id` is requested and a terminal record exists for that turn. */
+  turn_terminal?: TurnTerminalRecord | null;
 }
 
 export interface ApprovalDecideResult {

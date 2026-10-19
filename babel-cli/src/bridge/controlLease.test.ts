@@ -72,6 +72,20 @@ describe('ControlLeaseRegistry', () => {
     assert.equal(missing.error, 'epoch_required');
   });
 
+  it('allows paired remote priority takeover from a desktop controller holder', () => {
+    const leases = new ControlLeaseRegistry({ ttlMs: 60_000 });
+    const desktop = leases.acquire({ threadId: 'thr-shared', clientId: 'desktop:abc12345' });
+    assert.equal(desktop.ok, true);
+    const blocked = leases.acquire({ threadId: 'thr-shared', clientId: 'device:phone' });
+    assert.equal(blocked.ok, false);
+    const takeover = leases.acquire({
+      threadId: 'thr-shared',
+      clientId: 'device:phone',
+      remotePriorityTakeover: true,
+    });
+    assert.equal(takeover.ok, true);
+  });
+
   it('expires lease without renewal (background suspend) and requires re-acquire', async () => {
     const leases = new ControlLeaseRegistry({ ttlMs: 40 });
     const acquired = leases.acquire({ threadId: 'thr-bg', clientId: 'device:pwa' });

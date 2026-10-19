@@ -17,7 +17,7 @@ Status: living document for the remote implementation campaign. **Qualified** me
 | 4 | Revoke: no WS fan-out / ticket mint | Tested | `remoteRevokeFanout.gateway.test.ts`, `remoteControlWs.gateway.test.ts`, `sessionServer.ts` |
 | 4 | Stale epoch / command_id integrity | Tested | `remoteSecurity.gateway.test.ts`, `protocolGateway.test.ts` |
 | 4 | Stale approval digest / replay | Tested | `remoteApproval.test.ts`, `remoteSecurity.gateway.test.ts` |
-| 2 | Desktop ↔ phone single owner | Not implemented | Desktop `sharedSession: false` unchanged |
+| 2 | Desktop ↔ phone single owner | Not qualified | Production IPC + `remote host-run` path in progress; phone E2E pending |
 | 6 | External harness adapters | Stub only | `harnessAdapterContract.ts` |
 | — | Physical phone + Tailscale | Not qualified | Owner checklist in `BABEL_REMOTE_QUICKSTART.md` |
 

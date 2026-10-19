@@ -75,6 +75,8 @@ export function mapChatEventToTurnStreamEvent(event: ChatEvent): TurnStreamEvent
         ...(terminal.outcome !== undefined ? { outcome: terminal.outcome } : {}),
         ...(event.reason_code !== undefined ? { reason_code: event.reason_code } : {}),
         ...(event.cause_class !== undefined ? { cause_class: event.cause_class } : {}),
+        ...(event.fixture_execution === true ? { fixture_execution: true } : {}),
+        ...(typeof event.fixture_kind === 'string' ? { fixture_kind: event.fixture_kind } : {}),
       };
     }
     case 'failed': {

@@ -14,6 +14,8 @@ import type {
   HistoryLookupResult,
   ApprovalDecideParams,
   ApprovalDecideResult,
+  ApprovalLookupParams,
+  ApprovalLookupResult,
   WorkspaceChangesParams,
   WorkspaceChangesResult,
   VerificationLookupParams,
@@ -61,6 +63,11 @@ export interface ApprovalDecideRequest
 
 export interface ApprovalDecideResponse extends JsonRpcSuccessResponse<ApprovalDecideResult> {}
 
+export interface ApprovalLookupRequest
+  extends JsonRpcRequest<'approval.lookup', ApprovalLookupParams> {}
+
+export interface ApprovalLookupResponse extends JsonRpcSuccessResponse<ApprovalLookupResult> {}
+
 export interface WorkspaceChangesRequest
   extends JsonRpcRequest<'workspace.changes', WorkspaceChangesParams> {}
 
@@ -81,6 +88,7 @@ export type BabelProtocolRequest =
   | TurnCancelRequest
   | HistoryLookupRequest
   | ApprovalDecideRequest
+  | ApprovalLookupRequest
   | WorkspaceChangesRequest
   | VerificationLookupRequest;
 
@@ -92,6 +100,7 @@ export type BabelProtocolSuccessResponse =
   | TurnCancelResponse
   | HistoryLookupResponse
   | ApprovalDecideResponse
+  | ApprovalLookupResponse
   | WorkspaceChangesResponse
   | VerificationLookupResponse;
 
@@ -131,6 +140,7 @@ export interface BabelProtocolMethodMap {
   'turn.cancel': { params: TurnCancelParams; result: TurnCancelResult };
   'history.lookup': { params: HistoryLookupParams; result: HistoryLookupResult };
   'approval.decide': { params: ApprovalDecideParams; result: ApprovalDecideResult };
+  'approval.lookup': { params: ApprovalLookupParams; result: ApprovalLookupResult };
   'workspace.changes': { params: WorkspaceChangesParams; result: WorkspaceChangesResult };
   'verification.lookup': { params: VerificationLookupParams; result: VerificationLookupResult };
 }

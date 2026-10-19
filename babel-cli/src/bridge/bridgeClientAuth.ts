@@ -12,8 +12,14 @@ import {
 } from './auth.js';
 import type { DevicePairingService } from './devicePairing.js';
 import { REMOTE_PAIRING_COOKIE } from './devicePairing.js';
+import { resolveDesktopControllerContext } from './desktopControllerAuth.js';
 
-export type BridgeAuthKind = 'host_bearer' | 'query_bearer' | 'paired_device' | 'none';
+export type BridgeAuthKind =
+  | 'host_bearer'
+  | 'query_bearer'
+  | 'paired_device'
+  | 'desktop_controller'
+  | 'none';
 
 export interface BridgeClientContext {
   authKind: BridgeAuthKind;
@@ -48,6 +54,8 @@ export function resolveBridgeClientContext(
   authToken: string,
   parsedUrl?: ParsedUrl | null,
   pairing?: DevicePairingService,
+  desktopControllerClientId?: string,
+  desktopControllerProofKey?: string,
 ): BridgeClientContext {
   const headerToken = extractBearerToken(req.headers['authorization']);
   if (headerToken && verifyToken(headerToken, authToken)) {
@@ -66,6 +74,13 @@ export function resolveBridgeClientContext(
     }
   }
 
+  const desktop = resolveDesktopControllerContext(
+    req,
+    desktopControllerClientId,
+    desktopControllerProofKey,
+  );
+  if (desktop) return desktop;
+
   if (parsedUrl) {
     const queryToken = extractQueryToken(
       new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`),
@@ -82,6 +97,9 @@ export function isBridgeClientAuthenticated(client: BridgeClientContext): boolea
   if (client.authKind === 'none') return false;
   if (client.authKind === 'paired_device') {
     return typeof client.deviceId === 'string' && client.deviceId.length > 0;
+  }
+  if (client.authKind === 'desktop_controller') {
+    return client.clientId.startsWith('desktop:');
   }
   return client.authKind === 'host_bearer' || client.authKind === 'query_bearer';
 }
@@ -102,9 +120,18 @@ export function isBridgeRequestAuthenticated(
   authToken: string,
   parsedUrl?: ParsedUrl | null,
   pairing?: DevicePairingService,
+  desktopControllerClientId?: string,
+  desktopControllerProofKey?: string,
 ): boolean {
   return isBridgeClientAuthenticated(
-    resolveBridgeClientContext(req, authToken, parsedUrl, pairing),
+    resolveBridgeClientContext(
+      req,
+      authToken,
+      parsedUrl,
+      pairing,
+      desktopControllerClientId,
+      desktopControllerProofKey,
+    ),
   );
 }
 

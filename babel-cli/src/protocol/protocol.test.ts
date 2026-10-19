@@ -24,7 +24,7 @@ test('BABEL_PROTOCOL_VERSION is defined', () => {
 test('all protocol method strings are unique', () => {
   const methods = [...BABEL_PROTOCOL_METHODS];
   assert.equal(new Set(methods).size, methods.length);
-  assert.equal(methods.length, 8);
+  assert.equal(methods.length, 9);
 });
 
 test('all protocol notification strings are unique', () => {
@@ -95,6 +95,7 @@ test('sample turn.event notification has no id field', () => {
 test('catalog method names match expected set', () => {
   assert.deepEqual([...BABEL_PROTOCOL_METHODS].sort(), [
     'approval.decide',
+    'approval.lookup',
     'history.lookup',
     'thread.create',
     'thread.resume',
