@@ -148,6 +148,24 @@ function hangRpcWhenEmergency(
   return createAbortAwareRpcHang(rpcMethod, emergencyAcked, stats, baseFetch);
 }
 
+async function waitForRpcCounter(
+  counters: RpcOpCounters,
+  field: keyof RpcOpCounters,
+  expected: number,
+  label: string,
+  timeoutMs = 5_000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline && counters[field] < expected) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.equal(
+    counters[field],
+    expected,
+    `Timed out waiting for RPC counter ${label} (${field}=${counters[field]}, expected ${expected})`,
+  );
+}
+
 function wrapFetchForSettledCatalogAfterEmergency(
   baseFetch: typeof fetch,
   emergencyAcked: () => boolean,
@@ -890,20 +908,20 @@ describe('shared host-run emergency observation errors (mocked authoritative bac
             }
           } as typeof WebSocket,
           observationRpcTimeoutMs: 25,
-          emergencyObservationDeadlineMs: 75,
+          // Stage-barrier budget: long enough for reconnect + approval.lookup under CI load;
+          // per-op RPC timeout (25ms) still exercises abort, not this overall window.
+          emergencyObservationDeadlineMs: 1_500,
           emergencyObservationPassLimit: 4,
         },
         (event) => {
           gate.write(event);
           if (event.type === 'emergency_stop') {
             emergencyAcked = true;
-            setTimeout(() => {
-              try {
-                closePrimarySocket(primarySocketHolder);
-              } catch {
-                /* ignore */
-              }
-            }, 5);
+            try {
+              closePrimarySocket(primarySocketHolder);
+            } catch {
+              /* ignore */
+            }
           }
         },
       );
@@ -914,11 +932,12 @@ describe('shared host-run emergency observation errors (mocked authoritative bac
         `${JSON.stringify({ decision: 'emergency_admin_stop', host_emergency_token: TOKEN })}\n`,
       );
       await gate.waitFor((event) => event.type === 'emergency_stop', 'emergency_stop');
-      const approvalReachedDeadline = Date.now() + 5_000;
-      while (Date.now() < approvalReachedDeadline && approvalCounters.reached < 1) {
-        await new Promise((resolve) => setTimeout(resolve, 10));
-      }
-      assert.equal(approvalCounters.reached, 1);
+      await waitForRpcCounter(
+        approvalCounters,
+        'reached',
+        1,
+        'approval.lookup hang after emergency ack',
+      );
 
       await gate.waitFor((event) => event.type === 'run_error', 'observation_run_error');
 
