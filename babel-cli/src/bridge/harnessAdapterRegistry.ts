@@ -7,7 +7,9 @@ import {
   type HarnessCapabilityFlags,
 } from './harnessAdapterContract.js';
 import { probeCommandCodeInstallation, type CommandCodeInstallProbe } from './commandCodeCliDiscovery.js';
+import { probeOpenCodeInstallation, type OpenCodeInstallProbe } from './openCodeCliDiscovery.js';
 import { buildCommandCodeAdapterDescriptor } from './commandCodeOwnCliAdapter.js';
+import { buildOpenCodeAdapterDescriptor } from './openCodeOwnCliAdapter.js';
 
 export type HarnessAdapterInstallationState =
   | 'native'
@@ -64,8 +66,10 @@ function stubDescriptor(id: HarnessAdapterId, displayName: string): HarnessAdapt
   };
 }
 
-const STUB_DISPLAY: Record<Exclude<HarnessAdapterId, 'babel-native' | 'command-code'>, string> = {
-  opencode: 'OpenCode CLI',
+const STUB_DISPLAY: Record<
+  Exclude<HarnessAdapterId, 'babel-native' | 'command-code' | 'opencode'>,
+  string
+> = {
   antigravity: 'Antigravity CLI (AGY)',
   'claude-code': 'Claude Code CLI',
   codex: 'Codex CLI',
@@ -73,14 +77,23 @@ const STUB_DISPLAY: Record<Exclude<HarnessAdapterId, 'babel-native' | 'command-c
 
 export async function buildHarnessAdapterCatalog(options?: {
   commandCodeProbe?: CommandCodeInstallProbe;
+  openCodeProbe?: OpenCodeInstallProbe;
 }): Promise<HarnessAdapterCatalogEntry[]> {
   const commandCodeProbe =
     options?.commandCodeProbe ?? (await probeCommandCodeInstallation());
+  const openCodeProbe = options?.openCodeProbe ?? (await probeOpenCodeInstallation());
   const commandCodeDescriptor = buildCommandCodeAdapterDescriptor(commandCodeProbe);
+  const openCodeDescriptor = buildOpenCodeAdapterDescriptor(openCodeProbe);
   const commandCodeInstallation: HarnessAdapterInstallationState =
     commandCodeProbe.state === 'verified'
       ? 'verified'
       : commandCodeProbe.state === 'missing'
+        ? 'missing'
+        : 'unverified';
+  const openCodeInstallation: HarnessAdapterInstallationState =
+    openCodeProbe.state === 'verified'
+      ? 'verified'
+      : openCodeProbe.state === 'missing'
         ? 'missing'
         : 'unverified';
 
@@ -96,12 +109,17 @@ export async function buildHarnessAdapterCatalog(options?: {
     campaign_order: 1,
     profile_ids: [EXTERNAL_ADAPTER_PROFILE_IDS.commandCodeGoat],
   });
+  byId.set('opencode', {
+    descriptor: openCodeDescriptor,
+    installation: openCodeInstallation,
+    campaign_order: 2,
+    profile_ids: [EXTERNAL_ADAPTER_PROFILE_IDS.openCodeGo],
+  });
 
-  let order = 2;
+  let order = 3;
   for (const id of EXTERNAL_ADAPTER_CAMPAIGN_ORDER) {
-    if (id === 'command-code') continue;
-    const profileIds =
-      id === 'opencode' ? [EXTERNAL_ADAPTER_PROFILE_IDS.openCodeGo] : undefined;
+    if (id === 'command-code' || id === 'opencode') continue;
+    const profileIds = undefined;
     const displayName = STUB_DISPLAY[id as keyof typeof STUB_DISPLAY];
     byId.set(id, {
       descriptor: stubDescriptor(id, displayName),

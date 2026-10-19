@@ -25,6 +25,7 @@ export interface ModePolicy {
 export type HarnessAdapterBinding =
   | 'babel-native'
   | 'command-code'
+  | 'opencode'
 
 /** Durable descriptor sufficient to reconstruct a server-owned session. */
 export interface SessionDescriptor {

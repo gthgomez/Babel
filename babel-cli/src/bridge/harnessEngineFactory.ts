@@ -3,8 +3,11 @@ import type { SessionDescriptor } from '../executor/contracts.js';
 import type { ProtocolHostState } from '../protocol/client/host.js';
 import { buildPreparedTurn } from '../executor/modeAdapters.js';
 import { createCommandCodeHarnessEngine } from './commandCodeHarnessEngine.js';
+import { createOpenCodeHarnessEngine } from './openCodeHarnessEngine.js';
 import type { CommandCodeAcpRuntimeRegistry } from './commandCodeAcpRuntime.js';
+import type { OpenCodeAcpRuntimeRegistry } from './openCodeAcpRuntime.js';
 import { probeCommandCodeInstallation } from './commandCodeCliDiscovery.js';
+import { probeOpenCodeInstallation } from './openCodeCliDiscovery.js';
 
 function defaultNativeEngine(descriptor: SessionDescriptor): ChatEngine {
   const prepared = buildPreparedTurn(descriptor);
@@ -26,10 +29,14 @@ function defaultNativeEngine(descriptor: SessionDescriptor): ChatEngine {
  */
 export function createHarnessAwareEngineFactory(
   commandCodeRegistry: CommandCodeAcpRuntimeRegistry,
+  openCodeRegistry: OpenCodeAcpRuntimeRegistry,
 ): ProtocolHostState['engineFactory'] {
   return (descriptor: SessionDescriptor) => {
     if (descriptor.harness_adapter_id === 'command-code') {
       return createCommandCodeHarnessEngine({ descriptor, registry: commandCodeRegistry });
+    }
+    if (descriptor.harness_adapter_id === 'opencode') {
+      return createOpenCodeHarnessEngine({ descriptor, registry: openCodeRegistry });
     }
     return defaultNativeEngine(descriptor);
   };
@@ -39,5 +46,12 @@ export async function assertCommandCodeHarnessAvailable(): Promise<void> {
   const probe = await probeCommandCodeInstallation();
   if (probe.state !== 'verified') {
     throw new Error('COMMAND_CODE_HARNESS_UNAVAILABLE');
+  }
+}
+
+export async function assertOpenCodeHarnessAvailable(): Promise<void> {
+  const probe = await probeOpenCodeInstallation();
+  if (probe.state !== 'verified') {
+    throw new Error('OPENCODE_HARNESS_UNAVAILABLE');
   }
 }

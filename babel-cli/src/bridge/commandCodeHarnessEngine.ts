@@ -2,6 +2,7 @@ import { ChatEngine } from '../agent/chatEngine.js';
 import type { ChatEvent } from '../agent/chatEngineContracts.js';
 import type { SessionDescriptor } from '../executor/contracts.js';
 import { writeSessionDescriptor } from '../services/threadStore/sessionDescriptor.js';
+import { isAnyAcpPromptTimeoutError } from './acpHarnessTransportErrors.js';
 import { getRemoteSurface } from './remoteApproval.js';
 import { mapPromptTerminalFromStopReason, type AcpTurnMapState } from './commandCodeAcpEventMap.js';
 import type { CommandCodeAcpRuntimeRegistry } from './commandCodeAcpRuntime.js';
@@ -23,7 +24,7 @@ function sleep(ms: number): Promise<void> {
 
 function formatCommandCodePromptError(promptError: unknown): string {
   const text = promptError instanceof Error ? promptError.message : String(promptError);
-  if (text.includes('COMMAND_CODE_ACP_RPC_TIMEOUT:session/prompt')) {
+  if (isAnyAcpPromptTimeoutError(promptError)) {
     return 'Command Code prompt observation timed out; owned runtime stopped';
   }
   if (text.startsWith('COMMAND_CODE_ACP_ERROR:')) {
@@ -152,8 +153,7 @@ export function createCommandCodeHarnessEngine(options: CommandCodeHarnessEngine
 
         await promptDone;
         if (promptError) {
-          const messageText = String(promptError);
-          if (messageText.includes('COMMAND_CODE_ACP_RPC_TIMEOUT:session/prompt')) {
+          if (isAnyAcpPromptTimeoutError(promptError)) {
             await registry.forceStopForThread(descriptor);
             while (!session.processDead) {
               await sleep(20);

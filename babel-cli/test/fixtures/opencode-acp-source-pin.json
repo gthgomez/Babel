@@ -1,0 +1,12 @@
+{
+  "repository": "https://github.com/anomalyco/opencode",
+  "commit": "b154f6ac29ea155d1e6edc1b6dd8b76c7d9c5518",
+  "documentation": "https://opencode.ai/v2/docs/cli/acp",
+  "implementation_paths": [
+    "packages/cli/src/acp/permission.ts",
+    "packages/cli/src/acp/prompt.ts",
+    "packages/cli/src/acp/translate.ts",
+    "packages/cli/src/commands/handlers/acp.ts"
+  ],
+  "notes": "Commit 44b6938b2ad2895bdd89d5d5cf753fb01ca8e3dd has ACP docs only (no packages/cli/src/acp). Fixtures and permission binding derive from dev implementation paths above plus v2 docs."
+}
