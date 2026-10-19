@@ -1543,66 +1543,52 @@ describe('shared host-run emergency observation errors (mocked authoritative bac
     process.env['BABEL_CONFIG_DIR'] = configDir;
     process.env['BABEL_RUNS_DIR'] = tmp;
 
-    const server = new BridgeServer({
-      authToken: TOKEN,
-      allowedWorkspaceRoot: tmp,
-      allowedOrigins: ['http://127.0.0.1:*', 'http://localhost:*'],
-      enforceControlLease: true,
-      desktopControllerClientId: desktopId,
-      desktopControllerProofKey: desktopProofKey,
-      engineFactory: (descriptor) => {
-        const engine = new ChatEngine({
-          task: 'ticket-hang',
-          projectRoot: descriptor.projectRoot,
-          executionProfile: 'chat',
-        });
-        engine.submitMessageStream = async function* () {
-          yield { type: 'thinking' };
-          await new Promise<void>(() => {
-            /* never settles — recovery must observe ticket hang */
-          });
-        } as ChatEngine['submitMessageStream'];
-        return engine;
-      },
-    });
-    await server.start(0);
-    const port = server.port;
-
-    let emergencyAcked = false;
-    const ticketCounters = createRpcOpCounters();
-    const baseFetch = globalThis.fetch.bind(globalThis);
-    const fetchImpl: typeof fetch = async (input, init) => {
-      const url = String(input);
-      if (emergencyAcked && url.includes('/ws/ticket')) {
-        ticketCounters.reached += 1;
-        await new Promise<void>((_resolve, reject) => {
-          const signal = init?.signal;
-          if (!signal) {
-            reject(new Error('ws ticket missing abort signal'));
-            return;
-          }
-          if (signal.aborted) {
-            ticketCounters.aborted += 1;
-            reject(signal.reason ?? new Error('aborted'));
-            return;
-          }
-          signal.addEventListener(
-            'abort',
-            () => {
-              ticketCounters.aborted += 1;
-              reject(signal.reason ?? new Error('aborted'));
-            },
-            { once: true },
-          );
-        });
-        ticketCounters.completed += 1;
-      }
-      return baseFetch(input, init);
-    };
-    const gate = createHostRunEventGate();
-    const stdin = new PassThrough();
-    const primarySocketHolder = createPrimarySocketHolder();
+    let server: BridgeServer | undefined;
+    let stdin: PassThrough | undefined;
     try {
+      server = new BridgeServer({
+        authToken: TOKEN,
+        allowedWorkspaceRoot: tmp,
+        allowedOrigins: ['http://127.0.0.1:*', 'http://localhost:*'],
+        enforceControlLease: true,
+        desktopControllerClientId: desktopId,
+        desktopControllerProofKey: desktopProofKey,
+        engineFactory: (descriptor) => {
+          const engine = new ChatEngine({
+            task: 'ticket-hang',
+            projectRoot: descriptor.projectRoot,
+            executionProfile: 'chat',
+          });
+          engine.submitMessageStream = async function* () {
+            yield { type: 'thinking' };
+            await new Promise<void>(() => {
+              /* never settles — recovery must observe ticket hang */
+            });
+          } as ChatEngine['submitMessageStream'];
+          return engine;
+        },
+      });
+      await server.start(0);
+      const port = server.port;
+
+      let emergencyAcked = false;
+      const primarySocketHolder = createPrimarySocketHolder();
+      const ticketCounters = createRpcOpCounters();
+      const baseFetch = globalThis.fetch.bind(globalThis);
+      const reconcileBarrier = withPostEmergencyReconcileCompletionBarrier(
+        () => emergencyAcked,
+        baseFetch,
+      );
+      const fetchImpl = withHeldRecoveryWsTicket(
+        () => emergencyAcked,
+        reconcileBarrier.fetchImpl,
+        ticketCounters,
+      );
+      const { clock: emergencyObservationClock, advance: advanceEmergencyClock } =
+        createManualSharedProtocolHostRunClock();
+
+      const gate = createHostRunEventGate();
+      stdin = new PassThrough();
       const runPromise = executeSharedProtocolHostRun(
         {
           port,
@@ -1613,26 +1599,17 @@ describe('shared host-run emergency observation errors (mocked authoritative bac
           desktopProofKey,
           stdin,
           fetchImpl,
-          WebSocketImpl: class extends WebSocket {
-            constructor(url: string | URL, protocols?: string | string[]) {
-              super(url, protocols);
-              primarySocketHolder.socket = this;
-            }
-          } as typeof WebSocket,
+          WebSocketImpl: makeTrackingWebSocket(primarySocketHolder),
           observationRpcTimeoutMs: 25,
-          emergencyObservationDeadlineMs: 75,
+          emergencyObservationDeadlineMs: 500,
+          emergencyObservationPassLimit: 4,
+          emergencyObservationClock,
         },
         (event) => {
           gate.write(event);
           if (event.type === 'emergency_stop') {
             emergencyAcked = true;
-            setTimeout(() => {
-              try {
-                closePrimarySocket(primarySocketHolder);
-              } catch {
-                /* ignore */
-              }
-            }, 5);
+            closePrimarySocket(primarySocketHolder);
           }
         },
       );
@@ -1643,20 +1620,34 @@ describe('shared host-run emergency observation errors (mocked authoritative bac
         `${JSON.stringify({ decision: 'emergency_admin_stop', host_emergency_token: TOKEN })}\n`,
       );
       await gate.waitFor((event) => event.type === 'emergency_stop', 'emergency_stop');
-      const ticketDeadline = Date.now() + 5_000;
-      while (Date.now() < ticketDeadline && ticketCounters.reached < 1) {
-        await new Promise((resolve) => setTimeout(resolve, 10));
-      }
-      assert.equal(ticketCounters.reached, 1);
+      await reconcileBarrier.waitForCompletedReconciles(
+        1,
+        'immediate post-ack terminal reconcile',
+      );
+      await waitForRpcCounter(
+        ticketCounters,
+        'reached',
+        1,
+        'recovery ws ticket held pending',
+      );
+      await advanceEmergencyClock(30);
       await gate.waitFor((event) => event.type === 'run_error', 'observation_run_error');
 
-      const code = await runPromise;
+      const code = await Promise.race([
+        runPromise,
+        new Promise<number>((_, reject) =>
+          setTimeout(() => reject(new Error('host-run hung on ticket hang')), 3_000),
+        ),
+      ]);
 
       assert.equal(code, 1);
+      assert.equal(ticketCounters.reached, 1);
+      assert.equal(ticketCounters.aborted, 1);
+      assert.equal(ticketCounters.completed, 0);
       assert.equal(gate.events.some((e) => e.type === 'cancelled'), false);
       assert.ok(gate.events.some((e) => e.type === 'run_error'));
     } finally {
-      await cleanupOwnedEmergencyFixture(server, tmp, stdin);
+      if (server) await cleanupOwnedEmergencyFixture(server, tmp, stdin);
     }
   });
 

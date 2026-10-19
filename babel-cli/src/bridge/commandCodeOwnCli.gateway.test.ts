@@ -96,6 +96,14 @@ async function rpc(
   return JSON.parse(res.body) as Record<string, unknown>;
 }
 
+function formatRpcDiagnostics(label: string, body: Record<string, unknown>): string {
+  const err = body.error as { code?: unknown; message?: string } | undefined;
+  if (err) {
+    return `${label}: rpc error code=${String(err.code ?? 'unknown')} message=${String(err.message ?? '')}`;
+  }
+  return `${label}: missing result (id=${String(body.id ?? '')})`;
+}
+
 async function runTurn(
   rpcPort: number,
   threadId: string,
@@ -137,7 +145,7 @@ async function runTurn(
     }
   });
   const submit = await rpc(rpcPort, desktopHeaders(), 'turn.submit', { thread_id: threadId, message }, 50);
-  assert.ok(submit.result);
+  assert.ok(submit.result, formatRpcDiagnostics('turn.submit', submit));
   await new Promise<void>((resolve) => {
     const timer = setTimeout(() => resolve(), 12_000);
     const check = () => {
@@ -722,16 +730,56 @@ describe('command code own-CLI gateway integration', () => {
       );
       const threadId = (created.result as { thread_id: string }).thread_id;
       await rpc(sPort, desktopHeaders(), 'control.acquire', { thread_id: threadId, force: false }, 71);
+      const ticketRes = await httpRequest(`http://127.0.0.1:${sPort}/ws/ticket`, {
+        method: 'POST',
+        headers: { ...desktopHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: transportSessionId, thread_id: threadId }),
+      });
+      const ticketBody = JSON.parse(ticketRes.body) as { ticket?: string };
+      const ws = new WebSocket(
+        `ws://127.0.0.1:${sPort}/ws?sessionId=${encodeURIComponent(transportSessionId)}&ticket=${encodeURIComponent(ticketBody.ticket ?? '')}`,
+      );
+      await new Promise<void>((resolve, reject) => {
+        ws.once('open', () => resolve());
+        ws.once('error', reject);
+      });
+      const events: Record<string, unknown>[] = [];
+      ws.on('message', (raw) => {
+        const frame = JSON.parse(raw.toString()) as { method?: string; params?: Record<string, unknown> };
+        if (frame.method === 'turn.event' && frame.params?.event) {
+          events.push(frame.params.event as Record<string, unknown>);
+        }
+      });
       void rpc(sPort, desktopHeaders(), 'turn.submit', { thread_id: threadId, message: 'slow-cancel' }, 72);
-      await sleep(80);
+      await waitForTurnEvent(events, promptAdmittedEvent, 'peer_prompt_admitted');
       await rpc(sPort, desktopHeaders(), 'turn.cancel', { thread_id: threadId }, 73);
-      await sleep(50);
-      const after = await runTurn(sPort, threadId, transportSessionId, 'after-cancel');
+      await waitForTurnEvent(events, (event) => event.type === 'cancelled', 'authoritative_cancelled');
+      const afterSubmit = await rpc(
+        sPort,
+        desktopHeaders(),
+        'turn.submit',
+        { thread_id: threadId, message: 'after-cancel' },
+        74,
+      );
+      assert.ok(afterSubmit.result, formatRpcDiagnostics('turn.submit after-cancel', afterSubmit));
+      await waitForTurnEvent(
+        events,
+        (event) =>
+          event.type === 'done' &&
+          String((event as { answer?: string }).answer ?? '').includes('fixture:after-cancel'),
+        'after_cancel_done',
+      );
+      const terminal = events.find(
+        (event) =>
+          event.type === 'done' &&
+          String((event as { answer?: string }).answer ?? '').includes('fixture:after-cancel'),
+      );
+      assert.ok(terminal, 'expected terminal done for after-cancel turn');
       assert.ok(
-        !String((after.terminal as { answer?: string }).answer ?? '').includes('slow-cancel'),
+        !String((terminal as { answer?: string }).answer ?? '').includes('slow-cancel'),
         'next turn must not include prior cancelled prompt output',
       );
-      assert.equal(after.terminal?.type, 'done');
+      ws.close();
     });
   });
 
