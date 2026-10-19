@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test, { type TestContext } from 'node:test'
 import { spawn, spawnSync, execFileSync } from 'node:child_process'
-import { chmodSync, linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, linkSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -283,7 +283,7 @@ if (!isSyntheticProviderFixtureReady()) {
   }
 
   test('external permission changes do not inherit task-owned content admission', async t => {
-    const f = fixture(t)
+    const f = fixture(t, false, false, undefined, process.platform === 'win32')
     assert.equal((await f.write('owned\n')).policyBlocked, false)
     const path = join(f.root, 'notes.txt')
     const before = statSync(path).mode
@@ -291,7 +291,8 @@ if (!isSyntheticProviderFixtureReady()) {
     chmodSync(path, process.platform === 'win32' ? 0o444 : (before & 0o777) ^ 0o111)
     try {
       assert.notEqual(statSync(path).mode, before)
-      assert.deepEqual(f.ownership()?.classifyChanges().unexpectedPaths.map(value => relative(path, value)), [''])
+      assert.deepEqual(f.ownership()?.classifyChanges().unexpectedPaths.map(value =>
+        relative(realpathSync.native(path), realpathSync.native(value))), [''])
       assert.equal((await f.write('overwrite\n')).policyBlocked, true)
       assert.equal(readFileSync(path, 'utf8'), 'owned\n')
     } finally { chmodSync(path, before) }
