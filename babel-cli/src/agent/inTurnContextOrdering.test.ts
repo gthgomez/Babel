@@ -25,9 +25,12 @@
  * Required matrix (brief + routed Task-4 finding):
  *   1. compacting turn dispatches the JUST-INSTALLED generation (root identity,
  *      content, route-identity binding), completing in enforce mode.
- *   2. non-compacting turns are unchanged (dispatch deep-equals the rebuild the
- *      pre-fix ordering produced; install-blocked / install-unavailable paths
- *      unchanged).
+ *   2. non-compacting turns with a successful install are unchanged (dispatch
+ *      deep-equals the rebuild the pre-fix ordering produced). An install that
+ *      cannot produce a required context root now fails closed rather than
+ *      dispatching root-less, while unavailable repository coverage alone still
+ *      continues through V2 conversation continuation
+ *      (contextPreparation.integration.test.ts).
  *   3. routed Task-4 trace: promoted A + mid-process commit B → next dispatch
  *      roots at B (never A), in BOTH enforce and shadow modes; B validates
  *      CURRENT while A proves `lineage_superseded`.
@@ -620,9 +623,9 @@ test('compacting turn: provider request uses the just-installed generation (runn
   });
 });
 
-// ─── 2. non-compacting turns remain unchanged ─────────────────────────────
+// ─── 2. non-compacting turns: identical rebuild; uninstallable root fails closed
 
-test('non-compacting turns: dispatch identical to the pre-fix rebuild, install paths unchanged', async () => {
+test('non-compacting turns: dispatch identical to the pre-fix rebuild; an uninstallable root fails closed', async () => {
   await withRunsDir(async () => {
     const runId = 't5-noncompacting';
     const projectRoot = makeProjectRoot();
@@ -783,6 +786,11 @@ test('non-compacting turns: dispatch identical to the pre-fix rebuild, install p
         String(first.last?.['error'] ?? ''),
         /Could not prepare context:/,
         'the refusal must name the context preparation failure',
+      );
+      assert.match(
+        String(first.last?.['error'] ?? ''),
+        /install block: sources_unavailable/,
+        'the refusal must be the install-refusal branch, not a thrown preparation error',
       );
       assert.equal(capture.dispatches.length, 0, 'no provider dispatch may happen without a root');
       assert.equal(provider.bodies.length, 0, 'no serialized request may leave the process');
