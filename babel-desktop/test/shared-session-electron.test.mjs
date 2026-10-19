@@ -16,10 +16,7 @@ import {
   EVAL_STOP_REMOTE_BRIDGE,
   EVAL_TRUST_PROJECT,
 } from './shared-session-electron-ipc.mjs';
-
-const desktopCliShimRuntime = fileURLToPath(
-  new URL('./desktop-cli-shim-runtime.mjs', import.meta.url),
-);
+import { buildDesktopCliShimEntrySource } from './shared-protocol-shim-import.mjs';
 
 async function assertLoopbackPortClosed(port, label) {
   try {
@@ -45,14 +42,18 @@ const desktopDistHtml = resolve(
 
 function resolveElectronExecutable() {
   if (process.env.BABEL_TEST_ELECTRON_EXECUTABLE) return process.env.BABEL_TEST_ELECTRON_EXECUTABLE;
-  const bundled = resolve(
+  const electronDistDir = join(
     fileURLToPath(new URL('..', import.meta.url)),
     'node_modules',
     'electron',
     'dist',
-    'electron',
   );
-  return existsSync(bundled) ? bundled : null;
+  const names = process.platform === 'win32' ? ['electron.exe', 'electron'] : ['electron'];
+  for (const name of names) {
+    const candidate = join(electronDistDir, name);
+    if (existsSync(candidate)) return candidate;
+  }
+  return null;
 }
 
 const electronExecutable = resolveElectronExecutable();
@@ -196,15 +197,14 @@ test('shared-session Electron run uses host-run child and preserves thread acros
 
     await writeFile(
       entry,
-      `import { runDesktopCliShim } from ${JSON.stringify(desktopCliShimRuntime)};
-runDesktopCliShim({
-  dist: ${JSON.stringify(babelCliDist)},
-  argv: process.argv.slice(2),
-  hostRunReceipt: ${JSON.stringify(hostRunReceipt)},
-  legacyRunReceipt: ${JSON.stringify(legacyRunReceipt)},
-  includeDesktopCapabilities: true,
-});
-`,
+      buildDesktopCliShimEntrySource({
+        distPath: babelCliDist,
+        receiptPath: hostRunReceipt,
+        shimOptions: {
+          legacyRunReceipt,
+          includeDesktopCapabilities: true,
+        },
+      }),
     );
 
     await writeFile(

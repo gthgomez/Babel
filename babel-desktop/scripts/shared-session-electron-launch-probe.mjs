@@ -20,13 +20,17 @@ function emitParentTrace(stage, detail = {}) {
   );
 }
 
-const electronExecutable =
-  process.env.BABEL_TEST_ELECTRON_EXECUTABLE ??
-  (existsSync(
-    resolve(fileURLToPath(new URL('..', import.meta.url)), 'node_modules/electron/dist/electron'),
-  )
-    ? resolve(fileURLToPath(new URL('..', import.meta.url)), 'node_modules/electron/dist/electron')
-    : null);
+const electronDistDir = resolve(
+  fileURLToPath(new URL('..', import.meta.url)),
+  'node_modules',
+  'electron',
+  'dist',
+);
+const electronNames = process.platform === 'win32' ? ['electron.exe', 'electron'] : ['electron'];
+const bundledElectron = electronNames
+  .map((name) => join(electronDistDir, name))
+  .find((candidate) => existsSync(candidate));
+const electronExecutable = process.env.BABEL_TEST_ELECTRON_EXECUTABLE ?? bundledElectron ?? null;
 
 if (!electronExecutable) {
   console.error('probe: missing electron executable');

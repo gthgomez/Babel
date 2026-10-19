@@ -968,7 +968,7 @@ describe('shared host-run emergency observation errors (mocked authoritative bac
       baseFetch,
     );
 
-    let primarySocket: WebSocket | null = null;
+    let primarySocket: { close: () => void } | null = null;
     const gate = createHostRunEventGate();
     const stdin = new PassThrough();
     try {

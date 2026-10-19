@@ -15,14 +15,11 @@ import { saveProviderRoute, qualifiedProviders, readProviderRoute } from '../nat
 import { productionNodeCliArgv } from '../native/cli-launch.mjs';
 import { nodeChildSpawnEnvironment } from '../native/spawn-env-floor.mjs';
 import { rmTempDirWithOwnedChildDrain } from './temp-dir-cleanup.mjs';
+import { buildDesktopCliShimEntrySource } from './shared-protocol-shim-import.mjs';
 
 const babelCliDist = resolve(
   fileURLToPath(new URL('../../babel-cli/dist/index.js', import.meta.url)),
 );
-const desktopCliShimRuntime = fileURLToPath(
-  new URL('./desktop-cli-shim-runtime.mjs', import.meta.url),
-);
-
 async function assertLoopbackPortClosed(port, label) {
   try {
     const response = await fetch(`http://127.0.0.1:${port}/health`, {
@@ -192,13 +189,10 @@ test('desktop stack reaches run_complete through shim and shared bridge (no Elec
         await writeFile(join(project, 'README.md'), '# stack');
         await writeFile(
           entry,
-          `import { runDesktopCliShim } from ${JSON.stringify(desktopCliShimRuntime)};
-runDesktopCliShim({
-  dist: ${JSON.stringify(babelCliDist)},
-  argv: process.argv.slice(2),
-  hostRunReceipt: ${JSON.stringify(receipt)},
-});
-`,
+          buildDesktopCliShimEntrySource({
+            distPath: babelCliDist,
+            receiptPath: receipt,
+          }),
         );
         saveProviderRoute({
           configDirectory: config,

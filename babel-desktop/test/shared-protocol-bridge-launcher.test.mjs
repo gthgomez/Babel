@@ -18,14 +18,14 @@ import {
   documentedNodeChildSpawnOptions,
   nodeChildSpawnEnvironment,
 } from '../native/spawn-env-floor.mjs';
+import {
+  buildDesktopCliShimEntrySource,
+  classifyAllowlistedStartupCodes,
+} from './shared-protocol-shim-import.mjs';
 
 const babelCliDist = resolve(
   fileURLToPath(new URL('../../babel-cli/dist/index.js', import.meta.url)),
 );
-const desktopCliShimRuntime = fileURLToPath(
-  new URL('./desktop-cli-shim-runtime.mjs', import.meta.url),
-);
-
 const TOKEN = 'launcher-test-token';
 
 function redactArgv(argv) {
@@ -49,13 +49,10 @@ async function writeStackShimFixture(root) {
   await writeFile(join(config, 'bridge.json'), JSON.stringify({ authToken: TOKEN }), 'utf8');
   await writeFile(
     entry,
-    `import { runDesktopCliShim } from ${JSON.stringify(desktopCliShimRuntime)};
-runDesktopCliShim({
-  dist: ${JSON.stringify(babelCliDist)},
-  argv: process.argv.slice(2),
-  hostRunReceipt: ${JSON.stringify(receipt)},
-});
-`,
+    buildDesktopCliShimEntrySource({
+      distPath: babelCliDist,
+      receiptPath: receipt,
+    }),
   );
   return { project, config, runsDir, entry };
 }
@@ -130,16 +127,17 @@ test('shared bridge startup with spawn env floor reaches ready', {
   }
 });
 
-test('startup failure records sanitized artifact without raw stderr payloads', {
+test('startup failure harness records synthetic probe artifact (not production classification)', {
   skip: !existsSync(babelCliDist) ? 'missing babel-cli dist' : false,
   timeout: 20_000,
 }, async () => {
   const root = await mkdtemp(join(tmpdir(), 'babel-bridge-startup-fail-'));
   const entry = join(root, 'exit1.mjs');
+  const syntheticInjectedCode = 'MODULE_NOT_FOUND';
   await writeFile(
     entry,
-    `const err = new Error('MODULE_NOT_FOUND fixture loader');
-err.code = 'MODULE_NOT_FOUND';
+    `const err = new Error('synthetic fixture loader probe');
+err.code = ${JSON.stringify(syntheticInjectedCode)};
 process.stderr.write(String(err.code) + '\\n');
 process.exit(1);
 `,
@@ -147,6 +145,7 @@ process.exit(1);
   const artifactPath = join(root, 'startup-artifact.json');
   const diagnostics = [];
   let stderrBytes = 0;
+  let stderrObserved = '';
   const bridge = new RemoteBridgeChild({
     executable: process.execPath,
     entry,
@@ -157,6 +156,7 @@ process.exit(1);
       const child = spawn(executable, argv, options);
       child.stderr?.on('data', (chunk) => {
         stderrBytes += chunk.length;
+        stderrObserved += chunk.toString('utf8');
       });
       return child;
     },
@@ -176,12 +176,15 @@ process.exit(1);
       false,
       'raw stderr must not be forwarded',
     );
+    const allowlistedCodesObserved = classifyAllowlistedStartupCodes(stderrObserved);
     const artifact = {
+      artifactKind: 'synthetic_harness_probe',
+      syntheticInjectedCode,
       platform: process.platform,
       spawn: documentedNodeChildSpawnOptions(),
       stderrBytesObservedInTestHarness: stderrBytes,
       diagnosticCodes: diagnostics.map((line) => line.code).filter(Boolean),
-      startupFailureClass: 'MODULE_NOT_FOUND',
+      allowlistedCodesObserved,
       childExitCode: 1,
       argvShape: redactArgv(productionNodeCliArgv(entry, ['remote', 'serve', '--port', '4733'])),
     };
@@ -189,6 +192,8 @@ process.exit(1);
     const text = await import('node:fs/promises').then((m) => m.readFile(artifactPath, 'utf8'));
     assert.equal(text.includes('synthetic-secret'), false);
     assert.ok(stderrBytes > 0, 'harness observed stderr without forwarding payload');
+    assert.deepEqual(allowlistedCodesObserved, [syntheticInjectedCode]);
+    assert.equal(Object.hasOwn(artifact, 'startupFailureClass'), false);
   } finally {
     bridge.stop();
   }
