@@ -27,6 +27,7 @@ import type { PolicyEventLog } from './policyEventLog.js'
 import type { ToolCallLogEntry } from './chatEngineObservability.js'
 
 export interface FreshTaskIsolationHost {
+  taskMutationOwnership?: import('./taskMutationOwnership.js').TaskMutationOwnership | null
   engineRunId: string
   engineRunDir: string
   executionProfile: ChatExecutionProfile
@@ -77,6 +78,12 @@ export function isolateEngineForFreshUserSubmission(
   },
 ): void {
   retireLiveCertificationForRun(host.engineRunId)
+  // Submission counters reset even for natural-language continuation/amendment.
+  // Ownership follows the durable objective, not those per-submission counters.
+  if (!runtime.objectiveContinuation) {
+    host.taskMutationOwnership?.retire()
+    host.taskMutationOwnership = null
+  }
   host.progressController.resetTaskLocal()
   host.taskCostScopeUnavailable = false
   host.criticRepairCostCapUsd = null

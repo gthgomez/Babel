@@ -7,6 +7,7 @@
  */
 
 import { existsSync } from 'node:fs';
+import { getExecutionContext } from './executionContext.js';
 import { readFile, writeFile, rm } from 'node:fs/promises';
 import { isAbsolute, resolve } from 'node:path';
 
@@ -407,6 +408,8 @@ export async function governedApplyPatch(
 
   const targets = parsed.files.map((f) => f.newPath || f.oldPath || '');
   const absolutePaths = targets.map((t) => resolveProjectPath(options.projectRoot, t));
+  const ownership = getExecutionContext()?.mutationOwnership;
+  const priorOwnership = ownership?.snapshot(absolutePaths);
 
   // Phase A: read all target files.
   const contents = new Map<string, string>();
@@ -684,6 +687,7 @@ export async function governedApplyPatch(
       }
     });
   } catch (err) {
+    if (priorOwnership) ownership?.restore(priorOwnership, absolutePaths);
     const failure = (err as { governedPatchFailure?: GovernedApplyPatchResult }).governedPatchFailure;
     if (failure) return failure;
     throw err;

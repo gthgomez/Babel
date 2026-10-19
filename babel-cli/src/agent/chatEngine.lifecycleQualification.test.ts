@@ -39,6 +39,7 @@ type TestRunner = {
   execute: () => Promise<{ type: 'completion'; answer: string }>;
   executeRaw: () => Promise<string>;
   getLastInvocationMetadata: () => null;
+  executeRawStream?: (...args: unknown[]) => AsyncGenerator<string, void, undefined>;
   /** Fixture-only: satisfies compaction admission without implying production wire parity. */
   buildNativeToolsWireBody: (
     messages: Array<{ role: string; content?: unknown }>,
@@ -663,23 +664,35 @@ describe('ChatEngine lifecycle and crash qualification', { concurrency: false },
     let admissionStore: AdmissionStore | undefined;
     try {
       process.env['BABEL_COMPACTION'] = 'off';
-      const overLimit = prepareProviderRequest({
-        body: JSON.stringify({ messages: [{ role: 'user', content: 'over-limit fixture' }] }),
-        mode: 'native',
-        provider: 'deepinfra',
-        requestedModelId: 'test-fixture-model',
-        contextLimitTokens: 1,
-        reservedCompletionTokens: 1,
-        requestId: 'request-over-limit',
-        attemptId: 'attempt-over-limit',
-      });
-      assert.equal(overLimit.admission, 'over_limit');
-
+      let recoveryPhase = false;
+      let failedCeiling: number | undefined;
       let calls = 0;
       const runner: TestRunner = {
         async *executeWithToolsStream() {
+          if (!recoveryPhase) {
+            yield { type: 'text_delta', text: 'retained fact: ' + 'synthetic lifecycle evidence. '.repeat(600) };
+            yield { type: 'done', finishReason: 'stop' };
+            return;
+          }
           calls += 1;
-          if (calls === 1) throw new PreparedRequestAdmissionError(overLimit);
+          const body = engine.buildNativeCompactionAdmissionWireBody();
+          const input = {
+            body, mode: 'native' as const, provider: 'deepinfra',
+            requestedModelId: FIXTURE_PROVIDER_POLICY.providerModelId!,
+            reservedCompletionTokens: fixtureNativeWireHooks.getNativeRequestReservedCompletionTokens(),
+          };
+          if (calls === 1) {
+            const unbounded = prepareProviderRequest({ ...input, contextLimitTokens: null });
+            assert.ok(unbounded.accounting.estimated_total_tokens !== null);
+            failedCeiling = unbounded.accounting.estimated_total_tokens - 2000;
+            const overLimit = prepareProviderRequest({ ...input, contextLimitTokens: failedCeiling,
+              requestId: 'request-over-limit', attemptId: 'attempt-over-limit' });
+            assert.equal(overLimit.admission, 'over_limit');
+            throw new PreparedRequestAdmissionError(overLimit);
+          }
+          assert.ok(failedCeiling !== undefined);
+          const rebuilt = prepareProviderRequest({ ...input, contextLimitTokens: failedCeiling });
+          assert.equal(rebuilt.admission, 'qualified', 'the retry must fit the same ceiling that rejected the first request');
           yield { type: 'text_delta', text: 'rebuilt request admitted' };
           yield { type: 'done', finishReason: 'stop' };
         },
@@ -694,21 +707,67 @@ describe('ChatEngine lifecycle and crash qualification', { concurrency: false },
       admissionStore = opened.store;
       const engine = makeEngine(fixture.project, 'prepared-admission', runner, {
         admissionStore,
-        maxConversationMessages: 6,
-        maxEstimatedTokens: 80,
+        maxConversationMessages: 80,
+        maxEstimatedTokens: 128_000,
+        maxTurns: 16,
+        operation: 'READ_ONLY',
       });
-      engine.replaceConversation([
-        { role: 'system', content: 'fixture system' },
-        ...Array.from({ length: 8 }, (_, index) => ({
-          role: index % 2 === 0 ? 'user' as const : 'assistant' as const,
-          content: `retained fact ${index}`,
-        })),
-      ]);
+      // Accumulate real durable messages: replacing only the live array would
+      // leave the native wire history empty and would not prove request recovery.
+      for (let index = 0; index < 4; index += 1) {
+        const warmup = await collectStream(engine.submitMessageStream(`explain retained facts turn ${index}`, 'explain'));
+        assert.equal(warmup.at(-1)?.type, 'done');
+        assert.equal(warmup.some(event => event.type === 'context_compacted'), false);
+      }
+      recoveryPhase = true;
 
       const events = await collectStream(engine.submitMessageStream('explain the retained facts', 'explain'));
       assert.equal(calls, 2, `admission recovery must issue one rebuilt attempt: ${JSON.stringify(events)}`);
       assert.ok(events.some((event) => event.type === 'context_compacted'));
+      assert.equal(events.filter(event => event.type === 'context_compacted').length, 1);
       assert.ok(events.some((event) => event.type === 'done' && event.answer.includes('rebuilt request admitted')));
+    } finally {
+      admissionStore?.close();
+      fixture.cleanup();
+    }
+  });
+
+  for (const mode of ['native', 'text', 'legacy'] as const) test(`unrecoverable ${mode} prepared-request capacity stops without protocol fallback`, async () => {
+    const fixture = makeFixture();
+    commitCapturedProject(fixture.project);
+    let admissionStore: AdmissionStore | undefined;
+    try {
+      process.env['BABEL_COMPACTION'] = 'off';
+      const overLimit = prepareProviderRequest({
+        body: JSON.stringify({ model: 'test-fixture-model', max_tokens: 4096,
+          messages: [{ role: 'system', content: 'mandatory policy' }, { role: 'user', content: 'explain the fixture' }] }),
+        mode, provider: 'deepinfra', requestedModelId: 'test-fixture-model',
+        contextLimitTokens: 1, reservedCompletionTokens: 4096,
+      });
+      let calls = 0;
+      let protocolFallbacks = 0;
+      const runner: TestRunner = {
+        async *executeWithToolsStream() { calls++; throw new PreparedRequestAdmissionError(overLimit); },
+        async *executeRawStream() { calls++; throw new PreparedRequestAdmissionError(overLimit); },
+        async execute() { protocolFallbacks++; throw new PreparedRequestAdmissionError(overLimit); },
+        async executeRaw() { protocolFallbacks++; throw new PreparedRequestAdmissionError(overLimit); },
+        getLastInvocationMetadata: () => null,
+        ...fixtureNativeWireHooks,
+      };
+      mkdirSync(fixture.runs, { recursive: true });
+      const opened = openSessionAdmissionStore('prepared-capacity');
+      if (!opened.ok) throw new Error(opened.detail);
+      admissionStore = opened.store;
+      const engine = makeEngine(fixture.project, 'prepared-capacity', runner, { admissionStore });
+      Object.assign(engine, { shouldUseNativeTools: () => mode === 'native', shouldUseTextTools: () => mode === 'text' });
+      const events = await collectStream(engine.submitMessageStream('explain the fixture', 'explain'));
+      assert.equal(calls, 1);
+      assert.equal(protocolFallbacks, 0);
+      assert.equal(events.some(event => event.type === 'context_compacted'), false);
+      const error = events.find(event => event.type === 'failed');
+      assert.equal(error?.cause_class, 'harness');
+      assert.equal(error?.reason_code, 'context_preparation_failed');
+      assert.match(error?.error ?? '', /Reduce optional context or output reserve/);
     } finally {
       admissionStore?.close();
       fixture.cleanup();

@@ -13,6 +13,7 @@ import {
   prepareStreamingSubmission,
 } from "./chatEngineStreamingPreparation.js";
 import { finalizeStreamingTurnLimit } from "./chatEngineStreamingFinalizer.js";
+import { recoverStreamingRequestAdmission } from './chatEngineRequestRecovery.js';
 import { settleStreamingCompletion } from "./chatEngineStreamingCompletion.js";
 import { normalizeChatAnswer, requestedChatJsonKind } from './chatResponseContract.js';
 import { recordChatHarnessFeedback } from "./chatHarnessFeedback.js";
@@ -537,15 +538,13 @@ export class ChatEngineStreamingLoop {
             providerEnd,
           );
           if (!this.host.isSubmissionCurrent(submissionGeneration)) return;
-          const admissionRecovery =
-            await this.host.recoverPreparedRequestAdmission(
-              err,
-              submissionGeneration,
-            );
-          if (admissionRecovery) {
-            yield { type: "context_compacted", ...admissionRecovery };
-            continue;
-          }
+          const admissionRecovery = yield* recoverStreamingRequestAdmission(
+            this.host, err, submissionGeneration, () => {
+              endSpan(_turnSpan, SpanStatusCode.ERROR);
+              _turnSpan = null;
+            });
+          if (admissionRecovery === 'recovered') continue;
+          if (admissionRecovery === 'stopped') return;
           endSpan(_turnSpan, SpanStatusCode.ERROR);
           _turnSpan = null;
           if (!this.host.isSubmissionCurrent(submissionGeneration)) return;
@@ -771,15 +770,13 @@ export class ChatEngineStreamingLoop {
             yield cancelled ?? this.host.streamFailed(isNativeControllerCompletion(answerText) ? 'NATIVE_TOOL_PROTOCOL_INVALID: interrupted internal controller completion.' : err?.message ?? String(err));
             return;
           }
-          const admissionRecovery =
-            await this.host.recoverPreparedRequestAdmission(
-              err,
-              submissionGeneration,
-            );
-          if (admissionRecovery) {
-            yield { type: "context_compacted", ...admissionRecovery };
-            continue;
-          }
+          const admissionRecovery = yield* recoverStreamingRequestAdmission(
+            this.host, err, submissionGeneration, () => {
+              endSpan(_turnSpan, SpanStatusCode.ERROR);
+              _turnSpan = null;
+            });
+          if (admissionRecovery === 'recovered') continue;
+          if (admissionRecovery === 'stopped') return;
           if (!this.host.isSubmissionCurrent(submissionGeneration)) return;
           // Retry the same runner once when the attempt produced no text and
           // no tool call. A different provider is not a substitute, and an
@@ -1072,15 +1069,13 @@ export class ChatEngineStreamingLoop {
             legacyEnd,
           );
           if (!this.host.isSubmissionCurrent(submissionGeneration)) return;
-          const admissionRecovery =
-            await this.host.recoverPreparedRequestAdmission(
-              err,
-              submissionGeneration,
-            );
-          if (admissionRecovery) {
-            yield { type: "context_compacted", ...admissionRecovery };
-            continue;
-          }
+          const admissionRecovery = yield* recoverStreamingRequestAdmission(
+            this.host, err, submissionGeneration, () => {
+              endSpan(_turnSpan, SpanStatusCode.ERROR);
+              _turnSpan = null;
+            });
+          if (admissionRecovery === 'recovered') continue;
+          if (admissionRecovery === 'stopped') return;
           if (!this.host.isSubmissionCurrent(submissionGeneration)) return;
           const fb = yield* this.host.resolveFallbackOrFail(
             err,

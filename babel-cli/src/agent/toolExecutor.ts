@@ -1,4 +1,5 @@
 import {getExecutionContext} from './executionContext.js';
+import { resolveIsolationBrokerFlags } from './chatEngineIsolationFlags.js';
 /**
  * Tool executor lane — maps normalized `AgentAction` values to `executeTool` calls.
  *
@@ -763,6 +764,20 @@ export async function executeActionWithPolicy(
   // suspension. A completion from a retired task cannot hand certification
   // to a later task that reuses the same engine run id.
   const certificationEpoch = certificationEpochForRun(context.runId);
+  const mutationOwnership = getExecutionContext()?.mutationOwnership;
+  const ownedRoot = mutationWorkspaceRoot(context, deps.mutationRoot);
+  if (mutationOwnership && !mutationOwnership.matchesRoot(ownedRoot)) {
+    return {
+      action, terminal: false, policyDecision: 'deny', policyBlocked: true,
+      results: [policyBlockedToolResult(action, 'deny', 'Task mutation owner was retired or its project changed')],
+    };
+  }
+  if (mutationOwnership?.matchesRoot(ownedRoot)) {
+    // Re-evaluate for every per-file dispatch, including governed replacements
+    // and patches; a prior patch file may have changed the workspace.
+    const flags = resolveIsolationBrokerFlags(ownedRoot);
+    deps = { ...flags, ...deps, dirtyTree: flags.dirtyTree || deps.dirtyTree === true };
+  }
   const executor = deps.executor ?? defaultToolExecutor;
   // V2 authority: the default decision path consults the PDP when a lease is
   // active (env or explicit override). Additive — no lease → legacy behavior.
@@ -1081,6 +1096,16 @@ export async function executeActionWithPolicy(
       sessionId: context.runId,
       ...(deps.lockContext ? { lockContext: deps.lockContext } : {}),
     });
+    // Policy/approval and snapshot acquisition can suspend. Recheck external
+    // changes and owner retirement before opening an effect or invoking tools.
+    if (mutationOwnership && (!mutationOwnership.matchesRoot(workspaceRoot)
+      || resolveIsolationBrokerFlags(workspaceRoot).dirtyTree)) {
+      return {
+        action, terminal: false, policyDecision: 'deny', policyBlocked: true,
+        results: [policyBlockedToolResult(action, 'deny',
+          'Workspace changed unexpectedly or task owner retired before mutation dispatch')],
+      };
+    }
     // H4: begin revision-linked effect transaction (linked to task/plan step/idempotency).
     effectTx = beginEffectTransaction({
       tool_name: action.type,
@@ -1489,6 +1514,9 @@ export async function executeActionWithPolicy(
         effectTx = commitEffectTransaction(effectTx, {
           compositeTreeHash: batchTx.postRevisionHash ?? batchTx.preRevisionHash,
         });
+      }
+      if (liveCertificationEpochs.get(context.runId) === certificationEpoch) {
+        mutationOwnership?.recordCommitted(batchTx);
       }
     } else if (effectTx) {
       const postRevision = captureWorkspaceRevisionIdentity(workspaceRoot);
