@@ -527,10 +527,11 @@ describe('command code own-CLI gateway integration', () => {
         project_root: tmp,
         session_id: transportSessionId,
         harness_adapter_id: 'command-code',
-        harness_native_session_id: 'sess_fixture_preload',
+        harness_native_session_id: 'sess_fixture_binding_primary',
       },
       64,
     );
+    assert.ok(created.result, `thread.create failed: ${JSON.stringify(created.error)}`);
     const threadId = (created.result as { thread_id: string }).thread_id;
     await rpc(port, desktopHeaders(), 'control.acquire', { thread_id: threadId, force: false }, 65);
     const denied = await rpc(

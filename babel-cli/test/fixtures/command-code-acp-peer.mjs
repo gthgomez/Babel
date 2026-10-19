@@ -60,6 +60,14 @@ async function handleSessionNew(id, params) {
 
 function handleSessionLoad(id, params) {
   const sessionId = String(params.sessionId ?? '');
+  if (process.env.BABEL_COMMAND_CODE_FIXTURE_LOAD_FAIL === '1') {
+    write({
+      jsonrpc: '2.0',
+      id,
+      error: { code: -32000, message: 'COMMAND_CODE_FIXTURE_LOAD_FAILED' },
+    });
+    return;
+  }
   const delayMs = Number(process.env.BABEL_COMMAND_CODE_FIXTURE_LOAD_DELAY_MS ?? 0);
   const finish = () => {
     if (!sessions.has(sessionId)) {
