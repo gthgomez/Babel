@@ -3,6 +3,7 @@ import { isAbsolute, resolve } from 'node:path';
 import { JsonlDecoder } from './stream.mjs';
 import {scopedApproval,scopedApprovalReply} from '../src/core.mjs';
 import {applyExecutionScopeEnvironment} from './childEnv.mjs';
+import {productionNodeCliArgv} from './cli-launch.mjs';
 
 /** The effective execution profile the Desktop launches the CLI with. */
 export const EXECUTION_PROFILE = 'safe_repo';
@@ -69,7 +70,7 @@ export class BabelChild {
       if(['run_complete','run_error','turn.completed','turn.failed','cancelled'].includes(event.type)){this.#approval=null;this.#approvalClosed=true;}
       send({kind:'event',event});
     }, report);
-    const child = spawn(this.executable, args, {
+    const child = spawn(this.executable, productionNodeCliArgv(this.entry, args.slice(1)), {
       cwd: this.launchDirectory, shell: false, windowsHide: true,
       stdio: ['pipe','pipe','pipe'], env: applyExecutionScopeEnvironment({
         ...(this.inheritEnv ? process.env : {}), ...this.env,

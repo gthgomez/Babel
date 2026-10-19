@@ -3,7 +3,9 @@
  * Emits stream-json events on the provided writer (same vocabulary as `babel run`).
  */
 
-import { createInterface } from 'node:readline';
+import { readFileSync } from 'node:fs';
+import { createInterface, type Interface } from 'node:readline';
+import { join } from 'node:path';
 
 import {
   computeDesktopControllerProof,
@@ -27,6 +29,8 @@ export interface SharedProtocolHostRunOptions {
   WebSocketImpl?: typeof WebSocket;
   signal?: AbortSignal;
   stdin?: NodeJS.ReadableStream;
+  /** Host bearer for emergency stop when the desktop lease was taken by remote priority. */
+  hostEmergencyBearerToken?: string;
 }
 
 type NdjsonWriter = (event: Record<string, unknown>) => void;
@@ -36,6 +40,20 @@ function desktopHeaders(clientId: string, proofKey: string): Record<string, stri
     [DESKTOP_CLIENT_ID_HEADER]: clientId,
     [DESKTOP_PROOF_HEADER]: computeDesktopControllerProof(proofKey, clientId),
   };
+}
+
+function loadHostEmergencyBearerToken(): string | undefined {
+  const fromEnv = process.env['BABEL_BRIDGE_HOST_EMERGENCY_TOKEN']?.trim();
+  if (fromEnv) return fromEnv;
+  const configDir = process.env['BABEL_CONFIG_DIR']?.trim();
+  if (!configDir) return undefined;
+  try {
+    const raw = readFileSync(join(configDir, 'bridge.json'), 'utf8');
+    const parsed = JSON.parse(raw) as { authToken?: string };
+    return typeof parsed.authToken === 'string' && parsed.authToken ? parsed.authToken : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function mapTurnEventToStream(
@@ -90,27 +108,70 @@ function mapTurnEventToStream(
   }
 }
 
-function mapPermissionRequest(params: Record<string, unknown>): Record<string, unknown> | null {
-  const permission = params.permission as Record<string, unknown> | undefined;
-  if (!permission) return null;
+/** Map real `permission.request` broker frames (flat params) to Desktop stream-json. */
+export function mapPermissionRequest(
+  params: Record<string, unknown>,
+  runId: string,
+): Record<string, unknown> | null {
+  const approvalId = typeof params.approval_id === 'string' ? params.approval_id : '';
+  const operationDigest =
+    typeof params.operation_digest === 'string' ? params.operation_digest : '';
+  const expiresAt = typeof params.expires_at === 'string' ? params.expires_at : '';
+  const threadId = typeof params.thread_id === 'string' ? params.thread_id : '';
+  const turnId = typeof params.turn_id === 'string' ? params.turn_id : '';
+  if (!approvalId || !operationDigest || !expiresAt || !threadId || !turnId) return null;
+  const command =
+    typeof params.command === 'string'
+      ? params.command
+      : typeof params.action_type === 'string'
+        ? params.action_type
+        : typeof params.permission === 'string'
+          ? params.permission
+          : undefined;
   return {
     type: 'approval.required',
     message: 'Babel is waiting for approval.',
     item: {
-      command: permission.action_type,
-      cwd: permission.cwd,
-      details: permission.detail,
+      command,
+      cwd: params.cwd,
+      details: params.reason,
       approval: {
         schemaVersion: 2,
-        request_id: permission.approval_id,
-        thread_id: params.thread_id,
-        turn_id: params.turn_id,
-        operation_digest: permission.operation_digest,
-        run_id: params.run_id ?? 'shared-protocol',
-        expires_at: permission.expires_at,
+        request_id: approvalId,
+        thread_id: threadId,
+        turn_id: turnId,
+        operation_digest: operationDigest,
+        run_id: runId,
+        expires_at: expiresAt,
       },
     },
   };
+}
+
+async function cancelTurnWithFencing(
+  desktopClient: HttpProtocolClient,
+  threadId: string,
+  controlEpoch: number,
+  emergencyBearer?: string,
+  fetchImpl?: typeof fetch,
+  port?: number,
+): Promise<void> {
+  try {
+    await desktopClient.call('turn.cancel', {
+      thread_id: threadId,
+      control_epoch: controlEpoch,
+    });
+    return;
+  } catch (desktopError) {
+    if (!emergencyBearer || port === undefined) throw desktopError;
+    const emergency = new HttpProtocolClient({
+      baseUrl: `http://127.0.0.1:${port}`,
+      bearerToken: emergencyBearer,
+      ...(fetchImpl ? { fetchImpl } : {}),
+    });
+    await emergency.call('control.acquire', { thread_id: threadId, force: true });
+    await emergency.call('turn.cancel', { thread_id: threadId });
+  }
 }
 
 /** Run one shared-host chat turn to completion. Returns process exit code. */
@@ -126,6 +187,8 @@ export async function executeSharedProtocolHostRun(
     ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
   });
   const headers = desktopHeaders(options.desktopClientId, options.desktopProofKey);
+  const emergencyBearer =
+    options.hostEmergencyBearerToken?.trim() || loadHostEmergencyBearerToken();
   const WebSocketCtor = options.WebSocketImpl ?? globalThis.WebSocket;
   if (!WebSocketCtor) throw new Error('WebSocket is unavailable');
 
@@ -134,10 +197,22 @@ export async function executeSharedProtocolHostRun(
   let transportClosedUnexpectedly = false;
   let ws: WebSocket | null = null;
   let cancelRequested = false;
-  let pendingApprovalId: string | null = null;
+  let pendingApproval: Record<string, unknown> | null = null;
   let activeThreadId = threadId;
+  let controlEpoch = 0;
+  let stdinInterface: Interface | null = null;
 
   const abort = () => options.signal?.aborted === true || cancelRequested;
+
+  const closeStdinInterface = () => {
+    if (!stdinInterface) return;
+    try {
+      stdinInterface.close();
+    } catch {
+      /* ignore */
+    }
+    stdinInterface = null;
+  };
 
   write({ type: 'run_start' });
   if (abort()) {
@@ -146,6 +221,15 @@ export async function executeSharedProtocolHostRun(
   }
 
   try {
+    if (
+      threadId &&
+      (options.model !== undefined || options.provider !== undefined)
+    ) {
+      throw new Error(
+        'Resumed shared threads keep their existing route; change the model in Settings only when starting a new conversation.',
+      );
+    }
+
     const transportSessionId = await client.createTransportSession(options.projectRoot);
     if (threadId) {
       await client.call('thread.resume', { thread_id: threadId, session_id: transportSessionId });
@@ -172,47 +256,96 @@ export async function executeSharedProtocolHostRun(
     }
     activeThreadId = threadId;
 
-    if (options.stdin?.readable) {
-      const rl = createInterface({ input: options.stdin });
-      rl.on('line', (line) => {
-        try {
-          const msg = JSON.parse(line) as {
-            decision?: string;
-            approval?: Record<string, unknown>;
-          };
-          if (msg.decision === 'cancel') {
-            cancelRequested = true;
-            void client.call('turn.cancel', { thread_id: activeThreadId }).catch(() => undefined);
-            return;
-          }
-          if (msg.decision && msg.approval && pendingApprovalId) {
-            void client
-              .call('approval.decide', {
-                approval_id: pendingApprovalId,
-                decision: msg.decision,
-                thread_id: activeThreadId,
-                turn_id: String(msg.approval.turn_id ?? ''),
-                ...(typeof msg.approval.operation_digest === 'string'
-                  ? { operation_digest: msg.approval.operation_digest }
-                  : {}),
-              })
-              .catch(() => undefined);
-            pendingApprovalId = null;
-          }
-        } catch {
-          /* ignore non-json stdin */
-        }
-      });
-    }
-
     const lease = await client.call<
       'control.acquire',
       { thread_id: string; force: boolean },
       { epoch: number }
     >('control.acquire', { thread_id: threadId, force: false });
+    controlEpoch = lease.epoch;
+
+    if (options.stdin?.readable) {
+      stdinInterface = createInterface({ input: options.stdin });
+      stdinInterface.on('line', (line) => {
+        void (async () => {
+          try {
+            const msg = JSON.parse(line) as {
+              decision?: string;
+              approval?: Record<string, unknown>;
+            };
+            if (msg.decision === 'cancel') {
+              cancelRequested = true;
+              try {
+                await cancelTurnWithFencing(
+                  client,
+                  activeThreadId,
+                  controlEpoch,
+                  emergencyBearer,
+                  options.fetchImpl,
+                  options.port,
+                );
+              } catch (error) {
+                write({
+                  type: 'run_error',
+                  error:
+                    error instanceof Error
+                      ? error.message
+                      : 'Cancel was rejected by the shared protocol host',
+                });
+              }
+              return;
+            }
+            if (msg.decision && msg.approval && pendingApproval) {
+              const binding = msg.approval;
+              const expected = pendingApproval;
+              const matches =
+                binding.request_id === expected.request_id &&
+                binding.thread_id === expected.thread_id &&
+                binding.turn_id === expected.turn_id &&
+                binding.operation_digest === expected.operation_digest &&
+                binding.run_id === expected.run_id;
+              if (!matches) {
+                write({
+                  type: 'run_error',
+                  error: 'Approval decision did not match the pending request',
+                });
+                return;
+              }
+              try {
+                await client.call('approval.decide', {
+                  approval_id: String(expected.request_id),
+                  decision: msg.decision,
+                  thread_id: String(expected.thread_id),
+                  turn_id: String(expected.turn_id),
+                  operation_digest: String(expected.operation_digest),
+                  control_epoch: controlEpoch,
+                });
+                pendingApproval = null;
+              } catch (error) {
+                write({
+                  type: 'run_error',
+                  error:
+                    error instanceof Error
+                      ? error.message
+                      : 'Approval decision was rejected by the shared protocol host',
+                });
+              }
+            }
+          } catch {
+            /* ignore non-json stdin */
+          }
+        })();
+      });
+    }
 
     if (abort()) {
-      await client.call('turn.cancel', { thread_id: threadId }).catch(() => undefined);
+      await cancelTurnWithFencing(
+        client,
+        threadId,
+        controlEpoch,
+        emergencyBearer,
+        options.fetchImpl,
+        options.port,
+      );
       write({ type: 'cancelled' });
       return 0;
     }
@@ -228,7 +361,7 @@ export async function executeSharedProtocolHostRun(
     }
 
     ws = new WebSocketCtor(
-      `ws://127.0.0.1:${options.port}/ws?ticket=${encodeURIComponent(ticketBody.ticket)}`,
+      `ws://127.0.0.1:${options.port}/ws?sessionId=${encodeURIComponent(transportSessionId)}&ticket=${encodeURIComponent(ticketBody.ticket)}`,
     );
     await new Promise<void>((resolve, reject) => {
       ws!.addEventListener('open', () => resolve());
@@ -252,11 +385,11 @@ export async function executeSharedProtocolHostRun(
             }
           } else if (message.method === 'permission.request') {
             const params = message.params as Record<string, unknown>;
-            const permission = params.permission as Record<string, unknown> | undefined;
-            if (permission && typeof permission.approval_id === 'string') {
-              pendingApprovalId = permission.approval_id;
+            const mapped = mapPermissionRequest(params, options.runId);
+            if (mapped?.item && typeof mapped.item === 'object') {
+              const item = mapped.item as { approval?: Record<string, unknown> };
+              if (item.approval) pendingApproval = item.approval;
             }
-            const mapped = mapPermissionRequest(params);
             if (mapped) write(mapped);
           }
         } catch {
@@ -274,7 +407,14 @@ export async function executeSharedProtocolHostRun(
     });
 
     if (abort()) {
-      await client.call('turn.cancel', { thread_id: threadId }).catch(() => undefined);
+      await cancelTurnWithFencing(
+        client,
+        threadId,
+        controlEpoch,
+        emergencyBearer,
+        options.fetchImpl,
+        options.port,
+      );
       write({ type: 'cancelled' });
       return 0;
     }
@@ -301,6 +441,7 @@ export async function executeSharedProtocolHostRun(
     }
     return 1;
   } finally {
+    closeStdinInterface();
     try {
       ws?.close();
     } catch {

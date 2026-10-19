@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import { isAbsolute } from 'node:path';
 import { JsonlDecoder } from './stream.mjs';
 import {scopedApproval,scopedApprovalReply} from '../src/core.mjs';
+import {productionNodeCliArgv} from './cli-launch.mjs';
 
 function terminateChildTree(child) {
   try { child.kill(); } catch { /* already exited */ }
@@ -60,7 +61,8 @@ export class SharedProtocolRun {
 
   start(request, onPacket) {
     if (this.busy) throw new Error('A shared protocol run is already active');
-    const args = buildHostRunArgs(this.entry, this.projectRoot, request);
+    const hostArgs = buildHostRunArgs(this.entry, this.projectRoot, request);
+    const args = productionNodeCliArgv(this.entry, hostArgs.slice(1));
     const send = packet => onPacket({runId: request.runId, ...packet});
     this.#approval = null;
     this.#runId = request.runId;
@@ -146,5 +148,10 @@ export class SharedProtocolRun {
       }
     } catch { /* fall through */ }
     if (!wrote) terminateChildTree(child);
+    else{
+      const timeout=setTimeout(()=>{if(child===this.#child)terminateChildTree(child);},8000);
+      timeout.unref?.();
+      child.once('close',()=>clearTimeout(timeout));
+    }
   }
 }

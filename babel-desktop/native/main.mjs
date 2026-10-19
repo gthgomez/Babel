@@ -82,13 +82,23 @@ let updateBusy=false;
 let connectionChangeBusy=false;
 let cliUpdate={state:'unchecked'};
 let preferencePath;
-const busy=()=>Boolean(
-  runAdmission||
-  runner?.busy||
-  (remoteBridge?.running && !remoteBridge?.sharedSession)||
-  updateBusy||
-  connectionChangeBusy,
-);
+function remoteBlocksLocalRunAdmission(){
+  return Boolean(remoteBridge?.running&&!remoteBridge?.sharedSession);
+}
+function busy(){
+  return Boolean(
+    runAdmission||
+    runner?.busy||
+    remoteBridge?.running||
+    updateBusy||
+    connectionChangeBusy,
+  );
+}
+function assertRunAdmissionIdle(){
+  if(runAdmission||runner?.busy||remoteBlocksLocalRunAdmission()||updateBusy||connectionChangeBusy){
+    throw new Error('Wait for the current Babel run to finish before starting another.');
+  }
+}
 
 protocol.registerSchemesAsPrivileged([{scheme:'babel',privileges:{standard:true,secure:true,supportFetchAPI:true}}]);
 const singleInstance=app.requestSingleInstanceLock();
@@ -524,7 +534,7 @@ async function start(){
   }));
   handle('babel:stop-remote-bridge',()=>{remoteAdmissionEpoch++;remoteBridge?.stop();remoteBridge=null;return {stopped:true};});
   handle('babel:run',async request=>{
-    assertIdle();
+    assertRunAdmissionIdle();
     runAdmission=true;
     const admissionEpoch=runAdmissionEpoch;
     try{

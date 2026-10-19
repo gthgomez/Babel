@@ -138,7 +138,7 @@ export function registerRemoteCommands(program: Command): void {
       const write = (event: Record<string, unknown>) => {
         process.stdout.write(`${JSON.stringify(event)}\n`);
       };
-      process.exitCode = await executeSharedProtocolHostRun(
+      const code = await executeSharedProtocolHostRun(
         {
           port,
           projectRoot: resolve(options.projectRoot),
@@ -147,12 +147,14 @@ export function registerRemoteCommands(program: Command): void {
           desktopClientId: clientId,
           desktopProofKey: proofKey,
           stdin: process.stdin,
+          commandId: `desktop-${options.runId}`,
           ...(options.resumeThread ? { resumeThreadId: options.resumeThread } : {}),
           ...(options.model ? { model: options.model } : {}),
           ...(options.provider ? { provider: options.provider } : {}),
         },
         write,
       );
+      process.exit(code);
     });
 
   remote

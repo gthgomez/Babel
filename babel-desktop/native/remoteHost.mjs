@@ -1,6 +1,7 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { isAbsolute, resolve } from 'node:path';
+import {productionNodeCliArgv} from './cli-launch.mjs';
 
 // The listen host is configuration-derived (`BABEL_BRIDGE_HOST` may be
 // `localhost`, `LocalHost` or `::1`) while the socket itself always binds
@@ -167,9 +168,13 @@ export class RemoteBridgeChild {
     this.#sharedSession = useSharedSession;
     this.#desktopClientId = controllerId;
     this.#desktopProofKey = proofKey;
+    const serveCliArgs = buildRemoteServeArgs(this.entry, this.projectRoot, {
+      port,
+      sharedSession: useSharedSession,
+    });
     const child = this.spawnChild(
       this.executable,
-      buildRemoteServeArgs(this.entry, this.projectRoot, {port, sharedSession: useSharedSession}),
+      productionNodeCliArgv(this.entry, serveCliArgs.slice(1)),
       {
       cwd: this.projectRoot,
       shell: false,
