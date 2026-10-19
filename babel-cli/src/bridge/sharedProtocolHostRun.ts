@@ -434,6 +434,10 @@ export async function executeSharedProtocolHostRun(
   let controlEpoch = 0;
   let submittedTurnId: number | undefined;
   let stdinInterface: Interface | null = null;
+  /** Resolves the active turn observer promise (transport loss or external settlement). */
+  let wakeTurnObserver: (() => void) | null = null;
+  /** Successful bearer emergency cancel RPC (distinct from stream terminal observation). */
+  let emergencyAdministrativeStopSucceeded = false;
 
   const abort = () => options.signal?.aborted === true || cancelRequested;
 
@@ -495,16 +499,147 @@ export async function executeSharedProtocolHostRun(
     >('control.acquire', { thread_id: threadId, force: false });
     controlEpoch = lease.epoch;
 
+    if (abort()) {
+      try {
+        await cancelTurnDesktop(client, threadId, controlEpoch);
+        write({ type: 'cancelled' });
+        return 0;
+      } catch (error) {
+        writeControlRejected(
+          write,
+          'cancel',
+          error instanceof Error ? error.message : 'Cancel was rejected',
+        );
+        return 0;
+      }
+    }
+
+    const openTurnSocket = async (): Promise<WebSocket> => {
+      const ticket = await (options.fetchImpl ?? fetch)(`${baseUrl}/ws/ticket`, {
+        method: 'POST',
+        headers: { ...headers, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: transportSessionId, thread_id: threadId }),
+      });
+      const ticketBody = (await ticket.json()) as { ticket?: string };
+      if (!ticket.ok || !ticketBody.ticket) {
+        throw new Error('Failed to mint WebSocket ticket');
+      }
+      const socket = new WebSocketCtor(
+        `ws://127.0.0.1:${options.port}/ws?sessionId=${encodeURIComponent(transportSessionId)}&ticket=${encodeURIComponent(ticketBody.ticket)}`,
+      );
+      await new Promise<void>((resolve, reject) => {
+        socket.addEventListener('open', () => resolve());
+        socket.addEventListener('error', () => reject(new Error('WebSocket connection failed')));
+      });
+      return socket;
+    };
+
+    const exitCodeForTerminalEvent = (mapped: Record<string, unknown>): number => {
+      const type = String(mapped.type);
+      if (type === 'run_error') return 1;
+      if (type === 'cancelled') return 0;
+      if (type === 'run_complete') return 0;
+      return 1;
+    };
+
+    const writeStreamEvent = (mapped: Record<string, unknown> | null): boolean => {
+      if (!mapped) return false;
+      const isTerminal = ['run_complete', 'run_error', 'cancelled'].includes(String(mapped.type));
+      if (isTerminal) {
+        if (turnSettled) return true;
+        write(mapped);
+        turnSettled = true;
+        terminalExitCode = exitCodeForTerminalEvent(mapped);
+        return true;
+      }
+      write(mapped);
+      return false;
+    };
+
+    const finalizeHostRunExitCode = (): number => {
+      if (terminalExitCode !== null) return terminalExitCode;
+      return turnSettled ? 0 : 1;
+    };
+
+    const attachTurnObserver = (socket: WebSocket): Promise<void> =>
+      new Promise<void>((resolve) => {
+        const finishObservation = () => {
+          wakeTurnObserver = null;
+          resolve();
+        };
+        wakeTurnObserver = () => {
+          transportClosedUnexpectedly = true;
+          finishObservation();
+        };
+        const onMessage = (event: MessageEvent) => {
+          try {
+            const message = JSON.parse(String(event.data)) as Record<string, unknown>;
+            if (message.method === 'turn.event') {
+              const params = message.params as Record<string, unknown> | undefined;
+              const eventThreadId = params?.thread_id;
+              const eventTurnId = params?.turn_id;
+              if (eventThreadId !== undefined && String(eventThreadId) !== threadId) return;
+              if (
+                submittedTurnId !== undefined &&
+                eventTurnId !== undefined &&
+                Number(eventTurnId) !== submittedTurnId
+              ) {
+                return;
+              }
+              let ev = params?.event as Record<string, unknown> | undefined;
+              if (ev) {
+                if (
+                  emergencyAdministrativeStopSucceeded &&
+                  !turnSettled &&
+                  ev.type === 'failed'
+                ) {
+                  ev = { type: 'cancelled' };
+                }
+                const settled = writeStreamEvent(mapTurnEventToStream(ev, threadId));
+                if (settled) finishObservation();
+              }
+            } else if (message.method === 'permission.request') {
+              const params = message.params as Record<string, unknown>;
+              const mapped = mapPermissionRequest(params, options.runId);
+              if (mapped?.item && typeof mapped.item === 'object') {
+                const item = mapped.item as { approval?: Record<string, unknown> };
+                if (item.approval) pendingApproval = item.approval;
+              }
+              if (mapped) write(mapped);
+            }
+          } catch {
+            /* ignore malformed frames */
+          }
+        };
+        const onClose = () => {
+          if (!turnSettled) {
+            transportClosedUnexpectedly = true;
+            finishObservation();
+          }
+        };
+        socket.addEventListener('message', onMessage as EventListener);
+        socket.addEventListener('close', onClose as EventListener);
+      });
+
     if (options.stdin?.readable) {
       stdinInterface = createInterface({ input: options.stdin });
       stdinInterface.on('line', (line) => {
         void (async () => {
+          let msg: {
+            decision?: string;
+            approval?: Record<string, unknown>;
+            host_emergency_token?: string;
+          };
           try {
-            const msg = JSON.parse(line) as {
+            msg = JSON.parse(line) as {
               decision?: string;
               approval?: Record<string, unknown>;
               host_emergency_token?: string;
             };
+          } catch {
+            return;
+          }
+          try {
             if (msg.decision === 'emergency_admin_stop') {
               const token =
                 typeof msg.host_emergency_token === 'string'
@@ -526,9 +661,26 @@ export async function executeSharedProtocolHostRun(
                   token,
                   options.fetchImpl,
                 );
+                emergencyAdministrativeStopSucceeded = true;
                 write({ type: 'emergency_stop' });
-                turnSettled = true;
-                terminalExitCode = 0;
+                if (!turnSettled && submittedTurnId !== undefined) {
+                  for (let attempt = 0; attempt < 12 && !turnSettled; attempt++) {
+                    const terminal = await reconcileTerminalTurnFromHost(
+                      client,
+                      activeThreadId,
+                      submittedTurnId,
+                    );
+                    if (terminal) {
+                      writeStreamEvent(terminal);
+                      break;
+                    }
+                    await new Promise((resolve) => setTimeout(resolve, 25));
+                  }
+                }
+                if (!turnSettled) {
+                  writeStreamEvent({ type: 'cancelled' });
+                }
+                wakeTurnObserver?.();
               } catch (error) {
                 write({
                   type: 'run_error',
@@ -632,119 +784,16 @@ export async function executeSharedProtocolHostRun(
                 );
               }
             }
-          } catch {
-            /* ignore non-json stdin */
+          } catch (error) {
+            write({
+              type: 'run_error',
+              error:
+                error instanceof Error ? error.message : 'Host control stdin handling failed',
+            });
           }
         })();
       });
     }
-
-    if (abort()) {
-      try {
-        await cancelTurnDesktop(client, threadId, controlEpoch);
-        write({ type: 'cancelled' });
-        return 0;
-      } catch (error) {
-        writeControlRejected(
-          write,
-          'cancel',
-          error instanceof Error ? error.message : 'Cancel was rejected',
-        );
-        return 0;
-      }
-    }
-
-    const openTurnSocket = async (): Promise<WebSocket> => {
-      const ticket = await (options.fetchImpl ?? fetch)(`${baseUrl}/ws/ticket`, {
-        method: 'POST',
-        headers: { ...headers, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ session_id: transportSessionId, thread_id: threadId }),
-      });
-      const ticketBody = (await ticket.json()) as { ticket?: string };
-      if (!ticket.ok || !ticketBody.ticket) {
-        throw new Error('Failed to mint WebSocket ticket');
-      }
-      const socket = new WebSocketCtor(
-        `ws://127.0.0.1:${options.port}/ws?sessionId=${encodeURIComponent(transportSessionId)}&ticket=${encodeURIComponent(ticketBody.ticket)}`,
-      );
-      await new Promise<void>((resolve, reject) => {
-        socket.addEventListener('open', () => resolve());
-        socket.addEventListener('error', () => reject(new Error('WebSocket connection failed')));
-      });
-      return socket;
-    };
-
-    const exitCodeForTerminalEvent = (mapped: Record<string, unknown>): number => {
-      const type = String(mapped.type);
-      if (type === 'run_error') return 1;
-      if (type === 'cancelled') return 0;
-      if (type === 'run_complete') return 0;
-      return 1;
-    };
-
-    const writeStreamEvent = (mapped: Record<string, unknown> | null): boolean => {
-      if (!mapped) return false;
-      const isTerminal = ['run_complete', 'run_error', 'cancelled'].includes(String(mapped.type));
-      if (isTerminal) {
-        if (turnSettled) return true;
-        write(mapped);
-        turnSettled = true;
-        terminalExitCode = exitCodeForTerminalEvent(mapped);
-        return true;
-      }
-      write(mapped);
-      return false;
-    };
-
-    const finalizeHostRunExitCode = (): number => {
-      if (terminalExitCode !== null) return terminalExitCode;
-      return turnSettled ? 0 : 1;
-    };
-
-    const attachTurnObserver = (socket: WebSocket): Promise<void> =>
-      new Promise<void>((resolve) => {
-        const onMessage = (event: MessageEvent) => {
-          try {
-            const message = JSON.parse(String(event.data)) as Record<string, unknown>;
-            if (message.method === 'turn.event') {
-              const params = message.params as Record<string, unknown> | undefined;
-              const eventThreadId = params?.thread_id;
-              const eventTurnId = params?.turn_id;
-              if (eventThreadId !== undefined && String(eventThreadId) !== threadId) return;
-              if (
-                submittedTurnId !== undefined &&
-                eventTurnId !== undefined &&
-                Number(eventTurnId) !== submittedTurnId
-              ) {
-                return;
-              }
-              const ev = params?.event as Record<string, unknown> | undefined;
-              if (ev) {
-                const settled = writeStreamEvent(mapTurnEventToStream(ev, threadId));
-                if (settled) resolve();
-              }
-            } else if (message.method === 'permission.request') {
-              const params = message.params as Record<string, unknown>;
-              const mapped = mapPermissionRequest(params, options.runId);
-              if (mapped?.item && typeof mapped.item === 'object') {
-                const item = mapped.item as { approval?: Record<string, unknown> };
-                if (item.approval) pendingApproval = item.approval;
-              }
-              if (mapped) write(mapped);
-            }
-          } catch {
-            /* ignore malformed frames */
-          }
-        };
-        const onClose = () => {
-          if (!turnSettled) {
-            transportClosedUnexpectedly = true;
-            resolve();
-          }
-        };
-        socket.addEventListener('message', onMessage as EventListener);
-        socket.addEventListener('close', onClose as EventListener);
-      });
 
     ws = await openTurnSocket();
 
