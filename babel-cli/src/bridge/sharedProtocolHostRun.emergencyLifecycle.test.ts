@@ -78,6 +78,29 @@ function createRpcOpCounters(): RpcOpCounters {
   return { reached: 0, aborted: 0, completed: 0 };
 }
 
+type PrimarySocketHolder = { socket: WebSocket | null };
+
+function createPrimarySocketHolder(): PrimarySocketHolder {
+  return { socket: null };
+}
+
+function closePrimarySocket(holder: PrimarySocketHolder): void {
+  try {
+    holder.socket?.close();
+  } catch {
+    /* ignore */
+  }
+}
+
+function makeTrackingWebSocket(holder: PrimarySocketHolder): typeof WebSocket {
+  return class extends WebSocket {
+    constructor(url: string | URL, protocols?: string | string[]) {
+      super(url, protocols);
+      holder.socket = this;
+    }
+  } as typeof WebSocket;
+}
+
 function createAbortAwareRpcHang(
   rpcMethod: string,
   whenHang: () => boolean,
@@ -837,7 +860,7 @@ describe('shared host-run emergency observation errors (mocked authoritative bac
     const port = server.port;
 
     let emergencyAcked = false;
-    let primarySocket: WebSocket | null = null;
+    const primarySocketHolder = createPrimarySocketHolder();
     const approvalCounters = createRpcOpCounters();
     const baseFetch = globalThis.fetch.bind(globalThis);
     const fetchImpl = hangRpcWhenEmergency(
@@ -863,7 +886,7 @@ describe('shared host-run emergency observation errors (mocked authoritative bac
           WebSocketImpl: class extends WebSocket {
             constructor(url: string | URL, protocols?: string | string[]) {
               super(url, protocols);
-              primarySocket = this;
+              primarySocketHolder.socket = this;
             }
           } as typeof WebSocket,
           observationRpcTimeoutMs: 25,
@@ -876,7 +899,7 @@ describe('shared host-run emergency observation errors (mocked authoritative bac
             emergencyAcked = true;
             setTimeout(() => {
               try {
-                primarySocket?.close();
+                closePrimarySocket(primarySocketHolder);
               } catch {
                 /* ignore */
               }
@@ -968,7 +991,7 @@ describe('shared host-run emergency observation errors (mocked authoritative bac
       baseFetch,
     );
 
-    let primarySocket: { close: () => void } | null = null;
+    const primarySocketHolder = createPrimarySocketHolder();
     const gate = createHostRunEventGate();
     const stdin = new PassThrough();
     try {
@@ -985,7 +1008,7 @@ describe('shared host-run emergency observation errors (mocked authoritative bac
           WebSocketImpl: class extends WebSocket {
             constructor(url: string | URL, protocols?: string | string[]) {
               super(url, protocols);
-              primarySocket = this;
+              primarySocketHolder.socket = this;
             }
           } as typeof WebSocket,
           observationRpcTimeoutMs: 25,
@@ -1001,7 +1024,7 @@ describe('shared host-run emergency observation errors (mocked authoritative bac
       await gate.waitFor((event) => event.type === 'run_start', 'run_start');
       await gate.waitFor((event) => event.type === 'thought', 'turn_stream_active');
       try {
-        primarySocket?.close();
+        closePrimarySocket(primarySocketHolder);
       } catch {
         /* ignore */
       }
@@ -1106,7 +1129,7 @@ describe('shared host-run emergency observation errors (mocked authoritative bac
     };
     const gate = createHostRunEventGate();
     const stdin = new PassThrough();
-    let primarySocket: WebSocket | null = null;
+    const primarySocketHolder = createPrimarySocketHolder();
     try {
       const runPromise = executeSharedProtocolHostRun(
         {
@@ -1121,7 +1144,7 @@ describe('shared host-run emergency observation errors (mocked authoritative bac
           WebSocketImpl: class extends WebSocket {
             constructor(url: string | URL, protocols?: string | string[]) {
               super(url, protocols);
-              primarySocket = this;
+              primarySocketHolder.socket = this;
             }
           } as typeof WebSocket,
           observationRpcTimeoutMs: 25,
@@ -1133,7 +1156,7 @@ describe('shared host-run emergency observation errors (mocked authoritative bac
             emergencyAcked = true;
             setTimeout(() => {
               try {
-                primarySocket?.close();
+                closePrimarySocket(primarySocketHolder);
               } catch {
                 /* ignore */
               }
@@ -1266,7 +1289,7 @@ describe('shared host-run emergency observation errors (mocked authoritative bac
     const port = server.port;
 
     let emergencyAcked = false;
-    let primarySocket: WebSocket | null = null;
+    const primarySocketHolder = createPrimarySocketHolder();
     const historyCounters = createRpcOpCounters();
     const baseFetch = globalThis.fetch.bind(globalThis);
     const fetchImpl = hangRpcWhenEmergency(
@@ -1291,7 +1314,7 @@ describe('shared host-run emergency observation errors (mocked authoritative bac
           WebSocketImpl: class extends WebSocket {
             constructor(url: string | URL, protocols?: string | string[]) {
               super(url, protocols);
-              primarySocket = this;
+              primarySocketHolder.socket = this;
             }
           } as typeof WebSocket,
           observationRpcTimeoutMs: 25,
@@ -1303,7 +1326,7 @@ describe('shared host-run emergency observation errors (mocked authoritative bac
             emergencyAcked = true;
             setTimeout(() => {
               try {
-                primarySocket?.close();
+                closePrimarySocket(primarySocketHolder);
               } catch {
                 /* ignore */
               }
@@ -1378,7 +1401,7 @@ describe('shared host-run emergency observation errors (mocked authoritative bac
     const port = server.port;
 
     let emergencyAcked = false;
-    let primarySocket: WebSocket | null = null;
+    const primarySocketHolder = createPrimarySocketHolder();
     const verificationCounters = createRpcOpCounters();
     const baseFetch = globalThis.fetch.bind(globalThis);
     const fetchImpl: typeof fetch = async (input, init) => {
@@ -1437,7 +1460,7 @@ describe('shared host-run emergency observation errors (mocked authoritative bac
           WebSocketImpl: class extends WebSocket {
             constructor(url: string | URL, protocols?: string | string[]) {
               super(url, protocols);
-              primarySocket = this;
+              primarySocketHolder.socket = this;
             }
           } as typeof WebSocket,
           observationRpcTimeoutMs: 25,
@@ -1449,7 +1472,7 @@ describe('shared host-run emergency observation errors (mocked authoritative bac
             emergencyAcked = true;
             setTimeout(() => {
               try {
-                primarySocket?.close();
+                closePrimarySocket(primarySocketHolder);
               } catch {
                 /* ignore */
               }
@@ -1526,7 +1549,7 @@ describe('shared host-run emergency observation errors (mocked authoritative bac
     const port = server.port;
 
     let emergencyAcked = false;
-    let primarySocket: WebSocket | null = null;
+    const primarySocketHolder = createPrimarySocketHolder();
     const gate = createHostRunEventGate();
     const stdin = new PassThrough();
     try {
@@ -1543,7 +1566,7 @@ describe('shared host-run emergency observation errors (mocked authoritative bac
             const RecoveryStall = makeRecoveryStallWebSocket(() => emergencyAcked);
             return function (url: string | URL, protocols?: string | string[]) {
               const socket = new RecoveryStall(url, protocols);
-              primarySocket = socket;
+              primarySocketHolder.socket = socket;
               return socket;
             } as unknown as typeof WebSocket;
           })(),
@@ -1556,7 +1579,7 @@ describe('shared host-run emergency observation errors (mocked authoritative bac
             emergencyAcked = true;
             setTimeout(() => {
               try {
-                primarySocket?.close();
+                closePrimarySocket(primarySocketHolder);
               } catch {
                 /* ignore */
               }
@@ -1626,7 +1649,7 @@ describe('shared host-run emergency observation errors (mocked authoritative bac
     const port = server.port;
 
     let emergencyAcked = false;
-    let primarySocket: WebSocket | null = null;
+    const primarySocketHolder = createPrimarySocketHolder();
     const baseFetch = globalThis.fetch.bind(globalThis);
     const fetchImpl = hangRpcWhenEmergency(
       () => emergencyAcked,
@@ -1649,7 +1672,7 @@ describe('shared host-run emergency observation errors (mocked authoritative bac
           WebSocketImpl: class extends WebSocket {
             constructor(url: string | URL, protocols?: string | string[]) {
               super(url, protocols);
-              primarySocket = this;
+              primarySocketHolder.socket = this;
             }
           } as typeof WebSocket,
           observationRpcTimeoutMs: 25,
@@ -1661,7 +1684,7 @@ describe('shared host-run emergency observation errors (mocked authoritative bac
             emergencyAcked = true;
             setTimeout(() => {
               try {
-                primarySocket?.close();
+                closePrimarySocket(primarySocketHolder);
               } catch {
                 /* ignore */
               }
@@ -1708,4 +1731,148 @@ describe('shared host-run emergency observation errors (mocked authoritative bac
       delete process.env['BABEL_RUNS_DIR'];
     }
   });
+
+  for (const scenario of [
+    {
+      name: 'failed',
+      streamType: 'run_error',
+      exitCode: 1,
+      terminalYield: { type: 'failed' as const, error: 'live failed during pre-ack approval' },
+    },
+    {
+      name: 'cancelled',
+      streamType: 'cancelled',
+      exitCode: 0,
+      terminalYield: { type: 'cancelled' as const },
+    },
+    {
+      name: 'done',
+      streamType: 'run_complete',
+      exitCode: 0,
+      terminalYield: { type: 'done' as const, answer: 'live done during pre-ack approval' },
+    },
+  ]) {
+    it(`aborts pending pre-ACK approval when live ${scenario.name} terminal arrives on socket`, async () => {
+      const tmp = mkdtempSync(join(tmpdir(), `babel-emergency-live-${scenario.name}-`));
+      const configDir = join(tmp, 'config');
+      mkdirSync(configDir, { recursive: true });
+      writeFileSync(join(configDir, 'bridge.json'), JSON.stringify({ authToken: TOKEN }), 'utf8');
+      process.env['BABEL_CONFIG_DIR'] = configDir;
+      process.env['BABEL_RUNS_DIR'] = tmp;
+
+      const terminalGate: { release: (() => void) | null } = { release: null };
+      const server = new BridgeServer({
+        authToken: TOKEN,
+        allowedWorkspaceRoot: tmp,
+        allowedOrigins: ['http://127.0.0.1:*', 'http://localhost:*'],
+        enforceControlLease: true,
+        desktopControllerClientId: desktopId,
+        desktopControllerProofKey: desktopProofKey,
+        engineFactory: (descriptor) => {
+          const engine = new ChatEngine({
+            task: `live-${scenario.name}-during-pre-ack`,
+            projectRoot: descriptor.projectRoot,
+            executionProfile: 'chat',
+          });
+          engine.submitMessageStream = async function* () {
+            yield { type: 'thinking' };
+            await new Promise<void>((resolve) => {
+              terminalGate.release = resolve;
+            });
+            yield scenario.terminalYield;
+          } as ChatEngine['submitMessageStream'];
+          return engine;
+        },
+      });
+      await server.start(0);
+      const port = server.port;
+
+      const approvalCounters = createRpcOpCounters();
+      const baseFetch = globalThis.fetch.bind(globalThis);
+      const fetchImpl = createAbortAwareRpcHang(
+        'approval.lookup',
+        () => true,
+        approvalCounters,
+        baseFetch,
+      );
+
+      const primarySocketHolder = createPrimarySocketHolder();
+      const gate = createHostRunEventGate();
+      const stdin = new PassThrough();
+      try {
+        const runPromise = executeSharedProtocolHostRun(
+          {
+            port,
+            projectRoot: tmp,
+            task: `live ${scenario.name} pre-ack`,
+            runId: `emergency-live-${scenario.name}-pre-ack`,
+            desktopClientId: desktopId,
+            desktopProofKey,
+            stdin,
+            fetchImpl,
+            WebSocketImpl: class extends WebSocket {
+              constructor(url: string | URL, protocols?: string | string[]) {
+                super(url, protocols);
+                primarySocketHolder.socket = this;
+              }
+            } as typeof WebSocket,
+            observationRpcTimeoutMs: 25,
+            emergencyObservationDeadlineMs: 75,
+            emergencyObservationPassLimit: 4,
+          },
+          gate.write,
+        );
+
+        await gate.waitFor((event) => event.type === 'run_start', 'run_start');
+        await gate.waitFor((event) => event.type === 'thought', 'turn_stream_active');
+        try {
+          closePrimarySocket(primarySocketHolder);
+        } catch {
+          /* ignore */
+        }
+        const approvalDeadline = Date.now() + 3_000;
+        while (Date.now() < approvalDeadline && approvalCounters.reached < 1) {
+          await new Promise((resolve) => setTimeout(resolve, 10));
+        }
+        assert.ok(approvalCounters.reached >= 1);
+
+        stdin.write(
+          `${JSON.stringify({ decision: 'emergency_admin_stop', host_emergency_token: TOKEN })}\n`,
+        );
+        await gate.waitFor((event) => event.type === 'emergency_stop', 'emergency_stop');
+        terminalGate.release?.();
+
+        const code = await Promise.race([
+          runPromise,
+          new Promise<number>((_, reject) =>
+            setTimeout(
+              () => reject(new Error(`host-run hung after live ${scenario.name} terminal`)),
+              2_000,
+            ),
+          ),
+        ]);
+
+        assert.equal(code, scenario.exitCode);
+        assert.ok(approvalCounters.aborted >= 1);
+        assert.equal(approvalCounters.completed, 0);
+        assert.equal(
+          gate.events.filter((e) => e.type === scenario.streamType).length,
+          1,
+          `expected one ${scenario.streamType}`,
+        );
+        assert.equal(
+          gate.events.filter((e) =>
+            ['run_complete', 'run_error', 'cancelled'].includes(String(e.type)),
+          ).length,
+          1,
+          'exactly one terminal stream event',
+        );
+      } finally {
+        await server.stop();
+        rmSync(tmp, { recursive: true, force: true });
+        delete process.env['BABEL_CONFIG_DIR'];
+        delete process.env['BABEL_RUNS_DIR'];
+      }
+    });
+  }
 });

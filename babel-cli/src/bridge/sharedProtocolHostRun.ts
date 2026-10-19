@@ -479,6 +479,8 @@ export async function executeSharedProtocolHostRun(
   let stdinInterface: Interface | null = null;
   /** Resolves the active turn observer promise (transport loss or external settlement). */
   let wakeTurnObserver: (() => void) | null = null;
+  /** Resolves turnDone without marking transport loss (live terminal settlement). */
+  let releaseTurnObserverAwait: (() => void) | null = null;
   /** Bearer emergency cancel RPC succeeded; terminal outcome still requires authoritative evidence. */
   let emergencyStopAcknowledged = false;
   let emergencyObservationPasses = 0;
@@ -664,7 +666,10 @@ export async function executeSharedProtocolHostRun(
       if (settled) {
         clearEmergencyObservationTimers();
         abortRunObservation(new Error('observation_terminal_settled'));
-        wakeTurnObserver?.();
+        const release = releaseTurnObserverAwait;
+        releaseTurnObserverAwait = null;
+        wakeTurnObserver = null;
+        release?.();
       }
     };
 
@@ -812,9 +817,11 @@ export async function executeSharedProtocolHostRun(
     const attachTurnObserver = (socket: WebSocket): Promise<void> =>
       new Promise<void>((resolve) => {
         const finishObservation = () => {
+          releaseTurnObserverAwait = null;
           wakeTurnObserver = null;
           resolve();
         };
+        releaseTurnObserverAwait = finishObservation;
         wakeTurnObserver = () => {
           transportClosedUnexpectedly = true;
           finishObservation();
@@ -838,8 +845,14 @@ export async function executeSharedProtocolHostRun(
               if (ev) {
                 const mapped = mapTurnEventToStream(ev, threadId);
                 if (mapped) {
-                  const settled = writeStreamEvent(mapped);
-                  if (settled) finishObservation();
+                  const isTerminal = ['run_complete', 'run_error', 'cancelled'].includes(
+                    String(mapped.type),
+                  );
+                  if (isTerminal) {
+                    finalizeTerminalObservation(mapped);
+                  } else {
+                    writeStreamEvent(mapped);
+                  }
                 }
               }
             } else if (message.method === 'permission.request') {
