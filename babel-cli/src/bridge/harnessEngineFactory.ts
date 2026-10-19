@@ -3,6 +3,7 @@ import type { SessionDescriptor } from '../executor/contracts.js';
 import type { ProtocolHostState } from '../protocol/client/host.js';
 import { buildPreparedTurn } from '../executor/modeAdapters.js';
 import { createCommandCodeHarnessEngine } from './commandCodeHarnessEngine.js';
+import type { CommandCodeAcpRuntimeRegistry } from './commandCodeAcpRuntime.js';
 import { probeCommandCodeInstallation } from './commandCodeCliDiscovery.js';
 
 function defaultNativeEngine(descriptor: SessionDescriptor): ChatEngine {
@@ -23,10 +24,12 @@ function defaultNativeEngine(descriptor: SessionDescriptor): ChatEngine {
 /**
  * Protocol-host engine router: native ChatEngine vs Command Code own-CLI ACP adapter.
  */
-export function createHarnessAwareEngineFactory(): ProtocolHostState['engineFactory'] {
+export function createHarnessAwareEngineFactory(
+  commandCodeRegistry: CommandCodeAcpRuntimeRegistry,
+): ProtocolHostState['engineFactory'] {
   return (descriptor: SessionDescriptor) => {
     if (descriptor.harness_adapter_id === 'command-code') {
-      return createCommandCodeHarnessEngine({ descriptor });
+      return createCommandCodeHarnessEngine({ descriptor, registry: commandCodeRegistry });
     }
     return defaultNativeEngine(descriptor);
   };

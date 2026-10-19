@@ -4,6 +4,7 @@
 
 import type { ProtocolHostState } from '../protocol/client/host.js';
 import { listThreads } from '../services/threadStore/index.js';
+import type { CommandCodeAcpRuntimeRegistry } from './commandCodeAcpRuntime.js';
 import { isPathInsideRoot } from './workspaceBound.js';
 
 function workspaceRootMatches(projectRoot: string, registeredRoot: string): boolean {
@@ -34,6 +35,14 @@ export interface RemoteSessionEntry {
   /** Set when `active_turn` is true for the in-flight launch generation. */
   active_turn_id?: number;
   owned_by_bridge_session?: string;
+  harness_adapter_id?: string;
+  harness_native_session_id?: string;
+}
+
+export interface RemoteVendorSessionEntry {
+  session_id: string;
+  title?: string;
+  harness_adapter_id: 'command-code';
 }
 
 export interface RemoteCatalogResult {
@@ -43,6 +52,7 @@ export interface RemoteCatalogResult {
   };
   workspaces: RemoteWorkspaceEntry[];
   sessions: RemoteSessionEntry[];
+  vendor_sessions?: RemoteVendorSessionEntry[];
 }
 
 function workspaceLabel(projectRoot: string): string {
@@ -75,6 +85,7 @@ export async function buildRemoteCatalog(input: {
   state: ProtocolHostState;
   registeredWorkspaceRoot: string;
   threadOwner?: (threadId: string) => string | undefined;
+  commandCodeRegistry?: CommandCodeAcpRuntimeRegistry;
 }): Promise<RemoteCatalogResult> {
   const root = input.registeredWorkspaceRoot;
   const workspaces: RemoteWorkspaceEntry[] = [
@@ -97,6 +108,12 @@ export async function buildRemoteCatalog(input: {
       active_turn: Boolean(launch && !launch.settled),
       ...(launch && !launch.settled ? { active_turn_id: launch.turnId } : {}),
       ...(owner ? { owned_by_bridge_session: owner } : {}),
+      ...(descriptor.harness_adapter_id
+        ? { harness_adapter_id: descriptor.harness_adapter_id }
+        : {}),
+      ...(descriptor.harness_native_session_id
+        ? { harness_native_session_id: descriptor.harness_native_session_id }
+        : {}),
     });
   }
 
@@ -128,6 +145,19 @@ export async function buildRemoteCatalog(input: {
   }
 
   const sessions = [...byId.values()].sort((a, b) => b.updated_at - a.updated_at);
+  let vendor_sessions: RemoteVendorSessionEntry[] | undefined;
+  if (input.commandCodeRegistry) {
+    try {
+      const listed = await input.commandCodeRegistry.listSessions(root);
+      vendor_sessions = listed.map((row) => ({
+        session_id: row.sessionId,
+        harness_adapter_id: 'command-code',
+        ...(row.title ? { title: row.title } : {}),
+      }));
+    } catch {
+      vendor_sessions = [];
+    }
+  }
   return {
     host: {
       execution_owner: 'protocol_host',
@@ -135,5 +165,6 @@ export async function buildRemoteCatalog(input: {
     },
     workspaces,
     sessions,
+    ...(vendor_sessions !== undefined ? { vendor_sessions } : {}),
   };
 }

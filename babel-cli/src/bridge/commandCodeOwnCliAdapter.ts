@@ -64,13 +64,13 @@ export function buildCommandCodeAdapterDescriptor(
       ...COMMAND_CODE_BASE_CAPABILITIES,
       catalog: enabled,
       start: enabled,
-      readHistory: enabled,
+      readHistory: false,
       resumeStopped: enabled,
       stream: enabled,
-      steer: enabled,
+      steer: false,
       cancel: enabled,
       approve: enabled,
-      usage: enabled,
+      usage: false,
     },
     unsupportedReason: enabled ? COMMAND_CODE_ATTACH_LIVE_UNSUPPORTED_REASON : (
       probe.state === 'missing'

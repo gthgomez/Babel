@@ -68,13 +68,24 @@ export function resolveCommandCodeExecutable(pathEnv: string | undefined = proce
   return undefined;
 }
 
+function versionProbeLaunch(
+  executable: string,
+  args: readonly string[],
+): { command: string; args: string[] } {
+  if (executable.endsWith('.mjs') || executable.endsWith('.js')) {
+    return { command: process.execPath, args: [executable, ...args] };
+  }
+  return { command: executable, args: [...args] };
+}
+
 function defaultVersionSpawn(
   executable: string,
   args: readonly string[],
   pathEnv: string | undefined,
 ): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+  const launch = versionProbeLaunch(executable, args);
   return new Promise((resolvePromise, reject) => {
-    const child = spawn(executable, [...args], {
+    const child = spawn(launch.command, launch.args, {
       env: reviewerEnvironment(pathEnv),
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,
@@ -110,23 +121,16 @@ function parseVersion(stdout: string, stderr: string): string | undefined {
 
 /**
  * Probe local Command Code CLI installation. Never performs paid/provider calls.
- * When `BABEL_COMMAND_CODE_ACP_COMMAND` is set (tests), treat as verified if executable exists.
+ * Tests may set `BABEL_COMMAND_CODE_PROBE_EXECUTABLE` to a fixture script (see gateway tests).
  */
 export async function probeCommandCodeInstallation(options?: {
   pathEnv?: string;
   spawnFn?: CommandCodeVersionSpawnFn;
 }): Promise<CommandCodeInstallProbe> {
   const pathEnv = options?.pathEnv;
-  const testAcpCommand = process.env['BABEL_COMMAND_CODE_ACP_COMMAND']?.trim();
-  if (testAcpCommand) {
-    return {
-      state: 'verified',
-      executable: testAcpCommand,
-      version: 'fixture-acp-peer',
-    };
-  }
 
-  const executable = resolveCommandCodeExecutable(pathEnv);
+  const probeOverride = process.env['BABEL_COMMAND_CODE_PROBE_EXECUTABLE']?.trim();
+  const executable = probeOverride || resolveCommandCodeExecutable(pathEnv);
   if (!executable) return { state: 'missing' };
 
   const spawnFn =

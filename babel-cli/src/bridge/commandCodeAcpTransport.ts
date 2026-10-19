@@ -2,7 +2,11 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { createInterface, type Interface } from 'node:readline';
 
 import {
-  COMMAND_CODE_ACP_PROTOCOL_VERSION,
+  buildInitializeParams,
+  parseInitializeResult,
+  type AcpNegotiatedCodec,
+} from './commandCodeAcpNegotiation.js';
+import {
   isCommandCodeNotification,
   isCommandCodeRequest,
   parseCommandCodeLine,
@@ -30,6 +34,8 @@ export type CommandCodeSessionUpdateHandler = (update: {
   update: Record<string, unknown>;
 }) => void;
 
+export type CommandCodeProcessExitHandler = (detail: { code: number | null; signal: NodeJS.Signals | null }) => void;
+
 export class CommandCodeAcpTransport {
   private child: ChildProcessWithoutNullStreams | null = null;
   private reader: Interface | null = null;
@@ -38,24 +44,36 @@ export class CommandCodeAcpTransport {
     string | number,
     { resolve: (msg: CommandCodeWireMessage) => void; reject: (err: Error) => void; timer: NodeJS.Timeout }
   >();
-  private generation = 0;
+  private readonly runtimeInstanceId: number;
   private closed = false;
   private initialized = false;
-  private negotiatedProtocolVersion: number | null = null;
+  private codec: AcpNegotiatedCodec | null = null;
+  private stdoutRemainder = '';
+  private onProcessExit: CommandCodeProcessExitHandler | null = null;
 
   constructor(
     private readonly options: CommandCodeAcpSpawnOptions,
+    runtimeInstanceId: number,
     private readonly onSessionUpdate?: CommandCodeSessionUpdateHandler,
     private readonly onPermissionRequest?: CommandCodePermissionHandler,
-  ) {}
-
-  get processGeneration(): number {
-    return this.generation;
+  ) {
+    this.runtimeInstanceId = runtimeInstanceId;
   }
 
-  async start(): Promise<void> {
-    if (this.child) return;
-    this.generation += 1;
+  get processRuntimeInstanceId(): number {
+    return this.runtimeInstanceId;
+  }
+
+  negotiatedCodec(): AcpNegotiatedCodec | null {
+    return this.codec;
+  }
+
+  setProcessExitHandler(handler: CommandCodeProcessExitHandler | null): void {
+    this.onProcessExit = handler;
+  }
+
+  async start(): Promise<AcpNegotiatedCodec> {
+    if (this.codec) return this.codec;
     const child = spawn(this.options.command, this.options.args, {
       cwd: this.options.cwd,
       env: this.options.env ?? process.env,
@@ -63,27 +81,63 @@ export class CommandCodeAcpTransport {
       windowsHide: true,
     });
     this.child = child;
-    this.reader = createInterface({ input: child.stdout });
-    this.reader.on('line', (line) => {
-      void this.handleLine(line);
+    child.on('error', (error) => {
+      this.closed = true;
+      for (const [id, entry] of this.pending) {
+        clearTimeout(entry.timer);
+        entry.reject(error instanceof Error ? error : new Error(String(error)));
+        this.pending.delete(id);
+      }
+      this.onProcessExit?.({ code: null, signal: null });
+    });
+    child.stdout.on('data', (chunk: Buffer) => {
+      this.ingestStdout(chunk.toString('utf8'));
     });
     child.stderr.on('data', () => {
-      /* diagnostics only; never treat as protocol */
+      /* vendor diagnostics only */
     });
-    child.once('exit', () => {
+    child.once('exit', (code, signal) => {
       this.closed = true;
       for (const [id, entry] of this.pending) {
         clearTimeout(entry.timer);
         entry.reject(new Error(`COMMAND_CODE_ACP_PROCESS_EXIT:${id}`));
         this.pending.delete(id);
       }
+      this.onProcessExit?.({ code, signal });
     });
-    await this.call('initialize', {
-      protocolVersion: COMMAND_CODE_ACP_PROTOCOL_VERSION,
-      capabilities: {},
-      clientInfo: { name: 'babel-protocol-host', version: '1' },
-    });
+    let negotiated: AcpNegotiatedCodec | null = null;
+    for (const version of [2, 1] as const) {
+      try {
+        const result = await this.call('initialize', buildInitializeParams(version));
+        negotiated = parseInitializeResult(result);
+        break;
+      } catch {
+        /* try next protocol version */
+      }
+    }
+    if (!negotiated) {
+      await this.stop();
+      throw new Error('ACP_INITIALIZE_FAILED');
+    }
+    this.codec = negotiated;
     this.initialized = true;
+    return negotiated;
+  }
+
+  private ingestStdout(chunk: string): void {
+    const maxBytes = this.options.maxLineBytes ?? 512_000;
+    this.stdoutRemainder += chunk;
+    if (Buffer.byteLength(this.stdoutRemainder, 'utf8') > maxBytes) {
+      void this.stop();
+      return;
+    }
+    for (;;) {
+      const newline = this.stdoutRemainder.indexOf('\n');
+      if (newline < 0) break;
+      const line = this.stdoutRemainder.slice(0, newline);
+      this.stdoutRemainder = this.stdoutRemainder.slice(newline + 1);
+      void this.handleLine(line);
+    }
   }
 
   async stop(): Promise<void> {
@@ -139,13 +193,24 @@ export class CommandCodeAcpTransport {
       this.child!.stdin.write(line);
     });
     if (response.error) {
-      throw new Error(`COMMAND_CODE_ACP_ERROR:${response.error.code}:${response.error.message}`);
-    }
-    if (method === 'initialize' && response.result) {
-      const version = response.result.protocolVersion;
-      if (typeof version === 'number') this.negotiatedProtocolVersion = version;
+      const data = response.error.data;
+      throw new Error(
+        `COMMAND_CODE_ACP_ERROR:${response.error.code}:${response.error.message}:${JSON.stringify(data ?? null)}`,
+      );
     }
     return response.result ?? {};
+  }
+
+  notify(method: string, params?: Record<string, unknown>): void {
+    if (this.closed) throw new Error('COMMAND_CODE_ACP_TRANSPORT_CLOSED');
+    if (!this.child?.stdin.writable) throw new Error('COMMAND_CODE_ACP_STDIN_UNAVAILABLE');
+    const message: CommandCodeWireMessage = {
+      jsonrpc: '2.0',
+      method,
+      ...(params ? { params } : {}),
+    };
+    const line = serializeCommandCodeLine(message);
+    this.child.stdin.write(line);
   }
 
   private async handleLine(line: string): Promise<void> {
@@ -180,19 +245,15 @@ export class CommandCodeAcpTransport {
       const sessionId = String(params.sessionId ?? '');
       const requestId = message.id;
       try {
-        const decision = await handler({
-          sessionId,
-          requestId,
-          params,
-        });
+        const decision = await handler({ sessionId, requestId, params });
         const response: CommandCodeWireMessage = {
           jsonrpc: '2.0',
           id: message.id,
           result: {
             outcome:
               decision.outcome === 'cancelled'
-                ? { type: 'cancelled' }
-                : { type: 'selected', optionId: decision.optionId },
+                ? { outcome: 'cancelled' }
+                : { outcome: 'selected', optionId: decision.optionId },
           },
         };
         this.child?.stdin.write(serializeCommandCodeLine(response));
@@ -217,28 +278,7 @@ export class CommandCodeAcpTransport {
     }
   }
 
-  negotiatedVersion(): number | null {
-    return this.negotiatedProtocolVersion;
-  }
-
   isInitialized(): boolean {
     return this.initialized;
   }
-}
-
-export function resolveCommandCodeAcpLaunch(): { command: string; args: string[] } {
-  const command =
-    process.env['BABEL_COMMAND_CODE_ACP_COMMAND']?.trim() ??
-    process.env['BABEL_COMMAND_CODE_CLI_EXECUTABLE']?.trim();
-  if (command) {
-    const rawArgs = process.env['BABEL_COMMAND_CODE_ACP_ARGS']?.trim();
-    if (rawArgs) {
-      const parsed = JSON.parse(rawArgs) as string[];
-      return { command, args: parsed };
-    }
-    return { command, args: ['acp'] };
-  }
-  const executable = process.env['BABEL_COMMAND_CODE_CLI_EXECUTABLE']?.trim();
-  if (executable) return { command: executable, args: ['acp'] };
-  return { command: 'cmd', args: ['acp'] };
 }

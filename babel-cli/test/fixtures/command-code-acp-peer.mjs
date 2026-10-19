@@ -1,42 +1,57 @@
 #!/usr/bin/env node
 /**
- * Deterministic fake Command Code ACP peer (real child process, stdio JSON-RPC).
- * Activated via BABEL_COMMAND_CODE_ACP_COMMAND + BABEL_COMMAND_CODE_ACP_ARGS.
+ * Strict ACP-shaped fake peer (v1 + v2 initialize). Real stdio child for deterministic tests.
  */
 
 import { createInterface } from 'node:readline';
 
 const sessions = new Map();
 let nextSession = 1;
+let negotiatedVersion = 2;
+const permissionWaiters = new Map();
 
 function write(msg) {
   process.stdout.write(`${JSON.stringify(msg)}\n`);
 }
 
-function handleInitialize(id) {
+function sessionUpdate(sessionId, sessionUpdateBody) {
+  write({
+    jsonrpc: '2.0',
+    method: 'session/update',
+    params: { sessionId, update: { sessionUpdate: sessionUpdateBody } },
+  });
+}
+
+function handleInitialize(id, params) {
+  const version = params?.protocolVersion === 1 ? 1 : 2;
+  negotiatedVersion = version;
+  if (version === 2) {
+    write({
+      jsonrpc: '2.0',
+      id,
+      result: {
+        protocolVersion: 2,
+        capabilities: { session: {} },
+        info: { name: 'fixture-command-code-acp', version: '0.0.0-fixture' },
+      },
+    });
+    return;
+  }
   write({
     jsonrpc: '2.0',
     id,
     result: {
-      protocolVersion: 2,
-      capabilities: { session: {} },
-      info: { name: 'fixture-command-code-acp', version: '0.0.0-fixture' },
+      protocolVersion: 1,
+      agentCapabilities: { session: {} },
+      agentInfo: { name: 'fixture-command-code-acp', version: '0.0.0-fixture' },
     },
   });
 }
 
 function handleSessionNew(id, params) {
   const sessionId = `sess_fixture_${nextSession++}`;
-  sessions.set(sessionId, { cwd: params.cwd, messages: [] });
+  sessions.set(sessionId, { cwd: params.cwd, messages: [], permissionDone: false });
   write({ jsonrpc: '2.0', id, result: { sessionId } });
-  write({
-    jsonrpc: '2.0',
-    method: 'session/update',
-    params: {
-      sessionId,
-      update: { type: 'state_update', state: 'idle', stopReason: 'end_turn' },
-    },
-  });
 }
 
 function handleSessionResume(id, params) {
@@ -45,26 +60,19 @@ function handleSessionResume(id, params) {
     write({ jsonrpc: '2.0', id, error: { code: -32001, message: 'session not found' } });
     return;
   }
+  if (params.replayFrom?.type === 'start') {
+    sessionUpdate(sessionId, {
+      type: 'agent_message_chunk',
+      content: { type: 'text', text: 'fixture:history-replay' },
+    });
+  }
   write({ jsonrpc: '2.0', id, result: { sessionId } });
-  write({
-    jsonrpc: '2.0',
-    method: 'session/update',
-    params: {
-      sessionId,
-      update: { type: 'state_update', state: 'idle', stopReason: 'end_turn' },
-    },
-  });
 }
 
-function handleSessionList(id, params) {
-  const cwd = params?.cwd;
-  const listed = [...sessions.entries()]
-    .filter(([, row]) => !cwd || row.cwd === cwd)
-    .map(([sessionId]) => ({ sessionId, title: 'fixture' }));
+function handleSessionList(id) {
+  const listed = [...sessions.keys()].map((sessionId) => ({ sessionId, title: 'fixture' }));
   write({ jsonrpc: '2.0', id, result: { sessions: listed } });
 }
-
-const permissionWaiters = new Map();
 
 function waitForPermissionResponse(requestId) {
   return new Promise((resolve) => {
@@ -87,11 +95,7 @@ async function handleSessionPrompt(id, params) {
   const messageId = `msg_${session.messages.length}`;
   write({ jsonrpc: '2.0', id, result: { messageId } });
 
-  write({
-    jsonrpc: '2.0',
-    method: 'session/update',
-    params: { sessionId, update: { type: 'state_update', state: 'running' } },
-  });
+  sessionUpdate(sessionId, { type: 'state_update', state: 'running' });
 
   if (process.env.BABEL_COMMAND_CODE_FIXTURE_PERMISSION === '1' && !session.permissionDone) {
     session.permissionDone = true;
@@ -105,84 +109,43 @@ async function handleSessionPrompt(id, params) {
         title: 'fixture permission',
         options: [
           { optionId: 'allow_once', kind: 'allow_once', name: 'Allow once' },
-          { optionId: 'reject_once', kind: 'reject_once', name: 'Reject' },
+          { optionId: 'allow_always', kind: 'allow_always', name: 'Allow always' },
         ],
+        toolCall: { title: 'run_fixture', kind: 'execute', input: { command: 'fixture-cmd' } },
       },
     });
     await waitForPermissionResponse(requestId);
   }
 
-  const chunk = `fixture:${text}`;
-  write({
-    jsonrpc: '2.0',
-    method: 'session/update',
-    params: {
-      sessionId,
-      update: { type: 'message_chunk', text: chunk },
-    },
-  });
-
-  if (process.env.BABEL_COMMAND_CODE_FIXTURE_TOOL === '1') {
-    write({
-      jsonrpc: '2.0',
-      method: 'session/update',
-      params: {
-        sessionId,
-        update: { type: 'tool_call', tool: 'read_file', target: 'README.md', status: 'started' },
-      },
-    });
-    write({
-      jsonrpc: '2.0',
-      method: 'session/update',
-      params: {
-        sessionId,
-        update: { type: 'tool_call', tool: 'read_file', target: 'README.md', status: 'completed' },
-      },
-    });
+  if (process.env.BABEL_COMMAND_CODE_FIXTURE_SLOW === '1') {
+    await new Promise((r) => setTimeout(r, 500));
   }
 
-  write({
-    jsonrpc: '2.0',
-    method: 'session/update',
-    params: {
-      sessionId,
-      update: {
-        type: 'usage_update',
-        usage: { totalCostUSD: 0.01, totalInputTokens: 3, totalOutputTokens: 5, totalTokens: 8 },
-      },
-    },
+  const chunk = `fixture:${text}`;
+  sessionUpdate(sessionId, {
+    type: 'agent_message_chunk',
+    content: { type: 'text', text: chunk },
   });
 
-  write({
-    jsonrpc: '2.0',
-    method: 'session/update',
-    params: {
-      sessionId,
-      update: { type: 'state_update', state: 'idle', stopReason: 'end_turn' },
-    },
+  sessionUpdate(sessionId, {
+    type: 'usage_update',
+    usage: { cost: { amount: 0.01, currency: 'USD' }, used: 8, size: 100 },
   });
+
+  sessionUpdate(sessionId, { type: 'state_update', state: 'idle', stopReason: 'end_turn' });
 }
 
-function handleSessionCancel(id, params) {
+function handleSessionCancelNotification(params) {
   const sessionId = String(params.sessionId ?? '');
-  write({ jsonrpc: '2.0', id, result: { cancelled: true } });
-  write({
-    jsonrpc: '2.0',
-    method: 'session/update',
-    params: {
-      sessionId,
-      update: { type: 'state_update', state: 'idle', stopReason: 'cancelled' },
-    },
-  });
+  if (process.env.BABEL_COMMAND_CODE_FIXTURE_NO_CANCEL_TERMINAL === '1') return;
+  sessionUpdate(sessionId, { type: 'state_update', state: 'idle', stopReason: 'cancelled' });
 }
 
 const rl = createInterface({ input: process.stdin });
 rl.on('line', (line) => {
   const trimmed = line.trim();
   if (!trimmed) return;
-  if (trimmed === 'CRASH') {
-    process.exit(2);
-  }
+  if (trimmed === 'CRASH') process.exit(2);
   let msg;
   try {
     msg = JSON.parse(trimmed);
@@ -195,9 +158,13 @@ rl.on('line', (line) => {
     permissionWaiters.delete(String(id));
     return;
   }
+  if (method === 'session/cancel') {
+    handleSessionCancelNotification(params ?? {});
+    return;
+  }
   switch (method) {
     case 'initialize':
-      handleInitialize(id);
+      handleInitialize(id, params ?? {});
       break;
     case 'session/new':
       handleSessionNew(id, params ?? {});
@@ -206,16 +173,10 @@ rl.on('line', (line) => {
       handleSessionResume(id, params ?? {});
       break;
     case 'session/list':
-      handleSessionList(id, params ?? {});
+      handleSessionList(id);
       break;
     case 'session/prompt':
       void handleSessionPrompt(id, params ?? {});
-      break;
-    case 'session/cancel':
-      handleSessionCancel(id, params ?? {});
-      break;
-    case 'session/set_config_option':
-      write({ jsonrpc: '2.0', id, error: { code: -32601, message: 'unsupported in fixture' } });
       break;
     default:
       if (id !== undefined) {

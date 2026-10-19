@@ -9,8 +9,12 @@ function git(root, args) {
   return result.stdout.trim()
 }
 
-function gh(args) {
-  const result = spawnSync('gh', args, { encoding: 'utf8', windowsHide: true })
+function ghGet(repo, branch) {
+  const result = spawnSync(
+    'gh',
+    ['api', '--method', 'GET', `repos/${repo}/actions/runs`, '-f', `branch=${branch}`, '-f', 'per_page=1'],
+    { encoding: 'utf8', windowsHide: true },
+  )
   if (result.status !== 0 || result.error) {
     throw new Error('gh unavailable for branch gate preflight (push aborted)')
   }
@@ -28,14 +32,7 @@ export function assertBranchPriorGateComplete(root, remote = 'origin') {
   const match = remoteUrl.match(/github\.com[:/](.+?)(?:\.git)?$/i)
   if (!match) return
   const repo = match[1]
-  const json = gh([
-    'api',
-    `repos/${repo}/actions/runs`,
-    '-f',
-    `branch=${branch}`,
-    '-f',
-    'per_page=1',
-  ])
+  const json = ghGet(repo, branch)
   const payload = JSON.parse(json)
   const run = payload.workflow_runs?.[0]
   if (!run) return

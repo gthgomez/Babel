@@ -733,7 +733,12 @@ export async function handleProtocolRequest(
               // P03: dispatch through the shared runtime facade when a durable
               // descriptor exists. The pre-P03 direct adapter remains selectable
               // via the compatibility switch for trace comparison.
-              if (isRuntimeCoordinatorEnabled() && descriptor != null) {
+              const harnessAdapterId = descriptor?.harness_adapter_id;
+              const useRuntimeCoordinator =
+                isRuntimeCoordinatorEnabled() &&
+                descriptor != null &&
+                harnessAdapterId !== 'command-code';
+              if (useRuntimeCoordinator) {
                 runtimeExecution = state.coordinator.beginTurn({
                   prepared: buildPreparedTurn(descriptor),
                   threadId: params.thread_id,

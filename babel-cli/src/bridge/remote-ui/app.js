@@ -4,6 +4,7 @@
   const byId = function (id) { return document.getElementById(id); };
   const tokenEl = byId('token');
   const rootEl = byId('root');
+  const harnessEl = byId('harness-adapter');
   const composer = byId('composer');
   const threadInput = byId('thread-id');
   const transcript = byId('transcript');
@@ -56,6 +57,8 @@
     R.setText(byId('turn-detail'), turn === 'UNKNOWN' ? 'Outcome is ambiguous. Do not resubmit automatically.' : label(turn) + ' turn state.');
     R.setText(byId('thread-id-display'), memory.threadId || 'No active thread');
     R.setText(byId('workspace'), rootEl.value || '—');
+    const harnessLabel = harnessEl && harnessEl.value === 'command-code' ? 'Command Code CLI' : 'Babel native';
+    R.setText(byId('harness-label'), harnessLabel);
     R.setText(byId('connection-copy'), host === 'ONLINE' ? 'Host connected' : 'Host ' + label(host).toLowerCase());
     document.querySelectorAll('.topbar-status .status-dot, #host-card .status-dot').forEach(function (dot) {
       dot.className = 'status-dot ' + String(host).toLowerCase();
@@ -430,7 +433,10 @@
     try {
       thread = transition('thread', thread, 'create');
       const sessionId = await ensureSession();
-      const result = await rpc('thread.create', { project_root: rootEl.value, session_id: sessionId });
+      const harness = harnessEl && harnessEl.value ? harnessEl.value : 'babel-native';
+      const createParams = { project_root: rootEl.value, session_id: sessionId };
+      if (harness === 'command-code') createParams.harness_adapter_id = 'command-code';
+      const result = await rpc('thread.create', createParams);
       if (result.classified.kind !== 'success') throw new Error('thread.create rejected');
       memory.threadId = result.payload.result && result.payload.result.thread_id;
       clearControlLease();

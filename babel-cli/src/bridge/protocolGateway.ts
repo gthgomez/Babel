@@ -21,6 +21,7 @@ import { ThreadOwnershipRegistry, type ThreadOwnershipError } from './threadOwne
 import { threadStoreExists } from '../services/threadStore/threadStore.js';
 import { buildRemoteCatalog } from './remoteCatalog.js';
 import { buildRemoteHarnessCapabilities } from './harnessAdapterRegistry.js';
+import type { CommandCodeAcpRuntimeRegistry } from './commandCodeAcpRuntime.js';
 import { ControlLeaseRegistry } from './controlLease.js';
 import type { BridgeClientContext } from './bridgeClientAuth.js';
 
@@ -56,6 +57,7 @@ export class ProtocolGateway {
   readonly controlLeases = new ControlLeaseRegistry();
   private readonly registeredWorkspaceRoot: string;
   private readonly enforceControlLease: boolean;
+  private readonly commandCodeRegistry: CommandCodeAcpRuntimeRegistry | undefined;
   private subscribers = new Set<GatewaySubscriber>();
 
   constructor(options: {
@@ -63,10 +65,12 @@ export class ProtocolGateway {
     engineFactory?: ProtocolHostState['engineFactory'];
     remoteSurface?: boolean;
     enforceControlLease?: boolean;
+    commandCodeRegistry?: CommandCodeAcpRuntimeRegistry;
   }) {
     const allowedRoot = options.allowedWorkspaceRoot;
     this.registeredWorkspaceRoot = canonicalizeContained(resolve(allowedRoot));
     this.enforceControlLease = options.enforceControlLease === true;
+    this.commandCodeRegistry = options.commandCodeRegistry;
     this.host = createProtocolHostState({
       executeWithoutNotifications: true,
       projectRootGuard: (projectRoot) => assertAllowedProjectRoot(projectRoot, allowedRoot),
@@ -132,6 +136,9 @@ export class ProtocolGateway {
           state: this.host,
           registeredWorkspaceRoot: this.registeredWorkspaceRoot,
           threadOwner: (threadId) => this.threadOwnership.ownerOf(threadId)?.sessionId,
+          ...(this.commandCodeRegistry
+            ? { commandCodeRegistry: this.commandCodeRegistry }
+            : {}),
         });
         return {
           jsonrpc: '2.0',

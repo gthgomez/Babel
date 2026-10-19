@@ -16,16 +16,4 @@ describe('commandCodeCliDiscovery', () => {
     assert.equal(resolveCommandCodeExecutable('/empty'), undefined);
   });
 
-  it('treats fixture ACP command env as verified without version spawn', async () => {
-    const prev = process.env['BABEL_COMMAND_CODE_ACP_COMMAND'];
-    process.env['BABEL_COMMAND_CODE_ACP_COMMAND'] = '/bin/false';
-    try {
-      const probe = await probeCommandCodeInstallation();
-      assert.equal(probe.state, 'verified');
-      assert.equal(probe.executable, '/bin/false');
-    } finally {
-      if (prev === undefined) delete process.env['BABEL_COMMAND_CODE_ACP_COMMAND'];
-      else process.env['BABEL_COMMAND_CODE_ACP_COMMAND'] = prev;
-    }
-  });
 });
