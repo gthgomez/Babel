@@ -658,7 +658,9 @@ export class LLMSummarizeCompaction implements CompactionStrategy {
 
     const provider: ProviderId = baseUrl.toLowerCase().includes('openrouter')
       ? 'openrouter'
-      : 'deepinfra';
+      : baseUrl.toLowerCase().includes('api.deepseek.com')
+        ? 'deepseek'
+        : 'deepinfra';
     const inferenceId = randomUUID();
     const requestBody = {
       model,
@@ -1127,6 +1129,15 @@ export function resolveCompactionSummarizationProvider(input: {
     return {
       apiKey: process.env['DEEPINFRA_API_KEY']!.trim(),
       baseUrl: 'https://api.deepinfra.com/v1/openai/chat/completions',
+      defaultModel: model,
+    };
+  }
+  if (provider === 'deepseek' && process.env['DEEPSEEK_API_KEY']?.trim()) {
+    // Direct DeepSeek is a certified admitted route; summarize on its own
+    // endpoint with its own credential rather than degrading to heuristic.
+    return {
+      apiKey: process.env['DEEPSEEK_API_KEY']!.trim(),
+      baseUrl: 'https://api.deepseek.com/v1/chat/completions',
       defaultModel: model,
     };
   }
