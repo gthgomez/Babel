@@ -4,7 +4,7 @@ Status: living document for the remote implementation campaign. **Qualified** me
 
 ## Command Code own-CLI acceptance matrix (PR #397 bounded batch)
 
-Published head on remote: `b6252077c9080f6bc274e787f5585d1ff6394461`. **Publication hold:** no push until coordinator release after exact gate terminal + independent review of local candidate (task artifact `shared/pr397-local-candidate/`). **Local candidate HEAD:** `3fc72281` (see `shared/pr397-local-candidate/HEAD.txt`; code delta vs `b6252077` through `2032a847` plus ledger row `3fc72281`). Gate `39265006865` on `b6252077`: **failure** — Windows `unit-shards (windows-latest, 0)` and `2` (“Validate complete unit TAP inventory”), `architecture-regressions (windows-latest)`, aggregate `windows-portability`; Linux leg not recertified on unpublished delta.
+Published head on remote: `b6252077c9080f6bc274e787f5585d1ff6394461`. **Publication hold:** no push until coordinator release after exact gate terminal + independent review of local candidate (task artifact `shared/pr397-local-candidate/`). **Local candidate HEAD:** `9a62f6f1` (see `shared/pr397-local-candidate/HEAD.txt`; unpublished delta vs `b6252077`). Gate `39265006865` on `b6252077`: **failure** — Windows `unit-shards (windows-latest, 0)` and `2` (“Validate complete unit TAP inventory”), `architecture-regressions (windows-latest)`, aggregate `windows-portability`; Linux leg not recertified on unpublished delta.
 
 | # | Invariant | Production entrypoint / source | Exact regression assertion | Failing-before evidence | Current command / exit / result | Remaining limitation |
 |---|-----------|------------------------------|----------------------------|-------------------------|--------------------------------|----------------------|
