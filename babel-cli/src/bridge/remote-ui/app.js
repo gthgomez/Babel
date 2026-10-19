@@ -447,6 +447,9 @@
       await observeThread();
       if (memory.threadId) {
         thread = transition('thread', thread, 'recover');
+        if (memory.authKind === 'paired') {
+          await ensurePairedControlLease(memory.threadId);
+        }
         const resumed = await rpc('thread.resume', {
           thread_id: memory.threadId,
           project_root: rootEl.value,
@@ -458,7 +461,9 @@
         const cells = (history.payload.result && history.payload.result.cells) || [];
         transcript.textContent = '';
         cells.forEach(function (cell) { appendEvent({ type: cell.kind || 'cell', text: JSON.stringify(cell.payload || {}) }); });
-        await syncControlLeaseFromHost();
+        if (memory.authKind !== 'paired') {
+          await syncControlLeaseFromHost();
+        }
         await reconcileAuthoritativeTaskState();
         thread = transition('thread', thread, 'ready');
       }
@@ -543,6 +548,9 @@
       memory.threadId = threadInput.value;
       clearControlLease();
       const sessionId = await ensureSession();
+      if (memory.authKind === 'paired') {
+        await ensurePairedControlLease(memory.threadId);
+      }
       const result = await rpc('thread.resume', {
         thread_id: memory.threadId,
         project_root: rootEl.value,
@@ -551,7 +559,9 @@
       if (result.classified.kind !== 'success') throw new Error('thread.resume rejected');
       thread = transition('thread', thread, 'ready');
       await observeThread();
-      await syncControlLeaseFromHost();
+      if (memory.authKind !== 'paired') {
+        await syncControlLeaseFromHost();
+      }
     } catch (error) { thread = transition('thread', thread, 'fail'); appendEvent({ type: 'failed', error: 'Thread resume failed.' }); }
     renderChrome();
   }
