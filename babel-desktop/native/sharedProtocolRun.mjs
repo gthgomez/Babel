@@ -74,7 +74,11 @@ export class SharedProtocolRun {
         const binding = scopedApproval(event.item?.approval);
         this.#approval = binding?.run_id === request.runId ? binding : null;
       }
-      if (['run_complete', 'run_error', 'turn.completed', 'turn.failed', 'cancelled'].includes(event.type)) {
+      if (event.type === 'approval.pending' && event.item?.approval && !this.#approvalClosed) {
+        const binding = scopedApproval(event.item.approval);
+        this.#approval = binding?.run_id === request.runId ? binding : this.#approval;
+      }
+      if (['run_complete', 'run_error', 'turn.completed', 'turn.failed', 'cancelled', 'emergency_stop'].includes(event.type)) {
         turnSettled = true;
         this.#approval = null;
         this.#approvalClosed = true;
@@ -135,23 +139,31 @@ export class SharedProtocolRun {
   }
 
   cancel() {
-    this.#approval = null;
-    this.#approvalClosed = true;
     const child = this.#child;
     if (!child || child.desktopCancelling) return;
     child.desktopCancelling = true;
-    let wrote = false;
     try {
       if (child.stdin && !child.stdin.destroyed) {
         child.stdin.write(`${JSON.stringify({ decision: 'cancel' })}\n`);
-        wrote = true;
       }
-    } catch { /* fall through */ }
-    if (!wrote) terminateChildTree(child);
-    else{
-      const timeout=setTimeout(()=>{if(child===this.#child)terminateChildTree(child);},8000);
-      timeout.unref?.();
-      child.once('close',()=>clearTimeout(timeout));
+    } catch {
+      terminateChildTree(child);
+    }
+  }
+
+  /** Local-admin emergency stop — never used for ordinary cancel. */
+  emergencyAdminStop(hostEmergencyToken) {
+    const child = this.#child;
+    if (!child?.stdin || child.stdin.destroyed || typeof hostEmergencyToken !== 'string' || !hostEmergencyToken) {
+      return false;
+    }
+    try {
+      child.stdin.write(
+        `${JSON.stringify({ decision: 'emergency_admin_stop', host_emergency_token: hostEmergencyToken })}\n`,
+      );
+      return true;
+    } catch {
+      return false;
     }
   }
 }

@@ -29,6 +29,7 @@ import {qualifiedProviders, readProviderRoute, saveProviderRoute, validateProvid
 import {listSavedChats,readSavedChat,searchSavedChats,readSavedMessage} from './sessions.mjs';
 import {ComposerDraftStore,composerDraftScope} from './composer-drafts.mjs';
 import {CLOSE_GRACE_MS,decideLastWindow,decideWindowClose,createCloseRequest} from './lifecycle.mjs';
+import {readBridgeHostAuthToken} from './bridge-host-token.mjs';
 
 const packageRoot=dirname(dirname(fileURLToPath(import.meta.url)));
 const profileArgument=process.argv.find(arg=>arg.startsWith('--profile-dir='));
@@ -505,6 +506,12 @@ async function start(){
     return {accepted};
   });
   handle('babel:cancel',()=>{runAdmissionEpoch++;runner?.cancel();return true;});
+  handle('babel:emergency-stop-shared-run',()=>{
+    if(!runner||typeof runner.emergencyAdminStop!=='function')return {accepted:false,reason:'not_shared_protocol'};
+    const token=readBridgeHostAuthToken(runtimeEnvironment().BABEL_CONFIG_DIR);
+    if(!token)return {accepted:false,reason:'missing_host_token'};
+    return {accepted:runner.emergencyAdminStop(token)===true};
+  });
   handle('babel:start-remote-bridge',options=>withConnectionChange(async()=>{
     const admissionEpoch=remoteAdmissionEpoch;
     if(remoteBridge?.running)throw new Error('The loopback remote bridge is already running');

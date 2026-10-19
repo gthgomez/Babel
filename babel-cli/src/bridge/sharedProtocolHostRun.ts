@@ -29,8 +29,6 @@ export interface SharedProtocolHostRunOptions {
   WebSocketImpl?: typeof WebSocket;
   signal?: AbortSignal;
   stdin?: NodeJS.ReadableStream;
-  /** Host bearer for emergency stop when the desktop lease was taken by remote priority. */
-  hostEmergencyBearerToken?: string;
 }
 
 type NdjsonWriter = (event: Record<string, unknown>) => void;
@@ -54,6 +52,33 @@ function loadHostEmergencyBearerToken(): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+async function cancelTurnDesktop(
+  client: HttpProtocolClient,
+  threadId: string,
+  controlEpoch: number,
+): Promise<void> {
+  await client.call('turn.cancel', {
+    thread_id: threadId,
+    control_epoch: controlEpoch,
+  });
+}
+
+/** Distinct local-admin emergency stop — never invoked from ordinary cancel. */
+async function emergencyAdminStopTurn(
+  port: number,
+  threadId: string,
+  hostEmergencyToken: string,
+  fetchImpl?: typeof fetch,
+): Promise<void> {
+  const emergency = new HttpProtocolClient({
+    baseUrl: `http://127.0.0.1:${port}`,
+    bearerToken: hostEmergencyToken,
+    ...(fetchImpl ? { fetchImpl } : {}),
+  });
+  await emergency.call('control.acquire', { thread_id: threadId, force: true });
+  await emergency.call('turn.cancel', { thread_id: threadId });
 }
 
 function mapTurnEventToStream(
@@ -148,32 +173,6 @@ export function mapPermissionRequest(
   };
 }
 
-async function cancelTurnWithFencing(
-  desktopClient: HttpProtocolClient,
-  threadId: string,
-  controlEpoch: number,
-  emergencyBearer?: string,
-  fetchImpl?: typeof fetch,
-  port?: number,
-): Promise<void> {
-  try {
-    await desktopClient.call('turn.cancel', {
-      thread_id: threadId,
-      control_epoch: controlEpoch,
-    });
-    return;
-  } catch (desktopError) {
-    if (!emergencyBearer || port === undefined) throw desktopError;
-    const emergency = new HttpProtocolClient({
-      baseUrl: `http://127.0.0.1:${port}`,
-      bearerToken: emergencyBearer,
-      ...(fetchImpl ? { fetchImpl } : {}),
-    });
-    await emergency.call('control.acquire', { thread_id: threadId, force: true });
-    await emergency.call('turn.cancel', { thread_id: threadId });
-  }
-}
-
 /** Run one shared-host chat turn to completion. Returns process exit code. */
 export async function executeSharedProtocolHostRun(
   options: SharedProtocolHostRunOptions,
@@ -187,8 +186,6 @@ export async function executeSharedProtocolHostRun(
     ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
   });
   const headers = desktopHeaders(options.desktopClientId, options.desktopProofKey);
-  const emergencyBearer =
-    options.hostEmergencyBearerToken?.trim() || loadHostEmergencyBearerToken();
   const WebSocketCtor = options.WebSocketImpl ?? globalThis.WebSocket;
   if (!WebSocketCtor) throw new Error('WebSocket is unavailable');
 
@@ -271,18 +268,45 @@ export async function executeSharedProtocolHostRun(
             const msg = JSON.parse(line) as {
               decision?: string;
               approval?: Record<string, unknown>;
+              host_emergency_token?: string;
             };
+            if (msg.decision === 'emergency_admin_stop') {
+              const token =
+                typeof msg.host_emergency_token === 'string'
+                  ? msg.host_emergency_token.trim()
+                  : '';
+              const expected = loadHostEmergencyBearerToken();
+              if (!expected || token !== expected) {
+                write({
+                  type: 'run_error',
+                  error: 'Host emergency stop was rejected (invalid admin token)',
+                });
+                return;
+              }
+              try {
+                await emergencyAdminStopTurn(
+                  options.port,
+                  activeThreadId,
+                  token,
+                  options.fetchImpl,
+                );
+                write({ type: 'emergency_stop' });
+              } catch (error) {
+                write({
+                  type: 'run_error',
+                  error:
+                    error instanceof Error
+                      ? error.message
+                      : 'Host emergency stop failed',
+                });
+              }
+              return;
+            }
             if (msg.decision === 'cancel') {
               cancelRequested = true;
               try {
-                await cancelTurnWithFencing(
-                  client,
-                  activeThreadId,
-                  controlEpoch,
-                  emergencyBearer,
-                  options.fetchImpl,
-                  options.port,
-                );
+                await cancelTurnDesktop(client, activeThreadId, controlEpoch);
+                write({ type: 'cancelled' });
               } catch (error) {
                 write({
                   type: 'run_error',
@@ -338,16 +362,17 @@ export async function executeSharedProtocolHostRun(
     }
 
     if (abort()) {
-      await cancelTurnWithFencing(
-        client,
-        threadId,
-        controlEpoch,
-        emergencyBearer,
-        options.fetchImpl,
-        options.port,
-      );
-      write({ type: 'cancelled' });
-      return 0;
+      try {
+        await cancelTurnDesktop(client, threadId, controlEpoch);
+        write({ type: 'cancelled' });
+        return 0;
+      } catch (error) {
+        write({
+          type: 'run_error',
+          error: error instanceof Error ? error.message : 'Cancel was rejected',
+        });
+        return 1;
+      }
     }
 
     const ticketRes = await (options.fetchImpl ?? fetch)(`${baseUrl}/ws/ticket`, {
@@ -407,16 +432,17 @@ export async function executeSharedProtocolHostRun(
     });
 
     if (abort()) {
-      await cancelTurnWithFencing(
-        client,
-        threadId,
-        controlEpoch,
-        emergencyBearer,
-        options.fetchImpl,
-        options.port,
-      );
-      write({ type: 'cancelled' });
-      return 0;
+      try {
+        await cancelTurnDesktop(client, threadId, controlEpoch);
+        write({ type: 'cancelled' });
+        return 0;
+      } catch (error) {
+        write({
+          type: 'run_error',
+          error: error instanceof Error ? error.message : 'Cancel was rejected',
+        });
+        return 1;
+      }
     }
 
     await client.call('turn.submit', {
@@ -428,6 +454,13 @@ export async function executeSharedProtocolHostRun(
 
     await turnDone;
     if (transportClosedUnexpectedly) {
+      if (pendingApproval) {
+        write({
+          type: 'approval.pending',
+          message: 'Approval is still pending after transport loss; reconnect before deciding.',
+          item: { approval: pendingApproval },
+        });
+      }
       write({ type: 'run_error', error: 'Shared protocol transport lost before turn settled' });
       return 1;
     }
