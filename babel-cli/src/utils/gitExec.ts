@@ -9,6 +9,12 @@ export interface GitCommandResult {
   stderr: string;
 }
 
+export interface GitCommandBytesResult {
+  status: number | null;
+  stdout: Buffer;
+  stderr: Buffer;
+}
+
 export function getGitCommand(env: NodeJS.ProcessEnv = process.env): string {
   const configured = env['BABEL_GIT_PATH']?.trim();
   if (configured) {
@@ -55,18 +61,36 @@ export function runGitCommand(
     env?: NodeJS.ProcessEnv;
   } = {},
 ): GitCommandResult {
+  const result = runGitCommandBytes(args, cwd, options);
+  return {
+    status: result.status,
+    stdout: result.stdout.toString('utf8'),
+    stderr: result.stderr.toString('utf8'),
+  };
+}
+
+/** Preserve raw Git pathname bytes for callers that must validate UTF-8 identity. */
+export function runGitCommandBytes(
+  args: string[],
+  cwd: string,
+  options: {
+    timeoutMs?: number;
+    env?: NodeJS.ProcessEnv;
+    maxBuffer?: number;
+  } = {},
+): GitCommandBytesResult {
   const env = buildGitEnv(options.env);
   const result = spawnSync(getGitCommand(env), args, {
     cwd,
     env,
-    encoding: 'utf8',
     timeout: options.timeoutMs ?? 15_000,
+    ...(options.maxBuffer !== undefined ? { maxBuffer: options.maxBuffer } : {}),
     windowsHide: true,
   });
   return {
     status: result.status,
-    stdout: result.stdout ?? '',
-    stderr: result.stderr ?? result.error?.message ?? '',
+    stdout: result.stdout ?? Buffer.alloc(0),
+    stderr: result.stderr ?? Buffer.from(result.error?.message ?? ''),
   };
 }
 

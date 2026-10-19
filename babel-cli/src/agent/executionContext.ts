@@ -17,6 +17,7 @@
  */
 
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { TaskMutationOwnership } from './taskMutationOwnership.js';
 
 import type { ApprovalSessionState } from './approvalRequests.js';
 
@@ -32,6 +33,7 @@ export interface ExecutionContext {
   readonly approvalSession?: ApprovalSessionState;
   readonly indexWritePolicy: IndexWritePolicy;
   readonly taskOwnerId?: string;
+  readonly mutationOwnership?: import('./taskMutationOwnership.js').TaskMutationOwnership;
   readonly parentTaskOwnerId?: string;
   /** Owning parent of a derived child scope, for no-widening / audit. */
   readonly parentTrace?: { threadId: string; turnId: string | null };
@@ -42,6 +44,23 @@ const store = new AsyncLocalStorage<ExecutionContext>();
 /** Bind a context for the duration of `fn` (and its async descendants). */
 export function runWithExecutionContext<T>(ctx: ExecutionContext, fn: () => T): T {
   return store.run(ctx, fn);
+}
+
+/** Bind evidence to an already authorized child worktree without widening its permissions. */
+export async function runWithTaskMutationWorkspace<T>(
+  root: string, ownerId: string, fn: () => Promise<T>,
+): Promise<T> {
+  const parent = store.getStore();
+  if (!parent?.mutationOwnership || parent.root === null || parent.executionScope?.kind === 'conversation') {
+    return fn();
+  }
+  const ownership = new TaskMutationOwnership(root, ownerId, parent.mutationOwnership);
+  try {
+    return await store.run({ ...parent, root, executionScope: { kind: 'project', projectRoot: root },
+      mutationOwnership: ownership }, fn);
+  } finally {
+    ownership.retire();
+  }
 }
 
 /**

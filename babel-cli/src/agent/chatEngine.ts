@@ -1,6 +1,7 @@
 import {normalizeChatExecutionScope,requireProjectRoot,assertConversationRestoreScope} from './chatExecutionScope.js';
 import {providerMessagesToChatMessages,legacyArchiveToChatMessages} from './providerMessagesToChatMessages.js';
 import {retainedLegacyArchive} from './chatArchiveLegacy.js';
+import { buildChatEngineExecutionContext, type ChatExecutionContextHost } from './chatEngineExecutionContext.js';
 /**
  * ChatEngine — unified conversational agent loop for Babel chat mode.
  * Chat investigates and executes; deep mode remains the governed pipeline.
@@ -266,7 +267,6 @@ import {
   enforcePreambleBudget,
 } from "./preambleBudget.js";
 import { invalidateRepoMapFile, invalidateRepoMapCache } from "../services/repoMap/graph.js";
-import { getChatApprovalSession } from "./chatApproval.js";
 
 import {
   scopeAsyncGenerator,
@@ -2830,6 +2830,7 @@ export class ChatEngine {
    */
   closeAdmissionStore(): void {
     retireLiveCertificationForRun(this.engineRunId);
+    this.taskMutationOwnership?.retire();
     const claim = this.activeAdmissionClaim;
     if (claim && !claim.settled) {
       this.settleAdmissionClaim(claim, "aborted", {
@@ -2901,15 +2902,10 @@ export class ChatEngine {
    * ALS-bound scope.
    */
   private buildBaseExecutionContext(): ExecutionContext {
-    return {
-      threadId: this.parity.eventLog.thread_id ?? this.engineRunId,
-      turnId: this.parity.turnId,
-      root: this.options.projectRoot,
-      ...(this.options.executionScope?{executionScope:this.options.executionScope}:{}),
-      approvalSession: getChatApprovalSession(),
-      indexWritePolicy: this.options.projectRoot ? "allow" : "deny",
-    };
+    return buildChatEngineExecutionContext(this as unknown as ChatExecutionContextHost);
   }
+
+  taskMutationOwnership: import('./taskMutationOwnership.js').TaskMutationOwnership | null = null;
 
   /**
    * W0.3: open TurnRuntime for a user submission.
