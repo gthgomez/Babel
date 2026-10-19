@@ -244,8 +244,8 @@ describe('ChatEngine recursive shell degradation & suppression loop', () => {
     // Only genuine capability failures degrade the family. An isolation or
     // permission denial is a diagnostic outcome, not a capability failure, so
     // the DEGRADED precondition is established with real capability failures.
-    pc.recordFailure({ tool: 'run_command', commandSnippet: action.command, exitCode: 1 });
-    pc.recordFailure({ tool: 'run_command', commandSnippet: action.command, exitCode: 1 });
+    pc.recordFailure({ tool: 'run_command', commandSnippet: action.command, exitCode: 1, capabilityFailure: true });
+    pc.recordFailure({ tool: 'run_command', commandSnippet: action.command, exitCode: 1, capabilityFailure: true });
     assert.equal(pc.getCapabilityState('shell.recursive_enumeration'), 'DEGRADED');
 
     // First attempt after degradation is the one bounded recovery probe: it

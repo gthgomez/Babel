@@ -800,7 +800,9 @@ test('context refusal CLI text and JSON preserve unresolved charges and useful r
   const human = formatRunResultHuman(payload)
   assert.match(human, /known subtotal/)
   assert.match(human, /1 unresolved charge/)
-  assert.match(human, /conversation/i)
+  // The refusal blocked dispatch, so no conversation fallback may be promised.
+  assert.match(human, /operational state|preparation\/install failure/i)
+  assert.doesNotMatch(human, /conversation/i)
   assert.doesNotMatch(human, /--project-root/)
 })
 

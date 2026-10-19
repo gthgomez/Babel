@@ -99,14 +99,21 @@ describe("ProgressController", () => {
   });
   // ── Acceptance Tests T9–T12: Capability Degradation & Quiet Recovery ────
 
-  it("T9: Transient shell failure marks capability SUSPECT without disabling tool family", () => {
+  // A genuine capability failure carries positive trusted evidence: either the
+  // sandbox's own launch-failure marker or an explicit capabilityFailure flag.
+  // An ordinary non-zero exit is not capability evidence and never degrades.
+  const SPAWN_FAILED = "[sandbox] Spawn error: spawn cmd.exe ENOENT";
+
+  it("T9: A genuine capability failure marks capability SUSPECT without disabling tool family", () => {
     const pc = new ProgressController();
     const res = pc.recordFailure({
       tool: "run_shell_command",
       commandSnippet: "npm test",
       exitCode: 1,
+      stderr: SPAWN_FAILED,
     });
     assert.strictEqual(res.capability, "shell.execution");
+    assert.strictEqual(res.outcome, "capability");
     assert.strictEqual(res.state, "SUSPECT");
     assert.strictEqual(pc.getCapabilityState("shell.execution"), "SUSPECT");
     assert.strictEqual(pc.getDegradedCapabilities().length, 0);
@@ -119,6 +126,7 @@ describe("ProgressController", () => {
       tool: "run_shell_command",
       commandSnippet: "Get-ChildItem -Recurse",
       exitCode: 1,
+      capabilityFailure: true,
     });
     assert.strictEqual(res.capability, "shell.recursive_enumeration");
     assert.strictEqual(res.state, "SUSPECT");
@@ -128,6 +136,7 @@ describe("ProgressController", () => {
       tool: "run_shell_command",
       commandSnippet: "Get-ChildItem -Recurse",
       exitCode: 1,
+      capabilityFailure: true,
     });
     assert.strictEqual(res.capability, "shell.recursive_enumeration");
     assert.strictEqual(res.state, "DEGRADED");
@@ -145,11 +154,13 @@ describe("ProgressController", () => {
       tool: "run_shell_command",
       commandSnippet: "Get-ChildItem -Recurse",
       exitCode: 1,
+      stderr: SPAWN_FAILED,
     });
     pc.recordFailure({
       tool: "run_shell_command",
       commandSnippet: "Get-ChildItem -Recurse",
       exitCode: 1,
+      stderr: SPAWN_FAILED,
     });
     assert.strictEqual(pc.getCapabilityState("shell.recursive_enumeration"), "DEGRADED");
 
@@ -164,11 +175,13 @@ describe("ProgressController", () => {
       tool: "run_shell_command",
       commandSnippet: "dir /s",
       exitCode: 1,
+      capabilityFailure: true,
     });
     pc1.recordFailure({
       tool: "run_shell_command",
       commandSnippet: "dir /s",
       exitCode: 1,
+      capabilityFailure: true,
     });
     const snap = pc1.snapshot();
 
@@ -183,6 +196,7 @@ describe("ProgressController", () => {
       tool: "run_command",
       commandSnippet: "Get-ChildItem -Recurse",
       exitCode: 1,
+      capabilityFailure: true,
     });
     assert.strictEqual(f1.capability, "shell.recursive_enumeration");
     assert.strictEqual(f1.state, "SUSPECT");
@@ -191,6 +205,7 @@ describe("ProgressController", () => {
       tool: "test_run",
       commandSnippet: "dir /s",
       exitCode: 1,
+      capabilityFailure: true,
     });
     assert.strictEqual(f2.capability, "shell.recursive_enumeration");
     assert.strictEqual(f2.state, "DEGRADED");
@@ -241,11 +256,13 @@ describe("ProgressController", () => {
       tool: "run_command",
       commandSnippet: "find . -type f",
       exitCode: 1,
+      capabilityFailure: true,
     });
     pc.recordFailure({
       tool: "run_command",
       commandSnippet: "find . -type f",
       exitCode: 1,
+      capabilityFailure: true,
     });
     assert.strictEqual(pc.InterventionLevel, "terminal_blocked");
     assert.strictEqual(pc.TotalScore, 0);
@@ -285,15 +302,38 @@ describe("ConversationalRenderer - ProgressRecovery", () => {
 describe("ProgressController capability failure classification", () => {
   it("classifies each outcome, letting explicit signals win over inference", () => {
     const cases: Array<[Parameters<typeof classifyCapabilityFailure>[0], string]> = [
-      [{ tool: "run_command", exitCode: 1 }, "capability"],
+      // An unknown non-zero exit is *not* capability evidence.
+      [{ tool: "run_command", exitCode: 1 }, "ambiguous"],
+      [{ tool: "run_command", exitCode: 1, stderr: "boom: unexpected failure" }, "ambiguous"],
+      // Representative missing-target outcomes across POSIX and Windows shells.
+      [{ tool: "read_file", exitCode: 1, stderr: "ENOENT: no such file or directory" }, "missing_target"],
+      [
+        {
+          tool: "run_command",
+          exitCode: 1,
+          stderr: "Get-ChildItem : Cannot find path 'C:\\nope' because it does not exist.",
+        },
+        "missing_target",
+      ],
+      [{ tool: "run_command", exitCode: 1, stderr: "The system cannot find the file specified." }, "missing_target"],
       [{ tool: "run_command", exitCode: 1, stderr: "permission denied" }, "permission"],
       [{ tool: "run_command", exitCode: 1, policyBlocked: true }, "permission"],
       [{ tool: "run_command", exitCode: 1, stderr: "bash: foo: command not found" }, "bad_command"],
-      [{ tool: "read_file", exitCode: 1, stderr: "ENOENT: no such file or directory" }, "missing_target"],
       [{ tool: "run_command", exitCode: 0 }, "empty_success"],
       [{ tool: "run_command", exitCode: 1, cancelled: true }, "cancelled"],
       [{ tool: "run_command", exitCode: 1, signal: "SIGTERM" }, "cancelled"],
       [{ tool: "run_command" }, "ambiguous"],
+      // Genuine capability failure requires positive trusted evidence.
+      [{ tool: "run_command", exitCode: 1, capabilityFailure: true }, "capability"],
+      [
+        { tool: "run_command", exitCode: 1, stderr: "[sandbox] Spawn error: spawn cmd.exe ENOENT" },
+        "capability",
+      ],
+      [
+        { tool: "run_command", exitCode: 1, stderr: "[sandbox] Transient spawn error (retries exhausted): nope" },
+        "capability",
+      ],
+      // An explicit classification still wins over every inferred signal.
       [{ tool: "run_command", exitCode: 1, stderr: "command not found", outcome: "capability" }, "capability"],
     ];
     for (const [sig, expected] of cases) {
@@ -301,7 +341,7 @@ describe("ProgressController capability failure classification", () => {
     }
   });
 
-  it("does not degrade a family for permission, cancellation, missing-target, bad-command or ambiguity", () => {
+  it("does not degrade a family for permission, cancellation, missing-target, bad-command, unknown exit or ambiguity", () => {
     const sigs: Parameters<ProgressController["recordFailure"]>[0][] = [
       { tool: "run_command", commandSnippet: "ls -R", exitCode: 1, stderr: "permission denied" },
       { tool: "run_command", commandSnippet: "ls -R", exitCode: 1, cancelled: true },
@@ -309,6 +349,16 @@ describe("ProgressController capability failure classification", () => {
       { tool: "run_command", commandSnippet: "ls -R", exitCode: 1, stderr: "command not found" },
       { tool: "run_command", commandSnippet: "ls -R", exitCode: 1, policyBlocked: true },
       { tool: "run_command", commandSnippet: "ls -R", exitCode: 0 },
+      // Unknown non-zero exit and a diagnostic-free exit 1 are inconclusive,
+      // not proof the enumeration family is broken.
+      { tool: "run_command", commandSnippet: "ls -R", exitCode: 1, stderr: "boom: unexpected failure" },
+      { tool: "run_command", commandSnippet: "ls -R", exitCode: 1 },
+      {
+        tool: "run_command",
+        commandSnippet: "ls -R",
+        exitCode: 1,
+        stderr: "Get-ChildItem : Cannot find path 'C:\\nope' because it does not exist.",
+      },
     ];
     for (const sig of sigs) {
       const pc = new ProgressController();
@@ -324,8 +374,8 @@ describe("ProgressController capability failure classification", () => {
 
   it("still degrades recursive enumeration after two genuine capability failures", () => {
     const pc = new ProgressController();
-    pc.recordFailure({ tool: "run_command", commandSnippet: "ls -R", exitCode: 1 });
-    const second = pc.recordFailure({ tool: "run_command", commandSnippet: "ls -R", exitCode: 1 });
+    pc.recordFailure({ tool: "run_command", commandSnippet: "ls -R", exitCode: 1, capabilityFailure: true });
+    const second = pc.recordFailure({ tool: "run_command", commandSnippet: "ls -R", exitCode: 1, capabilityFailure: true });
     assert.strictEqual(second.outcome, "capability");
     assert.strictEqual(second.state, "DEGRADED");
     assert.strictEqual(pc.getCapabilityState("shell.recursive_enumeration"), "DEGRADED");
@@ -333,8 +383,8 @@ describe("ProgressController capability failure classification", () => {
 
   it("restores availability on a successful probe", () => {
     const pc = new ProgressController();
-    pc.recordFailure({ tool: "run_command", commandSnippet: "ls -R", exitCode: 1 });
-    pc.recordFailure({ tool: "run_command", commandSnippet: "ls -R", exitCode: 1 });
+    pc.recordFailure({ tool: "run_command", commandSnippet: "ls -R", exitCode: 1, capabilityFailure: true });
+    pc.recordFailure({ tool: "run_command", commandSnippet: "ls -R", exitCode: 1, capabilityFailure: true });
     assert.strictEqual(pc.getCapabilityState("shell.recursive_enumeration"), "DEGRADED");
     pc.recordSuccess("shell.recursive_enumeration");
     assert.strictEqual(pc.getCapabilityState("shell.recursive_enumeration"), "AVAILABLE");

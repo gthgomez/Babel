@@ -70,17 +70,44 @@ export interface FailureSignature {
   badCommand?: boolean | undefined;
   /** Explicit missing file/directory/pattern target. */
   missingTarget?: boolean | undefined;
+  /**
+   * Explicit trusted positive evidence that the tool family itself failed to
+   * execute, supplied only by a trusted boundary (never inferred from ordinary
+   * command text). Required before an outcome may be classified `capability`.
+   */
+  capabilityFailure?: boolean | undefined;
 }
 
 const CANCELLED_RE = /\b(?:(?:operation|request) was aborted|aborted|sigint|sigterm|cancelled|canceled|interrupted)\b/i;
 const PERMISSION_RE = /\b(?:permission denied|access is denied|eacces|eperm|operation not permitted|not permitted|autonomy_denied|policy_denied|denied by policy)\b/i;
 const BAD_COMMAND_RE = /\b(?:command not found|not recognized as an internal or external command|unknown (?:option|command|flag)|unrecognized arguments?|invalid (?:option|argument)|usage:)\b/i;
-const MISSING_TARGET_RE = /\b(?:enoent|no such file or directory)\b/i;
+// Missing-target diagnostics across POSIX and Windows shells. PowerShell reports
+// "Cannot find path '...' because it does not exist."; cmd reports "The system
+// cannot find the file specified.". Both are missing targets, not capability
+// failures. Deliberately narrow: these phrases only ever downgrade a failure to
+// a benign class, so a wider match can never over-degrade a family.
+const MISSING_TARGET_RE = /\b(?:enoent|no such file or directory|cannot find (?:the )?(?:path|file)|the system cannot find the (?:file|path)|path not found)\b/i;
+/**
+ * First-party evidence from Babel's own sandbox boundary that the process could
+ * not be launched at all. That is a genuine capability failure (the tool family
+ * itself is unusable), unlike ordinary command text, and is emitted only by the
+ * sandbox — so it is trusted positive evidence rather than a command-supplied
+ * English diagnostic.
+ */
+const TRUSTED_SPAWN_FAILURE_RE = /\[sandbox\] (?:Transient spawn error \(retries exhausted\)|Spawn error):/;
 
 /**
  * Classify an observed outcome. Explicit caller flags win over inference so the
- * dispatcher can supply trusted context; inference stays conservative and never
- * treats an ordinary non-zero exit as an ambiguity.
+ * dispatcher can supply trusted context, and inference is fail-safe: recognizing
+ * a benign class (cancellation, permission, bad command, missing target, empty
+ * success) can only *prevent* a false degradation, so those patterns stay
+ * conservative but may be broadened exactly.
+ *
+ * A `capability` outcome is never inferred. It requires positive trusted
+ * evidence — an explicit caller classification or the sandbox's own
+ * launch-failure marker — because an unrecognized non-zero exit is not proof
+ * that the tool family itself is broken. Everything unclassified is reported as
+ * `ambiguous` (a command/ambiguity diagnostic) and never degrades a family.
  */
 export function classifyCapabilityFailure(sig: FailureSignature): CapabilityFailureClass {
   if (sig.outcome) return sig.outcome;
@@ -92,10 +119,17 @@ export function classifyCapabilityFailure(sig: FailureSignature): CapabilityFail
     return 'permission';
   }
   if (sig.exitCode === 0) return 'empty_success';
-  if (sig.badCommand === true || BAD_COMMAND_RE.test(stderr)) return 'bad_command';
-  if (sig.missingTarget === true || MISSING_TARGET_RE.test(stderr)) return 'missing_target';
-  if (sig.exitCode === undefined && !stderr.trim()) return 'ambiguous';
-  return 'capability';
+  // Explicit trusted flags win over any text inference.
+  if (sig.badCommand === true) return 'bad_command';
+  if (sig.missingTarget === true) return 'missing_target';
+  // Positive trusted evidence of a family-wide capability failure — an explicit
+  // caller flag or the sandbox's own launch-failure marker — precedes the
+  // benign-class text patterns. A launch failure already carries "ENOENT",
+  // which must not be misread as a missing *target*.
+  if (sig.capabilityFailure === true || TRUSTED_SPAWN_FAILURE_RE.test(stderr)) return 'capability';
+  if (BAD_COMMAND_RE.test(stderr)) return 'bad_command';
+  if (MISSING_TARGET_RE.test(stderr)) return 'missing_target';
+  return 'ambiguous';
 }
 
 export interface ProgressControllerSnapshot {

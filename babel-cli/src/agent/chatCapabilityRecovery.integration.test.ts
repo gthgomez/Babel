@@ -34,6 +34,7 @@ interface ProgressProbe {
     exitCode?: number;
     stderr?: string;
     policyBlocked?: boolean;
+    capabilityFailure?: boolean;
   }): { outcome: string; state: string };
   admitCapabilityRecoveryProbe(request: {
     capability: string;
@@ -66,8 +67,8 @@ test('a degraded capability is probed once, suppressed, and re-armed for a new t
 
     // Genuine capability failures degrade the family; an isolation/permission
     // denial deliberately would not.
-    pc.recordFailure({ tool: 'run_command', commandSnippet: RECURSIVE.command, exitCode: 1 });
-    pc.recordFailure({ tool: 'run_command', commandSnippet: RECURSIVE.command, exitCode: 1 });
+    pc.recordFailure({ tool: 'run_command', commandSnippet: RECURSIVE.command, exitCode: 1, capabilityFailure: true });
+    pc.recordFailure({ tool: 'run_command', commandSnippet: RECURSIVE.command, exitCode: 1, capabilityFailure: true });
     assert.equal(pc.getCapabilityState('shell.recursive_enumeration'), 'DEGRADED');
 
     const ctx = { agentId: 'test', runId: 'test', runDir: root, babelRoot: root, projectRoot: root };
@@ -104,8 +105,8 @@ test('probe scope is host-derived and refuses a model-supplied environment label
   try {
     const engine = new ChatEngine({ task: 'List the tree', projectRoot: root });
     const pc = progress(engine);
-    pc.recordFailure({ tool: 'run_command', commandSnippet: RECURSIVE.command, exitCode: 1 });
-    pc.recordFailure({ tool: 'run_command', commandSnippet: RECURSIVE.command, exitCode: 1 });
+    pc.recordFailure({ tool: 'run_command', commandSnippet: RECURSIVE.command, exitCode: 1, capabilityFailure: true });
+    pc.recordFailure({ tool: 'run_command', commandSnippet: RECURSIVE.command, exitCode: 1, capabilityFailure: true });
 
     const ctx = { agentId: 'test', runId: 'test', runDir: root, babelRoot: root, projectRoot: root };
     await (engine as any).executeOneAction({ ...RECURSIVE }, ctx, {}, { index: 0 });

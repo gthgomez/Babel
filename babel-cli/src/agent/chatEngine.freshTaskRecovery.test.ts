@@ -41,6 +41,7 @@ interface ProgressControllerProbe {
     commandSnippet?: string;
     exitCode?: number;
     stderr?: string;
+    capabilityFailure?: boolean;
   }): { capability: string; state: string; outcome: string };
   snapshot(): { capabilities?: Record<string, unknown> };
   restore(snapshot: unknown): void;
@@ -674,8 +675,8 @@ test('#216 capability health survives a task boundary and is not blanked', () =>
   // permission denial is recorded but must NOT degrade it, so this fixture
   // drives the capability outcome directly rather than depending on a
   // sandbox-denied shell command.
-  controller.recordFailure({ tool: 'run_command', commandSnippet: 'Get-ChildItem -Recurse', exitCode: 1 });
-  controller.recordFailure({ tool: 'run_command', commandSnippet: 'Get-ChildItem -Recurse', exitCode: 1 });
+  controller.recordFailure({ tool: 'run_command', commandSnippet: 'Get-ChildItem -Recurse', exitCode: 1, capabilityFailure: true });
+  controller.recordFailure({ tool: 'run_command', commandSnippet: 'Get-ChildItem -Recurse', exitCode: 1, capabilityFailure: true });
   assert.equal(
     controller.getCapabilityState('shell.recursive_enumeration'),
     'DEGRADED',
