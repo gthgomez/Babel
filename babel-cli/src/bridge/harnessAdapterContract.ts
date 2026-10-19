@@ -35,6 +35,25 @@ export interface HarnessAdapterDescriptor {
   unsupportedReason?: string;
 }
 
+export const COMMAND_CODE_ATTACH_LIVE_UNSUPPORTED_REASON =
+  'Unmanaged live TUI attach is unsupported; use Babel-managed own-CLI runtime (attachLive=false).';
+
+export const COMMAND_CODE_BASE_CAPABILITIES: HarnessCapabilityFlags = {
+  catalog: true,
+  start: true,
+  readHistory: true,
+  resumeStopped: true,
+  attachLive: false,
+  stream: true,
+  steer: true,
+  cancel: true,
+  approve: true,
+  files: false,
+  diff: false,
+  usage: true,
+  exclusiveControl: false,
+};
+
 export const BABEL_NATIVE_ADAPTER: HarnessAdapterDescriptor = {
   id: 'babel-native',
   displayName: 'Babel native',
@@ -56,27 +75,20 @@ export const BABEL_NATIVE_ADAPTER: HarnessAdapterDescriptor = {
   },
 };
 
-/** Built-in adapters ship disabled until host installation is verified. */
-export const PLANNED_EXTERNAL_ADAPTERS: HarnessAdapterDescriptor[] = [
-  {
-    id: 'command-code',
-    displayName: 'Command Code CLI',
-    version: 'unverified',
-    capabilities: {
-      catalog: true,
-      start: true,
-      readHistory: true,
-      resumeStopped: true,
-      attachLive: false,
-      stream: true,
-      steer: true,
-      cancel: true,
-      approve: true,
-      files: false,
-      diff: false,
-      usage: true,
-      exclusiveControl: false,
-    },
-    unsupportedReason: 'Live TUI attach is not established; use Babel-managed ACP runtime.',
-  },
+/** Campaign order for external own-CLI adapters (not all implemented). */
+export const EXTERNAL_ADAPTER_CAMPAIGN_ORDER: HarnessAdapterId[] = [
+  'command-code',
+  'opencode',
+  'antigravity',
+  'claude-code',
+  'codex',
 ];
+
+/** Reserved profile ids for future slices (fixtures only; no live qualification). */
+export const EXTERNAL_ADAPTER_PROFILE_IDS = Object.freeze({
+  commandCodeGoat: 'command-code-goat',
+  openCodeGo: 'opencode-go',
+});
+
+/** Legacy static placeholder; prefer `buildHarnessAdapterCatalog()`. */
+export const PLANNED_EXTERNAL_ADAPTERS: HarnessAdapterDescriptor[] = [];

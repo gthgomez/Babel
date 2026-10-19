@@ -9,4 +9,5 @@ for tool in node pwsh; do
     exit 1
   fi
 done
+node "$SCRIPT_DIR/../tools/assert-branch-prior-gate-complete.mjs" "${1:-origin}"
 node "$SCRIPT_DIR/../tools/validate-push-candidates.mjs" "${1:-origin}"

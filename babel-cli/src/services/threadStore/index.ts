@@ -10,6 +10,7 @@ export {
   getTurnBounds,
   listThreads,
   loadThreadCells,
+  collapseHistoryCellsById,
   loadTurnTerminalRecord,
   persistTurnTerminalRecord,
   replaceThreadRecords,

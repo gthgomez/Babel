@@ -42,6 +42,8 @@ export interface SharedProtocolHostRunOptions {
    * Production uses wall time; tests may inject a manual scheduler without changing timeout policy.
    */
   emergencyObservationClock?: SharedProtocolHostRunClock;
+  /** When set to `command-code`, thread.create binds the Command Code own-CLI harness. */
+  harnessAdapterId?: 'command-code' | 'babel-native';
 }
 
 /** Wall-clock and timers used for post-emergency-ACK observation bounds. */
@@ -611,6 +613,9 @@ export async function executeSharedProtocolHostRun(
         mode: 'chat',
         ...(model ? { model } : {}),
         ...(provider ? { provider } : {}),
+        ...(options.harnessAdapterId === 'command-code'
+          ? { harness_adapter_id: 'command-code' }
+          : {}),
       });
       threadId = created.thread_id;
     }

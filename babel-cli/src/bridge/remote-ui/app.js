@@ -4,6 +4,8 @@
   const byId = function (id) { return document.getElementById(id); };
   const tokenEl = byId('token');
   const rootEl = byId('root');
+  const harnessEl = byId('harness-adapter');
+  const vendorSessionEl = byId('vendor-session');
   const composer = byId('composer');
   const threadInput = byId('thread-id');
   const transcript = byId('transcript');
@@ -56,6 +58,12 @@
     R.setText(byId('turn-detail'), turn === 'UNKNOWN' ? 'Outcome is ambiguous. Do not resubmit automatically.' : label(turn) + ' turn state.');
     R.setText(byId('thread-id-display'), memory.threadId || 'No active thread');
     R.setText(byId('workspace'), rootEl.value || '—');
+    const harnessLabel = harnessEl && harnessEl.value === 'command-code' ? 'Command Code CLI' : 'Babel native';
+    R.setText(byId('harness-label'), harnessLabel);
+    if (vendorSessionEl) {
+      const cc = harnessEl && harnessEl.value === 'command-code';
+      vendorSessionEl.disabled = !cc || !memory.token && !memory.pairedDevice;
+    }
     R.setText(byId('connection-copy'), host === 'ONLINE' ? 'Host connected' : 'Host ' + label(host).toLowerCase());
     document.querySelectorAll('.topbar-status .status-dot, #host-card .status-dot').forEach(function (dot) {
       dot.className = 'status-dot ' + String(host).toLowerCase();
@@ -264,6 +272,39 @@
     };
   }
 
+  let lastCatalogResult = null;
+
+  function refreshVendorSessions(catalogResult) {
+    if (!vendorSessionEl) return;
+    const harness = harnessEl && harnessEl.value === 'command-code';
+    vendorSessionEl.disabled = !harness;
+    const previous = vendorSessionEl.value;
+    while (vendorSessionEl.options.length > 1) vendorSessionEl.remove(1);
+    if (catalogResult) lastCatalogResult = catalogResult;
+    if (!harness || !lastCatalogResult || !Array.isArray(lastCatalogResult.vendor_sessions)) return;
+    lastCatalogResult.vendor_sessions.forEach(function (row) {
+      if (!row || !row.session_id) return;
+      const opt = document.createElement('option');
+      opt.value = row.session_id;
+      const owned = row.bound && row.canonical_thread_id ? ' [Babel ' + row.canonical_thread_id + ']' : '';
+      opt.textContent = (row.title ? row.title + ' ' : '') + row.session_id + owned;
+      vendorSessionEl.appendChild(opt);
+    });
+    if (previous && vendorSessionEl.querySelector('option[value="' + previous + '"]')) {
+      vendorSessionEl.value = previous;
+    }
+  }
+
+  async function renderHistoryCells(threadId) {
+    const history = await rpc('history.lookup', { thread_id: threadId });
+    if (history.classified.kind !== 'success') return;
+    const cells = (history.payload.result && history.payload.result.cells) || [];
+    transcript.textContent = '';
+    cells.forEach(function (cell) {
+      appendEvent({ type: cell.kind || 'cell', text: JSON.stringify(cell.payload || {}) });
+    });
+  }
+
   async function observeThread() {
     if (memory.threadId) connectSocket(await mintTicket());
   }
@@ -286,6 +327,7 @@
       try {
         const catalog = await rpc('remote.catalog', {});
         const sessions = (catalog.payload.result && catalog.payload.result.sessions) || [];
+        refreshVendorSessions(catalog.payload.result);
         if (sessions.length && byId('thread-id')) {
           byId('thread-id').placeholder = sessions.length + ' session(s) on host';
         }
@@ -302,6 +344,7 @@
     try {
       const catalog = await rpc('remote.catalog', {});
       if (catalog.classified.kind === 'success') {
+        refreshVendorSessions(catalog.payload.result);
         const sessions = (catalog.payload.result && catalog.payload.result.sessions) || [];
         const row = sessions.find(function (item) { return item.thread_id === memory.threadId; });
         if (row) {
@@ -397,9 +440,16 @@
       if (host === 'UNKNOWN' || host === 'OFFLINE') host = transition('host', host, 'start');
       renderChrome();
       await refreshAuthSession();
+      const health = await fetch('/health');
+      const healthJson = await health.json();
+      if (!healthJson.ok) throw new Error('health');
+      if (host === 'RECONNECTING' || host === 'CONNECTING') host = transition('host', host, 'open');
       await observeThread();
       if (memory.threadId) {
         thread = transition('thread', thread, 'recover');
+        if (memory.authKind === 'paired') {
+          await ensurePairedControlLease(memory.threadId);
+        }
         const resumed = await rpc('thread.resume', {
           thread_id: memory.threadId,
           project_root: rootEl.value,
@@ -411,7 +461,9 @@
         const cells = (history.payload.result && history.payload.result.cells) || [];
         transcript.textContent = '';
         cells.forEach(function (cell) { appendEvent({ type: cell.kind || 'cell', text: JSON.stringify(cell.payload || {}) }); });
-        await syncControlLeaseFromHost();
+        if (memory.authKind !== 'paired') {
+          await syncControlLeaseFromHost();
+        }
         await reconcileAuthoritativeTaskState();
         thread = transition('thread', thread, 'ready');
       }
@@ -426,14 +478,63 @@
     renderChrome();
   }
 
+  async function ensurePairedControlLease(threadId) {
+    if (memory.authKind !== 'paired' || !threadId) return;
+    const acquired = await rpc('control.acquire', { thread_id: threadId, force: false });
+    if (acquired.classified.kind !== 'success' || !acquired.payload.result) {
+      throw new Error('control.acquire rejected');
+    }
+    memory.controlEpoch = acquired.payload.result.epoch;
+    memory.controlExpiresAtMs = acquired.payload.result.expires_at_ms || null;
+    startLeaseRenewal();
+  }
+
   async function createThread() {
     try {
       thread = transition('thread', thread, 'create');
       const sessionId = await ensureSession();
-      const result = await rpc('thread.create', { project_root: rootEl.value, session_id: sessionId });
-      if (result.classified.kind !== 'success') throw new Error('thread.create rejected');
-      memory.threadId = result.payload.result && result.payload.result.thread_id;
-      clearControlLease();
+      const harness = harnessEl && harnessEl.value ? harnessEl.value : 'babel-native';
+      const createParams = { project_root: rootEl.value, session_id: sessionId };
+      if (harness === 'command-code' && vendorSessionEl && vendorSessionEl.value) {
+        const nativeId = vendorSessionEl.value;
+        const selected = (lastCatalogResult && lastCatalogResult.vendor_sessions || []).find(function (row) {
+          return row && row.session_id === nativeId;
+        });
+        createParams.harness_adapter_id = 'command-code';
+        if (selected && selected.canonical_thread_id) {
+          memory.threadId = selected.canonical_thread_id;
+          await ensurePairedControlLease(memory.threadId);
+          const resumed = await rpc('thread.resume', {
+            thread_id: memory.threadId,
+            project_root: rootEl.value,
+            session_id: sessionId,
+          });
+          if (resumed.classified.kind !== 'success') throw new Error('thread.resume rejected');
+        } else {
+          createParams.harness_native_session_id = nativeId;
+          const result = await rpc('thread.create', createParams);
+          if (result.classified.kind !== 'success') throw new Error('thread.create rejected');
+          memory.threadId = result.payload.result && result.payload.result.thread_id;
+          await ensurePairedControlLease(memory.threadId);
+        }
+        if (memory.authKind === 'paired') {
+          /* lease acquired before resume/create above */
+        } else {
+          await syncControlLeaseFromHost();
+        }
+        const opened = await rpc('harness.command_code.open', {
+          thread_id: memory.threadId,
+          project_root: rootEl.value,
+          harness_native_session_id: nativeId,
+        });
+        if (opened.classified.kind !== 'success') throw new Error('harness.command_code.open rejected');
+        await renderHistoryCells(memory.threadId);
+      } else {
+        if (harness === 'command-code') createParams.harness_adapter_id = 'command-code';
+        const result = await rpc('thread.create', createParams);
+        if (result.classified.kind !== 'success') throw new Error('thread.create rejected');
+        memory.threadId = result.payload.result && result.payload.result.thread_id;
+      }
       threadInput.value = memory.threadId || '';
       thread = transition('thread', thread, 'ready');
       await observeThread();
@@ -447,6 +548,9 @@
       memory.threadId = threadInput.value;
       clearControlLease();
       const sessionId = await ensureSession();
+      if (memory.authKind === 'paired') {
+        await ensurePairedControlLease(memory.threadId);
+      }
       const result = await rpc('thread.resume', {
         thread_id: memory.threadId,
         project_root: rootEl.value,
@@ -455,7 +559,9 @@
       if (result.classified.kind !== 'success') throw new Error('thread.resume rejected');
       thread = transition('thread', thread, 'ready');
       await observeThread();
-      await syncControlLeaseFromHost();
+      if (memory.authKind !== 'paired') {
+        await syncControlLeaseFromHost();
+      }
     } catch (error) { thread = transition('thread', thread, 'fail'); appendEvent({ type: 'failed', error: 'Thread resume failed.' }); }
     renderChrome();
   }
@@ -590,6 +696,17 @@
       } catch (error) { appendEvent({ type: 'failed', error: 'Verification unavailable.' }); }
     };
     rootEl.oninput = renderChrome;
+    if (harnessEl) {
+      harnessEl.onchange = async function () {
+        renderChrome();
+        if (harnessEl.value === 'command-code' && (memory.token || memory.pairedDevice)) {
+          try {
+            const catalog = await rpc('remote.catalog', {});
+            if (catalog.classified.kind === 'success') refreshVendorSessions(catalog.payload.result);
+          } catch (catalogError) { /* optional */ }
+        }
+      };
+    }
     document.addEventListener('visibilitychange', function () {
       if (document.visibilityState === 'visible') {
         void syncControlLeaseFromHost().then(function () { renderChrome(); });
@@ -607,6 +724,12 @@
       getState: function () {
         return { host: host, thread: thread, turn: turn, approval: approval, sendInFlight: sendInFlight };
       },
+      getControlEpoch: function () {
+        return memory.controlEpoch;
+      },
+      getAuthKind: function () {
+        return memory.authKind;
+      },
       memoryHasToken: function () { return Boolean(memory.token) || memory.pairedDevice; },
       send: send,
       stop: stop,
@@ -619,6 +742,7 @@
         if (patch && patch.memory) Object.assign(memory, patch.memory);
       },
       reconnect: reconnect,
+      observeThread: observeThread,
       reconcileAuthoritativeTaskState: reconcileAuthoritativeTaskState,
     };
     renderChrome();

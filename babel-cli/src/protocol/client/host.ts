@@ -25,10 +25,15 @@ import {
   RepoIdentityMismatchError,
 } from '../../services/threadStore/sessionHydration.js';
 import {
+  commandCodeNativeOwnershipViolation,
+  withSerializedCommandCodeNativeBinding,
+} from '../../bridge/remoteCatalog.js';
+import {
   allocateThreadId,
   ensureThread,
   loadSessionDescriptor,
   loadThreadCells,
+  collapseHistoryCellsById,
   loadTurnTerminalRecord,
   persistTurnTerminalRecord,
   resolveLatestTurnIdFromThreadStore,
@@ -58,6 +63,7 @@ import type {
   VerificationLookupResult,
 } from '../types.js';
 import { RemoteApprovalBroker, runOnRemoteSurface } from '../../bridge/remoteApproval.js';
+import { probeCommandCodeInstallation } from '../../bridge/commandCodeCliDiscovery.js';
 import { collectWorkspaceChanges } from '../../bridge/workspaceChanges.js';
 import {
   mapVerificationEvidence,
@@ -232,6 +238,10 @@ function defaultEngineFactory(descriptor: SessionDescriptor): ChatEngine {
 
 function descriptorFromCreate(threadId: string, params: ThreadCreateParams): SessionDescriptor {
   const mode = params.mode ?? 'chat';
+  const harness =
+    params.harness_adapter_id && params.harness_adapter_id !== 'babel-native'
+      ? params.harness_adapter_id
+      : undefined;
   return {
     schemaVersion: 1,
     threadId,
@@ -244,6 +254,16 @@ function descriptorFromCreate(threadId: string, params: ThreadCreateParams): Ses
     kernelVersion: 'executor-kernel-v1',
     contractVersion: 'executor-contract-v1',
     ...(params.task !== undefined ? { task: params.task } : {}),
+    ...(harness ? { harness_adapter_id: harness } : {}),
+    ...(params.harness_native_session_id
+      ? { harness_native_session_id: params.harness_native_session_id }
+      : {}),
+    ...(harness === 'command-code'
+      ? {
+          harness_provider_profile: params.provider ?? process.env['BABEL_PROVIDER'] ?? 'default',
+          harness_model_profile: params.model ?? process.env['BABEL_MODEL'] ?? 'default',
+        }
+      : {}),
   };
 }
 
@@ -390,6 +410,18 @@ export async function handleProtocolRequest(
         if (!params) {
           return errorResponse(id, BabelProtocolErrorCode.INVALID_PARAMS, 'Missing params');
         }
+        if (params.harness_adapter_id === 'command-code') {
+          const probe = await probeCommandCodeInstallation();
+          if (probe.state !== 'verified') {
+            return errorResponse(
+              id,
+              BabelProtocolErrorCode.MODE_UNSUPPORTED,
+              probe.state === 'missing'
+                ? 'Command Code CLI is not installed on the host.'
+                : 'Command Code CLI installation could not be verified.',
+            );
+          }
+        }
         let projectRoot = params.project_root;
         try {
           if (state.projectRootGuard) {
@@ -404,11 +436,45 @@ export async function handleProtocolRequest(
         }
         const threadId = allocateThreadId();
         const descriptor = descriptorFromCreate(threadId, { ...params, project_root: projectRoot });
-        ensureThread(threadId, { project_root: descriptor.projectRoot });
-        writeSessionDescriptor(descriptor);
-        state.descriptors.set(threadId, descriptor);
-        const result: ThreadCreateResult = { thread_id: threadId };
-        return { jsonrpc: '2.0', id, result };
+        const persistThread = (): JsonRpcResponse => {
+          ensureThread(threadId, { project_root: descriptor.projectRoot });
+          writeSessionDescriptor(descriptor);
+          state.descriptors.set(threadId, descriptor);
+          const result: ThreadCreateResult = { thread_id: threadId };
+          return { jsonrpc: '2.0', id, result };
+        };
+        if (
+          descriptor.harness_adapter_id === 'command-code' &&
+          descriptor.harness_native_session_id
+        ) {
+          return await withSerializedCommandCodeNativeBinding(
+            descriptor.projectRoot,
+            descriptor.harness_native_session_id,
+            async () => {
+              const violation = await commandCodeNativeOwnershipViolation(
+                state,
+                descriptor.projectRoot,
+                descriptor.harness_native_session_id!,
+              );
+              if (violation === 'corrupt') {
+                return errorResponse(
+                  id,
+                  BabelProtocolErrorCode.INVALID_PARAMS,
+                  'Multiple persisted Babel threads own this Command Code native session',
+                );
+              }
+              if (violation === 'conflict') {
+                return errorResponse(
+                  id,
+                  BabelProtocolErrorCode.INVALID_PARAMS,
+                  'Another Babel thread already owns this Command Code native session',
+                );
+              }
+              return persistThread();
+            },
+          );
+        }
+        return persistThread();
       }
       case 'thread.resume': {
         const params = request.params;
@@ -706,7 +772,12 @@ export async function handleProtocolRequest(
               // P03: dispatch through the shared runtime facade when a durable
               // descriptor exists. The pre-P03 direct adapter remains selectable
               // via the compatibility switch for trace comparison.
-              if (isRuntimeCoordinatorEnabled() && descriptor != null) {
+              const harnessAdapterId = descriptor?.harness_adapter_id;
+              const useRuntimeCoordinator =
+                isRuntimeCoordinatorEnabled() &&
+                descriptor != null &&
+                harnessAdapterId !== 'command-code';
+              if (useRuntimeCoordinator) {
                 runtimeExecution = state.coordinator.beginTurn({
                   prepared: buildPreparedTurn(descriptor),
                   threadId: params.thread_id,
@@ -829,7 +900,7 @@ export async function handleProtocolRequest(
         if (!params) {
           return errorResponse(id, BabelProtocolErrorCode.INVALID_PARAMS, 'Missing params');
         }
-        const cells = loadThreadCells(params.thread_id);
+        const cells = collapseHistoryCellsById(loadThreadCells(params.thread_id));
         let filtered = cells;
         if (params.turn_id !== undefined) {
           filtered = filtered.filter((c) => c.turn_id === params.turn_id);

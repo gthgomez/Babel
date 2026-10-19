@@ -67,6 +67,11 @@ import { writePairUiResponse } from './pairUiAssets.js';
 import { pairedDeviceMutationOriginOk } from './bridgeMutationPolicy.js';
 import type { BridgeClientContext } from './bridgeClientAuth.js';
 import { acceptanceHealthExtension } from './acceptanceBridge.js';
+import {
+  CommandCodeAcpRuntimeRegistry,
+  type CommandCodeAcpLaunchOverride,
+} from './commandCodeAcpRuntime.js';
+import { createHarnessAwareEngineFactory } from './harnessEngineFactory.js';
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
 export interface BridgeServerOptions {
@@ -113,6 +118,14 @@ export interface BridgeServerOptions {
   desktopControllerProofKey?: string;
   /** Test-only acceptance fixture metadata (never set on ordinary `remote serve`). */
   acceptanceFixture?: { kind: string; label: string };
+  /** Per-bridge Command Code ACP registry (defaults to a host-scoped instance). */
+  commandCodeRegistry?: CommandCodeAcpRuntimeRegistry;
+  /** Test-only injected ACP peer launch (never set on production serve). */
+  commandCodeTestLaunch?: CommandCodeAcpLaunchOverride;
+  /** Test-only installation probe override (does not select production ACP binary). */
+  commandCodeInstallProbe?: () => Promise<import('./commandCodeCliDiscovery.js').CommandCodeInstallProbe>;
+  /** Test-only: PATH probe executable for Command Code CLI version check. */
+  commandCodeProbeExecutable?: string;
 }
 
 /** Test-only hooks for post-initial-auth / pre-body-read synchronization. */
@@ -236,6 +249,7 @@ export class BridgeServer {
   private readonly bridgeInstance = (process.env['BABEL_BRIDGE_INSTANCE'] ?? '').trim();
   readonly wsTickets = new WsTicketStore();
   readonly devicePairing: DevicePairingService;
+  readonly commandCodeRegistry: CommandCodeAcpRuntimeRegistry;
 
   /** Active WebSocket transports keyed by session ID. */
   private wsTransports = new Map<string, BridgeTransport>();
@@ -261,14 +275,26 @@ export class BridgeServer {
         'https://localhost:*',
       ];
     const enforceControlLease = this.options.enforceControlLease !== false;
+    this.commandCodeRegistry =
+      this.options.commandCodeRegistry ??
+      new CommandCodeAcpRuntimeRegistry({
+        hostScopeId: this.bridgeInstance || randomUUID(),
+        ...(this.options.commandCodeTestLaunch
+          ? { testLaunch: this.options.commandCodeTestLaunch }
+          : {}),
+        ...(this.options.commandCodeInstallProbe
+          ? { installProbe: this.options.commandCodeInstallProbe }
+          : {}),
+      });
     this.protocolGateway =
       this.options.protocolGateway ??
       new ProtocolGateway({
         allowedWorkspaceRoot: this.options.allowedWorkspaceRoot ?? process.cwd(),
         enforceControlLease,
-        ...(this.options.engineFactory
-          ? { engineFactory: this.options.engineFactory }
-          : {}),
+        commandCodeRegistry: this.commandCodeRegistry,
+        engineFactory:
+          this.options.engineFactory ??
+          createHarnessAwareEngineFactory(this.commandCodeRegistry),
       });
     this.devicePairing =
       this.options.devicePairing ?? new DevicePairingService(this.authToken);
@@ -380,6 +406,7 @@ export class BridgeServer {
     // P05/P11 (A4): release the gateway host's durable admission handles so a
     // stopped bridge leaks no SQLite ownership into a later start.
     closeProtocolHostState(this.protocolGateway.host);
+    await this.commandCodeRegistry.closeAll();
 
     if (typeof this.server.closeAllConnections === 'function') {
       this.server.closeAllConnections();

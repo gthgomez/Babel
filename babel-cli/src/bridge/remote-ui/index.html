@@ -65,6 +65,15 @@
           <input id="token" type="password" autocomplete="off" spellcheck="false"/>
           <label for="root">Workspace root</label>
           <input id="root" autocomplete="off" placeholder="registered host workspace"/>
+          <label for="harness-adapter">Harness</label>
+          <select id="harness-adapter">
+            <option value="babel-native">Babel native</option>
+            <option value="command-code">Command Code CLI (managed ACP)</option>
+          </select>
+          <label for="vendor-session">Saved Command Code session (optional)</label>
+          <select id="vendor-session" disabled>
+            <option value="">New native session</option>
+          </select>
           <div class="button-row"><button id="connect" class="button button-primary" type="button">Connect</button><button id="take-control" class="button" type="button" disabled>Take control</button><button id="create" class="button" type="button" disabled>Create thread</button><button id="resume" class="button" type="button" disabled>Resume thread</button></div>
           <p id="control-copy" class="muted">Viewing does not grant mutation rights. Take control before sending prompts or approvals.</p>
           <label for="thread-id">Known thread id</label>
