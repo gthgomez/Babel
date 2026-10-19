@@ -12,7 +12,10 @@ import {
 } from './desktopControllerAuth.js';
 import { HttpProtocolClient } from './httpProtocolClient.js';
 import { BridgeServer } from './sessionServer.js';
-import { executeSharedProtocolHostRun } from './sharedProtocolHostRun.js';
+import {
+  createManualSharedProtocolHostRunClock,
+  executeSharedProtocolHostRun,
+} from './sharedProtocolHostRun.js';
 
 const TOKEN = 'emergency-lifecycle-token';
 
@@ -897,6 +900,8 @@ describe('shared host-run emergency observation errors (mocked authoritative bac
       approvalCounters,
     );
 
+    const { clock: emergencyObservationClock, advance: advanceEmergencyClock } =
+      createManualSharedProtocolHostRunClock();
     const gate = createHostRunEventGate();
     const stdin = new PassThrough();
     try {
@@ -919,7 +924,7 @@ describe('shared host-run emergency observation errors (mocked authoritative bac
           observationRpcTimeoutMs: 25,
           emergencyObservationDeadlineMs: 500,
           emergencyObservationPassLimit: 4,
-          emergencyPerOpRpcTimeoutOnlyForLabel: 'approval.lookup',
+          emergencyObservationClock,
         },
         (event) => {
           gate.write(event);
@@ -946,6 +951,7 @@ describe('shared host-run emergency observation errors (mocked authoritative bac
         1,
         'approval.lookup hang after emergency ack',
       );
+      await advanceEmergencyClock(30);
 
       await gate.waitFor((event) => event.type === 'run_error', 'observation_run_error');
 
@@ -1080,8 +1086,8 @@ describe('shared host-run emergency observation errors (mocked authoritative bac
     }
   });
 
-  it('still reaches approval.lookup hang when ticket setup is delayed but per-op timeout is label-isolated', async () => {
-    const tmp = mkdtempSync(join(tmpdir(), 'babel-emergency-approval-ticket-isolated-'));
+  it('reaches approval.lookup hang when ticket setup is delayed and emergency clock advances after entry', async () => {
+    const tmp = mkdtempSync(join(tmpdir(), 'babel-emergency-approval-ticket-manual-clock-'));
     const configDir = join(tmp, 'config');
     mkdirSync(configDir, { recursive: true });
     writeFileSync(join(configDir, 'bridge.json'), JSON.stringify({ authToken: TOKEN }), 'utf8');
@@ -1097,7 +1103,7 @@ describe('shared host-run emergency observation errors (mocked authoritative bac
       desktopControllerProofKey: desktopProofKey,
       engineFactory: (descriptor) => {
         const engine = new ChatEngine({
-          task: 'approval-ticket-isolated',
+          task: 'approval-ticket-manual-clock',
           projectRoot: descriptor.projectRoot,
           executionProfile: 'chat',
         });
@@ -1124,6 +1130,8 @@ describe('shared host-run emergency observation errors (mocked authoritative bac
       approvalCounters,
     );
 
+    const { clock: emergencyObservationClock, advance: advanceEmergencyClock } =
+      createManualSharedProtocolHostRunClock();
     const gate = createHostRunEventGate();
     const stdin = new PassThrough();
     try {
@@ -1131,8 +1139,8 @@ describe('shared host-run emergency observation errors (mocked authoritative bac
         {
           port,
           projectRoot: tmp,
-          task: 'approval ticket isolated',
-          runId: 'emergency-approval-ticket-isolated',
+          task: 'approval ticket manual clock',
+          runId: 'emergency-approval-ticket-manual-clock',
           desktopClientId: desktopId,
           desktopProofKey,
           stdin,
@@ -1141,7 +1149,7 @@ describe('shared host-run emergency observation errors (mocked authoritative bac
           observationRpcTimeoutMs: 25,
           emergencyObservationDeadlineMs: 500,
           emergencyObservationPassLimit: 4,
-          emergencyPerOpRpcTimeoutOnlyForLabel: 'approval.lookup',
+          emergencyObservationClock,
         },
         (event) => {
           gate.write(event);
@@ -1164,12 +1172,13 @@ describe('shared host-run emergency observation errors (mocked authoritative bac
         1,
         'approval.lookup hang with delayed ticket',
       );
+      await advanceEmergencyClock(30);
       await gate.waitFor((event) => event.type === 'run_error', 'observation_run_error');
 
       const code = await Promise.race([
         runPromise,
         new Promise<number>((_, reject) =>
-          setTimeout(() => reject(new Error('host-run hung on isolated ticket delay')), 3_000),
+          setTimeout(() => reject(new Error('host-run hung on manual-clock ticket delay')), 3_000),
         ),
       ]);
 
