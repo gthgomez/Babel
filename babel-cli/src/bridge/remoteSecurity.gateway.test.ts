@@ -159,9 +159,17 @@ describe('Remote security and failure gateway', () => {
     const result = body.result as {
       control_lease_enforced?: boolean;
       exclusive_remote_control?: boolean;
+      execution_owner?: string;
+      unmanaged_live_attach?: { supported: boolean; reason: string };
+      harness_adapters?: Array<{ descriptor: { id: string }; installation: string }>;
     };
     assert.equal(result.control_lease_enforced, true);
     assert.equal(result.exclusive_remote_control, true);
+    assert.equal(result.execution_owner, 'protocol_host');
+    assert.equal(result.unmanaged_live_attach?.supported, false);
+    assert.ok(Array.isArray(result.harness_adapters));
+    assert.ok(result.harness_adapters.some((entry) => entry.descriptor.id === 'command-code'));
+    assert.ok(result.harness_adapters.some((entry) => entry.descriptor.id === 'babel-native'));
   });
 
   it('ignores paired force-acquire while another client holds the lease', async () => {

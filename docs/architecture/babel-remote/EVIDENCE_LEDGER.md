@@ -17,8 +17,10 @@ Status: living document for the remote implementation campaign. **Qualified** me
 | 4 | Revoke: no WS fan-out / ticket mint | Tested | `remoteRevokeFanout.gateway.test.ts`, `remoteControlWs.gateway.test.ts`, `sessionServer.ts` |
 | 4 | Stale epoch / command_id integrity | Tested | `remoteSecurity.gateway.test.ts`, `protocolGateway.test.ts` |
 | 4 | Stale approval digest / replay | Tested | `remoteApproval.test.ts`, `remoteSecurity.gateway.test.ts` |
-| 2 | Desktop ↔ phone single owner | Not qualified | Production IPC + `remote host-run` path in progress; phone E2E pending |
-| 6 | External harness adapters | Stub only | `harnessAdapterContract.ts` |
+| 2 | Desktop ↔ phone single owner | Tested (deterministic) | `sharedProtocolHostRun.*`, desktop shared-session/stack tests; phone E2E still not qualified |
+| 6 | External harness adapters — Command Code own-CLI slice | Tested (fixture/discovery) | `commandCodeCliDiscovery.test.ts`, `commandCodeOwnCliAdapter.test.ts`, `harnessAdapterRegistry.test.ts`, `remote.capabilities` via `remoteSecurity.gateway.test.ts` |
+| 6 | OpenCode / AGY / Claude Code / Codex adapters | Not implemented | Campaign stubs in `harnessAdapterRegistry.ts` (`not-implemented`) |
+| 6 | Unmanaged live TUI attach | Unsupported (explicit) | `remote.capabilities.unmanaged_live_attach.supported=false` |
 | — | Physical phone + Tailscale | Not qualified | Owner checklist in `BABEL_REMOTE_QUICKSTART.md` |
 
-**Last tested commit:** update after re-review correction push on `cursor/babel-remote-phase1-pairing-0634`.
+**Last tested commit:** `ea02842f2be7eb671eac2bc9532f3e3ac0369bd8` (merge #393); adapter slice pending new PR head.
