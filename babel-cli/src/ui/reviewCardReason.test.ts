@@ -105,8 +105,9 @@ describe('D03 reviewCard reason-first guidance', () => {
 test('context failure guidance retains known subtotal and unresolved accounting with cumulative usage', () => {
   const card = buildReviewCard({ outcome: 'BLOCKED_POLICY', status: 'blocked', reasonCode: 'context_preparation_failed',
     causeClass: 'harness', costUsd: 0.039075115852, unknownChargeCount: 1, usageScope: 'task', tokens: 3162714 })
-  assert.match(card.body, /snapshot|context authority/)
-  assert.match(card.body, /--project-root/)
+  assert.match(card.body, /context authority|durable operational state/i)
+  assert.match(card.body, /conversation/i)
+  assert.doesNotMatch(card.body, /--project-root/)
   assert.match(card.body, /0.0391 known subtotal this task/)
   assert.match(card.body, /1 unresolved charge/)
   assert.match(card.body, /3,162,714 cumulative tokens/)

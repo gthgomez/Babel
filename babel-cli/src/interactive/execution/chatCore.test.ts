@@ -800,7 +800,8 @@ test('context refusal CLI text and JSON preserve unresolved charges and useful r
   const human = formatRunResultHuman(payload)
   assert.match(human, /known subtotal/)
   assert.match(human, /1 unresolved charge/)
-  assert.match(human, /--project-root/)
+  assert.match(human, /conversation/i)
+  assert.doesNotMatch(human, /--project-root/)
 })
 
 

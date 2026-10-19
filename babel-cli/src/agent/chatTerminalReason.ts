@@ -95,8 +95,11 @@ const GUIDANCE: Record<TerminalReasonCode, TerminalReasonGuidance> = {
     nextActions: ['Inspect response diagnostics', 'Retry with an evidence-grounded answer'],
   },
   context_preparation_failed: {
-    message: 'Could not prepare context: workspace snapshot or context authority unavailable',
-    nextActions: ['Select the intended repository with --project-root', 'Inspect run evidence and resolve the snapshot prerequisite before retrying'],
+    message: 'Could not prepare the required repository context: context authority or durable operational state is unavailable',
+    nextActions: [
+      'Continue in conversation scope — repository coverage may be unavailable',
+      'Inspect run evidence for the preparation/install failure before retrying repository-grounded work',
+    ],
   },
   unknown: {
     message: 'Cause was not established',
