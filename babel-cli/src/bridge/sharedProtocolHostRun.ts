@@ -354,6 +354,7 @@ async function resolveAuthoritativeTerminalOutcome(
   client: HttpProtocolClient,
   threadId: string,
   terminal: TurnTerminalRecord,
+  rpcOptions?: { signal?: AbortSignal },
 ): Promise<string> {
   if (terminal.fixture_execution) return 'UNVERIFIED_PATCH';
   if (terminal.event_type === 'cancelled') return 'CANCELLED';
@@ -367,7 +368,7 @@ async function resolveAuthoritativeTerminalOutcome(
       'verification.lookup',
       { thread_id: string },
       { has_machine_evidence: boolean }
-    >('verification.lookup', { thread_id: threadId });
+    >('verification.lookup', { thread_id: threadId }, Date.now(), rpcOptions);
     return verification.has_machine_evidence ? 'VERIFIED_COMPLETE' : 'UNVERIFIED_PATCH';
   }
   return outcome;
@@ -377,6 +378,7 @@ async function mapAuthoritativeTerminalToStream(
   client: HttpProtocolClient,
   threadId: string,
   terminal: TurnTerminalRecord,
+  rpcOptions?: { signal?: AbortSignal },
 ): Promise<Record<string, unknown>> {
   if (terminal.event_type === 'cancelled') {
     return { type: 'cancelled' };
@@ -387,7 +389,12 @@ async function mapAuthoritativeTerminalToStream(
       error: terminal.error ?? 'Turn failed on the shared protocol host',
     };
   }
-  const terminalOutcome = await resolveAuthoritativeTerminalOutcome(client, threadId, terminal);
+  const terminalOutcome = await resolveAuthoritativeTerminalOutcome(
+    client,
+    threadId,
+    terminal,
+    rpcOptions,
+  );
   return {
     type: 'run_complete',
     result: {
@@ -439,7 +446,7 @@ export async function reconcileTerminalTurnFromHost(
   );
   const terminal = history.turn_terminal;
   if (!terminal || terminal.turn_id !== submittedTurnId) return null;
-  return await mapAuthoritativeTerminalToStream(client, threadId, terminal);
+  return await mapAuthoritativeTerminalToStream(client, threadId, terminal, rpcOptions);
 }
 
 /** Run one shared-host chat turn to completion. Returns process exit code. */

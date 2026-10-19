@@ -138,7 +138,9 @@ test('startup failure records sanitized artifact without raw stderr payloads', {
   const entry = join(root, 'exit1.mjs');
   await writeFile(
     entry,
-    `process.stderr.write('synthetic-secret-should-not-appear\\n');
+    `const err = new Error('MODULE_NOT_FOUND fixture loader');
+err.code = 'MODULE_NOT_FOUND';
+process.stderr.write(String(err.code) + '\\n');
 process.exit(1);
 `,
   );
@@ -179,6 +181,8 @@ process.exit(1);
       spawn: documentedNodeChildSpawnOptions(),
       stderrBytesObservedInTestHarness: stderrBytes,
       diagnosticCodes: diagnostics.map((line) => line.code).filter(Boolean),
+      startupFailureClass: 'MODULE_NOT_FOUND',
+      childExitCode: 1,
       argvShape: redactArgv(productionNodeCliArgv(entry, ['remote', 'serve', '--port', '4733'])),
     };
     await writeFileAsync(artifactPath, `${JSON.stringify(artifact)}\n`, 'utf8');
