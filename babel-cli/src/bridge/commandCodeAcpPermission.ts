@@ -6,10 +6,11 @@ function toolCallRecord(params: Record<string, unknown>): Record<string, unknown
   return undefined;
 }
 
+/** Returns null when the operation cannot be represented safely (fail closed before broker). */
 export function permissionActionFromAcpParams(
   params: Record<string, unknown>,
   cwd: string,
-): AgentAction {
+): AgentAction | null {
   const title = typeof params.title === 'string' ? params.title : 'Command Code permission';
   const toolCall = toolCallRecord(params);
   const toolCallId =
@@ -26,27 +27,40 @@ export function permissionActionFromAcpParams(
       typeof rawInput === 'object' && rawInput && 'path' in (rawInput as object)
         ? String((rawInput as { path?: unknown }).path ?? '')
         : '';
-    if (!path) {
-      return failClosedPermission(title, toolCallId);
-    }
+    if (!path) return null;
     return {
       type: 'ask_approval',
       reason: `${title}${toolCallId ? ` (${toolCallId})` : ''}`,
       requested_action: { type: 'read_file', path },
     };
   }
-  if (kind === 'edit' || kind === 'write' || kind === 'delete') {
+  if (kind === 'edit' || kind === 'write') {
     const path =
       typeof rawInput === 'object' && rawInput && 'path' in (rawInput as object)
         ? String((rawInput as { path?: unknown }).path ?? '')
         : '';
-    if (!path) {
-      return failClosedPermission(title, toolCallId);
-    }
+    const content =
+      typeof rawInput === 'object' && rawInput && 'content' in (rawInput as object)
+        ? String((rawInput as { content?: unknown }).content ?? '')
+        : '';
+    if (!path) return null;
+    const command = `acp:${kind}:${path}${content ? `:${content.length}B` : ''}`;
     return {
       type: 'ask_approval',
-      reason: `${title}${toolCallId ? ` (${toolCallId})` : ''}`,
-      requested_action: { type: 'read_file', path },
+      reason: `${title} — ${kind} ${path}${toolCallId ? ` (${toolCallId})` : ''}`,
+      requested_action: { type: 'run_command', command, cwd },
+    };
+  }
+  if (kind === 'delete') {
+    const path =
+      typeof rawInput === 'object' && rawInput && 'path' in (rawInput as object)
+        ? String((rawInput as { path?: unknown }).path ?? '')
+        : '';
+    if (!path) return null;
+    return {
+      type: 'ask_approval',
+      reason: `${title} — delete ${path}${toolCallId ? ` (${toolCallId})` : ''}`,
+      requested_action: { type: 'run_command', command: `acp:delete:${path}`, cwd },
     };
   }
   if (kind === 'execute' || kind === 'bash' || kind === 'run_command') {
@@ -56,9 +70,7 @@ export function permissionActionFromAcpParams(
         : typeof rawInput === 'string'
           ? rawInput
           : '';
-    if (!command) {
-      return failClosedPermission(title, toolCallId);
-    }
+    if (!command) return null;
     return {
       type: 'ask_approval',
       reason: `${title}${toolCallId ? ` (${toolCallId})` : ''}`,
@@ -74,15 +86,7 @@ export function permissionActionFromAcpParams(
       requested_action: { type: 'read_file', path: subject.path },
     };
   }
-  return failClosedPermission(title, toolCallId);
-}
-
-function failClosedPermission(title: string, toolCallId?: string): AgentAction {
-  return {
-    type: 'ask_approval',
-    reason: `Unrecognized Command Code permission (${title}${toolCallId ? `:${toolCallId}` : ''})`,
-    requested_action: { type: 'run_command', command: '__unknown_permission__', cwd: process.cwd() },
-  };
+  return null;
 }
 
 export function selectAllowOnceOptionId(options: unknown[]): string | null {

@@ -1,14 +1,14 @@
 #!/usr/bin/env node
 /**
- * Strict canonical ACP v1 peer (primary) with v2 initialize fallback for negotiation tests.
+ * Strict canonical ACP v1 peer for Command Code harness integration tests.
  */
 
 import { createInterface } from 'node:readline';
 
 const sessions = new Map();
 let nextSession = 1;
-let negotiatedVersion = 1;
 const permissionWaiters = new Map();
+const pendingPrompts = new Map();
 
 function write(msg) {
   process.stdout.write(`${JSON.stringify(msg)}\n`);
@@ -26,20 +26,6 @@ function sessionUpdate(sessionId, sessionUpdateKind, fields = {}) {
 }
 
 function handleInitialize(id, params) {
-  const version = params?.protocolVersion === 2 ? 2 : 1;
-  negotiatedVersion = version;
-  if (version === 2) {
-    write({
-      jsonrpc: '2.0',
-      id,
-      result: {
-        protocolVersion: 2,
-        capabilities: { session: {} },
-        info: { name: 'fixture-command-code-acp', version: '0.0.0-fixture' },
-      },
-    });
-    return;
-  }
   if (!params?.clientInfo || params?.protocolVersion !== 1) {
     write({ jsonrpc: '2.0', id, error: { code: -32602, message: 'invalid v1 initialize' } });
     return;
@@ -60,7 +46,7 @@ function handleInitialize(id, params) {
 
 function handleSessionNew(id, params) {
   const sessionId = `sess_fixture_${nextSession++}`;
-  sessions.set(sessionId, { cwd: params.cwd, messages: [], permissionDone: false });
+  sessions.set(sessionId, { cwd: params.cwd, messages: [], permissionDone: false, cancelled: false });
   write({ jsonrpc: '2.0', id, result: { sessionId } });
   if (process.env.BABEL_COMMAND_CODE_FIXTURE_STARTUP_IDLE === '1') {
     sessionUpdate(sessionId, 'state_update', { state: 'idle', stopReason: 'end_turn' });
@@ -73,18 +59,12 @@ function handleSessionLoad(id, params) {
     write({ jsonrpc: '2.0', id, error: { code: -32001, message: 'session not found' } });
     return;
   }
-  sessionUpdate(sessionId, 'agent_message_chunk', {
-    content: [{ type: 'text', text: 'fixture:history-replay' }],
+  sessionUpdate(sessionId, 'user_message_chunk', {
+    content: { type: 'text', text: 'fixture:user-history' },
   });
-  write({ jsonrpc: '2.0', id, result: { sessionId } });
-}
-
-function handleSessionResume(id, params) {
-  const sessionId = String(params.sessionId ?? '');
-  if (!sessions.has(sessionId)) {
-    write({ jsonrpc: '2.0', id, error: { code: -32001, message: 'session not found' } });
-    return;
-  }
+  sessionUpdate(sessionId, 'agent_message_chunk', {
+    content: { type: 'text', text: 'fixture:history-replay' },
+  });
   write({ jsonrpc: '2.0', id, result: { sessionId } });
 }
 
@@ -111,8 +91,16 @@ async function handleSessionPrompt(id, params) {
       ? String(params.prompt[0].text)
       : String(params.text ?? '');
   session.messages.push(text);
+  pendingPrompts.set(sessionId, id);
 
   sessionUpdate(sessionId, 'state_update', { state: 'running' });
+
+  const honorCancel = process.env.BABEL_COMMAND_CODE_FIXTURE_NO_CANCEL_TERMINAL !== '1';
+  if (session.cancelled && honorCancel) {
+    pendingPrompts.delete(sessionId);
+    write({ jsonrpc: '2.0', id, result: { stopReason: 'cancelled' } });
+    return;
+  }
 
   if (process.env.BABEL_COMMAND_CODE_FIXTURE_PERMISSION === '1' && !session.permissionDone) {
     session.permissionDone = true;
@@ -136,34 +124,43 @@ async function handleSessionPrompt(id, params) {
         },
       },
     });
-    await waitForPermissionResponse(requestId);
+    const outcome = await waitForPermissionResponse(requestId);
+    if (outcome === 'cancelled') {
+      pendingPrompts.delete(sessionId);
+      write({ jsonrpc: '2.0', id, result: { stopReason: 'cancelled' } });
+      return;
+    }
   }
 
   if (process.env.BABEL_COMMAND_CODE_FIXTURE_SLOW === '1') {
     await new Promise((r) => setTimeout(r, 500));
   }
 
-  const chunk = `fixture:${text}`;
-  sessionUpdate(sessionId, 'agent_message_chunk', {
-    content: [{ type: 'text', text: chunk }],
-  });
-
-  if (negotiatedVersion === 1) {
-    write({ jsonrpc: '2.0', id, result: { stopReason: 'end_turn' } });
+  if (session.cancelled && honorCancel) {
+    pendingPrompts.delete(sessionId);
+    write({ jsonrpc: '2.0', id, result: { stopReason: 'cancelled' } });
     return;
   }
 
-  sessionUpdate(sessionId, 'usage_update', {
-    usage: { cost: { amount: 0.01, currency: 'USD' }, used: 8, size: 100 },
+  const chunk = `fixture:${text}`;
+  sessionUpdate(sessionId, 'agent_message_chunk', {
+    content: { type: 'text', text: chunk },
   });
-  sessionUpdate(sessionId, 'state_update', { state: 'idle', stopReason: 'end_turn' });
-  write({ jsonrpc: '2.0', id, result: { messageId: `msg_${session.messages.length}` } });
+
+  pendingPrompts.delete(sessionId);
+  write({ jsonrpc: '2.0', id, result: { stopReason: 'end_turn' } });
 }
 
 function handleSessionCancelNotification(params) {
-  const sessionId = String(params.sessionId ?? '');
   if (process.env.BABEL_COMMAND_CODE_FIXTURE_NO_CANCEL_TERMINAL === '1') return;
-  sessionUpdate(sessionId, 'state_update', { state: 'idle', stopReason: 'cancelled' });
+  const sessionId = String(params.sessionId ?? '');
+  const session = sessions.get(sessionId);
+  if (session) session.cancelled = true;
+  const pendingId = pendingPrompts.get(sessionId);
+  if (pendingId !== undefined) {
+    pendingPrompts.delete(sessionId);
+    write({ jsonrpc: '2.0', id: pendingId, result: { stopReason: 'cancelled' } });
+  }
 }
 
 const rl = createInterface({ input: process.stdin });
@@ -179,13 +176,15 @@ rl.on('line', (line) => {
   const { id, method, params, result } = msg;
   if (id !== undefined && result !== undefined && permissionWaiters.has(String(id))) {
     const outcome = result.outcome;
-    if (
-      outcome?.outcome === 'selected' &&
-      typeof outcome.optionId === 'string' &&
-      outcome.optionId === 'allow_once'
-    ) {
-      permissionWaiters.get(String(id))();
+    if (outcome?.outcome === 'selected' && outcome.optionId === 'allow_once') {
+      permissionWaiters.get(String(id))('selected');
       permissionWaiters.delete(String(id));
+      return;
+    }
+    if (outcome?.outcome === 'cancelled') {
+      permissionWaiters.get(String(id))('cancelled');
+      permissionWaiters.delete(String(id));
+      return;
     }
     return;
   }
@@ -203,9 +202,6 @@ rl.on('line', (line) => {
       break;
     case 'session/load':
       handleSessionLoad(id, params ?? {});
-      break;
-    case 'session/resume':
-      handleSessionResume(id, params ?? {});
       break;
     case 'session/list':
       handleSessionList(id);

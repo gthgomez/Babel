@@ -37,7 +37,25 @@ describe('commandCodeAcpPermission', () => {
       '/proj',
     );
     assert.notDeepEqual(edit, del);
-    assert.match(JSON.stringify(edit), /a\.txt/);
-    assert.match(JSON.stringify(del), /b\.txt/);
+    assert.equal(edit?.type, 'ask_approval');
+    assert.equal(del?.type, 'ask_approval');
+    if (edit?.type !== 'ask_approval' || del?.type !== 'ask_approval') throw new Error('expected ask_approval');
+    assert.equal(edit.requested_action.type, 'run_command');
+    assert.equal(del.requested_action.type, 'run_command');
+    assert.match(edit.requested_action.command, /acp:edit:a\.txt/);
+    assert.match(del.requested_action.command, /acp:delete:b\.txt/);
+    const read = permissionActionFromAcpParams(
+      {
+        title: 'read c.txt',
+        toolCall: { toolCallId: 'tc_read', kind: 'read', rawInput: { path: 'c.txt' } },
+      },
+      '/proj',
+    );
+    assert.equal(read?.type, 'ask_approval');
+    if (read?.type === 'ask_approval') assert.equal(read.requested_action.type, 'read_file');
+    assert.equal(
+      permissionActionFromAcpParams({ title: 'mystery', toolCall: { kind: 'warp' } }, '/proj'),
+      null,
+    );
   });
 });

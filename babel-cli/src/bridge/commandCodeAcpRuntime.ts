@@ -4,7 +4,10 @@ import { resolve } from 'node:path';
 
 import type { ChatEvent } from '../agent/chatEngineContracts.js';
 import type { SessionDescriptor } from '../executor/contracts.js';
+import { appendTurnCells } from '../services/threadStore/threadStore.js';
+import type { HistoryCellRecord } from '../ui/historyCells/types.js';
 import { mapCommandCodeAcpUpdate, type AcpTurnMapState } from './commandCodeAcpEventMap.js';
+import { mapAcpReplayToHistoryCell } from './commandCodeAcpReplay.js';
 import { probeCommandCodeInstallation, type CommandCodeInstallProbe } from './commandCodeCliDiscovery.js';
 import { permissionActionFromAcpParams, selectAllowOnceOptionId } from './commandCodeAcpPermission.js';
 import { CommandCodeAcpTransport } from './commandCodeAcpTransport.js';
@@ -30,6 +33,8 @@ export interface CommandCodeRuntimeSession {
   processDead: boolean;
   replayEvents: ChatEvent[];
   replayCapture: boolean;
+  replayHistoryCells: HistoryCellRecord[];
+  pendingCancel: boolean;
 }
 
 interface ProjectRuntime {
@@ -64,6 +69,8 @@ export class CommandCodeAcpRuntimeRegistry {
   private readonly installProbe: (() => Promise<CommandCodeInstallProbe>) | undefined;
   private readonly projects = new Map<string, ProjectRuntime>();
   private readonly projectStarts = new Map<string, Promise<ProjectRuntime>>();
+  private readonly pendingThreadCancels = new Set<string>();
+  private shuttingDown = false;
 
   constructor(options?: CommandCodeAcpRuntimeRegistryOptions) {
     this.hostScopeId = options?.hostScopeId ?? randomUUID();
@@ -84,6 +91,7 @@ export class CommandCodeAcpRuntimeRegistry {
   }
 
   private async projectRuntime(projectRoot: string): Promise<ProjectRuntime> {
+    if (this.shuttingDown) throw new Error('COMMAND_CODE_SHUTTING_DOWN');
     const key = this.projectKey(this.hostScopeId, projectRoot);
     const existing = this.projects.get(key);
     if (existing) return existing;
@@ -93,6 +101,10 @@ export class CommandCodeAcpRuntimeRegistry {
     this.projectStarts.set(key, promise);
     try {
       const runtime = await promise;
+      if (this.shuttingDown) {
+        await runtime.transport.stop();
+        throw new Error('COMMAND_CODE_SHUTTING_DOWN');
+      }
       this.projects.set(key, runtime);
       return runtime;
     } finally {
@@ -101,6 +113,7 @@ export class CommandCodeAcpRuntimeRegistry {
   }
 
   private async createProjectRuntime(projectRoot: string, key: string): Promise<ProjectRuntime> {
+    if (this.shuttingDown) throw new Error('COMMAND_CODE_SHUTTING_DOWN');
     const probe = this.installProbe
       ? await this.installProbe()
       : await probeCommandCodeInstallation();
@@ -137,6 +150,10 @@ export class CommandCodeAcpRuntimeRegistry {
       }
     });
     await transport.start();
+    if (this.shuttingDown) {
+      await transport.stop();
+      throw new Error('COMMAND_CODE_SHUTTING_DOWN');
+    }
     const runtime: ProjectRuntime = {
       projectRoot: canonical,
       hostScopeId: this.hostScopeId,
@@ -146,7 +163,6 @@ export class CommandCodeAcpRuntimeRegistry {
       nativeOwners: new Map(),
       starting: null,
     };
-    this.projects.set(key, runtime);
     return runtime;
   }
 
@@ -165,13 +181,14 @@ export class CommandCodeAcpRuntimeRegistry {
     if (!session) return;
     const codec = runtime.transport.negotiatedCodec();
     if (!codec) return;
+    if (session.replayCapture) {
+      const cell = mapAcpReplayToHistoryCell(update.update, session.threadId);
+      if (cell) session.replayHistoryCells.push(cell);
+      return;
+    }
     const events = mapCommandCodeAcpUpdate(update.update, session.turnState, codec.protocolVersion);
     for (const event of events) {
-      if (session.replayCapture) {
-        session.replayEvents.push(event);
-      } else {
-        session.pendingEvents.push(event);
-      }
+      session.pendingEvents.push(event);
     }
     session.wake?.();
   }
@@ -201,6 +218,7 @@ export class CommandCodeAcpRuntimeRegistry {
     const allowOnceId = selectAllowOnceOptionId(options);
     if (!allowOnceId) return { outcome: 'cancelled' };
     const action = permissionActionFromAcpParams(params, binding.cwd);
+    if (!action) return { outcome: 'cancelled' };
     const allowed = await binding.broker.requestAllowOnce({
       action,
       thread_id: binding.threadId,
@@ -249,35 +267,29 @@ export class CommandCodeAcpRuntimeRegistry {
       processDead: false,
       replayEvents: [],
       replayCapture: false,
+      replayHistoryCells: [],
+      pendingCancel: this.pendingThreadCancels.has(descriptor.threadId),
     };
 
     try {
       if (descriptor.harness_native_session_id) {
+        if (!codec.session.load) {
+          throw new Error('COMMAND_CODE_SAVED_SESSION_UNSUPPORTED');
+        }
         this.claimNativeSession(runtime, descriptor.harness_native_session_id, descriptor.threadId);
         placeholder.nativeSessionId = descriptor.harness_native_session_id;
         runtime.sessions.set(descriptor.threadId, placeholder);
         placeholder.replayCapture = true;
         const mcpServers: unknown[] = [];
-        if (codec.protocolVersion === 1 && codec.session.load) {
-          await runtime.transport.call('session/load', {
-            sessionId: descriptor.harness_native_session_id,
-            cwd: runtime.projectRoot,
-            mcpServers,
-          });
-        } else if (codec.protocolVersion === 2 && codec.session.resume) {
-          await runtime.transport.call('session/resume', {
-            sessionId: descriptor.harness_native_session_id,
-            cwd: runtime.projectRoot,
-            replayFrom: { type: 'start' },
-          });
-        } else if (codec.session.resume) {
-          await runtime.transport.call('session/resume', {
-            sessionId: descriptor.harness_native_session_id,
-            cwd: runtime.projectRoot,
-            mcpServers,
-          });
-        }
+        await runtime.transport.call('session/load', {
+          sessionId: descriptor.harness_native_session_id,
+          cwd: runtime.projectRoot,
+          mcpServers,
+        });
         placeholder.replayCapture = false;
+        if (placeholder.pendingCancel && placeholder.nativeSessionId) {
+          runtime.transport.notify('session/cancel', { sessionId: placeholder.nativeSessionId });
+        }
         return placeholder;
       }
 
@@ -340,17 +352,58 @@ export class CommandCodeAcpRuntimeRegistry {
     return runtime.transport;
   }
 
-  requestCancel(descriptor: SessionDescriptor): void {
+  markCancelPending(descriptor: SessionDescriptor): void {
+    this.pendingThreadCancels.add(descriptor.threadId);
     const session = this.getBoundSession(descriptor);
-    if (!session?.nativeSessionId) return;
-    const transport = this.transportForThread(descriptor);
-    transport.notify('session/cancel', { sessionId: session.nativeSessionId });
+    if (session) session.pendingCancel = true;
+  }
+
+  isCancelPending(descriptor: SessionDescriptor): boolean {
+    if (this.pendingThreadCancels.has(descriptor.threadId)) return true;
+    const session = this.getBoundSession(descriptor);
+    return Boolean(session?.pendingCancel);
+  }
+
+  clearCancelPending(descriptor: SessionDescriptor): void {
+    this.pendingThreadCancels.delete(descriptor.threadId);
+    const session = this.getBoundSession(descriptor);
+    if (session) session.pendingCancel = false;
+  }
+
+  requestCancel(descriptor: SessionDescriptor): boolean {
+    this.markCancelPending(descriptor);
+    const session = this.getBoundSession(descriptor);
+    if (!session?.nativeSessionId) return false;
+    try {
+      const transport = this.transportForThread(descriptor);
+      transport.notify('session/cancel', { sessionId: session.nativeSessionId });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  persistReplayHistory(descriptor: SessionDescriptor): void {
+    const session = this.getBoundSession(descriptor);
+    if (!session || session.replayHistoryCells.length === 0) return;
+    appendTurnCells(descriptor.threadId, 0, session.replayHistoryCells);
+    session.replayHistoryCells = [];
+  }
+
+  async forceStopForThread(descriptor: SessionDescriptor): Promise<void> {
+    const key = this.projectKey(this.hostScopeId, descriptor.projectRoot);
+    const runtime = this.projects.get(key);
+    if (!runtime) return;
+    await runtime.transport.stop();
   }
 
   async closeAll(): Promise<void> {
-    for (const runtime of this.projects.values()) {
-      if (runtime.starting) await runtime.starting.catch(() => undefined);
-      await runtime.transport?.stop();
+    this.shuttingDown = true;
+    const inflight = [...this.projectStarts.values()];
+    await Promise.all(inflight.map((start) => start.catch(() => undefined)));
+    const runtimes = [...this.projects.values()];
+    for (const runtime of runtimes) {
+      await runtime.transport.stop();
     }
     this.projects.clear();
     this.projectStarts.clear();
@@ -370,6 +423,9 @@ function assertCommandCodeProfilesSupported(
   descriptor: SessionDescriptor,
   codec: { session: { modelSelection: boolean } },
 ): void {
+  if (descriptor.mode && descriptor.mode !== 'chat') {
+    throw new Error('COMMAND_CODE_MODE_UNSUPPORTED');
+  }
   const model = descriptor.harness_model_profile ?? descriptor.model;
   const provider = descriptor.harness_provider_profile ?? descriptor.provider;
   const nonDefaultModel = model && model !== 'default';

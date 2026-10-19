@@ -67,15 +67,32 @@ function mapSessionUpdateBody(
     return text ? [{ type: 'answer_chunk', text }] : [];
   }
   if (kind === 'tool_call_update' || kind === 'tool_call') {
-    const toolCall = body.toolCall as { title?: string; toolCallId?: string; status?: string } | undefined;
-    const tool = toolCall?.title ?? toolCall?.toolCallId ?? 'tool';
-    const status = toolCall?.status ?? body.status;
+    const toolCall = body.toolCall as
+      | { title?: string; toolCallId?: string; status?: string; kind?: string }
+      | undefined;
+    const tool =
+      (typeof body.title === 'string' ? body.title : undefined) ??
+      toolCall?.title ??
+      (typeof body.toolCallId === 'string' ? body.toolCallId : undefined) ??
+      toolCall?.toolCallId ??
+      'tool';
+    const target =
+      (typeof body.toolCallId === 'string' ? body.toolCallId : undefined) ??
+      toolCall?.toolCallId ??
+      '';
+    const status = body.status ?? toolCall?.status;
     if (status === 'completed' || status === 'succeeded') {
-      return [{ type: 'tool_complete', tool, target: '' }];
+      return [{ type: 'tool_complete', tool, target }];
     }
-    return [{ type: 'tool_start', tool, target: '' }];
+    if (status === 'failed' || status === 'error' || status === 'cancelled') {
+      return [{ type: 'tool_complete', tool, target }];
+    }
+    return [{ type: 'tool_start', tool, target }];
   }
   if (kind === 'state_update') {
+    if (protocolVersion === 1) {
+      return [];
+    }
     if (body.state !== 'idle') return [];
     const stopReason = body.stopReason;
     if (stopReason === 'cancelled') {
@@ -91,7 +108,7 @@ function mapSessionUpdateBody(
     }
     if (stopReason === 'end_turn' || stopReason === 'completed') {
       if (!state.promptAdmitted) return [];
-      return mapPromptTerminalFromStopReason(state, protocolVersion);
+      return mapPromptTerminalFromStopReason(state, protocolVersion, String(stopReason));
     }
     if (stopReason === 'refusal' || stopReason === 'max_tokens' || stopReason === 'max_turn_requests') {
       if (!state.promptAdmitted) return [];
@@ -101,21 +118,28 @@ function mapSessionUpdateBody(
     return [];
   }
   if (kind === 'usage_update') {
-    const usage = body.usage as
-      | { cost?: { amount?: number }; used?: number; size?: number; totalCostUSD?: number }
+    const nested = body.usage as
+      | { cost?: { amount?: number; currency?: string }; used?: number; size?: number }
       | undefined;
+    const topCost = body.cost as { amount?: number; currency?: string } | undefined;
     const amount =
-      typeof usage?.cost?.amount === 'number'
-        ? usage.cost.amount
-        : typeof usage?.totalCostUSD === 'number'
-          ? usage.totalCostUSD
+      typeof topCost?.amount === 'number'
+        ? topCost.amount
+        : typeof nested?.cost?.amount === 'number'
+          ? nested.cost.amount
+          : undefined;
+    const used =
+      typeof body.used === 'number'
+        ? body.used
+        : typeof nested?.used === 'number'
+          ? nested.used
           : undefined;
     if (typeof amount === 'number') {
       state.usage = {
         totalCostUSD: amount,
         totalInputTokens: 0,
         totalOutputTokens: 0,
-        totalTokens: typeof usage?.used === 'number' ? usage.used : 0,
+        totalTokens: typeof used === 'number' ? used : 0,
         modelBreakdown: {},
       };
     }
@@ -127,9 +151,10 @@ function mapSessionUpdateBody(
 export function mapPromptTerminalFromStopReason(
   state: AcpTurnMapState,
   _protocolVersion: AcpProtocolVersion,
-  stopReason?: string,
+  stopReason: string,
 ): ChatEvent[] {
-  const reason = stopReason ?? 'end_turn';
+  if (state.terminalEmitted) return [];
+  const reason = stopReason;
   if (reason === 'cancelled') {
     state.terminalEmitted = true;
     return [{ type: 'cancelled' }];
@@ -143,15 +168,6 @@ export function mapPromptTerminalFromStopReason(
     return [{ type: 'failed', error: `Command Code prompt stop: ${reason}`, status: 'failed' }];
   }
   const answer = state.textBuffer.join('');
-  if (!answer) {
-    state.terminalEmitted = true;
-    return [
-      {
-        type: 'failed',
-        error: 'Command Code prompt completed without assistant content',
-      },
-    ];
-  }
   state.terminalEmitted = true;
   const usage: SessionUsageSummary =
     state.usage ?? {

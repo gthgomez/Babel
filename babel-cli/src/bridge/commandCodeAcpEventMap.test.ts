@@ -36,13 +36,13 @@ describe('commandCodeAcpEventMap', () => {
     assert.equal(events.length, 0);
   });
 
-  it('fails closed on admitted idle without assistant content', () => {
+  it('ignores v1 idle end_turn after prompt admission (stopReason is authoritative on prompt RPC)', () => {
     const state = { textBuffer: [], terminalEmitted: false, promptAdmitted: true };
     const events = mapCommandCodeAcpUpdate(
       { sessionUpdate: 'state_update', state: 'idle', stopReason: 'end_turn' },
       state,
       1,
     );
-    assert.equal(events[0]?.type, 'failed');
+    assert.equal(events.length, 0);
   });
 });

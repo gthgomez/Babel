@@ -5,6 +5,7 @@
   const tokenEl = byId('token');
   const rootEl = byId('root');
   const harnessEl = byId('harness-adapter');
+  const vendorSessionEl = byId('vendor-session');
   const composer = byId('composer');
   const threadInput = byId('thread-id');
   const transcript = byId('transcript');
@@ -59,6 +60,10 @@
     R.setText(byId('workspace'), rootEl.value || '—');
     const harnessLabel = harnessEl && harnessEl.value === 'command-code' ? 'Command Code CLI' : 'Babel native';
     R.setText(byId('harness-label'), harnessLabel);
+    if (vendorSessionEl) {
+      const cc = harnessEl && harnessEl.value === 'command-code';
+      vendorSessionEl.disabled = !cc || !memory.token && !memory.pairedDevice;
+    }
     R.setText(byId('connection-copy'), host === 'ONLINE' ? 'Host connected' : 'Host ' + label(host).toLowerCase());
     document.querySelectorAll('.topbar-status .status-dot, #host-card .status-dot').forEach(function (dot) {
       dot.className = 'status-dot ' + String(host).toLowerCase();
@@ -267,6 +272,21 @@
     };
   }
 
+  function refreshVendorSessions(catalogResult) {
+    if (!vendorSessionEl) return;
+    const harness = harnessEl && harnessEl.value === 'command-code';
+    vendorSessionEl.disabled = !harness;
+    while (vendorSessionEl.options.length > 1) vendorSessionEl.remove(1);
+    if (!harness || !catalogResult || !Array.isArray(catalogResult.vendor_sessions)) return;
+    catalogResult.vendor_sessions.forEach(function (row) {
+      if (!row || !row.session_id) return;
+      const opt = document.createElement('option');
+      opt.value = row.session_id;
+      opt.textContent = row.title ? row.title + ' (' + row.session_id + ')' : row.session_id;
+      vendorSessionEl.appendChild(opt);
+    });
+  }
+
   async function observeThread() {
     if (memory.threadId) connectSocket(await mintTicket());
   }
@@ -289,6 +309,7 @@
       try {
         const catalog = await rpc('remote.catalog', {});
         const sessions = (catalog.payload.result && catalog.payload.result.sessions) || [];
+        refreshVendorSessions(catalog.payload.result);
         if (sessions.length && byId('thread-id')) {
           byId('thread-id').placeholder = sessions.length + ' session(s) on host';
         }
@@ -305,6 +326,7 @@
     try {
       const catalog = await rpc('remote.catalog', {});
       if (catalog.classified.kind === 'success') {
+        refreshVendorSessions(catalog.payload.result);
         const sessions = (catalog.payload.result && catalog.payload.result.sessions) || [];
         const row = sessions.find(function (item) { return item.thread_id === memory.threadId; });
         if (row) {
@@ -435,7 +457,12 @@
       const sessionId = await ensureSession();
       const harness = harnessEl && harnessEl.value ? harnessEl.value : 'babel-native';
       const createParams = { project_root: rootEl.value, session_id: sessionId };
-      if (harness === 'command-code') createParams.harness_adapter_id = 'command-code';
+      if (harness === 'command-code') {
+        createParams.harness_adapter_id = 'command-code';
+        if (vendorSessionEl && vendorSessionEl.value) {
+          createParams.harness_native_session_id = vendorSessionEl.value;
+        }
+      }
       const result = await rpc('thread.create', createParams);
       if (result.classified.kind !== 'success') throw new Error('thread.create rejected');
       memory.threadId = result.payload.result && result.payload.result.thread_id;

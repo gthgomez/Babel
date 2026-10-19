@@ -17,6 +17,10 @@ function* drainPendingEvents(session: { pendingEvents: ChatEvent[] }): Generator
   }
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export function createCommandCodeHarnessEngine(options: CommandCodeHarnessEngineOptions): ChatEngine {
   const registry = options.registry;
   const descriptor = options.descriptor;
@@ -41,10 +45,13 @@ export function createCommandCodeHarnessEngine(options: CommandCodeHarnessEngine
     }
 
     const session = await registry.ensureSession(descriptor);
-    for (const replay of session.replayEvents) {
-      yield replay;
+    registry.persistReplayHistory(descriptor);
+
+    if (registry.isCancelPending(descriptor) || session.pendingCancel) {
+      registry.clearCancelPending(descriptor);
+      yield { type: 'cancelled' };
+      return;
     }
-    session.replayEvents = [];
 
     const turnState: AcpTurnMapState = {
       textBuffer: [],
@@ -70,16 +77,27 @@ export function createCommandCodeHarnessEngine(options: CommandCodeHarnessEngine
         return;
       }
 
-      turnState.promptAdmitted = true;
+      if (registry.isCancelPending(descriptor) || session.pendingCancel) {
+        registry.requestCancel(descriptor);
+        cancelNotified = true;
+        yield { type: 'cancelled' };
+        return;
+      }
+
       let promptResult: Record<string, unknown> | undefined;
+      let promptError: unknown;
+      turnState.promptAdmitted = true;
       const promptDone = transport
         .call('session/prompt', {
           sessionId: session.nativeSessionId,
           prompt: [{ type: 'text', text: message }],
-          ...(codec.protocolVersion === 1 ? { mcpServers: [] } : {}),
+          mcpServers: [],
         })
         .then((result) => {
           promptResult = result;
+        })
+        .catch((error) => {
+          promptError = error;
         });
 
       yield { type: 'thinking' };
@@ -96,8 +114,9 @@ export function createCommandCodeHarnessEngine(options: CommandCodeHarnessEngine
         if (settled) break;
 
         if (cancelRequested && !cancelNotified) {
-          registry.requestCancel(descriptor);
-          cancelNotified = true;
+          if (registry.requestCancel(descriptor)) {
+            cancelNotified = true;
+          }
         }
 
         if (session.processDead) {
@@ -109,42 +128,58 @@ export function createCommandCodeHarnessEngine(options: CommandCodeHarnessEngine
           promptDone.then(() => 'prompt' as const),
           new Promise<'tick'>((resolve) => setTimeout(() => resolve('tick'), 20)),
         ]);
-        if (raced === 'prompt') {
-          await promptDone;
-          await new Promise<void>((resolve) => setTimeout(resolve, 30));
-          for (const event of drainPendingEvents(session)) {
-            yield event;
-            if (event.type === 'done' || event.type === 'failed' || event.type === 'cancelled') {
-              settled = true;
+        if (raced !== 'prompt') continue;
+
+        await promptDone;
+        if (promptError) {
+          const messageText = String(promptError);
+          if (messageText.includes('COMMAND_CODE_ACP_RPC_TIMEOUT:session/prompt')) {
+            await registry.forceStopForThread(descriptor);
+            while (!session.processDead) {
+              await sleep(20);
             }
           }
-          if (!settled && !turnState.terminalEmitted) {
-            const stopReason =
-              typeof promptResult?.stopReason === 'string' ? promptResult.stopReason : 'end_turn';
-            for (const event of mapPromptTerminalFromStopReason(
-              turnState,
-              codec.protocolVersion,
-              stopReason,
-            )) {
-              yield event;
-              settled = true;
-            }
-          }
-          break;
+          yield {
+            type: 'failed',
+            error: 'Command Code prompt observation timed out; runtime stopped',
+          };
+          return;
         }
+
+        for (const event of drainPendingEvents(session)) {
+          yield event;
+          if (event.type === 'done' || event.type === 'failed' || event.type === 'cancelled') {
+            settled = true;
+          }
+        }
+        if (settled) break;
+
+        if (!turnState.terminalEmitted) {
+          const stopReason = promptResult?.stopReason;
+          if (typeof stopReason !== 'string' || !stopReason) {
+            yield { type: 'failed', error: 'Command Code prompt missing stopReason' };
+            return;
+          }
+          for (const event of mapPromptTerminalFromStopReason(turnState, codec.protocolVersion, stopReason)) {
+            yield event;
+            settled = true;
+          }
+        }
+        break;
       }
     } finally {
       session.permissionBinding = null;
       turnState.promptAdmitted = false;
+      registry.clearCancelPending(descriptor);
     }
   };
 
   engine.cancel = () => {
     cancelRequested = true;
+    registry.markCancelPending(descriptor);
     const session = registry.getBoundSession(descriptor);
     session?.wake?.();
-    if (!cancelNotified) {
-      registry.requestCancel(descriptor);
+    if (!cancelNotified && registry.requestCancel(descriptor)) {
       cancelNotified = true;
     }
   };
