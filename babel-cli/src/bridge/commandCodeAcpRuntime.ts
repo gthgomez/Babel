@@ -4,6 +4,7 @@ import { resolve } from 'node:path';
 
 import type { ChatEvent } from '../agent/chatEngineContracts.js';
 import type { SessionDescriptor } from '../executor/contracts.js';
+import type { HistoryCellRecord } from '../ui/historyCells/types.js';
 import { appendTurnCells, loadThreadCells } from '../services/threadStore/threadStore.js';
 import { mapCommandCodeAcpUpdate, type AcpTurnMapState } from './commandCodeAcpEventMap.js';
 import {
@@ -74,6 +75,28 @@ export interface CommandCodeAcpRuntimeRegistryOptions {
 }
 
 let nextRuntimeInstanceId = 1;
+
+/** Append novel replay cells and revised payloads for existing stable ids. */
+export function reconcileReplayCellsForPersist(
+  existing: HistoryCellRecord[],
+  incoming: HistoryCellRecord[],
+): HistoryCellRecord[] {
+  const existingById = new Map(existing.map((cell) => [cell.cell_id, cell]));
+  const toAppend: HistoryCellRecord[] = [];
+  for (const cell of incoming) {
+    const prior = existingById.get(cell.cell_id);
+    if (!prior) {
+      toAppend.push(cell);
+      continue;
+    }
+    if (JSON.stringify(prior.payload) === JSON.stringify(cell.payload)) continue;
+    toAppend.push({
+      ...cell,
+      revision: (prior.revision ?? 1) + 1,
+    });
+  }
+  return toAppend;
+}
 
 export class CommandCodeAcpRuntimeRegistry {
   private readonly hostScopeId: string;
@@ -270,11 +293,10 @@ export class CommandCodeAcpRuntimeRegistry {
     const inflight = runtime.sessionInit.get(descriptor.threadId);
     if (inflight) return inflight;
 
-    const work = this.ensureSessionInner(runtime, descriptor);
-    runtime.sessionInit.set(descriptor.threadId, work);
-    void work.finally(() => {
+    const work = this.ensureSessionInner(runtime, descriptor).finally(() => {
       runtime.sessionInit.delete(descriptor.threadId);
     });
+    runtime.sessionInit.set(descriptor.threadId, work);
     return work;
   }
 
@@ -341,6 +363,8 @@ export class CommandCodeAcpRuntimeRegistry {
       this.claimNativeSession(runtime, sessionId, descriptor.threadId);
       descriptor.harness_native_session_id = sessionId;
       descriptor.harness_process_generation = runtime.runtimeInstanceId;
+      sessionRecord.sessionCostCurrencyKnown = true;
+      sessionRecord.sessionCumulativeCostUSD = 0;
       sessionRecord.initializationComplete = true;
       return sessionRecord;
     } catch (error) {
@@ -452,10 +476,9 @@ export class CommandCodeAcpRuntimeRegistry {
     if (!session) return;
     const cells = finalizeReplayCells(session.replayAccumulator);
     if (cells.length === 0) return;
-    const existingIds = new Set(loadThreadCells(descriptor.threadId).map((cell) => cell.cell_id));
-    const novel = cells.filter((cell) => !existingIds.has(cell.cell_id));
-    if (novel.length === 0) return;
-    appendTurnCells(descriptor.threadId, 0, novel);
+    const toAppend = reconcileReplayCellsForPersist(loadThreadCells(descriptor.threadId), cells);
+    if (toAppend.length === 0) return;
+    appendTurnCells(descriptor.threadId, 0, toAppend);
   }
 
   async forceStopForThread(descriptor: SessionDescriptor): Promise<void> {

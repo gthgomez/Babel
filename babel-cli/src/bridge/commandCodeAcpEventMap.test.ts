@@ -71,6 +71,36 @@ describe('commandCodeAcpEventMap', () => {
     assert.equal(state.usage?.unknownChargeCount, 1);
   });
 
+  it('treats decreasing USD cumulative total as incomplete cost', () => {
+    const state: AcpTurnMapState = {
+      textBuffer: [],
+      terminalEmitted: false,
+      promptAdmitted: true,
+      sessionCostBaselineUSD: 10,
+    };
+    mapCommandCodeAcpUpdate(
+      { sessionUpdate: 'usage_update', cost: { amount: 0.15, currency: 'USD' } },
+      state,
+      1,
+    );
+    assert.equal(state.usage?.costComplete, false);
+    assert.equal(state.usage?.totalCostUSD, 0);
+  });
+
+  it('keeps USD turn partial after unknown baseline on a session-new path', () => {
+    const state: AcpTurnMapState = {
+      textBuffer: [],
+      terminalEmitted: false,
+      promptAdmitted: true,
+    };
+    mapCommandCodeAcpUpdate(
+      { sessionUpdate: 'usage_update', cost: { amount: 10.05, currency: 'USD' } },
+      state,
+      1,
+    );
+    assert.equal(state.usage?.costComplete, false);
+  });
+
   it('treats EUR cumulative usage as unknown USD cost', () => {
     const state: AcpTurnMapState = {
       textBuffer: [],

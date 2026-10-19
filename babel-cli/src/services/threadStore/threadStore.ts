@@ -474,6 +474,25 @@ export function appendTurnCells(
   }
 }
 
+/** Keep the latest revision per cell_id while preserving first-seen order. */
+export function collapseHistoryCellsById(cells: HistoryCellRecord[]): HistoryCellRecord[] {
+  const latest = new Map<string, HistoryCellRecord>();
+  for (const cell of cells) {
+    const prior = latest.get(cell.cell_id);
+    if (!prior || (cell.revision ?? 1) >= (prior.revision ?? 1)) {
+      latest.set(cell.cell_id, cell);
+    }
+  }
+  const seen = new Set<string>();
+  const ordered: HistoryCellRecord[] = [];
+  for (const cell of cells) {
+    if (!latest.has(cell.cell_id) || seen.has(cell.cell_id)) continue;
+    seen.add(cell.cell_id);
+    ordered.push(latest.get(cell.cell_id)!);
+  }
+  return ordered;
+}
+
 export function loadThreadCells(threadId: string): HistoryCellRecord[] {
   const cellsPath = getCellsPath(threadId);
   if (!existsSync(cellsPath)) return [];

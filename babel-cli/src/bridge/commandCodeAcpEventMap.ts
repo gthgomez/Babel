@@ -160,8 +160,16 @@ function mapSessionUpdateBody(
       }
       const baselineKnown = state.sessionCostBaselineUSD !== undefined;
       const baseline = state.sessionCostBaselineUSD ?? 0;
-      const delta = usdKnown && baselineKnown ? Math.max(0, amount - baseline) : 0;
-      const costComplete = usdKnown && baselineKnown;
+      let delta = 0;
+      let costComplete = false;
+      if (usdKnown && baselineKnown) {
+        if (amount < baseline) {
+          costComplete = false;
+        } else {
+          delta = amount - baseline;
+          costComplete = true;
+        }
+      }
       state.usage = {
         totalCostUSD: usdKnown ? delta : 0,
         costComplete,

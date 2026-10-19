@@ -2,10 +2,21 @@
  * Authoritative remote session catalog derived from the protocol host and thread store.
  */
 
+import { realpathSync } from 'node:fs';
+import { resolve } from 'node:path';
+
 import type { ProtocolHostState } from '../protocol/client/host.js';
 import { listThreads, loadSessionDescriptor } from '../services/threadStore/index.js';
 import type { CommandCodeAcpRuntimeRegistry } from './commandCodeAcpRuntime.js';
 import { isPathInsideRoot } from './workspaceBound.js';
+
+export function canonicalCommandCodeProjectRoot(projectRoot: string): string {
+  try {
+    return realpathSync(resolve(projectRoot));
+  } catch {
+    return resolve(projectRoot);
+  }
+}
 
 function workspaceRootMatches(projectRoot: string, registeredRoot: string): boolean {
   return isPathInsideRoot(registeredRoot, projectRoot);
@@ -59,17 +70,22 @@ function isPersistedNativeOwner(threadId: string, nativeId: string): boolean {
   return persisted?.harness_native_session_id === nativeId;
 }
 
-function pickCanonicalNativeOwner(
-  left: CommandCodeNativeOwnerCandidate,
-  right: CommandCodeNativeOwnerCandidate,
-): CommandCodeNativeOwnerCandidate {
-  if (left.persisted !== right.persisted) return left.persisted ? left : right;
-  return left.threadId < right.threadId ? left : right;
+const NATIVE_OWNER_KEY_SEP = '\u0000';
+
+function nativeOwnerCompositeKey(projectRoot: string, nativeId: string): string {
+  return `${canonicalCommandCodeProjectRoot(projectRoot)}${NATIVE_OWNER_KEY_SEP}${nativeId}`;
+}
+
+function splitNativeOwnerCompositeKey(key: string): { projectKey: string; nativeId: string } {
+  const sep = key.indexOf(NATIVE_OWNER_KEY_SEP);
+  return {
+    projectKey: key.slice(0, sep),
+    nativeId: key.slice(sep + 1),
+  };
 }
 
 function considerNativeOwnerCandidate(
   owners: Map<string, CommandCodeNativeOwnerCandidate>,
-  registeredWorkspaceRoot: string,
   threadId: string,
   descriptor: {
     harness_adapter_id?: string;
@@ -80,17 +96,42 @@ function considerNativeOwnerCandidate(
   if (descriptor.harness_adapter_id !== 'command-code') return;
   const nativeId = descriptor.harness_native_session_id;
   if (!nativeId) return;
-  if (!workspaceRootMatches(descriptor.projectRoot, registeredWorkspaceRoot)) return;
+  const key = nativeOwnerCompositeKey(descriptor.projectRoot, nativeId);
   const incoming: CommandCodeNativeOwnerCandidate = {
     threadId,
     persisted: isPersistedNativeOwner(threadId, nativeId),
   };
-  const existing = owners.get(nativeId);
+  const existing = owners.get(key);
   if (!existing) {
-    owners.set(nativeId, incoming);
+    owners.set(key, incoming);
     return;
   }
-  owners.set(nativeId, pickCanonicalNativeOwner(existing, incoming));
+  if (existing.threadId === incoming.threadId) return;
+  if (existing.persisted && incoming.persisted) {
+    return;
+  }
+  if (incoming.persisted && !existing.persisted) {
+    owners.set(key, incoming);
+  }
+}
+
+async function loadCommandCodeNativeOwnerCandidates(
+  state: ProtocolHostState,
+): Promise<Map<string, CommandCodeNativeOwnerCandidate>> {
+  const candidates = new Map<string, CommandCodeNativeOwnerCandidate>();
+  const seenThreads = new Set<string>();
+  for (const [threadId, descriptor] of state.descriptors) {
+    seenThreads.add(threadId);
+    considerNativeOwnerCandidate(candidates, threadId, descriptor);
+  }
+  const threads = await listThreads({ limit: 500 });
+  for (const row of threads) {
+    if (seenThreads.has(row.thread_id)) continue;
+    const persisted = loadSessionDescriptor(row.thread_id);
+    if (!persisted) continue;
+    considerNativeOwnerCandidate(candidates, row.thread_id, persisted);
+  }
+  return candidates;
 }
 
 /** Durable + in-memory native session ownership for one registered workspace root. */
@@ -98,21 +139,11 @@ export async function indexCommandCodeNativeOwners(
   state: ProtocolHostState,
   registeredWorkspaceRoot: string,
 ): Promise<Map<string, string>> {
-  const candidates = new Map<string, CommandCodeNativeOwnerCandidate>();
-  const seenThreads = new Set<string>();
-  for (const [threadId, descriptor] of state.descriptors) {
-    seenThreads.add(threadId);
-    considerNativeOwnerCandidate(candidates, registeredWorkspaceRoot, threadId, descriptor);
-  }
-  const threads = await listThreads({ limit: 500 });
-  for (const row of threads) {
-    if (seenThreads.has(row.thread_id)) continue;
-    const persisted = loadSessionDescriptor(row.thread_id);
-    if (!persisted) continue;
-    considerNativeOwnerCandidate(candidates, registeredWorkspaceRoot, row.thread_id, persisted);
-  }
+  const candidates = await loadCommandCodeNativeOwnerCandidates(state);
   const owners = new Map<string, string>();
-  for (const [nativeId, candidate] of candidates) {
+  for (const [key, candidate] of candidates) {
+    const { projectKey, nativeId } = splitNativeOwnerCompositeKey(key);
+    if (!workspaceRootMatches(projectKey, registeredWorkspaceRoot)) continue;
     owners.set(nativeId, candidate.threadId);
   }
   return owners;
@@ -123,8 +154,22 @@ export async function findCanonicalCommandCodeNativeOwnerForProject(
   projectRoot: string,
   nativeSessionId: string,
 ): Promise<string | undefined> {
-  const owners = await indexCommandCodeNativeOwners(state, projectRoot);
-  return owners.get(nativeSessionId);
+  const candidates = await loadCommandCodeNativeOwnerCandidates(state);
+  return candidates.get(nativeOwnerCompositeKey(projectRoot, nativeSessionId))?.threadId;
+}
+
+/** Returns an existing persisted owner for the same canonical project + native id, if any. */
+export async function conflictingPersistedCommandCodeNativeOwner(
+  state: ProtocolHostState,
+  projectRoot: string,
+  nativeSessionId: string,
+  exceptThreadId?: string,
+): Promise<string | undefined> {
+  const candidates = await loadCommandCodeNativeOwnerCandidates(state);
+  const owner = candidates.get(nativeOwnerCompositeKey(projectRoot, nativeSessionId));
+  if (!owner || !owner.persisted) return undefined;
+  if (exceptThreadId && owner.threadId === exceptThreadId) return undefined;
+  return owner.threadId;
 }
 
 export interface RemoteCatalogResult {

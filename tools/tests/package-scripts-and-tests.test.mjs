@@ -445,6 +445,7 @@ export const SPECIALIZED_LANES = {
     files: [
       'src/bridge/e2e/remoteBrowser.gateway.test.ts',
       'src/bridge/e2e/remotePwaReconnect.gateway.test.ts',
+      'src/bridge/e2e/commandCodePwaVendorOpen.gateway.test.ts',
     ],
     command: 'npm run test:remote-ui',
     loader: 'tsx',
@@ -864,7 +865,7 @@ test('every discovered source test belongs to canonical unit lane or an explicit
   }
 
   const totalSpecializedFiles = Object.values(SPECIALIZED_LANES).reduce((acc, l) => acc + l.files.length, 0);
-  assert.equal(totalSpecializedFiles, 21, `Expected exactly 21 specialized test files, found ${totalSpecializedFiles}`);
+  assert.equal(totalSpecializedFiles, 22, `Expected exactly 22 specialized test files, found ${totalSpecializedFiles}`);
 
   const { errors, specializedSet, unclassified, overlap } = validateTestClassification(
     allTests,
@@ -875,7 +876,7 @@ test('every discovered source test belongs to canonical unit lane or an explicit
   );
 
   assert.equal(errors.length, 0, `Test classification errors:\n${errors.join('\n')}`);
-  assert.equal(specializedSet.size, 21);
+  assert.equal(specializedSet.size, 22);
   assert.equal(unclassified.length, 0);
   assert.equal(overlap.length, 0);
   const classified = [...unitInventory, ...specializedSet].sort();

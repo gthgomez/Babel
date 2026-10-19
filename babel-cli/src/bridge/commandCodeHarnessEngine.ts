@@ -71,8 +71,6 @@ export function createCommandCodeHarnessEngine(options: CommandCodeHarnessEngine
     let sessionCostBaselineUSD: number | undefined;
     if (session.sessionCostCurrencyKnown && session.sessionCumulativeCostUSD !== undefined) {
       sessionCostBaselineUSD = session.sessionCumulativeCostUSD;
-    } else if (!session.restoredFromNativeLoad) {
-      sessionCostBaselineUSD = 0;
     }
     const turnState: AcpTurnMapState = {
       textBuffer: [],

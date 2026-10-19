@@ -361,4 +361,39 @@ describe('harness.command_code.open side effects', () => {
     assert.equal(registry.openSavedSessionCalls, before);
     assert.notEqual(ownerThread, otherThread);
   });
+
+  it('rejects thread.create alias for an already-owned persisted native session', async () => {
+    const sess = await httpRequest(`http://127.0.0.1:${port}/sessions`, {
+      method: 'POST',
+      headers: fullDesktopHeaders(),
+      body: JSON.stringify({ projectRoot: tmp }),
+    });
+    const transportSessionId = (JSON.parse(sess.body) as { sessionId: string }).sessionId;
+    const owner = await rpc(
+      port,
+      fullDesktopHeaders(),
+      'thread.create',
+      {
+        project_root: tmp,
+        session_id: transportSessionId,
+        harness_adapter_id: 'command-code',
+        harness_native_session_id: 'sess_fixture_alias_owner',
+      },
+      50,
+    );
+    assert.ok(owner.result);
+    const alias = await rpc(
+      port,
+      fullDesktopHeaders(),
+      'thread.create',
+      {
+        project_root: tmp,
+        session_id: transportSessionId,
+        harness_adapter_id: 'command-code',
+        harness_native_session_id: 'sess_fixture_alias_owner',
+      },
+      51,
+    );
+    assert.ok(alias.error, 'expected alias thread.create rejection');
+  });
 });

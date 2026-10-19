@@ -24,11 +24,13 @@ import {
   inspectThreadRepoIdentityOnHydration,
   RepoIdentityMismatchError,
 } from '../../services/threadStore/sessionHydration.js';
+import { conflictingPersistedCommandCodeNativeOwner } from '../../bridge/remoteCatalog.js';
 import {
   allocateThreadId,
   ensureThread,
   loadSessionDescriptor,
   loadThreadCells,
+  collapseHistoryCellsById,
   loadTurnTerminalRecord,
   persistTurnTerminalRecord,
   resolveLatestTurnIdFromThreadStore,
@@ -431,6 +433,23 @@ export async function handleProtocolRequest(
         }
         const threadId = allocateThreadId();
         const descriptor = descriptorFromCreate(threadId, { ...params, project_root: projectRoot });
+        if (
+          descriptor.harness_adapter_id === 'command-code' &&
+          descriptor.harness_native_session_id
+        ) {
+          const conflict = await conflictingPersistedCommandCodeNativeOwner(
+            state,
+            descriptor.projectRoot,
+            descriptor.harness_native_session_id,
+          );
+          if (conflict) {
+            return errorResponse(
+              id,
+              BabelProtocolErrorCode.INVALID_PARAMS,
+              'Another Babel thread already owns this Command Code native session',
+            );
+          }
+        }
         ensureThread(threadId, { project_root: descriptor.projectRoot });
         writeSessionDescriptor(descriptor);
         state.descriptors.set(threadId, descriptor);
@@ -861,7 +880,7 @@ export async function handleProtocolRequest(
         if (!params) {
           return errorResponse(id, BabelProtocolErrorCode.INVALID_PARAMS, 'Missing params');
         }
-        const cells = loadThreadCells(params.thread_id);
+        const cells = collapseHistoryCellsById(loadThreadCells(params.thread_id));
         let filtered = cells;
         if (params.turn_id !== undefined) {
           filtered = filtered.filter((c) => c.turn_id === params.turn_id);

@@ -473,6 +473,17 @@
     renderChrome();
   }
 
+  async function ensurePairedControlLease(threadId) {
+    if (memory.authKind !== 'paired' || !threadId) return;
+    const acquired = await rpc('control.acquire', { thread_id: threadId, force: false });
+    if (acquired.classified.kind !== 'success' || !acquired.payload.result) {
+      throw new Error('control.acquire rejected');
+    }
+    memory.controlEpoch = acquired.payload.result.epoch;
+    memory.controlExpiresAtMs = acquired.payload.result.expires_at_ms || null;
+    startLeaseRenewal();
+  }
+
   async function createThread() {
     try {
       thread = transition('thread', thread, 'create');
@@ -487,6 +498,7 @@
         createParams.harness_adapter_id = 'command-code';
         if (selected && selected.canonical_thread_id) {
           memory.threadId = selected.canonical_thread_id;
+          await ensurePairedControlLease(memory.threadId);
           const resumed = await rpc('thread.resume', {
             thread_id: memory.threadId,
             project_root: rootEl.value,
@@ -498,15 +510,10 @@
           const result = await rpc('thread.create', createParams);
           if (result.classified.kind !== 'success') throw new Error('thread.create rejected');
           memory.threadId = result.payload.result && result.payload.result.thread_id;
+          await ensurePairedControlLease(memory.threadId);
         }
         if (memory.authKind === 'paired') {
-          const acquired = await rpc('control.acquire', { thread_id: memory.threadId, force: false });
-          if (acquired.classified.kind !== 'success' || !acquired.payload.result) {
-            throw new Error('control.acquire rejected before open');
-          }
-          memory.controlEpoch = acquired.payload.result.epoch;
-          memory.controlExpiresAtMs = acquired.payload.result.expires_at_ms || null;
-          startLeaseRenewal();
+          /* lease acquired before resume/create above */
         } else {
           await syncControlLeaseFromHost();
         }
@@ -706,6 +713,12 @@
     window.BabelRemoteApp = {
       getState: function () {
         return { host: host, thread: thread, turn: turn, approval: approval, sendInFlight: sendInFlight };
+      },
+      getControlEpoch: function () {
+        return memory.controlEpoch;
+      },
+      getAuthKind: function () {
+        return memory.authKind;
       },
       memoryHasToken: function () { return Boolean(memory.token) || memory.pairedDevice; },
       send: send,
