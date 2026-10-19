@@ -322,6 +322,9 @@ describe('shared host-run emergency observation errors (mocked authoritative bac
             this.addEventListener('open', () => setTimeout(() => this.close(), 5));
           }
         } as typeof WebSocket,
+        emergencyObservationPassLimit: 2,
+        emergencyObservationDeadlineMs: 3_000,
+        observationRpcTimeoutMs: 500,
       },
       (event) => events.push(event),
     );
@@ -447,7 +450,20 @@ describe('shared host-run emergency observation errors (mocked authoritative bac
       enforceControlLease: true,
       desktopControllerClientId: desktopId,
       desktopControllerProofKey: desktopProofKey,
-      engineFactory: (descriptor) => cooperativeCancelEngine(descriptor, 'reconcile-error'),
+      engineFactory: (descriptor) => {
+        const engine = new ChatEngine({
+          task: 'reconcile-error',
+          projectRoot: descriptor.projectRoot,
+          executionProfile: 'chat',
+        });
+        engine.submitMessageStream = async function* () {
+          yield { type: 'thinking' };
+          await new Promise<void>(() => {
+            /* ignore cancel — reconcile error must surface before fabricated terminal */
+          });
+        } as ChatEngine['submitMessageStream'];
+        return engine;
+      },
     });
     await server.start(0);
     const port = server.port;
@@ -456,7 +472,10 @@ describe('shared host-run emergency observation errors (mocked authoritative bac
     const fetchImpl: typeof fetch = async (input, init) => {
       const url = String(input);
       const body = typeof init?.body === 'string' ? init.body : '';
-      if (url.includes('/rpc') && body.includes('history.lookup')) {
+      if (
+        url.includes('/rpc') &&
+        (body.includes('remote.catalog') || body.includes('history.lookup'))
+      ) {
         throw new Error('catalog lookup failed during emergency reconciliation');
       }
       return baseFetch(input, init);
@@ -474,6 +493,13 @@ describe('shared host-run emergency observation errors (mocked authoritative bac
         desktopProofKey,
         stdin,
         fetchImpl,
+        WebSocketImpl: class extends WebSocket {
+          constructor(url: string | URL, protocols?: string | string[]) {
+            super(url, protocols);
+            this.addEventListener('open', () => setTimeout(() => this.close(), 5));
+          }
+        } as typeof WebSocket,
+        observationRpcTimeoutMs: 500,
       },
       (event) => events.push(event),
     );
@@ -496,6 +522,109 @@ describe('shared host-run emergency observation errors (mocked authoritative bac
         (e) =>
           e.type === 'run_error' &&
           String((e as { error?: string }).error).includes('catalog lookup failed'),
+      ),
+    );
+    assert.equal(events.some((e) => e.type === 'cancelled'), false);
+
+    await server.stop();
+    rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it('fails closed on a never-resolving observation RPC and wakes waiters without cancelled', async () => {
+    const tmp = mkdtempSync(join(tmpdir(), 'babel-emergency-rpc-hang-'));
+    const configDir = join(tmp, 'config');
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(join(configDir, 'bridge.json'), JSON.stringify({ authToken: TOKEN }), 'utf8');
+    process.env['BABEL_CONFIG_DIR'] = configDir;
+    process.env['BABEL_RUNS_DIR'] = tmp;
+
+    const server = new BridgeServer({
+      authToken: TOKEN,
+      allowedWorkspaceRoot: tmp,
+      allowedOrigins: ['http://127.0.0.1:*', 'http://localhost:*'],
+      enforceControlLease: true,
+      desktopControllerClientId: desktopId,
+      desktopControllerProofKey: desktopProofKey,
+      engineFactory: (descriptor) => {
+        const engine = new ChatEngine({
+          task: 'rpc-hang',
+          projectRoot: descriptor.projectRoot,
+          executionProfile: 'chat',
+        });
+        engine.submitMessageStream = async function* () {
+          yield { type: 'thinking' };
+          await new Promise<void>(() => {
+            /* never settles — observation must fail closed */
+          });
+        } as ChatEngine['submitMessageStream'];
+        return engine;
+      },
+    });
+    await server.start(0);
+    const port = server.port;
+
+    let hangLookup = false;
+    const baseFetch = globalThis.fetch.bind(globalThis);
+    const fetchImpl: typeof fetch = async (input, init) => {
+      const url = String(input);
+      const body = typeof init?.body === 'string' ? init.body : '';
+      if (hangLookup && url.includes('/rpc') && body.includes('history.lookup')) {
+        await new Promise<void>((_resolve, reject) => {
+          setTimeout(
+            () => reject(new Error('history.lookup observation RPC timed out after 200ms')),
+            200,
+          );
+        });
+      }
+      return baseFetch(input, init);
+    };
+
+    const stdin = new PassThrough();
+    const events: Record<string, unknown>[] = [];
+    const runPromise = executeSharedProtocolHostRun(
+      {
+        port,
+        projectRoot: tmp,
+        task: 'rpc hang',
+        runId: 'emergency-rpc-hang',
+        desktopClientId: desktopId,
+        desktopProofKey,
+        stdin,
+        fetchImpl,
+        observationRpcTimeoutMs: 200,
+        emergencyObservationDeadlineMs: 5_000,
+      },
+      (event) => events.push(event),
+    );
+
+    const deadline = Date.now() + 10_000;
+    while (Date.now() < deadline) {
+      if (events.some((e) => e.type === 'thought' || e.type === 'thinking')) break;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    hangLookup = true;
+    stdin.write(
+      `${JSON.stringify({ decision: 'emergency_admin_stop', host_emergency_token: TOKEN })}\n`,
+    );
+
+    const code = await Promise.race([
+      runPromise,
+      new Promise<number>((_, reject) =>
+        setTimeout(() => reject(new Error('host-run hung on never-resolving RPC')), 15_000),
+      ),
+    ]);
+
+    assert.equal(code, 1);
+    assert.ok(events.some((e) => e.type === 'emergency_stop'));
+    assert.equal(events.some((e) => e.type === 'cancelled'), false);
+    assert.ok(
+      events.some(
+        (e) =>
+          e.type === 'run_error' &&
+          (String((e as { error?: string }).error).includes('observation RPC timed out') ||
+            String((e as { error?: string }).error).includes(
+              'authoritative turn terminal was not observed',
+            )),
       ),
     );
 

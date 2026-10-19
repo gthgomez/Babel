@@ -31,9 +31,30 @@ export interface SharedProtocolHostRunOptions {
   WebSocketImpl?: typeof WebSocket;
   signal?: AbortSignal;
   stdin?: NodeJS.ReadableStream;
+  /** Per-RPC ceiling while observing emergency-stop terminal evidence (default 4s). */
+  observationRpcTimeoutMs?: number;
+  /** Wall-clock ceiling after emergency ACK before observation fails closed (default 15s). */
+  emergencyObservationDeadlineMs?: number;
+  /** Active-turn reconcile passes without terminal before observation fails closed (default 12). */
+  emergencyObservationPassLimit?: number;
 }
 
 type NdjsonWriter = (event: Record<string, unknown>) => void;
+
+function emergencyHostRunTrace(
+  stage: string,
+  detail?: Record<string, unknown>,
+): void {
+  if (process.env['BABEL_HOST_RUN_EMERGENCY_TRACE'] !== '1') return;
+  process.stderr.write(
+    `${JSON.stringify({
+      type: 'host_run.emergency_trace',
+      stage,
+      ts: Date.now(),
+      ...detail,
+    })}\n`,
+  );
+}
 
 function desktopHeaders(clientId: string, proofKey: string): Record<string, string> {
   return {
@@ -439,7 +460,10 @@ export async function executeSharedProtocolHostRun(
   /** Bearer emergency cancel RPC succeeded; terminal outcome still requires authoritative evidence. */
   let emergencyStopAcknowledged = false;
   let emergencyObservationPasses = 0;
-  const emergencyTerminalObservationLimit = 12;
+  const emergencyTerminalObservationLimit = options.emergencyObservationPassLimit ?? 12;
+  const observationRpcTimeoutMs = options.observationRpcTimeoutMs ?? 4_000;
+  const emergencyObservationDeadlineMs = options.emergencyObservationDeadlineMs ?? 15_000;
+  let emergencyObservationDeadlineAt = 0;
 
   const abort = () => options.signal?.aborted === true || cancelRequested;
 
@@ -577,6 +601,73 @@ export async function executeSharedProtocolHostRun(
       });
     };
 
+    const runObservationRpc = async <T>(label: string, fn: () => Promise<T>): Promise<T> => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        return await Promise.race([
+          fn(),
+          new Promise<T>((_, reject) => {
+            timer = setTimeout(() => {
+              emergencyHostRunTrace('rpc_timeout', { label, observationRpcTimeoutMs });
+              reject(new Error(`${label} observation RPC timed out after ${observationRpcTimeoutMs}ms`));
+            }, observationRpcTimeoutMs);
+          }),
+        ]);
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+    };
+
+    const wakeTurnObserverTraced = (reason: string): void => {
+      emergencyHostRunTrace('observer_wake', { reason, turnSettled });
+      (wakeTurnObserver as (() => void) | null)?.();
+    };
+
+    const waitForTurnObservation = async (stage: string): Promise<void> => {
+      emergencyHostRunTrace('await_turn_observation_begin', {
+        stage,
+        turnSettled,
+        emergencyStopAcknowledged,
+        transportClosedUnexpectedly,
+      });
+      if (turnSettled) {
+        emergencyHostRunTrace('await_turn_observation_skip_settled', { stage });
+        return;
+      }
+      if (emergencyStopAcknowledged) {
+        while (!turnSettled && !transportClosedUnexpectedly) {
+          if (emergencyObservationBudgetExpired()) {
+            emergencyHostRunTrace('await_turn_observation_budget_expired', { stage });
+            return;
+          }
+          await new Promise((resolve) => setTimeout(resolve, 25));
+        }
+        emergencyHostRunTrace('await_turn_observation_emergency_short_circuit', {
+          stage,
+          turnSettled,
+          transportClosedUnexpectedly,
+        });
+        return;
+      }
+      await turnDone;
+      emergencyHostRunTrace('await_turn_observation_turn_done', { stage });
+    };
+
+    const beginEmergencyObservationWindow = (): void => {
+      if (emergencyObservationDeadlineAt === 0) {
+        emergencyObservationDeadlineAt = Date.now() + emergencyObservationDeadlineMs;
+      }
+    };
+
+    const emergencyObservationBudgetExpired = (): boolean => {
+      if (!emergencyStopAcknowledged || emergencyObservationDeadlineAt === 0) return false;
+      if (Date.now() < emergencyObservationDeadlineAt) return false;
+      finalizeFatalObservationError(
+        'Emergency stop observation timed out before authoritative terminal was available',
+      );
+      return true;
+    };
+
     const attachTurnObserver = (socket: WebSocket): Promise<void> =>
       new Promise<void>((resolve) => {
         const finishObservation = () => {
@@ -674,16 +765,35 @@ export async function executeSharedProtocolHostRun(
                   options.fetchImpl,
                 );
                 emergencyStopAcknowledged = true;
+                beginEmergencyObservationWindow();
+                emergencyHostRunTrace('emergency_ack', {
+                  threadId: activeThreadId,
+                  submittedTurnId,
+                });
                 write({ type: 'emergency_stop' });
                 if (!turnSettled && submittedTurnId !== undefined) {
+                  emergencyHostRunTrace('immediate_reconcile_begin', {
+                    submittedTurnId,
+                  });
                   try {
-                    const terminal = await reconcileTerminalTurnFromHost(
-                      client,
-                      activeThreadId,
-                      submittedTurnId,
+                    if (emergencyObservationBudgetExpired()) {
+                      return;
+                    }
+                    const terminal = await runObservationRpc('turn terminal reconcile', () =>
+                      reconcileTerminalTurnFromHost(client, activeThreadId, submittedTurnId),
                     );
                     if (terminal) finalizeTerminalObservation(terminal);
+                    emergencyHostRunTrace('immediate_reconcile_end', {
+                      settled: turnSettled,
+                      hadTerminal: Boolean(terminal),
+                    });
                   } catch (reconcileError) {
+                    emergencyHostRunTrace('immediate_reconcile_error', {
+                      message:
+                        reconcileError instanceof Error
+                          ? reconcileError.message
+                          : 'Emergency stop reconciliation failed',
+                    });
                     finalizeFatalObservationError(
                       reconcileError instanceof Error
                         ? reconcileError.message
@@ -691,7 +801,7 @@ export async function executeSharedProtocolHostRun(
                     );
                   }
                 }
-                if (!turnSettled) wakeTurnObserver?.();
+                wakeTurnObserverTraced('emergency_stdin_after_reconcile');
               } catch (error) {
                 writeControlRejected(
                   write,
@@ -834,9 +944,12 @@ export async function executeSharedProtocolHostRun(
     });
     submittedTurnId = submitted.turn_id;
 
-    await turnDone;
+    await waitForTurnObservation('primary');
 
     while (transportClosedUnexpectedly && !turnSettled) {
+      if (emergencyObservationBudgetExpired()) {
+        return finalizeHostRunExitCode();
+      }
       transportClosedUnexpectedly = false;
       try {
         ws?.close();
@@ -844,25 +957,65 @@ export async function executeSharedProtocolHostRun(
         /* ignore */
       }
       ws = await openTurnSocket();
+      emergencyHostRunTrace('loop_reattach', { submittedTurnId });
       turnDone = attachTurnObserver(ws);
       const turnHint =
         pendingApproval && typeof pendingApproval.turn_id === 'string'
           ? pendingApproval.turn_id
           : undefined;
-      const authoritative = await lookupAuthoritativePendingApproval(
-        client,
-        threadId,
-        options.runId,
-        turnHint,
-      );
+      let authoritative: Record<string, unknown> | null = null;
+      try {
+        authoritative = await lookupAuthoritativePendingApproval(
+          client,
+          threadId,
+          options.runId,
+          turnHint,
+        );
+      } catch (error) {
+        if (emergencyStopAcknowledged) {
+          finalizeFatalObservationError(
+            error instanceof Error ? error.message : 'Approval lookup observation failed',
+          );
+          return finalizeHostRunExitCode();
+        }
+        throw error;
+      }
       if (turnSettled) break;
-      const terminal = await reconcileTerminalTurnFromHost(client, threadId, submittedTurnId);
+      let terminal: Record<string, unknown> | null = null;
+      try {
+        terminal = emergencyStopAcknowledged
+          ? await runObservationRpc('turn terminal reconcile', () =>
+              reconcileTerminalTurnFromHost(client, threadId, submittedTurnId),
+            )
+          : await reconcileTerminalTurnFromHost(client, threadId, submittedTurnId);
+      } catch (error) {
+        if (emergencyStopAcknowledged) {
+          finalizeFatalObservationError(
+            error instanceof Error ? error.message : 'Turn terminal reconcile observation failed',
+          );
+          return finalizeHostRunExitCode();
+        }
+        throw error;
+      }
       if (terminal && !turnSettled) {
         finalizeTerminalObservation(terminal);
         break;
       }
       if (turnSettled) break;
-      const catalogRow = await lookupCatalogSession(client, threadId);
+      let catalogRow: { status: string; active_turn: boolean; active_turn_id?: number } | null = null;
+      try {
+        catalogRow = emergencyStopAcknowledged
+          ? await runObservationRpc('remote.catalog', () => lookupCatalogSession(client, threadId))
+          : await lookupCatalogSession(client, threadId);
+      } catch (error) {
+        if (emergencyStopAcknowledged) {
+          finalizeFatalObservationError(
+            error instanceof Error ? error.message : 'Catalog observation failed',
+          );
+          return finalizeHostRunExitCode();
+        }
+        throw error;
+      }
       if (turnSettled) break;
       if (
         emergencyStopAcknowledged &&
@@ -907,7 +1060,12 @@ export async function executeSharedProtocolHostRun(
         return finalizeHostRunExitCode();
       }
       if (turnSettled) break;
-      await turnDone;
+      if (emergencyStopAcknowledged) {
+        await waitForTurnObservation('recovery_loop');
+      } else {
+        await turnDone;
+        emergencyHostRunTrace('await_turn_observation_turn_done', { stage: 'recovery_loop' });
+      }
     }
 
     return finalizeHostRunExitCode();
@@ -919,10 +1077,12 @@ export async function executeSharedProtocolHostRun(
       });
       turnSettled = true;
       terminalExitCode = 1;
+      emergencyHostRunTrace('observer_wake', { reason: 'outer_catch', turnSettled });
       (wakeTurnObserver as (() => void) | null)?.();
     }
     return terminalExitCode ?? 1;
   } finally {
+    emergencyHostRunTrace('finally_cleanup', { turnSettled, terminalExitCode });
     closeStdinInterface();
     try {
       ws?.close();
