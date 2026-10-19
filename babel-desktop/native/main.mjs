@@ -82,7 +82,13 @@ let updateBusy=false;
 let connectionChangeBusy=false;
 let cliUpdate={state:'unchecked'};
 let preferencePath;
-const busy=()=>Boolean(runAdmission||runner?.busy||remoteBridge?.running||updateBusy||connectionChangeBusy);
+const busy=()=>Boolean(
+  runAdmission||
+  runner?.busy||
+  (remoteBridge?.running && !remoteBridge?.sharedSession)||
+  updateBusy||
+  connectionChangeBusy,
+);
 
 protocol.registerSchemesAsPrivileged([{scheme:'babel',privileges:{standard:true,secure:true,supportFetchAPI:true}}]);
 const singleInstance=app.requestSingleInstanceLock();
@@ -554,10 +560,17 @@ async function start(){
       throw new Error('Shared remote sessions require an open project.');
     }
     if(sharedBridge){
+      if(route?.provider) runRequest.provider=route.provider;
+      if(selectedModel?.modelId) runRequest.model=selectedModel.modelId;
       runner=new SharedProtocolRun({
+        executable:officialRuntime().executable,
+        entry:cliEntry,
         port:remoteBridge.port,
         desktopClientId:remoteBridge.desktopClientId,
+        desktopProofKey:remoteBridge.desktopProofKey,
         projectRoot:runAuthority.identity.root,
+        env:childEnvironment,
+        inheritEnv:false,
       });
     }else{
       runner=new BabelChild({executable:officialRuntime().executable, entry:cliEntry, projectRoot:runAuthority?.identity.root??null,launchDirectory:app.getPath('userData'), env:childEnvironment, inheritEnv:false});

@@ -108,6 +108,8 @@ export interface BridgeServerOptions {
    * the Desktop controller without a host bearer (shared protocol-host ownership).
    */
   desktopControllerClientId?: string;
+  /** Per-launch desktop controller proof secret (never published to remote UIs). */
+  desktopControllerProofKey?: string;
 }
 
 /** Test-only hooks for post-initial-auth / pre-body-read synchronization. */
@@ -283,6 +285,13 @@ export class BridgeServer {
     return fromEnv || undefined;
   }
 
+  private desktopControllerProofKey(): string | undefined {
+    const fromOptions = this.options.desktopControllerProofKey?.trim();
+    if (fromOptions) return fromOptions;
+    const fromEnv = process.env['BABEL_BRIDGE_DESKTOP_PROOF_KEY']?.trim();
+    return fromEnv || undefined;
+  }
+
   private resolveHttpClient(
     req: IncomingMessage,
     parsedUrl?: ParsedUrl | null,
@@ -293,6 +302,7 @@ export class BridgeServer {
       parsedUrl,
       this.devicePairing,
       this.desktopControllerClientId(),
+      this.desktopControllerProofKey(),
     );
   }
 
@@ -477,6 +487,7 @@ export class BridgeServer {
         parsedUrl,
         this.devicePairing,
         this.desktopControllerClientId(),
+        this.desktopControllerProofKey(),
       )
     ) {
       setCorsHeaders(res, req.headers['origin'], this.allowedOrigins);

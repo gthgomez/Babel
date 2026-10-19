@@ -3,12 +3,16 @@ import { resolve } from 'node:path';
 import { Command } from 'commander';
 
 import { assertRemoteListenConfig } from '../bridge/bindGuard.js';
-import { mintDesktopControllerClientId } from '../bridge/desktopControllerAuth.js';
+import {
+  mintDesktopControllerClientId,
+  mintDesktopControllerProofKey,
+} from '../bridge/desktopControllerAuth.js';
 import { BridgeServer } from '../bridge/sessionServer.js';
 import {
   REMOTE_UI_FIXTURE_SCENARIOS,
   startRemoteUiFixtureServer,
 } from '../bridge/remoteUiFixture.js';
+import { executeSharedProtocolHostRun } from '../bridge/sharedProtocolHostRun.js';
 
 export function registerRemoteCommands(program: Command): void {
   const remote = program
@@ -54,8 +58,13 @@ export function registerRemoteCommands(program: Command): void {
         ? (process.env['BABEL_BRIDGE_DESKTOP_CLIENT_ID']?.trim() ||
             mintDesktopControllerClientId())
         : undefined;
-      if (sharedSession && desktopControllerClientId) {
+      const desktopControllerProofKey = sharedSession
+        ? (process.env['BABEL_BRIDGE_DESKTOP_PROOF_KEY']?.trim() ||
+            mintDesktopControllerProofKey())
+        : undefined;
+      if (sharedSession && desktopControllerClientId && desktopControllerProofKey) {
         process.env['BABEL_BRIDGE_DESKTOP_CLIENT_ID'] = desktopControllerClientId;
+        process.env['BABEL_BRIDGE_DESKTOP_PROOF_KEY'] = desktopControllerProofKey;
         process.env['BABEL_BRIDGE_SHARED_SESSION'] = '1';
       }
       const server = new BridgeServer({
@@ -67,7 +76,9 @@ export function registerRemoteCommands(program: Command): void {
           'https://localhost:*',
           ...extraOrigins,
         ],
-        ...(desktopControllerClientId ? { desktopControllerClientId } : {}),
+        ...(desktopControllerClientId && desktopControllerProofKey
+          ? { desktopControllerClientId, desktopControllerProofKey }
+          : {}),
       });
       await server.start(port);
       console.log(`Babel Remote listening on http://${listenHost}:${server.port}`);
@@ -76,8 +87,7 @@ export function registerRemoteCommands(program: Command): void {
       console.log(`ui:        http://${listenHost}:${server.port}/ui`);
       console.log(`rpc:       POST http://${listenHost}:${server.port}/rpc`);
       if (sharedSession) {
-        console.log('shared:    Desktop controller id on loopback (x-babel-desktop-client-id)');
-        console.log(`desktop:   ${desktopControllerClientId}`);
+        console.log('shared:    Desktop controller proof on loopback (id header is not a credential)');
       }
       console.log('Auth: Bearer token from ~/.babel/bridge.json');
       if (options.showToken && Boolean(process.stdout.isTTY)) {
@@ -90,6 +100,59 @@ export function registerRemoteCommands(program: Command): void {
       console.log(`  tailscale serve --bg ${server.port}`);
       console.log('Do not run: tailscale funnel');
       console.log('Ctrl+C to stop. Closing this process stops the gateway; ChatEngine turns are cancelled.');
+    });
+
+  remote
+    .command('host-run')
+    .description('Run one chat turn on the loopback shared protocol host (Desktop IPC entry)')
+    .requiredOption('--project-root <dir>', 'Registered workspace root')
+    .requiredOption('--run-id <id>', 'Desktop run id')
+    .option('--resume-thread <id>', 'Resume an existing protocol thread id')
+    .option('--model <id>', 'Provider model id for thread.create')
+    .option('--provider <id>', 'Provider id for thread.create')
+    .option('--output-format <fmt>', 'Output format', 'stream-json')
+    .allowExcessArguments(true)
+    .action(async (options: {
+      projectRoot: string;
+      runId: string;
+      resumeThread?: string;
+      model?: string;
+      provider?: string;
+      outputFormat?: string;
+    }, command) => {
+      const port = Number(process.env['BABEL_BRIDGE_PORT'] ?? '4545');
+      const clientId = process.env['BABEL_BRIDGE_DESKTOP_CLIENT_ID']?.trim() ?? '';
+      const proofKey = process.env['BABEL_BRIDGE_DESKTOP_PROOF_KEY']?.trim() ?? '';
+      const taskParts = (command.args as string[]) ?? [];
+      const task = taskParts.join(' ').trim();
+      if (!task) {
+        console.error('Task text is required after --');
+        process.exitCode = 1;
+        return;
+      }
+      if (!clientId || !proofKey) {
+        console.error('Missing BABEL_BRIDGE_DESKTOP_CLIENT_ID or BABEL_BRIDGE_DESKTOP_PROOF_KEY');
+        process.exitCode = 1;
+        return;
+      }
+      const write = (event: Record<string, unknown>) => {
+        process.stdout.write(`${JSON.stringify(event)}\n`);
+      };
+      process.exitCode = await executeSharedProtocolHostRun(
+        {
+          port,
+          projectRoot: resolve(options.projectRoot),
+          task,
+          runId: options.runId,
+          desktopClientId: clientId,
+          desktopProofKey: proofKey,
+          stdin: process.stdin,
+          ...(options.resumeThread ? { resumeThreadId: options.resumeThread } : {}),
+          ...(options.model ? { model: options.model } : {}),
+          ...(options.provider ? { provider: options.provider } : {}),
+        },
+        write,
+      );
     });
 
   remote

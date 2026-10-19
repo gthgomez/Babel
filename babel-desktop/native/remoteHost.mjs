@@ -1,5 +1,5 @@
 import { spawn, spawnSync } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { isAbsolute, resolve } from 'node:path';
 
 // The listen host is configuration-derived (`BABEL_BRIDGE_HOST` may be
@@ -106,6 +106,7 @@ export class RemoteBridgeChild {
   #generation = 0;
   #stopTimer = null;
   #desktopClientId = null;
+  #desktopProofKey = null;
   #sharedSession = false;
 
   /**
@@ -145,6 +146,10 @@ export class RemoteBridgeChild {
     return this.#desktopClientId;
   }
 
+  get desktopProofKey() {
+    return this.#desktopProofKey;
+  }
+
   async start({port = 4545, onLine, readyTimeoutMs = DEFAULT_READY_TIMEOUT_MS, sharedSession = true, desktopClientId} = {}) {
     if (this.running) throw new Error('Remote bridge is already running');
     const generation = ++this.#generation;
@@ -158,8 +163,10 @@ export class RemoteBridgeChild {
           ? desktopClientId
           : `desktop:${randomUUID().replace(/-/g, '')}`)
       : null;
+    const proofKey = useSharedSession ? randomBytes(32).toString('base64url') : null;
     this.#sharedSession = useSharedSession;
     this.#desktopClientId = controllerId;
+    this.#desktopProofKey = proofKey;
     const child = this.spawnChild(
       this.executable,
       buildRemoteServeArgs(this.entry, this.projectRoot, {port, sharedSession: useSharedSession}),
@@ -174,10 +181,11 @@ export class RemoteBridgeChild {
         BABEL_DESKTOP_IPC: '1',
         // Per-launch identity the bridge echoes on /health. Not a credential.
         BABEL_BRIDGE_INSTANCE: instance,
-        ...(controllerId
+        ...(controllerId && proofKey
           ? {
               BABEL_BRIDGE_SHARED_SESSION: '1',
               BABEL_BRIDGE_DESKTOP_CLIENT_ID: controllerId,
+              BABEL_BRIDGE_DESKTOP_PROOF_KEY: proofKey,
             }
           : {}),
       },
@@ -327,6 +335,7 @@ export class RemoteBridgeChild {
     this.#child = null;
     this.#port = null;
     this.#desktopClientId = null;
+    this.#desktopProofKey = null;
     this.#sharedSession = false;
   }
 }

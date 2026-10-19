@@ -55,14 +55,12 @@ export function resolveBridgeClientContext(
   parsedUrl?: ParsedUrl | null,
   pairing?: DevicePairingService,
   desktopControllerClientId?: string,
+  desktopControllerProofKey?: string,
 ): BridgeClientContext {
   const headerToken = extractBearerToken(req.headers['authorization']);
   if (headerToken && verifyToken(headerToken, authToken)) {
     return { authKind: 'host_bearer', clientId: hostClientIdFromBearer(headerToken) };
   }
-
-  const desktop = resolveDesktopControllerContext(req, desktopControllerClientId);
-  if (desktop) return desktop;
 
   const cookieToken = pairingCookieToken(req);
   if (cookieToken && pairing) {
@@ -75,6 +73,13 @@ export function resolveBridgeClientContext(
       };
     }
   }
+
+  const desktop = resolveDesktopControllerContext(
+    req,
+    desktopControllerClientId,
+    desktopControllerProofKey,
+  );
+  if (desktop) return desktop;
 
   if (parsedUrl) {
     const queryToken = extractQueryToken(
@@ -116,9 +121,17 @@ export function isBridgeRequestAuthenticated(
   parsedUrl?: ParsedUrl | null,
   pairing?: DevicePairingService,
   desktopControllerClientId?: string,
+  desktopControllerProofKey?: string,
 ): boolean {
   return isBridgeClientAuthenticated(
-    resolveBridgeClientContext(req, authToken, parsedUrl, pairing, desktopControllerClientId),
+    resolveBridgeClientContext(
+      req,
+      authToken,
+      parsedUrl,
+      pairing,
+      desktopControllerClientId,
+      desktopControllerProofKey,
+    ),
   );
 }
 

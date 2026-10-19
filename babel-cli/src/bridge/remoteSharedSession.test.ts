@@ -7,7 +7,10 @@ import { after, before, describe, it } from 'node:test';
 
 import { ChatEngine } from '../agent/chatEngine.js';
 import type { RemoteCatalogResult } from './remoteCatalog.js';
-import { mintDesktopControllerClientId } from './desktopControllerAuth.js';
+import {
+  mintDesktopControllerClientId,
+  mintDesktopControllerProofKey,
+} from './desktopControllerAuth.js';
 import { HttpProtocolClient } from './httpProtocolClient.js';
 import { BridgeServer } from './sessionServer.js';
 import type { ThreadCreateResult, ThreadResumeResult } from '../protocol/types.js';
@@ -62,6 +65,7 @@ describe('Babel Remote shared protocol host (Phase 2)', () => {
   let desktop: HttpProtocolClient;
   let remoteCookie: string;
   const desktopId = mintDesktopControllerClientId();
+  const desktopProofKey = mintDesktopControllerProofKey();
 
   before(async () => {
     tmp = mkdtempSync(join(tmpdir(), 'babel-remote-shared-'));
@@ -72,6 +76,7 @@ describe('Babel Remote shared protocol host (Phase 2)', () => {
       allowedWorkspaceRoot: tmp,
       allowedOrigins: ['http://127.0.0.1:*', 'http://localhost:*'],
       desktopControllerClientId: desktopId,
+      desktopControllerProofKey: desktopProofKey,
       engineFactory: (descriptor) =>
         new ChatEngine({
           task: descriptor.task ?? 'shared',
@@ -82,7 +87,11 @@ describe('Babel Remote shared protocol host (Phase 2)', () => {
     await server.start(0);
     port = server.port;
     const base = `http://127.0.0.1:${port}`;
-    desktop = new HttpProtocolClient({ baseUrl: base, desktopClientId: desktopId });
+    desktop = new HttpProtocolClient({
+      baseUrl: base,
+      desktopClientId: desktopId,
+      desktopProofKey,
+    });
 
     const challengeRes = await httpRequest(`http://127.0.0.1:${port}/pair/challenge`, {
       method: 'POST',

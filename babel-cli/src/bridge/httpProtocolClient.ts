@@ -3,13 +3,19 @@
  */
 
 import type { JsonRpcResponse } from '../protocol/jsonRpc.js';
-import { DESKTOP_CLIENT_ID_HEADER } from './desktopControllerAuth.js';
+import {
+  computeDesktopControllerProof,
+  DESKTOP_CLIENT_ID_HEADER,
+  DESKTOP_PROOF_HEADER,
+} from './desktopControllerAuth.js';
 
 export interface HttpProtocolClientOptions {
   baseUrl: string;
   bearerToken?: string;
   /** Loopback Desktop controller identity (no host bearer on ordinary input). */
   desktopClientId?: string;
+  /** Required with desktopClientId — never treat the public client id as a secret. */
+  desktopProofKey?: string;
   fetchImpl?: typeof fetch;
 }
 
@@ -17,15 +23,20 @@ export class HttpProtocolClient {
   private readonly baseUrl: string;
   private readonly bearerToken: string | undefined;
   private readonly desktopClientId: string | undefined;
+  private readonly desktopProofKey: string | undefined;
   private readonly fetchImpl: typeof fetch;
 
   constructor(options: HttpProtocolClientOptions) {
     this.baseUrl = options.baseUrl.replace(/\/$/, '');
     this.bearerToken = options.bearerToken ?? undefined;
     this.desktopClientId = options.desktopClientId ?? undefined;
+    this.desktopProofKey = options.desktopProofKey ?? undefined;
     this.fetchImpl = options.fetchImpl ?? fetch;
     if (!this.bearerToken && !this.desktopClientId) {
       throw new Error('HttpProtocolClient requires bearerToken or desktopClientId');
+    }
+    if (this.desktopClientId && !this.desktopProofKey) {
+      throw new Error('desktopProofKey is required with desktopClientId');
     }
   }
 
@@ -34,8 +45,12 @@ export class HttpProtocolClient {
       'Content-Type': 'application/json',
       ...extra,
     };
-    if (this.desktopClientId) {
+    if (this.desktopClientId && this.desktopProofKey) {
       headers[DESKTOP_CLIENT_ID_HEADER] = this.desktopClientId;
+      headers[DESKTOP_PROOF_HEADER] = computeDesktopControllerProof(
+        this.desktopProofKey,
+        this.desktopClientId,
+      );
     }
     if (this.bearerToken) {
       headers.Authorization = `Bearer ${this.bearerToken}`;

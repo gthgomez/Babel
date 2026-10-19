@@ -1,204 +1,150 @@
-import { loopbackProtocolHeaders } from './sharedSessionBridge.mjs';
+import { spawn } from 'node:child_process';
+import { isAbsolute } from 'node:path';
+import { JsonlDecoder } from './stream.mjs';
+import {scopedApproval,scopedApprovalReply} from '../src/core.mjs';
 
-function mapTurnEventToCliEvent(event) {
-  if (!event || typeof event !== 'object') return null;
-  switch (event.type) {
-    case 'answer_chunk':
-      return { type: 'assistant_chunk', chunk: event.text ?? '' };
-    case 'thought':
-    case 'thinking':
-      return { type: 'thought', line: event.text ?? '' };
-    case 'done':
-      return {
-        type: 'run_complete',
-        result: {
-          answer: event.answer,
-          usage: event.usage,
-          terminal_outcome: event.outcome ?? 'COMPLETED',
-          user_status: event.status ?? 'completed',
-        },
-      };
-    case 'failed':
-      return { type: 'run_error', error: event.error ?? 'Turn failed' };
-    case 'cancelled':
-      return { type: 'cancelled' };
-    default:
-      return null;
-  }
+function terminateChildTree(child) {
+  try { child.kill(); } catch { /* already exited */ }
 }
 
-async function postJson(url, headers, body) {
-  const response = await fetch(url, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(body),
-  });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    const message =
-      payload?.error?.message ??
-      payload?.message ??
-      `HTTP ${response.status}`;
-    throw new Error(message);
-  }
-  return payload;
-}
-
-async function rpc(baseUrl, headers, method, params, id) {
-  const payload = await postJson(`${baseUrl}/rpc`, headers, {
-    jsonrpc: '2.0',
-    id,
-    method,
-    params,
-  });
-  if (payload?.error) {
-    throw new Error(payload.error.message ?? String(payload.error.code ?? 'rpc_error'));
-  }
-  return payload.result;
+/** CLI execution entry for shared protocol-host chat (ADR-010 on loopback bridge). */
+export function buildHostRunArgs(entry, projectRoot, request) {
+  if (typeof entry !== 'string' || !isAbsolute(entry)) throw new TypeError('CLI entry must be absolute');
+  if (typeof projectRoot !== 'string' || !isAbsolute(projectRoot)) throw new TypeError('Project root must be absolute');
+  if (typeof request.runId !== 'string' || !/^[\w-]{1,100}$/.test(request.runId)) throw new TypeError('Invalid run ID');
+  if (request.mode !== 'chat') throw new TypeError('Shared protocol host runs support chat mode only');
+  const args = [
+    entry,
+    'remote',
+    'host-run',
+    '--project-root',
+    projectRoot,
+    '--run-id',
+    request.runId,
+    '--output-format',
+    'stream-json',
+  ];
+  if (request.sessionId) args.push('--resume-thread', request.sessionId);
+  if (typeof request.model === 'string' && request.model) args.push('--model', request.model);
+  if (typeof request.provider === 'string' && request.provider) args.push('--provider', request.provider);
+  args.push('--', request.task);
+  return args;
 }
 
 /**
- * Runs chat turns on the loopback shared protocol host (same executor as Remote/PWA).
+ * Owns one `babel remote host-run` child — same IPC surface as BabelChild.
  */
 export class SharedProtocolRun {
-  #active = false;
-  #ws = null;
-  #cancelled = false;
+  #child = null;
+  #approval = null;
+  #runId = null;
+  #approvalClosed = true;
 
-  constructor({ port, desktopClientId, projectRoot }) {
-    if (!Number.isInteger(port) || port < 1024) throw new TypeError('Invalid bridge port');
-    if (typeof desktopClientId !== 'string') throw new TypeError('desktopClientId is required');
-    if (typeof projectRoot !== 'string' || !projectRoot) throw new TypeError('projectRoot is required');
+  constructor({executable, entry, projectRoot, port, desktopClientId, desktopProofKey, env = {}, inheritEnv = true}) {
+    if (!isAbsolute(executable)) throw new TypeError('The Node executable must be absolute');
+    this.executable = executable;
+    this.entry = entry;
+    this.projectRoot = projectRoot;
     this.port = port;
     this.desktopClientId = desktopClientId;
-    this.projectRoot = projectRoot;
-    this.baseUrl = `http://127.0.0.1:${port}`;
-    this.headers = () => loopbackProtocolHeaders(this.desktopClientId);
+    this.desktopProofKey = desktopProofKey;
+    this.env = env;
+    this.inheritEnv = inheritEnv;
   }
 
-  get busy() {
-    return this.#active;
-  }
+  get busy() { return this.#child !== null; }
 
   get awaitingApproval() {
-    return false;
+    return !this.#approvalClosed && Boolean(this.#approval && Date.parse(this.#approval.expires_at) > Date.now());
   }
 
-  cancel() {
-    this.#cancelled = true;
+  start(request, onPacket) {
+    if (this.busy) throw new Error('A shared protocol run is already active');
+    const args = buildHostRunArgs(this.entry, this.projectRoot, request);
+    const send = packet => onPacket({runId: request.runId, ...packet});
+    this.#approval = null;
+    this.#runId = request.runId;
+    this.#approvalClosed = false;
+    let turnSettled = false;
+    let transportLost = false;
+    const decoder = new JsonlDecoder(event => {
+      if (event.type === 'approval.required' && !this.#approvalClosed) {
+        const binding = scopedApproval(event.item?.approval);
+        this.#approval = binding?.run_id === request.runId ? binding : null;
+      }
+      if (['run_complete', 'run_error', 'turn.completed', 'turn.failed', 'cancelled'].includes(event.type)) {
+        turnSettled = true;
+        this.#approval = null;
+        this.#approvalClosed = true;
+      }
+      send({kind: 'event', event});
+    }, error => send({kind: 'transport-error', error}));
+    const child = spawn(this.executable, args, {
+      cwd: this.projectRoot,
+      shell: false,
+      windowsHide: true,
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env: {
+        ...(this.inheritEnv ? process.env : {}),
+        ...this.env,
+        BABEL_DESKTOP_IPC: '1',
+        BABEL_DESKTOP_RUN_ID: request.runId,
+        BABEL_BRIDGE_PORT: String(this.port),
+        BABEL_BRIDGE_DESKTOP_CLIENT_ID: this.desktopClientId,
+        BABEL_BRIDGE_DESKTOP_PROOF_KEY: this.desktopProofKey,
+        BABEL_DAEMON_ENABLED: 'false',
+      },
+    });
+    this.#child = child;
+    child.stdout.on('data', chunk => decoder.push(chunk));
+    child.stderr.on('data', () => { /* withheld */ });
+    child.on('close', (code, signal) => {
+      decoder.end();
+      this.#child = null;
+      this.#approval = null;
+      this.#runId = null;
+      this.#approvalClosed = true;
+      if (!turnSettled && !transportLost) {
+        send({kind: 'event', event: {type: 'run_error', error: 'Shared protocol run ended before the turn settled'}});
+        send({kind: 'exit', code: 1, signal});
+        return;
+      }
+      send({kind: 'exit', code: transportLost ? 1 : code ?? 1, signal});
+    });
+  }
+
+  reply(request) {
+    if (this.#approvalClosed || !this.#child?.stdin || this.#child.stdin.destroyed || request?.runId !== this.#runId) return false;
+    const reply = scopedApprovalReply(request, this.#approval);
+    if (!reply) return false;
+    this.#approval = null;
     try {
-      this.#ws?.close();
+      this.#child.stdin.write(`${JSON.stringify(reply)}\n`);
+      return true;
     } catch {
-      /* already closed */
+      return false;
     }
-  }
-
-  reply() {
-    return false;
   }
 
   whenIdle(callback) {
-    if (!this.#active) callback();
+    if (typeof callback !== 'function') return;
+    if (!this.#child) { callback(); return; }
+    this.#child.once('close', callback);
   }
 
-  async start(request, onPacket) {
-    if (this.#active) throw new Error('A shared protocol run is already active');
-    if (request.mode !== 'chat') {
-      throw new Error('Shared remote sessions support chat mode only. Stop the bridge or use a local run for other modes.');
-    }
-    this.#active = true;
-    this.#cancelled = false;
-    const send = packet => onPacket({ runId: request.runId, ...packet });
-    send({ kind: 'event', event: { type: 'run_start' } });
+  cancel() {
+    this.#approval = null;
+    this.#approvalClosed = true;
+    const child = this.#child;
+    if (!child || child.desktopCancelling) return;
+    child.desktopCancelling = true;
+    let wrote = false;
     try {
-      const session = await postJson(`${this.baseUrl}/sessions`, this.headers(), {
-        projectRoot: this.projectRoot,
-      });
-      const sessionId = session.sessionId;
-      let threadId = request.sessionId;
-      if (threadId) {
-        await rpc(this.baseUrl, this.headers(), 'thread.resume', {
-          thread_id: threadId,
-          session_id: sessionId,
-        }, 1);
-      } else {
-        const created = await rpc(this.baseUrl, this.headers(), 'thread.create', {
-          project_root: this.projectRoot,
-          session_id: sessionId,
-          task: request.task,
-        }, 1);
-        threadId = created.thread_id;
+      if (child.stdin && !child.stdin.destroyed) {
+        child.stdin.write(`${JSON.stringify({ decision: 'cancel' })}\n`);
+        wrote = true;
       }
-      const lease = await rpc(this.baseUrl, this.headers(), 'control.acquire', {
-        thread_id: threadId,
-        force: false,
-      }, 2);
-      const ticket = await postJson(`${this.baseUrl}/ws/ticket`, this.headers(), {
-        session_id: sessionId,
-        thread_id: threadId,
-      });
-      const wsUrl = `ws://127.0.0.1:${this.port}/ws?ticket=${encodeURIComponent(ticket.ticket)}`;
-      await new Promise((resolve, reject) => {
-        const ws = new WebSocket(wsUrl);
-        this.#ws = ws;
-        ws.addEventListener('open', () => resolve());
-        ws.addEventListener('error', () => reject(new Error('Shared protocol WebSocket failed')));
-      });
-      const submitPromise = rpc(this.baseUrl, this.headers(), 'turn.submit', {
-        thread_id: threadId,
-        message: request.task,
-        control_epoch: lease.epoch,
-      }, 3);
-      const ws = this.#ws;
-      await new Promise((resolve, reject) => {
-        const onMessage = event => {
-          try {
-            const message = JSON.parse(String(event.data));
-            if (message.method === 'turn.event' && message.params?.event) {
-              const mapped = mapTurnEventToCliEvent(message.params.event);
-              if (mapped) send({ kind: 'event', event: mapped });
-              if (['done', 'failed', 'cancelled'].includes(message.params.event.type)) {
-                cleanup();
-                resolve();
-              }
-            }
-          } catch {
-            /* ignore malformed frames */
-          }
-        };
-        const onClose = () => {
-          cleanup();
-          resolve();
-        };
-        const cleanup = () => {
-          ws.removeEventListener('message', onMessage);
-          ws.removeEventListener('close', onClose);
-          try {
-            ws.close();
-          } catch {
-            /* ignore */
-          }
-        };
-        ws.addEventListener('message', onMessage);
-        ws.addEventListener('close', onClose);
-        submitPromise.catch(err => {
-          cleanup();
-          reject(err);
-        });
-        if (this.#cancelled) {
-          cleanup();
-          resolve();
-        }
-      });
-      if (!this.#cancelled) {
-        send({ kind: 'exit', code: 0 });
-      }
-    } catch (error) {
-      send({ kind: 'event', event: { type: 'run_error', error: error.message ?? String(error) } });
-      send({ kind: 'exit', code: 1 });
-    } finally {
-      this.#active = false;
-      this.#ws = null;
-    }
+    } catch { /* fall through */ }
+    if (!wrote) terminateChildTree(child);
   }
 }

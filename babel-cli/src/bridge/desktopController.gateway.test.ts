@@ -6,7 +6,13 @@ import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
 import { ChatEngine } from '../agent/chatEngine.js';
-import { DESKTOP_CLIENT_ID_HEADER, mintDesktopControllerClientId } from './desktopControllerAuth.js';
+import {
+  computeDesktopControllerProof,
+  DESKTOP_CLIENT_ID_HEADER,
+  DESKTOP_PROOF_HEADER,
+  mintDesktopControllerClientId,
+  mintDesktopControllerProofKey,
+} from './desktopControllerAuth.js';
 import { BridgeServer } from './sessionServer.js';
 
 const TOKEN = 'desktop-controller-gateway-token';
@@ -57,6 +63,7 @@ describe('Desktop controller shared-session gateway', () => {
   let prevRuns: string | undefined;
   let port = 0;
   const desktopId = mintDesktopControllerClientId();
+  const desktopProofKey = mintDesktopControllerProofKey();
 
   before(async () => {
     tmp = mkdtempSync(join(tmpdir(), 'babel-desktop-controller-'));
@@ -67,6 +74,7 @@ describe('Desktop controller shared-session gateway', () => {
       allowedWorkspaceRoot: tmp,
       allowedOrigins: ['http://127.0.0.1:*', 'http://localhost:*'],
       desktopControllerClientId: desktopId,
+      desktopControllerProofKey: desktopProofKey,
       engineFactory: (descriptor) =>
         new ChatEngine({
           task: descriptor.task ?? 'desktop',
@@ -85,7 +93,11 @@ describe('Desktop controller shared-session gateway', () => {
     rmSync(tmp, { recursive: true, force: true });
   });
 
-  const desktopHeaders = { [DESKTOP_CLIENT_ID_HEADER]: desktopId, Origin: ORIGIN };
+  const desktopHeaders = {
+    [DESKTOP_CLIENT_ID_HEADER]: desktopId,
+    [DESKTOP_PROOF_HEADER]: computeDesktopControllerProof(desktopProofKey, desktopId),
+    Origin: ORIGIN,
+  };
 
   async function desktopRpc(method: string, params: Record<string, unknown>, id = 1) {
     const res = await httpRequest(`http://127.0.0.1:${port}/rpc`, {
@@ -129,6 +141,23 @@ describe('Desktop controller shared-session gateway', () => {
     assert.ok(cookie);
     return cookie;
   }
+
+  it('rejects desktop id header without proof on loopback', async () => {
+    const forged = await httpRequest(`http://127.0.0.1:${port}/rpc`, {
+      method: 'POST',
+      headers: {
+        Origin: ORIGIN,
+        [DESKTOP_CLIENT_ID_HEADER]: desktopId,
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 99,
+        method: 'remote.catalog',
+        params: {},
+      }),
+    });
+    assert.equal(forged.statusCode, 401);
+  });
 
   it('authenticates loopback desktop controller without host bearer', async () => {
     const denied = await httpRequest(`http://127.0.0.1:${port}/rpc`, {
