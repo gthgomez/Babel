@@ -318,6 +318,48 @@ export class RemoteBridgeChild {
     }
   }
 
+  /**
+   * Wait until the owned bridge child process has exited (close event).
+   * Call after stop(); rejects if the PID is still alive past timeoutMs.
+   */
+  waitForOwnedChildExit(timeoutMs = 8_000) {
+    return new Promise((resolve, reject) => {
+      const child = this.#child;
+      if (!child) {
+        if (this.#state === 'stopping') {
+          reject(
+            new Error(
+              'Remote bridge is stopping but owned child handle is missing (orphan risk)',
+            ),
+          );
+          return;
+        }
+        if (this.#state === 'stopped' || this.#state === 'failed') {
+          resolve({ pid: null, exitCode: 0, signal: null });
+          return;
+        }
+        reject(new Error(`Remote bridge has no owned child while state=${this.#state}`));
+        return;
+      }
+      const pid = child.pid;
+      if (child.exitCode !== null || child.signalCode !== null) {
+        resolve({ pid, exitCode: child.exitCode ?? 0, signal: child.signalCode });
+        return;
+      }
+      const timer = setTimeout(() => {
+        reject(
+          new Error(
+            `owned bridge child pid=${pid} did not exit within ${timeoutMs}ms (state=${this.#state})`,
+          ),
+        );
+      }, timeoutMs);
+      child.once('close', (exitCode, signal) => {
+        clearTimeout(timer);
+        resolve({ pid, exitCode, signal });
+      });
+    });
+  }
+
   stop() {
     if (this.#stopTimer) {
       clearTimeout(this.#stopTimer);

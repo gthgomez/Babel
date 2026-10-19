@@ -258,12 +258,17 @@ if (remoteIdx >= 0 && (remoteSub === 'serve' || remoteSub === 'acceptance-bridge
     assert.ok(receiptText.includes('host-run'));
 
     bridge.stop();
-    const bridgeStopDeadline = Date.now() + STAGE_BUDGET_MS['bridge-stop'];
-    while (Date.now() < bridgeStopDeadline) {
-      if (bridge.state === 'stopped' || bridge.state === 'failed') break;
-      await new Promise((r) => setTimeout(r, 50));
-    }
-    mark('bridge-stop', { state: bridge.state, note: 'owned bridge stop signaled; stopping is acceptable before temp cleanup' });
+    const bridgeExit = await bounded(
+      bridge.waitForOwnedChildExit(STAGE_BUDGET_MS['bridge-stop']),
+      'bridge-stop',
+    );
+    assert.equal(bridge.state, 'stopped', 'owned bridge must reach stopped after child exit');
+    assert.equal(bridge.port, null, 'owned bridge must release port after child exit');
+    mark('bridge-stop', {
+      pid: bridgeExit.pid,
+      exitCode: bridgeExit.exitCode,
+      signal: bridgeExit.signal,
+    });
   } catch (error) {
     emitStackTrace('fixture:error', {
       error: error instanceof Error ? error.message : String(error),
