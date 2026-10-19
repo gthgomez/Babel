@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test, { type TestContext } from 'node:test'
-import { spawn, execFileSync } from 'node:child_process'
+import { spawn, spawnSync, execFileSync } from 'node:child_process'
 import { chmodSync, linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, relative, resolve } from 'node:path'
@@ -30,6 +30,12 @@ if (!isSyntheticProviderFixtureReady()) {
       child.once('close', value => resolveChild(value ?? 1))
     })
     t.diagnostic(summarizeSyntheticProviderOutput(output, code))
+    if (code !== 0) {
+      // Numeric case identities aid CI diagnosis without exporting child errors,
+      // filesystem paths, provider objects, or synthetic credential canaries.
+      t.diagnostic(JSON.stringify({ failedCases: [...output.matchAll(/^not ok (\d+) - /gm)]
+        .map(match => Number(match[1])) }))
+    }
     assert.equal(code, 0)
   })
 } else {
@@ -70,13 +76,30 @@ if (!isSyntheticProviderFixtureReady()) {
     assert.equal(readFileSync(join(f.root, 'notes.txt'), 'utf8'), 'before\n')
   })
 
-  function fixture(t: TestContext, subdirectory = false, selectedAlias = false, repositoryName?: string) {
+  test('Windows short repository aliases preserve consecutive owned edits', async t => {
+    if (process.platform !== 'win32') { t.skip('Windows 8.3 path identity'); return }
+    const f = fixture(t, false, false, undefined, true)
+    if (f.root === f.repository) { t.skip('8.3 aliases are disabled on this fixture volume'); return }
+    assert.equal((await f.write('one\n')).policyBlocked, false)
+    assert.equal((await f.replace('one', 'two')).policyBlocked, false)
+    assert.equal((await f.patch('two', 'three')).policyBlocked, false)
+    assert.equal(readFileSync(join(f.root, 'notes.txt'), 'utf8'), 'three\n')
+  })
+
+  function fixture(t: TestContext, subdirectory = false, selectedAlias = false, repositoryName?: string, shortAlias = false) {
     const temporaryRoot = mkdtempSync(join(tmpdir(), 'babel-owned-edits-'))
     const repository = repositoryName ? join(temporaryRoot, repositoryName) : temporaryRoot
     if (repositoryName) mkdirSync(repository)
     const physicalRoot = subdirectory ? join(repository, 'package') : repository
     if (subdirectory) mkdirSync(physicalRoot)
-    const root = selectedAlias ? `${repository}-selected` : physicalRoot
+    const shortResult = shortAlias
+      ? spawnSync('cmd.exe', ['/d', '/c', `for %I in ("${physicalRoot}") do @echo %~sI`], {
+          encoding: 'utf8', windowsHide: true, windowsVerbatimArguments: true,
+        })
+      : null
+    if (shortResult) assert.equal(shortResult.status, 0)
+    const root = shortResult ? shortResult.stdout.trim()
+      : selectedAlias ? `${repository}-selected` : physicalRoot
     if (selectedAlias) symlinkSync(physicalRoot, root, process.platform === 'win32' ? 'junction' : 'dir')
     t.after(() => {
       if (selectedAlias) rmSync(root, { recursive: true, force: true })

@@ -1,10 +1,10 @@
 import { createHash } from 'node:crypto'
 import { isUtf8 } from 'node:buffer'
-import { spawnSync } from 'node:child_process'
 import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, realpathSync } from 'node:fs'
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path'
 import { isCredentialTargetPath } from './autonomyEnforcement.js'
 import { WorkspaceTransactionManager, type MutationBatchTransaction } from '../services/workspaceTransactions.js'
+import { runGitCommandBytes } from '../utils/gitExec.js'
 
 export interface TaskWorkspaceChangeClassification {
   taskOwnedPaths: string[]
@@ -15,6 +15,11 @@ export interface TaskWorkspaceChangeClassification {
 interface TaskPostImage {
   readonly digest: string
   readonly mode: number
+}
+
+function physicalRoot(path: string): string {
+  // Git expands Windows 8.3 cwd aliases; JS realpath retains their spelling.
+  return process.platform === 'win32' ? realpathSync.native(path) : realpathSync(path)
 }
 
 /** Decode Git path output without changing valid filename identities. */
@@ -37,7 +42,7 @@ export class TaskMutationOwnership {
 
   constructor(root: string, readonly ownerId: string, private readonly parent?: TaskMutationOwnership) {
     this.selectedRoot = resolve(root)
-    this.root = realpathSync(root)
+    this.root = physicalRoot(root)
   }
 
   get isCurrent(): boolean {
@@ -45,7 +50,7 @@ export class TaskMutationOwnership {
   }
 
   matchesRoot(root: string): boolean {
-    try { return this.isCurrent && relative(this.root, realpathSync(root)) === '' } catch { return false }
+    try { return this.isCurrent && relative(this.root, physicalRoot(root)) === '' } catch { return false }
   }
 
   retire(): void {
@@ -87,13 +92,12 @@ export class TaskMutationOwnership {
       taskOwnedPaths: [], unexpectedPaths: [], unverifiablePaths: [],
     }
     if (!this.isCurrent) return { ...result, unverifiablePaths: ['<retired-owner>'] }
-    const git = (args: string[]) => spawnSync('git', args, {
-      cwd: this.root, timeout: 5000, maxBuffer: 1024 * 1024,
-      windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
+    const git = (args: string[]) => runGitCommandBytes(args, this.root, {
+      timeoutMs: 5000, maxBuffer: 1024 * 1024,
     })
     const rootResult = git(['rev-parse', '--show-toplevel'])
     const status = git(['status', '--porcelain=v1', '-z', '--untracked-files=all'])
-    if (rootResult.status !== 0 || status.status !== 0 || status.error || rootResult.error) {
+    if (rootResult.status !== 0 || status.status !== 0) {
       return { ...result, unverifiablePaths: ['<git-status>'] }
     }
     const rootOutput = decodeTaskGitRootOutput(rootResult.stdout)
