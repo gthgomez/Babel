@@ -31,6 +31,7 @@ import {
   type ChatEngineCompactionHost,
 } from './compactionCommit.js';
 import { DeepInfraApiRunner } from '../runners/deepInfraApi.js';
+import { createCompactionSourceFence } from './compactionSourceContinuity.js';
 import type { ToolDefinition } from '../runners/base.js';
 import {
   createThreadEventLog,
@@ -45,7 +46,7 @@ import {
   mapProviderMessagesToWire,
   validateProviderMessageProtocol,
 } from '../runners/providerMessages.js';
-import { createSessionEventLog, parseSessionEventLog, recordUserSubmitted, serializeSessionEventLog } from './sessionEvents.js';
+import { createSessionEventLog, parseSessionEventLog, recordUserSubmitted, recordBudgetSnapshot, serializeSessionEventLog } from './sessionEvents.js';
 import { captureApprovedObservation, readObservationPage, resolveObservation } from '../evidence/observationStore.js';
 import {
   buildContextBudgetSnapshot,
@@ -1197,9 +1198,9 @@ describe('H1 compaction lifecycle result', () => {
 });
 
 
-describe('compaction capture admission and rollback', () => {
+describe('compaction authority admission and rollback', () => {
   for (const phase of ['prepare', 'commit', 'persist'] as const) {
-    it(`preserves resumable history when capture refuses at ${phase}`, async () => {
+    it(`preserves resumable history when the context guard refuses at ${phase}`, async () => {
       const prior: ChatMessage[] = [
         { role: 'system', content: 'Inspect the current app.' },
         { role: 'user', content: 'Inspect the current app.' },
@@ -1227,17 +1228,17 @@ describe('compaction capture admission and rollback', () => {
         resolveModel: () => 'm', shouldCompactByTokens: () => true, estimateTokens,
         forceCompaction: true,
         prepareContextGuard: () => {
-          if (phase === 'prepare') throw new Error('snapshot unavailable: size cap')
+          if (phase === 'prepare') throw new Error('context owner unavailable')
           return () => captureCurrent
         },
         compactionManager: { compactWithResult: async () => {
           summarized++
-          if (phase === 'commit') captureCurrent = false // Physical inputs or admitted owner changed during summarization.
+          if (phase === 'commit') captureCurrent = false // Admitted context owner changed during summarization.
           return { messages: [prior[0]!, prior[1]!, { role: 'assistant', name: 'compaction_summary', content: 'Candidate summary.', provenance: 'model', authoritative: false }],
             strategy: 'llm-summarize', tokensBefore: 1000, tokensAfter: 100, changed: true, status: 'applied', strategyErrors: [] }
         } },
       }
-      if (phase === 'prepare') await assert.rejects(runChatEngineCompaction(host), /snapshot unavailable/)
+      if (phase === 'prepare') await assert.rejects(runChatEngineCompaction(host), /context owner unavailable/)
       else assert.equal(await runChatEngineCompaction(host), null, 'commit refusal retains the original full-history authority')
       assert.equal(summarized, phase === 'prepare' ? 0 : 1)
       assert.deepEqual(host.conversation, prior)
@@ -1249,3 +1250,58 @@ describe('compaction capture admission and rollback', () => {
     })
   }
 })
+
+describe('compaction source continuity around persistence', () => {
+  for (const change of ['foreign source append', 'owned capsule tamper', 'owned receipt tamper', 'accounting append'] as const) {
+    it(`preserves authority during ${change}`, async () => {
+      const conversation = longConversation(4);
+      const threadLog = createThreadEventLog();
+      const sessionLog = createSessionEventLog();
+      const turnId = startTurn(threadLog, { task: 'retain source', model: 'm', provider: 'deepinfra', projectRoot: '/fixture', policyPreset: 'chat' });
+      recordUserSubmitted(sessionLog, { turn_id: turnId, task: 'retain source' });
+      for (const message of conversation) {
+        if (message.role === 'user') recordUserMessage(threadLog, turnId, message.content);
+        if (message.role === 'assistant') recordAssistantMessage(threadLog, turnId, message.content);
+      }
+      const original = serializeThreadEventLog(threadLog);
+      const fence = createCompactionSourceFence({ getConversation: () => conversation, thread: threadLog, session: sessionLog });
+      let persistCalls = 0;
+      const result = await commitCompaction({
+        priorConversation: conversation, strategyMessages: conversation.slice(-2), strategy: 'heuristic-truncation',
+        tokensBefore: estimateTokens(conversation), tokensAfter: 10, operational: { task: 'retain source' },
+        threadLog, sessionLog, turnId, modelId: 'm', blockOnPersistFailure: true, isSourceCurrent: fence.isCurrent,
+        persist: async () => {
+          await Promise.resolve();
+          if (++persistCalls !== 1) return;
+          if (change === 'foreign source append') recordUserMessage(threadLog, turnId, 'late source sentinel');
+          if (change === 'owned capsule tamper') {
+            const capsule = threadLog.events.find(event => event.kind === 'compaction_capsule');
+            assert.ok(capsule?.kind === 'compaction_capsule');
+            capsule.content += ' altered';
+          }
+          if (change === 'owned receipt tamper') {
+            const receipt = sessionLog.events.find(event => event.kind === 'compaction_committed');
+            assert.ok(receipt?.kind === 'compaction_committed');
+            receipt.capsule_digest = '0'.repeat(64);
+          }
+          if (change === 'accounting append') recordBudgetSnapshot(sessionLog, turnId, { tokens_used: 10 });
+        },
+      });
+      if (change === 'accounting append') {
+        assert.equal(result.status, 'committed');
+        assert.equal(persistCalls, 1);
+        assert.ok(fence.isCurrent(result.sourceOwnership));
+      } else {
+        assert.equal(result.status, 'noop');
+        assert.equal(persistCalls, 2, 'source invalidation must compensate the durable write');
+        assert.equal(threadLog.events.some(event => event.kind === 'compaction_capsule'), false);
+        assert.equal(sessionLog.events.some(event => event.kind === 'compaction_committed'), false);
+        if (change === 'foreign source append') {
+          assert.ok(threadLog.events.some(event => event.kind === 'user_message' && event.content === 'late source sentinel'));
+        } else assert.equal(serializeThreadEventLog(threadLog), original);
+      }
+      assert.doesNotThrow(() => parseThreadEventLog(serializeThreadEventLog(threadLog)));
+      assert.doesNotThrow(() => parseSessionEventLog(serializeSessionEventLog(sessionLog)));
+    });
+  }
+});

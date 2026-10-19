@@ -392,21 +392,9 @@ export class ChatEngineStreamingLoop {
       // R0-8/R1: a superseded submission must not finalize the live turn as
       // failed nor dispatch a provider request for the new owner.
       if (!this.host.isSubmissionCurrent(submissionGeneration)) return;
-      const conversationOnly =
-        this.host.options.executionScope?.kind === 'conversation' && !this.host.options.projectRoot;
-      const missingWorkspaceOnly =
-        conversationOnly &&
-        !hadInstalledP11Context &&
-        !pendingCapsuleAuthority &&
-        Boolean(
-          this.host.parity.admissionStore &&
-            this.host.p11InstallBlock?.details.includes('workspace_revision'),
-        );
       if (
         !p11ContextInstalled &&
-        !missingWorkspaceOnly &&
-        (hadInstalledP11Context || pendingCapsuleAuthority ||
-          (this.host.parity.admissionStore && this.host.p11InstallBlock?.details.includes('workspace_revision')))
+        (hadInstalledP11Context || pendingCapsuleAuthority || this.host.parity.admissionStore)
       ) {
         // Structured refusal diagnostic: surface WHY the install was blocked
         // (reason code + bounded details from the rejecting boundary) so a
@@ -417,7 +405,7 @@ export class ChatEngineStreamingLoop {
           ? ` (install block: ${block.code}${block.details.length > 0 ? `: ${block.details.join('; ')}` : ''})`
           : '';
         yield this.host.streamFailed(
-          `Could not prepare context: workspace snapshot or context authority unavailable. Project: ${this.host.options.projectRoot}. Select the intended repository with --project-root and inspect the run evidence before retrying.${blockSuffix}`,
+          `Could not prepare context: admitted context authority or durable operational state is unavailable. Inspect the run evidence before retrying.${blockSuffix}`,
           { code: 'context_preparation_failed', cause_class: 'harness', ...(block ? { detail: block.code } : {}) },
         );
         return;

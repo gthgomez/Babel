@@ -10,9 +10,10 @@ import type { ToolStreamEvent } from '../runners/base.js'
 import { openAdmissionStore } from '../runtime/admission.js'
 import { consumeChatStream, buildChatRunPayload } from '../interactive/execution/chatCore.js'
 import { loadSessionEventLogFromDir } from './sessionEvents.js'
+import { validateColdResume } from '../runtime/contextCheckpoints.js'
 
-for (const selected of ['umbrella', 'nested', 'non-git'] as const) {
-  test(`admitted ${selected} root refuses unsupported capture before dispatch or reads its explicit repo`, async t => {
+for (const selected of ['umbrella', 'nested', 'non-git', 'missing-state'] as const) {
+  test(`admitted ${selected} root continues without repository certification or refuses missing operational state`, async t => {
     const root = mkdtempSync(join(tmpdir(), 'babel-context-preparation-'))
     const project = join(root, 'workspace'); mkdirSync(project)
     const nested = join(project, 'products', 'current-app'); mkdirSync(nested, { recursive: true })
@@ -42,13 +43,13 @@ for (const selected of ['umbrella', 'nested', 'non-git'] as const) {
       execute: async () => ({ type: 'completion', answer: 'Inspected source.' }), executeRaw: async () => 'Inspected source.', getLastInvocationMetadata: () => null,
     }
     Object.assign(engine, { deliberationRunner: runner, synthesisRunner: runner, shouldUseNativeTools: () => true })
+    if (selected === 'missing-state') Object.assign(engine, { buildP11Sources: () => null })
     const result = await consumeChatStream(engine.submitMessageStream('Research the current app UI.', 'explain'), null)
-    if (selected !== 'nested') {
+    if (selected === 'missing-state') {
       assert.equal(dispatches, 0)
       assert.equal(result.reason_code, 'context_preparation_failed')
       assert.equal(result.cause_class, 'harness')
-      assert.match(result.answer, selected === 'umbrella' ? /size cap/ : /capture unavailable/)
-      assert.match(result.answer, /--project-root/)
+      assert.match(result.answer, /operational state is unavailable/)
       assert.equal(engine.getParityEventLog().events.some(event => event.kind === 'compaction_capsule'), false)
       const payload = buildChatRunPayload(result, { task: 'Research UI', projectRoot })
       assert.equal(payload['terminal_outcome'], 'BLOCKED_POLICY')
@@ -63,7 +64,21 @@ for (const selected of ['umbrella', 'nested', 'non-git'] as const) {
       assert.equal(dispatches, 2)
       assert.match(result.answer, /Visual interaction checks were not performed/)
       assert.ok(engine.getParityRuntime().contextCheckpoint)
+      assert.equal(engine.getParityRuntime().contextCheckpoint?.schema_version, 2)
+      assert.equal(engine.getParityRuntime().contextCheckpoint?.workspace, null)
+      assert.equal(engine.getParityRuntime().contextCheckpoint?.population.workspace_revision_current, false)
       assert.ok(engine.getParityRuntime().sessionEvents.events.some(event => event.kind === 'tool_completed' && event.tool_call_id === 'source-range'))
+      const parity = engine.getParityRuntime()
+      const checkpoint = parity.contextCheckpoint
+      assert.ok(checkpoint)
+      assert.equal(checkpoint.observation_manifest.length, 1)
+      assert.ok(checkpoint.observation_manifest.every(observation => !observation.snapshot_ref && !observation.coverage_ref))
+      const membership = [...(parity.authorizedObservationIds ?? [])]
+      const resumeInput = { checkpoint, currentOwner: opened.store.readOwner(checkpoint.threadId),
+        lineageEvidence: { threadEvents: parity.eventLog.events, sessionEvents: parity.sessionEvents.events } }
+      assert.equal(validateColdResume({ ...resumeInput, authorizedObservationIds: membership }).status, 'ready')
+      assert.equal(validateColdResume({ ...resumeInput, authorizedObservationIds: [] }).status, 'blocked')
+      assert.equal(validateColdResume(resumeInput).status, 'blocked')
     }
   })
 }

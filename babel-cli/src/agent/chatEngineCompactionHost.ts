@@ -4,6 +4,7 @@
  */
 
 import { realpathSync } from 'node:fs';
+import { createCompactionSourceFence } from './compactionSourceContinuity.js';
 
 import {
   DEFAULT_COMPACTION_CONFIG,
@@ -102,6 +103,10 @@ export async function runChatEngineCompactionFor(
   const compactionOwnerId = engine.taskAllowance?.taskOwnerId ?? null;
   const compactionEpoch = globalCostTracker.getAccountingEpoch();
   const compactionTurnId = engine.parity.turnId;
+  const sourceFence = createCompactionSourceFence({
+    getConversation: () => engine.conversation,
+    thread: compactionParity.eventLog, session: compactionParity.sessionEvents,
+  });
   const usageScope: {
     taskOwnerId: string | null;
     projectRoot?: string;
@@ -226,7 +231,7 @@ export async function runChatEngineCompactionFor(
     shouldUseTextTools: () => engine.shouldUseTextTools(),
     compactHeuristic: () => {
       if (!engine.isSubmissionCurrent(ownerGeneration)) return;
-      engine.compactConversation();
+      if (!sourceFence.updateConversation(() => engine.compactConversation())) return;
       host.conversation = engine.conversation;
     },
     checkpoint: async () => {
@@ -245,6 +250,7 @@ export async function runChatEngineCompactionFor(
     ...(input.recoveryPressure ? { recoveryPressure: input.recoveryPressure } : {}),
     prepareContextGuard: () => engine.prepareCompactionGuard(),
     isOwnerCurrent: () => engine.isSubmissionCurrent(ownerGeneration),
+    isSourceCurrent: sourceFence.isCurrent,
     resolveModel: input => resolveCompactionModelId({ ...input,
       pinSelection: engine.options.model !== undefined || engine.options.providerPolicy !== undefined }),
     shouldCompactByTokens: parityShouldCompact,
@@ -265,8 +271,25 @@ export async function runChatEngineCompactionFor(
   };
   if (engine.compactionManager) host.compactionManager = engine.compactionManager;
   if (engine.condensationFacts) host.condensationFacts = engine.condensationFacts;
-  const result = await runChatEngineCompaction(host);
+  let result: Awaited<ReturnType<typeof runChatEngineCompaction>>;
+  try {
+    result = await runChatEngineCompaction(host);
+  } catch (error) {
+    // The inline heuristic replaces the live array before persistence. Its
+    // host rollback must also reach the engine, without overwriting a newer source.
+    if (engine.isSubmissionCurrent(ownerGeneration) && sourceFence.isConversationCurrent()) {
+      engine.conversation = host.conversation;
+    }
+    throw error;
+  }
   if (!engine.isSubmissionCurrent(ownerGeneration)) return null;
+  if (!sourceFence.isCurrent(result?.commit?.sourceOwnership)) {
+    // An invalidated transaction restores its host window before returning null.
+    // Durable source drift must not strand its eagerly pruned engine window;
+    // array identity/content still protect a newer replacement or in-place edit.
+    if (!result && sourceFence.isConversationCurrent()) engine.conversation = host.conversation;
+    return null;
+  }
   engine.conversation = host.conversation;
   if (!result) return null;
   if (input.recoveryPressure || engine.lastLogicalRequestId !== null) {

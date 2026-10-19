@@ -255,7 +255,7 @@ import {
 import { type ObservationRefV1 } from "../evidence/observationStore.js";
 import {
   type ContextCheckpointOwnerV1,
-  type ContextCheckpointPreparationResultV1,
+  type ContextCheckpointPreparationResult,
   type LiveOperationalSourcesV1,
 } from "../runtime/contextCheckpoints.js";
 import type { AdmissionStore } from "../runtime/admission.js";
@@ -3345,7 +3345,7 @@ export class ChatEngine {
   private prepareP11ContextCheckpointCandidate(route: {
     tool_profile: string;
     model_route: string;
-  }): ContextCheckpointPreparationResultV1 | null {
+  }): ContextCheckpointPreparationResult | null {
     return this.p11Authority.prepareP11ContextCheckpointCandidate(route);
   }
 

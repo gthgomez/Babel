@@ -120,6 +120,15 @@ Maturity labels: **IMPLEMENTED** | **PARTIAL** | **PROTOTYPE** | **PLANNED** | *
 | **Gaps** | Fragment utility measurement; conflict reports; full ChatEngine dual-write of every H2 budget event on all paths |
 | **Target** | Provenance-aware fragments + utility metrics |
 
+Conversation continuation and repository certification are separate checkpoint purposes.
+`ContextCheckpointV1` requires a current repository snapshot. Chat uses version 2 with
+`purpose: conversation_continuation` and explicit unavailable repository coverage;
+it retains admitted ownership, task/budget state, pending operations, request identity,
+installed lineage, and independently authorized durable observations through the same
+atomic persistence transaction. It grants no repository coverage or verifier success.
+Older readers must reject an unsupported checkpoint version rather than relabel it as
+V1; admission records, task allowances, and durable event logs remain independent.
+
 ### 3. Risk Router and Controller
 
 | | |

@@ -43,9 +43,11 @@ import type {
   RuntimeFactV1,
 } from '../runtime/events.js';
 import {
+  contextCheckpointVersion,
   validateContextCheckpointInstalledLineage,
+  validateContextCheckpoint,
   type ContextCheckpointLineageEvidenceV1,
-  type ContextCheckpointV1,
+  type ContextCheckpoint,
   type ContextCheckpointValidationReasonV1,
 } from '../runtime/contextCheckpoints.js';
 import {
@@ -359,9 +361,9 @@ export type ResumeCapsuleContextResultV1 =
       status: 'ready';
       checkpointId: string;
       contextEpoch: string;
-      workingState: ContextCheckpointV1['workingStateSnapshot']['state'];
-      workspace: ContextCheckpointV1['workspace'];
-      observations: ContextCheckpointV1['observation_manifest'];
+      workingState: ContextCheckpoint['workingStateSnapshot']['state'];
+      workspace: ContextCheckpoint['workspace'];
+      observations: ContextCheckpoint['observation_manifest'];
       gaps: readonly ResumeCapsuleGapV1[];
     }
   | {
@@ -378,10 +380,24 @@ export type ResumeCapsuleContextResultV1 =
  * they are never silently dropped or repaired here.
  */
 export function resumeCapsuleContext(
-  capsule: ContextCheckpointV1,
+  capsule: ContextCheckpoint,
   lineageEvidence?: ContextCheckpointLineageEvidenceV1,
+  authorizedObservationIds?: readonly string[],
 ): ResumeCapsuleContextResultV1 {
-  const reasons = validateContextCheckpointInstalledLineage(capsule, lineageEvidence);
+  const version = contextCheckpointVersion(capsule);
+  if (version === null) {
+    return { status: 'blocked', checkpointId: capsule?.checkpointId ?? null, reasons: ['invalid_schema'] };
+  }
+  if (version === 2 && authorizedObservationIds === undefined) {
+    return { status: 'blocked', checkpointId: capsule.checkpointId, reasons: ['observation_membership_unavailable'] };
+  }
+  const reasons = version === 2
+    ? validateContextCheckpoint(capsule, {
+        requireInstalledLineage: true,
+        ...(lineageEvidence !== undefined ? { lineageEvidence } : {}),
+        ...(authorizedObservationIds !== undefined ? { authorizedObservationIds } : {}),
+      }).reasons
+    : validateContextCheckpointInstalledLineage(capsule, lineageEvidence);
   if (reasons.length > 0) {
     return { status: 'blocked', checkpointId: capsule.checkpointId ?? null, reasons };
   }
@@ -398,11 +414,13 @@ export function resumeCapsuleContext(
       });
     }
   }
-  if (capsule.workspace && !capsule.workspace.capture_complete) {
+  if (capsule.schema_version === 2 || (capsule.workspace && !capsule.workspace.capture_complete)) {
     gaps.push({
       kind: 'incomplete_workspace',
-      ref: capsule.workspace.current_snapshot_revision ?? 'none',
-      detail: 'capsule workspace capture is incomplete',
+      ref: capsule.workspace?.current_snapshot_revision ?? 'none',
+      detail: capsule.schema_version === 2
+        ? 'whole-repository coverage was not captured for conversation continuation'
+        : 'capsule workspace capture is incomplete',
     });
   }
   for (const error of capsule.population?.errors ?? []) {
@@ -471,8 +489,9 @@ export type PreCompactionReconstructionV1 =
 export function reconstructPreCompactionView(
   facts: readonly RuntimeFactV1[],
   compactionId: string,
-  capsule?: ContextCheckpointV1,
+  capsule?: ContextCheckpoint,
   lineageEvidence?: ContextCheckpointLineageEvidenceV1,
+  authorizedObservationIds?: readonly string[],
 ): PreCompactionReconstructionV1 {
   let started: Extract<FactPayload, { type: 'context.condensation.started' }> | null = null;
   let completed: Extract<FactPayload, { type: 'context.condensation.completed' }> | null = null;
@@ -511,7 +530,7 @@ export function reconstructPreCompactionView(
     capsuleCheckpointId: completed.capsuleCheckpointId ?? null,
     capsule:
       capsule !== undefined && completed.capsuleCheckpointId !== undefined
-        ? resumeCapsuleContext(capsule, lineageEvidence)
+        ? resumeCapsuleContext(capsule, lineageEvidence, authorizedObservationIds)
         : null,
   };
 }
