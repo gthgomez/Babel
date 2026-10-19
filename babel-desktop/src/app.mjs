@@ -176,6 +176,7 @@ function renderRuntime() {
     nativeInfo?.remoteBridge ? runtimeRow('Remote bridge', nativeInfo.remoteBridge.running ? `Active on ${nativeInfo.remoteBridge.url ?? 'loopback'}` : `Stopped (${nativeInfo.remoteBridge.state})`) : '',
     nativeInfo?.remoteBridge?.blocksLocalRuns ? '<p class="fine-print">Local Babel runs are paused while the loopback remote bridge is active. Stop the bridge to return to local work.</p>' : '',
     nativeInfo?.remoteBridge && !nativeInfo.remoteBridge.sharedSession ? '<p class="fine-print">Remote access uses a separate CLI session; Desktop does not share one chat transcript with the phone bridge.</p>' : '',
+    nativeInfo?.remoteBridge?.sharedSession ? '<p class="fine-print">Remote access shares this Desktop project session with paired phones on the same loopback protocol host.</p>' : '',
     updatePhase ? `<p class="fine-print">${e(updatePhase)}</p>` : '',
     (update.state === 'error' || update.state === 'unsupported') ? `<p class="fine-print">${e(update.detail)}</p>` : ''
   ].join('');

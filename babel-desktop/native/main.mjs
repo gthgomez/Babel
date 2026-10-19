@@ -7,6 +7,7 @@ import {basename,dirname,join,isAbsolute} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {randomUUID} from 'node:crypto';
 import {BabelChild,buildRunArgs,EXECUTION_PROFILE} from './child.mjs';
+import {SharedProtocolRun} from './sharedProtocolRun.mjs';
 import {RemoteBridgeChild,releaseBridgeIfCurrent} from './remoteHost.mjs';
 import {listDirectory,readProjectFile} from './workspace.mjs';
 import {readProjectDiff} from './project-diff.mjs';
@@ -145,10 +146,13 @@ async function getInfo(){
           state:remoteBridge.state,
           port:remoteBridge.port,
           url:remoteBridge.port?`http://127.0.0.1:${remoteBridge.port}`:null,
-          blocksLocalRuns:remoteBridge.state==='ready' || remoteBridge.state==='starting',
-          sharedSession:false,
+          blocksLocalRuns:remoteBridge.sharedSession
+            ? false
+            : remoteBridge.state==='ready' || remoteBridge.state==='starting',
+          sharedSession:Boolean(remoteBridge.sharedSession),
+          desktopClientId:remoteBridge.desktopClientId??null,
         }
-      : {running:false,state:'stopped',port:null,url:null,blocksLocalRuns:false,sharedSession:false},
+      : {running:false,state:'stopped',port:null,url:null,blocksLocalRuns:false,sharedSession:false,desktopClientId:null},
   };
 }
 const credentialBindings=new Map();
@@ -500,7 +504,11 @@ async function start(){
     const bridge=new RemoteBridgeChild({executable:officialRuntime().executable,entry:cliEntry,projectRoot:admission.identity.root,env:childEnvironment,inheritEnv:false});
     remoteBridge=bridge;
     try{
-      const result=await bridge.start({port,onLine:({stream,text,phase,code,diagnosticAvailable})=>{if(window&&!window.isDestroyed())window.webContents.send('babel:remote-log',{stream,text,phase,code,diagnosticAvailable});}});
+      const result=await bridge.start({
+        port,
+        sharedSession:true,
+        onLine:({stream,text,phase,code,diagnosticAvailable})=>{if(window&&!window.isDestroyed())window.webContents.send('babel:remote-log',{stream,text,phase,code,diagnosticAvailable});},
+      });
       if(!projectAuthority.isCurrent(admission)||remoteBridge!==bridge){bridge.stop();throw new Error('Project trust or connection changed while starting remote access.');}
       return result;
     }catch(error){
@@ -541,9 +549,21 @@ async function start(){
     const childEnvironment=applySelectedModelEnvironment(await ownedCliEnvironment(),selectedModel);
     runAuthority=conversationOnly?null:await projectAuthority.admit(preferences.projectRoot);
     if(admissionEpoch!==runAdmissionEpoch){runAuthority=null;return {started:false};}
-    runner = new BabelChild({executable:officialRuntime().executable, entry:cliEntry, projectRoot:runAuthority?.identity.root??null,launchDirectory:app.getPath('userData'), env:childEnvironment, inheritEnv:false});
+    const sharedBridge=remoteBridge?.state==='ready'&&remoteBridge.sharedSession&&remoteBridge.port&&remoteBridge.desktopClientId;
+    if(sharedBridge&&conversationOnly){
+      throw new Error('Shared remote sessions require an open project.');
+    }
+    if(sharedBridge){
+      runner=new SharedProtocolRun({
+        port:remoteBridge.port,
+        desktopClientId:remoteBridge.desktopClientId,
+        projectRoot:runAuthority.identity.root,
+      });
+    }else{
+      runner=new BabelChild({executable:officialRuntime().executable, entry:cliEntry, projectRoot:runAuthority?.identity.root??null,launchDirectory:app.getPath('userData'), env:childEnvironment, inheritEnv:false});
+    }
     backgroundStatus='Babel is working';
-    runner.start(runRequest, handleBabelPacket);
+    void runner.start(runRequest, handleBabelPacket);
     try{updateTray();}catch{ /* Tray refresh cannot invalidate an already admitted run. */ }
     return {started:true};
     }finally{runAdmission=false;}

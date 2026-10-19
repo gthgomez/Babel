@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 import { Command } from 'commander';
 
 import { assertRemoteListenConfig } from '../bridge/bindGuard.js';
+import { mintDesktopControllerClientId } from '../bridge/desktopControllerAuth.js';
 import { BridgeServer } from '../bridge/sessionServer.js';
 import {
   REMOTE_UI_FIXTURE_SCENARIOS,
@@ -26,7 +27,17 @@ export function registerRemoteCommands(program: Command): void {
       [] as string[],
     )
     .option('--show-token', 'Print the bearer token (TTY only)')
-    .action(async (options: { port?: string; project?: string; origin?: string[]; showToken?: boolean }) => {
+    .option(
+      '--shared-session',
+      'Enable loopback Desktop controller identity for CLI/Desktop/PWA single-owner sessions',
+    )
+    .action(async (options: {
+      port?: string;
+      project?: string;
+      origin?: string[];
+      showToken?: boolean;
+      sharedSession?: boolean;
+    }) => {
       const listenHost = assertRemoteListenConfig();
       const workspace = resolve(options.project ?? process.cwd());
       const port = Number(options.port ?? 4545);
@@ -36,6 +47,17 @@ export function registerRemoteCommands(program: Command): void {
         return;
       }
       const extraOrigins = (options.origin ?? []).filter((origin) => origin && origin !== '*');
+      const sharedSession =
+        options.sharedSession === true ||
+        process.env['BABEL_BRIDGE_SHARED_SESSION'] === '1';
+      const desktopControllerClientId = sharedSession
+        ? (process.env['BABEL_BRIDGE_DESKTOP_CLIENT_ID']?.trim() ||
+            mintDesktopControllerClientId())
+        : undefined;
+      if (sharedSession && desktopControllerClientId) {
+        process.env['BABEL_BRIDGE_DESKTOP_CLIENT_ID'] = desktopControllerClientId;
+        process.env['BABEL_BRIDGE_SHARED_SESSION'] = '1';
+      }
       const server = new BridgeServer({
         port,
         allowedWorkspaceRoot: workspace,
@@ -45,6 +67,7 @@ export function registerRemoteCommands(program: Command): void {
           'https://localhost:*',
           ...extraOrigins,
         ],
+        ...(desktopControllerClientId ? { desktopControllerClientId } : {}),
       });
       await server.start(port);
       console.log(`Babel Remote listening on http://${listenHost}:${server.port}`);
@@ -52,6 +75,10 @@ export function registerRemoteCommands(program: Command): void {
       console.log(`health:    http://${listenHost}:${server.port}/health`);
       console.log(`ui:        http://${listenHost}:${server.port}/ui`);
       console.log(`rpc:       POST http://${listenHost}:${server.port}/rpc`);
+      if (sharedSession) {
+        console.log('shared:    Desktop controller id on loopback (x-babel-desktop-client-id)');
+        console.log(`desktop:   ${desktopControllerClientId}`);
+      }
       console.log('Auth: Bearer token from ~/.babel/bridge.json');
       if (options.showToken && Boolean(process.stdout.isTTY)) {
         console.log(`token:     ${server.token}`);

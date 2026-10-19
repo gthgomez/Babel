@@ -27,7 +27,7 @@ function terminateChildTree(child) {
 }
 
 /** Build argv for `babel remote serve` without shell interpolation. */
-export function buildRemoteServeArgs(entry, projectRoot, {port = 4545} = {}) {
+export function buildRemoteServeArgs(entry, projectRoot, {port = 4545, sharedSession = false} = {}) {
   if (typeof entry !== 'string' || !isAbsolute(entry)) throw new TypeError('CLI entry must be an absolute path');
   if (typeof projectRoot !== 'string' || !isAbsolute(projectRoot)) {
     throw new TypeError('Project root must be an absolute path');
@@ -36,7 +36,9 @@ export function buildRemoteServeArgs(entry, projectRoot, {port = 4545} = {}) {
   if (!Number.isInteger(listenPort) || listenPort < 1024 || listenPort > 65535) {
     throw new TypeError('Invalid remote listen port');
   }
-  return [entry, 'remote', 'serve', '--port', String(listenPort), '--project', projectRoot];
+  const args = [entry, 'remote', 'serve', '--port', String(listenPort), '--project', projectRoot];
+  if (sharedSession) args.push('--shared-session');
+  return args;
 }
 
 /** Payload of a Babel bridge /health response, or null when it is not one. */
@@ -103,6 +105,8 @@ export class RemoteBridgeChild {
   #state = 'stopped';
   #generation = 0;
   #stopTimer = null;
+  #desktopClientId = null;
+  #sharedSession = false;
 
   /**
    * @param {object} options
@@ -133,14 +137,33 @@ export class RemoteBridgeChild {
     return this.#port;
   }
 
-  async start({port = 4545, onLine, readyTimeoutMs = DEFAULT_READY_TIMEOUT_MS} = {}) {
+  get sharedSession() {
+    return this.#sharedSession;
+  }
+
+  get desktopClientId() {
+    return this.#desktopClientId;
+  }
+
+  async start({port = 4545, onLine, readyTimeoutMs = DEFAULT_READY_TIMEOUT_MS, sharedSession = true, desktopClientId} = {}) {
     if (this.running) throw new Error('Remote bridge is already running');
     const generation = ++this.#generation;
     this.#state = 'starting';
     this.#port = port;
 
     const instance = randomUUID();
-    const child = this.spawnChild(this.executable, buildRemoteServeArgs(this.entry, this.projectRoot, {port}), {
+    const useSharedSession = sharedSession === true;
+    const controllerId = useSharedSession
+      ? (typeof desktopClientId === 'string' && desktopClientId.startsWith('desktop:')
+          ? desktopClientId
+          : `desktop:${randomUUID().replace(/-/g, '')}`)
+      : null;
+    this.#sharedSession = useSharedSession;
+    this.#desktopClientId = controllerId;
+    const child = this.spawnChild(
+      this.executable,
+      buildRemoteServeArgs(this.entry, this.projectRoot, {port, sharedSession: useSharedSession}),
+      {
       cwd: this.projectRoot,
       shell: false,
       windowsHide: true,
@@ -151,8 +174,15 @@ export class RemoteBridgeChild {
         BABEL_DESKTOP_IPC: '1',
         // Per-launch identity the bridge echoes on /health. Not a credential.
         BABEL_BRIDGE_INSTANCE: instance,
+        ...(controllerId
+          ? {
+              BABEL_BRIDGE_SHARED_SESSION: '1',
+              BABEL_BRIDGE_DESKTOP_CLIENT_ID: controllerId,
+            }
+          : {}),
       },
-    });
+    },
+    );
     this.#child = child;
 
     let announcedPort = null;
@@ -238,7 +268,13 @@ export class RemoteBridgeChild {
           text: 'Remote bridge is ready on the requested loopback port.',
         });
       }
-      return {port: readyPort, url: `http://127.0.0.1:${readyPort}`, uiPath: '/ui'};
+      return {
+        port: readyPort,
+        url: `http://127.0.0.1:${readyPort}`,
+        uiPath: '/ui',
+        sharedSession: useSharedSession,
+        desktopClientId: controllerId,
+      };
     } catch (error) {
       if (generation === this.#generation) {
         this.#state = 'failed';
@@ -290,5 +326,7 @@ export class RemoteBridgeChild {
   #resetChild() {
     this.#child = null;
     this.#port = null;
+    this.#desktopClientId = null;
+    this.#sharedSession = false;
   }
 }
