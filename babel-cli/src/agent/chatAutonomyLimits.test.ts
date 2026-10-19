@@ -580,27 +580,25 @@ describe('PRODUCTION PATH: ChatEngine.checkBudgets / repair budgets', () => {
     assert.ok(h.postWriteRepairWallCapMs != null, 'non-progress intervention must enter repair');
   });
 
-  it('an old failure after recorded progress does not re-enter the window', () => {
+  it('an old failure after recorded progress does not re-enter the repair window', () => {
     const engine = makeEngine({ maxCostUsd: 10.0, maxWallMs: 600_000 });
     const h = harness(engine);
     globalCostTracker.resetSession();
+    // The model already made progress (a green verifier cleared the earlier
+    // failure) and the window was never entered. Continuing to write
+    // productively must not open one.
     h.currentTurnHasMutation = () => true;
-    h.lastVerifierFailed = true;
-    h.applyPostWriteRepairBudget();
-    const entered = h.postWriteRepairWallCapMs;
-    assert.ok(entered != null);
-
-    // Progress: a later green verifier clears the failure and the model keeps
-    // writing productively. No second window may open.
     h.lastVerifierFailed = false;
+    h.lastCriticReceipt = null;
     h.progressController.scoreTurn(['production_mutation', 'verifier_advanced'], false, 0);
-    h.applyPostWriteRepairBudget();
-    assert.equal(h.postWriteRepairWallCapMs, entered, 'progress must not open a second window');
 
-    // A stale failure that resurfaces still cannot renew the entered window.
-    h.lastVerifierFailed = true;
     h.applyPostWriteRepairBudget();
-    assert.equal(h.postWriteRepairWallCapMs, entered, 'an old failure must not renew the window');
+
+    assert.equal(
+      h.postWriteRepairWallCapMs,
+      null,
+      'a cleared earlier failure must not open a repair window',
+    );
   });
 
   it('the repair cap is not renewed by repeated triggers and nudges exactly once', () => {

@@ -454,11 +454,21 @@ test('A-6b: a fresh non-continued submission clears the repair window and latch'
     assert.ok(entered.repair.postWriteRepairWallCapMs !== null)
     assert.equal(entered.repair.postWriteRepairRestrict, true)
 
+    // A stale critic rejection from the previous objective must not survive
+    // into the fresh task and re-open the repair window on its first write.
+    const criticState = engine as unknown as { lastCriticReceipt: unknown }
+    criticState.lastCriticReceipt = { verdict: 'reject' }
+
     // A fresh, non-continued submission must clear task-local repair punishment.
     engine.applyUserSubmission({ userInput: 'a different, unrelated task' })
     const fresh = access.getTaskAllowanceSnapshot()!
     assert.equal(fresh.repair.postWriteRepairWallCapMs, null)
     assert.equal(fresh.repair.postWriteRepairRestrict, false)
+    assert.equal(
+      criticState.lastCriticReceipt,
+      null,
+      'a fresh task must not inherit a stale critic verdict',
+    )
   } finally {
     if (previousRunsDir === undefined) delete process.env['BABEL_RUNS_DIR']
     else process.env['BABEL_RUNS_DIR'] = previousRunsDir
