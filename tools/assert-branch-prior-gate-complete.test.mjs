@@ -11,6 +11,7 @@ import {
   parseGithubRepoFromRemote,
   parseLsRemoteOutput,
   resolveGithubRepoForGate,
+  validateWorkflowRunsPage,
 } from './assert-branch-prior-gate-complete.mjs'
 
 const REMOTE = 'origin'
@@ -18,6 +19,22 @@ const REPO = 'gthgomez/Babel'
 const BRANCH = 'cursor/test-branch'
 const REMOTE_REF = `refs/heads/${BRANCH}`
 const TIP = 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef'
+
+function gateRun(overrides = {}) {
+  return {
+    id: 1,
+    status: 'completed',
+    head_sha: TIP,
+    workflow_id: PUBLIC_RELEASE_GATE_WORKFLOW_ID,
+    name: 'Public Release Gate',
+    head_branch: BRANCH,
+    ...overrides,
+  }
+}
+
+function gateRunPage(runs, totalCount = runs.length) {
+  return { workflow_runs: runs, total_count: totalCount }
+}
 
 function lsRemoteHeadOk() {
   return { present: true, sha: 'a'.repeat(40), status: 0 }
@@ -32,7 +49,7 @@ function lsRemoteBranchPresent(sha = TIP) {
 }
 
 function makeExistingBranchDeps(overrides = {}) {
-  const ghPages = overrides.ghPages ?? [{ workflow_runs: [] }]
+  const ghPages = overrides.ghPages ?? [gateRunPage([])]
   let ghCall = 0
   return {
     git: (root, args) => {
@@ -45,6 +62,9 @@ function makeExistingBranchDeps(overrides = {}) {
       throw new Error(`unexpected git ${args.join(' ')}`)
     },
     lsRemote: (root, remote, ref) => {
+      if (overrides.lsRemote) {
+        return overrides.lsRemote(root, remote, ref)
+      }
       if (remote !== REMOTE) throw new Error('wrong remote')
       if (ref === 'HEAD') return lsRemoteHeadOk()
       if (ref === REMOTE_REF) {
@@ -215,7 +235,7 @@ describe('assert-branch-prior-gate-complete', () => {
     assert.doesNotThrow(() =>
       assertBranchPriorGateComplete(root, REMOTE, makeExistingBranchDeps({
         branchProbe: lsRemoteBranchAbsent(),
-        ghPages: [{ workflow_runs: [] }],
+        ghPages: [gateRunPage([])],
       })),
     )
   })
@@ -226,21 +246,98 @@ describe('assert-branch-prior-gate-complete', () => {
       () =>
         assertBranchPriorGateComplete(root, REMOTE, makeExistingBranchDeps({
           branchProbe: lsRemoteBranchAbsent(),
-          ghPages: [
-            {
-              workflow_runs: [
-                {
-                  id: 1,
-                  status: 'completed',
-                  head_sha: TIP,
-                  workflow_id: PUBLIC_RELEASE_GATE_WORKFLOW_ID,
-                  name: 'Public Release Gate',
-                },
-              ],
-            },
-          ],
+          ghPages: [gateRunPage([gateRun()], 1)],
         })),
       /absent but Public Release Gate history exists/,
+    )
+  })
+
+  it('fails closed on malformed workflow run entries instead of granting no-history', () => {
+    const root = process.cwd()
+    assert.throws(
+      () =>
+        assertBranchPriorGateComplete(root, REMOTE, makeExistingBranchDeps({
+          branchProbe: lsRemoteBranchAbsent(),
+          ghPages: [{ workflow_runs: [{}], total_count: 0 }],
+        })),
+      /malformed workflow run entry/,
+    )
+  })
+
+  it('fails closed when total_count disagrees with returned workflow rows', () => {
+    const root = process.cwd()
+    assert.throws(
+      () =>
+        assertBranchPriorGateComplete(root, REMOTE, makeExistingBranchDeps({
+          branchProbe: lsRemoteBranchAbsent(),
+          ghPages: [gateRunPage([gateRun()], 2)],
+        })),
+      /incomplete Public Release Gate workflow run evidence/,
+    )
+  })
+
+  it('fails closed on duplicate workflow run ids across pages', () => {
+    const seenRunIds = new Set(['99'])
+    assert.throws(
+      () =>
+        validateWorkflowRunsPage(gateRunPage([gateRun({ id: 99 })]), {
+          branch: BRANCH,
+          repo: REPO,
+          page: 2,
+          seenRunIds,
+        }),
+      /duplicate workflow run page/,
+    )
+  })
+
+  it('fails closed when remote branch ref appears after workflow history lookup', () => {
+    const root = process.cwd()
+    let branchRefProbes = 0
+    assert.throws(
+      () =>
+        assertBranchPriorGateComplete(root, REMOTE, makeExistingBranchDeps({
+          branchProbe: lsRemoteBranchAbsent(),
+          ghPages: [gateRunPage([])],
+          lsRemote: (r, remote, ref) => {
+            if (ref === 'HEAD') return lsRemoteHeadOk()
+            if (ref === REMOTE_REF) {
+              branchRefProbes += 1
+              return branchRefProbes === 1 ? lsRemoteBranchAbsent() : lsRemoteBranchPresent()
+            }
+            throw new Error('unexpected ref')
+          },
+        })),
+      /remote ref appeared during gate preflight/,
+    )
+  })
+
+  it('fails closed on workflow run branch binding mismatch', () => {
+    const root = process.cwd()
+    assert.throws(
+      () =>
+        collectPublicReleaseGateRuns(
+          REPO,
+          BRANCH,
+          () => gateRunPage([gateRun({ head_branch: 'other-branch' })]),
+          { requireCompletePagination: true },
+        ),
+      /branch binding mismatch/,
+    )
+  })
+
+  it('fails closed on workflow run repository binding mismatch', () => {
+    assert.throws(
+      () =>
+        collectPublicReleaseGateRuns(
+          REPO,
+          BRANCH,
+          () =>
+            gateRunPage([
+              gateRun({ repository: { full_name: 'other-org/wrong-default' } }),
+            ]),
+          { requireCompletePagination: true },
+        ),
+      /repository binding mismatch/,
     )
   })
 
@@ -332,16 +429,12 @@ describe('assert-branch-prior-gate-complete', () => {
 
   it('fails closed on incomplete pagination for first publication', () => {
     const root = process.cwd()
-    const fullPage = Array.from({ length: 100 }, (_, i) => ({
-      id: i,
-      status: 'completed',
-      head_sha: 'b'.repeat(40),
-      workflow_id: 999,
-      name: 'Auxiliary',
-    }))
-    const pages = Array.from({ length: PUBLIC_RELEASE_GATE_MAX_PAGES }, () => ({
-      workflow_runs: fullPage,
-    }))
+    const pages = Array.from({ length: PUBLIC_RELEASE_GATE_MAX_PAGES }, (_, pageIndex) => {
+      const fullPage = Array.from({ length: 100 }, (_, i) =>
+        gateRun({ id: pageIndex * 100 + i + 1, head_sha: 'b'.repeat(40) }),
+      )
+      return gateRunPage(fullPage, PUBLIC_RELEASE_GATE_MAX_PAGES * 100)
+    })
     assert.throws(
       () =>
         assertBranchPriorGateComplete(root, REMOTE, makeExistingBranchDeps({
@@ -372,17 +465,14 @@ describe('assert-branch-prior-gate-complete', () => {
           branchProbe: lsRemoteBranchPresent(sha),
           tipAfterFetch: sha,
           ghPages: [
-            {
-              workflow_runs: [
-                {
-                  id: 39252099671,
-                  status: 'in_progress',
-                  head_sha: sha,
-                  workflow_id: PUBLIC_RELEASE_GATE_WORKFLOW_ID,
-                  name: 'Public Release Gate',
-                },
-              ],
-            },
+            gateRunPage([
+              gateRun({
+                id: 39252099671,
+                status: 'in_progress',
+                head_sha: sha,
+                head_branch: BRANCH,
+              }),
+            ], 1),
           ],
         })),
       /is in_progress/,
@@ -397,17 +487,13 @@ describe('assert-branch-prior-gate-complete', () => {
         branchProbe: lsRemoteBranchPresent(sha),
         tipAfterFetch: sha,
         ghPages: [
-          {
-            workflow_runs: [
-              {
-                id: 39250306347,
-                status: 'completed',
-                head_sha: sha,
-                workflow_id: PUBLIC_RELEASE_GATE_WORKFLOW_ID,
-                name: 'Public Release Gate',
-              },
-            ],
-          },
+          gateRunPage([
+            gateRun({
+              id: 39250306347,
+              head_sha: sha,
+              head_branch: BRANCH,
+            }),
+          ], 1),
         ],
       })),
     )
@@ -428,11 +514,7 @@ describe('assert-branch-prior-gate-complete', () => {
     let calls = 0
     const runs = collectPublicReleaseGateRuns(REPO, BRANCH, () => {
       calls += 1
-      return {
-        workflow_runs: [
-          { id: 1, head_sha: sha, workflow_id: PUBLIC_RELEASE_GATE_WORKFLOW_ID, name: 'Public Release Gate' },
-        ],
-      }
+      return gateRunPage([gateRun({ id: 1, head_sha: sha })], 1)
     }, { publishedHeadSha: sha, requireCompletePagination: false })
     assert.equal(calls, 1)
     assert.equal(runs.length, 1)

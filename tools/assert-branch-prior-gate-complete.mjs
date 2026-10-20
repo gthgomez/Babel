@@ -112,6 +112,76 @@ export function evaluatePublishedHeadGate(workflowRuns, publishedHeadSha, option
   return { allow: true, reason: 'Public Release Gate completed for published head', runs: matching }
 }
 
+const WORKFLOW_RUN_SHA_RE = /^[0-9a-f]{40}$/
+
+function assertWorkflowRunShape(run, branch, repo) {
+  if (!run || typeof run !== 'object' || Array.isArray(run)) {
+    throw new Error('[pre-push] branch gate preflight: malformed workflow run entry')
+  }
+  const id = run.id
+  if (
+    id === undefined ||
+    id === null ||
+    (typeof id !== 'number' && typeof id !== 'string') ||
+    String(id).length === 0
+  ) {
+    throw new Error('[pre-push] branch gate preflight: malformed workflow run entry')
+  }
+  if (typeof run.status !== 'string' || !run.status.trim()) {
+    throw new Error('[pre-push] branch gate preflight: malformed workflow run entry')
+  }
+  if (typeof run.head_sha !== 'string' || !WORKFLOW_RUN_SHA_RE.test(run.head_sha)) {
+    throw new Error('[pre-push] branch gate preflight: malformed workflow run entry')
+  }
+  if (!isPublicReleaseGateRun(run)) {
+    throw new Error('[pre-push] branch gate preflight: unexpected workflow run producer')
+  }
+  if (run.head_branch !== undefined && run.head_branch !== branch) {
+    throw new Error('[pre-push] branch gate preflight: workflow run branch binding mismatch')
+  }
+  const repository = run.repository
+  if (repository && typeof repository === 'object' && typeof repository.full_name === 'string') {
+    if (repository.full_name !== repo) {
+      throw new Error('[pre-push] branch gate preflight: workflow run repository binding mismatch')
+    }
+  }
+}
+
+/**
+ * Validate one workflow-runs API page from the workflow-specific endpoint.
+ */
+export function validateWorkflowRunsPage(payload, { branch, repo, page, seenRunIds }) {
+  if (!payload || typeof payload !== 'object' || !Array.isArray(payload.workflow_runs)) {
+    throw new Error(
+      '[pre-push] branch gate preflight: malformed Public Release Gate workflow run list from GitHub',
+    )
+  }
+  let totalCount = null
+  if (payload.total_count !== undefined && payload.total_count !== null) {
+    if (typeof payload.total_count !== 'number' || !Number.isFinite(payload.total_count)) {
+      throw new Error(
+        '[pre-push] branch gate preflight: malformed Public Release Gate workflow run total_count',
+      )
+    }
+    totalCount = payload.total_count
+  }
+  const batch = payload.workflow_runs
+  for (const run of batch) {
+    assertWorkflowRunShape(run, branch, repo)
+    const runId = String(run.id)
+    if (seenRunIds.has(runId)) {
+      throw new Error('[pre-push] branch gate preflight: duplicate workflow run page')
+    }
+    seenRunIds.add(runId)
+  }
+  if (totalCount !== null && page === 1 && totalCount === 0 && batch.length > 0) {
+    throw new Error(
+      '[pre-push] branch gate preflight: inconsistent Public Release Gate workflow run total_count',
+    )
+  }
+  return { batch, totalCount }
+}
+
 function defaultGhGet(repo, query) {
   const args = [
     'api',
@@ -134,14 +204,23 @@ function defaultGhGet(repo, query) {
  */
 export function collectPublicReleaseGateRuns(repo, branch, ghGet, options) {
   const runs = []
+  const seenRunIds = new Set()
+  let declaredTotalCount = null
   for (let page = 1; page <= PUBLIC_RELEASE_GATE_MAX_PAGES; page += 1) {
     const payload = ghGet(repo, { branch, per_page: '100', page: String(page) })
-    if (!payload || typeof payload !== 'object' || !Array.isArray(payload.workflow_runs)) {
+    const validated = validateWorkflowRunsPage(payload, { branch, repo, page, seenRunIds })
+    if (page === 1 && validated.totalCount !== null) {
+      declaredTotalCount = validated.totalCount
+    } else if (
+      validated.totalCount !== null &&
+      declaredTotalCount !== null &&
+      validated.totalCount !== declaredTotalCount
+    ) {
       throw new Error(
-        '[pre-push] branch gate preflight: malformed Public Release Gate workflow run list from GitHub',
+        '[pre-push] branch gate preflight: inconsistent Public Release Gate workflow run total_count',
       )
     }
-    const batch = payload.workflow_runs
+    const batch = validated.batch
     runs.push(...batch)
     if (batch.length < 100) break
     if (options.requireCompletePagination) {
@@ -157,6 +236,11 @@ export function collectPublicReleaseGateRuns(repo, branch, ghGet, options) {
       typeof publishedHeadSha === 'string' &&
       batch.some((run) => run.head_sha === publishedHeadSha)
     if (hasHead) break
+  }
+  if (declaredTotalCount !== null && runs.length !== declaredTotalCount) {
+    throw new Error(
+      '[pre-push] branch gate preflight: incomplete Public Release Gate workflow run evidence',
+    )
   }
   return runs
 }
@@ -200,6 +284,12 @@ export function assertBranchPriorGateComplete(root, remote = 'origin', deps = {}
     if (branchHasAnyGateRuns(runs)) {
       throw new Error(
         `[pre-push] branch ${branch} remote ref is absent but Public Release Gate history exists`,
+      )
+    }
+    const branchProbeAfterHistory = lsRemoteFn(root, remote, remoteBranchRef)
+    if (branchProbeAfterHistory.present) {
+      throw new Error(
+        `[pre-push] branch ${branch} remote ref appeared during gate preflight (retry push)`,
       )
     }
     const verdict = evaluatePublishedHeadGate(runs, '0'.repeat(40), {
