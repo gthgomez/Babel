@@ -6,7 +6,14 @@ import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
-import { SafeExecutor, awaitPendingProcessTerminations, spawnCommandAsync, isTransientSpawnError, validateExecutorShellCommand } from './sandbox.js';
+import {
+  SafeExecutor,
+  awaitPendingProcessTerminations,
+  spawnCommandAsync,
+  isTransientSpawnError,
+  normalizeSupervisorTerminatedShellOutput,
+  validateExecutorShellCommand,
+} from './sandbox.js';
 import { waitForProcessExit } from './processTree.js';
 import { ProcessWitness } from './diagnostics/bdns/processWitness.js';
 import {
@@ -943,18 +950,35 @@ test('shellExecAsync preserves shellExec result shape for a successful command',
   }
 });
 
+const SUPERVISOR_LAUNCHED_MARKER = 'BABEL_SUPERVISOR_LAUNCHED';
+
+function assertSupervisorTerminatedNotLaunchFailure(
+  result: { exit_code: number; stdout: string; stderr: string; launch_failure?: unknown; denial?: unknown },
+  label: string,
+): void {
+  assert.equal(result.denial, undefined, `${label}: must not be a policy denial`);
+  assert.equal(result.launch_failure, undefined, `${label}: must not be a host launch failure`);
+  assert.match(result.stdout, new RegExp(SUPERVISOR_LAUNCHED_MARKER), `${label}: must prove the child launched`);
+  assert.notEqual(result.exit_code, 0, `${label}: supervisor termination must not report success`);
+}
+
 test('shellExecAsync supervisor timeout is not a host launch failure', async () => {
   const fixture = makeFixture();
   try {
     writeFileSync(
-      join(fixture.projectRoot, 'hang.mjs'),
-      "setTimeout(() => {}, 30_000);\n",
+      join(fixture.projectRoot, 'timeout-async.mjs'),
+      `process.stdout.write('${SUPERVISOR_LAUNCHED_MARKER}\\n');
+process.on('SIGTERM', () => process.exit(0));
+setTimeout(() => {}, 60_000);
+`,
       'utf-8',
     );
     const executor = new SafeExecutor(fixture.projectRoot);
-    const result = await executor.shellExecAsync('node hang.mjs', '.', 200);
-    assert.equal(result.launch_failure, undefined, 'a launched process that timed out is not a launch failure');
-    assert.notEqual(result.exit_code, 0);
+    const result = await executor.shellExecAsync('node timeout-async.mjs', '.', 250);
+    assertSupervisorTerminatedNotLaunchFailure(
+      result,
+      'async supervisor timeout (SIGTERM exit 0)',
+    );
   } finally {
     fixture.cleanup();
   }
@@ -964,14 +988,70 @@ test('shellExec supervisor timeout is not a host launch failure', () => {
   const fixture = makeFixture();
   try {
     writeFileSync(
-      join(fixture.projectRoot, 'hang-sync.mjs'),
-      "setTimeout(() => {}, 30_000);\n",
+      join(fixture.projectRoot, 'timeout-sync.mjs'),
+      `process.stdout.write('${SUPERVISOR_LAUNCHED_MARKER}\\n');
+process.on('SIGTERM', () => process.exit(0));
+setTimeout(() => {}, 60_000);
+`,
       'utf-8',
     );
     const executor = new SafeExecutor(fixture.projectRoot);
-    const result = executor.shellExec('node hang-sync.mjs', '.', 200);
-    assert.equal(result.launch_failure, undefined, 'spawnSync timeout after launch is not a launch failure');
-    assert.notEqual(result.exit_code, 0);
+    const result = executor.shellExec('node timeout-sync.mjs', '.', 250);
+    assertSupervisorTerminatedNotLaunchFailure(
+      result,
+      'sync supervisor timeout (SIGTERM exit 0)',
+    );
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('shellExec spawnSync ENOBUFS overflow is not a host launch failure', () => {
+  const fixture = makeFixture();
+  try {
+    writeFileSync(
+      join(fixture.projectRoot, 'overflow-sync.mjs'),
+      `process.stdout.write('${SUPERVISOR_LAUNCHED_MARKER}\\n');
+const chunk = 'x'.repeat(64 * 1024);
+for (let i = 0; i < 96; i++) process.stdout.write(chunk);
+`,
+      'utf-8',
+    );
+    const executor = new SafeExecutor(fixture.projectRoot);
+    const result = executor.shellExec('node overflow-sync.mjs', '.', 60_000);
+    assertSupervisorTerminatedNotLaunchFailure(result, 'spawnSync ENOBUFS overflow');
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('spawnCommandAsync supervisor timeout coerces SIGTERM exit 0 to non-zero', async () => {
+  const fixture = makeFixture();
+  try {
+    writeFileSync(
+      join(fixture.projectRoot, 'timeout-spawn-async.mjs'),
+      `process.stdout.write('${SUPERVISOR_LAUNCHED_MARKER}\\n');
+process.on('SIGTERM', () => process.exit(0));
+setTimeout(() => {}, 60_000);
+`,
+      'utf-8',
+    );
+    const raw = await spawnCommandAsync(process.execPath, [join(fixture.projectRoot, 'timeout-spawn-async.mjs')], {
+      cwd: fixture.projectRoot,
+      timeoutMs: 250,
+      env: { SystemRoot: process.env['SystemRoot'] },
+    });
+    assert.equal(raw.processStarted, true);
+    assert.equal(raw.timedOut, true);
+    assert.ok(raw.error);
+    const result = normalizeSupervisorTerminatedShellOutput(
+      raw.status,
+      raw.stdout,
+      raw.stderr,
+      raw.stdoutTruncated,
+      raw.stderrTruncated,
+    );
+    assertSupervisorTerminatedNotLaunchFailure(result, 'spawnCommandAsync timeout path');
   } finally {
     fixture.cleanup();
   }

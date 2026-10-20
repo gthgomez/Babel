@@ -318,7 +318,11 @@ function isTransientSpawnError(errorMessage: string): boolean {
 /** spawnSync child ran but the supervisor ended it (timeout or output cap). */
 function isSpawnSyncRuntimeSupervisorError(error: Error): boolean {
   const code = (error as NodeJS.ErrnoException).code;
-  return code === 'ETIMEDOUT' || code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER';
+  return (
+    code === 'ETIMEDOUT' ||
+    code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' ||
+    code === 'ENOBUFS'
+  );
 }
 
 /**
@@ -333,8 +337,25 @@ function isChildRuntimeSupervisorError(
   if (timedOut && processStarted) return true;
   const code = (error as NodeJS.ErrnoException).code;
   if (code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' && processStarted) return true;
+  if (code === 'ENOBUFS' && processStarted) return true;
   if (code === 'ETIMEDOUT' && processStarted) return true;
   return /spawn .+ etimedout/i.test(error.message) && processStarted;
+}
+
+/**
+ * Child output after the supervisor ended a launched process (timeout or
+ * stdio cap). The child may exit 0 after SIGTERM; the tool result must still
+ * be non-success and must not carry host launch_failure.
+ */
+function normalizeSupervisorTerminatedShellOutput(
+  status: number | null,
+  rawStdout: string,
+  rawStderr: string,
+  stdoutWasTruncated = false,
+  stderrWasTruncated = false,
+): ToolResult {
+  const exitStatus = status === 0 || status === null ? 1 : status;
+  return normalizeShellOutput(exitStatus, rawStdout, rawStderr, stdoutWasTruncated, stderrWasTruncated);
 }
 
 /**
@@ -725,7 +746,7 @@ function normalizeShellOutput(
 }
 
 /** @visibleForTesting */
-export { isTransientSpawnError };
+export { isTransientSpawnError, normalizeSupervisorTerminatedShellOutput };
 
 /**
  * Commands allowed in shellExec / testRun. Checked against argv[0] basename.
@@ -2043,7 +2064,11 @@ export class SafeExecutor {
 
     if (result.error) {
       if (isSpawnSyncRuntimeSupervisorError(result.error)) {
-        return normalizeShellOutput(result.status, result.stdout ?? '', result.stderr ?? '');
+        return normalizeSupervisorTerminatedShellOutput(
+          result.status,
+          result.stdout ?? '',
+          result.stderr ?? '',
+        );
       }
       const isTransient = transientRetryCount > 0 && isTransientSpawnError(result.error.message);
       const prefix = isTransient
@@ -2120,7 +2145,7 @@ export class SafeExecutor {
         };
       }
       if (isChildRuntimeSupervisorError(result.error, result.processStarted, result.timedOut)) {
-        return normalizeShellOutput(
+        return normalizeSupervisorTerminatedShellOutput(
           result.status,
           result.stdout,
           result.stderr,
