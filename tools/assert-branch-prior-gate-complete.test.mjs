@@ -11,6 +11,7 @@ import {
   parseGithubRepoFromRemote,
   parseLsRemoteOutput,
   resolveGithubRepoForGate,
+  assertRemotePushFetchRepoAligned,
   validateWorkflowRunsPage,
 } from './assert-branch-prior-gate-complete.mjs'
 
@@ -163,7 +164,7 @@ describe('assert-branch-prior-gate-complete', () => {
             return { workflow_runs: [] }
           }
           if (repo === configuredRepo) {
-            return { workflow_runs: [] }
+            return { workflow_runs: [], total_count: 0 }
           }
           throw new Error(`unexpected workflow repo ${repo}`)
         },
@@ -267,6 +268,32 @@ describe('assert-branch-prior-gate-complete', () => {
         })),
       /absent but Public Release Gate history exists/,
     )
+  })
+
+  it('fails closed on missing total_count for first-publication history proof', () => {
+    const root = process.cwd()
+    assert.throws(
+      () =>
+        assertBranchPriorGateComplete(root, REMOTE, makeExistingBranchDeps({
+          branchProbe: lsRemoteBranchAbsent(),
+          ghPages: [{ workflow_runs: [] }],
+        })),
+      /missing Public Release Gate workflow run total_count/,
+    )
+  })
+
+  it('fails closed on null or non-integer total_count for first-publication history proof', () => {
+    const root = process.cwd()
+    for (const total_count of [null, 1.5, -1, Number.NaN]) {
+      assert.throws(
+        () =>
+          assertBranchPriorGateComplete(root, REMOTE, makeExistingBranchDeps({
+            branchProbe: lsRemoteBranchAbsent(),
+            ghPages: [{ workflow_runs: [], total_count }],
+          })),
+        /malformed Public Release Gate workflow run total_count|missing Public Release Gate workflow run total_count/,
+      )
+    }
   })
 
   it('fails closed on malformed workflow run entries instead of granting no-history', () => {
@@ -518,6 +545,66 @@ describe('assert-branch-prior-gate-complete', () => {
           ],
         })),
       /is in_progress/,
+    )
+  })
+
+  it('allows existing-head early stop when page is full but total_count exceeds fetched rows', () => {
+    const root = process.cwd()
+    const sha = TIP
+    const fullPage = Array.from({ length: 100 }, (_, i) =>
+      gateRun({
+        id: i + 1,
+        head_sha: i === 50 ? sha : 'b'.repeat(40),
+      }),
+    )
+    let ghCalls = 0
+    assert.doesNotThrow(() =>
+      assertBranchPriorGateComplete(root, REMOTE, {
+        ...makeExistingBranchDeps({
+          branchProbe: lsRemoteBranchPresent(sha),
+          tipAfterFetch: sha,
+        }),
+        ghGet: (repo) => {
+          ghCalls += 1
+          if (repo !== REPO) throw new Error('wrong repo')
+          return gateRunPage(fullPage, 150)
+        },
+      }),
+    )
+    assert.equal(ghCalls, 1)
+  })
+
+  it('fails closed when pushurl targets a different repository than fetch url', () => {
+    const root = process.cwd()
+    assert.throws(
+      () =>
+        assertBranchPriorGateComplete(root, REMOTE, {
+          ...makeExistingBranchDeps({ branchProbe: lsRemoteBranchAbsent() }),
+          configGetAll: () => ['git@github.com:other-org/other-repo.git'],
+        }),
+      /push destination does not match fetch remote repository/,
+    )
+  })
+
+  it('fails closed on ambiguous multiple pushurl destinations', () => {
+    const root = process.cwd()
+    assert.throws(
+      () =>
+        assertRemotePushFetchRepoAligned(
+          root,
+          REMOTE,
+          (r, args) => {
+            if (args[0] === 'remote' && args[1] === 'get-url') {
+              return `git@github.com:${REPO}.git`
+            }
+            throw new Error('unexpected git')
+          },
+          () => [
+            'git@github.com:gthgomez/Babel.git',
+            'git@github.com:other-org/other-repo.git',
+          ],
+        ),
+      /ambiguous push destination/,
     )
   })
 
