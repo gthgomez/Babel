@@ -82,6 +82,12 @@ import { sanitizePath } from './cli/constants.js';
 import { isCanonicalMcpSuccessResult } from './tools/mcpTransport.js';
 import { OutputBuffer } from './ui/outputBuffer.js';
 import type { ProcessWitness, ProcessWitnessInput } from './diagnostics/bdns/processWitness.js';
+import { MAX_SHELL_OUTPUT_BYTES, normalizeShellOutput } from './shellOutputNormalize.js';
+import {
+  isChildRuntimeSupervisorError,
+  isSpawnSyncRuntimeSupervisorError,
+  normalizeSupervisorTerminatedShellOutput,
+} from './sandboxSupervisorTermination.js';
 
 // ─── Shared result type ───────────────────────────────────────────────────────
 
@@ -248,13 +254,6 @@ export interface ShellCommandValidationOptions {
 // ─── Configuration ────────────────────────────────────────────────────────────
 
 /**
- * Hard cap on combined stdout + stderr bytes returned from shellExec.
- * Prevents runaway commands from flooding the executor context window.
- * Excess bytes are dropped and a sentinel notice is appended.
- */
-const MAX_SHELL_OUTPUT_BYTES = 5 * 1024 * 1024; // 5 MB
-
-/**
  * Patterns that indicate a transient infrastructure error during spawn.
  * When matched, the spawn operation is retried up to MAX_TRANSIENT_SPAWN_RETRIES
  * times before being reported as a failure. These errors should NOT consume
@@ -313,49 +312,6 @@ function isTransientSpawnError(errorMessage: string): boolean {
     }
     return lower.includes(pattern.toLowerCase());
   });
-}
-
-/** spawnSync child ran but the supervisor ended it (timeout or output cap). */
-function isSpawnSyncRuntimeSupervisorError(error: Error): boolean {
-  const code = (error as NodeJS.ErrnoException).code;
-  return (
-    code === 'ETIMEDOUT' ||
-    code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' ||
-    code === 'ENOBUFS'
-  );
-}
-
-/**
- * Async child launched successfully, then the supervisor ended it (timeout) or
- * output was capped — not a could-not-launch failure.
- */
-function isChildRuntimeSupervisorError(
-  error: Error,
-  processStarted: boolean,
-  timedOut: boolean,
-): boolean {
-  if (timedOut && processStarted) return true;
-  const code = (error as NodeJS.ErrnoException).code;
-  if (code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' && processStarted) return true;
-  if (code === 'ENOBUFS' && processStarted) return true;
-  if (code === 'ETIMEDOUT' && processStarted) return true;
-  return /spawn .+ etimedout/i.test(error.message) && processStarted;
-}
-
-/**
- * Child output after the supervisor ended a launched process (timeout or
- * stdio cap). The child may exit 0 after SIGTERM; the tool result must still
- * be non-success and must not carry host launch_failure.
- */
-function normalizeSupervisorTerminatedShellOutput(
-  status: number | null,
-  rawStdout: string,
-  rawStderr: string,
-  stdoutWasTruncated = false,
-  stderrWasTruncated = false,
-): ToolResult {
-  const exitStatus = status === 0 || status === null ? 1 : status;
-  return normalizeShellOutput(exitStatus, rawStdout, rawStderr, stdoutWasTruncated, stderrWasTruncated);
 }
 
 /**
@@ -714,35 +670,6 @@ export function spawnCommandAsync(
       }
     });
   });
-}
-
-function normalizeShellOutput(
-  status: number | null,
-  rawStdout: string,
-  rawStderr: string,
-  stdoutWasTruncated = false,
-  stderrWasTruncated = false,
-): ToolResult {
-  let stdout = rawStdout;
-  let stderr = rawStderr;
-  if (process.platform === 'win32') {
-    stdout = stdout.replace(/\r\n/g, '\n');
-    stderr = stderr.replace(/\r\n/g, '\n');
-  }
-
-  const stdoutBytes = Buffer.byteLength(stdout, 'utf8');
-  const stderrBytes = Buffer.byteLength(stderr, 'utf8');
-  if (stdoutBytes > MAX_SHELL_OUTPUT_BYTES || stdoutWasTruncated) {
-    stdout =
-      Buffer.from(stdout, 'utf8').subarray(0, MAX_SHELL_OUTPUT_BYTES).toString('utf8') +
-      `\n[sandbox] stdout truncated — output exceeded ${MAX_SHELL_OUTPUT_BYTES / (1024 * 1024)} MB cap.`;
-  }
-  if (stderrBytes > MAX_SHELL_OUTPUT_BYTES || stderrWasTruncated) {
-    stderr =
-      Buffer.from(stderr, 'utf8').subarray(0, MAX_SHELL_OUTPUT_BYTES).toString('utf8') +
-      `\n[sandbox] stderr truncated — output exceeded ${MAX_SHELL_OUTPUT_BYTES / (1024 * 1024)} MB cap.`;
-  }
-  return { exit_code: status ?? 1, stdout, stderr };
 }
 
 /** @visibleForTesting */
