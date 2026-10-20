@@ -584,6 +584,26 @@ describe('assert-branch-prior-gate-complete', () => {
     )
   })
 
+  it('fails closed when full page exceeds declared total_count even with matching published head', () => {
+    const root = process.cwd()
+    const sha = TIP
+    const fullPage = Array.from({ length: 100 }, (_, i) =>
+      gateRun({
+        id: i + 1,
+        head_sha: i === 50 ? sha : 'b'.repeat(40),
+      }),
+    )
+    assert.throws(
+      () =>
+        assertBranchPriorGateComplete(root, REMOTE, makeExistingBranchDeps({
+          branchProbe: lsRemoteBranchPresent(sha),
+          tipAfterFetch: sha,
+          ghPages: [gateRunPage(fullPage, 1)],
+        })),
+      /inconsistent Public Release Gate workflow run total_count/,
+    )
+  })
+
   it('allows existing-head early stop when page is full but total_count exceeds fetched rows', () => {
     const root = process.cwd()
     const sha = TIP

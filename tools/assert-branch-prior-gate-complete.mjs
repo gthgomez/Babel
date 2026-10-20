@@ -228,6 +228,14 @@ export function validateWorkflowRunsPage(payload, { branch, repo, page, seenRunI
   return { batch, totalCount }
 }
 
+function assertCumulativeRunsWithinDeclaredTotal(fetchedCount, declaredTotalCount) {
+  if (declaredTotalCount !== null && fetchedCount > declaredTotalCount) {
+    throw new Error(
+      '[pre-push] branch gate preflight: inconsistent Public Release Gate workflow run total_count',
+    )
+  }
+}
+
 function defaultGhGet(repo, query) {
   const args = [
     'api',
@@ -274,6 +282,7 @@ export function collectPublicReleaseGateRuns(repo, branch, ghGet, options) {
     }
     const batch = validated.batch
     runs.push(...batch)
+    assertCumulativeRunsWithinDeclaredTotal(runs.length, declaredTotalCount)
     if (batch.length < 100) break
     if (options.requireCompletePagination) {
       if (page === PUBLIC_RELEASE_GATE_MAX_PAGES) {
