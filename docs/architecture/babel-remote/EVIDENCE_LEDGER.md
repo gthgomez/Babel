@@ -60,7 +60,8 @@ Contract pin: `openCodeAcpContract.ts` + shipped `babel-cli/src/bridge/opencode-
 | 2 | Desktop ↔ phone single owner | Not qualified | Production IPC + `remote host-run` path in progress; phone E2E pending |
 | 6 | Command Code own-CLI ACP adapter (managed subprocess) | Tested (strict canonical ACP v1 peer) | Matrix above + `commandCodeAcpPermission.test.ts`; **not** live installed `cmd`/`cmdc` qualification |
 | 6 | OpenCode own-CLI ACP adapter (managed subprocess) | Tested (strict OpenCode-shaped ACP peer) | Matrix above; **not** live installed `opencode` qualification |
-| 6 | Other external harness adapters (AGY, Claude, Codex) | Stub only | `harnessAdapterRegistry.ts` campaign stubs |
+| 6 | Antigravity CLI (AGY) offline foundation | Unavailable / not qualified (static catalog regression only) | `antigravityOwnCliAdapter.test.ts`, `harnessAdapterRegistry.test.ts`; evidence doc is source-linked gap analysis, not live `agy` qualification |
+| 6 | Other external harness adapters (Claude, Codex) | Stub only | `harnessAdapterRegistry.ts` campaign stubs |
 | — | Physical phone + Tailscale | Not qualified | Owner checklist in `BABEL_REMOTE_QUICKSTART.md` |
 
 **Owner deferred after merge:** physical ROG14/phone remote journey; live Command Code login/provider on host; Windows `cmdc` path smoke against installed binary.
