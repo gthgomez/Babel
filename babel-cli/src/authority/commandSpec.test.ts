@@ -717,6 +717,12 @@ const HOST_PROCESS_SURFACE = new Set([
   'runtime/admission.ts',
   // Review workers are contained by the watchdog / Windows Job Object helper.
   'services/reviewProcessContainment.ts',
+  // Command Code ACP managed child: argv from registry launch seam only; stdio JSON-RPC; bounded line framing.
+  'bridge/commandCodeAcpTransport.ts',
+  // Command Code install probe: fixed --version/-V argv shapes; reviewer-scoped env; 4s spawn timeout.
+  'bridge/commandCodeCliDiscovery.ts',
+  // OpenCode install probe: fixed --version argv; reviewer-scoped env; bounded spawn timeout.
+  'bridge/openCodeCliDiscovery.ts',
   'bridge/workspaceChanges.ts',
   'eval/canary/liveCell.ts',
   'eval/cleanRoomGrade.ts',
