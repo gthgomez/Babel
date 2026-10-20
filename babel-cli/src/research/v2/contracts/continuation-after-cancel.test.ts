@@ -175,6 +175,48 @@ describe('host-authorized continuation after cancellation (checkpoint.3.1.1)', (
       ...ctxP2,
       writer_generation: resumed.writer_generation,
     }
+
+    const conflictingCompletion = {
+      mission_id: ctxContinued.mission_id,
+      operation_id: billOp,
+      attempt_id: billAttempt,
+      completed_at: '2026-10-20T12:08:00.000Z',
+      settlement: 'succeeded' as const,
+      usage_settlement: {
+        attempt_id: billAttempt,
+        cost: { status: 'reported' as const, amount_usd: 0.02, currency: 'USD' as const },
+      },
+    }
+    await assert.rejects(
+      () => store.appendExternalOperationCompleted(ctxContinued, conflictingCompletion),
+      (e: unknown) => e instanceof StoreContractError,
+    )
+    await assert.rejects(
+      () => store.appendExternalOperationCompleted(ctxContinued, conflictingCompletion),
+      (e: unknown) => e instanceof StoreContractError,
+    )
+
+    const newBillAttempt = 'run-att-bill-2'
+    await store.appendExternalOperationIntent(ctxContinued, {
+      mission_id: ctxContinued.mission_id,
+      operation_id: billOp,
+      attempt_id: newBillAttempt,
+      operation_kind: 'model_invoke',
+      dispatched_at: '2026-10-20T12:08:30.000Z',
+      idempotency_key: 'run-bill-2',
+    })
+    await store.appendExternalOperationCompleted(ctxContinued, {
+      mission_id: ctxContinued.mission_id,
+      operation_id: billOp,
+      attempt_id: newBillAttempt,
+      completed_at: '2026-10-20T12:08:31.000Z',
+      settlement: 'succeeded',
+      usage_settlement: {
+        attempt_id: newBillAttempt,
+        cost: { status: 'reported' as const, amount_usd: 0.03, currency: 'USD' as const },
+      },
+    })
+
     await store.appendSource(
       ctxContinued,
       SourceRecordSchema.parse({
@@ -213,6 +255,18 @@ describe('host-authorized continuation after cancellation (checkpoint.3.1.1)', (
     assert.ok(events.some((e) => e.kind === 'source_recorded' && (e.payload as { source?: { source_id?: string } }).source?.source_id === 'pre-cancel-src'))
     assert.ok(events.some((e) => e.kind === 'source_recorded' && (e.payload as { source?: { source_id?: string } }).source?.source_id === 'post-resume-src'))
     assert.equal(events.filter((e) => e.kind === 'external_operation_reconciled').length, 1)
+    const billCompletions = events.filter(
+      (e) =>
+        e.kind === 'external_operation_completed' &&
+        (e.payload as { completion?: { operation_id?: string; attempt_id?: string } }).completion
+          ?.operation_id === billOp,
+    )
+    assert.equal(billCompletions.length, 1)
+    assert.equal(
+      (billCompletions[0]?.payload as { completion?: { attempt_id?: string } }).completion
+        ?.attempt_id,
+      newBillAttempt,
+    )
     assert.equal(events.filter((e) => e.kind === 'terminal_receipt').length, 2)
     assert.equal(events.filter((e) => e.kind === 'research_continuation_resumed').length, 1)
   })

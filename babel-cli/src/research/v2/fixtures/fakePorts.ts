@@ -544,6 +544,17 @@ export class InMemoryResearchStore implements ResearchStore {
       completion.usage_settlement,
       'completion',
     )
+    if (tracked.accountingReconciled) {
+      const reconciled = tracked.accountingReconciled
+      if (
+        completion.settlement === reconciled.resolved_settlement &&
+        stableJson(completion.usage_settlement ?? null) ===
+          stableJson(reconciled.usage_settlement)
+      ) {
+        return Promise.resolve({ eventId: `evt-idempotent-${key}` })
+      }
+      throw new StoreContractError('completion conflicts with settled accounting reconciliation')
+    }
     if (tracked.completion) {
       if (stableJson(tracked.completion) === stableJson(completion)) {
         return Promise.resolve({ eventId: `evt-idempotent-${key}` })
