@@ -2,6 +2,8 @@ import type { SessionDescriptor } from '../executor/contracts.js';
 import type { ChatEvent } from '../agent/chatEngineContracts.js';
 import type { SessionUsageSummary } from '../services/costTracker.js';
 import type { ClaudeCodeAdmittedSession } from './claudeCodeAdmission.js';
+import { buildClaudeCodeChildEnv } from './claudeCodeChildEnv.js';
+import { resolveClaudeCodeHarnessCredentialEnv } from './claudeCodeCredentialResolver.js';
 import { buildClaudeCodeLaunchPolicySpec } from './claudeCodePolicyEvidence.js';
 import type { ClaudeCodeSdkPort } from './claudeCodeSdkPort.js';
 import { createClaudeCodeLiveSdkPort } from './claudeCodeLiveSdkPort.js';
@@ -37,12 +39,20 @@ export class ClaudeCodeAgentRuntimeRegistry {
   private readonly sessions = new Map<string, ClaudeCodeRuntimeSession>();
   private readonly admittedByThread = new Map<string, ClaudeCodeAdmittedSession>();
   private readonly sdkPort: ClaudeCodeSdkPort;
-  private readonly credentialResolver: ClaudeCodeCredentialResolver | undefined;
+  private readonly credentialResolver: ClaudeCodeCredentialResolver;
   private nextProcessGeneration = 1;
 
   constructor(options?: ClaudeCodeAgentRuntimeRegistryOptions) {
     this.sdkPort = options?.sdkPort ?? createClaudeCodeLiveSdkPort();
-    this.credentialResolver = options?.credentialResolver;
+    this.credentialResolver =
+      options?.credentialResolver ??
+      (async (ref, admitted) => {
+        try {
+          return resolveClaudeCodeHarnessCredentialEnv(ref, admitted);
+        } catch {
+          return null;
+        }
+      });
   }
 
   getAdmitted(threadId: string): ClaudeCodeAdmittedSession | undefined {
@@ -110,9 +120,10 @@ export class ClaudeCodeAgentRuntimeRegistry {
   async forceStopForThread(descriptor: SessionDescriptor): Promise<void> {
     const session = this.sessions.get(descriptor.threadId);
     if (!session) return;
-    await this.sdkPort.interrupt(session.admitted.admission_digest);
-    await this.sdkPort.close(session.admitted.admission_digest);
-    await this.sdkPort.awaitTeardown(session.admitted.admission_digest);
+    const digest = session.admitted.admission_digest;
+    await this.sdkPort.interrupt(digest);
+    await this.sdkPort.close(digest);
+    await this.sdkPort.awaitTeardown(digest);
     session.generation += 1;
     session.processGeneration = this.nextProcessGeneration++;
     session.turnInFlight = false;
@@ -140,26 +151,30 @@ export class ClaudeCodeAgentRuntimeRegistry {
     session.pendingEvents = [];
 
     const policy = buildClaudeCodeLaunchPolicySpec(session.admitted.harness_provider_profile);
-    if (this.credentialResolver) {
-      const creds = await this.credentialResolver(
-        session.admitted.harness_credential_ref,
-        session.admitted,
-      );
-      if (!creds) {
-        session.pendingEvents.push({
-          type: 'failed',
-          error: 'Claude credential ref could not be resolved',
-        });
-        session.turnInFlight = false;
-        return;
-      }
+    const creds = await this.credentialResolver(
+      session.admitted.harness_credential_ref,
+      session.admitted,
+    );
+    if (!creds) {
+      session.pendingEvents.push({
+        type: 'failed',
+        error: 'Claude credential ref could not be resolved',
+      });
+      session.turnInFlight = false;
+      return;
     }
+    const childEnv = buildClaudeCodeChildEnv({
+      admitted: session.admitted,
+      policy,
+      credentialEnv: creds,
+    });
 
     const stream = this.sdkPort.runTurn({
       admitted: session.admitted,
       policy,
       message: input.message,
       generation: turnGeneration,
+      childEnv,
       canUseTool: (req) =>
         bridgeClaudeCanUseTool({
           req,
@@ -226,6 +241,7 @@ export class ClaudeCodeAgentRuntimeRegistry {
       }
     } finally {
       session.turnInFlight = false;
+      await this.sdkPort.awaitTeardown(session.admitted.admission_digest);
     }
   }
 

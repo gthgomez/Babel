@@ -88,6 +88,29 @@ describe('claudeCodeAdmission', () => {
     assert.equal(result.status === 'rejected' ? result.reason : '', 'policy_unresolved');
   });
 
+  it('rejects resume when admission digest drifts', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'babel-claude-admit-'));
+    const configRoot = mkdtempSync(join(tmpdir(), 'babel-claude-config-'));
+    const result = await evaluateClaudeCodeAdmission(
+      {
+        harness_adapter_id: 'claude-code',
+        harness_provider_profile: EXTERNAL_ADAPTER_PROFILE_IDS.commandCodeGoat,
+        harness_model_profile: 'claude-sonnet-5-5',
+        harness_credential_ref: 'CRED_REF',
+        harness_config_root: configRoot,
+        project_root: root,
+        harness_native_session_id: 'sess-1',
+        resume_expected_digest: 'deadbeef',
+      },
+      {
+        integrityProbe: async () => verifiedIntegrity,
+        resolvePolicyEvidence: async () => ({ ok: true, digest: 'policy-digest-1' }),
+      },
+    );
+    assert.equal(result.status, 'rejected');
+    assert.equal(result.status === 'rejected' ? result.reason : '', 'resume_digest_mismatch');
+  });
+
   it('qualifies frozen tuple with digest', async () => {
     const root = mkdtempSync(join(tmpdir(), 'babel-claude-admit-'));
     const configRoot = mkdtempSync(join(tmpdir(), 'babel-claude-config-'));

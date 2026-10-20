@@ -5,21 +5,22 @@ import {
   type ClaudeCodeAdmittedSession,
 } from './claudeCodeAdmission.js';
 import { probeClaudeSdkIntegrity } from './claudeCodeIntegrity.js';
-import { resolveClaudeCodePolicyEvidence } from './claudeCodePolicyEvidence.js';
+import {
+  defaultClaudeResolveSettings,
+  resolveClaudeCodePolicyEvidence,
+  type ClaudeResolveSettingsFn,
+} from './claudeCodePolicyEvidence.js';
 
 export interface ClaudeCodeSessionAdmissionDeps {
   integrityProbe?: () => ReturnType<typeof probeClaudeSdkIntegrity>;
-  resolveSettings?: (opts: {
-    cwd: string;
-    settingSources: [];
-    managedSettings: Record<string, unknown>;
-  }) => Promise<{ effective?: Record<string, unknown> }>;
+  resolveSettings?: ClaudeResolveSettingsFn;
 }
 
 export async function admitClaudeCodeSession(
   input: ClaudeCodeAdmissionInput,
   deps?: ClaudeCodeSessionAdmissionDeps,
 ): Promise<ClaudeCodeAdmissionResult> {
+  const resolveSettings = deps?.resolveSettings ?? defaultClaudeResolveSettings;
   return evaluateClaudeCodeAdmission(input, {
     integrityProbe: deps?.integrityProbe ?? (() => probeClaudeSdkIntegrity()),
     resolvePolicyEvidence: (evidenceInput) =>
@@ -27,7 +28,7 @@ export async function admitClaudeCodeSession(
         cwd: evidenceInput.cwd,
         config_root: evidenceInput.config_root,
         provider_profile: evidenceInput.provider_profile,
-        ...(deps?.resolveSettings ? { resolveSettings: deps.resolveSettings } : {}),
+        resolveSettings,
       }),
   });
 }

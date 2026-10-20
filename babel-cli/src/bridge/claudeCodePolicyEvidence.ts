@@ -1,5 +1,7 @@
 import { createHash } from 'node:crypto';
 
+import { filterEscalatingDefaultMode, resolveSettings } from '@anthropic-ai/claude-agent-sdk';
+
 import type { ClaudeHarnessProviderProfile } from './claudeCodeAdmission.js';
 
 export interface ClaudeCodeLaunchPolicySpec {
@@ -43,23 +45,37 @@ export function digestClaudeCodeLaunchPolicy(spec: ClaudeCodeLaunchPolicySpec): 
   return createHash('sha256').update(payload).digest('hex');
 }
 
+export type ClaudeResolveSettingsFn = (opts: {
+  cwd: string;
+  settingSources: [];
+  managedSettings: Record<string, unknown>;
+}) => Promise<{ effective?: Record<string, unknown> }>;
+
+export async function defaultClaudeResolveSettings(opts: {
+  cwd: string;
+  settingSources: [];
+  managedSettings: Record<string, unknown>;
+}): Promise<{ effective: Record<string, unknown> }> {
+  const resolved = await resolveSettings({
+    cwd: opts.cwd,
+    settingSources: [],
+    managedSettings: opts.managedSettings as import('@anthropic-ai/claude-agent-sdk').Settings,
+  });
+  const filtered = filterEscalatingDefaultMode(resolved);
+  return { effective: filtered as Record<string, unknown> };
+}
+
 export async function resolveClaudeCodePolicyEvidence(input: {
   cwd: string;
   config_root: string;
   provider_profile: ClaudeHarnessProviderProfile;
-  resolveSettings?: (opts: {
-    cwd: string;
-    settingSources: [];
-    managedSettings: Record<string, unknown>;
-  }) => Promise<{ effective?: Record<string, unknown> }>;
+  resolveSettings?: ClaudeResolveSettingsFn;
 }): Promise<{ ok: boolean; digest: string; detail?: string }> {
   const spec = buildClaudeCodeLaunchPolicySpec(input.provider_profile);
   const digest = digestClaudeCodeLaunchPolicy(spec);
-  if (!input.resolveSettings) {
-    return { ok: true, digest };
-  }
+  const resolveFn = input.resolveSettings ?? defaultClaudeResolveSettings;
   try {
-    const resolved = await input.resolveSettings({
+    const resolved = await resolveFn({
       cwd: input.cwd,
       settingSources: [],
       managedSettings: spec.managedSettings,

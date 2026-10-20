@@ -32,6 +32,8 @@ describe('claudeCodePermissionBridge', () => {
         command: '',
         canonical_cwd: '/tmp',
         target_path: '/tmp/a',
+        thread_id: 't1',
+        turn_id: 'turn-1',
       },
     });
     gen = 2;

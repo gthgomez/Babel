@@ -40,6 +40,8 @@ export interface ClaudeCodeTurnRequest {
   policy: ClaudeCodeLaunchPolicySpec;
   message: string;
   generation: number;
+  /** Full-replace child env passed to SDK query() options.env */
+  childEnv: Record<string, string>;
   canUseTool: (req: ClaudeCanUseToolRequest) => Promise<ClaudeCanUseToolDecision>;
 }
 

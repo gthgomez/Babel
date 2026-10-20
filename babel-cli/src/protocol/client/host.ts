@@ -33,6 +33,7 @@ import {
 import { probeCommandCodeInstallation } from '../../bridge/commandCodeCliDiscovery.js';
 import { probeOpenCodeInstallation } from '../../bridge/openCodeCliDiscovery.js';
 import { admitClaudeCodeSession } from '../../bridge/claudeCodeSessionAdmission.js';
+import { ensureClaudeCodeThreadAdmissionBound } from '../../bridge/claudeCodeHostBinding.js';
 import type { ClaudeCodeAgentRuntimeRegistry } from '../../bridge/claudeCodeAgentRuntime.js';
 import type { ClaudeCodeSessionAdmissionDeps } from '../../bridge/claudeCodeSessionAdmission.js';
 import {
@@ -831,6 +832,18 @@ export async function handleProtocolRequest(
 
         let engine: ChatEngine | undefined;
         try {
+          if (descriptor?.harness_adapter_id === 'claude-code') {
+            const bound = await ensureClaudeCodeThreadAdmissionBound(state, descriptor);
+            if ('error' in bound) {
+              launch.settled = true;
+              releaseLaunchOwnership(state, params.thread_id, launch);
+              return errorResponse(
+                id,
+                BabelProtocolErrorCode.MODE_UNSUPPORTED,
+                bound.error,
+              );
+            }
+          }
           engine = descriptor ? materializeEngine(state, descriptor) : state.engines.get(params.thread_id);
         } catch (err) {
           launch.settled = true;

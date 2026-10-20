@@ -43,7 +43,14 @@ export interface SharedProtocolHostRunOptions {
    */
   emergencyObservationClock?: SharedProtocolHostRunClock;
   /** When set, thread.create binds the matching own-CLI harness adapter. */
-  harnessAdapterId?: 'command-code' | 'opencode' | 'babel-native';
+  harnessAdapterId?: 'command-code' | 'opencode' | 'claude-code' | 'babel-native';
+  /** Required when harnessAdapterId is claude-code (frozen admission tuple). */
+  claudeHarnessProviderProfile?: string;
+  claudeHarnessModelProfile?: string;
+  claudeHarnessConfigRoot?: string;
+  claudeHarnessCredentialRef?: string;
+  claudeHarnessAdmissionDigest?: string;
+  claudeHarnessNativeSessionId?: string;
 }
 
 /** Wall-clock and timers used for post-emergency-ACK observation bounds. */
@@ -622,7 +629,21 @@ export async function executeSharedProtocolHostRun(
           ? { harness_adapter_id: 'command-code' }
           : options.harnessAdapterId === 'opencode'
             ? { harness_adapter_id: 'opencode' }
-            : {}),
+            : options.harnessAdapterId === 'claude-code'
+              ? {
+                  harness_adapter_id: 'claude-code',
+                  harness_provider_profile: options.claudeHarnessProviderProfile ?? '',
+                  harness_model_profile: options.claudeHarnessModelProfile ?? model ?? '',
+                  harness_config_root: options.claudeHarnessConfigRoot ?? '',
+                  harness_credential_ref: options.claudeHarnessCredentialRef ?? '',
+                  ...(options.claudeHarnessAdmissionDigest
+                    ? { harness_admission_digest: options.claudeHarnessAdmissionDigest }
+                    : {}),
+                  ...(options.claudeHarnessNativeSessionId
+                    ? { harness_native_session_id: options.claudeHarnessNativeSessionId }
+                    : {}),
+                }
+              : {}),
       });
       threadId = created.thread_id;
     }
