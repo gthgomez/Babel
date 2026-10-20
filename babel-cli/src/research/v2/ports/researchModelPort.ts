@@ -8,6 +8,8 @@ export type UsageSettlement = z.infer<typeof UsageSettlementSchema>
 
 export interface ResearchModelInvocationRequest {
   operationId: string
+  /** Admitted attempt identity from dispatch — must not be invented by the port. */
+  attemptId: string
   kind: ResearchModelOperationKind
   input: Record<string, unknown>
   signal: AbortSignal

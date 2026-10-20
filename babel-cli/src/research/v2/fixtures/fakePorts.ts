@@ -97,7 +97,10 @@ export class FakeResearchModelPort implements ResearchModelPort {
   async invokeStructured(
     request: ResearchModelInvocationRequest,
   ): Promise<ResearchModelInvocationResult> {
-    const attemptId = `attempt-${request.operationId}`
+    const attemptId = request.attemptId
+    if (!attemptId) {
+      throw new Error('ResearchModelInvocationRequest.attemptId is required')
+    }
     if (request.signal.aborted) {
       return {
         status: 'cancelled',
@@ -251,10 +254,22 @@ interface TrackedOperation {
   attemptId: string
   intent: ExternalOperationIntent
   completion?: ExternalOperationCompletion
+  accountingReconciled?: ExternalOperationReconciliation
 }
 
-function operationKey(missionId: string, operationId: string): string {
-  return `${missionId}::${operationId}`
+function operationKey(missionId: string, operationId: string, attemptId: string): string {
+  return `${missionId}::${operationId}::${attemptId}`
+}
+
+function assertUsageSettlementAttempt(
+  attemptId: string,
+  usage: { attempt_id: string } | undefined,
+  label: string,
+): void {
+  if (usage === undefined) return
+  if (usage.attempt_id !== attemptId) {
+    throw new StoreContractError(`${label} usage_settlement attempt mismatch`)
+  }
 }
 
 function stableJson(value: unknown): string {
@@ -339,16 +354,13 @@ export class InMemoryResearchStore implements ResearchStore {
 
   async acquireWriterOwnership(request: {
     mission_id: string
-    expected_writer_generation?: number
+    expected_writer_generation: number
   }): Promise<ResearchStoreMissionHandle> {
     const fence = this.fence(request.mission_id)
     if (fence.terminalReport !== null) {
       throw new StoreContractError('cannot acquire ownership on terminal mission')
     }
-    if (
-      request.expected_writer_generation !== undefined &&
-      request.expected_writer_generation !== fence.writerGeneration
-    ) {
+    if (request.expected_writer_generation !== fence.writerGeneration) {
       throw new StoreContractError('competing resume rejected')
     }
     fence.writerGeneration += 1
@@ -397,14 +409,17 @@ export class InMemoryResearchStore implements ResearchStore {
     if (plan.mission_id !== ctx.mission_id) {
       throw new StoreContractError('plan mission mismatch')
     }
-    if (ctx.plan_revision_id !== plan.plan_revision_id) {
-      throw new StoreContractError('plan revision context mismatch')
-    }
-    if (
-      fence.activePlanRevisionId !== null &&
-      ctx.plan_revision_id !== fence.activePlanRevisionId
-    ) {
-      throw new StoreContractError('stale plan revision')
+    if (fence.activePlanRevisionId === null) {
+      if (ctx.plan_revision_id !== plan.plan_revision_id) {
+        throw new StoreContractError('initial plan context must match proposed plan revision')
+      }
+    } else {
+      if (ctx.plan_revision_id !== fence.activePlanRevisionId) {
+        throw new StoreContractError('stale plan revision')
+      }
+      if (plan.plan_revision_id === fence.activePlanRevisionId) {
+        throw new StoreContractError('proposed plan revision must differ from active plan')
+      }
     }
     fence.activePlanRevisionId = plan.plan_revision_id
     return Promise.resolve(this.push(ctx.mission_id, 'plan_revised', { plan }))
@@ -445,16 +460,13 @@ export class InMemoryResearchStore implements ResearchStore {
     if (intent.mission_id !== ctx.mission_id) {
       throw new StoreContractError('operation mission mismatch')
     }
-    const key = operationKey(intent.mission_id, intent.operation_id)
+    const key = operationKey(intent.mission_id, intent.operation_id, intent.attempt_id)
     const existing = this.operations.get(key)
     if (existing) {
-      if (
-        existing.attemptId === intent.attempt_id &&
-        stableJson(existing.intent) === stableJson(intent)
-      ) {
+      if (stableJson(existing.intent) === stableJson(intent)) {
         return
       }
-      throw new StoreContractError('operation id reused with different attempt')
+      throw new StoreContractError('operation attempt idempotency conflict')
     }
     this.operations.set(key, { missionId: intent.mission_id, attemptId: intent.attempt_id, intent })
   }
@@ -476,14 +488,16 @@ export class InMemoryResearchStore implements ResearchStore {
     if (completion.mission_id !== ctx.mission_id) {
       throw new StoreContractError('completion mission mismatch')
     }
-    const key = operationKey(completion.mission_id, completion.operation_id)
+    const key = operationKey(completion.mission_id, completion.operation_id, completion.attempt_id)
     const tracked = this.operations.get(key)
     if (!tracked) {
       throw new StoreContractError('completion without prior intent')
     }
-    if (tracked.attemptId !== completion.attempt_id) {
-      throw new StoreContractError('completion attempt mismatch')
-    }
+    assertUsageSettlementAttempt(
+      completion.attempt_id,
+      completion.usage_settlement,
+      'completion',
+    )
     if (tracked.completion) {
       if (stableJson(tracked.completion) === stableJson(completion)) {
         return Promise.resolve({ eventId: `evt-idempotent-${key}` })
@@ -500,19 +514,56 @@ export class InMemoryResearchStore implements ResearchStore {
     ctx: MissionWriteContext,
     reconciliation: ExternalOperationReconciliation,
   ): Promise<ResearchStoreWriteResult> {
-    this.requireCtx(ctx, { allowUsageReconciliation: true })
+    const fence = this.requireCtx(ctx, { allowUsageReconciliation: true })
+    const auth = this.authority(ctx)
     if (reconciliation.mission_id !== ctx.mission_id) {
       throw new StoreContractError('reconciliation mission mismatch')
     }
-    const key = operationKey(reconciliation.mission_id, reconciliation.operation_id)
+    assertUsageSettlementAttempt(
+      reconciliation.attempt_id,
+      reconciliation.usage_settlement,
+      'reconciliation',
+    )
+    const key = operationKey(
+      reconciliation.mission_id,
+      reconciliation.operation_id,
+      reconciliation.attempt_id,
+    )
     const tracked = this.operations.get(key)
-    if (!tracked?.completion) {
+    if (!tracked) {
+      throw new StoreContractError('reconciliation without prior intent')
+    }
+
+    const lateAccountingOnly =
+      auth === 'usage_reconciliation' && fence.terminalReport !== null && !tracked.completion
+
+    if (lateAccountingOnly) {
+      if (tracked.accountingReconciled) {
+        if (stableJson(tracked.accountingReconciled) === stableJson(reconciliation)) {
+          return Promise.resolve({ eventId: `evt-idempotent-${key}` })
+        }
+        throw new StoreContractError('duplicate accounting reconciliation')
+      }
+      tracked.accountingReconciled = reconciliation
+      return Promise.resolve(
+        this.push(ctx.mission_id, 'external_operation_reconciled', { reconciliation }),
+      )
+    }
+
+    if (!tracked.completion) {
       throw new StoreContractError('reconciliation without prior completion')
     }
     if (tracked.attemptId !== reconciliation.attempt_id) {
       throw new StoreContractError('reconciliation attempt mismatch')
     }
     if (tracked.completion.settlement !== 'uncertain') {
+      const alreadyResolved =
+        tracked.completion.settlement === reconciliation.resolved_settlement &&
+        stableJson(tracked.completion.usage_settlement) ===
+          stableJson(reconciliation.usage_settlement)
+      if (alreadyResolved) {
+        return Promise.resolve({ eventId: `evt-idempotent-${key}` })
+      }
       throw new StoreContractError('reconciliation requires uncertain prior settlement')
     }
     if (reconciliation.prior_settlement !== 'uncertain') {

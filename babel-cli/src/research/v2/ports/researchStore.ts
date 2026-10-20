@@ -45,7 +45,7 @@ export interface ResearchStore {
   appendMission(mission: ResearchMissionV2): Promise<ResearchStoreMissionHandle>
   /** Resume or compete for write ownership; bumps writer generation on success. */
   acquireWriterOwnership(
-    request: { mission_id: string; expected_writer_generation?: number },
+    request: { mission_id: string; expected_writer_generation: number },
   ): Promise<ResearchStoreMissionHandle>
   /** Invalidate prior writer generation after handoff (e.g. crash recovery). */
   replaceWriterOwnership(

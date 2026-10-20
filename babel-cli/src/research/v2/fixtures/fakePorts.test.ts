@@ -74,6 +74,7 @@ describe('research v2 fake ports', () => {
     model.scriptOutput('bad-1', { kind: 'plan_questions', questions: [{ text: '', importance: 'low' }] })
     const result = await model.invokeStructured({
       operationId: 'bad-1',
+      attemptId: 'att-bad-1',
       kind: 'plan_questions',
       input: {},
       signal: new AbortController().signal,

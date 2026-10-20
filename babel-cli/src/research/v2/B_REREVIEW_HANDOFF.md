@@ -1,8 +1,8 @@
 # Agent A → Agent B reciprocal rereview handoff
 
 **Supersedes for review:** `59cd561b2414fcc32253de568c70285517eae1cd` (BLOCKED)  
-**Proposed revision (local only, not pushed):** branch `cursor/research-v2-contract-a-fc31` tip (`git rev-parse HEAD` after coordinator fetch)  
-**Contract version:** `2026.10.20-checkpoint.2`  
+**Proposed revision (local only, not pushed):** branch `cursor/research-v2-contract-a-fc31` — see `review-artifacts/agent-a-checkpoint3.1-candidate/EXPORT_MANIFEST.json` for exact `head_commit`  
+**Contract version:** `2026.10.20-checkpoint.3.1` (composition FIX + verbatim B corpus; base `d51418b3`)  
 **Baseline:** `d9e42b14b00b6dba25f0415ae16b084363386a01`
 
 Remote publication and dependent coding remain **held** until B and independent exact-head rereview approve this patch.
@@ -55,6 +55,15 @@ node --import tsx --no-warnings=ExperimentalWarning --import ./src/testinfra/reg
 
 | Field | Value |
 |-------|--------|
-| Reviewed HEAD | _pending_ |
+| Reviewed HEAD | _pending_ (await B relay of A `d51418b3`) |
 | Verdict | APPROVE / BLOCK |
 | Notes | _pending_ |
+
+## Agent A reciprocal review of B fixture repair (2026-10-20)
+
+| Field | Value |
+|-------|--------|
+| B head reviewed | `b2572ca844c21f444e79f253fc60b9295a67cb05` (patch verified; read-only snapshot) |
+| Verdict | **APPROVE manifest/fixture slice only** — **NOT** campaign acceptance |
+| Evidence | `review-artifacts/B_RECIPROCAL_REVIEW_A.md` (complete); A `74ee4276` at `review-artifacts/agent-a-frozen-74ee4276/` |
+| A hold | `d51418b3` verified, **not accepted** — composition defects to consolidated native report; **no piecemeal repair** until then |

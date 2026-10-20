@@ -195,6 +195,7 @@ describe('research v2 contract regressions (#405 repair)', () => {
     controller.abort()
     const result = await model.invokeStructured({
       operationId: 'm-cancel',
+      attemptId: 'att-m-cancel',
       kind: 'plan_questions',
       input: {},
       signal: controller.signal,
