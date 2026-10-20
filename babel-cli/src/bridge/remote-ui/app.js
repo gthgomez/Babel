@@ -58,11 +58,17 @@
     R.setText(byId('turn-detail'), turn === 'UNKNOWN' ? 'Outcome is ambiguous. Do not resubmit automatically.' : label(turn) + ' turn state.');
     R.setText(byId('thread-id-display'), memory.threadId || 'No active thread');
     R.setText(byId('workspace'), rootEl.value || '—');
-    const harnessLabel = harnessEl && harnessEl.value === 'command-code' ? 'Command Code CLI' : 'Babel native';
+    const harnessValue = harnessEl && harnessEl.value ? harnessEl.value : 'babel-native';
+    const harnessLabel =
+      harnessValue === 'command-code'
+        ? 'Command Code CLI'
+        : harnessValue === 'opencode'
+          ? 'OpenCode CLI'
+          : 'Babel native';
     R.setText(byId('harness-label'), harnessLabel);
     if (vendorSessionEl) {
-      const cc = harnessEl && harnessEl.value === 'command-code';
-      vendorSessionEl.disabled = !cc || !memory.token && !memory.pairedDevice;
+      const externalHarness = harnessValue === 'command-code' || harnessValue === 'opencode';
+      vendorSessionEl.disabled = !externalHarness || !memory.token && !memory.pairedDevice;
     }
     R.setText(byId('connection-copy'), host === 'ONLINE' ? 'Host connected' : 'Host ' + label(host).toLowerCase());
     document.querySelectorAll('.topbar-status .status-dot, #host-card .status-dot').forEach(function (dot) {
@@ -276,14 +282,30 @@
 
   function refreshVendorSessions(catalogResult) {
     if (!vendorSessionEl) return;
-    const harness = harnessEl && harnessEl.value === 'command-code';
+    const harness = harnessEl && (harnessEl.value === 'command-code' || harnessEl.value === 'opencode');
     vendorSessionEl.disabled = !harness;
     const previous = vendorSessionEl.value;
     while (vendorSessionEl.options.length > 1) vendorSessionEl.remove(1);
     if (catalogResult) lastCatalogResult = catalogResult;
-    if (!harness || !lastCatalogResult || !Array.isArray(lastCatalogResult.vendor_sessions)) return;
+    if (!harness || !lastCatalogResult) return;
+    const adapterFilter = harnessEl && harnessEl.value ? harnessEl.value : '';
+    if (Array.isArray(lastCatalogResult.vendor_session_list_errors)) {
+      const listError = lastCatalogResult.vendor_session_list_errors.find(function (row) {
+        return row && row.harness_adapter_id === adapterFilter;
+      });
+      if (listError && listError.error) {
+        const errOpt = document.createElement('option');
+        errOpt.value = '';
+        errOpt.disabled = true;
+        errOpt.textContent = 'Vendor list unavailable: ' + listError.error;
+        vendorSessionEl.appendChild(errOpt);
+        return;
+      }
+    }
+    if (!Array.isArray(lastCatalogResult.vendor_sessions)) return;
     lastCatalogResult.vendor_sessions.forEach(function (row) {
       if (!row || !row.session_id) return;
+      if (adapterFilter && row.harness_adapter_id && row.harness_adapter_id !== adapterFilter) return;
       const opt = document.createElement('option');
       opt.value = row.session_id;
       const owned = row.bound && row.canonical_thread_id ? ' [Babel ' + row.canonical_thread_id + ']' : '';
@@ -495,12 +517,16 @@
       const sessionId = await ensureSession();
       const harness = harnessEl && harnessEl.value ? harnessEl.value : 'babel-native';
       const createParams = { project_root: rootEl.value, session_id: sessionId };
-      if (harness === 'command-code' && vendorSessionEl && vendorSessionEl.value) {
+      if (
+        (harness === 'command-code' || harness === 'opencode') &&
+        vendorSessionEl &&
+        vendorSessionEl.value
+      ) {
         const nativeId = vendorSessionEl.value;
         const selected = (lastCatalogResult && lastCatalogResult.vendor_sessions || []).find(function (row) {
-          return row && row.session_id === nativeId;
+          return row && row.session_id === nativeId && row.harness_adapter_id === harness;
         });
-        createParams.harness_adapter_id = 'command-code';
+        createParams.harness_adapter_id = harness;
         if (selected && selected.canonical_thread_id) {
           memory.threadId = selected.canonical_thread_id;
           await ensurePairedControlLease(memory.threadId);
@@ -522,15 +548,19 @@
         } else {
           await syncControlLeaseFromHost();
         }
-        const opened = await rpc('harness.command_code.open', {
+        const openMethod =
+          harness === 'opencode' ? 'harness.opencode.open' : 'harness.command_code.open';
+        const opened = await rpc(openMethod, {
           thread_id: memory.threadId,
           project_root: rootEl.value,
           harness_native_session_id: nativeId,
         });
-        if (opened.classified.kind !== 'success') throw new Error('harness.command_code.open rejected');
+        if (opened.classified.kind !== 'success') throw new Error(openMethod + ' rejected');
         await renderHistoryCells(memory.threadId);
       } else {
-        if (harness === 'command-code') createParams.harness_adapter_id = 'command-code';
+        if (harness === 'command-code' || harness === 'opencode') {
+          createParams.harness_adapter_id = harness;
+        }
         const result = await rpc('thread.create', createParams);
         if (result.classified.kind !== 'success') throw new Error('thread.create rejected');
         memory.threadId = result.payload.result && result.payload.result.thread_id;
@@ -699,7 +729,10 @@
     if (harnessEl) {
       harnessEl.onchange = async function () {
         renderChrome();
-        if (harnessEl.value === 'command-code' && (memory.token || memory.pairedDevice)) {
+        if (
+          (harnessEl.value === 'command-code' || harnessEl.value === 'opencode') &&
+          (memory.token || memory.pairedDevice)
+        ) {
           try {
             const catalog = await rpc('remote.catalog', {});
             if (catalog.classified.kind === 'success') refreshVendorSessions(catalog.payload.result);

@@ -38,6 +38,25 @@ export interface HarnessAdapterDescriptor {
 export const COMMAND_CODE_ATTACH_LIVE_UNSUPPORTED_REASON =
   'Unmanaged live TUI attach is unsupported; use Babel-managed own-CLI runtime (attachLive=false).';
 
+export const OPENCODE_ATTACH_LIVE_UNSUPPORTED_REASON =
+  'Unmanaged live TUI attach is unsupported; use Babel-managed opencode acp runtime (attachLive=false).';
+
+export const OPENCODE_BASE_CAPABILITIES: HarnessCapabilityFlags = {
+  catalog: true,
+  start: true,
+  readHistory: true,
+  resumeStopped: true,
+  attachLive: false,
+  stream: true,
+  steer: true,
+  cancel: true,
+  approve: true,
+  files: false,
+  diff: false,
+  usage: true,
+  exclusiveControl: false,
+};
+
 export const COMMAND_CODE_BASE_CAPABILITIES: HarnessCapabilityFlags = {
   catalog: true,
   start: true,

@@ -721,6 +721,8 @@ const HOST_PROCESS_SURFACE = new Set([
   'bridge/commandCodeAcpTransport.ts',
   // Command Code install probe: fixed --version/-V argv shapes; reviewer-scoped env; 4s spawn timeout.
   'bridge/commandCodeCliDiscovery.ts',
+  // OpenCode install probe: fixed --version argv; reviewer-scoped env; bounded spawn timeout.
+  'bridge/openCodeCliDiscovery.ts',
   'bridge/workspaceChanges.ts',
   'eval/canary/liveCell.ts',
   'eval/cleanRoomGrade.ts',

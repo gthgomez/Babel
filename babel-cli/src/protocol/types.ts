@@ -178,7 +178,7 @@ export interface ThreadCreateParams {
   /** Bridge session that owns this thread for /ws/ticket mint. */
   session_id?: string;
   /** External harness adapter (default babel-native ChatEngine). */
-  harness_adapter_id?: 'babel-native' | 'command-code';
+  harness_adapter_id?: 'babel-native' | 'command-code' | 'opencode';
   /** Vendor-native session id when resuming a stopped Command Code session. */
   harness_native_session_id?: string;
 }

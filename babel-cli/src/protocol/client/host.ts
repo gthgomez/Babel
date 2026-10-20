@@ -26,8 +26,12 @@ import {
 } from '../../services/threadStore/sessionHydration.js';
 import {
   commandCodeNativeOwnershipViolation,
+  openCodeNativeOwnershipViolation,
   withSerializedCommandCodeNativeBinding,
+  withSerializedOpenCodeNativeBinding,
 } from '../../bridge/remoteCatalog.js';
+import { probeCommandCodeInstallation } from '../../bridge/commandCodeCliDiscovery.js';
+import { probeOpenCodeInstallation } from '../../bridge/openCodeCliDiscovery.js';
 import {
   allocateThreadId,
   ensureThread,
@@ -63,7 +67,6 @@ import type {
   VerificationLookupResult,
 } from '../types.js';
 import { RemoteApprovalBroker, runOnRemoteSurface } from '../../bridge/remoteApproval.js';
-import { probeCommandCodeInstallation } from '../../bridge/commandCodeCliDiscovery.js';
 import { collectWorkspaceChanges } from '../../bridge/workspaceChanges.js';
 import {
   mapVerificationEvidence,
@@ -118,6 +121,8 @@ export interface ProtocolHostState {
    * by `closeProtocolHostState`.
    */
   admissionStores: Map<string, AdmissionStore>;
+  /** Test-only: overrides OpenCode PATH probe for thread.create (constructor injection). */
+  openCodeInstallProbe?: () => Promise<import('../../bridge/openCodeCliDiscovery.js').OpenCodeInstallProbe>;
 }
 
 export function createProtocolHostState(options: {
@@ -126,6 +131,7 @@ export function createProtocolHostState(options: {
   projectRootGuard?: (projectRoot: string) => string;
   remoteSurface?: boolean;
   coordinator?: RuntimeCoordinator;
+  openCodeInstallProbe?: () => Promise<import('../../bridge/openCodeCliDiscovery.js').OpenCodeInstallProbe>;
 } = {}): ProtocolHostState {
   return {
     engines: new Map(),
@@ -135,6 +141,7 @@ export function createProtocolHostState(options: {
     engineFactory: options.engineFactory ?? defaultEngineFactory,
     executeWithoutNotifications: options.executeWithoutNotifications ?? false,
     ...(options.projectRootGuard ? { projectRootGuard: options.projectRootGuard } : {}),
+    ...(options.openCodeInstallProbe ? { openCodeInstallProbe: options.openCodeInstallProbe } : {}),
     idempotency: new Map(),
     lastMessageIntegrity: new Map(),
     remoteSurface: options.remoteSurface === true,
@@ -258,7 +265,7 @@ function descriptorFromCreate(threadId: string, params: ThreadCreateParams): Ses
     ...(params.harness_native_session_id
       ? { harness_native_session_id: params.harness_native_session_id }
       : {}),
-    ...(harness === 'command-code'
+    ...(harness === 'command-code' || harness === 'opencode'
       ? {
           harness_provider_profile: params.provider ?? process.env['BABEL_PROVIDER'] ?? 'default',
           harness_model_profile: params.model ?? process.env['BABEL_MODEL'] ?? 'default',
@@ -422,6 +429,20 @@ export async function handleProtocolRequest(
             );
           }
         }
+        if (params.harness_adapter_id === 'opencode') {
+          const probe = state.openCodeInstallProbe
+            ? await state.openCodeInstallProbe()
+            : await probeOpenCodeInstallation();
+          if (probe.state !== 'verified') {
+            return errorResponse(
+              id,
+              BabelProtocolErrorCode.MODE_UNSUPPORTED,
+              probe.state === 'missing'
+                ? 'OpenCode CLI is not installed on the host.'
+                : 'OpenCode CLI installation could not be verified.',
+            );
+          }
+        }
         let projectRoot = params.project_root;
         try {
           if (state.projectRootGuard) {
@@ -468,6 +489,34 @@ export async function handleProtocolRequest(
                   id,
                   BabelProtocolErrorCode.INVALID_PARAMS,
                   'Another Babel thread already owns this Command Code native session',
+                );
+              }
+              return persistThread();
+            },
+          );
+        }
+        if (descriptor.harness_adapter_id === 'opencode' && descriptor.harness_native_session_id) {
+          return await withSerializedOpenCodeNativeBinding(
+            descriptor.projectRoot,
+            descriptor.harness_native_session_id,
+            async () => {
+              const violation = await openCodeNativeOwnershipViolation(
+                state,
+                descriptor.projectRoot,
+                descriptor.harness_native_session_id!,
+              );
+              if (violation === 'corrupt') {
+                return errorResponse(
+                  id,
+                  BabelProtocolErrorCode.INVALID_PARAMS,
+                  'Multiple persisted Babel threads own this OpenCode native session',
+                );
+              }
+              if (violation === 'conflict') {
+                return errorResponse(
+                  id,
+                  BabelProtocolErrorCode.INVALID_PARAMS,
+                  'Another Babel thread already owns this OpenCode native session',
                 );
               }
               return persistThread();
@@ -776,7 +825,8 @@ export async function handleProtocolRequest(
               const useRuntimeCoordinator =
                 isRuntimeCoordinatorEnabled() &&
                 descriptor != null &&
-                harnessAdapterId !== 'command-code';
+                harnessAdapterId !== 'command-code' &&
+                harnessAdapterId !== 'opencode';
               if (useRuntimeCoordinator) {
                 runtimeExecution = state.coordinator.beginTurn({
                   prepared: buildPreparedTurn(descriptor),

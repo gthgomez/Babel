@@ -20,9 +20,15 @@ import { originAllowed as originAllowedStructured } from './originPolicy.js';
 import { ThreadOwnershipRegistry, type ThreadOwnershipError } from './threadOwnership.js';
 import { loadSessionDescriptor } from '../services/threadStore/sessionDescriptor.js';
 import { threadStoreExists } from '../services/threadStore/threadStore.js';
-import { buildRemoteCatalog, commandCodeOpenNativeAuthority } from './remoteCatalog.js';
+import {
+  buildRemoteCatalog,
+  commandCodeOpenNativeAuthority,
+  openCodeOpenNativeAuthority,
+} from './remoteCatalog.js';
 import { buildRemoteHarnessCapabilities } from './harnessAdapterRegistry.js';
 import type { CommandCodeAcpRuntimeRegistry } from './commandCodeAcpRuntime.js';
+import type { OpenCodeAcpRuntimeRegistry } from './openCodeAcpRuntime.js';
+import type { HarnessAdapterId } from './harnessAdapterContract.js';
 import { ControlLeaseRegistry } from './controlLease.js';
 import type { BridgeClientContext } from './bridgeClientAuth.js';
 
@@ -33,6 +39,7 @@ export const REMOTE_MUTATING_RPC_METHODS = new Set([
   'turn.cancel',
   'approval.decide',
   'harness.command_code.open',
+  'harness.opencode.open',
 ]);
 
 const MUTATING_METHODS = REMOTE_MUTATING_RPC_METHODS;
@@ -60,6 +67,7 @@ export class ProtocolGateway {
   private readonly registeredWorkspaceRoot: string;
   private readonly enforceControlLease: boolean;
   private readonly commandCodeRegistry: CommandCodeAcpRuntimeRegistry | undefined;
+  private readonly openCodeRegistry: OpenCodeAcpRuntimeRegistry | undefined;
   private subscribers = new Set<GatewaySubscriber>();
 
   constructor(options: {
@@ -68,16 +76,22 @@ export class ProtocolGateway {
     remoteSurface?: boolean;
     enforceControlLease?: boolean;
     commandCodeRegistry?: CommandCodeAcpRuntimeRegistry;
+    openCodeRegistry?: OpenCodeAcpRuntimeRegistry;
+    openCodeInstallProbe?: () => Promise<import('./openCodeCliDiscovery.js').OpenCodeInstallProbe>;
   }) {
     const allowedRoot = options.allowedWorkspaceRoot;
     this.registeredWorkspaceRoot = canonicalizeContained(resolve(allowedRoot));
     this.enforceControlLease = options.enforceControlLease === true;
     this.commandCodeRegistry = options.commandCodeRegistry;
+    this.openCodeRegistry = options.openCodeRegistry;
     this.host = createProtocolHostState({
       executeWithoutNotifications: true,
       projectRootGuard: (projectRoot) => assertAllowedProjectRoot(projectRoot, allowedRoot),
       remoteSurface: options.remoteSurface !== false,
       ...(options.engineFactory ? { engineFactory: options.engineFactory } : {}),
+      ...(options.openCodeInstallProbe
+        ? { openCodeInstallProbe: options.openCodeInstallProbe }
+        : {}),
     });
   }
 
@@ -141,6 +155,7 @@ export class ProtocolGateway {
           ...(this.commandCodeRegistry
             ? { commandCodeRegistry: this.commandCodeRegistry }
             : {}),
+          ...(this.openCodeRegistry ? { openCodeRegistry: this.openCodeRegistry } : {}),
         });
         return {
           jsonrpc: '2.0',
@@ -162,7 +177,23 @@ export class ProtocolGateway {
           dispatchContext,
         );
         if (leaseDenied) return leaseDenied;
-        return await this.dispatchCommandCodeOpen(openParams, parsedId);
+        return await this.dispatchHarnessOpen('command-code', openParams, parsedId);
+      }
+      if (envelope.method === 'harness.opencode.open') {
+        parsedId =
+          typeof envelope.id === 'string' || typeof envelope.id === 'number' ? envelope.id : null;
+        const openParams = ((envelope as { params?: unknown }).params ?? {}) as Record<string, unknown>;
+        const leaseDenied = this.assertControlLeaseForMutation(
+          {
+            jsonrpc: '2.0',
+            method: 'harness.opencode.open',
+            id: parsedId ?? 0,
+            params: openParams,
+          } as unknown as BabelProtocolRequest,
+          dispatchContext,
+        );
+        if (leaseDenied) return leaseDenied;
+        return await this.dispatchHarnessOpen('opencode', openParams, parsedId);
       }
       if (envelope.method === 'remote.capabilities') {
         parsedId =
@@ -250,17 +281,21 @@ export class ProtocolGateway {
     this.fanout(notification);
   }
 
-  private async dispatchCommandCodeOpen(
+  private async dispatchHarnessOpen(
+    adapterId: HarnessAdapterId,
     params: Record<string, unknown>,
     parsedId: string | number | null,
   ): Promise<JsonRpcResponse> {
-    if (!this.commandCodeRegistry) {
+    const registry =
+      adapterId === 'command-code' ? this.commandCodeRegistry : this.openCodeRegistry;
+    const displayName = adapterId === 'command-code' ? 'Command Code' : 'OpenCode';
+    if (!registry) {
       return {
         jsonrpc: '2.0',
         id: parsedId ?? 0,
         error: {
           code: BabelProtocolErrorCode.MODE_UNSUPPORTED,
-          message: 'Command Code harness is not available on this host',
+          message: `${displayName} harness is not available on this host`,
         },
       };
     }
@@ -288,13 +323,13 @@ export class ProtocolGateway {
     }
     const persisted = loadSessionDescriptor(threadId);
     const descriptor = persisted ?? this.host.descriptors.get(threadId) ?? null;
-    if (!descriptor || descriptor.harness_adapter_id !== 'command-code') {
+    if (!descriptor || descriptor.harness_adapter_id !== adapterId) {
       return {
         jsonrpc: '2.0',
         id: parsedId ?? 0,
         error: {
           code: BabelProtocolErrorCode.MODE_UNSUPPORTED,
-          message: 'Thread is not a Command Code harness session',
+          message: `Thread is not a ${displayName} harness session`,
         },
       };
     }
@@ -347,19 +382,17 @@ export class ProtocolGateway {
         },
       };
     }
-    const openAuthority = await commandCodeOpenNativeAuthority(
-      this.host,
-      canonicalRoot,
-      nativeId,
-      threadId,
-    );
+    const openAuthority =
+      adapterId === 'command-code'
+        ? await commandCodeOpenNativeAuthority(this.host, canonicalRoot, nativeId, threadId)
+        : await openCodeOpenNativeAuthority(this.host, canonicalRoot, nativeId, threadId);
     if (openAuthority === 'corrupt') {
       return {
         jsonrpc: '2.0',
         id: parsedId ?? 0,
         error: {
           code: BabelProtocolErrorCode.INVALID_PARAMS,
-          message: 'Multiple persisted Babel threads own this Command Code native session',
+          message: `Multiple persisted Babel threads own this ${displayName} native session`,
         },
       };
     }
@@ -369,7 +402,7 @@ export class ProtocolGateway {
         id: parsedId ?? 0,
         error: {
           code: BabelProtocolErrorCode.INVALID_PARAMS,
-          message: 'Another Babel thread already owns this Command Code native session',
+          message: `Another Babel thread already owns this ${displayName} native session`,
         },
       };
     }
@@ -379,7 +412,7 @@ export class ProtocolGateway {
         id: parsedId ?? 0,
         error: {
           code: BabelProtocolErrorCode.INVALID_PARAMS,
-          message: 'No persisted canonical owner for this Command Code native session',
+          message: `No persisted canonical owner for this ${displayName} native session`,
         },
       };
     }
@@ -390,11 +423,11 @@ export class ProtocolGateway {
         id: parsedId ?? 0,
         error: {
           code: BabelProtocolErrorCode.TURN_IN_PROGRESS,
-          message: 'Cannot open saved Command Code history while a turn is active',
+          message: `Cannot open saved ${displayName} history while a turn is active`,
         },
       };
     }
-    const opened = await this.commandCodeRegistry.openSavedSession(descriptor);
+    const opened = await registry.openSavedSession(descriptor);
     return {
       jsonrpc: '2.0',
       id: parsedId ?? 0,

@@ -71,6 +71,10 @@ import {
   CommandCodeAcpRuntimeRegistry,
   type CommandCodeAcpLaunchOverride,
 } from './commandCodeAcpRuntime.js';
+import {
+  OpenCodeAcpRuntimeRegistry,
+  type OpenCodeAcpLaunchOverride,
+} from './openCodeAcpRuntime.js';
 import { createHarnessAwareEngineFactory } from './harnessEngineFactory.js';
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
@@ -126,6 +130,11 @@ export interface BridgeServerOptions {
   commandCodeInstallProbe?: () => Promise<import('./commandCodeCliDiscovery.js').CommandCodeInstallProbe>;
   /** Test-only: PATH probe executable for Command Code CLI version check. */
   commandCodeProbeExecutable?: string;
+  openCodeRegistry?: OpenCodeAcpRuntimeRegistry;
+  openCodeTestLaunch?: OpenCodeAcpLaunchOverride;
+  openCodeInstallProbe?: () => Promise<import('./openCodeCliDiscovery.js').OpenCodeInstallProbe>;
+  /** Test-only: injected prompt RPC timeout for OpenCode death-fence gateway proofs. */
+  openCodeTestRpcTimeoutMs?: number;
 }
 
 /** Test-only hooks for post-initial-auth / pre-body-read synchronization. */
@@ -250,6 +259,7 @@ export class BridgeServer {
   readonly wsTickets = new WsTicketStore();
   readonly devicePairing: DevicePairingService;
   readonly commandCodeRegistry: CommandCodeAcpRuntimeRegistry;
+  readonly openCodeRegistry: OpenCodeAcpRuntimeRegistry;
 
   /** Active WebSocket transports keyed by session ID. */
   private wsTransports = new Map<string, BridgeTransport>();
@@ -286,15 +296,31 @@ export class BridgeServer {
           ? { installProbe: this.options.commandCodeInstallProbe }
           : {}),
       });
+    this.openCodeRegistry =
+      this.options.openCodeRegistry ??
+      new OpenCodeAcpRuntimeRegistry({
+        hostScopeId: this.bridgeInstance || randomUUID(),
+        ...(this.options.openCodeTestLaunch ? { testLaunch: this.options.openCodeTestLaunch } : {}),
+        ...(this.options.openCodeInstallProbe
+          ? { installProbe: this.options.openCodeInstallProbe }
+          : {}),
+        ...(this.options.openCodeTestRpcTimeoutMs !== undefined
+          ? { testRpcTimeoutMs: this.options.openCodeTestRpcTimeoutMs }
+          : {}),
+      });
     this.protocolGateway =
       this.options.protocolGateway ??
       new ProtocolGateway({
         allowedWorkspaceRoot: this.options.allowedWorkspaceRoot ?? process.cwd(),
         enforceControlLease,
         commandCodeRegistry: this.commandCodeRegistry,
+        openCodeRegistry: this.openCodeRegistry,
+        ...(this.options.openCodeInstallProbe
+          ? { openCodeInstallProbe: this.options.openCodeInstallProbe }
+          : {}),
         engineFactory:
           this.options.engineFactory ??
-          createHarnessAwareEngineFactory(this.commandCodeRegistry),
+          createHarnessAwareEngineFactory(this.commandCodeRegistry, this.openCodeRegistry),
       });
     this.devicePairing =
       this.options.devicePairing ?? new DevicePairingService(this.authToken);
@@ -407,6 +433,7 @@ export class BridgeServer {
     // stopped bridge leaks no SQLite ownership into a later start.
     closeProtocolHostState(this.protocolGateway.host);
     await this.commandCodeRegistry.closeAll();
+    await this.openCodeRegistry.closeAll();
 
     if (typeof this.server.closeAllConnections === 'function') {
       this.server.closeAllConnections();

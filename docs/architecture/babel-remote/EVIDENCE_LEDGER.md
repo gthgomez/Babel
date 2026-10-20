@@ -24,6 +24,22 @@ Published head on remote: `4d28d70824c1a483a7c22b02444aaf9b5d43c5f4`. **Gate in 
 | Permission edit SHA256 / unknown kind null | `commandCodeAcpPermission.ts` | `commandCodeAcpPermission.test.ts` | Regression kept |
 | Replay stable ids with explicit `messageId` | `commandCodeAcpReplay.ts` | `merges chunks with the same messageId…` | Regression kept |
 
+## OpenCode own-CLI acceptance matrix (local implementation batch — unpublished)
+
+Contract pin: `openCodeAcpContract.ts` + shipped `babel-cli/src/bridge/opencode-acp-source-pin.json` (copied to `dist/bridge/` on build) → `anomalyco/opencode` commit `b154f6ac29ea155d1e6edc1b6dd8b76c7d9c5518` (`packages/cli/src/acp/*`, `packages/cli/src/commands/handlers/acp.ts`); v2 docs at `opencode.ai/v2/docs/cli/acp`. Prior pin `44b6938b` had docs-only ACP paths (no implementation tree). ACP protocol version **1**, child argv `opencode acp`. Strict peer: `babel-cli/test/fixtures/opencode-acp-peer.mjs`.
+
+| # | Invariant | Production entrypoint / source | Exact regression assertion | Current local command / exit | Remaining limitation |
+|---|-----------|------------------------------|----------------------------|------------------------------|----------------------|
+| O1 | `harness.opencode.open` lease + canonical binding; zero `openSavedSession` on deny | `protocolGateway.dispatchHarnessOpen('opencode')`, `openCodeOpenNativeAuthority` | `openCodeOpenSideEffects.gateway.test.ts` (7 cases) | `node --import tsx --import ./src/testinfra/register-no-ambient-inference.mjs --test src/bridge/openCodeOpenSideEffects.gateway.test.ts` → **exit 0**, 7/7 | Live installed `opencode` deferred |
+| O2 | `session/load` + serialized init; load failure recovery; profile selection fail-closed | `openCodeAcpRuntime.ensureSession` | `openCodeAcpRuntime.init.test.ts`, `openCodeAcpRuntime.persist.test.ts` | init **3/3**, persist **3/3** | — |
+| O3 | PWA catalog → open → two turns → reconnect/history | `remote-ui/app.js`, `harness.opencode.open` | `e2e/openCodePwaVendorOpen.gateway.test.ts` (in `npm run test:remote-ui`) | `npm run test:remote-ui` → **exit 0**, 6/6 (port **14656** avoids parallel clash with Command Code **14655**) | Physical device deferred |
+| O4 | `session/list` pagination fail-closed; usage unknown when baseline missing | `openCodeAcpRuntime.listSessions`, `openCodeAcpEventMap` | `openCodeOwnCli.gateway.test.ts` pagination case | gateway **15/15** | Non-USD incomplete by design |
+| O5 | Cancel after admitted prompt; immediate next turn | `opencode-acp-peer.mjs`, gateway | `openCodeOwnCli.gateway.test.ts` cancel cases | gateway **15/15** | — |
+| O6 | Permission content binding (shell cwd/workdir, patch raw+preview, diff) | `openCodeAcpPermission.ts` | `openCodeAcpPermission.test.ts` + gateway subprocess permission/usage cases | **8/8** unit + gateway subprocess | Vendor `cmd` alias supported; preview-only patch fails closed |
+| O7 | Registry `closeAll` on bridge stop | `sessionServer.stop` | `withDedicatedServer` finally | gateway suites | — |
+| O8 | Host stop / emergency path preserved | `sharedProtocolHostRun.emergencyLifecycle.test.ts` + `openCodeEmergencyAdminStop.gateway.test.ts` | Shared emergency20 = native+CC regression-only; `openCodeHarnessEngine.deathFence.test.ts` + `openCodeTimeoutIsolation.gateway.test.ts` (timeout isolation); `openCodeEmergencyAdminStop.gateway.test.ts` (stdin `emergency_admin_stop` → bearer `control.acquire`+`turn.cancel` on active host-run OpenCode thread only, CC survives) | Re-run with exit-preserving logs on exact head | — |
+| O9 | Catalog honest when CLI missing; constructor-only test injection | `buildHarnessAdapterCatalog`, `openCodeInstallProbe` on `BridgeServer`/`ProtocolGateway` | `harnessAdapterRegistry.test.ts` | **2/2** | No `BABEL_OPENCODE_*` production env selector |
+
 ## Milestone table (remote campaign)
 
 | Milestone | Capability | Status | Proof |
@@ -43,7 +59,8 @@ Published head on remote: `4d28d70824c1a483a7c22b02444aaf9b5d43c5f4`. **Gate in 
 | 4 | Stale approval digest / replay | Tested | `remoteApproval.test.ts`, `remoteSecurity.gateway.test.ts` |
 | 2 | Desktop ↔ phone single owner | Not qualified | Production IPC + `remote host-run` path in progress; phone E2E pending |
 | 6 | Command Code own-CLI ACP adapter (managed subprocess) | Tested (strict canonical ACP v1 peer) | Matrix above + `commandCodeAcpPermission.test.ts`; **not** live installed `cmd`/`cmdc` qualification |
-| 6 | Other external harness adapters (OpenCode, AGY, Claude, Codex) | Stub only | `harnessAdapterRegistry.ts` campaign stubs |
+| 6 | OpenCode own-CLI ACP adapter (managed subprocess) | Tested (strict OpenCode-shaped ACP peer) | Matrix above; **not** live installed `opencode` qualification |
+| 6 | Other external harness adapters (AGY, Claude, Codex) | Stub only | `harnessAdapterRegistry.ts` campaign stubs |
 | — | Physical phone + Tailscale | Not qualified | Owner checklist in `BABEL_REMOTE_QUICKSTART.md` |
 
 **Owner deferred after merge:** physical ROG14/phone remote journey; live Command Code login/provider on host; Windows `cmdc` path smoke against installed binary.

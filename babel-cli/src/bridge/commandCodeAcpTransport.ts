@@ -6,6 +6,7 @@ import {
   parseInitializeResult,
   type AcpNegotiatedCodec,
 } from './commandCodeAcpNegotiation.js';
+import { createAcpHarnessRpcTimeoutError } from './acpHarnessTransportErrors.js';
 import {
   isCommandCodeNotification,
   isCommandCodeRequest,
@@ -21,6 +22,8 @@ export interface CommandCodeAcpSpawnOptions {
   env?: NodeJS.ProcessEnv;
   maxLineBytes?: number;
   rpcTimeoutMs?: number;
+  /** Test-only: overrides the production session/prompt observation timeout when set. */
+  promptRpcTimeoutMs?: number;
 }
 
 export type CommandCodePermissionHandler = (input: {
@@ -187,8 +190,10 @@ export class CommandCodeAcpTransport {
         if (method === 'session/prompt') {
           void this.stop();
         }
-        reject(new Error(`COMMAND_CODE_ACP_RPC_TIMEOUT:${method}`));
-      }, method === 'session/prompt' ? 600_000 : this.options.rpcTimeoutMs ?? 30_000);
+        reject(createAcpHarnessRpcTimeoutError(method));
+      }, method === 'session/prompt'
+        ? (this.options.promptRpcTimeoutMs ?? 600_000)
+        : (this.options.rpcTimeoutMs ?? 30_000));
       this.pending.set(requestId, { resolve, reject, timer });
       this.child!.stdin.write(line);
     });
