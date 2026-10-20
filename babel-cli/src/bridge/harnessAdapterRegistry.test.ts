@@ -26,4 +26,20 @@ describe('harnessAdapterRegistry', () => {
     const external = catalog.filter((entry) => entry.descriptor.id !== 'babel-native');
     assert.ok(external.every((entry) => entry.descriptor.capabilities.attachLive === false));
   });
+
+  it('exposes antigravity offline foundation without probe, profile, or execution', async () => {
+    const catalog = await buildHarnessAdapterCatalog({
+      commandCodeProbe: { state: 'missing' },
+      openCodeProbe: { state: 'missing' },
+    });
+    const agy = catalog.find((entry) => entry.descriptor.id === 'antigravity');
+    assert.equal(agy?.installation, 'not_implemented');
+    assert.equal(agy?.profile_ids, undefined);
+    assert.equal(agy?.descriptor.capabilities.start, false);
+    assert.equal(agy?.descriptor.capabilities.approve, false);
+    assert.ok(
+      Object.values(agy?.descriptor.capabilities ?? {}).every((enabled) => enabled === false),
+    );
+    assert.match(agy?.descriptor.unsupportedReason ?? '', /offline evidence foundation/i);
+  });
 });

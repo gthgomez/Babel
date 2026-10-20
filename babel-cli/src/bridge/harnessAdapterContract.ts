@@ -41,6 +41,12 @@ export const COMMAND_CODE_ATTACH_LIVE_UNSUPPORTED_REASON =
 export const OPENCODE_ATTACH_LIVE_UNSUPPORTED_REASON =
   'Unmanaged live TUI attach is unsupported; use Babel-managed opencode acp runtime (attachLive=false).';
 
+export const ANTIGRAVITY_OFFLINE_FOUNDATION_REASON =
+  'Babel shared-owner Antigravity execution is not implemented (offline evidence foundation only). Headless integration must use stream-json on stdin; ACP-style control_request/control_response abort the session (documented exit 2).';
+
+export const ANTIGRAVITY_ATTACH_LIVE_UNSUPPORTED_REASON =
+  'Unmanaged live TUI attach and Google Remote Control are unsupported on the shared-owner path (attachLive=false).';
+
 export const OPENCODE_BASE_CAPABILITIES: HarnessCapabilityFlags = {
   catalog: true,
   start: true,

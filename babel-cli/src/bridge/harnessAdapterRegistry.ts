@@ -8,6 +8,7 @@ import {
 } from './harnessAdapterContract.js';
 import { probeCommandCodeInstallation, type CommandCodeInstallProbe } from './commandCodeCliDiscovery.js';
 import { probeOpenCodeInstallation, type OpenCodeInstallProbe } from './openCodeCliDiscovery.js';
+import { buildAntigravityAdapterDescriptor } from './antigravityOwnCliAdapter.js';
 import { buildCommandCodeAdapterDescriptor } from './commandCodeOwnCliAdapter.js';
 import { buildOpenCodeAdapterDescriptor } from './openCodeOwnCliAdapter.js';
 
@@ -67,10 +68,9 @@ function stubDescriptor(id: HarnessAdapterId, displayName: string): HarnessAdapt
 }
 
 const STUB_DISPLAY: Record<
-  Exclude<HarnessAdapterId, 'babel-native' | 'command-code' | 'opencode'>,
+  Exclude<HarnessAdapterId, 'babel-native' | 'command-code' | 'opencode' | 'antigravity'>,
   string
 > = {
-  antigravity: 'Antigravity CLI (AGY)',
   'claude-code': 'Claude Code CLI',
   codex: 'Codex CLI',
 };
@@ -84,6 +84,7 @@ export async function buildHarnessAdapterCatalog(options?: {
   const openCodeProbe = options?.openCodeProbe ?? (await probeOpenCodeInstallation());
   const commandCodeDescriptor = buildCommandCodeAdapterDescriptor(commandCodeProbe);
   const openCodeDescriptor = buildOpenCodeAdapterDescriptor(openCodeProbe);
+  const antigravityDescriptor = buildAntigravityAdapterDescriptor();
   const commandCodeInstallation: HarnessAdapterInstallationState =
     commandCodeProbe.state === 'verified'
       ? 'verified'
@@ -96,7 +97,6 @@ export async function buildHarnessAdapterCatalog(options?: {
       : openCodeProbe.state === 'missing'
         ? 'missing'
         : 'unverified';
-
   const byId = new Map<HarnessAdapterId, HarnessAdapterCatalogEntry>();
   byId.set('babel-native', {
     descriptor: BABEL_NATIVE_ADAPTER,
@@ -115,10 +115,15 @@ export async function buildHarnessAdapterCatalog(options?: {
     campaign_order: 2,
     profile_ids: [EXTERNAL_ADAPTER_PROFILE_IDS.openCodeGo],
   });
+  byId.set('antigravity', {
+    descriptor: antigravityDescriptor,
+    installation: 'not_implemented',
+    campaign_order: 3,
+  });
 
-  let order = 3;
+  let order = 4;
   for (const id of EXTERNAL_ADAPTER_CAMPAIGN_ORDER) {
-    if (id === 'command-code' || id === 'opencode') continue;
+    if (id === 'command-code' || id === 'opencode' || id === 'antigravity') continue;
     const profileIds = undefined;
     const displayName = STUB_DISPLAY[id as keyof typeof STUB_DISPLAY];
     byId.set(id, {
