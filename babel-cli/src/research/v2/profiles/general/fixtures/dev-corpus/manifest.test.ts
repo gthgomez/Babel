@@ -27,6 +27,25 @@ const EXPECTED_PDF_PAGE_TEXT = [
   'Page two: effective 2026-03-15.',
 ] as const
 
+/** Explicit per-case source files (directory non-empty alone is insufficient). */
+const REQUIRED_SOURCE_FILES: Record<string, readonly string[]> = {
+  'G-DEV-01': ['plan-a.html', 'plan-b.html'],
+  'G-DEV-02': ['helio-tab-pro.html', 'orion-lite.html'],
+  'G-DEV-03': ['official-policy.txt'],
+  'G-DEV-04': ['local-blog.html', 'press-wire-a.html', 'press-wire-b.html', 'widgetship-2025.csv'],
+  'G-DEV-05': ['city_report.html', 'metro_survey.html'],
+  'G-DEV-06': ['registry-unavailable.json', 'search-snippet-a.txt', 'search-snippet-b.txt'],
+}
+
+const EXPECTED_CASE_IDS = [
+  'G-DEV-01',
+  'G-DEV-02',
+  'G-DEV-03',
+  'G-DEV-04',
+  'G-DEV-05',
+  'G-DEV-06',
+] as const
+
 function loadManifest(): DevCorpusManifest {
   const raw = JSON.parse(readFileSync(join(manifestDir, 'manifest.json'), 'utf8')) as DevCorpusManifest
   assert.equal(raw.schema_version, 1)
@@ -54,19 +73,18 @@ function parseManifestJson(relativePath: string): Record<string, unknown> {
   return parsed as Record<string, unknown>
 }
 
-function assertPopulatedSourceDirectory(relativeDir: string): void {
-  const absolute = resolveManifestPath(relativeDir)
-  assert.equal(existsSync(absolute), true, `missing source directory: ${relativeDir}`)
-  const entries = readdirSync(absolute)
-  assert.ok(entries.length > 0, `empty source directory: ${relativeDir}`)
-  for (const entry of entries) {
-    const child = join(absolute, entry)
-    assert.equal(existsSync(child), true, `missing source file: ${relativeDir}${entry}`)
-    readFileSync(child)
+function assertRequiredSourceFiles(caseId: string, relativeDir: string): void {
+  const required = REQUIRED_SOURCE_FILES[caseId]
+  assert.ok(required?.length, `missing REQUIRED_SOURCE_FILES entry for ${caseId}`)
+  const absoluteDir = resolveManifestPath(relativeDir)
+  assert.equal(existsSync(absoluteDir), true, `missing source directory: ${relativeDir}`)
+  for (const fileName of required) {
+    const relativeFile = join(relativeDir, fileName).replace(/\\/g, '/')
+    readManifestFile(relativeFile)
   }
 }
 
-function assertTwoPageSamplePdf(relativePath: string): void {
+function assertPdfFixtureStructureAndEmbeddedText(relativePath: string): void {
   const bytes = readManifestFile(relativePath)
   assert.ok(bytes.length > 100, 'PDF fixture unexpectedly small')
   assert.equal(bytes.subarray(0, 5).toString('ascii'), '%PDF-', 'invalid PDF header')
@@ -82,17 +100,19 @@ function assertTwoPageSamplePdf(relativePath: string): void {
   assert.ok(pageObjects.length >= 2, `expected ≥2 page objects, saw ${pageObjects.length}`)
 }
 
-test('dev-corpus manifest: every declared asset resolves, JSON parses, sources populated, PDF valid', () => {
+test('dev-corpus manifest: every declared asset resolves, JSON parses, required source files, PDF fixture structure/text present', () => {
   const manifest = loadManifest()
   assert.equal(manifest.cases.length, 6)
+  const ids = manifest.cases.map((c) => c.id).sort()
+  assert.deepEqual(ids, [...EXPECTED_CASE_IDS])
 
   for (const caseEntry of manifest.cases) {
     assert.match(caseEntry.id, /^G-DEV-\d{2}$/)
+    for (const sourceDir of caseEntry.sources) {
+      assertRequiredSourceFiles(caseEntry.id, sourceDir)
+    }
     parseManifestJson(caseEntry.mission_fixture)
     parseManifestJson(caseEntry.expectations)
-    for (const sourceDir of caseEntry.sources) {
-      assertPopulatedSourceDirectory(sourceDir)
-    }
   }
 
   for (const securityPath of manifest.security_fixtures) {
@@ -107,5 +127,5 @@ test('dev-corpus manifest: every declared asset resolves, JSON parses, sources p
     }
   }
   assert.ok(pdfPath, 'manifest must list two-page-sample.pdf in document_fixtures')
-  assertTwoPageSamplePdf(pdfPath)
+  assertPdfFixtureStructureAndEmbeddedText(pdfPath)
 })

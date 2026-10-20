@@ -12,7 +12,11 @@
 | Merge / ready for review | **None.** Draft preserved; no merge, no `draft: false`. |
 | Post-review remote writes | **None** after contract review hold (local-only checklist/findings files; not pushed). |
 
-## Pre-push / maintainer guards (this environment)
+## Historical — early campaign VM (superseded)
+
+The following rows record the **first** guard attempt before task-local `pwsh`/gitleaks relocation and before repo-local `gh` credential helper approval. **Do not treat as current.**
+
+## Pre-push / maintainer guards (historical snapshot)
 
 | Guard | Result |
 |-------|--------|
@@ -46,25 +50,28 @@ Task-local `pwsh`: `/workspace/.tools/powershell-7.5.4/pwsh` (Microsoft **7.5.4*
 
 **Ordinary push** (when authorized): preflight + public-content + strict external secret scan. **Maintainer pre-merge** additionally needs supplemental policy.
 
-### `repo_local_gh_credential_helper_missing` — sanctioned repair (NOT performed)
+### `repo_local_gh_credential_helper_missing` — historical (superseded)
 
-Per `docs/guides/AGENT_GIT_OPERATIONS.md` § Repository-local GitHub credentials, **repo-local only** (no global config):
+**Historical:** helper repair was pending in the first VM pass. **Current (2026-10-20):** repo-local `credential.helper` chain configured per `docs/guides/AGENT_GIT_OPERATIONS.md`; `agent-preflight.ps1` reports `ok: true`, `pushReady: true` (push still held by coordinator).
 
-```powershell
-git config --local --unset-all credential.helper
-git config --local --add credential.helper ''
-git config --local --add credential.helper '!gh auth git-credential'
-```
-
-**Scope if user approves:** mutate only this clone’s `.git/config` credential.helper chain; requires existing `gh auth` session (no token in repo). **Pending user approval** — not applied in this campaign VM.
-
-## Unpublished diff handoff (vs remote #404 `c7ff361e`)
+## Unpublished diff handoff — historical row (superseded)
 
 | Scope | SHA-256 |
 |-------|---------|
 | Committed `origin..HEAD` (2 commits) | `a12d94376e34b1aab5e6c328b80f54b6c3801abbacb8133bb7f9518e18b019c4` |
 | Full unpublished vs `c7ff361e` (excl. `.tools/`) | `ea756242127343ed2cacd19c38c9154d6f3b06ac79a9c562e766cf0c2acd2342` |
 | Local HEAD | `7aa145b1287fdb88fa6914dc65372ce5fb1171ce` |
+
+## Current — immutable B review candidate (coordinator-supplied)
+
+| Item | Value |
+|------|--------|
+| Local HEAD (fixture repair GO baseline) | `b2572ca844c21f444e79f253fc60b9295a67cb05` |
+| vs published #404 `c7ff361e` patch bytes | **41,733** |
+| Patch SHA-256 | `144d5e470053c0790a5e29bc0aa7290fdc62ca5ec666b583e9e5b88202790fc9` |
+| Independent native review | **GO — fixture repair only** (not contract freeze / integration / live / merge / publication) |
+| Export copy (Files) | `/tmp/b-repair-export.txt` (gzip+base64 transport of patch; export-only gitleaks pass) |
+| Post-GO local cleanup | Planned/applied on owned paths only; **not pushed** until coordinator releases |
 
 ## Current gate posture
 

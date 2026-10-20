@@ -6,7 +6,7 @@
 **Tests run (isolated worktree, no network):**  
 `node --import tsx --import ./src/testinfra/register-no-ambient-inference.mjs --test src/research/v2/**/*.test.ts` → **8/8 pass**
 
-**Superseded by:** `REVISED_CONTRACT_CHECKPOINT.md` and `contract-regression/aCheckpoint59cd561b.regression.test.ts`.
+**Superseded by:** `REVISED_CONTRACT_CHECKPOINT.md` and `contract-regression/aCheckpoint59cd561b.characterization.test.ts`.
 
 ## Verdict: FIX (checkpoint.2 required before M1)
 
