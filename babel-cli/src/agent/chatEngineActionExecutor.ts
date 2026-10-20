@@ -53,7 +53,6 @@ import {
 import { mutationPathsFromSessionEvents } from "../evidence/chatRevisionBinding.js";
 import {
   executeActionWithPolicy,
-  defaultToolExecutor,
   type PolicyGatedExecutionResult,
 } from "./toolExecutor.js";
 import { governedStrReplace } from "./governedMutations.js";
@@ -775,7 +774,7 @@ export class ChatEngineActionExecutor {
             projectRoot: requireProjectRoot(this.host.options),
             context: toolContext,
             preset: "workspace_write",
-            executor: defaultToolExecutor,
+            executor: this.host.resolveToolExecutor(),
             onDispatchAuthorized: () => recoveredAuthorization,
             onBeforeExecutorExecute: () =>
               this.host.persistToolStartedAtExecutorDispatch(action, meta),
@@ -1309,7 +1308,7 @@ export class ChatEngineActionExecutor {
           : "workspace_write",
         toolContext,
         {
-          executor: defaultToolExecutor,
+          executor: this.host.resolveToolExecutor(),
           mode:
             this.host.executionProfile === "plan"
               ? "plan"
@@ -1433,6 +1432,10 @@ export class ChatEngineActionExecutor {
             emptyStdout: lastResult.stdout.trim() === "",
             stderr: lastResult.stderr,
             policyBlocked: result.policyBlocked === true,
+            // Trusted capability evidence comes only from the executor's typed
+            // host-origin launch failure — never from child stderr, which a
+            // failed command could forge.
+            capabilityFailure: lastResult.launch_failure !== undefined,
           });
           if (rec.notice) {
             obsParts.push(`\n[BABEL ADVISORY] ${rec.notice}`);

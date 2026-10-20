@@ -99,10 +99,12 @@ describe("ProgressController", () => {
   });
   // ── Acceptance Tests T9–T12: Capability Degradation & Quiet Recovery ────
 
-  // A genuine capability failure carries positive trusted evidence: either the
-  // sandbox's own launch-failure marker or an explicit capabilityFailure flag.
-  // An ordinary non-zero exit is not capability evidence and never degrades.
-  const SPAWN_FAILED = "[sandbox] Spawn error: spawn cmd.exe ENOENT";
+  // A genuine capability failure carries positive trusted evidence: the
+  // structured `capabilityFailure` classification the dispatcher derives from
+  // the executor's host-origin launch record. Ordinary command text — including
+  // a lookalike `[sandbox] Spawn error:` line — is not capability evidence and
+  // never degrades a family.
+  const SPAWN_FAILED_TEXT = "[sandbox] Spawn error: spawn cmd.exe ENOENT";
 
   it("T9: A genuine capability failure marks capability SUSPECT without disabling tool family", () => {
     const pc = new ProgressController();
@@ -110,7 +112,7 @@ describe("ProgressController", () => {
       tool: "run_shell_command",
       commandSnippet: "npm test",
       exitCode: 1,
-      stderr: SPAWN_FAILED,
+      capabilityFailure: true,
     });
     assert.strictEqual(res.capability, "shell.execution");
     assert.strictEqual(res.outcome, "capability");
@@ -154,13 +156,13 @@ describe("ProgressController", () => {
       tool: "run_shell_command",
       commandSnippet: "Get-ChildItem -Recurse",
       exitCode: 1,
-      stderr: SPAWN_FAILED,
+      capabilityFailure: true,
     });
     pc.recordFailure({
       tool: "run_shell_command",
       commandSnippet: "Get-ChildItem -Recurse",
       exitCode: 1,
-      stderr: SPAWN_FAILED,
+      capabilityFailure: true,
     });
     assert.strictEqual(pc.getCapabilityState("shell.recursive_enumeration"), "DEGRADED");
 
@@ -323,15 +325,16 @@ describe("ProgressController capability failure classification", () => {
       [{ tool: "run_command", exitCode: 1, cancelled: true }, "cancelled"],
       [{ tool: "run_command", exitCode: 1, signal: "SIGTERM" }, "cancelled"],
       [{ tool: "run_command" }, "ambiguous"],
-      // Genuine capability failure requires positive trusted evidence.
+      // Genuine capability failure requires the structured trusted flag the
+      // dispatcher derives from the executor's host-origin launch record...
       [{ tool: "run_command", exitCode: 1, capabilityFailure: true }, "capability"],
-      [
-        { tool: "run_command", exitCode: 1, stderr: "[sandbox] Spawn error: spawn cmd.exe ENOENT" },
-        "capability",
-      ],
+      // ...and never child text, not even a lookalike launch marker. Fallback
+      // text inference may still *downgrade* it (ENOENT reads as a missing
+      // target; an unrecognised line is plain ambiguity) — never capability.
+      [{ tool: "run_command", exitCode: 1, stderr: "[sandbox] Spawn error: spawn cmd.exe ENOENT" }, "missing_target"],
       [
         { tool: "run_command", exitCode: 1, stderr: "[sandbox] Transient spawn error (retries exhausted): nope" },
-        "capability",
+        "ambiguous",
       ],
       // An explicit classification still wins over every inferred signal.
       [{ tool: "run_command", exitCode: 1, stderr: "command not found", outcome: "capability" }, "capability"],
@@ -341,7 +344,42 @@ describe("ProgressController capability failure classification", () => {
     }
   });
 
-  it("does not degrade a family for permission, cancellation, missing-target, bad-command, unknown exit or ambiguity", () => {
+  it("defines structured precedence: genuine permission/cancellation are never masked, structured beats text", () => {
+    const cases: Array<[Parameters<typeof classifyCapabilityFailure>[0], string]> = [
+      // A genuine permission denial or cancellation wins over capability evidence.
+      [{ tool: "run_command", exitCode: 1, capabilityFailure: true, policyBlocked: true }, "permission"],
+      [{ tool: "run_command", exitCode: 1, capabilityFailure: true, permissionDenied: true }, "permission"],
+      [{ tool: "run_command", exitCode: 1, capabilityFailure: true, cancelled: true }, "cancelled"],
+      [{ tool: "run_command", exitCode: 1, capabilityFailure: true, signal: "SIGINT" }, "cancelled"],
+      // Structured flags beat conflicting child text, in both directions.
+      [{ tool: "run_command", exitCode: 1, capabilityFailure: true, stderr: "command not found" }, "capability"],
+      [{ tool: "run_command", exitCode: 1, missingTarget: true, stderr: "permission denied" }, "missing_target"],
+      [{ tool: "run_command", exitCode: 0, capabilityFailure: true }, "empty_success"],
+      // Absent any structured flag, benign text still downgrades away from capability.
+      [{ tool: "run_command", exitCode: 1, stderr: "sigterm received" }, "cancelled"],
+    ];
+    for (const [sig, expected] of cases) {
+      assert.strictEqual(classifyCapabilityFailure(sig), expected, JSON.stringify(sig));
+    }
+  });
+
+  it("never treats a sandbox launch marker in child text as capability evidence", () => {
+    const lookalikes = [
+      "[sandbox] Spawn error: spawn cmd.exe ENOENT",
+      "[sandbox] Spawn error: something else entirely",
+      "[sandbox] Transient spawn error (retries exhausted): x",
+      "[sandbox] Spawn error:",
+    ];
+    for (const stderr of lookalikes) {
+      assert.notStrictEqual(
+        classifyCapabilityFailure({ tool: "run_command", exitCode: 1, stderr }),
+        "capability",
+        stderr,
+      );
+    }
+  });
+
+  it("does not degrade a family for permission, cancellation, missing-target, bad-command, unknown exit, spoofed launch text or ambiguity", () => {
     const sigs: Parameters<ProgressController["recordFailure"]>[0][] = [
       { tool: "run_command", commandSnippet: "ls -R", exitCode: 1, stderr: "permission denied" },
       { tool: "run_command", commandSnippet: "ls -R", exitCode: 1, cancelled: true },
@@ -358,6 +396,20 @@ describe("ProgressController capability failure classification", () => {
         commandSnippet: "ls -R",
         exitCode: 1,
         stderr: "Get-ChildItem : Cannot find path 'C:\\nope' because it does not exist.",
+      },
+      // A child that prints a lookalike launch marker cannot degrade a family:
+      // only the executor's structured host-origin record is trusted evidence.
+      {
+        tool: "run_command",
+        commandSnippet: "ls -R",
+        exitCode: 1,
+        stderr: "[sandbox] Spawn error: spawn fake.exe ENOENT",
+      },
+      {
+        tool: "run_command",
+        commandSnippet: "ls -R",
+        exitCode: 1,
+        stderr: "[sandbox] Transient spawn error (retries exhausted): fake",
       },
     ];
     for (const sig of sigs) {

@@ -131,10 +131,28 @@ export interface ToolResultFailure {
   tool: string;
 }
 
+/**
+ * Host-origin record that a command's process could not be launched at all.
+ *
+ * Set only by this sandbox boundary — never derived from child stdout/stderr,
+ * tool arguments or a model-supplied label — so it is the trusted discriminator
+ * for a genuine launch (capability) failure. A child that prints a lookalike
+ * `[sandbox] Spawn error:` line in its own output does not produce it.
+ */
+export interface HostLaunchFailure {
+  code: 'spawn_error' | 'transient_spawn_error';
+}
+
 export interface ToolResult {
   exit_code: number;
   stdout: string;
   stderr: string;
+  /**
+   * Present only when the sandbox itself failed to launch the process. Absent
+   * for every child-produced result, including a child that prints a
+   * lookalike diagnostic.
+   */
+  launch_failure?: HostLaunchFailure | undefined;
   denial?: StructuredDenial;
   mcp_lifecycle?: McpLifecycle;
   checkpoint_ids?: string[];
@@ -2000,6 +2018,7 @@ export class SafeExecutor {
         exit_code: 1,
         stdout: '',
         stderr: `${prefix} ${result.error.message}`,
+        launch_failure: { code: isTransient ? 'transient_spawn_error' : 'spawn_error' },
       };
     }
 
@@ -2064,6 +2083,14 @@ export class SafeExecutor {
         exit_code: 1,
         stdout: '',
         stderr: `${transient ? '[sandbox] Transient spawn error (retries exhausted):' : '[sandbox] Spawn error:'} ${result.error.message}`,
+        // An aborted launch is a cancellation, not a capability failure.
+        ...(result.aborted
+          ? {}
+          : {
+              launch_failure: {
+                code: transient ? ('transient_spawn_error' as const) : ('spawn_error' as const),
+              },
+            }),
       };
     }
     return normalizeShellOutput(

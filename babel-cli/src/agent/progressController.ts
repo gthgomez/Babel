@@ -72,8 +72,10 @@ export interface FailureSignature {
   missingTarget?: boolean | undefined;
   /**
    * Explicit trusted positive evidence that the tool family itself failed to
-   * execute, supplied only by a trusted boundary (never inferred from ordinary
-   * command text). Required before an outcome may be classified `capability`.
+   * execute. The dispatcher sets this only from the executor's structured
+   * host-origin launch failure; it is never inferred from child output, tool
+   * arguments or a model-supplied label. Required before an outcome may be
+   * classified `capability`.
    */
   capabilityFailure?: boolean | undefined;
 }
@@ -87,46 +89,38 @@ const BAD_COMMAND_RE = /\b(?:command not found|not recognized as an internal or 
 // failures. Deliberately narrow: these phrases only ever downgrade a failure to
 // a benign class, so a wider match can never over-degrade a family.
 const MISSING_TARGET_RE = /\b(?:enoent|no such file or directory|cannot find (?:the )?(?:path|file)|the system cannot find the (?:file|path)|path not found)\b/i;
-/**
- * First-party evidence from Babel's own sandbox boundary that the process could
- * not be launched at all. That is a genuine capability failure (the tool family
- * itself is unusable), unlike ordinary command text, and is emitted only by the
- * sandbox — so it is trusted positive evidence rather than a command-supplied
- * English diagnostic.
- */
-const TRUSTED_SPAWN_FAILURE_RE = /\[sandbox\] (?:Transient spawn error \(retries exhausted\)|Spawn error):/;
 
 /**
- * Classify an observed outcome. Explicit caller flags win over inference so the
- * dispatcher can supply trusted context, and inference is fail-safe: recognizing
- * a benign class (cancellation, permission, bad command, missing target, empty
- * success) can only *prevent* a false degradation, so those patterns stay
- * conservative but may be broadened exactly.
+ * Classify an observed outcome.
  *
- * A `capability` outcome is never inferred. It requires positive trusted
- * evidence — an explicit caller classification or the sandbox's own
- * launch-failure marker — because an unrecognized non-zero exit is not proof
- * that the tool family itself is broken. Everything unclassified is reported as
- * `ambiguous` (a command/ambiguity diagnostic) and never degrades a family.
+ * Precedence is deliberate and two-tiered:
+ *
+ *  1. An explicit `outcome` wins outright (caller owns the classification).
+ *  2. Structured signals supplied by trusted code — the dispatcher, translating
+ *     the executor's typed result — in a fixed order: cancellation, permission,
+ *     empty success, bad command, missing target, then capability. A genuine
+ *     permission or cancellation therefore always beats capability evidence;
+ *     capability never masks them.
+ *  3. Text inference last, and only for the *benign* classes (cancellation,
+ *     permission, bad command, missing target). Text can only downgrade an
+ *     outcome away from capability, so a hostile or merely chatty child cannot
+ *     promote its own failure into a capability judgement.
+ *
+ * A `capability` outcome is therefore never inferred from child text. It
+ * requires an explicit trusted classification, and everything unclassified is
+ * reported as `ambiguous` — never degrading a tool family.
  */
 export function classifyCapabilityFailure(sig: FailureSignature): CapabilityFailureClass {
   if (sig.outcome) return sig.outcome;
-  const stderr = sig.stderr ?? '';
-  if (sig.cancelled === true || sig.signal === 'SIGINT' || sig.signal === 'SIGTERM' || CANCELLED_RE.test(stderr)) {
-    return 'cancelled';
-  }
-  if (sig.permissionDenied === true || sig.policyBlocked === true || PERMISSION_RE.test(stderr)) {
-    return 'permission';
-  }
+  if (sig.cancelled === true || sig.signal === 'SIGINT' || sig.signal === 'SIGTERM') return 'cancelled';
+  if (sig.permissionDenied === true || sig.policyBlocked === true) return 'permission';
   if (sig.exitCode === 0) return 'empty_success';
-  // Explicit trusted flags win over any text inference.
   if (sig.badCommand === true) return 'bad_command';
   if (sig.missingTarget === true) return 'missing_target';
-  // Positive trusted evidence of a family-wide capability failure — an explicit
-  // caller flag or the sandbox's own launch-failure marker — precedes the
-  // benign-class text patterns. A launch failure already carries "ENOENT",
-  // which must not be misread as a missing *target*.
-  if (sig.capabilityFailure === true || TRUSTED_SPAWN_FAILURE_RE.test(stderr)) return 'capability';
+  if (sig.capabilityFailure === true) return 'capability';
+  const stderr = sig.stderr ?? '';
+  if (CANCELLED_RE.test(stderr)) return 'cancelled';
+  if (PERMISSION_RE.test(stderr)) return 'permission';
   if (BAD_COMMAND_RE.test(stderr)) return 'bad_command';
   if (MISSING_TARGET_RE.test(stderr)) return 'missing_target';
   return 'ambiguous';

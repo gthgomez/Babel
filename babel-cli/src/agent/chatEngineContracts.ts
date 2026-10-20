@@ -860,6 +860,13 @@ export interface ChatEngineActionExecutorHost {
   }
   recoveryStatePersistenceUnavailable: boolean
   requireTodoBeforeMutate: boolean
+  /**
+   * The tool executor used for governed dispatch. Defaults to the shared
+   * `defaultToolExecutor`. A test may inject a per-instance replacement; it is
+   * deliberately not settable from model input, the CLI, the environment or any
+   * persisted/selectable override, and it never bypasses policy or admission.
+   */
+  resolveToolExecutor: () => import('./toolExecutor.js').ToolExecutor
   runPostEditStaticCheck: (filePath: string) => Promise<string | null>
   invalidateRepositoryContext: (paths: readonly string[], reason: string) => void
   settleStaleActionResult: (
