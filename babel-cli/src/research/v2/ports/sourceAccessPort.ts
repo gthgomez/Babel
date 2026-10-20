@@ -1,21 +1,12 @@
+import type { AdmittedContent } from '../contracts/admittedContent.js'
 import type { SourceClassSchema } from '../contracts/mission.js'
-import type { SourceRecord, SourceRevision } from '../contracts/sources.js'
-import type { PassageRecord } from '../contracts/passages.js'
+import type { SourceRecord } from '../contracts/sources.js'
+import type { SourceAccessFailureCategory } from './sourceAccessTypes.js'
 import type { z } from 'zod'
 
 export type SourceClass = z.infer<typeof SourceClassSchema>
 
-export type SourceAccessFailureCategory =
-  | 'policy_denied'
-  | 'network_error'
-  | 'timeout'
-  | 'not_found'
-  | 'rate_limited'
-  | 'truncated'
-  | 'extraction_failed'
-  | 'unsupported_media'
-  | 'private_address_blocked'
-  | 'cancelled'
+export type { SourceAccessFailureCategory } from './sourceAccessTypes.js'
 
 export interface SourceSearchRequest {
   operationId: string
@@ -27,48 +18,39 @@ export interface SourceSearchRequest {
 export interface SourceSearchHit {
   source: SourceRecord
   snippet: string
-  /** Discovery evidence only until a primary read succeeds. */
   completeness: 'metadata_only' | 'snippet'
 }
 
-export interface SourceSearchResult {
-  operationId: string
-  hits: SourceSearchHit[]
-}
+export type SourceSearchResult =
+  | { operationId: string; status: 'ok'; hits: SourceSearchHit[] }
+  | {
+      operationId: string
+      status: 'failed'
+      failureCategory: SourceAccessFailureCategory
+      message: string
+    }
+  | { operationId: string; status: 'cancelled' }
 
-export interface SourceReadRequest {
+export interface SourceFetchRequest {
   operationId: string
   source: SourceRecord
   signal: AbortSignal
 }
 
-export type SourceReadResult =
+export type SourceFetchResult =
+  | { operationId: string; status: 'ok'; admitted: AdmittedContent }
   | {
-      status: 'ok'
       operationId: string
-      revision: SourceRevision
-      passages: PassageRecord[]
-    }
-  | {
-      status: 'partial'
-      operationId: string
-      revision: SourceRevision
-      passages: PassageRecord[]
-      failureCategory: SourceAccessFailureCategory
-      message: string
-    }
-  | {
       status: 'failed'
-      operationId: string
       failureCategory: SourceAccessFailureCategory
       message: string
     }
+  | { operationId: string; status: 'cancelled' }
 
 /**
- * Admitted search/fetch/read boundary. Enforces network policy and size limits.
- * Adapters receive this port; they do not perform ambient fetch or shell access.
+ * Admitted search/fetch boundary. Network policy and byte limits enforced here only.
  */
 export interface SourceAccessPort {
   search(request: SourceSearchRequest): Promise<SourceSearchResult>
-  read(request: SourceReadRequest): Promise<SourceReadResult>
+  fetchContent(request: SourceFetchRequest): Promise<SourceFetchResult>
 }

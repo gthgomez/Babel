@@ -1,11 +1,13 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
+import { CostProvenanceSchema } from './common.js'
 import { FindingRecordSchema } from './findings.js'
 import { ResearchMissionV2Schema } from './mission.js'
-import { PassageRecordSchema } from './passages.js'
+import { PassageRecordSchema, PassageLocatorSchema, PassageTextRefSchema } from './passages.js'
 import { ResearchStateSnapshotV2Schema } from './plan.js'
 import { SourceRevisionSchema } from './sources.js'
 import { RESEARCH_V2_CONTRACT_VERSION } from './version.js'
+import { normalizeGeneralMissionBrief } from './normalization.js'
 import {
   examplePlanRevisionFixture,
   exampleTechnicalMissionFixture,
@@ -15,33 +17,66 @@ describe('research v2 contracts', () => {
   it('parses example technical mission fixture', () => {
     const parsed = ResearchMissionV2Schema.parse(exampleTechnicalMissionFixture)
     assert.equal(parsed.contract_version, RESEARCH_V2_CONTRACT_VERSION)
-    assert.equal(parsed.as_of, '2026-10-20')
-    assert.equal(parsed.jurisdiction, 'unknown')
+    assert.equal(parsed.model_route.fixture_route, true)
   })
 
-  it('rejects invented citation passage without valid hash', () => {
+  it('rejects invalid passage text reference shapes', () => {
     assert.throws(() =>
-      PassageRecordSchema.parse({
-        passage_id: 'p1',
-        source_revision_id: 'r1',
-        locator: { kind: 'page', start: 1 },
-        text_ref: { mode: 'inline', text: 'hello', text_hash: 'not-a-hash' },
+      PassageTextRefSchema.parse({
+        mode: 'inline',
+        text_hash: 'a'.repeat(64),
+      }),
+    )
+    assert.throws(() =>
+      PassageTextRefSchema.parse({
+        mode: 'blob_ref',
+        text_hash: 'a'.repeat(64),
       }),
     )
   })
 
-  it('keeps source integrity separate from semantic support', () => {
-    const finding = FindingRecordSchema.parse({
-      finding_id: 'f1',
-      question_id: 'q1',
-      assertion_text: 'Observed export omits bytes when incomplete.',
-      assertion_kind: 'source_observation',
-      passage_ids: ['p1'],
-      source_integrity: 'not_checked',
-      created_at: '2026-10-20T12:00:00.000Z',
+  it('rejects page zero and inverted line ranges', () => {
+    assert.throws(() =>
+      PassageLocatorSchema.parse({ kind: 'page', start_page: 0 }),
+    )
+    assert.throws(() =>
+      PassageLocatorSchema.parse({ kind: 'line_range', start_line: 3, end_line: 1 }),
+    )
+  })
+
+  it('accepts valid PDF page locator', () => {
+    const locator = PassageLocatorSchema.parse({ kind: 'page', start_page: 2, end_page: 2 })
+    assert.equal(locator.kind, 'page')
+  })
+
+  it('cost unknown must not carry fake amount', () => {
+    assert.throws(() =>
+      CostProvenanceSchema.parse({ status: 'unknown', amount_usd: 0 }),
+    )
+    const reported = CostProvenanceSchema.parse({
+      status: 'reported',
+      amount_usd: 0.01,
+      currency: 'USD',
     })
-    assert.equal(finding.semantic_support, undefined)
-    assert.equal(finding.source_integrity, 'not_checked')
+    assert.equal(reported.status, 'reported')
+  })
+
+  it('normalizes general mission brief without cast', () => {
+    const mission = normalizeGeneralMissionBrief(
+      {
+        profile_id: 'general',
+        primary_question: 'What is the fee?',
+        as_of: '2026-06-15',
+        constraints: { currency: 'USD' },
+      },
+      {
+        mission_id: 'mission-g-dev-03',
+        created_at: '2026-10-20T12:00:00.000Z',
+        profile_version: '0.0.0-checkpoint',
+      },
+    )
+    assert.equal(mission.model_route.fixture_route, true)
+    assert.ok(mission.constraints.some((c) => c.includes('currency')))
   })
 
   it('bundles snapshot shape for inspect/resume design', () => {
@@ -67,5 +102,15 @@ describe('research v2 contracts', () => {
       completeness: 'metadata_only',
     })
     assert.equal(rev.completeness, 'metadata_only')
+  })
+
+  it('issued passage requires revision binding', () => {
+    const passage = PassageRecordSchema.parse({
+      passage_id: 'passage-issued-1',
+      source_revision_id: 'rev-1',
+      locator: { kind: 'page', start_page: 1 },
+      text_ref: { mode: 'inline', text: 'hello', text_hash: 'a'.repeat(64) },
+    })
+    assert.equal(passage.source_revision_id, 'rev-1')
   })
 })

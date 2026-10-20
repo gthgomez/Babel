@@ -9,7 +9,10 @@ export const AssertionKindSchema = z.enum([
   'proposal',
 ])
 
-export const SourceIntegrityResultSchema = z.enum([
+/** Citation / hash / locator integrity — not semantic truth. */
+export const SourceIntegrityStateSchema = z.enum(['valid', 'invalid', 'not_checked'])
+
+export const SemanticSupportStatusSchema = z.enum([
   'supported',
   'contradicted',
   'insufficient',
@@ -18,7 +21,7 @@ export const SourceIntegrityResultSchema = z.enum([
 
 export const SemanticSupportJudgmentSchema = z
   .object({
-    status: SourceIntegrityResultSchema,
+    status: SemanticSupportStatusSchema,
     reviewer: z.string().min(1),
     reviewer_version: z.string().min(1),
     rationale: z.string().min(1),
@@ -32,8 +35,8 @@ export const FindingRecordSchema = z
     question_id: RecordIdSchema,
     assertion_text: z.string().min(1),
     assertion_kind: AssertionKindSchema,
-    passage_ids: z.array(RecordIdSchema),
-    source_integrity: SourceIntegrityResultSchema,
+    passage_ids: z.array(RecordIdSchema).min(1),
+    source_integrity: SourceIntegrityStateSchema,
     semantic_support: SemanticSupportJudgmentSchema.optional(),
     assumption_ids: z.array(RecordIdSchema).optional(),
     conflicting_finding_ids: z.array(RecordIdSchema).optional(),

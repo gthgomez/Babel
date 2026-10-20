@@ -2,7 +2,7 @@ import { ResearchMissionV2Schema } from '../contracts/mission.js'
 import { PlanRevisionSchema } from '../contracts/plan.js'
 import { RESEARCH_V2_CONTRACT_VERSION } from '../contracts/version.js'
 
-/** Fixture mission for contract review — not executed by an engine in checkpoint M0. */
+/** Fixture mission for contract review — not a live OpenRouter route. */
 export const exampleTechnicalMissionFixture = ResearchMissionV2Schema.parse({
   schema_version: 'research-mission-v2',
   contract_version: RESEARCH_V2_CONTRACT_VERSION,
@@ -31,9 +31,10 @@ export const exampleTechnicalMissionFixture = ResearchMissionV2Schema.parse({
     resolved_budget_label: 'host-resolved-normal',
   },
   model_route: {
-    backend_key: 'deepseek-v4-flash-openrouter',
-    provider: 'openrouter',
-    provider_model_id: 'deepseek/deepseek-v4-flash-0731',
+    backend_key: 'fixture-model-route',
+    provider: 'fixture',
+    provider_model_id: 'fixture/technical-research-model',
+    fixture_route: true,
   },
   pinned_target_repository: {
     provider: 'github',
@@ -66,3 +67,9 @@ export const examplePlanRevisionFixture = PlanRevisionSchema.parse({
     },
   ],
 })
+
+export const exampleMissionWriteContext = {
+  mission_id: exampleTechnicalMissionFixture.mission_id,
+  plan_revision_id: examplePlanRevisionFixture.plan_revision_id,
+  writer_generation: 0,
+}

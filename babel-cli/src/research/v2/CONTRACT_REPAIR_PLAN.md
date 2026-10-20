@@ -1,6 +1,6 @@
 # Contract repair plan (local, pre-consolidated review)
 
-**Status:** blocked on consolidated independent #405 final report + B agreement.  
+**Status:** superseded by local implementation of `2026.10.20-checkpoint.2` (not pushed; await review).  
 **Current frozen head:** `59cd561b2414fcc32253de568c70285517eae1cd`  
 **Remote writes / revised checkpoint:** **held**
 

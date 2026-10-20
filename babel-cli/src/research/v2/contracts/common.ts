@@ -21,17 +21,59 @@ export const TimeRangeSchema = z
 
 export const ContentHashSchema = z.string().regex(/^[a-f0-9]{64}$/i, 'expected sha256 hex')
 
+/** Required on every store append after the initial mission write. */
+export const MissionWriteContextSchema = z
+  .object({
+    mission_id: RecordIdSchema,
+    plan_revision_id: RecordIdSchema,
+    /** Monotonic owner generation; stale writes fail closed. */
+    writer_generation: z.number().int().nonnegative(),
+  })
+  .strict()
+export type MissionWriteContext = z.infer<typeof MissionWriteContextSchema>
+
+export const CostProvenanceSchema = z.discriminatedUnion('status', [
+  z
+    .object({
+      status: z.literal('reported'),
+      amount_usd: z.number().nonnegative(),
+      currency: z.literal('USD'),
+    })
+    .strict(),
+  z
+    .object({
+      status: z.literal('estimated'),
+      amount_usd: z.number().nonnegative(),
+      method: z.string().min(1),
+      as_of: IsoDateTimeSchema,
+    })
+    .strict(),
+  z.object({ status: z.literal('unknown') }).strict(),
+])
+export type CostProvenance = z.infer<typeof CostProvenanceSchema>
+
+export const UsageSettlementSchema = z
+  .object({
+    input_tokens: z.number().int().nonnegative().optional(),
+    output_tokens: z.number().int().nonnegative().optional(),
+    cache_read_tokens: z.number().int().nonnegative().optional(),
+    reasoning_tokens: z.number().int().nonnegative().optional(),
+    cost: CostProvenanceSchema,
+    attempt_id: RecordIdSchema,
+  })
+  .strict()
+export type UsageSettlement = z.infer<typeof UsageSettlementSchema>
+
 export const ModelRouteReferenceSchema = z
   .object({
-    /** Host config key or explicit backend name; not a secret. */
     backend_key: z.string().min(1),
     provider: z.string().min(1),
-    /** Resolved upstream model slug when known. */
     provider_model_id: z.string().min(1).optional(),
+    /** True for corpus/fixture routes — not a live selected backend. */
+    fixture_route: z.boolean().optional(),
   })
   .strict()
 
-/** Non-secret routing receipt bound to a single admitted invocation. */
 export const ModelRouteReceiptSchema = z
   .object({
     operation_id: RecordIdSchema,
@@ -39,22 +81,12 @@ export const ModelRouteReceiptSchema = z
     provider: z.string().min(1),
     provider_model_id: z.string().min(1),
     resolved_at: IsoDateTimeSchema,
-    /** Host-native usage fields; never API keys or raw env. */
-    usage: z
-      .object({
-        input_tokens: z.number().int().nonnegative().optional(),
-        output_tokens: z.number().int().nonnegative().optional(),
-        total_cost_usd: z.number().nonnegative().optional(),
-        cost_status: z.enum(['reported', 'estimated', 'unknown']),
-      })
-      .strict()
-      .optional(),
+    usage_settlement: UsageSettlementSchema,
   })
   .strict()
 
 export const HostEffortPolicySchema = z
   .object({
-    /** Resolved by host from mission + global policy; models cannot raise these. */
     preset_name: z.enum(['low', 'normal', 'deep']).optional(),
     resolved_budget_label: z.string().min(1),
   })

@@ -4,21 +4,24 @@ export type {
   ResearchModelInvocationResult,
   ResearchModelOperationKind,
   ModelRouteReceipt,
+  UsageSettlement,
 } from './researchModelPort.js'
 export type {
   SourceAccessPort,
-  SourceAccessFailureCategory,
   SourceSearchRequest,
   SourceSearchResult,
   SourceSearchHit,
-  SourceReadRequest,
-  SourceReadResult,
+  SourceFetchRequest,
+  SourceFetchResult,
   SourceClass,
 } from './sourceAccessPort.js'
+export type { SourceAccessFailureCategory } from './sourceAccessTypes.js'
 export type {
   SourceAdapter,
   SourceDiscoverRequest,
   SourceDiscoverResult,
+  SourceAdapterReadRequest,
+  SourceAdapterReadResult,
   SourceAdapterRegistry,
 } from './sourceAdapter.js'
 export type {
@@ -26,6 +29,7 @@ export type {
   ResearchStoreEvent,
   ResearchStoreEventKind,
   ResearchStoreWriteResult,
+  ResearchStoreMissionHandle,
 } from './researchStore.js'
 export type {
   ResearchProfileDefinition,

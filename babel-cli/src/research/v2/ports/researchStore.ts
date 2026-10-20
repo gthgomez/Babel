@@ -1,4 +1,10 @@
+import type { MissionWriteContext } from '../contracts/common.js'
 import type { FindingRecord } from '../contracts/findings.js'
+import type {
+  ExternalOperationCompletion,
+  ExternalOperationIntent,
+  ExternalOperationReconciliation,
+} from '../contracts/operations.js'
 import type { PlanRevision, ResearchReportV2 } from '../contracts/plan.js'
 import type { PassageRecord } from '../contracts/passages.js'
 import type { ResearchMissionV2 } from '../contracts/mission.js'
@@ -15,6 +21,7 @@ export type ResearchStoreEventKind =
   | 'model_invocation_completed'
   | 'external_operation_intent'
   | 'external_operation_completed'
+  | 'external_operation_reconciled'
   | 'terminal_receipt'
 
 export interface ResearchStoreEvent {
@@ -29,18 +36,43 @@ export interface ResearchStoreWriteResult {
   eventId: string
 }
 
-/**
- * Atomic record/event writes and deterministic resume reconstruction.
- * Single mission-writer ownership enforced by host.
- */
+export interface ResearchStoreMissionHandle {
+  mission_id: string
+  writer_generation: number
+}
+
 export interface ResearchStore {
-  appendMission(mission: ResearchMissionV2): Promise<ResearchStoreWriteResult>
-  appendPlanRevision(plan: PlanRevision): Promise<ResearchStoreWriteResult>
-  appendSource(source: SourceRecord): Promise<ResearchStoreWriteResult>
-  appendSourceRevision(revision: SourceRevision): Promise<ResearchStoreWriteResult>
-  appendPassage(passage: PassageRecord): Promise<ResearchStoreWriteResult>
-  appendFinding(finding: FindingRecord): Promise<ResearchStoreWriteResult>
-  appendModelReceipt(receipt: ModelRouteReceipt): Promise<ResearchStoreWriteResult>
-  appendTerminalReport(report: ResearchReportV2): Promise<ResearchStoreWriteResult>
+  appendMission(mission: ResearchMissionV2): Promise<ResearchStoreMissionHandle>
+  appendPlanRevision(
+    ctx: MissionWriteContext,
+    plan: PlanRevision,
+  ): Promise<ResearchStoreWriteResult>
+  appendSource(ctx: MissionWriteContext, source: SourceRecord): Promise<ResearchStoreWriteResult>
+  appendSourceRevision(
+    ctx: MissionWriteContext,
+    revision: SourceRevision,
+  ): Promise<ResearchStoreWriteResult>
+  appendPassage(ctx: MissionWriteContext, passage: PassageRecord): Promise<ResearchStoreWriteResult>
+  appendFinding(ctx: MissionWriteContext, finding: FindingRecord): Promise<ResearchStoreWriteResult>
+  appendModelReceipt(
+    ctx: MissionWriteContext,
+    receipt: ModelRouteReceipt,
+  ): Promise<ResearchStoreWriteResult>
+  appendExternalOperationIntent(
+    ctx: MissionWriteContext,
+    intent: ExternalOperationIntent,
+  ): Promise<ResearchStoreWriteResult>
+  appendExternalOperationCompleted(
+    ctx: MissionWriteContext,
+    completion: ExternalOperationCompletion,
+  ): Promise<ResearchStoreWriteResult>
+  appendExternalOperationReconciled(
+    ctx: MissionWriteContext,
+    reconciliation: ExternalOperationReconciliation,
+  ): Promise<ResearchStoreWriteResult>
+  appendTerminalReport(
+    ctx: MissionWriteContext,
+    report: ResearchReportV2,
+  ): Promise<ResearchStoreWriteResult>
   listEvents(missionId: string): Promise<readonly ResearchStoreEvent[]>
 }

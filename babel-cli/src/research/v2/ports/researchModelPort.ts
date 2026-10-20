@@ -1,34 +1,44 @@
-import type { ModelRouteReceiptSchema } from '../contracts/common.js'
+import type { ModelRouteReceiptSchema, UsageSettlementSchema } from '../contracts/common.js'
+import type { ResearchModelOperationKind } from '../contracts/modelOutputs.js'
 import type { z } from 'zod'
 
+export type { ResearchModelOperationKind } from '../contracts/modelOutputs.js'
 export type ModelRouteReceipt = z.infer<typeof ModelRouteReceiptSchema>
-
-export type ResearchModelOperationKind =
-  | 'plan_questions'
-  | 'extract_findings'
-  | 'semantic_support_review'
-  | 'synthesize_report'
+export type UsageSettlement = z.infer<typeof UsageSettlementSchema>
 
 export interface ResearchModelInvocationRequest {
   operationId: string
   kind: ResearchModelOperationKind
-  /** JSON-serializable payload; must not contain secrets or raw source policy escalation. */
   input: Record<string, unknown>
   signal: AbortSignal
 }
 
-export interface ResearchModelInvocationResult<T = Record<string, unknown>> {
-  operationId: string
-  output: T
-  receipt: ModelRouteReceipt
-}
+export type ResearchModelInvocationResult =
+  | {
+      status: 'ok'
+      operationId: string
+      output: Record<string, unknown>
+      receipt: ModelRouteReceipt
+    }
+  | {
+      status: 'failed'
+      operationId: string
+      failureCategory: string
+      message: string
+      usageSettlement: UsageSettlement
+    }
+  | {
+      status: 'cancelled'
+      operationId: string
+      usageSettlement: UsageSettlement
+    }
+  | {
+      status: 'uncertain'
+      operationId: string
+      message: string
+      usageSettlement: UsageSettlement
+    }
 
-/**
- * Async structured model operations delegated to ProviderEngine / OpenRouter admission.
- * Implementations must validate outputs before returning.
- */
 export interface ResearchModelPort {
-  invokeStructured<T extends Record<string, unknown>>(
-    request: ResearchModelInvocationRequest,
-  ): Promise<ResearchModelInvocationResult<T>>
+  invokeStructured(request: ResearchModelInvocationRequest): Promise<ResearchModelInvocationResult>
 }
