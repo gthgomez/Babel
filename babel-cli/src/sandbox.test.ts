@@ -1,5 +1,14 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readFileSync, symlinkSync, writeFileSync, rmSync } from 'node:fs';
+import {
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  symlinkSync,
+  unlinkSync,
+  writeFileSync,
+  rmSync,
+} from 'node:fs';
 import test from 'node:test';
 import childProcess from 'node:child_process';
 import { syncBuiltinESMExports } from 'node:module';
@@ -14,7 +23,7 @@ import {
   normalizeSupervisorTerminatedShellOutput,
   validateExecutorShellCommand,
 } from './sandbox.js';
-import { waitForProcessExit } from './processTree.js';
+import { isProcessAlive, waitForProcessExit } from './processTree.js';
 import { ProcessWitness } from './diagnostics/bdns/processWitness.js';
 import {
   setDockerAvailableForTest,
@@ -951,6 +960,79 @@ test('shellExecAsync preserves shellExec result shape for a successful command',
 });
 
 const SUPERVISOR_LAUNCHED_MARKER = 'BABEL_SUPERVISOR_LAUNCHED';
+const SYNC_SUPERVISOR_PID_FILE = '.supervisor-sync-test.pid';
+/** Matches production Windows tree kill bound in processTree.terminateChildTree. */
+const FIXTURE_TASKKILL_TIMEOUT_MS = 1_500;
+
+/**
+ * Pre-existing production limitation (NOT repaired by this test helper):
+ * shellExec uses spawnSync with timeout only (sandbox.ts ~1956–2012) and does not call
+ * registerPendingProcessTermination. On Windows, prepareShellExecution routes through
+ * cmd.exe (sandbox.ts ~1820–1823), so the wrapper can return after supervisor timeout
+ * while a descendant node process keeps the cwd. This helper only tears down fixture-
+ * recorded PIDs for test isolation; it does not change executor behavior.
+ */
+async function teardownFixtureSupervisorPids(
+  projectRoot: string,
+  pidFileName: string,
+  options: { requireReceipt: boolean },
+): Promise<void> {
+  const pidPath = join(projectRoot, pidFileName);
+  if (!existsSync(pidPath)) {
+    assert.equal(
+      options.requireReceipt,
+      false,
+      'fixture PID receipt file missing after sync supervisor child was expected to launch',
+    );
+    return;
+  }
+  const pids = [
+    ...new Set(
+      readFileSync(pidPath, 'utf8')
+        .split(/\r?\n/)
+        .map((line) => Number(line.trim()))
+        .filter((pid) => Number.isFinite(pid) && pid > 0),
+    ),
+  ];
+  unlinkSync(pidPath);
+  if (options.requireReceipt) {
+    assert.ok(pids.length > 0, 'fixture PID receipt file contained no recorded child PIDs');
+  }
+  for (const pid of pids) {
+    if (!isProcessAlive(pid)) {
+      continue;
+    }
+    if (process.platform === 'win32') {
+      const windowsRoot = process.env['SystemRoot'] || process.env['WINDIR'] || 'C:\\Windows';
+      const killResult = childProcess.spawnSync(
+        join(windowsRoot, 'System32', 'taskkill.exe'),
+        ['/F', '/T', '/PID', String(pid)],
+        { stdio: 'ignore', windowsHide: true, timeout: FIXTURE_TASKKILL_TIMEOUT_MS },
+      );
+      if (killResult.error) {
+        assert.fail(
+          `taskkill must complete within ${FIXTURE_TASKKILL_TIMEOUT_MS}ms for fixture pid ${pid}: ${killResult.error.message}`,
+        );
+      }
+      assert.equal(
+        killResult.status,
+        0,
+        `taskkill must terminate fixture supervisor child pid ${pid} (status ${killResult.status})`,
+      );
+    } else {
+      try {
+        process.kill(pid, 'SIGKILL');
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code !== 'ESRCH') {
+          throw error;
+        }
+      }
+    }
+    const exited = await waitForProcessExit(pid, 5_000);
+    assert.equal(exited, true, `fixture supervisor child pid ${pid} must be dead before cleanup`);
+  }
+}
 
 function assertSupervisorTerminatedNotLaunchFailure(
   result: { exit_code: number; stdout: string; stderr: string; launch_failure?: unknown; denial?: unknown },
@@ -984,12 +1066,15 @@ setTimeout(() => {}, 60_000);
   }
 });
 
-test('shellExec supervisor timeout is not a host launch failure', () => {
+test('shellExec supervisor timeout is not a host launch failure', async () => {
   const fixture = makeFixture();
+  let requirePidReceipt = false;
   try {
     writeFileSync(
       join(fixture.projectRoot, 'timeout-sync.mjs'),
-      `process.stdout.write('${SUPERVISOR_LAUNCHED_MARKER}\\n');
+      `import { appendFileSync } from 'node:fs';
+appendFileSync('${SYNC_SUPERVISOR_PID_FILE}', String(process.pid) + '\\n', 'utf8');
+process.stdout.write('${SUPERVISOR_LAUNCHED_MARKER}\\n');
 process.on('SIGTERM', () => process.exit(0));
 setTimeout(() => {}, 60_000);
 `,
@@ -997,11 +1082,15 @@ setTimeout(() => {}, 60_000);
     );
     const executor = new SafeExecutor(fixture.projectRoot);
     const result = executor.shellExec('node timeout-sync.mjs', '.', 250);
+    requirePidReceipt = result.stdout.includes(SUPERVISOR_LAUNCHED_MARKER);
     assertSupervisorTerminatedNotLaunchFailure(
       result,
       'sync supervisor timeout (SIGTERM exit 0)',
     );
   } finally {
+    await teardownFixtureSupervisorPids(fixture.projectRoot, SYNC_SUPERVISOR_PID_FILE, {
+      requireReceipt: requirePidReceipt,
+    });
     fixture.cleanup();
   }
 });
