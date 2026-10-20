@@ -29,8 +29,13 @@ async function importAModule(relative: string): Promise<Record<string, unknown>>
 function readContractVersion(): string {
   const src = readFileSync(aPath('contracts', 'version.ts'), 'utf8')
   const match = src.match(/RESEARCH_V2_CONTRACT_VERSION\s*=\s*'([^']+)'/)
-  assert.ok(match)
-  return match[1]
+  assert.ok(match, 'RESEARCH_V2_CONTRACT_VERSION assignment not found in A version.ts')
+  const captured = match[1]
+  assert.ok(
+    typeof captured === 'string' && captured.length > 0,
+    'RESEARCH_V2_CONTRACT_VERSION capture group missing under noUncheckedIndexedAccess',
+  )
+  return captured
 }
 
 const characterize = process.env.RESEARCH_V2_CHARACTERIZE_PRE_FIX === '1' && Boolean(aRoot)
