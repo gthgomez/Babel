@@ -42,6 +42,8 @@ export interface SharedProtocolHostRunOptions {
    * Production uses wall time; tests may inject a manual scheduler without changing timeout policy.
    */
   emergencyObservationClock?: SharedProtocolHostRunClock;
+  /** When set, thread.create binds the matching own-CLI harness adapter. */
+  harnessAdapterId?: 'command-code' | 'opencode' | 'babel-native';
 }
 
 /** Wall-clock and timers used for post-emergency-ACK observation bounds. */
@@ -551,6 +553,8 @@ export async function executeSharedProtocolHostRun(
   let releaseTurnObserverAwait: (() => void) | null = null;
   /** Bearer emergency cancel RPC succeeded; terminal outcome still requires authoritative evidence. */
   let emergencyStopAcknowledged = false;
+  /** Post-emergency authoritative recovery should poll RPC instead of waiting on turnDone. */
+  let emergencyAuthoritativeRecoveryPoll = false;
   let emergencyObservationPasses = 0;
   const emergencyTerminalObservationLimit = options.emergencyObservationPassLimit ?? 12;
   const observationRpcTimeoutMs = options.observationRpcTimeoutMs ?? 4_000;
@@ -561,6 +565,9 @@ export async function executeSharedProtocolHostRun(
   let emergencyObservationScopeEpoch = 0;
   const EMERGENCY_OBSERVATION_TIMEOUT_MESSAGE =
     'Emergency stop observation timed out before authoritative terminal was available';
+  /** Primary turn socket may still deliver harness cancel terminals after emergency ACK. */
+  const PRIMARY_TRANSPORT_EMERGENCY_SETTLEMENT_GRACE_MS = 450;
+  let primaryTransportEmergencyWakeTimer: unknown = null;
 
   const abort = () => options.signal?.aborted === true || cancelRequested;
 
@@ -611,6 +618,11 @@ export async function executeSharedProtocolHostRun(
         mode: 'chat',
         ...(model ? { model } : {}),
         ...(provider ? { provider } : {}),
+        ...(options.harnessAdapterId === 'command-code'
+          ? { harness_adapter_id: 'command-code' }
+          : options.harnessAdapterId === 'opencode'
+            ? { harness_adapter_id: 'opencode' }
+            : {}),
       });
       threadId = created.thread_id;
     }
@@ -721,6 +733,10 @@ export async function executeSharedProtocolHostRun(
       if (emergencyObservationDeadlineTimer !== null) {
         emergencyClock.clearTimeout(emergencyObservationDeadlineTimer);
         emergencyObservationDeadlineTimer = null;
+      }
+      if (primaryTransportEmergencyWakeTimer !== null) {
+        emergencyClock.clearTimeout(primaryTransportEmergencyWakeTimer);
+        primaryTransportEmergencyWakeTimer = null;
       }
     };
 
@@ -835,7 +851,37 @@ export async function executeSharedProtocolHostRun(
 
     const wakeTurnObserverTraced = (reason: string): void => {
       emergencyHostRunTrace('observer_wake', { reason, turnSettled });
+      if (!turnSettled) {
+        emergencyAuthoritativeRecoveryPoll = true;
+      }
       (wakeTurnObserver as (() => void) | null)?.();
+    };
+
+    const requestEmergencyObserverWakeAfterReconcile = async (): Promise<void> => {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      if (turnSettled || transportClosedUnexpectedly) {
+        wakeTurnObserverTraced('emergency_stdin_after_reconcile');
+        return;
+      }
+      if (primaryTransportEmergencyWakeTimer !== null) {
+        emergencyClock.clearTimeout(primaryTransportEmergencyWakeTimer);
+        primaryTransportEmergencyWakeTimer = null;
+      }
+      const graceMs = Math.min(
+        PRIMARY_TRANSPORT_EMERGENCY_SETTLEMENT_GRACE_MS,
+        remainingEmergencyObservationMs(),
+      );
+      if (graceMs <= 0) {
+        wakeTurnObserverTraced('emergency_primary_transport_grace_zero');
+        return;
+      }
+      emergencyHostRunTrace('primary_transport_grace_arm', { graceMs });
+      primaryTransportEmergencyWakeTimer = emergencyClock.setTimeout(() => {
+        primaryTransportEmergencyWakeTimer = null;
+        if (!turnSettled) {
+          wakeTurnObserverTraced('emergency_primary_transport_grace_elapsed');
+        }
+      }, graceMs);
     };
 
     const waitForTurnObservation = async (stage: string): Promise<void> => {
@@ -850,7 +896,11 @@ export async function executeSharedProtocolHostRun(
         return;
       }
       if (emergencyStopAcknowledged) {
-        while (!turnSettled && !transportClosedUnexpectedly) {
+        while (
+          !turnSettled &&
+          !transportClosedUnexpectedly &&
+          !emergencyAuthoritativeRecoveryPoll
+        ) {
           if (runObservationScope.signal.aborted || emergencyObservationBudgetExpired()) {
             emergencyHostRunTrace('await_turn_observation_budget_expired', { stage });
             return;
@@ -863,6 +913,7 @@ export async function executeSharedProtocolHostRun(
           stage,
           turnSettled,
           transportClosedUnexpectedly,
+          emergencyAuthoritativeRecoveryPoll,
         });
         return;
       }
@@ -942,6 +993,11 @@ export async function executeSharedProtocolHostRun(
         const onClose = () => {
           if (!turnSettled) {
             transportClosedUnexpectedly = true;
+            if (primaryTransportEmergencyWakeTimer !== null) {
+              emergencyClock.clearTimeout(primaryTransportEmergencyWakeTimer);
+              primaryTransportEmergencyWakeTimer = null;
+              wakeTurnObserverTraced('emergency_transport_closed_during_grace');
+            }
             finishObservation();
           }
         };
@@ -1033,7 +1089,7 @@ export async function executeSharedProtocolHostRun(
                     }
                   }
                 }
-                wakeTurnObserverTraced('emergency_stdin_after_reconcile');
+                await requestEmergencyObserverWakeAfterReconcile();
               } catch (error) {
                 writeControlRejected(
                   write,
@@ -1178,7 +1234,10 @@ export async function executeSharedProtocolHostRun(
 
     await waitForTurnObservation('primary');
 
-    while (transportClosedUnexpectedly && !turnSettled) {
+    while (
+      !turnSettled &&
+      (transportClosedUnexpectedly || emergencyAuthoritativeRecoveryPoll)
+    ) {
       if (emergencyObservationBudgetExpired()) {
         return finalizeHostRunExitCode();
       }
@@ -1339,6 +1398,10 @@ export async function executeSharedProtocolHostRun(
     if (emergencyObservationDeadlineTimer !== null) {
       emergencyClock.clearTimeout(emergencyObservationDeadlineTimer);
       emergencyObservationDeadlineTimer = null;
+    }
+    if (primaryTransportEmergencyWakeTimer !== null) {
+      emergencyClock.clearTimeout(primaryTransportEmergencyWakeTimer);
+      primaryTransportEmergencyWakeTimer = null;
     }
     emergencyHostRunTrace('finally_cleanup', { turnSettled, terminalExitCode });
     closeStdinInterface();
