@@ -45,3 +45,13 @@ if (!existsSync(openCodePinSource)) {
 mkdirSync(dirname(openCodePinDestination), { recursive: true });
 cpSync(openCodePinSource, openCodePinDestination);
 console.log(`copy_playbooks: copied OpenCode ACP source pin → ${openCodePinDestination}`);
+
+const claudePinSource = resolve(packageRoot, 'src', 'bridge', 'claude-agent-sdk-pin.json');
+const claudePinDestination = resolve(packageRoot, 'dist', 'bridge', 'claude-agent-sdk-pin.json');
+if (!existsSync(claudePinSource)) {
+  console.error(`copy_playbooks: Claude Agent SDK pin missing: ${claudePinSource}`);
+  process.exit(1);
+}
+mkdirSync(dirname(claudePinDestination), { recursive: true });
+cpSync(claudePinSource, claudePinDestination);
+console.log(`copy_playbooks: copied Claude Agent SDK pin → ${claudePinDestination}`);

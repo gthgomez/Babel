@@ -32,6 +32,9 @@ import {
 } from '../../bridge/remoteCatalog.js';
 import { probeCommandCodeInstallation } from '../../bridge/commandCodeCliDiscovery.js';
 import { probeOpenCodeInstallation } from '../../bridge/openCodeCliDiscovery.js';
+import { admitClaudeCodeSession } from '../../bridge/claudeCodeSessionAdmission.js';
+import type { ClaudeCodeAgentRuntimeRegistry } from '../../bridge/claudeCodeAgentRuntime.js';
+import type { ClaudeCodeSessionAdmissionDeps } from '../../bridge/claudeCodeSessionAdmission.js';
 import {
   allocateThreadId,
   ensureThread,
@@ -123,6 +126,8 @@ export interface ProtocolHostState {
   admissionStores: Map<string, AdmissionStore>;
   /** Test-only: overrides OpenCode PATH probe for thread.create (constructor injection). */
   openCodeInstallProbe?: () => Promise<import('../../bridge/openCodeCliDiscovery.js').OpenCodeInstallProbe>;
+  claudeCodeRegistry?: ClaudeCodeAgentRuntimeRegistry;
+  claudeCodeAdmissionDeps?: ClaudeCodeSessionAdmissionDeps;
 }
 
 export function createProtocolHostState(options: {
@@ -132,6 +137,8 @@ export function createProtocolHostState(options: {
   remoteSurface?: boolean;
   coordinator?: RuntimeCoordinator;
   openCodeInstallProbe?: () => Promise<import('../../bridge/openCodeCliDiscovery.js').OpenCodeInstallProbe>;
+  claudeCodeRegistry?: ClaudeCodeAgentRuntimeRegistry;
+  claudeCodeAdmissionDeps?: ClaudeCodeSessionAdmissionDeps;
 } = {}): ProtocolHostState {
   return {
     engines: new Map(),
@@ -142,6 +149,10 @@ export function createProtocolHostState(options: {
     executeWithoutNotifications: options.executeWithoutNotifications ?? false,
     ...(options.projectRootGuard ? { projectRootGuard: options.projectRootGuard } : {}),
     ...(options.openCodeInstallProbe ? { openCodeInstallProbe: options.openCodeInstallProbe } : {}),
+    ...(options.claudeCodeRegistry ? { claudeCodeRegistry: options.claudeCodeRegistry } : {}),
+    ...(options.claudeCodeAdmissionDeps
+      ? { claudeCodeAdmissionDeps: options.claudeCodeAdmissionDeps }
+      : {}),
     idempotency: new Map(),
     lastMessageIntegrity: new Map(),
     remoteSurface: options.remoteSurface === true,
@@ -269,6 +280,17 @@ function descriptorFromCreate(threadId: string, params: ThreadCreateParams): Ses
       ? {
           harness_provider_profile: params.provider ?? process.env['BABEL_PROVIDER'] ?? 'default',
           harness_model_profile: params.model ?? process.env['BABEL_MODEL'] ?? 'default',
+        }
+      : {}),
+    ...(harness === 'claude-code'
+      ? {
+          harness_provider_profile: params.harness_provider_profile ?? '',
+          harness_model_profile: params.harness_model_profile ?? params.model ?? 'default',
+          harness_config_root: params.harness_config_root ?? '',
+          harness_credential_ref: params.harness_credential_ref ?? '',
+          ...(params.harness_admission_digest
+            ? { harness_admission_digest: params.harness_admission_digest }
+            : {}),
         }
       : {}),
   };
@@ -413,7 +435,7 @@ export async function handleProtocolRequest(
   try {
     switch (request.method) {
       case 'thread.create': {
-        const params = request.params;
+        let params = request.params;
         if (!params) {
           return errorResponse(id, BabelProtocolErrorCode.INVALID_PARAMS, 'Missing params');
         }
@@ -443,6 +465,49 @@ export async function handleProtocolRequest(
             );
           }
         }
+        let claudeAdmitted: import('../../bridge/claudeCodeAdmission.js').ClaudeCodeAdmittedSession | undefined;
+        if (params.harness_adapter_id === 'claude-code') {
+          const admission = await admitClaudeCodeSession(
+            {
+              harness_adapter_id: 'claude-code',
+              harness_provider_profile: params.harness_provider_profile ?? '',
+              harness_model_profile: params.harness_model_profile ?? params.model ?? '',
+              harness_credential_ref: params.harness_credential_ref ?? '',
+              harness_config_root: params.harness_config_root ?? '',
+              project_root: params.project_root,
+              ...(params.harness_native_session_id
+                ? { harness_native_session_id: params.harness_native_session_id }
+                : {}),
+              ...(params.harness_admission_digest
+                ? { resume_expected_digest: params.harness_admission_digest }
+                : {}),
+            },
+            state.claudeCodeAdmissionDeps,
+          );
+          if (admission.status === 'rejected') {
+            return errorResponse(
+              id,
+              BabelProtocolErrorCode.MODE_UNSUPPORTED,
+              `${admission.reason}: ${admission.detail}`,
+            );
+          }
+          if (!state.claudeCodeRegistry) {
+            return errorResponse(
+              id,
+              BabelProtocolErrorCode.MODE_UNSUPPORTED,
+              'Claude Code registry is not available on this host',
+            );
+          }
+          claudeAdmitted = admission.admitted;
+          params = {
+            ...params,
+            harness_provider_profile: admission.admitted.harness_provider_profile,
+            harness_model_profile: admission.admitted.harness_model_profile,
+            harness_config_root: admission.admitted.harness_config_root,
+            harness_credential_ref: admission.admitted.harness_credential_ref,
+            harness_admission_digest: admission.admitted.admission_digest,
+          };
+        }
         let projectRoot = params.project_root;
         try {
           if (state.projectRootGuard) {
@@ -456,6 +521,9 @@ export async function handleProtocolRequest(
           );
         }
         const threadId = allocateThreadId();
+        if (claudeAdmitted && state.claudeCodeRegistry) {
+          state.claudeCodeRegistry.bindAdmitted(threadId, claudeAdmitted);
+        }
         const descriptor = descriptorFromCreate(threadId, { ...params, project_root: projectRoot });
         const persistThread = (): JsonRpcResponse => {
           ensureThread(threadId, { project_root: descriptor.projectRoot });

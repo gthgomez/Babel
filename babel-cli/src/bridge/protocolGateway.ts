@@ -78,6 +78,8 @@ export class ProtocolGateway {
     commandCodeRegistry?: CommandCodeAcpRuntimeRegistry;
     openCodeRegistry?: OpenCodeAcpRuntimeRegistry;
     openCodeInstallProbe?: () => Promise<import('./openCodeCliDiscovery.js').OpenCodeInstallProbe>;
+    claudeCodeRegistry?: import('./claudeCodeAgentRuntime.js').ClaudeCodeAgentRuntimeRegistry;
+    claudeCodeAdmissionDeps?: import('./claudeCodeSessionAdmission.js').ClaudeCodeSessionAdmissionDeps;
   }) {
     const allowedRoot = options.allowedWorkspaceRoot;
     this.registeredWorkspaceRoot = canonicalizeContained(resolve(allowedRoot));
@@ -91,6 +93,10 @@ export class ProtocolGateway {
       ...(options.engineFactory ? { engineFactory: options.engineFactory } : {}),
       ...(options.openCodeInstallProbe
         ? { openCodeInstallProbe: options.openCodeInstallProbe }
+        : {}),
+      ...(options.claudeCodeRegistry ? { claudeCodeRegistry: options.claudeCodeRegistry } : {}),
+      ...(options.claudeCodeAdmissionDeps
+        ? { claudeCodeAdmissionDeps: options.claudeCodeAdmissionDeps }
         : {}),
     });
   }
