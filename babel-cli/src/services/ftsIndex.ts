@@ -228,38 +228,97 @@ export class FtsSearchIndex {
       INSERT OR REPLACE INTO fts_files (path, name, content, extension, content_hash, size_bytes, indexed_bytes, content_complete, indexed_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
     `);
+    const selectHash = this.db.prepare('SELECT content_hash FROM fts_files WHERE path = ?');
+
+    type PendingInsert = {
+      relativePath: string;
+      name: string;
+      content: string;
+      ext: string;
+      hash: string;
+      sizeBytes: number;
+      indexedBytes: number;
+      complete: boolean;
+    };
 
     let indexed = 0;
-    let batchCount = 0;
+    const pending: PendingInsert[] = [];
+    const pendingPaths = new Set<string>();
+
+    const flushPendingBatch = (): void => {
+      if (pending.length === 0) return;
+      let batchTransactionOpen = false;
+      try {
+        this.db.exec('BEGIN IMMEDIATE');
+        batchTransactionOpen = true;
+        for (const row of pending) {
+          insert.run(
+            row.relativePath,
+            row.name,
+            row.content,
+            row.ext,
+            row.hash,
+            row.sizeBytes,
+            row.indexedBytes,
+            row.complete ? 1 : 0,
+          );
+        }
+        this.db.exec('COMMIT');
+        batchTransactionOpen = false;
+        indexed += pending.length;
+        pending.length = 0;
+        pendingPaths.clear();
+      } catch (error) {
+        if (batchTransactionOpen) {
+          try {
+            this.db.exec('ROLLBACK');
+          } catch {
+            // Best-effort rollback for this batch only.
+          }
+        }
+        pending.length = 0;
+        pendingPaths.clear();
+        throw error;
+      }
+    };
 
     for (const { filePath, relativePath } of files) {
       if (options?.shouldContinue && !options.shouldContinue()) throw new Error('Semantic index lifetime retired');
+      if (pendingPaths.has(relativePath)) {
+        flushPendingBatch();
+      }
       const data = this.indexSingleFile(filePath, options?.rootPath);
       if (!data) continue;
       options?.onReadFile?.(relativePath);
 
       if (!options?.force) {
-        const storedHash = this.getStoredHash(relativePath);
+        const row = selectHash.get(relativePath) as { content_hash: string } | undefined;
+        const storedHash = row?.content_hash ?? null;
         if (data.complete && storedHash === data.hash) continue;
       }
 
-      insert.run(relativePath, data.name, data.content, data.ext, data.hash, data.sizeBytes, data.indexedBytes, data.complete ? 1 : 0);
-      indexed++;
-      batchCount++;
+      pending.push({
+        relativePath,
+        name: data.name,
+        content: data.content,
+        ext: data.ext,
+        hash: data.hash,
+        sizeBytes: data.sizeBytes,
+        indexedBytes: data.indexedBytes,
+        complete: data.complete,
+      });
+      pendingPaths.add(relativePath);
 
-      // Yield to the event loop every BATCH_SIZE files so the REPL and other
-      // I/O stay responsive during background indexing of large repos.
-      if (batchCount >= BATCH_SIZE) {
-        batchCount = 0;
+      if (pending.length >= BATCH_SIZE) {
+        flushPendingBatch();
         options?.onProgress?.(indexed, total);
         await new Promise((resolve) => setImmediate(resolve));
         if (options?.shouldContinue && !options.shouldContinue()) throw new Error('Semantic index lifetime retired');
       }
     }
 
-    // Rebuild FTS index
+    flushPendingBatch();
     this.rebuildFts();
-
     return indexed;
   }
 
