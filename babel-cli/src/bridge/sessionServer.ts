@@ -145,6 +145,7 @@ export interface BridgeServerOptions {
   claudeCodeTestSdkPort?: ClaudeCodeSdkPort;
   claudeCodeTestCredentialResolver?: ClaudeCodeCredentialResolver;
   claudeCodeAdmissionDeps?: ClaudeCodeSessionAdmissionDeps;
+  claudeCodeHostLaunchRegistry?: import('./claudeCodeHostLaunchRegistry.js').ClaudeCodeHostLaunchRegistry;
 }
 
 /** Test-only hooks for post-initial-auth / pre-body-read synchronization. */
@@ -342,6 +343,9 @@ export class BridgeServer {
         claudeCodeRegistry: this.claudeCodeRegistry,
         ...(this.options.claudeCodeAdmissionDeps
           ? { claudeCodeAdmissionDeps: this.options.claudeCodeAdmissionDeps }
+          : {}),
+        ...(this.options.claudeCodeHostLaunchRegistry
+          ? { claudeCodeHostLaunchRegistry: this.options.claudeCodeHostLaunchRegistry }
           : {}),
         engineFactory:
           this.options.engineFactory ??

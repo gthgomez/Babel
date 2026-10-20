@@ -33,6 +33,10 @@ import {
 import { probeCommandCodeInstallation } from '../../bridge/commandCodeCliDiscovery.js';
 import { probeOpenCodeInstallation } from '../../bridge/openCodeCliDiscovery.js';
 import { admitClaudeCodeSession } from '../../bridge/claudeCodeSessionAdmission.js';
+import {
+  resolveClaudeCodeTrustedLaunchFields,
+  type ClaudeCodeHostLaunchRegistry,
+} from '../../bridge/claudeCodeHostLaunchRegistry.js';
 import { ensureClaudeCodeThreadAdmissionBound } from '../../bridge/claudeCodeHostBinding.js';
 import type { ClaudeCodeAgentRuntimeRegistry } from '../../bridge/claudeCodeAgentRuntime.js';
 import type { ClaudeCodeSessionAdmissionDeps } from '../../bridge/claudeCodeSessionAdmission.js';
@@ -129,6 +133,7 @@ export interface ProtocolHostState {
   openCodeInstallProbe?: () => Promise<import('../../bridge/openCodeCliDiscovery.js').OpenCodeInstallProbe>;
   claudeCodeRegistry?: ClaudeCodeAgentRuntimeRegistry;
   claudeCodeAdmissionDeps?: ClaudeCodeSessionAdmissionDeps;
+  claudeCodeHostLaunchRegistry?: ClaudeCodeHostLaunchRegistry;
 }
 
 export function createProtocolHostState(options: {
@@ -140,6 +145,7 @@ export function createProtocolHostState(options: {
   openCodeInstallProbe?: () => Promise<import('../../bridge/openCodeCliDiscovery.js').OpenCodeInstallProbe>;
   claudeCodeRegistry?: ClaudeCodeAgentRuntimeRegistry;
   claudeCodeAdmissionDeps?: ClaudeCodeSessionAdmissionDeps;
+  claudeCodeHostLaunchRegistry?: ClaudeCodeHostLaunchRegistry;
 } = {}): ProtocolHostState {
   return {
     engines: new Map(),
@@ -153,6 +159,9 @@ export function createProtocolHostState(options: {
     ...(options.claudeCodeRegistry ? { claudeCodeRegistry: options.claudeCodeRegistry } : {}),
     ...(options.claudeCodeAdmissionDeps
       ? { claudeCodeAdmissionDeps: options.claudeCodeAdmissionDeps }
+      : {}),
+    ...(options.claudeCodeHostLaunchRegistry
+      ? { claudeCodeHostLaunchRegistry: options.claudeCodeHostLaunchRegistry }
       : {}),
     idempotency: new Map(),
     lastMessageIntegrity: new Map(),
@@ -289,6 +298,9 @@ function descriptorFromCreate(threadId: string, params: ThreadCreateParams): Ses
           harness_model_profile: params.harness_model_profile ?? params.model ?? 'default',
           harness_config_root: params.harness_config_root ?? '',
           harness_credential_ref: params.harness_credential_ref ?? '',
+          ...(params.harness_project_policy_root
+            ? { harness_project_policy_root: params.harness_project_policy_root }
+            : {}),
           ...(params.harness_admission_digest
             ? { harness_admission_digest: params.harness_admission_digest }
             : {}),
@@ -468,13 +480,39 @@ export async function handleProtocolRequest(
         }
         let claudeAdmitted: import('../../bridge/claudeCodeAdmission.js').ClaudeCodeAdmittedSession | undefined;
         if (params.harness_adapter_id === 'claude-code') {
+          const launchRegistry = state.claudeCodeHostLaunchRegistry;
+          if (!launchRegistry) {
+            return errorResponse(
+              id,
+              BabelProtocolErrorCode.MODE_UNSUPPORTED,
+              'Claude Code host launch registry is not configured',
+            );
+          }
+          const trusted = resolveClaudeCodeTrustedLaunchFields({
+            registry: launchRegistry,
+            harness_provider_profile: params.harness_provider_profile ?? '',
+            project_root: params.project_root,
+          });
+          if (!trusted.ok) {
+            return errorResponse(
+              id,
+              BabelProtocolErrorCode.MODE_UNSUPPORTED,
+              trusted.detail,
+            );
+          }
           const admission = await admitClaudeCodeSession(
             {
               harness_adapter_id: 'claude-code',
-              harness_provider_profile: params.harness_provider_profile ?? '',
-              harness_model_profile: params.harness_model_profile ?? params.model ?? '',
-              harness_credential_ref: params.harness_credential_ref ?? '',
-              harness_config_root: params.harness_config_root ?? '',
+              harness_provider_profile: trusted.binding.profile_id,
+              harness_model_profile: trusted.harness_model_profile,
+              harness_credential_ref: trusted.harness_credential_ref,
+              harness_config_root: trusted.harness_config_root,
+              project_policy_root: trusted.project_policy_root,
+              trusted_auth_host_env: trusted.binding.auth_host_env,
+              trusted_auth_child_env: trusted.binding.auth_child_env,
+              ...(trusted.binding.endpoint_env
+                ? { endpoint_env: trusted.binding.endpoint_env }
+                : {}),
               project_root: params.project_root,
               ...(params.harness_native_session_id
                 ? { harness_native_session_id: params.harness_native_session_id }
@@ -507,6 +545,7 @@ export async function handleProtocolRequest(
             harness_config_root: admission.admitted.harness_config_root,
             harness_credential_ref: admission.admitted.harness_credential_ref,
             harness_admission_digest: admission.admitted.admission_digest,
+            harness_project_policy_root: admission.admitted.project_policy_root,
           };
         }
         let projectRoot = params.project_root;

@@ -7,6 +7,11 @@ import { describe, it } from 'node:test';
 import { EXTERNAL_ADAPTER_PROFILE_IDS } from './harnessAdapterContract.js';
 import { evaluateClaudeCodeAdmission } from './claudeCodeAdmission.js';
 
+const TRUSTED_AUTH = {
+  trusted_auth_host_env: 'BABEL_TEST_AUTH_HOST',
+  trusted_auth_child_env: 'ANTHROPIC_API_KEY',
+} as const;
+
 describe('claudeCodeAdmission', () => {
   const verifiedIntegrity = {
     state: 'verified' as const,
@@ -52,6 +57,7 @@ describe('claudeCodeAdmission', () => {
         harness_credential_ref: 'CRED_REF',
         harness_config_root: configRoot,
         project_root: root,
+        ...TRUSTED_AUTH,
       },
       {
         integrityProbe: async () => verifiedIntegrity,
@@ -74,6 +80,7 @@ describe('claudeCodeAdmission', () => {
         harness_credential_ref: 'CRED_REF',
         harness_config_root: configRoot,
         project_root: root,
+        ...TRUSTED_AUTH,
       },
       {
         integrityProbe: async () => verifiedIntegrity,
@@ -101,6 +108,7 @@ describe('claudeCodeAdmission', () => {
         project_root: root,
         harness_native_session_id: 'sess-1',
         resume_expected_digest: 'deadbeef',
+        ...TRUSTED_AUTH,
       },
       {
         integrityProbe: async () => verifiedIntegrity,
@@ -122,6 +130,7 @@ describe('claudeCodeAdmission', () => {
         harness_credential_ref: 'CRED_REF',
         harness_config_root: configRoot,
         project_root: root,
+        ...TRUSTED_AUTH,
       },
       {
         integrityProbe: async () => verifiedIntegrity,

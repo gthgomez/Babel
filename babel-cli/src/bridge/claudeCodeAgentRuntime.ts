@@ -5,6 +5,8 @@ import type { ClaudeCodeAdmittedSession } from './claudeCodeAdmission.js';
 import { buildClaudeCodeChildEnv } from './claudeCodeChildEnv.js';
 import { resolveClaudeCodeHarnessCredentialEnv } from './claudeCodeCredentialResolver.js';
 import { buildClaudeCodeLaunchPolicySpec } from './claudeCodePolicyEvidence.js';
+import type { ClaudeCodeHostProfileBindingV1 } from './claudeCodeHostLaunchRegistry.js';
+import { claudeCodeSessionKey } from './claudeCodeQueryHandle.js';
 import type { ClaudeCodeSdkPort } from './claudeCodeSdkPort.js';
 import { createClaudeCodeLiveSdkPort } from './claudeCodeLiveSdkPort.js';
 import { bridgeClaudeCanUseTool } from './claudeCodePermissionBridge.js';
@@ -23,6 +25,7 @@ export interface ClaudeCodeRuntimeSession {
   sessionCumulativeCostUSD?: number;
   sessionCostCurrencyKnown?: boolean;
   nativeSessionId?: string;
+  turnLock: Promise<void>;
 }
 
 export type ClaudeCodeCredentialResolver = (
@@ -33,6 +36,10 @@ export type ClaudeCodeCredentialResolver = (
 export interface ClaudeCodeAgentRuntimeRegistryOptions {
   sdkPort?: ClaudeCodeSdkPort;
   credentialResolver?: ClaudeCodeCredentialResolver;
+  hostAuthBinding?: Pick<
+    ClaudeCodeHostProfileBindingV1,
+    'auth_host_env' | 'auth_child_env' | 'credential_ref'
+  >;
 }
 
 export class ClaudeCodeAgentRuntimeRegistry {
@@ -40,15 +47,21 @@ export class ClaudeCodeAgentRuntimeRegistry {
   private readonly admittedByThread = new Map<string, ClaudeCodeAdmittedSession>();
   private readonly sdkPort: ClaudeCodeSdkPort;
   private readonly credentialResolver: ClaudeCodeCredentialResolver;
+  private readonly hostAuthBinding?: ClaudeCodeAgentRuntimeRegistryOptions['hostAuthBinding'];
   private nextProcessGeneration = 1;
 
   constructor(options?: ClaudeCodeAgentRuntimeRegistryOptions) {
     this.sdkPort = options?.sdkPort ?? createClaudeCodeLiveSdkPort();
+    this.hostAuthBinding = options?.hostAuthBinding;
     this.credentialResolver =
       options?.credentialResolver ??
       (async (ref, admitted) => {
         try {
-          return resolveClaudeCodeHarnessCredentialEnv(ref, admitted);
+          return resolveClaudeCodeHarnessCredentialEnv(ref, admitted, process.env, {
+            credential_ref: admitted.harness_credential_ref,
+            auth_host_env: admitted.trusted_auth_host_env,
+            auth_child_env: admitted.trusted_auth_child_env,
+          });
         } catch {
           return null;
         }
@@ -71,10 +84,17 @@ export class ClaudeCodeAgentRuntimeRegistry {
         pendingCancel: false,
         turnInFlight: false,
         interruptRequested: false,
+        turnLock: Promise.resolve(),
+        ...(admitted.harness_native_session_id
+          ? { nativeSessionId: admitted.harness_native_session_id }
+          : {}),
       });
     } else {
       const session = this.sessions.get(threadId)!;
       session.admitted = admitted;
+      if (admitted.harness_native_session_id) {
+        session.nativeSessionId = admitted.harness_native_session_id;
+      }
     }
   }
 
@@ -94,6 +114,7 @@ export class ClaudeCodeAgentRuntimeRegistry {
         pendingCancel: false,
         turnInFlight: false,
         interruptRequested: false,
+        turnLock: Promise.resolve(),
       };
       this.sessions.set(descriptor.threadId, session);
     }
@@ -104,30 +125,43 @@ export class ClaudeCodeAgentRuntimeRegistry {
     return this.sessions.get(descriptor.threadId)?.pendingCancel === true;
   }
 
+  markCancelPending(descriptor: SessionDescriptor): void {
+    const session = this.sessions.get(descriptor.threadId);
+    if (session) session.pendingCancel = true;
+  }
+
   clearCancelPending(descriptor: SessionDescriptor): void {
     const session = this.sessions.get(descriptor.threadId);
     if (session) session.pendingCancel = false;
   }
 
-  requestInterrupt(descriptor: SessionDescriptor): boolean {
+  requestInterrupt(descriptor: SessionDescriptor, turnId: string): boolean {
     const session = this.sessions.get(descriptor.threadId);
     if (!session || !session.turnInFlight) return false;
     session.interruptRequested = true;
-    void this.sdkPort.interrupt(session.admitted.admission_digest);
+    session.pendingCancel = true;
+    const key = claudeCodeSessionKey(descriptor.threadId, session.processGeneration, turnId);
+    void this.sdkPort.interrupt(key);
     return true;
   }
 
-  async forceStopForThread(descriptor: SessionDescriptor): Promise<void> {
+  async forceStopForThread(descriptor: SessionDescriptor, turnId: string): Promise<void> {
     const session = this.sessions.get(descriptor.threadId);
     if (!session) return;
-    const digest = session.admitted.admission_digest;
-    await this.sdkPort.interrupt(digest);
-    await this.sdkPort.close(digest);
-    await this.sdkPort.awaitTeardown(digest);
     session.generation += 1;
+    session.pendingCancel = true;
+    const key = claudeCodeSessionKey(descriptor.threadId, session.processGeneration, turnId);
+    await this.sdkPort.interrupt(key);
+    await this.sdkPort.close(key);
+    await this.sdkPort.awaitTeardown(key);
     session.processGeneration = this.nextProcessGeneration++;
     session.turnInFlight = false;
     session.interruptRequested = false;
+  }
+
+  consumeNativeSessionId(threadId: string): string | undefined {
+    const session = this.sessions.get(threadId);
+    return session?.nativeSessionId;
   }
 
   async runTurn(input: {
@@ -142,35 +176,76 @@ export class ClaudeCodeAgentRuntimeRegistry {
     };
   }): Promise<void> {
     const session = await this.ensureSession(input.descriptor);
+    const previousLock = session.turnLock;
+    let releaseLock!: () => void;
+    session.turnLock = new Promise<void>((resolve) => {
+      releaseLock = resolve;
+    });
+    await previousLock;
+
     if (session.turnInFlight) {
+      releaseLock();
       throw new Error('CLAUDE_CODE_TURN_ALREADY_IN_FLIGHT');
     }
+
     const turnGeneration = session.generation;
+    const processGeneration = session.processGeneration;
+    const sessionKey = claudeCodeSessionKey(
+      input.binding.threadId,
+      processGeneration,
+      input.binding.turnId,
+    );
+
+    const stale = () =>
+      session.generation !== turnGeneration || session.pendingCancel || session.interruptRequested;
+
+    if (stale()) {
+      session.pendingEvents.push({ type: 'cancelled' });
+      releaseLock();
+      return;
+    }
+
     session.turnInFlight = true;
     session.interruptRequested = false;
-    session.pendingEvents = [];
+    session.pendingCancel = false;
+    const costBaseline =
+      typeof session.sessionCumulativeCostUSD === 'number' ? session.sessionCumulativeCostUSD : 0;
 
     const policy = buildClaudeCodeLaunchPolicySpec(session.admitted.harness_provider_profile);
     const creds = await this.credentialResolver(
       session.admitted.harness_credential_ref,
       session.admitted,
     );
+    if (stale()) {
+      session.pendingEvents.push({ type: 'cancelled' });
+      session.turnInFlight = false;
+      releaseLock();
+      return;
+    }
     if (!creds) {
       session.pendingEvents.push({
         type: 'failed',
         error: 'Claude credential ref could not be resolved',
       });
       session.turnInFlight = false;
+      releaseLock();
       return;
     }
+
+    const admittedForTurn: ClaudeCodeAdmittedSession = {
+      ...session.admitted,
+      ...(session.nativeSessionId ? { harness_native_session_id: session.nativeSessionId } : {}),
+    };
+
     const childEnv = buildClaudeCodeChildEnv({
-      admitted: session.admitted,
+      admitted: admittedForTurn,
       policy,
       credentialEnv: creds,
     });
 
     const stream = this.sdkPort.runTurn({
-      admitted: session.admitted,
+      sessionKey,
+      admitted: admittedForTurn,
       policy,
       message: input.message,
       generation: turnGeneration,
@@ -191,7 +266,7 @@ export class ClaudeCodeAgentRuntimeRegistry {
     let textBuffer = '';
     try {
       for await (const msg of stream) {
-        if (session.generation !== turnGeneration) {
+        if (stale()) {
           session.pendingEvents.push({ type: 'cancelled' });
           break;
         }
@@ -205,23 +280,37 @@ export class ClaudeCodeAgentRuntimeRegistry {
             result?: string;
             total_cost_usd?: number;
             session_id?: string;
+            is_error?: boolean;
+            turn_cost_usd?: number;
           };
-          if (result.session_id) session.nativeSessionId = result.session_id;
+          if (result.session_id) {
+            session.nativeSessionId = result.session_id;
+            session.admitted = {
+              ...session.admitted,
+              harness_native_session_id: result.session_id,
+            };
+            this.admittedByThread.set(session.threadId, session.admitted);
+          }
+
+          let turnCost: number | undefined;
+          if (typeof result.total_cost_usd === 'number') {
+            session.sessionCumulativeCostUSD = result.total_cost_usd;
+            session.sessionCostCurrencyKnown = true;
+            turnCost = Math.max(0, result.total_cost_usd - costBaseline);
+          }
+
           const usage: SessionUsageSummary = {
-            totalCostUSD:
-              typeof result.total_cost_usd === 'number' ? result.total_cost_usd : 0,
-            costComplete: typeof result.total_cost_usd === 'number',
-            unknownChargeCount: typeof result.total_cost_usd === 'number' ? 0 : 1,
+            totalCostUSD: typeof turnCost === 'number' ? turnCost : 0,
+            costComplete: typeof turnCost === 'number',
+            unknownChargeCount: typeof turnCost === 'number' ? 0 : 1,
             totalInputTokens: 0,
             totalOutputTokens: 0,
             totalTokens: 0,
             modelBreakdown: {},
           };
-          if (typeof result.total_cost_usd === 'number') {
-            session.sessionCumulativeCostUSD = result.total_cost_usd;
-            session.sessionCostCurrencyKnown = true;
-          }
-          if (result.subtype === 'success') {
+
+          const failed = result.is_error === true || result.subtype === 'error';
+          if (!failed && result.subtype === 'success') {
             session.pendingEvents.push({
               type: 'done',
               answer: result.result ?? textBuffer,
@@ -241,14 +330,16 @@ export class ClaudeCodeAgentRuntimeRegistry {
       }
     } finally {
       session.turnInFlight = false;
-      await this.sdkPort.awaitTeardown(session.admitted.admission_digest);
+      await this.sdkPort.awaitTeardown(sessionKey);
+      releaseLock();
     }
   }
 
   async closeAll(): Promise<void> {
     for (const session of this.sessions.values()) {
-      await this.sdkPort.close(session.admitted.admission_digest);
-      await this.sdkPort.awaitTeardown(session.admitted.admission_digest);
+      const key = claudeCodeSessionKey(session.threadId, session.processGeneration, 'shutdown');
+      await this.sdkPort.close(key);
+      await this.sdkPort.awaitTeardown(key);
     }
     this.sessions.clear();
     this.admittedByThread.clear();

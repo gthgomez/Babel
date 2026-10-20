@@ -1,4 +1,5 @@
 import type { ClaudeCodeAdmittedSession } from './claudeCodeAdmission.js';
+import type { ClaudeCodeHostProfileBindingV1 } from './claudeCodeHostLaunchRegistry.js';
 import {
   loadClaudeHarnessManifest,
   type ClaudeHarnessCredentialRefSpec,
@@ -32,22 +33,28 @@ function resolveRefSpec(
 }
 
 /**
- * Resolve an approved credential reference using only the admitted config root manifest
- * and already-configured host environment variables (no helper scripts or global routes).
+ * Resolve credential using host-frozen auth variable names (not manifest-selected host_env).
  */
 export function resolveClaudeCodeHarnessCredentialEnv(
   ref: string,
   admitted: ClaudeCodeAdmittedSession,
   hostEnv: NodeJS.ProcessEnv = process.env,
+  trustedAuth?: Pick<ClaudeCodeHostProfileBindingV1, 'auth_host_env' | 'auth_child_env' | 'credential_ref'>,
 ): Record<string, string> {
   const trimmed = ref.trim();
   if (!trimmed) {
     throw new ClaudeCodeCredentialResolutionError('harness_credential_ref is empty');
   }
+  if (trustedAuth && trimmed !== trustedAuth.credential_ref) {
+    throw new ClaudeCodeCredentialResolutionError('credential ref does not match host binding');
+  }
   const manifest = loadClaudeHarnessManifest(admitted.harness_config_root);
   const spec = resolveRefSpec(manifest, trimmed);
-  const hostVar = spec.host_env.trim();
-  const childVar = (spec.child_env ?? spec.host_env).trim();
+  const hostVar = (trustedAuth?.auth_host_env ?? spec.host_env).trim();
+  if (trustedAuth && spec.host_env.trim() !== trustedAuth.auth_host_env) {
+    throw new ClaudeCodeCredentialResolutionError('manifest host_env does not match host binding');
+  }
+  const childVar = (trustedAuth?.auth_child_env ?? spec.child_env ?? spec.host_env).trim();
   const value = hostEnv[hostVar]?.trim();
   if (!value) {
     throw new ClaudeCodeCredentialResolutionError(

@@ -27,7 +27,9 @@ export async function admitClaudeCodeSession(
       resolveClaudeCodePolicyEvidence({
         cwd: evidenceInput.cwd,
         config_root: evidenceInput.config_root,
+        project_policy_root: evidenceInput.project_policy_root,
         provider_profile: evidenceInput.provider_profile,
+        ...(evidenceInput.endpoint_env ? { endpoint_env: evidenceInput.endpoint_env } : {}),
         resolveSettings,
       }),
   });

@@ -16,6 +16,7 @@ export function claudeAdmissionInputFromDescriptor(
     harness_model_profile: descriptor.harness_model_profile ?? descriptor.model ?? '',
     harness_credential_ref: descriptor.harness_credential_ref ?? '',
     harness_config_root: descriptor.harness_config_root ?? '',
+    project_policy_root: descriptor.harness_project_policy_root ?? descriptor.projectRoot,
     project_root: descriptor.projectRoot,
     ...(descriptor.harness_native_session_id
       ? { harness_native_session_id: descriptor.harness_native_session_id }
@@ -36,6 +37,16 @@ export async function ensureClaudeCodeThreadAdmissionBound(
   if (!state.claudeCodeRegistry) {
     return { error: 'Claude Code registry is not available on this host' };
   }
+  const existing = state.claudeCodeRegistry.getAdmitted(descriptor.threadId);
+  if (existing) {
+    if (
+      descriptor.harness_admission_digest &&
+      descriptor.harness_admission_digest !== existing.admission_digest
+    ) {
+      return { error: 'resume_digest_mismatch: descriptor admission digest drift' };
+    }
+    return existing;
+  }
   const input = claudeAdmissionInputFromDescriptor(descriptor);
   if (!input) {
     return { error: 'Claude Code descriptor is incomplete' };
@@ -44,7 +55,6 @@ export async function ensureClaudeCodeThreadAdmissionBound(
   if (admission.status === 'rejected') {
     return { error: `${admission.reason}: ${admission.detail}` };
   }
-  const existing = state.claudeCodeRegistry.getAdmitted(descriptor.threadId);
   if (existing) {
     const compat = assertResumeClaudeAdmissionCompatible(existing, admission.admitted);
     if (compat.status === 'rejected') {

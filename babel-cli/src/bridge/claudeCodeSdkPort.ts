@@ -18,6 +18,8 @@ export interface ClaudeSdkResultMessage {
   total_cost_usd?: number;
   session_id?: string;
   is_error?: boolean;
+  /** Turn delta when provider reports cumulative session cost. */
+  turn_cost_usd?: number;
 }
 
 export type ClaudeSdkStreamMessage =
@@ -29,6 +31,8 @@ export type ClaudeSdkStreamMessage =
 export interface ClaudeCanUseToolRequest {
   toolName: string;
   input: Record<string, unknown>;
+  toolUseID?: string;
+  signal?: AbortSignal;
 }
 
 export type ClaudeCanUseToolDecision =
@@ -36,6 +40,7 @@ export type ClaudeCanUseToolDecision =
   | { behavior: 'deny'; message: string };
 
 export interface ClaudeCodeTurnRequest {
+  sessionKey: string;
   admitted: ClaudeCodeAdmittedSession;
   policy: ClaudeCodeLaunchPolicySpec;
   message: string;

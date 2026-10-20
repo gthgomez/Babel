@@ -15,6 +15,11 @@ import type { SessionDescriptor } from '../executor/contracts.js';
 import { evaluateClaudeCodeAdmission } from './claudeCodeAdmission.js';
 import { resolveClaudeCodePolicyEvidence } from './claudeCodePolicyEvidence.js';
 
+const TRUSTED_AUTH = {
+  trusted_auth_host_env: 'BABEL_TEST_ANTHROPIC_KEY',
+  trusted_auth_child_env: 'ANTHROPIC_API_KEY',
+} as const;
+
 const verifiedIntegrity = {
   state: 'verified' as const,
   sdkVersion: '0.3.304',
@@ -44,8 +49,9 @@ describe('claudeCode harness gateway', () => {
     const evidence = await resolveClaudeCodePolicyEvidence({
       cwd: root,
       config_root: configRoot,
+      project_policy_root: root,
       provider_profile: EXTERNAL_ADAPTER_PROFILE_IDS.commandCodeGoat,
-      resolveSettings: async () => ({}),
+      resolveSettings: async () => ({ ok: false, digest: 'x', detail: 'stub' }),
     });
     assert.equal(evidence.ok, false);
   });
@@ -73,6 +79,7 @@ describe('claudeCode harness gateway', () => {
         harness_credential_ref: 'TEST_CRED',
         harness_config_root: configRoot,
         project_root: projectRoot,
+        ...TRUSTED_AUTH,
       },
       {
         integrityProbe: async () => verifiedIntegrity,
@@ -159,6 +166,7 @@ describe('claudeCode harness gateway', () => {
         harness_credential_ref: 'TEST_CRED',
         harness_config_root: configRoot,
         project_root: projectRoot,
+        ...TRUSTED_AUTH,
       },
       {
         integrityProbe: async () => verifiedIntegrity,
@@ -170,10 +178,9 @@ describe('claudeCode harness gateway', () => {
 
     let interruptCalls = 0;
     let closeCalls = 0;
-    const sdkPort = createClaudeCodeFakeSdkPort(() => [
-      { type: 'assistant', text: 'slow' },
-      { type: 'result', subtype: 'success', result: 'slow', total_cost_usd: 0 },
-    ]);
+    const sdkPort = createClaudeCodeFakeSdkPort(() => [{ type: 'assistant', text: 'slow' }], {
+      stallUntilInterrupted: true,
+    });
     const originalInterrupt = sdkPort.interrupt.bind(sdkPort);
     const originalClose = sdkPort.close.bind(sdkPort);
     sdkPort.interrupt = async (key) => {
@@ -214,13 +221,17 @@ describe('claudeCode harness gateway', () => {
           message: 'work',
           binding: { threadId, turnId: 'turn-int', cwd: projectRoot, broker },
         });
-        await new Promise((resolve) => setTimeout(resolve, 5));
-        registry.requestInterrupt(descriptor);
+        await new Promise<void>((resolve) => {
+          setImmediate(() => {
+            assert.equal(registry.requestInterrupt(descriptor, 'turn-int'), true);
+            resolve();
+          });
+        });
         await run;
       },
     );
     assert.ok(interruptCalls >= 1);
-    await registry.forceStopForThread(descriptor);
+    await registry.forceStopForThread(descriptor, 'turn-int');
     assert.ok(closeCalls >= 1);
   });
 });

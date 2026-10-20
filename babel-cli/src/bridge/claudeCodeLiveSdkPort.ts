@@ -1,6 +1,10 @@
 import type { Query, SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 
+import {
+  createClaudeCodeSpawnFenceFactory,
+  type ClaudeSpawnExitFence,
+} from './claudeCodeSpawnFence.js';
 import type {
   ClaudeCodeSdkPort,
   ClaudeCodeTurnRequest,
@@ -11,6 +15,7 @@ interface ActiveClaudeQuery {
   query: Query;
   teardown: Promise<void>;
   closed: boolean;
+  exitFence?: ClaudeSpawnExitFence;
 }
 
 function mapSdkMessage(msg: SDKMessage): ClaudeSdkStreamMessage | null {
@@ -27,20 +32,23 @@ function mapSdkMessage(msg: SDKMessage): ClaudeSdkStreamMessage | null {
     return { type: 'assistant', text };
   }
   if (msg.type === 'result') {
-    if (msg.subtype === 'success') {
+    const isError = msg.is_error === true;
+    if (msg.subtype === 'success' && !isError) {
       return {
         type: 'result',
         subtype: 'success',
         result: msg.result,
         total_cost_usd: msg.total_cost_usd,
         session_id: msg.session_id,
-        is_error: msg.is_error,
+        is_error: false,
       };
     }
+    const errText =
+      'errors' in msg && Array.isArray(msg.errors) ? msg.errors.join('; ') : msg.subtype;
     return {
       type: 'result',
       subtype: 'error',
-      result: msg.errors?.join('; ') ?? 'Claude SDK error result',
+      result: errText,
       total_cost_usd: msg.total_cost_usd,
       session_id: msg.session_id,
       is_error: true,
@@ -51,25 +59,30 @@ function mapSdkMessage(msg: SDKMessage): ClaudeSdkStreamMessage | null {
 
 export function createClaudeCodeLiveSdkPort(): ClaudeCodeSdkPort {
   const sessions = new Map<string, ActiveClaudeQuery>();
+  const exitFences = new Map<string, ClaudeSpawnExitFence>();
+  const spawnFactory = createClaudeCodeSpawnFenceFactory(exitFences);
 
   const awaitSessionTeardown = async (sessionKey: string): Promise<void> => {
     const active = sessions.get(sessionKey);
     if (!active) return;
     await active.teardown;
     sessions.delete(sessionKey);
+    exitFences.delete(sessionKey);
   };
 
   return {
     async *runTurn(request: ClaudeCodeTurnRequest): AsyncIterable<ClaudeSdkStreamMessage> {
-      const key = request.admitted.admission_digest;
+      const key = request.sessionKey;
       await awaitSessionTeardown(key);
 
       const abortController = new AbortController();
+      const spawnClaudeCodeProcess = spawnFactory(key);
+      const nativeId = request.admitted.harness_native_session_id?.trim();
       const q = query({
         prompt: request.message,
         options: {
           cwd: request.admitted.cwd,
-          projectConfigRoot: request.admitted.harness_config_root,
+          projectConfigRoot: request.admitted.project_policy_root,
           model: request.admitted.harness_model_profile,
           pathToClaudeCodeExecutable: request.admitted.cli_executable_path,
           settingSources: request.policy.settingSources,
@@ -78,8 +91,14 @@ export function createClaudeCodeLiveSdkPort(): ClaudeCodeSdkPort {
           managedSettings: request.policy.managedSettings as import('@anthropic-ai/claude-agent-sdk').Settings,
           env: request.childEnv,
           abortController,
-          canUseTool: async (toolName, input) => {
-            const decision = await request.canUseTool({ toolName, input });
+          spawnClaudeCodeProcess,
+          canUseTool: async (toolName, input, options) => {
+            const decision = await request.canUseTool({
+              toolName,
+              input,
+              toolUseID: options.toolUseID,
+              signal: options.signal,
+            });
             if (decision.behavior === 'allow') {
               return {
                 behavior: 'allow',
@@ -88,9 +107,7 @@ export function createClaudeCodeLiveSdkPort(): ClaudeCodeSdkPort {
             }
             return { behavior: 'deny', message: decision.message };
           },
-          ...(request.admitted.harness_native_session_id
-            ? { resume: request.admitted.harness_native_session_id }
-            : {}),
+          ...(nativeId ? { resume: nativeId } : {}),
         },
       });
 
@@ -98,7 +115,13 @@ export function createClaudeCodeLiveSdkPort(): ClaudeCodeSdkPort {
       const teardown = new Promise<void>((resolve) => {
         resolveTeardown = resolve;
       });
-      sessions.set(key, { query: q, teardown, closed: false });
+      const exitFence = exitFences.get(key);
+      sessions.set(key, {
+        query: q,
+        teardown,
+        closed: false,
+        ...(exitFence ? { exitFence } : {}),
+      });
 
       try {
         for await (const msg of q) {
@@ -106,8 +129,17 @@ export function createClaudeCodeLiveSdkPort(): ClaudeCodeSdkPort {
           if (mapped) yield mapped;
         }
       } finally {
+        try {
+          q.close();
+        } catch {
+          // ignore close errors during consumer teardown
+        }
+        if (exitFence) {
+          await exitFence.waitForExit(2000);
+        }
         resolveTeardown();
         sessions.delete(key);
+        exitFences.delete(key);
       }
     },
     async interrupt(sessionKey: string): Promise<void> {

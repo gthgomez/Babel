@@ -20,6 +20,10 @@ export interface ClaudeCodeAdmissionInput {
   harness_model_profile: string;
   harness_credential_ref: string;
   harness_config_root: string;
+  project_policy_root?: string;
+  trusted_auth_host_env?: string;
+  trusted_auth_child_env?: string;
+  endpoint_env?: Record<string, string>;
   project_root: string;
   harness_native_session_id?: string;
   resume_expected_digest?: string;
@@ -31,6 +35,10 @@ export interface ClaudeCodeAdmittedSession {
   harness_model_profile: string;
   harness_credential_ref: string;
   harness_config_root: string;
+  /** SDK projectConfigRoot / project policy tree (distinct from config HOME). */
+  project_policy_root: string;
+  trusted_auth_host_env: string;
+  trusted_auth_child_env: string;
   cwd: string;
   sdk_version: string;
   cli_version: string;
@@ -69,7 +77,9 @@ export interface ClaudeCodeAdmissionDeps {
   resolvePolicyEvidence: (input: {
     cwd: string;
     config_root: string;
+    project_policy_root: string;
     provider_profile: ClaudeHarnessProviderProfile;
+    endpoint_env?: Record<string, string>;
   }) => Promise<ClaudeCodePolicyResolverEvidence>;
 }
 
@@ -89,6 +99,9 @@ export function computeAdmissionDigest(admitted: Omit<ClaudeCodeAdmittedSession,
     harness_model_profile: admitted.harness_model_profile,
     harness_credential_ref: admitted.harness_credential_ref,
     harness_config_root: admitted.harness_config_root,
+    project_policy_root: admitted.project_policy_root,
+    trusted_auth_host_env: admitted.trusted_auth_host_env,
+    trusted_auth_child_env: admitted.trusted_auth_child_env,
     cwd: admitted.cwd,
     sdk_version: admitted.sdk_version,
     cli_version: admitted.cli_version,
@@ -164,6 +177,28 @@ export async function evaluateClaudeCodeAdmission(
   if (!existsSync(cwd)) {
     return { status: 'rejected', reason: 'cwd_missing', detail: 'project_root does not exist' };
   }
+  let projectPolicyRoot: string;
+  const policyRootRaw = input.project_policy_root?.trim();
+  if (policyRootRaw) {
+    try {
+      projectPolicyRoot = realpathSync(resolve(policyRootRaw));
+    } catch {
+      return {
+        status: 'rejected',
+        reason: 'config_root_missing',
+        detail: 'project_policy_root does not exist',
+      };
+    }
+    if (!statSync(projectPolicyRoot).isDirectory()) {
+      return {
+        status: 'rejected',
+        reason: 'config_root_not_directory',
+        detail: 'project_policy_root must be a directory',
+      };
+    }
+  } else {
+    projectPolicyRoot = cwd;
+  }
 
   const integrity = await deps.integrityProbe();
   const pin = loadClaudeAgentSdkPin();
@@ -180,10 +215,22 @@ export async function evaluateClaudeCodeAdmission(
     };
   }
 
+  const authHost = input.trusted_auth_host_env?.trim();
+  const authChild = input.trusted_auth_child_env?.trim();
+  if (!authHost || !authChild) {
+    return {
+      status: 'rejected',
+      reason: 'credential_ref_missing',
+      detail: 'trusted auth env binding is required',
+    };
+  }
+
   const policy = await deps.resolvePolicyEvidence({
     cwd,
     config_root: configRoot,
+    project_policy_root: projectPolicyRoot,
     provider_profile: input.harness_provider_profile,
+    ...(input.endpoint_env ? { endpoint_env: input.endpoint_env } : {}),
   });
   if (!policy.ok) {
     return {
@@ -210,6 +257,9 @@ export async function evaluateClaudeCodeAdmission(
     harness_model_profile: model,
     harness_credential_ref: credentialRef,
     harness_config_root: configRoot,
+    project_policy_root: projectPolicyRoot,
+    trusted_auth_host_env: authHost,
+    trusted_auth_child_env: authChild,
     cwd,
     sdk_version: pin.sdkVersion,
     cli_version: pin.cliVersion,

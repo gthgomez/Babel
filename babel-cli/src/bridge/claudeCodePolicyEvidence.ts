@@ -1,8 +1,11 @@
 import { createHash } from 'node:crypto';
 
-import { filterEscalatingDefaultMode, resolveSettings } from '@anthropic-ai/claude-agent-sdk';
-
 import type { ClaudeHarnessProviderProfile } from './claudeCodeAdmission.js';
+import {
+  resolveClaudeCodePolicyIsolated,
+  type ClaudeIsolatedPolicyResolveInput,
+} from './claudeCodeIsolatedPolicyResolve.js';
+import { profileChildEnvMarkers } from './claudeCodeProfileCatalog.js';
 
 export interface ClaudeCodeLaunchPolicySpec {
   settingSources: [];
@@ -33,9 +36,6 @@ export function buildClaudeCodeLaunchPolicySpec(
       sandbox: {
         enabled: true,
       },
-      env: {
-        BABEL_CLAUDE_PROFILE: providerProfile,
-      },
     },
   };
 }
@@ -45,58 +45,55 @@ export function digestClaudeCodeLaunchPolicy(spec: ClaudeCodeLaunchPolicySpec): 
   return createHash('sha256').update(payload).digest('hex');
 }
 
-export type ClaudeResolveSettingsFn = (opts: {
-  cwd: string;
-  settingSources: [];
-  managedSettings: Record<string, unknown>;
-}) => Promise<{ effective?: Record<string, unknown> }>;
+export type ClaudeResolveSettingsFn = (
+  input: ClaudeIsolatedPolicyResolveInput,
+) => Promise<{ ok: boolean; digest: string; detail?: string }>;
 
-export async function defaultClaudeResolveSettings(opts: {
-  cwd: string;
-  settingSources: [];
-  managedSettings: Record<string, unknown>;
-}): Promise<{ effective: Record<string, unknown> }> {
-  const resolved = await resolveSettings({
-    cwd: opts.cwd,
-    settingSources: [],
-    managedSettings: opts.managedSettings as import('@anthropic-ai/claude-agent-sdk').Settings,
-  });
-  const filtered = filterEscalatingDefaultMode(resolved);
-  return { effective: filtered as Record<string, unknown> };
+export async function defaultClaudeResolveSettings(
+  input: ClaudeIsolatedPolicyResolveInput,
+): Promise<{ ok: boolean; digest: string; detail?: string }> {
+  const result = await resolveClaudeCodePolicyIsolated(input);
+  return {
+    ok: result.ok,
+    digest: result.digest,
+    ...(result.detail ? { detail: result.detail } : {}),
+  };
 }
 
 export async function resolveClaudeCodePolicyEvidence(input: {
   cwd: string;
   config_root: string;
+  project_policy_root: string;
   provider_profile: ClaudeHarnessProviderProfile;
+  endpoint_env?: Record<string, string>;
   resolveSettings?: ClaudeResolveSettingsFn;
 }): Promise<{ ok: boolean; digest: string; detail?: string }> {
   const spec = buildClaudeCodeLaunchPolicySpec(input.provider_profile);
-  const digest = digestClaudeCodeLaunchPolicy(spec);
+  const childEnvBaseline = {
+    ...spec.envSuppressors,
+    ...profileChildEnvMarkers(input.provider_profile),
+    ...(input.endpoint_env ?? {}),
+  };
   const resolveFn = input.resolveSettings ?? defaultClaudeResolveSettings;
   try {
     const resolved = await resolveFn({
-      cwd: input.cwd,
-      settingSources: [],
-      managedSettings: spec.managedSettings,
+      projectPolicyRoot: input.project_policy_root,
+      configHome: input.config_root,
+      launchSpec: spec,
+      childEnvBaseline,
     });
-    if (!resolved.effective || typeof resolved.effective !== 'object') {
-      return { ok: false, digest, detail: 'resolveSettings returned no effective object' };
-    }
-    const mode = (resolved.effective as { permissions?: { defaultMode?: string } }).permissions
-      ?.defaultMode;
-    if (mode && mode !== 'default' && mode !== 'plan') {
+    if (!resolved.ok) {
       return {
         ok: false,
-        digest,
-        detail: `Escalating permissions.defaultMode ${mode} rejected`,
+        digest: resolved.digest,
+        ...(resolved.detail ? { detail: resolved.detail } : {}),
       };
     }
-    return { ok: true, digest };
+    return { ok: true, digest: resolved.digest };
   } catch (error) {
     return {
       ok: false,
-      digest,
+      digest: digestClaudeCodeLaunchPolicy(spec),
       detail: error instanceof Error ? error.message : String(error),
     };
   }

@@ -80,6 +80,7 @@ export class ProtocolGateway {
     openCodeInstallProbe?: () => Promise<import('./openCodeCliDiscovery.js').OpenCodeInstallProbe>;
     claudeCodeRegistry?: import('./claudeCodeAgentRuntime.js').ClaudeCodeAgentRuntimeRegistry;
     claudeCodeAdmissionDeps?: import('./claudeCodeSessionAdmission.js').ClaudeCodeSessionAdmissionDeps;
+    claudeCodeHostLaunchRegistry?: import('./claudeCodeHostLaunchRegistry.js').ClaudeCodeHostLaunchRegistry;
   }) {
     const allowedRoot = options.allowedWorkspaceRoot;
     this.registeredWorkspaceRoot = canonicalizeContained(resolve(allowedRoot));
@@ -97,6 +98,9 @@ export class ProtocolGateway {
       ...(options.claudeCodeRegistry ? { claudeCodeRegistry: options.claudeCodeRegistry } : {}),
       ...(options.claudeCodeAdmissionDeps
         ? { claudeCodeAdmissionDeps: options.claudeCodeAdmissionDeps }
+        : {}),
+      ...(options.claudeCodeHostLaunchRegistry
+        ? { claudeCodeHostLaunchRegistry: options.claudeCodeHostLaunchRegistry }
         : {}),
     });
   }

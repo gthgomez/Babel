@@ -16,10 +16,6 @@ function* drainPendingEvents(session: { pendingEvents: ChatEvent[] }): Generator
   }
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 export function createClaudeCodeHarnessEngine(options: ClaudeCodeHarnessEngineOptions): ChatEngine {
   const registry = options.registry;
   const descriptor = options.descriptor;
@@ -33,6 +29,7 @@ export function createClaudeCodeHarnessEngine(options: ClaudeCodeHarnessEngineOp
 
   let cancelRequested = false;
   let cancelNotified = false;
+  let activeTurnId = '';
 
   engine.submitMessageStream = async function* (message: string) {
     cancelRequested = false;
@@ -56,6 +53,7 @@ export function createClaudeCodeHarnessEngine(options: ClaudeCodeHarnessEngineOp
       return;
     }
 
+    activeTurnId = surface.turnId;
     writeSessionDescriptor(descriptor);
 
     const runPromise = registry.runTurn({
@@ -73,38 +71,49 @@ export function createClaudeCodeHarnessEngine(options: ClaudeCodeHarnessEngineOp
     yield { type: 'thinking' };
 
     let settled = false;
-    while (!settled) {
-      for (const event of drainPendingEvents(session)) {
-        yield event;
-        if (event.type === 'done' || event.type === 'failed' || event.type === 'cancelled') {
-          settled = true;
-          break;
+    try {
+      while (!settled) {
+        for (const event of drainPendingEvents(session)) {
+          yield event;
+          if (event.type === 'done' || event.type === 'failed' || event.type === 'cancelled') {
+            settled = true;
+            break;
+          }
         }
-      }
-      if (settled) break;
+        if (settled) break;
 
-      if (cancelRequested && !cancelNotified) {
-        if (registry.requestInterrupt(descriptor)) {
-          cancelNotified = true;
+        if (cancelRequested && !cancelNotified) {
+          if (registry.requestInterrupt(descriptor, activeTurnId)) {
+            cancelNotified = true;
+          }
         }
-      }
 
-      const raced = await Promise.race([
-        runPromise.then(() => 'done' as const),
-        new Promise<'tick'>((resolve) => setTimeout(() => resolve('tick'), 20)),
-      ]);
-      if (raced !== 'done') continue;
-      await runPromise;
-      for (const event of drainPendingEvents(session)) {
-        yield event;
+        const raced = await Promise.race([
+          runPromise.then(() => 'done' as const),
+          new Promise<'tick'>((resolve) => setTimeout(() => resolve('tick'), 20)),
+        ]);
+        if (raced !== 'done') continue;
+        await runPromise;
+        for (const event of drainPendingEvents(session)) {
+          yield event;
+        }
+        settled = true;
       }
-      settled = true;
+    } finally {
+      const nativeId = registry.consumeNativeSessionId(descriptor.threadId);
+      if (nativeId && descriptor.harness_native_session_id !== nativeId) {
+        descriptor.harness_native_session_id = nativeId;
+        writeSessionDescriptor(descriptor);
+      }
     }
   };
 
   engine.cancel = () => {
     cancelRequested = true;
-    registry.requestInterrupt(descriptor);
+    registry.markCancelPending(descriptor);
+    if (activeTurnId) {
+      registry.requestInterrupt(descriptor, activeTurnId);
+    }
   };
 
   return engine;

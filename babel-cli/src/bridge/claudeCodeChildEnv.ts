@@ -55,12 +55,22 @@ export function buildClaudeCodeChildEnv(input: {
     typeof input.policy.managedSettings.env === 'object' && input.policy.managedSettings.env !== null
       ? (input.policy.managedSettings.env as Record<string, string>)
       : {};
+  const frozenConfigDir = input.admitted.harness_config_root;
+  const blockedOverrides = new Set([
+    'CLAUDE_CONFIG_DIR',
+    ...Object.keys(input.policy.envSuppressors),
+  ]);
+  const safeCredential: Record<string, string> = {};
+  for (const [key, value] of Object.entries(input.credentialEnv)) {
+    if (blockedOverrides.has(key)) continue;
+    safeCredential[key] = value;
+  }
   return {
     ...base,
     ...input.policy.envSuppressors,
     ...profileChildEnvMarkers(input.admitted.harness_provider_profile),
     ...managedEnv,
-    CLAUDE_CONFIG_DIR: input.admitted.harness_config_root,
-    ...input.credentialEnv,
+    ...safeCredential,
+    CLAUDE_CONFIG_DIR: frozenConfigDir,
   };
 }

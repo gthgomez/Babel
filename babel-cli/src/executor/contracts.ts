@@ -52,6 +52,7 @@ export interface SessionDescriptor {
   harness_model_profile?: string
   /** User-owned Claude config root (frozen at admission). */
   harness_config_root?: string
+  harness_project_policy_root?: string
   /** Opaque credential reference (resolved only after admission). */
   harness_credential_ref?: string
   /** Frozen admission tuple digest for resume compatibility. */

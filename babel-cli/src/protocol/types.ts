@@ -185,6 +185,7 @@ export interface ThreadCreateParams {
   harness_provider_profile?: string;
   harness_model_profile?: string;
   harness_config_root?: string;
+  harness_project_policy_root?: string;
   harness_credential_ref?: string;
   harness_admission_digest?: string;
 }

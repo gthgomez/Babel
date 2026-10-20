@@ -12,6 +12,11 @@ import {
   resolveClaudeCodeHarnessCredentialEnv,
 } from './claudeCodeCredentialResolver.js';
 
+const TRUSTED_AUTH = {
+  trusted_auth_host_env: 'BABEL_TEST_ANTHROPIC_KEY',
+  trusted_auth_child_env: 'ANTHROPIC_API_KEY',
+} as const;
+
 describe('claudeCodeCredentialResolver', () => {
   const verifiedIntegrity = {
     state: 'verified' as const,
@@ -37,6 +42,7 @@ describe('claudeCodeCredentialResolver', () => {
         harness_credential_ref: 'MISSING_REF',
         harness_config_root: configRoot,
         project_root: root,
+        ...TRUSTED_AUTH,
       },
       {
         integrityProbe: async () => verifiedIntegrity,
@@ -74,6 +80,7 @@ describe('claudeCodeCredentialResolver', () => {
         harness_credential_ref: 'TEST_CRED',
         harness_config_root: configRoot,
         project_root: root,
+        ...TRUSTED_AUTH,
       },
       {
         integrityProbe: async () => verifiedIntegrity,
@@ -82,9 +89,16 @@ describe('claudeCodeCredentialResolver', () => {
     );
     assert.equal(admission.status, 'qualified');
     if (admission.status !== 'qualified') return;
-    const env = resolveClaudeCodeHarnessCredentialEnv('TEST_CRED', admission.admitted, {
-      BABEL_TEST_ANTHROPIC_KEY: 'secret-value',
-    });
-    assert.deepEqual(env, { BABEL_TEST_ANTHROPIC_KEY: 'secret-value' });
+    const env = resolveClaudeCodeHarnessCredentialEnv(
+      'TEST_CRED',
+      admission.admitted,
+      { BABEL_TEST_ANTHROPIC_KEY: 'secret-value' },
+      {
+        credential_ref: 'TEST_CRED',
+        auth_host_env: TRUSTED_AUTH.trusted_auth_host_env,
+        auth_child_env: TRUSTED_AUTH.trusted_auth_child_env,
+      },
+    );
+    assert.deepEqual(env, { ANTHROPIC_API_KEY: 'secret-value' });
   });
 });
