@@ -1,7 +1,7 @@
 # Agent A → Agent B reciprocal rereview handoff
 
 **Supersedes for review:** `59cd561b2414fcc32253de568c70285517eae1cd` (BLOCKED)  
-**Proposed revision (local only, not pushed):** branch `cursor/research-v2-contract-a-fc31` — see `review-artifacts/agent-a-checkpoint3.1-candidate/EXPORT_MANIFEST.json` for exact `head_commit`  
+**Published draft head (PR #405):** `17838c028c0a8a80f9745b01d1525983752e0eae` on branch `cursor/research-v2-contract-a-fc31` (tree `2ad1a8b0fbd448828327a261b78b87d97e28fdaf` at last publication)  
 **Contract version:** `2026.10.20-checkpoint.3.1` (composition FIX + verbatim B corpus; base `d51418b3`)  
 **Baseline:** `d9e42b14b00b6dba25f0415ae16b084363386a01`
 

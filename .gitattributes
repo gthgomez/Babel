@@ -6,3 +6,5 @@
 *.json text
 *.ps1 text eol=crlf
 babel-cli/.env.example text eol=lf
+babel-cli/src/research/v2/fixtures/general-dev-brief-corpus/**/mission.json text eol=lf
+babel-cli/src/research/v2/fixtures/general-dev-brief-corpus/BRIEF_FIXTURE_MANIFEST.json text eol=lf

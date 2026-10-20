@@ -3,10 +3,6 @@
  * identity + cancellation + accounting-only late settlement (no post-terminal evidence).
  */
 import assert from 'node:assert/strict'
-import { createHash } from 'node:crypto'
-import { readFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
 import { describe, it } from 'node:test'
 import {
   GeneralMissionBriefSchema,
@@ -20,18 +16,11 @@ import {
   StoreContractError,
 } from '../fixtures/fakePorts.js'
 import { RESEARCH_V2_CONTRACT_VERSION } from './version.js'
-
-const corpusDir = join(dirname(fileURLToPath(import.meta.url)), '../fixtures/general-dev-brief-corpus')
+import { parseVerbatimBriefJson } from '../fixtures/general-dev-brief-corpus/verbatimBriefBytes.js'
 
 describe('research v2 full journey regression (checkpoint.3.1 candidate)', () => {
   it('verbatim G-DEV-01 brief through cancel and late usage reconciliation only', async () => {
-    const manifest = JSON.parse(
-      readFileSync(join(corpusDir, 'BRIEF_FIXTURE_MANIFEST.json'), 'utf8'),
-    ) as { cases: Record<string, { sha256: string }> }
-    const bytes = readFileSync(join(corpusDir, 'G-DEV-01/mission.json'))
-    const sha = createHash('sha256').update(bytes).digest('hex')
-    assert.equal(sha, manifest.cases['G-DEV-01']?.sha256)
-    const brief = GeneralMissionBriefSchema.parse(JSON.parse(bytes.toString('utf8')))
+    const brief = GeneralMissionBriefSchema.parse(parseVerbatimBriefJson('G-DEV-01'))
     const mission = ResearchMissionV2Schema.parse(
       normalizeGeneralMissionBrief(brief, {
         mission_id: 'journey-g-dev-01',

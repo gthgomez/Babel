@@ -4,34 +4,25 @@
  * fail against frozen A 74ee4276 — not substitutes or inlined copies.
  */
 import assert from 'node:assert/strict'
-import { createHash } from 'node:crypto'
-import { readFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
 import { describe, it } from 'node:test'
 import {
   GeneralMissionBriefSchema,
   normalizeGeneralMissionBrief,
 } from './normalization.js'
 import { ResearchMissionV2Schema } from './mission.js'
+import {
+  parseVerbatimBriefJson,
+  type VerbatimBriefCaseId,
+} from '../fixtures/general-dev-brief-corpus/verbatimBriefBytes.js'
 
-const corpusDir = join(dirname(fileURLToPath(import.meta.url)), '../fixtures/general-dev-brief-corpus')
-const manifest = JSON.parse(
-  readFileSync(join(corpusDir, 'BRIEF_FIXTURE_MANIFEST.json'), 'utf8'),
-) as {
-  cases: Record<string, { sha256: string }>
-}
-
-const CASE_IDS = ['G-DEV-01', 'G-DEV-02', 'G-DEV-03', 'G-DEV-04', 'G-DEV-05', 'G-DEV-06'] as const
-
-function loadOriginalBrief(caseId: string): unknown {
-  const rel = join(caseId, 'mission.json')
-  const bytes = readFileSync(join(corpusDir, rel))
-  const sha = createHash('sha256').update(bytes).digest('hex')
-  const expected = manifest.cases[caseId]?.sha256
-  assert.equal(sha, expected, `${caseId} mission.json bytes changed from B original`)
-  return JSON.parse(bytes.toString('utf8'))
-}
+const CASE_IDS: VerbatimBriefCaseId[] = [
+  'G-DEV-01',
+  'G-DEV-02',
+  'G-DEV-03',
+  'G-DEV-04',
+  'G-DEV-05',
+  'G-DEV-06',
+]
 
 const normalizeOpts = (missionId: string) => ({
   mission_id: missionId,
@@ -42,12 +33,12 @@ const normalizeOpts = (missionId: string) => ({
 describe('normalizeGeneralMissionBrief — six original B mission.json files', () => {
   for (const caseId of CASE_IDS) {
     it(`${caseId}: GeneralMissionBriefSchema accepts verbatim JSON`, () => {
-      const brief = loadOriginalBrief(caseId)
+      const brief = parseVerbatimBriefJson(caseId)
       GeneralMissionBriefSchema.parse(brief)
     })
 
     it(`${caseId}: normalizes to ResearchMissionV2 without cast`, () => {
-      const brief = loadOriginalBrief(caseId)
+      const brief = parseVerbatimBriefJson(caseId)
       const mission = normalizeGeneralMissionBrief(brief, normalizeOpts(caseId))
       ResearchMissionV2Schema.parse(mission)
       assert.equal(mission.profile_id, 'general')
@@ -55,7 +46,7 @@ describe('normalizeGeneralMissionBrief — six original B mission.json files', (
   }
 
   it('G-DEV-02: missing as_of becomes unknown; hard_requirements preserved', () => {
-    const brief = loadOriginalBrief('G-DEV-02')
+    const brief = parseVerbatimBriefJson('G-DEV-02')
     assert.equal((brief as { as_of?: string }).as_of, undefined)
     assert.deepEqual((brief as { hard_requirements?: string[] }).hard_requirements, [
       'usb_c_displayport_alt_mode',
@@ -70,7 +61,7 @@ describe('normalizeGeneralMissionBrief — six original B mission.json files', (
   })
 
   it('G-DEV-06: notes preserved; as_of from brief retained', () => {
-    const brief = loadOriginalBrief('G-DEV-06')
+    const brief = parseVerbatimBriefJson('G-DEV-06')
     assert.equal(
       (brief as { notes?: string }).notes,
       'Primary registry fixture is intentionally inaccessible.',
@@ -87,7 +78,7 @@ describe('normalizeGeneralMissionBrief — six original B mission.json files', (
 
   it('verbatim briefs are not valid ResearchMissionV2 without normalization', () => {
     for (const caseId of CASE_IDS) {
-      const brief = loadOriginalBrief(caseId)
+      const brief = parseVerbatimBriefJson(caseId)
       assert.throws(() => ResearchMissionV2Schema.parse(brief))
     }
   })
