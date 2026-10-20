@@ -445,6 +445,34 @@ test('indexFiles rolls back a failed pending batch and allows a later successful
   }
 });
 
+test('indexFiles yields during forced reindexes of the same path every 50 operations', async () => {
+  const root = tempDir();
+  const dbPath = join(root, 'test.db');
+  const rel = 'repeat.ts';
+  const filePath = join(root, rel);
+  try {
+    writeFileSync(filePath, 'export const TOKEN = "REPEAT";', 'utf-8');
+    const idx = new FtsSearchIndex(dbPath);
+    const entries = Array.from({ length: 5000 }, () => ({ filePath, relativePath: rel }));
+
+    let scheduledImmediateRuns = 0;
+    for (let i = 0; i < 8; i++) {
+      setImmediate(() => {
+        scheduledImmediateRuns++;
+      });
+    }
+
+    const count = await idx.indexFiles(entries, { force: true });
+    assert.equal(count, 5000, 'each forced reindex operation should be counted');
+    assert.ok(scheduledImmediateRuns > 0, 'event loop turns must occur before indexFiles completes');
+    assert.equal(idx.count, 1, 'repeated path inserts should collapse to one indexed file');
+    assert.ok(idx.search('REPEAT', 5).length >= 1, 'final indexed content should remain searchable');
+    idx.close();
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 // ── Yielding verification ────────────────────────────────────────────────────
 
 test('indexFiles yields to event loop (no blocking > 100ms per batch)', async () => {

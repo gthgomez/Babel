@@ -242,6 +242,7 @@ export class FtsSearchIndex {
     };
 
     let indexed = 0;
+    let operationsSinceYield = 0;
     const pending: PendingInsert[] = [];
     const pendingPaths = new Set<string>();
 
@@ -308,9 +309,15 @@ export class FtsSearchIndex {
         complete: data.complete,
       });
       pendingPaths.add(relativePath);
+      operationsSinceYield++;
 
       if (pending.length >= BATCH_SIZE) {
         flushPendingBatch();
+      }
+
+      if (operationsSinceYield >= BATCH_SIZE) {
+        flushPendingBatch();
+        operationsSinceYield = 0;
         options?.onProgress?.(indexed, total);
         await new Promise((resolve) => setImmediate(resolve));
         if (options?.shouldContinue && !options.shouldContinue()) throw new Error('Semantic index lifetime retired');
