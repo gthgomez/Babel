@@ -37,6 +37,7 @@ import {
   resolveOpenRouterDeepSeekModelId,
 } from '../modelPolicy.js';
 import type { RunnerCallbacks } from '../runners/base.js';
+import type { ProgressInterventionLevel } from './progressController.js';
 
 export type CriticToolLogEntry = {
   tool: string;
@@ -210,6 +211,37 @@ export function computeCriticRepairCostCap(input: {
     capUsd: input.spentUsd + window,
     repairWindowUsd: window,
   };
+}
+
+export interface RepairBudgetEvidence {
+  /** A confirmed mutation happened in the turn being evaluated. */
+  hasMutation: boolean;
+  /** The current authoritative verifier failed. */
+  currentVerifierFailed: boolean;
+  /** The most recent diff-critic verdict was a real rejection. */
+  criticRejected: boolean;
+  /** Non-progress intervention level reported by the progress controller. */
+  intervention: ProgressInterventionLevel;
+}
+
+/**
+ * Finding 1: entering the bounded post-write repair window requires evidence of
+ * repair work or non-progress — a current failed verifier, a real critic
+ * rejection, or an existing last_chance_repair/terminal_blocked intervention.
+ *
+ * A successful write on its own is NOT evidence of repair: productive
+ * multi-file implementation must keep its granted allowance instead of being
+ * cut to a minutes-long repair window after the first edit. Hard task
+ * ceilings, cancellation and stall handling remain independent.
+ */
+export function shouldEnterRepairBudget(input: RepairBudgetEvidence): boolean {
+  if (!input.hasMutation) return false;
+  if (input.currentVerifierFailed) return true;
+  if (input.criticRejected) return true;
+  return (
+    input.intervention === 'last_chance_repair' ||
+    input.intervention === 'terminal_blocked'
+  );
 }
 
 /**
