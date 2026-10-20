@@ -1,0 +1,10 @@
+{
+  "structural": {
+    "must_normalize_annual_to_monthly_equivalent": true,
+    "must_state_tax_unknown": true,
+    "must_not_invent_tax_rate": true
+  },
+  "comparison_dimensions": ["storage_gb", "monthly_equivalent_usd", "annual_total_usd"],
+  "acceptable_terminal_states": ["complete", "partial"],
+  "forbidden_conclusions": ["exact_after_tax_price_without_source"]
+}

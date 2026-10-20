@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "campaign": "babel-research-v2",
+  "profile": "general",
+  "split": "development",
+  "cases": [
+    {
+      "id": "G-DEV-01",
+      "title": "Fictional plan comparison with tax unknown",
+      "mission_fixture": "G-DEV-01/mission.json",
+      "sources": ["G-DEV-01/sources/"],
+      "expectations": "G-DEV-01/expectations.json"
+    },
+    {
+      "id": "G-DEV-02",
+      "title": "Hard compatibility constraint beats cheaper option",
+      "mission_fixture": "G-DEV-02/mission.json",
+      "sources": ["G-DEV-02/sources/"],
+      "expectations": "G-DEV-02/expectations.json"
+    },
+    {
+      "id": "G-DEV-03",
+      "title": "Policy announcement vs publication vs effective dates",
+      "mission_fixture": "G-DEV-03/mission.json",
+      "sources": ["G-DEV-03/sources/"],
+      "expectations": "G-DEV-03/expectations.json"
+    },
+    {
+      "id": "G-DEV-04",
+      "title": "Syndicated press vs one underlying dataset",
+      "mission_fixture": "G-DEV-04/mission.json",
+      "sources": ["G-DEV-04/sources/"],
+      "expectations": "G-DEV-04/expectations.json"
+    },
+    {
+      "id": "G-DEV-05",
+      "title": "Scope-mismatched estimates not a false contradiction",
+      "mission_fixture": "G-DEV-05/mission.json",
+      "sources": ["G-DEV-05/sources/"],
+      "expectations": "G-DEV-05/expectations.json"
+    },
+    {
+      "id": "G-DEV-06",
+      "title": "Inaccessible primary with conflicting snippets",
+      "mission_fixture": "G-DEV-06/mission.json",
+      "sources": ["G-DEV-06/sources/"],
+      "expectations": "G-DEV-06/expectations.json"
+    }
+  ],
+  "security_fixtures": [
+    "security/prompt-injection-page.html",
+    "security/private-redirect-note.md"
+  ],
+  "document_fixtures": [
+    "../../adapters/documents/fixtures/sample-policy.txt",
+    "../../adapters/documents/fixtures/two-page-sample.pdf"
+  ]
+}

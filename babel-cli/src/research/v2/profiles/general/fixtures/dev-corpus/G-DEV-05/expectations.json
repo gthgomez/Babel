@@ -1,0 +1,7 @@
+{
+  "must_explain_scope_mismatch_not_contradiction": true,
+  "sources": {
+    "metro_survey.html": { "population": "metro", "period": "Q1 2026" },
+    "city_report.html": { "population": "city_limits", "period": "2025 annual average" }
+  }
+}
