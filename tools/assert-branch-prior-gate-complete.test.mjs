@@ -252,6 +252,23 @@ describe('assert-branch-prior-gate-complete', () => {
     )
   })
 
+  it('treats any validated workflow-endpoint row as gate history without producer name matching', () => {
+    const root = process.cwd()
+    assert.throws(
+      () =>
+        assertBranchPriorGateComplete(root, REMOTE, makeExistingBranchDeps({
+          branchProbe: lsRemoteBranchAbsent(),
+          ghPages: [
+            gateRunPage(
+              [{ id: 1, status: 'completed', head_sha: TIP, head_branch: BRANCH }],
+              1,
+            ),
+          ],
+        })),
+      /absent but Public Release Gate history exists/,
+    )
+  })
+
   it('fails closed on malformed workflow run entries instead of granting no-history', () => {
     const root = process.cwd()
     assert.throws(
@@ -451,6 +468,31 @@ describe('assert-branch-prior-gate-complete', () => {
       () =>
         assertBranchPriorGateComplete(root, REMOTE, makeExistingBranchDeps({
           tipAfterFetch: 'c'.repeat(40),
+        })),
+      /remote tip changed during gate preflight/,
+    )
+  })
+
+  it('fails closed when existing remote tip changes after workflow history lookup', () => {
+    const root = process.cwd()
+    const sha = TIP
+    let branchRefProbes = 0
+    assert.throws(
+      () =>
+        assertBranchPriorGateComplete(root, REMOTE, makeExistingBranchDeps({
+          branchProbe: lsRemoteBranchPresent(sha),
+          tipAfterFetch: sha,
+          ghPages: [gateRunPage([], 0)],
+          lsRemote: (r, remote, ref) => {
+            if (ref === 'HEAD') return lsRemoteHeadOk()
+            if (ref === REMOTE_REF) {
+              branchRefProbes += 1
+              return branchRefProbes === 1
+                ? lsRemoteBranchPresent(sha)
+                : lsRemoteBranchPresent('e'.repeat(40))
+            }
+            throw new Error('unexpected ref')
+          },
         })),
       /remote tip changed during gate preflight/,
     )

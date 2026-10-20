@@ -87,9 +87,7 @@ export function gitLsRemoteExact(root, remote, ref) {
 }
 
 export function evaluatePublishedHeadGate(workflowRuns, publishedHeadSha, options = {}) {
-  const matching = workflowRuns.filter(
-    (run) => run.head_sha === publishedHeadSha && isPublicReleaseGateRun(run),
-  )
+  const matching = workflowRuns.filter((run) => run.head_sha === publishedHeadSha)
   if (matching.length === 0) {
     if (options.branchHasAnyGateRuns === false) {
       return { allow: true, reason: 'no prior Public Release Gate on branch (first publication)' }
@@ -132,9 +130,6 @@ function assertWorkflowRunShape(run, branch, repo) {
   }
   if (typeof run.head_sha !== 'string' || !WORKFLOW_RUN_SHA_RE.test(run.head_sha)) {
     throw new Error('[pre-push] branch gate preflight: malformed workflow run entry')
-  }
-  if (!isPublicReleaseGateRun(run)) {
-    throw new Error('[pre-push] branch gate preflight: unexpected workflow run producer')
   }
   if (run.head_branch !== undefined && run.head_branch !== branch) {
     throw new Error('[pre-push] branch gate preflight: workflow run branch binding mismatch')
@@ -246,7 +241,23 @@ export function collectPublicReleaseGateRuns(repo, branch, ghGet, options) {
 }
 
 function branchHasAnyGateRuns(runs) {
-  return runs.some((run) => isPublicReleaseGateRun(run))
+  return runs.length > 0
+}
+
+function assertRemoteBranchTipUnchanged(
+  lsRemoteFn,
+  root,
+  remote,
+  remoteBranchRef,
+  expectedSha,
+  branch,
+) {
+  const probe = lsRemoteFn(root, remote, remoteBranchRef)
+  if (!probe.present || probe.sha !== expectedSha) {
+    throw new Error(
+      `[pre-push] branch ${branch} remote tip changed during gate preflight (retry push)`,
+    )
+  }
 }
 
 function assertRemoteReachable(root, remote, lsRemoteFn) {
@@ -314,6 +325,14 @@ export function assertBranchPriorGateComplete(root, remote = 'origin', deps = {}
     publishedHeadSha: tipAfterFetch,
     requireCompletePagination: false,
   })
+  assertRemoteBranchTipUnchanged(
+    lsRemoteFn,
+    root,
+    remote,
+    remoteBranchRef,
+    tipBeforeFetch,
+    branch,
+  )
   const verdict = evaluatePublishedHeadGate(runs, tipAfterFetch, {
     branchHasAnyGateRuns: branchHasAnyGateRuns(runs),
   })
