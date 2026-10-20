@@ -48,11 +48,11 @@
     }
   ],
   "security_fixtures": [
-    "security/prompt-injection-page.html",
-    "security/private-redirect-note.md"
+    "../security/prompt-injection-page.html",
+    "../security/private-redirect-note.md"
   ],
   "document_fixtures": [
-    "../../adapters/documents/fixtures/sample-policy.txt",
-    "../../adapters/documents/fixtures/two-page-sample.pdf"
+    "../../../../adapters/documents/fixtures/sample-policy.txt",
+    "../../../../adapters/documents/fixtures/two-page-sample.pdf"
   ]
 }
