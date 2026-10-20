@@ -10,6 +10,10 @@ import type { PassageRecord } from '../contracts/passages.js'
 import type { ResearchMissionV2 } from '../contracts/mission.js'
 import type { SourceRecord, SourceRevision } from '../contracts/sources.js'
 import type { ModelRouteReceipt } from './researchModelPort.js'
+import type {
+  ResearchContinuationResume,
+  WriterOwnershipAcquire,
+} from '../contracts/storeLifecycle.js'
 
 export type ResearchStoreEventKind =
   | 'mission_created'
@@ -23,6 +27,7 @@ export type ResearchStoreEventKind =
   | 'external_operation_completed'
   | 'external_operation_reconciled'
   | 'terminal_receipt'
+  | 'research_continuation_resumed'
 
 export interface ResearchStoreEvent {
   eventId: string
@@ -43,9 +48,14 @@ export interface ResearchStoreMissionHandle {
 
 export interface ResearchStore {
   appendMission(mission: ResearchMissionV2): Promise<ResearchStoreMissionHandle>
-  /** Resume or compete for write ownership; bumps writer generation on success. */
-  acquireWriterOwnership(
-    request: { mission_id: string; expected_writer_generation: number },
+  /** Compete for write ownership on a non-terminal mission; bumps writer generation on success. */
+  acquireWriterOwnership(request: WriterOwnershipAcquire): Promise<ResearchStoreMissionHandle>
+  /**
+   * Host-authorized continuation after a resumable terminal receipt. Retains prior terminal
+   * evidence in the log; does not clear accounting. Never available via usage_reconciliation.
+   */
+  resumeResearchContinuation(
+    request: ResearchContinuationResume,
   ): Promise<ResearchStoreMissionHandle>
   /** Invalidate prior writer generation after handoff (e.g. crash recovery). */
   replaceWriterOwnership(

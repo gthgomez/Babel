@@ -1,5 +1,10 @@
 import { createHash } from 'node:crypto'
 import type { MissionWriteContext } from '../contracts/common.js'
+import {
+  isResumableTerminalState,
+  ResearchContinuationResumeSchema,
+  WriterOwnershipAcquireSchema,
+} from '../contracts/storeLifecycle.js'
 import type { FindingRecord } from '../contracts/findings.js'
 import type { PassageRecord } from '../contracts/passages.js'
 import type { PlanRevision, ResearchReportV2 } from '../contracts/plan.js'
@@ -246,7 +251,10 @@ export class FakeSourceAccessPort implements SourceAccessPort {
 interface MissionFence {
   writerGeneration: number
   activePlanRevisionId: string | null
+  /** Active terminal fence; cleared only by explicit host resume (prior receipt stays in events). */
   terminalReport: ResearchReportV2 | null
+  /** Immutable cancelled/interrupted receipt retained after resume for inspect continuity. */
+  retainedTerminalReceipt: ResearchReportV2 | null
 }
 
 interface TrackedOperation {
@@ -347,26 +355,64 @@ export class InMemoryResearchStore implements ResearchStore {
       writerGeneration: 1,
       activePlanRevisionId: null,
       terminalReport: null,
+      retainedTerminalReceipt: null,
     })
     this.push(mission.mission_id, 'mission_created', { mission })
     return Promise.resolve({ mission_id: mission.mission_id, writer_generation: 1 })
   }
 
-  async acquireWriterOwnership(request: {
-    mission_id: string
-    expected_writer_generation: number
-  }): Promise<ResearchStoreMissionHandle> {
-    const fence = this.fence(request.mission_id)
+  async acquireWriterOwnership(
+    request: Parameters<ResearchStore['acquireWriterOwnership']>[0],
+  ): Promise<ResearchStoreMissionHandle> {
+    const parsed = WriterOwnershipAcquireSchema.parse(request)
+    const fence = this.fence(parsed.mission_id)
     if (fence.terminalReport !== null) {
       throw new StoreContractError('cannot acquire ownership on terminal mission')
     }
-    if (request.expected_writer_generation !== fence.writerGeneration) {
+    if (parsed.expected_writer_generation !== fence.writerGeneration) {
       throw new StoreContractError('competing resume rejected')
     }
     fence.writerGeneration += 1
     return Promise.resolve({
-      mission_id: request.mission_id,
+      mission_id: parsed.mission_id,
       writer_generation: fence.writerGeneration,
+    })
+  }
+
+  async resumeResearchContinuation(
+    request: Parameters<ResearchStore['resumeResearchContinuation']>[0],
+  ): Promise<ResearchStoreMissionHandle> {
+    const parsed = ResearchContinuationResumeSchema.parse(request)
+    const fence = this.fence(parsed.mission_id)
+    if (fence.terminalReport === null) {
+      throw new StoreContractError('resume requires active terminal receipt')
+    }
+    if (!isResumableTerminalState(fence.terminalReport.terminal_state)) {
+      throw new StoreContractError('terminal state not resumable')
+    }
+    if (fence.terminalReport.terminal_state !== parsed.acknowledged_terminal_state) {
+      throw new StoreContractError('acknowledged terminal state mismatch')
+    }
+    if (fence.terminalReport.plan_revision_id !== parsed.acknowledged_plan_revision_id) {
+      throw new StoreContractError('acknowledged plan revision mismatch')
+    }
+    if (parsed.expected_writer_generation !== fence.writerGeneration) {
+      throw new StoreContractError('competing resume rejected')
+    }
+    const retained = fence.terminalReport
+    fence.retainedTerminalReceipt = retained
+    fence.terminalReport = null
+    fence.writerGeneration += 1
+    const newGeneration = fence.writerGeneration
+    this.push(parsed.mission_id, 'research_continuation_resumed', {
+      host_authorization_ref: parsed.host_authorization_ref,
+      retained_terminal_receipt: retained,
+      prior_writer_generation: parsed.expected_writer_generation,
+      writer_generation: newGeneration,
+    })
+    return Promise.resolve({
+      mission_id: parsed.mission_id,
+      writer_generation: newGeneration,
     })
   }
 

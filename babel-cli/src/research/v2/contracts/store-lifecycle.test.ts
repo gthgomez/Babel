@@ -427,11 +427,11 @@ describe('research v2 store lifecycle (checkpoint.3.1 composition FIX)', () => {
     const store = new InMemoryResearchStore()
     const handle = await seedMission(store)
     assert.equal(handle.writer_generation, 1)
-    const resumed = await store.acquireWriterOwnership({
+    const acquiredRun = await store.acquireWriterOwnership({
       mission_id: handle.mission_id,
       expected_writer_generation: 1,
     })
-    assert.equal(resumed.writer_generation, 2)
+    assert.equal(acquiredRun.writer_generation, 2)
     const ctxP1 = {
       ...exampleMissionWriteContext,
       writer_generation: 2,
