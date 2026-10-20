@@ -3,11 +3,13 @@
  * capability recovery.
  *
  * These tests drive the actual ChatEngine action dispatcher. A deterministic
- * tool executor is injected per instance with `setToolExecutorForTesting`, so
+ * tool executor is injected per instance through `toolExecutorForTesting`, so
  * execution is admitted, controlled and observable: the fake never launches a
  * real subprocess and never touches a provider or the network. Policy and
  * admission still run, because the executor is only reached through
- * `executeActionWithPolicy`.
+ * `executeActionWithPolicy`. The executor is injected through the internal
+ * `toolExecutorForTesting` option, which is never parsed from the CLI, the
+ * environment or persisted configuration.
  *
  * Host execution is admitted by selecting the documented no-isolation profile
  * (`dev_local`) under a narrow synthetic autonomy lease. The isolation-denial
@@ -177,15 +179,16 @@ function withFixture(
   process.env['BABEL_AUTONOMY_LEASE'] = SYNTHETIC_LEASE;
 
   const calls: ToolCallRequest[] = [];
-  const engine = new ChatEngine({ task: 'List the project tree', projectRoot: root });
-  engine.setToolExecutorForTesting(
-    createToolExecutor({
+  const engine = new ChatEngine({
+    task: 'List the project tree',
+    projectRoot: root,
+    toolExecutorForTesting: createToolExecutor({
       executeTool: async (req: ToolCallRequest, _context: ToolContext): Promise<ToolResult> => {
         calls.push(req);
         return await handler(req);
       },
     }),
-  );
+  });
   const pc = (engine as unknown as { progressController: ProgressProbe }).progressController;
   const ctx = { agentId: 'test', runId: 'test', runDir: root, babelRoot: root, projectRoot: root };
 

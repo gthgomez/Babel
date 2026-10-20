@@ -775,7 +775,7 @@ export class ChatEngineActionExecutor {
             projectRoot: requireProjectRoot(this.host.options),
             context: toolContext,
             preset: "workspace_write",
-            executor: this.host.resolveToolExecutor?.() ?? defaultToolExecutor,
+            executor: this.host.options.toolExecutorForTesting ?? defaultToolExecutor,
             onDispatchAuthorized: () => recoveredAuthorization,
             onBeforeExecutorExecute: () =>
               this.host.persistToolStartedAtExecutorDispatch(action, meta),
@@ -1309,7 +1309,7 @@ export class ChatEngineActionExecutor {
           : "workspace_write",
         toolContext,
         {
-          executor: this.host.resolveToolExecutor?.() ?? defaultToolExecutor,
+          executor: this.host.options.toolExecutorForTesting ?? defaultToolExecutor,
           mode:
             this.host.executionProfile === "plan"
               ? "plan"

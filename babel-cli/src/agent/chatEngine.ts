@@ -320,7 +320,6 @@ import {
   ChatEngineActionExecutor,
   type ChatEngineActionExecutorHost,
 } from "./chatEngineActionExecutor.js";
-import { defaultToolExecutor, type ToolExecutor } from "./toolExecutor.js";
 import {
   ChatEngineStreamingLoop,
   type ChatEngineStreamingLoopHost,
@@ -566,13 +565,6 @@ export class ChatEngine {
   private readonly ownerAccounting: ChatEngineOwnerAccounting;
   private readonly taskAllowanceOwner: ChatEngineTaskAllowance;
   private readonly actionExecutor: ChatEngineActionExecutor;
-  /**
-   * Per-instance governed-dispatch tool executor. Defaults to the shared
-   * `defaultToolExecutor`; only {@link setToolExecutorForTesting} changes it.
-   * Never reachable from model input, the CLI, the environment or persisted
-   * configuration, and it never bypasses policy, admission or lifecycle.
-   */
-  private toolExecutorOverride: ToolExecutor | null = null;
   private readonly streamingLoop: ChatEngineStreamingLoop;
   private readonly p11Authority: ChatEngineP11Authority;
   /** P11 A11a: exact approved observation refs retained for the installed context. */
@@ -3808,22 +3800,6 @@ export class ChatEngine {
         "applied to the current task.",
       ].join("\n"),
     };
-  }
-
-  /** Host port: the tool executor governed dispatch delivers to. */
-  resolveToolExecutor(): ToolExecutor {
-    return this.toolExecutorOverride ?? defaultToolExecutor;
-  }
-
-  /**
-   * @internal Test-only per-instance injection of a deterministic tool
-   * executor. Not exposed through model input, the CLI, the environment or
-   * persisted configuration; policy, admission, cancellation and receipts are
-   * unchanged because the executor is still driven through
-   * `executeActionWithPolicy`.
-   */
-  setToolExecutorForTesting(executor: ToolExecutor): void {
-    this.toolExecutorOverride = executor;
   }
 
   private async executeOneAction(
