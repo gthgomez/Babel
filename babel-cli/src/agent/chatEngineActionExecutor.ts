@@ -53,6 +53,7 @@ import {
 import { mutationPathsFromSessionEvents } from "../evidence/chatRevisionBinding.js";
 import {
   executeActionWithPolicy,
+  defaultToolExecutor,
   type PolicyGatedExecutionResult,
 } from "./toolExecutor.js";
 import { governedStrReplace } from "./governedMutations.js";
@@ -774,7 +775,7 @@ export class ChatEngineActionExecutor {
             projectRoot: requireProjectRoot(this.host.options),
             context: toolContext,
             preset: "workspace_write",
-            executor: this.host.resolveToolExecutor(),
+            executor: this.host.resolveToolExecutor?.() ?? defaultToolExecutor,
             onDispatchAuthorized: () => recoveredAuthorization,
             onBeforeExecutorExecute: () =>
               this.host.persistToolStartedAtExecutorDispatch(action, meta),
@@ -1308,7 +1309,7 @@ export class ChatEngineActionExecutor {
           : "workspace_write",
         toolContext,
         {
-          executor: this.host.resolveToolExecutor(),
+          executor: this.host.resolveToolExecutor?.() ?? defaultToolExecutor,
           mode:
             this.host.executionProfile === "plan"
               ? "plan"
