@@ -27,24 +27,13 @@ export function parseGithubRepoFromRemote(remoteUrl) {
   throw new Error('[pre-push] origin is not a github.com repository URL')
 }
 
-function resolveGithubRepo(root, remote, gitFn) {
+/**
+ * Resolve the GitHub repository for gate authorization from the named remote URL only.
+ * Unparseable remotes fail closed; never substitute gh's default repository.
+ */
+export function resolveGithubRepoForGate(root, remote, gitFn) {
   const remoteUrl = gitFn(root, ['remote', 'get-url', remote])
-  try {
-    return parseGithubRepoFromRemote(remoteUrl)
-  } catch (error) {
-    const gh = spawnSync('gh', ['repo', 'view', '--json', 'nameWithOwner'], {
-      cwd: root,
-      encoding: 'utf8',
-      windowsHide: true,
-    })
-    if (gh.status === 0 && gh.stdout) {
-      const payload = JSON.parse(gh.stdout)
-      if (typeof payload.nameWithOwner === 'string' && payload.nameWithOwner.includes('/')) {
-        return payload.nameWithOwner
-      }
-    }
-    throw error
-  }
+  return parseGithubRepoFromRemote(remoteUrl)
 }
 
 export function isPublicReleaseGateRun(run) {
@@ -197,7 +186,7 @@ export function assertBranchPriorGateComplete(root, remote = 'origin', deps = {}
     throw new Error('[pre-push] detached HEAD; checkout a branch before pushing')
   }
 
-  const repo = resolveGithubRepo(root, remote, gitFn)
+  const repo = resolveGithubRepoForGate(root, remote, gitFn)
   const remoteBranchRef = `refs/heads/${branch}`
 
   assertRemoteReachable(root, remote, lsRemoteFn)

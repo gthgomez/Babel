@@ -8,9 +8,9 @@ import {
   assertBranchPriorGateComplete,
   collectPublicReleaseGateRuns,
   evaluatePublishedHeadGate,
-  gitLsRemoteExact,
   parseGithubRepoFromRemote,
   parseLsRemoteOutput,
+  resolveGithubRepoForGate,
 } from './assert-branch-prior-gate-complete.mjs'
 
 const REMOTE = 'origin'
@@ -52,7 +52,10 @@ function makeExistingBranchDeps(overrides = {}) {
       }
       throw new Error(`unexpected ls-remote ref ${ref}`)
     },
-    ghGet: () => {
+    ghGet: (repo, query) => {
+      if (repo !== REPO) {
+        throw new Error(`ghGet bound to wrong repository: ${repo}`)
+      }
       const page = ghPages[ghCall]
       if (!page) throw new Error('ghGet called too many times')
       ghCall += 1
@@ -75,6 +78,79 @@ describe('assert-branch-prior-gate-complete', () => {
       REPO,
     )
     assert.throws(() => parseGithubRepoFromRemote('https://gitlab.com/gthgomez/Babel.git'))
+  })
+
+  it('resolveGithubRepoForGate binds only to the configured remote URL', () => {
+    const root = process.cwd()
+    const repo = resolveGithubRepoForGate(root, REMOTE, (r, args) => {
+      if (args[0] === 'remote' && args[1] === 'get-url') {
+        return 'git@github.com:gthgomez/Babel.git'
+      }
+      throw new Error('unexpected git')
+    })
+    assert.equal(repo, REPO)
+  })
+
+  it('fails closed on unparseable remote URL without gh default-repository fallback', () => {
+    const root = process.cwd()
+    let ghWorkflowQuery = false
+    assert.throws(
+      () =>
+        assertBranchPriorGateComplete(root, REMOTE, {
+          git: (r, args) => {
+            if (args[0] === 'symbolic-ref') return BRANCH
+            if (args[0] === 'remote' && args[1] === 'get-url') {
+              return 'https://example.com/not-github.git'
+            }
+            throw new Error('unexpected git')
+          },
+          lsRemote: (r, remote, ref) => {
+            if (ref === 'HEAD') return lsRemoteHeadOk()
+            return lsRemoteBranchAbsent()
+          },
+          ghGet: () => {
+            ghWorkflowQuery = true
+            return { workflow_runs: [] }
+          },
+        }),
+      /not a github.com repository URL/,
+    )
+    assert.equal(ghWorkflowQuery, false)
+  })
+
+  it('does not authorize first publication via an unrelated default gh repository', () => {
+    const root = process.cwd()
+    const configuredRepo = 'gthgomez/Babel'
+    const wrongDefaultRepo = 'other-org/wrong-default'
+    let workflowRepo = null
+    assert.doesNotThrow(() =>
+      assertBranchPriorGateComplete(root, REMOTE, {
+        git: (r, args) => {
+          if (args[0] === 'symbolic-ref') return BRANCH
+          if (args[0] === 'remote' && args[1] === 'get-url') {
+            return `git@github.com:${configuredRepo}.git`
+          }
+          throw new Error('unexpected git')
+        },
+        lsRemote: (r, remote, ref) => {
+          if (ref === 'HEAD') return lsRemoteHeadOk()
+          if (ref === REMOTE_REF) return lsRemoteBranchAbsent()
+          throw new Error('unexpected ref')
+        },
+        ghGet: (repo) => {
+          workflowRepo = repo
+          if (repo === wrongDefaultRepo) {
+            return { workflow_runs: [] }
+          }
+          if (repo === configuredRepo) {
+            return { workflow_runs: [] }
+          }
+          throw new Error(`unexpected workflow repo ${repo}`)
+        },
+      }),
+    )
+    assert.equal(workflowRepo, configuredRepo)
+    assert.notEqual(workflowRepo, wrongDefaultRepo)
   })
 
   it('parses ls-remote lines and rejects malformed output', () => {
