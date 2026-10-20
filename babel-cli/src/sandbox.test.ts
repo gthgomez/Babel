@@ -943,6 +943,40 @@ test('shellExecAsync preserves shellExec result shape for a successful command',
   }
 });
 
+test('shellExecAsync supervisor timeout is not a host launch failure', async () => {
+  const fixture = makeFixture();
+  try {
+    writeFileSync(
+      join(fixture.projectRoot, 'hang.mjs'),
+      "setTimeout(() => {}, 30_000);\n",
+      'utf-8',
+    );
+    const executor = new SafeExecutor(fixture.projectRoot);
+    const result = await executor.shellExecAsync('node hang.mjs', '.', 200);
+    assert.equal(result.launch_failure, undefined, 'a launched process that timed out is not a launch failure');
+    assert.notEqual(result.exit_code, 0);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('shellExec supervisor timeout is not a host launch failure', () => {
+  const fixture = makeFixture();
+  try {
+    writeFileSync(
+      join(fixture.projectRoot, 'hang-sync.mjs'),
+      "setTimeout(() => {}, 30_000);\n",
+      'utf-8',
+    );
+    const executor = new SafeExecutor(fixture.projectRoot);
+    const result = executor.shellExec('node hang-sync.mjs', '.', 200);
+    assert.equal(result.launch_failure, undefined, 'spawnSync timeout after launch is not a launch failure');
+    assert.notEqual(result.exit_code, 0);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
 // The product shell policy denies project interpreters on an unisolated host.
 // Exercise its real process supervisor with fixed, owned fixture scripts.
 function superviseFixtureScript(fixture: ReturnType<typeof makeFixture>, name: string, timeoutMs: number, signal?: AbortSignal) {

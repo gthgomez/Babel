@@ -315,6 +315,28 @@ function isTransientSpawnError(errorMessage: string): boolean {
   });
 }
 
+/** spawnSync child ran but the supervisor ended it (timeout or output cap). */
+function isSpawnSyncRuntimeSupervisorError(error: Error): boolean {
+  const code = (error as NodeJS.ErrnoException).code;
+  return code === 'ETIMEDOUT' || code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER';
+}
+
+/**
+ * Async child launched successfully, then the supervisor ended it (timeout) or
+ * output was capped — not a could-not-launch failure.
+ */
+function isChildRuntimeSupervisorError(
+  error: Error,
+  processStarted: boolean,
+  timedOut: boolean,
+): boolean {
+  if (timedOut && processStarted) return true;
+  const code = (error as NodeJS.ErrnoException).code;
+  if (code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' && processStarted) return true;
+  if (code === 'ETIMEDOUT' && processStarted) return true;
+  return /spawn .+ etimedout/i.test(error.message) && processStarted;
+}
+
 /**
  * Synchronous sleep using Atomics.wait on a shared buffer.
  * This is safe to use in the spawn retry loop because spawnSync is already
@@ -350,6 +372,10 @@ interface AsyncSpawnResult {
   stdoutTruncated: boolean;
   stderrTruncated: boolean;
   aborted: boolean;
+  /** Process reached the spawn callback before the error (runtime, not launch). */
+  processStarted: boolean;
+  /** Wall-clock supervisor timeout after a successful launch. */
+  timedOut: boolean;
 }
 
 interface PreparedShellInvocation {
@@ -479,6 +505,8 @@ export function spawnCommandAsync(
       stdoutTruncated: false,
       stderrTruncated: false,
       aborted: true,
+      processStarted: false,
+      timedOut: false,
     });
   }
 
@@ -506,6 +534,8 @@ export function spawnCommandAsync(
         stdoutTruncated: false,
         stderrTruncated: false,
         aborted: false,
+        processStarted: false,
+        timedOut: false,
       });
       return;
     }
@@ -562,6 +592,8 @@ export function spawnCommandAsync(
         stdoutTruncated,
         stderrTruncated,
         aborted,
+        processStarted,
+        timedOut,
       });
     };
 
@@ -2010,6 +2042,9 @@ export class SafeExecutor {
     }
 
     if (result.error) {
+      if (isSpawnSyncRuntimeSupervisorError(result.error)) {
+        return normalizeShellOutput(result.status, result.stdout ?? '', result.stderr ?? '');
+      }
       const isTransient = transientRetryCount > 0 && isTransientSpawnError(result.error.message);
       const prefix = isTransient
         ? '[sandbox] Transient spawn error (retries exhausted):'
@@ -2077,20 +2112,31 @@ export class SafeExecutor {
     }
 
     if (result.error) {
+      if (result.aborted) {
+        return {
+          exit_code: 1,
+          stdout: '',
+          stderr: `[sandbox] Spawn error: ${result.error.message}`,
+        };
+      }
+      if (isChildRuntimeSupervisorError(result.error, result.processStarted, result.timedOut)) {
+        return normalizeShellOutput(
+          result.status,
+          result.stdout,
+          result.stderr,
+          result.stdoutTruncated,
+          result.stderrTruncated,
+        );
+      }
       const transient =
-        !result.aborted && transientRetryCount > 0 && isTransientSpawnError(result.error.message);
+        transientRetryCount > 0 && isTransientSpawnError(result.error.message);
       return {
         exit_code: 1,
         stdout: '',
         stderr: `${transient ? '[sandbox] Transient spawn error (retries exhausted):' : '[sandbox] Spawn error:'} ${result.error.message}`,
-        // An aborted launch is a cancellation, not a capability failure.
-        ...(result.aborted
-          ? {}
-          : {
-              launch_failure: {
-                code: transient ? ('transient_spawn_error' as const) : ('spawn_error' as const),
-              },
-            }),
+        launch_failure: {
+          code: transient ? ('transient_spawn_error' as const) : ('spawn_error' as const),
+        },
       };
     }
     return normalizeShellOutput(

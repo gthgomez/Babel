@@ -168,9 +168,9 @@ type EnvKey = (typeof ENV_KEYS)[number];
 function withFixture(
   name: string,
   handler: (req: ToolCallRequest) => Promise<ToolResult>,
-  options: { admitted?: boolean } = {},
+  options: { admitted?: boolean; admitSubmission?: boolean } = {},
 ): { h: Harness; cleanup: () => void } {
-  const { admitted = true } = options;
+  const { admitted = true, admitSubmission = false } = options;
   const root = mkdtempSync(join(tmpdir(), name));
   const previous = new Map<EnvKey, string | undefined>(ENV_KEYS.map((k) => [k, process.env[k]]));
 
@@ -189,6 +189,20 @@ function withFixture(
       },
     }),
   });
+  const engineInternals = engine as unknown as {
+    taskAllowanceOwner: {
+      createTaskAllowance: () => import('./chatEngineContracts.js').ChatTaskAllowanceSnapshot;
+    };
+    taskAllowance: import('./chatEngineContracts.js').ChatTaskAllowanceSnapshot | null;
+  };
+  if (admitSubmission) {
+    engine.applyUserSubmission({
+      userInput: 'List the project tree',
+      taskIntent: 'execute',
+    });
+  } else {
+    engineInternals.taskAllowance = engineInternals.taskAllowanceOwner.createTaskAllowance();
+  }
   const pc = (engine as unknown as { progressController: ProgressProbe }).progressController;
   const ctx = { agentId: 'test', runId: 'test', runDir: root, babelRoot: root, projectRoot: root };
 
@@ -385,13 +399,77 @@ test('a new task may probe once and a model label cannot forge a trusted environ
       false,
     );
 
-    const engine = h.engine as unknown as { activeSubmissionGeneration: number };
-    engine.activeSubmissionGeneration = Number(engine.activeSubmissionGeneration ?? 0) + 1;
+    const freshOwner = h.engine as unknown as {
+      taskAllowanceOwner: {
+        createTaskAllowance: () => import('./chatEngineContracts.js').ChatTaskAllowanceSnapshot;
+      };
+      taskAllowance: import('./chatEngineContracts.js').ChatTaskAllowanceSnapshot | null;
+    };
+    freshOwner.taskAllowance = freshOwner.taskAllowanceOwner.createTaskAllowance();
     const reprobe = await h.dispatch(1);
     assert.doesNotMatch(reprobe.observation, SUPPRESSED, 'a new task re-arms exactly one probe');
     assert.equal(h.calls.length, 2);
   } finally {
     cleanup();
+  }
+});
+
+test('preserved taskOwnerId across submission generation cannot re-arm a consumed probe (Continue path)', async () => {
+  const { h, cleanup } = withFixture('babel-cap-continue-', async () => hostLaunchFailure());
+  try {
+    const engine = h.engine as unknown as {
+      taskAllowance: { taskOwnerId: string } | null;
+      activeSubmissionGeneration: number;
+    };
+    const ownerBefore = engine.taskAllowance?.taskOwnerId;
+    assert.ok(ownerBefore && ownerBefore.length > 0, 'fixture must bind taskOwnerId');
+
+    degrade(h.pc);
+    await h.dispatch(0);
+    assert.equal(h.calls.length, 1, 'the one probe for this durable task reached dispatch');
+
+    // submitMessage / prepareStreamingSubmission bumps generation on every submission,
+    // including explicit Continue, while prepareSubmissionAllowance preserves taskOwnerId.
+    const generationBefore = engine.activeSubmissionGeneration;
+    engine.activeSubmissionGeneration = generationBefore + 1;
+    assert.equal(engine.taskAllowance?.taskOwnerId, ownerBefore);
+
+    const after = await h.dispatch(1);
+    assert.match(after.observation, SUPPRESSED, 'consumed probe must not re-arm when only generation advances');
+    assert.equal(h.calls.length, 1);
+  } finally {
+    cleanup();
+  }
+});
+
+test('applyUserSubmission continueTask preserves taskOwnerId for capability probe scope', () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-cap-continue-admit-'));
+  const previous = new Map<EnvKey, string | undefined>(ENV_KEYS.map((k) => [k, process.env[k]]));
+  for (const key of ENV_KEYS) delete process.env[key];
+  process.env['BABEL_EXECUTION_PROFILE'] = 'dev_local';
+  process.env['BABEL_AUTONOMY_LEASE'] = SYNTHETIC_LEASE;
+  try {
+    const engine = new ChatEngine({ task: 'Implement listing', projectRoot: root });
+    engine.applyUserSubmission({ userInput: 'Implement listing', taskIntent: 'execute' });
+    const ownerBefore = (engine as unknown as { taskAllowance: { taskOwnerId: string } }).taskAllowance
+      .taskOwnerId;
+    engine.applyUserSubmission({
+      userInput: 'continue implementing the listing',
+      continueTask: true,
+      taskIntent: 'execute',
+    });
+    assert.equal(
+      (engine as unknown as { taskAllowance: { taskOwnerId: string } }).taskAllowance.taskOwnerId,
+      ownerBefore,
+      'Continue must preserve durable taskOwnerId used for probe scope',
+    );
+  } finally {
+    for (const key of ENV_KEYS) {
+      const value = previous.get(key);
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    rmSync(root, { recursive: true, force: true });
   }
 });
 

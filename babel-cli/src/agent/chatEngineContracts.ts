@@ -877,6 +877,7 @@ export interface ChatEngineActionExecutorHost {
     index: number,
     reason: string,
   ) => { index: number; observation: string }
+  readonly taskAllowance: ChatTaskAllowanceSnapshot | null
   taskClass: ChatTaskClass
   todos: Map<string, { content: string; status: string }>
   toolCallLog: {
