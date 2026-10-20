@@ -30,6 +30,42 @@
 | Relayed to coordinator | Via Cursor thread; **not** posted as #404/#405 PR review |
 | v2 contract tests (local worktree) | 8/8 pass, no network |
 
+## Guard commands (last executed — not re-run for unchanged tree)
+
+Task-local `pwsh`: `/workspace/.tools/powershell-7.5.4/pwsh` (Microsoft **7.5.4**, SHA256 verified).
+
+| Guard | Command | Exit | Result |
+|-------|---------|------|--------|
+| Preflight | `pwsh scripts/agent-preflight.ps1 -RepoRoot /workspace -GitPath /usr/bin/git -GhPath /exec-daemon/gh` | 1 | `ok: false` — `unexpected_dirty_worktree` (`.tools/` + uncommitted docs); `repo_local_gh_credential_helper_missing` (**user approval pending — not configured**) |
+| Public content | `pwsh tools/check-public-content-policy.ps1 -RepoRoot /workspace` | 0 | **Public content policy passed.** |
+| Secret scan | `pwsh tools/run-public-secret-scan.ps1 -RepoRoot /workspace -Strict -RequireExternalScanner` | 1 | Scrub **pass**; **gitleaks 8.30.1** — 2 findings in **`.tools/README.md`** (tool artifact examples, not Babel source) |
+| Maintainer pre-merge | `pwsh tools/validate-public-release.ps1 -Strict -RequireSupplementalPolicy` | **not run** | **Blocks maintainer merge only** — requires real `BABEL_PRIVATE_SCRUB_POLICY_PATH` or approved `-SupplementalPolicyPath`; does **not** block local B-owned work or ordinary push scrub by itself; **no campaign waiver** |
+| Secret scan (after tool relocation) | same + gitleaks on `PATH` from `/tmp/babel-campaign-tools.*` | **0** | **Public secret scan passed with gitleaks 8.30.1** (full repo, untracked source included; no gitignore/scanner exclusions) |
+
+**Campaign tools (outside checkout):** verified copy at `/tmp/babel-campaign-tools.hjmT7z` — pwsh **7.5.4**, gitleaks **8.30.1**, tarballs match `tools/security/policy.json` + Microsoft `hashes.sha256`. **Removed** generated-only `/workspace/.tools/` from checkout (no source mixed).
+
+**Ordinary push** (when authorized): preflight + public-content + strict external secret scan. **Maintainer pre-merge** additionally needs supplemental policy.
+
+### `repo_local_gh_credential_helper_missing` — sanctioned repair (NOT performed)
+
+Per `docs/guides/AGENT_GIT_OPERATIONS.md` § Repository-local GitHub credentials, **repo-local only** (no global config):
+
+```powershell
+git config --local --unset-all credential.helper
+git config --local --add credential.helper ''
+git config --local --add credential.helper '!gh auth git-credential'
+```
+
+**Scope if user approves:** mutate only this clone’s `.git/config` credential.helper chain; requires existing `gh auth` session (no token in repo). **Pending user approval** — not applied in this campaign VM.
+
+## Unpublished diff handoff (vs remote #404 `c7ff361e`)
+
+| Scope | SHA-256 |
+|-------|---------|
+| Committed `origin..HEAD` (2 commits) | `a12d94376e34b1aab5e6c328b80f54b6c3801abbacb8133bb7f9518e18b019c4` |
+| Full unpublished vs `c7ff361e` (excl. `.tools/`) | `ea756242127343ed2cacd19c38c9154d6f3b06ac79a9c562e766cf0c2acd2342` |
+| Local HEAD | `7aa145b1287fdb88fa6914dc65372ce5fb1171ce` |
+
 ## Current gate posture
 
 - Keep **#404** draft; do not delete or hide.

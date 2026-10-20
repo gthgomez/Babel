@@ -1,39 +1,34 @@
 # Contract review checklist (Agent B)
 
-**State:** awaiting Agent A inspectable contract checkpoint (coordinator relay).  
-**Agent A run:** https://cursor.com/agents/bc-2b3b69ab-b874-4b9e-958e-61fcca75fc31
+**State:** FIX on A `59cd561b` / `2026.10.20-checkpoint.1` — not waived. See `REVISED_CONTRACT_CHECKPOINT.md`.
 
-Do not begin profile/adapter implementation against shared types until this review is recorded.
+## A shared contract (Agent A checkpoint)
 
-## Annex concepts — verify in A's package
-
-- [ ] `ResearchMissionV2` — `as_of`, jurisdiction, constraints, source classes, budget from host (no model-raised caps)
-- [ ] `SourceRecord` / `SourceRevision` — identity beyond raw URL; completeness ladder; syndication uncertainty
-- [ ] `PassageRecord` — immutable id, revision binding, locators, text hash, truncation flags
-- [ ] `FindingRecord` — assertion kinds; integrity vs semantic support; no fake confidence %
+- [ ] `ResearchMissionV2` — `as_of`, jurisdiction, constraints, source classes, budget from host
+- [ ] `SourceRecord` / `SourceRevision` — identity beyond raw URL; completeness ladder
+- [ ] `PassageRecord` — revision binding, locators (incl. PDF `page`), text_ref discriminated unions
+- [ ] `FindingRecord` — assertion kinds; citation integrity vs semantic support (separate enums)
 - [ ] `QuestionRecord` + plan/report terminal semantics
-- [ ] Ports: `ResearchModelPort`, `SourceAccessPort`, `SourceAdapter`, `ResearchStore`, `ResearchProfileDefinition`
+- [ ] Ports: `ResearchModelPort`, `SourceAccessPort` (admitted bytes), `SourceAdapter` **read/extract**, `ResearchStore` external ops, `ResearchProfileDefinition`
 
-## Fake ports and fixtures (Agent A)
+## B fixture / corpus peer review (strengthened — A missed on first pass)
 
-- [ ] In-memory fakes implement the same interfaces production will use
-- [ ] Both profiles can run identical fake-port harness (no general-only shortcuts)
-- [ ] Deterministic stalled-model / repeated-tool-call fixtures present for lifecycle
+- [ ] `fixtures/dev-corpus/manifest.json` auxiliary paths resolve from **manifest directory** (`../security/`, `../../../../adapters/documents/fixtures/`)
+- [ ] `manifest.test.ts` resolves **every** declared asset (sources, security, documents), parses mission/expectation JSON, validates PDF header/pages/text
+- [ ] G-DEV brief JSON is **not** cast to `ResearchMissionV2` without explicit normalization layer
+- [ ] No broken relative paths in manifest for security or document fixtures
 
-## B-specific consumption
+## Fake ports / characterization (opt-in only)
 
-- [ ] `SourceAdapter` discover/read signatures sufficient for web + document without raw network
-- [ ] General profile can declare temporal/jurisdiction/comparison rubric without owning scheduler
-- [ ] Document passages support **page** locators for PDF (T-L2)
-- [ ] Event/accounting adapter does not require weakening `taskEventJournal` secret key guards
+- [ ] Pre-fix evidence in `contract-regression/CHARACTERIZATION_EVIDENCE_59cd561b.md`
+- [ ] Acceptance wired after coordinator agrees checkpoint.2
 
-## Review outcome (fill on relay)
+## Review outcome
 
 | Field | Value |
 |-------|--------|
-| Contract version | `2026.10.20-checkpoint.1` |
-| A checkpoint commit/branch | `59cd561b2414fcc32253de568c70285517eae1cd` / `cursor/research-v2-contract-a-fc31` (draft PR #405) |
-| B reviewer | Agent B (non-author) |
-| Approved / blocked | **BLOCK** (narrow interface amendments; schemas otherwise sufficient) |
-| Blocking notes | See `CONTRACT_REVIEW_FINDINGS.md` |
-
+| Contract version reviewed | `2026.10.20-checkpoint.1` |
+| A head | `59cd561b2414fcc32253de568c70285517eae1cd` |
+| B verdict | **FIX** (nine items — not waived) |
+| B manifest path review | **FAIL on c7ff361e** — repaired locally at `97063a82`+ |
+| Coordinator agreement | _pending_ |
