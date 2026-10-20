@@ -199,6 +199,15 @@ export interface ChatEngineOptions {
    * Also implied by operatorMode === 'hard_plan'.
    */
   hardPlanMode?: boolean
+  /**
+   * @internal Test-only deterministic tool-executor injection for governed
+   * dispatch. Never parsed from the CLI, the environment or persisted
+   * configuration; production leaves it undefined and dispatch uses the shared
+   * `defaultToolExecutor`. Policy, admission, cancellation and receipts are
+   * unchanged because the executor is still driven through
+   * `executeActionWithPolicy`.
+   */
+  toolExecutorForTesting?: import('./toolExecutor.js').ToolExecutor | undefined
   /** Implementor W1.4 operator policy (orthogonal to chat/plan/deep ValidMode). */
   operatorMode?: import('./planExecuteMode.js').ChatOperatorMode
   /** Implementor W1.3: plan→execute handoff injected at first user turn. */
@@ -868,6 +877,7 @@ export interface ChatEngineActionExecutorHost {
     index: number,
     reason: string,
   ) => { index: number; observation: string }
+  readonly taskAllowance: ChatTaskAllowanceSnapshot | null
   taskClass: ChatTaskClass
   todos: Map<string, { content: string; status: string }>
   toolCallLog: {

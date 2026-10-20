@@ -36,6 +36,15 @@ interface ProgressControllerProbe {
     gateStrikes: number,
   ): { intervention: string; transitioned: boolean; score: number };
   getCapabilityState(capability: string): string;
+  recordFailure(sig: {
+    tool: string;
+    commandSnippet?: string;
+    exitCode?: number;
+    stderr?: string;
+    capabilityFailure?: boolean;
+  }): { capability: string; state: string; outcome: string };
+  snapshot(): { capabilities?: Record<string, unknown> };
+  restore(snapshot: unknown): void;
 }
 
 function progress(engine: ChatEngine): ProgressControllerProbe {
@@ -658,26 +667,26 @@ test('#216 continueTask preserves task-local recovery state (positive control)',
   );
 });
 
-test('#216 capability health survives a task boundary and is not blanked', async () => {
+test('#216 capability health survives a task boundary and is not blanked', () => {
   const engine = new ChatEngine({ task: 'Find all files in repo', projectRoot: '/tmp' });
-  const action = {
-    type: 'run_command' as const,
-    command: 'Get-ChildItem -Path /non_existent_path_xyz_123 -Recurse',
-  };
-  const ctx = { agentId: 'test', runId: 'test', runDir: '/tmp', babelRoot: '/tmp' };
+  const controller = progress(engine);
 
-  await (engine as any).executeOneAction(action, ctx, {}, { index: 0, subAgentCounter: 0 });
-  await (engine as any).executeOneAction(action, ctx, {}, { index: 1, subAgentCounter: 0 });
+  // Only a genuine capability failure degrades the family. An isolation or
+  // permission denial is recorded but must NOT degrade it, so this fixture
+  // drives the capability outcome directly rather than depending on a
+  // sandbox-denied shell command.
+  controller.recordFailure({ tool: 'run_command', commandSnippet: 'Get-ChildItem -Recurse', exitCode: 1, capabilityFailure: true });
+  controller.recordFailure({ tool: 'run_command', commandSnippet: 'Get-ChildItem -Recurse', exitCode: 1, capabilityFailure: true });
   assert.equal(
-    progress(engine).getCapabilityState('shell.recursive_enumeration'),
+    controller.getCapabilityState('shell.recursive_enumeration'),
     'DEGRADED',
-    'fixture precondition: recursive enumeration degrades after two failures',
+    'fixture precondition: recursive enumeration degrades after two genuine failures',
   );
 
   engine.applyUserSubmission({ userInput: 'B: list the project tree' });
 
   assert.equal(
-    progress(engine).getCapabilityState('shell.recursive_enumeration'),
+    controller.getCapabilityState('shell.recursive_enumeration'),
     'DEGRADED',
     'environment/provider capability health deliberately survives a task boundary and must not be blanked',
   );

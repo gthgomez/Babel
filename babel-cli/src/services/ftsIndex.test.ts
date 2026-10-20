@@ -12,6 +12,26 @@ function tempDir(): string {
   return mkdtempSync(join(tmpdir(), 'babel-fts-'));
 }
 
+type TxnSpy = { openDepth: number; restore: () => void };
+
+function attachSqliteTxnSpy(idx: FtsSearchIndex): TxnSpy {
+  const db = (idx as unknown as { db: { exec: (sql: string) => void } }).db;
+  const originalExec = db.exec.bind(db);
+  const spy: TxnSpy = { openDepth: 0, restore: () => {} };
+  db.exec = (sql: string) => {
+    const normalized = sql.trim().toUpperCase();
+    if (normalized.startsWith('BEGIN')) spy.openDepth++;
+    originalExec(sql);
+    if (normalized.startsWith('COMMIT') || normalized.startsWith('ROLLBACK')) {
+      spy.openDepth = Math.max(0, spy.openDepth - 1);
+    }
+  };
+  spy.restore = () => {
+    db.exec = originalExec;
+  };
+  return spy;
+}
+
 function writeTempFiles(root: string, files: Array<{ path: string; content: string }>): string[] {
   const written: string[] = [];
   for (const f of files) {
@@ -236,6 +256,223 @@ test('pruneMissing removes deleted files from index', async () => {
   }
 });
 
+// ── Transaction / callback boundaries ────────────────────────────────────────
+
+test('indexFiles invokes shouldContinue and onReadFile only outside SQLite transactions', async () => {
+  const root = tempDir();
+  const dbPath = join(root, 'test.db');
+  try {
+    writeTempFiles(root, [
+      { path: 'a.ts', content: 'export const A = 1;' },
+      { path: 'b.ts', content: 'export const B = 2;' },
+      { path: 'c.ts', content: 'export const C = 3;' },
+    ]);
+
+    const idx = new FtsSearchIndex(dbPath);
+    const txnSpy = attachSqliteTxnSpy(idx);
+    try {
+      await idx.indexFiles(
+        [
+          { filePath: join(root, 'a.ts'), relativePath: 'a.ts' },
+          { filePath: join(root, 'b.ts'), relativePath: 'b.ts' },
+          { filePath: join(root, 'c.ts'), relativePath: 'c.ts' },
+        ],
+        {
+          shouldContinue: () => {
+            assert.equal(txnSpy.openDepth, 0, 'shouldContinue must not run inside a transaction');
+            return true;
+          },
+          onReadFile: () => {
+            assert.equal(txnSpy.openDepth, 0, 'onReadFile must not run inside a transaction');
+          },
+        },
+      );
+      assert.equal(txnSpy.openDepth, 0, 'no transaction should remain open after indexFiles');
+    } finally {
+      txnSpy.restore();
+    }
+
+    idx.close();
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('indexFiles leaves no open transaction when onReadFile throws', async () => {
+  const root = tempDir();
+  const dbPath = join(root, 'test.db');
+  try {
+    writeTempFiles(root, [
+      { path: 'a.ts', content: 'export const A = 1;' },
+      { path: 'b.ts', content: 'export const B = 2;' },
+    ]);
+
+    const idx = new FtsSearchIndex(dbPath);
+    const txnSpy = attachSqliteTxnSpy(idx);
+    try {
+      await assert.rejects(
+        () =>
+          idx.indexFiles(
+            [
+              { filePath: join(root, 'a.ts'), relativePath: 'a.ts' },
+              { filePath: join(root, 'b.ts'), relativePath: 'b.ts' },
+            ],
+            {
+              onReadFile: (relativePath) => {
+                assert.equal(txnSpy.openDepth, 0, 'onReadFile must not run inside a transaction');
+                if (relativePath === 'b.ts') throw new Error('callback abort');
+              },
+            },
+          ),
+        /callback abort/,
+      );
+      assert.equal(txnSpy.openDepth, 0, 'throwing callback must not leak an open transaction');
+      assert.equal(idx.count, 0, 'failed run must not commit partial batches');
+    } finally {
+      txnSpy.restore();
+    }
+
+    idx.close();
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('indexFiles counts one reindex when the same complete file appears twice in one pass', async () => {
+  const root = tempDir();
+  const dbPath = join(root, 'test.db');
+  try {
+    writeTempFiles(root, [{ path: 'dup.ts', content: 'export const DUP = 1;' }]);
+    const filePath = join(root, 'dup.ts');
+    const idx = new FtsSearchIndex(dbPath);
+    const count = await idx.indexFiles([
+      { filePath, relativePath: 'dup.ts' },
+      { filePath, relativePath: 'dup.ts' },
+    ]);
+    assert.equal(count, 1, 'duplicate unchanged paths in one pass should count a single reindex');
+    idx.close();
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('indexFiles preserves ordered reindex count when the same path changes twice in one pass', async () => {
+  const root = tempDir();
+  const dbPath = join(root, 'test.db');
+  const rel = 'flip.ts';
+  const filePath = join(root, rel);
+  try {
+    writeFileSync(filePath, 'export const TOKEN = "CONTENT_A";', 'utf-8');
+    const idx = new FtsSearchIndex(dbPath);
+    await idx.indexFiles([{ filePath, relativePath: rel }]);
+    assert.ok(idx.search('CONTENT_A', 5).length >= 1);
+
+    writeFileSync(filePath, 'export const TOKEN = "CONTENT_B";', 'utf-8');
+    const count = await idx.indexFiles(
+      [
+        { filePath, relativePath: rel },
+        { filePath, relativePath: rel },
+      ],
+      {
+        onReadFile: () => {
+          writeFileSync(filePath, 'export const TOKEN = "CONTENT_A";', 'utf-8');
+        },
+      },
+    );
+    assert.equal(count, 2, 'B then A on the same path should count both reindex operations');
+    assert.ok(idx.search('CONTENT_A', 5).length >= 1, 'final indexed content should be A');
+    assert.equal(idx.search('CONTENT_B', 5).length, 0, 'intermediate B should not remain indexed');
+    idx.close();
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('indexFiles rolls back a failed pending batch and allows a later successful index', async () => {
+  const root = tempDir();
+  const dbPath = join(root, 'test.db');
+  try {
+    writeTempFiles(root, [
+      { path: 'one.ts', content: 'export const ONE = 1;' },
+      { path: 'two.ts', content: 'export const TWO = 2;' },
+    ]);
+    const idx = new FtsSearchIndex(dbPath);
+    const db = (idx as unknown as { db: { prepare: (sql: string) => { run: (...args: unknown[]) => unknown } } }).db;
+    const originalPrepare = db.prepare.bind(db);
+    let insertRuns = 0;
+    db.prepare = (sql: string) => {
+      const statement = originalPrepare(sql);
+      if (!sql.includes('INSERT OR REPLACE INTO fts_files')) {
+        return statement;
+      }
+      return {
+        run: (...args: unknown[]) => {
+          insertRuns++;
+          if (insertRuns === 2) {
+            throw new Error('injected insert failure');
+          }
+          return statement.run(...args);
+        },
+      };
+    };
+
+    const txnSpy = attachSqliteTxnSpy(idx);
+    try {
+      await assert.rejects(
+        () =>
+          idx.indexFiles([
+            { filePath: join(root, 'one.ts'), relativePath: 'one.ts' },
+            { filePath: join(root, 'two.ts'), relativePath: 'two.ts' },
+          ]),
+        /injected insert failure/,
+      );
+      assert.equal(txnSpy.openDepth, 0, 'failed batch must not leak an open transaction');
+      assert.equal(idx.count, 0, 'failed batch must not commit partial pending writes');
+    } finally {
+      txnSpy.restore();
+      db.prepare = originalPrepare;
+    }
+
+    const recovered = await idx.indexFiles([
+      { filePath: join(root, 'one.ts'), relativePath: 'one.ts' },
+      { filePath: join(root, 'two.ts'), relativePath: 'two.ts' },
+    ]);
+    assert.equal(recovered, 2);
+    assert.equal(idx.count, 2);
+    idx.close();
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('indexFiles yields during forced reindexes of the same path every 50 operations', async () => {
+  const root = tempDir();
+  const dbPath = join(root, 'test.db');
+  const rel = 'repeat.ts';
+  const filePath = join(root, rel);
+  try {
+    writeFileSync(filePath, 'export const TOKEN = "REPEAT";', 'utf-8');
+    const idx = new FtsSearchIndex(dbPath);
+    const entries = Array.from({ length: 5000 }, () => ({ filePath, relativePath: rel }));
+
+    let scheduledImmediateRuns = 0;
+    for (let i = 0; i < 8; i++) {
+      setImmediate(() => {
+        scheduledImmediateRuns++;
+      });
+    }
+
+    const count = await idx.indexFiles(entries, { force: true });
+    assert.equal(count, 5000, 'each forced reindex operation should be counted');
+    assert.ok(scheduledImmediateRuns > 0, 'event loop turns must occur before indexFiles completes');
+    assert.equal(idx.count, 1, 'repeated path inserts should collapse to one indexed file');
+    assert.ok(idx.search('REPEAT', 5).length >= 1, 'final indexed content should remain searchable');
+    idx.close();
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 // ── Yielding verification ────────────────────────────────────────────────────
 
 test('indexFiles yields to event loop (no blocking > 100ms per batch)', async () => {
@@ -279,6 +516,11 @@ test('indexFiles yields to event loop (no blocking > 100ms per batch)', async ()
 test('large-repo stress: indexes 5000 files without blocking', { timeout: 120_000 }, async () => {
   const root = tempDir();
   const dbPath = join(root, 'stress.db');
+  let idx: FtsSearchIndex | undefined;
+  let heartbeats = 0;
+  const heartbeat = setInterval(() => {
+    heartbeats++;
+  }, 25);
   try {
     // Create 5000 small files
     const BATCH = 500;
@@ -294,7 +536,7 @@ test('large-repo stress: indexes 5000 files without blocking', { timeout: 120_00
       writeTempFiles(root, batchFiles);
     }
 
-    const idx = new FtsSearchIndex(dbPath);
+    idx = new FtsSearchIndex(dbPath);
 
     // Collect all file entries
     const allEntries: Array<{ filePath: string; relativePath: string }> = [];
@@ -307,10 +549,13 @@ test('large-repo stress: indexes 5000 files without blocking', { timeout: 120_00
     }
     assert.equal(allEntries.length, 5000);
 
+    const heartbeatsBefore = heartbeats;
     const start = performance.now();
     const count = await idx.indexFiles(allEntries);
     const elapsed = performance.now() - start;
+    const heartbeatsDuring = heartbeats - heartbeatsBefore;
 
+    assert.ok(heartbeatsDuring > 0, `event loop should heartbeat during indexing (saw ${heartbeatsDuring})`);
     assert.equal(count, 5000, 'should index all 5000 files');
     // 5000 files at 50/batch = 100 yields. CI runners with slower I/O may need more time.
     assert.ok(elapsed < 110_000, `indexing 5000 files took ${elapsed.toFixed(0)}ms, expected < 110s`);
@@ -318,9 +563,9 @@ test('large-repo stress: indexes 5000 files without blocking', { timeout: 120_00
     // Verify search still works after stress
     const hits = idx.search(`ID_3742`, 5);
     assert.ok(hits.length >= 1, 'should find a specific file after large insert');
-
-    idx.close();
   } finally {
+    clearInterval(heartbeat);
+    idx?.close();
     rmSync(root, { recursive: true, force: true });
   }
 });

@@ -82,6 +82,12 @@ import { sanitizePath } from './cli/constants.js';
 import { isCanonicalMcpSuccessResult } from './tools/mcpTransport.js';
 import { OutputBuffer } from './ui/outputBuffer.js';
 import type { ProcessWitness, ProcessWitnessInput } from './diagnostics/bdns/processWitness.js';
+import { MAX_SHELL_OUTPUT_BYTES, normalizeShellOutput } from './shellOutputNormalize.js';
+import {
+  isChildRuntimeSupervisorError,
+  isSpawnSyncRuntimeSupervisorError,
+  normalizeSupervisorTerminatedShellOutput,
+} from './sandboxSupervisorTermination.js';
 
 // ─── Shared result type ───────────────────────────────────────────────────────
 
@@ -131,10 +137,28 @@ export interface ToolResultFailure {
   tool: string;
 }
 
+/**
+ * Host-origin record that a command's process could not be launched at all.
+ *
+ * Set only by this sandbox boundary — never derived from child stdout/stderr,
+ * tool arguments or a model-supplied label — so it is the trusted discriminator
+ * for a genuine launch (capability) failure. A child that prints a lookalike
+ * `[sandbox] Spawn error:` line in its own output does not produce it.
+ */
+export interface HostLaunchFailure {
+  code: 'spawn_error' | 'transient_spawn_error';
+}
+
 export interface ToolResult {
   exit_code: number;
   stdout: string;
   stderr: string;
+  /**
+   * Present only when the sandbox itself failed to launch the process. Absent
+   * for every child-produced result, including a child that prints a
+   * lookalike diagnostic.
+   */
+  launch_failure?: HostLaunchFailure | undefined;
   denial?: StructuredDenial;
   mcp_lifecycle?: McpLifecycle;
   checkpoint_ids?: string[];
@@ -228,13 +252,6 @@ export interface ShellCommandValidationOptions {
 }
 
 // ─── Configuration ────────────────────────────────────────────────────────────
-
-/**
- * Hard cap on combined stdout + stderr bytes returned from shellExec.
- * Prevents runaway commands from flooding the executor context window.
- * Excess bytes are dropped and a sentinel notice is appended.
- */
-const MAX_SHELL_OUTPUT_BYTES = 5 * 1024 * 1024; // 5 MB
 
 /**
  * Patterns that indicate a transient infrastructure error during spawn.
@@ -332,6 +349,10 @@ interface AsyncSpawnResult {
   stdoutTruncated: boolean;
   stderrTruncated: boolean;
   aborted: boolean;
+  /** Process reached the spawn callback before the error (runtime, not launch). */
+  processStarted: boolean;
+  /** Wall-clock supervisor timeout after a successful launch. */
+  timedOut: boolean;
 }
 
 interface PreparedShellInvocation {
@@ -461,6 +482,8 @@ export function spawnCommandAsync(
       stdoutTruncated: false,
       stderrTruncated: false,
       aborted: true,
+      processStarted: false,
+      timedOut: false,
     });
   }
 
@@ -488,6 +511,8 @@ export function spawnCommandAsync(
         stdoutTruncated: false,
         stderrTruncated: false,
         aborted: false,
+        processStarted: false,
+        timedOut: false,
       });
       return;
     }
@@ -544,6 +569,8 @@ export function spawnCommandAsync(
         stdoutTruncated,
         stderrTruncated,
         aborted,
+        processStarted,
+        timedOut,
       });
     };
 
@@ -645,37 +672,8 @@ export function spawnCommandAsync(
   });
 }
 
-function normalizeShellOutput(
-  status: number | null,
-  rawStdout: string,
-  rawStderr: string,
-  stdoutWasTruncated = false,
-  stderrWasTruncated = false,
-): ToolResult {
-  let stdout = rawStdout;
-  let stderr = rawStderr;
-  if (process.platform === 'win32') {
-    stdout = stdout.replace(/\r\n/g, '\n');
-    stderr = stderr.replace(/\r\n/g, '\n');
-  }
-
-  const stdoutBytes = Buffer.byteLength(stdout, 'utf8');
-  const stderrBytes = Buffer.byteLength(stderr, 'utf8');
-  if (stdoutBytes > MAX_SHELL_OUTPUT_BYTES || stdoutWasTruncated) {
-    stdout =
-      Buffer.from(stdout, 'utf8').subarray(0, MAX_SHELL_OUTPUT_BYTES).toString('utf8') +
-      `\n[sandbox] stdout truncated — output exceeded ${MAX_SHELL_OUTPUT_BYTES / (1024 * 1024)} MB cap.`;
-  }
-  if (stderrBytes > MAX_SHELL_OUTPUT_BYTES || stderrWasTruncated) {
-    stderr =
-      Buffer.from(stderr, 'utf8').subarray(0, MAX_SHELL_OUTPUT_BYTES).toString('utf8') +
-      `\n[sandbox] stderr truncated — output exceeded ${MAX_SHELL_OUTPUT_BYTES / (1024 * 1024)} MB cap.`;
-  }
-  return { exit_code: status ?? 1, stdout, stderr };
-}
-
 /** @visibleForTesting */
-export { isTransientSpawnError };
+export { isTransientSpawnError, normalizeSupervisorTerminatedShellOutput };
 
 /**
  * Commands allowed in shellExec / testRun. Checked against argv[0] basename.
@@ -1992,6 +1990,13 @@ export class SafeExecutor {
     }
 
     if (result.error) {
+      if (isSpawnSyncRuntimeSupervisorError(result.error)) {
+        return normalizeSupervisorTerminatedShellOutput(
+          result.status,
+          result.stdout ?? '',
+          result.stderr ?? '',
+        );
+      }
       const isTransient = transientRetryCount > 0 && isTransientSpawnError(result.error.message);
       const prefix = isTransient
         ? '[sandbox] Transient spawn error (retries exhausted):'
@@ -2000,6 +2005,7 @@ export class SafeExecutor {
         exit_code: 1,
         stdout: '',
         stderr: `${prefix} ${result.error.message}`,
+        launch_failure: { code: isTransient ? 'transient_spawn_error' : 'spawn_error' },
       };
     }
 
@@ -2058,12 +2064,31 @@ export class SafeExecutor {
     }
 
     if (result.error) {
+      if (result.aborted) {
+        return {
+          exit_code: 1,
+          stdout: '',
+          stderr: `[sandbox] Spawn error: ${result.error.message}`,
+        };
+      }
+      if (isChildRuntimeSupervisorError(result.error, result.processStarted, result.timedOut)) {
+        return normalizeSupervisorTerminatedShellOutput(
+          result.status,
+          result.stdout,
+          result.stderr,
+          result.stdoutTruncated,
+          result.stderrTruncated,
+        );
+      }
       const transient =
-        !result.aborted && transientRetryCount > 0 && isTransientSpawnError(result.error.message);
+        transientRetryCount > 0 && isTransientSpawnError(result.error.message);
       return {
         exit_code: 1,
         stdout: '',
         stderr: `${transient ? '[sandbox] Transient spawn error (retries exhausted):' : '[sandbox] Spawn error:'} ${result.error.message}`,
+        launch_failure: {
+          code: transient ? ('transient_spawn_error' as const) : ('spawn_error' as const),
+        },
       };
     }
     return normalizeShellOutput(

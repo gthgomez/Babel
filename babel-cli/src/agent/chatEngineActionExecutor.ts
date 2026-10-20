@@ -34,6 +34,7 @@ import {
 } from "./codingLoop/reflection.js";
 import type { EditFormatId } from "./codingLoop/editFormatPolicy.js";
 import { recoveryTargetIdentity } from "./codingLoop/recoveryIdentity.js";
+import { bindCapabilityRecoveryScope } from "./capabilityRecoveryScope.js";
 import {
   actualRecoveryEdit,
   admitRecoveryPlan,
@@ -774,7 +775,7 @@ export class ChatEngineActionExecutor {
             projectRoot: requireProjectRoot(this.host.options),
             context: toolContext,
             preset: "workspace_write",
-            executor: defaultToolExecutor,
+            executor: this.host.options.toolExecutorForTesting ?? defaultToolExecutor,
             onDispatchAuthorized: () => recoveredAuthorization,
             onBeforeExecutorExecute: () =>
               this.host.persistToolStartedAtExecutorDispatch(action, meta),
@@ -1177,22 +1178,30 @@ export class ChatEngineActionExecutor {
             "shell.recursive_enumeration",
           );
           if (capState === "DEGRADED" || capState === "UNAVAILABLE") {
-            const observation = `### ${tool} ${target}\nexit_code: 1\n\`\`\`\n[BABEL ADVISORY] Recursive shell command suppressed: shell.recursive_enumeration is DEGRADED due to repeated failures. Use the list_dir / directory_list tool instead for reliable filesystem inspection.\n\`\`\``;
-            this.host.toolCallLog.push({
-              tool,
-              target,
-              detail: "degraded_suppressed",
-              index: meta.index,
-              exit_code: 1,
-              error: "capability_degraded",
+            // One bounded probe per capability × task × trusted environment: a
+            // success restores availability, a failure stays consumed.
+            const probeAdmitted = this.host.progressController.admitCapabilityRecoveryProbe({
+              capability: "shell.recursive_enumeration",
+              ...bindCapabilityRecoveryScope(this.host),
             });
-            callbacks?.onToolComplete?.(
-              toolId,
-              "degraded_suppressed",
-              "capability_degraded",
-              1,
-            );
-            return { index: meta.index, observation };
+            if (!probeAdmitted) {
+              const observation = `### ${tool} ${target}\nexit_code: 1\n\`\`\`\n[BABEL ADVISORY] Recursive shell command suppressed: shell.recursive_enumeration is DEGRADED due to repeated failures. Use the list_dir / directory_list tool instead for reliable filesystem inspection.\n\`\`\``;
+              this.host.toolCallLog.push({
+                tool,
+                target,
+                detail: "degraded_suppressed",
+                index: meta.index,
+                exit_code: 1,
+                error: "capability_degraded",
+              });
+              callbacks?.onToolComplete?.(
+                toolId,
+                "degraded_suppressed",
+                "capability_degraded",
+                1,
+              );
+              return { index: meta.index, observation };
+            }
           }
         }
       }
@@ -1300,7 +1309,7 @@ export class ChatEngineActionExecutor {
           : "workspace_write",
         toolContext,
         {
-          executor: defaultToolExecutor,
+          executor: this.host.options.toolExecutorForTesting ?? defaultToolExecutor,
           mode:
             this.host.executionProfile === "plan"
               ? "plan"
@@ -1422,6 +1431,12 @@ export class ChatEngineActionExecutor {
                 : undefined,
             exitCode: lastResult.exit_code,
             emptyStdout: lastResult.stdout.trim() === "",
+            stderr: lastResult.stderr,
+            policyBlocked: result.policyBlocked === true,
+            // Trusted capability evidence comes only from the executor's typed
+            // host-origin launch failure — never from child stderr, which a
+            // failed command could forge.
+            capabilityFailure: lastResult.launch_failure !== undefined,
           });
           if (rec.notice) {
             obsParts.push(`\n[BABEL ADVISORY] ${rec.notice}`);

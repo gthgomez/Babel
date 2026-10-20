@@ -102,11 +102,16 @@ describe('D03 reviewCard reason-first guidance', () => {
 });
 
 
-test('context failure guidance retains known subtotal and unresolved accounting with cumulative usage', () => {
+test('context refusal names the blocked dispatch, never promises an unadmitted fallback, and retains accounting', () => {
+  // A context-preparation refusal is emitted only when dispatch was refused.
+  // Unavailable repository coverage *alone* is not a refusal — V2 continuation
+  // installs and dispatches (inTurnContextOrdering / contextPreparation
+  // integration tests) — so the refusal guidance must not promise continuation.
   const card = buildReviewCard({ outcome: 'BLOCKED_POLICY', status: 'blocked', reasonCode: 'context_preparation_failed',
     causeClass: 'harness', costUsd: 0.039075115852, unknownChargeCount: 1, usageScope: 'task', tokens: 3162714 })
-  assert.match(card.body, /snapshot|context authority/)
-  assert.match(card.body, /--project-root/)
+  assert.match(card.body, /operational authority|durable state/i)
+  assert.doesNotMatch(card.body, /conversation/i)
+  assert.doesNotMatch(card.body, /--project-root/)
   assert.match(card.body, /0.0391 known subtotal this task/)
   assert.match(card.body, /1 unresolved charge/)
   assert.match(card.body, /3,162,714 cumulative tokens/)
