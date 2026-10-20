@@ -1,7 +1,7 @@
 # Agent A → Agent B reciprocal rereview handoff
 
 **Supersedes for review:** `59cd561b2414fcc32253de568c70285517eae1cd` (BLOCKED)  
-**Proposed revision (local only, not pushed):** `c98318f86bbcfb037589f1a5de8998548acf2c46`  
+**Proposed revision (local only, not pushed):** branch `cursor/research-v2-contract-a-fc31` tip (`git rev-parse HEAD` after coordinator fetch)  
 **Contract version:** `2026.10.20-checkpoint.2`  
 **Baseline:** `d9e42b14b00b6dba25f0415ae16b084363386a01`
 
@@ -25,7 +25,7 @@ All nine items are addressed in this single local revision; see `CHECKPOINT.md` 
 
 ```bash
 git fetch origin cursor/research-v2-contract-a-fc31   # after coordinator publishes
-git diff 59cd561b2414fcc32253de568c70285517eae1cd..c98318f86bbcfb037589f1a5de8998548acf2c46 -- babel-cli/src/research/v2
+git diff 59cd561b2414fcc32253de568c70285517eae1cd..HEAD -- babel-cli/src/research/v2
 ```
 
 Or apply from coordinator-supplied bundle when released.
