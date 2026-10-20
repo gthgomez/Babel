@@ -183,15 +183,25 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $prs = gh api "repos/$env:GITHUB_REPOSITORY/commits/$env:HEAD_SHA/pulls" | ConvertFrom-Json
-          if ($LASTEXITCODE -ne 0 -or @($prs).Count -lt 1) { throw 'No pull request bound to release gate head.' }
-          $open = @($prs | Where-Object { $_.state -eq 'open' -and $_.base.ref -eq 'main' })
-          if ($open.Count -ne 1) { throw 'Release gate head is not a unique open main pull request.' }
-          $pr = $open[0]
+          if ($LASTEXITCODE -ne 0) { throw 'Unable to read pull requests associated with the release gate head.' }
+          $exact = @($prs | Where-Object {
+            [string]$_.state -eq 'open' -and
+            [string]$_.base.ref -eq 'main' -and
+            [string]::Equals([string]$_.head.sha, $env:HEAD_SHA, [StringComparison]::Ordinal) -and
+            [string]::Equals([string]$_.head.repo.full_name, $env:GITHUB_REPOSITORY, [StringComparison]::Ordinal)
+          })
+          if ($exact.Count -eq 0) {
+            throw 'No exact-head open main pull request in this repository for the release gate head.'
+          }
+          if ($exact.Count -gt 1) {
+            throw 'Multiple exact-head open main pull requests; audit association is ambiguous.'
+          }
+          $pr = $exact[0]
+          if ($pr.PSObject.Properties['draft'] -and [bool]$pr.draft) { throw 'Draft pull requests stay out of the merge audit.' }
           if ([string]$pr.head.sha -ne [string]$env:HEAD_SHA) { throw 'PR head advanced past the release gate head; audit must re-run on the current head.' }
           Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "number=$($pr.number)"
           Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "base_sha=$($pr.base.sha)"
           Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "head_sha=$env:HEAD_SHA"
-          if ($pr.draft) { throw 'Draft pull requests stay out of the merge audit.' }
       - name: Checkout immutable base
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
