@@ -71,5 +71,5 @@ export const examplePlanRevisionFixture = PlanRevisionSchema.parse({
 export const exampleMissionWriteContext = {
   mission_id: exampleTechnicalMissionFixture.mission_id,
   plan_revision_id: examplePlanRevisionFixture.plan_revision_id,
-  writer_generation: 0,
+  writer_generation: 1,
 }

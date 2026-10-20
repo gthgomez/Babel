@@ -7,6 +7,10 @@
 
 Remote publication and dependent coding remain **held** until B and independent exact-head rereview approve this patch.
 
+**Coordinator guards:** Missing supplemental scrub policy blocks **maintainer pre-merge** (`validate-public-release.ps1 -RequireSupplementalPolicy`), not local contract repair, tests, or export review. **No campaign waiver; no merge authority.** Remote writes stay held until release after exact-head review.
+
+**Shared checklist:** `SHARED_REVIEW_CHECKLIST.md` — includes mandatory B fixture-path verification; Agent A’s first peer pass missed broken B paths; **`#404` FIX is controlling and not waived.**
+
 ## B BLOCK findings → repair mapping
 
 | B finding (59cd561b) | Repair in checkpoint.2 |

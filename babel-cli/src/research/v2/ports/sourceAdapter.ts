@@ -8,10 +8,15 @@ export interface SourceDiscoverRequest {
   signal: AbortSignal
 }
 
-export interface SourceDiscoverResult {
-  operationId: string
-  candidates: SourceRecord[]
-}
+export type SourceDiscoverResult =
+  | { operationId: string; status: 'ok'; candidates: SourceRecord[] }
+  | {
+      operationId: string
+      status: 'failed'
+      failureCategory: string
+      message: string
+    }
+  | { operationId: string; status: 'cancelled' }
 
 export interface SourceAdapterReadRequest {
   operationId: string

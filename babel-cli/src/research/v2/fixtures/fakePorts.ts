@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from 'node:crypto'
+import { createHash } from 'node:crypto'
 import type { MissionWriteContext } from '../contracts/common.js'
 import type { FindingRecord } from '../contracts/findings.js'
 import type { PassageRecord } from '../contracts/passages.js'
@@ -49,10 +49,26 @@ function issueRevisionId(sourceId: string, contentHash: string): string {
   return `rev-${sourceId}-${contentHash.slice(0, 16)}`
 }
 
-function lineRangeLocator(body: string): PassageRecord['locator'] {
+const MAX_PASSAGE_INLINE_CHARS = 4000
+
+function lineRangeLocatorForText(body: string): PassageRecord['locator'] {
   const lines = body.split('\n')
   const end = Math.max(1, lines.length)
   return { kind: 'line_range', start_line: 1, end_line: end }
+}
+
+function boundedExcerpt(text: string): { excerpt: string; truncated: boolean } {
+  if (text.length <= MAX_PASSAGE_INLINE_CHARS) {
+    return { excerpt: text, truncated: false }
+  }
+  let cut = MAX_PASSAGE_INLINE_CHARS
+  const lastNl = text.lastIndexOf('\n', cut - 1)
+  if (lastNl > 0) cut = lastNl
+  return { excerpt: text.slice(0, cut), truncated: true }
+}
+
+function deterministicPassageId(revisionId: string, textHash: string): string {
+  return `passage-${sha256(`${revisionId}:${textHash}`).slice(0, 24)}`
 }
 
 function unknownUsageSettlement(attemptId: string) {
@@ -133,6 +149,7 @@ export class FakeSourceAccessPort implements SourceAccessPort {
   constructor(
     private readonly corpus: FakeCorpusSource[],
     private readonly clock: FakePortClock = new SystemFakeClock(),
+    private readonly maxAdmittedBytes?: number,
   ) {}
 
   async search(request: SourceSearchRequest): Promise<SourceSearchResult> {
@@ -167,8 +184,20 @@ export class FakeSourceAccessPort implements SourceAccessPort {
         message: 'unknown source',
       }
     }
-    const bytes = Buffer.from(entry.body, 'utf8')
-    const contentHash = sha256(bytes)
+    if (entry.body.length === 0) {
+      return {
+        operationId: request.operationId,
+        status: 'failed',
+        failureCategory: 'empty_body',
+        message: 'source has no retrievable bytes',
+      }
+    }
+    const fullBytes = Buffer.from(entry.body, 'utf8')
+    const limit = this.maxAdmittedBytes
+    const truncated =
+      typeof limit === 'number' && limit > 0 && fullBytes.byteLength > limit
+    const admittedBytes = truncated ? fullBytes.subarray(0, limit) : fullBytes
+    const contentHash = sha256(admittedBytes)
     const revision: SourceRevision = {
       revision_id: issueRevisionId(request.source.source_id, contentHash),
       source_id: request.source.source_id,
@@ -176,8 +205,9 @@ export class FakeSourceAccessPort implements SourceAccessPort {
       retrieved_at: this.clock.now(),
       extraction_version: 'fake-fetch-1',
       media_type: entry.mediaType,
-      completeness: 'complete',
-      byte_length_received: bytes.byteLength,
+      completeness: truncated ? 'truncated' : 'complete',
+      byte_length_received: admittedBytes.byteLength,
+      truncation_reason: truncated ? 'host_byte_limit' : undefined,
     }
     const requestedUrl = entry.source.observed_urls[0] ?? 'https://example.test/unknown'
     return {
@@ -194,30 +224,88 @@ export class FakeSourceAccessPort implements SourceAccessPort {
         },
         payload: {
           mode: 'inline_bytes',
-          bytes_base64: bytes.toString('base64'),
-          byte_length: bytes.byteLength,
+          bytes_base64: admittedBytes.toString('base64'),
+          byte_length: admittedBytes.byteLength,
           content_hash: contentHash,
         },
+        truncation: truncated
+          ? {
+              reason: 'host_byte_limit',
+              bytes_received: fullBytes.byteLength,
+              bytes_limit: limit!,
+            }
+          : undefined,
       },
     }
   }
 }
 
+interface MissionFence {
+  writerGeneration: number
+  activePlanRevisionId: string | null
+  terminalReport: ResearchReportV2 | null
+}
+
+interface TrackedOperation {
+  missionId: string
+  attemptId: string
+  intent: ExternalOperationIntent
+  completion?: ExternalOperationCompletion
+}
+
+function operationKey(missionId: string, operationId: string): string {
+  return `${missionId}::${operationId}`
+}
+
+function stableJson(value: unknown): string {
+  return JSON.stringify(value)
+}
+
 export class InMemoryResearchStore implements ResearchStore {
   private readonly events: ResearchStoreEvent[] = []
-  private readonly generations = new Map<string, number>()
-  private readonly completedOperations = new Set<string>()
+  private readonly missions = new Map<string, MissionFence>()
+  private readonly operations = new Map<string, TrackedOperation>()
 
   constructor(private readonly clock: FakePortClock = new SystemFakeClock()) {}
 
-  private requireCtx(ctx: MissionWriteContext): void {
-    const current = this.generations.get(ctx.mission_id)
-    if (current === undefined) {
-      throw new StoreContractError(`unknown mission ${ctx.mission_id}`)
-    }
-    if (current !== ctx.writer_generation) {
+  private fence(missionId: string): MissionFence {
+    const fence = this.missions.get(missionId)
+    if (!fence) throw new StoreContractError(`unknown mission ${missionId}`)
+    return fence
+  }
+
+  private authority(ctx: MissionWriteContext): 'evidence' | 'usage_reconciliation' {
+    return ctx.write_authority ?? 'evidence'
+  }
+
+  private requireCtx(ctx: MissionWriteContext, options?: { allowUsageReconciliation?: boolean }): MissionFence {
+    const fence = this.fence(ctx.mission_id)
+    if (fence.writerGeneration !== ctx.writer_generation) {
       throw new StoreContractError('stale writer generation')
     }
+    if (
+      fence.activePlanRevisionId !== null &&
+      ctx.plan_revision_id !== fence.activePlanRevisionId
+    ) {
+      throw new StoreContractError('stale plan revision')
+    }
+    const auth = this.authority(ctx)
+    if (fence.terminalReport !== null) {
+      if (auth !== 'usage_reconciliation' || !options?.allowUsageReconciliation) {
+        throw new StoreContractError('mission terminal fenced')
+      }
+    } else if (auth === 'usage_reconciliation') {
+      throw new StoreContractError('usage reconciliation requires terminal fence')
+    }
+    return fence
+  }
+
+  private requireEvidenceCtx(ctx: MissionWriteContext): MissionFence {
+    const fence = this.requireCtx(ctx)
+    if (fence.activePlanRevisionId === null) {
+      throw new StoreContractError('no active plan revision')
+    }
+    return fence
   }
 
   private push(
@@ -236,96 +324,230 @@ export class InMemoryResearchStore implements ResearchStore {
     return { eventId }
   }
 
-  appendMission(mission: ResearchMissionV2): Promise<ResearchStoreMissionHandle> {
-    this.generations.set(mission.mission_id, 0)
+  async appendMission(mission: ResearchMissionV2): Promise<ResearchStoreMissionHandle> {
+    if (this.missions.has(mission.mission_id)) {
+      throw new StoreContractError('duplicate mission creation')
+    }
+    this.missions.set(mission.mission_id, {
+      writerGeneration: 1,
+      activePlanRevisionId: null,
+      terminalReport: null,
+    })
     this.push(mission.mission_id, 'mission_created', { mission })
-    return Promise.resolve({ mission_id: mission.mission_id, writer_generation: 0 })
+    return Promise.resolve({ mission_id: mission.mission_id, writer_generation: 1 })
   }
 
+  async acquireWriterOwnership(request: {
+    mission_id: string
+    expected_writer_generation?: number
+  }): Promise<ResearchStoreMissionHandle> {
+    const fence = this.fence(request.mission_id)
+    if (fence.terminalReport !== null) {
+      throw new StoreContractError('cannot acquire ownership on terminal mission')
+    }
+    if (
+      request.expected_writer_generation !== undefined &&
+      request.expected_writer_generation !== fence.writerGeneration
+    ) {
+      throw new StoreContractError('competing resume rejected')
+    }
+    fence.writerGeneration += 1
+    return Promise.resolve({
+      mission_id: request.mission_id,
+      writer_generation: fence.writerGeneration,
+    })
+  }
+
+  async replaceWriterOwnership(
+    ctx: MissionWriteContext,
+    rationale: string,
+  ): Promise<ResearchStoreMissionHandle> {
+    if (!rationale.trim()) throw new StoreContractError('ownership replace requires rationale')
+    this.requireEvidenceCtx(ctx)
+    const fence = this.fence(ctx.mission_id)
+    fence.writerGeneration += 1
+    return Promise.resolve({
+      mission_id: ctx.mission_id,
+      writer_generation: fence.writerGeneration,
+    })
+  }
+
+  async releaseWriterOwnership(ctx: MissionWriteContext): Promise<void> {
+    this.requireEvidenceCtx(ctx)
+    const fence = this.fence(ctx.mission_id)
+    fence.writerGeneration += 1
+    return Promise.resolve()
+  }
+
+  /** Test helper — prefer acquireWriterOwnership / replaceWriterOwnership. */
   bumpWriterGeneration(missionId: string): number {
-    const next = (this.generations.get(missionId) ?? 0) + 1
-    this.generations.set(missionId, next)
-    return next
+    const fence = this.fence(missionId)
+    fence.writerGeneration += 1
+    return fence.writerGeneration
   }
 
-  appendPlanRevision(ctx: MissionWriteContext, plan: PlanRevision): Promise<ResearchStoreWriteResult> {
-    this.requireCtx(ctx)
+  async appendPlanRevision(ctx: MissionWriteContext, plan: PlanRevision): Promise<ResearchStoreWriteResult> {
+    const fence = this.fence(ctx.mission_id)
+    if (fence.writerGeneration !== ctx.writer_generation) {
+      throw new StoreContractError('stale writer generation')
+    }
+    if (fence.terminalReport !== null) {
+      throw new StoreContractError('mission terminal fenced')
+    }
+    if (plan.mission_id !== ctx.mission_id) {
+      throw new StoreContractError('plan mission mismatch')
+    }
+    if (ctx.plan_revision_id !== plan.plan_revision_id) {
+      throw new StoreContractError('plan revision context mismatch')
+    }
+    if (
+      fence.activePlanRevisionId !== null &&
+      ctx.plan_revision_id !== fence.activePlanRevisionId
+    ) {
+      throw new StoreContractError('stale plan revision')
+    }
+    fence.activePlanRevisionId = plan.plan_revision_id
     return Promise.resolve(this.push(ctx.mission_id, 'plan_revised', { plan }))
   }
 
-  appendSource(ctx: MissionWriteContext, source: SourceRecord): Promise<ResearchStoreWriteResult> {
-    this.requireCtx(ctx)
+  async appendSource(ctx: MissionWriteContext, source: SourceRecord): Promise<ResearchStoreWriteResult> {
+    this.requireEvidenceCtx(ctx)
     return Promise.resolve(this.push(ctx.mission_id, 'source_recorded', { source }))
   }
 
-  appendSourceRevision(
+  async appendSourceRevision(
     ctx: MissionWriteContext,
     revision: SourceRevision,
   ): Promise<ResearchStoreWriteResult> {
-    this.requireCtx(ctx)
+    this.requireEvidenceCtx(ctx)
     return Promise.resolve(this.push(ctx.mission_id, 'revision_recorded', { revision }))
   }
 
-  appendPassage(ctx: MissionWriteContext, passage: PassageRecord): Promise<ResearchStoreWriteResult> {
-    this.requireCtx(ctx)
+  async appendPassage(ctx: MissionWriteContext, passage: PassageRecord): Promise<ResearchStoreWriteResult> {
+    this.requireEvidenceCtx(ctx)
     return Promise.resolve(this.push(ctx.mission_id, 'passage_recorded', { passage }))
   }
 
-  appendFinding(ctx: MissionWriteContext, finding: FindingRecord): Promise<ResearchStoreWriteResult> {
-    this.requireCtx(ctx)
+  async appendFinding(ctx: MissionWriteContext, finding: FindingRecord): Promise<ResearchStoreWriteResult> {
+    this.requireEvidenceCtx(ctx)
     return Promise.resolve(this.push(ctx.mission_id, 'finding_recorded', { finding }))
   }
 
-  appendModelReceipt(
+  async appendModelReceipt(
     ctx: MissionWriteContext,
     receipt: ModelRouteReceipt,
   ): Promise<ResearchStoreWriteResult> {
-    this.requireCtx(ctx)
+    this.requireEvidenceCtx(ctx)
     return Promise.resolve(this.push(ctx.mission_id, 'model_invocation_completed', { receipt }))
   }
 
-  appendExternalOperationIntent(
+  private trackIntent(ctx: MissionWriteContext, intent: ExternalOperationIntent): void {
+    if (intent.mission_id !== ctx.mission_id) {
+      throw new StoreContractError('operation mission mismatch')
+    }
+    const key = operationKey(intent.mission_id, intent.operation_id)
+    const existing = this.operations.get(key)
+    if (existing) {
+      if (
+        existing.attemptId === intent.attempt_id &&
+        stableJson(existing.intent) === stableJson(intent)
+      ) {
+        return
+      }
+      throw new StoreContractError('operation id reused with different attempt')
+    }
+    this.operations.set(key, { missionId: intent.mission_id, attemptId: intent.attempt_id, intent })
+  }
+
+  async appendExternalOperationIntent(
     ctx: MissionWriteContext,
     intent: ExternalOperationIntent,
   ): Promise<ResearchStoreWriteResult> {
-    this.requireCtx(ctx)
+    this.requireEvidenceCtx(ctx)
+    this.trackIntent(ctx, intent)
     return Promise.resolve(this.push(ctx.mission_id, 'external_operation_intent', { intent }))
   }
 
-  appendExternalOperationCompleted(
+  async appendExternalOperationCompleted(
     ctx: MissionWriteContext,
     completion: ExternalOperationCompletion,
   ): Promise<ResearchStoreWriteResult> {
-    this.requireCtx(ctx)
-    if (this.completedOperations.has(completion.operation_id)) {
+    this.requireEvidenceCtx(ctx)
+    if (completion.mission_id !== ctx.mission_id) {
+      throw new StoreContractError('completion mission mismatch')
+    }
+    const key = operationKey(completion.mission_id, completion.operation_id)
+    const tracked = this.operations.get(key)
+    if (!tracked) {
+      throw new StoreContractError('completion without prior intent')
+    }
+    if (tracked.attemptId !== completion.attempt_id) {
+      throw new StoreContractError('completion attempt mismatch')
+    }
+    if (tracked.completion) {
+      if (stableJson(tracked.completion) === stableJson(completion)) {
+        return Promise.resolve({ eventId: `evt-idempotent-${key}` })
+      }
       throw new StoreContractError('duplicate operation completion')
     }
-    this.completedOperations.add(completion.operation_id)
+    tracked.completion = completion
     return Promise.resolve(
       this.push(ctx.mission_id, 'external_operation_completed', { completion }),
     )
   }
 
-  appendExternalOperationReconciled(
+  async appendExternalOperationReconciled(
     ctx: MissionWriteContext,
     reconciliation: ExternalOperationReconciliation,
   ): Promise<ResearchStoreWriteResult> {
-    this.requireCtx(ctx)
+    this.requireCtx(ctx, { allowUsageReconciliation: true })
+    if (reconciliation.mission_id !== ctx.mission_id) {
+      throw new StoreContractError('reconciliation mission mismatch')
+    }
+    const key = operationKey(reconciliation.mission_id, reconciliation.operation_id)
+    const tracked = this.operations.get(key)
+    if (!tracked?.completion) {
+      throw new StoreContractError('reconciliation without prior completion')
+    }
+    if (tracked.attemptId !== reconciliation.attempt_id) {
+      throw new StoreContractError('reconciliation attempt mismatch')
+    }
+    if (tracked.completion.settlement !== 'uncertain') {
+      throw new StoreContractError('reconciliation requires uncertain prior settlement')
+    }
+    if (reconciliation.prior_settlement !== 'uncertain') {
+      throw new StoreContractError('reconciliation prior_settlement mismatch')
+    }
+    tracked.completion = {
+      ...tracked.completion,
+      settlement: reconciliation.resolved_settlement,
+      usage_settlement: reconciliation.usage_settlement,
+    }
     return Promise.resolve(
       this.push(ctx.mission_id, 'external_operation_reconciled', { reconciliation }),
     )
   }
 
-  appendTerminalReport(
+  async appendTerminalReport(
     ctx: MissionWriteContext,
     report: ResearchReportV2,
   ): Promise<ResearchStoreWriteResult> {
-    this.requireCtx(ctx)
+    const fence = this.requireEvidenceCtx(ctx)
+    if (report.mission_id !== ctx.mission_id) {
+      throw new StoreContractError('terminal report mission mismatch')
+    }
+    if (report.plan_revision_id !== ctx.plan_revision_id) {
+      throw new StoreContractError('terminal report plan mismatch')
+    }
+    if (fence.terminalReport !== null) {
+      throw new StoreContractError('duplicate terminal report')
+    }
+    fence.terminalReport = report
     return Promise.resolve(this.push(ctx.mission_id, 'terminal_receipt', { report }))
   }
 
-  listEvents(missionId: string): Promise<readonly ResearchStoreEvent[]> {
-    return Promise.resolve(this.events.filter((e) => e.missionId === missionId))
+  async listEvents(missionId: string): Promise<readonly ResearchStoreEvent[]> {
+    return this.events.filter((e) => e.missionId === missionId)
   }
 
   allEvents(): readonly ResearchStoreEvent[] {
@@ -337,23 +559,34 @@ export class InMemoryResearchStore implements ResearchStore {
 export function extractPlainTextPassagesFromAdmitted(
   revision: SourceRevision,
   text: string,
-  issuePassageId: () => string,
 ): PassageRecord[] {
-  const excerpt = text.slice(0, 4000)
+  const { excerpt, truncated } = boundedExcerpt(text)
+  const textHash = sha256(excerpt)
+  const passageId = deterministicPassageId(revision.revision_id, textHash)
+  const locator = truncated
+    ? ({
+        kind: 'byte_offset',
+        start_offset: 0,
+        end_offset: Buffer.byteLength(excerpt, 'utf8'),
+      } satisfies PassageRecord['locator'])
+    : lineRangeLocatorForText(excerpt)
+  const notes = truncated ? ['excerpt_truncated_to_complete_lines'] : undefined
   return [
     {
-      passage_id: issuePassageId(),
+      passage_id: passageId,
       source_revision_id: revision.revision_id,
-      locator: lineRangeLocator(text),
+      locator,
       text_ref: {
         mode: 'inline',
         text: excerpt,
-        text_hash: sha256(excerpt),
+        text_hash: textHash,
       },
+      extraction_notes: notes,
     },
   ]
 }
 
+/** @deprecated Use deterministic ids from extractPlainTextPassagesFromAdmitted */
 export function fakePassageId(): string {
-  return `passage-${randomBytes(4).toString('hex')}`
+  return deterministicPassageId('legacy', sha256('legacy'))
 }

@@ -10,24 +10,15 @@ export const RedirectProvenanceSchema = z
   })
   .strict()
 
-export const AdmittedContentPayloadSchema = z.discriminatedUnion('mode', [
-  z
-    .object({
-      mode: z.literal('inline_bytes'),
-      bytes_base64: z.string().min(1),
-      byte_length: z.number().int().positive(),
-      content_hash: ContentHashSchema,
-    })
-    .strict(),
-  z
-    .object({
-      mode: z.literal('blob_ref'),
-      blob_ref: z.string().min(1),
-      byte_length: z.number().int().positive(),
-      content_hash: ContentHashSchema,
-    })
-    .strict(),
-])
+/** Inline bytes only for V2 contract MVP — hosts must not emit unresolved blob_ref admissions. */
+export const AdmittedContentPayloadSchema = z
+  .object({
+    mode: z.literal('inline_bytes'),
+    bytes_base64: z.string().min(1),
+    byte_length: z.number().int().positive(),
+    content_hash: ContentHashSchema,
+  })
+  .strict()
 
 export const AdmittedContentSchema = z
   .object({

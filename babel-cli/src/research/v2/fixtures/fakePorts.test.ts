@@ -8,6 +8,7 @@ import {
 } from './fakePorts.js'
 import {
   exampleMissionWriteContext,
+  examplePlanRevisionFixture,
   exampleTechnicalMissionFixture,
 } from './exampleMission.js'
 
@@ -83,6 +84,7 @@ describe('research v2 fake ports', () => {
   it('appends durable mission-scoped events in order', async () => {
     const store = new InMemoryResearchStore()
     await store.appendMission(exampleTechnicalMissionFixture)
+    await store.appendPlanRevision(exampleMissionWriteContext, examplePlanRevisionFixture)
     await store.appendSource(exampleMissionWriteContext, SourceRecordSchema.parse({
       source_id: 'src-1',
       kind: 'web',
@@ -90,7 +92,7 @@ describe('research v2 fake ports', () => {
       observed_urls: ['https://example.test/'],
     }))
     const events = await store.listEvents(exampleTechnicalMissionFixture.mission_id)
-    assert.equal(events.length, 2)
-    assert.equal(events[1]?.kind, 'source_recorded')
+    assert.equal(events.length, 3)
+    assert.equal(events[2]?.kind, 'source_recorded')
   })
 })

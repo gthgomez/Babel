@@ -24,3 +24,5 @@ node --import tsx --no-warnings=ExperimentalWarning --import ./src/testinfra/reg
 ## B review gate
 
 Confirm `fetchContent` + `SourceAdapter.read` seam, `search_provider_unavailable`, and normalization output before dependent adapter implementation.
+
+Peer reviewers must also complete `SHARED_REVIEW_CHECKLIST.md` (B fixture paths on disk, colocated tests, independent `#404` FIX — not waived).

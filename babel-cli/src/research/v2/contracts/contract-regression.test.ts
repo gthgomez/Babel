@@ -10,14 +10,20 @@ import {
   InMemoryResearchStore,
   StoreContractError,
   extractPlainTextPassagesFromAdmitted,
-  fakePassageId,
 } from '../fixtures/fakePorts.js'
 import { SourceRecordSchema } from './sources.js'
+import { AdmittedContentSchema } from './admittedContent.js'
 import {
   exampleMissionWriteContext,
+  examplePlanRevisionFixture,
   exampleTechnicalMissionFixture,
 } from '../fixtures/exampleMission.js'
 import { FindingRecordSchema } from './findings.js'
+
+async function seedMissionWithPlan(store: InMemoryResearchStore): Promise<void> {
+  await store.appendMission(exampleTechnicalMissionFixture)
+  await store.appendPlanRevision(exampleMissionWriteContext, examplePlanRevisionFixture)
+}
 
 describe('research v2 contract regressions (#405 repair)', () => {
   it('ResearchStore exposes mission-scoped external operation intent/completion writes', () => {
@@ -42,6 +48,16 @@ describe('research v2 contract regressions (#405 repair)', () => {
       plan_revision_id: 'plan-b',
       writer_generation: handleB.writer_generation,
     }
+    await store.appendPlanRevision(ctxA, {
+      ...examplePlanRevisionFixture,
+      mission_id: 'mission-a',
+      plan_revision_id: 'plan-a',
+    })
+    await store.appendPlanRevision(ctxB, {
+      ...examplePlanRevisionFixture,
+      mission_id: 'mission-b',
+      plan_revision_id: 'plan-b',
+    })
     const sourceA = SourceRecordSchema.parse({
       source_id: 'src-a',
       kind: 'document',
@@ -58,8 +74,16 @@ describe('research v2 contract regressions (#405 repair)', () => {
     await store.appendSource(ctxB, sourceB)
     const eventsA = await store.listEvents('mission-a')
     const eventsB = await store.listEvents('mission-b')
-    assert.deepEqual(eventsA.map((e) => e.kind), ['mission_created', 'source_recorded'])
-    assert.deepEqual(eventsB.map((e) => e.kind), ['mission_created', 'source_recorded'])
+    assert.deepEqual(eventsA.map((e) => e.kind), [
+      'mission_created',
+      'plan_revised',
+      'source_recorded',
+    ])
+    assert.deepEqual(eventsB.map((e) => e.kind), [
+      'mission_created',
+      'plan_revised',
+      'source_recorded',
+    ])
   })
 
   it('SourceAccessPort.fetchContent yields admitted bytes without port-owned passages', async () => {
@@ -87,7 +111,7 @@ describe('research v2 contract regressions (#405 repair)', () => {
     const required: Pick<SourceAdapter, 'adapterId' | 'supportedKinds' | 'discover' | 'read'> = {
       adapterId: 'web',
       supportedKinds: ['web'],
-      discover: async () => ({ operationId: 'd', candidates: [] }),
+      discover: async () => ({ operationId: 'd', status: 'cancelled' }),
       read: async () => ({ operationId: 'r', status: 'cancelled' }),
     }
     assert.equal(typeof required.read, 'function')
@@ -95,33 +119,40 @@ describe('research v2 contract regressions (#405 repair)', () => {
 
   it('store rejects duplicate completion and stale writer generation', async () => {
     const store = new InMemoryResearchStore()
-    await store.appendMission(exampleTechnicalMissionFixture)
+    await seedMissionWithPlan(store)
     const ctx = { ...exampleMissionWriteContext }
     await store.appendExternalOperationIntent(ctx, {
+      mission_id: ctx.mission_id,
       operation_id: 'op-1',
+      attempt_id: 'att-1',
       operation_kind: 'source_fetch',
       dispatched_at: '2026-10-20T12:00:00.000Z',
       idempotency_key: 'k1',
     })
     await store.appendExternalOperationCompleted(ctx, {
+      mission_id: ctx.mission_id,
       operation_id: 'op-1',
+      attempt_id: 'att-1',
       completed_at: '2026-10-20T12:00:01.000Z',
       settlement: 'succeeded',
     })
     await assert.rejects(
       async () => {
         await store.appendExternalOperationCompleted(ctx, {
+          mission_id: ctx.mission_id,
           operation_id: 'op-1',
+          attempt_id: 'att-1',
           completed_at: '2026-10-20T12:00:02.000Z',
-          settlement: 'succeeded',
+          settlement: 'failed',
         })
       },
       (err: unknown) => err instanceof StoreContractError,
     )
     store.bumpWriterGeneration(ctx.mission_id)
+    const staleCtx = { ...ctx, writer_generation: ctx.writer_generation }
     await assert.rejects(
       async () => {
-        await store.appendSource(ctx, SourceRecordSchema.parse({
+        await store.appendSource(staleCtx, SourceRecordSchema.parse({
           source_id: 'src-stale',
           kind: 'web',
           canonical_key: 'x',
@@ -196,14 +227,74 @@ describe('research v2 contract regressions (#405 repair)', () => {
         : '',
       'base64',
     ).toString('utf8')
-    const passages = extractPlainTextPassagesFromAdmitted(
-      fetched.admitted.revision,
-      text,
-      fakePassageId,
-    )
+    const passages = extractPlainTextPassagesFromAdmitted(fetched.admitted.revision, text)
     assert.equal(passages[0]?.locator.kind, 'line_range')
     if (passages[0]?.locator.kind === 'line_range') {
       assert.equal(passages[0].locator.end_line, 3)
+    }
+    const again = extractPlainTextPassagesFromAdmitted(fetched.admitted.revision, text)
+    assert.equal(passages[0]?.passage_id, again[0]?.passage_id)
+  })
+
+  it('fetch rejects empty body without fabricated inline payload', async () => {
+    const source = SourceRecordSchema.parse({
+      source_id: 'src-empty',
+      kind: 'document',
+      canonical_key: 'empty',
+      observed_urls: ['https://example.test/empty'],
+    })
+    const access = new FakeSourceAccessPort([{ source, body: '', mediaType: 'text/plain' }])
+    const result = await access.fetchContent({
+      operationId: 'op-empty',
+      source,
+      signal: new AbortController().signal,
+    })
+    assert.equal(result.status, 'failed')
+    if (result.status === 'failed') assert.equal(result.failureCategory, 'empty_body')
+  })
+
+  it('propagates truncated admitted bytes with schema-valid envelope', async () => {
+    const source = SourceRecordSchema.parse({
+      source_id: 'src-trunc',
+      kind: 'document',
+      canonical_key: 'trunc',
+      observed_urls: ['https://example.test/trunc'],
+    })
+    const body = 'x'.repeat(200)
+    const access = new FakeSourceAccessPort(
+      [{ source, body, mediaType: 'text/plain' }],
+      undefined,
+      64,
+    )
+    const result = await access.fetchContent({
+      operationId: 'op-trunc',
+      source,
+      signal: new AbortController().signal,
+    })
+    assert.equal(result.status, 'ok')
+    if (result.status !== 'ok') return
+    AdmittedContentSchema.parse(result.admitted)
+    assert.equal(result.admitted.revision.completeness, 'truncated')
+    assert.ok(result.admitted.truncation)
+  })
+
+  it('long multiline excerpt uses locator within bounded text', () => {
+    const revision = {
+      revision_id: 'rev-long',
+      source_id: 'src-long',
+      content_hash: 'a'.repeat(64),
+      retrieved_at: '2026-10-20T12:00:00.000Z',
+      extraction_version: 't',
+      media_type: 'text/plain',
+      completeness: 'complete' as const,
+    }
+    const lines = Array.from({ length: 500 }, (_, i) => `line-${i}`)
+    const text = lines.join('\n')
+    const passages = extractPlainTextPassagesFromAdmitted(revision, text)
+    assert.equal(passages[0]?.locator.kind, 'byte_offset')
+    assert.equal(passages[0]!.text_ref.mode, 'inline')
+    if (passages[0]!.text_ref.mode === 'inline') {
+      assert.ok(passages[0]!.text_ref.text.length <= 4000)
     }
   })
 })

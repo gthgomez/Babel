@@ -16,7 +16,9 @@ export const OperationSettlementStateSchema = z.enum([
 
 export const ExternalOperationIntentSchema = z
   .object({
+    mission_id: RecordIdSchema,
     operation_id: RecordIdSchema,
+    attempt_id: RecordIdSchema,
     operation_kind: ExternalOperationKindSchema,
     dispatched_at: IsoDateTimeSchema,
     idempotency_key: z.string().min(1),
@@ -25,7 +27,9 @@ export const ExternalOperationIntentSchema = z
 
 export const ExternalOperationCompletionSchema = z
   .object({
+    mission_id: RecordIdSchema,
     operation_id: RecordIdSchema,
+    attempt_id: RecordIdSchema,
     completed_at: IsoDateTimeSchema,
     settlement: OperationSettlementStateSchema,
     usage_settlement: UsageSettlementSchema.optional(),
@@ -36,7 +40,9 @@ export const ExternalOperationCompletionSchema = z
 
 export const ExternalOperationReconciliationSchema = z
   .object({
+    mission_id: RecordIdSchema,
     operation_id: RecordIdSchema,
+    attempt_id: RecordIdSchema,
     reconciled_at: IsoDateTimeSchema,
     prior_settlement: OperationSettlementStateSchema,
     resolved_settlement: OperationSettlementStateSchema,

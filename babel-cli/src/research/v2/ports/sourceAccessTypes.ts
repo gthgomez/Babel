@@ -9,4 +9,5 @@ export type SourceAccessFailureCategory =
   | 'unsupported_media'
   | 'private_address_blocked'
   | 'search_provider_unavailable'
+  | 'empty_body'
   | 'cancelled'

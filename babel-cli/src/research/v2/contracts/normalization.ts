@@ -8,10 +8,12 @@ export const GeneralMissionBriefSchema = z
     profile_id: z.literal('general'),
     primary_question: z.string().min(1),
     intended_decision: z.string().min(1).optional(),
-    as_of: z.union([z.string().min(1), z.literal('unknown')]),
+    as_of: z.union([z.string().min(1), z.literal('unknown')]).optional(),
     jurisdiction: z.union([z.string().min(1), z.literal('unknown')]).optional(),
     constraints: z.union([z.array(z.string()), z.record(z.string(), z.unknown())]).optional(),
+    hard_requirements: z.array(z.string().min(1)).optional(),
     exclusions: z.array(z.string()).optional(),
+    notes: z.string().min(1).optional(),
   })
   .strict()
 
@@ -42,6 +44,8 @@ export function normalizeGeneralMissionBrief(
   },
 ): ResearchMissionV2 {
   const parsed = GeneralMissionBriefSchema.parse(brief)
+  const hardReqConstraints = (parsed.hard_requirements ?? []).map((r) => `hard_requirement:${r}`)
+  const noteConstraints = parsed.notes ? [`mission_note:${parsed.notes}`] : []
   const mission = {
     schema_version: 'research-mission-v2',
     contract_version: RESEARCH_V2_CONTRACT_VERSION,
@@ -51,9 +55,13 @@ export function normalizeGeneralMissionBrief(
     created_at: options.created_at,
     primary_question: parsed.primary_question,
     intended_decision: parsed.intended_decision ?? 'Answer the primary question with cited evidence.',
-    constraints: flattenConstraints(parsed.constraints),
+    constraints: [
+      ...flattenConstraints(parsed.constraints),
+      ...hardReqConstraints,
+      ...noteConstraints,
+    ],
     exclusions: parsed.exclusions ?? [],
-    as_of: parsed.as_of,
+    as_of: parsed.as_of ?? 'unknown',
     jurisdiction: parsed.jurisdiction ?? 'unknown',
     source_policy: {
       allowed_source_classes: ['web', 'document'],

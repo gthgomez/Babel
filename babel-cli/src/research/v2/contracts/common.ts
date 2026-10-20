@@ -21,13 +21,17 @@ export const TimeRangeSchema = z
 
 export const ContentHashSchema = z.string().regex(/^[a-f0-9]{64}$/i, 'expected sha256 hex')
 
+export const MissionWriteAuthoritySchema = z.enum(['evidence', 'usage_reconciliation'])
+
 /** Required on every store append after the initial mission write. */
 export const MissionWriteContextSchema = z
   .object({
     mission_id: RecordIdSchema,
     plan_revision_id: RecordIdSchema,
     /** Monotonic owner generation; stale writes fail closed. */
-    writer_generation: z.number().int().nonnegative(),
+    writer_generation: z.number().int().positive(),
+    /** Default evidence; usage_reconciliation allows post-terminal billing settlement only. */
+    write_authority: MissionWriteAuthoritySchema.optional(),
   })
   .strict()
 export type MissionWriteContext = z.infer<typeof MissionWriteContextSchema>
