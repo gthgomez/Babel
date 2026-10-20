@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url'
 
 export const PUBLIC_RELEASE_GATE_WORKFLOW_ID = 258744217
 export const PUBLIC_RELEASE_GATE_WORKFLOW_NAME = 'Public Release Gate'
+export const PUBLIC_RELEASE_GATE_MAX_PAGES = 5
 
 function git(root, args) {
   const result = spawnSync('git', ['-C', root, ...args], { encoding: 'utf8', windowsHide: true })
@@ -46,12 +47,59 @@ function resolveGithubRepo(root, remote, gitFn) {
   }
 }
 
+export function isPublicReleaseGateRun(run) {
+  return (
+    run.workflow_id === PUBLIC_RELEASE_GATE_WORKFLOW_ID ||
+    run.name === PUBLIC_RELEASE_GATE_WORKFLOW_NAME
+  )
+}
+
+/**
+ * @returns {{ status: number, lines: Array<{ sha: string, ref: string }> }}
+ */
+export function parseLsRemoteOutput(stdout) {
+  const lines = []
+  for (const row of stdout.split(/\r?\n/).filter(Boolean)) {
+    const match = row.match(/^([0-9a-f]{40})\t(.+)$/)
+    if (!match) {
+      throw new Error('[pre-push] branch gate preflight: malformed ls-remote output')
+    }
+    lines.push({ sha: match[1], ref: match[2] })
+  }
+  return lines
+}
+
+/**
+ * Probe an exact ref on a named remote. Exit code 2 means no matching ref (authenticated absence).
+ */
+export function gitLsRemoteExact(root, remote, ref) {
+  const result = spawnSync(
+    'git',
+    ['-C', root, 'ls-remote', '--exit-code', remote, ref],
+    { encoding: 'utf8', windowsHide: true },
+  )
+  if (result.error) {
+    throw new Error('[pre-push] branch gate preflight: remote ref probe failed (network)')
+  }
+  const lines = parseLsRemoteOutput(result.stdout ?? '')
+  if (result.status === 2) {
+    if (lines.length > 0) {
+      throw new Error('[pre-push] branch gate preflight: inconsistent ls-remote absence')
+    }
+    return { present: false, sha: null, status: 2 }
+  }
+  if (result.status !== 0) {
+    throw new Error('[pre-push] branch gate preflight: remote ref probe failed (auth or network)')
+  }
+  if (lines.length !== 1 || lines[0].ref !== ref) {
+    throw new Error('[pre-push] branch gate preflight: unexpected ls-remote ref binding')
+  }
+  return { present: true, sha: lines[0].sha, status: 0 }
+}
+
 export function evaluatePublishedHeadGate(workflowRuns, publishedHeadSha, options = {}) {
   const matching = workflowRuns.filter(
-    (run) =>
-      run.head_sha === publishedHeadSha &&
-      (run.workflow_id === PUBLIC_RELEASE_GATE_WORKFLOW_ID ||
-        run.name === PUBLIC_RELEASE_GATE_WORKFLOW_NAME),
+    (run) => run.head_sha === publishedHeadSha && isPublicReleaseGateRun(run),
   )
   if (matching.length === 0) {
     if (options.branchHasAnyGateRuns === false) {
@@ -76,7 +124,12 @@ export function evaluatePublishedHeadGate(workflowRuns, publishedHeadSha, option
 }
 
 function defaultGhGet(repo, query) {
-  const args = ['api', '--method', 'GET', `repos/${repo}/actions/workflows/${PUBLIC_RELEASE_GATE_WORKFLOW_ID}/runs`]
+  const args = [
+    'api',
+    '--method',
+    'GET',
+    `repos/${repo}/actions/workflows/${PUBLIC_RELEASE_GATE_WORKFLOW_ID}/runs`,
+  ]
   for (const [key, value] of Object.entries(query)) {
     args.push('-f', `${key}=${value}`)
   }
@@ -88,24 +141,11 @@ function defaultGhGet(repo, query) {
 }
 
 /**
- * Abort push when the published remote tip still has an in-flight Public Release Gate.
+ * @param {{ publishedHeadSha?: string, requireCompletePagination: boolean }} options
  */
-export function assertBranchPriorGateComplete(root, remote = 'origin', deps = {}) {
-  const gitFn = deps.git ?? git
-  const ghGet = deps.ghGet ?? defaultGhGet
-
-  const branch = gitFn(root, ['symbolic-ref', '--short', '-q', 'HEAD'])
-  if (!branch) {
-    throw new Error('[pre-push] detached HEAD; checkout a branch before pushing')
-  }
-
-  const repo = resolveGithubRepo(root, remote, gitFn)
-
-  gitFn(root, ['fetch', remote, branch])
-  const publishedHeadSha = gitFn(root, ['rev-parse', `${remote}/${branch}`])
-
+export function collectPublicReleaseGateRuns(repo, branch, ghGet, options) {
   const runs = []
-  for (let page = 1; page <= 5; page += 1) {
+  for (let page = 1; page <= PUBLIC_RELEASE_GATE_MAX_PAGES; page += 1) {
     const payload = ghGet(repo, { branch, per_page: '100', page: String(page) })
     if (!payload || typeof payload !== 'object' || !Array.isArray(payload.workflow_runs)) {
       throw new Error(
@@ -115,15 +155,89 @@ export function assertBranchPriorGateComplete(root, remote = 'origin', deps = {}
     const batch = payload.workflow_runs
     runs.push(...batch)
     if (batch.length < 100) break
-    const hasHead = batch.some((run) => run.head_sha === publishedHeadSha)
+    if (options.requireCompletePagination) {
+      if (page === PUBLIC_RELEASE_GATE_MAX_PAGES) {
+        throw new Error(
+          '[pre-push] branch gate preflight: incomplete Public Release Gate history pagination',
+        )
+      }
+      continue
+    }
+    const publishedHeadSha = options.publishedHeadSha
+    const hasHead =
+      typeof publishedHeadSha === 'string' &&
+      batch.some((run) => run.head_sha === publishedHeadSha)
     if (hasHead) break
   }
-  const branchHasAnyGateRuns = runs.some(
-    (run) =>
-      run.workflow_id === PUBLIC_RELEASE_GATE_WORKFLOW_ID ||
-      run.name === PUBLIC_RELEASE_GATE_WORKFLOW_NAME,
-  )
-  const verdict = evaluatePublishedHeadGate(runs, publishedHeadSha, { branchHasAnyGateRuns })
+  return runs
+}
+
+function branchHasAnyGateRuns(runs) {
+  return runs.some((run) => isPublicReleaseGateRun(run))
+}
+
+function assertRemoteReachable(root, remote, lsRemoteFn) {
+  const headRef = 'HEAD'
+  const head = lsRemoteFn(root, remote, headRef)
+  if (head.status !== 0 || !head.present || !head.sha) {
+    throw new Error('[pre-push] branch gate preflight: remote reachability probe failed')
+  }
+}
+
+/**
+ * Abort push when the published remote tip still has an in-flight Public Release Gate.
+ */
+export function assertBranchPriorGateComplete(root, remote = 'origin', deps = {}) {
+  const gitFn = deps.git ?? git
+  const ghGet = deps.ghGet ?? defaultGhGet
+  const lsRemoteFn = deps.lsRemote ?? gitLsRemoteExact
+
+  const branch = gitFn(root, ['symbolic-ref', '--short', '-q', 'HEAD'])
+  if (!branch) {
+    throw new Error('[pre-push] detached HEAD; checkout a branch before pushing')
+  }
+
+  const repo = resolveGithubRepo(root, remote, gitFn)
+  const remoteBranchRef = `refs/heads/${branch}`
+
+  assertRemoteReachable(root, remote, lsRemoteFn)
+
+  const branchProbe = lsRemoteFn(root, remote, remoteBranchRef)
+
+  if (!branchProbe.present) {
+    const runs = collectPublicReleaseGateRuns(repo, branch, ghGet, {
+      requireCompletePagination: true,
+    })
+    if (branchHasAnyGateRuns(runs)) {
+      throw new Error(
+        `[pre-push] branch ${branch} remote ref is absent but Public Release Gate history exists`,
+      )
+    }
+    const verdict = evaluatePublishedHeadGate(runs, '0'.repeat(40), {
+      branchHasAnyGateRuns: false,
+    })
+    if (!verdict.allow) {
+      throw new Error(`[pre-push] branch ${branch} ${verdict.reason}`)
+    }
+    return
+  }
+
+  const tipBeforeFetch = branchProbe.sha
+  gitFn(root, ['fetch', remote, branch])
+  const tipAfterFetch = gitFn(root, ['rev-parse', `${remote}/${branch}`])
+  if (tipBeforeFetch !== tipAfterFetch) {
+    throw new Error(
+      `[pre-push] branch ${branch} remote tip changed during gate preflight (retry push)`,
+    )
+  }
+
+  const runs = collectPublicReleaseGateRuns(repo, branch, ghGet, {
+    publishedHeadSha: tipAfterFetch,
+    requireCompletePagination: false,
+  })
+  const verdict = evaluatePublishedHeadGate(runs, tipAfterFetch, {
+    branchHasAnyGateRuns: branchHasAnyGateRuns(runs),
+  })
   if (!verdict.allow) {
     throw new Error(`[pre-push] branch ${branch} ${verdict.reason}`)
   }
