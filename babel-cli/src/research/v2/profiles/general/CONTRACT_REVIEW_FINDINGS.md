@@ -6,7 +6,9 @@
 **Tests run (isolated worktree, no network):**  
 `node --import tsx --import ./src/testinfra/register-no-ambient-inference.mjs --test src/research/v2/**/*.test.ts` → **8/8 pass**
 
-## Verdict: BLOCK (resolvable before M1)
+**Superseded by:** `REVISED_CONTRACT_CHECKPOINT.md` and `contract-regression/aCheckpoint59cd561b.regression.test.ts`.
+
+## Verdict: FIX (checkpoint.2 required before M1)
 
 Schemas and fake ports are largely aligned with the shared annex. Two port-surface gaps block B-owned document/web adapter implementation without A-owned engine edits.
 

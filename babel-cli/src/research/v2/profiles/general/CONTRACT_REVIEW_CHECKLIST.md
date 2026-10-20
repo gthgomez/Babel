@@ -31,8 +31,9 @@ Do not begin profile/adapter implementation against shared types until this revi
 
 | Field | Value |
 |-------|--------|
-| Contract version | _pending_ |
-| A checkpoint commit/branch | _pending_ |
-| B reviewer | Agent B |
-| Approved / blocked | _pending_ |
-| Blocking notes | _pending_ |
+| Contract version | `2026.10.20-checkpoint.1` |
+| A checkpoint commit/branch | `59cd561b2414fcc32253de568c70285517eae1cd` / `cursor/research-v2-contract-a-fc31` (draft PR #405) |
+| B reviewer | Agent B (non-author) |
+| Approved / blocked | **BLOCK** (narrow interface amendments; schemas otherwise sufficient) |
+| Blocking notes | See `CONTRACT_REVIEW_FINDINGS.md` |
+

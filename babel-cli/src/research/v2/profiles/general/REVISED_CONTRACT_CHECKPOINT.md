@@ -86,16 +86,11 @@ Before contract freeze.2, B will review:
 
 ## Verification (author claims not sufficient)
 
-When A publishes checkpoint.2, run prescribed preflight plus:
+**Pre-fix characterization (not acceptance):** opt-in only; evidence frozen in `contract-regression/CHARACTERIZATION_EVIDENCE_59cd561b.md`. Default repo tests **skip** intentional A checkpoint.1 failures.
 
-```bash
-export RESEARCH_V2_A_ROOT=/path/to/a/v2   # e.g. worktree at 59cd561b+fixes
-cd babel-cli
-node --import tsx --import ./src/testinfra/register-no-ambient-inference.mjs \
-  --test src/research/v2/profiles/general/contract-regression/*.test.ts
-```
+**Post-repair acceptance:** after coordinator agrees checkpoint.2, set `RESEARCH_V2_RUN_ACCEPTANCE=1` and run `acceptance.checkpoint.test.ts` against repaired `RESEARCH_V2_A_ROOT`.
 
-Regression suite must **pass** on checkpoint.2; it **fails** on `59cd561b`.
+Prescribed push guards (no waiver assumed): `agent-preflight`, `check-public-content-policy`, `run-public-secret-scan -Strict -RequireExternalScanner`. Maintainer pre-merge additionally requires `validate-public-release.ps1 -Strict -RequireSupplementalPolicy` with real `BABEL_PRIVATE_SCRUB_POLICY_PATH` or approved `-SupplementalPolicyPath` (absence blocks maintainer pre-merge only, not ordinary push scrub).
 
 ## Publication
 
