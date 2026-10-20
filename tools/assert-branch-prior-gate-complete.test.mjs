@@ -20,6 +20,11 @@ const REPO = 'gthgomez/Babel'
 const BRANCH = 'cursor/test-branch'
 const REMOTE_REF = `refs/heads/${BRANCH}`
 const TIP = 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef'
+const DEFAULT_FETCH_URL = `git@github.com:${REPO}.git`
+
+function defaultGetPushUrlsAll() {
+  return () => [DEFAULT_FETCH_URL]
+}
 
 function gateRun(overrides = {}) {
   return {
@@ -83,6 +88,7 @@ function makeExistingBranchDeps(overrides = {}) {
       if (overrides.ghThrow) throw new Error('gh api failure')
       return page
     },
+    getPushUrlsAll: overrides.getPushUrlsAll ?? defaultGetPushUrlsAll(),
     ...overrides.deps,
   }
 }
@@ -158,10 +164,11 @@ describe('assert-branch-prior-gate-complete', () => {
           if (ref === REMOTE_REF) return lsRemoteBranchAbsent()
           throw new Error('unexpected ref')
         },
+        getPushUrlsAll: () => [`git@github.com:${configuredRepo}.git`],
         ghGet: (repo) => {
           workflowRepo = repo
           if (repo === wrongDefaultRepo) {
-            return { workflow_runs: [] }
+            return { workflow_runs: [], total_count: 0 }
           }
           if (repo === configuredRepo) {
             return { workflow_runs: [], total_count: 0 }
@@ -267,6 +274,32 @@ describe('assert-branch-prior-gate-complete', () => {
           ],
         })),
       /absent but Public Release Gate history exists/,
+    )
+  })
+
+  it('fails closed on missing total_count for existing ref with no gate history', () => {
+    const root = process.cwd()
+    assert.throws(
+      () =>
+        assertBranchPriorGateComplete(root, REMOTE, makeExistingBranchDeps({
+          ghPages: [{ workflow_runs: [] }],
+        })),
+      /missing Public Release Gate workflow run total_count/,
+    )
+  })
+
+  it('fails closed when existing ref workflow evidence is incomplete without found-head early stop', () => {
+    const root = process.cwd()
+    const partial = Array.from({ length: 50 }, (_, i) =>
+      gateRun({ id: i + 1, head_sha: 'c'.repeat(40) }),
+    )
+    assert.throws(
+      () =>
+        assertBranchPriorGateComplete(root, REMOTE, makeExistingBranchDeps({
+          branchProbe: lsRemoteBranchPresent(TIP),
+          ghPages: [gateRunPage(partial, 150)],
+        })),
+      /incomplete Public Release Gate workflow run evidence/,
     )
   })
 
@@ -399,7 +432,8 @@ describe('assert-branch-prior-gate-complete', () => {
             if (ref === 'HEAD') return { present: false, sha: null, status: 128 }
             return lsRemoteBranchAbsent()
           },
-          ghGet: () => ({ workflow_runs: [] }),
+          getPushUrlsAll: defaultGetPushUrlsAll(),
+          ghGet: () => ({ workflow_runs: [], total_count: 0 }),
         }),
       /reachability probe failed/,
     )
@@ -419,7 +453,8 @@ describe('assert-branch-prior-gate-complete', () => {
             if (ref === 'HEAD') return lsRemoteHeadOk()
             throw new Error('[pre-push] branch gate preflight: remote ref probe failed (auth or network)')
           },
-          ghGet: () => ({ workflow_runs: [] }),
+          getPushUrlsAll: defaultGetPushUrlsAll(),
+          ghGet: () => ({ workflow_runs: [], total_count: 0 }),
         }),
       /remote ref probe failed/,
     )
@@ -444,7 +479,8 @@ describe('assert-branch-prior-gate-complete', () => {
             }
             throw new Error('unexpected ref')
           },
-          ghGet: () => ({ workflow_runs: [] }),
+          getPushUrlsAll: defaultGetPushUrlsAll(),
+          ghGet: () => ({ workflow_runs: [], total_count: 0 }),
         }),
       /unexpected ls-remote ref binding/,
     )
@@ -574,19 +610,19 @@ describe('assert-branch-prior-gate-complete', () => {
     assert.equal(ghCalls, 1)
   })
 
-  it('fails closed when pushurl targets a different repository than fetch url', () => {
+  it('fails closed when effective push URL targets a different repository than fetch url', () => {
     const root = process.cwd()
     assert.throws(
       () =>
         assertBranchPriorGateComplete(root, REMOTE, {
           ...makeExistingBranchDeps({ branchProbe: lsRemoteBranchAbsent() }),
-          configGetAll: () => ['git@github.com:other-org/other-repo.git'],
+          getPushUrlsAll: () => ['git@github.com:other-org/other-repo.git'],
         }),
       /push destination does not match fetch remote repository/,
     )
   })
 
-  it('fails closed on ambiguous multiple pushurl destinations', () => {
+  it('fails closed on ambiguous multiple effective push destinations', () => {
     const root = process.cwd()
     assert.throws(
       () =>
@@ -602,6 +638,28 @@ describe('assert-branch-prior-gate-complete', () => {
           () => [
             'git@github.com:gthgomez/Babel.git',
             'git@github.com:other-org/other-repo.git',
+          ],
+        ),
+      /ambiguous push destination/,
+    )
+  })
+
+  it('fails closed on multiple effective push destinations even when same repository', () => {
+    const root = process.cwd()
+    assert.throws(
+      () =>
+        assertRemotePushFetchRepoAligned(
+          root,
+          REMOTE,
+          (r, args) => {
+            if (args[0] === 'remote' && args[1] === 'get-url') {
+              return `git@github.com:${REPO}.git`
+            }
+            throw new Error('unexpected git')
+          },
+          () => [
+            `git@github.com:${REPO}.git`,
+            `https://github.com/${REPO}`,
           ],
         ),
       /ambiguous push destination/,

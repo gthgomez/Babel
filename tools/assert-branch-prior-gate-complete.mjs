@@ -36,41 +36,38 @@ export function resolveGithubRepoForGate(root, remote, gitFn) {
   return parseGithubRepoFromRemote(remoteUrl)
 }
 
-function gitConfigGetAll(root, key) {
-  const result = spawnSync('git', ['-C', root, 'config', '--get-all', key], {
-    encoding: 'utf8',
-    windowsHide: true,
-  })
-  if (result.status === 0) {
-    return (result.stdout ?? '')
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter(Boolean)
+/** Effective push destinations after url.*.pushInsteadOf (git remote get-url --push --all). */
+export function gitRemoteGetPushUrlsAll(root, remote) {
+  const result = spawnSync(
+    'git',
+    ['-C', root, 'remote', 'get-url', '--push', '--all', remote],
+    { encoding: 'utf8', windowsHide: true },
+  )
+  if (result.error || result.status !== 0) {
+    throw new Error('[pre-push] branch gate preflight: push destination probe failed')
   }
-  if (result.status === 1) {
-    return []
-  }
-  throw new Error('[pre-push] branch gate preflight: remote configuration probe failed')
+  return (result.stdout ?? '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
 }
 
 /**
  * Push must target the same GitHub repository as fetch for the named remote.
- * Rejects multiple push URLs or push/fetch repository mismatch (no URL values in errors).
+ * Requires exactly one effective push URL (no alternate-push); no URL values in errors.
  */
-export function assertRemotePushFetchRepoAligned(root, remote, gitFn, configGetAll = gitConfigGetAll) {
+export function assertRemotePushFetchRepoAligned(
+  root,
+  remote,
+  gitFn,
+  getPushUrlsAll = gitRemoteGetPushUrlsAll,
+) {
   const fetchRepo = resolveGithubRepoForGate(root, remote, gitFn)
-  const pushUrls = configGetAll(root, `remote.${remote}.pushurl`)
-  if (pushUrls.length === 0) {
-    return fetchRepo
-  }
-  const pushRepos = new Set()
-  for (const pushUrl of pushUrls) {
-    pushRepos.add(parseGithubRepoFromRemote(pushUrl))
-  }
-  if (pushRepos.size !== 1) {
+  const pushUrls = getPushUrlsAll(root, remote)
+  if (pushUrls.length !== 1) {
     throw new Error('[pre-push] branch gate preflight: ambiguous push destination for remote')
   }
-  const pushRepo = pushRepos.values().next().value
+  const pushRepo = parseGithubRepoFromRemote(pushUrls[0])
   if (pushRepo !== fetchRepo) {
     throw new Error(
       '[pre-push] branch gate preflight: push destination does not match fetch remote repository',
@@ -207,21 +204,13 @@ function assertWorkflowRunShape(run, branch, repo) {
 /**
  * Validate one workflow-runs API page from the workflow-specific endpoint.
  */
-export function validateWorkflowRunsPage(
-  payload,
-  { branch, repo, page, seenRunIds, requireTotalCount = false },
-) {
+export function validateWorkflowRunsPage(payload, { branch, repo, page, seenRunIds }) {
   if (!payload || typeof payload !== 'object' || !Array.isArray(payload.workflow_runs)) {
     throw new Error(
       '[pre-push] branch gate preflight: malformed Public Release Gate workflow run list from GitHub',
     )
   }
-  let totalCount = null
-  if (requireTotalCount) {
-    totalCount = parseRequiredTotalCount(payload.total_count)
-  } else if (payload.total_count !== undefined && payload.total_count !== null) {
-    totalCount = parseRequiredTotalCount(payload.total_count)
-  }
+  const totalCount = parseRequiredTotalCount(payload.total_count)
   const batch = payload.workflow_runs
   for (const run of batch) {
     assertWorkflowRunShape(run, branch, repo)
@@ -263,6 +252,7 @@ export function collectPublicReleaseGateRuns(repo, branch, ghGet, options) {
   const runs = []
   const seenRunIds = new Set()
   let declaredTotalCount = null
+  let skippedCountEqualityForFoundHeadEarlyStop = false
   for (let page = 1; page <= PUBLIC_RELEASE_GATE_MAX_PAGES; page += 1) {
     const payload = ghGet(repo, { branch, per_page: '100', page: String(page) })
     const validated = validateWorkflowRunsPage(payload, {
@@ -270,7 +260,6 @@ export function collectPublicReleaseGateRuns(repo, branch, ghGet, options) {
       repo,
       page,
       seenRunIds,
-      requireTotalCount: options.requireCompletePagination,
     })
     if (page === 1 && validated.totalCount !== null) {
       declaredTotalCount = validated.totalCount
@@ -298,10 +287,15 @@ export function collectPublicReleaseGateRuns(repo, branch, ghGet, options) {
     const hasHead =
       typeof publishedHeadSha === 'string' &&
       batch.some((run) => run.head_sha === publishedHeadSha)
-    if (hasHead) break
+    if (hasHead) {
+      if (batch.length === 100) {
+        skippedCountEqualityForFoundHeadEarlyStop = true
+      }
+      break
+    }
   }
   if (
-    options.requireCompletePagination &&
+    !skippedCountEqualityForFoundHeadEarlyStop &&
     declaredTotalCount !== null &&
     runs.length !== declaredTotalCount
   ) {
@@ -353,8 +347,8 @@ export function assertBranchPriorGateComplete(root, remote = 'origin', deps = {}
     throw new Error('[pre-push] detached HEAD; checkout a branch before pushing')
   }
 
-  const configGetAll = deps.configGetAll ?? gitConfigGetAll
-  const repo = assertRemotePushFetchRepoAligned(root, remote, gitFn, configGetAll)
+  const getPushUrlsAll = deps.getPushUrlsAll ?? gitRemoteGetPushUrlsAll
+  const repo = assertRemotePushFetchRepoAligned(root, remote, gitFn, getPushUrlsAll)
   const remoteBranchRef = `refs/heads/${branch}`
 
   assertRemoteReachable(root, remote, lsRemoteFn)
