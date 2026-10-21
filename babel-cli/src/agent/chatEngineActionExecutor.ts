@@ -110,6 +110,7 @@ import {
 import type { ChatCallbacks } from "./chatEngineContracts.js";
 
 import type { ChatEngineActionExecutorHost } from "./chatEngineContracts.js";
+import { captureRunArtifactAccess, executeReadArtifactAction, formatRegisteredToolObservation } from './codingLoop/readArtifactExecutor.js';
 export type { ChatEngineActionExecutorHost } from "./chatEngineContracts.js";
 
 export class ChatEngineActionExecutor {
@@ -184,6 +185,7 @@ export class ChatEngineActionExecutor {
     const tool = chatActionToolName(action);
     const target = chatActionTarget(action);
     const toolId = callbacks.onToolStart?.(tool, target) ?? -1;
+    const artifactAccess = captureRunArtifactAccess(this.host, ownerGeneration, String(meta.idempotencyKey ?? toolId), tool);
     const restoreProjectRoot = pinProjectRootEnv(requireProjectRoot(this.host.options));
     const toolStart = performance.now();
 
@@ -1099,6 +1101,10 @@ export class ChatEngineActionExecutor {
       }
 
       // ── B1: read_range — read specific lines ────────────────────────
+      if (action.type === 'read_artifact') {
+        return executeReadArtifactAction({ host: this.host, action, access: artifactAccess,
+          callbacks, meta, toolId, ownerGeneration, ...(toolContext.signal ? { signal: toolContext.signal } : {}) });
+      }
       if (action.type === "read_range") {
         // Extracted to codingLoop/readRangeExecutor.ts to respect the
         // file-size ratchet (same pattern as the background-shell handlers).
@@ -1404,15 +1410,7 @@ export class ChatEngineActionExecutor {
           }
         } else {
           obsParts.push(
-            formatChatToolObservation(
-              action,
-              {
-                stdout: r.stdout,
-                stderr: r.stderr,
-                exitCode: r.exit_code,
-              },
-              { spillDir: this.host.engineRunDir, toolCallId: String(toolId) },
-            ),
+            formatRegisteredToolObservation(action, r, artifactAccess, String(meta.idempotencyKey ?? toolId)),
           );
         }
       }

@@ -25,6 +25,7 @@ import { type FileLockContext } from '../services/editReliability.js';
 import { WorkspaceTransactionManager, type MutationBatchReceipt, type MutationBatchTransaction } from '../services/workspaceTransactions.js';
 import { classifyToolEffect } from '../executor/contracts.js';
 import { recordEffectIntent, recordEffectTerminal, classifyIntendedWriteOutcome } from '../executor/effectLedger.js';
+import { captureEffectParentIdentity } from '../executor/effectPathIdentity.js';
 import {
   beginEffectTransaction,
   captureWorkspaceRevisionIdentity,
@@ -205,6 +206,8 @@ export interface PolicyGatedExecutionResult extends ToolExecutionResult {
   mutationReceipt?: MutationBatchReceipt | undefined;
   /** H4: revision-linked effect transaction record when a reconcilable mutation ran. */
   effectTransaction?: EffectTransactionRecord | undefined;
+  /** Durable original effect identity for a containing patch's compensation. */
+  effectLedgerRecord?: import('../executor/effectLedger.js').EffectLedgerRecord;
 }
 
 /** Extract primary target path from an AgentAction for capability checks. */
@@ -1136,6 +1139,7 @@ export async function executeActionWithPolicy(
         toolName: action.type,
         targetPaths: txPaths,
         preImageHashes: batchTx.preBatchHash,
+        targetParentIdentities: Object.fromEntries(txPaths.map(path => [path, captureEffectParentIdentity(path)])),
         ...(action.type === 'write_file'
           ? { intendedContent: action.content }
           : action.type === 'apply_patch'
@@ -1542,6 +1546,7 @@ export async function executeActionWithPolicy(
       policyDecision,
       policyBlocked: false,
       ...(effectTx ? { effectTransaction: effectTx } : {}),
+      ...(effectIntent ? { effectLedgerRecord: effectIntent } : {}),
       ...(batchTx ? {
         mutationPaths: txPaths,
         preBatchHash: batchTx.preBatchHash,
