@@ -20,6 +20,8 @@ export const HttpContentCodingProvenanceSchema = z
     decoded_truncated: z.boolean().optional(),
     /** Admitted decoded prefix length after host cap and UTF-8-safe trimming. */
     admitted_decoded_byte_length: z.number().int().nonnegative().optional(),
+    /** When true, decoded_byte_length is a lower bound (decompressor stopped at cap). */
+    decoded_byte_length_is_lower_bound: z.boolean().optional(),
   })
   .strict()
 

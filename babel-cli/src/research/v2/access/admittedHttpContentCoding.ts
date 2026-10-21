@@ -1,7 +1,10 @@
 import { createGunzip, createInflate } from 'node:zlib'
 import { pipeline } from 'node:stream/promises'
 import { Readable } from 'node:stream'
-import { utf8SafeBytePrefix } from './utf8SafeBytePrefix.js'
+import {
+  trimIncompleteUtf8SequenceSuffix,
+  Utf8InteriorCorruptionError,
+} from './utf8SafeBytePrefix.js'
 
 export class AdmittedContentCodingError extends Error {
   readonly code: 'unsupported_encoding' | 'malformed_encoding' | 'decompression_limit_exceeded' | 'aborted'
@@ -23,6 +26,8 @@ export interface AdmittedHttpTransportCoding {
   admitted_representation: 'decoded_bytes'
   decoded_truncated?: boolean
   admitted_decoded_byte_length?: number
+  /** When true, decoded_byte_length is bytes observed before early stop (lower bound on full stream). */
+  decoded_byte_length_is_lower_bound?: boolean
 }
 
 export function parseContentEncodings(
@@ -45,7 +50,16 @@ function assertNotAborted(signal: AbortSignal): void {
 interface InflateBoundedResult {
   buffer: Buffer
   decodedTruncated: boolean
-  decodedBytesTotal: number
+  decodedBytesObserved: number
+  decodedByteLengthIsLowerBound: boolean
+}
+
+function destroyInflateEarly(
+  source: Readable,
+  decompressor: ReturnType<typeof createGunzip>,
+): void {
+  source.destroy()
+  decompressor.destroy()
 }
 
 async function inflateBounded(
@@ -57,65 +71,80 @@ async function inflateBounded(
   assertNotAborted(signal)
   const chunks: Buffer[] = []
   let storedBytes = 0
-  let decodedBytesTotal = 0
+  let decodedBytesObserved = 0
   let decodedTruncated = false
-  let stopStoring = false
+  let stoppedEarly = false
 
   const source = Readable.from(encoded)
   const decompressor = mode === 'gzip' ? createGunzip() : createInflate()
   const onAbort = () => {
-    source.destroy()
-    decompressor.destroy()
+    destroyInflateEarly(source, decompressor)
   }
   signal.addEventListener('abort', onAbort, { once: true })
 
-  try {
-    decompressor.on('data', (chunk: Buffer) => {
-      decodedBytesTotal += chunk.length
-      if (stopStoring) {
-        return
-      }
-      const remaining = maxAdmittedDecodedBytes - storedBytes
-      if (remaining <= 0) {
-        stopStoring = true
-        decodedTruncated = true
-        return
-      }
-      if (chunk.length <= remaining) {
-        chunks.push(chunk)
-        storedBytes += chunk.length
-        return
-      }
-      chunks.push(chunk.subarray(0, remaining))
-      storedBytes += remaining
-      stopStoring = true
+  const onData = (chunk: Buffer) => {
+    decodedBytesObserved += chunk.length
+    if (stoppedEarly) {
+      return
+    }
+    const remaining = maxAdmittedDecodedBytes - storedBytes
+    if (remaining <= 0) {
+      stoppedEarly = true
       decodedTruncated = true
-    })
+      destroyInflateEarly(source, decompressor)
+      return
+    }
+    if (chunk.length <= remaining) {
+      chunks.push(chunk)
+      storedBytes += chunk.length
+      return
+    }
+    chunks.push(chunk.subarray(0, remaining))
+    storedBytes += remaining
+    stoppedEarly = true
+    decodedTruncated = true
+    destroyInflateEarly(source, decompressor)
+  }
+
+  try {
+    decompressor.on('data', onData)
     await pipeline(source, decompressor)
   } catch (err: unknown) {
     if (signal.aborted) {
       throw new AdmittedContentCodingError('aborted', 'content decoding aborted')
     }
-    if (err instanceof AdmittedContentCodingError) {
+    if (decodedTruncated) {
+      // Early destroy after cap — expected.
+    } else if (err instanceof AdmittedContentCodingError) {
       throw err
+    } else {
+      throw new AdmittedContentCodingError(
+        'malformed_encoding',
+        err instanceof Error ? err.message : String(err),
+      )
     }
-    throw new AdmittedContentCodingError(
-      'malformed_encoding',
-      err instanceof Error ? err.message : String(err),
-    )
   } finally {
     signal.removeEventListener('abort', onAbort)
+    decompressor.off('data', onData)
   }
 
   let buffer: Buffer = Buffer.concat(chunks)
   if (decodedTruncated) {
-    buffer = Buffer.from(utf8SafeBytePrefix(buffer, maxAdmittedDecodedBytes))
+    try {
+      buffer = Buffer.from(trimIncompleteUtf8SequenceSuffix(buffer))
+    } catch (err: unknown) {
+      if (err instanceof Utf8InteriorCorruptionError) {
+        throw new AdmittedContentCodingError('malformed_encoding', err.message)
+      }
+      throw err
+    }
   }
 
   return {
     buffer,
     decodedTruncated,
-    decodedBytesTotal,
+    decodedBytesObserved,
+    decodedByteLengthIsLowerBound: decodedTruncated,
   }
 }
 
@@ -159,7 +188,8 @@ export async function decodeAdmittedHttpBody(params: {
   let working = params.encodedBody
   const chain: string[] = [...encodings]
   let decodedTruncated = false
-  let decodedBytesTotal = 0
+  let decodedBytesObserved = 0
+  let decodedByteLengthIsLowerBound = false
   for (let i = encodings.length - 1; i >= 0; i--) {
     const encoding = encodings[i]!
     assertNotAborted(params.signal)
@@ -167,7 +197,8 @@ export async function decodeAdmittedHttpBody(params: {
     const inflated = await inflateBounded(working, params.maxDecodedBytes, params.signal, mode)
     working = inflated.buffer
     decodedTruncated = inflated.decodedTruncated
-    decodedBytesTotal = inflated.decodedBytesTotal
+    decodedBytesObserved = inflated.decodedBytesObserved
+    decodedByteLengthIsLowerBound = inflated.decodedByteLengthIsLowerBound
   }
 
   return {
@@ -176,12 +207,13 @@ export async function decodeAdmittedHttpBody(params: {
     transportCoding: {
       content_encodings: chain,
       encoded_byte_length: params.encodedBody.byteLength,
-      decoded_byte_length: decodedBytesTotal,
+      decoded_byte_length: decodedBytesObserved,
       admitted_representation: 'decoded_bytes',
       ...(decodedTruncated
         ? {
             decoded_truncated: true,
             admitted_decoded_byte_length: working.byteLength,
+            decoded_byte_length_is_lower_bound: decodedByteLengthIsLowerBound,
           }
         : {}),
     },

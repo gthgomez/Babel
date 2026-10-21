@@ -36,8 +36,10 @@ describe('decodeAdmittedHttpBody', () => {
       signal: new AbortController().signal,
     })
     assert.equal(result.decodedTruncated, true)
-    assert.equal(result.transportCoding?.decoded_byte_length, PYTHON_HTML_DECODED_BYTES)
     assert.equal(result.transportCoding?.decoded_truncated, true)
+    assert.equal(result.transportCoding?.decoded_byte_length_is_lower_bound, true)
+    assert.ok((result.transportCoding?.decoded_byte_length ?? 0) >= HOST_CAP)
+    assert.ok((result.transportCoding?.decoded_byte_length ?? 0) < PYTHON_HTML_DECODED_BYTES)
     assert.equal(result.transportCoding?.admitted_decoded_byte_length, result.buffer.byteLength)
     assert.ok(result.buffer.byteLength <= HOST_CAP)
     new TextDecoder('utf-8', { fatal: true }).decode(result.buffer)
