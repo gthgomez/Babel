@@ -1,7 +1,5 @@
 /**
  * B reciprocal for Agent A ownership repair @ 161984196deb8f9dfb6c44e72a8f093835b21ed4 (draft PR 406).
- * Child retrieval throws RetrievalIterationFailedAfterAcquireError with own acquiredHandle/writeContext;
- * composed iteration must not adopt readMissionWriteFence after foreign replacement.
  */
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
@@ -15,12 +13,20 @@ import { examplePlanRevisionFixture } from '../fixtures/exampleMission.js'
 import { InMemoryResearchStore } from '../fixtures/fakePorts.js'
 import { createCombinedResearchRegistries } from '../registry/reviewedBAdapterIntegration.js'
 import { resolveDiscoveryAdapterForMission } from '../registry/missionAdapterResolution.js'
+import { slotOperationSuffix } from './technicalRetrievalComposition.js'
 import { runAdmittedComposedRetrievalIteration } from './researchComposedRetrievalLoop.js'
 import { ResearchPassFailedError } from './researchPassFailure.js'
 import pins from '../fixtures/campaign/T-L1-T-L2-PINNED-VERSIONS.json' with { type: 'json' }
 
 const FIXED_NOW = '2026-10-21T09:15:00.000Z'
 const campaignDir = join(dirname(fileURLToPath(import.meta.url)), '../fixtures/campaign')
+const SEARCH_BASE = 'b-reciprocal-foreign-search'
+const FETCH_BASE = 'b-reciprocal-foreign-fetch'
+const REPO_SLOT_ID = 'repository-pin-0'
+const DOC_SLOT_ID = 'document-ref-0'
+const REPO_SEARCH_OP = slotOperationSuffix(SEARCH_BASE, REPO_SLOT_ID)
+const DOC_SEARCH_OP = slotOperationSuffix(SEARCH_BASE, DOC_SLOT_ID)
+const DOC_FETCH_OP = slotOperationSuffix(FETCH_BASE, DOC_SLOT_ID)
 
 function loadMission(name: string) {
   return ResearchMissionV2Schema.parse(
@@ -42,8 +48,18 @@ async function seedMissionStore(mission: ReturnType<typeof loadMission>) {
   return { store, handle }
 }
 
+function operationIdFromEvent(event: { kind: string; payload: Record<string, unknown> }): string | undefined {
+  if (event.kind === 'external_operation_intent') {
+    return (event.payload.intent as { operation_id?: string }).operation_id
+  }
+  if (event.kind === 'external_operation_completed') {
+    return (event.payload.completion as { operation_id?: string }).operation_id
+  }
+  return undefined
+}
+
 describe('composed retrieval composition ownership (B reciprocal @ A 16198419)', () => {
-  it('foreign fence advance after failed child keeps controller on own CAS generation and fences out', async () => {
+  it('foreign replacement during dispatched failing repository slot blocks later dispatch and evidence', async () => {
     const base = loadMission('T-L2-mission.json')
     const mission = {
       ...base,
@@ -61,14 +77,49 @@ describe('composed retrieval composition ownership (B reciprocal @ A 16198419)',
       join(dirname(fileURLToPath(import.meta.url)), '../adapters/documents/fixtures/two-page-sample.pdf'),
     )
 
+    const { store, handle } = await seedMissionStore(mission)
+    let childOwnGeneration: number | null = null
+    const origAcquire = store.acquireWriterOwnership.bind(store)
+    store.acquireWriterOwnership = async (req) => {
+      const acquired = await origAcquire(req)
+      if (
+        childOwnGeneration === null &&
+        req.expected_writer_generation === handle.writer_generation
+      ) {
+        childOwnGeneration = acquired.writer_generation
+      }
+      return acquired
+    }
+
+    let foreignReplacementDuringPendingSlot = false
+
     const searchProvider = createMissionProductionSearchProvider({
       mission,
-      fetchRepositoryTree: async () => ({
-        ok: false,
-        status: 500,
-        entries: [],
-        message: 'repository child failed before foreign replacement',
-      }),
+      fetchRepositoryTree: async () => {
+        const events = await store.listEvents(mission.mission_id)
+        const repoIntentDispatched = events.some(
+          (e) =>
+            e.kind === 'external_operation_intent' &&
+            operationIdFromEvent(e) === REPO_SEARCH_OP,
+        )
+        assert.equal(
+          repoIntentDispatched,
+          true,
+          'repository search intent must be dispatched before foreign replacement during pending slot',
+        )
+        const fence = store.readMissionWriteFence(mission.mission_id)
+        await store.acquireWriterOwnership({
+          mission_id: mission.mission_id,
+          expected_writer_generation: fence.writer_generation,
+        })
+        foreignReplacementDuringPendingSlot = true
+        return {
+          ok: false,
+          status: 500,
+          entries: [],
+          message: 'tree listing failed after foreign replacement during pending slot',
+        }
+      },
     })
 
     const access = createGovernedSourceAccessPort({
@@ -88,22 +139,7 @@ describe('composed retrieval composition ownership (B reciprocal @ A 16198419)',
       }),
     })
 
-    const { store, handle } = await seedMissionStore(mission)
     const eventsBefore = (await store.listEvents(mission.mission_id)).length
-
-    let childOwnGeneration: number | null = null
-    const origAcquire = store.acquireWriterOwnership.bind(store)
-    store.acquireWriterOwnership = async (req) => {
-      const acquired = await origAcquire(req)
-      if (
-        childOwnGeneration === null &&
-        req.expected_writer_generation === handle.writer_generation
-      ) {
-        childOwnGeneration = acquired.writer_generation
-        store.bumpWriterGeneration(req.mission_id)
-      }
-      return acquired
-    }
 
     await assert.rejects(
       () =>
@@ -119,9 +155,9 @@ describe('composed retrieval composition ownership (B reciprocal @ A 16198419)',
           registries,
           activePlan: { ...examplePlanRevisionFixture, mission_id: mission.mission_id },
           discoverQuery: 'persistence',
-          searchOperationId: 'b-reciprocal-foreign-search',
+          searchOperationId: SEARCH_BASE,
           searchAttemptId: 'b-reciprocal-foreign-search-att',
-          fetchOperationId: 'b-reciprocal-foreign-fetch',
+          fetchOperationId: FETCH_BASE,
           fetchAttemptId: 'b-reciprocal-foreign-fetch-att',
           dispatchedAt: FIXED_NOW,
           signal: new AbortController().signal,
@@ -132,23 +168,35 @@ describe('composed retrieval composition ownership (B reciprocal @ A 16198419)',
         (err instanceof Error && /competing resume rejected/i.test(err.message)),
     )
 
-    assert.equal(childOwnGeneration, 2, 'repository child must CAS from session generation 1 to own generation 2')
-    const fence = store.readMissionWriteFence(mission.mission_id)
-    assert.ok(fence.writer_generation > childOwnGeneration!)
-    assert.notEqual(
-      fence.writer_generation,
-      childOwnGeneration,
-      'foreign replacement must advance fence beyond this controller CAS generation',
-    )
+    assert.equal(foreignReplacementDuringPendingSlot, true)
+    assert.equal(childOwnGeneration, 2)
 
     const events = await store.listEvents(mission.mission_id)
-    const docPassages = events
-      .slice(eventsBefore)
-      .filter((e) => e.kind === 'passage_recorded' || e.kind === 'source_recorded')
-    assert.equal(
-      docPassages.length,
-      0,
-      'document slot must not admit evidence after foreign replacement fenced controller out',
+    const repoIntentIndex = events.findIndex(
+      (e) => e.kind === 'external_operation_intent' && operationIdFromEvent(e) === REPO_SEARCH_OP,
     )
+    assert.ok(repoIntentIndex >= 0)
+    const afterRepoIntent = events.slice(repoIntentIndex + 1)
+
+    const subsequentDispatches = afterRepoIntent.filter((e) => e.kind === 'external_operation_intent')
+    assert.equal(
+      subsequentDispatches.length,
+      0,
+      'no later-slot external_operation_intent after foreign replacement during failing repository slot',
+    )
+    const subsequentCompletions = afterRepoIntent.filter((e) => e.kind === 'external_operation_completed')
+    for (const event of subsequentCompletions) {
+      const opId = operationIdFromEvent(event)
+      assert.notEqual(opId, DOC_SEARCH_OP)
+      assert.notEqual(opId, DOC_FETCH_OP)
+    }
+
+    const evidenceAfter = events
+      .slice(eventsBefore)
+      .filter((e) => e.kind === 'source_recorded' || e.kind === 'passage_recorded')
+    assert.equal(evidenceAfter.length, 0)
+
+    const fence = store.readMissionWriteFence(mission.mission_id)
+    assert.ok(fence.writer_generation > childOwnGeneration!)
   })
 })

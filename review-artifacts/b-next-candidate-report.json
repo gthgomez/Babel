@@ -1,0 +1,48 @@
+{
+  "schema": "b-next-candidate-report/v1",
+  "recorded_at_utc": "2026-10-21T08:55:19.403Z",
+  "worktree_realpath": "/workspace",
+  "branch": "cursor/agent-b-general-fixtures-f617",
+  "git": {
+    "head_sha": "69c8f0673afe412d7f1344db12e1c87425ad8449",
+    "tree_sha": "4b1be0e78e1f07857138fb4d5511f9b83bd412a0",
+    "rev_parse_commands": [
+      "git -C /workspace rev-parse HEAD",
+      "git -C /workspace rev-parse HEAD^{tree}"
+    ]
+  },
+  "built_entrypoints": {
+    "babel_bin_realpath": "/workspace/babel-cli/bin/babel.js",
+    "babel_dist_index_realpath": "/workspace/babel-cli/dist/index.js",
+    "sha256": {
+      "babel_bin_babel_js": "ee8f9ba2a7bd12b937451c0f4d86503d0b68d9076ed3cd24b9a7138b7039f43f",
+      "babel_dist_index_js": "981e1318e624340e3d3f8c5c816cbd827eec29f689a3024b1d2fb98a41de0970"
+    }
+  },
+  "test_overlays_same_worktree": {
+    "command": "cd /workspace/babel-cli && node --import tsx --test src/research/v2/model/providerInvokeDiagnosticsFromCompletion.test.ts src/research/v2/model/providerResearchModelBridge.emptyResponseMetadataHandoff.acceptance.test.ts src/research/v2/model/providerResearchModelBridge.emptyResponseMetadataHandoff.integration.acceptance.test.ts src/research/v2/engine/researchComposedRetrievalLoop.compositionOwnership.reciprocal.test.ts",
+    "result": "9/9 pass, 0 skip",
+    "receipt_path": "/tmp/b-test-overlay-receipt.txt"
+  },
+  "build_receipt": {
+    "command": "npm --prefix /workspace/babel-cli run build",
+    "exit_code": 0,
+    "log_path": "/tmp/b-build-receipt.txt"
+  },
+  "openrouter_preflight": {
+    "command": "npx tsx /workspace/codex/missions/general-g-l1-python-stable-attempt3/preflight-search-route.mjs (cwd babel-cli)",
+    "exit_code": 0,
+    "artifact": "review-artifacts/b-a1153-union-openrouter-preflight.json",
+    "no_live_model_call": true
+  },
+  "readiness_artifacts_separate": {
+    "metadata": "review-artifacts/b-a3340-metadata-readiness.json",
+    "ownership": "review-artifacts/b-a161984-ownership-readiness.json",
+    "binding_correction": "review-artifacts/b-binding-correction-c511-sha.txt"
+  },
+  "agent_a_checkpoints": {
+    "metadata_mapper": "3340cf0deb555ff9c8a74020017c02262cfc8247",
+    "ownership": "161984196deb8f9dfb6c44e72a8f093835b21ed4"
+  },
+  "no_attempt4": true
+}

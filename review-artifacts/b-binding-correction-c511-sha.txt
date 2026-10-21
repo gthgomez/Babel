@@ -1,0 +1,21 @@
+schema=b-binding-correction-c511-sha/v1
+additive_correction=true
+supersedes_nothing_historical=true
+
+incorrect_record=
+  commit_document=c2c53bba (review-artifacts/b-a1153-union-workspace-prep.json at that revision)
+  wrong_b_union_head_sha=c511f896f283617712f4e2acfa330a8919da040d
+  error=last 40 hex digits were not produced by git rev-parse; middle segment was corrupted/reconstructed
+
+git_verified_correct=
+  command=git rev-parse c511f896^{commit}
+  actual_full_sha=c511f896dde1faf0c59c92404bbd401fb5270190
+  note=short prefix c511f896 resolves to the published object above in this repository
+
+preserved_unchanged=
+  review-artifacts/general-g-l1-attempt3-live-run-receipt.json
+  review-artifacts/general-g-l1-attempt3-binding-correction.txt
+
+current_union_head_at_correction_authorship=
+  use=review-artifacts/b-next-candidate-report.json
+  never_reconstruct_sha_from_partial_prefix=true

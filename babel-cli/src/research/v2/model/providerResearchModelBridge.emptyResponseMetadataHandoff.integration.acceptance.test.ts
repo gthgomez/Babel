@@ -17,11 +17,13 @@ import {
   EMPTY_RESPONSE_HANDOFF_USAGE_META,
   productionShapedEmptyResponseBridgeOptions,
   emptyResponseHandoffRunner,
+  interleavedEmptyResponseHandoffRunner,
 } from './fixtures/emptyResponseMetadataHandoff.fixture.js'
 import { assertNoForbiddenPersistenceSubstrings } from './fixtures/providerInvokeDiagnosticsAllowlist.js'
 
 const FIXED_COMPLETED_AT = '2026-10-21T08:30:00.000Z'
 const PLAN_REVISION_ID = 'plan-empty-response-accept-001'
+const REPORTED_COST_USD = EMPTY_RESPONSE_HANDOFF_USAGE_META.estimated_cost_usd
 
 function writeContext(handle: { mission_id: string; writer_generation: number }): MissionWriteContext {
   return {
@@ -119,9 +121,8 @@ describe('empty-response metadata durable settlement (A repair acceptance)', () 
         completion.usage_settlement?.reasoning_tokens,
         EMPTY_RESPONSE_HANDOFF_USAGE_META.actual_reasoning_tokens,
       )
-      if (completion.usage_settlement?.cost.status === 'reported') {
-        assert.equal(completion.usage_settlement.cost.amount_usd, 0.004328364)
-      }
+      assert.equal(completion.usage_settlement?.cost.status, 'reported')
+      assert.equal(completion.usage_settlement?.cost.amount_usd, REPORTED_COST_USD)
       ProviderInvokeDiagnosticsSchema.parse(completion.provider_invoke_diagnostics)
       assert.equal(
         (completion.provider_invoke_diagnostics as { visible_content_present?: boolean })
@@ -138,7 +139,7 @@ describe('empty-response metadata durable settlement (A repair acceptance)', () 
     }
   })
 
-  it('overlapping model invokes keep isolated completion metadata in one store', async () => {
+  it('interleaved invokes on one shared bridge keep isolated durable completion metadata', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'babel-empty-response-meta-isolate-'))
     try {
       const store = await DurableResearchStore.open(dir)
@@ -167,34 +168,48 @@ describe('empty-response metadata durable settlement (A repair acceptance)', () 
           idempotency_key: `${spec.operationId}:${spec.attemptId}`,
         })
       }
-      await Promise.all(
-        specs.map(async (spec) => {
-          const bridge = new ProviderResearchModelBridge(
-            productionShapedEmptyResponseBridgeOptions(
-              emptyResponseHandoffRunner({
-                providerRequestId: spec.providerRequestId,
-                inferenceId: spec.inferenceId,
-              }),
-            ),
-          )
-          const modelResult = await bridge.invokeStructured({
-            operationId: spec.operationId,
-            attemptId: spec.attemptId,
-            kind: 'plan_questions',
-            input: { mission_id: handle.mission_id },
-            signal: new AbortController().signal,
-          })
-          await settleModelOperation(
-            store,
-            ctx,
-            handle.mission_id,
-            spec.operationId,
-            spec.attemptId,
-            modelResult,
-            FIXED_COMPLETED_AT,
-          )
+
+      const turnOrder: Array<() => void> = []
+      const awaitTurn = (index: number) =>
+        new Promise<void>((resolve) => {
+          turnOrder[index] = resolve
+        })
+      const bridge = new ProviderResearchModelBridge(
+        productionShapedEmptyResponseBridgeOptions(
+          interleavedEmptyResponseHandoffRunner(
+            specs.map((spec, index) => ({
+              inferenceId: spec.inferenceId,
+              providerRequestId: spec.providerRequestId,
+              awaitTurn: () => awaitTurn(index),
+            })),
+          ),
+        ),
+      )
+
+      const pending = specs.map((spec) =>
+        bridge.invokeStructured({
+          operationId: spec.operationId,
+          attemptId: spec.attemptId,
+          kind: 'plan_questions',
+          input: { mission_id: handle.mission_id },
+          signal: new AbortController().signal,
         }),
       )
+      turnOrder[1]?.()
+      turnOrder[0]?.()
+      const modelResults = await Promise.all(pending)
+      for (let i = 0; i < specs.length; i += 1) {
+        const spec = specs[i]!
+        await settleModelOperation(
+          store,
+          ctx,
+          handle.mission_id,
+          spec.operationId,
+          spec.attemptId,
+          modelResults[i]!,
+          FIXED_COMPLETED_AT,
+        )
+      }
       const events = await store.listEvents(exampleTechnicalMissionFixture.mission_id)
       for (const spec of specs) {
         const completed = completionsForOp(events, spec.operationId)
@@ -204,6 +219,9 @@ describe('empty-response metadata durable settlement (A repair acceptance)', () 
         )
         assert.equal(diagnostics.provider_request_id, spec.providerRequestId)
         assert.equal(diagnostics.inference_id, spec.inferenceId)
+        const usage = (completed[0]!.payload as CompletionPayload).completion.usage_settlement
+        assert.equal(usage?.cost.status, 'reported')
+        assert.equal(usage?.cost.amount_usd, REPORTED_COST_USD)
       }
       await store.close()
     } finally {

@@ -39,6 +39,67 @@ export interface EmptyResponseHandoffRunnerOptions {
   outputDigest?: string
 }
 
+export interface InterleavedEmptyResponseInvokeSpec {
+  inferenceId: string
+  providerRequestId: string
+  /** Test releases this invoke so hook metadata cannot cross concurrent calls on one runner. */
+  awaitTurn: () => Promise<void>
+}
+
+function emitEmptyResponseCompletion(
+  callbacks: RunnerCallbacks | undefined,
+  options: EmptyResponseHandoffRunnerOptions,
+): void {
+  const inferenceId = options.inferenceId ?? 'inf-empty-handoff'
+  const providerRequestId = options.providerRequestId ?? 'req-handoff-fixture'
+  const outputDigest = options.outputDigest ?? EMPTY_VISIBLE_OUTPUT_DIGEST
+  const completionEvent: ProviderInvocationCompleted = {
+    inference_id: inferenceId,
+    provider: 'openrouter',
+    model: 'deepseek/deepseek-v4-flash-0731',
+    status: 'delivered',
+    usage_metadata: EMPTY_RESPONSE_HANDOFF_USAGE_META,
+    observed_model_id: 'deepseek/deepseek-v4-flash-0731',
+    output_digest: outputDigest,
+    normalized_finish_reason: 'OUTPUT_BUDGET_EXHAUSTED',
+    provider_request_id: providerRequestId,
+    requested_output_budget: 32_000,
+    effective_output_budget: 32_000,
+  }
+  Object.assign(completionEvent, {
+    decoy_authorization: 'Bearer handoff-fixture-secret-token',
+    decoy_raw_reasoning: 'THINKING_TRACE_LEAK_FIXTURE',
+  })
+  callbacks?.onInvocationCompleted?.(completionEvent)
+}
+
+/** One shared LlmRunner: concurrent execute() calls interleave on awaitTurn boundaries. */
+export function interleavedEmptyResponseHandoffRunner(
+  specs: readonly InterleavedEmptyResponseInvokeSpec[],
+): Pick<LlmRunner, 'execute'> {
+  let invokeIndex = 0
+  return {
+    async execute<T>(_prompt: string, _schema: ZodType<T>, callbacks?: RunnerCallbacks): Promise<T> {
+      const spec = specs[invokeIndex++]
+      if (!spec) {
+        throw new Error('interleavedEmptyResponseHandoffRunner: unexpected extra invoke')
+      }
+      await spec.awaitTurn()
+      emitEmptyResponseCompletion(callbacks, {
+        inferenceId: spec.inferenceId,
+        providerRequestId: spec.providerRequestId,
+      })
+      throw buildStructuredOutputError({
+        failure_kind: 'empty_response',
+        provider: 'openrouter',
+        model: 'deepseek/deepseek-v4-flash-0731',
+        message: '[deepInfraApi] Empty response from model "deepseek/deepseek-v4-flash-0731".',
+        raw_output: '',
+      })
+    },
+  }
+}
+
 /**
  * Delivered-path empty body: hook fires with usage + bounded metadata, then structured empty_response throw.
  * Includes in-memory secret/reasoning decoys that must not be persisted.
@@ -52,24 +113,7 @@ export function emptyResponseHandoffRunner(
 
   return {
     async execute<T>(_prompt: string, _schema: ZodType<T>, callbacks?: RunnerCallbacks): Promise<T> {
-      const completionEvent: ProviderInvocationCompleted = {
-        inference_id: inferenceId,
-        provider: 'openrouter',
-        model: 'deepseek/deepseek-v4-flash-0731',
-        status: 'delivered',
-        usage_metadata: EMPTY_RESPONSE_HANDOFF_USAGE_META,
-        observed_model_id: 'deepseek/deepseek-v4-flash-0731',
-        output_digest: outputDigest,
-        normalized_finish_reason: 'OUTPUT_BUDGET_EXHAUSTED',
-        provider_request_id: providerRequestId,
-        requested_output_budget: 32_000,
-        effective_output_budget: 32_000,
-      }
-      Object.assign(completionEvent, {
-        decoy_authorization: 'Bearer handoff-fixture-secret-token',
-        decoy_raw_reasoning: 'THINKING_TRACE_LEAK_FIXTURE',
-      })
-      callbacks?.onInvocationCompleted?.(completionEvent)
+      emitEmptyResponseCompletion(callbacks, { inferenceId, providerRequestId, outputDigest })
       throw buildStructuredOutputError({
         failure_kind: 'empty_response',
         provider: 'openrouter',
