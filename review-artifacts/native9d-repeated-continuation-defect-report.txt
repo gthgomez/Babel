@@ -1,0 +1,26 @@
+# Native9d review — repeated continuation defect (B reciprocal evidence)
+
+**Spec:** `generalAdapterLifecycleReciprocal.integration.test.ts` →
+`second resume after cancelled continuation: distinct durable ids + new engine report`
+
+**Scenario**
+1. Owner watcher cancel during pending inference (run 1) → cancelled terminal.
+2. Resume 1 → blocking continuation with `planRevisionId = \`${activePlan}-continued\`` → cancel before plan persists → cancelled terminal.
+3. Resume 2 → same plan-derived suffix (`continuedPlanIdAgain === continuedPlanId`) → engine pass should produce new work.
+
+**Observed failure (integration head 556da8be+, A engine at 9d97448a)**
+On resume 2 / third engine pass:
+```
+StoreContractError: snapshot operations map entry disagrees with event-derived state
+  at assertOperationsMapMatchesEvents (snapshotIntegrity.ts)
+  during DurableResearchStore restore / third owner open
+```
+
+**Root cause (A runtime, per native review)**
+`offlineOperationIds(runSuffix)` in `researchV2MissionRun.ts` derives attempt/operation ids from **plan revision id truncated to 48 chars**. When continuation is cancelled before a new plan revision is persisted, resume 2 reuses the same suffix → **duplicate durable operation/attempt ids** across writer generations.
+
+**Required A fix (not B)**
+Bind operation/attempt identity to **distinct run or writer_generation** (or monotonic run token), not plan-derived suffix alone.
+
+**B scope**
+Reciprocal test remains failing until A lands fix; does not block separately scoped first general-web G-L1 smoke.

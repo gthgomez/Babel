@@ -301,6 +301,38 @@ async function runGeneralMissionWithOwnerSession(options: {
   }
 }
 
+function externalOperationIntents(events: readonly { kind: string; payload: unknown }[]) {
+  return events
+    .filter((e) => e.kind === 'external_operation_intent')
+    .map((e) => (e.payload as { intent: { operation_id: string; attempt_id: string } }).intent)
+}
+
+function assertAllIntentsDistinct(
+  intents: Array<{ operation_id: string; attempt_id: string }>,
+  label: string,
+): void {
+  const operationIds = intents.map((i) => i.operation_id)
+  const attemptIds = intents.map((i) => i.attempt_id)
+  const uniqueOps = new Set(operationIds)
+  const uniqueAttempts = new Set(attemptIds)
+  assert.equal(
+    uniqueOps.size,
+    operationIds.length,
+    `${label}: duplicate operation_id among durable intents (A defect: plan-suffix truncation); ops=${operationIds.join(',')}`,
+  )
+  assert.equal(
+    uniqueAttempts.size,
+    attemptIds.length,
+    `${label}: duplicate attempt_id among durable intents (A defect: bind run/writer generation, not plan suffix); attempts=${attemptIds.join(',')}`,
+  )
+}
+
+function terminalPlanRevisionId(events: readonly { kind: string; payload: unknown }[]): string {
+  const terminal = events.find((e) => e.kind === 'terminal_receipt')
+  assert.ok(terminal)
+  return (terminal.payload as { report: { plan_revision_id: string } }).report.plan_revision_id
+}
+
 async function pollOwnerSessionId(storeDirectory: string): Promise<string> {
   for (let i = 0; i < 50; i += 1) {
     await new Promise((r) => setTimeout(r, 20))
@@ -395,6 +427,126 @@ describe('general adapter lifecycle reciprocal (#406 9d97448a, durable store, in
         ...new Set(planAttempts.filter((id) => id.includes('cli-run-plan-att'))),
       ]
       assert.ok(uniquePlanAttempts.length >= 2)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('second resume after cancelled continuation: distinct durable ids + new engine report', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'babel-general-lifecycle-second-resume-'))
+    const mission = loadGeneralLifecycleMission()
+    const planId = 'plan-general-lifecycle-second-resume'
+    const blocking = new BlockingUntilAbortModel()
+    try {
+      const firstRun = runGeneralMissionWithOwnerSession({
+        storeDirectory: dir,
+        mission,
+        discoverQuery: 'Nimbus Plan A monthly',
+        planRevisionId: planId,
+        model: blocking,
+      })
+      const sessionId = await pollOwnerSessionId(dir)
+      assert.ok(sessionId)
+      await submitAdmittedOwnerCancelRequest(dir, sessionId)
+      await assert.rejects(() => firstRun)
+
+      let inspect = await ResearchEngineSession.openInspect(dir)
+      let events = await inspect.listEvents(mission.mission_id)
+      const cancelledPlan = terminalPlanRevisionId(events)
+
+      let owner = await ResearchEngineSession.openOwner({ storeDirectory: dir, model: blocking })
+      let fence = owner.store.readMissionWriteFence(mission.mission_id)
+      let resumed = await owner.resumeResearchContinuation({
+        mission_id: mission.mission_id,
+        expected_writer_generation: fence.writer_generation,
+        host_authorization_ref: 'b-reciprocal/lifecycle-resume-1',
+        acknowledged_plan_revision_id: cancelledPlan,
+        acknowledged_terminal_state: 'cancelled',
+      })
+      const activeAfterResume1 = owner.store.readMissionWriteFence(mission.mission_id)
+        .active_plan_revision_id
+      assert.ok(activeAfterResume1)
+      const continuedPlanId = `${activeAfterResume1}-continued`
+      const cancelController = new AbortController()
+      const watcher = owner.watchExternalCancelRequests(cancelController)
+      const continuationRun = runGeneralOfflinePassOnOwner({
+        owner,
+        mission,
+        handle: resumed,
+        discoverQuery: 'Nimbus Plan A monthly',
+        activePlanRevisionId: activeAfterResume1,
+        planRevisionId: continuedPlanId,
+        signal: cancelController.signal,
+        model: blocking,
+      })
+      await new Promise((r) => setTimeout(r, 40))
+      cancelController.abort()
+      watcher.stop()
+      await assert.rejects(() => continuationRun)
+      await finalizeOwnerResearchRunCancellation({ store: owner.store, mission, now: () => FIXED_NOW })
+      await owner.close()
+
+      inspect = await ResearchEngineSession.openInspect(dir)
+      events = await inspect.listEvents(mission.mission_id)
+      assert.equal(events.filter((e) => e.kind === 'terminal_receipt').length, 2)
+      const cancelledPlanAfterCont = terminalPlanRevisionId(
+        events.filter((e) => e.kind === 'terminal_receipt').slice(-1),
+      )
+
+      owner = await ResearchEngineSession.openOwner({
+        storeDirectory: dir,
+        model: generalFixtureModelForE2e(),
+      })
+      fence = owner.store.readMissionWriteFence(mission.mission_id)
+      resumed = await owner.resumeResearchContinuation({
+        mission_id: mission.mission_id,
+        expected_writer_generation: fence.writer_generation,
+        host_authorization_ref: 'b-reciprocal/lifecycle-resume-2',
+        acknowledged_plan_revision_id: cancelledPlanAfterCont,
+        acknowledged_terminal_state: 'cancelled',
+      })
+      const activeAfterResume2 = owner.store.readMissionWriteFence(mission.mission_id)
+        .active_plan_revision_id
+      assert.ok(activeAfterResume2)
+      const continuedPlanIdAgain = `${activeAfterResume2}-continued`
+      assert.equal(
+        continuedPlanIdAgain,
+        continuedPlanId,
+        'expected same plan-derived suffix on repeated continuation (reproduces Native9d defect surface)',
+      )
+      const thirdPass = await runGeneralOfflinePassOnOwner({
+        owner,
+        mission,
+        handle: resumed,
+        discoverQuery: 'Nimbus Plan A monthly',
+        activePlanRevisionId: activeAfterResume2,
+        planRevisionId: continuedPlanIdAgain,
+        signal: new AbortController().signal,
+        model: generalFixtureModelForE2e(),
+      })
+      assert.equal(thirdPass.terminalReportEmitted, true)
+      assert.ok(thirdPass.passageIds.length >= 1)
+      await owner.close()
+
+      const inspectFinal = await ResearchEngineSession.openInspect(dir)
+      const eventsFinal = await inspectFinal.listEvents(mission.mission_id)
+      assert.equal(eventsFinal.filter((e) => e.kind === 'research_continuation_resumed').length, 2)
+      const terminals = eventsFinal.filter((e) => e.kind === 'terminal_receipt')
+      assert.equal(terminals.length, 3)
+      const states = terminals.map(
+        (e) => (e.payload as { report: { terminal_state: string } }).report.terminal_state,
+      )
+      assert.equal(states.filter((s) => s === 'cancelled').length, 2)
+      assert.ok(states.some((s) => s === 'complete' || s === 'partial'))
+      const intents = externalOperationIntents(eventsFinal)
+      assert.ok(intents.length >= 3, 'expected durable intents from three engine runs')
+      assertAllIntentsDistinct(intents, 'three-run watcher lifecycle')
+      const resumedEvents = eventsFinal.filter((e) => e.kind === 'research_continuation_resumed')
+      const generations = resumedEvents.map(
+        (e) =>
+          (e.payload as { writer_generation: number; prior_writer_generation: number }).writer_generation,
+      )
+      assert.equal(new Set(generations).size, generations.length)
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
