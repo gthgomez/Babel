@@ -3,9 +3,8 @@
   "label": "T-L1 invalid discover-primary planning failure reciprocal (synthetic model, production runner)",
   "qualification_status": "author_run_incomplete",
   "qualification_note": "Baseline reciprocal tests pass; acceptance settlement test is intentionally red until A canonical slot/settlement repair (A8930 class). Not a full-suite or CI-green claim.",
-  "git_head_at_receipt_authoring": "08bb1806",
-  "git_head_full": "08bb1806",
-  "working_tree_dirty_untracked_paths": "unknown_at_bind_time",
+  "git_head_at_receipt_authoring": "08bb180633de5ad45b019fcf4e30f13507d61deb",
+  "working_tree_dirty_untracked_paths": 48,
   "timing_provenance": "TAP captured at commit; HEAD/hash binding updated on same commit",
   "exact_source_binding": {
     "test_source": "babel-cli/src/research/v2/fixtures/campaign/T-L1-invalidCoverageSlot.planningFailure.reciprocal.test.ts",
