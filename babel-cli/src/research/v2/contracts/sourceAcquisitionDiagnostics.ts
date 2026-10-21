@@ -23,6 +23,9 @@ export const SourceAcquisitionDiagnosticsSchema = z
     http_failure: z
       .object({
         public_message: z.string().max(512).optional(),
+        public_message_qualifier: z
+          .literal('unverified_github_json_message_field')
+          .optional(),
         request_id: z.string().max(128).optional(),
         retry_after: z.string().max(64).optional(),
         rate_limit_remaining: z.string().max(32).optional(),

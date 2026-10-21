@@ -1,9 +1,12 @@
 import type { IncomingHttpHeaders } from 'node:http'
 import type { AdmittedHttpGetResult } from './admittedHttpGet.js'
+import { HTTP_FAILURE_FIELD_LIMITS } from './sanitizedHttpFailureFieldLimits.js'
 
-const MAX_PUBLIC_MESSAGE_CHARS = 512
-const MAX_HEADER_VALUE_CHARS = 128
 const MAX_BODY_PEEK_BYTES = 4_096
+
+/** GitHub JSON `message` only; allowlisted response headers do not prove absence of secrets. */
+export const HTTP_FAILURE_PUBLIC_MESSAGE_QUALIFIER =
+  'unverified_github_json_message_field' as const
 
 const SENSITIVE_HEADER_NAMES = new Set([
   'authorization',
@@ -15,6 +18,7 @@ const SENSITIVE_HEADER_NAMES = new Set([
 
 export interface SanitizedHttpFailureMetadata {
   public_message?: string
+  public_message_qualifier?: typeof HTTP_FAILURE_PUBLIC_MESSAGE_QUALIFIER
   request_id?: string
   retry_after?: string
   rate_limit_remaining?: string
@@ -58,7 +62,7 @@ function sanitizePublicMessageFromBody(buffer: Buffer, contentType: string): str
   try {
     const parsed = JSON.parse(text) as { message?: unknown }
     if (typeof parsed.message !== 'string') return undefined
-    return sanitizePublicHttpScalar(parsed.message, MAX_PUBLIC_MESSAGE_CHARS)
+    return sanitizePublicHttpScalar(parsed.message, HTTP_FAILURE_FIELD_LIMITS.public_message)
   } catch {
     return undefined
   }
@@ -88,28 +92,33 @@ export function sanitizedHttpFailureMetadataFromGet(
 
   const metadata: SanitizedHttpFailureMetadata = {}
   const publicMessage = sanitizePublicMessageFromBody(response.buffer, response.contentType)
-  if (publicMessage) metadata.public_message = publicMessage
+  if (publicMessage) {
+    metadata.public_message = publicMessage
+    metadata.public_message_qualifier = HTTP_FAILURE_PUBLIC_MESSAGE_QUALIFIER
+  }
 
   const requestId = requestIdRaw
-    ? sanitizePublicHttpScalar(requestIdRaw, MAX_HEADER_VALUE_CHARS)
+    ? sanitizePublicHttpScalar(requestIdRaw, HTTP_FAILURE_FIELD_LIMITS.request_id)
     : undefined
   if (requestId) metadata.request_id = requestId
 
   const retryAfter = retryAfterRaw
-    ? sanitizePublicHttpScalar(retryAfterRaw, MAX_HEADER_VALUE_CHARS)
+    ? sanitizePublicHttpScalar(retryAfterRaw, HTTP_FAILURE_FIELD_LIMITS.retry_after)
     : undefined
   if (retryAfter) metadata.retry_after = retryAfter
 
   const remaining = remainingRaw
-    ? sanitizePublicHttpScalar(remainingRaw, MAX_HEADER_VALUE_CHARS)
+    ? sanitizePublicHttpScalar(remainingRaw, HTTP_FAILURE_FIELD_LIMITS.rate_limit_remaining)
     : undefined
   if (remaining) metadata.rate_limit_remaining = remaining
 
-  const reset = resetRaw ? sanitizePublicHttpScalar(resetRaw, MAX_HEADER_VALUE_CHARS) : undefined
+  const reset = resetRaw
+    ? sanitizePublicHttpScalar(resetRaw, HTTP_FAILURE_FIELD_LIMITS.rate_limit_reset)
+    : undefined
   if (reset) metadata.rate_limit_reset = reset
 
   const resource = resourceRaw
-    ? sanitizePublicHttpScalar(resourceRaw, MAX_HEADER_VALUE_CHARS)
+    ? sanitizePublicHttpScalar(resourceRaw, HTTP_FAILURE_FIELD_LIMITS.rate_limit_resource)
     : undefined
   if (resource) metadata.rate_limit_resource = resource
 

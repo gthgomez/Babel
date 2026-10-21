@@ -37,6 +37,7 @@ export type SourceSearchResult =
       status: 'failed'
       failureCategory: SourceAccessFailureCategory
       message: string
+      acquisition_diagnostics?: SourceAcquisitionDiagnostics
       receipt?: SourceSearchProviderReceipt
     }
   | { operationId: string; status: 'cancelled' }
