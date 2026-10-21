@@ -73,7 +73,8 @@ npm run test:research-v2-pdfjs-staged-package-smoke
 | Packaged PDF runtime (A smoke) | `npm run test:research-v2-pdfjs-staged-package-smoke` | Isolated lockfile `npm ci` + platform binding + pdfjs text extract |
 | B reciprocal packaging (authoritative) | `npm run test:research-v2-production-package-reciprocal` | Same flags as Windows pack; copies **dist** + B probes; `canvas_package_json_present=true` + PDF probe ok |
 | Campaign OpenRouter lane | `npm run test:research-v2-openrouter-route-smoke` | `openrouter` / `deepseek/deepseek-v4-flash-0731` / `deepseek-v4-flash-openrouter` (`review-artifacts/readiness-9d97448a-openrouter-route.log`) |
-| Campaign G-L1 preflight (no network) | `npm run test:research-v2-campaign-preflight` | mission `mission-g-l1-general-live`, DuckDuckGo HTML search URL (`review-artifacts/readiness-9d97448a-campaign-preflight.log`) |
+| Campaign G-L1 preflight (no network) | `npm run test:research-v2-campaign-preflight` | public-fact Node.js @ `as_of=2026-10-21`, domains `nodejs.org` + DuckDuckGo (`review-artifacts/readiness-g-l1-campaign-preflight-corrected.log`) |
+| Full Research v2 manifest (prior receipt) | `node scripts/research-v2-collect-test-files.mjs \| tr '\\n' '\\0' \| xargs -0 node --import tsx --test` | **268** pass / 0 fail @ provenance head (unchanged by G-L1 input-only fix); later heads **269** with B `1693fb0d` regression |
 | CLI model route | `node bin/babel.js research v2 model-route --json` | same policy route as smoke (`review-artifacts/readiness-9d97448a-model-route.json`) |
 | Live gate (this run) | `node bin/babel.js research v2 live-status --json` | `live_api_enabled: false` until `BABEL_RESEARCH_V2_ALLOW_LIVE_API=1` + operator credentials |
 
@@ -93,7 +94,7 @@ export BABEL_RESEARCH_V2_ALLOW_LIVE_API=1
 node bin/babel.js research v2 run \
   --store /path/to/g-l1-store \
   --mission-file src/research/v2/fixtures/campaign/G-L1-mission.json \
-  --discover-query "Which fictional cloud plan fits a solo developer who needs 500 GB" \
+  --discover-query "What is the latest stable Node.js release version as of 2026-10-21 according to official" \
   --json
 
 # Post-run usage/cost: inspect store events / terminal receipt (usage_settlement on completions)

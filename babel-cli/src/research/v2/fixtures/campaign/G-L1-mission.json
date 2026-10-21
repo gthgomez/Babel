@@ -4,19 +4,25 @@
   "mission_id": "mission-g-l1-general-live",
   "profile_id": "general",
   "profile_version": "0.1.0-m0",
-  "created_at": "2026-10-21T06:00:00.000Z",
-  "primary_question": "Which fictional cloud plan fits a solo developer who needs 500 GB storage and can pay either monthly or annually?",
-  "intended_decision": "Choose Plan A or Plan B for the next 12 months.",
+  "created_at": "2026-10-21T06:45:00.000Z",
+  "primary_question": "What is the latest stable Node.js release version as of 2026-10-21 according to official nodejs.org sources?",
+  "intended_decision": "Report the current stable Node.js version line and version number published for production use on nodejs.org.",
   "constraints": [
-    "currency=\"USD\"",
-    "billing_periods_to_compare=[\"monthly\",\"annual\"]"
+    "as_of=\"2026-10-21\"",
+    "source_class=web",
+    "prefer_official_nodejs_org_pages=true"
   ],
-  "exclusions": ["signup", "purchase", "live pricing APIs"],
-  "as_of": "2026-04-01",
+  "exclusions": ["third-party version aggregators", "forum posts without primary citation"],
+  "as_of": "2026-10-21",
   "jurisdiction": "unknown",
   "source_policy": {
     "allowed_source_classes": ["web"],
-    "allowed_web_domains": ["duckduckgo.com", "html.duckduckgo.com"],
+    "allowed_web_domains": [
+      "duckduckgo.com",
+      "html.duckduckgo.com",
+      "nodejs.org",
+      "www.nodejs.org"
+    ],
     "visibility_retention": {
       "source_visibility": "public",
       "retention": "excerpt_only",
