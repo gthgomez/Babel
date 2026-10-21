@@ -93,7 +93,7 @@ describe('general adapter reciprocal integration (B80 catalog, offline)', () => 
     assert.equal(reg.getAdapter('documents/general-document/0.1.0'), undefined)
   })
 
-  it('discover → honest not_supported on document and web without port search (B80)', async () => {
+  it('discover → honest not_supported on B80 adapters without port search (catalog-only branch)', async () => {
     const reg = registryFromCatalog()
     const { port, getSearchCalls } = trackingPort(async () => ({
       operationId: 'unused',

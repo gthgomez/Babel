@@ -1,0 +1,53 @@
+TAP version 13
+# Subtest: general adapter engine reciprocal (\#406 integration base, offline)
+    # Subtest: createCombinedResearchRegistries registers B catalog adapters
+    ok 1 - createCombinedResearchRegistries registers B catalog adapters
+      ---
+      duration_ms: 23.51684
+      type: 'test'
+      ...
+    # Subtest: production discovery uses search-backed web adapter (not document)
+    ok 2 - production discovery uses search-backed web adapter (not document)
+      ---
+      duration_ms: 4.095717
+      type: 'test'
+      ...
+    # Subtest: runAdmittedRetrievalIteration: search → web discover → HTML read → persisted passages
+    ok 3 - runAdmittedRetrievalIteration: search → web discover → HTML read → persisted passages
+      ---
+      duration_ms: 24.317024
+      type: 'test'
+      ...
+    # Subtest: runAdmittedRetrievalIteration: document candidate resolves to PDF read + persisted page passages
+    ok 4 - runAdmittedRetrievalIteration: document candidate resolves to PDF read + persisted page passages
+      ---
+      duration_ms: 826.611552
+      type: 'test'
+      ...
+    # Subtest: document adapter discover remains unsupported through retrieval loop
+    ok 5 - document adapter discover remains unsupported through retrieval loop
+      ---
+      duration_ms: 4.454139
+      type: 'test'
+      ...
+    # Subtest: runAdmittedRetrievalIteration: cancelled discover settles without persisting passages
+    ok 6 - runAdmittedRetrievalIteration: cancelled discover settles without persisting passages
+      ---
+      duration_ms: 2.358013
+      type: 'test'
+      ...
+    1..6
+ok 1 - general adapter engine reciprocal (\#406 integration base, offline)
+  ---
+  duration_ms: 886.384714
+  type: 'suite'
+  ...
+1..1
+# tests 6
+# suites 1
+# pass 6
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 6193.367487
