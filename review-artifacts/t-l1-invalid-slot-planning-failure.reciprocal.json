@@ -8,8 +8,9 @@
     "tree": "d8160b4bf4ca8e9c4fa0e70b36241d2ed464c7a0",
     "pr": "https://github.com/gthgomez/Babel/pull/406"
   },
-  "git_head_at_receipt_authoring": "pending_after_commit",
-  "working_tree_dirty_untracked_paths": "pending_after_commit",
+  "git_head_at_receipt_authoring": "bbd3ac53",
+  "git_tree_at_receipt_authoring": "pending",
+  "working_tree_dirty_untracked_paths": 48,
   "exact_source_binding": {
     "test_source": "babel-cli/src/research/v2/fixtures/campaign/T-L1-invalidCoverageSlot.planningFailure.reciprocal.test.ts",
     "test_source_sha256": "983d4f2453c51a107aab231dccd309e54ea2b16770fc62cb01ad7b3f3fc6318e",
