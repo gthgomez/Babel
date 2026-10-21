@@ -16,6 +16,11 @@ describe('T-L1 architecture-comparison campaign mission', () => {
     assert.equal(mission.profile_version, pins.profile.profile_version)
     assert.deepEqual(mission.source_policy.allowed_source_classes, ['repository_file'])
     assert.equal(mission.pinned_target_repository?.commit_sha, pins.babel_repository.commit_sha)
+    assert.equal(mission.source_policy.selected_repository_refs?.length, 1)
+    assert.equal(
+      mission.source_policy.selected_repository_refs?.[0]?.commit_sha,
+      pins.reference_repository.commit_sha,
+    )
     assert.equal(mission.model_route.provider, 'openrouter')
     assert.equal(mission.model_route.fixture_route, undefined)
   })

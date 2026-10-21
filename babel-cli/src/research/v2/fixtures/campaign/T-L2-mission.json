@@ -20,7 +20,7 @@
   "as_of": "2026-10-21",
   "jurisdiction": "unknown",
   "source_policy": {
-    "allowed_source_classes": ["repository_file", "document"],
+    "allowed_source_classes": ["repository_file", "document", "structured"],
     "allowed_web_domains": ["github.com", "raw.githubusercontent.com", "arxiv.org"],
     "selected_document_refs": ["https://arxiv.org/pdf/1706.03762.pdf"],
     "visibility_retention": {

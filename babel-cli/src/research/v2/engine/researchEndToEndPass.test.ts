@@ -102,6 +102,7 @@ describe('research end-to-end pass (offline governed)', () => {
       model: fixtureModelWithE2eScripts(),
       access: governedAccess(),
       adapter,
+      registries,
       discoverQuery: 'RESEARCH_CONTRACT',
       planOperationId: 'e2e-plan',
       planAttemptId: 'e2e-plan-att',

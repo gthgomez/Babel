@@ -13,7 +13,15 @@
     "canonical_url": "https://arxiv.org/pdf/1706.03762.pdf",
     "title": "Attention Is All You Need",
     "arxiv_id": "1706.03762",
+    "observed_content_length_bytes": 2215244,
     "license_note": "arXiv.org perpetual non-exclusive license to distribute; mission cites PDF URL only."
+  },
+  "reference_repository": {
+    "provider": "github",
+    "full_name": "langchain-ai/langgraph",
+    "repo_id": "github:langchain-ai/langgraph",
+    "commit_sha": "d2c584a238566d2bfd7d28e053a94e3a9af1ffd7",
+    "commit_subject": "pinned for T-L1 architecture comparison (declared selected_repository_refs)"
   },
   "profile": {
     "profile_id": "technical",

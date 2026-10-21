@@ -13,7 +13,11 @@ describe('T-L2 paper/code PDF campaign mission', () => {
     const mission = ResearchMissionV2Schema.parse(JSON.parse(readFileSync(missionPath, 'utf8')))
     assert.equal(mission.mission_id, 'mission-t-l2-paper-code-pdf')
     assert.equal(mission.profile_id, pins.profile.profile_id)
-    assert.deepEqual(mission.source_policy.allowed_source_classes, ['repository_file', 'document'])
+    assert.deepEqual(mission.source_policy.allowed_source_classes, [
+      'repository_file',
+      'document',
+      'structured',
+    ])
     assert.deepEqual(mission.source_policy.selected_document_refs, [pins.t_l2_paper.canonical_url])
     assert.equal(mission.pinned_target_repository?.commit_sha, pins.babel_repository.commit_sha)
     const domains = mission.source_policy.allowed_web_domains ?? []

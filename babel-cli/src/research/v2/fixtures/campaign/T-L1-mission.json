@@ -5,12 +5,12 @@
   "profile_id": "technical",
   "profile_version": "0.0.0-checkpoint",
   "created_at": "2026-10-21T08:00:00.000Z",
-  "primary_question": "At the pinned Babel commit, how does research v2 separate durable evidence, store events, and model synthesis from executable harness policy? Compare boundary mechanisms under babel-cli/src/research/v2/ versus babel-cli/src/executor/ and cite concrete file paths.",
-  "intended_decision": "Choose whether Babel's current research-vs-executor split is sufficient for governed technical research, with cited paths on both sides of the boundary.",
+  "primary_question": "Compare how the pinned Babel repository and the pinned LangGraph repository separate durable graph/state persistence from agent execution policy. Cite concrete file paths in each repository at the declared commits.",
+  "intended_decision": "Choose which pinned repository exposes clearer persistence-vs-execution boundaries for governed technical research, with per-repo file citations.",
   "constraints": [
     "pinned_github_commit_only=true",
     "repository_file_sources_only=true",
-    "cite_paths_not_summaries_only=true"
+    "two_declared_repository_pins_required=true"
   ],
   "exclusions": [
     "unpinned github branches",
@@ -22,6 +22,14 @@
   "source_policy": {
     "allowed_source_classes": ["repository_file"],
     "allowed_web_domains": ["github.com", "raw.githubusercontent.com"],
+    "selected_repository_refs": [
+      {
+        "provider": "github",
+        "repo_id": "github:langchain-ai/langgraph",
+        "full_name": "langchain-ai/langgraph",
+        "commit_sha": "d2c584a238566d2bfd7d28e053a94e3a9af1ffd7"
+      }
+    ],
     "visibility_retention": {
       "source_visibility": "public",
       "retention": "excerpt_only",

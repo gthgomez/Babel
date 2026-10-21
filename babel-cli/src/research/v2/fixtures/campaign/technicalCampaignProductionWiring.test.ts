@@ -12,6 +12,7 @@ import {
   resolveDiscoveryAdapterForMission,
   resolveReadAdapterForSource,
 } from '../../registry/missionAdapterResolution.js'
+import { planTechnicalRetrievalSlots } from '../../engine/technicalRetrievalComposition.js'
 import pins from './T-L1-T-L2-PINNED-VERSIONS.json' with { type: 'json' }
 
 const campaignDir = dirname(fileURLToPath(import.meta.url))
@@ -22,6 +23,12 @@ function loadMission(name: string) {
 }
 
 describe('technical campaign production wiring (injected transport, no live model)', () => {
+  it('T-L1 plans two repository pins (Babel + LangGraph)', () => {
+    const mission = loadMission('T-L1-mission.json')
+    const slots = planTechnicalRetrievalSlots(mission, 'persistence')
+    assert.equal(slots.filter((s) => s.kind === 'repository_pin').length, 2)
+  })
+
   it('T-L1 resolves repository-file discovery and read adapters', async () => {
     const mission = loadMission('T-L1-mission.json')
     const registries = await createCombinedResearchRegistries()

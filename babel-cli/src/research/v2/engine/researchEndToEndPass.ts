@@ -10,6 +10,8 @@ import type { ResearchStore, ResearchStoreMissionHandle } from '../ports/researc
 import { missionRequirementsPayload } from './planFromModelOutput.js'
 import { runAdmittedPlanningIteration, type AdmittedPlanningSession } from './researchIterationLoop.js'
 import { runAdmittedRetrievalIteration } from './researchRetrievalLoop.js'
+import { runAdmittedComposedRetrievalIteration } from './researchComposedRetrievalLoop.js'
+import { missionUsesComposedTechnicalRetrieval } from './technicalRetrievalComposition.js'
 import { buildSemanticSupportReviewInput } from './buildSemanticSupportReviewInput.js'
 import {
   applySemanticSupportReview,
@@ -225,27 +227,55 @@ export async function runAdmittedResearchEndToEndPass(
     throw new Error('planned revision missing from store')
   }
 
-  const retrieved = await runAdmittedRetrievalIteration({
-    session: {
-      mission: request.session.mission,
-      handle: planned.handle,
-      activePlanRevisionId: planned.planRevisionId,
-    },
-    store: request.store,
-    access: request.access,
-    adapter: request.adapter,
-    ...(request.readAdapter ? { readAdapter: request.readAdapter } : {}),
-    ...(request.registries ? { registries: request.registries } : {}),
-    activePlan,
-    discoverQuery: request.discoverQuery,
-    searchOperationId: request.retrievalSearchOperationId,
-    searchAttemptId: request.retrievalSearchAttemptId,
-    fetchOperationId: request.retrievalFetchOperationId,
-    fetchAttemptId: request.retrievalFetchAttemptId,
-    dispatchedAt: request.dispatchedAt,
-    signal: request.signal,
-    now,
-  })
+  const composed = missionUsesComposedTechnicalRetrieval(request.session.mission)
+  if (composed && !request.registries) {
+    throw new Error('composed technical retrieval requires registries')
+  }
+
+  const retrieved = composed
+    ? await runAdmittedComposedRetrievalIteration({
+        session: {
+          mission: request.session.mission,
+          handle: planned.handle,
+          activePlanRevisionId: planned.planRevisionId,
+        },
+        store: request.store,
+        access: request.access,
+        adapter: request.adapter,
+        registries: request.registries!,
+        activePlan,
+        discoverQuery: request.discoverQuery,
+        searchOperationId: request.retrievalSearchOperationId,
+        searchAttemptId: request.retrievalSearchAttemptId,
+        fetchOperationId: request.retrievalFetchOperationId,
+        fetchAttemptId: request.retrievalFetchAttemptId,
+        dispatchedAt: request.dispatchedAt,
+        signal: request.signal,
+        now,
+      })
+    : await runAdmittedRetrievalIteration({
+        session: {
+          mission: request.session.mission,
+          handle: planned.handle,
+          activePlanRevisionId: planned.planRevisionId,
+        },
+        store: request.store,
+        access: request.access,
+        adapter: request.adapter,
+        ...(request.readAdapter ? { readAdapter: request.readAdapter } : {}),
+        ...(request.registries ? { registries: request.registries } : {}),
+        activePlan,
+        discoverQuery: request.discoverQuery,
+        searchOperationId: request.retrievalSearchOperationId,
+        searchAttemptId: request.retrievalSearchAttemptId,
+        fetchOperationId: request.retrievalFetchOperationId,
+        fetchAttemptId: request.retrievalFetchAttemptId,
+        dispatchedAt: request.dispatchedAt,
+        signal: request.signal,
+        now,
+      })
+
+  const composedRetrievalLimitations = composed && 'limitations' in retrieved ? retrieved.limitations : []
 
   const ctx = retrieved.writeContext
   const passageEvents = (await request.store.listEvents(request.session.mission.mission_id)).filter(
@@ -332,6 +362,9 @@ export async function runAdmittedResearchEndToEndPass(
     findings,
     modelOutput: synthesizeOutput,
     generatedAt: now(),
+    ...(composedRetrievalLimitations.length > 0
+      ? { additionalLimitations: composedRetrievalLimitations }
+      : {}),
   })
   await request.store.appendTerminalReport(ctx, report)
 
