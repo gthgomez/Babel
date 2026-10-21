@@ -1,0 +1,78 @@
+{
+  "checkpoint_base": {
+    "commit": "eb79fd3f2e249293975409897a6ea4234f205f57",
+    "tree": "7e2145c361f627dae7413e2270012bd658901207",
+    "role": "canonical A production (integrity, source-slot, eligible indexing)"
+  },
+  "pr": 406,
+  "branch": "cursor/research-v2-post-review-settlement-fc31",
+  "donors": {
+    "included_from_B_802b8ad0": {
+      "ref": "802b8ad070454b54811fb0a41a4dc58a5aae8f2b",
+      "branch": "cursor/agent-b-general-fixtures-f617",
+      "paths": [
+        "babel-cli/src/research/v2/access/admittedHttpGet.ts",
+        "babel-cli/src/research/v2/access/admittedHttpGet.defaultTransport.test.ts",
+        "babel-cli/src/research/v2/access/governedHttpClientIdentity.ts",
+        "babel-cli/src/research/v2/access/inferHttpAccessFailureCategory.ts",
+        "babel-cli/src/research/v2/access/inferHttpAccessFailureCategory.test.ts",
+        "babel-cli/src/research/v2/access/parseAcquisitionDiagnosticsFromHttpGet.ts",
+        "babel-cli/src/research/v2/access/pinnedRepositoryFileSearchProvider.ts",
+        "babel-cli/src/research/v2/access/pinnedRepositoryFileSearchProvider.test.ts",
+        "babel-cli/src/research/v2/access/sanitizedHttpFailureFieldLimits.ts",
+        "babel-cli/src/research/v2/access/sanitizedHttpFailureMetadata.ts",
+        "babel-cli/src/research/v2/access/sanitizedHttpFailureMetadata.test.ts",
+        "babel-cli/src/research/v2/access/sourceAcquisitionDiagnosticsFromHttp.ts",
+        "babel-cli/src/research/v2/access/missionWebRetrieval.actualPort.reciprocal.test.ts",
+        "babel-cli/src/research/v2/access/fetchSourceAccessPort.gzip.reciprocal.test.ts",
+        "babel-cli/src/research/v2/contracts/sourceAcquisitionDiagnostics.ts",
+        "babel-cli/src/research/v2/ports/sourceAccessPort.ts",
+        "babel-cli/src/research/v2/fixtures/campaign/passageIntegrityVerification.durable.reciprocal.test.ts",
+        "babel-cli/src/research/v2/fixtures/campaign/passageIntegrityVerification.historicalFixtures.guard.prep.test.ts",
+        "babel-cli/src/research/v2/fixtures/campaign/T-L1-discover-query.reciprocal.test.ts",
+        "babel-cli/src/research/v2/fixtures/campaign/T-L1-invalidCoverageSlot.planningFailure.reciprocal.test.ts",
+        "babel-cli/src/research/v2/fixtures/campaign/T-L1-synthetic-invalid-discover-primary-plan-questions.json",
+        "babel-cli/src/research/v2/fixtures/campaign/T-L1-synthetic-valid-repository-pin-plan-questions.json",
+        "babel-cli/src/research/v2/fixtures/campaign/T-L2-document-byte-budget.reciprocal.test.ts",
+        "babel-cli/src/research/v2/fixtures/campaign/G-L2-quality-case1-cross-source-max-age.fixture.json",
+        "babel-cli/src/research/v2/fixtures/campaign/G-L2-quality-case2-audience-vs-cache-scope.fixture.json"
+      ],
+      "lineage_note": "Transport slice from 675a627d → e94e7a54 → 74e0dfe9; reciprocal tests from f3268d04/802b8ad0 adapted to PassageRecord.integrity_verification",
+      "adaptations": [
+        "missionWebRetrieval.actualPort.reciprocal.test.ts: align missing-ref case with A direct-acquisition synthesis (missionWebRetrievalSelection.test.ts)"
+      ]
+    },
+    "included_from_PR408_a0047fda": {
+      "ref": "a0047fdac608990aac3735e54fe8ef643ab96a56",
+      "paths": [
+        "review-artifacts/t-l1-protocol-access-diagnostic-e94e7a54-prerequisite-correction.json",
+        "review-artifacts/t-l1-protocol-access-diagnostic-e94e7a54-receipt.json",
+        "review-artifacts/t-l1-protocol-access-diagnostic-e94e7a54-worktree-package-json.diff"
+      ],
+      "note": "Evidence-only delta integrated once; no #407 runtime replay"
+    },
+    "excluded_superseded": {
+      "B_802b_production_index": [
+        "babel-cli/scripts/research-v2-production-package-esm-isolation-probe.mjs",
+        "babel-cli/scripts/research-v2-production-package-reciprocal-probe.mjs"
+      ],
+      "B_overwritten_A_canonical": [
+        "babel-cli/src/research/v2/engine/sourceIntegrityFromEvidence.ts"
+      ],
+      "B_alternate_integrity_html": "Not copied: B passageIntegrity/HTML production files superseded by A eb79/ef9655",
+      "PR405": "Already ancestor; no snapshot merge",
+      "PR409": "Incorporated into B donor; deleted head not recreated"
+    }
+  },
+  "proof_artifacts": {
+    "typecheck_log": "/opt/cursor/artifacts/a406-checkpoint-typecheck.log",
+    "build_log": "/opt/cursor/artifacts/a406-checkpoint-build.log",
+    "focused_tap_log": "/opt/cursor/artifacts/a406-checkpoint-focused-tap.log",
+    "research_v2_test_inventory": "/opt/cursor/artifacts/a406-research-v2-test-inventory.txt",
+    "research_v2_test_file_count": 145,
+    "research_v2_full_tap_log": "/opt/cursor/artifacts/a406-checkpoint-research-v2-full-tap.log",
+    "pre_existing_failures_on_eb79": [
+      "babel-cli/src/research/v2/engine/researchRetrievalLoop.repair.test.ts (durable store cancelled during appendPassage; integrity receipt passage_id)"
+    ]
+  }
+}

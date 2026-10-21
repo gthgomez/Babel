@@ -154,8 +154,9 @@ function latestFindings(events: Awaited<ReturnType<DurableResearchStore['listEve
 describe('source integrity end-to-end (DurableResearchStore)', () => {
   it('complete path: verified integrity, terminal complete, cold reopen preserves receipts', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'babel-integrity-e2e-'))
+    let store: DurableResearchStore | undefined
     try {
-      let store = await DurableResearchStore.open(dir)
+      store = await DurableResearchStore.open(dir)
       const handle = await store.appendMission(exampleTechnicalMissionFixture)
       const session = { mission: exampleTechnicalMissionFixture, handle }
       const registries = createTechnicalResearchRegistries()
@@ -228,6 +229,9 @@ describe('source integrity end-to-end (DurableResearchStore)', () => {
       )
       assert.ok(reopenedFindings.every((f) => f.source_integrity === 'valid'))
     } finally {
+      if (store) {
+        await store.close()
+      }
       await rm(dir, { recursive: true, force: true })
     }
   })

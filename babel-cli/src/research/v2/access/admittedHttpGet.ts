@@ -13,6 +13,7 @@ import {
   decodeAdmittedHttpBody,
   type AdmittedHttpTransportCoding,
 } from './admittedHttpContentCoding.js'
+import { buildGovernedHttpGetRequestHeaders } from './governedHttpClientIdentity.js'
 
 const MAX_REDIRECTS = 8
 
@@ -192,7 +193,7 @@ function singleGet(
   const lookupFn = buildPinnedLookup(target)
   const options: RequestOptions = {
     method: 'GET',
-    headers: { accept: '*/*' },
+    headers: buildGovernedHttpGetRequestHeaders(),
     ...(lookupFn ? { lookup: lookupFn } : {}),
   }
 

@@ -1,7 +1,10 @@
 import type { ResearchMissionV2 } from '../contracts/mission.js'
+import type { SourceAcquisitionDiagnostics } from '../contracts/sourceAcquisitionDiagnostics.js'
 import type { AdmittedSourceSearchProvider } from '../ports/admittedSourceSearchProvider.js'
 import type { SourceSearchRequest, SourceSearchResult } from '../ports/sourceAccessPort.js'
 import { admittedHttpGet } from './admittedHttpGet.js'
+import { inferHttpAccessFailureCategory } from './inferHttpAccessFailureCategory.js'
+import { parseAcquisitionDiagnosticsFromHttpGet } from './parseAcquisitionDiagnosticsFromHttpGet.js'
 import {
   missionPinnedRepositories,
   repositoryFileSourceFromPinnedPath,
@@ -12,40 +15,83 @@ export interface GitHubTreeEntry {
   type: 'blob' | 'tree' | string
 }
 
+export type FetchPinnedRepositoryTreeResult =
+  | {
+      ok: true
+      status: number
+      entries: GitHubTreeEntry[]
+    }
+  | {
+      ok: false
+      status: number
+      entries: GitHubTreeEntry[]
+      message: string
+      acquisition_diagnostics?: SourceAcquisitionDiagnostics
+    }
+
 export type FetchPinnedRepositoryTree = (params: {
   apiUrl: string
   signal: AbortSignal
-}) => Promise<{ ok: boolean; status: number; entries: GitHubTreeEntry[]; message?: string }>
+}) => Promise<FetchPinnedRepositoryTreeResult>
 
 const DEFAULT_MAX_HITS = 25
 
 export async function defaultFetchPinnedRepositoryTree(params: {
   apiUrl: string
   signal: AbortSignal
-}): Promise<{ ok: boolean; status: number; entries: GitHubTreeEntry[]; message?: string }> {
+}): Promise<FetchPinnedRepositoryTreeResult> {
   const response = await admittedHttpGet({
     url: params.apiUrl,
     maxBytes: 4_000_000,
     signal: params.signal,
   })
   if (!response.ok) {
+    const acquisition_diagnostics = parseAcquisitionDiagnosticsFromHttpGet(response, {
+      attemptedUrl: params.apiUrl,
+    })
+    const publicMsg = acquisition_diagnostics.http_failure?.public_message
     return {
       ok: false,
       status: response.status,
       entries: [],
-      message: `GitHub tree API HTTP ${response.status}`,
+      message: publicMsg
+        ? `GitHub tree API HTTP ${response.status}: ${publicMsg}`
+        : `GitHub tree API HTTP ${response.status}`,
+      acquisition_diagnostics,
     }
   }
   try {
     const body = JSON.parse(response.buffer.toString('utf8')) as { tree?: GitHubTreeEntry[] }
     return { ok: true, status: response.status, entries: body.tree ?? [] }
   } catch {
+    const acquisition_diagnostics = parseAcquisitionDiagnosticsFromHttpGet(response, {
+      attemptedUrl: params.apiUrl,
+    })
     return {
       ok: false,
       status: response.status,
       entries: [],
       message: 'GitHub tree API returned non-JSON payload',
+      acquisition_diagnostics,
     }
+  }
+}
+
+export function pinnedRepositoryTreeSearchFailure(params: {
+  listed: Extract<FetchPinnedRepositoryTreeResult, { ok: false }>
+  operationId: string
+}): Extract<SourceSearchResult, { status: 'failed' }> {
+  const diagnostics = params.listed.acquisition_diagnostics
+  const failureCategory = inferHttpAccessFailureCategory({
+    httpStatus: params.listed.status,
+    ...(diagnostics?.http_failure ? { httpFailure: diagnostics.http_failure } : {}),
+  })
+  return {
+    operationId: params.operationId,
+    status: 'failed',
+    failureCategory,
+    message: params.listed.message,
+    ...(diagnostics ? { acquisition_diagnostics: diagnostics } : {}),
   }
 }
 
@@ -90,12 +136,10 @@ export function createPinnedRepositoryFileSearchProvider(options?: {
           return { operationId: request.operationId, status: 'cancelled' }
         }
         if (!listed.ok) {
-          return {
+          return pinnedRepositoryTreeSearchFailure({
+            listed,
             operationId: request.operationId,
-            status: 'failed',
-            failureCategory: 'network_error',
-            message: listed.message ?? `GitHub tree listing failed (${listed.status})`,
-          }
+          })
         }
         for (const entry of listed.entries) {
           if (entry.type !== 'blob') continue

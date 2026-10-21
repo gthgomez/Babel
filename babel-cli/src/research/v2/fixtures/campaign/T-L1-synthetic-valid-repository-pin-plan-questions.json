@@ -1,0 +1,32 @@
+{
+  "schema": "research-v2-t-l1-synthetic-plan-questions/v1",
+  "_provenance": "Synthetic structurally valid plan_questions with repository-pin-0 obligation for T-L1. NOT live model capture.",
+  "request_local_usage_metadata": {
+    "provider": "openrouter",
+    "provider_model_id": "deepseek/deepseek-v4-flash-0731",
+    "observed_model_id": "deepseek/deepseek-v4-flash-0731",
+    "latency_ms": 2100,
+    "prompt_tokens": 520,
+    "completion_tokens": 240,
+    "total_tokens": 760,
+    "estimated_cost_usd": 0.0000912,
+    "cost_precision": "exact"
+  },
+  "raw_model_payload": {
+    "kind": "plan_questions",
+    "questions": [
+      {
+        "text": "How does the pinned Babel repository separate durable persistence from execution policy?",
+        "importance": "critical",
+        "coverage_obligations": [
+          {
+            "obligation_id": "ob-synthetic-babel-pin",
+            "source_slot": "repository-pin-0",
+            "aspect": "technical_effect",
+            "technical_effect": "general_technical"
+          }
+        ]
+      }
+    ]
+  }
+}

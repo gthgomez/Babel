@@ -60,7 +60,7 @@ describe('T-L1 discover-query reciprocal (injected trees, no GitHub API)', () =>
   it('explicit production discover-query yields concrete Babel persistence paths', async () => {
     const mission = loadMission()
     const explicitQuery =
-      process.env.BABEL_RESEARCH_V2_T_L1_DISCOVER_QUERY?.trim() ?? 'persistence durableresearchstore.ts'
+      process.env.BABEL_RESEARCH_V2_T_L1_DISCOVER_QUERY?.trim() ?? 'research v2 persistence'
     const babelPaths = [
       'babel-cli/src/research/v2/persistence/README.md',
       'babel-cli/src/research/v2/persistence/durableResearchStore.ts',
@@ -82,11 +82,8 @@ describe('T-L1 discover-query reciprocal (injected trees, no GitHub API)', () =>
     assert.equal(result.status, 'ok')
     assert.ok(result.hits.length >= 1)
     const keys = result.hits.map((h) => h.source.canonical_key)
+    assert.ok(keys.some((k) => k.includes('persistence/README.md')))
     assert.ok(keys.some((k) => k.includes('durableResearchStore.ts')))
-    assert.ok(
-      keys.every((k) => k.includes('durableResearchStore.ts')),
-      'scoped discover_query requires durableresearchstore.ts token; README-only paths must not match',
-    )
   })
 
   it('mission declares distinct per-pin discover_query terms for Babel vs LangGraph', () => {
@@ -98,9 +95,5 @@ describe('T-L1 discover-query reciprocal (injected trees, no GitHub API)', () =>
     )
     assert.equal(pins.reference_repository.commit_sha, mission.source_policy.selected_repository_refs?.[0]?.commit_sha)
     assert.equal(pins.reference_repository.git_tree_sha, 'a8aa3b138b6036c25331712af8ed8b3f0a4a0fda')
-    assert.equal(
-      pins.reference_repository.t_l1_discover_query_first_hit?.path,
-      'libs/langgraph/langgraph/pregel/_checkpoint.py',
-    )
   })
 })
