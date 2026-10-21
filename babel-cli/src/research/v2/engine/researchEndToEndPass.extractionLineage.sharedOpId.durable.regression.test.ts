@@ -70,7 +70,11 @@ function inlinePassage(passageId: string, text: string) {
 
 async function seedSharedOperationLineageConflict(
   store: DurableResearchStore,
-  ctx: { mission_id: string; writer_generation: number },
+  ctx: {
+    mission_id: string
+    plan_revision_id: string
+    writer_generation: number
+  },
   interleaved: boolean,
 ) {
   const orphanText = 'orphan-passage-from-failed-attempt-a'
@@ -157,7 +161,11 @@ describe('research e2e extraction lineage @ A dd544 (durable, shared operation_i
     try {
       let store = await DurableResearchStore.open(dir)
       const handle = await store.appendMission(exampleTechnicalMissionFixture)
-      const seedCtx = { ...exampleMissionWriteContext, writer_generation: handle.writer_generation }
+      const seedCtx = {
+        ...exampleMissionWriteContext,
+        writer_generation: handle.writer_generation,
+        plan_revision_id: examplePlanRevisionFixture.plan_revision_id,
+      }
       await store.appendPlanRevision(seedCtx, examplePlanRevisionFixture)
       const seeded = await seedSharedOperationLineageConflict(store, seedCtx, interleaved)
       await store.close()
