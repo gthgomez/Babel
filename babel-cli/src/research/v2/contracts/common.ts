@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { ProviderInvokeDiagnosticsSchema } from './providerInvokeDiagnostics.js'
 
 /** Opaque stable identifiers issued by the host store. */
 export const RecordIdSchema = z.string().min(1).max(128)
@@ -86,6 +87,7 @@ export const ModelRouteReceiptSchema = z
     provider_model_id: z.string().min(1),
     resolved_at: IsoDateTimeSchema,
     usage_settlement: UsageSettlementSchema,
+    provider_invoke_diagnostics: ProviderInvokeDiagnosticsSchema.optional(),
   })
   .strict()
 

@@ -3,6 +3,24 @@ import type { ResearchModelInvocationResult } from '../ports/researchModelPort.j
 import type { ResearchStore } from '../ports/researchStore.js'
 import { settleExternalOperation, unknownUsageSettlement } from './settleExternalOperation.js'
 
+function diagnosticsForResult(
+  modelResult: ResearchModelInvocationResult,
+): import('../contracts/providerInvokeDiagnostics.js').ProviderInvokeDiagnostics | undefined {
+  if (modelResult.status === 'ok') {
+    return (
+      modelResult.providerInvokeDiagnostics ?? modelResult.receipt.provider_invoke_diagnostics
+    )
+  }
+  if (
+    modelResult.status === 'failed' ||
+    modelResult.status === 'cancelled' ||
+    modelResult.status === 'uncertain'
+  ) {
+    return modelResult.providerInvokeDiagnostics
+  }
+  return undefined
+}
+
 function usageForResult(
   modelResult: ResearchModelInvocationResult,
   attemptId: string,
@@ -31,6 +49,10 @@ export async function settleModelOperation(
   completedAt: string,
 ): Promise<void> {
   const usage = usageForResult(modelResult, attemptId) ?? unknownUsageSettlement(attemptId)
+  const providerInvokeDiagnostics = diagnosticsForResult(modelResult)
+  const diagnosticsFields = providerInvokeDiagnostics
+    ? { provider_invoke_diagnostics: providerInvokeDiagnostics }
+    : {}
   if (modelResult.status === 'ok') {
     await settleExternalOperation(
       store,
@@ -38,7 +60,7 @@ export async function settleModelOperation(
       missionId,
       operationId,
       attemptId,
-      { settlement: 'succeeded', usage_settlement: usage },
+      { settlement: 'succeeded', usage_settlement: usage, ...diagnosticsFields },
       completedAt,
     )
     return
@@ -50,7 +72,7 @@ export async function settleModelOperation(
       missionId,
       operationId,
       attemptId,
-      { settlement: 'cancelled', usage_settlement: usage },
+      { settlement: 'cancelled', usage_settlement: usage, ...diagnosticsFields },
       completedAt,
     )
     return
@@ -66,6 +88,7 @@ export async function settleModelOperation(
         settlement: 'uncertain',
         usage_settlement: usage,
         message: modelResult.message,
+        ...diagnosticsFields,
       },
       completedAt,
     )
@@ -82,6 +105,7 @@ export async function settleModelOperation(
       usage_settlement: usage,
       failureCategory: modelResult.failureCategory,
       message: modelResult.message,
+      ...diagnosticsFields,
     },
     completedAt,
   )

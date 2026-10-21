@@ -1,5 +1,6 @@
 import type {
   LlmRunner,
+  ProviderInvocationCompleted,
   RunnerCallbacks,
   RunnerInvocationMetadata,
 } from '../../../runners/base.js'
@@ -8,6 +9,7 @@ import { ZodError } from 'zod'
 import type { CostProvenance } from '../contracts/common.js'
 import { modelOutputSchemaForKind, parseValidatedModelOutput } from '../contracts/modelOutputs.js'
 import { buildResearchV2StructuredModelPrompt } from './researchV2ProviderModelPrompt.js'
+import type { ProviderInvokeDiagnostics } from '../contracts/providerInvokeDiagnostics.js'
 import type {
   ModelRouteReceipt,
   ResearchModelInvocationRequest,
@@ -15,6 +17,7 @@ import type {
   ResearchModelPort,
   UsageSettlement,
 } from '../ports/researchModelPort.js'
+import { providerInvokeDiagnosticsFromCompletion } from './providerInvokeDiagnosticsFromCompletion.js'
 
 export interface ProviderResearchModelBridgeOptions {
   runner: Pick<LlmRunner, 'execute'>
@@ -72,8 +75,20 @@ function usageFromMetadata(attemptId: string, meta: RunnerInvocationMetadata | n
     attempt_id: attemptId,
     ...(meta?.prompt_tokens != null ? { input_tokens: meta.prompt_tokens } : {}),
     ...(meta?.completion_tokens != null ? { output_tokens: meta.completion_tokens } : {}),
+    ...(meta?.actual_reasoning_tokens != null
+      ? { reasoning_tokens: meta.actual_reasoning_tokens }
+      : {}),
     cost: costProvenanceFromMetadata(meta),
   }
+}
+
+function diagnosticsForRequest(
+  completion: ProviderInvocationCompleted | null,
+): ProviderInvokeDiagnostics | undefined {
+  if (!completion) {
+    return undefined
+  }
+  return providerInvokeDiagnosticsFromCompletion(completion)
 }
 
 function routeReceiptFromMetadata(
@@ -81,6 +96,7 @@ function routeReceiptFromMetadata(
   meta: RunnerInvocationMetadata | null | undefined,
   resolvedAt: string,
   configured: ProviderResearchModelBridgeOptions,
+  completion: ProviderInvocationCompleted | null,
 ): ModelRouteReceipt {
   const provider = meta?.provider ?? configured.provider
   const providerModelId = meta
@@ -90,6 +106,7 @@ function routeReceiptFromMetadata(
       meta.provider_model_id ??
       configured.providerModelId)
     : configured.providerModelId
+  const providerInvokeDiagnostics = diagnosticsForRequest(completion)
   return {
     operation_id: request.operationId,
     backend_key: configured.backendKey,
@@ -97,6 +114,7 @@ function routeReceiptFromMetadata(
     provider_model_id: providerModelId,
     resolved_at: resolvedAt,
     usage_settlement: usageFromMetadata(request.attemptId, meta),
+    ...(providerInvokeDiagnostics ? { provider_invoke_diagnostics: providerInvokeDiagnostics } : {}),
   }
 }
 
@@ -128,8 +146,10 @@ export class ProviderResearchModelBridge implements ResearchModelPort {
     const built = (this.buildPrompt ?? defaultBuildPrompt)(request)
     const { prompt, systemPrompt } = built
     let invocationMeta: RunnerInvocationMetadata | null = null
+    let invocationCompletion: ProviderInvocationCompleted | null = null
     const callbacks: RunnerCallbacks = {
       onInvocationCompleted: (event) => {
+        invocationCompletion = event
         invocationMeta = event.usage_metadata ?? null
       },
     }
@@ -146,6 +166,10 @@ export class ProviderResearchModelBridge implements ResearchModelPort {
           status: 'cancelled',
           operationId: request.operationId,
           usageSettlement: usageFromMetadata(request.attemptId, invocationMeta),
+          ...(() => {
+            const d = diagnosticsForRequest(invocationCompletion)
+            return d ? { providerInvokeDiagnostics: d } : {}
+          })(),
         }
       }
       const output = parseValidatedModelOutput(request.kind, raw)
@@ -154,15 +178,27 @@ export class ProviderResearchModelBridge implements ResearchModelPort {
           status: 'cancelled',
           operationId: request.operationId,
           usageSettlement: usageFromMetadata(request.attemptId, invocationMeta),
+          ...(() => {
+            const d = diagnosticsForRequest(invocationCompletion)
+            return d ? { providerInvokeDiagnostics: d } : {}
+          })(),
         }
       }
       const meta = invocationMeta
       const resolvedAt = new Date().toISOString()
+      const providerInvokeDiagnostics = diagnosticsForRequest(invocationCompletion)
       return {
         status: 'ok',
         operationId: request.operationId,
         output,
-        receipt: routeReceiptFromMetadata(request, meta, resolvedAt, this.options),
+        receipt: routeReceiptFromMetadata(
+          request,
+          meta,
+          resolvedAt,
+          this.options,
+          invocationCompletion,
+        ),
+        ...(providerInvokeDiagnostics ? { providerInvokeDiagnostics } : {}),
       }
     } catch (err: unknown) {
       if (request.signal.aborted) {
@@ -170,15 +206,21 @@ export class ProviderResearchModelBridge implements ResearchModelPort {
           status: 'cancelled',
           operationId: request.operationId,
           usageSettlement: usageFromMetadata(request.attemptId, invocationMeta),
+          ...(() => {
+            const d = diagnosticsForRequest(invocationCompletion)
+            return d ? { providerInvokeDiagnostics: d } : {}
+          })(),
         }
       }
       const failureCategory = modelInvokeFailureCategory(err)
+      const failureDiagnostics = diagnosticsForRequest(invocationCompletion)
       return {
         status: 'failed',
         operationId: request.operationId,
         failureCategory,
         message: err instanceof Error ? err.message : String(err),
         usageSettlement: usageFromMetadata(request.attemptId, invocationMeta),
+        ...(failureDiagnostics ? { providerInvokeDiagnostics: failureDiagnostics } : {}),
       }
     }
   }

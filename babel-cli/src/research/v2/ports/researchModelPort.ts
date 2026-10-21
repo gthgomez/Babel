@@ -1,4 +1,5 @@
 import type { ModelRouteReceiptSchema, UsageSettlementSchema } from '../contracts/common.js'
+import type { ProviderInvokeDiagnostics } from '../contracts/providerInvokeDiagnostics.js'
 import type { ResearchModelOperationKind } from '../contracts/modelOutputs.js'
 import type { z } from 'zod'
 
@@ -21,6 +22,7 @@ export type ResearchModelInvocationResult =
       operationId: string
       output: Record<string, unknown>
       receipt: ModelRouteReceipt
+      providerInvokeDiagnostics?: ProviderInvokeDiagnostics
     }
   | {
       status: 'failed'
@@ -28,17 +30,20 @@ export type ResearchModelInvocationResult =
       failureCategory: string
       message: string
       usageSettlement: UsageSettlement
+      providerInvokeDiagnostics?: ProviderInvokeDiagnostics
     }
   | {
       status: 'cancelled'
       operationId: string
       usageSettlement: UsageSettlement
+      providerInvokeDiagnostics?: ProviderInvokeDiagnostics
     }
   | {
       status: 'uncertain'
       operationId: string
       message: string
       usageSettlement: UsageSettlement
+      providerInvokeDiagnostics?: ProviderInvokeDiagnostics
     }
 
 export interface ResearchModelPort {
