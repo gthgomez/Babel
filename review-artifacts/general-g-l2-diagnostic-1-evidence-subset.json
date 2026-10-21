@@ -1,0 +1,497 @@
+{
+  "schema_version": "research-v2-evidence-subset-v1",
+  "campaign_attempt": "general-g-l2-diagnostic-1",
+  "mission_id": "mission-g-l2-general-live-diagnostic-1",
+  "provenance": {
+    "source_store_snapshot_path": "codex/runs/general-g-l2-diagnostic-1/store/research-store.snapshot.json",
+    "source_store_snapshot_sha256": "d07551a20d2bc94b5c0d1ccf9e21f4f4b297a677ec7a096c30218736fb5d0e2a",
+    "live_run_receipt": "review-artifacts/general-g-l2-diagnostic-1-live-run-receipt.json",
+    "extraction_command": "node review-artifacts/extract-general-g-l2-diagnostic-1-evidence-subset.mjs codex/runs/general-g-l2-diagnostic-1/store/research-store.snapshot.json",
+    "extracted_at": "2026-10-21T10:57:58.190Z",
+    "sanitization": "Original store fields for cited passages and final findings only; no model_invoke bodies; no credentials, HTTP headers, or provider diagnostics; semantic review rationales retained as stored (not re-run)."
+  },
+  "sources": [
+    {
+      "source_id": "web-mission-ref-6700e628c37b3bec566c",
+      "kind": "web",
+      "canonical_key": "https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Cache-Control",
+      "observed_urls": [
+        "https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Cache-Control"
+      ],
+      "title": "https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Cache-Control"
+    },
+    {
+      "source_id": "web-mission-ref-a3762b1cb2b133bbe803",
+      "kind": "web",
+      "canonical_key": "https://developers.cloudflare.com/cache/concepts/cache-control/",
+      "observed_urls": [
+        "https://developers.cloudflare.com/cache/concepts/cache-control/"
+      ],
+      "title": "https://developers.cloudflare.com/cache/concepts/cache-control/"
+    }
+  ],
+  "revisions": [
+    {
+      "revision_id": "rev-web-mission-ref-6700e628c37b3bec566c-d5b685da33a982b5",
+      "source_id": "web-mission-ref-6700e628c37b3bec566c",
+      "content_hash": "d5b685da33a982b565f6297ae10828625feefb2c806894cfe03c7ebbd2f3f15f",
+      "retrieved_at": "2026-10-21T10:52:38.164Z",
+      "extraction_version": "fetch-source-access-2",
+      "media_type": "text/html",
+      "completeness": "truncated",
+      "byte_length_received": 200000,
+      "truncation_reason": "host_byte_limit"
+    },
+    {
+      "revision_id": "rev-web-mission-ref-a3762b1cb2b133bbe803-d50c4acb0c55125a",
+      "source_id": "web-mission-ref-a3762b1cb2b133bbe803",
+      "content_hash": "d50c4acb0c55125a570e06238005e88899b5308bae2d77113c48435684333cb4",
+      "retrieved_at": "2026-10-21T10:52:38.259Z",
+      "extraction_version": "fetch-source-access-2",
+      "media_type": "text/html",
+      "completeness": "complete",
+      "byte_length_received": 163777
+    }
+  ],
+  "passages": [
+    {
+      "passage_id": "cli-run-fetch-wg1-b982cb0c--web-ref-0:html:0",
+      "source_revision_id": "rev-web-mission-ref-6700e628c37b3bec566c-d5b685da33a982b5",
+      "locator": {
+        "kind": "section",
+        "section_id": "cache-control-header"
+      },
+      "heading_path": [
+        "Cache-Control header"
+      ],
+      "text_ref": {
+        "mode": "inline",
+        "text": "Baseline Widely available This feature is well established and works across many devices and browser versions. It’s been available across browsers since July 2015. See full compatibility Learn more The HTTP Cache-Control header holds directives (instructions) in both requests and responses that control caching in browsers and shared caches (e.g., Proxies, CDNs). Header type Request header , Response header Forbidden request header No CORS-safelisted response header Yes",
+        "text_hash": "3b4e9bd69a45996e56d835fba8f53d5f59d96175872a2747529e8f11ea050473"
+      },
+      "extraction_notes": [
+        "heading_level:1",
+        "static_html_extractor"
+      ]
+    },
+    {
+      "passage_id": "cli-run-fetch-wg1-b982cb0c--web-ref-0:html:1",
+      "source_revision_id": "rev-web-mission-ref-6700e628c37b3bec566c-d5b685da33a982b5",
+      "locator": {
+        "kind": "section",
+        "section_id": "in-this-article"
+      },
+      "heading_path": [
+        "In this article"
+      ],
+      "text_ref": {
+        "mode": "inline",
+        "text": "Syntax Vocabulary Directives Use Cases Specifications Browser compatibility See also",
+        "text_hash": "15656ba3053ebd6f92b8a0b1ac13a06866103268453fd1c977f63653e55e3a4a"
+      },
+      "extraction_notes": [
+        "heading_level:2",
+        "static_html_extractor"
+      ]
+    },
+    {
+      "passage_id": "cli-run-fetch-wg1-b982cb0c--web-ref-1:html:1",
+      "source_revision_id": "rev-web-mission-ref-a3762b1cb2b133bbe803-d50c4acb0c55125a",
+      "locator": {
+        "kind": "section",
+        "section_id": "cacheability"
+      },
+      "heading_path": [
+        "Cacheability"
+      ],
+      "text_ref": {
+        "mode": "inline",
+        "text": "Cacheability refers to whether or not a resource should enter a cache, and the directives below indicate a resource's cacheability. public — Indicates any cache may store the response, even if the response is normally non-cacheable or cacheable only within a private cache. private — Indicates the response message is intended for a single user, such as a browser cache, and must not be stored by a shared cache like Cloudflare or a corporate proxy. no-store — Indicates any cache, such as a client or proxy cache, must not store any part of either the immediate request or response.",
+        "text_hash": "39b4caacc6e63dcf5ab1b6f882631e0574362f03d71f5eaaa1641ce938a3bcf7"
+      },
+      "extraction_notes": [
+        "heading_level:3",
+        "static_html_extractor"
+      ]
+    },
+    {
+      "passage_id": "cli-run-fetch-wg1-b982cb0c--web-ref-1:html:12",
+      "source_revision_id": "rev-web-mission-ref-a3762b1cb2b133bbe803-d50c4acb0c55125a",
+      "locator": {
+        "kind": "section",
+        "section_id": "browser-cache-ttl"
+      },
+      "heading_path": [
+        "Browser Cache TTL"
+      ],
+      "text_ref": {
+        "mode": "inline",
+        "text": "Browser Cache TTL Cache Rules override max-age settings passed downstream from our edge, typically to your visitor's browsers.",
+        "text_hash": "132b1aa0f03b0c4b47e41d4e2cce938d168d4920bcca723e50e8cabbc3a786a0"
+      },
+      "extraction_notes": [
+        "heading_level:3",
+        "static_html_extractor"
+      ]
+    },
+    {
+      "passage_id": "cli-run-fetch-wg1-b982cb0c--web-ref-1:html:2",
+      "source_revision_id": "rev-web-mission-ref-a3762b1cb2b133bbe803-d50c4acb0c55125a",
+      "locator": {
+        "kind": "section",
+        "section_id": "expiration"
+      },
+      "heading_path": [
+        "Expiration"
+      ],
+      "text_ref": {
+        "mode": "inline",
+        "text": "Expiration refers to how long a resource should remain in the cache, and the directives below affect how long a resource stays in the cache. Note Cloudflare respects whichever value is higher: the Browser Cache TTL in Cloudflare or the max-age header. You can also simultaneously specify a Cloudflare Edge Cache TTL different than a Browser's Cache TTL respectively via the s-maxage and max-age Cache-Control headers. When using Origin Cache Control and setting max-age=0 , Cloudflare prefers to cache and revalidate. With Origin Cache Control off and max-age=0 , Cloudflare will bypass cache. When setting no-cache with Origin Cache Control off, Cloudflare does not cache. When setting no-cache with Origin Cache Control on, Cloudflare caches and always revalidates. max-age=seconds — Indicates the response is stale after its age is greater than the specified number of seconds. Age is defined as the time in seconds since the asset was served from the origin server. The seconds argument is an unquoted integer. s-maxage=seconds — Indicates that in shared caches, the maximum age specified by this directive overrides the maximum age specified by either the max-age directive or the Expires header field. The s-maxage directive also implies the semantics of the proxy-revalidate response directive. Browsers ignore s-maxage . `s-maxage` disables `stale-while-revalidate` Per RFC 9111 ↗︎ , s-maxage incorporates the semantics of proxy-revalidate , which means a shared cache must not serve stale content without first revalidating with the origin. For a complete list of directives that disable stale-while-revalidate and workarounds, refer to Controlling stale behavior . no-cache — Indicates the response cannot be used to satisfy a subsequent request without successful validation on the origin server. This allows an origin server to prevent a cache from using the origin to satisfy a request without contacting it, even by caches that have been configured to send stale responses. Ensure the HTTP Expires header is set in your origin server to use Greenwich Mean Time (GMT) as stipulated in RFC 2616 ↗︎ .",
+        "text_hash": "f5a7d8090c926565a7e40b84f9f10b12e2c0ba04ae9d1ec73dad71f8f995d6b1"
+      },
+      "extraction_notes": [
+        "heading_level:3",
+        "static_html_extractor"
+      ]
+    },
+    {
+      "passage_id": "cli-run-fetch-wg1-b982cb0c--web-ref-1:html:4",
+      "source_revision_id": "rev-web-mission-ref-a3762b1cb2b133bbe803-d50c4acb0c55125a",
+      "locator": {
+        "kind": "section",
+        "section_id": "other"
+      },
+      "heading_path": [
+        "Other"
+      ],
+      "text_ref": {
+        "mode": "inline",
+        "text": "Additional directives that influence cache behavior are listed below. no-transform — Indicates that an intermediary — regardless of whether it implements a cache — must not transform the payload. vary — By default, Cloudflare does not consider vary values in caching decisions. Vary values are respected when you configure the Cache Rules Vary setting , when Vary for images is configured, and when the vary header is vary: accept-encoding . immutable — Indicates to clients the response body does not change over time. The resource, if unexpired, is unchanged on the server. The user should not send a conditional revalidation request, such as If-None-Match or If-Modified-Since , to check for updates, even when the user explicitly refreshes the page. This directive has no effect on public caches like Cloudflare, but does change browser behavior.",
+        "text_hash": "b72562823e0b32464f35250c4a6864fab990dc8f1e2ebe6a354815e7cbc14928"
+      },
+      "extraction_notes": [
+        "heading_level:3",
+        "static_html_extractor"
+      ]
+    },
+    {
+      "passage_id": "cli-run-fetch-wg1-b982cb0c--web-ref-1:html:9",
+      "source_revision_id": "rev-web-mission-ref-a3762b1cb2b133bbe803-d50c4acb0c55125a",
+      "locator": {
+        "kind": "section",
+        "section_id": "examples"
+      },
+      "heading_path": [
+        "Examples"
+      ],
+      "text_ref": {
+        "mode": "inline",
+        "text": "Review the examples below to learn which directives to use with the Cache-Control header to control specific caching behavior. Cache a static asset. Cache-Control: public, max-age=86400 Ensure a secret asset is never cached. Cache-Control: no-store Cache assets on browsers but not on proxy cache. Cache-Control: private, max-age=3600 Cache assets in client and proxy caches, but prefer revalidation when serve. Cache-Control: public, no-cache Cache assets in proxy caches but REQUIRE revalidation by the proxy when serve. Cache-Control: public, no-cache, proxy-revalidate or Cache-Control: public, s-maxage=0 Cache assets in proxy caches, but REQUIRE revalidation by any cache when serve. Cache-Control: public, no-cache, must-revalidate Cache assets, but ensure the proxy does not modify it. Cache-Control: public, no-transform This configuration also disables transformation like gzip or brotli compression from our edge to your visitors if the original payload was served uncompressed. Cache assets with revalidation, but allow stale responses if origin server is unreachable. Cache-Control: public, max-age=3600, stale-if-error=60 With this configuration, Cloudflare attempts to revalidate the content with the origin server after it has been in cache for 3600 seconds (one hour). If the server returns an error instead of proper revalidation responses, Cloudflare continues serving the stale resource for a total of one minute beyond the expiration of the resource. Cache assets for different amounts of time on Cloudflare and in visitor browsers. Cache-Control: public, max-age=7200, s-maxage=3600 Cache an asset and serve while asset is being revalidated. Cache-Control: max-age=600, stale-while-revalidate=30 This configuration indicates the asset is fresh for 600 seconds. The asset can be served stale for up to an additional 30 seconds while Cloudflare revalidates the asset with the origin in the background. For more information, refer to Revalidation . Note Do not use s-maxage with stale-while-revalidate . The s-maxage directive implies proxy-revalidate , which prevents shared caches from serving stale content. For workarounds, refer to Controlling stale behavior .",
+        "text_hash": "2980fd181e1d6e9ac545cdb11a1b0affb72a817aab3ca77e7d5c039792879e6d"
+      },
+      "extraction_notes": [
+        "heading_level:2",
+        "static_html_extractor"
+      ]
+    }
+  ],
+  "findings": [
+    {
+      "finding_id": "finding-076d6c363b663797e6cccb19",
+      "question_id": "q-plan-136a705e-a33b-45c8-9c3f-e97b9bc7eab1-3",
+      "assertion_text": "Cloudflare says private indicates the response is intended for a single user, such as a browser cache, and must not be stored by a shared cache like Cloudflare or a corporate proxy, while public indicates any cache may store the response.",
+      "assertion_kind": "vendor_reported_result",
+      "passage_ids": [
+        "cli-run-fetch-wg1-b982cb0c--web-ref-1:html:1"
+      ],
+      "source_integrity": "not_checked",
+      "created_at": "2026-10-21T10:53:15.849Z",
+      "semantic_support": {
+        "status": "supported",
+        "reviewer": "research-v2-semantic-review",
+        "reviewer_version": "0.1.0-offline",
+        "rationale": "The Cloudflare cacheability passage explicitly defines public and private, including that private responses are for a single user such as a browser cache and must not be stored by shared caches like Cloudflare, matching the assertion.",
+        "reviewed_at": "2026-10-21T10:53:36.524Z"
+      },
+      "question_coverage": {
+        "status": "partial",
+        "reviewer": "research-v2-semantic-review",
+        "reviewer_version": "0.1.0-question-coverage",
+        "rationale": "The Cloudflare cacheability passage explicitly defines public and private, including that private responses are for a single user such as a browser cache and must not be stored by shared caches like Cloudflare, matching the assertion.",
+        "reviewed_at": "2026-10-21T10:53:36.524Z"
+      },
+      "revised_at": "2026-10-21T10:53:36.524Z"
+    },
+    {
+      "finding_id": "finding-0f7b8dcf4a296b8d779ca65f",
+      "question_id": "q-plan-136a705e-a33b-45c8-9c3f-e97b9bc7eab1-2",
+      "assertion_text": "Cloudflare's examples include caching a static asset with 'Cache-Control: public, max-age=86400' and caching assets in browsers but not proxy caches with 'Cache-Control: private, max-age=3600'.",
+      "assertion_kind": "vendor_reported_result",
+      "passage_ids": [
+        "cli-run-fetch-wg1-b982cb0c--web-ref-1:html:9"
+      ],
+      "source_integrity": "not_checked",
+      "created_at": "2026-10-21T10:53:15.849Z",
+      "semantic_support": {
+        "status": "supported",
+        "reviewer": "research-v2-semantic-review",
+        "reviewer_version": "0.1.0-offline",
+        "rationale": "The Cloudflare examples include 'Cache-Control: public, max-age=86400' for a static asset and 'Cache-Control: private, max-age=3600' for caching in browsers but not proxy caches, directly supporting the assertion.",
+        "reviewed_at": "2026-10-21T10:53:36.524Z"
+      },
+      "question_coverage": {
+        "status": "partial",
+        "reviewer": "research-v2-semantic-review",
+        "reviewer_version": "0.1.0-question-coverage",
+        "rationale": "The Cloudflare examples include 'Cache-Control: public, max-age=86400' for a static asset and 'Cache-Control: private, max-age=3600' for caching in browsers but not proxy caches, directly supporting the assertion.",
+        "reviewed_at": "2026-10-21T10:53:36.524Z"
+      },
+      "revised_at": "2026-10-21T10:53:36.524Z"
+    },
+    {
+      "finding_id": "finding-22b46df42ae4bc46fb329782",
+      "question_id": "q-plan-136a705e-a33b-45c8-9c3f-e97b9bc7eab1-2",
+      "assertion_text": "Cloudflare defines max-age=seconds as indicating that the response is stale after its age is greater than the specified number of seconds, where age is measured from when the asset was served from the origin server.",
+      "assertion_kind": "vendor_reported_result",
+      "passage_ids": [
+        "cli-run-fetch-wg1-b982cb0c--web-ref-1:html:2"
+      ],
+      "source_integrity": "not_checked",
+      "created_at": "2026-10-21T10:53:15.849Z",
+      "semantic_support": {
+        "status": "supported",
+        "reviewer": "research-v2-semantic-review",
+        "reviewer_version": "0.1.0-offline",
+        "rationale": "The Cloudflare passage defines max-age=seconds and states that age is measured from when the asset was served from the origin server, exactly supporting the assertion. The assertion does not address the browser vs edge/CDN framing part of the question.",
+        "reviewed_at": "2026-10-21T10:53:36.524Z"
+      },
+      "question_coverage": {
+        "status": "partial",
+        "reviewer": "research-v2-semantic-review",
+        "reviewer_version": "0.1.0-question-coverage",
+        "rationale": "The Cloudflare passage defines max-age=seconds and states that age is measured from when the asset was served from the origin server, exactly supporting the assertion. The assertion does not address the browser vs edge/CDN framing part of the question.",
+        "reviewed_at": "2026-10-21T10:53:36.524Z"
+      },
+      "revised_at": "2026-10-21T10:53:36.524Z"
+    },
+    {
+      "finding_id": "finding-412bb3d959dcdfbf8a72a12e",
+      "question_id": "q-plan-136a705e-a33b-45c8-9c3f-e97b9bc7eab1-2",
+      "assertion_text": "Cloudflare frames max-age guidance for both CDN/shared caches and browser caches: s-maxage overrides max-age in shared caches, browsers ignore s-maxage, and Browser Cache TTL rules override max-age passed downstream to visitors' browsers.",
+      "assertion_kind": "vendor_reported_result",
+      "passage_ids": [
+        "cli-run-fetch-wg1-b982cb0c--web-ref-1:html:2",
+        "cli-run-fetch-wg1-b982cb0c--web-ref-1:html:12"
+      ],
+      "source_integrity": "not_checked",
+      "created_at": "2026-10-21T10:53:15.849Z",
+      "semantic_support": {
+        "status": "supported",
+        "reviewer": "research-v2-semantic-review",
+        "reviewer_version": "0.1.0-offline",
+        "rationale": "The cited Cloudflare passages confirm that s-maxage overrides max-age in shared caches, browsers ignore s-maxage, and Browser Cache TTL settings override max-age passed to browsers, directly supporting the framing claim.",
+        "reviewed_at": "2026-10-21T10:53:36.524Z"
+      },
+      "question_coverage": {
+        "status": "answers",
+        "reviewer": "research-v2-semantic-review",
+        "reviewer_version": "0.1.0-question-coverage",
+        "rationale": "The cited Cloudflare passages confirm that s-maxage overrides max-age in shared caches, browsers ignore s-maxage, and Browser Cache TTL settings override max-age passed to browsers, directly supporting the framing claim.",
+        "reviewed_at": "2026-10-21T10:53:36.524Z"
+      },
+      "revised_at": "2026-10-21T10:53:36.524Z"
+    },
+    {
+      "finding_id": "finding-6cd87e048669f9bc9eddda24",
+      "question_id": "q-plan-136a705e-a33b-45c8-9c3f-e97b9bc7eab1-1",
+      "assertion_text": "MDN states that the HTTP Cache-Control header holds directives that control caching in browsers and shared caches, with shared caches identified as proxies and CDNs.",
+      "assertion_kind": "source_observation",
+      "passage_ids": [
+        "cli-run-fetch-wg1-b982cb0c--web-ref-0:html:0"
+      ],
+      "source_integrity": "not_checked",
+      "created_at": "2026-10-21T10:53:15.849Z",
+      "semantic_support": {
+        "status": "supported",
+        "reviewer": "research-v2-semantic-review",
+        "reviewer_version": "0.1.0-offline",
+        "rationale": "The cited MDN passage directly states that Cache-Control holds directives controlling caching in browsers and shared caches (e.g., proxies, CDNs), matching the assertion. It addresses the audience/scope portion but not the requested specific max-age guidance.",
+        "reviewed_at": "2026-10-21T10:53:36.524Z"
+      },
+      "question_coverage": {
+        "status": "partial",
+        "reviewer": "research-v2-semantic-review",
+        "reviewer_version": "0.1.0-question-coverage",
+        "rationale": "The cited MDN passage directly states that Cache-Control holds directives controlling caching in browsers and shared caches (e.g., proxies, CDNs), matching the assertion. It addresses the audience/scope portion but not the requested specific max-age guidance.",
+        "reviewed_at": "2026-10-21T10:53:36.524Z"
+      },
+      "revised_at": "2026-10-21T10:53:36.524Z"
+    },
+    {
+      "finding_id": "finding-7f3b2733cd9d640be75867f5",
+      "question_id": "q-plan-136a705e-a33b-45c8-9c3f-e97b9bc7eab1-3",
+      "assertion_text": "MDN and Cloudflare both describe Cache-Control as affecting browsers and shared caches, but Cloudflare's documentation gives concrete max-age semantics and separate edge/browser configuration, while the available MDN excerpt is a general header reference without a static-asset max-age recommendation.",
+      "assertion_kind": "inference",
+      "passage_ids": [
+        "cli-run-fetch-wg1-b982cb0c--web-ref-0:html:0",
+        "cli-run-fetch-wg1-b982cb0c--web-ref-1:html:2",
+        "cli-run-fetch-wg1-b982cb0c--web-ref-1:html:9"
+      ],
+      "source_integrity": "not_checked",
+      "created_at": "2026-10-21T10:53:15.849Z",
+      "semantic_support": {
+        "status": "supported",
+        "reviewer": "research-v2-semantic-review",
+        "reviewer_version": "0.1.0-offline",
+        "rationale": "MDN's overview describes Cache-Control as affecting browsers and shared caches, while the Cloudflare passages provide concrete max-age semantics, edge/browser-TTL distinctions, and examples; the available MDN excerpt contains no static-asset max-age recommendation. This directly addresses comparison dimensions.",
+        "reviewed_at": "2026-10-21T10:53:36.524Z"
+      },
+      "question_coverage": {
+        "status": "answers",
+        "reviewer": "research-v2-semantic-review",
+        "reviewer_version": "0.1.0-question-coverage",
+        "rationale": "MDN's overview describes Cache-Control as affecting browsers and shared caches, while the Cloudflare passages provide concrete max-age semantics, edge/browser-TTL distinctions, and examples; the available MDN excerpt contains no static-asset max-age recommendation. This directly addresses comparison dimensions.",
+        "reviewed_at": "2026-10-21T10:53:36.524Z"
+      },
+      "revised_at": "2026-10-21T10:53:36.524Z"
+    },
+    {
+      "finding_id": "finding-a0cf246d49ce566335d79122",
+      "question_id": "q-plan-136a705e-a33b-45c8-9c3f-e97b9bc7eab1-4",
+      "assertion_text": "The MDN audience claim is supported by the Cache-Control overview (web-ref-0 html:0), and Cloudflare's max-age and browser/CDN-role claims are supported by the Cacheability, Expiration, and Examples sections (web-ref-1 html:1, html:2, and html:9).",
+      "assertion_kind": "inference",
+      "passage_ids": [
+        "cli-run-fetch-wg1-b982cb0c--web-ref-0:html:0",
+        "cli-run-fetch-wg1-b982cb0c--web-ref-1:html:1",
+        "cli-run-fetch-wg1-b982cb0c--web-ref-1:html:2",
+        "cli-run-fetch-wg1-b982cb0c--web-ref-1:html:9"
+      ],
+      "source_integrity": "not_checked",
+      "created_at": "2026-10-21T10:53:15.849Z",
+      "semantic_support": {
+        "status": "supported",
+        "reviewer": "research-v2-semantic-review",
+        "reviewer_version": "0.1.0-offline",
+        "rationale": "The cited MDN html:0 passage supports the audience claim, and Cloudflare html:1, html:2, and html:9 support max-age and browser/CDN-role claims, matching the assertion about which excerpts can be cited.",
+        "reviewed_at": "2026-10-21T10:53:36.524Z"
+      },
+      "question_coverage": {
+        "status": "answers",
+        "reviewer": "research-v2-semantic-review",
+        "reviewer_version": "0.1.0-question-coverage",
+        "rationale": "The cited MDN html:0 passage supports the audience claim, and Cloudflare html:1, html:2, and html:9 support max-age and browser/CDN-role claims, matching the assertion about which excerpts can be cited.",
+        "reviewed_at": "2026-10-21T10:53:36.524Z"
+      },
+      "revised_at": "2026-10-21T10:53:36.524Z"
+    },
+    {
+      "finding_id": "finding-b5b97f65b91da274ef9406f3",
+      "question_id": "q-plan-136a705e-a33b-45c8-9c3f-e97b9bc7eab1-3",
+      "assertion_text": "Cloudflare explicitly separates browser from edge/CDN roles: immutable has no effect on public caches like Cloudflare but changes browser behavior, and s-maxage implies proxy-revalidate so shared caches must revalidate while browsers ignore s-maxage.",
+      "assertion_kind": "vendor_reported_result",
+      "passage_ids": [
+        "cli-run-fetch-wg1-b982cb0c--web-ref-1:html:4",
+        "cli-run-fetch-wg1-b982cb0c--web-ref-1:html:2"
+      ],
+      "source_integrity": "not_checked",
+      "created_at": "2026-10-21T10:53:15.849Z",
+      "semantic_support": {
+        "status": "supported",
+        "reviewer": "research-v2-semantic-review",
+        "reviewer_version": "0.1.0-offline",
+        "rationale": "The cited passages state that immutable has no effect on public caches like Cloudflare but changes browser behavior, and that s-maxage implies proxy-revalidate while browsers ignore s-maxage, supporting the browser/edge role separation claim.",
+        "reviewed_at": "2026-10-21T10:53:36.524Z"
+      },
+      "question_coverage": {
+        "status": "partial",
+        "reviewer": "research-v2-semantic-review",
+        "reviewer_version": "0.1.0-question-coverage",
+        "rationale": "The cited passages state that immutable has no effect on public caches like Cloudflare but changes browser behavior, and that s-maxage implies proxy-revalidate while browsers ignore s-maxage, supporting the browser/edge role separation claim.",
+        "reviewed_at": "2026-10-21T10:53:36.524Z"
+      },
+      "revised_at": "2026-10-21T10:53:36.524Z"
+    },
+    {
+      "finding_id": "finding-e942aee2bdcdececc51120c1",
+      "question_id": "q-plan-136a705e-a33b-45c8-9c3f-e97b9bc7eab1-1",
+      "assertion_text": "The available MDN excerpt does not specify a recommended max-age value or a concrete Cache-Control example for browser-facing static assets; it provides an overview of Cache-Control syntax and directives.",
+      "assertion_kind": "inference",
+      "passage_ids": [
+        "cli-run-fetch-wg1-b982cb0c--web-ref-0:html:0",
+        "cli-run-fetch-wg1-b982cb0c--web-ref-0:html:1"
+      ],
+      "source_integrity": "not_checked",
+      "created_at": "2026-10-21T10:53:15.849Z",
+      "semantic_support": {
+        "status": "supported",
+        "reviewer": "research-v2-semantic-review",
+        "reviewer_version": "0.1.0-offline",
+        "rationale": "The cited MDN excerpts contain only the header overview and section navigation; they do not give a max-age value or a concrete static-asset example, so the assertion about the excerpt lacking such guidance is accurate.",
+        "reviewed_at": "2026-10-21T10:53:36.524Z"
+      },
+      "question_coverage": {
+        "status": "partial",
+        "reviewer": "research-v2-semantic-review",
+        "reviewer_version": "0.1.0-question-coverage",
+        "rationale": "The cited MDN excerpts contain only the header overview and section navigation; they do not give a max-age value or a concrete static-asset example, so the assertion about the excerpt lacking such guidance is accurate.",
+        "reviewed_at": "2026-10-21T10:53:36.524Z"
+      },
+      "revised_at": "2026-10-21T10:53:36.524Z"
+    }
+  ],
+  "terminal_report": {
+    "mission_id": "mission-g-l2-general-live-diagnostic-1",
+    "plan_revision_id": "plan-136a705e-a33b-45c8-9c3f-e97b9bc7eab1",
+    "terminal_state": "partial",
+    "answer_summary": "[supported:finding-6cd87e048669f9bc9eddda24] MDN states that the HTTP Cache-Control header holds directives that control caching in browsers and shared caches, with shared caches identified as proxies and CDNs. (passages: cli-run-fetch-wg1-b982cb0c--web-ref-0:html:0) [supported:finding-e942aee2bdcdececc51120c1] The available MDN excerpt does not specify a recommended max-age value or a concrete Cache-Control example for browser-facing static assets; it provides an overview of Cache-Control syntax and directives. (passages: cli-run-fetch-wg1-b982cb0c--web-ref-0:html:0,cli-run-fetch-wg1-b982cb0c--web-ref-0:html:1) [supported:finding-22b46df42ae4bc46fb329782] Cloudflare defines max-age=seconds as indicating that the response is stale after its age is greater than the specified number of seconds, where age is measured from when the asset was served from the origin server. (passages: cli-run-fetch-wg1-b982cb0c--web-ref-1:html:2) [supported:finding-0f7b8dcf4a296b8d779ca65f] Cloudflare's examples include caching a static asset with 'Cache-Control: public, max-age=86400' and caching assets in browsers but not proxy caches with 'Cache-Control: private, max-age=3600'. (passages: cli-run-fetch-wg1-b982cb0c--web-ref-1:html:9) [supported:finding-412bb3d959dcdfbf8a72a12e] Cloudflare frames max-age guidance for both CDN/shared caches and browser caches: s-maxage overrides max-age in shared caches, browsers ignore s-maxage, and Browser Cache TTL rules override max-age passed downstream to visitors' browsers. (passages: cli-run-fetch-wg1-b982cb0c--web-ref-1:html:2,cli-run-fetch-wg1-b982cb0c--web-ref-1:html:12) [supported:finding-076d6c363b663797e6cccb19] Cloudflare says private indicates the response is intended for a single user, such as a browser cache, and must not be stored by a shared cache like Cloudflare or a corporate proxy, while public indicates any cache may store the response. (passages: cli-run-fetch-wg1-b982cb0c--web-ref-1:html:1) [supported:finding-b5b97f65b91da274ef9406f3] Cloudflare explicitly separates browser from edge/CDN roles: immutable has no effect on public caches like Cloudflare but changes browser behavior, and s-maxage implies proxy-revalidate so shared caches must revalidate while browsers ignore s-maxage. (passages: cli-run-fetch-wg1-b982cb0c--web-ref-1:html:4,cli-run-fetch-wg1-b982cb0c--web-ref-1:html:2) [supported:finding-7f3b2733cd9d640be75867f5] MDN and Cloudflare both describe Cache-Control as affecting browsers and shared caches, but Cloudflare's documentation gives concrete max-age semantics and separate edge/browser configuration, while the available MDN excerpt is a general header reference without a static-asset max-age recommendation. (passages: cli-run-fetch-wg1-b982cb0c--web-ref-0:html:0,cli-run-fetch-wg1-b982cb0c--web-ref-1:html:2,cli-run-fetch-wg1-b982cb0c--web-ref-1:html:9) [supported:finding-a0cf246d49ce566335d79122] The MDN audience claim is supported by the Cache-Control overview (web-ref-0 html:0), and Cloudflare's max-age and browser/CDN-role claims are supported by the Cacheability, Expiration, and Examples sections (web-ref-1 html:1, html:2, and html:9). (passages: cli-run-fetch-wg1-b982cb0c--web-ref-0:html:0,cli-run-fetch-wg1-b982cb0c--web-ref-1:html:1,cli-run-fetch-wg1-b982cb0c--web-ref-1:html:2,cli-run-fetch-wg1-b982cb0c--web-ref-1:html:9)",
+    "unanswered_questions": [
+      "q-plan-136a705e-a33b-45c8-9c3f-e97b9bc7eab1-1"
+    ],
+    "coverage_notes": "answer_summary lists only semantically supported findings with explicit finding_id bindings; unanswered_questions requires question_coverage answers on a supported finding (passage support or question_id membership alone is insufficient; partial/tangential coverage remains unanswered).",
+    "limitations": [
+      "source_revision_truncated:host_byte_limit:bytes_received=200000:retrieved_at=2026-10-21T10:52:38.164Z",
+      "finding_source_integrity_not_verified:finding-6cd87e048669f9bc9eddda24:not_checked",
+      "finding_source_integrity_not_verified:finding-e942aee2bdcdececc51120c1:not_checked",
+      "finding_source_integrity_not_verified:finding-22b46df42ae4bc46fb329782:not_checked",
+      "finding_source_integrity_not_verified:finding-0f7b8dcf4a296b8d779ca65f:not_checked",
+      "finding_source_integrity_not_verified:finding-412bb3d959dcdfbf8a72a12e:not_checked",
+      "finding_source_integrity_not_verified:finding-076d6c363b663797e6cccb19:not_checked",
+      "finding_source_integrity_not_verified:finding-b5b97f65b91da274ef9406f3:not_checked",
+      "finding_source_integrity_not_verified:finding-7f3b2733cd9d640be75867f5:not_checked",
+      "finding_source_integrity_not_verified:finding-a0cf246d49ce566335d79122:not_checked",
+      "question_coverage_partial:q-plan-136a705e-a33b-45c8-9c3f-e97b9bc7eab1-1:finding-6cd87e048669f9bc9eddda24",
+      "question_coverage_partial:q-plan-136a705e-a33b-45c8-9c3f-e97b9bc7eab1-1:finding-e942aee2bdcdececc51120c1",
+      "question_coverage_partial:q-plan-136a705e-a33b-45c8-9c3f-e97b9bc7eab1-2:finding-22b46df42ae4bc46fb329782",
+      "question_coverage_partial:q-plan-136a705e-a33b-45c8-9c3f-e97b9bc7eab1-2:finding-0f7b8dcf4a296b8d779ca65f",
+      "question_coverage_partial:q-plan-136a705e-a33b-45c8-9c3f-e97b9bc7eab1-3:finding-076d6c363b663797e6cccb19",
+      "question_coverage_partial:q-plan-136a705e-a33b-45c8-9c3f-e97b9bc7eab1-3:finding-b5b97f65b91da274ef9406f3",
+      "unverified_model_synthesis_excluded: MDN's Cache-Control documentation is a general header reference covering browsers and shared caches (proxies/CDNs) but does not recommend a specific max-age for browser-facing static assets. Cloudflare's documentation provides concrete max-",
+      "unverified_model_stopping_prose_excluded: complete",
+      "offline_or_governed_sources_only"
+    ],
+    "source_cutoff": "2026-10-21T10:52:38.259Z",
+    "acceptance_state": "host_admitted_model_synthesis",
+    "stopping_reason": "single_pass_host_finalization;unanswered_plan_questions=1;acquisition_or_extraction_limits_recorded;evidence_verification_limits_recorded",
+    "finding_ids": [
+      "finding-6cd87e048669f9bc9eddda24",
+      "finding-e942aee2bdcdececc51120c1",
+      "finding-22b46df42ae4bc46fb329782",
+      "finding-0f7b8dcf4a296b8d779ca65f",
+      "finding-412bb3d959dcdfbf8a72a12e",
+      "finding-076d6c363b663797e6cccb19",
+      "finding-b5b97f65b91da274ef9406f3",
+      "finding-7f3b2733cd9d640be75867f5",
+      "finding-a0cf246d49ce566335d79122"
+    ],
+    "citation_passage_ids": [
+      "cli-run-fetch-wg1-b982cb0c--web-ref-0:html:0",
+      "cli-run-fetch-wg1-b982cb0c--web-ref-0:html:1",
+      "cli-run-fetch-wg1-b982cb0c--web-ref-1:html:2",
+      "cli-run-fetch-wg1-b982cb0c--web-ref-1:html:9",
+      "cli-run-fetch-wg1-b982cb0c--web-ref-1:html:12",
+      "cli-run-fetch-wg1-b982cb0c--web-ref-1:html:1",
+      "cli-run-fetch-wg1-b982cb0c--web-ref-1:html:4"
+    ],
+    "generated_at": "2026-10-21T10:53:39.741Z"
+  }
+}

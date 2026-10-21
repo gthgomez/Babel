@@ -18,6 +18,10 @@ describe('G-L3 campaign mission fixture', () => {
     const domains = mission.source_policy.allowed_web_domains ?? []
     assert.ok(domains.includes('www.python.org'))
     assert.ok(domains.includes('docs.python.org'))
+    assert.deepEqual(mission.source_policy.selected_web_refs, [
+      'https://www.python.org/downloads/',
+      'https://docs.python.org/devguide/status.html',
+    ])
     assert.deepEqual(outcomes.acceptance_scenario, 'G-L3')
     assert.ok(outcomes.structural.must_allow_terminal_partial_on_insufficient_or_contradicted)
     assert.ok(outcomes.structural.requires_two_distinct_canonical_pages)
