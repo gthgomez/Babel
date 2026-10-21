@@ -75,3 +75,8 @@ Complete terminal state is reachable only when **all existing gates** genuinely 
 19. Duplicate `passage_id` across different fetch attempts — selection must not reuse another attempt’s receipt.
 
 **C:** source-only live diagnostic remains parent/C-owned after review; not executed here.
+
+### Substitution policy
+
+- No `skip`, no-op, or `not_checked` substitutions masquerading as acceptance.
+- Files labeled **PREP** / `preparation_not_acceptance` are planning and guards only until B lands real reciprocal tests on A’s published API.

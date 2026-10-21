@@ -1,9 +1,5 @@
-<<<<<<< HEAD
 import { EXA_LITE_SEARCH_PROVIDER_ID, resolveProductionSearchProviderId } from '../access/babelConfiguredWebSearch.js'
 import { exaApiKeyConfigured } from '../access/exaLiteSearchCredentials.js'
-=======
-import { resolveProductionSearchProviderId } from '../access/babelConfiguredWebSearch.js'
->>>>>>> origin/pr-406-head
 import type { ResearchMissionV2 } from '../contracts/mission.js'
 import { getProviderCredentialStatus } from '../../../runners/credentialHub.js'
 import {
@@ -69,12 +65,9 @@ export function evaluateResearchV2CampaignPreflightReadiness(
   if (!searchProviderId) {
     failures.push('unsupported_or_null_search_provider')
   }
-<<<<<<< HEAD
   if (searchProviderId === EXA_LITE_SEARCH_PROVIDER_ID && !exaApiKeyConfigured(env)) {
     failures.push('exa_api_key_not_configured')
   }
-=======
->>>>>>> origin/pr-406-head
 
   let missionModelRouteMatchesEffective = false
   try {

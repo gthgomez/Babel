@@ -29,5 +29,7 @@
     "new_verification": "only_in_separately_labeled_deterministic_replay"
   },
   "acceptance_test_matrix_ref": "review-artifacts/b-passage-integrity-verification-acceptance-prep.md",
+  "substitution_policy": "no_skip_noop_not_checked_as_acceptance; prep_not_implemented_acceptance",
+  "live_diagnostic": "source_only_C_owned_after_parent_review_not_executed",
   "implemented_on_branch": false
 }
