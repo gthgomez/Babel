@@ -26,6 +26,7 @@ import {
   technicalRepositoryCorpusFinalUrl,
 } from '../fixtures/technicalRepositoryCorpus.js'
 import { finalizeCancelledOwnerRunAndClose } from '../engine/ownerSessionCancellationFinalize.js'
+import { finalizeFailedOwnerResearchPass } from '../engine/finalizeFailedOwnerResearchPass.js'
 import { fixtureModelForOfflineRun } from './researchV2FixtureRunModel.js'
 
 export interface ResearchV2MissionRunResult {
@@ -191,42 +192,61 @@ export async function runResearchV2EnginePassOnOwner(options: {
     options.planRevisionId ?? (injectedOffline ? 'plan-cli-run-001' : `plan-${randomUUID()}`)
   const signal = options.signal ?? new AbortController().signal
 
-  const result = await runAdmittedResearchEndToEndPass({
-    session: {
-      mission: options.mission,
-      handle: options.handle,
-      ...(options.activePlanRevisionId ? { activePlanRevisionId: options.activePlanRevisionId } : {}),
-    },
-    store: options.owner.store,
-    model: resolvedModel,
-    access,
-    adapter,
-    registries,
-    discoverQuery: options.discoverQuery,
-    planOperationId: op.planOperationId,
-    planAttemptId: op.planAttemptId,
-    planRevisionId,
-    retrievalSearchOperationId: op.retrievalSearchOperationId,
-    retrievalSearchAttemptId: op.retrievalSearchAttemptId,
-    retrievalFetchOperationId: op.retrievalFetchOperationId,
-    retrievalFetchAttemptId: op.retrievalFetchAttemptId,
-    extractOperationId: op.extractOperationId,
-    extractAttemptId: op.extractAttemptId,
-    reviewOperationId: op.reviewOperationId,
-    reviewAttemptId: op.reviewAttemptId,
-    synthesizeOperationId: op.synthesizeOperationId,
-    synthesizeAttemptId: op.synthesizeAttemptId,
-    dispatchedAt: new Date().toISOString(),
-    signal,
-  })
-  return {
-    mission_id: options.mission.mission_id,
-    plan_revision_id: result.planRevisionId,
-    passage_ids: result.passageIds,
-    finding_ids: result.findingIds,
-    terminal_report_emitted: result.terminalReportEmitted,
-    live_api: !injectedOffline,
-    mode: injectedOffline ? 'injected_offline_run' : 'production_mission_run',
+  let terminalReportEmitted = false
+  try {
+    const result = await runAdmittedResearchEndToEndPass({
+      session: {
+        mission: options.mission,
+        handle: options.handle,
+        ...(options.activePlanRevisionId ? { activePlanRevisionId: options.activePlanRevisionId } : {}),
+      },
+      store: options.owner.store,
+      model: resolvedModel,
+      access,
+      adapter,
+      registries,
+      discoverQuery: options.discoverQuery,
+      planOperationId: op.planOperationId,
+      planAttemptId: op.planAttemptId,
+      planRevisionId,
+      retrievalSearchOperationId: op.retrievalSearchOperationId,
+      retrievalSearchAttemptId: op.retrievalSearchAttemptId,
+      retrievalFetchOperationId: op.retrievalFetchOperationId,
+      retrievalFetchAttemptId: op.retrievalFetchAttemptId,
+      extractOperationId: op.extractOperationId,
+      extractAttemptId: op.extractAttemptId,
+      reviewOperationId: op.reviewOperationId,
+      reviewAttemptId: op.reviewAttemptId,
+      synthesizeOperationId: op.synthesizeOperationId,
+      synthesizeAttemptId: op.synthesizeAttemptId,
+      dispatchedAt: new Date().toISOString(),
+      signal,
+    })
+    terminalReportEmitted = result.terminalReportEmitted
+    return {
+      mission_id: options.mission.mission_id,
+      plan_revision_id: result.planRevisionId,
+      passage_ids: result.passageIds,
+      finding_ids: result.findingIds,
+      terminal_report_emitted: terminalReportEmitted,
+      live_api: !injectedOffline,
+      mode: injectedOffline ? 'injected_offline_run' : 'production_mission_run',
+    }
+  } catch (err: unknown) {
+    if (!signal.aborted) {
+      const message = err instanceof Error ? err.message : String(err)
+      const appended = await finalizeFailedOwnerResearchPass({
+        store: options.owner.store,
+        mission: options.mission,
+        planRevisionId,
+        failurePhase: 'admitted_research_pass',
+        message,
+      })
+      if (appended) {
+        terminalReportEmitted = true
+      }
+    }
+    throw err
   }
 }
 

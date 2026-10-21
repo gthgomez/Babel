@@ -1,0 +1,17 @@
+{
+  "schema": "research-v2-g-l1-malformed-model-replay/v1",
+  "source": "B draft404 ac011dea general-g-l1-live-run (sanitized)",
+  "note": "Provider returned JSON that fails PlanQuestionsOutputSchema strict parse",
+  "raw_model_payload": {
+    "kind": "plan_questions",
+    "operation_kind": "plan_questions",
+    "input_mission_id": "mission-g-l1-general-live",
+    "questions": [
+      {
+        "id": "q1",
+        "question": "What is the latest stable Python release and its release date?",
+        "purpose": "Identify the current production Python version from official sources"
+      }
+    ]
+  }
+}
