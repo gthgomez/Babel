@@ -1,0 +1,7 @@
+(node:9604) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:9604) ExperimentalWarning: Importing WebAssembly module instances is an experimental feature and might change at any time
+{
+  "status": "fail",
+  "error": "coverage obligation source_slot discover-primary is not a mission retrieval slot"
+}

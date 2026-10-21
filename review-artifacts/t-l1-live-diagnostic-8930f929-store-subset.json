@@ -1,0 +1,142 @@
+{
+  "schema": "research-v2-t-l1-live-partial-evidence-subset/v1",
+  "mission_id": "mission-t-l1-validation-8930f929-001",
+  "snapshot_sha256": "fb0b3015c7f4870f64833347a9a7db77fa54bd7b7cd35f6d8911ba7832e6f19c",
+  "events": [
+    {
+      "eventId": "evt-1",
+      "missionId": "mission-t-l1-validation-8930f929-001",
+      "kind": "mission_created",
+      "recordedAt": "2026-10-21T14:43:52.502Z",
+      "payload": {
+        "mission": {
+          "schema_version": "research-mission-v2",
+          "contract_version": "2026.10.20-checkpoint.3.1.1",
+          "mission_id": "mission-t-l1-validation-8930f929-001",
+          "profile_id": "technical",
+          "profile_version": "0.0.0-checkpoint",
+          "created_at": "2026-10-21T14:43:51.000Z",
+          "primary_question": "Compare how the pinned Babel repository and the pinned LangGraph repository separate durable graph/state persistence from agent execution policy. Cite concrete file paths in each repository at the declared commits.",
+          "intended_decision": "Choose which pinned repository exposes clearer persistence-vs-execution boundaries for governed technical research, with per-repo file citations.",
+          "constraints": [
+            "pinned_github_commit_only=true",
+            "repository_file_sources_only=true",
+            "two_declared_repository_pins_required=true"
+          ],
+          "exclusions": [
+            "unpinned github branches",
+            "third-party mirrors without pinned blob URLs",
+            "live model spend during Agent A readiness"
+          ],
+          "as_of": "2026-10-21",
+          "jurisdiction": "unknown",
+          "source_policy": {
+            "allowed_source_classes": [
+              "repository_file"
+            ],
+            "allowed_web_domains": [
+              "github.com",
+              "raw.githubusercontent.com"
+            ],
+            "selected_repository_refs": [
+              {
+                "provider": "github",
+                "repo_id": "github:langchain-ai/langgraph",
+                "full_name": "langchain-ai/langgraph",
+                "commit_sha": "3cd57c038ad827d05f80c6488adea9994156c58c",
+                "discover_query": "pregel checkpoint"
+              }
+            ],
+            "visibility_retention": {
+              "source_visibility": "public",
+              "retention": "excerpt_only",
+              "export_may_omit_bytes": true
+            }
+          },
+          "effort_policy": {
+            "preset_name": "normal",
+            "resolved_budget_label": "host-resolved-normal-t-l1-validation-8930f929"
+          },
+          "model_route": {
+            "backend_key": "research-v2-cli",
+            "provider": "openrouter",
+            "provider_model_id": "deepseek/deepseek-v4-flash-0731"
+          },
+          "pinned_target_repository": {
+            "provider": "github",
+            "repo_id": "github:gthgomez/Babel",
+            "full_name": "gthgomez/Babel",
+            "commit_sha": "e912c2f3320de0b6e1c9ff85b95b0f74d8b5323c",
+            "discover_query": "persistence durableresearchstore.ts"
+          }
+        }
+      }
+    },
+    {
+      "eventId": "evt-2",
+      "missionId": "mission-t-l1-validation-8930f929-001",
+      "kind": "plan_revised",
+      "recordedAt": "2026-10-21T14:43:52.504Z",
+      "payload": {
+        "plan": {
+          "plan_revision_id": "plan-da0cdcb0-87c1-4c00-8b1f-d60a7e4325f2-bootstrap",
+          "mission_id": "mission-t-l1-validation-8930f929-001",
+          "created_at": "2026-10-21T14:43:52.502Z",
+          "questions": [
+            {
+              "question_id": "q-plan-da0cdcb0-87c1-4c00-8b1f-d60a7e4325f2-bootstrap-bootstrap",
+              "text": "Host bootstrap plan shell (awaiting model plan_questions)",
+              "importance": "low",
+              "evidence_requirement": "Not used for research evidence",
+              "status": "open"
+            }
+          ],
+          "revision_reason": "host_bootstrap_before_model_plan"
+        }
+      }
+    },
+    {
+      "eventId": "evt-3",
+      "missionId": "mission-t-l1-validation-8930f929-001",
+      "kind": "external_operation_intent",
+      "recordedAt": "2026-10-21T14:43:52.506Z",
+      "payload": {
+        "intent": {
+          "mission_id": "mission-t-l1-validation-8930f929-001",
+          "operation_id": "cli-run-plan-wg2-9ecfec5a",
+          "attempt_id": "cli-run-plan-att-wg2-9ecfec5a",
+          "operation_kind": "model_invoke",
+          "dispatched_at": "2026-10-21T14:43:52.506Z",
+          "idempotency_key": "cli-run-plan-wg2-9ecfec5a"
+        }
+      }
+    },
+    {
+      "eventId": "evt-4",
+      "missionId": "mission-t-l1-validation-8930f929-001",
+      "kind": "terminal_receipt",
+      "recordedAt": "2026-10-21T14:44:03.673Z",
+      "payload": {
+        "report": {
+          "mission_id": "mission-t-l1-validation-8930f929-001",
+          "plan_revision_id": "plan-da0cdcb0-87c1-4c00-8b1f-d60a7e4325f2-bootstrap",
+          "terminal_state": "failed",
+          "answer_summary": "Research pass failed during admitted_research_pass. coverage obligation source_slot discover-primary is not a mission retrieval slot",
+          "unanswered_questions": [],
+          "coverage_notes": "Terminal receipt recorded after admitted pass failure; external operations retain settled failure accounting.",
+          "limitations": [
+            "source_retrieval_or_extraction_failed"
+          ],
+          "source_cutoff": "unknown",
+          "acceptance_state": "not_accepted",
+          "stopping_reason": "source_retrieval_failed",
+          "finding_ids": [],
+          "citation_passage_ids": [],
+          "generated_at": "2026-10-21T14:44:03.672Z"
+        }
+      }
+    }
+  ],
+  "run_error": "coverage obligation source_slot discover-primary is not a mission retrieval slot",
+  "scope_note": "Data-path diagnostic only; two sampled implementation files out of scope for this failed pass."
+}

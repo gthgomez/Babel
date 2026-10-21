@@ -1,0 +1,57 @@
+{
+  "schema": "research-v2-t-l1-live-diagnostic-receipt-sanitized/v1",
+  "receipt_binding": {
+    "frozen": true,
+    "bound_a_commit": "8930f9296c23642df52cac6154a0e92b8c39dad3",
+    "bound_tree": "0ca17e7fb0fe820563579a424c319bab2101b769",
+    "case": "T-L1 data-path diagnostic (not G-L3; single authorized run)"
+  },
+  "preflight": {
+    "npm_ci_exit": 0,
+    "typecheck_exit": 0,
+    "build_exit": 0,
+    "technical_campaign_preflight_exit": 0,
+    "log_build_typecheck": "review-artifacts/t-l1-live-diagnostic-8930f929-build-typecheck.log",
+    "log_technical_preflight": "review-artifacts/t-l1-live-diagnostic-8930f929-preflight.log",
+    "fingerprints": "review-artifacts/t-l1-live-diagnostic-8930f929-fingerprints.txt",
+    "worktree_babel_cli": "/tmp/babel-t-l1-preflight-8930f929/babel-cli",
+    "bin_absolute": "/tmp/babel-t-l1-preflight-8930f929/babel-cli/bin/babel.js"
+  },
+  "credentials_boolean": {
+    "openrouter_api_key_configured": true,
+    "exa_api_key_configured": true
+  },
+  "openrouter_route": {
+    "provider": "openrouter",
+    "model_id": "deepseek/deepseek-v4-flash-0731",
+    "route_key": "deepseek-v4-flash-openrouter"
+  },
+  "verified_pins_not_d2c584": {
+    "babel_commit": "e912c2f3320de0b6e1c9ff85b95b0f74d8b5323c",
+    "expected_babel_path": "babel-cli/src/research/v2/persistence/durableResearchStore.ts",
+    "expected_babel_bytes": 8305,
+    "langgraph_commit": "3cd57c038ad827d05f80c6488adea9994156c58c",
+    "langgraph_tree": "a8aa3b138b6036c25331712af8ed8b3f0a4a0fda",
+    "expected_langgraph_path": "libs/langgraph/langgraph/pregel/_checkpoint.py",
+    "expected_langgraph_bytes": 20417,
+    "invalid_replaced_pin": "d2c584a238566d2bfd7d28e053a94e3a9af1ffd7"
+  },
+  "live_run": {
+    "mission_id": "mission-t-l1-validation-8930f929-001",
+    "mission_file": "review-artifacts/t-l1-live-diagnostic-8930f929-mission.json",
+    "store_directory": "/tmp/babel-t-l1-store-8930f929-1792593831",
+    "command": "node /tmp/babel-t-l1-preflight-8930f929/babel-cli/bin/babel.js research v2 run --store /tmp/babel-t-l1-store-8930f929-1792593831 --mission-file /tmp/babel-t-l1-mission-8930f929-fresh.json --json",
+    "meta": "review-artifacts/t-l1-live-diagnostic-8930f929-run-meta.txt",
+    "cli_json": "review-artifacts/t-l1-live-diagnostic-8930f929-run.json",
+    "cli_exit": 1,
+    "failure": "coverage obligation source_slot discover-primary is not a mission retrieval slot",
+    "terminal_state": "failed",
+    "repository_file_outcomes": "not_reached",
+    "exa_search": "not_observed_technical_repository_file_pipeline",
+    "model_usage": "plan model_invoke intent dispatched; no successful research pass completions recorded in store subset"
+  },
+  "artifacts": {
+    "store_subset": "review-artifacts/t-l1-live-diagnostic-8930f929-store-subset.json"
+  },
+  "scope_limitation": "Does not assert whole-repository architecture or research-quality acceptance; known claimed-source semantic defect under separate A repair."
+}

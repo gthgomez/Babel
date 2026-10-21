@@ -1,0 +1,8 @@
+COMMAND: node /tmp/babel-t-l1-preflight-8930f929/babel-cli/bin/babel.js research v2 run --store /tmp/babel-t-l1-store-8930f929-1792593831 --mission-file /tmp/babel-t-l1-mission-8930f929-fresh.json --json
+START_UTC: 2026-10-21T14:43:51.525Z
+END_UTC: 2026-10-21T14:44:03.691Z
+EXIT: 1
+STORE: /tmp/babel-t-l1-store-8930f929-1792593831
+MISSION: /tmp/babel-t-l1-mission-8930f929-fresh.json
+MISSION_ID: mission-t-l1-validation-8930f929-001
+BIN: /tmp/babel-t-l1-preflight-8930f929/babel-cli/bin/babel.js
