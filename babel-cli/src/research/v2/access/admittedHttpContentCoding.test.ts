@@ -45,6 +45,26 @@ describe('decodeAdmittedHttpBody', () => {
     new TextDecoder('utf-8', { fatal: true }).decode(result.buffer)
   })
 
+  it('preserves byte-exact decoded bytes at cap (no UTF-8 text trimming on inflate)', async () => {
+    const HOST_CAP = 200_000
+    const prefix = Buffer.alloc(HOST_CAP - 2, 0x61)
+    const tail = Buffer.from([0xe2, 0x82, 0x61])
+    const full = Buffer.concat([prefix, tail])
+    const encoded = gzipSync(full)
+
+    const result = await decodeAdmittedHttpBody({
+      encodedBody: encoded,
+      contentEncodingHeader: 'gzip',
+      maxDecodedBytes: HOST_CAP,
+      signal: new AbortController().signal,
+    })
+    assert.equal(result.decodedTruncated, true)
+    assert.equal(result.buffer.byteLength, HOST_CAP)
+    assert.equal(result.buffer[HOST_CAP - 2], 0xe2)
+    assert.equal(result.buffer[HOST_CAP - 1], 0x82)
+    assert.throws(() => new TextDecoder('utf-8', { fatal: true }).decode(result.buffer))
+  })
+
   it('rejects unsupported br encoding', async () => {
     await assert.rejects(
       () =>

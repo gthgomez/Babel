@@ -1,10 +1,6 @@
 import { createGunzip, createInflate } from 'node:zlib'
 import { pipeline } from 'node:stream/promises'
 import { Readable } from 'node:stream'
-import {
-  trimIncompleteUtf8SequenceSuffix,
-  Utf8InteriorCorruptionError,
-} from './utf8SafeBytePrefix.js'
 
 export class AdmittedContentCodingError extends Error {
   readonly code: 'unsupported_encoding' | 'malformed_encoding' | 'decompression_limit_exceeded' | 'aborted'
@@ -128,17 +124,7 @@ async function inflateBounded(
     decompressor.off('data', onData)
   }
 
-  let buffer: Buffer = Buffer.concat(chunks)
-  if (decodedTruncated) {
-    try {
-      buffer = Buffer.from(trimIncompleteUtf8SequenceSuffix(buffer))
-    } catch (err: unknown) {
-      if (err instanceof Utf8InteriorCorruptionError) {
-        throw new AdmittedContentCodingError('malformed_encoding', err.message)
-      }
-      throw err
-    }
-  }
+  const buffer: Buffer = Buffer.concat(chunks)
 
   return {
     buffer,

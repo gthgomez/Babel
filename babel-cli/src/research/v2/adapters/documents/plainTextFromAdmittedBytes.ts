@@ -2,6 +2,11 @@ import { createHash } from 'node:crypto'
 import type { AdmittedContent } from '../../contracts/admittedContent.js'
 import type { PassageRecord } from '../../contracts/passages.js'
 import { PassageRecordSchema } from '../../contracts/passages.js'
+import {
+  isUtf8TextMediaType,
+  trimIncompleteUtf8SequenceSuffix,
+  Utf8InteriorCorruptionError,
+} from '../../access/utf8SafeBytePrefix.js'
 
 export const PLAIN_TEXT_MEDIA_TYPE = 'text/plain'
 export const PLAIN_TEXT_EXTRACTION_VERSION = 'general-plain-text/0.1.0'
@@ -32,12 +37,26 @@ export function decodeAdmittedInlineBytes(admitted: AdmittedContent): Buffer {
 /** Decode and integrity-check inline admitted UTF-8 text bytes (no network). */
 export function decodeAdmittedUtf8Bytes(admitted: AdmittedContent): Buffer {
   const raw = decodeAdmittedInlineBytes(admitted)
+  let bytes = raw
+  if (
+    admitted.revision.truncation_reason === 'host_decoded_byte_limit' &&
+    isUtf8TextMediaType(admitted.media_type)
+  ) {
+    try {
+      bytes = trimIncompleteUtf8SequenceSuffix(raw)
+    } catch (err: unknown) {
+      if (err instanceof Utf8InteriorCorruptionError) {
+        throw new Error('admitted bytes are not valid UTF-8')
+      }
+      throw err
+    }
+  }
   try {
-    new TextDecoder('utf-8', { fatal: true }).decode(raw)
+    new TextDecoder('utf-8', { fatal: true }).decode(bytes)
   } catch {
     throw new Error('admitted bytes are not valid UTF-8')
   }
-  return raw
+  return bytes
 }
 
 /**
