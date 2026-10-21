@@ -1,0 +1,81 @@
+
+> babel-harness@0.1.4 test:research-v2-technical-campaign-preflight
+> node --import tsx scripts/research-v2-technical-campaign-preflight.mjs
+
+{
+  "schema": "research-v2-technical-campaign-preflight/v1",
+  "head_note": "No live API calls; OpenRouter lane + mission/adapter labels only",
+  "openrouter_route": {
+    "route_key": "deepseek-v4-flash-openrouter",
+    "provider": "openrouter",
+    "model_id": "deepseek/deepseek-v4-flash-0731",
+    "policy_path": "/workspace/codex/worktrees/a-runtime-3245d3d8/config/model-policy.json",
+    "selection_basis": "model_policy_json",
+    "backend_key": "research-v2-cli"
+  },
+  "pinned_versions_file": "/workspace/codex/worktrees/a-runtime-3245d3d8/babel-cli/src/research/v2/fixtures/campaign/T-L1-T-L2-PINNED-VERSIONS.json",
+  "pinned_versions": {
+    "schema": "research-v2-technical-campaign-pins/v1",
+    "recorded_at": "2026-10-21T08:00:00.000Z",
+    "integration_branch": "cursor/research-v2-post-review-settlement-fc31",
+    "babel_repository": {
+      "provider": "github",
+      "full_name": "gthgomez/Babel",
+      "repo_id": "github:gthgomez/Babel",
+      "commit_sha": "e912c2f3320de0b6e1c9ff85b95b0f74d8b5323c",
+      "commit_subject": "fix(research-v2): strict UTF-8 suffix rules; trim only in text decode"
+    },
+    "t_l2_paper": {
+      "canonical_url": "https://arxiv.org/pdf/1706.03762.pdf",
+      "title": "Attention Is All You Need",
+      "arxiv_id": "1706.03762",
+      "observed_content_length_bytes": 2215244,
+      "license_note": "arXiv.org perpetual non-exclusive license to distribute; mission cites PDF URL only."
+    },
+    "reference_repository": {
+      "provider": "github",
+      "full_name": "langchain-ai/langgraph",
+      "repo_id": "github:langchain-ai/langgraph",
+      "commit_sha": "d2c584a238566d2bfd7d28e053a94e3a9af1ffd7",
+      "commit_subject": "pinned for T-L1 architecture comparison (declared selected_repository_refs)"
+    },
+    "profile": {
+      "profile_id": "technical",
+      "profile_version": "0.0.0-checkpoint"
+    }
+  },
+  "missions": {
+    "T-L1": {
+      "acceptance_scenario": "T-L1",
+      "mission_file": "/workspace/codex/worktrees/a-runtime-3245d3d8/babel-cli/src/research/v2/fixtures/campaign/T-L1-mission.json",
+      "mission_id": "mission-t-l1-architecture-comparison",
+      "profile_id": "technical",
+      "discover_query": "research v2 store executor boundary",
+      "discovery_adapter_id": "technical-repository-file",
+      "allowed_source_classes": [
+        "repository_file"
+      ],
+      "pinned_commit_sha": "e912c2f3320de0b6e1c9ff85b95b0f74d8b5323c"
+    },
+    "T-L2": {
+      "acceptance_scenario": "T-L2",
+      "mission_file": "/workspace/codex/worktrees/a-runtime-3245d3d8/babel-cli/src/research/v2/fixtures/campaign/T-L2-mission.json",
+      "mission_id": "mission-t-l2-paper-code-pdf",
+      "profile_id": "technical",
+      "discover_query": "durable research store persistence",
+      "discovery_adapter_id": "technical-repository-file",
+      "allowed_source_classes": [
+        "repository_file",
+        "document",
+        "structured"
+      ],
+      "selected_document_refs": [
+        "https://arxiv.org/pdf/1706.03762.pdf"
+      ],
+      "pinned_commit_sha": "e912c2f3320de0b6e1c9ff85b95b0f74d8b5323c",
+      "document_search_note": "Production document discover requires sourceClasses=[document] per request; engine retrieval is currently single-candidate per pass."
+    }
+  },
+  "expected_discovery_adapter_id": "technical-repository-file"
+}
+

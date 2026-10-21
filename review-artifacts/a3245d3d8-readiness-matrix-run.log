@@ -1,0 +1,599 @@
+# source_revision=3245d3d8b01c9a3f0b1deebf4a58d86219828fd8
+# worktree=/workspace/codex/worktrees/a-runtime-3245d3d8
+# started=2026-10-21T13:20:48Z
+>>> npm run test:research-v2-g-l3-preflight
+
+> babel-harness@0.1.4 test:research-v2-g-l3-preflight
+> node --import tsx scripts/research-v2-campaign-preflight-run.mjs G-L3
+
+{
+  "schema": "research-v2-campaign-preflight/v1",
+  "head_note": "No live API calls; campaign OpenRouter lane and host readiness only",
+  "acceptance_scenario": "G-L3",
+  "readiness": {
+    "search_provider_configured": true,
+    "mission_model_route_matches_effective": true,
+    "openrouter_credential_configured": true,
+    "ready": true,
+    "failures": []
+  },
+  "openrouter_route": {
+    "route_key": "deepseek-v4-flash-openrouter",
+    "provider": "openrouter",
+    "model_id": "deepseek/deepseek-v4-flash-0731",
+    "policy_path": "/workspace/codex/worktrees/a-runtime-3245d3d8/config/model-policy.json",
+    "selection_basis": "model_policy_json",
+    "backend_key": "research-v2-cli"
+  },
+  "openrouter_credential": {
+    "provider": "openrouter",
+    "env_var": "OPENROUTER_API_KEY",
+    "configured": true,
+    "required": true
+  },
+  "mission_id": "mission-g-l3-contradiction-insufficient",
+  "profile_id": "general",
+  "primary_question": "On official python.org pages only, does the latest stable CPython release version and its release date read the same from the downloads landing view and from the developer guide status table? Report contradiction, insufficiency, or agreement per sub-question with citations.",
+  "search_provider_id": "duckduckgo_html_fallback",
+  "expected_outcomes": {
+    "schema": "research-v2-campaign-expected-outcomes/v1",
+    "acceptance_scenario": "G-L3",
+    "mission_id": "mission-g-l3-contradiction-insufficient",
+    "structural": {
+      "requires_per_question_semantic_support": true,
+      "requires_two_distinct_canonical_pages": true,
+      "plan_question_themes": [
+        "downloads_page_stable_version_and_date",
+        "devguide_status_table_stable_version_and_date",
+        "cross_source_agreement_or_conflict"
+      ],
+      "must_allow_terminal_partial_on_insufficient_or_contradicted": true,
+      "deterministic_insufficiency_fixture": "G-L3-deterministic-insufficiency.fixture.json",
+      "live_agreement_or_conflict_investigation_separate_from": "G-L3-deterministic-insufficiency.fixture.json"
+    },
+    "acceptable_terminal_states": [
+      "partial",
+      "complete"
+    ],
+    "complete_only_when": {
+      "two_distinct_admitted_canonical_pages": true,
+      "per_question_semantic_support_without_invented_contradiction": true,
+      "official_pages_agree_on_stable_version_and_date": true
+    },
+    "forbidden_conclusions": [
+      "asserting_agreement_without_supported_findings_per_question",
+      "asserting_contradiction_without_supported_findings_per_question",
+      "invented_contradiction_or_version_mismatch",
+      "single_page_counted_as_two_source_cross_page_coverage",
+      "citations_outside_allowed_web_domains"
+    ],
+    "preflight": {
+      "requires_openrouter_route_lane": true,
+      "requires_mission_model_route_matches_effective_openrouter_route": true,
+      "requires_openrouter_credential_configured": true,
+      "requires_configured_search_provider": true,
+      "live_model_dispatch": false
+    }
+  },
+  "mission_file": "/workspace/codex/worktrees/a-runtime-3245d3d8/babel-cli/src/research/v2/fixtures/campaign/G-L3-mission.json",
+  "expected_outcomes_file": "/workspace/codex/worktrees/a-runtime-3245d3d8/babel-cli/src/research/v2/fixtures/campaign/G-L3-expected-outcomes.json",
+  "allowed_web_domains": [
+    "duckduckgo.com",
+    "html.duckduckgo.com",
+    "python.org",
+    "www.python.org",
+    "docs.python.org"
+  ],
+  "evidence_web_domains": [
+    "python.org",
+    "www.python.org",
+    "docs.python.org"
+  ],
+  "search_transport_domains": [
+    "duckduckgo.com",
+    "html.duckduckgo.com"
+  ],
+  "discover_query": "On official python.org pages only, does the latest stable CPython release version",
+  "search_url": "https://duckduckgo.com/html/?q=On+official+python.org+pages+only%2C+does+the+latest+stable+CPython+release+version"
+}
+research-v2-campaign-preflight: ok (G-L3)
+exit=0
+>>> npm run test:research-v2-technical-campaign-preflight
+
+> babel-harness@0.1.4 test:research-v2-technical-campaign-preflight
+> node --import tsx scripts/research-v2-technical-campaign-preflight.mjs
+
+{
+  "schema": "research-v2-technical-campaign-preflight/v1",
+  "head_note": "No live API calls; OpenRouter lane + mission/adapter labels only",
+  "openrouter_route": {
+    "route_key": "deepseek-v4-flash-openrouter",
+    "provider": "openrouter",
+    "model_id": "deepseek/deepseek-v4-flash-0731",
+    "policy_path": "/workspace/codex/worktrees/a-runtime-3245d3d8/config/model-policy.json",
+    "selection_basis": "model_policy_json",
+    "backend_key": "research-v2-cli"
+  },
+  "pinned_versions_file": "/workspace/codex/worktrees/a-runtime-3245d3d8/babel-cli/src/research/v2/fixtures/campaign/T-L1-T-L2-PINNED-VERSIONS.json",
+  "pinned_versions": {
+    "schema": "research-v2-technical-campaign-pins/v1",
+    "recorded_at": "2026-10-21T08:00:00.000Z",
+    "integration_branch": "cursor/research-v2-post-review-settlement-fc31",
+    "babel_repository": {
+      "provider": "github",
+      "full_name": "gthgomez/Babel",
+      "repo_id": "github:gthgomez/Babel",
+      "commit_sha": "e912c2f3320de0b6e1c9ff85b95b0f74d8b5323c",
+      "commit_subject": "fix(research-v2): strict UTF-8 suffix rules; trim only in text decode"
+    },
+    "t_l2_paper": {
+      "canonical_url": "https://arxiv.org/pdf/1706.03762.pdf",
+      "title": "Attention Is All You Need",
+      "arxiv_id": "1706.03762",
+      "observed_content_length_bytes": 2215244,
+      "license_note": "arXiv.org perpetual non-exclusive license to distribute; mission cites PDF URL only."
+    },
+    "reference_repository": {
+      "provider": "github",
+      "full_name": "langchain-ai/langgraph",
+      "repo_id": "github:langchain-ai/langgraph",
+      "commit_sha": "d2c584a238566d2bfd7d28e053a94e3a9af1ffd7",
+      "commit_subject": "pinned for T-L1 architecture comparison (declared selected_repository_refs)"
+    },
+    "profile": {
+      "profile_id": "technical",
+      "profile_version": "0.0.0-checkpoint"
+    }
+  },
+  "missions": {
+    "T-L1": {
+      "acceptance_scenario": "T-L1",
+      "mission_file": "/workspace/codex/worktrees/a-runtime-3245d3d8/babel-cli/src/research/v2/fixtures/campaign/T-L1-mission.json",
+      "mission_id": "mission-t-l1-architecture-comparison",
+      "profile_id": "technical",
+      "discover_query": "research v2 store executor boundary",
+      "discovery_adapter_id": "technical-repository-file",
+      "allowed_source_classes": [
+        "repository_file"
+      ],
+      "pinned_commit_sha": "e912c2f3320de0b6e1c9ff85b95b0f74d8b5323c"
+    },
+    "T-L2": {
+      "acceptance_scenario": "T-L2",
+      "mission_file": "/workspace/codex/worktrees/a-runtime-3245d3d8/babel-cli/src/research/v2/fixtures/campaign/T-L2-mission.json",
+      "mission_id": "mission-t-l2-paper-code-pdf",
+      "profile_id": "technical",
+      "discover_query": "durable research store persistence",
+      "discovery_adapter_id": "technical-repository-file",
+      "allowed_source_classes": [
+        "repository_file",
+        "document",
+        "structured"
+      ],
+      "selected_document_refs": [
+        "https://arxiv.org/pdf/1706.03762.pdf"
+      ],
+      "pinned_commit_sha": "e912c2f3320de0b6e1c9ff85b95b0f74d8b5323c",
+      "document_search_note": "Production document discover requires sourceClasses=[document] per request; engine retrieval is currently single-candidate per pass."
+    }
+  },
+  "expected_discovery_adapter_id": "technical-repository-file"
+}
+research-v2-technical-campaign-preflight: ok
+exit=0
+>>> G-L3 mission tests
+TAP version 13
+# Subtest: G-L3 campaign mission fixture
+    # Subtest: parses contradiction/insufficiency mission with official python.org scope
+    ok 1 - parses contradiction/insufficiency mission with official python.org scope
+      ---
+      duration_ms: 3.885968
+      type: 'test'
+      ...
+    1..1
+ok 1 - G-L3 campaign mission fixture
+  ---
+  duration_ms: 4.416825
+  type: 'suite'
+  ...
+1..1
+# tests 1
+# suites 1
+# pass 1
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 236.14733
+exit=0
+>>> T-L1 mission tests
+TAP version 13
+# Subtest: T-L1 architecture-comparison campaign mission
+    # Subtest: parses technical profile mission with pinned Babel repository only
+    ok 1 - parses technical profile mission with pinned Babel repository only
+      ---
+      duration_ms: 3.872494
+      type: 'test'
+      ...
+    1..1
+ok 1 - T-L1 architecture-comparison campaign mission
+  ---
+  duration_ms: 4.405115
+  type: 'suite'
+  ...
+1..1
+# tests 1
+# suites 1
+# pass 1
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 242.300471
+exit=0
+>>> T-L2 mission tests
+TAP version 13
+# Subtest: T-L2 paper/code PDF campaign mission
+    # Subtest: parses technical mission with pinned repo and selected arXiv PDF ref
+    ok 1 - parses technical mission with pinned repo and selected arXiv PDF ref
+      ---
+      duration_ms: 4.285666
+      type: 'test'
+      ...
+    1..1
+ok 1 - T-L2 paper/code PDF campaign mission
+  ---
+  duration_ms: 4.835965
+  type: 'suite'
+  ...
+1..1
+# tests 1
+# suites 1
+# pass 1
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 241.556547
+exit=0
+>>> technicalCampaignProductionWiring
+TAP version 13
+# Subtest: technical campaign production wiring (injected transport, no live model)
+    # Subtest: T-L1 plans two repository pins (Babel + LangGraph)
+    ok 1 - T-L1 plans two repository pins (Babel + LangGraph)
+      ---
+      duration_ms: 3.784139
+      type: 'test'
+      ...
+    # Subtest: T-L1 resolves repository-file discovery and read adapters
+    ok 2 - T-L1 resolves repository-file discovery and read adapters
+      ---
+      duration_ms: 1.525609
+      type: 'test'
+      ...
+    # Subtest: T-L2 document search uses selected_document_refs (not fixture index)
+    ok 3 - T-L2 document search uses selected_document_refs (not fixture index)
+      ---
+      duration_ms: 1.289742
+      type: 'test'
+      ...
+    1..3
+ok 1 - technical campaign production wiring (injected transport, no live model)
+  ---
+  duration_ms: 7.303844
+  type: 'suite'
+  ...
+1..1
+# tests 3
+# suites 1
+# pass 3
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 294.943677
+exit=0
+>>> researchV2CampaignPreflight.test
+TAP version 13
+# Subtest: research v2 campaign preflight readiness (no network)
+    # Subtest: G-L3 mission model_route matches effective OpenRouter policy route
+    ok 1 - G-L3 mission model_route matches effective OpenRouter policy route
+      ---
+      duration_ms: 3.884881
+      type: 'test'
+      ...
+    # Subtest: unsupported BABEL_WEB_SEARCH_PROVIDER fails readiness without printing ok semantics
+    ok 2 - unsupported BABEL_WEB_SEARCH_PROVIDER fails readiness without printing ok semantics
+      ---
+      duration_ms: 0.934695
+      type: 'test'
+      ...
+    1..2
+ok 1 - research v2 campaign preflight readiness (no network)
+  ---
+  duration_ms: 5.427794
+  type: 'suite'
+  ...
+1..1
+# tests 2
+# suites 1
+# pass 2
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 267.753348
+exit=0
+>>> generalAdapterTwoCanonical G-L3
+Could not find 'src/research/v2/profiles/general/generalAdapterTwoCanonicalSources.actualPort.reciprocal.test.ts'
+exit=1
+>>> generalMultiWeb G-L3
+Could not find 'src/research/v2/profiles/general/generalMultiWebProductionFactory.actualPort.reciprocal.test.ts'
+exit=1
+>>> researchComposedRetrievalLoop T-L1/T-L2
+TAP version 13
+# Subtest: research composed retrieval (code + paper + evidenced unsupported)
+    # Subtest: T-L2 mission plans repository, document, and unsupported structured slots
+    ok 1 - T-L2 mission plans repository, document, and unsupported structured slots
+      ---
+      duration_ms: 3.980811
+      type: 'test'
+      ...
+    # Subtest: arXiv paper content-length exceeds default admitted byte cap (host truncation expected at fetch)
+    ok 2 - arXiv paper content-length exceeds default admitted byte cap (host truncation expected at fetch)
+      ---
+      duration_ms: 0.096055
+      type: 'test'
+      ...
+    # Subtest: persists repo + PDF passages with distinct operation IDs while structured slot stays unsupported
+    ok 3 - persists repo + PDF passages with distinct operation IDs while structured slot stays unsupported
+      ---
+      duration_ms: 6.62114
+      type: 'test'
+      ...
+    1..3
+ok 1 - research composed retrieval (code + paper + evidenced unsupported)
+  ---
+  duration_ms: 11.382636
+  type: 'suite'
+  ...
+1..1
+# tests 3
+# suites 1
+# pass 3
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 327.400927
+exit=0
+>>> X-L1 CLI routes
+TAP version 13
+# (node:172331) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: research v2 CLI routes (offline injected)
+    # Subtest: argv dispatches research without -- passthrough
+    ok 1 - argv dispatches research without -- passthrough
+      ---
+      duration_ms: 0.552435
+      type: 'test'
+      ...
+    # Subtest: run → inspect → report on durable store
+    ok 2 - run → inspect → report on durable store
+      ---
+      duration_ms: 44.795646
+      type: 'test'
+      ...
+    # Subtest: cancel-resume-once records single continuation (X-L1 offline)
+    ok 3 - cancel-resume-once records single continuation (X-L1 offline)
+      ---
+      duration_ms: 29.006093
+      type: 'test'
+      ...
+    1..3
+ok 1 - research v2 CLI routes (offline injected)
+  ---
+  duration_ms: 75.29908
+  type: 'suite'
+  ...
+1..1
+# tests 3
+# suites 1
+# pass 3
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 643.21094
+exit=0
+>>> cancelResumeControl
+TAP version 13
+# Subtest: research engine cancel/resume control (M1.3 slice)
+    # Subtest: inspect session reads terminal state without owner lock
+    ok 1 - inspect session reads terminal state without owner lock
+      ---
+      duration_ms: 19.759896
+      type: 'test'
+      ...
+    # Subtest: admitted stale recovery then host resume continuation journey
+    ok 2 - admitted stale recovery then host resume continuation journey
+      ---
+      duration_ms: 272.335971
+      type: 'test'
+      ...
+    # Subtest: model bridge invokes fixture structured output with attempt id
+    ok 3 - model bridge invokes fixture structured output with attempt id
+      ---
+      duration_ms: 0.689053
+      type: 'test'
+      ...
+    1..3
+ok 1 - research engine cancel/resume control (M1.3 slice)
+  ---
+  duration_ms: 293.498264
+  type: 'suite'
+  ...
+1..1
+# tests 3
+# suites 1
+# pass 3
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 556.238329
+exit=0
+>>> continuation-after-cancel
+TAP version 13
+# Subtest: host-authorized continuation after cancellation (checkpoint.3.1.1)
+    # Subtest: schema rejects acquire without expected_writer_generation
+    ok 1 - schema rejects acquire without expected_writer_generation
+      ---
+      duration_ms: 1.135766
+      type: 'test'
+      ...
+    # Subtest: complete journey: P1 work, P2, cancel, late accounting, explicit resume, new terminal
+    ok 2 - complete journey: P1 work, P2, cancel, late accounting, explicit resume, new terminal
+      ---
+      duration_ms: 3.933306
+      type: 'test'
+      ...
+    1..2
+ok 1 - host-authorized continuation after cancellation (checkpoint.3.1.1)
+  ---
+  duration_ms: 5.678674
+  type: 'suite'
+  ...
+1..1
+# tests 2
+# suites 1
+# pass 2
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 265.916928
+exit=0
+>>> typecheck
+
+> babel-harness@0.1.4 typecheck
+> tsc --noEmit && tsc -p tsconfig.scripts.json --noEmit
+
+exit=0
+
+>>> arxivPaperExternalCache (T-L2 pins)
+TAP version 13
+# Subtest: arxiv external paper cache (isolated temp dirs)
+    # Subtest: resolveCacheFileOpenFlags mirrors runtime fs.constants (no silent zero fallback)
+    ok 1 - resolveCacheFileOpenFlags mirrors runtime fs.constants (no silent zero fallback)
+      ---
+      duration_ms: 0.657292
+      type: 'test'
+      ...
+    # Subtest: readBoundedRegularFileAtPath fails closed when injected open flags are unsupported
+    ok 2 - readBoundedRegularFileAtPath fails closed when injected open flags are unsupported
+      ---
+      duration_ms: 1.23219
+      type: 'test'
+      ...
+    # Subtest: resolveManifestedPaperBytesFromExternalCache surfaces unsupported_platform from injected flags
+    ok 3 - resolveManifestedPaperBytesFromExternalCache surfaces unsupported_platform from injected flags
+      ---
+      duration_ms: 1.506186
+      type: 'test'
+      ...
+    # Subtest: reports missing cache without reading user home cache
+    ok 4 - reports missing cache without reading user home cache
+      ---
+      duration_ms: 0.399512
+      type: 'test'
+      ...
+    # Subtest: rejects wrong-size cache before digest work
+    ok 5 - rejects wrong-size cache before digest work
+      ---
+      duration_ms: 0.461914
+      type: 'test'
+      ...
+    # Subtest: rejects oversized cache when file grew beyond manifest byte_length
+    ok 6 - rejects oversized cache when file grew beyond manifest byte_length
+      ---
+      duration_ms: 0.46132
+      type: 'test'
+      ...
+    # Subtest: reports digest_mismatch when size matches but hash differs
+    ok 7 - reports digest_mismatch when size matches but hash differs
+      ---
+      duration_ms: 0.465519
+      type: 'test'
+      ...
+    # Subtest: returns ok bytes for matching size and digest
+    ok 8 - returns ok bytes for matching size and digest
+      ---
+      duration_ms: 0.512042
+      type: 'test'
+      ...
+    # Subtest: readBoundedRegularFileAtPath rejects non-regular files
+    ok 9 - readBoundedRegularFileAtPath rejects non-regular files
+      ---
+      duration_ms: 0.594885
+      type: 'test'
+      ...
+    # Subtest: fails closed on FIFO cache paths without blocking when safe open flags are available
+    ok 10 - fails closed on FIFO cache paths without blocking when safe open flags are available
+      ---
+      duration_ms: 5.49802
+      type: 'test'
+      ...
+    # Subtest: detects file growth after initial stat when safe open flags are available
+    ok 11 - detects file growth after initial stat when safe open flags are available
+      ---
+      duration_ms: 0.843375
+      type: 'test'
+      ...
+    1..11
+ok 1 - arxiv external paper cache (isolated temp dirs)
+  ---
+  duration_ms: 15.241033
+  type: 'suite'
+  ...
+1..1
+# tests 11
+# suites 1
+# pass 11
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 314.733739
+exit=0
+>>> researchEndToEndPass (G-L3 semantic slice)
+TAP version 13
+# Subtest: research end-to-end pass (offline governed)
+    # Subtest: runs plan → admitted search/fetch → claims → review → cited partial report
+    ok 1 - runs plan → admitted search/fetch → claims → review → cited partial report
+      ---
+      duration_ms: 13.249476
+      type: 'test'
+      ...
+    # Subtest: ProviderResearchModelBridge uses request-local callback metadata (factory path)
+    ok 2 - ProviderResearchModelBridge uses request-local callback metadata (factory path)
+      ---
+      duration_ms: 0.809822
+      type: 'test'
+      ...
+    1..2
+ok 1 - research end-to-end pass (offline governed)
+  ---
+  duration_ms: 15.003993
+  type: 'suite'
+  ...
+1..1
+# tests 2
+# suites 1
+# pass 2
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 401.97913
+exit=0

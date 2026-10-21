@@ -1,7 +1,14 @@
 {
   "schema": "babel-research-v2-acceptance-inventory/v1",
-  "generated_at": "2026-10-21T10:15:00.000Z",
+  "generated_at": "2026-10-21T13:25:00.000Z",
   "branch": "cursor/agent-b-general-fixtures-f617",
+  "a_combined_runtime_matrix": {
+    "revision": "3245d3d8b01c9a3f0b1deebf4a58d86219828fd8",
+    "artifact": "review-artifacts/a3245d3d8-G-L3-T-L1-T-L2-X-L1-readiness-matrix.json",
+    "proof_log": "review-artifacts/a3245d3d8-readiness-matrix-run.log",
+    "scenarios": ["G-L3", "T-L1", "T-L2", "X-L1"],
+    "note": "Read-only matrix on A settlement runtime; not rebinding attempt4 or 5dbd8700 frozen receipts."
+  },
   "runtime_checkpoints": {
     "production_finalizer_go": "08cc2986507b7549be04fe6d49ccfc995080e351",
     "extract_question_id_production": "b0194564c1a0934e0a11da614f4fda2f798b7a0d",
