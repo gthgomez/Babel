@@ -1,0 +1,21 @@
+{
+  "schema": "research-v2-b-receipt-chronology-correction/v1",
+  "corrected_additively_at": "unknown_host_clock_not_captured_for_this_edit",
+  "finding": "Several receipt JSON fields used 14:20:00Z and 14:25:00Z verified_at/run_at values that were manually rounded during authoring, not read from git or test-runner metadata.",
+  "git_authoritative_timestamps_utc": {
+    "cce1345545a65399a5881e125ef55ac729b6e81a": "2026-10-21T14:07:36+00:00",
+    "8dd8807d65caa9456dd4f7d22582c500a18ba271": "2026-10-21T14:10:32+00:00",
+    "d826c4ca_production_logs_commit": "2026-10-21T14:13:54+00:00"
+  },
+  "affected_receipts_with_estimated_times": [
+    "review-artifacts/t-l1-discover-query-tree-first-hit.json (verified_at_utc 14:20:00Z — estimated)",
+    "review-artifacts/t-l1-per-pin-discover-query-reciprocal.json (verified_at_utc 14:10:00Z — estimated)",
+    "review-artifacts/b-focused-extraction-query-test-run.json (run_at_utc 14:25:00Z — estimated)"
+  ],
+  "preserved_raw_evidence": {
+    "production_typecheck_build": "review-artifacts/b-cce13455-production-typecheck.stdout.log (HEAD cce13455 embedded at run time)",
+    "focused_21_test_tap": "review-artifacts/b-focused-extraction-query-test-run.tap.txt",
+    "focused_23_test_tap_union": "review-artifacts/b-focused-extraction-query-union-test-run.tap.txt"
+  },
+  "policy": "Use git %aI for commit ordering; use TAP footer or log headers for test runs; mark unknown when not captured. Do not invent retrospective UTC times."
+}

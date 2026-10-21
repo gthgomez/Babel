@@ -1,0 +1,15 @@
+{
+  "schema": "research-v2-b-focused-test-run-receipt/v1",
+  "label": "Focused extraction + query + early-cancel union (not full suite)",
+  "timing_provenance": "TAP capture on host; no authoritative UTC clock field in runner output",
+  "candidate_heads": {
+    "query_html_slice": "cce1345545a65399a5881e125ef55ac729b6e81a",
+    "union_with_a_bootstrap": "f060092c (cherry-pick 8dd8807d + cce13455 discover_query)"
+  },
+  "exit_code": 0,
+  "counts": { "tests": 23, "pass": 23, "fail": 0, "suites": 6 },
+  "tap_log": "review-artifacts/b-focused-extraction-query-union-test-run.tap.txt",
+  "new_union_tests": "babel-cli/src/research/v2/engine/earlyCancelBootstrapUnion.reciprocal.test.ts",
+  "preserved_prior_receipt": "review-artifacts/b-focused-extraction-query-test-run.json (21-test slice, unchanged counts)",
+  "preserved_production_logs": "review-artifacts/b-cce13455-production-typecheck-build-receipt.json (not rerun)"
+}

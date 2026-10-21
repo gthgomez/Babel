@@ -1,6 +1,7 @@
 {
   "schema": "research-v2-t-l1-discover-query-tree-first-hit/v1",
-  "verified_at_utc": "2026-10-21T14:20:00.000Z",
+  "verified_at_utc": "unknown",
+  "timing_provenance": "Authoring-time estimate (14:20Z) superseded; tree verification performed during cce13455 work (git 2026-10-21T14:07:36Z). See b-receipt-chronology-correction.json.",
   "method": "GitHub GET /repos/{owner}/{repo}/git/trees/{commit_sha}?recursive=1; token-match terms.every on lowercase path (same as pinnedRepositoryFileSearchProvider); first blob in API tree order",
   "not_claimed": "Single first-hit path does not establish whole-repository architecture conclusions; campaign compares cited files at pinned commits only.",
   "babel": {
