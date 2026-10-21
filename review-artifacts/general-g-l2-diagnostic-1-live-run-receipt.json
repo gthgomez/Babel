@@ -7,6 +7,8 @@
   "source_go_sha": "601b443b5e8031169cbecbd39fdd5dd84e167aff",
   "git_tree_sha": "29682d9e43fd1c3e9690723f109aa7f25e86bc76",
   "pre_run_fingerprints": "review-artifacts/general-g-l2-diagnostic-1-pre-run-fingerprints.json",
+  "published_evidence_subset": "review-artifacts/general-g-l2-diagnostic-1-evidence-subset.json",
+  "published_evidence_extraction": "review-artifacts/extract-general-g-l2-diagnostic-1-evidence-subset.mjs",
   "build_stdout_log": "review-artifacts/general-g-l2-diagnostic-1-build.stdout.log",
   "mission_id": "mission-g-l2-general-live-diagnostic-1",
   "mission_file": "/workspace/codex/missions/general-g-l2-cache-control-diagnostic-1/mission.json",
