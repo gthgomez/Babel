@@ -15,7 +15,7 @@ import {
 type QuestionCoverageStatus = z.infer<typeof QuestionCoverageStatusSchema>
 
 const HOST_COVERAGE_REVIEWER = 'research-v2-bound-question-coverage'
-const HOST_COVERAGE_REVIEWER_VERSION = '0.3.1-obligation-response-validation'
+const HOST_COVERAGE_REVIEWER_VERSION = '0.3.2-obligation-judgment-integrity'
 
 export function buildRevisionProvenanceIndex(
   sources: readonly SourceRecord[],
@@ -67,6 +67,7 @@ export interface BoundCoverageAssessment {
   satisfiesRequiredFacets: boolean
   missingFacets: string[]
   wrongAspectEvidenceOnly: boolean
+  judgmentIntegrityIssues?: string[]
 }
 
 export function assessBoundQuestionCoverageFromAdmittedEvidence(
@@ -158,10 +159,13 @@ export function enforceBoundQuestionCoverageOnFindings(
     }
 
     const missing = assessment.missingFacets.join(',')
+    const integrity = assessment.judgmentIntegrityIssues?.join(',') ?? ''
     const hostRationale =
       obligations.length === 0
         ? `Host bound-question coverage: downgraded model "${modelCoverage}" to "${boundStatus}" because plan question has no coverage_obligations (legacy conservative bound).`
-        : `Host bound-question coverage: downgraded model "${modelCoverage}" to "${boundStatus}" because obligation judgment(s) fail host validation: ${missing}.`
+        : integrity.length > 0
+          ? `Host bound-question coverage: downgraded model "${modelCoverage}" to "${boundStatus}" because obligation_coverage judgment integrity failed: ${integrity}.`
+          : `Host bound-question coverage: downgraded model "${modelCoverage}" to "${boundStatus}" because obligation judgment(s) fail host validation: ${missing}.`
     const priorRationale = finding.question_coverage?.rationale ?? ''
     return {
       ...finding,

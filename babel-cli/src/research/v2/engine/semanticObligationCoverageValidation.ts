@@ -1,10 +1,16 @@
 import type { PlanCoverageObligation } from '../contracts/plan.js'
 import type { PlanObligationCoverageRecord } from '../contracts/planObligationCoverageRecords.js'
+import {
+  allowedObligationIdsFromPlan,
+  integrityIssueToResponseViolation,
+  obligationRowIntegrityIssueStrings,
+  passageIdIntegrityIssueStrings,
+} from './obligationCoverageJudgmentIntegrity.js'
 
 export type ObligationCoverageResponseViolation =
   | 'unknown_obligation_id'
   | 'duplicate_obligation_id'
-  | 'unknown_passage_id'
+  | 'absent_passage_id'
   | 'foreign_passage_id'
   | 'missing_supporting_passage_ids'
   | 'obligation_coverage_omitted'
@@ -42,52 +48,45 @@ export function validateSemanticObligationCoverageResponse(
     }
   }
 
-  const allowedObligationIds = new Set(params.planObligations.map((o) => o.obligation_id))
-  const findingPassageSet = new Set(params.findingPassageIds)
+  const allowedObligationIds = allowedObligationIdsFromPlan(params.planObligations)
   const seenObligationIds = new Set<string>()
   const records: PlanObligationCoverageRecord[] = []
 
   for (const entry of rawEntries) {
-    if (seenObligationIds.has(entry.obligation_id)) {
+    const rowIssues = obligationRowIntegrityIssueStrings(
+      entry.obligation_id,
+      allowedObligationIds,
+      seenObligationIds,
+    )
+    if (rowIssues.length > 0) {
+      const issue = rowIssues[0]!
       return {
         valid: false,
-        violation: 'duplicate_obligation_id',
-        detail: `duplicate obligation_id ${entry.obligation_id}`,
-      }
-    }
-    seenObligationIds.add(entry.obligation_id)
-
-    if (!allowedObligationIds.has(entry.obligation_id)) {
-      return {
-        valid: false,
-        violation: 'unknown_obligation_id',
-        detail: `unknown obligation_id ${entry.obligation_id}`,
+        violation: integrityIssueToResponseViolation(issue),
+        detail: issue,
       }
     }
 
-    if (entry.status === 'met') {
-      const supporting = entry.supporting_passage_ids
-      if (!supporting || supporting.length === 0) {
+    const supporting = entry.supporting_passage_ids
+    if (entry.status === 'met' && (!supporting || supporting.length === 0)) {
+      return {
+        valid: false,
+        violation: 'missing_supporting_passage_ids',
+        detail: `missing_supporting_passage_ids:${entry.obligation_id}`,
+      }
+    }
+    if (supporting && supporting.length > 0) {
+      const passageIssues = passageIdIntegrityIssueStrings(
+        params.findingPassageIds,
+        supporting,
+        (passageId) => params.admittedPassageIds.has(passageId),
+      )
+      if (passageIssues.length > 0) {
+        const issue = passageIssues[0]!
         return {
           valid: false,
-          violation: 'missing_supporting_passage_ids',
-          detail: `obligation_id ${entry.obligation_id} met requires supporting_passage_ids`,
-        }
-      }
-      for (const passageId of supporting) {
-        if (!params.admittedPassageIds.has(passageId)) {
-          return {
-            valid: false,
-            violation: 'unknown_passage_id',
-            detail: `unknown passage_id ${passageId} for obligation_id ${entry.obligation_id}`,
-          }
-        }
-        if (!findingPassageSet.has(passageId)) {
-          return {
-            valid: false,
-            violation: 'foreign_passage_id',
-            detail: `passage_id ${passageId} not cited on finding for obligation_id ${entry.obligation_id}`,
-          }
+          violation: integrityIssueToResponseViolation(issue),
+          detail: issue,
         }
       }
     }

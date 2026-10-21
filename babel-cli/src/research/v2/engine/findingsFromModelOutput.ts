@@ -123,7 +123,7 @@ export function applySemanticSupportReview(
           judgment.question_coverage,
           validated.violation,
         )
-        coverageRationale = `${judgment.rationale} Host rejected obligation_coverage response (${validated.violation}): ${validated.detail}.`
+        coverageRationale = `${judgment.rationale} Host rejected obligation_coverage response: ${validated.detail}.`
         finding.plan_obligation_coverage = undefined
       } else {
         finding.plan_obligation_coverage = validated.records

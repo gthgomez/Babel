@@ -74,7 +74,7 @@ describe('validateSemanticObligationCoverageResponse', () => {
     )
     assert.equal(result.valid, false)
     if (!result.valid) {
-      assert.equal(result.violation, 'unknown_passage_id')
+      assert.equal(result.violation, 'absent_passage_id')
     }
   })
 
@@ -172,7 +172,7 @@ describe('applySemanticSupportReview obligation_coverage response validation', (
       },
     )
     assert.equal(reviewed[0]?.question_coverage?.status, 'partial')
-    assert.match(reviewed[0]?.question_coverage?.rationale ?? '', /unknown_passage_id/)
+    assert.match(reviewed[0]?.question_coverage?.rationale ?? '', /absent_passage_id:DOES-NOT-EXIST/)
     assert.equal(reviewed[0]?.plan_obligation_coverage, undefined)
   })
 })
