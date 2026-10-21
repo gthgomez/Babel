@@ -1,5 +1,11 @@
 {
   "schema": "research-v2-offline-native-review-readiness/v1",
+  "receipt_binding": {
+    "frozen": true,
+    "do_not_rebind_to_later_commits": true,
+    "bound_review_head": "5dbd870070bba0a5d0ba16b8b2feed203afcebf3",
+    "note": "Scoped native-review offline proof at this head; later follow-up commits do not retroactively invalidate the fresh Linux two-distinct-URL comparison diagnostic readiness issued against this receipt."
+  },
   "review_checkpoints": ["e5f028ce", "5dbd8700"],
   "git": {
     "head": "5dbd870070bba0a5d0ba16b8b2feed203afcebf3",

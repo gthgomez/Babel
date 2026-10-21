@@ -14,6 +14,7 @@ import {
   assertRegularFileSizeStableAfterRead,
   readBoundedRegularFileAtPath,
   resolveArxiv170603762PaperBytesFromExternalCache,
+  resolveCacheFileOpenFlags,
   resolveManifestedPaperBytesFromExternalCache,
 } from './arxivPaperExternalCache.js'
 import { readFileSync } from 'node:fs'
@@ -38,6 +39,22 @@ function withTempCacheDir(run: (cacheRoot: string) => void): void {
 }
 
 describe('arxiv external paper cache (isolated temp dirs)', () => {
+  it('resolveCacheFileOpenFlags is qualified on linux (no silent zero fallback)', () => {
+    const flags = resolveCacheFileOpenFlags()
+    if (process.platform === 'linux') {
+      assert.equal(flags.supported, true)
+      if (!flags.supported) return
+      assert.equal(flags.platform_qualification, 'linux_open_nofollow_nonblock')
+      assert.equal(typeof flags.flags, 'number')
+      assert.notEqual(flags.flags, constants.O_RDONLY)
+    } else {
+      assert.equal(flags.supported, false)
+      if (flags.supported) return
+      assert.equal(flags.status, 'unsupported_platform')
+      assert.ok(flags.missing_constants.length >= 1)
+    }
+  })
+
   it('reports missing cache without reading user home cache', () => {
     withTempCacheDir((cacheRoot) => {
       const resolved = resolveManifestedPaperBytesFromExternalCache(tinyManifest, { cacheRoot })

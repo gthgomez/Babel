@@ -46,6 +46,12 @@ export type ArxivPaperCacheResolveResult =
       manifestSha256: string
       actualSha256: string
     }
+  | {
+      status: 'unsupported_platform'
+      message: string
+      missing_constants: ('O_NOFOLLOW' | 'O_NONBLOCK')[]
+      platform_qualification: 'requires_linux_open_nofollow_nonblock'
+    }
 
 function defaultCacheRoot(): string {
   const override = process.env.BABEL_RESEARCH_V2_CAMPAIGN_PAPER_CACHE?.trim()
@@ -59,18 +65,54 @@ function resolveArtifactPath(cacheRoot: string, artifactPath: string): string {
   return join(cacheRoot, artifactPath)
 }
 
-const OPEN_FLAGS =
-  constants.O_RDONLY |
-  (constants.O_NOFOLLOW ?? 0) |
-  (constants.O_NONBLOCK ?? 0)
+export type CacheFileOpenPlatformSupport =
+  | {
+      supported: true
+      flags: number
+      platform_qualification: 'linux_open_nofollow_nonblock'
+    }
+  | {
+      supported: false
+      status: 'unsupported_platform'
+      message: string
+      missing_constants: ('O_NOFOLLOW' | 'O_NONBLOCK')[]
+      platform_qualification: 'requires_linux_open_nofollow_nonblock'
+    }
+
+/** Fail closed when symlink-safe open flags are unavailable (no silent `?? 0` fallback). */
+export function resolveCacheFileOpenFlags(): CacheFileOpenPlatformSupport {
+  const missing: ('O_NOFOLLOW' | 'O_NONBLOCK')[] = []
+  if (typeof constants.O_NOFOLLOW !== 'number') {
+    missing.push('O_NOFOLLOW')
+  }
+  if (typeof constants.O_NONBLOCK !== 'number') {
+    missing.push('O_NONBLOCK')
+  }
+  if (missing.length > 0) {
+    return {
+      supported: false,
+      status: 'unsupported_platform',
+      message:
+        `campaign paper cache requires fs.constants ${missing.join(' and ')} for bounded regular-file reads without following symlinks; this platform does not expose them`,
+      missing_constants: missing,
+      platform_qualification: 'requires_linux_open_nofollow_nonblock',
+    }
+  }
+  return {
+    supported: true,
+    flags: constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+    platform_qualification: 'linux_open_nofollow_nonblock',
+  }
+}
 
 type BoundedReadResult =
   | { ok: true; bytes: Buffer }
   | {
       ok: false
-      status: 'not_regular_file' | 'size_mismatch' | 'read_failed'
+      status: 'not_regular_file' | 'size_mismatch' | 'read_failed' | 'unsupported_platform'
       message: string
       actualByteLength?: number
+      missing_constants?: ('O_NOFOLLOW' | 'O_NONBLOCK')[]
     }
 
 export function assertRegularFileSizeStableAfterRead(
@@ -108,9 +150,18 @@ export function readBoundedRegularFileAtPath(
   resolvedPath: string,
   expectedByteLength: number,
 ): BoundedReadResult {
+  const openFlags = resolveCacheFileOpenFlags()
+  if (!openFlags.supported) {
+    return {
+      ok: false,
+      status: 'unsupported_platform',
+      message: openFlags.message,
+      missing_constants: openFlags.missing_constants,
+    }
+  }
   let fd: number | undefined
   try {
-    fd = openSync(resolvedPath, OPEN_FLAGS)
+    fd = openSync(resolvedPath, openFlags.flags)
     const stat = fstatSync(fd)
     if (!stat.isFile()) {
       return {
@@ -186,6 +237,14 @@ export function resolveManifestedPaperBytesFromExternalCache(
 
   const read = readBoundedRegularFileAtPath(expectedPath, manifest.byte_length)
   if (!read.ok) {
+    if (read.status === 'unsupported_platform') {
+      return {
+        status: 'unsupported_platform',
+        message: read.message,
+        missing_constants: read.missing_constants ?? [],
+        platform_qualification: 'requires_linux_open_nofollow_nonblock',
+      }
+    }
     if (read.status === 'not_regular_file') {
       return {
         status: 'not_regular_file',
