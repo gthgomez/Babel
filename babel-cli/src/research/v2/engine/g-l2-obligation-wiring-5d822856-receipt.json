@@ -1,0 +1,16 @@
+{
+  "schema": "research-v2-g-l2-obligation-wiring-receipt/v1",
+  "integration_commits": {
+    "production_wiring": "27512ba14e5ab2101c68134f18a8e58c2bc432fa",
+    "docs_clarification": "5d8228564fb133d6a95785dc1f9a8c7822345019",
+    "upstream_tree": "b56938e4f56feb6a2909e13fa07de95c92280431"
+  },
+  "command": "npm run test:research-v2-g-l2-bound-coverage",
+  "verification_head": "af31114ecf1729dceb8fc7a3f02578545182eae2",
+  "tests_expected": 24,
+  "note": "Production path reciprocal tests use buildPlanRevisionFromPlanQuestions + stampCoverageSourceSlotOnSource; labelled fixture bytes unchanged.",
+  "outer_exit_code": 0,
+  "tests": 24,
+  "pass": 24,
+  "fail": 0
+}
