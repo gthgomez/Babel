@@ -3,8 +3,10 @@ import type { PassageRecord } from '../../contracts/passages.js'
 import { PassageRecordSchema } from '../../contracts/passages.js'
 import {
   awaitWithPdfAbort,
+  destroyLoadingTask,
   destroyPdfResources,
   mergeAbortSignals,
+  type PdfLoadingTaskLike,
 } from './pdfAbortable.js'
 import { buildInlinePassageTextRef } from './passageInlineText.js'
 import { decodeAdmittedInlineBytes } from './plainTextFromAdmittedBytes.js'
@@ -20,6 +22,11 @@ export const PDF_TEXT_EXTRACTION_VERSION = 'general-pdf-text/0.1.0'
 
 export type PdfExtractionStallStage = 'loading' | 'getPage' | 'getTextContent'
 
+export type PdfExtractionTestHooks = {
+  /** Replace pdfjs loading task (deterministic load failure/cleanup tests). */
+  createLoadingTask?: () => PdfLoadingTaskLike
+}
+
 export type PdfExtractionOptions = {
   /** Test hook: delay between pages to exercise cancellation. */
   pageDelayMs?: number
@@ -27,6 +34,7 @@ export type PdfExtractionOptions = {
   stallStage?: PdfExtractionStallStage
   /** Test hook: build passages without pdfjs (page number → raw page text). */
   synthesizePageText?: Record<number, string>
+  testHooks?: PdfExtractionTestHooks
 }
 
 type PdfPageLike = {
@@ -37,11 +45,6 @@ type PdfDocumentLike = {
   numPages: number
   getPage: (n: number) => Promise<PdfPageLike>
   destroy: () => Promise<void>
-}
-
-type PdfLoadingTaskLike = {
-  promise: Promise<PdfDocumentLike>
-  destroy: () => void
 }
 
 function assertPdfMagic(bytes: Buffer): void {
@@ -109,26 +112,36 @@ function passagesFromSynthesizedPages(
 async function loadPdfDocument(
   raw: Buffer,
   signal?: AbortSignal,
-  stallStage?: PdfExtractionStallStage,
+  options?: PdfExtractionOptions,
 ): Promise<{ doc: PdfDocumentLike; loadingTask: PdfLoadingTaskLike }> {
-  if (stallStage === 'loading') {
-    const loadingTask: PdfLoadingTaskLike = {
+  const stallStage = options?.stallStage
+  let loadingTask: PdfLoadingTaskLike
+
+  if (options?.testHooks?.createLoadingTask) {
+    loadingTask = options.testHooks.createLoadingTask()
+  } else if (stallStage === 'loading') {
+    loadingTask = {
       promise: neverResolving<PdfDocumentLike>(),
-      destroy: () => {},
+      destroy: () => Promise.resolve(),
     }
-    const doc = await awaitWithPdfAbort(loadingTask.promise, signal, () => {
-      loadingTask.destroy()
-    })
-    return { doc, loadingTask }
+  } else {
+    const { getDocument } = await import('pdfjs-dist/legacy/build/pdf.mjs')
+    throwIfPdfAborted(signal)
+    loadingTask = getDocument({
+      data: new Uint8Array(raw),
+      useSystemFonts: true,
+    }) as PdfLoadingTaskLike
   }
 
-  const { getDocument } = await import('pdfjs-dist/legacy/build/pdf.mjs')
-  throwIfPdfAborted(signal)
-  const loadingTask = getDocument({ data: new Uint8Array(raw), useSystemFonts: true }) as PdfLoadingTaskLike
-  const doc = await awaitWithPdfAbort(loadingTask.promise, signal, () => {
-    loadingTask.destroy()
-  })
-  return { doc, loadingTask }
+  try {
+    const doc = (await awaitWithPdfAbort(loadingTask.promise as Promise<PdfDocumentLike>, signal, () => {
+      void destroyLoadingTask(loadingTask)
+    })) as PdfDocumentLike
+    return { doc, loadingTask }
+  } catch (error) {
+    await destroyLoadingTask(loadingTask)
+    throw error
+  }
 }
 
 async function extractPassagesFromDoc(
@@ -192,40 +205,43 @@ export async function passagesFromAdmittedPdf(
   const scope = mergeAbortSignals(signal, PDF_EXTRACTION_DEADLINE_MS)
   const activeSignal = scope.signal
 
-  throwIfPdfAborted(activeSignal)
-  const raw = decodeAdmittedInlineBytes(admitted)
-  assertPdfMagic(raw)
-
-  if (options?.synthesizePageText) {
-    throwIfPdfAborted(activeSignal)
-    return passagesFromSynthesizedPages(admitted, options.synthesizePageText)
-  }
-
-  let doc: PdfDocumentLike | null = null
-  let loadingTask: PdfLoadingTaskLike | null = null
   try {
-    if (options?.stallStage === 'getPage' || options?.stallStage === 'getTextContent') {
-      doc = {
-        numPages: 1,
-        getPage: async () => ({
-          getTextContent: async () => ({ items: [{ str: 'unused' }] }),
-        }),
-        destroy: async () => {},
-      }
-      loadingTask = { promise: Promise.resolve(doc), destroy: () => {} }
-      return await extractPassagesFromDoc(admitted, doc, activeSignal, options)
+    throwIfPdfAborted(activeSignal)
+    const raw = decodeAdmittedInlineBytes(admitted)
+    assertPdfMagic(raw)
+
+    if (options?.synthesizePageText) {
+      throwIfPdfAborted(activeSignal)
+      return passagesFromSynthesizedPages(admitted, options.synthesizePageText)
     }
 
-    const loaded = await loadPdfDocument(raw, activeSignal, options?.stallStage)
-    doc = loaded.doc
-    loadingTask = loaded.loadingTask
-    throwIfPdfAborted(activeSignal)
-    return await extractPassagesFromDoc(admitted, doc, activeSignal, options)
+    let doc: PdfDocumentLike | null = null
+    let loadingTask: PdfLoadingTaskLike | null = null
+    try {
+      if (options?.stallStage === 'getPage' || options?.stallStage === 'getTextContent') {
+        doc = {
+          numPages: 1,
+          getPage: async () => ({
+            getTextContent: async () => ({ items: [{ str: 'unused' }] }),
+          }),
+          destroy: async () => {},
+        }
+        loadingTask = { promise: Promise.resolve(doc), destroy: () => Promise.resolve() }
+        return await extractPassagesFromDoc(admitted, doc, activeSignal, options)
+      }
+
+      const loaded = await loadPdfDocument(raw, activeSignal, options)
+      doc = loaded.doc
+      loadingTask = loaded.loadingTask
+      throwIfPdfAborted(activeSignal)
+      return await extractPassagesFromDoc(admitted, doc, activeSignal, options)
+    } finally {
+      await destroyPdfResources(doc, loadingTask)
+    }
   } catch (error) {
     if (error instanceof PdfExtractionCancelled) throw error
     throw error
   } finally {
-    await destroyPdfResources(doc, loadingTask)
     scope.dispose()
   }
 }

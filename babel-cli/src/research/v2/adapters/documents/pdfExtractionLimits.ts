@@ -4,6 +4,8 @@ export const PDF_MAX_PAGES_PER_EXTRACTION = 512
 export const PDF_MAX_OUTPUT_UTF16_UNITS_PER_PAGE = 32_000
 /** Wall-clock bound for a single admitted-PDF extraction (loading + pages). */
 export const PDF_EXTRACTION_DEADLINE_MS = 120_000
+/** Wall-clock bound waiting on pdfjs destroy() during cleanup. */
+export const PDF_DESTROY_BOUND_MS = 5_000
 
 export class PdfExtractionCancelled extends Error {
   constructor() {

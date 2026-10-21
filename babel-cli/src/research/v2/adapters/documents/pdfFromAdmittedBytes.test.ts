@@ -93,6 +93,50 @@ test('passagesFromAdmittedPdf: long unicode page text satisfies PassageRecordSch
   }
 })
 
+test('passagesFromAdmittedPdf: rejected load destroys loading task', async () => {
+  let destroyCalls = 0
+  const admitted = pdfAdmitted()
+  await assert.rejects(
+    () =>
+      passagesFromAdmittedPdf(admitted, undefined, {
+        testHooks: {
+          createLoadingTask: () => ({
+            promise: Promise.reject(new Error('synthetic load failure')),
+            destroy: () => {
+              destroyCalls++
+              return Promise.reject(new Error('synthetic destroy failure'))
+            },
+          }),
+        },
+      }),
+    /synthetic load failure/,
+  )
+  assert.ok(destroyCalls >= 1)
+})
+
+test('passagesFromAdmittedPdf: aborted read returns while hanging doc destroy stays bounded', async () => {
+  const user = new AbortController()
+  const admitted = pdfAdmitted()
+  const promise = passagesFromAdmittedPdf(admitted, user.signal, {
+    testHooks: {
+      createLoadingTask: () => ({
+        promise: Promise.resolve({
+          numPages: 1,
+          getPage: async () => ({
+            getTextContent: () => new Promise<{ items: Array<{ str?: string }> }>(() => {}),
+          }),
+          destroy: () => new Promise<void>(() => {}),
+        }),
+        destroy: () => Promise.resolve(),
+      }),
+    },
+  })
+  user.abort()
+  const started = Date.now()
+  await assert.rejects(promise, (err: unknown) => err instanceof PdfExtractionCancelled)
+  assert.ok(Date.now() - started < 500)
+})
+
 test('passagesFromAdmittedPdf: rejects non-pdf bytes', async () => {
   const bytes = Buffer.from('not a pdf file', 'utf8')
   const admitted = buildAdmittedContent('op', 's', 'r', bytes, PDF_MEDIA_TYPE)
