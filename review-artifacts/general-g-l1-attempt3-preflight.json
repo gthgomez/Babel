@@ -4,6 +4,7 @@
   "coordinator_release_required": true,
   "integration_transport_sha": "06c18d445f172fca8e03cc0307a0748fbb3d4c3d",
   "integration_tree_sha": "aeacaf9f32e8fb89a307fd8e702654f1b2e2ce9c",
+  "b_merge_sha": "ee157eebcb8d0d0f23f1cf641e08ed7fd1bb7aa9",
   "model_route": {
     "route_key": "deepseek-v4-flash-openrouter",
     "provider": "openrouter",
