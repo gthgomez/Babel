@@ -1,6 +1,7 @@
 import type { FindingRecord } from '../contracts/findings.js'
 import type { PassageRecord } from '../contracts/passages.js'
 import { MissionTerminalStateSchema, type PlanRevision } from '../contracts/plan.js'
+import type { ResearchStoreEvent } from '../ports/researchStore.js'
 import type { z } from 'zod'
 
 type MissionTerminalState = z.infer<typeof MissionTerminalStateSchema>
@@ -37,15 +38,16 @@ export function questionIdsWithAnsweredCoverage(
   return answered
 }
 
-/** Supported findings that do not fully answer their bound plan question. */
+/** Findings with assessed partial/tangential question coverage (supported or host-downgraded insufficient). */
 export function deriveQuestionCoverageLimitations(
   findings: readonly FindingRecord[],
 ): string[] {
   const limitations: string[] = []
   for (const finding of findings) {
-    if (supportStatus(finding)?.status !== 'supported') continue
+    const support = supportStatus(finding)?.status ?? 'not_checked'
+    if (support !== 'supported' && support !== 'insufficient') continue
     const coverage = finding.question_coverage?.status ?? 'not_assessed'
-    if (coverage === 'answers') continue
+    if (coverage === 'answers' || coverage === 'not_assessed') continue
     limitations.push(
       `question_coverage_${coverage}:${finding.question_id}:${finding.finding_id}`,
     )
@@ -62,6 +64,19 @@ export function deriveUnansweredPlanQuestionIds(
   return plan.questions
     .map((q) => q.question_id)
     .filter((questionId) => !answered.has(questionId))
+}
+
+export function planRevisionFromStoreEvents(
+  events: readonly ResearchStoreEvent[],
+  planRevisionId: string,
+): PlanRevision | undefined {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index]
+    if (event?.kind !== 'plan_revised') continue
+    const plan = (event.payload as { plan?: PlanRevision }).plan
+    if (plan?.plan_revision_id === planRevisionId) return plan
+  }
+  return undefined
 }
 
 function retrievedAtInstantMs(retrievedAt: string): number | null {

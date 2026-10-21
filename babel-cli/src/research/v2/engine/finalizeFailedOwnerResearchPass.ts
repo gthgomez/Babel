@@ -8,6 +8,11 @@ import {
   type ResearchPassStoppingReason,
 } from './researchPassFailure.js'
 import { deriveExternalOperationAccountingNotes } from './deriveExternalOperationAccountingNotes.js'
+import { listFindingsFromStoreEvents } from './listFindingsFromStoreEvents.js'
+import {
+  deriveUnansweredPlanQuestionIds,
+  planRevisionFromStoreEvents,
+} from './researchReportFinalization.js'
 import { deriveSearchProviderReportLimitations } from './sourceDiscoverSearchReceipt.js'
 
 export function buildFailedPassTerminalReport(params: {
@@ -19,6 +24,7 @@ export function buildFailedPassTerminalReport(params: {
   stoppingReason: ResearchPassStoppingReason
   searchProviderLimitations?: readonly string[]
   accountingNotes?: string
+  unansweredQuestionIds?: readonly string[]
 }): ResearchReportV2 {
   const summary = `Research pass failed during ${params.failurePhase}. ${params.message}`.slice(0, 4000)
   return {
@@ -26,7 +32,7 @@ export function buildFailedPassTerminalReport(params: {
     plan_revision_id: params.planRevisionId,
     terminal_state: 'failed',
     answer_summary: summary,
-    unanswered_questions: [],
+    unanswered_questions: [...(params.unansweredQuestionIds ?? [])],
     coverage_notes: [
       'Terminal receipt recorded after admitted pass failure.',
       params.accountingNotes ??
@@ -70,6 +76,11 @@ export async function finalizeFailedOwnerResearchPass(params: {
     fence.active_plan_revision_id ?? `${params.planRevisionId}-bootstrap`
   const events = await params.store.listEvents(params.mission.mission_id)
   const searchProviderLimitations = deriveSearchProviderReportLimitations(events)
+  const activePlan = planRevisionFromStoreEvents(events, planRevisionId)
+  const findings = listFindingsFromStoreEvents(events)
+  const unansweredQuestionIds = activePlan
+    ? deriveUnansweredPlanQuestionIds(activePlan, findings)
+    : []
   const ctx: MissionWriteContext = {
     mission_id: params.mission.mission_id,
     plan_revision_id: planRevisionId,
@@ -86,6 +97,7 @@ export async function finalizeFailedOwnerResearchPass(params: {
       stoppingReason,
       searchProviderLimitations,
       accountingNotes: deriveExternalOperationAccountingNotes(events, params.mission.mission_id),
+      unansweredQuestionIds,
     }),
   )
   return true

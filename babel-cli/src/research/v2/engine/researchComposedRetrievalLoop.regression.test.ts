@@ -47,8 +47,8 @@ describe('composed retrieval regressions (scoped access + settlement)', () => {
     const discovery = resolveDiscoveryAdapterForMission(mission, registries)
     assert.ok(discovery instanceof TechnicalRepositoryFileAdapter)
 
-    const babelPath = 'babel-cli/src/research/v2/persistence/README.md'
-    const langgraphPath = 'libs/langgraph/README.md'
+    const babelPath = 'babel-cli/src/research/v2/persistence/durableResearchStore.ts'
+    const langgraphPath = 'libs/langgraph/pregel/checkpoint.py'
     const treesSeen: string[] = []
 
     const searchProvider = createMissionProductionSearchProvider({
