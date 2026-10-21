@@ -19,7 +19,10 @@ import {
   findingsFromExtractModelOutput,
 } from './findingsFromModelOutput.js'
 import { buildSynthesizedResearchReport } from './buildSynthesizedResearchReport.js'
-import { listSourceRevisionsFromStoreEvents } from './listSourceRevisionsFromStoreEvents.js'
+import {
+  listSourceRevisionsFromStoreEvents,
+  listSourcesFromStoreEvents,
+} from './listSourceRevisionsFromStoreEvents.js'
 import { settleModelOperation } from './settleModelOperation.js'
 import { unknownUsageSettlement } from './settleExternalOperation.js'
 import type { ResearchModelInvocationResult } from '../ports/researchModelPort.js'
@@ -324,7 +327,13 @@ export async function runAdmittedResearchEndToEndPass(
     await request.store.appendFinding(ctx, finding)
   }
 
-  const reviewInput = buildSemanticSupportReviewInput(findings, passages, activePlan)
+  const evidenceForReview = await request.store.listEvents(request.session.mission.mission_id)
+  const reviewSources = listSourcesFromStoreEvents(evidenceForReview)
+  const reviewRevisions = listSourceRevisionsFromStoreEvents(evidenceForReview)
+  const reviewInput = buildSemanticSupportReviewInput(findings, passages, activePlan, {
+    sources: reviewSources,
+    sourceRevisions: reviewRevisions,
+  })
   const reviewOutput = await invokeModelPhase(request.store, ctx, request.model, {
     operationId: request.reviewOperationId,
     attemptId: request.reviewAttemptId,
@@ -338,7 +347,12 @@ export async function runAdmittedResearchEndToEndPass(
     now,
   })
 
-  findings = applySemanticSupportReview(findings, reviewOutput, now())
+  findings = applySemanticSupportReview(findings, reviewOutput, now(), {
+    plan: activePlan,
+    passages,
+    sources: reviewSources,
+    sourceRevisions: reviewRevisions,
+  })
   for (const finding of findings) {
     throwIfAborted(request.signal, 'semantic judgment persistence')
     await request.store.appendFinding(ctx, finding)

@@ -6,6 +6,8 @@ import {
 } from '../contracts/modelOutputs.js'
 import type { PlanRevision } from '../contracts/plan.js'
 import type { PassageRecord } from '../contracts/passages.js'
+import type { SourceRecord, SourceRevision } from '../contracts/sources.js'
+import { enforceBoundQuestionCoverageOnFindings } from './boundQuestionCoverageFromEvidence.js'
 
 function findingId(operationId: string, index: number): string {
   return `finding-${createHash('sha256').update(`${operationId}:${index}`).digest('hex').slice(0, 24)}`
@@ -61,10 +63,18 @@ const SEMANTIC_REVIEWER_VERSION = '0.1.0-offline'
 const QUESTION_COVERAGE_REVIEWER = SEMANTIC_REVIEWER
 const QUESTION_COVERAGE_REVIEWER_VERSION = '0.1.0-question-coverage'
 
+export interface SemanticSupportReviewContext {
+  plan: PlanRevision
+  passages: readonly PassageRecord[]
+  sources: readonly SourceRecord[]
+  sourceRevisions: readonly SourceRevision[]
+}
+
 export function applySemanticSupportReview(
   findings: FindingRecord[],
   modelOutput: Record<string, unknown>,
   reviewedAt: string,
+  context?: SemanticSupportReviewContext,
 ): FindingRecord[] {
   const parsed = SemanticSupportReviewOutputSchema.parse(modelOutput)
   const byId = new Map(findings.map((f) => [f.finding_id, { ...f }]))
@@ -112,5 +122,15 @@ export function applySemanticSupportReview(
     }
     finding.revised_at = reviewedAt
   }
-  return [...byId.values()]
+  const reviewed = [...byId.values()]
+  if (!context) {
+    return reviewed
+  }
+  return enforceBoundQuestionCoverageOnFindings(reviewed, {
+    plan: context.plan,
+    passages: context.passages,
+    sources: context.sources,
+    sourceRevisions: context.sourceRevisions,
+    reviewedAt,
+  })
 }
