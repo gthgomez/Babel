@@ -20,6 +20,7 @@ describe('FetchSourceAccessPort', () => {
         requestedUrl: raw,
         finalUrl: raw,
         redirectChain: [raw],
+      transportCoding: null,
       }),
     })
     const source = SourceRecordSchema.parse({
@@ -64,6 +65,7 @@ describe('FetchSourceAccessPort', () => {
         requestedUrl: 'https://example.test',
         finalUrl: 'https://example.test',
         redirectChain: ['https://example.test'],
+      transportCoding: null,
       }),
     })
     const result = await port.search({

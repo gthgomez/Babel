@@ -210,7 +210,16 @@ export class FetchSourceAccessPort implements SourceAccessPort {
           message: 'source has no retrievable bytes',
         }
       }
-      const truncated = response.truncated
+      const decodeTruncated = response.transportCoding?.decoded_truncated === true
+      const truncated = response.truncated || decodeTruncated
+      const truncationReason = decodeTruncated
+        ? 'host_decoded_byte_limit'
+        : response.truncated
+          ? 'host_byte_limit'
+          : undefined
+      const bytesReceivedTotal = decodeTruncated
+        ? (response.transportCoding?.decoded_byte_length ?? response.bytesReceived)
+        : response.bytesReceived
       const contentHash = sha256(admittedBytes)
       const mediaType = response.contentType.split(';')[0]?.trim() ?? 'application/octet-stream'
       const revision: SourceRevision = {
@@ -222,7 +231,7 @@ export class FetchSourceAccessPort implements SourceAccessPort {
         media_type: mediaType,
         completeness: truncated ? 'truncated' : 'complete',
         byte_length_received: admittedBytes.byteLength,
-        truncation_reason: truncated ? 'host_byte_limit' : undefined,
+        truncation_reason: truncationReason,
       }
       let provenanceUrls: AdmittedContent['provenance']
       if (pinnedBlobRef && request.source.kind === 'repository_file') {
@@ -239,6 +248,9 @@ export class FetchSourceAccessPort implements SourceAccessPort {
             final_url: response.finalUrl,
             redirect_chain: response.redirectChain,
             repository_file_pin: { pinned_blob_url: observedUrl },
+            ...(response.transportCoding
+              ? { http_content_coding: response.transportCoding }
+              : {}),
           }
         } catch (err) {
           const message = err instanceof TechnicalRepositoryPinError ? err.message : String(err)
@@ -254,6 +266,9 @@ export class FetchSourceAccessPort implements SourceAccessPort {
           requested_url: response.requestedUrl,
           final_url: response.finalUrl,
           redirect_chain: response.redirectChain,
+          ...(response.transportCoding
+            ? { http_content_coding: response.transportCoding }
+            : {}),
         }
       }
       const admitted: AdmittedContent = {
@@ -270,8 +285,8 @@ export class FetchSourceAccessPort implements SourceAccessPort {
         ...(truncated
           ? {
               truncation: {
-                reason: 'host_byte_limit',
-                bytes_received: response.bytesReceived,
+                reason: truncationReason ?? 'host_byte_limit',
+                bytes_received: bytesReceivedTotal,
                 bytes_limit: limit,
               },
             }

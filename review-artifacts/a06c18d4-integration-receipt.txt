@@ -1,0 +1,22 @@
+integration_transport_commit=06c18d445f172fca8e03cc0307a0748fbb3d4c3d
+integration_tree=aeacaf9f32e8fb89a307fd8e702654f1b2e2ce9c
+b_branch_merge_sha=ee157eebcb8d0d0f23f1cf641e08ed7fd1bb7aa9
+
+api_surface=babel-cli/src/research/v2/access/admittedHttpContentCoding.ts
+  exports=decodeAdmittedHttpBody, parseContentEncodings, AdmittedContentCodingError, AdmittedHttpTransportCoding
+port_tests=A fetchSourceAccessPort.decodeTruncation.test.ts (218649 @ 200000 cap)
+b_reciprocal=fetchSourceAccessPort.gzip.reciprocal.test.ts
+
+targeted_tap=18/18 pass (7 suites)
+  admittedHttpContentCoding.test.ts (3)
+  fetchSourceAccessPort.decodeTruncation.test.ts (1)
+  fetchSourceAccessPort.gzip.reciprocal.test.ts (7)
+  generalWebGzipUtf8Admission.negative.integration.test.ts (1)
+  generalAdapterGL1PlanningFailureReciprocal.integration.test.ts (3)
+  generalAdapterLifecycleReciprocal.integration.test.ts (3)
+
+typecheck=pass (babel-cli npm run typecheck)
+build=pass (babel-cli npm run build)
+
+raw_tap=runs/evidence/gzip-a06c18d4-reciprocal.tap.txt (gitignored)
+attempt3_live=not executed (coordinator release)

@@ -8,6 +8,11 @@ import {
   formatEnterprisePolicyDecision,
 } from '../../../config/enterprisePolicy.js'
 import { isPrivateNetworkAddress } from '../../../tools/webContext.js'
+import {
+  AdmittedContentCodingError,
+  decodeAdmittedHttpBody,
+  type AdmittedHttpTransportCoding,
+} from './admittedHttpContentCoding.js'
 
 const MAX_REDIRECTS = 8
 
@@ -31,6 +36,7 @@ export interface AdmittedHttpGetResult {
   requestedUrl: string
   finalUrl: string
   redirectChain: string[]
+  transportCoding: AdmittedHttpTransportCoding | null
   /** Final-hop response headers (wire names lowercased; values as received). */
   responseHeaders?: Record<string, string | string[] | undefined>
 }
@@ -291,16 +297,43 @@ export async function admittedHttpGet(params: {
       ? contentTypeHeader.join(', ')
       : (contentTypeHeader ?? 'application/octet-stream')
 
+    if (params.signal.aborted) {
+      throw new AdmittedContentCodingError('aborted', 'content decoding aborted')
+    }
+
+    let decodedBuffer = response.body.buffer
+    let transportCoding: AdmittedHttpTransportCoding | null = null
+    let truncated = response.body.truncated
+    try {
+      const decoded = await decodeAdmittedHttpBody({
+        encodedBody: response.body.buffer,
+        contentEncodingHeader: response.headers['content-encoding'],
+        maxDecodedBytes: params.maxBytes,
+        signal: params.signal,
+      })
+      decodedBuffer = decoded.buffer
+      transportCoding = decoded.transportCoding
+      if (decoded.decodedTruncated) {
+        truncated = true
+      }
+    } catch (err: unknown) {
+      if (err instanceof AdmittedContentCodingError) {
+        throw new AdmittedNetworkPolicyError(err.message)
+      }
+      throw err
+    }
+
     return {
       ok: status >= 200 && status < 300,
       status,
       contentType,
-      buffer: response.body.buffer,
+      buffer: decodedBuffer,
       bytesReceived: response.body.bytesReceived,
-      truncated: response.body.truncated,
+      truncated,
       requestedUrl,
       finalUrl: current.href,
       redirectChain,
+      transportCoding,
       responseHeaders: response.headers,
     }
   }

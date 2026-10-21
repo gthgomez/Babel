@@ -113,7 +113,7 @@ describe('general G-L1 planning failure reciprocal (A integration runtime, deter
         }
       }).completion
       assert.equal(completion.settlement, 'failed')
-      assert.equal(completion.failure_category, 'provider_invoke_failed')
+      assert.equal(completion.failure_category, 'structured_output_validation_failed')
       assert.equal(completion.usage_settlement?.input_tokens, 429)
       assert.equal(completion.usage_settlement?.output_tokens, 1784)
       if (completion.usage_settlement?.cost.status === 'reported') {

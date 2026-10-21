@@ -35,6 +35,7 @@ function governedAccess() {
       requestedUrl: technicalRepositoryCorpusFinalUrl,
       finalUrl: technicalRepositoryCorpusFinalUrl,
       redirectChain: [technicalRepositoryCorpusFinalUrl],
+    transportCoding: null,
     }),
   })
 }

@@ -99,6 +99,7 @@ function injectedOfflineAccess(mission: ResearchMissionV2) {
       requestedUrl: technicalRepositoryCorpusFinalUrl,
       finalUrl: technicalRepositoryCorpusFinalUrl,
       redirectChain: [technicalRepositoryCorpusFinalUrl],
+    transportCoding: null,
     }),
   })
   return port

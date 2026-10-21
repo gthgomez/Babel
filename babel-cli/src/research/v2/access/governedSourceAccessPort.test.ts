@@ -36,6 +36,7 @@ describe('GovernedSourceAccessPort', () => {
         requestedUrl: technicalRepositoryCorpusSource.observed_urls[0]!,
         finalUrl: technicalRepositoryCorpusSource.observed_urls[0]!,
         redirectChain: [technicalRepositoryCorpusSource.observed_urls[0]!],
+      transportCoding: null,
       }),
     })
     const search = await port.search({

@@ -1,0 +1,33 @@
+{
+  "schema_version": "research-mission-v2",
+  "contract_version": "2026.10.20-checkpoint.3.1.1",
+  "mission_id": "mission-g-l1-general-live-attempt3",
+  "profile_id": "general",
+  "profile_version": "0.1.0-m0",
+  "created_at": "2026-10-21T07:45:00.000Z",
+  "primary_question": "As of the run's UTC date, what is the latest stable Python release and its release date? Distinguish stable releases from prereleases, cite the official Python release/download page, and report uncertainty if official pages disagree or cannot be read.",
+  "intended_decision": "State the latest stable Python version number, its release date, and an official python.org release or download page citation; note uncertainty if sources conflict or are unreadable.",
+  "constraints": [
+    "as_of=run_utc_date",
+    "evidence_from_official_python_org=true",
+    "stable_vs_prerelease_must_be_explicit=true",
+    "campaign_attempt=3"
+  ],
+  "exclusions": [
+    "fictional products",
+    "invented version numbers",
+    "third-party download mirrors without primary python.org citation"
+  ],
+  "as_of": "2026-10-21",
+  "jurisdiction": "unknown",
+  "source_policy": {
+    "allowed_source_classes": ["web"],
+    "allowed_web_domains": [
+      "duckduckgo.com",
+      "html.duckduckgo.com",
+      "python.org",
+      "www.python.org",
+      "docs.python.org"
+    ]
+  }
+}

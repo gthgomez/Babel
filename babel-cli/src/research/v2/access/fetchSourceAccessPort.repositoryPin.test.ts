@@ -19,6 +19,7 @@ describe('FetchSourceAccessPort repository_file pin transport', () => {
         requestedUrl: rawUrl,
         finalUrl: otherRepoFinal,
         redirectChain: [rawUrl, otherRepoFinal],
+      transportCoding: null,
       }),
     })
     const result = await port.fetchContent({
