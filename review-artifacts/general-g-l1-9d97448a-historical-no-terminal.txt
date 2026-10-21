@@ -1,0 +1,11 @@
+# G-L1 live smoke @ 9d97448a — historical characterization (preserved)
+
+**Not current acceptance** after A failed-terminal repair lands.
+
+At `9d97448a`, single live G-L1 run (`review-artifacts/general-g-l1-live-run-receipt.json`):
+- `terminal_receipt_count: 0`
+- `research v2 report` failed: `no terminal_receipt report found for mission`
+- One failed `provider_invoke_failed` planning op with reported usage preserved
+- No sources/passages/citations
+
+Current B reciprocal acceptance (post-repair target): one honest `terminal_state: failed` receipt + inspectable `report`, still no fabricated evidence. See `generalAdapterGL1PlanningFailureReciprocal.integration.test.ts` (red until A lands failed-terminal).

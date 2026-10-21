@@ -1,5 +1,5 @@
 {
-  "_provenance": "Reconstructed from live G-L1 durable failure message (2026-10-21T06:41:22Z). Model echoed prompt/mission envelope instead of Research V2 plan_questions output; see review-artifacts/general-g-l1-cli-validation-details.txt for exact Zod trace.",
+  "_provenance": "Reconstructed from live G-L1 durable failure message (2026-10-21T06:41:22Z). Model echoed prompt/mission envelope instead of Research V2 plan_questions output; see review-artifacts/general-g-l1-cli-validation-details.txt for exact Zod trace. This is NOT a captured raw model response.",
   "operation_kind": "plan_questions",
   "input_mission_id": "mission-general-g-l1-python-stable",
   "profile_id": "general",

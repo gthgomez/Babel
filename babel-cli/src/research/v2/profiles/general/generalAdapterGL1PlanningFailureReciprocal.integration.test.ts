@@ -1,6 +1,6 @@
 /**
- * B reciprocal: G-L1 live planning failure shape on A integration runtime (9d97448a+).
- * Deterministic ProviderResearchModelBridge + captured malformed payload; no live API.
+ * B reciprocal: G-L1 planning failure on A integration runtime (deterministic; no live API).
+ * Malformed payload: reconstructed from live validation trace (not raw model capture).
  */
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
@@ -11,11 +11,7 @@ import { fileURLToPath } from 'node:url'
 import { describe, it } from 'node:test'
 import type { LlmRunner, RunnerCallbacks, RunnerInvocationMetadata } from '../../../../runners/base.js'
 import { loadResearchMissionFromFile } from '../../cli/loadResearchMissionFile.js'
-import {
-  inspectResearchV2Store,
-  reportResearchV2Store,
-  terminalReportFromEvents,
-} from '../../cli/researchV2CliOperations.js'
+import { reportResearchV2Store, terminalReportFromEvents } from '../../cli/researchV2CliOperations.js'
 import { runResearchV2MissionWithOwnerSession } from '../../cli/researchV2MissionRun.js'
 import { openAdmittedInspectStore } from '../../control/researchStoreAdmission.js'
 import { ProviderResearchModelBridge } from '../../model/providerResearchModelBridge.js'
@@ -70,37 +66,37 @@ function gL1ProductionShapedModel(): ProviderResearchModelBridge {
   })
 }
 
-describe('general G-L1 planning failure reciprocal (A runtime, deterministic)', () => {
-  it('preserves failed model op + usage; no evidence; inspect ok after close/reopen', async () => {
-    const mission = await loadResearchMissionFromFile(missionFile)
-    const dir = await mkdtemp(join(tmpdir(), 'babel-g-l1-planning-fail-'))
-    const model = gL1ProductionShapedModel()
-    const discoverQuery = 'latest stable Python release python.org download'
-    try {
-      await assert.rejects(
-        () =>
-          runResearchV2MissionWithOwnerSession({
-            storeDirectory: dir,
-            mission,
-            discoverQuery,
-            planRevisionId: 'plan-g-l1-reciprocal-001',
-            model,
-          }),
-        (err: unknown) => {
-          const message = err instanceof Error ? err.message : String(err)
-          assert.match(message, /Zod validation failed|Invalid input/)
-          return true
-        },
-      )
+async function runDeterministicPlanningFailureStore(dir: string, planRevisionId: string) {
+  const mission = await loadResearchMissionFromFile(missionFile)
+  await assert.rejects(
+    () =>
+      runResearchV2MissionWithOwnerSession({
+        storeDirectory: dir,
+        mission,
+        discoverQuery: 'latest stable Python release python.org download',
+        planRevisionId,
+        model: gL1ProductionShapedModel(),
+      }),
+    (err: unknown) => {
+      const message = err instanceof Error ? err.message : String(err)
+      assert.match(message, /Zod validation failed|Invalid input/)
+      return true
+    },
+  )
+  return mission
+}
 
+describe('general G-L1 planning failure reciprocal (A integration runtime, deterministic)', () => {
+  it('preserves failed model op + usage; no generated source/passage/finding evidence', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'babel-g-l1-planning-fail-'))
+    try {
+      const mission = await runDeterministicPlanningFailureStore(dir, 'plan-g-l1-reciprocal-001')
       const inspect = await openAdmittedInspectStore(dir)
       const events = await inspect.listEvents(mission.mission_id)
-      const intents = events.filter((e) => e.kind === 'external_operation_intent')
-      const completions = events.filter((e) => e.kind === 'external_operation_completed')
-      assert.equal(intents.length, 1)
-      assert.equal(completions.length, 1)
+      assert.equal(events.filter((e) => e.kind === 'external_operation_intent').length, 1)
+      assert.equal(events.filter((e) => e.kind === 'external_operation_completed').length, 1)
 
-      const completion = (completions[0]!.payload as {
+      const completion = (events.find((e) => e.kind === 'external_operation_completed')!.payload as {
         completion: {
           settlement: string
           failure_category?: string
@@ -119,79 +115,63 @@ describe('general G-L1 planning failure reciprocal (A runtime, deterministic)', 
         assert.equal(completion.usage_settlement.cost.amount_usd, 0.0002636874)
       }
 
-      const evidenceKinds = new Set([
+      const generatedEvidence = new Set([
         'source_issued',
         'source_revision_issued',
         'passage_issued',
         'finding_issued',
-        'terminal_receipt',
       ])
       assert.equal(
-        events.some((e) => evidenceKinds.has(e.kind)),
+        events.some((e) => generatedEvidence.has(e.kind)),
         false,
-        'planning failure must not fabricate sources/passages/findings/terminal',
+        'planning failure must not fabricate admitted sources/passages/findings',
       )
 
       const inspectAfterReopen = await openAdmittedInspectStore(dir)
-      const eventsReopen = await inspectAfterReopen.listEvents(mission.mission_id)
-      assert.equal(eventsReopen.length, events.length)
-      assert.equal(terminalReportFromEvents(eventsReopen), null)
-
-      let inspectPrinted = ''
-      await inspectResearchV2Store({
-        store: dir,
-        missionId: mission.mission_id,
-        print: (_payload, human) => {
-          inspectPrinted = human
-        },
-      })
-      assert.match(inspectPrinted, /terminal_receipt_count.: 0/)
-
-      await assert.rejects(
-        () =>
-          reportResearchV2Store({
-            store: dir,
-            missionId: mission.mission_id,
-            print: () => {},
-          }),
-        /no terminal_receipt report found/,
+      assert.equal(
+        (await inspectAfterReopen.listEvents(mission.mission_id)).length,
+        events.length,
       )
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
   })
 
-  it('A-owned red: failed planning must emit inspectable failed terminal_receipt (not yet)', async () => {
-    const mission = await loadResearchMissionFromFile(missionFile)
-    const dir = await mkdtemp(join(tmpdir(), 'babel-g-l1-terminal-red-'))
+  it('A integration acceptance: honest failed terminal_receipt and inspectable report after planning failure', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'babel-g-l1-terminal-accept-'))
     try {
-      await assert.rejects(() =>
-        runResearchV2MissionWithOwnerSession({
-          storeDirectory: dir,
-          mission,
-          discoverQuery: 'latest stable Python release python.org download',
-          planRevisionId: 'plan-g-l1-terminal-red',
-          model: gL1ProductionShapedModel(),
-        }),
-      )
-      const inspect = await openAdmittedInspectStore(dir)
-      const events = await inspect.listEvents(mission.mission_id)
+      const mission = await runDeterministicPlanningFailureStore(dir, 'plan-g-l1-terminal-accept')
+      const events = await (await openAdmittedInspectStore(dir)).listEvents(mission.mission_id)
       const terminals = events.filter((e) => e.kind === 'terminal_receipt')
       assert.equal(
         terminals.length,
         1,
-        'A repair: persist failed terminal_receipt after provider_invoke_failed planning',
+        'A failed-terminal repair: one durable terminal_receipt after provider_invoke_failed planning',
       )
       const report = terminalReportFromEvents(events)
       assert.ok(report)
       assert.equal(report?.terminal_state, 'failed')
+
+      let reported: unknown
+      await reportResearchV2Store({
+        store: dir,
+        missionId: mission.mission_id,
+        print: (payload) => {
+          reported = payload
+        },
+      })
+      assert.ok(reported)
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
   })
 
-  it('malformed fixture matches live validation envelope (offline check)', () => {
+  it('malformed fixture is reconstructed from validation trace (offline envelope check)', () => {
     const payload = JSON.parse(readFileSync(malformedPayloadPath, 'utf8')) as Record<string, unknown>
+    assert.equal(
+      payload._provenance,
+      'Reconstructed from live G-L1 durable failure message (2026-10-21T06:41:22Z). Model echoed prompt/mission envelope instead of Research V2 plan_questions output; see review-artifacts/general-g-l1-cli-validation-details.txt for exact Zod trace.',
+    )
     delete payload._provenance
     assert.throws(() => parseValidatedModelOutput('plan_questions', payload), /Invalid input|Unrecognized keys/)
   })

@@ -1,0 +1,14 @@
+# Native9d second-resume — historical red @ 9d97448a (preserved)
+
+**Runtime SHA:** `9d97448a20045b2f4eec7b6f06bac9a533fc5424`  
+**Superseded for repair verification by:** A integration `52a93b9c`+ (`b05a3bcf` writer-generation scoped offline op ids)
+
+**Observed failure (2026-10-21, B reciprocal before A merge):**
+```
+StoreContractError: snapshot operations map entry disagrees with event-derived state
+```
+Third engine pass after second resume reused plan-derived offline suffix; duplicate durable operation/attempt ids across writer generations.
+
+**Current acceptance:** `generalAdapterLifecycleReciprocal.integration.test.ts` second-resume case @ merged A head (see `general-a-52a93b9c-second-resume-receipt.txt`).
+
+Do not delete this file when reporting green at 52a93b9c+; it documents pre-repair behavior only.

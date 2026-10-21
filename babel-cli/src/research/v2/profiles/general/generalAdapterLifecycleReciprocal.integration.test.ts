@@ -24,6 +24,7 @@ import { openAdmittedInspectStore } from '../../control/researchStoreAdmission.j
 import { submitAdmittedOwnerCancelRequest } from '../../control/storeCancelRequest.js'
 import { finalizeOwnerResearchRunCancellation } from '../../engine/finalizeOwnerResearchRunCancellation.js'
 import { finalizeCancelledOwnerRunAndClose } from '../../engine/ownerSessionCancellationFinalize.js'
+import { offlineRunOperationSuffix } from '../../cli/researchV2MissionRun.js'
 import { runAdmittedResearchEndToEndPass } from '../../engine/researchEndToEndPass.js'
 import { ResearchEngineSession } from '../../engine/researchEngineSession.js'
 import { FixtureResearchModelBridge } from '../../model/fixtureModelBridge.js'
@@ -145,8 +146,8 @@ function generalIntegrationAccess(): GeneralProfileIntegrationAccessPort {
   )
 }
 
-function offlineOperationIds(runSuffix: string) {
-  const s = runSuffix.replace(/[^a-zA-Z0-9-]/g, '-').slice(0, 48)
+function offlineOperationIds(writerGeneration: number, runSuffix: string) {
+  const s = offlineRunOperationSuffix(writerGeneration, runSuffix)
   return {
     planOperationId: `cli-run-plan-${s}`,
     planAttemptId: `cli-run-plan-att-${s}`,
@@ -225,7 +226,7 @@ async function runGeneralOfflinePassOnOwner(options: {
   const adapter = resolveDiscoveryAdapterForMission(options.mission, registries)
   assert.ok(adapter)
   const access = generalIntegrationAccess()
-  const op = offlineOperationIds(options.planRevisionId)
+  const op = offlineOperationIds(options.handle.writer_generation, options.planRevisionId)
   return runAdmittedResearchEndToEndPass({
     session: {
       mission: options.mission,
@@ -343,8 +344,8 @@ async function pollOwnerSessionId(storeDirectory: string): Promise<string> {
   return ''
 }
 
-/** Second-resume case stays red until A binds offline op/attempt ids to writer_generation (Native9d). */
-describe('general adapter lifecycle reciprocal (#406 9d97448a, durable store, injected)', () => {
+/** Native9d second-resume: red @ 9d97448a (see review-artifacts/native9d-9d97448a-red-receipt.txt); green @ A 52a93b9c+ writer-generation repair. */
+describe('general adapter lifecycle reciprocal (A integration, durable store, injected)', () => {
   it('owner watcher cancel → close/inspect → resume → new engine report (not manual terminal)', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'babel-general-lifecycle-'))
     const mission = loadGeneralLifecycleMission()
