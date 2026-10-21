@@ -292,13 +292,14 @@ describe('source search receipt bounded review (durable)', () => {
         mission,
         now: () => FIXED_NOW,
       })
-      assert.equal(appended, true)
+      assert.equal(appended.status, 'terminal_appended')
       const duplicate = await finalizeOwnerResearchRunCancellation({
         store,
         mission,
         now: () => FIXED_NOW,
       })
-      assert.equal(duplicate, false)
+      assert.equal(duplicate.status, 'not_appended')
+      assert.equal(duplicate.reason, 'terminal_already_present')
       await store.close()
 
       const reopened = await DurableResearchStore.open(dir)

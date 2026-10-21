@@ -71,6 +71,44 @@ export interface FetchSourceAccessPortOptions {
 
 export const DEFAULT_MAX_ADMITTED_BYTES = 200_000
 
+export function resolveGeneralHostWireCeiling(options: FetchSourceAccessPortOptions): number {
+  return options.maxAdmittedBytes !== undefined
+    ? options.maxAdmittedBytes
+    : DEFAULT_MAX_ADMITTED_BYTES
+}
+
+export function resolveGeneralHostDecodedCeiling(
+  options: FetchSourceAccessPortOptions,
+  generalWire: number,
+): number {
+  return options.maxDecompressedBytes !== undefined ? options.maxDecompressedBytes : generalWire
+}
+
+/**
+ * Document-policy host ceilings: optional document env allowances apply to admitted-document
+ * fetches; explicit general `maxAdmittedBytes` / `maxDecompressedBytes` still cap them when set.
+ * Implicit general defaults do not cap a higher document allowance.
+ */
+export function resolveDocumentPolicyHostByteCeilings(
+  options: FetchSourceAccessPortOptions,
+): { hostWireCeiling: number; hostDecodedCeiling: number } {
+  const generalWire = resolveGeneralHostWireCeiling(options)
+  const generalDecoded = resolveGeneralHostDecodedCeiling(options, generalWire)
+  if (options.maxDocumentWireBytes === undefined) {
+    return { hostWireCeiling: generalWire, hostDecodedCeiling: generalDecoded }
+  }
+  let hostWireCeiling = options.maxDocumentWireBytes
+  let hostDecodedCeiling =
+    options.maxDocumentDecompressedBytes ?? options.maxDocumentWireBytes
+  if (options.maxAdmittedBytes !== undefined) {
+    hostWireCeiling = Math.min(hostWireCeiling, options.maxAdmittedBytes)
+  }
+  if (options.maxDecompressedBytes !== undefined) {
+    hostDecodedCeiling = Math.min(hostDecodedCeiling, options.maxDecompressedBytes)
+  }
+  return { hostWireCeiling, hostDecodedCeiling }
+}
+
 function sha256(bytes: Buffer): string {
   return createHash('sha256').update(bytes).digest('hex')
 }
@@ -244,14 +282,13 @@ export class FetchSourceAccessPort implements SourceAccessPort {
       mission,
       fetchUrl,
     )
-    const defaultHostWire = this.options.maxAdmittedBytes ?? DEFAULT_MAX_ADMITTED_BYTES
-    const defaultHostDecoded = this.options.maxDecompressedBytes ?? defaultHostWire
-    const hostWireCeiling = documentPolicy
-      ? (this.options.maxDocumentWireBytes ?? defaultHostWire)
-      : defaultHostWire
-    const hostDecodedCeiling = documentPolicy
-      ? (this.options.maxDocumentDecompressedBytes ?? defaultHostDecoded)
-      : defaultHostDecoded
+    const generalWire = resolveGeneralHostWireCeiling(this.options)
+    const generalDecoded = resolveGeneralHostDecodedCeiling(this.options, generalWire)
+    const documentHost = documentPolicy
+      ? resolveDocumentPolicyHostByteCeilings(this.options)
+      : null
+    const hostWireCeiling = documentHost?.hostWireCeiling ?? generalWire
+    const hostDecodedCeiling = documentHost?.hostDecodedCeiling ?? generalDecoded
     if (documentPolicy) {
       const preDispatchViolation = assertDocumentPolicyFetchUrl(fetchUrl, documentPolicy)
       if (preDispatchViolation) {

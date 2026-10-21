@@ -5,26 +5,32 @@ import { fileURLToPath } from 'node:url'
 import { describe, it } from 'node:test'
 import { ResearchMissionV2Schema } from '../contracts/mission.js'
 import type { SourceRecord } from '../contracts/sources.js'
+import largeManifest from '../fixtures/campaign/papers/production-cli-large-synthetic.manifest.json' with { type: 'json' }
 import { createProductionGovernedSourceAccessForMission } from './createProductionGovernedSourceAccess.js'
 import { createMissionSelectedDocumentSearchProvider } from './missionSelectedDocumentSearchProvider.js'
 import { DEFAULT_MAX_ADMITTED_BYTES } from './fetchSourceAccessPort.js'
-import arxivManifest from '../fixtures/campaign/papers/1706.03762.manifest.json' with { type: 'json' }
 
 const campaignDir = join(dirname(fileURLToPath(import.meta.url)), '../fixtures/campaign')
-const arxivPaperBytes = readFileSync(join(campaignDir, 'papers/1706.03762.pdf'))
+const papersDir = join(campaignDir, 'papers')
 
-function loadT2Mission() {
+function loadLargeDocumentMission() {
   return ResearchMissionV2Schema.parse(
-    JSON.parse(readFileSync(join(campaignDir, 'T-L2-mission.json'), 'utf8')),
+    JSON.parse(readFileSync(join(campaignDir, 'production-cli-large-document-mission.json'), 'utf8')),
   )
 }
 
-async function t2DocumentSource(mission: ReturnType<typeof loadT2Mission>): Promise<SourceRecord> {
+function readLargeSyntheticPaperBytes(): Buffer {
+  return readFileSync(join(papersDir, largeManifest.artifact_path))
+}
+
+async function largeDocumentSource(
+  mission: ReturnType<typeof loadLargeDocumentMission>,
+): Promise<SourceRecord> {
   const search = createMissionSelectedDocumentSearchProvider()
   const result = await search.search(
     {
       operationId: 'prod-factory-doc-search',
-      query: '1706.03762',
+      query: 'babel-production-cli-large-synthetic',
       sourceClasses: ['document'],
       signal: new AbortController().signal,
     },
@@ -36,9 +42,10 @@ async function t2DocumentSource(mission: ReturnType<typeof loadT2Mission>): Prom
 }
 
 describe('createProductionGovernedSourceAccessForMission (CLI factory)', () => {
-  it('default host budget rejects complete T-L2 paper acquisition (truncated, not admitted)', async () => {
-    const mission = loadT2Mission()
-    const source = await t2DocumentSource(mission)
+  it('default host budget rejects complete large synthetic acquisition (truncated, not admitted)', async () => {
+    const mission = loadLargeDocumentMission()
+    const source = await largeDocumentSource(mission)
+    const paperBytes = readLargeSyntheticPaperBytes()
     let observedMaxWire: number | undefined
     const access = createProductionGovernedSourceAccessForMission({
       mission,
@@ -51,12 +58,12 @@ describe('createProductionGovernedSourceAccessForMission (CLI factory)', () => {
           ok: true,
           status: 200,
           contentType: 'application/pdf',
-          buffer: arxivPaperBytes.subarray(0, DEFAULT_MAX_ADMITTED_BYTES),
+          buffer: paperBytes.subarray(0, DEFAULT_MAX_ADMITTED_BYTES),
           bytesReceived: DEFAULT_MAX_ADMITTED_BYTES,
           truncated: true,
-          requestedUrl: arxivManifest.canonical_url,
-          finalUrl: arxivManifest.canonical_url,
-          redirectChain: [arxivManifest.canonical_url],
+          requestedUrl: largeManifest.canonical_url,
+          finalUrl: largeManifest.canonical_url,
+          redirectChain: [largeManifest.canonical_url],
           transportCoding: null,
         }
       },
@@ -74,10 +81,11 @@ describe('createProductionGovernedSourceAccessForMission (CLI factory)', () => {
     assert.equal(observedMaxWire, DEFAULT_MAX_ADMITTED_BYTES)
   })
 
-  it('explicit document host env admits full pinned paper bytes (acquisition complete)', async () => {
-    const mission = loadT2Mission()
-    const source = await t2DocumentSource(mission)
+  it('explicit document host env admits full pinned synthetic bytes (acquisition complete)', async () => {
+    const mission = loadLargeDocumentMission()
+    const source = await largeDocumentSource(mission)
     const policy = mission.source_policy.admitted_document_sources![0]!
+    const paperBytes = readLargeSyntheticPaperBytes()
     let observedMaxWire: number | undefined
     let observedMaxDecoded: number | undefined
     const access = createProductionGovernedSourceAccessForMission({
@@ -97,12 +105,12 @@ describe('createProductionGovernedSourceAccessForMission (CLI factory)', () => {
           ok: true,
           status: 200,
           contentType: 'application/pdf',
-          buffer: arxivPaperBytes,
-          bytesReceived: arxivPaperBytes.length,
+          buffer: paperBytes,
+          bytesReceived: paperBytes.length,
           truncated: false,
-          requestedUrl: arxivManifest.canonical_url,
-          finalUrl: arxivManifest.canonical_url,
-          redirectChain: [arxivManifest.canonical_url],
+          requestedUrl: largeManifest.canonical_url,
+          finalUrl: largeManifest.canonical_url,
+          redirectChain: [largeManifest.canonical_url],
           transportCoding: null,
         }
       },
@@ -123,14 +131,7 @@ describe('createProductionGovernedSourceAccessForMission (CLI factory)', () => {
   })
 
   it('raised document host does not raise general web host ceiling', async () => {
-    const t2 = loadT2Mission()
-    const mission = ResearchMissionV2Schema.parse({
-      ...t2,
-      source_policy: {
-        ...t2.source_policy,
-        allowed_source_classes: ['web', 'document', 'repository_file', 'structured'],
-      },
-    })
+    const mission = loadLargeDocumentMission()
     const webUrl = 'https://arxiv.org/abs/1706.03762'
     const webSource: SourceRecord = {
       source_id: 'web-cap-check',

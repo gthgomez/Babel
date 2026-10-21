@@ -62,6 +62,13 @@ function buildCancelledTerminalReport(params: {
   }
 }
 
+export type OwnerResearchRunCancellationFinalizeOutcome =
+  | { status: 'terminal_appended' }
+  | {
+      status: 'not_appended'
+      reason: 'terminal_already_present' | 'pre_bootstrap_no_active_plan'
+    }
+
 /**
  * When an owner run aborts, settle dangling external operations and persist a cancelled terminal receipt.
  */
@@ -69,15 +76,15 @@ export async function finalizeOwnerResearchRunCancellation(params: {
   store: ResearchStore
   mission: ResearchMissionV2
   now?: () => string
-}): Promise<boolean> {
+}): Promise<OwnerResearchRunCancellationFinalizeOutcome> {
   const now = params.now ?? (() => new Date().toISOString())
   const fence = params.store.readMissionWriteFence(params.mission.mission_id)
   if (fence.terminal_report) {
-    return false
+    return { status: 'not_appended', reason: 'terminal_already_present' }
   }
   const planRevisionId = fence.active_plan_revision_id
   if (!planRevisionId) {
-    return false
+    return { status: 'not_appended', reason: 'pre_bootstrap_no_active_plan' }
   }
   const ctx: MissionWriteContext = {
     mission_id: params.mission.mission_id,
@@ -127,5 +134,5 @@ export async function finalizeOwnerResearchRunCancellation(params: {
       searchProviderLimitations,
     }),
   )
-  return true
+  return { status: 'terminal_appended' }
 }

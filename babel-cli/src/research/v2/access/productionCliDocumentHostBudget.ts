@@ -10,11 +10,18 @@ export interface ProductionCliDocumentHostByteCeilings {
   maxDocumentDecompressedBytes: number
 }
 
-function parsePositiveIntEnv(raw: string | undefined): number | undefined {
+function parsePositiveSafeIntEnv(raw: string | undefined, envName: string): number | undefined {
   if (!raw?.trim()) return undefined
-  const value = Number.parseInt(raw.trim(), 10)
-  if (!Number.isFinite(value) || value <= 0) {
-    throw new Error(`invalid positive integer: ${raw}`)
+  if (raw !== raw.trim()) {
+    throw new Error(`${envName} must be a positive safe integer (got ${raw})`)
+  }
+  const trimmed = raw.trim()
+  if (!/^\d+$/.test(trimmed)) {
+    throw new Error(`${envName} must be a positive safe integer (got ${raw})`)
+  }
+  const value = Number(trimmed)
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new Error(`${envName} must be a positive safe integer (got ${raw})`)
   }
   return value
 }
@@ -28,8 +35,14 @@ function parsePositiveIntEnv(raw: string | undefined): number | undefined {
 export function resolveProductionCliDocumentHostByteCeilings(
   env: NodeJS.ProcessEnv = process.env,
 ): ProductionCliDocumentHostByteCeilings | undefined {
-  const wire = parsePositiveIntEnv(env[PRODUCTION_CLI_DOCUMENT_HOST_WIRE_BYTES_ENV])
-  const decoded = parsePositiveIntEnv(env[PRODUCTION_CLI_DOCUMENT_HOST_DECOMPRESSED_BYTES_ENV])
+  const wire = parsePositiveSafeIntEnv(
+    env[PRODUCTION_CLI_DOCUMENT_HOST_WIRE_BYTES_ENV],
+    PRODUCTION_CLI_DOCUMENT_HOST_WIRE_BYTES_ENV,
+  )
+  const decoded = parsePositiveSafeIntEnv(
+    env[PRODUCTION_CLI_DOCUMENT_HOST_DECOMPRESSED_BYTES_ENV],
+    PRODUCTION_CLI_DOCUMENT_HOST_DECOMPRESSED_BYTES_ENV,
+  )
   if (wire === undefined && decoded === undefined) {
     return undefined
   }

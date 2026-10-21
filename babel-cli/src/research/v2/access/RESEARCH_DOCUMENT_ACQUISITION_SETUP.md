@@ -27,7 +27,7 @@ Set **both** (positive integers):
 - `BABEL_RESEARCH_ADMITTED_DOCUMENT_HOST_WIRE_BYTES`
 - `BABEL_RESEARCH_ADMITTED_DOCUMENT_HOST_DECOMPRESSED_BYTES`
 
-Unset → document fetches use the same 200 KB host caps as web (bounded rejection for large pinned papers).
+Unset → document fetches use the same 200 KB host caps as web (bounded rejection for large pinned papers). When document host env is set, it applies to admitted-document fetches only; explicit port `maxAdmittedBytes` / `maxDecompressedBytes` still cap document allowances when provided.
 
 Example for T-L2-shaped arXiv paper mission (`wire_byte_budget` / `decompressed_byte_budget` 2 300 000):
 
