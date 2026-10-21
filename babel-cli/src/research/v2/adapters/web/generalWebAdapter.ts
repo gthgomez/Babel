@@ -14,6 +14,9 @@ import {
   validateFetchBinding,
 } from '../documents/readBinding.js'
 import {
+  mergeDiscoverSearchReceipts,
+} from '../../engine/sourceDiscoverSearchReceipt.js'
+import {
   passagesFromAdmittedStaticHtml,
   STATIC_HTML_EXTRACTION_VERSION,
 } from './htmlFromAdmittedBytes.js'
@@ -57,6 +60,7 @@ export class GeneralWebAdapter implements SourceAdapter {
       }
     }
     let candidates: SourceRecord[] = search.hits.map((hit) => hit.source)
+    let searchReceipt = mergeDiscoverSearchReceipts(search.receipt)
     if (candidates.length === 0) {
       const docSearch = await access.search({
         operationId: `${request.operationId}:document-search`,
@@ -79,8 +83,14 @@ export class GeneralWebAdapter implements SourceAdapter {
         }
       }
       candidates = docSearch.hits.map((hit) => hit.source)
+      searchReceipt = mergeDiscoverSearchReceipts(search.receipt, docSearch.receipt) ?? searchReceipt
     }
-    return { operationId: request.operationId, status: 'ok', candidates }
+    return {
+      operationId: request.operationId,
+      status: 'ok',
+      candidates,
+      ...(searchReceipt ? { search_provider_receipt: searchReceipt } : {}),
+    }
   }
 
   async read(

@@ -19,6 +19,7 @@ import {
   findingsFromExtractModelOutput,
 } from './findingsFromModelOutput.js'
 import { buildSynthesizedResearchReport } from './buildSynthesizedResearchReport.js'
+import { deriveSearchProviderReportLimitations } from './sourceDiscoverSearchReceipt.js'
 import {
   listSourceRevisionsFromStoreEvents,
   listSourcesFromStoreEvents,
@@ -286,6 +287,8 @@ export async function runAdmittedResearchEndToEndPass(
 
   const composedRetrievalLimitations =
     'limitations' in retrieved && Array.isArray(retrieved.limitations) ? retrieved.limitations : []
+  const storeEventsAfterRetrieval = await request.store.listEvents(request.session.mission.mission_id)
+  const searchReceiptLimitations = deriveSearchProviderReportLimitations(storeEventsAfterRetrieval)
 
   const ctx = retrieved.writeContext
   const storeEvents = await request.store.listEvents(request.session.mission.mission_id)
@@ -388,7 +391,11 @@ export async function runAdmittedResearchEndToEndPass(
     sourceRevisions,
     modelOutput: synthesizeOutput,
     generatedAt: now(),
-    additionalLimitations: [...composedRetrievalLimitations, ...extractionLineageLimitations],
+    additionalLimitations: [
+      ...composedRetrievalLimitations,
+      ...searchReceiptLimitations,
+      ...extractionLineageLimitations,
+    ],
   })
   await request.store.appendTerminalReport(ctx, report)
 

@@ -1,7 +1,7 @@
 import type { SourceAcquisitionDiagnostics } from '../contracts/sourceAcquisitionDiagnostics.js'
 import type { PassageRecord } from '../contracts/passages.js'
 import type { SourceRecord, SourceRevision } from '../contracts/sources.js'
-import type { SourceClass, SourceAccessPort } from './sourceAccessPort.js'
+import type { SourceClass, SourceAccessPort, SourceSearchProviderReceipt } from './sourceAccessPort.js'
 
 export interface SourceDiscoverRequest {
   operationId: string
@@ -10,7 +10,12 @@ export interface SourceDiscoverRequest {
 }
 
 export type SourceDiscoverResult =
-  | { operationId: string; status: 'ok'; candidates: SourceRecord[] }
+  | {
+      operationId: string
+      status: 'ok'
+      candidates: SourceRecord[]
+      search_provider_receipt?: SourceSearchProviderReceipt
+    }
   | {
       operationId: string
       status: 'failed'

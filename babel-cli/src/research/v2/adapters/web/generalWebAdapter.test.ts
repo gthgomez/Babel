@@ -96,6 +96,39 @@ test('GeneralWebAdapter.discover: maps admitted search hits to web candidates', 
   assert.equal(result.candidates[0]?.source_id, hitSource.source_id)
 })
 
+test('GeneralWebAdapter.discover: passes sanitized search_provider_receipt from port', async () => {
+  const hitSource = webSource('src-receipt')
+  const port: SourceAccessPort = {
+    async search(request: SourceSearchRequest) {
+      return {
+        operationId: request.operationId,
+        status: 'ok',
+        hits: [{ source: hitSource, snippet: 'x', completeness: 'snippet' }],
+        receipt: {
+          configured_provider_id: 'exa_lite',
+          effective_provider_id: 'exa_lite',
+          exa_lite: { requestId: 'req-1', costDollars: 0.01 },
+        },
+      }
+    },
+    async fetchContent(request: SourceFetchRequest) {
+      return {
+        operationId: request.operationId,
+        status: 'failed',
+        failureCategory: 'policy_denied',
+        message: 'discover-only',
+      }
+    },
+  }
+  const result = await new GeneralWebAdapter().discover(
+    { operationId: 'discover-receipt', query: 'q', signal: AbortSignal.timeout(5_000) },
+    port,
+  )
+  assert.equal(result.status, 'ok')
+  if (result.status !== 'ok') return
+  assert.equal(result.search_provider_receipt?.exa_lite?.requestId, 'req-1')
+})
+
 test('GeneralWebAdapter.discover: falls back to document search when web hits empty', async () => {
   const docSource: SourceRecord = {
     source_id: 'src-doc-fallback',

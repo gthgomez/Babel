@@ -30,7 +30,12 @@ import {
 } from '../registry/missionAdapterResolution.js'
 import { resolveMissionWebRetrievalCandidates } from '../access/missionWebRetrievalSelection.js'
 import { stampCoverageSourceSlotOnSource } from './missionCoverageSourceSlots.js'
+import {
+  reportLimitationsFromSearchProviderReceipt,
+  sourceSearchCompletionOutcome,
+} from './sourceDiscoverSearchReceipt.js'
 import { slotOperationSuffix } from './technicalRetrievalComposition.js'
+import type { SourceSearchProviderReceipt } from '../contracts/sourceSearchProviderReceipt.js'
 
 export interface RetrievalIterationRequest {
   session: AdmittedPlanningSession
@@ -68,6 +73,7 @@ export interface RetrievalIterationResult {
   searchOperationId: string
   fetchOperationId: string
   terminalReportEmitted: boolean
+  searchProviderReceipt?: SourceSearchProviderReceipt
 }
 
 function resolveSlotFetchOperationIds(
@@ -265,7 +271,14 @@ export async function runAdmittedRetrievalIteration(
     request.session.mission,
   )
   const multiWebRetrieval = (request.session.mission.source_policy.selected_web_refs ?? []).length > 0
-  const limitations = [...resolution.limitations]
+  const searchProviderReceipt =
+    discover.status === 'ok' ? discover.search_provider_receipt : undefined
+  const limitations = [
+    ...resolution.limitations,
+    ...(searchProviderReceipt
+      ? reportLimitationsFromSearchProviderReceipt(searchProviderReceipt)
+      : []),
+  ]
 
   if (resolution.slots.length === 0) {
     await settleExternalOperation(
@@ -296,7 +309,16 @@ export async function runAdmittedRetrievalIteration(
     ctx.mission_id,
     request.searchOperationId,
     request.searchAttemptId,
-    { settlement: 'succeeded' },
+    {
+      settlement: 'succeeded',
+      ...(searchProviderReceipt
+        ? sourceSearchCompletionOutcome({
+            discoverReceipt: searchProviderReceipt,
+            searchAttemptId: request.searchAttemptId,
+            completedAt: now(),
+          })
+        : {}),
+    },
     now(),
   )
 
@@ -564,5 +586,6 @@ export async function runAdmittedRetrievalIteration(
     searchOperationId: request.searchOperationId,
     fetchOperationId: request.fetchOperationId,
     terminalReportEmitted,
+    ...(searchProviderReceipt ? { searchProviderReceipt } : {}),
   }
 }

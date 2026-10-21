@@ -1,9 +1,12 @@
 import type { AdmittedContent } from '../contracts/admittedContent.js'
+import type { SourceSearchProviderReceipt } from '../contracts/sourceSearchProviderReceipt.js'
 import type { SourceAcquisitionDiagnostics } from '../contracts/sourceAcquisitionDiagnostics.js'
 import type { SourceClassSchema } from '../contracts/mission.js'
 import type { SourceRecord } from '../contracts/sources.js'
 import type { SourceAccessFailureCategory } from './sourceAccessTypes.js'
 import type { z } from 'zod'
+
+export type { SourceSearchProviderReceipt } from '../contracts/sourceSearchProviderReceipt.js'
 
 export type SourceClass = z.infer<typeof SourceClassSchema>
 
@@ -23,7 +26,7 @@ export interface SourceSearchHit {
 }
 
 export type SourceSearchResult =
-  | { operationId: string; status: 'ok'; hits: SourceSearchHit[] }
+  | { operationId: string; status: 'ok'; hits: SourceSearchHit[]; receipt?: SourceSearchProviderReceipt }
   | {
       operationId: string
       status: 'failed'

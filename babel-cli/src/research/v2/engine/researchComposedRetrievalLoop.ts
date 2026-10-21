@@ -16,6 +16,10 @@ import {
 } from './researchRetrievalLoop.js'
 import { stampCoverageSourceSlotOnSource } from './missionCoverageSourceSlots.js'
 import {
+  sanitizeSourceSearchProviderReceipt,
+  sourceSearchCompletionOutcome,
+} from './sourceDiscoverSearchReceipt.js'
+import {
   missionUsesComposedTechnicalRetrieval,
   planTechnicalRetrievalSlots,
   slotOperationSuffix,
@@ -272,13 +276,27 @@ async function runDocumentRefSlot(
 
   throwIfAborted(request.signal, 'document_search settlement')
 
+  const searchReceipt =
+    search.status === 'ok' && search.receipt
+      ? sanitizeSourceSearchProviderReceipt(search.receipt)
+      : undefined
+
   await settleExternalOperation(
     request.store,
     ctx,
     ctx.mission_id,
     searchOperationId,
     searchAttemptId,
-    { settlement: 'succeeded' },
+    {
+      settlement: 'succeeded',
+      ...(searchReceipt
+        ? sourceSearchCompletionOutcome({
+            discoverReceipt: searchReceipt,
+            searchAttemptId,
+            completedAt: now(),
+          })
+        : {}),
+    },
     now(),
   )
 
@@ -286,6 +304,7 @@ async function runDocumentRefSlot(
     operationId: search.operationId,
     status: 'ok' as const,
     candidates: [candidate],
+    ...(searchReceipt ? { search_provider_receipt: searchReceipt } : {}),
   }
 
   const readAdapter = resolveReadAdapterForSource(candidate, request.registries, {
