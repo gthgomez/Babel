@@ -5,7 +5,8 @@
   "not_acceptance_criteria": true,
   "summary": "Pre-A-coverage-repair host maps semantic_support:supported to answered plan question_ids without evaluating whether assertions substantively answer bound question text.",
   "test_suite": "babel-cli/src/research/v2/engine/semanticQuestionCoverage.production.reciprocal.test.ts",
-  "migrate_when": "Agent A publishes question-text-bound semantic review input and canonical question-coverage decision APIs (after general multi-source slice).",
-  "flip_test_flag": "HOST_EVALUATES_QUESTION_COVERAGE in that test file",
+  "superseded_by_production_checkpoint": "c3c553a234b7d1f2133d40601376c723e973909d",
+  "status": "historical_only_do_not_use_as_acceptance",
+  "migrate_when": "Superseded — production APIs integrated; keep this file as archival characterization of pre-c3c553a host behavior only.",
   "paired_migration": "babel-cli/src/research/v2/profiles/general/generalAdapterTwoCanonicalSources.actualPort.reciprocal.test.ts — first-candidate (discover.candidates[0]) characterization moves to A multi-source APIs when published"
 }

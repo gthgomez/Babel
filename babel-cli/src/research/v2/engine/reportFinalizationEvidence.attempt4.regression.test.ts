@@ -106,8 +106,29 @@ describe('G-L1 attempt4 evidence subset (historical) + fef78559 finalizer', () =
     assert.match(String(terminal_report.source_cutoff), /mutually consistent/)
   })
 
-  it('rebuilds attempt4 with canonical finalizer: partial, per-question unanswered, truncation, corrected coverage_notes', () => {
+  it('rebuilds attempt4 with canonical finalizer using synthetic question_coverage (not historical re-review)', () => {
     const { revision, passages, findings, terminal_report } = loadAttempt4EvidenceSubset()
+    const firstQuestionId = attempt4Plan.questions[0]?.question_id
+    assert.ok(firstQuestionId)
+    const syntheticFindings = findings.map((f: FindingRecord) => ({
+      ...f,
+      question_coverage:
+        f.question_id === firstQuestionId
+          ? {
+              status: 'answers' as const,
+              reviewer: 'synthetic-finalizer-slice',
+              reviewer_version: '0.0.0-test',
+              rationale: 'synthetic: only q1 marked answered for finalizer slice',
+              reviewed_at: '2026-10-21T09:04:28.000Z',
+            }
+          : {
+              status: 'not_assessed' as const,
+              reviewer: 'synthetic-finalizer-slice',
+              reviewer_version: '0.0.0-test',
+              rationale: 'synthetic: sibling rows not assessed in this slice',
+              reviewed_at: '2026-10-21T09:04:28.000Z',
+            },
+    }))
     const mission = ResearchMissionV2Schema.parse({
       ...JSON.parse(readFileSync(gL1MissionPath, 'utf8')),
       mission_id: 'mission-g-l1-general-live-attempt4',
@@ -120,7 +141,7 @@ describe('G-L1 attempt4 evidence subset (historical) + fef78559 finalizer', () =
         plan_revision_id: attempt4Plan.plan_revision_id,
         writer_generation: 3,
       },
-      findings,
+      findings: syntheticFindings,
       passages,
       sourceRevisions: [revision],
       modelOutput: {
@@ -132,14 +153,12 @@ describe('G-L1 attempt4 evidence subset (historical) + fef78559 finalizer', () =
     })
     assert.equal(report.terminal_state, 'partial')
     assert.deepEqual(
-      deriveUnansweredPlanQuestionIds(attempt4Plan, findings),
+      deriveUnansweredPlanQuestionIds(attempt4Plan, syntheticFindings),
       UNANSWERED_AFTER_Q1_SUPPORTED,
     )
     assert.deepEqual(report.unanswered_questions, UNANSWERED_AFTER_Q1_SUPPORTED)
     assert.ok(
-      report.coverage_notes.includes(
-        'unanswered_questions includes plan questions without semantically supported findings',
-      ),
+      report.coverage_notes.includes('question_coverage answers on a supported finding'),
     )
     assert.equal(report.source_cutoff, '2026-10-21T09:04:02.034Z')
     assert.ok(report.stopping_reason.startsWith('single_pass_host_finalization'))

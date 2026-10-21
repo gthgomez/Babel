@@ -321,7 +321,7 @@ export async function runAdmittedResearchEndToEndPass(
     await request.store.appendFinding(ctx, finding)
   }
 
-  const reviewInput = buildSemanticSupportReviewInput(findings, passages)
+  const reviewInput = buildSemanticSupportReviewInput(findings, passages, activePlan)
   const reviewOutput = await invokeModelPhase(request.store, ctx, request.model, {
     operationId: request.reviewOperationId,
     attemptId: request.reviewAttemptId,

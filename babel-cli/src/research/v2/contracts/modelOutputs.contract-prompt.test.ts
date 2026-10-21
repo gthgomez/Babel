@@ -38,6 +38,7 @@ export const MINIMAL_VALID_MODEL_OUTPUT_BY_KIND: Record<string, Record<string, u
         finding_id: 'finding-1',
         status: 'insufficient',
         rationale: 'Passage does not establish the claim.',
+        question_coverage: 'none',
       },
     ],
   },

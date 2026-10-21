@@ -5,6 +5,7 @@
   "runtime_checkpoints": {
     "production_finalizer_go": "08cc2986507b7549be04fe6d49ccfc995080e351",
     "extract_question_id_production": "b0194564c1a0934e0a11da614f4fda2f798b7a0d",
+    "semantic_question_coverage_production": "c3c553a234b7d1f2133d40601376c723e973909d",
     "draft_pr_extract_contract": 406,
     "b_preflight_portable_runner": "3f9754fc",
     "handoff_artifacts": "f7784353",

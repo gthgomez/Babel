@@ -39,11 +39,16 @@ Historical pre-adoption Q[0] host binding is **nonacceptance evidence only**:
 - **G-L2 / G-L3:** `fixtures/campaign/*` + portable preflight (`3f9754fc` runner)
 - Preflight coordination: `review-artifacts/PROPOSED-B-CAMPAIGN-PREFLIGHT-SHARED.md`
 
-## Semantic question coverage (separate from b019 `question_id` binding)
+## Semantic question coverage (A `c3c553a`)
 
-Passage-level `semantic_support: supported` is **not** yet host-equivalent to “plan question substantively answered.”
-B reciprocal tests: `semanticQuestionCoverage.production.reciprocal.test.ts` (honest partial via `insufficient`;
-documented capability gaps until A lands question-text in semantic review + canonical coverage decision).
+Production: bound `question_text` in semantic review input; judgments carry separate `question_coverage`
+(`answers` / `partial` / `tangential` / `none`); durable `FindingRecord.question_coverage`; unanswered requires
+`supported` + `answers`. Legacy `not_assessed` cannot close coverage.
+
+B reciprocal tests: `semanticQuestionCoverage.production.reciprocal.test.ts`, `durableResearchStore.questionCoverage.conformance.test.ts`.
+Pre-c3c553a gap characterization: `historical-semantic-question-coverage-gap-9d532d9b.json` only.
+
+**A followup:** include `question_coverage` on synthesis input (B does not implement).
 
 ## Preserved checkpoints
 

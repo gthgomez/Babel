@@ -54,6 +54,10 @@ export const SemanticSupportReviewOutputSchema = z
           finding_id: z.string().min(1),
           status: z.enum(['supported', 'contradicted', 'insufficient', 'not_checked']),
           rationale: z.string().min(1),
+          /**
+           * Whether the assertion addresses the bound plan question text (not citation support alone).
+           */
+          question_coverage: z.enum(['answers', 'partial', 'tangential', 'none']),
         })
         .strict(),
     ),

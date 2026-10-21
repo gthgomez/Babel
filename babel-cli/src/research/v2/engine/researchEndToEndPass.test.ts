@@ -74,6 +74,7 @@ function fixtureModelWithE2eScripts(): ResearchModelPort {
               finding_id: findingId ?? 'missing',
               status: 'insufficient',
               rationale: 'Only one pinned file was retrieved; decision remains incomplete.',
+              question_coverage: 'none',
             },
           ],
         })

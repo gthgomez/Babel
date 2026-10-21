@@ -200,6 +200,7 @@ function generalFixtureModelForE2e(): ResearchModelPort {
               finding_id: findingId ?? 'missing',
               status: 'insufficient',
               rationale: 'Offline reciprocal — partial semantic support only.',
+              question_coverage: 'none',
             },
           ],
         })

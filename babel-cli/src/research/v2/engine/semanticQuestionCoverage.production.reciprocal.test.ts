@@ -1,9 +1,7 @@
 /**
- * HISTORICAL_CAPABILITY_GAP_CHARACTERIZATION (checkpoint 9d532d9b).
- * Records pre-A-repair host behavior only — NOT acceptance that irrelevant
- * `supported` findings should close plan question coverage.
- * @see review-artifacts/historical-semantic-question-coverage-gap-9d532d9b.json
- * @see review-artifacts/MIGRATION-PREP-A-COVERAGE-MULTISOURCE-APIS.md
+ * Production reciprocal tests for semantic passage support vs plan question coverage (A c3c553a).
+ * Historical pre-repair gap characterization lives only in
+ * review-artifacts/historical-semantic-question-coverage-gap-9d532d9b.json — not here.
  */
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
@@ -17,9 +15,9 @@ import { buildSemanticSupportReviewInput } from './buildSemanticSupportReviewInp
 import { buildSynthesizedResearchReport } from './buildSynthesizedResearchReport.js'
 import { applySemanticSupportReview } from './findingsFromModelOutput.js'
 import {
-  deriveTerminalState,
+  deriveQuestionCoverageLimitations,
   deriveUnansweredPlanQuestionIds,
-  questionIdsWithSupportedFindings,
+  questionIdsWithAnsweredCoverage,
 } from './researchReportFinalization.js'
 
 const campaignDir = join(dirname(fileURLToPath(import.meta.url)), '../fixtures/campaign')
@@ -47,267 +45,193 @@ const multiPartPlan = PlanRevisionSchema.parse({
   ],
 })
 
-const supportedReview = {
-  status: 'supported' as const,
-  reviewer: 'research-v2-semantic-review',
-  reviewer_version: '0.1.0-offline',
-  rationale: 'Passage text is consistent with the assertion wording.',
-  reviewed_at: '2026-10-21T10:06:00.000Z',
-}
+const REVIEWER = 'research-v2-semantic-review'
+const REVIEWED_AT = '2026-10-21T10:06:00.000Z'
 
-const insufficientReview = {
-  status: 'insufficient' as const,
-  reviewer: 'research-v2-semantic-review',
-  reviewer_version: '0.1.0-offline',
-  rationale: 'Excerpt does not establish the release date asked by the plan question.',
-  reviewed_at: '2026-10-21T10:06:00.000Z',
-}
-
-function baseFinding(overrides: Partial<FindingRecord> & Pick<FindingRecord, 'finding_id' | 'question_id'>): FindingRecord {
+function baseFinding(
+  overrides: Partial<FindingRecord> & Pick<FindingRecord, 'finding_id' | 'question_id'>,
+): FindingRecord {
   return {
-    assertion_text: 'placeholder',
+    assertion_text: 'synthetic fixture assertion',
     assertion_kind: 'source_observation',
-    passage_ids: ['p-1'],
+    passage_ids: ['p-synth-1'],
     source_integrity: 'valid',
     created_at: '2026-10-21T10:05:00.000Z',
     ...overrides,
   }
 }
 
-/** Flip when A publishes canonical question-coverage APIs (post general multi-source). */
-const HOST_EVALUATES_QUESTION_COVERAGE = false
+function withReview(
+  finding: FindingRecord,
+  status: 'supported' | 'insufficient' | 'contradicted',
+  questionCoverage: 'answers' | 'partial' | 'tangential' | 'none',
+): FindingRecord {
+  return applySemanticSupportReview(
+    [finding],
+    {
+      kind: 'semantic_support_review',
+      judgments: [
+        {
+          finding_id: finding.finding_id,
+          status,
+          rationale: 'synthetic production reciprocal judgment',
+          question_coverage: questionCoverage,
+        },
+      ],
+    },
+    REVIEWED_AT,
+  )[0]!
+}
 
-/** Irrelevant supported closing coverage is characterized, never endorsed. */
-const HISTORICAL_GAP_NOT_ACCEPTANCE = true
-
-describe('HISTORICAL_CAPABILITY_GAP: semantic question coverage vs passage support (B characterization)', () => {
-  it('production semantic review input carries assertion + cited passages only (question text binding queued on A)', () => {
-    const findings = [
-      baseFinding({
-        finding_id: 'f-1',
-        question_id: 'q-g-l2-mdn-cache',
-        assertion_text: 'MDN mentions max-age.',
-      }),
-    ]
+describe('semantic question coverage (production c3c553a reciprocal)', () => {
+  it('buildSemanticSupportReviewInput binds question_text from active plan', () => {
+    const finding = baseFinding({
+      finding_id: 'f-bind-text',
+      question_id: 'q-g-l2-mdn-cache',
+      assertion_text: 'MDN mentions max-age.',
+    })
     const passages = [
       {
-        passage_id: 'p-1',
+        passage_id: 'p-synth-1',
         source_revision_id: 'rev-1',
         locator: { kind: 'section' as const, section_id: 's' },
-        text_ref: { mode: 'inline' as const, text: 'Cache-Control: max-age=3600', text_hash: 'c'.repeat(64) },
+        text_ref: { mode: 'inline' as const, text: 'max-age=3600', text_hash: 'a'.repeat(64) },
       },
     ]
-    const input = buildSemanticSupportReviewInput(findings, passages)
-    assert.equal(input.findings.length, 1)
-    const row = input.findings[0]
-    assert.equal(row?.finding_id, 'f-1')
-    assert.equal(row?.assertion_text, 'MDN mentions max-age.')
-    assert.ok(row?.cited_passages[0]?.content_status === 'available')
-    assert.equal('question_id' in (row ?? {}), false)
-    assert.equal('question_text' in (row ?? {}), false)
+    const input = buildSemanticSupportReviewInput([finding], passages, gL2TwoQuestionPlan)
+    assert.equal(input.findings[0]?.question_text, gL2TwoQuestionPlan.questions[0]?.text)
+    assert.equal(input.findings[0]?.question_id, 'q-g-l2-mdn-cache')
   })
 
-  it('honest partial: insufficient judgment keeps plan question in unanswered (passage support ≠ question answered)', () => {
-    const findings = [
-      baseFinding({
-        finding_id: 'f-irrelevant-insufficient',
-        question_id: 'q-g-l3-stable-version-and-date',
-        assertion_text: 'The downloads page uses a responsive layout.',
-        semantic_support: insufficientReview,
-      }),
-    ]
-    assert.deepEqual(deriveUnansweredPlanQuestionIds(multiPartPlan, findings), [
-      'q-g-l3-stable-version-and-date',
-    ])
-    const terminal = deriveTerminalState({
-      unansweredQuestionIds: deriveUnansweredPlanQuestionIds(multiPartPlan, findings),
-      acquisitionLimitations: [],
-      evidenceVerificationLimitations: [],
-      runtimeLimitations: [],
-      hasSemanticInsufficient: true,
-      hasSemanticContradiction: false,
-      hasSemanticNotChecked: false,
-    })
-    assert.equal(terminal, 'partial')
-  })
-
-  it('honest partial: multi-part question stays open when only a partial substantive finding is insufficient', () => {
-    const versionOnly = baseFinding({
-      finding_id: 'f-version',
+  it('supported + tangential does not close plan question coverage', () => {
+    const raw = baseFinding({
+      finding_id: 'f-tangential',
       question_id: 'q-g-l3-stable-version-and-date',
-      assertion_text: 'Latest stable version is 3.14.0.',
-      semantic_support: insufficientReview,
+      assertion_text: 'The python.org footer includes a copyright notice.',
     })
-    assert.deepEqual(deriveUnansweredPlanQuestionIds(multiPartPlan, [versionOnly]), [
+    const finding = withReview(raw, 'supported', 'tangential')
+    assert.deepEqual(deriveUnansweredPlanQuestionIds(multiPartPlan, [finding]), [
       'q-g-l3-stable-version-and-date',
     ])
+    assert.equal(questionIdsWithAnsweredCoverage([finding]).size, 0)
+    const limitations = deriveQuestionCoverageLimitations([finding])
+    assert.ok(limitations.some((l) => l.startsWith('question_coverage_tangential:')))
   })
 
-  it('applySemanticSupportReview: insufficient on bound question preserves question_id and unanswered', () => {
-    const extracted = [
+  it('supported + partial on multi-part question keeps question unanswered', () => {
+    const finding = withReview(
       baseFinding({
-        finding_id: 'f-extract',
-        question_id: 'q-g-l2-cloudflare-cache',
-        assertion_text: 'Cloudflare logo color is orange.',
+        finding_id: 'f-version-only',
+        question_id: 'q-g-l3-stable-version-and-date',
+        assertion_text: 'Latest stable version is 3.14.0.',
       }),
-    ]
-    const reviewed = applySemanticSupportReview(
-      extracted,
-      {
-        kind: 'semantic_support_review',
-        judgments: [
-          {
-            finding_id: 'f-extract',
-            status: 'insufficient',
-            rationale: 'Passage supports branding text, not edge TTL / max-age guidance.',
-          },
-        ],
-      },
-      '2026-10-21T10:06:00.000Z',
+      'supported',
+      'partial',
     )
-    assert.equal(reviewed[0]?.semantic_support?.status, 'insufficient')
-    assert.deepEqual(deriveUnansweredPlanQuestionIds(gL2TwoQuestionPlan, reviewed), [
+    assert.deepEqual(deriveUnansweredPlanQuestionIds(multiPartPlan, [finding]), [
+      'q-g-l3-stable-version-and-date',
+    ])
+    assert.ok(
+      deriveQuestionCoverageLimitations([finding]).some((l) =>
+        l.startsWith('question_coverage_partial:'),
+      ),
+    )
+  })
+
+  it('supported + answers closes only the bound question with answered coverage', () => {
+    const answered = withReview(
+      baseFinding({
+        finding_id: 'f-answered',
+        question_id: 'q-g-l2-mdn-cache',
+        assertion_text: 'MDN documents max-age for browser caches.',
+      }),
+      'supported',
+      'answers',
+    )
+    assert.deepEqual(deriveUnansweredPlanQuestionIds(gL2TwoQuestionPlan, [answered]), [
+      'q-g-l2-cloudflare-cache',
+    ])
+    assert.ok(questionIdsWithAnsweredCoverage([answered]).has('q-g-l2-mdn-cache'))
+  })
+
+  it('legacy not_assessed on supported finding cannot close coverage', () => {
+    const finding = baseFinding({
+      finding_id: 'f-not-assessed',
+      question_id: 'q-g-l2-mdn-cache',
+      assertion_text: 'Supported-looking assertion without coverage judgment.',
+      semantic_support: {
+        status: 'supported',
+        reviewer: REVIEWER,
+        reviewer_version: '0.1.0-offline',
+        rationale: 'synthetic: passage supports assertion text only',
+        reviewed_at: REVIEWED_AT,
+      },
+      question_coverage: {
+        status: 'not_assessed',
+        reviewer: REVIEWER,
+        reviewer_version: '0.1.0-question-coverage',
+        rationale: 'synthetic: legacy row',
+        reviewed_at: REVIEWED_AT,
+      },
+    })
+    assert.deepEqual(deriveUnansweredPlanQuestionIds(gL2TwoQuestionPlan, [finding]), [
       'q-g-l2-mdn-cache',
       'q-g-l2-cloudflare-cache',
     ])
   })
 
-  it('two-question plan: supported on one question does not clear the sibling without its own supported finding', () => {
-    const findings = [
+  it('synthesized report stays partial when tangential supported finding would have closed Q[0] under legacy rules', () => {
+    const finding = withReview(
       baseFinding({
-        finding_id: 'f-mdn',
-        question_id: 'q-g-l2-mdn-cache',
-        assertion_text: 'MDN documents max-age for browsers.',
-        semantic_support: supportedReview,
+        finding_id: 'f-report-tangential',
+        question_id: 'q-g-l3-stable-version-and-date',
+        assertion_text: 'Footer copyright notice only.',
       }),
-      baseFinding({
-        finding_id: 'f-cf-insufficient',
-        question_id: 'q-g-l2-cloudflare-cache',
-        assertion_text: 'Cloudflare mentions cookies.',
-        semantic_support: insufficientReview,
-      }),
-    ]
-    assert.deepEqual(deriveUnansweredPlanQuestionIds(gL2TwoQuestionPlan, findings), [
-      'q-g-l2-cloudflare-cache',
-    ])
+      'supported',
+      'tangential',
+    )
     const report = buildSynthesizedResearchReport({
       mission: gL3Mission,
-      plan: gL2TwoQuestionPlan,
+      plan: multiPartPlan,
       ctx: {
         mission_id: gL3Mission.mission_id,
-        plan_revision_id: gL2TwoQuestionPlan.plan_revision_id,
+        plan_revision_id: multiPartPlan.plan_revision_id,
         writer_generation: 1,
       },
-      findings,
+      findings: [finding],
+      passages: [
+        {
+          passage_id: 'p-synth-1',
+          source_revision_id: 'rev-synth',
+          locator: { kind: 'section' as const, section_id: 'footer' },
+          text_ref: {
+            mode: 'inline' as const,
+            text: 'Copyright notice',
+            text_hash: 'b'.repeat(64),
+          },
+        },
+      ],
+      sourceRevisions: [
+        {
+          revision_id: 'rev-synth',
+          source_id: 'src-synth',
+          content_hash: 'c'.repeat(64),
+          retrieved_at: '2026-10-21T10:05:01.000Z',
+          extraction_version: 'test/0',
+          media_type: 'text/html',
+          completeness: 'complete',
+          byte_length_received: 100,
+        },
+      ],
       modelOutput: {
         kind: 'synthesize_report',
-        answer_summary: 'Model must not imply both vendors answered.',
+        answer_summary: 'Excluded model prose.',
         stopping_reason: 'coverage_sufficient',
       },
-      generatedAt: '2026-10-21T10:06:00.000Z',
+      generatedAt: REVIEWED_AT,
     })
     assert.equal(report.terminal_state, 'partial')
-    assert.deepEqual(report.unanswered_questions, ['q-g-l2-cloudflare-cache'])
-    assert.ok(report.limitations.includes('semantic_support_insufficient'))
-    assert.ok(!report.stopping_reason.includes('coverage_sufficient'))
-  })
-
-  it('historical_characterization: supported passage-backed assertion currently clears question_id without question-text coverage (not desired)', () => {
-    assert.ok(HISTORICAL_GAP_NOT_ACCEPTANCE)
-    const findings = [
-      baseFinding({
-        finding_id: 'f-supported-irrelevant',
-        question_id: 'q-g-l3-stable-version-and-date',
-        assertion_text: 'The python.org footer includes a copyright notice.',
-        semantic_support: {
-          ...supportedReview,
-          rationale: 'Passage includes a footer copyright line matching the assertion.',
-        },
-      }),
-    ]
-    const unanswered = deriveUnansweredPlanQuestionIds(multiPartPlan, findings)
-    const supportedQuestions = questionIdsWithSupportedFindings(findings)
-    if (HOST_EVALUATES_QUESTION_COVERAGE) {
-      assert.deepEqual(unanswered, ['q-g-l3-stable-version-and-date'])
-      assert.equal(supportedQuestions.has('q-g-l3-stable-version-and-date'), false)
-    } else {
-      assert.deepEqual(unanswered, [])
-      assert.ok(supportedQuestions.has('q-g-l3-stable-version-and-date'))
-      const passage = {
-        passage_id: 'p-1',
-        source_revision_id: 'rev-g-l3-gap',
-        locator: { kind: 'section' as const, section_id: 'footer' },
-        text_ref: {
-          mode: 'inline' as const,
-          text: 'Copyright © Python Software Foundation',
-          text_hash: 'd'.repeat(64),
-        },
-      }
-      const revision = {
-        revision_id: 'rev-g-l3-gap',
-        source_id: 'src-g-l3-footer',
-        content_hash: 'e'.repeat(64),
-        retrieved_at: '2026-10-21T10:05:01.000Z',
-        extraction_version: 'general-static-html/0.1.0',
-        media_type: 'text/html',
-        completeness: 'complete' as const,
-        byte_length_received: 4_000,
-      }
-      const report = buildSynthesizedResearchReport({
-        mission: gL3Mission,
-        plan: multiPartPlan,
-        ctx: {
-          mission_id: gL3Mission.mission_id,
-          plan_revision_id: multiPartPlan.plan_revision_id,
-          writer_generation: 1,
-        },
-        findings,
-        passages: [passage],
-        sourceRevisions: [revision],
-        modelOutput: {
-          kind: 'synthesize_report',
-          answer_summary: 'Must not be treated as verified mission answer.',
-          stopping_reason: 'coverage_sufficient',
-        },
-        generatedAt: '2026-10-21T10:06:00.000Z',
-      })
-      assert.equal(
-        report.terminal_state,
-        'complete',
-        'characterization only: documents current host gap; irrelevant supported must not close coverage after A repair',
-      )
-      assert.ok(
-        report.limitations.every((l) => !l.startsWith('question_coverage_')),
-        'host does not yet emit question-coverage limitations',
-      )
-      assert.ok(
-        !report.coverage_notes.toLowerCase().includes('all plan questions substantively answered'),
-      )
-    }
-  })
-
-  it('historical_characterization: partial multi-part answer with one supported finding still clears question_id today (not desired)', () => {
-    assert.ok(HISTORICAL_GAP_NOT_ACCEPTANCE)
-    const findings = [
-      baseFinding({
-        finding_id: 'f-version-only',
-        question_id: 'q-g-l3-stable-version-and-date',
-        assertion_text: 'Latest stable version is 3.14.0.',
-        semantic_support: supportedReview,
-      }),
-      baseFinding({
-        finding_id: 'f-date-missing',
-        question_id: 'q-g-l3-stable-version-and-date',
-        assertion_text: 'Release date was not stated in the excerpt.',
-        semantic_support: insufficientReview,
-      }),
-    ]
-    const unanswered = deriveUnansweredPlanQuestionIds(multiPartPlan, findings)
-    if (HOST_EVALUATES_QUESTION_COVERAGE) {
-      assert.deepEqual(unanswered, ['q-g-l3-stable-version-and-date'])
-    } else {
-      assert.deepEqual(unanswered, [])
-      assert.ok(questionIdsWithSupportedFindings(findings).has('q-g-l3-stable-version-and-date'))
-    }
+    assert.deepEqual(report.unanswered_questions, ['q-g-l3-stable-version-and-date'])
+    assert.ok(report.limitations.some((l) => l.startsWith('question_coverage_tangential:')))
   })
 })

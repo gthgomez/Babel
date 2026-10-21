@@ -1,11 +1,14 @@
 # Migration prep (B branch) — A coverage + multi-source APIs
 
-Agent A owns canonical repair. B keeps **characterization tests** until A publishes stable production APIs.
+**Integrated:** `c3c553a234b7d1f2133d40601376c723e973909d` — question text in semantic review, `question_coverage` on findings, `deriveUnansweredPlanQuestionIds` uses `answers` only.
 
-| B artifact (today) | Migrate when A ships |
-|--------------------|----------------------|
-| `semanticQuestionCoverage.production.reciprocal.test.ts` (`HOST_EVALUATES_QUESTION_COVERAGE`) | Question-text in semantic review + host coverage decision; flip flag and replace `capability_gap_reciprocal` blocks with acceptance assertions |
-| `generalAdapterTwoCanonicalSources.actualPort.reciprocal.test.ts` (`candidates[0]` single-iteration case) | Bounded general multi-source discover/fetch in canonical loop; extend same suite against A APIs (no second controller) |
-| `historical-semantic-question-coverage-gap-9d532d9b.json` | Retain as historical record; do not delete when migrating tests |
+| B artifact | Next step when A ships follow-up |
+|------------|----------------------------------|
+| `semanticQuestionCoverage.production.reciprocal.test.ts` | Extend when synthesis input includes `question_coverage` (A-owned small followup) |
+| `missionWebRetrieval.actualPort.reciprocal.test.ts` | Tighten URL-binding assertions after abd4 repair checkpoint (do not encode faulty binding as acceptance) |
+| `generalAdapterTwoCanonicalSources.actualPort.reciprocal.test.ts` | Extend for bounded multi-source loop (no second controller) |
+| `historical-semantic-question-coverage-gap-9d532d9b.json` | Archival only — never acceptance criteria |
+
+**G-L2/G-L3 handoff for A (absent at abd4):** campaign missions + expected outcomes + portable preflight — see `review-artifacts/PROPOSED-B-CAMPAIGN-PREFLIGHT-SHARED.md` and `babel-cli/src/research/v2/fixtures/campaign/G-L{2,3}-*`.
 
 No duplicate production loop or coverage helper on B branch.
