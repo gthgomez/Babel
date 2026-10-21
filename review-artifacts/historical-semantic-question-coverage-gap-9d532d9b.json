@@ -1,0 +1,11 @@
+{
+  "schema": "babel-research-v2-historical-nonacceptance/v1",
+  "git_checkpoint": "9d532d9b",
+  "label": "HISTORICAL_CAPABILITY_GAP_CHARACTERIZATION",
+  "not_acceptance_criteria": true,
+  "summary": "Pre-A-coverage-repair host maps semantic_support:supported to answered plan question_ids without evaluating whether assertions substantively answer bound question text.",
+  "test_suite": "babel-cli/src/research/v2/engine/semanticQuestionCoverage.production.reciprocal.test.ts",
+  "migrate_when": "Agent A publishes question-text-bound semantic review input and canonical question-coverage decision APIs (after general multi-source slice).",
+  "flip_test_flag": "HOST_EVALUATES_QUESTION_COVERAGE in that test file",
+  "paired_migration": "babel-cli/src/research/v2/profiles/general/generalAdapterTwoCanonicalSources.actualPort.reciprocal.test.ts — first-candidate (discover.candidates[0]) characterization moves to A multi-source APIs when published"
+}

@@ -1,3 +1,10 @@
+/**
+ * HISTORICAL_CAPABILITY_GAP_CHARACTERIZATION (checkpoint 9d532d9b).
+ * Records pre-A-repair host behavior only — NOT acceptance that irrelevant
+ * `supported` findings should close plan question coverage.
+ * @see review-artifacts/historical-semantic-question-coverage-gap-9d532d9b.json
+ * @see review-artifacts/MIGRATION-PREP-A-COVERAGE-MULTISOURCE-APIS.md
+ */
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -67,13 +74,13 @@ function baseFinding(overrides: Partial<FindingRecord> & Pick<FindingRecord, 'fi
   }
 }
 
-/**
- * Flip to true when Agent A lands canonical question-coverage in host finalization
- * (after general multi-source). Until then, tests document honest capability gaps.
- */
+/** Flip when A publishes canonical question-coverage APIs (post general multi-source). */
 const HOST_EVALUATES_QUESTION_COVERAGE = false
 
-describe('semantic question coverage vs passage support (production reciprocal, B-owned tests)', () => {
+/** Irrelevant supported closing coverage is characterized, never endorsed. */
+const HISTORICAL_GAP_NOT_ACCEPTANCE = true
+
+describe('HISTORICAL_CAPABILITY_GAP: semantic question coverage vs passage support (B characterization)', () => {
   it('production semantic review input carries assertion + cited passages only (question text binding queued on A)', () => {
     const findings = [
       baseFinding({
@@ -205,7 +212,8 @@ describe('semantic question coverage vs passage support (production reciprocal, 
     assert.ok(!report.stopping_reason.includes('coverage_sufficient'))
   })
 
-  it('capability_gap_reciprocal: supported passage-backed assertion closes question_id without question-text coverage check', () => {
+  it('historical_characterization: supported passage-backed assertion currently clears question_id without question-text coverage (not desired)', () => {
+    assert.ok(HISTORICAL_GAP_NOT_ACCEPTANCE)
     const findings = [
       baseFinding({
         finding_id: 'f-supported-irrelevant',
@@ -263,7 +271,11 @@ describe('semantic question coverage vs passage support (production reciprocal, 
         },
         generatedAt: '2026-10-21T10:06:00.000Z',
       })
-      assert.equal(report.terminal_state, 'complete')
+      assert.equal(
+        report.terminal_state,
+        'complete',
+        'characterization only: documents current host gap; irrelevant supported must not close coverage after A repair',
+      )
       assert.ok(
         report.limitations.every((l) => !l.startsWith('question_coverage_')),
         'host does not yet emit question-coverage limitations',
@@ -274,7 +286,8 @@ describe('semantic question coverage vs passage support (production reciprocal, 
     }
   })
 
-  it('capability_gap_reciprocal: partial multi-part answer with one supported finding still closes single plan question', () => {
+  it('historical_characterization: partial multi-part answer with one supported finding still clears question_id today (not desired)', () => {
+    assert.ok(HISTORICAL_GAP_NOT_ACCEPTANCE)
     const findings = [
       baseFinding({
         finding_id: 'f-version-only',

@@ -1,3 +1,9 @@
+/**
+ * Actual-port reciprocal tests (production loop, injected transport).
+ * First-candidate (`discover.candidates[0]`) characterization migrates to A general
+ * multi-source APIs when published — no second controller on B branch.
+ * @see review-artifacts/MIGRATION-PREP-A-COVERAGE-MULTISOURCE-APIS.md
+ */
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
