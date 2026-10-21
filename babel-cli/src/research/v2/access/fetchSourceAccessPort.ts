@@ -33,6 +33,10 @@ import {
 } from '../contracts/sourceAcquisitionDiagnostics.js'
 import { acquisitionDiagnosticsFromHttpGet } from './sourceAcquisitionDiagnosticsFromHttp.js'
 import type { SourceAccessFailureCategory } from '../ports/sourceAccessTypes.js'
+import {
+  resolveFetchAdmittedByteLimitForSource,
+  verifyVersionPinnedDocumentAdmission,
+} from './versionPinnedDocumentAcquisition.js'
 
 export type AdmittedHttpGetFn = (params: {
   url: string
@@ -205,7 +209,12 @@ export class FetchSourceAccessPort implements SourceAccessPort {
         }
       }
     }
-    const limit = this.options.maxAdmittedBytes ?? DEFAULT_MAX_ADMITTED_BYTES
+    const perSourceLimit = resolveFetchAdmittedByteLimitForSource(
+      request.source,
+      this.options.mission,
+    )
+    const limit =
+      perSourceLimit ?? this.options.maxAdmittedBytes ?? DEFAULT_MAX_ADMITTED_BYTES
     try {
       const mission = this.options.mission
       const response = await this.admittedGet({
@@ -238,6 +247,24 @@ export class FetchSourceAccessPort implements SourceAccessPort {
         )
       }
       const admittedBytes = response.buffer
+      const decodeTruncated = response.transportCoding?.decoded_truncated === true
+      const truncated = response.truncated || decodeTruncated
+      const pinnedAdmission = verifyVersionPinnedDocumentAdmission(
+        request.source,
+        admittedBytes,
+        truncated,
+      )
+      if (!pinnedAdmission.ok) {
+        return failedFetch(
+          request.operationId,
+          pinnedAdmission.failureCategory,
+          pinnedAdmission.message,
+          acquisitionDiagnosticsFromHttpGet(response, {
+            attemptedUrl: fetchUrl,
+            sourceId: request.source.source_id,
+          }),
+        )
+      }
       if (admittedBytes.length === 0) {
         return failedFetch(
           request.operationId,
@@ -249,8 +276,6 @@ export class FetchSourceAccessPort implements SourceAccessPort {
           }),
         )
       }
-      const decodeTruncated = response.transportCoding?.decoded_truncated === true
-      const truncated = response.truncated || decodeTruncated
       const truncationReason = decodeTruncated
         ? 'host_decoded_byte_limit'
         : response.truncated

@@ -14,6 +14,11 @@ import {
 } from '../../registry/missionAdapterResolution.js'
 import { planTechnicalRetrievalSlots } from '../../engine/technicalRetrievalComposition.js'
 import pins from './T-L1-T-L2-PINNED-VERSIONS.json' with { type: 'json' }
+import { DEFAULT_MAX_ADMITTED_BYTES } from '../../access/fetchSourceAccessPort.js'
+import {
+  findVersionPinnedDocumentPolicy,
+  resolveFetchAdmittedByteLimitForSource,
+} from '../../access/versionPinnedDocumentAcquisition.js'
 
 const campaignDir = dirname(fileURLToPath(import.meta.url))
 
@@ -97,5 +102,11 @@ describe('technical campaign production wiring (injected transport, no live mode
       { mediaType: 'application/pdf' },
     )
     assert.equal(paperRead?.adapterId, GENERAL_DOCUMENT_ADAPTER_ID)
+
+    const policy = findVersionPinnedDocumentPolicy(docSource)
+    assert.ok(policy)
+    const limit = resolveFetchAdmittedByteLimitForSource(docSource, mission)
+    assert.ok(limit! > DEFAULT_MAX_ADMITTED_BYTES)
+    assert.ok(limit! >= pins.t_l2_paper.observed_content_length_bytes)
   })
 })

@@ -17,6 +17,6 @@ Technical missions use **composed retrieval** when slots are planned: each decla
 
 ## Remaining blockers
 
-1. **arXiv PDF vs `DEFAULT_MAX_ADMITTED_BYTES` (200000)** — full paper is ~2.2MB; governed fetch truncates unless host cap is raised for campaign runs. Extraction may be partial/truncated; record `host_decoded_byte_limit` honestly.
+1. **arXiv PDF (~2.2MB, SHA-256 `bdfaa68d…`)** — use `versionPinnedDocumentAcquisition` (`T_L2_VERSION_PINNED_PAPER_POLICY`) for `https://arxiv.org/pdf/1706.03762.pdf` only: wire/decompressed limit **2_300_000**, complete-body + manifest digest required. General web cap (`DEFAULT_MAX_ADMITTED_BYTES` 200000) unchanged; truncated or digest-mismatch PDF is **failed**, not success. Offline bytes: `fixtures/campaign/papers/1706.03762.pdf` + manifest.
 2. **`paper` discovery** — use `document` + `selected_document_refs` (no open-web paper crawl).
 3. **Live GitHub tree + PDF fetch** — B-owned campaign execution; A proves injected-transport composition only.

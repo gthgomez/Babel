@@ -1,4 +1,6 @@
+import { findVersionPinnedDocumentPolicy } from '../../access/versionPinnedDocumentAcquisition.js'
 import type { AdmittedContent } from '../../contracts/admittedContent.js'
+import { isPdfMediaType } from './pdfAdmission.js'
 import type { SourceAdapterReadResult } from '../../ports/sourceAdapter.js'
 import type { SourceFetchResult } from '../../ports/sourceAccessPort.js'
 import type { SourceRecord } from '../../contracts/sources.js'
@@ -98,6 +100,17 @@ export function validateFetchBinding(
   const redirectErr = validateAdmittedRedirectProvenance(admitted.provenance)
   if (redirectErr) {
     return bindingFailed(operationId, redirectErr)
+  }
+  const pinnedPolicy = findVersionPinnedDocumentPolicy(source)
+  if (
+    pinnedPolicy?.require_complete_body &&
+    isPdfMediaType(admitted.media_type) &&
+    admitted.revision.completeness === 'truncated'
+  ) {
+    return bindingFailed(
+      operationId,
+      `version-pinned document ${pinnedPolicy.provenance.arxiv_id} requires complete PDF admission`,
+    )
   }
   return null
 }
