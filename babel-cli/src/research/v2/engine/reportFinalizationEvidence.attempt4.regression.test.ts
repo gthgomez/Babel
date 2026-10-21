@@ -91,10 +91,14 @@ describe('G-L1 attempt4 evidence subset (historical) + fef78559 finalizer', () =
           assertion_text: f.assertion_text,
           assertion_kind: f.assertion_kind,
           passage_ids: f.passage_ids,
+          question_id: f.question_id,
         })),
       },
     })
-    assert.ok(rebound.every((f) => f.question_id === firstQuestionId))
+    assert.ok(
+      rebound.every((f) => f.question_id === firstQuestionId),
+      'rebound preserves per-finding question_id from extract output',
+    )
   })
 
   it('records historical terminal report (pre-fef78559 builder) with all five unanswered and model prose cutoff', () => {

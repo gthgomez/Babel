@@ -50,6 +50,9 @@ function fixtureModelWithE2eScripts(): ResearchModelPort {
     async invokeStructured(request: ResearchModelInvocationRequest): Promise<ResearchModelInvocationResult> {
       if (request.kind === 'extract_findings') {
         const passageIds = (request.input.passage_ids as string[]) ?? []
+        const planQuestions =
+          (request.input.plan_questions as { question_id: string }[] | undefined) ?? []
+        const questionId = planQuestions[0]?.question_id ?? 'q-plan-e2e-001-1'
         fixture.scriptOutput(request.operationId, {
           kind: 'extract_findings',
           findings: [
@@ -57,6 +60,7 @@ function fixtureModelWithE2eScripts(): ResearchModelPort {
               assertion_text: 'The file exports a RESEARCH_CONTRACT constant.',
               assertion_kind: 'source_observation',
               passage_ids: passageIds,
+              question_id: questionId,
             },
           ],
         })

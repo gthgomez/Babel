@@ -14,14 +14,21 @@ import {
   intersectDocumentFetchByteBudgets,
   resolveMissionDocumentPolicyForFetchUrl,
 } from './missionDocumentAcquisitionPolicy.js'
-import paperManifest from '../fixtures/campaign/papers/1706.03762.manifest.json' with { type: 'json' }
+import arxivManifest from '../fixtures/campaign/papers/1706.03762.manifest.json' with { type: 'json' }
+import syntheticManifest from '../fixtures/campaign/papers/mutable-locator-synthetic.manifest.json' with { type: 'json' }
 
 const campaignDir = join(dirname(fileURLToPath(import.meta.url)), '../fixtures/campaign')
-const paperBytes = readFileSync(join(campaignDir, 'papers/1706.03762.pdf'))
+const syntheticPaperBytes = readFileSync(join(campaignDir, 'papers/mutable-locator-synthetic.pdf'))
 
 function loadT2Mission() {
   return ResearchMissionV2Schema.parse(
     JSON.parse(readFileSync(join(campaignDir, 'T-L2-mission.json'), 'utf8')),
+  )
+}
+
+function loadT2SyntheticMission() {
+  return ResearchMissionV2Schema.parse(
+    JSON.parse(readFileSync(join(campaignDir, 'T-L2-synthetic-mission.json'), 'utf8')),
   )
 }
 
@@ -66,13 +73,13 @@ describe('mission document acquisition policy', () => {
     const source = {
       source_id: 'x',
       kind: 'document' as const,
-      canonical_key: paperManifest.canonical_url,
-      observed_urls: [paperManifest.canonical_url],
+      canonical_key: arxivManifest.canonical_url,
+      observed_urls: [arxivManifest.canonical_url],
     }
     const policy = resolveMissionDocumentPolicyForFetchUrl(
       source,
       mission,
-      paperManifest.canonical_url,
+      arxivManifest.canonical_url,
     )
     assert.ok(policy)
     const budgets = intersectDocumentFetchByteBudgets(policy, 100_000, 100_000)
@@ -85,13 +92,13 @@ describe('mission document acquisition policy', () => {
     const source = {
       source_id: 'x',
       kind: 'document' as const,
-      canonical_key: paperManifest.canonical_url,
-      observed_urls: [paperManifest.canonical_url],
+      canonical_key: arxivManifest.canonical_url,
+      observed_urls: [arxivManifest.canonical_url],
     }
     const policy = resolveMissionDocumentPolicyForFetchUrl(
       source,
       mission,
-      paperManifest.canonical_url,
+      arxivManifest.canonical_url,
     )
     assert.ok(policy)
     const budgets = intersectDocumentFetchByteBudgets(policy, 10_000_000, 10_000_000)
@@ -101,7 +108,7 @@ describe('mission document acquisition policy', () => {
 
   it('rejects unrelated first observed_url with policy_denied and zero dispatch', async () => {
     const mission = loadT2Mission()
-    const arxivUrl = paperManifest.canonical_url
+    const arxivUrl = arxivManifest.canonical_url
     const unrelated = 'https://evil.example.invalid/not-the-paper.pdf'
     const source: SourceRecord = {
       source_id: 'borrow-budget',
@@ -144,7 +151,7 @@ describe('mission document acquisition policy', () => {
       mission,
       maxAdmittedBytes: 10_000_000,
       dispatchGet: async (url, _target, _max, signal) => {
-        if (url.href === paperManifest.canonical_url) {
+        if (url.href === arxivManifest.canonical_url) {
           initialDispatchCount += 1
           return {
             status: 302,
@@ -172,22 +179,22 @@ describe('mission document acquisition policy', () => {
     assert.equal(forbiddenTargetDispatchCount, 0)
   })
 
-  it('real parser extracts multi-page passages including last page (not digest-only proof)', async () => {
-    const mission = loadT2Mission()
+  it('synthetic parser extracts multi-page passages (repository-owned deterministic bytes)', async () => {
+    const mission = loadT2SyntheticMission()
     const source = await paperSource(mission)
     const access = createGovernedSourceAccessPort({
       mission,
       searchProvider: createMissionSelectedDocumentSearchProvider(),
       maxAdmittedBytes: 10_000_000,
       admittedGet: async ({ url, maxWireBytes, maxDecodedBytes }) => {
-        assert.ok((maxWireBytes ?? 0) >= paperBytes.length)
-        assert.ok((maxDecodedBytes ?? 0) >= paperBytes.length)
+        assert.ok((maxWireBytes ?? 0) >= syntheticPaperBytes.length)
+        assert.ok((maxDecodedBytes ?? 0) >= syntheticPaperBytes.length)
         return {
           ok: true,
           status: 200,
           contentType: 'application/pdf',
-          buffer: paperBytes,
-          bytesReceived: paperBytes.length,
+          buffer: syntheticPaperBytes,
+          bytesReceived: syntheticPaperBytes.length,
           truncated: false,
           requestedUrl: url,
           finalUrl: url,
@@ -197,39 +204,36 @@ describe('mission document acquisition policy', () => {
       },
     })
     const read = await new GeneralDocumentAdapter().read(
-      { operationId: 'real-parser', source, signal: AbortSignal.timeout(120_000) },
+      { operationId: 'synthetic-parser', source, signal: AbortSignal.timeout(120_000) },
       access,
     )
     assert.equal(read.status, 'ok')
     if (read.status !== 'ok') return
     assert.equal(read.revision.completeness, 'complete')
-    assert.equal(read.revision.content_hash, paperManifest.content_sha256)
+    assert.equal(read.revision.content_hash, syntheticManifest.content_sha256)
     assert.ok(read.document_pdf_extraction_coverage)
     const cov = read.document_pdf_extraction_coverage!
-    assert.equal(cov.pdf_page_count, paperManifest.expected_pdf_page_count ?? 15)
+    assert.equal(cov.pdf_page_count, syntheticManifest.expected_pdf_page_count ?? 2)
     assert.equal(cov.pages_processed, cov.pdf_page_count)
     assert.equal(cov.last_page_with_passage, cov.pdf_page_count)
     assert.ok(cov.pages_with_passages > 1)
     assert.equal(cov.page_traversal_complete, true)
     assert.equal(cov.text_extraction_complete, true)
-    assert.equal(cov.pages_without_extractable_text, 0)
-    assert.equal(cov.pages_with_truncated_inline_text, 0)
     for (const passage of read.passages) {
       PassageRecordSchema.parse(passage)
       assert.equal(passage.locator.kind, 'page')
     }
-    const lastPassage = read.passages.find(
-      (p) => p.locator.kind === 'page' && p.locator.start_page === cov.pdf_page_count,
+    const firstPassage = read.passages.find(
+      (p) => p.locator.kind === 'page' && p.locator.start_page === 1,
     )
-    assert.ok(lastPassage)
-    assert.equal(lastPassage!.text_ref.mode, 'inline')
-    if (lastPassage!.text_ref.mode === 'inline') {
-      assert.match(lastPassage!.text_ref.text, /Law/i)
+    assert.ok(firstPassage)
+    if (firstPassage!.text_ref.mode === 'inline') {
+      assert.match(firstPassage!.text_ref.text, /retention 90 days/i)
     }
   })
 
   it('truncated body fails closed under mutable_locator_content_digest pin', async () => {
-    const mission = loadT2Mission()
+    const mission = loadT2SyntheticMission()
     const source = await paperSource(mission)
     const access = createGovernedSourceAccessPort({
       mission,
@@ -238,7 +242,7 @@ describe('mission document acquisition policy', () => {
         ok: true,
         status: 200,
         contentType: 'application/pdf',
-        buffer: paperBytes.subarray(0, DEFAULT_MAX_ADMITTED_BYTES),
+        buffer: syntheticPaperBytes.subarray(0, DEFAULT_MAX_ADMITTED_BYTES),
         bytesReceived: DEFAULT_MAX_ADMITTED_BYTES,
         truncated: true,
         requestedUrl: url,

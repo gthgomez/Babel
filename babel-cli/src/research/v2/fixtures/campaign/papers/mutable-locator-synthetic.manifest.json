@@ -1,0 +1,15 @@
+{
+  "schema": "research-v2-mutable-locator-content-digest-manifest/v1",
+  "canonical_url": "https://arxiv.org/pdf/1706.03762.pdf",
+  "arxiv_id": "1706.03762",
+  "title": "Repository-owned synthetic PDF (deterministic tests)",
+  "artifact_path": "mutable-locator-synthetic.pdf",
+  "byte_length": 895,
+  "content_sha256": "d5e9ef3344cf88b639c730a063c9a2263678246a06ce84ef43e575ebfb40c7f0",
+  "content_pin_kind": "mutable_locator_content_digest",
+  "expected_pdf_page_count": 2,
+  "recorded_at": "2026-10-21T09:45:00.000Z",
+  "wire_byte_limit": 100000,
+  "decompressed_byte_limit": 100000,
+  "provenance_note": "Tracked in-repo synthetic bytes; not the arXiv full paper. Live arXiv bytes use external cache tooling and 1706.03762.manifest.json."
+}

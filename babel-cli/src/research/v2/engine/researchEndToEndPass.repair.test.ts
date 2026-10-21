@@ -51,6 +51,9 @@ function modelPort(): import('../ports/researchModelPort.js').ResearchModelPort 
       }
       if (request.kind === 'extract_findings') {
         const passageIds = (request.input.passages as { passage_id: string }[])?.map((p) => p.passage_id) ?? []
+        const planQuestions =
+          (request.input.plan_questions as { question_id: string }[] | undefined) ?? []
+        const questionId = planQuestions[0]?.question_id ?? 'q-plan-repair-001-1'
         fixture.scriptOutput(request.operationId, {
           kind: 'extract_findings',
           findings: [
@@ -58,6 +61,7 @@ function modelPort(): import('../ports/researchModelPort.js').ResearchModelPort 
               assertion_text: 'Observed constant export.',
               assertion_kind: 'source_observation',
               passage_ids: passageIds.slice(0, 1),
+              question_id: questionId,
             },
           ],
         })

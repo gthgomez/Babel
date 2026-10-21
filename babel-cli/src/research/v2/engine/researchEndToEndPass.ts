@@ -299,6 +299,10 @@ export async function runAdmittedResearchEndToEndPass(
         passage_id: p.passage_id,
         text: p.text_ref.mode === 'inline' ? p.text_ref.text : '',
       })),
+      plan_questions: activePlan.questions.map((q) => ({
+        question_id: q.question_id,
+        text: q.text,
+      })),
     },
     signal: request.signal,
     dispatchedAt: request.dispatchedAt,
@@ -346,6 +350,7 @@ export async function runAdmittedResearchEndToEndPass(
       primary_question: request.session.mission.primary_question,
       findings: findings.map((f) => ({
         finding_id: f.finding_id,
+        question_id: f.question_id,
         assertion_text: f.assertion_text,
         semantic_support: f.semantic_support?.status ?? 'not_checked',
       })),

@@ -27,6 +27,7 @@ export const MINIMAL_VALID_MODEL_OUTPUT_BY_KIND: Record<string, Record<string, u
         assertion_text: 'Observed value in passage.',
         assertion_kind: 'source_observation',
         passage_ids: ['passage-1'],
+        question_id: 'q-plan-1',
       },
     ],
   },

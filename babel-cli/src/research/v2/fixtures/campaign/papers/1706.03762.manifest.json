@@ -4,6 +4,8 @@
   "arxiv_id": "1706.03762",
   "title": "Attention Is All You Need",
   "artifact_path": "1706.03762.pdf",
+  "external_cache_note": "Full arXiv bytes are not tracked in Git. Place verified bytes at BABEL_RESEARCH_V2_CAMPAIGN_PAPER_CACHE/1706.03762.pdf or ~/.cache/babel/research-v2/campaign/papers/1706.03762.pdf. arXiv non-exclusive distribution license is not general downstream CC permission.",
+  "repository_synthetic_fixture": "mutable-locator-synthetic.manifest.json",
   "byte_length": 2215244,
   "content_sha256": "bdfaa68d8984f0dc02beaca527b76f207d99b666d31d1da728ee0728182df697",
   "content_pin_kind": "mutable_locator_content_digest",

@@ -11,6 +11,20 @@ function findingId(operationId: string, index: number): string {
   return `finding-${createHash('sha256').update(`${operationId}:${index}`).digest('hex').slice(0, 24)}`
 }
 
+function assertExtractFindingQuestionId(
+  questionId: string,
+  planQuestionIds: ReadonlySet<string>,
+): string {
+  if (!planQuestionIds.has(questionId)) {
+    throw new Error(`model cited unknown question_id ${questionId}`)
+  }
+  return questionId
+}
+
+/**
+ * Maps extract_findings model output to FindingRecords.
+ * Backward compatibility: extracts without question_id fail Zod parse; there is no plan.questions[0] fallback.
+ */
 export function findingsFromExtractModelOutput(params: {
   operationId: string
   modelOutput: Record<string, unknown>
@@ -19,11 +33,10 @@ export function findingsFromExtractModelOutput(params: {
   createdAt: string
 }): FindingRecord[] {
   const parsed = ExtractFindingsOutputSchema.parse(params.modelOutput)
-  /** Extract schema has no per-question binding; host stores findings on the first plan question only. */
-  const defaultQuestionId = params.plan.questions[0]?.question_id
-  if (!defaultQuestionId) {
+  if (params.plan.questions.length === 0) {
     throw new Error('plan has no questions for finding binding')
   }
+  const planQuestionIds = new Set(params.plan.questions.map((q) => q.question_id))
   const passageIds = new Set(params.passages.map((p) => p.passage_id))
   return parsed.findings.map((raw, index) => {
     for (const pid of raw.passage_ids) {
@@ -33,7 +46,7 @@ export function findingsFromExtractModelOutput(params: {
     }
     return {
       finding_id: findingId(params.operationId, index),
-      question_id: defaultQuestionId,
+      question_id: assertExtractFindingQuestionId(raw.question_id, planQuestionIds),
       assertion_text: raw.assertion_text,
       assertion_kind: raw.assertion_kind,
       passage_ids: raw.passage_ids,

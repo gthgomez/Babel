@@ -13,11 +13,6 @@
       "path": "babel-desktop/references/BabelTuiNorthStar.png",
       "sha256": "fd4250031448b6b0a448f2fbe57177b56fbcdab93609db4ea9f4ba970bf796f0",
       "rationale": "Visual source image for the desktop shell screenshot harness."
-    },
-    {
-      "path": "babel-cli/src/research/v2/fixtures/campaign/papers/1706.03762.pdf",
-      "sha256": "bdfaa68d8984f0dc02beaca527b76f207d99b666d31d1da728ee0728182df697",
-      "rationale": "Open-access arXiv:1706.03762 offline campaign fixture; SHA-256 pinned in papers/1706.03762.manifest.json for research-v2 mutable_locator tests only (not a product release artifact)."
     }
   ],
   "forbidden_generated_path_patterns": [
@@ -309,11 +304,6 @@
         "path": "babel-desktop/references/BabelTuiNorthStar.png",
         "sha256": "fd4250031448b6b0a448f2fbe57177b56fbcdab93609db4ea9f4ba970bf796f0",
         "rationale": "Visual source image for the desktop shell screenshot harness."
-      },
-      {
-        "path": "babel-cli/src/research/v2/fixtures/campaign/papers/1706.03762.pdf",
-        "sha256": "bdfaa68d8984f0dc02beaca527b76f207d99b666d31d1da728ee0728182df697",
-        "rationale": "Open-access arXiv:1706.03762 offline campaign fixture; SHA-256 pinned in papers/1706.03762.manifest.json for research-v2 mutable_locator tests only (not a product release artifact)."
       }
     ],
     "fixture_exceptions": [

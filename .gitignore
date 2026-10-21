@@ -133,3 +133,4 @@ docs/OSS_DOCS_CRITIQUE_2026-08-01.md
 /babel-cli/LICENSE
 /babel-cli/*.tgz
 /artifacts/consumer-package/
+babel-cli/src/research/v2/fixtures/campaign/papers/1706.03762.pdf
