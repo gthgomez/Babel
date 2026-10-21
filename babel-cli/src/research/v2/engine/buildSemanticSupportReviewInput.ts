@@ -27,7 +27,7 @@ export function coverageRubricForQuestion(question: {
     'question_coverage answers requires the assertion to address the bound question_text using cited passages; tangential supported facts do not count as answers.'
   if (obligations.length > 0) {
     guidance +=
-      ' When coverage_obligations are present, each listed source_slot needs admitted passage support for its aspect (technical_effect vs audience_intent are distinct). Comparative coverage requires every obligation satisfied; missing any obligation is partial, not answers. max_age_or_ttl_semantics requires max-age/s-maxage/TTL substance — Cache-Control header mention alone is insufficient.'
+      ' When coverage_obligations are present, emit obligation_coverage per obligation_id with status met|unmet|wrong_aspect and supporting_passage_ids from this finding. Ground judgments in cited passage text; host validates slot/passage identity and completeness (not topic keywords). Comparative coverage requires every obligation met for question_coverage answers.'
   } else {
     guidance += ` Plan evidence_requirement (human): ${question.evidence_requirement}`
   }
