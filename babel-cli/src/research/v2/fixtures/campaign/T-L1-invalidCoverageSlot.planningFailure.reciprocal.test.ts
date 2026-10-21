@@ -12,7 +12,10 @@ import { fileURLToPath } from 'node:url'
 import { describe, it } from 'node:test'
 import type { ZodType } from 'zod'
 import type { LlmRunner, RunnerCallbacks, RunnerInvocationMetadata } from '../../../../runners/base.js'
-import type { GitHubTreeEntry } from '../../access/pinnedRepositoryFileSearchProvider.js'
+import type {
+  FetchPinnedRepositoryTree,
+  GitHubTreeEntry,
+} from '../../access/pinnedRepositoryFileSearchProvider.js'
 import { runResearchV2MissionWithOwnerSession } from '../../cli/researchV2MissionRun.js'
 import { fixtureModelForOfflineRun } from '../../cli/researchV2FixtureRunModel.js'
 import { terminalReportFromEvents } from '../../cli/researchV2CliOperations.js'
@@ -43,6 +46,9 @@ function treeFromPaths(paths: string[]): GitHubTreeEntry[] {
   return paths.map((path) => ({ path, type: 'blob' }))
 }
 
+/** Deterministic stop before production admittedGet raw-file HTTP (test-only). */
+export const T_L1_RETRIEVAL_TREE_DISPATCH_OBSERVED = 'T_L1_RETRIEVAL_TREE_DISPATCH_OBSERVED'
+
 function tL1InjectedFetchRepositoryTree(mission: ReturnType<typeof ResearchMissionV2Schema.parse>) {
   const babelPath = 'babel-cli/src/research/v2/persistence/durableResearchStore.ts'
   const langPath = 'libs/langgraph/langgraph/pregel/_checkpoint.py'
@@ -62,6 +68,21 @@ function tL1InjectedFetchRepositoryTree(mission: ReturnType<typeof ResearchMissi
       }
     }
     return { ok: false, status: 404, entries: [], message: `unexpected tree ${apiUrl}` }
+  }
+}
+
+function tL1FetchTreeStopsAfterFirstDispatch(
+  mission: ReturnType<typeof ResearchMissionV2Schema.parse>,
+): FetchPinnedRepositoryTree {
+  const inner = tL1InjectedFetchRepositoryTree(mission)
+  let treeDispatchConsumed = false
+  return async (params) => {
+    if (treeDispatchConsumed) {
+      throw new Error(T_L1_RETRIEVAL_TREE_DISPATCH_OBSERVED)
+    }
+    treeDispatchConsumed = true
+    await inner(params)
+    throw new Error(T_L1_RETRIEVAL_TREE_DISPATCH_OBSERVED)
   }
 }
 
@@ -368,19 +389,28 @@ describe('T-L1 invalid discover-primary planning failure reciprocal (A c27fb39c 
     }
   })
 
-  it('valid repository-slot plan proceeds to injected repository search via owner runner', async () => {
+  it('valid repository-slot plan reaches injected tree dispatch; stops before admittedGet HTTP (owner runner isolation)', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'babel-t-l1-valid-slot-retrieval-'))
     const mission = ResearchMissionV2Schema.parse(JSON.parse(readFileSync(missionPath, 'utf8')))
     const planId = 'plan-t-l1-valid-slot-retrieval'
     try {
+      let runError: unknown
       await runResearchV2MissionWithOwnerSession({
         storeDirectory: dir,
         mission,
         discoverQuery: 'global-fallback-unused',
         planRevisionId: planId,
         model: tL1ValidPlanThenFixturePhasesModel(),
-        fetchRepositoryTree: tL1InjectedFetchRepositoryTree(mission),
-      }).catch(() => undefined)
+        fetchRepositoryTree: tL1FetchTreeStopsAfterFirstDispatch(mission),
+      }).catch((err) => {
+        runError = err
+      })
+      const message = runError instanceof Error ? runError.message : String(runError ?? '')
+      assert.ok(
+        message.includes(T_L1_RETRIEVAL_TREE_DISPATCH_OBSERVED) ||
+          message.includes('composed retrieval produced no admitted sources'),
+        `must stop after injected tree dispatch before production admittedGet fetch; got: ${message}`,
+      )
 
       const events = await (await openAdmittedInspectStore(dir)).listEvents(mission.mission_id)
       const modelPlan = events
@@ -389,21 +419,31 @@ describe('T-L1 invalid discover-primary planning failure reciprocal (A c27fb39c 
         .find((p) => p.revision_reason === 'e2e_model_planning')
       assert.ok(modelPlan, 'expected persisted model plan revision after valid slot obligations')
 
-      const retrievalIntents = events.filter((e) => {
+      const searchIntents = events.filter((e) => {
         if (e.kind !== 'external_operation_intent') return false
-        const kind = (e.payload as { intent?: { operation_kind?: string } }).intent?.operation_kind
-        return kind === 'source_search' || kind === 'source_fetch'
+        return (e.payload as { intent?: { operation_kind?: string } }).intent?.operation_kind === 'source_search'
       })
-      assert.ok(retrievalIntents.length >= 1, 'valid planning must reach injected repository retrieval')
+      assert.ok(
+        searchIntents.length >= 1,
+        'valid planning must reach repository search intent via injected tree (not full offline acquisition)',
+      )
+      assert.equal(
+        events.filter((e) => e.kind === 'source_recorded').length,
+        0,
+        'isolation gate must prevent successful raw-file acquisition via production admittedGet',
+      )
+      assert.equal(
+        events.filter((e) => {
+          if (e.kind !== 'external_operation_intent') return false
+          return (e.payload as { intent?: { operation_kind?: string } }).intent?.operation_kind === 'source_fetch'
+        }).length,
+        0,
+        'must not proceed to fetch intents after tree dispatch stop',
+      )
 
       const reopened = await ResearchEngineSession.openInspect(dir)
       const eventsAfterReopen = await reopened.listEvents(mission.mission_id)
       assert.equal(eventsAfterReopen.length, events.length)
-      assert.equal(retrievalIntents.length, eventsAfterReopen.filter((e) => {
-        if (e.kind !== 'external_operation_intent') return false
-        const kind = (e.payload as { intent?: { operation_kind?: string } }).intent?.operation_kind
-        return kind === 'source_search' || kind === 'source_fetch'
-      }).length)
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

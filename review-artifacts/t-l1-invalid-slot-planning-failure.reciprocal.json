@@ -18,9 +18,8 @@
     "review-artifacts/t-l1-invalid-slot-planning-failure.reciprocal.tap.txt (808d0613-era red runs)",
     "review-artifacts/t-l1-invalid-slot-planning-failure.reciprocal.union-v2.tap.txt (b024ca95 9/9 union)"
   ],
-  "git_head_at_receipt_authoring": "13a62ab7",
-  "git_head_full": "13a62ab7",
-  "git_tree_at_receipt_authoring": "53a7a4457d93c32201b3642268ce2baecd926fc7",
+  "git_head_at_receipt_authoring": "13a62ab717647ff556d0a6bd117ab9490b9c7735",
+  "git_tree_at_receipt_authoring": "294ddaf07cffb1dff538e5a05f6f06abd204160b",
   "test_source_commit_for_sha256_binding": "40e421c663b92547d8e223c47a8ca64e16054e33",
   "working_tree_status": "dirty_untracked_present",
   "working_tree_dirty_untracked_paths": 47,
