@@ -79,3 +79,23 @@ export function withAdditionalSourceAdapters(
     profiles: registries.profiles,
   }
 }
+
+export function withAdditionalProfiles(
+  registries: ReturnType<typeof createTechnicalResearchRegistries>,
+  additional: readonly ResearchProfileDefinition[],
+): ReturnType<typeof createTechnicalResearchRegistries> {
+  const profiles: ResearchProfileDefinition[] = [technicalProfileDefinition]
+  for (const profile of additional) {
+    if (
+      profile.profileId === technicalProfileDefinition.profileId &&
+      profile.profileVersion === technicalProfileDefinition.profileVersion
+    ) {
+      continue
+    }
+    profiles.push(profile)
+  }
+  return {
+    sourceAdapters: registries.sourceAdapters,
+    profiles: new MapProfileRegistry(profiles),
+  }
+}

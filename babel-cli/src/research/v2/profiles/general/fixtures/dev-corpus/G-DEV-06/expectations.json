@@ -1,0 +1,6 @@
+{
+  "acceptable_terminal_states": ["partial", "blocked"],
+  "must_not_invent_fee": true,
+  "must_label_snippet_only_evidence": true,
+  "conflicting_snippets": ["search-snippet-a.txt", "search-snippet-b.txt"]
+}

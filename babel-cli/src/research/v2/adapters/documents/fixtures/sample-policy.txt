@@ -1,0 +1,3 @@
+Sample policy excerpt for document adapter locator tests (fictional).
+Section 2.1 — Retention period: 90 days.
+Page locator tests use PDF fixture `two-page-sample.pdf`.

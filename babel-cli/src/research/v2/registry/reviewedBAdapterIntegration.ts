@@ -1,64 +1,60 @@
+import {
+  GENERAL_DOCUMENT_ADAPTER_ID,
+  GeneralDocumentAdapter,
+} from '../adapters/documents/generalDocumentAdapter.js'
 import type { SourceAdapter } from '../ports/sourceAdapter.js'
+import type { ResearchProfileDefinition } from '../ports/researchProfileDefinition.js'
+import {
+  GENERAL_PROFILE_ID,
+  GENERAL_PROFILE_VERSION,
+  generalProfileDefinition,
+} from '../profiles/general/generalProfileDefinition.js'
 import {
   createTechnicalResearchRegistries,
+  withAdditionalProfiles,
   withAdditionalSourceAdapters,
 } from './frozenRegistries.js'
+import { loadRepairInProgressBWebCatalog } from './loadRepairInProgressBWebCatalog.js'
 
 /**
- * Agent B ownership: profiles/general, adapters/web, adapters/documents.
- * Register reviewed B adapters here after independent review — Agent A does not duplicate HTML/PDF extraction.
+ * Agent B ownership: profiles/general (except registry wiring), adapters/web, adapters/documents.
+ * Reviewed export @ 196098d9: {@link GeneralDocumentAdapter} + {@link generalProfileDefinition}.
+ * HTML/PDF catalog slice loads only when B modules exist; ids land in `bAdaptersRepairInProgress`.
  */
-const B_GENERAL_PLAIN_TEXT_ADAPTER = '../profiles/general/plainTextWebAdapter.js'
-const B_WEB_HTML_ADAPTER = '../adapters/web/htmlWebSourceAdapter.js'
-const B_DOCUMENT_PDF_ADAPTER = '../adapters/documents/pdfDocumentAdapter.js'
+export interface CombinedResearchRegistries extends ReturnType<typeof createTechnicalResearchRegistries> {
+  /** Independently reviewed B adapter registration keys (Agent A registry wiring). */
+  bAdaptersRegistered: string[]
+  /** B HTML/PDF slice present locally but not accepted for review yet. */
+  bAdaptersRepairInProgress: string[]
+}
 
-async function tryImport<T>(specifier: string): Promise<T | null> {
-  try {
-    return (await import(specifier)) as T
-  } catch {
-    return null
+function asResearchProfileDefinition(): ResearchProfileDefinition {
+  return {
+    profileId: GENERAL_PROFILE_ID,
+    profileVersion: GENERAL_PROFILE_VERSION,
+    preferredSourceClasses: [...generalProfileDefinition.preferredSourceClasses],
+    questionTemplates: [...generalProfileDefinition.questionTemplates],
+    reportSections: [...generalProfileDefinition.reportSections],
   }
 }
 
-async function loadAdapter(
-  specifier: string,
-  exportName: string,
-): Promise<SourceAdapter | null> {
-  const mod = await tryImport<Record<string, new () => SourceAdapter>>(specifier)
-  if (!mod) return null
-  const Ctor = mod[exportName]
-  if (!Ctor) return null
-  return new Ctor()
-}
-
-export interface CombinedResearchRegistries extends ReturnType<typeof createTechnicalResearchRegistries> {
-  bAdaptersRegistered: string[]
-}
-
-/** Technical baseline plus optional B-reviewed adapters when modules exist locally. */
+/** Technical baseline plus B-reviewed document adapter and optional in-repair web/catalog slice. */
 export async function createCombinedResearchRegistries(): Promise<CombinedResearchRegistries> {
   const technical = createTechnicalResearchRegistries()
-  const extras: SourceAdapter[] = []
-  const registered: string[] = []
+  const reviewedAdapters: SourceAdapter[] = [new GeneralDocumentAdapter()]
+  const registered = [`documents/${GENERAL_DOCUMENT_ADAPTER_ID}`]
 
-  const plain = await loadAdapter(B_GENERAL_PLAIN_TEXT_ADAPTER, 'PlainTextWebSourceAdapter')
-  if (plain) {
-    extras.push(plain)
-    registered.push('general/plainTextWebSourceAdapter')
+  let registries = withAdditionalProfiles(technical, [asResearchProfileDefinition()])
+  registries = withAdditionalSourceAdapters(registries, reviewedAdapters)
+
+  const repairSlice = await loadRepairInProgressBWebCatalog()
+  if (repairSlice.adapters.length > 0) {
+    registries = withAdditionalSourceAdapters(registries, repairSlice.adapters)
   }
 
-  const html = await loadAdapter(B_WEB_HTML_ADAPTER, 'HtmlWebSourceAdapter')
-  if (html) {
-    extras.push(html)
-    registered.push('web/htmlWebSourceAdapter')
+  return {
+    ...registries,
+    bAdaptersRegistered: registered,
+    bAdaptersRepairInProgress: repairSlice.adapterIds,
   }
-
-  const pdf = await loadAdapter(B_DOCUMENT_PDF_ADAPTER, 'PdfDocumentSourceAdapter')
-  if (pdf) {
-    extras.push(pdf)
-    registered.push('documents/pdfDocumentSourceAdapter')
-  }
-
-  const merged = extras.length > 0 ? withAdditionalSourceAdapters(technical, extras) : technical
-  return { ...merged, bAdaptersRegistered: registered }
 }
