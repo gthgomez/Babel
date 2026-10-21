@@ -1,0 +1,7 @@
+(node:11990) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:11990) ExperimentalWarning: Importing WebAssembly module instances is an experimental feature and might change at any time
+{
+  "status": "fail",
+  "error": "composed retrieval produced no admitted sources"
+}

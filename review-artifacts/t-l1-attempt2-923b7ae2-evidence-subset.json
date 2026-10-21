@@ -1,0 +1,170 @@
+{
+  "schema": "research-v2-t-l1-attempt2-evidence-subset/v1",
+  "bound_commit": "923b7ae2ffade35e8a556703eb93c8dd1c23c1f9",
+  "bound_tree": "68875e977d35235ed48253f75691a386343f44ad",
+  "mission_id": "mission-t-l1-validation-923b7ae2-attempt2-001",
+  "store_directory": "/tmp/babel-t-l1-store-923b7ae2-attempt2-1792596031",
+  "snapshot_sha256": "044e673ec448df63c57597f9acf6a8fafd1b9cad0409bdd9062cf26e5c16a979",
+  "snapshot_bytes": 16210,
+  "event_count": 11,
+  "event_kinds": [
+    "mission_created",
+    "plan_revised",
+    "external_operation_intent",
+    "model_invocation_completed",
+    "external_operation_completed",
+    "terminal_receipt"
+  ],
+  "intent_count": 3,
+  "completed_count": 3,
+  "model_invocation_completed_count": 1,
+  "repository_pin_retrieval_outcomes": [
+    {
+      "source_slot": "repository-pin-0",
+      "expected_pin_commit": "e912c2f3320de0b6e1c9ff85b95b0f74d8b5323c",
+      "discover_query": "persistence durableresearchstore.ts",
+      "sampled_implementation_path_expected": "babel-cli/src/research/v2/persistence/durableResearchStore.ts",
+      "sampled_bytes_expected": 8305,
+      "search_operation_id": "cli-run-search-wg2-d5fbec88--repository-pin-0",
+      "outcome": "failed_before_admitted_source",
+      "failure_category": "network_error",
+      "message": "GitHub tree API HTTP 403",
+      "admitted_file_path": null,
+      "admitted_blob_sha256": null,
+      "admitted_bytes": null
+    },
+    {
+      "source_slot": "repository-pin-1",
+      "expected_pin_commit": "3cd57c038ad827d05f80c6488adea9994156c58c",
+      "discover_query": "pregel checkpoint",
+      "sampled_implementation_path_expected": "libs/langgraph/langgraph/pregel/_checkpoint.py",
+      "sampled_bytes_expected": 20417,
+      "search_operation_id": "cli-run-search-wg2-d5fbec88--repository-pin-1",
+      "outcome": "failed_before_admitted_source",
+      "failure_category": "network_error",
+      "message": "GitHub tree API HTTP 403",
+      "admitted_file_path": null,
+      "admitted_blob_sha256": null,
+      "admitted_bytes": null
+    }
+  ],
+  "repository_outcomes": [],
+  "passages_count": 0,
+  "findings": [],
+  "plans": [
+    {
+      "recordedAt": "2026-10-21T15:20:32.609Z",
+      "plan_revision_id": "plan-7b8890cb-e9d5-427f-8ed3-c202f1d5febf-bootstrap",
+      "revision_reason": "host_bootstrap_before_model_plan",
+      "question_count": 1,
+      "coverage_obligations_sample": []
+    },
+    {
+      "recordedAt": "2026-10-21T15:20:49.569Z",
+      "plan_revision_id": "plan-7b8890cb-e9d5-427f-8ed3-c202f1d5febf",
+      "revision_reason": "e2e_model_planning",
+      "question_count": 2,
+      "coverage_obligations_sample": [
+        {
+          "obligation_id": "persistence-path-repository-pin-0",
+          "source_slot": "repository-pin-0",
+          "criterion_id": "durable-state-persistence-mapping",
+          "evidence_requirement": "For the repository exposed through repository-pin-0, cite the concrete file path(s) that implement durable graph/state persistence and explain what code-level components make that persistence durable, such as checkpoint storage, serialization, or state store APIs."
+        },
+        {
+          "obligation_id": "execution-policy-path-repository-pin-0",
+          "source_slot": "repository-pin-0",
+          "criterion_id": "agent-execution-policy-mapping",
+          "evidence_requirement": "For the repository exposed through repository-pin-0, cite the concrete file path(s) that implement agent execution policy or control flow and describe how execution decisions are made independently of or entangled with persistence."
+        },
+        {
+          "obligation_id": "persistence-path-repository-pin-1",
+          "source_slot": "repository-pin-1",
+          "criterion_id": "durable-state-persistence-mapping",
+          "evidence_requirement": "For the repository exposed through repository-pin-1, cite the concrete file path(s) that implement durable graph/state persistence and explain what code-level components make that persistence durable, such as checkpoint storage, serialization, or state store APIs."
+        },
+        {
+          "obligation_id": "execution-policy-path-repository-pin-1",
+          "source_slot": "repository-pin-1",
+          "criterion_id": "agent-execution-policy-mapping",
+          "evidence_requirement": "For the repository exposed through repository-pin-1, cite the concrete file path(s) that implement agent execution policy or control flow and describe how execution decisions are made independently of or entangled with persistence."
+        },
+        {
+          "obligation_id": "separation-clarity-repository-pin-0",
+          "source_slot": "repository-pin-0",
+          "criterion_id": "separation-clarity",
+          "evidence_requirement": "Characterize the persistence-vs-execution boundary in the repository exposed through repository-pin-0 using concrete file paths and API/module names, including any signs of entangling or clean separation."
+        },
+        {
+          "obligation_id": "separation-clarity-repository-pin-1",
+          "source_slot": "repository-pin-1",
+          "criterion_id": "separation-clarity",
+          "evidence_requirement": "Characterize the persistence-vs-execution boundary in the repository exposed through repository-pin-1 using concrete file paths and API/module names, including any signs of entangling or clean separation."
+        }
+      ]
+    }
+  ],
+  "usage_and_diagnostics_by_completion": [
+    {
+      "operation_id": "cli-run-plan-wg2-d5fbec88",
+      "attempt_id": "cli-run-plan-att-wg2-d5fbec88",
+      "usage_settlement": {
+        "attempt_id": "cli-run-plan-att-wg2-d5fbec88",
+        "input_tokens": 942,
+        "output_tokens": 3585,
+        "reasoning_tokens": 2843,
+        "cost": {
+          "status": "reported",
+          "amount_usd": 0.00051981468,
+          "currency": "USD"
+        }
+      },
+      "provider_invoke_diagnostics": {
+        "inference_id": "0b6c8128-dcbe-499b-bf59-042d7dd52b68",
+        "visible_content_present": true,
+        "normalized_finish_reason": "NATURAL_COMPLETION",
+        "output_digest": "ce0d2425e23014b8fe2882bc10c6cfe30c6f9ae1f1c7bcf846579b250bb5db06",
+        "input_tokens": 942,
+        "output_tokens": 3585,
+        "reasoning_tokens": 2843
+      }
+    },
+    {
+      "operation_id": "cli-run-search-wg2-d5fbec88--repository-pin-0",
+      "attempt_id": "cli-run-search-att-wg2-d5fbec88--repository-pin-0",
+      "outcome_status": "failed",
+      "failure_category": "network_error",
+      "message": "GitHub tree API HTTP 403",
+      "usage_settlement": null,
+      "exa": "not_used"
+    },
+    {
+      "operation_id": "cli-run-search-wg2-d5fbec88--repository-pin-1",
+      "attempt_id": "cli-run-search-att-wg2-d5fbec88--repository-pin-1",
+      "outcome_status": "failed",
+      "failure_category": "network_error",
+      "message": "GitHub tree API HTTP 403",
+      "usage_settlement": null,
+      "exa": "not_used"
+    }
+  ],
+  "terminal_receipt": {
+    "mission_id": "mission-t-l1-validation-923b7ae2-attempt2-001",
+    "plan_revision_id": "plan-7b8890cb-e9d5-427f-8ed3-c202f1d5febf",
+    "terminal_state": "failed",
+    "answer_summary": "Research pass failed during admitted_research_pass. composed retrieval produced no admitted sources",
+    "unanswered_questions": [],
+    "coverage_notes": "Terminal receipt recorded after admitted pass failure. External operation accounting: each recorded external_operation_intent has a matching external_operation_completed event for the same mission, operation, and attempt.",
+    "limitations": [
+      "source_retrieval_or_extraction_failed"
+    ],
+    "source_cutoff": "unknown",
+    "acceptance_state": "not_accepted",
+    "stopping_reason": "source_retrieval_failed",
+    "finding_ids": [],
+    "citation_passage_ids": [],
+    "generated_at": "2026-10-21T15:20:49.722Z"
+  },
+  "attempt1_historical_planning_cost": "unknown_unchanged",
+  "scope_note": "Two sampled implementation files only; no whole-repository architecture or semantic-quality certification."
+}

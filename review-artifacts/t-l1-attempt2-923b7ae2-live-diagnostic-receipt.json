@@ -1,0 +1,63 @@
+{
+  "schema": "research-v2-t-l1-attempt2-live-diagnostic-receipt-sanitized/v1",
+  "attempt": 2,
+  "receipt_binding": {
+    "bound_a_commit": "923b7ae2ffade35e8a556703eb93c8dd1c23c1f9",
+    "bound_tree": "68875e977d35235ed48253f75691a386343f44ad",
+    "worktree_babel_cli": "/tmp/babel-t-l1-preflight-923b7ae2/babel-cli",
+    "bin_absolute": "/tmp/babel-t-l1-preflight-923b7ae2/babel-cli/bin/babel.js"
+  },
+  "attempt1_unchanged": {
+    "store": "/tmp/babel-t-l1-store-8930f929-1792593831",
+    "planning_cost": "unknown",
+    "note": "Attempt1 historical planning token/cost not revised by attempt2."
+  },
+  "preflight_before_run": {
+    "typecheck_exit": 0,
+    "build_exit": 0,
+    "technical_campaign_preflight": "ok",
+    "openrouter_api_key_configured": true
+  },
+  "live_run": {
+    "mission_id": "mission-t-l1-validation-923b7ae2-attempt2-001",
+    "store_directory": "/tmp/babel-t-l1-store-923b7ae2-attempt2-1792596031",
+    "snapshot_sha256": "044e673ec448df63c57597f9acf6a8fafd1b9cad0409bdd9062cf26e5c16a979",
+    "meta": "review-artifacts/t-l1-attempt2-923b7ae2-run-meta.txt",
+    "cli_json": "review-artifacts/t-l1-attempt2-923b7ae2-run-cli.json",
+    "cli_exit": 1,
+    "terminal_state": "failed",
+    "failure": "composed retrieval produced no admitted sources",
+    "stopping_reason": "source_retrieval_failed"
+  },
+  "planning_model_settlement": {
+    "operation_id": "cli-run-plan-wg2-d5fbec88",
+    "inference_id": "0b6c8128-dcbe-499b-bf59-042d7dd52b68",
+    "finish_reason": "NATURAL_COMPLETION",
+    "input_tokens": 942,
+    "output_tokens": 3585,
+    "reasoning_tokens": 2843,
+    "cost_usd_reported": 0.00051981468,
+    "plan_persisted": true,
+    "repository_slots_in_plan": ["repository-pin-0", "repository-pin-1"]
+  },
+  "repository_pins_scope": {
+    "babel": {
+      "commit": "e912c2f3320de0b6e1c9ff85b95b0f74d8b5323c",
+      "query": "persistence durableresearchstore.ts",
+      "retrieval": "GitHub tree API HTTP 403; no admitted blob"
+    },
+    "langgraph": {
+      "commit": "3cd57c038ad827d05f80c6488adea9994156c58c",
+      "query": "pregel checkpoint",
+      "retrieval": "GitHub tree API HTTP 403; no admitted blob"
+    }
+  },
+  "exa": "not_observed_technical_github_tree_pipeline",
+  "artifacts": {
+    "evidence_subset": "review-artifacts/t-l1-attempt2-923b7ae2-evidence-subset.json",
+    "mission": "review-artifacts/t-l1-attempt2-923b7ae2-mission.json",
+    "inspect": "review-artifacts/t-l1-attempt2-923b7ae2-inspect.json",
+    "report": "review-artifacts/t-l1-attempt2-923b7ae2-report.json"
+  },
+  "scope_limitation": "Two sampled implementation files not acquired; no whole-repository architecture or semantic-quality certification."
+}

@@ -1,0 +1,24 @@
+(node:12031) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:12031) ExperimentalWarning: Importing WebAssembly module instances is an experimental feature and might change at any time
+{
+  "store_directory": "/tmp/babel-t-l1-store-923b7ae2-attempt2-1792596031",
+  "mission_id": "mission-t-l1-validation-923b7ae2-attempt2-001",
+  "report": {
+    "mission_id": "mission-t-l1-validation-923b7ae2-attempt2-001",
+    "plan_revision_id": "plan-7b8890cb-e9d5-427f-8ed3-c202f1d5febf",
+    "terminal_state": "failed",
+    "answer_summary": "Research pass failed during admitted_research_pass. composed retrieval produced no admitted sources",
+    "unanswered_questions": [],
+    "coverage_notes": "Terminal receipt recorded after admitted pass failure. External operation accounting: each recorded external_operation_intent has a matching external_operation_completed event for the same mission, operation, and attempt.",
+    "limitations": [
+      "source_retrieval_or_extraction_failed"
+    ],
+    "source_cutoff": "unknown",
+    "acceptance_state": "not_accepted",
+    "stopping_reason": "source_retrieval_failed",
+    "finding_ids": [],
+    "citation_passage_ids": [],
+    "generated_at": "2026-10-21T15:20:49.722Z"
+  }
+}
