@@ -1,7 +1,7 @@
 === extraction dependency evidence (read-only) ===
-generatedAt: 2026-10-21T02:46:27Z
-localHead: 2e81686d2606709e54b6b1ecdbaf8d793524a088
-localTree: be5e60aa1aacd3062f73179e1d606f10b3a036ad
+generatedAt: 2026-10-21T02:47:18Z
+localHead: 3175ba2f28c3cfeeaa905c28d18448506eca8291
+localTree: e69d4477fb322ee66f43331f4bf76dd32cb57302
 
 === package.json direct dependency on pdfjs-dist ===
 pdfjs-dist in package.json: (not a direct dependency key)
@@ -21,3 +21,10 @@ babel-harness@0.1.4 /workspace/babel-cli
 
 === blob at HEAD (rev-parse) ===
 5469b80b6bf025e59f6628d448d6d839fb7fac0e
+
+=== B importer contract (A must preserve for pin/smoke) ===
+dynamic import: pdfjs-dist/legacy/build/pdf.mjs
+export used: getDocument
+resolved version today: 5.4.296 (transitive only — A adds direct dependency + prod-install smoke)
+catalog export: generalAdapterCatalog (profiles/general/generalAdapterCatalog.ts)
+handoff doc: babel-cli/src/research/v2/profiles/general/EXTRACTION_SLICE_CANDIDATE_M1.md

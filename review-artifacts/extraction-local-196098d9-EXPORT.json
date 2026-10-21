@@ -5,11 +5,15 @@
     "tree": "4d6a4fef366e6734e9b95eddebbaa57a9e52c234"
   },
   "localHead": {
-    "commit": "2e81686d2606709e54b6b1ecdbaf8d793524a088",
-    "tree": "be5e60aa1aacd3062f73179e1d606f10b3a036ad"
+    "commit": "3175ba2f28c3cfeeaa905c28d18448506eca8291",
+    "tree": "e69d4477fb322ee66f43331f4bf76dd32cb57302"
   },
   "repairHead": {
     "commit": "2e81686d2606709e54b6b1ecdbaf8d793524a088"
+  },
+  "handoffDocHead": {
+    "commit": "3175ba2f28c3cfeeaa905c28d18448506eca8291",
+    "path": "babel-cli/src/research/v2/profiles/general/EXTRACTION_SLICE_CANDIDATE_M1.md"
   },
   "m1HtmlCatalogHead": {
     "commit": "7128bd70e217b1700328d2d58060cd374cb806a9"
@@ -17,12 +21,13 @@
   "commits": [
     "7128bd70 feat(general): M1 static HTML adapter and adapter catalog (local)",
     "6bb8d08d feat(general): M2 admitted PDF page text via pdfjs (local)",
-    "2e81686d fix(general): repair HTML/PDF extraction review defects (local)"
+    "2e81686d fix(general): repair HTML/PDF extraction review defects (local)",
+    "3175ba2f docs(general): handoff pdfjs API pin and catalog exports for A (local)"
   ],
   "patchFullLocal": {
     "path": "review-artifacts/extraction-local-196098d9-to-HEAD.patch",
-    "sha256": "7e1fae592fc96fc4cdc6bb491b78ff98a013480c711742ec2ddae63d1df813c9",
-    "bytes": 38670
+    "sha256": "332fdd45f80774126d85788ffa7d0a83a1ef5936968c30ddcb138557985d852b",
+    "bytes": 113317
   },
   "patchM1HtmlCatalogOnly": {
     "path": "review-artifacts/extraction-M1-html-catalog-196098d9-to-7128bd70.patch",
@@ -92,7 +97,7 @@
     },
     {
       "path": "babel-cli/src/research/v2/profiles/general/EXTRACTION_SLICE_CANDIDATE_M1.md",
-      "blob": "2d98a6a08455018bf04c3f2fa41cfda417dd6609"
+      "blob": "e850577ce224b41b41000e94f57310d1c5710f73"
     },
     {
       "path": "babel-cli/src/research/v2/profiles/general/generalAdapterCatalog.test.ts",
@@ -101,13 +106,39 @@
     {
       "path": "babel-cli/src/research/v2/profiles/general/generalAdapterCatalog.ts",
       "blob": "2e0669a0cc5b943d91bddc6e61b64e7becd2540c"
+    },
+    {
+      "path": "review-artifacts/extraction-M1-html-catalog-196098d9-to-7128bd70.patch",
+      "blob": "7dd04fa837f81b14a0ca5481479026c259eeb385"
+    },
+    {
+      "path": "review-artifacts/extraction-dependency-evidence.txt",
+      "blob": "e71f042708869f9562244be0698eec2e05763557"
+    },
+    {
+      "path": "review-artifacts/extraction-local-196098d9-EXPORT.json",
+      "blob": "ff989869095461699d61962beee0798e7e70dec9"
+    },
+    {
+      "path": "review-artifacts/extraction-local-196098d9-to-HEAD.patch",
+      "blob": "7c9fac15d4a75c8cd4b3b98cd1bb1a0dba19a40a"
+    },
+    {
+      "path": "review-artifacts/extraction-local-test-receipt.tap.txt",
+      "blob": "761eb0badb19fd8d0173c33e30a048f6148ea8fd"
     }
   ],
+  "agentAHandoff": {
+    "pdfjsDistVersionObserved": "5.4.296",
+    "pdfjsImport": "pdfjs-dist/legacy/build/pdf.mjs",
+    "catalogExport": "generalAdapterCatalog",
+    "catalogModule": "babel-cli/src/research/v2/profiles/general/generalAdapterCatalog.ts"
+  },
   "focusedTestReceipt": {
     "path": "review-artifacts/extraction-local-test-receipt.tap.txt",
     "tests": 43,
     "pass": 43,
     "fail": 0
   },
-  "generatedAt": "2026-10-21T02:46:27Z"
+  "generatedAt": "2026-10-21T02:47:18Z"
 }
