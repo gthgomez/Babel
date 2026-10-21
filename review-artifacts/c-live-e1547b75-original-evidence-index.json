@@ -8,11 +8,28 @@
   },
   "t_l1": {
     "snapshot_sha256": "d83840ba9b07a556eba70da2019cb212784d331e51091d12e9d672c608500cf4",
-    "export": "review-artifacts/c-live-e1547b75-t-l1-original-evidence-export.json"
+    "export": "review-artifacts/c-live-e1547b75-t-l1-original-evidence-export.json",
+    "passage_integrity_verification_supplement": "review-artifacts/c-live-e1547b75-t-l1-passage-integrity-verification-supplement.json"
+  },
+  "passage_integrity_verification_correction_additive": {
+    "prior_original_exports_unchanged": [
+      "review-artifacts/c-live-e1547b75-t-l1-original-evidence-export.json",
+      "review-artifacts/c-live-e1547b75-g-l3-original-evidence-export.json"
+    ],
+    "prior_extractor_unchanged": "review-artifacts/c-live-e1547b75-extract-original-evidence.mjs",
+    "wrong_field_read_by_prior_extractor": "host_passage_integrity ?? passage_integrity",
+    "canonical_persisted_passage_field": "integrity_verification",
+    "correct_supplement_extractor": {
+      "script": "review-artifacts/c-live-e1547b75-extract-passage-integrity-verification-supplement.mjs",
+      "script_sha256": "2c8fd2e3a7498088f9bc0515808f8602e19d6b5abc2b94af01fcb786ba0db87d"
+    },
+    "t_l1_supplement": "review-artifacts/c-live-e1547b75-t-l1-passage-integrity-verification-supplement.json",
+    "g_l3_supplement": "review-artifacts/c-live-e1547b75-g-l3-passage-integrity-verification-supplement.json"
   },
   "g_l3": {
     "snapshot_sha256": "03e63bcb1e8610206fb119ff489f169b68f6faca3b8092830584b19f9ec2586a",
     "export": "review-artifacts/c-live-e1547b75-g-l3-original-evidence-export.json",
+    "passage_integrity_verification_supplement": "review-artifacts/c-live-e1547b75-g-l3-passage-integrity-verification-supplement.json",
     "truncation_by_revision_not_inference": {
       "truncated_revision_id": "rev-src-web-84ed1861359f79ce6123ebc1-195ff5a69c1d8eae",
       "canonical_key": "https://www.python.org/downloads/",

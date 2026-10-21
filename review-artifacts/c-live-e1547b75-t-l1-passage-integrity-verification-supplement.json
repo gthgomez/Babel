@@ -1,0 +1,96 @@
+{
+  "schema": "research-v2-c-live-passage-integrity-verification-supplement/v1",
+  "case": "t-l1",
+  "bound_commit": "e1547b756d7de3e41cbad613b95cfc0b62b75af8",
+  "bound_tree": "ca8a3d0b4273cbbb84d2acde9dee654129a7b192",
+  "runtime_binding": {
+    "execution_cwd": "/tmp/babel-validation-prep-e1547b75/babel-cli",
+    "bin_absolute": "/tmp/babel-validation-prep-e1547b75/babel-cli/bin/babel.js"
+  },
+  "mission_id": "mission-t-l1-validation-e1547b75-pending-001",
+  "store_directory": "/tmp/babel-t-l1-store-e1547b75-release-pending",
+  "snapshot": {
+    "path": "/tmp/babel-t-l1-store-e1547b75-release-pending/research-store.snapshot.json",
+    "byte_length": 70594,
+    "sha256": "d83840ba9b07a556eba70da2019cb212784d331e51091d12e9d672c608500cf4"
+  },
+  "corrects_prior_export": {
+    "prior_export_unchanged": "review-artifacts/c-live-e1547b75-t-l1-original-evidence-export.json",
+    "prior_extractor_script": "review-artifacts/c-live-e1547b75-extract-original-evidence.mjs",
+    "prior_extractor_wrong_passage_fields": [
+      "host_passage_integrity",
+      "passage_integrity"
+    ],
+    "canonical_persisted_passage_field": "integrity_verification",
+    "omission_note": "Prior export emitted host_passage_integrity null because the extractor read non-canonical keys; that does not establish absent runtime verification on the persisted PassageRecord."
+  },
+  "extraction": {
+    "script_path": "review-artifacts/c-live-e1547b75-extract-passage-integrity-verification-supplement.mjs",
+    "script_sha256": "2c8fd2e3a7498088f9bc0515808f8602e19d6b5abc2b94af01fcb786ba0db87d",
+    "command": "BABEL_STORE=<store> BABEL_MISSION_ID=<id> BABEL_CASE=<case> BABEL_OUT=<out> node review-artifacts/c-live-e1547b75-extract-passage-integrity-verification-supplement.mjs",
+    "read_method": "direct_snapshot_json_passage_recorded_events_only"
+  },
+  "receipt_presence_after_reading_records": {
+    "passage_recorded_events": 2,
+    "integrity_verification_present_count": 2,
+    "integrity_verification_absent_count": 0,
+    "host_passage_integrity_on_any_record": false,
+    "passage_integrity_on_any_record": false
+  },
+  "passages_integrity_verification_verbatim": [
+    {
+      "event_id": "evt-12",
+      "recorded_at": "2026-10-21T17:31:36.849Z",
+      "passage_id": "passage-0fd913811180d079720d8a6f",
+      "source_revision_id": "rev-src-repo-cd2d0155774390fac5cd3ccd-ce01a15f109ead69",
+      "integrity_verification_present_on_record": true,
+      "integrity_verification": {
+        "version": "passage-integrity-v1",
+        "verifier": "babel-admitted-extraction",
+        "verifier_version": "1.0.0",
+        "source_id": "src-repo-cd2d0155774390fac5cd3ccd",
+        "source_revision_id": "rev-src-repo-cd2d0155774390fac5cd3ccd-ce01a15f109ead69",
+        "source_content_hash": "ce01a15f109ead6917174fa8a530fd0ef752c3b9f5aaa4e646604b636cf9aae4",
+        "admitted_byte_length": 8305,
+        "extraction_version": "technical-plain-2",
+        "passage_id": "passage-0fd913811180d079720d8a6f",
+        "locator": {
+          "kind": "byte_offset",
+          "start_offset": 0,
+          "end_offset": 4000
+        },
+        "passage_text_hash": "c4744d1ad01e327c8bbb270a8b06a184211feda2499c689915d54cbb77826e59",
+        "verification_scope": "admitted_representation",
+        "retention": "verification_receipt_and_excerpt"
+      },
+      "wrong_fields_on_record": {}
+    },
+    {
+      "event_id": "evt-19",
+      "recorded_at": "2026-10-21T17:31:37.175Z",
+      "passage_id": "passage-955a3710985bc9431c39a18b",
+      "source_revision_id": "rev-src-repo-699a37e94f0a38a9d8cb087a-49065ded9a05d6a0",
+      "integrity_verification_present_on_record": true,
+      "integrity_verification": {
+        "version": "passage-integrity-v1",
+        "verifier": "babel-admitted-extraction",
+        "verifier_version": "1.0.0",
+        "source_id": "src-repo-699a37e94f0a38a9d8cb087a",
+        "source_revision_id": "rev-src-repo-699a37e94f0a38a9d8cb087a-49065ded9a05d6a0",
+        "source_content_hash": "49065ded9a05d6a0df806449eea8ab9a59fe24f3ce1739e7e5c34725b3022fb8",
+        "admitted_byte_length": 20417,
+        "extraction_version": "technical-plain-2",
+        "passage_id": "passage-955a3710985bc9431c39a18b",
+        "locator": {
+          "kind": "byte_offset",
+          "start_offset": 0,
+          "end_offset": 4000
+        },
+        "passage_text_hash": "91d0817e0bd738c4676b526acfae1c3f403dcdf2e926c3ee2a2d133ec0a56204",
+        "verification_scope": "admitted_representation",
+        "retention": "verification_receipt_and_excerpt"
+      },
+      "wrong_fields_on_record": {}
+    }
+  ]
+}

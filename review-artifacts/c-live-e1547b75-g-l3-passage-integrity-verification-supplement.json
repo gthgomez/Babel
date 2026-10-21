@@ -1,0 +1,354 @@
+{
+  "schema": "research-v2-c-live-passage-integrity-verification-supplement/v1",
+  "case": "g-l3",
+  "bound_commit": "e1547b756d7de3e41cbad613b95cfc0b62b75af8",
+  "bound_tree": "ca8a3d0b4273cbbb84d2acde9dee654129a7b192",
+  "runtime_binding": {
+    "execution_cwd": "/tmp/babel-validation-prep-e1547b75/babel-cli",
+    "bin_absolute": "/tmp/babel-validation-prep-e1547b75/babel-cli/bin/babel.js"
+  },
+  "mission_id": "mission-g-l3-validation-e1547b75-pending-001",
+  "store_directory": "/tmp/babel-g-l3-store-e1547b75-release-pending",
+  "snapshot": {
+    "path": "/tmp/babel-g-l3-store-e1547b75-release-pending/research-store.snapshot.json",
+    "byte_length": 90929,
+    "sha256": "03e63bcb1e8610206fb119ff489f169b68f6faca3b8092830584b19f9ec2586a"
+  },
+  "corrects_prior_export": {
+    "prior_export_unchanged": "review-artifacts/c-live-e1547b75-g-l3-original-evidence-export.json",
+    "prior_extractor_script": "review-artifacts/c-live-e1547b75-extract-original-evidence.mjs",
+    "prior_extractor_wrong_passage_fields": [
+      "host_passage_integrity",
+      "passage_integrity"
+    ],
+    "canonical_persisted_passage_field": "integrity_verification",
+    "omission_note": "Prior export emitted host_passage_integrity null because the extractor read non-canonical keys; that does not establish absent runtime verification on the persisted PassageRecord."
+  },
+  "extraction": {
+    "script_path": "review-artifacts/c-live-e1547b75-extract-passage-integrity-verification-supplement.mjs",
+    "script_sha256": "2c8fd2e3a7498088f9bc0515808f8602e19d6b5abc2b94af01fcb786ba0db87d",
+    "command": "BABEL_STORE=<store> BABEL_MISSION_ID=<id> BABEL_CASE=<case> BABEL_OUT=<out> node review-artifacts/c-live-e1547b75-extract-passage-integrity-verification-supplement.mjs",
+    "read_method": "direct_snapshot_json_passage_recorded_events_only"
+  },
+  "receipt_presence_after_reading_records": {
+    "passage_recorded_events": 12,
+    "integrity_verification_present_count": 12,
+    "integrity_verification_absent_count": 0,
+    "host_passage_integrity_on_any_record": false,
+    "passage_integrity_on_any_record": false
+  },
+  "passages_integrity_verification_verbatim": [
+    {
+      "event_id": "evt-12",
+      "recorded_at": "2026-10-21T17:32:50.712Z",
+      "passage_id": "cli-run-fetch-wg2-73d891bf--web-ref-0:html:0",
+      "source_revision_id": "rev-src-web-84ed1861359f79ce6123ebc1-195ff5a69c1d8eae",
+      "integrity_verification_present_on_record": true,
+      "integrity_verification": {
+        "version": "passage-integrity-v1",
+        "verifier": "babel-admitted-extraction",
+        "verifier_version": "1.0.0",
+        "source_id": "src-web-84ed1861359f79ce6123ebc1",
+        "source_revision_id": "rev-src-web-84ed1861359f79ce6123ebc1-195ff5a69c1d8eae",
+        "source_content_hash": "195ff5a69c1d8eae609c416f262b6cf1399f56b373d8dbb5d3bb05ebe5fa0bf9",
+        "admitted_byte_length": 200000,
+        "extraction_version": "general-static-html/0.1.0",
+        "passage_id": "cli-run-fetch-wg2-73d891bf--web-ref-0:html:0",
+        "locator": {
+          "kind": "section",
+          "section_id": "download-the-latest-source-release"
+        },
+        "passage_text_hash": "9675bf4ec312333228f20ca8ed26238fb175f0257656bda54643321117b58448",
+        "verification_scope": "admitted_representation",
+        "retention": "verification_receipt_and_excerpt"
+      },
+      "wrong_fields_on_record": {}
+    },
+    {
+      "event_id": "evt-13",
+      "recorded_at": "2026-10-21T17:32:50.713Z",
+      "passage_id": "cli-run-fetch-wg2-73d891bf--web-ref-0:html:1",
+      "source_revision_id": "rev-src-web-84ed1861359f79ce6123ebc1-195ff5a69c1d8eae",
+      "integrity_verification_present_on_record": true,
+      "integrity_verification": {
+        "version": "passage-integrity-v1",
+        "verifier": "babel-admitted-extraction",
+        "verifier_version": "1.0.0",
+        "source_id": "src-web-84ed1861359f79ce6123ebc1",
+        "source_revision_id": "rev-src-web-84ed1861359f79ce6123ebc1-195ff5a69c1d8eae",
+        "source_content_hash": "195ff5a69c1d8eae609c416f262b6cf1399f56b373d8dbb5d3bb05ebe5fa0bf9",
+        "admitted_byte_length": 200000,
+        "extraction_version": "general-static-html/0.1.0",
+        "passage_id": "cli-run-fetch-wg2-73d891bf--web-ref-0:html:1",
+        "locator": {
+          "kind": "section",
+          "section_id": "download-the-latest-version-for-windows"
+        },
+        "passage_text_hash": "8d1129b15159f9c96587d0ca459fb2fbc6ce7692bffc13a3034965e68b89807f",
+        "verification_scope": "admitted_representation",
+        "retention": "verification_receipt_and_excerpt"
+      },
+      "wrong_fields_on_record": {}
+    },
+    {
+      "event_id": "evt-14",
+      "recorded_at": "2026-10-21T17:32:50.713Z",
+      "passage_id": "cli-run-fetch-wg2-73d891bf--web-ref-0:html:2",
+      "source_revision_id": "rev-src-web-84ed1861359f79ce6123ebc1-195ff5a69c1d8eae",
+      "integrity_verification_present_on_record": true,
+      "integrity_verification": {
+        "version": "passage-integrity-v1",
+        "verifier": "babel-admitted-extraction",
+        "verifier_version": "1.0.0",
+        "source_id": "src-web-84ed1861359f79ce6123ebc1",
+        "source_revision_id": "rev-src-web-84ed1861359f79ce6123ebc1-195ff5a69c1d8eae",
+        "source_content_hash": "195ff5a69c1d8eae609c416f262b6cf1399f56b373d8dbb5d3bb05ebe5fa0bf9",
+        "admitted_byte_length": 200000,
+        "extraction_version": "general-static-html/0.1.0",
+        "passage_id": "cli-run-fetch-wg2-73d891bf--web-ref-0:html:2",
+        "locator": {
+          "kind": "section",
+          "section_id": "download-the-latest-version-for-macos"
+        },
+        "passage_text_hash": "9675bf4ec312333228f20ca8ed26238fb175f0257656bda54643321117b58448",
+        "verification_scope": "admitted_representation",
+        "retention": "verification_receipt_and_excerpt"
+      },
+      "wrong_fields_on_record": {}
+    },
+    {
+      "event_id": "evt-15",
+      "recorded_at": "2026-10-21T17:32:50.714Z",
+      "passage_id": "cli-run-fetch-wg2-73d891bf--web-ref-0:html:3",
+      "source_revision_id": "rev-src-web-84ed1861359f79ce6123ebc1-195ff5a69c1d8eae",
+      "integrity_verification_present_on_record": true,
+      "integrity_verification": {
+        "version": "passage-integrity-v1",
+        "verifier": "babel-admitted-extraction",
+        "verifier_version": "1.0.0",
+        "source_id": "src-web-84ed1861359f79ce6123ebc1",
+        "source_revision_id": "rev-src-web-84ed1861359f79ce6123ebc1-195ff5a69c1d8eae",
+        "source_content_hash": "195ff5a69c1d8eae609c416f262b6cf1399f56b373d8dbb5d3bb05ebe5fa0bf9",
+        "admitted_byte_length": 200000,
+        "extraction_version": "general-static-html/0.1.0",
+        "passage_id": "cli-run-fetch-wg2-73d891bf--web-ref-0:html:3",
+        "locator": {
+          "kind": "section",
+          "section_id": "download-the-latest-version-of-python"
+        },
+        "passage_text_hash": "b607e73ee458afcef8e9d979c476317c87f2853847ce140ea9e359caa1440915",
+        "verification_scope": "admitted_representation",
+        "retention": "verification_receipt_and_excerpt"
+      },
+      "wrong_fields_on_record": {}
+    },
+    {
+      "event_id": "evt-16",
+      "recorded_at": "2026-10-21T17:32:50.715Z",
+      "passage_id": "cli-run-fetch-wg2-73d891bf--web-ref-0:html:4",
+      "source_revision_id": "rev-src-web-84ed1861359f79ce6123ebc1-195ff5a69c1d8eae",
+      "integrity_verification_present_on_record": true,
+      "integrity_verification": {
+        "version": "passage-integrity-v1",
+        "verifier": "babel-admitted-extraction",
+        "verifier_version": "1.0.0",
+        "source_id": "src-web-84ed1861359f79ce6123ebc1",
+        "source_revision_id": "rev-src-web-84ed1861359f79ce6123ebc1-195ff5a69c1d8eae",
+        "source_content_hash": "195ff5a69c1d8eae609c416f262b6cf1399f56b373d8dbb5d3bb05ebe5fa0bf9",
+        "admitted_byte_length": 200000,
+        "extraction_version": "general-static-html/0.1.0",
+        "passage_id": "cli-run-fetch-wg2-73d891bf--web-ref-0:html:4",
+        "locator": {
+          "kind": "section",
+          "section_id": "active-python-releases"
+        },
+        "passage_text_hash": "47d6420173944faa7fa4aa64e1826a7a15c600f5cba866a3f8bad2df5f649e81",
+        "verification_scope": "admitted_representation",
+        "retention": "verification_receipt_and_excerpt"
+      },
+      "wrong_fields_on_record": {}
+    },
+    {
+      "event_id": "evt-17",
+      "recorded_at": "2026-10-21T17:32:50.716Z",
+      "passage_id": "cli-run-fetch-wg2-73d891bf--web-ref-0:html:5",
+      "source_revision_id": "rev-src-web-84ed1861359f79ce6123ebc1-195ff5a69c1d8eae",
+      "integrity_verification_present_on_record": true,
+      "integrity_verification": {
+        "version": "passage-integrity-v1",
+        "verifier": "babel-admitted-extraction",
+        "verifier_version": "1.0.0",
+        "source_id": "src-web-84ed1861359f79ce6123ebc1",
+        "source_revision_id": "rev-src-web-84ed1861359f79ce6123ebc1-195ff5a69c1d8eae",
+        "source_content_hash": "195ff5a69c1d8eae609c416f262b6cf1399f56b373d8dbb5d3bb05ebe5fa0bf9",
+        "admitted_byte_length": 200000,
+        "extraction_version": "general-static-html/0.1.0",
+        "passage_id": "cli-run-fetch-wg2-73d891bf--web-ref-0:html:5",
+        "locator": {
+          "kind": "section",
+          "section_id": "looking-for-a-specific-release"
+        },
+        "passage_text_hash": "e4c46d05cc79dfcc686c14a58c3091956612366e9031ecb9198998fee802028e",
+        "verification_scope": "admitted_representation",
+        "retention": "verification_receipt_and_excerpt"
+      },
+      "wrong_fields_on_record": {}
+    },
+    {
+      "event_id": "evt-18",
+      "recorded_at": "2026-10-21T17:32:50.716Z",
+      "passage_id": "cli-run-fetch-wg2-73d891bf--web-ref-0:html:6",
+      "source_revision_id": "rev-src-web-84ed1861359f79ce6123ebc1-195ff5a69c1d8eae",
+      "integrity_verification_present_on_record": true,
+      "integrity_verification": {
+        "version": "passage-integrity-v1",
+        "verifier": "babel-admitted-extraction",
+        "verifier_version": "1.0.0",
+        "source_id": "src-web-84ed1861359f79ce6123ebc1",
+        "source_revision_id": "rev-src-web-84ed1861359f79ce6123ebc1-195ff5a69c1d8eae",
+        "source_content_hash": "195ff5a69c1d8eae609c416f262b6cf1399f56b373d8dbb5d3bb05ebe5fa0bf9",
+        "admitted_byte_length": 200000,
+        "extraction_version": "general-static-html/0.1.0",
+        "passage_id": "cli-run-fetch-wg2-73d891bf--web-ref-0:html:6",
+        "locator": {
+          "kind": "section",
+          "section_id": "sponsors"
+        },
+        "passage_text_hash": "cb8f5917485e8c8d331c8912470badb0f9d8d51f9a4aa6fbc9c2c55c93c7b2d3",
+        "verification_scope": "admitted_representation",
+        "retention": "verification_receipt_and_excerpt"
+      },
+      "wrong_fields_on_record": {}
+    },
+    {
+      "event_id": "evt-23",
+      "recorded_at": "2026-10-21T17:32:50.933Z",
+      "passage_id": "cli-run-fetch-wg2-73d891bf--web-ref-1:html:0",
+      "source_revision_id": "rev-web-mission-ref-600acab9a967586fa025-a862729c9dc1b8c2",
+      "integrity_verification_present_on_record": true,
+      "integrity_verification": {
+        "version": "passage-integrity-v1",
+        "verifier": "babel-admitted-extraction",
+        "verifier_version": "1.0.0",
+        "source_id": "web-mission-ref-600acab9a967586fa025",
+        "source_revision_id": "rev-web-mission-ref-600acab9a967586fa025-a862729c9dc1b8c2",
+        "source_content_hash": "a862729c9dc1b8c23c75dd3f4b4b57f5603bcf45b8b325494fe789483339380e",
+        "admitted_byte_length": 125309,
+        "extraction_version": "general-static-html/0.1.0",
+        "passage_id": "cli-run-fetch-wg2-73d891bf--web-ref-1:html:0",
+        "locator": {
+          "kind": "section",
+          "section_id": "status-of-python-versions"
+        },
+        "passage_text_hash": "ee4f0349fc0af1322016a592282562631f1071352d70f506067fa03039b0dd43",
+        "verification_scope": "admitted_representation",
+        "retention": "verification_receipt_and_excerpt"
+      },
+      "wrong_fields_on_record": {}
+    },
+    {
+      "event_id": "evt-24",
+      "recorded_at": "2026-10-21T17:32:50.935Z",
+      "passage_id": "cli-run-fetch-wg2-73d891bf--web-ref-1:html:1",
+      "source_revision_id": "rev-web-mission-ref-600acab9a967586fa025-a862729c9dc1b8c2",
+      "integrity_verification_present_on_record": true,
+      "integrity_verification": {
+        "version": "passage-integrity-v1",
+        "verifier": "babel-admitted-extraction",
+        "verifier_version": "1.0.0",
+        "source_id": "web-mission-ref-600acab9a967586fa025",
+        "source_revision_id": "rev-web-mission-ref-600acab9a967586fa025-a862729c9dc1b8c2",
+        "source_content_hash": "a862729c9dc1b8c23c75dd3f4b4b57f5603bcf45b8b325494fe789483339380e",
+        "admitted_byte_length": 125309,
+        "extraction_version": "general-static-html/0.1.0",
+        "passage_id": "cli-run-fetch-wg2-73d891bf--web-ref-1:html:1",
+        "locator": {
+          "kind": "section",
+          "section_id": "supported-versions"
+        },
+        "passage_text_hash": "ac421f0f7698ebcebe221f1d02b726f128a715e57aa912b07791dc2ba9f3a62c",
+        "verification_scope": "admitted_representation",
+        "retention": "verification_receipt_and_excerpt"
+      },
+      "wrong_fields_on_record": {}
+    },
+    {
+      "event_id": "evt-25",
+      "recorded_at": "2026-10-21T17:32:50.936Z",
+      "passage_id": "cli-run-fetch-wg2-73d891bf--web-ref-1:html:2",
+      "source_revision_id": "rev-web-mission-ref-600acab9a967586fa025-a862729c9dc1b8c2",
+      "integrity_verification_present_on_record": true,
+      "integrity_verification": {
+        "version": "passage-integrity-v1",
+        "verifier": "babel-admitted-extraction",
+        "verifier_version": "1.0.0",
+        "source_id": "web-mission-ref-600acab9a967586fa025",
+        "source_revision_id": "rev-web-mission-ref-600acab9a967586fa025-a862729c9dc1b8c2",
+        "source_content_hash": "a862729c9dc1b8c23c75dd3f4b4b57f5603bcf45b8b325494fe789483339380e",
+        "admitted_byte_length": 125309,
+        "extraction_version": "general-static-html/0.1.0",
+        "passage_id": "cli-run-fetch-wg2-73d891bf--web-ref-1:html:2",
+        "locator": {
+          "kind": "section",
+          "section_id": "unsupported-versions"
+        },
+        "passage_text_hash": "d6d880cfbf99deeb617dc68bf31c4526cafdfcdf9780ec2ba1fb0abf6dd87eeb",
+        "verification_scope": "admitted_representation",
+        "retention": "verification_receipt_and_excerpt"
+      },
+      "wrong_fields_on_record": {}
+    },
+    {
+      "event_id": "evt-26",
+      "recorded_at": "2026-10-21T17:32:50.937Z",
+      "passage_id": "cli-run-fetch-wg2-73d891bf--web-ref-1:html:3",
+      "source_revision_id": "rev-web-mission-ref-600acab9a967586fa025-a862729c9dc1b8c2",
+      "integrity_verification_present_on_record": true,
+      "integrity_verification": {
+        "version": "passage-integrity-v1",
+        "verifier": "babel-admitted-extraction",
+        "verifier_version": "1.0.0",
+        "source_id": "web-mission-ref-600acab9a967586fa025",
+        "source_revision_id": "rev-web-mission-ref-600acab9a967586fa025-a862729c9dc1b8c2",
+        "source_content_hash": "a862729c9dc1b8c23c75dd3f4b4b57f5603bcf45b8b325494fe789483339380e",
+        "admitted_byte_length": 125309,
+        "extraction_version": "general-static-html/0.1.0",
+        "passage_id": "cli-run-fetch-wg2-73d891bf--web-ref-1:html:3",
+        "locator": {
+          "kind": "section",
+          "section_id": "full-chart"
+        },
+        "passage_text_hash": "f81c16b658f3aa944fc746a81f5bdf3b8196923ee773876fd8c9396145f1a80c",
+        "verification_scope": "admitted_representation",
+        "retention": "verification_receipt_and_excerpt"
+      },
+      "wrong_fields_on_record": {}
+    },
+    {
+      "event_id": "evt-27",
+      "recorded_at": "2026-10-21T17:32:50.939Z",
+      "passage_id": "cli-run-fetch-wg2-73d891bf--web-ref-1:html:4",
+      "source_revision_id": "rev-web-mission-ref-600acab9a967586fa025-a862729c9dc1b8c2",
+      "integrity_verification_present_on_record": true,
+      "integrity_verification": {
+        "version": "passage-integrity-v1",
+        "verifier": "babel-admitted-extraction",
+        "verifier_version": "1.0.0",
+        "source_id": "web-mission-ref-600acab9a967586fa025",
+        "source_revision_id": "rev-web-mission-ref-600acab9a967586fa025-a862729c9dc1b8c2",
+        "source_content_hash": "a862729c9dc1b8c23c75dd3f4b4b57f5603bcf45b8b325494fe789483339380e",
+        "admitted_byte_length": 125309,
+        "extraction_version": "general-static-html/0.1.0",
+        "passage_id": "cli-run-fetch-wg2-73d891bf--web-ref-1:html:4",
+        "locator": {
+          "kind": "section",
+          "section_id": "status-key"
+        },
+        "passage_text_hash": "de310a1448640bd08f381bc652373aa304daabd19722d86a9c89759012b2d128",
+        "verification_scope": "admitted_representation",
+        "retention": "verification_receipt_and_excerpt"
+      },
+      "wrong_fields_on_record": {}
+    }
+  ]
+}
