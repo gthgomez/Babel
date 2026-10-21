@@ -1,0 +1,20 @@
+{
+  "label": "B_bounded_extraction_and_lifecycle_repair",
+  "prior_matrix_checkpoint": "fe571ebb",
+  "scope": {
+    "nested_html_heading_extraction": "generic h1-h6 with nested inline markup; stable section_id via allocateSectionLocatorId",
+    "g_l3_fixture": "G-L3-fixtures/devguide-nested-heading-representative.html (representative only; does not claim live devguide byte parity)",
+    "lifecycle": "ModelEntryLatch replaces session-appearance polling in X-L1 + general lifecycle reciprocal tests; pre-bootstrap cancel tests added",
+    "admission_diagnostics": "CRLF/LF hints on digest and length mismatch without weakening hashes",
+    "deferred": "T-L2 explicit wire/decoded ceiling via A dependency-bearing factory (not landed on branch)"
+  },
+  "execution_evidence": {
+    "command": "node --import tsx --test htmlFromAdmittedBytes.test.ts missionDocumentAcquisitionPolicy.test.ts x-l1-owner-lifecycle.harness.test.ts generalAdapterLifecycleReciprocal.integration.test.ts arxivPaperExternalCache.test.ts",
+    "cwd": "babel-cli/src/research/v2 (paths relative in command)",
+    "result": "28 tests, 27 pass on first batch run; missionDocumentAdmissionPolicy.test.ts re-run 2/2 pass after assert fix",
+    "note": "G-L3 live devguide root cause remains unproven; nested-heading fix addresses static extractor gap only"
+  },
+  "source_only": [
+    "fe571ebb pin/query/matrix retained without re-execution in this slice"
+  ]
+}

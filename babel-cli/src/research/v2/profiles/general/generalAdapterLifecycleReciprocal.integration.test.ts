@@ -22,6 +22,10 @@ import { buildAdmittedContent } from '../../adapters/documents/testAdmittedFixtu
 import { resolveQuarantinedFixturePath } from '../../adapters/documents/quarantinePath.js'
 import { openAdmittedInspectStore } from '../../control/researchStoreAdmission.js'
 import { submitAdmittedOwnerCancelRequest } from '../../control/storeCancelRequest.js'
+import {
+  BlockingUntilAbortModel,
+  ModelEntryLatch,
+} from '../../engine/testSupport/lifecycleModelEntryLatch.js'
 import { finalizeOwnerResearchRunCancellation } from '../../engine/finalizeOwnerResearchRunCancellation.js'
 import { finalizeCancelledOwnerRunAndClose } from '../../engine/ownerSessionCancellationFinalize.js'
 import { offlineRunOperationSuffix } from '../../cli/researchV2MissionRun.js'
@@ -35,32 +39,6 @@ const here = dirname(fileURLToPath(import.meta.url))
 const devCorpusRoot = join(here, 'fixtures/dev-corpus')
 const pdfFixture = join(here, '../../adapters/documents/fixtures/two-page-sample.pdf')
 const FIXED_NOW = '2026-10-21T06:10:00.000Z'
-
-class BlockingUntilAbortModel implements ResearchModelPort {
-  constructor(private readonly inner = new FixtureResearchModelBridge()) {}
-
-  async invokeStructured(request: Parameters<ResearchModelPort['invokeStructured']>[0]) {
-    await new Promise<void>((resolve) => {
-      if (request.signal.aborted) {
-        resolve()
-        return
-      }
-      const onAbort = (): void => {
-        request.signal.removeEventListener('abort', onAbort)
-        resolve()
-      }
-      request.signal.addEventListener('abort', onAbort)
-    })
-    if (request.signal.aborted) {
-      return {
-        status: 'cancelled' as const,
-        operationId: request.operationId,
-        usageSettlement: { attempt_id: request.attemptId, cost: { status: 'unknown' as const } },
-      }
-    }
-    return this.inner.invokeStructured(request)
-  }
-}
 
 class GeneralProfileIntegrationAccessPort implements SourceAccessPort {
   constructor(
@@ -339,14 +317,13 @@ function terminalPlanRevisionId(events: readonly { kind: string; payload: unknow
   return (terminal.payload as { report: { plan_revision_id: string } }).report.plan_revision_id
 }
 
-async function pollOwnerSessionId(storeDirectory: string): Promise<string> {
-  for (let i = 0; i < 50; i += 1) {
-    await new Promise((r) => setTimeout(r, 20))
-    const inspect = await openAdmittedInspectStore(storeDirectory)
-    const sessionId = inspect.sessionControl?.session_id ?? ''
-    if (sessionId) return sessionId
-  }
-  return ''
+async function sessionIdAfterModelEntryLatch(
+  storeDirectory: string,
+  latch: ModelEntryLatch,
+): Promise<string> {
+  await latch.waitForModelEntry()
+  const inspect = await openAdmittedInspectStore(storeDirectory)
+  return inspect.sessionControl?.session_id ?? ''
 }
 
 /** Native9d second-resume: red @ 9d97448a (see review-artifacts/native9d-9d97448a-red-receipt.txt); green @ A 52a93b9c+ writer-generation repair. */
@@ -355,7 +332,8 @@ describe('general adapter lifecycle reciprocal (A integration, durable store, in
     const dir = await mkdtemp(join(tmpdir(), 'babel-general-lifecycle-'))
     const mission = loadGeneralLifecycleMission()
     const planId = 'plan-general-lifecycle-001'
-    const model = new BlockingUntilAbortModel()
+    const latch = new ModelEntryLatch()
+    const model = new BlockingUntilAbortModel(latch)
     try {
       const runPromise = runGeneralMissionWithOwnerSession({
         storeDirectory: dir,
@@ -364,7 +342,7 @@ describe('general adapter lifecycle reciprocal (A integration, durable store, in
         planRevisionId: planId,
         model,
       })
-      const sessionId = await pollOwnerSessionId(dir)
+      const sessionId = await sessionIdAfterModelEntryLatch(dir, latch)
       assert.ok(sessionId.length > 0)
       await submitAdmittedOwnerCancelRequest(dir, sessionId)
       await assert.rejects(() => runPromise)
@@ -443,7 +421,8 @@ describe('general adapter lifecycle reciprocal (A integration, durable store, in
     const dir = await mkdtemp(join(tmpdir(), 'babel-general-lifecycle-second-resume-'))
     const mission = loadGeneralLifecycleMission()
     const planId = 'plan-general-lifecycle-second-resume'
-    const blocking = new BlockingUntilAbortModel()
+    const firstLatch = new ModelEntryLatch()
+    const blocking = new BlockingUntilAbortModel(firstLatch)
     try {
       const firstRun = runGeneralMissionWithOwnerSession({
         storeDirectory: dir,
@@ -452,7 +431,7 @@ describe('general adapter lifecycle reciprocal (A integration, durable store, in
         planRevisionId: planId,
         model: blocking,
       })
-      const sessionId = await pollOwnerSessionId(dir)
+      const sessionId = await sessionIdAfterModelEntryLatch(dir, firstLatch)
       assert.ok(sessionId)
       await submitAdmittedOwnerCancelRequest(dir, sessionId)
       await assert.rejects(() => firstRun)
@@ -563,7 +542,8 @@ describe('general adapter lifecycle reciprocal (A integration, durable store, in
     const dir = await mkdtemp(join(tmpdir(), 'babel-general-lifecycle-cont-'))
     const mission = loadGeneralLifecycleMission()
     const planId = 'plan-general-lifecycle-cancel-resume'
-    const blocking = new BlockingUntilAbortModel()
+    const firstLatch = new ModelEntryLatch()
+    const blocking = new BlockingUntilAbortModel(firstLatch)
     try {
       const firstRun = runGeneralMissionWithOwnerSession({
         storeDirectory: dir,
@@ -572,7 +552,7 @@ describe('general adapter lifecycle reciprocal (A integration, durable store, in
         planRevisionId: planId,
         model: blocking,
       })
-      const sessionId = await pollOwnerSessionId(dir)
+      const sessionId = await sessionIdAfterModelEntryLatch(dir, firstLatch)
       assert.ok(sessionId)
       await submitAdmittedOwnerCancelRequest(dir, sessionId)
       await assert.rejects(() => firstRun)
@@ -632,6 +612,39 @@ describe('general adapter lifecycle reciprocal (A integration, durable store, in
         ),
       ]
       assert.ok(planAttempts.length >= 2, `expected distinct plan attempt ids, got ${planAttempts.join(',')}`)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('cancels before planning bootstrap: no bootstrap plan or model intent persisted', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'babel-general-lifecycle-pre-bootstrap-'))
+    const mission = loadGeneralLifecycleMission()
+    const aborted = new AbortController()
+    aborted.abort()
+    try {
+      const owner = await ResearchEngineSession.openOwner({
+        storeDirectory: dir,
+        model: generalFixtureModelForE2e(),
+      })
+      const handle = await owner.appendMission(mission)
+      await assert.rejects(
+        () =>
+          runGeneralOfflinePassOnOwner({
+            owner,
+            mission,
+            handle,
+            discoverQuery: 'Nimbus Plan A monthly',
+            planRevisionId: 'plan-general-pre-bootstrap-cancel',
+            signal: aborted.signal,
+            model: generalFixtureModelForE2e(),
+          }),
+        /planning iteration aborted/,
+      )
+      const events = await owner.store.listEvents(mission.mission_id)
+      assert.equal(events.filter((e) => e.kind === 'plan_revised').length, 0)
+      assert.equal(events.filter((e) => e.kind === 'external_operation_intent').length, 0)
+      await owner.close()
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

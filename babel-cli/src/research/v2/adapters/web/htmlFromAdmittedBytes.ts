@@ -8,6 +8,16 @@ import { allocateSectionLocatorId } from './htmlSectionLocator.js'
 export const HTML_MEDIA_TYPE = 'text/html'
 export const STATIC_HTML_EXTRACTION_VERSION = 'general-static-html/0.1.0'
 
+function headingInnerText(htmlFragment: string): string {
+  return htmlFragment
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+/** Opening `<hN>...</hN>` with nested inline markup (anchors, emphasis, spans). */
+const HEADING_BLOCK_RE = /<h([1-6])\b[^>]*>([\s\S]*?)<\/h\1>/gi
+
 /** Minimal static HTML: one passage per heading block (admitted bytes only; no JS). */
 export function passagesFromAdmittedStaticHtml(admitted: AdmittedContent): PassageRecord[] {
   if (admitted.media_type !== HTML_MEDIA_TYPE) {
@@ -23,13 +33,13 @@ export function passagesFromAdmittedStaticHtml(admitted: AdmittedContent): Passa
   const stripped = html
     .replace(/<script[\s\S]*?<\/script>/gi, '')
     .replace(/<style[\s\S]*?<\/style>/gi, '')
-  const headingRe = /<h([1-6])[^>]*>([^<]*)<\/h[1-6]>/gi
   const passages: PassageRecord[] = []
   const sectionOccurrence = new Map<string, number>()
   let match: RegExpExecArray | null
   let index = 0
-  while ((match = headingRe.exec(stripped)) !== null) {
-    const heading = (match[2] ?? '').trim()
+  HEADING_BLOCK_RE.lastIndex = 0
+  while ((match = HEADING_BLOCK_RE.exec(stripped)) !== null) {
+    const heading = headingInnerText(match[2] ?? '')
     if (!heading) continue
     const level = Number(match[1] ?? '1')
     const after = stripped.slice(match.index + match[0].length)

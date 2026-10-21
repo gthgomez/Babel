@@ -14,6 +14,42 @@ const devCorpusRoot = join(
   '../../profiles/general/fixtures/dev-corpus',
 )
 
+test('passagesFromAdmittedStaticHtml: nested heading markup yields stable section locators (representative, not live bytes)', () => {
+  const rel = 'G-L3-fixtures/devguide-nested-heading-representative.html'
+  const campaignRoot = join(dirname(fileURLToPath(import.meta.url)), '../../fixtures/campaign')
+  const bytes = readFileSync(join(campaignRoot, rel))
+  const admitted = buildAdmittedContent('op-nested-h', 'src-nested', 'rev-nested', bytes, HTML_MEDIA_TYPE, {
+    requestedUrl: 'https://docs.python.org/devguide/status.html',
+    finalUrl: 'https://docs.python.org/devguide/status.html',
+    redirectChain: ['https://docs.python.org/devguide/status.html'],
+  })
+  const passages = passagesFromAdmittedStaticHtml(admitted)
+  assert.equal(passages.length, 2)
+  assert.equal(
+    passages[0]?.locator.kind === 'section' ? passages[0].locator.section_id : '',
+    'status-of-python-versions',
+  )
+  assert.deepEqual(passages[0]?.heading_path, ['Status of Python versions'])
+  assert.equal(
+    passages[1]?.locator.kind === 'section' ? passages[1].locator.section_id : '',
+    'release-cadence',
+  )
+  for (const p of passages) PassageRecordSchema.parse(p)
+})
+
+test('passagesFromAdmittedStaticHtml: inline anchor/em inside single heading', () => {
+  const html =
+    '<html><body><h2><a href="/x">Topic</a> details</h2><p>Body copy for section.</p></body></html>'
+  const admitted = buildAdmittedContent('op', 's', 'r', Buffer.from(html, 'utf8'), HTML_MEDIA_TYPE)
+  const passages = passagesFromAdmittedStaticHtml(admitted)
+  assert.equal(passages.length, 1)
+  assert.deepEqual(passages[0]?.heading_path, ['Topic details'])
+  assert.equal(
+    passages[0]?.locator.kind === 'section' ? passages[0].locator.section_id : '',
+    'topic-details',
+  )
+})
+
 test('passagesFromAdmittedStaticHtml: G-DEV-01 plan-a heading sections', () => {
   const rel = 'G-DEV-01/sources/plan-a.html'
   const bytes = readFileSync(resolveQuarantinedFixturePath(devCorpusRoot, rel))

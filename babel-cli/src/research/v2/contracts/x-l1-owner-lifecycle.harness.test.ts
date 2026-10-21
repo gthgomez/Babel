@@ -8,46 +8,26 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, it } from 'node:test'
-import { runResearchV2EnginePassOnOwner, runResearchV2MissionWithOwnerSession } from '../cli/researchV2MissionRun.js'
+import {
+  runResearchV2EnginePassOnOwner,
+  runResearchV2MissionWithOwnerSession,
+} from '../cli/researchV2MissionRun.js'
 import { finalizeOwnerResearchRunCancellation } from '../engine/finalizeOwnerResearchRunCancellation.js'
 import { ResearchEngineSession } from '../engine/researchEngineSession.js'
 import { openAdmittedInspectStore } from '../control/researchStoreAdmission.js'
 import { submitAdmittedOwnerCancelRequest } from '../control/storeCancelRequest.js'
 import { exampleTechnicalMissionFixture } from '../fixtures/exampleMission.js'
 import { fixtureModelForOfflineRun } from '../cli/researchV2FixtureRunModel.js'
-import { FixtureResearchModelBridge } from '../model/fixtureModelBridge.js'
-import type { ResearchModelPort } from '../ports/researchModelPort.js'
-
-class BlockingUntilAbortModel implements ResearchModelPort {
-  constructor(private readonly inner = new FixtureResearchModelBridge()) {}
-
-  async invokeStructured(request: Parameters<ResearchModelPort['invokeStructured']>[0]) {
-    await new Promise<void>((resolve) => {
-      if (request.signal.aborted) {
-        resolve()
-        return
-      }
-      const onAbort = (): void => {
-        request.signal.removeEventListener('abort', onAbort)
-        resolve()
-      }
-      request.signal.addEventListener('abort', onAbort)
-    })
-    if (request.signal.aborted) {
-      return {
-        status: 'cancelled' as const,
-        operationId: request.operationId,
-        usageSettlement: { attempt_id: request.attemptId, cost: { status: 'unknown' as const } },
-      }
-    }
-    return this.inner.invokeStructured(request)
-  }
-}
+import {
+  BlockingUntilAbortModel,
+  ModelEntryLatch,
+} from '../engine/testSupport/lifecycleModelEntryLatch.js'
 
 describe('X-L1 owner lifecycle harness (offline, maps_to_acceptance_scenario X-L1)', () => {
   it('starts mission, observes active owner session, cancels, awaits cancelled terminal, resumes once with authorization', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'babel-x-l1-lifecycle-'))
-    const model = new BlockingUntilAbortModel()
+    const latch = new ModelEntryLatch()
+    const model = new BlockingUntilAbortModel(latch)
     const planRevisionId = 'plan-x-l1-lifecycle-001'
     try {
       const runPromise = runResearchV2MissionWithOwnerSession({
@@ -59,14 +39,10 @@ describe('X-L1 owner lifecycle harness (offline, maps_to_acceptance_scenario X-L
         model,
       })
 
-      let sessionId = ''
-      for (let i = 0; i < 50; i += 1) {
-        await new Promise((r) => setTimeout(r, 20))
-        const inspect = await openAdmittedInspectStore(dir)
-        sessionId = inspect.sessionControl?.session_id ?? ''
-        if (sessionId) break
-      }
-      assert.ok(sessionId.length > 0, 'active owner session must be observable before cancel')
+      await latch.waitForModelEntry()
+      const inspectBeforeCancel = await openAdmittedInspectStore(dir)
+      const sessionId = inspectBeforeCancel.sessionControl?.session_id ?? ''
+      assert.ok(sessionId.length > 0, 'owner session must exist once planning model entry is latched')
 
       await submitAdmittedOwnerCancelRequest(dir, sessionId)
       await assert.rejects(() => runPromise)
@@ -113,6 +89,38 @@ describe('X-L1 owner lifecycle harness (offline, maps_to_acceptance_scenario X-L
         latestTerminal.terminal_state === 'complete' || latestTerminal.terminal_state === 'partial',
         `continuation terminal must settle (${latestTerminal.terminal_state})`,
       )
+      await owner.close()
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('aborts before planning bootstrap without persisting bootstrap plan revision', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'babel-x-l1-pre-bootstrap-'))
+    const aborted = new AbortController()
+    aborted.abort()
+    try {
+      const owner = await ResearchEngineSession.openOwner({
+        storeDirectory: dir,
+        model: fixtureModelForOfflineRun(),
+      })
+      const handle = await owner.appendMission(exampleTechnicalMissionFixture)
+      await assert.rejects(
+        () =>
+          runResearchV2EnginePassOnOwner({
+            owner,
+            mission: exampleTechnicalMissionFixture,
+            handle,
+            discoverQuery: 'RESEARCH_CONTRACT',
+            injectedOffline: true,
+            planRevisionId: 'plan-x-l1-pre-bootstrap',
+            signal: aborted.signal,
+            model: fixtureModelForOfflineRun(),
+          }),
+        /planning iteration aborted/,
+      )
+      const events = await owner.store.listEvents(exampleTechnicalMissionFixture.mission_id)
+      assert.equal(events.filter((e) => e.kind === 'plan_revised').length, 0)
       await owner.close()
     } finally {
       await rm(dir, { recursive: true, force: true })

@@ -1,7 +1,7 @@
-import { createHash } from 'node:crypto'
 import { closeSync, constants, existsSync, fstatSync, openSync, readSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { documentAdmissionCrlfHints, sha256Hex } from '../../../access/missionDocumentAcquisitionPolicy.js'
 import arxivManifest from './1706.03762.manifest.json' with { type: 'json' }
 
 export interface ArxivPaperManifestRef {
@@ -45,6 +45,8 @@ export type ArxivPaperCacheResolveResult =
       resolvedPath: string
       manifestSha256: string
       actualSha256: string
+      actualByteLength: number
+      message: string
     }
   | {
       status: 'unsupported_platform'
@@ -275,13 +277,24 @@ export function resolveManifestedPaperBytesFromExternalCache(
     }
   }
 
-  const actualSha256 = createHash('sha256').update(read.bytes).digest('hex')
+  const actualSha256 = sha256Hex(read.bytes)
   if (actualSha256 !== manifest.content_sha256) {
+    const hints = documentAdmissionCrlfHints(
+      read.bytes,
+      manifest.content_sha256,
+      manifest.byte_length,
+    )
+    const hintSuffix = hints.length > 0 ? ` (${hints.join('; ')})` : ''
     return {
       status: 'digest_mismatch',
       resolvedPath: expectedPath,
       manifestSha256: manifest.content_sha256,
       actualSha256,
+      actualByteLength: read.bytes.length,
+      message:
+        `cached paper digest does not match manifest ` +
+        `(actual=${actualSha256}, expected=${manifest.content_sha256}, byte_length=${read.bytes.length})` +
+        hintSuffix,
     }
   }
   return {
