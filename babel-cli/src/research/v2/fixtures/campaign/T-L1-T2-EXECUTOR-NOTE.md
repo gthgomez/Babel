@@ -9,8 +9,6 @@
 
 Non-secret preflight: `npm run test:research-v2-technical-campaign-preflight`.
 
-**T-L1 discover query (verified 2026-10-21):** do not rely on CLI default first-eight-word query (`0` repository path hits). Mission pins carry optional `discover_query` (trimmed nonempty at parse; whitespace-only rejected). `T-L1-mission.json`: Babel `persistence durableresearchstore.ts` → first tree hit `durableResearchStore.ts`; LangGraph `pregel checkpoint` → `_checkpoint.py` (not `libs checkpoint` → conformance Makefile). Recorded tree verification: `review-artifacts/t-l1-discover-query-tree-first-hit.json`. Host `--discover-query` remains fallback when a pin omits `discover_query`. LangGraph commit `3cd57c03…` (tree `a8aa3b13…`).
-
 Offline production wiring proof (injected GitHub tree + document search routing): `technicalCampaignProductionWiring.test.ts` — **not** canonical live acceptance.
 
 ## Composed retrieval (post `fb1c44aa`)

@@ -14,6 +14,11 @@ import {
   validateFetchBinding,
 } from '../documents/readBinding.js'
 import {
+  cancelledDiscoverResult,
+  receiptFromSourceSearchResult,
+} from './discoverSearchReceiptHandoff.js'
+import { mergeDiscoverSearchReceipts } from '../../engine/sourceDiscoverSearchReceipt.js'
+import {
   passagesFromAdmittedStaticHtml,
   STATIC_HTML_EXTRACTION_VERSION,
 } from './htmlFromAdmittedBytes.js'
@@ -34,7 +39,7 @@ export class GeneralWebAdapter implements SourceAdapter {
     access: SourceAccessPort,
   ): Promise<SourceDiscoverResult> {
     if (request.signal.aborted) {
-      return { operationId: request.operationId, status: 'cancelled' }
+      return cancelledDiscoverResult(request.operationId)
     }
     const search = await access.search({
       operationId: `${request.operationId}:search`,
@@ -42,21 +47,25 @@ export class GeneralWebAdapter implements SourceAdapter {
       sourceClasses: [...this.supportedKinds],
       signal: request.signal,
     })
+    const webSearchReceipt = receiptFromSourceSearchResult(search)
     if (request.signal.aborted) {
-      return { operationId: request.operationId, status: 'cancelled' }
+      return cancelledDiscoverResult(request.operationId, webSearchReceipt)
     }
     if (search.status === 'cancelled') {
-      return { operationId: request.operationId, status: 'cancelled' }
+      return cancelledDiscoverResult(request.operationId, webSearchReceipt)
     }
     if (search.status === 'failed') {
+      const failedReceipt = mergeDiscoverSearchReceipts(search.receipt)
       return {
         operationId: request.operationId,
         status: 'failed',
         failureCategory: search.failureCategory,
         message: search.message,
+        ...(failedReceipt ? { search_provider_receipt: failedReceipt } : {}),
       }
     }
     let candidates: SourceRecord[] = search.hits.map((hit) => hit.source)
+    let searchReceipt = mergeDiscoverSearchReceipts(search.receipt)
     if (candidates.length === 0) {
       const docSearch = await access.search({
         operationId: `${request.operationId}:document-search`,
@@ -65,22 +74,31 @@ export class GeneralWebAdapter implements SourceAdapter {
         signal: request.signal,
       })
       if (request.signal.aborted) {
-        return { operationId: request.operationId, status: 'cancelled' }
+        return cancelledDiscoverResult(request.operationId, searchReceipt)
       }
       if (docSearch.status === 'cancelled') {
-        return { operationId: request.operationId, status: 'cancelled' }
+        return cancelledDiscoverResult(request.operationId, searchReceipt)
       }
       if (docSearch.status === 'failed') {
+        const failedReceipt =
+          mergeDiscoverSearchReceipts(search.receipt, docSearch.receipt) ?? searchReceipt
         return {
           operationId: request.operationId,
           status: 'failed',
           failureCategory: docSearch.failureCategory,
           message: docSearch.message,
+          ...(failedReceipt ? { search_provider_receipt: failedReceipt } : {}),
         }
       }
       candidates = docSearch.hits.map((hit) => hit.source)
+      searchReceipt = mergeDiscoverSearchReceipts(search.receipt, docSearch.receipt) ?? searchReceipt
     }
-    return { operationId: request.operationId, status: 'ok', candidates }
+    return {
+      operationId: request.operationId,
+      status: 'ok',
+      candidates,
+      ...(searchReceipt ? { search_provider_receipt: searchReceipt } : {}),
+    }
   }
 
   async read(

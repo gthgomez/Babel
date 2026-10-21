@@ -61,6 +61,7 @@ export function buildPlanRevisionFromPlanQuestions(params: {
   })
 }
 
+/** Planner input: canonical coverage slot IDs plus existing mission metadata (not a typed source directory). */
 export function missionRequirementsPayload(mission: ResearchMissionV2): Record<string, unknown> {
   return {
     mission_id: mission.mission_id,

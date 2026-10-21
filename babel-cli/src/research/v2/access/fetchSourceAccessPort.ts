@@ -55,16 +55,59 @@ export type AdmittedHttpGetFn = (params: {
 export interface FetchSourceAccessPortOptions {
   /** Production path: governed network GET. Tests inject a stub instead of live HTTP. */
   admittedGet?: AdmittedHttpGetFn
-  /** Host decoded/decompressed ceiling (intersected with mission document budgets). */
+  /** Host decoded/decompressed ceiling for general/web/repository fetch (not document-policy). */
   maxDecompressedBytes?: number
   /** Injected transport for the default admittedHttpGet wrapper (tests only). */
   dispatchGet?: AdmittedHttpGetDispatch
+  /** General/web/repository wire ceiling; documents use {@link maxDocumentWireBytes} when set. */
   maxAdmittedBytes?: number
+  /** Mission-selected admitted document wire ceiling (intersected with mission budgets). */
+  maxDocumentWireBytes?: number
+  /** Mission-selected admitted document decompressed ceiling (intersected with mission budgets). */
+  maxDocumentDecompressedBytes?: number
   /** When set, enforce mission source classes, pins, and redirect-hop domain policy before dispatch. */
   mission?: ResearchMissionV2
 }
 
 export const DEFAULT_MAX_ADMITTED_BYTES = 200_000
+
+export function resolveGeneralHostWireCeiling(options: FetchSourceAccessPortOptions): number {
+  return options.maxAdmittedBytes !== undefined
+    ? options.maxAdmittedBytes
+    : DEFAULT_MAX_ADMITTED_BYTES
+}
+
+export function resolveGeneralHostDecodedCeiling(
+  options: FetchSourceAccessPortOptions,
+  generalWire: number,
+): number {
+  return options.maxDecompressedBytes !== undefined ? options.maxDecompressedBytes : generalWire
+}
+
+/**
+ * Document-policy host ceilings: optional document env allowances apply to admitted-document
+ * fetches; explicit general `maxAdmittedBytes` / `maxDecompressedBytes` still cap them when set.
+ * Implicit general defaults do not cap a higher document allowance.
+ */
+export function resolveDocumentPolicyHostByteCeilings(
+  options: FetchSourceAccessPortOptions,
+): { hostWireCeiling: number; hostDecodedCeiling: number } {
+  const generalWire = resolveGeneralHostWireCeiling(options)
+  const generalDecoded = resolveGeneralHostDecodedCeiling(options, generalWire)
+  if (options.maxDocumentWireBytes === undefined) {
+    return { hostWireCeiling: generalWire, hostDecodedCeiling: generalDecoded }
+  }
+  let hostWireCeiling = options.maxDocumentWireBytes
+  let hostDecodedCeiling =
+    options.maxDocumentDecompressedBytes ?? options.maxDocumentWireBytes
+  if (options.maxAdmittedBytes !== undefined) {
+    hostWireCeiling = Math.min(hostWireCeiling, options.maxAdmittedBytes)
+  }
+  if (options.maxDecompressedBytes !== undefined) {
+    hostDecodedCeiling = Math.min(hostDecodedCeiling, options.maxDecompressedBytes)
+  }
+  return { hostWireCeiling, hostDecodedCeiling }
+}
 
 function sha256(bytes: Buffer): string {
   return createHash('sha256').update(bytes).digest('hex')
@@ -233,14 +276,19 @@ export class FetchSourceAccessPort implements SourceAccessPort {
         }
       }
     }
-    const hostWireCeiling = this.options.maxAdmittedBytes ?? DEFAULT_MAX_ADMITTED_BYTES
-    const hostDecodedCeiling = this.options.maxDecompressedBytes ?? hostWireCeiling
     const mission = this.options.mission
     const documentPolicy = resolveMissionDocumentPolicyForFetchUrl(
       request.source,
       mission,
       fetchUrl,
     )
+    const generalWire = resolveGeneralHostWireCeiling(this.options)
+    const generalDecoded = resolveGeneralHostDecodedCeiling(this.options, generalWire)
+    const documentHost = documentPolicy
+      ? resolveDocumentPolicyHostByteCeilings(this.options)
+      : null
+    const hostWireCeiling = documentHost?.hostWireCeiling ?? generalWire
+    const hostDecodedCeiling = documentHost?.hostDecodedCeiling ?? generalDecoded
     if (documentPolicy) {
       const preDispatchViolation = assertDocumentPolicyFetchUrl(fetchUrl, documentPolicy)
       if (preDispatchViolation) {

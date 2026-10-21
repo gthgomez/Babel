@@ -80,6 +80,22 @@ describe('missionWebRetrievalSelection', () => {
     assert.deepEqual(resolution.limitations, [])
   })
 
+  it('dedupes fragment aliases on the same HTTP resource', () => {
+    const base = 'https://developer.mozilla.org/en-US/docs/Web/API/Fetch_API'
+    const mission = ResearchMissionV2Schema.parse({
+      ...baseMission,
+      source_policy: {
+        ...baseMission.source_policy,
+        selected_web_refs: [`${base}#a`, `${base}#b`],
+      },
+    })
+    const mdn = webSource('mdn', base)
+    const resolution = resolveMissionWebRetrievalCandidates([mdn], mission)
+    assert.equal(resolution.slots.length, 1)
+    assert.equal(resolution.slots[0]?.candidate.observed_urls[0], base)
+    assert.ok(resolution.limitations.some((l) => l.startsWith('retrieval_web_ref_duplicate:')))
+  })
+
   it('dedupes duplicate mission refs to a single fetch target', () => {
     const mission = ResearchMissionV2Schema.parse({
       ...baseMission,
@@ -116,6 +132,17 @@ describe('missionWebRetrievalSelection', () => {
     )
     const bound = bindWebSourceToMissionRef(discoverHit, ref)
     assert.equal(bound.observed_urls[0], ref)
+  })
+
+  it('binds fragment mission refs to fragment-free fetch URL with provenance preserved', () => {
+    const ref = 'https://developer.mozilla.org/en-US/docs/Web/API/Fetch_API#Using_Fetch'
+    const fetchUrl = 'https://developer.mozilla.org/en-US/docs/Web/API/Fetch_API'
+    const direct = bindWebSourceToMissionRef(
+      webSource('mdn', 'https://developer.mozilla.org/en-US/docs/alias-primary'),
+      ref,
+    )
+    assert.equal(direct.observed_urls[0], fetchUrl)
+    assert.ok(direct.observed_urls.includes(ref))
   })
 
   it('legacy mode keeps first discover candidate (fetch-time admission unchanged)', () => {

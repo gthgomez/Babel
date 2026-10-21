@@ -13,7 +13,10 @@ import {
 } from './plainTextFromAdmittedBytes.js'
 import { isPdfMediaType } from './pdfAdmission.js'
 import { PdfExtractionCancelled } from './pdfExtractionLimits.js'
-import { PDF_TEXT_EXTRACTION_VERSION, passagesFromAdmittedPdf } from './pdfFromAdmittedBytes.js'
+import {
+  PDF_TEXT_EXTRACTION_VERSION,
+  passagesAndCoverageFromAdmittedPdf,
+} from './pdfFromAdmittedBytes.js'
 import {
   assertReadPreconditions,
   cancelledRead,
@@ -71,16 +74,27 @@ export class GeneralDocumentAdapter implements SourceAdapter {
     const admitted = fetched.admitted
     try {
       if (isPdfMediaType(admitted.media_type)) {
-        const passages = await passagesFromAdmittedPdf(admitted, request.signal)
+        const extracted = await passagesAndCoverageFromAdmittedPdf(admitted, request.signal)
         if (request.signal.aborted) {
           return cancelledRead(request.operationId)
         }
+        const coverage = extracted.coverage
         return {
           operationId: request.operationId,
           status: 'ok',
           revision: admitted.revision,
-          passages,
+          passages: extracted.passages,
           extraction_version: PDF_TEXT_EXTRACTION_VERSION,
+          document_pdf_extraction_coverage: {
+            pdf_page_count: coverage.pdf_page_count,
+            pages_processed: coverage.pages_processed,
+            pages_with_passages: coverage.pages_with_passages,
+            pages_without_extractable_text: coverage.pages_without_extractable_text,
+            pages_with_truncated_inline_text: coverage.pages_with_truncated_inline_text,
+            last_page_with_passage: coverage.last_page_with_passage,
+            page_traversal_complete: coverage.page_traversal_complete,
+            text_extraction_complete: coverage.text_extraction_complete,
+          },
         }
       }
       if (admitted.media_type !== PLAIN_TEXT_MEDIA_TYPE) {

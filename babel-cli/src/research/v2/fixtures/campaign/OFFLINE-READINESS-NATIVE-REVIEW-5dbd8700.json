@@ -1,0 +1,48 @@
+{
+  "schema": "research-v2-offline-native-review-readiness/v1",
+  "receipt_binding": {
+    "frozen": true,
+    "do_not_rebind_to_later_commits": true,
+    "bound_review_head": "5dbd870070bba0a5d0ba16b8b2feed203afcebf3",
+    "note": "Scoped native-review offline proof at this head; later follow-up commits do not retroactively invalidate the fresh Linux two-distinct-URL comparison diagnostic readiness issued against this receipt."
+  },
+  "review_checkpoints": ["e5f028ce", "5dbd8700"],
+  "git": {
+    "head": "5dbd870070bba0a5d0ba16b8b2feed203afcebf3",
+    "tree": "059dac4cd738bc42a8ae5873a8176a6270f6b21a",
+    "subject": "feat(research-v2): pass question_coverage into synthesis model input"
+  },
+  "attempt4_evidence_subset_blob_sha256": "b772baa5edda219b929b90a54a522fb9c45f17de",
+  "worktree_root": "/workspace",
+  "babel_cli": {
+    "package_root": "/workspace/babel-cli",
+    "bin_absolute": "/workspace/babel-cli/bin/babel.js",
+    "bin_sha256": "ee8f9ba2a7bd12b937451c0f4d86503d0b68d9076ed3cd24b9a7138b7039f43f",
+    "cli_entry_dispatch_absolute": "/workspace/babel-cli/dist/cliEntryDispatch.js",
+    "cli_entry_dispatch_sha256": "f5943d8014b6452390f769bb5ac59fc5fee7ff8655657fa038eb8ec26716d942",
+    "cli_entry_dispatch_bytes": 519
+  },
+  "proof_artifacts": {
+    "full_command_log": "babel-cli/src/research/v2/fixtures/campaign/OFFLINE-READINESS-NATIVE-REVIEW-5dbd8700.log",
+    "generated_at_utc": "2026-10-21T10:39:36Z"
+  },
+  "local_proof_summary": {
+    "npm_run_build_exit": 0,
+    "npm_run_typecheck_exit": 0,
+    "affected_canonical_tests_exit": 0,
+    "g_l2_preflight_exit": 0,
+    "g_l3_preflight_exit": 0
+  },
+  "remaining_blockers": [
+    "No live G-L2/G-L3 research v2 run or paid model inference in this receipt (coordinator-held).",
+    "Actual-port fault matrix (URL primary mismatch, dedup, persistence fencing) delegated to Agent B on governed access; runtime covered offline via fixture routing + InMemory/durable loop tests only.",
+    "Live DuckDuckGo HTML search and real MDN/Cloudflare/python.org fetches not exercised here; preflight validates mission schema, effective OpenRouter route lane, search provider id, and credential presence only.",
+    "Hosted CI exact-head status not polled for this bounded readiness capture."
+  ],
+  "canonical_helper_ownership": {
+    "attempt4_bytes": "review-artifacts/general-g-l1-attempt4-evidence-subset.json (unchanged b772baa5)",
+    "question_coverage_overlay": "babel-cli/src/research/v2/engine/testSupport/attempt4QuestionCoverageDerived.ts",
+    "multi_web_selection": "babel-cli/src/research/v2/access/missionWebRetrievalSelection.ts",
+    "synthesis_input": "babel-cli/src/research/v2/engine/buildSynthesizeReportModelInput.ts"
+  }
+}

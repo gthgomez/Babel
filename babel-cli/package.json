@@ -158,10 +158,14 @@
     "test:research-v2-campaign-preflight": "node --import tsx scripts/research-v2-campaign-preflight-run.mjs G-L1",
     "test:research-v2-g-l2-preflight": "node --import tsx scripts/research-v2-campaign-preflight-run.mjs G-L2",
     "test:research-v2-g-l3-preflight": "node --import tsx scripts/research-v2-campaign-preflight-run.mjs G-L3",
+<<<<<<< HEAD
     "test:research-v2-g-l2-bound-coverage": "node --import tsx --test src/research/v2/engine/planCoverageObligations.test.ts src/research/v2/engine/boundQuestionCoverageFromEvidence.test.ts src/research/v2/engine/reportFinalizationEvidence.gL2.regression.test.ts src/research/v2/engine/gL2Diagnostic1Quality.boundCoverage.reciprocal.test.ts src/research/v2/engine/gL2ObligationJudgmentIntegrity.boundCoverage.reciprocal.test.ts src/research/v2/engine/obligationCoverageJudgmentIntegrity.test.ts src/research/v2/engine/gL2ObligationWiringAReconciliation.alignment.test.ts",
     "test:research-v2-exa-lite-search": "node --import tsx --test src/research/v2/access/exaLiteSearchProvider.test.ts src/research/v2/access/createAdmittedSourceSearchProvider.test.ts src/research/v2/access/admittedExaLiteHttpsPost.test.ts src/research/v2/access/exaLiteSearchResponseValidation.test.ts",
     "test:research-v2-extraction-lineage-durable": "node --import tsx --test src/research/v2/engine/retrievalExtractionLineage.test.ts src/research/v2/engine/researchEndToEndPass.extractionLineage.sharedOpId.durable.regression.test.ts src/research/v2/engine/researchEndToEndPass.extractionLineage.nesting.durable.regression.test.ts src/research/v2/engine/researchEndToEndPass.extractionLineage.sharedPassageId.durable.regression.test.ts",
     "test:research-v2-extraction-lineage-blocked-regression": "npm run test:research-v2-extraction-lineage-durable",
+=======
+    "test:research-v2-technical-campaign-preflight": "node --import tsx scripts/research-v2-technical-campaign-preflight.mjs",
+>>>>>>> origin/pr-406-head
     "prepublishOnly": "npm run check:source-provenance && npm run check:dist",
     "benchmark:claude-babel:certify": "tsx --no-warnings=ExperimentalWarning scripts/claude-babel-astra-lab/run_go_certification.ts",
     "benchmark:claude-babel:smoke": "tsx --no-warnings=ExperimentalWarning scripts/claude-babel-astra-lab/run_babel_smoke.ts",

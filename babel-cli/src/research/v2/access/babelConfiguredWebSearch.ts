@@ -14,8 +14,11 @@ import {
 
 export { EXA_LITE_SEARCH_PROVIDER_ID } from './exaLiteSearchProvider.js'
 
-/** Matches {@link handleWebSearch} in tools/webContext.ts — the only configured production provider today. */
+/** Legacy HTML-only web search (Babel `handleWebSearch` tool path unchanged). */
 export const DUCKDUCKGO_HTML_FALLBACK_PROVIDER_ID = 'duckduckgo_html_fallback'
+
+/** Default for Research v2 admitted web discovery: Exa lite primary with governed DDG fallback. */
+export const DEFAULT_RESEARCH_WEB_SEARCH_PROVIDER_ID = EXA_LITE_SEARCH_PROVIDER_ID
 
 export const DUCKDUCKGO_HTML_FALLBACK_LIMITATIONS = [
   'same_unofficial_html_endpoint_as_babel_web_search_tool',
@@ -39,13 +42,16 @@ export function resolveProductionSearchProviderId(
   env: NodeJS.ProcessEnv = process.env,
 ): BabelConfiguredSearchProviderId | null {
   const explicit = env.BABEL_WEB_SEARCH_PROVIDER?.trim()
-  if (!explicit || explicit === DUCKDUCKGO_HTML_FALLBACK_PROVIDER_ID) {
+  if (explicit === DUCKDUCKGO_HTML_FALLBACK_PROVIDER_ID) {
     return DUCKDUCKGO_HTML_FALLBACK_PROVIDER_ID
   }
   if (explicit === EXA_LITE_SEARCH_PROVIDER_ID) {
     return EXA_LITE_SEARCH_PROVIDER_ID
   }
-  return null
+  if (explicit) {
+    return null
+  }
+  return DEFAULT_RESEARCH_WEB_SEARCH_PROVIDER_ID
 }
 
 function resolveExaApiKey(env: NodeJS.ProcessEnv): string | null {

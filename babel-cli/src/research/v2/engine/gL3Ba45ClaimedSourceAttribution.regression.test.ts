@@ -156,7 +156,7 @@ describe('G-L3 ba45 derived claimed-source attribution (original evidence)', () 
     assert.deepEqual(reviewed[0]?.claimed_source_attribution?.source_slots, ['web-ref-0'])
   })
 
-  it('original G-L3 replay with honest [web-ref-0] attribution keeps seven findings supported', () => {
+  it('original G-L3 replay with uniform false [web-ref-0] slots shows model-semantic limit (seven supported)', () => {
     const extractBase = gL3Ba45HistoricalFindings.map((h) => ({
       finding_id: h.finding_id,
       question_id: h.question_id,
@@ -166,6 +166,7 @@ describe('G-L3 ba45 derived claimed-source attribution (original evidence)', () 
       source_integrity: h.source_integrity,
       created_at: h.created_at,
     }))
+    // Deliberately false annotation: every finding gets [web-ref-0]; host scoped-source GO does not fix this.
     const modelOutput = syntheticReviewFromHistorical(gL3Ba45HistoricalFindings, () => ['web-ref-0'])
     parseValidatedModelOutput('semantic_support_review', modelOutput)
     const reviewed = applySemanticSupportReview(

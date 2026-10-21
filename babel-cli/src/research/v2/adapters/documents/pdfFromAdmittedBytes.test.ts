@@ -6,7 +6,11 @@ import { test } from 'node:test'
 import { PassageRecordSchema } from '../../contracts/passages.js'
 import { buildAdmittedContent } from './testAdmittedFixtures.js'
 import { PdfExtractionCancelled } from './pdfExtractionLimits.js'
-import { passagesFromAdmittedPdf, PDF_TEXT_EXTRACTION_VERSION } from './pdfFromAdmittedBytes.js'
+import {
+  passagesAndCoverageFromAdmittedPdf,
+  passagesFromAdmittedPdf,
+  PDF_TEXT_EXTRACTION_VERSION,
+} from './pdfFromAdmittedBytes.js'
 import { PDF_MEDIA_TYPE } from './pdfAdmission.js'
 import { MAX_INLINE_PASSAGE_UTF16_UNITS, passageTextHash } from './passageInlineText.js'
 
@@ -141,4 +145,28 @@ test('passagesFromAdmittedPdf: rejects non-pdf bytes', async () => {
   const bytes = Buffer.from('not a pdf file', 'utf8')
   const admitted = buildAdmittedContent('op', 's', 'r', bytes, PDF_MEDIA_TYPE)
   await assert.rejects(() => passagesFromAdmittedPdf(admitted), /PDF header/)
+})
+
+test('passagesAndCoverageFromAdmittedPdf: truncated inline page marks text incomplete', async () => {
+  const emoji = '😀'
+  const pageText = 'a'.repeat(MAX_INLINE_PASSAGE_UTF16_UNITS - 1) + emoji
+  const { coverage } = await passagesAndCoverageFromAdmittedPdf(pdfAdmitted(), undefined, {
+    synthesizePageText: { 1: pageText, 2: 'second page ok' },
+  })
+  assert.equal(coverage.page_traversal_complete, true)
+  assert.equal(coverage.text_extraction_complete, false)
+  assert.equal(coverage.pages_with_truncated_inline_text, 1)
+  assert.equal(coverage.pages_without_extractable_text, 0)
+})
+
+test('passagesAndCoverageFromAdmittedPdf: empty middle page marks text incomplete', async () => {
+  const { coverage } = await passagesAndCoverageFromAdmittedPdf(pdfAdmitted(), undefined, {
+    synthesizePageText: { 1: 'first', 3: 'third' },
+  })
+  assert.equal(coverage.pdf_page_count, 3)
+  assert.equal(coverage.page_traversal_complete, true)
+  assert.equal(coverage.text_extraction_complete, false)
+  assert.equal(coverage.pages_without_extractable_text, 1)
+  assert.equal(coverage.pages_with_truncated_inline_text, 0)
+  assert.equal(coverage.pages_with_passages, 2)
 })

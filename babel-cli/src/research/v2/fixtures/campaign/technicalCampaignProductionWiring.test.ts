@@ -14,6 +14,11 @@ import {
 } from '../../registry/missionAdapterResolution.js'
 import { planTechnicalRetrievalSlots } from '../../engine/technicalRetrievalComposition.js'
 import pins from './T-L1-T-L2-PINNED-VERSIONS.json' with { type: 'json' }
+import { DEFAULT_MAX_ADMITTED_BYTES } from '../../access/fetchSourceAccessPort.js'
+import {
+  intersectDocumentFetchByteBudgets,
+  resolveMissionDocumentPolicyForFetchUrl,
+} from '../../access/missionDocumentAcquisitionPolicy.js'
 
 const campaignDir = dirname(fileURLToPath(import.meta.url))
 
@@ -97,5 +102,18 @@ describe('technical campaign production wiring (injected transport, no live mode
       { mediaType: 'application/pdf' },
     )
     assert.equal(paperRead?.adapterId, GENERAL_DOCUMENT_ADAPTER_ID)
+
+    const policy = resolveMissionDocumentPolicyForFetchUrl(
+      docSource,
+      mission,
+      pins.t_l2_paper.canonical_url,
+    )
+    assert.ok(policy)
+    assert.equal(policy.content_pin_kind, 'mutable_locator_content_digest')
+    const budgets = intersectDocumentFetchByteBudgets(policy, DEFAULT_MAX_ADMITTED_BYTES, DEFAULT_MAX_ADMITTED_BYTES)
+    assert.equal(budgets.maxWireBytes, DEFAULT_MAX_ADMITTED_BYTES)
+    assert.equal(budgets.maxDecodedBytes, DEFAULT_MAX_ADMITTED_BYTES)
+    const raisedHost = intersectDocumentFetchByteBudgets(policy, 10_000_000, 10_000_000)
+    assert.ok(raisedHost.maxWireBytes >= pins.t_l2_paper.observed_content_length_bytes)
   })
 })

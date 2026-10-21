@@ -1,4 +1,8 @@
-import type { ResearchModelInvocationResult } from '../ports/researchModelPort.js'
+import type {
+  ResearchModelInvocationResult,
+  UsageSettlement,
+} from '../ports/researchModelPort.js'
+import { unknownUsageSettlement } from './settleExternalOperation.js'
 
 export class ModelReceiptBindingError extends Error {
   constructor(message: string) {
@@ -26,5 +30,29 @@ export function assertModelInvocationReceiptBound(
     throw new ModelReceiptBindingError(
       `usage settlement attempt_id ${result.receipt.usage_settlement.attempt_id} does not match admitted ${attemptId}`,
     )
+  }
+}
+
+/** Usage for cancellation-after-return: bound ok receipts only; foreign bindings stay unknown. */
+export function usageSettlementWhenAbortedAfterInvoke(
+  operationId: string,
+  attemptId: string,
+  result: ResearchModelInvocationResult,
+): UsageSettlement {
+  if (
+    result.status === 'failed' ||
+    result.status === 'cancelled' ||
+    result.status === 'uncertain'
+  ) {
+    return result.usageSettlement
+  }
+  if (result.status !== 'ok') {
+    return unknownUsageSettlement(attemptId)
+  }
+  try {
+    assertModelInvocationReceiptBound(operationId, attemptId, result)
+    return result.receipt.usage_settlement
+  } catch {
+    return unknownUsageSettlement(attemptId)
   }
 }

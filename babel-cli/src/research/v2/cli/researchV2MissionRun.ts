@@ -1,8 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { mkdir } from 'node:fs/promises'
 import type { ResearchMissionV2 } from '../contracts/mission.js'
-import { createGovernedSourceAccessPort } from '../access/governedSourceAccessPort.js'
-import { createMissionProductionSearchProvider } from '../access/createMissionProductionSearchProvider.js'
+import { createProductionGovernedSourceAccessForMission } from '../access/createProductionGovernedSourceAccess.js'
 import type { FetchPinnedRepositoryTree } from '../access/pinnedRepositoryFileSearchProvider.js'
 import { createGovernedSourceAccessForMission } from '../access/createGovernedSourceAccess.js'
 import type { BabelWebSearchTransport } from '../access/babelConfiguredWebSearch.js'
@@ -72,6 +71,12 @@ async function resolveRegistries(mission: ResearchMissionV2): Promise<MissionReg
   if (mission.profile_id === GENERAL_PROFILE_ID) {
     return createCombinedResearchRegistries()
   }
+  const classes = mission.source_policy.allowed_source_classes
+  const needsDocumentOrWebRead =
+    classes.includes('web') || classes.includes('document') || classes.includes('paper')
+  if (needsDocumentOrWebRead) {
+    return createCombinedResearchRegistries()
+  }
   return createTechnicalResearchRegistries()
 }
 
@@ -86,14 +91,10 @@ function productionAccessPort(
   mission: ResearchMissionV2,
   options: Pick<ResearchV2MissionRunOptions, 'webSearchTransport' | 'fetchRepositoryTree'>,
 ) {
-  const searchProvider = createMissionProductionSearchProvider({
+  return createProductionGovernedSourceAccessForMission({
     mission,
     ...(options.webSearchTransport ? { webSearchTransport: options.webSearchTransport } : {}),
     ...(options.fetchRepositoryTree ? { fetchRepositoryTree: options.fetchRepositoryTree } : {}),
-  })
-  return createGovernedSourceAccessPort({
-    mission,
-    searchProvider,
   })
 }
 
@@ -112,7 +113,11 @@ function injectedOfflineAccess(mission: ResearchMissionV2) {
       requestedUrl: technicalRepositoryCorpusFinalUrl,
       finalUrl: technicalRepositoryCorpusFinalUrl,
       redirectChain: [technicalRepositoryCorpusFinalUrl],
+<<<<<<< HEAD
     transportCoding: null,
+=======
+      transportCoding: null,
+>>>>>>> origin/pr-406-head
     }),
   })
   return port
@@ -255,6 +260,7 @@ export async function runResearchV2EnginePassOnOwner(options: {
         planRevisionId,
         failurePhase: 'admitted_research_pass',
         message,
+        cause: err,
       })
       if (appended) {
         terminalReportEmitted = true

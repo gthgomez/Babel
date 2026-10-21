@@ -24,13 +24,15 @@
 | `resolved_search_type` | string \| null |
 | `warnings` | `SourceSearchExaLiteDiagnosticRecord[]` (`code`, `path`, `message`, bounded `details`) |
 | `notices` | `SourceSearchExaLiteDiagnosticRecord[]` |
-| `estimated_cost_dollars` | number \| null — official `costDollars.total` when present (provider estimate, **not** an invoice) |
-| `estimated_cost_detail` | Record<string, number> \| null — non-`total` breakdown keys from `costDollars` (e.g. `search`, `contents`); `total` is not duplicated here |
+| `estimated_cost_dollars` | number \| null (provider estimate, **not** an invoice) |
+| `estimated_cost_detail` | Record<string, number> \| null |
 
 **Invariant:** When Exa returns HTTP 200 with billing metadata but zero in-policy hits (`exa_primary_empty_billed`), B **preserves** `receipt` even if DuckDuckGo fallback subsequently fails.
 
 ## Suggested A mapping (non-normative)
 
-- Copy `receipt` onto discover operation diagnostics / `SourceDiscoverResult.provider_receipt`.
+- Copy `receipt` onto discover operation diagnostics / `SourceDiscoverResult.search_provider_receipt`.
 - Surface `exa_participation` + `degradation.reason` in report limitations when degraded.
 - Do not treat `exa_lite` snippets as passages; governed `fetchContent` remains evidence authority.
+
+Canonical Zod: `contracts/sourceSearchProviderReceipt.ts` (keep in sync with B `ports/sourceAccessPort.ts` interfaces).

@@ -21,6 +21,17 @@ import { ensurePdfJsNodeCanvasRuntime } from './pdfNodeCanvasPolyfill.js'
 
 export const PDF_TEXT_EXTRACTION_VERSION = 'general-pdf-text/0.1.0'
 
+export interface PdfExtractionCoverage {
+  pdf_page_count: number
+  pages_processed: number
+  pages_with_passages: number
+  pages_without_extractable_text: number
+  pages_with_truncated_inline_text: number
+  last_page_with_passage: number | null
+  page_traversal_complete: boolean
+  text_extraction_complete: boolean
+}
+
 export type PdfExtractionStallStage = 'loading' | 'getPage' | 'getTextContent'
 
 export type PdfExtractionTestHooks = {
@@ -151,54 +162,90 @@ async function extractPassagesFromDoc(
   activeDoc: PdfDocumentLike,
   signal?: AbortSignal,
   options?: PdfExtractionOptions,
-): Promise<PassageRecord[]> {
+): Promise<{ passages: PassageRecord[]; coverage: PdfExtractionCoverage }> {
   if (activeDoc.numPages > PDF_MAX_PAGES_PER_EXTRACTION) {
     throw new Error(
       `pdf exceeds page limit (${activeDoc.numPages} > ${PDF_MAX_PAGES_PER_EXTRACTION})`,
     )
   }
   const passages: PassageRecord[] = []
+  let lastPageWithPassage: number | null = null
+  let pagesWithoutExtractableText = 0
+  let pagesWithTruncatedInline = 0
   for (let pageNum = 1; pageNum <= activeDoc.numPages; pageNum++) {
     throwIfPdfAborted(signal)
     if (options?.pageDelayMs) {
       await abortableDelay(options.pageDelayMs, signal)
     }
 
-    const pagePromise =
-      options?.stallStage === 'getPage' ? neverResolving<PdfPageLike>() : activeDoc.getPage(pageNum)
-    const page = await awaitWithPdfAbort(pagePromise, signal)
+    let text = ''
+    if (options?.synthesizePageText) {
+      text = (options.synthesizePageText[pageNum] ?? '').replace(/\s+/g, ' ').trim()
+    } else {
+      const pagePromise =
+        options?.stallStage === 'getPage' ? neverResolving<PdfPageLike>() : activeDoc.getPage(pageNum)
+      const page = await awaitWithPdfAbort(pagePromise, signal)
 
-    throwIfPdfAborted(signal)
-    const textContentPromise =
-      options?.stallStage === 'getTextContent'
-        ? neverResolving<{ items: Array<{ str?: string }> }>()
-        : page.getTextContent()
-    const content = await awaitWithPdfAbort(textContentPromise, signal)
+      throwIfPdfAborted(signal)
+      const textContentPromise =
+        options?.stallStage === 'getTextContent'
+          ? neverResolving<{ items: Array<{ str?: string }> }>()
+          : page.getTextContent()
+      const content = await awaitWithPdfAbort(textContentPromise, signal)
 
-    throwIfPdfAborted(signal)
-    const text = content.items
-      .map((item) => ('str' in item ? String(item.str) : ''))
-      .join(' ')
-      .replace(/\s+/g, ' ')
-      .trim()
-    if (!text) continue
-    passages.push(buildPassageFromPageText(admitted, pageNum, text))
+      throwIfPdfAborted(signal)
+      text = content.items
+        .map((item) => ('str' in item ? String(item.str) : ''))
+        .join(' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+    }
+    if (!text) {
+      pagesWithoutExtractableText += 1
+      continue
+    }
+    const passage = buildPassageFromPageText(admitted, pageNum, text)
+    if (
+      passage.extraction_notes?.some((note) => note.startsWith('inline_text_truncated:')) === true
+    ) {
+      pagesWithTruncatedInline += 1
+    }
+    passages.push(passage)
+    lastPageWithPassage = pageNum
   }
   throwIfPdfAborted(signal)
   if (passages.length === 0) {
     throw new Error('pdf extraction produced no text passages')
   }
-  return passages
+  const pageTraversalComplete = activeDoc.numPages > 0
+  const textExtractionComplete =
+    pageTraversalComplete &&
+    pagesWithoutExtractableText === 0 &&
+    pagesWithTruncatedInline === 0 &&
+    passages.length > 0
+  return {
+    passages,
+    coverage: {
+      pdf_page_count: activeDoc.numPages,
+      pages_processed: activeDoc.numPages,
+      pages_with_passages: passages.length,
+      pages_without_extractable_text: pagesWithoutExtractableText,
+      pages_with_truncated_inline_text: pagesWithTruncatedInline,
+      last_page_with_passage: lastPageWithPassage,
+      page_traversal_complete: pageTraversalComplete,
+      text_extraction_complete: textExtractionComplete,
+    },
+  }
 }
 
 /**
  * Extract per-page text from admitted inline PDF bytes (pdfjs-dist).
  */
-export async function passagesFromAdmittedPdf(
+export async function passagesAndCoverageFromAdmittedPdf(
   admitted: AdmittedContent,
   signal?: AbortSignal,
   options?: PdfExtractionOptions,
-): Promise<PassageRecord[]> {
+): Promise<{ passages: PassageRecord[]; coverage: PdfExtractionCoverage }> {
   if (admitted.media_type !== PDF_MEDIA_TYPE) {
     throw new Error(
       `unsupported media_type for PDF extractor: ${admitted.media_type} (only ${PDF_MEDIA_TYPE})`,
@@ -214,7 +261,18 @@ export async function passagesFromAdmittedPdf(
 
     if (options?.synthesizePageText) {
       throwIfPdfAborted(activeSignal)
-      return passagesFromSynthesizedPages(admitted, options.synthesizePageText)
+      const pageNums = Object.keys(options.synthesizePageText)
+        .map((k) => Number(k))
+        .filter((n) => Number.isInteger(n) && n > 0)
+      const numPages = pageNums.length > 0 ? Math.max(...pageNums) : 0
+      const syntheticDoc: PdfDocumentLike = {
+        numPages,
+        getPage: async () => ({
+          getTextContent: async () => ({ items: [] }),
+        }),
+        destroy: async () => {},
+      }
+      return await extractPassagesFromDoc(admitted, syntheticDoc, activeSignal, options)
     }
 
     let doc: PdfDocumentLike | null = null
@@ -246,4 +304,13 @@ export async function passagesFromAdmittedPdf(
   } finally {
     scope.dispose()
   }
+}
+
+export async function passagesFromAdmittedPdf(
+  admitted: AdmittedContent,
+  signal?: AbortSignal,
+  options?: PdfExtractionOptions,
+): Promise<PassageRecord[]> {
+  const extracted = await passagesAndCoverageFromAdmittedPdf(admitted, signal, options)
+  return extracted.passages
 }

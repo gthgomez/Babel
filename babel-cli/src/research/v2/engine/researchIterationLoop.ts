@@ -14,6 +14,7 @@ import { ZodError } from 'zod'
 import { PlanCoverageObligationValidationError } from './missionCoverageSourceSlots.js'
 import { persistModelInvocationEvidence } from './persistModelInvocationEvidence.js'
 import { settleModelOperation } from './settleModelOperation.js'
+import { usageSettlementWhenAbortedAfterInvoke } from './validateModelInvocationReceipt.js'
 import { unknownUsageSettlement } from './settleExternalOperation.js'
 import { researchPassFailedFromModelResult } from './researchPassFailure.js'
 import {
@@ -143,14 +144,11 @@ export async function runAdmittedPlanningIteration(
       {
         status: 'cancelled',
         operationId: request.modelOperationId,
-        usageSettlement:
-          modelResult.status === 'ok'
-            ? modelResult.receipt.usage_settlement
-            : modelResult.status === 'failed' ||
-                modelResult.status === 'cancelled' ||
-                modelResult.status === 'uncertain'
-              ? modelResult.usageSettlement
-              : unknownUsageSettlement(request.modelAttemptId),
+        usageSettlement: usageSettlementWhenAbortedAfterInvoke(
+          request.modelOperationId,
+          request.modelAttemptId,
+          modelResult,
+        ),
       },
       now(),
     )

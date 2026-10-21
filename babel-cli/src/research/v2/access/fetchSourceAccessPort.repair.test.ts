@@ -38,7 +38,7 @@ describe('FetchSourceAccessPort M1.3 review repairs', () => {
         requestedUrl: 'https://example.test/a',
         finalUrl: 'https://cdn.example.test/b',
         redirectChain: ['https://example.test/a', 'https://cdn.example.test/b'],
-      transportCoding: null,
+        transportCoding: null,
       }),
     })
     const result = await port.fetchContent({

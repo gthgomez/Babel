@@ -76,7 +76,8 @@ function fakeExaPost(
 }
 
 describe('exa lite search provider (fake transport)', () => {
-  it('resolveProductionSearchProviderId accepts explicit exa_lite', () => {
+  it('resolveProductionSearchProviderId defaults to exa_lite and accepts explicit override', () => {
+    assert.equal(resolveProductionSearchProviderId({}), EXA_LITE_SEARCH_PROVIDER_ID)
     assert.equal(
       resolveProductionSearchProviderId({ BABEL_WEB_SEARCH_PROVIDER: 'exa_lite' }),
       EXA_LITE_SEARCH_PROVIDER_ID,

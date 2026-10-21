@@ -1,43 +1,11 @@
 import type { MissionWriteContext } from '../contracts/common.js'
 import type { ResearchMissionV2 } from '../contracts/mission.js'
 import type { ResearchReportV2 } from '../contracts/plan.js'
-import type { ExternalOperationIntent } from '../contracts/operations.js'
-import type { ResearchStore, ResearchStoreEvent } from '../ports/researchStore.js'
+import type { ResearchStore } from '../ports/researchStore.js'
+import { listUnsettledExternalOperationIntents } from './deriveExternalOperationAccountingNotes.js'
 import { deriveSearchProviderReportLimitations } from './sourceDiscoverSearchReceipt.js'
 import { settleExternalOperation, unknownUsageSettlement } from './settleExternalOperation.js'
 import { settleModelOperation } from './settleModelOperation.js'
-
-function operationKey(missionId: string, operationId: string, attemptId: string): string {
-  return `${missionId}::${operationId}::${attemptId}`
-}
-
-function unsettledOperationIntents(
-  events: readonly ResearchStoreEvent[],
-  missionId: string,
-): ExternalOperationIntent[] {
-  const intents = new Map<string, ExternalOperationIntent>()
-  const completed = new Set<string>()
-  for (const event of events) {
-    if (event.missionId !== missionId) continue
-    if (event.kind === 'external_operation_intent') {
-      const intent = (event.payload as { intent?: ExternalOperationIntent }).intent
-      if (!intent) continue
-      intents.set(operationKey(intent.mission_id, intent.operation_id, intent.attempt_id), intent)
-    }
-    if (event.kind === 'external_operation_completed') {
-      const completion = (event.payload as {
-        completion?: { mission_id: string; operation_id: string; attempt_id: string }
-      }).completion
-      if (!completion) continue
-      completed.add(
-        operationKey(completion.mission_id, completion.operation_id, completion.attempt_id),
-      )
-    }
-  }
-  return [...intents.values()].filter(
-    (intent) => !completed.has(operationKey(intent.mission_id, intent.operation_id, intent.attempt_id)),
-  )
-}
 
 function buildCancelledTerminalReport(params: {
   mission: ResearchMissionV2
@@ -92,7 +60,7 @@ export async function finalizeOwnerResearchRunCancellation(params: {
     writer_generation: fence.writer_generation,
   }
   let events = await params.store.listEvents(params.mission.mission_id)
-  for (const intent of unsettledOperationIntents(events, params.mission.mission_id)) {
+  for (const intent of listUnsettledExternalOperationIntents(events, params.mission.mission_id)) {
     if (intent.operation_kind === 'model_invoke') {
       await settleModelOperation(
         params.store,

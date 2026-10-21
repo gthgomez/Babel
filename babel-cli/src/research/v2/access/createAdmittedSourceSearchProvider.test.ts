@@ -15,31 +15,43 @@ const SAMPLE_HTML = [
 ].join('\n')
 
 describe('createAdmittedSourceSearchProvider', () => {
-  it('production mode selects configured duckduckgo_html_fallback provider', () => {
+  it('production mode selects exa_lite composite by default', () => {
     const resolved = createAdmittedSourceSearchProvider({
       mode: 'babel_configured_web',
       mission: exampleTechnicalMissionFixture,
       webSearchTransport: async () => ({ ok: true, status: 200, html: SAMPLE_HTML }),
-      env: {},
+      env: { EXA_API_KEY: 'test-key' },
+      exaLiteTransport: {
+        post: async () => ({
+          status: 200,
+          headers: {},
+          bodyText: JSON.stringify({
+            requestId: 'offline',
+            results: [
+              {
+                title: 'Babel',
+                url: 'https://github.com/gthgomez/Babel',
+                highlights: ['repo'],
+              },
+            ],
+          }),
+        }),
+      },
     })
-    assert.equal(resolved.configuredProviderId, DUCKDUCKGO_HTML_FALLBACK_PROVIDER_ID)
-    assert.ok(resolved.limitations.join(' ').includes('no_paid_api_key'))
+    assert.equal(resolved.configuredProviderId, 'exa_lite')
+    assert.ok(resolved.limitations.join(' ').includes('degrades_to_duckduckgo'))
   })
 
-  it('resolveProductionSearchProviderId matches Babel web_search default', () => {
-    assert.equal(resolveProductionSearchProviderId({}), DUCKDUCKGO_HTML_FALLBACK_PROVIDER_ID)
-    assert.equal(
-      resolveProductionSearchProviderId({ BABEL_WEB_SEARCH_PROVIDER: 'duckduckgo_html_fallback' }),
-      DUCKDUCKGO_HTML_FALLBACK_PROVIDER_ID,
-    )
+  it('resolveProductionSearchProviderId rejects unknown explicit override', () => {
     assert.equal(resolveProductionSearchProviderId({ BABEL_WEB_SEARCH_PROVIDER: 'unknown_vendor' }), null)
   })
 
-  it('production search uses injected transport against duckduckgo html URL', async () => {
+  it('duckduckgo_html_fallback override uses injected transport only', async () => {
     let seenUrl = ''
     const resolved = createAdmittedSourceSearchProvider({
       mode: 'babel_configured_web',
       mission: exampleTechnicalMissionFixture,
+      env: { BABEL_WEB_SEARCH_PROVIDER: 'duckduckgo_html_fallback' },
       webSearchTransport: async ({ searchUrl }) => {
         seenUrl = searchUrl
         return { ok: true, status: 200, html: SAMPLE_HTML }

@@ -39,6 +39,8 @@ export const MINIMAL_VALID_MODEL_OUTPUT_BY_KIND: Record<string, Record<string, u
         status: 'insufficient',
         rationale: 'Passage does not establish the claim.',
         question_coverage: 'none',
+        claimed_source_attribution: 'names_unfetched_or_unread_source',
+        claimed_source_slots: ['web-ref-0'],
       },
     ],
   },

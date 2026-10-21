@@ -1,11 +1,11 @@
 import { createHash } from 'node:crypto'
 import type { ResearchMissionV2 } from '../contracts/mission.js'
 import type { SourceRecord } from '../contracts/sources.js'
-import { normalizeDocumentUrl } from './missionDocumentAcquisitionPolicy.js'
+import { httpResourceDedupKey, httpResourceUrlWithoutFragment } from './httpResourceUrlIdentity.js'
 import { sourceAdmittedForMission } from './missionSourceAdmission.js'
 
 export function normalizedWebTargetKey(url: string): string {
-  return normalizeDocumentUrl(url)
+  return httpResourceDedupKey(url)
 }
 
 export function primaryObservedWebUrl(source: SourceRecord): string | undefined {
@@ -30,25 +30,29 @@ export function sourceObservedUrlsIncludeSelectedWebRef(source: SourceRecord, re
 }
 
 export function buildMissionSelectedWebSourceRecord(ref: string): SourceRecord {
-  const normalizedRef = normalizedWebTargetKey(ref)
-  const sourceId = `web-mission-ref-${createHash('sha256').update(normalizedRef).digest('hex').slice(0, 20)}`
+  const fetchUrl = httpResourceUrlWithoutFragment(ref)
+  const dedupKey = normalizedWebTargetKey(ref)
+  const sourceId = `web-mission-ref-${createHash('sha256').update(dedupKey).digest('hex').slice(0, 20)}`
   return {
     source_id: sourceId,
     kind: 'web',
-    canonical_key: normalizedRef,
-    observed_urls: [normalizedRef],
-    title: normalizedRef,
+    canonical_key: dedupKey,
+    observed_urls: [fetchUrl, ...(fetchUrl !== ref ? [ref] : [])],
+    title: ref,
   }
 }
 
 /** Rebind discover hit so fetch dispatches on the mission-selected URL as observed_urls[0]. */
 export function bindWebSourceToMissionRef(source: SourceRecord, ref: string): SourceRecord {
-  const normalizedRef = normalizedWebTargetKey(ref)
-  const rest = source.observed_urls.filter((u) => normalizedWebTargetKey(u) !== normalizedRef)
+  const fetchUrl = httpResourceUrlWithoutFragment(ref)
+  const dedupKey = normalizedWebTargetKey(ref)
+  const rest = source.observed_urls.filter((u) => normalizedWebTargetKey(u) !== dedupKey)
+  const provenance = rest.filter((u) => u !== fetchUrl && u !== ref)
+  const observed_urls = [fetchUrl, ...(ref !== fetchUrl ? [ref] : []), ...provenance]
   return {
     ...source,
-    canonical_key: normalizedRef,
-    observed_urls: [normalizedRef, ...rest],
+    canonical_key: dedupKey,
+    observed_urls,
   }
 }
 

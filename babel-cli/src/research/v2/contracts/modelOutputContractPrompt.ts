@@ -12,19 +12,21 @@ export const RESEARCH_MODEL_OUTPUT_CONTRACT_PROMPT: Record<ResearchModelOperatio
     {
       "text": "<non-empty string>",
       "importance": "critical" | "high" | "medium" | "low",
+      "evidence_requirement": "<natural-language evidence requirement for this question>",
       "coverage_obligations": [
         {
           "obligation_id": "<unique id>",
           "source_slot": "<mission coverage_source_slot from input>",
-          "aspect": "technical_effect" | "audience_intent",
-          "technical_effect": "max_age_or_ttl_semantics" | "authentication_mechanism" | "general_technical"
+          "criterion_id": "<stable criterion id for this slot>",
+          "evidence_requirement": "<what admitted passage text must establish for this slot>"
         }
       ]
     }
   ]
 }
-Per-question allowed keys only: text, importance, coverage_obligations (optional).
-technical_effect is required when aspect is technical_effect; forbidden when aspect is audience_intent.
+Per-question allowed keys only: text, importance, evidence_requirement (optional), coverage_obligations (optional).
+Prefer criterion_id + evidence_requirement on each obligation (no aspect/technical_effect).
+Legacy obligations may instead use aspect "technical_effect" | "audience_intent" with technical_effect when aspect is technical_effect.
 Forbidden per-question keys: question, id, purpose, title, rationale.
 Forbidden root keys besides kind and questions: operation_kind, input, input_mission_id, mission_id.`,
   extract_findings: `Root object (strict — no extra keys):
@@ -50,6 +52,8 @@ Each question_id must match one of the active plan question ids; unknown ids are
       "status": "supported" | "contradicted" | "insufficient" | "not_checked",
       "rationale": "<non-empty string>",
       "question_coverage": "answers" | "partial" | "tangential" | "none",
+      "claimed_source_attribution": "matches_admitted_citations" | "names_unfetched_or_unread_source" | "not_assessed",
+      "claimed_source_slots": ["<mission source_slot id>", "..."],
       "obligation_coverage": [
         {
           "obligation_id": "<plan obligation_id>",
@@ -60,9 +64,11 @@ Each question_id must match one of the active plan question ids; unknown ids are
     }
   ]
 }
-Per-judgment allowed keys only: finding_id, status, rationale, question_coverage, obligation_coverage (required when plan question has coverage_obligations).
-status judges whether cited passages support the assertion; question_coverage judges whether the assertion addresses the bound plan question text (tangential supported facts do not count as answers).
-Use coverage_rubric on each finding in the request: when coverage_obligations are listed, each source_slot needs admitted passage support for its aspect (technical_effect vs audience_intent are distinct). Comparative coverage requires every obligation satisfied; missing any obligation is partial, not answers. max_age_or_ttl_semantics requires max-age/s-maxage/TTL substance — Cache-Control header mention alone is insufficient. Wrong-aspect technical evidence for an audience obligation is tangential or partial. Host finalization may downgrade model "answers" when admitted citations fail these bounds.`,
+Per-judgment allowed keys only: finding_id, status, rationale, question_coverage, claimed_source_attribution, claimed_source_slots, obligation_coverage (required when plan question has coverage_obligations).
+claimed_source_slots lists source_slot ids the assertion attributes substantive facts to (unique, non-empty). A hyperlink mention alone does not claim the linked page was read; do not list question-required sources unless the assertion treats them as read evidence.
+status judges whether cited passages support the assertion; claimed_source_attribution judges whether those attributed slots match admitted fetched citations (distinct from question_coverage obligations).
+question_coverage judges whether the assertion addresses the bound plan question text (tangential supported facts do not count as answers).
+Use coverage_rubric and mission_source_slots on each finding in the request: when coverage_obligations are listed, each source_slot needs admitted fetched passage support for its criterion or legacy aspect. Hyperlinks to unfetched mission URLs are not admitted evidence for that slot. Comparative coverage requires every obligation satisfied; missing any obligation or unavailable second source is partial, not answers. Keep assertion_support (status), source attribution (slot/url/title), and question_coverage separate; do not mark claims about unread sources as supported. Host finalization may downgrade model "answers" when slot/fetch/passage identity checks fail.`,
   synthesize_report: `Root object (strict — no extra keys):
 {
   "kind": "synthesize_report",
