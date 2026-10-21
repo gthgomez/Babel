@@ -1,0 +1,316 @@
+{
+  "schema_version": "research-v2-evidence-subset-v1",
+  "campaign_attempt": "general-g-l1-attempt4",
+  "mission_id": "mission-g-l1-general-live-attempt4",
+  "provenance": {
+    "source_store_snapshot_path": "codex/runs/general-g-l1-attempt4/store/research-store.snapshot.json",
+    "source_store_snapshot_sha256": "482517edfbab478660f958f9595119d5e844bf30962f5042fc2ba7f4fb3a7a08",
+    "source_revision_content_hash": "a0afa499c0bcfcfad46229c19edd86e0907e0eade9b0f7dbbe939a861254d1dc",
+    "extraction_command": "node review-artifacts/extract-general-g-l1-attempt4-evidence-subset.mjs codex/runs/general-g-l1-attempt4/store/research-store.snapshot.json",
+    "extracted_at": "2026-10-21T09:11:28.480Z",
+    "sanitization": "Original store fields only; no model_invoke bodies; no credentials or HTTP headers."
+  },
+  "source": {
+    "source_id": "src-web-84ed1861359f79ce6123ebc1",
+    "kind": "web",
+    "canonical_key": "https://www.python.org/downloads/",
+    "observed_urls": [
+      "https://www.python.org/downloads/"
+    ],
+    "title": "Download Python | Python.org"
+  },
+  "revision": {
+    "revision_id": "rev-src-web-84ed1861359f79ce6123ebc1-a0afa499c0bcfcfa",
+    "source_id": "src-web-84ed1861359f79ce6123ebc1",
+    "content_hash": "a0afa499c0bcfcfad46229c19edd86e0907e0eade9b0f7dbbe939a861254d1dc",
+    "retrieved_at": "2026-10-21T09:04:02.034Z",
+    "extraction_version": "fetch-source-access-2",
+    "media_type": "text/html",
+    "completeness": "truncated",
+    "byte_length_received": 200000,
+    "truncation_reason": "host_decoded_byte_limit"
+  },
+  "passages": [
+    {
+      "passage_id": "cli-run-fetch-wg1-5f7d51ab:html:0",
+      "source_revision_id": "rev-src-web-84ed1861359f79ce6123ebc1-a0afa499c0bcfcfa",
+      "locator": {
+        "kind": "section",
+        "section_id": "download-the-latest-source-release"
+      },
+      "heading_path": [
+        "Download the latest source release"
+      ],
+      "text_ref": {
+        "mode": "inline",
+        "text": "Download Python 3.15.0",
+        "text_hash": "7aebfd5b0e54c79ed66fee7772fa5af047b436f85dddf4b5e4073fc6eebee3cf"
+      },
+      "extraction_notes": [
+        "heading_level:1",
+        "static_html_extractor"
+      ]
+    },
+    {
+      "passage_id": "cli-run-fetch-wg1-5f7d51ab:html:1",
+      "source_revision_id": "rev-src-web-84ed1861359f79ce6123ebc1-a0afa499c0bcfcfa",
+      "locator": {
+        "kind": "section",
+        "section_id": "download-the-latest-version-for-windows"
+      },
+      "heading_path": [
+        "Download the latest version for Windows"
+      ],
+      "text_ref": {
+        "mode": "inline",
+        "text": "Download Python install manager Or get the standalone installer for Python 3.15.0",
+        "text_hash": "a5c1c6e6a3219302f02d87bbd2f4394888e07293f566e173f31165cad950b645"
+      },
+      "extraction_notes": [
+        "heading_level:1",
+        "static_html_extractor"
+      ]
+    },
+    {
+      "passage_id": "cli-run-fetch-wg1-5f7d51ab:html:2",
+      "source_revision_id": "rev-src-web-84ed1861359f79ce6123ebc1-a0afa499c0bcfcfa",
+      "locator": {
+        "kind": "section",
+        "section_id": "download-the-latest-version-for-macos"
+      },
+      "heading_path": [
+        "Download the latest version for macOS"
+      ],
+      "text_ref": {
+        "mode": "inline",
+        "text": "Download Python 3.15.0",
+        "text_hash": "7aebfd5b0e54c79ed66fee7772fa5af047b436f85dddf4b5e4073fc6eebee3cf"
+      },
+      "extraction_notes": [
+        "heading_level:1",
+        "static_html_extractor"
+      ]
+    },
+    {
+      "passage_id": "cli-run-fetch-wg1-5f7d51ab:html:3",
+      "source_revision_id": "rev-src-web-84ed1861359f79ce6123ebc1-a0afa499c0bcfcfa",
+      "locator": {
+        "kind": "section",
+        "section_id": "download-the-latest-version-of-python"
+      },
+      "heading_path": [
+        "Download the latest version of Python"
+      ],
+      "text_ref": {
+        "mode": "inline",
+        "text": "Download Python 3.15.0 Looking for Python with a different OS? Python for Windows , Linux/Unix , macOS , Android , iOS , other Want to help test development versions of Python 3.16? Pre-releases , Docker images",
+        "text_hash": "467274dec87f3d19b6c5428188e4abee6f527818fcb6b9334888de1c36829545"
+      },
+      "extraction_notes": [
+        "heading_level:1",
+        "static_html_extractor"
+      ]
+    },
+    {
+      "passage_id": "cli-run-fetch-wg1-5f7d51ab:html:4",
+      "source_revision_id": "rev-src-web-84ed1861359f79ce6123ebc1-a0afa499c0bcfcfa",
+      "locator": {
+        "kind": "section",
+        "section_id": "active-python-releases"
+      },
+      "heading_path": [
+        "Active Python releases"
+      ],
+      "text_ref": {
+        "mode": "inline",
+        "text": "For more information visit the Python Developer's Guide . Python version Maintenance status &nbsp; First released End of support Release schedule 3.16 pre-release Download 2027-10-06 (planned) 2032-10 PEP 826 3.15 bugfix Download 2026-10-09 2031-10 PEP 790 3.14 bugfix Download 2025-10-07 2030-10 PEP 745 3.13 security Download 2024-10-07 2029-10 PEP 719 3.12 security Download 2023-10-02 2028-10 PEP 693 3.11 security Download 2022-10-24 2027-10 PEP 664 3.10 end-of-life, last release was 3.10.22 Download 2021-10-04 2026-10-01 PEP 619",
+        "text_hash": "47d6420173944faa7fa4aa64e1826a7a15c600f5cba866a3f8bad2df5f649e81"
+      },
+      "extraction_notes": [
+        "heading_level:2",
+        "static_html_extractor"
+      ]
+    },
+    {
+      "passage_id": "cli-run-fetch-wg1-5f7d51ab:html:5",
+      "source_revision_id": "rev-src-web-84ed1861359f79ce6123ebc1-a0afa499c0bcfcfa",
+      "locator": {
+        "kind": "section",
+        "section_id": "looking-for-a-specific-release"
+      },
+      "heading_path": [
+        "Looking for a specific release?"
+      ],
+      "text_ref": {
+        "mode": "inline",
+        "text": "Python releases by version number: Release version Release date &nbsp; Click for more Python 3.15.0 Oct. 9, 2026 Download Release notes Python 3.14.8 Sept. 30, 2026 Download Release notes Python 3.14.7 Aug. 5, 2026 Download Release notes Python 3.14.6 June 10, 2026 Download Release notes Python 3.14.5 May 10, 2026 Download Release notes Python 3.14.4 April 7, 2026 Download Release notes Python 3.14.3 Feb. 3, 2026 Download Release notes Python 3.14.2 Dec. 5, 2025 Download Release notes Python 3.14.1 Dec. 2, 2025 Download Release notes Python 3.14.0 Oct. 7, 2025 Download Release notes Python 3.13.16 Sept. 30, 2026 Download Release notes Python 3.13.15 Aug. 5, 2026 Download Release notes Python 3.13.14 June 10, 2026 Download Release notes Python 3.13.13 April 7, 2026 Download Release notes Python 3.13.12 Feb. 3, 2026 Download Release notes Python 3.13.11 Dec. 5, 2025 Download Release notes Python 3.13.10 Dec. 2, 2025 Download Release notes Python 3.13.9 Oct. 14, 2025 Download Release notes Python 3.13.8 Oct. 7, 2025 Download Release notes Python 3.13.7 Aug. 14, 2025 Download Release notes Python 3.13.6 Aug. 6, 2025 Download Release notes Python 3.13.5 June 11, 2025 Download Release notes Python 3.13.4 June 3, 2025 Download Release notes Python 3.13.3 April 8, 2025 Download Release notes Python 3.13.2 Feb. 4, 2025 Download Release notes Python 3.13.1 Dec. 3, 2024 Download Release notes Python 3.13.0 Oct. 7, 2024 Download Release notes Python 3.12.15 Sept. 30, 2026 Download Release notes Python 3.12.14 Aug. 12, 2026 Download Release notes Python 3.12.13 March 3, 2026 Download Release notes Python 3.12.12 Oct. 9, 2025 Download Release notes Python 3.12.11 June 3, 2025 Download Release notes Python 3.12.10 April 8, 2025 Download Release notes Python 3.12.9 Feb. 4, 2025 Download Release notes Python 3.12.8 Dec. 3, 2024 Download Release notes Python 3.12.7 Oct. 1, 2024 Download Release notes Python 3.12.6 Sept. 6, 2024 Download Release notes Python 3.12.5 Aug. 6, 2024 Download Release notes Python 3.12.4 June 6, 2024 Download Release notes Python 3.12.3 April 9, 2024 Download Release notes Python 3.12.2 Feb. 6, 2024 Download Release notes Python 3.12.1 Dec. 8, 2023 Download Release notes Python 3.12.0 Oct. 2, 2023 Download Release notes Python 3.11.17 Oct. 1, 2026 Download Release notes Python 3.11.16 Aug. 12, 2026 Download Release notes Python 3.11.15 March 3, 2026 Download Release notes Python 3.11.14 Oct. 9, 2025 Download Release notes Python 3.11.13 June 3, 2025 Download Release notes Python 3.11.12 April 8, 2025 Download Release notes Python 3.11.11 Dec. 3, 2024 Download Release notes Python 3.11.10 Sept. 7, 2024 Download Release notes Python 3.11.9 April 2, 2024 Download Release notes Python 3.11.8 Feb. 6, 2024 Download Release notes Python 3.11.7 Dec. 4, 2023 Download Release notes Python 3.11.6 Oct. 2, 2023 Download Release notes Python 3.11.5 Aug. 24, 2023 Download Release notes Python 3.11.4 June 6, 2023 Download Release notes Python 3.11.3 April 5, 2023 Download Release notes Python 3.11.2 Feb. 8, 2023 Download Release notes Python 3.11.1 Dec. 6, 2022 Download Release notes Python 3.11.0 Oct. 24, 2022 Download Release notes Python 3.10.22 Oct. 1, 2026 Download Release notes Python 3.10.21 Aug. 12, 2026 Download Release notes Python 3.10.20 March 3, 2026 Download Release notes Python 3.10.19 Oct. 9, 2025 Download Release notes Python 3.10.18 June 3, 2025 Download Release notes Python 3.10.17 April 8, 2025 Download Release notes Python 3.10.16 Dec. 3, 2024 Download Release notes Python 3.10.15 Sept. 7, 2024 Download Release notes Python 3.10.14 March 19, 2024 Download Release notes Python 3.10.13 Aug. 24, 2023 Download Release notes Python 3.10.12 June 6, 2023 Download Release notes Python 3.10.11 April 5, 2023 Download Release notes Python 3.10.10 Feb. 8, 2023 Download Release notes Python 3.10.9 Dec. 6, 2022 Download Release notes Python 3.10.8 Oct. 11, 2022 Download Release notes Python 3.10.7 Sept. 6, 2022 Download Release notes Python 3.10.6 Aug. 2, 2022 Download Release notes Python 3.10.5 June 6, 2022 Download Release notes Python 3.10.4 March 24, 2022 Download Release notes Python 3.10.3 March 16, 2022 Download Release notes Python 3.10.2 Jan. 14, 2022 Download Release notes Python 3.10.1 Dec. 6, 2021 Download Release notes Python 3.10.0 Oct. 4, 2021 Download Release notes Python 3.9.25 Oct. 31, 2025 Download Release notes Python 3.9.24 Oct. 9, 2025 Download Release notes Python 3.9.23 June 3, 2025 Download Release notes Python 3.9.22 April 8, 2025 Download Release notes Python 3.9.21 Dec. 3, 2024 Download Release notes Python 3.9.20 Sept. 6, 2024 Download Release notes Python 3.9.19 March 19, 2024 Download Release notes Python 3.9.18 Aug. 24, 2023 Download Release notes Python 3.9.17 June 6, 2023 Download Release notes Python 3.9.16 Dec. 6, 2022 Download Release notes Python 3.9.15 Oct. 11, 2022 Download Release notes Python 3.9.14 Sept. 6, 2022 Download Release notes Python 3.9.13 May 17, 2022 Download Release notes Python 3.9.12 March 23, 2022 Download Release notes Python 3.9.11 March 16, 2022 Download Release notes Python 3.9.10 Jan. 14, 2022 Download Release notes Python 3.9.9 Nov. 15, 2021 Download Release notes Python 3.9.8 Nov. 5, 2021 Download Release notes Python 3.9.7 Aug. 30, 2021 Download Release notes Python 3.9.6 June 28, 2021 Download Release notes Python 3.9.5 May 3, 2021 Download Release notes Python 3.9.4 April 4, 2021 Download Release notes Python 3.9.2 Feb. 19, 2021 Download Release notes Python 3.9.1 Dec. 7, 2020 Download Release notes Python 3.9.0 Oct. 5, 2020 Download Release notes Python 3.8.20 Sept. 6, 2024 Download Release notes Python 3.8.19 March 19, 2024 Download Release notes Python 3.8.18 Aug. 24, 2023 Download Release notes Python 3.8.17 June 6, 2023 Download Release notes Python 3.8.16 Dec. 6, 2022 Download Release notes Python 3.8.15 Oct. 11, 2022 Download Release notes Python 3.8.14 Sept. 6, 2022 Download Release notes Python 3.8.13 March 16, 2022 Download Release notes Python 3.8.12 Aug. 30, 2021 Download Release notes Python 3.8.11 June 28, 2021 Download Release notes Python 3.8.10 May 3, 2021 Download Release notes Python 3.8.9 April 2, 2021 Download Release notes Python 3.8.8 Feb. 19, 2021 Download Release notes Python 3.8.7 Dec. 21, 2020 Download Release notes Python 3.8.6 Sept. 24, 2020 Download Release notes Python 3.8.5 July 20, 2020 Download Release notes Python 3.8.4 July 13, 2020 Download Release notes Python 3.8.3 May 13, 2020 Download Release notes Python 3.8.2 Feb. 24, 2020 Download Release notes Python 3.8.1 Dec. 18, 2019 Download Release notes Python 3.8.0 Oct. 14, 2019 Download Release notes Python 3.7.17 June 6, 2023 Download Release notes Python 3.7.16 Dec. 6, 2022 Download Release notes Python 3.7.15 Oct. 11, 2022 Download Release notes Python 3.7.14 Sept. 6, 2022 Download Release notes Python 3.7.13 March 16, 2022 Download Release notes Python 3.7.12 Sept. 4, 2021 Download Release notes Python 3.7.11 June 28, 2021 Download Release notes Python 3.7.10 Feb. 15, 2021 Download Release notes Python 3.7.9 Aug. 17, 2020 Download Release notes Python 3.7.8 June 27, 2020 Download Release notes Python 3.7.7 March 10, 2020 Download Release notes Python 3.7.6 Dec. 18, 2019 Download Release notes Python 3.7.5 Oct. 15, 2019 Download Release notes Python 3.7.4 July 8, 2019 Download Release notes Python 3.7.3 March 25, 2019 Download Release notes Python 3.7.2 Dec. 24, 2018 Download Release notes Python 3.7.1 Oct. 20, 2018 Download Release notes Python 3.7.0 June 27, 2018 Download Release notes Python 3.6.15 Sept. 4, 2021 Download Release notes Python 3.6.14 June 28, 2021 Download Release notes Python 3.6.13 Feb. 15, 2021 Download Release notes Python 3.6.12 Aug. 17, 2020 Download Release notes Python 3.6.11 June 27, 2020 Download Release notes Python 3.6.10 Dec. 18, 2019 Download Release notes Python 3.6.9 July 2, 2019 Download Release notes Python 3.6.8 Dec. 24, 2018 Download Release notes Python 3.6.7 Oct. 20, 2018 Download Release notes Python 3.6.6 June 27, 2018 Download Release notes Python 3.6.5 March 28, 2018 Download Release notes Python 3.6.4 Dec. 19, 2017 Download Release notes Python 3.6.3 Oct. 3, 2017 Download Release notes Python 3.6.2 July 17, 2017 Download Release notes Python 3.6.1 March 21, 2017 Download Release notes Python 3.6.0 Dec. 23, 2016 Download Release notes Python 3.5.10 Sept. 5, 2020 Download Release notes Python 3.5.9 Nov. 2, 2019 Download Release notes Python 3.5.8 Oct. 29, 2019 Download Release notes Python 3.5.7 March 18, 2019 Download Release notes Python 3.5.6 Aug. 2, 2018 Download Release notes Python 3.5.5 Feb. 5, 2018 Download Release notes Python 3.5.4 Aug. 8, 2017 Download Release notes Python 3.5.3 Jan. 17, 2017 Download Release notes Python 3.5.2 June 27, 2016 Download Release notes Python 3.5.1 Dec. 7, 2015 Download Release notes Python 3.5.0 Sept. 13, 2015 Download Release notes Python 3.4.10 March 18, 2019 Download Release notes Python 3.4.9 Aug. 2, 2018 Download Release notes Python 3.4.8 Feb. 5, 2018 Download Release notes Python 3.4.7 Aug. 9, 2017 Download Release notes Python 3.4.6 Jan. 17, 2017 Download Release notes Python 3.4.5 June 27, 2016 Download Release notes Python 3.4.4 Dec. 21, 2015 Download Release notes Python 3.4.3 Feb. 25, 2015 Download Release notes Python 3.4.2 Oct. 13, 2014 Download Release notes Python 3.4.1 May 19, 2014 Download Release notes Python 3.4.0 March 17, 2014 Download Release notes Python 3.3.7 Sept. 19, 2017 Download Release notes Python 3.3.6 Oct. 12, 2014 Download Release notes Python 3.3.5 March 9, 2014 Download Release notes Python 3.3.4 Feb. 9, 2014 Download Release notes Python 3.3.3 Nov. 17, 2013 Download Release notes Python 3.3.2 May 15, 2013 Download Release notes Python 3.3.1 April 6, 2013 Download Release notes Python 3.3.0 Sept. 29, 2012 Download Release notes Python 3.2.6 Oct. 12, 2014 Download Release notes Python 3.2.5 May 15, 2013 Download Release notes Python 3.2.4 April 6, 2013 Download Release notes Python 3.2.3 April 10, 2012 Download Release notes Python 3.2.2 Sept. 3, 2011 Download Release notes Python 3.2.1 July 9, 2011 Download Release notes Python 3.2.0 Feb. 20, 2011 Download Release notes Python 3.1.5 April 9, 2012 Download Release notes Python 3.1.4 June 11, 2011 Download Release notes Python 3.1.3 Nov. 27, 2010 Download Release notes Python 3.1.2 March 20, 2010 Download Release notes Python 3.1.1 Aug. 17, 2009 Download Release notes Python 3.1.0 June 26, 2009 Download Release notes Python 3.0.1 Feb. 13, 2009 Download Release notes Python 3.0.0 Dec. 3, 2008 Download Release notes Python 2.7.18 April 20, 2020 Download Release notes Python 2.7.17 Oct. 19, 2019 Download Release notes Python 2.7.16 March 4, 2019 Download Release notes Python 2.7.15 May 1, 2018 Download Release notes Python 2.7.14 Sept. 16, 2017 Download Release notes Python 2.7.13 Dec. 17, 2016 Download Release notes Python 2.7.12 June 25, 2016 Download Release notes Python 2.7.11 Dec. 5, 2015 Download Release notes Python 2.7.10 May 23, 2015 Download Release notes Python 2.7.9 Dec. 10, 2014 Download Release notes Python 2.7.8 July 2, 2014 Download Release notes Python 2.7.7 June 1, 2014 Download Release notes Python 2.7.6 Nov. 10, 2013 Download Release notes Python 2.7.5 May 12, 2013 Download Release notes Python 2.7.4 April 6, 2013 Download Release notes Python 2.7.3 April 9, 2012 Download Release notes Python 2.7.2 June 11, 2011 Download Release notes Python 2.7.1 Nov. 27, 2010 Download Release notes Python 2.7.0 July 3, 2010 Download Release notes Python 2.6.9 Oct. 29, 2013 Download Release notes Python 2.6.8 April 10, 2012 Download Release notes Python 2.6.7 June 3, 2011 Download Release notes Python 2.6.6 Aug. 24, 2010 Download Release notes Python 2.6.5 March 18, 2010 Download Release notes Python 2.6.4 Oct. 26, 2009 Download Release notes Python 2.6.3 Oct. 2, 2009 Download Release notes Python 2.6.2 April 14, 2009 Download Release notes Python 2.6.1 Dec. 4, 2008 Download Release notes Python 2.6.0 Oct. 2, 2008 Download Release notes Python 2.5.6 May 26, 2011 Download Release notes Python 2.5.5 Jan. 31, 2010 Download Release notes Python 2.5.4 Dec. 23, 2008 Download Release notes Python 2.5.3 Dec. 19, 2008 Download Release notes Python 2.5.2 Feb. 21, 2008 Download Release notes Python 2.5.1 April 19, 2007 Download Release notes Python 2.5.0 Sept. 19, 2006 Download Release notes Python 2.4.6 Dec. 19, 2008 Download Release notes Python 2.4.5 March 11, 2008 Download Release notes Python 2.4.4 Oct. 18, 2006 Download Release notes Python 2.4.3 April 15, 2006 Download Release notes Python 2.4.2 Sept. 27, 2005 Download Release notes Python 2.4.1 March 30, 2005 Download Release notes Python 2.4.0 Nov. 30, 2004 Download Release notes Python 2.3.7 March 11, 2008 Download Release notes Python 2.3.6 Nov. 1, 2006 Download Release notes Python 2.3.5 Feb. 8, 2005 Download Release notes Python 2.3.4 May 27, 2004 Download Release notes Python 2.3.3 Dec. 19, 2003 Download Release notes Python 2.3.2 Oct. 3, 2003 Download Release notes Python 2.3.1 Sept. 23, 2003 Download Release notes Python 2.3.0 July 29, 2003 Download Release notes Python 2.2.3 May 30, 2003 Download Release notes Python 2.2.2 Oct. 14, 2002 Download Release notes Python 2.2.1 April 10, 2002 Download Release notes Python 2.2.0 Dec. 21, 2001 Download Release notes Python 2.1.3 April 9, 2002 Download Release notes Python 2.0.1 June 22, 2001 Download Release notes View older releases Older releases: Source releases, binaries-1.1 , binaries-1.2 , binaries-1.3 , binaries-1.4 , binaries-1.5 -->",
+        "text_hash": "7ce3c8dd424b89f401f855adbf71d1e749a1053995aa724617e55f1bc04a92a4"
+      },
+      "extraction_notes": [
+        "heading_level:2",
+        "static_html_extractor"
+      ]
+    }
+  ],
+  "findings": [
+    {
+      "finding_id": "finding-144fd0c6397ba0f6f6e3d41d",
+      "question_id": "q-plan-3f83793b-d454-422e-95df-ab774fb86c6c-1",
+      "assertion_text": "The official Python downloads page does not list any stable release newer than 3.15.0; the only newer version shown, 3.16, is marked as a pre-release.",
+      "assertion_kind": "inference",
+      "passage_ids": [
+        "cli-run-fetch-wg1-5f7d51ab:html:3",
+        "cli-run-fetch-wg1-5f7d51ab:html:4",
+        "cli-run-fetch-wg1-5f7d51ab:html:5"
+      ],
+      "source_integrity": "not_checked",
+      "created_at": "2026-10-21T09:04:28.734Z",
+      "semantic_support": {
+        "status": "supported",
+        "reviewer": "research-v2-semantic-review",
+        "reviewer_version": "0.1.0-offline",
+        "rationale": "The downloads page cites Python 3.15.0 as the current download and refers to Python 3.16 only as pre-release/development versions; no stable release newer than 3.15.0 is listed.",
+        "reviewed_at": "2026-10-21T09:04:39.515Z"
+      },
+      "revised_at": "2026-10-21T09:04:39.515Z"
+    },
+    {
+      "finding_id": "finding-34d2946eb18ddc2b0642e824",
+      "question_id": "q-plan-3f83793b-d454-422e-95df-ab774fb86c6c-1",
+      "assertion_text": "Python 3.16 is identified as a pre-release/development version, with a planned first release date of 2027-10-06, so it is not a stable release as of 2026-10-21.",
+      "assertion_kind": "inference",
+      "passage_ids": [
+        "cli-run-fetch-wg1-5f7d51ab:html:3",
+        "cli-run-fetch-wg1-5f7d51ab:html:4"
+      ],
+      "source_integrity": "not_checked",
+      "created_at": "2026-10-21T09:04:28.734Z",
+      "semantic_support": {
+        "status": "supported",
+        "reviewer": "research-v2-semantic-review",
+        "reviewer_version": "0.1.0-offline",
+        "rationale": "The passages identify 3.16 as 'pre-release' with planned first release 2027-10-06 and do not show a stable 3.16 release, supporting that it is not stable as of 2026-10-21.",
+        "reviewed_at": "2026-10-21T09:04:39.515Z"
+      },
+      "revised_at": "2026-10-21T09:04:39.515Z"
+    },
+    {
+      "finding_id": "finding-4990be1175df71080b24d295",
+      "question_id": "q-plan-3f83793b-d454-422e-95df-ab774fb86c6c-1",
+      "assertion_text": "The official Python releases table reports Python 3.15.0 with release date Oct. 9, 2026.",
+      "assertion_kind": "vendor_reported_result",
+      "passage_ids": [
+        "cli-run-fetch-wg1-5f7d51ab:html:5"
+      ],
+      "source_integrity": "not_checked",
+      "created_at": "2026-10-21T09:04:28.734Z",
+      "semantic_support": {
+        "status": "supported",
+        "reviewer": "research-v2-semantic-review",
+        "reviewer_version": "0.1.0-offline",
+        "rationale": "The releases table lists 'Python 3.15.0 Oct. 9, 2026 Download Release notes', directly matching the assertion.",
+        "reviewed_at": "2026-10-21T09:04:39.515Z"
+      },
+      "revised_at": "2026-10-21T09:04:39.515Z"
+    },
+    {
+      "finding_id": "finding-55920fb269172ac1948b0dce",
+      "question_id": "q-plan-3f83793b-d454-422e-95df-ab774fb86c6c-1",
+      "assertion_text": "The official Python downloads page prominently presents Python 3.15.0 as the current download for Python.",
+      "assertion_kind": "source_observation",
+      "passage_ids": [
+        "cli-run-fetch-wg1-5f7d51ab:html:0",
+        "cli-run-fetch-wg1-5f7d51ab:html:1",
+        "cli-run-fetch-wg1-5f7d51ab:html:2",
+        "cli-run-fetch-wg1-5f7d51ab:html:3"
+      ],
+      "source_integrity": "not_checked",
+      "created_at": "2026-10-21T09:04:28.734Z",
+      "semantic_support": {
+        "status": "supported",
+        "reviewer": "research-v2-semantic-review",
+        "reviewer_version": "0.1.0-offline",
+        "rationale": "The cited page text repeatedly shows 'Download Python 3.15.0' and the standalone installer for Python 3.15.0, confirming that 3.15.0 is presented as the current download.",
+        "reviewed_at": "2026-10-21T09:04:39.515Z"
+      },
+      "revised_at": "2026-10-21T09:04:39.515Z"
+    },
+    {
+      "finding_id": "finding-9dc6ef503a420cd02740112b",
+      "question_id": "q-plan-3f83793b-d454-422e-95df-ab774fb86c6c-1",
+      "assertion_text": "The official Python status table lists Python 3.15 as a bugfix release with first release date 2026-10-09.",
+      "assertion_kind": "source_observation",
+      "passage_ids": [
+        "cli-run-fetch-wg1-5f7d51ab:html:4"
+      ],
+      "source_integrity": "not_checked",
+      "created_at": "2026-10-21T09:04:28.734Z",
+      "semantic_support": {
+        "status": "supported",
+        "reviewer": "research-v2-semantic-review",
+        "reviewer_version": "0.1.0-offline",
+        "rationale": "The status table shows '3.15 bugfix Download 2026-10-09 2031-10 PEP 790', confirming bugfix status and first release date.",
+        "reviewed_at": "2026-10-21T09:04:39.515Z"
+      },
+      "revised_at": "2026-10-21T09:04:39.515Z"
+    },
+    {
+      "finding_id": "finding-d7e08cedb95c3bd486374394",
+      "question_id": "q-plan-3f83793b-d454-422e-95df-ab774fb86c6c-1",
+      "assertion_text": "As of 2026-10-21, the latest stable Python release is 3.15.0, released on Oct. 9, 2026.",
+      "assertion_kind": "inference",
+      "passage_ids": [
+        "cli-run-fetch-wg1-5f7d51ab:html:4",
+        "cli-run-fetch-wg1-5f7d51ab:html:5"
+      ],
+      "source_integrity": "not_checked",
+      "created_at": "2026-10-21T09:04:28.734Z",
+      "semantic_support": {
+        "status": "supported",
+        "reviewer": "research-v2-semantic-review",
+        "reviewer_version": "0.1.0-offline",
+        "rationale": "The status table lists 3.16 as pre-release with planned first release 2027-10-06 and 3.15 as bugfix, while the releases table shows 3.15.0 (Oct. 9, 2026) as the latest listed release; no newer stable release appears.",
+        "reviewed_at": "2026-10-21T09:04:39.515Z"
+      },
+      "revised_at": "2026-10-21T09:04:39.515Z"
+    }
+  ],
+  "terminal_report": {
+    "mission_id": "mission-g-l1-general-live-attempt4",
+    "plan_revision_id": "plan-3f83793b-d454-422e-95df-ab774fb86c6c",
+    "terminal_state": "partial",
+    "answer_summary": "[supported:finding-55920fb269172ac1948b0dce] The official Python downloads page prominently presents Python 3.15.0 as the current download for Python. (passages: cli-run-fetch-wg1-5f7d51ab:html:0,cli-run-fetch-wg1-5f7d51ab:html:1,cli-run-fetch-wg1-5f7d51ab:html:2,cli-run-fetch-wg1-5f7d51ab:html:3) [supported:finding-4990be1175df71080b24d295] The official Python releases table reports Python 3.15.0 with release date Oct. 9, 2026. (passages: cli-run-fetch-wg1-5f7d51ab:html:5) [supported:finding-9dc6ef503a420cd02740112b] The official Python status table lists Python 3.15 as a bugfix release with first release date 2026-10-09. (passages: cli-run-fetch-wg1-5f7d51ab:html:4) [supported:finding-34d2946eb18ddc2b0642e824] Python 3.16 is identified as a pre-release/development version, with a planned first release date of 2027-10-06, so it is not a stable release as of 2026-10-21. (passages: cli-run-fetch-wg1-5f7d51ab:html:3,cli-run-fetch-wg1-5f7d51ab:html:4) [supported:finding-d7e08cedb95c3bd486374394] As of 2026-10-21, the latest stable Python release is 3.15.0, released on Oct. 9, 2026. (passages: cli-run-fetch-wg1-5f7d51ab:html:4,cli-run-fetch-wg1-5f7d51ab:html:5) [supported:finding-144fd0c6397ba0f6f6e3d41d] The official Python downloads page does not list any stable release newer than 3.15.0; the only newer version shown, 3.16, is marked as a pre-release. (passages: cli-run-fetch-wg1-5f7d51ab:html:3,cli-run-fetch-wg1-5f7d51ab:html:4,cli-run-fetch-wg1-5f7d51ab:html:5)",
+    "unanswered_questions": [
+      "q-plan-3f83793b-d454-422e-95df-ab774fb86c6c-1",
+      "q-plan-3f83793b-d454-422e-95df-ab774fb86c6c-2",
+      "q-plan-3f83793b-d454-422e-95df-ab774fb86c6c-3",
+      "q-plan-3f83793b-d454-422e-95df-ab774fb86c6c-4",
+      "q-plan-3f83793b-d454-422e-95df-ab774fb86c6c-5"
+    ],
+    "coverage_notes": "answer_summary lists only semantically supported findings with explicit finding_id bindings; free-form model synthesis is not treated as verified fact.",
+    "limitations": [
+      "unverified_model_synthesis_excluded: As of the run's UTC date (2026-10-21), the latest stable Python release is 3.15.0, released on Oct. 9, 2026, according to the official Python downloads page and releases/status tables. Python 3.16 is listed as a pre-release/development vers",
+      "offline_or_governed_sources_only"
+    ],
+    "source_cutoff": "All findings were mutually consistent and directly answered the primary question, so the report was finalized.",
+    "acceptance_state": "host_admitted_model_synthesis",
+    "stopping_reason": "All findings were mutually consistent and directly answered the primary question, so the report was finalized.",
+    "finding_ids": [
+      "finding-55920fb269172ac1948b0dce",
+      "finding-4990be1175df71080b24d295",
+      "finding-9dc6ef503a420cd02740112b",
+      "finding-34d2946eb18ddc2b0642e824",
+      "finding-d7e08cedb95c3bd486374394",
+      "finding-144fd0c6397ba0f6f6e3d41d"
+    ],
+    "citation_passage_ids": [
+      "cli-run-fetch-wg1-5f7d51ab:html:0",
+      "cli-run-fetch-wg1-5f7d51ab:html:1",
+      "cli-run-fetch-wg1-5f7d51ab:html:2",
+      "cli-run-fetch-wg1-5f7d51ab:html:3",
+      "cli-run-fetch-wg1-5f7d51ab:html:5",
+      "cli-run-fetch-wg1-5f7d51ab:html:4"
+    ],
+    "generated_at": "2026-10-21T09:04:40.417Z"
+  }
+}
