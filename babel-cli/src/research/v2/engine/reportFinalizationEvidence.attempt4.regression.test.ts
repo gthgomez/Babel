@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, it } from 'node:test'
+import type { FindingRecord } from '../contracts/findings.js'
 import { FindingRecordSchema } from '../contracts/findings.js'
 import { ResearchMissionV2Schema } from '../contracts/mission.js'
 import { PlanRevisionSchema } from '../contracts/plan.js'
@@ -13,7 +14,9 @@ import {
   buildHostStoppingReason,
   buildSourceFreshnessLimitations,
   buildTruncatedSourceDisclosureLimitations,
-  deriveEvidenceBackedUnansweredQuestionIds,
+  derivePreservedUnresolvedPlanQuestionIds,
+  isExtractDefaultFirstQuestionLump,
+  planQuestionIdsWithExplicitSupportedCoverage,
 } from './reportFinalizationEvidence.js'
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '../../../../..')
@@ -67,6 +70,8 @@ const attempt4Plan = PlanRevisionSchema.parse({
   revision_reason: 'e2e_model_planning',
 })
 
+const ALL_FIVE_QUESTION_IDS = attempt4Plan.questions.map((q) => q.question_id)
+
 function loadAttempt4Subset() {
   const subset = JSON.parse(readFileSync(subsetPath, 'utf8'))
   const source = SourceRecordSchema.parse(subset.source)
@@ -93,15 +98,24 @@ describe('G-L1 attempt4 report finalization evidence (host-owned, not model self
     )
   })
 
-  it('derives unanswered plan questions from supported findings only (q1 answered; q2–q5 open)', () => {
+  it('attempt4 findings are extract-default lump on plan.questions[0] only', () => {
     const { findings } = loadAttempt4Subset()
-    const unanswered = deriveEvidenceBackedUnansweredQuestionIds(attempt4Plan, findings)
-    assert.deepEqual(unanswered, [
-      'q-plan-3f83793b-d454-422e-95df-ab774fb86c6c-2',
-      'q-plan-3f83793b-d454-422e-95df-ab774fb86c6c-3',
-      'q-plan-3f83793b-d454-422e-95df-ab774fb86c6c-4',
-      'q-plan-3f83793b-d454-422e-95df-ab774fb86c6c-5',
-    ])
+    const firstQuestionId = attempt4Plan.questions[0]?.question_id
+    assert.ok(firstQuestionId)
+    assert.ok(findings.every((f: FindingRecord) => f.question_id === firstQuestionId))
+    assert.ok(isExtractDefaultFirstQuestionLump(attempt4Plan, findings))
+    const explicitCoverage = planQuestionIdsWithExplicitSupportedCoverage(attempt4Plan, findings)
+    assert.deepEqual(explicitCoverage, [firstQuestionId])
+    const preservedUnresolved = derivePreservedUnresolvedPlanQuestionIds(attempt4Plan, findings)
+    assert.deepEqual(preservedUnresolved, ALL_FIVE_QUESTION_IDS)
+  })
+
+  it('does not treat attempt4 as complete: preserves all five unresolved plan questions', () => {
+    const { findings, subset } = loadAttempt4Subset()
+    const preservedUnresolved = derivePreservedUnresolvedPlanQuestionIds(attempt4Plan, findings)
+    assert.deepEqual(preservedUnresolved, ALL_FIVE_QUESTION_IDS)
+    assert.equal(subset.terminal_report.terminal_state, 'partial')
+    assert.deepEqual(subset.terminal_report.unanswered_questions, ALL_FIVE_QUESTION_IDS)
   })
 
   it('surfaces truncated-source disclosure and truthful source freshness metadata', () => {
@@ -122,15 +136,20 @@ describe('G-L1 attempt4 report finalization evidence (host-owned, not model self
 
   it('uses host retrieval cutoff and stopping reason instead of model synthesis prose', () => {
     const { revision, findings } = loadAttempt4Subset()
-    const unanswered = deriveEvidenceBackedUnansweredQuestionIds(attempt4Plan, findings)
+    const preservedUnresolved = derivePreservedUnresolvedPlanQuestionIds(attempt4Plan, findings)
+    assert.equal(preservedUnresolved.length, 5)
     const cutoff = buildHostSourceCutoff([revision])
     assert.ok(!cutoff.includes('mutually consistent'))
     assert.match(cutoff, /admitted_sources_truncated/)
-    const stopping = buildHostStoppingReason({ unansweredQuestionIds: unanswered, revisions: [revision] })
+    const stopping = buildHostStoppingReason({
+      unansweredQuestionIds: preservedUnresolved,
+      revisions: [revision],
+    })
     assert.equal(stopping, 'host_finalized_with_truncated_admitted_sources')
+    assert.notEqual(stopping, 'host_finalized_all_plan_questions_evidence_backed')
   })
 
-  it('documents current synthesized report gap: plan-status unanswered list still lists all five questions', () => {
+  it('documents current synthesized report gap: no truncation disclosure and model prose in source_cutoff', () => {
     const { findings, subset } = loadAttempt4Subset()
     const mission = ResearchMissionV2Schema.parse({
       ...JSON.parse(readFileSync(gL1MissionPath, 'utf8')),
@@ -156,10 +175,10 @@ describe('G-L1 attempt4 report finalization evidence (host-owned, not model self
       generatedAt: subset.terminal_report.generated_at,
     })
     assert.equal(report.terminal_state, 'partial')
-    assert.equal(report.unanswered_questions.length, 5)
+    assert.deepEqual(report.unanswered_questions, ALL_FIVE_QUESTION_IDS)
     assert.ok(!report.limitations.some((l) => l.startsWith('source_truncated:')))
     assert.match(report.source_cutoff ?? '', /mutually consistent/)
-    const evidenceUnanswered = deriveEvidenceBackedUnansweredQuestionIds(attempt4Plan, findings)
-    assert.notDeepEqual(report.unanswered_questions, evidenceUnanswered)
+    const preservedUnresolved = derivePreservedUnresolvedPlanQuestionIds(attempt4Plan, findings)
+    assert.deepEqual(preservedUnresolved, report.unanswered_questions)
   })
 })

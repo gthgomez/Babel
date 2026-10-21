@@ -6,15 +6,57 @@ function isSemanticallySupported(finding: FindingRecord): boolean {
   return finding.semantic_support?.status === 'supported'
 }
 
-/** Plan questions with no semantically supported finding bindings (host evidence, not plan status). */
-export function deriveEvidenceBackedUnansweredQuestionIds(
+/**
+ * Plan questions with at least one semantically supported finding bound to that exact question_id.
+ * Does not infer coverage for sibling plan questions from findings lumped on plan.questions[0].
+ */
+export function planQuestionIdsWithExplicitSupportedCoverage(
   plan: PlanRevision,
   findings: readonly FindingRecord[],
 ): string[] {
-  const answered = new Set(
-    findings.filter(isSemanticallySupported).map((f) => f.question_id),
-  )
-  return plan.questions.map((q) => q.question_id).filter((id) => !answered.has(id))
+  const planIds = new Set(plan.questions.map((q) => q.question_id))
+  const covered = new Set<string>()
+  for (const finding of findings) {
+    if (!isSemanticallySupported(finding)) continue
+    if (planIds.has(finding.question_id)) {
+      covered.add(finding.question_id)
+    }
+  }
+  return plan.questions.map((q) => q.question_id).filter((id) => covered.has(id))
+}
+
+/**
+ * True when every supported finding is bound only to plan.questions[0] (findingsFromExtractModelOutput default).
+ */
+export function isExtractDefaultFirstQuestionLump(
+  plan: PlanRevision,
+  findings: readonly FindingRecord[],
+): boolean {
+  const firstQuestionId = plan.questions[0]?.question_id
+  if (!firstQuestionId) {
+    return false
+  }
+  const supported = findings.filter(isSemanticallySupported)
+  if (supported.length === 0) {
+    return false
+  }
+  return supported.every((f) => f.question_id === firstQuestionId)
+}
+
+/**
+ * Plan questions that must remain unresolved for reporting: never auto-close all plan items from
+ * a lump of supported findings on plan.questions[0] only.
+ */
+export function derivePreservedUnresolvedPlanQuestionIds(
+  plan: PlanRevision,
+  findings: readonly FindingRecord[],
+): string[] {
+  const allQuestionIds = plan.questions.map((q) => q.question_id)
+  if (isExtractDefaultFirstQuestionLump(plan, findings)) {
+    return allQuestionIds
+  }
+  const explicitlyCovered = new Set(planQuestionIdsWithExplicitSupportedCoverage(plan, findings))
+  return allQuestionIds.filter((id) => !explicitlyCovered.has(id))
 }
 
 export function buildTruncatedSourceDisclosureLimitations(
