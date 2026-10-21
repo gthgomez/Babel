@@ -17,7 +17,7 @@ const tL1Mission = ResearchMissionV2Schema.parse(
 )
 
 describe('T-L1 missionRequirementsPayload slots', () => {
-  it('derives repository-pin slots from the canonical mission source directory', () => {
+  it('derives repository-pin slot IDs from mission metadata for planner input', () => {
     const slots = missionCoverageSourceSlots(tL1Mission)
     assert.deepEqual(slots, ['repository-pin-0', 'repository-pin-1'])
     const payload = missionRequirementsPayload(tL1Mission)

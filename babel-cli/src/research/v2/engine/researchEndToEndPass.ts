@@ -30,6 +30,7 @@ import type { ResearchModelInvocationResult } from '../ports/researchModelPort.j
 import {
   assertModelInvocationReceiptBound,
   ModelReceiptBindingError,
+  usageSettlementWhenAbortedAfterInvoke,
 } from './validateModelInvocationReceipt.js'
 import {
   extractionLineageReportLimitations,
@@ -136,12 +137,11 @@ async function invokeModelPhase(
     const cancelled: ResearchModelInvocationResult = {
       status: 'cancelled',
       operationId: params.operationId,
-      usageSettlement:
-        result.status === 'ok'
-          ? result.receipt.usage_settlement
-          : result.status === 'failed' || result.status === 'cancelled' || result.status === 'uncertain'
-            ? result.usageSettlement
-            : unknownUsageSettlement(params.attemptId),
+      usageSettlement: usageSettlementWhenAbortedAfterInvoke(
+        params.operationId,
+        params.attemptId,
+        result,
+      ),
     }
     await settleModelOperation(
       store,

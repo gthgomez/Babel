@@ -85,7 +85,7 @@ export async function finalizeFailedOwnerResearchPass(params: {
       message: params.message,
       stoppingReason,
       searchProviderLimitations,
-      accountingNotes: deriveExternalOperationAccountingNotes(events),
+      accountingNotes: deriveExternalOperationAccountingNotes(events, params.mission.mission_id),
     }),
   )
   return true
