@@ -23,16 +23,20 @@ The probe uses **non-`*.test.ts` naming** so unit-shard / TAP inventory does not
 
 ## Acceptance (checkpoint.2+, after coordinator agreement)
 
+**Behavioral acceptance is not implemented** in default CI or unit-shard inventory. There is no inventoried `acceptance.checkpoint.test.ts` (prior placeholder skip / fake-green no-op paths are removed).
+
+**Manual readiness probe only** (nonacceptance; fails closed when env is set):
+
 ```bash
 export RESEARCH_V2_A_ROOT=/path/to/repaired/a/v2
-export RESEARCH_V2_ACCEPTANCE_CONTRACT_VERSION=2026.10.20-checkpoint.2
+export RESEARCH_V2_ACCEPTANCE_CONTRACT_VERSION=2026.10.20-checkpoint.3.1.1
 export RESEARCH_V2_RUN_ACCEPTANCE=1
 cd babel-cli && npm ci
 node --import tsx --import ./src/testinfra/register-no-ambient-inference.mjs \
-  --test src/research/v2/profiles/general/contract-regression/acceptance.checkpoint.test.ts
+  --test src/research/v2/profiles/general/contract-regression/acceptance.checkpoint.readiness.nonacceptance.probe.ts
 ```
 
-`acceptance.checkpoint.test.ts` remains in unit-shard inventory: **default CI passes** without skip markers (acceptance not claimed). Extended placeholder wiring: `acceptance.checkpoint.placeholder.nonacceptance.probe.ts` (opt-in, not inventoried).
+Expect **one failing test** with `UNIMPLEMENTED` until coordinator-authored acceptance lands. **Lifecycle reciprocal probes** (7) against published A remain separate evidence — not replaced by this probe.
 
 ## B-owned fixture tests (always)
 

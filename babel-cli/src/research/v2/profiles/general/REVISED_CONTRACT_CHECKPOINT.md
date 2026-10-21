@@ -86,9 +86,9 @@ Before contract freeze.2, B will review:
 
 ## Verification (author claims not sufficient)
 
-**Pre-fix characterization (not acceptance):** opt-in only; evidence frozen in `contract-regression/CHARACTERIZATION_EVIDENCE_59cd561b.md`. Default repo tests **skip** intentional A checkpoint.1 failures.
+**Pre-fix characterization (not acceptance):** opt-in only via `aCheckpoint59cd561b.characterization.nonacceptance.probe.ts` (excluded from unit-shard `*.test.ts` inventory); evidence frozen in `contract-regression/CHARACTERIZATION_EVIDENCE_59cd561b.md`.
 
-**Post-repair acceptance:** after coordinator agrees a checkpoint version, set `RESEARCH_V2_RUN_ACCEPTANCE=1` and run `acceptance.checkpoint.test.ts` against repaired `RESEARCH_V2_A_ROOT` (default CI passes without claiming acceptance). Placeholder probe: `acceptance.checkpoint.placeholder.nonacceptance.probe.ts`.
+**Post-repair acceptance:** **unimplemented** in B unit inventory. Manual nonacceptance readiness: `acceptance.checkpoint.readiness.nonacceptance.probe.ts` (opt-in, fails closed). Lifecycle reciprocal probes (7) against published A remain separate until acceptance is authored.
 
 Prescribed push guards (no waiver assumed): `agent-preflight`, `check-public-content-policy`, `run-public-secret-scan -Strict -RequireExternalScanner`. Maintainer pre-merge additionally requires `validate-public-release.ps1 -Strict -RequireSupplementalPolicy` with real `BABEL_PRIVATE_SCRUB_POLICY_PATH` or approved `-SupplementalPolicyPath` (absence blocks maintainer pre-merge only, not ordinary push scrub).
 
