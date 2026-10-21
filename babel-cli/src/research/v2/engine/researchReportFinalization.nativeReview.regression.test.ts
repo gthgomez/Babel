@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import type { FindingRecord } from '../contracts/findings.js'
 import type { PassageRecord } from '../contracts/passages.js'
+import type { PlanRevision } from '../contracts/plan.js'
 import { PlanRevisionSchema } from '../contracts/plan.js'
 import type { SourceRevision } from '../contracts/sources.js'
 import { buildSynthesizedResearchReport } from './buildSynthesizedResearchReport.js'
@@ -11,19 +12,25 @@ import {
 } from './researchReportFinalization.js'
 import { exampleTechnicalMissionFixture } from '../fixtures/exampleMission.js'
 
-const plan = PlanRevisionSchema.parse({
-  plan_revision_id: 'plan-native-review',
-  mission_id: exampleTechnicalMissionFixture.mission_id,
-  created_at: '2026-10-21T09:00:00.000Z',
-  revision_reason: 'fixture',
-  questions: Array.from({ length: 5 }, (_, index) => ({
-    question_id: `q-${index + 1}`,
-    text: `Question ${index + 1}`,
-    importance: 'high',
-    evidence_requirement: 'Official pages',
-    status: 'open',
-  })),
-})
+const SINGLE_QUESTION_ID = 'q-only'
+
+function singleQuestionPlan(planRevisionId = 'plan-single-q'): PlanRevision {
+  return PlanRevisionSchema.parse({
+    plan_revision_id: planRevisionId,
+    mission_id: exampleTechnicalMissionFixture.mission_id,
+    created_at: '2026-10-21T09:00:00.000Z',
+    revision_reason: 'fixture',
+    questions: [
+      {
+        question_id: SINGLE_QUESTION_ID,
+        text: 'Single plan question',
+        importance: 'high',
+        evidence_requirement: 'Official pages',
+        status: 'open',
+      },
+    ],
+  })
+}
 
 const baseRevision: SourceRevision = {
   revision_id: 'rev-base',
@@ -52,13 +59,12 @@ const supportedReview = {
 
 function supportedFinding(
   id: string,
-  questionId: string,
   integrity: FindingRecord['source_integrity'],
   passageIds: string[] = ['p-1'],
 ): FindingRecord {
   return {
     finding_id: id,
-    question_id: questionId,
+    question_id: SINGLE_QUESTION_ID,
     assertion_text: `Assertion ${id}`,
     assertion_kind: 'source_observation',
     passage_ids: passageIds,
@@ -68,12 +74,14 @@ function supportedFinding(
   }
 }
 
-function buildReport(params: {
+function buildSingleQuestionReport(params: {
+  plan?: PlanRevision
   findings: FindingRecord[]
   passages?: PassageRecord[]
   sourceRevisions?: SourceRevision[]
   additionalLimitations?: string[]
 }) {
+  const plan = params.plan ?? singleQuestionPlan()
   return buildSynthesizedResearchReport({
     mission: exampleTechnicalMissionFixture,
     plan,
@@ -97,7 +105,7 @@ function buildReport(params: {
   })
 }
 
-describe('researchReportFinalization native fef78559 review regressions', () => {
+describe('researchReportFinalization native review regressions (single-question partial predicate)', () => {
   it('source_cutoff compares instants with timezone offsets (not lexicographic strings)', () => {
     const lexicographicallyGreaterButEarlierInstant: SourceRevision = {
       ...baseRevision,
@@ -121,55 +129,78 @@ describe('researchReportFinalization native fef78559 review regressions', () => 
     )
   })
 
-  it('requires partial when semantically supported findings lack verified source_integrity', () => {
-    const report = buildReport({
-      findings: [supportedFinding('f1', 'q-1', 'not_checked')],
+  it('complete control: verified evidence on a one-question mission yields complete', () => {
+    const report = buildSingleQuestionReport({
+      findings: [supportedFinding('f-good', 'valid')],
       passages: [basePassage],
       sourceRevisions: [baseRevision],
     })
+    assert.equal(report.terminal_state, 'complete')
+    assert.deepEqual(report.unanswered_questions, [])
+    assert.equal(report.stopping_reason, 'single_pass_evidence_complete')
+    assert.equal(report.source_cutoff, '2026-10-21T09:00:00.000Z')
+    assert.ok(!report.limitations.some((l) => l.startsWith('finding_source_integrity_not_verified:')))
+  })
+
+  it('partial: supported finding with not_checked source_integrity (one question, zero unanswered)', () => {
+    const report = buildSingleQuestionReport({
+      findings: [supportedFinding('f1', 'not_checked')],
+      passages: [basePassage],
+      sourceRevisions: [baseRevision],
+    })
+    assert.deepEqual(report.unanswered_questions, [])
     assert.equal(report.terminal_state, 'partial')
     assert.ok(
       report.limitations.some((l) =>
         l.startsWith('finding_source_integrity_not_verified:f1:not_checked'),
       ),
     )
+    assert.ok(report.stopping_reason.includes('evidence_verification_limits_recorded'))
   })
 
-  it('requires partial for invalid source_integrity on supported findings', () => {
-    const report = buildReport({
-      findings: [supportedFinding('f1', 'q-1', 'invalid')],
+  it('partial: supported finding with invalid source_integrity', () => {
+    const report = buildSingleQuestionReport({
+      findings: [supportedFinding('f1', 'invalid')],
       passages: [basePassage],
       sourceRevisions: [baseRevision],
     })
+    assert.deepEqual(report.unanswered_questions, [])
     assert.equal(report.terminal_state, 'partial')
+    assert.ok(
+      report.limitations.some((l) =>
+        l.startsWith('finding_source_integrity_not_verified:f1:invalid'),
+      ),
+    )
   })
 
-  it('requires partial when supported finding cites a missing passage id', () => {
+  it('partial: supported finding cites missing passage id', () => {
     const limitations = deriveVerifiedEvidenceLimitations({
-      findings: [supportedFinding('f1', 'q-1', 'valid', ['missing-passage'])],
+      findings: [supportedFinding('f1', 'valid', ['missing-passage'])],
       passages: [basePassage],
       sourceRevisions: [baseRevision],
     })
     assert.ok(limitations.some((l) => l.startsWith('finding_cites_missing_passage:')))
-    const report = buildReport({
-      findings: [supportedFinding('f1', 'q-1', 'valid', ['missing-passage'])],
+    const report = buildSingleQuestionReport({
+      findings: [supportedFinding('f1', 'valid', ['missing-passage'])],
       passages: [basePassage],
       sourceRevisions: [baseRevision],
     })
+    assert.deepEqual(report.unanswered_questions, [])
     assert.equal(report.terminal_state, 'partial')
   })
 
-  it('requires partial when passage references an absent source revision', () => {
+  it('partial: passage references absent source revision', () => {
     const orphanPassage: PassageRecord = {
       ...basePassage,
       passage_id: 'p-orphan',
       source_revision_id: 'rev-missing',
     }
-    const report = buildReport({
-      findings: [supportedFinding('f1', 'q-1', 'valid', ['p-orphan'])],
+    const report = buildSingleQuestionReport({
+      findings: [supportedFinding('f1', 'valid', ['p-orphan'])],
       passages: [orphanPassage],
       sourceRevisions: [baseRevision],
     })
+    assert.deepEqual(report.unanswered_questions, [])
     assert.equal(report.terminal_state, 'partial')
     assert.ok(
       report.limitations.some((l) =>
@@ -179,13 +210,14 @@ describe('researchReportFinalization native fef78559 review regressions', () => 
   })
 
   for (const completeness of ['metadata_only', 'unavailable', 'extraction_failed'] as const) {
-    it(`requires partial for source revision completeness ${completeness}`, () => {
+    it(`partial: source revision completeness ${completeness}`, () => {
       const revision: SourceRevision = { ...baseRevision, completeness }
-      const report = buildReport({
-        findings: [supportedFinding('f1', 'q-1', 'valid')],
+      const report = buildSingleQuestionReport({
+        findings: [supportedFinding('f1', 'valid')],
         passages: [basePassage],
         sourceRevisions: [revision],
       })
+      assert.deepEqual(report.unanswered_questions, [])
       assert.equal(report.terminal_state, 'partial')
       assert.ok(
         report.limitations.some((l) =>
@@ -195,15 +227,20 @@ describe('researchReportFinalization native fef78559 review regressions', () => 
     })
   }
 
-  it('requires partial for q1 supported plus failed-slot additionalLimitations', () => {
-    const report = buildReport({
-      findings: [supportedFinding('f1', 'q-1', 'valid')],
+  it('partial: runtime failed-slot additionalLimitations with otherwise good evidence', () => {
+    const report = buildSingleQuestionReport({
+      findings: [supportedFinding('f1', 'valid')],
       passages: [basePassage],
       sourceRevisions: [baseRevision],
       additionalLimitations: ['composed_retrieval_slot_failed:slot-2:unsupported'],
     })
+    assert.deepEqual(report.unanswered_questions, [])
     assert.equal(report.terminal_state, 'partial')
     assert.ok(report.stopping_reason.includes('runtime_slot_limits_recorded'))
-    assert.deepEqual(report.unanswered_questions, ['q-2', 'q-3', 'q-4', 'q-5'])
+    assert.ok(
+      report.limitations.some((l) =>
+        l.startsWith('composed_retrieval_slot_failed:slot-2:unsupported'),
+      ),
+    )
   })
 })
