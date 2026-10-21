@@ -158,6 +158,7 @@
     "test:research-v2-campaign-preflight": "node --import tsx scripts/research-v2-campaign-preflight-run.mjs G-L1",
     "test:research-v2-g-l2-preflight": "node --import tsx scripts/research-v2-campaign-preflight-run.mjs G-L2",
     "test:research-v2-g-l3-preflight": "node --import tsx scripts/research-v2-campaign-preflight-run.mjs G-L3",
+    "test:research-v2-extraction-lineage-blocked-regression": "BABEL_RESEARCH_V2_RUN_BLOCKED_REGRESSION=1 node --import tsx --test src/research/v2/engine/researchEndToEndPass.extractionLineage.sharedOpId.durable.regression.test.ts",
     "prepublishOnly": "npm run check:source-provenance && npm run check:dist",
     "benchmark:claude-babel:certify": "tsx --no-warnings=ExperimentalWarning scripts/claude-babel-astra-lab/run_go_certification.ts",
     "benchmark:claude-babel:smoke": "tsx --no-warnings=ExperimentalWarning scripts/claude-babel-astra-lab/run_babel_smoke.ts",

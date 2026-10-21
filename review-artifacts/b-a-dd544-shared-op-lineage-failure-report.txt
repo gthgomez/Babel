@@ -1,0 +1,30 @@
+B → A handoff: extraction lineage @ dd544967 (blocked regression)
+===============================================================
+B branch: cursor/agent-b-general-fixtures-f617 (pre-A dd544 integration)
+Production owner: A (#406) — `retrievalExtractionLineage.ts` + `researchEndToEndPass` wiring
+
+Observed failure (deterministic, no live model):
+  Command:
+    npm --prefix babel-cli run test:research-v2-extraction-lineage-blocked-regression
+  Test file:
+    babel-cli/src/research/v2/engine/researchEndToEndPass.extractionLineage.sharedOpId.durable.regression.test.ts
+
+Scenario (durable store, then `runAdmittedResearchEndToEndPass`):
+  1. Seed `source_fetch` attempt A with operation_id `shared-fetch-operation-id` → record orphan passage → settlement `failed`.
+  2. Seed attempt B with the **same** operation_id → record admitted passage → settlement `succeeded`.
+  3. Variant B interleaves the second intent before attempt A completes.
+  4. Close/reopen durable store; run offline e2e pass (fixture model + governed technical retrieval).
+
+Expected after A dd544:
+  Extract phase must NOT include attempt A orphan (`shared-fetch-operation-id:orphan-a` / text `orphan-passage-from-failed-attempt-a`).
+
+Actual on B without dd544 (both variants):
+  AssertionError: failed attempt A orphan **text leaked** to extract `passages` payload
+  (passage_ids may also include orphan depending on retrieval.passageIds vs store scan).
+
+Root cause (B observation, A to fix):
+  `researchEndToEndPass.ts` maps **all** `passage_recorded` store events into extract input;
+  no event-window lineage filter under succeeded `source_fetch` completions.
+
+Default CI: tests skipped unless BABEL_RESEARCH_V2_RUN_BLOCKED_REGRESSION=1.
+Do not duplicate A production helper on B; integrate A dd544 when ready.
