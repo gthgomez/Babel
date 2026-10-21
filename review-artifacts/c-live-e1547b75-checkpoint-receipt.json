@@ -1,0 +1,51 @@
+{
+  "schema": "research-v2-c-live-diagnostics-checkpoint/v1",
+  "bound_commit": "e1547b756d7de3e41cbad613b95cfc0b62b75af8",
+  "bound_tree": "ca8a3d0b4273cbbb84d2acde9dee654129a7b192",
+  "execution_cwd": "/tmp/babel-validation-prep-e1547b75/babel-cli",
+  "bin_absolute": "/tmp/babel-validation-prep-e1547b75/babel-cli/bin/babel.js",
+  "effective_route": {
+    "provider": "openrouter",
+    "model_id": "deepseek/deepseek-v4-flash-0731",
+    "route_key": "deepseek-v4-flash-openrouter"
+  },
+  "prep_basis": "review-artifacts/c-prep-e1547b75-readiness.json",
+  "binding_basis": "review-artifacts/c-prep-e1547b75-binding-correction.json",
+  "t_l1": {
+    "mission_id": "mission-t-l1-validation-e1547b75-pending-001",
+    "cli_exit": 0,
+    "meta": "review-artifacts/c-live-e1547b75-t-l1-run-meta.txt",
+    "cli_json": "review-artifacts/c-live-e1547b75-t-l1-run-cli.json",
+    "store": "/tmp/babel-t-l1-store-e1547b75-release-pending",
+    "snapshot_sha256": "d83840ba9b07a556eba70da2019cb212784d331e51091d12e9d672c608500cf4",
+    "terminal_state": "partial",
+    "exa": "not_used_technical_repository_file_path",
+    "sampled_files_admitted": [
+      "babel-cli/src/research/v2/persistence/durableResearchStore.ts @ e912c2f3",
+      "libs/langgraph/langgraph/pregel/_checkpoint.py @ 3cd57c03"
+    ],
+    "evidence_subset": "review-artifacts/c-live-e1547b75-t-l1-evidence-subset.json",
+    "report": "review-artifacts/c-live-e1547b75-t-l1-report.json"
+  },
+  "g_l3": {
+    "mission_id": "mission-g-l3-validation-e1547b75-pending-001",
+    "cli_exit": 0,
+    "meta": "review-artifacts/c-live-e1547b75-g-l3-run-meta.txt",
+    "cli_json": "review-artifacts/c-live-e1547b75-g-l3-run-cli.json",
+    "store": "/tmp/babel-g-l3-store-e1547b75-release-pending",
+    "snapshot_sha256": "03e63bcb1e8610206fb119ff489f169b68f6faca3b8092830584b19f9ec2586a",
+    "terminal_state": "partial",
+    "honest_outcome": "insufficiency_on_cross-page_patch-level_agreement (devguide branch table lacks 3.15.1/Oct-21 patch); not forced complete",
+    "exa_lite_estimated_cost_usd_from_terminal_limitations": 0.004,
+    "exa_lite_request_id_from_terminal_limitations": "4653c86ca1fc2e2724b0f186e72ee8c4",
+    "web_sources": [
+      "https://www.python.org/downloads/",
+      "https://devguide.python.org/versions/"
+    ],
+    "devguide_truncation_noted": "source_revision_truncated host_decoded_byte_limit bytes_received=200000",
+    "evidence_subset": "review-artifacts/c-live-e1547b75-g-l3-evidence-subset.json",
+    "report": "review-artifacts/c-live-e1547b75-g-l3-report.json"
+  },
+  "model_usage_detail": "see external_operation_usage arrays in each evidence_subset",
+  "scope": "T-L1 limited to two sampled implementation files; G-L3 per official python.org pages only"
+}

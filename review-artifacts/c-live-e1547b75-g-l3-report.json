@@ -1,0 +1,55 @@
+{
+  "store_directory": "/tmp/babel-g-l3-store-e1547b75-release-pending",
+  "mission_id": "mission-g-l3-validation-e1547b75-pending-001",
+  "report": {
+    "mission_id": "mission-g-l3-validation-e1547b75-pending-001",
+    "plan_revision_id": "plan-0c68e8cf-d6b6-41ba-aa7f-dba4c961e02c",
+    "terminal_state": "partial",
+    "answer_summary": "[supported:finding-f73c8d6c97302e9212b7d1c4] The python.org downloads landing page identifies the latest stable CPython release as 3.15.1, with release date Oct. 21, 2026, shown in the page heading and in the release-version table. (passages: cli-run-fetch-wg2-73d891bf--web-ref-0:html:0,cli-run-fetch-wg2-73d891bf--web-ref-0:html:3,cli-run-fetch-wg2-73d891bf--web-ref-0:html:5) [supported:finding-437791986c074f8f93207ad9] The downloads landing page also lists Python 3.15.0 as released Oct. 9, 2026 and shows the 3.15 branch in bugfix maintenance, while 3.16 is listed as a pre-release. (passages: cli-run-fetch-wg2-73d891bf--web-ref-0:html:4,cli-run-fetch-wg2-73d891bf--web-ref-0:html:5) [supported:finding-f22b3fc1f40c310a7a0fb189] The developer guide status table lists the 3.15 branch as bugfix with first release 2026-10-09 and end of life 2031-10, but it does not state a latest stable patch version (3.15.1) or an Oct. 21, 2026 patch release date. (passages: cli-run-fetch-wg2-73d891bf--web-ref-1:html:1) [supported:finding-c725a330d9efa96b6d863b0d] Because the developer guide status table provides only branch-level status and first-release dates, it is insufficient as a source for the latest stable CPython patch release version and its release date. (passages: cli-run-fetch-wg2-73d891bf--web-ref-1:html:1) [supported:finding-eb3e51cc5ee92f13e32ea162] The two official python.org pages agree at the branch level that 3.15 is the latest stable branch in bugfix maintenance with 2026-10-09 as its first release, but the developer guide status table lacks the patch-level version and release date needed to confirm agreement with the downloads page's 3.15.1 / Oct. 21, 2026 statement. (passages: cli-run-fetch-wg2-73d891bf--web-ref-0:html:4,cli-run-fetch-wg2-73d891bf--web-ref-0:html:5,cli-run-fetch-wg2-73d891bf--web-ref-1:html:1)",
+    "unanswered_questions": [
+      "q-plan-0c68e8cf-d6b6-41ba-aa7f-dba4c961e02c-2",
+      "q-plan-0c68e8cf-d6b6-41ba-aa7f-dba4c961e02c-3"
+    ],
+    "coverage_notes": "answer_summary lists only semantically supported findings with explicit finding_id bindings; unanswered_questions requires question_coverage answers on a supported finding (passage support or question_id membership alone is insufficient; partial/tangential coverage remains unanswered).",
+    "limitations": [
+      "search_provider_configured:exa_lite",
+      "search_provider_effective:exa_lite",
+      "exa_participation:exa_primary_ok",
+      "exa_lite_request_id:4653c86ca1fc2e2724b0f186e72ee8c4",
+      "exa_lite_provider_estimated_cost_usd:0.004",
+      "exa_lite_highlights_discovery_only:not_admitted_passages",
+      "search_provider_configured:exa_lite",
+      "search_provider_effective:exa_lite",
+      "exa_participation:exa_primary_ok",
+      "exa_lite_request_id:4653c86ca1fc2e2724b0f186e72ee8c4",
+      "exa_lite_provider_estimated_cost_usd:0.004",
+      "exa_lite_highlights_discovery_only:not_admitted_passages",
+      "source_revision_truncated:host_decoded_byte_limit:bytes_received=200000:retrieved_at=2026-10-21T17:32:50.691Z",
+      "question_coverage_tangential:q-plan-0c68e8cf-d6b6-41ba-aa7f-dba4c961e02c-1:finding-437791986c074f8f93207ad9",
+      "question_coverage_partial:q-plan-0c68e8cf-d6b6-41ba-aa7f-dba4c961e02c-2:finding-f22b3fc1f40c310a7a0fb189",
+      "question_coverage_partial:q-plan-0c68e8cf-d6b6-41ba-aa7f-dba4c961e02c-2:finding-c725a330d9efa96b6d863b0d",
+      "question_coverage_partial:q-plan-0c68e8cf-d6b6-41ba-aa7f-dba4c961e02c-3:finding-eb3e51cc5ee92f13e32ea162",
+      "unverified_model_synthesis_excluded: The python.org downloads landing page (https://www.python.org/downloads/) identifies the latest stable CPython release as 3.15.1, with release date Oct. 21, 2026, visible both in the page heading and the release-version table. The developer",
+      "unverified_model_stopping_prose_excluded: complete",
+      "offline_or_governed_sources_only"
+    ],
+    "source_cutoff": "2026-10-21T17:32:50.919Z",
+    "acceptance_state": "host_admitted_model_synthesis",
+    "stopping_reason": "single_pass_host_finalization;unanswered_plan_questions=2;acquisition_or_extraction_limits_recorded;runtime_slot_limits_recorded",
+    "finding_ids": [
+      "finding-f73c8d6c97302e9212b7d1c4",
+      "finding-437791986c074f8f93207ad9",
+      "finding-f22b3fc1f40c310a7a0fb189",
+      "finding-c725a330d9efa96b6d863b0d",
+      "finding-eb3e51cc5ee92f13e32ea162"
+    ],
+    "citation_passage_ids": [
+      "cli-run-fetch-wg2-73d891bf--web-ref-0:html:0",
+      "cli-run-fetch-wg2-73d891bf--web-ref-0:html:3",
+      "cli-run-fetch-wg2-73d891bf--web-ref-0:html:5",
+      "cli-run-fetch-wg2-73d891bf--web-ref-0:html:4",
+      "cli-run-fetch-wg2-73d891bf--web-ref-1:html:1"
+    ],
+    "generated_at": "2026-10-21T17:34:59.972Z"
+  }
+}

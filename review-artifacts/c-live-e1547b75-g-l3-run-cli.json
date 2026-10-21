@@ -1,0 +1,36 @@
+(node:17608) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:17608) ExperimentalWarning: Importing WebAssembly module instances is an experimental feature and might change at any time
+{
+  "session_id": "32774fe0-b970-4712-8092-9a9646556f0b",
+  "mission_id": "mission-g-l3-validation-e1547b75-pending-001",
+  "plan_revision_id": "plan-0c68e8cf-d6b6-41ba-aa7f-dba4c961e02c",
+  "passage_ids": [
+    "cli-run-fetch-wg2-73d891bf--web-ref-0:html:0",
+    "cli-run-fetch-wg2-73d891bf--web-ref-0:html:1",
+    "cli-run-fetch-wg2-73d891bf--web-ref-0:html:2",
+    "cli-run-fetch-wg2-73d891bf--web-ref-0:html:3",
+    "cli-run-fetch-wg2-73d891bf--web-ref-0:html:4",
+    "cli-run-fetch-wg2-73d891bf--web-ref-0:html:5",
+    "cli-run-fetch-wg2-73d891bf--web-ref-0:html:6",
+    "cli-run-fetch-wg2-73d891bf--web-ref-1:html:0",
+    "cli-run-fetch-wg2-73d891bf--web-ref-1:html:1",
+    "cli-run-fetch-wg2-73d891bf--web-ref-1:html:2",
+    "cli-run-fetch-wg2-73d891bf--web-ref-1:html:3",
+    "cli-run-fetch-wg2-73d891bf--web-ref-1:html:4"
+  ],
+  "finding_ids": [
+    "finding-f73c8d6c97302e9212b7d1c4",
+    "finding-437791986c074f8f93207ad9",
+    "finding-f22b3fc1f40c310a7a0fb189",
+    "finding-c725a330d9efa96b6d863b0d",
+    "finding-eb3e51cc5ee92f13e32ea162"
+  ],
+  "terminal_report_emitted": true,
+  "live_api": true,
+  "mode": "production_mission_run",
+  "cancellation_finalize": "not_attempted",
+  "store_directory": "/tmp/babel-g-l3-store-e1547b75-release-pending",
+  "discover_query": "On official python.org pages only, does the latest",
+  "note": "Production mission run with governed adapters and durable store persistence."
+}

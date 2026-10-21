@@ -1,0 +1,39 @@
+{
+  "store_directory": "/tmp/babel-t-l1-store-e1547b75-release-pending",
+  "mission_id": "mission-t-l1-validation-e1547b75-pending-001",
+  "report": {
+    "mission_id": "mission-t-l1-validation-e1547b75-pending-001",
+    "plan_revision_id": "plan-43554e89-e7ea-4d62-ba2d-7f3c51c3eeb0",
+    "terminal_state": "partial",
+    "answer_summary": "[supported:finding-e40c7276127a6de3c28bf170] In the pinned Babel repository at commit e912c2f3320de0b6e1c9ff85b95b0f74d8b5323c, the file babel-cli/src/research/v2/persistence/durableResearchStore.ts implements durable graph/state persistence by exposing a DurableResearchStore class that uses an exclusive directory lock, staged snapshot commit to research-store.snapshot.json, and validated reload from snapshot files. (passages: passage-0fd913811180d079720d8a6f) [supported:finding-1d33ad0893881a78d7d1ebac] In the pinned LangGraph repository at commit 3cd57c038ad827d05f80c6488adea9994156c58c, the file libs/langgraph/langgraph/pregel/_checkpoint.py implements checkpoint/state persistence through checkpoint channel versioning, DeltaChannel snapshot scheduling, and helpers for checkpoint writes and snapshot decisions. (passages: passage-955a3710985bc9431c39a18b) [supported:finding-43d88bc10717e0e70492545a] The Babel persistence layer is isolated in the babel-cli/src/research/v2/persistence/ directory and depends on a ResearchStore port plus storage helpers such as MutationQueue and storeDirectoryLock, rather than on execution-loop code; the cited file does not contain node scheduling or agent execution-policy logic. (passages: passage-0fd913811180d079720d8a6f) [supported:finding-b60f048c8f87f7fa3ddbfca0] The LangGraph evidence shows checkpoint persistence implemented inside libs/langgraph/langgraph/pregel/_checkpoint.py, which is part of the pregel execution package; the available passage does not itself identify a separate execution-policy file, so the execution/persistence boundary cannot be directly evidenced from this passage alone. (passages: passage-955a3710985bc9431c39a18b) [supported:finding-fbb1e2f09074a9b8cdcc30e8] Based on the concrete file-path evidence, the pinned Babel repository exposes clearer persistence-versus-execution separation: durable state persistence lives in a dedicated babel-cli/src/research/v2/persistence/durableResearchStore.ts module behind a ResearchStore port, whereas the LangGraph checkpoint implementation is a private module inside the langgraph/pregel execution package. (passages: passage-0fd913811180d079720d8a6f,passage-955a3710985bc9431c39a18b)",
+    "unanswered_questions": [
+      "q-plan-43554e89-e7ea-4d62-ba2d-7f3c51c3eeb0-1",
+      "q-plan-43554e89-e7ea-4d62-ba2d-7f3c51c3eeb0-2"
+    ],
+    "coverage_notes": "answer_summary lists only semantically supported findings with explicit finding_id bindings; unanswered_questions requires question_coverage answers on a supported finding (passage support or question_id membership alone is insufficient; partial/tangential coverage remains unanswered).",
+    "limitations": [
+      "question_coverage_partial:q-plan-43554e89-e7ea-4d62-ba2d-7f3c51c3eeb0-1:finding-e40c7276127a6de3c28bf170",
+      "question_coverage_partial:q-plan-43554e89-e7ea-4d62-ba2d-7f3c51c3eeb0-1:finding-1d33ad0893881a78d7d1ebac",
+      "question_coverage_partial:q-plan-43554e89-e7ea-4d62-ba2d-7f3c51c3eeb0-2:finding-43d88bc10717e0e70492545a",
+      "question_coverage_partial:q-plan-43554e89-e7ea-4d62-ba2d-7f3c51c3eeb0-2:finding-b60f048c8f87f7fa3ddbfca0",
+      "unverified_model_synthesis_excluded: The pinned Babel repository (commit e912c2f3320de0b6e1c9ff85b95b0f74d8b5323c) and pinned LangGraph repository (commit 3cd57c038ad827d05f80c6488adea9994156c58c) separate durable graph/state persistence from agent execution policy in notably ",
+      "unverified_model_stopping_prose_excluded: completed",
+      "offline_or_governed_sources_only"
+    ],
+    "source_cutoff": "2026-10-21T17:31:37.171Z",
+    "acceptance_state": "host_admitted_model_synthesis",
+    "stopping_reason": "single_pass_host_finalization;unanswered_plan_questions=2",
+    "finding_ids": [
+      "finding-e40c7276127a6de3c28bf170",
+      "finding-1d33ad0893881a78d7d1ebac",
+      "finding-43d88bc10717e0e70492545a",
+      "finding-b60f048c8f87f7fa3ddbfca0",
+      "finding-fbb1e2f09074a9b8cdcc30e8"
+    ],
+    "citation_passage_ids": [
+      "passage-0fd913811180d079720d8a6f",
+      "passage-955a3710985bc9431c39a18b"
+    ],
+    "generated_at": "2026-10-21T17:32:36.050Z"
+  }
+}

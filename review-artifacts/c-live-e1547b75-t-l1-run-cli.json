@@ -1,0 +1,26 @@
+(node:17525) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:17525) ExperimentalWarning: Importing WebAssembly module instances is an experimental feature and might change at any time
+{
+  "session_id": "038c4cf6-0032-450b-ab65-f3b2b030fc70",
+  "mission_id": "mission-t-l1-validation-e1547b75-pending-001",
+  "plan_revision_id": "plan-43554e89-e7ea-4d62-ba2d-7f3c51c3eeb0",
+  "passage_ids": [
+    "passage-0fd913811180d079720d8a6f",
+    "passage-955a3710985bc9431c39a18b"
+  ],
+  "finding_ids": [
+    "finding-e40c7276127a6de3c28bf170",
+    "finding-1d33ad0893881a78d7d1ebac",
+    "finding-43d88bc10717e0e70492545a",
+    "finding-b60f048c8f87f7fa3ddbfca0",
+    "finding-fbb1e2f09074a9b8cdcc30e8"
+  ],
+  "terminal_report_emitted": true,
+  "live_api": true,
+  "mode": "production_mission_run",
+  "cancellation_finalize": "not_attempted",
+  "store_directory": "/tmp/babel-t-l1-store-e1547b75-release-pending",
+  "discover_query": "Compare how the pinned Babel repository and the",
+  "note": "Production mission run with governed adapters and durable store persistence."
+}

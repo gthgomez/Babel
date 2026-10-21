@@ -1,0 +1,6 @@
+CASE=G-L3
+CWD=/tmp/babel-validation-prep-e1547b75/babel-cli
+COMMAND=BABEL_RESEARCH_V2_ALLOW_LIVE_API=1 node /tmp/babel-validation-prep-e1547b75/babel-cli/bin/babel.js research v2 run --store /tmp/babel-g-l3-store-e1547b75-release-pending --mission-file /workspace/review-artifacts/c-prep-e1547b75-proposed-g-l3-mission.json --json
+START_UTC=2026-10-21T17:32:41.830Z
+END_UTC=2026-10-21T17:35:00.005Z
+EXIT=0
