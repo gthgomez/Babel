@@ -74,6 +74,46 @@ function throwIfAborted(signal: AbortSignal, phase: string): void {
   }
 }
 
+/** Child iteration acquired writer ownership then failed; carries this controller's CAS handle only. */
+export class RetrievalIterationFailedAfterAcquireError extends Error {
+  readonly acquiredHandle: ResearchStoreMissionHandle
+  readonly writeContext: MissionWriteContext
+
+  constructor(
+    message: string,
+    acquiredHandle: ResearchStoreMissionHandle,
+    writeContext: MissionWriteContext,
+    options?: ErrorOptions,
+  ) {
+    super(message, options)
+    this.name = 'RetrievalIterationFailedAfterAcquireError'
+    this.acquiredHandle = acquiredHandle
+    this.writeContext = writeContext
+  }
+
+  static from(
+    acquired: ResearchStoreMissionHandle,
+    ctx: MissionWriteContext,
+    err: unknown,
+  ): RetrievalIterationFailedAfterAcquireError {
+    const message = err instanceof Error ? err.message : String(err)
+    return new RetrievalIterationFailedAfterAcquireError(
+      message,
+      acquired,
+      ctx,
+      err instanceof Error ? { cause: err } : undefined,
+    )
+  }
+
+  static withMessage(
+    acquired: ResearchStoreMissionHandle,
+    ctx: MissionWriteContext,
+    message: string,
+  ): RetrievalIterationFailedAfterAcquireError {
+    return new RetrievalIterationFailedAfterAcquireError(message, acquired, ctx)
+  }
+}
+
 /**
  * Admitted discover → read → evidence persistence through {@link SourceAdapter} + {@link SourceAccessPort}.
  * IO stays on the access port; extraction stays in profile adapters (technical today; general via B registry later).
@@ -136,7 +176,7 @@ export async function runAdmittedRetrievalIteration(
       },
       now(),
     )
-    throw err instanceof Error ? err : new Error(message)
+    throw RetrievalIterationFailedAfterAcquireError.from(acquired, ctx, err)
   }
 
   if (discover.status === 'cancelled' || request.signal.aborted) {
@@ -149,7 +189,11 @@ export async function runAdmittedRetrievalIteration(
       { settlement: 'cancelled' },
       now(),
     )
-    throw new Error('source discover cancelled during retrieval iteration')
+    throw RetrievalIterationFailedAfterAcquireError.withMessage(
+      acquired,
+      ctx,
+      'source discover cancelled during retrieval iteration',
+    )
   }
   if (discover.status === 'ok' && discover.operationId !== request.searchOperationId) {
     await settleExternalOperation(
@@ -165,7 +209,11 @@ export async function runAdmittedRetrievalIteration(
       },
       now(),
     )
-    throw new Error('discover operationId does not match admitted search operation')
+    throw RetrievalIterationFailedAfterAcquireError.withMessage(
+      acquired,
+      ctx,
+      'discover operationId does not match admitted search operation',
+    )
   }
 
   if (discover.status === 'failed') {
@@ -182,7 +230,7 @@ export async function runAdmittedRetrievalIteration(
       },
       now(),
     )
-    throw new Error(discover.message)
+    throw RetrievalIterationFailedAfterAcquireError.withMessage(acquired, ctx, discover.message)
   }
 
   const candidate = discover.candidates[0]
@@ -200,7 +248,11 @@ export async function runAdmittedRetrievalIteration(
       },
       now(),
     )
-    throw new Error('discover returned no source candidates')
+    throw RetrievalIterationFailedAfterAcquireError.withMessage(
+      acquired,
+      ctx,
+      'discover returned no source candidates',
+    )
   }
 
   const readAdapter =
@@ -258,7 +310,7 @@ export async function runAdmittedRetrievalIteration(
       },
       now(),
     )
-    throw err instanceof Error ? err : new Error(message)
+    throw RetrievalIterationFailedAfterAcquireError.from(acquired, ctx, err)
   }
 
   if (read.status === 'cancelled' || request.signal.aborted) {
@@ -271,7 +323,11 @@ export async function runAdmittedRetrievalIteration(
       { settlement: 'cancelled' },
       now(),
     )
-    throw new Error('source read cancelled during retrieval iteration')
+    throw RetrievalIterationFailedAfterAcquireError.withMessage(
+      acquired,
+      ctx,
+      'source read cancelled during retrieval iteration',
+    )
   }
   if (read.status === 'failed') {
     await settleExternalOperation(
@@ -290,10 +346,14 @@ export async function runAdmittedRetrievalIteration(
       },
       now(),
     )
-    throw new ResearchPassFailedError(read.message, {
-      stoppingReason: 'source_retrieval_failed',
-      failurePhase: 'retrieval',
-    })
+    throw RetrievalIterationFailedAfterAcquireError.from(
+      acquired,
+      ctx,
+      new ResearchPassFailedError(read.message, {
+        stoppingReason: 'source_retrieval_failed',
+        failurePhase: 'retrieval',
+      }),
+    )
   }
 
   throwIfAborted(request.signal, 'evidence persistence')
@@ -328,7 +388,7 @@ export async function runAdmittedRetrievalIteration(
       },
       now(),
     )
-    throw err instanceof Error ? err : new Error(message)
+    throw RetrievalIterationFailedAfterAcquireError.from(acquired, ctx, err)
   }
 
   try {
@@ -355,9 +415,13 @@ export async function runAdmittedRetrievalIteration(
         },
         now(),
       )
-      throw new Error('retrieval iteration aborted during evidence persistence')
+      throw RetrievalIterationFailedAfterAcquireError.withMessage(
+        acquired,
+        ctx,
+        'retrieval iteration aborted during evidence persistence',
+      )
     }
-    throw err instanceof Error ? err : new Error(String(err))
+    throw RetrievalIterationFailedAfterAcquireError.from(acquired, ctx, err)
   }
 
   await settleExternalOperation(
