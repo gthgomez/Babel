@@ -65,8 +65,8 @@ npm run test:research-v2-pdfjs-staged-package-smoke
 
 | Check | Command | Outcome |
 |-------|---------|---------|
-| Research v2 manifest | `node scripts/research-v2-collect-test-files.mjs \| tr '\\n' '\\0' \| xargs -0 npx tsx --test` | **259** pass @ `5d17ad77` |
-| B reciprocal receipt | `npm run test:research-v2-production-package-reciprocal` | `probe_ok`, `canvas_package_json_present=true` @ `5d17ad77` |
+| Research v2 manifest | `node scripts/research-v2-collect-test-files.mjs \| tr '\\n' '\\0' \| xargs -0 npx tsx --test` | **259** pass @ `9291bc6c` |
+| B reciprocal receipt | `npm run test:research-v2-production-package-reciprocal` | `probe_ok`, `canvas_package_json_present=true` @ `9291bc6c` |
 | Incorrect / hung-style glob | `node --test src/research/v2/**/*.test.ts` | **Do not use** — shell leaves literal `**` or runs a partial set; not authoritative |
 | Packaged PDF runtime (A smoke) | `npm run test:research-v2-pdfjs-staged-package-smoke` | Isolated lockfile `npm ci` + platform binding + pdfjs text extract |
 | B reciprocal packaging (authoritative) | `npm run test:research-v2-production-package-reciprocal` | Same flags as Windows pack; copies **dist** + B probes; `canvas_package_json_present=true` + PDF probe ok |
