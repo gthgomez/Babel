@@ -1,11 +1,11 @@
 {
   "schema": "b-next-candidate-report/v1",
-  "recorded_at_utc": "2026-10-21T08:55:19.403Z",
+  "recorded_at_utc": "2026-10-21T08:56:02.418Z",
   "worktree_realpath": "/workspace",
   "branch": "cursor/agent-b-general-fixtures-f617",
   "git": {
-    "head_sha": "97b181c9b65017a9f31b9d78a752a7459845528d",
-    "tree_sha": "3de05efe0eed4a25366573cc2263543a033e23fe",
+    "head_sha": "3248b4fdc780c209599a4eed82937f331bd21409",
+    "tree_sha": "540a61e3eee8678a6179408d4531be9a888a9709",
     "rev_parse_commands": [
       "git -C /workspace rev-parse HEAD",
       "git -C /workspace rev-parse HEAD^{tree}"
