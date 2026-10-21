@@ -1,0 +1,28 @@
+{
+  "schema": "general-g-l1-attempt4-pre-run-fingerprints/v1",
+  "recorded_at_utc": "2026-10-21T09:03:48.321Z",
+  "source_go_sha": "5149abfb5e90e12d3fc1322a8c3a3f3b7795fb54",
+  "git": {
+    "head_sha": "5149abfb5e90e12d3fc1322a8c3a3f3b7795fb54",
+    "tree_sha": "a4eb9f079887c4d9f1346173e631066fb35ed57e"
+  },
+  "execution_cwd": "/workspace/babel-cli",
+  "babel_bin": {
+    "realpath": "/workspace/babel-cli/bin/babel.js",
+    "sha256": "ee8f9ba2a7bd12b937451c0f4d86503d0b68d9076ed3cd24b9a7138b7039f43f"
+  },
+  "dist_modules": {
+    "cliEntryDispatch": {
+      "realpath": "/workspace/babel-cli/dist/cliEntryDispatch.js",
+      "sha256": "f5943d8014b6452390f769bb5ac59fc5fee7ff8655657fa038eb8ec26716d942"
+    },
+    "researchV2MissionRun": {
+      "realpath": "/workspace/babel-cli/dist/research/v2/cli/researchV2MissionRun.js",
+      "sha256": "c60214002173f96d065a6055a94bc31cfadf61fe8c4ec7f5099d8d75a4f05ecd"
+    },
+    "providerResearchModelBridge": {
+      "realpath": "/workspace/babel-cli/dist/research/v2/model/providerResearchModelBridge.js",
+      "sha256": "1671282909574f98116d1d08a0a046ef60d2c9dc7159cc469a39a91009efdff1"
+    }
+  }
+}

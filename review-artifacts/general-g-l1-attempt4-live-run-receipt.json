@@ -1,0 +1,213 @@
+{
+  "schema": "general-g-l1-attempt4-live-run-receipt/v1",
+  "attempt": 4,
+  "diagnostic_only": true,
+  "acceptance_state": "not_accepted",
+  "source_go_sha": "5149abfb5e90e12d3fc1322a8c3a3f3b7795fb54",
+  "pre_run_fingerprints": "review-artifacts/general-g-l1-attempt4-pre-run-fingerprints.json",
+  "mission_id": "mission-g-l1-general-live-attempt4",
+  "mission_file": "/workspace/codex/missions/general-g-l1-python-stable-attempt4/mission.json",
+  "store_directory": "/workspace/codex/runs/general-g-l1-attempt4/store",
+  "session_id": "f97a099e-7fc3-4324-b509-b0ad2792c273",
+  "plan_revision_id": "plan-3f83793b-d454-422e-95df-ab774fb86c6c",
+  "command": "cd /workspace/babel-cli && export BABEL_RESEARCH_V2_ALLOW_LIVE_API=1 && export BABEL_RESEARCH_V2_MODEL_ROUTE_KEY=deepseek-v4-flash-openrouter && node /workspace/babel-cli/bin/babel.js research v2 run --store /workspace/codex/runs/general-g-l1-attempt4/store --mission-file /workspace/codex/missions/general-g-l1-python-stable-attempt4/mission.json --discover-query 'latest stable Python release python.org download' --json",
+  "utc_start": "2026-10-21T09:03:56Z",
+  "utc_end": "2026-10-21T09:04:40Z",
+  "cli_exit_code": 0,
+  "cli_status": "success",
+  "terminal_state": "partial",
+  "terminal_receipt_count": 1,
+  "stopping_reason": "All findings were mutually consistent and directly answered the primary question, so the report was finalized.",
+  "discover_query": "latest stable Python release python.org download",
+  "model_route": {
+    "route_key": "deepseek-v4-flash-openrouter",
+    "provider": "openrouter",
+    "model_id": "deepseek/deepseek-v4-flash-0731"
+  },
+  "retrieval": {
+    "discover_executed": true,
+    "fetch_executed": true,
+    "search_operation_id": "cli-run-search-wg1-5f7d51ab",
+    "fetch_operation_id": "cli-run-fetch-wg1-5f7d51ab",
+    "admitted_sources": [
+      {
+        "source_id": "src-web-84ed1861359f79ce6123ebc1",
+        "title": "Download Python | Python.org",
+        "observed_urls": [
+          "https://www.python.org/downloads/"
+        ],
+        "kind": "web"
+      }
+    ],
+    "passage_count": 10,
+    "passage_ids": [
+      "cli-run-fetch-wg1-5f7d51ab:html:0",
+      "cli-run-fetch-wg1-5f7d51ab:html:1",
+      "cli-run-fetch-wg1-5f7d51ab:html:2",
+      "cli-run-fetch-wg1-5f7d51ab:html:3",
+      "cli-run-fetch-wg1-5f7d51ab:html:4",
+      "cli-run-fetch-wg1-5f7d51ab:html:5",
+      "cli-run-fetch-wg1-5f7d51ab:html:6",
+      "cli-run-fetch-wg1-5f7d51ab:html:7",
+      "cli-run-fetch-wg1-5f7d51ab:html:8",
+      "cli-run-fetch-wg1-5f7d51ab:html:9"
+    ],
+    "finding_ids": [
+      "finding-55920fb269172ac1948b0dce",
+      "finding-4990be1175df71080b24d295",
+      "finding-9dc6ef503a420cd02740112b",
+      "finding-34d2946eb18ddc2b0642e824",
+      "finding-d7e08cedb95c3bd486374394",
+      "finding-144fd0c6397ba0f6f6e3d41d"
+    ],
+    "citation_passage_ids": [
+      "cli-run-fetch-wg1-5f7d51ab:html:0",
+      "cli-run-fetch-wg1-5f7d51ab:html:1",
+      "cli-run-fetch-wg1-5f7d51ab:html:2",
+      "cli-run-fetch-wg1-5f7d51ab:html:3",
+      "cli-run-fetch-wg1-5f7d51ab:html:5",
+      "cli-run-fetch-wg1-5f7d51ab:html:4"
+    ]
+  },
+  "model_operations": [
+    {
+      "operation_id": "cli-run-plan-wg1-5f7d51ab",
+      "attempt_id": "cli-run-plan-att-wg1-5f7d51ab",
+      "settlement": "succeeded",
+      "usage_settlement": {
+        "input_tokens": 652,
+        "output_tokens": 651,
+        "reasoning_tokens": 550,
+        "cost": {
+          "status": "reported",
+          "amount_usd": 0.0001330468,
+          "currency": "USD"
+        }
+      },
+      "provider_invoke_diagnostics": {
+        "inference_id": "02935268-c2ea-43c6-b7b7-3bb454f21c31",
+        "normalized_finish_reason": "NATURAL_COMPLETION",
+        "visible_content_present": true,
+        "output_digest": "4adf847d94a5533a78cf45de649ba824914ed3af83f1990825427a8541704f60",
+        "input_tokens": 652,
+        "output_tokens": 651,
+        "reasoning_tokens": 550,
+        "provider_request_id": null
+      }
+    },
+    {
+      "operation_id": "cli-run-search-wg1-5f7d51ab",
+      "attempt_id": "cli-run-search-att-wg1-5f7d51ab",
+      "settlement": "succeeded",
+      "usage_settlement": {}
+    },
+    {
+      "operation_id": "cli-run-fetch-wg1-5f7d51ab",
+      "attempt_id": "cli-run-fetch-att-wg1-5f7d51ab",
+      "settlement": "succeeded",
+      "usage_settlement": {}
+    },
+    {
+      "operation_id": "cli-run-extract-wg1-5f7d51ab",
+      "attempt_id": "cli-run-extract-att-wg1-5f7d51ab",
+      "settlement": "succeeded",
+      "usage_settlement": {
+        "input_tokens": 6303,
+        "output_tokens": 4081,
+        "reasoning_tokens": 3507,
+        "cost": {
+          "status": "reported",
+          "amount_usd": 0.001721335,
+          "currency": "USD"
+        }
+      },
+      "provider_invoke_diagnostics": {
+        "inference_id": "1bade90f-6d4f-4ed5-abb1-5dc1474126b8",
+        "normalized_finish_reason": "NATURAL_COMPLETION",
+        "visible_content_present": true,
+        "output_digest": "2b3c0382c79144544e6aba6c797e8803629e5b3bf8fde1a54ac78c6677e1dc60",
+        "input_tokens": 6303,
+        "output_tokens": 4081,
+        "reasoning_tokens": 3507,
+        "provider_request_id": null
+      }
+    },
+    {
+      "operation_id": "cli-run-review-wg1-5f7d51ab",
+      "attempt_id": "cli-run-review-att-wg1-5f7d51ab",
+      "settlement": "succeeded",
+      "usage_settlement": {
+        "input_tokens": 16298,
+        "output_tokens": 1675,
+        "reasoning_tokens": 1226,
+        "cost": {
+          "status": "reported",
+          "amount_usd": 0.002338112,
+          "currency": "USD"
+        }
+      },
+      "provider_invoke_diagnostics": {
+        "inference_id": "49c4721d-1c22-4f9c-be4b-10f8468e120e",
+        "normalized_finish_reason": "NATURAL_COMPLETION",
+        "visible_content_present": true,
+        "output_digest": "71f6965502f07264e8cc1a2c954c291046e1656c8ce168d407fb88cb02643807",
+        "input_tokens": 16298,
+        "output_tokens": 1675,
+        "reasoning_tokens": 1226,
+        "provider_request_id": null
+      }
+    },
+    {
+      "operation_id": "cli-run-synth-wg1-5f7d51ab",
+      "attempt_id": "cli-run-synth-att-wg1-5f7d51ab",
+      "settlement": "succeeded",
+      "usage_settlement": {
+        "input_tokens": 756,
+        "output_tokens": 229,
+        "reasoning_tokens": 74,
+        "cost": {
+          "status": "reported",
+          "amount_usd": 0.00016996,
+          "currency": "USD"
+        }
+      },
+      "provider_invoke_diagnostics": {
+        "inference_id": "4f4d5a52-0c65-412b-95b1-13a59bd26704",
+        "normalized_finish_reason": "NATURAL_COMPLETION",
+        "visible_content_present": true,
+        "output_digest": "08e9934ff6bc4f031edbcc91a3016596512bce699b2caadb02086549fd3475f1",
+        "input_tokens": 756,
+        "output_tokens": 229,
+        "reasoning_tokens": 74,
+        "provider_request_id": null
+      }
+    }
+  ],
+  "request_local_usage_aggregate_reported_usd": 0.0043624538,
+  "upstream_http_retry_count": "unknown",
+  "provider_callback_count_note": "not_total_http_requests",
+  "answer_from_terminal_report": {
+    "latest_stable_python": "3.15.0",
+    "release_date": "2026-10-09",
+    "prerelease_noted": "3.16 pre-release/development",
+    "official_citation": "https://www.python.org/downloads/",
+    "uncertainty": "none_reported_in_findings"
+  },
+  "scoped_proof": {
+    "openrouter_preflight": "review-artifacts/general-g-l1-attempt4-openrouter-preflight.json",
+    "store_snapshot": "codex/runs/general-g-l1-attempt4/store/research-store.snapshot.json"
+  },
+  "raw_artifacts": {
+    "cli_stdout": "runs/evidence/general-g-l1-attempt4-cli-stdout.json",
+    "cli_stderr": "runs/evidence/general-g-l1-attempt4-cli-stderr.txt",
+    "inspect_summary": "runs/evidence/general-g-l1-attempt4-inspect.json",
+    "report": "runs/evidence/general-g-l1-attempt4-report.json"
+  },
+  "prior_attempts_preserved": {
+    "attempt1": "codex/worktrees/g-l1-9d97448a/codex/runs/general-g-l1-python-stable/store",
+    "attempt2": "codex/runs/general-g-l1-attempt2/store",
+    "attempt3": "codex/runs/general-g-l1-attempt3/store",
+    "attempt3_receipt": "review-artifacts/general-g-l1-attempt3-live-run-receipt.json"
+  },
+  "no_automatic_retry": true
+}
