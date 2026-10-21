@@ -5,6 +5,7 @@ import type {
 } from '../../../runners/base.js'
 import type { CostProvenance } from '../contracts/common.js'
 import { modelOutputSchemaForKind, parseValidatedModelOutput } from '../contracts/modelOutputs.js'
+import { buildResearchV2StructuredModelPrompt } from './researchV2ProviderModelPrompt.js'
 import type {
   ModelRouteReceipt,
   ResearchModelInvocationRequest,
@@ -28,14 +29,7 @@ function defaultBuildPrompt(request: ResearchModelInvocationRequest): {
   prompt: string
   systemPrompt: string
 } {
-  return {
-    systemPrompt:
-      'Respond with JSON only matching the requested research operation schema. No markdown fences.',
-    prompt: JSON.stringify({
-      operation_kind: request.kind,
-      input: request.input,
-    }),
-  }
+  return buildResearchV2StructuredModelPrompt(request)
 }
 
 function costProvenanceFromMetadata(meta: RunnerInvocationMetadata | null | undefined): CostProvenance {

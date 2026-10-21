@@ -8,4 +8,4 @@ Full readiness pack (command template, logs, prior 268-pass receipt): repository
 
 Coordinator issues live command to B after mission/route validation.
 
-**A repair (post B ac011dea failure):** strict `plan_questions` prompt in `researchV2ProviderModelPrompt.ts`; malformed replay fixture `G-L1-live-malformed-plan-questions-response.json`; failed passes append `terminal_state: failed` receipt (`finalizeFailedOwnerResearchPass.ts`). B should re-run diagnostic after pulling A head — A does not execute live.
+**A repair (post B ac011dea failure):** strict output contract for **all four** model ops in `modelOutputContractPrompt.ts` (sync-tested vs Zod in `modelOutputs.contract-prompt.test.ts`); default bridge prompt no longer sends `operation_kind`+`input` only. Malformed replay: `G-L1-live-malformed-plan-questions-response.json`. Failed passes: `terminal_state: failed` (`finalizeFailedOwnerResearchPass.ts`). **Attempt 2** live identity is B-owned; A does not execute live.
