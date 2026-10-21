@@ -2,11 +2,12 @@ import type { ResearchMissionV2 } from '../contracts/mission.js'
 import type { AdmittedSourceSearchProvider } from '../ports/admittedSourceSearchProvider.js'
 import type { SourceSearchRequest, SourceSearchResult } from '../ports/sourceAccessPort.js'
 import {
-  createDuckDuckGoHtmlFallbackSearchProvider,
+  createBabelConfiguredWebSearchProvider,
   defaultBabelWebSearchTransport,
   resolveProductionSearchProviderId,
   type BabelWebSearchTransport,
 } from './babelConfiguredWebSearch.js'
+import type { ExaLiteSearchTransport } from './exaLiteSearchProvider.js'
 import {
   createPinnedRepositoryFileSearchProvider,
   type FetchPinnedRepositoryTree,
@@ -16,6 +17,7 @@ import { createMissionSelectedDocumentSearchProvider } from './missionSelectedDo
 export interface MissionProductionSearchProviderOptions {
   mission: ResearchMissionV2
   webSearchTransport?: BabelWebSearchTransport
+  exaLiteTransport?: ExaLiteSearchTransport
   fetchRepositoryTree?: FetchPinnedRepositoryTree
   env?: NodeJS.ProcessEnv
 }
@@ -35,8 +37,11 @@ export function createMissionProductionSearchProvider(
   const web =
     providerId === null
       ? null
-      : createDuckDuckGoHtmlFallbackSearchProvider({
-          transport: options.webSearchTransport ?? defaultBabelWebSearchTransport(),
+      : createBabelConfiguredWebSearchProvider({
+          providerId,
+          webSearchTransport: options.webSearchTransport ?? defaultBabelWebSearchTransport(),
+          exaLiteTransport: options.exaLiteTransport,
+          env,
         })
 
   const limitations = [

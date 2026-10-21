@@ -6,6 +6,13 @@ import type { SourceSearchRequest, SourceSearchResult } from '../ports/sourceAcc
 import { parseDuckDuckGoHtml } from '../../../tools/webContext.js'
 import { admittedHttpGet } from './admittedHttpGet.js'
 import { parseAdmittedHttpUrl } from './admittedHttpGet.js'
+import {
+  createExaLiteWithDuckDuckGoFallbackSearchProvider,
+  EXA_LITE_SEARCH_PROVIDER_ID,
+  type ExaLiteSearchTransport,
+} from './exaLiteSearchProvider.js'
+
+export { EXA_LITE_SEARCH_PROVIDER_ID } from './exaLiteSearchProvider.js'
 
 /** Matches {@link handleWebSearch} in tools/webContext.ts — the only configured production provider today. */
 export const DUCKDUCKGO_HTML_FALLBACK_PROVIDER_ID = 'duckduckgo_html_fallback'
@@ -17,7 +24,9 @@ export const DUCKDUCKGO_HTML_FALLBACK_LIMITATIONS = [
   'may_return_zero_hits_without_distinct_error',
 ] as const
 
-export type BabelConfiguredSearchProviderId = typeof DUCKDUCKGO_HTML_FALLBACK_PROVIDER_ID
+export type BabelConfiguredSearchProviderId =
+  | typeof DUCKDUCKGO_HTML_FALLBACK_PROVIDER_ID
+  | typeof EXA_LITE_SEARCH_PROVIDER_ID
 
 export type BabelWebSearchTransport = (params: {
   searchUrl: string
@@ -33,7 +42,41 @@ export function resolveProductionSearchProviderId(
   if (!explicit || explicit === DUCKDUCKGO_HTML_FALLBACK_PROVIDER_ID) {
     return DUCKDUCKGO_HTML_FALLBACK_PROVIDER_ID
   }
+  if (explicit === EXA_LITE_SEARCH_PROVIDER_ID) {
+    return EXA_LITE_SEARCH_PROVIDER_ID
+  }
   return null
+}
+
+function resolveExaApiKey(env: NodeJS.ProcessEnv): string | null {
+  const value = env.EXA_API_KEY?.trim()
+  return value ? value : null
+}
+
+export interface CreateBabelConfiguredWebSearchProviderOptions {
+  providerId: BabelConfiguredSearchProviderId
+  webSearchTransport?: BabelWebSearchTransport
+  exaLiteTransport?: ExaLiteSearchTransport
+  env?: NodeJS.ProcessEnv
+}
+
+export function createBabelConfiguredWebSearchProvider(
+  options: CreateBabelConfiguredWebSearchProviderOptions,
+): AdmittedSourceSearchProvider & {
+  providerId: BabelConfiguredSearchProviderId
+  limitations: readonly string[]
+} {
+  const env = options.env ?? process.env
+  const duckTransport = options.webSearchTransport ?? defaultBabelWebSearchTransport()
+  if (options.providerId === EXA_LITE_SEARCH_PROVIDER_ID) {
+    return createExaLiteWithDuckDuckGoFallbackSearchProvider({
+      resolveApiKey: resolveExaApiKey,
+      exaTransport: options.exaLiteTransport ?? {},
+      duckTransport,
+      env,
+    })
+  }
+  return createDuckDuckGoHtmlFallbackSearchProvider({ transport: duckTransport })
 }
 
 export function buildDuckDuckGoHtmlSearchUrl(query: string): string {

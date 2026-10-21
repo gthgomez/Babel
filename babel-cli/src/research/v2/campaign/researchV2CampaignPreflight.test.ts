@@ -25,6 +25,17 @@ describe('research v2 campaign preflight readiness (no network)', () => {
     assertMissionModelRouteMatchesEffectiveOpenRouterRoute(mission, effective)
   })
 
+  it('exa_lite without EXA_API_KEY fails readiness (presence-only)', () => {
+    const mission = loadMission('G-L3-mission.json')
+    const readiness = evaluateResearchV2CampaignPreflightReadiness(mission, {
+      ...process.env,
+      BABEL_WEB_SEARCH_PROVIDER: 'exa_lite',
+      EXA_API_KEY: '',
+    })
+    assert.ok(readiness.failures.includes('exa_api_key_not_configured'))
+    assert.equal(readiness.ready, false)
+  })
+
   it('unsupported BABEL_WEB_SEARCH_PROVIDER fails readiness without printing ok semantics', () => {
     const mission = loadMission('G-L3-mission.json')
     const readiness = evaluateResearchV2CampaignPreflightReadiness(mission, {

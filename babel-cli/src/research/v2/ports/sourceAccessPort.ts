@@ -22,8 +22,27 @@ export interface SourceSearchHit {
   completeness: 'metadata_only' | 'snippet'
 }
 
+/** Discovery-only provider metadata (not admitted evidence). */
+export interface SourceSearchProviderReceipt {
+  configured_provider_id: string
+  effective_provider_id: string
+  degradation?: {
+    from_provider_id: string
+    to_provider_id: string
+    reason: string
+  }
+  /** Exa lite API metadata when Exa participated in this search (values preserved as returned). */
+  exa_lite?: {
+    requestId?: unknown
+    resolvedSearchType?: unknown
+    warnings?: unknown
+    notices?: unknown
+    costDollars?: unknown
+  }
+}
+
 export type SourceSearchResult =
-  | { operationId: string; status: 'ok'; hits: SourceSearchHit[] }
+  | { operationId: string; status: 'ok'; hits: SourceSearchHit[]; receipt?: SourceSearchProviderReceipt }
   | {
       operationId: string
       status: 'failed'
