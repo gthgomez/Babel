@@ -6,7 +6,7 @@ import { ProviderResearchModelBridge } from './providerResearchModelBridge.js'
 function runnerWithMetadata(
   meta: RunnerInvocationMetadata,
   delayMs = 0,
-): Pick<LlmRunner, 'execute' | 'getLastInvocationMetadata'> {
+): Pick<LlmRunner, 'execute'> {
   return {
     async execute(_prompt, schema, callbacks?: RunnerCallbacks) {
       if (delayMs > 0) {
@@ -24,18 +24,6 @@ function runnerWithMetadata(
         kind: 'plan_questions',
         questions: [{ text: 'What changed?', importance: 'high' }],
       })
-    },
-    getLastInvocationMetadata() {
-      return {
-        provider: 'stale-provider',
-        provider_model_id: 'stale/model',
-        latency_ms: 0,
-        prompt_tokens: 0,
-        completion_tokens: 0,
-        total_tokens: 0,
-        estimated_cost_usd: 999,
-        cost_precision: 'exact',
-      }
     },
   }
 }
@@ -110,7 +98,48 @@ describe('ProviderResearchModelBridge', () => {
     }
   })
 
-  it('does not use stale getLastInvocationMetadata when callback metadata is present', async () => {
+  it('ignores runner.getLastInvocationMetadata even when present on the object', async () => {
+    const runner: Pick<LlmRunner, 'execute'> & { getLastInvocationMetadata: () => RunnerInvocationMetadata } = {
+      async execute(_prompt, schema) {
+        return schema.parse({
+          kind: 'plan_questions',
+          questions: [{ text: 'no callback', importance: 'low' }],
+        })
+      },
+      getLastInvocationMetadata() {
+        return {
+          provider: 'stale-provider',
+          provider_model_id: 'stale/leaked-model',
+          latency_ms: 0,
+          prompt_tokens: 0,
+          completion_tokens: 0,
+          total_tokens: 0,
+          estimated_cost_usd: 999,
+          cost_precision: 'exact',
+        }
+      },
+    }
+    const bridge = new ProviderResearchModelBridge({
+      runner,
+      backendKey: 'research-v2',
+      provider: 'openrouter',
+      providerModelId: 'configured/model',
+    })
+    const result = await bridge.invokeStructured({
+      operationId: 'op-no-callback',
+      attemptId: 'att-no-callback',
+      kind: 'plan_questions',
+      input: {},
+      signal: new AbortController().signal,
+    })
+    assert.equal(result.status, 'ok')
+    if (result.status === 'ok') {
+      assert.equal(result.receipt.provider_model_id, 'configured/model')
+      assert.equal(result.receipt.usage_settlement.cost.status, 'unknown')
+    }
+  })
+
+  it('uses callback metadata when present', async () => {
     const runner = runnerWithMetadata({
       provider: 'openrouter',
       provider_model_id: 'callback/model',
@@ -145,7 +174,7 @@ describe('ProviderResearchModelBridge', () => {
   })
 
   it('isolates concurrent invocations via request-local callbacks', async () => {
-    const runner: Pick<LlmRunner, 'execute' | 'getLastInvocationMetadata'> = {
+    const runner: Pick<LlmRunner, 'execute'> = {
       async execute(_prompt, schema, callbacks?: RunnerCallbacks) {
         const id = _prompt.includes('slow') ? 'slow' : 'fast'
         const meta: RunnerInvocationMetadata = {
@@ -173,7 +202,6 @@ describe('ProviderResearchModelBridge', () => {
           questions: [{ text: id, importance: 'low' }],
         })
       },
-      getLastInvocationMetadata: () => null,
     }
     const bridge = new ProviderResearchModelBridge({
       runner,
@@ -207,7 +235,7 @@ describe('ProviderResearchModelBridge', () => {
 
   it('returns cancelled when signal aborts after runner completes', async () => {
     const controller = new AbortController()
-    const runner: Pick<LlmRunner, 'execute' | 'getLastInvocationMetadata'> = {
+    const runner: Pick<LlmRunner, 'execute'> = {
       async execute(_prompt, schema, callbacks?: RunnerCallbacks) {
         callbacks?.onInvocationCompleted?.({
           inference_id: 'inf',
@@ -231,7 +259,6 @@ describe('ProviderResearchModelBridge', () => {
           questions: [{ text: 'late cancel', importance: 'low' }],
         })
       },
-      getLastInvocationMetadata: () => null,
     }
     const bridge = new ProviderResearchModelBridge({
       runner,

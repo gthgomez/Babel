@@ -14,7 +14,7 @@ import type {
 } from '../ports/researchModelPort.js'
 
 export interface ProviderResearchModelBridgeOptions {
-  runner: Pick<LlmRunner, 'execute' | 'getLastInvocationMetadata'>
+  runner: Pick<LlmRunner, 'execute'>
   backendKey: string
   provider: string
   providerModelId: string
@@ -77,12 +77,13 @@ function routeReceiptFromMetadata(
   configured: ProviderResearchModelBridgeOptions,
 ): ModelRouteReceipt {
   const provider = meta?.provider ?? configured.provider
-  const providerModelId =
-    meta?.observed_model_id ??
-    meta?.sent_model_id ??
-    meta?.normalized_model_id ??
-    meta?.provider_model_id ??
-    configured.providerModelId
+  const providerModelId = meta
+    ? (meta.observed_model_id ??
+      meta.sent_model_id ??
+      meta.normalized_model_id ??
+      meta.provider_model_id ??
+      configured.providerModelId)
+    : configured.providerModelId
   return {
     operation_id: request.operationId,
     backend_key: configured.backendKey,
@@ -135,23 +136,21 @@ export class ProviderResearchModelBridge implements ResearchModelPort {
         request.signal,
       )
       if (request.signal.aborted) {
-        const meta = invocationMeta ?? this.options.runner.getLastInvocationMetadata?.() ?? null
         return {
           status: 'cancelled',
           operationId: request.operationId,
-          usageSettlement: usageFromMetadata(request.attemptId, meta),
+          usageSettlement: usageFromMetadata(request.attemptId, invocationMeta),
         }
       }
       const output = parseValidatedModelOutput(request.kind, raw)
       if (request.signal.aborted) {
-        const meta = invocationMeta ?? this.options.runner.getLastInvocationMetadata?.() ?? null
         return {
           status: 'cancelled',
           operationId: request.operationId,
-          usageSettlement: usageFromMetadata(request.attemptId, meta),
+          usageSettlement: usageFromMetadata(request.attemptId, invocationMeta),
         }
       }
-      const meta = invocationMeta ?? this.options.runner.getLastInvocationMetadata?.() ?? null
+      const meta = invocationMeta
       const resolvedAt = new Date().toISOString()
       return {
         status: 'ok',
@@ -160,12 +159,11 @@ export class ProviderResearchModelBridge implements ResearchModelPort {
         receipt: routeReceiptFromMetadata(request, meta, resolvedAt, this.options),
       }
     } catch (err: unknown) {
-      const meta = invocationMeta ?? this.options.runner.getLastInvocationMetadata?.() ?? null
       if (request.signal.aborted) {
         return {
           status: 'cancelled',
           operationId: request.operationId,
-          usageSettlement: usageFromMetadata(request.attemptId, meta),
+          usageSettlement: usageFromMetadata(request.attemptId, invocationMeta),
         }
       }
       return {
@@ -173,7 +171,7 @@ export class ProviderResearchModelBridge implements ResearchModelPort {
         operationId: request.operationId,
         failureCategory: 'provider_invoke_failed',
         message: err instanceof Error ? err.message : String(err),
-        usageSettlement: usageFromMetadata(request.attemptId, meta),
+        usageSettlement: usageFromMetadata(request.attemptId, invocationMeta),
       }
     }
   }

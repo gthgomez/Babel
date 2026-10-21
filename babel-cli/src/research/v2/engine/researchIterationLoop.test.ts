@@ -172,7 +172,7 @@ describe('research iteration loop (admitted ports)', () => {
         status: 'uncertain' as const,
         operationId: 'plan-op-uncertain',
         message: 'provider settlement unknown',
-        usageSettlement: { attempt_id: 'plan-att-uncertain', cost: { status: 'unknown' } },
+        usageSettlement: { attempt_id: 'plan-att-uncertain', cost: { status: 'unknown' as const } },
       }),
     }
     await assert.rejects(() =>
@@ -221,6 +221,108 @@ describe('research iteration loop (admitted ports)', () => {
     assert.equal(events.filter((e) => e.kind === 'plan_revised').length, 1)
     const completed = events.find((e) => e.kind === 'external_operation_completed')
     assert.equal(completionSettlement(completed), 'failed')
+  })
+
+  it('records uncertain completion when model invoke throws (no generated evidence)', async () => {
+    const store = new InMemoryResearchStore()
+    const session = await openAdmittedSession(store)
+    const model = {
+      invokeStructured: async () => {
+        throw new Error('runner transport failure')
+      },
+    }
+    await assert.rejects(
+      () =>
+        runAdmittedPlanningIteration({
+          session,
+          store,
+          model,
+          modelOperationId: 'plan-op-throw',
+          modelAttemptId: 'plan-att-throw',
+          planRevisionId: 'plan-throw-001',
+          revisionReason: 'throw',
+          dispatchedAt: '2026-10-20T12:04:00.000Z',
+          signal: new AbortController().signal,
+          now: () => FIXED_NOW,
+        }),
+      /runner transport failure/,
+    )
+    const events = await store.listEvents(session.mission.mission_id)
+    assert.equal(events.filter((e) => e.kind === 'plan_revised').length, 1)
+    assert.equal(events.filter((e) => e.kind === 'model_invocation_completed').length, 0)
+    const completed = events.find((e) => e.kind === 'external_operation_completed')
+    assert.equal(completionSettlement(completed), 'uncertain')
+  })
+
+  it('records uncertain completion when model throws during cancellation', async () => {
+    const store = new InMemoryResearchStore()
+    const session = await openAdmittedSession(store)
+    const controller = new AbortController()
+    const model = {
+      invokeStructured: async () => {
+        controller.abort()
+        throw new Error('late reject')
+      },
+    }
+    await assert.rejects(
+      () =>
+        runAdmittedPlanningIteration({
+          session,
+          store,
+          model,
+          modelOperationId: 'plan-op-throw-cancel',
+          modelAttemptId: 'plan-att-throw-cancel',
+          planRevisionId: 'plan-throw-cancel-001',
+          revisionReason: 'throw-cancel',
+          dispatchedAt: '2026-10-20T12:04:00.000Z',
+          signal: controller.signal,
+          now: () => FIXED_NOW,
+        }),
+      /model invoke rejected during cancellation/,
+    )
+    const events = await store.listEvents(session.mission.mission_id)
+    assert.equal(events.filter((e) => e.kind === 'model_invocation_completed').length, 0)
+    const completed = events.find((e) => e.kind === 'external_operation_completed')
+    assert.equal(completionSettlement(completed), 'uncertain')
+  })
+
+  it('returns writeContext for the generated plan so a follow-up admitted write succeeds', async () => {
+    const store = new InMemoryResearchStore()
+    const session = await openAdmittedSession(store)
+    const model = new FixtureResearchModelBridge()
+    model.scriptOutput('plan-op-ctx', {
+      kind: 'plan_questions',
+      questions: [{ text: 'Context follow-up', importance: 'high' }],
+    })
+    const result = await runAdmittedPlanningIteration({
+      session,
+      store,
+      model,
+      modelOperationId: 'plan-op-ctx',
+      modelAttemptId: 'plan-att-ctx',
+      planRevisionId: 'plan-generated-ctx',
+      revisionReason: 'ctx',
+      dispatchedAt: '2026-10-20T12:04:00.000Z',
+      signal: new AbortController().signal,
+      now: () => FIXED_NOW,
+    })
+    assert.equal(result.writeContext.plan_revision_id, 'plan-generated-ctx')
+    assert.notEqual(result.writeContext.plan_revision_id, 'plan-generated-ctx-bootstrap')
+    await store.appendExternalOperationIntent(result.writeContext, {
+      mission_id: result.writeContext.mission_id,
+      operation_id: 'follow-up-op',
+      attempt_id: 'follow-up-att',
+      operation_kind: 'model_invoke',
+      dispatched_at: FIXED_NOW,
+      idempotency_key: 'follow-up-op',
+    })
+    const events = await store.listEvents(session.mission.mission_id)
+    const followUp = events.find(
+      (e) =>
+        e.kind === 'external_operation_intent' &&
+        (e.payload.intent as { operation_id?: string } | undefined)?.operation_id === 'follow-up-op',
+    )
+    assert.ok(followUp)
   })
 
   it('does not append plan or model receipt when cancelled after inference', async () => {

@@ -154,13 +154,36 @@ export async function runAdmittedPlanningIteration(
     idempotency_key: request.modelOperationId,
   })
 
-  const modelResult = await request.model.invokeStructured({
-    operationId: request.modelOperationId,
-    attemptId: request.modelAttemptId,
-    kind: 'plan_questions',
-    input: missionRequirementsPayload(request.session.mission),
-    signal: request.signal,
-  })
+  let modelResult: ResearchModelInvocationResult
+  try {
+    modelResult = await request.model.invokeStructured({
+      operationId: request.modelOperationId,
+      attemptId: request.modelAttemptId,
+      kind: 'plan_questions',
+      input: missionRequirementsPayload(request.session.mission),
+      signal: request.signal,
+    })
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err)
+    const thrownResult: ResearchModelInvocationResult = {
+      status: 'uncertain',
+      operationId: request.modelOperationId,
+      message: request.signal.aborted
+        ? `model invoke rejected during cancellation: ${message}`
+        : message,
+      usageSettlement: { attempt_id: request.modelAttemptId, cost: { status: 'unknown' } },
+    }
+    await settleOperation(
+      request.store,
+      ctx,
+      ctx.mission_id,
+      request.modelOperationId,
+      request.modelAttemptId,
+      thrownResult,
+      now(),
+    )
+    throw new Error(thrownResult.message)
+  }
 
   if (request.signal.aborted) {
     await settleOperation(
@@ -248,7 +271,7 @@ export async function runAdmittedPlanningIteration(
 
   return {
     handle: acquired,
-    writeContext: ctx,
+    writeContext: evidenceCtx,
     modelOperationId: request.modelOperationId,
     planRevisionId: planRevision.plan_revision_id,
     plannedQuestionCount: planRevision.questions.length,

@@ -228,22 +228,38 @@ function resolveRedirectLocation(location: string, base: URL): URL {
  * Governed GET with scheme/enterprise/private-address/DNS admission and redirect re-validation.
  * Enforces maxBytes while streaming (does not buffer the full body before truncation).
  */
+export type AdmittedHttpGetDispatch = (
+  url: URL,
+  target: PublicNetworkTarget,
+  maxBytes: number,
+  signal: AbortSignal,
+  timeoutMs: number,
+) => Promise<{
+  status: number
+  headers: IncomingMessage['headers']
+  body: Awaited<ReturnType<typeof readStreamingBody>>
+}>
+
 export async function admittedHttpGet(params: {
   url: string
   maxBytes: number
   signal: AbortSignal
   timeoutMs?: number
   env?: NodeJS.ProcessEnv
+  /** Test seam — count and stub HTTP dispatches without live network. */
+  dispatchGet?: AdmittedHttpGetDispatch
 }): Promise<AdmittedHttpGetResult> {
   const env = params.env ?? process.env
   const requestedUrl = params.url
   let current = parseAdmittedHttpUrl(requestedUrl, env)
   const redirectChain: string[] = [current.href]
   const timeoutMs = params.timeoutMs ?? 15_000
+  const dispatchGet = params.dispatchGet ?? singleGet
 
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+    current = parseAdmittedHttpUrl(current.href, env)
     const target = await assertPublicNetworkTarget(current, env)
-    const response = await singleGet(current, target, params.maxBytes, params.signal, timeoutMs)
+    const response = await dispatchGet(current, target, params.maxBytes, params.signal, timeoutMs)
     const status = response.status
     if (status >= 300 && status < 400) {
       const locationRaw = response.headers.location
@@ -254,7 +270,8 @@ export async function admittedHttpGet(params: {
       if (hop >= MAX_REDIRECTS) {
         throw new AdmittedNetworkPolicyError('redirect limit exceeded')
       }
-      current = resolveRedirectLocation(location, current)
+      const redirectTarget = resolveRedirectLocation(location, current)
+      current = parseAdmittedHttpUrl(redirectTarget.href, env)
       redirectChain.push(current.href)
       continue
     }
