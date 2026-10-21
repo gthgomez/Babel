@@ -39,11 +39,13 @@ Each question_id must match one of the active plan question ids; unknown ids are
     {
       "finding_id": "<non-empty string>",
       "status": "supported" | "contradicted" | "insufficient" | "not_checked",
-      "rationale": "<non-empty string>"
+      "rationale": "<non-empty string>",
+      "question_coverage": "answers" | "partial" | "tangential" | "none"
     }
   ]
 }
-Per-judgment allowed keys only: finding_id, status, rationale.`,
+Per-judgment allowed keys only: finding_id, status, rationale, question_coverage.
+status judges whether cited passages support the assertion; question_coverage judges whether the assertion addresses the bound plan question text (tangential supported facts do not count as answers).`,
   synthesize_report: `Root object (strict — no extra keys):
 {
   "kind": "synthesize_report",

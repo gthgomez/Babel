@@ -11,6 +11,7 @@ import {
   deriveSinglePassStoppingReason,
   deriveSourceCutoffFromRevisions,
   deriveTerminalState,
+  deriveQuestionCoverageLimitations,
   deriveUnansweredPlanQuestionIds,
   deriveVerifiedEvidenceLimitations,
 } from './researchReportFinalization.js'
@@ -83,6 +84,7 @@ export function buildSynthesizedResearchReport(params: {
     passages,
     sourceRevisions,
   })
+  const questionCoverageLimitations = deriveQuestionCoverageLimitations(params.findings)
   const unansweredQuestionIds = deriveUnansweredPlanQuestionIds(params.plan, params.findings)
   const terminalState = deriveTerminalState({
     unansweredQuestionIds,
@@ -114,11 +116,12 @@ export function buildSynthesizedResearchReport(params: {
     answer_summary: buildCitationQualifiedAnswerSummary(verifiedAssertions),
     unanswered_questions: unansweredQuestionIds,
     coverage_notes:
-      'answer_summary lists only semantically supported findings with explicit finding_id bindings; unanswered_questions includes plan questions without semantically supported findings (default extract binding to the first plan question does not answer the full plan).',
+      'answer_summary lists only semantically supported findings with explicit finding_id bindings; unanswered_questions requires question_coverage answers on a supported finding (passage support or question_id membership alone is insufficient; partial/tangential coverage remains unanswered).',
     limitations: [
       ...runtimeLimitations,
       ...acquisitionLimitations,
       ...evidenceVerificationLimitations,
+      ...questionCoverageLimitations,
       ...(hasInsufficient ? ['semantic_support_insufficient'] : []),
       ...(hasContradiction ? ['semantic_support_contradicted'] : []),
       ...(hasNotChecked ? ['semantic_support_not_checked'] : []),

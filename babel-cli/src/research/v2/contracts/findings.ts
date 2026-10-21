@@ -29,6 +29,25 @@ export const SemanticSupportJudgmentSchema = z
   })
   .strict()
 
+/** Whether a finding's assertion addresses its bound plan question (distinct from passage support). */
+export const QuestionCoverageStatusSchema = z.enum([
+  'answers',
+  'partial',
+  'tangential',
+  'none',
+  'not_assessed',
+])
+
+export const QuestionCoverageJudgmentSchema = z
+  .object({
+    status: QuestionCoverageStatusSchema,
+    reviewer: z.string().min(1),
+    reviewer_version: z.string().min(1),
+    rationale: z.string().min(1),
+    reviewed_at: IsoDateTimeSchema,
+  })
+  .strict()
+
 export const FindingRecordSchema = z
   .object({
     finding_id: RecordIdSchema,
@@ -38,6 +57,7 @@ export const FindingRecordSchema = z
     passage_ids: z.array(RecordIdSchema).min(1),
     source_integrity: SourceIntegrityStateSchema,
     semantic_support: SemanticSupportJudgmentSchema.optional(),
+    question_coverage: QuestionCoverageJudgmentSchema.optional(),
     assumption_ids: z.array(RecordIdSchema).optional(),
     conflicting_finding_ids: z.array(RecordIdSchema).optional(),
     calculation_ref: z.string().optional(),

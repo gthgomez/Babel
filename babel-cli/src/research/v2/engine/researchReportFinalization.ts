@@ -23,12 +23,42 @@ export function questionIdsWithSupportedFindings(
   return supported
 }
 
-/** Plan questions lacking at least one semantically supported finding (ignores plan.status). */
+/** Plan questions with at least one supported finding whose coverage status is `answers`. */
+export function questionIdsWithAnsweredCoverage(
+  findings: readonly FindingRecord[],
+): Set<string> {
+  const answered = new Set<string>()
+  for (const finding of findings) {
+    if (supportStatus(finding)?.status !== 'supported') continue
+    if (finding.question_coverage?.status === 'answers') {
+      answered.add(finding.question_id)
+    }
+  }
+  return answered
+}
+
+/** Supported findings that do not fully answer their bound plan question. */
+export function deriveQuestionCoverageLimitations(
+  findings: readonly FindingRecord[],
+): string[] {
+  const limitations: string[] = []
+  for (const finding of findings) {
+    if (supportStatus(finding)?.status !== 'supported') continue
+    const coverage = finding.question_coverage?.status ?? 'not_assessed'
+    if (coverage === 'answers') continue
+    limitations.push(
+      `question_coverage_${coverage}:${finding.question_id}:${finding.finding_id}`,
+    )
+  }
+  return limitations
+}
+
+/** Plan questions lacking a supported finding with question_coverage `answers` (ignores plan.status). */
 export function deriveUnansweredPlanQuestionIds(
   plan: PlanRevision,
   findings: readonly FindingRecord[],
 ): string[] {
-  const answered = questionIdsWithSupportedFindings(findings)
+  const answered = questionIdsWithAnsweredCoverage(findings)
   return plan.questions
     .map((q) => q.question_id)
     .filter((questionId) => !answered.has(questionId))

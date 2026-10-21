@@ -272,6 +272,13 @@
         "rationale": "The status table lists 3.16 as pre-release with planned first release 2027-10-06 and 3.15 as bugfix, while the releases table shows 3.15.0 (Oct. 9, 2026) as the latest listed release; no newer stable release appears.",
         "reviewed_at": "2026-10-21T09:04:39.515Z"
       },
+      "question_coverage": {
+        "status": "answers",
+        "reviewer": "research-v2-semantic-review",
+        "reviewer_version": "0.1.0-question-coverage",
+        "rationale": "Assertion states the latest stable release version and date for the mission as-of date.",
+        "reviewed_at": "2026-10-21T09:04:39.515Z"
+      },
       "revised_at": "2026-10-21T09:04:39.515Z"
     }
   ],

@@ -24,6 +24,7 @@ describe('semantic support review persistence shape', () => {
             finding_id: 'f-1',
             status: 'contradicted',
             rationale: 'Passage text contradicts the assertion.',
+            question_coverage: 'none',
           },
         ],
       },
@@ -33,6 +34,7 @@ describe('semantic support review persistence shape', () => {
     const f2 = reviewed.find((f) => f.finding_id === 'f-2')
     assert.equal(f1?.semantic_support?.status, 'contradicted')
     assert.equal(f2?.semantic_support?.status, 'not_checked')
+    assert.equal(f2?.question_coverage?.status, 'not_assessed')
     assert.ok(f2?.revised_at)
   })
 })

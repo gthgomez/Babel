@@ -45,6 +45,7 @@ export function fixtureModelForOfflineRun(): ResearchModelPort {
               finding_id: findingId ?? 'missing',
               status: 'insufficient',
               rationale: 'Offline CLI run — insufficient for a live acceptance decision.',
+              question_coverage: 'partial',
             },
           ],
         })

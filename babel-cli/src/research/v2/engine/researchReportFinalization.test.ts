@@ -45,7 +45,11 @@ const finding = (
   id: string,
   questionId: string,
   status: FindingRecord['semantic_support'],
-  options?: { sourceIntegrity?: FindingRecord['source_integrity']; passageIds?: string[] },
+  options?: {
+    sourceIntegrity?: FindingRecord['source_integrity']
+    passageIds?: string[]
+    questionCoverage?: FindingRecord['question_coverage']
+  },
 ): FindingRecord => ({
   finding_id: id,
   question_id: questionId,
@@ -54,6 +58,7 @@ const finding = (
   passage_ids: options?.passageIds ?? ['p-1'],
   source_integrity: options?.sourceIntegrity ?? 'not_checked',
   semantic_support: status,
+  ...(options?.questionCoverage ? { question_coverage: options.questionCoverage } : {}),
   created_at: '2026-10-21T09:04:00.000Z',
 })
 
@@ -101,13 +106,37 @@ const supportedReview = {
   reviewed_at: '2026-10-21T09:04:00.000Z',
 }
 
+const answersCoverage = {
+  status: 'answers' as const,
+  reviewer: 'r',
+  reviewer_version: '0',
+  rationale: 'Addresses the plan question.',
+  reviewed_at: '2026-10-21T09:04:00.000Z',
+}
+
 describe('researchReportFinalization', () => {
-  it('derives unanswered questions from supported findings per question_id (not plan.status)', () => {
+  it('derives unanswered questions from question_coverage answers (not support alone)', () => {
     const findings = [
-      finding('f1', 'q-1', supportedReview),
-      finding('f2', 'q-1', supportedReview),
+      finding('f1', 'q-1', supportedReview, { questionCoverage: answersCoverage }),
+      finding('f2', 'q-1', supportedReview, { questionCoverage: answersCoverage }),
     ]
     assert.deepEqual(deriveUnansweredPlanQuestionIds(fiveQuestionPlan, findings), [
+      'q-2',
+      'q-3',
+      'q-4',
+      'q-5',
+    ])
+  })
+
+  it('supported tangential findings do not close plan questions', () => {
+    const tangential = {
+      ...answersCoverage,
+      status: 'tangential' as const,
+      rationale: 'Supported fact but does not answer the question.',
+    }
+    const findings = [finding('f1', 'q-1', supportedReview, { questionCoverage: tangential })]
+    assert.deepEqual(deriveUnansweredPlanQuestionIds(fiveQuestionPlan, findings), [
+      'q-1',
       'q-2',
       'q-3',
       'q-4',
@@ -126,6 +155,7 @@ describe('researchReportFinalization', () => {
     const supported = finding('supported-1', 'q-only', supportedReview, {
       sourceIntegrity: 'valid',
       passageIds: ['p-1'],
+      questionCoverage: answersCoverage,
     })
     const report = buildSynthesizedResearchReport({
       mission: exampleTechnicalMissionFixture,
@@ -147,13 +177,14 @@ describe('researchReportFinalization', () => {
     })
     assert.equal(report.terminal_state, 'complete')
     assert.deepEqual(report.unanswered_questions, [])
-    assert.match(report.coverage_notes, /unanswered_questions includes/)
+    assert.match(report.coverage_notes, /question_coverage/)
   })
 
   it('single-question mission: acquisition truncation stays partial without masking unanswered', () => {
     const supported = finding('supported-1', 'q-only', supportedReview, {
       sourceIntegrity: 'valid',
       passageIds: ['p-1'],
+      questionCoverage: answersCoverage,
     })
     const passages = [
       passage('p-1', truncatedRevision.revision_id, false),

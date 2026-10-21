@@ -138,12 +138,8 @@ describe('G-L1 attempt4 evidence subset (historical) + fef78559 finalizer', () =
       UNANSWERED_AFTER_Q1_SUPPORTED,
     )
     assert.deepEqual(report.unanswered_questions, UNANSWERED_AFTER_Q1_SUPPORTED)
-    assert.match(report.coverage_notes, /unanswered_questions includes/)
-    assert.ok(
-      report.coverage_notes.includes(
-        'default extract binding to the first plan question does not answer the full plan',
-      ),
-    )
+    assert.match(report.coverage_notes, /question_coverage/)
+    assert.match(report.coverage_notes, /question_coverage answers/)
     assert.equal(report.source_cutoff, '2026-10-21T09:04:02.034Z')
     assert.ok(report.stopping_reason.startsWith('single_pass_host_finalization'))
     assert.ok(

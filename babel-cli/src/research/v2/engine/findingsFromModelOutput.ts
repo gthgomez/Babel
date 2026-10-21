@@ -58,6 +58,8 @@ export function findingsFromExtractModelOutput(params: {
 
 const SEMANTIC_REVIEWER = 'research-v2-semantic-review'
 const SEMANTIC_REVIEWER_VERSION = '0.1.0-offline'
+const QUESTION_COVERAGE_REVIEWER = SEMANTIC_REVIEWER
+const QUESTION_COVERAGE_REVIEWER_VERSION = '0.1.0-question-coverage'
 
 export function applySemanticSupportReview(
   findings: FindingRecord[],
@@ -80,6 +82,13 @@ export function applySemanticSupportReview(
       rationale: judgment.rationale,
       reviewed_at: reviewedAt,
     }
+    finding.question_coverage = {
+      status: judgment.question_coverage,
+      reviewer: QUESTION_COVERAGE_REVIEWER,
+      reviewer_version: QUESTION_COVERAGE_REVIEWER_VERSION,
+      rationale: judgment.rationale,
+      reviewed_at: reviewedAt,
+    }
     finding.revised_at = reviewedAt
     if (judgment.status === 'contradicted') {
       finding.conflicting_finding_ids = finding.conflicting_finding_ids ?? []
@@ -92,6 +101,13 @@ export function applySemanticSupportReview(
       reviewer: SEMANTIC_REVIEWER,
       reviewer_version: SEMANTIC_REVIEWER_VERSION,
       rationale: 'semantic review omitted an explicit judgment for this finding',
+      reviewed_at: reviewedAt,
+    }
+    finding.question_coverage = {
+      status: 'not_assessed',
+      reviewer: QUESTION_COVERAGE_REVIEWER,
+      reviewer_version: QUESTION_COVERAGE_REVIEWER_VERSION,
+      rationale: 'semantic review omitted question coverage for this finding',
       reviewed_at: reviewedAt,
     }
     finding.revised_at = reviewedAt

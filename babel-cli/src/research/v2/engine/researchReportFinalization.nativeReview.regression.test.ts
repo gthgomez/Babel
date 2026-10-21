@@ -50,6 +50,14 @@ const supportedReview = {
   reviewed_at: '2026-10-21T09:04:00.000Z',
 }
 
+const answersCoverage = {
+  status: 'answers' as const,
+  reviewer: 'r',
+  reviewer_version: '0',
+  rationale: 'Addresses question.',
+  reviewed_at: '2026-10-21T09:04:00.000Z',
+}
+
 function supportedFinding(
   id: string,
   questionId: string,
@@ -64,6 +72,7 @@ function supportedFinding(
     passage_ids: passageIds,
     source_integrity: integrity,
     semantic_support: supportedReview,
+    question_coverage: answersCoverage,
     created_at: '2026-10-21T09:04:00.000Z',
   }
 }
