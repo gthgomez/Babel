@@ -97,5 +97,10 @@ describe('T-L1 discover-query reciprocal (injected trees, no GitHub API)', () =>
       'pregel checkpoint',
     )
     assert.equal(pins.reference_repository.commit_sha, mission.source_policy.selected_repository_refs?.[0]?.commit_sha)
+    assert.equal(pins.reference_repository.git_tree_sha, 'a8aa3b138b6036c25331712af8ed8b3f0a4a0fda')
+    assert.equal(
+      pins.reference_repository.t_l1_discover_query_first_hit?.path,
+      'libs/langgraph/langgraph/pregel/_checkpoint.py',
+    )
   })
 })
