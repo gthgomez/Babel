@@ -13,8 +13,9 @@ import {
 } from './frozenRegistries.js'
 
 /**
- * Agent B ownership: profiles/general, adapters/web, adapters/documents.
- * Registry wiring is Agent A; adapters come from {@link generalAdapterCatalog} (B80a7a9ef).
+ * Agent B ownership: profiles/general, adapters/web/documents **read** + extraction.
+ * Registry wiring is Agent A; factories from {@link generalAdapterCatalog} (B80a7a9ef).
+ * Web **discover** on #406 is Agent A search-backed — keep {@link GeneralWebAdapter#discover}.
  */
 export interface CombinedResearchRegistries extends ReturnType<typeof createTechnicalResearchRegistries> {
   bAdaptersRegistered: string[]

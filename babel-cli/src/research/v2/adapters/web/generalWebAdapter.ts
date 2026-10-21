@@ -23,6 +23,11 @@ export class GeneralWebAdapter implements SourceAdapter {
   readonly adapterId = GENERAL_WEB_ADAPTER_ID
   readonly supportedKinds: readonly SourceClass[] = ['web']
 
+  /**
+   * Agent A (#406): discovery is search-backed via {@link SourceAccessPort#search}.
+   * B80 catalog slices return `not_supported` without calling search — do not replace
+   * this method wholesale when porting B extraction/read fixes.
+   */
   async discover(
     request: SourceDiscoverRequest,
     access: SourceAccessPort,
