@@ -1,3 +1,3 @@
-# Engine (M1+)
+# Engine (M1.3+)
 
-Shared scheduling loop, gap selection, and synthesis live here after contract freeze and Agent B review. Checkpoint M0 does not implement this directory.
+`ResearchEngineSession` coordinates an admitted single-owner durable store, fixture model bridge, and control admission helpers. See `cancelResumeControl.test.ts` for the canonical cancel → inspect → stale recovery → resume journey (no live API).

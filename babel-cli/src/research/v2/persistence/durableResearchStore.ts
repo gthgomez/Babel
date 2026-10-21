@@ -1,5 +1,6 @@
 import { mkdir, rename, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import { randomUUID } from 'node:crypto'
 import type { MissionWriteContext } from '../contracts/common.js'
 import type { FindingRecord } from '../contracts/findings.js'
 import type {
@@ -52,9 +53,16 @@ export class DurableResearchStore implements ResearchStore {
     this.inner = inner
   }
 
-  static async open(storeDirectory: string): Promise<DurableResearchStore> {
+  static async open(
+    storeDirectory: string,
+    options?: { ownerSessionId?: string },
+  ): Promise<DurableResearchStore> {
     await mkdir(storeDirectory, { recursive: true })
-    const releaseExclusiveLock = await acquireExclusiveStoreLock(storeDirectory)
+    const sessionId = options?.ownerSessionId ?? randomUUID()
+    const releaseExclusiveLock = await acquireExclusiveStoreLock(storeDirectory, {
+      session_id: sessionId,
+      pid: process.pid,
+    })
     const snapshotPath = join(storeDirectory, DURABLE_RESEARCH_STORE_SNAPSHOT_FILE)
     try {
       const inner = await loadStoreInnerFromSnapshotFile(snapshotPath)
@@ -65,9 +73,24 @@ export class DurableResearchStore implements ResearchStore {
     }
   }
 
-  async close(): Promise<void> {
+  async close(beforeExclusiveLockRelease?: () => Promise<void>): Promise<void> {
     if (this.closed) return
     await this.mutationQueue.drain()
+    if (beforeExclusiveLockRelease) {
+      await beforeExclusiveLockRelease()
+    }
+    this.closed = true
+    await this.releaseExclusiveLock()
+  }
+
+  /** @internal Regression — drain writes without releasing the directory exclusive lock. */
+  async drainMutationsForClose(): Promise<void> {
+    await this.mutationQueue.drain()
+  }
+
+  /** @internal Regression — release lock after {@link drainMutationsForClose} (skips owner control cleanup). */
+  async releaseExclusiveLockForClose(): Promise<void> {
+    if (this.closed) return
     this.closed = true
     await this.releaseExclusiveLock()
   }

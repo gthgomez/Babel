@@ -8,7 +8,7 @@ Engine and live provider integration remain out of scope until canonical tests c
 
 ## Concurrency and failure bounds (post–d9 review FIX)
 
-- **Exclusive opener:** `.research-store.exclusive.lock` (`wx`) — second `open()` on the same directory throws `DurableStoreBusyError`; call `close()` to release after pending mutations drain. This does **not** by itself cover multi-CLI cancel/inspect or stale-crash resume; integrate via an admitted control path or operation-scoped locking — not routine manual lock deletion.
+- **Exclusive opener:** `.research-store.exclusive.lock` (`wx`) carries JSON `{ schema_version, session_id, pid }`; second `open()` on the same directory throws `DurableStoreBusyError`; `close()` releases only when on-disk lock payload still matches the handle binding. Multi-CLI **inspect**, **external cancel-request**, and **stale-crash owner recovery** use `control/researchStoreAdmission.ts` + `control/storeCancelRequest.ts`. End-to-end acceptance still requires engine/CLI integration — not lock deletion as routine ops.
 - **Same-instance serialization:** one staged→persist→publish transaction at a time per open handle (`MutationQueue`).
 - **Staged commit:** mutations apply to a staged snapshot, flush to disk, then replace memory; flush failure reloads from disk (no ghost missions).
 - **Restore:** `assertSnapshotIntegrity` cross-checks event log vs fence maps and **bidirectional** operation tracking vs intent/completion/reconciliation events (fail closed).
