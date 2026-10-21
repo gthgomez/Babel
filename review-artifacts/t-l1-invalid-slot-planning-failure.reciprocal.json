@@ -3,8 +3,8 @@
   "label": "T-L1 invalid discover-primary planning failure reciprocal (synthetic model, production runner)",
   "qualification_status": "author_run_incomplete",
   "qualification_note": "Baseline trace + durable-subset tests pass. Two acceptance tests remain red until A repairs missionRequirementsPayload slot directory and planning settlement before buildPlanRevisionFromPlanQuestions mapping. Not CI-green / not full-suite.",
-  "git_head_at_receipt_authoring": "3657009c",
-  "working_tree_dirty_untracked_paths": 48,
+  "git_head_at_receipt_authoring": "3657009c9f9d7af561a7e0a6e48b670807cc3fcc",
+  "working_tree_dirty_untracked_paths": 49,
   "canonical_defects_under_test": [
     "missionRequirementsPayload supplies discover-primary instead of missionCoverageSourceSlots for T-L1 technical mission",
     "buildPlanRevisionFromPlanQuestions throws before planning external_operation_completed settlement"
