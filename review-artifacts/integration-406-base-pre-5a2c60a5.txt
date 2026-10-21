@@ -1,0 +1,12 @@
+integration_base_pr=406
+integration_base_branch=cursor/research-v2-post-review-settlement-fc31
+integration_base_commit=1b8389dd4c50cd1d29fd828188920da0ce4c2525
+integration_base_subject=docs(research-v2): lock A/B discover split for #406 vs B80 reciprocal tests
+merged_into=cursor/agent-b-general-fixtures-f617
+recorded_at=2026-10-21T05:06:00Z
+a_draft_head=f00db4c5
+pending_a_checkpoint=authoritative @napi-rs/canvas direct dep (A1b package repair in progress; see coordination-a1b-canvas-dependency-proposal.txt)
+production_package_flags=ci --omit=dev --omit=optional --ignore-scripts --no-audit --no-fund
+production_package_command=review-artifacts/production-package-reciprocal-command.txt
+b_package_ownership=no B edits to package.json/package-lock.json (reverted 3a6861b5 canvas)
+lifecycle_reciprocal_owner=Agent A cancelResumeControl + durable store close/reopen (#406 f00db4c5+)
