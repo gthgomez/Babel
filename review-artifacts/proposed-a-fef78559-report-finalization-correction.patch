@@ -1,0 +1,182 @@
+diff --git a/babel-cli/src/research/v2/engine/buildSynthesizedResearchReport.ts b/babel-cli/src/research/v2/engine/buildSynthesizedResearchReport.ts
+index 7fd99371..58c25bab 100644
+--- a/babel-cli/src/research/v2/engine/buildSynthesizedResearchReport.ts
++++ b/babel-cli/src/research/v2/engine/buildSynthesizedResearchReport.ts
+@@ -12,6 +12,7 @@ import {
+   deriveSourceCutoffFromRevisions,
+   deriveTerminalState,
+   deriveUnansweredPlanQuestionIds,
++  deriveVerifiedEvidenceLimitations,
+ } from './researchReportFinalization.js'
+ 
+ function supportStatus(finding: FindingRecord): FindingRecord['semantic_support'] | undefined {
+@@ -72,14 +73,22 @@ export function buildSynthesizedResearchReport(params: {
+   )
+   const sourceRevisions = params.sourceRevisions ?? []
+   const passages = params.passages ?? []
++  const runtimeLimitations = params.additionalLimitations ?? []
+   const acquisitionLimitations = deriveAcquisitionEvidenceLimitations({
+     sourceRevisions,
+     passages,
+   })
++  const evidenceVerificationLimitations = deriveVerifiedEvidenceLimitations({
++    findings: params.findings,
++    passages,
++    sourceRevisions,
++  })
+   const unansweredQuestionIds = deriveUnansweredPlanQuestionIds(params.plan, params.findings)
+   const terminalState = deriveTerminalState({
+     unansweredQuestionIds,
+     acquisitionLimitations,
++    evidenceVerificationLimitations,
++    runtimeLimitations,
+     hasSemanticInsufficient: hasInsufficient,
+     hasSemanticContradiction: hasContradiction,
+     hasSemanticNotChecked: hasNotChecked,
+@@ -87,6 +96,8 @@ export function buildSynthesizedResearchReport(params: {
+   const stoppingReason = deriveSinglePassStoppingReason({
+     unansweredQuestionIds,
+     acquisitionLimitations,
++    evidenceVerificationLimitations,
++    runtimeLimitations,
+     hasSemanticInsufficient: hasInsufficient,
+     hasSemanticContradiction: hasContradiction,
+     hasSemanticNotChecked: hasNotChecked,
+@@ -105,8 +116,9 @@ export function buildSynthesizedResearchReport(params: {
+     coverage_notes:
+       'answer_summary lists only semantically supported findings with explicit finding_id bindings; unanswered_questions omits plan questions without semantically supported findings (default extract binding to the first plan question does not answer the full plan).',
+     limitations: [
+-      ...(params.additionalLimitations ?? []),
++      ...runtimeLimitations,
+       ...acquisitionLimitations,
++      ...evidenceVerificationLimitations,
+       ...(hasInsufficient ? ['semantic_support_insufficient'] : []),
+       ...(hasContradiction ? ['semantic_support_contradicted'] : []),
+       ...(hasNotChecked ? ['semantic_support_not_checked'] : []),
+diff --git a/babel-cli/src/research/v2/engine/researchReportFinalization.ts b/babel-cli/src/research/v2/engine/researchReportFinalization.ts
+index e504494e..dc498632 100644
+--- a/babel-cli/src/research/v2/engine/researchReportFinalization.ts
++++ b/babel-cli/src/research/v2/engine/researchReportFinalization.ts
+@@ -34,17 +34,78 @@ export function deriveUnansweredPlanQuestionIds(
+     .filter((questionId) => !answered.has(questionId))
+ }
+ 
++function retrievedAtInstantMs(retrievedAt: string): number | null {
++  const ms = Date.parse(retrievedAt)
++  return Number.isFinite(ms) ? ms : null
++}
++
++/** Latest admitted revision instant, normalized to UTC ISO; unknown when absent or invalid. */
+ export function deriveSourceCutoffFromRevisions(
+   revisions: readonly SourceRevision[],
+ ): UnknownValue {
+   if (revisions.length === 0) return 'unknown'
+-  let latest = revisions[0]!.retrieved_at
++  let latestMs: number | null = null
+   for (const revision of revisions) {
+-    if (revision.retrieved_at > latest) {
+-      latest = revision.retrieved_at
++    const ms = retrievedAtInstantMs(revision.retrieved_at)
++    if (ms === null) continue
++    if (latestMs === null || ms > latestMs) {
++      latestMs = ms
+     }
+   }
+-  return latest
++  if (latestMs === null) return 'unknown'
++  return new Date(latestMs).toISOString()
++}
++
++const INCOMPLETE_REVISION_COMPLETENESS = new Set<SourceRevision['completeness']>([
++  'metadata_only',
++  'unavailable',
++  'extraction_failed',
++])
++
++/**
++ * Semantic support and citation ids alone are not verified evidence; host checks integrity and
++ * admitted passage/revision linkage when building the report.
++ */
++export function deriveVerifiedEvidenceLimitations(params: {
++  findings: readonly FindingRecord[]
++  passages: readonly PassageRecord[]
++  sourceRevisions: readonly SourceRevision[]
++}): string[] {
++  const limitations: string[] = []
++  const passageIds = new Set(params.passages.map((p) => p.passage_id))
++  const revisionIds = new Set(params.sourceRevisions.map((r) => r.revision_id))
++
++  for (const finding of params.findings) {
++    if (supportStatus(finding)?.status !== 'supported') continue
++    if (finding.source_integrity !== 'valid') {
++      limitations.push(
++        `finding_source_integrity_not_verified:${finding.finding_id}:${finding.source_integrity}`,
++      )
++    }
++    for (const passageId of finding.passage_ids) {
++      if (!passageIds.has(passageId)) {
++        limitations.push(`finding_cites_missing_passage:${finding.finding_id}:${passageId}`)
++      }
++    }
++  }
++
++  for (const passage of params.passages) {
++    if (!revisionIds.has(passage.source_revision_id)) {
++      limitations.push(
++        `passage_missing_source_revision:${passage.passage_id}:${passage.source_revision_id}`,
++      )
++    }
++  }
++
++  for (const revision of params.sourceRevisions) {
++    if (INCOMPLETE_REVISION_COMPLETENESS.has(revision.completeness)) {
++      limitations.push(
++        `source_revision_incomplete:${revision.revision_id}:${revision.completeness}`,
++      )
++    }
++  }
++
++  return limitations
+ }
+ 
+ export function deriveAcquisitionEvidenceLimitations(params: {
+@@ -86,6 +147,8 @@ export function deriveAcquisitionEvidenceLimitations(params: {
+ export function deriveTerminalState(params: {
+   unansweredQuestionIds: readonly string[]
+   acquisitionLimitations: readonly string[]
++  evidenceVerificationLimitations: readonly string[]
++  runtimeLimitations: readonly string[]
+   hasSemanticInsufficient: boolean
+   hasSemanticContradiction: boolean
+   hasSemanticNotChecked: boolean
+@@ -93,6 +156,8 @@ export function deriveTerminalState(params: {
+   if (
+     params.unansweredQuestionIds.length > 0 ||
+     params.acquisitionLimitations.length > 0 ||
++    params.evidenceVerificationLimitations.length > 0 ||
++    params.runtimeLimitations.length > 0 ||
+     params.hasSemanticInsufficient ||
+     params.hasSemanticContradiction ||
+     params.hasSemanticNotChecked
+@@ -105,6 +170,8 @@ export function deriveTerminalState(params: {
+ export function deriveSinglePassStoppingReason(params: {
+   unansweredQuestionIds: readonly string[]
+   acquisitionLimitations: readonly string[]
++  evidenceVerificationLimitations: readonly string[]
++  runtimeLimitations: readonly string[]
+   hasSemanticInsufficient: boolean
+   hasSemanticContradiction: boolean
+   hasSemanticNotChecked: boolean
+@@ -116,6 +183,12 @@ export function deriveSinglePassStoppingReason(params: {
+   if (params.acquisitionLimitations.length > 0) {
+     parts.push('acquisition_or_extraction_limits_recorded')
+   }
++  if (params.evidenceVerificationLimitations.length > 0) {
++    parts.push('evidence_verification_limits_recorded')
++  }
++  if (params.runtimeLimitations.length > 0) {
++    parts.push('runtime_slot_limits_recorded')
++  }
+   if (params.hasSemanticInsufficient) parts.push('semantic_support_insufficient')
+   if (params.hasSemanticContradiction) parts.push('semantic_support_contradicted')
+   if (params.hasSemanticNotChecked) parts.push('semantic_support_not_checked')
