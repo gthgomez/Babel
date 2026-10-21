@@ -1,0 +1,62 @@
+{
+  "schema": "research-v2-t-l1-planning-evidence-followup/v1",
+  "mission_id": "mission-t-l1-validation-8930f929-001",
+  "planning_operation": {
+    "operation_id": "cli-run-plan-wg2-9ecfec5a",
+    "attempt_id": "cli-run-plan-att-wg2-9ecfec5a",
+    "operation_kind": "model_invoke",
+    "intent_recorded_at": "2026-10-21T14:43:52.506Z",
+    "terminal_recorded_at": "2026-10-21T14:44:03.673Z",
+    "elapsed_ms_intent_to_terminal": 11167
+  },
+  "sources_inspected_read_only": [
+    "/tmp/babel-t-l1-store-8930f929-1792593831/research-store.snapshot.json",
+    "/tmp/babel-t-l1-8930f929-run.json",
+    "/tmp/babel-t-l1-8930f929-run-meta.txt",
+    "review-artifacts/t-l1-live-diagnostic-8930f929-store-subset.json",
+    "review-artifacts/t-l1-live-diagnostic-8930f929-run.json"
+  ],
+  "store_event_kinds_present": [
+    "mission_created",
+    "plan_revised",
+    "external_operation_intent",
+    "terminal_receipt"
+  ],
+  "store_event_kinds_absent": [
+    "external_operation_completed",
+    "model_invocation_completed",
+    "model_receipt_recorded",
+    "plan_revised_after_bootstrap"
+  ],
+  "operations_index_in_snapshot": {
+    "entries": 1,
+    "has_completion_payload": false,
+    "has_usage_settlement": false,
+    "has_provider_invoke_diagnostics": false
+  },
+  "request_local_completion_metadata": {
+    "provider_request_id": "unknown",
+    "inference_id": "unknown",
+    "finish_reason": "unknown",
+    "input_tokens": "unknown",
+    "output_tokens": "unknown",
+    "reasoning_tokens": "unknown",
+    "cost_usd": "unknown",
+    "basis": "No separate request-local runner log or sanitized completion artifact was saved for this run; CLI stdout captured only status fail plus error string. Inspect of original store confirms intent without matching completion."
+  },
+  "original_model_plan_questions_output": {
+    "availability": "unavailable",
+    "basis": "Bootstrap plan_revised remains the only plan in store; no post-model plan revision, model receipt, or completion event was persisted before terminal failure."
+  },
+  "terminal_receipt_coverage_notes_correction": {
+    "verbatim_in_store": "Terminal receipt recorded after admitted pass failure; external operations retain settled failure accounting.",
+    "supported_by_this_snapshot": false,
+    "correction": "This snapshot retains external_operation_intent for the planning invoke but no external_operation_completed and no usage_settlement or provider_invoke_diagnostics on the operation record. The coverage_notes sentence is generic finalizer copy and must not be read as evidence of settled provider accounting for cli-run-plan-wg2-9ecfec5a.",
+    "finalizer_source_file": "babel-cli/src/research/v2/engine/finalizeFailedOwnerResearchPass.ts"
+  },
+  "http_and_provider_invocation": {
+    "provider_http_request_count": "unknown",
+    "note": "Elapsed time between intent and terminal is consistent with a possible provider round-trip but does not establish request count, success, or billable usage without persisted completion metadata."
+  },
+  "failure_mechanism_scope": "Post-model plan obligation validation (discover-primary slot) throws before settleModelOperation in researchIterationLoop; explains missing completion despite possible in-process provider callback."
+}

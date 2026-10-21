@@ -48,10 +48,22 @@
     "terminal_state": "failed",
     "repository_file_outcomes": "not_reached",
     "exa_search": "not_observed_technical_repository_file_pipeline",
-    "model_usage": "plan model_invoke intent dispatched; no successful research pass completions recorded in store subset"
+    "model_usage": "plan model_invoke intent only; see planning_evidence_followup for token/cost/request-id availability"
+  },
+  "planning_invoke_evidence_followup": {
+    "artifact": "review-artifacts/t-l1-live-diagnostic-8930f929-planning-evidence-followup.json",
+    "external_operation_completed_in_store": false,
+    "provider_request_id": "unknown",
+    "inference_id": "unknown",
+    "finish_reason": "unknown",
+    "token_and_cost_fields": "unknown",
+    "original_model_plan_questions_output": "unavailable_not_persisted",
+    "terminal_coverage_notes_settled_accounting_supported_by_snapshot": false,
+    "correction": "Store terminal_receipt coverage_notes claims settled failure accounting; this snapshot has no completion or usage settlement for cli-run-plan-wg2-9ecfec5a. Do not infer zero cost or total HTTP count from the single CLI invocation."
   },
   "artifacts": {
-    "store_subset": "review-artifacts/t-l1-live-diagnostic-8930f929-store-subset.json"
+    "store_subset": "review-artifacts/t-l1-live-diagnostic-8930f929-store-subset.json",
+    "planning_evidence_followup": "review-artifacts/t-l1-live-diagnostic-8930f929-planning-evidence-followup.json"
   },
   "scope_limitation": "Does not assert whole-repository architecture or research-quality acceptance; known claimed-source semantic defect under separate A repair."
 }
