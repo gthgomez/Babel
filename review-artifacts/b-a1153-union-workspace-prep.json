@@ -10,8 +10,8 @@
   "draft_pr": 406,
   "b_branch_union": {
     "branch": "cursor/agent-b-general-fixtures-f617",
-    "head_sha": "9899a863",
-    "tree_sha": "see_git_rev_parse_after_push",
+    "head_sha": "f152ada3488c376b15c77bebbba4b4e2994631ef",
+    "tree_sha": "a09c95e53e313bdb87a1a89f1f90d0250bf0d23e",
     "integration": "cherry-picks 1153af89,3340cf0d,26c60bc9,e567f851,16198419 onto B branch (not main)"
   },
   "workspace_realpaths": {
