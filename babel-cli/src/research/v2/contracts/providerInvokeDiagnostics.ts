@@ -5,7 +5,9 @@ export const ProviderInvokeDiagnosticsSchema = z
   .object({
     inference_id: z.string().min(1),
     normalized_finish_reason: z.string().min(1).optional(),
-    visible_content_present: z.boolean(),
+    /** Omitted when delivered-output digest is missing or invocation was not delivered. */
+    visible_content_present: z.boolean().optional(),
+    /** Only set when delivered-output digest proves empty (SHA-256 of empty string). */
     visible_content_byte_length: z.number().int().nonnegative().optional(),
     output_digest: z
       .string()
