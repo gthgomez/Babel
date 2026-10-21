@@ -59,6 +59,12 @@ async function resolveRegistries(mission: ResearchMissionV2): Promise<MissionReg
   if (mission.profile_id === GENERAL_PROFILE_ID) {
     return createCombinedResearchRegistries()
   }
+  const classes = mission.source_policy.allowed_source_classes
+  const needsDocumentOrWebRead =
+    classes.includes('web') || classes.includes('document') || classes.includes('paper')
+  if (needsDocumentOrWebRead) {
+    return createCombinedResearchRegistries()
+  }
   return createTechnicalResearchRegistries()
 }
 

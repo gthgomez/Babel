@@ -156,6 +156,7 @@
     "test:research-v2-production-package-reciprocal": "node scripts/research-v2-production-package-reciprocal.mjs",
     "test:research-v2-openrouter-route-smoke": "node --import tsx scripts/research-v2-openrouter-route-smoke.mjs",
     "test:research-v2-campaign-preflight": "node --import tsx scripts/research-v2-campaign-preflight.mjs",
+    "test:research-v2-technical-campaign-preflight": "node --import tsx scripts/research-v2-technical-campaign-preflight.mjs",
     "prepublishOnly": "npm run check:source-provenance && npm run check:dist",
     "benchmark:claude-babel:certify": "tsx --no-warnings=ExperimentalWarning scripts/claude-babel-astra-lab/run_go_certification.ts",
     "benchmark:claude-babel:smoke": "tsx --no-warnings=ExperimentalWarning scripts/claude-babel-astra-lab/run_babel_smoke.ts",

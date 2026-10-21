@@ -1,0 +1,46 @@
+{
+  "schema_version": "research-mission-v2",
+  "contract_version": "2026.10.20-checkpoint.3.1.1",
+  "mission_id": "mission-t-l1-architecture-comparison",
+  "profile_id": "technical",
+  "profile_version": "0.0.0-checkpoint",
+  "created_at": "2026-10-21T08:00:00.000Z",
+  "primary_question": "At the pinned Babel commit, how does research v2 separate durable evidence, store events, and model synthesis from executable harness policy? Compare boundary mechanisms under babel-cli/src/research/v2/ versus babel-cli/src/executor/ and cite concrete file paths.",
+  "intended_decision": "Choose whether Babel's current research-vs-executor split is sufficient for governed technical research, with cited paths on both sides of the boundary.",
+  "constraints": [
+    "pinned_github_commit_only=true",
+    "repository_file_sources_only=true",
+    "cite_paths_not_summaries_only=true"
+  ],
+  "exclusions": [
+    "unpinned github branches",
+    "third-party mirrors without pinned blob URLs",
+    "live model spend during Agent A readiness"
+  ],
+  "as_of": "2026-10-21",
+  "jurisdiction": "unknown",
+  "source_policy": {
+    "allowed_source_classes": ["repository_file"],
+    "allowed_web_domains": ["github.com", "raw.githubusercontent.com"],
+    "visibility_retention": {
+      "source_visibility": "public",
+      "retention": "excerpt_only",
+      "export_may_omit_bytes": true
+    }
+  },
+  "effort_policy": {
+    "preset_name": "normal",
+    "resolved_budget_label": "host-resolved-normal-campaign-t-l1"
+  },
+  "model_route": {
+    "backend_key": "research-v2-cli",
+    "provider": "openrouter",
+    "provider_model_id": "deepseek/deepseek-v4-flash-0731"
+  },
+  "pinned_target_repository": {
+    "provider": "github",
+    "repo_id": "github:gthgomez/Babel",
+    "full_name": "gthgomez/Babel",
+    "commit_sha": "e912c2f3320de0b6e1c9ff85b95b0f74d8b5323c"
+  }
+}
