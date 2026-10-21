@@ -1,0 +1,120 @@
+{
+  "schema": "research-v2-g-l3-NEW-devguide-repaired-adapter-replay/v1",
+  "label": "Offline replay of retained NEW-fetch bytes through repaired extractor @ 5628e90e (no network)",
+  "source_binding": {
+    "head": "5628e90edd88cbbe8a7d43dab27de8582ba770ae",
+    "tree": "1303716887b0f6e035ee77adf6640581eff21de0",
+    "worktree": "/tmp/babel-g-l3-replay-5628e90",
+    "static_html_extraction_version": "general-static-html/0.1.0",
+    "adapter_module": "babel-cli/src/research/v2/adapters/web/htmlFromAdmittedBytes.ts",
+    "execution_mode": "tsx_source_import",
+    "full_npm_build_exit": 2,
+    "full_npm_build_note": "tsc failed on unrelated campaign reciprocal tests; replay uses repaired source via tsx"
+  },
+  "retained_input": {
+    "path": "/tmp/g-l3-NEW-diagnostic-devguide-fetch.html",
+    "byte_length": 125309,
+    "sha256": "a862729c9dc1b8c23c75dd3f4b4b57f5603bcf45b8b325494fe789483339380e",
+    "admission_identity_preserved": true,
+    "operation_id": "diag-NEW-admitted-fetch-devguide-ba45f328-001",
+    "revision_id": "rev-web-mission-ref-diag-new-devguide-a862729c9dc1b8c2",
+    "content_hash": "a862729c9dc1b8c23c75dd3f4b4b57f5603bcf45b8b325494fe789483339380e"
+  },
+  "command": "node --import tsx (passagesFromAdmittedStaticHtml on injected AdmittedContent)",
+  "exit_code": 0,
+  "extraction_error": null,
+  "passage_count": 5,
+  "passages": [
+    {
+      "passage_id": "diag-NEW-admitted-fetch-devguide-ba45f328-001:html:0",
+      "locator": {
+        "kind": "section",
+        "section_id": "status-of-python-versions"
+      },
+      "heading_path": [
+        "Status of Python versions"
+      ],
+      "source_revision_id": "rev-web-mission-ref-diag-new-devguide-a862729c9dc1b8c2",
+      "text_hash": "ee4f0349fc0af1322016a592282562631f1071352d70f506067fa03039b0dd43",
+      "text_byte_length": 740,
+      "extraction_notes": [
+        "heading_level:1",
+        "static_html_extractor"
+      ],
+      "cited_text_preview": "The main branch is currently the future Python 3.16, and is the only branch that accepts new features. The latest release for each Python version can be found on the download page . &#39;19 &#39;20 &#"
+    },
+    {
+      "passage_id": "diag-NEW-admitted-fetch-devguide-ba45f328-001:html:1",
+      "locator": {
+        "kind": "section",
+        "section_id": "supported-versions"
+      },
+      "heading_path": [
+        "Supported versions"
+      ],
+      "source_revision_id": "rev-web-mission-ref-diag-new-devguide-a862729c9dc1b8c2",
+      "text_hash": "ac421f0f7698ebcebe221f1d02b726f128a715e57aa912b07791dc2ba9f3a62c",
+      "text_byte_length": 469,
+      "extraction_notes": [
+        "heading_level:2",
+        "static_html_extractor"
+      ],
+      "cited_text_preview": "Dates shown in italic are scheduled and can be adjusted. Branch Schedule Status First release End of life Release manager main PEP 826 feature 2027-10-06 2032-10 Savannah Ostrowski 3.15 PEP 790 bugfix"
+    },
+    {
+      "passage_id": "diag-NEW-admitted-fetch-devguide-ba45f328-001:html:2",
+      "locator": {
+        "kind": "section",
+        "section_id": "unsupported-versions"
+      },
+      "heading_path": [
+        "Unsupported versions"
+      ],
+      "source_revision_id": "rev-web-mission-ref-diag-new-devguide-a862729c9dc1b8c2",
+      "text_hash": "d6d880cfbf99deeb617dc68bf31c4526cafdfcdf9780ec2ba1fb0abf6dd87eeb",
+      "text_byte_length": 875,
+      "extraction_notes": [
+        "heading_level:2",
+        "static_html_extractor"
+      ],
+      "cited_text_preview": "Branch Schedule Status First release End of life Release manager 3.10 PEP 619 end-of-life 2021-10-04 2026-10-01 Pablo Galindo Salgado 3.9 PEP 596 end-of-life 2020-10-05 2025-10-31 Łukasz Langa 3.8 PEP"
+    },
+    {
+      "passage_id": "diag-NEW-admitted-fetch-devguide-ba45f328-001:html:3",
+      "locator": {
+        "kind": "section",
+        "section_id": "full-chart"
+      },
+      "heading_path": [
+        "Full chart"
+      ],
+      "source_revision_id": "rev-web-mission-ref-diag-new-devguide-a862729c9dc1b8c2",
+      "text_hash": "f81c16b658f3aa944fc746a81f5bdf3b8196923ee773876fd8c9396145f1a80c",
+      "text_byte_length": 825,
+      "extraction_notes": [
+        "heading_level:2",
+        "static_html_extractor"
+      ],
+      "cited_text_preview": "&#39;08 &#39;09 &#39;10 &#39;11 &#39;12 &#39;13 &#39;14 &#39;15 &#39;16 &#39;17 &#39;18 &#39;19 &#39;20 &#39;21 &#39;22 &#39;23 &#39;24 &#39;25 &#39;26 &#39;27 &#39;28 &#39;29 &#39;30 &#39;31 &#39;32 "
+    },
+    {
+      "passage_id": "diag-NEW-admitted-fetch-devguide-ba45f328-001:html:4",
+      "locator": {
+        "kind": "section",
+        "section_id": "status-key"
+      },
+      "heading_path": [
+        "Status key"
+      ],
+      "source_revision_id": "rev-web-mission-ref-diag-new-devguide-a862729c9dc1b8c2",
+      "text_hash": "de310a1448640bd08f381bc652373aa304daabd19722d86a9c89759012b2d128",
+      "text_byte_length": 1293,
+      "extraction_notes": [
+        "heading_level:2",
+        "static_html_extractor"
+      ],
+      "cited_text_preview": "Python releases go through five phases, as described in PEP 602 . Release managers can adjust specific dates as needed. feature : Before the first beta, the next full release can accept new features, "
+    }
+  ],
+  "scope_limitation": "Success on this retained page only; not full table completeness, DOM correctness, or general challenge-page detection."
+}

@@ -1,0 +1,51 @@
+START 2026-10-21T13:59:05Z
+npm warn ERESOLVE overriding peer dependency
+npm warn While resolving: nunjucks@3.2.4
+npm warn Found: chokidar@5.0.0
+npm warn node_modules/chokidar
+npm warn   chokidar@"^5.0.0" from the root project
+npm warn   1 more (promptfoo)
+npm warn
+npm warn Could not resolve dependency:
+npm warn peerOptional chokidar@"^3.3.0" from nunjucks@3.2.4
+npm warn node_modules/nunjucks
+npm warn   nunjucks@"^3.2.4" from promptfoo@0.121.17
+npm warn   node_modules/promptfoo
+npm warn
+npm warn Conflicting peer dependency: chokidar@3.6.0
+npm warn node_modules/chokidar
+npm warn   peerOptional chokidar@"^3.3.0" from nunjucks@3.2.4
+npm warn   node_modules/nunjucks
+npm warn     nunjucks@"^3.2.4" from promptfoo@0.121.17
+npm warn     node_modules/promptfoo
+npm warn deprecated boolean@3.2.0: Package no longer supported. Contact Support at https://www.npmjs.com/support for more info.
+npm warn deprecated node-domexception@1.0.0: Use your platform's native DOMException instead
+npm warn deprecated glob@10.5.0: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
+
+added 850 packages, and audited 851 packages in 18s
+
+194 packages are looking for funding
+  run `npm fund` for details
+
+47 vulnerabilities (1 low, 16 moderate, 27 high, 3 critical)
+
+To address all issues, run:
+  npm audit fix
+
+Run `npm audit` for details.
+NPM_CI=0
+
+> babel-harness@0.1.4 build
+> npm run clean:dist && tsc && node scripts/copy_playbooks.mjs
+
+
+> babel-harness@0.1.4 clean:dist
+> node scripts/clean_dist.mjs
+
+src/research/v2/fixtures/campaign/T-L1-discover-query.reciprocal.test.ts(121,28): error TS2339: Property 'hits' does not exist on type 'SourceSearchResult'.
+  Property 'hits' does not exist on type '{ operationId: string; status: "failed"; failureCategory: SourceAccessFailureCategory; message: string; receipt?: SourceSearchProviderReceipt; }'.
+src/research/v2/fixtures/campaign/T-L1-discover-query.reciprocal.test.ts(122,27): error TS2339: Property 'hits' does not exist on type 'SourceSearchResult'.
+  Property 'hits' does not exist on type '{ operationId: string; status: "failed"; failureCategory: SourceAccessFailureCategory; message: string; receipt?: SourceSearchProviderReceipt; }'.
+src/research/v2/fixtures/campaign/T-L1-discover-query.reciprocal.test.ts(132,27): error TS2339: Property 'hits' does not exist on type 'SourceSearchResult'.
+  Property 'hits' does not exist on type '{ operationId: string; status: "failed"; failureCategory: SourceAccessFailureCategory; message: string; receipt?: SourceSearchProviderReceipt; }'.
+BUILD=2

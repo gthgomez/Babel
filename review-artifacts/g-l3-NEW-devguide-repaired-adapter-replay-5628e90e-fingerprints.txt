@@ -1,0 +1,3 @@
+b70dfe721d48bc1b7a913f70424fdd63f139ec7b58068ffc1841ff164eabcc60  /tmp/babel-g-l3-replay-5628e90/babel-cli/dist/research/v2/adapters/web/htmlFromAdmittedBytes.js
+bin/babel.js
+ee8f9ba2a7bd12b937451c0f4d86503d0b68d9076ed3cd24b9a7138b7039f43f  /tmp/babel-g-l3-replay-5628e90/babel-cli/bin/babel.js
