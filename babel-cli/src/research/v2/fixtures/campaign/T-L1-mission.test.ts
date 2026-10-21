@@ -16,7 +16,7 @@ describe('T-L1 architecture-comparison campaign mission', () => {
     assert.equal(mission.profile_version, pins.profile.profile_version)
     assert.deepEqual(mission.source_policy.allowed_source_classes, ['repository_file'])
     assert.equal(mission.pinned_target_repository?.commit_sha, pins.babel_repository.commit_sha)
-    assert.equal(mission.pinned_target_repository?.discover_query, 'research v2 persistence')
+    assert.equal(mission.pinned_target_repository?.discover_query, 'persistence durableresearchstore.ts')
     assert.equal(mission.source_policy.selected_repository_refs?.length, 1)
     assert.equal(
       mission.source_policy.selected_repository_refs?.[0]?.commit_sha,
@@ -24,9 +24,21 @@ describe('T-L1 architecture-comparison campaign mission', () => {
     )
     assert.equal(
       mission.source_policy.selected_repository_refs?.[0]?.discover_query,
-      'libs checkpoint',
+      'pregel checkpoint',
     )
     assert.equal(mission.model_route.provider, 'openrouter')
     assert.equal(mission.model_route.fixture_route, undefined)
+  })
+
+  it('rejects whitespace-only discover_query instead of silent global fallback', () => {
+    const mission = ResearchMissionV2Schema.parse(JSON.parse(readFileSync(missionPath, 'utf8')))
+    const invalid = {
+      ...mission,
+      pinned_target_repository: {
+        ...mission.pinned_target_repository!,
+        discover_query: '   ',
+      },
+    }
+    assert.throws(() => ResearchMissionV2Schema.parse(invalid), /non-empty after trim/)
   })
 })

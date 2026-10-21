@@ -14,16 +14,15 @@ import { runAdmittedComposedRetrievalIteration } from './researchComposedRetriev
 import { missionUsesComposedTechnicalRetrieval } from './technicalRetrievalComposition.js'
 import { buildSemanticSupportReviewInput } from './buildSemanticSupportReviewInput.js'
 import { buildSynthesizeReportModelInput } from './buildSynthesizeReportModelInput.js'
+import { passageRecordsWithSourceAttribution } from './claimedSourceAttribution.js'
+import { buildMissionSourceSlotAttribution } from './sourceAttributionContext.js'
+import { listSourceRevisionsFromStoreEvents, listSourcesFromStoreEvents } from './listSourceRevisionsFromStoreEvents.js'
 import {
   applySemanticSupportReview,
   findingsFromExtractModelOutput,
 } from './findingsFromModelOutput.js'
 import { buildSynthesizedResearchReport } from './buildSynthesizedResearchReport.js'
 import { deriveSearchProviderReportLimitations } from './sourceDiscoverSearchReceipt.js'
-import {
-  listSourceRevisionsFromStoreEvents,
-  listSourcesFromStoreEvents,
-} from './listSourceRevisionsFromStoreEvents.js'
 import { settleModelOperation } from './settleModelOperation.js'
 import { unknownUsageSettlement } from './settleExternalOperation.js'
 import type { ResearchModelInvocationResult } from '../ports/researchModelPort.js'
@@ -298,6 +297,13 @@ export async function runAdmittedResearchEndToEndPass(
   const passages = filterPassagesForExtractionLineage(allPassages, storeEvents)
   const extractionLineageLimitations = extractionLineageReportLimitations(allPassages, storeEvents)
   const extractionPassageIds = passages.map((p) => p.passage_id)
+  const extractionSources = listSourcesFromStoreEvents(storeEventsAfterRetrieval)
+  const extractionRevisions = listSourceRevisionsFromStoreEvents(storeEventsAfterRetrieval)
+  const missionSourceSlots = buildMissionSourceSlotAttribution(
+    request.session.mission,
+    extractionSources,
+    extractionRevisions,
+  )
 
   const extractOutput = await invokeModelPhase(request.store, ctx, request.model, {
     operationId: request.extractOperationId,
@@ -307,14 +313,17 @@ export async function runAdmittedResearchEndToEndPass(
       mission_id: request.session.mission.mission_id,
       plan_revision_id: planned.planRevisionId,
       mission_requirements: missionRequirementsPayload(request.session.mission),
+      mission_source_slots: missionSourceSlots,
       passage_ids: extractionPassageIds,
-      passages: passages.map((p) => ({
-        passage_id: p.passage_id,
-        text: p.text_ref.mode === 'inline' ? p.text_ref.text : '',
-      })),
+      passages: passageRecordsWithSourceAttribution(
+        passages,
+        extractionSources,
+        extractionRevisions,
+      ),
       plan_questions: activePlan.questions.map((q) => ({
         question_id: q.question_id,
         text: q.text,
+        evidence_requirement: q.evidence_requirement,
       })),
     },
     signal: request.signal,

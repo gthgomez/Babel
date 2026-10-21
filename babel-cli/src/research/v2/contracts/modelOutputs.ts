@@ -61,6 +61,13 @@ export const SemanticSupportReviewOutputSchema = z
            * Whether the assertion addresses the bound plan question text (not citation support alone).
            */
           question_coverage: z.enum(['answers', 'partial', 'tangential', 'none']),
+          claimed_source_attribution: z
+            .enum([
+              'matches_admitted_citations',
+              'names_unfetched_or_unread_source',
+              'not_assessed',
+            ])
+            .optional(),
           obligation_coverage: z
             .array(
               z

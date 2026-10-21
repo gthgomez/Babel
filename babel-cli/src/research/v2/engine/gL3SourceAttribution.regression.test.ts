@@ -73,7 +73,7 @@ describe('G-L3 source attribution regression (original-derived)', () => {
       },
     )
     const finding = reviewed[0]!
-    assert.equal(finding.semantic_support?.status, 'supported')
+    assert.equal(finding.semantic_support?.status, 'insufficient')
     assert.equal(finding.question_coverage?.status, 'partial')
     assert.match(finding.question_coverage?.rationale ?? '', /Host bound-question coverage/)
   })

@@ -35,6 +35,7 @@ describe('buildSynthesizeReportModelInput', () => {
       },
     ])
     assert.equal(input.findings[0]?.semantic_support, 'supported')
+    assert.equal(input.findings[0]?.claimed_source_attribution, 'not_assessed')
     assert.equal(input.findings[0]?.question_coverage, 'tangential')
   })
 

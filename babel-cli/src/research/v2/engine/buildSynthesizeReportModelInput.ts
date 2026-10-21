@@ -6,6 +6,9 @@ export function buildSynthesizeReportModelInput(findings: readonly FindingRecord
     question_id: string
     assertion_text: string
     semantic_support: NonNullable<FindingRecord['semantic_support']>['status'] | 'not_checked'
+    claimed_source_attribution:
+      | NonNullable<FindingRecord['claimed_source_attribution']>['status']
+      | 'not_assessed'
     question_coverage: NonNullable<FindingRecord['question_coverage']>['status'] | 'not_assessed'
   }>
 } {
@@ -15,6 +18,8 @@ export function buildSynthesizeReportModelInput(findings: readonly FindingRecord
       question_id: finding.question_id,
       assertion_text: finding.assertion_text,
       semantic_support: finding.semantic_support?.status ?? 'not_checked',
+      claimed_source_attribution:
+        finding.claimed_source_attribution?.status ?? 'not_assessed',
       question_coverage: finding.question_coverage?.status ?? 'not_assessed',
     })),
   }

@@ -49,6 +49,23 @@ export const QuestionCoverageJudgmentSchema = z
   })
   .strict()
 
+/** Whether the assertion's named sources match admitted fetched citations (distinct from question_coverage). */
+export const ClaimedSourceAttributionStatusSchema = z.enum([
+  'matches_admitted_citations',
+  'names_unfetched_or_unread_source',
+  'not_assessed',
+])
+
+export const ClaimedSourceAttributionJudgmentSchema = z
+  .object({
+    status: ClaimedSourceAttributionStatusSchema,
+    reviewer: z.string().min(1),
+    reviewer_version: z.string().min(1),
+    rationale: z.string().min(1),
+    reviewed_at: IsoDateTimeSchema,
+  })
+  .strict()
+
 export const FindingRecordSchema = z
   .object({
     finding_id: RecordIdSchema,
@@ -58,6 +75,7 @@ export const FindingRecordSchema = z
     passage_ids: z.array(RecordIdSchema).min(1),
     source_integrity: SourceIntegrityStateSchema,
     semantic_support: SemanticSupportJudgmentSchema.optional(),
+    claimed_source_attribution: ClaimedSourceAttributionJudgmentSchema.optional(),
     question_coverage: QuestionCoverageJudgmentSchema.optional(),
     plan_obligation_coverage: z.array(PlanObligationCoverageRecordSchema).optional(),
     assumption_ids: z.array(RecordIdSchema).optional(),

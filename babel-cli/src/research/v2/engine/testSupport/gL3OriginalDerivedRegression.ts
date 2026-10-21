@@ -60,6 +60,8 @@ export const gL3OriginalDerivedFindingFalseAgreement =
   crossPage.findings.cross_page_false_agreement!
 export const gL3OriginalDerivedFindingInsufficientHonest =
   crossPage.findings.cross_page_insufficient_honest!
+export const gL3OriginalDerivedFindingSingleSource =
+  crossPage.findings.single_source_downloads_only!
 
 export const gL3RenamedSlotPlan = renamedSlot.plan
 export const gL3RenamedSlotSources = renamedSlot.sources
@@ -76,6 +78,7 @@ export function gL3FalseAgreementModelReview(): Record<string, unknown> {
         status: 'supported',
         rationale: 'Table and landing agree.',
         question_coverage: 'answers',
+        claimed_source_attribution: 'matches_admitted_citations',
         obligation_coverage: [
           {
             obligation_id: 'ob-downloads-stable-version-date',
@@ -102,6 +105,7 @@ export function gL3InsufficientHonestModelReview(): Record<string, unknown> {
         status: 'supported',
         rationale: 'Downloads admitted; devguide missing.',
         question_coverage: 'partial',
+        claimed_source_attribution: 'matches_admitted_citations',
         obligation_coverage: [
           {
             obligation_id: 'ob-downloads-stable-version-date',

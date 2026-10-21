@@ -60,7 +60,7 @@
         "locator": { "kind": "section", "section_id": "downloads-hero" },
         "text_ref": {
           "mode": "inline",
-          "text": "Download the latest stable release: Python 3.12.7 released on 2024-10-01. For full version status see the table at https://devguide.python.org/versions/ (Developer Guide).",
+          "text": "Download the latest stable release for your platform. For full version status see the table on the Developer Guide (https://devguide.python.org/versions/).",
           "text_hash": "f819829f8422aa729d30956e80295fca64afa1d7cf54322707b139bc2194ae00"
         }
       }
@@ -69,16 +69,25 @@
       "cross_page_false_agreement": {
         "finding_id": "finding-g-l3-cross-false-agreement",
         "question_id": "q-g-l3-cross-release",
-        "assertion_text": "The Developer Guide versions status table shows Python 3.12.7 released on 2024-10-01, matching the downloads landing page.",
+        "assertion_text": "The Developer Guide versions status table documents the same stable release and date as the downloads page.",
         "assertion_kind": "source_observation",
         "passage_ids": ["fetch-downloads-original-derived:html:4"],
         "source_integrity": "not_checked",
         "created_at": "2026-10-21T13:00:10.000Z"
       },
+      "single_source_downloads_only": {
+        "finding_id": "finding-g-l3-single-source-downloads",
+        "question_id": "q-g-l3-cross-release",
+        "assertion_text": "The admitted downloads landing excerpt links readers to the Developer Guide for status table details.",
+        "assertion_kind": "source_observation",
+        "passage_ids": ["fetch-downloads-original-derived:html:4"],
+        "source_integrity": "not_checked",
+        "created_at": "2026-10-21T13:00:09.500Z"
+      },
       "cross_page_insufficient_honest": {
         "finding_id": "finding-g-l3-cross-insufficient",
         "question_id": "q-g-l3-cross-release",
-        "assertion_text": "Downloads landing shows Python 3.12.7 on 2024-10-01; devguide status table was not admitted so cross-page agreement is unresolved.",
+        "assertion_text": "The downloads landing page excerpt is admitted; the Developer Guide status table was not fetched, so cross-page agreement is unresolved.",
         "assertion_kind": "source_observation",
         "passage_ids": ["fetch-downloads-original-derived:html:4"],
         "source_integrity": "not_checked",
@@ -145,7 +154,7 @@
         "locator": { "kind": "section", "section_id": "hero" },
         "text_ref": {
           "mode": "inline",
-          "text": "Python 3.12.7 stable release on 2024-10-01.",
+          "text": "Download the latest stable release for your platform.",
           "text_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
         }
       }
@@ -154,7 +163,7 @@
       "wrong_slot_met": {
         "finding_id": "finding-g-l3-renamed-wrong-slot",
         "question_id": "q-g-l3-renamed",
-        "assertion_text": "Both pages agree on 3.12.7.",
+        "assertion_text": "The Mozilla Developer Network downloads page agrees with the devguide table.",
         "assertion_kind": "inference",
         "passage_ids": ["fetch-renamed:html:1"],
         "source_integrity": "not_checked",

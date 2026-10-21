@@ -146,8 +146,10 @@ export function enforceBoundQuestionCoverageOnFindings(
       return finding
     }
     const obligations = obligationsForQuestion(question)
-    if (finding.semantic_support?.status !== 'supported' && obligations.length > 0) {
-      return finding
+    if (obligations.length === 0) {
+      if (finding.semantic_support?.status !== 'supported') {
+        return finding
+      }
     }
 
     const assessment = assessBoundQuestionCoverageFromAdmittedEvidence(question, finding, {

@@ -8,6 +8,11 @@ import type { PlanRevision } from '../contracts/plan.js'
 import type { PassageRecord } from '../contracts/passages.js'
 import type { SourceRecord, SourceRevision } from '../contracts/sources.js'
 import { enforceBoundQuestionCoverageOnFindings } from './boundQuestionCoverageFromEvidence.js'
+import {
+  CLAIMED_SOURCE_ATTRIBUTION_REVIEWER,
+  CLAIMED_SOURCE_ATTRIBUTION_REVIEWER_VERSION,
+  enforceSemanticSupportClaimedSourceAttribution,
+} from './claimedSourceAttribution.js'
 import { obligationsForQuestion } from './planCoverageObligations.js'
 import {
   conservativeQuestionCoverageAfterObligationResponseViolation,
@@ -65,7 +70,7 @@ export function findingsFromExtractModelOutput(params: {
 }
 
 const SEMANTIC_REVIEWER = 'research-v2-semantic-review'
-const SEMANTIC_REVIEWER_VERSION = '0.1.0-offline'
+const SEMANTIC_REVIEWER_VERSION = '0.2.0-claimed-source-attribution'
 const QUESTION_COVERAGE_REVIEWER = SEMANTIC_REVIEWER
 const QUESTION_COVERAGE_REVIEWER_VERSION = '0.1.0-question-coverage'
 
@@ -103,6 +108,15 @@ export function applySemanticSupportReview(
       reviewer_version: SEMANTIC_REVIEWER_VERSION,
       rationale: judgment.rationale,
       reviewed_at: reviewedAt,
+    }
+    if (judgment.claimed_source_attribution) {
+      finding.claimed_source_attribution = {
+        status: judgment.claimed_source_attribution,
+        reviewer: CLAIMED_SOURCE_ATTRIBUTION_REVIEWER,
+        reviewer_version: CLAIMED_SOURCE_ATTRIBUTION_REVIEWER_VERSION,
+        rationale: judgment.rationale,
+        reviewed_at: reviewedAt,
+      }
     }
 
     let questionCoverageStatus = judgment.question_coverage
@@ -172,7 +186,14 @@ export function applySemanticSupportReview(
   if (!context) {
     return reviewed
   }
-  return enforceBoundQuestionCoverageOnFindings(reviewed, {
+  const withClaimedSource = enforceSemanticSupportClaimedSourceAttribution(reviewed, {
+    plan: context.plan,
+    passages: context.passages,
+    sources: context.sources,
+    sourceRevisions: context.sourceRevisions,
+    reviewedAt,
+  })
+  return enforceBoundQuestionCoverageOnFindings(withClaimedSource, {
     plan: context.plan,
     passages: context.passages,
     sources: context.sources,

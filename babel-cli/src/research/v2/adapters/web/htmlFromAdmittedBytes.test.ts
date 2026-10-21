@@ -89,3 +89,28 @@ test('passagesFromAdmittedStaticHtml: rejects non-html media', () => {
   const admitted = buildAdmittedContent('op', 's', 'r', bytes, 'text/plain')
   assert.throws(() => passagesFromAdmittedStaticHtml(admitted), /unsupported media_type/)
 })
+
+test('passagesFromAdmittedStaticHtml: nested heading markup yields stable section locators', () => {
+  const fixturePath = join(
+    dirname(fileURLToPath(import.meta.url)),
+    '../../fixtures/campaign/G-L3-fixtures/devguide-nested-heading-representative.html',
+  )
+  const bytes = readFileSync(fixturePath)
+  const admitted = buildAdmittedContent(
+    'op-g-l3-nested-heading',
+    'web-devguide-representative',
+    'rev-nested-heading',
+    bytes,
+    HTML_MEDIA_TYPE,
+    {
+      requestedUrl: 'https://devguide.python.org/versions/',
+      finalUrl: 'https://devguide.python.org/versions/',
+      redirectChain: ['https://devguide.python.org/versions/'],
+    },
+  )
+  const passages = passagesFromAdmittedStaticHtml(admitted)
+  assert.equal(passages.length, 2)
+  assert.deepEqual(passages[0]?.heading_path, ['Status of Python versions'])
+  assert.deepEqual(passages[1]?.heading_path, ['Release cadence'])
+  for (const passage of passages) PassageRecordSchema.parse(passage)
+})
