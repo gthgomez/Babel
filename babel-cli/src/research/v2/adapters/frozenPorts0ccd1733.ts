@@ -1,7 +1,7 @@
 /**
- * Structural port aliases for Agent B adapter compile on branch-only trees.
- * Must match Agent A `0ccd17333ee67bfa7cdd210262f90a204fb39661` / tree `b597acbf…`.
- * Replace with `import type` from `../../ports/*` after integration; do not extend semantics here.
+ * TEMPORARY structural aliases — NOT integrated acceptance.
+ * Shapes mirror Agent A `0ccd1733` for branch-only compile until `ports/` + `contracts/` exist here.
+ * Integrated tests must import real frozen A modules and delete this file (see documents/INTEGRATION_BINDING.md).
  */
 export type SourceClass = 'document' | 'web' | 'paper' | 'dataset' | 'code' | 'other'
 
