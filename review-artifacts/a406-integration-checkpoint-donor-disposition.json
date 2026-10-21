@@ -4,6 +4,10 @@
     "tree": "7e2145c361f627dae7413e2270012bd658901207",
     "role": "canonical A production (integrity, source-slot, eligible indexing)"
   },
+  "integrated_head": {
+    "commit": "cb3d4423f3d2c38121f5d8daac52f35a54f0f073",
+    "tree": "4ef0e1390b694f221829eed57c777a7de5608df1"
+  },
   "pr": 406,
   "branch": "cursor/research-v2-post-review-settlement-fc31",
   "donors": {
@@ -70,7 +74,10 @@
     "focused_tap_log": "/opt/cursor/artifacts/a406-checkpoint-focused-tap.log",
     "research_v2_test_inventory": "/opt/cursor/artifacts/a406-research-v2-test-inventory.txt",
     "research_v2_test_file_count": 145,
-    "research_v2_full_tap_log": "/opt/cursor/artifacts/a406-checkpoint-research-v2-full-tap.log",
+    "research_v2_full_tap_log_postcommit": "/opt/cursor/artifacts/a406-checkpoint-research-v2-full-tap-postcommit.log",
+    "research_v2_full_tap_summary_postcommit": "572 tests, 571 pass, 1 fail (pre-existing researchRetrievalLoop.repair.test.ts)",
+    "public_content_policy_log": "/opt/cursor/artifacts/a406-checkpoint-public-content-policy.log",
+    "local_secret_scan_note": "gitleaks exit 1 on workspace runs/chat-sessions (not in git); committed tree only"
     "pre_existing_failures_on_eb79": [
       "babel-cli/src/research/v2/engine/researchRetrievalLoop.repair.test.ts (durable store cancelled during appendPassage; integrity receipt passage_id)"
     ]
