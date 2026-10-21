@@ -10,6 +10,7 @@ import { buildSynthesizedResearchReport } from './buildSynthesizedResearchReport
 import { deriveUnansweredPlanQuestionIds } from './researchReportFinalization.js'
 import { findingsFromExtractModelOutput } from './findingsFromModelOutput.js'
 import { loadAttempt4EvidenceSubset } from './testSupport/attempt4EvidenceSubset.js'
+import { applyAttempt4DerivedQuestionCoverageOverlay } from './testSupport/attempt4QuestionCoverageDerived.js'
 
 const gL1MissionPath = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -109,7 +110,9 @@ describe('G-L1 attempt4 evidence subset (historical) + fef78559 finalizer', () =
   })
 
   it('rebuilds attempt4 with canonical finalizer: partial, per-question unanswered, truncation, corrected coverage_notes', () => {
-    const { revision, passages, findings, terminal_report } = loadAttempt4EvidenceSubset()
+    const { revision, passages, findings: historicalFindings, terminal_report } =
+      loadAttempt4EvidenceSubset()
+    const findings = applyAttempt4DerivedQuestionCoverageOverlay(historicalFindings)
     const mission = ResearchMissionV2Schema.parse({
       ...JSON.parse(readFileSync(gL1MissionPath, 'utf8')),
       mission_id: 'mission-g-l1-general-live-attempt4',

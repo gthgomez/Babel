@@ -1,0 +1,22 @@
+{
+  "plan_revision_id": "plan-g-l2-attribution-fixture",
+  "mission_id": "mission-g-l2-constrained-comparison",
+  "created_at": "2026-10-21T09:40:00.000Z",
+  "revision_reason": "fixture_two_question_attribution",
+  "questions": [
+    {
+      "question_id": "q-g-l2-mdn-cache",
+      "text": "What does MDN document about Cache-Control max-age for browser caches?",
+      "importance": "critical",
+      "evidence_requirement": "Cite developer.mozilla.org passages only",
+      "status": "open"
+    },
+    {
+      "question_id": "q-g-l2-cloudflare-cache",
+      "text": "What does Cloudflare document about cache TTL / max-age at the edge?",
+      "importance": "critical",
+      "evidence_requirement": "Cite developers.cloudflare.com passages only",
+      "status": "open"
+    }
+  ]
+}

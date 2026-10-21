@@ -329,6 +329,110 @@ describe('research retrieval loop (admitted ports)', () => {
     assert.equal(completionSettlement(completionEvent(events, 'multi-fetch--web-ref-0')), 'succeeded')
     assert.equal(completionSettlement(completionEvent(events, 'multi-fetch--web-ref-1')), 'succeeded')
   })
+
+  it('multi-web: persistence failure settles fetch once and does not continue', async () => {
+    const mdnUrl = 'https://developer.mozilla.org/en-US/docs/Web/API/Fetch_API'
+    const cfUrl = 'https://developers.cloudflare.com/workers/'
+    const mission = ResearchMissionV2Schema.parse({
+      ...exampleTechnicalMissionFixture,
+      mission_id: 'mission-multi-web-fence',
+      profile_id: 'general',
+      source_policy: {
+        allowed_source_classes: ['web'],
+        allowed_web_domains: ['developer.mozilla.org', 'developers.cloudflare.com'],
+        selected_web_refs: [mdnUrl, cfUrl],
+        visibility_retention: exampleTechnicalMissionFixture.source_policy.visibility_retention,
+      },
+    })
+    const plan = { ...examplePlanRevisionFixture, mission_id: mission.mission_id }
+    const store = new InMemoryResearchStore()
+    const handle = await store.appendMission(mission)
+    await store.appendPlanRevision(
+      {
+        mission_id: handle.mission_id,
+        plan_revision_id: plan.plan_revision_id,
+        writer_generation: handle.writer_generation,
+      },
+      plan,
+    )
+    const session = { mission, handle, activePlanRevisionId: plan.plan_revision_id }
+    const adapter: SourceAdapter = {
+      adapterId: 'fence-fixture',
+      supportedKinds: ['web'],
+      async discover(request) {
+        return { operationId: request.operationId, status: 'ok', candidates: [] }
+      },
+      async read(request) {
+        const revisionId = `rev-${request.operationId}`
+        return {
+          operationId: request.operationId,
+          status: 'ok',
+          revision: {
+            revision_id: revisionId,
+            source_id: request.source.source_id,
+            content_hash: 'hash',
+            retrieved_at: FIXED_NOW,
+            extraction_version: 'fixture',
+            media_type: 'text/html',
+            completeness: 'complete',
+          },
+          passages: [
+            {
+              passage_id: `${request.operationId}:p0`,
+              source_revision_id: revisionId,
+              locator: { kind: 'line_range', start_line: 1, end_line: 1 },
+              text_ref: { mode: 'inline', text: 'x', text_hash: 'h' },
+            },
+          ],
+          extraction_version: 'fixture',
+        }
+      },
+    }
+    const originalAppendPassage = store.appendPassage.bind(store)
+    let appendPassageCalls = 0
+    store.appendPassage = async (...args) => {
+      appendPassageCalls += 1
+      if (appendPassageCalls === 1) {
+        throw new Error('store fencing failure')
+      }
+      return originalAppendPassage(...args)
+    }
+    await assert.rejects(
+      () =>
+        runAdmittedRetrievalIteration({
+          session,
+          store,
+          access: new FakeSourceAccessPort([]),
+          adapter,
+          activePlan: plan,
+          discoverQuery: 'x',
+          searchOperationId: 'fence-search',
+          searchAttemptId: 'fence-search-att',
+          fetchOperationId: 'fence-fetch',
+          fetchAttemptId: 'fence-fetch-att',
+          dispatchedAt: FIXED_NOW,
+          signal: new AbortController().signal,
+          now: () => FIXED_NOW,
+        }),
+      /store fencing failure/,
+    )
+    const events = await store.listEvents(mission.mission_id)
+    const failedFetch = events.filter(
+      (e) =>
+        e.kind === 'external_operation_completed' &&
+        (e.payload.completion as { operation_id?: string; settlement?: string })?.operation_id ===
+          'fence-fetch--web-ref-0' &&
+        (e.payload.completion as { settlement?: string })?.settlement === 'failed',
+    )
+    assert.equal(failedFetch.length, 1)
+    assert.equal(events.filter((e) => e.kind === 'passage_recorded').length, 0)
+    const secondFetch = events.filter(
+      (e) =>
+        e.kind === 'external_operation_completed' &&
+        (e.payload.completion as { operation_id?: string })?.operation_id === 'fence-fetch--web-ref-1',
+    )
+    assert.equal(secondFetch.length, 0)
+  })
 })
 
 function completionEvent(

@@ -1,20 +1,55 @@
+import { createHash } from 'node:crypto'
 import type { ResearchMissionV2 } from '../contracts/mission.js'
 import type { SourceRecord } from '../contracts/sources.js'
 import { normalizeDocumentUrl } from './missionDocumentAcquisitionPolicy.js'
 import { sourceAdmittedForMission } from './missionSourceAdmission.js'
 
-function sourceUrlKeys(source: SourceRecord): Set<string> {
-  const keys = new Set<string>()
-  keys.add(normalizeDocumentUrl(source.canonical_key))
-  for (const url of source.observed_urls) {
-    keys.add(normalizeDocumentUrl(url))
-  }
-  return keys
+export function normalizedWebTargetKey(url: string): string {
+  return normalizeDocumentUrl(url)
 }
 
-export function sourceMatchesSelectedWebRef(source: SourceRecord, ref: string): boolean {
-  const normalizedRef = normalizeDocumentUrl(ref)
-  return sourceUrlKeys(source).has(normalizedRef)
+export function primaryObservedWebUrl(source: SourceRecord): string | undefined {
+  if (source.kind !== 'web') return undefined
+  return source.observed_urls[0]
+}
+
+/** Mission fetch identity uses the primary observed URL only (not canonical aliases). */
+export function sourcePrimaryUrlMatchesSelectedWebRef(source: SourceRecord, ref: string): boolean {
+  const primary = primaryObservedWebUrl(source)
+  if (!primary) return false
+  return normalizedWebTargetKey(primary) === normalizedWebTargetKey(ref)
+}
+
+/** Discover/index matching may still consult secondary observed URLs. */
+export function sourceObservedUrlsIncludeSelectedWebRef(source: SourceRecord, ref: string): boolean {
+  const key = normalizedWebTargetKey(ref)
+  for (const url of source.observed_urls) {
+    if (normalizedWebTargetKey(url) === key) return true
+  }
+  return normalizedWebTargetKey(source.canonical_key) === key
+}
+
+export function buildMissionSelectedWebSourceRecord(ref: string): SourceRecord {
+  const normalizedRef = normalizedWebTargetKey(ref)
+  const sourceId = `web-mission-ref-${createHash('sha256').update(normalizedRef).digest('hex').slice(0, 20)}`
+  return {
+    source_id: sourceId,
+    kind: 'web',
+    canonical_key: normalizedRef,
+    observed_urls: [normalizedRef],
+    title: normalizedRef,
+  }
+}
+
+/** Rebind discover hit so fetch dispatches on the mission-selected URL as observed_urls[0]. */
+export function bindWebSourceToMissionRef(source: SourceRecord, ref: string): SourceRecord {
+  const normalizedRef = normalizedWebTargetKey(ref)
+  const rest = source.observed_urls.filter((u) => normalizedWebTargetKey(u) !== normalizedRef)
+  return {
+    ...source,
+    canonical_key: normalizedRef,
+    observed_urls: [normalizedRef, ...rest],
+  }
 }
 
 export interface MissionWebRetrievalResolvedSlot {
@@ -29,8 +64,9 @@ export interface MissionWebRetrievalCandidateResolution {
 }
 
 /**
- * When `selected_web_refs` is declared, resolve admitted discover hits in mission ref order (deduped).
- * Otherwise retain legacy behavior: first policy-admitted discover candidate only.
+ * When `selected_web_refs` is set: dedupe by normalized fetch target, bind each ref to
+ * observed_urls[0], and synthesize direct-acquisition sources when discover omits a ref.
+ * Legacy (no refs): first discover candidate only.
  */
 export function resolveMissionWebRetrievalCandidates(
   discovered: readonly SourceRecord[],
@@ -50,16 +86,46 @@ export function resolveMissionWebRetrievalCandidates(
   const admitted = discovered.filter((candidate) => sourceAdmittedForMission(candidate, mission))
   const limitations: string[] = []
   const slots: MissionWebRetrievalResolvedSlot[] = []
+  const usedTargetKeys = new Set<string>()
   const usedSourceIds = new Set<string>()
+
   for (const [index, ref] of selectedRefs.entries()) {
-    const match = admitted.find(
-      (candidate) =>
-        !usedSourceIds.has(candidate.source_id) && sourceMatchesSelectedWebRef(candidate, ref),
-    )
-    if (!match) {
-      limitations.push(`retrieval_web_ref_missing:${normalizeDocumentUrl(ref)}`)
+    const targetKey = normalizedWebTargetKey(ref)
+    if (usedTargetKeys.has(targetKey)) {
+      limitations.push(`retrieval_web_ref_duplicate:${targetKey}`)
       continue
     }
+
+    let match =
+      admitted.find(
+        (candidate) =>
+          !usedSourceIds.has(candidate.source_id) &&
+          sourcePrimaryUrlMatchesSelectedWebRef(candidate, ref),
+      ) ??
+      admitted.find(
+        (candidate) =>
+          !usedSourceIds.has(candidate.source_id) &&
+          sourceObservedUrlsIncludeSelectedWebRef(candidate, ref),
+      )
+
+    if (!match) {
+      const direct = buildMissionSelectedWebSourceRecord(ref)
+      if (!sourceAdmittedForMission(direct, mission)) {
+        limitations.push(`retrieval_web_ref_missing:${targetKey}`)
+        continue
+      }
+      match = direct
+    } else {
+      match = bindWebSourceToMissionRef(match, ref)
+    }
+
+    const fetchKey = normalizedWebTargetKey(match.observed_urls[0] ?? ref)
+    if (usedTargetKeys.has(fetchKey)) {
+      limitations.push(`retrieval_web_ref_duplicate:${fetchKey}`)
+      continue
+    }
+
+    usedTargetKeys.add(fetchKey)
     usedSourceIds.add(match.source_id)
     slots.push({
       slotId: `web-ref-${index}`,

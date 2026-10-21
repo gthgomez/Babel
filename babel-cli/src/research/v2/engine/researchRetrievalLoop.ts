@@ -473,12 +473,21 @@ export async function runAdmittedRetrievalIteration(
           'retrieval iteration aborted during evidence persistence',
         )
       }
-      if (!multiWebRetrieval) {
-        throw RetrievalIterationFailedAfterAcquireError.from(acquired, ctx, err)
-      }
       const message = err instanceof Error ? err.message : String(err)
-      limitations.push(`retrieval_web_ref_failed:${slot.slotId}:${message}`)
-      continue
+      await settleExternalOperation(
+        request.store,
+        ctx,
+        ctx.mission_id,
+        fetchOperationId,
+        fetchAttemptId,
+        {
+          settlement: 'failed',
+          failureCategory: 'evidence_persistence_failed',
+          message,
+        },
+        now(),
+      )
+      throw RetrievalIterationFailedAfterAcquireError.from(acquired, ctx, err)
     }
 
     await settleExternalOperation(

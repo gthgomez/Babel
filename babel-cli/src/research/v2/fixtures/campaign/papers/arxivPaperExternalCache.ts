@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { closeSync, existsSync, fstatSync, openSync, readSync } from 'node:fs'
+import { closeSync, constants, existsSync, fstatSync, openSync, readSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import arxivManifest from './1706.03762.manifest.json' with { type: 'json' }
@@ -59,6 +59,11 @@ function resolveArtifactPath(cacheRoot: string, artifactPath: string): string {
   return join(cacheRoot, artifactPath)
 }
 
+const OPEN_FLAGS =
+  constants.O_RDONLY |
+  (constants.O_NOFOLLOW ?? 0) |
+  (constants.O_NONBLOCK ?? 0)
+
 type BoundedReadResult =
   | { ok: true; bytes: Buffer }
   | {
@@ -68,8 +73,36 @@ type BoundedReadResult =
       actualByteLength?: number
     }
 
+export function assertRegularFileSizeStableAfterRead(
+  fd: number,
+  expectedByteLength: number,
+): BoundedReadResult {
+  try {
+    const after = fstatSync(fd)
+    if (!after.isFile()) {
+      return {
+        ok: false,
+        status: 'not_regular_file',
+        message: 'cache entry changed to a non-regular file during read',
+      }
+    }
+    if (after.size !== expectedByteLength) {
+      return {
+        ok: false,
+        status: 'size_mismatch',
+        message: 'cache file size changed during bounded read',
+        actualByteLength: after.size,
+      }
+    }
+    return { ok: true, bytes: Buffer.alloc(0) }
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err)
+    return { ok: false, status: 'read_failed', message }
+  }
+}
+
 /**
- * Stat before read; reject non-regular files and sizes above manifest byte_length before allocating.
+ * Open without following symlinks; stat before read; reject growth before and after read.
  */
 export function readBoundedRegularFileAtPath(
   resolvedPath: string,
@@ -77,7 +110,7 @@ export function readBoundedRegularFileAtPath(
 ): BoundedReadResult {
   let fd: number | undefined
   try {
-    fd = openSync(resolvedPath, 'r')
+    fd = openSync(resolvedPath, OPEN_FLAGS)
     const stat = fstatSync(fd)
     if (!stat.isFile()) {
       return {
@@ -112,12 +145,21 @@ export function readBoundedRegularFileAtPath(
         message: `expected ${expectedByteLength} bytes, read ${bytesRead}`,
       }
     }
+    const stable = assertRegularFileSizeStableAfterRead(fd, expectedByteLength)
+    if (!stable.ok) {
+      return stable
+    }
     return { ok: true, bytes }
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err)
+    const notRegular =
+      message.includes('ENOTSUP') ||
+      message.includes('EOPNOTSUPP') ||
+      message.includes('EINVAL') ||
+      message.includes('ELOOP')
     return {
       ok: false,
-      status: 'read_failed',
+      status: notRegular ? 'not_regular_file' : 'read_failed',
       message,
     }
   } finally {

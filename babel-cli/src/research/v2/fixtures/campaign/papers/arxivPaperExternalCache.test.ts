@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { closeSync, constants, fstatSync, mkdirSync, mkdtempSync, openSync, rmSync, writeFileSync } from 'node:fs'
+import { execSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, it } from 'node:test'
@@ -10,6 +11,7 @@ import { createGovernedSourceAccessPort } from '../../../access/governedSourceAc
 import { createMissionSelectedDocumentSearchProvider } from '../../../access/missionSelectedDocumentSearchProvider.js'
 import arxivManifest from './1706.03762.manifest.json' with { type: 'json' }
 import {
+  assertRegularFileSizeStableAfterRead,
   readBoundedRegularFileAtPath,
   resolveArxiv170603762PaperBytesFromExternalCache,
   resolveManifestedPaperBytesFromExternalCache,
@@ -96,6 +98,39 @@ describe('arxiv external paper cache (isolated temp dirs)', () => {
       assert.equal(read.ok, false)
       if (read.ok) return
       assert.equal(read.status, 'not_regular_file')
+    })
+  })
+
+  it('fails closed on FIFO cache paths without blocking (linux)', () => {
+    if (process.platform !== 'linux') {
+      return
+    }
+    withTempCacheDir((cacheRoot) => {
+      const fifoPath = join(cacheRoot, tinyManifest.artifact_path)
+      execSync(`mkfifo ${JSON.stringify(fifoPath)}`)
+      const read = readBoundedRegularFileAtPath(fifoPath, tinyManifest.byte_length)
+      assert.equal(read.ok, false)
+      if (read.ok) return
+      assert.ok(read.status === 'not_regular_file' || read.status === 'read_failed')
+    })
+  })
+
+  it('detects file growth after initial stat (linux)', () => {
+    if (process.platform !== 'linux') {
+      return
+    }
+    withTempCacheDir((cacheRoot) => {
+      const path = join(cacheRoot, tinyManifest.artifact_path)
+      writeFileSync(path, 'hello-paper')
+      const fd = openSync(path, constants.O_RDONLY)
+      const before = fstatSync(fd)
+      assert.equal(before.size, tinyManifest.byte_length)
+      writeFileSync(path, 'hello-paper!')
+      const stable = assertRegularFileSizeStableAfterRead(fd, tinyManifest.byte_length)
+      closeSync(fd)
+      assert.equal(stable.ok, false)
+      if (stable.ok) return
+      assert.equal(stable.status, 'size_mismatch')
     })
   })
 })

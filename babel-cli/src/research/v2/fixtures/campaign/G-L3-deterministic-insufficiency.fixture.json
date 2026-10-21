@@ -1,0 +1,36 @@
+{
+  "schema": "research-v2-g-l3-deterministic-insufficiency/v1",
+  "label": "DETERMINISTIC_INSUFFICIENCY_FIXTURE",
+  "acceptance_scenario": "G-L3",
+  "mission_id": "mission-g-l3-contradiction-insufficient",
+  "purpose": "Offline, labeled insufficiency slice — not a substitute for live cross-page agreement or conflict investigation on python.org.",
+  "rules": {
+    "never_invent_contradiction": true,
+    "one_page_cannot_count_as_cross_page_coverage": true,
+    "do_not_assert_live_agreement_from_this_fixture": true
+  },
+  "admitted_fixture_pages": [
+    {
+      "fixture_file": "G-L3-fixtures/downloads-landing-snippet.html",
+      "canonical_url": "https://www.python.org/downloads/",
+      "role": "downloads_landing_stable_version_and_date"
+    }
+  ],
+  "missing_for_cross_page_comparison": [
+    "devguide_status_table_stable_version_and_date"
+  ],
+  "expected_offline_terminal_state": "partial",
+  "expected_limitation_themes": [
+    "insufficient_evidence_across_required_canonical_pages",
+    "not_semantic_contradiction_without_second_admitted_page"
+  ],
+  "live_investigation": {
+    "requires_two_distinct_canonical_pages": true,
+    "example_page_roles": [
+      "downloads_landing_stable_version_and_date",
+      "devguide_status_table_stable_version_and_date"
+    ],
+    "acceptable_terminal_states_when_official_pages_agree": ["complete"],
+    "acceptable_terminal_states_when_insufficient_or_contradicted": ["partial"]
+  }
+}
