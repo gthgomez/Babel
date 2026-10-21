@@ -18,10 +18,11 @@
     "review-artifacts/t-l1-invalid-slot-planning-failure.reciprocal.tap.txt (808d0613-era red runs)",
     "review-artifacts/t-l1-invalid-slot-planning-failure.reciprocal.union-v2.tap.txt (b024ca95 9/9 union)"
   ],
-  "git_head_at_receipt_authoring": "40e421c6",
-  "git_tree_at_receipt_authoring": "pending_post_commit_capture",
+  "git_head_at_receipt_authoring": "0e201ebf",
+  "git_tree_at_receipt_authoring": "16c96a9c15f6c0cd064e1013f50f48c8daf10208",
+  "test_source_commit_for_sha256_binding": "40e421c663b92547d8e223c47a8ca64e16054e33",
   "working_tree_status": "dirty_untracked_present",
-  "working_tree_dirty_untracked_paths": 0,
+  "working_tree_dirty_untracked_paths": 46,
   "exact_source_binding": {
     "test_source": "babel-cli/src/research/v2/fixtures/campaign/T-L1-invalidCoverageSlot.planningFailure.reciprocal.test.ts",
     "test_source_sha256": "dcd813bdfb44f68a487df531e2b7fe3d72de8526a94d98a7ae50b8eab561cf4b",
