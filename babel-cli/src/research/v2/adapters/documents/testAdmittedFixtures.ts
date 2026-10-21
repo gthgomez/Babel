@@ -24,20 +24,31 @@ export function buildAdmittedContent(
   revisionId: string,
   bytes: Buffer,
   mediaType: string,
-  opts?: { corruptPayloadHash?: boolean; corruptRevisionHash?: boolean; wrongSourceId?: string },
+  opts?: {
+    corruptPayloadHash?: boolean
+    corruptRevisionHash?: boolean
+    wrongSourceId?: string
+    requestedUrl?: string
+    finalUrl?: string
+    redirectChain?: string[]
+  },
 ): AdmittedContent {
   const hash = createHash('sha256').update(bytes).digest('hex')
   const payloadHash = opts?.corruptPayloadHash ? '0'.repeat(64) : hash
   const revisionHash = opts?.corruptRevisionHash ? 'f'.repeat(64) : hash
   const revisionSourceId = opts?.wrongSourceId ?? sourceId
+  const requestedUrl = opts?.requestedUrl ?? 'https://example.invalid/source'
+  const finalUrl = opts?.finalUrl ?? requestedUrl
+  const redirectChain =
+    opts?.redirectChain ?? (finalUrl === requestedUrl ? [requestedUrl] : [requestedUrl, finalUrl])
   return {
     operation_id: operationId,
     revision: buildSourceRevision(revisionSourceId, revisionId, revisionHash),
     media_type: mediaType,
     provenance: {
-      requested_url: 'https://example.invalid/requested',
-      final_url: 'https://example.invalid/final',
-      redirect_chain: ['https://example.invalid/requested'],
+      requested_url: requestedUrl,
+      final_url: finalUrl,
+      redirect_chain: redirectChain,
     },
     payload: {
       mode: 'inline_bytes',

@@ -135,6 +135,52 @@ test('GeneralDocumentAdapter.read: fails on port operationId mismatch', async ()
   if (result.status === 'failed') assert.match(result.message, /operationId/)
 })
 
+test('GeneralDocumentAdapter.read: fails when provenance requested_url is unrelated to source', async () => {
+  const bytes = Buffer.from('line\n', 'utf8')
+  const port = stubAccessPort(async (request) => {
+    const admitted = buildAdmittedContent(
+      request.operationId,
+      request.source.source_id,
+      'rev-x',
+      bytes,
+      'text/plain',
+      {
+        requestedUrl: 'https://unrelated.invalid/doc',
+        finalUrl: 'https://unrelated.invalid/doc',
+        redirectChain: ['https://unrelated.invalid/doc'],
+      },
+    )
+    return { operationId: request.operationId, status: 'ok', admitted }
+  })
+  const result = await new GeneralDocumentAdapter().read(
+    { operationId: 'op-url', source: sampleSource('s'), signal: AbortSignal.timeout(1_000) },
+    port,
+  )
+  assert.equal(result.status, 'failed')
+  if (result.status === 'failed') {
+    assert.equal(result.failureCategory, 'contract_violation')
+    assert.match(result.message, /observed_urls/)
+  }
+})
+
+test('GeneralDocumentAdapter.read: does not propagate failure from foreign operationId', async () => {
+  const port = stubAccessPort(async () => ({
+    operationId: 'foreign-op',
+    status: 'failed',
+    failureCategory: 'network_error',
+    message: 'wrong operation',
+  }))
+  const result = await new GeneralDocumentAdapter().read(
+    { operationId: 'read-op', source: sampleSource('s'), signal: AbortSignal.timeout(1_000) },
+    port,
+  )
+  assert.equal(result.status, 'failed')
+  if (result.status === 'failed') {
+    assert.equal(result.failureCategory, 'contract_violation')
+    assert.match(result.message, /operationId/)
+  }
+})
+
 test('GeneralDocumentAdapter.read: fails on admitted source_id mismatch', async () => {
   const result = await new GeneralDocumentAdapter().read(
     { operationId: 'op-bind', source: sampleSource('requested-src'), signal: AbortSignal.timeout(1_000) },

@@ -13,7 +13,8 @@ There is **no** `frozenPorts*` alias file. Proof runs in a disposable worktree a
 ## Runtime rules
 
 - Bytes only via `SourceAccessPort.fetchContent`.
-- `read` binds outer/inner `operationId`, admitted `operation_id`, requested `source_id`, and provenance URLs.
+- `read` checks port `operationId` against the read for **every** fetch status before interpreting the result (foreign failures/cancellations are `contract_violation`, not propagated).
+- On `ok`, binds admitted `operation_id`, `revision.source_id`, and provenance: `requested_url` must appear on the selected source `observed_urls`; `redirect_chain[0] === requested_url` and the chain must end at `final_url` (redirects may change the final URL; `final_url === requested_url` is not required).
 - Pre- and post-await `AbortSignal` → `cancelled`.
 - Plain extraction accepts **`text/plain` only** (not `text/html`).
 - Fixture paths: `quarantinePath.ts` (rejects absolute paths and cross-drive escape on Windows).
