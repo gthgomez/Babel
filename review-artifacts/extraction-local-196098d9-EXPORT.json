@@ -5,14 +5,11 @@
     "tree": "4d6a4fef366e6734e9b95eddebbaa57a9e52c234"
   },
   "localHead": {
-    "commit": "06e7717d3be264badf71cc328553162716d0ffb3",
-    "tree": "a72bc6490ee73c4a0c9f593b685f5037907df21e"
+    "commit": "c12d5ed39ccca47a8deef85a2b8167ee48e8edce",
+    "tree": "1bafc487e610d5a0204cb7082e3817b3e578ed2d"
   },
-  "identityBinding": "localHead/localTree from git rev-parse HEAD and HEAD^{tree} at generatedAt",
-  "priorExportIdentityNote": "3175ba2f/e69d4477 was stale; 2d660bf0/9233005b was pre-lifecycle-repair tip",
-  "repairHead": {
-    "commit": "2e81686d2606709e54b6b1ecdbaf8d793524a088"
-  },
+  "identityBinding": "localHead/localTree = git rev-parse HEAD and HEAD^{tree} when this file was written",
+  "priorExportIdentityNote": "3175ba2f/e69d4477 stale; corrected to match rev-parse",
   "lifecycleRepairHead": {
     "commit": "0693cb8f2eb1174432a7449806c4857937199253"
   },
@@ -23,12 +20,12 @@
     "3175ba2f docs(general): handoff pdfjs API pin and catalog exports for A (local)",
     "2d660bf0 chore(review): refresh extraction exports with A handoff metadata (local)",
     "0693cb8f fix(general): UTF-16 inline cap and interruptible PDF parser lifecycle (local)",
-    "06e7717d chore(review): bind extraction exports to HEAD rev-parse identity (local)"
+    "c12d5ed3 chore(review): bind extraction exports to HEAD rev-parse identity (local)"
   ],
   "patchFullLocal": {
     "path": "review-artifacts/extraction-local-196098d9-to-HEAD.patch",
-    "sha256": "6cdde2810b7fc95c7f88ff1ad399d638d778a7245159ec648a8e4dc0d448cfb5",
-    "bytes": 295143
+    "sha256": "7436c7bd8157d5234bb56f597438d654aa3c566b9a0ee8a950f9b8a261d270c0",
+    "bytes": 390623
   },
   "blobManifestFull": [
     {
@@ -117,11 +114,11 @@
     },
     {
       "path": "review-artifacts/extraction-local-196098d9-EXPORT.json",
-      "blob": "a918e117a1675feb7f3e735c890651002c398684"
+      "blob": "addff3d07214ebdf6cfcccbb874a99a4e7bbeaa1"
     },
     {
       "path": "review-artifacts/extraction-local-196098d9-to-HEAD.patch",
-      "blob": "0dbfaef6025c6a6975d4c5823478b1eacb02a93b"
+      "blob": "20ad91bbf1d5bce4180186a405f6e7c093154945"
     },
     {
       "path": "review-artifacts/extraction-local-focused-test-command.txt",
@@ -139,5 +136,5 @@
     "pass": 49,
     "fail": 0
   },
-  "generatedAt": "2026-10-21T02:54:11Z"
+  "generatedAt": "2026-10-21T02:54:24Z"
 }
