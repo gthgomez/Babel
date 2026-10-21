@@ -1,0 +1,20 @@
+{
+  "schema": "research-v2-t-l1-live-diagnostic-reference/v1",
+  "label": "Structural reference for C #408 fe9bf5ef store subset (event kinds only)",
+  "not_original_capture": true,
+  "source_pointer": "C PR #408 commit fe9bf5ef review-artifacts/t-l1-live-diagnostic-8930f929-store-subset.json (not vendored into this branch)",
+  "observed_event_kinds_in_order": [
+    "mission_created",
+    "plan_revised",
+    "external_operation_intent",
+    "terminal_receipt"
+  ],
+  "explicitly_absent_in_live_diagnostic": [
+    "external_operation_completed",
+    "model_invocation_completed",
+    "source_issued",
+    "passage_recorded",
+    "finding_issued"
+  ],
+  "failure_message_substring": "coverage obligation source_slot discover-primary is not a mission retrieval slot"
+}

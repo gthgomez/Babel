@@ -1,0 +1,32 @@
+{
+  "schema": "research-v2-t-l1-synthetic-plan-questions/v1",
+  "_provenance": "Synthetic structurally valid plan_questions payload for T-L1 repository-only mission. Logical error: discover-primary is not a mission retrieval slot. NOT original C #408 fe9bf5ef captured model output.",
+  "request_local_usage_metadata": {
+    "provider": "openrouter",
+    "provider_model_id": "deepseek/deepseek-v4-flash-0731",
+    "observed_model_id": "deepseek/deepseek-v4-flash-0731",
+    "latency_ms": 4120,
+    "prompt_tokens": 512,
+    "completion_tokens": 896,
+    "total_tokens": 1408,
+    "estimated_cost_usd": 0.00018432,
+    "cost_precision": "exact"
+  },
+  "raw_model_payload": {
+    "kind": "plan_questions",
+    "questions": [
+      {
+        "text": "How does each pinned repository separate durable graph or state persistence from execution policy?",
+        "importance": "critical",
+        "coverage_obligations": [
+          {
+            "obligation_id": "ob-synthetic-discover-primary",
+            "source_slot": "discover-primary",
+            "aspect": "technical_effect",
+            "technical_effect": "general_technical"
+          }
+        ]
+      }
+    ]
+  }
+}
