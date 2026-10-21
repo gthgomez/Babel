@@ -1,0 +1,275 @@
+{
+  "plan_revisions": [
+    {
+      "plan_revision_id": "plan-ad20edb0-c6f8-461e-b7ec-1c8cf3f53f36-bootstrap",
+      "mission_id": "mission-g-l3-validation-ba45f328-001",
+      "created_at": "2026-10-21T13:32:51.537Z",
+      "questions": [
+        {
+          "question_id": "q-plan-ad20edb0-c6f8-461e-b7ec-1c8cf3f53f36-bootstrap-bootstrap",
+          "text": "Host bootstrap plan shell (awaiting model plan_questions)",
+          "importance": "low",
+          "evidence_requirement": "Not used for research evidence",
+          "status": "open"
+        }
+      ],
+      "revision_reason": "host_bootstrap_before_model_plan"
+    },
+    {
+      "plan_revision_id": "plan-ad20edb0-c6f8-461e-b7ec-1c8cf3f53f36",
+      "mission_id": "mission-g-l3-validation-ba45f328-001",
+      "created_at": "2026-10-21T13:34:04.971Z",
+      "questions": [
+        {
+          "question_id": "q-plan-ad20edb0-c6f8-461e-b7ec-1c8cf3f53f36-1",
+          "text": "Do the downloads landing page and the developer guide versions table state the same latest stable CPython release version number?",
+          "importance": "critical",
+          "evidence_requirement": "Host-admitted plan question; refine locators during retrieval",
+          "status": "open",
+          "coverage_obligations": [
+            {
+              "obligation_id": "q1-oblig-web-ref-0",
+              "source_slot": "web-ref-0",
+              "aspect": "technical_effect",
+              "technical_effect": "general_technical"
+            },
+            {
+              "obligation_id": "q1-oblig-web-ref-1",
+              "source_slot": "web-ref-1",
+              "aspect": "technical_effect",
+              "technical_effect": "general_technical"
+            }
+          ]
+        },
+        {
+          "question_id": "q-plan-ad20edb0-c6f8-461e-b7ec-1c8cf3f53f36-2",
+          "text": "Do the downloads landing page and the developer guide versions table state the same release date for the latest stable CPython release, and are the temporal semantics of that date consistent (e.g., release date vs. page update date)?",
+          "importance": "critical",
+          "evidence_requirement": "Host-admitted plan question; refine locators during retrieval",
+          "status": "open",
+          "coverage_obligations": [
+            {
+              "obligation_id": "q2-oblig-web-ref-0",
+              "source_slot": "web-ref-0",
+              "aspect": "technical_effect",
+              "technical_effect": "max_age_or_ttl_semantics"
+            },
+            {
+              "obligation_id": "q2-oblig-web-ref-1",
+              "source_slot": "web-ref-1",
+              "aspect": "technical_effect",
+              "technical_effect": "max_age_or_ttl_semantics"
+            }
+          ]
+        },
+        {
+          "question_id": "q-plan-ad20edb0-c6f8-461e-b7ec-1c8cf3f53f36-3",
+          "text": "Do both pages explicitly identify the latest stable CPython release as stable and distinguish it from prerelease versions such as release candidates or betas?",
+          "importance": "high",
+          "evidence_requirement": "Host-admitted plan question; refine locators during retrieval",
+          "status": "open",
+          "coverage_obligations": [
+            {
+              "obligation_id": "q3-oblig-web-ref-0",
+              "source_slot": "web-ref-0",
+              "aspect": "technical_effect",
+              "technical_effect": "general_technical"
+            },
+            {
+              "obligation_id": "q3-oblig-web-ref-1",
+              "source_slot": "web-ref-1",
+              "aspect": "technical_effect",
+              "technical_effect": "general_technical"
+            }
+          ]
+        },
+        {
+          "question_id": "q-plan-ad20edb0-c6f8-461e-b7ec-1c8cf3f53f36-4",
+          "text": "If the two pages differ in the stated version or release date, is the difference a contradiction or an insufficiency (e.g., one page omits the release date)?",
+          "importance": "high",
+          "evidence_requirement": "Host-admitted plan question; refine locators during retrieval",
+          "status": "open",
+          "coverage_obligations": [
+            {
+              "obligation_id": "q4-oblig-web-ref-0",
+              "source_slot": "web-ref-0",
+              "aspect": "technical_effect",
+              "technical_effect": "general_technical"
+            },
+            {
+              "obligation_id": "q4-oblig-web-ref-1",
+              "source_slot": "web-ref-1",
+              "aspect": "technical_effect",
+              "technical_effect": "general_technical"
+            }
+          ]
+        },
+        {
+          "question_id": "q-plan-ad20edb0-c6f8-461e-b7ec-1c8cf3f53f36-5",
+          "text": "Are the version and release date statements on both pages attributable to official python.org pages rather than third-party mirrors or non-official content?",
+          "importance": "high",
+          "evidence_requirement": "Host-admitted plan question; refine locators during retrieval",
+          "status": "open",
+          "coverage_obligations": [
+            {
+              "obligation_id": "q5-oblig-web-ref-0",
+              "source_slot": "web-ref-0",
+              "aspect": "technical_effect",
+              "technical_effect": "authentication_mechanism"
+            },
+            {
+              "obligation_id": "q5-oblig-web-ref-1",
+              "source_slot": "web-ref-1",
+              "aspect": "technical_effect",
+              "technical_effect": "authentication_mechanism"
+            }
+          ]
+        },
+        {
+          "question_id": "q-plan-ad20edb0-c6f8-461e-b7ec-1c8cf3f53f36-6",
+          "text": "Should differences in wording or emphasis between the downloads-oriented landing page and the developer-oriented status table be interpreted as complementary audience-specific presentations rather than factual contradictions?",
+          "importance": "medium",
+          "evidence_requirement": "Host-admitted plan question; refine locators during retrieval",
+          "status": "open",
+          "coverage_obligations": [
+            {
+              "obligation_id": "q6-oblig-web-ref-0",
+              "source_slot": "web-ref-0",
+              "aspect": "audience_intent"
+            },
+            {
+              "obligation_id": "q6-oblig-web-ref-1",
+              "source_slot": "web-ref-1",
+              "aspect": "audience_intent"
+            }
+          ]
+        }
+      ],
+      "revision_reason": "e2e_model_planning"
+    }
+  ],
+  "findings": [
+    {
+      "finding_id": "finding-a458cc25e3c4633ac9862829",
+      "question_ids": [],
+      "passage_ids": [
+        "cli-run-fetch-wg1-ba51ff60--web-ref-0:html:0",
+        "cli-run-fetch-wg1-ba51ff60--web-ref-0:html:1",
+        "cli-run-fetch-wg1-ba51ff60--web-ref-0:html:2",
+        "cli-run-fetch-wg1-ba51ff60--web-ref-0:html:3"
+      ],
+      "statement": null
+    },
+    {
+      "finding_id": "finding-f6141bbd69702e076a81e190",
+      "question_ids": [],
+      "passage_ids": [
+        "cli-run-fetch-wg1-ba51ff60--web-ref-0:html:4"
+      ],
+      "statement": null
+    },
+    {
+      "finding_id": "finding-5568d5e515443e7b1cb213cd",
+      "question_ids": [],
+      "passage_ids": [
+        "cli-run-fetch-wg1-ba51ff60--web-ref-0:html:5"
+      ],
+      "statement": null
+    },
+    {
+      "finding_id": "finding-f0bb8c5bf7d1325a3bb1ace1",
+      "question_ids": [],
+      "passage_ids": [
+        "cli-run-fetch-wg1-ba51ff60--web-ref-0:html:4",
+        "cli-run-fetch-wg1-ba51ff60--web-ref-0:html:5"
+      ],
+      "statement": null
+    },
+    {
+      "finding_id": "finding-802abc3fd045bc6ee75d48b6",
+      "question_ids": [],
+      "passage_ids": [
+        "cli-run-fetch-wg1-ba51ff60--web-ref-0:html:3",
+        "cli-run-fetch-wg1-ba51ff60--web-ref-0:html:4"
+      ],
+      "statement": null
+    },
+    {
+      "finding_id": "finding-0fcd8fd29444b134fc3cc56e",
+      "question_ids": [],
+      "passage_ids": [
+        "cli-run-fetch-wg1-ba51ff60--web-ref-0:html:0",
+        "cli-run-fetch-wg1-ba51ff60--web-ref-0:html:4",
+        "cli-run-fetch-wg1-ba51ff60--web-ref-0:html:5"
+      ],
+      "statement": null
+    },
+    {
+      "finding_id": "finding-7f198c86e7cfaa5c781d4ef2",
+      "question_ids": [],
+      "passage_ids": [
+        "cli-run-fetch-wg1-ba51ff60--web-ref-0:html:0",
+        "cli-run-fetch-wg1-ba51ff60--web-ref-0:html:4",
+        "cli-run-fetch-wg1-ba51ff60--web-ref-0:html:5"
+      ],
+      "statement": null
+    },
+    {
+      "finding_id": "finding-f09cea1f696ea97e577ef43d",
+      "question_ids": [],
+      "passage_ids": [
+        "cli-run-fetch-wg1-ba51ff60--web-ref-0:html:3",
+        "cli-run-fetch-wg1-ba51ff60--web-ref-0:html:4",
+        "cli-run-fetch-wg1-ba51ff60--web-ref-0:html:5"
+      ],
+      "statement": null
+    }
+  ],
+  "model_usage_settlements": [
+    {
+      "attempt_id": "cli-run-plan-att-wg1-ba51ff60",
+      "input_tokens": 803,
+      "output_tokens": 9493,
+      "reasoning_tokens": 8482,
+      "cost": {
+        "status": "reported",
+        "amount_usd": 0.00277046,
+        "currency": "USD"
+      }
+    },
+    {
+      "attempt_id": "cli-run-extract-att-wg1-ba51ff60",
+      "input_tokens": 6645,
+      "output_tokens": 5413,
+      "reasoning_tokens": 4130,
+      "cost": {
+        "status": "reported",
+        "amount_usd": 0.002079049,
+        "currency": "USD"
+      }
+    },
+    {
+      "attempt_id": "cli-run-review-att-wg1-ba51ff60",
+      "input_tokens": 31796,
+      "output_tokens": 14089,
+      "reasoning_tokens": 12191,
+      "cost": {
+        "status": "reported",
+        "amount_usd": 0.007136906,
+        "currency": "USD"
+      }
+    },
+    {
+      "attempt_id": "cli-run-synth-att-wg1-ba51ff60",
+      "input_tokens": 1368,
+      "output_tokens": 415,
+      "reasoning_tokens": 158,
+      "cost": {
+        "status": "reported",
+        "amount_usd": 0.00028574,
+        "currency": "USD"
+      }
+    }
+  ],
+  "model_reported_cost_usd_total": 0.012272155
+}

@@ -1,0 +1,7 @@
+COMMAND: node /tmp/babel-g-l3-preflight-ba45f328/babel-cli/bin/babel.js research v2 run --store /tmp/babel-g-l3-store-ba45f328-1792589570 --mission-file /tmp/babel-g-l3-mission-ba45f328-fresh.json --json
+START_UTC: 2026-10-21T13:32:50.558Z
+END_UTC: 2026-10-21T13:36:11.535Z
+EXIT: 0
+STORE: /tmp/babel-g-l3-store-ba45f328-1792589570
+MISSION: /tmp/babel-g-l3-mission-ba45f328-fresh.json
+MISSION_ID: mission-g-l3-validation-ba45f328-001

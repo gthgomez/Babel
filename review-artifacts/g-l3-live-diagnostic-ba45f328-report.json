@@ -1,0 +1,78 @@
+(node:5348) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:5348) ExperimentalWarning: Importing WebAssembly module instances is an experimental feature and might change at any time
+{
+  "store_directory": "/tmp/babel-g-l3-store-ba45f328-1792589570",
+  "mission_id": "mission-g-l3-validation-ba45f328-001",
+  "report": {
+    "mission_id": "mission-g-l3-validation-ba45f328-001",
+    "plan_revision_id": "plan-ad20edb0-c6f8-461e-b7ec-1c8cf3f53f36",
+    "terminal_state": "partial",
+    "answer_summary": "[supported:finding-a458cc25e3c4633ac9862829] The python.org downloads landing page contains the text 'Download Python 3.15.1' and 'get the standalone installer for Python 3.15.1', identifying 3.15.1 as the current release offered for download. (passages: cli-run-fetch-wg1-ba51ff60--web-ref-0:html:0,cli-run-fetch-wg1-ba51ff60--web-ref-0:html:1,cli-run-fetch-wg1-ba51ff60--web-ref-0:html:2,cli-run-fetch-wg1-ba51ff60--web-ref-0:html:3) [supported:finding-f6141bbd69702e076a81e190] The developer guide versions table on the page lists '3.16 pre-release' and '3.15 bugfix', showing 3.15 as the highest non-prerelease maintenance version line, but it does not state the patch version 3.15.1. (passages: cli-run-fetch-wg1-ba51ff60--web-ref-0:html:4) [supported:finding-5568d5e515443e7b1cb213cd] The page's release-by-version table lists 'Python 3.15.1 Oct. 21, 2026' as the latest 3.15.x entry, so the latest stable patch release is 3.15.1 released on Oct. 21, 2026. (passages: cli-run-fetch-wg1-ba51ff60--web-ref-0:html:5) [supported:finding-f0bb8c5bf7d1325a3bb1ace1] The developer guide versions table gives 'First released' as 2026-10-09 for the 3.15 line, but it does not give a release date for 3.15.1; the 3.15.1 date appears only in the releases-by-version list as Oct. 21, 2026. (passages: cli-run-fetch-wg1-ba51ff60--web-ref-0:html:4,cli-run-fetch-wg1-ba51ff60--web-ref-0:html:5) [supported:finding-802abc3fd045bc6ee75d48b6] The landing page distinguishes the stable release from prereleases by saying 'Want to help test development versions of Python 3.16? Pre-releases', and the developer guide table labels 3.16 as 'pre-release' and 3.15 as 'bugfix'. (passages: cli-run-fetch-wg1-ba51ff60--web-ref-0:html:3,cli-run-fetch-wg1-ba51ff60--web-ref-0:html:4) [supported:finding-0fcd8fd29444b134fc3cc56e] The apparent difference between the downloads page's '3.15.1' and the developer guide table's '3.15 bugfix' is a granularity difference (patch release vs minor-version line), not a factual contradiction; the developer guide table omits the patch-level release date. (passages: cli-run-fetch-wg1-ba51ff60--web-ref-0:html:0,cli-run-fetch-wg1-ba51ff60--web-ref-0:html:4,cli-run-fetch-wg1-ba51ff60--web-ref-0:html:5) [supported:finding-7f198c86e7cfaa5c781d4ef2] All cited passages are from the python.org downloads page listed in the mission's allowed domains, so the statements are attributable to official python.org content rather than a third-party mirror. (passages: cli-run-fetch-wg1-ba51ff60--web-ref-0:html:0,cli-run-fetch-wg1-ba51ff60--web-ref-0:html:4,cli-run-fetch-wg1-ba51ff60--web-ref-0:html:5)",
+    "unanswered_questions": [
+      "q-plan-ad20edb0-c6f8-461e-b7ec-1c8cf3f53f36-1",
+      "q-plan-ad20edb0-c6f8-461e-b7ec-1c8cf3f53f36-2",
+      "q-plan-ad20edb0-c6f8-461e-b7ec-1c8cf3f53f36-3",
+      "q-plan-ad20edb0-c6f8-461e-b7ec-1c8cf3f53f36-4",
+      "q-plan-ad20edb0-c6f8-461e-b7ec-1c8cf3f53f36-5",
+      "q-plan-ad20edb0-c6f8-461e-b7ec-1c8cf3f53f36-6"
+    ],
+    "coverage_notes": "answer_summary lists only semantically supported findings with explicit finding_id bindings; unanswered_questions requires question_coverage answers on a supported finding (passage support or question_id membership alone is insufficient; partial/tangential coverage remains unanswered).",
+    "limitations": [
+      "search_provider_configured:exa_lite",
+      "search_provider_effective:exa_lite",
+      "exa_participation:exa_primary_ok",
+      "exa_lite_request_id:def86302eaf2323e586828d8c60754e9",
+      "exa_lite_provider_estimated_cost_usd:0.004",
+      "exa_lite_highlights_discovery_only:not_admitted_passages",
+      "retrieval_web_ref_failed:web-ref-1:no heading-bounded sections extracted from admitted HTML",
+      "search_provider_configured:exa_lite",
+      "search_provider_effective:exa_lite",
+      "exa_participation:exa_primary_ok",
+      "exa_lite_request_id:def86302eaf2323e586828d8c60754e9",
+      "exa_lite_provider_estimated_cost_usd:0.004",
+      "exa_lite_highlights_discovery_only:not_admitted_passages",
+      "source_revision_truncated:host_decoded_byte_limit:bytes_received=200000:retrieved_at=2026-10-21T13:34:05.577Z",
+      "finding_source_integrity_not_verified:finding-a458cc25e3c4633ac9862829:not_checked",
+      "finding_source_integrity_not_verified:finding-f6141bbd69702e076a81e190:not_checked",
+      "finding_source_integrity_not_verified:finding-5568d5e515443e7b1cb213cd:not_checked",
+      "finding_source_integrity_not_verified:finding-f0bb8c5bf7d1325a3bb1ace1:not_checked",
+      "finding_source_integrity_not_verified:finding-802abc3fd045bc6ee75d48b6:not_checked",
+      "finding_source_integrity_not_verified:finding-0fcd8fd29444b134fc3cc56e:not_checked",
+      "finding_source_integrity_not_verified:finding-7f198c86e7cfaa5c781d4ef2:not_checked",
+      "question_coverage_partial:q-plan-ad20edb0-c6f8-461e-b7ec-1c8cf3f53f36-1:finding-a458cc25e3c4633ac9862829",
+      "question_coverage_partial:q-plan-ad20edb0-c6f8-461e-b7ec-1c8cf3f53f36-1:finding-f6141bbd69702e076a81e190",
+      "question_coverage_partial:q-plan-ad20edb0-c6f8-461e-b7ec-1c8cf3f53f36-2:finding-5568d5e515443e7b1cb213cd",
+      "question_coverage_partial:q-plan-ad20edb0-c6f8-461e-b7ec-1c8cf3f53f36-2:finding-f0bb8c5bf7d1325a3bb1ace1",
+      "question_coverage_partial:q-plan-ad20edb0-c6f8-461e-b7ec-1c8cf3f53f36-3:finding-802abc3fd045bc6ee75d48b6",
+      "question_coverage_partial:q-plan-ad20edb0-c6f8-461e-b7ec-1c8cf3f53f36-4:finding-0fcd8fd29444b134fc3cc56e",
+      "question_coverage_partial:q-plan-ad20edb0-c6f8-461e-b7ec-1c8cf3f53f36-5:finding-7f198c86e7cfaa5c781d4ef2",
+      "semantic_support_insufficient",
+      "report_excludes_unsupported_findings",
+      "unverified_model_synthesis_excluded: On official python.org pages, the latest stable CPython release is 3.15.1, released Oct. 21, 2026. The downloads landing page identifies 3.15.1 as the current stable download, and the developer guide's release-by-version table lists 'Python",
+      "unverified_model_stopping_prose_excluded: completed",
+      "offline_or_governed_sources_only"
+    ],
+    "source_cutoff": "2026-10-21T13:34:05.577Z",
+    "acceptance_state": "host_admitted_model_synthesis",
+    "stopping_reason": "single_pass_host_finalization;unanswered_plan_questions=6;acquisition_or_extraction_limits_recorded;evidence_verification_limits_recorded;runtime_slot_limits_recorded;semantic_support_insufficient",
+    "finding_ids": [
+      "finding-a458cc25e3c4633ac9862829",
+      "finding-f6141bbd69702e076a81e190",
+      "finding-5568d5e515443e7b1cb213cd",
+      "finding-f0bb8c5bf7d1325a3bb1ace1",
+      "finding-802abc3fd045bc6ee75d48b6",
+      "finding-0fcd8fd29444b134fc3cc56e",
+      "finding-7f198c86e7cfaa5c781d4ef2"
+    ],
+    "citation_passage_ids": [
+      "cli-run-fetch-wg1-ba51ff60--web-ref-0:html:0",
+      "cli-run-fetch-wg1-ba51ff60--web-ref-0:html:1",
+      "cli-run-fetch-wg1-ba51ff60--web-ref-0:html:2",
+      "cli-run-fetch-wg1-ba51ff60--web-ref-0:html:3",
+      "cli-run-fetch-wg1-ba51ff60--web-ref-0:html:4",
+      "cli-run-fetch-wg1-ba51ff60--web-ref-0:html:5"
+    ],
+    "generated_at": "2026-10-21T13:36:11.481Z"
+  }
+}
