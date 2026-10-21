@@ -3,6 +3,43 @@ import { setImmediate as nextTurn } from 'node:timers/promises'
 import test from 'node:test'
 import * as sandbox from './sandbox.js'
 import { ProcessWitness } from './diagnostics/bdns/processWitness.js'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { isProcessAlive } from './processTree.js'
+
+test('owner drain waits for a cancelled executor child when process diagnostics are disabled', async () => {
+  // Trusted host-only supervisor fixture; this is not live-provider qualification.
+  const root = mkdtempSync(join(tmpdir(), 'babel-owner-drain-'))
+  const previous = process.env['BABEL_EXECUTION_PROFILE']
+  const previousFallback = process.env['BABEL_ALLOW_HOST_FALLBACK']
+  process.env['BABEL_EXECUTION_PROFILE'] = 'dev_local'
+  process.env['BABEL_ALLOW_HOST_FALLBACK'] = '1'
+  writeFileSync(join(root, 'hold.mjs'), "import fs from 'node:fs';fs.writeFileSync('pid.txt',String(process.pid));setInterval(()=>{},1000);\n")
+  const controller = new AbortController()
+  try {
+    const pending = new sandbox.SafeExecutor(root).shellExecAsync('node hold.mjs', root, 15_000, 'test_run', controller.signal, { sessionId: 'owner-without-diagnostics' })
+    let earlyResult: sandbox.ToolResult | undefined
+    void pending.then(result => { earlyResult = result })
+    const deadline = Date.now() + 5_000
+    while (!existsSync(join(root, 'pid.txt'))) {
+      if (earlyResult) throw new Error(`Owned fixture ended before its start marker: ${earlyResult.stderr}`)
+      if (Date.now() > deadline) throw new Error('Owned fixture process did not start')
+      await new Promise(resolve => setTimeout(resolve, 10))
+    }
+    const pid = Number(readFileSync(join(root, 'pid.txt'), 'utf8'))
+    controller.abort()
+    assert.notEqual((await pending).exit_code, 0)
+    await sandbox.awaitPendingProcessTerminations('owner-without-diagnostics')
+    assert.equal(isProcessAlive(pid), false, 'an owner drain must include its real child even without a ProcessWitness')
+  } finally {
+    controller.abort()
+    await sandbox.awaitPendingProcessTerminations()
+    if (previous === undefined) delete process.env['BABEL_EXECUTION_PROFILE']; else process.env['BABEL_EXECUTION_PROFILE'] = previous
+    if (previousFallback === undefined) delete process.env['BABEL_ALLOW_HOST_FALLBACK']; else process.env['BABEL_ALLOW_HOST_FALLBACK'] = previousFallback
+    rmSync(root, { recursive: true, force: true })
+  }
+})
 
 test('a settled deferred termination failure remains visible until its owner drains it', async () => {
   assert.equal(typeof sandbox.registerPendingProcessTermination, 'function')

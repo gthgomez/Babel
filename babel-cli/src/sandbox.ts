@@ -53,12 +53,12 @@ import {
 } from 'node:fs';
 import { resolve, sep, dirname, basename, isAbsolute, relative } from 'node:path';
 import {
-  buildBenchmarkContainerCommand,
   evaluateGovernedIsolation,
   getDockerUnavailableReason,
   isBenchmarkProjectExecutableCommand,
   shouldUseDockerSandbox,
 } from './config/benchmarkContainer.js';
+import { prepareOwnedContainerInvocation, removeOwnedContainer, removeOwnedContainerSync, type PreparedShellInvocation } from './sandboxContainerLifecycle.js';
 import {
   getExecutionProfileCommandAdditions,
   isToolAllowedForExecutionProfile,
@@ -353,13 +353,6 @@ interface AsyncSpawnResult {
   processStarted: boolean;
   /** Wall-clock supervisor timeout after a successful launch. */
   timedOut: boolean;
-}
-
-interface PreparedShellInvocation {
-  executable: string;
-  args: string[];
-  cwd: string;
-  env: NodeJS.ProcessEnv;
 }
 
 function appendCappedChunk(
@@ -1880,19 +1873,10 @@ export class SafeExecutor {
     const useDockerSandbox =
       isolation.kind === 'docker' &&
       shouldUseDockerSandbox(process.env['BABEL_EXECUTION_PROFILE']);
-    const containerCommand = useDockerSandbox
-      ? buildBenchmarkContainerCommand({
-          dockerImage: benchmarkDockerImage!,
-          projectRoot: this.projectRoot,
-          cwd: safeCwd,
-          command,
-        })
-      : null;
-
     // Legacy one-time warning path (host_escalated already logged above).
     if (
       isolation.kind === 'host_escalated' &&
-      !containerCommand &&
+      !useDockerSandbox &&
       !dockerFallbackWarningEmitted &&
       process.env['BABEL_DOCKER_DISABLE'] !== 'true'
     ) {
@@ -1938,13 +1922,8 @@ export class SafeExecutor {
       env = hardenGitHostEnvironment(env);
     }
 
-    return containerCommand
-      ? {
-          executable: containerCommand.executable,
-          args: containerCommand.args,
-          cwd: this.projectRoot,
-          env,
-        }
+    return useDockerSandbox
+      ? prepareOwnedContainerInvocation({ dockerImage: benchmarkDockerImage!, projectRoot: this.projectRoot, cwd: safeCwd, command }, env)
       : { executable: spawnCmd, args: spawnArgs, cwd: resolvedCwd, env };
   }
 
@@ -1975,6 +1954,8 @@ export class SafeExecutor {
         break; // Spawn succeeded — no spawn-level error.
       }
 
+      if (result.pid > 0 && isSpawnSyncRuntimeSupervisorError(result.error)) break;
+
       if (!isTransientSpawnError(result.error.message)) {
         break; // Non-transient error — fail immediately without retry.
       }
@@ -1989,6 +1970,10 @@ export class SafeExecutor {
       sleep(delayMs);
     }
 
+    if (prepared.ownedContainerName && (result.error || result.status !== 0)) {
+      try { removeOwnedContainerSync(prepared.ownedContainerName, prepared.env); }
+      catch (error) { return { exit_code: 1, stdout: result.stdout ?? '', stderr: String(error) }; }
+    }
     if (result.error) {
       if (isSpawnSyncRuntimeSupervisorError(result.error)) {
         return normalizeSupervisorTerminatedShellOutput(
@@ -2036,20 +2021,16 @@ export class SafeExecutor {
         timeoutMs,
         env: prepared.env,
         ...(signal ? { signal } : {}),
-        ...(this.processWitness
-          ? {
-              processWitness: this.processWitness,
-              processContext: {
-                projectRoot: this.projectRoot,
-                toolName,
-                ...(sessionId ? { sessionId } : {}),
-                ...(processContext?.turnId ? { turnId: processContext.turnId } : {}),
-                ...(processContext?.toolCallId ? { toolCallId: processContext.toolCallId } : {}),
-              },
-            }
-          : {}),
+        ...(this.processWitness ? { processWitness: this.processWitness } : {}),
+        processContext: {
+          projectRoot: this.projectRoot,
+          toolName,
+          ...(sessionId ? { sessionId } : {}),
+          ...(processContext?.turnId ? { turnId: processContext.turnId } : {}),
+          ...(processContext?.toolCallId ? { toolCallId: processContext.toolCallId } : {}),
+        },
       });
-      if (!result.error || result.aborted || !isTransientSpawnError(result.error.message)) break;
+      if (!result.error || result.aborted || isChildRuntimeSupervisorError(result.error, result.processStarted, result.timedOut) || !isTransientSpawnError(result.error.message)) break;
       transientRetryCount += 1;
       if (transientRetryCount > MAX_TRANSIENT_SPAWN_RETRIES) break;
       const delayMs = 1000 * Math.pow(2, transientRetryCount - 1) + Math.floor(Math.random() * 500);
@@ -2063,6 +2044,12 @@ export class SafeExecutor {
       }
     }
 
+    if (prepared.ownedContainerName && (result.error || result.aborted || result.status !== 0)) {
+      const cleanup = removeOwnedContainer(prepared.ownedContainerName, prepared.env);
+      registerPendingProcessTermination(cleanup, sessionId ?? 'unscoped', prepared.ownedContainerName);
+      try { await cleanup; }
+      catch (error) { return { exit_code: 1, stdout: result.stdout, stderr: String(error) }; }
+    }
     if (result.error) {
       if (result.aborted) {
         return {
