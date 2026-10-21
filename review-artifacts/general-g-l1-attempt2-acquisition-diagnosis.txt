@@ -1,0 +1,48 @@
+# G-L1 attempt2 acquisition failure — exact selected source (B evidence)
+
+**Runtime:** `ec7dce912eebd1210f762ddc6092de4d199c3c3b`  
+**Live fetch op:** `cli-run-fetch-wg1-15576886` / `cli-run-fetch-att-wg1-15576886`  
+**Durable store:** no URL, Content-Type, bytes, or decode offset retained (`excerpt_only` / failed before `source_issued`).
+
+## Selected source (retrieval takes `discover.candidates[0]`)
+
+| Field | Value |
+|--------|--------|
+| **Requested / final URL** | `https://www.python.org/downloads/` |
+| **Redirect chain** | single hop (no redirect) |
+| **canonical_key** | `https://www.python.org/downloads/` |
+| **source_id** | `src-web-84ed1861359f79ce6123ebc1` |
+| **Discover title** | Download Python \| Python.org |
+
+Search query (live): `latest stable Python release python.org download`  
+Other candidates (not fetched): `/downloads/latest/` (3.15.0), `/downloads/latest/python3.14/`, etc.
+
+## Bounded replay diagnostic (no model, no store write)
+
+**Script:** `review-artifacts/g-l1-attempt2-acquisition-diagnostic.mjs`  
+**JSON:** `review-artifacts/general-g-l1-attempt2-acquisition-diagnostic.json`  
+**Provenance:** ec7 `admittedHttpGet` + same mission + DuckDuckGo discover as production path.
+
+| Field | Observed |
+|--------|----------|
+| HTTP status | 200 |
+| **Content-Type header** | `text/html; charset=utf-8` |
+| **Content-Encoding** | (see curl probe below; body is gzip regardless of label) |
+| **Byte length** | 19,338 |
+| **SHA-256** | `aea841ac1c12385bd15197a980c2d2a2d5c5cb4eb48982d7168b1c7bda0f5ac2` |
+| **Truncated** | `false` |
+| **Magic** | `gzip_magic_1f8b` (bytes `1f 8b 08 …`) |
+| **UTF-8 fatal decode** | fails at **offset 0** (first byte `0x1f`, not valid UTF-8 lead) |
+
+## Classification (evidence-based)
+
+**Compressed transport body admitted as opaque bytes without decompression**, while the web HTML extractor runs `TextDecoder('utf-8', { fatal: true })` on the raw buffer (`htmlFromAdmittedBytes` → `decodeAdmittedUtf8Bytes`).
+
+This is **not**:
+- an incomplete UTF-8 multibyte boundary at EOF (`truncated=false`, failure at byte 0),
+- a PDF/binary mislabeled as HTML selected as download artifact (magic is **gzip**, not `%PDF`),
+- “genuinely invalid text” HTML — the payload is **gzip-compressed**, not mis-encoded UTF-8 text.
+
+**A-owned:** shared `admittedHttpGet` / fetch admission should decode `Content-Encoding: gzip` (or reject with explicit category) before UTF-8 HTML admission.
+
+**Attempt1 / attempt2 stores and usage:** unchanged by this diagnostic.

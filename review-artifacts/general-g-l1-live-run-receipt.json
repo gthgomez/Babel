@@ -1,6 +1,6 @@
 {
-<<<<<<< HEAD
   "schema": "general-g-l1-live-run-receipt/v1",
+  "attempt": 1,
   "runtime_sha": "9d97448a20045b2f4eec7b6f06bac9a533fc5424",
   "mission_id": "mission-general-g-l1-python-stable",
   "executor": "agent-b-sole",
@@ -63,47 +63,14 @@
     "error": "no terminal_receipt report found for mission"
   },
   "store_directory": "/workspace/codex/worktrees/g-l1-9d97448a/codex/runs/general-g-l1-python-stable/store",
-  "note": "Single diagnostic smoke only; not overall Research acceptance. No retry, no provider fallback.",
+  "store_preserved": true,
+  "note": "Attempt 1 only — store must remain unchanged for coordinator review.",
   "evidence_for_a": {
     "validation_details": "review-artifacts/general-g-l1-cli-validation-details.txt",
     "request_local_receipt": "review-artifacts/general-g-l1-request-local-receipt.json",
-    "malformed_payload_fixture": "codex/missions/general-g-l1-python-stable/g-l1-malformed-plan-questions-payload.json",
+    "malformed_payload_fixture_b_reconstructed": "codex/missions/general-g-l1-python-stable/g-l1-malformed-plan-questions-payload.json",
+    "malformed_payload_fixture_a_reconstructed": "babel-cli/src/research/v2/fixtures/campaign/G-L1-live-malformed-plan-questions-response.json",
     "reciprocal_test": "babel-cli/src/research/v2/profiles/general/generalAdapterGL1PlanningFailureReciprocal.integration.test.ts"
-  }
-=======
-  "schema": "research-v2-g-l1-live-run-receipt-sanitized/v1",
-  "source_head": "9d97448a (reviewed runtime, B executor)",
-  "b_draft_reference": "draft404 ac011dea",
-  "run_window_utc": {
-    "start": "2026-10-21T06:41:15Z",
-    "end": "2026-10-21T06:41:22Z"
   },
-  "cli_exit_code": 1,
-  "openrouter_route": {
-    "provider": "openrouter",
-    "model_id": "deepseek/deepseek-v4-flash-0731"
-  },
-  "planning_failure": {
-    "category": "provider_invoke_failed",
-    "zod_contract": "plan_questions",
-    "symptoms": [
-      "questions used question/id/purpose instead of required text/importance",
-      "unexpected top-level operation_kind and input_mission_id"
-    ],
-    "malformed_replay_fixture": "babel-cli/src/research/v2/fixtures/campaign/G-L1-live-malformed-plan-questions-response.json"
-  },
-  "usage_settlement": {
-    "input_tokens": 429,
-    "output_tokens": 1784,
-    "reported_cost_usd": 0.0002636874
-  },
-  "retrieval": {
-    "search_ran": false,
-    "sources": 0,
-    "passages": 0,
-    "citations": 0
-  },
-  "terminal_receipt_before_a_fix": false,
-  "note": "Original response/store preserved in B diagnostic worktree; A repair adds strict prompt + failed-pass terminal receipt."
->>>>>>> ec7dce912eebd1210f762ddc6092de4d199c3c3b
+  "a_sanitized_summary_schema": "research-v2-g-l1-live-run-receipt-sanitized/v1"
 }

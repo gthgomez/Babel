@@ -1,0 +1,68 @@
+{
+  "schema": "g-l1-attempt2-acquisition-diagnostic/v1",
+  "runtime_sha": "ec7dce912eebd1210f762ddc6092de4d199c3c3b",
+  "provenance": "Replay only — attempt2 durable store retains no URL/bytes (excerpt_only). Same mission, discover query, and ec7 admitted transport as live run.",
+  "store_bytes_retained": false,
+  "live_fetch_operation_id": "cli-run-fetch-wg1-15576886",
+  "discover_query": "latest stable Python release python.org download",
+  "discover_status": "ok",
+  "candidate_count": 5,
+  "candidates": [
+    {
+      "index": 0,
+      "source_id": "src-web-84ed1861359f79ce6123ebc1",
+      "canonical_key": "https://www.python.org/downloads/",
+      "observed_url": "https://www.python.org/downloads/",
+      "title": "Download Python | Python.org"
+    },
+    {
+      "index": 1,
+      "source_id": "src-web-9d29541292eedc4708e9be20",
+      "canonical_key": "https://www.python.org/downloads/latest/",
+      "observed_url": "https://www.python.org/downloads/latest/",
+      "title": "Python Release Python 3.15.0 | Python.org"
+    },
+    {
+      "index": 2,
+      "source_id": "src-web-21148eec278f4e8c153c540a",
+      "canonical_key": "https://www.python.org/downloads/latest/python3.14/",
+      "observed_url": "https://www.python.org/downloads/latest/python3.14/",
+      "title": "Python Release Python 3.14.8 | Python.org"
+    },
+    {
+      "index": 3,
+      "source_id": "src-web-ffd8d1959bf303ce6b5a82c6",
+      "canonical_key": "https://www.python.org/downloads/windows/",
+      "observed_url": "https://www.python.org/downloads/windows/",
+      "title": "Python Releases for Windows | Python.org"
+    },
+    {
+      "index": 4,
+      "source_id": "src-web-97aa83fc575144ad97d3493f",
+      "canonical_key": "https://www.python.org/downloads/source/",
+      "observed_url": "https://www.python.org/downloads/source/",
+      "title": "Python Source Releases | Python.org"
+    }
+  ],
+  "selected_candidate_index": 0,
+  "fetch": {
+    "requested_url": "https://www.python.org/downloads/",
+    "final_url": "https://www.python.org/downloads/",
+    "redirect_chain": [
+      "https://www.python.org/downloads/"
+    ],
+    "http_status": 200,
+    "ok": true,
+    "content_type_header": "text/html; charset=utf-8",
+    "content_encoding_header_observed_via_curl": "gzip",
+    "bytes_received": 19338,
+    "buffered_length": 19338,
+    "truncated": false,
+    "sha256": "aea841ac1c12385bd15197a980c2d2a2d5c5cb4eb48982d7168b1c7bda0f5ac2",
+    "magic": "gzip_magic_1f8b",
+    "utf8_invalid_offset": 1,
+    "head_hex": "1f8b0800000000000003e57ded92db4692ed7f45f81d305484c78e6df003fc96",
+    "ascii_head": "...........}...F...E..0T...m.....{V.-[^K...ql..p..HB\"........}..z.I..*|T...l...z"
+  },
+  "inference": "Likely compressed transport body admitted as raw bytes without decompression before UTF-8 fatal decode in htmlFromAdmittedBytes."
+}

@@ -54,5 +54,12 @@
   "post_run_inspect_exit": 0,
   "post_run_report_exit": 0,
   "store_directory": "/workspace/codex/worktrees/ec7dce91/codex/runs/general-g-l1-attempt2/store",
+  "acquisition_evidence": {
+    "diagnosis": "review-artifacts/general-g-l1-attempt2-acquisition-diagnosis.txt",
+    "diagnostic_json": "review-artifacts/general-g-l1-attempt2-acquisition-diagnostic.json",
+    "replay_script": "review-artifacts/g-l1-attempt2-acquisition-diagnostic.mjs",
+    "selected_url": "https://www.python.org/downloads/",
+    "store_bytes_retained": false
+  },
   "note": "Single diagnostic iteration only; not acceptance. No retry or provider fallback. Attempt1 unchanged."
 }
