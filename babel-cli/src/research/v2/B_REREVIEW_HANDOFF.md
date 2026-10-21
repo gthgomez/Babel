@@ -2,10 +2,20 @@
 
 ## Active coordination (2026-10-21)
 
+### G-L1 single live run — executor ownership
+
+| Role | Agent A | Agent B |
+|------|---------|---------|
+| G-L1 **live** `research v2 run` / OpenRouter spend | **Forbidden** — readiness + fixtures only | **Sole executor** after coordinator mission/route validation |
+| Credentials | Do not set `OPENROUTER_API_KEY` or `BABEL_RESEARCH_V2_ALLOW_LIVE_API` for campaign | B's existing OpenRouter secret |
+| Readiness pack | `review-artifacts/G-L1-READINESS-FOR-B.md` + logs under `review-artifacts/readiness-g-l1-python-*` | Consumes A published runtime on #406 |
+
+Supersedes all earlier conditional live-run authority for Agent A in this task (prevents duplicate charges).
+
 | Track | Draft PR | Published head (exact GitHub) | Owner |
 |-------|----------|-------------------------------|--------|
-| Agent A integration | [#406](https://github.com/gthgomez/Babel/pull/406) | `9d97448a`+ (`cursor/research-v2-post-review-settlement-fc31`) | Combined runtime, CLI/engine, registry wiring, **web discover**, **pdfjs/canvas pack**, **G-L1 campaign fixture** |
-| Agent B extraction/tests | [#404](https://github.com/gthgomez/Babel/pull/404) | `b590e115` (engine reciprocal vs #406; 6/6 offline) | Read/HTML/PDF extraction, reciprocal integration tests |
+| Agent A integration | [#406](https://github.com/gthgomez/Babel/pull/406) | `9d97448a`+ (`cursor/research-v2-post-review-settlement-fc31`) | Combined runtime, CLI/engine, registry wiring, **web discover**, **pdfjs/canvas pack**, **G-L1 campaign fixture (no live)** |
+| Agent B extraction/tests | [#404](https://github.com/gthgomez/Babel/pull/404) | `b590e115` (engine reciprocal vs #406; 6/6 offline) | Read/HTML/PDF extraction, reciprocal integration tests; **one G-L1 diagnostic live** when coordinated |
 
 **Discover contract on #406:** `GeneralWebAdapter.discover` delegates to `access.search` and maps hits to web candidates (`generalWebAdapter.test.ts`). **Do not** replace `generalWebAdapter.ts` with B80, whose discover returns `not_supported` without search. `GeneralDocumentAdapter.discover` remains honestly `not_supported` (mission-selected documents).
 
@@ -80,7 +90,7 @@ npm run test:research-v2-pdfjs-staged-package-smoke
 
 **Effective OpenRouter (policy default, no env override):** provider `openrouter`, model `deepseek/deepseek-v4-flash-0731`, route key `deepseek-v4-flash-openrouter`, policy `/workspace/config/model-policy.json`, `backend_key` `research-v2-cli`.
 
-**Canonical G-L1 (callable after preflight verification; one authorized diagnostic live run):**
+**Canonical G-L1 (B executes live when coordinated; A documents only — do not run live in A):**
 
 Mission task (verbatim in `G-L1-mission.json` `primary_question`): latest **stable** Python release + release date as of run UTC date; stable vs prerelease; official python.org release/download citation; uncertainty on conflict/unreadable pages.
 
