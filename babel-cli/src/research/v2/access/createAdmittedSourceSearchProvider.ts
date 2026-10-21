@@ -74,8 +74,8 @@ export function createAdmittedSourceSearchProvider(
   const configured = createBabelConfiguredWebSearchProvider({
     providerId,
     webSearchTransport: options.webSearchTransport ?? defaultBabelWebSearchTransport(),
-    exaLiteTransport: options.exaLiteTransport,
-    env: options.env,
+    ...(options.exaLiteTransport ? { exaLiteTransport: options.exaLiteTransport } : {}),
+    ...(options.env ? { env: options.env } : {}),
   })
   return {
     mode: options.mode,

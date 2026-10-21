@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
-import type { IncomingMessage } from 'node:http'
-import type { ClientRequest } from 'node:https'
+import type { ClientRequest, IncomingMessage } from 'node:http'
 import { describe, it } from 'node:test'
 import {
   admittedExaLiteHttpsPost,
@@ -9,23 +8,27 @@ import {
   EXA_LITE_API_HOSTNAME,
 } from './admittedExaLiteHttpsPost.js'
 import { assertPublicNetworkTarget } from './admittedHttpGet.js'
-import { setExaLiteHttpsRequestForTests } from './exaLiteHttpsClient.js'
+import { setExaLiteHttpsRequestForTests, type ExaLiteHttpsRequestFn } from './exaLiteHttpsClient.js'
 
-function stubHttpsRequest(
-  onResponse: (res: IncomingMessage) => void,
-): typeof import('node:https').request {
-  return (_url, _options, callback) => {
+function stubHttpsRequest(onResponse: (res: IncomingMessage) => void): ExaLiteHttpsRequestFn {
+  const fn = (_url: string | URL, _options: unknown, callback?: (res: IncomingMessage) => void) => {
     const res = new EventEmitter() as IncomingMessage
     res.statusCode = 200
     onResponse(res)
     callback?.(res)
     const req = new EventEmitter() as ClientRequest
-    req.write = () => true
-    req.end = () => true
-    req.setTimeout = () => req
-    req.destroy = () => req
+    Object.assign(req, {
+      write: () => req,
+      end: () => req,
+      setTimeout: () => req,
+      destroy: () => {
+        req.emit('error', new Error('destroyed'))
+        return req
+      },
+    })
     return req
   }
+  return fn as ExaLiteHttpsRequestFn
 }
 
 describe('admittedExaLiteHttpsPost default transport', () => {
@@ -97,21 +100,86 @@ describe('admittedExaLiteHttpsPost default transport', () => {
     }
   })
 
-  it('admittedExaLiteHttpsPost enforces total deadline across DNS + HTTPS (injected dispatch)', async () => {
-    const result = await admittedExaLiteHttpsPost({
-      apiKey: 'k',
-      jsonBody: { type: 'lite', query: 'q' },
-      signal: new AbortController().signal,
-      timeoutMs: 50,
-      dispatch: async () => {
-        await new Promise((resolve) => setTimeout(resolve, 5))
-        return {
-          status: 200,
-          headers: {},
-          bodyText: JSON.stringify({ results: [] }),
+  it('aborts trickling default HTTPS body when linked deadline expires', async () => {
+    let reqDestroyed = false
+    setExaLiteHttpsRequestForTests(
+      ((_url, _options, callback) => {
+        const res = new EventEmitter() as IncomingMessage
+        res.statusCode = 200
+        let trickle: NodeJS.Timeout | undefined
+        res.destroy = () => {
+          if (trickle) clearInterval(trickle)
+          res.removeAllListeners()
+          return res
         }
-      },
-    })
-    assert.equal(result.ok, true)
+        callback?.(res)
+        const req = new EventEmitter() as ClientRequest
+        Object.assign(req, {
+          write: () => req,
+          end: () => {
+            trickle = setInterval(() => res.emit('data', Buffer.from('x')), 25)
+            return req
+          },
+          setTimeout: () => req,
+          destroy: () => {
+            reqDestroyed = true
+            res.destroy()
+            req.emit('error', new Error('destroyed'))
+            return req
+          },
+        })
+        return req
+      }) as ExaLiteHttpsRequestFn,
+    )
+    try {
+      await assert.rejects(
+        () =>
+          admittedExaLiteHttpsPost({
+            apiKey: 'k',
+            jsonBody: { type: 'lite', query: 'q' },
+            signal: new AbortController().signal,
+            timeoutMs: 50,
+            env: { BABEL_WEB_ALLOW_PRIVATE: '1' },
+          }),
+        /deadline exceeded|aborted|destroyed/i,
+      )
+      assert.equal(reqDestroyed, true)
+    } finally {
+      setExaLiteHttpsRequestForTests(null)
+    }
+  })
+
+  it('does not dispatch HTTPS after deadline during slow admission', async () => {
+    let dispatchCalled = false
+    try {
+      await assert.rejects(
+        () =>
+          admittedExaLiteHttpsPost({
+            apiKey: 'k',
+            jsonBody: { type: 'lite', query: 'q' },
+            signal: new AbortController().signal,
+            timeoutMs: 40,
+            env: { BABEL_WEB_ALLOW_PRIVATE: '1' },
+            admissionTargetResolver: async (_url, _env, signal) => {
+              await new Promise((resolve) => setTimeout(resolve, 200))
+              if (signal.aborted) {
+                throw new Error('DNS admission aborted')
+              }
+              return await assertPublicNetworkTarget(
+                new URL(`https://${EXA_LITE_API_HOSTNAME}/search`),
+                { BABEL_WEB_ALLOW_PRIVATE: '1' },
+              )
+            },
+            dispatch: async () => {
+              dispatchCalled = true
+              return { status: 200, headers: {}, bodyText: '{"results":[]}' }
+            },
+          }),
+        /DNS admission aborted|deadline exceeded|aborted/i,
+      )
+      assert.equal(dispatchCalled, false)
+    } finally {
+      setExaLiteHttpsRequestForTests(null)
+    }
   })
 })

@@ -22,12 +22,19 @@ export interface SourceSearchHit {
   completeness: 'metadata_only' | 'snippet'
 }
 
+export interface SourceSearchExaLiteDiagnosticRecord {
+  code: string
+  path: string | null
+  message: string
+  details: Record<string, string> | null
+}
+
 /** Sanitized Exa lite metadata at the search provider boundary (A propagates downstream). */
 export interface SourceSearchExaLiteReceiptMetadata {
   request_id: string | null
   resolved_search_type: string | null
-  warnings: string[]
-  notices: string[]
+  warnings: SourceSearchExaLiteDiagnosticRecord[]
+  notices: SourceSearchExaLiteDiagnosticRecord[]
   /** Provider-reported estimate only — not an invoice. */
   estimated_cost_dollars: number | null
   estimated_cost_detail: Record<string, number> | null

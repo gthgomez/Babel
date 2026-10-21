@@ -1,13 +1,13 @@
-import { request as nodeHttpsRequest, type ClientRequest, type RequestOptions } from 'node:https'
-import type { IncomingMessage } from 'node:http'
+import type { ClientRequest, IncomingMessage } from 'node:http'
+import { request as nodeHttpsRequest, type RequestOptions } from 'node:https'
 
-type HttpsRequestFn = (
+export type ExaLiteHttpsRequestFn = (
   url: string | URL,
   options: RequestOptions,
   callback?: (res: IncomingMessage) => void,
 ) => ClientRequest
 
-let requestImpl: HttpsRequestFn = nodeHttpsRequest
+let requestImpl: ExaLiteHttpsRequestFn = nodeHttpsRequest
 
 export function exaLiteHttpsRequest(
   url: string | URL,
@@ -18,6 +18,6 @@ export function exaLiteHttpsRequest(
 }
 
 /** Test seam — restores automatically when tests pass a mock and call reset. */
-export function setExaLiteHttpsRequestForTests(impl: HttpsRequestFn | null): void {
+export function setExaLiteHttpsRequestForTests(impl: ExaLiteHttpsRequestFn | null): void {
   requestImpl = impl ?? nodeHttpsRequest
 }

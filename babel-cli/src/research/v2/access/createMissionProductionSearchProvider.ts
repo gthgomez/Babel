@@ -40,7 +40,7 @@ export function createMissionProductionSearchProvider(
       : createBabelConfiguredWebSearchProvider({
           providerId,
           webSearchTransport: options.webSearchTransport ?? defaultBabelWebSearchTransport(),
-          exaLiteTransport: options.exaLiteTransport,
+          ...(options.exaLiteTransport ? { exaLiteTransport: options.exaLiteTransport } : {}),
           env,
         })
 

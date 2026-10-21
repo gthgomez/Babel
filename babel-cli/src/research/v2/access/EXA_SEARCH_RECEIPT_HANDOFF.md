@@ -22,8 +22,8 @@
 | --- | --- |
 | `request_id` | string \| null |
 | `resolved_search_type` | string \| null |
-| `warnings` | string[] |
-| `notices` | string[] |
+| `warnings` | `SourceSearchExaLiteDiagnosticRecord[]` (`code`, `path`, `message`, bounded `details`) |
+| `notices` | `SourceSearchExaLiteDiagnosticRecord[]` |
 | `estimated_cost_dollars` | number \| null (provider estimate, **not** an invoice) |
 | `estimated_cost_detail` | Record<string, number> \| null |
 

@@ -48,8 +48,8 @@ export function toSourceSearchExaLiteReceipt(
   return {
     request_id: metadata.request_id,
     resolved_search_type: metadata.resolved_search_type,
-    warnings: [...metadata.warnings],
-    notices: [...metadata.notices],
+    warnings: metadata.warnings.map((w) => ({ ...w, details: w.details ? { ...w.details } : null })),
+    notices: metadata.notices.map((n) => ({ ...n, details: n.details ? { ...n.details } : null })),
     estimated_cost_dollars: metadata.estimated_cost_dollars,
     estimated_cost_detail: metadata.estimated_cost_detail
       ? { ...metadata.estimated_cost_detail }
@@ -92,7 +92,7 @@ function buildExaReceipt(
   return {
     configured_provider_id: EXA_LITE_SEARCH_PROVIDER_ID,
     effective_provider_id: effectiveProviderId,
-    exa_participation: participation,
+    ...(participation ? { exa_participation: participation } : {}),
     exa_lite: toSourceSearchExaLiteReceipt(metadata),
   }
 }
@@ -298,13 +298,13 @@ export function createExaLiteWithDuckDuckGoFallbackSearchProvider(options: {
   const exa = createExaLiteSearchProvider({
     resolveApiKey: options.resolveApiKey,
     transport: options.exaTransport,
-    maxResults: options.maxResults,
-    maxResponseBytes: options.maxResponseBytes,
-    env: options.env,
+    ...(options.maxResults !== undefined ? { maxResults: options.maxResults } : {}),
+    ...(options.maxResponseBytes !== undefined ? { maxResponseBytes: options.maxResponseBytes } : {}),
+    ...(options.env ? { env: options.env } : {}),
   })
   const duck = createDuckDuckGoHtmlFallbackSearchProvider({
     transport: options.duckTransport,
-    maxResults: options.maxResults,
+    ...(options.maxResults !== undefined ? { maxResults: options.maxResults } : {}),
   })
 
   return {

@@ -1,4 +1,5 @@
-import type { ClientRequest, type IncomingMessage, type RequestOptions } from 'node:https'
+import type { ClientRequest, IncomingMessage } from 'node:http'
+import type { RequestOptions } from 'node:https'
 import { exaLiteHttpsRequest } from './exaLiteHttpsClient.js'
 import {
   AdmittedNetworkPolicyError,
@@ -7,6 +8,10 @@ import {
   parseAdmittedHttpUrl,
   type PublicNetworkTarget,
 } from './admittedHttpGet.js'
+import {
+  assertOperationSignalActive,
+  createLinkedOperationAbort,
+} from './exaLiteOperationAbort.js'
 
 export const EXA_LITE_API_SEARCH_URL = 'https://api.exa.ai/search'
 export const EXA_LITE_API_HOSTNAME = 'api.exa.ai'
@@ -35,6 +40,12 @@ export interface AdmittedExaLiteHttpsPostDispatchParams {
 export type AdmittedExaLiteHttpsPostDispatch = (
   params: AdmittedExaLiteHttpsPostDispatchParams,
 ) => Promise<{ status: number; headers: IncomingMessage['headers']; bodyText: string }>
+
+export type ExaLiteAdmissionTargetResolver = (
+  url: URL,
+  env: NodeJS.ProcessEnv,
+  signal: AbortSignal,
+) => Promise<PublicNetworkTarget>
 
 function assertExaApiHostname(url: URL): void {
   const host = url.hostname.toLowerCase()
@@ -66,6 +77,10 @@ function readBodyText(
     signal.addEventListener('abort', onAbort, { once: true })
 
     response.on('data', (chunk: Buffer) => {
+      if (signal.aborted) {
+        fail(new AdmittedNetworkPolicyError('search aborted'))
+        return
+      }
       total += chunk.length
       if (total > maxBytes) {
         signal.removeEventListener('abort', onAbort)
@@ -91,6 +106,10 @@ export function defaultAdmittedExaLiteHttpsPostDispatch(
   params: AdmittedExaLiteHttpsPostDispatchParams,
 ): Promise<{ status: number; headers: IncomingMessage['headers']; bodyText: string }> {
   const { url, target, headers, body, signal, timeoutMs, maxBytes } = params
+  if (signal.aborted) {
+    return Promise.reject(new AdmittedNetworkPolicyError('search aborted before connect'))
+  }
+
   const lookupFn = buildPinnedLookup(target)
 
   const options: RequestOptions = {
@@ -104,16 +123,21 @@ export function defaultAdmittedExaLiteHttpsPostDispatch(
   }
 
   return new Promise((resolve, reject) => {
-    if (signal.aborted) {
-      reject(new AdmittedNetworkPolicyError('search aborted before connect'))
-      return
+    let req: ClientRequest | undefined
+    let res: IncomingMessage | undefined
+
+    const tearDown = (err: Error) => {
+      if (res && typeof res.destroy === 'function') {
+        res.destroy()
+      }
+      req?.destroy(err)
     }
 
-    let req: ClientRequest
-    const onAbort = () => req.destroy(new AdmittedNetworkPolicyError('search aborted'))
+    const onAbort = () => tearDown(new AdmittedNetworkPolicyError('search aborted'))
     signal.addEventListener('abort', onAbort, { once: true })
 
     req = exaLiteHttpsRequest(url, options, async (response) => {
+      res = response
       try {
         const bodyText = await readBodyText(response, maxBytes, signal)
         signal.removeEventListener('abort', onAbort)
@@ -124,8 +148,8 @@ export function defaultAdmittedExaLiteHttpsPostDispatch(
       }
     })
 
-    req.setTimeout(timeoutMs, () => req.destroy(new Error('HTTP request timed out')))
-    req.on('error', (err) => {
+    req.setTimeout(timeoutMs, () => tearDown(new Error('HTTP request timed out')))
+    req.on('error', (err: Error) => {
       signal.removeEventListener('abort', onAbort)
       reject(err)
     })
@@ -134,28 +158,15 @@ export function defaultAdmittedExaLiteHttpsPostDispatch(
   })
 }
 
-async function withRemainingDeadline<T>(
-  label: string,
-  remainingMs: number,
-  run: () => Promise<T>,
-): Promise<T> {
-  if (remainingMs <= 0) {
-    throw new AdmittedNetworkPolicyError(`${label} deadline exceeded`)
-  }
-  let timer: NodeJS.Timeout | undefined
-  try {
-    return await Promise.race([
-      run(),
-      new Promise<T>((_, reject) => {
-        timer = setTimeout(
-          () => reject(new AdmittedNetworkPolicyError(`${label} timed out`)),
-          remainingMs,
-        )
-      }),
-    ])
-  } finally {
-    if (timer) clearTimeout(timer)
-  }
+async function defaultAdmissionTargetResolver(
+  url: URL,
+  env: NodeJS.ProcessEnv,
+  signal: AbortSignal,
+): Promise<PublicNetworkTarget> {
+  assertOperationSignalActive(signal, 'DNS admission')
+  const target = await assertPublicNetworkTarget(url, env)
+  assertOperationSignalActive(signal, 'DNS admission')
+  return target
 }
 
 /**
@@ -170,47 +181,50 @@ export async function admittedExaLiteHttpsPost(params: {
   env?: NodeJS.ProcessEnv
   maxBytes?: number
   dispatch?: AdmittedExaLiteHttpsPostDispatch
+  admissionTargetResolver?: ExaLiteAdmissionTargetResolver
 }): Promise<AdmittedExaLiteHttpsPostResult> {
   const env = params.env ?? process.env
   const deadlineMs = params.timeoutMs ?? 15_000
   const maxBytes = params.maxBytes ?? DEFAULT_EXA_LITE_RESPONSE_MAX_BYTES
   const started = Date.now()
-  const remaining = () => deadlineMs - (Date.now() - started)
+  const remainingMs = () => Math.max(0, deadlineMs - (Date.now() - started))
+  const linked = createLinkedOperationAbort(params.signal, deadlineMs)
 
-  const url = parseAdmittedHttpUrl(EXA_LITE_API_SEARCH_URL, env)
-  assertExaApiHostname(url)
-  const target = await withRemainingDeadline('DNS admission', remaining(), () =>
-    assertPublicNetworkTarget(url, env),
-  )
+  try {
+    const url = parseAdmittedHttpUrl(EXA_LITE_API_SEARCH_URL, env)
+    assertExaApiHostname(url)
+    const resolveTarget = params.admissionTargetResolver ?? defaultAdmissionTargetResolver
+    const target = await resolveTarget(url, env, linked.signal)
 
-  const dispatch = params.dispatch ?? defaultAdmittedExaLiteHttpsPostDispatch
-  const body = JSON.stringify(params.jsonBody)
-  const response = await withRemainingDeadline('HTTPS POST', remaining(), () =>
-    dispatch({
+    assertOperationSignalActive(linked.signal, 'HTTPS POST')
+    const dispatch = params.dispatch ?? defaultAdmittedExaLiteHttpsPostDispatch
+    const body = JSON.stringify(params.jsonBody)
+    const response = await dispatch({
       url,
       target,
       headers: { 'x-api-key': params.apiKey },
       body,
-      signal: params.signal,
-      timeoutMs: remaining(),
+      signal: linked.signal,
+      timeoutMs: remainingMs(),
       maxBytes,
-    }),
-  )
+    })
 
-  const location = response.headers.location
-  if (location && response.status >= 300 && response.status < 400) {
-    throw new AdmittedNetworkPolicyError(
-      'Exa search refused HTTP redirect (credential must not leave api.exa.ai).',
-    )
-  }
+    const location = response.headers.location
+    if (location && response.status >= 300 && response.status < 400) {
+      throw new AdmittedNetworkPolicyError(
+        'Exa search refused HTTP redirect (credential must not leave api.exa.ai).',
+      )
+    }
 
-  const bodyTruncated = false
-  return {
-    ok: response.status >= 200 && response.status < 300,
-    status: response.status,
-    bodyText: response.bodyText,
-    requestedUrl: EXA_LITE_API_SEARCH_URL,
-    finalUrl: url.href,
-    bodyTruncated,
+    return {
+      ok: response.status >= 200 && response.status < 300,
+      status: response.status,
+      bodyText: response.bodyText,
+      requestedUrl: EXA_LITE_API_SEARCH_URL,
+      finalUrl: url.href,
+      bodyTruncated: false,
+    }
+  } finally {
+    linked.dispose()
   }
 }

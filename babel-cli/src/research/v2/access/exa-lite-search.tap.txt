@@ -1,0 +1,192 @@
+
+> babel-harness@0.1.4 test:research-v2-exa-lite-search
+> node --import tsx --test src/research/v2/access/exaLiteSearchProvider.test.ts src/research/v2/access/createAdmittedSourceSearchProvider.test.ts src/research/v2/access/admittedExaLiteHttpsPost.test.ts src/research/v2/access/exaLiteSearchResponseValidation.test.ts
+
+TAP version 13
+# Subtest: admittedExaLiteHttpsPost default transport
+    # Subtest: defaultAdmittedExaLiteHttpsPostDispatch accepts object params (not positional args)
+    ok 1 - defaultAdmittedExaLiteHttpsPostDispatch accepts object params (not positional args)
+      ---
+      duration_ms: 5.421293
+      type: 'test'
+      ...
+    # Subtest: destroys response when body exceeds maxBytes
+    ok 2 - destroys response when body exceeds maxBytes
+      ---
+      duration_ms: 1.066815
+      type: 'test'
+      ...
+    # Subtest: aborts trickling default HTTPS body when linked deadline expires
+    ok 3 - aborts trickling default HTTPS body when linked deadline expires
+      ---
+      duration_ms: 49.888154
+      type: 'test'
+      ...
+    # Subtest: does not dispatch HTTPS after deadline during slow admission
+    ok 4 - does not dispatch HTTPS after deadline during slow admission
+      ---
+      duration_ms: 200.292475
+      type: 'test'
+      ...
+    1..4
+ok 1 - admittedExaLiteHttpsPost default transport
+  ---
+  duration_ms: 257.55289
+  type: 'suite'
+  ...
+# Subtest: createAdmittedSourceSearchProvider
+    # Subtest: production mode selects configured duckduckgo_html_fallback provider
+    ok 1 - production mode selects configured duckduckgo_html_fallback provider
+      ---
+      duration_ms: 0.576693
+      type: 'test'
+      ...
+    # Subtest: resolveProductionSearchProviderId matches Babel web_search default
+    ok 2 - resolveProductionSearchProviderId matches Babel web_search default
+      ---
+      duration_ms: 0.097038
+      type: 'test'
+      ...
+    # Subtest: production search uses injected transport against duckduckgo html URL
+    ok 3 - production search uses injected transport against duckduckgo html URL
+      ---
+      duration_ms: 2.018186
+      type: 'test'
+      ...
+    # Subtest: corpus mode uses declared index without web transport
+    ok 4 - corpus mode uses declared index without web transport
+      ---
+      duration_ms: 0.361736
+      type: 'test'
+      ...
+    1..4
+ok 2 - createAdmittedSourceSearchProvider
+  ---
+  duration_ms: 3.746617
+  type: 'suite'
+  ...
+# Subtest: exa lite search provider (fake transport)
+    # Subtest: resolveProductionSearchProviderId accepts explicit exa_lite
+    ok 1 - resolveProductionSearchProviderId accepts explicit exa_lite
+      ---
+      duration_ms: 0.671887
+      type: 'test'
+      ...
+    # Subtest: factory selects exa_lite when configured
+    ok 2 - factory selects exa_lite when configured
+      ---
+      duration_ms: 0.243976
+      type: 'test'
+      ...
+    # Subtest: posts lite contract with includeDomains and highlights; normalizes provenance
+    ok 3 - posts lite contract with includeDomains and highlights; normalizes provenance
+      ---
+      duration_ms: 25.927346
+      type: 'test'
+      ...
+    # Subtest: host-enforces allowed domains even when Exa returns out-of-policy URLs
+    ok 4 - host-enforces allowed domains even when Exa returns out-of-policy URLs
+      ---
+      duration_ms: 14.585491
+      type: 'test'
+      ...
+    # Subtest: fails closed without EXA_API_KEY (no credential value in message)
+    ok 5 - fails closed without EXA_API_KEY (no credential value in message)
+      ---
+      duration_ms: 0.233773
+      type: 'test'
+      ...
+    # Subtest: maps auth and rate-limit without echoing credential headers
+    ok 6 - maps auth and rate-limit without echoing credential headers
+      ---
+      duration_ms: 77.933478
+      type: 'test'
+      ...
+    # Subtest: treats malformed HTTP 200 as failed validation (not silent empty)
+    ok 7 - treats malformed HTTP 200 as failed validation (not silent empty)
+      ---
+      duration_ms: 22.939212
+      type: 'test'
+      ...
+    # Subtest: cancels before await and after transport (pre/post cancel)
+    ok 8 - cancels before await and after transport (pre/post cancel)
+      ---
+      duration_ms: 23.626065
+      type: 'test'
+      ...
+    # Subtest: credential is only sent to api.exa.ai (redirect host rejected)
+    ok 9 - credential is only sent to api.exa.ai (redirect host rejected)
+      ---
+      duration_ms: 15.883162
+      type: 'test'
+      ...
+    # Subtest: preserves billed-empty Exa receipt when DDG fallback fails
+    ok 10 - preserves billed-empty Exa receipt when DDG fallback fails
+      ---
+      duration_ms: 15.532495
+      type: 'test'
+      ...
+    # Subtest: degrades to duckduckgo with explicit receipt when Exa returns zero hits
+    ok 11 - degrades to duckduckgo with explicit receipt when Exa returns zero hits
+      ---
+      duration_ms: 20.290664
+      type: 'test'
+      ...
+    # Subtest: never logs api key in transport errors
+    ok 12 - never logs api key in transport errors
+      ---
+      duration_ms: 13.475624
+      type: 'test'
+      ...
+    1..12
+ok 3 - exa lite search provider (fake transport)
+  ---
+  duration_ms: 232.610106
+  type: 'suite'
+  ...
+# Subtest: exaLiteSearchResponseValidation
+    # Subtest: rejects malformed HTTP 200 JSON (not empty success)
+    ok 1 - rejects malformed HTTP 200 JSON (not empty success)
+      ---
+      duration_ms: 0.81745
+      type: 'test'
+      ...
+    # Subtest: sanitizes cost metadata as provider estimate with explicit total only
+    ok 2 - sanitizes cost metadata as provider estimate with explicit total only
+      ---
+      duration_ms: 0.261703
+      type: 'test'
+      ...
+    # Subtest: rejects numeric cost root and does not infer total from breakdown
+    ok 3 - rejects numeric cost root and does not infer total from breakdown
+      ---
+      duration_ms: 0.117282
+      type: 'test'
+      ...
+    # Subtest: drops negative cost fields and preserves structured warnings/notices
+    ok 4 - drops negative cost fields and preserves structured warnings/notices
+      ---
+      duration_ms: 0.238987
+      type: 'test'
+      ...
+    # Subtest: maps auth, billing, policy, timeout and rate-limit statuses
+    ok 5 - maps auth, billing, policy, timeout and rate-limit statuses
+      ---
+      duration_ms: 0.14036
+      type: 'test'
+      ...
+    1..5
+ok 4 - exaLiteSearchResponseValidation
+  ---
+  duration_ms: 2.252106
+  type: 'suite'
+  ...
+1..4
+# tests 25
+# suites 4
+# pass 25
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 593.813063

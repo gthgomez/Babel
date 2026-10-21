@@ -28,8 +28,15 @@ function exaSuccessBody(overrides: Record<string, unknown> = {}): string {
   return JSON.stringify({
     requestId: 'req-test-1',
     resolvedSearchType: 'lite',
-    warnings: ['relaxed-domain'],
-    notices: ['cached-only'],
+    warnings: [
+      {
+        code: 'domain_filter_relaxed',
+        path: 'includeDomains',
+        message: 'relaxed-domain',
+        details: { mode: 'partial' },
+      },
+    ],
+    notices: [{ code: 'cached_content', path: null, message: 'cached-only', details: null }],
     costDollars: { total: 0.001 },
     results: [
       {
@@ -83,13 +90,18 @@ describe('exa lite search provider (fake transport)', () => {
   })
 
   it('posts lite contract with includeDomains and highlights; normalizes provenance', async () => {
-    let seen: { headers: Record<string, string>; body: Record<string, unknown>; host: string } | null =
-      null
+    const seen: { headers: Record<string, string>; body: Record<string, unknown>; host: string } = {
+      headers: {},
+      body: {},
+      host: '',
+    }
     const provider = createExaLiteSearchProvider({
       resolveApiKey: () => 'secret-key',
       transport: {
         post: fakeExaPost(({ headers, body, url }) => {
-          seen = { headers, body, host: url.hostname }
+          seen.headers = headers
+          seen.body = body
+          seen.host = url.hostname
           return { status: 200, bodyText: exaSuccessBody() }
         }),
       },
@@ -103,13 +115,12 @@ describe('exa lite search provider (fake transport)', () => {
       },
       exampleTechnicalMissionFixture,
     )
-    assert.ok(seen)
-    assert.equal(seen!.host, EXA_LITE_API_HOSTNAME)
-    assert.equal(seen!.headers['x-api-key'], 'secret-key')
-    assert.equal(seen!.body.type, 'lite')
-    assert.equal(seen!.body.query, 'babel research')
-    assert.ok(Array.isArray(seen!.body.includeDomains))
-    assert.ok((seen!.body.contents as { highlights?: unknown }).highlights)
+    assert.equal(seen.host, EXA_LITE_API_HOSTNAME)
+    assert.equal(seen.headers['x-api-key'], 'secret-key')
+    assert.equal(seen.body.type, 'lite')
+    assert.equal(seen.body.query, 'babel research')
+    assert.ok(Array.isArray(seen.body.includeDomains))
+    assert.ok((seen.body.contents as { highlights?: unknown }).highlights)
     assert.equal(result.status, 'ok')
     if (result.status === 'ok') {
       assert.equal(result.hits.length, 1)
