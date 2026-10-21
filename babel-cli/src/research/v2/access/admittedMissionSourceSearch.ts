@@ -48,8 +48,9 @@ function sourceAdmittedForMission(source: SourceRecord, mission: ResearchMission
 }
 
 /**
- * Mission-scoped admitted search over a host-provided index (offline corpus or pinned manifest).
- * Does not scrape arbitrary HTML; B-owned document adapters register richer indexes separately.
+ * **Declared-index corpus search** — token match over a host-provided manifest/index with mission admission checks.
+ * Not open-web discovery. Open-web admitted search is supplied by a separate
+ * {@link import('../ports/admittedSourceSearchProvider.js').AdmittedSourceSearchProvider} (B-owned web catalog/adapter).
  */
 export function admittedMissionSourceSearch(
   request: SourceSearchRequest,

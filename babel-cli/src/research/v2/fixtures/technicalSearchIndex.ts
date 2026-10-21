@@ -5,7 +5,7 @@ import {
   technicalRepositoryCorpusSource,
 } from './technicalRepositoryCorpus.js'
 
-/** Offline admitted search index for the pinned technical repository fixture mission. */
+/** Declared-index corpus entries for offline tests — not an open-web search catalog. */
 export function technicalRepositorySearchIndex(): AdmittedSearchIndexEntry[] {
   return [
     {
