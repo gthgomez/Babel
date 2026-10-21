@@ -1,0 +1,14 @@
+=== COMMAND ===
+npm run typecheck
+=== CWD ===
+/workspace/babel-cli
+=== HEAD ===
+cce1345545a65399a5881e125ef55ac729b6e81a
+=== TREE ===
+aebef55071c8176065e55f31e60963b72a91cd06
+=== START ===
+
+> babel-harness@0.1.4 typecheck
+> tsc --noEmit && tsc -p tsconfig.scripts.json --noEmit
+
+=== TYPECHECK_EXIT=0 ===

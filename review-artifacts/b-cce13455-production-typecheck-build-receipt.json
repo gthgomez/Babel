@@ -1,0 +1,28 @@
+{
+  "schema": "research-v2-b-production-typecheck-build-receipt/v1",
+  "candidate_head": "cce1345545a65399a5881e125ef55ac729b6e81a",
+  "candidate_tree": "aebef55071c8176065e55f31e60963b72a91cd06",
+  "branch": "cursor/agent-b-general-fixtures-f617",
+  "cwd": "babel-cli",
+  "preserved_prior_proof": {
+    "focused_extraction_query": "review-artifacts/b-focused-extraction-query-test-run.json",
+    "result": "21/21 pass, exit 0"
+  },
+  "superseded_not_rerun": {
+    "note": "C historical 5628 replay build exit 2 on removed T-L1-discover-query.reciprocal.test.ts hits narrowing lines; obsolete after 0195ec26 — not repaired or re-executed here"
+  },
+  "commands": [
+    {
+      "command": "npm run typecheck",
+      "exit_code": 0,
+      "log": "review-artifacts/b-cce13455-production-typecheck.stdout.log"
+    },
+    {
+      "command": "npm run build",
+      "exit_code": 0,
+      "log": "review-artifacts/b-cce13455-production-build.stdout.log"
+    }
+  ],
+  "network_model": "none",
+  "full_suite": "not run"
+}
