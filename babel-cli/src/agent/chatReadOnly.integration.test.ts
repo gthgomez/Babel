@@ -34,13 +34,15 @@ test('actual chat dispatch denies adversarial tools and out-of-snapshot reads', 
     { name: 'semantic_search', args: { query: 'shared private memory' } },
     { name: 'read_range', args: { file_path: join(source, 'fixture.txt'), start_line: 2, end_line: 3 } },
     { name: 'read_file', args: { path: join(source, 'fixture.txt') } },
+    { name: 'read_artifact', args: { artifact_id: '00000000-0000-4000-8000-000000000000' } },
   ];
   globalThis.fetch = async (_url, init) => {
     const request = JSON.parse(String(init?.body)) as { tools: Array<{ function: { name: string } }>; tool_choice?: string };
     const advertised = request.tools.map(tool => tool.function.name);
     assert.ok(advertised.length > 0);
-    assert.ok(advertised.every(name => ['read_file', 'read_range', 'list_dir', 'grep', 'glob'].includes(name)), JSON.stringify(advertised));
+    assert.ok(advertised.every(name => ['read_file', 'read_range', 'read_artifact', 'list_dir', 'grep', 'glob'].includes(name)), JSON.stringify(advertised));
     assert.ok(advertised.includes('read_range'));
+    assert.ok(advertised.includes('read_artifact'));
     assert.equal(request.tool_choice, 'auto');
     // Force the ordinary stall nudge before the next model turn. A read-only
     // investigation must not request an empty mutate-only set with required use.
@@ -56,6 +58,7 @@ test('actual chat dispatch denies adversarial tools and out-of-snapshot reads', 
     assert.equal(result.payload['mode'], 'chat');
     const tools = result.payload['toolCalls'] as Array<{ tool: string; error?: string; target?: string; exit_code?: number }>;
     for (const name of ['write_file', 'str_replace', 'run_command', 'semantic_search']) assert.ok(tools.some(t => t.tool === name && t.error), name);
+    assert.ok(tools.some(t => t.tool === 'read_artifact' && t.target === '00000000-0000-4000-8000-000000000000' && t.error), 'unregistered artifact handle is denied');
     assert.ok(tools.some(t => t.target === join(root, 'outside.txt') && t.error));
     assert.ok(tools.some(t => t.target === join(source, 'fixture.txt') && t.exit_code === 0));
     assert.equal(result.payload['write_count'], 0);
