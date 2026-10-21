@@ -2,31 +2,43 @@
 
 ## Ownership
 
-- **Agent A:** shared `Content-Encoding` decode + `FetchSourceAccessPort` wiring.
-- **Agent B:** regression contract tests, optional `responseHeaders` on `admittedHttpGet`, acquisition evidence, PCONT artifact hygiene.
+- **Agent A:** shared `Content-Encoding` decode, **200_000-byte decoded cap** with truthful truncation + UTF-8-safe bounds (A294 repair; must not fail 218_649-byte python.org HTML class with hard decompress error).
+- **Agent B:** contract types/tests, `responseHeaders` on `admittedHttpGet`, acquisition evidence, PCONT hygiene. **No port wiring.**
 
-## Shipped on branch `cursor/agent-b-general-fixtures-f617` (not discarded)
+## A294 review note (refetch evidence)
 
-| Artifact | Path | Role |
-|----------|------|------|
-| Optional header capture | `babel-cli/src/research/v2/access/admittedHttpGet.ts` (`responseHeaders?`, `defaultAdmittedHttpGetDispatch`) | Landed @ `7840bff2` / `abe4e5e7` lineage |
-| B reconciliation candidate (not imported by port) | `babel-cli/src/research/v2/access/admittedTransportBody.ts` | Reference API: `expandAdmittedTransportBody`, `contentEncodingIncludesGzip` |
-| B contract regressions | `babel-cli/src/research/v2/access/admittedTransportBody.regression.test.ts` | Valid gzip HTML + strict UTF-8, malformed gzip, decoded-size limit, cancel |
-| Port integration placeholder | `babel-cli/src/research/v2/access/fetchSourceAccessPort.gzip.integration.test.ts` | `todo` until A wires decoder |
-| Adapter leak negative | `babel-cli/src/research/v2/profiles/general/generalWebGzipUtf8Admission.negative.integration.test.ts` | Gzip bytes inside admitted payload still fail UTF-8 at read |
-| Acquisition replay | `review-artifacts/general-g-l1-attempt2-acquisition-diagnosis.txt` (v2 JSON) | Refetch provenance; original wire bytes unknown |
+| Measure | Value | Provenance |
+|---------|--------|------------|
+| Decompressed HTML length (replay) | **218_649** | `G_L1_ATTEMPT2_REFETCH_DECOMPRESSED_LENGTH` — refetch only; attempt2 store retained **no** original bytes |
+| Decode cap | **200_000** | `DEFAULT_MAX_DECODED_ADMISSION_BYTES` |
+| Prior failure mode | `ERR_BUFFER_TOO_LARGE` / hard reject | B expects **truncated `ok`** admission + valid UTF-8 |
 
-## Reconcile steps for A
+## B test map (imports Agent A module via `admittedTransportRegressionTarget.ts`)
 
-1. Implement shared decoder (may replace or merge `admittedTransportBody.ts`).
-2. Wire into `fetchSourceAccessPort.ts` using `response.responseHeaders['content-encoding']`.
-3. Point `admittedTransportBody.regression.test.ts` imports at A's module (or re-export from proposal path).
-4. Clear `todo` in `fetchSourceAccessPort.gzip.integration.test.ts` and assert port-level gzip HTML admission.
+| File | Runs without A? | Coverage |
+|------|-----------------|----------|
+| `admittedTransportContract.ts` | types/constants | Cap + refetch length constants |
+| `admittedTransportGzip.decoder.regression.test.ts` | **skipped** | Malformed gzip, cancel, tiny maxDecoded, valid gzip UTF-8 |
+| `admittedTransportTruncation.reciprocal.test.ts` | partial | **Always:** read-path hash/locator/completeness; **skipped:** 218_649 + multibyte decode |
+| `admittedTransportTestFixtures.ts` | fixtures only | Synthetic HTML sizes / UTF-8-safe truncate |
+| `generalWebGzipUtf8Admission.negative.integration.test.ts` | yes | Gzip inside admitted payload (leak) |
+| `fetchSourceAccessPort.gzip.integration.test.ts` | todo | Port-level after A wires |
 
-## Explicitly reverted / not published by B
+## Agent A module candidates (`loadAgentAGzipWireAdmission`)
 
-- No `expandAdmittedTransportBody` call in `fetchSourceAccessPort.ts` on this branch (avoid competing transport).
+- `admittedHttpGzipAdmission.js` — preferred export `expandGzipWireAdmission`
+- `admittedCompressedHttpBody.js`, `admittedTransportDecode.js` — alternate names
+
+Return shape: `admittedTransportContract.ts` (`GzipWireAdmissionResult`).
+
+## B reconciliation candidate (not wired, not used by tests)
+
+`admittedTransportBody.ts` — reference only for manual diff; **tests do not import it.**
+
+## Shipped transport delta (B)
+
+`admittedHttpGet.ts`: optional `responseHeaders`, `defaultAdmittedHttpGetDispatch` (@ `7840bff2`).
 
 ## Epistemic note (G-L1 attempt2)
 
-Live store retained no URL/headers/wire bytes. Bounded replay proves defect class under refetch; not byte-identical original response.
+Live store retained no URL/headers/wire bytes. Bounded replay proves defect class; not byte-identical original response. **No live G-L1** until integrated readiness review.
