@@ -57,5 +57,14 @@
     "pass": 10,
     "fail": 0,
     "suites": 4
+  },
+  "post_integration_a923_focused_proof": {
+    "git_head_at_proof": "2dceab05b5203522ff309833ebe37d721e5df581",
+    "git_tree_at_proof": "b918e2acdc811ff556d880ae6f211f43e4d4df5d",
+    "raw_log_outside_repo": "/tmp/babel-b-integration-logs/focused-tests-20261021T153438Z.log",
+    "typecheck_log_outside_repo": "/tmp/babel-b-integration-logs/typecheck-post-fix.log",
+    "build_log_outside_repo": "/tmp/babel-b-integration-logs/build-a3d569ca.log",
+    "t_l1_reciprocal_result": "8/8 pass (v4 isolation test included)",
+    "test_source_sha256_at_proof": "8a40c7c62f5804a294bc366c6a4e9cf2f6414fa1e9f955f2701bdfaae5db0b3c"
   }
 }
