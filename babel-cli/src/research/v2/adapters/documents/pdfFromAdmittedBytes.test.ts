@@ -8,18 +8,21 @@ import { buildAdmittedContent } from './testAdmittedFixtures.js'
 import { PdfExtractionCancelled } from './pdfExtractionLimits.js'
 import { passagesFromAdmittedPdf, PDF_TEXT_EXTRACTION_VERSION } from './pdfFromAdmittedBytes.js'
 import { PDF_MEDIA_TYPE } from './pdfAdmission.js'
-import { passageTextHash } from './passageInlineText.js'
+import { MAX_INLINE_PASSAGE_UTF16_UNITS, passageTextHash } from './passageInlineText.js'
 
 const pdfFixture = join(dirname(fileURLToPath(import.meta.url)), 'fixtures/two-page-sample.pdf')
 
-test('passagesFromAdmittedPdf: two-page fixture with page locators', async () => {
+function pdfAdmitted(operationId = 'op-pdf') {
   const bytes = readFileSync(pdfFixture)
-  const admitted = buildAdmittedContent('op-pdf', 'src', 'rev', bytes, PDF_MEDIA_TYPE, {
+  return buildAdmittedContent(operationId, 'src', 'rev', bytes, PDF_MEDIA_TYPE, {
     requestedUrl: 'https://example.invalid/two-page-sample.pdf',
     finalUrl: 'https://example.invalid/two-page-sample.pdf',
     redirectChain: ['https://example.invalid/two-page-sample.pdf'],
   })
-  const passages = await passagesFromAdmittedPdf(admitted)
+}
+
+test('passagesFromAdmittedPdf: two-page fixture with page locators', async () => {
+  const passages = await passagesFromAdmittedPdf(pdfAdmitted())
   assert.equal(passages.length, 2)
   assert.equal(passages[0]?.locator.kind, 'page')
   assert.equal(passages[0]?.locator.start_page, 1)
@@ -30,22 +33,63 @@ test('passagesFromAdmittedPdf: two-page fixture with page locators', async () =>
 })
 
 test('passagesFromAdmittedPdf: cancellation during delayed page loop', async () => {
-  const bytes = readFileSync(pdfFixture)
-  const admitted = buildAdmittedContent('op-pdf', 'src', 'rev', bytes, PDF_MEDIA_TYPE)
+  const admitted = pdfAdmitted()
   const controller = new AbortController()
   const promise = passagesFromAdmittedPdf(admitted, controller.signal, { pageDelayMs: 80 })
   setTimeout(() => controller.abort(), 10)
   await assert.rejects(promise, (err: unknown) => err instanceof PdfExtractionCancelled)
 })
 
+test('passagesFromAdmittedPdf: abort interrupts stalled loading without waiting', async () => {
+  const admitted = pdfAdmitted()
+  const controller = new AbortController()
+  const started = Date.now()
+  const promise = passagesFromAdmittedPdf(admitted, controller.signal, { stallStage: 'loading' })
+  controller.abort()
+  await assert.rejects(promise, (err: unknown) => err instanceof PdfExtractionCancelled)
+  assert.ok(Date.now() - started < 500)
+})
+
+test('passagesFromAdmittedPdf: abort interrupts stalled getPage', async () => {
+  const admitted = pdfAdmitted()
+  const controller = new AbortController()
+  const started = Date.now()
+  const promise = passagesFromAdmittedPdf(admitted, controller.signal, { stallStage: 'getPage' })
+  controller.abort()
+  await assert.rejects(promise, (err: unknown) => err instanceof PdfExtractionCancelled)
+  assert.ok(Date.now() - started < 500)
+})
+
+test('passagesFromAdmittedPdf: abort interrupts stalled getTextContent', async () => {
+  const admitted = pdfAdmitted()
+  const controller = new AbortController()
+  const started = Date.now()
+  const promise = passagesFromAdmittedPdf(admitted, controller.signal, { stallStage: 'getTextContent' })
+  controller.abort()
+  await assert.rejects(promise, (err: unknown) => err instanceof PdfExtractionCancelled)
+  assert.ok(Date.now() - started < 500)
+})
+
 test('passagesFromAdmittedPdf: hashes emitted inline text only when truncated', async () => {
-  const bytes = readFileSync(pdfFixture)
-  const admitted = buildAdmittedContent('op', 'src', 'rev', bytes, PDF_MEDIA_TYPE)
-  const passages = await passagesFromAdmittedPdf(admitted)
+  const passages = await passagesFromAdmittedPdf(pdfAdmitted('op'))
   for (const p of passages) {
     if (p.text_ref.mode === 'inline') {
       assert.equal(p.text_ref.text_hash, passageTextHash(p.text_ref.text))
     }
+  }
+})
+
+test('passagesFromAdmittedPdf: long unicode page text satisfies PassageRecordSchema', async () => {
+  const emoji = '😀'
+  const pageText = 'a'.repeat(MAX_INLINE_PASSAGE_UTF16_UNITS - 1) + emoji
+  const passages = await passagesFromAdmittedPdf(pdfAdmitted(), undefined, {
+    synthesizePageText: { 1: pageText },
+  })
+  assert.equal(passages.length, 1)
+  PassageRecordSchema.parse(passages[0])
+  if (passages[0]?.text_ref.mode === 'inline') {
+    assert.equal(passages[0].text_ref.text.length, MAX_INLINE_PASSAGE_UTF16_UNITS - 1)
+    assert.equal(passages[0].text_ref.text_hash, passageTextHash(passages[0].text_ref.text))
   }
 })
 

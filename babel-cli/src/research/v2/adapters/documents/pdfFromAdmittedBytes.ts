@@ -1,10 +1,16 @@
 import type { AdmittedContent } from '../../contracts/admittedContent.js'
 import type { PassageRecord } from '../../contracts/passages.js'
 import { PassageRecordSchema } from '../../contracts/passages.js'
+import {
+  awaitWithPdfAbort,
+  destroyPdfResources,
+  mergeAbortSignals,
+} from './pdfAbortable.js'
 import { buildInlinePassageTextRef } from './passageInlineText.js'
 import { decodeAdmittedInlineBytes } from './plainTextFromAdmittedBytes.js'
 import { PDF_MEDIA_TYPE } from './pdfAdmission.js'
 import {
+  PDF_EXTRACTION_DEADLINE_MS,
   PDF_MAX_PAGES_PER_EXTRACTION,
   PdfExtractionCancelled,
   throwIfPdfAborted,
@@ -12,9 +18,30 @@ import {
 
 export const PDF_TEXT_EXTRACTION_VERSION = 'general-pdf-text/0.1.0'
 
+export type PdfExtractionStallStage = 'loading' | 'getPage' | 'getTextContent'
+
 export type PdfExtractionOptions = {
   /** Test hook: delay between pages to exercise cancellation. */
   pageDelayMs?: number
+  /** Test hook: never-resolving parser stage (deterministic cancel interrupt). */
+  stallStage?: PdfExtractionStallStage
+  /** Test hook: build passages without pdfjs (page number → raw page text). */
+  synthesizePageText?: Record<number, string>
+}
+
+type PdfPageLike = {
+  getTextContent: () => Promise<{ items: Array<{ str?: string }> }>
+}
+
+type PdfDocumentLike = {
+  numPages: number
+  getPage: (n: number) => Promise<PdfPageLike>
+  destroy: () => Promise<void>
+}
+
+type PdfLoadingTaskLike = {
+  promise: Promise<PdfDocumentLike>
+  destroy: () => void
 }
 
 function assertPdfMagic(bytes: Buffer): void {
@@ -28,27 +55,125 @@ async function abortableDelay(ms: number, signal?: AbortSignal): Promise<void> {
     throwIfPdfAborted(signal)
     return
   }
-  throwIfPdfAborted(signal)
-  await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => {
-      signal?.removeEventListener('abort', onAbort)
-      resolve()
-    }, ms)
-    const onAbort = () => {
-      clearTimeout(timer)
-      reject(new PdfExtractionCancelled())
-    }
-    signal?.addEventListener('abort', onAbort, { once: true })
-  })
-  throwIfPdfAborted(signal)
+  await awaitWithPdfAbort(
+    new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, ms)
+      signal?.addEventListener('abort', () => clearTimeout(timer), { once: true })
+    }),
+    signal,
+  )
 }
 
-type PdfDocumentLike = {
-  numPages: number
-  getPage: (n: number) => Promise<{
-    getTextContent: () => Promise<{ items: Array<{ str?: string }> }>
-  }>
-  destroy: () => Promise<void>
+function neverResolving<T>(): Promise<T> {
+  return new Promise<T>(() => {})
+}
+
+function buildPassageFromPageText(
+  admitted: AdmittedContent,
+  pageNum: number,
+  text: string,
+): PassageRecord {
+  const inline = buildInlinePassageTextRef(text)
+  const record: PassageRecord = {
+    passage_id: `${admitted.operation_id}:pdf:p${pageNum}`,
+    source_revision_id: admitted.revision.revision_id,
+    locator: { kind: 'page', start_page: pageNum, end_page: pageNum },
+    text_ref: {
+      mode: 'inline',
+      text: inline.text,
+      text_hash: inline.text_hash,
+    },
+    extraction_notes: ['pdfjs_text_layer', 'admitted_inline_pdf', ...inline.truncationNotes],
+  }
+  PassageRecordSchema.parse(record)
+  return record
+}
+
+function passagesFromSynthesizedPages(
+  admitted: AdmittedContent,
+  synthesizePageText: Record<number, string>,
+): PassageRecord[] {
+  const pageNums = Object.keys(synthesizePageText)
+    .map((k) => Number(k))
+    .filter((n) => Number.isInteger(n) && n > 0)
+    .sort((a, b) => a - b)
+  const passages = pageNums.map((pageNum) =>
+    buildPassageFromPageText(admitted, pageNum, synthesizePageText[pageNum] ?? ''),
+  )
+  if (passages.length === 0) {
+    throw new Error('pdf extraction produced no text passages')
+  }
+  return passages
+}
+
+async function loadPdfDocument(
+  raw: Buffer,
+  signal?: AbortSignal,
+  stallStage?: PdfExtractionStallStage,
+): Promise<{ doc: PdfDocumentLike; loadingTask: PdfLoadingTaskLike }> {
+  if (stallStage === 'loading') {
+    const loadingTask: PdfLoadingTaskLike = {
+      promise: neverResolving<PdfDocumentLike>(),
+      destroy: () => {},
+    }
+    const doc = await awaitWithPdfAbort(loadingTask.promise, signal, () => {
+      loadingTask.destroy()
+    })
+    return { doc, loadingTask }
+  }
+
+  const { getDocument } = await import('pdfjs-dist/legacy/build/pdf.mjs')
+  throwIfPdfAborted(signal)
+  const loadingTask = getDocument({ data: new Uint8Array(raw), useSystemFonts: true }) as PdfLoadingTaskLike
+  const doc = await awaitWithPdfAbort(loadingTask.promise, signal, () => {
+    loadingTask.destroy()
+  })
+  return { doc, loadingTask }
+}
+
+async function extractPassagesFromDoc(
+  admitted: AdmittedContent,
+  activeDoc: PdfDocumentLike,
+  signal?: AbortSignal,
+  options?: PdfExtractionOptions,
+): Promise<PassageRecord[]> {
+  if (activeDoc.numPages > PDF_MAX_PAGES_PER_EXTRACTION) {
+    throw new Error(
+      `pdf exceeds page limit (${activeDoc.numPages} > ${PDF_MAX_PAGES_PER_EXTRACTION})`,
+    )
+  }
+  const passages: PassageRecord[] = []
+  for (let pageNum = 1; pageNum <= activeDoc.numPages; pageNum++) {
+    throwIfPdfAborted(signal)
+    if (options?.pageDelayMs) {
+      await abortableDelay(options.pageDelayMs, signal)
+    }
+
+    const pagePromise =
+      options?.stallStage === 'getPage' ? neverResolving<PdfPageLike>() : activeDoc.getPage(pageNum)
+    const page = await awaitWithPdfAbort(pagePromise, signal)
+
+    throwIfPdfAborted(signal)
+    const textContentPromise =
+      options?.stallStage === 'getTextContent'
+        ? neverResolving<{ items: Array<{ str?: string }> }>()
+        : page.getTextContent()
+    const content = await awaitWithPdfAbort(textContentPromise, signal)
+
+    throwIfPdfAborted(signal)
+    const text = content.items
+      .map((item) => ('str' in item ? String(item.str) : ''))
+      .join(' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+    if (!text) continue
+    passages.push(buildPassageFromPageText(admitted, pageNum, text))
+  }
+  throwIfPdfAborted(signal)
+  if (passages.length === 0) {
+    throw new Error('pdf extraction produced no text passages')
+  }
+  return passages
 }
 
 /**
@@ -64,71 +189,43 @@ export async function passagesFromAdmittedPdf(
       `unsupported media_type for PDF extractor: ${admitted.media_type} (only ${PDF_MEDIA_TYPE})`,
     )
   }
-  throwIfPdfAborted(signal)
+  const scope = mergeAbortSignals(signal, PDF_EXTRACTION_DEADLINE_MS)
+  const activeSignal = scope.signal
+
+  throwIfPdfAborted(activeSignal)
   const raw = decodeAdmittedInlineBytes(admitted)
   assertPdfMagic(raw)
-  const { getDocument } = await import('pdfjs-dist/legacy/build/pdf.mjs')
-  throwIfPdfAborted(signal)
-  const loadingTask = getDocument({ data: new Uint8Array(raw), useSystemFonts: true })
+
+  if (options?.synthesizePageText) {
+    throwIfPdfAborted(activeSignal)
+    return passagesFromSynthesizedPages(admitted, options.synthesizePageText)
+  }
+
   let doc: PdfDocumentLike | null = null
+  let loadingTask: PdfLoadingTaskLike | null = null
   try {
-    doc = (await loadingTask.promise) as unknown as PdfDocumentLike
-    throwIfPdfAborted(signal)
-    const activeDoc = doc
-    if (activeDoc.numPages > PDF_MAX_PAGES_PER_EXTRACTION) {
-      throw new Error(
-        `pdf exceeds page limit (${activeDoc.numPages} > ${PDF_MAX_PAGES_PER_EXTRACTION})`,
-      )
-    }
-    const pageCap = activeDoc.numPages
-    const passages: PassageRecord[] = []
-    for (let pageNum = 1; pageNum <= pageCap; pageNum++) {
-      throwIfPdfAborted(signal)
-      if (options?.pageDelayMs) {
-        await abortableDelay(options.pageDelayMs, signal)
+    if (options?.stallStage === 'getPage' || options?.stallStage === 'getTextContent') {
+      doc = {
+        numPages: 1,
+        getPage: async () => ({
+          getTextContent: async () => ({ items: [{ str: 'unused' }] }),
+        }),
+        destroy: async () => {},
       }
-      const page = await activeDoc.getPage(pageNum)
-      throwIfPdfAborted(signal)
-      const content = await page.getTextContent()
-      throwIfPdfAborted(signal)
-      const text = content.items
-        .map((item) => ('str' in item ? String(item.str) : ''))
-        .join(' ')
-        .replace(/\s+/g, ' ')
-        .trim()
-      if (!text) continue
-      const inline = buildInlinePassageTextRef(text)
-      const record: PassageRecord = {
-        passage_id: `${admitted.operation_id}:pdf:p${pageNum}`,
-        source_revision_id: admitted.revision.revision_id,
-        locator: { kind: 'page', start_page: pageNum, end_page: pageNum },
-        text_ref: {
-          mode: 'inline',
-          text: inline.text,
-          text_hash: inline.text_hash,
-        },
-        extraction_notes: ['pdfjs_text_layer', 'admitted_inline_pdf', ...inline.truncationNotes],
-      }
-      PassageRecordSchema.parse(record)
-      passages.push(record)
+      loadingTask = { promise: Promise.resolve(doc), destroy: () => {} }
+      return await extractPassagesFromDoc(admitted, doc, activeSignal, options)
     }
-    throwIfPdfAborted(signal)
-    if (passages.length === 0) {
-      throw new Error('pdf extraction produced no text passages')
-    }
-    return passages
+
+    const loaded = await loadPdfDocument(raw, activeSignal, options?.stallStage)
+    doc = loaded.doc
+    loadingTask = loaded.loadingTask
+    throwIfPdfAborted(activeSignal)
+    return await extractPassagesFromDoc(admitted, doc, activeSignal, options)
+  } catch (error) {
+    if (error instanceof PdfExtractionCancelled) throw error
+    throw error
   } finally {
-    if (doc) {
-      try {
-        await doc.destroy()
-      } catch {
-        /* best-effort cleanup */
-      }
-    }
-    try {
-      loadingTask.destroy()
-    } catch {
-      /* best-effort cleanup */
-    }
+    await destroyPdfResources(doc, loadingTask)
+    scope.dispose()
   }
 }

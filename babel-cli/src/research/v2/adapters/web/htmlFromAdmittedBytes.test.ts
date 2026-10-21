@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url'
 import { test } from 'node:test'
 import { PassageRecordSchema } from '../../contracts/passages.js'
 import { buildAdmittedContent } from '../documents/testAdmittedFixtures.js'
-import { passageTextHash } from '../documents/passageInlineText.js'
+import { MAX_INLINE_PASSAGE_UTF16_UNITS, passageTextHash } from '../documents/passageInlineText.js'
 import { resolveQuarantinedFixturePath } from '../documents/quarantinePath.js'
 import { passagesFromAdmittedStaticHtml, HTML_MEDIA_TYPE } from './htmlFromAdmittedBytes.js'
 
@@ -57,7 +57,24 @@ test('passagesFromAdmittedStaticHtml: inline hash matches emitted text', () => {
   assert.equal(ref?.mode, 'inline')
   if (ref?.mode === 'inline') {
     assert.equal(ref.text_hash, passageTextHash(ref.text))
+    assert.equal(ref.text.length, MAX_INLINE_PASSAGE_UTF16_UNITS)
     assert.ok(passages[0]?.extraction_notes?.some((n) => n.includes('inline_text_truncated')))
+    PassageRecordSchema.parse(passages[0])
+  }
+})
+
+test('passagesFromAdmittedStaticHtml: long unicode respects UTF-16 schema max', () => {
+  const emoji = '😀'
+  const body = 'a'.repeat(MAX_INLINE_PASSAGE_UTF16_UNITS - 1) + emoji
+  const html = `<html><body><h1>H</h1><p>${body}</p></body></html>`
+  const admitted = buildAdmittedContent('op', 's', 'r', Buffer.from(html, 'utf8'), HTML_MEDIA_TYPE)
+  const passages = passagesFromAdmittedStaticHtml(admitted)
+  const record = passages[0]
+  assert.ok(record)
+  PassageRecordSchema.parse(record)
+  if (record.text_ref.mode === 'inline') {
+    assert.equal(record.text_ref.text.length, MAX_INLINE_PASSAGE_UTF16_UNITS - 1)
+    assert.equal(record.text_ref.text_hash, passageTextHash(record.text_ref.text))
   }
 })
 

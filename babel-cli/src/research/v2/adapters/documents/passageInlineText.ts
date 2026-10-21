@@ -1,46 +1,77 @@
 import { createHash } from 'node:crypto'
+import { PassageTextRefSchema } from '../../contracts/passages.js'
 
-/** Contract max for inline passage text (Unicode code points). */
-export const MAX_INLINE_PASSAGE_CODE_POINTS = 32_000
+/** Frozen PassageTextRefSchema inline `text` max (UTF-16 code units). */
+export const MAX_INLINE_PASSAGE_UTF16_UNITS = 32_000
 
 export function passageTextHash(text: string): string {
   return createHash('sha256').update(text, 'utf8').digest('hex')
 }
 
-export function truncateToCodePointLimit(
-  text: string,
-  limit: number,
-): { emitted: string; truncated: boolean; originalCodePoints: number } {
-  const codePoints = [...text]
-  if (codePoints.length <= limit) {
-    return { emitted: text, truncated: false, originalCodePoints: codePoints.length }
+function utf16UnitsForCodePoint(codePoint: string): number {
+  const cp = codePoint.codePointAt(0)
+  if (cp === undefined) return 0
+  return cp > 0xffff ? 2 : 1
+}
+
+export function truncateToInlinePassageTextLimit(fullText: string): {
+  emitted: string
+  truncated: boolean
+  originalCodePoints: number
+  originalUtf16Units: number
+} {
+  const codePoints = [...fullText]
+  const originalUtf16Units = fullText.length
+  if (originalUtf16Units <= MAX_INLINE_PASSAGE_UTF16_UNITS) {
+    return {
+      emitted: fullText,
+      truncated: false,
+      originalCodePoints: codePoints.length,
+      originalUtf16Units,
+    }
+  }
+  let emitted = ''
+  let emittedUnits = 0
+  for (const cp of codePoints) {
+    const units = utf16UnitsForCodePoint(cp)
+    if (emittedUnits + units > MAX_INLINE_PASSAGE_UTF16_UNITS) break
+    emitted += cp
+    emittedUnits += units
+  }
+  if (!emitted) {
+    throw new Error('inline passage text cannot be represented within UTF-16 unit limit')
   }
   return {
-    emitted: codePoints.slice(0, limit).join(''),
-    truncated: true,
+    emitted,
+    truncated: emitted !== fullText,
     originalCodePoints: codePoints.length,
+    originalUtf16Units,
   }
 }
 
-/** Hash and emit only the stored inline text; truncate on code-point boundaries. */
+/** Hash and emit only stored inline text; whole code points; within schema UTF-16 max. */
 export function buildInlinePassageTextRef(fullText: string): {
   text: string
   text_hash: string
   truncationNotes: string[]
 } {
-  const { emitted, truncated, originalCodePoints } = truncateToCodePointLimit(
-    fullText,
-    MAX_INLINE_PASSAGE_CODE_POINTS,
-  )
+  const { emitted, truncated, originalCodePoints, originalUtf16Units } =
+    truncateToInlinePassageTextLimit(fullText)
   const truncationNotes: string[] = []
   if (truncated) {
     truncationNotes.push(
-      `inline_text_truncated:${originalCodePoints}_to_${MAX_INLINE_PASSAGE_CODE_POINTS}_codepoints`,
+      `inline_text_truncated:${originalCodePoints}_codepoints_${originalUtf16Units}_utf16_to_${emitted.length}_utf16`,
     )
   }
-  return {
+  const text_ref = {
+    mode: 'inline' as const,
     text: emitted,
     text_hash: passageTextHash(emitted),
+  }
+  PassageTextRefSchema.parse(text_ref)
+  return {
+    text: emitted,
+    text_hash: text_ref.text_hash,
     truncationNotes,
   }
 }

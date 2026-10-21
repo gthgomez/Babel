@@ -61,7 +61,7 @@ const { getDocument } = await import('pdfjs-dist/legacy/build/pdf.mjs')
 | Pages | `doc.numPages`; loop `doc.getPage(pageNum)` |
 | Text | `(await page.getTextContent()).items` — text from items with `str` (ignore non-`str` items) |
 | Cancel | `AbortSignal` → `PdfExtractionCancelled` via `throwIfPdfAborted` / adapter `cancelledRead` |
-| Limits | `PDF_MAX_PAGES_PER_EXTRACTION` (512); inline text cap `MAX_INLINE_PASSAGE_CODE_POINTS` (32_000 code points per page passage) |
+| Limits | `PDF_MAX_PAGES_PER_EXTRACTION` (512); `PDF_EXTRACTION_DEADLINE_MS`; inline text cap `MAX_INLINE_PASSAGE_UTF16_UNITS` (32_000 UTF-16 units, whole code points) |
 | Cleanup (always) | `await doc.destroy()`; `loadingTask.destroy()` in `finally` |
 
 Admission: `application/pdf` only; `%PDF-` magic on admitted inline bytes (`pdfAdmission.ts`). IO remains **`SourceAccessPort.fetchContent`** → admitted inline bytes only.
@@ -69,7 +69,7 @@ Admission: `application/pdf` only; `%PDF-` magic on admitted inline bytes (`pdfA
 ### HTML / inline text (no new A dependency)
 
 - Section locators: `htmlSectionLocator.ts` (`allocateSectionLocatorId`, `sectionSlugFromHeading`).
-- Inline hash/truncate: `passageInlineText.ts` (`buildInlinePassageTextRef`, `MAX_INLINE_PASSAGE_CODE_POINTS`).
+- Inline hash/truncate: `passageInlineText.ts` (`buildInlinePassageTextRef`, `MAX_INLINE_PASSAGE_UTF16_UNITS`).
 
 ### Mission flow (unchanged)
 

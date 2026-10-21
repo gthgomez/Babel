@@ -1,28 +1,37 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
+import { PassageRecordSchema } from '../../contracts/passages.js'
 import {
   buildInlinePassageTextRef,
-  MAX_INLINE_PASSAGE_CODE_POINTS,
+  MAX_INLINE_PASSAGE_UTF16_UNITS,
   passageTextHash,
-  truncateToCodePointLimit,
+  truncateToInlinePassageTextLimit,
 } from './passageInlineText.js'
 
-test('truncateToCodePointLimit: does not split emoji surrogate pair', () => {
+test('truncateToInlinePassageTextLimit: 31999 ASCII + emoji stays within UTF-16 schema max', () => {
   const emoji = '😀'
-  const prefix = 'a'.repeat(MAX_INLINE_PASSAGE_CODE_POINTS)
+  const prefix = 'a'.repeat(MAX_INLINE_PASSAGE_UTF16_UNITS - 1)
   const full = prefix + emoji
-  const { emitted, truncated } = truncateToCodePointLimit(full, MAX_INLINE_PASSAGE_CODE_POINTS)
+  const { emitted, truncated } = truncateToInlinePassageTextLimit(full)
   assert.equal(truncated, true)
-  assert.equal([...emitted].length, MAX_INLINE_PASSAGE_CODE_POINTS)
   assert.equal(emitted, prefix)
+  assert.equal(emitted.length, MAX_INLINE_PASSAGE_UTF16_UNITS - 1)
   assert.doesNotMatch(emitted, /\uD83D$/)
 })
 
-test('buildInlinePassageTextRef: hashes emitted text only', () => {
-  const long = 'x'.repeat(MAX_INLINE_PASSAGE_CODE_POINTS + 50)
+test('buildInlinePassageTextRef: hashes emitted text and satisfies PassageTextRefSchema', () => {
+  const long = 'x'.repeat(MAX_INLINE_PASSAGE_UTF16_UNITS + 50)
   const ref = buildInlinePassageTextRef(long)
-  assert.equal(ref.text.length, [...ref.text].length)
+  assert.equal(ref.text.length, MAX_INLINE_PASSAGE_UTF16_UNITS)
   assert.equal(ref.text_hash, passageTextHash(ref.text))
   assert.notEqual(ref.text_hash, passageTextHash(long))
   assert.ok(ref.truncationNotes.length >= 1)
+})
+
+test('buildInlinePassageTextRef: astral tail dropped before UTF-16 overflow', () => {
+  const emoji = '😀'
+  const prefix = 'a'.repeat(MAX_INLINE_PASSAGE_UTF16_UNITS)
+  const ref = buildInlinePassageTextRef(prefix + emoji)
+  assert.equal(ref.text.length, MAX_INLINE_PASSAGE_UTF16_UNITS)
+  assert.equal(ref.text, prefix)
 })

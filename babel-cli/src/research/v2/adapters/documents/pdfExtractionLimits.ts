@@ -1,6 +1,9 @@
 /** General document PDF extractor bounds (offline admitted bytes). */
 export const PDF_MAX_PAGES_PER_EXTRACTION = 512
-export const PDF_MAX_OUTPUT_CODE_POINTS_PER_PAGE = 32_000
+/** Matches PassageTextRefSchema inline text max (UTF-16 code units). */
+export const PDF_MAX_OUTPUT_UTF16_UNITS_PER_PAGE = 32_000
+/** Wall-clock bound for a single admitted-PDF extraction (loading + pages). */
+export const PDF_EXTRACTION_DEADLINE_MS = 120_000
 
 export class PdfExtractionCancelled extends Error {
   constructor() {
