@@ -21,3 +21,11 @@ test('resolveQuarantinedFixturePath rejects parent traversal', () => {
     /quarantine: rejected relative path/,
   )
 })
+
+test('resolveQuarantinedFixturePath rejects absolute relativePath', () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-quarantine-'))
+  assert.throws(
+    () => resolveQuarantinedFixturePath(root, '/etc/passwd'),
+    /quarantine: rejected absolute path/,
+  )
+})

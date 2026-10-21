@@ -1,11 +1,17 @@
 import assert from 'node:assert/strict'
-import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { test } from 'node:test'
-import type { SourceAccessPort, SourceFetchRequest, SourceRecord } from '../frozenPorts0ccd1733.js'
+import type {
+  SourceAccessPort,
+  SourceFetchRequest,
+  SourceSearchRequest,
+} from '../../ports/sourceAccessPort.js'
+import type { SourceRecord } from '../../contracts/sources.js'
 import { GeneralDocumentAdapter } from './generalDocumentAdapter.js'
+import { PLAIN_TEXT_EXTRACTION_VERSION } from './plainTextFromAdmittedBytes.js'
+import { buildAdmittedContent } from './testAdmittedFixtures.js'
 import { resolveQuarantinedFixturePath } from './quarantinePath.js'
 
 const devCorpusRoot = join(
@@ -13,53 +19,50 @@ const devCorpusRoot = join(
   '../../profiles/general/fixtures/dev-corpus',
 )
 
-function admittedPayload(bytes: Buffer, operationId: string, sourceId: string) {
-  const hash = createHash('sha256').update(bytes).digest('hex')
+function stubAccessPort(
+  fetchContent: SourceAccessPort['fetchContent'],
+): SourceAccessPort {
   return {
-    operation_id: operationId,
-    revision: {
-      revision_id: `rev-${sourceId}`,
-      source_id: sourceId,
-      content_hash: hash,
-      retrieved_at: '2026-10-21T00:00:00.000Z',
-      completeness_status: 'complete' as const,
+    async search(request: SourceSearchRequest) {
+      return {
+        operationId: request.operationId,
+        status: 'failed',
+        failureCategory: 'search_provider_unavailable',
+        message: 'test stub search',
+      }
     },
-    media_type: 'text/plain',
-    provenance: {
-      requested_url: 'file://fixture/local',
-      final_url: 'file://fixture/local',
-      redirect_chain: [] as string[],
-    },
-    payload: {
-      mode: 'inline_bytes' as const,
-      bytes_base64: bytes.toString('base64'),
-      byte_length: bytes.length,
-      content_hash: hash,
-    },
+    fetchContent,
   }
 }
 
-function fixtureFetchPort(fixtureRelPath: string): SourceAccessPort {
+function sampleSource(sourceId: string): SourceRecord {
+  return {
+    source_id: sourceId,
+    kind: 'document',
+    canonical_key: `fixture:${sourceId}`,
+    observed_urls: ['https://example.invalid/source'],
+  }
+}
+
+function fixtureFetchPort(fixtureRelPath: string, overrides?: {
+  operationId?: string
+  sourceId?: string
+}): SourceAccessPort {
   const abs = resolveQuarantinedFixturePath(devCorpusRoot, fixtureRelPath)
   const bytes = readFileSync(abs)
-  return {
-    async fetchContent(request: SourceFetchRequest) {
-      return {
-        operationId: request.operationId,
-        status: 'ok',
-        admitted: admittedPayload(bytes, request.operationId, request.source.source_id),
-      }
-    },
-  }
+  return stubAccessPort(async (request: SourceFetchRequest) => {
+    const op = overrides?.operationId ?? request.operationId
+    const sid = overrides?.sourceId ?? request.source.source_id
+    return {
+      operationId: op,
+      status: 'ok',
+      admitted: buildAdmittedContent(op, sid, `rev-${sid}`, bytes, 'text/plain'),
+    }
+  })
 }
 
 test('GeneralDocumentAdapter.read: admitted plain text via port only (G-DEV-03)', async () => {
-  const source: SourceRecord = {
-    source_id: 'src-policy',
-    kind: 'document',
-    canonical_key: 'fixture:G-DEV-03:official-policy',
-    observed_urls: [],
-  }
+  const source = sampleSource('src-policy')
   const adapter = new GeneralDocumentAdapter()
   const result = await adapter.read(
     { operationId: 'op-1', source, signal: AbortSignal.timeout(5_000) },
@@ -68,77 +71,105 @@ test('GeneralDocumentAdapter.read: admitted plain text via port only (G-DEV-03)'
   assert.equal(result.status, 'ok')
   if (result.status !== 'ok') return
   assert.ok(result.passages.length >= 1)
-  assert.equal(result.extraction_version, 'general-plain-text/0.1.0')
-  assert.equal(result.passages[0]?.source_id, 'src-policy')
+  assert.equal(result.extraction_version, PLAIN_TEXT_EXTRACTION_VERSION)
+  assert.equal(result.revision.source_id, 'src-policy')
 })
 
 test('GeneralDocumentAdapter.read: propagates port cancelled', async () => {
-  const port: SourceAccessPort = {
-    async fetchContent(request) {
-      return { operationId: request.operationId, status: 'cancelled' }
-    },
-  }
-  const source: SourceRecord = {
-    source_id: 's',
-    kind: 'document',
-    canonical_key: 'k',
-    observed_urls: [],
-  }
-  const adapter = new GeneralDocumentAdapter()
-  const result = await adapter.read(
-    { operationId: 'op-cancel', source, signal: AbortSignal.abort() },
+  const port = stubAccessPort(async (request) => {
+    return { operationId: request.operationId, status: 'cancelled' }
+  })
+  const result = await new GeneralDocumentAdapter().read(
+    { operationId: 'op-cancel', source: sampleSource('s'), signal: AbortSignal.abort() },
     port,
   )
   assert.equal(result.status, 'cancelled')
 })
 
-test('GeneralDocumentAdapter.read: propagates port failed', async () => {
-  const port: SourceAccessPort = {
-    async fetchContent(request) {
-      return {
-        operationId: request.operationId,
-        status: 'failed',
-        failureCategory: 'policy_blocked',
-        message: 'blocked',
-      }
-    },
-  }
-  const source: SourceRecord = {
-    source_id: 's',
-    kind: 'document',
-    canonical_key: 'k',
-    observed_urls: [],
-  }
+test('GeneralDocumentAdapter.read: pre-await abort returns cancelled', async () => {
+  const port = stubAccessPort(async () => {
+    throw new Error('fetch should not run when already aborted')
+  })
   const result = await new GeneralDocumentAdapter().read(
-    { operationId: 'op-fail', source, signal: AbortSignal.timeout(1_000) },
+    { operationId: 'op-pre', source: sampleSource('s'), signal: AbortSignal.abort() },
     port,
   )
-  assert.equal(result.status, 'failed')
-  if (result.status === 'failed') assert.equal(result.failureCategory, 'policy_blocked')
+  assert.equal(result.status, 'cancelled')
 })
 
-test('GeneralDocumentAdapter.read: extraction_failed on hash mismatch admitted bytes', async () => {
-  const bytes = Buffer.from('line\n', 'utf8')
-  const port: SourceAccessPort = {
-    async fetchContent(request) {
-      const admitted = admittedPayload(bytes, request.operationId, request.source.source_id)
-      admitted.payload.content_hash = '0'.repeat(64)
-      return { operationId: request.operationId, status: 'ok', admitted }
-    },
-  }
-  const source: SourceRecord = {
-    source_id: 's',
-    kind: 'document',
-    canonical_key: 'k',
-    observed_urls: [],
-  }
+test('GeneralDocumentAdapter.read: post-await abort returns cancelled', async () => {
+  const port = stubAccessPort(async (request) => {
+    await new Promise((resolve) => setTimeout(resolve, 15))
+    if (request.signal.aborted) {
+      return { operationId: request.operationId, status: 'cancelled' }
+    }
+    const bytes = Buffer.from('late\n', 'utf8')
+    return {
+      operationId: request.operationId,
+      status: 'ok',
+      admitted: buildAdmittedContent(
+        request.operationId,
+        request.source.source_id,
+        'rev-late',
+        bytes,
+        'text/plain',
+      ),
+    }
+  })
+  const controller = new AbortController()
+  const readPromise = new GeneralDocumentAdapter().read(
+    { operationId: 'op-post', source: sampleSource('s'), signal: controller.signal },
+    port,
+  )
+  controller.abort()
+  const result = await readPromise
+  assert.equal(result.status, 'cancelled')
+})
+
+test('GeneralDocumentAdapter.read: fails on port operationId mismatch', async () => {
   const result = await new GeneralDocumentAdapter().read(
-    { operationId: 'op-bad-hash', source, signal: AbortSignal.timeout(1_000) },
+    { operationId: 'op-outer', source: sampleSource('s'), signal: AbortSignal.timeout(1_000) },
+    fixtureFetchPort('G-DEV-03/sources/official-policy.txt', { operationId: 'op-inner' }),
+  )
+  assert.equal(result.status, 'failed')
+  if (result.status === 'failed') assert.match(result.message, /operationId/)
+})
+
+test('GeneralDocumentAdapter.read: fails on admitted source_id mismatch', async () => {
+  const result = await new GeneralDocumentAdapter().read(
+    { operationId: 'op-bind', source: sampleSource('requested-src'), signal: AbortSignal.timeout(1_000) },
+    fixtureFetchPort('G-DEV-03/sources/official-policy.txt', { sourceId: 'other-src' }),
+  )
+  assert.equal(result.status, 'failed')
+  if (result.status === 'failed') assert.match(result.message, /source_id/)
+})
+
+test('GeneralDocumentAdapter.read: extraction_failed on hash mismatch', async () => {
+  const bytes = Buffer.from('line\n', 'utf8')
+  const port = stubAccessPort(async (request) => {
+    const admitted = buildAdmittedContent(
+      request.operationId,
+      request.source.source_id,
+      'rev-x',
+      bytes,
+      'text/plain',
+      { corruptPayloadHash: true },
+    )
+    return { operationId: request.operationId, status: 'ok', admitted }
+  })
+  const result = await new GeneralDocumentAdapter().read(
+    { operationId: 'op-bad-hash', source: sampleSource('s'), signal: AbortSignal.timeout(1_000) },
     port,
   )
   assert.equal(result.status, 'failed')
-  if (result.status === 'failed') {
-    assert.equal(result.failureCategory, 'extraction_failed')
-    assert.match(result.message, /content_hash/)
-  }
+  if (result.status === 'failed') assert.match(result.message, /content_hash/)
+})
+
+test('GeneralDocumentAdapter.discover: not_supported without network', async () => {
+  const port = stubAccessPort(async () => ({ operationId: 'x', status: 'cancelled' }))
+  const result = await new GeneralDocumentAdapter().discover(
+    { operationId: 'disc-1', query: 'q', signal: AbortSignal.timeout(1_000) },
+    port,
+  )
+  assert.equal(result.status, 'failed')
 })

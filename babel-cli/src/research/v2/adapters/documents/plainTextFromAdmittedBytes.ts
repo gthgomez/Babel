@@ -1,19 +1,21 @@
 import { createHash } from 'node:crypto'
-import type { AdmittedContent, PassageRecord } from '../frozenPorts0ccd1733.js'
+import type { AdmittedContent } from '../../contracts/admittedContent.js'
+import type { PassageRecord } from '../../contracts/passages.js'
+import { PassageRecordSchema } from '../../contracts/passages.js'
 
-const EXTRACTION_VERSION = 'general-plain-text/0.1.0'
+export const PLAIN_TEXT_MEDIA_TYPE = 'text/plain'
+export const PLAIN_TEXT_EXTRACTION_VERSION = 'general-plain-text/0.1.0'
+
+function passageTextHash(text: string): string {
+  return createHash('sha256').update(text, 'utf8').digest('hex')
+}
 
 /** Decode and integrity-check inline admitted bytes (no network). */
 export function decodeAdmittedUtf8Bytes(admitted: AdmittedContent): Buffer {
   if (admitted.payload.mode !== 'inline_bytes') {
     throw new Error(`unsupported payload mode: ${admitted.payload.mode}`)
   }
-  let raw: Buffer
-  try {
-    raw = Buffer.from(admitted.payload.bytes_base64, 'base64')
-  } catch {
-    throw new Error('admitted bytes_base64 is not valid base64')
-  }
+  const raw = Buffer.from(admitted.payload.bytes_base64, 'base64')
   if (raw.length !== admitted.payload.byte_length) {
     throw new Error('admitted byte_length does not match decoded buffer length')
   }
@@ -33,11 +35,13 @@ export function decodeAdmittedUtf8Bytes(admitted: AdmittedContent): Buffer {
 }
 
 /**
- * Extract line-bounded passages from admitted inline UTF-8 text (no network).
+ * Extract line-bounded passages from admitted inline UTF-8 plain text only.
  */
 export function passagesFromAdmittedPlainText(admitted: AdmittedContent): PassageRecord[] {
-  if (admitted.media_type !== 'text/plain' && !admitted.media_type.startsWith('text/')) {
-    throw new Error(`unsupported media_type for plain extractor: ${admitted.media_type}`)
+  if (admitted.media_type !== PLAIN_TEXT_MEDIA_TYPE) {
+    throw new Error(
+      `unsupported media_type for plain extractor: ${admitted.media_type} (only ${PLAIN_TEXT_MEDIA_TYPE})`,
+    )
   }
   const raw = decodeAdmittedUtf8Bytes(admitted)
   const text = raw.toString('utf8')
@@ -47,31 +51,22 @@ export function passagesFromAdmittedPlainText(admitted: AdmittedContent): Passag
     const line = lines[i] ?? ''
     if (!line.trim()) continue
     const lineNo = i + 1
-    passages.push({
+    const record: PassageRecord = {
       passage_id: `${admitted.operation_id}:L${lineNo}`,
-      source_id: admitted.revision.source_id,
-      revision_id: admitted.revision.revision_id,
+      source_revision_id: admitted.revision.revision_id,
       locator: { kind: 'line_range', start_line: lineNo, end_line: lineNo },
-      text: line,
-      extraction_version: EXTRACTION_VERSION,
-    })
-  }
-  for (const passage of passages) {
-    if (passage.source_id !== admitted.revision.source_id) {
-      throw new Error('passage source_id does not match admitted revision')
+      text_ref: {
+        mode: 'inline',
+        text: line,
+        text_hash: passageTextHash(line),
+      },
     }
-    if (passage.revision_id !== admitted.revision.revision_id) {
-      throw new Error('passage revision_id does not match admitted revision')
-    }
-    if (passage.locator.start_line !== passage.locator.end_line) {
-      throw new Error('plain-text locator must be a single line_range')
-    }
-    const expectedLine = lines[passage.locator.start_line - 1] ?? ''
-    if (passage.text !== expectedLine) {
+    PassageRecordSchema.parse(record)
+    const expectedLine = lines[lineNo - 1] ?? ''
+    if (record.text_ref.mode === 'inline' && record.text_ref.text !== expectedLine) {
       throw new Error('passage text does not match admitted raw line bytes')
     }
+    passages.push(record)
   }
   return passages
 }
-
-export { EXTRACTION_VERSION as plainTextExtractionVersion }

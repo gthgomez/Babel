@@ -1,23 +1,19 @@
 # Document adapter — integration binding (Agent B)
 
-## Temporary compile aliases (branch-only)
+## Real frozen A contracts (required)
 
-`../frozenPorts0ccd1733.ts` duplicates **shapes only** so adapters typecheck before Agent A’s `ports/` and `contracts/` land on this branch. It is **not** acceptance coverage and **not** a second contract.
+All adapter modules import **Agent A** `0ccd1733` modules:
 
-## Required integration swap (before integrated acceptance)
+- `../../ports/sourceAdapter.js` (includes `discover` + `read`)
+- `../../ports/sourceAccessPort.js`
+- `../../contracts/admittedContent.js`, `passages.js`, `sources.js`
 
-Replace every import from `../frozenPorts0ccd1733.js` with Agent A frozen paths:
+There is **no** `frozenPorts*` alias file. Proof runs in a disposable worktree at A `0ccd1733` plus B-owned paths.
 
-| Temporary alias | Integrated import (A @ `0ccd1733`) |
-|-----------------|-------------------------------------|
-| `SourceAccessPort`, `SourceFetchRequest`, `SourceFetchResult` | `../../ports/sourceAccessPort.js` |
-| `SourceAdapter`, `SourceAdapterReadRequest`, `SourceAdapterReadResult` | `../../ports/sourceAdapter.js` |
-| `AdmittedContent`, `PassageRecord`, `SourceRecord`, `SourceRevision` | `../../contracts/admittedContent.js`, `passages.js`, `sources.js` |
+## Runtime rules
 
-Integrated acceptance tests must **compile against real A exports** and delete `frozenPorts0ccd1733.ts`.
-
-## Runtime rules (unchanged at integration)
-
-- Bytes enter only via `SourceAccessPort.fetchContent` (no ambient fetch).
-- Fixture paths use `quarantinePath.ts` under B-owned `profiles/general/fixtures/`.
-- Raw admitted bytes are validated (length, SHA-256, UTF-8) before extraction.
+- Bytes only via `SourceAccessPort.fetchContent`.
+- `read` binds outer/inner `operationId`, admitted `operation_id`, requested `source_id`, and provenance URLs.
+- Pre- and post-await `AbortSignal` → `cancelled`.
+- Plain extraction accepts **`text/plain` only** (not `text/html`).
+- Fixture paths: `quarantinePath.ts` (rejects absolute paths and cross-drive escape on Windows).
