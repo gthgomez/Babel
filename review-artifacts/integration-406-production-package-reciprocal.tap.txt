@@ -1,0 +1,29 @@
+TAP version 13
+# Subtest: general adapter production package reciprocal (Windows-packaged npm flags)
+    # Subtest: documents DOMMatrix failure when @napi-rs/canvas is omitted with --omit=optional
+    ok 1 - documents DOMMatrix failure when @napi-rs/canvas is omitted with --omit=optional
+      ---
+      duration_ms: 1632.005335
+      type: 'test'
+      ...
+    # Subtest: two-page PDF extraction + PdfExtractionCancelled cleanup under production npm ci flags
+    ok 2 - two-page PDF extraction + PdfExtractionCancelled cleanup under production npm ci flags
+      ---
+      duration_ms: 41250.888275
+      type: 'test'
+      ...
+    1..2
+ok 1 - general adapter production package reciprocal (Windows-packaged npm flags)
+  ---
+  duration_ms: 42883.980155
+  type: 'suite'
+  ...
+1..1
+# tests 2
+# suites 1
+# pass 2
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 43071.657666

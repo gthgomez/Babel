@@ -1,0 +1,11 @@
+# Observed under `npm ci --omit=dev --omit=optional --ignore-scripts` without direct @napi-rs/canvas
+# (matches babel-desktop/scripts/package-windows.mjs production install flags)
+
+Warning: Cannot load "@napi-rs/canvas" package: "Error: Cannot find module '@napi-rs/canvas'
+Require stack:
+- .../node_modules/pdfjs-dist/legacy/build/pdf.mjs".
+Warning: Cannot polyfill `DOMMatrix`, rendering may be broken.
+ReferenceError: DOMMatrix is not defined
+    at file:///.../node_modules/pdfjs-dist/legacy/build/pdf.mjs:15620:22
+
+Repair (Agent A package.json): direct dependency `@napi-rs/canvas@0.1.80` so --omit=optional does not drop pdfjs Node canvas backend.

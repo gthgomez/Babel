@@ -3,4 +3,7 @@ integration_base_branch=cursor/research-v2-post-review-settlement-fc31
 integration_base_commit=1b8389dd4c50cd1d29fd828188920da0ce4c2525
 integration_base_subject=docs(research-v2): lock A/B discover split for #406 vs B80 reciprocal tests
 merged_into=cursor/agent-b-general-fixtures-f617
-recorded_at=2026-10-21T05:00:00Z
+recorded_at=2026-10-21T05:06:00Z
+pending_a_checkpoint=package repair @napi-rs/canvas direct dep (A1b Windows --omit=optional); reconcile package.json/lock on next #406 publish
+production_package_flags=ci --omit=dev --omit=optional --ignore-scripts --no-audit --no-fund
+lifecycle_reciprocal_owner=Agent A cancelResumeControl + durable store close/reopen (next #406 checkpoint)
