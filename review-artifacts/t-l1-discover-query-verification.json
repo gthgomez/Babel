@@ -8,9 +8,10 @@
   "cli_default_eight_word_query": "Compare how the pinned Babel repository and the",
   "default_query_babel_hits": 0,
   "mission_per_pin_discover_query": {
-    "pinned_target_repository": "research v2 persistence",
-    "selected_repository_refs_langgraph": "libs checkpoint"
+    "pinned_target_repository": "persistence durableresearchstore.ts",
+    "selected_repository_refs_langgraph": "pregel checkpoint"
   },
+  "tree_first_hit_paths": "review-artifacts/t-l1-discover-query-tree-first-hit.json",
   "babel_sample_paths": [
     "babel-cli/src/research/v2/persistence/README.md",
     "babel-cli/src/research/v2/persistence/durableResearchStore.ts"

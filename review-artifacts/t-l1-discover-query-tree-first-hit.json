@@ -1,0 +1,23 @@
+{
+  "schema": "research-v2-t-l1-discover-query-tree-first-hit/v1",
+  "verified_at_utc": "2026-10-21T14:20:00.000Z",
+  "method": "GitHub GET /repos/{owner}/{repo}/git/trees/{commit_sha}?recursive=1; token-match terms.every on lowercase path (same as pinnedRepositoryFileSearchProvider); first blob in API tree order",
+  "not_claimed": "Single first-hit path does not establish whole-repository architecture conclusions; campaign compares cited files at pinned commits only.",
+  "babel": {
+    "commit_sha": "e912c2f3320de0b6e1c9ff85b95b0f74d8b5323c",
+    "discover_query": "persistence durableresearchstore.ts",
+    "first_match_path": "babel-cli/src/research/v2/persistence/durableResearchStore.ts",
+    "supersedes_query": "research v2 persistence",
+    "supersedes_first_match": "babel-cli/src/research/v2/persistence/README.md",
+    "scope_note": "Targets durable store implementation module, not README-only evidence."
+  },
+  "langgraph": {
+    "commit_sha": "3cd57c038ad827d05f80c6488adea9994156c58c",
+    "git_tree_sha": "a8aa3b138b6036c25331712af8ed8b3f0a4a0fda",
+    "discover_query": "pregel checkpoint",
+    "first_match_path": "libs/langgraph/langgraph/pregel/_checkpoint.py",
+    "supersedes_query": "libs checkpoint",
+    "supersedes_first_match": "libs/checkpoint-conformance/Makefile",
+    "scope_note": "Targets pregel checkpoint implementation, not conformance Makefile."
+  }
+}

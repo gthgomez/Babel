@@ -1,0 +1,17 @@
+{
+  "schema": "research-v2-b-focused-test-run-receipt/v1",
+  "label": "Focused extraction + query slice only (not full suite)",
+  "run_at_utc": "2026-10-21T14:25:00.000Z",
+  "exit_code": 0,
+  "counts": { "tests": 21, "pass": 21, "fail": 0, "suites": 5 },
+  "files": [
+    "babel-cli/src/research/v2/adapters/web/htmlFromAdmittedBytes.test.ts",
+    "babel-cli/src/research/v2/access/missionDocumentAcquisitionPolicy.test.ts",
+    "babel-cli/src/research/v2/engine/technicalRetrievalComposition.test.ts",
+    "babel-cli/src/research/v2/engine/researchComposedRetrievalLoop.perPinDiscoverQuery.reciprocal.test.ts",
+    "babel-cli/src/research/v2/fixtures/campaign/T-L1-discover-query.reciprocal.test.ts",
+    "babel-cli/src/research/v2/fixtures/campaign/T-L1-mission.test.ts"
+  ],
+  "tap_log": "review-artifacts/b-focused-extraction-query-test-run.tap.txt",
+  "note": "Prior 27/28 batch included additional files (lifecycle/arxiv); this receipt is the committed focused rerun after discover_query trim fix."
+}

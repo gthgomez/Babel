@@ -88,10 +88,10 @@ describe('T-L1 discover-query reciprocal (injected trees, no GitHub API)', () =>
 
   it('mission declares distinct per-pin discover_query terms for Babel vs LangGraph', () => {
     const mission = loadMission()
-    assert.equal(mission.pinned_target_repository?.discover_query, 'research v2 persistence')
+    assert.equal(mission.pinned_target_repository?.discover_query, 'persistence durableresearchstore.ts')
     assert.equal(
       mission.source_policy.selected_repository_refs?.[0]?.discover_query,
-      'libs checkpoint',
+      'pregel checkpoint',
     )
     assert.equal(pins.reference_repository.commit_sha, mission.source_policy.selected_repository_refs?.[0]?.commit_sha)
     assert.equal(pins.reference_repository.git_tree_sha, 'a8aa3b138b6036c25331712af8ed8b3f0a4a0fda')

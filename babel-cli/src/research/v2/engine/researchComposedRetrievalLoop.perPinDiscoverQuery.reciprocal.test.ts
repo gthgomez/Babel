@@ -26,10 +26,10 @@ describe('composed retrieval per-pin discover query (T-L1, injected trees)', () 
     const mission = ResearchMissionV2Schema.parse(
       JSON.parse(readFileSync(join(campaignDir, 'T-L1-mission.json'), 'utf8')),
     )
-    assert.equal(mission.pinned_target_repository?.discover_query, 'research v2 persistence')
+    assert.equal(mission.pinned_target_repository?.discover_query, 'persistence durableresearchstore.ts')
     assert.equal(
       mission.source_policy.selected_repository_refs?.[0]?.discover_query,
-      'libs checkpoint',
+      'pregel checkpoint',
     )
     assert.equal(mission.pinned_target_repository?.commit_sha, pins.babel_repository.commit_sha)
     assert.equal(
@@ -38,7 +38,7 @@ describe('composed retrieval per-pin discover query (T-L1, injected trees)', () 
     )
 
     const babelPath = 'babel-cli/src/research/v2/persistence/durableResearchStore.ts'
-    const langPath = 'libs/checkpoint-conformance/README.md'
+    const langPath = 'libs/langgraph/langgraph/pregel/_checkpoint.py'
     const recordedQueries: Array<{ query: string; fullName: string }> = []
 
     const baseSearch = createMissionProductionSearchProvider({
@@ -55,7 +55,7 @@ describe('composed retrieval per-pin discover query (T-L1, injected trees)', () 
           return {
             ok: true,
             status: 200,
-            entries: treeFromPaths([langPath, 'libs/langgraph/langgraph/pregel/_checkpoint.py']),
+            entries: treeFromPaths([langPath, 'libs/checkpoint-conformance/Makefile']),
           }
         }
         return { ok: false, status: 404, entries: [], message: `unexpected tree ${apiUrl}` }
@@ -86,7 +86,7 @@ describe('composed retrieval per-pin discover query (T-L1, injected trees)', () 
           url === babelRaw || url.includes(babelPath)
             ? Buffer.from('export const durable = 1\n', 'utf8')
             : url === langRaw || url.includes(langPath)
-              ? Buffer.from('# checkpoint conformance\n', 'utf8')
+              ? Buffer.from('# pregel checkpoint module\n', 'utf8')
               : null
         if (!body) {
           return {
@@ -158,7 +158,7 @@ describe('composed retrieval per-pin discover query (T-L1, injected trees)', () 
     assert.ok(result.passageIds.length >= 2)
     assert.deepEqual(
       recordedQueries.map((r) => r.query).sort(),
-      ['libs checkpoint', 'research v2 persistence'].sort(),
+      ['persistence durableresearchstore.ts', 'pregel checkpoint'].sort(),
     )
     assert.ok(recordedQueries.some((r) => r.fullName === 'gthgomez/Babel'))
     assert.ok(recordedQueries.some((r) => r.fullName === 'langchain-ai/langgraph'))
@@ -180,7 +180,7 @@ describe('composed retrieval per-pin discover query (T-L1, injected trees)', () 
         selected_repository_refs: undefined,
       },
     }
-    const repoPath = 'babel-cli/src/research/v2/persistence/README.md'
+    const repoPath = 'babel-cli/src/research/v2/persistence/durableResearchStore.ts'
     const recorded: string[] = []
     const baseSearch = createMissionProductionSearchProvider({
       mission,
@@ -208,7 +208,7 @@ describe('composed retrieval per-pin discover query (T-L1, injected trees)', () 
         ok: url === rawUrl || url.includes(repoPath),
         status: url === rawUrl || url.includes(repoPath) ? 200 : 404,
         contentType: 'text/plain',
-        buffer: Buffer.from('# persistence\n', 'utf8'),
+        buffer: Buffer.from('export const durable = 1\n', 'utf8'),
         bytesReceived: 16,
         truncated: false,
         requestedUrl: url,
@@ -230,7 +230,7 @@ describe('composed retrieval per-pin discover query (T-L1, injected trees)', () 
       },
       { ...examplePlanRevisionFixture, mission_id: mission.mission_id },
     )
-    const fallbackQuery = 'research v2 persistence'
+    const fallbackQuery = 'persistence durableresearchstore.ts'
     await runAdmittedComposedRetrievalIteration({
       session: {
         mission,

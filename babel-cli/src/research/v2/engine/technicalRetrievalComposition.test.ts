@@ -19,8 +19,8 @@ describe('technicalRetrievalComposition discover query', () => {
     const slots = planTechnicalRetrievalSlots(mission, '__global_fallback_unused__')
     const repoSlots = slots.filter((s) => s.kind === 'repository_pin')
     assert.equal(repoSlots.length, 2)
-    assert.equal(repoSlots[0]?.discoverQuery, 'research v2 persistence')
-    assert.equal(repoSlots[1]?.discoverQuery, 'libs checkpoint')
+    assert.equal(repoSlots[0]?.discoverQuery, 'persistence durableresearchstore.ts')
+    assert.equal(repoSlots[1]?.discoverQuery, 'pregel checkpoint')
     assert.equal(repoSlots[0]?.repositoryPin?.commit_sha, mission.pinned_target_repository?.commit_sha)
     assert.equal(
       repoSlots[1]?.repositoryPin?.commit_sha,

@@ -27,10 +27,8 @@ export function resolveRepositorySlotDiscoverQuery(
   pin: PinnedRepositoryRef,
   globalDiscoverQuery: string,
 ): string {
-  const perPin = pin.discover_query?.trim()
-  if (perPin) return perPin
-  const global = globalDiscoverQuery.trim()
-  return global
+  if (pin.discover_query !== undefined) return pin.discover_query
+  return globalDiscoverQuery.trim()
 }
 
 export function planTechnicalRetrievalSlots(
