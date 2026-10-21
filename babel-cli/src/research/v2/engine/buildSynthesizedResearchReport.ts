@@ -9,43 +9,36 @@ function supportStatus(finding: FindingRecord): FindingRecord['semantic_support'
   return finding.semantic_support
 }
 
-export function buildCitationQualifiedAnswerSummary(
+export interface VerifiedReportAssertion {
+  finding_id: string
+  assertion_text: string
+  passage_ids: readonly string[]
+}
+
+export function buildVerifiedReportAssertions(
   findings: readonly FindingRecord[],
-  modelAnswerSummary: string,
+): VerifiedReportAssertion[] {
+  return findings
+    .filter((f) => supportStatus(f)?.status === 'supported')
+    .map((f) => ({
+      finding_id: f.finding_id,
+      assertion_text: f.assertion_text,
+      passage_ids: f.passage_ids,
+    }))
+}
+
+export function buildCitationQualifiedAnswerSummary(
+  assertions: readonly VerifiedReportAssertion[],
 ): string {
-  const lines: string[] = []
-  for (const finding of findings) {
-    const status = supportStatus(finding)?.status ?? 'not_checked'
-    const cites = finding.passage_ids.join(',')
-    if (status === 'supported') {
-      lines.push(`[supported:${finding.finding_id}] ${finding.assertion_text} (passages: ${cites})`)
-      continue
-    }
-    if (status === 'contradicted') {
-      lines.push(
-        `[contradicted:${finding.finding_id}] ${finding.assertion_text} — not asserted as mission fact (passages: ${cites})`,
-      )
-      continue
-    }
-    if (status === 'insufficient') {
-      lines.push(
-        `[insufficient:${finding.finding_id}] ${finding.assertion_text} — evidence does not fully support this claim (passages: ${cites})`,
-      )
-      continue
-    }
-    lines.push(
-      `[not_checked:${finding.finding_id}] ${finding.assertion_text} — semantic review did not establish support (passages: ${cites})`,
-    )
+  if (assertions.length === 0) {
+    return 'No semantically supported findings to assert as mission facts.'
   }
-  const allSupported = findings.length > 0 && findings.every((f) => supportStatus(f)?.status === 'supported')
-  if (allSupported && modelAnswerSummary.trim()) {
-    lines.push(`Synthesis: ${modelAnswerSummary}`)
-  } else if (modelAnswerSummary.trim()) {
-    lines.push(
-      `Model synthesis (qualified; not all findings supported): ${modelAnswerSummary}`,
+  return assertions
+    .map(
+      (a) =>
+        `[supported:${a.finding_id}] ${a.assertion_text} (passages: ${a.passage_ids.join(',')})`,
     )
-  }
-  return lines.join(' ')
+    .join(' ')
 }
 
 export function buildSynthesizedResearchReport(params: {
@@ -57,45 +50,42 @@ export function buildSynthesizedResearchReport(params: {
   generatedAt: string
 }): ResearchReportV2 {
   const synthesis = SynthesizeReportOutputSchema.parse(params.modelOutput)
-  const supportedFindingIds = params.findings
-    .filter((f) => supportStatus(f)?.status === 'supported')
-    .map((f) => f.finding_id)
-  const citationPassageIds = [
-    ...new Set(
-      params.findings
-        .filter((f) => supportStatus(f)?.status === 'supported')
-        .flatMap((f) => f.passage_ids),
-    ),
-  ]
-  const findingIds = supportedFindingIds.length > 0 ? supportedFindingIds : params.findings.map((f) => f.finding_id)
+  const verifiedAssertions = buildVerifiedReportAssertions(params.findings)
+  const supportedFindingIds = verifiedAssertions.map((a) => a.finding_id)
+  const citationPassageIds = [...new Set(verifiedAssertions.flatMap((a) => a.passage_ids))]
   const hasContradiction = params.findings.some((f) => supportStatus(f)?.status === 'contradicted')
   const hasInsufficient = params.findings.some((f) => supportStatus(f)?.status === 'insufficient')
-  const hasNotChecked = params.findings.some((f) => (supportStatus(f)?.status ?? 'not_checked') === 'not_checked')
+  const hasNotChecked = params.findings.some(
+    (f) => (supportStatus(f)?.status ?? 'not_checked') === 'not_checked',
+  )
   const unanswered = params.plan.questions
     .filter((q) => q.status === 'open' || q.status === 'partially_answered')
     .map((q) => q.question_id)
 
-  const terminalState = 'partial'
+  const unverifiedModelSynthesis = synthesis.answer_summary.trim()
 
   return {
     mission_id: params.mission.mission_id,
     plan_revision_id: params.ctx.plan_revision_id,
-    terminal_state: terminalState,
-    answer_summary: buildCitationQualifiedAnswerSummary(params.findings, synthesis.answer_summary),
+    terminal_state: 'partial',
+    answer_summary: buildCitationQualifiedAnswerSummary(verifiedAssertions),
     unanswered_questions: unanswered.length > 0 ? unanswered : params.plan.questions.map((q) => q.question_id),
     coverage_notes:
-      'Report assertions are bound to reviewed findings and cited passages; unsupported or contradicted claims are explicitly qualified.',
+      'answer_summary lists only semantically supported findings with explicit finding_id bindings; free-form model synthesis is not treated as verified fact.',
     limitations: [
       ...(hasInsufficient ? ['semantic_support_insufficient'] : []),
       ...(hasContradiction ? ['semantic_support_contradicted'] : []),
       ...(hasNotChecked ? ['semantic_support_not_checked'] : []),
       ...(supportedFindingIds.length < params.findings.length ? ['report_excludes_unsupported_findings'] : []),
+      ...(unverifiedModelSynthesis
+        ? [`unverified_model_synthesis_excluded: ${unverifiedModelSynthesis.slice(0, 240)}`]
+        : []),
       'offline_or_governed_sources_only',
     ],
     source_cutoff: synthesis.stopping_reason,
     acceptance_state: 'host_admitted_model_synthesis',
     stopping_reason: synthesis.stopping_reason,
-    finding_ids: findingIds,
+    finding_ids: supportedFindingIds,
     citation_passage_ids: citationPassageIds,
     generated_at: params.generatedAt,
   }

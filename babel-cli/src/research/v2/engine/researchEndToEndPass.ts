@@ -18,6 +18,10 @@ import { buildSynthesizedResearchReport } from './buildSynthesizedResearchReport
 import { settleModelOperation } from './settleModelOperation.js'
 import { unknownUsageSettlement } from './settleExternalOperation.js'
 import type { ResearchModelInvocationResult } from '../ports/researchModelPort.js'
+import {
+  assertModelInvocationReceiptBound,
+  ModelReceiptBindingError,
+} from './validateModelInvocationReceipt.js'
 
 export interface ResearchEndToEndPassRequest {
   session: AdmittedPlanningSession
@@ -154,6 +158,27 @@ async function invokeModelPhase(
   }
 
   throwIfAborted(params.signal, `${params.kind} evidence`)
+  try {
+    assertModelInvocationReceiptBound(params.operationId, params.attemptId, result)
+  } catch (err: unknown) {
+    const message = err instanceof ModelReceiptBindingError ? err.message : String(err)
+    await settleModelOperation(
+      store,
+      ctx,
+      ctx.mission_id,
+      params.operationId,
+      params.attemptId,
+      {
+        status: 'failed',
+        operationId: params.operationId,
+        failureCategory: 'contract_violation',
+        message,
+        usageSettlement: unknownUsageSettlement(params.attemptId),
+      },
+      params.now(),
+    )
+    throw err instanceof Error ? err : new Error(message)
+  }
   await store.appendModelReceipt(ctx, result.receipt)
   await settleModelOperation(
     store,

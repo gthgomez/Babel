@@ -25,4 +25,32 @@ describe('admittedHttpGet redirect admission', () => {
     )
     assert.equal(dispatchCount, 1)
   })
+
+  it('denies forbidden mission hop before redirect dispatch (zero second requests)', async () => {
+    let dispatchCount = 0
+    await assert.rejects(
+      () =>
+        admittedHttpGet({
+          url: 'https://93.184.216.34/start',
+          maxBytes: 1024,
+          signal: new AbortController().signal,
+          env: { BABEL_WEB_ALLOW_PRIVATE: undefined },
+          assertHopAdmitted: (url) => {
+            if (url.hostname === 'evil.example') {
+              throw new AdmittedNetworkPolicyError('mission hop denied')
+            }
+          },
+          dispatchGet: async () => {
+            dispatchCount += 1
+            return {
+              status: 302,
+              headers: { location: 'https://evil.example/private' },
+              body: { buffer: Buffer.alloc(0), bytesReceived: 0, truncated: false },
+            }
+          },
+        }),
+      AdmittedNetworkPolicyError,
+    )
+    assert.equal(dispatchCount, 1)
+  })
 })

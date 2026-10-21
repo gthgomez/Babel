@@ -246,6 +246,8 @@ export async function admittedHttpGet(params: {
   signal: AbortSignal
   timeoutMs?: number
   env?: NodeJS.ProcessEnv
+  /** Invoked before each HTTP dispatch hop (initial URL and each redirect target). */
+  assertHopAdmitted?: (url: URL) => void | Promise<void>
   /** Test seam — count and stub HTTP dispatches without live network. */
   dispatchGet?: AdmittedHttpGetDispatch
 }): Promise<AdmittedHttpGetResult> {
@@ -258,6 +260,9 @@ export async function admittedHttpGet(params: {
 
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
     current = parseAdmittedHttpUrl(current.href, env)
+    if (params.assertHopAdmitted) {
+      await params.assertHopAdmitted(current)
+    }
     const target = await assertPublicNetworkTarget(current, env)
     const response = await dispatchGet(current, target, params.maxBytes, params.signal, timeoutMs)
     const status = response.status
@@ -272,6 +277,9 @@ export async function admittedHttpGet(params: {
       }
       const redirectTarget = resolveRedirectLocation(location, current)
       current = parseAdmittedHttpUrl(redirectTarget.href, env)
+      if (params.assertHopAdmitted) {
+        await params.assertHopAdmitted(current)
+      }
       redirectChain.push(current.href)
       continue
     }

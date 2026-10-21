@@ -55,6 +55,27 @@ export function validateMissionFetchAdmission(
   return null
 }
 
+/** Single HTTP hop URL admission for web sources (pre-dispatch). */
+export function validateMissionWebHopUrl(
+  hopUrl: string,
+  source: SourceRecord,
+  mission: ResearchMissionV2,
+): string | null {
+  if (source.kind !== 'web') {
+    return null
+  }
+  try {
+    const parsed = parseAdmittedHttpUrl(hopUrl)
+    if (!hostnameAllowed(parsed.hostname, mission)) {
+      return `hop ${hopUrl} is outside mission allowed_web_domains`
+    }
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err)
+    return `hop ${hopUrl} failed admission: ${message}`
+  }
+  return null
+}
+
 /** Each redirect hop must remain admitted for web sources (domain policy). */
 export function validateRedirectChainForMission(
   redirectChain: readonly string[],

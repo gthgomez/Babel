@@ -308,13 +308,30 @@ export async function runAdmittedRetrievalIteration(
     throw err instanceof Error ? err : new Error(message)
   }
 
-  await request.store.appendSource(ctx, candidate)
-  throwIfAborted(request.signal, 'source revision persistence')
-  await request.store.appendSourceRevision(ctx, revision)
-  for (const passage of passages) {
-    throwIfAborted(request.signal, 'passage persistence')
-    await request.store.appendPassage(ctx, passage)
+  try {
+    await request.store.appendSource(ctx, candidate)
+    throwIfAborted(request.signal, 'source revision persistence')
+    await request.store.appendSourceRevision(ctx, revision)
+    for (const passage of passages) {
+      throwIfAborted(request.signal, 'passage persistence')
+      await request.store.appendPassage(ctx, passage)
+    }
+  } catch (err: unknown) {
+    if (request.signal.aborted) {
+      await settleExternalOperation(
+        request.store,
+        ctx,
+        ctx.mission_id,
+        request.fetchOperationId,
+        request.fetchAttemptId,
+        { settlement: 'cancelled', message: 'evidence persistence aborted' },
+        now(),
+      )
+      throw new Error('retrieval iteration aborted during evidence persistence')
+    }
+    throw err instanceof Error ? err : new Error(String(err))
   }
+
   throwIfAborted(request.signal, 'fetch success settlement')
 
   await settleExternalOperation(

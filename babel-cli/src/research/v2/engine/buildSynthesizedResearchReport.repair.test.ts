@@ -5,6 +5,7 @@ import { examplePlanRevisionFixture, exampleTechnicalMissionFixture } from '../f
 import {
   buildCitationQualifiedAnswerSummary,
   buildSynthesizedResearchReport,
+  buildVerifiedReportAssertions,
 } from './buildSynthesizedResearchReport.js'
 
 const finding = (id: string, status: FindingRecord['semantic_support']): FindingRecord => ({
@@ -19,21 +20,56 @@ const finding = (id: string, status: FindingRecord['semantic_support']): Finding
 })
 
 describe('buildSynthesizedResearchReport repairs', () => {
-  it('qualifies model answer_summary when findings are not all supported', () => {
-    const summary = buildCitationQualifiedAnswerSummary(
-      [
-        finding('f-1', {
-          status: 'contradicted',
-          reviewer: 'r',
-          reviewer_version: '0',
-          rationale: 'x',
-          reviewed_at: '2026-10-20T00:00:00.000Z',
-        }),
-      ],
-      'This sounds definitive but cites every ID.',
+  it('does not treat free-form model synthesis as verified fact in answer_summary', () => {
+    const supported = finding('supported-1', {
+      status: 'supported',
+      reviewer: 'r',
+      reviewer_version: '0',
+      rationale: 'ok',
+      reviewed_at: '2026-10-20T00:00:00.000Z',
+    })
+    const report = buildSynthesizedResearchReport({
+      mission: exampleTechnicalMissionFixture,
+      plan: examplePlanRevisionFixture,
+      ctx: {
+        mission_id: exampleTechnicalMissionFixture.mission_id,
+        plan_revision_id: examplePlanRevisionFixture.plan_revision_id,
+        writer_generation: 1,
+      },
+      findings: [supported],
+      modelOutput: {
+        kind: 'synthesize_report',
+        answer_summary: 'This sounds definitive but is unverified prose.',
+        stopping_reason: 'test',
+      },
+      generatedAt: '2026-10-20T02:00:00.000Z',
+    })
+    assert.match(report.answer_summary, /\[supported:supported-1\]/)
+    assert.ok(!report.answer_summary.includes('unverified prose'))
+    assert.ok(
+      report.limitations.some((l) => l.startsWith('unverified_model_synthesis_excluded:')),
     )
-    assert.match(summary, /contradicted:f-1/)
-    assert.match(summary, /qualified/)
+  })
+
+  it('buildVerifiedReportAssertions only includes supported findings', () => {
+    const assertions = buildVerifiedReportAssertions([
+      finding('supported-1', {
+        status: 'supported',
+        reviewer: 'r',
+        reviewer_version: '0',
+        rationale: 'ok',
+        reviewed_at: '2026-10-20T00:00:00.000Z',
+      }),
+      finding('bad-1', {
+        status: 'insufficient',
+        reviewer: 'r',
+        reviewer_version: '0',
+        rationale: 'weak',
+        reviewed_at: '2026-10-20T00:00:00.000Z',
+      }),
+    ])
+    assert.deepEqual(assertions.map((a) => a.finding_id), ['supported-1'])
+    assert.match(buildCitationQualifiedAnswerSummary(assertions), /supported-1/)
   })
 
   it('links report finding_ids to supported findings only', () => {

@@ -12,6 +12,10 @@ import {
 } from './planFromModelOutput.js'
 import { settleModelOperation } from './settleModelOperation.js'
 import { unknownUsageSettlement } from './settleExternalOperation.js'
+import {
+  assertModelInvocationReceiptBound,
+  ModelReceiptBindingError,
+} from './validateModelInvocationReceipt.js'
 
 export interface AdmittedPlanningSession {
   mission: ResearchMissionV2
@@ -200,6 +204,31 @@ export async function runAdmittedPlanningIteration(
   const evidenceCtx: MissionWriteContext = {
     ...ctx,
     plan_revision_id: planRevision.plan_revision_id,
+  }
+  try {
+    assertModelInvocationReceiptBound(
+      request.modelOperationId,
+      request.modelAttemptId,
+      modelResult,
+    )
+  } catch (err: unknown) {
+    const message = err instanceof ModelReceiptBindingError ? err.message : String(err)
+    await settleModelOperation(
+      request.store,
+      evidenceCtx,
+      ctx.mission_id,
+      request.modelOperationId,
+      request.modelAttemptId,
+      {
+        status: 'failed',
+        operationId: request.modelOperationId,
+        failureCategory: 'contract_violation',
+        message,
+        usageSettlement: unknownUsageSettlement(request.modelAttemptId),
+      },
+      now(),
+    )
+    throw err instanceof Error ? err : new Error(message)
   }
   await request.store.appendModelReceipt(evidenceCtx, modelResult.receipt)
   await settleModelOperation(

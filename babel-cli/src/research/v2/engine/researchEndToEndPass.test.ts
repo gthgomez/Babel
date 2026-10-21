@@ -134,11 +134,19 @@ describe('research end-to-end pass (offline governed)', () => {
     assert.ok(events.some((e) => e.kind === 'model_invocation_completed'))
     assert.ok(events.some((e) => e.kind === 'terminal_receipt'))
     const terminal = events.find((e) => e.kind === 'terminal_receipt')
-    const report = (terminal?.payload as { report: { terminal_state: string; citation_passage_ids: string[] } })
-      .report
+    const report = (
+      terminal?.payload as {
+        report: {
+          terminal_state: string
+          citation_passage_ids: string[]
+          limitations: string[]
+          answer_summary: string
+        }
+      }
+    ).report
     assert.equal(report.terminal_state, 'partial')
     assert.ok(report.limitations.includes('semantic_support_insufficient'))
-    assert.ok(report.answer_summary.includes('insufficient'))
+    assert.ok(report.answer_summary.includes('supported:') || report.answer_summary.includes('No semantically'))
   })
 
   it('ProviderResearchModelBridge uses request-local callback metadata (factory path)', async () => {

@@ -250,6 +250,59 @@ describe('research retrieval loop repairs', () => {
     assert.ok(report.limitations.includes('no_model_synthesis'))
   })
 
+  it('settles fetch cancelled when aborted during evidence persistence after source write', async () => {
+    const controller = new AbortController()
+    class AbortOnRevisionStore extends InMemoryResearchStore {
+      override async appendSourceRevision(
+        ctx: Parameters<InMemoryResearchStore['appendSourceRevision']>[0],
+        revision: Parameters<InMemoryResearchStore['appendSourceRevision']>[1],
+      ) {
+        controller.abort()
+        return super.appendSourceRevision(ctx, revision)
+      }
+    }
+    const store = new AbortOnRevisionStore()
+    const session = await seedSession(store)
+    const access = new FakeSourceAccessPort([
+      {
+        source: technicalRepositoryCorpusSource,
+        body: technicalRepositoryCorpusBody,
+        mediaType: 'text/plain',
+        finalUrl: technicalRepositoryCorpusFinalUrl,
+      },
+    ])
+    const { TechnicalRepositoryFileAdapter } = await import('../profiles/technical/repositoryFileAdapter.js')
+    const inner = new TechnicalRepositoryFileAdapter()
+    const adapter: SourceAdapter = {
+      adapterId: inner.adapterId,
+      supportedKinds: inner.supportedKinds,
+      discover: (req, port) => inner.discover(req, port),
+      read: (req, port) => inner.read(req, port),
+    }
+    await assert.rejects(() =>
+      runAdmittedRetrievalIteration({
+        session,
+        store,
+        access,
+        adapter,
+        activePlan: examplePlanRevisionFixture,
+        discoverQuery: 'RESEARCH_CONTRACT',
+        searchOperationId: 'persist-cancel-search',
+        searchAttemptId: 'persist-cancel-search-att',
+        fetchOperationId: 'persist-cancel-fetch',
+        fetchAttemptId: 'persist-cancel-fetch-att',
+        dispatchedAt: FIXED_NOW,
+        signal: controller.signal,
+        now: () => FIXED_NOW,
+      }),
+    )
+    const events = await store.listEvents(session.mission.mission_id)
+    assert.equal(events.filter((e) => e.kind === 'source_recorded').length, 1)
+    assert.equal(events.filter((e) => e.kind === 'passage_recorded').length, 0)
+    const completion = completionFor(events, 'persist-cancel-fetch')
+    assert.equal(completion?.settlement, 'cancelled')
+  })
+
   it('offline report records injected offline provenance when provided', () => {
     const report = buildOfflineRetrievalReport({
       mission: exampleTechnicalMissionFixture,

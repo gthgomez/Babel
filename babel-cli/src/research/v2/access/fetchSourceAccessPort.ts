@@ -12,13 +12,14 @@ import type { ResearchMissionV2 } from '../contracts/mission.js'
 import { AdmittedNetworkPolicyError, admittedHttpGet, type AdmittedHttpGetResult } from './admittedHttpGet.js'
 import {
   validateMissionFetchAdmission,
-  validateRedirectChainForMission,
+  validateMissionWebHopUrl,
 } from './missionSourceAdmission.js'
 
 export type AdmittedHttpGetFn = (params: {
   url: string
   maxBytes: number
   signal: AbortSignal
+  assertHopAdmitted?: (url: URL) => void | Promise<void>
 }) => Promise<AdmittedHttpGetResult>
 
 export interface FetchSourceAccessPortOptions {
@@ -122,28 +123,24 @@ export class FetchSourceAccessPort implements SourceAccessPort {
     }
     const limit = this.options.maxAdmittedBytes ?? DEFAULT_MAX_ADMITTED_BYTES
     try {
+      const mission = this.options.mission
       const response = await this.admittedGet({
         url,
         maxBytes: limit,
         signal: request.signal,
+        ...(mission
+          ? {
+              assertHopAdmitted: (hopUrl: URL) => {
+                const violation = validateMissionWebHopUrl(hopUrl.href, request.source, mission)
+                if (violation) {
+                  throw new AdmittedNetworkPolicyError(violation)
+                }
+              },
+            }
+          : {}),
       })
       if (request.signal.aborted) {
         return { operationId: request.operationId, status: 'cancelled' }
-      }
-      if (this.options.mission) {
-        const redirectViolation = validateRedirectChainForMission(
-          response.redirectChain,
-          request.source,
-          this.options.mission,
-        )
-        if (redirectViolation) {
-          return {
-            operationId: request.operationId,
-            status: 'failed',
-            failureCategory: 'policy_denied',
-            message: redirectViolation,
-          }
-        }
       }
       if (!response.ok) {
         return {
