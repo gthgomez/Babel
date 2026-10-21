@@ -1,3 +1,4 @@
+# evidence_label: union v3 (10/10); positive control used injected tree but owner productionAccessPort admittedGet may run — plan persistence and retrieval intents only, not fully offline acquisition
 TAP version 13
 # Subtest: T-L1 missionRequirementsPayload slots
     # Subtest: derives repository-pin slots from the canonical mission source directory

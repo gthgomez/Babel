@@ -1,8 +1,8 @@
 {
   "schema": "research-v2-author-tap-receipt/v2",
   "label": "T-L1 invalid discover-primary planning reciprocal (A c27fb39c union)",
-  "qualification_status": "author_run_complete_union_v3",
-  "qualification_note": "v3 adds strict reported-cost assertions and valid repository-pin planning → injected retrieval path. Not full-suite; working tree not clean at capture.",
+  "qualification_status": "author_run_complete_union_v4",
+  "qualification_note": "v4 isolates positive control: tree dispatch gate stops before production admittedGet HTTP. v3 TAP preserved as evidence that reached search/fetch intents (not claimed fully offline acquisition). Not full-suite; working tree not clean at capture.",
   "a_canonical_dependency": {
     "commit": "c27fb39cc598e43043310633c04588c795380a42",
     "tree": "d8160b4bf4ca8e9c4fa0e70b36241d2ed464c7a0",
@@ -16,16 +16,26 @@
   ],
   "prior_tap_logs_preserved": [
     "review-artifacts/t-l1-invalid-slot-planning-failure.reciprocal.tap.txt (808d0613-era red runs)",
-    "review-artifacts/t-l1-invalid-slot-planning-failure.reciprocal.union-v2.tap.txt (b024ca95 9/9 union)"
+    "review-artifacts/t-l1-invalid-slot-planning-failure.reciprocal.union-v2.tap.txt (b024ca95 9/9 union)",
+    "review-artifacts/t-l1-invalid-slot-planning-failure.reciprocal-v3.tap.txt (10/10; positive control may use production admittedGet \u2014 retrieval intent only)"
   ],
-  "git_head_at_receipt_authoring": "13a62ab717647ff556d0a6bd117ab9490b9c7735",
-  "git_tree_at_receipt_authoring": "294ddaf07cffb1dff538e5a05f6f06abd204160b",
-  "test_source_commit_for_sha256_binding": "40e421c663b92547d8e223c47a8ca64e16054e33",
+  "v4_positive_control_isolation": "tL1FetchTreeStopsAfterFirstDispatch throws T_L1_RETRIEVAL_TREE_DISPATCH_OBSERVED after first injected tree; asserts source_search intent, zero source_recorded, zero source_fetch intents",
+  "superseded_v3_qualification_snapshot": {
+    "qualification_status": "author_run_complete_union_v3",
+    "qualification_note": "v3 adds strict reported-cost assertions and valid repository-pin planning with injected tree; productionAccessPort admittedGet may still run raw HTTP \u2014 evidence is plan persistence and retrieval intents, not fully offline acquisition.",
+    "git_head_at_receipt_authoring": "13a62ab717647ff556d0a6bd117ab9490b9c7735",
+    "git_tree_at_receipt_authoring": "294ddaf07cffb1dff538e5a05f6f06abd204160b",
+    "tap_log": "review-artifacts/t-l1-invalid-slot-planning-failure.reciprocal-v3.tap.txt",
+    "test_source_sha256": "dcd813bdfb44f68a487df531e2b7fe3d72de8526a94d98a7ae50b8eab561cf4b"
+  },
+  "git_head_at_receipt_authoring": "669a72c5bd1d957522580dc28e110247c72739b4",
+  "git_tree_at_receipt_authoring": "631912c4619b84ddc438c31a3cf2a6bebab93393",
+  "v4_test_isolation_commit": "a77af452e455a4ebddc8398f3703094772260ab9",
   "working_tree_status": "dirty_untracked_present",
   "working_tree_dirty_untracked_paths": 47,
   "exact_source_binding": {
     "test_source": "babel-cli/src/research/v2/fixtures/campaign/T-L1-invalidCoverageSlot.planningFailure.reciprocal.test.ts",
-    "test_source_sha256": "dcd813bdfb44f68a487df531e2b7fe3d72de8526a94d98a7ae50b8eab561cf4b",
+    "test_source_sha256": "5212b46d90e023e803f66e3118abda14ffe7b155f102a2caa0edfcf71c019731",
     "synthetic_invalid_fixture": "babel-cli/src/research/v2/fixtures/campaign/T-L1-synthetic-invalid-discover-primary-plan-questions.json",
     "synthetic_invalid_fixture_sha256": "358924f32d5a2fbdb9e7d7dab5312ad26d67b44c531445ce8699211722f0fd36",
     "synthetic_valid_fixture": "babel-cli/src/research/v2/fixtures/campaign/T-L1-synthetic-valid-repository-pin-plan-questions.json",
@@ -33,7 +43,12 @@
     "mission_fixture": "babel-cli/src/research/v2/fixtures/campaign/T-L1-mission.json",
     "mission_fixture_sha256": "04e0329df13a286c67e41d962593bbc088880648ce8fe371694b6f83de85175b"
   },
-  "tap_log": "review-artifacts/t-l1-invalid-slot-planning-failure.reciprocal-v3.tap.txt",
+  "tap_log": "review-artifacts/t-l1-invalid-slot-planning-failure.reciprocal-v4.tap.txt",
   "exit_code": 0,
-  "counts": { "tests": 10, "pass": 10, "fail": 0, "suites": 4 }
+  "counts": {
+    "tests": 10,
+    "pass": 10,
+    "fail": 0,
+    "suites": 4
+  }
 }
