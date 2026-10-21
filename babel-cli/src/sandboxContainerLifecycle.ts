@@ -29,24 +29,34 @@ function cleanupArgs(name: string): string[] {
   return ['rm', '--force', name];
 }
 
-function cleanupFailed(error: Error | null | undefined, status: number | null, stderr: string): Error | null {
+class ContainerAbsenceUncertainError extends Error {
+  constructor() { super('Owned Docker container cleanup uncertain: interrupted launch was not acknowledged and no container was found'); }
+}
+
+function cleanupFailed(error: Error | null | undefined, status: number | null, stderr: string, requireRemoval = false): Error | null {
   if (!error && status === 0) return null;
-  if (/no such container/i.test(stderr)) return null;
+  if (/no such container/i.test(stderr)) return requireRemoval ? new ContainerAbsenceUncertainError() : null;
   return new Error(`Owned Docker container cleanup failed: ${stderr.trim() || error?.message || `exit ${status}`}`);
 }
 
-export function removeOwnedContainerSync(name: string, env: NodeJS.ProcessEnv): void {
+export function removeOwnedContainerSync(name: string, env: NodeJS.ProcessEnv, requireRemoval = false): void {
   const result = spawnSync('docker', cleanupArgs(name), { env, encoding: 'utf8', windowsHide: true, timeout: 5_000 });
-  const failure = cleanupFailed(result.error, result.status, result.stderr ?? '');
+  const failure = cleanupFailed(result.error, result.status, result.stderr ?? '', requireRemoval);
   if (failure) throw failure;
 }
 
-export async function removeOwnedContainer(name: string, env: NodeJS.ProcessEnv): Promise<void> {
+export async function removeOwnedContainer(name: string, env: NodeJS.ProcessEnv, requireRemoval = false): Promise<void> {
   const args = cleanupArgs(name);
-  await new Promise<void>((resolve, reject) => {
-    execFile('docker', args, { env, encoding: 'utf8', windowsHide: true, timeout: 5_000 }, (error, _stdout, stderr) => {
-      const failure = cleanupFailed(error, error ? 1 : 0, stderr);
-      if (failure) reject(failure); else resolve();
+  for (let attempt = 0; ; attempt++) {
+    const failure = await new Promise<Error | null>((resolve) => {
+      execFile('docker', args, { env, encoding: 'utf8', windowsHide: true, timeout: 5_000 }, (error, _stdout, stderr) => {
+        resolve(cleanupFailed(error, error ? 1 : 0, stderr, requireRemoval));
+      });
     });
-  });
+    if (!failure) return;
+    if (!(failure instanceof ContainerAbsenceUncertainError) || attempt >= 2) throw failure;
+    // A stopped client may have submitted a daemon request before closure.
+    // Reconcile briefly, but never certify absence as an acknowledged removal.
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
 }

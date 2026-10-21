@@ -8,6 +8,19 @@ import { admitProjectContentRead } from '../chatReadOnly.js'
 
 const owner = { sessionId: 'session', taskOwnerId: 'task-owner', acceptedTaskId: 'task' }
 
+test('column continuation preserves following short lines and their search matches', () => {
+  const runDir = mkdtempSync(join(tmpdir(), 'babel-output-next-line-'))
+  try {
+    const artifact = registerRunOutput({ runDir, owner, content: `${'x'.repeat(20000)}\nIMPORTANT_DIAGNOSTIC`, tool: 'test_run', callId: 'continuation' })
+    const first = readRunOutput({ runDir, owner, artifactId: artifact.id })
+    const marker = /continue with start_line: (\d+), start_column: (\d+)/.exec(first)
+    assert.ok(marker)
+    const continuation = { runDir, owner, artifactId: artifact.id, startLine: Number(marker[1]), startColumn: Number(marker[2]) }
+    assert.match(readRunOutput(continuation), /2: IMPORTANT_DIAGNOSTIC/)
+    assert.match(readRunOutput({ ...continuation, query: 'IMPORTANT_DIAGNOSTIC' }), /2: IMPORTANT_DIAGNOSTIC/)
+  } finally { rmSync(runDir, { recursive: true, force: true }) }
+})
+
 test('line prefixes cannot exceed the declared evidence-body character bound', () => {
   const runDir = mkdtempSync(join(tmpdir(), 'babel-output-prefix-bound-'))
   try {

@@ -353,6 +353,8 @@ interface AsyncSpawnResult {
   processStarted: boolean;
   /** Wall-clock supervisor timeout after a successful launch. */
   timedOut: boolean;
+  /** Particular aborted client closure; daemon cleanup must follow this barrier. */
+  termination?: Promise<void>;
 }
 
 function appendCappedChunk(
@@ -527,6 +529,7 @@ export function spawnCommandAsync(
     let witnessTerminalRecorded = false;
     let timeout: NodeJS.Timeout | null = null;
     let abortSettle: NodeJS.Timeout | null = null;
+    let termination: Promise<void> | undefined;
     let releaseAbortPhysicalClose: (() => void) | undefined;
     const abortPhysicalClose = new Promise<void>((resolveAbortPhysicalClose) => {
       releaseAbortPhysicalClose = resolveAbortPhysicalClose;
@@ -564,6 +567,7 @@ export function spawnCommandAsync(
         aborted,
         processStarted,
         timedOut,
+        ...(termination ? { termination } : {}),
       });
     };
 
@@ -574,8 +578,7 @@ export function spawnCommandAsync(
       // event-loop turn so spawnSync(taskkill) cannot hold the promise microtask
       // queue — otherwise Windows cancel latency is dominated by taskkill, not
       // by AbortSignal delivery.
-      finish(1, new Error(`spawn ${executable} aborted`));
-      const termination = new Promise<void>((resolveTermination, rejectTermination) => {
+      termination = new Promise<void>((resolveTermination, rejectTermination) => {
         let complete = false;
         const closeTimeout = setTimeout(() => {
           if (complete) return;
@@ -613,6 +616,7 @@ export function spawnCommandAsync(
         options.processContext?.sessionId ?? 'unscoped',
         executionId ?? `${executable}:${child.pid ?? 'unknown'}`,
       );
+      finish(1, new Error(`spawn ${executable} aborted`));
     };
 
     if (options.timeoutMs > 0) {
@@ -1971,7 +1975,7 @@ export class SafeExecutor {
     }
 
     if (prepared.ownedContainerName && (result.error || result.status !== 0)) {
-      try { removeOwnedContainerSync(prepared.ownedContainerName, prepared.env); }
+      try { removeOwnedContainerSync(prepared.ownedContainerName, prepared.env, Boolean(result.error && result.pid > 0)); }
       catch (error) { return { exit_code: 1, stdout: result.stdout ?? '', stderr: String(error) }; }
     }
     if (result.error) {
@@ -2045,7 +2049,13 @@ export class SafeExecutor {
     }
 
     if (prepared.ownedContainerName && (result.error || result.aborted || result.status !== 0)) {
-      const cleanup = removeOwnedContainer(prepared.ownedContainerName, prepared.env);
+      const cleanup = (async () => {
+        let clientFailure: unknown;
+        try { await result.termination; } catch (error) { clientFailure = error; }
+        await removeOwnedContainer(prepared.ownedContainerName!, prepared.env,
+          Boolean(result.termination || (result.error && result.processStarted)));
+        if (clientFailure) throw clientFailure;
+      })();
       registerPendingProcessTermination(cleanup, sessionId ?? 'unscoped', prepared.ownedContainerName);
       try { await cleanup; }
       catch (error) { return { exit_code: 1, stdout: result.stdout, stderr: String(error) }; }

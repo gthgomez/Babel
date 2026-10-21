@@ -54,3 +54,33 @@ test('async cleanup preserves daemon errors and accepts only a confirmed absent 
     await lifecycle.removeOwnedContainer(name, {});
   } finally { t.mock.restoreAll(); syncBuiltinESMExports(); }
 });
+
+test('interrupted launch absence remains uncertain after bounded reconciliation', async (t) => {
+  let calls = 0;
+  t.mock.method(childProcess, 'execFile', (...args: unknown[]) => {
+    calls++;
+    const callback = args.at(-1);
+    if (typeof callback === 'function') queueMicrotask(() => callback(new Error('Docker exit 1'), '', 'No such container: owned'));
+    return new childProcess.ChildProcess();
+  });
+  syncBuiltinESMExports();
+  try {
+    await assert.rejects(lifecycle.removeOwnedContainer('babel-run-00000000-0000-0000-0000-000000000000', {}, true), /uncertain/i);
+    assert.equal(calls, 3);
+  } finally { t.mock.restoreAll(); syncBuiltinESMExports(); }
+});
+
+test('interrupted launch reconciliation removes a container created after the first absence', async (t) => {
+  let calls = 0;
+  t.mock.method(childProcess, 'execFile', (...args: unknown[]) => {
+    calls++;
+    const callback = args.at(-1);
+    if (typeof callback === 'function') queueMicrotask(() => callback(calls === 1 ? new Error('Docker exit 1') : null, '', calls === 1 ? 'No such container: owned' : ''));
+    return new childProcess.ChildProcess();
+  });
+  syncBuiltinESMExports();
+  try {
+    await lifecycle.removeOwnedContainer('babel-run-00000000-0000-0000-0000-000000000000', {}, true);
+    assert.equal(calls, 2);
+  } finally { t.mock.restoreAll(); syncBuiltinESMExports(); }
+});

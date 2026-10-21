@@ -123,12 +123,13 @@ export function readRunOutput(input: {
     const next = text.indexOf('\n', offset)
     const value = text.slice(offset, next < 0 ? text.length : next)
     line += 1
-    const match = input.query === undefined ? column - 1 : value.indexOf(input.query, column - 1)
+    const lineColumn = line === start ? column : 1
+    const match = input.query === undefined ? lineColumn - 1 : value.indexOf(input.query, lineColumn - 1)
     if (line >= start && line <= end && match >= 0 && match <= value.length) {
       if (selected.length >= MAX_ARTIFACT_LINES || chars >= MAX_ARTIFACT_CHARS) {
         truncated = true; continuation = `start_line: ${line}`; break
       }
-      const from = input.query === undefined ? match : Math.max(column - 1, match - 256)
+      const from = input.query === undefined ? match : Math.max(lineColumn - 1, match - 256)
       const prefix = `${line}: ${from > 0 ? `[column ${from + 1}] ` : ''}`
       const remaining = MAX_ARTIFACT_CHARS - chars
       if (remaining <= prefix.length) {
