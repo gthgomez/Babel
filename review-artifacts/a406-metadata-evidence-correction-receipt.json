@@ -1,0 +1,86 @@
+{
+  "schema": "research-v2-metadata-evidence-correction/v1",
+  "corrects": "review-artifacts/a406-integration-checkpoint-donor-disposition.json",
+  "prior_ui_error": {
+    "description": "Summary incorrectly recorded integrated code parent as d672384f829288a22b6060f6e6099afb4495d3ef (41ed59ff suffix); GitHub and git agree the code parent is d672384f0bd29f22fee345ae240f3b773b2be7e8.",
+    "wrong_commit_suffix_source": "41ed59ff829288a22b6060f6e6099afb4495d3ef"
+  },
+  "git_rev_parse": {
+    "commands": [
+      "git rev-parse d672384f^{commit}",
+      "git rev-parse d672384f^{tree}",
+      "git rev-parse HEAD",
+      "git rev-parse HEAD^{tree}",
+      "git rev-parse cb3d4423^{commit}",
+      "git rev-parse cb3d4423^{tree}"
+    ],
+    "stdout": {
+      "d672384f_commit": "d672384f0bd29f22fee345ae240f3b773b2be7e8",
+      "d672384f_tree": "33b30ea18277782fde12d49534592c355ae51f9f",
+      "branch_head_commit": "0ac4ded6781555e97ab6317a212813d4f1485437",
+      "branch_head_tree": "955604244cc22a14a12f589647d6a94eb28d9e02",
+      "cb3d4423_commit": "cb3d4423f3d2c38121f5d8daac52f35a54f0f073",
+      "cb3d4423_tree": "4ef0e1390b694f221829eed57c777a7de5608df1"
+    },
+    "captured_at": "2026-10-21T17:15:00.000Z"
+  },
+  "source_roles": {
+    "canonical_a_production": {
+      "commit": "eb79fd3f2e249293975409897a6ea4234f205f57",
+      "tree": "7e2145c361f627dae7413e2270012bd658901207"
+    },
+    "integration_transport_slice": {
+      "commit": "cb3d4423f3d2c38121f5d8daac52f35a54f0f073",
+      "tree": "4ef0e1390b694f221829eed57c777a7de5608df1"
+    },
+    "integration_code_parent": {
+      "commit": "d672384f0bd29f22fee345ae240f3b773b2be7e8",
+      "tree": "33b30ea18277782fde12d49534592c355ae51f9f",
+      "parent_commit": "41ed59ff829288a22b6060f6e6099afb4495d3ef"
+    },
+    "branch_metadata_tip": {
+      "commit": "0ac4ded6781555e97ab6317a212813d4f1485437",
+      "tree": "955604244cc22a14a12f589647d6a94eb28d9e02",
+      "changes_only": "review-artifacts/a406-integration-checkpoint-donor-disposition.json"
+    }
+  },
+  "proof_binding": {
+    "tested_source_equivalent_to_commit": "d672384f0bd29f22fee345ae240f3b773b2be7e8",
+    "tested_source_equivalent_to_tree": "33b30ea18277782fde12d49534592c355ae51f9f",
+    "execution_parent_at_run_time": "41ed59ff829288a22b6060f6e6099afb4495d3ef",
+    "working_tree_note": "577/577 TAP, typecheck, and build ran before commit d672384f; committed tree matches executed source (not metadata-only 0ac4ded6)."
+  },
+  "sanitized_proof_runs": [
+    {
+      "command": "cd babel-cli && npm run typecheck > /opt/cursor/artifacts/a406-discovery-diag-typecheck.log 2>&1; echo TC=$?",
+      "outer_exit_echo": "TC=0",
+      "raw_log": "/opt/cursor/artifacts/a406-discovery-diag-typecheck.log",
+      "log_tail_summary": "tsc --noEmit && tsc -p tsconfig.scripts.json --noEmit (no errors in log tail)"
+    },
+    {
+      "command": "cd babel-cli && npm run build > /opt/cursor/artifacts/a406-discovery-diag-build.log 2>&1; echo BD=$?",
+      "outer_exit_echo": "BD=0",
+      "raw_log": "/opt/cursor/artifacts/a406-discovery-diag-build.log"
+    },
+    {
+      "command": "cd babel-cli && node --import tsx --test $(cat inventory) > /opt/cursor/artifacts/a406-research-v2-full-tap-discovery-diag.log 2>&1; echo FULL=$?",
+      "outer_exit_echo": "FULL=0",
+      "inventory_file": "/opt/cursor/artifacts/a406-research-v2-test-inventory.txt",
+      "inventory_file_count": 146,
+      "raw_log": "/opt/cursor/artifacts/a406-research-v2-full-tap-discovery-diag.log",
+      "tap_summary_lines": [
+        "# tests 577",
+        "# pass 577",
+        "# fail 0"
+      ]
+    },
+    {
+      "command": "pwsh tools/check-public-content-policy.ps1 -RepoRoot . > /opt/cursor/artifacts/a406-discovery-diag-public-content-policy.log 2>&1; echo POLICY=$?",
+      "outer_exit_echo": "POLICY=0",
+      "raw_log": "/opt/cursor/artifacts/a406-discovery-diag-public-content-policy.log",
+      "log_tail_summary": "Public content policy passed."
+    }
+  ],
+  "secret_scan_qualification_note": "Release qualification uses git-tracked gitleaks scope; workspace dir scans may report gitignored paths under runs/ — no scanner finding values recorded here.",
+  "rerun_for_this_correction": false
+}

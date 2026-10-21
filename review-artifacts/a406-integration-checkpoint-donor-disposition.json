@@ -4,11 +4,21 @@
     "tree": "7e2145c361f627dae7413e2270012bd658901207",
     "role": "canonical A production (integrity, source-slot, eligible indexing)"
   },
-  "integrated_head": {
-    "commit": "d672384f",
-    "tree": "pending_tree",
-    "integration_commit_cb3d4423": "cb3d4423f3d2c38121f5d8daac52f35a54f0f073"
+  "integration_transport_commit": {
+    "commit": "cb3d4423f3d2c38121f5d8daac52f35a54f0f073",
+    "tree": "4ef0e1390b694f221829eed57c777a7de5608df1"
   },
+  "integration_code_parent": {
+    "commit": "d672384f0bd29f22fee345ae240f3b773b2be7e8",
+    "tree": "33b30ea18277782fde12d49534592c355ae51f9f",
+    "parent_commit": "41ed59ff829288a22b6060f6e6099afb4495d3ef"
+  },
+  "branch_metadata_tip": {
+    "commit": "0ac4ded6781555e97ab6317a212813d4f1485437",
+    "tree": "955604244cc22a14a12f589647d6a94eb28d9e02",
+    "note": "Donor-map metadata only; proof runs bound to integration_code_parent tree"
+  },
+  "metadata_evidence_correction": "review-artifacts/a406-metadata-evidence-correction-receipt.json",
   "pr": 406,
   "branch": "cursor/research-v2-post-review-settlement-fc31",
   "donors": {
@@ -77,11 +87,15 @@
     }
   },
   "proof_artifacts": {
+    "bound_to_commit": "d672384f0bd29f22fee345ae240f3b773b2be7e8",
+    "bound_to_tree": "33b30ea18277782fde12d49534592c355ae51f9f",
+    "execution_parent_at_run_time": "41ed59ff829288a22b6060f6e6099afb4495d3ef",
+    "sanitized_receipt": "review-artifacts/a406-metadata-evidence-correction-receipt.json",
     "typecheck_log": "/opt/cursor/artifacts/a406-discovery-diag-typecheck.log",
     "build_log": "/opt/cursor/artifacts/a406-discovery-diag-build.log",
     "research_v2_test_inventory": "/opt/cursor/artifacts/a406-research-v2-test-inventory.txt",
     "research_v2_test_file_count": 146,
-    "research_v2_full_tap_summary": "577 tests, 577 pass, 0 fail",
+    "research_v2_full_tap_summary": "577 tests, 577 pass, 0 fail; outer exit FULL=0",
     "research_v2_full_tap_log": "/opt/cursor/artifacts/a406-research-v2-full-tap-discovery-diag.log",
     "public_content_policy_log": "/opt/cursor/artifacts/a406-discovery-diag-public-content-policy.log",
     "local_secret_scan_note": "Workspace dir scan may flag gitignored runs/chat-sessions; git-mode gitleaks on tracked history is the release qualification scope"
