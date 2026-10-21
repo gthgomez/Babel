@@ -80,6 +80,10 @@
     "inspect_json": "review-artifacts/g-l3-live-diagnostic-ba45f328-inspect.json",
     "report_json": "review-artifacts/g-l3-live-diagnostic-ba45f328-report.json",
     "passages_cited_text": "review-artifacts/g-l3-live-diagnostic-ba45f328-passages.json",
-    "store_extract": "review-artifacts/g-l3-live-diagnostic-ba45f328-store-extract.json"
+    "store_extract": "review-artifacts/g-l3-live-diagnostic-ba45f328-store-extract.json",
+    "store_extract_correction": "review-artifacts/g-l3-live-diagnostic-ba45f328-store-extract-correction.json",
+    "original_evidence_subset": "review-artifacts/g-l3-live-diagnostic-ba45f328-original-evidence-subset.json",
+    "extract_original_subset_script": "review-artifacts/g-l3-live-diagnostic-ba45f328-extract-original-subset.mjs",
+    "web_ref_1_retention_audit": "review-artifacts/g-l3-live-diagnostic-ba45f328-web-ref-1-retention.json"
   }
 }

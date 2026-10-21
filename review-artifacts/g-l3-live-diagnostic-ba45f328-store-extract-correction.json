@@ -1,0 +1,13 @@
+{
+  "schema": "research-v2-g-l3-store-extract-correction/v1",
+  "supersedes_nothing": true,
+  "prior_artifact_preserved": "review-artifacts/g-l3-live-diagnostic-ba45f328-store-extract.json",
+  "correction_reason": "Initial store-extract used non-schema fields (question_ids, statement, claim) that are empty on FindingRecord; judgments live on semantic_support, question_coverage, and plan_obligation_coverage with assertion_text.",
+  "authoritative_original_subset": "review-artifacts/g-l3-live-diagnostic-ba45f328-original-evidence-subset.json",
+  "extraction_script": "review-artifacts/g-l3-live-diagnostic-ba45f328-extract-original-subset.mjs",
+  "snapshot_sha256": "59966f5e941d8484cc67937d4435a8458ac69eb8690c6f4f6fab2464a13b35c1",
+  "audit_notes": {
+    "html_4_content": "Passage cli-run-fetch-wg1-ba51ff60--web-ref-0:html:4 is downloads-page section 'Active Python releases' (includes link text to Python Developer's Guide); it is not admitted devguide.python.org content. Original incorrect model assertions referencing a devguide table while citing only web-ref-0 passages are preserved unchanged in findings_final.",
+    "web_ref_1_body_retention": "see review-artifacts/g-l3-live-diagnostic-ba45f328-web-ref-1-retention.json"
+  }
+}

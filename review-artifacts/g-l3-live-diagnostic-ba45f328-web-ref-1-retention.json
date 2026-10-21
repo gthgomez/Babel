@@ -1,0 +1,22 @@
+{
+  "schema": "research-v2-g-l3-web-ref-1-retention-audit/v1",
+  "mission_id": "mission-g-l3-validation-ba45f328-001",
+  "operation_id": "cli-run-fetch-wg1-ba51ff60--web-ref-1",
+  "requested_url": "https://devguide.python.org/versions/",
+  "final_url": "https://devguide.python.org/versions/",
+  "http_status": "unknown",
+  "media_type": "text/html",
+  "charset_encoding": "unknown",
+  "admitted_decoded_byte_length_reported": 125309,
+  "revision_recorded_in_store": false,
+  "source_recorded_in_store": false,
+  "content_hash_in_store": "unknown",
+  "body_bytes_retained_locally": false,
+  "body_sha256": "unknown",
+  "heading_extraction_shape_retained": false,
+  "failure_category": "extraction_failed",
+  "failure_message": "no heading-bounded sections extracted from admitted HTML",
+  "evidence_source": "research-store.snapshot.json external_operation_completed (frozen); no refetch",
+  "local_snapshot_path": "/tmp/babel-g-l3-store-ba45f328-1792589570/research-store.snapshot.json",
+  "note": "Diagnostics record decode length only; HTML body and heading structure were not persisted after extraction failure."
+}
