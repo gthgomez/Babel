@@ -87,6 +87,7 @@
     "web_ref_1_retention_audit": "review-artifacts/g-l3-live-diagnostic-ba45f328-web-ref-1-retention.json",
     "NEW_devguide_admitted_fetch_provenance": "review-artifacts/g-l3-NEW-devguide-admitted-fetch-provenance-ba45f328.json",
     "NEW_devguide_heading_structure_fixture": "review-artifacts/g-l3-NEW-devguide-heading-structure-fixture-ba45f328.json",
+    "NEW_devguide_repaired_adapter_replay_5628e90e": "review-artifacts/g-l3-NEW-devguide-repaired-adapter-replay-5628e90e.json",
     "original_evidence_subset_git_path": "review-artifacts/g-l3-live-diagnostic-ba45f328-original-evidence-subset.json"
   }
 }
