@@ -62,6 +62,8 @@ describe('research v2 CLI routes (offline injected)', () => {
         },
       })
       assert.equal(payload?.continuation_resumed_count, 1)
+      const withRun = payload as { continuation_run?: { terminal_report_emitted?: boolean } }
+      assert.equal(withRun.continuation_run?.terminal_report_emitted, true)
     } finally {
       await rm(store, { recursive: true, force: true })
     }

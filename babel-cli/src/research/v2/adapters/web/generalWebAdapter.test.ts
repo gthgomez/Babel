@@ -96,6 +96,45 @@ test('GeneralWebAdapter.discover: maps admitted search hits to web candidates', 
   assert.equal(result.candidates[0]?.source_id, hitSource.source_id)
 })
 
+test('GeneralWebAdapter.discover: falls back to document search when web hits empty', async () => {
+  const docSource: SourceRecord = {
+    source_id: 'src-doc-fallback',
+    kind: 'document',
+    canonical_key: 'fixture:pdf',
+    observed_urls: ['https://example.invalid/sample.pdf'],
+  }
+  let searchCalls = 0
+  const port: SourceAccessPort = {
+    async search(request) {
+      searchCalls++
+      if (request.sourceClasses.includes('web')) {
+        return { operationId: request.operationId, status: 'ok', hits: [] }
+      }
+      return {
+        operationId: request.operationId,
+        status: 'ok',
+        hits: [{ source: docSource, snippet: 'pdf', completeness: 'snippet' }],
+      }
+    },
+    async fetchContent(request) {
+      return {
+        operationId: request.operationId,
+        status: 'failed',
+        failureCategory: 'policy_denied',
+        message: 'discover-only',
+      }
+    },
+  }
+  const result = await new GeneralWebAdapter().discover(
+    { operationId: 'discover-fallback', query: 'sample pdf', signal: AbortSignal.timeout(5_000) },
+    port,
+  )
+  assert.equal(searchCalls, 2)
+  assert.equal(result.status, 'ok')
+  if (result.status !== 'ok') return
+  assert.equal(result.candidates[0]?.kind, 'document')
+})
+
 test('GeneralWebAdapter: adapter id and kinds', () => {
   const a = new GeneralWebAdapter()
   assert.equal(a.adapterId, GENERAL_WEB_ADAPTER_ID)

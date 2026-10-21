@@ -11,6 +11,7 @@ import {
   createPinnedRepositoryFileSearchProvider,
   type FetchPinnedRepositoryTree,
 } from './pinnedRepositoryFileSearchProvider.js'
+import { createMissionSelectedDocumentSearchProvider } from './missionSelectedDocumentSearchProvider.js'
 
 export interface MissionProductionSearchProviderOptions {
   mission: ResearchMissionV2
@@ -28,6 +29,7 @@ export function createMissionProductionSearchProvider(
   const repository = createPinnedRepositoryFileSearchProvider({
     ...(options.fetchRepositoryTree ? { fetchTree: options.fetchRepositoryTree } : {}),
   })
+  const documents = createMissionSelectedDocumentSearchProvider()
   const env = options.env ?? process.env
   const providerId = resolveProductionSearchProviderId(env)
   const web =
@@ -40,6 +42,7 @@ export function createMissionProductionSearchProvider(
   const limitations = [
     ...(web?.limitations ?? ['babel_configured_web_search_unavailable']),
     'pinned_repository_tree_listing_requires_public_github_api',
+    'document_discovery_limited_to_mission_selected_document_refs',
   ]
 
   return {
@@ -47,10 +50,14 @@ export function createMissionProductionSearchProvider(
     async search(request: SourceSearchRequest, mission: ResearchMissionV2): Promise<SourceSearchResult> {
       const wantsRepo = request.sourceClasses.includes('repository_file')
       const wantsWeb = request.sourceClasses.includes('web')
-      if (wantsRepo && !wantsWeb) {
+      const wantsDocument = request.sourceClasses.includes('document')
+      if (wantsRepo && !wantsWeb && !wantsDocument) {
         return repository.search(request, mission)
       }
-      if (wantsWeb && !wantsRepo) {
+      if (wantsDocument && !wantsWeb && !wantsRepo) {
+        return documents.search(request, mission)
+      }
+      if (wantsWeb && !wantsRepo && !wantsDocument) {
         if (!web) {
           return {
             operationId: request.operationId,

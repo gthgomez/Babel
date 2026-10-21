@@ -18,6 +18,7 @@ import {
   runResearchV2EnginePassOnOwner,
   runResearchV2MissionWithOwnerSession,
 } from './researchV2MissionRun.js'
+import { fixtureModelForOfflineRun } from './researchV2FixtureRunModel.js'
 
 export async function runResearchV2ProductionRun(options: {
   store: string
@@ -188,6 +189,7 @@ export async function resumeResearchV2Continuation(options: {
         discoverQuery,
         ...(options.model ? { model: options.model } : {}),
         injectedOffline: options.injectedOffline === true,
+        activePlanRevisionId: options.planRevisionId,
         planRevisionId: `${options.planRevisionId}-continued`,
         signal,
       })
@@ -248,7 +250,10 @@ export async function runResearchV2CancelResumeJourney(options: {
     const generationBefore = ctx.writer_generation
     await owner.close()
 
-    owner = await ResearchEngineSession.openOwner({ storeDirectory: options.store, model })
+    owner = await ResearchEngineSession.openOwner({
+      storeDirectory: options.store,
+      model: fixtureModelForOfflineRun(),
+    })
     const resumed = await owner.resumeResearchContinuation({
       mission_id: ctx.mission_id,
       expected_writer_generation: generationBefore,
@@ -256,6 +261,21 @@ export async function runResearchV2CancelResumeJourney(options: {
       acknowledged_plan_revision_id: examplePlanRevisionFixture.plan_revision_id,
       acknowledged_terminal_state: 'cancelled',
     })
+    const cancelController = new AbortController()
+    const cancelWatcher = owner.watchExternalCancelRequests(cancelController)
+    const continuationRun = await runResearchV2EnginePassOnOwner({
+      owner,
+      mission: exampleTechnicalMissionFixture,
+      handle: resumed,
+      discoverQuery: 'RESEARCH_CONTRACT',
+      injectedOffline: true,
+      activePlanRevisionId: examplePlanRevisionFixture.plan_revision_id,
+      planRevisionId: `${examplePlanRevisionFixture.plan_revision_id}-continued`,
+      signal: cancelController.signal,
+      model: fixtureModelForOfflineRun(),
+    })
+    cancelWatcher.stop()
+
     const inspect = await ResearchEngineSession.openInspect(options.store)
     const events = await inspect.listEvents(ctx.mission_id)
     const payload = {
@@ -263,9 +283,11 @@ export async function runResearchV2CancelResumeJourney(options: {
       store_directory: options.store,
       mission_id: ctx.mission_id,
       resumed_writer_generation: resumed.writer_generation,
+      continuation_run: continuationRun,
       terminal_receipt_count: events.filter((e) => e.kind === 'terminal_receipt').length,
       continuation_resumed_count: events.filter((e) => e.kind === 'research_continuation_resumed').length,
       maps_to_acceptance_scenario: 'X-L1',
+      note: 'Resume admitted and engine pass continued without re-appending mission.',
     }
     options.print(payload, JSON.stringify(payload, null, 2))
     await owner.close()

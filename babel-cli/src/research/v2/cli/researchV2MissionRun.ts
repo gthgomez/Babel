@@ -121,11 +121,14 @@ export async function runResearchV2EnginePassOnOwner(options: {
   handle: ResearchStoreMissionHandle
   discoverQuery: string
   planRevisionId?: string
+  activePlanRevisionId?: string
   injectedOffline?: boolean
   model?: ResearchModelPort
   signal?: AbortSignal
   webSearchTransport?: BabelWebSearchTransport
   fetchRepositoryTree?: FetchPinnedRepositoryTree
+  /** When continuing after resume, the store's current active plan revision id. */
+  activePlanRevisionId?: string
 }): Promise<Omit<ResearchV2MissionRunResult, 'session_id'>> {
   const injectedOffline = options.injectedOffline === true
   const resolvedModel = injectedOffline
@@ -164,7 +167,11 @@ export async function runResearchV2EnginePassOnOwner(options: {
   const signal = options.signal ?? new AbortController().signal
 
   const result = await runAdmittedResearchEndToEndPass({
-    session: { mission: options.mission, handle: options.handle },
+    session: {
+      mission: options.mission,
+      handle: options.handle,
+      ...(options.activePlanRevisionId ? { activePlanRevisionId: options.activePlanRevisionId } : {}),
+    },
     store: options.owner.store,
     model: resolvedModel,
     access,
@@ -230,6 +237,7 @@ export async function runResearchV2MissionWithOwnerSession(
       injectedOffline,
       signal,
       ...(options.planRevisionId ? { planRevisionId: options.planRevisionId } : {}),
+      ...(options.activePlanRevisionId ? { activePlanRevisionId: options.activePlanRevisionId } : {}),
       ...(options.model ? { model: options.model } : {}),
       ...(options.webSearchTransport ? { webSearchTransport: options.webSearchTransport } : {}),
       ...(options.fetchRepositoryTree ? { fetchRepositoryTree: options.fetchRepositoryTree } : {}),
