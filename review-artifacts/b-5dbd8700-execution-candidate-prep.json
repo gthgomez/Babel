@@ -1,0 +1,40 @@
+{
+  "schema": "research-v2-b-execution-candidate/v1",
+  "prepared_at": "2026-10-21T10:43:55.573Z",
+  "offline_only": true,
+  "no_live_model_dispatch": true,
+  "integrated_a_checkpoint": {
+    "pr": 406,
+    "head": "5dbd870070bba0a5d0ba16b8b2feed203afcebf3"
+  },
+  "b_branch": "cursor/agent-b-general-fixtures-f617",
+  "git": {
+    "head": "324b9009da6653857ac8f8d2337a99247cac256f",
+    "tree": "9ec6a6a57a6cd9ca94579e626afae3c402057d8a"
+  },
+  "attempt4_evidence_blob": "b772baa5edda219b929b90a54a522fb9c45f17de",
+  "bin_absolute": "/workspace/babel-cli/bin/babel.js",
+  "bin_git_blob": "22e4ff8b3177bd9890cb468fd426ff26af01c7c8",
+  "production_modules_git_blob": {
+    "researchRetrievalLoop_ts": "9c21bf63ddfd3974d7a24ddf73bf5ad3de0341d6",
+    "researchV2MissionRun_ts": "532c2e0aa087c963727b9f7ccab6f3a657e98885",
+    "providerResearchModelBridge_ts": "b0b6f76960c90cf17b7870c33c49003225fc3e82"
+  },
+  "tsx_resolve_absolute": {
+    "researchRetrievalLoop": "/workspace/babel-cli/src/research/v2/engine/researchRetrievalLoop.ts",
+    "researchV2MissionRun": "/workspace/babel-cli/src/research/v2/cli/researchV2MissionRun.ts",
+    "providerResearchModelBridge": "/workspace/babel-cli/src/research/v2/model/providerResearchModelBridge.ts"
+  },
+  "dist_after_build_git_blob": {
+    "researchRetrievalLoop_js": "8a5103b12bc869dd5b7f2ba478596cc59f4b097d",
+    "researchV2MissionRun_js": "fd1b26ffbd044ed26738c7534765ba255a34cfd2",
+    "providerResearchModelBridge_js": "b8e47c183d60382ab630fc897e2928527e6f37cd"
+  },
+  "proof": {
+    "typecheck_exit": 0,
+    "build_exit": 0,
+    "focused_tap": "review-artifacts/b-5dbd8700-focused-production.tap.txt (30/30)",
+    "g_l2_preflight": "npm --prefix babel-cli run test:research-v2-g-l2-preflight",
+    "g_l3_preflight": "npm --prefix babel-cli run test:research-v2-g-l3-preflight"
+  }
+}
