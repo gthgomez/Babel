@@ -2,13 +2,16 @@
   "schema": "research-v2-author-tap-receipt/v1",
   "label": "T-L1 invalid discover-primary planning failure reciprocal (synthetic model, production runner)",
   "qualification_status": "author_run_incomplete",
-  "qualification_note": "Baseline reciprocal tests pass; acceptance settlement test is intentionally red until A canonical slot/settlement repair (A8930 class). Not a full-suite or CI-green claim.",
-  "git_head_at_receipt_authoring": "08bb180633de5ad45b019fcf4e30f13507d61deb",
+  "qualification_note": "Baseline trace + durable-subset tests pass. Two acceptance tests remain red until A repairs missionRequirementsPayload slot directory and planning settlement before buildPlanRevisionFromPlanQuestions mapping. Not CI-green / not full-suite.",
+  "git_head_at_receipt_authoring": "3657009c",
   "working_tree_dirty_untracked_paths": 48,
-  "timing_provenance": "TAP captured at commit; HEAD/hash binding updated on same commit",
+  "canonical_defects_under_test": [
+    "missionRequirementsPayload supplies discover-primary instead of missionCoverageSourceSlots for T-L1 technical mission",
+    "buildPlanRevisionFromPlanQuestions throws before planning external_operation_completed settlement"
+  ],
   "exact_source_binding": {
     "test_source": "babel-cli/src/research/v2/fixtures/campaign/T-L1-invalidCoverageSlot.planningFailure.reciprocal.test.ts",
-    "test_source_sha256": "66cf6ae6b9a114098cc9c6a3647e00c98b10ff37da37bedf904ddc4ccdbb994e",
+    "test_source_sha256": "c28e1fd501278287afadd2155a286bd7ebe90069cf853e33d850f0102b219916",
     "synthetic_fixture": "babel-cli/src/research/v2/fixtures/campaign/T-L1-synthetic-invalid-discover-primary-plan-questions.json",
     "synthetic_fixture_sha256": "358924f32d5a2fbdb9e7d7dab5312ad26d67b44c531445ce8699211722f0fd36",
     "mission_fixture": "babel-cli/src/research/v2/fixtures/campaign/T-L1-mission.json",
@@ -16,7 +19,7 @@
   },
   "tap_log": "review-artifacts/t-l1-invalid-slot-planning-failure.reciprocal.tap.txt",
   "exit_code": 1,
-  "counts": { "tests": 3, "pass": 2, "fail": 1, "suites": 1 },
+  "counts": { "tests": 5, "pass": 3, "fail": 2, "suites": 1 },
   "c_diagnostic_reference": "review-artifacts/t-l1-invalid-slot-planning-failure-REFERENCE-event-kinds.json",
   "not_vendored": "C #408 fe9bf5ef t-l1-live-diagnostic-8930f929-store-subset.json original capture"
 }

@@ -16,5 +16,9 @@
     "passage_recorded",
     "finding_issued"
   ],
-  "failure_message_substring": "coverage obligation source_slot discover-primary is not a mission retrieval slot"
+  "failure_message_substring": "coverage obligation source_slot discover-primary is not a mission retrieval slot",
+  "native_trace_defects_under_test": [
+    "missionRequirementsPayload advertises discover-primary for repository-only technical missions instead of missionCoverageSourceSlots directory",
+    "buildPlanRevisionFromPlanQuestions throws PlanCoverageObligationValidationError before planning external_operation_completed settlement"
+  ]
 }

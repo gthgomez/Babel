@@ -18,7 +18,12 @@ import { openAdmittedInspectStore } from '../../control/researchStoreAdmission.j
 import { ResearchMissionV2Schema } from '../../contracts/mission.js'
 import { parseValidatedModelOutput } from '../../contracts/modelOutputs.js'
 import { missionCoverageSourceSlots } from '../../engine/missionCoverageSourceSlots.js'
+import { missionRequirementsPayload } from '../../engine/planFromModelOutput.js'
 import { ProviderResearchModelBridge } from '../../model/providerResearchModelBridge.js'
+import type {
+  ResearchModelInvocationRequest,
+  ResearchModelPort,
+} from '../../ports/researchModelPort.js'
 import { ResearchEngineSession } from '../../engine/researchEngineSession.js'
 
 const campaignDir = dirname(fileURLToPath(import.meta.url))
@@ -43,6 +48,20 @@ function loadSyntheticFixture() {
     raw_model_payload: Record<string, unknown>
   }
   return raw
+}
+
+function wrapModelWithPlanQuestionsInputCapture(
+  inner: ResearchModelPort,
+  onPlanQuestionsInput: (input: Record<string, unknown>) => void,
+): ResearchModelPort {
+  return {
+    async invokeStructured(request: ResearchModelInvocationRequest) {
+      if (request.kind === 'plan_questions') {
+        onPlanQuestionsInput(request.input as Record<string, unknown>)
+      }
+      return inner.invokeStructured(request)
+    },
+  }
 }
 
 function tL1ProductionShapedModel(): ProviderResearchModelBridge {
@@ -74,7 +93,11 @@ function tL1ProductionShapedModel(): ProviderResearchModelBridge {
   })
 }
 
-async function runSyntheticInvalidSlotMission(dir: string, planRevisionId: string) {
+async function runSyntheticInvalidSlotMission(
+  dir: string,
+  planRevisionId: string,
+  model: ResearchModelPort = tL1ProductionShapedModel(),
+) {
   const mission = ResearchMissionV2Schema.parse(JSON.parse(readFileSync(missionPath, 'utf8')))
   const slotError =
     /coverage obligation source_slot discover-primary is not a mission retrieval slot/
@@ -85,7 +108,7 @@ async function runSyntheticInvalidSlotMission(dir: string, planRevisionId: strin
         mission,
         discoverQuery: 'repository_file persistence checkpoint',
         planRevisionId,
-        model: tL1ProductionShapedModel(),
+        model,
       }),
     (err: unknown) => {
       const message = err instanceof Error ? err.message : String(err)
@@ -101,6 +124,16 @@ function listEventKinds(events: readonly { kind: string }[]): string[] {
 }
 
 describe('T-L1 invalid discover-primary planning failure reciprocal (production runner, synthetic model)', () => {
+  it('native trace baseline: missionRequirementsPayload lists discover-primary instead of repository-pin slots on T-L1', () => {
+    const mission = ResearchMissionV2Schema.parse(JSON.parse(readFileSync(missionPath, 'utf8')))
+    const canonicalSlots = missionCoverageSourceSlots(mission)
+    const requirements = missionRequirementsPayload(mission)
+    assert.equal(canonicalSlots.includes('discover-primary'), false)
+    assert.ok(canonicalSlots.every((id) => id.startsWith('repository-pin-')))
+    assert.deepEqual(requirements.coverage_source_slots, ['discover-primary'])
+    assert.notDeepEqual(requirements.coverage_source_slots, canonicalSlots)
+  })
+
   it('synthetic envelope parses; mission slots exclude discover-primary', () => {
     const fixture = loadSyntheticFixture()
     assert.match(fixture._provenance, /Synthetic structurally valid/)
@@ -176,7 +209,35 @@ describe('T-L1 invalid discover-primary planning failure reciprocal (production 
     }
   })
 
-  it('acceptance: exactly-once failed or uncertain model settlement preserves request-local usage (red until canonical repair)', async () => {
+  it('acceptance: actual planner input advertises canonical repository-pin slots, not discover-primary (red until missionRequirementsPayload repair)', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'babel-t-l1-planner-input-'))
+    let plannerInput: Record<string, unknown> | undefined
+    const model = wrapModelWithPlanQuestionsInputCapture(tL1ProductionShapedModel(), (input) => {
+      plannerInput = input
+    })
+    try {
+      const mission = await runSyntheticInvalidSlotMission(
+        dir,
+        'plan-t-l1-planner-input-canonical',
+        model,
+      )
+      assert.ok(plannerInput, 'plan_questions invoke must reach production planner input')
+      const canonicalSlots = missionCoverageSourceSlots(mission)
+      assert.deepEqual(
+        plannerInput.coverage_source_slots,
+        canonicalSlots,
+        'planner input must expose mission retrieval slot directory (repository-pin/document/web), not discover-primary',
+      )
+      assert.equal(
+        (plannerInput.coverage_source_slots as string[]).includes('discover-primary'),
+        false,
+      )
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('acceptance: planning slot validation failure settles model intent exactly once with preserved usage (red until buildPlanRevision settlement repair)', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'babel-t-l1-invalid-slot-settlement-'))
     const fixture = loadSyntheticFixture()
     const usageMeta = fixture.request_local_usage_metadata
@@ -187,7 +248,7 @@ describe('T-L1 invalid discover-primary planning failure reciprocal (production 
       assert.equal(
         completions.length,
         1,
-        'canonical gap: planning slot rejection must settle the model intent exactly once',
+        'canonical gap: logical slot validation throw must still settle planning model intent exactly once (not zero, not a second mapper-phase completion)',
       )
       const completion = (completions[0]!.payload as {
         completion: {
@@ -210,6 +271,11 @@ describe('T-L1 invalid discover-primary planning failure reciprocal (production 
         assert.equal(completion.usage_settlement.cost.amount_usd, usageMeta.estimated_cost_usd)
       }
       assert.equal(events.filter((e) => e.kind === 'model_invocation_completed').length, 0)
+      assert.equal(
+        events.filter((e) => e.kind === 'external_operation_intent').length,
+        1,
+        'extract/review/synthesis invokeModelPhase paths are not reached; only planning intent',
+      )
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
