@@ -1,3 +1,4 @@
+import type { SourceAcquisitionDiagnostics } from '../contracts/sourceAcquisitionDiagnostics.js'
 import type { PassageRecord } from '../contracts/passages.js'
 import type { SourceRecord, SourceRevision } from '../contracts/sources.js'
 import type { SourceClass, SourceAccessPort } from './sourceAccessPort.js'
@@ -15,6 +16,7 @@ export type SourceDiscoverResult =
       status: 'failed'
       failureCategory: string
       message: string
+      acquisition_diagnostics?: SourceAcquisitionDiagnostics
     }
   | { operationId: string; status: 'cancelled' }
 
@@ -37,6 +39,7 @@ export type SourceAdapterReadResult =
       status: 'failed'
       failureCategory: string
       message: string
+      acquisition_diagnostics?: SourceAcquisitionDiagnostics
     }
   | { operationId: string; status: 'cancelled' }
 

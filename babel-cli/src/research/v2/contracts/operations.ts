@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { IsoDateTimeSchema, RecordIdSchema, UsageSettlementSchema } from './common.js'
+import { SourceAcquisitionDiagnosticsSchema } from './sourceAcquisitionDiagnostics.js'
 
 export const ExternalOperationKindSchema = z.enum([
   'source_search',
@@ -35,6 +36,7 @@ export const ExternalOperationCompletionSchema = z
     usage_settlement: UsageSettlementSchema.optional(),
     failure_category: z.string().optional(),
     message: z.string().optional(),
+    acquisition_diagnostics: SourceAcquisitionDiagnosticsSchema.optional(),
   })
   .strict()
 

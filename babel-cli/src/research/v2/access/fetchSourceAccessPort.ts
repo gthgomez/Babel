@@ -26,6 +26,13 @@ import {
   validateMissionFetchAdmission,
   validateMissionWebHopUrl,
 } from './missionSourceAdmission.js'
+import type { SourceAcquisitionDiagnostics } from '../contracts/sourceAcquisitionDiagnostics.js'
+import {
+  SourceAcquisitionDiagnosticsSchema,
+  sanitizeAcquisitionUrl,
+} from '../contracts/sourceAcquisitionDiagnostics.js'
+import { acquisitionDiagnosticsFromHttpGet } from './sourceAcquisitionDiagnosticsFromHttp.js'
+import type { SourceAccessFailureCategory } from '../ports/sourceAccessTypes.js'
 
 export type AdmittedHttpGetFn = (params: {
   url: string
@@ -52,6 +59,32 @@ function sha256(bytes: Buffer): string {
 
 function issueRevisionId(sourceId: string, contentHash: string): string {
   return `rev-${sourceId}-${contentHash.slice(0, 16)}`
+}
+
+function minimalAcquisitionDiagnostics(
+  attemptedUrl: string,
+  sourceId: string,
+): SourceAcquisitionDiagnostics {
+  return SourceAcquisitionDiagnosticsSchema.parse({
+    evidence_role: 'attempted_source',
+    source_id: sourceId,
+    attempted_url: sanitizeAcquisitionUrl(attemptedUrl),
+  })
+}
+
+function failedFetch(
+  operationId: string,
+  failureCategory: SourceAccessFailureCategory,
+  message: string,
+  acquisition_diagnostics?: SourceAcquisitionDiagnostics,
+): SourceFetchResult {
+  return {
+    operationId,
+    status: 'failed',
+    failureCategory,
+    message,
+    ...(acquisition_diagnostics ? { acquisition_diagnostics } : {}),
+  }
 }
 
 function policyFailureCategory(err: unknown): SourceFetchResult {
@@ -194,21 +227,27 @@ export class FetchSourceAccessPort implements SourceAccessPort {
         return { operationId: request.operationId, status: 'cancelled' }
       }
       if (!response.ok) {
-        return {
-          operationId: request.operationId,
-          status: 'failed',
-          failureCategory: 'network_error',
-          message: `HTTP ${response.status}`,
-        }
+        return failedFetch(
+          request.operationId,
+          'network_error',
+          `HTTP ${response.status}`,
+          acquisitionDiagnosticsFromHttpGet(response, {
+            attemptedUrl: fetchUrl,
+            sourceId: request.source.source_id,
+          }),
+        )
       }
       const admittedBytes = response.buffer
       if (admittedBytes.length === 0) {
-        return {
-          operationId: request.operationId,
-          status: 'failed',
-          failureCategory: 'empty_body',
-          message: 'source has no retrievable bytes',
-        }
+        return failedFetch(
+          request.operationId,
+          'empty_body',
+          'source has no retrievable bytes',
+          acquisitionDiagnosticsFromHttpGet(response, {
+            attemptedUrl: fetchUrl,
+            sourceId: request.source.source_id,
+          }),
+        )
       }
       const decodeTruncated = response.transportCoding?.decoded_truncated === true
       const truncated = response.truncated || decodeTruncated

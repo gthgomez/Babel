@@ -1,3 +1,4 @@
+import { acquisitionDiagnosticsFromAdmitted } from '../../contracts/sourceAcquisitionDiagnostics.js'
 import type { SourceRecord } from '../../contracts/sources.js'
 import type { SourceAccessPort, SourceClass } from '../../ports/sourceAccessPort.js'
 import type {
@@ -131,6 +132,7 @@ export class GeneralWebAdapter implements SourceAdapter {
         status: 'failed',
         failureCategory,
         message,
+        acquisition_diagnostics: acquisitionDiagnosticsFromAdmitted(admitted),
       }
     }
   }

@@ -1,4 +1,5 @@
 import type { AdmittedContent } from '../contracts/admittedContent.js'
+import type { SourceAcquisitionDiagnostics } from '../contracts/sourceAcquisitionDiagnostics.js'
 import type { SourceClassSchema } from '../contracts/mission.js'
 import type { SourceRecord } from '../contracts/sources.js'
 import type { SourceAccessFailureCategory } from './sourceAccessTypes.js'
@@ -44,6 +45,7 @@ export type SourceFetchResult =
       status: 'failed'
       failureCategory: SourceAccessFailureCategory
       message: string
+      acquisition_diagnostics?: SourceAcquisitionDiagnostics
     }
   | { operationId: string; status: 'cancelled' }
 

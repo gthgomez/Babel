@@ -284,6 +284,9 @@ export async function runAdmittedRetrievalIteration(
         settlement: 'failed',
         failureCategory: read.failureCategory,
         message: read.message,
+        ...(read.status === 'failed' && read.acquisition_diagnostics
+          ? { acquisition_diagnostics: read.acquisition_diagnostics }
+          : {}),
       },
       now(),
     )
