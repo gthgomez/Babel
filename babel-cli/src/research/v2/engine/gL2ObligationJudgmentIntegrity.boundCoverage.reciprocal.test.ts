@@ -20,6 +20,7 @@ import {
   stampCoverageSourceSlotOnSource,
 } from './missionCoverageSourceSlots.js'
 import { questionIdsWithAnsweredCoverage } from './researchReportFinalization.js'
+import { requiredClaimedSourceReviewFields } from './testSupport/requiredClaimedSourceReviewFields.js'
 import {
   gL2OriginalDerivedFindingQ3Positive,
   gL2OriginalDerivedFindingQ4Positive,
@@ -103,6 +104,7 @@ describe('G-L2 obligation_coverage judgment integrity (production wiring)', () =
             status: 'supported',
             rationale: 'model claims answers',
             question_coverage: 'answers',
+            ...requiredClaimedSourceReviewFields(['web-ref-0', 'web-ref-1']),
             obligation_coverage,
           },
         ],
@@ -113,6 +115,10 @@ describe('G-L2 obligation_coverage judgment integrity (production wiring)', () =
         passages: gL2OriginalDerivedPassages,
         sources,
         sourceRevisions: gL2OriginalDerivedRevisions,
+        missionSourceSlots: missionCoverageSourceSlots(mission).map((source_slot) => ({
+          source_slot,
+          fetch_status: 'admitted_fetched',
+        })),
       },
     )
   }
@@ -225,18 +231,28 @@ describe('G-L2 obligation_coverage judgment integrity (production wiring)', () =
         })),
       },
     })
+    const positiveReview = gL2PositiveControlModelReview() as {
+      judgments: Array<Record<string, unknown>>
+    }
+    for (const judgment of positiveReview.judgments) {
+      judgment.claimed_source_slots = ['web-ref-0', 'web-ref-1']
+    }
     const reviewed = applySemanticSupportReview(
       [
         withQuestionId(gL2OriginalDerivedFindingQ3Positive, fullPlan.questions[0]!.question_id),
         withQuestionId(gL2OriginalDerivedFindingQ4Positive, fullPlan.questions[1]!.question_id),
       ],
-      gL2PositiveControlModelReview(),
+      positiveReview,
       '2026-10-21T12:11:00.000Z',
       {
         plan: fullPlan,
         passages: gL2OriginalDerivedPassages,
         sources,
         sourceRevisions: gL2OriginalDerivedRevisions,
+        missionSourceSlots: missionCoverageSourceSlots(mission).map((source_slot) => ({
+          source_slot,
+          fetch_status: 'admitted_fetched',
+        })),
       },
     )
     assert.deepEqual(

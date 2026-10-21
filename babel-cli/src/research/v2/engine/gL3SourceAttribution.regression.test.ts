@@ -15,6 +15,7 @@ import {
   gL3OriginalDerivedFindingInsufficientHonest,
   gL3OriginalDerivedPassages,
   gL3OriginalDerivedPlan,
+  gL3OriginalDerivedReviewContext,
   gL3OriginalDerivedRevisions,
   gL3OriginalDerivedSources,
 } from './testSupport/gL3OriginalDerivedRegression.js'
@@ -65,17 +66,11 @@ describe('G-L3 source attribution regression (original-derived)', () => {
       [gL3OriginalDerivedFindingFalseAgreement],
       gL3FalseAgreementModelReview(),
       '2026-10-21T13:01:00.000Z',
-      {
-        plan: gL3OriginalDerivedPlan,
-        passages: gL3OriginalDerivedPassages,
-        sources: gL3OriginalDerivedSources,
-        sourceRevisions: gL3OriginalDerivedRevisions,
-      },
+      gL3OriginalDerivedReviewContext(),
     )
     const finding = reviewed[0]!
     assert.equal(finding.semantic_support?.status, 'insufficient')
-    assert.equal(finding.question_coverage?.status, 'partial')
-    assert.match(finding.question_coverage?.rationale ?? '', /Host bound-question coverage/)
+    assert.match(finding.semantic_support?.rationale ?? '', /not resolved through cited passages/)
   })
 
   it('host bound preserves honest partial when devguide obligation unmet', () => {
@@ -83,12 +78,7 @@ describe('G-L3 source attribution regression (original-derived)', () => {
       [gL3OriginalDerivedFindingInsufficientHonest],
       gL3InsufficientHonestModelReview(),
       '2026-10-21T13:01:00.000Z',
-      {
-        plan: gL3OriginalDerivedPlan,
-        passages: gL3OriginalDerivedPassages,
-        sources: gL3OriginalDerivedSources,
-        sourceRevisions: gL3OriginalDerivedRevisions,
-      },
+      gL3OriginalDerivedReviewContext(),
     )
     assert.equal(reviewed[0]?.question_coverage?.status, 'partial')
   })

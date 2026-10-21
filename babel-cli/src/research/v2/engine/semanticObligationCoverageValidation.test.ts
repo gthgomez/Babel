@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import { validateSemanticObligationCoverageResponse } from './semanticObligationCoverageValidation.js'
 import { applySemanticSupportReview } from './findingsFromModelOutput.js'
+import { requiredClaimedSourceReviewFields } from './testSupport/requiredClaimedSourceReviewFields.js'
 import {
   gL2OriginalDerivedFindingQ3Positive,
   gL2OriginalDerivedPassages,
@@ -145,6 +146,7 @@ describe('applySemanticSupportReview obligation_coverage response validation', (
             status: 'supported',
             rationale: 'model claims complete coverage',
             question_coverage: 'answers',
+            ...requiredClaimedSourceReviewFields(['comparison_mdn', 'comparison_cloudflare']),
             obligation_coverage: [
               {
                 obligation_id: 'ob-mdn-max-age-semantics',
@@ -169,6 +171,10 @@ describe('applySemanticSupportReview obligation_coverage response validation', (
         passages: gL2OriginalDerivedPassages,
         sources: gL2OriginalDerivedSources,
         sourceRevisions: gL2OriginalDerivedRevisions,
+        missionSourceSlots: [
+          { source_slot: 'comparison_mdn', fetch_status: 'admitted_fetched' },
+          { source_slot: 'comparison_cloudflare', fetch_status: 'admitted_fetched' },
+        ],
       },
     )
     assert.equal(reviewed[0]?.question_coverage?.status, 'partial')

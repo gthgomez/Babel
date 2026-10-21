@@ -19,6 +19,7 @@ import {
   type RawObligationCoverageJudgment,
   validateSemanticObligationCoverageResponse,
 } from './semanticObligationCoverageValidation.js'
+import type { MissionSourceSlotAttribution } from './sourceAttributionContext.js'
 
 function findingId(operationId: string, index: number): string {
   return `finding-${createHash('sha256').update(`${operationId}:${index}`).digest('hex').slice(0, 24)}`
@@ -79,6 +80,19 @@ export interface SemanticSupportReviewContext {
   passages: readonly PassageRecord[]
   sources: readonly SourceRecord[]
   sourceRevisions: readonly SourceRevision[]
+  missionSourceSlots: readonly MissionSourceSlotAttribution[]
+}
+
+function assertClaimedSourceSlotsKnown(
+  slots: readonly string[],
+  missionSourceSlots: readonly MissionSourceSlotAttribution[],
+): void {
+  const known = new Set(missionSourceSlots.map((row) => row.source_slot))
+  for (const slot of slots) {
+    if (!known.has(slot)) {
+      throw new Error(`semantic review cited unknown claimed source_slot ${slot}`)
+    }
+  }
 }
 
 export function applySemanticSupportReview(
@@ -109,9 +123,11 @@ export function applySemanticSupportReview(
       rationale: judgment.rationale,
       reviewed_at: reviewedAt,
     }
-    if (judgment.claimed_source_attribution) {
+    if (context) {
+      assertClaimedSourceSlotsKnown(judgment.claimed_source_slots, context.missionSourceSlots)
       finding.claimed_source_attribution = {
         status: judgment.claimed_source_attribution,
+        source_slots: [...judgment.claimed_source_slots],
         reviewer: CLAIMED_SOURCE_ATTRIBUTION_REVIEWER,
         reviewer_version: CLAIMED_SOURCE_ATTRIBUTION_REVIEWER_VERSION,
         rationale: judgment.rationale,
@@ -187,10 +203,10 @@ export function applySemanticSupportReview(
     return reviewed
   }
   const withClaimedSource = enforceSemanticSupportClaimedSourceAttribution(reviewed, {
-    plan: context.plan,
     passages: context.passages,
     sources: context.sources,
     sourceRevisions: context.sourceRevisions,
+    missionSourceSlots: context.missionSourceSlots,
     reviewedAt,
   })
   return enforceBoundQuestionCoverageOnFindings(withClaimedSource, {

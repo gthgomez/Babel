@@ -23,6 +23,7 @@ import {
 } from './findingsFromModelOutput.js'
 import { buildSynthesizedResearchReport } from './buildSynthesizedResearchReport.js'
 import { deriveSearchProviderReportLimitations } from './sourceDiscoverSearchReceipt.js'
+import { persistModelInvocationEvidence } from './persistModelInvocationEvidence.js'
 import { settleModelOperation } from './settleModelOperation.js'
 import { unknownUsageSettlement } from './settleExternalOperation.js'
 import type { ResearchModelInvocationResult } from '../ports/researchModelPort.js'
@@ -193,16 +194,15 @@ async function invokeModelPhase(
     )
     throw err instanceof Error ? err : new Error(message)
   }
-  await store.appendModelReceipt(ctx, result.receipt)
-  await settleModelOperation(
+  await persistModelInvocationEvidence({
     store,
     ctx,
-    ctx.mission_id,
-    params.operationId,
-    params.attemptId,
-    result,
-    params.now(),
-  )
+    missionId: ctx.mission_id,
+    operationId: params.operationId,
+    attemptId: params.attemptId,
+    modelResult: result,
+    completedAt: params.now(),
+  })
   return result.output
 }
 
@@ -364,11 +364,17 @@ export async function runAdmittedResearchEndToEndPass(
     now,
   })
 
+  const reviewMissionSourceSlots = buildMissionSourceSlotAttribution(
+    request.session.mission,
+    reviewSources,
+    reviewRevisions,
+  )
   findings = applySemanticSupportReview(findings, reviewOutput, now(), {
     plan: activePlan,
     passages,
     sources: reviewSources,
     sourceRevisions: reviewRevisions,
+    missionSourceSlots: reviewMissionSourceSlots,
   })
   for (const finding of findings) {
     throwIfAborted(request.signal, 'semantic judgment persistence')
@@ -382,7 +388,12 @@ export async function runAdmittedResearchEndToEndPass(
     input: {
       mission_id: request.session.mission.mission_id,
       primary_question: request.session.mission.primary_question,
-      ...buildSynthesizeReportModelInput(findings),
+      ...buildSynthesizeReportModelInput(findings, {
+        mission_source_slots: reviewMissionSourceSlots,
+        passages,
+        sources: reviewSources,
+        sourceRevisions: reviewRevisions,
+      }),
     },
     signal: request.signal,
     dispatchedAt: request.dispatchedAt,

@@ -36,6 +36,8 @@ describe('buildSynthesizeReportModelInput', () => {
     ])
     assert.equal(input.findings[0]?.semantic_support, 'supported')
     assert.equal(input.findings[0]?.claimed_source_attribution, 'not_assessed')
+    assert.deepEqual(input.findings[0]?.claimed_source_slots, [])
+    assert.deepEqual(input.findings[0]?.passage_ids, ['p-1'])
     assert.equal(input.findings[0]?.question_coverage, 'tangential')
   })
 

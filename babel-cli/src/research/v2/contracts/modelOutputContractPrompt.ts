@@ -53,6 +53,7 @@ Each question_id must match one of the active plan question ids; unknown ids are
       "rationale": "<non-empty string>",
       "question_coverage": "answers" | "partial" | "tangential" | "none",
       "claimed_source_attribution": "matches_admitted_citations" | "names_unfetched_or_unread_source" | "not_assessed",
+      "claimed_source_slots": ["<mission source_slot id>", "..."],
       "obligation_coverage": [
         {
           "obligation_id": "<plan obligation_id>",
@@ -63,8 +64,9 @@ Each question_id must match one of the active plan question ids; unknown ids are
     }
   ]
 }
-Per-judgment allowed keys only: finding_id, status, rationale, question_coverage, claimed_source_attribution (optional), obligation_coverage (required when plan question has coverage_obligations).
-status judges whether cited passages support the assertion; claimed_source_attribution judges whether named sources in the assertion match admitted fetched citations (distinct from question_coverage obligations).
+Per-judgment allowed keys only: finding_id, status, rationale, question_coverage, claimed_source_attribution, claimed_source_slots, obligation_coverage (required when plan question has coverage_obligations).
+claimed_source_slots lists source_slot ids the assertion attributes substantive facts to (unique, non-empty). A hyperlink mention alone does not claim the linked page was read; do not list question-required sources unless the assertion treats them as read evidence.
+status judges whether cited passages support the assertion; claimed_source_attribution judges whether those attributed slots match admitted fetched citations (distinct from question_coverage obligations).
 question_coverage judges whether the assertion addresses the bound plan question text (tangential supported facts do not count as answers).
 Use coverage_rubric and mission_source_slots on each finding in the request: when coverage_obligations are listed, each source_slot needs admitted fetched passage support for its criterion or legacy aspect. Hyperlinks to unfetched mission URLs are not admitted evidence for that slot. Comparative coverage requires every obligation satisfied; missing any obligation or unavailable second source is partial, not answers. Keep assertion_support (status), source attribution (slot/url/title), and question_coverage separate; do not mark claims about unread sources as supported. Host finalization may downgrade model "answers" when slot/fetch/passage identity checks fail.`,
   synthesize_report: `Root object (strict — no extra keys):

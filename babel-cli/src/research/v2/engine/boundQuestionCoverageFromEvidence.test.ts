@@ -7,7 +7,9 @@ import {
   enforceBoundQuestionCoverageOnFindings,
 } from './boundQuestionCoverageFromEvidence.js'
 import { applySemanticSupportReview } from './findingsFromModelOutput.js'
+import { requiredClaimedSourceReviewFields } from './testSupport/requiredClaimedSourceReviewFields.js'
 import {
+  gL2FixtureMissionSourceSlots,
   gL2OriginalDerivedFindingQ3_7f3,
   gL2OriginalDerivedPassages,
   gL2OriginalDerivedPlan,
@@ -41,6 +43,7 @@ describe('boundQuestionCoverageFromEvidence', () => {
             status: 'supported',
             rationale: 'model claims met',
             question_coverage: 'answers',
+            ...requiredClaimedSourceReviewFields(['comparison_mdn', 'comparison_cloudflare']),
             obligation_coverage: [
               {
                 obligation_id: 'ob-mdn-max-age-semantics',
@@ -62,6 +65,7 @@ describe('boundQuestionCoverageFromEvidence', () => {
         passages: gL2OriginalDerivedPassages,
         sources: gL2OriginalDerivedSources,
         sourceRevisions: gL2OriginalDerivedRevisions,
+        missionSourceSlots: gL2FixtureMissionSourceSlots,
       },
     )
     assert.equal(reviewed[0]?.question_coverage?.status, 'partial')
@@ -84,6 +88,7 @@ describe('boundQuestionCoverageFromEvidence', () => {
             status: 'supported',
             rationale: 'Both slots document max-age semantics in admitted excerpts.',
             question_coverage: 'answers',
+            ...requiredClaimedSourceReviewFields(['comparison_mdn', 'comparison_cloudflare']),
             obligation_coverage: [
               {
                 obligation_id: 'ob-mdn-max-age-semantics',
@@ -105,6 +110,7 @@ describe('boundQuestionCoverageFromEvidence', () => {
         passages: gL2OriginalDerivedPassages,
         sources: gL2OriginalDerivedSources,
         sourceRevisions: gL2OriginalDerivedRevisions,
+        missionSourceSlots: gL2FixtureMissionSourceSlots,
       },
     )
     assert.equal(reviewed[0]?.question_coverage?.status, 'answers')

@@ -7,6 +7,7 @@ import {
   resolveFailedPassStoppingReason,
   type ResearchPassStoppingReason,
 } from './researchPassFailure.js'
+import { deriveExternalOperationAccountingNotes } from './deriveExternalOperationAccountingNotes.js'
 import { deriveSearchProviderReportLimitations } from './sourceDiscoverSearchReceipt.js'
 
 export function buildFailedPassTerminalReport(params: {
@@ -17,6 +18,7 @@ export function buildFailedPassTerminalReport(params: {
   message: string
   stoppingReason: ResearchPassStoppingReason
   searchProviderLimitations?: readonly string[]
+  accountingNotes?: string
 }): ResearchReportV2 {
   const summary = `Research pass failed during ${params.failurePhase}. ${params.message}`.slice(0, 4000)
   return {
@@ -25,8 +27,11 @@ export function buildFailedPassTerminalReport(params: {
     terminal_state: 'failed',
     answer_summary: summary,
     unanswered_questions: [],
-    coverage_notes:
-      'Terminal receipt recorded after admitted pass failure; external operations retain settled failure accounting.',
+    coverage_notes: [
+      'Terminal receipt recorded after admitted pass failure.',
+      params.accountingNotes ??
+        'External operation accounting could not be derived from store events.',
+    ].join(' '),
     limitations: [
       ...limitationsForFailedPass(params.stoppingReason),
       ...(params.searchProviderLimitations ?? []),
@@ -80,6 +85,7 @@ export async function finalizeFailedOwnerResearchPass(params: {
       message: params.message,
       stoppingReason,
       searchProviderLimitations,
+      accountingNotes: deriveExternalOperationAccountingNotes(events),
     }),
   )
   return true

@@ -59,6 +59,8 @@ export const ClaimedSourceAttributionStatusSchema = z.enum([
 export const ClaimedSourceAttributionJudgmentSchema = z
   .object({
     status: ClaimedSourceAttributionStatusSchema,
+    /** Mission source_slot ids the assertion attributes substantive facts to. */
+    source_slots: z.array(z.string().min(1)).optional(),
     reviewer: z.string().min(1),
     reviewer_version: z.string().min(1),
     rationale: z.string().min(1),

@@ -1,77 +1,61 @@
 import type { FindingRecord } from '../contracts/findings.js'
 import type { PassageRecord } from '../contracts/passages.js'
-import type { PlanCoverageObligation } from '../contracts/plan.js'
 import type { SourceRecord, SourceRevision } from '../contracts/sources.js'
 import { buildRevisionProvenanceIndex } from './boundQuestionCoverageFromEvidence.js'
-import { obligationsForQuestion } from './planCoverageObligations.js'
+import {
+  type MissionSourceSlotAttribution,
+  revisionRepresentsAdmittedFetch,
+} from './sourceAttributionContext.js'
 
 export const CLAIMED_SOURCE_ATTRIBUTION_REVIEWER = 'research-v2-claimed-source-attribution'
-export const CLAIMED_SOURCE_ATTRIBUTION_REVIEWER_VERSION = '0.1.0-host-bound'
+export const CLAIMED_SOURCE_ATTRIBUTION_REVIEWER_VERSION = '0.2.0-slot-resolution'
 
 export type ClaimedSourceAttributionStatus =
   | 'matches_admitted_citations'
   | 'names_unfetched_or_unread_source'
   | 'not_assessed'
 
-function citedSlotsForFinding(
+function admittedSlotResolvedThroughCitedPassages(
   finding: FindingRecord,
+  sourceSlot: string,
   passageById: ReadonlyMap<string, PassageRecord>,
   provenanceIndex: ReturnType<typeof buildRevisionProvenanceIndex>,
-): Set<string> {
-  const slots = new Set<string>()
+): boolean {
   for (const passageId of finding.passage_ids) {
     const passage = passageById.get(passageId)
     if (!passage) continue
     const provenance = provenanceIndex.get(passage.source_revision_id)
-    const slot = provenance?.source.coverage_source_slot
-    if (slot) slots.add(slot)
-  }
-  return slots
-}
-
-function obligationMetClaimsUnsupportedSlot(
-  finding: FindingRecord,
-  obligation: PlanCoverageObligation,
-  passageById: ReadonlyMap<string, PassageRecord>,
-  provenanceIndex: ReturnType<typeof buildRevisionProvenanceIndex>,
-): boolean {
-  const judgment = finding.plan_obligation_coverage?.find(
-    (row) => row.obligation_id === obligation.obligation_id,
-  )
-  if (!judgment || judgment.status !== 'met') {
-    return false
-  }
-  const supportingIds = judgment.supporting_passage_ids ?? []
-  if (supportingIds.length === 0) {
+    if (provenance?.source.coverage_source_slot !== sourceSlot) continue
+    if (!revisionRepresentsAdmittedFetch(provenance.revision)) continue
+    if (passage.text_ref.mode !== 'inline') continue
+    if (passage.text_ref.text.trim().length === 0) continue
     return true
   }
-  const citedSlots = citedSlotsForFinding(finding, passageById, provenanceIndex)
-  for (const passageId of supportingIds) {
-    const passage = passageById.get(passageId)
-    if (!passage) return true
-    const provenance = provenanceIndex.get(passage.source_revision_id)
-    if (provenance?.source.coverage_source_slot === obligation.source_slot) {
-      return false
-    }
-  }
-  return !citedSlots.has(obligation.source_slot)
+  return false
+}
+
+function slotKnownInMissionDirectory(
+  sourceSlot: string,
+  missionSourceSlots: readonly MissionSourceSlotAttribution[],
+): boolean {
+  return missionSourceSlots.some((row) => row.source_slot === sourceSlot)
 }
 
 /**
- * Host bound: assertion_support must not remain `supported` when claimed sources name unread
- * slots or when `met` obligation rows cite passages from the wrong mission slot.
+ * Host bound: effective assertion_support must not remain `supported` when attribution is
+ * missing/not_assessed, when the model reports unread claimed sources, or when attributed
+ * slots do not resolve through this finding's cited passages to admitted fetches.
  */
 export function enforceSemanticSupportClaimedSourceAttribution(
   findings: readonly FindingRecord[],
   params: {
-    plan: import('../contracts/plan.js').PlanRevision
     passages: readonly PassageRecord[]
     sources: readonly SourceRecord[]
     sourceRevisions: readonly SourceRevision[]
+    missionSourceSlots: readonly MissionSourceSlotAttribution[]
     reviewedAt: string
   },
 ): FindingRecord[] {
-  const questionById = new Map(params.plan.questions.map((q) => [q.question_id, q]))
   const passageById = new Map(params.passages.map((p) => [p.passage_id, p]))
   const provenanceIndex = buildRevisionProvenanceIndex(params.sources, params.sourceRevisions)
 
@@ -80,23 +64,53 @@ export function enforceSemanticSupportClaimedSourceAttribution(
     if (support !== 'supported') {
       return finding
     }
-    const question = questionById.get(finding.question_id)
-    const obligations = question ? obligationsForQuestion(question) : []
 
-    const claimedStatus = finding.claimed_source_attribution?.status
-    if (claimedStatus === 'names_unfetched_or_unread_source') {
+    const attribution = finding.claimed_source_attribution
+    if (!attribution || attribution.status === 'not_assessed') {
+      return downgradeAssertionSupport(finding, params.reviewedAt, {
+        reason:
+          'Host claimed-source attribution: supported finding lacks assessed attribution; assertion_support treated as insufficient.',
+      })
+    }
+
+    if (attribution.status === 'names_unfetched_or_unread_source') {
       return downgradeAssertionSupport(finding, params.reviewedAt, {
         reason:
           'Host claimed-source attribution: model reported names_unfetched_or_unread_source; assertion_support downgraded from supported.',
       })
     }
 
-    for (const obligation of obligations) {
+    const claimedSlots = attribution.source_slots ?? []
+    if (claimedSlots.length === 0) {
+      return downgradeAssertionSupport(finding, params.reviewedAt, {
+        reason:
+          'Host claimed-source attribution: matches_admitted_citations requires nonempty claimed source_slots.',
+      })
+    }
+    const unique = new Set(claimedSlots)
+    if (unique.size !== claimedSlots.length) {
+      return downgradeAssertionSupport(finding, params.reviewedAt, {
+        reason:
+          'Host claimed-source attribution: claimed source_slots must be unique.',
+      })
+    }
+
+    for (const slot of claimedSlots) {
+      if (!slotKnownInMissionDirectory(slot, params.missionSourceSlots)) {
+        return downgradeAssertionSupport(finding, params.reviewedAt, {
+          reason: `Host claimed-source attribution: unknown claimed source_slot ${slot}.`,
+        })
+      }
       if (
-        obligationMetClaimsUnsupportedSlot(finding, obligation, passageById, provenanceIndex)
+        !admittedSlotResolvedThroughCitedPassages(
+          finding,
+          slot,
+          passageById,
+          provenanceIndex,
+        )
       ) {
         return downgradeAssertionSupport(finding, params.reviewedAt, {
-          reason: `Host claimed-source attribution: obligation ${obligation.obligation_id} marked met without admitted passage from source_slot ${obligation.source_slot}.`,
+          reason: `Host claimed-source attribution: claimed source_slot ${slot} not resolved through cited passages to an admitted fetch.`,
         })
       }
     }

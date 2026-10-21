@@ -9,6 +9,7 @@ import type { PlanRevision } from '../../contracts/plan.js'
 import { PlanRevisionSchema } from '../../contracts/plan.js'
 import type { SourceRecord, SourceRevision } from '../../contracts/sources.js'
 import { SourceRecordSchema, SourceRevisionSchema } from '../../contracts/sources.js'
+import type { MissionSourceSlotAttribution } from '../sourceAttributionContext.js'
 
 export const GL3_ORIGINAL_DERIVED_LABEL = 'g-l3-original-derived-regression/v1'
 
@@ -69,6 +70,33 @@ export const gL3RenamedSlotRevisions = renamedSlot.source_revisions
 export const gL3RenamedSlotPassages = renamedSlot.passages
 export const gL3RenamedSlotFindingWrongMet = renamedSlot.findings.wrong_slot_met!
 
+export const gL3OriginalDerivedMissionSourceSlots: MissionSourceSlotAttribution[] = [
+  {
+    source_slot: 'web-ref-0',
+    configured_url: 'https://www.python.org/downloads/',
+    fetch_status: 'admitted_fetched',
+    ...(gL3OriginalDerivedSources[0]?.source_id
+      ? { admitted_source_id: gL3OriginalDerivedSources[0].source_id }
+      : {}),
+    revision_completeness: 'complete',
+  },
+  {
+    source_slot: 'web-ref-1',
+    configured_url: 'https://devguide.python.org/versions/',
+    fetch_status: 'fetch_failed_or_missing',
+  },
+]
+
+export function gL3OriginalDerivedReviewContext() {
+  return {
+    plan: gL3OriginalDerivedPlan,
+    passages: gL3OriginalDerivedPassages,
+    sources: gL3OriginalDerivedSources,
+    sourceRevisions: gL3OriginalDerivedRevisions,
+    missionSourceSlots: gL3OriginalDerivedMissionSourceSlots,
+  }
+}
+
 export function gL3FalseAgreementModelReview(): Record<string, unknown> {
   return {
     kind: 'semantic_support_review',
@@ -79,6 +107,7 @@ export function gL3FalseAgreementModelReview(): Record<string, unknown> {
         rationale: 'Table and landing agree.',
         question_coverage: 'answers',
         claimed_source_attribution: 'matches_admitted_citations',
+        claimed_source_slots: ['web-ref-1'],
         obligation_coverage: [
           {
             obligation_id: 'ob-downloads-stable-version-date',
@@ -87,8 +116,7 @@ export function gL3FalseAgreementModelReview(): Record<string, unknown> {
           },
           {
             obligation_id: 'ob-devguide-stable-version-date',
-            status: 'met',
-            supporting_passage_ids: ['fetch-downloads-original-derived:html:4'],
+            status: 'unmet',
           },
         ],
       },
@@ -106,6 +134,7 @@ export function gL3InsufficientHonestModelReview(): Record<string, unknown> {
         rationale: 'Downloads admitted; devguide missing.',
         question_coverage: 'partial',
         claimed_source_attribution: 'matches_admitted_citations',
+        claimed_source_slots: ['web-ref-0'],
         obligation_coverage: [
           {
             obligation_id: 'ob-downloads-stable-version-date',

@@ -6,6 +6,7 @@ import { describe, it } from 'node:test'
 import { ResearchMissionV2Schema } from '../contracts/mission.js'
 import { buildSynthesizedResearchReport } from './buildSynthesizedResearchReport.js'
 import { applySemanticSupportReview } from './findingsFromModelOutput.js'
+import { requiredClaimedSourceReviewFields } from './testSupport/requiredClaimedSourceReviewFields.js'
 import {
   deriveUnansweredPlanQuestionIds,
   questionIdsWithAnsweredCoverage,
@@ -26,6 +27,7 @@ import {
   gL2OriginalDerivedFindingQ4_a0cf,
   gL2OriginalDerivedPassages,
   gL2OriginalDerivedPlan,
+  gL2FixtureMissionSourceSlots,
   gL2OriginalDerivedRevisions,
   gL2OriginalDerivedSources,
   gL2RenamedSlotFindingPartial,
@@ -52,6 +54,7 @@ describe(`G-L2 original-derived coverage (${GL2_ORIGINAL_DERIVED_LABEL})`, () =>
         passages: gL2OriginalDerivedPassages,
         sources: gL2OriginalDerivedSources,
         sourceRevisions: gL2OriginalDerivedRevisions,
+        missionSourceSlots: gL2FixtureMissionSourceSlots,
       },
     )
     const finding = reviewed[0]
@@ -76,6 +79,7 @@ describe(`G-L2 original-derived coverage (${GL2_ORIGINAL_DERIVED_LABEL})`, () =>
         passages: gL2OriginalDerivedPassages,
         sources: gL2OriginalDerivedSources,
         sourceRevisions: gL2OriginalDerivedRevisions,
+        missionSourceSlots: gL2FixtureMissionSourceSlots,
       },
     )
     const finding = reviewed[0]
@@ -94,6 +98,7 @@ describe(`G-L2 original-derived coverage (${GL2_ORIGINAL_DERIVED_LABEL})`, () =>
         passages: gL2OriginalDerivedPassages,
         sources: gL2OriginalDerivedSources,
         sourceRevisions: gL2OriginalDerivedRevisions,
+        missionSourceSlots: gL2FixtureMissionSourceSlots,
       },
     )
     assert.deepEqual(questionIdsWithAnsweredCoverage(reviewed), new Set(['q-g-l2-audit-3', 'q-g-l2-audit-4']))
@@ -112,6 +117,7 @@ describe(`G-L2 original-derived coverage (${GL2_ORIGINAL_DERIVED_LABEL})`, () =>
         passages: gL2OriginalDerivedPassages,
         sources: gL2OriginalDerivedSources,
         sourceRevisions: gL2OriginalDerivedRevisions,
+        missionSourceSlots: gL2FixtureMissionSourceSlots,
       },
     )
     const mission = ResearchMissionV2Schema.parse(JSON.parse(readFileSync(gL2MissionPath, 'utf8')))
@@ -155,6 +161,7 @@ describe(`G-L2 original-derived coverage (${GL2_ORIGINAL_DERIVED_LABEL})`, () =>
             status: 'supported',
             rationale: 'model claims compare answered',
             question_coverage: 'answers',
+            ...requiredClaimedSourceReviewFields(['public_doc_a', 'public_doc_b']),
             obligation_coverage: [
               {
                 obligation_id: 'ob-slot-a-max-age',
@@ -176,6 +183,10 @@ describe(`G-L2 original-derived coverage (${GL2_ORIGINAL_DERIVED_LABEL})`, () =>
         passages: gL2RenamedSlotPassages,
         sources: gL2RenamedSlotSources,
         sourceRevisions: gL2RenamedSlotRevisions,
+        missionSourceSlots: [
+          { source_slot: 'public_doc_a', fetch_status: 'admitted_fetched' },
+          { source_slot: 'public_doc_b', fetch_status: 'admitted_fetched' },
+        ],
       },
     )
     assert.equal(reviewed[0]?.question_coverage?.status, 'partial')
@@ -194,6 +205,7 @@ describe(`G-L2 original-derived coverage (${GL2_ORIGINAL_DERIVED_LABEL})`, () =>
             status: 'supported',
             rationale: 'model claims compare answered',
             question_coverage: 'answers',
+            ...requiredClaimedSourceReviewFields(['provider_alpha', 'provider_beta']),
             obligation_coverage: [
               {
                 obligation_id: 'ob-alpha-auth-mechanism',
@@ -223,6 +235,10 @@ describe(`G-L2 original-derived coverage (${GL2_ORIGINAL_DERIVED_LABEL})`, () =>
         passages: gL2NonCachePassages,
         sources: gL2NonCacheSources,
         sourceRevisions: gL2NonCacheRevisions,
+        missionSourceSlots: [
+          { source_slot: 'provider_alpha', fetch_status: 'admitted_fetched' },
+          { source_slot: 'provider_beta', fetch_status: 'admitted_fetched' },
+        ],
       },
     )
     assert.equal(reviewed[0]?.question_coverage?.status, 'partial')

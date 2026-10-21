@@ -48,6 +48,13 @@ export const ExtractFindingsOutputSchema = z
   })
   .strict()
 
+const ClaimedSourceSlotsSchema = z
+  .array(z.string().min(1))
+  .min(1)
+  .refine((slots) => new Set(slots).size === slots.length, {
+    message: 'claimed_source_slots must contain unique source_slot ids',
+  })
+
 export const SemanticSupportReviewOutputSchema = z
   .object({
     kind: z.literal('semantic_support_review'),
@@ -61,13 +68,16 @@ export const SemanticSupportReviewOutputSchema = z
            * Whether the assertion addresses the bound plan question text (not citation support alone).
            */
           question_coverage: z.enum(['answers', 'partial', 'tangential', 'none']),
-          claimed_source_attribution: z
-            .enum([
-              'matches_admitted_citations',
-              'names_unfetched_or_unread_source',
-              'not_assessed',
-            ])
-            .optional(),
+          /**
+           * Sources the assertion attributes substantive facts to (not every question-required source).
+           * Link mentions alone do not claim the linked page was read.
+           */
+          claimed_source_attribution: z.enum([
+            'matches_admitted_citations',
+            'names_unfetched_or_unread_source',
+            'not_assessed',
+          ]),
+          claimed_source_slots: ClaimedSourceSlotsSchema,
           obligation_coverage: z
             .array(
               z

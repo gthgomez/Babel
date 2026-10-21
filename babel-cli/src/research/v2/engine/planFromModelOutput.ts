@@ -2,6 +2,7 @@ import { PlanRevisionSchema, type PlanRevision } from '../contracts/plan.js'
 import type { ResearchMissionV2 } from '../contracts/mission.js'
 import { PlanQuestionsOutputSchema } from '../contracts/modelOutputs.js'
 import {
+  missionCoverageSourceSlots,
   validateQuestionCoverageObligations,
 } from './missionCoverageSourceSlots.js'
 
@@ -73,8 +74,6 @@ export function missionRequirementsPayload(mission: ResearchMissionV2): Record<s
     source_policy: mission.source_policy,
     effort_policy: mission.effort_policy,
     pinned_target_repository: mission.pinned_target_repository,
-    coverage_source_slots: mission.source_policy.selected_web_refs?.length
-      ? mission.source_policy.selected_web_refs.map((_, index) => `web-ref-${index}`)
-      : ['discover-primary'],
+    coverage_source_slots: [...missionCoverageSourceSlots(mission)],
   }
 }

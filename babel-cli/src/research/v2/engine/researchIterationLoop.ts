@@ -10,6 +10,9 @@ import {
   buildPlanRevisionFromPlanQuestions,
   missionRequirementsPayload,
 } from './planFromModelOutput.js'
+import { ZodError } from 'zod'
+import { PlanCoverageObligationValidationError } from './missionCoverageSourceSlots.js'
+import { persistModelInvocationEvidence } from './persistModelInvocationEvidence.js'
 import { settleModelOperation } from './settleModelOperation.js'
 import { unknownUsageSettlement } from './settleExternalOperation.js'
 import { researchPassFailedFromModelResult } from './researchPassFailure.js'
@@ -223,29 +226,65 @@ export async function runAdmittedPlanningIteration(
     throw err instanceof Error ? err : new Error(message)
   }
 
-  const planRevision = buildPlanRevisionFromPlanQuestions({
-    mission: request.session.mission,
-    planRevisionId: request.planRevisionId,
-    revisionReason: request.revisionReason,
-    createdAt: now(),
-    modelOutput: modelResult.output,
-  })
+  let planRevision
+  try {
+    planRevision = buildPlanRevisionFromPlanQuestions({
+      mission: request.session.mission,
+      planRevisionId: request.planRevisionId,
+      revisionReason: request.revisionReason,
+      createdAt: now(),
+      modelOutput: modelResult.output,
+    })
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err)
+    const failureCategory =
+      err instanceof PlanCoverageObligationValidationError || err instanceof ZodError
+        ? 'structured_output_validation_failed'
+        : 'contract_violation'
+    const diagnostics =
+      modelResult.providerInvokeDiagnostics ?? modelResult.receipt.provider_invoke_diagnostics
+    const failedInvoke: ResearchModelInvocationResult = diagnostics
+      ? {
+          status: 'failed',
+          operationId: request.modelOperationId,
+          failureCategory,
+          message,
+          usageSettlement: modelResult.receipt.usage_settlement,
+          providerInvokeDiagnostics: diagnostics,
+        }
+      : {
+          status: 'failed',
+          operationId: request.modelOperationId,
+          failureCategory,
+          message,
+          usageSettlement: modelResult.receipt.usage_settlement,
+        }
+    await settleModelOperation(
+      request.store,
+      ctx,
+      ctx.mission_id,
+      request.modelOperationId,
+      request.modelAttemptId,
+      failedInvoke,
+      now(),
+    )
+    throw researchPassFailedFromModelResult(message, failureCategory, 'planning')
+  }
 
   await request.store.appendPlanRevision(ctx, planRevision)
   const evidenceCtx: MissionWriteContext = {
     ...ctx,
     plan_revision_id: planRevision.plan_revision_id,
   }
-  await request.store.appendModelReceipt(evidenceCtx, modelResult.receipt)
-  await settleModelOperation(
-    request.store,
-    evidenceCtx,
-    ctx.mission_id,
-    request.modelOperationId,
-    request.modelAttemptId,
+  await persistModelInvocationEvidence({
+    store: request.store,
+    ctx: evidenceCtx,
+    missionId: ctx.mission_id,
+    operationId: request.modelOperationId,
+    attemptId: request.modelAttemptId,
     modelResult,
-    now(),
-  )
+    completedAt: now(),
+  })
 
   return {
     handle: acquired,
