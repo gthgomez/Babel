@@ -1,0 +1,18 @@
+runtime_sha=ec7dce912eebd1210f762ddc6092de4d199c3c3b
+worktree=/workspace/codex/worktrees/ec7dce91
+b_merge_commit=39ae209b+ (includes ec7dce91)
+
+tests_ec7_bound=review-artifacts/general-ec7dce91-reciprocal-contract.tap.txt
+result=17/17 pass
+  - generalAdapterGL1PlanningFailureReciprocal.integration.test.ts (3/3 incl failed terminal)
+  - modelOutputs.contract-prompt.test.ts
+  - researchV2ProviderModelPrompt.test.ts
+  - providerResearchModelBridge.gL1Malformed.replay.test.ts
+  - finalizeFailedOwnerResearchPass.test.ts
+
+typecheck=ok (workspace babel-cli after merge)
+build=ok (ec7 worktree)
+
+attempt1_store_unchanged=/workspace/codex/worktrees/g-l1-9d97448a/codex/runs/general-g-l1-python-stable/store
+attempt2_preflight=review-artifacts/general-g-l1-attempt2-preflight.json
+live_run=not executed (await coordinator)

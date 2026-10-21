@@ -1,0 +1,32 @@
+{
+  "schema": "general-g-l1-attempt2-preflight/v1",
+  "runtime_sha": "ec7dce912eebd1210f762ddc6092de4d199c3c3b",
+  "worktree": "/workspace/codex/worktrees/ec7dce91",
+  "mission_id": "mission-g-l1-general-live-attempt2",
+  "mission_file": "/workspace/codex/missions/general-g-l1-python-stable-attempt2/mission.json",
+  "store_directory": "/workspace/codex/worktrees/ec7dce91/codex/runs/general-g-l1-attempt2/store",
+  "attempt1_store_preserved": "/workspace/codex/worktrees/g-l1-9d97448a/codex/runs/general-g-l1-python-stable/store",
+  "openrouter_route": {
+    "route_key": "deepseek-v4-flash-openrouter",
+    "provider": "openrouter",
+    "model_id": "deepseek/deepseek-v4-flash-0731",
+    "policy_path": "/workspace/config/model-policy.json",
+    "selection_basis": "model_policy_json",
+    "backend_key": "research-v2-cli"
+  },
+  "openrouter_credential_configured": true,
+  "discover_query": "latest stable Python release python.org download",
+  "search_provider_id": "duckduckgo_html_fallback",
+  "search_url": "https://duckduckgo.com/html/?q=latest+stable+Python+release+python.org+download",
+  "evidence_web_domains": [
+    "python.org",
+    "www.python.org",
+    "docs.python.org"
+  ],
+  "search_transport_domains": [
+    "duckduckgo.com",
+    "html.duckduckgo.com"
+  ],
+  "live_api_gate_env": "BABEL_RESEARCH_V2_ALLOW_LIVE_API",
+  "live_api_gate_enabled": true
+}

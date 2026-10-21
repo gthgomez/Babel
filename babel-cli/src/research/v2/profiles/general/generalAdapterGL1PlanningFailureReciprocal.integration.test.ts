@@ -9,6 +9,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, it } from 'node:test'
+import type { ZodType } from 'zod'
 import type { LlmRunner, RunnerCallbacks, RunnerInvocationMetadata } from '../../../../runners/base.js'
 import { loadResearchMissionFromFile } from '../../cli/loadResearchMissionFile.js'
 import { reportResearchV2Store, terminalReportFromEvents } from '../../cli/researchV2CliOperations.js'
@@ -43,7 +44,11 @@ function gL1MalformedPlanningRunner(): Pick<LlmRunner, 'execute'> {
   const payload = JSON.parse(readFileSync(malformedPayloadPath, 'utf8')) as Record<string, unknown>
   delete payload._provenance
   return {
-    async execute(_prompt, _schema, callbacks?: RunnerCallbacks) {
+    async execute<T>(
+      _prompt: string,
+      _schema: ZodType<T>,
+      callbacks?: RunnerCallbacks,
+    ): Promise<T> {
       callbacks?.onInvocationCompleted?.({
         inference_id: 'g-l1-reciprocal-inf',
         provider: 'openrouter',
@@ -52,7 +57,7 @@ function gL1MalformedPlanningRunner(): Pick<LlmRunner, 'execute'> {
         usage_metadata: G_L1_USAGE_META,
         observed_model_id: G_L1_USAGE_META.observed_model_id ?? null,
       })
-      return payload
+      return payload as T
     },
   }
 }
