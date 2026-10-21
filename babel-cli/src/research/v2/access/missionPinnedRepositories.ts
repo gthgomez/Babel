@@ -50,15 +50,26 @@ export function missionScopedToRepositoryPin(
   mission: ResearchMissionV2,
   pin: PinnedRepositoryRef,
 ): ResearchMissionV2 {
-  const others = missionPinnedRepositories(mission).filter(
-    (p) => p.repo_id !== pin.repo_id || p.commit_sha.toLowerCase() !== pin.commit_sha.toLowerCase(),
-  )
   return {
     ...mission,
     pinned_target_repository: pin,
     source_policy: {
       ...mission.source_policy,
-      selected_repository_refs: others.length > 0 ? others : undefined,
+      selected_repository_refs: undefined,
+    },
+  }
+}
+
+/** Restrict document discovery to one mission-declared ref for composed retrieval slots. */
+export function missionScopedToDocumentRef(
+  mission: ResearchMissionV2,
+  documentRef: string,
+): ResearchMissionV2 {
+  return {
+    ...mission,
+    source_policy: {
+      ...mission.source_policy,
+      selected_document_refs: [documentRef],
     },
   }
 }

@@ -31,6 +31,11 @@ export class GovernedSourceAccessPort implements SourceAccessPort {
   fetchContent(request: SourceFetchRequest): Promise<SourceFetchResult> {
     return this.fetchPort.fetchContent(request)
   }
+
+  /** Rebind governed fetch + search to a slot-scoped mission without sharing invocation state. */
+  withMission(mission: ResearchMissionV2): GovernedSourceAccessPort {
+    return new GovernedSourceAccessPort({ ...this.options, mission })
+  }
 }
 
 export function createGovernedSourceAccessPort(
