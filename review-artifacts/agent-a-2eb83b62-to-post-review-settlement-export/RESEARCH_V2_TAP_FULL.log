@@ -1,0 +1,1772 @@
+TAP version 13
+# Subtest: research v2 CLI dry-run repair
+    # Subtest: releases exclusive store lock when planning fails after owner open
+    ok 1 - releases exclusive store lock when planning fails after owner open
+      ---
+      duration_ms: 16.653121
+      type: 'test'
+      ...
+    1..1
+ok 1 - research v2 CLI dry-run repair
+  ---
+  duration_ms: 17.407937
+  type: 'suite'
+  ...
+# Subtest: research v2 CLI registration
+    # Subtest: registers dry-run and live gate commands under research v2
+    ok 1 - registers dry-run and live gate commands under research v2
+      ---
+      duration_ms: 1.397191
+      type: 'test'
+      ...
+    1..1
+ok 2 - research v2 CLI registration
+  ---
+  duration_ms: 2.025312
+  type: 'suite'
+  ...
+# Subtest: admittedHttpGet redirect admission
+    # Subtest: denies private redirect before a second HTTP dispatch
+    ok 1 - denies private redirect before a second HTTP dispatch
+      ---
+      duration_ms: 2.222635
+      type: 'test'
+      ...
+    # Subtest: denies forbidden mission hop before redirect dispatch (zero second requests)
+    ok 2 - denies forbidden mission hop before redirect dispatch (zero second requests)
+      ---
+      duration_ms: 0.498299
+      type: 'test'
+      ...
+    1..2
+ok 3 - admittedHttpGet redirect admission
+  ---
+  duration_ms: 3.29018
+  type: 'suite'
+  ...
+# Subtest: admittedMissionSourceSearch
+    # Subtest: returns mission-admitted hits for repository_file query
+    ok 1 - returns mission-admitted hits for repository_file query
+      ---
+      duration_ms: 0.73654
+      type: 'test'
+      ...
+    # Subtest: filters out sources outside pinned repository commit
+    ok 2 - filters out sources outside pinned repository commit
+      ---
+      duration_ms: 0.172043
+      type: 'test'
+      ...
+    1..2
+ok 4 - admittedMissionSourceSearch
+  ---
+  duration_ms: 1.561758
+  type: 'suite'
+  ...
+# Subtest: createAdmittedSourceSearchProvider
+    # Subtest: production mode selects configured duckduckgo_html_fallback provider
+    ok 1 - production mode selects configured duckduckgo_html_fallback provider
+      ---
+      duration_ms: 0.528331
+      type: 'test'
+      ...
+    # Subtest: resolveProductionSearchProviderId matches Babel web_search default
+    ok 2 - resolveProductionSearchProviderId matches Babel web_search default
+      ---
+      duration_ms: 0.092248
+      type: 'test'
+      ...
+    # Subtest: production search uses injected transport against duckduckgo html URL
+    ok 3 - production search uses injected transport against duckduckgo html URL
+      ---
+      duration_ms: 1.9632
+      type: 'test'
+      ...
+    # Subtest: corpus mode uses declared index without web transport
+    ok 4 - corpus mode uses declared index without web transport
+      ---
+      duration_ms: 0.317273
+      type: 'test'
+      ...
+    1..4
+ok 5 - createAdmittedSourceSearchProvider
+  ---
+  duration_ms: 3.658893
+  type: 'suite'
+  ...
+# Subtest: FetchSourceAccessPort mission hop admission
+    # Subtest: default wrapper forwards hop admission; forbidden redirect host gets zero requests
+    ok 1 - default wrapper forwards hop admission; forbidden redirect host gets zero requests
+      ---
+      duration_ms: 2.558475
+      type: 'test'
+      ...
+    1..1
+ok 6 - FetchSourceAccessPort mission hop admission
+  ---
+  duration_ms: 3.104154
+  type: 'suite'
+  ...
+# Subtest: FetchSourceAccessPort M1.3 review repairs
+    # Subtest: blocks loopback targets through admitted network boundary
+    ok 1 - blocks loopback targets through admitted network boundary
+      ---
+      duration_ms: 1.918731
+      type: 'test'
+      ...
+    # Subtest: records final URL after redirect rather than requested URL only
+    ok 2 - records final URL after redirect rather than requested URL only
+      ---
+      duration_ms: 0.848027
+      type: 'test'
+      ...
+    # Subtest: enforces byte cap during admittedGet (no full-body buffer beyond limit)
+    ok 3 - enforces byte cap during admittedGet (no full-body buffer beyond limit)
+      ---
+      duration_ms: 0.322845
+      type: 'test'
+      ...
+    1..3
+ok 7 - FetchSourceAccessPort M1.3 review repairs
+  ---
+  duration_ms: 3.741912
+  type: 'suite'
+  ...
+# Subtest: admittedHttpGet streaming contract
+    # Subtest: rejects private addresses without BABEL_WEB_ALLOW_PRIVATE
+    ok 1 - rejects private addresses without BABEL_WEB_ALLOW_PRIVATE
+      ---
+      duration_ms: 0.918334
+      type: 'test'
+      ...
+    1..1
+ok 8 - admittedHttpGet streaming contract
+  ---
+  duration_ms: 1.12334
+  type: 'suite'
+  ...
+# Subtest: FetchSourceAccessPort
+    # Subtest: fetches admitted bytes for observed URL via injected admittedGet
+    ok 1 - fetches admitted bytes for observed URL via injected admittedGet
+      ---
+      duration_ms: 3.169052
+      type: 'test'
+      ...
+    # Subtest: search fails closed with not_supported
+    ok 2 - search fails closed with not_supported
+      ---
+      duration_ms: 0.158926
+      type: 'test'
+      ...
+    1..2
+ok 9 - FetchSourceAccessPort
+  ---
+  duration_ms: 4.00671
+  type: 'suite'
+  ...
+# Subtest: GovernedSourceAccessPort
+    # Subtest: routes search through injected AdmittedSourceSearchProvider
+    ok 1 - routes search through injected AdmittedSourceSearchProvider
+      ---
+      duration_ms: 0.616218
+      type: 'test'
+      ...
+    # Subtest: declared-index corpus provider is not open-web discovery
+    ok 2 - declared-index corpus provider is not open-web discovery
+      ---
+      duration_ms: 0.283719
+      type: 'test'
+      ...
+    1..2
+ok 10 - GovernedSourceAccessPort
+  ---
+  duration_ms: 1.47475
+  type: 'suite'
+  ...
+# Subtest: missionSourceAdmission
+    # Subtest: rejects web fetch when redirect hop leaves allowed domains
+    ok 1 - rejects web fetch when redirect hop leaves allowed domains
+      ---
+      duration_ms: 1.166065
+      type: 'test'
+      ...
+    1..1
+ok 11 - missionSourceAdmission
+  ---
+  duration_ms: 1.704203
+  type: 'suite'
+  ...
+# Subtest: GeneralDocumentAdapter.read: admitted plain text via port only (G-DEV-03)
+ok 12 - GeneralDocumentAdapter.read: admitted plain text via port only (G-DEV-03)
+  ---
+  duration_ms: 5.562454
+  type: 'test'
+  ...
+# Subtest: GeneralDocumentAdapter.read: propagates port cancelled
+ok 13 - GeneralDocumentAdapter.read: propagates port cancelled
+  ---
+  duration_ms: 0.159568
+  type: 'test'
+  ...
+# Subtest: GeneralDocumentAdapter.read: pre-await abort returns cancelled
+ok 14 - GeneralDocumentAdapter.read: pre-await abort returns cancelled
+  ---
+  duration_ms: 0.096562
+  type: 'test'
+  ...
+# Subtest: GeneralDocumentAdapter.read: post-await abort returns cancelled
+ok 15 - GeneralDocumentAdapter.read: post-await abort returns cancelled
+  ---
+  duration_ms: 15.505959
+  type: 'test'
+  ...
+# Subtest: GeneralDocumentAdapter.read: fails on port operationId mismatch
+ok 16 - GeneralDocumentAdapter.read: fails on port operationId mismatch
+  ---
+  duration_ms: 0.571104
+  type: 'test'
+  ...
+# Subtest: GeneralDocumentAdapter.read: fails when provenance requested_url is unrelated to source
+ok 17 - GeneralDocumentAdapter.read: fails when provenance requested_url is unrelated to source
+  ---
+  duration_ms: 0.275582
+  type: 'test'
+  ...
+# Subtest: GeneralDocumentAdapter.read: does not propagate failure from foreign operationId
+ok 18 - GeneralDocumentAdapter.read: does not propagate failure from foreign operationId
+  ---
+  duration_ms: 0.193854
+  type: 'test'
+  ...
+# Subtest: GeneralDocumentAdapter.read: fails on admitted source_id mismatch
+ok 19 - GeneralDocumentAdapter.read: fails on admitted source_id mismatch
+  ---
+  duration_ms: 0.243516
+  type: 'test'
+  ...
+# Subtest: GeneralDocumentAdapter.read: extraction_failed on hash mismatch
+ok 20 - GeneralDocumentAdapter.read: extraction_failed on hash mismatch
+  ---
+  duration_ms: 0.28757
+  type: 'test'
+  ...
+# Subtest: GeneralDocumentAdapter.discover: not_supported without network
+ok 21 - GeneralDocumentAdapter.discover: not_supported without network
+  ---
+  duration_ms: 0.380433
+  type: 'test'
+  ...
+# Subtest: truncateToInlinePassageTextLimit: 31999 ASCII + emoji stays within UTF-16 schema max
+ok 22 - truncateToInlinePassageTextLimit: 31999 ASCII + emoji stays within UTF-16 schema max
+  ---
+  duration_ms: 5.03673
+  type: 'test'
+  ...
+# Subtest: buildInlinePassageTextRef: hashes emitted text and satisfies PassageTextRefSchema
+ok 23 - buildInlinePassageTextRef: hashes emitted text and satisfies PassageTextRefSchema
+  ---
+  duration_ms: 3.777902
+  type: 'test'
+  ...
+# Subtest: buildInlinePassageTextRef: astral tail dropped before UTF-16 overflow
+ok 24 - buildInlinePassageTextRef: astral tail dropped before UTF-16 overflow
+  ---
+  duration_ms: 2.035715
+  type: 'test'
+  ...
+# Subtest: mergeAbortSignals.dispose: removes user listener so later abort does not forward
+ok 25 - mergeAbortSignals.dispose: removes user listener so later abort does not forward
+  ---
+  duration_ms: 0.689238
+  type: 'test'
+  ...
+# Subtest: destroyLoadingTask: consumes rejected destroy promise
+ok 26 - destroyLoadingTask: consumes rejected destroy promise
+  ---
+  duration_ms: 0.242651
+  type: 'test'
+  ...
+# Subtest: awaitBoundedDestroy: does not hang when destroy never settles
+ok 27 - awaitBoundedDestroy: does not hang when destroy never settles
+  ---
+  duration_ms: 40.175264
+  type: 'test'
+  ...
+# Subtest: destroyPdfResources: bounded doc destroy with late rejection consumed
+ok 28 - destroyPdfResources: bounded doc destroy with late rejection consumed
+  ---
+  duration_ms: 10.725412
+  type: 'test'
+  ...
+# Subtest: GeneralDocumentAdapter.read: application/pdf via pdfjs page passages
+ok 29 - GeneralDocumentAdapter.read: application/pdf via pdfjs page passages
+  ---
+  duration_ms: 975.551464
+  type: 'test'
+  ...
+# Warning: Indexing all PDF objects
+# Subtest: GeneralDocumentAdapter.read: malformed pdf bytes extraction_failed
+ok 30 - GeneralDocumentAdapter.read: malformed pdf bytes extraction_failed
+  ---
+  duration_ms: 2.579857
+  type: 'test'
+  ...
+# Subtest: passagesFromAdmittedPdf: two-page fixture with page locators
+ok 31 - passagesFromAdmittedPdf: two-page fixture with page locators
+  ---
+  duration_ms: 1000.642675
+  type: 'test'
+  ...
+# Subtest: passagesFromAdmittedPdf: cancellation during delayed page loop
+ok 32 - passagesFromAdmittedPdf: cancellation during delayed page loop
+  ---
+  duration_ms: 11.00419
+  type: 'test'
+  ...
+# Subtest: passagesFromAdmittedPdf: abort interrupts stalled loading without waiting
+ok 33 - passagesFromAdmittedPdf: abort interrupts stalled loading without waiting
+  ---
+  duration_ms: 0.6255
+  type: 'test'
+  ...
+# Subtest: passagesFromAdmittedPdf: abort interrupts stalled getPage
+ok 34 - passagesFromAdmittedPdf: abort interrupts stalled getPage
+  ---
+  duration_ms: 0.428319
+  type: 'test'
+  ...
+# Subtest: passagesFromAdmittedPdf: abort interrupts stalled getTextContent
+ok 35 - passagesFromAdmittedPdf: abort interrupts stalled getTextContent
+  ---
+  duration_ms: 0.323272
+  type: 'test'
+  ...
+# Subtest: passagesFromAdmittedPdf: hashes emitted inline text only when truncated
+ok 36 - passagesFromAdmittedPdf: hashes emitted inline text only when truncated
+  ---
+  duration_ms: 3.823609
+  type: 'test'
+  ...
+# Subtest: passagesFromAdmittedPdf: long unicode page text satisfies PassageRecordSchema
+ok 37 - passagesFromAdmittedPdf: long unicode page text satisfies PassageRecordSchema
+  ---
+  duration_ms: 2.738398
+  type: 'test'
+  ...
+# Subtest: passagesFromAdmittedPdf: rejected load destroys loading task
+ok 38 - passagesFromAdmittedPdf: rejected load destroys loading task
+  ---
+  duration_ms: 0.41198
+  type: 'test'
+  ...
+# Subtest: passagesFromAdmittedPdf: aborted read returns while hanging doc destroy stays bounded
+ok 39 - passagesFromAdmittedPdf: aborted read returns while hanging doc destroy stays bounded
+  ---
+  duration_ms: 0.591027
+  type: 'test'
+  ...
+# Subtest: passagesFromAdmittedPdf: rejects non-pdf bytes
+ok 40 - passagesFromAdmittedPdf: rejects non-pdf bytes
+  ---
+  duration_ms: 0.386039
+  type: 'test'
+  ...
+# Subtest: passagesFromAdmittedPlainText: G-DEV-03 raw bytes, schema-valid passages
+ok 41 - passagesFromAdmittedPlainText: G-DEV-03 raw bytes, schema-valid passages
+  ---
+  duration_ms: 3.769099
+  type: 'test'
+  ...
+# Subtest: decodeAdmittedUtf8Bytes: rejects byte_length mismatch
+ok 42 - decodeAdmittedUtf8Bytes: rejects byte_length mismatch
+  ---
+  duration_ms: 0.353231
+  type: 'test'
+  ...
+# Subtest: decodeAdmittedUtf8Bytes: rejects payload content_hash mismatch
+ok 43 - decodeAdmittedUtf8Bytes: rejects payload content_hash mismatch
+  ---
+  duration_ms: 0.131534
+  type: 'test'
+  ...
+# Subtest: decodeAdmittedUtf8Bytes: rejects revision content_hash mismatch
+ok 44 - decodeAdmittedUtf8Bytes: rejects revision content_hash mismatch
+  ---
+  duration_ms: 0.1027
+  type: 'test'
+  ...
+# Subtest: decodeAdmittedUtf8Bytes: rejects invalid UTF-8
+ok 45 - decodeAdmittedUtf8Bytes: rejects invalid UTF-8
+  ---
+  duration_ms: 0.209674
+  type: 'test'
+  ...
+# Subtest: passagesFromAdmittedPlainText: rejects text/html login markup as unsupported
+ok 46 - passagesFromAdmittedPlainText: rejects text/html login markup as unsupported
+  ---
+  duration_ms: 0.09386
+  type: 'test'
+  ...
+# Subtest: decodeAdmittedUtf8Bytes: rejects decoded length drift vs byte_length
+ok 47 - decodeAdmittedUtf8Bytes: rejects decoded length drift vs byte_length
+  ---
+  duration_ms: 0.141886
+  type: 'test'
+  ...
+# Subtest: resolveQuarantinedFixturePath allows paths under fixture root
+ok 48 - resolveQuarantinedFixturePath allows paths under fixture root
+  ---
+  duration_ms: 1.794546
+  type: 'test'
+  ...
+# Subtest: resolveQuarantinedFixturePath rejects parent traversal
+ok 49 - resolveQuarantinedFixturePath rejects parent traversal
+  ---
+  duration_ms: 0.968596
+  type: 'test'
+  ...
+# Subtest: resolveQuarantinedFixturePath rejects absolute relativePath
+ok 50 - resolveQuarantinedFixturePath rejects absolute relativePath
+  ---
+  duration_ms: 0.445849
+  type: 'test'
+  ...
+# Subtest: win32: cross-drive paths are not within quarantine root
+ok 51 - win32: cross-drive paths are not within quarantine root
+  ---
+  duration_ms: 0.553032
+  type: 'test'
+  ...
+# Subtest: win32: relative path that resolves to absolute drive path is not within root
+ok 52 - win32: relative path that resolves to absolute drive path is not within root
+  ---
+  duration_ms: 0.146787
+  type: 'test'
+  ...
+# Subtest: win32: nested path under same drive is within root
+ok 53 - win32: nested path under same drive is within root
+  ---
+  duration_ms: 0.137759
+  type: 'test'
+  ...
+# Subtest: validateFetchBinding: rejects foreign operationId on failed fetch before propagating failure
+ok 54 - validateFetchBinding: rejects foreign operationId on failed fetch before propagating failure
+  ---
+  duration_ms: 0.909246
+  type: 'test'
+  ...
+# Subtest: validateFetchBinding: rejects foreign operationId on cancelled fetch
+ok 55 - validateFetchBinding: rejects foreign operationId on cancelled fetch
+  ---
+  duration_ms: 0.14214
+  type: 'test'
+  ...
+# Subtest: validateFetchBinding: propagates failed fetch when operationId matches
+ok 56 - validateFetchBinding: propagates failed fetch when operationId matches
+  ---
+  duration_ms: 0.158518
+  type: 'test'
+  ...
+# Subtest: validateFetchBinding: rejects ok admission when requested_url is not on source
+ok 57 - validateFetchBinding: rejects ok admission when requested_url is not on source
+  ---
+  duration_ms: 0.39197
+  type: 'test'
+  ...
+# Subtest: validateFetchBinding: accepts legitimate redirect when chain ends at final_url
+ok 58 - validateFetchBinding: accepts legitimate redirect when chain ends at final_url
+  ---
+  duration_ms: 0.963149
+  type: 'test'
+  ...
+# Subtest: validateAdmittedRedirectProvenance: rejects chain that does not end at final_url
+ok 59 - validateAdmittedRedirectProvenance: rejects chain that does not end at final_url
+  ---
+  duration_ms: 0.084613
+  type: 'test'
+  ...
+# Subtest: admitsRequestedUrlForSource: uses observed_urls only
+ok 60 - admitsRequestedUrlForSource: uses observed_urls only
+  ---
+  duration_ms: 0.149462
+  type: 'test'
+  ...
+# Subtest: bindingFailed: uses contract_violation category
+ok 61 - bindingFailed: uses contract_violation category
+  ---
+  duration_ms: 0.064003
+  type: 'test'
+  ...
+# Subtest: real A contract schemas accept document adapter shapes
+ok 62 - real A contract schemas accept document adapter shapes
+  ---
+  duration_ms: 5.737264
+  type: 'test'
+  ...
+# Subtest: GeneralWebAdapter.read: static HTML via port (G-DEV-01 plan-a)
+ok 63 - GeneralWebAdapter.read: static HTML via port (G-DEV-01 plan-a)
+  ---
+  duration_ms: 3.911446
+  type: 'test'
+  ...
+# Subtest: GeneralWebAdapter.discover: maps admitted search hits to web candidates
+ok 64 - GeneralWebAdapter.discover: maps admitted search hits to web candidates
+  ---
+  duration_ms: 0.222438
+  type: 'test'
+  ...
+# Subtest: GeneralWebAdapter: adapter id and kinds
+ok 65 - GeneralWebAdapter: adapter id and kinds
+  ---
+  duration_ms: 0.485849
+  type: 'test'
+  ...
+# Subtest: passagesFromAdmittedStaticHtml: G-DEV-01 plan-a heading sections
+ok 66 - passagesFromAdmittedStaticHtml: G-DEV-01 plan-a heading sections
+  ---
+  duration_ms: 3.641452
+  type: 'test'
+  ...
+# Subtest: passagesFromAdmittedStaticHtml: non-ascii repeated headings get unique section_id
+ok 67 - passagesFromAdmittedStaticHtml: non-ascii repeated headings get unique section_id
+  ---
+  duration_ms: 0.838056
+  type: 'test'
+  ...
+# Subtest: passagesFromAdmittedStaticHtml: repeated headings get unique section_id
+ok 68 - passagesFromAdmittedStaticHtml: repeated headings get unique section_id
+  ---
+  duration_ms: 0.632928
+  type: 'test'
+  ...
+# Subtest: passagesFromAdmittedStaticHtml: inline hash matches emitted text
+ok 69 - passagesFromAdmittedStaticHtml: inline hash matches emitted text
+  ---
+  duration_ms: 3.934663
+  type: 'test'
+  ...
+# Subtest: passagesFromAdmittedStaticHtml: long unicode respects UTF-16 schema max
+ok 70 - passagesFromAdmittedStaticHtml: long unicode respects UTF-16 schema max
+  ---
+  duration_ms: 2.77305
+  type: 'test'
+  ...
+# Subtest: passagesFromAdmittedStaticHtml: rejects login-only html
+ok 71 - passagesFromAdmittedStaticHtml: rejects login-only html
+  ---
+  duration_ms: 0.476822
+  type: 'test'
+  ...
+# Subtest: passagesFromAdmittedStaticHtml: rejects non-html media
+ok 72 - passagesFromAdmittedStaticHtml: rejects non-html media
+  ---
+  duration_ms: 0.203494
+  type: 'test'
+  ...
+# Subtest: allocateSectionLocatorId: disambiguates repeated headings
+ok 73 - allocateSectionLocatorId: disambiguates repeated headings
+  ---
+  duration_ms: 0.634684
+  type: 'test'
+  ...
+# Subtest: allocateSectionLocatorId: non-ascii headings get stable unique slugs
+ok 74 - allocateSectionLocatorId: non-ascii headings get stable unique slugs
+  ---
+  duration_ms: 0.416662
+  type: 'test'
+  ...
+# Subtest: host-authorized continuation after cancellation (checkpoint.3.1.1)
+    # Subtest: schema rejects acquire without expected_writer_generation
+    ok 1 - schema rejects acquire without expected_writer_generation
+      ---
+      duration_ms: 1.161802
+      type: 'test'
+      ...
+    # Subtest: complete journey: P1 work, P2, cancel, late accounting, explicit resume, new terminal
+    ok 2 - complete journey: P1 work, P2, cancel, late accounting, explicit resume, new terminal
+      ---
+      duration_ms: 3.48214
+      type: 'test'
+      ...
+    1..2
+ok 75 - host-authorized continuation after cancellation (checkpoint.3.1.1)
+  ---
+  duration_ms: 5.261856
+  type: 'suite'
+  ...
+# Subtest: research v2 contract regressions (\#405 repair)
+    # Subtest: ResearchStore exposes mission-scoped external operation intent/completion writes
+    ok 1 - ResearchStore exposes mission-scoped external operation intent/completion writes
+      ---
+      duration_ms: 0.660073
+      type: 'test'
+      ...
+    # Subtest: listEvents(missionId) includes evidence writes for two isolated missions
+    ok 2 - listEvents(missionId) includes evidence writes for two isolated missions
+      ---
+      duration_ms: 1.589759
+      type: 'test'
+      ...
+    # Subtest: SourceAccessPort.fetchContent yields admitted bytes without port-owned passages
+    ok 3 - SourceAccessPort.fetchContent yields admitted bytes without port-owned passages
+      ---
+      duration_ms: 0.592918
+      type: 'test'
+      ...
+    # Subtest: SourceAdapter exposes read() in addition to discover()
+    ok 4 - SourceAdapter exposes read() in addition to discover()
+      ---
+      duration_ms: 0.093897
+      type: 'test'
+      ...
+    # Subtest: store rejects duplicate completion and stale writer generation
+    ok 5 - store rejects duplicate completion and stale writer generation
+      ---
+      duration_ms: 0.676018
+      type: 'test'
+      ...
+    # Subtest: revision ids change when content bytes change
+    ok 6 - revision ids change when content bytes change
+      ---
+      duration_ms: 0.256859
+      type: 'test'
+      ...
+    # Subtest: model port returns cancelled settlement instead of throwing
+    ok 7 - model port returns cancelled settlement instead of throwing
+      ---
+      duration_ms: 0.208694
+      type: 'test'
+      ...
+    # Subtest: adapter extraction uses real line ranges for multiline bodies
+    ok 8 - adapter extraction uses real line ranges for multiline bodies
+      ---
+      duration_ms: 0.448417
+      type: 'test'
+      ...
+    # Subtest: fetch rejects empty body without fabricated inline payload
+    ok 9 - fetch rejects empty body without fabricated inline payload
+      ---
+      duration_ms: 0.197033
+      type: 'test'
+      ...
+    # Subtest: propagates truncated admitted bytes with schema-valid envelope
+    ok 10 - propagates truncated admitted bytes with schema-valid envelope
+      ---
+      duration_ms: 1.574071
+      type: 'test'
+      ...
+    # Subtest: long multiline excerpt uses locator within bounded text
+    ok 11 - long multiline excerpt uses locator within bounded text
+      ---
+      duration_ms: 0.223568
+      type: 'test'
+      ...
+    1..11
+ok 76 - research v2 contract regressions (\#405 repair)
+  ---
+  duration_ms: 7.535519
+  type: 'suite'
+  ...
+# Subtest: finding integrity vs semantic support
+    # Subtest: keeps integrity state separate from semantic judgment
+    ok 1 - keeps integrity state separate from semantic judgment
+      ---
+      duration_ms: 0.775632
+      type: 'test'
+      ...
+    1..1
+ok 77 - finding integrity vs semantic support
+  ---
+  duration_ms: 0.845005
+  type: 'suite'
+  ...
+# Subtest: research v2 contracts
+    # Subtest: parses example technical mission fixture
+    ok 1 - parses example technical mission fixture
+      ---
+      duration_ms: 0.779015
+      type: 'test'
+      ...
+    # Subtest: rejects invalid passage text reference shapes
+    ok 2 - rejects invalid passage text reference shapes
+      ---
+      duration_ms: 1.171071
+      type: 'test'
+      ...
+    # Subtest: rejects page zero and inverted line ranges
+    ok 3 - rejects page zero and inverted line ranges
+      ---
+      duration_ms: 0.759162
+      type: 'test'
+      ...
+    # Subtest: accepts valid PDF page locator
+    ok 4 - accepts valid PDF page locator
+      ---
+      duration_ms: 0.222345
+      type: 'test'
+      ...
+    # Subtest: cost unknown must not carry fake amount
+    ok 5 - cost unknown must not carry fake amount
+      ---
+      duration_ms: 0.459483
+      type: 'test'
+      ...
+    # Subtest: normalizes general mission brief without cast
+    ok 6 - normalizes general mission brief without cast
+      ---
+      duration_ms: 0.82206
+      type: 'test'
+      ...
+    # Subtest: bundles snapshot shape for inspect/resume design
+    ok 7 - bundles snapshot shape for inspect/resume design
+      ---
+      duration_ms: 0.479959
+      type: 'test'
+      ...
+    # Subtest: metadata-only completeness is explicit on revisions
+    ok 8 - metadata-only completeness is explicit on revisions
+      ---
+      duration_ms: 0.467046
+      type: 'test'
+      ...
+    # Subtest: issued passage requires revision binding
+    ok 9 - issued passage requires revision binding
+      ---
+      duration_ms: 0.466295
+      type: 'test'
+      ...
+    1..9
+ok 78 - research v2 contracts
+  ---
+  duration_ms: 8.895624
+  type: 'suite'
+  ...
+# Subtest: research v2 full journey regression (checkpoint.3.1 candidate)
+    # Subtest: verbatim G-DEV-01 brief through cancel and late usage reconciliation only
+    ok 1 - verbatim G-DEV-01 brief through cancel and late usage reconciliation only
+      ---
+      duration_ms: 9.664979
+      type: 'test'
+      ...
+    1..1
+ok 79 - research v2 full journey regression (checkpoint.3.1 candidate)
+  ---
+  duration_ms: 10.1801
+  type: 'suite'
+  ...
+# Subtest: normalizeGeneralMissionBrief — six original B mission.json files
+    # Subtest: G-DEV-01: GeneralMissionBriefSchema accepts verbatim JSON
+    ok 1 - G-DEV-01: GeneralMissionBriefSchema accepts verbatim JSON
+      ---
+      duration_ms: 2.269056
+      type: 'test'
+      ...
+    # Subtest: G-DEV-01: normalizes to ResearchMissionV2 without cast
+    ok 2 - G-DEV-01: normalizes to ResearchMissionV2 without cast
+      ---
+      duration_ms: 4.430075
+      type: 'test'
+      ...
+    # Subtest: G-DEV-02: GeneralMissionBriefSchema accepts verbatim JSON
+    ok 3 - G-DEV-02: GeneralMissionBriefSchema accepts verbatim JSON
+      ---
+      duration_ms: 0.259943
+      type: 'test'
+      ...
+    # Subtest: G-DEV-02: normalizes to ResearchMissionV2 without cast
+    ok 4 - G-DEV-02: normalizes to ResearchMissionV2 without cast
+      ---
+      duration_ms: 0.265995
+      type: 'test'
+      ...
+    # Subtest: G-DEV-03: GeneralMissionBriefSchema accepts verbatim JSON
+    ok 5 - G-DEV-03: GeneralMissionBriefSchema accepts verbatim JSON
+      ---
+      duration_ms: 0.179307
+      type: 'test'
+      ...
+    # Subtest: G-DEV-03: normalizes to ResearchMissionV2 without cast
+    ok 6 - G-DEV-03: normalizes to ResearchMissionV2 without cast
+      ---
+      duration_ms: 0.200829
+      type: 'test'
+      ...
+    # Subtest: G-DEV-04: GeneralMissionBriefSchema accepts verbatim JSON
+    ok 7 - G-DEV-04: GeneralMissionBriefSchema accepts verbatim JSON
+      ---
+      duration_ms: 0.179455
+      type: 'test'
+      ...
+    # Subtest: G-DEV-04: normalizes to ResearchMissionV2 without cast
+    ok 8 - G-DEV-04: normalizes to ResearchMissionV2 without cast
+      ---
+      duration_ms: 0.216597
+      type: 'test'
+      ...
+    # Subtest: G-DEV-05: GeneralMissionBriefSchema accepts verbatim JSON
+    ok 9 - G-DEV-05: GeneralMissionBriefSchema accepts verbatim JSON
+      ---
+      duration_ms: 0.271575
+      type: 'test'
+      ...
+    # Subtest: G-DEV-05: normalizes to ResearchMissionV2 without cast
+    ok 10 - G-DEV-05: normalizes to ResearchMissionV2 without cast
+      ---
+      duration_ms: 0.574004
+      type: 'test'
+      ...
+    # Subtest: G-DEV-06: GeneralMissionBriefSchema accepts verbatim JSON
+    ok 11 - G-DEV-06: GeneralMissionBriefSchema accepts verbatim JSON
+      ---
+      duration_ms: 0.156148
+      type: 'test'
+      ...
+    # Subtest: G-DEV-06: normalizes to ResearchMissionV2 without cast
+    ok 12 - G-DEV-06: normalizes to ResearchMissionV2 without cast
+      ---
+      duration_ms: 0.163415
+      type: 'test'
+      ...
+    # Subtest: G-DEV-02: missing as_of becomes unknown; hard_requirements preserved
+    ok 13 - G-DEV-02: missing as_of becomes unknown; hard_requirements preserved
+      ---
+      duration_ms: 0.776807
+      type: 'test'
+      ...
+    # Subtest: G-DEV-06: notes preserved; as_of from brief retained
+    ok 14 - G-DEV-06: notes preserved; as_of from brief retained
+      ---
+      duration_ms: 0.219702
+      type: 'test'
+      ...
+    # Subtest: verbatim briefs are not valid ResearchMissionV2 without normalization
+    ok 15 - verbatim briefs are not valid ResearchMissionV2 without normalization
+      ---
+      duration_ms: 1.630325
+      type: 'test'
+      ...
+    1..15
+ok 80 - normalizeGeneralMissionBrief — six original B mission.json files
+  ---
+  duration_ms: 12.769654
+  type: 'suite'
+  ...
+# Subtest: research v2 store lifecycle (checkpoint.3.1 composition FIX)
+    # Subtest: rejects duplicate mission creation
+    ok 1 - rejects duplicate mission creation
+      ---
+      duration_ms: 1.360878
+      type: 'test'
+      ...
+    # Subtest: activates plan P1 then transitions to P2 with current-plan precondition
+    ok 2 - activates plan P1 then transitions to P2 with current-plan precondition
+      ---
+      duration_ms: 0.87958
+      type: 'test'
+      ...
+    # Subtest: requires expected_writer_generation and rejects competing resumes
+    ok 3 - requires expected_writer_generation and rejects competing resumes
+      ---
+      duration_ms: 0.49757
+      type: 'test'
+      ...
+    # Subtest: replace and release writer ownership invalidate stale generations
+    ok 4 - replace and release writer ownership invalidate stale generations
+      ---
+      duration_ms: 0.303859
+      type: 'test'
+      ...
+    # Subtest: enforces operation intent before completion and mission-scoped operation ids in one store
+    ok 5 - enforces operation intent before completion and mission-scoped operation ids in one store
+      ---
+      duration_ms: 0.435637
+      type: 'test'
+      ...
+    # Subtest: allows explicit retry with new attempt after failed completion on same operation id
+    ok 6 - allows explicit retry with new attempt after failed completion on same operation id
+      ---
+      duration_ms: 0.203902
+      type: 'test'
+      ...
+    # Subtest: model port carries admitted attempt_id into usage settlement
+    ok 7 - model port carries admitted attempt_id into usage settlement
+      ---
+      duration_ms: 0.401255
+      type: 'test'
+      ...
+    # Subtest: fences evidence after terminal but allows uncertain completion reconciliation
+    ok 8 - fences evidence after terminal but allows uncertain completion reconciliation
+      ---
+      duration_ms: 1.088423
+      type: 'test'
+      ...
+    # Subtest: settles late accounting when intent dispatched then cancelled without completion
+    ok 9 - settles late accounting when intent dispatched then cancelled without completion
+      ---
+      duration_ms: 0.532835
+      type: 'test'
+      ...
+    # Subtest: composed VALID lifecycle: acquire, plan transition, dispatch, terminal fence
+    ok 10 - composed VALID lifecycle: acquire, plan transition, dispatch, terminal fence
+      ---
+      duration_ms: 0.526623
+      type: 'test'
+      ...
+    1..10
+ok 81 - research v2 store lifecycle (checkpoint.3.1 composition FIX)
+  ---
+  duration_ms: 7.200212
+  type: 'suite'
+  ...
+# Subtest: verbatim B brief fixture byte locks (LF checkout)
+    # Subtest: G-DEV-01 documents LF vs CRLF mis-checkout hashes
+    ok 1 - G-DEV-01 documents LF vs CRLF mis-checkout hashes
+      ---
+      duration_ms: 0.809623
+      type: 'test'
+      ...
+    # Subtest: G-DEV-01: on-disk bytes match locked LF manifest
+    ok 2 - G-DEV-01: on-disk bytes match locked LF manifest
+      ---
+      duration_ms: 0.223236
+      type: 'test'
+      ...
+    # Subtest: G-DEV-02: on-disk bytes match locked LF manifest
+    ok 3 - G-DEV-02: on-disk bytes match locked LF manifest
+      ---
+      duration_ms: 0.119123
+      type: 'test'
+      ...
+    # Subtest: G-DEV-03: on-disk bytes match locked LF manifest
+    ok 4 - G-DEV-03: on-disk bytes match locked LF manifest
+      ---
+      duration_ms: 0.19649
+      type: 'test'
+      ...
+    # Subtest: G-DEV-04: on-disk bytes match locked LF manifest
+    ok 5 - G-DEV-04: on-disk bytes match locked LF manifest
+      ---
+      duration_ms: 0.082826
+      type: 'test'
+      ...
+    # Subtest: G-DEV-05: on-disk bytes match locked LF manifest
+    ok 6 - G-DEV-05: on-disk bytes match locked LF manifest
+      ---
+      duration_ms: 0.074686
+      type: 'test'
+      ...
+    # Subtest: G-DEV-06: on-disk bytes match locked LF manifest
+    ok 7 - G-DEV-06: on-disk bytes match locked LF manifest
+      ---
+      duration_ms: 0.080653
+      type: 'test'
+      ...
+    1..7
+ok 82 - verbatim B brief fixture byte locks (LF checkout)
+  ---
+  duration_ms: 2.319469
+  type: 'suite'
+  ...
+# Subtest: research store admission control repair
+    # Subtest: releases exclusive lock when session control publication fails
+    ok 1 - releases exclusive lock when session control publication fails
+      ---
+      duration_ms: 33.030116
+      type: 'test'
+      ...
+    # Subtest: spawned child exit leaves bound lock; admitted recovery then new owner
+    ok 2 - spawned child exit leaves bound lock; admitted recovery then new owner
+      ---
+      duration_ms: 259.354514
+      type: 'test'
+      ...
+    # Subtest: denies stale recovery when control is tampered but lock still names live owner pid
+    ok 3 - denies stale recovery when control is tampered but lock still names live owner pid
+      ---
+      duration_ms: 7.549912
+      type: 'test'
+      ...
+    # Subtest: deterministic handoff race: new owner blocked until control removed under held lock
+    ok 4 - deterministic handoff race: new owner blocked until control removed under held lock
+      ---
+      duration_ms: 2.691008
+      type: 'test'
+      ...
+    # Subtest: TOCTOU regression: legacy post-lock control removal after new owner open deletes successor
+    ok 5 - TOCTOU regression: legacy post-lock control removal after new owner open deletes successor
+      ---
+      duration_ms: 9.368294
+      type: 'test'
+      ...
+    # Subtest: stale owner close does not remove successor control or lock
+    ok 6 - stale owner close does not remove successor control or lock
+      ---
+      duration_ms: 14.832472
+      type: 'test'
+      ...
+    # Subtest: two-process external cancel request reaches owner AbortController
+    ok 7 - two-process external cancel request reaches owner AbortController
+      ---
+      duration_ms: 248.496196
+      type: 'test'
+      ...
+    1..7
+ok 83 - research store admission control repair
+  ---
+  duration_ms: 576.466546
+  type: 'suite'
+  ...
+# Subtest: buildSemanticSupportReviewInput
+    # Subtest: includes admitted inline passage text and marks unavailable contents
+    ok 1 - includes admitted inline passage text and marks unavailable contents
+      ---
+      duration_ms: 0.623361
+      type: 'test'
+      ...
+    1..1
+ok 84 - buildSemanticSupportReviewInput
+  ---
+  duration_ms: 1.197494
+  type: 'suite'
+  ...
+# Subtest: buildSynthesizedResearchReport repairs
+    # Subtest: does not treat free-form model synthesis as verified fact in answer_summary
+    ok 1 - does not treat free-form model synthesis as verified fact in answer_summary
+      ---
+      duration_ms: 0.865283
+      type: 'test'
+      ...
+    # Subtest: buildVerifiedReportAssertions only includes supported findings
+    ok 2 - buildVerifiedReportAssertions only includes supported findings
+      ---
+      duration_ms: 0.484906
+      type: 'test'
+      ...
+    # Subtest: links report finding_ids to supported findings only
+    ok 3 - links report finding_ids to supported findings only
+      ---
+      duration_ms: 0.185334
+      type: 'test'
+      ...
+    1..3
+ok 85 - buildSynthesizedResearchReport repairs
+  ---
+  duration_ms: 2.149476
+  type: 'suite'
+  ...
+# Subtest: research engine cancel/resume control (M1.3 slice)
+    # Subtest: inspect session reads terminal state without owner lock
+    ok 1 - inspect session reads terminal state without owner lock
+      ---
+      duration_ms: 26.737727
+      type: 'test'
+      ...
+    # Subtest: admitted stale recovery then host resume continuation journey
+    ok 2 - admitted stale recovery then host resume continuation journey
+      ---
+      duration_ms: 281.360649
+      type: 'test'
+      ...
+    # Subtest: model bridge invokes fixture structured output with attempt id
+    ok 3 - model bridge invokes fixture structured output with attempt id
+      ---
+      duration_ms: 0.619876
+      type: 'test'
+      ...
+    1..3
+ok 86 - research engine cancel/resume control (M1.3 slice)
+  ---
+  duration_ms: 309.506135
+  type: 'suite'
+  ...
+# Subtest: semantic support review persistence shape
+    # Subtest: marks omitted findings not_checked instead of leaving semantic_support unset
+    ok 1 - marks omitted findings not_checked instead of leaving semantic_support unset
+      ---
+      duration_ms: 1.685646
+      type: 'test'
+      ...
+    1..1
+ok 87 - semantic support review persistence shape
+  ---
+  duration_ms: 3.218459
+  type: 'suite'
+  ...
+# Subtest: model receipt binding repairs
+    # Subtest: does not persist a foreign-operation receipt
+    ok 1 - does not persist a foreign-operation receipt
+      ---
+      duration_ms: 1.769676
+      type: 'test'
+      ...
+    1..1
+ok 88 - model receipt binding repairs
+  ---
+  duration_ms: 2.323037
+  type: 'suite'
+  ...
+# Subtest: research end-to-end pass repairs
+    # Subtest: persists not_checked judgments and reloads them from durable store
+    ok 1 - persists not_checked judgments and reloads them from durable store
+      ---
+      duration_ms: 36.8603
+      type: 'test'
+      ...
+    # Subtest: in-memory pass records usage settlement on model phases
+    ok 2 - in-memory pass records usage settlement on model phases
+      ---
+      duration_ms: 1.184896
+      type: 'test'
+      ...
+    1..2
+ok 89 - research end-to-end pass repairs
+  ---
+  duration_ms: 38.727546
+  type: 'suite'
+  ...
+# Subtest: research end-to-end pass (offline governed)
+    # Subtest: runs plan → admitted search/fetch → claims → review → cited partial report
+    ok 1 - runs plan → admitted search/fetch → claims → review → cited partial report
+      ---
+      duration_ms: 6.660669
+      type: 'test'
+      ...
+    # Subtest: ProviderResearchModelBridge uses request-local callback metadata (factory path)
+    ok 2 - ProviderResearchModelBridge uses request-local callback metadata (factory path)
+      ---
+      duration_ms: 0.564423
+      type: 'test'
+      ...
+    1..2
+ok 90 - research end-to-end pass (offline governed)
+  ---
+  duration_ms: 7.988798
+  type: 'suite'
+  ...
+# Subtest: planning receipt binding before plan activation
+    # Subtest: rejects foreign model result before appendPlanRevision
+    ok 1 - rejects foreign model result before appendPlanRevision
+      ---
+      duration_ms: 1.66999
+      type: 'test'
+      ...
+    1..1
+ok 91 - planning receipt binding before plan activation
+  ---
+  duration_ms: 2.165191
+  type: 'suite'
+  ...
+# Subtest: research iteration loop (admitted ports)
+    # Subtest: persists generated plan, receipt, and settled completion on success
+    ok 1 - persists generated plan, receipt, and settled completion on success
+      ---
+      duration_ms: 2.234075
+      type: 'test'
+      ...
+    # Subtest: reopens an existing admitted session without recreating the mission
+    ok 2 - reopens an existing admitted session without recreating the mission
+      ---
+      duration_ms: 0.667156
+      type: 'test'
+      ...
+    # Subtest: sends mission requirements to the model port
+    ok 3 - sends mission requirements to the model port
+      ---
+      duration_ms: 0.368008
+      type: 'test'
+      ...
+    # Subtest: works with ProviderResearchModelBridge (injected runner)
+    ok 4 - works with ProviderResearchModelBridge (injected runner)
+      ---
+      duration_ms: 0.616557
+      type: 'test'
+      ...
+    # Subtest: records uncertain completion without generated plan evidence
+    ok 5 - records uncertain completion without generated plan evidence
+      ---
+      duration_ms: 0.424431
+      type: 'test'
+      ...
+    # Subtest: records failed completion without plan evidence when model fails
+    ok 6 - records failed completion without plan evidence when model fails
+      ---
+      duration_ms: 0.634845
+      type: 'test'
+      ...
+    # Subtest: records uncertain completion when model invoke throws (no generated evidence)
+    ok 7 - records uncertain completion when model invoke throws (no generated evidence)
+      ---
+      duration_ms: 0.476441
+      type: 'test'
+      ...
+    # Subtest: records uncertain completion when model throws during cancellation
+    ok 8 - records uncertain completion when model throws during cancellation
+      ---
+      duration_ms: 0.531701
+      type: 'test'
+      ...
+    # Subtest: returns writeContext for the generated plan so a follow-up admitted write succeeds
+    ok 9 - returns writeContext for the generated plan so a follow-up admitted write succeeds
+      ---
+      duration_ms: 0.502245
+      type: 'test'
+      ...
+    # Subtest: does not append plan or model receipt when cancelled after inference
+    ok 10 - does not append plan or model receipt when cancelled after inference
+      ---
+      duration_ms: 0.473487
+      type: 'test'
+      ...
+    # Subtest: readTechnicalRepositorySource uses fetch access port
+    ok 11 - readTechnicalRepositorySource uses fetch access port
+      ---
+      duration_ms: 1.384626
+      type: 'test'
+      ...
+    1..11
+ok 92 - research iteration loop (admitted ports)
+  ---
+  duration_ms: 9.298834
+  type: 'suite'
+  ...
+# Subtest: research retrieval loop repairs
+    # Subtest: settles search cancelled without evidence when signal aborts after late discover ok
+    ok 1 - settles search cancelled without evidence when signal aborts after late discover ok
+      ---
+      duration_ms: 6.151511
+      type: 'test'
+      ...
+    # Subtest: settles uncertain when discover throws during cancellation
+    ok 2 - settles uncertain when discover throws during cancellation
+      ---
+      duration_ms: 0.596102
+      type: 'test'
+      ...
+    # Subtest: does not fetch when discover operationId mismatches search operation
+    ok 3 - does not fetch when discover operationId mismatches search operation
+      ---
+      duration_ms: 0.341938
+      type: 'test'
+      ...
+    # Subtest: does not append evidence when read operationId mismatches fetch operation
+    ok 4 - does not append evidence when read operationId mismatches fetch operation
+      ---
+      duration_ms: 6.967291
+      type: 'test'
+      ...
+    # Subtest: offline report omits no_live_network without proven offline execution
+    ok 5 - offline report omits no_live_network without proven offline execution
+      ---
+      duration_ms: 0.236715
+      type: 'test'
+      ...
+    # Subtest: settles fetch cancelled when aborted during evidence persistence after source write
+    ok 6 - settles fetch cancelled when aborted during evidence persistence after source write
+      ---
+      duration_ms: 1.243801
+      type: 'test'
+      ...
+    # Subtest: durable store: single cancelled completion when aborted during final appendPassage
+    ok 7 - durable store: single cancelled completion when aborted during final appendPassage
+      ---
+      duration_ms: 10.910192
+      type: 'test'
+      ...
+    # Subtest: settles fetch cancelled for zero passages when aborted after persistence loop
+    ok 8 - settles fetch cancelled for zero passages when aborted after persistence loop
+      ---
+      duration_ms: 1.006227
+      type: 'test'
+      ...
+    # Subtest: offline report records injected offline provenance when provided
+    ok 9 - offline report records injected offline provenance when provided
+      ---
+      duration_ms: 0.220343
+      type: 'test'
+      ...
+    1..9
+ok 93 - research retrieval loop repairs
+  ---
+  duration_ms: 28.728894
+  type: 'suite'
+  ...
+# Subtest: research retrieval loop (admitted ports)
+    # Subtest: runs discover → read → evidence through technical adapter and fake access
+    ok 1 - runs discover → read → evidence through technical adapter and fake access
+      ---
+      duration_ms: 3.170281
+      type: 'test'
+      ...
+    # Subtest: persists retrieval and offline terminal report on durable admitted session
+    ok 2 - persists retrieval and offline terminal report on durable admitted session
+      ---
+      duration_ms: 24.318057
+      type: 'test'
+      ...
+    # Subtest: chains planning then retrieval without duplicating general adapters
+    ok 3 - chains planning then retrieval without duplicating general adapters
+      ---
+      duration_ms: 1.615823
+      type: 'test'
+      ...
+    1..3
+ok 94 - research retrieval loop (admitted ports)
+  ---
+  duration_ms: 29.867611
+  type: 'suite'
+  ...
+# Subtest: validateModelInvocationReceipt
+    # Subtest: rejects foreign receipt operation_id
+    ok 1 - rejects foreign receipt operation_id
+      ---
+      duration_ms: 0.592773
+      type: 'test'
+      ...
+    1..1
+ok 95 - validateModelInvocationReceipt
+  ---
+  duration_ms: 1.103302
+  type: 'suite'
+  ...
+# Subtest: validateRetrievalEvidenceBindings
+    # Subtest: accepts a consistent discover/read chain
+    ok 1 - accepts a consistent discover/read chain
+      ---
+      duration_ms: 0.574045
+      type: 'test'
+      ...
+    # Subtest: rejects discover operationId mismatch
+    ok 2 - rejects discover operationId mismatch
+      ---
+      duration_ms: 0.28939
+      type: 'test'
+      ...
+    # Subtest: rejects read operationId mismatch
+    ok 3 - rejects read operationId mismatch
+      ---
+      duration_ms: 0.093178
+      type: 'test'
+      ...
+    # Subtest: rejects revision source_id mismatch
+    ok 4 - rejects revision source_id mismatch
+      ---
+      duration_ms: 0.090114
+      type: 'test'
+      ...
+    # Subtest: rejects passage source_revision_id mismatch
+    ok 5 - rejects passage source_revision_id mismatch
+      ---
+      duration_ms: 0.072156
+      type: 'test'
+      ...
+    # Subtest: rejects plan mission mismatch
+    ok 6 - rejects plan mission mismatch
+      ---
+      duration_ms: 0.081845
+      type: 'test'
+      ...
+    # Subtest: rejects plan revision mismatch with write context
+    ok 7 - rejects plan revision mismatch with write context
+      ---
+      duration_ms: 0.116061
+      type: 'test'
+      ...
+    1..7
+ok 96 - validateRetrievalEvidenceBindings
+  ---
+  duration_ms: 2.025778
+  type: 'suite'
+  ...
+# Subtest: research v2 fake ports
+    # Subtest: runs search/fetch without network
+    ok 1 - runs search/fetch without network
+      ---
+      duration_ms: 1.787778
+      type: 'test'
+      ...
+    # Subtest: search distinguishes cancel from zero hits
+    ok 2 - search distinguishes cancel from zero hits
+      ---
+      duration_ms: 0.143485
+      type: 'test'
+      ...
+    # Subtest: model port rejects malformed structured output
+    ok 3 - model port rejects malformed structured output
+      ---
+      duration_ms: 0.7952
+      type: 'test'
+      ...
+    # Subtest: appends durable mission-scoped events in order
+    ok 4 - appends durable mission-scoped events in order
+      ---
+      duration_ms: 4.618728
+      type: 'test'
+      ...
+    # Subtest: exportSnapshot round-trips writer fence and events
+    ok 5 - exportSnapshot round-trips writer fence and events
+      ---
+      duration_ms: 1.822646
+      type: 'test'
+      ...
+    1..5
+ok 97 - research v2 fake ports
+  ---
+  duration_ms: 9.949129
+  type: 'suite'
+  ...
+# Subtest: ProviderResearchModelBridge
+    # Subtest: invokes injected LlmRunner and returns validated structured output
+    ok 1 - invokes injected LlmRunner and returns validated structured output
+      ---
+      duration_ms: 1.944822
+      type: 'test'
+      ...
+    # Subtest: maps conservative cost precision to estimated settlement
+    ok 2 - maps conservative cost precision to estimated settlement
+      ---
+      duration_ms: 0.224947
+      type: 'test'
+      ...
+    # Subtest: ignores runner.getLastInvocationMetadata even when present on the object
+    ok 3 - ignores runner.getLastInvocationMetadata even when present on the object
+      ---
+      duration_ms: 0.286757
+      type: 'test'
+      ...
+    # Subtest: uses callback metadata when present
+    ok 4 - uses callback metadata when present
+      ---
+      duration_ms: 0.192058
+      type: 'test'
+      ...
+    # Subtest: isolates concurrent invocations via request-local callbacks
+    ok 5 - isolates concurrent invocations via request-local callbacks
+      ---
+      duration_ms: 30.191057
+      type: 'test'
+      ...
+    # Subtest: returns cancelled when signal aborts after runner completes
+    ok 6 - returns cancelled when signal aborts after runner completes
+      ---
+      duration_ms: 0.300952
+      type: 'test'
+      ...
+    1..6
+ok 98 - ProviderResearchModelBridge
+  ---
+  duration_ms: 33.995066
+  type: 'suite'
+  ...
+# Subtest: researchV2LiveModelPort
+    # Subtest: resolveLiveResearchModelConfigFromEnv returns null when provider/model unset
+    ok 1 - resolveLiveResearchModelConfigFromEnv returns null when provider/model unset
+      ---
+      duration_ms: 0.490419
+      type: 'test'
+      ...
+    # Subtest: createLiveResearchModelPort uses injected runner factory behind live gate
+    ok 2 - createLiveResearchModelPort uses injected runner factory behind live gate
+      ---
+      duration_ms: 1.741672
+      type: 'test'
+      ...
+    # Subtest: createProviderResearchModelBridge does not require live API gate
+    ok 3 - createProviderResearchModelBridge does not require live API gate
+      ---
+      duration_ms: 0.27439
+      type: 'test'
+      ...
+    1..3
+ok 99 - researchV2LiveModelPort
+  ---
+  duration_ms: 3.21547
+  type: 'suite'
+  ...
+# Subtest: durable research store (M1.1 conformance)
+    # Subtest: reopens with plan fencing and writer generation intact
+    ok 1 - reopens with plan fencing and writer generation intact
+      ---
+      duration_ms: 25.299524
+      type: 'test'
+      ...
+    # Subtest: persists terminal fence, late accounting, and host resume across reopen
+    ok 2 - persists terminal fence, late accounting, and host resume across reopen
+      ---
+      duration_ms: 9.403337
+      type: 'test'
+      ...
+    1..2
+ok 100 - durable research store (M1.1 conformance)
+  ---
+  duration_ms: 35.40701
+  type: 'suite'
+  ...
+# Subtest: durable store d9 review repairs
+    # Subtest: rejects a second open handle on the same directory (no lost plan update)
+    ok 1 - rejects a second open handle on the same directory (no lost plan update)
+      ---
+      duration_ms: 20.526396
+      type: 'test'
+      ...
+    # Subtest: does not cache mission memory when flush fails (EISDIR tmp) and allows retry
+    ok 2 - does not cache mission memory when flush fails (EISDIR tmp) and allows retry
+      ---
+      duration_ms: 3.193092
+      type: 'test'
+      ...
+    # Subtest: rejects malformed snapshot: terminal event with null terminal fence
+    ok 3 - rejects malformed snapshot: terminal event with null terminal fence
+      ---
+      duration_ms: 2.761624
+      type: 'test'
+      ...
+    # Subtest: restoreSnapshot fails closed on inconsistent fence vs events
+    ok 4 - restoreSnapshot fails closed on inconsistent fence vs events
+      ---
+      duration_ms: 0.231374
+      type: 'test'
+      ...
+    # Subtest: open rejects invalid JSON snapshot
+    ok 5 - open rejects invalid JSON snapshot
+      ---
+      duration_ms: 1.526722
+      type: 'test'
+      ...
+    # Subtest: serializes concurrent acquire on one handle during slow flush
+    ok 6 - serializes concurrent acquire on one handle during slow flush
+      ---
+      duration_ms: 93.082562
+      type: 'test'
+      ...
+    # Subtest: close drains in-flight mutation before releasing exclusive lock
+    ok 7 - close drains in-flight mutation before releasing exclusive lock
+      ---
+      duration_ms: 58.063985
+      type: 'test'
+      ...
+    # Subtest: rejects snapshot when operations map entry removed but intent events remain
+    ok 8 - rejects snapshot when operations map entry removed but intent events remain
+      ---
+      duration_ms: 2.712155
+      type: 'test'
+      ...
+    # Subtest: rejects snapshot when operations map completion diverges from completion event
+    ok 9 - rejects snapshot when operations map completion diverges from completion event
+      ---
+      duration_ms: 4.022069
+      type: 'test'
+      ...
+    # Subtest: after successful persist, reopen reads committed snapshot
+    ok 10 - after successful persist, reopen reads committed snapshot
+      ---
+      duration_ms: 2.392619
+      type: 'test'
+      ...
+    1..10
+ok 101 - durable store d9 review repairs
+  ---
+  duration_ms: 189.701038
+  type: 'suite'
+  ...
+# Subtest: dev-corpus manifest: every declared asset resolves, JSON parses, required source files, PDF fixture structure/text present
+ok 102 - dev-corpus manifest: every declared asset resolves, JSON parses, required source files, PDF fixture structure/text present
+  ---
+  duration_ms: 2.270652
+  type: 'test'
+  ...
+# Subtest: generalAdapterCatalog: exposes document and web adapter ids for A registry
+ok 103 - generalAdapterCatalog: exposes document and web adapter ids for A registry
+  ---
+  duration_ms: 0.573407
+  type: 'test'
+  ...
+# Subtest: generalProfileDefinition: declarative M0 shape
+ok 104 - generalProfileDefinition: declarative M0 shape
+  ---
+  duration_ms: 0.507633
+  type: 'test'
+  ...
+# Subtest: technical plain byte excerpt
+    # Subtest: does not split UTF-8 code units (emoji suffix)
+    ok 1 - does not split UTF-8 code units (emoji suffix)
+      ---
+      duration_ms: 0.593482
+      type: 'test'
+      ...
+    # Subtest: locator end_offset matches excerpt bytes in original admission
+    ok 2 - locator end_offset matches excerpt bytes in original admission
+      ---
+      duration_ms: 2.287634
+      type: 'test'
+      ...
+    1..2
+ok 105 - technical plain byte excerpt
+  ---
+  duration_ms: 3.525447
+  type: 'suite'
+  ...
+# Subtest: technical repository_file adapter M1.2 repairs
+    # Subtest: rejects repository_file without github_commit_sha before fetch
+    ok 1 - rejects repository_file without github_commit_sha before fetch
+      ---
+      duration_ms: 0.940539
+      type: 'test'
+      ...
+    # Subtest: rejects floating /blob/main/ observed_urls
+    ok 2 - rejects floating /blob/main/ observed_urls
+      ---
+      duration_ms: 0.375767
+      type: 'test'
+      ...
+    # Subtest: rejects login HTML and hash-inconsistent admission
+    ok 3 - rejects login HTML and hash-inconsistent admission
+      ---
+      duration_ms: 0.876319
+      type: 'test'
+      ...
+    # Subtest: returns cancelled when aborted after fetch completes
+    ok 4 - returns cancelled when aborted after fetch completes
+      ---
+      duration_ms: 0.535765
+      type: 'test'
+      ...
+    # Subtest: returns cancelled when aborted after discover search
+    ok 5 - returns cancelled when aborted after discover search
+      ---
+      duration_ms: 0.221988
+      type: 'test'
+      ...
+    # Subtest: rejects final_url repository swap with same commit and path
+    ok 6 - rejects final_url repository swap with same commit and path
+      ---
+      duration_ms: 0.362958
+      type: 'test'
+      ...
+    # Subtest: rejects admitted requested_url owner/repo drift from canonical source
+    ok 7 - rejects admitted requested_url owner/repo drift from canonical source
+      ---
+      duration_ms: 0.337113
+      type: 'test'
+      ...
+    # Subtest: rejects fetch response operation_id drift from request
+    ok 8 - rejects fetch response operation_id drift from request
+      ---
+      duration_ms: 0.263977
+      type: 'test'
+      ...
+    # Subtest: rejects provenance commit mismatch vs pinned source
+    ok 9 - rejects provenance commit mismatch vs pinned source
+      ---
+      duration_ms: 0.270788
+      type: 'test'
+      ...
+    # Subtest: repeat read with same operation id is byte-identical
+    ok 10 - repeat read with same operation id is byte-identical
+      ---
+      duration_ms: 1.127711
+      type: 'test'
+      ...
+    1..10
+ok 106 - technical repository_file adapter M1.2 repairs
+  ---
+  duration_ms: 6.181147
+  type: 'suite'
+  ...
+# Subtest: technical repository_file adapter
+    # Subtest: discover returns search hits as candidates via SourceAccessPort only
+    ok 1 - discover returns search hits as candidates via SourceAccessPort only
+      ---
+      duration_ms: 0.654093
+      type: 'test'
+      ...
+    # Subtest: read fetches admitted bytes and emits deterministic passages
+    ok 2 - read fetches admitted bytes and emits deterministic passages
+      ---
+      duration_ms: 1.300621
+      type: 'test'
+      ...
+    # Subtest: rejects unsupported source kinds without fetching
+    ok 3 - rejects unsupported source kinds without fetching
+      ---
+      duration_ms: 0.200158
+      type: 'test'
+      ...
+    # Subtest: exposes frozen adapter id
+    ok 4 - exposes frozen adapter id
+      ---
+      duration_ms: 0.442698
+      type: 'test'
+      ...
+    1..4
+ok 107 - technical repository_file adapter
+  ---
+  duration_ms: 3.239503
+  type: 'suite'
+  ...
+# Subtest: mission adapter resolution
+    # Subtest: general profile discovers via web adapter, not document
+    ok 1 - general profile discovers via web adapter, not document
+      ---
+      duration_ms: 1.748748
+      type: 'test'
+      ...
+    # Subtest: technical profile discovers via repository file adapter
+    ok 2 - technical profile discovers via repository file adapter
+      ---
+      duration_ms: 0.152908
+      type: 'test'
+      ...
+    # Subtest: read adapter follows source kind
+    ok 3 - read adapter follows source kind
+      ---
+      duration_ms: 0.217149
+      type: 'test'
+      ...
+    1..3
+ok 108 - mission adapter resolution
+  ---
+  duration_ms: 2.828902
+  type: 'suite'
+  ...
+# Subtest: reviewed B adapter integration (local combined branch)
+    # Subtest: registers generalAdapterCatalog document and web factories
+    ok 1 - registers generalAdapterCatalog document and web factories
+      ---
+      duration_ms: 0.948115
+      type: 'test'
+      ...
+    1..1
+ok 109 - reviewed B adapter integration (local combined branch)
+  ---
+  duration_ms: 1.449837
+  type: 'suite'
+  ...
+# Subtest: technical research registries (M1.2)
+    # Subtest: resolves technical profile and repository-file adapter
+    ok 1 - resolves technical profile and repository-file adapter
+      ---
+      duration_ms: 0.50833
+      type: 'test'
+      ...
+    # Subtest: wires adapter read end-to-end through registry lookup
+    ok 2 - wires adapter read end-to-end through registry lookup
+      ---
+      duration_ms: 1.229117
+      type: 'test'
+      ...
+    1..2
+ok 110 - technical research registries (M1.2)
+  ---
+  duration_ms: 2.392035
+  type: 'suite'
+  ...
+1..110
+# tests 242
+# suites 44
+# pass 242
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 11401.616755
+outer_exit=0
