@@ -4,10 +4,19 @@ import { join } from 'node:path'
 import type { Command } from 'commander'
 import { printJsonErrorAndExit, printJsonOrHuman } from './output.js'
 import { assertResearchV2LiveApiEnabled, isResearchV2LiveApiEnabled } from '../research/v2/liveApiGate.js'
+import { createLiveResearchModelPort } from '../research/v2/model/researchV2LiveModelPort.js'
 import {
-  createLiveResearchModelPort,
-  resolveLiveResearchModelConfigFromEnv,
-} from '../research/v2/model/researchV2LiveModelPort.js'
+  resolveLiveResearchModelConfigForCli,
+  resolveResearchV2OpenRouterRouteFromPolicy,
+} from '../research/v2/model/researchV2ModelRoute.js'
+import {
+  cancelResearchV2OwnerSession,
+  inspectResearchV2Store,
+  reportResearchV2Store,
+  resumeResearchV2Continuation,
+  runResearchV2CancelResumeJourney,
+  runResearchV2OfflineRun,
+} from '../research/v2/cli/researchV2CliOperations.js'
 import { openAdmittedOwnerStore } from '../research/v2/control/researchStoreAdmission.js'
 import { FixtureResearchModelBridge } from '../research/v2/model/fixtureModelBridge.js'
 import { runAdmittedPlanningIteration } from '../research/v2/engine/researchIterationLoop.js'
@@ -54,9 +63,8 @@ export async function runResearchV2DryRunPlan(
       session_id: owner.sessionId,
       planned_question_count: result.plannedQuestionCount,
       limitations: {
-        search: 'not_implemented',
-        live_plan: 'not_wired',
-        report: 'not_implemented',
+        search: 'use_v2_run_for_offline_retrieval',
+        report: 'use_v2_report_after_run',
       },
       note: 'Planning scaffold only — not a completed research engine or live research run.',
     }
@@ -71,17 +79,12 @@ export async function runResearchV2LivePlan(
   options: { store: string; json: boolean },
   seams?: {
     createModel?: () => ResearchModelPort
-    resolveConfig?: typeof resolveLiveResearchModelConfigFromEnv
+    resolveConfig?: typeof resolveLiveResearchModelConfigForCli
   },
 ): Promise<void> {
   assertResearchV2LiveApiEnabled()
-  const resolveConfig = seams?.resolveConfig ?? resolveLiveResearchModelConfigFromEnv
-  const liveConfig = resolveConfig()
-  if (!liveConfig) {
-    throw new Error(
-      'Live plan requires BABEL_RESEARCH_V2_PROVIDER and BABEL_RESEARCH_V2_MODEL_ID (optional BABEL_RESEARCH_V2_API_KEY_ENV).',
-    )
-  }
+  const resolveConfig = seams?.resolveConfig ?? resolveLiveResearchModelConfigForCli
+  const { config: liveConfig, route_report } = resolveConfig()
   const model = seams?.createModel?.() ?? createLiveResearchModelPort(liveConfig)
   await mkdir(options.store, { recursive: true })
   let owner: Awaited<ReturnType<typeof openAdmittedOwnerStore>> | undefined
@@ -104,13 +107,14 @@ export async function runResearchV2LivePlan(
       live_api: true,
       provider: liveConfig.engine.provider,
       model_id: liveConfig.engine.modelId,
+      ...(route_report ? { openrouter_route: route_report } : { config_source: 'babel_research_v2_env' }),
       store_directory: options.store,
       session_id: owner.sessionId,
       planned_question_count: result.plannedQuestionCount,
       plan_revision_id: result.planRevisionId,
       limitations: {
-        retrieval: 'not_implemented',
-        report: 'not_implemented',
+        retrieval: 'use_v2_run',
+        report: 'use_v2_report',
       },
       note: 'Live planning iteration only — not a completed research engine run.',
     }
@@ -147,6 +151,148 @@ export function registerResearchV2Commands(program: Command): void {
         gate_env: 'BABEL_RESEARCH_V2_ALLOW_LIVE_API',
       }
       printJsonOrHuman(payload, `live_api_enabled=${payload.live_api_enabled}`, options.json)
+    })
+
+  const print = (payload: unknown, human: string, json: boolean) =>
+    printJsonOrHuman(payload, human, json)
+
+  v2
+    .command('model-route')
+    .description('Report explicit OpenRouter route from model-policy (no network, no secrets)')
+    .option('--route-key <key>', 'model-policy backend key', '')
+    .option('--json', 'emit machine-readable output', false)
+    .action((options: { routeKey: string; json: boolean }) => {
+      try {
+        const route = resolveResearchV2OpenRouterRouteFromPolicy(
+          options.routeKey.trim() || undefined,
+        )
+        print(route, JSON.stringify(route, null, 2), options.json)
+      } catch (error) {
+        printJsonErrorAndExit(error instanceof Error ? error.message : String(error), options.json)
+      }
+    })
+
+  v2
+    .command('run')
+    .description('Offline injected research run into --store (fixture model + admitted corpus)')
+    .requiredOption('--store <dir>', 'admitted durable store directory')
+    .option('--json', 'emit machine-readable output', false)
+    .action(async (options: { store: string; json: boolean }) => {
+      try {
+        await runResearchV2OfflineRun({
+          store: options.store,
+          json: options.json,
+          print: (p, h) => print(p, h, options.json),
+        })
+      } catch (error) {
+        printJsonErrorAndExit(error instanceof Error ? error.message : String(error), options.json)
+      }
+    })
+
+  v2
+    .command('inspect')
+    .description('Inspect durable store events for a mission (no owner lock)')
+    .requiredOption('--store <dir>', 'admitted durable store directory')
+    .requiredOption('--mission-id <id>', 'mission id')
+    .option('--json', 'emit machine-readable output', false)
+    .action(async (options: { store: string; missionId: string; json: boolean }) => {
+      try {
+        await inspectResearchV2Store({
+          store: options.store,
+          missionId: options.missionId,
+          print: (p, h) => print(p, h, options.json),
+        })
+      } catch (error) {
+        printJsonErrorAndExit(error instanceof Error ? error.message : String(error), options.json)
+      }
+    })
+
+  v2
+    .command('report')
+    .description('Print latest terminal_receipt report for a mission')
+    .requiredOption('--store <dir>', 'admitted durable store directory')
+    .requiredOption('--mission-id <id>', 'mission id')
+    .option('--json', 'emit machine-readable output', false)
+    .action(async (options: { store: string; missionId: string; json: boolean }) => {
+      try {
+        await reportResearchV2Store({
+          store: options.store,
+          missionId: options.missionId,
+          print: (p, h) => print(p, h, options.json),
+        })
+      } catch (error) {
+        printJsonErrorAndExit(error instanceof Error ? error.message : String(error), options.json)
+      }
+    })
+
+  v2
+    .command('cancel')
+    .description('Submit external cancel request for an admitted owner session')
+    .requiredOption('--store <dir>', 'admitted durable store directory')
+    .requiredOption('--session-id <id>', 'owner session id from session control')
+    .option('--json', 'emit machine-readable output', false)
+    .action(async (options: { store: string; sessionId: string; json: boolean }) => {
+      try {
+        await cancelResearchV2OwnerSession({
+          store: options.store,
+          sessionId: options.sessionId,
+          print: (p, h) => print(p, h, options.json),
+        })
+      } catch (error) {
+        printJsonErrorAndExit(error instanceof Error ? error.message : String(error), options.json)
+      }
+    })
+
+  v2
+    .command('resume')
+    .description('Admit host-authorized research continuation after resumable terminal state')
+    .requiredOption('--store <dir>', 'admitted durable store directory')
+    .requiredOption('--mission-id <id>', 'mission id')
+    .requiredOption('--writer-generation <n>', 'expected writer generation', (v) => Number(v))
+    .requiredOption('--plan-revision-id <id>', 'acknowledged plan revision id')
+    .requiredOption('--terminal-state <state>', 'cancelled | interrupted | needs_reconciliation')
+    .requiredOption('--host-authorization-ref <ref>', 'host authorization reference')
+    .option('--json', 'emit machine-readable output', false)
+    .action(
+      async (options: {
+        store: string
+        missionId: string
+        writerGeneration: number
+        planRevisionId: string
+        terminalState: string
+        hostAuthorizationRef: string
+        json: boolean
+      }) => {
+        try {
+          await resumeResearchV2Continuation({
+            store: options.store,
+            missionId: options.missionId,
+            writerGeneration: options.writerGeneration,
+            planRevisionId: options.planRevisionId,
+            terminalState: options.terminalState as 'cancelled' | 'interrupted' | 'needs_reconciliation',
+            hostAuthorizationRef: options.hostAuthorizationRef,
+            print: (p, h) => print(p, h, options.json),
+          })
+        } catch (error) {
+          printJsonErrorAndExit(error instanceof Error ? error.message : String(error), options.json)
+        }
+      },
+    )
+
+  v2
+    .command('cancel-resume-once')
+    .description('Offline X-L1 journey: cancel terminal then resume continuation exactly once')
+    .requiredOption('--store <dir>', 'admitted durable store directory')
+    .option('--json', 'emit machine-readable output', false)
+    .action(async (options: { store: string; json: boolean }) => {
+      try {
+        await runResearchV2CancelResumeJourney({
+          store: options.store,
+          print: (p, h) => print(p, h, options.json),
+        })
+      } catch (error) {
+        printJsonErrorAndExit(error instanceof Error ? error.message : String(error), options.json)
+      }
     })
 
   v2

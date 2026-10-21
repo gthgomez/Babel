@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, it } from 'node:test'
 import { FixtureResearchModelBridge } from '../research/v2/model/fixtureModelBridge.js'
-import type { LiveResearchModelPortConfig } from '../research/v2/model/researchV2LiveModelPort.js'
+import { resolveLiveResearchModelConfigForCli } from '../research/v2/model/researchV2ModelRoute.js'
 import { runResearchV2LivePlan } from './researchV2Commands.js'
 
 describe('research v2 live-plan CLI wiring', () => {
@@ -22,11 +22,12 @@ describe('research v2 live-plan CLI wiring', () => {
         { store: storeDirectory, json: true },
         {
           createModel: () => model,
-          resolveConfig: () =>
-            ({
-              backendKey: 'test',
-              engine: { provider: 'openrouter', modelId: 'test/model' },
-            }) satisfies LiveResearchModelPortConfig,
+          resolveConfig: () => {
+            const env = { ...process.env }
+            delete env.BABEL_RESEARCH_V2_PROVIDER
+            delete env.BABEL_RESEARCH_V2_MODEL_ID
+            return resolveLiveResearchModelConfigForCli(env)
+          },
         },
       )
     } finally {
