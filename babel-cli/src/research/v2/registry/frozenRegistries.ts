@@ -7,7 +7,7 @@ import type {
 import { TechnicalRepositoryFileAdapter } from '../profiles/technical/repositoryFileAdapter.js'
 import { technicalProfileDefinition } from '../profiles/technical/technicalProfileDefinition.js'
 
-class MapSourceAdapterRegistry implements SourceAdapterRegistry {
+export class MapSourceAdapterRegistry implements SourceAdapterRegistry {
   constructor(private readonly byId: ReadonlyMap<string, SourceAdapter>) {}
 
   getAdapter(adapterId: string): SourceAdapter | undefined {
@@ -64,4 +64,18 @@ export function resolveSourceAdapterForMission(
     if (match) return match
   }
   return undefined
+}
+
+export function withAdditionalSourceAdapters(
+  registries: ReturnType<typeof createTechnicalResearchRegistries>,
+  adapters: readonly SourceAdapter[],
+): ReturnType<typeof createTechnicalResearchRegistries> {
+  const byId = new Map(registries.sourceAdapters.listAdapters().map((a) => [a.adapterId, a]))
+  for (const adapter of adapters) {
+    byId.set(adapter.adapterId, adapter)
+  }
+  return {
+    sourceAdapters: new MapSourceAdapterRegistry(byId),
+    profiles: registries.profiles,
+  }
 }
