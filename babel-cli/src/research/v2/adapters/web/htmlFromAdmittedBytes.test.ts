@@ -14,6 +14,77 @@ const devCorpusRoot = join(
   '../../profiles/general/fixtures/dev-corpus',
 )
 
+const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '../../../../../..')
+
+interface GDevguideHeadingStructureFixture {
+  schema: string
+  label: string
+  source_url: string
+  body_sha256: string
+  headings: Array<{
+    index: number
+    level: number
+    inner_html_sample: string
+    inner_has_nested_tags: boolean
+  }>
+  production_extractor_behavior: {
+    total_headings_dom_parse: number
+    production_regex_match_count: number
+  }
+}
+
+/** Minimal admitted HTML from C #408 structural JSON only (not full 125309-byte body). */
+function minimalHtmlFromHeadingStructureFixture(fixture: GDevguideHeadingStructureFixture): string {
+  const blocks = fixture.headings.map((h) => {
+    const body = `<p>fixture section ${h.index} body</p>`
+    return `<h${h.level}>${h.inner_html_sample}</h${h.level}>${body}`
+  })
+  return `<html><body>${blocks.join('')}</body></html>`
+}
+
+function legacyPlainInnerHeadingMatchCount(html: string): number {
+  const legacy = /<h([1-6])[^>]*>([^<]*)<\/h[1-6]>/gi
+  let count = 0
+  let match: RegExpExecArray | null
+  while ((match = legacy.exec(html)) !== null) {
+    if ((match[2] ?? '').trim()) count += 1
+  }
+  return count
+}
+
+test('passagesFromAdmittedStaticHtml: C NEW devguide heading structure (nested headerlink, not byte identity)', () => {
+  const fixturePath = join(
+    repoRoot,
+    'review-artifacts/g-l3-NEW-devguide-heading-structure-fixture-ba45f328.json',
+  )
+  const fixture = JSON.parse(readFileSync(fixturePath, 'utf8')) as GDevguideHeadingStructureFixture
+  assert.equal(fixture.production_extractor_behavior.production_regex_match_count, 0)
+  assert.equal(fixture.production_extractor_behavior.total_headings_dom_parse, 5)
+  const html = minimalHtmlFromHeadingStructureFixture(fixture)
+  assert.equal(legacyPlainInnerHeadingMatchCount(html), 0)
+  const admitted = buildAdmittedContent(
+    'op-g-l3-new-structure',
+    'web-mission-ref-diag-new-devguide',
+    'rev-structure-fixture-only',
+    Buffer.from(html, 'utf8'),
+    HTML_MEDIA_TYPE,
+    {
+      requestedUrl: fixture.source_url,
+      finalUrl: fixture.source_url,
+      redirectChain: [fixture.source_url],
+    },
+  )
+  const passages = passagesFromAdmittedStaticHtml(admitted)
+  assert.equal(passages.length, 5)
+  assert.deepEqual(passages[0]?.heading_path, ['Status of Python versions'])
+  assert.equal(
+    passages[0]?.locator.kind === 'section' ? passages[0].locator.section_id : '',
+    'status-of-python-versions',
+  )
+  assert.deepEqual(passages[1]?.heading_path, ['Supported versions'])
+  for (const p of passages) PassageRecordSchema.parse(p)
+})
+
 test('passagesFromAdmittedStaticHtml: nested heading markup yields stable section locators (representative, not live bytes)', () => {
   const rel = 'G-L3-fixtures/devguide-nested-heading-representative.html'
   const campaignRoot = join(dirname(fileURLToPath(import.meta.url)), '../../fixtures/campaign')

@@ -1,0 +1,82 @@
+{
+  "schema": "research-v2-g-l3-NEW-devguide-admitted-fetch-provenance/v1",
+  "label": "NEW diagnostic admitted direct fetch — NOT original-run byte reproduction",
+  "bound_head": "ba45f3280d32765979c43995006d77ad0f8443aa",
+  "operation_id": "diag-NEW-admitted-fetch-devguide-ba45f328-001",
+  "url_requested": "https://devguide.python.org/versions/",
+  "fetch_result_status": "ok",
+  "http_transport": {
+    "requested_url": "https://devguide.python.org/versions/",
+    "final_url": "https://devguide.python.org/versions/",
+    "http_status": "not_recorded_on_successful_fetch_ok_path",
+    "content_type_admitted": "text/html",
+    "charset_observed_in_html_meta": "utf-8",
+    "content_encoding_header": "unknown",
+    "wire_bytes_received": "unknown_on_success_path",
+    "decoded_admitted_byte_length": 125309,
+    "decoded_truncated": false,
+    "truncation_reason": null
+  },
+  "acquisition_diagnostics": null,
+  "admitted_revision": {
+    "revision_id": "rev-web-mission-ref-diag-new-devguide-a862729c9dc1b8c2",
+    "source_id": "web-mission-ref-diag-new-devguide",
+    "content_hash": "a862729c9dc1b8c23c75dd3f4b4b57f5603bcf45b8b325494fe789483339380e",
+    "retrieved_at": "2026-10-21T13:47:46.756Z",
+    "extraction_version": "fetch-source-access-2",
+    "media_type": "text/html",
+    "completeness": "complete",
+    "byte_length_received": 125309
+  },
+  "retained_html_local_path": "/tmp/g-l3-NEW-diagnostic-devguide-fetch.html",
+  "retained_html_note": "Full HTML kept only under /tmp; not committed to repository",
+  "decoded_body_sha256": "a862729c9dc1b8c23c75dd3f4b4b57f5603bcf45b8b325494fe789483339380e",
+  "decoded_body_byte_length": 125309,
+  "extraction_via_general_static_html_adapter": {
+    "outcome": "failed",
+    "message": "no heading-bounded sections extracted from admitted HTML"
+  },
+  "heading_structure_audit": [
+    {
+      "index": 0,
+      "level": 1,
+      "attrs": null,
+      "inner_html_sample": "Status of Python versions<a class=\"headerlink\" href=\"#status-of-python-versions\" title=\"Link to this heading\">¶</a>",
+      "inner_has_nested_tags": true,
+      "regex_plain_text_title": "Status of Python versions¶"
+    },
+    {
+      "index": 1,
+      "level": 2,
+      "attrs": null,
+      "inner_html_sample": "Supported versions<a class=\"headerlink\" href=\"#supported-versions\" title=\"Link to this heading\">¶</a>",
+      "inner_has_nested_tags": true,
+      "regex_plain_text_title": "Supported versions¶"
+    },
+    {
+      "index": 2,
+      "level": 2,
+      "attrs": null,
+      "inner_html_sample": "Unsupported versions<a class=\"headerlink\" href=\"#unsupported-versions\" title=\"Link to this heading\">¶</a>",
+      "inner_has_nested_tags": true,
+      "regex_plain_text_title": "Unsupported versions¶"
+    },
+    {
+      "index": 3,
+      "level": 2,
+      "attrs": null,
+      "inner_html_sample": "Full chart<a class=\"headerlink\" href=\"#full-chart\" title=\"Link to this heading\">¶</a>",
+      "inner_has_nested_tags": true,
+      "regex_plain_text_title": "Full chart¶"
+    },
+    {
+      "index": 4,
+      "level": 2,
+      "attrs": null,
+      "inner_html_sample": "Status key<a class=\"headerlink\" href=\"#status-key\" title=\"Link to this heading\">¶</a>",
+      "inner_has_nested_tags": true,
+      "regex_plain_text_title": "Status key¶"
+    }
+  ],
+  "extractor_root_cause_note": "Page contains h1/h2 headings with nested <a class=\"headerlink\"> markup. Production regex /<h([1-6])[^>]*>([^<]*)<\\/h[1-6]>/ matches 0 titles; DOM-style parse finds 5 headings. Extraction then finds no sections because regex loop never enters body extraction."
+}

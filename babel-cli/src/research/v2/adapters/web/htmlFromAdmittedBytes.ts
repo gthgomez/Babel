@@ -11,6 +11,7 @@ export const STATIC_HTML_EXTRACTION_VERSION = 'general-static-html/0.1.0'
 function headingInnerText(htmlFragment: string): string {
   return htmlFragment
     .replace(/<[^>]+>/g, ' ')
+    .replace(/\u00b6/g, '')
     .replace(/\s+/g, ' ')
     .trim()
 }

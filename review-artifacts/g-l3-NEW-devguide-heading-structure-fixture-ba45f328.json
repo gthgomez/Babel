@@ -1,0 +1,53 @@
+{
+  "schema": "research-v2-g-l3-NEW-devguide-heading-structure-fixture/v1",
+  "label": "Minimal structural sample from NEW diagnostic fetch only",
+  "source_url": "https://devguide.python.org/versions/",
+  "body_sha256": "a862729c9dc1b8c23c75dd3f4b4b57f5603bcf45b8b325494fe789483339380e",
+  "headings": [
+    {
+      "index": 0,
+      "level": 1,
+      "attrs": null,
+      "inner_html_sample": "Status of Python versions<a class=\"headerlink\" href=\"#status-of-python-versions\" title=\"Link to this heading\">¶</a>",
+      "inner_has_nested_tags": true,
+      "regex_plain_text_title": "Status of Python versions¶"
+    },
+    {
+      "index": 1,
+      "level": 2,
+      "attrs": null,
+      "inner_html_sample": "Supported versions<a class=\"headerlink\" href=\"#supported-versions\" title=\"Link to this heading\">¶</a>",
+      "inner_has_nested_tags": true,
+      "regex_plain_text_title": "Supported versions¶"
+    },
+    {
+      "index": 2,
+      "level": 2,
+      "attrs": null,
+      "inner_html_sample": "Unsupported versions<a class=\"headerlink\" href=\"#unsupported-versions\" title=\"Link to this heading\">¶</a>",
+      "inner_has_nested_tags": true,
+      "regex_plain_text_title": "Unsupported versions¶"
+    },
+    {
+      "index": 3,
+      "level": 2,
+      "attrs": null,
+      "inner_html_sample": "Full chart<a class=\"headerlink\" href=\"#full-chart\" title=\"Link to this heading\">¶</a>",
+      "inner_has_nested_tags": true,
+      "regex_plain_text_title": "Full chart¶"
+    },
+    {
+      "index": 4,
+      "level": 2,
+      "attrs": null,
+      "inner_html_sample": "Status key<a class=\"headerlink\" href=\"#status-key\" title=\"Link to this heading\">¶</a>",
+      "inner_has_nested_tags": true,
+      "regex_plain_text_title": "Status key¶"
+    }
+  ],
+  "production_extractor_behavior": {
+    "total_headings_dom_parse": 5,
+    "production_regex_match_count": 0,
+    "production_regex_matches_sample": []
+  }
+}

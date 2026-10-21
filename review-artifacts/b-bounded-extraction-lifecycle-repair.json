@@ -1,9 +1,18 @@
 {
   "label": "B_bounded_extraction_and_lifecycle_repair",
   "prior_matrix_checkpoint": "fe571ebb",
+  "c_checkpoint_reference": {
+    "pr": 408,
+    "commit": "6fdcda976b79b7c84ee7a6d3650d85bf805361f2",
+    "heading_structure_fixture": "review-artifacts/g-l3-NEW-devguide-heading-structure-fixture-ba45f328.json",
+    "admitted_fetch_provenance": "review-artifacts/g-l3-NEW-devguide-admitted-fetch-provenance-ba45f328.json",
+    "new_fetch_sha256": "a862729c9dc1b8c23c75dd3f4b4b57f5603bcf45b8b325494fe789483339380e",
+    "new_fetch_decoded_bytes": 125309,
+    "note": "Separate admitted fetch reproduction; full HTML retained by C locally only"
+  },
   "scope": {
     "nested_html_heading_extraction": "generic h1-h6 with nested inline markup; stable section_id via allocateSectionLocatorId",
-    "g_l3_fixture": "G-L3-fixtures/devguide-nested-heading-representative.html (representative only; does not claim live devguide byte parity)",
+    "g_l3_fixture": "G-L3-fixtures/devguide-nested-heading-representative.html plus C structural JSON regression (minimal HTML synthesis; not byte identity)",
     "lifecycle": "ModelEntryLatch replaces session-appearance polling in X-L1 + general lifecycle reciprocal tests; pre-bootstrap cancel tests added",
     "admission_diagnostics": "CRLF/LF hints on digest and length mismatch without weakening hashes",
     "deferred": "T-L2 explicit wire/decoded ceiling via A dependency-bearing factory (not landed on branch)"
