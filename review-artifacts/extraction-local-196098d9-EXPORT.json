@@ -5,14 +5,15 @@
     "tree": "4d6a4fef366e6734e9b95eddebbaa57a9e52c234"
   },
   "localHead": {
-    "commit": "c12d5ed39ccca47a8deef85a2b8167ee48e8edce",
-    "tree": "1bafc487e610d5a0204cb7082e3817b3e578ed2d"
+    "commit": "0f905fe73858fb56aa4c08a18c64b29eacf4b316",
+    "tree": "ff2c667ee78130383506a442f73fb76a6a3e964c"
   },
-  "identityBinding": "localHead/localTree = git rev-parse HEAD and HEAD^{tree} when this file was written",
-  "priorExportIdentityNote": "3175ba2f/e69d4477 stale; corrected to match rev-parse",
   "lifecycleRepairHead": {
-    "commit": "0693cb8f2eb1174432a7449806c4857937199253"
+    "commit": "0693cb8f2eb1174432a7449806c4857937199253",
+    "tree": "902ee792ee380e2929e3e89744ad62cefe838283"
   },
+  "identityBinding": "Verify: git rev-parse HEAD must equal localHead.commit",
+  "priorExportIdentityNote": "3175ba2f/e69d4477 was stale intermediate EXPORT",
   "commits": [
     "7128bd70 feat(general): M1 static HTML adapter and adapter catalog (local)",
     "6bb8d08d feat(general): M2 admitted PDF page text via pdfjs (local)",
@@ -20,12 +21,13 @@
     "3175ba2f docs(general): handoff pdfjs API pin and catalog exports for A (local)",
     "2d660bf0 chore(review): refresh extraction exports with A handoff metadata (local)",
     "0693cb8f fix(general): UTF-16 inline cap and interruptible PDF parser lifecycle (local)",
-    "c12d5ed3 chore(review): bind extraction exports to HEAD rev-parse identity (local)"
+    "c12d5ed3 chore(review): bind extraction exports to HEAD rev-parse identity (local)",
+    "0f905fe7 chore(review): align EXPORT localHead with rev-parse HEAD (local)"
   ],
   "patchFullLocal": {
     "path": "review-artifacts/extraction-local-196098d9-to-HEAD.patch",
-    "sha256": "7436c7bd8157d5234bb56f597438d654aa3c566b9a0ee8a950f9b8a261d270c0",
-    "bytes": 390623
+    "sha256": "dfadaea5ef25435571e81c87eea72000dea3f6c3fad9a9f8b3b39c2033112440",
+    "bytes": 488230
   },
   "blobManifestFull": [
     {
@@ -114,11 +116,11 @@
     },
     {
       "path": "review-artifacts/extraction-local-196098d9-EXPORT.json",
-      "blob": "addff3d07214ebdf6cfcccbb874a99a4e7bbeaa1"
+      "blob": "915f921c98e9c4019fb609a80d18e3fac0481350"
     },
     {
       "path": "review-artifacts/extraction-local-196098d9-to-HEAD.patch",
-      "blob": "20ad91bbf1d5bce4180186a405f6e7c093154945"
+      "blob": "03f2b9a4832fdc3c3a07ce66dbe1c54d0938b2f6"
     },
     {
       "path": "review-artifacts/extraction-local-focused-test-command.txt",
@@ -136,5 +138,5 @@
     "pass": 49,
     "fail": 0
   },
-  "generatedAt": "2026-10-21T02:54:24Z"
+  "generatedAt": "2026-10-21T02:54:37Z"
 }
