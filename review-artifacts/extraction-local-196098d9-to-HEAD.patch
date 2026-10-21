@@ -1750,10 +1750,10 @@ index 00000000..6842a281
 +handoff doc: babel-cli/src/research/v2/profiles/general/EXTRACTION_SLICE_CANDIDATE_M1.md
 diff --git a/review-artifacts/extraction-local-196098d9-EXPORT.json b/review-artifacts/extraction-local-196098d9-EXPORT.json
 new file mode 100644
-index 00000000..915f921c
+index 00000000..8ecd2353
 --- /dev/null
 +++ b/review-artifacts/extraction-local-196098d9-EXPORT.json
-@@ -0,0 +1,140 @@
+@@ -0,0 +1,142 @@
 +{
 +  "label": "LOCAL EXTRACTION \u2014 not published; remote at 196098d9",
 +  "basePublishedHead": {
@@ -1761,14 +1761,15 @@ index 00000000..915f921c
 +    "tree": "4d6a4fef366e6734e9b95eddebbaa57a9e52c234"
 +  },
 +  "localHead": {
-+    "commit": "c12d5ed39ccca47a8deef85a2b8167ee48e8edce",
-+    "tree": "1bafc487e610d5a0204cb7082e3817b3e578ed2d"
++    "commit": "0f905fe73858fb56aa4c08a18c64b29eacf4b316",
++    "tree": "ff2c667ee78130383506a442f73fb76a6a3e964c"
 +  },
-+  "identityBinding": "localHead/localTree = git rev-parse HEAD and HEAD^{tree} when this file was written",
-+  "priorExportIdentityNote": "3175ba2f/e69d4477 stale; corrected to match rev-parse",
 +  "lifecycleRepairHead": {
-+    "commit": "0693cb8f2eb1174432a7449806c4857937199253"
++    "commit": "0693cb8f2eb1174432a7449806c4857937199253",
++    "tree": "902ee792ee380e2929e3e89744ad62cefe838283"
 +  },
++  "identityBinding": "Verify: git rev-parse HEAD must equal localHead.commit",
++  "priorExportIdentityNote": "3175ba2f/e69d4477 was stale intermediate EXPORT",
 +  "commits": [
 +    "7128bd70 feat(general): M1 static HTML adapter and adapter catalog (local)",
 +    "6bb8d08d feat(general): M2 admitted PDF page text via pdfjs (local)",
@@ -1776,12 +1777,13 @@ index 00000000..915f921c
 +    "3175ba2f docs(general): handoff pdfjs API pin and catalog exports for A (local)",
 +    "2d660bf0 chore(review): refresh extraction exports with A handoff metadata (local)",
 +    "0693cb8f fix(general): UTF-16 inline cap and interruptible PDF parser lifecycle (local)",
-+    "c12d5ed3 chore(review): bind extraction exports to HEAD rev-parse identity (local)"
++    "c12d5ed3 chore(review): bind extraction exports to HEAD rev-parse identity (local)",
++    "0f905fe7 chore(review): align EXPORT localHead with rev-parse HEAD (local)"
 +  ],
 +  "patchFullLocal": {
 +    "path": "review-artifacts/extraction-local-196098d9-to-HEAD.patch",
-+    "sha256": "7436c7bd8157d5234bb56f597438d654aa3c566b9a0ee8a950f9b8a261d270c0",
-+    "bytes": 390623
++    "sha256": "dfadaea5ef25435571e81c87eea72000dea3f6c3fad9a9f8b3b39c2033112440",
++    "bytes": 488230
 +  },
 +  "blobManifestFull": [
 +    {
@@ -1870,11 +1872,11 @@ index 00000000..915f921c
 +    },
 +    {
 +      "path": "review-artifacts/extraction-local-196098d9-EXPORT.json",
-+      "blob": "addff3d07214ebdf6cfcccbb874a99a4e7bbeaa1"
++      "blob": "915f921c98e9c4019fb609a80d18e3fac0481350"
 +    },
 +    {
 +      "path": "review-artifacts/extraction-local-196098d9-to-HEAD.patch",
-+      "blob": "20ad91bbf1d5bce4180186a405f6e7c093154945"
++      "blob": "03f2b9a4832fdc3c3a07ce66dbe1c54d0938b2f6"
 +    },
 +    {
 +      "path": "review-artifacts/extraction-local-focused-test-command.txt",
@@ -1892,14 +1894,14 @@ index 00000000..915f921c
 +    "pass": 49,
 +    "fail": 0
 +  },
-+  "generatedAt": "2026-10-21T02:54:24Z"
++  "generatedAt": "2026-10-21T02:54:37Z"
 +}
 diff --git a/review-artifacts/extraction-local-196098d9-to-HEAD.patch b/review-artifacts/extraction-local-196098d9-to-HEAD.patch
 new file mode 100644
-index 00000000..03f2b9a4
+index 00000000..149f6682
 --- /dev/null
 +++ b/review-artifacts/extraction-local-196098d9-to-HEAD.patch
-@@ -0,0 +1,9408 @@
+@@ -0,0 +1,11628 @@
 +diff --git a/babel-cli/src/research/v2/adapters/documents/generalDocumentAdapter.ts b/babel-cli/src/research/v2/adapters/documents/generalDocumentAdapter.ts
 +index 24bd0c1e..31f0f7af 100644
 +--- a/babel-cli/src/research/v2/adapters/documents/generalDocumentAdapter.ts
@@ -3652,10 +3654,10 @@ index 00000000..03f2b9a4
 ++handoff doc: babel-cli/src/research/v2/profiles/general/EXTRACTION_SLICE_CANDIDATE_M1.md
 +diff --git a/review-artifacts/extraction-local-196098d9-EXPORT.json b/review-artifacts/extraction-local-196098d9-EXPORT.json
 +new file mode 100644
-+index 00000000..addff3d0
++index 00000000..915f921c
 +--- /dev/null
 ++++ b/review-artifacts/extraction-local-196098d9-EXPORT.json
-+@@ -0,0 +1,143 @@
++@@ -0,0 +1,140 @@
 ++{
 ++  "label": "LOCAL EXTRACTION \u2014 not published; remote at 196098d9",
 ++  "basePublishedHead": {
@@ -3663,14 +3665,11 @@ index 00000000..03f2b9a4
 ++    "tree": "4d6a4fef366e6734e9b95eddebbaa57a9e52c234"
 ++  },
 ++  "localHead": {
-++    "commit": "06e7717d3be264badf71cc328553162716d0ffb3",
-++    "tree": "a72bc6490ee73c4a0c9f593b685f5037907df21e"
+++    "commit": "c12d5ed39ccca47a8deef85a2b8167ee48e8edce",
+++    "tree": "1bafc487e610d5a0204cb7082e3817b3e578ed2d"
 ++  },
-++  "identityBinding": "localHead/localTree from git rev-parse HEAD and HEAD^{tree} at generatedAt",
-++  "priorExportIdentityNote": "3175ba2f/e69d4477 was stale; 2d660bf0/9233005b was pre-lifecycle-repair tip",
-++  "repairHead": {
-++    "commit": "2e81686d2606709e54b6b1ecdbaf8d793524a088"
-++  },
+++  "identityBinding": "localHead/localTree = git rev-parse HEAD and HEAD^{tree} when this file was written",
+++  "priorExportIdentityNote": "3175ba2f/e69d4477 stale; corrected to match rev-parse",
 ++  "lifecycleRepairHead": {
 ++    "commit": "0693cb8f2eb1174432a7449806c4857937199253"
 ++  },
@@ -3681,12 +3680,12 @@ index 00000000..03f2b9a4
 ++    "3175ba2f docs(general): handoff pdfjs API pin and catalog exports for A (local)",
 ++    "2d660bf0 chore(review): refresh extraction exports with A handoff metadata (local)",
 ++    "0693cb8f fix(general): UTF-16 inline cap and interruptible PDF parser lifecycle (local)",
-++    "06e7717d chore(review): bind extraction exports to HEAD rev-parse identity (local)"
+++    "c12d5ed3 chore(review): bind extraction exports to HEAD rev-parse identity (local)"
 ++  ],
 ++  "patchFullLocal": {
 ++    "path": "review-artifacts/extraction-local-196098d9-to-HEAD.patch",
-++    "sha256": "6cdde2810b7fc95c7f88ff1ad399d638d778a7245159ec648a8e4dc0d448cfb5",
-++    "bytes": 295143
+++    "sha256": "7436c7bd8157d5234bb56f597438d654aa3c566b9a0ee8a950f9b8a261d270c0",
+++    "bytes": 390623
 ++  },
 ++  "blobManifestFull": [
 ++    {
@@ -3775,11 +3774,11 @@ index 00000000..03f2b9a4
 ++    },
 ++    {
 ++      "path": "review-artifacts/extraction-local-196098d9-EXPORT.json",
-++      "blob": "a918e117a1675feb7f3e735c890651002c398684"
+++      "blob": "addff3d07214ebdf6cfcccbb874a99a4e7bbeaa1"
 ++    },
 ++    {
 ++      "path": "review-artifacts/extraction-local-196098d9-to-HEAD.patch",
-++      "blob": "0dbfaef6025c6a6975d4c5823478b1eacb02a93b"
+++      "blob": "20ad91bbf1d5bce4180186a405f6e7c093154945"
 ++    },
 ++    {
 ++      "path": "review-artifacts/extraction-local-focused-test-command.txt",
@@ -3797,14 +3796,14 @@ index 00000000..03f2b9a4
 ++    "pass": 49,
 ++    "fail": 0
 ++  },
-++  "generatedAt": "2026-10-21T02:54:11Z"
+++  "generatedAt": "2026-10-21T02:54:24Z"
 ++}
 +diff --git a/review-artifacts/extraction-local-196098d9-to-HEAD.patch b/review-artifacts/extraction-local-196098d9-to-HEAD.patch
 +new file mode 100644
-+index 00000000..20ad91bb
++index 00000000..03f2b9a4
 +--- /dev/null
 ++++ b/review-artifacts/extraction-local-196098d9-to-HEAD.patch
-+@@ -0,0 +1,7185 @@
++@@ -0,0 +1,9408 @@
 ++diff --git a/babel-cli/src/research/v2/adapters/documents/generalDocumentAdapter.ts b/babel-cli/src/research/v2/adapters/documents/generalDocumentAdapter.ts
 ++index 24bd0c1e..31f0f7af 100644
 ++--- a/babel-cli/src/research/v2/adapters/documents/generalDocumentAdapter.ts
@@ -5557,7 +5556,7 @@ index 00000000..03f2b9a4
 +++handoff doc: babel-cli/src/research/v2/profiles/general/EXTRACTION_SLICE_CANDIDATE_M1.md
 ++diff --git a/review-artifacts/extraction-local-196098d9-EXPORT.json b/review-artifacts/extraction-local-196098d9-EXPORT.json
 ++new file mode 100644
-++index 00000000..a918e117
+++index 00000000..addff3d0
 ++--- /dev/null
 +++++ b/review-artifacts/extraction-local-196098d9-EXPORT.json
 ++@@ -0,0 +1,143 @@
@@ -5568,10 +5567,11 @@ index 00000000..03f2b9a4
 +++    "tree": "4d6a4fef366e6734e9b95eddebbaa57a9e52c234"
 +++  },
 +++  "localHead": {
-+++    "commit": "0693cb8f2eb1174432a7449806c4857937199253",
-+++    "tree": "902ee792ee380e2929e3e89744ad62cefe838283"
++++    "commit": "06e7717d3be264badf71cc328553162716d0ffb3",
++++    "tree": "a72bc6490ee73c4a0c9f593b685f5037907df21e"
 +++  },
-+++  "priorExportIdentityNote": "3175ba2f/e69d4477 was stale in an intermediate EXPORT; superseded by git rev-parse HEAD at generatedAt",
++++  "identityBinding": "localHead/localTree from git rev-parse HEAD and HEAD^{tree} at generatedAt",
++++  "priorExportIdentityNote": "3175ba2f/e69d4477 was stale; 2d660bf0/9233005b was pre-lifecycle-repair tip",
 +++  "repairHead": {
 +++    "commit": "2e81686d2606709e54b6b1ecdbaf8d793524a088"
 +++  },
@@ -5584,12 +5584,13 @@ index 00000000..03f2b9a4
 +++    "2e81686d fix(general): repair HTML/PDF extraction review defects (local)",
 +++    "3175ba2f docs(general): handoff pdfjs API pin and catalog exports for A (local)",
 +++    "2d660bf0 chore(review): refresh extraction exports with A handoff metadata (local)",
-+++    "0693cb8f fix(general): UTF-16 inline cap and interruptible PDF parser lifecycle (local)"
++++    "0693cb8f fix(general): UTF-16 inline cap and interruptible PDF parser lifecycle (local)",
++++    "06e7717d chore(review): bind extraction exports to HEAD rev-parse identity (local)"
 +++  ],
 +++  "patchFullLocal": {
 +++    "path": "review-artifacts/extraction-local-196098d9-to-HEAD.patch",
-+++    "sha256": "dde63c99c55a5ad019b2521cc62669ed2480df45728cb1be772b396de64b31ef",
-+++    "bytes": 201934
++++    "sha256": "6cdde2810b7fc95c7f88ff1ad399d638d778a7245159ec648a8e4dc0d448cfb5",
++++    "bytes": 295143
 +++  },
 +++  "blobManifestFull": [
 +++    {
@@ -5674,27 +5675,25 @@ index 00000000..03f2b9a4
 +++    },
 +++    {
 +++      "path": "review-artifacts/extraction-dependency-evidence.txt",
-+++      "blob": "0dad8d27d47ba3f83fdf013f81c7c3e57018c65b"
++++      "blob": "6842a281123deaf04244f879b46616b54ef909dc"
 +++    },
 +++    {
 +++      "path": "review-artifacts/extraction-local-196098d9-EXPORT.json",
-+++      "blob": "3d75b3abdd44d5f3f636287fb520c128d20be79f"
++++      "blob": "a918e117a1675feb7f3e735c890651002c398684"
 +++    },
 +++    {
 +++      "path": "review-artifacts/extraction-local-196098d9-to-HEAD.patch",
-+++      "blob": "e699701d1c2a9d7f1451ae099e8934b1f3d10dc7"
++++      "blob": "0dbfaef6025c6a6975d4c5823478b1eacb02a93b"
++++    },
++++    {
++++      "path": "review-artifacts/extraction-local-focused-test-command.txt",
++++      "blob": "1ef345f5662b6f0310cde7c9dddc12dc2e1793cb"
 +++    },
 +++    {
 +++      "path": "review-artifacts/extraction-local-test-receipt.tap.txt",
-+++      "blob": "761eb0badb19fd8d0173c33e30a048f6148ea8fd"
++++      "blob": "6e7b87564af2caf5ade5e5c646d08cd861d1f781"
 +++    }
 +++  ],
-+++  "agentAHandoff": {
-+++    "pdfjsDistVersionObserved": "5.4.296",
-+++    "pdfjsImport": "pdfjs-dist/legacy/build/pdf.mjs",
-+++    "catalogExport": "generalAdapterCatalog",
-+++    "catalogModule": "babel-cli/src/research/v2/profiles/general/generalAdapterCatalog.ts"
-+++  },
 +++  "focusedTestReceipt": {
 +++    "commandPath": "review-artifacts/extraction-local-focused-test-command.txt",
 +++    "tapPath": "review-artifacts/extraction-local-test-receipt.tap.txt",
@@ -5702,14 +5701,14 @@ index 00000000..03f2b9a4
 +++    "pass": 49,
 +++    "fail": 0
 +++  },
-+++  "generatedAt": "2026-10-21T02:54:03Z"
++++  "generatedAt": "2026-10-21T02:54:11Z"
 +++}
 ++diff --git a/review-artifacts/extraction-local-196098d9-to-HEAD.patch b/review-artifacts/extraction-local-196098d9-to-HEAD.patch
 ++new file mode 100644
-++index 00000000..0dbfaef6
+++index 00000000..20ad91bb
 ++--- /dev/null
 +++++ b/review-artifacts/extraction-local-196098d9-to-HEAD.patch
-++@@ -0,0 +1,4962 @@
+++@@ -0,0 +1,7185 @@
 +++diff --git a/babel-cli/src/research/v2/adapters/documents/generalDocumentAdapter.ts b/babel-cli/src/research/v2/adapters/documents/generalDocumentAdapter.ts
 +++index 24bd0c1e..31f0f7af 100644
 +++--- a/babel-cli/src/research/v2/adapters/documents/generalDocumentAdapter.ts
@@ -7426,14 +7425,14 @@ index 00000000..03f2b9a4
 +++++} as const
 +++diff --git a/review-artifacts/extraction-dependency-evidence.txt b/review-artifacts/extraction-dependency-evidence.txt
 +++new file mode 100644
-+++index 00000000..0dad8d27
++++index 00000000..6842a281
 +++--- /dev/null
 ++++++ b/review-artifacts/extraction-dependency-evidence.txt
 +++@@ -0,0 +1,30 @@
 ++++=== extraction dependency evidence (read-only) ===
-++++generatedAt: 2026-10-21T02:47:18Z
-++++localHead: 3175ba2f28c3cfeeaa905c28d18448506eca8291
-++++localTree: e69d4477fb322ee66f43331f4bf76dd32cb57302
+++++generatedAt: 2026-10-21T02:54:03Z
+++++localHead: 0693cb8f2eb1174432a7449806c4857937199253
+++++localTree: 902ee792ee380e2929e3e89744ad62cefe838283
 ++++
 ++++=== package.json direct dependency on pdfjs-dist ===
 ++++pdfjs-dist in package.json: (not a direct dependency key)
@@ -7462,10 +7461,10 @@ index 00000000..03f2b9a4
 ++++handoff doc: babel-cli/src/research/v2/profiles/general/EXTRACTION_SLICE_CANDIDATE_M1.md
 +++diff --git a/review-artifacts/extraction-local-196098d9-EXPORT.json b/review-artifacts/extraction-local-196098d9-EXPORT.json
 +++new file mode 100644
-+++index 00000000..3d75b3ab
++++index 00000000..a918e117
 +++--- /dev/null
 ++++++ b/review-artifacts/extraction-local-196098d9-EXPORT.json
-+++@@ -0,0 +1,144 @@
++++@@ -0,0 +1,143 @@
 ++++{
 ++++  "label": "LOCAL EXTRACTION \u2014 not published; remote at 196098d9",
 ++++  "basePublishedHead": {
@@ -7473,34 +7472,28 @@ index 00000000..03f2b9a4
 ++++    "tree": "4d6a4fef366e6734e9b95eddebbaa57a9e52c234"
 ++++  },
 ++++  "localHead": {
-++++    "commit": "3175ba2f28c3cfeeaa905c28d18448506eca8291",
-++++    "tree": "e69d4477fb322ee66f43331f4bf76dd32cb57302"
+++++    "commit": "0693cb8f2eb1174432a7449806c4857937199253",
+++++    "tree": "902ee792ee380e2929e3e89744ad62cefe838283"
 ++++  },
+++++  "priorExportIdentityNote": "3175ba2f/e69d4477 was stale in an intermediate EXPORT; superseded by git rev-parse HEAD at generatedAt",
 ++++  "repairHead": {
 ++++    "commit": "2e81686d2606709e54b6b1ecdbaf8d793524a088"
 ++++  },
-++++  "handoffDocHead": {
-++++    "commit": "3175ba2f28c3cfeeaa905c28d18448506eca8291",
-++++    "path": "babel-cli/src/research/v2/profiles/general/EXTRACTION_SLICE_CANDIDATE_M1.md"
-++++  },
-++++  "m1HtmlCatalogHead": {
-++++    "commit": "7128bd70e217b1700328d2d58060cd374cb806a9"
+++++  "lifecycleRepairHead": {
+++++    "commit": "0693cb8f2eb1174432a7449806c4857937199253"
 ++++  },
 ++++  "commits": [
 ++++    "7128bd70 feat(general): M1 static HTML adapter and adapter catalog (local)",
 ++++    "6bb8d08d feat(general): M2 admitted PDF page text via pdfjs (local)",
 ++++    "2e81686d fix(general): repair HTML/PDF extraction review defects (local)",
-++++    "3175ba2f docs(general): handoff pdfjs API pin and catalog exports for A (local)"
+++++    "3175ba2f docs(general): handoff pdfjs API pin and catalog exports for A (local)",
+++++    "2d660bf0 chore(review): refresh extraction exports with A handoff metadata (local)",
+++++    "0693cb8f fix(general): UTF-16 inline cap and interruptible PDF parser lifecycle (local)"
 ++++  ],
 ++++  "patchFullLocal": {
 ++++    "path": "review-artifacts/extraction-local-196098d9-to-HEAD.patch",
-++++    "sha256": "332fdd45f80774126d85788ffa7d0a83a1ef5936968c30ddcb138557985d852b",
-++++    "bytes": 113317
-++++  },
-++++  "patchM1HtmlCatalogOnly": {
-++++    "path": "review-artifacts/extraction-M1-html-catalog-196098d9-to-7128bd70.patch",
-++++    "sha256": "762c0b8f965b23405d5cf416b7a658dff35066a536ba2a868f5354f705740a86",
-++++    "bytes": 15068
+++++    "sha256": "dde63c99c55a5ad019b2521cc62669ed2480df45728cb1be772b396de64b31ef",
+++++    "bytes": 201934
 ++++  },
 ++++  "blobManifestFull": [
 ++++    {
@@ -7509,11 +7502,15 @@ index 00000000..03f2b9a4
 ++++    },
 ++++    {
 ++++      "path": "babel-cli/src/research/v2/adapters/documents/passageInlineText.test.ts",
-++++      "blob": "0b832811b67c09a2785cff750561aed86d64d60f"
+++++      "blob": "ee1b7d63b796dad178e1a8e0549b05c93075d925"
 ++++    },
 ++++    {
 ++++      "path": "babel-cli/src/research/v2/adapters/documents/passageInlineText.ts",
-++++      "blob": "9ca6e8834742893f8a174b11c2db862936119886"
+++++      "blob": "fb42a6c130a38d60b4bb6861df94956d9f034cc1"
+++++    },
+++++    {
+++++      "path": "babel-cli/src/research/v2/adapters/documents/pdfAbortable.ts",
+++++      "blob": "e36502bb147430aa6bc44a6f47b361fd823de07b"
 ++++    },
 ++++    {
 ++++      "path": "babel-cli/src/research/v2/adapters/documents/pdfAdmission.test.ts",
@@ -7525,15 +7522,15 @@ index 00000000..03f2b9a4
 ++++    },
 ++++    {
 ++++      "path": "babel-cli/src/research/v2/adapters/documents/pdfExtractionLimits.ts",
-++++      "blob": "4bd1a36df53434ac3ab5e3ca7d24947908e4363d"
+++++      "blob": "c2c026f4893c6f76a904d3127f1ab29c977ed2c9"
 ++++    },
 ++++    {
 ++++      "path": "babel-cli/src/research/v2/adapters/documents/pdfFromAdmittedBytes.test.ts",
-++++      "blob": "82ea85b3cc8534dd8bf864b82b5130da510542f7"
+++++      "blob": "6eed94bb2cc275cda6241c0e5f1d87efab31a5d7"
 ++++    },
 ++++    {
 ++++      "path": "babel-cli/src/research/v2/adapters/documents/pdfFromAdmittedBytes.ts",
-++++      "blob": "d7a53f7fe25ba164504de864f529c2f4d2288e04"
+++++      "blob": "6d1c996c022e38e82e734237e3d9f22276be6255"
 ++++    },
 ++++    {
 ++++      "path": "babel-cli/src/research/v2/adapters/documents/plainTextFromAdmittedBytes.ts",
@@ -7549,7 +7546,7 @@ index 00000000..03f2b9a4
 ++++    },
 ++++    {
 ++++      "path": "babel-cli/src/research/v2/adapters/web/htmlFromAdmittedBytes.test.ts",
-++++      "blob": "bc691e666c5fee41cad75a4f3beea36dc9edc666"
+++++      "blob": "3050cb47fd90eb23b9e6d35009c37897f322a287"
 ++++    },
 ++++    {
 ++++      "path": "babel-cli/src/research/v2/adapters/web/htmlFromAdmittedBytes.ts",
@@ -7565,7 +7562,7 @@ index 00000000..03f2b9a4
 ++++    },
 ++++    {
 ++++      "path": "babel-cli/src/research/v2/profiles/general/EXTRACTION_SLICE_CANDIDATE_M1.md",
-++++      "blob": "e850577ce224b41b41000e94f57310d1c5710f73"
+++++      "blob": "160b2c8c8afe7283dfbc3610ee432ac60b42a649"
 ++++    },
 ++++    {
 ++++      "path": "babel-cli/src/research/v2/profiles/general/generalAdapterCatalog.test.ts",
@@ -7581,15 +7578,15 @@ index 00000000..03f2b9a4
 ++++    },
 ++++    {
 ++++      "path": "review-artifacts/extraction-dependency-evidence.txt",
-++++      "blob": "e71f042708869f9562244be0698eec2e05763557"
+++++      "blob": "0dad8d27d47ba3f83fdf013f81c7c3e57018c65b"
 ++++    },
 ++++    {
 ++++      "path": "review-artifacts/extraction-local-196098d9-EXPORT.json",
-++++      "blob": "ff989869095461699d61962beee0798e7e70dec9"
+++++      "blob": "3d75b3abdd44d5f3f636287fb520c128d20be79f"
 ++++    },
 ++++    {
 ++++      "path": "review-artifacts/extraction-local-196098d9-to-HEAD.patch",
-++++      "blob": "7c9fac15d4a75c8cd4b3b98cd1bb1a0dba19a40a"
+++++      "blob": "e699701d1c2a9d7f1451ae099e8934b1f3d10dc7"
 ++++    },
 ++++    {
 ++++      "path": "review-artifacts/extraction-local-test-receipt.tap.txt",
@@ -7603,19 +7600,20 @@ index 00000000..03f2b9a4
 ++++    "catalogModule": "babel-cli/src/research/v2/profiles/general/generalAdapterCatalog.ts"
 ++++  },
 ++++  "focusedTestReceipt": {
-++++    "path": "review-artifacts/extraction-local-test-receipt.tap.txt",
-++++    "tests": 43,
-++++    "pass": 43,
+++++    "commandPath": "review-artifacts/extraction-local-focused-test-command.txt",
+++++    "tapPath": "review-artifacts/extraction-local-test-receipt.tap.txt",
+++++    "tests": 49,
+++++    "pass": 49,
 ++++    "fail": 0
 ++++  },
-++++  "generatedAt": "2026-10-21T02:47:18Z"
+++++  "generatedAt": "2026-10-21T02:54:03Z"
 ++++}
 +++diff --git a/review-artifacts/extraction-local-196098d9-to-HEAD.patch b/review-artifacts/extraction-local-196098d9-to-HEAD.patch
 +++new file mode 100644
-+++index 00000000..e699701d
++++index 00000000..0dbfaef6
 +++--- /dev/null
 ++++++ b/review-artifacts/extraction-local-196098d9-to-HEAD.patch
-+++@@ -0,0 +1,2781 @@
++++@@ -0,0 +1,4962 @@
 ++++diff --git a/babel-cli/src/research/v2/adapters/documents/generalDocumentAdapter.ts b/babel-cli/src/research/v2/adapters/documents/generalDocumentAdapter.ts
 ++++index 24bd0c1e..31f0f7af 100644
 ++++--- a/babel-cli/src/research/v2/adapters/documents/generalDocumentAdapter.ts
@@ -7667,88 +7665,241 @@ index 00000000..03f2b9a4
 ++++         ? 'unsupported_media'
 ++++diff --git a/babel-cli/src/research/v2/adapters/documents/passageInlineText.test.ts b/babel-cli/src/research/v2/adapters/documents/passageInlineText.test.ts
 ++++new file mode 100644
-++++index 00000000..0b832811
+++++index 00000000..ee1b7d63
 ++++--- /dev/null
 +++++++ b/babel-cli/src/research/v2/adapters/documents/passageInlineText.test.ts
-++++@@ -0,0 +1,28 @@
+++++@@ -0,0 +1,37 @@
 +++++import assert from 'node:assert/strict'
 +++++import { test } from 'node:test'
++++++import { PassageRecordSchema } from '../../contracts/passages.js'
 +++++import {
 +++++  buildInlinePassageTextRef,
-+++++  MAX_INLINE_PASSAGE_CODE_POINTS,
++++++  MAX_INLINE_PASSAGE_UTF16_UNITS,
 +++++  passageTextHash,
-+++++  truncateToCodePointLimit,
++++++  truncateToInlinePassageTextLimit,
 +++++} from './passageInlineText.js'
 +++++
-+++++test('truncateToCodePointLimit: does not split emoji surrogate pair', () => {
++++++test('truncateToInlinePassageTextLimit: 31999 ASCII + emoji stays within UTF-16 schema max', () => {
 +++++  const emoji = '😀'
-+++++  const prefix = 'a'.repeat(MAX_INLINE_PASSAGE_CODE_POINTS)
++++++  const prefix = 'a'.repeat(MAX_INLINE_PASSAGE_UTF16_UNITS - 1)
 +++++  const full = prefix + emoji
-+++++  const { emitted, truncated } = truncateToCodePointLimit(full, MAX_INLINE_PASSAGE_CODE_POINTS)
++++++  const { emitted, truncated } = truncateToInlinePassageTextLimit(full)
 +++++  assert.equal(truncated, true)
-+++++  assert.equal([...emitted].length, MAX_INLINE_PASSAGE_CODE_POINTS)
 +++++  assert.equal(emitted, prefix)
++++++  assert.equal(emitted.length, MAX_INLINE_PASSAGE_UTF16_UNITS - 1)
 +++++  assert.doesNotMatch(emitted, /\uD83D$/)
 +++++})
 +++++
-+++++test('buildInlinePassageTextRef: hashes emitted text only', () => {
-+++++  const long = 'x'.repeat(MAX_INLINE_PASSAGE_CODE_POINTS + 50)
++++++test('buildInlinePassageTextRef: hashes emitted text and satisfies PassageTextRefSchema', () => {
++++++  const long = 'x'.repeat(MAX_INLINE_PASSAGE_UTF16_UNITS + 50)
 +++++  const ref = buildInlinePassageTextRef(long)
-+++++  assert.equal(ref.text.length, [...ref.text].length)
++++++  assert.equal(ref.text.length, MAX_INLINE_PASSAGE_UTF16_UNITS)
 +++++  assert.equal(ref.text_hash, passageTextHash(ref.text))
 +++++  assert.notEqual(ref.text_hash, passageTextHash(long))
 +++++  assert.ok(ref.truncationNotes.length >= 1)
 +++++})
++++++
++++++test('buildInlinePassageTextRef: astral tail dropped before UTF-16 overflow', () => {
++++++  const emoji = '😀'
++++++  const prefix = 'a'.repeat(MAX_INLINE_PASSAGE_UTF16_UNITS)
++++++  const ref = buildInlinePassageTextRef(prefix + emoji)
++++++  assert.equal(ref.text.length, MAX_INLINE_PASSAGE_UTF16_UNITS)
++++++  assert.equal(ref.text, prefix)
++++++})
 ++++diff --git a/babel-cli/src/research/v2/adapters/documents/passageInlineText.ts b/babel-cli/src/research/v2/adapters/documents/passageInlineText.ts
 ++++new file mode 100644
-++++index 00000000..9ca6e883
+++++index 00000000..fb42a6c1
 ++++--- /dev/null
 +++++++ b/babel-cli/src/research/v2/adapters/documents/passageInlineText.ts
-++++@@ -0,0 +1,46 @@
+++++@@ -0,0 +1,77 @@
 +++++import { createHash } from 'node:crypto'
++++++import { PassageTextRefSchema } from '../../contracts/passages.js'
 +++++
-+++++/** Contract max for inline passage text (Unicode code points). */
-+++++export const MAX_INLINE_PASSAGE_CODE_POINTS = 32_000
++++++/** Frozen PassageTextRefSchema inline `text` max (UTF-16 code units). */
++++++export const MAX_INLINE_PASSAGE_UTF16_UNITS = 32_000
 +++++
 +++++export function passageTextHash(text: string): string {
 +++++  return createHash('sha256').update(text, 'utf8').digest('hex')
 +++++}
 +++++
-+++++export function truncateToCodePointLimit(
-+++++  text: string,
-+++++  limit: number,
-+++++): { emitted: string; truncated: boolean; originalCodePoints: number } {
-+++++  const codePoints = [...text]
-+++++  if (codePoints.length <= limit) {
-+++++    return { emitted: text, truncated: false, originalCodePoints: codePoints.length }
++++++function utf16UnitsForCodePoint(codePoint: string): number {
++++++  const cp = codePoint.codePointAt(0)
++++++  if (cp === undefined) return 0
++++++  return cp > 0xffff ? 2 : 1
++++++}
++++++
++++++export function truncateToInlinePassageTextLimit(fullText: string): {
++++++  emitted: string
++++++  truncated: boolean
++++++  originalCodePoints: number
++++++  originalUtf16Units: number
++++++} {
++++++  const codePoints = [...fullText]
++++++  const originalUtf16Units = fullText.length
++++++  if (originalUtf16Units <= MAX_INLINE_PASSAGE_UTF16_UNITS) {
++++++    return {
++++++      emitted: fullText,
++++++      truncated: false,
++++++      originalCodePoints: codePoints.length,
++++++      originalUtf16Units,
++++++    }
++++++  }
++++++  let emitted = ''
++++++  let emittedUnits = 0
++++++  for (const cp of codePoints) {
++++++    const units = utf16UnitsForCodePoint(cp)
++++++    if (emittedUnits + units > MAX_INLINE_PASSAGE_UTF16_UNITS) break
++++++    emitted += cp
++++++    emittedUnits += units
++++++  }
++++++  if (!emitted) {
++++++    throw new Error('inline passage text cannot be represented within UTF-16 unit limit')
 +++++  }
 +++++  return {
-+++++    emitted: codePoints.slice(0, limit).join(''),
-+++++    truncated: true,
++++++    emitted,
++++++    truncated: emitted !== fullText,
 +++++    originalCodePoints: codePoints.length,
++++++    originalUtf16Units,
 +++++  }
 +++++}
 +++++
-+++++/** Hash and emit only the stored inline text; truncate on code-point boundaries. */
++++++/** Hash and emit only stored inline text; whole code points; within schema UTF-16 max. */
 +++++export function buildInlinePassageTextRef(fullText: string): {
 +++++  text: string
 +++++  text_hash: string
 +++++  truncationNotes: string[]
 +++++} {
-+++++  const { emitted, truncated, originalCodePoints } = truncateToCodePointLimit(
-+++++    fullText,
-+++++    MAX_INLINE_PASSAGE_CODE_POINTS,
-+++++  )
++++++  const { emitted, truncated, originalCodePoints, originalUtf16Units } =
++++++    truncateToInlinePassageTextLimit(fullText)
 +++++  const truncationNotes: string[] = []
 +++++  if (truncated) {
 +++++    truncationNotes.push(
-+++++      `inline_text_truncated:${originalCodePoints}_to_${MAX_INLINE_PASSAGE_CODE_POINTS}_codepoints`,
++++++      `inline_text_truncated:${originalCodePoints}_codepoints_${originalUtf16Units}_utf16_to_${emitted.length}_utf16`,
 +++++    )
 +++++  }
-+++++  return {
++++++  const text_ref = {
++++++    mode: 'inline' as const,
 +++++    text: emitted,
 +++++    text_hash: passageTextHash(emitted),
++++++  }
++++++  PassageTextRefSchema.parse(text_ref)
++++++  return {
++++++    text: emitted,
++++++    text_hash: text_ref.text_hash,
 +++++    truncationNotes,
++++++  }
++++++}
+++++diff --git a/babel-cli/src/research/v2/adapters/documents/pdfAbortable.ts b/babel-cli/src/research/v2/adapters/documents/pdfAbortable.ts
+++++new file mode 100644
+++++index 00000000..e36502bb
+++++--- /dev/null
++++++++ b/babel-cli/src/research/v2/adapters/documents/pdfAbortable.ts
+++++@@ -0,0 +1,107 @@
++++++import { PdfExtractionCancelled, throwIfPdfAborted } from './pdfExtractionLimits.js'
++++++
++++++export function consumeLateRejection(promise: Promise<unknown>): void {
++++++  void promise.catch(() => {
++++++    /* absorb after cancellation */
++++++  })
++++++}
++++++
++++++export async function awaitWithPdfAbort<T>(
++++++  promise: Promise<T>,
++++++  signal?: AbortSignal,
++++++  onAbort?: () => void,
++++++): Promise<T> {
++++++  throwIfPdfAborted(signal)
++++++  if (!signal) return promise
++++++
++++++  return new Promise<T>((resolve, reject) => {
++++++    const finish = (handler: () => void) => {
++++++      signal.removeEventListener('abort', onAbortHandler)
++++++      handler()
++++++    }
++++++
++++++    const onAbortHandler = () => {
++++++      try {
++++++        onAbort?.()
++++++      } catch {
++++++        /* best-effort */
++++++      }
++++++      finish(() => reject(new PdfExtractionCancelled()))
++++++    }
++++++
++++++    if (signal.aborted) {
++++++      onAbortHandler()
++++++      return
++++++    }
++++++
++++++    signal.addEventListener('abort', onAbortHandler, { once: true })
++++++    consumeLateRejection(promise)
++++++    promise.then(
++++++      (value) => {
++++++        finish(() => {
++++++          try {
++++++            throwIfPdfAborted(signal)
++++++            resolve(value)
++++++          } catch (error) {
++++++            reject(error)
++++++          }
++++++        })
++++++      },
++++++      (error) => finish(() => reject(error)),
++++++    )
++++++  })
++++++}
++++++
++++++export function mergeAbortSignals(
++++++  userSignal?: AbortSignal,
++++++  deadlineMs?: number,
++++++): { signal: AbortSignal; dispose: () => void } {
++++++  const controller = new AbortController()
++++++  const sources: AbortSignal[] = []
++++++  if (userSignal) sources.push(userSignal)
++++++  if (deadlineMs !== undefined && deadlineMs > 0) {
++++++    sources.push(AbortSignal.timeout(deadlineMs))
++++++  }
++++++  if (sources.length === 0) {
++++++    return { signal: controller.signal, dispose: () => {} }
++++++  }
++++++
++++++  const forward = (source: AbortSignal) => {
++++++    if (source.aborted) controller.abort(source.reason)
++++++    else {
++++++      source.addEventListener(
++++++        'abort',
++++++        () => controller.abort(source.reason),
++++++        { once: true },
++++++      )
++++++    }
++++++  }
++++++  for (const source of sources) forward(source)
++++++
++++++  return {
++++++    signal: controller.signal,
++++++    dispose: () => {
++++++      /* listeners are once; scope ends with extraction */
++++++    },
++++++  }
++++++}
++++++
++++++export async function destroyPdfResources(
++++++  doc: { destroy: () => Promise<void> } | null,
++++++  loadingTask: { destroy: () => void } | null,
++++++): Promise<void> {
++++++  if (doc) {
++++++    try {
++++++      await doc.destroy()
++++++    } catch {
++++++      /* best-effort */
++++++    }
++++++  }
++++++  if (loadingTask) {
++++++    try {
++++++      loadingTask.destroy()
++++++    } catch {
++++++      /* best-effort */
++++++    }
 +++++  }
 +++++}
 ++++diff --git a/babel-cli/src/research/v2/adapters/documents/pdfAdmission.test.ts b/babel-cli/src/research/v2/adapters/documents/pdfAdmission.test.ts
@@ -7864,13 +8015,16 @@ index 00000000..03f2b9a4
 +++++}
 ++++diff --git a/babel-cli/src/research/v2/adapters/documents/pdfExtractionLimits.ts b/babel-cli/src/research/v2/adapters/documents/pdfExtractionLimits.ts
 ++++new file mode 100644
-++++index 00000000..4bd1a36d
+++++index 00000000..c2c026f4
 ++++--- /dev/null
 +++++++ b/babel-cli/src/research/v2/adapters/documents/pdfExtractionLimits.ts
-++++@@ -0,0 +1,14 @@
+++++@@ -0,0 +1,17 @@
 +++++/** General document PDF extractor bounds (offline admitted bytes). */
 +++++export const PDF_MAX_PAGES_PER_EXTRACTION = 512
-+++++export const PDF_MAX_OUTPUT_CODE_POINTS_PER_PAGE = 32_000
++++++/** Matches PassageTextRefSchema inline text max (UTF-16 code units). */
++++++export const PDF_MAX_OUTPUT_UTF16_UNITS_PER_PAGE = 32_000
++++++/** Wall-clock bound for a single admitted-PDF extraction (loading + pages). */
++++++export const PDF_EXTRACTION_DEADLINE_MS = 120_000
 +++++
 +++++export class PdfExtractionCancelled extends Error {
 +++++  constructor() {
@@ -7884,10 +8038,10 @@ index 00000000..03f2b9a4
 +++++}
 ++++diff --git a/babel-cli/src/research/v2/adapters/documents/pdfFromAdmittedBytes.test.ts b/babel-cli/src/research/v2/adapters/documents/pdfFromAdmittedBytes.test.ts
 ++++new file mode 100644
-++++index 00000000..82ea85b3
+++++index 00000000..6eed94bb
 ++++--- /dev/null
 +++++++ b/babel-cli/src/research/v2/adapters/documents/pdfFromAdmittedBytes.test.ts
-++++@@ -0,0 +1,56 @@
+++++@@ -0,0 +1,100 @@
 +++++import assert from 'node:assert/strict'
 +++++import { readFileSync } from 'node:fs'
 +++++import { dirname, join } from 'node:path'
@@ -7898,18 +8052,21 @@ index 00000000..03f2b9a4
 +++++import { PdfExtractionCancelled } from './pdfExtractionLimits.js'
 +++++import { passagesFromAdmittedPdf, PDF_TEXT_EXTRACTION_VERSION } from './pdfFromAdmittedBytes.js'
 +++++import { PDF_MEDIA_TYPE } from './pdfAdmission.js'
-+++++import { passageTextHash } from './passageInlineText.js'
++++++import { MAX_INLINE_PASSAGE_UTF16_UNITS, passageTextHash } from './passageInlineText.js'
 +++++
 +++++const pdfFixture = join(dirname(fileURLToPath(import.meta.url)), 'fixtures/two-page-sample.pdf')
 +++++
-+++++test('passagesFromAdmittedPdf: two-page fixture with page locators', async () => {
++++++function pdfAdmitted(operationId = 'op-pdf') {
 +++++  const bytes = readFileSync(pdfFixture)
-+++++  const admitted = buildAdmittedContent('op-pdf', 'src', 'rev', bytes, PDF_MEDIA_TYPE, {
++++++  return buildAdmittedContent(operationId, 'src', 'rev', bytes, PDF_MEDIA_TYPE, {
 +++++    requestedUrl: 'https://example.invalid/two-page-sample.pdf',
 +++++    finalUrl: 'https://example.invalid/two-page-sample.pdf',
 +++++    redirectChain: ['https://example.invalid/two-page-sample.pdf'],
 +++++  })
-+++++  const passages = await passagesFromAdmittedPdf(admitted)
++++++}
++++++
++++++test('passagesFromAdmittedPdf: two-page fixture with page locators', async () => {
++++++  const passages = await passagesFromAdmittedPdf(pdfAdmitted())
 +++++  assert.equal(passages.length, 2)
 +++++  assert.equal(passages[0]?.locator.kind, 'page')
 +++++  assert.equal(passages[0]?.locator.start_page, 1)
@@ -7920,22 +8077,63 @@ index 00000000..03f2b9a4
 +++++})
 +++++
 +++++test('passagesFromAdmittedPdf: cancellation during delayed page loop', async () => {
-+++++  const bytes = readFileSync(pdfFixture)
-+++++  const admitted = buildAdmittedContent('op-pdf', 'src', 'rev', bytes, PDF_MEDIA_TYPE)
++++++  const admitted = pdfAdmitted()
 +++++  const controller = new AbortController()
 +++++  const promise = passagesFromAdmittedPdf(admitted, controller.signal, { pageDelayMs: 80 })
 +++++  setTimeout(() => controller.abort(), 10)
 +++++  await assert.rejects(promise, (err: unknown) => err instanceof PdfExtractionCancelled)
 +++++})
 +++++
++++++test('passagesFromAdmittedPdf: abort interrupts stalled loading without waiting', async () => {
++++++  const admitted = pdfAdmitted()
++++++  const controller = new AbortController()
++++++  const started = Date.now()
++++++  const promise = passagesFromAdmittedPdf(admitted, controller.signal, { stallStage: 'loading' })
++++++  controller.abort()
++++++  await assert.rejects(promise, (err: unknown) => err instanceof PdfExtractionCancelled)
++++++  assert.ok(Date.now() - started < 500)
++++++})
++++++
++++++test('passagesFromAdmittedPdf: abort interrupts stalled getPage', async () => {
++++++  const admitted = pdfAdmitted()
++++++  const controller = new AbortController()
++++++  const started = Date.now()
++++++  const promise = passagesFromAdmittedPdf(admitted, controller.signal, { stallStage: 'getPage' })
++++++  controller.abort()
++++++  await assert.rejects(promise, (err: unknown) => err instanceof PdfExtractionCancelled)
++++++  assert.ok(Date.now() - started < 500)
++++++})
++++++
++++++test('passagesFromAdmittedPdf: abort interrupts stalled getTextContent', async () => {
++++++  const admitted = pdfAdmitted()
++++++  const controller = new AbortController()
++++++  const started = Date.now()
++++++  const promise = passagesFromAdmittedPdf(admitted, controller.signal, { stallStage: 'getTextContent' })
++++++  controller.abort()
++++++  await assert.rejects(promise, (err: unknown) => err instanceof PdfExtractionCancelled)
++++++  assert.ok(Date.now() - started < 500)
++++++})
++++++
 +++++test('passagesFromAdmittedPdf: hashes emitted inline text only when truncated', async () => {
-+++++  const bytes = readFileSync(pdfFixture)
-+++++  const admitted = buildAdmittedContent('op', 'src', 'rev', bytes, PDF_MEDIA_TYPE)
-+++++  const passages = await passagesFromAdmittedPdf(admitted)
++++++  const passages = await passagesFromAdmittedPdf(pdfAdmitted('op'))
 +++++  for (const p of passages) {
 +++++    if (p.text_ref.mode === 'inline') {
 +++++      assert.equal(p.text_ref.text_hash, passageTextHash(p.text_ref.text))
 +++++    }
++++++  }
++++++})
++++++
++++++test('passagesFromAdmittedPdf: long unicode page text satisfies PassageRecordSchema', async () => {
++++++  const emoji = '😀'
++++++  const pageText = 'a'.repeat(MAX_INLINE_PASSAGE_UTF16_UNITS - 1) + emoji
++++++  const passages = await passagesFromAdmittedPdf(pdfAdmitted(), undefined, {
++++++    synthesizePageText: { 1: pageText },
++++++  })
++++++  assert.equal(passages.length, 1)
++++++  PassageRecordSchema.parse(passages[0])
++++++  if (passages[0]?.text_ref.mode === 'inline') {
++++++    assert.equal(passages[0].text_ref.text.length, MAX_INLINE_PASSAGE_UTF16_UNITS - 1)
++++++    assert.equal(passages[0].text_ref.text_hash, passageTextHash(passages[0].text_ref.text))
 +++++  }
 +++++})
 +++++
@@ -7946,17 +8144,23 @@ index 00000000..03f2b9a4
 +++++})
 ++++diff --git a/babel-cli/src/research/v2/adapters/documents/pdfFromAdmittedBytes.ts b/babel-cli/src/research/v2/adapters/documents/pdfFromAdmittedBytes.ts
 ++++new file mode 100644
-++++index 00000000..d7a53f7f
+++++index 00000000..6d1c996c
 ++++--- /dev/null
 +++++++ b/babel-cli/src/research/v2/adapters/documents/pdfFromAdmittedBytes.ts
-++++@@ -0,0 +1,134 @@
+++++@@ -0,0 +1,231 @@
 +++++import type { AdmittedContent } from '../../contracts/admittedContent.js'
 +++++import type { PassageRecord } from '../../contracts/passages.js'
 +++++import { PassageRecordSchema } from '../../contracts/passages.js'
++++++import {
++++++  awaitWithPdfAbort,
++++++  destroyPdfResources,
++++++  mergeAbortSignals,
++++++} from './pdfAbortable.js'
 +++++import { buildInlinePassageTextRef } from './passageInlineText.js'
 +++++import { decodeAdmittedInlineBytes } from './plainTextFromAdmittedBytes.js'
 +++++import { PDF_MEDIA_TYPE } from './pdfAdmission.js'
 +++++import {
++++++  PDF_EXTRACTION_DEADLINE_MS,
 +++++  PDF_MAX_PAGES_PER_EXTRACTION,
 +++++  PdfExtractionCancelled,
 +++++  throwIfPdfAborted,
@@ -7964,9 +8168,30 @@ index 00000000..03f2b9a4
 +++++
 +++++export const PDF_TEXT_EXTRACTION_VERSION = 'general-pdf-text/0.1.0'
 +++++
++++++export type PdfExtractionStallStage = 'loading' | 'getPage' | 'getTextContent'
++++++
 +++++export type PdfExtractionOptions = {
 +++++  /** Test hook: delay between pages to exercise cancellation. */
 +++++  pageDelayMs?: number
++++++  /** Test hook: never-resolving parser stage (deterministic cancel interrupt). */
++++++  stallStage?: PdfExtractionStallStage
++++++  /** Test hook: build passages without pdfjs (page number → raw page text). */
++++++  synthesizePageText?: Record<number, string>
++++++}
++++++
++++++type PdfPageLike = {
++++++  getTextContent: () => Promise<{ items: Array<{ str?: string }> }>
++++++}
++++++
++++++type PdfDocumentLike = {
++++++  numPages: number
++++++  getPage: (n: number) => Promise<PdfPageLike>
++++++  destroy: () => Promise<void>
++++++}
++++++
++++++type PdfLoadingTaskLike = {
++++++  promise: Promise<PdfDocumentLike>
++++++  destroy: () => void
 +++++}
 +++++
 +++++function assertPdfMagic(bytes: Buffer): void {
@@ -7980,27 +8205,125 @@ index 00000000..03f2b9a4
 +++++    throwIfPdfAborted(signal)
 +++++    return
 +++++  }
-+++++  throwIfPdfAborted(signal)
-+++++  await new Promise<void>((resolve, reject) => {
-+++++    const timer = setTimeout(() => {
-+++++      signal?.removeEventListener('abort', onAbort)
-+++++      resolve()
-+++++    }, ms)
-+++++    const onAbort = () => {
-+++++      clearTimeout(timer)
-+++++      reject(new PdfExtractionCancelled())
-+++++    }
-+++++    signal?.addEventListener('abort', onAbort, { once: true })
-+++++  })
-+++++  throwIfPdfAborted(signal)
++++++  await awaitWithPdfAbort(
++++++    new Promise<void>((resolve) => {
++++++      const timer = setTimeout(resolve, ms)
++++++      signal?.addEventListener('abort', () => clearTimeout(timer), { once: true })
++++++    }),
++++++    signal,
++++++  )
 +++++}
 +++++
-+++++type PdfDocumentLike = {
-+++++  numPages: number
-+++++  getPage: (n: number) => Promise<{
-+++++    getTextContent: () => Promise<{ items: Array<{ str?: string }> }>
-+++++  }>
-+++++  destroy: () => Promise<void>
++++++function neverResolving<T>(): Promise<T> {
++++++  return new Promise<T>(() => {})
++++++}
++++++
++++++function buildPassageFromPageText(
++++++  admitted: AdmittedContent,
++++++  pageNum: number,
++++++  text: string,
++++++): PassageRecord {
++++++  const inline = buildInlinePassageTextRef(text)
++++++  const record: PassageRecord = {
++++++    passage_id: `${admitted.operation_id}:pdf:p${pageNum}`,
++++++    source_revision_id: admitted.revision.revision_id,
++++++    locator: { kind: 'page', start_page: pageNum, end_page: pageNum },
++++++    text_ref: {
++++++      mode: 'inline',
++++++      text: inline.text,
++++++      text_hash: inline.text_hash,
++++++    },
++++++    extraction_notes: ['pdfjs_text_layer', 'admitted_inline_pdf', ...inline.truncationNotes],
++++++  }
++++++  PassageRecordSchema.parse(record)
++++++  return record
++++++}
++++++
++++++function passagesFromSynthesizedPages(
++++++  admitted: AdmittedContent,
++++++  synthesizePageText: Record<number, string>,
++++++): PassageRecord[] {
++++++  const pageNums = Object.keys(synthesizePageText)
++++++    .map((k) => Number(k))
++++++    .filter((n) => Number.isInteger(n) && n > 0)
++++++    .sort((a, b) => a - b)
++++++  const passages = pageNums.map((pageNum) =>
++++++    buildPassageFromPageText(admitted, pageNum, synthesizePageText[pageNum] ?? ''),
++++++  )
++++++  if (passages.length === 0) {
++++++    throw new Error('pdf extraction produced no text passages')
++++++  }
++++++  return passages
++++++}
++++++
++++++async function loadPdfDocument(
++++++  raw: Buffer,
++++++  signal?: AbortSignal,
++++++  stallStage?: PdfExtractionStallStage,
++++++): Promise<{ doc: PdfDocumentLike; loadingTask: PdfLoadingTaskLike }> {
++++++  if (stallStage === 'loading') {
++++++    const loadingTask: PdfLoadingTaskLike = {
++++++      promise: neverResolving<PdfDocumentLike>(),
++++++      destroy: () => {},
++++++    }
++++++    const doc = await awaitWithPdfAbort(loadingTask.promise, signal, () => {
++++++      loadingTask.destroy()
++++++    })
++++++    return { doc, loadingTask }
++++++  }
++++++
++++++  const { getDocument } = await import('pdfjs-dist/legacy/build/pdf.mjs')
++++++  throwIfPdfAborted(signal)
++++++  const loadingTask = getDocument({ data: new Uint8Array(raw), useSystemFonts: true }) as PdfLoadingTaskLike
++++++  const doc = await awaitWithPdfAbort(loadingTask.promise, signal, () => {
++++++    loadingTask.destroy()
++++++  })
++++++  return { doc, loadingTask }
++++++}
++++++
++++++async function extractPassagesFromDoc(
++++++  admitted: AdmittedContent,
++++++  activeDoc: PdfDocumentLike,
++++++  signal?: AbortSignal,
++++++  options?: PdfExtractionOptions,
++++++): Promise<PassageRecord[]> {
++++++  if (activeDoc.numPages > PDF_MAX_PAGES_PER_EXTRACTION) {
++++++    throw new Error(
++++++      `pdf exceeds page limit (${activeDoc.numPages} > ${PDF_MAX_PAGES_PER_EXTRACTION})`,
++++++    )
++++++  }
++++++  const passages: PassageRecord[] = []
++++++  for (let pageNum = 1; pageNum <= activeDoc.numPages; pageNum++) {
++++++    throwIfPdfAborted(signal)
++++++    if (options?.pageDelayMs) {
++++++      await abortableDelay(options.pageDelayMs, signal)
++++++    }
++++++
++++++    const pagePromise =
++++++      options?.stallStage === 'getPage' ? neverResolving<PdfPageLike>() : activeDoc.getPage(pageNum)
++++++    const page = await awaitWithPdfAbort(pagePromise, signal)
++++++
++++++    throwIfPdfAborted(signal)
++++++    const textContentPromise =
++++++      options?.stallStage === 'getTextContent'
++++++        ? neverResolving<{ items: Array<{ str?: string }> }>()
++++++        : page.getTextContent()
++++++    const content = await awaitWithPdfAbort(textContentPromise, signal)
++++++
++++++    throwIfPdfAborted(signal)
++++++    const text = content.items
++++++      .map((item) => ('str' in item ? String(item.str) : ''))
++++++      .join(' ')
++++++      .replace(/\s+/g, ' ')
++++++      .trim()
++++++    if (!text) continue
++++++    passages.push(buildPassageFromPageText(admitted, pageNum, text))
++++++  }
++++++  throwIfPdfAborted(signal)
++++++  if (passages.length === 0) {
++++++    throw new Error('pdf extraction produced no text passages')
++++++  }
++++++  return passages
 +++++}
 +++++
 +++++/**
@@ -8016,72 +8339,44 @@ index 00000000..03f2b9a4
 +++++      `unsupported media_type for PDF extractor: ${admitted.media_type} (only ${PDF_MEDIA_TYPE})`,
 +++++    )
 +++++  }
-+++++  throwIfPdfAborted(signal)
++++++  const scope = mergeAbortSignals(signal, PDF_EXTRACTION_DEADLINE_MS)
++++++  const activeSignal = scope.signal
++++++
++++++  throwIfPdfAborted(activeSignal)
 +++++  const raw = decodeAdmittedInlineBytes(admitted)
 +++++  assertPdfMagic(raw)
-+++++  const { getDocument } = await import('pdfjs-dist/legacy/build/pdf.mjs')
-+++++  throwIfPdfAborted(signal)
-+++++  const loadingTask = getDocument({ data: new Uint8Array(raw), useSystemFonts: true })
++++++
++++++  if (options?.synthesizePageText) {
++++++    throwIfPdfAborted(activeSignal)
++++++    return passagesFromSynthesizedPages(admitted, options.synthesizePageText)
++++++  }
++++++
 +++++  let doc: PdfDocumentLike | null = null
++++++  let loadingTask: PdfLoadingTaskLike | null = null
 +++++  try {
-+++++    doc = (await loadingTask.promise) as unknown as PdfDocumentLike
-+++++    throwIfPdfAborted(signal)
-+++++    const activeDoc = doc
-+++++    if (activeDoc.numPages > PDF_MAX_PAGES_PER_EXTRACTION) {
-+++++      throw new Error(
-+++++        `pdf exceeds page limit (${activeDoc.numPages} > ${PDF_MAX_PAGES_PER_EXTRACTION})`,
-+++++      )
-+++++    }
-+++++    const pageCap = activeDoc.numPages
-+++++    const passages: PassageRecord[] = []
-+++++    for (let pageNum = 1; pageNum <= pageCap; pageNum++) {
-+++++      throwIfPdfAborted(signal)
-+++++      if (options?.pageDelayMs) {
-+++++        await abortableDelay(options.pageDelayMs, signal)
++++++    if (options?.stallStage === 'getPage' || options?.stallStage === 'getTextContent') {
++++++      doc = {
++++++        numPages: 1,
++++++        getPage: async () => ({
++++++          getTextContent: async () => ({ items: [{ str: 'unused' }] }),
++++++        }),
++++++        destroy: async () => {},
 +++++      }
-+++++      const page = await activeDoc.getPage(pageNum)
-+++++      throwIfPdfAborted(signal)
-+++++      const content = await page.getTextContent()
-+++++      throwIfPdfAborted(signal)
-+++++      const text = content.items
-+++++        .map((item) => ('str' in item ? String(item.str) : ''))
-+++++        .join(' ')
-+++++        .replace(/\s+/g, ' ')
-+++++        .trim()
-+++++      if (!text) continue
-+++++      const inline = buildInlinePassageTextRef(text)
-+++++      const record: PassageRecord = {
-+++++        passage_id: `${admitted.operation_id}:pdf:p${pageNum}`,
-+++++        source_revision_id: admitted.revision.revision_id,
-+++++        locator: { kind: 'page', start_page: pageNum, end_page: pageNum },
-+++++        text_ref: {
-+++++          mode: 'inline',
-+++++          text: inline.text,
-+++++          text_hash: inline.text_hash,
-+++++        },
-+++++        extraction_notes: ['pdfjs_text_layer', 'admitted_inline_pdf', ...inline.truncationNotes],
-+++++      }
-+++++      PassageRecordSchema.parse(record)
-+++++      passages.push(record)
++++++      loadingTask = { promise: Promise.resolve(doc), destroy: () => {} }
++++++      return await extractPassagesFromDoc(admitted, doc, activeSignal, options)
 +++++    }
-+++++    throwIfPdfAborted(signal)
-+++++    if (passages.length === 0) {
-+++++      throw new Error('pdf extraction produced no text passages')
-+++++    }
-+++++    return passages
++++++
++++++    const loaded = await loadPdfDocument(raw, activeSignal, options?.stallStage)
++++++    doc = loaded.doc
++++++    loadingTask = loaded.loadingTask
++++++    throwIfPdfAborted(activeSignal)
++++++    return await extractPassagesFromDoc(admitted, doc, activeSignal, options)
++++++  } catch (error) {
++++++    if (error instanceof PdfExtractionCancelled) throw error
++++++    throw error
 +++++  } finally {
-+++++    if (doc) {
-+++++      try {
-+++++        await doc.destroy()
-+++++      } catch {
-+++++        /* best-effort cleanup */
-+++++      }
-+++++    }
-+++++    try {
-+++++      loadingTask.destroy()
-+++++    } catch {
-+++++      /* best-effort cleanup */
-+++++    }
++++++    await destroyPdfResources(doc, loadingTask)
++++++    scope.dispose()
 +++++  }
 +++++}
 ++++diff --git a/babel-cli/src/research/v2/adapters/documents/plainTextFromAdmittedBytes.ts b/babel-cli/src/research/v2/adapters/documents/plainTextFromAdmittedBytes.ts
@@ -8292,10 +8587,10 @@ index 00000000..03f2b9a4
 +++++}
 ++++diff --git a/babel-cli/src/research/v2/adapters/web/htmlFromAdmittedBytes.test.ts b/babel-cli/src/research/v2/adapters/web/htmlFromAdmittedBytes.test.ts
 ++++new file mode 100644
-++++index 00000000..bc691e66
+++++index 00000000..3050cb47
 ++++--- /dev/null
 +++++++ b/babel-cli/src/research/v2/adapters/web/htmlFromAdmittedBytes.test.ts
-++++@@ -0,0 +1,74 @@
+++++@@ -0,0 +1,91 @@
 +++++import assert from 'node:assert/strict'
 +++++import { readFileSync } from 'node:fs'
 +++++import { dirname, join } from 'node:path'
@@ -8303,7 +8598,7 @@ index 00000000..03f2b9a4
 +++++import { test } from 'node:test'
 +++++import { PassageRecordSchema } from '../../contracts/passages.js'
 +++++import { buildAdmittedContent } from '../documents/testAdmittedFixtures.js'
-+++++import { passageTextHash } from '../documents/passageInlineText.js'
++++++import { MAX_INLINE_PASSAGE_UTF16_UNITS, passageTextHash } from '../documents/passageInlineText.js'
 +++++import { resolveQuarantinedFixturePath } from '../documents/quarantinePath.js'
 +++++import { passagesFromAdmittedStaticHtml, HTML_MEDIA_TYPE } from './htmlFromAdmittedBytes.js'
 +++++
@@ -8355,7 +8650,24 @@ index 00000000..03f2b9a4
 +++++  assert.equal(ref?.mode, 'inline')
 +++++  if (ref?.mode === 'inline') {
 +++++    assert.equal(ref.text_hash, passageTextHash(ref.text))
++++++    assert.equal(ref.text.length, MAX_INLINE_PASSAGE_UTF16_UNITS)
 +++++    assert.ok(passages[0]?.extraction_notes?.some((n) => n.includes('inline_text_truncated')))
++++++    PassageRecordSchema.parse(passages[0])
++++++  }
++++++})
++++++
++++++test('passagesFromAdmittedStaticHtml: long unicode respects UTF-16 schema max', () => {
++++++  const emoji = '😀'
++++++  const body = 'a'.repeat(MAX_INLINE_PASSAGE_UTF16_UNITS - 1) + emoji
++++++  const html = `<html><body><h1>H</h1><p>${body}</p></body></html>`
++++++  const admitted = buildAdmittedContent('op', 's', 'r', Buffer.from(html, 'utf8'), HTML_MEDIA_TYPE)
++++++  const passages = passagesFromAdmittedStaticHtml(admitted)
++++++  const record = passages[0]
++++++  assert.ok(record)
++++++  PassageRecordSchema.parse(record)
++++++  if (record.text_ref.mode === 'inline') {
++++++    assert.equal(record.text_ref.text.length, MAX_INLINE_PASSAGE_UTF16_UNITS - 1)
++++++    assert.equal(record.text_ref.text_hash, passageTextHash(record.text_ref.text))
 +++++  }
 +++++})
 +++++
@@ -8497,7 +8809,7 @@ index 00000000..03f2b9a4
 +++++}
 ++++diff --git a/babel-cli/src/research/v2/profiles/general/EXTRACTION_SLICE_CANDIDATE_M1.md b/babel-cli/src/research/v2/profiles/general/EXTRACTION_SLICE_CANDIDATE_M1.md
 ++++new file mode 100644
-++++index 00000000..e850577c
+++++index 00000000..160b2c8c
 ++++--- /dev/null
 +++++++ b/babel-cli/src/research/v2/profiles/general/EXTRACTION_SLICE_CANDIDATE_M1.md
 ++++@@ -0,0 +1,89 @@
@@ -8564,7 +8876,7 @@ index 00000000..03f2b9a4
 +++++| Pages | `doc.numPages`; loop `doc.getPage(pageNum)` |
 +++++| Text | `(await page.getTextContent()).items` — text from items with `str` (ignore non-`str` items) |
 +++++| Cancel | `AbortSignal` → `PdfExtractionCancelled` via `throwIfPdfAborted` / adapter `cancelledRead` |
-+++++| Limits | `PDF_MAX_PAGES_PER_EXTRACTION` (512); inline text cap `MAX_INLINE_PASSAGE_CODE_POINTS` (32_000 code points per page passage) |
++++++| Limits | `PDF_MAX_PAGES_PER_EXTRACTION` (512); `PDF_EXTRACTION_DEADLINE_MS`; inline text cap `MAX_INLINE_PASSAGE_UTF16_UNITS` (32_000 UTF-16 units, whole code points) |
 +++++| Cleanup (always) | `await doc.destroy()`; `loadingTask.destroy()` in `finally` |
 +++++
 +++++Admission: `application/pdf` only; `%PDF-` magic on admitted inline bytes (`pdfAdmission.ts`). IO remains **`SourceAccessPort.fetchContent`** → admitted inline bytes only.
@@ -8572,7 +8884,7 @@ index 00000000..03f2b9a4
 +++++### HTML / inline text (no new A dependency)
 +++++
 +++++- Section locators: `htmlSectionLocator.ts` (`allocateSectionLocatorId`, `sectionSlugFromHeading`).
-+++++- Inline hash/truncate: `passageInlineText.ts` (`buildInlinePassageTextRef`, `MAX_INLINE_PASSAGE_CODE_POINTS`).
++++++- Inline hash/truncate: `passageInlineText.ts` (`buildInlinePassageTextRef`, `MAX_INLINE_PASSAGE_UTF16_UNITS`).
 +++++
 +++++### Mission flow (unchanged)
 +++++
@@ -9018,14 +9330,14 @@ index 00000000..03f2b9a4
 ++++++} as const
 ++++diff --git a/review-artifacts/extraction-dependency-evidence.txt b/review-artifacts/extraction-dependency-evidence.txt
 ++++new file mode 100644
-++++index 00000000..e71f0427
+++++index 00000000..0dad8d27
 ++++--- /dev/null
 +++++++ b/review-artifacts/extraction-dependency-evidence.txt
-++++@@ -0,0 +1,23 @@
+++++@@ -0,0 +1,30 @@
 +++++=== extraction dependency evidence (read-only) ===
-+++++generatedAt: 2026-10-21T02:46:27Z
-+++++localHead: 2e81686d2606709e54b6b1ecdbaf8d793524a088
-+++++localTree: be5e60aa1aacd3062f73179e1d606f10b3a036ad
++++++generatedAt: 2026-10-21T02:47:18Z
++++++localHead: 3175ba2f28c3cfeeaa905c28d18448506eca8291
++++++localTree: e69d4477fb322ee66f43331f4bf76dd32cb57302
 +++++
 +++++=== package.json direct dependency on pdfjs-dist ===
 +++++pdfjs-dist in package.json: (not a direct dependency key)
@@ -9045,12 +9357,19 @@ index 00000000..03f2b9a4
 +++++
 +++++=== blob at HEAD (rev-parse) ===
 +++++5469b80b6bf025e59f6628d448d6d839fb7fac0e
++++++
++++++=== B importer contract (A must preserve for pin/smoke) ===
++++++dynamic import: pdfjs-dist/legacy/build/pdf.mjs
++++++export used: getDocument
++++++resolved version today: 5.4.296 (transitive only — A adds direct dependency + prod-install smoke)
++++++catalog export: generalAdapterCatalog (profiles/general/generalAdapterCatalog.ts)
++++++handoff doc: babel-cli/src/research/v2/profiles/general/EXTRACTION_SLICE_CANDIDATE_M1.md
 ++++diff --git a/review-artifacts/extraction-local-196098d9-EXPORT.json b/review-artifacts/extraction-local-196098d9-EXPORT.json
 ++++new file mode 100644
-++++index 00000000..ff989869
+++++index 00000000..3d75b3ab
 ++++--- /dev/null
 +++++++ b/review-artifacts/extraction-local-196098d9-EXPORT.json
-++++@@ -0,0 +1,113 @@
+++++@@ -0,0 +1,144 @@
 +++++{
 +++++  "label": "LOCAL EXTRACTION \u2014 not published; remote at 196098d9",
 +++++  "basePublishedHead": {
@@ -9058,11 +9377,15 @@ index 00000000..03f2b9a4
 +++++    "tree": "4d6a4fef366e6734e9b95eddebbaa57a9e52c234"
 +++++  },
 +++++  "localHead": {
-+++++    "commit": "2e81686d2606709e54b6b1ecdbaf8d793524a088",
-+++++    "tree": "be5e60aa1aacd3062f73179e1d606f10b3a036ad"
++++++    "commit": "3175ba2f28c3cfeeaa905c28d18448506eca8291",
++++++    "tree": "e69d4477fb322ee66f43331f4bf76dd32cb57302"
 +++++  },
 +++++  "repairHead": {
 +++++    "commit": "2e81686d2606709e54b6b1ecdbaf8d793524a088"
++++++  },
++++++  "handoffDocHead": {
++++++    "commit": "3175ba2f28c3cfeeaa905c28d18448506eca8291",
++++++    "path": "babel-cli/src/research/v2/profiles/general/EXTRACTION_SLICE_CANDIDATE_M1.md"
 +++++  },
 +++++  "m1HtmlCatalogHead": {
 +++++    "commit": "7128bd70e217b1700328d2d58060cd374cb806a9"
@@ -9070,12 +9393,13 @@ index 00000000..03f2b9a4
 +++++  "commits": [
 +++++    "7128bd70 feat(general): M1 static HTML adapter and adapter catalog (local)",
 +++++    "6bb8d08d feat(general): M2 admitted PDF page text via pdfjs (local)",
-+++++    "2e81686d fix(general): repair HTML/PDF extraction review defects (local)"
++++++    "2e81686d fix(general): repair HTML/PDF extraction review defects (local)",
++++++    "3175ba2f docs(general): handoff pdfjs API pin and catalog exports for A (local)"
 +++++  ],
 +++++  "patchFullLocal": {
 +++++    "path": "review-artifacts/extraction-local-196098d9-to-HEAD.patch",
-+++++    "sha256": "7e1fae592fc96fc4cdc6bb491b78ff98a013480c711742ec2ddae63d1df813c9",
-+++++    "bytes": 38670
++++++    "sha256": "332fdd45f80774126d85788ffa7d0a83a1ef5936968c30ddcb138557985d852b",
++++++    "bytes": 113317
 +++++  },
 +++++  "patchM1HtmlCatalogOnly": {
 +++++    "path": "review-artifacts/extraction-M1-html-catalog-196098d9-to-7128bd70.patch",
@@ -9145,7 +9469,7 @@ index 00000000..03f2b9a4
 +++++    },
 +++++    {
 +++++      "path": "babel-cli/src/research/v2/profiles/general/EXTRACTION_SLICE_CANDIDATE_M1.md",
-+++++      "blob": "2d98a6a08455018bf04c3f2fa41cfda417dd6609"
++++++      "blob": "e850577ce224b41b41000e94f57310d1c5710f73"
 +++++    },
 +++++    {
 +++++      "path": "babel-cli/src/research/v2/profiles/general/generalAdapterCatalog.test.ts",
@@ -9154,22 +9478,48 @@ index 00000000..03f2b9a4
 +++++    {
 +++++      "path": "babel-cli/src/research/v2/profiles/general/generalAdapterCatalog.ts",
 +++++      "blob": "2e0669a0cc5b943d91bddc6e61b64e7becd2540c"
++++++    },
++++++    {
++++++      "path": "review-artifacts/extraction-M1-html-catalog-196098d9-to-7128bd70.patch",
++++++      "blob": "7dd04fa837f81b14a0ca5481479026c259eeb385"
++++++    },
++++++    {
++++++      "path": "review-artifacts/extraction-dependency-evidence.txt",
++++++      "blob": "e71f042708869f9562244be0698eec2e05763557"
++++++    },
++++++    {
++++++      "path": "review-artifacts/extraction-local-196098d9-EXPORT.json",
++++++      "blob": "ff989869095461699d61962beee0798e7e70dec9"
++++++    },
++++++    {
++++++      "path": "review-artifacts/extraction-local-196098d9-to-HEAD.patch",
++++++      "blob": "7c9fac15d4a75c8cd4b3b98cd1bb1a0dba19a40a"
++++++    },
++++++    {
++++++      "path": "review-artifacts/extraction-local-test-receipt.tap.txt",
++++++      "blob": "761eb0badb19fd8d0173c33e30a048f6148ea8fd"
 +++++    }
 +++++  ],
++++++  "agentAHandoff": {
++++++    "pdfjsDistVersionObserved": "5.4.296",
++++++    "pdfjsImport": "pdfjs-dist/legacy/build/pdf.mjs",
++++++    "catalogExport": "generalAdapterCatalog",
++++++    "catalogModule": "babel-cli/src/research/v2/profiles/general/generalAdapterCatalog.ts"
++++++  },
 +++++  "focusedTestReceipt": {
 +++++    "path": "review-artifacts/extraction-local-test-receipt.tap.txt",
 +++++    "tests": 43,
 +++++    "pass": 43,
 +++++    "fail": 0
 +++++  },
-+++++  "generatedAt": "2026-10-21T02:46:27Z"
++++++  "generatedAt": "2026-10-21T02:47:18Z"
 +++++}
 ++++diff --git a/review-artifacts/extraction-local-196098d9-to-HEAD.patch b/review-artifacts/extraction-local-196098d9-to-HEAD.patch
 ++++new file mode 100644
-++++index 00000000..7c9fac15
+++++index 00000000..e699701d
 ++++--- /dev/null
 +++++++ b/review-artifacts/extraction-local-196098d9-to-HEAD.patch
-++++@@ -0,0 +1,952 @@
+++++@@ -0,0 +1,2781 @@
 +++++diff --git a/babel-cli/src/research/v2/adapters/documents/generalDocumentAdapter.ts b/babel-cli/src/research/v2/adapters/documents/generalDocumentAdapter.ts
 +++++index 24bd0c1e..31f0f7af 100644
 +++++--- a/babel-cli/src/research/v2/adapters/documents/generalDocumentAdapter.ts
@@ -10051,11 +10401,13 @@ index 00000000..03f2b9a4
 ++++++}
 +++++diff --git a/babel-cli/src/research/v2/profiles/general/EXTRACTION_SLICE_CANDIDATE_M1.md b/babel-cli/src/research/v2/profiles/general/EXTRACTION_SLICE_CANDIDATE_M1.md
 +++++new file mode 100644
-+++++index 00000000..2d98a6a0
++++++index 00000000..e850577c
 +++++--- /dev/null
 ++++++++ b/babel-cli/src/research/v2/profiles/general/EXTRACTION_SLICE_CANDIDATE_M1.md
-+++++@@ -0,0 +1,26 @@
++++++@@ -0,0 +1,89 @@
 ++++++# Extraction slice (local, unpublished)
+++++++
+++++++**Published integration base:** `196098d9` (remote). **Local repaired head:** `2e81686d` (M1 HTML catalog + M2 PDF + review-defect repairs). Not pushed.
 ++++++
 ++++++**Plaintext checkpoint preserved:** `general-document/0.1.0` `text/plain` path on published `196098d9` semantics.
 ++++++
@@ -10063,24 +10415,85 @@ index 00000000..03f2b9a4
 ++++++
 ++++++| Adapter | Media | Outcome |
 ++++++|---------|--------|---------|
-++++++| `general-document/0.1.0` | `text/plain` | Reviewed admitted inline UTF-8 lines |
+++++++| `general-document/0.1.0` | `text/plain` | Admitted inline UTF-8 lines (`general-plain-text/0.1.0`) |
 ++++++| `general-document/0.1.0` | `application/pdf` | Per-page text via pdfjs (`general-pdf-text/0.1.0`); page limits; abort + cleanup |
 ++++++| `general-web/0.1.0` | `text/html` | Static heading sections (`general-static-html/0.1.0`) |
 ++++++| `general-web/0.1.0` | discover | `not_supported` (no live search in this slice) |
 ++++++
-++++++## Agent A coordination
+++++++## Repaired-slice handoff (Agent A — registry + runtime dependency)
 ++++++
-++++++- Register `generalAdapterCatalog` on `SourceAdapterRegistry` (A-owned).
-++++++- Mission → `fetchContent` → adapter `read()` → schema-valid passages.
+++++++B does **not** edit `package.json`, `package-lock.json`, or A-owned registry sources. A owns **direct** `pdfjs-dist` dependency correction, **production-install smoke** where needed, and **`SourceAdapterRegistry` wiring**.
+++++++
+++++++### Catalog export (real names)
+++++++
+++++++Module: `babel-cli/src/research/v2/profiles/general/generalAdapterCatalog.ts`
+++++++
+++++++| Export | Kind | Value / shape |
+++++++|--------|------|----------------|
+++++++| `generalAdapterCatalog` | const object | Registry-ready map (see below) |
+++++++| `generalAdapterCatalog.document.adapterId` | string | `general-document/0.1.0` (`GENERAL_DOCUMENT_ADAPTER_ID`) |
+++++++| `generalAdapterCatalog.document.factory` | `() => GeneralDocumentAdapter` | Document adapter instance |
+++++++| `generalAdapterCatalog.web.adapterId` | string | `general-web/0.1.0` (`GENERAL_WEB_ADAPTER_ID`) |
+++++++| `generalAdapterCatalog.web.factory` | `() => GeneralWebAdapter` | Web adapter instance |
+++++++
+++++++Related adapter classes (if A registers by class instead of catalog factory):
+++++++
+++++++- `GeneralDocumentAdapter` from `adapters/documents/generalDocumentAdapter.js`
+++++++- `GeneralWebAdapter` from `adapters/web/generalWebAdapter.js`
+++++++
+++++++Extraction version strings returned on successful `read()`:
+++++++
+++++++- `PLAIN_TEXT_EXTRACTION_VERSION` → `general-plain-text/0.1.0`
+++++++- `PDF_TEXT_EXTRACTION_VERSION` → `general-pdf-text/0.1.0`
+++++++- `STATIC_HTML_EXTRACTION_VERSION` → `general-static-html/0.1.0`
+++++++
+++++++### PDF parser — version and import (required for A dependency pin)
+++++++
+++++++**Observed today (B evidence, read-only):** `pdfjs-dist@5.4.296` is **transitive only** (`promptfoo` → `pdf-parse` → `pdfjs-dist`). See `review-artifacts/extraction-dependency-evidence.txt`.
+++++++
+++++++**A action:** add a **direct** supported runtime dependency on **`pdfjs-dist@5.4.296`** (or a coordinator-agreed compatible 5.4.x pin that preserves the API below) and a **production-install** smoke path that can `import('pdfjs-dist/legacy/build/pdf.mjs')` without dev-only transitive hoisting.
+++++++
+++++++**Importer (B slice — do not change without coordinated bump):**
+++++++
+++++++```ts
+++++++const { getDocument } = await import('pdfjs-dist/legacy/build/pdf.mjs')
+++++++```
+++++++
+++++++**Runtime API used** (`adapters/documents/pdfFromAdmittedBytes.ts` → `passagesFromAdmittedPdf`):
+++++++
+++++++| Step | Call |
+++++++|------|------|
+++++++| Load | `loadingTask = getDocument({ data: Uint8Array, useSystemFonts: true })` |
+++++++| Document | `doc = await loadingTask.promise` |
+++++++| Pages | `doc.numPages`; loop `doc.getPage(pageNum)` |
+++++++| Text | `(await page.getTextContent()).items` — text from items with `str` (ignore non-`str` items) |
+++++++| Cancel | `AbortSignal` → `PdfExtractionCancelled` via `throwIfPdfAborted` / adapter `cancelledRead` |
+++++++| Limits | `PDF_MAX_PAGES_PER_EXTRACTION` (512); inline text cap `MAX_INLINE_PASSAGE_CODE_POINTS` (32_000 code points per page passage) |
+++++++| Cleanup (always) | `await doc.destroy()`; `loadingTask.destroy()` in `finally` |
+++++++
+++++++Admission: `application/pdf` only; `%PDF-` magic on admitted inline bytes (`pdfAdmission.ts`). IO remains **`SourceAccessPort.fetchContent`** → admitted inline bytes only.
+++++++
+++++++### HTML / inline text (no new A dependency)
+++++++
+++++++- Section locators: `htmlSectionLocator.ts` (`allocateSectionLocatorId`, `sectionSlugFromHeading`).
+++++++- Inline hash/truncate: `passageInlineText.ts` (`buildInlinePassageTextRef`, `MAX_INLINE_PASSAGE_CODE_POINTS`).
+++++++
+++++++### Mission flow (unchanged)
+++++++
+++++++Register `generalAdapterCatalog` on `SourceAdapterRegistry` (A-owned) → mission → `fetchContent` → adapter `read()` → schema-valid passages.
 ++++++
 ++++++## Fixtures
 ++++++
 ++++++- HTML: `profiles/general/fixtures/dev-corpus/G-DEV-01/sources/plan-a.html`
-++++++- PDF: `adapters/documents/fixtures/two-page-sample.pdf`
+++++++- PDF: `adapters/documents/fixtures/two-page-sample.pdf` (git blob `5469b80b…` at local head)
+++++++
+++++++## Focused proof (B, not expanded here)
+++++++
+++++++`review-artifacts/extraction-local-test-receipt.tap.txt` — 43 tests (documents + web adapters, inline text, locators, PDF cancel/cleanup). Delta: `review-artifacts/extraction-local-196098d9-to-HEAD.patch`.
 ++++++
 ++++++## Not in scope
 ++++++
-++++++Live network/search, JS rendering, OCR, publication push.
+++++++Live network/search, JS rendering, OCR, B edits to shared lockfiles, publication push.
 +++++diff --git a/babel-cli/src/research/v2/profiles/general/generalAdapterCatalog.test.ts b/babel-cli/src/research/v2/profiles/general/generalAdapterCatalog.test.ts
 +++++new file mode 100644
 +++++index 00000000..61ae60b5
@@ -10122,6 +10535,1772 @@ index 00000000..03f2b9a4
 ++++++    extraction: 'static text/html heading-bounded sections (admitted bytes)',
 ++++++  },
 ++++++} as const
++++++diff --git a/review-artifacts/extraction-M1-html-catalog-196098d9-to-7128bd70.patch b/review-artifacts/extraction-M1-html-catalog-196098d9-to-7128bd70.patch
++++++new file mode 100644
++++++index 00000000..7dd04fa8
++++++--- /dev/null
+++++++++ b/review-artifacts/extraction-M1-html-catalog-196098d9-to-7128bd70.patch
++++++@@ -0,0 +1,379 @@
+++++++diff --git a/babel-cli/src/research/v2/adapters/web/generalWebAdapter.test.ts b/babel-cli/src/research/v2/adapters/web/generalWebAdapter.test.ts
+++++++new file mode 100644
+++++++index 00000000..342f3751
+++++++--- /dev/null
++++++++++ b/babel-cli/src/research/v2/adapters/web/generalWebAdapter.test.ts
+++++++@@ -0,0 +1,74 @@
++++++++import assert from 'node:assert/strict'
++++++++import { readFileSync } from 'node:fs'
++++++++import { dirname, join } from 'node:path'
++++++++import { fileURLToPath } from 'node:url'
++++++++import { test } from 'node:test'
++++++++import type { SourceAccessPort, SourceFetchRequest, SourceSearchRequest } from '../../ports/sourceAccessPort.js'
++++++++import type { SourceRecord } from '../../contracts/sources.js'
++++++++import { buildAdmittedContent } from '../documents/testAdmittedFixtures.js'
++++++++import { resolveQuarantinedFixturePath } from '../documents/quarantinePath.js'
++++++++import { GeneralWebAdapter, GENERAL_WEB_ADAPTER_ID } from './generalWebAdapter.js'
++++++++import { STATIC_HTML_EXTRACTION_VERSION } from './htmlFromAdmittedBytes.js'
++++++++
++++++++const devCorpusRoot = join(
++++++++  dirname(fileURLToPath(import.meta.url)),
++++++++  '../../profiles/general/fixtures/dev-corpus',
++++++++)
++++++++
++++++++function stubPort(fetchContent: SourceAccessPort['fetchContent']): SourceAccessPort {
++++++++  return {
++++++++    async search(request: SourceSearchRequest) {
++++++++      return {
++++++++        operationId: request.operationId,
++++++++        status: 'failed',
++++++++        failureCategory: 'search_provider_unavailable',
++++++++        message: 'test stub',
++++++++      }
++++++++    },
++++++++    fetchContent,
++++++++  }
++++++++}
++++++++
++++++++function webSource(id: string): SourceRecord {
++++++++  return {
++++++++    source_id: id,
++++++++    kind: 'web',
++++++++    canonical_key: `fixture:web:${id}`,
++++++++    observed_urls: ['https://example.invalid/plan-a'],
++++++++  }
++++++++}
++++++++
++++++++test('GeneralWebAdapter.read: static HTML via port (G-DEV-01 plan-a)', async () => {
++++++++  const rel = 'G-DEV-01/sources/plan-a.html'
++++++++  const bytes = readFileSync(resolveQuarantinedFixturePath(devCorpusRoot, rel))
++++++++  const port = stubPort(async (request: SourceFetchRequest) => ({
++++++++    operationId: request.operationId,
++++++++    status: 'ok',
++++++++    admitted: buildAdmittedContent(
++++++++      request.operationId,
++++++++      request.source.source_id,
++++++++      'rev-web',
++++++++      bytes,
++++++++      'text/html',
++++++++      {
++++++++        requestedUrl: 'https://example.invalid/plan-a',
++++++++        finalUrl: 'https://example.invalid/plan-a',
++++++++        redirectChain: ['https://example.invalid/plan-a'],
++++++++      },
++++++++    ),
++++++++  }))
++++++++  const result = await new GeneralWebAdapter().read(
++++++++    { operationId: 'op-web', source: webSource('src'), signal: AbortSignal.timeout(5_000) },
++++++++    port,
++++++++  )
++++++++  assert.equal(result.status, 'ok')
++++++++  if (result.status !== 'ok') return
++++++++  assert.equal(result.extraction_version, STATIC_HTML_EXTRACTION_VERSION)
++++++++  assert.ok(result.passages.length >= 1)
++++++++})
++++++++
++++++++test('GeneralWebAdapter: adapter id and kinds', () => {
++++++++  const a = new GeneralWebAdapter()
++++++++  assert.equal(a.adapterId, GENERAL_WEB_ADAPTER_ID)
++++++++  assert.deepEqual(a.supportedKinds, ['web'])
++++++++})
+++++++diff --git a/babel-cli/src/research/v2/adapters/web/generalWebAdapter.ts b/babel-cli/src/research/v2/adapters/web/generalWebAdapter.ts
+++++++new file mode 100644
+++++++index 00000000..7f50a964
+++++++--- /dev/null
++++++++++ b/babel-cli/src/research/v2/adapters/web/generalWebAdapter.ts
+++++++@@ -0,0 +1,92 @@
++++++++import type { SourceAccessPort, SourceClass } from '../../ports/sourceAccessPort.js'
++++++++import type {
++++++++  SourceAdapter,
++++++++  SourceAdapterReadRequest,
++++++++  SourceAdapterReadResult,
++++++++  SourceDiscoverRequest,
++++++++  SourceDiscoverResult,
++++++++} from '../../ports/sourceAdapter.js'
++++++++import {
++++++++  assertReadPreconditions,
++++++++  cancelledRead,
++++++++  validateFetchBinding,
++++++++} from '../documents/readBinding.js'
++++++++import {
++++++++  passagesFromAdmittedStaticHtml,
++++++++  STATIC_HTML_EXTRACTION_VERSION,
++++++++} from './htmlFromAdmittedBytes.js'
++++++++
++++++++export const GENERAL_WEB_ADAPTER_ID = 'general-web/0.1.0'
++++++++
++++++++export class GeneralWebAdapter implements SourceAdapter {
++++++++  readonly adapterId = GENERAL_WEB_ADAPTER_ID
++++++++  readonly supportedKinds: readonly SourceClass[] = ['web']
++++++++
++++++++  async discover(
++++++++    request: SourceDiscoverRequest,
++++++++    _access: SourceAccessPort,
++++++++  ): Promise<SourceDiscoverResult> {
++++++++    if (request.signal.aborted) {
++++++++      return { operationId: request.operationId, status: 'cancelled' }
++++++++    }
++++++++    return {
++++++++      operationId: request.operationId,
++++++++      status: 'failed',
++++++++      failureCategory: 'not_supported',
++++++++      message: 'general web adapter: offline slice does not implement live discovery',
++++++++    }
++++++++  }
++++++++
++++++++  async read(
++++++++    request: SourceAdapterReadRequest,
++++++++    access: SourceAccessPort,
++++++++  ): Promise<SourceAdapterReadResult> {
++++++++    const pre = assertReadPreconditions(request.operationId, request.source, request.signal)
++++++++    if (pre) return pre
++++++++
++++++++    const fetched = await access.fetchContent({
++++++++      operationId: request.operationId,
++++++++      source: request.source,
++++++++      signal: request.signal,
++++++++    })
++++++++
++++++++    if (request.signal.aborted) {
++++++++      return cancelledRead(request.operationId)
++++++++    }
++++++++
++++++++    const binding = validateFetchBinding(
++++++++      request.operationId,
++++++++      request.source,
++++++++      fetched,
++++++++      request.signal,
++++++++    )
++++++++    if (binding) return binding
++++++++
++++++++    if (fetched.status !== 'ok') return fetched
++++++++
++++++++    const admitted = fetched.admitted
++++++++    try {
++++++++      const passages = passagesFromAdmittedStaticHtml(admitted)
++++++++      return {
++++++++        operationId: request.operationId,
++++++++        status: 'ok',
++++++++        revision: admitted.revision,
++++++++        passages,
++++++++        extraction_version: STATIC_HTML_EXTRACTION_VERSION,
++++++++      }
++++++++    } catch (error) {
++++++++      const message = error instanceof Error ? error.message : String(error)
++++++++      const failureCategory = message.includes('unsupported media_type')
++++++++        ? 'unsupported_media'
++++++++        : message.includes('incomplete') || message.includes('no heading')
++++++++          ? 'extraction_failed'
++++++++          : 'extraction_failed'
++++++++      return {
++++++++        operationId: request.operationId,
++++++++        status: 'failed',
++++++++        failureCategory,
++++++++        message,
++++++++      }
++++++++    }
++++++++  }
++++++++}
+++++++diff --git a/babel-cli/src/research/v2/adapters/web/htmlFromAdmittedBytes.test.ts b/babel-cli/src/research/v2/adapters/web/htmlFromAdmittedBytes.test.ts
+++++++new file mode 100644
+++++++index 00000000..18165df9
+++++++--- /dev/null
++++++++++ b/babel-cli/src/research/v2/adapters/web/htmlFromAdmittedBytes.test.ts
+++++++@@ -0,0 +1,41 @@
++++++++import assert from 'node:assert/strict'
++++++++import { readFileSync } from 'node:fs'
++++++++import { dirname, join } from 'node:path'
++++++++import { fileURLToPath } from 'node:url'
++++++++import { test } from 'node:test'
++++++++import { PassageRecordSchema } from '../../contracts/passages.js'
++++++++import { buildAdmittedContent } from '../documents/testAdmittedFixtures.js'
++++++++import { resolveQuarantinedFixturePath } from '../documents/quarantinePath.js'
++++++++import { passagesFromAdmittedStaticHtml, HTML_MEDIA_TYPE } from './htmlFromAdmittedBytes.js'
++++++++
++++++++const devCorpusRoot = join(
++++++++  dirname(fileURLToPath(import.meta.url)),
++++++++  '../../profiles/general/fixtures/dev-corpus',
++++++++)
++++++++
++++++++test('passagesFromAdmittedStaticHtml: G-DEV-01 plan-a heading sections', () => {
++++++++  const rel = 'G-DEV-01/sources/plan-a.html'
++++++++  const bytes = readFileSync(resolveQuarantinedFixturePath(devCorpusRoot, rel))
++++++++  const admitted = buildAdmittedContent('op-html', 'src-plan', 'rev-plan', bytes, HTML_MEDIA_TYPE, {
++++++++    requestedUrl: 'https://example.invalid/plan-a',
++++++++    finalUrl: 'https://example.invalid/plan-a',
++++++++    redirectChain: ['https://example.invalid/plan-a'],
++++++++  })
++++++++  const passages = passagesFromAdmittedStaticHtml(admitted)
++++++++  assert.ok(passages.length >= 1)
++++++++  assert.equal(passages[0]?.locator.kind, 'section')
++++++++  assert.ok(passages[0]?.heading_path?.[0]?.includes('Nimbus'))
++++++++  for (const p of passages) PassageRecordSchema.parse(p)
++++++++})
++++++++
++++++++test('passagesFromAdmittedStaticHtml: rejects login-only html', () => {
++++++++  const bytes = Buffer.from('<html><body><form><input type="password"/></form></body></html>', 'utf8')
++++++++  const admitted = buildAdmittedContent('op', 's', 'r', bytes, HTML_MEDIA_TYPE)
++++++++  assert.throws(() => passagesFromAdmittedStaticHtml(admitted), /login-only|incomplete/)
++++++++})
++++++++
++++++++test('passagesFromAdmittedStaticHtml: rejects non-html media', () => {
++++++++  const bytes = Buffer.from('<p>x</p>', 'utf8')
++++++++  const admitted = buildAdmittedContent('op', 's', 'r', bytes, 'text/plain')
++++++++  assert.throws(() => passagesFromAdmittedStaticHtml(admitted), /unsupported media_type/)
++++++++})
+++++++diff --git a/babel-cli/src/research/v2/adapters/web/htmlFromAdmittedBytes.ts b/babel-cli/src/research/v2/adapters/web/htmlFromAdmittedBytes.ts
+++++++new file mode 100644
+++++++index 00000000..dc860ce5
+++++++--- /dev/null
++++++++++ b/babel-cli/src/research/v2/adapters/web/htmlFromAdmittedBytes.ts
+++++++@@ -0,0 +1,74 @@
++++++++import { createHash } from 'node:crypto'
++++++++import type { AdmittedContent } from '../../contracts/admittedContent.js'
++++++++import type { PassageRecord } from '../../contracts/passages.js'
++++++++import { PassageRecordSchema } from '../../contracts/passages.js'
++++++++import { decodeAdmittedUtf8Bytes } from '../documents/plainTextFromAdmittedBytes.js'
++++++++
++++++++export const HTML_MEDIA_TYPE = 'text/html'
++++++++export const STATIC_HTML_EXTRACTION_VERSION = 'general-static-html/0.1.0'
++++++++
++++++++function passageTextHash(text: string): string {
++++++++  return createHash('sha256').update(text, 'utf8').digest('hex')
++++++++}
++++++++
++++++++function sectionIdFromHeading(heading: string): string {
++++++++  const slug = heading
++++++++    .trim()
++++++++    .toLowerCase()
++++++++    .replace(/[^a-z0-9]+/g, '-')
++++++++    .replace(/^-|-$/g, '')
++++++++  return slug.length > 0 ? slug : 'section'
++++++++}
++++++++
++++++++/** Minimal static HTML: one passage per heading block (offline fixtures only; no JS). */
++++++++export function passagesFromAdmittedStaticHtml(admitted: AdmittedContent): PassageRecord[] {
++++++++  if (admitted.media_type !== HTML_MEDIA_TYPE) {
++++++++    throw new Error(
++++++++      `unsupported media_type for static HTML extractor: ${admitted.media_type} (only ${HTML_MEDIA_TYPE})`,
++++++++    )
++++++++  }
++++++++  const raw = decodeAdmittedUtf8Bytes(admitted)
++++++++  const html = raw.toString('utf8')
++++++++  if (/<form[^>]*>[\s\S]*password/i.test(html) && !/<h[1-6]/i.test(html)) {
++++++++    throw new Error('html appears to be login-only markup; extraction incomplete')
++++++++  }
++++++++  const stripped = html
++++++++    .replace(/<script[\s\S]*?<\/script>/gi, '')
++++++++    .replace(/<style[\s\S]*?<\/style>/gi, '')
++++++++  const headingRe = /<h([1-6])[^>]*>([^<]*)<\/h[1-6]>/gi
++++++++  const passages: PassageRecord[] = []
++++++++  let match: RegExpExecArray | null
++++++++  let index = 0
++++++++  while ((match = headingRe.exec(stripped)) !== null) {
++++++++    const heading = (match[2] ?? '').trim()
++++++++    if (!heading) continue
++++++++    const level = Number(match[1] ?? '1')
++++++++    const after = stripped.slice(match.index + match[0].length)
++++++++    const nextHeading = after.search(/<h[1-6]/i)
++++++++    const block = nextHeading >= 0 ? after.slice(0, nextHeading) : after
++++++++    const text = block
++++++++      .replace(/<[^>]+>/g, ' ')
++++++++      .replace(/\s+/g, ' ')
++++++++      .trim()
++++++++    if (!text) continue
++++++++    const sectionId = sectionIdFromHeading(heading)
++++++++    const record: PassageRecord = {
++++++++      passage_id: `${admitted.operation_id}:html:${index++}`,
++++++++      source_revision_id: admitted.revision.revision_id,
++++++++      locator: { kind: 'section', section_id: sectionId },
++++++++      heading_path: [heading],
++++++++      text_ref: {
++++++++        mode: 'inline',
++++++++        text: text.length > 32_000 ? text.slice(0, 32_000) : text,
++++++++        text_hash: passageTextHash(text),
++++++++      },
++++++++      extraction_notes: [`heading_level:${level}`, 'static_html_offline'],
++++++++    }
++++++++    PassageRecordSchema.parse(record)
++++++++    passages.push(record)
++++++++  }
++++++++  if (passages.length === 0) {
++++++++    throw new Error('no heading-bounded sections extracted from admitted HTML')
++++++++  }
++++++++  return passages
++++++++}
+++++++diff --git a/babel-cli/src/research/v2/profiles/general/EXTRACTION_SLICE_CANDIDATE_M1.md b/babel-cli/src/research/v2/profiles/general/EXTRACTION_SLICE_CANDIDATE_M1.md
+++++++new file mode 100644
+++++++index 00000000..a25393da
+++++++--- /dev/null
++++++++++ b/babel-cli/src/research/v2/profiles/general/EXTRACTION_SLICE_CANDIDATE_M1.md
+++++++@@ -0,0 +1,27 @@
++++++++# Extraction slice candidate M1 (local, unpublished)
++++++++
++++++++**Checkpoint preserved:** `general-document/0.1.0` plaintext path unchanged on published head semantics.
++++++++
++++++++## Bounded scope
++++++++
++++++++| Adapter | Media | Outcome |
++++++++|---------|--------|---------|
++++++++| `general-document/0.1.0` | `text/plain` | Unchanged reviewed plaintext integration |
++++++++| `general-document/0.1.0` | `application/pdf` | **Failed** `extraction_failed` — not implemented |
++++++++| `general-web/0.1.0` | `text/html` | **Ok** static heading-bounded passages (`general-static-html/0.1.0`) |
++++++++| `general-web/0.1.0` | discover | **Failed** `not_supported` — offline slice |
++++++++
++++++++## Agent A coordination
++++++++
++++++++- Register `generalAdapterCatalog` entries on `SourceAdapterRegistry` (A-owned).
++++++++- Mission → fetch → `read()` → passages already schema-valid; A owns cited-report loop.
++++++++- Shared: `readBinding`, `SourceAccessPort.fetchContent`, contract schemas @ `0ccd1733`.
++++++++
++++++++## Fixtures
++++++++
++++++++- HTML: `profiles/general/fixtures/dev-corpus/G-DEV-01/sources/plan-a.html`
++++++++- PDF negative: `adapters/documents/fixtures/two-page-sample.pdf`
++++++++
++++++++## Not in scope
++++++++
++++++++Live network/search, JS rendering, full PDF layout, publication push.
+++++++diff --git a/babel-cli/src/research/v2/profiles/general/generalAdapterCatalog.test.ts b/babel-cli/src/research/v2/profiles/general/generalAdapterCatalog.test.ts
+++++++new file mode 100644
+++++++index 00000000..61ae60b5
+++++++--- /dev/null
++++++++++ b/babel-cli/src/research/v2/profiles/general/generalAdapterCatalog.test.ts
+++++++@@ -0,0 +1,10 @@
++++++++import assert from 'node:assert/strict'
++++++++import { test } from 'node:test'
++++++++import { generalAdapterCatalog } from './generalAdapterCatalog.js'
++++++++
++++++++test('generalAdapterCatalog: exposes document and web adapter ids for A registry', () => {
++++++++  assert.match(generalAdapterCatalog.document.adapterId, /^general-document\//)
++++++++  assert.match(generalAdapterCatalog.web.adapterId, /^general-web\//)
++++++++  assert.equal(typeof generalAdapterCatalog.document.factory, 'function')
++++++++  assert.equal(typeof generalAdapterCatalog.web.factory, 'function')
++++++++})
+++++++diff --git a/babel-cli/src/research/v2/profiles/general/generalAdapterCatalog.ts b/babel-cli/src/research/v2/profiles/general/generalAdapterCatalog.ts
+++++++new file mode 100644
+++++++index 00000000..87e871e7
+++++++--- /dev/null
++++++++++ b/babel-cli/src/research/v2/profiles/general/generalAdapterCatalog.ts
+++++++@@ -0,0 +1,19 @@
++++++++/**
++++++++ * B-owned adapter IDs for Agent A registry wiring (no registry edits here).
++++++++ * IO only through SourceAccessPort; mission/report loop remains Agent A.
++++++++ */
++++++++import { GENERAL_DOCUMENT_ADAPTER_ID, GeneralDocumentAdapter } from '../../adapters/documents/generalDocumentAdapter.js'
++++++++import { GENERAL_WEB_ADAPTER_ID, GeneralWebAdapter } from '../../adapters/web/generalWebAdapter.js'
++++++++
++++++++export const generalAdapterCatalog = {
++++++++  document: {
++++++++    adapterId: GENERAL_DOCUMENT_ADAPTER_ID,
++++++++    factory: () => new GeneralDocumentAdapter(),
++++++++    extraction: 'text/plain inline bytes (checkpoint); pdf explicitly not implemented',
++++++++  },
++++++++  web: {
++++++++    adapterId: GENERAL_WEB_ADAPTER_ID,
++++++++    factory: () => new GeneralWebAdapter(),
++++++++    extraction: 'static text/html heading-bounded sections (offline fixtures)',
++++++++  },
++++++++} as const
++++++diff --git a/review-artifacts/extraction-dependency-evidence.txt b/review-artifacts/extraction-dependency-evidence.txt
++++++new file mode 100644
++++++index 00000000..e71f0427
++++++--- /dev/null
+++++++++ b/review-artifacts/extraction-dependency-evidence.txt
++++++@@ -0,0 +1,23 @@
+++++++=== extraction dependency evidence (read-only) ===
+++++++generatedAt: 2026-10-21T02:46:27Z
+++++++localHead: 2e81686d2606709e54b6b1ecdbaf8d793524a088
+++++++localTree: be5e60aa1aacd3062f73179e1d606f10b3a036ad
+++++++
+++++++=== package.json direct dependency on pdfjs-dist ===
+++++++pdfjs-dist in package.json: (not a direct dependency key)
+++++++
+++++++=== package-lock.json resolved pdfjs-dist (babel-cli) ===
+++++++node_modules/pdfjs-dist: version=5.4.296 resolved=https://registry.npmjs.org/pdfjs-dist/-/pdfjs-dist-5.4.296.tgz
+++++++
+++++++=== npm ls pdfjs-dist (babel-cli, read-only) ===
+++++++babel-harness@0.1.4 /workspace/babel-cli
+++++++└─┬ promptfoo@0.121.17
+++++++  └─┬ pdf-parse@2.4.5
+++++++    └── pdfjs-dist@5.4.296
+++++++
+++++++
+++++++=== test fixture path: git ls-tree HEAD ===
+++++++100644 blob 5469b80b6bf025e59f6628d448d6d839fb7fac0e	babel-cli/src/research/v2/adapters/documents/fixtures/two-page-sample.pdf
+++++++
+++++++=== blob at HEAD (rev-parse) ===
+++++++5469b80b6bf025e59f6628d448d6d839fb7fac0e
++++++diff --git a/review-artifacts/extraction-local-196098d9-EXPORT.json b/review-artifacts/extraction-local-196098d9-EXPORT.json
++++++new file mode 100644
++++++index 00000000..ff989869
++++++--- /dev/null
+++++++++ b/review-artifacts/extraction-local-196098d9-EXPORT.json
++++++@@ -0,0 +1,113 @@
+++++++{
+++++++  "label": "LOCAL EXTRACTION \u2014 not published; remote at 196098d9",
+++++++  "basePublishedHead": {
+++++++    "commit": "196098d9d7bfa261009b72cc48002754e5c92fbf",
+++++++    "tree": "4d6a4fef366e6734e9b95eddebbaa57a9e52c234"
+++++++  },
+++++++  "localHead": {
+++++++    "commit": "2e81686d2606709e54b6b1ecdbaf8d793524a088",
+++++++    "tree": "be5e60aa1aacd3062f73179e1d606f10b3a036ad"
+++++++  },
+++++++  "repairHead": {
+++++++    "commit": "2e81686d2606709e54b6b1ecdbaf8d793524a088"
+++++++  },
+++++++  "m1HtmlCatalogHead": {
+++++++    "commit": "7128bd70e217b1700328d2d58060cd374cb806a9"
+++++++  },
+++++++  "commits": [
+++++++    "7128bd70 feat(general): M1 static HTML adapter and adapter catalog (local)",
+++++++    "6bb8d08d feat(general): M2 admitted PDF page text via pdfjs (local)",
+++++++    "2e81686d fix(general): repair HTML/PDF extraction review defects (local)"
+++++++  ],
+++++++  "patchFullLocal": {
+++++++    "path": "review-artifacts/extraction-local-196098d9-to-HEAD.patch",
+++++++    "sha256": "7e1fae592fc96fc4cdc6bb491b78ff98a013480c711742ec2ddae63d1df813c9",
+++++++    "bytes": 38670
+++++++  },
+++++++  "patchM1HtmlCatalogOnly": {
+++++++    "path": "review-artifacts/extraction-M1-html-catalog-196098d9-to-7128bd70.patch",
+++++++    "sha256": "762c0b8f965b23405d5cf416b7a658dff35066a536ba2a868f5354f705740a86",
+++++++    "bytes": 15068
+++++++  },
+++++++  "blobManifestFull": [
+++++++    {
+++++++      "path": "babel-cli/src/research/v2/adapters/documents/generalDocumentAdapter.ts",
+++++++      "blob": "31f0f7af2d711a41c0a54b9afe8efd4a46f93191"
+++++++    },
+++++++    {
+++++++      "path": "babel-cli/src/research/v2/adapters/documents/passageInlineText.test.ts",
+++++++      "blob": "0b832811b67c09a2785cff750561aed86d64d60f"
+++++++    },
+++++++    {
+++++++      "path": "babel-cli/src/research/v2/adapters/documents/passageInlineText.ts",
+++++++      "blob": "9ca6e8834742893f8a174b11c2db862936119886"
+++++++    },
+++++++    {
+++++++      "path": "babel-cli/src/research/v2/adapters/documents/pdfAdmission.test.ts",
+++++++      "blob": "999b7c479440f3d0c84b76ae53fc1e51ef24a6a3"
+++++++    },
+++++++    {
+++++++      "path": "babel-cli/src/research/v2/adapters/documents/pdfAdmission.ts",
+++++++      "blob": "ccfa8d6072e3aa18d688cd70db162da8261fdd9c"
+++++++    },
+++++++    {
+++++++      "path": "babel-cli/src/research/v2/adapters/documents/pdfExtractionLimits.ts",
+++++++      "blob": "4bd1a36df53434ac3ab5e3ca7d24947908e4363d"
+++++++    },
+++++++    {
+++++++      "path": "babel-cli/src/research/v2/adapters/documents/pdfFromAdmittedBytes.test.ts",
+++++++      "blob": "82ea85b3cc8534dd8bf864b82b5130da510542f7"
+++++++    },
+++++++    {
+++++++      "path": "babel-cli/src/research/v2/adapters/documents/pdfFromAdmittedBytes.ts",
+++++++      "blob": "d7a53f7fe25ba164504de864f529c2f4d2288e04"
+++++++    },
+++++++    {
+++++++      "path": "babel-cli/src/research/v2/adapters/documents/plainTextFromAdmittedBytes.ts",
+++++++      "blob": "812e9532dfe31be28c40132f852f25776c2f4b6e"
+++++++    },
+++++++    {
+++++++      "path": "babel-cli/src/research/v2/adapters/web/generalWebAdapter.test.ts",
+++++++      "blob": "342f37510a164f8c05d684929007c4e665a4247a"
+++++++    },
+++++++    {
+++++++      "path": "babel-cli/src/research/v2/adapters/web/generalWebAdapter.ts",
+++++++      "blob": "d46c376c398db1a49254bbc3912ce576e868c7ba"
+++++++    },
+++++++    {
+++++++      "path": "babel-cli/src/research/v2/adapters/web/htmlFromAdmittedBytes.test.ts",
+++++++      "blob": "bc691e666c5fee41cad75a4f3beea36dc9edc666"
+++++++    },
+++++++    {
+++++++      "path": "babel-cli/src/research/v2/adapters/web/htmlFromAdmittedBytes.ts",
+++++++      "blob": "2a3409e9e30669659579b0c11814f55118067278"
+++++++    },
+++++++    {
+++++++      "path": "babel-cli/src/research/v2/adapters/web/htmlSectionLocator.test.ts",
+++++++      "blob": "c8d2bb337f7e279394a8bf2d6e70993e7cdb9797"
+++++++    },
+++++++    {
+++++++      "path": "babel-cli/src/research/v2/adapters/web/htmlSectionLocator.ts",
+++++++      "blob": "cdd80ea0a5500f7c796e6f81b6d622bfdc40086a"
+++++++    },
+++++++    {
+++++++      "path": "babel-cli/src/research/v2/profiles/general/EXTRACTION_SLICE_CANDIDATE_M1.md",
+++++++      "blob": "2d98a6a08455018bf04c3f2fa41cfda417dd6609"
+++++++    },
+++++++    {
+++++++      "path": "babel-cli/src/research/v2/profiles/general/generalAdapterCatalog.test.ts",
+++++++      "blob": "61ae60b55ed40ed475c90d0ccd0f6d56cfc7cd1e"
+++++++    },
+++++++    {
+++++++      "path": "babel-cli/src/research/v2/profiles/general/generalAdapterCatalog.ts",
+++++++      "blob": "2e0669a0cc5b943d91bddc6e61b64e7becd2540c"
+++++++    }
+++++++  ],
+++++++  "focusedTestReceipt": {
+++++++    "path": "review-artifacts/extraction-local-test-receipt.tap.txt",
+++++++    "tests": 43,
+++++++    "pass": 43,
+++++++    "fail": 0
+++++++  },
+++++++  "generatedAt": "2026-10-21T02:46:27Z"
+++++++}
++++++diff --git a/review-artifacts/extraction-local-196098d9-to-HEAD.patch b/review-artifacts/extraction-local-196098d9-to-HEAD.patch
++++++new file mode 100644
++++++index 00000000..7c9fac15
++++++--- /dev/null
+++++++++ b/review-artifacts/extraction-local-196098d9-to-HEAD.patch
++++++@@ -0,0 +1,952 @@
+++++++diff --git a/babel-cli/src/research/v2/adapters/documents/generalDocumentAdapter.ts b/babel-cli/src/research/v2/adapters/documents/generalDocumentAdapter.ts
+++++++index 24bd0c1e..31f0f7af 100644
+++++++--- a/babel-cli/src/research/v2/adapters/documents/generalDocumentAdapter.ts
++++++++++ b/babel-cli/src/research/v2/adapters/documents/generalDocumentAdapter.ts
+++++++@@ -9,7 +9,11 @@ import type {
+++++++ import {
+++++++   PLAIN_TEXT_EXTRACTION_VERSION,
+++++++   passagesFromAdmittedPlainText,
++++++++  PLAIN_TEXT_MEDIA_TYPE,
+++++++ } from './plainTextFromAdmittedBytes.js'
++++++++import { isPdfMediaType } from './pdfAdmission.js'
++++++++import { PdfExtractionCancelled } from './pdfExtractionLimits.js'
++++++++import { PDF_TEXT_EXTRACTION_VERSION, passagesFromAdmittedPdf } from './pdfFromAdmittedBytes.js'
+++++++ import {
+++++++   assertReadPreconditions,
+++++++   cancelledRead,
+++++++@@ -66,6 +70,22 @@ export class GeneralDocumentAdapter implements SourceAdapter {
+++++++ 
+++++++     const admitted = fetched.admitted
+++++++     try {
++++++++      if (isPdfMediaType(admitted.media_type)) {
++++++++        const passages = await passagesFromAdmittedPdf(admitted, request.signal)
++++++++        if (request.signal.aborted) {
++++++++          return cancelledRead(request.operationId)
++++++++        }
++++++++        return {
++++++++          operationId: request.operationId,
++++++++          status: 'ok',
++++++++          revision: admitted.revision,
++++++++          passages,
++++++++          extraction_version: PDF_TEXT_EXTRACTION_VERSION,
++++++++        }
++++++++      }
++++++++      if (admitted.media_type !== PLAIN_TEXT_MEDIA_TYPE) {
++++++++        throw new Error(`unsupported media_type for document adapter: ${admitted.media_type}`)
++++++++      }
+++++++       const passages = passagesFromAdmittedPlainText(admitted)
+++++++       return {
+++++++         operationId: request.operationId,
+++++++@@ -75,6 +95,9 @@ export class GeneralDocumentAdapter implements SourceAdapter {
+++++++         extraction_version: PLAIN_TEXT_EXTRACTION_VERSION,
+++++++       }
+++++++     } catch (error) {
++++++++      if (error instanceof PdfExtractionCancelled || request.signal.aborted) {
++++++++        return cancelledRead(request.operationId)
++++++++      }
+++++++       const message = error instanceof Error ? error.message : String(error)
+++++++       const failureCategory = message.includes('unsupported media_type')
+++++++         ? 'unsupported_media'
+++++++diff --git a/babel-cli/src/research/v2/adapters/documents/passageInlineText.test.ts b/babel-cli/src/research/v2/adapters/documents/passageInlineText.test.ts
+++++++new file mode 100644
+++++++index 00000000..0b832811
+++++++--- /dev/null
++++++++++ b/babel-cli/src/research/v2/adapters/documents/passageInlineText.test.ts
+++++++@@ -0,0 +1,28 @@
++++++++import assert from 'node:assert/strict'
++++++++import { test } from 'node:test'
++++++++import {
++++++++  buildInlinePassageTextRef,
++++++++  MAX_INLINE_PASSAGE_CODE_POINTS,
++++++++  passageTextHash,
++++++++  truncateToCodePointLimit,
++++++++} from './passageInlineText.js'
++++++++
++++++++test('truncateToCodePointLimit: does not split emoji surrogate pair', () => {
++++++++  const emoji = '😀'
++++++++  const prefix = 'a'.repeat(MAX_INLINE_PASSAGE_CODE_POINTS)
++++++++  const full = prefix + emoji
++++++++  const { emitted, truncated } = truncateToCodePointLimit(full, MAX_INLINE_PASSAGE_CODE_POINTS)
++++++++  assert.equal(truncated, true)
++++++++  assert.equal([...emitted].length, MAX_INLINE_PASSAGE_CODE_POINTS)
++++++++  assert.equal(emitted, prefix)
++++++++  assert.doesNotMatch(emitted, /\uD83D$/)
++++++++})
++++++++
++++++++test('buildInlinePassageTextRef: hashes emitted text only', () => {
++++++++  const long = 'x'.repeat(MAX_INLINE_PASSAGE_CODE_POINTS + 50)
++++++++  const ref = buildInlinePassageTextRef(long)
++++++++  assert.equal(ref.text.length, [...ref.text].length)
++++++++  assert.equal(ref.text_hash, passageTextHash(ref.text))
++++++++  assert.notEqual(ref.text_hash, passageTextHash(long))
++++++++  assert.ok(ref.truncationNotes.length >= 1)
++++++++})
+++++++diff --git a/babel-cli/src/research/v2/adapters/documents/passageInlineText.ts b/babel-cli/src/research/v2/adapters/documents/passageInlineText.ts
+++++++new file mode 100644
+++++++index 00000000..9ca6e883
+++++++--- /dev/null
++++++++++ b/babel-cli/src/research/v2/adapters/documents/passageInlineText.ts
+++++++@@ -0,0 +1,46 @@
++++++++import { createHash } from 'node:crypto'
++++++++
++++++++/** Contract max for inline passage text (Unicode code points). */
++++++++export const MAX_INLINE_PASSAGE_CODE_POINTS = 32_000
++++++++
++++++++export function passageTextHash(text: string): string {
++++++++  return createHash('sha256').update(text, 'utf8').digest('hex')
++++++++}
++++++++
++++++++export function truncateToCodePointLimit(
++++++++  text: string,
++++++++  limit: number,
++++++++): { emitted: string; truncated: boolean; originalCodePoints: number } {
++++++++  const codePoints = [...text]
++++++++  if (codePoints.length <= limit) {
++++++++    return { emitted: text, truncated: false, originalCodePoints: codePoints.length }
++++++++  }
++++++++  return {
++++++++    emitted: codePoints.slice(0, limit).join(''),
++++++++    truncated: true,
++++++++    originalCodePoints: codePoints.length,
++++++++  }
++++++++}
++++++++
++++++++/** Hash and emit only the stored inline text; truncate on code-point boundaries. */
++++++++export function buildInlinePassageTextRef(fullText: string): {
++++++++  text: string
++++++++  text_hash: string
++++++++  truncationNotes: string[]
++++++++} {
++++++++  const { emitted, truncated, originalCodePoints } = truncateToCodePointLimit(
++++++++    fullText,
++++++++    MAX_INLINE_PASSAGE_CODE_POINTS,
++++++++  )
++++++++  const truncationNotes: string[] = []
++++++++  if (truncated) {
++++++++    truncationNotes.push(
++++++++      `inline_text_truncated:${originalCodePoints}_to_${MAX_INLINE_PASSAGE_CODE_POINTS}_codepoints`,
++++++++    )
++++++++  }
++++++++  return {
++++++++    text: emitted,
++++++++    text_hash: passageTextHash(emitted),
++++++++    truncationNotes,
++++++++  }
++++++++}
+++++++diff --git a/babel-cli/src/research/v2/adapters/documents/pdfAdmission.test.ts b/babel-cli/src/research/v2/adapters/documents/pdfAdmission.test.ts
+++++++new file mode 100644
+++++++index 00000000..999b7c47
+++++++--- /dev/null
++++++++++ b/babel-cli/src/research/v2/adapters/documents/pdfAdmission.test.ts
+++++++@@ -0,0 +1,84 @@
++++++++import assert from 'node:assert/strict'
++++++++import { readFileSync } from 'node:fs'
++++++++import { dirname, join } from 'node:path'
++++++++import { fileURLToPath } from 'node:url'
++++++++import { test } from 'node:test'
++++++++import type { SourceAccessPort, SourceFetchRequest, SourceSearchRequest } from '../../ports/sourceAccessPort.js'
++++++++import type { SourceRecord } from '../../contracts/sources.js'
++++++++import { buildAdmittedContent } from './testAdmittedFixtures.js'
++++++++import { GeneralDocumentAdapter } from './generalDocumentAdapter.js'
++++++++import { PDF_TEXT_EXTRACTION_VERSION } from './pdfFromAdmittedBytes.js'
++++++++
++++++++const pdfFixture = join(dirname(fileURLToPath(import.meta.url)), 'fixtures/two-page-sample.pdf')
++++++++
++++++++function stubPort(fetchContent: SourceAccessPort['fetchContent']): SourceAccessPort {
++++++++  return {
++++++++    async search(request: SourceSearchRequest) {
++++++++      return {
++++++++        operationId: request.operationId,
++++++++        status: 'failed',
++++++++        failureCategory: 'search_provider_unavailable',
++++++++        message: 'test stub',
++++++++      }
++++++++    },
++++++++    fetchContent,
++++++++  }
++++++++}
++++++++
++++++++test('GeneralDocumentAdapter.read: application/pdf via pdfjs page passages', async () => {
++++++++  const bytes = readFileSync(pdfFixture)
++++++++  const source: SourceRecord = {
++++++++    source_id: 'pdf-src',
++++++++    kind: 'document',
++++++++    canonical_key: 'fixture:pdf',
++++++++    observed_urls: ['https://example.invalid/sample.pdf'],
++++++++  }
++++++++  const port = stubPort(async (request: SourceFetchRequest) => ({
++++++++    operationId: request.operationId,
++++++++    status: 'ok',
++++++++    admitted: buildAdmittedContent(
++++++++      request.operationId,
++++++++      source.source_id,
++++++++      'rev-pdf',
++++++++      bytes,
++++++++      'application/pdf',
++++++++      {
++++++++        requestedUrl: 'https://example.invalid/sample.pdf',
++++++++        finalUrl: 'https://example.invalid/sample.pdf',
++++++++        redirectChain: ['https://example.invalid/sample.pdf'],
++++++++      },
++++++++    ),
++++++++  }))
++++++++  const result = await new GeneralDocumentAdapter().read(
++++++++    { operationId: 'op-pdf', source, signal: AbortSignal.timeout(30_000) },
++++++++    port,
++++++++  )
++++++++  assert.equal(result.status, 'ok')
++++++++  if (result.status !== 'ok') return
++++++++  assert.equal(result.extraction_version, PDF_TEXT_EXTRACTION_VERSION)
++++++++  assert.equal(result.passages.length, 2)
++++++++})
++++++++
++++++++test('GeneralDocumentAdapter.read: malformed pdf bytes extraction_failed', async () => {
++++++++  const bytes = Buffer.from('%PDF-1.4\n% corrupted', 'utf8')
++++++++  const source: SourceRecord = {
++++++++    source_id: 'bad-pdf',
++++++++    kind: 'document',
++++++++    canonical_key: 'fixture:bad',
++++++++    observed_urls: ['https://example.invalid/bad.pdf'],
++++++++  }
++++++++  const port = stubPort(async (request: SourceFetchRequest) => ({
++++++++    operationId: request.operationId,
++++++++    status: 'ok',
++++++++    admitted: buildAdmittedContent(request.operationId, source.source_id, 'rev', bytes, 'application/pdf', {
++++++++      requestedUrl: 'https://example.invalid/bad.pdf',
++++++++      finalUrl: 'https://example.invalid/bad.pdf',
++++++++      redirectChain: ['https://example.invalid/bad.pdf'],
++++++++    }),
++++++++  }))
++++++++  const result = await new GeneralDocumentAdapter().read(
++++++++    { operationId: 'op-bad', source, signal: AbortSignal.timeout(30_000) },
++++++++    port,
++++++++  )
++++++++  assert.equal(result.status, 'failed')
++++++++})
+++++++diff --git a/babel-cli/src/research/v2/adapters/documents/pdfAdmission.ts b/babel-cli/src/research/v2/adapters/documents/pdfAdmission.ts
+++++++new file mode 100644
+++++++index 00000000..ccfa8d60
+++++++--- /dev/null
++++++++++ b/babel-cli/src/research/v2/adapters/documents/pdfAdmission.ts
+++++++@@ -0,0 +1,15 @@
++++++++import type { AdmittedContent } from '../../contracts/admittedContent.js'
++++++++
++++++++export const PDF_MEDIA_TYPE = 'application/pdf'
++++++++
++++++++export function isPdfMediaType(mediaType: string): boolean {
++++++++  return mediaType === PDF_MEDIA_TYPE
++++++++}
++++++++
++++++++/** Reject obvious non-PDF payloads before invoking parser. */
++++++++export function rejectNonPdfBytes(admitted: AdmittedContent, raw: Buffer): void {
++++++++  if (!isPdfMediaType(admitted.media_type)) return
++++++++  if (raw.length < 5 || raw.subarray(0, 5).toString('ascii') !== '%PDF-') {
++++++++    throw new Error('admitted bytes are not a PDF header')
++++++++  }
++++++++}
+++++++diff --git a/babel-cli/src/research/v2/adapters/documents/pdfExtractionLimits.ts b/babel-cli/src/research/v2/adapters/documents/pdfExtractionLimits.ts
+++++++new file mode 100644
+++++++index 00000000..4bd1a36d
+++++++--- /dev/null
++++++++++ b/babel-cli/src/research/v2/adapters/documents/pdfExtractionLimits.ts
+++++++@@ -0,0 +1,14 @@
++++++++/** General document PDF extractor bounds (offline admitted bytes). */
++++++++export const PDF_MAX_PAGES_PER_EXTRACTION = 512
++++++++export const PDF_MAX_OUTPUT_CODE_POINTS_PER_PAGE = 32_000
++++++++
++++++++export class PdfExtractionCancelled extends Error {
++++++++  constructor() {
++++++++    super('pdf extraction cancelled')
++++++++    this.name = 'PdfExtractionCancelled'
++++++++  }
++++++++}
++++++++
++++++++export function throwIfPdfAborted(signal?: AbortSignal): void {
++++++++  if (signal?.aborted) throw new PdfExtractionCancelled()
++++++++}
+++++++diff --git a/babel-cli/src/research/v2/adapters/documents/pdfFromAdmittedBytes.test.ts b/babel-cli/src/research/v2/adapters/documents/pdfFromAdmittedBytes.test.ts
+++++++new file mode 100644
+++++++index 00000000..82ea85b3
+++++++--- /dev/null
++++++++++ b/babel-cli/src/research/v2/adapters/documents/pdfFromAdmittedBytes.test.ts
+++++++@@ -0,0 +1,56 @@
++++++++import assert from 'node:assert/strict'
++++++++import { readFileSync } from 'node:fs'
++++++++import { dirname, join } from 'node:path'
++++++++import { fileURLToPath } from 'node:url'
++++++++import { test } from 'node:test'
++++++++import { PassageRecordSchema } from '../../contracts/passages.js'
++++++++import { buildAdmittedContent } from './testAdmittedFixtures.js'
++++++++import { PdfExtractionCancelled } from './pdfExtractionLimits.js'
++++++++import { passagesFromAdmittedPdf, PDF_TEXT_EXTRACTION_VERSION } from './pdfFromAdmittedBytes.js'
++++++++import { PDF_MEDIA_TYPE } from './pdfAdmission.js'
++++++++import { passageTextHash } from './passageInlineText.js'
++++++++
++++++++const pdfFixture = join(dirname(fileURLToPath(import.meta.url)), 'fixtures/two-page-sample.pdf')
++++++++
++++++++test('passagesFromAdmittedPdf: two-page fixture with page locators', async () => {
++++++++  const bytes = readFileSync(pdfFixture)
++++++++  const admitted = buildAdmittedContent('op-pdf', 'src', 'rev', bytes, PDF_MEDIA_TYPE, {
++++++++    requestedUrl: 'https://example.invalid/two-page-sample.pdf',
++++++++    finalUrl: 'https://example.invalid/two-page-sample.pdf',
++++++++    redirectChain: ['https://example.invalid/two-page-sample.pdf'],
++++++++  })
++++++++  const passages = await passagesFromAdmittedPdf(admitted)
++++++++  assert.equal(passages.length, 2)
++++++++  assert.equal(passages[0]?.locator.kind, 'page')
++++++++  assert.equal(passages[0]?.locator.start_page, 1)
++++++++  assert.match(passages[0]?.text_ref.mode === 'inline' ? passages[0].text_ref.text : '', /retention 90 days/)
++++++++  assert.match(passages[1]?.text_ref.mode === 'inline' ? passages[1].text_ref.text : '', /2026-03-15/)
++++++++  for (const p of passages) PassageRecordSchema.parse(p)
++++++++  assert.equal(PDF_TEXT_EXTRACTION_VERSION, 'general-pdf-text/0.1.0')
++++++++})
++++++++
++++++++test('passagesFromAdmittedPdf: cancellation during delayed page loop', async () => {
++++++++  const bytes = readFileSync(pdfFixture)
++++++++  const admitted = buildAdmittedContent('op-pdf', 'src', 'rev', bytes, PDF_MEDIA_TYPE)
++++++++  const controller = new AbortController()
++++++++  const promise = passagesFromAdmittedPdf(admitted, controller.signal, { pageDelayMs: 80 })
++++++++  setTimeout(() => controller.abort(), 10)
++++++++  await assert.rejects(promise, (err: unknown) => err instanceof PdfExtractionCancelled)
++++++++})
++++++++
++++++++test('passagesFromAdmittedPdf: hashes emitted inline text only when truncated', async () => {
++++++++  const bytes = readFileSync(pdfFixture)
++++++++  const admitted = buildAdmittedContent('op', 'src', 'rev', bytes, PDF_MEDIA_TYPE)
++++++++  const passages = await passagesFromAdmittedPdf(admitted)
++++++++  for (const p of passages) {
++++++++    if (p.text_ref.mode === 'inline') {
++++++++      assert.equal(p.text_ref.text_hash, passageTextHash(p.text_ref.text))
++++++++    }
++++++++  }
++++++++})
++++++++
++++++++test('passagesFromAdmittedPdf: rejects non-pdf bytes', async () => {
++++++++  const bytes = Buffer.from('not a pdf file', 'utf8')
++++++++  const admitted = buildAdmittedContent('op', 's', 'r', bytes, PDF_MEDIA_TYPE)
++++++++  await assert.rejects(() => passagesFromAdmittedPdf(admitted), /PDF header/)
++++++++})
+++++++diff --git a/babel-cli/src/research/v2/adapters/documents/pdfFromAdmittedBytes.ts b/babel-cli/src/research/v2/adapters/documents/pdfFromAdmittedBytes.ts
+++++++new file mode 100644
+++++++index 00000000..d7a53f7f
+++++++--- /dev/null
++++++++++ b/babel-cli/src/research/v2/adapters/documents/pdfFromAdmittedBytes.ts
+++++++@@ -0,0 +1,134 @@
++++++++import type { AdmittedContent } from '../../contracts/admittedContent.js'
++++++++import type { PassageRecord } from '../../contracts/passages.js'
++++++++import { PassageRecordSchema } from '../../contracts/passages.js'
++++++++import { buildInlinePassageTextRef } from './passageInlineText.js'
++++++++import { decodeAdmittedInlineBytes } from './plainTextFromAdmittedBytes.js'
++++++++import { PDF_MEDIA_TYPE } from './pdfAdmission.js'
++++++++import {
++++++++  PDF_MAX_PAGES_PER_EXTRACTION,
++++++++  PdfExtractionCancelled,
++++++++  throwIfPdfAborted,
++++++++} from './pdfExtractionLimits.js'
++++++++
++++++++export const PDF_TEXT_EXTRACTION_VERSION = 'general-pdf-text/0.1.0'
++++++++
++++++++export type PdfExtractionOptions = {
++++++++  /** Test hook: delay between pages to exercise cancellation. */
++++++++  pageDelayMs?: number
++++++++}
++++++++
++++++++function assertPdfMagic(bytes: Buffer): void {
++++++++  if (bytes.length < 5 || bytes.subarray(0, 5).toString('ascii') !== '%PDF-') {
++++++++    throw new Error('admitted bytes are not a PDF header')
++++++++  }
++++++++}
++++++++
++++++++async function abortableDelay(ms: number, signal?: AbortSignal): Promise<void> {
++++++++  if (ms <= 0) {
++++++++    throwIfPdfAborted(signal)
++++++++    return
++++++++  }
++++++++  throwIfPdfAborted(signal)
++++++++  await new Promise<void>((resolve, reject) => {
++++++++    const timer = setTimeout(() => {
++++++++      signal?.removeEventListener('abort', onAbort)
++++++++      resolve()
++++++++    }, ms)
++++++++    const onAbort = () => {
++++++++      clearTimeout(timer)
++++++++      reject(new PdfExtractionCancelled())
++++++++    }
++++++++    signal?.addEventListener('abort', onAbort, { once: true })
++++++++  })
++++++++  throwIfPdfAborted(signal)
++++++++}
++++++++
++++++++type PdfDocumentLike = {
++++++++  numPages: number
++++++++  getPage: (n: number) => Promise<{
++++++++    getTextContent: () => Promise<{ items: Array<{ str?: string }> }>
++++++++  }>
++++++++  destroy: () => Promise<void>
++++++++}
++++++++
++++++++/**
++++++++ * Extract per-page text from admitted inline PDF bytes (pdfjs-dist).
++++++++ */
++++++++export async function passagesFromAdmittedPdf(
++++++++  admitted: AdmittedContent,
++++++++  signal?: AbortSignal,
++++++++  options?: PdfExtractionOptions,
++++++++): Promise<PassageRecord[]> {
++++++++  if (admitted.media_type !== PDF_MEDIA_TYPE) {
++++++++    throw new Error(
++++++++      `unsupported media_type for PDF extractor: ${admitted.media_type} (only ${PDF_MEDIA_TYPE})`,
++++++++    )
++++++++  }
++++++++  throwIfPdfAborted(signal)
++++++++  const raw = decodeAdmittedInlineBytes(admitted)
++++++++  assertPdfMagic(raw)
++++++++  const { getDocument } = await import('pdfjs-dist/legacy/build/pdf.mjs')
++++++++  throwIfPdfAborted(signal)
++++++++  const loadingTask = getDocument({ data: new Uint8Array(raw), useSystemFonts: true })
++++++++  let doc: PdfDocumentLike | null = null
++++++++  try {
++++++++    doc = (await loadingTask.promise) as unknown as PdfDocumentLike
++++++++    throwIfPdfAborted(signal)
++++++++    const activeDoc = doc
++++++++    if (activeDoc.numPages > PDF_MAX_PAGES_PER_EXTRACTION) {
++++++++      throw new Error(
++++++++        `pdf exceeds page limit (${activeDoc.numPages} > ${PDF_MAX_PAGES_PER_EXTRACTION})`,
++++++++      )
++++++++    }
++++++++    const pageCap = activeDoc.numPages
++++++++    const passages: PassageRecord[] = []
++++++++    for (let pageNum = 1; pageNum <= pageCap; pageNum++) {
++++++++      throwIfPdfAborted(signal)
++++++++      if (options?.pageDelayMs) {
++++++++        await abortableDelay(options.pageDelayMs, signal)
++++++++      }
++++++++      const page = await activeDoc.getPage(pageNum)
++++++++      throwIfPdfAborted(signal)
++++++++      const content = await page.getTextContent()
++++++++      throwIfPdfAborted(signal)
++++++++      const text = content.items
++++++++        .map((item) => ('str' in item ? String(item.str) : ''))
++++++++        .join(' ')
++++++++        .replace(/\s+/g, ' ')
++++++++        .trim()
++++++++      if (!text) continue
++++++++      const inline = buildInlinePassageTextRef(text)
++++++++      const record: PassageRecord = {
++++++++        passage_id: `${admitted.operation_id}:pdf:p${pageNum}`,
++++++++        source_revision_id: admitted.revision.revision_id,
++++++++        locator: { kind: 'page', start_page: pageNum, end_page: pageNum },
++++++++        text_ref: {
++++++++          mode: 'inline',
++++++++          text: inline.text,
++++++++          text_hash: inline.text_hash,
++++++++        },
++++++++        extraction_notes: ['pdfjs_text_layer', 'admitted_inline_pdf', ...inline.truncationNotes],
++++++++      }
++++++++      PassageRecordSchema.parse(record)
++++++++      passages.push(record)
++++++++    }
++++++++    throwIfPdfAborted(signal)
++++++++    if (passages.length === 0) {
++++++++      throw new Error('pdf extraction produced no text passages')
++++++++    }
++++++++    return passages
++++++++  } finally {
++++++++    if (doc) {
++++++++      try {
++++++++        await doc.destroy()
++++++++      } catch {
++++++++        /* best-effort cleanup */
++++++++      }
++++++++    }
++++++++    try {
++++++++      loadingTask.destroy()
++++++++    } catch {
++++++++      /* best-effort cleanup */
++++++++    }
++++++++  }
++++++++}
+++++++diff --git a/babel-cli/src/research/v2/adapters/documents/plainTextFromAdmittedBytes.ts b/babel-cli/src/research/v2/adapters/documents/plainTextFromAdmittedBytes.ts
+++++++index abc7eb9d..812e9532 100644
+++++++--- a/babel-cli/src/research/v2/adapters/documents/plainTextFromAdmittedBytes.ts
++++++++++ b/babel-cli/src/research/v2/adapters/documents/plainTextFromAdmittedBytes.ts
+++++++@@ -10,8 +10,8 @@ function passageTextHash(text: string): string {
+++++++   return createHash('sha256').update(text, 'utf8').digest('hex')
+++++++ }
+++++++ 
+++++++-/** Decode and integrity-check inline admitted bytes (no network). */
+++++++-export function decodeAdmittedUtf8Bytes(admitted: AdmittedContent): Buffer {
++++++++/** Integrity-check inline admitted bytes (binary-safe; no network). */
++++++++export function decodeAdmittedInlineBytes(admitted: AdmittedContent): Buffer {
+++++++   if (admitted.payload.mode !== 'inline_bytes') {
+++++++     throw new Error(`unsupported payload mode: ${admitted.payload.mode}`)
+++++++   }
+++++++@@ -26,6 +26,12 @@ export function decodeAdmittedUtf8Bytes(admitted: AdmittedContent): Buffer {
+++++++   if (digest !== admitted.revision.content_hash) {
+++++++     throw new Error('admitted revision content_hash does not match decoded bytes')
+++++++   }
++++++++  return raw
++++++++}
++++++++
++++++++/** Decode and integrity-check inline admitted UTF-8 text bytes (no network). */
++++++++export function decodeAdmittedUtf8Bytes(admitted: AdmittedContent): Buffer {
++++++++  const raw = decodeAdmittedInlineBytes(admitted)
+++++++   try {
+++++++     new TextDecoder('utf-8', { fatal: true }).decode(raw)
+++++++   } catch {
+++++++diff --git a/babel-cli/src/research/v2/adapters/web/generalWebAdapter.test.ts b/babel-cli/src/research/v2/adapters/web/generalWebAdapter.test.ts
+++++++new file mode 100644
+++++++index 00000000..342f3751
+++++++--- /dev/null
++++++++++ b/babel-cli/src/research/v2/adapters/web/generalWebAdapter.test.ts
+++++++@@ -0,0 +1,74 @@
++++++++import assert from 'node:assert/strict'
++++++++import { readFileSync } from 'node:fs'
++++++++import { dirname, join } from 'node:path'
++++++++import { fileURLToPath } from 'node:url'
++++++++import { test } from 'node:test'
++++++++import type { SourceAccessPort, SourceFetchRequest, SourceSearchRequest } from '../../ports/sourceAccessPort.js'
++++++++import type { SourceRecord } from '../../contracts/sources.js'
++++++++import { buildAdmittedContent } from '../documents/testAdmittedFixtures.js'
++++++++import { resolveQuarantinedFixturePath } from '../documents/quarantinePath.js'
++++++++import { GeneralWebAdapter, GENERAL_WEB_ADAPTER_ID } from './generalWebAdapter.js'
++++++++import { STATIC_HTML_EXTRACTION_VERSION } from './htmlFromAdmittedBytes.js'
++++++++
++++++++const devCorpusRoot = join(
++++++++  dirname(fileURLToPath(import.meta.url)),
++++++++  '../../profiles/general/fixtures/dev-corpus',
++++++++)
++++++++
++++++++function stubPort(fetchContent: SourceAccessPort['fetchContent']): SourceAccessPort {
++++++++  return {
++++++++    async search(request: SourceSearchRequest) {
++++++++      return {
++++++++        operationId: request.operationId,
++++++++        status: 'failed',
++++++++        failureCategory: 'search_provider_unavailable',
++++++++        message: 'test stub',
++++++++      }
++++++++    },
++++++++    fetchContent,
++++++++  }
++++++++}
++++++++
++++++++function webSource(id: string): SourceRecord {
++++++++  return {
++++++++    source_id: id,
++++++++    kind: 'web',
++++++++    canonical_key: `fixture:web:${id}`,
++++++++    observed_urls: ['https://example.invalid/plan-a'],
++++++++  }
++++++++}
++++++++
++++++++test('GeneralWebAdapter.read: static HTML via port (G-DEV-01 plan-a)', async () => {
++++++++  const rel = 'G-DEV-01/sources/plan-a.html'
++++++++  const bytes = readFileSync(resolveQuarantinedFixturePath(devCorpusRoot, rel))
++++++++  const port = stubPort(async (request: SourceFetchRequest) => ({
++++++++    operationId: request.operationId,
++++++++    status: 'ok',
++++++++    admitted: buildAdmittedContent(
++++++++      request.operationId,
++++++++      request.source.source_id,
++++++++      'rev-web',
++++++++      bytes,
++++++++      'text/html',
++++++++      {
++++++++        requestedUrl: 'https://example.invalid/plan-a',
++++++++        finalUrl: 'https://example.invalid/plan-a',
++++++++        redirectChain: ['https://example.invalid/plan-a'],
++++++++      },
++++++++    ),
++++++++  }))
++++++++  const result = await new GeneralWebAdapter().read(
++++++++    { operationId: 'op-web', source: webSource('src'), signal: AbortSignal.timeout(5_000) },
++++++++    port,
++++++++  )
++++++++  assert.equal(result.status, 'ok')
++++++++  if (result.status !== 'ok') return
++++++++  assert.equal(result.extraction_version, STATIC_HTML_EXTRACTION_VERSION)
++++++++  assert.ok(result.passages.length >= 1)
++++++++})
++++++++
++++++++test('GeneralWebAdapter: adapter id and kinds', () => {
++++++++  const a = new GeneralWebAdapter()
++++++++  assert.equal(a.adapterId, GENERAL_WEB_ADAPTER_ID)
++++++++  assert.deepEqual(a.supportedKinds, ['web'])
++++++++})
+++++++diff --git a/babel-cli/src/research/v2/adapters/web/generalWebAdapter.ts b/babel-cli/src/research/v2/adapters/web/generalWebAdapter.ts
+++++++new file mode 100644
+++++++index 00000000..d46c376c
+++++++--- /dev/null
++++++++++ b/babel-cli/src/research/v2/adapters/web/generalWebAdapter.ts
+++++++@@ -0,0 +1,92 @@
++++++++import type { SourceAccessPort, SourceClass } from '../../ports/sourceAccessPort.js'
++++++++import type {
++++++++  SourceAdapter,
++++++++  SourceAdapterReadRequest,
++++++++  SourceAdapterReadResult,
++++++++  SourceDiscoverRequest,
++++++++  SourceDiscoverResult,
++++++++} from '../../ports/sourceAdapter.js'
++++++++import {
++++++++  assertReadPreconditions,
++++++++  cancelledRead,
++++++++  validateFetchBinding,
++++++++} from '../documents/readBinding.js'
++++++++import {
++++++++  passagesFromAdmittedStaticHtml,
++++++++  STATIC_HTML_EXTRACTION_VERSION,
++++++++} from './htmlFromAdmittedBytes.js'
++++++++
++++++++export const GENERAL_WEB_ADAPTER_ID = 'general-web/0.1.0'
++++++++
++++++++export class GeneralWebAdapter implements SourceAdapter {
++++++++  readonly adapterId = GENERAL_WEB_ADAPTER_ID
++++++++  readonly supportedKinds: readonly SourceClass[] = ['web']
++++++++
++++++++  async discover(
++++++++    request: SourceDiscoverRequest,
++++++++    _access: SourceAccessPort,
++++++++  ): Promise<SourceDiscoverResult> {
++++++++    if (request.signal.aborted) {
++++++++      return { operationId: request.operationId, status: 'cancelled' }
++++++++    }
++++++++    return {
++++++++      operationId: request.operationId,
++++++++      status: 'failed',
++++++++      failureCategory: 'not_supported',
++++++++      message: 'general web adapter: live discovery not implemented in this slice',
++++++++    }
++++++++  }
++++++++
++++++++  async read(
++++++++    request: SourceAdapterReadRequest,
++++++++    access: SourceAccessPort,
++++++++  ): Promise<SourceAdapterReadResult> {
++++++++    const pre = assertReadPreconditions(request.operationId, request.source, request.signal)
++++++++    if (pre) return pre
++++++++
++++++++    const fetched = await access.fetchContent({
++++++++      operationId: request.operationId,
++++++++      source: request.source,
++++++++      signal: request.signal,
++++++++    })
++++++++
++++++++    if (request.signal.aborted) {
++++++++      return cancelledRead(request.operationId)
++++++++    }
++++++++
++++++++    const binding = validateFetchBinding(
++++++++      request.operationId,
++++++++      request.source,
++++++++      fetched,
++++++++      request.signal,
++++++++    )
++++++++    if (binding) return binding
++++++++
++++++++    if (fetched.status !== 'ok') return fetched
++++++++
++++++++    const admitted = fetched.admitted
++++++++    try {
++++++++      const passages = passagesFromAdmittedStaticHtml(admitted)
++++++++      return {
++++++++        operationId: request.operationId,
++++++++        status: 'ok',
++++++++        revision: admitted.revision,
++++++++        passages,
++++++++        extraction_version: STATIC_HTML_EXTRACTION_VERSION,
++++++++      }
++++++++    } catch (error) {
++++++++      const message = error instanceof Error ? error.message : String(error)
++++++++      const failureCategory = message.includes('unsupported media_type')
++++++++        ? 'unsupported_media'
++++++++        : message.includes('incomplete') || message.includes('no heading')
++++++++          ? 'extraction_failed'
++++++++          : 'extraction_failed'
++++++++      return {
++++++++        operationId: request.operationId,
++++++++        status: 'failed',
++++++++        failureCategory,
++++++++        message,
++++++++      }
++++++++    }
++++++++  }
++++++++}
+++++++diff --git a/babel-cli/src/research/v2/adapters/web/htmlFromAdmittedBytes.test.ts b/babel-cli/src/research/v2/adapters/web/htmlFromAdmittedBytes.test.ts
+++++++new file mode 100644
+++++++index 00000000..bc691e66
+++++++--- /dev/null
++++++++++ b/babel-cli/src/research/v2/adapters/web/htmlFromAdmittedBytes.test.ts
+++++++@@ -0,0 +1,74 @@
++++++++import assert from 'node:assert/strict'
++++++++import { readFileSync } from 'node:fs'
++++++++import { dirname, join } from 'node:path'
++++++++import { fileURLToPath } from 'node:url'
++++++++import { test } from 'node:test'
++++++++import { PassageRecordSchema } from '../../contracts/passages.js'
++++++++import { buildAdmittedContent } from '../documents/testAdmittedFixtures.js'
++++++++import { passageTextHash } from '../documents/passageInlineText.js'
++++++++import { resolveQuarantinedFixturePath } from '../documents/quarantinePath.js'
++++++++import { passagesFromAdmittedStaticHtml, HTML_MEDIA_TYPE } from './htmlFromAdmittedBytes.js'
++++++++
++++++++const devCorpusRoot = join(
++++++++  dirname(fileURLToPath(import.meta.url)),
++++++++  '../../profiles/general/fixtures/dev-corpus',
++++++++)
++++++++
++++++++test('passagesFromAdmittedStaticHtml: G-DEV-01 plan-a heading sections', () => {
++++++++  const rel = 'G-DEV-01/sources/plan-a.html'
++++++++  const bytes = readFileSync(resolveQuarantinedFixturePath(devCorpusRoot, rel))
++++++++  const admitted = buildAdmittedContent('op-html', 'src-plan', 'rev-plan', bytes, HTML_MEDIA_TYPE, {
++++++++    requestedUrl: 'https://example.invalid/plan-a',
++++++++    finalUrl: 'https://example.invalid/plan-a',
++++++++    redirectChain: ['https://example.invalid/plan-a'],
++++++++  })
++++++++  const passages = passagesFromAdmittedStaticHtml(admitted)
++++++++  assert.ok(passages.length >= 1)
++++++++  assert.equal(passages[0]?.locator.kind, 'section')
++++++++  assert.ok(passages[0]?.heading_path?.[0]?.includes('Nimbus'))
++++++++  for (const p of passages) PassageRecordSchema.parse(p)
++++++++})
++++++++
++++++++test('passagesFromAdmittedStaticHtml: non-ascii repeated headings get unique section_id', () => {
++++++++  const html = `<html><body><h1>日本語</h1><p>one</p><h1>日本語</h1><p>two</p></body></html>`
++++++++  const admitted = buildAdmittedContent('op', 's', 'r', Buffer.from(html, 'utf8'), HTML_MEDIA_TYPE)
++++++++  const passages = passagesFromAdmittedStaticHtml(admitted)
++++++++  assert.equal(passages.length, 2)
++++++++  const ids = passages.map((p) => (p.locator.kind === 'section' ? p.locator.section_id : ''))
++++++++  assert.notEqual(ids[0], ids[1])
++++++++  assert.match(ids[0] ?? '', /^heading-[a-f0-9]{16}$/)
++++++++  assert.equal(ids[1], `${ids[0]}~2`)
++++++++})
++++++++
++++++++test('passagesFromAdmittedStaticHtml: repeated headings get unique section_id', () => {
++++++++  const html = `<html><body><h1>Same</h1><p>one</p><h1>Same</h1><p>two</p></body></html>`
++++++++  const admitted = buildAdmittedContent('op', 's', 'r', Buffer.from(html, 'utf8'), HTML_MEDIA_TYPE)
++++++++  const passages = passagesFromAdmittedStaticHtml(admitted)
++++++++  assert.equal(passages.length, 2)
++++++++  const ids = passages.map((p) => (p.locator.kind === 'section' ? p.locator.section_id : ''))
++++++++  assert.notEqual(ids[0], ids[1])
++++++++})
++++++++
++++++++test('passagesFromAdmittedStaticHtml: inline hash matches emitted text', () => {
++++++++  const html = `<html><body><h1>H</h1><p>${'z'.repeat(32_001)}</p></body></html>`
++++++++  const admitted = buildAdmittedContent('op', 's', 'r', Buffer.from(html, 'utf8'), HTML_MEDIA_TYPE)
++++++++  const passages = passagesFromAdmittedStaticHtml(admitted)
++++++++  const ref = passages[0]?.text_ref
++++++++  assert.equal(ref?.mode, 'inline')
++++++++  if (ref?.mode === 'inline') {
++++++++    assert.equal(ref.text_hash, passageTextHash(ref.text))
++++++++    assert.ok(passages[0]?.extraction_notes?.some((n) => n.includes('inline_text_truncated')))
++++++++  }
++++++++})
++++++++
++++++++test('passagesFromAdmittedStaticHtml: rejects login-only html', () => {
++++++++  const bytes = Buffer.from('<html><body><form><input type="password"/></form></body></html>', 'utf8')
++++++++  const admitted = buildAdmittedContent('op', 's', 'r', bytes, HTML_MEDIA_TYPE)
++++++++  assert.throws(() => passagesFromAdmittedStaticHtml(admitted), /login-only|incomplete/)
++++++++})
++++++++
++++++++test('passagesFromAdmittedStaticHtml: rejects non-html media', () => {
++++++++  const bytes = Buffer.from('<p>x</p>', 'utf8')
++++++++  const admitted = buildAdmittedContent('op', 's', 'r', bytes, 'text/plain')
++++++++  assert.throws(() => passagesFromAdmittedStaticHtml(admitted), /unsupported media_type/)
++++++++})
+++++++diff --git a/babel-cli/src/research/v2/adapters/web/htmlFromAdmittedBytes.ts b/babel-cli/src/research/v2/adapters/web/htmlFromAdmittedBytes.ts
+++++++new file mode 100644
+++++++index 00000000..2a3409e9
+++++++--- /dev/null
++++++++++ b/babel-cli/src/research/v2/adapters/web/htmlFromAdmittedBytes.ts
+++++++@@ -0,0 +1,64 @@
++++++++import type { AdmittedContent } from '../../contracts/admittedContent.js'
++++++++import type { PassageRecord } from '../../contracts/passages.js'
++++++++import { PassageRecordSchema } from '../../contracts/passages.js'
++++++++import { buildInlinePassageTextRef } from '../documents/passageInlineText.js'
++++++++import { decodeAdmittedUtf8Bytes } from '../documents/plainTextFromAdmittedBytes.js'
++++++++import { allocateSectionLocatorId } from './htmlSectionLocator.js'
++++++++
++++++++export const HTML_MEDIA_TYPE = 'text/html'
++++++++export const STATIC_HTML_EXTRACTION_VERSION = 'general-static-html/0.1.0'
++++++++
++++++++/** Minimal static HTML: one passage per heading block (admitted bytes only; no JS). */
++++++++export function passagesFromAdmittedStaticHtml(admitted: AdmittedContent): PassageRecord[] {
++++++++  if (admitted.media_type !== HTML_MEDIA_TYPE) {
++++++++    throw new Error(
++++++++      `unsupported media_type for static HTML extractor: ${admitted.media_type} (only ${HTML_MEDIA_TYPE})`,
++++++++    )
++++++++  }
++++++++  const raw = decodeAdmittedUtf8Bytes(admitted)
++++++++  const html = raw.toString('utf8')
++++++++  if (/<form[^>]*>[\s\S]*password/i.test(html) && !/<h[1-6]/i.test(html)) {
++++++++    throw new Error('html appears to be login-only markup; extraction incomplete')
++++++++  }
++++++++  const stripped = html
++++++++    .replace(/<script[\s\S]*?<\/script>/gi, '')
++++++++    .replace(/<style[\s\S]*?<\/style>/gi, '')
++++++++  const headingRe = /<h([1-6])[^>]*>([^<]*)<\/h[1-6]>/gi
++++++++  const passages: PassageRecord[] = []
++++++++  const sectionOccurrence = new Map<string, number>()
++++++++  let match: RegExpExecArray | null
++++++++  let index = 0
++++++++  while ((match = headingRe.exec(stripped)) !== null) {
++++++++    const heading = (match[2] ?? '').trim()
++++++++    if (!heading) continue
++++++++    const level = Number(match[1] ?? '1')
++++++++    const after = stripped.slice(match.index + match[0].length)
++++++++    const nextHeading = after.search(/<h[1-6]/i)
++++++++    const block = nextHeading >= 0 ? after.slice(0, nextHeading) : after
++++++++    const text = block
++++++++      .replace(/<[^>]+>/g, ' ')
++++++++      .replace(/\s+/g, ' ')
++++++++      .trim()
++++++++    if (!text) continue
++++++++    const sectionId = allocateSectionLocatorId(heading, sectionOccurrence)
++++++++    const inline = buildInlinePassageTextRef(text)
++++++++    const record: PassageRecord = {
++++++++      passage_id: `${admitted.operation_id}:html:${index++}`,
++++++++      source_revision_id: admitted.revision.revision_id,
++++++++      locator: { kind: 'section', section_id: sectionId },
++++++++      heading_path: [heading],
++++++++      text_ref: {
++++++++        mode: 'inline',
++++++++        text: inline.text,
++++++++        text_hash: inline.text_hash,
++++++++      },
++++++++      extraction_notes: [`heading_level:${level}`, 'static_html_extractor', ...inline.truncationNotes],
++++++++    }
++++++++    PassageRecordSchema.parse(record)
++++++++    passages.push(record)
++++++++  }
++++++++  if (passages.length === 0) {
++++++++    throw new Error('no heading-bounded sections extracted from admitted HTML')
++++++++  }
++++++++  return passages
++++++++}
+++++++diff --git a/babel-cli/src/research/v2/adapters/web/htmlSectionLocator.test.ts b/babel-cli/src/research/v2/adapters/web/htmlSectionLocator.test.ts
+++++++new file mode 100644
+++++++index 00000000..c8d2bb33
+++++++--- /dev/null
++++++++++ b/babel-cli/src/research/v2/adapters/web/htmlSectionLocator.test.ts
+++++++@@ -0,0 +1,19 @@
++++++++import assert from 'node:assert/strict'
++++++++import { test } from 'node:test'
++++++++import { allocateSectionLocatorId } from './htmlSectionLocator.js'
++++++++
++++++++test('allocateSectionLocatorId: disambiguates repeated headings', () => {
++++++++  const map = new Map<string, number>()
++++++++  const a = allocateSectionLocatorId('Overview', map)
++++++++  const b = allocateSectionLocatorId('Overview', map)
++++++++  assert.equal(a, 'overview')
++++++++  assert.equal(b, 'overview~2')
++++++++})
++++++++
++++++++test('allocateSectionLocatorId: non-ascii headings get stable unique slugs', () => {
++++++++  const map = new Map<string, number>()
++++++++  const a = allocateSectionLocatorId('日本語', map)
++++++++  const b = allocateSectionLocatorId('日本語', map)
++++++++  assert.match(a, /^heading-[a-f0-9]{16}$/)
++++++++  assert.equal(b, `${a}~2`)
++++++++})
+++++++diff --git a/babel-cli/src/research/v2/adapters/web/htmlSectionLocator.ts b/babel-cli/src/research/v2/adapters/web/htmlSectionLocator.ts
+++++++new file mode 100644
+++++++index 00000000..cdd80ea0
+++++++--- /dev/null
++++++++++ b/babel-cli/src/research/v2/adapters/web/htmlSectionLocator.ts
+++++++@@ -0,0 +1,24 @@
++++++++import { createHash } from 'node:crypto'
++++++++
++++++++export function sectionSlugFromHeading(heading: string): string {
++++++++  const trimmed = heading.trim()
++++++++  const ascii = trimmed
++++++++    .toLowerCase()
++++++++    .replace(/[^a-z0-9]+/g, '-')
++++++++    .replace(/^-|-$/g, '')
++++++++  if (ascii.length > 0) return ascii.slice(0, 80)
++++++++  const digest = createHash('sha256').update(trimmed, 'utf8').digest('hex').slice(0, 16)
++++++++  return `heading-${digest}`
++++++++}
++++++++
++++++++/** Deterministic section_id unique within one extraction pass (repeated headings disambiguated). */
++++++++export function allocateSectionLocatorId(
++++++++  heading: string,
++++++++  occurrenceBySlug: Map<string, number>,
++++++++): string {
++++++++  const slug = sectionSlugFromHeading(heading)
++++++++  const seen = occurrenceBySlug.get(slug) ?? 0
++++++++  occurrenceBySlug.set(slug, seen + 1)
++++++++  if (seen === 0) return slug
++++++++  return `${slug}~${seen + 1}`
++++++++}
+++++++diff --git a/babel-cli/src/research/v2/profiles/general/EXTRACTION_SLICE_CANDIDATE_M1.md b/babel-cli/src/research/v2/profiles/general/EXTRACTION_SLICE_CANDIDATE_M1.md
+++++++new file mode 100644
+++++++index 00000000..2d98a6a0
+++++++--- /dev/null
++++++++++ b/babel-cli/src/research/v2/profiles/general/EXTRACTION_SLICE_CANDIDATE_M1.md
+++++++@@ -0,0 +1,26 @@
++++++++# Extraction slice (local, unpublished)
++++++++
++++++++**Plaintext checkpoint preserved:** `general-document/0.1.0` `text/plain` path on published `196098d9` semantics.
++++++++
++++++++## Bounded scope
++++++++
++++++++| Adapter | Media | Outcome |
++++++++|---------|--------|---------|
++++++++| `general-document/0.1.0` | `text/plain` | Reviewed admitted inline UTF-8 lines |
++++++++| `general-document/0.1.0` | `application/pdf` | Per-page text via pdfjs (`general-pdf-text/0.1.0`); page limits; abort + cleanup |
++++++++| `general-web/0.1.0` | `text/html` | Static heading sections (`general-static-html/0.1.0`) |
++++++++| `general-web/0.1.0` | discover | `not_supported` (no live search in this slice) |
++++++++
++++++++## Agent A coordination
++++++++
++++++++- Register `generalAdapterCatalog` on `SourceAdapterRegistry` (A-owned).
++++++++- Mission → `fetchContent` → adapter `read()` → schema-valid passages.
++++++++
++++++++## Fixtures
++++++++
++++++++- HTML: `profiles/general/fixtures/dev-corpus/G-DEV-01/sources/plan-a.html`
++++++++- PDF: `adapters/documents/fixtures/two-page-sample.pdf`
++++++++
++++++++## Not in scope
++++++++
++++++++Live network/search, JS rendering, OCR, publication push.
+++++++diff --git a/babel-cli/src/research/v2/profiles/general/generalAdapterCatalog.test.ts b/babel-cli/src/research/v2/profiles/general/generalAdapterCatalog.test.ts
+++++++new file mode 100644
+++++++index 00000000..61ae60b5
+++++++--- /dev/null
++++++++++ b/babel-cli/src/research/v2/profiles/general/generalAdapterCatalog.test.ts
+++++++@@ -0,0 +1,10 @@
++++++++import assert from 'node:assert/strict'
++++++++import { test } from 'node:test'
++++++++import { generalAdapterCatalog } from './generalAdapterCatalog.js'
++++++++
++++++++test('generalAdapterCatalog: exposes document and web adapter ids for A registry', () => {
++++++++  assert.match(generalAdapterCatalog.document.adapterId, /^general-document\//)
++++++++  assert.match(generalAdapterCatalog.web.adapterId, /^general-web\//)
++++++++  assert.equal(typeof generalAdapterCatalog.document.factory, 'function')
++++++++  assert.equal(typeof generalAdapterCatalog.web.factory, 'function')
++++++++})
+++++++diff --git a/babel-cli/src/research/v2/profiles/general/generalAdapterCatalog.ts b/babel-cli/src/research/v2/profiles/general/generalAdapterCatalog.ts
+++++++new file mode 100644
+++++++index 00000000..2e0669a0
+++++++--- /dev/null
++++++++++ b/babel-cli/src/research/v2/profiles/general/generalAdapterCatalog.ts
+++++++@@ -0,0 +1,19 @@
++++++++/**
++++++++ * B-owned adapter IDs for Agent A registry wiring (no registry edits here).
++++++++ * IO only through SourceAccessPort; mission/report loop remains Agent A.
++++++++ */
++++++++import { GENERAL_DOCUMENT_ADAPTER_ID, GeneralDocumentAdapter } from '../../adapters/documents/generalDocumentAdapter.js'
++++++++import { GENERAL_WEB_ADAPTER_ID, GeneralWebAdapter } from '../../adapters/web/generalWebAdapter.js'
++++++++
++++++++export const generalAdapterCatalog = {
++++++++  document: {
++++++++    adapterId: GENERAL_DOCUMENT_ADAPTER_ID,
++++++++    factory: () => new GeneralDocumentAdapter(),
++++++++    extraction: 'text/plain inline bytes; application/pdf per-page text (pdfjs-dist, admitted bytes)',
++++++++  },
++++++++  web: {
++++++++    adapterId: GENERAL_WEB_ADAPTER_ID,
++++++++    factory: () => new GeneralWebAdapter(),
++++++++    extraction: 'static text/html heading-bounded sections (admitted bytes)',
++++++++  },
++++++++} as const
++++++diff --git a/review-artifacts/extraction-local-test-receipt.tap.txt b/review-artifacts/extraction-local-test-receipt.tap.txt
++++++new file mode 100644
++++++index 00000000..761eb0ba
++++++--- /dev/null
+++++++++ b/review-artifacts/extraction-local-test-receipt.tap.txt
++++++@@ -0,0 +1,269 @@
+++++++TAP version 13
+++++++# Subtest: GeneralDocumentAdapter.read: admitted plain text via port only (G-DEV-03)
+++++++ok 1 - GeneralDocumentAdapter.read: admitted plain text via port only (G-DEV-03)
+++++++  ---
+++++++  duration_ms: 4.04829
+++++++  type: 'test'
+++++++  ...
+++++++# Subtest: GeneralDocumentAdapter.read: propagates port cancelled
+++++++ok 2 - GeneralDocumentAdapter.read: propagates port cancelled
+++++++  ---
+++++++  duration_ms: 0.172603
+++++++  type: 'test'
+++++++  ...
+++++++# Subtest: GeneralDocumentAdapter.read: pre-await abort returns cancelled
+++++++ok 3 - GeneralDocumentAdapter.read: pre-await abort returns cancelled
+++++++  ---
+++++++  duration_ms: 0.101342
+++++++  type: 'test'
+++++++  ...
+++++++# Subtest: GeneralDocumentAdapter.read: post-await abort returns cancelled
+++++++ok 4 - GeneralDocumentAdapter.read: post-await abort returns cancelled
+++++++  ---
+++++++  duration_ms: 15.536534
+++++++  type: 'test'
+++++++  ...
+++++++# Subtest: GeneralDocumentAdapter.read: fails on port operationId mismatch
+++++++ok 5 - GeneralDocumentAdapter.read: fails on port operationId mismatch
+++++++  ---
+++++++  duration_ms: 0.613703
+++++++  type: 'test'
+++++++  ...
+++++++# Subtest: GeneralDocumentAdapter.read: fails when provenance requested_url is unrelated to source
+++++++ok 6 - GeneralDocumentAdapter.read: fails when provenance requested_url is unrelated to source
+++++++  ---
+++++++  duration_ms: 0.235356
+++++++  type: 'test'
+++++++  ...
+++++++# Subtest: GeneralDocumentAdapter.read: does not propagate failure from foreign operationId
+++++++ok 7 - GeneralDocumentAdapter.read: does not propagate failure from foreign operationId
+++++++  ---
+++++++  duration_ms: 0.191197
+++++++  type: 'test'
+++++++  ...
+++++++# Subtest: GeneralDocumentAdapter.read: fails on admitted source_id mismatch
+++++++ok 8 - GeneralDocumentAdapter.read: fails on admitted source_id mismatch
+++++++  ---
+++++++  duration_ms: 0.239614
+++++++  type: 'test'
+++++++  ...
+++++++# Subtest: GeneralDocumentAdapter.read: extraction_failed on hash mismatch
+++++++ok 9 - GeneralDocumentAdapter.read: extraction_failed on hash mismatch
+++++++  ---
+++++++  duration_ms: 0.35691
+++++++  type: 'test'
+++++++  ...
+++++++# Subtest: GeneralDocumentAdapter.discover: not_supported without network
+++++++ok 10 - GeneralDocumentAdapter.discover: not_supported without network
+++++++  ---
+++++++  duration_ms: 0.28985
+++++++  type: 'test'
+++++++  ...
+++++++# Subtest: truncateToCodePointLimit: does not split emoji surrogate pair
+++++++ok 11 - truncateToCodePointLimit: does not split emoji surrogate pair
+++++++  ---
+++++++  duration_ms: 1.705675
+++++++  type: 'test'
+++++++  ...
+++++++# Subtest: buildInlinePassageTextRef: hashes emitted text only
+++++++ok 12 - buildInlinePassageTextRef: hashes emitted text only
+++++++  ---
+++++++  duration_ms: 1.533594
+++++++  type: 'test'
+++++++  ...
+++++++# Subtest: GeneralDocumentAdapter.read: application/pdf via pdfjs page passages
+++++++ok 13 - GeneralDocumentAdapter.read: application/pdf via pdfjs page passages
+++++++  ---
+++++++  duration_ms: 1128.057025
+++++++  type: 'test'
+++++++  ...
+++++++# Warning: Indexing all PDF objects
+++++++# Subtest: GeneralDocumentAdapter.read: malformed pdf bytes extraction_failed
+++++++ok 14 - GeneralDocumentAdapter.read: malformed pdf bytes extraction_failed
+++++++  ---
+++++++  duration_ms: 6.904126
+++++++  type: 'test'
+++++++  ...
+++++++# Subtest: passagesFromAdmittedPdf: two-page fixture with page locators
+++++++ok 15 - passagesFromAdmittedPdf: two-page fixture with page locators
+++++++  ---
+++++++  duration_ms: 1086.246539
+++++++  type: 'test'
+++++++  ...
+++++++# Subtest: passagesFromAdmittedPdf: cancellation during delayed page loop
+++++++ok 16 - passagesFromAdmittedPdf: cancellation during delayed page loop
+++++++  ---
+++++++  duration_ms: 11.671284
+++++++  type: 'test'
+++++++  ...
+++++++# Subtest: passagesFromAdmittedPdf: hashes emitted inline text only when truncated
+++++++ok 17 - passagesFromAdmittedPdf: hashes emitted inline text only when truncated
+++++++  ---
+++++++  duration_ms: 4.009664
+++++++  type: 'test'
+++++++  ...
+++++++# Subtest: passagesFromAdmittedPdf: rejects non-pdf bytes
+++++++ok 18 - passagesFromAdmittedPdf: rejects non-pdf bytes
+++++++  ---
+++++++  duration_ms: 0.252193
+++++++  type: 'test'
+++++++  ...
+++++++# Subtest: passagesFromAdmittedPlainText: G-DEV-03 raw bytes, schema-valid passages
+++++++ok 19 - passagesFromAdmittedPlainText: G-DEV-03 raw bytes, schema-valid passages
+++++++  ---
+++++++  duration_ms: 3.979577
+++++++  type: 'test'
+++++++  ...
+++++++# Subtest: decodeAdmittedUtf8Bytes: rejects byte_length mismatch
+++++++ok 20 - decodeAdmittedUtf8Bytes: rejects byte_length mismatch
+++++++  ---
+++++++  duration_ms: 0.385053
+++++++  type: 'test'
+++++++  ...
+++++++# Subtest: decodeAdmittedUtf8Bytes: rejects payload content_hash mismatch
+++++++ok 21 - decodeAdmittedUtf8Bytes: rejects payload content_hash mismatch
+++++++  ---
+++++++  duration_ms: 0.134371
+++++++  type: 'test'
+++++++  ...
+++++++# Subtest: decodeAdmittedUtf8Bytes: rejects revision content_hash mismatch
+++++++ok 22 - decodeAdmittedUtf8Bytes: rejects revision content_hash mismatch
+++++++  ---
+++++++  duration_ms: 0.11209
+++++++  type: 'test'
+++++++  ...
+++++++# Subtest: decodeAdmittedUtf8Bytes: rejects invalid UTF-8
+++++++ok 23 - decodeAdmittedUtf8Bytes: rejects invalid UTF-8
+++++++  ---
+++++++  duration_ms: 0.237484
+++++++  type: 'test'
+++++++  ...
+++++++# Subtest: passagesFromAdmittedPlainText: rejects text/html login markup as unsupported
+++++++ok 24 - passagesFromAdmittedPlainText: rejects text/html login markup as unsupported
+++++++  ---
+++++++  duration_ms: 0.11482
+++++++  type: 'test'
+++++++  ...
+++++++# Subtest: decodeAdmittedUtf8Bytes: rejects decoded length drift vs byte_length
+++++++ok 25 - decodeAdmittedUtf8Bytes: rejects decoded length drift vs byte_length
+++++++  ---
+++++++  duration_ms: 0.181721
+++++++  type: 'test'
+++++++  ...
+++++++# Subtest: validateFetchBinding: rejects foreign operationId on failed fetch before propagating failure
+++++++ok 26 - validateFetchBinding: rejects foreign operationId on failed fetch before propagating failure
+++++++  ---
+++++++  duration_ms: 1.044005
+++++++  type: 'test'
+++++++  ...
+++++++# Subtest: validateFetchBinding: rejects foreign operationId on cancelled fetch
+++++++ok 27 - validateFetchBinding: rejects foreign operationId on cancelled fetch
+++++++  ---
+++++++  duration_ms: 0.180224
+++++++  type: 'test'
+++++++  ...
+++++++# Subtest: validateFetchBinding: propagates failed fetch when operationId matches
+++++++ok 28 - validateFetchBinding: propagates failed fetch when operationId matches
+++++++  ---
+++++++  duration_ms: 0.090507
+++++++  type: 'test'
+++++++  ...
+++++++# Subtest: validateFetchBinding: rejects ok admission when requested_url is not on source
+++++++ok 29 - validateFetchBinding: rejects ok admission when requested_url is not on source
+++++++  ---
+++++++  duration_ms: 0.398082
+++++++  type: 'test'
+++++++  ...
+++++++# Subtest: validateFetchBinding: accepts legitimate redirect when chain ends at final_url
+++++++ok 30 - validateFetchBinding: accepts legitimate redirect when chain ends at final_url
+++++++  ---
+++++++  duration_ms: 0.138261
+++++++  type: 'test'
+++++++  ...
+++++++# Subtest: validateAdmittedRedirectProvenance: rejects chain that does not end at final_url
+++++++ok 31 - validateAdmittedRedirectProvenance: rejects chain that does not end at final_url
+++++++  ---
+++++++  duration_ms: 0.06402
+++++++  type: 'test'
+++++++  ...
+++++++# Subtest: admitsRequestedUrlForSource: uses observed_urls only
+++++++ok 32 - admitsRequestedUrlForSource: uses observed_urls only
+++++++  ---
+++++++  duration_ms: 0.102844
+++++++  type: 'test'
+++++++  ...
+++++++# Subtest: bindingFailed: uses contract_violation category
+++++++ok 33 - bindingFailed: uses contract_violation category
+++++++  ---
+++++++  duration_ms: 0.056252
+++++++  type: 'test'
+++++++  ...
+++++++# Subtest: GeneralWebAdapter.read: static HTML via port (G-DEV-01 plan-a)
+++++++ok 34 - GeneralWebAdapter.read: static HTML via port (G-DEV-01 plan-a)
+++++++  ---
+++++++  duration_ms: 3.886822
+++++++  type: 'test'
+++++++  ...
+++++++# Subtest: GeneralWebAdapter: adapter id and kinds
+++++++ok 35 - GeneralWebAdapter: adapter id and kinds
+++++++  ---
+++++++  duration_ms: 0.557631
+++++++  type: 'test'
+++++++  ...
+++++++# Subtest: passagesFromAdmittedStaticHtml: G-DEV-01 plan-a heading sections
+++++++ok 36 - passagesFromAdmittedStaticHtml: G-DEV-01 plan-a heading sections
+++++++  ---
+++++++  duration_ms: 3.950026
+++++++  type: 'test'
+++++++  ...
+++++++# Subtest: passagesFromAdmittedStaticHtml: non-ascii repeated headings get unique section_id
+++++++ok 37 - passagesFromAdmittedStaticHtml: non-ascii repeated headings get unique section_id
+++++++  ---
+++++++  duration_ms: 0.967605
+++++++  type: 'test'
+++++++  ...
+++++++# Subtest: passagesFromAdmittedStaticHtml: repeated headings get unique section_id
+++++++ok 38 - passagesFromAdmittedStaticHtml: repeated headings get unique section_id
+++++++  ---
+++++++  duration_ms: 0.908437
+++++++  type: 'test'
+++++++  ...
+++++++# Subtest: passagesFromAdmittedStaticHtml: inline hash matches emitted text
+++++++ok 39 - passagesFromAdmittedStaticHtml: inline hash matches emitted text
+++++++  ---
+++++++  duration_ms: 1.811479
+++++++  type: 'test'
+++++++  ...
+++++++# Subtest: passagesFromAdmittedStaticHtml: rejects login-only html
+++++++ok 40 - passagesFromAdmittedStaticHtml: rejects login-only html
+++++++  ---
+++++++  duration_ms: 0.538446
+++++++  type: 'test'
+++++++  ...
+++++++# Subtest: passagesFromAdmittedStaticHtml: rejects non-html media
+++++++ok 41 - passagesFromAdmittedStaticHtml: rejects non-html media
+++++++  ---
+++++++  duration_ms: 0.143537
+++++++  type: 'test'
+++++++  ...
+++++++# Subtest: allocateSectionLocatorId: disambiguates repeated headings
+++++++ok 42 - allocateSectionLocatorId: disambiguates repeated headings
+++++++  ---
+++++++  duration_ms: 0.665939
+++++++  type: 'test'
+++++++  ...
+++++++# Subtest: allocateSectionLocatorId: non-ascii headings get stable unique slugs
+++++++ok 43 - allocateSectionLocatorId: non-ascii headings get stable unique slugs
+++++++  ---
+++++++  duration_ms: 0.375575
+++++++  type: 'test'
+++++++  ...
+++++++1..43
+++++++# tests 43
+++++++# suites 0
+++++++# pass 43
+++++++# fail 0
+++++++# cancelled 0
+++++++# skipped 0
+++++++# todo 0
+++++++# duration_ms 1625.84074
 ++++diff --git a/review-artifacts/extraction-local-test-receipt.tap.txt b/review-artifacts/extraction-local-test-receipt.tap.txt
 ++++new file mode 100644
 ++++index 00000000..761eb0ba
@@ -10397,281 +12576,324 @@ index 00000000..03f2b9a4
 +++++# skipped 0
 +++++# todo 0
 +++++# duration_ms 1625.84074
++++diff --git a/review-artifacts/extraction-local-focused-test-command.txt b/review-artifacts/extraction-local-focused-test-command.txt
++++new file mode 100644
++++index 00000000..1ef345f5
++++--- /dev/null
+++++++ b/review-artifacts/extraction-local-focused-test-command.txt
++++@@ -0,0 +1 @@
+++++cd babel-cli && node --test --import tsx src/research/v2/adapters/documents/passageInlineText.test.ts src/research/v2/adapters/documents/pdfFromAdmittedBytes.test.ts src/research/v2/adapters/documents/pdfAdmission.test.ts src/research/v2/adapters/documents/plainTextFromAdmittedBytes.test.ts src/research/v2/adapters/documents/generalDocumentAdapter.test.ts src/research/v2/adapters/documents/readBinding.test.ts src/research/v2/adapters/web/htmlFromAdmittedBytes.test.ts src/research/v2/adapters/web/htmlSectionLocator.test.ts src/research/v2/adapters/web/generalWebAdapter.test.ts
 +++diff --git a/review-artifacts/extraction-local-test-receipt.tap.txt b/review-artifacts/extraction-local-test-receipt.tap.txt
 +++new file mode 100644
-+++index 00000000..761eb0ba
++++index 00000000..6e7b8756
 +++--- /dev/null
 ++++++ b/review-artifacts/extraction-local-test-receipt.tap.txt
-+++@@ -0,0 +1,269 @@
++++@@ -0,0 +1,305 @@
 ++++TAP version 13
 ++++# Subtest: GeneralDocumentAdapter.read: admitted plain text via port only (G-DEV-03)
 ++++ok 1 - GeneralDocumentAdapter.read: admitted plain text via port only (G-DEV-03)
 ++++  ---
-++++  duration_ms: 4.04829
+++++  duration_ms: 3.774717
 ++++  type: 'test'
 ++++  ...
 ++++# Subtest: GeneralDocumentAdapter.read: propagates port cancelled
 ++++ok 2 - GeneralDocumentAdapter.read: propagates port cancelled
 ++++  ---
-++++  duration_ms: 0.172603
+++++  duration_ms: 0.147308
 ++++  type: 'test'
 ++++  ...
 ++++# Subtest: GeneralDocumentAdapter.read: pre-await abort returns cancelled
 ++++ok 3 - GeneralDocumentAdapter.read: pre-await abort returns cancelled
 ++++  ---
-++++  duration_ms: 0.101342
+++++  duration_ms: 0.089611
 ++++  type: 'test'
 ++++  ...
 ++++# Subtest: GeneralDocumentAdapter.read: post-await abort returns cancelled
 ++++ok 4 - GeneralDocumentAdapter.read: post-await abort returns cancelled
 ++++  ---
-++++  duration_ms: 15.536534
+++++  duration_ms: 15.761903
 ++++  type: 'test'
 ++++  ...
 ++++# Subtest: GeneralDocumentAdapter.read: fails on port operationId mismatch
 ++++ok 5 - GeneralDocumentAdapter.read: fails on port operationId mismatch
 ++++  ---
-++++  duration_ms: 0.613703
+++++  duration_ms: 0.565907
 ++++  type: 'test'
 ++++  ...
 ++++# Subtest: GeneralDocumentAdapter.read: fails when provenance requested_url is unrelated to source
 ++++ok 6 - GeneralDocumentAdapter.read: fails when provenance requested_url is unrelated to source
 ++++  ---
-++++  duration_ms: 0.235356
+++++  duration_ms: 0.213985
 ++++  type: 'test'
 ++++  ...
 ++++# Subtest: GeneralDocumentAdapter.read: does not propagate failure from foreign operationId
 ++++ok 7 - GeneralDocumentAdapter.read: does not propagate failure from foreign operationId
 ++++  ---
-++++  duration_ms: 0.191197
+++++  duration_ms: 0.177171
 ++++  type: 'test'
 ++++  ...
 ++++# Subtest: GeneralDocumentAdapter.read: fails on admitted source_id mismatch
 ++++ok 8 - GeneralDocumentAdapter.read: fails on admitted source_id mismatch
 ++++  ---
-++++  duration_ms: 0.239614
+++++  duration_ms: 0.244757
 ++++  type: 'test'
 ++++  ...
 ++++# Subtest: GeneralDocumentAdapter.read: extraction_failed on hash mismatch
 ++++ok 9 - GeneralDocumentAdapter.read: extraction_failed on hash mismatch
 ++++  ---
-++++  duration_ms: 0.35691
+++++  duration_ms: 0.348647
 ++++  type: 'test'
 ++++  ...
 ++++# Subtest: GeneralDocumentAdapter.discover: not_supported without network
 ++++ok 10 - GeneralDocumentAdapter.discover: not_supported without network
 ++++  ---
-++++  duration_ms: 0.28985
+++++  duration_ms: 1.412531
 ++++  type: 'test'
 ++++  ...
-++++# Subtest: truncateToCodePointLimit: does not split emoji surrogate pair
-++++ok 11 - truncateToCodePointLimit: does not split emoji surrogate pair
+++++# Subtest: truncateToInlinePassageTextLimit: 31999 ASCII + emoji stays within UTF-16 schema max
+++++ok 11 - truncateToInlinePassageTextLimit: 31999 ASCII + emoji stays within UTF-16 schema max
 ++++  ---
-++++  duration_ms: 1.705675
+++++  duration_ms: 6.770065
 ++++  type: 'test'
 ++++  ...
-++++# Subtest: buildInlinePassageTextRef: hashes emitted text only
-++++ok 12 - buildInlinePassageTextRef: hashes emitted text only
+++++# Subtest: buildInlinePassageTextRef: hashes emitted text and satisfies PassageTextRefSchema
+++++ok 12 - buildInlinePassageTextRef: hashes emitted text and satisfies PassageTextRefSchema
 ++++  ---
-++++  duration_ms: 1.533594
+++++  duration_ms: 2.588422
 ++++  type: 'test'
 ++++  ...
-++++# Subtest: GeneralDocumentAdapter.read: application/pdf via pdfjs page passages
-++++ok 13 - GeneralDocumentAdapter.read: application/pdf via pdfjs page passages
+++++# Subtest: buildInlinePassageTextRef: astral tail dropped before UTF-16 overflow
+++++ok 13 - buildInlinePassageTextRef: astral tail dropped before UTF-16 overflow
 ++++  ---
-++++  duration_ms: 1128.057025
+++++  duration_ms: 3.704933
 ++++  type: 'test'
 ++++  ...
 ++++# Warning: Indexing all PDF objects
-++++# Subtest: GeneralDocumentAdapter.read: malformed pdf bytes extraction_failed
-++++ok 14 - GeneralDocumentAdapter.read: malformed pdf bytes extraction_failed
+++++# Subtest: GeneralDocumentAdapter.read: application/pdf via pdfjs page passages
+++++ok 14 - GeneralDocumentAdapter.read: application/pdf via pdfjs page passages
 ++++  ---
-++++  duration_ms: 6.904126
+++++  duration_ms: 1100.035944
+++++  type: 'test'
+++++  ...
+++++# Subtest: GeneralDocumentAdapter.read: malformed pdf bytes extraction_failed
+++++ok 15 - GeneralDocumentAdapter.read: malformed pdf bytes extraction_failed
+++++  ---
+++++  duration_ms: 2.367017
 ++++  type: 'test'
 ++++  ...
 ++++# Subtest: passagesFromAdmittedPdf: two-page fixture with page locators
-++++ok 15 - passagesFromAdmittedPdf: two-page fixture with page locators
+++++ok 16 - passagesFromAdmittedPdf: two-page fixture with page locators
 ++++  ---
-++++  duration_ms: 1086.246539
+++++  duration_ms: 1092.749452
 ++++  type: 'test'
 ++++  ...
 ++++# Subtest: passagesFromAdmittedPdf: cancellation during delayed page loop
-++++ok 16 - passagesFromAdmittedPdf: cancellation during delayed page loop
+++++ok 17 - passagesFromAdmittedPdf: cancellation during delayed page loop
 ++++  ---
-++++  duration_ms: 11.671284
+++++  duration_ms: 11.666256
+++++  type: 'test'
+++++  ...
+++++# Subtest: passagesFromAdmittedPdf: abort interrupts stalled loading without waiting
+++++ok 18 - passagesFromAdmittedPdf: abort interrupts stalled loading without waiting
+++++  ---
+++++  duration_ms: 0.485558
+++++  type: 'test'
+++++  ...
+++++# Subtest: passagesFromAdmittedPdf: abort interrupts stalled getPage
+++++ok 19 - passagesFromAdmittedPdf: abort interrupts stalled getPage
+++++  ---
+++++  duration_ms: 0.407502
+++++  type: 'test'
+++++  ...
+++++# Subtest: passagesFromAdmittedPdf: abort interrupts stalled getTextContent
+++++ok 20 - passagesFromAdmittedPdf: abort interrupts stalled getTextContent
+++++  ---
+++++  duration_ms: 0.374578
 ++++  type: 'test'
 ++++  ...
 ++++# Subtest: passagesFromAdmittedPdf: hashes emitted inline text only when truncated
-++++ok 17 - passagesFromAdmittedPdf: hashes emitted inline text only when truncated
+++++ok 21 - passagesFromAdmittedPdf: hashes emitted inline text only when truncated
 ++++  ---
-++++  duration_ms: 4.009664
+++++  duration_ms: 4.090954
+++++  type: 'test'
+++++  ...
+++++# Subtest: passagesFromAdmittedPdf: long unicode page text satisfies PassageRecordSchema
+++++ok 22 - passagesFromAdmittedPdf: long unicode page text satisfies PassageRecordSchema
+++++  ---
+++++  duration_ms: 2.95475
 ++++  type: 'test'
 ++++  ...
 ++++# Subtest: passagesFromAdmittedPdf: rejects non-pdf bytes
-++++ok 18 - passagesFromAdmittedPdf: rejects non-pdf bytes
+++++ok 23 - passagesFromAdmittedPdf: rejects non-pdf bytes
 ++++  ---
-++++  duration_ms: 0.252193
+++++  duration_ms: 0.257816
 ++++  type: 'test'
 ++++  ...
 ++++# Subtest: passagesFromAdmittedPlainText: G-DEV-03 raw bytes, schema-valid passages
-++++ok 19 - passagesFromAdmittedPlainText: G-DEV-03 raw bytes, schema-valid passages
+++++ok 24 - passagesFromAdmittedPlainText: G-DEV-03 raw bytes, schema-valid passages
 ++++  ---
-++++  duration_ms: 3.979577
+++++  duration_ms: 3.735168
 ++++  type: 'test'
 ++++  ...
 ++++# Subtest: decodeAdmittedUtf8Bytes: rejects byte_length mismatch
-++++ok 20 - decodeAdmittedUtf8Bytes: rejects byte_length mismatch
+++++ok 25 - decodeAdmittedUtf8Bytes: rejects byte_length mismatch
 ++++  ---
-++++  duration_ms: 0.385053
+++++  duration_ms: 0.415852
 ++++  type: 'test'
 ++++  ...
 ++++# Subtest: decodeAdmittedUtf8Bytes: rejects payload content_hash mismatch
-++++ok 21 - decodeAdmittedUtf8Bytes: rejects payload content_hash mismatch
+++++ok 26 - decodeAdmittedUtf8Bytes: rejects payload content_hash mismatch
 ++++  ---
-++++  duration_ms: 0.134371
+++++  duration_ms: 0.138242
 ++++  type: 'test'
 ++++  ...
 ++++# Subtest: decodeAdmittedUtf8Bytes: rejects revision content_hash mismatch
-++++ok 22 - decodeAdmittedUtf8Bytes: rejects revision content_hash mismatch
+++++ok 27 - decodeAdmittedUtf8Bytes: rejects revision content_hash mismatch
 ++++  ---
-++++  duration_ms: 0.11209
+++++  duration_ms: 0.125432
 ++++  type: 'test'
 ++++  ...
 ++++# Subtest: decodeAdmittedUtf8Bytes: rejects invalid UTF-8
-++++ok 23 - decodeAdmittedUtf8Bytes: rejects invalid UTF-8
+++++ok 28 - decodeAdmittedUtf8Bytes: rejects invalid UTF-8
 ++++  ---
-++++  duration_ms: 0.237484
+++++  duration_ms: 0.200716
 ++++  type: 'test'
 ++++  ...
 ++++# Subtest: passagesFromAdmittedPlainText: rejects text/html login markup as unsupported
-++++ok 24 - passagesFromAdmittedPlainText: rejects text/html login markup as unsupported
+++++ok 29 - passagesFromAdmittedPlainText: rejects text/html login markup as unsupported
 ++++  ---
-++++  duration_ms: 0.11482
+++++  duration_ms: 0.110896
 ++++  type: 'test'
 ++++  ...
 ++++# Subtest: decodeAdmittedUtf8Bytes: rejects decoded length drift vs byte_length
-++++ok 25 - decodeAdmittedUtf8Bytes: rejects decoded length drift vs byte_length
+++++ok 30 - decodeAdmittedUtf8Bytes: rejects decoded length drift vs byte_length
 ++++  ---
-++++  duration_ms: 0.181721
+++++  duration_ms: 0.150639
 ++++  type: 'test'
 ++++  ...
 ++++# Subtest: validateFetchBinding: rejects foreign operationId on failed fetch before propagating failure
-++++ok 26 - validateFetchBinding: rejects foreign operationId on failed fetch before propagating failure
+++++ok 31 - validateFetchBinding: rejects foreign operationId on failed fetch before propagating failure
 ++++  ---
-++++  duration_ms: 1.044005
+++++  duration_ms: 0.958023
 ++++  type: 'test'
 ++++  ...
 ++++# Subtest: validateFetchBinding: rejects foreign operationId on cancelled fetch
-++++ok 27 - validateFetchBinding: rejects foreign operationId on cancelled fetch
+++++ok 32 - validateFetchBinding: rejects foreign operationId on cancelled fetch
 ++++  ---
-++++  duration_ms: 0.180224
+++++  duration_ms: 0.174047
 ++++  type: 'test'
 ++++  ...
 ++++# Subtest: validateFetchBinding: propagates failed fetch when operationId matches
-++++ok 28 - validateFetchBinding: propagates failed fetch when operationId matches
+++++ok 33 - validateFetchBinding: propagates failed fetch when operationId matches
 ++++  ---
-++++  duration_ms: 0.090507
+++++  duration_ms: 0.104229
 ++++  type: 'test'
 ++++  ...
 ++++# Subtest: validateFetchBinding: rejects ok admission when requested_url is not on source
-++++ok 29 - validateFetchBinding: rejects ok admission when requested_url is not on source
+++++ok 34 - validateFetchBinding: rejects ok admission when requested_url is not on source
 ++++  ---
-++++  duration_ms: 0.398082
+++++  duration_ms: 0.411132
 ++++  type: 'test'
 ++++  ...
 ++++# Subtest: validateFetchBinding: accepts legitimate redirect when chain ends at final_url
-++++ok 30 - validateFetchBinding: accepts legitimate redirect when chain ends at final_url
+++++ok 35 - validateFetchBinding: accepts legitimate redirect when chain ends at final_url
 ++++  ---
-++++  duration_ms: 0.138261
+++++  duration_ms: 0.146903
 ++++  type: 'test'
 ++++  ...
 ++++# Subtest: validateAdmittedRedirectProvenance: rejects chain that does not end at final_url
-++++ok 31 - validateAdmittedRedirectProvenance: rejects chain that does not end at final_url
+++++ok 36 - validateAdmittedRedirectProvenance: rejects chain that does not end at final_url
 ++++  ---
-++++  duration_ms: 0.06402
+++++  duration_ms: 0.068584
 ++++  type: 'test'
 ++++  ...
 ++++# Subtest: admitsRequestedUrlForSource: uses observed_urls only
-++++ok 32 - admitsRequestedUrlForSource: uses observed_urls only
+++++ok 37 - admitsRequestedUrlForSource: uses observed_urls only
 ++++  ---
-++++  duration_ms: 0.102844
+++++  duration_ms: 0.10422
 ++++  type: 'test'
 ++++  ...
 ++++# Subtest: bindingFailed: uses contract_violation category
-++++ok 33 - bindingFailed: uses contract_violation category
+++++ok 38 - bindingFailed: uses contract_violation category
 ++++  ---
-++++  duration_ms: 0.056252
+++++  duration_ms: 0.058706
 ++++  type: 'test'
 ++++  ...
 ++++# Subtest: GeneralWebAdapter.read: static HTML via port (G-DEV-01 plan-a)
-++++ok 34 - GeneralWebAdapter.read: static HTML via port (G-DEV-01 plan-a)
+++++ok 39 - GeneralWebAdapter.read: static HTML via port (G-DEV-01 plan-a)
 ++++  ---
-++++  duration_ms: 3.886822
+++++  duration_ms: 4.171559
 ++++  type: 'test'
 ++++  ...
 ++++# Subtest: GeneralWebAdapter: adapter id and kinds
-++++ok 35 - GeneralWebAdapter: adapter id and kinds
+++++ok 40 - GeneralWebAdapter: adapter id and kinds
 ++++  ---
-++++  duration_ms: 0.557631
+++++  duration_ms: 0.511502
 ++++  type: 'test'
 ++++  ...
 ++++# Subtest: passagesFromAdmittedStaticHtml: G-DEV-01 plan-a heading sections
-++++ok 36 - passagesFromAdmittedStaticHtml: G-DEV-01 plan-a heading sections
+++++ok 41 - passagesFromAdmittedStaticHtml: G-DEV-01 plan-a heading sections
 ++++  ---
-++++  duration_ms: 3.950026
+++++  duration_ms: 3.833117
 ++++  type: 'test'
 ++++  ...
 ++++# Subtest: passagesFromAdmittedStaticHtml: non-ascii repeated headings get unique section_id
-++++ok 37 - passagesFromAdmittedStaticHtml: non-ascii repeated headings get unique section_id
+++++ok 42 - passagesFromAdmittedStaticHtml: non-ascii repeated headings get unique section_id
 ++++  ---
-++++  duration_ms: 0.967605
+++++  duration_ms: 0.748358
 ++++  type: 'test'
 ++++  ...
 ++++# Subtest: passagesFromAdmittedStaticHtml: repeated headings get unique section_id
-++++ok 38 - passagesFromAdmittedStaticHtml: repeated headings get unique section_id
+++++ok 43 - passagesFromAdmittedStaticHtml: repeated headings get unique section_id
 ++++  ---
-++++  duration_ms: 0.908437
+++++  duration_ms: 0.562004
 ++++  type: 'test'
 ++++  ...
 ++++# Subtest: passagesFromAdmittedStaticHtml: inline hash matches emitted text
-++++ok 39 - passagesFromAdmittedStaticHtml: inline hash matches emitted text
+++++ok 44 - passagesFromAdmittedStaticHtml: inline hash matches emitted text
 ++++  ---
-++++  duration_ms: 1.811479
+++++  duration_ms: 8.447494
+++++  type: 'test'
+++++  ...
+++++# Subtest: passagesFromAdmittedStaticHtml: long unicode respects UTF-16 schema max
+++++ok 45 - passagesFromAdmittedStaticHtml: long unicode respects UTF-16 schema max
+++++  ---
+++++  duration_ms: 2.548107
 ++++  type: 'test'
 ++++  ...
 ++++# Subtest: passagesFromAdmittedStaticHtml: rejects login-only html
-++++ok 40 - passagesFromAdmittedStaticHtml: rejects login-only html
+++++ok 46 - passagesFromAdmittedStaticHtml: rejects login-only html
 ++++  ---
-++++  duration_ms: 0.538446
+++++  duration_ms: 0.443866
 ++++  type: 'test'
 ++++  ...
 ++++# Subtest: passagesFromAdmittedStaticHtml: rejects non-html media
-++++ok 41 - passagesFromAdmittedStaticHtml: rejects non-html media
+++++ok 47 - passagesFromAdmittedStaticHtml: rejects non-html media
 ++++  ---
-++++  duration_ms: 0.143537
+++++  duration_ms: 0.17016
 ++++  type: 'test'
 ++++  ...
 ++++# Subtest: allocateSectionLocatorId: disambiguates repeated headings
-++++ok 42 - allocateSectionLocatorId: disambiguates repeated headings
+++++ok 48 - allocateSectionLocatorId: disambiguates repeated headings
 ++++  ---
-++++  duration_ms: 0.665939
+++++  duration_ms: 0.842863
 ++++  type: 'test'
 ++++  ...
 ++++# Subtest: allocateSectionLocatorId: non-ascii headings get stable unique slugs
-++++ok 43 - allocateSectionLocatorId: non-ascii headings get stable unique slugs
+++++ok 49 - allocateSectionLocatorId: non-ascii headings get stable unique slugs
 ++++  ---
-++++  duration_ms: 0.375575
+++++  duration_ms: 0.520327
 ++++  type: 'test'
 ++++  ...
-++++1..43
-++++# tests 43
+++++1..49
+++++# tests 49
 ++++# suites 0
-++++# pass 43
+++++# pass 49
 ++++# fail 0
 ++++# cancelled 0
 ++++# skipped 0
 ++++# todo 0
-++++# duration_ms 1625.84074
+++++# duration_ms 1754.91532
 ++diff --git a/review-artifacts/extraction-local-focused-test-command.txt b/review-artifacts/extraction-local-focused-test-command.txt
 ++new file mode 100644
 ++index 00000000..1ef345f5
