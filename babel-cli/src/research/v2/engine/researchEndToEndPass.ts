@@ -18,6 +18,7 @@ import {
   findingsFromExtractModelOutput,
 } from './findingsFromModelOutput.js'
 import { buildSynthesizedResearchReport } from './buildSynthesizedResearchReport.js'
+import { listSourceRevisionsFromStoreEvents } from './listSourceRevisionsFromStoreEvents.js'
 import { settleModelOperation } from './settleModelOperation.js'
 import { unknownUsageSettlement } from './settleExternalOperation.js'
 import type { ResearchModelInvocationResult } from '../ports/researchModelPort.js'
@@ -355,11 +356,15 @@ export async function runAdmittedResearchEndToEndPass(
   })
 
   throwIfAborted(request.signal, 'terminal report')
+  const evidenceEvents = await request.store.listEvents(request.session.mission.mission_id)
+  const sourceRevisions = listSourceRevisionsFromStoreEvents(evidenceEvents)
   const report = buildSynthesizedResearchReport({
     mission: request.session.mission,
     plan: activePlan,
     ctx,
     findings,
+    passages,
+    sourceRevisions,
     modelOutput: synthesizeOutput,
     generatedAt: now(),
     ...(composedRetrievalLimitations.length > 0

@@ -1,9 +1,18 @@
 import type { FindingRecord } from '../contracts/findings.js'
+import type { PassageRecord } from '../contracts/passages.js'
 import type { MissionWriteContext } from '../contracts/common.js'
 import type { ResearchReportV2 } from '../contracts/plan.js'
 import type { PlanRevision } from '../contracts/plan.js'
 import type { ResearchMissionV2 } from '../contracts/mission.js'
+import type { SourceRevision } from '../contracts/sources.js'
 import { SynthesizeReportOutputSchema } from '../contracts/modelOutputs.js'
+import {
+  deriveAcquisitionEvidenceLimitations,
+  deriveSinglePassStoppingReason,
+  deriveSourceCutoffFromRevisions,
+  deriveTerminalState,
+  deriveUnansweredPlanQuestionIds,
+} from './researchReportFinalization.js'
 
 function supportStatus(finding: FindingRecord): FindingRecord['semantic_support'] | undefined {
   return finding.semantic_support
@@ -46,6 +55,8 @@ export function buildSynthesizedResearchReport(params: {
   plan: PlanRevision
   ctx: MissionWriteContext
   findings: readonly FindingRecord[]
+  passages?: readonly PassageRecord[]
+  sourceRevisions?: readonly SourceRevision[]
   modelOutput: Record<string, unknown>
   generatedAt: string
   additionalLimitations?: readonly string[]
@@ -59,22 +70,43 @@ export function buildSynthesizedResearchReport(params: {
   const hasNotChecked = params.findings.some(
     (f) => (supportStatus(f)?.status ?? 'not_checked') === 'not_checked',
   )
-  const unanswered = params.plan.questions
-    .filter((q) => q.status === 'open' || q.status === 'partially_answered')
-    .map((q) => q.question_id)
+  const sourceRevisions = params.sourceRevisions ?? []
+  const passages = params.passages ?? []
+  const acquisitionLimitations = deriveAcquisitionEvidenceLimitations({
+    sourceRevisions,
+    passages,
+  })
+  const unansweredQuestionIds = deriveUnansweredPlanQuestionIds(params.plan, params.findings)
+  const terminalState = deriveTerminalState({
+    unansweredQuestionIds,
+    acquisitionLimitations,
+    hasSemanticInsufficient: hasInsufficient,
+    hasSemanticContradiction: hasContradiction,
+    hasSemanticNotChecked: hasNotChecked,
+  })
+  const stoppingReason = deriveSinglePassStoppingReason({
+    unansweredQuestionIds,
+    acquisitionLimitations,
+    hasSemanticInsufficient: hasInsufficient,
+    hasSemanticContradiction: hasContradiction,
+    hasSemanticNotChecked: hasNotChecked,
+  })
+  const sourceCutoff = deriveSourceCutoffFromRevisions(sourceRevisions)
 
   const unverifiedModelSynthesis = synthesis.answer_summary.trim()
+  const modelStoppingProse = synthesis.stopping_reason.trim()
 
   return {
     mission_id: params.mission.mission_id,
     plan_revision_id: params.ctx.plan_revision_id,
-    terminal_state: 'partial',
+    terminal_state: terminalState,
     answer_summary: buildCitationQualifiedAnswerSummary(verifiedAssertions),
-    unanswered_questions: unanswered.length > 0 ? unanswered : params.plan.questions.map((q) => q.question_id),
+    unanswered_questions: unansweredQuestionIds,
     coverage_notes:
-      'answer_summary lists only semantically supported findings with explicit finding_id bindings; free-form model synthesis is not treated as verified fact.',
+      'answer_summary lists only semantically supported findings with explicit finding_id bindings; unanswered_questions omits plan questions without semantically supported findings (default extract binding to the first plan question does not answer the full plan).',
     limitations: [
       ...(params.additionalLimitations ?? []),
+      ...acquisitionLimitations,
       ...(hasInsufficient ? ['semantic_support_insufficient'] : []),
       ...(hasContradiction ? ['semantic_support_contradicted'] : []),
       ...(hasNotChecked ? ['semantic_support_not_checked'] : []),
@@ -82,11 +114,14 @@ export function buildSynthesizedResearchReport(params: {
       ...(unverifiedModelSynthesis
         ? [`unverified_model_synthesis_excluded: ${unverifiedModelSynthesis.slice(0, 240)}`]
         : []),
+      ...(modelStoppingProse
+        ? [`unverified_model_stopping_prose_excluded: ${modelStoppingProse.slice(0, 240)}`]
+        : []),
       'offline_or_governed_sources_only',
     ],
-    source_cutoff: synthesis.stopping_reason,
+    source_cutoff: sourceCutoff,
     acceptance_state: 'host_admitted_model_synthesis',
-    stopping_reason: synthesis.stopping_reason,
+    stopping_reason: stoppingReason,
     finding_ids: supportedFindingIds,
     citation_passage_ids: citationPassageIds,
     generated_at: params.generatedAt,

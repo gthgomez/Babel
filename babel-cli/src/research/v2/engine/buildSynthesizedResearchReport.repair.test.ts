@@ -49,6 +49,8 @@ describe('buildSynthesizedResearchReport repairs', () => {
     assert.ok(
       report.limitations.some((l) => l.startsWith('unverified_model_synthesis_excluded:')),
     )
+    assert.ok(report.stopping_reason.startsWith('single_pass_host_finalization'))
+    assert.equal(report.source_cutoff, 'unknown')
   })
 
   it('buildVerifiedReportAssertions only includes supported findings', () => {
