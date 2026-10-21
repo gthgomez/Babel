@@ -7,9 +7,10 @@
 | Model/mode | Composer 2.5, non-fast (per campaign activation) |
 | `OPENROUTER_API_KEY` present | verified via `getProviderCredentialStatus('openrouter').configured` |
 | Live OpenRouter tests | **not run** (await integration + coordinator scenario release) |
-| Agent A contract review | **pending** coordinator relay of A checkpoint |
-| General dev fixtures | G-DEV-01 … G-DEV-06 on disk + manifest test |
-| Adapter implementation | **not started** (blocked on contract freeze) |
+| Agent A M0 freeze (coordinator) | **accepted** `0ccd1733` / tree `b597acbf…` for compatibility (not CI-green / not merge) |
+| Agent A contract review | LF/handoff delta + 23 targeted tests; prior **53+7** lifecycle evidence retained |
+| General dev fixtures | G-DEV-01 … G-DEV-06 on disk + manifest test (LF hashes match A manifest) |
+| Adapter implementation | **started** — document plain-text slice via admitted bytes + quarantine (no live API) |
 | Draft PR | see repository PR for this branch |
 
 ## Message to coordinator / Agent A
