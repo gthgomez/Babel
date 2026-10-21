@@ -1,7 +1,11 @@
 import type { MissionWriteContext } from '../contracts/common.js'
 import type { PlanRevision } from '../contracts/plan.js'
 import type { SourceRecord } from '../contracts/sources.js'
-import { missionScopedToRepositoryPin } from '../access/missionPinnedRepositories.js'
+import {
+  missionScopedToDocumentRef,
+  missionScopedToRepositoryPin,
+} from '../access/missionPinnedRepositories.js'
+import { sourceAccessForMission } from '../access/sourceAccessForMission.js'
 import type { SourceAdapter } from '../ports/sourceAdapter.js'
 import type { SourceAccessPort } from '../ports/sourceAccessPort.js'
 import type { ResearchStore, ResearchStoreMissionHandle } from '../ports/researchStore.js'
@@ -73,6 +77,14 @@ function throwIfAborted(signal: AbortSignal, phase: string): void {
   }
 }
 
+function syncWriterHandleFromStore(
+  store: ResearchStore,
+  handle: ResearchStoreMissionHandle,
+): ResearchStoreMissionHandle {
+  const fence = store.readMissionWriteFence(handle.mission_id)
+  return { mission_id: handle.mission_id, writer_generation: fence.writer_generation }
+}
+
 async function recordUnsupportedSlot(
   request: ComposedRetrievalIterationRequest,
   ctx: MissionWriteContext,
@@ -117,6 +129,8 @@ async function runDocumentRefSlot(
   request: ComposedRetrievalIterationRequest,
   ctx: MissionWriteContext,
   slot: TechnicalRetrievalSlot,
+  scopedMission: ReturnType<typeof missionScopedToDocumentRef>,
+  slotAccess: SourceAccessPort,
   now: () => string,
 ): Promise<ComposedRetrievalSlotOutcome> {
   const searchOperationId = slotOperationSuffix(request.searchOperationId, slot.slotId)
@@ -133,12 +147,40 @@ async function runDocumentRefSlot(
     idempotency_key: searchOperationId,
   })
 
-  const search = await request.access.search({
-    operationId: searchOperationId,
-    query: slot.documentRef ?? slot.discoverQuery,
-    sourceClasses: ['document'],
-    signal: request.signal,
-  })
+  let search
+  try {
+    search = await slotAccess.search({
+      operationId: searchOperationId,
+      query: slot.documentRef ?? slot.discoverQuery,
+      sourceClasses: ['document'],
+      signal: request.signal,
+    })
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err)
+    await settleExternalOperation(
+      request.store,
+      ctx,
+      ctx.mission_id,
+      searchOperationId,
+      searchAttemptId,
+      {
+        settlement: 'uncertain',
+        message: request.signal.aborted
+          ? `document source search rejected during cancellation: ${message}`
+          : message,
+        usage_settlement: unknownUsageSettlement(searchAttemptId),
+      },
+      now(),
+    )
+    return {
+      slotId: slot.slotId,
+      kind: slot.kind,
+      searchOperationId,
+      fetchOperationId,
+      settlement: 'failed',
+      message,
+    }
+  }
 
   if (search.status === 'cancelled' || request.signal.aborted) {
     await settleExternalOperation(
@@ -176,6 +218,30 @@ async function runDocumentRefSlot(
     }
   }
 
+  if (search.status === 'ok' && search.operationId !== searchOperationId) {
+    await settleExternalOperation(
+      request.store,
+      ctx,
+      ctx.mission_id,
+      searchOperationId,
+      searchAttemptId,
+      {
+        settlement: 'failed',
+        failureCategory: 'contract_violation',
+        message: 'document search operationId does not match admitted search operation',
+      },
+      now(),
+    )
+    return {
+      slotId: slot.slotId,
+      kind: slot.kind,
+      searchOperationId,
+      fetchOperationId,
+      settlement: 'failed',
+      message: 'document search operationId does not match admitted search operation',
+    }
+  }
+
   const candidate = search.hits[0]?.source
   if (!candidate) {
     await settleExternalOperation(
@@ -201,6 +267,8 @@ async function runDocumentRefSlot(
     }
   }
 
+  throwIfAborted(request.signal, 'document_search settlement')
+
   await settleExternalOperation(
     request.store,
     ctx,
@@ -210,6 +278,12 @@ async function runDocumentRefSlot(
     { settlement: 'succeeded' },
     now(),
   )
+
+  const discover = {
+    operationId: search.operationId,
+    status: 'ok' as const,
+    candidates: [candidate],
+  }
 
   const readAdapter = resolveReadAdapterForSource(candidate, request.registries, {
     mediaType: 'application/pdf',
@@ -255,17 +329,11 @@ async function runDocumentRefSlot(
     idempotency_key: fetchOperationId,
   })
 
-  const discover = {
-    operationId: searchOperationId,
-    status: 'ok' as const,
-    candidates: [candidate],
-  }
-
   let read
   try {
     read = await readAdapter.read(
       { operationId: fetchOperationId, source: candidate, signal: request.signal },
-      request.access,
+      slotAccess,
     )
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err)
@@ -277,7 +345,9 @@ async function runDocumentRefSlot(
       fetchAttemptId,
       {
         settlement: 'uncertain',
-        message,
+        message: request.signal.aborted
+          ? `document read rejected during cancellation: ${message}`
+          : message,
         usage_settlement: unknownUsageSettlement(fetchAttemptId),
       },
       now(),
@@ -290,6 +360,19 @@ async function runDocumentRefSlot(
       settlement: 'failed',
       message,
     }
+  }
+
+  if (read.status === 'cancelled' || request.signal.aborted) {
+    await settleExternalOperation(
+      request.store,
+      ctx,
+      ctx.mission_id,
+      fetchOperationId,
+      fetchAttemptId,
+      { settlement: 'cancelled' },
+      now(),
+    )
+    throw new Error('document read cancelled during composed retrieval')
   }
 
   if (read.status === 'failed') {
@@ -316,19 +399,10 @@ async function runDocumentRefSlot(
       message: read.message,
     }
   }
-  if (read.status !== 'ok') {
-    await settleExternalOperation(
-      request.store,
-      ctx,
-      ctx.mission_id,
-      fetchOperationId,
-      fetchAttemptId,
-      { settlement: 'cancelled' },
-      now(),
-    )
-    throw new Error('document read cancelled during composed retrieval')
-  }
 
+  throwIfAborted(request.signal, 'document evidence persistence')
+
+  let boundPassages
   try {
     const bound = validateRetrievalEvidenceBindings({
       searchOperationId,
@@ -336,35 +410,36 @@ async function runDocumentRefSlot(
       discover,
       read,
       candidate,
-      mission: request.session.mission,
+      mission: scopedMission,
       plan: request.activePlan,
       ctx,
     })
-    const boundPassages = bound.passages
+    boundPassages = bound.passages
     await request.store.appendSource(ctx, candidate)
+    throwIfAborted(request.signal, 'document source revision persistence')
     await request.store.appendSourceRevision(ctx, bound.revision)
     for (const passage of boundPassages) {
+      throwIfAborted(request.signal, 'document passage persistence')
       await request.store.appendPassage(ctx, passage)
     }
-    await settleExternalOperation(
-      request.store,
-      ctx,
-      ctx.mission_id,
-      fetchOperationId,
-      fetchAttemptId,
-      { settlement: 'succeeded' },
-      now(),
-    )
-    return {
-      slotId: slot.slotId,
-      kind: slot.kind,
-      searchOperationId,
-      fetchOperationId,
-      settlement: 'succeeded',
-      sourceId: candidate.source_id,
-      passageIds: boundPassages.map((p) => p.passage_id),
-    }
+    throwIfAborted(request.signal, 'document evidence persistence completion')
   } catch (err: unknown) {
+    if (request.signal.aborted) {
+      await settleExternalOperation(
+        request.store,
+        ctx,
+        ctx.mission_id,
+        fetchOperationId,
+        fetchAttemptId,
+        {
+          settlement: 'cancelled',
+          message: 'document evidence persistence aborted',
+          usage_settlement: unknownUsageSettlement(fetchAttemptId),
+        },
+        now(),
+      )
+      throw new Error('document composed retrieval aborted during evidence persistence')
+    }
     const message = err instanceof RetrievalEvidenceBindingError ? err.message : String(err)
     await settleExternalOperation(
       request.store,
@@ -387,6 +462,25 @@ async function runDocumentRefSlot(
       settlement: 'failed',
       message,
     }
+  }
+
+  await settleExternalOperation(
+    request.store,
+    ctx,
+    ctx.mission_id,
+    fetchOperationId,
+    fetchAttemptId,
+    { settlement: 'succeeded' },
+    now(),
+  )
+  return {
+    slotId: slot.slotId,
+    kind: slot.kind,
+    searchOperationId,
+    fetchOperationId,
+    settlement: 'succeeded',
+    sourceId: candidate.source_id,
+    passageIds: boundPassages.map((p) => p.passage_id),
   }
 }
 
@@ -447,7 +541,17 @@ export async function runAdmittedComposedRetrievalIteration(
 
     if (slot.kind === 'document_ref') {
       const ctx = await ensureWriteContext()
-      const outcome = await runDocumentRefSlot(request, ctx, slot, now)
+      const documentRef = slot.documentRef ?? slot.discoverQuery
+      const scopedMission = missionScopedToDocumentRef(request.session.mission, documentRef)
+      const slotAccess = sourceAccessForMission(request.access, scopedMission)
+      const outcome = await runDocumentRefSlot(
+        request,
+        ctx,
+        slot,
+        scopedMission,
+        slotAccess,
+        now,
+      )
       slotOutcomes.push(outcome)
       if (outcome.settlement === 'failed') {
         limitations.push(`retrieval_slot_failed:${slot.slotId}:${outcome.message ?? 'failed'}`)
@@ -467,6 +571,7 @@ export async function runAdmittedComposedRetrievalIteration(
 
     if (slot.kind === 'repository_pin' && slot.repositoryPin) {
       const scopedMission = missionScopedToRepositoryPin(request.session.mission, slot.repositoryPin)
+      const slotAccess = sourceAccessForMission(request.access, scopedMission)
       const searchOperationId = slotOperationSuffix(request.searchOperationId, slot.slotId)
       const searchAttemptId = slotOperationSuffix(request.searchAttemptId, slot.slotId)
       const fetchOperationId = slotOperationSuffix(request.fetchOperationId, slot.slotId)
@@ -479,7 +584,7 @@ export async function runAdmittedComposedRetrievalIteration(
             activePlanRevisionId,
           },
           store: request.store,
-          access: request.access,
+          access: slotAccess,
           adapter: request.adapter,
           registries: request.registries,
           activePlan: request.activePlan,
@@ -505,6 +610,13 @@ export async function runAdmittedComposedRetrievalIteration(
           sourceId: result.source.source_id,
         })
       } catch (err: unknown) {
+        workingHandle = syncWriterHandleFromStore(request.store, workingHandle)
+        if (writeContext) {
+          writeContext = {
+            ...writeContext,
+            writer_generation: workingHandle.writer_generation,
+          }
+        }
         const message = err instanceof Error ? err.message : String(err)
         slotOutcomes.push({
           slotId: slot.slotId,
