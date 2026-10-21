@@ -9,4 +9,4 @@ tap=review-artifacts/general-a-52a93b9c-second-resume.tap.txt
 result=3/3 pass (includes Native9d second-resume case)
 
 historical_9d_red=review-artifacts/native9d-9d97448a-red-receipt.txt
-g_l1_failed_terminal=still red @ 52a93b9c — see general-a-52a93b9c-g-l1-reciprocal.tap.txt
+g_l1_failed_terminal=still red @ 52a93b9c — see general-a-52a93b9c-g-l1-reciprocal-receipt.txt (raw TAP: runs/evidence/)
