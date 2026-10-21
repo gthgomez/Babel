@@ -17,6 +17,7 @@ import {
   PdfExtractionCancelled,
   throwIfPdfAborted,
 } from './pdfExtractionLimits.js'
+import { ensurePdfJsNodeCanvasRuntime } from './pdfNodeCanvasPolyfill.js'
 
 export const PDF_TEXT_EXTRACTION_VERSION = 'general-pdf-text/0.1.0'
 
@@ -125,6 +126,7 @@ async function loadPdfDocument(
       destroy: () => Promise.resolve(),
     }
   } else {
+    await ensurePdfJsNodeCanvasRuntime()
     const { getDocument } = await import('pdfjs-dist/legacy/build/pdf.mjs')
     throwIfPdfAborted(signal)
     loadingTask = getDocument({
