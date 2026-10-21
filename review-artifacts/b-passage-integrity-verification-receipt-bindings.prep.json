@@ -1,0 +1,33 @@
+{
+  "schema": "research-v2-passage-integrity-verification-receipt-bindings-prep/v1",
+  "status": "preparation_not_acceptance",
+  "authority": "Agent A — optional PassageRecord.integrity_verification via appendPassage + source_fetch_owner + successful attempt lineage",
+  "b_scope": "reciprocal acceptance tests after A dependency union; no parallel verifier port",
+  "transport_baseline_preserved": {
+    "commit": "e94e7a54c1f5ee316341575c6fc895e367788985",
+    "note": "Governed User-Agent and bounded acquisition diagnostics; independent review"
+  },
+  "required_receipt_bindings": [
+    "source_id",
+    "source_revision_id",
+    "content_hash",
+    "byte_length",
+    "extraction_version",
+    "passage_id",
+    "text_hash",
+    "locator",
+    "admitted_representation_scope",
+    "excerpt_only_retention"
+  ],
+  "host_constraints": [
+    "created_at_actual_extractor_while_representation_exists",
+    "no_new_store_event_kind",
+    "no_model_output_field"
+  ],
+  "historical_fixture_policy": {
+    "g_l2_g_l3_original_derived": "unchanged records remain source_integrity not_checked",
+    "new_verification": "only_in_separately_labeled_deterministic_replay"
+  },
+  "acceptance_test_matrix_ref": "review-artifacts/b-passage-integrity-verification-acceptance-prep.md",
+  "implemented_on_branch": false
+}
