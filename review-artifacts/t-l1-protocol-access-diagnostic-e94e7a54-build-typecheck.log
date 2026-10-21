@@ -1,0 +1,73 @@
+=== NOTE bound git tree package.json contains merge conflict; worktree package.json locally merged for npm only (not committed) ===
+=== HEAD e94e7a54c1f5ee316341575c6fc895e367788985 TREE 3cfc654f3130eaa8338a1f1f389924e1d8c21d8c ===
+npm warn ERESOLVE overriding peer dependency
+npm warn While resolving: nunjucks@3.2.4
+npm warn Found: chokidar@5.0.0
+npm warn node_modules/chokidar
+npm warn   chokidar@"^5.0.0" from the root project
+npm warn   1 more (promptfoo)
+npm warn
+npm warn Could not resolve dependency:
+npm warn peerOptional chokidar@"^3.3.0" from nunjucks@3.2.4
+npm warn node_modules/nunjucks
+npm warn   nunjucks@"^3.2.4" from promptfoo@0.121.17
+npm warn   node_modules/promptfoo
+npm warn
+npm warn Conflicting peer dependency: chokidar@3.6.0
+npm warn node_modules/chokidar
+npm warn   peerOptional chokidar@"^3.3.0" from nunjucks@3.2.4
+npm warn   node_modules/nunjucks
+npm warn     nunjucks@"^3.2.4" from promptfoo@0.121.17
+npm warn     node_modules/promptfoo
+npm warn deprecated boolean@3.2.0: Package no longer supported. Contact Support at https://www.npmjs.com/support for more info.
+npm warn deprecated node-domexception@1.0.0: Use your platform's native DOMException instead
+npm warn deprecated glob@10.5.0: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
+
+added 850 packages, and audited 851 packages in 24s
+
+194 packages are looking for funding
+  run `npm fund` for details
+
+47 vulnerabilities (1 low, 16 moderate, 27 high, 3 critical)
+
+To address all issues, run:
+  npm audit fix
+
+Run `npm audit` for details.
+NPM_CI_EXIT=0
+
+> babel-harness@0.1.4 typecheck
+> tsc --noEmit && tsc -p tsconfig.scripts.json --noEmit
+
+src/research/v2/campaign/researchV2CampaignPreflight.ts(1,1): error TS1185: Merge conflict marker encountered.
+src/research/v2/campaign/researchV2CampaignPreflight.ts(4,1): error TS1185: Merge conflict marker encountered.
+src/research/v2/campaign/researchV2CampaignPreflight.ts(6,1): error TS1185: Merge conflict marker encountered.
+src/research/v2/campaign/researchV2CampaignPreflight.ts(72,1): error TS1185: Merge conflict marker encountered.
+src/research/v2/campaign/researchV2CampaignPreflight.ts(76,1): error TS1185: Merge conflict marker encountered.
+src/research/v2/campaign/researchV2CampaignPreflight.ts(77,1): error TS1185: Merge conflict marker encountered.
+src/research/v2/cli/researchV2MissionRun.ts(116,1): error TS1185: Merge conflict marker encountered.
+src/research/v2/cli/researchV2MissionRun.ts(118,1): error TS1185: Merge conflict marker encountered.
+src/research/v2/cli/researchV2MissionRun.ts(120,1): error TS1185: Merge conflict marker encountered.
+TYPECHECK_EXIT=2
+
+> babel-harness@0.1.4 build
+> npm run clean:dist && tsc && node scripts/copy_playbooks.mjs
+
+
+> babel-harness@0.1.4 clean:dist
+> node scripts/clean_dist.mjs
+
+src/research/v2/campaign/researchV2CampaignPreflight.ts(1,1): error TS1185: Merge conflict marker encountered.
+src/research/v2/campaign/researchV2CampaignPreflight.ts(4,1): error TS1185: Merge conflict marker encountered.
+src/research/v2/campaign/researchV2CampaignPreflight.ts(6,1): error TS1185: Merge conflict marker encountered.
+src/research/v2/campaign/researchV2CampaignPreflight.ts(72,1): error TS1185: Merge conflict marker encountered.
+src/research/v2/campaign/researchV2CampaignPreflight.ts(76,1): error TS1185: Merge conflict marker encountered.
+src/research/v2/campaign/researchV2CampaignPreflight.ts(77,1): error TS1185: Merge conflict marker encountered.
+src/research/v2/cli/researchV2MissionRun.ts(116,1): error TS1185: Merge conflict marker encountered.
+src/research/v2/cli/researchV2MissionRun.ts(118,1): error TS1185: Merge conflict marker encountered.
+src/research/v2/cli/researchV2MissionRun.ts(120,1): error TS1185: Merge conflict marker encountered.
+BUILD_EXIT=2
+d465c832a47439b28c1a403babacf82ba6e4f21fca7b115811d70fc77a6b1303  dist/research/v2/access/admittedHttpGet.js
+b2f639df8d239b79ff0435aaa0b0126be0b9b3f27867e29a19284fe10dd46bb8  dist/research/v2/access/governedHttpClientIdentity.js
+591b66f7013011e93036521f3704613b69b941534cc809051f780e0cc41783f6  dist/research/v2/access/sanitizedHttpFailureMetadata.js
+a8cbf2ec3814ff942268fdd945c705b56877028dddbf47c1b8b701cdb983864d  dist/research/v2/access/parseAcquisitionDiagnosticsFromHttpGet.js

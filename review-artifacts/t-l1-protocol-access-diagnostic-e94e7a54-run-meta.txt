@@ -1,0 +1,14 @@
+CATEGORY: NEW protocol/access diagnostic (not attempt2 rerun)
+BOUND_B_COMMIT: e94e7a54c1f5ee316341575c6fc895e367788985
+BOUND_TREE: 3cfc654f3130eaa8338a1f1f389924e1d8c21d8c
+WORKTREE: /tmp/babel-protocol-diag-e94e7a54/babel-cli
+URL: https://api.github.com/repos/gthgomez/Babel/git/trees/e912c2f3320de0b6e1c9ff85b95b0f74d8b5323c?recursive=1
+COMMAND: node --input-type=module dist/admittedHttpGet single GET
+START_UTC: 2026-10-21T15:57:44.191Z
+END_UTC: 2026-10-21T15:57:44.650Z
+EXIT: 0
+BOUND_TREE_TYPECHECK_EXIT: 2
+BOUND_TREE_BUILD_EXIT: 2
+BOUND_TREE_NOTE: merge conflict markers in package.json and other TS files at tree 3cfc654f; worktree package.json locally merged for npm ci only
+ATTEMPT2_STORE_SHA256_UNCHANGED: 044e673ec448df63c57597f9acf6a8fafd1b9cad0409bdd9062cf26e5c16a979
+LOADED_MODULE_SHA256: see t-l1-protocol-access-diagnostic-e94e7a54-build-typecheck.log

@@ -1,0 +1,36 @@
+{
+  "schema": "research-v2-protocol-access-github-tree-get-result/v1",
+  "category": "NEW_protocol_access_diagnostic_not_attempt2_rerun",
+  "bound_b_commit": "e94e7a54c1f5ee316341575c6fc895e367788985",
+  "bound_tree": "3cfc654f3130eaa8338a1f1f389924e1d8c21d8c",
+  "transport": "dist/admittedHttpGet.js (partial tsc emit; full project typecheck exit 2 due to merge conflicts elsewhere in bound tree)",
+  "request_headers_sent": {
+    "accept": "*/*",
+    "user-agent": "Babel-Research/0.1.4 (+https://github.com/gthgomez/Babel; governed-admitted-http-get)"
+  },
+  "governed_user_agent_label": "Babel-Research/0.1.4 (+https://github.com/gthgomez/Babel; governed-admitted-http-get)",
+  "attempted_url": "https://api.github.com/repos/gthgomez/Babel/git/trees/e912c2f3320de0b6e1c9ff85b95b0f74d8b5323c?recursive=1",
+  "http_status": 200,
+  "response_ok": true,
+  "final_url": "https://api.github.com/repos/gthgomez/Babel/git/trees/e912c2f3320de0b6e1c9ff85b95b0f74d8b5323c?recursive=1",
+  "redirect_hop_count": 1,
+  "bytes_received": 1006582,
+  "buffer_byte_length": 1006582,
+  "truncated": false,
+  "body_sha256": "5d9e9b0a332c01a15983bf93cf1fb20be23e159c6e2f8882db715d63f6f991df",
+  "content_type": "application/json; charset=utf-8",
+  "bounded_http_failure": null,
+  "acquisition_diagnostics": {
+    "evidence_role": "attempted_source",
+    "attempted_url": "https://api.github.com/repos/gthgomez/Babel/git/trees/e912c2f3320de0b6e1c9ff85b95b0f74d8b5323c?recursive=1",
+    "final_url": "https://api.github.com/repos/gthgomez/Babel/git/trees/e912c2f3320de0b6e1c9ff85b95b0f74d8b5323c?recursive=1",
+    "http_status": 200,
+    "content_type": "application/json; charset=utf-8",
+    "wire_bytes_received": 1006582,
+    "admitted_decoded_byte_length": 1006582
+  },
+  "tree_json_usable": true,
+  "tree_entry_count": 4039,
+  "tree_sha_field": "e912c2f3320de0b6e1c9ff85b95b0f74d8b5323c",
+  "rate_limit_header_disclaimer": "rate-limit headers are not proof of root cause when present"
+}
