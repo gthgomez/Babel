@@ -7,9 +7,11 @@
     "worktree": "/tmp/babel-g-l3-replay-5628e90",
     "static_html_extraction_version": "general-static-html/0.1.0",
     "adapter_module": "babel-cli/src/research/v2/adapters/web/htmlFromAdmittedBytes.ts",
-    "execution_mode": "tsx_source_import",
+    "dist_module_sha256": "b70dfe721d48bc1b7a913f70424fdd63f139ec7b58068ffc1841ff164eabcc60",
+    "execution_mode": "tsx_source_import_and_dist_module_confirmed",
+    "dist_replay_passage_count": 5,
     "full_npm_build_exit": 2,
-    "full_npm_build_note": "tsc failed on unrelated campaign reciprocal tests; replay uses repaired source via tsx"
+    "full_npm_build_note": "npm run build: tsc failed on unrelated T-L1-discover-query reciprocal tests after emitting repaired htmlFromAdmittedBytes.js; dist replay matches tsx source replay."
   },
   "retained_input": {
     "path": "/tmp/g-l3-NEW-diagnostic-devguide-fetch.html",
