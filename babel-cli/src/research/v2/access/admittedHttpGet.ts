@@ -31,6 +31,8 @@ export interface AdmittedHttpGetResult {
   requestedUrl: string
   finalUrl: string
   redirectChain: string[]
+  /** Final-hop response headers (wire names lowercased; values as received). */
+  responseHeaders: Record<string, string | string[] | undefined>
 }
 
 export class AdmittedNetworkPolicyError extends Error {
@@ -299,8 +301,12 @@ export async function admittedHttpGet(params: {
       requestedUrl,
       finalUrl: current.href,
       redirectChain,
+      responseHeaders: response.headers,
     }
   }
 
   throw new AdmittedNetworkPolicyError('redirect limit exceeded')
 }
+
+/** Default HTTP dispatch for {@link admittedHttpGet} (test/diagnostic seam). */
+export const defaultAdmittedHttpGetDispatch: AdmittedHttpGetDispatch = singleGet

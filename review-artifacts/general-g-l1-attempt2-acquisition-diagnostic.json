@@ -1,7 +1,20 @@
 {
-  "schema": "g-l1-attempt2-acquisition-diagnostic/v1",
+  "schema": "g-l1-attempt2-acquisition-diagnostic/v2",
   "runtime_sha": "ec7dce912eebd1210f762ddc6092de4d199c3c3b",
-  "provenance": "Replay only — attempt2 durable store retains no URL/bytes (excerpt_only). Same mission, discover query, and ec7 admitted transport as live run.",
+  "epistemic_limits": {
+    "original_attempt2_store_retains": {
+      "source_url": false,
+      "response_headers": false,
+      "admitted_bytes": false,
+      "utf8_failure_offset": false
+    },
+    "replay_proves": "Reproducible acquisition defect class under same mission, discover query, and admittedHttpGet transport as live attempt2.",
+    "replay_does_not_prove": [
+      "byte_identical_original_http_response",
+      "verified_original_selected_source_url"
+    ],
+    "replay_url_derivation": "discover.candidates[0] on this replay (retrieval policy selects first candidate; live store did not persist URL)"
+  },
   "store_bytes_retained": false,
   "live_fetch_operation_id": "cli-run-fetch-wg1-15576886",
   "discover_query": "latest stable Python release python.org download",
@@ -46,23 +59,46 @@
   ],
   "selected_candidate_index": 0,
   "fetch": {
-    "requested_url": "https://www.python.org/downloads/",
+    "replay_url": "https://www.python.org/downloads/",
     "final_url": "https://www.python.org/downloads/",
     "redirect_chain": [
       "https://www.python.org/downloads/"
     ],
     "http_status": 200,
     "ok": true,
-    "content_type_header": "text/html; charset=utf-8",
-    "content_encoding_header_observed_via_curl": "gzip",
+    "response_headers": {
+      "content-type": "text/html; charset=utf-8",
+      "content-encoding": "gzip"
+    },
+    "content_type_parsed": {
+      "media_type": "text/html",
+      "charset": "utf-8"
+    },
     "bytes_received": 19338,
     "buffered_length": 19338,
     "truncated": false,
     "sha256": "aea841ac1c12385bd15197a980c2d2a2d5c5cb4eb48982d7168b1c7bda0f5ac2",
-    "magic": "gzip_magic_1f8b",
-    "utf8_invalid_offset": 1,
-    "head_hex": "1f8b0800000000000003e57ded92db4692ed7f45f81d305484c78e6df003fc96",
-    "ascii_head": "...........}...F...E..0T...m.....{V.-[^K...ql..p..HB\"........}..z.I..*|T...l...z"
+    "magic": "gzip_magic_1f8b08",
+    "head_hex": "1f8b0800000000000003e57ded92db46",
+    "utf8_validation": {
+      "whole_buffer_fatal_utf8": {
+        "valid": false,
+        "error": "admitted bytes are not valid UTF-8",
+        "decoder_message": "The encoded data was not valid for encoding utf-8"
+      },
+      "first_prefix_fatal_byte_index": 1,
+      "note": "Byte 0x1f (if present) is valid UTF-8 ASCII U+001F; failure is not attributed to byte 0 unless index is 0."
+    },
+    "bounded_decompression": {
+      "algorithm": "gzip",
+      "decompressed_byte_length": 218649,
+      "decompressed_sha256": "722e474c17e2ede4ae61c2c69fc8331fc26b3aa4a116ba033ff0727f6e9f5d9b",
+      "decompressed_fatal_utf8": {
+        "valid": true,
+        "error": null
+      },
+      "decompressed_head_ascii": "<!doctype html>\n<html class=\"no-js\" lang=\"en\" dir=\"ltr\">\n\n<head>\n    \n    <script defer\n            file-types=\"bz2,chm,"
+    }
   },
-  "inference": "Likely compressed transport body admitted as raw bytes without decompression before UTF-8 fatal decode in htmlFromAdmittedBytes."
+  "inference": "Wire body is gzip-compressed octets admitted without decompression; fatal UTF-8 check runs on compressed bytes (htmlFromAdmittedBytes path). Content-Encoding only if present on response headers."
 }
