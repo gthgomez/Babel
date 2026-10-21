@@ -2,6 +2,7 @@ import { createProviderRunner, type ProviderEngineOptions } from '../../../runne
 import type { ProviderId } from '../../../runners/providerRegistry.js'
 import { assertResearchV2LiveApiEnabled } from '../liveApiGate.js'
 import { ProviderResearchModelBridge } from './providerResearchModelBridge.js'
+import { buildResearchV2StructuredModelPrompt } from './researchV2ProviderModelPrompt.js'
 
 export type CreateProviderRunner = typeof createProviderRunner
 
@@ -46,6 +47,7 @@ export function createProviderResearchModelBridge(
     backendKey: config.backendKey,
     provider: String(config.engine.provider),
     providerModelId: config.engine.modelId,
+    buildPrompt: buildResearchV2StructuredModelPrompt,
   })
 }
 
