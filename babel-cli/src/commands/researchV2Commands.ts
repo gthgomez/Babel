@@ -6,8 +6,8 @@ import { printJsonErrorAndExit, printJsonOrHuman } from './output.js'
 import { assertResearchV2LiveApiEnabled, isResearchV2LiveApiEnabled } from '../research/v2/liveApiGate.js'
 import { createLiveResearchModelPort } from '../research/v2/model/researchV2LiveModelPort.js'
 import {
-  resolveEffectiveResearchV2ModelRouteForCli,
   resolveLiveResearchModelConfigForCli,
+  verifyEffectiveResearchV2OpenRouterRouteForLive,
 } from '../research/v2/model/researchV2ModelRoute.js'
 import {
   cancelResearchV2OwnerSession,
@@ -164,7 +164,7 @@ export function registerResearchV2Commands(program: Command): void {
     .option('--json', 'emit machine-readable output', false)
     .action((options: { routeKey: string; json: boolean }) => {
       try {
-        const route = resolveEffectiveResearchV2ModelRouteForCli(
+        const route = verifyEffectiveResearchV2OpenRouterRouteForLive(
           process.env,
           options.routeKey.trim() || undefined,
         )

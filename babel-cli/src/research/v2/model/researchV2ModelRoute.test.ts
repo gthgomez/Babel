@@ -6,6 +6,7 @@ import {
   resolveEffectiveResearchV2ModelRouteForCli,
   resolveLiveResearchModelConfigForCli,
   resolveResearchV2OpenRouterRouteFromPolicy,
+  verifyEffectiveResearchV2OpenRouterRouteForLive,
 } from './researchV2ModelRoute.js'
 
 describe('research v2 OpenRouter model route', () => {
@@ -44,7 +45,7 @@ describe('research v2 OpenRouter model route', () => {
     )
   })
 
-  it('resolveLiveResearchModelConfigForCli uses complete env override', () => {
+  it('resolveLiveResearchModelConfigForCli uses complete OpenRouter env override', () => {
     const { config, route_report } = resolveLiveResearchModelConfigForCli({
       BABEL_RESEARCH_V2_PROVIDER: 'openrouter',
       BABEL_RESEARCH_V2_MODEL_ID: 'vendor/model',
@@ -52,5 +53,24 @@ describe('research v2 OpenRouter model route', () => {
     assert.equal(route_report.selection_basis, 'env_override')
     assert.equal(config.engine.provider, 'openrouter')
     assert.equal(config.engine.modelId, 'vendor/model')
+  })
+
+  it('rejects non-OpenRouter env override (no silent OpenCode fallback)', () => {
+    assert.throws(
+      () =>
+        verifyEffectiveResearchV2OpenRouterRouteForLive({
+          BABEL_RESEARCH_V2_PROVIDER: 'opencode',
+          BABEL_RESEARCH_V2_MODEL_ID: 'some/model',
+        }),
+      /must be openrouter/i,
+    )
+    assert.throws(
+      () =>
+        resolveLiveResearchModelConfigForCli({
+          BABEL_RESEARCH_V2_PROVIDER: 'opencode-go',
+          BABEL_RESEARCH_V2_MODEL_ID: 'some/model',
+        }),
+      /must be openrouter/i,
+    )
   })
 })

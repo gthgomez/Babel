@@ -6,6 +6,18 @@ import type { LiveResearchModelPortConfig } from './researchV2LiveModelPort.js'
 /** Default OpenRouter control route from repo model-policy (not a silent family default). */
 export const DEFAULT_RESEARCH_V2_OPENROUTER_ROUTE_KEY = 'deepseek-v4-flash-openrouter'
 
+/** Live research v2 accepts OpenRouter only (no OpenCode or other provider fallback). */
+export const RESEARCH_V2_LIVE_MODEL_PROVIDER = 'openrouter'
+
+export function assertResearchV2LiveModelProviderIsOpenRouter(provider: string): void {
+  const normalized = provider.trim().toLowerCase()
+  if (normalized !== RESEARCH_V2_LIVE_MODEL_PROVIDER) {
+    throw new Error(
+      `research v2 live model provider must be ${RESEARCH_V2_LIVE_MODEL_PROVIDER} (got ${provider}); other providers including OpenCode are rejected`,
+    )
+  }
+}
+
 export interface ResolvedResearchV2OpenRouterRoute {
   route_key: string
   provider: 'openrouter'
@@ -88,6 +100,19 @@ export function liveResearchModelConfigFromOpenRouterRoute(
   }
 }
 
+/**
+ * Fail-closed check before live API or canonical live smoke: effective route must be OpenRouter.
+ * Uses model-policy when env override is absent; rejects non-openrouter env overrides.
+ */
+export function verifyEffectiveResearchV2OpenRouterRouteForLive(
+  env: NodeJS.ProcessEnv = process.env,
+  routeKey?: string,
+): EffectiveResearchV2ModelRoute {
+  const effective = resolveEffectiveResearchV2ModelRouteForCli(env, routeKey)
+  assertResearchV2LiveModelProviderIsOpenRouter(effective.provider)
+  return effective
+}
+
 /** Same effective route resolution used by `babel research v2 run` and `model-route`. */
 export function resolveEffectiveResearchV2ModelRouteForCli(
   env: NodeJS.ProcessEnv = process.env,
@@ -97,6 +122,7 @@ export function resolveEffectiveResearchV2ModelRouteForCli(
   const provider = env.BABEL_RESEARCH_V2_PROVIDER?.trim()
   const modelId = env.BABEL_RESEARCH_V2_MODEL_ID?.trim()
   if (provider && modelId) {
+    assertResearchV2LiveModelProviderIsOpenRouter(provider)
     const backendKey = env.BABEL_RESEARCH_V2_BACKEND_KEY ?? 'research-v2-cli'
     return {
       route_key: null,
@@ -120,7 +146,7 @@ export function resolveLiveResearchModelConfigForCli(
   env: NodeJS.ProcessEnv = process.env,
   routeKey?: string,
 ): { config: LiveResearchModelPortConfig; route_report: EffectiveResearchV2ModelRoute } {
-  const effective = resolveEffectiveResearchV2ModelRouteForCli(env, routeKey)
+  const effective = verifyEffectiveResearchV2OpenRouterRouteForLive(env, routeKey)
   if (effective.selection_basis === 'env_override') {
     return {
       config: {
