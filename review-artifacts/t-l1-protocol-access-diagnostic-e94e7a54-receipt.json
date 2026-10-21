@@ -34,5 +34,7 @@
     "tree_sha_field": "e912c2f3320de0b6e1c9ff85b95b0f74d8b5323c",
     "bounded_http_failure_metadata": null
   },
-  "interpretation": "Anonymous governed GET with honest User-Agent succeeded for the same Babel tree URL that attempt2 could not list under 923 accept-only transport; does not by itself explain attempt2 403 without paired response evidence from that run."
+  "qualification_status": "partial_emitted_transport_evidence_only_not_clean_build",
+  "prerequisite_correction": "review-artifacts/t-l1-protocol-access-diagnostic-e94e7a54-prerequisite-correction.json",
+  "interpretation": "Suggestive transport contrast only; not clean-build qualified; attempt2 403 cause not proven. See prerequisite_correction."
 }
