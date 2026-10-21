@@ -1,0 +1,25 @@
+{
+  "schema": "research-v2-ci-repair-receipt/v1",
+  "pr": 406,
+  "root_cause": "fixtureModelForOfflineRun semantic_support_review judgments omitted required claimed_source_attribution and claimed_source_slots after SemanticSupportReviewOutputSchema tightened; validation failed before cancel-resume journey completed on CI shard0.",
+  "changed_files": [
+    "babel-cli/src/research/v2/cli/researchV2FixtureRunModel.ts",
+    "babel-cli/src/research/v2/cli/researchV2CliOperations.ts"
+  ],
+  "fix_summary": "Bind offline CLI semantic judgments with requiredClaimedSourceReviewFields(['repository-pin-0'], 'not_assessed'); stop cancel watcher in finally during X-L1 journey so abort watcher cannot outlive failed engine pass.",
+  "preserved": [
+    "e1547b756d7de3e41cbad613b95cfc0b62b75af8 evidence bindings",
+    "main merge fe5d699ab7758580f90fee17e3bb3df998d37b2b",
+    "production validation and researchV2CliRoutes.test.ts assertions"
+  ],
+  "offline_proof": {
+    "tested_parent_commit": "89e9591f2411b86ba95ffa59e8bd65c7381bef03",
+    "tested_parent_tree": "22f1045531dfbbcdfb28b09adbda2969bc3f59a2",
+    "command": "cd babel-cli && node --import tsx --test src/commands/researchV2CliRoutes.test.ts",
+    "outer_exit": 0,
+    "tap_summary": "# tests 3; # pass 3; # fail 0",
+    "raw_log": "/opt/cursor/artifacts/a406-cli-routes-shard0-repair.log",
+    "sanitized_receipt": "/opt/cursor/artifacts/a406-cli-routes-shard0-repair-receipt.txt"
+  },
+  "excluded": ["live model/search/fetch", "permission-held live evidence export"]
+}

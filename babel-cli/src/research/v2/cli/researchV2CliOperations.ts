@@ -278,18 +278,22 @@ export async function runResearchV2CancelResumeJourney(options: {
     })
     const cancelController = new AbortController()
     const cancelWatcher = owner.watchExternalCancelRequests(cancelController)
-    const continuationRun = await runResearchV2EnginePassOnOwner({
-      owner,
-      mission: exampleTechnicalMissionFixture,
-      handle: resumed,
-      discoverQuery: 'RESEARCH_CONTRACT',
-      injectedOffline: true,
-      activePlanRevisionId: examplePlanRevisionFixture.plan_revision_id,
-      planRevisionId: `${examplePlanRevisionFixture.plan_revision_id}-continued`,
-      signal: cancelController.signal,
-      model: fixtureModelForOfflineRun(),
-    })
-    cancelWatcher.stop()
+    let continuationRun: Awaited<ReturnType<typeof runResearchV2EnginePassOnOwner>> | undefined
+    try {
+      continuationRun = await runResearchV2EnginePassOnOwner({
+        owner,
+        mission: exampleTechnicalMissionFixture,
+        handle: resumed,
+        discoverQuery: 'RESEARCH_CONTRACT',
+        injectedOffline: true,
+        activePlanRevisionId: examplePlanRevisionFixture.plan_revision_id,
+        planRevisionId: `${examplePlanRevisionFixture.plan_revision_id}-continued`,
+        signal: cancelController.signal,
+        model: fixtureModelForOfflineRun(),
+      })
+    } finally {
+      cancelWatcher.stop()
+    }
 
     const inspect = await ResearchEngineSession.openInspect(options.store)
     const events = await inspect.listEvents(ctx.mission_id)
@@ -305,7 +309,6 @@ export async function runResearchV2CancelResumeJourney(options: {
       note: 'Resume admitted and engine pass continued without re-appending mission.',
     }
     options.print(payload, JSON.stringify(payload, null, 2))
-    await owner.close()
   } finally {
     await owner?.close().catch(() => undefined)
   }

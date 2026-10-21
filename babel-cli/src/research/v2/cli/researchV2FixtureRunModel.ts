@@ -1,5 +1,6 @@
 import { FixtureResearchModelBridge } from '../model/fixtureModelBridge.js'
 import type { ResearchModelPort } from '../ports/researchModelPort.js'
+import { requiredClaimedSourceReviewFields } from '../engine/testSupport/requiredClaimedSourceReviewFields.js'
 
 /** Deterministic model scripts for injected offline CLI / test runs. */
 export function fixtureModelForOfflineRun(): ResearchModelPort {
@@ -46,6 +47,7 @@ export function fixtureModelForOfflineRun(): ResearchModelPort {
               status: 'insufficient',
               rationale: 'Offline CLI run — insufficient for a live acceptance decision.',
               question_coverage: 'partial',
+              ...requiredClaimedSourceReviewFields(['repository-pin-0'], 'not_assessed'),
             },
           ],
         })
