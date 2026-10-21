@@ -1,0 +1,51 @@
+=== PHASE: before npm ci ===
+HEAD e1547b756d7de3e41cbad613b95cfc0b62b75af8
+TREE ca8a3d0b4273cbbb84d2acde9dee654129a7b192
+CHECKOUT_ABSOLUTE /tmp/babel-validation-prep-e1547b75/babel-cli
+TRACKED_STATUS
+=== source fingerprints (key paths) ===
+7ef0f9021cbc620787d2180b9b570925b367d80ba1afc9a22fc38ef6794b7a06  /tmp/babel-validation-prep-e1547b75/babel-cli/package.json
+d59a9a3de7239954572f6e3ef454e04082fd44c574980322f92af5dfb14965b2  /tmp/babel-validation-prep-e1547b75/babel-cli/package-lock.json
+adde6b3b46a88ced39da0cb2771223a3c80baa1bfec418f977b43be42b2adde6  /tmp/babel-validation-prep-e1547b75/babel-cli/src/research/v2/access/admittedHttpGet.ts
+4dc3e3ea066191c9b60cec9b8a66ec6e677cec291cbe01d7d6f12e963a0a7403  /tmp/babel-validation-prep-e1547b75/babel-cli/src/research/v2/access/governedHttpClientIdentity.ts
+04e0329df13a286c67e41d962593bbc088880648ce8fe371694b6f83de85175b  /tmp/babel-validation-prep-e1547b75/babel-cli/src/research/v2/fixtures/campaign/T-L1-mission.json
+f00e8b60418ed69055863e335b6586e474cb36eb2c1d7a2b01cc3276fec7642b  /tmp/babel-validation-prep-e1547b75/babel-cli/src/research/v2/fixtures/campaign/G-L3-mission.json
+26ecae78e66f76d3b67fe11974a044c0cc1f3526c44053abccbc375166ede3fe  /tmp/babel-validation-prep-e1547b75/config/model-policy.json
+=== npm ci ===
+
+added 850 packages, and audited 851 packages in 25s
+
+194 packages are looking for funding
+  run `npm fund` for details
+
+47 vulnerabilities (1 low, 16 moderate, 27 high, 3 critical)
+
+To address all issues, run:
+  npm audit fix
+
+Run `npm audit` for details.
+NPM_CI_EXIT=0
+=== npm run typecheck ===
+
+> babel-harness@0.1.4 typecheck
+> tsc --noEmit && tsc -p tsconfig.scripts.json --noEmit
+
+TYPECHECK_EXIT=0
+=== npm run build ===
+
+> babel-harness@0.1.4 build
+> npm run clean:dist && tsc && node scripts/copy_playbooks.mjs
+
+
+> babel-harness@0.1.4 clean:dist
+> node scripts/clean_dist.mjs
+
+copy_playbooks: copied *.json → /tmp/babel-validation-prep-e1547b75/babel-cli/dist/services/playbooks
+copy_playbooks: copied owned native oracle asset
+copy_playbooks: copied OpenCode ACP source pin → /tmp/babel-validation-prep-e1547b75/babel-cli/dist/bridge/opencode-acp-source-pin.json
+BUILD_EXIT=0
+=== PHASE: after build tracked status ===
+=== post-build source fingerprints (unchanged expected) ===
+7ef0f9021cbc620787d2180b9b570925b367d80ba1afc9a22fc38ef6794b7a06  /tmp/babel-validation-prep-e1547b75/babel-cli/package.json
+adde6b3b46a88ced39da0cb2771223a3c80baa1bfec418f977b43be42b2adde6  /tmp/babel-validation-prep-e1547b75/babel-cli/src/research/v2/access/admittedHttpGet.ts
+04e0329df13a286c67e41d962593bbc088880648ce8fe371694b6f83de85175b  /tmp/babel-validation-prep-e1547b75/babel-cli/src/research/v2/fixtures/campaign/T-L1-mission.json

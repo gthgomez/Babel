@@ -1,0 +1,95 @@
+
+> babel-harness@0.1.4 test:research-v2-g-l3-preflight
+> node --import tsx scripts/research-v2-campaign-preflight-run.mjs G-L3
+
+{
+  "schema": "research-v2-campaign-preflight/v1",
+  "head_note": "No live API calls; campaign OpenRouter lane and host readiness only",
+  "acceptance_scenario": "G-L3",
+  "readiness": {
+    "search_provider_configured": true,
+    "mission_model_route_matches_effective": true,
+    "openrouter_credential_configured": true,
+    "ready": true,
+    "failures": []
+  },
+  "openrouter_route": {
+    "route_key": "deepseek-v4-flash-openrouter",
+    "provider": "openrouter",
+    "model_id": "deepseek/deepseek-v4-flash-0731",
+    "policy_path": "/tmp/babel-validation-prep-e1547b75/config/model-policy.json",
+    "selection_basis": "model_policy_json",
+    "backend_key": "research-v2-cli"
+  },
+  "openrouter_credential": {
+    "provider": "openrouter",
+    "env_var": "OPENROUTER_API_KEY",
+    "configured": true,
+    "required": true
+  },
+  "mission_id": "mission-g-l3-contradiction-insufficient",
+  "profile_id": "general",
+  "primary_question": "On official python.org pages only, does the latest stable CPython release version and its release date read the same from the downloads landing view and from the developer guide status table? Report contradiction, insufficiency, or agreement per sub-question with citations.",
+  "search_provider_id": "exa_lite",
+  "expected_outcomes": {
+    "schema": "research-v2-campaign-expected-outcomes/v1",
+    "acceptance_scenario": "G-L3",
+    "mission_id": "mission-g-l3-contradiction-insufficient",
+    "structural": {
+      "requires_per_question_semantic_support": true,
+      "requires_two_distinct_canonical_pages": true,
+      "plan_question_themes": [
+        "downloads_page_stable_version_and_date",
+        "devguide_status_table_stable_version_and_date",
+        "cross_source_agreement_or_conflict"
+      ],
+      "must_allow_terminal_partial_on_insufficient_or_contradicted": true,
+      "deterministic_insufficiency_fixture": "G-L3-deterministic-insufficiency.fixture.json",
+      "live_agreement_or_conflict_investigation_separate_from": "G-L3-deterministic-insufficiency.fixture.json"
+    },
+    "acceptable_terminal_states": [
+      "partial",
+      "complete"
+    ],
+    "complete_only_when": {
+      "two_distinct_admitted_canonical_pages": true,
+      "per_question_semantic_support_without_invented_contradiction": true,
+      "official_pages_agree_on_stable_version_and_date": true
+    },
+    "forbidden_conclusions": [
+      "asserting_agreement_without_supported_findings_per_question",
+      "asserting_contradiction_without_supported_findings_per_question",
+      "invented_contradiction_or_version_mismatch",
+      "single_page_counted_as_two_source_cross_page_coverage",
+      "citations_outside_allowed_web_domains"
+    ],
+    "preflight": {
+      "requires_openrouter_route_lane": true,
+      "requires_mission_model_route_matches_effective_openrouter_route": true,
+      "requires_openrouter_credential_configured": true,
+      "requires_configured_search_provider": true,
+      "live_model_dispatch": false
+    }
+  },
+  "mission_file": "/tmp/babel-validation-prep-e1547b75/babel-cli/src/research/v2/fixtures/campaign/G-L3-mission.json",
+  "expected_outcomes_file": "/tmp/babel-validation-prep-e1547b75/babel-cli/src/research/v2/fixtures/campaign/G-L3-expected-outcomes.json",
+  "allowed_web_domains": [
+    "duckduckgo.com",
+    "html.duckduckgo.com",
+    "python.org",
+    "www.python.org",
+    "docs.python.org"
+  ],
+  "evidence_web_domains": [
+    "python.org",
+    "www.python.org",
+    "docs.python.org"
+  ],
+  "search_transport_domains": [
+    "duckduckgo.com",
+    "html.duckduckgo.com"
+  ],
+  "discover_query": "On official python.org pages only, does the latest stable CPython release version",
+  "search_url": "https://duckduckgo.com/html/?q=On+official+python.org+pages+only%2C+does+the+latest+stable+CPython+release+version"
+}
+research-v2-campaign-preflight: ok (G-L3)
