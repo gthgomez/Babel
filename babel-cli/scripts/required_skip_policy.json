@@ -118,6 +118,18 @@
       }
     },
     {
+      "id": "posix-compensation-mode",
+      "platforms": ["win32"],
+      "reasons": ["POSIX mode/umask semantics are not available on Windows"],
+      "rationale": "Linux executes the compensation mode/umask contract; Windows executes restoration, retained-capture and parent-identity tests without claiming POSIX permission semantics.",
+      "suites": ["unit"],
+      "files": {
+        "src/agent/patchCompensation.test.ts": [
+          "exclusive restoration preserves POSIX mode despite a restrictive umask"
+        ]
+      }
+    },
+    {
       "id": "posix-durability",
       "platforms": [
         "win32"

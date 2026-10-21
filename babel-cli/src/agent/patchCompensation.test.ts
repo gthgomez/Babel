@@ -14,6 +14,43 @@ import { captureEffectParentIdentity } from '../executor/effectPathIdentity.js'
 
 const hash = (text: string): string => createHash('sha256').update(text).digest('hex')
 
+test('optional run directory keeps retained compensation outside the project and preserves open writers', async () => {
+  const root = fs.mkdtempSync(join(tmpdir(), 'babel-compensation-optional-run-'))
+  const path = join(root, 'owned.txt')
+  const mkdtemp = fsPromises.mkdtemp
+  let captureRoot: string | undefined
+  let writer: number | undefined
+  try {
+    fs.writeFileSync(path, 'after')
+    writer = fs.openSync(path, 'r+')
+    fsPromises.mkdtemp = (async (...args: Parameters<typeof fsPromises.mkdtemp>) => {
+      const result = await mkdtemp(...args)
+      captureRoot = String(result)
+      return result
+    }) as typeof fsPromises.mkdtemp
+    syncBuiltinESMExports()
+    const result = await compensatePatchWrites([path], new Map([[path, 'before']]), new Set(),
+      new Map([[path, 'after']]), new Map(),
+      { runId: 'session', agentId: 'test', babelRoot: root },
+      new Map([[path, captureEffectParentIdentity(path)]]))
+    assert.deepEqual(result.failures, [])
+    assert.deepEqual(result.rolledBack, [path])
+    assert.deepEqual(fs.readdirSync(root), ['owned.txt'], 'retained captures must not dirty the project')
+    assert.ok(captureRoot)
+    const capture = join(captureRoot, 'captured')
+    assert.equal(fs.readFileSync(capture, 'utf8'), 'after')
+    fs.writeSync(writer, 'later', 0, 'utf8')
+    fs.fsyncSync(writer)
+    assert.equal(fs.readFileSync(capture, 'utf8'), 'later')
+    assert.equal(fs.readFileSync(path, 'utf8'), 'before')
+  } finally {
+    fsPromises.mkdtemp = mkdtemp; syncBuiltinESMExports()
+    if (writer !== undefined) fs.closeSync(writer)
+    if (captureRoot) fs.rmSync(captureRoot, { recursive: true, force: true })
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
 for (const replaceParent of [false, true]) {
   test(`compensation refuses unbound newly created parent directories (replacement=${replaceParent})`, async () => {
     const root = fs.mkdtempSync(join(tmpdir(), 'babel-compensation-new-parent-'))

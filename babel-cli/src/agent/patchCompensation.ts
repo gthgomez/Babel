@@ -1,5 +1,6 @@
 import { open, lstat, rename, link, mkdir, mkdtemp, realpath } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
+import { tmpdir } from 'node:os'
 import { createHash } from 'node:crypto'
 import type { ToolContext } from '../localTools.js'
 import { WorkspaceTransactionManager } from '../services/workspaceTransactions.js'
@@ -49,7 +50,9 @@ export async function compensatePatchWrites(
       // Rename must stay on one volume; retain cross-volume captures beside
       // the target and name them in durable evidence rather than copying bytes.
       const targetInfo = await lstat(dirname(ownedTarget()))
-      const evidenceRoot = context.runDir ?? dirname(path)
+      // Legacy callers without a run directory must not dirty their project
+      // with retained captures when temporary storage is on the same volume.
+      const evidenceRoot = context.runDir ?? tmpdir()
       await mkdir(evidenceRoot, { recursive: true })
       const evidenceCanonical = await realpath(evidenceRoot)
       const evidenceInfo = await lstat(evidenceCanonical)

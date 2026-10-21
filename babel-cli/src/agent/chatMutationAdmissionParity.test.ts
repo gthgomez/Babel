@@ -374,6 +374,17 @@ if (!isSyntheticProviderFixtureReady()) {
     assert.equal(readFileSync(join(f.root, 'notes.txt'), 'utf8'), 'owned\n')
   })
 
+  test('an unrelated compensation-named directory still blocks mutation admission', async t => {
+    const f = fixture(t)
+    assert.equal((await f.write('owned\n')).results[0]?.exit_code, 0)
+    const unrelated = join(f.root, '.babel-compensation-external')
+    mkdirSync(unrelated)
+    writeFileSync(join(unrelated, 'captured'), 'external\n')
+    assert.equal((await f.write('denied\n')).policyBlocked, true)
+    assert.equal(readFileSync(join(f.root, 'notes.txt'), 'utf8'), 'owned\n')
+    assert.equal(readFileSync(join(unrelated, 'captured'), 'utf8'), 'external\n')
+  })
+
   test('a newly hard-linked owned target is not admitted as an ordinary file', async t => {
     const f = fixture(t)
     assert.equal((await f.write('owned\n')).results[0]?.exit_code, 0)

@@ -713,6 +713,10 @@ const HOST_PROCESS_SURFACE = new Set([
   'agent/codingLoop/recoveryIdentity.ts',
   // Process-tree termination uses the fixed System32 taskkill executable on Windows.
   'processTree.ts',
+  // Compensation pins Windows directories with a fixed helper and encoded path data.
+  'executor/effectDirectoryAnchors.ts',
+  // Fixed Docker removal arguments require a validated Babel-owned UUID name.
+  'sandboxContainerLifecycle.ts',
   // Admission state applies and verifies owner-only Windows DACLs via System32 tools.
   'runtime/admission.ts',
   // Review workers are contained by the watchdog / Windows Job Object helper.
