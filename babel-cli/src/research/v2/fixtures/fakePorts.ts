@@ -35,6 +35,7 @@ import type {
   ResearchStoreMissionHandle,
   ResearchStoreWriteResult,
 } from '../ports/researchStore.js'
+import { assertSnapshotIntegrity } from '../persistence/snapshotIntegrity.js'
 
 export interface FakePortClock {
   now(): string
@@ -176,6 +177,9 @@ export class FakeSourceAccessPort implements SourceAccessPort {
         snippet: entry.body.slice(0, 240),
         completeness: 'snippet' as const,
       }))
+    if (request.signal.aborted) {
+      return { operationId: request.operationId, status: 'cancelled' }
+    }
     return { operationId: request.operationId, status: 'ok', hits }
   }
 
@@ -217,7 +221,11 @@ export class FakeSourceAccessPort implements SourceAccessPort {
       byte_length_received: admittedBytes.byteLength,
       truncation_reason: truncated ? 'host_byte_limit' : undefined,
     }
+    if (request.signal.aborted) {
+      return { operationId: request.operationId, status: 'cancelled' }
+    }
     const requestedUrl = entry.source.observed_urls[0] ?? 'https://example.test/unknown'
+    const finalUrl = entry.finalUrl ?? requestedUrl
     return {
       operationId: request.operationId,
       status: 'ok',
@@ -227,8 +235,10 @@ export class FakeSourceAccessPort implements SourceAccessPort {
         media_type: entry.mediaType,
         provenance: {
           requested_url: requestedUrl,
-          final_url: entry.finalUrl ?? requestedUrl,
-          redirect_chain: entry.redirectChain ?? [requestedUrl],
+          final_url: finalUrl,
+          redirect_chain: entry.redirectChain ?? [requestedUrl, finalUrl].filter(
+            (url, index, arr) => arr.indexOf(url) === index,
+          ),
         },
         payload: {
           mode: 'inline_bytes',
@@ -263,6 +273,14 @@ interface TrackedOperation {
   intent: ExternalOperationIntent
   completion?: ExternalOperationCompletion
   accountingReconciled?: ExternalOperationReconciliation
+}
+
+/** JSON-serializable durable snapshot of in-memory store runtime state (M1 persistence). */
+export interface InMemoryResearchStoreSnapshot {
+  schema_version: 1
+  events: ResearchStoreEvent[]
+  missions: Array<[string, MissionFence]>
+  operations: Array<[string, TrackedOperation]>
 }
 
 function operationKey(missionId: string, operationId: string, attemptId: string): string {
@@ -660,6 +678,31 @@ export class InMemoryResearchStore implements ResearchStore {
 
   allEvents(): readonly ResearchStoreEvent[] {
     return this.events
+  }
+
+  exportSnapshot(): InMemoryResearchStoreSnapshot {
+    return {
+      schema_version: 1,
+      events: structuredClone(this.events),
+      missions: [...this.missions.entries()],
+      operations: [...this.operations.entries()],
+    }
+  }
+
+  static restoreSnapshot(
+    snapshot: InMemoryResearchStoreSnapshot,
+    clock: FakePortClock = new SystemFakeClock(),
+  ): InMemoryResearchStore {
+    assertSnapshotIntegrity(snapshot)
+    const store = new InMemoryResearchStore(clock)
+    store.events.push(...structuredClone(snapshot.events))
+    for (const [missionId, fence] of snapshot.missions) {
+      store.missions.set(missionId, structuredClone(fence))
+    }
+    for (const [key, op] of snapshot.operations) {
+      store.operations.set(key, structuredClone(op))
+    }
+    return store
   }
 }
 

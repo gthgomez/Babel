@@ -1,6 +1,5 @@
-// @ts-nocheck — registry/engine imports resolve on PR #406 integration worktree (78afd1c1); skipped locally when absent.
 import assert from 'node:assert/strict'
-import { existsSync, readFileSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, it } from 'node:test'
@@ -19,11 +18,13 @@ import { resolveQuarantinedFixturePath } from '../../adapters/documents/quaranti
 import { passageTextHash } from '../../adapters/documents/passageInlineText.js'
 import { GENERAL_DOCUMENT_ADAPTER_ID } from '../../adapters/documents/generalDocumentAdapter.js'
 import { GENERAL_WEB_ADAPTER_ID } from '../../adapters/web/generalWebAdapter.js'
+import { InMemoryResearchStore } from '../../fixtures/fakePorts.js'
+import { runAdmittedRetrievalIteration } from '../../engine/researchRetrievalLoop.js'
+import { resolveDiscoveryAdapterForMission } from '../../registry/missionAdapterResolution.js'
+import { createCombinedResearchRegistries } from '../../registry/reviewedBAdapterIntegration.js'
+import { generalAdapterCatalog } from './generalAdapterCatalog.js'
 
 const here = dirname(fileURLToPath(import.meta.url))
-const registryModule = join(here, '../../registry/reviewedBAdapterIntegration.ts')
-const engineIntegrationEnabled = existsSync(registryModule)
-
 const devCorpusRoot = join(here, 'fixtures/dev-corpus')
 const pdfFixture = join(here, '../../adapters/documents/fixtures/two-page-sample.pdf')
 
@@ -122,15 +123,8 @@ class GeneralProfileIntegrationAccessPort implements SourceAccessPort {
   }
 }
 
-describe(
-  'general adapter engine reciprocal (#406 integration base, offline)',
-  { skip: engineIntegrationEnabled ? false : 'registry/engine modules not present (run on #406 worktree)' },
-  () => {
-    it('createCombinedResearchRegistries registers B catalog adapters', async () => {
-      const { createCombinedResearchRegistries } = await import(
-        '../../registry/reviewedBAdapterIntegration.js'
-      )
-      const { generalAdapterCatalog } = await import('./generalAdapterCatalog.js')
+describe('general adapter engine reciprocal (#406 integration base, offline)', () => {
+  it('createCombinedResearchRegistries registers B catalog adapters', async () => {
       const registries = await createCombinedResearchRegistries()
       assert.ok(registries.sourceAdapters.getAdapter(generalAdapterCatalog.document.adapterId))
       assert.ok(registries.sourceAdapters.getAdapter(generalAdapterCatalog.web.adapterId))
@@ -141,12 +135,6 @@ describe(
     })
 
     it('production discovery uses search-backed web adapter (not document)', async () => {
-      const { createCombinedResearchRegistries } = await import(
-        '../../registry/reviewedBAdapterIntegration.js'
-      )
-      const { resolveDiscoveryAdapterForMission } = await import(
-        '../../registry/missionAdapterResolution.js'
-      )
       const mission = loadGeneralDev01Mission()
       const registries = await createCombinedResearchRegistries()
       const discovery = resolveDiscoveryAdapterForMission(mission, registries)
@@ -156,14 +144,6 @@ describe(
     })
 
     it('runAdmittedRetrievalIteration: search → web discover → HTML read → persisted passages', async () => {
-      const { InMemoryResearchStore } = await import('../../fixtures/fakePorts.js')
-      const { runAdmittedRetrievalIteration } = await import('../../engine/researchRetrievalLoop.js')
-      const { createCombinedResearchRegistries } = await import(
-        '../../registry/reviewedBAdapterIntegration.js'
-      )
-      const { resolveDiscoveryAdapterForMission } = await import(
-        '../../registry/missionAdapterResolution.js'
-      )
       const mission = loadGeneralDev01Mission()
       const plan = loadGeneralPlan(mission.mission_id)
       const store = new InMemoryResearchStore()
@@ -247,11 +227,6 @@ describe(
     })
 
     it('runAdmittedRetrievalIteration: document candidate resolves to PDF read + persisted page passages', async () => {
-      const { InMemoryResearchStore } = await import('../../fixtures/fakePorts.js')
-      const { runAdmittedRetrievalIteration } = await import('../../engine/researchRetrievalLoop.js')
-      const { createCombinedResearchRegistries } = await import(
-        '../../registry/reviewedBAdapterIntegration.js'
-      )
       const mission = loadGeneralDev01Mission()
       const plan = loadGeneralPlan(mission.mission_id)
       const store = new InMemoryResearchStore()
@@ -334,11 +309,6 @@ describe(
     })
 
     it('document adapter discover remains unsupported through retrieval loop', async () => {
-      const { InMemoryResearchStore } = await import('../../fixtures/fakePorts.js')
-      const { runAdmittedRetrievalIteration } = await import('../../engine/researchRetrievalLoop.js')
-      const { createCombinedResearchRegistries } = await import(
-        '../../registry/reviewedBAdapterIntegration.js'
-      )
       const mission = loadGeneralDev01Mission()
       const plan = loadGeneralPlan(mission.mission_id)
       const store = new InMemoryResearchStore()
@@ -398,14 +368,6 @@ describe(
     })
 
     it('runAdmittedRetrievalIteration: cancelled discover settles without persisting passages', async () => {
-      const { InMemoryResearchStore } = await import('../../fixtures/fakePorts.js')
-      const { runAdmittedRetrievalIteration } = await import('../../engine/researchRetrievalLoop.js')
-      const { createCombinedResearchRegistries } = await import(
-        '../../registry/reviewedBAdapterIntegration.js'
-      )
-      const { resolveDiscoveryAdapterForMission } = await import(
-        '../../registry/missionAdapterResolution.js'
-      )
       const mission = loadGeneralDev01Mission()
       const plan = loadGeneralPlan(mission.mission_id)
       const store = new InMemoryResearchStore()
@@ -466,5 +428,4 @@ describe(
       const passages = await passagesFromStoreEvents(store, mission.mission_id)
       assert.equal(passages.length, 0)
     })
-  },
-)
+})

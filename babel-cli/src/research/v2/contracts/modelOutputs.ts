@@ -73,10 +73,15 @@ const OUTPUT_SCHEMAS: Record<ResearchModelOperationKind, z.ZodType<Record<string
   synthesize_report: SynthesizeReportOutputSchema,
 }
 
+export function modelOutputSchemaForKind(
+  operationKind: ResearchModelOperationKind,
+): z.ZodType<Record<string, unknown>> {
+  return OUTPUT_SCHEMAS[operationKind]
+}
+
 export function parseValidatedModelOutput(
   operationKind: ResearchModelOperationKind,
   raw: unknown,
 ): Record<string, unknown> {
-  const schema = OUTPUT_SCHEMAS[operationKind]
-  return schema.parse(raw) as Record<string, unknown>
+  return modelOutputSchemaForKind(operationKind).parse(raw) as Record<string, unknown>
 }

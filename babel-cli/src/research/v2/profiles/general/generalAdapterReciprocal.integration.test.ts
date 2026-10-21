@@ -93,28 +93,63 @@ describe('general adapter reciprocal integration (B80 catalog, offline)', () => 
     assert.equal(reg.getAdapter('documents/general-document/0.1.0'), undefined)
   })
 
-  it('discover → honest not_supported on B80 adapters without port search (catalog-only branch)', async () => {
+  it('discover → document not_supported without port search', async () => {
     const reg = registryFromCatalog()
     const { port, getSearchCalls } = trackingPort(async () => ({
       operationId: 'unused',
       status: 'cancelled',
     }))
-    for (const adapterId of [
-      generalAdapterCatalog.document.adapterId,
-      generalAdapterCatalog.web.adapterId,
-    ]) {
-      const adapter = reg.getAdapter(adapterId)
-      assert.ok(adapter)
-      const result = await adapter.discover(
-        { operationId: `disc-${adapterId}`, query: 'widgets', signal: AbortSignal.timeout(2_000) },
-        port,
-      )
-      assert.equal(result.status, 'failed')
-      if (result.status === 'failed') {
-        assert.equal(result.failureCategory, 'not_supported')
-      }
+    const adapter = reg.getAdapter(generalAdapterCatalog.document.adapterId)
+    assert.ok(adapter)
+    const result = await adapter.discover(
+      { operationId: 'disc-doc', query: 'widgets', signal: AbortSignal.timeout(2_000) },
+      port,
+    )
+    assert.equal(result.status, 'failed')
+    if (result.status === 'failed') {
+      assert.equal(result.failureCategory, 'not_supported')
     }
     assert.equal(getSearchCalls(), 0)
+  })
+
+  it('discover → web uses search-backed production path (#406)', async () => {
+    const reg = registryFromCatalog()
+    const hitSource: SourceRecord = {
+      source_id: 'src-reciprocal-discover',
+      kind: 'web',
+      canonical_key: 'fixture:discover',
+      observed_urls: ['https://example.invalid/plan-a'],
+    }
+    let searchCalls = 0
+    const port: SourceAccessPort = {
+      async search(request: SourceSearchRequest) {
+        searchCalls++
+        return {
+          operationId: request.operationId,
+          status: 'ok',
+          hits: [{ source: hitSource, snippet: 'Nimbus plan', completeness: 'snippet' }],
+        }
+      },
+      async fetchContent() {
+        return {
+          operationId: 'unused',
+          status: 'failed',
+          failureCategory: 'policy_denied',
+          message: 'discover-only',
+        }
+      },
+    }
+    const adapter = reg.getAdapter(generalAdapterCatalog.web.adapterId)
+    assert.ok(adapter)
+    const result = await adapter.discover(
+      { operationId: 'disc-web', query: 'Nimbus', signal: AbortSignal.timeout(2_000) },
+      port,
+    )
+    assert.equal(searchCalls, 1)
+    assert.equal(result.status, 'ok')
+    if (result.status === 'ok') {
+      assert.equal(result.candidates[0]?.source_id, hitSource.source_id)
+    }
   })
 
   it('fetch → read: G-DEV-01 HTML through registered web adapter', async () => {

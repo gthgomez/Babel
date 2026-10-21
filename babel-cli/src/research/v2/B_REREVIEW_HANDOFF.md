@@ -1,5 +1,20 @@
 # Agent A → Agent B reciprocal rereview handoff
 
+## Active coordination (2026-10-21)
+
+| Track | Draft PR | Published head (exact GitHub) | Owner |
+|-------|----------|-------------------------------|--------|
+| Agent A integration | [#406](https://github.com/gthgomez/Babel/pull/406) | `40dadfa2` (`cursor/research-v2-post-review-settlement-fc31`) | Combined runtime, CLI/engine, registry wiring, **web discover** |
+| Agent B extraction/tests | [#404](https://github.com/gthgomez/Babel/pull/404) | `c470f0cb` (tests-only on B80 catalog) | Read/HTML/PDF extraction, reciprocal integration tests |
+
+**Discover contract on #406:** `GeneralWebAdapter.discover` delegates to `access.search` and maps hits to web candidates (`generalWebAdapter.test.ts`). **Do not** replace `generalWebAdapter.ts` with B80, whose discover returns `not_supported` without search. `GeneralDocumentAdapter.discover` remains honestly `not_supported` (mission-selected documents).
+
+B `c470f0cb` reciprocal tests assume B80 discover for **both** catalog adapters; when B rebases tests onto #406, web discover expectations should follow A search-backed behavior while read/HTML/PDF/cancellation cases stay B-owned.
+
+Review uses exact published heads; no manual patch-export gate. Credentials unchanged.
+
+---
+
 **Supersedes for review:** `59cd561b2414fcc32253de568c70285517eae1cd` (BLOCKED)  
 **Published draft head (PR #405):** `17838c028c0a8a80f9745b01d1525983752e0eae` on branch `cursor/research-v2-contract-a-fc31` (tree `2ad1a8b0fbd448828327a261b78b87d97e28fdaf` at last publication)  
 **Contract version:** `2026.10.20-checkpoint.3.1` (composition FIX + verbatim B corpus; base `d51418b3`)  

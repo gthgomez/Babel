@@ -96,4 +96,32 @@ describe('research v2 fake ports', () => {
     assert.equal(events.length, 3)
     assert.equal(events[2]?.kind, 'source_recorded')
   })
+
+  it('exportSnapshot round-trips writer fence and events', async () => {
+    const store = new InMemoryResearchStore()
+    const handle = await store.appendMission(exampleTechnicalMissionFixture)
+    const acquired = await store.acquireWriterOwnership({
+      mission_id: handle.mission_id,
+      expected_writer_generation: handle.writer_generation,
+    })
+    const ctx = {
+      ...exampleMissionWriteContext,
+      writer_generation: acquired.writer_generation,
+      plan_revision_id: examplePlanRevisionFixture.plan_revision_id,
+    }
+    await store.appendPlanRevision(ctx, examplePlanRevisionFixture)
+    const snap = store.exportSnapshot()
+    const restored = InMemoryResearchStore.restoreSnapshot(snap)
+    const before = await store.listEvents(exampleTechnicalMissionFixture.mission_id)
+    const after = await restored.listEvents(exampleTechnicalMissionFixture.mission_id)
+    assert.deepEqual(after, before)
+    await assert.rejects(
+      () =>
+        restored.acquireWriterOwnership({
+          mission_id: handle.mission_id,
+          expected_writer_generation: handle.writer_generation,
+        }),
+      /competing resume rejected/,
+    )
+  })
 })

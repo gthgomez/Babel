@@ -1,7 +1,6 @@
-integration_base_commit=78afd1c1cbfc1aff7320c4d547c8dc661224d9c3
-integration_base_tree=438bdcb82aaf756d58bcd6fdb5e74d75e28c576b
-b_extraction_checkpoint=80a7a9ef4cbd0ec8d4ac4740b4fc114ef781bfc3
-b_extraction_tree=185476b892eaf3db69b5a36e9267ac57b9225d42
-worktree_path=/tmp/babel-integration-406
-engine_reciprocal_tap=review-artifacts/integration-406-engine-reciprocal.tap.txt
-engine_reciprocal_result=6/6 pass (2026-10-21 run against worktree + workspace node_modules link)
+integration_base_pr=406
+integration_base_branch=cursor/research-v2-post-review-settlement-fc31
+integration_base_commit=1b8389dd4c50cd1d29fd828188920da0ce4c2525
+integration_base_subject=docs(research-v2): lock A/B discover split for #406 vs B80 reciprocal tests
+merged_into=cursor/agent-b-general-fixtures-f617
+recorded_at=2026-10-21T05:00:00Z

@@ -1,3 +1,4 @@
+import type { SourceRecord } from '../../contracts/sources.js'
 import type { SourceAccessPort, SourceClass } from '../../ports/sourceAccessPort.js'
 import type {
   SourceAdapter,
@@ -22,19 +23,40 @@ export class GeneralWebAdapter implements SourceAdapter {
   readonly adapterId = GENERAL_WEB_ADAPTER_ID
   readonly supportedKinds: readonly SourceClass[] = ['web']
 
+  /**
+   * Agent A (#406): discovery is search-backed via {@link SourceAccessPort#search}.
+   * B80 catalog slices return `not_supported` without calling search — do not replace
+   * this method wholesale when porting B extraction/read fixes.
+   */
   async discover(
     request: SourceDiscoverRequest,
-    _access: SourceAccessPort,
+    access: SourceAccessPort,
   ): Promise<SourceDiscoverResult> {
     if (request.signal.aborted) {
       return { operationId: request.operationId, status: 'cancelled' }
     }
-    return {
-      operationId: request.operationId,
-      status: 'failed',
-      failureCategory: 'not_supported',
-      message: 'general web adapter: live discovery not implemented in this slice',
+    const search = await access.search({
+      operationId: `${request.operationId}:search`,
+      query: request.query,
+      sourceClasses: [...this.supportedKinds],
+      signal: request.signal,
+    })
+    if (request.signal.aborted) {
+      return { operationId: request.operationId, status: 'cancelled' }
     }
+    if (search.status === 'cancelled') {
+      return { operationId: request.operationId, status: 'cancelled' }
+    }
+    if (search.status === 'failed') {
+      return {
+        operationId: request.operationId,
+        status: 'failed',
+        failureCategory: search.failureCategory,
+        message: search.message,
+      }
+    }
+    const candidates: SourceRecord[] = search.hits.map((hit) => hit.source)
+    return { operationId: request.operationId, status: 'ok', candidates }
   }
 
   async read(

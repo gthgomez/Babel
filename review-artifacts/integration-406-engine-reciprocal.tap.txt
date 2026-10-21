@@ -3,51 +3,100 @@ TAP version 13
     # Subtest: createCombinedResearchRegistries registers B catalog adapters
     ok 1 - createCombinedResearchRegistries registers B catalog adapters
       ---
-      duration_ms: 23.51684
+      duration_ms: 1.242077
       type: 'test'
       ...
     # Subtest: production discovery uses search-backed web adapter (not document)
     ok 2 - production discovery uses search-backed web adapter (not document)
       ---
-      duration_ms: 4.095717
+      duration_ms: 3.645016
       type: 'test'
       ...
     # Subtest: runAdmittedRetrievalIteration: search → web discover → HTML read → persisted passages
     ok 3 - runAdmittedRetrievalIteration: search → web discover → HTML read → persisted passages
       ---
-      duration_ms: 24.317024
+      duration_ms: 5.774822
       type: 'test'
       ...
     # Subtest: runAdmittedRetrievalIteration: document candidate resolves to PDF read + persisted page passages
     ok 4 - runAdmittedRetrievalIteration: document candidate resolves to PDF read + persisted page passages
       ---
-      duration_ms: 826.611552
+      duration_ms: 972.834884
       type: 'test'
       ...
     # Subtest: document adapter discover remains unsupported through retrieval loop
     ok 5 - document adapter discover remains unsupported through retrieval loop
       ---
-      duration_ms: 4.454139
+      duration_ms: 1.394614
       type: 'test'
       ...
     # Subtest: runAdmittedRetrievalIteration: cancelled discover settles without persisting passages
     ok 6 - runAdmittedRetrievalIteration: cancelled discover settles without persisting passages
       ---
-      duration_ms: 2.358013
+      duration_ms: 0.862593
       type: 'test'
       ...
     1..6
 ok 1 - general adapter engine reciprocal (\#406 integration base, offline)
   ---
-  duration_ms: 886.384714
+  duration_ms: 986.70912
   type: 'suite'
   ...
-1..1
-# tests 6
-# suites 1
-# pass 6
+# Subtest: general adapter reciprocal integration (B80 catalog, offline)
+    # Subtest: registers catalog factories under bare adapterId (A registry contract)
+    ok 1 - registers catalog factories under bare adapterId (A registry contract)
+      ---
+      duration_ms: 1.168952
+      type: 'test'
+      ...
+    # Subtest: discover → document not_supported without port search
+    ok 2 - discover → document not_supported without port search
+      ---
+      duration_ms: 0.316067
+      type: 'test'
+      ...
+    # Subtest: discover → web uses search-backed production path (\#406)
+    ok 3 - discover → web uses search-backed production path (\#406)
+      ---
+      duration_ms: 0.471629
+      type: 'test'
+      ...
+    # Subtest: fetch → read: G-DEV-01 HTML through registered web adapter
+    ok 4 - fetch → read: G-DEV-01 HTML through registered web adapter
+      ---
+      duration_ms: 4.891689
+      type: 'test'
+      ...
+    # Subtest: fetch → read: two-page PDF through registered document adapter
+    ok 5 - fetch → read: two-page PDF through registered document adapter
+      ---
+      duration_ms: 1032.755617
+      type: 'test'
+      ...
+    # Subtest: read: post-fetch abort returns cancelled without hanging PDF cleanup
+    ok 6 - read: post-fetch abort returns cancelled without hanging PDF cleanup
+      ---
+      duration_ms: 21.207192
+      type: 'test'
+      ...
+    # Subtest: read: stalled PDF load abort rejects with PdfExtractionCancelled via adapter
+    ok 7 - read: stalled PDF load abort rejects with PdfExtractionCancelled via adapter
+      ---
+      duration_ms: 2.054034
+      type: 'test'
+      ...
+    1..7
+ok 2 - general adapter reciprocal integration (B80 catalog, offline)
+  ---
+  duration_ms: 1063.936943
+  type: 'suite'
+  ...
+1..2
+# tests 13
+# suites 2
+# pass 13
 # fail 0
 # cancelled 0
 # skipped 0
 # todo 0
-# duration_ms 6193.367487
+# duration_ms 6385.478141
