@@ -137,7 +137,8 @@ describe('research end-to-end pass (offline governed)', () => {
     const report = (terminal?.payload as { report: { terminal_state: string; citation_passage_ids: string[] } })
       .report
     assert.equal(report.terminal_state, 'partial')
-    assert.ok(report.citation_passage_ids.length >= 1)
+    assert.ok(report.limitations.includes('semantic_support_insufficient'))
+    assert.ok(report.answer_summary.includes('insufficient'))
   })
 
   it('ProviderResearchModelBridge uses request-local callback metadata (factory path)', async () => {

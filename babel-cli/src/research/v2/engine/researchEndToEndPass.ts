@@ -9,12 +9,15 @@ import type { ResearchStore, ResearchStoreMissionHandle } from '../ports/researc
 import { missionRequirementsPayload } from './planFromModelOutput.js'
 import { runAdmittedPlanningIteration, type AdmittedPlanningSession } from './researchIterationLoop.js'
 import { runAdmittedRetrievalIteration } from './researchRetrievalLoop.js'
-import { settleExternalOperation } from './settleExternalOperation.js'
+import { buildSemanticSupportReviewInput } from './buildSemanticSupportReviewInput.js'
 import {
   applySemanticSupportReview,
   findingsFromExtractModelOutput,
 } from './findingsFromModelOutput.js'
 import { buildSynthesizedResearchReport } from './buildSynthesizedResearchReport.js'
+import { settleModelOperation } from './settleModelOperation.js'
+import { unknownUsageSettlement } from './settleExternalOperation.js'
+import type { ResearchModelInvocationResult } from '../ports/researchModelPort.js'
 
 export interface ResearchEndToEndPassRequest {
   session: AdmittedPlanningSession
@@ -50,6 +53,12 @@ export interface ResearchEndToEndPassResult {
   terminalReportEmitted: true
 }
 
+function throwIfAborted(signal: AbortSignal, phase: string): void {
+  if (signal.aborted) {
+    throw new Error(`research end-to-end pass aborted before ${phase}`)
+  }
+}
+
 async function invokeModelPhase(
   store: ResearchStore,
   ctx: MissionWriteContext,
@@ -64,6 +73,7 @@ async function invokeModelPhase(
     now: () => string
   },
 ): Promise<Record<string, unknown>> {
+  throwIfAborted(params.signal, `${params.kind} intent`)
   await store.appendExternalOperationIntent(ctx, {
     mission_id: ctx.mission_id,
     operation_id: params.operationId,
@@ -72,49 +82,86 @@ async function invokeModelPhase(
     dispatched_at: params.dispatchedAt,
     idempotency_key: params.operationId,
   })
-  const result = await model.invokeStructured({
-    operationId: params.operationId,
-    attemptId: params.attemptId,
-    kind: params.kind,
-    input: params.input,
-    signal: params.signal,
-  })
-  if (result.status === 'cancelled') {
-    await settleExternalOperation(
+  let result: ResearchModelInvocationResult
+  try {
+    result = await model.invokeStructured({
+      operationId: params.operationId,
+      attemptId: params.attemptId,
+      kind: params.kind,
+      input: params.input,
+      signal: params.signal,
+    })
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err)
+    const thrown: ResearchModelInvocationResult = {
+      status: 'uncertain',
+      operationId: params.operationId,
+      message: params.signal.aborted
+        ? `model ${params.kind} rejected during cancellation: ${message}`
+        : message,
+      usageSettlement: unknownUsageSettlement(params.attemptId),
+    }
+    await settleModelOperation(
       store,
       ctx,
       ctx.mission_id,
       params.operationId,
       params.attemptId,
-      { settlement: 'cancelled' },
+      thrown,
       params.now(),
     )
-    throw new Error(`model ${params.kind} cancelled`)
+    throw err instanceof Error ? err : new Error(message)
   }
-  if (result.status === 'failed' || result.status === 'uncertain') {
-    await settleExternalOperation(
+
+  if (params.signal.aborted) {
+    const cancelled: ResearchModelInvocationResult = {
+      status: 'cancelled',
+      operationId: params.operationId,
+      usageSettlement:
+        result.status === 'ok'
+          ? result.receipt.usage_settlement
+          : result.status === 'failed' || result.status === 'cancelled' || result.status === 'uncertain'
+            ? result.usageSettlement
+            : unknownUsageSettlement(params.attemptId),
+    }
+    await settleModelOperation(
       store,
       ctx,
       ctx.mission_id,
       params.operationId,
       params.attemptId,
-      {
-        settlement: result.status === 'uncertain' ? 'uncertain' : 'failed',
-        message: result.message,
-        ...(result.status === 'failed' ? { failureCategory: result.failureCategory } : {}),
-      },
+      cancelled,
       params.now(),
     )
-    throw new Error(result.message)
+    throw new Error(`model ${params.kind} cancelled after invoke`)
   }
+
+  if (result.status === 'cancelled' || result.status === 'failed' || result.status === 'uncertain') {
+    await settleModelOperation(
+      store,
+      ctx,
+      ctx.mission_id,
+      params.operationId,
+      params.attemptId,
+      result,
+      params.now(),
+    )
+    throw new Error(
+      result.status === 'failed' || result.status === 'uncertain'
+        ? result.message
+        : `model ${params.kind} cancelled`,
+    )
+  }
+
+  throwIfAborted(params.signal, `${params.kind} evidence`)
   await store.appendModelReceipt(ctx, result.receipt)
-  await settleExternalOperation(
+  await settleModelOperation(
     store,
     ctx,
     ctx.mission_id,
     params.operationId,
     params.attemptId,
-    { settlement: 'succeeded' },
+    result,
     params.now(),
   )
   return result.output
@@ -205,20 +252,18 @@ export async function runAdmittedResearchEndToEndPass(
     createdAt: now(),
   })
   for (const finding of findings) {
+    throwIfAborted(request.signal, 'finding persistence')
     await request.store.appendFinding(ctx, finding)
   }
 
+  const reviewInput = buildSemanticSupportReviewInput(findings, passages)
   const reviewOutput = await invokeModelPhase(request.store, ctx, request.model, {
     operationId: request.reviewOperationId,
     attemptId: request.reviewAttemptId,
     kind: 'semantic_support_review',
     input: {
       mission_id: request.session.mission.mission_id,
-      findings: findings.map((f) => ({
-        finding_id: f.finding_id,
-        assertion_text: f.assertion_text,
-        passage_ids: f.passage_ids,
-      })),
+      ...reviewInput,
     },
     signal: request.signal,
     dispatchedAt: request.dispatchedAt,
@@ -226,6 +271,10 @@ export async function runAdmittedResearchEndToEndPass(
   })
 
   findings = applySemanticSupportReview(findings, reviewOutput, now())
+  for (const finding of findings) {
+    throwIfAborted(request.signal, 'semantic judgment persistence')
+    await request.store.appendFinding(ctx, finding)
+  }
 
   const synthesizeOutput = await invokeModelPhase(request.store, ctx, request.model, {
     operationId: request.synthesizeOperationId,
@@ -245,6 +294,7 @@ export async function runAdmittedResearchEndToEndPass(
     now,
   })
 
+  throwIfAborted(request.signal, 'terminal report')
   const report = buildSynthesizedResearchReport({
     mission: request.session.mission,
     plan: activePlan,

@@ -21,7 +21,7 @@ export class GovernedSourceAccessPort implements SourceAccessPort {
   private readonly fetchPort: FetchSourceAccessPort
 
   constructor(private readonly options: GovernedSourceAccessPortOptions) {
-    this.fetchPort = new FetchSourceAccessPort(options)
+    this.fetchPort = new FetchSourceAccessPort({ ...options, mission: options.mission })
   }
 
   search(request: SourceSearchRequest): Promise<SourceSearchResult> {

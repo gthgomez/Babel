@@ -10,6 +10,8 @@ import {
   buildPlanRevisionFromPlanQuestions,
   missionRequirementsPayload,
 } from './planFromModelOutput.js'
+import { settleModelOperation } from './settleModelOperation.js'
+import { unknownUsageSettlement } from './settleExternalOperation.js'
 
 export interface AdmittedPlanningSession {
   mission: ResearchMissionV2
@@ -41,68 +43,6 @@ export interface PlanningIterationResult {
   planRevisionId: string
   plannedQuestionCount: number
   modelResult: ResearchModelInvocationResult
-}
-
-async function settleOperation(
-  store: ResearchStore,
-  ctx: MissionWriteContext,
-  missionId: string,
-  operationId: string,
-  attemptId: string,
-  modelResult: ResearchModelInvocationResult,
-  completedAt: string,
-): Promise<void> {
-  const usage =
-    modelResult.status === 'ok'
-      ? modelResult.receipt.usage_settlement
-      : modelResult.status === 'failed' || modelResult.status === 'cancelled' || modelResult.status === 'uncertain'
-        ? modelResult.usageSettlement
-        : undefined
-
-  if (modelResult.status === 'ok') {
-    await store.appendExternalOperationCompleted(ctx, {
-      mission_id: missionId,
-      operation_id: operationId,
-      attempt_id: attemptId,
-      completed_at: completedAt,
-      settlement: 'succeeded',
-      usage_settlement: usage,
-    })
-    return
-  }
-  if (modelResult.status === 'cancelled') {
-    await store.appendExternalOperationCompleted(ctx, {
-      mission_id: missionId,
-      operation_id: operationId,
-      attempt_id: attemptId,
-      completed_at: completedAt,
-      settlement: 'cancelled',
-      usage_settlement: usage,
-    })
-    return
-  }
-  if (modelResult.status === 'uncertain') {
-    await store.appendExternalOperationCompleted(ctx, {
-      mission_id: missionId,
-      operation_id: operationId,
-      attempt_id: attemptId,
-      completed_at: completedAt,
-      settlement: 'uncertain',
-      usage_settlement: usage,
-      message: modelResult.message,
-    })
-    return
-  }
-  await store.appendExternalOperationCompleted(ctx, {
-    mission_id: missionId,
-    operation_id: operationId,
-    attempt_id: attemptId,
-    completed_at: completedAt,
-    settlement: 'failed',
-    usage_settlement: usage,
-    failure_category: modelResult.failureCategory,
-    message: modelResult.message,
-  })
 }
 
 /**
@@ -171,9 +111,9 @@ export async function runAdmittedPlanningIteration(
       message: request.signal.aborted
         ? `model invoke rejected during cancellation: ${message}`
         : message,
-      usageSettlement: { attempt_id: request.modelAttemptId, cost: { status: 'unknown' } },
+      usageSettlement: unknownUsageSettlement(request.modelAttemptId),
     }
-    await settleOperation(
+    await settleModelOperation(
       request.store,
       ctx,
       ctx.mission_id,
@@ -186,7 +126,7 @@ export async function runAdmittedPlanningIteration(
   }
 
   if (request.signal.aborted) {
-    await settleOperation(
+    await settleModelOperation(
       request.store,
       ctx,
       ctx.mission_id,
@@ -195,11 +135,14 @@ export async function runAdmittedPlanningIteration(
       {
         status: 'cancelled',
         operationId: request.modelOperationId,
-        usageSettlement: modelResult.status === 'ok'
-          ? modelResult.receipt.usage_settlement
-          : modelResult.status === 'failed' || modelResult.status === 'cancelled' || modelResult.status === 'uncertain'
-            ? modelResult.usageSettlement
-            : { attempt_id: request.modelAttemptId, cost: { status: 'unknown' } },
+        usageSettlement:
+          modelResult.status === 'ok'
+            ? modelResult.receipt.usage_settlement
+            : modelResult.status === 'failed' ||
+                modelResult.status === 'cancelled' ||
+                modelResult.status === 'uncertain'
+              ? modelResult.usageSettlement
+              : unknownUsageSettlement(request.modelAttemptId),
       },
       now(),
     )
@@ -207,7 +150,7 @@ export async function runAdmittedPlanningIteration(
   }
 
   if (modelResult.status === 'cancelled') {
-    await settleOperation(
+    await settleModelOperation(
       request.store,
       ctx,
       ctx.mission_id,
@@ -220,7 +163,7 @@ export async function runAdmittedPlanningIteration(
   }
 
   if (modelResult.status === 'uncertain') {
-    await settleOperation(
+    await settleModelOperation(
       request.store,
       ctx,
       ctx.mission_id,
@@ -233,7 +176,7 @@ export async function runAdmittedPlanningIteration(
   }
 
   if (modelResult.status === 'failed') {
-    await settleOperation(
+    await settleModelOperation(
       request.store,
       ctx,
       ctx.mission_id,
@@ -259,7 +202,7 @@ export async function runAdmittedPlanningIteration(
     plan_revision_id: planRevision.plan_revision_id,
   }
   await request.store.appendModelReceipt(evidenceCtx, modelResult.receipt)
-  await settleOperation(
+  await settleModelOperation(
     request.store,
     evidenceCtx,
     ctx.mission_id,

@@ -42,28 +42,45 @@ export function findingsFromExtractModelOutput(params: {
   })
 }
 
+const SEMANTIC_REVIEWER = 'research-v2-semantic-review'
+const SEMANTIC_REVIEWER_VERSION = '0.1.0-offline'
+
 export function applySemanticSupportReview(
   findings: FindingRecord[],
   modelOutput: Record<string, unknown>,
   reviewedAt: string,
 ): FindingRecord[] {
   const parsed = SemanticSupportReviewOutputSchema.parse(modelOutput)
-  const byId = new Map(findings.map((f) => [f.finding_id, f]))
+  const byId = new Map(findings.map((f) => [f.finding_id, { ...f }]))
+  const judgedIds = new Set<string>()
   for (const judgment of parsed.judgments) {
     const finding = byId.get(judgment.finding_id)
     if (!finding) {
       throw new Error(`semantic review references unknown finding ${judgment.finding_id}`)
     }
+    judgedIds.add(judgment.finding_id)
     finding.semantic_support = {
       status: judgment.status,
-      reviewer: 'research-v2-semantic-review',
-      reviewer_version: '0.1.0-offline',
+      reviewer: SEMANTIC_REVIEWER,
+      reviewer_version: SEMANTIC_REVIEWER_VERSION,
       rationale: judgment.rationale,
       reviewed_at: reviewedAt,
     }
+    finding.revised_at = reviewedAt
     if (judgment.status === 'contradicted') {
       finding.conflicting_finding_ids = finding.conflicting_finding_ids ?? []
     }
+  }
+  for (const finding of byId.values()) {
+    if (judgedIds.has(finding.finding_id)) continue
+    finding.semantic_support = {
+      status: 'not_checked',
+      reviewer: SEMANTIC_REVIEWER,
+      reviewer_version: SEMANTIC_REVIEWER_VERSION,
+      rationale: 'semantic review omitted an explicit judgment for this finding',
+      reviewed_at: reviewedAt,
+    }
+    finding.revised_at = reviewedAt
   }
   return [...byId.values()]
 }

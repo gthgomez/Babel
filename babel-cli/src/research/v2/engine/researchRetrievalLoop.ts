@@ -141,6 +141,23 @@ export async function runAdmittedRetrievalIteration(
     )
     throw new Error('source discover cancelled during retrieval iteration')
   }
+  if (discover.status === 'ok' && discover.operationId !== request.searchOperationId) {
+    await settleExternalOperation(
+      request.store,
+      ctx,
+      ctx.mission_id,
+      request.searchOperationId,
+      request.searchAttemptId,
+      {
+        settlement: 'failed',
+        failureCategory: 'contract_violation',
+        message: 'discover operationId does not match admitted search operation',
+      },
+      now(),
+    )
+    throw new Error('discover operationId does not match admitted search operation')
+  }
+
   if (discover.status === 'failed') {
     await settleExternalOperation(
       request.store,
@@ -292,10 +309,13 @@ export async function runAdmittedRetrievalIteration(
   }
 
   await request.store.appendSource(ctx, candidate)
+  throwIfAborted(request.signal, 'source revision persistence')
   await request.store.appendSourceRevision(ctx, revision)
   for (const passage of passages) {
+    throwIfAborted(request.signal, 'passage persistence')
     await request.store.appendPassage(ctx, passage)
   }
+  throwIfAborted(request.signal, 'fetch success settlement')
 
   await settleExternalOperation(
     request.store,

@@ -147,6 +147,47 @@ describe('research retrieval loop repairs', () => {
     assert.equal(completion?.usage_settlement?.cost?.status, 'unknown')
   })
 
+  it('does not fetch when discover operationId mismatches search operation', async () => {
+    const store = new InMemoryResearchStore()
+    const session = await seedSession(store)
+    let readCalls = 0
+    const adapter: SourceAdapter = {
+      adapterId: 'bad-discover-op',
+      supportedKinds: ['repository_file'],
+      async discover(request) {
+        return {
+          operationId: 'wrong-discover-op',
+          status: 'ok',
+          candidates: [technicalRepositoryCorpusSource],
+        }
+      },
+      async read() {
+        readCalls += 1
+        throw new Error('read should not run')
+      },
+    }
+    await assert.rejects(() =>
+      runAdmittedRetrievalIteration({
+        session,
+        store,
+        access: new FakeSourceAccessPort([]),
+        adapter,
+        activePlan: examplePlanRevisionFixture,
+        discoverQuery: 'x',
+        searchOperationId: 'discover-bind-search',
+        searchAttemptId: 'discover-bind-search-att',
+        fetchOperationId: 'discover-bind-fetch',
+        fetchAttemptId: 'discover-bind-fetch-att',
+        dispatchedAt: FIXED_NOW,
+        signal: new AbortController().signal,
+        now: () => FIXED_NOW,
+      }),
+    )
+    assert.equal(readCalls, 0)
+    const completion = completionFor(await store.listEvents(session.mission.mission_id), 'discover-bind-search')
+    assert.equal(completion?.settlement, 'failed')
+  })
+
   it('does not append evidence when read operationId mismatches fetch operation', async () => {
     const store = new InMemoryResearchStore()
     const session = await seedSession(store)

@@ -8,7 +8,12 @@ import type {
   SourceSearchRequest,
   SourceSearchResult,
 } from '../ports/sourceAccessPort.js'
+import type { ResearchMissionV2 } from '../contracts/mission.js'
 import { AdmittedNetworkPolicyError, admittedHttpGet, type AdmittedHttpGetResult } from './admittedHttpGet.js'
+import {
+  validateMissionFetchAdmission,
+  validateRedirectChainForMission,
+} from './missionSourceAdmission.js'
 
 export type AdmittedHttpGetFn = (params: {
   url: string
@@ -20,6 +25,8 @@ export interface FetchSourceAccessPortOptions {
   /** Production path: governed network GET. Tests inject a stub instead of live HTTP. */
   admittedGet?: AdmittedHttpGetFn
   maxAdmittedBytes?: number
+  /** When set, enforce mission source classes, pins, and redirect-hop domain policy before dispatch. */
+  mission?: ResearchMissionV2
 }
 
 const DEFAULT_MAX_ADMITTED_BYTES = 200_000
@@ -101,6 +108,18 @@ export class FetchSourceAccessPort implements SourceAccessPort {
         message: 'source has no observed URL',
       }
     }
+    if (this.options.mission) {
+      const denied = validateMissionFetchAdmission(request.source, this.options.mission)
+      if (denied) {
+        return {
+          operationId: request.operationId,
+          status: 'failed',
+          failureCategory:
+            denied.failureCategory === 'pin_binding_failed' ? 'policy_denied' : denied.failureCategory,
+          message: denied.message,
+        }
+      }
+    }
     const limit = this.options.maxAdmittedBytes ?? DEFAULT_MAX_ADMITTED_BYTES
     try {
       const response = await this.admittedGet({
@@ -110,6 +129,21 @@ export class FetchSourceAccessPort implements SourceAccessPort {
       })
       if (request.signal.aborted) {
         return { operationId: request.operationId, status: 'cancelled' }
+      }
+      if (this.options.mission) {
+        const redirectViolation = validateRedirectChainForMission(
+          response.redirectChain,
+          request.source,
+          this.options.mission,
+        )
+        if (redirectViolation) {
+          return {
+            operationId: request.operationId,
+            status: 'failed',
+            failureCategory: 'policy_denied',
+            message: redirectViolation,
+          }
+        }
       }
       if (!response.ok) {
         return {
