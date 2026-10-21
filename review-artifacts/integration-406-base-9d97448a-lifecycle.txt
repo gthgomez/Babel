@@ -1,0 +1,16 @@
+a_checkpoint=9d97448a20045b2f4eec7b6f06bac9a533fc5424
+a_prior_checkpoint=60a0c6451985f5e6a787e606fde6b5706c649b3c
+integration_head=(see git after commit)
+merge_note=60697abf merge 9d97448a; B probe esm isolation kept fail-closed (--ours)
+
+linux_staged_native_proof=accepted at cc99a5d7 — not re-run this slice
+
+offline_reciprocal_tap=integration-406-reciprocal-9d97448a.tap.txt
+lifecycle_reciprocal=B-owned generalAdapterLifecycleReciprocal.integration.test.ts (2 tests)
+  - external cancel watcher + finalize path (not manual terminal)
+  - resume + complete report with general injected transport/adapters
+  - continuation cancel with distinct plan attempt ids
+
+a_owned_watchpoint=runResearchV2MissionWithOwnerSession still uses technical injectedOfflineAccess for all profiles; B lifecycle uses runGeneralOfflinePassOnOwner with GeneralProfileIntegrationAccessPort
+
+live_model=OpenRouter only when live; this slice injected only

@@ -1,0 +1,121 @@
+TAP version 13
+# Subtest: general adapter engine reciprocal (\#406 integration base, offline)
+    # Subtest: createCombinedResearchRegistries registers B catalog adapters
+    ok 1 - createCombinedResearchRegistries registers B catalog adapters
+      ---
+      duration_ms: 1.161473
+      type: 'test'
+      ...
+    # Subtest: production discovery uses search-backed web adapter (not document)
+    ok 2 - production discovery uses search-backed web adapter (not document)
+      ---
+      duration_ms: 3.821676
+      type: 'test'
+      ...
+    # Subtest: runAdmittedRetrievalIteration: search → web discover → HTML read → persisted passages
+    ok 3 - runAdmittedRetrievalIteration: search → web discover → HTML read → persisted passages
+      ---
+      duration_ms: 5.21758
+      type: 'test'
+      ...
+    # Subtest: runAdmittedRetrievalIteration: document candidate resolves to PDF read + persisted page passages
+    ok 4 - runAdmittedRetrievalIteration: document candidate resolves to PDF read + persisted page passages
+      ---
+      duration_ms: 994.09578
+      type: 'test'
+      ...
+    # Subtest: document adapter discover remains unsupported through retrieval loop
+    ok 5 - document adapter discover remains unsupported through retrieval loop
+      ---
+      duration_ms: 1.27347
+      type: 'test'
+      ...
+    # Subtest: runAdmittedRetrievalIteration: cancelled discover settles without persisting passages
+    ok 6 - runAdmittedRetrievalIteration: cancelled discover settles without persisting passages
+      ---
+      duration_ms: 0.825381
+      type: 'test'
+      ...
+    1..6
+ok 1 - general adapter engine reciprocal (\#406 integration base, offline)
+  ---
+  duration_ms: 1007.292922
+  type: 'suite'
+  ...
+# Subtest: general adapter lifecycle reciprocal (\#406 9d97448a, durable store, injected)
+    # Subtest: owner watcher cancel → close/inspect → resume → new engine report (not manual terminal)
+    ok 1 - owner watcher cancel → close/inspect → resume → new engine report (not manual terminal)
+      ---
+      duration_ms: 82.417881
+      type: 'test'
+      ...
+    # Subtest: resume continuation: cancel during pending inference uses distinct attempt ids
+    ok 2 - resume continuation: cancel during pending inference uses distinct attempt ids
+      ---
+      duration_ms: 119.024913
+      type: 'test'
+      ...
+    1..2
+ok 2 - general adapter lifecycle reciprocal (\#406 9d97448a, durable store, injected)
+  ---
+  duration_ms: 202.181175
+  type: 'suite'
+  ...
+# Subtest: general adapter reciprocal integration (B80 catalog, offline)
+    # Subtest: registers catalog factories under bare adapterId (A registry contract)
+    ok 1 - registers catalog factories under bare adapterId (A registry contract)
+      ---
+      duration_ms: 0.965999
+      type: 'test'
+      ...
+    # Subtest: discover → document not_supported without port search
+    ok 2 - discover → document not_supported without port search
+      ---
+      duration_ms: 0.27872
+      type: 'test'
+      ...
+    # Subtest: discover → web uses search-backed production path (\#406)
+    ok 3 - discover → web uses search-backed production path (\#406)
+      ---
+      duration_ms: 0.213467
+      type: 'test'
+      ...
+    # Subtest: fetch → read: G-DEV-01 HTML through registered web adapter
+    ok 4 - fetch → read: G-DEV-01 HTML through registered web adapter
+      ---
+      duration_ms: 3.404853
+      type: 'test'
+      ...
+    # Subtest: fetch → read: two-page PDF through registered document adapter
+    ok 5 - fetch → read: two-page PDF through registered document adapter
+      ---
+      duration_ms: 958.041167
+      type: 'test'
+      ...
+    # Subtest: read: post-fetch abort returns cancelled without hanging PDF cleanup
+    ok 6 - read: post-fetch abort returns cancelled without hanging PDF cleanup
+      ---
+      duration_ms: 20.353
+      type: 'test'
+      ...
+    # Subtest: read: stallStage loading abort control rejects with PdfExtractionCancelled (not pdfjs destroy/cleanup evidence)
+    ok 7 - read: stallStage loading abort control rejects with PdfExtractionCancelled (not pdfjs destroy/cleanup evidence)
+      ---
+      duration_ms: 1.605783
+      type: 'test'
+      ...
+    1..7
+ok 3 - general adapter reciprocal integration (B80 catalog, offline)
+  ---
+  duration_ms: 985.768413
+  type: 'suite'
+  ...
+1..3
+# tests 15
+# suites 3
+# pass 15
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 6334.777417
