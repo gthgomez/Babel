@@ -1,0 +1,30 @@
+{
+  "schema": "research-v2-technical-campaign-pins/v1",
+  "recorded_at": "2026-10-21T08:00:00.000Z",
+  "integration_branch": "cursor/research-v2-post-review-settlement-fc31",
+  "babel_repository": {
+    "provider": "github",
+    "full_name": "gthgomez/Babel",
+    "repo_id": "github:gthgomez/Babel",
+    "commit_sha": "e912c2f3320de0b6e1c9ff85b95b0f74d8b5323c",
+    "commit_subject": "fix(research-v2): strict UTF-8 suffix rules; trim only in text decode"
+  },
+  "t_l2_paper": {
+    "canonical_url": "https://arxiv.org/pdf/1706.03762.pdf",
+    "title": "Attention Is All You Need",
+    "arxiv_id": "1706.03762",
+    "observed_content_length_bytes": 2215244,
+    "license_note": "arXiv.org perpetual non-exclusive license to distribute; mission cites PDF URL only."
+  },
+  "reference_repository": {
+    "provider": "github",
+    "full_name": "langchain-ai/langgraph",
+    "repo_id": "github:langchain-ai/langgraph",
+    "commit_sha": "d2c584a238566d2bfd7d28e053a94e3a9af1ffd7",
+    "commit_subject": "pinned for T-L1 architecture comparison (declared selected_repository_refs)"
+  },
+  "profile": {
+    "profile_id": "technical",
+    "profile_version": "0.0.0-checkpoint"
+  }
+}

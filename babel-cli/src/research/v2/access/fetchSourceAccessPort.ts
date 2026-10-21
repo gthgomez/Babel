@@ -51,7 +51,7 @@ export interface FetchSourceAccessPortOptions {
   mission?: ResearchMissionV2
 }
 
-const DEFAULT_MAX_ADMITTED_BYTES = 200_000
+export const DEFAULT_MAX_ADMITTED_BYTES = 200_000
 
 function sha256(bytes: Buffer): string {
   return createHash('sha256').update(bytes).digest('hex')

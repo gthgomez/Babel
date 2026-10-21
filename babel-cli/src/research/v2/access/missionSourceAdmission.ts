@@ -5,6 +5,7 @@ import {
   parsePinnedGithubRawContentUrl,
 } from '../profiles/technical/repositoryFilePinning.js'
 import { parseAdmittedHttpUrl } from './admittedHttpGet.js'
+import { missionPinnedRepositories } from './missionPinnedRepositories.js'
 
 function hostnameAllowed(hostname: string, mission: ResearchMissionV2): boolean {
   const allowed = mission.source_policy.allowed_web_domains
@@ -18,13 +19,21 @@ export function sourceAdmittedForMission(source: SourceRecord, mission: Research
   if (!mission.source_policy.allowed_source_classes.includes(source.kind)) {
     return false
   }
-  if (source.kind === 'repository_file' && mission.pinned_target_repository) {
+  if (source.kind === 'repository_file') {
+    const pins = missionPinnedRepositories(mission)
+    if (pins.length === 0) {
+      return true
+    }
     const repoId = source.canonical_identifiers?.github_repo_id
-    if (repoId && repoId !== mission.pinned_target_repository.repo_id) {
+    const sha = source.canonical_identifiers?.github_commit_sha
+    if (!repoId || !sha) {
       return false
     }
-    const sha = source.canonical_identifiers?.github_commit_sha
-    if (sha && sha !== mission.pinned_target_repository.commit_sha) {
+    const admitted = pins.some(
+      (pin) =>
+        pin.repo_id === repoId && pin.commit_sha.toLowerCase() === sha.toLowerCase(),
+    )
+    if (!admitted) {
       return false
     }
   }

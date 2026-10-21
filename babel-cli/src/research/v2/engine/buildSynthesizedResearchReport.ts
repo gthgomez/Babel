@@ -48,6 +48,7 @@ export function buildSynthesizedResearchReport(params: {
   findings: readonly FindingRecord[]
   modelOutput: Record<string, unknown>
   generatedAt: string
+  additionalLimitations?: readonly string[]
 }): ResearchReportV2 {
   const synthesis = SynthesizeReportOutputSchema.parse(params.modelOutput)
   const verifiedAssertions = buildVerifiedReportAssertions(params.findings)
@@ -73,6 +74,7 @@ export function buildSynthesizedResearchReport(params: {
     coverage_notes:
       'answer_summary lists only semantically supported findings with explicit finding_id bindings; free-form model synthesis is not treated as verified fact.',
     limitations: [
+      ...(params.additionalLimitations ?? []),
       ...(hasInsufficient ? ['semantic_support_insufficient'] : []),
       ...(hasContradiction ? ['semantic_support_contradicted'] : []),
       ...(hasNotChecked ? ['semantic_support_not_checked'] : []),
