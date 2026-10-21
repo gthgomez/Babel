@@ -1,8 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { mkdir } from 'node:fs/promises'
 import type { ResearchMissionV2 } from '../contracts/mission.js'
-import { createGovernedSourceAccessPort } from '../access/governedSourceAccessPort.js'
-import { createMissionProductionSearchProvider } from '../access/createMissionProductionSearchProvider.js'
+import { createProductionGovernedSourceAccessForMission } from '../access/createProductionGovernedSourceAccess.js'
 import type { FetchPinnedRepositoryTree } from '../access/pinnedRepositoryFileSearchProvider.js'
 import { createGovernedSourceAccessForMission } from '../access/createGovernedSourceAccess.js'
 import type { BabelWebSearchTransport } from '../access/babelConfiguredWebSearch.js'
@@ -79,14 +78,10 @@ function productionAccessPort(
   mission: ResearchMissionV2,
   options: Pick<ResearchV2MissionRunOptions, 'webSearchTransport' | 'fetchRepositoryTree'>,
 ) {
-  const searchProvider = createMissionProductionSearchProvider({
+  return createProductionGovernedSourceAccessForMission({
     mission,
     ...(options.webSearchTransport ? { webSearchTransport: options.webSearchTransport } : {}),
     ...(options.fetchRepositoryTree ? { fetchRepositoryTree: options.fetchRepositoryTree } : {}),
-  })
-  return createGovernedSourceAccessPort({
-    mission,
-    searchProvider,
   })
 }
 

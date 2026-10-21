@@ -55,11 +55,16 @@ export type AdmittedHttpGetFn = (params: {
 export interface FetchSourceAccessPortOptions {
   /** Production path: governed network GET. Tests inject a stub instead of live HTTP. */
   admittedGet?: AdmittedHttpGetFn
-  /** Host decoded/decompressed ceiling (intersected with mission document budgets). */
+  /** Host decoded/decompressed ceiling for general/web/repository fetch (not document-policy). */
   maxDecompressedBytes?: number
   /** Injected transport for the default admittedHttpGet wrapper (tests only). */
   dispatchGet?: AdmittedHttpGetDispatch
+  /** General/web/repository wire ceiling; documents use {@link maxDocumentWireBytes} when set. */
   maxAdmittedBytes?: number
+  /** Mission-selected admitted document wire ceiling (intersected with mission budgets). */
+  maxDocumentWireBytes?: number
+  /** Mission-selected admitted document decompressed ceiling (intersected with mission budgets). */
+  maxDocumentDecompressedBytes?: number
   /** When set, enforce mission source classes, pins, and redirect-hop domain policy before dispatch. */
   mission?: ResearchMissionV2
 }
@@ -233,14 +238,20 @@ export class FetchSourceAccessPort implements SourceAccessPort {
         }
       }
     }
-    const hostWireCeiling = this.options.maxAdmittedBytes ?? DEFAULT_MAX_ADMITTED_BYTES
-    const hostDecodedCeiling = this.options.maxDecompressedBytes ?? hostWireCeiling
     const mission = this.options.mission
     const documentPolicy = resolveMissionDocumentPolicyForFetchUrl(
       request.source,
       mission,
       fetchUrl,
     )
+    const defaultHostWire = this.options.maxAdmittedBytes ?? DEFAULT_MAX_ADMITTED_BYTES
+    const defaultHostDecoded = this.options.maxDecompressedBytes ?? defaultHostWire
+    const hostWireCeiling = documentPolicy
+      ? (this.options.maxDocumentWireBytes ?? defaultHostWire)
+      : defaultHostWire
+    const hostDecodedCeiling = documentPolicy
+      ? (this.options.maxDocumentDecompressedBytes ?? defaultHostDecoded)
+      : defaultHostDecoded
     if (documentPolicy) {
       const preDispatchViolation = assertDocumentPolicyFetchUrl(fetchUrl, documentPolicy)
       if (preDispatchViolation) {
