@@ -8,6 +8,7 @@
  */
 
 export const MODEL_TOOL_NAMES = [
+  'read_artifact',
   'read_file',
   'list_dir',
   'semantic_search',
@@ -73,6 +74,7 @@ const MAPPINGS: readonly CanonicalToolMapping[] = [
   { model: 'write_file', executor: 'file_write', aliases: ['write', 'file_write'] },
   { model: 'str_replace', executor: null, aliases: ['replace', 'string_replace'] },
   { model: 'read_range', executor: null, aliases: ['range_read'] },
+  { model: 'read_artifact', executor: null, aliases: [] },
   { model: 'apply_patch', executor: null, aliases: ['patch'] },
   { model: 'run_command', executor: 'shell_exec', aliases: ['shell', 'shell_exec', 'exec'] },
   { model: 'await_command', executor: 'shell_exec', aliases: ['wait_for_command'] },

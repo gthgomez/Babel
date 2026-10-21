@@ -16,6 +16,7 @@
 import type { ToolEffectClass } from '../executor/contracts.js';
 import {
   findInterruptedEffects,
+  interpretCompensations,
   loadEffectLedgerWithDiagnostics,
   reconcileInterruptedEffect,
   type EffectReconciliationDecision,
@@ -283,6 +284,17 @@ export function restoreFromCommittedState(input: RestoreInput): RestoreSession {
     const ledger = loadEffectLedgerWithDiagnostics(input.runDir);
     ledgerCorruptLines = ledger.corruptLines;
     ledgerTornTail = ledger.tornFinalLine;
+    for (const { originalOperationId, compensation, state } of interpretCompensations(ledger.records)) {
+      // Compensation supersedes an admission's completion claim for the
+      // original effect, while retaining both immutable ledger identities.
+      const priorIndex = operations.findIndex(item => item.operationId === originalOperationId);
+      if (priorIndex >= 0) operations.splice(priorIndex, 1);
+      operations.push({ operationId: originalOperationId, effectClass: compensation.effectClass,
+        compensationState: state,
+        evidenceRefs: [`effect:${originalOperationId}`, `effect:${compensation.operationId}`] });
+      knownOperationIds.add(originalOperationId);
+      knownOperationIds.add(compensation.operationId);
+    }
     for (const effect of findInterruptedEffects(ledger.records)) {
       if (knownOperationIds.has(effect.operationId)) continue;
       operations.push(ledgerEffectEvidence(effect, currentImageHashes));

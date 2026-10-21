@@ -204,7 +204,8 @@ function withFixture(
     engineInternals.taskAllowance = engineInternals.taskAllowanceOwner.createTaskAllowance();
   }
   const pc = (engine as unknown as { progressController: ProgressProbe }).progressController;
-  const ctx = { agentId: 'test', runId: 'test', runDir: root, babelRoot: root, projectRoot: root };
+  const ctx = { agentId: 'test', runId: 'test', runDir: root, babelRoot: root, projectRoot: root,
+    signal: engine['abortController'].signal };
 
   return {
     h: {
@@ -376,6 +377,34 @@ test('owner replacement while execution is pending: late success and failure can
     } finally {
       cleanup();
     }
+  }
+});
+
+test('cancellation while an owned probe is pending fences late success and a fresh task probes independently', async () => {
+  const gate = deferred<ToolResult>();
+  const { h, cleanup } = withFixture('babel-cap-cancel-pending-', async () => await gate.promise);
+  let pending: ReturnType<typeof h.dispatch> | undefined;
+  try {
+    degrade(h.pc);
+    pending = h.dispatch(0);
+    await waitFor(() => h.calls.length === 1, 'owned probe to enter executor');
+    h.engine.cancel();
+    const before = h.pc.getCapabilityState(CAPABILITY);
+    gate.resolve(ok());
+    await pending;
+    assert.equal(h.pc.getCapabilityState(CAPABILITY), before, 'late success after cancellation cannot certify availability');
+    const fresh = withFixture('babel-cap-cancel-fresh-', async () => ok());
+    try {
+      degrade(fresh.h.pc);
+      await fresh.h.dispatch(0);
+      assert.equal(fresh.h.calls.length, 1);
+      assert.equal(fresh.h.pc.getCapabilityState(CAPABILITY), 'AVAILABLE');
+      assert.equal(h.calls.length, 1, 'fresh task cannot replay cancelled owner work');
+    } finally { fresh.cleanup(); }
+  } finally {
+    gate.resolve(ok());
+    await pending;
+    cleanup();
   }
 });
 

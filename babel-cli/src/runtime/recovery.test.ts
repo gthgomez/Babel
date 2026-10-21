@@ -16,7 +16,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { openAdmissionStore, type AdmissionStore, type AdmissionStoreOptions } from './admission.js';
 import { incompleteCompleteness, type CommandDigestInput } from './admissionContracts.js';
 import { ADMISSION_FAULT_HOOK, type AdmissionFaultPoint } from './admissionTestHooks.js';
-import { recordEffectIntent } from '../executor/effectLedger.js';
+import { recordEffectIntent, recordEffectTerminal } from '../executor/effectLedger.js';
 import { classifyInterruption, restoreFromCommittedState, type RestoreInput } from './recovery.js';
 import { RESTORE_REASONS } from './restoreReport.js';
 
@@ -75,6 +75,34 @@ function restore(fixture: Fixture, overrides: Partial<RestoreInput> = {}) {
     threadId: 'thread-1',
     interruptionClass: 'process_restart',
     ...overrides,
+  });
+}
+
+for (const settlement of ['completed', 'failed', 'interrupted'] as const) {
+  test(`cold recovery distinguishes ${settlement} compensation without retrying the original write`, () => {
+    const fixture = makeFixture();
+    try {
+      const original = recordEffectIntent({ runDir: fixture.runDir, sessionId: 'session-1',
+        mutationBatchId: 'batch-1', effectClass: 'reconcilable_mutation', toolName: 'write_file',
+        targetPaths: ['a.txt'], preImageHashes: { 'a.txt': 'before' } });
+      recordEffectTerminal(fixture.runDir, original, { status: 'completed', postImageHashes: { 'a.txt': 'after' } });
+      const compensation = recordEffectIntent({ runDir: fixture.runDir, sessionId: 'session-1',
+        mutationBatchId: original.mutationBatchId, effectClass: 'reconcilable_mutation',
+        toolName: 'apply_patch_compensation', targetPaths: ['a.txt'], preImageHashes: { 'a.txt': 'after' },
+        compensatesOperationId: original.operationId, restorationHashes: { 'a.txt': 'before' } });
+      if (settlement !== 'interrupted') recordEffectTerminal(fixture.runDir, compensation, {
+        status: settlement, ...(settlement === 'completed' ? { postImageHashes: { 'a.txt': 'before' } } : {}),
+      });
+      const restored = restore(fixture, { currentImageHashes: { 'a.txt': 'before' } });
+      try {
+        const operation = restored.report.operations.find(item => item.operationId === original.operationId);
+        assert.ok(operation, 'original operation must surface with compensation history');
+        assert.equal(operation.automaticRetryAllowed, false);
+        assert.ok(operation.reasons.includes(settlement === 'completed' ? 'effect_compensated'
+          : settlement === 'failed' ? 'effect_compensation_failed' : 'effect_compensation_uncertain'));
+        if (settlement !== 'completed') assert.equal(operation.state, 'indeterminate');
+      } finally { restored.close(); }
+    } finally { fixture.cleanup(); }
   });
 }
 

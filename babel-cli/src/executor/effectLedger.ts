@@ -3,6 +3,7 @@ import { appendFileSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, 
 import { dirname, join } from 'node:path'
 
 import type { ToolEffectClass } from './contracts.js'
+import type { EffectParentIdentity } from './effectPathIdentity.js'
 
 /** Durable effect state written before and after a potentially mutating tool. */
 export type EffectLedgerStatus = 'intent' | 'completed' | 'failed' | 'cancelled'
@@ -19,6 +20,13 @@ export interface EffectLedgerRecord {
   targetPaths: string[]
   preImageHashes: Record<string, string>
   intendedDigest?: string
+  /** A new effect restoring an earlier effect; the original history is immutable. */
+  compensatesOperationId?: string
+  /** Expected restored identities, including the canonical missing-path digest. */
+  restorationHashes?: Record<string, string>
+  /** Retained captured entry; recovery must preserve it until reconciliation. */
+  compensationCapturePath?: string
+  targetParentIdentities?: Record<string, EffectParentIdentity>
   status: EffectLedgerStatus
   postImageHashes?: Record<string, string>
   error?: string
@@ -56,6 +64,10 @@ export function recordEffectIntent(input: {
   targetPaths: string[]
   preImageHashes: Record<string, string>
   intendedContent?: string
+  compensatesOperationId?: string
+  restorationHashes?: Record<string, string>
+  compensationCapturePath?: string
+  targetParentIdentities?: Record<string, EffectParentIdentity>
 }): EffectLedgerRecord {
   const now = new Date().toISOString()
   const record: EffectLedgerRecord = {
@@ -69,6 +81,10 @@ export function recordEffectIntent(input: {
     targetPaths: [...input.targetPaths],
     preImageHashes: { ...input.preImageHashes },
     ...(input.intendedContent !== undefined ? { intendedDigest: digest(input.intendedContent) } : {}),
+    ...(input.compensatesOperationId ? { compensatesOperationId: input.compensatesOperationId } : {}),
+    ...(input.restorationHashes ? { restorationHashes: { ...input.restorationHashes } } : {}),
+    ...(input.compensationCapturePath ? { compensationCapturePath: input.compensationCapturePath } : {}),
+    ...(input.targetParentIdentities ? { targetParentIdentities: { ...input.targetParentIdentities } } : {}),
     status: 'intent',
     createdAt: now,
     updatedAt: now,
@@ -204,6 +220,29 @@ export function findInterruptedEffects(records: EffectLedgerRecord[]): EffectLed
   return records.filter((record) => record.status === 'intent' && !terminalIds.has(record.operationId))
 }
 
+/** Cold interpretation of append-only compensation history, never a replay grant. */
+export function interpretCompensations(records: EffectLedgerRecord[]): Array<{
+  originalOperationId: string
+  compensation: EffectLedgerRecord
+  state: 'completed' | 'failed' | 'uncertain'
+}> {
+  const latest = new Map<string, EffectLedgerRecord>()
+  for (const record of records) latest.set(record.operationId, record)
+  const byOriginal = new Map<string, EffectLedgerRecord>()
+  for (const record of latest.values()) {
+    if (record.compensatesOperationId) byOriginal.set(record.compensatesOperationId, record)
+  }
+  return [...byOriginal].map(([originalOperationId, compensation]) => {
+    const original = latest.get(originalOperationId)
+    const expected = compensation.restorationHashes
+    const confirmed = original?.status === 'completed' && compensation.status === 'completed'
+      && expected !== undefined && Object.keys(expected).length > 0
+      && hashesMatch(expected, compensation.postImageHashes ?? {})
+    return { originalOperationId, compensation,
+      state: confirmed ? 'completed' : compensation.status === 'failed' ? 'failed' : 'uncertain' }
+  })
+}
+
 export type EffectReconciliationDecision =
   | 'retry_reconcilable'
   | 'recovered_complete'
@@ -215,6 +254,7 @@ export interface ReconcilableEffect {
   effectClass: ToolEffectClass
   preImageHashes: Record<string, string>
   postImageHashes?: Record<string, string>
+  compensatesOperationId?: string
 }
 
 /**
@@ -229,6 +269,9 @@ export function reconcileInterruptedEffect(
   intent: ReconcilableEffect,
   currentImageHashes: Record<string, string>,
 ): EffectReconciliationDecision {
+  // An interrupted restoration may already have changed bytes. Never replay it
+  // as an ordinary write or declare it settled from the original post-image.
+  if (intent.compensatesOperationId) return 'manual_review'
   if (
     intent.effectClass === 'non_idempotent_local_effect' ||
     intent.effectClass === 'external_side_effect'

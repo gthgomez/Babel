@@ -14,6 +14,7 @@ import childProcess from 'node:child_process';
 import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { PassThrough } from 'node:stream';
 
 import {
   SafeExecutor,
@@ -1092,6 +1093,76 @@ setTimeout(() => {}, 60_000);
       requireReceipt: requirePidReceipt,
     });
     fixture.cleanup();
+  }
+});
+
+test('shellExec never retries a launched supervisor timeout', (t) => {
+  const fixture = makeFixture();
+  const previousProfile = process.env['BABEL_EXECUTION_PROFILE'];
+  process.env['BABEL_EXECUTION_PROFILE'] = 'dev_local';
+  let calls = 0;
+  t.mock.method(childProcess, 'spawnSync', () => {
+    calls++;
+    return { pid: 1, output: ['', SUPERVISOR_LAUNCHED_MARKER, ''], stdout: SUPERVISOR_LAUNCHED_MARKER, stderr: '', status: null, signal: null,
+      error: Object.assign(new Error('spawnSync node ETIMEDOUT'), { code: 'ETIMEDOUT' }) };
+  });
+  syncBuiltinESMExports();
+  try {
+    const result = new SafeExecutor(fixture.projectRoot).shellExec('node timeout.mjs', '.', 1);
+    assertSupervisorTerminatedNotLaunchFailure(result, 'launched sync timeout');
+    assert.equal(calls, 1, 'a runtime timeout must not replay potentially mutating project code');
+  } finally {
+    t.mock.restoreAll(); syncBuiltinESMExports(); fixture.cleanup();
+    if (previousProfile === undefined) delete process.env['BABEL_EXECUTION_PROFILE']; else process.env['BABEL_EXECUTION_PROFILE'] = previousProfile;
+  }
+});
+
+test('shellExecAsync never retries a launched supervisor timeout', async (t) => {
+  const fixture = makeFixture();
+  const previousProfile = process.env['BABEL_EXECUTION_PROFILE'];
+  process.env['BABEL_EXECUTION_PROFILE'] = 'dev_local';
+  let calls = 0;
+  const keepAlive = setInterval(() => {}, 1000);
+  t.mock.method(childProcess, 'spawn', () => {
+    calls++;
+    const child = new childProcess.ChildProcess();
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    t.mock.method(child, 'kill', () => { queueMicrotask(() => child.emit('close', 0)); return true; });
+    queueMicrotask(() => { child.emit('spawn'); child.stdout?.emit('data', SUPERVISOR_LAUNCHED_MARKER); });
+    return child;
+  });
+  syncBuiltinESMExports();
+  try {
+    const result = await new SafeExecutor(fixture.projectRoot).shellExecAsync('node timeout.mjs', '.', 1);
+    assertSupervisorTerminatedNotLaunchFailure(result, 'launched async timeout');
+    assert.equal(calls, 1, 'a runtime timeout must not replay potentially mutating project code');
+  } finally {
+    clearInterval(keepAlive); t.mock.restoreAll(); syncBuiltinESMExports(); fixture.cleanup();
+    if (previousProfile === undefined) delete process.env['BABEL_EXECUTION_PROFILE']; else process.env['BABEL_EXECUTION_PROFILE'] = previousProfile;
+  }
+});
+
+test('shellExec retains retry for a confirmed launch failure before any child starts', (t) => {
+  const fixture = makeFixture();
+  const previousProfile = process.env['BABEL_EXECUTION_PROFILE'];
+  process.env['BABEL_EXECUTION_PROFILE'] = 'dev_local';
+  let calls = 0;
+  t.mock.method(childProcess, 'spawnSync', () => {
+    calls++;
+    return calls === 1
+      ? { pid: 0, output: ['', '', ''], stdout: '', stderr: '', status: null, signal: null, error: Object.assign(new Error('spawn node ENOENT'), { code: 'ENOENT' }) }
+      : { pid: 1, output: ['', 'started once', ''], stdout: 'started once', stderr: '', status: 0, signal: null };
+  });
+  syncBuiltinESMExports();
+  try {
+    const result = new SafeExecutor(fixture.projectRoot).shellExec('node launch.mjs', '.', 5000);
+    assert.equal(result.exit_code, 0);
+    assert.equal(result.stdout, 'started once');
+    assert.equal(calls, 2);
+  } finally {
+    t.mock.restoreAll(); syncBuiltinESMExports(); fixture.cleanup();
+    if (previousProfile === undefined) delete process.env['BABEL_EXECUTION_PROFILE']; else process.env['BABEL_EXECUTION_PROFILE'] = previousProfile;
   }
 });
 

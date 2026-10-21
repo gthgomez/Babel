@@ -19,6 +19,7 @@ import { ensureThread, loadThreadCells, resolveNextTurnId } from '../../services
 import type { HistoryCellRecord } from '../../ui/historyCells/types.js';
 import type { ConversationalRenderer } from '../../ui/waterfall.js';
 import { TurnPersistence } from './turnPersistence.js';
+import { recordInteractiveDiagnostic } from '../../ui/interactiveDiagnostics.js';
 
 export { mapChatEventToTurnStreamEvent };
 
@@ -77,6 +78,20 @@ export class ProtocolTurnSession {
     };
     dispatchProtocolNotification({ method: 'cell.committed', params });
   }
+}
+
+/** Local cancellation remains authoritative when the optional protocol is absent or fails. */
+export function cancelChatEngineTurn(
+  engine: Pick<ChatEngine, 'cancel'>,
+  session: ProtocolTurnSession | null,
+): Promise<void> {
+  engine.cancel();
+  if (!session) return Promise.resolve();
+  return Promise.resolve()
+    .then(() => getProtocolClient().turnCancel({ thread_id: session.threadId }))
+    .then(() => undefined, error => {
+      recordInteractiveDiagnostic('protocol-cancel', error instanceof Error ? error.message : String(error));
+    });
 }
 
 export async function beginProtocolTurn(

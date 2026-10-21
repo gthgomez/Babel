@@ -44,17 +44,7 @@ export function invalidateChatPathReads(
  * Pin BABEL_PROJECT_ROOT for the duration of a tool action (P2.4).
  * SafeExecutor / localTools resolve paths via BABEL_PROJECT_ROOT || cwd.
  */
-export function pinProjectRootEnv(projectRoot: string): () => void {
-  const previous = process.env['BABEL_PROJECT_ROOT'];
-  process.env['BABEL_PROJECT_ROOT'] = projectRoot;
-  return () => {
-    if (previous === undefined) {
-      delete process.env['BABEL_PROJECT_ROOT'];
-    } else {
-      process.env['BABEL_PROJECT_ROOT'] = previous;
-    }
-  };
-}
+export { pinProjectRootEnv } from './projectRootPin.js';
 
 /**
  * Invalidate active verifier ledger receipts and lastVerifierReceipt staleness

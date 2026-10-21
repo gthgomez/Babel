@@ -36,6 +36,14 @@ test('required native rg cannot use the optional unit-lane exclusion', () => {
   assert.equal(reviewedSkip(record, 'win32', 'native-rg', true), null)
 })
 
+test('compensation mode exclusion binds only the POSIX permission test on Windows', () => {
+  const record = { path: 'src/agent/patchCompensation.test.ts', name: 'exclusive restoration preserves POSIX mode despite a restrictive umask', reason: 'POSIX mode/umask semantics are not available on Windows' }
+  assert.ok(reviewedSkip(record, 'win32', 'unit', true))
+  for (const platform of ['linux', 'darwin']) assert.equal(reviewedSkip(record, platform, 'unit', true), null)
+  assert.equal(reviewedSkip(record, 'win32', 'chat-truth', true), null)
+  assert.equal(reviewedSkip({ ...record, name: 'optional run directory keeps retained compensation outside the project and preserves open writers' }, 'win32', 'unit', true), null)
+})
+
 test('local missing-tool or base exceptions never apply in hosted qualification', () => {
   for (const record of [
     {path: 'src/services/reviewControlPlaneParity.test.ts', name: 'immutable base preserves a supported V3 contract and rejects wrong-head and BLOCK evidence during migration', reason: 'Immutable trusted base unavailable for local qualification'},
