@@ -5,6 +5,10 @@ import type { PlanObligationCoverageRecord } from '../contracts/planObligationCo
 import type { SourceRecord, SourceRevision } from '../contracts/sources.js'
 import { collectObligationCoverageJudgmentIntegrityIssues } from './obligationCoverageJudgmentIntegrity.js'
 import { obligationsForQuestion } from './planCoverageObligations.js'
+import {
+  isCriterionBasedPlanObligation,
+  slotHasAdmittedFetch,
+} from './sourceAttributionContext.js'
 
 export type RevisionProvenanceIndex = Map<
   string,
@@ -58,6 +62,15 @@ export function obligationCitationStructuralCompleteness(
       (n) => n.startsWith('inline_text_truncated:') || n.startsWith('excerpt_truncated'),
     ) === true
   const revisionTruncated = provenance?.revision.completeness === 'truncated'
+  if (isCriterionBasedPlanObligation(obligation)) {
+    if (passageTruncated && passage.text_ref.text.trim().length < 24) {
+      return false
+    }
+    if (revisionTruncated && passage.text_ref.text.trim().length < 24) {
+      return false
+    }
+    return passage.text_ref.text.trim().length > 0
+  }
   if (obligation.aspect === 'technical_effect' && (passageTruncated || revisionTruncated)) {
     return false
   }
@@ -143,6 +156,13 @@ export function assessObligationCoverageHostBound(
       return obligationCitationStructuralCompleteness(p, obligation, provenance)
     })
     if (!structurallyComplete) {
+      missingObligationIds.push(obligation.obligation_id)
+      continue
+    }
+    if (
+      isCriterionBasedPlanObligation(obligation) &&
+      !slotHasAdmittedFetch(obligation.source_slot, params.provenanceIndex)
+    ) {
       missingObligationIds.push(obligation.obligation_id)
     }
   }

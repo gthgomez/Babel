@@ -340,6 +340,7 @@ export async function runAdmittedResearchEndToEndPass(
   const reviewInput = buildSemanticSupportReviewInput(findings, passages, activePlan, {
     sources: reviewSources,
     sourceRevisions: reviewRevisions,
+    mission: request.session.mission,
   })
   const reviewOutput = await invokeModelPhase(request.store, ctx, request.model, {
     operationId: request.reviewOperationId,

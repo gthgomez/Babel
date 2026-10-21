@@ -1,6 +1,7 @@
 import type { PassageRecord } from '../contracts/passages.js'
 import type { PlanCoverageObligation, QuestionRecord } from '../contracts/plan.js'
 import type { SourceRecord, SourceRevision } from '../contracts/sources.js'
+import { isCriterionBasedPlanObligation } from './sourceAttributionContext.js'
 
 const MAX_AGE_OR_TTL_SUBSTANCE = /\bmax-age\b|\bmax age\b|s-maxage|\bttl\b/i
 const AUTHENTICATION_MECHANISM_SUBSTANCE =
@@ -55,6 +56,19 @@ export function passageSupportsObligationCompleteness(
   obligation: PlanCoverageObligation,
   passage?: PassageRecord,
 ): boolean {
+  if (isCriterionBasedPlanObligation(obligation)) {
+    if (text.trim().length === 0) {
+      return false
+    }
+    const truncated =
+      passage?.extraction_notes?.some(
+        (n) => n.startsWith('inline_text_truncated:') || n.startsWith('excerpt_truncated'),
+      ) === true
+    if (truncated && text.trim().length < 24) {
+      return false
+    }
+    return true
+  }
   const truncated =
     passage?.extraction_notes?.some(
       (n) => n.startsWith('inline_text_truncated:') || n.startsWith('excerpt_truncated'),

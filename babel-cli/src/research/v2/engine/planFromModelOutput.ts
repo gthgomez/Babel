@@ -50,7 +50,9 @@ export function buildPlanRevisionFromPlanQuestions(params: {
         question_id: `q-${params.planRevisionId}-${index + 1}`,
         text: question.text,
         importance: question.importance,
-        evidence_requirement: 'Host-admitted plan question; refine locators during retrieval',
+        evidence_requirement:
+          question.evidence_requirement?.trim() ||
+          'Host-admitted plan question; refine locators during retrieval',
         status: 'open',
         ...(obligations.length > 0 ? { coverage_obligations: obligations } : {}),
       }

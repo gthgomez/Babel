@@ -26,11 +26,42 @@ export const PlanCoverageObligationSchema = z
   .object({
     obligation_id: z.string().min(1),
     source_slot: z.string().min(1),
-    aspect: PlanCoverageAspectSchema,
+    /** Generic per-question criterion (preferred over closed aspect taxonomy). */
+    criterion_id: z.string().min(1).optional(),
+    /** Natural-language evidence requirement for semantic review of this slot/criterion. */
+    evidence_requirement: z.string().min(1).optional(),
+    /** Legacy aspect routing; omitted when criterion_id is set. */
+    aspect: PlanCoverageAspectSchema.optional(),
     technical_effect: PlanCoverageTechnicalEffectSchema.optional(),
   })
   .strict()
   .superRefine((value, ctx) => {
+    const criterionBased =
+      value.criterion_id !== undefined && value.criterion_id.length > 0
+    if (criterionBased) {
+      if (!value.evidence_requirement) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'criterion_id requires evidence_requirement on the obligation',
+          path: ['evidence_requirement'],
+        })
+      }
+      if (value.aspect !== undefined || value.technical_effect !== undefined) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'criterion-based obligations must not set aspect or technical_effect',
+        })
+      }
+      return
+    }
+    if (!value.aspect) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'coverage obligation requires criterion_id or legacy aspect',
+        path: ['aspect'],
+      })
+      return
+    }
     if (value.aspect === 'technical_effect' && !value.technical_effect) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,

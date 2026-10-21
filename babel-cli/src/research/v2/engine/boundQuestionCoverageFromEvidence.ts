@@ -48,10 +48,15 @@ export function citedPassageEvidenceSignals(
   } catch {
     web_domain = undefined
   }
+  const fetchedUrl = provenance?.source.observed_urls[0]
+  const fetchedTitle =
+    typeof provenance?.source.title === 'string' ? provenance.source.title : undefined
   return {
     passage_id: passage.passage_id,
     source_revision_id: passage.source_revision_id,
     coverage_source_slot: provenance?.source.coverage_source_slot,
+    fetched_url: fetchedUrl,
+    fetched_title: fetchedTitle,
     web_domain,
     revision_completeness: provenance?.revision.completeness,
     passage_truncated,

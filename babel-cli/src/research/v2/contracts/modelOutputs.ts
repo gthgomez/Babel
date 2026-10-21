@@ -17,6 +17,7 @@ export const PlanQuestionsOutputSchema = z
         .object({
           text: z.string().min(1),
           importance: z.enum(['critical', 'high', 'medium', 'low']),
+          evidence_requirement: z.string().min(1).optional(),
           coverage_obligations: z.array(PlanCoverageObligationSchema).optional(),
         })
         .strict(),
