@@ -276,7 +276,8 @@ export async function runAdmittedResearchEndToEndPass(
         now,
       })
 
-  const composedRetrievalLimitations = composed && 'limitations' in retrieved ? retrieved.limitations : []
+  const composedRetrievalLimitations =
+    'limitations' in retrieved && Array.isArray(retrieved.limitations) ? retrieved.limitations : []
 
   const ctx = retrieved.writeContext
   const passageEvents = (await request.store.listEvents(request.session.mission.mission_id)).filter(

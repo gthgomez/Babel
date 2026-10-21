@@ -8,6 +8,7 @@ import { parseAdmittedHttpUrl } from './admittedHttpGet.js'
 import { documentSourceMatchesSelectedRef } from './missionDocumentAdmission.js'
 import { missionPinnedRepositories } from './missionPinnedRepositories.js'
 import { hostnameAllowed } from './missionDocumentAdmission.js'
+import { sourceMatchesSelectedWebRef } from './missionWebRetrievalSelection.js'
 
 /** Mission admission for a source record (search index filtering and pre-fetch gate). */
 export function sourceAdmittedForMission(source: SourceRecord, mission: ResearchMissionV2): boolean {
@@ -40,6 +41,12 @@ export function sourceAdmittedForMission(source: SourceRecord, mission: Research
       if (!hostnameAllowed(parsed.hostname, mission)) return false
     } catch {
       return false
+    }
+    const selectedWeb = mission.source_policy.selected_web_refs ?? []
+    if (selectedWeb.length > 0) {
+      if (!selectedWeb.some((ref) => sourceMatchesSelectedWebRef(source, ref))) {
+        return false
+      }
     }
   }
   if (source.kind === 'document' || source.kind === 'paper') {

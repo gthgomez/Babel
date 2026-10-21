@@ -64,6 +64,8 @@ export const MissionSourcePolicyV2Schema = z
     allowed_source_classes: z.array(SourceClassSchema).min(1),
     /** Host-enforced domain patterns; adapters cannot expand. */
     allowed_web_domains: z.array(z.string().min(1)).optional(),
+    /** Mission-selected web page URLs to retrieve (general profile multi-source comparisons). */
+    selected_web_refs: z.array(z.string().url()).optional(),
     selected_document_refs: z.array(z.string().min(1)).optional(),
     admitted_document_sources: z.array(MissionAdmittedDocumentSourceSchema).optional(),
     selected_repository_refs: z.array(PinnedRepositoryRefSchema).optional(),

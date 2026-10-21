@@ -23,6 +23,8 @@ import {
   resolveReadAdapterForSource,
   type MissionRegistryBundle,
 } from '../registry/missionAdapterResolution.js'
+import { resolveMissionWebRetrievalCandidates } from '../access/missionWebRetrievalSelection.js'
+import { slotOperationSuffix } from './technicalRetrievalComposition.js'
 
 export interface RetrievalIterationRequest {
   session: AdmittedPlanningSession
@@ -53,11 +55,30 @@ export interface RetrievalIterationResult {
   handle: ResearchStoreMissionHandle
   writeContext: MissionWriteContext
   source: SourceRecord
+  sources: SourceRecord[]
   revisionId: string
   passageIds: string[]
+  limitations: string[]
   searchOperationId: string
   fetchOperationId: string
   terminalReportEmitted: boolean
+}
+
+function resolveSlotFetchOperationIds(
+  request: RetrievalIterationRequest,
+  slotId: string,
+  multiWebRetrieval: boolean,
+): { fetchOperationId: string; fetchAttemptId: string } {
+  if (!multiWebRetrieval) {
+    return {
+      fetchOperationId: request.fetchOperationId,
+      fetchAttemptId: request.fetchAttemptId,
+    }
+  }
+  return {
+    fetchOperationId: slotOperationSuffix(request.fetchOperationId, slotId),
+    fetchAttemptId: slotOperationSuffix(request.fetchAttemptId, slotId),
+  }
 }
 
 function assertActivePlan(session: AdmittedPlanningSession): string {
@@ -233,8 +254,14 @@ export async function runAdmittedRetrievalIteration(
     throw RetrievalIterationFailedAfterAcquireError.withMessage(acquired, ctx, discover.message)
   }
 
-  const candidate = discover.candidates[0]
-  if (!candidate) {
+  const resolution = resolveMissionWebRetrievalCandidates(
+    discover.candidates,
+    request.session.mission,
+  )
+  const multiWebRetrieval = (request.session.mission.source_policy.selected_web_refs ?? []).length > 0
+  const limitations = [...resolution.limitations]
+
+  if (resolution.slots.length === 0) {
     await settleExternalOperation(
       request.store,
       ctx,
@@ -244,23 +271,16 @@ export async function runAdmittedRetrievalIteration(
       {
         settlement: 'failed',
         failureCategory: 'no_candidates',
-        message: 'discover returned no source candidates',
+        message: 'discover returned no admitted source candidates',
       },
       now(),
     )
     throw RetrievalIterationFailedAfterAcquireError.withMessage(
       acquired,
       ctx,
-      'discover returned no source candidates',
+      'discover returned no admitted source candidates',
     )
   }
-
-  const readAdapter =
-    request.readAdapter ??
-    (request.registries
-      ? resolveReadAdapterForSource(candidate, request.registries)
-      : undefined) ??
-    request.adapter
 
   throwIfAborted(request.signal, 'source_search settlement')
 
@@ -274,165 +294,221 @@ export async function runAdmittedRetrievalIteration(
     now(),
   )
 
-  await request.store.appendExternalOperationIntent(ctx, {
-    mission_id: ctx.mission_id,
-    operation_id: request.fetchOperationId,
-    attempt_id: request.fetchAttemptId,
-    operation_kind: 'source_fetch',
-    dispatched_at: request.dispatchedAt,
-    idempotency_key: request.fetchOperationId,
-  })
+  const persistedSources: SourceRecord[] = []
+  const allPassages: PassageRecord[] = []
+  let firstRevisionId = ''
 
-  let read
-  try {
-    read = await readAdapter.read(
-      {
-        operationId: request.fetchOperationId,
-        source: candidate,
-        signal: request.signal,
-      },
-      request.access,
+  for (const slot of resolution.slots) {
+    throwIfAborted(request.signal, `source_fetch ${slot.slotId}`)
+    const candidate = slot.candidate
+    const { fetchOperationId, fetchAttemptId } = resolveSlotFetchOperationIds(
+      request,
+      slot.slotId,
+      multiWebRetrieval,
     )
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err)
+
+    const readAdapter =
+      request.readAdapter ??
+      (request.registries
+        ? resolveReadAdapterForSource(candidate, request.registries)
+        : undefined) ??
+      request.adapter
+
+    await request.store.appendExternalOperationIntent(ctx, {
+      mission_id: ctx.mission_id,
+      operation_id: fetchOperationId,
+      attempt_id: fetchAttemptId,
+      operation_kind: 'source_fetch',
+      dispatched_at: request.dispatchedAt,
+      idempotency_key: fetchOperationId,
+    })
+
+    let read
+    try {
+      read = await readAdapter.read(
+        {
+          operationId: fetchOperationId,
+          source: candidate,
+          signal: request.signal,
+        },
+        request.access,
+      )
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err)
+      await settleExternalOperation(
+        request.store,
+        ctx,
+        ctx.mission_id,
+        fetchOperationId,
+        fetchAttemptId,
+        {
+          settlement: 'uncertain',
+          message: request.signal.aborted
+            ? `source read rejected during cancellation: ${message}`
+            : message,
+          usage_settlement: unknownUsageSettlement(fetchAttemptId),
+        },
+        now(),
+      )
+      if (request.signal.aborted || !multiWebRetrieval) {
+        throw RetrievalIterationFailedAfterAcquireError.from(acquired, ctx, err)
+      }
+      limitations.push(`retrieval_web_ref_failed:${slot.slotId}:${message}`)
+      continue
+    }
+
+    if (read.status === 'cancelled' || request.signal.aborted) {
+      await settleExternalOperation(
+        request.store,
+        ctx,
+        ctx.mission_id,
+        fetchOperationId,
+        fetchAttemptId,
+        { settlement: 'cancelled' },
+        now(),
+      )
+      throw RetrievalIterationFailedAfterAcquireError.withMessage(
+        acquired,
+        ctx,
+        'source read cancelled during retrieval iteration',
+      )
+    }
+    if (read.status === 'failed') {
+      await settleExternalOperation(
+        request.store,
+        ctx,
+        ctx.mission_id,
+        fetchOperationId,
+        fetchAttemptId,
+        {
+          settlement: 'failed',
+          failureCategory: read.failureCategory,
+          message: read.message,
+          ...(read.acquisition_diagnostics
+            ? { acquisition_diagnostics: read.acquisition_diagnostics }
+            : {}),
+        },
+        now(),
+      )
+      if (!multiWebRetrieval) {
+        throw RetrievalIterationFailedAfterAcquireError.from(
+          acquired,
+          ctx,
+          new ResearchPassFailedError(read.message, {
+            stoppingReason: 'source_retrieval_failed',
+            failurePhase: 'retrieval',
+          }),
+        )
+      }
+      limitations.push(`retrieval_web_ref_failed:${slot.slotId}:${read.message}`)
+      continue
+    }
+
+    throwIfAborted(request.signal, 'evidence persistence')
+
+    let revision
+    let passages: PassageRecord[]
+    try {
+      const bound = validateRetrievalEvidenceBindings({
+        searchOperationId: request.searchOperationId,
+        fetchOperationId,
+        discover,
+        read,
+        candidate,
+        mission: request.session.mission,
+        plan: request.activePlan,
+        ctx,
+      })
+      revision = bound.revision
+      passages = bound.passages
+    } catch (err: unknown) {
+      const message = err instanceof RetrievalEvidenceBindingError ? err.message : String(err)
+      await settleExternalOperation(
+        request.store,
+        ctx,
+        ctx.mission_id,
+        fetchOperationId,
+        fetchAttemptId,
+        {
+          settlement: 'failed',
+          failureCategory: 'evidence_binding_failed',
+          message,
+        },
+        now(),
+      )
+      if (!multiWebRetrieval) {
+        throw RetrievalIterationFailedAfterAcquireError.from(acquired, ctx, err)
+      }
+      limitations.push(`retrieval_web_ref_failed:${slot.slotId}:${message}`)
+      continue
+    }
+
+    try {
+      await request.store.appendSource(ctx, candidate)
+      throwIfAborted(request.signal, 'source revision persistence')
+      await request.store.appendSourceRevision(ctx, revision)
+      for (const passage of passages) {
+        throwIfAborted(request.signal, 'passage persistence')
+        await request.store.appendPassage(ctx, passage)
+      }
+      throwIfAborted(request.signal, 'evidence persistence completion')
+    } catch (err: unknown) {
+      if (request.signal.aborted) {
+        await settleExternalOperation(
+          request.store,
+          ctx,
+          ctx.mission_id,
+          fetchOperationId,
+          fetchAttemptId,
+          {
+            settlement: 'cancelled',
+            message: 'evidence persistence aborted',
+            usage_settlement: unknownUsageSettlement(fetchAttemptId),
+          },
+          now(),
+        )
+        throw RetrievalIterationFailedAfterAcquireError.withMessage(
+          acquired,
+          ctx,
+          'retrieval iteration aborted during evidence persistence',
+        )
+      }
+      if (!multiWebRetrieval) {
+        throw RetrievalIterationFailedAfterAcquireError.from(acquired, ctx, err)
+      }
+      const message = err instanceof Error ? err.message : String(err)
+      limitations.push(`retrieval_web_ref_failed:${slot.slotId}:${message}`)
+      continue
+    }
+
     await settleExternalOperation(
       request.store,
       ctx,
       ctx.mission_id,
-      request.fetchOperationId,
-      request.fetchAttemptId,
-      {
-        settlement: 'uncertain',
-        message: request.signal.aborted
-          ? `source read rejected during cancellation: ${message}`
-          : message,
-        usage_settlement: unknownUsageSettlement(request.fetchAttemptId),
-      },
+      fetchOperationId,
+      fetchAttemptId,
+      { settlement: 'succeeded' },
       now(),
     )
-    throw RetrievalIterationFailedAfterAcquireError.from(acquired, ctx, err)
+    persistedSources.push(candidate)
+    allPassages.push(...passages)
+    if (!firstRevisionId) {
+      firstRevisionId = revision.revision_id
+    }
   }
 
-  if (read.status === 'cancelled' || request.signal.aborted) {
-    await settleExternalOperation(
-      request.store,
-      ctx,
-      ctx.mission_id,
-      request.fetchOperationId,
-      request.fetchAttemptId,
-      { settlement: 'cancelled' },
-      now(),
-    )
-    throw RetrievalIterationFailedAfterAcquireError.withMessage(
-      acquired,
-      ctx,
-      'source read cancelled during retrieval iteration',
-    )
-  }
-  if (read.status === 'failed') {
-    await settleExternalOperation(
-      request.store,
-      ctx,
-      ctx.mission_id,
-      request.fetchOperationId,
-      request.fetchAttemptId,
-      {
-        settlement: 'failed',
-        failureCategory: read.failureCategory,
-        message: read.message,
-        ...(read.status === 'failed' && read.acquisition_diagnostics
-          ? { acquisition_diagnostics: read.acquisition_diagnostics }
-          : {}),
-      },
-      now(),
-    )
+  if (persistedSources.length === 0) {
     throw RetrievalIterationFailedAfterAcquireError.from(
       acquired,
       ctx,
-      new ResearchPassFailedError(read.message, {
+      new ResearchPassFailedError('retrieval produced no admitted sources', {
         stoppingReason: 'source_retrieval_failed',
         failurePhase: 'retrieval',
       }),
     )
   }
 
-  throwIfAborted(request.signal, 'evidence persistence')
-
-  let revision
-  let passages: PassageRecord[]
-  try {
-    const bound = validateRetrievalEvidenceBindings({
-      searchOperationId: request.searchOperationId,
-      fetchOperationId: request.fetchOperationId,
-      discover,
-      read,
-      candidate,
-      mission: request.session.mission,
-      plan: request.activePlan,
-      ctx,
-    })
-    revision = bound.revision
-    passages = bound.passages
-  } catch (err: unknown) {
-    const message = err instanceof RetrievalEvidenceBindingError ? err.message : String(err)
-    await settleExternalOperation(
-      request.store,
-      ctx,
-      ctx.mission_id,
-      request.fetchOperationId,
-      request.fetchAttemptId,
-      {
-        settlement: 'failed',
-        failureCategory: 'evidence_binding_failed',
-        message,
-      },
-      now(),
-    )
-    throw RetrievalIterationFailedAfterAcquireError.from(acquired, ctx, err)
-  }
-
-  try {
-    await request.store.appendSource(ctx, candidate)
-    throwIfAborted(request.signal, 'source revision persistence')
-    await request.store.appendSourceRevision(ctx, revision)
-    for (const passage of passages) {
-      throwIfAborted(request.signal, 'passage persistence')
-      await request.store.appendPassage(ctx, passage)
-    }
-    throwIfAborted(request.signal, 'evidence persistence completion')
-  } catch (err: unknown) {
-    if (request.signal.aborted) {
-      await settleExternalOperation(
-        request.store,
-        ctx,
-        ctx.mission_id,
-        request.fetchOperationId,
-        request.fetchAttemptId,
-        {
-          settlement: 'cancelled',
-          message: 'evidence persistence aborted',
-          usage_settlement: unknownUsageSettlement(request.fetchAttemptId),
-        },
-        now(),
-      )
-      throw RetrievalIterationFailedAfterAcquireError.withMessage(
-        acquired,
-        ctx,
-        'retrieval iteration aborted during evidence persistence',
-      )
-    }
-    throw RetrievalIterationFailedAfterAcquireError.from(acquired, ctx, err)
-  }
-
-  await settleExternalOperation(
-    request.store,
-    ctx,
-    ctx.mission_id,
-    request.fetchOperationId,
-    request.fetchAttemptId,
-    { settlement: 'succeeded' },
-    now(),
-  )
+  const primarySource = persistedSources[0]!
 
   let terminalReportEmitted = false
   if (request.emitOfflineTerminalReport) {
@@ -441,7 +517,7 @@ export async function runAdmittedRetrievalIteration(
       mission: request.session.mission,
       plan: request.activePlan,
       ctx,
-      passages,
+      passages: allPassages,
       generatedAt: now(),
       ...(request.executionProvenance !== undefined
         ? { executionProvenance: request.executionProvenance }
@@ -454,9 +530,11 @@ export async function runAdmittedRetrievalIteration(
   return {
     handle: acquired,
     writeContext: ctx,
-    source: candidate,
-    revisionId: revision.revision_id,
-    passageIds: passages.map((p) => p.passage_id),
+    source: primarySource,
+    sources: persistedSources,
+    revisionId: firstRevisionId,
+    passageIds: allPassages.map((p) => p.passage_id),
+    limitations,
     searchOperationId: request.searchOperationId,
     fetchOperationId: request.fetchOperationId,
     terminalReportEmitted,

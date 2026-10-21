@@ -9,6 +9,9 @@ import {
   examplePlanRevisionFixture,
   exampleTechnicalMissionFixture,
 } from '../fixtures/exampleMission.js'
+import { ResearchMissionV2Schema } from '../contracts/mission.js'
+import type { SourceAdapter } from '../ports/sourceAdapter.js'
+import type { SourceRecord } from '../contracts/sources.js'
 import {
   technicalRepositoryCorpusBody,
   technicalRepositoryCorpusFinalUrl,
@@ -220,4 +223,121 @@ describe('research retrieval loop (admitted ports)', () => {
     assert.ok(events.some((e) => e.kind === 'model_invocation_completed'))
     assert.ok(events.some((e) => e.kind === 'passage_recorded'))
   })
+
+  it('fetches each mission selected_web_ref with distinct fetch operations', async () => {
+    const mdnUrl = 'https://developer.mozilla.org/en-US/docs/Web/API/Fetch_API'
+    const cfUrl = 'https://developers.cloudflare.com/workers/'
+    const mission = ResearchMissionV2Schema.parse({
+      ...exampleTechnicalMissionFixture,
+      mission_id: 'mission-multi-web',
+      profile_id: 'general',
+      source_policy: {
+        allowed_source_classes: ['web'],
+        allowed_web_domains: ['developer.mozilla.org', 'developers.cloudflare.com'],
+        selected_web_refs: [mdnUrl, cfUrl],
+        visibility_retention: exampleTechnicalMissionFixture.source_policy.visibility_retention,
+      },
+    })
+    const plan = {
+      ...examplePlanRevisionFixture,
+      mission_id: mission.mission_id,
+    }
+    const webA: SourceRecord = {
+      source_id: 'web-mdn',
+      kind: 'web',
+      canonical_key: mdnUrl,
+      observed_urls: [mdnUrl],
+      title: 'MDN Fetch',
+    }
+    const webB: SourceRecord = {
+      source_id: 'web-cf',
+      kind: 'web',
+      canonical_key: cfUrl,
+      observed_urls: [cfUrl],
+      title: 'Cloudflare Workers',
+    }
+    const store = new InMemoryResearchStore()
+    const handle = await store.appendMission(mission)
+    await store.appendPlanRevision(
+      {
+        mission_id: handle.mission_id,
+        plan_revision_id: plan.plan_revision_id,
+        writer_generation: handle.writer_generation,
+      },
+      plan,
+    )
+    const session = {
+      mission,
+      handle,
+      activePlanRevisionId: plan.plan_revision_id,
+    }
+    const adapter: SourceAdapter = {
+      adapterId: 'multi-web-fixture',
+      supportedKinds: ['web'],
+      async discover(request) {
+        return {
+          operationId: request.operationId,
+          status: 'ok',
+          candidates: [webB, webA],
+        }
+      },
+      async read(request) {
+        const revisionId = `rev-${request.source.source_id}`
+        return {
+          operationId: request.operationId,
+          status: 'ok',
+          revision: {
+            revision_id: revisionId,
+            source_id: request.source.source_id,
+            content_hash: 'hash',
+            retrieved_at: FIXED_NOW,
+            extraction_version: 'fixture',
+            media_type: 'text/html',
+            completeness: 'complete',
+          },
+          passages: [
+            {
+              passage_id: `${request.operationId}:p0`,
+              source_revision_id: revisionId,
+              locator: { kind: 'line_range', start_line: 1, end_line: 1 },
+              text_ref: { mode: 'inline', text: `body-${request.source.source_id}`, text_hash: 'h' },
+            },
+          ],
+          extraction_version: 'fixture',
+        }
+      },
+    }
+    const result = await runAdmittedRetrievalIteration({
+      session,
+      store,
+      access: new FakeSourceAccessPort([]),
+      adapter,
+      activePlan: plan,
+      discoverQuery: 'compare fetch workers',
+      searchOperationId: 'multi-search',
+      searchAttemptId: 'multi-search-att',
+      fetchOperationId: 'multi-fetch',
+      fetchAttemptId: 'multi-fetch-att',
+      dispatchedAt: '2026-10-20T12:09:00.000Z',
+      signal: new AbortController().signal,
+      now: () => FIXED_NOW,
+    })
+    assert.equal(result.sources.length, 2)
+    assert.equal(result.passageIds.length, 2)
+    assert.deepEqual(result.limitations, [])
+    const events = await store.listEvents(mission.mission_id)
+    assert.equal(completionSettlement(completionEvent(events, 'multi-fetch--web-ref-0')), 'succeeded')
+    assert.equal(completionSettlement(completionEvent(events, 'multi-fetch--web-ref-1')), 'succeeded')
+  })
 })
+
+function completionEvent(
+  events: Awaited<ReturnType<InMemoryResearchStore['listEvents']>>,
+  opId: string,
+) {
+  return events.find(
+    (e) =>
+      e.kind === 'external_operation_completed' &&
+      (e.payload.completion as { operation_id?: string })?.operation_id === opId,
+  )
+}
