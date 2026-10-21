@@ -1,0 +1,42 @@
+{
+  "schema": "general-g-l2-diagnostic-1-pre-run-fingerprints/v1",
+  "recorded_at_utc": "2026-10-21T10:52:25.000Z",
+  "source_go_sha": "601b443b5e8031169cbecbd39fdd5dd84e167aff",
+  "git": {
+    "head_sha": "601b443b5e8031169cbecbd39fdd5dd84e167aff",
+    "tree_sha": "29682d9e43fd1c3e9690723f109aa7f25e86bc76"
+  },
+  "source_diff_note": "Working tree has unrelated review-artifacts doc drift only; babel-cli src unchanged at tree SHA.",
+  "build": {
+    "command": "cd /workspace/babel-cli && npm run build",
+    "stdout_log": "review-artifacts/general-g-l2-diagnostic-1-build.stdout.log",
+    "exit_code": 0
+  },
+  "execution_cwd": "/workspace/babel-cli",
+  "babel_bin": {
+    "realpath": "/workspace/babel-cli/bin/babel.js",
+    "sha256": "ee8f9ba2a7bd12b937451c0f4d86503d0b68d9076ed3cd24b9a7138b7039f43f"
+  },
+  "dist_modules": {
+    "cliEntryDispatch": {
+      "realpath": "/workspace/babel-cli/dist/cliEntryDispatch.js",
+      "sha256": "f5943d8014b6452390f769bb5ac59fc5fee7ff8655657fa038eb8ec26716d942"
+    },
+    "researchV2MissionRun": {
+      "realpath": "/workspace/babel-cli/dist/research/v2/cli/researchV2MissionRun.js",
+      "sha256": "c60214002173f96d065a6055a94bc31cfadf61fe8c4ec7f5099d8d75a4f05ecd"
+    },
+    "providerResearchModelBridge": {
+      "realpath": "/workspace/babel-cli/dist/research/v2/model/providerResearchModelBridge.js",
+      "sha256": "1671282909574f98116d1d08a0a046ef60d2c9dc7159cc469a39a91009efdff1"
+    },
+    "researchRetrievalLoop": {
+      "realpath": "/workspace/babel-cli/dist/research/v2/engine/researchRetrievalLoop.js",
+      "sha256": "36dc1fcbf2dc54bb21edd4a09704d63c9c6435a93af69b0710a7993d57876067"
+    }
+  },
+  "preflight": "review-artifacts/general-g-l2-diagnostic-1-preflight.json",
+  "canonical_mission_fixture": "babel-cli/src/research/v2/fixtures/campaign/G-L2-mission.json",
+  "live_mission_file": "/workspace/codex/missions/general-g-l2-cache-control-diagnostic-1/mission.json",
+  "store_directory": "/workspace/codex/runs/general-g-l2-diagnostic-1/store"
+}
