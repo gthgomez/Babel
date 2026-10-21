@@ -1,4 +1,0 @@
-
-> babel-harness@0.1.4 typecheck
-> tsc --noEmit && tsc -p tsconfig.scripts.json --noEmit
-

@@ -55,7 +55,7 @@ mkdirSync(cli, {recursive:true});
 command('tar.exe', ['-xzf',join(output,pack.filename),'-C',cli,'--strip-components=1']);
 // The same canonical lockfile resolves production dependencies; no lifecycle scripts or downloads at first launch.
 cpSync(join(cliSource,'package-lock.json'), join(cli,'package-lock.json'));
-command(process.execPath, [npmCli,'ci','--omit=dev','--ignore-scripts','--no-audit','--no-fund'], cli);
+command(process.execPath, [npmCli,'ci','--omit=dev','--omit=optional','--ignore-scripts','--no-audit','--no-fund'], cli);
 const nodeExtract = join(output, `node-${sourceSha.slice(0,12)}`);
 mkdirSync(nodeExtract);
 command('tar.exe', ['-xf',archive,'-C',nodeExtract]);

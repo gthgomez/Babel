@@ -1,4 +1,0 @@
-prior_checkpoint=2eb83b62a998bb651ae475697c512da137bbe32a
-candidate_head=10ddcfc7033d146537a445cb30f4d6ce8621aca8
-candidate_tree=57b47e66c7f82b66a69c30bbaa9a0b9b45a423d5
-branch=cursor/research-v2-post-review-settlement-fc31

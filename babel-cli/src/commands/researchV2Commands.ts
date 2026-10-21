@@ -16,6 +16,7 @@ import {
   resumeResearchV2Continuation,
   runResearchV2CancelResumeJourney,
   runResearchV2OfflineRun,
+  runResearchV2ProductionRun,
 } from '../research/v2/cli/researchV2CliOperations.js'
 import { openAdmittedOwnerStore } from '../research/v2/control/researchStoreAdmission.js'
 import { FixtureResearchModelBridge } from '../research/v2/model/fixtureModelBridge.js'
@@ -174,20 +175,43 @@ export function registerResearchV2Commands(program: Command): void {
 
   v2
     .command('run')
-    .description('Offline injected research run into --store (fixture model + admitted corpus)')
+    .description('Mission-driven research run into --store (production adapters; live model when gated)')
     .requiredOption('--store <dir>', 'admitted durable store directory')
+    .option('--mission-file <path>', 'research mission JSON (required unless --injected-offline)')
+    .option('--discover-query <text>', 'discovery query override (defaults to mission primary question)')
+    .option('--injected-offline', 'deterministic offline injected run (fixture mission corpus)', false)
     .option('--json', 'emit machine-readable output', false)
-    .action(async (options: { store: string; json: boolean }) => {
-      try {
-        await runResearchV2OfflineRun({
-          store: options.store,
-          json: options.json,
-          print: (p, h) => print(p, h, options.json),
-        })
-      } catch (error) {
-        printJsonErrorAndExit(error instanceof Error ? error.message : String(error), options.json)
-      }
-    })
+    .action(
+      async (options: {
+        store: string
+        missionFile: string
+        discoverQuery: string
+        injectedOffline: boolean
+        json: boolean
+      }) => {
+        try {
+          if (options.injectedOffline) {
+            await runResearchV2OfflineRun({
+              store: options.store,
+              json: options.json,
+              print: (p, h) => print(p, h, options.json),
+            })
+            return
+          }
+          if (!options.missionFile?.trim()) {
+            throw new Error('--mission-file is required for production research v2 run')
+          }
+          await runResearchV2ProductionRun({
+            store: options.store,
+            missionFile: options.missionFile.trim(),
+            discoverQuery: options.discoverQuery,
+            print: (p, h) => print(p, h, options.json),
+          })
+        } catch (error) {
+          printJsonErrorAndExit(error instanceof Error ? error.message : String(error), options.json)
+        }
+      },
+    )
 
   v2
     .command('inspect')
@@ -252,6 +276,10 @@ export function registerResearchV2Commands(program: Command): void {
     .requiredOption('--plan-revision-id <id>', 'acknowledged plan revision id')
     .requiredOption('--terminal-state <state>', 'cancelled | interrupted | needs_reconciliation')
     .requiredOption('--host-authorization-ref <ref>', 'host authorization reference')
+    .option('--mission-file <path>', 'mission JSON when not already in store events')
+    .option('--discover-query <text>', 'discovery query for continued engine pass')
+    .option('--injected-offline', 'continue with deterministic offline adapters/model', false)
+    .option('--no-continue-run', 'admit continuation only; skip engine pass', false)
     .option('--json', 'emit machine-readable output', false)
     .action(
       async (options: {
@@ -261,6 +289,10 @@ export function registerResearchV2Commands(program: Command): void {
         planRevisionId: string
         terminalState: string
         hostAuthorizationRef: string
+        missionFile: string
+        discoverQuery: string
+        injectedOffline: boolean
+        continueRun: boolean
         json: boolean
       }) => {
         try {
@@ -271,6 +303,12 @@ export function registerResearchV2Commands(program: Command): void {
             planRevisionId: options.planRevisionId,
             terminalState: options.terminalState as 'cancelled' | 'interrupted' | 'needs_reconciliation',
             hostAuthorizationRef: options.hostAuthorizationRef,
+            ...(options.missionFile?.trim()
+              ? { missionFile: options.missionFile.trim() }
+              : {}),
+            ...(options.discoverQuery ? { discoverQuery: options.discoverQuery } : {}),
+            continueRun: options.continueRun,
+            injectedOffline: options.injectedOffline,
             print: (p, h) => print(p, h, options.json),
           })
         } catch (error) {

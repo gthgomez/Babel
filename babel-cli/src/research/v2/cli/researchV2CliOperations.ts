@@ -1,92 +1,48 @@
 import { mkdir } from 'node:fs/promises'
 import type { ResearchReportV2 } from '../contracts/plan.js'
-import { createGovernedSourceAccessForMission } from '../access/createGovernedSourceAccess.js'
-import { openAdmittedInspectStore, openAdmittedOwnerStore } from '../control/researchStoreAdmission.js'
+import type { ResearchMissionV2 } from '../contracts/mission.js'
+import { openAdmittedInspectStore } from '../control/researchStoreAdmission.js'
 import { ResearchEngineSession } from '../engine/researchEngineSession.js'
-import { runAdmittedResearchEndToEndPass } from '../engine/researchEndToEndPass.js'
 import {
   exampleMissionWriteContext,
   examplePlanRevisionFixture,
   exampleTechnicalMissionFixture,
 } from '../fixtures/exampleMission.js'
-import {
-  technicalRepositoryCorpusBody,
-  technicalRepositoryCorpusFinalUrl,
-} from '../fixtures/technicalRepositoryCorpus.js'
-import { searchIndexForTechnicalMission } from '../fixtures/technicalSearchIndex.js'
 import { FixtureResearchModelBridge } from '../model/fixtureModelBridge.js'
 import type { ResearchModelPort } from '../ports/researchModelPort.js'
-import { createTechnicalResearchRegistries } from '../registry/frozenRegistries.js'
-import { resolveDiscoveryAdapterForMission } from '../registry/missionAdapterResolution.js'
 import type { ResearchStoreEvent } from '../ports/researchStore.js'
 import type { ResumableTerminalState } from '../contracts/storeLifecycle.js'
+import { loadResearchMissionFromFile } from './loadResearchMissionFile.js'
+import {
+  missionFromStoreEvents,
+  runResearchV2EnginePassOnOwner,
+  runResearchV2MissionWithOwnerSession,
+} from './researchV2MissionRun.js'
 
-const CLI_PLAN_REVISION_ID = 'plan-cli-run-001'
-
-function fixtureModelForOfflineRun(): ResearchModelPort {
-  const fixture = new FixtureResearchModelBridge()
-  fixture.scriptOutput('cli-run-plan', {
-    kind: 'plan_questions',
-    questions: [{ text: 'What does the pinned contracts file export?', importance: 'high' }],
+export async function runResearchV2ProductionRun(options: {
+  store: string
+  missionFile: string
+  discoverQuery?: string
+  print: (payload: unknown, human: string) => void
+  model?: ResearchModelPort
+}): Promise<void> {
+  const mission = await loadResearchMissionFromFile(options.missionFile)
+  const discoverQuery =
+    options.discoverQuery?.trim() ||
+    mission.primary_question.split(/\s+/).slice(0, 8).join(' ')
+  const result = await runResearchV2MissionWithOwnerSession({
+    storeDirectory: options.store,
+    mission,
+    discoverQuery,
+    ...(options.model ? { model: options.model } : {}),
   })
-  return {
-    async invokeStructured(request) {
-      if (request.kind === 'extract_findings') {
-        const passageIds = (request.input.passage_ids as string[]) ?? []
-        fixture.scriptOutput(request.operationId, {
-          kind: 'extract_findings',
-          findings: [
-            {
-              assertion_text: 'The file exports a RESEARCH_CONTRACT constant.',
-              assertion_kind: 'source_observation',
-              passage_ids: passageIds,
-            },
-          ],
-        })
-      }
-      if (request.kind === 'semantic_support_review') {
-        const findingId = (request.input.findings as { finding_id: string }[])?.[0]?.finding_id
-        fixture.scriptOutput(request.operationId, {
-          kind: 'semantic_support_review',
-          judgments: [
-            {
-              finding_id: findingId ?? 'missing',
-              status: 'insufficient',
-              rationale: 'Offline CLI run — insufficient for a live acceptance decision.',
-            },
-          ],
-        })
-      }
-      if (request.kind === 'synthesize_report') {
-        fixture.scriptOutput(request.operationId, {
-          kind: 'synthesize_report',
-          answer_summary: 'Offline injected run produced a partial cited report.',
-          stopping_reason: 'insufficient_semantic_support',
-        })
-      }
-      return fixture.invokeStructured(request)
-    },
+  const payload = {
+    ...result,
+    store_directory: options.store,
+    discover_query: discoverQuery,
+    note: 'Production mission run with governed adapters and durable store persistence.',
   }
-}
-
-function governedTechnicalAccess() {
-  const { port } = createGovernedSourceAccessForMission({
-    mission: exampleTechnicalMissionFixture,
-    searchMode: 'declared_index_corpus',
-    corpusIndex: searchIndexForTechnicalMission(exampleTechnicalMissionFixture),
-    admittedGet: async () => ({
-      ok: true,
-      status: 200,
-      contentType: 'text/plain',
-      buffer: Buffer.from(technicalRepositoryCorpusBody, 'utf8'),
-      bytesReceived: technicalRepositoryCorpusBody.length,
-      truncated: false,
-      requestedUrl: technicalRepositoryCorpusFinalUrl,
-      finalUrl: technicalRepositoryCorpusFinalUrl,
-      redirectChain: [technicalRepositoryCorpusFinalUrl],
-    }),
-  })
-  return port
+  options.print(payload, JSON.stringify(payload, null, 2))
 }
 
 export async function runResearchV2OfflineRun(options: {
@@ -94,58 +50,27 @@ export async function runResearchV2OfflineRun(options: {
   json: boolean
   print: (payload: unknown, human: string) => void
 }): Promise<void> {
-  await mkdir(options.store, { recursive: true })
-  let owner: Awaited<ReturnType<typeof openAdmittedOwnerStore>> | undefined
-  try {
-    owner = await openAdmittedOwnerStore(options.store)
-    const handle = await owner.store.appendMission(exampleTechnicalMissionFixture)
-    const session = { mission: exampleTechnicalMissionFixture, handle }
-    const registries = createTechnicalResearchRegistries()
-    const adapter = resolveDiscoveryAdapterForMission(exampleTechnicalMissionFixture, registries)
-    if (!adapter) {
-      throw new Error('no discovery adapter for technical mission')
-    }
-    const result = await runAdmittedResearchEndToEndPass({
-      session,
-      store: owner.store,
-      model: fixtureModelForOfflineRun(),
-      access: governedTechnicalAccess(),
-      adapter,
-      registries,
-      discoverQuery: 'RESEARCH_CONTRACT',
-      planOperationId: 'cli-run-plan',
-      planAttemptId: 'cli-run-plan-att',
-      planRevisionId: CLI_PLAN_REVISION_ID,
-      retrievalSearchOperationId: 'cli-run-search',
-      retrievalSearchAttemptId: 'cli-run-search-att',
-      retrievalFetchOperationId: 'cli-run-fetch',
-      retrievalFetchAttemptId: 'cli-run-fetch-att',
-      extractOperationId: 'cli-run-extract',
-      extractAttemptId: 'cli-run-extract-att',
-      reviewOperationId: 'cli-run-review',
-      reviewAttemptId: 'cli-run-review-att',
-      synthesizeOperationId: 'cli-run-synth',
-      synthesizeAttemptId: 'cli-run-synth-att',
-      dispatchedAt: new Date().toISOString(),
-      signal: new AbortController().signal,
-    })
-    const payload = {
-      mode: 'offline_injected_run',
-      live_api: false,
-      store_directory: options.store,
-      session_id: owner.sessionId,
-      mission_id: exampleTechnicalMissionFixture.mission_id,
-      plan_revision_id: result.planRevisionId,
-      passage_ids: result.passageIds,
-      finding_ids: result.findingIds,
-      terminal_report_emitted: result.terminalReportEmitted,
-      maps_to_acceptance_scenario: 'T-L1',
-      note: 'Offline injected transport — not a canonical live acceptance execution.',
-    }
-    options.print(payload, JSON.stringify(payload, null, 2))
-  } finally {
-    await owner?.close()
+  const result = await runResearchV2MissionWithOwnerSession({
+    storeDirectory: options.store,
+    mission: exampleTechnicalMissionFixture,
+    discoverQuery: 'RESEARCH_CONTRACT',
+    injectedOffline: true,
+    planRevisionId: 'plan-cli-run-001',
+  })
+  const payload = {
+    mode: 'offline_injected_run',
+    live_api: false,
+    store_directory: options.store,
+    session_id: result.session_id,
+    mission_id: exampleTechnicalMissionFixture.mission_id,
+    plan_revision_id: result.plan_revision_id,
+    passage_ids: result.passage_ids,
+    finding_ids: result.finding_ids,
+    terminal_report_emitted: result.terminal_report_emitted,
+    maps_to_acceptance_scenario: 'T-L1',
+    note: 'Offline injected transport — not a canonical live acceptance execution.',
   }
+  options.print(payload, JSON.stringify(payload, null, 2))
 }
 
 export function terminalReportFromEvents(
@@ -218,6 +143,10 @@ export async function resumeResearchV2Continuation(options: {
   hostAuthorizationRef: string
   print: (payload: unknown, human: string) => void
   model?: ResearchModelPort
+  missionFile?: string
+  discoverQuery?: string
+  continueRun?: boolean
+  injectedOffline?: boolean
 }): Promise<void> {
   const model = options.model ?? new FixtureResearchModelBridge()
   let owner: ResearchEngineSession | undefined
@@ -230,12 +159,50 @@ export async function resumeResearchV2Continuation(options: {
       acknowledged_plan_revision_id: options.planRevisionId,
       acknowledged_terminal_state: options.terminalState,
     })
+
+    const cancelController = new AbortController()
+    const cancelWatcher = owner.watchExternalCancelRequests(cancelController)
+    const signal = AbortSignal.any([cancelController.signal])
+
+    let runResult: Awaited<ReturnType<typeof runResearchV2EnginePassOnOwner>> | undefined
+    const shouldContinue = options.continueRun !== false
+    if (shouldContinue) {
+      let mission: ResearchMissionV2 | null = null
+      if (options.missionFile) {
+        mission = await loadResearchMissionFromFile(options.missionFile)
+      } else {
+        const inspect = await openAdmittedInspectStore(options.store)
+        const events = await inspect.listEvents(options.missionId)
+        mission = missionFromStoreEvents(events)
+      }
+      if (!mission) {
+        throw new Error('resume continuation requires mission.json via --mission-file or mission_created in store')
+      }
+      const discoverQuery =
+        options.discoverQuery?.trim() ||
+        mission.primary_question.split(/\s+/).slice(0, 8).join(' ')
+      runResult = await runResearchV2EnginePassOnOwner({
+        owner,
+        mission,
+        handle,
+        discoverQuery,
+        ...(options.model ? { model: options.model } : {}),
+        injectedOffline: options.injectedOffline === true,
+        planRevisionId: `${options.planRevisionId}-continued`,
+        signal,
+      })
+    }
+    cancelWatcher.stop()
+
     const payload = {
       store_directory: options.store,
       mission_id: options.missionId,
       writer_generation: handle.writer_generation,
+      continuation_run: runResult ?? null,
       maps_to_acceptance_scenario: 'X-L1',
-      note: 'Resume admission only — host must continue engine work after resume.',
+      note: shouldContinue
+        ? 'Resume admitted and engine pass continued on persisted store.'
+        : 'Resume admission only — pass --no-continue-run to skip engine continuation.',
     }
     options.print(payload, JSON.stringify(payload, null, 2))
   } finally {
