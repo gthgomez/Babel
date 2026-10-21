@@ -3,17 +3,29 @@ import type { ResearchMissionV2 } from '../contracts/mission.js'
 import type { SourceRecord } from '../contracts/sources.js'
 import type { AdmittedSourceSearchProvider } from '../ports/admittedSourceSearchProvider.js'
 import type {
+  SourceSearchExaLiteReceiptMetadata,
   SourceSearchProviderReceipt,
   SourceSearchRequest,
   SourceSearchResult,
 } from '../ports/sourceAccessPort.js'
-import { admittedExaLiteHttpsPost, type AdmittedExaLiteHttpsPostDispatch } from './admittedExaLiteHttpsPost.js'
-import { exaApiKeyConfigured } from './exaLiteSearchCredentials.js'
+import type { SourceAccessFailureCategory } from '../ports/sourceAccessTypes.js'
+import {
+  admittedExaLiteHttpsPost,
+  DEFAULT_EXA_LITE_RESPONSE_MAX_BYTES,
+  type AdmittedExaLiteHttpsPostDispatch,
+} from './admittedExaLiteHttpsPost.js'
+import { AdmittedNetworkPolicyError } from './admittedHttpGet.js'
 import { parseAdmittedHttpUrl } from './admittedHttpGet.js'
 import {
   createDuckDuckGoHtmlFallbackSearchProvider,
   type BabelWebSearchTransport,
 } from './babelConfiguredWebSearch.js'
+import {
+  ExaLiteResponseValidationError,
+  mapExaLiteHttpStatusToFailure,
+  validateExaLiteSearchResponseBody,
+  type SanitizedExaLiteReceiptMetadata,
+} from './exaLiteSearchResponseValidation.js'
 
 export const EXA_LITE_SEARCH_PROVIDER_ID = 'exa_lite'
 
@@ -30,12 +42,19 @@ export interface ExaLiteSearchTransport {
   post?: AdmittedExaLiteHttpsPostDispatch
 }
 
-export interface ExaLiteNormalizedMetadata {
-  requestId?: unknown
-  resolvedSearchType?: unknown
-  warnings?: unknown
-  notices?: unknown
-  costDollars?: unknown
+export function toSourceSearchExaLiteReceipt(
+  metadata: SanitizedExaLiteReceiptMetadata,
+): SourceSearchExaLiteReceiptMetadata {
+  return {
+    request_id: metadata.request_id,
+    resolved_search_type: metadata.resolved_search_type,
+    warnings: [...metadata.warnings],
+    notices: [...metadata.notices],
+    estimated_cost_dollars: metadata.estimated_cost_dollars,
+    estimated_cost_detail: metadata.estimated_cost_detail
+      ? { ...metadata.estimated_cost_detail }
+      : null,
+  }
 }
 
 function hostnameAllowed(hostname: string, mission: ResearchMissionV2): boolean {
@@ -65,69 +84,60 @@ function webSourceFromUrl(title: string, url: string): SourceRecord | null {
   }
 }
 
-function excerptFromHighlights(row: Record<string, unknown>): string {
-  const highlights = row.highlights
-  if (Array.isArray(highlights)) {
-    return highlights.filter((h) => typeof h === 'string').join(' ')
-  }
-  const contents = row.contents
-  if (contents && typeof contents === 'object') {
-    const inner = (contents as { highlights?: unknown }).highlights
-    if (Array.isArray(inner)) {
-      return inner.filter((h) => typeof h === 'string').join(' ')
-    }
-  }
-  return typeof row.text === 'string' ? row.text : ''
-}
-
-export function parseExaLiteSearchResponse(bodyText: string): {
-  results: Record<string, unknown>[]
-  metadata: ExaLiteNormalizedMetadata
-} {
-  let parsed: Record<string, unknown>
-  try {
-    parsed = JSON.parse(bodyText) as Record<string, unknown>
-  } catch {
-    return { results: [], metadata: {} }
-  }
-  const results = Array.isArray(parsed.results)
-    ? parsed.results.filter((r): r is Record<string, unknown> => typeof r === 'object' && r !== null)
-    : []
+function buildExaReceipt(
+  metadata: SanitizedExaLiteReceiptMetadata,
+  participation: SourceSearchProviderReceipt['exa_participation'],
+  effectiveProviderId: string,
+): SourceSearchProviderReceipt {
   return {
-    results,
-    metadata: {
-      requestId: parsed.requestId ?? parsed.request_id,
-      resolvedSearchType: parsed.resolvedSearchType ?? parsed.resolved_search_type,
-      warnings: parsed.warnings,
-      notices: parsed.notices,
-      costDollars: parsed.costDollars ?? parsed.cost_dollars,
-    },
+    configured_provider_id: EXA_LITE_SEARCH_PROVIDER_ID,
+    effective_provider_id: effectiveProviderId,
+    exa_participation: participation,
+    exa_lite: toSourceSearchExaLiteReceipt(metadata),
   }
 }
 
-function exaFailureMessage(status: number): string {
-  if (status === 401 || status === 403) {
-    return 'configured search provider rejected the request'
+function mapTransportError(err: unknown): {
+  failureCategory: SourceAccessFailureCategory
+  message: string
+} {
+  const text = err instanceof Error ? err.message : String(err)
+  if (/aborted/i.test(text)) {
+    return { failureCategory: 'cancelled', message: 'search cancelled' }
   }
-  if (status === 429) {
-    return 'configured search provider rate limited the request'
+  if (/timed out|deadline exceeded/i.test(text)) {
+    return { failureCategory: 'timeout', message: 'configured search provider request timed out' }
   }
-  if (status >= 500) {
-    return 'configured search provider server error'
+  if (/exceeds configured maxBytes/i.test(text)) {
+    return { failureCategory: 'truncated', message: 'configured search provider response exceeded size limit' }
   }
-  return `configured search provider HTTP ${status}`
+  if (err instanceof AdmittedNetworkPolicyError) {
+    return { failureCategory: 'policy_denied', message: 'configured search provider network policy blocked request' }
+  }
+  return { failureCategory: 'network_error', message: 'configured search provider transport failed' }
+}
+
+function isBilledEmptyExa(metadata: SanitizedExaLiteReceiptMetadata, hitCount: number): boolean {
+  if (hitCount > 0) return false
+  return (
+    metadata.request_id !== null ||
+    metadata.estimated_cost_dollars !== null ||
+    metadata.estimated_cost_detail !== null
+  )
 }
 
 export function createExaLiteSearchProvider(options: {
   resolveApiKey: (env: NodeJS.ProcessEnv) => string | null
   transport: ExaLiteSearchTransport
   maxResults?: number
+  maxResponseBytes?: number
   env?: NodeJS.ProcessEnv
 }): AdmittedSourceSearchProvider & {
   providerId: typeof EXA_LITE_SEARCH_PROVIDER_ID
   limitations: readonly string[]
 } {
   const maxResults = options.maxResults ?? DEFAULT_MAX_RESULTS
+  const maxResponseBytes = options.maxResponseBytes ?? DEFAULT_EXA_LITE_RESPONSE_MAX_BYTES
   const env = options.env ?? process.env
 
   return {
@@ -172,27 +182,25 @@ export function createExaLiteSearchProvider(options: {
           jsonBody: body,
           signal: request.signal,
           env,
+          maxBytes: maxResponseBytes,
           ...(options.transport.post ? { dispatch: options.transport.post } : {}),
         })
         if (request.signal.aborted) {
           return { operationId: request.operationId, status: 'cancelled' }
         }
         if (!response.ok) {
-          const failureCategory = response.status === 429 ? 'rate_limited' : 'network_error'
+          const mapped = mapExaLiteHttpStatusToFailure(response.status)
           return {
             operationId: request.operationId,
             status: 'failed',
-            failureCategory,
-            message: exaFailureMessage(response.status),
+            failureCategory: mapped.failureCategory,
+            message: mapped.message,
           }
         }
-        const { results, metadata } = parseExaLiteSearchResponse(response.bodyText)
+        const validated = validateExaLiteSearchResponseBody(response.bodyText)
         const hits = []
-        for (const row of results) {
-          const url = typeof row.url === 'string' ? row.url : ''
-          const title = typeof row.title === 'string' ? row.title : url
-          if (!url) continue
-          const source = webSourceFromUrl(title, url)
+        for (const row of validated.results) {
+          const source = webSourceFromUrl(row.title, row.url)
           if (!source) continue
           try {
             const host = new URL(source.observed_urls[0]!).hostname
@@ -200,34 +208,78 @@ export function createExaLiteSearchProvider(options: {
           } catch {
             continue
           }
-          const snippet = excerptFromHighlights(row).trim() || title
+          const snippet = row.highlights.join(' ').trim() || row.title
           hits.push({
             source,
             snippet,
             completeness: 'snippet' as const,
           })
         }
-        const receipt: SourceSearchProviderReceipt = {
-          configured_provider_id: EXA_LITE_SEARCH_PROVIDER_ID,
-          effective_provider_id: EXA_LITE_SEARCH_PROVIDER_ID,
-          exa_lite: metadata,
-        }
+        const participation =
+          hits.length > 0 ? 'exa_primary_ok' : isBilledEmptyExa(validated.metadata, hits.length)
+            ? 'exa_primary_empty_billed'
+            : 'exa_primary_ok'
+        const receipt = buildExaReceipt(
+          validated.metadata,
+          participation,
+          EXA_LITE_SEARCH_PROVIDER_ID,
+        )
         return { operationId: request.operationId, status: 'ok', hits, receipt }
       } catch (err: unknown) {
         if (request.signal.aborted) {
           return { operationId: request.operationId, status: 'cancelled' }
         }
-        const message = err instanceof Error ? err.message : 'search transport failed'
-        if (/aborted/i.test(message)) {
+        if (err instanceof ExaLiteResponseValidationError) {
+          return {
+            operationId: request.operationId,
+            status: 'failed',
+            failureCategory: err.failureCategory,
+            message: err.message,
+          }
+        }
+        const mapped = mapTransportError(err)
+        if (mapped.failureCategory === 'cancelled') {
           return { operationId: request.operationId, status: 'cancelled' }
         }
         return {
           operationId: request.operationId,
           status: 'failed',
-          failureCategory: 'network_error',
-          message: 'configured search provider transport failed',
+          failureCategory: mapped.failureCategory,
+          message: mapped.message,
         }
       }
+    },
+  }
+}
+
+function mergeDegradedReceipt(
+  primary: SourceSearchResult,
+  fallbackProviderId: string,
+  reason: string,
+): SourceSearchProviderReceipt {
+  const base =
+    primary.status === 'ok' && primary.receipt
+      ? primary.receipt
+      : buildExaReceipt(
+          {
+            request_id: null,
+            resolved_search_type: null,
+            warnings: [],
+            notices: [],
+            estimated_cost_dollars: null,
+            estimated_cost_detail: null,
+          },
+          'exa_primary_failed',
+          EXA_LITE_SEARCH_PROVIDER_ID,
+        )
+  return {
+    ...base,
+    effective_provider_id: fallbackProviderId,
+    exa_participation: 'exa_degraded_fallback',
+    degradation: {
+      from_provider_id: EXA_LITE_SEARCH_PROVIDER_ID,
+      to_provider_id: fallbackProviderId,
+      reason,
     },
   }
 }
@@ -237,6 +289,7 @@ export function createExaLiteWithDuckDuckGoFallbackSearchProvider(options: {
   exaTransport: ExaLiteSearchTransport
   duckTransport: BabelWebSearchTransport
   maxResults?: number
+  maxResponseBytes?: number
   env?: NodeJS.ProcessEnv
 }): AdmittedSourceSearchProvider & {
   providerId: typeof EXA_LITE_SEARCH_PROVIDER_ID
@@ -246,6 +299,7 @@ export function createExaLiteWithDuckDuckGoFallbackSearchProvider(options: {
     resolveApiKey: options.resolveApiKey,
     transport: options.exaTransport,
     maxResults: options.maxResults,
+    maxResponseBytes: options.maxResponseBytes,
     env: options.env,
   })
   const duck = createDuckDuckGoHtmlFallbackSearchProvider({
@@ -267,22 +321,13 @@ export function createExaLiteWithDuckDuckGoFallbackSearchProvider(options: {
       const reason =
         primary.status === 'failed'
           ? `exa_failed:${primary.failureCategory}`
-          : 'exa_zero_hits'
+          : primary.receipt?.exa_participation === 'exa_primary_empty_billed'
+            ? 'exa_empty_billed'
+            : 'exa_zero_hits'
       const fallback = await duck.search(request, mission)
-      if (fallback.status !== 'ok') {
-        return fallback
-      }
-      const receipt: SourceSearchProviderReceipt = {
-        configured_provider_id: EXA_LITE_SEARCH_PROVIDER_ID,
-        effective_provider_id: duck.providerId,
-        degradation: {
-          from_provider_id: EXA_LITE_SEARCH_PROVIDER_ID,
-          to_provider_id: duck.providerId,
-          reason,
-        },
-      }
-      if (primary.status === 'ok' && primary.receipt?.exa_lite) {
-        receipt.exa_lite = primary.receipt.exa_lite
+      const receipt = mergeDegradedReceipt(primary, duck.providerId, reason)
+      if (fallback.status === 'ok') {
+        return { ...fallback, receipt }
       }
       return { ...fallback, receipt }
     },

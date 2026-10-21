@@ -113,7 +113,7 @@ export async function assertPublicNetworkTarget(
   }
 }
 
-function buildPinnedLookup(target: PublicNetworkTarget): LookupFunction | undefined {
+export function buildPinnedLookup(target: PublicNetworkTarget): LookupFunction | undefined {
   if (!target.addresses || target.addresses.length === 0) {
     return undefined
   }

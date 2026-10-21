@@ -14,10 +14,11 @@ import {
   EXA_LITE_SEARCH_PROVIDER_ID,
   resolveProductionSearchProviderId,
 } from './babelConfiguredWebSearch.js'
+import { createExaLiteSearchProvider } from './exaLiteSearchProvider.js'
 import {
-  createExaLiteSearchProvider,
-  parseExaLiteSearchResponse,
-} from './exaLiteSearchProvider.js'
+  ExaLiteResponseValidationError,
+  validateExaLiteSearchResponseBody,
+} from './exaLiteSearchResponseValidation.js'
 
 const SAMPLE_HTML = [
   '<a class="result__a" href="/l/?uddg=https%3A%2F%2Fgithub.com%2Fgthgomez%2FBabel&amp;rut=abc">Babel repo</a>',
@@ -113,8 +114,9 @@ describe('exa lite search provider (fake transport)', () => {
     if (result.status === 'ok') {
       assert.equal(result.hits.length, 1)
       assert.match(result.hits[0]?.snippet ?? '', /monorepo/)
-      assert.equal(result.receipt?.exa_lite?.requestId, 'req-test-1')
-      assert.equal(result.receipt?.exa_lite?.resolvedSearchType, 'lite')
+      assert.equal(result.receipt?.exa_lite?.request_id, 'req-test-1')
+      assert.equal(result.receipt?.exa_lite?.resolved_search_type, 'lite')
+      assert.equal(result.receipt?.exa_participation, 'exa_primary_ok')
     }
   })
 
@@ -189,16 +191,25 @@ describe('exa lite search provider (fake transport)', () => {
     }
   })
 
-  it('handles malformed and empty JSON as zero hits with preserved metadata when present', () => {
-    const empty = parseExaLiteSearchResponse('{}')
-    assert.deepEqual(empty.results, [])
-    const bad = parseExaLiteSearchResponse('not-json')
-    assert.deepEqual(bad.results, [])
-    const partial = parseExaLiteSearchResponse(
-      JSON.stringify({ requestId: 'r2', results: [{ url: 'https://github.com/gthgomez/Babel', title: 'B' }] }),
+  it('treats malformed HTTP 200 as failed validation (not silent empty)', async () => {
+    const provider = createExaLiteSearchProvider({
+      resolveApiKey: () => 'k',
+      transport: { post: fakeExaPost(() => ({ status: 200, bodyText: 'not-json' })) },
+    })
+    const result = await provider.search(
+      {
+        operationId: 'malformed',
+        query: 'q',
+        sourceClasses: ['web'],
+        signal: new AbortController().signal,
+      },
+      exampleTechnicalMissionFixture,
     )
-    assert.equal(partial.metadata.requestId, 'r2')
-    assert.equal(partial.results.length, 1)
+    assert.equal(result.status, 'failed')
+    if (result.status === 'failed') {
+      assert.equal(result.failureCategory, 'extraction_failed')
+    }
+    assert.throws(() => validateExaLiteSearchResponseBody('{}'), ExaLiteResponseValidationError)
   })
 
   it('cancels before await and after transport (pre/post cancel)', async () => {
@@ -268,6 +279,39 @@ describe('exa lite search provider (fake transport)', () => {
     )
     assert.equal(requestHost, EXA_LITE_API_HOSTNAME)
     assert.equal(result.status, 'failed')
+  })
+
+  it('preserves billed-empty Exa receipt when DDG fallback fails', async () => {
+    const configured = createBabelConfiguredWebSearchProvider({
+      providerId: EXA_LITE_SEARCH_PROVIDER_ID,
+      env: { EXA_API_KEY: 'k' },
+      exaLiteTransport: {
+        post: fakeExaPost(() => ({
+          status: 200,
+          bodyText: JSON.stringify({
+            requestId: 'billed-empty',
+            costDollars: { total: 0.002 },
+            results: [],
+          }),
+        })),
+      },
+      webSearchTransport: async () => ({ ok: false, status: 503, html: '' }),
+    })
+    const result = await configured.search(
+      {
+        operationId: 'billed-empty',
+        query: 'babel research',
+        sourceClasses: ['web'],
+        signal: new AbortController().signal,
+      },
+      exampleTechnicalMissionFixture,
+    )
+    assert.equal(result.status, 'failed')
+    if (result.status === 'failed') {
+      assert.equal(result.receipt?.exa_lite?.request_id, 'billed-empty')
+      assert.equal(result.receipt?.exa_participation, 'exa_degraded_fallback')
+      assert.match(result.receipt?.degradation?.reason ?? '', /exa_empty_billed/)
+    }
   })
 
   it('degrades to duckduckgo with explicit receipt when Exa returns zero hits', async () => {

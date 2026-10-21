@@ -22,23 +22,34 @@ export interface SourceSearchHit {
   completeness: 'metadata_only' | 'snippet'
 }
 
+/** Sanitized Exa lite metadata at the search provider boundary (A propagates downstream). */
+export interface SourceSearchExaLiteReceiptMetadata {
+  request_id: string | null
+  resolved_search_type: string | null
+  warnings: string[]
+  notices: string[]
+  /** Provider-reported estimate only — not an invoice. */
+  estimated_cost_dollars: number | null
+  estimated_cost_detail: Record<string, number> | null
+}
+
+export type SourceSearchExaParticipation =
+  | 'exa_primary_ok'
+  | 'exa_primary_empty_billed'
+  | 'exa_primary_failed'
+  | 'exa_degraded_fallback'
+
 /** Discovery-only provider metadata (not admitted evidence). */
 export interface SourceSearchProviderReceipt {
   configured_provider_id: string
   effective_provider_id: string
+  exa_participation?: SourceSearchExaParticipation
   degradation?: {
     from_provider_id: string
     to_provider_id: string
     reason: string
   }
-  /** Exa lite API metadata when Exa participated in this search (values preserved as returned). */
-  exa_lite?: {
-    requestId?: unknown
-    resolvedSearchType?: unknown
-    warnings?: unknown
-    notices?: unknown
-    costDollars?: unknown
-  }
+  exa_lite?: SourceSearchExaLiteReceiptMetadata
 }
 
 export type SourceSearchResult =
@@ -48,6 +59,7 @@ export type SourceSearchResult =
       status: 'failed'
       failureCategory: SourceAccessFailureCategory
       message: string
+      receipt?: SourceSearchProviderReceipt
     }
   | { operationId: string; status: 'cancelled' }
 
