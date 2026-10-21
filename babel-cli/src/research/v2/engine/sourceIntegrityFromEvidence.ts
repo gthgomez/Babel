@@ -15,7 +15,11 @@ import {
   sourceFetchEvidenceOwnerKey,
   type SourceFetchEvidenceOwner,
 } from '../contracts/retrievalEvidenceOwnership.js'
-import { ownerMatchesSucceededAttempt, succeededSourceFetchAttemptOwnerKeys } from './retrievalExtractionLineage.js'
+import {
+  ownerMatchesSucceededAttempt,
+  passageIsAdmittedForExtractionLineage,
+  succeededSourceFetchAttemptOwnerKeys,
+} from './retrievalExtractionLineage.js'
 
 function sha256Utf8(text: string): string {
   return createHash('sha256').update(text, 'utf8').digest('hex')
@@ -41,7 +45,10 @@ function indexPassagesById(
 ): { byId: Map<string, PassageRecord>; ambiguousIds: Set<string> } {
   const byId = new Map<string, PassageRecord>()
   const ambiguousIds = new Set<string>()
-  const consider = (passage: PassageRecord) => {
+  const considerEligible = (passage: PassageRecord) => {
+    if (!passageIsAdmittedForExtractionLineage(passage, events)) {
+      return
+    }
     const existing = byId.get(passage.passage_id)
     if (!existing) {
       byId.set(passage.passage_id, passage)
@@ -55,10 +62,10 @@ function indexPassagesById(
     if (event.kind !== 'passage_recorded') continue
     const passage = (event.payload as { passage?: PassageRecord }).passage
     if (!passage) continue
-    consider(passage)
+    considerEligible(passage)
   }
   for (const passage of extra) {
-    consider(passage)
+    considerEligible(passage)
   }
   return { byId, ambiguousIds }
 }

@@ -330,29 +330,88 @@ describe('deriveFindingSourceIntegrity', () => {
     assert.equal(result, 'valid')
   })
 
-  it('returns not_checked when same passage_id maps to materially different records', () => {
-    const { passage, sources, revisions, events, owner } = verifiedPassageFixture()
+  it('returns not_checked when two succeeded owners share a passage_id with different eligible records', () => {
+    const { passage, sources, revisions, revision } = verifiedPassageFixture()
+    const otherOwner = fetchOwner('fetch-other', 'att-other')
+    const otherRevision = stampSourceFetchEvidenceOwnerOnRevision(
+      { ...revision, revision_id: 'rev-other' },
+      otherOwner,
+    )
     const other = stampSourceFetchEvidenceOwnerOnPassage(
       PassageRecordSchema.parse({
         ...passage,
         passage_id: passage.passage_id,
+        source_revision_id: otherRevision.revision_id,
         text_ref: {
           mode: 'inline',
           text: 'other excerpt',
           text_hash: createHash('sha256').update('other excerpt', 'utf8').digest('hex'),
         },
       }),
-      fetchOwner('fetch-other', 'att-other'),
+      otherOwner,
     )
+    const events: ResearchStoreEvent[] = [
+      fetchIntent('fetch-ok', 'att-ok'),
+      revisionRecorded(revision),
+      passageRecorded(passage),
+      fetchSucceeded('fetch-ok', 'att-ok'),
+      fetchIntent('fetch-other', 'att-other'),
+      revisionRecorded(otherRevision),
+      passageRecorded(other),
+      fetchSucceeded('fetch-other', 'att-other'),
+    ]
     const result = deriveFindingSourceIntegrity(
       finding([passage.passage_id]),
       [passage, other],
-      revisions,
+      [revision, otherRevision],
       sources,
-      [...events, passageRecorded(other)],
+      events,
     )
     assert.equal(result, 'not_checked')
-    assert.notEqual(owner.operation_id, other.source_fetch_owner?.operation_id)
+  })
+
+  it('retains valid integrity when a failed attempt later records a conflicting duplicate passage_id', () => {
+    const { passage, sources, revisions, revision } = verifiedPassageFixture()
+    const failedOwner = fetchOwner('fetch-fail', 'att-fail')
+    const failedDup = stampSourceFetchEvidenceOwnerOnPassage(
+      PassageRecordSchema.parse({
+        ...passage,
+        text_ref: {
+          mode: 'inline',
+          text: 'failed attempt tamper',
+          text_hash: createHash('sha256').update('failed attempt tamper', 'utf8').digest('hex'),
+        },
+      }),
+      failedOwner,
+    )
+    const events: ResearchStoreEvent[] = [
+      fetchIntent('fetch-ok', 'att-ok'),
+      revisionRecorded(revision),
+      passageRecorded(passage),
+      fetchSucceeded('fetch-ok', 'att-ok'),
+      fetchIntent('fetch-fail', 'att-fail'),
+      passageRecorded(failedDup),
+      {
+        ...fetchSucceeded('fetch-fail', 'att-fail'),
+        payload: {
+          completion: {
+            mission_id: MISSION_ID,
+            operation_id: 'fetch-fail',
+            attempt_id: 'att-fail',
+            completed_at: '2026-10-20T12:00:02.000Z',
+            settlement: 'failed',
+          },
+        },
+      },
+    ]
+    const result = deriveFindingSourceIntegrity(
+      finding([passage.passage_id]),
+      [passage],
+      revisions,
+      sources,
+      events,
+    )
+    assert.equal(result, 'valid')
   })
 
   it('returns invalid when revision owner contradicts passage owner', () => {
