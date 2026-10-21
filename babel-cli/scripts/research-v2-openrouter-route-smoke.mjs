@@ -4,9 +4,9 @@
  * from model-policy (or complete OpenRouter env override) and reject any other provider.
  * No network, no OpenCode, no credentials required.
  */
-import { verifyEffectiveResearchV2OpenRouterRouteForLive } from '../src/research/v2/model/researchV2ModelRoute.ts'
+import { verifyEffectiveResearchV2OpenRouterRouteForCampaignPreflight } from '../src/research/v2/model/researchV2ModelRoute.ts'
 
-const route = verifyEffectiveResearchV2OpenRouterRouteForLive(process.env)
+const route = verifyEffectiveResearchV2OpenRouterRouteForCampaignPreflight(process.env)
 const payload = {
   schema: 'research-v2-openrouter-route-smoke/v1',
   provider: route.provider,

@@ -3,10 +3,11 @@ import { describe, it } from 'node:test'
 import {
   DEFAULT_RESEARCH_V2_OPENROUTER_ROUTE_KEY,
   assertCompleteResearchV2ModelEnvOverride,
+  assertResearchV2CampaignPreflightProviderIsOpenRouter,
   resolveEffectiveResearchV2ModelRouteForCli,
   resolveLiveResearchModelConfigForCli,
   resolveResearchV2OpenRouterRouteFromPolicy,
-  verifyEffectiveResearchV2OpenRouterRouteForLive,
+  verifyEffectiveResearchV2OpenRouterRouteForCampaignPreflight,
 } from './researchV2ModelRoute.js'
 
 describe('research v2 OpenRouter model route', () => {
@@ -55,25 +56,14 @@ describe('research v2 OpenRouter model route', () => {
     assert.equal(config.engine.modelId, 'deepseek/deepseek-v4-flash-0731')
   })
 
-  it('rejects env override model_id not present in configured openrouter routes', () => {
+  it('rejects env override not present in configured model-policy routes', () => {
     assert.throws(
       () =>
         resolveLiveResearchModelConfigForCli({
           BABEL_RESEARCH_V2_PROVIDER: 'openrouter',
           BABEL_RESEARCH_V2_MODEL_ID: 'vendor/not-in-policy',
         }),
-      /must match a configured enabled openrouter route/,
-    )
-  })
-
-  it('rejects non-OpenRouter env override (no silent OpenCode fallback)', () => {
-    assert.throws(
-      () =>
-        verifyEffectiveResearchV2OpenRouterRouteForLive({
-          BABEL_RESEARCH_V2_PROVIDER: 'opencode',
-          BABEL_RESEARCH_V2_MODEL_ID: 'some/model',
-        }),
-      /must be openrouter/i,
+      /must match a configured enabled model-policy route/,
     )
     assert.throws(
       () =>
@@ -81,7 +71,16 @@ describe('research v2 OpenRouter model route', () => {
           BABEL_RESEARCH_V2_PROVIDER: 'opencode-go',
           BABEL_RESEARCH_V2_MODEL_ID: 'some/model',
         }),
-      /must be openrouter/i,
+      /must match a configured enabled model-policy route/,
     )
+  })
+
+  it('campaign preflight rejects non-OpenRouter provider', () => {
+    assert.throws(
+      () => assertResearchV2CampaignPreflightProviderIsOpenRouter('opencode'),
+      /campaign preflight requires openrouter/i,
+    )
+    const route = verifyEffectiveResearchV2OpenRouterRouteForCampaignPreflight({})
+    assert.equal(route.provider, 'openrouter')
   })
 })

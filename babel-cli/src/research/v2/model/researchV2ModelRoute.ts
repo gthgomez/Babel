@@ -6,14 +6,14 @@ import type { LiveResearchModelPortConfig } from './researchV2LiveModelPort.js'
 /** Default OpenRouter control route from repo model-policy (not a silent family default). */
 export const DEFAULT_RESEARCH_V2_OPENROUTER_ROUTE_KEY = 'deepseek-v4-flash-openrouter'
 
-/** Live research v2 accepts OpenRouter only (no OpenCode or other provider fallback). */
-export const RESEARCH_V2_LIVE_MODEL_PROVIDER = 'openrouter'
+/** Campaign live-smoke preflight: operator lane is OpenRouter-only for this testing window. */
+export const RESEARCH_V2_CAMPAIGN_PREFLIGHT_PROVIDER = 'openrouter'
 
-export function assertResearchV2LiveModelProviderIsOpenRouter(provider: string): void {
+export function assertResearchV2CampaignPreflightProviderIsOpenRouter(provider: string): void {
   const normalized = provider.trim().toLowerCase()
-  if (normalized !== RESEARCH_V2_LIVE_MODEL_PROVIDER) {
+  if (normalized !== RESEARCH_V2_CAMPAIGN_PREFLIGHT_PROVIDER) {
     throw new Error(
-      `research v2 live model provider must be ${RESEARCH_V2_LIVE_MODEL_PROVIDER} (got ${provider}); other providers including OpenCode are rejected`,
+      `research v2 campaign preflight requires ${RESEARCH_V2_CAMPAIGN_PREFLIGHT_PROVIDER} (got ${provider}); use npm run test:research-v2-openrouter-route-smoke before live smoke`,
     )
   }
 }
@@ -50,30 +50,29 @@ export function assertCompleteResearchV2ModelEnvOverride(env: NodeJS.ProcessEnv 
   }
 }
 
-/** Runtime validation: env override model_id must match an enabled OpenRouter route in model-policy. */
-export function assertResearchV2EnvOverrideMatchesConfiguredOpenRouterRoute(
+/** Runtime validation: complete env override must match an enabled model-policy provider + model_id pair. */
+export function assertResearchV2EnvOverrideMatchesConfiguredModelRoute(
   env: NodeJS.ProcessEnv = process.env,
   babelRoot?: string,
 ): void {
   const provider = env.BABEL_RESEARCH_V2_PROVIDER?.trim()
   const modelId = env.BABEL_RESEARCH_V2_MODEL_ID?.trim()
   if (!provider || !modelId) return
-  assertResearchV2LiveModelProviderIsOpenRouter(provider)
   const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..', '..')
   const { config } = loadModelPolicyConfig(babelRoot ?? repoRoot)
   const models = config.models as Record<
     string,
     { provider?: string; model_id?: string; enabled?: boolean }
   >
-  const allowed = new Set<string>()
-  for (const entry of Object.values(models)) {
-    if (entry?.provider === 'openrouter' && entry.enabled !== false && entry.model_id) {
-      allowed.add(entry.model_id)
-    }
-  }
-  if (!allowed.has(modelId)) {
+  const matched = Object.values(models).some(
+    (entry) =>
+      entry?.enabled !== false &&
+      entry.provider === provider &&
+      entry.model_id === modelId,
+  )
+  if (!matched) {
     throw new Error(
-      `research v2 BABEL_RESEARCH_V2_MODEL_ID must match a configured enabled openrouter route in model-policy (got ${modelId})`,
+      `research v2 model override must match a configured enabled model-policy route (provider=${provider}, model_id=${modelId})`,
     )
   }
 }
@@ -129,17 +128,21 @@ export function liveResearchModelConfigFromOpenRouterRoute(
 }
 
 /**
- * Fail-closed check before live API or canonical live smoke: effective route must be OpenRouter.
- * Uses model-policy when env override is absent; rejects non-openrouter env overrides.
+ * Campaign preflight only (`test:research-v2-openrouter-route-smoke`): OpenRouter lane for current testing.
+ * Not used by general `babel research v2 run` / live-plan resolution.
  */
-export function verifyEffectiveResearchV2OpenRouterRouteForLive(
+export function verifyEffectiveResearchV2OpenRouterRouteForCampaignPreflight(
   env: NodeJS.ProcessEnv = process.env,
   routeKey?: string,
 ): EffectiveResearchV2ModelRoute {
   const effective = resolveEffectiveResearchV2ModelRouteForCli(env, routeKey)
-  assertResearchV2LiveModelProviderIsOpenRouter(effective.provider)
+  assertResearchV2CampaignPreflightProviderIsOpenRouter(effective.provider)
   return effective
 }
+
+/** @deprecated Use verifyEffectiveResearchV2OpenRouterRouteForCampaignPreflight */
+export const verifyEffectiveResearchV2OpenRouterRouteForLive =
+  verifyEffectiveResearchV2OpenRouterRouteForCampaignPreflight
 
 /** Same effective route resolution used by `babel research v2 run` and `model-route`. */
 export function resolveEffectiveResearchV2ModelRouteForCli(
@@ -150,7 +153,7 @@ export function resolveEffectiveResearchV2ModelRouteForCli(
   const provider = env.BABEL_RESEARCH_V2_PROVIDER?.trim()
   const modelId = env.BABEL_RESEARCH_V2_MODEL_ID?.trim()
   if (provider && modelId) {
-    assertResearchV2EnvOverrideMatchesConfiguredOpenRouterRoute(env)
+    assertResearchV2EnvOverrideMatchesConfiguredModelRoute(env)
     const backendKey = env.BABEL_RESEARCH_V2_BACKEND_KEY ?? 'research-v2-cli'
     return {
       route_key: null,
@@ -174,13 +177,13 @@ export function resolveLiveResearchModelConfigForCli(
   env: NodeJS.ProcessEnv = process.env,
   routeKey?: string,
 ): { config: LiveResearchModelPortConfig; route_report: EffectiveResearchV2ModelRoute } {
-  const effective = verifyEffectiveResearchV2OpenRouterRouteForLive(env, routeKey)
+  const effective = resolveEffectiveResearchV2ModelRouteForCli(env, routeKey)
   if (effective.selection_basis === 'env_override') {
     return {
       config: {
         backendKey: effective.backend_key,
         engine: {
-          provider: 'openrouter',
+          provider: effective.provider as LiveResearchModelPortConfig['engine']['provider'],
           modelId: effective.model_id,
           ...(env.BABEL_RESEARCH_V2_API_KEY_ENV
             ? { apiKeyEnvVar: env.BABEL_RESEARCH_V2_API_KEY_ENV }

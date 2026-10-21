@@ -1,7 +1,6 @@
 import { createProviderRunner, type ProviderEngineOptions } from '../../../runners/providerEngine.js'
 import type { ProviderId } from '../../../runners/providerRegistry.js'
 import { assertResearchV2LiveApiEnabled } from '../liveApiGate.js'
-import { assertResearchV2LiveModelProviderIsOpenRouter } from './researchV2ModelRoute.js'
 import { ProviderResearchModelBridge } from './providerResearchModelBridge.js'
 
 export type CreateProviderRunner = typeof createProviderRunner
@@ -19,7 +18,6 @@ export function resolveLiveResearchModelConfigFromEnv(
   const provider = env.BABEL_RESEARCH_V2_PROVIDER
   const modelId = env.BABEL_RESEARCH_V2_MODEL_ID
   if (!provider || !modelId) return null
-  assertResearchV2LiveModelProviderIsOpenRouter(provider)
   const backendKey = env.BABEL_RESEARCH_V2_BACKEND_KEY ?? 'research-v2-cli'
   return {
     backendKey,
@@ -41,7 +39,6 @@ export function resolveLiveResearchModelConfigFromEnv(
 export function createProviderResearchModelBridge(
   config: LiveResearchModelPortConfig,
 ): ProviderResearchModelBridge {
-  assertResearchV2LiveModelProviderIsOpenRouter(String(config.engine.provider))
   const createRunner = config.createRunner ?? createProviderRunner
   const runner = createRunner(config.engine)
   return new ProviderResearchModelBridge({

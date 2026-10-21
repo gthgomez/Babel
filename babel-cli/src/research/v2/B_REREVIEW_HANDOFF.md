@@ -70,7 +70,7 @@ npm run test:research-v2-pdfjs-staged-package-smoke
 | Incorrect / hung-style glob | `node --test src/research/v2/**/*.test.ts` | **Do not use** — shell leaves literal `**` or runs a partial set; not authoritative |
 | Packaged PDF runtime (A smoke) | `npm run test:research-v2-pdfjs-staged-package-smoke` | Isolated lockfile `npm ci` + platform binding + pdfjs text extract |
 | B reciprocal packaging (authoritative) | `npm run test:research-v2-production-package-reciprocal` | Same flags as Windows pack; copies **dist** + B probes; `canvas_package_json_present=true` + PDF probe ok |
-| Live route preflight (OpenRouter only) | `npm run test:research-v2-openrouter-route-smoke` | Run **before** any live research v2 smoke; rejects OpenCode/non-OpenRouter env overrides (no network) |
+| Campaign live preflight (OpenRouter lane) | `npm run test:research-v2-openrouter-route-smoke` | **Campaign testing only** — run before live smoke; general `research v2 run` keeps validated configurable providers via model-policy |
 
 **Canvas packaging (A owns lock/runtime):** direct `@napi-rs/canvas@0.1.80` + `pdfjs-dist@5.4.296` in `dependencies` (aligned with B `b3a6861b5` intent, reconciled with explicit platform-binding install for `--omit=optional` trees). B reciprocal PDF tests should copy runtime into staged `node_modules` and report resolved paths the same way — `NODE_PATH` to checkout `dist` is not packaged proof.
 

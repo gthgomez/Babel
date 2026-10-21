@@ -7,7 +7,7 @@ import { assertResearchV2LiveApiEnabled, isResearchV2LiveApiEnabled } from '../r
 import { createLiveResearchModelPort } from '../research/v2/model/researchV2LiveModelPort.js'
 import {
   resolveLiveResearchModelConfigForCli,
-  verifyEffectiveResearchV2OpenRouterRouteForLive,
+  resolveEffectiveResearchV2ModelRouteForCli,
 } from '../research/v2/model/researchV2ModelRoute.js'
 import {
   cancelResearchV2OwnerSession,
@@ -164,7 +164,7 @@ export function registerResearchV2Commands(program: Command): void {
     .option('--json', 'emit machine-readable output', false)
     .action((options: { routeKey: string; json: boolean }) => {
       try {
-        const route = verifyEffectiveResearchV2OpenRouterRouteForLive(
+        const route = resolveEffectiveResearchV2ModelRouteForCli(
           process.env,
           options.routeKey.trim() || undefined,
         )
