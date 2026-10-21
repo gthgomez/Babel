@@ -14,15 +14,16 @@ import { runAdmittedComposedRetrievalIteration } from './researchComposedRetriev
 import { missionUsesComposedTechnicalRetrieval } from './technicalRetrievalComposition.js'
 import { buildSemanticSupportReviewInput } from './buildSemanticSupportReviewInput.js'
 import { buildSynthesizeReportModelInput } from './buildSynthesizeReportModelInput.js'
+import { passageRecordsWithSourceAttribution } from './claimedSourceAttribution.js'
+import { buildMissionSourceSlotAttribution } from './sourceAttributionContext.js'
+import { listSourceRevisionsFromStoreEvents, listSourcesFromStoreEvents } from './listSourceRevisionsFromStoreEvents.js'
 import {
   applySemanticSupportReview,
   findingsFromExtractModelOutput,
 } from './findingsFromModelOutput.js'
 import { buildSynthesizedResearchReport } from './buildSynthesizedResearchReport.js'
-import {
-  listSourceRevisionsFromStoreEvents,
-  listSourcesFromStoreEvents,
-} from './listSourceRevisionsFromStoreEvents.js'
+import { deriveSearchProviderReportLimitations } from './sourceDiscoverSearchReceipt.js'
+import { persistModelInvocationEvidence } from './persistModelInvocationEvidence.js'
 import { settleModelOperation } from './settleModelOperation.js'
 import { unknownUsageSettlement } from './settleExternalOperation.js'
 import type { ResearchModelInvocationResult } from '../ports/researchModelPort.js'
@@ -193,16 +194,15 @@ async function invokeModelPhase(
     )
     throw err instanceof Error ? err : new Error(message)
   }
-  await store.appendModelReceipt(ctx, result.receipt)
-  await settleModelOperation(
+  await persistModelInvocationEvidence({
     store,
     ctx,
-    ctx.mission_id,
-    params.operationId,
-    params.attemptId,
-    result,
-    params.now(),
-  )
+    missionId: ctx.mission_id,
+    operationId: params.operationId,
+    attemptId: params.attemptId,
+    modelResult: result,
+    completedAt: params.now(),
+  })
   return result.output
 }
 
@@ -286,6 +286,8 @@ export async function runAdmittedResearchEndToEndPass(
 
   const composedRetrievalLimitations =
     'limitations' in retrieved && Array.isArray(retrieved.limitations) ? retrieved.limitations : []
+  const storeEventsAfterRetrieval = await request.store.listEvents(request.session.mission.mission_id)
+  const searchReceiptLimitations = deriveSearchProviderReportLimitations(storeEventsAfterRetrieval)
 
   const ctx = retrieved.writeContext
   const storeEvents = await request.store.listEvents(request.session.mission.mission_id)
@@ -295,6 +297,13 @@ export async function runAdmittedResearchEndToEndPass(
   const passages = filterPassagesForExtractionLineage(allPassages, storeEvents)
   const extractionLineageLimitations = extractionLineageReportLimitations(allPassages, storeEvents)
   const extractionPassageIds = passages.map((p) => p.passage_id)
+  const extractionSources = listSourcesFromStoreEvents(storeEventsAfterRetrieval)
+  const extractionRevisions = listSourceRevisionsFromStoreEvents(storeEventsAfterRetrieval)
+  const missionSourceSlots = buildMissionSourceSlotAttribution(
+    request.session.mission,
+    extractionSources,
+    extractionRevisions,
+  )
 
   const extractOutput = await invokeModelPhase(request.store, ctx, request.model, {
     operationId: request.extractOperationId,
@@ -304,14 +313,17 @@ export async function runAdmittedResearchEndToEndPass(
       mission_id: request.session.mission.mission_id,
       plan_revision_id: planned.planRevisionId,
       mission_requirements: missionRequirementsPayload(request.session.mission),
+      mission_source_slots: missionSourceSlots,
       passage_ids: extractionPassageIds,
-      passages: passages.map((p) => ({
-        passage_id: p.passage_id,
-        text: p.text_ref.mode === 'inline' ? p.text_ref.text : '',
-      })),
+      passages: passageRecordsWithSourceAttribution(
+        passages,
+        extractionSources,
+        extractionRevisions,
+      ),
       plan_questions: activePlan.questions.map((q) => ({
         question_id: q.question_id,
         text: q.text,
+        evidence_requirement: q.evidence_requirement,
       })),
     },
     signal: request.signal,
@@ -337,6 +349,7 @@ export async function runAdmittedResearchEndToEndPass(
   const reviewInput = buildSemanticSupportReviewInput(findings, passages, activePlan, {
     sources: reviewSources,
     sourceRevisions: reviewRevisions,
+    mission: request.session.mission,
   })
   const reviewOutput = await invokeModelPhase(request.store, ctx, request.model, {
     operationId: request.reviewOperationId,
@@ -351,11 +364,17 @@ export async function runAdmittedResearchEndToEndPass(
     now,
   })
 
+  const reviewMissionSourceSlots = buildMissionSourceSlotAttribution(
+    request.session.mission,
+    reviewSources,
+    reviewRevisions,
+  )
   findings = applySemanticSupportReview(findings, reviewOutput, now(), {
     plan: activePlan,
     passages,
     sources: reviewSources,
     sourceRevisions: reviewRevisions,
+    missionSourceSlots: reviewMissionSourceSlots,
   })
   for (const finding of findings) {
     throwIfAborted(request.signal, 'semantic judgment persistence')
@@ -369,7 +388,12 @@ export async function runAdmittedResearchEndToEndPass(
     input: {
       mission_id: request.session.mission.mission_id,
       primary_question: request.session.mission.primary_question,
-      ...buildSynthesizeReportModelInput(findings),
+      ...buildSynthesizeReportModelInput(findings, {
+        mission_source_slots: reviewMissionSourceSlots,
+        passages,
+        sources: reviewSources,
+        sourceRevisions: reviewRevisions,
+      }),
     },
     signal: request.signal,
     dispatchedAt: request.dispatchedAt,
@@ -388,7 +412,11 @@ export async function runAdmittedResearchEndToEndPass(
     sourceRevisions,
     modelOutput: synthesizeOutput,
     generatedAt: now(),
-    additionalLimitations: [...composedRetrievalLimitations, ...extractionLineageLimitations],
+    additionalLimitations: [
+      ...composedRetrievalLimitations,
+      ...searchReceiptLimitations,
+      ...extractionLineageLimitations,
+    ],
   })
   await request.store.appendTerminalReport(ctx, report)
 

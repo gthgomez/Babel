@@ -123,15 +123,41 @@ function listEventKinds(events: readonly { kind: string }[]): string[] {
   return events.map((e) => e.kind)
 }
 
-describe('T-L1 invalid discover-primary planning failure reciprocal (production runner, synthetic model)', () => {
-  it('native trace baseline: missionRequirementsPayload lists discover-primary instead of repository-pin slots on T-L1', () => {
+describe('historical pre-repair characterization (808d0613 / C #408 fe9bf5ef class; frozen)', () => {
+  it('reference: planner payload directory defect was discover-primary fallback for repository-only missions', () => {
+    const mission = ResearchMissionV2Schema.parse(JSON.parse(readFileSync(missionPath, 'utf8')))
+    const canonicalSlots = missionCoverageSourceSlots(mission)
+    assert.equal(canonicalSlots.includes('discover-primary'), false)
+    assert.deepEqual(canonicalSlots, ['repository-pin-0', 'repository-pin-1'])
+    assert.deepEqual(PRE_REPAIR_PAYLOAD_COVERAGE_SLOTS, ['discover-primary'])
+    assert.notDeepEqual(PRE_REPAIR_PAYLOAD_COVERAGE_SLOTS, canonicalSlots)
+  })
+
+  it('reference: live diagnostic durable subset omitted external_operation_completed before settlement repair', () => {
+    assert.deepEqual([...C_408_DIAGNOSTIC_EVENT_KINDS], [
+      'mission_created',
+      'plan_revised',
+      'external_operation_intent',
+      'terminal_receipt',
+    ])
+    assert.ok(PRE_REPAIR_ABSENT_EVENT_KINDS.includes('external_operation_completed'))
+  })
+})
+
+/** Pre-A `missionRequirementsPayload` fallback (808d0613); not asserted against current runtime. */
+const PRE_REPAIR_PAYLOAD_COVERAGE_SLOTS = ['discover-primary'] as const
+const PRE_REPAIR_ABSENT_EVENT_KINDS = [
+  'external_operation_completed',
+  'model_invocation_completed',
+] as const
+
+describe('T-L1 invalid discover-primary planning failure reciprocal (A c27fb39c union, synthetic model)', () => {
+  it('missionRequirementsPayload advertises canonical repository-pin slots on T-L1', () => {
     const mission = ResearchMissionV2Schema.parse(JSON.parse(readFileSync(missionPath, 'utf8')))
     const canonicalSlots = missionCoverageSourceSlots(mission)
     const requirements = missionRequirementsPayload(mission)
-    assert.equal(canonicalSlots.includes('discover-primary'), false)
-    assert.ok(canonicalSlots.every((id) => id.startsWith('repository-pin-')))
-    assert.deepEqual(requirements.coverage_source_slots, ['discover-primary'])
-    assert.notDeepEqual(requirements.coverage_source_slots, canonicalSlots)
+    assert.deepEqual(requirements.coverage_source_slots, canonicalSlots)
+    assert.equal(requirements.coverage_source_slots.includes('discover-primary'), false)
   })
 
   it('synthetic envelope parses; mission slots exclude discover-primary', () => {
@@ -147,17 +173,22 @@ describe('T-L1 invalid discover-primary planning failure reciprocal (production 
     assert.equal(parsed.kind, 'plan_questions')
   })
 
-  it('production runner: strict slot rejection, C diagnostic durable subset, no retrieval evidence, cold reopen stable', async () => {
+  it('production runner: strict slot rejection, settled planning failure, no retrieval evidence, cold reopen stable', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'babel-t-l1-invalid-slot-'))
     const planId = 'plan-t-l1-invalid-slot-reciprocal'
     try {
       const mission = await runSyntheticInvalidSlotMission(dir, planId)
       const inspect = await openAdmittedInspectStore(dir)
       const events = await inspect.listEvents(mission.mission_id)
-      assert.deepEqual(listEventKinds(events), [...C_408_DIAGNOSTIC_EVENT_KINDS])
+      const kinds = listEventKinds(events)
+      assert.ok(kinds.includes('mission_created'))
+      assert.ok(kinds.includes('plan_revised'))
+      assert.ok(kinds.includes('external_operation_intent'))
+      assert.ok(kinds.includes('external_operation_completed'))
+      assert.ok(kinds.includes('terminal_receipt'))
 
       assert.equal(events.filter((e) => e.kind === 'external_operation_intent').length, 1)
-      assert.equal(events.filter((e) => e.kind === 'external_operation_completed').length, 0)
+      assert.equal(events.filter((e) => e.kind === 'external_operation_completed').length, 1)
       assert.equal(events.filter((e) => e.kind === 'model_invocation_completed').length, 0)
       assert.equal(events.filter((e) => e.kind === 'plan_revised').length, 1)
 
@@ -209,7 +240,7 @@ describe('T-L1 invalid discover-primary planning failure reciprocal (production 
     }
   })
 
-  it('acceptance: actual planner input advertises canonical repository-pin slots, not discover-primary (red until missionRequirementsPayload repair)', async () => {
+  it('actual planner input advertises canonical repository-pin slots, not discover-primary', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'babel-t-l1-planner-input-'))
     let plannerInput: Record<string, unknown> | undefined
     const model = wrapModelWithPlanQuestionsInputCapture(tL1ProductionShapedModel(), (input) => {
@@ -237,7 +268,7 @@ describe('T-L1 invalid discover-primary planning failure reciprocal (production 
     }
   })
 
-  it('acceptance: planning slot validation failure settles model intent exactly once with preserved usage (red until buildPlanRevision settlement repair)', async () => {
+  it('planning slot validation failure settles model intent exactly once with preserved usage', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'babel-t-l1-invalid-slot-settlement-'))
     const fixture = loadSyntheticFixture()
     const usageMeta = fixture.request_local_usage_metadata

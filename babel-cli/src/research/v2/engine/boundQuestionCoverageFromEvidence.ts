@@ -15,7 +15,7 @@ import {
 type QuestionCoverageStatus = z.infer<typeof QuestionCoverageStatusSchema>
 
 const HOST_COVERAGE_REVIEWER = 'research-v2-bound-question-coverage'
-const HOST_COVERAGE_REVIEWER_VERSION = '0.3.0-obligation-judgments'
+const HOST_COVERAGE_REVIEWER_VERSION = '0.3.2-obligation-judgment-integrity'
 
 export function buildRevisionProvenanceIndex(
   sources: readonly SourceRecord[],
@@ -48,10 +48,15 @@ export function citedPassageEvidenceSignals(
   } catch {
     web_domain = undefined
   }
+  const fetchedUrl = provenance?.source.observed_urls[0]
+  const fetchedTitle =
+    typeof provenance?.source.title === 'string' ? provenance.source.title : undefined
   return {
     passage_id: passage.passage_id,
     source_revision_id: passage.source_revision_id,
     coverage_source_slot: provenance?.source.coverage_source_slot,
+    fetched_url: fetchedUrl,
+    fetched_title: fetchedTitle,
     web_domain,
     revision_completeness: provenance?.revision.completeness,
     passage_truncated,
@@ -141,8 +146,10 @@ export function enforceBoundQuestionCoverageOnFindings(
       return finding
     }
     const obligations = obligationsForQuestion(question)
-    if (finding.semantic_support?.status !== 'supported' && obligations.length > 0) {
-      return finding
+    if (obligations.length === 0) {
+      if (finding.semantic_support?.status !== 'supported') {
+        return finding
+      }
     }
 
     const assessment = assessBoundQuestionCoverageFromAdmittedEvidence(question, finding, {

@@ -150,6 +150,13 @@ function q4ObligationCoveragePositive(): Record<string, unknown>[] {
   ]
 }
 
+const gL2ClaimedSlotsAudit = ['comparison_mdn', 'comparison_cloudflare'] as const
+
+export const gL2FixtureMissionSourceSlots = gL2ClaimedSlotsAudit.map((source_slot) => ({
+  source_slot,
+  fetch_status: 'admitted_fetched' as const,
+}))
+
 export function gL2AuditDerivedModelReviewClaimingAnswersFor(
   findingId: string,
 ): Record<string, unknown> {
@@ -167,6 +174,8 @@ export function gL2AuditDerivedModelReviewClaimingAnswersFor(
         status: 'supported',
         rationale: 'Model incorrectly labels coverage as answers (original-derived defect replay).',
         question_coverage: 'answers',
+        claimed_source_attribution: 'matches_admitted_citations',
+        claimed_source_slots: [...gL2ClaimedSlotsAudit],
         ...(obligation_coverage ? { obligation_coverage } : {}),
       },
     ],
@@ -181,6 +190,8 @@ export const gL2AuditDerivedModelReviewBothClaimingAnswers = {
       status: 'supported' as const,
       rationale: 'Model incorrectly labels comparison answered despite missing MDN max-age substance.',
       question_coverage: 'answers' as const,
+      claimed_source_attribution: 'matches_admitted_citations',
+      claimed_source_slots: [...gL2ClaimedSlotsAudit],
       obligation_coverage: q3ObligationCoverageDefectReplay(),
     },
     {
@@ -188,6 +199,8 @@ export const gL2AuditDerivedModelReviewBothClaimingAnswers = {
       status: 'supported' as const,
       rationale: 'Model treats cache directives as audience coverage.',
       question_coverage: 'answers' as const,
+      claimed_source_attribution: 'matches_admitted_citations',
+      claimed_source_slots: [...gL2ClaimedSlotsAudit],
       obligation_coverage: q4ObligationCoverageWrongAspect(),
     },
   ],
@@ -202,6 +215,8 @@ export function gL2PositiveControlModelReview(): Record<string, unknown> {
         status: 'supported',
         rationale: 'Both slots document max-age semantics in admitted excerpts.',
         question_coverage: 'answers',
+        claimed_source_attribution: 'matches_admitted_citations',
+        claimed_source_slots: [...gL2ClaimedSlotsAudit],
         obligation_coverage: q3ObligationCoveragePositive(),
       },
       {
@@ -209,6 +224,8 @@ export function gL2PositiveControlModelReview(): Record<string, unknown> {
         status: 'supported',
         rationale: 'Audience roles are explicit per source.',
         question_coverage: 'answers',
+        claimed_source_attribution: 'matches_admitted_citations',
+        claimed_source_slots: [...gL2ClaimedSlotsAudit],
         obligation_coverage: q4ObligationCoveragePositive(),
       },
     ],

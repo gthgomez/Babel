@@ -10,14 +10,17 @@ import { describe, it } from 'node:test'
 import { ResearchMissionV2Schema } from '../contracts/mission.js'
 import type { FindingRecord } from '../contracts/findings.js'
 import { applySemanticSupportReview } from './findingsFromModelOutput.js'
-import { assessObligationCoverageHostBound } from './obligationCoverageHostBound.js'
+import {
+  assessObligationCoverageHostBound,
+  obligationCitationStructuralCompleteness,
+} from './obligationCoverageHostBound.js'
 import { buildPlanRevisionFromPlanQuestions } from './planFromModelOutput.js'
 import {
   missionCoverageSourceSlots,
   stampCoverageSourceSlotOnSource,
 } from './missionCoverageSourceSlots.js'
-import { passageSupportsObligationCompleteness } from './planCoverageObligations.js'
 import { questionIdsWithAnsweredCoverage } from './researchReportFinalization.js'
+import { requiredClaimedSourceReviewFields } from './testSupport/requiredClaimedSourceReviewFields.js'
 import {
   gL2OriginalDerivedFindingQ3Positive,
   gL2OriginalDerivedFindingQ4Positive,
@@ -101,6 +104,7 @@ describe('G-L2 obligation_coverage judgment integrity (production wiring)', () =
             status: 'supported',
             rationale: 'model claims answers',
             question_coverage: 'answers',
+            ...requiredClaimedSourceReviewFields(['web-ref-0', 'web-ref-1']),
             obligation_coverage,
           },
         ],
@@ -111,6 +115,10 @@ describe('G-L2 obligation_coverage judgment integrity (production wiring)', () =
         passages: gL2OriginalDerivedPassages,
         sources,
         sourceRevisions: gL2OriginalDerivedRevisions,
+        missionSourceSlots: missionCoverageSourceSlots(mission).map((source_slot) => ({
+          source_slot,
+          fetch_status: 'admitted_fetched',
+        })),
       },
     )
   }
@@ -223,18 +231,28 @@ describe('G-L2 obligation_coverage judgment integrity (production wiring)', () =
         })),
       },
     })
+    const positiveReview = gL2PositiveControlModelReview() as {
+      judgments: Array<Record<string, unknown>>
+    }
+    for (const judgment of positiveReview.judgments) {
+      judgment.claimed_source_slots = ['web-ref-0', 'web-ref-1']
+    }
     const reviewed = applySemanticSupportReview(
       [
         withQuestionId(gL2OriginalDerivedFindingQ3Positive, fullPlan.questions[0]!.question_id),
         withQuestionId(gL2OriginalDerivedFindingQ4Positive, fullPlan.questions[1]!.question_id),
       ],
-      gL2PositiveControlModelReview(),
+      positiveReview,
       '2026-10-21T12:11:00.000Z',
       {
         plan: fullPlan,
         passages: gL2OriginalDerivedPassages,
         sources,
         sourceRevisions: gL2OriginalDerivedRevisions,
+        missionSourceSlots: missionCoverageSourceSlots(mission).map((source_slot) => ({
+          source_slot,
+          fetch_status: 'admitted_fetched',
+        })),
       },
     )
     assert.deepEqual(
@@ -243,20 +261,23 @@ describe('G-L2 obligation_coverage judgment integrity (production wiring)', () =
     )
   })
 
-  it('documents host bound still applies passageSupportsObligationCompleteness regex (A replaces with semantic judgments)', () => {
+  it('host bound rejects overview-only MDN support when structural completeness fails (truncated excerpt)', () => {
     const overviewPassage = gL2OriginalDerivedPassages.find(
       (p) => p.passage_id === 'fetch-mdn-original-derived:html:overview',
     )
     assert.ok(overviewPassage)
-    const text =
-      overviewPassage.text_ref.mode === 'inline' ? overviewPassage.text_ref.text : ''
+    const mdnRevision = gL2OriginalDerivedRevisions.find(
+      (r) => r.revision_id === overviewPassage.source_revision_id,
+    )
+    const mdnSource = sources.find((s) => s.source_id === mdnRevision?.source_id)
+    assert.ok(mdnRevision && mdnSource)
     assert.equal(
-      passageSupportsObligationCompleteness(text, {
+      obligationCitationStructuralCompleteness(overviewPassage, {
         obligation_id: 'ob-mdn-max-age-semantics',
         source_slot: 'web-ref-0',
         aspect: 'technical_effect',
         technical_effect: 'max_age_or_ttl_semantics',
-      }),
+      }, { source: mdnSource, revision: mdnRevision }),
       false,
     )
     const question = plan.questions[0]!

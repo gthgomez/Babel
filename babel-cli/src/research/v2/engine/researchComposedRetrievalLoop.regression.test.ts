@@ -18,6 +18,7 @@ import pins from '../fixtures/campaign/T-L1-T-L2-PINNED-VERSIONS.json' with { ty
 
 const FIXED_NOW = '2026-10-21T09:00:00.000Z'
 const campaignDir = join(dirname(fileURLToPath(import.meta.url)), '../fixtures/campaign')
+const syntheticPaperBytes = readFileSync(join(campaignDir, 'papers/mutable-locator-synthetic.pdf'))
 
 function loadMission(name: string) {
   return ResearchMissionV2Schema.parse(
@@ -117,7 +118,7 @@ describe('composed retrieval regressions (scoped access + settlement)', () => {
   })
 
   it('repository slot failure preserves writer generation for a later document slot', async () => {
-    const base = loadMission('T-L2-mission.json')
+    const base = loadMission('T-L2-synthetic-mission.json')
     const mission = {
       ...base,
       source_policy: {
@@ -129,10 +130,6 @@ describe('composed retrieval regressions (scoped access + settlement)', () => {
     const registries = await createCombinedResearchRegistries()
     const discovery = resolveDiscoveryAdapterForMission(mission, registries)
     assert.ok(discovery instanceof TechnicalRepositoryFileAdapter)
-
-    const pdfFixture = readFileSync(
-      join(dirname(fileURLToPath(import.meta.url)), '../adapters/documents/fixtures/two-page-sample.pdf'),
-    )
 
     const searchProvider = createMissionProductionSearchProvider({
       mission,
@@ -153,8 +150,8 @@ describe('composed retrieval regressions (scoped access + settlement)', () => {
             ok: true,
             status: 200,
             contentType: 'application/pdf',
-            buffer: pdfFixture,
-            bytesReceived: pdfFixture.length,
+            buffer: syntheticPaperBytes,
+            bytesReceived: syntheticPaperBytes.length,
             truncated: false,
             requestedUrl: url,
             finalUrl: url,
@@ -211,7 +208,7 @@ describe('composed retrieval regressions (scoped access + settlement)', () => {
   })
 
   it('foreign writer replacement after failed child slot fences composed controller out', async () => {
-    const base = loadMission('T-L2-mission.json')
+    const base = loadMission('T-L2-synthetic-mission.json')
     const mission = {
       ...base,
       source_policy: {
@@ -223,9 +220,6 @@ describe('composed retrieval regressions (scoped access + settlement)', () => {
     const registries = await createCombinedResearchRegistries()
     const discovery = resolveDiscoveryAdapterForMission(mission, registries)
     assert.ok(discovery)
-    const pdfFixture = readFileSync(
-      join(dirname(fileURLToPath(import.meta.url)), '../adapters/documents/fixtures/two-page-sample.pdf'),
-    )
     const searchProvider = createMissionProductionSearchProvider({
       mission,
       fetchRepositoryTree: async () => ({
@@ -242,8 +236,8 @@ describe('composed retrieval regressions (scoped access + settlement)', () => {
         ok: url === pins.t_l2_paper.canonical_url,
         status: url === pins.t_l2_paper.canonical_url ? 200 : 404,
         contentType: 'application/pdf',
-        buffer: url === pins.t_l2_paper.canonical_url ? pdfFixture : Buffer.alloc(0),
-        bytesReceived: url === pins.t_l2_paper.canonical_url ? pdfFixture.length : 0,
+        buffer: url === pins.t_l2_paper.canonical_url ? syntheticPaperBytes : Buffer.alloc(0),
+        bytesReceived: url === pins.t_l2_paper.canonical_url ? syntheticPaperBytes.length : 0,
         truncated: false,
         requestedUrl: url,
         finalUrl: url,

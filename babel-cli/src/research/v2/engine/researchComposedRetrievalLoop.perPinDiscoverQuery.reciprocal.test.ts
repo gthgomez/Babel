@@ -158,7 +158,7 @@ describe('composed retrieval per-pin discover query (T-L1, injected trees)', () 
     assert.ok(result.passageIds.length >= 2)
     assert.deepEqual(
       recordedQueries.map((r) => r.query).sort(),
-      ['persistence durableresearchstore.ts', 'pregel checkpoint'].sort(),
+      ['pregel checkpoint', 'persistence durableresearchstore.ts'].sort(),
     )
     assert.ok(recordedQueries.some((r) => r.fullName === 'gthgomez/Babel'))
     assert.ok(recordedQueries.some((r) => r.fullName === 'langchain-ai/langgraph'))
@@ -208,7 +208,7 @@ describe('composed retrieval per-pin discover query (T-L1, injected trees)', () 
         ok: url === rawUrl || url.includes(repoPath),
         status: url === rawUrl || url.includes(repoPath) ? 200 : 404,
         contentType: 'text/plain',
-        buffer: Buffer.from('export const durable = 1\n', 'utf8'),
+        buffer: Buffer.from('# persistence\n', 'utf8'),
         bytesReceived: 16,
         truncated: false,
         requestedUrl: url,

@@ -46,19 +46,29 @@ export function resolveFailedPassStoppingReason(
   }
   const message = err instanceof Error ? err.message : String(err)
   if (
-    /admitted bytes are not valid UTF-8|source read|retrieval iteration|fetch|discover|empty_body|content.encoding|decompression/i.test(
+    /not a mission retrieval slot|PlanCoverageObligationValidationError|coverage obligation/i.test(
+      message,
+    )
+  ) {
+    return 'structured_output_validation_failed'
+  }
+  if (
+    failurePhase.includes('plan') &&
+    /Unrecognized key|invalid_type|expected|Zod|strict|structured_output_validation/i.test(message)
+  ) {
+    return 'structured_output_validation_failed'
+  }
+  if (failurePhase.includes('plan') || /plan_questions|plan validation/i.test(message)) {
+    return 'provider_invoke_failed'
+  }
+  if (
+    /admitted bytes are not valid UTF-8|source read|retrieval iteration|composed retrieval|fetch|discover|empty_body|content.encoding|decompression/i.test(
       message,
     )
   ) {
     return 'source_retrieval_failed'
   }
-  if (/Unrecognized key|invalid_type|expected|Zod|strict/i.test(message) && failurePhase.includes('plan')) {
-    return 'structured_output_validation_failed'
-  }
-  if (failurePhase.includes('plan') || /plan_questions|model invoke/i.test(message)) {
-    return 'provider_invoke_failed'
-  }
-  return 'source_retrieval_failed'
+  return 'pass_aborted'
 }
 
 export function limitationsForFailedPass(stoppingReason: ResearchPassStoppingReason): string[] {

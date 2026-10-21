@@ -1,92 +1,93 @@
 TAP version 13
-# Subtest: T-L1 invalid discover-primary planning failure reciprocal (production runner, synthetic model)
-    # Subtest: native trace baseline: missionRequirementsPayload lists discover-primary instead of repository-pin slots on T-L1
-    ok 1 - native trace baseline: missionRequirementsPayload lists discover-primary instead of repository-pin slots on T-L1
+# Subtest: T-L1 missionRequirementsPayload slots
+    # Subtest: derives repository-pin slots from the canonical mission source directory
+    ok 1 - derives repository-pin slots from the canonical mission source directory
       ---
-      duration_ms: 1.594532
+      duration_ms: 0.976178
+      type: 'test'
+      ...
+    1..1
+ok 1 - T-L1 missionRequirementsPayload slots
+  ---
+  duration_ms: 1.490842
+  type: 'suite'
+  ...
+# Subtest: planning post-response validation settlement
+    # Subtest: settles model operation once when plan slot validation fails after ok invoke
+    ok 1 - settles model operation once when plan slot validation fails after ok invoke
+      ---
+      duration_ms: 3.017951
+      type: 'test'
+      ...
+    1..1
+ok 2 - planning post-response validation settlement
+  ---
+  duration_ms: 3.620918
+  type: 'suite'
+  ...
+# Subtest: historical pre-repair characterization (808d0613 / C \#408 fe9bf5ef class; frozen)
+    # Subtest: reference: planner payload directory defect was discover-primary fallback for repository-only missions
+    ok 1 - reference: planner payload directory defect was discover-primary fallback for repository-only missions
+      ---
+      duration_ms: 1.321973
+      type: 'test'
+      ...
+    # Subtest: reference: live diagnostic durable subset omitted external_operation_completed before settlement repair
+    ok 2 - reference: live diagnostic durable subset omitted external_operation_completed before settlement repair
+      ---
+      duration_ms: 0.132017
+      type: 'test'
+      ...
+    1..2
+ok 3 - historical pre-repair characterization (808d0613 / C \#408 fe9bf5ef class; frozen)
+  ---
+  duration_ms: 2.126018
+  type: 'suite'
+  ...
+# Subtest: T-L1 invalid discover-primary planning failure reciprocal (A c27fb39c union, synthetic model)
+    # Subtest: missionRequirementsPayload advertises canonical repository-pin slots on T-L1
+    ok 1 - missionRequirementsPayload advertises canonical repository-pin slots on T-L1
+      ---
+      duration_ms: 0.431173
       type: 'test'
       ...
     # Subtest: synthetic envelope parses; mission slots exclude discover-primary
     ok 2 - synthetic envelope parses; mission slots exclude discover-primary
       ---
-      duration_ms: 0.99286
+      duration_ms: 0.847994
       type: 'test'
       ...
-    # Subtest: production runner: strict slot rejection, C diagnostic durable subset, no retrieval evidence, cold reopen stable
-    ok 3 - production runner: strict slot rejection, C diagnostic durable subset, no retrieval evidence, cold reopen stable
+    # Subtest: production runner: strict slot rejection, settled planning failure, no retrieval evidence, cold reopen stable
+    ok 3 - production runner: strict slot rejection, settled planning failure, no retrieval evidence, cold reopen stable
       ---
-      duration_ms: 18.300372
+      duration_ms: 18.464678
       type: 'test'
       ...
-    # Subtest: acceptance: actual planner input advertises canonical repository-pin slots, not discover-primary (red until missionRequirementsPayload repair)
-    not ok 4 - acceptance: actual planner input advertises canonical repository-pin slots, not discover-primary (red until missionRequirementsPayload repair)
+    # Subtest: actual planner input advertises canonical repository-pin slots, not discover-primary
+    ok 4 - actual planner input advertises canonical repository-pin slots, not discover-primary
       ---
-      duration_ms: 8.37409
+      duration_ms: 5.189069
       type: 'test'
-      location: '/workspace/babel-cli/src/research/v2/fixtures/campaign/T-L1-invalidCoverageSlot.planningFailure.reciprocal.test.ts:1:6988'
-      failureType: 'testCodeFailure'
-      error: |-
-        planner input must expose mission retrieval slot directory (repository-pin/document/web), not discover-primary
-        + actual - expected
-        
-          [
-        +   'discover-primary'
-        -   'repository-pin-0',
-        -   'repository-pin-1'
-          ]
-        
-      code: 'ERR_ASSERTION'
-      name: 'AssertionError'
-      expected:
-        0: 'repository-pin-0'
-        1: 'repository-pin-1'
-      actual:
-        0: 'discover-primary'
-      operator: 'deepStrictEqual'
-      stack: |-
-        TestContext.<anonymous> (/workspace/babel-cli/src/research/v2/fixtures/campaign/T-L1-invalidCoverageSlot.planningFailure.reciprocal.test.ts:226:14)
-        async Test.run (node:internal/test_runner/test:1054:7)
-        async Suite.processPendingSubtests (node:internal/test_runner/test:744:7)
       ...
-    # Subtest: acceptance: planning slot validation failure settles model intent exactly once with preserved usage (red until buildPlanRevision settlement repair)
-    not ok 5 - acceptance: planning slot validation failure settles model intent exactly once with preserved usage (red until buildPlanRevision settlement repair)
+    # Subtest: planning slot validation failure settles model intent exactly once with preserved usage
+    ok 5 - planning slot validation failure settles model intent exactly once with preserved usage
       ---
-      duration_ms: 6.286532
+      duration_ms: 8.410186
       type: 'test'
-      location: '/workspace/babel-cli/src/research/v2/fixtures/campaign/T-L1-invalidCoverageSlot.planningFailure.reciprocal.test.ts:1:7899'
-      failureType: 'testCodeFailure'
-      error: |-
-        canonical gap: logical slot validation throw must still settle planning model intent exactly once (not zero, not a second mapper-phase completion)
-        
-        0 !== 1
-        
-      code: 'ERR_ASSERTION'
-      name: 'AssertionError'
-      expected: 1
-      actual: 0
-      operator: 'strictEqual'
-      stack: |-
-        TestContext.<anonymous> (/workspace/babel-cli/src/research/v2/fixtures/campaign/T-L1-invalidCoverageSlot.planningFailure.reciprocal.test.ts:248:14)
-        async Test.run (node:internal/test_runner/test:1054:7)
-        async Suite.processPendingSubtests (node:internal/test_runner/test:744:7)
       ...
     1..5
-not ok 1 - T-L1 invalid discover-primary planning failure reciprocal (production runner, synthetic model)
+ok 4 - T-L1 invalid discover-primary planning failure reciprocal (A c27fb39c union, synthetic model)
   ---
-  duration_ms: 36.610589
+  duration_ms: 33.918846
   type: 'suite'
-  location: '/workspace/babel-cli/src/research/v2/fixtures/campaign/T-L1-invalidCoverageSlot.planningFailure.reciprocal.test.ts:1:3430'
-  failureType: 'subtestsFailed'
-  error: '2 subtests failed'
-  code: 'ERR_TEST_FAILURE'
   ...
-1..1
-# tests 5
-# suites 1
-# pass 3
-# fail 2
+1..4
+# tests 9
+# suites 4
+# pass 9
+# fail 0
 # cancelled 0
 # skipped 0
 # todo 0
-# duration_ms 562.076287
-EXIT_CODE=1
+# duration_ms 580.822455
+EXIT_CODE=0

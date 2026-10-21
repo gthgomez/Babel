@@ -1,25 +1,26 @@
 {
   "schema": "research-v2-author-tap-receipt/v1",
-  "label": "T-L1 invalid discover-primary planning failure reciprocal (synthetic model, production runner)",
-  "qualification_status": "author_run_incomplete",
-  "qualification_note": "Baseline trace + durable-subset tests pass. Two acceptance tests remain red until A repairs missionRequirementsPayload slot directory and planning settlement before buildPlanRevisionFromPlanQuestions mapping. Not CI-green / not full-suite.",
-  "git_head_at_receipt_authoring": "3657009c9f9d7af561a7e0a6e48b670807cc3fcc",
-  "working_tree_dirty_untracked_paths": 49,
-  "canonical_defects_under_test": [
-    "missionRequirementsPayload supplies discover-primary instead of missionCoverageSourceSlots for T-L1 technical mission",
-    "buildPlanRevisionFromPlanQuestions throws before planning external_operation_completed settlement"
-  ],
+  "label": "T-L1 invalid discover-primary planning reciprocal (A c27fb39c union)",
+  "qualification_status": "author_run_complete_union",
+  "qualification_note": "Integrated A c27fb39cc598e43043310633c04588c795380a42 (tree d8160b4bf4ca8e9c4fa0e70b36241d2ed464c7a0). Historical 808d0613 characterization frozen in tests; union acceptance green. Not full-suite.",
+  "a_canonical_dependency": {
+    "commit": "c27fb39cc598e43043310633c04588c795380a42",
+    "tree": "d8160b4bf4ca8e9c4fa0e70b36241d2ed464c7a0",
+    "pr": "https://github.com/gthgomez/Babel/pull/406"
+  },
+  "git_head_at_receipt_authoring": "pending_after_commit",
+  "working_tree_dirty_untracked_paths": "pending_after_commit",
   "exact_source_binding": {
     "test_source": "babel-cli/src/research/v2/fixtures/campaign/T-L1-invalidCoverageSlot.planningFailure.reciprocal.test.ts",
-    "test_source_sha256": "c28e1fd501278287afadd2155a286bd7ebe90069cf853e33d850f0102b219916",
+    "test_source_sha256": "983d4f2453c51a107aab231dccd309e54ea2b16770fc62cb01ad7b3f3fc6318e",
     "synthetic_fixture": "babel-cli/src/research/v2/fixtures/campaign/T-L1-synthetic-invalid-discover-primary-plan-questions.json",
     "synthetic_fixture_sha256": "358924f32d5a2fbdb9e7d7dab5312ad26d67b44c531445ce8699211722f0fd36",
     "mission_fixture": "babel-cli/src/research/v2/fixtures/campaign/T-L1-mission.json",
     "mission_fixture_sha256": "04e0329df13a286c67e41d962593bbc088880648ce8fe371694b6f83de85175b"
   },
   "tap_log": "review-artifacts/t-l1-invalid-slot-planning-failure.reciprocal.tap.txt",
-  "exit_code": 1,
-  "counts": { "tests": 5, "pass": 3, "fail": 2, "suites": 1 },
-  "c_diagnostic_reference": "review-artifacts/t-l1-invalid-slot-planning-failure-REFERENCE-event-kinds.json",
-  "not_vendored": "C #408 fe9bf5ef t-l1-live-diagnostic-8930f929-store-subset.json original capture"
+  "exit_code": 0,
+  "counts": { "tests": 9, "pass": 9, "fail": 0, "suites": 4 },
+  "historical_frozen": "808d0613-class pre-repair references retained in test file describe block",
+  "c_diagnostic_reference": "review-artifacts/t-l1-invalid-slot-planning-failure-REFERENCE-event-kinds.json"
 }

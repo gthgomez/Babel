@@ -25,6 +25,8 @@ describe('semantic support review persistence shape', () => {
             status: 'contradicted',
             rationale: 'Passage text contradicts the assertion.',
             question_coverage: 'none',
+            claimed_source_attribution: 'not_assessed',
+            claimed_source_slots: ['web-ref-0'],
           },
         ],
       },

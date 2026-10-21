@@ -10,6 +10,7 @@ import { buildSynthesizedResearchReport } from './buildSynthesizedResearchReport
 import { deriveUnansweredPlanQuestionIds } from './researchReportFinalization.js'
 import { findingsFromExtractModelOutput } from './findingsFromModelOutput.js'
 import { loadAttempt4EvidenceSubset } from './testSupport/attempt4EvidenceSubset.js'
+import { applyAttempt4DerivedQuestionCoverageOverlay } from './testSupport/attempt4QuestionCoverageDerived.js'
 
 const gL1MissionPath = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -64,7 +65,7 @@ const ALL_FIVE_QUESTION_IDS = attempt4Plan.questions.map((q) => q.question_id)
 const UNANSWERED_AFTER_Q1_SUPPORTED = ALL_FIVE_QUESTION_IDS.slice(1)
 
 describe('G-L1 attempt4 evidence subset (historical) + fef78559 finalizer', () => {
-  it('preserves ORIGINAL subset artifact and historical stored Q[0] host binding (pre-b0194564)', () => {
+  it('preserves ORIGINAL subset artifact and extract binding on plan.questions[0]', () => {
     const { provenance, revision, passages, findings } = loadAttempt4EvidenceSubset()
     assert.equal(
       revision.content_hash,
@@ -80,22 +81,24 @@ describe('G-L1 attempt4 evidence subset (historical) + fef78559 finalizer', () =
         'extract-general-g-l1-attempt4-evidence-subset.mjs',
       ),
     )
-    assert.throws(
-      () =>
-        findingsFromExtractModelOutput({
-          operationId: 'op-attempt4-legacy-shape',
-          plan: attempt4Plan,
-          passages,
-          createdAt: '2026-10-21T09:04:28.000Z',
-          modelOutput: {
-            kind: 'extract_findings',
-            findings: findings.map((f) => ({
-              assertion_text: f.assertion_text,
-              assertion_kind: f.assertion_kind,
-              passage_ids: f.passage_ids,
-            })),
-          },
-        }),
+    const rebound = findingsFromExtractModelOutput({
+      operationId: 'op-attempt4-shape',
+      plan: attempt4Plan,
+      passages,
+      createdAt: '2026-10-21T09:04:28.000Z',
+      modelOutput: {
+        kind: 'extract_findings',
+        findings: findings.map((f) => ({
+          assertion_text: f.assertion_text,
+          assertion_kind: f.assertion_kind,
+          passage_ids: f.passage_ids,
+          question_id: f.question_id,
+        })),
+      },
+    })
+    assert.ok(
+      rebound.every((f) => f.question_id === firstQuestionId),
+      'rebound preserves per-finding question_id from extract output',
     )
   })
 
@@ -106,29 +109,10 @@ describe('G-L1 attempt4 evidence subset (historical) + fef78559 finalizer', () =
     assert.match(String(terminal_report.source_cutoff), /mutually consistent/)
   })
 
-  it('rebuilds attempt4 with canonical finalizer using synthetic question_coverage (not historical re-review)', () => {
-    const { revision, passages, findings, terminal_report } = loadAttempt4EvidenceSubset()
-    const firstQuestionId = attempt4Plan.questions[0]?.question_id
-    assert.ok(firstQuestionId)
-    const syntheticFindings = findings.map((f: FindingRecord) => ({
-      ...f,
-      question_coverage:
-        f.question_id === firstQuestionId
-          ? {
-              status: 'answers' as const,
-              reviewer: 'synthetic-finalizer-slice',
-              reviewer_version: '0.0.0-test',
-              rationale: 'synthetic: only q1 marked answered for finalizer slice',
-              reviewed_at: '2026-10-21T09:04:28.000Z',
-            }
-          : {
-              status: 'not_assessed' as const,
-              reviewer: 'synthetic-finalizer-slice',
-              reviewer_version: '0.0.0-test',
-              rationale: 'synthetic: sibling rows not assessed in this slice',
-              reviewed_at: '2026-10-21T09:04:28.000Z',
-            },
-    }))
+  it('rebuilds attempt4 with canonical finalizer: partial, per-question unanswered, truncation, corrected coverage_notes', () => {
+    const { revision, passages, findings: historicalFindings, terminal_report } =
+      loadAttempt4EvidenceSubset()
+    const findings = applyAttempt4DerivedQuestionCoverageOverlay(historicalFindings)
     const mission = ResearchMissionV2Schema.parse({
       ...JSON.parse(readFileSync(gL1MissionPath, 'utf8')),
       mission_id: 'mission-g-l1-general-live-attempt4',
@@ -141,7 +125,7 @@ describe('G-L1 attempt4 evidence subset (historical) + fef78559 finalizer', () =
         plan_revision_id: attempt4Plan.plan_revision_id,
         writer_generation: 3,
       },
-      findings: syntheticFindings,
+      findings,
       passages,
       sourceRevisions: [revision],
       modelOutput: {
@@ -153,13 +137,12 @@ describe('G-L1 attempt4 evidence subset (historical) + fef78559 finalizer', () =
     })
     assert.equal(report.terminal_state, 'partial')
     assert.deepEqual(
-      deriveUnansweredPlanQuestionIds(attempt4Plan, syntheticFindings),
+      deriveUnansweredPlanQuestionIds(attempt4Plan, findings),
       UNANSWERED_AFTER_Q1_SUPPORTED,
     )
     assert.deepEqual(report.unanswered_questions, UNANSWERED_AFTER_Q1_SUPPORTED)
-    assert.ok(
-      report.coverage_notes.includes('question_coverage answers on a supported finding'),
-    )
+    assert.match(report.coverage_notes, /question_coverage/)
+    assert.match(report.coverage_notes, /question_coverage answers/)
     assert.equal(report.source_cutoff, '2026-10-21T09:04:02.034Z')
     assert.ok(report.stopping_reason.startsWith('single_pass_host_finalization'))
     assert.ok(

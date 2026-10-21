@@ -20,7 +20,7 @@ describe('planCoverageObligations', () => {
     assert.equal(passageSupportsTechnicalEffect(text, 'max_age_or_ttl_semantics'), true)
   })
 
-  it('native probe phrases: nav max-age, single-user audience, welcome technical', () => {
+  it('evidence signal helpers remain available for review input (not host obligation gates)', () => {
     assert.equal(
       passageSupportsTechnicalEffect('On this page: max-age | TTL | See also', 'max_age_or_ttl_semantics'),
       true,

@@ -2,6 +2,7 @@ import type { MissionWriteContext } from '../contracts/common.js'
 import type { ExternalOperationCompletion } from '../contracts/operations.js'
 import type { SourceAcquisitionDiagnostics } from '../contracts/sourceAcquisitionDiagnostics.js'
 import type { ProviderInvokeDiagnostics } from '../contracts/providerInvokeDiagnostics.js'
+import type { SourceSearchProviderReceipt } from '../contracts/sourceSearchProviderReceipt.js'
 import type { UsageSettlement } from '../ports/researchModelPort.js'
 import type { ResearchStore } from '../ports/researchStore.js'
 
@@ -12,6 +13,7 @@ export interface ExternalOperationOutcome {
   usage_settlement?: UsageSettlement
   acquisition_diagnostics?: SourceAcquisitionDiagnostics
   provider_invoke_diagnostics?: ProviderInvokeDiagnostics
+  search_provider_receipt?: SourceSearchProviderReceipt
 }
 
 /** Persist intent completion for non-model external operations (search/fetch). */
@@ -38,6 +40,9 @@ export async function settleExternalOperation(
       : {}),
     ...(outcome.provider_invoke_diagnostics
       ? { provider_invoke_diagnostics: outcome.provider_invoke_diagnostics }
+      : {}),
+    ...(outcome.search_provider_receipt
+      ? { search_provider_receipt: outcome.search_provider_receipt }
       : {}),
   })
 }

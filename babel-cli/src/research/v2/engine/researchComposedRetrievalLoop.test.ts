@@ -164,6 +164,8 @@ describe('research composed retrieval (code + paper + evidenced unsupported)', (
     assert.equal(structuredOutcome?.settlement, 'skipped_unsupported')
     const repoOutcome = result.slotOutcomes.find((o) => o.kind === 'repository_pin')
     assert.equal(repoOutcome?.settlement, 'succeeded')
+    const docOutcome = result.slotOutcomes.find((o) => o.kind === 'document_ref')
+    assert.equal(docOutcome?.settlement, 'failed')
 
     const events = await store.listEvents(mission.mission_id)
     const structuredCompletion = events.find(

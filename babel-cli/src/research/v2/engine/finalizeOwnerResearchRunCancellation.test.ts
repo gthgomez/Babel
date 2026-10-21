@@ -74,7 +74,7 @@ describe('finalizeOwnerResearchRunCancellation', () => {
         mission: exampleTechnicalMissionFixture,
         now: () => '2026-10-21T12:00:00.000Z',
       })
-      assert.equal(appended, true)
+      assert.equal(appended.status, 'terminal_appended')
       const events = await owner.store.listEvents(exampleTechnicalMissionFixture.mission_id)
       const terminals = events.filter((e) => e.kind === 'terminal_receipt')
       assert.equal(terminals.length, 1)

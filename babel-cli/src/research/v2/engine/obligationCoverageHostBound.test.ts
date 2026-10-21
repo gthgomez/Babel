@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
-import { assessObligationCoverageHostBound } from './obligationCoverageHostBound.js'
+import {
+  assessObligationCoverageHostBound,
+  obligationCitationStructuralCompleteness,
+} from './obligationCoverageHostBound.js'
 import type { FindingRecord } from '../contracts/findings.js'
 import type { QuestionRecord } from '../contracts/plan.js'
 import type { PassageRecord } from '../contracts/passages.js'
@@ -77,6 +80,30 @@ describe('obligationCoverageHostBound', () => {
       provenanceIndex,
     })
     assert.equal(result.satisfiesRequiredFacets, true)
+  })
+
+  it('rejects met on truncated technical citation without topic regex', () => {
+    const truncatedPassage: PassageRecord = {
+      ...passage,
+      extraction_notes: ['inline_text_truncated:host_decoded_byte_limit'],
+    }
+    const truncRevision: SourceRevision = {
+      ...revision,
+      completeness: 'truncated',
+    }
+    assert.equal(
+      obligationCitationStructuralCompleteness(
+        truncatedPassage,
+        {
+          obligation_id: 'ob-tech',
+          source_slot: 'web-ref-0',
+          aspect: 'technical_effect',
+          technical_effect: 'max_age_or_ttl_semantics',
+        },
+        { source, revision: truncRevision },
+      ),
+      false,
+    )
   })
 
   it('rejects met judgment when supporting passage is from wrong slot', () => {
