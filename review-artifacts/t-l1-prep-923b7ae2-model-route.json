@@ -1,0 +1,11 @@
+{
+  "route_key": "deepseek-v4-flash-openrouter",
+  "provider": "openrouter",
+  "model_id": "deepseek/deepseek-v4-flash-0731",
+  "policy_path": "/tmp/babel-t-l1-preflight-923b7ae2/config/model-policy.json",
+  "selection_basis": "model_policy_json",
+  "backend_key": "research-v2-cli"
+}
+(node:11452) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:11452) ExperimentalWarning: Importing WebAssembly module instances is an experimental feature and might change at any time

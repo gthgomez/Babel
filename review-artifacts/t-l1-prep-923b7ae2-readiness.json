@@ -1,0 +1,82 @@
+{
+  "schema": "research-v2-t-l1-offline-prep-readiness/v1",
+  "status": "ready_pending_explicit_live_release",
+  "execution": {
+    "live_run_authorized": false,
+    "model_or_exa_invocation_in_this_turn": false
+  },
+  "prior_failed_diagnostic_unchanged": {
+    "commit": "8930f9296c23642df52cac6154a0e92b8c39dad3",
+    "store_directory": "/tmp/babel-t-l1-store-8930f929-1792593831",
+    "snapshot_sha256": "fb0b3015c7f4870f64833347a9a7db77fa54bd7b7cd35f6d8911ba7832e6f19c",
+    "planning_token_cost_request_id": "unknown_historical_unchanged",
+    "receipt_index": "review-artifacts/t-l1-live-diagnostic-receipt-8930f929.json"
+  },
+  "repaired_a_binding": {
+    "commit": "923b7ae2ffade35e8a556703eb93c8dd1c23c1f9",
+    "tree": "68875e977d35235ed48253f75691a386343f44ad",
+    "subject_note": "Native review: canonical technical planner slots, post-response validation settlement, retry accounting, foreign-receipt cancellation edges (per user handoff; B actual-runner 10/10 separate)"
+  },
+  "worktree": {
+    "root": "/tmp/babel-t-l1-preflight-923b7ae2",
+    "babel_cli": "/tmp/babel-t-l1-preflight-923b7ae2/babel-cli",
+    "tracked_clean_at_prep": true
+  },
+  "build": {
+    "npm_ci_exit": 0,
+    "typecheck_exit": 0,
+    "build_exit": 0,
+    "log": "review-artifacts/t-l1-prep-923b7ae2-build-typecheck.log"
+  },
+  "bin_and_dist_fingerprints": "review-artifacts/t-l1-prep-923b7ae2-fingerprints.txt",
+  "bin_absolute": "/tmp/babel-t-l1-preflight-923b7ae2/babel-cli/bin/babel.js",
+  "credentials_boolean": {
+    "openrouter_api_key_configured": true,
+    "exa_api_key_configured": true
+  },
+  "openrouter_route": {
+    "artifact": "review-artifacts/t-l1-prep-923b7ae2-model-route.json",
+    "provider": "openrouter",
+    "model_id": "deepseek/deepseek-v4-flash-0731",
+    "route_key": "deepseek-v4-flash-openrouter",
+    "policy_path": "/tmp/babel-t-l1-preflight-923b7ae2/config/model-policy.json"
+  },
+  "technical_campaign_preflight": {
+    "exit": 0,
+    "log": "review-artifacts/t-l1-prep-923b7ae2-technical-preflight.log"
+  },
+  "t_l1_mission_validation": {
+    "fixture_source": "/tmp/babel-t-l1-preflight-923b7ae2/babel-cli/src/research/v2/fixtures/campaign/T-L1-mission.json",
+    "pins_file": "/tmp/babel-t-l1-preflight-923b7ae2/babel-cli/src/research/v2/fixtures/campaign/T-L1-T-L2-PINNED-VERSIONS.json",
+    "invalid_pin_excluded": "d2c584a238566d2bfd7d28e053a94e3a9af1ffd7",
+    "babel": {
+      "commit_sha": "e912c2f3320de0b6e1c9ff85b95b0f74d8b5323c",
+      "discover_query": "persistence durableresearchstore.ts",
+      "sampled_implementation_path": "babel-cli/src/research/v2/persistence/durableResearchStore.ts",
+      "expected_bytes": 8305
+    },
+    "langgraph": {
+      "commit_sha": "3cd57c038ad827d05f80c6488adea9994156c58c",
+      "git_tree_sha": "a8aa3b138b6036c25331712af8ed8b3f0a4a0fda",
+      "discover_query": "pregel checkpoint",
+      "sampled_implementation_path": "libs/langgraph/langgraph/pregel/_checkpoint.py",
+      "expected_bytes": 20417
+    },
+    "allowed_source_classes": ["repository_file"],
+    "planner_slot_payload_repair_at_923b7ae2": "missionRequirementsPayload uses missionCoverageSourceSlots(mission) (not discover-primary default for repository_file-only missions)"
+  },
+  "proposed_live_run_identity": {
+    "mission_id": "mission-t-l1-validation-923b7ae2-001",
+    "mission_file_review_artifact": "review-artifacts/t-l1-prep-923b7ae2-proposed-mission.json",
+    "mission_file_runtime_absolute": "/workspace/review-artifacts/t-l1-prep-923b7ae2-proposed-mission.json",
+    "store_directory_absolute": "/tmp/babel-t-l1-store-923b7ae2-release-pending",
+    "store_created_at_prep": false,
+    "exact_command_when_released": "BABEL_RESEARCH_V2_ALLOW_LIVE_API=1 node /tmp/babel-t-l1-preflight-923b7ae2/babel-cli/bin/babel.js research v2 run --store /tmp/babel-t-l1-store-923b7ae2-release-pending --mission-file /workspace/review-artifacts/t-l1-prep-923b7ae2-proposed-mission.json --json",
+    "guards": {
+      "no_automatic_retry": true,
+      "no_provider_fallback": true,
+      "exa_only_if_pipeline_requires": true
+    }
+  },
+  "scope_limitation": "Readiness scoped to T-L1 two-repository pin path and two sampled implementation files; not whole-repo architecture acceptance."
+}
