@@ -1,6 +1,5 @@
 /**
- * Durable store acceptance: empty-response failure settlement survives close/reopen exactly once.
- * Gated on Agent A bridge + settlement wiring (same runtime probe as unit acceptance).
+ * Durable store acceptance on Agent A settlement wiring (draft PR 406 @ 1153af89…).
  */
 import assert from 'node:assert/strict'
 import { mkdtemp, rm } from 'node:fs/promises'
@@ -8,6 +7,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, it } from 'node:test'
 import type { MissionWriteContext } from '../contracts/common.js'
+import { ProviderInvokeDiagnosticsSchema } from '../contracts/providerInvokeDiagnostics.js'
 import { examplePlanRevisionFixture, exampleTechnicalMissionFixture } from '../fixtures/exampleMission.js'
 import { settleModelOperation } from '../engine/settleModelOperation.js'
 import { DurableResearchStore } from '../persistence/durableResearchStore.js'
@@ -19,7 +19,6 @@ import {
   emptyResponseHandoffRunner,
 } from './fixtures/emptyResponseMetadataHandoff.fixture.js'
 import { assertNoForbiddenPersistenceSubstrings } from './fixtures/providerInvokeDiagnosticsAllowlist.js'
-import { probeProviderEmptyResponseMetadataRepair } from './emptyResponseMetadataRepairProbe.js'
 
 const FIXED_COMPLETED_AT = '2026-10-21T08:30:00.000Z'
 const PLAN_REVISION_ID = 'plan-empty-response-accept-001'
@@ -58,7 +57,7 @@ type CompletionPayload = {
       reasoning_tokens?: number
       cost: { status: string; amount_usd?: number }
     }
-    provider_invoke_diagnostics?: Record<string, unknown>
+    provider_invoke_diagnostics?: unknown
   }
 }
 
@@ -71,11 +70,7 @@ function completionsForOp(events: readonly { kind: string; payload: Record<strin
 }
 
 describe('empty-response metadata durable settlement (A repair acceptance)', () => {
-  it('close/reopen retains usage, cost, and bounded diagnostics exactly once', async (t) => {
-    if (!(await probeProviderEmptyResponseMetadataRepair())) {
-      t.skip('Agent A empty-response metadata bridge repair not detected on ProviderResearchModelBridge')
-      return
-    }
+  it('close/reopen retains usage, cost, and bounded diagnostics exactly once', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'babel-empty-response-meta-'))
     try {
       const store = await DurableResearchStore.open(dir)
@@ -127,8 +122,12 @@ describe('empty-response metadata durable settlement (A repair acceptance)', () 
       if (completion.usage_settlement?.cost.status === 'reported') {
         assert.equal(completion.usage_settlement.cost.amount_usd, 0.004328364)
       }
-      assert.ok(completion.provider_invoke_diagnostics)
-      assert.equal(completion.provider_invoke_diagnostics?.visible_content_present, false)
+      ProviderInvokeDiagnosticsSchema.parse(completion.provider_invoke_diagnostics)
+      assert.equal(
+        (completion.provider_invoke_diagnostics as { visible_content_present?: boolean })
+          .visible_content_present,
+        false,
+      )
       assertNoForbiddenPersistenceSubstrings(
         JSON.stringify(eventsAfterReopen),
         EMPTY_RESPONSE_HANDOFF_FORBIDDEN_STORE_SUBSTRINGS,
@@ -139,11 +138,7 @@ describe('empty-response metadata durable settlement (A repair acceptance)', () 
     }
   })
 
-  it('overlapping model invokes keep isolated completion metadata in one store', async (t) => {
-    if (!(await probeProviderEmptyResponseMetadataRepair())) {
-      t.skip('Agent A empty-response metadata bridge repair not detected on ProviderResearchModelBridge')
-      return
-    }
+  it('overlapping model invokes keep isolated completion metadata in one store', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'babel-empty-response-meta-isolate-'))
     try {
       const store = await DurableResearchStore.open(dir)
@@ -153,11 +148,13 @@ describe('empty-response metadata durable settlement (A repair acceptance)', () 
           operationId: 'model-empty-a',
           attemptId: 'model-empty-a-att',
           providerRequestId: 'req-store-a',
+          inferenceId: 'inf-store-a',
         },
         {
           operationId: 'model-empty-b',
           attemptId: 'model-empty-b-att',
           providerRequestId: 'req-store-b',
+          inferenceId: 'inf-store-b',
         },
       ]
       for (const spec of specs) {
@@ -174,7 +171,10 @@ describe('empty-response metadata durable settlement (A repair acceptance)', () 
         specs.map(async (spec) => {
           const bridge = new ProviderResearchModelBridge(
             productionShapedEmptyResponseBridgeOptions(
-              emptyResponseHandoffRunner({ providerRequestId: spec.providerRequestId }),
+              emptyResponseHandoffRunner({
+                providerRequestId: spec.providerRequestId,
+                inferenceId: spec.inferenceId,
+              }),
             ),
           )
           const modelResult = await bridge.invokeStructured({
@@ -199,9 +199,11 @@ describe('empty-response metadata durable settlement (A repair acceptance)', () 
       for (const spec of specs) {
         const completed = completionsForOp(events, spec.operationId)
         assert.equal(completed.length, 1)
-        const diagnostics = (completed[0]!.payload as CompletionPayload).completion
-          .provider_invoke_diagnostics
-        assert.equal(diagnostics?.provider_request_id, spec.providerRequestId)
+        const diagnostics = ProviderInvokeDiagnosticsSchema.parse(
+          (completed[0]!.payload as CompletionPayload).completion.provider_invoke_diagnostics,
+        )
+        assert.equal(diagnostics.provider_request_id, spec.providerRequestId)
+        assert.equal(diagnostics.inference_id, spec.inferenceId)
       }
       await store.close()
     } finally {

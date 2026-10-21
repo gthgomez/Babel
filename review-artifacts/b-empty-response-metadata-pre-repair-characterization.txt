@@ -1,0 +1,26 @@
+schema=research-v2-empty-response-metadata-pre-repair-characterization/v1
+status=historical_nonacceptance_evidence
+not_in_automatic_test_inventory=true
+supersedes_test_file=babel-cli/src/research/v2/model/providerResearchModelBridge.emptyResponseMetadataHandoff.characterization.test.ts (removed)
+
+observed_before_agent_a_1153af89=
+  ProviderResearchModelBridge captured only event.usage_metadata from onInvocationCompleted.
+  usageFromMetadata mapped prompt/completion tokens and cost but not actual_reasoning_tokens.
+  Failed empty-response invoke returned usageSettlement without reasoning_tokens.
+  No providerInvokeDiagnostics on ResearchModelInvocationResult.
+  external_operation_completed had usage_settlement only (attempt3 store class).
+
+attempt3_reference=
+  review-artifacts/general-g-l1-attempt3-live-run-receipt.json (immutable)
+  review-artifacts/general-g-l1-attempt3-binding-correction.txt
+
+agent_a_repair_checkpoint=
+  full_sha=1153af89f057cf55d608baa8b56be7297035c5e7
+  branch=cursor/research-v2-post-review-settlement-fc31
+  draft_pr=406
+  contracts=babel-cli/src/research/v2/contracts/providerInvokeDiagnostics.ts
+  mapper=babel-cli/src/research/v2/model/providerInvokeDiagnosticsFromCompletion.ts
+
+b_automatic_acceptance_after_union=
+  babel-cli/src/research/v2/model/providerResearchModelBridge.emptyResponseMetadataHandoff.acceptance.test.ts
+  babel-cli/src/research/v2/model/providerResearchModelBridge.emptyResponseMetadataHandoff.integration.acceptance.test.ts

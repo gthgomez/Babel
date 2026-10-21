@@ -1,9 +1,10 @@
 /**
- * Positive acceptance vs Agent A repaired ProviderResearchModelBridge (runtime probe).
- * Skipped until shared bridge persists bounded hook metadata; characterization stays frozen.
+ * B reciprocal acceptance on Agent A repaired bridge (@ 1153af89… on draft PR 406).
  */
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
+import { ProviderInvokeDiagnosticsSchema } from '../contracts/providerInvokeDiagnostics.js'
+import { EMPTY_VISIBLE_OUTPUT_DIGEST } from './providerInvokeDiagnosticsFromCompletion.js'
 import { ProviderResearchModelBridge } from './providerResearchModelBridge.js'
 import {
   EMPTY_RESPONSE_HANDOFF_FORBIDDEN_STORE_SUBSTRINGS,
@@ -12,20 +13,12 @@ import {
   productionShapedEmptyResponseBridgeOptions,
 } from './fixtures/emptyResponseMetadataHandoff.fixture.js'
 import {
-  assertAllowlistedProviderInvokeDiagnosticsOnly,
   assertNoForbiddenPersistenceSubstrings,
+  parseBoundedProviderInvokeDiagnostics,
 } from './fixtures/providerInvokeDiagnosticsAllowlist.js'
-import {
-  probeProviderEmptyResponseMetadataRepair,
-  type FailedInvokeWithDiagnostics,
-} from './emptyResponseMetadataRepairProbe.js'
 
 describe('ProviderResearchModelBridge empty-response metadata (A repair acceptance)', () => {
-  it('persists bounded diagnostics on failed empty-response invoke', async (t) => {
-    if (!(await probeProviderEmptyResponseMetadataRepair())) {
-      t.skip('Agent A empty-response metadata bridge repair not detected on ProviderResearchModelBridge')
-      return
-    }
+  it('persists bounded diagnostics on failed empty-response invoke', async () => {
     const bridge = new ProviderResearchModelBridge(
       productionShapedEmptyResponseBridgeOptions(emptyResponseHandoffRunner()),
     )
@@ -38,29 +31,24 @@ describe('ProviderResearchModelBridge empty-response metadata (A repair acceptan
     })
     assert.equal(result.status, 'failed')
     if (result.status !== 'failed') return
-    const enriched = result as FailedInvokeWithDiagnostics
     assert.equal(
-      enriched.usageSettlement.reasoning_tokens,
+      result.usageSettlement.reasoning_tokens,
       EMPTY_RESPONSE_HANDOFF_USAGE_META.actual_reasoning_tokens,
     )
-    const diagnostics = enriched.provider_invoke_diagnostics
-    assert.ok(diagnostics)
-    assertAllowlistedProviderInvokeDiagnosticsOnly(diagnostics as Record<string, unknown>)
+    assert.ok(result.providerInvokeDiagnostics)
+    const diagnostics = parseBoundedProviderInvokeDiagnostics(result.providerInvokeDiagnostics)
+    ProviderInvokeDiagnosticsSchema.parse(diagnostics)
     assert.equal(diagnostics.normalized_finish_reason, 'OUTPUT_BUDGET_EXHAUSTED')
     assert.equal(diagnostics.visible_content_present, false)
     assert.equal(diagnostics.visible_content_byte_length, 0)
     assert.equal(diagnostics.provider_request_id, 'req-handoff-fixture')
-    assert.equal(diagnostics.output_digest, 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855')
-    assert.equal(diagnostics.upstream_http_retry_count, undefined)
+    assert.equal(diagnostics.output_digest, EMPTY_VISIBLE_OUTPUT_DIGEST)
+    assert.equal(diagnostics.inference_id, 'inf-empty-handoff')
     const serialized = JSON.stringify(result)
     assertNoForbiddenPersistenceSubstrings(serialized, EMPTY_RESPONSE_HANDOFF_FORBIDDEN_STORE_SUBSTRINGS)
   })
 
-  it('isolates overlapping request-local metadata per attempt', async (t) => {
-    if (!(await probeProviderEmptyResponseMetadataRepair())) {
-      t.skip('Agent A empty-response metadata bridge repair not detected on ProviderResearchModelBridge')
-      return
-    }
+  it('isolates overlapping request-local metadata per attempt', async () => {
     const bridgeA = new ProviderResearchModelBridge(
       productionShapedEmptyResponseBridgeOptions(
         emptyResponseHandoffRunner({
@@ -95,11 +83,12 @@ describe('ProviderResearchModelBridge empty-response metadata (A repair acceptan
     ])
     assert.equal(resultA.status, 'failed')
     assert.equal(resultB.status, 'failed')
-    const diagA = (resultA as FailedInvokeWithDiagnostics).provider_invoke_diagnostics
-    const diagB = (resultB as FailedInvokeWithDiagnostics).provider_invoke_diagnostics
-    assert.equal(diagA?.provider_request_id, 'req-overlap-a')
-    assert.equal(diagB?.provider_request_id, 'req-overlap-b')
-    assert.equal(diagA?.inference_id, 'inf-overlap-a')
-    assert.equal(diagB?.inference_id, 'inf-overlap-b')
+    if (resultA.status !== 'failed' || resultB.status !== 'failed') return
+    const diagA = parseBoundedProviderInvokeDiagnostics(resultA.providerInvokeDiagnostics)
+    const diagB = parseBoundedProviderInvokeDiagnostics(resultB.providerInvokeDiagnostics)
+    assert.equal(diagA.provider_request_id, 'req-overlap-a')
+    assert.equal(diagB.provider_request_id, 'req-overlap-b')
+    assert.equal(diagA.inference_id, 'inf-overlap-a')
+    assert.equal(diagB.inference_id, 'inf-overlap-b')
   })
 })

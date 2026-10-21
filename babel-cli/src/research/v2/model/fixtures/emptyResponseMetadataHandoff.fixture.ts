@@ -6,6 +6,7 @@ import {
   type RunnerCallbacks,
   type RunnerInvocationMetadata,
 } from '../../../../runners/base.js'
+import { EMPTY_VISIBLE_OUTPUT_DIGEST } from '../providerInvokeDiagnosticsFromCompletion.js'
 
 /** Attempt3-shaped usage from live empty-response diagnostic (no live call in tests). */
 export const EMPTY_RESPONSE_HANDOFF_USAGE_META: RunnerInvocationMetadata = {
@@ -32,21 +33,6 @@ export const EMPTY_RESPONSE_HANDOFF_FORBIDDEN_STORE_SUBSTRINGS = [
   'req-handoff-secret-header-value',
 ] as const
 
-export const PROVIDER_INVOKE_DIAGNOSTICS_ALLOWLIST_KEYS = new Set([
-  'normalized_finish_reason',
-  'visible_content_present',
-  'visible_content_byte_length',
-  'output_digest',
-  'input_tokens',
-  'output_tokens',
-  'reasoning_tokens',
-  'requested_output_budget',
-  'effective_output_budget',
-  'provider_request_id',
-  'inference_id',
-  'upstream_http_retry_count',
-])
-
 export interface EmptyResponseHandoffRunnerOptions {
   inferenceId?: string
   providerRequestId?: string
@@ -62,9 +48,7 @@ export function emptyResponseHandoffRunner(
 ): Pick<LlmRunner, 'execute'> {
   const inferenceId = options.inferenceId ?? 'inf-empty-handoff'
   const providerRequestId = options.providerRequestId ?? 'req-handoff-fixture'
-  const outputDigest =
-    options.outputDigest ??
-    'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'
+  const outputDigest = options.outputDigest ?? EMPTY_VISIBLE_OUTPUT_DIGEST
 
   return {
     async execute<T>(_prompt: string, _schema: ZodType<T>, callbacks?: RunnerCallbacks): Promise<T> {

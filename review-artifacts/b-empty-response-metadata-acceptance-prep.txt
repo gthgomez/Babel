@@ -4,12 +4,14 @@ awaiting=Agent_A_bounded_bridge_and_settlement_repair
 handoff_doc=review-artifacts/a-empty-response-metadata-handoff.txt
 characterization_frozen=babel-cli/src/research/v2/model/providerResearchModelBridge.emptyResponseMetadataHandoff.characterization.test.ts
 acceptance_probe=babel-cli/src/research/v2/model/emptyResponseMetadataRepairProbe.ts
-pinned_repair_sha=null_until_A_merges
+agent_a_repair_full_sha=1153af89f057cf55d608baa8b56be7297035c5e7
+agent_a_branch=cursor/research-v2-post-review-settlement-fc31
+draft_pr=406
+b_branch_union=cursor/agent-b-general-fixtures-f617
+integration_model=local_merge_cherry_pick_of_A_runtime_into_B_branch_not_main
+probe_gates=removed_acceptance_runs_unconditionally
+pre_repair_characterization=review-artifacts/b-empty-response-metadata-pre-repair-characterization.txt
 offline_validation_only=true
 no_attempt4=true
 no_paid_calls=true
-probe_behavior=runtime_on_real_ProviderResearchModelBridge; acceptance_skips_when_false
-flip_steps_when_A_checkpoint_lands=
-  1) set PINNED_EMPTY_RESPONSE_METADATA_REPAIR_SHA in emptyResponseMetadataRepairProbe.ts
-  2) run characterization (must still pass unchanged) + acceptance (must pass)
-  3) optional: npm run build && scoped TAP in codex/worktrees/a-e912-execution-prep @ pinned transport e912c2f
+workspace_prep_json=review-artifacts/b-a1153-union-workspace-prep.json

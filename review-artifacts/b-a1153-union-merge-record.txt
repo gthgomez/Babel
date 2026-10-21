@@ -1,0 +1,13 @@
+schema=b-a1153-union-merge-record/v1
+not_main_merge=true
+b_branch=cursor/agent-b-general-fixtures-f617
+a_branch=cursor/research-v2-post-review-settlement-fc31
+a_repair_full_sha=1153af89f057cf55d608baa8b56be7297035c5e7
+a_draft_pr=406
+integration_method=git cherry-pick 1153af89f057cf55d608baa8b56be7297035c5e7 onto B branch (authorized local union)
+b_commit_carrying_a_runtime=4b8c3babf283617712f4e2acfa330a8919da040d
+conflict_resolution=
+  A-owned production retained from cherry-pick (providerInvokeDiagnostics contract, FromCompletion mapper, bridge, settleModelOperation, settleExternalOperation, operations schema).
+  B-owned acceptance retained: emptyResponseMetadataHandoff.acceptance + integration.acceptance + fixtures.
+  Removed: emptyResponseMetadataRepairProbe.ts, characterization.test.ts (historical moved to review-artifacts/b-empty-response-metadata-pre-repair-characterization.txt).
+  Removed duplicate A handoff.test.ts on B branch to avoid twin inventory; B acceptance covers durable store + overlap + secret scan.
