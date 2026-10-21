@@ -20,6 +20,9 @@ const discoverQuery =
   mission.primary_question.split(/\s+/).slice(0, 12).join(' ')
 const searchProviderId = resolveProductionSearchProviderId(process.env)
 const searchUrl = searchProviderId ? buildDuckDuckGoHtmlSearchUrl(discoverQuery) : null
+const allowedWebDomains = mission.source_policy.allowed_web_domains ?? []
+const searchTransportDomains = ['duckduckgo.com', 'html.duckduckgo.com']
+const evidenceWebDomains = allowedWebDomains.filter((d) => !searchTransportDomains.includes(d))
 
 const payload = {
   schema: 'research-v2-campaign-preflight/v1',
@@ -28,7 +31,10 @@ const payload = {
   mission_file: missionPath,
   mission_id: mission.mission_id,
   profile_id: mission.profile_id,
-  allowed_web_domains: mission.source_policy.allowed_web_domains ?? [],
+  primary_question: mission.primary_question,
+  allowed_web_domains: allowedWebDomains,
+  evidence_web_domains: evidenceWebDomains,
+  search_transport_domains: searchTransportDomains.filter((d) => allowedWebDomains.includes(d)),
   discover_query: discoverQuery,
   search_provider_id: searchProviderId,
   search_url: searchUrl,

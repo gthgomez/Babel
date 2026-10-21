@@ -73,14 +73,16 @@ npm run test:research-v2-pdfjs-staged-package-smoke
 | Packaged PDF runtime (A smoke) | `npm run test:research-v2-pdfjs-staged-package-smoke` | Isolated lockfile `npm ci` + platform binding + pdfjs text extract |
 | B reciprocal packaging (authoritative) | `npm run test:research-v2-production-package-reciprocal` | Same flags as Windows pack; copies **dist** + B probes; `canvas_package_json_present=true` + PDF probe ok |
 | Campaign OpenRouter lane | `npm run test:research-v2-openrouter-route-smoke` | `openrouter` / `deepseek/deepseek-v4-flash-0731` / `deepseek-v4-flash-openrouter` (`review-artifacts/readiness-9d97448a-openrouter-route.log`) |
-| Campaign G-L1 preflight (no network) | `npm run test:research-v2-campaign-preflight` | public-fact Node.js @ `as_of=2026-10-21`, domains `nodejs.org` + DuckDuckGo (`review-artifacts/readiness-g-l1-campaign-preflight-corrected.log`) |
+| Campaign G-L1 preflight (no network) | `npm run test:research-v2-campaign-preflight` | canonical Python stable-release fact; evidence `python.org` / `docs.python.org`; DuckDuckGo search transport only (`review-artifacts/readiness-g-l1-python-campaign-preflight.log`) |
 | Full Research v2 manifest (prior receipt) | `node scripts/research-v2-collect-test-files.mjs \| tr '\\n' '\\0' \| xargs -0 node --import tsx --test` | **268** pass / 0 fail @ provenance head (unchanged by G-L1 input-only fix); later heads **269** with B `1693fb0d` regression |
 | CLI model route | `node bin/babel.js research v2 model-route --json` | same policy route as smoke (`review-artifacts/readiness-9d97448a-model-route.json`) |
 | Live gate (this run) | `node bin/babel.js research v2 live-status --json` | `live_api_enabled: false` until `BABEL_RESEARCH_V2_ALLOW_LIVE_API=1` + operator credentials |
 
 **Effective OpenRouter (policy default, no env override):** provider `openrouter`, model `deepseek/deepseek-v4-flash-0731`, route key `deepseek-v4-flash-openrouter`, policy `/workspace/config/model-policy.json`, `backend_key` `research-v2-cli`.
 
-**Canonical G-L1 (document only — do not execute live until provenance/cancel review clears):**
+**Canonical G-L1 (callable after preflight verification; one authorized diagnostic live run):**
+
+Mission task (verbatim in `G-L1-mission.json` `primary_question`): latest **stable** Python release + release date as of run UTC date; stable vs prerelease; official python.org release/download citation; uncertainty on conflict/unreadable pages.
 
 ```bash
 cd babel-cli
@@ -94,7 +96,7 @@ export BABEL_RESEARCH_V2_ALLOW_LIVE_API=1
 node bin/babel.js research v2 run \
   --store /path/to/g-l1-store \
   --mission-file src/research/v2/fixtures/campaign/G-L1-mission.json \
-  --discover-query "What is the latest stable Node.js release version as of 2026-10-21 according to official" \
+  --discover-query "As of the run's UTC date, what is the latest stable Python release and" \
   --json
 
 # Post-run usage/cost: inspect store events / terminal receipt (usage_settlement on completions)
@@ -102,7 +104,9 @@ node bin/babel.js research v2 inspect --store /path/to/g-l1-store --mission-id m
 node bin/babel.js research v2 report --store /path/to/g-l1-store --mission-id mission-g-l1-general-live --json
 ```
 
-Optional: `BABEL_RESEARCH_V2_G_L1_DISCOVER_QUERY` overrides the discover string used by `test:research-v2-campaign-preflight` only.
+Optional: `BABEL_RESEARCH_V2_G_L1_DISCOVER_QUERY` overrides discover string for `test:research-v2-campaign-preflight` only.
+
+**Prior manifest receipt (unchanged proof):** **268** pass / 0 fail / exit 0 @ provenance head — not rebound by G-L1 input-only edits.
 
 **Canvas packaging (A owns lock/runtime):** direct `@napi-rs/canvas@0.1.80` + `pdfjs-dist@5.4.296` in `dependencies` (aligned with B `b3a6861b5` intent, reconciled with explicit platform-binding install for `--omit=optional` trees). B reciprocal PDF tests should copy runtime into staged `node_modules` and report resolved paths the same way — `NODE_PATH` to checkout `dist` is not packaged proof.
 

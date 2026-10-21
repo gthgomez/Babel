@@ -4,15 +4,19 @@
   "mission_id": "mission-g-l1-general-live",
   "profile_id": "general",
   "profile_version": "0.1.0-m0",
-  "created_at": "2026-10-21T06:45:00.000Z",
-  "primary_question": "What is the latest stable Node.js release version as of 2026-10-21 according to official nodejs.org sources?",
-  "intended_decision": "Report the current stable Node.js version line and version number published for production use on nodejs.org.",
+  "created_at": "2026-10-21T06:50:00.000Z",
+  "primary_question": "As of the run's UTC date, what is the latest stable Python release and its release date? Distinguish stable releases from prereleases, cite the official Python release/download page, and report uncertainty if official pages disagree or cannot be read.",
+  "intended_decision": "State the latest stable Python version number, its release date, and an official python.org release or download page citation; note uncertainty if sources conflict or are unreadable.",
   "constraints": [
-    "as_of=\"2026-10-21\"",
-    "source_class=web",
-    "prefer_official_nodejs_org_pages=true"
+    "as_of=run_utc_date",
+    "evidence_from_official_python_org=true",
+    "stable_vs_prerelease_must_be_explicit=true"
   ],
-  "exclusions": ["third-party version aggregators", "forum posts without primary citation"],
+  "exclusions": [
+    "fictional products",
+    "invented version numbers",
+    "third-party download mirrors without primary python.org citation"
+  ],
   "as_of": "2026-10-21",
   "jurisdiction": "unknown",
   "source_policy": {
@@ -20,8 +24,9 @@
     "allowed_web_domains": [
       "duckduckgo.com",
       "html.duckduckgo.com",
-      "nodejs.org",
-      "www.nodejs.org"
+      "python.org",
+      "www.python.org",
+      "docs.python.org"
     ],
     "visibility_retention": {
       "source_visibility": "public",
