@@ -1,0 +1,66 @@
+{
+  "schema": "general-g-l1-live-run-receipt/v1",
+  "runtime_sha": "9d97448a20045b2f4eec7b6f06bac9a533fc5424",
+  "mission_id": "mission-general-g-l1-python-stable",
+  "executor": "agent-b-sole",
+  "command": "cd /workspace/codex/worktrees/g-l1-9d97448a/babel-cli && export BABEL_RESEARCH_V2_ALLOW_LIVE_API=1 && export BABEL_RESEARCH_V2_MODEL_ROUTE_KEY=deepseek-v4-flash-openrouter && node bin/babel.js research v2 run --store /workspace/codex/worktrees/g-l1-9d97448a/codex/runs/general-g-l1-python-stable/store --mission-file /workspace/codex/worktrees/g-l1-9d97448a/codex/missions/general-g-l1-python-stable/mission.json --discover-query 'latest stable Python release python.org download' --json",
+  "utc_start": "2026-10-21T06:41:15Z",
+  "utc_end": "2026-10-21T06:41:22Z",
+  "exit_code": 1,
+  "cli_status": "fail",
+  "terminal_state": null,
+  "terminal_receipt_count": 0,
+  "blocked_stage": "planning_model_invoke",
+  "failure_summary": "OpenRouter model response failed Research V2 plan_questions Zod validation (wrong JSON shape: question/id fields vs text/importance; extra top-level keys).",
+  "failure_category_durable": "provider_invoke_failed",
+  "failure_message_prefix": "[deepInfraApi] Zod validation failed (deepseek/deepseek-v4-flash-0731)",
+  "model_route": {
+    "route_key": "deepseek-v4-flash-openrouter",
+    "provider": "openrouter",
+    "model_id": "deepseek/deepseek-v4-flash-0731",
+    "selection_basis": "model_policy_json"
+  },
+  "durable_operations": [
+    {
+      "operation_id": "cli-run-plan-6f0b8c48",
+      "attempt_id": "cli-run-plan-att-6f0b8c48",
+      "operation_kind": "model_invoke",
+      "dispatched_at": "2026-10-21T06:41:16.269Z",
+      "completed_at": "2026-10-21T06:41:22.224Z",
+      "settlement": "failed"
+    }
+  ],
+  "usage_settlement": {
+    "attempt_id": "cli-run-plan-att-6f0b8c48",
+    "input_tokens": 429,
+    "output_tokens": 1784,
+    "cost": {
+      "status": "reported",
+      "amount_usd": 0.0002636874,
+      "currency": "USD"
+    }
+  },
+  "discover_query": "latest stable Python release python.org download",
+  "search_executed": false,
+  "sources_count": 0,
+  "passages_count": 0,
+  "citations_in_report": 0,
+  "plan_revision_id": "plan-36b76347-6237-4403-ba2c-9572cc02cae0-bootstrap",
+  "post_run_inspect": {
+    "command": "node bin/babel.js research v2 inspect --store <store> --mission-id mission-general-g-l1-python-stable --json",
+    "exit_code": 0,
+    "event_kinds": [
+      "external_operation_completed",
+      "external_operation_intent",
+      "mission_created",
+      "plan_revised"
+    ]
+  },
+  "post_run_report": {
+    "command": "node bin/babel.js research v2 report --store <store> --mission-id mission-general-g-l1-python-stable --json",
+    "exit_code": 1,
+    "error": "no terminal_receipt report found for mission"
+  },
+  "store_directory": "/workspace/codex/worktrees/g-l1-9d97448a/codex/runs/general-g-l1-python-stable/store",
+  "note": "Single diagnostic smoke only; not overall Research acceptance. No retry, no provider fallback."
+}
