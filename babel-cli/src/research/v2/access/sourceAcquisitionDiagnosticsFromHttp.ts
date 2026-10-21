@@ -1,4 +1,5 @@
 import type { AdmittedHttpGetResult } from './admittedHttpGet.js'
+import { sanitizedHttpFailureMetadataFromGet } from './sanitizedHttpFailureMetadata.js'
 import {
   type SourceAcquisitionDiagnostics,
   SourceAcquisitionDiagnosticsSchema,
@@ -33,6 +34,12 @@ export function acquisitionDiagnosticsFromHttpGet(
         }
       : { admitted_decoded_byte_length: response.buffer.byteLength }),
     ...(params.truncationReason ? { truncation_reason: params.truncationReason } : {}),
+    ...(response.ok
+      ? {}
+      : (() => {
+          const httpFailure = sanitizedHttpFailureMetadataFromGet(response)
+          return httpFailure ? { http_failure: httpFailure } : {}
+        })()),
   }
   return SourceAcquisitionDiagnosticsSchema.parse(payload)
 }

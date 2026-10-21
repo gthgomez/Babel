@@ -20,6 +20,17 @@ export const SourceAcquisitionDiagnosticsSchema = z
     admitted_decoded_byte_length: z.number().int().nonnegative().optional(),
     decoded_truncated: z.boolean().optional(),
     truncation_reason: z.string().optional(),
+    http_failure: z
+      .object({
+        public_message: z.string().max(512).optional(),
+        request_id: z.string().max(128).optional(),
+        retry_after: z.string().max(64).optional(),
+        rate_limit_remaining: z.string().max(32).optional(),
+        rate_limit_reset: z.string().max(32).optional(),
+        rate_limit_resource: z.string().max(64).optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
 
