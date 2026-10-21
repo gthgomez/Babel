@@ -1,0 +1,12 @@
+a_integration_sha=52a93b9c20045b2f4eec7b6f06bac9a533fc5424
+a_writer_generation_repair=b05a3bcf
+worktree=/workspace/codex/worktrees/a-integration-52a93b9c
+b_test_commit=29ac49fc
+executed_utc=2026-10-21T06:50:00Z
+
+command=cd worktree/babel-cli && node --import tsx --test src/research/v2/profiles/general/generalAdapterLifecycleReciprocal.integration.test.ts
+tap=review-artifacts/general-a-52a93b9c-second-resume.tap.txt
+result=3/3 pass (includes Native9d second-resume case)
+
+historical_9d_red=review-artifacts/native9d-9d97448a-red-receipt.txt
+g_l1_failed_terminal=still red @ 52a93b9c — see general-a-52a93b9c-g-l1-reciprocal.tap.txt
