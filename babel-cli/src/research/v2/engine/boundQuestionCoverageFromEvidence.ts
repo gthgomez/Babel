@@ -15,7 +15,7 @@ import {
 type QuestionCoverageStatus = z.infer<typeof QuestionCoverageStatusSchema>
 
 const HOST_COVERAGE_REVIEWER = 'research-v2-bound-question-coverage'
-const HOST_COVERAGE_REVIEWER_VERSION = '0.3.0-obligation-judgments'
+const HOST_COVERAGE_REVIEWER_VERSION = '0.3.1-obligation-response-validation'
 
 export function buildRevisionProvenanceIndex(
   sources: readonly SourceRecord[],

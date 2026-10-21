@@ -8,6 +8,12 @@ import type { PlanRevision } from '../contracts/plan.js'
 import type { PassageRecord } from '../contracts/passages.js'
 import type { SourceRecord, SourceRevision } from '../contracts/sources.js'
 import { enforceBoundQuestionCoverageOnFindings } from './boundQuestionCoverageFromEvidence.js'
+import { obligationsForQuestion } from './planCoverageObligations.js'
+import {
+  conservativeQuestionCoverageAfterObligationResponseViolation,
+  type RawObligationCoverageJudgment,
+  validateSemanticObligationCoverageResponse,
+} from './semanticObligationCoverageValidation.js'
 
 function findingId(operationId: string, index: number): string {
   return `finding-${createHash('sha256').update(`${operationId}:${index}`).digest('hex').slice(0, 24)}`
@@ -79,6 +85,12 @@ export function applySemanticSupportReview(
   const parsed = SemanticSupportReviewOutputSchema.parse(modelOutput)
   const byId = new Map(findings.map((f) => [f.finding_id, { ...f }]))
   const judgedIds = new Set<string>()
+  const questionById = context
+    ? new Map(context.plan.questions.map((q) => [q.question_id, q]))
+    : undefined
+  const admittedPassageIds = context
+    ? new Set(context.passages.map((p) => p.passage_id))
+    : undefined
   for (const judgment of parsed.judgments) {
     const finding = byId.get(judgment.finding_id)
     if (!finding) {
@@ -92,21 +104,46 @@ export function applySemanticSupportReview(
       rationale: judgment.rationale,
       reviewed_at: reviewedAt,
     }
-    finding.question_coverage = {
-      status: judgment.question_coverage,
-      reviewer: QUESTION_COVERAGE_REVIEWER,
-      reviewer_version: QUESTION_COVERAGE_REVIEWER_VERSION,
-      rationale: judgment.rationale,
-      reviewed_at: reviewedAt,
-    }
-    if (judgment.obligation_coverage) {
+
+    let questionCoverageStatus = judgment.question_coverage
+    let coverageRationale = judgment.rationale
+    const question = questionById?.get(finding.question_id)
+    const planObligations = question ? obligationsForQuestion(question) : []
+
+    if (planObligations.length > 0 && admittedPassageIds) {
+      const validated = validateSemanticObligationCoverageResponse(
+        judgment.obligation_coverage as readonly RawObligationCoverageJudgment[] | undefined,
+        {
+        planObligations,
+        findingPassageIds: finding.passage_ids,
+        admittedPassageIds,
+      })
+      if (!validated.valid) {
+        questionCoverageStatus = conservativeQuestionCoverageAfterObligationResponseViolation(
+          judgment.question_coverage,
+          validated.violation,
+        )
+        coverageRationale = `${judgment.rationale} Host rejected obligation_coverage response (${validated.violation}): ${validated.detail}.`
+        finding.plan_obligation_coverage = undefined
+      } else {
+        finding.plan_obligation_coverage = validated.records
+      }
+    } else if (judgment.obligation_coverage) {
       finding.plan_obligation_coverage = judgment.obligation_coverage.map((entry) => ({
         obligation_id: entry.obligation_id,
         status: entry.status,
         ...(entry.supporting_passage_ids
-          ? { supporting_passage_ids: entry.supporting_passage_ids }
+          ? { supporting_passage_ids: [...entry.supporting_passage_ids] }
           : {}),
       }))
+    }
+
+    finding.question_coverage = {
+      status: questionCoverageStatus,
+      reviewer: QUESTION_COVERAGE_REVIEWER,
+      reviewer_version: QUESTION_COVERAGE_REVIEWER_VERSION,
+      rationale: coverageRationale,
+      reviewed_at: reviewedAt,
     }
     finding.revised_at = reviewedAt
     if (judgment.status === 'contradicted') {

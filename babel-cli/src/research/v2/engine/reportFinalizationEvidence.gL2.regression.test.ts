@@ -202,8 +202,7 @@ describe(`G-L2 original-derived coverage (${GL2_ORIGINAL_DERIVED_LABEL})`, () =>
               },
               {
                 obligation_id: 'ob-beta-auth-mechanism',
-                status: 'met',
-                supporting_passage_ids: ['fetch-beta:html:audience'],
+                status: 'unmet',
               },
               {
                 obligation_id: 'ob-alpha-audience',

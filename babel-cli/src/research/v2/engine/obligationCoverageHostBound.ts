@@ -3,7 +3,7 @@ import type { PassageRecord } from '../contracts/passages.js'
 import type { PlanCoverageObligation, QuestionRecord } from '../contracts/plan.js'
 import type { PlanObligationCoverageRecord } from '../contracts/planObligationCoverageRecords.js'
 import type { SourceRecord, SourceRevision } from '../contracts/sources.js'
-import { obligationsForQuestion, passageSupportsObligationCompleteness } from './planCoverageObligations.js'
+import { obligationsForQuestion } from './planCoverageObligations.js'
 
 export type RevisionProvenanceIndex = Map<
   string,
@@ -16,10 +16,6 @@ export interface ObligationHostBoundAssessment {
   wrongAspectEvidenceOnly: boolean
 }
 
-function passageInlineText(passage: PassageRecord): string {
-  return passage.text_ref.mode === 'inline' ? passage.text_ref.text : ''
-}
-
 function judgmentForObligation(
   records: readonly PlanObligationCoverageRecord[] | undefined,
   obligationId: string,
@@ -27,13 +23,13 @@ function judgmentForObligation(
   return records?.find((r) => r.obligation_id === obligationId)
 }
 
-function citedPassagesForJudgment(
+function resolveSupportingPassages(
   finding: FindingRecord,
-  passageIds: readonly string[] | undefined,
+  judgment: PlanObligationCoverageRecord,
   passageById: ReadonlyMap<string, PassageRecord>,
 ): PassageRecord[] {
-  const ids = passageIds ?? finding.passage_ids
-  return ids.map((id) => passageById.get(id)).filter((p): p is PassageRecord => p !== undefined)
+  const ids = judgment.supporting_passage_ids ?? []
+  return ids.map((id) => passageById.get(id)!)
 }
 
 function slotMatches(
@@ -43,6 +39,26 @@ function slotMatches(
 ): boolean {
   const provenance = provenanceIndex.get(passage.source_revision_id)
   return provenance?.source.coverage_source_slot === obligation.source_slot
+}
+
+/** Structural citation completeness for model `met` (identity/availability/truncation — not topic lexicon). */
+export function obligationCitationStructuralCompleteness(
+  passage: PassageRecord,
+  obligation: PlanCoverageObligation,
+  provenance?: { source: SourceRecord; revision: SourceRevision },
+): boolean {
+  if (passage.text_ref.mode !== 'inline') {
+    return false
+  }
+  const passageTruncated =
+    passage.extraction_notes?.some(
+      (n) => n.startsWith('inline_text_truncated:') || n.startsWith('excerpt_truncated'),
+    ) === true
+  const revisionTruncated = provenance?.revision.completeness === 'truncated'
+  if (obligation.aspect === 'technical_effect' && (passageTruncated || revisionTruncated)) {
+    return false
+  }
+  return passage.text_ref.text.trim().length > 0
 }
 
 export function assessObligationCoverageHostBound(
@@ -77,7 +93,7 @@ export function assessObligationCoverageHostBound(
       missingObligationIds.push(obligation.obligation_id)
       continue
     }
-    if (judgment.status === 'unmet') {
+    if (judgment.status === 'unmet' || judgment.status === 'not_assessed') {
       missingObligationIds.push(obligation.obligation_id)
       continue
     }
@@ -86,16 +102,17 @@ export function assessObligationCoverageHostBound(
       continue
     }
 
-    const supporting = citedPassagesForJudgment(
-      finding,
-      judgment.supporting_passage_ids,
-      params.passageById,
-    )
-    if (supporting.length === 0) {
+    const supportingIds = judgment.supporting_passage_ids ?? []
+    if (supportingIds.length === 0) {
       missingObligationIds.push(obligation.obligation_id)
       continue
     }
-    if (!supporting.every((id) => finding.passage_ids.includes(id.passage_id))) {
+    if (!supportingIds.every((id) => finding.passage_ids.includes(id))) {
+      missingObligationIds.push(obligation.obligation_id)
+      continue
+    }
+    const supporting = resolveSupportingPassages(finding, judgment, params.passageById)
+    if (supporting.length !== supportingIds.length) {
       missingObligationIds.push(obligation.obligation_id)
       continue
     }
@@ -104,10 +121,11 @@ export function assessObligationCoverageHostBound(
       continue
     }
     const slotPassages = supporting.filter((p) => slotMatches(p, obligation, params.provenanceIndex))
-    const completenessOk = slotPassages.some((p) =>
-      passageSupportsObligationCompleteness(passageInlineText(p), obligation, p),
-    )
-    if (!completenessOk) {
+    const structurallyComplete = slotPassages.some((p) => {
+      const provenance = params.provenanceIndex.get(p.source_revision_id)
+      return obligationCitationStructuralCompleteness(p, obligation, provenance)
+    })
+    if (!structurallyComplete) {
       missingObligationIds.push(obligation.obligation_id)
     }
   }
