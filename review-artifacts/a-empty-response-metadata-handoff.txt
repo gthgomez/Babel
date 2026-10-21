@@ -44,8 +44,15 @@ proposed_runner_touchpoints (A owns; B does not fork runner):
   - Bridge: extend usageFromMetadata OR attach provider_invoke_diagnostics from full ProviderInvocationCompleted event on both failed and ok outcomes.
 
 bounded_regression (B):
-  babel-cli/src/research/v2/model/providerResearchModelBridge.emptyResponseMetadataHandoff.test.ts
-  Characterizes current drop of hook fields; documents expected persistence contract for A follow-up.
+  characterization (frozen pre-repair):
+    babel-cli/src/research/v2/model/providerResearchModelBridge.emptyResponseMetadataHandoff.characterization.test.ts
+  acceptance (runtime probe on real ProviderResearchModelBridge; skips until A repair):
+    babel-cli/src/research/v2/model/providerResearchModelBridge.emptyResponseMetadataHandoff.acceptance.test.ts
+    babel-cli/src/research/v2/model/providerResearchModelBridge.emptyResponseMetadataHandoff.integration.acceptance.test.ts
+  shared fixtures/probe (B-owned):
+    babel-cli/src/research/v2/model/fixtures/emptyResponseMetadataHandoff.fixture.ts
+    babel-cli/src/research/v2/model/emptyResponseMetadataRepairProbe.ts
+  Characterizes current drop of hook fields; positive acceptance flips when probe detects reasoning_tokens + bounded provider_invoke_diagnostics on failed empty-response invoke and durable settlement.
 
 upstream_http_retry_count=
   Hooks expose actual_attempt/max_attempts on failure_receipt path; attempt3 empty path used delivered status — retry count remains uncaptured in store unless A persists failure_receipt or diagnostics.

@@ -1,0 +1,211 @@
+/**
+ * Durable store acceptance: empty-response failure settlement survives close/reopen exactly once.
+ * Gated on Agent A bridge + settlement wiring (same runtime probe as unit acceptance).
+ */
+import assert from 'node:assert/strict'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { describe, it } from 'node:test'
+import type { MissionWriteContext } from '../contracts/common.js'
+import { examplePlanRevisionFixture, exampleTechnicalMissionFixture } from '../fixtures/exampleMission.js'
+import { settleModelOperation } from '../engine/settleModelOperation.js'
+import { DurableResearchStore } from '../persistence/durableResearchStore.js'
+import { ProviderResearchModelBridge } from './providerResearchModelBridge.js'
+import {
+  EMPTY_RESPONSE_HANDOFF_FORBIDDEN_STORE_SUBSTRINGS,
+  EMPTY_RESPONSE_HANDOFF_USAGE_META,
+  productionShapedEmptyResponseBridgeOptions,
+  emptyResponseHandoffRunner,
+} from './fixtures/emptyResponseMetadataHandoff.fixture.js'
+import { assertNoForbiddenPersistenceSubstrings } from './fixtures/providerInvokeDiagnosticsAllowlist.js'
+import { probeProviderEmptyResponseMetadataRepair } from './emptyResponseMetadataRepairProbe.js'
+
+const FIXED_COMPLETED_AT = '2026-10-21T08:30:00.000Z'
+const PLAN_REVISION_ID = 'plan-empty-response-accept-001'
+
+function writeContext(handle: { mission_id: string; writer_generation: number }): MissionWriteContext {
+  return {
+    mission_id: handle.mission_id,
+    plan_revision_id: PLAN_REVISION_ID,
+    writer_generation: handle.writer_generation,
+  }
+}
+
+async function admitMissionWithPlan(store: DurableResearchStore) {
+  const handle = await store.appendMission(exampleTechnicalMissionFixture)
+  const ctx = writeContext(handle)
+  const plan = {
+    ...examplePlanRevisionFixture,
+    plan_revision_id: PLAN_REVISION_ID,
+    mission_id: handle.mission_id,
+    created_at: '2026-10-21T08:28:00.000Z',
+    revision_reason: 'empty_response_acceptance_fixture',
+  }
+  await store.appendPlanRevision(ctx, plan)
+  return { handle, ctx }
+}
+
+type CompletionPayload = {
+  completion: {
+    operation_id: string
+    attempt_id: string
+    settlement: string
+    failure_category?: string
+    usage_settlement?: {
+      input_tokens?: number
+      output_tokens?: number
+      reasoning_tokens?: number
+      cost: { status: string; amount_usd?: number }
+    }
+    provider_invoke_diagnostics?: Record<string, unknown>
+  }
+}
+
+function completionsForOp(events: readonly { kind: string; payload: Record<string, unknown> }[], opId: string) {
+  return events.filter((e) => {
+    if (e.kind !== 'external_operation_completed') return false
+    const completion = (e.payload as CompletionPayload).completion
+    return completion.operation_id === opId
+  })
+}
+
+describe('empty-response metadata durable settlement (A repair acceptance)', () => {
+  it('close/reopen retains usage, cost, and bounded diagnostics exactly once', async (t) => {
+    if (!(await probeProviderEmptyResponseMetadataRepair())) {
+      t.skip('Agent A empty-response metadata bridge repair not detected on ProviderResearchModelBridge')
+      return
+    }
+    const dir = await mkdtemp(join(tmpdir(), 'babel-empty-response-meta-'))
+    try {
+      const store = await DurableResearchStore.open(dir)
+      const { handle, ctx } = await admitMissionWithPlan(store)
+      const operationId = 'model-empty-response-accept'
+      const attemptId = 'model-empty-response-accept-att'
+      await store.appendExternalOperationIntent(ctx, {
+        mission_id: handle.mission_id,
+        operation_id: operationId,
+        attempt_id: attemptId,
+        operation_kind: 'model_invoke',
+        dispatched_at: '2026-10-21T08:29:00.000Z',
+        idempotency_key: `${operationId}:${attemptId}`,
+      })
+      const bridge = new ProviderResearchModelBridge(
+        productionShapedEmptyResponseBridgeOptions(emptyResponseHandoffRunner()),
+      )
+      const modelResult = await bridge.invokeStructured({
+        operationId,
+        attemptId,
+        kind: 'plan_questions',
+        input: { mission_id: handle.mission_id },
+        signal: new AbortController().signal,
+      })
+      await settleModelOperation(
+        store,
+        ctx,
+        handle.mission_id,
+        operationId,
+        attemptId,
+        modelResult,
+        FIXED_COMPLETED_AT,
+      )
+      await store.close()
+
+      const reopened = await DurableResearchStore.open(dir)
+      const eventsAfterReopen = await reopened.listEvents(exampleTechnicalMissionFixture.mission_id)
+      const completed = completionsForOp(eventsAfterReopen, operationId)
+      assert.equal(completed.length, 1, 'expected exactly one external_operation_completed for the invoke')
+      const completion = (completed[0]!.payload as CompletionPayload).completion
+      assert.equal(completion.settlement, 'failed')
+      assert.equal(completion.failure_category, 'provider_invoke_failed')
+      assert.equal(completion.usage_settlement?.input_tokens, 652)
+      assert.equal(completion.usage_settlement?.output_tokens, 32_000)
+      assert.equal(
+        completion.usage_settlement?.reasoning_tokens,
+        EMPTY_RESPONSE_HANDOFF_USAGE_META.actual_reasoning_tokens,
+      )
+      if (completion.usage_settlement?.cost.status === 'reported') {
+        assert.equal(completion.usage_settlement.cost.amount_usd, 0.004328364)
+      }
+      assert.ok(completion.provider_invoke_diagnostics)
+      assert.equal(completion.provider_invoke_diagnostics?.visible_content_present, false)
+      assertNoForbiddenPersistenceSubstrings(
+        JSON.stringify(eventsAfterReopen),
+        EMPTY_RESPONSE_HANDOFF_FORBIDDEN_STORE_SUBSTRINGS,
+      )
+      await reopened.close()
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('overlapping model invokes keep isolated completion metadata in one store', async (t) => {
+    if (!(await probeProviderEmptyResponseMetadataRepair())) {
+      t.skip('Agent A empty-response metadata bridge repair not detected on ProviderResearchModelBridge')
+      return
+    }
+    const dir = await mkdtemp(join(tmpdir(), 'babel-empty-response-meta-isolate-'))
+    try {
+      const store = await DurableResearchStore.open(dir)
+      const { handle, ctx } = await admitMissionWithPlan(store)
+      const specs = [
+        {
+          operationId: 'model-empty-a',
+          attemptId: 'model-empty-a-att',
+          providerRequestId: 'req-store-a',
+        },
+        {
+          operationId: 'model-empty-b',
+          attemptId: 'model-empty-b-att',
+          providerRequestId: 'req-store-b',
+        },
+      ]
+      for (const spec of specs) {
+        await store.appendExternalOperationIntent(ctx, {
+          mission_id: handle.mission_id,
+          operation_id: spec.operationId,
+          attempt_id: spec.attemptId,
+          operation_kind: 'model_invoke',
+          dispatched_at: '2026-10-21T08:29:30.000Z',
+          idempotency_key: `${spec.operationId}:${spec.attemptId}`,
+        })
+      }
+      await Promise.all(
+        specs.map(async (spec) => {
+          const bridge = new ProviderResearchModelBridge(
+            productionShapedEmptyResponseBridgeOptions(
+              emptyResponseHandoffRunner({ providerRequestId: spec.providerRequestId }),
+            ),
+          )
+          const modelResult = await bridge.invokeStructured({
+            operationId: spec.operationId,
+            attemptId: spec.attemptId,
+            kind: 'plan_questions',
+            input: { mission_id: handle.mission_id },
+            signal: new AbortController().signal,
+          })
+          await settleModelOperation(
+            store,
+            ctx,
+            handle.mission_id,
+            spec.operationId,
+            spec.attemptId,
+            modelResult,
+            FIXED_COMPLETED_AT,
+          )
+        }),
+      )
+      const events = await store.listEvents(exampleTechnicalMissionFixture.mission_id)
+      for (const spec of specs) {
+        const completed = completionsForOp(events, spec.operationId)
+        assert.equal(completed.length, 1)
+        const diagnostics = (completed[0]!.payload as CompletionPayload).completion
+          .provider_invoke_diagnostics
+        assert.equal(diagnostics?.provider_request_id, spec.providerRequestId)
+      }
+      await store.close()
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+})

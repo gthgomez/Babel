@@ -1,0 +1,15 @@
+schema=research-v2-empty-response-metadata-acceptance-prep/v1
+owner=Agent_B
+awaiting=Agent_A_bounded_bridge_and_settlement_repair
+handoff_doc=review-artifacts/a-empty-response-metadata-handoff.txt
+characterization_frozen=babel-cli/src/research/v2/model/providerResearchModelBridge.emptyResponseMetadataHandoff.characterization.test.ts
+acceptance_probe=babel-cli/src/research/v2/model/emptyResponseMetadataRepairProbe.ts
+pinned_repair_sha=null_until_A_merges
+offline_validation_only=true
+no_attempt4=true
+no_paid_calls=true
+probe_behavior=runtime_on_real_ProviderResearchModelBridge; acceptance_skips_when_false
+flip_steps_when_A_checkpoint_lands=
+  1) set PINNED_EMPTY_RESPONSE_METADATA_REPAIR_SHA in emptyResponseMetadataRepairProbe.ts
+  2) run characterization (must still pass unchanged) + acceptance (must pass)
+  3) optional: npm run build && scoped TAP in codex/worktrees/a-e912-execution-prep @ pinned transport e912c2f
