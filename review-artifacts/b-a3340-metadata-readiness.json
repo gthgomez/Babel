@@ -1,0 +1,20 @@
+{
+  "schema": "b-a3340-metadata-readiness/v1",
+  "scope": "provider_invoke_diagnostics_mapper_and_settlement_only",
+  "not_combined_with": "composition_ownership_acceptance",
+  "agent_a_checkpoints": {
+    "diagnostics_bridge": "1153af89f057cf55d608baa8b56be7297035c5e7",
+    "visibility_mapper": "3340cf0deb555ff9c8a74020017c02262cfc8247"
+  },
+  "draft_pr": 406,
+  "b_branch": "cursor/agent-b-general-fixtures-f617",
+  "automatic_tests": [
+    "babel-cli/src/research/v2/model/providerInvokeDiagnosticsFromCompletion.test.ts",
+    "babel-cli/src/research/v2/model/providerResearchModelBridge.emptyResponseMetadataHandoff.acceptance.test.ts",
+    "babel-cli/src/research/v2/model/providerResearchModelBridge.emptyResponseMetadataHandoff.integration.acceptance.test.ts"
+  ],
+  "pre_repair_characterization": "review-artifacts/b-empty-response-metadata-pre-repair-characterization.txt",
+  "built_entrypoint_receipt": "review-artifacts/b-a1153-union-workspace-prep.json",
+  "openrouter_preflight": "review-artifacts/b-a1153-union-openrouter-preflight.json",
+  "no_live_model_call": true
+}

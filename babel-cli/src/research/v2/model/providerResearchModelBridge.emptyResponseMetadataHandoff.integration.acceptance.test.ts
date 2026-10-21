@@ -1,5 +1,5 @@
 /**
- * Durable store acceptance on Agent A settlement wiring (draft PR 406 @ 1153af89…).
+ * Durable store metadata acceptance @ 3340cf0d + 1153af89 settlement (draft PR 406).
  */
 import assert from 'node:assert/strict'
 import { mkdtemp, rm } from 'node:fs/promises'

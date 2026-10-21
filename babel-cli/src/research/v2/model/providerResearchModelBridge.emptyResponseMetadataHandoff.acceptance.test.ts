@@ -1,5 +1,5 @@
 /**
- * B reciprocal acceptance on Agent A repaired bridge (@ 1153af89… on draft PR 406).
+ * B metadata acceptance on Agent A mapper @ 3340cf0deb555ff9c8a74020017c02262cfc8247 (draft PR 406).
  */
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'

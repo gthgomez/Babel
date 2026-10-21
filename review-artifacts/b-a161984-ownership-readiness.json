@@ -1,0 +1,15 @@
+{
+  "schema": "b-a161984-ownership-readiness/v1",
+  "scope": "composed_retrieval_ownership_only",
+  "not_combined_with": "metadata_mapper_readiness",
+  "agent_a_checkpoint_full_sha": "161984196deb8f9dfb6c44e72a8f093835b21ed4",
+  "depends_on": "e567f8513f41c7605615c1ee825dfd22efb63fe3",
+  "draft_pr": 406,
+  "b_branch": "cursor/agent-b-general-fixtures-f617",
+  "mechanism": "RetrievalIterationFailedAfterAcquireError carries acquiredHandle/writeContext; composed loop does not readMissionWriteFence on child failure",
+  "automatic_tests": [
+    "babel-cli/src/research/v2/engine/researchComposedRetrievalLoop.regression.test.ts",
+    "babel-cli/src/research/v2/engine/researchComposedRetrievalLoop.compositionOwnership.reciprocal.test.ts"
+  ],
+  "no_live_model_call": true
+}
