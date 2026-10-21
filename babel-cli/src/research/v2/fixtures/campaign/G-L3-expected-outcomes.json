@@ -4,20 +4,34 @@
   "mission_id": "mission-g-l3-contradiction-insufficient",
   "structural": {
     "requires_per_question_semantic_support": true,
+    "requires_two_distinct_canonical_pages": true,
     "plan_question_themes": [
       "downloads_page_stable_version_and_date",
       "devguide_status_table_stable_version_and_date",
       "cross_source_agreement_or_conflict"
     ],
-    "must_allow_terminal_partial_on_insufficient_or_contradicted": true
+    "must_allow_terminal_partial_on_insufficient_or_contradicted": true,
+    "deterministic_insufficiency_fixture": "G-L3-deterministic-insufficiency.fixture.json",
+    "live_agreement_or_conflict_investigation_separate_from": "G-L3-deterministic-insufficiency.fixture.json"
   },
-  "acceptable_terminal_states": ["partial"],
+  "acceptable_terminal_states": ["partial", "complete"],
+  "complete_only_when": {
+    "two_distinct_admitted_canonical_pages": true,
+    "per_question_semantic_support_without_invented_contradiction": true,
+    "official_pages_agree_on_stable_version_and_date": true
+  },
   "forbidden_conclusions": [
     "asserting_agreement_without_supported_findings_per_question",
+    "asserting_contradiction_without_supported_findings_per_question",
+    "invented_contradiction_or_version_mismatch",
+    "single_page_counted_as_two_source_cross_page_coverage",
     "citations_outside_allowed_web_domains"
   ],
   "preflight": {
     "requires_openrouter_route_lane": true,
+    "requires_mission_model_route_matches_effective_openrouter_route": true,
+    "requires_openrouter_credential_configured": true,
+    "requires_configured_search_provider": true,
     "live_model_dispatch": false
   }
 }

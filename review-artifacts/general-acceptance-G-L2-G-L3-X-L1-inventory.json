@@ -1,6 +1,6 @@
 {
   "schema": "babel-research-v2-acceptance-inventory/v1",
-  "generated_at": "2026-10-21T09:36:00.000Z",
+  "generated_at": "2026-10-21T10:15:00.000Z",
   "branch": "cursor/agent-b-general-fixtures-f617",
   "runtime_checkpoints": {
     "production_finalizer_go": "08cc2986507b7549be04fe6d49ccfc995080e351",
@@ -27,8 +27,10 @@
         "Multi-question plan via model plan_questions op (live or fixture-scripted)",
         "08cc2986 finalizer: partial when unanswered plan questions or acquisition limits"
       ],
+      "mission_fixture": "babel-cli/src/research/v2/fixtures/campaign/G-L2-mission.json",
+      "expected_outcomes": "babel-cli/src/research/v2/fixtures/campaign/G-L2-expected-outcomes.json",
+      "preflight_command": "npm --prefix babel-cli run test:research-v2-g-l2-preflight",
       "blockers_or_gaps": [
-        "No campaign/G-L2-mission.json or G-L2 preflight script (only G-L1 in research-v2-campaign-preflight.mjs)",
         "extract_findings schema has no per-finding question_id; host binds all findings to plan.questions[0] (findingsFromModelOutput.ts)",
         "Live comparison run needs coordinator-authorized spend (not in this inventory turn)",
         "Holdout/dev-corpus answers not executed or inspected in this inventory"
@@ -48,10 +50,15 @@
         "08cc2986 finalizer: hasSemanticInsufficient/hasSemanticContradiction → partial",
         "nativeReview regressions: integrity/missing passage/incomplete revision → partial (single-question rows)"
       ],
+      "mission_fixture": "babel-cli/src/research/v2/fixtures/campaign/G-L3-mission.json",
+      "expected_outcomes": "babel-cli/src/research/v2/fixtures/campaign/G-L3-expected-outcomes.json",
+      "preflight_command": "npm --prefix babel-cli run test:research-v2-g-l3-preflight",
+      "deterministic_insufficiency_fixture": "babel-cli/src/research/v2/fixtures/campaign/G-L3-deterministic-insufficiency.fixture.json",
+      "expected_outcomes_notes": "complete allowed when two distinct admitted canonical pages agree; partial when insufficient or contradicted; labeled insufficiency fixture is not live conflict investigation",
       "blockers_or_gaps": [
-        "No G-L3 campaign mission JSON wired to CLI preflight",
+        "Production discover still fetches discover.candidates[0] only — two-page evidence requires sequential iterations until A ships bounded multi-source runtime",
         "G-DEV-05/06 expectations are structural prose only — no automated CLI acceptance runner bound to maps_to_acceptance_scenario G-L3",
-        "Per-question contradiction attribution blocked by extract default question_id = questions[0]",
+        "Per-question contradiction attribution blocked by extract default question_id = questions[0] (proposed tests remain proposed)",
         "Paid live extract/review not run in this inventory"
       ],
       "cli_path_proposed": {
@@ -84,6 +91,44 @@
     }
   },
   "deterministic_checks": {
+    "executed_after_46ad6767": [
+      {
+        "command": "npm --prefix babel-cli run test:research-v2-g-l2-preflight",
+        "expected": "exit 0; acceptance_scenario G-L2; includes expected_outcomes",
+        "status": "pass"
+      },
+      {
+        "command": "npm --prefix babel-cli run test:research-v2-g-l3-preflight",
+        "expected": "exit 0; acceptance_scenario G-L3",
+        "status": "pass"
+      },
+      {
+        "command": "node --import tsx --test babel-cli/src/research/v2/fixtures/campaign/G-L2-mission.test.ts babel-cli/src/research/v2/fixtures/campaign/G-L3-mission.test.ts",
+        "expected": "schema-valid G-L2/G-L3 missions",
+        "status": "pass"
+      },
+      {
+        "command": "node --import tsx --test babel-cli/src/research/v2/engine/extractQuestionAttribution.legacy.reciprocal.test.ts",
+        "expected": "production Q[0] binding documented",
+        "status": "pass"
+      },
+      {
+        "command": "node --import tsx --test babel-cli/src/research/v2/engine/extractQuestionAttribution.proposed.contract.test.ts",
+        "expected": "PROPOSED required question_id; per-question semantic/unanswered",
+        "status": "pass"
+      },
+      {
+        "command": "node --import tsx --test babel-cli/src/research/v2/campaign/researchV2CampaignPreflight.test.ts",
+        "expected": "search provider + mission route parity readiness (no network)",
+        "status": "pass"
+      },
+      {
+        "command": "node --import tsx --test babel-cli/src/research/v2/profiles/general/generalAdapterTwoCanonicalSources.actualPort.reciprocal.test.ts",
+        "expected": "two canonical pages via sequential iterations; candidates[0] limitation documented",
+        "maps_to": "G-L3 actual-port",
+        "status": "pass"
+      }
+    ],
     "already_run_this_inventory": [
       {
         "command": "npm --prefix babel-cli run test:research-v2-campaign-preflight",
@@ -130,16 +175,19 @@
         "maps_to": "X-L1 regression 1693fb0d"
       },
       {
-        "command": "node babel-cli/scripts/research-v2-campaign-preflight.mjs (extended for G-DEV-01 mission path when added)",
-        "expected": "schema + route lane only; no network",
-        "maps_to": "G-L2 preflight (fixture mission file TBD by A)"
+        "command": "node babel-cli/scripts/research-v2-campaign-preflight-run.mjs G-L2",
+        "expected": "readiness.ready true; mission route parity; credential presence boolean only",
+        "maps_to": "G-L2/G-L3 shared preflight (coordinate via review-artifacts/PROPOSED-B-CAMPAIGN-PREFLIGHT-SHARED.md)"
       }
     ]
   },
   "extract_question1_binding_assessment": {
     "current_behavior": "findingsFromExtractModelOutput assigns every finding to plan.questions[0].question_id; ExtractFindingsOutputSchema has no question field.",
-    "honest_incompleteness": "08cc2986 report: unanswered_questions lists q2–q5 when only q1 has supported findings; coverage_notes states first-question extract binding does not answer full plan; terminal_state partial with acquisition/integrity limits.",
-    "functional_multi_question_limit": "Cannot attach evidence to q2–q5 at extract time; semantic review and per-question coverage cannot reflect true multi-question attribution until model schema + host mapper accept per-finding question binding. Multi-question plans run but collapse to single-question evidence unless A extends contract.",
+    "a_proposed_contract": "review-artifacts/PROPOSED-A-EXTRACT-QUESTION-ATTRIBUTION.md — required question_id, unknown rejected, no Q1 fallback",
+    "proposed_tests": "babel-cli/src/research/v2/engine/extractQuestionAttribution.proposed.contract.test.ts",
+    "legacy_executed_tests": "babel-cli/src/research/v2/engine/extractQuestionAttribution.legacy.reciprocal.test.ts",
+    "honest_incompleteness": "08cc2986 report: unanswered_questions lists sibling plan questions without supported findings on that question_id; terminal_state partial with acquisition/integrity limits.",
+    "functional_multi_question_limit": "Until A ships attribution, multi-question plans cannot record per-question extract evidence (see legacy reciprocal tests).",
     "not_a_holdout_inspection": true
   }
 }

@@ -20,5 +20,17 @@ describe('G-L3 campaign mission fixture', () => {
     assert.ok(domains.includes('docs.python.org'))
     assert.deepEqual(outcomes.acceptance_scenario, 'G-L3')
     assert.ok(outcomes.structural.must_allow_terminal_partial_on_insufficient_or_contradicted)
+    assert.ok(outcomes.structural.requires_two_distinct_canonical_pages)
+    assert.deepEqual(outcomes.acceptable_terminal_states, ['partial', 'complete'])
+    assert.ok(outcomes.structural.deterministic_insufficiency_fixture)
+    const insufficiency = JSON.parse(
+      readFileSync(
+        join(dirname(fileURLToPath(import.meta.url)), outcomes.structural.deterministic_insufficiency_fixture),
+        'utf8',
+      ),
+    )
+    assert.equal(insufficiency.label, 'DETERMINISTIC_INSUFFICIENCY_FIXTURE')
+    assert.ok(insufficiency.rules.never_invent_contradiction)
+    assert.ok(insufficiency.rules.one_page_cannot_count_as_cross_page_coverage)
   })
 })
