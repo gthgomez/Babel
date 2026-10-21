@@ -1,5 +1,9 @@
 import assert from 'node:assert/strict'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, it } from 'node:test'
+import { DurableResearchStore } from '../persistence/durableResearchStore.js'
 import type { SourceAdapter } from '../ports/sourceAdapter.js'
 import { FakeSourceAccessPort } from '../fixtures/fakePorts.js'
 import { InMemoryResearchStore } from '../fixtures/fakePorts.js'
@@ -301,6 +305,94 @@ describe('research retrieval loop repairs', () => {
     assert.equal(events.filter((e) => e.kind === 'passage_recorded').length, 0)
     const completion = completionFor(events, 'persist-cancel-fetch')
     assert.equal(completion?.settlement, 'cancelled')
+  })
+
+  it('durable store: single cancelled completion when aborted during final appendPassage', async () => {
+    const controller = new AbortController()
+    const dir = await mkdtemp(join(tmpdir(), 'babel-research-v2-final-passage-cancel-'))
+    try {
+      const store = await DurableResearchStore.open(dir)
+      const handle = await store.appendMission(exampleTechnicalMissionFixture)
+      await store.appendPlanRevision(
+        {
+          mission_id: handle.mission_id,
+          plan_revision_id: examplePlanRevisionFixture.plan_revision_id,
+          writer_generation: handle.writer_generation,
+        },
+        examplePlanRevisionFixture,
+      )
+      const session = {
+        mission: exampleTechnicalMissionFixture,
+        handle,
+        activePlanRevisionId: examplePlanRevisionFixture.plan_revision_id,
+      }
+      const access = new FakeSourceAccessPort([
+        {
+          source: technicalRepositoryCorpusSource,
+          body: technicalRepositoryCorpusBody,
+          mediaType: 'text/plain',
+          finalUrl: technicalRepositoryCorpusFinalUrl,
+        },
+      ])
+      const { TechnicalRepositoryFileAdapter } = await import('../profiles/technical/repositoryFileAdapter.js')
+      const inner = new TechnicalRepositoryFileAdapter()
+      let passageWrites = 0
+      const originalAppendPassage = store.appendPassage.bind(store)
+      store.appendPassage = async (ctx, passage) => {
+        const result = await originalAppendPassage(ctx, passage)
+        passageWrites++
+        if (passageWrites >= 2) {
+          controller.abort()
+        }
+        return result
+      }
+      const adapter: SourceAdapter = {
+        adapterId: inner.adapterId,
+        supportedKinds: inner.supportedKinds,
+        discover: (req, port) => inner.discover(req, port),
+        read: async (req, port) => {
+          const result = await inner.read(req, port)
+          if (result.status !== 'ok' || result.passages.length < 1) return result
+          const second = {
+            ...result.passages[0]!,
+            passage_id: `${result.passages[0]!.passage_id}-dup`,
+          }
+          return { ...result, passages: [...result.passages, second] }
+        },
+      }
+      await assert.rejects(
+        () =>
+          runAdmittedRetrievalIteration({
+            session,
+            store,
+            access,
+            adapter,
+            activePlan: examplePlanRevisionFixture,
+            discoverQuery: 'RESEARCH_CONTRACT',
+            searchOperationId: 'final-pass-search',
+            searchAttemptId: 'final-pass-search-att',
+            fetchOperationId: 'final-pass-fetch',
+            fetchAttemptId: 'final-pass-fetch-att',
+            dispatchedAt: FIXED_NOW,
+            signal: controller.signal,
+            now: () => FIXED_NOW,
+          }),
+        (err: unknown) => err instanceof Error && /aborted during evidence persistence/.test(err.message),
+      )
+      const events = await store.listEvents(session.mission.mission_id)
+      const completions = events.filter((e) => e.kind === 'external_operation_completed')
+      const fetchCompletions = completions.filter(
+        (e) => (e.payload.completion as { operation_id?: string }).operation_id === 'final-pass-fetch',
+      )
+      assert.equal(fetchCompletions.length, 1)
+      assert.equal(
+        (fetchCompletions[0]!.payload.completion as { settlement?: string }).settlement,
+        'cancelled',
+      )
+      await store.close()
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
   })
 
   it('settles fetch cancelled for zero passages when aborted after persistence loop', async () => {

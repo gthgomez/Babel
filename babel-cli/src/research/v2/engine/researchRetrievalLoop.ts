@@ -18,12 +18,21 @@ import {
   RetrievalEvidenceBindingError,
   validateRetrievalEvidenceBindings,
 } from './validateRetrievalEvidenceBindings.js'
+import {
+  resolveReadAdapterForSource,
+  type MissionRegistryBundle,
+} from '../registry/missionAdapterResolution.js'
 
 export interface RetrievalIterationRequest {
   session: AdmittedPlanningSession
   store: ResearchStore
   access: SourceAccessPort
+  /** Adapter used for source discover (search-backed). */
   adapter: SourceAdapter
+  /** Adapter used for read/extract; defaults to {@link RetrievalIterationRequest.adapter}. */
+  readAdapter?: SourceAdapter
+  /** When set, resolves read adapter from discovered source if readAdapter is omitted. */
+  registries?: MissionRegistryBundle
   activePlan: PlanRevision
   discoverQuery: string
   searchOperationId: string
@@ -193,6 +202,13 @@ export async function runAdmittedRetrievalIteration(
     throw new Error('discover returned no source candidates')
   }
 
+  const readAdapter =
+    request.readAdapter ??
+    (request.registries
+      ? resolveReadAdapterForSource(candidate, request.registries)
+      : undefined) ??
+    request.adapter
+
   throwIfAborted(request.signal, 'source_search settlement')
 
   await settleExternalOperation(
@@ -216,7 +232,7 @@ export async function runAdmittedRetrievalIteration(
 
   let read
   try {
-    read = await request.adapter.read(
+    read = await readAdapter.read(
       {
         operationId: request.fetchOperationId,
         source: candidate,
@@ -316,18 +332,7 @@ export async function runAdmittedRetrievalIteration(
       throwIfAborted(request.signal, 'passage persistence')
       await request.store.appendPassage(ctx, passage)
     }
-    if (request.signal.aborted) {
-      await settleExternalOperation(
-        request.store,
-        ctx,
-        ctx.mission_id,
-        request.fetchOperationId,
-        request.fetchAttemptId,
-        { settlement: 'cancelled', message: 'evidence persistence aborted after final passage' },
-        now(),
-      )
-      throw new Error('retrieval iteration aborted during evidence persistence')
-    }
+    throwIfAborted(request.signal, 'evidence persistence completion')
   } catch (err: unknown) {
     if (request.signal.aborted) {
       await settleExternalOperation(

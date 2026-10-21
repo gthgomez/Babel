@@ -11,8 +11,12 @@ import {
 import { openAdmittedOwnerStore } from '../research/v2/control/researchStoreAdmission.js'
 import { FixtureResearchModelBridge } from '../research/v2/model/fixtureModelBridge.js'
 import { runAdmittedPlanningIteration } from '../research/v2/engine/researchIterationLoop.js'
-import { examplePlanRevisionFixture, exampleTechnicalMissionFixture } from '../research/v2/fixtures/exampleMission.js'
+import {
+  examplePlanRevisionFixture,
+  exampleTechnicalMissionFixture,
+} from '../research/v2/fixtures/exampleMission.js'
 import type { ResearchModelPort } from '../research/v2/ports/researchModelPort.js'
+import { mkdir } from 'node:fs/promises'
 
 /** @internal Exported for CLI repair tests — performs owner cleanup before surfacing errors. */
 export async function runResearchV2DryRunPlan(
@@ -62,6 +66,60 @@ export async function runResearchV2DryRunPlan(
   }
 }
 
+/** @internal Live-gated planning iteration into a host-owned durable store directory. */
+export async function runResearchV2LivePlan(
+  options: { store: string; json: boolean },
+  seams?: {
+    createModel?: () => ResearchModelPort
+    resolveConfig?: typeof resolveLiveResearchModelConfigFromEnv
+  },
+): Promise<void> {
+  assertResearchV2LiveApiEnabled()
+  const resolveConfig = seams?.resolveConfig ?? resolveLiveResearchModelConfigFromEnv
+  const liveConfig = resolveConfig()
+  if (!liveConfig) {
+    throw new Error(
+      'Live plan requires BABEL_RESEARCH_V2_PROVIDER and BABEL_RESEARCH_V2_MODEL_ID (optional BABEL_RESEARCH_V2_API_KEY_ENV).',
+    )
+  }
+  const model = seams?.createModel?.() ?? createLiveResearchModelPort(liveConfig)
+  await mkdir(options.store, { recursive: true })
+  let owner: Awaited<ReturnType<typeof openAdmittedOwnerStore>> | undefined
+  try {
+    owner = await openAdmittedOwnerStore(options.store)
+    const missionHandle = await owner.store.appendMission(exampleTechnicalMissionFixture)
+    const result = await runAdmittedPlanningIteration({
+      session: { mission: exampleTechnicalMissionFixture, handle: missionHandle },
+      store: owner.store,
+      model,
+      modelOperationId: 'cli-live-plan-op',
+      modelAttemptId: 'cli-live-plan-att',
+      planRevisionId: examplePlanRevisionFixture.plan_revision_id,
+      revisionReason: 'cli_live_planning',
+      dispatchedAt: new Date().toISOString(),
+      signal: new AbortController().signal,
+    })
+    const payload = {
+      mode: 'live_plan',
+      live_api: true,
+      provider: liveConfig.engine.provider,
+      model_id: liveConfig.engine.modelId,
+      store_directory: options.store,
+      session_id: owner.sessionId,
+      planned_question_count: result.plannedQuestionCount,
+      plan_revision_id: result.planRevisionId,
+      limitations: {
+        retrieval: 'not_implemented',
+        report: 'not_implemented',
+      },
+      note: 'Live planning iteration only — not a completed research engine run.',
+    }
+    printJsonOrHuman(payload, JSON.stringify(payload, null, 2), options.json)
+  } finally {
+    await owner?.close()
+  }
+}
+
 export function registerResearchV2Commands(program: Command): void {
   const v2 = program
     .command('v2')
@@ -98,19 +156,7 @@ export function registerResearchV2Commands(program: Command): void {
     .option('--json', 'emit machine-readable output', false)
     .action(async (options: { store: string; json: boolean }) => {
       try {
-        assertResearchV2LiveApiEnabled()
-        const liveConfig = resolveLiveResearchModelConfigFromEnv()
-        if (!liveConfig) {
-          printJsonErrorAndExit(
-            'Live plan requires BABEL_RESEARCH_V2_PROVIDER and BABEL_RESEARCH_V2_MODEL_ID (optional BABEL_RESEARCH_V2_API_KEY_ENV).',
-            options.json,
-          )
-        }
-        createLiveResearchModelPort(liveConfig)
-        printJsonErrorAndExit(
-          'Live plan store iteration is not enabled yet; provider port factory is ready. Use dry-run-plan for admitted fixture iteration.',
-          options.json,
-        )
+        await runResearchV2LivePlan(options)
       } catch (error) {
         printJsonErrorAndExit(error instanceof Error ? error.message : String(error), options.json)
       }

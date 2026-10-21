@@ -67,6 +67,35 @@ test('GeneralWebAdapter.read: static HTML via port (G-DEV-01 plan-a)', async () 
   assert.ok(result.passages.length >= 1)
 })
 
+test('GeneralWebAdapter.discover: maps admitted search hits to web candidates', async () => {
+  const hitSource = webSource('src-discover')
+  const port: SourceAccessPort = {
+    async search(request: SourceSearchRequest) {
+      return {
+        operationId: request.operationId,
+        status: 'ok',
+        hits: [{ source: hitSource, snippet: 'plan a', completeness: 'snippet' }],
+      }
+    },
+    async fetchContent(request: SourceFetchRequest) {
+      return {
+        operationId: request.operationId,
+        status: 'failed',
+        failureCategory: 'policy_denied',
+        message: 'discover-only test',
+      }
+    },
+  }
+  const result = await new GeneralWebAdapter().discover(
+    { operationId: 'discover-op', query: 'cloud plan', signal: AbortSignal.timeout(5_000) },
+    port,
+  )
+  assert.equal(result.status, 'ok')
+  if (result.status !== 'ok') return
+  assert.equal(result.operationId, 'discover-op')
+  assert.equal(result.candidates[0]?.source_id, hitSource.source_id)
+})
+
 test('GeneralWebAdapter: adapter id and kinds', () => {
   const a = new GeneralWebAdapter()
   assert.equal(a.adapterId, GENERAL_WEB_ADAPTER_ID)

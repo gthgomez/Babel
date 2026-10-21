@@ -3,6 +3,7 @@ import type { FindingRecord } from '../contracts/findings.js'
 import type { PassageRecord } from '../contracts/passages.js'
 import type { PlanRevision } from '../contracts/plan.js'
 import type { SourceAdapter } from '../ports/sourceAdapter.js'
+import type { MissionRegistryBundle } from '../registry/missionAdapterResolution.js'
 import type { SourceAccessPort } from '../ports/sourceAccessPort.js'
 import type { ResearchModelPort } from '../ports/researchModelPort.js'
 import type { ResearchStore, ResearchStoreMissionHandle } from '../ports/researchStore.js'
@@ -29,6 +30,8 @@ export interface ResearchEndToEndPassRequest {
   model: ResearchModelPort
   access: SourceAccessPort
   adapter: SourceAdapter
+  readAdapter?: SourceAdapter
+  registries?: MissionRegistryBundle
   discoverQuery: string
   planOperationId: string
   planAttemptId: string
@@ -231,6 +234,8 @@ export async function runAdmittedResearchEndToEndPass(
     store: request.store,
     access: request.access,
     adapter: request.adapter,
+    ...(request.readAdapter ? { readAdapter: request.readAdapter } : {}),
+    ...(request.registries ? { registries: request.registries } : {}),
     activePlan,
     discoverQuery: request.discoverQuery,
     searchOperationId: request.retrievalSearchOperationId,

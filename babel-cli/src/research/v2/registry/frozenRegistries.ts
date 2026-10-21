@@ -1,4 +1,3 @@
-import type { ResearchMissionV2 } from '../contracts/mission.js'
 import type { SourceAdapter, SourceAdapterRegistry } from '../ports/sourceAdapter.js'
 import type {
   ResearchProfileDefinition,
@@ -44,27 +43,12 @@ export function createTechnicalResearchRegistries(): {
   return { sourceAdapters, profiles }
 }
 
-/**
- * Pick the first registry adapter compatible with the mission profile's preferred source classes.
- * B-owned web/document adapters register here when integrated — A does not duplicate them.
- */
-export function resolveSourceAdapterForMission(
-  mission: ResearchMissionV2,
-  registries: {
-    sourceAdapters: SourceAdapterRegistry
-    profiles: ResearchProfileRegistry
-  },
-): SourceAdapter | undefined {
-  const profile = registries.profiles.get(mission.profile_id, mission.profile_version)
-  if (!profile) return undefined
-  for (const sourceClass of profile.preferredSourceClasses) {
-    const match = registries.sourceAdapters
-      .listAdapters()
-      .find((adapter) => adapter.supportedKinds.includes(sourceClass))
-    if (match) return match
-  }
-  return undefined
-}
+export {
+  adapterSupportsDiscovery,
+  resolveDiscoveryAdapterForMission,
+  resolveReadAdapterForSource,
+  resolveSourceAdapterForMission,
+} from './missionAdapterResolution.js'
 
 export function withAdditionalSourceAdapters(
   registries: ReturnType<typeof createTechnicalResearchRegistries>,

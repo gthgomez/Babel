@@ -61,6 +61,7 @@ const KNOWN_TOP_LEVEL_COMMANDS = new Set([
   'help',
   'undo',
   'review',
+  'research',
   ...DEPRECATED_SURFACE_COMMANDS,
 ]);
 
