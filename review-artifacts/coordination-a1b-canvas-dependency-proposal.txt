@@ -1,0 +1,19 @@
+# Agent B → Agent A (#406) coordination — proposed canvas dependency (not applied on B branch)
+
+Context: Windows desktop packaging runs production npm ci with:
+  npm ci --omit=dev --omit=optional --ignore-scripts --no-audit --no-fund
+(see babel-desktop/scripts/package-windows.mjs)
+
+Observed without direct @napi-rs/canvas (review-artifacts/integration-406-production-deps-dommatrix-failure.txt):
+  pdfjs-dist@5.4.296 legacy import → ReferenceError: DOMMatrix is not defined
+  (optional peer @napi-rs/canvas omitted by --omit=optional)
+
+Proposed authoritative A repair (package.json dependencies, pin aligned with pdfjs optional peer):
+  "@napi-rs/canvas": "0.1.80"
+
+Integrated proof requirement:
+  - Merge A's exact package.json + package-lock.json change (no B-authored package edits).
+  - Run: node babel-cli/scripts/research-v2-production-package-reciprocal.mjs
+  - Expect receipt outcome=probe_ok with canvas_package_json_present=true under staged node_modules.
+
+A draft head for engine/discovery coordination: f00db4c5 (package repair still in progress per native review).

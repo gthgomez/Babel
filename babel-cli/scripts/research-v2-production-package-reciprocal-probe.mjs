@@ -1,24 +1,46 @@
 #!/usr/bin/env node
 /**
- * B reciprocal probe: real two-page PDF extraction + cancellation cleanup under a
- * production-shaped node_modules tree (see integration test for npm ci flags).
- *
- * Requires:
- * - NODE_PATH → directory with `npm ci --omit=dev --omit=optional` output
- * - BABEL_CLI_DIST → babel-cli/dist (built adapter + pdfjs import path)
- * - BABEL_PDF_FIXTURE → absolute path to two-page-sample.pdf
+ * Runs inside a staged package root (BABEL_STAGED_ROOT): imports dist from
+ * ./runtime/dist only; pdfjs/canvas resolve from ./node_modules (no host fallback).
  */
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { pathToFileURL } from 'node:url'
+import { dirname, join } from 'node:path'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
-const dist = process.env.BABEL_CLI_DIST
-const fixturePath = process.env.BABEL_PDF_FIXTURE
-if (!dist || !fixturePath) {
-  throw new Error('BABEL_CLI_DIST and BABEL_PDF_FIXTURE are required')
+const stageRoot = process.env.BABEL_STAGED_ROOT
+if (!stageRoot) {
+  throw new Error('BABEL_STAGED_ROOT is required (staged package root with node_modules + runtime/dist)')
+}
+if (process.env.NODE_PATH) {
+  throw new Error('NODE_PATH must be unset for staged reciprocal probe (no host dependency fallback)')
 }
 
-const distUrl = pathToFileURL(dist.endsWith('/') ? dist : `${dist}/`).href
+const probeDir = dirname(fileURLToPath(import.meta.url))
+const stageRootResolved = join(stageRoot, '.')
+const distRoot = join(stageRootResolved, 'runtime', 'dist')
+const distUrl = pathToFileURL(join(distRoot, '/')).href
+const fixturePath = join(stageRootResolved, 'reciprocal', 'fixtures', 'two-page-sample.pdf')
+
+async function assertDependencyResolvedUnderStage(specifier) {
+  const resolved = import.meta.resolve(specifier, import.meta.url)
+  const resolvedPath = fileURLToPath(resolved)
+  const nm = join(stageRootResolved, 'node_modules')
+  assert.ok(
+    resolvedPath.startsWith(nm + '/') || resolvedPath.startsWith(nm + '\\'),
+    `${specifier} must resolve under staged node_modules, got ${resolvedPath}`,
+  )
+  return resolvedPath
+}
+
+await assertDependencyResolvedUnderStage('pdfjs-dist/package.json')
+try {
+  await assertDependencyResolvedUnderStage('@napi-rs/canvas/package.json')
+} catch {
+  console.error(
+    'staged_probe: @napi-rs/canvas not installed under production flags (expected until A #406 package repair lands)',
+  )
+}
 
 const { GeneralDocumentAdapter } = await import(
   new URL('research/v2/adapters/documents/generalDocumentAdapter.js', distUrl).href

@@ -1,0 +1,48 @@
+# generated 2026-10-21T05:15:40.404Z
+outcome=probe_failed
+stageRoot=/tmp/babel-prod-reciprocal-stage-pVNa91
+production_npm_ci=ci --omit=dev --omit=optional --ignore-scripts --no-audit --no-fund
+canvas_package_json_present=false
+pdfjs_package_json_present=true
+canvas_version=null
+Authoritative @napi-rs/canvas direct dependency is Agent A #406 package repair (in progress at f00db4c5); B does not edit package.json.
+--- npm ci (tail) ---
+
+added 49 packages in 2s
+
+--- probe error ---
+Command failed: /exec-daemon/node /tmp/babel-prod-reciprocal-stage-pVNa91/reciprocal/probe.mjs
+staged_probe: @napi-rs/canvas not installed under production flags (expected until A #406 package repair lands)
+Warning: Cannot load "@napi-rs/canvas" package: "Error: Cannot find module '@napi-rs/canvas'
+Require stack:
+- /tmp/babel-prod-reciprocal-stage-pVNa91/node_modules/pdfjs-dist/legacy/build/pdf.mjs".
+Warning: Cannot polyfill `DOMMatrix`, rendering may be broken.
+Warning: Cannot polyfill `ImageData`, rendering may be broken.
+Warning: Cannot polyfill `Path2D`, rendering may be broken.
+file:///tmp/babel-prod-reciprocal-stage-pVNa91/reciprocal/probe.mjs:100
+  throw new Error(`production-package reciprocal PDF read failed: ${detail}`)
+        ^
+
+Error: production-package reciprocal PDF read failed: extraction_failed: DOMMatrix is not defined
+    at file:///tmp/babel-prod-reciprocal-stage-pVNa91/reciprocal/probe.mjs:100:9
+
+Node.js v22.23.3
+
+--- probe stdout ---
+
+--- probe stderr ---
+staged_probe: @napi-rs/canvas not installed under production flags (expected until A #406 package repair lands)
+Warning: Cannot load "@napi-rs/canvas" package: "Error: Cannot find module '@napi-rs/canvas'
+Require stack:
+- /tmp/babel-prod-reciprocal-stage-pVNa91/node_modules/pdfjs-dist/legacy/build/pdf.mjs".
+Warning: Cannot polyfill `DOMMatrix`, rendering may be broken.
+Warning: Cannot polyfill `ImageData`, rendering may be broken.
+Warning: Cannot polyfill `Path2D`, rendering may be broken.
+file:///tmp/babel-prod-reciprocal-stage-pVNa91/reciprocal/probe.mjs:100
+  throw new Error(`production-package reciprocal PDF read failed: ${detail}`)
+        ^
+
+Error: production-package reciprocal PDF read failed: extraction_failed: DOMMatrix is not defined
+    at file:///tmp/babel-prod-reciprocal-stage-pVNa91/reciprocal/probe.mjs:100:9
+
+Node.js v22.23.3

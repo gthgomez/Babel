@@ -185,7 +185,6 @@
     "marked": "^18.0.5",
     "minisearch": "^7.2.0",
     "nucleo-matcher-wasm": "^0.4.0",
-    "@napi-rs/canvas": "0.1.80",
     "pdfjs-dist": "5.4.296",
     "sqlite-vec": "^0.1.9",
     "string-width": "^8.2.0",

@@ -1,0 +1,7 @@
+# Explicit packaging integration (not default unit-test shard; may use network for npm ci)
+
+cd babel-cli && npm run build
+node scripts/research-v2-production-package-reciprocal.mjs \
+  --receipt=../review-artifacts/integration-406-production-package-reciprocal-run.txt
+
+Optional: --keep-stage --stage=/tmp/babel-prod-reciprocal-stage for inspection
