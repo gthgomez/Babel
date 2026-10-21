@@ -343,6 +343,7 @@ async function pollOwnerSessionId(storeDirectory: string): Promise<string> {
   return ''
 }
 
+/** Second-resume case stays red until A binds offline op/attempt ids to writer_generation (Native9d). */
 describe('general adapter lifecycle reciprocal (#406 9d97448a, durable store, injected)', () => {
   it('owner watcher cancel → close/inspect → resume → new engine report (not manual terminal)', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'babel-general-lifecycle-'))

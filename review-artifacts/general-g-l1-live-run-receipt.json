@@ -62,5 +62,11 @@
     "error": "no terminal_receipt report found for mission"
   },
   "store_directory": "/workspace/codex/worktrees/g-l1-9d97448a/codex/runs/general-g-l1-python-stable/store",
-  "note": "Single diagnostic smoke only; not overall Research acceptance. No retry, no provider fallback."
+  "note": "Single diagnostic smoke only; not overall Research acceptance. No retry, no provider fallback.",
+  "evidence_for_a": {
+    "validation_details": "review-artifacts/general-g-l1-cli-validation-details.txt",
+    "request_local_receipt": "review-artifacts/general-g-l1-request-local-receipt.json",
+    "malformed_payload_fixture": "codex/missions/general-g-l1-python-stable/g-l1-malformed-plan-questions-payload.json",
+    "reciprocal_test": "babel-cli/src/research/v2/profiles/general/generalAdapterGL1PlanningFailureReciprocal.integration.test.ts"
+  }
 }
