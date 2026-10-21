@@ -13,6 +13,7 @@ import { runAdmittedRetrievalIteration } from './researchRetrievalLoop.js'
 import { runAdmittedComposedRetrievalIteration } from './researchComposedRetrievalLoop.js'
 import { missionUsesComposedTechnicalRetrieval } from './technicalRetrievalComposition.js'
 import { buildSemanticSupportReviewInput } from './buildSemanticSupportReviewInput.js'
+import { buildSynthesizeReportModelInput } from './buildSynthesizeReportModelInput.js'
 import {
   applySemanticSupportReview,
   findingsFromExtractModelOutput,
@@ -349,12 +350,7 @@ export async function runAdmittedResearchEndToEndPass(
     input: {
       mission_id: request.session.mission.mission_id,
       primary_question: request.session.mission.primary_question,
-      findings: findings.map((f) => ({
-        finding_id: f.finding_id,
-        question_id: f.question_id,
-        assertion_text: f.assertion_text,
-        semantic_support: f.semantic_support?.status ?? 'not_checked',
-      })),
+      ...buildSynthesizeReportModelInput(findings),
     },
     signal: request.signal,
     dispatchedAt: request.dispatchedAt,

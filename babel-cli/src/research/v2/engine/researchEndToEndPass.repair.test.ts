@@ -78,6 +78,12 @@ function modelPort(): import('../ports/researchModelPort.js').ResearchModelPort 
         })
       }
       if (request.kind === 'synthesize_report') {
+        const synthFindings = request.input.findings as {
+          semantic_support?: string
+          question_coverage?: string
+        }[]
+        assert.equal(synthFindings[0]?.semantic_support, 'not_checked')
+        assert.equal(synthFindings[0]?.question_coverage, 'not_assessed')
         fixture.scriptOutput(request.operationId, {
           kind: 'synthesize_report',
           answer_summary: 'Unqualified summary.',
