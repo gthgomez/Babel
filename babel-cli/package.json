@@ -152,6 +152,8 @@
     "format:fix": "prettier --write src/",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.scripts.json --noEmit",
     "test:research-v2-pdfjs-production-smoke": "node scripts/research-v2-pdfjs-production-smoke.mjs",
+    "test:research-v2-pdfjs-staged-package-smoke": "node scripts/research-v2-pdfjs-staged-package-smoke.mjs",
+    "test:research-v2-production-package-reciprocal": "node scripts/research-v2-production-package-reciprocal.mjs",
     "prepublishOnly": "npm run check:source-provenance && npm run check:dist",
     "benchmark:claude-babel:certify": "tsx --no-warnings=ExperimentalWarning scripts/claude-babel-astra-lab/run_go_certification.ts",
     "benchmark:claude-babel:smoke": "tsx --no-warnings=ExperimentalWarning scripts/claude-babel-astra-lab/run_babel_smoke.ts",

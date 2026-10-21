@@ -1,12 +1,17 @@
 #!/usr/bin/env node
 /**
- * Production dependency smoke: pdfjs-dist legacy entry + @napi-rs/canvas (DOMMatrix).
- * Run after `npm ci --omit=dev --omit=optional` in babel-cli.
+ * Production dependency smoke in the current install tree (developer / post-npm-ci).
+ * For packaged proof under --omit=optional, use research-v2-pdfjs-staged-package-smoke.mjs.
  */
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { resolveInstalledModulePaths } from './research-v2-canvas-platform-binding.mjs'
+
+const cwd = join(dirname(fileURLToPath(import.meta.url)), '..')
+const paths = resolveInstalledModulePaths(cwd)
+console.log(JSON.stringify({ schema: 'research-v2-pdfjs-production-smoke/v1', module_paths: paths }, null, 2))
 
 await import('@napi-rs/canvas')
 

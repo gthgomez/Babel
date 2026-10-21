@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 /**
  * Explicit packaging integration: stage a production npm ci tree (Windows package flags),
- * copy built dist + probes + fixture inside the stage, run ESM isolation then PDF probe
- * with NODE_PATH/NODE_OPTIONS cleared (no host fallback). Writes a receipt path.
+ * install @napi-rs/canvas platform binding (A-owned), copy built dist + B probes, run
+ * ESM isolation then PDF probe with loader env cleared. Writes a receipt path.
  *
- * Not part of default unit-test shards (may use network for npm ci).
+ * Aligns with B #404 @ 8eb70ae0 reciprocal probes; not a default unit-test shard.
  */
 import { execFileSync } from 'node:child_process'
 import {
@@ -20,6 +20,11 @@ import {
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import {
+  installCanvasPlatformBinding,
+  resolveCanvasPlatformBindingPackage,
+  resolveInstalledModulePaths,
+} from './research-v2-canvas-platform-binding.mjs'
 
 const babelCliRoot = join(dirname(fileURLToPath(import.meta.url)), '..')
 const repoRoot = join(babelCliRoot, '..')
@@ -60,12 +65,20 @@ function runStagedScript(stageRoot, scriptPath) {
 function canvasInstallEvidence(stageRoot) {
   const canvasPkg = join(stageRoot, 'node_modules', '@napi-rs', 'canvas', 'package.json')
   const pdfjsPkg = join(stageRoot, 'node_modules', 'pdfjs-dist', 'package.json')
+  let modulePaths = null
+  try {
+    modulePaths = resolveInstalledModulePaths(stageRoot)
+  } catch {
+    modulePaths = null
+  }
   return {
     canvasPackageJsonPresent: existsSync(canvasPkg),
     pdfjsPackageJsonPresent: existsSync(pdfjsPkg),
     canvasVersion: existsSync(canvasPkg)
       ? JSON.parse(readFileSync(canvasPkg, 'utf8')).version
       : null,
+    platformBindingPackage: resolveCanvasPlatformBindingPackage(),
+    modulePaths,
   }
 }
 
@@ -73,6 +86,12 @@ function main() {
   const keepStage = process.argv.includes('--keep-stage')
   const receiptPath =
     parseArg('receipt') ?? join(repoRoot, 'review-artifacts/integration-406-production-package-reciprocal-run.txt')
+
+  const npmCli = process.env.npm_execpath
+  if (!npmCli) {
+    console.error('Run via npm (npm_execpath required for platform canvas binding install)')
+    process.exit(1)
+  }
 
   execFileSync('npm', ['run', 'build'], {
     cwd: babelCliRoot,
@@ -120,6 +139,27 @@ function main() {
       npmCiStdout: err.stdout ?? '',
       npmCiStderr: err.stderr ?? '',
       message: err.message ?? String(err),
+      canvas: canvasInstallEvidence(stageRoot),
+    })
+    if (!keepStage) rmSync(stageRoot, { recursive: true, force: true })
+    process.exit(1)
+  }
+
+  let platformBindingInstalled = null
+  let platformBindingError = ''
+  try {
+    platformBindingInstalled = installCanvasPlatformBinding({
+      cwd: stageRoot,
+      npmCli,
+      nodeExec: process.execPath,
+    })
+  } catch (error) {
+    platformBindingError = error instanceof Error ? error.message : String(error)
+    writeReceipt(receiptPath, {
+      stageRoot,
+      outcome: 'canvas_platform_binding_failed',
+      productionNpmCiArgs: PRODUCTION_NPM_CI_ARGS.join(' '),
+      platformBindingError,
       canvas: canvasInstallEvidence(stageRoot),
     })
     if (!keepStage) rmSync(stageRoot, { recursive: true, force: true })
@@ -180,6 +220,7 @@ function main() {
     outcome,
     productionNpmCiArgs: PRODUCTION_NPM_CI_ARGS.join(' '),
     npmCiOutputTail: npmCiOutput.split('\n').slice(-8).join('\n'),
+    platformBindingInstalled,
     canvas,
     esmExit,
     esmStdout,
@@ -190,7 +231,7 @@ function main() {
     probeStderr,
     probeError,
     coordinationNote:
-      'Authoritative @napi-rs/canvas direct dependency + target-platform native install are Agent A #406 package repair (optional platform lock entries remain omitted by --omit=optional until A fixes). B does not edit package.json.',
+      'A #406: direct @napi-rs/canvas + pdfjs-dist in dependencies; platform binding installed after npm ci --omit=optional; dist loads canvas before pdfjs (DOMMatrix).',
   })
 
   if (!keepStage) rmSync(stageRoot, { recursive: true, force: true })
@@ -209,9 +250,14 @@ function writeReceipt(path, body) {
     `outcome=${body.outcome}`,
     `stageRoot=${body.stageRoot}`,
     `production_npm_ci=${body.productionNpmCiArgs ?? ''}`,
+    `platform_binding_installed=${body.platformBindingInstalled ?? ''}`,
     `canvas_package_json_present=${body.canvas?.canvasPackageJsonPresent}`,
     `pdfjs_package_json_present=${body.canvas?.pdfjsPackageJsonPresent}`,
     `canvas_version=${body.canvas?.canvasVersion ?? 'null'}`,
+    body.canvas?.modulePaths
+      ? `module_paths=${JSON.stringify(body.canvas.modulePaths)}`
+      : '',
+    body.platformBindingError ? `platform_binding_error=${body.platformBindingError}` : '',
     body.coordinationNote ?? '',
     '',
     body.npmCiOutputTail ? `--- npm ci (tail) ---\n${body.npmCiOutputTail}` : '',

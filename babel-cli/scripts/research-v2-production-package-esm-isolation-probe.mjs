@@ -43,10 +43,9 @@ const pdfjsPkg = import.meta.resolve('pdfjs-dist/package.json', distPdfModule)
 const pdfjsReal = assertRealpathUnderStage('pdfjs-dist/package.json (from dist parentURL)', pdfjsPkg)
 
 let canvasPkg = null
-let canvasPkgReal = null
 try {
   canvasPkg = import.meta.resolve('@napi-rs/canvas/package.json', distPdfModule)
-  canvasPkgReal = assertRealpathUnderStage('@napi-rs/canvas/package.json (from dist parentURL)', canvasPkg)
+  assertRealpathUnderStage('@napi-rs/canvas/package.json (from dist parentURL)', canvasPkg)
 } catch {
   console.error(
     'esm_isolation_probe: @napi-rs/canvas not resolvable from dist under production flags (A must add direct dep + target-platform install)',
@@ -81,7 +80,6 @@ console.log(
     marker: 'research-v2-production-package-esm-isolation-probe: ok',
     stageReal,
     pdfjsReal,
-    canvasPkgReal,
     canvasNativeReal,
   }),
 )
