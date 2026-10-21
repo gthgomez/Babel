@@ -1,0 +1,58 @@
+{
+  "schema": "general-g-l1-attempt2-live-run-receipt/v1",
+  "attempt": 2,
+  "runtime_sha": "ec7dce912eebd1210f762ddc6092de4d199c3c3b",
+  "worktree_head": "ec7dce912eebd1210f762ddc6092de4d199c3c3b",
+  "mission_id": "mission-g-l1-general-live-attempt2",
+  "attempt1_store_preserved": "/workspace/codex/worktrees/g-l1-9d97448a/codex/runs/general-g-l1-python-stable/store",
+  "command": "cd /workspace/codex/worktrees/ec7dce91/babel-cli && export BABEL_RESEARCH_V2_ALLOW_LIVE_API=1 && export BABEL_RESEARCH_V2_MODEL_ROUTE_KEY=deepseek-v4-flash-openrouter && node bin/babel.js research v2 run --store /workspace/codex/worktrees/ec7dce91/codex/runs/general-g-l1-attempt2/store --mission-file /workspace/codex/missions/general-g-l1-python-stable-attempt2/mission.json --discover-query 'latest stable Python release python.org download' --json",
+  "utc_start": "2026-10-21T06:58:42Z",
+  "utc_end": "2026-10-21T06:58:49Z",
+  "cli_exit_code": 1,
+  "cli_status": "fail",
+  "cli_error": "admitted bytes are not valid UTF-8",
+  "blocked_stage": "retrieval_fetch_admission_utf8",
+  "precise_failure": "external_operation_completed settlement failed on cli-run-fetch (extraction_failed: admitted bytes are not valid UTF-8)",
+  "terminal_state": "failed",
+  "terminal_receipt_count": 1,
+  "stopping_reason": "provider_invoke_failed",
+  "acceptance_state": "not_accepted",
+  "model_route": {
+    "route_key": "deepseek-v4-flash-openrouter",
+    "provider": "openrouter",
+    "model_id": "deepseek/deepseek-v4-flash-0731"
+  },
+  "durable_operations": [
+    {
+      "operation_id": "cli-run-plan-wg1-15576886",
+      "attempt_id": "cli-run-plan-att-wg1-15576886",
+      "kind": "model_invoke",
+      "settlement": "succeeded",
+      "usage": { "input_tokens": 652, "output_tokens": 556, "cost_usd_reported": 0.0001117236 }
+    },
+    {
+      "operation_id": "cli-run-search-wg1-15576886",
+      "attempt_id": "cli-run-search-att-wg1-15576886",
+      "kind": "search",
+      "settlement": "succeeded"
+    },
+    {
+      "operation_id": "cli-run-fetch-wg1-15576886",
+      "attempt_id": "cli-run-fetch-att-wg1-15576886",
+      "kind": "fetch",
+      "settlement": "failed",
+      "failure_category": "extraction_failed",
+      "message": "admitted bytes are not valid UTF-8"
+    }
+  ],
+  "plan_revision_id": "plan-dc5be6e8-e6d4-499b-b43a-b4d37ca05dea",
+  "sources_issued": 0,
+  "passages_issued": 0,
+  "citation_passage_ids": 0,
+  "finding_ids": 0,
+  "answer_summary": "Research pass failed during admitted_research_pass. admitted bytes are not valid UTF-8",
+  "post_run_inspect_exit": 0,
+  "post_run_report_exit": 0,
+  "store_directory": "/workspace/codex/worktrees/ec7dce91/codex/runs/general-g-l1-attempt2/store",
+  "note": "Single diagnostic iteration only; not acceptance. No retry or provider fallback. Attempt1 unchanged."
+}
