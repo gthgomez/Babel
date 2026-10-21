@@ -33,7 +33,7 @@ export class GeneralWebAdapter implements SourceAdapter {
       operationId: request.operationId,
       status: 'failed',
       failureCategory: 'not_supported',
-      message: 'general web adapter: offline slice does not implement live discovery',
+      message: 'general web adapter: live discovery not implemented in this slice',
     }
   }
 

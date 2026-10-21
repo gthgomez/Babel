@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url'
 import { test } from 'node:test'
 import { PassageRecordSchema } from '../../contracts/passages.js'
 import { buildAdmittedContent } from '../documents/testAdmittedFixtures.js'
+import { passageTextHash } from '../documents/passageInlineText.js'
 import { resolveQuarantinedFixturePath } from '../documents/quarantinePath.js'
 import { passagesFromAdmittedStaticHtml, HTML_MEDIA_TYPE } from './htmlFromAdmittedBytes.js'
 
@@ -26,6 +27,38 @@ test('passagesFromAdmittedStaticHtml: G-DEV-01 plan-a heading sections', () => {
   assert.equal(passages[0]?.locator.kind, 'section')
   assert.ok(passages[0]?.heading_path?.[0]?.includes('Nimbus'))
   for (const p of passages) PassageRecordSchema.parse(p)
+})
+
+test('passagesFromAdmittedStaticHtml: non-ascii repeated headings get unique section_id', () => {
+  const html = `<html><body><h1>日本語</h1><p>one</p><h1>日本語</h1><p>two</p></body></html>`
+  const admitted = buildAdmittedContent('op', 's', 'r', Buffer.from(html, 'utf8'), HTML_MEDIA_TYPE)
+  const passages = passagesFromAdmittedStaticHtml(admitted)
+  assert.equal(passages.length, 2)
+  const ids = passages.map((p) => (p.locator.kind === 'section' ? p.locator.section_id : ''))
+  assert.notEqual(ids[0], ids[1])
+  assert.match(ids[0] ?? '', /^heading-[a-f0-9]{16}$/)
+  assert.equal(ids[1], `${ids[0]}~2`)
+})
+
+test('passagesFromAdmittedStaticHtml: repeated headings get unique section_id', () => {
+  const html = `<html><body><h1>Same</h1><p>one</p><h1>Same</h1><p>two</p></body></html>`
+  const admitted = buildAdmittedContent('op', 's', 'r', Buffer.from(html, 'utf8'), HTML_MEDIA_TYPE)
+  const passages = passagesFromAdmittedStaticHtml(admitted)
+  assert.equal(passages.length, 2)
+  const ids = passages.map((p) => (p.locator.kind === 'section' ? p.locator.section_id : ''))
+  assert.notEqual(ids[0], ids[1])
+})
+
+test('passagesFromAdmittedStaticHtml: inline hash matches emitted text', () => {
+  const html = `<html><body><h1>H</h1><p>${'z'.repeat(32_001)}</p></body></html>`
+  const admitted = buildAdmittedContent('op', 's', 'r', Buffer.from(html, 'utf8'), HTML_MEDIA_TYPE)
+  const passages = passagesFromAdmittedStaticHtml(admitted)
+  const ref = passages[0]?.text_ref
+  assert.equal(ref?.mode, 'inline')
+  if (ref?.mode === 'inline') {
+    assert.equal(ref.text_hash, passageTextHash(ref.text))
+    assert.ok(passages[0]?.extraction_notes?.some((n) => n.includes('inline_text_truncated')))
+  }
 })
 
 test('passagesFromAdmittedStaticHtml: rejects login-only html', () => {

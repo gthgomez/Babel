@@ -1,27 +1,26 @@
-# Extraction slice candidate M1 (local, unpublished)
+# Extraction slice (local, unpublished)
 
-**Checkpoint preserved:** `general-document/0.1.0` plaintext path unchanged on published head semantics.
+**Plaintext checkpoint preserved:** `general-document/0.1.0` `text/plain` path on published `196098d9` semantics.
 
 ## Bounded scope
 
 | Adapter | Media | Outcome |
 |---------|--------|---------|
-| `general-document/0.1.0` | `text/plain` | Unchanged reviewed plaintext integration |
-| `general-document/0.1.0` | `application/pdf` | **Failed** `extraction_failed` — not implemented |
-| `general-web/0.1.0` | `text/html` | **Ok** static heading-bounded passages (`general-static-html/0.1.0`) |
-| `general-web/0.1.0` | discover | **Failed** `not_supported` — offline slice |
+| `general-document/0.1.0` | `text/plain` | Reviewed admitted inline UTF-8 lines |
+| `general-document/0.1.0` | `application/pdf` | Per-page text via pdfjs (`general-pdf-text/0.1.0`); page limits; abort + cleanup |
+| `general-web/0.1.0` | `text/html` | Static heading sections (`general-static-html/0.1.0`) |
+| `general-web/0.1.0` | discover | `not_supported` (no live search in this slice) |
 
 ## Agent A coordination
 
-- Register `generalAdapterCatalog` entries on `SourceAdapterRegistry` (A-owned).
-- Mission → fetch → `read()` → passages already schema-valid; A owns cited-report loop.
-- Shared: `readBinding`, `SourceAccessPort.fetchContent`, contract schemas @ `0ccd1733`.
+- Register `generalAdapterCatalog` on `SourceAdapterRegistry` (A-owned).
+- Mission → `fetchContent` → adapter `read()` → schema-valid passages.
 
 ## Fixtures
 
 - HTML: `profiles/general/fixtures/dev-corpus/G-DEV-01/sources/plan-a.html`
-- PDF negative: `adapters/documents/fixtures/two-page-sample.pdf`
+- PDF: `adapters/documents/fixtures/two-page-sample.pdf`
 
 ## Not in scope
 
-Live network/search, JS rendering, full PDF layout, publication push.
+Live network/search, JS rendering, OCR, publication push.

@@ -9,11 +9,11 @@ export const generalAdapterCatalog = {
   document: {
     adapterId: GENERAL_DOCUMENT_ADAPTER_ID,
     factory: () => new GeneralDocumentAdapter(),
-    extraction: 'text/plain inline bytes; application/pdf per-page text (pdfjs-dist, offline)',
+    extraction: 'text/plain inline bytes; application/pdf per-page text (pdfjs-dist, admitted bytes)',
   },
   web: {
     adapterId: GENERAL_WEB_ADAPTER_ID,
     factory: () => new GeneralWebAdapter(),
-    extraction: 'static text/html heading-bounded sections (offline fixtures)',
+    extraction: 'static text/html heading-bounded sections (admitted bytes)',
   },
 } as const

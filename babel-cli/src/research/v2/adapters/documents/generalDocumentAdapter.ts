@@ -12,6 +12,7 @@ import {
   PLAIN_TEXT_MEDIA_TYPE,
 } from './plainTextFromAdmittedBytes.js'
 import { isPdfMediaType } from './pdfAdmission.js'
+import { PdfExtractionCancelled } from './pdfExtractionLimits.js'
 import { PDF_TEXT_EXTRACTION_VERSION, passagesFromAdmittedPdf } from './pdfFromAdmittedBytes.js'
 import {
   assertReadPreconditions,
@@ -70,7 +71,10 @@ export class GeneralDocumentAdapter implements SourceAdapter {
     const admitted = fetched.admitted
     try {
       if (isPdfMediaType(admitted.media_type)) {
-        const passages = await passagesFromAdmittedPdf(admitted)
+        const passages = await passagesFromAdmittedPdf(admitted, request.signal)
+        if (request.signal.aborted) {
+          return cancelledRead(request.operationId)
+        }
         return {
           operationId: request.operationId,
           status: 'ok',
@@ -91,6 +95,9 @@ export class GeneralDocumentAdapter implements SourceAdapter {
         extraction_version: PLAIN_TEXT_EXTRACTION_VERSION,
       }
     } catch (error) {
+      if (error instanceof PdfExtractionCancelled || request.signal.aborted) {
+        return cancelledRead(request.operationId)
+      }
       const message = error instanceof Error ? error.message : String(error)
       const failureCategory = message.includes('unsupported media_type')
         ? 'unsupported_media'

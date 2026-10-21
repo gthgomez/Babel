@@ -1,26 +1,14 @@
-import { createHash } from 'node:crypto'
 import type { AdmittedContent } from '../../contracts/admittedContent.js'
 import type { PassageRecord } from '../../contracts/passages.js'
 import { PassageRecordSchema } from '../../contracts/passages.js'
+import { buildInlinePassageTextRef } from '../documents/passageInlineText.js'
 import { decodeAdmittedUtf8Bytes } from '../documents/plainTextFromAdmittedBytes.js'
+import { allocateSectionLocatorId } from './htmlSectionLocator.js'
 
 export const HTML_MEDIA_TYPE = 'text/html'
 export const STATIC_HTML_EXTRACTION_VERSION = 'general-static-html/0.1.0'
 
-function passageTextHash(text: string): string {
-  return createHash('sha256').update(text, 'utf8').digest('hex')
-}
-
-function sectionIdFromHeading(heading: string): string {
-  const slug = heading
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-|-$/g, '')
-  return slug.length > 0 ? slug : 'section'
-}
-
-/** Minimal static HTML: one passage per heading block (offline fixtures only; no JS). */
+/** Minimal static HTML: one passage per heading block (admitted bytes only; no JS). */
 export function passagesFromAdmittedStaticHtml(admitted: AdmittedContent): PassageRecord[] {
   if (admitted.media_type !== HTML_MEDIA_TYPE) {
     throw new Error(
@@ -37,6 +25,7 @@ export function passagesFromAdmittedStaticHtml(admitted: AdmittedContent): Passa
     .replace(/<style[\s\S]*?<\/style>/gi, '')
   const headingRe = /<h([1-6])[^>]*>([^<]*)<\/h[1-6]>/gi
   const passages: PassageRecord[] = []
+  const sectionOccurrence = new Map<string, number>()
   let match: RegExpExecArray | null
   let index = 0
   while ((match = headingRe.exec(stripped)) !== null) {
@@ -51,7 +40,8 @@ export function passagesFromAdmittedStaticHtml(admitted: AdmittedContent): Passa
       .replace(/\s+/g, ' ')
       .trim()
     if (!text) continue
-    const sectionId = sectionIdFromHeading(heading)
+    const sectionId = allocateSectionLocatorId(heading, sectionOccurrence)
+    const inline = buildInlinePassageTextRef(text)
     const record: PassageRecord = {
       passage_id: `${admitted.operation_id}:html:${index++}`,
       source_revision_id: admitted.revision.revision_id,
@@ -59,10 +49,10 @@ export function passagesFromAdmittedStaticHtml(admitted: AdmittedContent): Passa
       heading_path: [heading],
       text_ref: {
         mode: 'inline',
-        text: text.length > 32_000 ? text.slice(0, 32_000) : text,
-        text_hash: passageTextHash(text),
+        text: inline.text,
+        text_hash: inline.text_hash,
       },
-      extraction_notes: [`heading_level:${level}`, 'static_html_offline'],
+      extraction_notes: [`heading_level:${level}`, 'static_html_extractor', ...inline.truncationNotes],
     }
     PassageRecordSchema.parse(record)
     passages.push(record)
