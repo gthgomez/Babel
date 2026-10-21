@@ -1,0 +1,952 @@
+diff --git a/babel-cli/src/research/v2/adapters/documents/generalDocumentAdapter.ts b/babel-cli/src/research/v2/adapters/documents/generalDocumentAdapter.ts
+index 24bd0c1e..31f0f7af 100644
+--- a/babel-cli/src/research/v2/adapters/documents/generalDocumentAdapter.ts
++++ b/babel-cli/src/research/v2/adapters/documents/generalDocumentAdapter.ts
+@@ -9,7 +9,11 @@ import type {
+ import {
+   PLAIN_TEXT_EXTRACTION_VERSION,
+   passagesFromAdmittedPlainText,
++  PLAIN_TEXT_MEDIA_TYPE,
+ } from './plainTextFromAdmittedBytes.js'
++import { isPdfMediaType } from './pdfAdmission.js'
++import { PdfExtractionCancelled } from './pdfExtractionLimits.js'
++import { PDF_TEXT_EXTRACTION_VERSION, passagesFromAdmittedPdf } from './pdfFromAdmittedBytes.js'
+ import {
+   assertReadPreconditions,
+   cancelledRead,
+@@ -66,6 +70,22 @@ export class GeneralDocumentAdapter implements SourceAdapter {
+ 
+     const admitted = fetched.admitted
+     try {
++      if (isPdfMediaType(admitted.media_type)) {
++        const passages = await passagesFromAdmittedPdf(admitted, request.signal)
++        if (request.signal.aborted) {
++          return cancelledRead(request.operationId)
++        }
++        return {
++          operationId: request.operationId,
++          status: 'ok',
++          revision: admitted.revision,
++          passages,
++          extraction_version: PDF_TEXT_EXTRACTION_VERSION,
++        }
++      }
++      if (admitted.media_type !== PLAIN_TEXT_MEDIA_TYPE) {
++        throw new Error(`unsupported media_type for document adapter: ${admitted.media_type}`)
++      }
+       const passages = passagesFromAdmittedPlainText(admitted)
+       return {
+         operationId: request.operationId,
+@@ -75,6 +95,9 @@ export class GeneralDocumentAdapter implements SourceAdapter {
+         extraction_version: PLAIN_TEXT_EXTRACTION_VERSION,
+       }
+     } catch (error) {
++      if (error instanceof PdfExtractionCancelled || request.signal.aborted) {
++        return cancelledRead(request.operationId)
++      }
+       const message = error instanceof Error ? error.message : String(error)
+       const failureCategory = message.includes('unsupported media_type')
+         ? 'unsupported_media'
+diff --git a/babel-cli/src/research/v2/adapters/documents/passageInlineText.test.ts b/babel-cli/src/research/v2/adapters/documents/passageInlineText.test.ts
+new file mode 100644
+index 00000000..0b832811
+--- /dev/null
++++ b/babel-cli/src/research/v2/adapters/documents/passageInlineText.test.ts
+@@ -0,0 +1,28 @@
++import assert from 'node:assert/strict'
++import { test } from 'node:test'
++import {
++  buildInlinePassageTextRef,
++  MAX_INLINE_PASSAGE_CODE_POINTS,
++  passageTextHash,
++  truncateToCodePointLimit,
++} from './passageInlineText.js'
++
++test('truncateToCodePointLimit: does not split emoji surrogate pair', () => {
++  const emoji = '😀'
++  const prefix = 'a'.repeat(MAX_INLINE_PASSAGE_CODE_POINTS)
++  const full = prefix + emoji
++  const { emitted, truncated } = truncateToCodePointLimit(full, MAX_INLINE_PASSAGE_CODE_POINTS)
++  assert.equal(truncated, true)
++  assert.equal([...emitted].length, MAX_INLINE_PASSAGE_CODE_POINTS)
++  assert.equal(emitted, prefix)
++  assert.doesNotMatch(emitted, /\uD83D$/)
++})
++
++test('buildInlinePassageTextRef: hashes emitted text only', () => {
++  const long = 'x'.repeat(MAX_INLINE_PASSAGE_CODE_POINTS + 50)
++  const ref = buildInlinePassageTextRef(long)
++  assert.equal(ref.text.length, [...ref.text].length)
++  assert.equal(ref.text_hash, passageTextHash(ref.text))
++  assert.notEqual(ref.text_hash, passageTextHash(long))
++  assert.ok(ref.truncationNotes.length >= 1)
++})
+diff --git a/babel-cli/src/research/v2/adapters/documents/passageInlineText.ts b/babel-cli/src/research/v2/adapters/documents/passageInlineText.ts
+new file mode 100644
+index 00000000..9ca6e883
+--- /dev/null
++++ b/babel-cli/src/research/v2/adapters/documents/passageInlineText.ts
+@@ -0,0 +1,46 @@
++import { createHash } from 'node:crypto'
++
++/** Contract max for inline passage text (Unicode code points). */
++export const MAX_INLINE_PASSAGE_CODE_POINTS = 32_000
++
++export function passageTextHash(text: string): string {
++  return createHash('sha256').update(text, 'utf8').digest('hex')
++}
++
++export function truncateToCodePointLimit(
++  text: string,
++  limit: number,
++): { emitted: string; truncated: boolean; originalCodePoints: number } {
++  const codePoints = [...text]
++  if (codePoints.length <= limit) {
++    return { emitted: text, truncated: false, originalCodePoints: codePoints.length }
++  }
++  return {
++    emitted: codePoints.slice(0, limit).join(''),
++    truncated: true,
++    originalCodePoints: codePoints.length,
++  }
++}
++
++/** Hash and emit only the stored inline text; truncate on code-point boundaries. */
++export function buildInlinePassageTextRef(fullText: string): {
++  text: string
++  text_hash: string
++  truncationNotes: string[]
++} {
++  const { emitted, truncated, originalCodePoints } = truncateToCodePointLimit(
++    fullText,
++    MAX_INLINE_PASSAGE_CODE_POINTS,
++  )
++  const truncationNotes: string[] = []
++  if (truncated) {
++    truncationNotes.push(
++      `inline_text_truncated:${originalCodePoints}_to_${MAX_INLINE_PASSAGE_CODE_POINTS}_codepoints`,
++    )
++  }
++  return {
++    text: emitted,
++    text_hash: passageTextHash(emitted),
++    truncationNotes,
++  }
++}
+diff --git a/babel-cli/src/research/v2/adapters/documents/pdfAdmission.test.ts b/babel-cli/src/research/v2/adapters/documents/pdfAdmission.test.ts
+new file mode 100644
+index 00000000..999b7c47
+--- /dev/null
++++ b/babel-cli/src/research/v2/adapters/documents/pdfAdmission.test.ts
+@@ -0,0 +1,84 @@
++import assert from 'node:assert/strict'
++import { readFileSync } from 'node:fs'
++import { dirname, join } from 'node:path'
++import { fileURLToPath } from 'node:url'
++import { test } from 'node:test'
++import type { SourceAccessPort, SourceFetchRequest, SourceSearchRequest } from '../../ports/sourceAccessPort.js'
++import type { SourceRecord } from '../../contracts/sources.js'
++import { buildAdmittedContent } from './testAdmittedFixtures.js'
++import { GeneralDocumentAdapter } from './generalDocumentAdapter.js'
++import { PDF_TEXT_EXTRACTION_VERSION } from './pdfFromAdmittedBytes.js'
++
++const pdfFixture = join(dirname(fileURLToPath(import.meta.url)), 'fixtures/two-page-sample.pdf')
++
++function stubPort(fetchContent: SourceAccessPort['fetchContent']): SourceAccessPort {
++  return {
++    async search(request: SourceSearchRequest) {
++      return {
++        operationId: request.operationId,
++        status: 'failed',
++        failureCategory: 'search_provider_unavailable',
++        message: 'test stub',
++      }
++    },
++    fetchContent,
++  }
++}
++
++test('GeneralDocumentAdapter.read: application/pdf via pdfjs page passages', async () => {
++  const bytes = readFileSync(pdfFixture)
++  const source: SourceRecord = {
++    source_id: 'pdf-src',
++    kind: 'document',
++    canonical_key: 'fixture:pdf',
++    observed_urls: ['https://example.invalid/sample.pdf'],
++  }
++  const port = stubPort(async (request: SourceFetchRequest) => ({
++    operationId: request.operationId,
++    status: 'ok',
++    admitted: buildAdmittedContent(
++      request.operationId,
++      source.source_id,
++      'rev-pdf',
++      bytes,
++      'application/pdf',
++      {
++        requestedUrl: 'https://example.invalid/sample.pdf',
++        finalUrl: 'https://example.invalid/sample.pdf',
++        redirectChain: ['https://example.invalid/sample.pdf'],
++      },
++    ),
++  }))
++  const result = await new GeneralDocumentAdapter().read(
++    { operationId: 'op-pdf', source, signal: AbortSignal.timeout(30_000) },
++    port,
++  )
++  assert.equal(result.status, 'ok')
++  if (result.status !== 'ok') return
++  assert.equal(result.extraction_version, PDF_TEXT_EXTRACTION_VERSION)
++  assert.equal(result.passages.length, 2)
++})
++
++test('GeneralDocumentAdapter.read: malformed pdf bytes extraction_failed', async () => {
++  const bytes = Buffer.from('%PDF-1.4\n% corrupted', 'utf8')
++  const source: SourceRecord = {
++    source_id: 'bad-pdf',
++    kind: 'document',
++    canonical_key: 'fixture:bad',
++    observed_urls: ['https://example.invalid/bad.pdf'],
++  }
++  const port = stubPort(async (request: SourceFetchRequest) => ({
++    operationId: request.operationId,
++    status: 'ok',
++    admitted: buildAdmittedContent(request.operationId, source.source_id, 'rev', bytes, 'application/pdf', {
++      requestedUrl: 'https://example.invalid/bad.pdf',
++      finalUrl: 'https://example.invalid/bad.pdf',
++      redirectChain: ['https://example.invalid/bad.pdf'],
++    }),
++  }))
++  const result = await new GeneralDocumentAdapter().read(
++    { operationId: 'op-bad', source, signal: AbortSignal.timeout(30_000) },
++    port,
++  )
++  assert.equal(result.status, 'failed')
++})
+diff --git a/babel-cli/src/research/v2/adapters/documents/pdfAdmission.ts b/babel-cli/src/research/v2/adapters/documents/pdfAdmission.ts
+new file mode 100644
+index 00000000..ccfa8d60
+--- /dev/null
++++ b/babel-cli/src/research/v2/adapters/documents/pdfAdmission.ts
+@@ -0,0 +1,15 @@
++import type { AdmittedContent } from '../../contracts/admittedContent.js'
++
++export const PDF_MEDIA_TYPE = 'application/pdf'
++
++export function isPdfMediaType(mediaType: string): boolean {
++  return mediaType === PDF_MEDIA_TYPE
++}
++
++/** Reject obvious non-PDF payloads before invoking parser. */
++export function rejectNonPdfBytes(admitted: AdmittedContent, raw: Buffer): void {
++  if (!isPdfMediaType(admitted.media_type)) return
++  if (raw.length < 5 || raw.subarray(0, 5).toString('ascii') !== '%PDF-') {
++    throw new Error('admitted bytes are not a PDF header')
++  }
++}
+diff --git a/babel-cli/src/research/v2/adapters/documents/pdfExtractionLimits.ts b/babel-cli/src/research/v2/adapters/documents/pdfExtractionLimits.ts
+new file mode 100644
+index 00000000..4bd1a36d
+--- /dev/null
++++ b/babel-cli/src/research/v2/adapters/documents/pdfExtractionLimits.ts
+@@ -0,0 +1,14 @@
++/** General document PDF extractor bounds (offline admitted bytes). */
++export const PDF_MAX_PAGES_PER_EXTRACTION = 512
++export const PDF_MAX_OUTPUT_CODE_POINTS_PER_PAGE = 32_000
++
++export class PdfExtractionCancelled extends Error {
++  constructor() {
++    super('pdf extraction cancelled')
++    this.name = 'PdfExtractionCancelled'
++  }
++}
++
++export function throwIfPdfAborted(signal?: AbortSignal): void {
++  if (signal?.aborted) throw new PdfExtractionCancelled()
++}
+diff --git a/babel-cli/src/research/v2/adapters/documents/pdfFromAdmittedBytes.test.ts b/babel-cli/src/research/v2/adapters/documents/pdfFromAdmittedBytes.test.ts
+new file mode 100644
+index 00000000..82ea85b3
+--- /dev/null
++++ b/babel-cli/src/research/v2/adapters/documents/pdfFromAdmittedBytes.test.ts
+@@ -0,0 +1,56 @@
++import assert from 'node:assert/strict'
++import { readFileSync } from 'node:fs'
++import { dirname, join } from 'node:path'
++import { fileURLToPath } from 'node:url'
++import { test } from 'node:test'
++import { PassageRecordSchema } from '../../contracts/passages.js'
++import { buildAdmittedContent } from './testAdmittedFixtures.js'
++import { PdfExtractionCancelled } from './pdfExtractionLimits.js'
++import { passagesFromAdmittedPdf, PDF_TEXT_EXTRACTION_VERSION } from './pdfFromAdmittedBytes.js'
++import { PDF_MEDIA_TYPE } from './pdfAdmission.js'
++import { passageTextHash } from './passageInlineText.js'
++
++const pdfFixture = join(dirname(fileURLToPath(import.meta.url)), 'fixtures/two-page-sample.pdf')
++
++test('passagesFromAdmittedPdf: two-page fixture with page locators', async () => {
++  const bytes = readFileSync(pdfFixture)
++  const admitted = buildAdmittedContent('op-pdf', 'src', 'rev', bytes, PDF_MEDIA_TYPE, {
++    requestedUrl: 'https://example.invalid/two-page-sample.pdf',
++    finalUrl: 'https://example.invalid/two-page-sample.pdf',
++    redirectChain: ['https://example.invalid/two-page-sample.pdf'],
++  })
++  const passages = await passagesFromAdmittedPdf(admitted)
++  assert.equal(passages.length, 2)
++  assert.equal(passages[0]?.locator.kind, 'page')
++  assert.equal(passages[0]?.locator.start_page, 1)
++  assert.match(passages[0]?.text_ref.mode === 'inline' ? passages[0].text_ref.text : '', /retention 90 days/)
++  assert.match(passages[1]?.text_ref.mode === 'inline' ? passages[1].text_ref.text : '', /2026-03-15/)
++  for (const p of passages) PassageRecordSchema.parse(p)
++  assert.equal(PDF_TEXT_EXTRACTION_VERSION, 'general-pdf-text/0.1.0')
++})
++
++test('passagesFromAdmittedPdf: cancellation during delayed page loop', async () => {
++  const bytes = readFileSync(pdfFixture)
++  const admitted = buildAdmittedContent('op-pdf', 'src', 'rev', bytes, PDF_MEDIA_TYPE)
++  const controller = new AbortController()
++  const promise = passagesFromAdmittedPdf(admitted, controller.signal, { pageDelayMs: 80 })
++  setTimeout(() => controller.abort(), 10)
++  await assert.rejects(promise, (err: unknown) => err instanceof PdfExtractionCancelled)
++})
++
++test('passagesFromAdmittedPdf: hashes emitted inline text only when truncated', async () => {
++  const bytes = readFileSync(pdfFixture)
++  const admitted = buildAdmittedContent('op', 'src', 'rev', bytes, PDF_MEDIA_TYPE)
++  const passages = await passagesFromAdmittedPdf(admitted)
++  for (const p of passages) {
++    if (p.text_ref.mode === 'inline') {
++      assert.equal(p.text_ref.text_hash, passageTextHash(p.text_ref.text))
++    }
++  }
++})
++
++test('passagesFromAdmittedPdf: rejects non-pdf bytes', async () => {
++  const bytes = Buffer.from('not a pdf file', 'utf8')
++  const admitted = buildAdmittedContent('op', 's', 'r', bytes, PDF_MEDIA_TYPE)
++  await assert.rejects(() => passagesFromAdmittedPdf(admitted), /PDF header/)
++})
+diff --git a/babel-cli/src/research/v2/adapters/documents/pdfFromAdmittedBytes.ts b/babel-cli/src/research/v2/adapters/documents/pdfFromAdmittedBytes.ts
+new file mode 100644
+index 00000000..d7a53f7f
+--- /dev/null
++++ b/babel-cli/src/research/v2/adapters/documents/pdfFromAdmittedBytes.ts
+@@ -0,0 +1,134 @@
++import type { AdmittedContent } from '../../contracts/admittedContent.js'
++import type { PassageRecord } from '../../contracts/passages.js'
++import { PassageRecordSchema } from '../../contracts/passages.js'
++import { buildInlinePassageTextRef } from './passageInlineText.js'
++import { decodeAdmittedInlineBytes } from './plainTextFromAdmittedBytes.js'
++import { PDF_MEDIA_TYPE } from './pdfAdmission.js'
++import {
++  PDF_MAX_PAGES_PER_EXTRACTION,
++  PdfExtractionCancelled,
++  throwIfPdfAborted,
++} from './pdfExtractionLimits.js'
++
++export const PDF_TEXT_EXTRACTION_VERSION = 'general-pdf-text/0.1.0'
++
++export type PdfExtractionOptions = {
++  /** Test hook: delay between pages to exercise cancellation. */
++  pageDelayMs?: number
++}
++
++function assertPdfMagic(bytes: Buffer): void {
++  if (bytes.length < 5 || bytes.subarray(0, 5).toString('ascii') !== '%PDF-') {
++    throw new Error('admitted bytes are not a PDF header')
++  }
++}
++
++async function abortableDelay(ms: number, signal?: AbortSignal): Promise<void> {
++  if (ms <= 0) {
++    throwIfPdfAborted(signal)
++    return
++  }
++  throwIfPdfAborted(signal)
++  await new Promise<void>((resolve, reject) => {
++    const timer = setTimeout(() => {
++      signal?.removeEventListener('abort', onAbort)
++      resolve()
++    }, ms)
++    const onAbort = () => {
++      clearTimeout(timer)
++      reject(new PdfExtractionCancelled())
++    }
++    signal?.addEventListener('abort', onAbort, { once: true })
++  })
++  throwIfPdfAborted(signal)
++}
++
++type PdfDocumentLike = {
++  numPages: number
++  getPage: (n: number) => Promise<{
++    getTextContent: () => Promise<{ items: Array<{ str?: string }> }>
++  }>
++  destroy: () => Promise<void>
++}
++
++/**
++ * Extract per-page text from admitted inline PDF bytes (pdfjs-dist).
++ */
++export async function passagesFromAdmittedPdf(
++  admitted: AdmittedContent,
++  signal?: AbortSignal,
++  options?: PdfExtractionOptions,
++): Promise<PassageRecord[]> {
++  if (admitted.media_type !== PDF_MEDIA_TYPE) {
++    throw new Error(
++      `unsupported media_type for PDF extractor: ${admitted.media_type} (only ${PDF_MEDIA_TYPE})`,
++    )
++  }
++  throwIfPdfAborted(signal)
++  const raw = decodeAdmittedInlineBytes(admitted)
++  assertPdfMagic(raw)
++  const { getDocument } = await import('pdfjs-dist/legacy/build/pdf.mjs')
++  throwIfPdfAborted(signal)
++  const loadingTask = getDocument({ data: new Uint8Array(raw), useSystemFonts: true })
++  let doc: PdfDocumentLike | null = null
++  try {
++    doc = (await loadingTask.promise) as unknown as PdfDocumentLike
++    throwIfPdfAborted(signal)
++    const activeDoc = doc
++    if (activeDoc.numPages > PDF_MAX_PAGES_PER_EXTRACTION) {
++      throw new Error(
++        `pdf exceeds page limit (${activeDoc.numPages} > ${PDF_MAX_PAGES_PER_EXTRACTION})`,
++      )
++    }
++    const pageCap = activeDoc.numPages
++    const passages: PassageRecord[] = []
++    for (let pageNum = 1; pageNum <= pageCap; pageNum++) {
++      throwIfPdfAborted(signal)
++      if (options?.pageDelayMs) {
++        await abortableDelay(options.pageDelayMs, signal)
++      }
++      const page = await activeDoc.getPage(pageNum)
++      throwIfPdfAborted(signal)
++      const content = await page.getTextContent()
++      throwIfPdfAborted(signal)
++      const text = content.items
++        .map((item) => ('str' in item ? String(item.str) : ''))
++        .join(' ')
++        .replace(/\s+/g, ' ')
++        .trim()
++      if (!text) continue
++      const inline = buildInlinePassageTextRef(text)
++      const record: PassageRecord = {
++        passage_id: `${admitted.operation_id}:pdf:p${pageNum}`,
++        source_revision_id: admitted.revision.revision_id,
++        locator: { kind: 'page', start_page: pageNum, end_page: pageNum },
++        text_ref: {
++          mode: 'inline',
++          text: inline.text,
++          text_hash: inline.text_hash,
++        },
++        extraction_notes: ['pdfjs_text_layer', 'admitted_inline_pdf', ...inline.truncationNotes],
++      }
++      PassageRecordSchema.parse(record)
++      passages.push(record)
++    }
++    throwIfPdfAborted(signal)
++    if (passages.length === 0) {
++      throw new Error('pdf extraction produced no text passages')
++    }
++    return passages
++  } finally {
++    if (doc) {
++      try {
++        await doc.destroy()
++      } catch {
++        /* best-effort cleanup */
++      }
++    }
++    try {
++      loadingTask.destroy()
++    } catch {
++      /* best-effort cleanup */
++    }
++  }
++}
+diff --git a/babel-cli/src/research/v2/adapters/documents/plainTextFromAdmittedBytes.ts b/babel-cli/src/research/v2/adapters/documents/plainTextFromAdmittedBytes.ts
+index abc7eb9d..812e9532 100644
+--- a/babel-cli/src/research/v2/adapters/documents/plainTextFromAdmittedBytes.ts
++++ b/babel-cli/src/research/v2/adapters/documents/plainTextFromAdmittedBytes.ts
+@@ -10,8 +10,8 @@ function passageTextHash(text: string): string {
+   return createHash('sha256').update(text, 'utf8').digest('hex')
+ }
+ 
+-/** Decode and integrity-check inline admitted bytes (no network). */
+-export function decodeAdmittedUtf8Bytes(admitted: AdmittedContent): Buffer {
++/** Integrity-check inline admitted bytes (binary-safe; no network). */
++export function decodeAdmittedInlineBytes(admitted: AdmittedContent): Buffer {
+   if (admitted.payload.mode !== 'inline_bytes') {
+     throw new Error(`unsupported payload mode: ${admitted.payload.mode}`)
+   }
+@@ -26,6 +26,12 @@ export function decodeAdmittedUtf8Bytes(admitted: AdmittedContent): Buffer {
+   if (digest !== admitted.revision.content_hash) {
+     throw new Error('admitted revision content_hash does not match decoded bytes')
+   }
++  return raw
++}
++
++/** Decode and integrity-check inline admitted UTF-8 text bytes (no network). */
++export function decodeAdmittedUtf8Bytes(admitted: AdmittedContent): Buffer {
++  const raw = decodeAdmittedInlineBytes(admitted)
+   try {
+     new TextDecoder('utf-8', { fatal: true }).decode(raw)
+   } catch {
+diff --git a/babel-cli/src/research/v2/adapters/web/generalWebAdapter.test.ts b/babel-cli/src/research/v2/adapters/web/generalWebAdapter.test.ts
+new file mode 100644
+index 00000000..342f3751
+--- /dev/null
++++ b/babel-cli/src/research/v2/adapters/web/generalWebAdapter.test.ts
+@@ -0,0 +1,74 @@
++import assert from 'node:assert/strict'
++import { readFileSync } from 'node:fs'
++import { dirname, join } from 'node:path'
++import { fileURLToPath } from 'node:url'
++import { test } from 'node:test'
++import type { SourceAccessPort, SourceFetchRequest, SourceSearchRequest } from '../../ports/sourceAccessPort.js'
++import type { SourceRecord } from '../../contracts/sources.js'
++import { buildAdmittedContent } from '../documents/testAdmittedFixtures.js'
++import { resolveQuarantinedFixturePath } from '../documents/quarantinePath.js'
++import { GeneralWebAdapter, GENERAL_WEB_ADAPTER_ID } from './generalWebAdapter.js'
++import { STATIC_HTML_EXTRACTION_VERSION } from './htmlFromAdmittedBytes.js'
++
++const devCorpusRoot = join(
++  dirname(fileURLToPath(import.meta.url)),
++  '../../profiles/general/fixtures/dev-corpus',
++)
++
++function stubPort(fetchContent: SourceAccessPort['fetchContent']): SourceAccessPort {
++  return {
++    async search(request: SourceSearchRequest) {
++      return {
++        operationId: request.operationId,
++        status: 'failed',
++        failureCategory: 'search_provider_unavailable',
++        message: 'test stub',
++      }
++    },
++    fetchContent,
++  }
++}
++
++function webSource(id: string): SourceRecord {
++  return {
++    source_id: id,
++    kind: 'web',
++    canonical_key: `fixture:web:${id}`,
++    observed_urls: ['https://example.invalid/plan-a'],
++  }
++}
++
++test('GeneralWebAdapter.read: static HTML via port (G-DEV-01 plan-a)', async () => {
++  const rel = 'G-DEV-01/sources/plan-a.html'
++  const bytes = readFileSync(resolveQuarantinedFixturePath(devCorpusRoot, rel))
++  const port = stubPort(async (request: SourceFetchRequest) => ({
++    operationId: request.operationId,
++    status: 'ok',
++    admitted: buildAdmittedContent(
++      request.operationId,
++      request.source.source_id,
++      'rev-web',
++      bytes,
++      'text/html',
++      {
++        requestedUrl: 'https://example.invalid/plan-a',
++        finalUrl: 'https://example.invalid/plan-a',
++        redirectChain: ['https://example.invalid/plan-a'],
++      },
++    ),
++  }))
++  const result = await new GeneralWebAdapter().read(
++    { operationId: 'op-web', source: webSource('src'), signal: AbortSignal.timeout(5_000) },
++    port,
++  )
++  assert.equal(result.status, 'ok')
++  if (result.status !== 'ok') return
++  assert.equal(result.extraction_version, STATIC_HTML_EXTRACTION_VERSION)
++  assert.ok(result.passages.length >= 1)
++})
++
++test('GeneralWebAdapter: adapter id and kinds', () => {
++  const a = new GeneralWebAdapter()
++  assert.equal(a.adapterId, GENERAL_WEB_ADAPTER_ID)
++  assert.deepEqual(a.supportedKinds, ['web'])
++})
+diff --git a/babel-cli/src/research/v2/adapters/web/generalWebAdapter.ts b/babel-cli/src/research/v2/adapters/web/generalWebAdapter.ts
+new file mode 100644
+index 00000000..d46c376c
+--- /dev/null
++++ b/babel-cli/src/research/v2/adapters/web/generalWebAdapter.ts
+@@ -0,0 +1,92 @@
++import type { SourceAccessPort, SourceClass } from '../../ports/sourceAccessPort.js'
++import type {
++  SourceAdapter,
++  SourceAdapterReadRequest,
++  SourceAdapterReadResult,
++  SourceDiscoverRequest,
++  SourceDiscoverResult,
++} from '../../ports/sourceAdapter.js'
++import {
++  assertReadPreconditions,
++  cancelledRead,
++  validateFetchBinding,
++} from '../documents/readBinding.js'
++import {
++  passagesFromAdmittedStaticHtml,
++  STATIC_HTML_EXTRACTION_VERSION,
++} from './htmlFromAdmittedBytes.js'
++
++export const GENERAL_WEB_ADAPTER_ID = 'general-web/0.1.0'
++
++export class GeneralWebAdapter implements SourceAdapter {
++  readonly adapterId = GENERAL_WEB_ADAPTER_ID
++  readonly supportedKinds: readonly SourceClass[] = ['web']
++
++  async discover(
++    request: SourceDiscoverRequest,
++    _access: SourceAccessPort,
++  ): Promise<SourceDiscoverResult> {
++    if (request.signal.aborted) {
++      return { operationId: request.operationId, status: 'cancelled' }
++    }
++    return {
++      operationId: request.operationId,
++      status: 'failed',
++      failureCategory: 'not_supported',
++      message: 'general web adapter: live discovery not implemented in this slice',
++    }
++  }
++
++  async read(
++    request: SourceAdapterReadRequest,
++    access: SourceAccessPort,
++  ): Promise<SourceAdapterReadResult> {
++    const pre = assertReadPreconditions(request.operationId, request.source, request.signal)
++    if (pre) return pre
++
++    const fetched = await access.fetchContent({
++      operationId: request.operationId,
++      source: request.source,
++      signal: request.signal,
++    })
++
++    if (request.signal.aborted) {
++      return cancelledRead(request.operationId)
++    }
++
++    const binding = validateFetchBinding(
++      request.operationId,
++      request.source,
++      fetched,
++      request.signal,
++    )
++    if (binding) return binding
++
++    if (fetched.status !== 'ok') return fetched
++
++    const admitted = fetched.admitted
++    try {
++      const passages = passagesFromAdmittedStaticHtml(admitted)
++      return {
++        operationId: request.operationId,
++        status: 'ok',
++        revision: admitted.revision,
++        passages,
++        extraction_version: STATIC_HTML_EXTRACTION_VERSION,
++      }
++    } catch (error) {
++      const message = error instanceof Error ? error.message : String(error)
++      const failureCategory = message.includes('unsupported media_type')
++        ? 'unsupported_media'
++        : message.includes('incomplete') || message.includes('no heading')
++          ? 'extraction_failed'
++          : 'extraction_failed'
++      return {
++        operationId: request.operationId,
++        status: 'failed',
++        failureCategory,
++        message,
++      }
++    }
++  }
++}
+diff --git a/babel-cli/src/research/v2/adapters/web/htmlFromAdmittedBytes.test.ts b/babel-cli/src/research/v2/adapters/web/htmlFromAdmittedBytes.test.ts
+new file mode 100644
+index 00000000..bc691e66
+--- /dev/null
++++ b/babel-cli/src/research/v2/adapters/web/htmlFromAdmittedBytes.test.ts
+@@ -0,0 +1,74 @@
++import assert from 'node:assert/strict'
++import { readFileSync } from 'node:fs'
++import { dirname, join } from 'node:path'
++import { fileURLToPath } from 'node:url'
++import { test } from 'node:test'
++import { PassageRecordSchema } from '../../contracts/passages.js'
++import { buildAdmittedContent } from '../documents/testAdmittedFixtures.js'
++import { passageTextHash } from '../documents/passageInlineText.js'
++import { resolveQuarantinedFixturePath } from '../documents/quarantinePath.js'
++import { passagesFromAdmittedStaticHtml, HTML_MEDIA_TYPE } from './htmlFromAdmittedBytes.js'
++
++const devCorpusRoot = join(
++  dirname(fileURLToPath(import.meta.url)),
++  '../../profiles/general/fixtures/dev-corpus',
++)
++
++test('passagesFromAdmittedStaticHtml: G-DEV-01 plan-a heading sections', () => {
++  const rel = 'G-DEV-01/sources/plan-a.html'
++  const bytes = readFileSync(resolveQuarantinedFixturePath(devCorpusRoot, rel))
++  const admitted = buildAdmittedContent('op-html', 'src-plan', 'rev-plan', bytes, HTML_MEDIA_TYPE, {
++    requestedUrl: 'https://example.invalid/plan-a',
++    finalUrl: 'https://example.invalid/plan-a',
++    redirectChain: ['https://example.invalid/plan-a'],
++  })
++  const passages = passagesFromAdmittedStaticHtml(admitted)
++  assert.ok(passages.length >= 1)
++  assert.equal(passages[0]?.locator.kind, 'section')
++  assert.ok(passages[0]?.heading_path?.[0]?.includes('Nimbus'))
++  for (const p of passages) PassageRecordSchema.parse(p)
++})
++
++test('passagesFromAdmittedStaticHtml: non-ascii repeated headings get unique section_id', () => {
++  const html = `<html><body><h1>日本語</h1><p>one</p><h1>日本語</h1><p>two</p></body></html>`
++  const admitted = buildAdmittedContent('op', 's', 'r', Buffer.from(html, 'utf8'), HTML_MEDIA_TYPE)
++  const passages = passagesFromAdmittedStaticHtml(admitted)
++  assert.equal(passages.length, 2)
++  const ids = passages.map((p) => (p.locator.kind === 'section' ? p.locator.section_id : ''))
++  assert.notEqual(ids[0], ids[1])
++  assert.match(ids[0] ?? '', /^heading-[a-f0-9]{16}$/)
++  assert.equal(ids[1], `${ids[0]}~2`)
++})
++
++test('passagesFromAdmittedStaticHtml: repeated headings get unique section_id', () => {
++  const html = `<html><body><h1>Same</h1><p>one</p><h1>Same</h1><p>two</p></body></html>`
++  const admitted = buildAdmittedContent('op', 's', 'r', Buffer.from(html, 'utf8'), HTML_MEDIA_TYPE)
++  const passages = passagesFromAdmittedStaticHtml(admitted)
++  assert.equal(passages.length, 2)
++  const ids = passages.map((p) => (p.locator.kind === 'section' ? p.locator.section_id : ''))
++  assert.notEqual(ids[0], ids[1])
++})
++
++test('passagesFromAdmittedStaticHtml: inline hash matches emitted text', () => {
++  const html = `<html><body><h1>H</h1><p>${'z'.repeat(32_001)}</p></body></html>`
++  const admitted = buildAdmittedContent('op', 's', 'r', Buffer.from(html, 'utf8'), HTML_MEDIA_TYPE)
++  const passages = passagesFromAdmittedStaticHtml(admitted)
++  const ref = passages[0]?.text_ref
++  assert.equal(ref?.mode, 'inline')
++  if (ref?.mode === 'inline') {
++    assert.equal(ref.text_hash, passageTextHash(ref.text))
++    assert.ok(passages[0]?.extraction_notes?.some((n) => n.includes('inline_text_truncated')))
++  }
++})
++
++test('passagesFromAdmittedStaticHtml: rejects login-only html', () => {
++  const bytes = Buffer.from('<html><body><form><input type="password"/></form></body></html>', 'utf8')
++  const admitted = buildAdmittedContent('op', 's', 'r', bytes, HTML_MEDIA_TYPE)
++  assert.throws(() => passagesFromAdmittedStaticHtml(admitted), /login-only|incomplete/)
++})
++
++test('passagesFromAdmittedStaticHtml: rejects non-html media', () => {
++  const bytes = Buffer.from('<p>x</p>', 'utf8')
++  const admitted = buildAdmittedContent('op', 's', 'r', bytes, 'text/plain')
++  assert.throws(() => passagesFromAdmittedStaticHtml(admitted), /unsupported media_type/)
++})
+diff --git a/babel-cli/src/research/v2/adapters/web/htmlFromAdmittedBytes.ts b/babel-cli/src/research/v2/adapters/web/htmlFromAdmittedBytes.ts
+new file mode 100644
+index 00000000..2a3409e9
+--- /dev/null
++++ b/babel-cli/src/research/v2/adapters/web/htmlFromAdmittedBytes.ts
+@@ -0,0 +1,64 @@
++import type { AdmittedContent } from '../../contracts/admittedContent.js'
++import type { PassageRecord } from '../../contracts/passages.js'
++import { PassageRecordSchema } from '../../contracts/passages.js'
++import { buildInlinePassageTextRef } from '../documents/passageInlineText.js'
++import { decodeAdmittedUtf8Bytes } from '../documents/plainTextFromAdmittedBytes.js'
++import { allocateSectionLocatorId } from './htmlSectionLocator.js'
++
++export const HTML_MEDIA_TYPE = 'text/html'
++export const STATIC_HTML_EXTRACTION_VERSION = 'general-static-html/0.1.0'
++
++/** Minimal static HTML: one passage per heading block (admitted bytes only; no JS). */
++export function passagesFromAdmittedStaticHtml(admitted: AdmittedContent): PassageRecord[] {
++  if (admitted.media_type !== HTML_MEDIA_TYPE) {
++    throw new Error(
++      `unsupported media_type for static HTML extractor: ${admitted.media_type} (only ${HTML_MEDIA_TYPE})`,
++    )
++  }
++  const raw = decodeAdmittedUtf8Bytes(admitted)
++  const html = raw.toString('utf8')
++  if (/<form[^>]*>[\s\S]*password/i.test(html) && !/<h[1-6]/i.test(html)) {
++    throw new Error('html appears to be login-only markup; extraction incomplete')
++  }
++  const stripped = html
++    .replace(/<script[\s\S]*?<\/script>/gi, '')
++    .replace(/<style[\s\S]*?<\/style>/gi, '')
++  const headingRe = /<h([1-6])[^>]*>([^<]*)<\/h[1-6]>/gi
++  const passages: PassageRecord[] = []
++  const sectionOccurrence = new Map<string, number>()
++  let match: RegExpExecArray | null
++  let index = 0
++  while ((match = headingRe.exec(stripped)) !== null) {
++    const heading = (match[2] ?? '').trim()
++    if (!heading) continue
++    const level = Number(match[1] ?? '1')
++    const after = stripped.slice(match.index + match[0].length)
++    const nextHeading = after.search(/<h[1-6]/i)
++    const block = nextHeading >= 0 ? after.slice(0, nextHeading) : after
++    const text = block
++      .replace(/<[^>]+>/g, ' ')
++      .replace(/\s+/g, ' ')
++      .trim()
++    if (!text) continue
++    const sectionId = allocateSectionLocatorId(heading, sectionOccurrence)
++    const inline = buildInlinePassageTextRef(text)
++    const record: PassageRecord = {
++      passage_id: `${admitted.operation_id}:html:${index++}`,
++      source_revision_id: admitted.revision.revision_id,
++      locator: { kind: 'section', section_id: sectionId },
++      heading_path: [heading],
++      text_ref: {
++        mode: 'inline',
++        text: inline.text,
++        text_hash: inline.text_hash,
++      },
++      extraction_notes: [`heading_level:${level}`, 'static_html_extractor', ...inline.truncationNotes],
++    }
++    PassageRecordSchema.parse(record)
++    passages.push(record)
++  }
++  if (passages.length === 0) {
++    throw new Error('no heading-bounded sections extracted from admitted HTML')
++  }
++  return passages
++}
+diff --git a/babel-cli/src/research/v2/adapters/web/htmlSectionLocator.test.ts b/babel-cli/src/research/v2/adapters/web/htmlSectionLocator.test.ts
+new file mode 100644
+index 00000000..c8d2bb33
+--- /dev/null
++++ b/babel-cli/src/research/v2/adapters/web/htmlSectionLocator.test.ts
+@@ -0,0 +1,19 @@
++import assert from 'node:assert/strict'
++import { test } from 'node:test'
++import { allocateSectionLocatorId } from './htmlSectionLocator.js'
++
++test('allocateSectionLocatorId: disambiguates repeated headings', () => {
++  const map = new Map<string, number>()
++  const a = allocateSectionLocatorId('Overview', map)
++  const b = allocateSectionLocatorId('Overview', map)
++  assert.equal(a, 'overview')
++  assert.equal(b, 'overview~2')
++})
++
++test('allocateSectionLocatorId: non-ascii headings get stable unique slugs', () => {
++  const map = new Map<string, number>()
++  const a = allocateSectionLocatorId('日本語', map)
++  const b = allocateSectionLocatorId('日本語', map)
++  assert.match(a, /^heading-[a-f0-9]{16}$/)
++  assert.equal(b, `${a}~2`)
++})
+diff --git a/babel-cli/src/research/v2/adapters/web/htmlSectionLocator.ts b/babel-cli/src/research/v2/adapters/web/htmlSectionLocator.ts
+new file mode 100644
+index 00000000..cdd80ea0
+--- /dev/null
++++ b/babel-cli/src/research/v2/adapters/web/htmlSectionLocator.ts
+@@ -0,0 +1,24 @@
++import { createHash } from 'node:crypto'
++
++export function sectionSlugFromHeading(heading: string): string {
++  const trimmed = heading.trim()
++  const ascii = trimmed
++    .toLowerCase()
++    .replace(/[^a-z0-9]+/g, '-')
++    .replace(/^-|-$/g, '')
++  if (ascii.length > 0) return ascii.slice(0, 80)
++  const digest = createHash('sha256').update(trimmed, 'utf8').digest('hex').slice(0, 16)
++  return `heading-${digest}`
++}
++
++/** Deterministic section_id unique within one extraction pass (repeated headings disambiguated). */
++export function allocateSectionLocatorId(
++  heading: string,
++  occurrenceBySlug: Map<string, number>,
++): string {
++  const slug = sectionSlugFromHeading(heading)
++  const seen = occurrenceBySlug.get(slug) ?? 0
++  occurrenceBySlug.set(slug, seen + 1)
++  if (seen === 0) return slug
++  return `${slug}~${seen + 1}`
++}
+diff --git a/babel-cli/src/research/v2/profiles/general/EXTRACTION_SLICE_CANDIDATE_M1.md b/babel-cli/src/research/v2/profiles/general/EXTRACTION_SLICE_CANDIDATE_M1.md
+new file mode 100644
+index 00000000..2d98a6a0
+--- /dev/null
++++ b/babel-cli/src/research/v2/profiles/general/EXTRACTION_SLICE_CANDIDATE_M1.md
+@@ -0,0 +1,26 @@
++# Extraction slice (local, unpublished)
++
++**Plaintext checkpoint preserved:** `general-document/0.1.0` `text/plain` path on published `196098d9` semantics.
++
++## Bounded scope
++
++| Adapter | Media | Outcome |
++|---------|--------|---------|
++| `general-document/0.1.0` | `text/plain` | Reviewed admitted inline UTF-8 lines |
++| `general-document/0.1.0` | `application/pdf` | Per-page text via pdfjs (`general-pdf-text/0.1.0`); page limits; abort + cleanup |
++| `general-web/0.1.0` | `text/html` | Static heading sections (`general-static-html/0.1.0`) |
++| `general-web/0.1.0` | discover | `not_supported` (no live search in this slice) |
++
++## Agent A coordination
++
++- Register `generalAdapterCatalog` on `SourceAdapterRegistry` (A-owned).
++- Mission → `fetchContent` → adapter `read()` → schema-valid passages.
++
++## Fixtures
++
++- HTML: `profiles/general/fixtures/dev-corpus/G-DEV-01/sources/plan-a.html`
++- PDF: `adapters/documents/fixtures/two-page-sample.pdf`
++
++## Not in scope
++
++Live network/search, JS rendering, OCR, publication push.
+diff --git a/babel-cli/src/research/v2/profiles/general/generalAdapterCatalog.test.ts b/babel-cli/src/research/v2/profiles/general/generalAdapterCatalog.test.ts
+new file mode 100644
+index 00000000..61ae60b5
+--- /dev/null
++++ b/babel-cli/src/research/v2/profiles/general/generalAdapterCatalog.test.ts
+@@ -0,0 +1,10 @@
++import assert from 'node:assert/strict'
++import { test } from 'node:test'
++import { generalAdapterCatalog } from './generalAdapterCatalog.js'
++
++test('generalAdapterCatalog: exposes document and web adapter ids for A registry', () => {
++  assert.match(generalAdapterCatalog.document.adapterId, /^general-document\//)
++  assert.match(generalAdapterCatalog.web.adapterId, /^general-web\//)
++  assert.equal(typeof generalAdapterCatalog.document.factory, 'function')
++  assert.equal(typeof generalAdapterCatalog.web.factory, 'function')
++})
+diff --git a/babel-cli/src/research/v2/profiles/general/generalAdapterCatalog.ts b/babel-cli/src/research/v2/profiles/general/generalAdapterCatalog.ts
+new file mode 100644
+index 00000000..2e0669a0
+--- /dev/null
++++ b/babel-cli/src/research/v2/profiles/general/generalAdapterCatalog.ts
+@@ -0,0 +1,19 @@
++/**
++ * B-owned adapter IDs for Agent A registry wiring (no registry edits here).
++ * IO only through SourceAccessPort; mission/report loop remains Agent A.
++ */
++import { GENERAL_DOCUMENT_ADAPTER_ID, GeneralDocumentAdapter } from '../../adapters/documents/generalDocumentAdapter.js'
++import { GENERAL_WEB_ADAPTER_ID, GeneralWebAdapter } from '../../adapters/web/generalWebAdapter.js'
++
++export const generalAdapterCatalog = {
++  document: {
++    adapterId: GENERAL_DOCUMENT_ADAPTER_ID,
++    factory: () => new GeneralDocumentAdapter(),
++    extraction: 'text/plain inline bytes; application/pdf per-page text (pdfjs-dist, admitted bytes)',
++  },
++  web: {
++    adapterId: GENERAL_WEB_ADAPTER_ID,
++    factory: () => new GeneralWebAdapter(),
++    extraction: 'static text/html heading-bounded sections (admitted bytes)',
++  },
++} as const

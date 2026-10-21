@@ -1,0 +1,379 @@
+diff --git a/babel-cli/src/research/v2/adapters/web/generalWebAdapter.test.ts b/babel-cli/src/research/v2/adapters/web/generalWebAdapter.test.ts
+new file mode 100644
+index 00000000..342f3751
+--- /dev/null
++++ b/babel-cli/src/research/v2/adapters/web/generalWebAdapter.test.ts
+@@ -0,0 +1,74 @@
++import assert from 'node:assert/strict'
++import { readFileSync } from 'node:fs'
++import { dirname, join } from 'node:path'
++import { fileURLToPath } from 'node:url'
++import { test } from 'node:test'
++import type { SourceAccessPort, SourceFetchRequest, SourceSearchRequest } from '../../ports/sourceAccessPort.js'
++import type { SourceRecord } from '../../contracts/sources.js'
++import { buildAdmittedContent } from '../documents/testAdmittedFixtures.js'
++import { resolveQuarantinedFixturePath } from '../documents/quarantinePath.js'
++import { GeneralWebAdapter, GENERAL_WEB_ADAPTER_ID } from './generalWebAdapter.js'
++import { STATIC_HTML_EXTRACTION_VERSION } from './htmlFromAdmittedBytes.js'
++
++const devCorpusRoot = join(
++  dirname(fileURLToPath(import.meta.url)),
++  '../../profiles/general/fixtures/dev-corpus',
++)
++
++function stubPort(fetchContent: SourceAccessPort['fetchContent']): SourceAccessPort {
++  return {
++    async search(request: SourceSearchRequest) {
++      return {
++        operationId: request.operationId,
++        status: 'failed',
++        failureCategory: 'search_provider_unavailable',
++        message: 'test stub',
++      }
++    },
++    fetchContent,
++  }
++}
++
++function webSource(id: string): SourceRecord {
++  return {
++    source_id: id,
++    kind: 'web',
++    canonical_key: `fixture:web:${id}`,
++    observed_urls: ['https://example.invalid/plan-a'],
++  }
++}
++
++test('GeneralWebAdapter.read: static HTML via port (G-DEV-01 plan-a)', async () => {
++  const rel = 'G-DEV-01/sources/plan-a.html'
++  const bytes = readFileSync(resolveQuarantinedFixturePath(devCorpusRoot, rel))
++  const port = stubPort(async (request: SourceFetchRequest) => ({
++    operationId: request.operationId,
++    status: 'ok',
++    admitted: buildAdmittedContent(
++      request.operationId,
++      request.source.source_id,
++      'rev-web',
++      bytes,
++      'text/html',
++      {
++        requestedUrl: 'https://example.invalid/plan-a',
++        finalUrl: 'https://example.invalid/plan-a',
++        redirectChain: ['https://example.invalid/plan-a'],
++      },
++    ),
++  }))
++  const result = await new GeneralWebAdapter().read(
++    { operationId: 'op-web', source: webSource('src'), signal: AbortSignal.timeout(5_000) },
++    port,
++  )
++  assert.equal(result.status, 'ok')
++  if (result.status !== 'ok') return
++  assert.equal(result.extraction_version, STATIC_HTML_EXTRACTION_VERSION)
++  assert.ok(result.passages.length >= 1)
++})
++
++test('GeneralWebAdapter: adapter id and kinds', () => {
++  const a = new GeneralWebAdapter()
++  assert.equal(a.adapterId, GENERAL_WEB_ADAPTER_ID)
++  assert.deepEqual(a.supportedKinds, ['web'])
++})
+diff --git a/babel-cli/src/research/v2/adapters/web/generalWebAdapter.ts b/babel-cli/src/research/v2/adapters/web/generalWebAdapter.ts
+new file mode 100644
+index 00000000..7f50a964
+--- /dev/null
++++ b/babel-cli/src/research/v2/adapters/web/generalWebAdapter.ts
+@@ -0,0 +1,92 @@
++import type { SourceAccessPort, SourceClass } from '../../ports/sourceAccessPort.js'
++import type {
++  SourceAdapter,
++  SourceAdapterReadRequest,
++  SourceAdapterReadResult,
++  SourceDiscoverRequest,
++  SourceDiscoverResult,
++} from '../../ports/sourceAdapter.js'
++import {
++  assertReadPreconditions,
++  cancelledRead,
++  validateFetchBinding,
++} from '../documents/readBinding.js'
++import {
++  passagesFromAdmittedStaticHtml,
++  STATIC_HTML_EXTRACTION_VERSION,
++} from './htmlFromAdmittedBytes.js'
++
++export const GENERAL_WEB_ADAPTER_ID = 'general-web/0.1.0'
++
++export class GeneralWebAdapter implements SourceAdapter {
++  readonly adapterId = GENERAL_WEB_ADAPTER_ID
++  readonly supportedKinds: readonly SourceClass[] = ['web']
++
++  async discover(
++    request: SourceDiscoverRequest,
++    _access: SourceAccessPort,
++  ): Promise<SourceDiscoverResult> {
++    if (request.signal.aborted) {
++      return { operationId: request.operationId, status: 'cancelled' }
++    }
++    return {
++      operationId: request.operationId,
++      status: 'failed',
++      failureCategory: 'not_supported',
++      message: 'general web adapter: offline slice does not implement live discovery',
++    }
++  }
++
++  async read(
++    request: SourceAdapterReadRequest,
++    access: SourceAccessPort,
++  ): Promise<SourceAdapterReadResult> {
++    const pre = assertReadPreconditions(request.operationId, request.source, request.signal)
++    if (pre) return pre
++
++    const fetched = await access.fetchContent({
++      operationId: request.operationId,
++      source: request.source,
++      signal: request.signal,
++    })
++
++    if (request.signal.aborted) {
++      return cancelledRead(request.operationId)
++    }
++
++    const binding = validateFetchBinding(
++      request.operationId,
++      request.source,
++      fetched,
++      request.signal,
++    )
++    if (binding) return binding
++
++    if (fetched.status !== 'ok') return fetched
++
++    const admitted = fetched.admitted
++    try {
++      const passages = passagesFromAdmittedStaticHtml(admitted)
++      return {
++        operationId: request.operationId,
++        status: 'ok',
++        revision: admitted.revision,
++        passages,
++        extraction_version: STATIC_HTML_EXTRACTION_VERSION,
++      }
++    } catch (error) {
++      const message = error instanceof Error ? error.message : String(error)
++      const failureCategory = message.includes('unsupported media_type')
++        ? 'unsupported_media'
++        : message.includes('incomplete') || message.includes('no heading')
++          ? 'extraction_failed'
++          : 'extraction_failed'
++      return {
++        operationId: request.operationId,
++        status: 'failed',
++        failureCategory,
++        message,
++      }
++    }
++  }
++}
+diff --git a/babel-cli/src/research/v2/adapters/web/htmlFromAdmittedBytes.test.ts b/babel-cli/src/research/v2/adapters/web/htmlFromAdmittedBytes.test.ts
+new file mode 100644
+index 00000000..18165df9
+--- /dev/null
++++ b/babel-cli/src/research/v2/adapters/web/htmlFromAdmittedBytes.test.ts
+@@ -0,0 +1,41 @@
++import assert from 'node:assert/strict'
++import { readFileSync } from 'node:fs'
++import { dirname, join } from 'node:path'
++import { fileURLToPath } from 'node:url'
++import { test } from 'node:test'
++import { PassageRecordSchema } from '../../contracts/passages.js'
++import { buildAdmittedContent } from '../documents/testAdmittedFixtures.js'
++import { resolveQuarantinedFixturePath } from '../documents/quarantinePath.js'
++import { passagesFromAdmittedStaticHtml, HTML_MEDIA_TYPE } from './htmlFromAdmittedBytes.js'
++
++const devCorpusRoot = join(
++  dirname(fileURLToPath(import.meta.url)),
++  '../../profiles/general/fixtures/dev-corpus',
++)
++
++test('passagesFromAdmittedStaticHtml: G-DEV-01 plan-a heading sections', () => {
++  const rel = 'G-DEV-01/sources/plan-a.html'
++  const bytes = readFileSync(resolveQuarantinedFixturePath(devCorpusRoot, rel))
++  const admitted = buildAdmittedContent('op-html', 'src-plan', 'rev-plan', bytes, HTML_MEDIA_TYPE, {
++    requestedUrl: 'https://example.invalid/plan-a',
++    finalUrl: 'https://example.invalid/plan-a',
++    redirectChain: ['https://example.invalid/plan-a'],
++  })
++  const passages = passagesFromAdmittedStaticHtml(admitted)
++  assert.ok(passages.length >= 1)
++  assert.equal(passages[0]?.locator.kind, 'section')
++  assert.ok(passages[0]?.heading_path?.[0]?.includes('Nimbus'))
++  for (const p of passages) PassageRecordSchema.parse(p)
++})
++
++test('passagesFromAdmittedStaticHtml: rejects login-only html', () => {
++  const bytes = Buffer.from('<html><body><form><input type="password"/></form></body></html>', 'utf8')
++  const admitted = buildAdmittedContent('op', 's', 'r', bytes, HTML_MEDIA_TYPE)
++  assert.throws(() => passagesFromAdmittedStaticHtml(admitted), /login-only|incomplete/)
++})
++
++test('passagesFromAdmittedStaticHtml: rejects non-html media', () => {
++  const bytes = Buffer.from('<p>x</p>', 'utf8')
++  const admitted = buildAdmittedContent('op', 's', 'r', bytes, 'text/plain')
++  assert.throws(() => passagesFromAdmittedStaticHtml(admitted), /unsupported media_type/)
++})
+diff --git a/babel-cli/src/research/v2/adapters/web/htmlFromAdmittedBytes.ts b/babel-cli/src/research/v2/adapters/web/htmlFromAdmittedBytes.ts
+new file mode 100644
+index 00000000..dc860ce5
+--- /dev/null
++++ b/babel-cli/src/research/v2/adapters/web/htmlFromAdmittedBytes.ts
+@@ -0,0 +1,74 @@
++import { createHash } from 'node:crypto'
++import type { AdmittedContent } from '../../contracts/admittedContent.js'
++import type { PassageRecord } from '../../contracts/passages.js'
++import { PassageRecordSchema } from '../../contracts/passages.js'
++import { decodeAdmittedUtf8Bytes } from '../documents/plainTextFromAdmittedBytes.js'
++
++export const HTML_MEDIA_TYPE = 'text/html'
++export const STATIC_HTML_EXTRACTION_VERSION = 'general-static-html/0.1.0'
++
++function passageTextHash(text: string): string {
++  return createHash('sha256').update(text, 'utf8').digest('hex')
++}
++
++function sectionIdFromHeading(heading: string): string {
++  const slug = heading
++    .trim()
++    .toLowerCase()
++    .replace(/[^a-z0-9]+/g, '-')
++    .replace(/^-|-$/g, '')
++  return slug.length > 0 ? slug : 'section'
++}
++
++/** Minimal static HTML: one passage per heading block (offline fixtures only; no JS). */
++export function passagesFromAdmittedStaticHtml(admitted: AdmittedContent): PassageRecord[] {
++  if (admitted.media_type !== HTML_MEDIA_TYPE) {
++    throw new Error(
++      `unsupported media_type for static HTML extractor: ${admitted.media_type} (only ${HTML_MEDIA_TYPE})`,
++    )
++  }
++  const raw = decodeAdmittedUtf8Bytes(admitted)
++  const html = raw.toString('utf8')
++  if (/<form[^>]*>[\s\S]*password/i.test(html) && !/<h[1-6]/i.test(html)) {
++    throw new Error('html appears to be login-only markup; extraction incomplete')
++  }
++  const stripped = html
++    .replace(/<script[\s\S]*?<\/script>/gi, '')
++    .replace(/<style[\s\S]*?<\/style>/gi, '')
++  const headingRe = /<h([1-6])[^>]*>([^<]*)<\/h[1-6]>/gi
++  const passages: PassageRecord[] = []
++  let match: RegExpExecArray | null
++  let index = 0
++  while ((match = headingRe.exec(stripped)) !== null) {
++    const heading = (match[2] ?? '').trim()
++    if (!heading) continue
++    const level = Number(match[1] ?? '1')
++    const after = stripped.slice(match.index + match[0].length)
++    const nextHeading = after.search(/<h[1-6]/i)
++    const block = nextHeading >= 0 ? after.slice(0, nextHeading) : after
++    const text = block
++      .replace(/<[^>]+>/g, ' ')
++      .replace(/\s+/g, ' ')
++      .trim()
++    if (!text) continue
++    const sectionId = sectionIdFromHeading(heading)
++    const record: PassageRecord = {
++      passage_id: `${admitted.operation_id}:html:${index++}`,
++      source_revision_id: admitted.revision.revision_id,
++      locator: { kind: 'section', section_id: sectionId },
++      heading_path: [heading],
++      text_ref: {
++        mode: 'inline',
++        text: text.length > 32_000 ? text.slice(0, 32_000) : text,
++        text_hash: passageTextHash(text),
++      },
++      extraction_notes: [`heading_level:${level}`, 'static_html_offline'],
++    }
++    PassageRecordSchema.parse(record)
++    passages.push(record)
++  }
++  if (passages.length === 0) {
++    throw new Error('no heading-bounded sections extracted from admitted HTML')
++  }
++  return passages
++}
+diff --git a/babel-cli/src/research/v2/profiles/general/EXTRACTION_SLICE_CANDIDATE_M1.md b/babel-cli/src/research/v2/profiles/general/EXTRACTION_SLICE_CANDIDATE_M1.md
+new file mode 100644
+index 00000000..a25393da
+--- /dev/null
++++ b/babel-cli/src/research/v2/profiles/general/EXTRACTION_SLICE_CANDIDATE_M1.md
+@@ -0,0 +1,27 @@
++# Extraction slice candidate M1 (local, unpublished)
++
++**Checkpoint preserved:** `general-document/0.1.0` plaintext path unchanged on published head semantics.
++
++## Bounded scope
++
++| Adapter | Media | Outcome |
++|---------|--------|---------|
++| `general-document/0.1.0` | `text/plain` | Unchanged reviewed plaintext integration |
++| `general-document/0.1.0` | `application/pdf` | **Failed** `extraction_failed` — not implemented |
++| `general-web/0.1.0` | `text/html` | **Ok** static heading-bounded passages (`general-static-html/0.1.0`) |
++| `general-web/0.1.0` | discover | **Failed** `not_supported` — offline slice |
++
++## Agent A coordination
++
++- Register `generalAdapterCatalog` entries on `SourceAdapterRegistry` (A-owned).
++- Mission → fetch → `read()` → passages already schema-valid; A owns cited-report loop.
++- Shared: `readBinding`, `SourceAccessPort.fetchContent`, contract schemas @ `0ccd1733`.
++
++## Fixtures
++
++- HTML: `profiles/general/fixtures/dev-corpus/G-DEV-01/sources/plan-a.html`
++- PDF negative: `adapters/documents/fixtures/two-page-sample.pdf`
++
++## Not in scope
++
++Live network/search, JS rendering, full PDF layout, publication push.
+diff --git a/babel-cli/src/research/v2/profiles/general/generalAdapterCatalog.test.ts b/babel-cli/src/research/v2/profiles/general/generalAdapterCatalog.test.ts
+new file mode 100644
+index 00000000..61ae60b5
+--- /dev/null
++++ b/babel-cli/src/research/v2/profiles/general/generalAdapterCatalog.test.ts
+@@ -0,0 +1,10 @@
++import assert from 'node:assert/strict'
++import { test } from 'node:test'
++import { generalAdapterCatalog } from './generalAdapterCatalog.js'
++
++test('generalAdapterCatalog: exposes document and web adapter ids for A registry', () => {
++  assert.match(generalAdapterCatalog.document.adapterId, /^general-document\//)
++  assert.match(generalAdapterCatalog.web.adapterId, /^general-web\//)
++  assert.equal(typeof generalAdapterCatalog.document.factory, 'function')
++  assert.equal(typeof generalAdapterCatalog.web.factory, 'function')
++})
+diff --git a/babel-cli/src/research/v2/profiles/general/generalAdapterCatalog.ts b/babel-cli/src/research/v2/profiles/general/generalAdapterCatalog.ts
+new file mode 100644
+index 00000000..87e871e7
+--- /dev/null
++++ b/babel-cli/src/research/v2/profiles/general/generalAdapterCatalog.ts
+@@ -0,0 +1,19 @@
++/**
++ * B-owned adapter IDs for Agent A registry wiring (no registry edits here).
++ * IO only through SourceAccessPort; mission/report loop remains Agent A.
++ */
++import { GENERAL_DOCUMENT_ADAPTER_ID, GeneralDocumentAdapter } from '../../adapters/documents/generalDocumentAdapter.js'
++import { GENERAL_WEB_ADAPTER_ID, GeneralWebAdapter } from '../../adapters/web/generalWebAdapter.js'
++
++export const generalAdapterCatalog = {
++  document: {
++    adapterId: GENERAL_DOCUMENT_ADAPTER_ID,
++    factory: () => new GeneralDocumentAdapter(),
++    extraction: 'text/plain inline bytes (checkpoint); pdf explicitly not implemented',
++  },
++  web: {
++    adapterId: GENERAL_WEB_ADAPTER_ID,
++    factory: () => new GeneralWebAdapter(),
++    extraction: 'static text/html heading-bounded sections (offline fixtures)',
++  },
++} as const

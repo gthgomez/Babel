@@ -1,0 +1,23 @@
+=== extraction dependency evidence (read-only) ===
+generatedAt: 2026-10-21T02:46:27Z
+localHead: 2e81686d2606709e54b6b1ecdbaf8d793524a088
+localTree: be5e60aa1aacd3062f73179e1d606f10b3a036ad
+
+=== package.json direct dependency on pdfjs-dist ===
+pdfjs-dist in package.json: (not a direct dependency key)
+
+=== package-lock.json resolved pdfjs-dist (babel-cli) ===
+node_modules/pdfjs-dist: version=5.4.296 resolved=https://registry.npmjs.org/pdfjs-dist/-/pdfjs-dist-5.4.296.tgz
+
+=== npm ls pdfjs-dist (babel-cli, read-only) ===
+babel-harness@0.1.4 /workspace/babel-cli
+└─┬ promptfoo@0.121.17
+  └─┬ pdf-parse@2.4.5
+    └── pdfjs-dist@5.4.296
+
+
+=== test fixture path: git ls-tree HEAD ===
+100644 blob 5469b80b6bf025e59f6628d448d6d839fb7fac0e	babel-cli/src/research/v2/adapters/documents/fixtures/two-page-sample.pdf
+
+=== blob at HEAD (rev-parse) ===
+5469b80b6bf025e59f6628d448d6d839fb7fac0e

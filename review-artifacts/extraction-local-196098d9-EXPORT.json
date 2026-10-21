@@ -1,0 +1,113 @@
+{
+  "label": "LOCAL EXTRACTION \u2014 not published; remote at 196098d9",
+  "basePublishedHead": {
+    "commit": "196098d9d7bfa261009b72cc48002754e5c92fbf",
+    "tree": "4d6a4fef366e6734e9b95eddebbaa57a9e52c234"
+  },
+  "localHead": {
+    "commit": "2e81686d2606709e54b6b1ecdbaf8d793524a088",
+    "tree": "be5e60aa1aacd3062f73179e1d606f10b3a036ad"
+  },
+  "repairHead": {
+    "commit": "2e81686d2606709e54b6b1ecdbaf8d793524a088"
+  },
+  "m1HtmlCatalogHead": {
+    "commit": "7128bd70e217b1700328d2d58060cd374cb806a9"
+  },
+  "commits": [
+    "7128bd70 feat(general): M1 static HTML adapter and adapter catalog (local)",
+    "6bb8d08d feat(general): M2 admitted PDF page text via pdfjs (local)",
+    "2e81686d fix(general): repair HTML/PDF extraction review defects (local)"
+  ],
+  "patchFullLocal": {
+    "path": "review-artifacts/extraction-local-196098d9-to-HEAD.patch",
+    "sha256": "7e1fae592fc96fc4cdc6bb491b78ff98a013480c711742ec2ddae63d1df813c9",
+    "bytes": 38670
+  },
+  "patchM1HtmlCatalogOnly": {
+    "path": "review-artifacts/extraction-M1-html-catalog-196098d9-to-7128bd70.patch",
+    "sha256": "762c0b8f965b23405d5cf416b7a658dff35066a536ba2a868f5354f705740a86",
+    "bytes": 15068
+  },
+  "blobManifestFull": [
+    {
+      "path": "babel-cli/src/research/v2/adapters/documents/generalDocumentAdapter.ts",
+      "blob": "31f0f7af2d711a41c0a54b9afe8efd4a46f93191"
+    },
+    {
+      "path": "babel-cli/src/research/v2/adapters/documents/passageInlineText.test.ts",
+      "blob": "0b832811b67c09a2785cff750561aed86d64d60f"
+    },
+    {
+      "path": "babel-cli/src/research/v2/adapters/documents/passageInlineText.ts",
+      "blob": "9ca6e8834742893f8a174b11c2db862936119886"
+    },
+    {
+      "path": "babel-cli/src/research/v2/adapters/documents/pdfAdmission.test.ts",
+      "blob": "999b7c479440f3d0c84b76ae53fc1e51ef24a6a3"
+    },
+    {
+      "path": "babel-cli/src/research/v2/adapters/documents/pdfAdmission.ts",
+      "blob": "ccfa8d6072e3aa18d688cd70db162da8261fdd9c"
+    },
+    {
+      "path": "babel-cli/src/research/v2/adapters/documents/pdfExtractionLimits.ts",
+      "blob": "4bd1a36df53434ac3ab5e3ca7d24947908e4363d"
+    },
+    {
+      "path": "babel-cli/src/research/v2/adapters/documents/pdfFromAdmittedBytes.test.ts",
+      "blob": "82ea85b3cc8534dd8bf864b82b5130da510542f7"
+    },
+    {
+      "path": "babel-cli/src/research/v2/adapters/documents/pdfFromAdmittedBytes.ts",
+      "blob": "d7a53f7fe25ba164504de864f529c2f4d2288e04"
+    },
+    {
+      "path": "babel-cli/src/research/v2/adapters/documents/plainTextFromAdmittedBytes.ts",
+      "blob": "812e9532dfe31be28c40132f852f25776c2f4b6e"
+    },
+    {
+      "path": "babel-cli/src/research/v2/adapters/web/generalWebAdapter.test.ts",
+      "blob": "342f37510a164f8c05d684929007c4e665a4247a"
+    },
+    {
+      "path": "babel-cli/src/research/v2/adapters/web/generalWebAdapter.ts",
+      "blob": "d46c376c398db1a49254bbc3912ce576e868c7ba"
+    },
+    {
+      "path": "babel-cli/src/research/v2/adapters/web/htmlFromAdmittedBytes.test.ts",
+      "blob": "bc691e666c5fee41cad75a4f3beea36dc9edc666"
+    },
+    {
+      "path": "babel-cli/src/research/v2/adapters/web/htmlFromAdmittedBytes.ts",
+      "blob": "2a3409e9e30669659579b0c11814f55118067278"
+    },
+    {
+      "path": "babel-cli/src/research/v2/adapters/web/htmlSectionLocator.test.ts",
+      "blob": "c8d2bb337f7e279394a8bf2d6e70993e7cdb9797"
+    },
+    {
+      "path": "babel-cli/src/research/v2/adapters/web/htmlSectionLocator.ts",
+      "blob": "cdd80ea0a5500f7c796e6f81b6d622bfdc40086a"
+    },
+    {
+      "path": "babel-cli/src/research/v2/profiles/general/EXTRACTION_SLICE_CANDIDATE_M1.md",
+      "blob": "2d98a6a08455018bf04c3f2fa41cfda417dd6609"
+    },
+    {
+      "path": "babel-cli/src/research/v2/profiles/general/generalAdapterCatalog.test.ts",
+      "blob": "61ae60b55ed40ed475c90d0ccd0f6d56cfc7cd1e"
+    },
+    {
+      "path": "babel-cli/src/research/v2/profiles/general/generalAdapterCatalog.ts",
+      "blob": "2e0669a0cc5b943d91bddc6e61b64e7becd2540c"
+    }
+  ],
+  "focusedTestReceipt": {
+    "path": "review-artifacts/extraction-local-test-receipt.tap.txt",
+    "tests": 43,
+    "pass": 43,
+    "fail": 0
+  },
+  "generatedAt": "2026-10-21T02:46:27Z"
+}

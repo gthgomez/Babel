@@ -1,0 +1,269 @@
+TAP version 13
+# Subtest: GeneralDocumentAdapter.read: admitted plain text via port only (G-DEV-03)
+ok 1 - GeneralDocumentAdapter.read: admitted plain text via port only (G-DEV-03)
+  ---
+  duration_ms: 4.04829
+  type: 'test'
+  ...
+# Subtest: GeneralDocumentAdapter.read: propagates port cancelled
+ok 2 - GeneralDocumentAdapter.read: propagates port cancelled
+  ---
+  duration_ms: 0.172603
+  type: 'test'
+  ...
+# Subtest: GeneralDocumentAdapter.read: pre-await abort returns cancelled
+ok 3 - GeneralDocumentAdapter.read: pre-await abort returns cancelled
+  ---
+  duration_ms: 0.101342
+  type: 'test'
+  ...
+# Subtest: GeneralDocumentAdapter.read: post-await abort returns cancelled
+ok 4 - GeneralDocumentAdapter.read: post-await abort returns cancelled
+  ---
+  duration_ms: 15.536534
+  type: 'test'
+  ...
+# Subtest: GeneralDocumentAdapter.read: fails on port operationId mismatch
+ok 5 - GeneralDocumentAdapter.read: fails on port operationId mismatch
+  ---
+  duration_ms: 0.613703
+  type: 'test'
+  ...
+# Subtest: GeneralDocumentAdapter.read: fails when provenance requested_url is unrelated to source
+ok 6 - GeneralDocumentAdapter.read: fails when provenance requested_url is unrelated to source
+  ---
+  duration_ms: 0.235356
+  type: 'test'
+  ...
+# Subtest: GeneralDocumentAdapter.read: does not propagate failure from foreign operationId
+ok 7 - GeneralDocumentAdapter.read: does not propagate failure from foreign operationId
+  ---
+  duration_ms: 0.191197
+  type: 'test'
+  ...
+# Subtest: GeneralDocumentAdapter.read: fails on admitted source_id mismatch
+ok 8 - GeneralDocumentAdapter.read: fails on admitted source_id mismatch
+  ---
+  duration_ms: 0.239614
+  type: 'test'
+  ...
+# Subtest: GeneralDocumentAdapter.read: extraction_failed on hash mismatch
+ok 9 - GeneralDocumentAdapter.read: extraction_failed on hash mismatch
+  ---
+  duration_ms: 0.35691
+  type: 'test'
+  ...
+# Subtest: GeneralDocumentAdapter.discover: not_supported without network
+ok 10 - GeneralDocumentAdapter.discover: not_supported without network
+  ---
+  duration_ms: 0.28985
+  type: 'test'
+  ...
+# Subtest: truncateToCodePointLimit: does not split emoji surrogate pair
+ok 11 - truncateToCodePointLimit: does not split emoji surrogate pair
+  ---
+  duration_ms: 1.705675
+  type: 'test'
+  ...
+# Subtest: buildInlinePassageTextRef: hashes emitted text only
+ok 12 - buildInlinePassageTextRef: hashes emitted text only
+  ---
+  duration_ms: 1.533594
+  type: 'test'
+  ...
+# Subtest: GeneralDocumentAdapter.read: application/pdf via pdfjs page passages
+ok 13 - GeneralDocumentAdapter.read: application/pdf via pdfjs page passages
+  ---
+  duration_ms: 1128.057025
+  type: 'test'
+  ...
+# Warning: Indexing all PDF objects
+# Subtest: GeneralDocumentAdapter.read: malformed pdf bytes extraction_failed
+ok 14 - GeneralDocumentAdapter.read: malformed pdf bytes extraction_failed
+  ---
+  duration_ms: 6.904126
+  type: 'test'
+  ...
+# Subtest: passagesFromAdmittedPdf: two-page fixture with page locators
+ok 15 - passagesFromAdmittedPdf: two-page fixture with page locators
+  ---
+  duration_ms: 1086.246539
+  type: 'test'
+  ...
+# Subtest: passagesFromAdmittedPdf: cancellation during delayed page loop
+ok 16 - passagesFromAdmittedPdf: cancellation during delayed page loop
+  ---
+  duration_ms: 11.671284
+  type: 'test'
+  ...
+# Subtest: passagesFromAdmittedPdf: hashes emitted inline text only when truncated
+ok 17 - passagesFromAdmittedPdf: hashes emitted inline text only when truncated
+  ---
+  duration_ms: 4.009664
+  type: 'test'
+  ...
+# Subtest: passagesFromAdmittedPdf: rejects non-pdf bytes
+ok 18 - passagesFromAdmittedPdf: rejects non-pdf bytes
+  ---
+  duration_ms: 0.252193
+  type: 'test'
+  ...
+# Subtest: passagesFromAdmittedPlainText: G-DEV-03 raw bytes, schema-valid passages
+ok 19 - passagesFromAdmittedPlainText: G-DEV-03 raw bytes, schema-valid passages
+  ---
+  duration_ms: 3.979577
+  type: 'test'
+  ...
+# Subtest: decodeAdmittedUtf8Bytes: rejects byte_length mismatch
+ok 20 - decodeAdmittedUtf8Bytes: rejects byte_length mismatch
+  ---
+  duration_ms: 0.385053
+  type: 'test'
+  ...
+# Subtest: decodeAdmittedUtf8Bytes: rejects payload content_hash mismatch
+ok 21 - decodeAdmittedUtf8Bytes: rejects payload content_hash mismatch
+  ---
+  duration_ms: 0.134371
+  type: 'test'
+  ...
+# Subtest: decodeAdmittedUtf8Bytes: rejects revision content_hash mismatch
+ok 22 - decodeAdmittedUtf8Bytes: rejects revision content_hash mismatch
+  ---
+  duration_ms: 0.11209
+  type: 'test'
+  ...
+# Subtest: decodeAdmittedUtf8Bytes: rejects invalid UTF-8
+ok 23 - decodeAdmittedUtf8Bytes: rejects invalid UTF-8
+  ---
+  duration_ms: 0.237484
+  type: 'test'
+  ...
+# Subtest: passagesFromAdmittedPlainText: rejects text/html login markup as unsupported
+ok 24 - passagesFromAdmittedPlainText: rejects text/html login markup as unsupported
+  ---
+  duration_ms: 0.11482
+  type: 'test'
+  ...
+# Subtest: decodeAdmittedUtf8Bytes: rejects decoded length drift vs byte_length
+ok 25 - decodeAdmittedUtf8Bytes: rejects decoded length drift vs byte_length
+  ---
+  duration_ms: 0.181721
+  type: 'test'
+  ...
+# Subtest: validateFetchBinding: rejects foreign operationId on failed fetch before propagating failure
+ok 26 - validateFetchBinding: rejects foreign operationId on failed fetch before propagating failure
+  ---
+  duration_ms: 1.044005
+  type: 'test'
+  ...
+# Subtest: validateFetchBinding: rejects foreign operationId on cancelled fetch
+ok 27 - validateFetchBinding: rejects foreign operationId on cancelled fetch
+  ---
+  duration_ms: 0.180224
+  type: 'test'
+  ...
+# Subtest: validateFetchBinding: propagates failed fetch when operationId matches
+ok 28 - validateFetchBinding: propagates failed fetch when operationId matches
+  ---
+  duration_ms: 0.090507
+  type: 'test'
+  ...
+# Subtest: validateFetchBinding: rejects ok admission when requested_url is not on source
+ok 29 - validateFetchBinding: rejects ok admission when requested_url is not on source
+  ---
+  duration_ms: 0.398082
+  type: 'test'
+  ...
+# Subtest: validateFetchBinding: accepts legitimate redirect when chain ends at final_url
+ok 30 - validateFetchBinding: accepts legitimate redirect when chain ends at final_url
+  ---
+  duration_ms: 0.138261
+  type: 'test'
+  ...
+# Subtest: validateAdmittedRedirectProvenance: rejects chain that does not end at final_url
+ok 31 - validateAdmittedRedirectProvenance: rejects chain that does not end at final_url
+  ---
+  duration_ms: 0.06402
+  type: 'test'
+  ...
+# Subtest: admitsRequestedUrlForSource: uses observed_urls only
+ok 32 - admitsRequestedUrlForSource: uses observed_urls only
+  ---
+  duration_ms: 0.102844
+  type: 'test'
+  ...
+# Subtest: bindingFailed: uses contract_violation category
+ok 33 - bindingFailed: uses contract_violation category
+  ---
+  duration_ms: 0.056252
+  type: 'test'
+  ...
+# Subtest: GeneralWebAdapter.read: static HTML via port (G-DEV-01 plan-a)
+ok 34 - GeneralWebAdapter.read: static HTML via port (G-DEV-01 plan-a)
+  ---
+  duration_ms: 3.886822
+  type: 'test'
+  ...
+# Subtest: GeneralWebAdapter: adapter id and kinds
+ok 35 - GeneralWebAdapter: adapter id and kinds
+  ---
+  duration_ms: 0.557631
+  type: 'test'
+  ...
+# Subtest: passagesFromAdmittedStaticHtml: G-DEV-01 plan-a heading sections
+ok 36 - passagesFromAdmittedStaticHtml: G-DEV-01 plan-a heading sections
+  ---
+  duration_ms: 3.950026
+  type: 'test'
+  ...
+# Subtest: passagesFromAdmittedStaticHtml: non-ascii repeated headings get unique section_id
+ok 37 - passagesFromAdmittedStaticHtml: non-ascii repeated headings get unique section_id
+  ---
+  duration_ms: 0.967605
+  type: 'test'
+  ...
+# Subtest: passagesFromAdmittedStaticHtml: repeated headings get unique section_id
+ok 38 - passagesFromAdmittedStaticHtml: repeated headings get unique section_id
+  ---
+  duration_ms: 0.908437
+  type: 'test'
+  ...
+# Subtest: passagesFromAdmittedStaticHtml: inline hash matches emitted text
+ok 39 - passagesFromAdmittedStaticHtml: inline hash matches emitted text
+  ---
+  duration_ms: 1.811479
+  type: 'test'
+  ...
+# Subtest: passagesFromAdmittedStaticHtml: rejects login-only html
+ok 40 - passagesFromAdmittedStaticHtml: rejects login-only html
+  ---
+  duration_ms: 0.538446
+  type: 'test'
+  ...
+# Subtest: passagesFromAdmittedStaticHtml: rejects non-html media
+ok 41 - passagesFromAdmittedStaticHtml: rejects non-html media
+  ---
+  duration_ms: 0.143537
+  type: 'test'
+  ...
+# Subtest: allocateSectionLocatorId: disambiguates repeated headings
+ok 42 - allocateSectionLocatorId: disambiguates repeated headings
+  ---
+  duration_ms: 0.665939
+  type: 'test'
+  ...
+# Subtest: allocateSectionLocatorId: non-ascii headings get stable unique slugs
+ok 43 - allocateSectionLocatorId: non-ascii headings get stable unique slugs
+  ---
+  duration_ms: 0.375575
+  type: 'test'
+  ...
+1..43
+# tests 43
+# suites 0
+# pass 43
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 1625.84074
