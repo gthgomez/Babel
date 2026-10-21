@@ -4,9 +4,12 @@
   "root_cause": "fixtureModelForOfflineRun semantic_support_review judgments omitted required claimed_source_attribution and claimed_source_slots after SemanticSupportReviewOutputSchema tightened; validation failed before cancel-resume journey completed on CI shard0.",
   "changed_files": [
     "babel-cli/src/research/v2/cli/researchV2FixtureRunModel.ts",
-    "babel-cli/src/research/v2/cli/researchV2CliOperations.ts"
+    "babel-cli/src/research/v2/cli/researchV2CliOperations.ts",
+    "babel-cli/src/research/v2/engine/testSupport/claimedSourceReviewFieldsFromSemanticInput.ts",
+    "babel-cli/src/research/v2/engine/testSupport/claimedSourceReviewFieldsFromSemanticInput.test.ts"
   ],
-  "fix_summary": "Bind offline CLI semantic judgments with requiredClaimedSourceReviewFields(['repository-pin-0'], 'not_assessed'); stop cancel watcher in finally during X-L1 journey so abort watcher cannot outlive failed engine pass.",
+  "fix_summary": "Derive claimed_source_slots from semantic_support_review input cited_passages.source_attribution.coverage_source_slot and mission_source_slots fetch evidence via claimedSourceReviewFieldsFromSemanticInput; stop cancel watcher in finally during X-L1 journey.",
+  "follow_up": "Replaced hardcoded repository-pin-0 with evidence-derived slots in researchV2FixtureRunModel.ts semantic_support_review handler.",
   "preserved": [
     "e1547b756d7de3e41cbad613b95cfc0b62b75af8 evidence bindings",
     "main merge fe5d699ab7758580f90fee17e3bb3df998d37b2b",
