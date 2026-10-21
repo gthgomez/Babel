@@ -100,6 +100,40 @@ describe('research retrieval loop (admitted ports)', () => {
     assert.equal(completionSettlement(fetchCompleted[0]), 'succeeded')
   })
 
+  it('coverageSourceSlotId overrides discover-primary for composed repository child retrieval', async () => {
+    const store = new InMemoryResearchStore()
+    const session = await seedAdmittedPlan(store)
+    const registries = createTechnicalResearchRegistries()
+    const adapter = resolveSourceAdapterForMission(exampleTechnicalMissionFixture, registries)
+    assert.ok(adapter)
+    const access = new FakeSourceAccessPort([
+      {
+        source: technicalRepositoryCorpusSource,
+        body: technicalRepositoryCorpusBody,
+        mediaType: 'text/plain',
+        finalUrl: technicalRepositoryCorpusFinalUrl,
+      },
+    ])
+    const result = await runAdmittedRetrievalIteration({
+      session,
+      store,
+      access,
+      adapter,
+      activePlan: examplePlanRevisionFixture,
+      discoverQuery: 'RESEARCH_CONTRACT',
+      searchOperationId: 'ret-search-slot',
+      searchAttemptId: 'ret-search-slot-att',
+      fetchOperationId: 'ret-fetch-slot',
+      fetchAttemptId: 'ret-fetch-slot-att',
+      coverageSourceSlotId: 'repository-pin-1',
+      dispatchedAt: '2026-10-20T12:09:00.000Z',
+      signal: new AbortController().signal,
+      now: () => FIXED_NOW,
+    })
+    assert.equal(result.source.coverage_source_slot, 'repository-pin-1')
+    assert.notEqual(result.source.coverage_source_slot, 'discover-primary')
+  })
+
   it('persists retrieval and offline terminal report on durable admitted session', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'babel-research-v2-retrieval-'))
     try {

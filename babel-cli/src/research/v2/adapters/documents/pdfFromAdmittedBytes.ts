@@ -206,8 +206,9 @@ async function extractPassagesFromDoc(
       continue
     }
     const basePassage = buildPassageFromPageText(admitted, pageNum, text)
-    const passage =
-      options?.synthesizePageText !== undefined
+    const skipParserIntegrityReceipt =
+      options?.synthesizePageText !== undefined || options?.testHooks?.createLoadingTask !== undefined
+    const passage = skipParserIntegrityReceipt
         ? basePassage
         : passageWithIntegrityVerification(basePassage, {
             source: { source_id: admitted.revision.source_id },

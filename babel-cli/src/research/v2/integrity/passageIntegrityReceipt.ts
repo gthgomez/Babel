@@ -42,6 +42,12 @@ function resolveExcerptFromAdmitted(
   if (locator.kind === 'line_range') {
     const raw = decodeAdmittedUtf8Bytes(admitted)
     const lines = raw.toString('utf8').split(/\n/)
+    const lineCount = lines.length
+    if (locator.start_line > lineCount || locator.end_line > lineCount) {
+      throw new PassageIntegrityVerificationError(
+        `line_range end_line ${locator.end_line} exceeds admitted line count ${lineCount}`,
+      )
+    }
     const slice = lines.slice(locator.start_line - 1, locator.end_line).join('\n')
     return { text: slice }
   }
@@ -60,7 +66,19 @@ function resolveExcerptFromAdmitted(
   }
   if (locator.kind === 'byte_offset') {
     const bytes = decodeAdmittedInlineBytes(admitted)
-    const slice = bytes.subarray(locator.start_offset, locator.end_offset + 1)
+    const { start_offset: start, end_offset: end } = locator
+    if (start > bytes.length || end > bytes.length) {
+      throw new PassageIntegrityVerificationError('byte_offset range exceeds admitted byte length')
+    }
+    if (end < start) {
+      throw new PassageIntegrityVerificationError('inverted byte_offset range')
+    }
+    const slice = bytes.subarray(start, end)
+    try {
+      new TextDecoder('utf-8', { fatal: true }).decode(slice)
+    } catch {
+      throw new PassageIntegrityVerificationError('byte_offset slice is not valid UTF-8')
+    }
     return { text: slice.toString('utf8') }
   }
   if (locator.kind === 'page') {

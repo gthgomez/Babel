@@ -626,6 +626,7 @@ export async function runAdmittedComposedRetrievalIteration(
           searchAttemptId,
           fetchOperationId,
           fetchAttemptId,
+          coverageSourceSlotId: slot.slotId,
           dispatchedAt: request.dispatchedAt,
           signal: request.signal,
           now,

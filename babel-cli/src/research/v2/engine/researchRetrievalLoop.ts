@@ -60,6 +60,11 @@ export interface RetrievalIterationRequest {
   emitOfflineTerminalReport?: boolean
   /** Labels terminal report limitations; omit to avoid claiming offline-only execution. */
   executionProvenance?: RetrievalExecutionProvenance
+  /**
+   * When set (composed repository-pin child), stamps `coverage_source_slot` on persisted sources
+   * instead of legacy `discover-primary` for single-candidate discover.
+   */
+  coverageSourceSlotId?: string
   now?: () => string
 }
 
@@ -354,7 +359,8 @@ export async function runAdmittedRetrievalIteration(
 
   for (const slot of resolution.slots) {
     throwIfAborted(request.signal, `source_fetch ${slot.slotId}`)
-    const candidate = stampCoverageSourceSlotOnSource(slot.candidate, slot.slotId)
+    const coverageSlotId = request.coverageSourceSlotId ?? slot.slotId
+    const candidate = stampCoverageSourceSlotOnSource(slot.candidate, coverageSlotId)
     const { fetchOperationId, fetchAttemptId } = resolveSlotFetchOperationIds(
       request,
       slot.slotId,
