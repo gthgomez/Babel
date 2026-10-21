@@ -25,7 +25,9 @@ import {
   technicalRepositoryCorpusBody,
   technicalRepositoryCorpusFinalUrl,
 } from '../fixtures/technicalRepositoryCorpus.js'
+import { ensureAdmittedBootstrapPlanShell } from '../engine/admittedBootstrapPlanShell.js'
 import { finalizeCancelledOwnerRunAndClose } from '../engine/ownerSessionCancellationFinalize.js'
+import type { OwnerResearchRunCancellationFinalizeOutcome } from '../engine/finalizeOwnerResearchRunCancellation.js'
 import { finalizeFailedOwnerResearchPass } from '../engine/finalizeFailedOwnerResearchPass.js'
 import { fixtureModelForOfflineRun } from './researchV2FixtureRunModel.js'
 
@@ -38,6 +40,10 @@ export interface ResearchV2MissionRunResult {
   terminal_report_emitted: boolean
   live_api: boolean
   mode: 'production_mission_run' | 'injected_offline_run'
+  /** Set when owner teardown ran cancellation finalization (including not_appended reasons). */
+  cancellation_finalize?:
+    | OwnerResearchRunCancellationFinalizeOutcome
+    | 'not_attempted'
 }
 
 export interface ResearchV2MissionRunOptions {
@@ -268,6 +274,10 @@ export async function runResearchV2MissionWithOwnerSession(
   let owner: ResearchEngineSession | undefined
   let cancelWatcher: { stop(): void } | undefined
   let missionAppended = false
+  let cancellationFinalize:
+    | OwnerResearchRunCancellationFinalizeOutcome
+    | 'not_attempted' = 'not_attempted'
+  let runResult: ResearchV2MissionRunResult | undefined
   try {
     owner = await ResearchEngineSession.openOwner({
       storeDirectory: options.storeDirectory,
@@ -275,8 +285,20 @@ export async function runResearchV2MissionWithOwnerSession(
     })
     cancelWatcher = owner.watchExternalCancelRequests(cancelController)
 
-    const handle = await owner.appendMission(options.mission)
+    let handle = await owner.appendMission(options.mission)
     missionAppended = true
+    const admittedAt = new Date().toISOString()
+    const planRevisionId =
+      options.planRevisionId ??
+      (injectedOffline ? 'plan-cli-run-001' : `plan-${randomUUID()}`)
+    const shell = await ensureAdmittedBootstrapPlanShell({
+      store: owner.store,
+      mission: options.mission,
+      handle,
+      planRevisionId,
+      createdAt: admittedAt,
+    })
+    handle = shell.handle
     const pass = await runResearchV2EnginePassOnOwner({
       owner,
       mission: options.mission,
@@ -284,25 +306,34 @@ export async function runResearchV2MissionWithOwnerSession(
       discoverQuery: options.discoverQuery,
       injectedOffline,
       signal,
-      ...(options.planRevisionId ? { planRevisionId: options.planRevisionId } : {}),
-      ...(options.activePlanRevisionId ? { activePlanRevisionId: options.activePlanRevisionId } : {}),
+      planRevisionId,
+      activePlanRevisionId: options.activePlanRevisionId ?? shell.bootstrapPlanRevisionId,
       ...(options.model ? { model: options.model } : {}),
       ...(options.webSearchTransport ? { webSearchTransport: options.webSearchTransport } : {}),
       ...(options.fetchRepositoryTree ? { fetchRepositoryTree: options.fetchRepositoryTree } : {}),
     })
-    return {
+    runResult = {
       session_id: owner.sessionId,
       ...pass,
+      cancellation_finalize: 'not_attempted',
     }
   } finally {
     cancelWatcher?.stop()
-    await finalizeCancelledOwnerRunAndClose({
+    const closeOutcome = await finalizeCancelledOwnerRunAndClose({
       owner,
       mission: options.mission,
       missionAppended,
       signal,
     })
+    cancellationFinalize = closeOutcome.cancellation_finalize
+    if (runResult) {
+      runResult.cancellation_finalize = cancellationFinalize
+    }
   }
+  if (!runResult) {
+    throw new Error('research mission run did not produce a result')
+  }
+  return runResult
 }
 
 export function missionFromStoreEvents(
