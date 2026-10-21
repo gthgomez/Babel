@@ -25,11 +25,13 @@ Forbidden root keys besides kind and questions: operation_kind, input, input_mis
     {
       "assertion_text": "<non-empty string>",
       "assertion_kind": "source_observation" | "vendor_reported_result" | "measured_result" | "inference" | "proposal",
-      "passage_ids": ["<non-empty passage id>", "..."]
+      "passage_ids": ["<non-empty passage id>", "..."],
+      "question_id": "<plan question_id from plan_questions host binding>"
     }
   ]
 }
-Per-finding allowed keys only: assertion_text, assertion_kind, passage_ids.`,
+Per-finding allowed keys only: assertion_text, assertion_kind, passage_ids, question_id.
+Each question_id must match one of the active plan question ids; unknown ids are rejected.`,
   semantic_support_review: `Root object (strict — no extra keys):
 {
   "kind": "semantic_support_review",

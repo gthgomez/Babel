@@ -37,6 +37,8 @@ export const ExtractFindingsOutputSchema = z
             'proposal',
           ]),
           passage_ids: z.array(z.string().min(1)),
+          /** Required; must match an active plan question id (no legacy Q[0] fallback). */
+          question_id: z.string().min(1),
         })
         .strict(),
     ),

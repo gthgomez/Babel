@@ -4,9 +4,13 @@
   "branch": "cursor/agent-b-general-fixtures-f617",
   "runtime_checkpoints": {
     "production_finalizer_go": "08cc2986507b7549be04fe6d49ccfc995080e351",
+    "extract_question_id_production": "b0194564c1a0934e0a11da614f4fda2f798b7a0d",
+    "draft_pr_extract_contract": 406,
+    "b_preflight_portable_runner": "3f9754fc",
     "handoff_artifacts": "f7784353",
     "one_question_partial_regression": "6c51bbed",
-    "attempt4_evidence_subset": "review-artifacts/general-g-l1-attempt4-evidence-subset.json"
+    "attempt4_evidence_subset": "review-artifacts/general-g-l1-attempt4-evidence-subset.json",
+    "historical_q0_binding_evidence": "review-artifacts/historical-extract-question-id-q0-host-binding.json"
   },
   "dependency_bearing_runtime": {
     "cli_entry": "babel-cli/bin/babel.js research v2 …",
@@ -31,7 +35,7 @@
       "expected_outcomes": "babel-cli/src/research/v2/fixtures/campaign/G-L2-expected-outcomes.json",
       "preflight_command": "npm --prefix babel-cli run test:research-v2-g-l2-preflight",
       "blockers_or_gaps": [
-        "extract_findings schema has no per-finding question_id; host binds all findings to plan.questions[0] (findingsFromModelOutput.ts)",
+        "Multi-source discover in one iteration still candidates[0]-only until A multi-source checkpoint lands (B actual-port tests ready)",
         "Live comparison run needs coordinator-authorized spend (not in this inventory turn)",
         "Holdout/dev-corpus answers not executed or inspected in this inventory"
       ],
@@ -58,7 +62,7 @@
       "blockers_or_gaps": [
         "Production discover still fetches discover.candidates[0] only — two-page evidence requires sequential iterations until A ships bounded multi-source runtime",
         "G-DEV-05/06 expectations are structural prose only — no automated CLI acceptance runner bound to maps_to_acceptance_scenario G-L3",
-        "Per-question contradiction attribution blocked by extract default question_id = questions[0] (proposed tests remain proposed)",
+        "Live G-L3 agreement/conflict not executed (deterministic insufficiency fixture separate)",
         "Paid live extract/review not run in this inventory"
       ],
       "cli_path_proposed": {
@@ -108,13 +112,13 @@
         "status": "pass"
       },
       {
-        "command": "node --import tsx --test babel-cli/src/research/v2/engine/extractQuestionAttribution.legacy.reciprocal.test.ts",
-        "expected": "production Q[0] binding documented",
+        "command": "node --import tsx --test babel-cli/src/research/v2/engine/extractQuestionAttribution.production.contract.test.ts",
+        "expected": "production question_id: two-question success, unknown/missing rejection, per-question outcomes",
         "status": "pass"
       },
       {
-        "command": "node --import tsx --test babel-cli/src/research/v2/engine/extractQuestionAttribution.proposed.contract.test.ts",
-        "expected": "PROPOSED required question_id; per-question semantic/unanswered",
+        "command": "node --import tsx --test babel-cli/src/research/v2/engine/findingsFromModelOutput.extractBinding.test.ts",
+        "expected": "mapper validates question_id against active plan",
         "status": "pass"
       },
       {
@@ -181,13 +185,12 @@
       }
     ]
   },
-  "extract_question1_binding_assessment": {
-    "current_behavior": "findingsFromExtractModelOutput assigns every finding to plan.questions[0].question_id; ExtractFindingsOutputSchema has no question field.",
-    "a_proposed_contract": "review-artifacts/PROPOSED-A-EXTRACT-QUESTION-ATTRIBUTION.md — required question_id, unknown rejected, no Q1 fallback",
-    "proposed_tests": "babel-cli/src/research/v2/engine/extractQuestionAttribution.proposed.contract.test.ts",
-    "legacy_executed_tests": "babel-cli/src/research/v2/engine/extractQuestionAttribution.legacy.reciprocal.test.ts",
-    "honest_incompleteness": "08cc2986 report: unanswered_questions lists sibling plan questions without supported findings on that question_id; terminal_state partial with acquisition/integrity limits.",
-    "functional_multi_question_limit": "Until A ships attribution, multi-question plans cannot record per-question extract evidence (see legacy reciprocal tests).",
+  "extract_question_id_binding_assessment": {
+    "production_checkpoint": "b0194564c1a0934e0a11da614f4fda2f798b7a0d (draft #406)",
+    "current_behavior": "Required question_id on extract rows; validated against active plan; plan_questions on extract input; question_id on synthesis input; no Q[0] fallback",
+    "b_production_tests": "babel-cli/src/research/v2/engine/extractQuestionAttribution.production.contract.test.ts",
+    "historical_nonacceptance": "review-artifacts/historical-extract-question-id-q0-host-binding.json",
+    "attempt4_preserved": "review-artifacts/general-g-l1-attempt4-evidence-subset.json bytes unchanged; stored findings still show historical Q[0] shape",
     "not_a_holdout_inspection": true
   }
 }

@@ -1,42 +1,124 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
-import { examplePlanRevisionFixture } from '../fixtures/exampleMission.js'
+import { PlanRevisionSchema } from '../contracts/plan.js'
+import { exampleTechnicalMissionFixture } from '../fixtures/exampleMission.js'
 import { findingsFromExtractModelOutput } from './findingsFromModelOutput.js'
 
-describe('findingsFromExtractModelOutput plan binding', () => {
-  it('assigns every extracted finding to plan.questions[0].question_id', () => {
-    const firstQuestionId = examplePlanRevisionFixture.questions[0]?.question_id
-    assert.ok(firstQuestionId)
+const plan = PlanRevisionSchema.parse({
+  plan_revision_id: 'plan-extract-binding',
+  mission_id: exampleTechnicalMissionFixture.mission_id,
+  created_at: '2026-10-21T09:50:00.000Z',
+  revision_reason: 'fixture',
+  questions: [
+    {
+      question_id: 'q-alpha',
+      text: 'Alpha?',
+      importance: 'high',
+      evidence_requirement: 'evidence',
+      status: 'open',
+    },
+    {
+      question_id: 'q-beta',
+      text: 'Beta?',
+      importance: 'high',
+      evidence_requirement: 'evidence',
+      status: 'open',
+    },
+  ],
+})
+
+describe('findingsFromExtractModelOutput question_id binding', () => {
+  it('preserves validated question_id per finding (no Q[0] fallback)', () => {
     const findings = findingsFromExtractModelOutput({
-      operationId: 'op-extract-binding',
-      plan: examplePlanRevisionFixture,
+      operationId: 'op-bind',
+      plan,
       passages: [
         {
           passage_id: 'p-1',
           source_revision_id: 'rev-1',
           locator: { kind: 'section', section_id: 's' },
-          heading_path: ['H'],
-          text_ref: { mode: 'inline', text: 'text', text_hash: 'abc' },
+          text_ref: { mode: 'inline', text: 't', text_hash: 'a'.repeat(64) },
         },
       ],
-      createdAt: '2026-10-21T00:00:00.000Z',
+      createdAt: '2026-10-21T09:50:00.000Z',
       modelOutput: {
         kind: 'extract_findings',
         findings: [
           {
-            assertion_text: 'First assertion',
+            assertion_text: 'A',
             assertion_kind: 'source_observation',
             passage_ids: ['p-1'],
+            question_id: 'q-alpha',
           },
           {
-            assertion_text: 'Second assertion',
-            assertion_kind: 'inference',
+            assertion_text: 'B',
+            assertion_kind: 'source_observation',
             passage_ids: ['p-1'],
+            question_id: 'q-beta',
           },
         ],
       },
     })
-    assert.equal(findings.length, 2)
-    assert.ok(findings.every((f) => f.question_id === firstQuestionId))
+    assert.deepEqual(findings.map((f) => f.question_id), ['q-alpha', 'q-beta'])
+  })
+
+  it('rejects unknown question_id', () => {
+    assert.throws(
+      () =>
+        findingsFromExtractModelOutput({
+          operationId: 'op-bad-q',
+          plan,
+          passages: [
+            {
+              passage_id: 'p-1',
+              source_revision_id: 'rev-1',
+              locator: { kind: 'section', section_id: 's' },
+              text_ref: { mode: 'inline', text: 't', text_hash: 'a'.repeat(64) },
+            },
+          ],
+          createdAt: '2026-10-21T09:50:00.000Z',
+          modelOutput: {
+            kind: 'extract_findings',
+            findings: [
+              {
+                assertion_text: 'X',
+                assertion_kind: 'source_observation',
+                passage_ids: ['p-1'],
+                question_id: 'q-unknown',
+              },
+            ],
+          },
+        }),
+      /unknown question_id/,
+    )
+  })
+
+  it('rejects legacy extract output missing question_id (Zod parse)', () => {
+    assert.throws(
+      () =>
+        findingsFromExtractModelOutput({
+          operationId: 'op-legacy',
+          plan,
+          passages: [
+            {
+              passage_id: 'p-1',
+              source_revision_id: 'rev-1',
+              locator: { kind: 'section', section_id: 's' },
+              text_ref: { mode: 'inline', text: 't', text_hash: 'a'.repeat(64) },
+            },
+          ],
+          createdAt: '2026-10-21T09:50:00.000Z',
+          modelOutput: {
+            kind: 'extract_findings',
+            findings: [
+              {
+                assertion_text: 'legacy',
+                assertion_kind: 'source_observation',
+                passage_ids: ['p-1'],
+              },
+            ],
+          },
+        }),
+    )
   })
 })

@@ -176,6 +176,9 @@ function generalFixtureModelForE2e(): ResearchModelPort {
       }
       if (request.kind === 'extract_findings') {
         const passageIds = (request.input.passage_ids as string[]) ?? []
+        const questionId =
+          (request.input.plan_questions as { question_id: string }[])?.[0]?.question_id ??
+          'missing-plan-question'
         fixture.scriptOutput(request.operationId, {
           kind: 'extract_findings',
           findings: [
@@ -183,6 +186,7 @@ function generalFixtureModelForE2e(): ResearchModelPort {
               assertion_text: 'Plan A advertises monthly retention terms.',
               assertion_kind: 'source_observation',
               passage_ids: passageIds,
+              question_id: questionId,
             },
           ],
         })

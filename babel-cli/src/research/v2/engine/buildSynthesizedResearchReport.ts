@@ -114,7 +114,7 @@ export function buildSynthesizedResearchReport(params: {
     answer_summary: buildCitationQualifiedAnswerSummary(verifiedAssertions),
     unanswered_questions: unansweredQuestionIds,
     coverage_notes:
-      'answer_summary lists only semantically supported findings with explicit finding_id bindings; unanswered_questions omits plan questions without semantically supported findings (default extract binding to the first plan question does not answer the full plan).',
+      'answer_summary lists only semantically supported findings with explicit finding_id bindings; unanswered_questions includes plan questions without semantically supported findings.',
     limitations: [
       ...runtimeLimitations,
       ...acquisitionLimitations,

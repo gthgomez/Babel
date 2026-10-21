@@ -27,6 +27,7 @@ export const MINIMAL_VALID_MODEL_OUTPUT_BY_KIND: Record<string, Record<string, u
         assertion_text: 'Observed value in passage.',
         assertion_kind: 'source_observation',
         passage_ids: ['passage-1'],
+        question_id: 'q-plan-1',
       },
     ],
   },
@@ -118,8 +119,10 @@ describe('research model output contract prompt sync', () => {
       '../fixtures/campaign/G-L1-live-malformed-plan-questions-response.json',
     )
     const fixture = JSON.parse(readFileSync(fixturePath, 'utf8')) as {
-      raw_model_payload: unknown
+      representative_validation_failure_payload: unknown
     }
-    assert.throws(() => PlanQuestionsOutputSchema.parse(fixture.raw_model_payload))
+    assert.throws(() =>
+      PlanQuestionsOutputSchema.parse(fixture.representative_validation_failure_payload),
+    )
   })
 })

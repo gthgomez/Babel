@@ -3,25 +3,31 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, it } from 'node:test'
+import { ExtractFindingsOutputSchema } from '../contracts/modelOutputs.js'
 import { PlanRevisionSchema } from '../contracts/plan.js'
 import type { FindingRecord } from '../contracts/findings.js'
-import { applySemanticSupportReview } from './findingsFromModelOutput.js'
-import { deriveUnansweredPlanQuestionIds } from './researchReportFinalization.js'
 import {
-  assertExtractQuestionIdsAdmittedByPlan,
-  ExtractQuestionAttributionError,
-  ProposedExtractFindingsOutputSchema,
-} from './testSupport/proposedExtractQuestionAttributionContract.js'
+  applySemanticSupportReview,
+  findingsFromExtractModelOutput,
+} from './findingsFromModelOutput.js'
+import { deriveUnansweredPlanQuestionIds } from './researchReportFinalization.js'
 
 const campaignDir = join(dirname(fileURLToPath(import.meta.url)), '../fixtures/campaign')
 const twoQuestionPlan = PlanRevisionSchema.parse(
   JSON.parse(readFileSync(join(campaignDir, 'G-L2-two-question-plan.fixture.json'), 'utf8')),
 )
 
-describe('PROPOSED extract question_id contract (A adoption; not production)', () => {
-  it('requires question_id on every extract finding row', () => {
+const passageFixture = {
+  passage_id: 'p-mdn',
+  source_revision_id: 'rev-1',
+  locator: { kind: 'section' as const, section_id: 's' },
+  text_ref: { mode: 'inline' as const, text: 't', text_hash: 'a'.repeat(64) },
+}
+
+describe('extract question_id contract (production b0194564)', () => {
+  it('requires question_id on every extract finding row (schema)', () => {
     assert.throws(() =>
-      ProposedExtractFindingsOutputSchema.parse({
+      ExtractFindingsOutputSchema.parse({
         kind: 'extract_findings',
         findings: [
           {
@@ -35,35 +41,59 @@ describe('PROPOSED extract question_id contract (A adoption; not production)', (
   })
 
   it('two-question attribution success when both question_ids are admitted by plan', () => {
-    const parsed = ProposedExtractFindingsOutputSchema.parse({
-      kind: 'extract_findings',
-      findings: [
-        {
-          assertion_text: 'MDN max-age guidance',
-          assertion_kind: 'source_observation',
-          passage_ids: ['p-mdn'],
-          question_id: 'q-g-l2-mdn-cache',
-        },
-        {
-          assertion_text: 'Cloudflare edge TTL guidance',
-          assertion_kind: 'source_observation',
-          passage_ids: ['p-cf'],
-          question_id: 'q-g-l2-cloudflare-cache',
-        },
+    const findings = findingsFromExtractModelOutput({
+      operationId: 'op-g-l2-two-q',
+      plan: twoQuestionPlan,
+      passages: [
+        passageFixture,
+        { ...passageFixture, passage_id: 'p-cf' },
       ],
+      createdAt: '2026-10-21T10:00:00.000Z',
+      modelOutput: {
+        kind: 'extract_findings',
+        findings: [
+          {
+            assertion_text: 'MDN max-age guidance',
+            assertion_kind: 'source_observation',
+            passage_ids: ['p-mdn'],
+            question_id: 'q-g-l2-mdn-cache',
+          },
+          {
+            assertion_text: 'Cloudflare edge TTL guidance',
+            assertion_kind: 'source_observation',
+            passage_ids: ['p-cf'],
+            question_id: 'q-g-l2-cloudflare-cache',
+          },
+        ],
+      },
     })
-    assertExtractQuestionIdsAdmittedByPlan(twoQuestionPlan, parsed.findings)
-    const bindings = new Set(parsed.findings.map((f) => f.question_id))
-    assert.deepEqual(bindings, new Set(['q-g-l2-mdn-cache', 'q-g-l2-cloudflare-cache']))
+    assert.deepEqual(
+      new Set(findings.map((f) => f.question_id)),
+      new Set(['q-g-l2-mdn-cache', 'q-g-l2-cloudflare-cache']),
+    )
   })
 
   it('rejects unknown question_id with no Q1 fallback', () => {
     assert.throws(
       () =>
-        assertExtractQuestionIdsAdmittedByPlan(twoQuestionPlan, [
-          { question_id: 'q-not-on-plan' },
-        ]),
-      (err: unknown) => err instanceof ExtractQuestionAttributionError,
+        findingsFromExtractModelOutput({
+          operationId: 'op-bad-q',
+          plan: twoQuestionPlan,
+          passages: [passageFixture],
+          createdAt: '2026-10-21T10:00:00.000Z',
+          modelOutput: {
+            kind: 'extract_findings',
+            findings: [
+              {
+                assertion_text: 'X',
+                assertion_kind: 'source_observation',
+                passage_ids: ['p-mdn'],
+                question_id: 'q-not-on-plan',
+              },
+            ],
+          },
+        }),
+      /unknown question_id/,
     )
   })
 

@@ -64,7 +64,7 @@ const ALL_FIVE_QUESTION_IDS = attempt4Plan.questions.map((q) => q.question_id)
 const UNANSWERED_AFTER_Q1_SUPPORTED = ALL_FIVE_QUESTION_IDS.slice(1)
 
 describe('G-L1 attempt4 evidence subset (historical) + fef78559 finalizer', () => {
-  it('preserves ORIGINAL subset artifact and extract binding on plan.questions[0]', () => {
+  it('preserves ORIGINAL subset artifact and historical stored Q[0] host binding (pre-b0194564)', () => {
     const { provenance, revision, passages, findings } = loadAttempt4EvidenceSubset()
     assert.equal(
       revision.content_hash,
@@ -80,21 +80,23 @@ describe('G-L1 attempt4 evidence subset (historical) + fef78559 finalizer', () =
         'extract-general-g-l1-attempt4-evidence-subset.mjs',
       ),
     )
-    const rebound = findingsFromExtractModelOutput({
-      operationId: 'op-attempt4-shape',
-      plan: attempt4Plan,
-      passages,
-      createdAt: '2026-10-21T09:04:28.000Z',
-      modelOutput: {
-        kind: 'extract_findings',
-        findings: findings.map((f) => ({
-          assertion_text: f.assertion_text,
-          assertion_kind: f.assertion_kind,
-          passage_ids: f.passage_ids,
-        })),
-      },
-    })
-    assert.ok(rebound.every((f) => f.question_id === firstQuestionId))
+    assert.throws(
+      () =>
+        findingsFromExtractModelOutput({
+          operationId: 'op-attempt4-legacy-shape',
+          plan: attempt4Plan,
+          passages,
+          createdAt: '2026-10-21T09:04:28.000Z',
+          modelOutput: {
+            kind: 'extract_findings',
+            findings: findings.map((f) => ({
+              assertion_text: f.assertion_text,
+              assertion_kind: f.assertion_kind,
+              passage_ids: f.passage_ids,
+            })),
+          },
+        }),
+    )
   })
 
   it('records historical terminal report (pre-fef78559 builder) with all five unanswered and model prose cutoff', () => {
@@ -136,7 +138,7 @@ describe('G-L1 attempt4 evidence subset (historical) + fef78559 finalizer', () =
     assert.deepEqual(report.unanswered_questions, UNANSWERED_AFTER_Q1_SUPPORTED)
     assert.ok(
       report.coverage_notes.includes(
-        'default extract binding to the first plan question does not answer the full plan',
+        'unanswered_questions includes plan questions without semantically supported findings',
       ),
     )
     assert.equal(report.source_cutoff, '2026-10-21T09:04:02.034Z')

@@ -1,0 +1,16 @@
+{
+  "schema": "babel-research-v2-historical-nonacceptance/v1",
+  "checkpoint_superseded_by": "b0194564c1a0934e0a11da614f4fda2f798b7a0d",
+  "draft_pr": 406,
+  "title": "Pre-b0194564 extract rows omitted question_id; host bound all findings to plan.questions[0]",
+  "production_behavior_before": {
+    "extract_findings_schema": "assertion_text, assertion_kind, passage_ids only",
+    "mapper": "findingsFromExtractModelOutput assigned question_id = plan.questions[0].question_id for every row",
+    "multi_question_plans": "sibling questions could not receive distinct extract attribution from model output"
+  },
+  "evidence_artifacts": [
+    "review-artifacts/general-g-l1-attempt4-evidence-subset.json — stored findings all carry first plan question_id",
+    "babel-cli/src/research/v2/engine/reportFinalizationEvidence.attempt4.regression.test.ts — preserves subset bytes; documents historical Q[0] stored shape"
+  ],
+  "not_a_regression_target": "Repaired product must reject legacy extract output missing question_id (Zod) and validate question_id against active plan"
+}
