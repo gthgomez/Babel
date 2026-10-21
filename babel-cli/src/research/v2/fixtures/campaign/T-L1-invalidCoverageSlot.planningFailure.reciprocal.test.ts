@@ -12,7 +12,9 @@ import { fileURLToPath } from 'node:url'
 import { describe, it } from 'node:test'
 import type { ZodType } from 'zod'
 import type { LlmRunner, RunnerCallbacks, RunnerInvocationMetadata } from '../../../../runners/base.js'
+import type { GitHubTreeEntry } from '../../access/pinnedRepositoryFileSearchProvider.js'
 import { runResearchV2MissionWithOwnerSession } from '../../cli/researchV2MissionRun.js'
+import { fixtureModelForOfflineRun } from '../../cli/researchV2FixtureRunModel.js'
 import { terminalReportFromEvents } from '../../cli/researchV2CliOperations.js'
 import { openAdmittedInspectStore } from '../../control/researchStoreAdmission.js'
 import { ResearchMissionV2Schema } from '../../contracts/mission.js'
@@ -28,10 +30,40 @@ import { ResearchEngineSession } from '../../engine/researchEngineSession.js'
 
 const campaignDir = dirname(fileURLToPath(import.meta.url))
 const missionPath = join(campaignDir, 'T-L1-mission.json')
-const syntheticFixturePath = join(
+const syntheticInvalidFixturePath = join(
   campaignDir,
   'T-L1-synthetic-invalid-discover-primary-plan-questions.json',
 )
+const syntheticValidFixturePath = join(
+  campaignDir,
+  'T-L1-synthetic-valid-repository-pin-plan-questions.json',
+)
+
+function treeFromPaths(paths: string[]): GitHubTreeEntry[] {
+  return paths.map((path) => ({ path, type: 'blob' }))
+}
+
+function tL1InjectedFetchRepositoryTree(mission: ReturnType<typeof ResearchMissionV2Schema.parse>) {
+  const babelPath = 'babel-cli/src/research/v2/persistence/durableResearchStore.ts'
+  const langPath = 'libs/langgraph/langgraph/pregel/_checkpoint.py'
+  return async ({ apiUrl }: { apiUrl: string }) => {
+    if (apiUrl.includes('gthgomez/Babel')) {
+      return {
+        ok: true,
+        status: 200,
+        entries: treeFromPaths([babelPath, 'babel-cli/src/executor/kernel.ts']),
+      }
+    }
+    if (apiUrl.includes('langchain-ai/langgraph')) {
+      return {
+        ok: true,
+        status: 200,
+        entries: treeFromPaths([langPath, 'libs/checkpoint-conformance/Makefile']),
+      }
+    }
+    return { ok: false, status: 404, entries: [], message: `unexpected tree ${apiUrl}` }
+  }
+}
 
 /** Event kinds reported from C #408 fe9bf5ef live store subset (reference only; not vendored original JSON). */
 const C_408_DIAGNOSTIC_EVENT_KINDS = [
@@ -41,8 +73,8 @@ const C_408_DIAGNOSTIC_EVENT_KINDS = [
   'terminal_receipt',
 ] as const
 
-function loadSyntheticFixture() {
-  const raw = JSON.parse(readFileSync(syntheticFixturePath, 'utf8')) as {
+function loadSyntheticFixture(fixturePath: string = syntheticInvalidFixturePath) {
+  const raw = JSON.parse(readFileSync(fixturePath, 'utf8')) as {
     _provenance: string
     request_local_usage_metadata: RunnerInvocationMetadata
     raw_model_payload: Record<string, unknown>
@@ -64,8 +96,22 @@ function wrapModelWithPlanQuestionsInputCapture(
   }
 }
 
-function tL1ProductionShapedModel(): ProviderResearchModelBridge {
-  const fixture = loadSyntheticFixture()
+function assertReportedUsageSettlement(
+  usageSettlement: {
+    input_tokens?: number
+    output_tokens?: number
+    cost: { status: string; amount_usd?: number }
+  },
+  usageMeta: RunnerInvocationMetadata,
+): void {
+  assert.equal(usageSettlement.input_tokens, usageMeta.prompt_tokens)
+  assert.equal(usageSettlement.output_tokens, usageMeta.completion_tokens)
+  assert.equal(usageSettlement.cost.status, 'reported')
+  assert.equal(usageSettlement.cost.amount_usd, usageMeta.estimated_cost_usd)
+}
+
+function tL1ProductionShapedModel(fixturePath: string = syntheticInvalidFixturePath): ProviderResearchModelBridge {
+  const fixture = loadSyntheticFixture(fixturePath)
   const usageMeta = fixture.request_local_usage_metadata
   const payload = { ...fixture.raw_model_payload }
   const runner: Pick<LlmRunner, 'execute'> = {
@@ -91,6 +137,19 @@ function tL1ProductionShapedModel(): ProviderResearchModelBridge {
     provider: 'openrouter',
     providerModelId: usageMeta.provider_model_id ?? 'deepseek/deepseek-v4-flash-0731',
   })
+}
+
+function tL1ValidPlanThenFixturePhasesModel(): ResearchModelPort {
+  const planningBridge = tL1ProductionShapedModel(syntheticValidFixturePath)
+  const postPlan = fixtureModelForOfflineRun()
+  return {
+    async invokeStructured(request) {
+      if (request.kind === 'plan_questions') {
+        return planningBridge.invokeStructured(request)
+      }
+      return postPlan.invokeStructured(request)
+    },
+  }
 }
 
 async function runSyntheticInvalidSlotMission(
@@ -296,17 +355,55 @@ describe('T-L1 invalid discover-primary planning failure reciprocal (A c27fb39c 
         completion.settlement === 'failed' || completion.settlement === 'uncertain',
         `expected failed/uncertain settlement, got ${completion.settlement}`,
       )
-      assert.equal(completion.usage_settlement?.input_tokens, usageMeta.prompt_tokens)
-      assert.equal(completion.usage_settlement?.output_tokens, usageMeta.completion_tokens)
-      if (completion.usage_settlement?.cost.status === 'reported') {
-        assert.equal(completion.usage_settlement.cost.amount_usd, usageMeta.estimated_cost_usd)
-      }
+      assert.ok(completion.usage_settlement)
+      assertReportedUsageSettlement(completion.usage_settlement, usageMeta)
       assert.equal(events.filter((e) => e.kind === 'model_invocation_completed').length, 0)
       assert.equal(
         events.filter((e) => e.kind === 'external_operation_intent').length,
         1,
         'extract/review/synthesis invokeModelPhase paths are not reached; only planning intent',
       )
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('valid repository-slot plan proceeds to injected repository search via owner runner', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'babel-t-l1-valid-slot-retrieval-'))
+    const mission = ResearchMissionV2Schema.parse(JSON.parse(readFileSync(missionPath, 'utf8')))
+    const planId = 'plan-t-l1-valid-slot-retrieval'
+    try {
+      await runResearchV2MissionWithOwnerSession({
+        storeDirectory: dir,
+        mission,
+        discoverQuery: 'global-fallback-unused',
+        planRevisionId: planId,
+        model: tL1ValidPlanThenFixturePhasesModel(),
+        fetchRepositoryTree: tL1InjectedFetchRepositoryTree(mission),
+      }).catch(() => undefined)
+
+      const events = await (await openAdmittedInspectStore(dir)).listEvents(mission.mission_id)
+      const modelPlan = events
+        .filter((e) => e.kind === 'plan_revised')
+        .map((e) => (e.payload as { plan: { revision_reason: string; plan_revision_id: string } }).plan)
+        .find((p) => p.revision_reason === 'e2e_model_planning')
+      assert.ok(modelPlan, 'expected persisted model plan revision after valid slot obligations')
+
+      const retrievalIntents = events.filter((e) => {
+        if (e.kind !== 'external_operation_intent') return false
+        const kind = (e.payload as { intent?: { operation_kind?: string } }).intent?.operation_kind
+        return kind === 'source_search' || kind === 'source_fetch'
+      })
+      assert.ok(retrievalIntents.length >= 1, 'valid planning must reach injected repository retrieval')
+
+      const reopened = await ResearchEngineSession.openInspect(dir)
+      const eventsAfterReopen = await reopened.listEvents(mission.mission_id)
+      assert.equal(eventsAfterReopen.length, events.length)
+      assert.equal(retrievalIntents.length, eventsAfterReopen.filter((e) => {
+        if (e.kind !== 'external_operation_intent') return false
+        const kind = (e.payload as { intent?: { operation_kind?: string } }).intent?.operation_kind
+        return kind === 'source_search' || kind === 'source_fetch'
+      }).length)
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -322,7 +419,7 @@ export function tL1InvalidSlotReciprocalSourceBinding(): {
   const testPath = fileURLToPath(import.meta.url)
   return {
     mission_json_sha256: hash(missionPath),
-    synthetic_fixture_sha256: hash(syntheticFixturePath),
+    synthetic_fixture_sha256: hash(syntheticInvalidFixturePath),
     test_source_sha256: hash(testPath),
   }
 }

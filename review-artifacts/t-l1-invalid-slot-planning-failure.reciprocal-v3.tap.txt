@@ -1,0 +1,99 @@
+TAP version 13
+# Subtest: T-L1 missionRequirementsPayload slots
+    # Subtest: derives repository-pin slots from the canonical mission source directory
+    ok 1 - derives repository-pin slots from the canonical mission source directory
+      ---
+      duration_ms: 1.030878
+      type: 'test'
+      ...
+    1..1
+ok 1 - T-L1 missionRequirementsPayload slots
+  ---
+  duration_ms: 1.570791
+  type: 'suite'
+  ...
+# Subtest: planning post-response validation settlement
+    # Subtest: settles model operation once when plan slot validation fails after ok invoke
+    ok 1 - settles model operation once when plan slot validation fails after ok invoke
+      ---
+      duration_ms: 2.850459
+      type: 'test'
+      ...
+    1..1
+ok 2 - planning post-response validation settlement
+  ---
+  duration_ms: 3.380603
+  type: 'suite'
+  ...
+# Subtest: historical pre-repair characterization (808d0613 / C \#408 fe9bf5ef class; frozen)
+    # Subtest: reference: planner payload directory defect was discover-primary fallback for repository-only missions
+    ok 1 - reference: planner payload directory defect was discover-primary fallback for repository-only missions
+      ---
+      duration_ms: 1.481492
+      type: 'test'
+      ...
+    # Subtest: reference: live diagnostic durable subset omitted external_operation_completed before settlement repair
+    ok 2 - reference: live diagnostic durable subset omitted external_operation_completed before settlement repair
+      ---
+      duration_ms: 0.124378
+      type: 'test'
+      ...
+    1..2
+ok 3 - historical pre-repair characterization (808d0613 / C \#408 fe9bf5ef class; frozen)
+  ---
+  duration_ms: 2.303289
+  type: 'suite'
+  ...
+# Subtest: T-L1 invalid discover-primary planning failure reciprocal (A c27fb39c union, synthetic model)
+    # Subtest: missionRequirementsPayload advertises canonical repository-pin slots on T-L1
+    ok 1 - missionRequirementsPayload advertises canonical repository-pin slots on T-L1
+      ---
+      duration_ms: 0.415582
+      type: 'test'
+      ...
+    # Subtest: synthetic envelope parses; mission slots exclude discover-primary
+    ok 2 - synthetic envelope parses; mission slots exclude discover-primary
+      ---
+      duration_ms: 0.808226
+      type: 'test'
+      ...
+    # Subtest: production runner: strict slot rejection, settled planning failure, no retrieval evidence, cold reopen stable
+    ok 3 - production runner: strict slot rejection, settled planning failure, no retrieval evidence, cold reopen stable
+      ---
+      duration_ms: 17.181728
+      type: 'test'
+      ...
+    # Subtest: actual planner input advertises canonical repository-pin slots, not discover-primary
+    ok 4 - actual planner input advertises canonical repository-pin slots, not discover-primary
+      ---
+      duration_ms: 5.385177
+      type: 'test'
+      ...
+    # Subtest: planning slot validation failure settles model intent exactly once with preserved usage
+    ok 5 - planning slot validation failure settles model intent exactly once with preserved usage
+      ---
+      duration_ms: 6.500912
+      type: 'test'
+      ...
+    # Subtest: valid repository-slot plan proceeds to injected repository search via owner runner
+    ok 6 - valid repository-slot plan proceeds to injected repository search via owner runner
+      ---
+      duration_ms: 126.268033
+      type: 'test'
+      ...
+    1..6
+ok 4 - T-L1 invalid discover-primary planning failure reciprocal (A c27fb39c union, synthetic model)
+  ---
+  duration_ms: 157.119392
+  type: 'suite'
+  ...
+1..4
+# tests 10
+# suites 4
+# pass 10
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 713.636461
+EXIT_CODE=0
