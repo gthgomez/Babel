@@ -6,8 +6,8 @@ import { printJsonErrorAndExit, printJsonOrHuman } from './output.js'
 import { assertResearchV2LiveApiEnabled, isResearchV2LiveApiEnabled } from '../research/v2/liveApiGate.js'
 import { createLiveResearchModelPort } from '../research/v2/model/researchV2LiveModelPort.js'
 import {
+  resolveEffectiveResearchV2ModelRouteForCli,
   resolveLiveResearchModelConfigForCli,
-  resolveResearchV2OpenRouterRouteFromPolicy,
 } from '../research/v2/model/researchV2ModelRoute.js'
 import {
   cancelResearchV2OwnerSession,
@@ -164,7 +164,8 @@ export function registerResearchV2Commands(program: Command): void {
     .option('--json', 'emit machine-readable output', false)
     .action((options: { routeKey: string; json: boolean }) => {
       try {
-        const route = resolveResearchV2OpenRouterRouteFromPolicy(
+        const route = resolveEffectiveResearchV2ModelRouteForCli(
+          process.env,
           options.routeKey.trim() || undefined,
         )
         print(route, JSON.stringify(route, null, 2), options.json)
@@ -279,7 +280,7 @@ export function registerResearchV2Commands(program: Command): void {
     .option('--mission-file <path>', 'mission JSON when not already in store events')
     .option('--discover-query <text>', 'discovery query for continued engine pass')
     .option('--injected-offline', 'continue with deterministic offline adapters/model', false)
-    .option('--no-continue-run', 'admit continuation only; skip engine pass', false)
+    .option('--no-continue-run', 'admit continuation only; skip engine pass')
     .option('--json', 'emit machine-readable output', false)
     .action(
       async (options: {

@@ -10,6 +10,12 @@ import type {
 } from '../ports/sourceAccessPort.js'
 import type { ResearchMissionV2 } from '../contracts/mission.js'
 import {
+  parsePinnedGithubBlobUrl,
+  pinnedGithubBlobUrlToRawContentUrl,
+  pinnedGithubRefToBlobUrl,
+  provenanceBlobUrlFromFetchHop,
+} from '../profiles/technical/repositoryFilePinning.js'
+import {
   AdmittedNetworkPolicyError,
   admittedHttpGet,
   type AdmittedHttpGetDispatch,
@@ -110,8 +116,8 @@ export class FetchSourceAccessPort implements SourceAccessPort {
     if (request.signal.aborted) {
       return { operationId: request.operationId, status: 'cancelled' }
     }
-    const url = request.source.observed_urls[0]
-    if (!url) {
+    const observedUrl = request.source.observed_urls[0]
+    if (!observedUrl) {
       return {
         operationId: request.operationId,
         status: 'failed',
@@ -119,6 +125,12 @@ export class FetchSourceAccessPort implements SourceAccessPort {
         message: 'source has no observed URL',
       }
     }
+    const fetchUrl =
+      request.source.kind === 'repository_file'
+        ? (pinnedGithubBlobUrlToRawContentUrl(observedUrl) ?? observedUrl)
+        : observedUrl
+    const pinnedBlobRef =
+      request.source.kind === 'repository_file' ? parsePinnedGithubBlobUrl(observedUrl) : null
     if (this.options.mission) {
       const denied = validateMissionFetchAdmission(request.source, this.options.mission)
       if (denied) {
@@ -135,7 +147,7 @@ export class FetchSourceAccessPort implements SourceAccessPort {
     try {
       const mission = this.options.mission
       const response = await this.admittedGet({
-        url,
+        url: fetchUrl,
         maxBytes: limit,
         signal: request.signal,
         ...(mission
@@ -183,15 +195,31 @@ export class FetchSourceAccessPort implements SourceAccessPort {
         byte_length_received: admittedBytes.byteLength,
         truncation_reason: truncated ? 'host_byte_limit' : undefined,
       }
+      const provenanceUrls =
+        pinnedBlobRef && request.source.kind === 'repository_file'
+          ? {
+              requested_url:
+                provenanceBlobUrlFromFetchHop(response.requestedUrl, pinnedBlobRef) ??
+                pinnedGithubRefToBlobUrl(pinnedBlobRef),
+              final_url:
+                provenanceBlobUrlFromFetchHop(response.finalUrl, pinnedBlobRef) ??
+                pinnedGithubRefToBlobUrl(pinnedBlobRef),
+              redirect_chain: response.redirectChain.map(
+                (hop) =>
+                  provenanceBlobUrlFromFetchHop(hop, pinnedBlobRef) ??
+                  pinnedGithubRefToBlobUrl(pinnedBlobRef),
+              ),
+            }
+          : {
+              requested_url: response.requestedUrl,
+              final_url: response.finalUrl,
+              redirect_chain: response.redirectChain,
+            }
       const admitted: AdmittedContent = {
         operation_id: request.operationId,
         revision,
         media_type: mediaType,
-        provenance: {
-          requested_url: response.requestedUrl,
-          final_url: response.finalUrl,
-          redirect_chain: response.redirectChain,
-        },
+        provenance: provenanceUrls,
         payload: {
           mode: 'inline_bytes',
           bytes_base64: admittedBytes.toString('base64'),

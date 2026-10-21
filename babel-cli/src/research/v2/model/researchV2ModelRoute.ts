@@ -14,6 +14,30 @@ export interface ResolvedResearchV2OpenRouterRoute {
   selection_basis: 'model_policy_json'
 }
 
+export type EffectiveResearchV2ModelRoute =
+  | (ResolvedResearchV2OpenRouterRoute & {
+      backend_key: string
+      selection_basis: 'model_policy_json'
+    })
+  | {
+      route_key: null
+      provider: string
+      model_id: string
+      backend_key: string
+      policy_path: null
+      selection_basis: 'env_override'
+    }
+
+export function assertCompleteResearchV2ModelEnvOverride(env: NodeJS.ProcessEnv = process.env): void {
+  const provider = env.BABEL_RESEARCH_V2_PROVIDER?.trim()
+  const modelId = env.BABEL_RESEARCH_V2_MODEL_ID?.trim()
+  if ((provider && !modelId) || (!provider && modelId)) {
+    throw new Error(
+      'research v2 model override requires both BABEL_RESEARCH_V2_PROVIDER and BABEL_RESEARCH_V2_MODEL_ID',
+    )
+  }
+}
+
 /** Resolve an explicit OpenRouter backend from configured model-policy routes (no network, no secrets). */
 export function resolveResearchV2OpenRouterRouteFromPolicy(
   routeKey?: string,
@@ -64,28 +88,62 @@ export function liveResearchModelConfigFromOpenRouterRoute(
   }
 }
 
-/** Env overrides policy; policy route is explicit OpenRouter when env provider/model omitted. */
-export function resolveLiveResearchModelConfigForCli(
+/** Same effective route resolution used by `babel research v2 run` and `model-route`. */
+export function resolveEffectiveResearchV2ModelRouteForCli(
   env: NodeJS.ProcessEnv = process.env,
-): { config: LiveResearchModelPortConfig; route_report: ResolvedResearchV2OpenRouterRoute | null } {
+  routeKey?: string,
+): EffectiveResearchV2ModelRoute {
+  assertCompleteResearchV2ModelEnvOverride(env)
   const provider = env.BABEL_RESEARCH_V2_PROVIDER?.trim()
   const modelId = env.BABEL_RESEARCH_V2_MODEL_ID?.trim()
   if (provider && modelId) {
     const backendKey = env.BABEL_RESEARCH_V2_BACKEND_KEY ?? 'research-v2-cli'
     return {
+      route_key: null,
+      provider,
+      model_id: modelId,
+      backend_key: backendKey,
+      policy_path: null,
+      selection_basis: 'env_override',
+    }
+  }
+  const route = resolveResearchV2OpenRouterRouteFromPolicy(routeKey)
+  return {
+    ...route,
+    backend_key: env.BABEL_RESEARCH_V2_BACKEND_KEY ?? 'research-v2-cli',
+    selection_basis: 'model_policy_json',
+  }
+}
+
+/** Env overrides policy; policy route is explicit OpenRouter when env provider/model omitted. */
+export function resolveLiveResearchModelConfigForCli(
+  env: NodeJS.ProcessEnv = process.env,
+  routeKey?: string,
+): { config: LiveResearchModelPortConfig; route_report: EffectiveResearchV2ModelRoute } {
+  const effective = resolveEffectiveResearchV2ModelRouteForCli(env, routeKey)
+  if (effective.selection_basis === 'env_override') {
+    return {
       config: {
-        backendKey,
+        backendKey: effective.backend_key,
         engine: {
-          provider: provider as LiveResearchModelPortConfig['engine']['provider'],
-          modelId,
+          provider: effective.provider as LiveResearchModelPortConfig['engine']['provider'],
+          modelId: effective.model_id,
           ...(env.BABEL_RESEARCH_V2_API_KEY_ENV
             ? { apiKeyEnvVar: env.BABEL_RESEARCH_V2_API_KEY_ENV }
             : {}),
         },
       },
-      route_report: null,
+      route_report: effective,
     }
   }
-  const route = resolveResearchV2OpenRouterRouteFromPolicy()
-  return { config: liveResearchModelConfigFromOpenRouterRoute(route.route_key), route_report: route }
+  return {
+    config: {
+      backendKey: effective.backend_key,
+      engine: {
+        provider: 'openrouter',
+        modelId: effective.model_id,
+      },
+    },
+    route_report: effective,
+  }
 }

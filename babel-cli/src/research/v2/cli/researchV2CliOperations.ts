@@ -167,6 +167,7 @@ export async function resumeResearchV2Continuation(options: {
 
     let runResult: Awaited<ReturnType<typeof runResearchV2EnginePassOnOwner>> | undefined
     const shouldContinue = options.continueRun !== false
+    try {
     if (shouldContinue) {
       let mission: ResearchMissionV2 | null = null
       if (options.missionFile) {
@@ -194,7 +195,9 @@ export async function resumeResearchV2Continuation(options: {
         signal,
       })
     }
-    cancelWatcher.stop()
+    } finally {
+      cancelWatcher.stop()
+    }
 
     const payload = {
       store_directory: options.store,

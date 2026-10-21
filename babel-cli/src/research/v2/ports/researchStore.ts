@@ -96,4 +96,9 @@ export interface ResearchStore {
     report: ResearchReportV2,
   ): Promise<ResearchStoreWriteResult>
   listEvents(missionId: string): Promise<readonly ResearchStoreEvent[]>
+  readMissionWriteFence(missionId: string): {
+    writer_generation: number
+    active_plan_revision_id: string | null
+    terminal_report: ResearchReportV2 | null
+  }
 }

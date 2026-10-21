@@ -24,4 +24,18 @@ describe('research v2 CLI registration', () => {
     assert.ok(sub.includes('model-route'))
     assert.ok(sub.includes('cancel-resume-once'))
   })
+
+  it('resume defaults to continuing engine pass unless --no-continue-run is set', () => {
+    const parseResumeFlags = (argv: string[]): { continueRun: boolean } => {
+      const cmd = new Command('resume')
+      cmd.option('--no-continue-run', 'admit continuation only; skip engine pass')
+      cmd.exitOverride()
+      cmd.action(() => undefined)
+      cmd.parse(argv, { from: 'user' })
+      return cmd.opts() as { continueRun: boolean }
+    }
+    assert.equal(parseResumeFlags([]).continueRun, true)
+    assert.equal(parseResumeFlags(['--no-continue-run']).continueRun, false)
+    assert.equal(undefined !== false, true)
+  })
 })

@@ -25,6 +25,7 @@ import {
   technicalRepositoryCorpusBody,
   technicalRepositoryCorpusFinalUrl,
 } from '../fixtures/technicalRepositoryCorpus.js'
+import { finalizeOwnerResearchRunCancellation } from '../engine/finalizeOwnerResearchRunCancellation.js'
 import { fixtureModelForOfflineRun } from './researchV2FixtureRunModel.js'
 
 export interface ResearchV2MissionRunResult {
@@ -43,6 +44,8 @@ export interface ResearchV2MissionRunOptions {
   mission: ResearchMissionV2
   discoverQuery: string
   planRevisionId?: string
+  /** When continuing after resume, the store's current active plan revision id. */
+  activePlanRevisionId?: string
   /** When true, uses fixture corpus + fixture model (deterministic tests only). */
   injectedOffline?: boolean
   model?: ResearchModelPort
@@ -127,8 +130,6 @@ export async function runResearchV2EnginePassOnOwner(options: {
   signal?: AbortSignal
   webSearchTransport?: BabelWebSearchTransport
   fetchRepositoryTree?: FetchPinnedRepositoryTree
-  /** When continuing after resume, the store's current active plan revision id. */
-  activePlanRevisionId?: string
 }): Promise<Omit<ResearchV2MissionRunResult, 'session_id'>> {
   const injectedOffline = options.injectedOffline === true
   const resolvedModel = injectedOffline
@@ -221,6 +222,7 @@ export async function runResearchV2MissionWithOwnerSession(
 
   let owner: ResearchEngineSession | undefined
   let cancelWatcher: { stop(): void } | undefined
+  let missionAppended = false
   try {
     owner = await ResearchEngineSession.openOwner({
       storeDirectory: options.storeDirectory,
@@ -229,6 +231,7 @@ export async function runResearchV2MissionWithOwnerSession(
     cancelWatcher = owner.watchExternalCancelRequests(cancelController)
 
     const handle = await owner.appendMission(options.mission)
+    missionAppended = true
     const pass = await runResearchV2EnginePassOnOwner({
       owner,
       mission: options.mission,
@@ -248,6 +251,12 @@ export async function runResearchV2MissionWithOwnerSession(
     }
   } finally {
     cancelWatcher?.stop()
+    if (signal.aborted && owner && missionAppended) {
+      await finalizeOwnerResearchRunCancellation({
+        store: owner.store,
+        mission: options.mission,
+      })
+    }
     await owner?.close()
   }
 }

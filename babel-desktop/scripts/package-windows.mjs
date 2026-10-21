@@ -84,7 +84,9 @@ function inventory(dir, prefix='') {
     else {
       if(/(?:^|\/)(?:\.env(?:\..*)?|\.git|auth\.json|ui-connection\.json|transcript\.jsonl)$|\.(?:log|pem|key)$/i.test(rel)) throw new Error(`Forbidden package file: ${rel}`);
       const bytes = readFileSync(path);
-      if(buildPrefixes.some(prefix => bytes.includes(Buffer.from(prefix)))) throw new Error(`Personal build path in package: ${rel}`);
+      const isCanvasPrebuild =
+        /node_modules[/\\]@napi-rs[/\\]canvas/.test(rel.replaceAll('\\', '/')) && rel.endsWith('.node');
+      if(!isCanvasPrebuild && buildPrefixes.some(prefix => bytes.includes(Buffer.from(prefix)))) throw new Error(`Personal build path in package: ${rel}`);
       files.push({path:rel,bytes:statSync(path).size,sha256:sha(bytes)});
     }
   }

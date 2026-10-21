@@ -4,6 +4,9 @@ import type { SourceRecord } from '../../contracts/sources.js'
 const GITHUB_BLOB_PATH =
   /^https:\/\/github\.com\/([^/]+)\/([^/]+)\/blob\/([a-f0-9]{40})\/(.+)$/i
 
+const GITHUB_RAW_PATH =
+  /^https:\/\/raw\.githubusercontent\.com\/([^/]+)\/([^/]+)\/([a-f0-9]{40})\/(.+)$/i
+
 export interface PinnedGithubBlobRef {
   owner: string
   repo: string
@@ -27,6 +30,47 @@ export function parsePinnedGithubBlobUrl(url: string): PinnedGithubBlobRef | nul
     repo: blob[2],
     commitSha: blob[3],
     path: blob[4],
+  }
+}
+
+export function parsePinnedGithubRawContentUrl(url: string): PinnedGithubBlobRef | null {
+  const raw = GITHUB_RAW_PATH.exec(url)
+  if (!raw?.[1] || !raw[2] || !raw[3] || !raw[4]) return null
+  return {
+    owner: raw[1],
+    repo: raw[2],
+    commitSha: raw[3],
+    path: raw[4],
+  }
+}
+
+export function pinnedGithubBlobUrlToRawContentUrl(blobUrl: string): string | null {
+  const parsed = parsePinnedGithubBlobUrl(blobUrl)
+  if (!parsed) return null
+  return `https://raw.githubusercontent.com/${parsed.owner}/${parsed.repo}/${parsed.commitSha}/${parsed.path}`
+}
+
+export function pinnedGithubRefToBlobUrl(ref: PinnedGithubBlobRef): string {
+  return `https://github.com/${ref.owner}/${ref.repo}/blob/${ref.commitSha}/${ref.path}`
+}
+
+export function provenanceBlobUrlFromFetchHop(hopUrl: string, expected: PinnedGithubBlobRef): string | null {
+  const blob = parsePinnedGithubBlobUrl(hopUrl)
+  if (blob) {
+    try {
+      assertBlobRefMatchesExpected('fetch hop', blob, expected)
+      return hopUrl
+    } catch {
+      return null
+    }
+  }
+  const raw = parsePinnedGithubRawContentUrl(hopUrl)
+  if (!raw) return null
+  try {
+    assertBlobRefMatchesExpected('fetch hop', raw, expected)
+    return pinnedGithubRefToBlobUrl(raw)
+  } catch {
+    return null
   }
 }
 
