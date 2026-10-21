@@ -4,14 +4,16 @@ import {
   assessBoundQuestionCoverageFromAdmittedEvidence,
   buildRevisionProvenanceIndex,
   citedPassageEvidenceSignals,
+  enforceBoundQuestionCoverageOnFindings,
 } from './boundQuestionCoverageFromEvidence.js'
-import { buildCitedPassageProvenance } from './planCoverageObligations.js'
+import { applySemanticSupportReview } from './findingsFromModelOutput.js'
 import {
   gL2OriginalDerivedFindingQ3_7f3,
   gL2OriginalDerivedPassages,
   gL2OriginalDerivedPlan,
   gL2OriginalDerivedRevisions,
   gL2OriginalDerivedSources,
+  gL2OriginalDerivedFindingQ3Positive,
 } from './testSupport/gL2OriginalDerivedRegression.js'
 
 describe('boundQuestionCoverageFromEvidence', () => {
@@ -25,30 +27,129 @@ describe('boundQuestionCoverageFromEvidence', () => {
     assert.equal(signals.supports_max_age_or_ttl_semantics, false)
   })
 
-  it('flags missing MDN max-age obligation for original-derived q3 citations (7f3 replay)', () => {
+  it('rejects model met claims when host completeness fails (7f3 replay)', () => {
     const index = buildRevisionProvenanceIndex(gL2OriginalDerivedSources, gL2OriginalDerivedRevisions)
+    const passageById = new Map(gL2OriginalDerivedPassages.map((p) => [p.passage_id, p]))
     const q3 = gL2OriginalDerivedPlan.questions.find((q) => q.question_id === 'q-g-l2-audit-3')!
-    const cited = buildCitedPassageProvenance(
-      gL2OriginalDerivedFindingQ3_7f3.passage_ids,
-      new Map(gL2OriginalDerivedPassages.map((p) => [p.passage_id, p])),
-      index,
+    const reviewed = applySemanticSupportReview(
+      [gL2OriginalDerivedFindingQ3_7f3],
+      {
+        kind: 'semantic_support_review',
+        judgments: [
+          {
+            finding_id: gL2OriginalDerivedFindingQ3_7f3.finding_id,
+            status: 'supported',
+            rationale: 'model claims met',
+            question_coverage: 'answers',
+            obligation_coverage: [
+              {
+                obligation_id: 'ob-mdn-max-age-semantics',
+                status: 'met',
+                supporting_passage_ids: ['fetch-mdn-original-derived:html:overview'],
+              },
+              {
+                obligation_id: 'ob-cf-max-age-semantics',
+                status: 'met',
+                supporting_passage_ids: ['fetch-cf-original-derived:html:max-age'],
+              },
+            ],
+          },
+        ],
+      },
+      '2026-10-21T12:00:00.000Z',
+      {
+        plan: gL2OriginalDerivedPlan,
+        passages: gL2OriginalDerivedPassages,
+        sources: gL2OriginalDerivedSources,
+        sourceRevisions: gL2OriginalDerivedRevisions,
+      },
     )
-    const assessment = assessBoundQuestionCoverageFromAdmittedEvidence(q3, cited)
+    assert.equal(reviewed[0]?.question_coverage?.status, 'partial')
+    const assessment = assessBoundQuestionCoverageFromAdmittedEvidence(q3, reviewed[0]!, {
+      passageById,
+      provenanceIndex: index,
+    })
     assert.equal(assessment.satisfiesRequiredFacets, false)
     assert.ok(assessment.missingFacets.includes('ob-mdn-max-age-semantics'))
-    assert.equal(assessment.wrongAspectEvidenceOnly, false)
   })
 
-  it('satisfies q3 obligations for positive control citations', () => {
-    const index = buildRevisionProvenanceIndex(gL2OriginalDerivedSources, gL2OriginalDerivedRevisions)
-    const q3 = gL2OriginalDerivedPlan.questions.find((q) => q.question_id === 'q-g-l2-audit-3')!
-    const cited = buildCitedPassageProvenance(
-      ['fetch-cf-original-derived:html:max-age', 'fetch-mdn-original-derived:html:max-age'],
-      new Map(gL2OriginalDerivedPassages.map((p) => [p.passage_id, p])),
-      index,
+  it('accepts positive control when obligation judgments and slots align', () => {
+    const reviewed = applySemanticSupportReview(
+      [gL2OriginalDerivedFindingQ3Positive],
+      {
+        kind: 'semantic_support_review',
+        judgments: [
+          {
+            finding_id: gL2OriginalDerivedFindingQ3Positive.finding_id,
+            status: 'supported',
+            rationale: 'Both slots document max-age semantics in admitted excerpts.',
+            question_coverage: 'answers',
+            obligation_coverage: [
+              {
+                obligation_id: 'ob-mdn-max-age-semantics',
+                status: 'met',
+                supporting_passage_ids: ['fetch-mdn-original-derived:html:max-age'],
+              },
+              {
+                obligation_id: 'ob-cf-max-age-semantics',
+                status: 'met',
+                supporting_passage_ids: ['fetch-cf-original-derived:html:max-age'],
+              },
+            ],
+          },
+        ],
+      },
+      '2026-10-21T12:00:01.000Z',
+      {
+        plan: gL2OriginalDerivedPlan,
+        passages: gL2OriginalDerivedPassages,
+        sources: gL2OriginalDerivedSources,
+        sourceRevisions: gL2OriginalDerivedRevisions,
+      },
     )
-    const assessment = assessBoundQuestionCoverageFromAdmittedEvidence(q3, cited)
-    assert.equal(assessment.satisfiesRequiredFacets, true)
-    assert.deepEqual(assessment.missingFacets, [])
+    assert.equal(reviewed[0]?.question_coverage?.status, 'answers')
+  })
+
+  it('downgrades model answers when plan question has no coverage_obligations', () => {
+    const plan = {
+      ...gL2OriginalDerivedPlan,
+      questions: [
+        {
+          ...gL2OriginalDerivedPlan.questions[0]!,
+          question_id: 'q-legacy',
+          coverage_obligations: undefined,
+        },
+      ],
+    }
+    const finding = { ...gL2OriginalDerivedFindingQ3_7f3, question_id: 'q-legacy' }
+    const enforced = enforceBoundQuestionCoverageOnFindings(
+      [
+        {
+          ...finding,
+          semantic_support: {
+            status: 'supported',
+            reviewer: 't',
+            reviewer_version: 't',
+            rationale: 'x',
+            reviewed_at: '2026-10-21T12:00:00.000Z',
+          },
+          question_coverage: {
+            status: 'answers',
+            reviewer: 't',
+            reviewer_version: 't',
+            rationale: 'x',
+            reviewed_at: '2026-10-21T12:00:00.000Z',
+          },
+        },
+      ],
+      {
+        plan,
+        passages: gL2OriginalDerivedPassages,
+        sources: gL2OriginalDerivedSources,
+        sourceRevisions: gL2OriginalDerivedRevisions,
+        reviewedAt: '2026-10-21T12:00:02.000Z',
+      },
+    )
+    assert.equal(enforced[0]?.question_coverage?.status, 'partial')
   })
 })

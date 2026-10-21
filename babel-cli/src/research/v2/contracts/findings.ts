@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { IsoDateTimeSchema, RecordIdSchema } from './common.js'
+import { PlanObligationCoverageRecordSchema } from './planObligationCoverageRecords.js'
 
 export const AssertionKindSchema = z.enum([
   'source_observation',
@@ -58,6 +59,7 @@ export const FindingRecordSchema = z
     source_integrity: SourceIntegrityStateSchema,
     semantic_support: SemanticSupportJudgmentSchema.optional(),
     question_coverage: QuestionCoverageJudgmentSchema.optional(),
+    plan_obligation_coverage: z.array(PlanObligationCoverageRecordSchema).optional(),
     assumption_ids: z.array(RecordIdSchema).optional(),
     conflicting_finding_ids: z.array(RecordIdSchema).optional(),
     calculation_ref: z.string().optional(),

@@ -4,8 +4,8 @@ import type { PassageRecord } from '../contracts/passages.js'
 import type { PlanRevision, QuestionRecord } from '../contracts/plan.js'
 import type { SourceRecord, SourceRevision } from '../contracts/sources.js'
 import type { z } from 'zod'
+import { assessObligationCoverageHostBound } from './obligationCoverageHostBound.js'
 import {
-  assessPlanCoverageObligations,
   buildCitedPassageProvenance,
   obligationsForQuestion,
   passageSupportsAudienceIntent,
@@ -15,7 +15,7 @@ import {
 type QuestionCoverageStatus = z.infer<typeof QuestionCoverageStatusSchema>
 
 const HOST_COVERAGE_REVIEWER = 'research-v2-bound-question-coverage'
-const HOST_COVERAGE_REVIEWER_VERSION = '0.2.0-plan-obligations'
+const HOST_COVERAGE_REVIEWER_VERSION = '0.3.0-obligation-judgments'
 
 export function buildRevisionProvenanceIndex(
   sources: readonly SourceRecord[],
@@ -71,28 +71,34 @@ export interface BoundCoverageAssessment {
 
 export function assessBoundQuestionCoverageFromAdmittedEvidence(
   question: QuestionRecord,
-  citedProvenance: ReturnType<typeof buildCitedPassageProvenance>,
+  finding: FindingRecord,
+  params: {
+    passageById: ReadonlyMap<string, PassageRecord>
+    provenanceIndex: ReturnType<typeof buildRevisionProvenanceIndex>
+  },
 ): BoundCoverageAssessment {
   const obligations = obligationsForQuestion(question)
   if (obligations.length === 0) {
     return {
-      satisfiesRequiredFacets: true,
+      satisfiesRequiredFacets: false,
       missingFacets: [],
       wrongAspectEvidenceOnly: false,
     }
   }
-  const assessment = assessPlanCoverageObligations(obligations, citedProvenance)
-  return {
-    satisfiesRequiredFacets: assessment.satisfiesAllObligations,
-    missingFacets: assessment.missingObligationIds,
-    wrongAspectEvidenceOnly: assessment.wrongAspectOnly,
-  }
+  return assessObligationCoverageHostBound(question, finding, params)
 }
 
 function downgradeCoverageStatus(
   modelStatus: Exclude<QuestionCoverageStatus, 'not_assessed'>,
   assessment: BoundCoverageAssessment,
+  hasObligations: boolean,
 ): QuestionCoverageStatus {
+  if (!hasObligations) {
+    if (modelStatus === 'answers') {
+      return 'partial'
+    }
+    return modelStatus
+  }
   if (modelStatus !== 'answers') {
     return modelStatus
   }
@@ -106,8 +112,9 @@ function downgradeCoverageStatus(
 }
 
 /**
- * Host-side bound on model `question_coverage`: never upgrades; downgrades `answers` when cited
- * passages do not satisfy explicit plan `coverage_obligations` per source slot and aspect.
+ * Host-side bound on model `question_coverage`: never upgrades; validates plan obligation
+ * judgments and slot/passage identity. Questions without `coverage_obligations` cannot
+ * retain model `answers` (conservative partial).
  */
 export function enforceBoundQuestionCoverageOnFindings(
   findings: readonly FindingRecord[],
@@ -133,26 +140,28 @@ export function enforceBoundQuestionCoverageOnFindings(
       return finding
     }
     const obligations = obligationsForQuestion(question)
-    if (obligations.length === 0) {
-      return finding
-    }
-    if (finding.semantic_support?.status !== 'supported') {
+    if (finding.semantic_support?.status !== 'supported' && obligations.length > 0) {
       return finding
     }
 
-    const citedProvenance = buildCitedPassageProvenance(
-      finding.passage_ids,
+    const assessment = assessBoundQuestionCoverageFromAdmittedEvidence(question, finding, {
       passageById,
       provenanceIndex,
+    })
+    const boundStatus = downgradeCoverageStatus(
+      modelCoverage,
+      assessment,
+      obligations.length > 0,
     )
-    const assessment = assessBoundQuestionCoverageFromAdmittedEvidence(question, citedProvenance)
-    const boundStatus = downgradeCoverageStatus(modelCoverage, assessment)
     if (boundStatus === modelCoverage) {
       return finding
     }
 
     const missing = assessment.missingFacets.join(',')
-    const hostRationale = `Host bound-question coverage: downgraded model "${modelCoverage}" to "${boundStatus}" because admitted citations lack obligation(s): ${missing}.`
+    const hostRationale =
+      obligations.length === 0
+        ? `Host bound-question coverage: downgraded model "${modelCoverage}" to "${boundStatus}" because plan question has no coverage_obligations (legacy conservative bound).`
+        : `Host bound-question coverage: downgraded model "${modelCoverage}" to "${boundStatus}" because obligation judgment(s) fail host validation: ${missing}.`
     const priorRationale = finding.question_coverage?.rationale ?? ''
     return {
       ...finding,
@@ -167,3 +176,5 @@ export function enforceBoundQuestionCoverageOnFindings(
     }
   })
 }
+
+export { buildCitedPassageProvenance }

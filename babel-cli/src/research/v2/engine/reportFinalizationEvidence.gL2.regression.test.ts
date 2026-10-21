@@ -14,6 +14,7 @@ import {
   GL2_ORIGINAL_DERIVED_LABEL,
   gL2AuditDerivedModelReviewBothClaimingAnswers,
   gL2AuditDerivedModelReviewClaimingAnswersFor,
+  gL2PositiveControlModelReview,
   gL2NonCacheFindingInsufficient,
   gL2NonCachePassages,
   gL2NonCachePlan,
@@ -86,23 +87,7 @@ describe(`G-L2 original-derived coverage (${GL2_ORIGINAL_DERIVED_LABEL})`, () =>
     const reviewedAt = '2026-10-21T11:06:01.500Z'
     const reviewed = applySemanticSupportReview(
       [gL2OriginalDerivedFindingQ3Positive, gL2OriginalDerivedFindingQ4Positive],
-      {
-        kind: 'semantic_support_review',
-        judgments: [
-          {
-            finding_id: gL2OriginalDerivedFindingQ3Positive.finding_id,
-            status: 'supported',
-            rationale: 'Both slots document max-age semantics in admitted excerpts.',
-            question_coverage: 'answers',
-          },
-          {
-            finding_id: gL2OriginalDerivedFindingQ4Positive.finding_id,
-            status: 'supported',
-            rationale: 'Audience roles are explicit per source.',
-            question_coverage: 'answers',
-          },
-        ],
-      },
+      gL2PositiveControlModelReview(),
       reviewedAt,
       {
         plan: gL2OriginalDerivedPlan,
@@ -162,7 +147,29 @@ describe(`G-L2 original-derived coverage (${GL2_ORIGINAL_DERIVED_LABEL})`, () =>
     const reviewedAt = '2026-10-21T11:10:05.000Z'
     const reviewed = applySemanticSupportReview(
       [gL2RenamedSlotFindingPartial],
-      gL2AuditDerivedModelReviewClaimingAnswersFor(gL2RenamedSlotFindingPartial.finding_id),
+      {
+        kind: 'semantic_support_review',
+        judgments: [
+          {
+            finding_id: gL2RenamedSlotFindingPartial.finding_id,
+            status: 'supported',
+            rationale: 'model claims compare answered',
+            question_coverage: 'answers',
+            obligation_coverage: [
+              {
+                obligation_id: 'ob-slot-a-max-age',
+                status: 'met',
+                supporting_passage_ids: ['fetch-doc-a-renamed:html:0'],
+              },
+              {
+                obligation_id: 'ob-slot-b-max-age',
+                status: 'met',
+                supporting_passage_ids: ['fetch-doc-b-renamed:html:0'],
+              },
+            ],
+          },
+        ],
+      },
       reviewedAt,
       {
         plan: gL2RenamedSlotPlan,
@@ -179,7 +186,38 @@ describe(`G-L2 original-derived coverage (${GL2_ORIGINAL_DERIVED_LABEL})`, () =>
     const reviewedAt = '2026-10-21T11:12:05.000Z'
     const reviewed = applySemanticSupportReview(
       [gL2NonCacheFindingInsufficient],
-      gL2AuditDerivedModelReviewClaimingAnswersFor(gL2NonCacheFindingInsufficient.finding_id),
+      {
+        kind: 'semantic_support_review',
+        judgments: [
+          {
+            finding_id: gL2NonCacheFindingInsufficient.finding_id,
+            status: 'supported',
+            rationale: 'model claims compare answered',
+            question_coverage: 'answers',
+            obligation_coverage: [
+              {
+                obligation_id: 'ob-alpha-auth-mechanism',
+                status: 'met',
+                supporting_passage_ids: ['fetch-alpha:html:auth'],
+              },
+              {
+                obligation_id: 'ob-beta-auth-mechanism',
+                status: 'met',
+                supporting_passage_ids: ['fetch-beta:html:audience'],
+              },
+              {
+                obligation_id: 'ob-alpha-audience',
+                status: 'unmet',
+              },
+              {
+                obligation_id: 'ob-beta-audience',
+                status: 'met',
+                supporting_passage_ids: ['fetch-beta:html:audience'],
+              },
+            ],
+          },
+        ],
+      },
       reviewedAt,
       {
         plan: gL2NonCachePlan,
