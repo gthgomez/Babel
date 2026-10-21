@@ -1,0 +1,34 @@
+{
+  "schema": "research-v2-c-prep-binding-correction/v1",
+  "corrects": "review-artifacts/c-prep-e1547b75-readiness.json",
+  "live_authorization_in_this_message": false,
+  "forthcoming_execution": {
+    "pwd_and_cwd": "/tmp/babel-validation-prep-e1547b75/babel-cli",
+    "bin_absolute": "/tmp/babel-validation-prep-e1547b75/babel-cli/bin/babel.js"
+  },
+  "runtime_module_sha256_absolute_paths": {
+    "artifact": "review-artifacts/c-prep-e1547b75-runtime-fingerprints-absolute.txt",
+    "cliEntryDispatch.js": "/tmp/babel-validation-prep-e1547b75/babel-cli/dist/cliEntryDispatch.js",
+    "researchV2MissionRun.js": "/tmp/babel-validation-prep-e1547b75/babel-cli/dist/research/v2/cli/researchV2MissionRun.js",
+    "providerResearchModelBridge.js": "/tmp/babel-validation-prep-e1547b75/babel-cli/dist/research/v2/model/providerResearchModelBridge.js",
+    "createAdmittedSourceSearchProvider.js": "/tmp/babel-validation-prep-e1547b75/babel-cli/dist/research/v2/access/createAdmittedSourceSearchProvider.js",
+    "createMissionProductionSearchProvider.js": "/tmp/babel-validation-prep-e1547b75/babel-cli/dist/research/v2/access/createMissionProductionSearchProvider.js"
+  },
+  "config_path_environment_overrides": {
+    "BABEL_MODEL_POLICY_PATH": null,
+    "BABEL_RESEARCH_V2_MODEL_ROUTE_KEY": null,
+    "BABEL_RESEARCH_V2_PROVIDER": null,
+    "BABEL_RESEARCH_V2_MODEL_ID": null,
+    "note": "All unset at binding correction; effective policy_path resolved to /tmp/babel-validation-prep-e1547b75/config/model-policy.json via default repo layout (model_policy_json)."
+  },
+  "model_route_evidence": {
+    "mixed_original_stdout_stderr_log": "review-artifacts/c-prep-e1547b75-model-route.log",
+    "separated_json": "review-artifacts/c-prep-e1547b75-model-route.json"
+  },
+  "actions_not_taken": [
+    "no_reinstall",
+    "no_rebuild",
+    "no_source_change",
+    "no_model_search_fetch"
+  ]
+}

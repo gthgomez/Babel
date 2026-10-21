@@ -29,11 +29,14 @@
     "model_policy.json": "26ecae78e66f76d3b67fe11974a044c0cc1f3526c44053abccbc375166ede3fe"
   },
   "source_fingerprints_after_build_unchanged": true,
-  "runtime_fingerprints_after_clean_build": "review-artifacts/c-prep-e1547b75-runtime-fingerprints.txt",
+  "runtime_fingerprints_after_clean_build": "review-artifacts/c-prep-e1547b75-runtime-fingerprints-absolute.txt",
+  "binding_correction": "review-artifacts/c-prep-e1547b75-binding-correction.json",
+  "forthcoming_execution_cwd": "/tmp/babel-validation-prep-e1547b75/babel-cli",
   "bin_absolute": "/tmp/babel-validation-prep-e1547b75/babel-cli/bin/babel.js",
   "config_lookup": {
     "model_policy_absolute": "/tmp/babel-validation-prep-e1547b75/config/model-policy.json",
-    "model_route_artifact": "review-artifacts/c-prep-e1547b75-model-route.json"
+    "model_route_json": "review-artifacts/c-prep-e1547b75-model-route.json",
+    "model_route_mixed_log": "review-artifacts/c-prep-e1547b75-model-route.log"
   },
   "credentials_boolean_only": {
     "openrouter_api_key_configured": true,

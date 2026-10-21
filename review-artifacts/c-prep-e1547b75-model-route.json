@@ -6,6 +6,3 @@
   "selection_basis": "model_policy_json",
   "backend_key": "research-v2-cli"
 }
-(node:16508) ExperimentalWarning: SQLite is an experimental feature and might change at any time
-(Use `node --trace-warnings ...` to show where the warning was created)
-(node:16508) ExperimentalWarning: Importing WebAssembly module instances is an experimental feature and might change at any time
