@@ -1,0 +1,13 @@
+export type SourceAccessFailureCategory =
+  | 'policy_denied'
+  | 'network_error'
+  | 'timeout'
+  | 'not_found'
+  | 'rate_limited'
+  | 'truncated'
+  | 'extraction_failed'
+  | 'unsupported_media'
+  | 'private_address_blocked'
+  | 'search_provider_unavailable'
+  | 'empty_body'
+  | 'cancelled'

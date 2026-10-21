@@ -1,0 +1,63 @@
+{
+  "schema": "research-v2-main-merge-qualification/v1",
+  "pr": 406,
+  "branch": "cursor/research-v2-post-review-settlement-fc31",
+  "preserved_evidence_anchor": "e1547b756d7de3e41cbad613b95cfc0b62b75af8",
+  "merged_main": {
+    "commit": "ad690d423bac2b0e68afa7bf18aa2fda15e9a299",
+    "pr": 410,
+    "note": "GitHub test-merge base was stale at d9e42b14; this merge qualifies combined runtime"
+  },
+  "merge_commit": {
+    "commit": "fe5d699ab7758580f90fee17e3bb3df998d37b2b",
+    "tree": "0927e6b9fcc244670243f5a8c686b2e83687e592",
+    "parent_first": "e1547b756d7de3e41cbad613b95cfc0b62b75af8",
+    "parent_second": "ad690d423bac2b0e68afa7bf18aa2fda15e9a299",
+    "merge_base_with_main_before_merge": "d9e42b14b00b6dba25f0415ae16b084363386a01",
+    "touched_path_overlap_branch_vs_main": []
+  },
+  "prior_research_bindings_unchanged": {
+    "metadata_evidence_correction": "review-artifacts/a406-metadata-evidence-correction-receipt.json",
+    "integration_code_parent": "d672384f0bd29f22fee345ae240f3b773b2be7e8",
+    "canonical_a": "eb79fd3f2e249293975409897a6ea4234f205f57"
+  },
+  "offline_qualification": {
+    "tested_commit": "fe5d699ab7758580f90fee17e3bb3df998d37b2b",
+    "tested_tree": "0927e6b9fcc244670243f5a8c686b2e83687e592",
+    "runs": [
+      {
+        "command": "cd babel-cli && npm run typecheck > /opt/cursor/artifacts/a406-main-merge-typecheck.log 2>&1; echo TC=$?",
+        "outer_exit_echo": "TC=0",
+        "raw_log": "/opt/cursor/artifacts/a406-main-merge-typecheck.log"
+      },
+      {
+        "command": "cd babel-cli && npm run build > /opt/cursor/artifacts/a406-main-merge-build.log 2>&1; echo BD=$?",
+        "outer_exit_echo": "BD=0",
+        "raw_log": "/opt/cursor/artifacts/a406-main-merge-build.log"
+      },
+      {
+        "command": "cd babel-cli && node --import tsx --test (16 focused research v2 test files)",
+        "outer_exit_echo": "RESEARCH=0",
+        "raw_log": "/opt/cursor/artifacts/a406-main-merge-research-focused-tap.log",
+        "tap_summary": "# tests 75; # pass 75; # fail 0"
+      },
+      {
+        "command": "cd babel-cli && npx tsx --import ./src/testinfra/register-no-ambient-inference.mjs --test (6 #410 coding-loop files)",
+        "outer_exit_echo": "CHAT=0",
+        "raw_log": "/opt/cursor/artifacts/a406-main-merge-coding-loop-tap.log",
+        "tap_summary": "# tests 65; # pass 65; # fail 0"
+      }
+    ]
+  },
+  "excluded": [
+    "live model/search/fetch requests",
+    "e154 validation runtime changes",
+    "permission-held live evidence publication"
+  ],
+  "pr_merge_to_main": false,
+  "qualification_metadata_commit": {
+    "commit": "6c8d8b19fb4a156aacdbf62330f1ffbb89f87993",
+    "tree": "d4e5a1a3578f34c48139bd4d925062d52d32839f",
+    "parent": "fe5d699ab7758580f90fee17e3bb3df998d37b2b"
+  }
+}

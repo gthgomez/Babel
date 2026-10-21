@@ -1,0 +1,443 @@
+{
+  "schema": "g-l2-original-derived-regression/v1",
+  "fixture_label": "g-l2-original-derived-regression/v1",
+  "cache_comparison_defect": {
+    "plan": {
+      "plan_revision_id": "plan-g-l2-original-derived-cache",
+      "mission_id": "mission-g-l2-constrained-comparison",
+      "created_at": "2026-10-21T11:05:00.000Z",
+      "revision_reason": "original_derived_q3_q4_coverage_obligations",
+      "questions": [
+        {
+          "question_id": "q-g-l2-audit-3",
+          "text": "Do MDN and Cloudflare public documentation agree or differ on Cache-Control max-age guidance for caching static assets?",
+          "importance": "critical",
+          "evidence_requirement": "Separate developer.mozilla.org and developers.cloudflare.com citations",
+          "status": "open",
+          "coverage_obligations": [
+            {
+              "obligation_id": "ob-mdn-max-age-semantics",
+              "source_slot": "comparison_mdn",
+              "aspect": "technical_effect",
+              "technical_effect": "max_age_or_ttl_semantics"
+            },
+            {
+              "obligation_id": "ob-cf-max-age-semantics",
+              "source_slot": "comparison_cloudflare",
+              "aspect": "technical_effect",
+              "technical_effect": "max_age_or_ttl_semantics"
+            }
+          ]
+        },
+        {
+          "question_id": "q-g-l2-audit-4",
+          "text": "Who is each document written for — browser-facing developers versus edge/CDN operators?",
+          "importance": "critical",
+          "evidence_requirement": "Keep browser vs edge/CDN roles explicit per source",
+          "status": "open",
+          "coverage_obligations": [
+            {
+              "obligation_id": "ob-mdn-audience",
+              "source_slot": "comparison_mdn",
+              "aspect": "audience_intent"
+            },
+            {
+              "obligation_id": "ob-cf-audience",
+              "source_slot": "comparison_cloudflare",
+              "aspect": "audience_intent"
+            }
+          ]
+        }
+      ]
+    },
+    "sources": [
+      {
+        "source_id": "web-mdn-cache-original-derived",
+        "kind": "web",
+        "canonical_key": "https://developer.mozilla.org/en-US/docs/Web/HTTP/Caching",
+        "observed_urls": ["https://developer.mozilla.org/en-US/docs/Web/HTTP/Caching"],
+        "title": "MDN HTTP Caching (truncated overview excerpt)",
+        "coverage_source_slot": "comparison_mdn"
+      },
+      {
+        "source_id": "web-cf-cache-original-derived",
+        "kind": "web",
+        "canonical_key": "https://developers.cloudflare.com/cache/concepts/cache-control/",
+        "observed_urls": ["https://developers.cloudflare.com/cache/concepts/cache-control/"],
+        "title": "Cloudflare cache-control concepts",
+        "coverage_source_slot": "comparison_cloudflare"
+      }
+    ],
+    "source_revisions": [
+      {
+        "revision_id": "rev-mdn-original-derived-trunc",
+        "source_id": "web-mdn-cache-original-derived",
+        "content_hash": "f819829f8422aa729d30956e80295fca64afa1d7cf54322707b139bc2194ae00",
+        "retrieved_at": "2026-10-21T11:00:01.000Z",
+        "extraction_version": "html-original-derived/v1",
+        "media_type": "text/html",
+        "completeness": "truncated",
+        "byte_length_received": 4200,
+        "truncation_reason": "host_decoded_byte_limit"
+      },
+      {
+        "revision_id": "rev-mdn-original-derived-max-age",
+        "source_id": "web-mdn-cache-original-derived",
+        "content_hash": "ed15af634e95db75e1fb51256d55b49853acb83c9d6066bd34c98fcb339768ba",
+        "retrieved_at": "2026-10-21T11:00:01.500Z",
+        "extraction_version": "html-original-derived/v1",
+        "media_type": "text/html",
+        "completeness": "complete",
+        "byte_length_received": 9800
+      },
+      {
+        "revision_id": "rev-cf-original-derived-complete",
+        "source_id": "web-cf-cache-original-derived",
+        "content_hash": "4e2867d79bbe1692b4cc32c093919410fe79c041b689568b61bf913a86567a5d",
+        "retrieved_at": "2026-10-21T11:00:02.000Z",
+        "extraction_version": "html-original-derived/v1",
+        "media_type": "text/html",
+        "completeness": "complete",
+        "byte_length_received": 4800
+      },
+      {
+        "revision_id": "rev-mdn-original-derived-audience",
+        "source_id": "web-mdn-cache-original-derived",
+        "content_hash": "ed95bd0c30257807eb5f38c1dac38f1beca350750a510f843a3dbb05761f1454",
+        "retrieved_at": "2026-10-21T11:00:01.600Z",
+        "extraction_version": "html-original-derived/v1",
+        "media_type": "text/html",
+        "completeness": "complete",
+        "byte_length_received": 2100
+      },
+      {
+        "revision_id": "rev-cf-original-derived-audience",
+        "source_id": "web-cf-cache-original-derived",
+        "content_hash": "67fa425330317522615bab74ff420545197f788eb4f6486aedf4c2c8ec4cbe4f",
+        "retrieved_at": "2026-10-21T11:00:02.100Z",
+        "extraction_version": "html-original-derived/v1",
+        "media_type": "text/html",
+        "completeness": "complete",
+        "byte_length_received": 2400
+      }
+    ],
+    "passages": [
+      {
+        "passage_id": "fetch-mdn-original-derived:html:overview",
+        "source_revision_id": "rev-mdn-original-derived-trunc",
+        "locator": { "kind": "section", "section_id": "overview" },
+        "text_ref": {
+          "mode": "inline",
+          "text": "The HTTP cache stores a response and uses cache headers, including Cache-Control, to decide how responses are cached and reused. This overview introduces cache types and validation.",
+          "text_hash": "f819829f8422aa729d30956e80295fca64afa1d7cf54322707b139bc2194ae00"
+        },
+        "extraction_notes": ["inline_text_truncated:host_decoded_byte_limit"]
+      },
+      {
+        "passage_id": "fetch-mdn-original-derived:html:max-age",
+        "source_revision_id": "rev-mdn-original-derived-max-age",
+        "locator": { "kind": "section", "section_id": "max-age" },
+        "text_ref": {
+          "mode": "inline",
+          "text": "The max-age directive in Cache-Control indicates the maximum time in seconds a resource is considered fresh. Browser caches honor max-age before revalidation.",
+          "text_hash": "ed15af634e95db75e1fb51256d55b49853acb83c9d6066bd34c98fcb339768ba"
+        }
+      },
+      {
+        "passage_id": "fetch-cf-original-derived:html:max-age",
+        "source_revision_id": "rev-cf-original-derived-complete",
+        "locator": { "kind": "section", "section_id": "cache-control" },
+        "text_ref": {
+          "mode": "inline",
+          "text": "Cache-Control max-age directive controls how long a response may be cached before revalidation is required.",
+          "text_hash": "4e2867d79bbe1692b4cc32c093919410fe79c041b689568b61bf913a86567a5d"
+        }
+      },
+      {
+        "passage_id": "fetch-mdn-original-derived:html:audience",
+        "source_revision_id": "rev-mdn-original-derived-audience",
+        "locator": { "kind": "section", "section_id": "audience" },
+        "text_ref": {
+          "mode": "inline",
+          "text": "This guide is written for browser-facing web developers implementing HTTP caching in user agents.",
+          "text_hash": "ed95bd0c30257807eb5f38c1dac38f1beca350750a510f843a3dbb05761f1454"
+        }
+      },
+      {
+        "passage_id": "fetch-cf-original-derived:html:audience",
+        "source_revision_id": "rev-cf-original-derived-audience",
+        "locator": { "kind": "section", "section_id": "audience" },
+        "text_ref": {
+          "mode": "inline",
+          "text": "This documentation is intended for CDN and edge operators configuring cache rules at the edge.",
+          "text_hash": "67fa425330317522615bab74ff420545197f788eb4f6486aedf4c2c8ec4cbe4f"
+        }
+      }
+    ],
+    "findings": {
+      "q3_7f3": {
+        "finding_id": "finding-g-l2-subset-q3-7f3",
+        "question_id": "q-g-l2-audit-3",
+        "assertion_text": "Cloudflare documents max-age at the edge; MDN caching overview was retrieved but the admitted MDN excerpt names Cache-Control without max-age TTL semantics.",
+        "assertion_kind": "source_observation",
+        "passage_ids": [
+          "fetch-cf-original-derived:html:max-age",
+          "fetch-mdn-original-derived:html:overview"
+        ],
+        "source_integrity": "not_checked",
+        "created_at": "2026-10-21T11:00:10.000Z"
+      },
+      "q4_a0cf": {
+        "finding_id": "finding-g-l2-subset-q4-a0cf",
+        "question_id": "q-g-l2-audit-4",
+        "assertion_text": "Cache-Control max-age applies to browser caches and CDN edge caches alike.",
+        "assertion_kind": "source_observation",
+        "passage_ids": ["fetch-cf-original-derived:html:max-age"],
+        "source_integrity": "not_checked",
+        "created_at": "2026-10-21T11:00:11.000Z"
+      },
+      "q3_positive_control": {
+        "finding_id": "finding-g-l2-subset-q3-positive",
+        "question_id": "q-g-l2-audit-3",
+        "assertion_text": "MDN and Cloudflare both document max-age freshness semantics for cached responses in the admitted excerpts.",
+        "assertion_kind": "source_observation",
+        "passage_ids": [
+          "fetch-cf-original-derived:html:max-age",
+          "fetch-mdn-original-derived:html:max-age"
+        ],
+        "source_integrity": "not_checked",
+        "created_at": "2026-10-21T11:00:12.000Z"
+      },
+      "q4_positive_control": {
+        "finding_id": "finding-g-l2-subset-q4-positive",
+        "question_id": "q-g-l2-audit-4",
+        "assertion_text": "MDN targets browser-facing developers while Cloudflare targets edge/CDN operators in the admitted excerpts.",
+        "assertion_kind": "source_observation",
+        "passage_ids": [
+          "fetch-mdn-original-derived:html:audience",
+          "fetch-cf-original-derived:html:audience"
+        ],
+        "source_integrity": "not_checked",
+        "created_at": "2026-10-21T11:00:13.000Z"
+      }
+    }
+  },
+  "renamed_slot_cache_comparison": {
+    "plan": {
+      "plan_revision_id": "plan-g-l2-renamed-slot-cache",
+      "mission_id": "mission-g-l2-constrained-comparison",
+      "created_at": "2026-10-21T11:10:00.000Z",
+      "revision_reason": "renamed_provider_slots_same_obligations",
+      "questions": [
+        {
+          "question_id": "q-g-l2-renamed-compare",
+          "text": "Do public_doc_a and public_doc_b agree or differ on Cache-Control max-age guidance for caching static assets?",
+          "importance": "critical",
+          "evidence_requirement": "Separate citations per logical provider slot",
+          "status": "open",
+          "coverage_obligations": [
+            {
+              "obligation_id": "ob-slot-a-max-age",
+              "source_slot": "public_doc_a",
+              "aspect": "technical_effect",
+              "technical_effect": "max_age_or_ttl_semantics"
+            },
+            {
+              "obligation_id": "ob-slot-b-max-age",
+              "source_slot": "public_doc_b",
+              "aspect": "technical_effect",
+              "technical_effect": "max_age_or_ttl_semantics"
+            }
+          ]
+        }
+      ]
+    },
+    "sources": [
+      {
+        "source_id": "web-doc-a-renamed",
+        "kind": "web",
+        "canonical_key": "https://docs.vendor-a.example/cache/overview",
+        "observed_urls": ["https://docs.vendor-a.example/cache/overview"],
+        "title": "Vendor A cache overview (renamed slot)",
+        "coverage_source_slot": "public_doc_a"
+      },
+      {
+        "source_id": "web-doc-b-renamed",
+        "kind": "web",
+        "canonical_key": "https://docs.vendor-b.example/edge/cache-control",
+        "observed_urls": ["https://docs.vendor-b.example/edge/cache-control"],
+        "title": "Vendor B cache control (renamed slot)",
+        "coverage_source_slot": "public_doc_b"
+      }
+    ],
+    "source_revisions": [
+      {
+        "revision_id": "rev-doc-a-renamed-trunc",
+        "source_id": "web-doc-a-renamed",
+        "content_hash": "f819829f8422aa729d30956e80295fca64afa1d7cf54322707b139bc2194ae00",
+        "retrieved_at": "2026-10-21T11:10:01.000Z",
+        "extraction_version": "html-renamed-slot/v1",
+        "media_type": "text/html",
+        "completeness": "truncated",
+        "byte_length_received": 3200,
+        "truncation_reason": "host_decoded_byte_limit"
+      },
+      {
+        "revision_id": "rev-doc-b-renamed-complete",
+        "source_id": "web-doc-b-renamed",
+        "content_hash": "4e2867d79bbe1692b4cc32c093919410fe79c041b689568b61bf913a86567a5d",
+        "retrieved_at": "2026-10-21T11:10:02.000Z",
+        "extraction_version": "html-renamed-slot/v1",
+        "media_type": "text/html",
+        "completeness": "complete",
+        "byte_length_received": 4100
+      }
+    ],
+    "passages": [
+      {
+        "passage_id": "fetch-doc-a-renamed:html:0",
+        "source_revision_id": "rev-doc-a-renamed-trunc",
+        "locator": { "kind": "section", "section_id": "overview" },
+        "text_ref": {
+          "mode": "inline",
+          "text": "The HTTP cache stores a response and uses cache headers, including Cache-Control, to decide how responses are cached and reused. This overview introduces cache types and validation.",
+          "text_hash": "f819829f8422aa729d30956e80295fca64afa1d7cf54322707b139bc2194ae00"
+        },
+        "extraction_notes": ["inline_text_truncated:host_decoded_byte_limit"]
+      },
+      {
+        "passage_id": "fetch-doc-b-renamed:html:0",
+        "source_revision_id": "rev-doc-b-renamed-complete",
+        "locator": { "kind": "section", "section_id": "cache-control" },
+        "text_ref": {
+          "mode": "inline",
+          "text": "Cache-Control max-age directive controls how long a response may be cached before revalidation is required.",
+          "text_hash": "4e2867d79bbe1692b4cc32c093919410fe79c041b689568b61bf913a86567a5d"
+        }
+      }
+    ],
+    "findings": {
+      "compare_partial": {
+        "finding_id": "finding-g-l2-renamed-compare-partial",
+        "question_id": "q-g-l2-renamed-compare",
+        "assertion_text": "Slot B documents max-age; slot A overview mentions Cache-Control only in the admitted excerpt.",
+        "assertion_kind": "source_observation",
+        "passage_ids": ["fetch-doc-b-renamed:html:0", "fetch-doc-a-renamed:html:0"],
+        "source_integrity": "not_checked",
+        "created_at": "2026-10-21T11:10:10.000Z"
+      }
+    }
+  },
+  "non_cache_comparison": {
+    "plan": {
+      "plan_revision_id": "plan-g-l2-non-cache-compare",
+      "mission_id": "mission-g-l2-constrained-comparison",
+      "created_at": "2026-10-21T11:12:00.000Z",
+      "revision_reason": "non_cache_obligations_distinct_aspects",
+      "questions": [
+        {
+          "question_id": "q-g-l2-api-compare",
+          "text": "How do Provider Alpha and Provider Beta public API guides compare on authentication mechanism and intended audience?",
+          "importance": "critical",
+          "evidence_requirement": "Cite each provider slot separately; do not merge roles",
+          "status": "open",
+          "coverage_obligations": [
+            {
+              "obligation_id": "ob-alpha-auth-mechanism",
+              "source_slot": "provider_alpha",
+              "aspect": "technical_effect",
+              "technical_effect": "authentication_mechanism"
+            },
+            {
+              "obligation_id": "ob-beta-auth-mechanism",
+              "source_slot": "provider_beta",
+              "aspect": "technical_effect",
+              "technical_effect": "authentication_mechanism"
+            },
+            {
+              "obligation_id": "ob-alpha-audience",
+              "source_slot": "provider_alpha",
+              "aspect": "audience_intent"
+            },
+            {
+              "obligation_id": "ob-beta-audience",
+              "source_slot": "provider_beta",
+              "aspect": "audience_intent"
+            }
+          ]
+        }
+      ]
+    },
+    "sources": [
+      {
+        "source_id": "web-provider-alpha",
+        "kind": "web",
+        "canonical_key": "https://api.alpha.example/docs/auth",
+        "observed_urls": ["https://api.alpha.example/docs/auth"],
+        "coverage_source_slot": "provider_alpha"
+      },
+      {
+        "source_id": "web-provider-beta",
+        "kind": "web",
+        "canonical_key": "https://api.beta.example/docs/overview",
+        "observed_urls": ["https://api.beta.example/docs/overview"],
+        "coverage_source_slot": "provider_beta"
+      }
+    ],
+    "source_revisions": [
+      {
+        "revision_id": "rev-alpha-auth",
+        "source_id": "web-provider-alpha",
+        "content_hash": "5708ac7e3e1f04b26b1fedfbc48a8b7ca3c897869c140b766385092c1a4d7642",
+        "retrieved_at": "2026-10-21T11:12:01.000Z",
+        "extraction_version": "html-non-cache/v1",
+        "media_type": "text/html",
+        "completeness": "complete",
+        "byte_length_received": 1800
+      },
+      {
+        "revision_id": "rev-beta-audience-only",
+        "source_id": "web-provider-beta",
+        "content_hash": "e906dd29c9611317f29f34c099731edcf75fbe4535a42a89f1a4c43d48efbfbd",
+        "retrieved_at": "2026-10-21T11:12:02.000Z",
+        "extraction_version": "html-non-cache/v1",
+        "media_type": "text/html",
+        "completeness": "complete",
+        "byte_length_received": 1600
+      }
+    ],
+    "passages": [
+      {
+        "passage_id": "fetch-alpha:html:auth",
+        "source_revision_id": "rev-alpha-auth",
+        "locator": { "kind": "section", "section_id": "auth" },
+        "text_ref": {
+          "mode": "inline",
+          "text": "Provider Alpha documents that clients must send an Authorization bearer token on each API request.",
+          "text_hash": "5708ac7e3e1f04b26b1fedfbc48a8b7ca3c897869c140b766385092c1a4d7642"
+        }
+      },
+      {
+        "passage_id": "fetch-beta:html:audience",
+        "source_revision_id": "rev-beta-audience-only",
+        "locator": { "kind": "section", "section_id": "audience" },
+        "text_ref": {
+          "mode": "inline",
+          "text": "Provider Beta wrote this guide intended for application developers integrating the public REST API.",
+          "text_hash": "e906dd29c9611317f29f34c099731edcf75fbe4535a42a89f1a4c43d48efbfbd"
+        }
+      }
+    ],
+    "findings": {
+      "api_compare_insufficient": {
+        "finding_id": "finding-g-l2-api-compare-insufficient",
+        "question_id": "q-g-l2-api-compare",
+        "assertion_text": "Alpha requires bearer tokens; Beta addresses application developers but does not document an authentication mechanism in the admitted excerpt.",
+        "assertion_kind": "source_observation",
+        "passage_ids": ["fetch-alpha:html:auth", "fetch-beta:html:audience"],
+        "source_integrity": "not_checked",
+        "created_at": "2026-10-21T11:12:10.000Z"
+      }
+    }
+  }
+}

@@ -1,0 +1,119 @@
+{
+  "checkpoint_base": {
+    "commit": "eb79fd3f2e249293975409897a6ea4234f205f57",
+    "tree": "7e2145c361f627dae7413e2270012bd658901207",
+    "role": "canonical A production (integrity, source-slot, eligible indexing)"
+  },
+  "integration_transport_commit": {
+    "commit": "cb3d4423f3d2c38121f5d8daac52f35a54f0f073",
+    "tree": "4ef0e1390b694f221829eed57c777a7de5608df1"
+  },
+  "integration_code_parent": {
+    "commit": "d672384f0bd29f22fee345ae240f3b773b2be7e8",
+    "tree": "33b30ea18277782fde12d49534592c355ae51f9f",
+    "parent_commit": "41ed59ff829288a22b6060f6e6099afb4495d3ef"
+  },
+  "branch_metadata_tip": {
+    "commit": "0ac4ded6781555e97ab6317a212813d4f1485437",
+    "tree": "955604244cc22a14a12f589647d6a94eb28d9e02",
+    "note": "Donor-map metadata only; proof runs bound to integration_code_parent tree"
+  },
+  "metadata_evidence_correction": "review-artifacts/a406-metadata-evidence-correction-receipt.json",
+  "main_merge_qualification": {
+    "receipt": "review-artifacts/a406-main-ad690-merge-qualification-receipt.json",
+    "merge_commit": "fe5d699ab7758580f90fee17e3bb3df998d37b2b",
+    "merge_tree": "0927e6b9fcc244670243f5a8c686b2e83687e592",
+    "parent_branch": "e1547b756d7de3e41cbad613b95cfc0b62b75af8",
+    "merged_main": "ad690d423bac2b0e68afa7bf18aa2fda15e9a299",
+    "merge_base_before_merge": "d9e42b14b00b6dba25f0415ae16b084363386a01",
+    "path_overlap_verified_empty": true
+  },
+  "integration_branch_tip": {
+    "merge_code_commit": "fe5d699ab7758580f90fee17e3bb3df998d37b2b",
+    "merge_code_tree": "0927e6b9fcc244670243f5a8c686b2e83687e592",
+    "branch_head_commit": "6c8d8b19fb4a156aacdbf62330f1ffbb89f87993",
+    "branch_head_tree": "d4e5a1a3578f34c48139bd4d925062d52d32839f",
+    "offline_qualification_tested": "fe5d699ab7758580f90fee17e3bb3df998d37b2b"
+  },
+  "pr": 406,
+  "branch": "cursor/research-v2-post-review-settlement-fc31",
+  "donors": {
+    "included_from_B_802b8ad0": {
+      "ref": "802b8ad070454b54811fb0a41a4dc58a5aae8f2b",
+      "branch": "cursor/agent-b-general-fixtures-f617",
+      "paths": [
+        "babel-cli/src/research/v2/access/admittedHttpGet.ts",
+        "babel-cli/src/research/v2/access/admittedHttpGet.defaultTransport.test.ts",
+        "babel-cli/src/research/v2/access/governedHttpClientIdentity.ts",
+        "babel-cli/src/research/v2/access/inferHttpAccessFailureCategory.ts",
+        "babel-cli/src/research/v2/access/inferHttpAccessFailureCategory.test.ts",
+        "babel-cli/src/research/v2/access/parseAcquisitionDiagnosticsFromHttpGet.ts",
+        "babel-cli/src/research/v2/access/pinnedRepositoryFileSearchProvider.ts",
+        "babel-cli/src/research/v2/access/pinnedRepositoryFileSearchProvider.test.ts",
+        "babel-cli/src/research/v2/access/sanitizedHttpFailureFieldLimits.ts",
+        "babel-cli/src/research/v2/access/sanitizedHttpFailureMetadata.ts",
+        "babel-cli/src/research/v2/access/sanitizedHttpFailureMetadata.test.ts",
+        "babel-cli/src/research/v2/access/sourceAcquisitionDiagnosticsFromHttp.ts",
+        "babel-cli/src/research/v2/access/missionWebRetrieval.actualPort.reciprocal.test.ts",
+        "babel-cli/src/research/v2/access/fetchSourceAccessPort.gzip.reciprocal.test.ts",
+        "babel-cli/src/research/v2/contracts/sourceAcquisitionDiagnostics.ts",
+        "babel-cli/src/research/v2/ports/sourceAccessPort.ts",
+        "babel-cli/src/research/v2/profiles/technical/repositoryFileAdapter.ts",
+        "babel-cli/src/research/v2/engine/researchRetrievalLoop.ts",
+        "babel-cli/src/research/v2/engine/researchComposedRetrievalLoop.ts",
+        "babel-cli/src/research/v2/engine/discoveryAcquisitionDiagnosticsPropagation.durable.test.ts",
+        "babel-cli/src/research/v2/profiles/technical/repositoryFileAdapter.test.ts",
+        "babel-cli/src/research/v2/engine/researchRetrievalLoop.repair.test.ts",
+        "babel-cli/src/research/v2/fixtures/campaign/passageIntegrityVerification.durable.reciprocal.test.ts",
+        "babel-cli/src/research/v2/fixtures/campaign/passageIntegrityVerification.historicalFixtures.guard.prep.test.ts",
+        "babel-cli/src/research/v2/fixtures/campaign/T-L1-discover-query.reciprocal.test.ts",
+        "babel-cli/src/research/v2/fixtures/campaign/T-L1-invalidCoverageSlot.planningFailure.reciprocal.test.ts",
+        "babel-cli/src/research/v2/fixtures/campaign/T-L1-synthetic-invalid-discover-primary-plan-questions.json",
+        "babel-cli/src/research/v2/fixtures/campaign/T-L1-synthetic-valid-repository-pin-plan-questions.json",
+        "babel-cli/src/research/v2/fixtures/campaign/T-L2-document-byte-budget.reciprocal.test.ts",
+        "babel-cli/src/research/v2/fixtures/campaign/G-L2-quality-case1-cross-source-max-age.fixture.json",
+        "babel-cli/src/research/v2/fixtures/campaign/G-L2-quality-case2-audience-vs-cache-scope.fixture.json"
+      ],
+      "lineage_note": "Transport slice from 675a627d → e94e7a54 → 74e0dfe9; reciprocal tests from f3268d04/802b8ad0 adapted to PassageRecord.integrity_verification",
+      "adaptations": [
+        "missionWebRetrieval.actualPort.reciprocal.test.ts: align missing-ref case with A direct-acquisition synthesis",
+        "discovery acquisition_diagnostics: propagate failed search diagnostics at adapter discover, retrieval discover settlement, and composed document search settlement (cb3 gap)"
+      ]
+    },
+    "included_from_PR408_a0047fda": {
+      "ref": "a0047fdac608990aac3735e54fe8ef643ab96a56",
+      "paths": [
+        "review-artifacts/t-l1-protocol-access-diagnostic-e94e7a54-prerequisite-correction.json",
+        "review-artifacts/t-l1-protocol-access-diagnostic-e94e7a54-receipt.json",
+        "review-artifacts/t-l1-protocol-access-diagnostic-e94e7a54-worktree-package-json.diff"
+      ],
+      "note": "Evidence-only delta integrated once; no #407 runtime replay"
+    },
+    "excluded_superseded": {
+      "B_802b_production_index": [
+        "babel-cli/scripts/research-v2-production-package-esm-isolation-probe.mjs",
+        "babel-cli/scripts/research-v2-production-package-reciprocal-probe.mjs"
+      ],
+      "B_overwritten_A_canonical": [
+        "babel-cli/src/research/v2/engine/sourceIntegrityFromEvidence.ts"
+      ],
+      "B_alternate_integrity_html": "Not copied: B passageIntegrity/HTML production files superseded by A eb79/ef9655",
+      "PR405": "Already ancestor; no snapshot merge",
+      "PR409": "Incorporated into B donor; deleted head not recreated"
+    }
+  },
+  "proof_artifacts": {
+    "bound_to_commit": "d672384f0bd29f22fee345ae240f3b773b2be7e8",
+    "bound_to_tree": "33b30ea18277782fde12d49534592c355ae51f9f",
+    "execution_parent_at_run_time": "41ed59ff829288a22b6060f6e6099afb4495d3ef",
+    "sanitized_receipt": "review-artifacts/a406-metadata-evidence-correction-receipt.json",
+    "typecheck_log": "/opt/cursor/artifacts/a406-discovery-diag-typecheck.log",
+    "build_log": "/opt/cursor/artifacts/a406-discovery-diag-build.log",
+    "research_v2_test_inventory": "/opt/cursor/artifacts/a406-research-v2-test-inventory.txt",
+    "research_v2_test_file_count": 146,
+    "research_v2_full_tap_summary": "577 tests, 577 pass, 0 fail; outer exit FULL=0",
+    "research_v2_full_tap_log": "/opt/cursor/artifacts/a406-research-v2-full-tap-discovery-diag.log",
+    "public_content_policy_log": "/opt/cursor/artifacts/a406-discovery-diag-public-content-policy.log",
+    "local_secret_scan_note": "Workspace dir scan may flag gitignored runs/chat-sessions; git-mode gitleaks on tracked history is the release qualification scope"
+  }
+}

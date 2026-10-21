@@ -1,0 +1,5 @@
+{
+  "must_distinguish_dates": ["announced", "published", "effective"],
+  "must_note_jurisdiction_exception": "harbor_district_small_businesses",
+  "must_cite_primary_policy_text": true
+}

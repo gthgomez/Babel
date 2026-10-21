@@ -1,0 +1,52 @@
+{
+  "schema_version": "research-mission-v2",
+  "contract_version": "2026.10.20-checkpoint.3.1.1",
+  "mission_id": "mission-t-l2-synthetic-pdf-deterministic",
+  "profile_id": "technical",
+  "profile_version": "0.0.0-checkpoint",
+  "created_at": "2026-10-21T09:45:00.000Z",
+  "primary_question": "Deterministic T-L2-shaped mission using repository-owned synthetic PDF bytes (not the arXiv full paper).",
+  "intended_decision": "Exercise mutable_locator_content_digest admission and PDF extraction without tracked arXiv bytes.",
+  "constraints": ["selected_document_refs_only_for_pdf=true"],
+  "exclusions": ["tracked_arxiv_full_paper_bytes"],
+  "as_of": "2026-10-21",
+  "jurisdiction": "unknown",
+  "source_policy": {
+    "allowed_source_classes": ["repository_file", "document", "structured"],
+    "allowed_web_domains": ["github.com", "raw.githubusercontent.com", "arxiv.org"],
+    "selected_document_refs": ["https://arxiv.org/pdf/1706.03762.pdf"],
+    "admitted_document_sources": [
+      {
+        "document_ref": "https://arxiv.org/pdf/1706.03762.pdf",
+        "content_pin_kind": "mutable_locator_content_digest",
+        "wire_byte_budget": 100000,
+        "decompressed_byte_budget": 100000,
+        "expected_content_sha256": "d5e9ef3344cf88b639c730a063c9a2263678246a06ce84ef43e575ebfb40c7f0",
+        "expected_byte_length": 895,
+        "require_complete_body": true,
+        "expected_pdf_page_count": 2
+      }
+    ],
+    "visibility_retention": {
+      "source_visibility": "public",
+      "retention": "excerpt_only",
+      "export_may_omit_bytes": true
+    }
+  },
+  "effort_policy": {
+    "preset_name": "normal",
+    "resolved_budget_label": "host-resolved-normal-campaign-t-l2-synthetic"
+  },
+  "model_route": {
+    "backend_key": "research-v2-cli",
+    "provider": "fixture",
+    "provider_model_id": "fixture/technical-research-model",
+    "fixture_route": true
+  },
+  "pinned_target_repository": {
+    "provider": "github",
+    "repo_id": "github:gthgomez/Babel",
+    "full_name": "gthgomez/Babel",
+    "commit_sha": "e912c2f3320de0b6e1c9ff85b95b0f74d8b5323c"
+  }
+}

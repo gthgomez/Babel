@@ -20,6 +20,7 @@ import { runHuntDiscovery } from "../research/hunt.js";
 import { readJsonl } from "../research/artifacts.js";
 import type { CandidateRecordV1 } from "../research/contracts.js";
 import { printJsonErrorAndExit, printJsonOrHuman } from "./output.js";
+import { registerResearchV2Commands } from "./researchV2Commands.js";
 
 /**
  * Host-owned GitHub credential for authenticated discovery. The token is
@@ -42,6 +43,8 @@ export function registerResearchCommands(program: Command): void {
   const research = program
     .command("research")
     .description("Repo Hunt research missions (discover, inspect, and learn from OSS evidence)");
+
+  registerResearchV2Commands(research);
 
   research
     .command("hunt <problem>")

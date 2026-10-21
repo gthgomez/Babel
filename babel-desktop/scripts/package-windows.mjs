@@ -6,6 +6,8 @@ import {createHash} from 'node:crypto';
 import {execFileSync} from 'node:child_process';
 import {homedir} from 'node:os';
 import {assertAppImportsResolve} from './lib/verify-app-imports.mjs';
+import {installCanvasPlatformBinding} from '../../babel-cli/scripts/research-v2-canvas-platform-binding.mjs';
+import {isAllowlistedCanvasVendorNativeArtifact} from '../../babel-cli/scripts/research-v2-canvas-vendor-allowlist.mjs';
 
 const desktop = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const repo = resolve(desktop, '..');
@@ -55,7 +57,9 @@ mkdirSync(cli, {recursive:true});
 command('tar.exe', ['-xzf',join(output,pack.filename),'-C',cli,'--strip-components=1']);
 // The same canonical lockfile resolves production dependencies; no lifecycle scripts or downloads at first launch.
 cpSync(join(cliSource,'package-lock.json'), join(cli,'package-lock.json'));
-command(process.execPath, [npmCli,'ci','--omit=dev','--ignore-scripts','--no-audit','--no-fund'], cli);
+command(process.execPath, [npmCli,'ci','--omit=dev','--omit=optional','--ignore-scripts','--no-audit','--no-fund'], cli);
+// @napi-rs/canvas platform .node packages are optionalDependencies; --omit=optional skips them.
+installCanvasPlatformBinding({cwd: cli, npmCli, nodeExec: process.execPath});
 const nodeExtract = join(output, `node-${sourceSha.slice(0,12)}`);
 mkdirSync(nodeExtract);
 command('tar.exe', ['-xf',archive,'-C',nodeExtract]);
@@ -84,7 +88,8 @@ function inventory(dir, prefix='') {
     else {
       if(/(?:^|\/)(?:\.env(?:\..*)?|\.git|auth\.json|ui-connection\.json|transcript\.jsonl)$|\.(?:log|pem|key)$/i.test(rel)) throw new Error(`Forbidden package file: ${rel}`);
       const bytes = readFileSync(path);
-      if(buildPrefixes.some(prefix => bytes.includes(Buffer.from(prefix)))) throw new Error(`Personal build path in package: ${rel}`);
+      const isCanvasPrebuild = isAllowlistedCanvasVendorNativeArtifact(rel, bytes);
+      if(!isCanvasPrebuild && buildPrefixes.some(prefix => bytes.includes(Buffer.from(prefix)))) throw new Error(`Personal build path in package: ${rel}`);
       files.push({path:rel,bytes:statSync(path).size,sha256:sha(bytes)});
     }
   }

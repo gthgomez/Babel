@@ -1,0 +1,13 @@
+{
+  "schema": "research-v2-mutable-locator-content-digest-manifest/v1",
+  "canonical_url": "https://arxiv.org/pdf/babel-production-cli-large-synthetic.pdf",
+  "title": "Repository-owned large synthetic PDF for production CLI factory tests",
+  "artifact_path": "production-cli-large-synthetic.pdf",
+  "byte_length": 250000,
+  "content_sha256": "d6c6c9c9562f3e86e077c3e771a3cd5f7b2cfb7a20f6fe4282ea0f1859f0194b",
+  "content_pin_kind": "mutable_locator_content_digest",
+  "require_complete_body": true,
+  "wire_byte_budget": 300000,
+  "decompressed_byte_budget": 300000,
+  "provenance_note": "Tracked in-repo bytes (>200KB) for offline production access factory tests. Full arXiv paper remains external-cache opt-in only."
+}

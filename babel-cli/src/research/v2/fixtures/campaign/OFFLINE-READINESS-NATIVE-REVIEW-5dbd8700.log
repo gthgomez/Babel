@@ -1,0 +1,465 @@
+=== native review offline readiness ===
+generated_at_utc: 2026-10-21T10:39:36Z
+git_head: 5dbd870070bba0a5d0ba16b8b2feed203afcebf3
+git_tree: 059dac4cd738bc42a8ae5873a8176a6270f6b21a
+git_subject: feat(research-v2): pass question_coverage into synthesis model input
+attempt4_subset_blob: b772baa5edda219b929b90a54a522fb9c45f17de
+
+=== build (npm run build) ===
+exit: 0 (see prior build in session)
+dispatch_path: /workspace/babel-cli/dist/cliEntryDispatch.js
+bin_path: /workspace/babel-cli/bin/babel.js
+ee8f9ba2a7bd12b937451c0f4d86503d0b68d9076ed3cd24b9a7138b7039f43f  bin/babel.js
+f5943d8014b6452390f769bb5ac59fc5fee7ff8655657fa038eb8ec26716d942  dist/cliEntryDispatch.js
+
+=== typecheck ===
+
+> babel-harness@0.1.4 typecheck
+> tsc --noEmit && tsc -p tsconfig.scripts.json --noEmit
+
+typecheck_exit: 0
+
+=== affected canonical tests (tsx --test) ===
+TAP version 13
+# Subtest: missionWebRetrievalSelection
+    # Subtest: matches selected refs on primary observed_urls[0] only
+    ok 1 - matches selected refs on primary observed_urls[0] only
+      ---
+      duration_ms: 0.625202
+      type: 'test'
+      ...
+    # Subtest: resolves mission ref order with dedupe and binds fetch URL to observed_urls[0]
+    ok 2 - resolves mission ref order with dedupe and binds fetch URL to observed_urls[0]
+      ---
+      duration_ms: 1.405093
+      type: 'test'
+      ...
+    # Subtest: dedupes duplicate mission refs to a single fetch target
+    ok 3 - dedupes duplicate mission refs to a single fetch target
+      ---
+      duration_ms: 0.604436
+      type: 'test'
+      ...
+    # Subtest: direct-acquires selected refs when discover omits them
+    ok 4 - direct-acquires selected refs when discover omits them
+      ---
+      duration_ms: 0.582924
+      type: 'test'
+      ...
+    # Subtest: rebinds discover alias hits to mission ref before fetch
+    ok 5 - rebinds discover alias hits to mission ref before fetch
+      ---
+      duration_ms: 0.115067
+      type: 'test'
+      ...
+    # Subtest: legacy mode keeps first discover candidate (fetch-time admission unchanged)
+    ok 6 - legacy mode keeps first discover candidate (fetch-time admission unchanged)
+      ---
+      duration_ms: 0.245149
+      type: 'test'
+      ...
+    1..6
+ok 1 - missionWebRetrievalSelection
+  ---
+  duration_ms: 4.45743
+  type: 'suite'
+  ...
+# Subtest: research v2 campaign preflight readiness (no network)
+    # Subtest: G-L3 mission model_route matches effective OpenRouter policy route
+    ok 1 - G-L3 mission model_route matches effective OpenRouter policy route
+      ---
+      duration_ms: 3.844568
+      type: 'test'
+      ...
+    # Subtest: unsupported BABEL_WEB_SEARCH_PROVIDER fails readiness without printing ok semantics
+    ok 2 - unsupported BABEL_WEB_SEARCH_PROVIDER fails readiness without printing ok semantics
+      ---
+      duration_ms: 0.901746
+      type: 'test'
+      ...
+    1..2
+ok 2 - research v2 campaign preflight readiness (no network)
+  ---
+  duration_ms: 5.343245
+  type: 'suite'
+  ...
+# Subtest: buildSemanticSupportReviewInput
+    # Subtest: includes admitted inline passage text and marks unavailable contents
+    ok 1 - includes admitted inline passage text and marks unavailable contents
+      ---
+      duration_ms: 0.585526
+      type: 'test'
+      ...
+    1..1
+ok 3 - buildSemanticSupportReviewInput
+  ---
+  duration_ms: 1.088811
+  type: 'suite'
+  ...
+# Subtest: buildSynthesizeReportModelInput
+    # Subtest: includes semantic_support and question_coverage separately for synthesis
+    ok 1 - includes semantic_support and question_coverage separately for synthesis
+      ---
+      duration_ms: 0.564427
+      type: 'test'
+      ...
+    # Subtest: defaults missing judgments to not_checked and not_assessed
+    ok 2 - defaults missing judgments to not_checked and not_assessed
+      ---
+      duration_ms: 0.081994
+      type: 'test'
+      ...
+    1..2
+ok 4 - buildSynthesizeReportModelInput
+  ---
+  duration_ms: 1.264397
+  type: 'suite'
+  ...
+# Subtest: G-L1 attempt4 evidence subset (historical) + fef78559 finalizer
+    # Subtest: preserves ORIGINAL subset artifact and extract binding on plan.questions[0]
+    ok 1 - preserves ORIGINAL subset artifact and extract binding on plan.questions[0]
+      ---
+      duration_ms: 3.919863
+      type: 'test'
+      ...
+    # Subtest: records historical terminal report (pre-fef78559 builder) with all five unanswered and model prose cutoff
+    ok 2 - records historical terminal report (pre-fef78559 builder) with all five unanswered and model prose cutoff
+      ---
+      duration_ms: 1.142759
+      type: 'test'
+      ...
+    # Subtest: rebuilds attempt4 with canonical finalizer: partial, per-question unanswered, truncation, corrected coverage_notes
+    ok 3 - rebuilds attempt4 with canonical finalizer: partial, per-question unanswered, truncation, corrected coverage_notes
+      ---
+      duration_ms: 2.641783
+      type: 'test'
+      ...
+    1..3
+ok 5 - G-L1 attempt4 evidence subset (historical) + fef78559 finalizer
+  ---
+  duration_ms: 8.349783
+  type: 'suite'
+  ...
+# Subtest: general multi-web production routing (G-L2 fixture)
+    # Subtest: direct-acquires both selected_web_refs when discover returns no hits
+    ok 1 - direct-acquires both selected_web_refs when discover returns no hits
+      ---
+      duration_ms: 6.745603
+      type: 'test'
+      ...
+    1..1
+ok 6 - general multi-web production routing (G-L2 fixture)
+  ---
+  duration_ms: 7.26495
+  type: 'suite'
+  ...
+# Subtest: research retrieval loop (admitted ports)
+    # Subtest: runs discover → read → evidence through technical adapter and fake access
+    ok 1 - runs discover → read → evidence through technical adapter and fake access
+      ---
+      duration_ms: 3.475929
+      type: 'test'
+      ...
+    # Subtest: persists retrieval and offline terminal report on durable admitted session
+    ok 2 - persists retrieval and offline terminal report on durable admitted session
+      ---
+      duration_ms: 23.371489
+      type: 'test'
+      ...
+    # Subtest: chains planning then retrieval without duplicating general adapters
+    ok 3 - chains planning then retrieval without duplicating general adapters
+      ---
+      duration_ms: 1.668091
+      type: 'test'
+      ...
+    # Subtest: fetches each mission selected_web_ref with distinct fetch operations
+    ok 4 - fetches each mission selected_web_ref with distinct fetch operations
+      ---
+      duration_ms: 2.256565
+      type: 'test'
+      ...
+    # Subtest: multi-web: persistence failure settles fetch once and does not continue
+    ok 5 - multi-web: persistence failure settles fetch once and does not continue
+      ---
+      duration_ms: 1.302382
+      type: 'test'
+      ...
+    1..5
+ok 7 - research retrieval loop (admitted ports)
+  ---
+  duration_ms: 32.87548
+  type: 'suite'
+  ...
+# Subtest: G-L2 campaign mission fixture
+    # Subtest: parses constrained-comparison mission with public MDN + Cloudflare scope
+    ok 1 - parses constrained-comparison mission with public MDN + Cloudflare scope
+      ---
+      duration_ms: 3.853175
+      type: 'test'
+      ...
+    1..1
+ok 8 - G-L2 campaign mission fixture
+  ---
+  duration_ms: 4.366323
+  type: 'suite'
+  ...
+# Subtest: G-L3 campaign mission fixture
+    # Subtest: parses contradiction/insufficiency mission with official python.org scope
+    ok 1 - parses contradiction/insufficiency mission with official python.org scope
+      ---
+      duration_ms: 3.760289
+      type: 'test'
+      ...
+    1..1
+ok 9 - G-L3 campaign mission fixture
+  ---
+  duration_ms: 4.302318
+  type: 'suite'
+  ...
+# Subtest: arxiv external paper cache (isolated temp dirs)
+    # Subtest: reports missing cache without reading user home cache
+    ok 1 - reports missing cache without reading user home cache
+      ---
+      duration_ms: 1.082755
+      type: 'test'
+      ...
+    # Subtest: rejects wrong-size cache before digest work
+    ok 2 - rejects wrong-size cache before digest work
+      ---
+      duration_ms: 0.542156
+      type: 'test'
+      ...
+    # Subtest: rejects oversized cache when file grew beyond manifest byte_length
+    ok 3 - rejects oversized cache when file grew beyond manifest byte_length
+      ---
+      duration_ms: 0.503848
+      type: 'test'
+      ...
+    # Subtest: reports digest_mismatch when size matches but hash differs
+    ok 4 - reports digest_mismatch when size matches but hash differs
+      ---
+      duration_ms: 0.502966
+      type: 'test'
+      ...
+    # Subtest: returns ok bytes for matching size and digest
+    ok 5 - returns ok bytes for matching size and digest
+      ---
+      duration_ms: 0.43028
+      type: 'test'
+      ...
+    # Subtest: readBoundedRegularFileAtPath rejects non-regular files
+    ok 6 - readBoundedRegularFileAtPath rejects non-regular files
+      ---
+      duration_ms: 0.365661
+      type: 'test'
+      ...
+    # Subtest: fails closed on FIFO cache paths without blocking (linux)
+    ok 7 - fails closed on FIFO cache paths without blocking (linux)
+      ---
+      duration_ms: 4.539008
+      type: 'test'
+      ...
+    # Subtest: detects file growth after initial stat (linux)
+    ok 8 - detects file growth after initial stat (linux)
+      ---
+      duration_ms: 0.847301
+      type: 'test'
+      ...
+    1..8
+ok 10 - arxiv external paper cache (isolated temp dirs)
+  ---
+  duration_ms: 9.737467
+  type: 'suite'
+  ...
+1..10
+# tests 30
+# suites 10
+# pass 30
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 1068.805459
+affected_tests_exit: 0
+
+=== G-L2 preflight (no inference) ===
+
+> babel-harness@0.1.4 test:research-v2-g-l2-preflight
+> node --import tsx scripts/research-v2-campaign-preflight-run.mjs G-L2
+
+{
+  "schema": "research-v2-campaign-preflight/v1",
+  "head_note": "No live API calls; campaign OpenRouter lane and host readiness only",
+  "acceptance_scenario": "G-L2",
+  "readiness": {
+    "search_provider_configured": true,
+    "mission_model_route_matches_effective": true,
+    "openrouter_credential_configured": true,
+    "ready": true,
+    "failures": []
+  },
+  "openrouter_route": {
+    "route_key": "deepseek-v4-flash-openrouter",
+    "provider": "openrouter",
+    "model_id": "deepseek/deepseek-v4-flash-0731",
+    "policy_path": "/workspace/config/model-policy.json",
+    "selection_basis": "model_policy_json",
+    "backend_key": "research-v2-cli"
+  },
+  "openrouter_credential": {
+    "provider": "openrouter",
+    "env_var": "OPENROUTER_API_KEY",
+    "configured": true,
+    "required": true
+  },
+  "mission_id": "mission-g-l2-constrained-comparison",
+  "profile_id": "general",
+  "primary_question": "For browser-facing static assets, how do MDN and Cloudflare public documentation compare on Cache-Control max-age guidance and who each document is written for (browser vs edge/CDN)? Cite only allowed domains; keep browser and CDN roles explicit.",
+  "search_provider_id": "duckduckgo_html_fallback",
+  "expected_outcomes": {
+    "schema": "research-v2-campaign-expected-outcomes/v1",
+    "acceptance_scenario": "G-L2",
+    "mission_id": "mission-g-l2-constrained-comparison",
+    "structural": {
+      "requires_two_public_source_classes": [
+        "developer.mozilla.org",
+        "developers.cloudflare.com"
+      ],
+      "comparison_dimensions": [
+        "cache_control_max_age",
+        "audience_browser_vs_edge"
+      ],
+      "must_label_browser_vs_cdn_roles": true
+    },
+    "acceptable_terminal_states": [
+      "partial",
+      "complete"
+    ],
+    "forbidden_conclusions": [
+      "single_merged_cache_story_without_role_labels",
+      "citations_outside_allowed_web_domains"
+    ],
+    "preflight": {
+      "requires_openrouter_route_lane": true,
+      "live_model_dispatch": false
+    }
+  },
+  "mission_file": "/workspace/babel-cli/src/research/v2/fixtures/campaign/G-L2-mission.json",
+  "expected_outcomes_file": "/workspace/babel-cli/src/research/v2/fixtures/campaign/G-L2-expected-outcomes.json",
+  "allowed_web_domains": [
+    "duckduckgo.com",
+    "html.duckduckgo.com",
+    "developer.mozilla.org",
+    "developers.cloudflare.com"
+  ],
+  "evidence_web_domains": [
+    "developer.mozilla.org",
+    "developers.cloudflare.com"
+  ],
+  "search_transport_domains": [
+    "duckduckgo.com",
+    "html.duckduckgo.com"
+  ],
+  "discover_query": "For browser-facing static assets, how do MDN and Cloudflare public documentation compare",
+  "search_url": "https://duckduckgo.com/html/?q=For+browser-facing+static+assets%2C+how+do+MDN+and+Cloudflare+public+documentation+compare"
+}
+research-v2-campaign-preflight: ok (G-L2)
+g_l2_preflight_exit: 0
+
+=== G-L3 preflight (no inference) ===
+
+> babel-harness@0.1.4 test:research-v2-g-l3-preflight
+> node --import tsx scripts/research-v2-campaign-preflight-run.mjs G-L3
+
+{
+  "schema": "research-v2-campaign-preflight/v1",
+  "head_note": "No live API calls; campaign OpenRouter lane and host readiness only",
+  "acceptance_scenario": "G-L3",
+  "readiness": {
+    "search_provider_configured": true,
+    "mission_model_route_matches_effective": true,
+    "openrouter_credential_configured": true,
+    "ready": true,
+    "failures": []
+  },
+  "openrouter_route": {
+    "route_key": "deepseek-v4-flash-openrouter",
+    "provider": "openrouter",
+    "model_id": "deepseek/deepseek-v4-flash-0731",
+    "policy_path": "/workspace/config/model-policy.json",
+    "selection_basis": "model_policy_json",
+    "backend_key": "research-v2-cli"
+  },
+  "openrouter_credential": {
+    "provider": "openrouter",
+    "env_var": "OPENROUTER_API_KEY",
+    "configured": true,
+    "required": true
+  },
+  "mission_id": "mission-g-l3-contradiction-insufficient",
+  "profile_id": "general",
+  "primary_question": "On official python.org pages only, does the latest stable CPython release version and its release date read the same from the downloads landing view and from the developer guide status table? Report contradiction, insufficiency, or agreement per sub-question with citations.",
+  "search_provider_id": "duckduckgo_html_fallback",
+  "expected_outcomes": {
+    "schema": "research-v2-campaign-expected-outcomes/v1",
+    "acceptance_scenario": "G-L3",
+    "mission_id": "mission-g-l3-contradiction-insufficient",
+    "structural": {
+      "requires_per_question_semantic_support": true,
+      "requires_two_distinct_canonical_pages": true,
+      "plan_question_themes": [
+        "downloads_page_stable_version_and_date",
+        "devguide_status_table_stable_version_and_date",
+        "cross_source_agreement_or_conflict"
+      ],
+      "must_allow_terminal_partial_on_insufficient_or_contradicted": true,
+      "deterministic_insufficiency_fixture": "G-L3-deterministic-insufficiency.fixture.json",
+      "live_agreement_or_conflict_investigation_separate_from": "G-L3-deterministic-insufficiency.fixture.json"
+    },
+    "acceptable_terminal_states": [
+      "partial",
+      "complete"
+    ],
+    "complete_only_when": {
+      "two_distinct_admitted_canonical_pages": true,
+      "per_question_semantic_support_without_invented_contradiction": true,
+      "official_pages_agree_on_stable_version_and_date": true
+    },
+    "forbidden_conclusions": [
+      "asserting_agreement_without_supported_findings_per_question",
+      "asserting_contradiction_without_supported_findings_per_question",
+      "invented_contradiction_or_version_mismatch",
+      "single_page_counted_as_two_source_cross_page_coverage",
+      "citations_outside_allowed_web_domains"
+    ],
+    "preflight": {
+      "requires_openrouter_route_lane": true,
+      "requires_mission_model_route_matches_effective_openrouter_route": true,
+      "requires_openrouter_credential_configured": true,
+      "requires_configured_search_provider": true,
+      "live_model_dispatch": false
+    }
+  },
+  "mission_file": "/workspace/babel-cli/src/research/v2/fixtures/campaign/G-L3-mission.json",
+  "expected_outcomes_file": "/workspace/babel-cli/src/research/v2/fixtures/campaign/G-L3-expected-outcomes.json",
+  "allowed_web_domains": [
+    "duckduckgo.com",
+    "html.duckduckgo.com",
+    "python.org",
+    "www.python.org",
+    "docs.python.org"
+  ],
+  "evidence_web_domains": [
+    "python.org",
+    "www.python.org",
+    "docs.python.org"
+  ],
+  "search_transport_domains": [
+    "duckduckgo.com",
+    "html.duckduckgo.com"
+  ],
+  "discover_query": "On official python.org pages only, does the latest stable CPython release version",
+  "search_url": "https://duckduckgo.com/html/?q=On+official+python.org+pages+only%2C+does+the+latest+stable+CPython+release+version"
+}
+research-v2-campaign-preflight: ok (G-L3)
+g_l3_preflight_exit: 0

@@ -58,26 +58,42 @@ test('core registration preserves the complete existing command contract', () =>
     ],
     children: [],
   });
-  assert.deepEqual(research[0], {
-    name: 'research', aliases: [], description: 'Repo Hunt research missions (discover, inspect, and learn from OSS evidence)',
-    args: [], options: [], children: [
-      {
-        name: 'hunt', aliases: [], description: 'hunt OSS for implementations analogous to the problem (discovery through shortlist)',
-        args: [{ name: 'problem', required: true, variadic: false, description: '' }],
-        options: [
-          { flags: '--project <path>', description: 'target project root', mandatory: true },
-          { flags: '--budget <preset>', description: 'named budget preset: low | normal | deep', mandatory: false },
-          { flags: '--json', description: 'emit machine-readable output', mandatory: false },
-        ], children: [],
-      },
-      {
-        name: 'inspect', aliases: [], description: 'explain a persisted research mission run (mission, candidates, scores, budget)',
-        args: [{ name: 'mission-id', required: true, variadic: false, description: '' }],
-        options: [
-          { flags: '--runs-root <path>', description: 'runs root to search', mandatory: false },
-          { flags: '--json', description: 'emit machine-readable output', mandatory: false },
-        ], children: [],
-      },
+  const researchNode = research[0]!
+  assert.deepEqual(researchNode.children.map((child) => child.name), ['v2', 'hunt', 'inspect']);
+  const v2 = researchNode.children[0]!
+  assert.equal(v2.name, 'v2');
+  assert.deepEqual(
+    v2.children.map((child) => child.name),
+    [
+      'dry-run-plan',
+      'live-status',
+      'model-route',
+      'run',
+      'inspect',
+      'report',
+      'cancel',
+      'resume',
+      'cancel-resume-once',
+      'live-plan',
     ],
+  );
+  const hunt = researchNode.children.find((child) => child.name === 'hunt');
+  const inspectLegacy = researchNode.children.find((child) => child.name === 'inspect');
+  assert.deepEqual(hunt, {
+    name: 'hunt', aliases: [], description: 'hunt OSS for implementations analogous to the problem (discovery through shortlist)',
+    args: [{ name: 'problem', required: true, variadic: false, description: '' }],
+    options: [
+      { flags: '--project <path>', description: 'target project root', mandatory: true },
+      { flags: '--budget <preset>', description: 'named budget preset: low | normal | deep', mandatory: false },
+      { flags: '--json', description: 'emit machine-readable output', mandatory: false },
+    ], children: [],
+  });
+  assert.deepEqual(inspectLegacy, {
+    name: 'inspect', aliases: [], description: 'explain a persisted research mission run (mission, candidates, scores, budget)',
+    args: [{ name: 'mission-id', required: true, variadic: false, description: '' }],
+    options: [
+      { flags: '--runs-root <path>', description: 'runs root to search', mandatory: false },
+      { flags: '--json', description: 'emit machine-readable output', mandatory: false },
+    ], children: [],
   });
 });

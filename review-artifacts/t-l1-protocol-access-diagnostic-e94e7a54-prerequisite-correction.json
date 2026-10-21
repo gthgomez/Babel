@@ -1,0 +1,50 @@
+{
+  "schema": "research-v2-protocol-access-prerequisite-correction/v1",
+  "corrects": "review-artifacts/t-l1-protocol-access-diagnostic-e94e7a54-receipt.json",
+  "one_shot_request": "consumed_no_repeat",
+  "conditional_release_violation": {
+    "required": "successful exact build and typecheck on bound B commit/tree before the single GET",
+    "observed_typecheck_exit": 2,
+    "observed_build_exit": 2,
+    "why_executor_proceeded_anyway": "After bound-tree npm ci failed on conflicted package.json, executor locally merged conflict markers in the pinned worktree only to run npm ci, then ran tsc despite exit 2 and loaded partially emitted dist access modules for the GET. That sequence was outside the stated prerequisite gate and should not have been treated as qualified release.",
+    "preserved_original_logs": [
+      "review-artifacts/t-l1-protocol-access-diagnostic-e94e7a54-build-typecheck.log",
+      "review-artifacts/t-l1-protocol-access-diagnostic-e94e7a54-run-meta.txt",
+      "review-artifacts/t-l1-protocol-access-diagnostic-e94e7a54-run.json",
+      "review-artifacts/t-l1-protocol-access-diagnostic-e94e7a54-run.stderr.log"
+    ]
+  },
+  "bound_source_not_clean": {
+    "bound_b_commit": "e94e7a54c1f5ee316341575c6fc895e367788985",
+    "bound_tree": "3cfc654f3130eaa8338a1f1f389924e1d8c21d8c",
+    "committed_tree_has_merge_conflicts": true,
+    "worktree_modification": {
+      "path": "/tmp/babel-protocol-diag-e94e7a54/babel-cli/package.json",
+      "change": "removed conflict markers; kept both script blocks",
+      "diff_artifact": "review-artifacts/t-l1-protocol-access-diagnostic-e94e7a54-worktree-package-json.diff",
+      "not_committed_to_git": true
+    },
+    "other_conflict_files_unrepaired_in_worktree": [
+      "babel-cli/src/research/v2/campaign/researchV2CampaignPreflight.ts",
+      "babel-cli/src/research/v2/cli/researchV2MissionRun.ts"
+    ]
+  },
+  "http_200_result_classification": {
+    "qualifies_as": "partial_emitted_transport_evidence_only",
+    "does_not_qualify_as": [
+      "exact_clean_build_qualification",
+      "proof_of_attempt2_root_cause",
+      "certification_that_bound_e94_tree_is_buildable"
+    ],
+    "executed_modules_sha256": {
+      "worktree_root": "/tmp/babel-protocol-diag-e94e7a54/babel-cli",
+      "admittedHttpGet.js": "d465c832a47439b28c1a403babacf82ba6e4f21fca7b115811d70fc77a6b1303",
+      "governedHttpClientIdentity.js": "b2f639df8d239b79ff0435aaa0b0126be0b9b3f27867e29a19284fe10dd46bb8",
+      "sanitizedHttpFailureMetadata.js": "591b66f7013011e93036521f3704613b69b941534cc809051f780e0cc41783f6",
+      "parseAcquisitionDiagnosticsFromHttpGet.js": "a8cbf2ec3814ff942268fdd945c705b56877028dddbf47c1b8b701cdb983864d"
+    },
+    "run_result_sha256": "d41b931cbcfe9b883cbbd1900881986b3cce0e9297745983c2ca9958d0c742bc"
+  },
+  "attempt2_interpretation_limit": "HTTP 200 under modified worktree partial dist is suggestive transport contrast only; attempt2 403 cause remains unproven without retained 403 response evidence from that run.",
+  "further_network_model_exa": "forbidden_consumed"
+}

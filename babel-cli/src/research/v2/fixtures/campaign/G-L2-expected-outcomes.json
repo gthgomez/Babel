@@ -1,0 +1,19 @@
+{
+  "schema": "research-v2-campaign-expected-outcomes/v1",
+  "acceptance_scenario": "G-L2",
+  "mission_id": "mission-g-l2-constrained-comparison",
+  "structural": {
+    "requires_two_public_source_classes": ["developer.mozilla.org", "developers.cloudflare.com"],
+    "comparison_dimensions": ["cache_control_max_age", "audience_browser_vs_edge"],
+    "must_label_browser_vs_cdn_roles": true
+  },
+  "acceptable_terminal_states": ["partial", "complete"],
+  "forbidden_conclusions": [
+    "single_merged_cache_story_without_role_labels",
+    "citations_outside_allowed_web_domains"
+  ],
+  "preflight": {
+    "requires_openrouter_route_lane": true,
+    "live_model_dispatch": false
+  }
+}

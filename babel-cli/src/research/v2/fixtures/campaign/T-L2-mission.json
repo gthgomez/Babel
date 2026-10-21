@@ -1,0 +1,59 @@
+{
+  "schema_version": "research-mission-v2",
+  "contract_version": "2026.10.20-checkpoint.3.1.1",
+  "mission_id": "mission-t-l2-paper-code-pdf",
+  "profile_id": "technical",
+  "profile_version": "0.0.0-checkpoint",
+  "created_at": "2026-10-21T08:00:00.000Z",
+  "primary_question": "Using the mission-selected arXiv PDF and the pinned Babel repository, where does research v2 document durable store guarantees and how does that compare to the transformer architecture described in the paper? Cite PDF page locators for paper claims and repository file paths for Babel code.",
+  "intended_decision": "State whether Babel's documented store contract aligns with the paper's described architecture, with page-located PDF excerpts and pinned file citations.",
+  "constraints": [
+    "selected_document_refs_only_for_pdf=true",
+    "pinned_github_commit_only=true",
+    "pdf_page_locators_required=true"
+  ],
+  "exclusions": [
+    "unpinned github branches",
+    "paywalled PDFs",
+    "live model spend during Agent A readiness"
+  ],
+  "as_of": "2026-10-21",
+  "jurisdiction": "unknown",
+  "source_policy": {
+    "allowed_source_classes": ["repository_file", "document", "structured"],
+    "allowed_web_domains": ["github.com", "raw.githubusercontent.com", "arxiv.org"],
+    "selected_document_refs": ["https://arxiv.org/pdf/1706.03762.pdf"],
+    "admitted_document_sources": [
+      {
+        "document_ref": "https://arxiv.org/pdf/1706.03762.pdf",
+        "content_pin_kind": "mutable_locator_content_digest",
+        "wire_byte_budget": 2300000,
+        "decompressed_byte_budget": 2300000,
+        "expected_content_sha256": "bdfaa68d8984f0dc02beaca527b76f207d99b666d31d1da728ee0728182df697",
+        "expected_byte_length": 2215244,
+        "require_complete_body": true,
+        "expected_pdf_page_count": 15
+      }
+    ],
+    "visibility_retention": {
+      "source_visibility": "public",
+      "retention": "excerpt_only",
+      "export_may_omit_bytes": true
+    }
+  },
+  "effort_policy": {
+    "preset_name": "normal",
+    "resolved_budget_label": "host-resolved-normal-campaign-t-l2"
+  },
+  "model_route": {
+    "backend_key": "research-v2-cli",
+    "provider": "openrouter",
+    "provider_model_id": "deepseek/deepseek-v4-flash-0731"
+  },
+  "pinned_target_repository": {
+    "provider": "github",
+    "repo_id": "github:gthgomez/Babel",
+    "full_name": "gthgomez/Babel",
+    "commit_sha": "e912c2f3320de0b6e1c9ff85b95b0f74d8b5323c"
+  }
+}

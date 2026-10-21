@@ -1,0 +1,49 @@
+{
+  "schema_version": "research-mission-v2",
+  "contract_version": "2026.10.20-checkpoint.3.1.1",
+  "mission_id": "mission-g-l2-constrained-comparison",
+  "profile_id": "general",
+  "profile_version": "0.1.0-m0",
+  "created_at": "2026-10-21T09:40:00.000Z",
+  "primary_question": "For browser-facing static assets, how do MDN and Cloudflare public documentation compare on Cache-Control max-age guidance and who each document is written for (browser vs edge/CDN)? Cite only allowed domains; keep browser and CDN roles explicit.",
+  "intended_decision": "State whether MDN and Cloudflare agree or differ on max-age semantics and audience, with separate citations for each source class.",
+  "constraints": [
+    "comparison_dimensions=cache_control_max_age,audience_browser_vs_edge",
+    "evidence_only_from_allowed_web_domains=true",
+    "must_not_merge_browser_and_cdn_roles_without_labeling=true"
+  ],
+  "exclusions": [
+    "third-party blogs",
+    "undocumented CDN configurations",
+    "live cache probing"
+  ],
+  "as_of": "2026-10-21",
+  "jurisdiction": "unknown",
+  "source_policy": {
+    "allowed_source_classes": ["web"],
+    "allowed_web_domains": [
+      "duckduckgo.com",
+      "html.duckduckgo.com",
+      "developer.mozilla.org",
+      "developers.cloudflare.com"
+    ],
+    "selected_web_refs": [
+      "https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Cache-Control",
+      "https://developers.cloudflare.com/cache/concepts/cache-control/"
+    ],
+    "visibility_retention": {
+      "source_visibility": "public",
+      "retention": "excerpt_only",
+      "export_may_omit_bytes": true
+    }
+  },
+  "effort_policy": {
+    "preset_name": "normal",
+    "resolved_budget_label": "host-resolved-normal-campaign-g-l2"
+  },
+  "model_route": {
+    "backend_key": "research-v2-cli",
+    "provider": "openrouter",
+    "provider_model_id": "deepseek/deepseek-v4-flash-0731"
+  }
+}
