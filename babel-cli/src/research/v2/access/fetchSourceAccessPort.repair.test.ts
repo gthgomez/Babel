@@ -6,11 +6,10 @@ import { FetchSourceAccessPort } from './fetchSourceAccessPort.js'
 
 const source = SourceRecordSchema.parse({
   source_id: 'src-repair',
-  kind: 'repository_file',
+  kind: 'web',
   title: 't',
   observed_urls: ['http://127.0.0.1:9/private'],
-  canonical_identifiers: { github_repo_id: 'github:org/repo' },
-  canonical_key: 'k',
+  canonical_key: 'web:127.0.0.1/private',
 })
 
 describe('FetchSourceAccessPort M1.3 review repairs', () => {
@@ -44,8 +43,11 @@ describe('FetchSourceAccessPort M1.3 review repairs', () => {
     const result = await port.fetchContent({
       operationId: 'fetch-redirect',
       source: SourceRecordSchema.parse({
-        ...source,
+        source_id: 'src-redirect',
+        kind: 'web',
+        title: 't',
         observed_urls: ['https://example.test/a'],
+        canonical_key: 'web:example.test/a',
       }),
       signal: new AbortController().signal,
     })
@@ -79,8 +81,11 @@ describe('FetchSourceAccessPort M1.3 review repairs', () => {
     const result = await port.fetchContent({
       operationId: 'fetch-cap',
       source: SourceRecordSchema.parse({
-        ...source,
+        source_id: 'src-cap',
+        kind: 'web',
+        title: 't',
         observed_urls: ['https://example.test/big'],
+        canonical_key: 'web:example.test/big',
       }),
       signal: new AbortController().signal,
     })

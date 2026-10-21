@@ -1,0 +1,35 @@
+{
+  "schema_version": "research-mission-v2",
+  "contract_version": "2026.10.20-checkpoint.3.1.1",
+  "mission_id": "mission-g-l1-general-live",
+  "profile_id": "general",
+  "profile_version": "0.1.0-m0",
+  "created_at": "2026-10-21T06:00:00.000Z",
+  "primary_question": "Which fictional cloud plan fits a solo developer who needs 500 GB storage and can pay either monthly or annually?",
+  "intended_decision": "Choose Plan A or Plan B for the next 12 months.",
+  "constraints": [
+    "currency=\"USD\"",
+    "billing_periods_to_compare=[\"monthly\",\"annual\"]"
+  ],
+  "exclusions": ["signup", "purchase", "live pricing APIs"],
+  "as_of": "2026-04-01",
+  "jurisdiction": "unknown",
+  "source_policy": {
+    "allowed_source_classes": ["web"],
+    "allowed_web_domains": ["duckduckgo.com", "html.duckduckgo.com"],
+    "visibility_retention": {
+      "source_visibility": "public",
+      "retention": "excerpt_only",
+      "export_may_omit_bytes": true
+    }
+  },
+  "effort_policy": {
+    "preset_name": "normal",
+    "resolved_budget_label": "host-resolved-normal-campaign-g-l1"
+  },
+  "model_route": {
+    "backend_key": "research-v2-cli",
+    "provider": "openrouter",
+    "provider_model_id": "deepseek/deepseek-v4-flash-0731"
+  }
+}

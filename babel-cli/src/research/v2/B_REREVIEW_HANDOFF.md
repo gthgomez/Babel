@@ -4,7 +4,7 @@
 
 | Track | Draft PR | Published head (exact GitHub) | Owner |
 |-------|----------|-------------------------------|--------|
-| Agent A integration | [#406](https://github.com/gthgomez/Babel/pull/406) | `5a2c60a5`+ (`cursor/research-v2-post-review-settlement-fc31`) | Combined runtime, CLI/engine, registry wiring, **web discover**, **pdfjs/canvas pack** |
+| Agent A integration | [#406](https://github.com/gthgomez/Babel/pull/406) | `9d97448a`+ (`cursor/research-v2-post-review-settlement-fc31`) | Combined runtime, CLI/engine, registry wiring, **web discover**, **pdfjs/canvas pack**, **G-L1 campaign fixture** |
 | Agent B extraction/tests | [#404](https://github.com/gthgomez/Babel/pull/404) | `b590e115` (engine reciprocal vs #406; 6/6 offline) | Read/HTML/PDF extraction, reciprocal integration tests |
 
 **Discover contract on #406:** `GeneralWebAdapter.discover` delegates to `access.search` and maps hits to web candidates (`generalWebAdapter.test.ts`). **Do not** replace `generalWebAdapter.ts` with B80, whose discover returns `not_supported` without search. `GeneralDocumentAdapter.discover` remains honestly `not_supported` (mission-selected documents).
@@ -65,12 +65,43 @@ npm run test:research-v2-pdfjs-staged-package-smoke
 
 | Check | Command | Outcome |
 |-------|---------|---------|
-| Research v2 manifest | `node scripts/research-v2-collect-test-files.mjs \| tr '\\n' '\\0' \| xargs -0 npx tsx --test` | **259** pass @ `25ac0033` |
-| B reciprocal receipt | `npm run test:research-v2-production-package-reciprocal` | `probe_ok`, `canvas_package_json_present=true` @ `25ac0033` |
+| Build + typecheck | `npm run build` && `npm run typecheck` | **ok** @ `9d97448a` (logs: `review-artifacts/readiness-9d97448a-build-typecheck.log`) |
+| Research v2 manifest | `node scripts/research-v2-collect-test-files.mjs \| tr '\\n' '\\0' \| xargs -0 node --import tsx --test` | **268** pass / 0 fail, 121 suites @ `9d97448a` (`review-artifacts/readiness-9d97448a-research-v2-tests.log`) |
+| CLI routes (in manifest) | `researchV2CliRoutes.test.ts`, `researchV2Commands.live.test.ts` | included in manifest above |
+| B reciprocal receipt | `npm run test:research-v2-production-package-reciprocal` | `probe_ok`, `canvas_package_json_present=true` @ prior heads (Linux; not re-run this pass) |
 | Incorrect / hung-style glob | `node --test src/research/v2/**/*.test.ts` | **Do not use** — shell leaves literal `**` or runs a partial set; not authoritative |
 | Packaged PDF runtime (A smoke) | `npm run test:research-v2-pdfjs-staged-package-smoke` | Isolated lockfile `npm ci` + platform binding + pdfjs text extract |
 | B reciprocal packaging (authoritative) | `npm run test:research-v2-production-package-reciprocal` | Same flags as Windows pack; copies **dist** + B probes; `canvas_package_json_present=true` + PDF probe ok |
-| Campaign live preflight (OpenRouter lane) | `npm run test:research-v2-openrouter-route-smoke` | **Campaign testing only** — run before live smoke; general `research v2 run` keeps validated configurable providers via model-policy |
+| Campaign OpenRouter lane | `npm run test:research-v2-openrouter-route-smoke` | `openrouter` / `deepseek/deepseek-v4-flash-0731` / `deepseek-v4-flash-openrouter` (`review-artifacts/readiness-9d97448a-openrouter-route.log`) |
+| Campaign G-L1 preflight (no network) | `npm run test:research-v2-campaign-preflight` | mission `mission-g-l1-general-live`, DuckDuckGo HTML search URL (`review-artifacts/readiness-9d97448a-campaign-preflight.log`) |
+| CLI model route | `node bin/babel.js research v2 model-route --json` | same policy route as smoke (`review-artifacts/readiness-9d97448a-model-route.json`) |
+| Live gate (this run) | `node bin/babel.js research v2 live-status --json` | `live_api_enabled: false` until `BABEL_RESEARCH_V2_ALLOW_LIVE_API=1` + operator credentials |
+
+**Effective OpenRouter (policy default, no env override):** provider `openrouter`, model `deepseek/deepseek-v4-flash-0731`, route key `deepseek-v4-flash-openrouter`, policy `/workspace/config/model-policy.json`, `backend_key` `research-v2-cli`.
+
+**Canonical G-L1 (document only — do not execute live until provenance/cancel review clears):**
+
+```bash
+cd babel-cli
+npm run build
+npm run test:research-v2-openrouter-route-smoke
+npm run test:research-v2-campaign-preflight
+
+export BABEL_RESEARCH_V2_ALLOW_LIVE_API=1
+# Operator sets OPENROUTER_API_KEY (presence only; not in repo)
+
+node bin/babel.js research v2 run \
+  --store /path/to/g-l1-store \
+  --mission-file src/research/v2/fixtures/campaign/G-L1-mission.json \
+  --discover-query "Which fictional cloud plan fits a solo developer who needs 500 GB" \
+  --json
+
+# Post-run usage/cost: inspect store events / terminal receipt (usage_settlement on completions)
+node bin/babel.js research v2 inspect --store /path/to/g-l1-store --mission-id mission-g-l1-general-live --json
+node bin/babel.js research v2 report --store /path/to/g-l1-store --mission-id mission-g-l1-general-live --json
+```
+
+Optional: `BABEL_RESEARCH_V2_G_L1_DISCOVER_QUERY` overrides the discover string used by `test:research-v2-campaign-preflight` only.
 
 **Canvas packaging (A owns lock/runtime):** direct `@napi-rs/canvas@0.1.80` + `pdfjs-dist@5.4.296` in `dependencies` (aligned with B `b3a6861b5` intent, reconciled with explicit platform-binding install for `--omit=optional` trees). B reciprocal PDF tests should copy runtime into staged `node_modules` and report resolved paths the same way — `NODE_PATH` to checkout `dist` is not packaged proof.
 

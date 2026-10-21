@@ -10,6 +10,15 @@ export function fixtureModelForOfflineRun(): ResearchModelPort {
   })
   return {
     async invokeStructured(request) {
+      if (
+        request.kind === 'plan_questions' &&
+        (request.operationId === 'cli-run-plan' || request.operationId.startsWith('cli-run-plan-'))
+      ) {
+        fixture.scriptOutput(request.operationId, {
+          kind: 'plan_questions',
+          questions: [{ text: 'What does the pinned contracts file export?', importance: 'high' }],
+        })
+      }
       if (request.kind === 'extract_findings') {
         const passageIds = (request.input.passage_ids as string[]) ?? []
         fixture.scriptOutput(request.operationId, {
