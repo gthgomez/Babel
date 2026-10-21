@@ -1,0 +1,23 @@
+{
+  "schema": "research-v2-campaign-expected-outcomes/v1",
+  "acceptance_scenario": "G-L3",
+  "mission_id": "mission-g-l3-contradiction-insufficient",
+  "structural": {
+    "requires_per_question_semantic_support": true,
+    "plan_question_themes": [
+      "downloads_page_stable_version_and_date",
+      "devguide_status_table_stable_version_and_date",
+      "cross_source_agreement_or_conflict"
+    ],
+    "must_allow_terminal_partial_on_insufficient_or_contradicted": true
+  },
+  "acceptable_terminal_states": ["partial"],
+  "forbidden_conclusions": [
+    "asserting_agreement_without_supported_findings_per_question",
+    "citations_outside_allowed_web_domains"
+  ],
+  "preflight": {
+    "requires_openrouter_route_lane": true,
+    "live_model_dispatch": false
+  }
+}

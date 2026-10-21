@@ -106,16 +106,18 @@
         "status": "pass"
       }
     ],
-    "proposed_not_run_yet": [
+    "proposed_followup": [
       {
         "command": "node --import tsx --test babel-cli/src/research/v2/profiles/general/generalAdapterEngineReciprocal.integration.test.ts",
         "expected": "G-DEV-01 engine reciprocal pass (comparison-class fixture)",
-        "maps_to": "G-L2 proxy"
+        "maps_to": "G-L2 proxy",
+        "status": "pass"
       },
       {
         "command": "node --import tsx --test babel-cli/src/research/v2/contracts/normalization-b-corpus.test.ts",
         "expected": "G-DEV-02/06 brief normalization pass",
-        "maps_to": "G-L2/G-L3 corpus hygiene"
+        "maps_to": "G-L2/G-L3 corpus hygiene",
+        "status": "pass"
       },
       {
         "command": "node --import tsx --test babel-cli/src/research/v2/profiles/general/generalAdapterLifecycleReciprocal.integration.test.ts",
