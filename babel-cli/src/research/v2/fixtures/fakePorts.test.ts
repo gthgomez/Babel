@@ -18,7 +18,9 @@ describe('research v2 fake ports', () => {
       source_id: 'src-babel-contract',
       kind: 'repository_file',
       canonical_key: 'github:gthgomez/Babel:contracts.ts',
-      observed_urls: ['https://github.com/gthgomez/Babel/blob/main/babel-cli/src/research/contracts.ts'],
+      observed_urls: [
+        'https://github.com/gthgomez/Babel/blob/d9e42b14b00b6dba25f0415ae16b084363386a01/babel-cli/src/research/contracts.ts',
+      ],
       title: 'V1 contracts',
     })
     const access = new FakeSourceAccessPort([

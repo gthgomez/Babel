@@ -29,7 +29,7 @@ describe('FetchSourceAccessPort repository_file pin transport', () => {
     assert.equal(result.status, 'failed')
     if (result.status === 'failed') {
       assert.equal(result.failureCategory, 'policy_denied')
-      assert.match(result.message, /does not match pinned blob identity/)
+      assert.match(result.message, /fetch hop owner does not match/)
     }
   })
 })

@@ -26,6 +26,8 @@ const v2Tests = await walk(root)
 const cliTests = [
   join(import.meta.dirname, '..', 'src', 'commands', 'researchV2Commands.test.ts'),
   join(import.meta.dirname, '..', 'src', 'commands', 'researchV2Commands.repair.test.ts'),
+  join(import.meta.dirname, '..', 'src', 'commands', 'researchV2CliRoutes.test.ts'),
+  join(import.meta.dirname, '..', 'src', 'commands', 'researchV2Commands.live.test.ts'),
 ]
 
 const babelRoot = join(import.meta.dirname, '..')

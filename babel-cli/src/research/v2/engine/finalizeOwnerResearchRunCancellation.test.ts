@@ -151,7 +151,7 @@ describe('finalizeOwnerResearchRunCancellation', () => {
       const firstAttempts = eventsAfterFirst
         .filter((e) => e.kind === 'external_operation_intent')
         .map((e) => (e.payload as { intent: { attempt_id: string } }).intent.attempt_id)
-      assert.ok(firstAttempts.some((id) => id.includes('plan-cancel-resume-001')))
+      assert.ok(firstAttempts.some((id) => id.includes('cli-run-plan-att-wg')))
 
       const owner = await ResearchEngineSession.openOwner({
         storeDirectory: dir,
@@ -196,11 +196,106 @@ describe('finalizeOwnerResearchRunCancellation', () => {
       const secondAttempts = eventsFinal
         .filter((e) => e.kind === 'external_operation_intent')
         .map((e) => (e.payload as { intent: { attempt_id: string } }).intent.attempt_id)
-      const firstPlanAttempt = firstAttempts.find((id) => id.includes('cli-run-plan-att'))
-      const secondPlanAttempt = secondAttempts.find((id) => id.includes(continuedPlanId))
+      const firstPlanAttempt = firstAttempts.find((id) => /^cli-run-plan-att-wg1-/.test(id))
+      const secondPlanAttempt = secondAttempts.find((id) =>
+        id.startsWith(`cli-run-plan-att-wg${resumed.writer_generation}-`),
+      )
       assert.ok(firstPlanAttempt)
       assert.ok(secondPlanAttempt)
       assert.notEqual(firstPlanAttempt, secondPlanAttempt)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('B regression 1693fb0d: watcher cancel → resume → planning cancel → second resume opens third owner', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'babel-research-v2-b1693fb0d-'))
+    const model = new BlockingUntilAbortModel()
+    const planBase = 'plan-b1693fb0d-cancel-resume-twice'
+    try {
+      const firstRun = runResearchV2MissionWithOwnerSession({
+        storeDirectory: dir,
+        mission: exampleTechnicalMissionFixture,
+        discoverQuery: 'RESEARCH_CONTRACT',
+        injectedOffline: true,
+        planRevisionId: planBase,
+        model,
+      })
+      let sessionId = ''
+      for (let i = 0; i < 50; i += 1) {
+        await new Promise((r) => setTimeout(r, 20))
+        const inspect = await openAdmittedInspectStore(dir)
+        sessionId = inspect.sessionControl?.session_id ?? ''
+        if (sessionId) break
+      }
+      assert.ok(sessionId)
+      await submitAdmittedOwnerCancelRequest(dir, sessionId)
+      await assert.rejects(() => firstRun)
+
+      const inspect1 = await ResearchEngineSession.openInspect(dir)
+      const terminals1 = (await inspect1.listEvents(exampleTechnicalMissionFixture.mission_id)).filter(
+        (e) => e.kind === 'terminal_receipt',
+      )
+      assert.equal(terminals1.length, 1)
+      const cancelled1 = (terminals1[0]!.payload as { report: { plan_revision_id: string } }).report
+
+      const owner2 = await ResearchEngineSession.openOwner({
+        storeDirectory: dir,
+        model: fixtureModelForOfflineRun(),
+      })
+      const fence1 = owner2.store.readMissionWriteFence(exampleTechnicalMissionFixture.mission_id)
+      const resumed1 = await owner2.resumeResearchContinuation({
+        mission_id: exampleTechnicalMissionFixture.mission_id,
+        expected_writer_generation: fence1.writer_generation,
+        host_authorization_ref: 'test-host/b1693fb0d-resume-1',
+        acknowledged_plan_revision_id: cancelled1.plan_revision_id,
+        acknowledged_terminal_state: 'cancelled',
+      })
+      const cancel2 = new AbortController()
+      const watcher2 = owner2.watchExternalCancelRequests(cancel2)
+      const continued1 = `${cancelled1.plan_revision_id}-continued`
+      const secondRun = runResearchV2EnginePassOnOwner({
+        owner: owner2,
+        mission: exampleTechnicalMissionFixture,
+        handle: resumed1,
+        discoverQuery: 'RESEARCH_CONTRACT',
+        injectedOffline: true,
+        activePlanRevisionId: cancelled1.plan_revision_id,
+        planRevisionId: continued1,
+        signal: cancel2.signal,
+        model,
+      })
+      await new Promise((r) => setTimeout(r, 40))
+      cancel2.abort()
+      watcher2.stop()
+      await assert.rejects(() => secondRun)
+      await finalizeOwnerResearchRunCancellation({
+        store: owner2.store,
+        mission: exampleTechnicalMissionFixture,
+      })
+      const fence2 = owner2.store.readMissionWriteFence(exampleTechnicalMissionFixture.mission_id)
+      const events2 = await owner2.store.listEvents(exampleTechnicalMissionFixture.mission_id)
+      assert.equal(events2.filter((e) => e.kind === 'terminal_receipt').length, 2)
+      const cancelled2 = (
+        events2.filter((e) => e.kind === 'terminal_receipt').at(-1)!.payload as {
+          report: { plan_revision_id: string }
+        }
+      ).report
+      await owner2.close()
+
+      const owner3 = await ResearchEngineSession.openOwner({
+        storeDirectory: dir,
+        model: fixtureModelForOfflineRun(),
+      })
+      const resumed2 = await owner3.resumeResearchContinuation({
+        mission_id: exampleTechnicalMissionFixture.mission_id,
+        expected_writer_generation: fence2.writer_generation,
+        host_authorization_ref: 'test-host/b1693fb0d-resume-2',
+        acknowledged_plan_revision_id: cancelled2.plan_revision_id,
+        acknowledged_terminal_state: 'cancelled',
+      })
+      assert.ok(resumed2.writer_generation > resumed1.writer_generation)
+      await owner3.close()
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

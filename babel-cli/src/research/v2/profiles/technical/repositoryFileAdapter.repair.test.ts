@@ -95,9 +95,12 @@ describe('technical repository_file adapter M1.2 repairs', () => {
       },
       media_type: 'text/html',
       provenance: {
-        requested_url: technicalRepositoryCorpusSource.observed_urls[0]!,
-        final_url: technicalRepositoryCorpusSource.observed_urls[0]!,
-        redirect_chain: [technicalRepositoryCorpusSource.observed_urls[0]!],
+        requested_url: technicalRepositoryCorpusFinalUrl,
+        final_url: technicalRepositoryCorpusFinalUrl,
+        redirect_chain: [technicalRepositoryCorpusFinalUrl],
+        repository_file_pin: {
+          pinned_blob_url: technicalRepositoryCorpusSource.observed_urls[0]!,
+        },
       },
       payload: {
         mode: 'inline_bytes',
@@ -145,6 +148,9 @@ describe('technical repository_file adapter M1.2 repairs', () => {
         requested_url: technicalRepositoryCorpusFinalUrl,
         final_url: technicalRepositoryCorpusFinalUrl,
         redirect_chain: [technicalRepositoryCorpusFinalUrl],
+        repository_file_pin: {
+          pinned_blob_url: technicalRepositoryCorpusSource.observed_urls[0]!,
+        },
       },
       payload: {
         mode: 'inline_bytes',
@@ -241,14 +247,14 @@ describe('technical repository_file adapter M1.2 repairs', () => {
     assert.equal(result.status, 'failed')
     if (result.status === 'failed') {
       assert.equal(result.failureCategory, 'pin_binding_failed')
-      assert.match(result.message, /final_url owner does not match canonical repository/i)
+      assert.match(result.message, /fetch hop owner does not match canonical repository/i)
     }
   })
 
   it('rejects admitted requested_url owner/repo drift from canonical source', async () => {
     const bytes = Buffer.from(technicalRepositoryCorpusBody, 'utf8')
     const hash = createHash('sha256').update(bytes).digest('hex')
-    const driftedRequested = `https://github.com/OTHER/OTHER/blob/${technicalRepositoryPinnedCommitSha}/babel-cli/src/research/contracts.ts`
+    const driftedRequested = `https://raw.githubusercontent.com/OTHER/OTHER/${technicalRepositoryPinnedCommitSha}/babel-cli/src/research/contracts.ts`
     const admitted: AdmittedContent = {
       operation_id: 'read-req-drift:fetch',
       revision: {
@@ -266,6 +272,9 @@ describe('technical repository_file adapter M1.2 repairs', () => {
         requested_url: driftedRequested,
         final_url: technicalRepositoryCorpusFinalUrl,
         redirect_chain: [driftedRequested, technicalRepositoryCorpusFinalUrl],
+        repository_file_pin: {
+          pinned_blob_url: technicalRepositoryCorpusSource.observed_urls[0]!,
+        },
       },
       payload: {
         mode: 'inline_bytes',
@@ -291,7 +300,7 @@ describe('technical repository_file adapter M1.2 repairs', () => {
     assert.equal(result.status, 'failed')
     if (result.status === 'failed') {
       assert.equal(result.failureCategory, 'pin_binding_failed')
-      assert.match(result.message, /requested_url owner does not match/i)
+      assert.match(result.message, /fetch hop owner does not match/i)
     }
   })
 

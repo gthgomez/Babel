@@ -10,6 +10,10 @@ import type { PassageRecord } from '../contracts/passages.js'
 import type { PlanRevision, ResearchReportV2 } from '../contracts/plan.js'
 import type { ResearchMissionV2 } from '../contracts/mission.js'
 import type { SourceRecord, SourceRevision } from '../contracts/sources.js'
+import {
+  pinnedGithubBlobUrlToRawContentUrl,
+  parsePinnedGithubBlobUrl,
+} from '../profiles/technical/repositoryFilePinning.js'
 import type {
   ExternalOperationCompletion,
   ExternalOperationIntent,
@@ -224,8 +228,43 @@ export class FakeSourceAccessPort implements SourceAccessPort {
     if (request.signal.aborted) {
       return { operationId: request.operationId, status: 'cancelled' }
     }
-    const requestedUrl = entry.source.observed_urls[0] ?? 'https://example.test/unknown'
-    const finalUrl = entry.finalUrl ?? requestedUrl
+    const observedUrl = entry.source.observed_urls[0] ?? 'https://example.test/unknown'
+    let requestedUrl = observedUrl
+    let finalUrl = entry.finalUrl ?? requestedUrl
+    let repositoryFilePin: { pinned_blob_url: string } | undefined
+    if (request.source.kind === 'repository_file') {
+      const blobUrl = request.source.observed_urls[0]
+      if (!blobUrl) {
+        return {
+          operationId: request.operationId,
+          status: 'failed',
+          failureCategory: 'not_found',
+          message: 'repository_file source has no observed URL',
+        }
+      }
+      const rawDefault = pinnedGithubBlobUrlToRawContentUrl(blobUrl)
+      if (!rawDefault) {
+        return {
+          operationId: request.operationId,
+          status: 'failed',
+          failureCategory: 'policy_denied',
+          message: 'repository_file observed URL is not a pinned github blob URL',
+        }
+      }
+      repositoryFilePin = { pinned_blob_url: blobUrl }
+      requestedUrl = rawDefault
+      if (entry.finalUrl === undefined || parsePinnedGithubBlobUrl(entry.finalUrl)) {
+        finalUrl =
+          entry.finalUrl && parsePinnedGithubBlobUrl(entry.finalUrl)
+            ? pinnedGithubBlobUrlToRawContentUrl(entry.finalUrl) ?? rawDefault
+            : rawDefault
+      } else {
+        finalUrl = entry.finalUrl
+      }
+    }
+    const redirectChain =
+      entry.redirectChain ??
+      [requestedUrl, finalUrl].filter((url, index, arr) => arr.indexOf(url) === index)
     return {
       operationId: request.operationId,
       status: 'ok',
@@ -236,9 +275,8 @@ export class FakeSourceAccessPort implements SourceAccessPort {
         provenance: {
           requested_url: requestedUrl,
           final_url: finalUrl,
-          redirect_chain: entry.redirectChain ?? [requestedUrl, finalUrl].filter(
-            (url, index, arr) => arr.indexOf(url) === index,
-          ),
+          redirect_chain: redirectChain,
+          ...(repositoryFilePin ? { repository_file_pin: repositoryFilePin } : {}),
         },
         payload: {
           mode: 'inline_bytes',

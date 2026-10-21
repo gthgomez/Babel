@@ -54,24 +54,22 @@ export function pinnedGithubRefToBlobUrl(ref: PinnedGithubBlobRef): string {
   return `https://github.com/${ref.owner}/${ref.repo}/blob/${ref.commitSha}/${ref.path}`
 }
 
-export function provenanceBlobUrlFromFetchHop(hopUrl: string, expected: PinnedGithubBlobRef): string | null {
-  const blob = parsePinnedGithubBlobUrl(hopUrl)
-  if (blob) {
-    try {
-      assertBlobRefMatchesExpected('fetch hop', blob, expected)
-      return hopUrl
-    } catch {
-      return null
-    }
+function pinnedRefFromTransportHop(hopUrl: string): PinnedGithubBlobRef | null {
+  return parsePinnedGithubBlobUrl(hopUrl) ?? parsePinnedGithubRawContentUrl(hopUrl)
+}
+
+/** Reject hops that do not identify the same pinned blob/ref; never rewrite transport URLs. */
+export function assertRepositoryFileTransportHopMatchesPin(
+  hopUrl: string,
+  expected: PinnedGithubBlobRef,
+): void {
+  const ref = pinnedRefFromTransportHop(hopUrl)
+  if (!ref) {
+    throw new TechnicalRepositoryPinError(
+      `repository_file fetch hop is not a pinned github blob or raw URL: ${hopUrl}`,
+    )
   }
-  const raw = parsePinnedGithubRawContentUrl(hopUrl)
-  if (!raw) return null
-  try {
-    assertBlobRefMatchesExpected('fetch hop', raw, expected)
-    return pinnedGithubRefToBlobUrl(raw)
-  } catch {
-    return null
-  }
+  assertBlobRefMatchesExpected('fetch hop', ref, expected)
 }
 
 /** Explicit equivalence: pinned blob URL must map to the immutable raw URL used for fetch. */
@@ -85,20 +83,6 @@ export function assertImmutableRawUrlForPinnedBlob(observedBlobUrl: string, fetc
       'repository_file fetch URL must equal immutable raw.githubusercontent.com URL for pinned blob',
     )
   }
-}
-
-/** Map a transport hop to blob provenance; reject cross-repo / mismatched hops (no substitution). */
-export function repositoryFileBlobProvenanceFromTransportHop(
-  hopUrl: string,
-  pinnedBlobRef: PinnedGithubBlobRef,
-): string {
-  const mapped = provenanceBlobUrlFromFetchHop(hopUrl, pinnedBlobRef)
-  if (!mapped) {
-    throw new TechnicalRepositoryPinError(
-      `repository_file fetch hop does not match pinned blob identity: ${hopUrl}`,
-    )
-  }
-  return mapped
 }
 
 function expectedBlobRef(source: SourceRecord): PinnedGithubBlobRef {
@@ -170,17 +154,36 @@ export function assertAdmissionBindsToPinnedSource(
     throw new TechnicalRepositoryPinError('admitted revision source_id mismatch')
   }
 
-  const requested = parsePinnedGithubBlobUrl(admitted.provenance.requested_url)
-  if (!requested) {
-    throw new TechnicalRepositoryPinError('admitted provenance requested_url is not a pinned github blob URL')
+  const pin = admitted.provenance.repository_file_pin
+  if (!pin?.pinned_blob_url) {
+    throw new TechnicalRepositoryPinError(
+      'repository_file admitted provenance requires repository_file_pin.pinned_blob_url',
+    )
   }
-  assertBlobRefMatchesExpected('admitted provenance requested_url', requested, expected)
+  if (!source.observed_urls.includes(pin.pinned_blob_url)) {
+    throw new TechnicalRepositoryPinError(
+      'repository_file_pin.pinned_blob_url must appear on source observed_urls',
+    )
+  }
+  const pinnedObserved = parsePinnedGithubBlobUrl(pin.pinned_blob_url)
+  if (!pinnedObserved) {
+    throw new TechnicalRepositoryPinError('repository_file_pin.pinned_blob_url is not a pinned github blob URL')
+  }
+  assertBlobRefMatchesExpected('repository_file_pin.pinned_blob_url', pinnedObserved, expected)
 
-  const final = parsePinnedGithubBlobUrl(admitted.provenance.final_url)
-  if (!final) {
-    throw new TechnicalRepositoryPinError('admitted provenance final_url is not a pinned github blob URL')
+  const { requested_url, final_url, redirect_chain } = admitted.provenance
+  if (redirect_chain.length < 1) {
+    throw new TechnicalRepositoryPinError('admitted redirect_chain must contain at least the requested URL')
   }
-  assertBlobRefMatchesExpected('admitted provenance final_url', final, expected)
+  if (redirect_chain[0] !== requested_url) {
+    throw new TechnicalRepositoryPinError('admitted redirect_chain must start with requested_url')
+  }
+  if (redirect_chain[redirect_chain.length - 1] !== final_url) {
+    throw new TechnicalRepositoryPinError('admitted redirect_chain must end with final_url')
+  }
+  for (const hop of redirect_chain) {
+    assertRepositoryFileTransportHopMatchesPin(hop, expected)
+  }
 }
 
 export class TechnicalRepositoryPinError extends Error {

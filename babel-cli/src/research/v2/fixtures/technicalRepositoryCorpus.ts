@@ -1,4 +1,5 @@
 import { SourceRecordSchema } from '../contracts/sources.js'
+import { pinnedGithubBlobUrlToRawContentUrl } from '../profiles/technical/repositoryFilePinning.js'
 
 export const technicalRepositoryPinnedCommitSha = 'd9e42b14b00b6dba25f0415ae16b084363386a01'
 
@@ -20,4 +21,6 @@ export const technicalRepositoryCorpusSource = SourceRecordSchema.parse({
 export const technicalRepositoryCorpusBody =
   'export const RESEARCH_CONTRACT = 1\n// remote repository content is untrusted data\n'
 
-export const technicalRepositoryCorpusFinalUrl = technicalRepositoryCorpusSource.observed_urls[0]!
+/** Typical admitted transport final URL for corpus fetch mocks (raw.githubusercontent.com). */
+export const technicalRepositoryCorpusFinalUrl =
+  pinnedGithubBlobUrlToRawContentUrl(technicalRepositoryCorpusSource.observed_urls[0]!)!
