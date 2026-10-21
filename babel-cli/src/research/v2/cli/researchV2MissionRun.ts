@@ -25,6 +25,7 @@ import {
   technicalRepositoryCorpusBody,
   technicalRepositoryCorpusFinalUrl,
 } from '../fixtures/technicalRepositoryCorpus.js'
+import { finalizeOwnerResearchRunCancellation } from '../engine/finalizeOwnerResearchRunCancellation.js'
 import { fixtureModelForOfflineRun } from './researchV2FixtureRunModel.js'
 
 export interface ResearchV2MissionRunResult {
@@ -43,6 +44,8 @@ export interface ResearchV2MissionRunOptions {
   mission: ResearchMissionV2
   discoverQuery: string
   planRevisionId?: string
+  /** When continuing after resume, the store's current active plan revision id. */
+  activePlanRevisionId?: string
   /** When true, uses fixture corpus + fixture model (deterministic tests only). */
   injectedOffline?: boolean
   model?: ResearchModelPort
@@ -121,6 +124,7 @@ export async function runResearchV2EnginePassOnOwner(options: {
   handle: ResearchStoreMissionHandle
   discoverQuery: string
   planRevisionId?: string
+  activePlanRevisionId?: string
   injectedOffline?: boolean
   model?: ResearchModelPort
   signal?: AbortSignal
@@ -164,7 +168,11 @@ export async function runResearchV2EnginePassOnOwner(options: {
   const signal = options.signal ?? new AbortController().signal
 
   const result = await runAdmittedResearchEndToEndPass({
-    session: { mission: options.mission, handle: options.handle },
+    session: {
+      mission: options.mission,
+      handle: options.handle,
+      ...(options.activePlanRevisionId ? { activePlanRevisionId: options.activePlanRevisionId } : {}),
+    },
     store: options.owner.store,
     model: resolvedModel,
     access,
@@ -214,6 +222,7 @@ export async function runResearchV2MissionWithOwnerSession(
 
   let owner: ResearchEngineSession | undefined
   let cancelWatcher: { stop(): void } | undefined
+  let missionAppended = false
   try {
     owner = await ResearchEngineSession.openOwner({
       storeDirectory: options.storeDirectory,
@@ -222,6 +231,7 @@ export async function runResearchV2MissionWithOwnerSession(
     cancelWatcher = owner.watchExternalCancelRequests(cancelController)
 
     const handle = await owner.appendMission(options.mission)
+    missionAppended = true
     const pass = await runResearchV2EnginePassOnOwner({
       owner,
       mission: options.mission,
@@ -230,6 +240,7 @@ export async function runResearchV2MissionWithOwnerSession(
       injectedOffline,
       signal,
       ...(options.planRevisionId ? { planRevisionId: options.planRevisionId } : {}),
+      ...(options.activePlanRevisionId ? { activePlanRevisionId: options.activePlanRevisionId } : {}),
       ...(options.model ? { model: options.model } : {}),
       ...(options.webSearchTransport ? { webSearchTransport: options.webSearchTransport } : {}),
       ...(options.fetchRepositoryTree ? { fetchRepositoryTree: options.fetchRepositoryTree } : {}),
@@ -240,6 +251,12 @@ export async function runResearchV2MissionWithOwnerSession(
     }
   } finally {
     cancelWatcher?.stop()
+    if (signal.aborted && owner && missionAppended) {
+      await finalizeOwnerResearchRunCancellation({
+        store: owner.store,
+        mission: options.mission,
+      })
+    }
     await owner?.close()
   }
 }

@@ -672,6 +672,19 @@ export class InMemoryResearchStore implements ResearchStore {
     return Promise.resolve(this.push(ctx.mission_id, 'terminal_receipt', { report }))
   }
 
+  readMissionWriteFence(missionId: string): {
+    writer_generation: number
+    active_plan_revision_id: string | null
+    terminal_report: ResearchReportV2 | null
+  } {
+    const fence = this.fence(missionId)
+    return {
+      writer_generation: fence.writerGeneration,
+      active_plan_revision_id: fence.activePlanRevisionId,
+      terminal_report: fence.terminalReport,
+    }
+  }
+
   async listEvents(missionId: string): Promise<readonly ResearchStoreEvent[]> {
     return this.events.filter((e) => e.missionId === missionId)
   }

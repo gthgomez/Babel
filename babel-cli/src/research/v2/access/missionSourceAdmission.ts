@@ -1,5 +1,9 @@
 import type { ResearchMissionV2 } from '../contracts/mission.js'
 import type { SourceRecord } from '../contracts/sources.js'
+import {
+  parsePinnedGithubBlobUrl,
+  parsePinnedGithubRawContentUrl,
+} from '../profiles/technical/repositoryFilePinning.js'
 import { parseAdmittedHttpUrl } from './admittedHttpGet.js'
 
 function hostnameAllowed(hostname: string, mission: ResearchMissionV2): boolean {
@@ -56,11 +60,38 @@ export function validateMissionFetchAdmission(
 }
 
 /** Single HTTP hop URL admission for web sources (pre-dispatch). */
+function repositoryFileHopMatchesPin(hopUrl: string, source: SourceRecord): string | null {
+  const blob = source.observed_urls.map((u) => parsePinnedGithubBlobUrl(u)).find(Boolean)
+  if (!blob) {
+    return 'repository_file source has no commit-pinned github blob observed_url'
+  }
+  const hopBlob = parsePinnedGithubBlobUrl(hopUrl) ?? parsePinnedGithubRawContentUrl(hopUrl)
+  if (!hopBlob) {
+    return `repository_file fetch hop must be pinned github blob or raw content URL`
+  }
+  if (hopBlob.owner.toLowerCase() !== blob.owner.toLowerCase()) {
+    return 'repository_file fetch hop owner does not match pinned source'
+  }
+  if (hopBlob.repo.toLowerCase() !== blob.repo.toLowerCase()) {
+    return 'repository_file fetch hop repository does not match pinned source'
+  }
+  if (hopBlob.commitSha.toLowerCase() !== blob.commitSha.toLowerCase()) {
+    return 'repository_file fetch hop commit does not match pinned source'
+  }
+  if (hopBlob.path !== blob.path) {
+    return 'repository_file fetch hop path does not match pinned source'
+  }
+  return null
+}
+
 export function validateMissionWebHopUrl(
   hopUrl: string,
   source: SourceRecord,
   mission: ResearchMissionV2,
 ): string | null {
+  if (source.kind === 'repository_file') {
+    return repositoryFileHopMatchesPin(hopUrl, source)
+  }
   if (source.kind !== 'web') {
     return null
   }

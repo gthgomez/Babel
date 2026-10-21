@@ -55,7 +55,30 @@ export class GeneralWebAdapter implements SourceAdapter {
         message: search.message,
       }
     }
-    const candidates: SourceRecord[] = search.hits.map((hit) => hit.source)
+    let candidates: SourceRecord[] = search.hits.map((hit) => hit.source)
+    if (candidates.length === 0) {
+      const docSearch = await access.search({
+        operationId: `${request.operationId}:document-search`,
+        query: request.query,
+        sourceClasses: ['document'],
+        signal: request.signal,
+      })
+      if (request.signal.aborted) {
+        return { operationId: request.operationId, status: 'cancelled' }
+      }
+      if (docSearch.status === 'cancelled') {
+        return { operationId: request.operationId, status: 'cancelled' }
+      }
+      if (docSearch.status === 'failed') {
+        return {
+          operationId: request.operationId,
+          status: 'failed',
+          failureCategory: docSearch.failureCategory,
+          message: docSearch.message,
+        }
+      }
+      candidates = docSearch.hits.map((hit) => hit.source)
+    }
     return { operationId: request.operationId, status: 'ok', candidates }
   }
 

@@ -229,4 +229,12 @@ export class DurableResearchStore implements ResearchStore {
   listEvents(missionId: string): Promise<readonly ResearchStoreEvent[]> {
     return this.inner.listEvents(missionId)
   }
+
+  readMissionWriteFence(missionId: string): {
+    writer_generation: number
+    active_plan_revision_id: string | null
+    terminal_report: ResearchReportV2 | null
+  } {
+    return this.inner.readMissionWriteFence(missionId)
+  }
 }

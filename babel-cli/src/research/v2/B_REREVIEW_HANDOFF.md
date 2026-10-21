@@ -5,7 +5,7 @@
 | Track | Draft PR | Published head (exact GitHub) | Owner |
 |-------|----------|-------------------------------|--------|
 | Agent A integration | [#406](https://github.com/gthgomez/Babel/pull/406) | `40dadfa2` (`cursor/research-v2-post-review-settlement-fc31`) | Combined runtime, CLI/engine, registry wiring, **web discover** |
-| Agent B extraction/tests | [#404](https://github.com/gthgomez/Babel/pull/404) | `c470f0cb` (tests-only on B80 catalog) | Read/HTML/PDF extraction, reciprocal integration tests |
+| Agent B extraction/tests | [#404](https://github.com/gthgomez/Babel/pull/404) | `b590e115` (engine reciprocal vs #406; 6/6 offline) | Read/HTML/PDF extraction, reciprocal integration tests |
 
 **Discover contract on #406:** `GeneralWebAdapter.discover` delegates to `access.search` and maps hits to web candidates (`generalWebAdapter.test.ts`). **Do not** replace `generalWebAdapter.ts` with B80, whose discover returns `not_supported` without search. `GeneralDocumentAdapter.discover` remains honestly `not_supported` (mission-selected documents).
 
