@@ -24,12 +24,6 @@ export function claimedSourceReviewFieldsFromSemanticInput(
   if (uniqueCitationSlots.length > 0) {
     return requiredClaimedSourceReviewFields(uniqueCitationSlots, 'matches_admitted_citations')
   }
-  const admittedFetched = (missionSourceSlots ?? [])
-    .filter((row) => row.fetch_status === 'admitted_fetched')
-    .map((row) => row.source_slot)
-  if (admittedFetched.length > 0) {
-    return requiredClaimedSourceReviewFields(admittedFetched, 'matches_admitted_citations')
-  }
   const configured = (missionSourceSlots ?? []).map((row) => row.source_slot)
   if (configured.length === 0) {
     throw new Error(
