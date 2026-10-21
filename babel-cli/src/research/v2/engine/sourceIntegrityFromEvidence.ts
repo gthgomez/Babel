@@ -39,9 +39,15 @@ function indexPassagesById(
   events: readonly ResearchStoreEvent[],
   extra: readonly PassageRecord[],
 ): { byId: Map<string, PassageRecord>; ambiguousIds: Set<string> } {
+  const succeededOwners = succeededSourceFetchAttemptOwnerKeys(events)
   const byId = new Map<string, PassageRecord>()
   const ambiguousIds = new Set<string>()
   const consider = (passage: PassageRecord) => {
+    const owner = passage.source_fetch_owner
+    if (!owner) return
+    const ownerKey = sourceFetchEvidenceOwnerKey(owner)
+    if (!succeededOwners.has(ownerKey)) return
+
     const existing = byId.get(passage.passage_id)
     if (!existing) {
       byId.set(passage.passage_id, passage)

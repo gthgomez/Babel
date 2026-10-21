@@ -76,6 +76,56 @@ test('buildPassageIntegrityVerification: rejects line_range beyond admitted line
   )
 })
 
+test('buildPassageIntegrityVerification: rejects byte_offset beyond admitted length', () => {
+  const bytes = Buffer.from('short', 'utf8')
+  const admitted = buildAdmittedContent('op-bytes', 'src-bytes', 'rev-bytes', bytes, PLAIN_TEXT_MEDIA_TYPE)
+  const passage = PassageRecordSchema.parse({
+    passage_id: 'p-byte-oob',
+    source_revision_id: admitted.revision.revision_id,
+    locator: { kind: 'byte_offset', start_offset: 0, end_offset: 99 },
+    text_ref: { mode: 'inline', text: 'x', text_hash: createHash('sha256').update('x').digest('hex') },
+  })
+  assert.throws(
+    () =>
+      buildPassageIntegrityVerification({
+        passage,
+        source: { source_id: 'src-bytes' },
+        revision: admitted.revision,
+        admitted,
+        extractionVersion: PLAIN_TEXT_EXTRACTION_VERSION,
+      }),
+    PassageIntegrityVerificationError,
+  )
+})
+
+test('buildPassageIntegrityVerification: rejects byte_offset slice that splits UTF-8 code unit', () => {
+  const bytes = Buffer.from('aéb', 'utf8')
+  const admitted = buildAdmittedContent('op-utf8', 'src-utf8', 'rev-utf8', bytes, PLAIN_TEXT_MEDIA_TYPE)
+  const passage = PassageRecordSchema.parse({
+    passage_id: 'p-byte-split',
+    source_revision_id: admitted.revision.revision_id,
+    locator: { kind: 'byte_offset', start_offset: 1, end_offset: 2 },
+    text_ref: {
+      mode: 'inline',
+      text: '\xc3',
+      text_hash: createHash('sha256').update('\xc3', 'utf8').digest('hex'),
+    },
+  })
+  assert.throws(
+    () =>
+      buildPassageIntegrityVerification({
+        passage,
+        source: { source_id: 'src-utf8' },
+        revision: admitted.revision,
+        admitted,
+        extractionVersion: PLAIN_TEXT_EXTRACTION_VERSION,
+      }),
+    (err: unknown) =>
+      err instanceof PassageIntegrityVerificationError &&
+      err.message.includes('not valid UTF-8'),
+  )
+})
+
 test('buildPassageIntegrityVerification: rejects locator/text mismatch', () => {
   const bytes = Buffer.from('one\ntwo\n', 'utf8')
   const admitted = buildAdmittedContent('op-bad', 'src-b', 'rev-b', bytes, PLAIN_TEXT_MEDIA_TYPE)

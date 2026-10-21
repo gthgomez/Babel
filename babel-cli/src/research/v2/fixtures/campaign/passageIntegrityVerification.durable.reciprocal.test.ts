@@ -490,34 +490,6 @@ describe('passage integrity verification durable reciprocal (B @ A canonical API
       )
       assert.equal(integrity, 'valid')
 
-      const ambiguousOther = stampSourceFetchEvidenceOwnerOnPassage(
-        PassageRecordSchema.parse({
-          ...a.passage,
-          text_ref: {
-            mode: 'inline',
-            text: 'materially different eligible excerpt',
-            text_hash: createHash('sha256').update('materially different eligible excerpt', 'utf8').digest('hex'),
-          },
-        }),
-        fetchOwner('fetch-other', 'att-other'),
-      )
-      const ambiguous = deriveFindingSourceIntegrity(
-        FindingRecordSchema.parse({
-          finding_id: 'f-ambiguous',
-          question_id: 'q-integrity-1',
-          assertion_text: 'ambiguous',
-          assertion_kind: 'source_observation',
-          passage_ids: [SHARED_PASSAGE_ID],
-          source_integrity: 'not_checked',
-          created_at: FIXED_NOW,
-        }),
-        [a.passage, ambiguousOther],
-        revisions,
-        sources,
-        events,
-      )
-      assert.equal(ambiguous, 'not_checked')
-
       const failPassageOwner = fetchOwner(FETCH_FAIL, `${ATT_FAIL}-passage`)
       await store.appendExternalOperationIntent(ctx, {
         mission_id: MISSION_ID,
@@ -566,9 +538,97 @@ describe('passage integrity verification durable reciprocal (B @ A canonical API
       )
       assert.equal(
         withFailedRow,
-        'not_checked',
-        'materially different passage_id reuse in store is conservatively not_checked (B row excluded)',
+        'valid',
+        'failed duplicate B passage row must be excluded; succeeded A owner-bound evidence stays valid',
       )
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('true ambiguity: two succeeded owners with materially different passage_id records → not_checked', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'integrity-true-ambiguity-'))
+    try {
+      const store = await DurableResearchStore.open(dir)
+      const handle = await store.appendMission(exampleTechnicalMissionFixture)
+      const ctx = {
+        ...exampleMissionWriteContext,
+        writer_generation: handle.writer_generation,
+        plan_revision_id: singleQuestionPlan.plan_revision_id,
+      }
+      await store.appendPlanRevision(ctx, singleQuestionPlan)
+
+      const a = verifiedRepositoryPassage({
+        passageId: SHARED_PASSAGE_ID,
+        revisionId: 'rev-amb-a',
+        sourceId: 'src-amb-a',
+        operationId: 'fetch-amb-a',
+        attemptId: 'att-amb-a',
+        lineText: 'owner-a excerpt\n',
+      })
+      await store.appendExternalOperationIntent(ctx, {
+        mission_id: MISSION_ID,
+        operation_id: 'fetch-amb-a',
+        attempt_id: 'att-amb-a',
+        operation_kind: 'source_fetch',
+        dispatched_at: FIXED_NOW,
+        idempotency_key: 'fetch-amb-a:att-amb-a',
+      })
+      await store.appendSource(ctx, a.source)
+      await store.appendSourceRevision(ctx, a.revision)
+      await store.appendPassage(ctx, a.passage)
+      await store.appendExternalOperationCompleted(ctx, {
+        mission_id: MISSION_ID,
+        operation_id: 'fetch-amb-a',
+        attempt_id: 'att-amb-a',
+        completed_at: FIXED_NOW,
+        settlement: 'succeeded',
+      })
+
+      const b = verifiedRepositoryPassage({
+        passageId: SHARED_PASSAGE_ID,
+        revisionId: 'rev-amb-b',
+        sourceId: 'src-amb-b',
+        operationId: 'fetch-amb-b',
+        attemptId: 'att-amb-b',
+        lineText: 'owner-b materially different excerpt\n',
+      })
+      await store.appendExternalOperationIntent(ctx, {
+        mission_id: MISSION_ID,
+        operation_id: 'fetch-amb-b',
+        attempt_id: 'att-amb-b',
+        operation_kind: 'source_fetch',
+        dispatched_at: FIXED_NOW,
+        idempotency_key: 'fetch-amb-b:att-amb-b',
+      })
+      await store.appendSource(ctx, b.source)
+      await store.appendSourceRevision(ctx, b.revision)
+      await store.appendPassage(ctx, b.passage)
+      await store.appendExternalOperationCompleted(ctx, {
+        mission_id: MISSION_ID,
+        operation_id: 'fetch-amb-b',
+        attempt_id: 'att-amb-b',
+        completed_at: FIXED_NOW,
+        settlement: 'succeeded',
+      })
+
+      const events = await store.listEvents(MISSION_ID)
+      const result = deriveFindingSourceIntegrity(
+        FindingRecordSchema.parse({
+          finding_id: 'f-true-ambiguity',
+          question_id: 'q-integrity-1',
+          assertion_text: 'ambiguous',
+          assertion_kind: 'source_observation',
+          passage_ids: [SHARED_PASSAGE_ID],
+          source_integrity: 'not_checked',
+          created_at: FIXED_NOW,
+        }),
+        [a.passage, b.passage],
+        listSourceRevisionsFromStoreEvents(events),
+        listSourcesFromStoreEvents(events),
+        events,
+      )
+      assert.equal(result, 'not_checked')
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -666,6 +726,39 @@ describe('passage integrity verification durable reciprocal (B @ A canonical API
         text_hash: createHash('sha256').update('stale-hash-bind').digest('hex'),
       },
     })
+    const tamperEvents = [
+      {
+        eventId: 'intent-tamper',
+        missionId: MISSION_ID,
+        kind: 'external_operation_intent' as const,
+        recordedAt: FIXED_NOW,
+        payload: {
+          intent: {
+            mission_id: MISSION_ID,
+            operation_id: FETCH_OK,
+            attempt_id: ATT_OK,
+            operation_kind: 'source_fetch',
+            dispatched_at: FIXED_NOW,
+            idempotency_key: `${FETCH_OK}:${ATT_OK}`,
+          },
+        },
+      },
+      {
+        eventId: 'done-tamper',
+        missionId: MISSION_ID,
+        kind: 'external_operation_completed' as const,
+        recordedAt: FIXED_NOW,
+        payload: {
+          completion: {
+            mission_id: MISSION_ID,
+            operation_id: FETCH_OK,
+            attempt_id: ATT_OK,
+            completed_at: FIXED_NOW,
+            settlement: 'succeeded',
+          },
+        },
+      },
+    ]
     const helperResult = deriveFindingSourceIntegrity(
       FindingRecordSchema.parse({
         finding_id: 'f-tamper',
@@ -679,7 +772,7 @@ describe('passage integrity verification durable reciprocal (B @ A canonical API
       [tampered],
       [revision],
       [source],
-      [],
+      tamperEvents,
     )
     assert.equal(helperResult, 'invalid')
 

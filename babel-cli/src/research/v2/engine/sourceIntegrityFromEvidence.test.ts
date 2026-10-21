@@ -344,12 +344,18 @@ describe('deriveFindingSourceIntegrity', () => {
       }),
       fetchOwner('fetch-other', 'att-other'),
     )
+    const otherEvents: ResearchStoreEvent[] = [
+      ...events,
+      fetchIntent('fetch-other', 'att-other'),
+      passageRecorded(other),
+      fetchSucceeded('fetch-other', 'att-other'),
+    ]
     const result = deriveFindingSourceIntegrity(
       finding([passage.passage_id]),
       [passage, other],
       revisions,
       sources,
-      [...events, passageRecorded(other)],
+      otherEvents,
     )
     assert.equal(result, 'not_checked')
     assert.notEqual(owner.operation_id, other.source_fetch_owner?.operation_id)

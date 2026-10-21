@@ -1,41 +1,159 @@
 TAP version 13
+# Subtest: deriveFindingSourceIntegrity
+    # Subtest: returns valid when receipt, owner, and hashes align with succeeded fetch
+    ok 1 - returns valid when receipt, owner, and hashes align with succeeded fetch
+      ---
+      duration_ms: 2.641843
+      type: 'test'
+      ...
+    # Subtest: returns invalid when persisted text hash does not match inline text
+    ok 2 - returns invalid when persisted text hash does not match inline text
+      ---
+      duration_ms: 0.504612
+      type: 'test'
+      ...
+    # Subtest: returns invalid when receipt still binds original hash after text tamper
+    ok 3 - returns invalid when receipt still binds original hash after text tamper
+      ---
+      duration_ms: 0.430164
+      type: 'test'
+      ...
+    # Subtest: returns invalid when locator changes but text/hash stay consistent with receipt
+    ok 4 - returns invalid when locator changes but text/hash stay consistent with receipt
+      ---
+      duration_ms: 0.359015
+      type: 'test'
+      ...
+    # Subtest: returns not_checked when owning fetch did not succeed
+    ok 5 - returns not_checked when owning fetch did not succeed
+      ---
+      duration_ms: 0.337695
+      type: 'test'
+      ...
+    # Subtest: returns not_checked for legacy passages without integrity_verification
+    ok 6 - returns not_checked for legacy passages without integrity_verification
+      ---
+      duration_ms: 0.102389
+      type: 'test'
+      ...
+    # Subtest: returns not_checked for unknown integrity verifier_version
+    ok 7 - returns not_checked for unknown integrity verifier_version
+      ---
+      duration_ms: 0.3853
+      type: 'test'
+      ...
+    # Subtest: resolves revision by revision_id and fetch owner when id is reused across attempts
+    ok 8 - resolves revision by revision_id and fetch owner when id is reused across attempts
+      ---
+      duration_ms: 0.525638
+      type: 'test'
+      ...
+    # Subtest: returns not_checked when same passage_id maps to materially different records
+    ok 9 - returns not_checked when same passage_id maps to materially different records
+      ---
+      duration_ms: 0.566386
+      type: 'test'
+      ...
+    # Subtest: returns invalid when revision owner contradicts passage owner
+    ok 10 - returns invalid when revision owner contradicts passage owner
+      ---
+      duration_ms: 0.566972
+      type: 'test'
+      ...
+    # Subtest: G-L3 historical findings stay not_checked on unchanged fixture passages
+    ok 11 - G-L3 historical findings stay not_checked on unchanged fixture passages
+      ---
+      duration_ms: 0.180868
+      type: 'test'
+      ...
+    1..11
+ok 1 - deriveFindingSourceIntegrity
+  ---
+  duration_ms: 7.496725
+  type: 'suite'
+  ...
 # Subtest: passage integrity verification durable reciprocal (B @ A canonical API)
     # Subtest: composed T-L1 retrieval persists repository-pin-0/1 sources (not discover-primary)
     ok 1 - composed T-L1 retrieval persists repository-pin-0/1 sources (not discover-primary)
       ---
-      duration_ms: 28.536372
+      duration_ms: 24.833769
       type: 'test'
       ...
+# (node:192192) Warning: Closing file descriptor 47 on garbage collection
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# (node:192192) [DEP0137] DeprecationWarning: Closing a FileHandle object on garbage collection is deprecated. Please close FileHandle objects explicitly using FileHandle.prototype.close(). In the future, an error will be thrown if a file descriptor is closed during garbage collection.
     # Subtest: persists succeeded A then failed B reusing revision/passage ids; A owner-bound evidence stays valid
     ok 2 - persists succeeded A then failed B reusing revision/passage ids; A owner-bound evidence stays valid
       ---
-      duration_ms: 10.278659
+      duration_ms: 14.857498
+      type: 'test'
+      ...
+    # Subtest: true ambiguity: two succeeded owners with materially different passage_id records → not_checked
+    ok 3 - true ambiguity: two succeeded owners with materially different passage_id records → not_checked
+      ---
+      duration_ms: 6.542606
       type: 'test'
       ...
     # Subtest: runner: verified receipts, valid findings, supported/answers, terminal complete; cold persistence reopen preserves state
-    ok 3 - runner: verified receipts, valid findings, supported/answers, terminal complete; cold persistence reopen preserves state
+    ok 4 - runner: verified receipts, valid findings, supported/answers, terminal complete; cold persistence reopen preserves state
       ---
-      duration_ms: 25.391138
+      duration_ms: 23.853788
       type: 'test'
       ...
     # Subtest: helper deriveFindingSourceIntegrity rejects tamper; finalizer boundary records unverified supported findings
-    ok 4 - helper deriveFindingSourceIntegrity rejects tamper; finalizer boundary records unverified supported findings
+    ok 5 - helper deriveFindingSourceIntegrity rejects tamper; finalizer boundary records unverified supported findings
       ---
-      duration_ms: 1.121598
+      duration_ms: 1.079411
       type: 'test'
       ...
-    1..4
-ok 1 - passage integrity verification durable reciprocal (B @ A canonical API)
+    1..5
+ok 2 - passage integrity verification durable reciprocal (B @ A canonical API)
   ---
-  duration_ms: 66.165244
+  duration_ms: 72.025198
   type: 'suite'
   ...
-1..1
-# tests 4
-# suites 1
-# pass 4
+# Subtest: passageWithIntegrityVerification: plain-text line range matches admitted bytes
+ok 3 - passageWithIntegrityVerification: plain-text line range matches admitted bytes
+  ---
+  duration_ms: 3.777408
+  type: 'test'
+  ...
+# Subtest: stampSourceFetchEvidenceOwnerOnPassage preserves integrity_verification
+ok 4 - stampSourceFetchEvidenceOwnerOnPassage preserves integrity_verification
+  ---
+  duration_ms: 0.780962
+  type: 'test'
+  ...
+# Subtest: buildPassageIntegrityVerification: rejects line_range beyond admitted lines
+ok 5 - buildPassageIntegrityVerification: rejects line_range beyond admitted lines
+  ---
+  duration_ms: 0.53782
+  type: 'test'
+  ...
+# Subtest: buildPassageIntegrityVerification: rejects byte_offset beyond admitted length
+ok 6 - buildPassageIntegrityVerification: rejects byte_offset beyond admitted length
+  ---
+  duration_ms: 0.396588
+  type: 'test'
+  ...
+# Subtest: buildPassageIntegrityVerification: rejects byte_offset slice that splits UTF-8 code unit
+ok 7 - buildPassageIntegrityVerification: rejects byte_offset slice that splits UTF-8 code unit
+  ---
+  duration_ms: 0.277448
+  type: 'test'
+  ...
+# Subtest: buildPassageIntegrityVerification: rejects locator/text mismatch
+ok 8 - buildPassageIntegrityVerification: rejects locator/text mismatch
+  ---
+  duration_ms: 0.345695
+  type: 'test'
+  ...
+1..8
+# tests 22
+# suites 2
+# pass 22
 # fail 0
 # cancelled 0
 # skipped 0
 # todo 0
-# duration_ms 377.040579
+# duration_ms 478.240657
