@@ -12,9 +12,9 @@ Labeled offline slices derived from the immutable diagnostic-1 evidence subset. 
 **Reciprocal tests:**
 
 - `gL2Diagnostic1Quality.originalDerived.reciprocal.test.ts` — finalization helpers + labeled expected rubric overlay.
-- `gL2Diagnostic1Quality.boundCoverage.reciprocal.test.ts` — A `boundQuestionCoverageFromEvidence` / `enforceBoundQuestionCoverageOnFindings` on **unchanged** diagnostic-1 question + passage wording (contrasts A synthetic derived slice).
-- `reportFinalizationEvidence.gL2.regression.test.ts` — A derived audit slice through `applySemanticSupportReview` with bound context.
+- `reportFinalizationEvidence.gL2.regression.test.ts` — labelled `g-l2-original-derived-regression/v1` fixture (frozen q3/q4 text, obligations, 7f3/a0cf replay, positives, renamed-slot + non-cache negatives).
+- `gL2Diagnostic1Quality.boundCoverage.reciprocal.test.ts` — production wiring checks (live subset lacks obligations; fixture path has them).
 
-Run bound + derived G-L2 regressions: `npm run test:research-v2-g-l2-bound-coverage`.
+Run: `npm run test:research-v2-g-l2-bound-coverage` (includes `planCoverageObligations.test.ts`).
 
 **Ownership:** Agent A — review contract / runtime after durable lineage repair. Agent B — fixtures and reciprocal tests only (no duplicate semantic implementation).

@@ -4,24 +4,15 @@ Integrated production helper: A `cfe0cd76` (`source_fetch_owner` write-time stam
 
 Run: `npm run test:research-v2-extraction-lineage-durable` (no skip flags; not gated on main).
 
-## 19-row matrix (honest outcomes after cfe0cd76)
+## 19-row matrix (honest outcomes; preserve d5632091 evidence until collision checkpoint)
 
 | # | Row | Expected |
 | --- | --- | --- |
-| 1–9 | `retrievalExtractionLineage.test.ts` (unit + durable reopen) | **GREEN** |
-| 10 | Shared `operation_id`, sequential failed→retry (e2e) | **GREEN** |
-| 11 | Shared `operation_id`, interleaved intents (e2e) | **GREEN** (owner-scoped; distinct passage ids) |
-| 12 | Nested same op, `a_then_b` filter reopen | **GREEN** |
-| 13 | Nested same op, `a_then_b` e2e extract | **GREEN** |
-| 14 | Nested same op, `b_then_a` filter reopen | **GREEN** |
-| 15 | Nested same op, `b_then_a` e2e extract | **GREEN** |
-| 16 | Nested distinct op, `a_then_b` filter reopen | **GREEN** |
-| 17 | Nested distinct op, `a_then_b` e2e extract | **GREEN** |
-| 18 | Nested distinct op, `b_then_a` filter + e2e | **GREEN** |
-| 19 | **Shared `passage_id`**, distinct owners (failed A, succeeded B) filter + e2e | **RED** — `allowedSet<passage_id>` admits id once; failed record can inherit eligibility |
+| 1–9 | `retrievalExtractionLineage.test.ts` | **GREEN** |
+| 10–11 | Shared `operation_id` sequential + interleaved e2e | **GREEN** |
+| 12–18 | Nested same/distinct op filter + e2e | **GREEN** |
+| 19 | Shared `passage_id`, distinct owners (failed A, succeeded B) | **RED** — ID-only allow-set admits both records / failed text in extract |
 
-Row 19: A owns per-record filter correction (not ID-only set). Do not treat leakage as product acceptance.
+Row 19: await A per-record filter checkpoint (`2004cbeb` on #406); rerun this suite unchanged except API adaptation.
 
-Historical: pre-cfe bb774 red rows (prefix/revision OR) documented in git history; `45175254` snapshot preserved in history.
-
-Semantic bound-coverage characterization (`2118a629` / `b2228115`) remains useful until A publishes general evidence-obligation API; then reconcile typed tests to expect partial/insufficient on original q3/q4 without preserving keyword-heuristic acceptance.
+Obligation API (`95a87054`): `npm run test:research-v2-g-l2-bound-coverage` — original q3/q4 desired partial/tangential via labelled fixture + production `applySemanticSupportReview` path.
