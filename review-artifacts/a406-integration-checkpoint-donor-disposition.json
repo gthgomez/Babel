@@ -5,8 +5,9 @@
     "role": "canonical A production (integrity, source-slot, eligible indexing)"
   },
   "integrated_head": {
-    "commit": "pending_push",
-    "tree": "pending_push"
+    "commit": "d672384f",
+    "tree": "pending_tree",
+    "integration_commit_cb3d4423": "cb3d4423f3d2c38121f5d8daac52f35a54f0f073"
   },
   "pr": 406,
   "branch": "cursor/research-v2-post-review-settlement-fc31",
@@ -79,6 +80,8 @@
     "typecheck_log": "/opt/cursor/artifacts/a406-discovery-diag-typecheck.log",
     "build_log": "/opt/cursor/artifacts/a406-discovery-diag-build.log",
     "research_v2_test_inventory": "/opt/cursor/artifacts/a406-research-v2-test-inventory.txt",
+    "research_v2_test_file_count": 146,
+    "research_v2_full_tap_summary": "577 tests, 577 pass, 0 fail",
     "research_v2_full_tap_log": "/opt/cursor/artifacts/a406-research-v2-full-tap-discovery-diag.log",
     "public_content_policy_log": "/opt/cursor/artifacts/a406-discovery-diag-public-content-policy.log",
     "local_secret_scan_note": "Workspace dir scan may flag gitignored runs/chat-sessions; git-mode gitleaks on tracked history is the release qualification scope"
