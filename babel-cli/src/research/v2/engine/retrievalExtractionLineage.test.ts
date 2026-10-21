@@ -16,8 +16,10 @@ import {
 } from '../fixtures/exampleMission.js'
 import { DurableResearchStore } from '../persistence/durableResearchStore.js'
 import {
+  extractionLineageReportLimitations,
   filterPassagesForExtractionLineage,
   passageIdsForExtractionLineage,
+  passageIsAdmittedForExtractionLineage,
   succeededSourceFetchAttemptOwnerKeys,
 } from './retrievalExtractionLineage.js'
 
@@ -43,8 +45,9 @@ function passage(
   id: string,
   sourceRevisionId = 'rev-1',
   owner?: SourceFetchEvidenceOwner,
+  inlineText?: string,
 ): PassageRecord {
-  const text = `text-for-${id}`
+  const text = inlineText ?? `text-for-${id}`
   return PassageRecordSchema.parse({
     passage_id: id,
     source_revision_id: sourceRevisionId,
@@ -128,6 +131,67 @@ describe('retrievalExtractionLineage', () => {
     const passages = [failedPassage, ...okPassages]
     const filtered = filterPassagesForExtractionLineage(passages, events)
     assert.deepEqual(filtered.map((p) => p.passage_id), ['fetch-ok', 'fetch-ok:1'])
+  })
+
+  it('does not cross-admit colliding passage_id: failed owner row excluded when id admitted on success', () => {
+    const sharedId = 'fetch-op:L1'
+    const failedText = 'failed-attempt-excerpt'
+    const successText = 'succeeded-attempt-excerpt'
+    const failedRow = passage(
+      sharedId,
+      'rev-fail',
+      fetchOwner('fetch-op', 'att-fail'),
+      failedText,
+    )
+    const successRow = passage(
+      sharedId,
+      'rev-ok',
+      fetchOwner('fetch-op', 'att-ok'),
+      successText,
+    )
+    const events = [
+      fetchIntent('fetch-op', 'att-fail'),
+      passageRecorded(failedRow),
+      fetchCompletion('fetch-op', 'failed', 'att-fail'),
+      fetchIntent('fetch-op', 'att-ok'),
+      passageRecorded(successRow),
+      fetchCompletion('fetch-op', 'succeeded', 'att-ok'),
+    ]
+    const filtered = filterPassagesForExtractionLineage([failedRow, successRow], events)
+    assert.equal(filtered.length, 1)
+    assert.equal(filtered[0]?.passage_id, sharedId)
+    assert.equal(
+      filtered[0]?.text_ref.mode === 'inline' ? filtered[0].text_ref.text : '',
+      successText,
+    )
+    assert.equal(passageIsAdmittedForExtractionLineage(failedRow, events), false)
+    assert.equal(passageIsAdmittedForExtractionLineage(successRow, events), true)
+  })
+
+  it('colliding passage_id: ownerless legacy row excluded while succeeded owner row kept', () => {
+    const sharedId = 'pdf:page:1'
+    const legacyRow = passage(sharedId, 'rev-legacy', undefined, 'legacy-unowned-text')
+    const ownedRow = passage(
+      sharedId,
+      'rev-ok',
+      fetchOwner('pdf-fetch', 'att-ok'),
+      'owned-success-text',
+    )
+    const events = [
+      fetchIntent('pdf-fetch', 'att-ok'),
+      passageRecorded(legacyRow),
+      passageRecorded(ownedRow),
+      fetchCompletion('pdf-fetch', 'succeeded', 'att-ok'),
+    ]
+    const filtered = filterPassagesForExtractionLineage([legacyRow, ownedRow], events)
+    assert.equal(filtered.length, 1)
+    assert.equal(
+      filtered[0]?.text_ref.mode === 'inline' ? filtered[0].text_ref.text : '',
+      'owned-success-text',
+    )
+    assert.deepEqual(extractionLineageReportLimitations([legacyRow, ownedRow], events), [
+      'extraction_lineage_excluded_ownerless_legacy_passage_count:1',
+    ])
   })
 
   it('excludes legacy passages without source_fetch_owner (fail closed)', () => {
@@ -266,6 +330,83 @@ describe('retrievalExtractionLineage', () => {
       assert.equal(allPassages.length, 2)
       const forExtract = filterPassagesForExtractionLineage(allPassages, events)
       assert.deepEqual(forExtract.map((p) => p.passage_id), [okOp])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('durable close/reopen: colliding passage_id keeps succeeded attempt text only', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'research-lineage-collision-'))
+    const sharedId = 'composed-fetch:L1'
+    const failedText = 'collision-failed-body'
+    const successText = 'collision-succeeded-body'
+    try {
+      let store = await DurableResearchStore.open(dir)
+      const handle = await store.appendMission(exampleTechnicalMissionFixture)
+      const ctx = { ...exampleMissionWriteContext, writer_generation: handle.writer_generation }
+      await store.appendPlanRevision(ctx, examplePlanRevisionFixture)
+      const op = 'collision-fetch-op'
+      await store.appendExternalOperationIntent(ctx, {
+        mission_id: ctx.mission_id,
+        operation_id: op,
+        attempt_id: 'att-fail',
+        operation_kind: 'source_fetch',
+        dispatched_at: '2026-10-20T12:00:00.000Z',
+        idempotency_key: `${op}:att-fail`,
+      })
+      await store.appendPassage(
+        ctx,
+        passage(
+          sharedId,
+          'rev-f',
+          fetchOwnerForMission(ctx.mission_id, op, 'att-fail'),
+          failedText,
+        ),
+      )
+      await store.appendExternalOperationCompleted(ctx, {
+        mission_id: ctx.mission_id,
+        operation_id: op,
+        attempt_id: 'att-fail',
+        completed_at: '2026-10-20T12:00:01.000Z',
+        settlement: 'failed',
+      })
+      await store.appendExternalOperationIntent(ctx, {
+        mission_id: ctx.mission_id,
+        operation_id: op,
+        attempt_id: 'att-ok',
+        operation_kind: 'source_fetch',
+        dispatched_at: '2026-10-20T12:00:02.000Z',
+        idempotency_key: `${op}:att-ok`,
+      })
+      await store.appendPassage(
+        ctx,
+        passage(
+          sharedId,
+          'rev-ok',
+          fetchOwnerForMission(ctx.mission_id, op, 'att-ok'),
+          successText,
+        ),
+      )
+      await store.appendExternalOperationCompleted(ctx, {
+        mission_id: ctx.mission_id,
+        operation_id: op,
+        attempt_id: 'att-ok',
+        completed_at: '2026-10-20T12:00:03.000Z',
+        settlement: 'succeeded',
+      })
+      await store.close()
+
+      store = await DurableResearchStore.open(dir)
+      const events = await store.listEvents(ctx.mission_id)
+      const allPassages = events
+        .filter((e) => e.kind === 'passage_recorded')
+        .map((e) => (e.payload as { passage: PassageRecord }).passage)
+      const forExtract = filterPassagesForExtractionLineage(allPassages, events)
+      assert.equal(forExtract.length, 1)
+      assert.equal(
+        forExtract[0]?.text_ref.mode === 'inline' ? forExtract[0].text_ref.text : '',
+        successText,
+      )
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

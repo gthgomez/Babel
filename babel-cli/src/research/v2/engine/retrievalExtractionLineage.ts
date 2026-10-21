@@ -92,42 +92,71 @@ function passageOwnerKey(passage: PassageRecord): string | undefined {
 }
 
 /**
- * Passage ids whose write-time `source_fetch_owner` matches a terminal succeeded `source_fetch`
- * attempt. Legacy passages without explicit ownership are excluded (fail closed).
+ * Whether this passage record (not passage_id alone) is eligible for extraction: write-time owner
+ * must match a terminal succeeded `source_fetch` attempt. Ownerless legacy rows fail closed.
+ */
+export function passageIsAdmittedForExtractionLineage(
+  passage: PassageRecord,
+  events: readonly ResearchStoreEvent[],
+): boolean {
+  const succeededOwners = succeededSourceFetchAttemptOwnerKeys(events)
+  if (succeededOwners.size === 0) {
+    return false
+  }
+  const ownerKey = passageOwnerKey(passage)
+  if (!ownerKey) {
+    return false
+  }
+  return succeededOwners.has(ownerKey)
+}
+
+/**
+ * Passage ids admitted for extraction after per-record owner filtering.
+ * Duplicate passage_ids across attempts collapse in this set; use {@link filterPassagesForExtractionLineage}
+ * when record-level text/owner must be preserved.
  */
 export function passageIdsAdmittedUnderSucceededSourceFetches(
   events: readonly ResearchStoreEvent[],
 ): Set<string> {
-  const succeededOwners = succeededSourceFetchAttemptOwnerKeys(events)
-  if (succeededOwners.size === 0) {
-    return new Set()
-  }
-  const admitted = new Set<string>()
-  for (const event of events) {
-    if (event.kind !== 'passage_recorded') continue
-    const passage = (event.payload as { passage: PassageRecord }).passage
-    const ownerKey = passageOwnerKey(passage)
-    if (!ownerKey) continue
-    if (succeededOwners.has(ownerKey)) {
-      admitted.add(passage.passage_id)
-    }
-  }
-  return admitted
+  const passages = events
+    .filter((e) => e.kind === 'passage_recorded')
+    .map((e) => (e.payload as { passage: PassageRecord }).passage)
+  return new Set(
+    filterPassagesForExtractionLineage(passages, events).map((p) => p.passage_id),
+  )
 }
 
 /**
  * Extraction may resume after close/reopen; omit passages without succeeded attempt ownership.
+ * Each record is filtered by its own `source_fetch_owner`, not by a shared passage_id allow-set.
  * Original store events are never deleted.
  */
 export function filterPassagesForExtractionLineage(
   passages: readonly PassageRecord[],
   events: readonly ResearchStoreEvent[],
 ): PassageRecord[] {
-  const admittedIds = passageIdsAdmittedUnderSucceededSourceFetches(events)
-  if (admittedIds.size === 0) {
+  const succeededOwners = succeededSourceFetchAttemptOwnerKeys(events)
+  if (succeededOwners.size === 0) {
     return []
   }
-  return passages.filter((passage) => admittedIds.has(passage.passage_id))
+  return passages.filter((passage) => {
+    const ownerKey = passageOwnerKey(passage)
+    return ownerKey !== undefined && succeededOwners.has(ownerKey)
+  })
+}
+
+/** Report limitations for ownerless legacy passages excluded from extraction (no ownership backfill). */
+export function extractionLineageReportLimitations(
+  allPassages: readonly PassageRecord[],
+  _events: readonly ResearchStoreEvent[],
+): string[] {
+  const ownerlessExcluded = allPassages.filter((p) => !p.source_fetch_owner).length
+  if (ownerlessExcluded === 0) {
+    return []
+  }
+  return [
+    `extraction_lineage_excluded_ownerless_legacy_passage_count:${ownerlessExcluded}`,
+  ]
 }
 
 export function passageIdsForExtractionLineage(

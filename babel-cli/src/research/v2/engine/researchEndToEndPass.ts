@@ -30,7 +30,10 @@ import {
   assertModelInvocationReceiptBound,
   ModelReceiptBindingError,
 } from './validateModelInvocationReceipt.js'
-import { filterPassagesForExtractionLineage } from './retrievalExtractionLineage.js'
+import {
+  extractionLineageReportLimitations,
+  filterPassagesForExtractionLineage,
+} from './retrievalExtractionLineage.js'
 
 export interface ResearchEndToEndPassRequest {
   session: AdmittedPlanningSession
@@ -290,6 +293,7 @@ export async function runAdmittedResearchEndToEndPass(
     .filter((e) => e.kind === 'passage_recorded')
     .map((e) => (e.payload as { passage: PassageRecord }).passage)
   const passages = filterPassagesForExtractionLineage(allPassages, storeEvents)
+  const extractionLineageLimitations = extractionLineageReportLimitations(allPassages, storeEvents)
   const extractionPassageIds = passages.map((p) => p.passage_id)
 
   const extractOutput = await invokeModelPhase(request.store, ctx, request.model, {
@@ -384,9 +388,7 @@ export async function runAdmittedResearchEndToEndPass(
     sourceRevisions,
     modelOutput: synthesizeOutput,
     generatedAt: now(),
-    ...(composedRetrievalLimitations.length > 0
-      ? { additionalLimitations: composedRetrievalLimitations }
-      : {}),
+    additionalLimitations: [...composedRetrievalLimitations, ...extractionLineageLimitations],
   })
   await request.store.appendTerminalReport(ctx, report)
 
