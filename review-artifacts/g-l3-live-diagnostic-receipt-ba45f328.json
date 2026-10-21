@@ -1,0 +1,85 @@
+{
+  "schema": "research-v2-g-l3-live-diagnostic-receipt-sanitized/v1",
+  "receipt_binding": {
+    "frozen": true,
+    "bound_head": "ba45f3280d32765979c43995006d77ad0f8443aa",
+    "bound_tree": "b0bc58a4abe9cd8723900c996edeb46acd887b92",
+    "prior_exa_connectivity_receipt": "review-artifacts/exa-lite-live-connectivity-receipt-d7236721.json",
+    "note": "Single G-L3 diagnostic run; not blanket acceptance. Prior Exa connectivity not repeated."
+  },
+  "environment": {
+    "cursor_environment_public_id": "30363159-cb05-11f1-bec7-b2318963e0b6",
+    "exa_api_key_configured_boolean": true,
+    "openrouter_api_key_configured_boolean": true
+  },
+  "preflight": {
+    "build_log": "review-artifacts/g-l3-live-diagnostic-ba45f328-build.log",
+    "build_exit": 0,
+    "g_l3_preflight_log": "review-artifacts/g-l3-live-diagnostic-ba45f328-preflight.log",
+    "g_l3_preflight_exit": 0,
+    "search_provider_default": "exa_lite",
+    "openrouter_model_id": "deepseek/deepseek-v4-flash-0731",
+    "module_fingerprints": "review-artifacts/g-l3-live-diagnostic-ba45f328-fingerprints.txt"
+  },
+  "invocation": {
+    "bin_absolute": "/tmp/babel-g-l3-preflight-ba45f328/babel-cli/bin/babel.js",
+    "command": "node /tmp/babel-g-l3-preflight-ba45f328/babel-cli/bin/babel.js research v2 run --store /tmp/babel-g-l3-store-ba45f328-1792589570 --mission-file /tmp/babel-g-l3-mission-ba45f328-fresh.json --json",
+    "live_api_gate": "BABEL_RESEARCH_V2_ALLOW_LIVE_API=1",
+    "mission_file_committed_copy": "review-artifacts/g-l3-live-diagnostic-ba45f328-mission.json",
+    "mission_id": "mission-g-l3-validation-ba45f328-001",
+    "selected_web_refs": [
+      "https://www.python.org/downloads/",
+      "https://devguide.python.org/versions/"
+    ],
+    "discover_query_defaulted": "On official python.org pages only, does the latest",
+    "run_meta": "review-artifacts/g-l3-live-diagnostic-ba45f328-run-meta.txt",
+    "started_utc": "2026-10-21T13:32:50.558Z",
+    "ended_utc": "2026-10-21T13:36:11.535Z",
+    "cli_exit": 0
+  },
+  "cost_accounting_separate": {
+    "exa_lite_provider_estimated_usd": 0.004,
+    "exa_lite_estimate_label": "exa_lite_provider_estimated_cost_usd",
+    "exa_lite_request_id": "def86302eaf2323e586828d8c60754e9",
+    "openrouter_model_reported_usd_total": 0.012272155,
+    "model_usage_detail": "review-artifacts/g-l3-live-diagnostic-ba45f328-store-extract.json"
+  },
+  "search_provider": {
+    "configured": "exa_lite",
+    "effective": "exa_lite",
+    "degradation": null,
+    "exa_participation": "exa_primary_ok"
+  },
+  "retrieval": {
+    "admitted_sources": 1,
+    "canonical_pages_fetched": ["https://www.python.org/downloads/"],
+    "web_ref_1_status": "retrieval_web_ref_failed:web-ref-1:no heading-bounded sections extracted from admitted HTML",
+    "source_revision": {
+      "content_hash": "c97ffea4e143fd19e55c5be35411a994af406e887651328b93bc796652b538c6",
+      "completeness": "truncated",
+      "truncation": "host_decoded_byte_limit:bytes_received=200000",
+      "retrieved_at": "2026-10-21T13:34:05.577Z"
+    }
+  },
+  "terminal_outcome": {
+    "terminal_state": "partial",
+    "plan_revision_id": "plan-ad20edb0-c6f8-461e-b7ec-1c8cf3f53f36",
+    "unanswered_plan_questions": 6,
+    "semantic_support_insufficient": true,
+    "stopping_reason": "single_pass_host_finalization;unanswered_plan_questions=6;acquisition_or_extraction_limits_recorded;evidence_verification_limits_recorded;runtime_slot_limits_recorded;semantic_support_insufficient"
+  },
+  "g_l3_diagnostic_assessment": {
+    "two_distinct_canonical_pages_admitted": false,
+    "cross_page_agreement_contradiction_or_insufficiency": "insufficiency",
+    "rationale": "Second selected URL (devguide versions) never produced admitted passages; host recorded web-ref-1 extraction failure. Cross-page version/date comparison obligations cannot be satisfied on admitted evidence. Terminal partial with all six plan questions unanswered and semantic_support_insufficient.",
+    "manufactured_contradiction": false,
+    "forced_agreement": false
+  },
+  "artifacts": {
+    "run_json": "review-artifacts/g-l3-live-diagnostic-ba45f328-run.json",
+    "inspect_json": "review-artifacts/g-l3-live-diagnostic-ba45f328-inspect.json",
+    "report_json": "review-artifacts/g-l3-live-diagnostic-ba45f328-report.json",
+    "passages_cited_text": "review-artifacts/g-l3-live-diagnostic-ba45f328-passages.json",
+    "store_extract": "review-artifacts/g-l3-live-diagnostic-ba45f328-store-extract.json"
+  }
+}
