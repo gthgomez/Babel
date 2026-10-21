@@ -28,7 +28,7 @@ The verification receipt must bind (scalar identifiers only in public artifacts)
 
 **Host-only:** verification is attached when representation exists at the real extractor; no separate verifier database or model-output field.
 
-**Honesty:** allowlisted HTTP / JSON message fields do **not** prove absence of secrets in passage text; semantic `source_integrity` remains distinct from model semantic judgment.
+**Honesty:** allowlisted HTTP / JSON message fields do **not** establish absence of secrets in passage text; semantic `source_integrity` remains distinct from model semantic judgment.
 
 ## Historical fixtures (G-L2 / G-L3)
 

@@ -21,10 +21,48 @@ describe('inferHttpAccessFailureCategory', () => {
     assert.equal(inferHttpAccessFailureCategory({ httpStatus: 401 }), 'policy_denied')
     assert.equal(
       inferHttpAccessFailureCategory({
+        httpStatus: 401,
+        httpFailure: { rate_limit_remaining: '59' },
+      }),
+      'policy_denied',
+    )
+    assert.equal(
+      inferHttpAccessFailureCategory({
         httpStatus: 403,
         httpFailure: { public_message: 'Requires authentication' },
       }),
       'policy_denied',
+    )
+  })
+
+  it('does not treat rate headers alone as rate_limited', () => {
+    assert.equal(
+      inferHttpAccessFailureCategory({
+        httpStatus: 403,
+        httpFailure: { rate_limit_remaining: '59' },
+      }),
+      'network_error',
+    )
+    assert.equal(
+      inferHttpAccessFailureCategory({
+        httpStatus: 503,
+        httpFailure: { rate_limit_resource: 'core' },
+      }),
+      'network_error',
+    )
+    assert.equal(
+      inferHttpAccessFailureCategory({
+        httpStatus: 418,
+        httpFailure: { retry_after: '120' },
+      }),
+      'network_error',
+    )
+    assert.equal(
+      inferHttpAccessFailureCategory({
+        httpStatus: 403,
+        httpFailure: { public_message: 'secondary rate limit exceeded' },
+      }),
+      'rate_limited',
     )
   })
 })

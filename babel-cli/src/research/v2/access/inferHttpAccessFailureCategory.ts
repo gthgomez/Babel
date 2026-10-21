@@ -36,20 +36,18 @@ export function inferHttpAccessFailureCategory(params: {
     return 'not_found'
   }
 
+  if (httpStatus === 401) {
+    return 'policy_denied'
+  }
+
   const rateEvidence =
-    httpFailure?.retry_after !== undefined ||
-    httpFailure?.rate_limit_remaining !== undefined ||
-    httpFailure?.rate_limit_reset !== undefined ||
-    httpFailure?.rate_limit_resource !== undefined ||
-    messageHintsRateLimit(publicMessage) ||
-    (httpStatus === 403 &&
-      httpFailure?.rate_limit_remaining === '0')
+    messageHintsRateLimit(publicMessage) || httpFailure?.rate_limit_remaining === '0'
 
   if (rateEvidence) {
     return 'rate_limited'
   }
 
-  if (httpStatus === 401 || (httpStatus === 403 && messageHintsAuth(publicMessage))) {
+  if (httpStatus === 403 && messageHintsAuth(publicMessage)) {
     return 'policy_denied'
   }
 

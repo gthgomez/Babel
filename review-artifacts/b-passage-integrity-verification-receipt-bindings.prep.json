@@ -5,7 +5,7 @@
   "b_scope": "reciprocal acceptance tests after A dependency union; no parallel verifier port",
   "transport_baseline_preserved": {
     "commit": "e94e7a54c1f5ee316341575c6fc895e367788985",
-    "note": "Governed User-Agent and bounded acquisition diagnostics; independent review"
+    "note": "Governed User-Agent and bounded acquisition diagnostics (e94 tree had unresolved merge markers in package.json/preflight/mission-run until baa54e96+; transport logic unchanged)"
   },
   "required_receipt_bindings": [
     "source_id",
