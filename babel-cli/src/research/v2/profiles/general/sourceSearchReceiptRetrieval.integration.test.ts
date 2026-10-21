@@ -89,6 +89,27 @@ function searchCompletion(
   return undefined
 }
 
+function exaLiteReceiptMeta(
+  requestId: string,
+  estimatedCostDollars: number,
+): {
+  request_id: string
+  resolved_search_type: string | null
+  warnings: string[]
+  notices: string[]
+  estimated_cost_dollars: number
+  estimated_cost_detail: null
+} {
+  return {
+    request_id: requestId,
+    resolved_search_type: 'auto',
+    warnings: [],
+    notices: [],
+    estimated_cost_dollars: estimatedCostDollars,
+    estimated_cost_detail: null,
+  }
+}
+
 function createExaBilledEmptyDdgSuccessProvider(hitSource: SourceRecord): AdmittedSourceSearchProvider {
   return {
     async search(request: SourceSearchRequest) {
@@ -111,23 +132,20 @@ function createExaBilledEmptyDdgSuccessProvider(hitSource: SourceRecord): Admitt
         receipt: {
           configured_provider_id: 'exa_lite',
           effective_provider_id: 'duckduckgo_html_fallback',
+          exa_participation: 'exa_degraded_fallback',
           degradation: {
             from_provider_id: 'exa_lite',
             to_provider_id: 'duckduckgo_html_fallback',
             reason: 'exa_zero_hits',
           },
-          exa_lite: {
-            requestId: 'exa-req-integration-001',
-            costDollars: 0.001,
-            resolvedSearchType: 'auto',
-          },
+          exa_lite: exaLiteReceiptMeta('exa-req-integration-001', 0.001),
         },
       }
     },
   }
 }
 
-function createExaAndDdgFailedProvider(): AdmittedSourceSearchProvider {
+function createExaBilledEmptyDdgFailedProvider(): AdmittedSourceSearchProvider {
   return {
     async search(request: SourceSearchRequest) {
       if (!request.sourceClasses.includes('web')) {
@@ -138,6 +156,17 @@ function createExaAndDdgFailedProvider(): AdmittedSourceSearchProvider {
         status: 'failed',
         failureCategory: 'network_error',
         message: 'configured search provider transport failed',
+        receipt: {
+          configured_provider_id: 'exa_lite',
+          effective_provider_id: 'duckduckgo_html_fallback',
+          exa_participation: 'exa_primary_empty_billed',
+          degradation: {
+            from_provider_id: 'exa_lite',
+            to_provider_id: 'duckduckgo_html_fallback',
+            reason: 'exa_zero_hits',
+          },
+          exa_lite: exaLiteReceiptMeta('exa-req-billed-empty-ddg-fail', 0.0015),
+        },
       }
     },
   }
@@ -216,10 +245,11 @@ describe('source search receipt retrieval integration (offline)', () => {
       assert.ok(completion)
       assert.equal(completion?.settlement, 'succeeded')
       assert.ok(completion?.search_provider_receipt)
-      assert.equal(completion?.search_provider_receipt?.exa_lite?.requestId, 'exa-req-integration-001')
+      assert.equal(completion?.search_provider_receipt?.exa_lite?.request_id, 'exa-req-integration-001')
+      assert.equal(completion?.search_provider_receipt?.exa_participation, 'exa_degraded_fallback')
       assert.equal(completion?.usage_settlement?.cost.status, 'estimated')
       assert.equal(completion?.usage_settlement?.cost.amount_usd, 0.001)
-      assert.equal(completion?.usage_settlement?.cost.method, 'exa_lite_provider_costDollars')
+      assert.equal(completion?.usage_settlement?.cost.method, 'exa_lite_estimated_cost_dollars')
 
       const limitations = deriveSearchProviderReportLimitations(events)
       assert.ok(limitations.some((l) => l.includes('search_provider_degraded:exa_lite->duckduckgo_html_fallback')))
@@ -233,7 +263,7 @@ describe('source search receipt retrieval integration (offline)', () => {
     }
   })
 
-  it('fails discover conservatively when fallback provider errors (no receipt persisted)', async () => {
+  it('persists billed-empty Exa receipt when DDG fallback fails (failed source_search)', async () => {
     const { createCombinedResearchRegistries } = await import('../../registry/reviewedBAdapterIntegration.js')
     const { resolveDiscoveryAdapterForMission } = await import('../../registry/missionAdapterResolution.js')
     const { runAdmittedRetrievalIteration } = await import('../../engine/researchRetrievalLoop.js')
@@ -242,7 +272,7 @@ describe('source search receipt retrieval integration (offline)', () => {
     const plan = loadPlan(mission.mission_id)
     const access = createGovernedSourceAccessPort({
       mission,
-      searchProvider: createExaAndDdgFailedProvider(),
+      searchProvider: createExaBilledEmptyDdgFailedProvider(),
       admittedGet: async () => ({
         ok: true,
         status: 200,
@@ -295,7 +325,17 @@ describe('source search receipt retrieval integration (offline)', () => {
     const completion = searchCompletion(events, 'receipt-fail-search')
     assert.ok(completion)
     assert.equal(completion?.settlement, 'failed')
-    assert.equal(completion?.search_provider_receipt, undefined)
+    assert.equal(completion?.search_provider_receipt?.exa_participation, 'exa_primary_empty_billed')
+    assert.equal(
+      completion?.search_provider_receipt?.exa_lite?.request_id,
+      'exa-req-billed-empty-ddg-fail',
+    )
+    assert.equal(completion?.usage_settlement?.cost.status, 'estimated')
+    if (completion?.usage_settlement?.cost.status === 'estimated') {
+      assert.equal(completion.usage_settlement.cost.amount_usd, 0.0015)
+    }
+    const limitations = deriveSearchProviderReportLimitations(events)
+    assert.ok(limitations.some((l) => l.includes('exa_participation:exa_primary_empty_billed')))
   })
 
   it('legacy discover without receipt remains incomplete accounting (no invented cost)', async () => {

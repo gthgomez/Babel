@@ -1,10 +1,37 @@
 import { z } from 'zod'
 
-/** Sanitized discovery-only provider metadata (compatible with B #404 handoff). */
+/** Aligns with B #404 `SourceSearchExaParticipation` (`access/EXA_SEARCH_RECEIPT_HANDOFF.md`). */
+export const SourceSearchExaParticipationSchema = z.enum([
+  'exa_primary_ok',
+  'exa_primary_empty_billed',
+  'exa_primary_failed',
+  'exa_degraded_fallback',
+])
+
+export type SourceSearchExaParticipation = z.infer<typeof SourceSearchExaParticipationSchema>
+
+export const SourceSearchExaLiteReceiptMetadataSchema = z
+  .object({
+    request_id: z.string().nullable(),
+    resolved_search_type: z.string().nullable(),
+    warnings: z.array(z.string()),
+    notices: z.array(z.string()),
+    /** Provider-reported estimate only — not an invoice. */
+    estimated_cost_dollars: z.number().nullable(),
+    estimated_cost_detail: z.record(z.string(), z.number()).nullable(),
+  })
+  .strict()
+
+export type SourceSearchExaLiteReceiptMetadata = z.infer<
+  typeof SourceSearchExaLiteReceiptMetadataSchema
+>
+
+/** Discovery-only provider metadata (B `SourceSearchProviderReceipt`; A propagates downstream). */
 export const SourceSearchProviderReceiptSchema = z
   .object({
     configured_provider_id: z.string().min(1),
     effective_provider_id: z.string().min(1),
+    exa_participation: SourceSearchExaParticipationSchema.optional(),
     degradation: z
       .object({
         from_provider_id: z.string().min(1),
@@ -13,16 +40,7 @@ export const SourceSearchProviderReceiptSchema = z
       })
       .strict()
       .optional(),
-    exa_lite: z
-      .object({
-        requestId: z.unknown().optional(),
-        resolvedSearchType: z.unknown().optional(),
-        warnings: z.unknown().optional(),
-        notices: z.unknown().optional(),
-        costDollars: z.unknown().optional(),
-      })
-      .strict()
-      .optional(),
+    exa_lite: SourceSearchExaLiteReceiptMetadataSchema.optional(),
   })
   .strict()
 

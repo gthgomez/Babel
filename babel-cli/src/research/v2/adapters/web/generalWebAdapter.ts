@@ -52,11 +52,13 @@ export class GeneralWebAdapter implements SourceAdapter {
       return { operationId: request.operationId, status: 'cancelled' }
     }
     if (search.status === 'failed') {
+      const failedReceipt = mergeDiscoverSearchReceipts(search.receipt)
       return {
         operationId: request.operationId,
         status: 'failed',
         failureCategory: search.failureCategory,
         message: search.message,
+        ...(failedReceipt ? { search_provider_receipt: failedReceipt } : {}),
       }
     }
     let candidates: SourceRecord[] = search.hits.map((hit) => hit.source)
@@ -75,11 +77,14 @@ export class GeneralWebAdapter implements SourceAdapter {
         return { operationId: request.operationId, status: 'cancelled' }
       }
       if (docSearch.status === 'failed') {
+        const failedReceipt =
+          mergeDiscoverSearchReceipts(search.receipt, docSearch.receipt) ?? searchReceipt
         return {
           operationId: request.operationId,
           status: 'failed',
           failureCategory: docSearch.failureCategory,
           message: docSearch.message,
+          ...(failedReceipt ? { search_provider_receipt: failedReceipt } : {}),
         }
       }
       candidates = docSearch.hits.map((hit) => hit.source)

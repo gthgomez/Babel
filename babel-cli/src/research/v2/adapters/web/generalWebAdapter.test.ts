@@ -107,7 +107,15 @@ test('GeneralWebAdapter.discover: passes sanitized search_provider_receipt from 
         receipt: {
           configured_provider_id: 'exa_lite',
           effective_provider_id: 'exa_lite',
-          exa_lite: { requestId: 'req-1', costDollars: 0.01 },
+          exa_participation: 'exa_primary_ok',
+          exa_lite: {
+            request_id: 'req-1',
+            resolved_search_type: null,
+            warnings: [],
+            notices: [],
+            estimated_cost_dollars: 0.01,
+            estimated_cost_detail: null,
+          },
         },
       }
     },
@@ -126,7 +134,49 @@ test('GeneralWebAdapter.discover: passes sanitized search_provider_receipt from 
   )
   assert.equal(result.status, 'ok')
   if (result.status !== 'ok') return
-  assert.equal(result.search_provider_receipt?.exa_lite?.requestId, 'req-1')
+  assert.equal(result.search_provider_receipt?.exa_lite?.request_id, 'req-1')
+})
+
+test('GeneralWebAdapter.discover: passes search_provider_receipt on failed port search', async () => {
+  const port: SourceAccessPort = {
+    async search(request: SourceSearchRequest) {
+      return {
+        operationId: request.operationId,
+        status: 'failed',
+        failureCategory: 'network_error',
+        message: 'fallback failed',
+        receipt: {
+          configured_provider_id: 'exa_lite',
+          effective_provider_id: 'duckduckgo_html_fallback',
+          exa_participation: 'exa_primary_empty_billed',
+          exa_lite: {
+            request_id: 'req-billed-empty',
+            resolved_search_type: null,
+            warnings: [],
+            notices: [],
+            estimated_cost_dollars: 0.001,
+            estimated_cost_detail: null,
+          },
+        },
+      }
+    },
+    async fetchContent(request: SourceFetchRequest) {
+      return {
+        operationId: request.operationId,
+        status: 'failed',
+        failureCategory: 'policy_denied',
+        message: 'discover-only',
+      }
+    },
+  }
+  const result = await new GeneralWebAdapter().discover(
+    { operationId: 'discover-fail-receipt', query: 'q', signal: AbortSignal.timeout(5_000) },
+    port,
+  )
+  assert.equal(result.status, 'failed')
+  if (result.status !== 'failed') return
+  assert.equal(result.search_provider_receipt?.exa_participation, 'exa_primary_empty_billed')
+  assert.equal(result.search_provider_receipt?.exa_lite?.request_id, 'req-billed-empty')
 })
 
 test('GeneralWebAdapter.discover: falls back to document search when web hits empty', async () => {

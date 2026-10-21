@@ -22,6 +22,7 @@ export type SourceDiscoverResult =
       failureCategory: string
       message: string
       acquisition_diagnostics?: SourceAcquisitionDiagnostics
+      search_provider_receipt?: SourceSearchProviderReceipt
     }
   | { operationId: string; status: 'cancelled' }
 

@@ -250,6 +250,7 @@ export async function runAdmittedRetrievalIteration(
   }
 
   if (discover.status === 'failed') {
+    const failedSearchReceipt = discover.search_provider_receipt
     await settleExternalOperation(
       request.store,
       ctx,
@@ -260,6 +261,13 @@ export async function runAdmittedRetrievalIteration(
         settlement: 'failed',
         failureCategory: discover.failureCategory,
         message: discover.message,
+        ...(failedSearchReceipt
+          ? sourceSearchCompletionOutcome({
+              discoverReceipt: failedSearchReceipt,
+              searchAttemptId: request.searchAttemptId,
+              completedAt: now(),
+            })
+          : {}),
       },
       now(),
     )

@@ -6,7 +6,11 @@ import type { SourceRecord } from '../contracts/sources.js'
 import type { SourceAccessFailureCategory } from './sourceAccessTypes.js'
 import type { z } from 'zod'
 
-export type { SourceSearchProviderReceipt } from '../contracts/sourceSearchProviderReceipt.js'
+export type {
+  SourceSearchExaLiteReceiptMetadata,
+  SourceSearchExaParticipation,
+  SourceSearchProviderReceipt,
+} from '../contracts/sourceSearchProviderReceipt.js'
 
 export type SourceClass = z.infer<typeof SourceClassSchema>
 
@@ -32,6 +36,7 @@ export type SourceSearchResult =
       status: 'failed'
       failureCategory: SourceAccessFailureCategory
       message: string
+      receipt?: SourceSearchProviderReceipt
     }
   | { operationId: string; status: 'cancelled' }
 
