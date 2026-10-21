@@ -131,6 +131,12 @@
         "expected": "two canonical pages via sequential iterations; candidates[0] limitation documented",
         "maps_to": "G-L3 actual-port",
         "status": "pass"
+      },
+      {
+        "command": "node --import tsx --test babel-cli/src/research/v2/engine/semanticQuestionCoverage.production.reciprocal.test.ts",
+        "expected": "passage-supported vs question-answered; capability gaps documented until A coverage decision",
+        "maps_to": "G-L2/G-L3 semantic coverage",
+        "status": "pass"
       }
     ],
     "already_run_this_inventory": [

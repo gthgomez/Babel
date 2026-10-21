@@ -39,6 +39,12 @@ Historical pre-adoption Q[0] host binding is **nonacceptance evidence only**:
 - **G-L2 / G-L3:** `fixtures/campaign/*` + portable preflight (`3f9754fc` runner)
 - Preflight coordination: `review-artifacts/PROPOSED-B-CAMPAIGN-PREFLIGHT-SHARED.md`
 
+## Semantic question coverage (separate from b019 `question_id` binding)
+
+Passage-level `semantic_support: supported` is **not** yet host-equivalent to “plan question substantively answered.”
+B reciprocal tests: `semanticQuestionCoverage.production.reciprocal.test.ts` (honest partial via `insufficient`;
+documented capability gaps until A lands question-text in semantic review + canonical coverage decision).
+
 ## Preserved checkpoints
 
 - Finalizer GO: `08cc2986507b7549be04fe6d49ccfc995080e351`
