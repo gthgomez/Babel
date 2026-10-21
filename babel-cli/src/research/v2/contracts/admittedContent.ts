@@ -13,8 +13,13 @@ export const HttpContentCodingProvenanceSchema = z
   .object({
     content_encodings: z.array(z.string().min(1)),
     encoded_byte_length: z.number().int().nonnegative(),
+    /** Full decoded byte length from the upstream Content-Encoding stream. */
     decoded_byte_length: z.number().int().nonnegative(),
     admitted_representation: z.literal('decoded_bytes'),
+    /** When true, only a prefix of decoded_byte_length is admitted (host decoded cap). */
+    decoded_truncated: z.boolean().optional(),
+    /** Admitted decoded prefix length after host cap and UTF-8-safe trimming. */
+    admitted_decoded_byte_length: z.number().int().nonnegative().optional(),
   })
   .strict()
 

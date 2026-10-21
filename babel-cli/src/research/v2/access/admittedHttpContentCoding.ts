@@ -1,6 +1,7 @@
 import { createGunzip, createInflate } from 'node:zlib'
 import { pipeline } from 'node:stream/promises'
 import { Readable } from 'node:stream'
+import { utf8SafeBytePrefix } from './utf8SafeBytePrefix.js'
 
 export class AdmittedContentCodingError extends Error {
   readonly code: 'unsupported_encoding' | 'malformed_encoding' | 'decompression_limit_exceeded' | 'aborted'
@@ -20,6 +21,8 @@ export interface AdmittedHttpTransportCoding {
   encoded_byte_length: number
   decoded_byte_length: number
   admitted_representation: 'decoded_bytes'
+  decoded_truncated?: boolean
+  admitted_decoded_byte_length?: number
 }
 
 export function parseContentEncodings(
@@ -39,15 +42,25 @@ function assertNotAborted(signal: AbortSignal): void {
   }
 }
 
+interface InflateBoundedResult {
+  buffer: Buffer
+  decodedTruncated: boolean
+  decodedBytesTotal: number
+}
+
 async function inflateBounded(
   encoded: Buffer,
-  maxDecodedBytes: number,
+  maxAdmittedDecodedBytes: number,
   signal: AbortSignal,
   mode: 'gzip' | 'deflate',
-): Promise<Buffer> {
+): Promise<InflateBoundedResult> {
   assertNotAborted(signal)
   const chunks: Buffer[] = []
-  let decodedBytes = 0
+  let storedBytes = 0
+  let decodedBytesTotal = 0
+  let decodedTruncated = false
+  let stopStoring = false
+
   const source = Readable.from(encoded)
   const decompressor = mode === 'gzip' ? createGunzip() : createInflate()
   const onAbort = () => {
@@ -55,22 +68,30 @@ async function inflateBounded(
     decompressor.destroy()
   }
   signal.addEventListener('abort', onAbort, { once: true })
+
   try {
     decompressor.on('data', (chunk: Buffer) => {
-      decodedBytes += chunk.length
-      if (decodedBytes > maxDecodedBytes) {
-        decompressor.destroy(
-          new AdmittedContentCodingError(
-            'decompression_limit_exceeded',
-            `decoded body exceeds limit of ${maxDecodedBytes} bytes`,
-          ),
-        )
+      decodedBytesTotal += chunk.length
+      if (stopStoring) {
         return
       }
-      chunks.push(chunk)
+      const remaining = maxAdmittedDecodedBytes - storedBytes
+      if (remaining <= 0) {
+        stopStoring = true
+        decodedTruncated = true
+        return
+      }
+      if (chunk.length <= remaining) {
+        chunks.push(chunk)
+        storedBytes += chunk.length
+        return
+      }
+      chunks.push(chunk.subarray(0, remaining))
+      storedBytes += remaining
+      stopStoring = true
+      decodedTruncated = true
     })
     await pipeline(source, decompressor)
-    return Buffer.concat(chunks)
   } catch (err: unknown) {
     if (signal.aborted) {
       throw new AdmittedContentCodingError('aborted', 'content decoding aborted')
@@ -85,22 +106,38 @@ async function inflateBounded(
   } finally {
     signal.removeEventListener('abort', onAbort)
   }
+
+  let buffer: Buffer = Buffer.concat(chunks)
+  if (decodedTruncated) {
+    buffer = Buffer.from(utf8SafeBytePrefix(buffer, maxAdmittedDecodedBytes))
+  }
+
+  return {
+    buffer,
+    decodedTruncated,
+    decodedBytesTotal,
+  }
 }
 
 /**
  * Decode HTTP response bytes per Content-Encoding (gzip/deflate). Identity passes through.
- * Enforces decoded byte cap and honors abort while decompressing.
+ * Enforces decoded admission cap with truthful truncation metadata; honors abort while decompressing.
  */
 export async function decodeAdmittedHttpBody(params: {
   encodedBody: Buffer
   contentEncodingHeader: string | string[] | undefined
   maxDecodedBytes: number
   signal: AbortSignal
-}): Promise<{ buffer: Buffer; transportCoding: AdmittedHttpTransportCoding | null }> {
+}): Promise<{
+  buffer: Buffer
+  decodedTruncated: boolean
+  transportCoding: AdmittedHttpTransportCoding | null
+}> {
   const encodings = parseContentEncodings(params.contentEncodingHeader)
   if (encodings.length === 0) {
     return {
       buffer: params.encodedBody,
+      decodedTruncated: false,
       transportCoding: null,
     }
   }
@@ -121,20 +158,32 @@ export async function decodeAdmittedHttpBody(params: {
 
   let working = params.encodedBody
   const chain: string[] = [...encodings]
+  let decodedTruncated = false
+  let decodedBytesTotal = 0
   for (let i = encodings.length - 1; i >= 0; i--) {
     const encoding = encodings[i]!
     assertNotAborted(params.signal)
     const mode = encoding === 'deflate' ? 'deflate' : 'gzip'
-    working = await inflateBounded(working, params.maxDecodedBytes, params.signal, mode)
+    const inflated = await inflateBounded(working, params.maxDecodedBytes, params.signal, mode)
+    working = inflated.buffer
+    decodedTruncated = inflated.decodedTruncated
+    decodedBytesTotal = inflated.decodedBytesTotal
   }
 
   return {
     buffer: working,
+    decodedTruncated,
     transportCoding: {
       content_encodings: chain,
       encoded_byte_length: params.encodedBody.byteLength,
-      decoded_byte_length: working.byteLength,
+      decoded_byte_length: decodedBytesTotal,
       admitted_representation: 'decoded_bytes',
+      ...(decodedTruncated
+        ? {
+            decoded_truncated: true,
+            admitted_decoded_byte_length: working.byteLength,
+          }
+        : {}),
     },
   }
 }
