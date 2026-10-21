@@ -19,6 +19,22 @@
     "note": "Donor-map metadata only; proof runs bound to integration_code_parent tree"
   },
   "metadata_evidence_correction": "review-artifacts/a406-metadata-evidence-correction-receipt.json",
+  "main_merge_qualification": {
+    "receipt": "review-artifacts/a406-main-ad690-merge-qualification-receipt.json",
+    "merge_commit": "fe5d699ab7758580f90fee17e3bb3df998d37b2b",
+    "merge_tree": "0927e6b9fcc244670243f5a8c686b2e83687e592",
+    "parent_branch": "e1547b756d7de3e41cbad613b95cfc0b62b75af8",
+    "merged_main": "ad690d423bac2b0e68afa7bf18aa2fda15e9a299",
+    "merge_base_before_merge": "d9e42b14b00b6dba25f0415ae16b084363386a01",
+    "path_overlap_verified_empty": true
+  },
+  "integration_branch_tip": {
+    "merge_code_commit": "fe5d699ab7758580f90fee17e3bb3df998d37b2b",
+    "merge_code_tree": "0927e6b9fcc244670243f5a8c686b2e83687e592",
+    "branch_head_commit": "6c8d8b19fb4a156aacdbf62330f1ffbb89f87993",
+    "branch_head_tree": "d4e5a1a3578f34c48139bd4d925062d52d32839f",
+    "offline_qualification_tested": "fe5d699ab7758580f90fee17e3bb3df998d37b2b"
+  },
   "pr": 406,
   "branch": "cursor/research-v2-post-review-settlement-fc31",
   "donors": {

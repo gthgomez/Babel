@@ -54,5 +54,10 @@
     "e154 validation runtime changes",
     "permission-held live evidence publication"
   ],
-  "pr_merge_to_main": false
+  "pr_merge_to_main": false,
+  "qualification_metadata_commit": {
+    "commit": "6c8d8b19fb4a156aacdbf62330f1ffbb89f87993",
+    "tree": "d4e5a1a3578f34c48139bd4d925062d52d32839f",
+    "parent": "fe5d699ab7758580f90fee17e3bb3df998d37b2b"
+  }
 }
