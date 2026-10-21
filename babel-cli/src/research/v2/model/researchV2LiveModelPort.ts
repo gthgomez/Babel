@@ -35,8 +35,10 @@ export function resolveLiveResearchModelConfigFromEnv(
  * Production {@link ResearchModelPort} for gated live CLI/engine paths.
  * Callers must still pass admitted store/control; this only constructs the model adapter.
  */
-export function createLiveResearchModelPort(config: LiveResearchModelPortConfig): ProviderResearchModelBridge {
-  assertResearchV2LiveApiEnabled()
+/** Construct {@link ProviderResearchModelBridge} from engine config (no live gate — callers gate invoke). */
+export function createProviderResearchModelBridge(
+  config: LiveResearchModelPortConfig,
+): ProviderResearchModelBridge {
   const createRunner = config.createRunner ?? createProviderRunner
   const runner = createRunner(config.engine)
   return new ProviderResearchModelBridge({
@@ -45,4 +47,9 @@ export function createLiveResearchModelPort(config: LiveResearchModelPortConfig)
     provider: String(config.engine.provider),
     providerModelId: config.engine.modelId,
   })
+}
+
+export function createLiveResearchModelPort(config: LiveResearchModelPortConfig): ProviderResearchModelBridge {
+  assertResearchV2LiveApiEnabled()
+  return createProviderResearchModelBridge(config)
 }

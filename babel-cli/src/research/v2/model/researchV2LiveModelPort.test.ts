@@ -2,7 +2,11 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import type { LlmRunner } from '../../../runners/base.js'
 import type { ProviderEngine } from '../../../runners/providerEngine.js'
-import { createLiveResearchModelPort, resolveLiveResearchModelConfigFromEnv } from './researchV2LiveModelPort.js'
+import {
+  createLiveResearchModelPort,
+  createProviderResearchModelBridge,
+  resolveLiveResearchModelConfigFromEnv,
+} from './researchV2LiveModelPort.js'
 
 describe('researchV2LiveModelPort', () => {
   it('resolveLiveResearchModelConfigFromEnv returns null when provider/model unset', () => {
@@ -40,5 +44,29 @@ describe('researchV2LiveModelPort', () => {
       if (prior === undefined) delete process.env.BABEL_RESEARCH_V2_ALLOW_LIVE_API
       else process.env.BABEL_RESEARCH_V2_ALLOW_LIVE_API = prior
     }
+  })
+
+  it('createProviderResearchModelBridge does not require live API gate', async () => {
+    const runner: Pick<LlmRunner, 'execute'> = {
+      async execute(_prompt, schema) {
+        return schema.parse({
+          kind: 'plan_questions',
+          questions: [{ text: 'Offline factory', importance: 'low' }],
+        })
+      },
+    }
+    const port = createProviderResearchModelBridge({
+      backendKey: 'offline-factory',
+      engine: { provider: 'openrouter', modelId: 'offline/model' },
+      createRunner: () => runner as ProviderEngine,
+    })
+    const result = await port.invokeStructured({
+      operationId: 'offline-factory-op',
+      attemptId: 'offline-factory-att',
+      kind: 'plan_questions',
+      input: {},
+      signal: new AbortController().signal,
+    })
+    assert.equal(result.status, 'ok')
   })
 })
