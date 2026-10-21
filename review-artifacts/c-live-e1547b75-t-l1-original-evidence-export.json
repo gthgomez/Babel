@@ -1,0 +1,1068 @@
+{
+  "schema": "research-v2-c-live-original-evidence-export/v1",
+  "case": "t-l1",
+  "bound_commit": "e1547b756d7de3e41cbad613b95cfc0b62b75af8",
+  "bound_tree": "ca8a3d0b4273cbbb84d2acde9dee654129a7b192",
+  "runtime_binding": {
+    "execution_cwd": "/tmp/babel-validation-prep-e1547b75/babel-cli",
+    "bin_absolute": "/tmp/babel-validation-prep-e1547b75/babel-cli/bin/babel.js"
+  },
+  "mission_id": "mission-t-l1-validation-e1547b75-pending-001",
+  "store_directory": "/tmp/babel-t-l1-store-e1547b75-release-pending",
+  "snapshot": {
+    "path": "/tmp/babel-t-l1-store-e1547b75-release-pending/research-store.snapshot.json",
+    "byte_length": 70594,
+    "sha256": "d83840ba9b07a556eba70da2019cb212784d331e51091d12e9d672c608500cf4"
+  },
+  "extraction": {
+    "script_path": "review-artifacts/c-live-e1547b75-extract-original-evidence.mjs",
+    "script_sha256": "a597c0bd228f2a8dfaa8f3668f355347912cd3127c2d27d1ef43189837f233a9",
+    "command": "BABEL_STORE=<store> BABEL_MISSION_ID=<id> BABEL_CASE=<case> BABEL_BABEL_CLI_ROOT=/tmp/babel-validation-prep-e1547b75/babel-cli BABEL_OUT=<out> node review-artifacts/c-live-e1547b75-extract-original-evidence.mjs"
+  },
+  "mission_persisted": {
+    "schema_version": "research-mission-v2",
+    "contract_version": "2026.10.20-checkpoint.3.1.1",
+    "mission_id": "mission-t-l1-validation-e1547b75-pending-001",
+    "profile_id": "technical",
+    "profile_version": "0.0.0-checkpoint",
+    "created_at": "2026-10-21T17:20:00.000Z",
+    "primary_question": "Compare how the pinned Babel repository and the pinned LangGraph repository separate durable graph/state persistence from agent execution policy. Cite concrete file paths in each repository at the declared commits.",
+    "intended_decision": "Choose which pinned repository exposes clearer persistence-vs-execution boundaries for governed technical research, with per-repo file citations.",
+    "constraints": [
+      "pinned_github_commit_only=true",
+      "repository_file_sources_only=true",
+      "two_declared_repository_pins_required=true"
+    ],
+    "exclusions": [
+      "unpinned github branches",
+      "third-party mirrors without pinned blob URLs",
+      "live model spend during Agent A readiness"
+    ],
+    "as_of": "2026-10-21",
+    "jurisdiction": "unknown",
+    "source_policy": {
+      "allowed_source_classes": [
+        "repository_file"
+      ],
+      "allowed_web_domains": [
+        "github.com",
+        "raw.githubusercontent.com"
+      ],
+      "selected_repository_refs": [
+        {
+          "provider": "github",
+          "repo_id": "github:langchain-ai/langgraph",
+          "full_name": "langchain-ai/langgraph",
+          "commit_sha": "3cd57c038ad827d05f80c6488adea9994156c58c",
+          "discover_query": "pregel checkpoint"
+        }
+      ],
+      "visibility_retention": {
+        "source_visibility": "public",
+        "retention": "excerpt_only",
+        "export_may_omit_bytes": true
+      }
+    },
+    "effort_policy": {
+      "preset_name": "normal",
+      "resolved_budget_label": "host-resolved-t-l1-e1547b75-pending"
+    },
+    "model_route": {
+      "backend_key": "research-v2-cli",
+      "provider": "openrouter",
+      "provider_model_id": "deepseek/deepseek-v4-flash-0731"
+    },
+    "pinned_target_repository": {
+      "provider": "github",
+      "repo_id": "github:gthgomez/Babel",
+      "full_name": "gthgomez/Babel",
+      "commit_sha": "e912c2f3320de0b6e1c9ff85b95b0f74d8b5323c",
+      "discover_query": "persistence durableresearchstore.ts"
+    }
+  },
+  "plan_revisions_all": [
+    {
+      "recorded_at": "2026-10-21T17:30:56.166Z",
+      "plan": {
+        "plan_revision_id": "plan-43554e89-e7ea-4d62-ba2d-7f3c51c3eeb0-bootstrap",
+        "mission_id": "mission-t-l1-validation-e1547b75-pending-001",
+        "created_at": "2026-10-21T17:30:56.165Z",
+        "questions": [
+          {
+            "question_id": "q-plan-43554e89-e7ea-4d62-ba2d-7f3c51c3eeb0-bootstrap-bootstrap",
+            "text": "Host bootstrap plan shell (awaiting model plan_questions)",
+            "importance": "low",
+            "evidence_requirement": "Not used for research evidence",
+            "status": "open"
+          }
+        ],
+        "revision_reason": "host_bootstrap_before_model_plan"
+      }
+    },
+    {
+      "recorded_at": "2026-10-21T17:31:36.328Z",
+      "plan": {
+        "plan_revision_id": "plan-43554e89-e7ea-4d62-ba2d-7f3c51c3eeb0",
+        "mission_id": "mission-t-l1-validation-e1547b75-pending-001",
+        "created_at": "2026-10-21T17:31:36.328Z",
+        "questions": [
+          {
+            "question_id": "q-plan-43554e89-e7ea-4d62-ba2d-7f3c51c3eeb0-1",
+            "text": "In the pinned Babel repository (gthgomez/Babel at e912c2f3320de0b6e1c9ff85b95b0f74d8b5323c) and the pinned LangGraph repository (langchain-ai/langgraph at 3cd57c038ad827d05f80c6488adea9994156c58c), which concrete file paths implement durable graph/state persistence, and what persistence mechanisms do they expose?",
+            "importance": "high",
+            "evidence_requirement": "Identify at least one concrete file path in each pinned repository at its declared commit and describe the persistence or checkpoint mechanism implemented by that path.",
+            "status": "open",
+            "coverage_obligations": [
+              {
+                "obligation_id": "q1-pin0-persistence",
+                "source_slot": "repository-pin-0",
+                "criterion_id": "repository-pin-0-persistence",
+                "evidence_requirement": "Admitted passages must cite a file path within gthgomez/Babel at commit e912c2f3320de0b6e1c9ff85b95b0f74d8b5323c and establish that the file is part of the durable graph/state persistence layer, for example through storage classes, serialization logic, or persistence-related module placement."
+              },
+              {
+                "obligation_id": "q1-pin1-persistence",
+                "source_slot": "repository-pin-1",
+                "criterion_id": "repository-pin-1-persistence",
+                "evidence_requirement": "Admitted passages must cite a file path within langchain-ai/langgraph at commit 3cd57c038ad827d05f80c6488adea9994156c58c and establish that the file is part of the checkpoint/persistence layer, for example through checkpointer implementations, storage backends, or persistence-related module placement."
+              }
+            ]
+          },
+          {
+            "question_id": "q-plan-43554e89-e7ea-4d62-ba2d-7f3c51c3eeb0-2",
+            "text": "In both pinned repositories, which concrete file paths define agent execution policy (for example, node scheduling, step control, or the execution loop), and how are those paths kept separate from the durable persistence layer identified in the previous question?",
+            "importance": "high",
+            "evidence_requirement": "Identify at least one execution-policy file path per repository at its declared commit and explain the boundary or dependency relationship between that execution-policy file and the persistence-layer files.",
+            "status": "open",
+            "coverage_obligations": [
+              {
+                "obligation_id": "q2-pin0-execution",
+                "source_slot": "repository-pin-0",
+                "criterion_id": "repository-pin-0-execution-policy",
+                "evidence_requirement": "Admitted passages must cite a file path within gthgomez/Babel at commit e912c2f3320de0b6e1c9ff85b95b0f74d8b5323c and establish that it contains execution-policy logic such as loop control, node scheduling, or step orchestration, and describe how that logic is or is not separated from persistence files."
+              },
+              {
+                "obligation_id": "q2-pin1-execution",
+                "source_slot": "repository-pin-1",
+                "criterion_id": "repository-pin-1-execution-policy",
+                "evidence_requirement": "Admitted passages must cite a file path within langchain-ai/langgraph at commit 3cd57c038ad827d05f80c6488adea9994156c58c and establish that it contains execution-policy logic such as the Pregel loop, task scheduling, or control flow, and describe how that logic is or is not separated from checkpoint/persistence files."
+              }
+            ]
+          },
+          {
+            "question_id": "q-plan-43554e89-e7ea-4d62-ba2d-7f3c51c3eeb0-3",
+            "text": "Based on concrete file-path evidence from both pinned repositories, which repository exposes a clearer separation between durable graph/state persistence and agent execution policy, and what file-level evidence supports that conclusion?",
+            "importance": "critical",
+            "evidence_requirement": "Compare concrete file-path evidence from both repositories and justify which repository has clearer persistence-vs-execution separation, referencing module boundaries, naming conventions, imports, or dependency structure.",
+            "status": "open",
+            "coverage_obligations": [
+              {
+                "obligation_id": "q3-pin0-boundary",
+                "source_slot": "repository-pin-0",
+                "criterion_id": "repository-pin-0-boundary-comparison",
+                "evidence_requirement": "Admitted passages must provide concrete Babel file-path evidence at commit e912c2f3320de0b6e1c9ff85b95b0f74d8b5323c showing the persistence-vs-execution boundary and explain why that boundary is or is not clear."
+              },
+              {
+                "obligation_id": "q3-pin1-boundary",
+                "source_slot": "repository-pin-1",
+                "criterion_id": "repository-pin-1-boundary-comparison",
+                "evidence_requirement": "Admitted passages must provide concrete LangGraph file-path evidence at commit 3cd57c038ad827d05f80c6488adea9994156c58c showing the persistence-vs-execution boundary and explain why that boundary is or is not clear."
+              }
+            ]
+          }
+        ],
+        "revision_reason": "e2e_model_planning"
+      }
+    }
+  ],
+  "active_plan_latest": {
+    "plan_revision_id": "plan-43554e89-e7ea-4d62-ba2d-7f3c51c3eeb0",
+    "mission_id": "mission-t-l1-validation-e1547b75-pending-001",
+    "created_at": "2026-10-21T17:31:36.328Z",
+    "questions": [
+      {
+        "question_id": "q-plan-43554e89-e7ea-4d62-ba2d-7f3c51c3eeb0-1",
+        "text": "In the pinned Babel repository (gthgomez/Babel at e912c2f3320de0b6e1c9ff85b95b0f74d8b5323c) and the pinned LangGraph repository (langchain-ai/langgraph at 3cd57c038ad827d05f80c6488adea9994156c58c), which concrete file paths implement durable graph/state persistence, and what persistence mechanisms do they expose?",
+        "importance": "high",
+        "evidence_requirement": "Identify at least one concrete file path in each pinned repository at its declared commit and describe the persistence or checkpoint mechanism implemented by that path.",
+        "status": "open",
+        "coverage_obligations": [
+          {
+            "obligation_id": "q1-pin0-persistence",
+            "source_slot": "repository-pin-0",
+            "criterion_id": "repository-pin-0-persistence",
+            "evidence_requirement": "Admitted passages must cite a file path within gthgomez/Babel at commit e912c2f3320de0b6e1c9ff85b95b0f74d8b5323c and establish that the file is part of the durable graph/state persistence layer, for example through storage classes, serialization logic, or persistence-related module placement."
+          },
+          {
+            "obligation_id": "q1-pin1-persistence",
+            "source_slot": "repository-pin-1",
+            "criterion_id": "repository-pin-1-persistence",
+            "evidence_requirement": "Admitted passages must cite a file path within langchain-ai/langgraph at commit 3cd57c038ad827d05f80c6488adea9994156c58c and establish that the file is part of the checkpoint/persistence layer, for example through checkpointer implementations, storage backends, or persistence-related module placement."
+          }
+        ]
+      },
+      {
+        "question_id": "q-plan-43554e89-e7ea-4d62-ba2d-7f3c51c3eeb0-2",
+        "text": "In both pinned repositories, which concrete file paths define agent execution policy (for example, node scheduling, step control, or the execution loop), and how are those paths kept separate from the durable persistence layer identified in the previous question?",
+        "importance": "high",
+        "evidence_requirement": "Identify at least one execution-policy file path per repository at its declared commit and explain the boundary or dependency relationship between that execution-policy file and the persistence-layer files.",
+        "status": "open",
+        "coverage_obligations": [
+          {
+            "obligation_id": "q2-pin0-execution",
+            "source_slot": "repository-pin-0",
+            "criterion_id": "repository-pin-0-execution-policy",
+            "evidence_requirement": "Admitted passages must cite a file path within gthgomez/Babel at commit e912c2f3320de0b6e1c9ff85b95b0f74d8b5323c and establish that it contains execution-policy logic such as loop control, node scheduling, or step orchestration, and describe how that logic is or is not separated from persistence files."
+          },
+          {
+            "obligation_id": "q2-pin1-execution",
+            "source_slot": "repository-pin-1",
+            "criterion_id": "repository-pin-1-execution-policy",
+            "evidence_requirement": "Admitted passages must cite a file path within langchain-ai/langgraph at commit 3cd57c038ad827d05f80c6488adea9994156c58c and establish that it contains execution-policy logic such as the Pregel loop, task scheduling, or control flow, and describe how that logic is or is not separated from checkpoint/persistence files."
+          }
+        ]
+      },
+      {
+        "question_id": "q-plan-43554e89-e7ea-4d62-ba2d-7f3c51c3eeb0-3",
+        "text": "Based on concrete file-path evidence from both pinned repositories, which repository exposes a clearer separation between durable graph/state persistence and agent execution policy, and what file-level evidence supports that conclusion?",
+        "importance": "critical",
+        "evidence_requirement": "Compare concrete file-path evidence from both repositories and justify which repository has clearer persistence-vs-execution separation, referencing module boundaries, naming conventions, imports, or dependency structure.",
+        "status": "open",
+        "coverage_obligations": [
+          {
+            "obligation_id": "q3-pin0-boundary",
+            "source_slot": "repository-pin-0",
+            "criterion_id": "repository-pin-0-boundary-comparison",
+            "evidence_requirement": "Admitted passages must provide concrete Babel file-path evidence at commit e912c2f3320de0b6e1c9ff85b95b0f74d8b5323c showing the persistence-vs-execution boundary and explain why that boundary is or is not clear."
+          },
+          {
+            "obligation_id": "q3-pin1-boundary",
+            "source_slot": "repository-pin-1",
+            "criterion_id": "repository-pin-1-boundary-comparison",
+            "evidence_requirement": "Admitted passages must provide concrete LangGraph file-path evidence at commit 3cd57c038ad827d05f80c6488adea9994156c58c showing the persistence-vs-execution boundary and explain why that boundary is or is not clear."
+          }
+        ]
+      }
+    ],
+    "revision_reason": "e2e_model_planning"
+  },
+  "sources": [
+    {
+      "source_id": "src-repo-cd2d0155774390fac5cd3ccd",
+      "kind": "repository_file",
+      "canonical_key": "github:gthgomez/Babel:babel-cli/src/research/v2/persistence/durableResearchStore.ts",
+      "canonical_identifiers": {
+        "github_repo_id": "github:gthgomez/Babel",
+        "github_commit_sha": "e912c2f3320de0b6e1c9ff85b95b0f74d8b5323c"
+      },
+      "observed_urls": [
+        "https://github.com/gthgomez/Babel/blob/e912c2f3320de0b6e1c9ff85b95b0f74d8b5323c/babel-cli/src/research/v2/persistence/durableResearchStore.ts"
+      ],
+      "title": "babel-cli/src/research/v2/persistence/durableResearchStore.ts",
+      "coverage_source_slot": "repository-pin-0"
+    },
+    {
+      "source_id": "src-repo-699a37e94f0a38a9d8cb087a",
+      "kind": "repository_file",
+      "canonical_key": "github:langchain-ai/langgraph:libs/langgraph/langgraph/pregel/_checkpoint.py",
+      "canonical_identifiers": {
+        "github_repo_id": "github:langchain-ai/langgraph",
+        "github_commit_sha": "3cd57c038ad827d05f80c6488adea9994156c58c"
+      },
+      "observed_urls": [
+        "https://github.com/langchain-ai/langgraph/blob/3cd57c038ad827d05f80c6488adea9994156c58c/libs/langgraph/langgraph/pregel/_checkpoint.py"
+      ],
+      "title": "libs/langgraph/langgraph/pregel/_checkpoint.py",
+      "coverage_source_slot": "repository-pin-1"
+    }
+  ],
+  "source_revisions": [
+    {
+      "revision_id": "rev-src-repo-cd2d0155774390fac5cd3ccd-ce01a15f109ead69",
+      "source_id": "src-repo-cd2d0155774390fac5cd3ccd",
+      "content_hash": "ce01a15f109ead6917174fa8a530fd0ef752c3b9f5aaa4e646604b636cf9aae4",
+      "retrieved_at": "2026-10-21T17:31:36.844Z",
+      "extraction_version": "fetch-source-access-2",
+      "media_type": "text/plain",
+      "completeness": "complete",
+      "byte_length_received": 8305,
+      "source_fetch_owner": {
+        "mission_id": "mission-t-l1-validation-e1547b75-pending-001",
+        "operation_id": "cli-run-fetch-wg2-a9985d37--repository-pin-0",
+        "attempt_id": "cli-run-fetch-att-wg2-a9985d37--repository-pin-0"
+      },
+      "coverage_source_slot": "repository-pin-0",
+      "canonical_key": "github:gthgomez/Babel:babel-cli/src/research/v2/persistence/durableResearchStore.ts",
+      "observed_urls": [
+        "https://github.com/gthgomez/Babel/blob/e912c2f3320de0b6e1c9ff85b95b0f74d8b5323c/babel-cli/src/research/v2/persistence/durableResearchStore.ts"
+      ]
+    },
+    {
+      "revision_id": "rev-src-repo-699a37e94f0a38a9d8cb087a-49065ded9a05d6a0",
+      "source_id": "src-repo-699a37e94f0a38a9d8cb087a",
+      "content_hash": "49065ded9a05d6a0df806449eea8ab9a59fe24f3ce1739e7e5c34725b3022fb8",
+      "retrieved_at": "2026-10-21T17:31:37.171Z",
+      "extraction_version": "fetch-source-access-2",
+      "media_type": "text/plain",
+      "completeness": "complete",
+      "byte_length_received": 20417,
+      "source_fetch_owner": {
+        "mission_id": "mission-t-l1-validation-e1547b75-pending-001",
+        "operation_id": "cli-run-fetch-wg2-a9985d37--repository-pin-1",
+        "attempt_id": "cli-run-fetch-att-wg2-a9985d37--repository-pin-1"
+      },
+      "coverage_source_slot": "repository-pin-1",
+      "canonical_key": "github:langchain-ai/langgraph:libs/langgraph/langgraph/pregel/_checkpoint.py",
+      "observed_urls": [
+        "https://github.com/langchain-ai/langgraph/blob/3cd57c038ad827d05f80c6488adea9994156c58c/libs/langgraph/langgraph/pregel/_checkpoint.py"
+      ]
+    }
+  ],
+  "truncation_attribution_by_revision": [],
+  "passages_cited": [
+    {
+      "recorded_at": "2026-10-21T17:31:36.849Z",
+      "passage_id": "passage-0fd913811180d079720d8a6f",
+      "source_revision_id": "rev-src-repo-cd2d0155774390fac5cd3ccd-ce01a15f109ead69",
+      "locator": {
+        "kind": "byte_offset",
+        "start_offset": 0,
+        "end_offset": 4000
+      },
+      "extraction_notes": [
+        "excerpt_truncated_by_byte_limit"
+      ],
+      "source_fetch_owner": {
+        "mission_id": "mission-t-l1-validation-e1547b75-pending-001",
+        "operation_id": "cli-run-fetch-wg2-a9985d37--repository-pin-0",
+        "attempt_id": "cli-run-fetch-att-wg2-a9985d37--repository-pin-0"
+      },
+      "host_passage_integrity": null,
+      "text_ref_mode": "inline",
+      "text_hash": "c4744d1ad01e327c8bbb270a8b06a184211feda2499c689915d54cbb77826e59",
+      "text_byte_length": 4000,
+      "cited_text": "import { mkdir, rename, writeFile } from 'node:fs/promises'\nimport { join } from 'node:path'\nimport { randomUUID } from 'node:crypto'\nimport type { MissionWriteContext } from '../contracts/common.js'\nimport type { FindingRecord } from '../contracts/findings.js'\nimport type {\n  ExternalOperationCompletion,\n  ExternalOperationIntent,\n  ExternalOperationReconciliation,\n} from '../contracts/operations.js'\nimport type { PlanRevision, ResearchReportV2 } from '../contracts/plan.js'\nimport type { PassageRecord } from '../contracts/passages.js'\nimport type { ResearchMissionV2 } from '../contracts/mission.js'\nimport type { SourceRecord, SourceRevision } from '../contracts/sources.js'\nimport { InMemoryResearchStore } from '../fixtures/fakePorts.js'\nimport type { ModelRouteReceipt } from '../ports/researchModelPort.js'\nimport type {\n  ResearchContinuationResume,\n  WriterOwnershipAcquire,\n} from '../contracts/storeLifecycle.js'\nimport type {\n  ResearchStore,\n  ResearchStoreEvent,\n  ResearchStoreMissionHandle,\n  ResearchStoreWriteResult,\n} from '../ports/researchStore.js'\nimport { loadStoreInnerFromSnapshotFile } from './loadStoreSnapshot.js'\nimport { MutationQueue } from './mutationQueue.js'\nimport { acquireExclusiveStoreLock } from './storeDirectoryLock.js'\n\nexport const DURABLE_RESEARCH_STORE_SNAPSHOT_FILE = 'research-store.snapshot.json'\n\n/** @internal Regression hook — delays persist between stage and rename. */\nlet durableStoreFlushDelayMsForTest = 0\n\nexport function setDurableStoreFlushDelayMsForTest(ms: number): void {\n  durableStoreFlushDelayMsForTest = ms\n}\n\n/**\n * File-backed {@link ResearchStore} — exclusive directory lock, staged commit, validated reload.\n */\nexport class DurableResearchStore implements ResearchStore {\n  private inner: InMemoryResearchStore\n  private readonly mutationQueue = new MutationQueue()\n  private closed = false\n\n  private constructor(\n    inner: InMemoryResearchStore,\n    private readonly snapshotPath: string,\n    private readonly releaseExclusiveLock: () => Promise<void>,\n  ) {\n    this.inner = inner\n  }\n\n  static async open(\n    storeDirectory: string,\n    options?: { ownerSessionId?: string },\n  ): Promise<DurableResearchStore> {\n    await mkdir(storeDirectory, { recursive: true })\n    const sessionId = options?.ownerSessionId ?? randomUUID()\n    const releaseExclusiveLock = await acquireExclusiveStoreLock(storeDirectory, {\n      session_id: sessionId,\n      pid: process.pid,\n    })\n    const snapshotPath = join(storeDirectory, DURABLE_RESEARCH_STORE_SNAPSHOT_FILE)\n    try {\n      const inner = await loadStoreInnerFromSnapshotFile(snapshotPath)\n      return new DurableResearchStore(inner, snapshotPath, releaseExclusiveLock)\n    } catch (err) {\n      await releaseExclusiveLock()\n      throw err\n    }\n  }\n\n  async close(beforeExclusiveLockRelease?: () => Promise<void>): Promise<void> {\n    if (this.closed) return\n    await this.mutationQueue.drain()\n    if (beforeExclusiveLockRelease) {\n      await beforeExclusiveLockRelease()\n    }\n    this.closed = true\n    await this.releaseExclusiveLock()\n  }\n\n  /** @internal Regression — drain writes without releasing the directory exclusive lock. */\n  async drainMutationsForClose(): Promise<void> {\n    await this.mutationQueue.drain()\n  }\n\n  /** @internal Regression — release lock after {@link drainMutationsForClose} (skips owner control cleanup). */\n  async releaseExclusiveLockForClose(): Promise<void> {\n    if (this.closed) return\n    this.closed = true\n    await this.releaseExclusiveLock()\n  }\n\n  /** Test/diagnostic — new handle; requires this instance to be closed first. */\n  async reloadFresh(): Promise<DurableResearchStore> {\n    const dir = join(this.snapshotPath, '..')\n    return DurableResearchStore.open(dir)\n  }\n\n  private async flushSnapshot(staged: InMemoryResearchStore): Promise<void> {\n    const snapshot = staged.exportSnapshot()\n    const payload = `${JSON.stringify(snapshot)}\\n`\n    const tmpPath = `${this.snapshotPath}.tmp`\n    if (dura"
+    },
+    {
+      "recorded_at": "2026-10-21T17:31:37.175Z",
+      "passage_id": "passage-955a3710985bc9431c39a18b",
+      "source_revision_id": "rev-src-repo-699a37e94f0a38a9d8cb087a-49065ded9a05d6a0",
+      "locator": {
+        "kind": "byte_offset",
+        "start_offset": 0,
+        "end_offset": 4000
+      },
+      "extraction_notes": [
+        "excerpt_truncated_by_byte_limit"
+      ],
+      "source_fetch_owner": {
+        "mission_id": "mission-t-l1-validation-e1547b75-pending-001",
+        "operation_id": "cli-run-fetch-wg2-a9985d37--repository-pin-1",
+        "attempt_id": "cli-run-fetch-att-wg2-a9985d37--repository-pin-1"
+      },
+      "host_passage_integrity": null,
+      "text_ref_mode": "inline",
+      "text_hash": "91d0817e0bd738c4676b526acfae1c3f403dcdf2e926c3ee2a2d133ec0a56204",
+      "text_byte_length": 4000,
+      "cited_text": "from __future__ import annotations\n\nimport uuid\nfrom collections.abc import Callable, Iterable, Mapping, Sequence\nfrom datetime import datetime, timezone\nfrom inspect import signature\nfrom typing import Any, Literal\n\nfrom langchain_core.runnables import RunnableConfig\nfrom langgraph.checkpoint.base import (\n    BaseCheckpointSaver,\n    ChannelVersions,\n    Checkpoint,\n    CheckpointTuple,\n    DeltaChannelHistory,\n    PendingWrite,\n)\nfrom langgraph.checkpoint.base.id import uuid6\nfrom langgraph.checkpoint.serde.types import _DeltaSnapshot\n\nfrom langgraph._internal._config import (\n    DELTA_MAX_SUPERSTEPS_SINCE_SNAPSHOT,\n    patch_configurable,\n)\nfrom langgraph._internal._constants import (\n    CONF,\n    CONFIG_KEY_CHECKPOINT_ID,\n    NS_END,\n    NS_SEP,\n    NULL_TASK_ID,\n    PUSH,\n    SNAPSHOT_BUMPS,\n)\nfrom langgraph._internal._typing import MISSING\nfrom langgraph.channels.base import BaseChannel\nfrom langgraph.channels.binop import BinaryOperatorAggregate, _get_overwrite\nfrom langgraph.channels.delta import DeltaChannel\nfrom langgraph.managed.base import ManagedValueMapping, ManagedValueSpec\n\nLATEST_VERSION = 4\n\nGetNextVersion = Callable[[Any, None], Any]\n\n\ndef empty_checkpoint() -> Checkpoint:\n    return Checkpoint(\n        v=LATEST_VERSION,\n        id=str(uuid6(clock_seq=-2)),\n        ts=datetime.now(timezone.utc).isoformat(),\n        channel_values={},\n        channel_versions={},\n        versions_seen={},\n    )\n\n\ndef put_writes_accepts_task_path(put_writes: Callable[..., Any]) -> bool:\n    \"\"\"Whether a saver's `put_writes` or `aput_writes` takes `task_path`.\n\n    Savers written before the parameter existed don't, so it is passed only\n    when this is true.\n    \"\"\"\n    return signature(put_writes).parameters.get(\"task_path\") is not None\n\n\ndef exit_delta_task_id(step: int, task_id: str) -> str:\n    \"\"\"Synthetic task id for exit-mode DeltaChannel writes.\n\n    Embeds the superstep in the first UUID group so `ORDER BY task_id, idx`\n    preserves chronological order while remaining a valid RFC UUID (required by\n    Postgres `checkpoint_writes.task_id uuid` columns). Never `NULL_TASK_ID`:\n    readers apply writes under it as the anchor checkpoint's own pending writes.\n    \"\"\"\n    parts = str(uuid.UUID(task_id)).split(\"-\")\n    synthetic = f\"{step:08d}-{parts[1]}-{parts[2]}-{parts[3]}-{parts[4]}\"\n    if synthetic == NULL_TASK_ID:\n        return f\"{step:08d}-0000-0000-0000-000000000001\"\n    return synthetic\n\n\ndef exit_delta_late_task_id(step: int, task_id: str) -> str:\n    \"\"\"Synthetic task id for exit-mode writes of a superstep after the anchor's own.\n\n    Sorts after every real task id, in step order, so replay keeps them after\n    the anchor's own superstep whether a saver orders by task path or task id.\n    \"\"\"\n    parts = str(uuid.UUID(task_id)).split(\"-\")\n    return f\"ffffffff-{step >> 16:04x}-{step & 0xFFFF:04x}-{parts[3]}-{parts[4]}\"\n\n\ndef delta_channels_to_snapshot(\n    channels: Mapping[str, BaseChannel],\n    counters_since_delta_snapshot: Mapping[str, tuple[int, int]],\n    channel_versions: ChannelVersions,\n) -> set[str]:\n    \"\"\"Return the set of DeltaChannel names that should snapshot now.\n\n    A channel snapshots when EITHER its accumulated update count reaches\n    `snapshot_frequency` OR the total supersteps since its last snapshot\n    reaches `DELTA_MAX_SUPERSTEPS_SINCE_SNAPSHOT`. A channel without a version\n    was never written on this branch, so it has nothing to snapshot. This is a\n    pure predicate — no mutation.\n    \"\"\"\n    result: set[str] = set()\n    for name, ch in channels.items():\n        if (\n            not isinstance(ch, DeltaChannel)\n            or not ch.is_available()\n            or name not in channel_versions\n        ):\n            continue\n        updates, supersteps = counters_since_delta_snapshot.get(name, (0, 0))\n        if (\n            updates >= ch.snapshot_frequency\n            or supersteps >= DELTA_MAX_SUPERSTEPS_SINCE_SNAPSHOT\n        ):\n            result.add(name)\n    return result\n\n"
+    }
+  ],
+  "findings": [
+    {
+      "finding_id": "finding-e40c7276127a6de3c28bf170",
+      "question_id": "q-plan-43554e89-e7ea-4d62-ba2d-7f3c51c3eeb0-1",
+      "assertion_text": "In the pinned Babel repository at commit e912c2f3320de0b6e1c9ff85b95b0f74d8b5323c, the file babel-cli/src/research/v2/persistence/durableResearchStore.ts implements durable graph/state persistence by exposing a DurableResearchStore class that uses an exclusive directory lock, staged snapshot commit to research-store.snapshot.json, and validated reload from snapshot files.",
+      "assertion_kind": "source_observation",
+      "passage_ids": [
+        "passage-0fd913811180d079720d8a6f"
+      ],
+      "citation_ids": null,
+      "source_integrity": "valid",
+      "semantic_support": {
+        "status": "supported",
+        "reviewer": "research-v2-semantic-review",
+        "reviewer_version": "0.2.0-claimed-source-attribution",
+        "rationale": "The cited passage from babel-cli/src/research/v2/persistence/durableResearchStore.ts directly supports the claimed persistence mechanisms: it defines DurableResearchStore implements ResearchStore, acquires an exclusive directory lock, uses the research-store.snapshot.json path, stages writes via a .tmp file, and reloads via loadStoreInnerFromSnapshotFile. The assertion is supported, but it addresses only the Babel repository, so the LangGraph obligation for the comparative question is unmet.",
+        "reviewed_at": "2026-10-21T17:32:30.764Z"
+      },
+      "question_coverage": {
+        "status": "partial",
+        "reviewer": "research-v2-semantic-review",
+        "reviewer_version": "0.1.0-question-coverage",
+        "rationale": "The cited passage from babel-cli/src/research/v2/persistence/durableResearchStore.ts directly supports the claimed persistence mechanisms: it defines DurableResearchStore implements ResearchStore, acquires an exclusive directory lock, uses the research-store.snapshot.json path, stages writes via a .tmp file, and reloads via loadStoreInnerFromSnapshotFile. The assertion is supported, but it addresses only the Babel repository, so the LangGraph obligation for the comparative question is unmet.",
+        "reviewed_at": "2026-10-21T17:32:30.764Z"
+      },
+      "plan_obligation_coverage": [
+        {
+          "obligation_id": "q1-pin0-persistence",
+          "status": "met",
+          "supporting_passage_ids": [
+            "passage-0fd913811180d079720d8a6f"
+          ]
+        },
+        {
+          "obligation_id": "q1-pin1-persistence",
+          "status": "unmet",
+          "supporting_passage_ids": []
+        }
+      ],
+      "claimed_source_attribution": {
+        "status": "matches_admitted_citations",
+        "source_slots": [
+          "repository-pin-0"
+        ],
+        "reviewer": "research-v2-claimed-source-attribution",
+        "reviewer_version": "0.2.0-slot-resolution",
+        "rationale": "The cited passage from babel-cli/src/research/v2/persistence/durableResearchStore.ts directly supports the claimed persistence mechanisms: it defines DurableResearchStore implements ResearchStore, acquires an exclusive directory lock, uses the research-store.snapshot.json path, stages writes via a .tmp file, and reloads via loadStoreInnerFromSnapshotFile. The assertion is supported, but it addresses only the Babel repository, so the LangGraph obligation for the comparative question is unmet.",
+        "reviewed_at": "2026-10-21T17:32:30.764Z"
+      },
+      "created_at": "2026-10-21T17:31:51.558Z",
+      "revised_at": "2026-10-21T17:32:30.764Z"
+    },
+    {
+      "finding_id": "finding-1d33ad0893881a78d7d1ebac",
+      "question_id": "q-plan-43554e89-e7ea-4d62-ba2d-7f3c51c3eeb0-1",
+      "assertion_text": "In the pinned LangGraph repository at commit 3cd57c038ad827d05f80c6488adea9994156c58c, the file libs/langgraph/langgraph/pregel/_checkpoint.py implements checkpoint/state persistence through checkpoint channel versioning, DeltaChannel snapshot scheduling, and helpers for checkpoint writes and snapshot decisions.",
+      "assertion_kind": "source_observation",
+      "passage_ids": [
+        "passage-955a3710985bc9431c39a18b"
+      ],
+      "citation_ids": null,
+      "source_integrity": "valid",
+      "semantic_support": {
+        "status": "supported",
+        "reviewer": "research-v2-semantic-review",
+        "reviewer_version": "0.2.0-claimed-source-attribution",
+        "rationale": "The cited langgraph/pregel/_checkpoint.py passage supports the assertion: it contains checkpoint/state persistence machinery including ChannelVersions, Checkpoint, BaseCheckpointSaver imports, empty_checkpoint(), and delta_channels_to_snapshot() for snapshot scheduling and checkpoint write helpers. The assertion covers only the LangGraph repository, so the comparative question is only partially addressed.",
+        "reviewed_at": "2026-10-21T17:32:30.764Z"
+      },
+      "question_coverage": {
+        "status": "partial",
+        "reviewer": "research-v2-semantic-review",
+        "reviewer_version": "0.1.0-question-coverage",
+        "rationale": "The cited langgraph/pregel/_checkpoint.py passage supports the assertion: it contains checkpoint/state persistence machinery including ChannelVersions, Checkpoint, BaseCheckpointSaver imports, empty_checkpoint(), and delta_channels_to_snapshot() for snapshot scheduling and checkpoint write helpers. The assertion covers only the LangGraph repository, so the comparative question is only partially addressed.",
+        "reviewed_at": "2026-10-21T17:32:30.764Z"
+      },
+      "plan_obligation_coverage": [
+        {
+          "obligation_id": "q1-pin0-persistence",
+          "status": "unmet",
+          "supporting_passage_ids": []
+        },
+        {
+          "obligation_id": "q1-pin1-persistence",
+          "status": "met",
+          "supporting_passage_ids": [
+            "passage-955a3710985bc9431c39a18b"
+          ]
+        }
+      ],
+      "claimed_source_attribution": {
+        "status": "matches_admitted_citations",
+        "source_slots": [
+          "repository-pin-1"
+        ],
+        "reviewer": "research-v2-claimed-source-attribution",
+        "reviewer_version": "0.2.0-slot-resolution",
+        "rationale": "The cited langgraph/pregel/_checkpoint.py passage supports the assertion: it contains checkpoint/state persistence machinery including ChannelVersions, Checkpoint, BaseCheckpointSaver imports, empty_checkpoint(), and delta_channels_to_snapshot() for snapshot scheduling and checkpoint write helpers. The assertion covers only the LangGraph repository, so the comparative question is only partially addressed.",
+        "reviewed_at": "2026-10-21T17:32:30.764Z"
+      },
+      "created_at": "2026-10-21T17:31:51.558Z",
+      "revised_at": "2026-10-21T17:32:30.764Z"
+    },
+    {
+      "finding_id": "finding-43d88bc10717e0e70492545a",
+      "question_id": "q-plan-43554e89-e7ea-4d62-ba2d-7f3c51c3eeb0-2",
+      "assertion_text": "The Babel persistence layer is isolated in the babel-cli/src/research/v2/persistence/ directory and depends on a ResearchStore port plus storage helpers such as MutationQueue and storeDirectoryLock, rather than on execution-loop code; the cited file does not contain node scheduling or agent execution-policy logic.",
+      "assertion_kind": "inference",
+      "passage_ids": [
+        "passage-0fd913811180d079720d8a6f"
+      ],
+      "citation_ids": null,
+      "source_integrity": "valid",
+      "semantic_support": {
+        "status": "supported",
+        "reviewer": "research-v2-semantic-review",
+        "reviewer_version": "0.2.0-claimed-source-attribution",
+        "rationale": "The cited Babel passage shows durableResearchStore.ts living in a dedicated persistence directory and depending on ResearchStore, MutationQueue, and storeDirectoryLock, and the visible code contains only persistence logic rather than node scheduling or execution-loop control. It supports the separation claim for Babel, but it does not identify any execution-policy file path and provides no LangGraph evidence, so the broader question is only partially answered.",
+        "reviewed_at": "2026-10-21T17:32:30.764Z"
+      },
+      "question_coverage": {
+        "status": "partial",
+        "reviewer": "research-v2-semantic-review",
+        "reviewer_version": "0.1.0-question-coverage",
+        "rationale": "The cited Babel passage shows durableResearchStore.ts living in a dedicated persistence directory and depending on ResearchStore, MutationQueue, and storeDirectoryLock, and the visible code contains only persistence logic rather than node scheduling or execution-loop control. It supports the separation claim for Babel, but it does not identify any execution-policy file path and provides no LangGraph evidence, so the broader question is only partially answered.",
+        "reviewed_at": "2026-10-21T17:32:30.764Z"
+      },
+      "plan_obligation_coverage": [
+        {
+          "obligation_id": "q2-pin0-execution",
+          "status": "wrong_aspect",
+          "supporting_passage_ids": [
+            "passage-0fd913811180d079720d8a6f"
+          ]
+        },
+        {
+          "obligation_id": "q2-pin1-execution",
+          "status": "unmet",
+          "supporting_passage_ids": []
+        }
+      ],
+      "claimed_source_attribution": {
+        "status": "matches_admitted_citations",
+        "source_slots": [
+          "repository-pin-0"
+        ],
+        "reviewer": "research-v2-claimed-source-attribution",
+        "reviewer_version": "0.2.0-slot-resolution",
+        "rationale": "The cited Babel passage shows durableResearchStore.ts living in a dedicated persistence directory and depending on ResearchStore, MutationQueue, and storeDirectoryLock, and the visible code contains only persistence logic rather than node scheduling or execution-loop control. It supports the separation claim for Babel, but it does not identify any execution-policy file path and provides no LangGraph evidence, so the broader question is only partially answered.",
+        "reviewed_at": "2026-10-21T17:32:30.764Z"
+      },
+      "created_at": "2026-10-21T17:31:51.558Z",
+      "revised_at": "2026-10-21T17:32:30.764Z"
+    },
+    {
+      "finding_id": "finding-b60f048c8f87f7fa3ddbfca0",
+      "question_id": "q-plan-43554e89-e7ea-4d62-ba2d-7f3c51c3eeb0-2",
+      "assertion_text": "The LangGraph evidence shows checkpoint persistence implemented inside libs/langgraph/langgraph/pregel/_checkpoint.py, which is part of the pregel execution package; the available passage does not itself identify a separate execution-policy file, so the execution/persistence boundary cannot be directly evidenced from this passage alone.",
+      "assertion_kind": "inference",
+      "passage_ids": [
+        "passage-955a3710985bc9431c39a18b"
+      ],
+      "citation_ids": null,
+      "source_integrity": "valid",
+      "semantic_support": {
+        "status": "supported",
+        "reviewer": "research-v2-semantic-review",
+        "reviewer_version": "0.2.0-claimed-source-attribution",
+        "rationale": "The cited LangGraph passage shows checkpoint persistence code in langgraph/pregel/_checkpoint.py and does not itself identify a separate execution-policy file, accurately supporting the assertion's limitation statement. The finding addresses only the LangGraph evidence and does not satisfy the execution-policy evidence requirement for either repository.",
+        "reviewed_at": "2026-10-21T17:32:30.764Z"
+      },
+      "question_coverage": {
+        "status": "partial",
+        "reviewer": "research-v2-semantic-review",
+        "reviewer_version": "0.1.0-question-coverage",
+        "rationale": "The cited LangGraph passage shows checkpoint persistence code in langgraph/pregel/_checkpoint.py and does not itself identify a separate execution-policy file, accurately supporting the assertion's limitation statement. The finding addresses only the LangGraph evidence and does not satisfy the execution-policy evidence requirement for either repository.",
+        "reviewed_at": "2026-10-21T17:32:30.764Z"
+      },
+      "plan_obligation_coverage": [
+        {
+          "obligation_id": "q2-pin0-execution",
+          "status": "unmet",
+          "supporting_passage_ids": []
+        },
+        {
+          "obligation_id": "q2-pin1-execution",
+          "status": "wrong_aspect",
+          "supporting_passage_ids": [
+            "passage-955a3710985bc9431c39a18b"
+          ]
+        }
+      ],
+      "claimed_source_attribution": {
+        "status": "matches_admitted_citations",
+        "source_slots": [
+          "repository-pin-1"
+        ],
+        "reviewer": "research-v2-claimed-source-attribution",
+        "reviewer_version": "0.2.0-slot-resolution",
+        "rationale": "The cited LangGraph passage shows checkpoint persistence code in langgraph/pregel/_checkpoint.py and does not itself identify a separate execution-policy file, accurately supporting the assertion's limitation statement. The finding addresses only the LangGraph evidence and does not satisfy the execution-policy evidence requirement for either repository.",
+        "reviewed_at": "2026-10-21T17:32:30.764Z"
+      },
+      "created_at": "2026-10-21T17:31:51.558Z",
+      "revised_at": "2026-10-21T17:32:30.764Z"
+    },
+    {
+      "finding_id": "finding-fbb1e2f09074a9b8cdcc30e8",
+      "question_id": "q-plan-43554e89-e7ea-4d62-ba2d-7f3c51c3eeb0-3",
+      "assertion_text": "Based on the concrete file-path evidence, the pinned Babel repository exposes clearer persistence-versus-execution separation: durable state persistence lives in a dedicated babel-cli/src/research/v2/persistence/durableResearchStore.ts module behind a ResearchStore port, whereas the LangGraph checkpoint implementation is a private module inside the langgraph/pregel execution package.",
+      "assertion_kind": "inference",
+      "passage_ids": [
+        "passage-0fd913811180d079720d8a6f",
+        "passage-955a3710985bc9431c39a18b"
+      ],
+      "citation_ids": null,
+      "source_integrity": "valid",
+      "semantic_support": {
+        "status": "supported",
+        "reviewer": "research-v2-semantic-review",
+        "reviewer_version": "0.2.0-claimed-source-attribution",
+        "rationale": "The Babel passage shows durable persistence isolated in babel-cli/src/research/v2/persistence/durableResearchStore.ts behind the ResearchStore port, while the LangGraph passage shows checkpoint code located inside the langgraph/pregel execution package in _checkpoint.py. These file-level facts support the comparative conclusion that Babel exposes a clearer persistence/execution separation.",
+        "reviewed_at": "2026-10-21T17:32:30.764Z"
+      },
+      "question_coverage": {
+        "status": "answers",
+        "reviewer": "research-v2-semantic-review",
+        "reviewer_version": "0.1.0-question-coverage",
+        "rationale": "The Babel passage shows durable persistence isolated in babel-cli/src/research/v2/persistence/durableResearchStore.ts behind the ResearchStore port, while the LangGraph passage shows checkpoint code located inside the langgraph/pregel execution package in _checkpoint.py. These file-level facts support the comparative conclusion that Babel exposes a clearer persistence/execution separation.",
+        "reviewed_at": "2026-10-21T17:32:30.764Z"
+      },
+      "plan_obligation_coverage": [
+        {
+          "obligation_id": "q3-pin0-boundary",
+          "status": "met",
+          "supporting_passage_ids": [
+            "passage-0fd913811180d079720d8a6f"
+          ]
+        },
+        {
+          "obligation_id": "q3-pin1-boundary",
+          "status": "met",
+          "supporting_passage_ids": [
+            "passage-955a3710985bc9431c39a18b"
+          ]
+        }
+      ],
+      "claimed_source_attribution": {
+        "status": "matches_admitted_citations",
+        "source_slots": [
+          "repository-pin-0",
+          "repository-pin-1"
+        ],
+        "reviewer": "research-v2-claimed-source-attribution",
+        "reviewer_version": "0.2.0-slot-resolution",
+        "rationale": "The Babel passage shows durable persistence isolated in babel-cli/src/research/v2/persistence/durableResearchStore.ts behind the ResearchStore port, while the LangGraph passage shows checkpoint code located inside the langgraph/pregel execution package in _checkpoint.py. These file-level facts support the comparative conclusion that Babel exposes a clearer persistence/execution separation.",
+        "reviewed_at": "2026-10-21T17:32:30.764Z"
+      },
+      "created_at": "2026-10-21T17:31:51.558Z",
+      "revised_at": "2026-10-21T17:32:30.764Z"
+    }
+  ],
+  "model_invocation_completed": [
+    {
+      "recorded_at": "2026-10-21T17:31:36.332Z",
+      "receipt": {
+        "operation_id": "cli-run-plan-wg2-a9985d37",
+        "backend_key": "research-v2-cli",
+        "provider": "openrouter",
+        "provider_model_id": "deepseek/deepseek-v4-flash-0731",
+        "resolved_at": "2026-10-21T17:31:36.328Z",
+        "usage_settlement": {
+          "attempt_id": "cli-run-plan-att-wg2-a9985d37",
+          "input_tokens": 936,
+          "output_tokens": 7580,
+          "reasoning_tokens": 6539,
+          "cost": {
+            "status": "reported",
+            "amount_usd": 0.00105216144,
+            "currency": "USD"
+          }
+        },
+        "provider_invoke_diagnostics": {
+          "inference_id": "8640e4f2-aa06-4fb1-b7da-f1abcf94cf60",
+          "visible_content_present": true,
+          "normalized_finish_reason": "NATURAL_COMPLETION",
+          "output_digest": "9b031584942f4d4a03fb6487c825d5dbf45f9fcdaaaad02705f811e7aff2bf74",
+          "input_tokens": 936,
+          "output_tokens": 7580,
+          "reasoning_tokens": 6539
+        }
+      }
+    },
+    {
+      "recorded_at": "2026-10-21T17:31:51.555Z",
+      "receipt": {
+        "operation_id": "cli-run-extract-wg2-a9985d37",
+        "backend_key": "research-v2-cli",
+        "provider": "openrouter",
+        "provider_model_id": "deepseek/deepseek-v4-flash-0731",
+        "resolved_at": "2026-10-21T17:31:51.554Z",
+        "usage_settlement": {
+          "attempt_id": "cli-run-extract-att-wg2-a9985d37",
+          "input_tokens": 4116,
+          "output_tokens": 2820,
+          "reasoning_tokens": 2059,
+          "cost": {
+            "status": "reported",
+            "amount_usd": 0.00055887744,
+            "currency": "USD"
+          }
+        },
+        "provider_invoke_diagnostics": {
+          "inference_id": "b1690271-1a3c-456f-885d-72c38bfcb82a",
+          "visible_content_present": true,
+          "normalized_finish_reason": "NATURAL_COMPLETION",
+          "output_digest": "ed832bd7b4e86d317c9acf5f0fa8f456d8ccd701d8a5492f520f74f4b226aaaf",
+          "input_tokens": 4116,
+          "output_tokens": 2820,
+          "reasoning_tokens": 2059
+        }
+      }
+    },
+    {
+      "recorded_at": "2026-10-21T17:32:30.757Z",
+      "receipt": {
+        "operation_id": "cli-run-review-wg2-a9985d37",
+        "backend_key": "research-v2-cli",
+        "provider": "openrouter",
+        "provider_model_id": "deepseek/deepseek-v4-flash-0731",
+        "resolved_at": "2026-10-21T17:32:30.756Z",
+        "usage_settlement": {
+          "attempt_id": "cli-run-review-att-wg2-a9985d37",
+          "input_tokens": 13145,
+          "output_tokens": 7668,
+          "reasoning_tokens": 6325,
+          "cost": {
+            "status": "reported",
+            "amount_usd": 0.00160646156,
+            "currency": "USD"
+          }
+        },
+        "provider_invoke_diagnostics": {
+          "inference_id": "f7b259cf-4504-4dbf-bef3-fc1ffef0abad",
+          "visible_content_present": true,
+          "normalized_finish_reason": "NATURAL_COMPLETION",
+          "output_digest": "65a011d37314965cdbd85e5fd3bd390abf99b235359566efdd41fe146f9b9f09",
+          "input_tokens": 13145,
+          "output_tokens": 7668,
+          "reasoning_tokens": 6325
+        }
+      }
+    },
+    {
+      "recorded_at": "2026-10-21T17:32:36.045Z",
+      "receipt": {
+        "operation_id": "cli-run-synth-wg2-a9985d37",
+        "backend_key": "research-v2-cli",
+        "provider": "openrouter",
+        "provider_model_id": "deepseek/deepseek-v4-flash-0731",
+        "resolved_at": "2026-10-21T17:32:36.044Z",
+        "usage_settlement": {
+          "attempt_id": "cli-run-synth-att-wg2-a9985d37",
+          "input_tokens": 4146,
+          "output_tokens": 847,
+          "reasoning_tokens": 474,
+          "cost": {
+            "status": "reported",
+            "amount_usd": 0.00029717028,
+            "currency": "USD"
+          }
+        },
+        "provider_invoke_diagnostics": {
+          "inference_id": "4e77e44a-616a-4398-b559-45e56d7852f6",
+          "visible_content_present": true,
+          "normalized_finish_reason": "NATURAL_COMPLETION",
+          "output_digest": "cf52ffd50c4384290dbc8318e4d0669800a114db0c6592955431af3ae42a2592",
+          "input_tokens": 4146,
+          "output_tokens": 847,
+          "reasoning_tokens": 474
+        }
+      }
+    }
+  ],
+  "external_operation_intents": [
+    {
+      "recorded_at": "2026-10-21T17:30:56.170Z",
+      "intent": {
+        "mission_id": "mission-t-l1-validation-e1547b75-pending-001",
+        "operation_id": "cli-run-plan-wg2-a9985d37",
+        "attempt_id": "cli-run-plan-att-wg2-a9985d37",
+        "operation_kind": "model_invoke",
+        "dispatched_at": "2026-10-21T17:30:56.168Z",
+        "idempotency_key": "cli-run-plan-wg2-a9985d37"
+      }
+    },
+    {
+      "recorded_at": "2026-10-21T17:31:36.336Z",
+      "intent": {
+        "mission_id": "mission-t-l1-validation-e1547b75-pending-001",
+        "operation_id": "cli-run-search-wg2-a9985d37--repository-pin-0",
+        "attempt_id": "cli-run-search-att-wg2-a9985d37--repository-pin-0",
+        "operation_kind": "source_search",
+        "dispatched_at": "2026-10-21T17:30:56.168Z",
+        "idempotency_key": "cli-run-search-wg2-a9985d37--repository-pin-0"
+      }
+    },
+    {
+      "recorded_at": "2026-10-21T17:31:36.686Z",
+      "intent": {
+        "mission_id": "mission-t-l1-validation-e1547b75-pending-001",
+        "operation_id": "cli-run-fetch-wg2-a9985d37--repository-pin-0",
+        "attempt_id": "cli-run-fetch-att-wg2-a9985d37--repository-pin-0",
+        "operation_kind": "source_fetch",
+        "dispatched_at": "2026-10-21T17:30:56.168Z",
+        "idempotency_key": "cli-run-fetch-wg2-a9985d37--repository-pin-0"
+      }
+    },
+    {
+      "recorded_at": "2026-10-21T17:31:36.853Z",
+      "intent": {
+        "mission_id": "mission-t-l1-validation-e1547b75-pending-001",
+        "operation_id": "cli-run-search-wg2-a9985d37--repository-pin-1",
+        "attempt_id": "cli-run-search-att-wg2-a9985d37--repository-pin-1",
+        "operation_kind": "source_search",
+        "dispatched_at": "2026-10-21T17:30:56.168Z",
+        "idempotency_key": "cli-run-search-wg2-a9985d37--repository-pin-1"
+      }
+    },
+    {
+      "recorded_at": "2026-10-21T17:31:37.044Z",
+      "intent": {
+        "mission_id": "mission-t-l1-validation-e1547b75-pending-001",
+        "operation_id": "cli-run-fetch-wg2-a9985d37--repository-pin-1",
+        "attempt_id": "cli-run-fetch-att-wg2-a9985d37--repository-pin-1",
+        "operation_kind": "source_fetch",
+        "dispatched_at": "2026-10-21T17:30:56.168Z",
+        "idempotency_key": "cli-run-fetch-wg2-a9985d37--repository-pin-1"
+      }
+    },
+    {
+      "recorded_at": "2026-10-21T17:31:37.179Z",
+      "intent": {
+        "mission_id": "mission-t-l1-validation-e1547b75-pending-001",
+        "operation_id": "cli-run-extract-wg2-a9985d37",
+        "attempt_id": "cli-run-extract-att-wg2-a9985d37",
+        "operation_kind": "model_invoke",
+        "dispatched_at": "2026-10-21T17:30:56.168Z",
+        "idempotency_key": "cli-run-extract-wg2-a9985d37"
+      }
+    },
+    {
+      "recorded_at": "2026-10-21T17:31:51.568Z",
+      "intent": {
+        "mission_id": "mission-t-l1-validation-e1547b75-pending-001",
+        "operation_id": "cli-run-review-wg2-a9985d37",
+        "attempt_id": "cli-run-review-att-wg2-a9985d37",
+        "operation_kind": "model_invoke",
+        "dispatched_at": "2026-10-21T17:30:56.168Z",
+        "idempotency_key": "cli-run-review-wg2-a9985d37"
+      }
+    },
+    {
+      "recorded_at": "2026-10-21T17:32:30.774Z",
+      "intent": {
+        "mission_id": "mission-t-l1-validation-e1547b75-pending-001",
+        "operation_id": "cli-run-synth-wg2-a9985d37",
+        "attempt_id": "cli-run-synth-att-wg2-a9985d37",
+        "operation_kind": "model_invoke",
+        "dispatched_at": "2026-10-21T17:30:56.168Z",
+        "idempotency_key": "cli-run-synth-wg2-a9985d37"
+      }
+    }
+  ],
+  "external_operation_completions": [
+    {
+      "recorded_at": "2026-10-21T17:31:36.333Z",
+      "completion": {
+        "mission_id": "mission-t-l1-validation-e1547b75-pending-001",
+        "operation_id": "cli-run-plan-wg2-a9985d37",
+        "attempt_id": "cli-run-plan-att-wg2-a9985d37",
+        "completed_at": "2026-10-21T17:31:36.332Z",
+        "settlement": "succeeded",
+        "usage_settlement": {
+          "attempt_id": "cli-run-plan-att-wg2-a9985d37",
+          "input_tokens": 936,
+          "output_tokens": 7580,
+          "reasoning_tokens": 6539,
+          "cost": {
+            "status": "reported",
+            "amount_usd": 0.00105216144,
+            "currency": "USD"
+          }
+        },
+        "provider_invoke_diagnostics": {
+          "inference_id": "8640e4f2-aa06-4fb1-b7da-f1abcf94cf60",
+          "visible_content_present": true,
+          "normalized_finish_reason": "NATURAL_COMPLETION",
+          "output_digest": "9b031584942f4d4a03fb6487c825d5dbf45f9fcdaaaad02705f811e7aff2bf74",
+          "input_tokens": 936,
+          "output_tokens": 7580,
+          "reasoning_tokens": 6539
+        }
+      }
+    },
+    {
+      "recorded_at": "2026-10-21T17:31:36.685Z",
+      "completion": {
+        "mission_id": "mission-t-l1-validation-e1547b75-pending-001",
+        "operation_id": "cli-run-search-wg2-a9985d37--repository-pin-0",
+        "attempt_id": "cli-run-search-att-wg2-a9985d37--repository-pin-0",
+        "completed_at": "2026-10-21T17:31:36.684Z",
+        "settlement": "succeeded"
+      }
+    },
+    {
+      "recorded_at": "2026-10-21T17:31:36.851Z",
+      "completion": {
+        "mission_id": "mission-t-l1-validation-e1547b75-pending-001",
+        "operation_id": "cli-run-fetch-wg2-a9985d37--repository-pin-0",
+        "attempt_id": "cli-run-fetch-att-wg2-a9985d37--repository-pin-0",
+        "completed_at": "2026-10-21T17:31:36.850Z",
+        "settlement": "succeeded"
+      }
+    },
+    {
+      "recorded_at": "2026-10-21T17:31:37.043Z",
+      "completion": {
+        "mission_id": "mission-t-l1-validation-e1547b75-pending-001",
+        "operation_id": "cli-run-search-wg2-a9985d37--repository-pin-1",
+        "attempt_id": "cli-run-search-att-wg2-a9985d37--repository-pin-1",
+        "completed_at": "2026-10-21T17:31:37.043Z",
+        "settlement": "succeeded"
+      }
+    },
+    {
+      "recorded_at": "2026-10-21T17:31:37.176Z",
+      "completion": {
+        "mission_id": "mission-t-l1-validation-e1547b75-pending-001",
+        "operation_id": "cli-run-fetch-wg2-a9985d37--repository-pin-1",
+        "attempt_id": "cli-run-fetch-att-wg2-a9985d37--repository-pin-1",
+        "completed_at": "2026-10-21T17:31:37.176Z",
+        "settlement": "succeeded"
+      }
+    },
+    {
+      "recorded_at": "2026-10-21T17:31:51.556Z",
+      "completion": {
+        "mission_id": "mission-t-l1-validation-e1547b75-pending-001",
+        "operation_id": "cli-run-extract-wg2-a9985d37",
+        "attempt_id": "cli-run-extract-att-wg2-a9985d37",
+        "completed_at": "2026-10-21T17:31:51.554Z",
+        "settlement": "succeeded",
+        "usage_settlement": {
+          "attempt_id": "cli-run-extract-att-wg2-a9985d37",
+          "input_tokens": 4116,
+          "output_tokens": 2820,
+          "reasoning_tokens": 2059,
+          "cost": {
+            "status": "reported",
+            "amount_usd": 0.00055887744,
+            "currency": "USD"
+          }
+        },
+        "provider_invoke_diagnostics": {
+          "inference_id": "b1690271-1a3c-456f-885d-72c38bfcb82a",
+          "visible_content_present": true,
+          "normalized_finish_reason": "NATURAL_COMPLETION",
+          "output_digest": "ed832bd7b4e86d317c9acf5f0fa8f456d8ccd701d8a5492f520f74f4b226aaaf",
+          "input_tokens": 4116,
+          "output_tokens": 2820,
+          "reasoning_tokens": 2059
+        }
+      }
+    },
+    {
+      "recorded_at": "2026-10-21T17:32:30.762Z",
+      "completion": {
+        "mission_id": "mission-t-l1-validation-e1547b75-pending-001",
+        "operation_id": "cli-run-review-wg2-a9985d37",
+        "attempt_id": "cli-run-review-att-wg2-a9985d37",
+        "completed_at": "2026-10-21T17:32:30.756Z",
+        "settlement": "succeeded",
+        "usage_settlement": {
+          "attempt_id": "cli-run-review-att-wg2-a9985d37",
+          "input_tokens": 13145,
+          "output_tokens": 7668,
+          "reasoning_tokens": 6325,
+          "cost": {
+            "status": "reported",
+            "amount_usd": 0.00160646156,
+            "currency": "USD"
+          }
+        },
+        "provider_invoke_diagnostics": {
+          "inference_id": "f7b259cf-4504-4dbf-bef3-fc1ffef0abad",
+          "visible_content_present": true,
+          "normalized_finish_reason": "NATURAL_COMPLETION",
+          "output_digest": "65a011d37314965cdbd85e5fd3bd390abf99b235359566efdd41fe146f9b9f09",
+          "input_tokens": 13145,
+          "output_tokens": 7668,
+          "reasoning_tokens": 6325
+        }
+      }
+    },
+    {
+      "recorded_at": "2026-10-21T17:32:36.048Z",
+      "completion": {
+        "mission_id": "mission-t-l1-validation-e1547b75-pending-001",
+        "operation_id": "cli-run-synth-wg2-a9985d37",
+        "attempt_id": "cli-run-synth-att-wg2-a9985d37",
+        "completed_at": "2026-10-21T17:32:36.045Z",
+        "settlement": "succeeded",
+        "usage_settlement": {
+          "attempt_id": "cli-run-synth-att-wg2-a9985d37",
+          "input_tokens": 4146,
+          "output_tokens": 847,
+          "reasoning_tokens": 474,
+          "cost": {
+            "status": "reported",
+            "amount_usd": 0.00029717028,
+            "currency": "USD"
+          }
+        },
+        "provider_invoke_diagnostics": {
+          "inference_id": "4e77e44a-616a-4398-b559-45e56d7852f6",
+          "visible_content_present": true,
+          "normalized_finish_reason": "NATURAL_COMPLETION",
+          "output_digest": "cf52ffd50c4384290dbc8318e4d0669800a114db0c6592955431af3ae42a2592",
+          "input_tokens": 4146,
+          "output_tokens": 847,
+          "reasoning_tokens": 474
+        }
+      }
+    }
+  ],
+  "usage_accounting": {
+    "model_invoke_reported_costs": [
+      {
+        "operation_id": "cli-run-plan-wg2-a9985d37",
+        "attempt_id": "cli-run-plan-att-wg2-a9985d37",
+        "amount_usd_reported": 0.00105216144
+      },
+      {
+        "operation_id": "cli-run-extract-wg2-a9985d37",
+        "attempt_id": "cli-run-extract-att-wg2-a9985d37",
+        "amount_usd_reported": 0.00055887744
+      },
+      {
+        "operation_id": "cli-run-review-wg2-a9985d37",
+        "attempt_id": "cli-run-review-att-wg2-a9985d37",
+        "amount_usd_reported": 0.00160646156
+      },
+      {
+        "operation_id": "cli-run-synth-wg2-a9985d37",
+        "attempt_id": "cli-run-synth-att-wg2-a9985d37",
+        "amount_usd_reported": 0.00029717028
+      }
+    ],
+    "model_invoke_reported_cost_sum_usd": 0.00351467072,
+    "exa_lite_estimated_cost_usd_once": null,
+    "exa_lite_request_id": null,
+    "note": "Exa estimate from search completion usage_settlement once; model sum from unique model_invoke completions with cost.status=reported; terminal limitation strings not summed."
+  },
+  "terminal_receipt": {
+    "mission_id": "mission-t-l1-validation-e1547b75-pending-001",
+    "plan_revision_id": "plan-43554e89-e7ea-4d62-ba2d-7f3c51c3eeb0",
+    "terminal_state": "partial",
+    "answer_summary": "[supported:finding-e40c7276127a6de3c28bf170] In the pinned Babel repository at commit e912c2f3320de0b6e1c9ff85b95b0f74d8b5323c, the file babel-cli/src/research/v2/persistence/durableResearchStore.ts implements durable graph/state persistence by exposing a DurableResearchStore class that uses an exclusive directory lock, staged snapshot commit to research-store.snapshot.json, and validated reload from snapshot files. (passages: passage-0fd913811180d079720d8a6f) [supported:finding-1d33ad0893881a78d7d1ebac] In the pinned LangGraph repository at commit 3cd57c038ad827d05f80c6488adea9994156c58c, the file libs/langgraph/langgraph/pregel/_checkpoint.py implements checkpoint/state persistence through checkpoint channel versioning, DeltaChannel snapshot scheduling, and helpers for checkpoint writes and snapshot decisions. (passages: passage-955a3710985bc9431c39a18b) [supported:finding-43d88bc10717e0e70492545a] The Babel persistence layer is isolated in the babel-cli/src/research/v2/persistence/ directory and depends on a ResearchStore port plus storage helpers such as MutationQueue and storeDirectoryLock, rather than on execution-loop code; the cited file does not contain node scheduling or agent execution-policy logic. (passages: passage-0fd913811180d079720d8a6f) [supported:finding-b60f048c8f87f7fa3ddbfca0] The LangGraph evidence shows checkpoint persistence implemented inside libs/langgraph/langgraph/pregel/_checkpoint.py, which is part of the pregel execution package; the available passage does not itself identify a separate execution-policy file, so the execution/persistence boundary cannot be directly evidenced from this passage alone. (passages: passage-955a3710985bc9431c39a18b) [supported:finding-fbb1e2f09074a9b8cdcc30e8] Based on the concrete file-path evidence, the pinned Babel repository exposes clearer persistence-versus-execution separation: durable state persistence lives in a dedicated babel-cli/src/research/v2/persistence/durableResearchStore.ts module behind a ResearchStore port, whereas the LangGraph checkpoint implementation is a private module inside the langgraph/pregel execution package. (passages: passage-0fd913811180d079720d8a6f,passage-955a3710985bc9431c39a18b)",
+    "unanswered_questions": [
+      "q-plan-43554e89-e7ea-4d62-ba2d-7f3c51c3eeb0-1",
+      "q-plan-43554e89-e7ea-4d62-ba2d-7f3c51c3eeb0-2"
+    ],
+    "coverage_notes": "answer_summary lists only semantically supported findings with explicit finding_id bindings; unanswered_questions requires question_coverage answers on a supported finding (passage support or question_id membership alone is insufficient; partial/tangential coverage remains unanswered).",
+    "limitations": [
+      "question_coverage_partial:q-plan-43554e89-e7ea-4d62-ba2d-7f3c51c3eeb0-1:finding-e40c7276127a6de3c28bf170",
+      "question_coverage_partial:q-plan-43554e89-e7ea-4d62-ba2d-7f3c51c3eeb0-1:finding-1d33ad0893881a78d7d1ebac",
+      "question_coverage_partial:q-plan-43554e89-e7ea-4d62-ba2d-7f3c51c3eeb0-2:finding-43d88bc10717e0e70492545a",
+      "question_coverage_partial:q-plan-43554e89-e7ea-4d62-ba2d-7f3c51c3eeb0-2:finding-b60f048c8f87f7fa3ddbfca0",
+      "unverified_model_synthesis_excluded: The pinned Babel repository (commit e912c2f3320de0b6e1c9ff85b95b0f74d8b5323c) and pinned LangGraph repository (commit 3cd57c038ad827d05f80c6488adea9994156c58c) separate durable graph/state persistence from agent execution policy in notably ",
+      "unverified_model_stopping_prose_excluded: completed",
+      "offline_or_governed_sources_only"
+    ],
+    "source_cutoff": "2026-10-21T17:31:37.171Z",
+    "acceptance_state": "host_admitted_model_synthesis",
+    "stopping_reason": "single_pass_host_finalization;unanswered_plan_questions=2",
+    "finding_ids": [
+      "finding-e40c7276127a6de3c28bf170",
+      "finding-1d33ad0893881a78d7d1ebac",
+      "finding-43d88bc10717e0e70492545a",
+      "finding-b60f048c8f87f7fa3ddbfca0",
+      "finding-fbb1e2f09074a9b8cdcc30e8"
+    ],
+    "citation_passage_ids": [
+      "passage-0fd913811180d079720d8a6f",
+      "passage-955a3710985bc9431c39a18b"
+    ],
+    "generated_at": "2026-10-21T17:32:36.050Z"
+  },
+  "report_cli_note": "Use store report event or c-live-*-report.json for host report mirror"
+}

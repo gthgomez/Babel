@@ -47,5 +47,11 @@
     "report": "review-artifacts/c-live-e1547b75-g-l3-report.json"
   },
   "model_usage_detail": "see external_operation_usage arrays in each evidence_subset",
+  "original_evidence_exports_additive": {
+    "index": "review-artifacts/c-live-e1547b75-original-evidence-index.json",
+    "t_l1": "review-artifacts/c-live-e1547b75-t-l1-original-evidence-export.json",
+    "g_l3": "review-artifacts/c-live-e1547b75-g-l3-original-evidence-export.json",
+    "extractor": "review-artifacts/c-live-e1547b75-extract-original-evidence.mjs"
+  },
   "scope": "T-L1 limited to two sampled implementation files; G-L3 per official python.org pages only"
 }

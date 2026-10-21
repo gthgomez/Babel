@@ -1,0 +1,26 @@
+{
+  "schema": "research-v2-c-live-original-evidence-index/v1",
+  "additive_to_prior_receipts": "review-artifacts/c-live-e1547b75-checkpoint-receipt.json and c-live-*-evidence-subset.json unchanged; snapshots on disk unchanged",
+  "bound_commit": "e1547b756d7de3e41cbad613b95cfc0b62b75af8",
+  "extractor": {
+    "script": "review-artifacts/c-live-e1547b75-extract-original-evidence.mjs",
+    "script_sha256": "see export.extraction.script_sha256 (regenerated with model cost fix)"
+  },
+  "t_l1": {
+    "snapshot_sha256": "d83840ba9b07a556eba70da2019cb212784d331e51091d12e9d672c608500cf4",
+    "export": "review-artifacts/c-live-e1547b75-t-l1-original-evidence-export.json"
+  },
+  "g_l3": {
+    "snapshot_sha256": "03e63bcb1e8610206fb119ff489f169b68f6faca3b8092830584b19f9ec2586a",
+    "export": "review-artifacts/c-live-e1547b75-g-l3-original-evidence-export.json",
+    "truncation_by_revision_not_inference": {
+      "truncated_revision_id": "rev-src-web-84ed1861359f79ce6123ebc1-195ff5a69c1d8eae",
+      "canonical_key": "https://www.python.org/downloads/",
+      "coverage_source_slot": "web-ref-0",
+      "completeness": "truncated",
+      "truncation_reason": "host_decoded_byte_limit",
+      "byte_length_received": 200000
+    },
+    "complete_revision_note": "rev-web-mission-ref-600acab9a967586fa025-a862729c9dc1b8c2 (devguide web-ref-1) completeness complete, 125309 bytes"
+  }
+}
