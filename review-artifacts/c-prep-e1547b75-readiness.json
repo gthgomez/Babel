@@ -1,0 +1,86 @@
+{
+  "schema": "research-v2-c-prep-readiness/v1",
+  "status": "ready_pending_explicit_coordinator_release",
+  "live_execution_authorized": false,
+  "prior_evidence_unchanged": "All prior failed-prerequisite, attempt2, and e94e7a54 partial-emitted protocol artifacts remain as committed; not modified by this prep.",
+  "canonical_binding": {
+    "commit": "e1547b756d7de3e41cbad613b95cfc0b62b75af8",
+    "tree": "ca8a3d0b4273cbbb84d2acde9dee654129a7b192",
+    "checkout_root": "/tmp/babel-validation-prep-e1547b75",
+    "babel_cli_absolute": "/tmp/babel-validation-prep-e1547b75/babel-cli",
+    "tracked_clean_after_build": true,
+    "local_source_edits": false
+  },
+  "build_log": "review-artifacts/c-prep-e1547b75-build.log",
+  "exits": {
+    "npm_ci": 0,
+    "typecheck": 0,
+    "build": 0,
+    "technical_campaign_preflight": 0,
+    "g_l3_campaign_preflight": 0
+  },
+  "source_fingerprints_before_build": {
+    "package_json": "7ef0f9021cbc620787d2180b9b570925b367d80ba1afc9a22fc38ef6794b7a06",
+    "package_lock": "d59a9a3de7239954572f6e3ef454e04082fd44c574980322f92af5dfb14965b2",
+    "admittedHttpGet.ts": "adde6b3b46a88ced39da0cb2771223a3c80baa1bfec418f977b43be42b2adde6",
+    "governedHttpClientIdentity.ts": "4dc3e3ea066191c9b60cec9b8a66ec6e677cec291cbe01d7d6f12e963a0a7403",
+    "T-L1-mission.json": "04e0329df13a286c67e41d962593bbc088880648ce8fe371694b6f83de85175b",
+    "G-L3-mission.json": "f00e8b60418ed69055863e335b6586e474cb36eb2c1d7a2b01cc3276fec7642b",
+    "model_policy.json": "26ecae78e66f76d3b67fe11974a044c0cc1f3526c44053abccbc375166ede3fe"
+  },
+  "source_fingerprints_after_build_unchanged": true,
+  "runtime_fingerprints_after_clean_build": "review-artifacts/c-prep-e1547b75-runtime-fingerprints.txt",
+  "bin_absolute": "/tmp/babel-validation-prep-e1547b75/babel-cli/bin/babel.js",
+  "config_lookup": {
+    "model_policy_absolute": "/tmp/babel-validation-prep-e1547b75/config/model-policy.json",
+    "model_route_artifact": "review-artifacts/c-prep-e1547b75-model-route.json"
+  },
+  "credentials_boolean_only": {
+    "openrouter_api_key_configured": true,
+    "exa_api_key_configured": true
+  },
+  "openrouter_effective_route": {
+    "provider": "openrouter",
+    "model_id": "deepseek/deepseek-v4-flash-0731",
+    "route_key": "deepseek-v4-flash-openrouter",
+    "invoked": false
+  },
+  "t_l1_pending": {
+    "mission_id": "mission-t-l1-validation-e1547b75-pending-001",
+    "mission_file": "review-artifacts/c-prep-e1547b75-proposed-t-l1-mission.json",
+    "mission_sha256": "aec94e6663f2c3bca86ad111d3373d00e37f7869e04614b5257f77363dfe9aee",
+    "store_directory_proposed": "/tmp/babel-t-l1-store-e1547b75-release-pending",
+    "store_created": false,
+    "pins": {
+      "babel": { "commit": "e912c2f3320de0b6e1c9ff85b95b0f74d8b5323c", "discover_query": "persistence durableresearchstore.ts", "sampled_path": "babel-cli/src/research/v2/persistence/durableResearchStore.ts" },
+      "langgraph": { "commit": "3cd57c038ad827d05f80c6488adea9994156c58c", "discover_query": "pregel checkpoint", "sampled_path": "libs/langgraph/langgraph/pregel/_checkpoint.py" }
+    },
+    "discovery_adapter": "technical-repository-file",
+    "search_provider": "pinned_repository_file_search (GitHub tree via admittedHttpGet; no Exa on technical profile)",
+    "exact_command_when_released": "BABEL_RESEARCH_V2_ALLOW_LIVE_API=1 node /tmp/babel-validation-prep-e1547b75/babel-cli/bin/babel.js research v2 run --store /tmp/babel-t-l1-store-e1547b75-release-pending --mission-file /workspace/review-artifacts/c-prep-e1547b75-proposed-t-l1-mission.json --json"
+  },
+  "g_l3_pending": {
+    "mission_id": "mission-g-l3-validation-e1547b75-pending-001",
+    "mission_file": "review-artifacts/c-prep-e1547b75-proposed-g-l3-mission.json",
+    "mission_sha256": "4590d73b9f5e04502021a4dd160202aad78eb3080458ca63d0efa23d53fcded9",
+    "store_directory_proposed": "/tmp/babel-g-l3-store-e1547b75-release-pending",
+    "store_created": false,
+    "selected_web_refs": [
+      "https://www.python.org/downloads/",
+      "https://devguide.python.org/versions/"
+    ],
+    "search_provider_id_offline_preflight": "exa_lite",
+    "expected_outcomes_summary": "Terminal partial or complete; per-question agreement, contradiction, or insufficiency with citations; two distinct canonical pages required for complete agreement path (see G-L3-expected-outcomes in fixture tree).",
+    "preflight_log": "review-artifacts/c-prep-e1547b75-g-l3-preflight.log",
+    "exact_command_when_released": "BABEL_RESEARCH_V2_ALLOW_LIVE_API=1 node /tmp/babel-validation-prep-e1547b75/babel-cli/bin/babel.js research v2 run --store /tmp/babel-g-l3-store-e1547b75-release-pending --mission-file /workspace/review-artifacts/c-prep-e1547b75-proposed-g-l3-mission.json --json"
+  },
+  "offline_preflight_logs": {
+    "technical": "review-artifacts/c-prep-e1547b75-technical-preflight.log",
+    "g_l3": "review-artifacts/c-prep-e1547b75-g-l3-preflight.log"
+  },
+  "uncertainties": [
+    "Live GitHub tree and Exa costs/outcomes unknown until explicit release.",
+    "G-L3 live agreement vs insufficiency depends on admitted extraction quality (historical devguide heading issue documented separately)."
+  ],
+  "coordinator_release_required_before_any_live_diagnostic": true
+}
