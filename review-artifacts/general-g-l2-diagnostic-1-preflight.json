@@ -1,0 +1,81 @@
+
+> babel-harness@0.1.4 test:research-v2-g-l2-preflight
+> node --import tsx scripts/research-v2-campaign-preflight-run.mjs G-L2
+
+{
+  "schema": "research-v2-campaign-preflight/v1",
+  "head_note": "No live API calls; campaign OpenRouter lane and host readiness only",
+  "acceptance_scenario": "G-L2",
+  "readiness": {
+    "search_provider_configured": true,
+    "mission_model_route_matches_effective": true,
+    "openrouter_credential_configured": true,
+    "ready": true,
+    "failures": []
+  },
+  "openrouter_route": {
+    "route_key": "deepseek-v4-flash-openrouter",
+    "provider": "openrouter",
+    "model_id": "deepseek/deepseek-v4-flash-0731",
+    "policy_path": "/workspace/config/model-policy.json",
+    "selection_basis": "model_policy_json",
+    "backend_key": "research-v2-cli"
+  },
+  "openrouter_credential": {
+    "provider": "openrouter",
+    "env_var": "OPENROUTER_API_KEY",
+    "configured": true,
+    "required": true
+  },
+  "mission_id": "mission-g-l2-constrained-comparison",
+  "profile_id": "general",
+  "primary_question": "For browser-facing static assets, how do MDN and Cloudflare public documentation compare on Cache-Control max-age guidance and who each document is written for (browser vs edge/CDN)? Cite only allowed domains; keep browser and CDN roles explicit.",
+  "search_provider_id": "duckduckgo_html_fallback",
+  "expected_outcomes": {
+    "schema": "research-v2-campaign-expected-outcomes/v1",
+    "acceptance_scenario": "G-L2",
+    "mission_id": "mission-g-l2-constrained-comparison",
+    "structural": {
+      "requires_two_public_source_classes": [
+        "developer.mozilla.org",
+        "developers.cloudflare.com"
+      ],
+      "comparison_dimensions": [
+        "cache_control_max_age",
+        "audience_browser_vs_edge"
+      ],
+      "must_label_browser_vs_cdn_roles": true
+    },
+    "acceptable_terminal_states": [
+      "partial",
+      "complete"
+    ],
+    "forbidden_conclusions": [
+      "single_merged_cache_story_without_role_labels",
+      "citations_outside_allowed_web_domains"
+    ],
+    "preflight": {
+      "requires_openrouter_route_lane": true,
+      "live_model_dispatch": false
+    }
+  },
+  "mission_file": "/workspace/babel-cli/src/research/v2/fixtures/campaign/G-L2-mission.json",
+  "expected_outcomes_file": "/workspace/babel-cli/src/research/v2/fixtures/campaign/G-L2-expected-outcomes.json",
+  "allowed_web_domains": [
+    "duckduckgo.com",
+    "html.duckduckgo.com",
+    "developer.mozilla.org",
+    "developers.cloudflare.com"
+  ],
+  "evidence_web_domains": [
+    "developer.mozilla.org",
+    "developers.cloudflare.com"
+  ],
+  "search_transport_domains": [
+    "duckduckgo.com",
+    "html.duckduckgo.com"
+  ],
+  "discover_query": "For browser-facing static assets, how do MDN and Cloudflare public documentation compare",
+  "search_url": "https://duckduckgo.com/html/?q=For+browser-facing+static+assets%2C+how+do+MDN+and+Cloudflare+public+documentation+compare"
+}
+research-v2-campaign-preflight: ok (G-L2)

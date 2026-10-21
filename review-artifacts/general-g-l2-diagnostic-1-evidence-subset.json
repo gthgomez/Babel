@@ -6,10 +6,157 @@
     "source_store_snapshot_path": "codex/runs/general-g-l2-diagnostic-1/store/research-store.snapshot.json",
     "source_store_snapshot_sha256": "d07551a20d2bc94b5c0d1ccf9e21f4f4b297a677ec7a096c30218736fb5d0e2a",
     "live_run_receipt": "review-artifacts/general-g-l2-diagnostic-1-live-run-receipt.json",
+    "read_only_verification_artifacts": {
+      "build_stdout_log": "review-artifacts/general-g-l2-diagnostic-1-build.stdout.log",
+      "pre_run_fingerprints": "review-artifacts/general-g-l2-diagnostic-1-pre-run-fingerprints.json",
+      "campaign_preflight_stdout": "review-artifacts/general-g-l2-diagnostic-1-preflight.json"
+    },
     "extraction_command": "node review-artifacts/extract-general-g-l2-diagnostic-1-evidence-subset.mjs codex/runs/general-g-l2-diagnostic-1/store/research-store.snapshot.json",
-    "extracted_at": "2026-10-21T10:57:58.190Z",
-    "sanitization": "Original store fields for cited passages and final findings only; no model_invoke bodies; no credentials, HTTP headers, or provider diagnostics; semantic review rationales retained as stored (not re-run)."
+    "extracted_at": "2026-10-21T11:01:01.921Z",
+    "sanitization": "Original store fields only; plan questions and final findings (including assertion and review rationales as stored); cited passages; allowlisted model completion/accounting (operation/attempt IDs, settlement, token and cost metadata, output_digest, finish reason flags). No model response bodies, reasoning streams, credentials, or HTTP headers."
   },
+  "plan_revision": {
+    "plan_revision_id": "plan-136a705e-a33b-45c8-9c3f-e97b9bc7eab1",
+    "mission_id": "mission-g-l2-general-live-diagnostic-1",
+    "created_at": "2026-10-21T10:52:37.180Z",
+    "revision_reason": "e2e_model_planning",
+    "questions": [
+      {
+        "question_id": "q-plan-136a705e-a33b-45c8-9c3f-e97b9bc7eab1-1",
+        "text": "What specific Cache-Control max-age guidance does MDN provide for browser-facing static assets, and what audience does MDN state it is written for?",
+        "importance": "critical",
+        "evidence_requirement": "Host-admitted plan question; refine locators during retrieval",
+        "status": "open"
+      },
+      {
+        "question_id": "q-plan-136a705e-a33b-45c8-9c3f-e97b9bc7eab1-2",
+        "text": "What specific Cache-Control max-age guidance does Cloudflare provide for static assets, and does Cloudflare frame that guidance for edge/CDN operators rather than browser developers?",
+        "importance": "critical",
+        "evidence_requirement": "Host-admitted plan question; refine locators during retrieval",
+        "status": "open"
+      },
+      {
+        "question_id": "q-plan-136a705e-a33b-45c8-9c3f-e97b9bc7eab1-3",
+        "text": "On which dimensions do MDN and Cloudflare agree or differ regarding max-age semantics, and how should browser versus edge/CDN roles be labeled separately in the comparison?",
+        "importance": "high",
+        "evidence_requirement": "Host-admitted plan question; refine locators during retrieval",
+        "status": "open"
+      },
+      {
+        "question_id": "q-plan-136a705e-a33b-45c8-9c3f-e97b9bc7eab1-4",
+        "text": "Which excerpts from the allowed MDN and Cloudflare documentation pages can be cited to support each source's audience and max-age claims without relying on third-party blogs or live cache probing?",
+        "importance": "high",
+        "evidence_requirement": "Host-admitted plan question; refine locators during retrieval",
+        "status": "open"
+      }
+    ]
+  },
+  "model_completions": [
+    {
+      "operation_id": "cli-run-plan-wg1-b982cb0c",
+      "attempt_id": "cli-run-plan-att-wg1-b982cb0c",
+      "completed_at": "2026-10-21T10:52:37.182Z",
+      "settlement": "succeeded",
+      "usage_settlement": {
+        "attempt_id": "cli-run-plan-att-wg1-b982cb0c",
+        "input_tokens": 688,
+        "output_tokens": 235,
+        "reasoning_tokens": 71,
+        "cost": {
+          "status": "reported",
+          "amount_usd": 0.000069528,
+          "currency": "USD"
+        }
+      },
+      "provider_invoke_diagnostics": {
+        "normalized_finish_reason": "NATURAL_COMPLETION",
+        "visible_content_present": true,
+        "output_digest": "f38bcbdaae98bd47239482dfc4331d05034b07565c9269cfa488a4ba8730290a",
+        "input_tokens": 688,
+        "output_tokens": 235,
+        "reasoning_tokens": 71,
+        "provider_request_id": null
+      }
+    },
+    {
+      "operation_id": "cli-run-extract-wg1-b982cb0c",
+      "attempt_id": "cli-run-extract-att-wg1-b982cb0c",
+      "completed_at": "2026-10-21T10:53:15.847Z",
+      "settlement": "succeeded",
+      "usage_settlement": {
+        "attempt_id": "cli-run-extract-att-wg1-b982cb0c",
+        "input_tokens": 6258,
+        "output_tokens": 7023,
+        "reasoning_tokens": 5714,
+        "cost": {
+          "status": "reported",
+          "amount_usd": 0.002416176,
+          "currency": "USD"
+        }
+      },
+      "provider_invoke_diagnostics": {
+        "normalized_finish_reason": "NATURAL_COMPLETION",
+        "visible_content_present": true,
+        "output_digest": "11b5393cc4c46f427fd9090c5ca14bd5e13207fa70f5192dad17d4a1f3a98cd9",
+        "input_tokens": 6258,
+        "output_tokens": 7023,
+        "reasoning_tokens": 5714,
+        "provider_request_id": null
+      }
+    },
+    {
+      "operation_id": "cli-run-review-wg1-b982cb0c",
+      "attempt_id": "cli-run-review-att-wg1-b982cb0c",
+      "completed_at": "2026-10-21T10:53:36.522Z",
+      "settlement": "succeeded",
+      "usage_settlement": {
+        "attempt_id": "cli-run-review-att-wg1-b982cb0c",
+        "input_tokens": 6748,
+        "output_tokens": 3816,
+        "reasoning_tokens": 3062,
+        "cost": {
+          "status": "reported",
+          "amount_usd": 0.00171122,
+          "currency": "USD"
+        }
+      },
+      "provider_invoke_diagnostics": {
+        "normalized_finish_reason": "NATURAL_COMPLETION",
+        "visible_content_present": true,
+        "output_digest": "1ba4026ef310de2b55dd81117bbfcda1531c4c30b9fe3a58c692e85532512d3f",
+        "input_tokens": 6748,
+        "output_tokens": 3816,
+        "reasoning_tokens": 3062,
+        "provider_request_id": null
+      }
+    },
+    {
+      "operation_id": "cli-run-synth-wg1-b982cb0c",
+      "attempt_id": "cli-run-synth-att-wg1-b982cb0c",
+      "completed_at": "2026-10-21T10:53:39.738Z",
+      "settlement": "succeeded",
+      "usage_settlement": {
+        "attempt_id": "cli-run-synth-att-wg1-b982cb0c",
+        "input_tokens": 1449,
+        "output_tokens": 667,
+        "reasoning_tokens": 500,
+        "cost": {
+          "status": "reported",
+          "amount_usd": 0.00038962,
+          "currency": "USD"
+        }
+      },
+      "provider_invoke_diagnostics": {
+        "normalized_finish_reason": "NATURAL_COMPLETION",
+        "visible_content_present": true,
+        "output_digest": "ca91d42f1b84ffd8ed7b5d42b6a620f08aa4fc9850c57dc5627b57d5e7740845",
+        "input_tokens": 1449,
+        "output_tokens": 667,
+        "reasoning_tokens": 500,
+        "provider_request_id": null
+      }
+    }
+  ],
   "sources": [
     {
       "source_id": "web-mission-ref-6700e628c37b3bec566c",
