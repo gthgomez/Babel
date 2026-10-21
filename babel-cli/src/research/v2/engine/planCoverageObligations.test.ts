@@ -3,6 +3,7 @@ import { describe, it } from 'node:test'
 import {
   assessPlanCoverageObligations,
   passageSupportsAudienceIntent,
+  passageSupportsObligationCompleteness,
   passageSupportsTechnicalEffect,
 } from './planCoverageObligations.js'
 
@@ -17,6 +18,26 @@ describe('planCoverageObligations', () => {
   it('accepts max-age TTL substance when present', () => {
     const text = 'Cache-Control max-age directive controls freshness.'
     assert.equal(passageSupportsTechnicalEffect(text, 'max_age_or_ttl_semantics'), true)
+  })
+
+  it('native probe phrases: nav max-age, single-user audience, welcome technical', () => {
+    assert.equal(
+      passageSupportsTechnicalEffect('On this page: max-age | TTL | See also', 'max_age_or_ttl_semantics'),
+      true,
+    )
+    assert.equal(
+      passageSupportsAudienceIntent('This document is intended for a single user.'),
+      true,
+    )
+    assert.equal(
+      passageSupportsObligationCompleteness('Welcome to our website', {
+        obligation_id: 'ob-tech',
+        source_slot: 'web-ref-0',
+        aspect: 'technical_effect',
+        technical_effect: 'general_technical',
+      }),
+      true,
+    )
   })
 
   it('distinguishes audience intent from cache-directive technical evidence', () => {

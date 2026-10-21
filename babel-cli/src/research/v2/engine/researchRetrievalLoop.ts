@@ -29,6 +29,7 @@ import {
   type MissionRegistryBundle,
 } from '../registry/missionAdapterResolution.js'
 import { resolveMissionWebRetrievalCandidates } from '../access/missionWebRetrievalSelection.js'
+import { stampCoverageSourceSlotOnSource } from './missionCoverageSourceSlots.js'
 import { slotOperationSuffix } from './technicalRetrievalComposition.js'
 
 export interface RetrievalIterationRequest {
@@ -305,7 +306,7 @@ export async function runAdmittedRetrievalIteration(
 
   for (const slot of resolution.slots) {
     throwIfAborted(request.signal, `source_fetch ${slot.slotId}`)
-    const candidate = slot.candidate
+    const candidate = stampCoverageSourceSlotOnSource(slot.candidate, slot.slotId)
     const { fetchOperationId, fetchAttemptId } = resolveSlotFetchOperationIds(
       request,
       slot.slotId,

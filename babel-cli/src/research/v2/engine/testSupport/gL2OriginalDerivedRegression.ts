@@ -90,9 +90,75 @@ export const gL2AuditDerivedPassages = gL2OriginalDerivedPassages
 export const gL2AuditDerivedFindingQ3 = gL2OriginalDerivedFindingQ3_7f3
 export const gL2AuditDerivedFindingQ4WrongAspect = gL2OriginalDerivedFindingQ4_a0cf
 
+function q3ObligationCoverageDefectReplay(): Record<string, unknown>[] {
+  return [
+    {
+      obligation_id: 'ob-mdn-max-age-semantics',
+      status: 'met',
+      supporting_passage_ids: ['fetch-mdn-original-derived:html:overview'],
+    },
+    {
+      obligation_id: 'ob-cf-max-age-semantics',
+      status: 'met',
+      supporting_passage_ids: ['fetch-cf-original-derived:html:max-age'],
+    },
+  ]
+}
+
+function q4ObligationCoverageWrongAspect(): Record<string, unknown>[] {
+  return [
+    {
+      obligation_id: 'ob-mdn-audience',
+      status: 'wrong_aspect',
+      supporting_passage_ids: ['fetch-cf-original-derived:html:max-age'],
+    },
+    {
+      obligation_id: 'ob-cf-audience',
+      status: 'wrong_aspect',
+      supporting_passage_ids: ['fetch-cf-original-derived:html:max-age'],
+    },
+  ]
+}
+
+function q3ObligationCoveragePositive(): Record<string, unknown>[] {
+  return [
+    {
+      obligation_id: 'ob-mdn-max-age-semantics',
+      status: 'met',
+      supporting_passage_ids: ['fetch-mdn-original-derived:html:max-age'],
+    },
+    {
+      obligation_id: 'ob-cf-max-age-semantics',
+      status: 'met',
+      supporting_passage_ids: ['fetch-cf-original-derived:html:max-age'],
+    },
+  ]
+}
+
+function q4ObligationCoveragePositive(): Record<string, unknown>[] {
+  return [
+    {
+      obligation_id: 'ob-mdn-audience',
+      status: 'met',
+      supporting_passage_ids: ['fetch-mdn-original-derived:html:audience'],
+    },
+    {
+      obligation_id: 'ob-cf-audience',
+      status: 'met',
+      supporting_passage_ids: ['fetch-cf-original-derived:html:audience'],
+    },
+  ]
+}
+
 export function gL2AuditDerivedModelReviewClaimingAnswersFor(
   findingId: string,
 ): Record<string, unknown> {
+  const obligation_coverage =
+    findingId === gL2OriginalDerivedFindingQ3_7f3.finding_id
+      ? q3ObligationCoverageDefectReplay()
+      : findingId === gL2OriginalDerivedFindingQ4_a0cf.finding_id
+        ? q4ObligationCoverageWrongAspect()
+        : undefined
   return {
     kind: 'semantic_support_review',
     judgments: [
@@ -101,6 +167,7 @@ export function gL2AuditDerivedModelReviewClaimingAnswersFor(
         status: 'supported',
         rationale: 'Model incorrectly labels coverage as answers (original-derived defect replay).',
         question_coverage: 'answers',
+        ...(obligation_coverage ? { obligation_coverage } : {}),
       },
     ],
   }
@@ -114,12 +181,36 @@ export const gL2AuditDerivedModelReviewBothClaimingAnswers = {
       status: 'supported' as const,
       rationale: 'Model incorrectly labels comparison answered despite missing MDN max-age substance.',
       question_coverage: 'answers' as const,
+      obligation_coverage: q3ObligationCoverageDefectReplay(),
     },
     {
       finding_id: gL2OriginalDerivedFindingQ4_a0cf.finding_id,
       status: 'supported' as const,
       rationale: 'Model treats cache directives as audience coverage.',
       question_coverage: 'answers' as const,
+      obligation_coverage: q4ObligationCoverageWrongAspect(),
     },
   ],
+}
+
+export function gL2PositiveControlModelReview(): Record<string, unknown> {
+  return {
+    kind: 'semantic_support_review',
+    judgments: [
+      {
+        finding_id: gL2OriginalDerivedFindingQ3Positive.finding_id,
+        status: 'supported',
+        rationale: 'Both slots document max-age semantics in admitted excerpts.',
+        question_coverage: 'answers',
+        obligation_coverage: q3ObligationCoveragePositive(),
+      },
+      {
+        finding_id: gL2OriginalDerivedFindingQ4Positive.finding_id,
+        status: 'supported',
+        rationale: 'Audience roles are explicit per source.',
+        question_coverage: 'answers',
+        obligation_coverage: q4ObligationCoveragePositive(),
+      },
+    ],
+  }
 }

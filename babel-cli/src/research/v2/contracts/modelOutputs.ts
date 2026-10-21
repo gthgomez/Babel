@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { PlanCoverageObligationSchema } from './plan.js'
 
 export const ResearchModelOperationKindSchema = z.enum([
   'plan_questions',
@@ -16,6 +17,7 @@ export const PlanQuestionsOutputSchema = z
         .object({
           text: z.string().min(1),
           importance: z.enum(['critical', 'high', 'medium', 'low']),
+          coverage_obligations: z.array(PlanCoverageObligationSchema).optional(),
         })
         .strict(),
     ),
@@ -58,6 +60,17 @@ export const SemanticSupportReviewOutputSchema = z
            * Whether the assertion addresses the bound plan question text (not citation support alone).
            */
           question_coverage: z.enum(['answers', 'partial', 'tangential', 'none']),
+          obligation_coverage: z
+            .array(
+              z
+                .object({
+                  obligation_id: z.string().min(1),
+                  status: z.enum(['met', 'unmet', 'wrong_aspect']),
+                  supporting_passage_ids: z.array(z.string().min(1)).optional(),
+                })
+                .strict(),
+            )
+            .optional(),
         })
         .strict(),
     ),

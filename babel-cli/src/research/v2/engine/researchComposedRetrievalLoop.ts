@@ -14,6 +14,7 @@ import {
   RetrievalIterationFailedAfterAcquireError,
   runAdmittedRetrievalIteration,
 } from './researchRetrievalLoop.js'
+import { stampCoverageSourceSlotOnSource } from './missionCoverageSourceSlots.js'
 import {
   missionUsesComposedTechnicalRetrieval,
   planTechnicalRetrievalSlots,
@@ -242,8 +243,8 @@ async function runDocumentRefSlot(
     }
   }
 
-  const candidate = search.hits[0]?.source
-  if (!candidate) {
+  const rawCandidate = search.hits[0]?.source
+  if (!rawCandidate) {
     await settleExternalOperation(
       request.store,
       ctx,
@@ -266,6 +267,8 @@ async function runDocumentRefSlot(
       message: 'document search returned no candidates',
     }
   }
+
+  const candidate = stampCoverageSourceSlotOnSource(rawCandidate, slot.slotId)
 
   throwIfAborted(request.signal, 'document_search settlement')
 

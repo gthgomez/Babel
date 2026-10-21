@@ -6,7 +6,7 @@ const MAX_AGE_OR_TTL_SUBSTANCE = /\bmax-age\b|\bmax age\b|s-maxage|\bttl\b/i
 const AUTHENTICATION_MECHANISM_SUBSTANCE =
   /\b(authorization|bearer|oauth|api[- ]?key|authenticate|authentication|auth(?:entication)? token)\b/i
 const AUDIENCE_INTENT_SUBSTANCE =
-  /\baudience\b|written for|intended for|\bwrote this guide for\b|\breader(s)?\b|browser(-|\s)?facing|\boperators?\b|who (is|are) (each|the|this)/i
+  /\baudience\b|written for|intended for|intended for a single user|\bwrote this guide for\b|\breader(s)?\b|browser(-|\s)?facing|\boperators?\b|who (is|are) (each|the|this)/i
 
 export interface CitedPassageProvenance {
   passage: PassageRecord
@@ -46,11 +46,39 @@ export function passageSupportsObligation(
   text: string,
   obligation: PlanCoverageObligation,
 ): boolean {
+  return passageSupportsObligationCompleteness(text, obligation)
+}
+
+/** Host completeness check for model `met` claims (not topic/vendor routing). */
+export function passageSupportsObligationCompleteness(
+  text: string,
+  obligation: PlanCoverageObligation,
+  passage?: PassageRecord,
+): boolean {
+  const truncated =
+    passage?.extraction_notes?.some(
+      (n) => n.startsWith('inline_text_truncated:') || n.startsWith('excerpt_truncated'),
+    ) === true
   if (obligation.aspect === 'audience_intent') {
     return passageSupportsAudienceIntent(text)
   }
   const kind = obligation.technical_effect ?? 'general_technical'
-  return passageSupportsTechnicalEffect(text, kind)
+  if (kind === 'max_age_or_ttl_semantics') {
+    if (
+      /\bcache-control\b/i.test(text) &&
+      !passageSupportsTechnicalEffect(text, 'max_age_or_ttl_semantics')
+    ) {
+      return false
+    }
+    return passageSupportsTechnicalEffect(text, 'max_age_or_ttl_semantics')
+  }
+  if (kind === 'authentication_mechanism') {
+    return passageSupportsTechnicalEffect(text, 'authentication_mechanism')
+  }
+  if (truncated && text.trim().length < 40) {
+    return false
+  }
+  return text.trim().length > 0
 }
 
 export function assessPlanCoverageObligations(

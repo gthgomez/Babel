@@ -11,11 +11,20 @@ export const RESEARCH_MODEL_OUTPUT_CONTRACT_PROMPT: Record<ResearchModelOperatio
   "questions": [
     {
       "text": "<non-empty string>",
-      "importance": "critical" | "high" | "medium" | "low"
+      "importance": "critical" | "high" | "medium" | "low",
+      "coverage_obligations": [
+        {
+          "obligation_id": "<unique id>",
+          "source_slot": "<mission coverage_source_slot from input>",
+          "aspect": "technical_effect" | "audience_intent",
+          "technical_effect": "max_age_or_ttl_semantics" | "authentication_mechanism" | "general_technical"
+        }
+      ]
     }
   ]
 }
-Per-question allowed keys only: text, importance.
+Per-question allowed keys only: text, importance, coverage_obligations (optional).
+technical_effect is required when aspect is technical_effect; forbidden when aspect is audience_intent.
 Forbidden per-question keys: question, id, purpose, title, rationale.
 Forbidden root keys besides kind and questions: operation_kind, input, input_mission_id, mission_id.`,
   extract_findings: `Root object (strict — no extra keys):
@@ -40,11 +49,18 @@ Each question_id must match one of the active plan question ids; unknown ids are
       "finding_id": "<non-empty string>",
       "status": "supported" | "contradicted" | "insufficient" | "not_checked",
       "rationale": "<non-empty string>",
-      "question_coverage": "answers" | "partial" | "tangential" | "none"
+      "question_coverage": "answers" | "partial" | "tangential" | "none",
+      "obligation_coverage": [
+        {
+          "obligation_id": "<plan obligation_id>",
+          "status": "met" | "unmet" | "wrong_aspect",
+          "supporting_passage_ids": ["<cited passage id>", "..."]
+        }
+      ]
     }
   ]
 }
-Per-judgment allowed keys only: finding_id, status, rationale, question_coverage.
+Per-judgment allowed keys only: finding_id, status, rationale, question_coverage, obligation_coverage (required when plan question has coverage_obligations).
 status judges whether cited passages support the assertion; question_coverage judges whether the assertion addresses the bound plan question text (tangential supported facts do not count as answers).
 Use coverage_rubric on each finding in the request: when coverage_obligations are listed, each source_slot needs admitted passage support for its aspect (technical_effect vs audience_intent are distinct). Comparative coverage requires every obligation satisfied; missing any obligation is partial, not answers. max_age_or_ttl_semantics requires max-age/s-maxage/TTL substance — Cache-Control header mention alone is insufficient. Wrong-aspect technical evidence for an audience obligation is tangential or partial. Host finalization may downgrade model "answers" when admitted citations fail these bounds.`,
   synthesize_report: `Root object (strict — no extra keys):

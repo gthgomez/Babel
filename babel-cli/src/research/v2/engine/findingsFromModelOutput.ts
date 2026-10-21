@@ -99,6 +99,15 @@ export function applySemanticSupportReview(
       rationale: judgment.rationale,
       reviewed_at: reviewedAt,
     }
+    if (judgment.obligation_coverage) {
+      finding.plan_obligation_coverage = judgment.obligation_coverage.map((entry) => ({
+        obligation_id: entry.obligation_id,
+        status: entry.status,
+        ...(entry.supporting_passage_ids
+          ? { supporting_passage_ids: entry.supporting_passage_ids }
+          : {}),
+      }))
+    }
     finding.revised_at = reviewedAt
     if (judgment.status === 'contradicted') {
       finding.conflicting_finding_ids = finding.conflicting_finding_ids ?? []
