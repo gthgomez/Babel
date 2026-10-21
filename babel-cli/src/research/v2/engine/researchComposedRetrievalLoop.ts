@@ -210,6 +210,9 @@ async function runDocumentRefSlot(
         settlement: 'failed',
         failureCategory: search.failureCategory,
         message: search.message,
+        ...(search.acquisition_diagnostics
+          ? { acquisition_diagnostics: search.acquisition_diagnostics }
+          : {}),
       },
       now(),
     )

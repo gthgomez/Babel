@@ -5,8 +5,8 @@
     "role": "canonical A production (integrity, source-slot, eligible indexing)"
   },
   "integrated_head": {
-    "commit": "cb3d4423f3d2c38121f5d8daac52f35a54f0f073",
-    "tree": "4ef0e1390b694f221829eed57c777a7de5608df1"
+    "commit": "pending_push",
+    "tree": "pending_push"
   },
   "pr": 406,
   "branch": "cursor/research-v2-post-review-settlement-fc31",
@@ -31,6 +31,12 @@
         "babel-cli/src/research/v2/access/fetchSourceAccessPort.gzip.reciprocal.test.ts",
         "babel-cli/src/research/v2/contracts/sourceAcquisitionDiagnostics.ts",
         "babel-cli/src/research/v2/ports/sourceAccessPort.ts",
+        "babel-cli/src/research/v2/profiles/technical/repositoryFileAdapter.ts",
+        "babel-cli/src/research/v2/engine/researchRetrievalLoop.ts",
+        "babel-cli/src/research/v2/engine/researchComposedRetrievalLoop.ts",
+        "babel-cli/src/research/v2/engine/discoveryAcquisitionDiagnosticsPropagation.durable.test.ts",
+        "babel-cli/src/research/v2/profiles/technical/repositoryFileAdapter.test.ts",
+        "babel-cli/src/research/v2/engine/researchRetrievalLoop.repair.test.ts",
         "babel-cli/src/research/v2/fixtures/campaign/passageIntegrityVerification.durable.reciprocal.test.ts",
         "babel-cli/src/research/v2/fixtures/campaign/passageIntegrityVerification.historicalFixtures.guard.prep.test.ts",
         "babel-cli/src/research/v2/fixtures/campaign/T-L1-discover-query.reciprocal.test.ts",
@@ -43,7 +49,8 @@
       ],
       "lineage_note": "Transport slice from 675a627d → e94e7a54 → 74e0dfe9; reciprocal tests from f3268d04/802b8ad0 adapted to PassageRecord.integrity_verification",
       "adaptations": [
-        "missionWebRetrieval.actualPort.reciprocal.test.ts: align missing-ref case with A direct-acquisition synthesis (missionWebRetrievalSelection.test.ts)"
+        "missionWebRetrieval.actualPort.reciprocal.test.ts: align missing-ref case with A direct-acquisition synthesis",
+        "discovery acquisition_diagnostics: propagate failed search diagnostics at adapter discover, retrieval discover settlement, and composed document search settlement (cb3 gap)"
       ]
     },
     "included_from_PR408_a0047fda": {
@@ -69,17 +76,11 @@
     }
   },
   "proof_artifacts": {
-    "typecheck_log": "/opt/cursor/artifacts/a406-checkpoint-typecheck.log",
-    "build_log": "/opt/cursor/artifacts/a406-checkpoint-build.log",
-    "focused_tap_log": "/opt/cursor/artifacts/a406-checkpoint-focused-tap.log",
+    "typecheck_log": "/opt/cursor/artifacts/a406-discovery-diag-typecheck.log",
+    "build_log": "/opt/cursor/artifacts/a406-discovery-diag-build.log",
     "research_v2_test_inventory": "/opt/cursor/artifacts/a406-research-v2-test-inventory.txt",
-    "research_v2_test_file_count": 145,
-    "research_v2_full_tap_log_postcommit": "/opt/cursor/artifacts/a406-checkpoint-research-v2-full-tap-postcommit.log",
-    "research_v2_full_tap_summary_postcommit": "572 tests, 571 pass, 1 fail (pre-existing researchRetrievalLoop.repair.test.ts)",
-    "public_content_policy_log": "/opt/cursor/artifacts/a406-checkpoint-public-content-policy.log",
-    "local_secret_scan_note": "gitleaks exit 1 on workspace runs/chat-sessions (not in git); committed tree only"
-    "pre_existing_failures_on_eb79": [
-      "babel-cli/src/research/v2/engine/researchRetrievalLoop.repair.test.ts (durable store cancelled during appendPassage; integrity receipt passage_id)"
-    ]
+    "research_v2_full_tap_log": "/opt/cursor/artifacts/a406-research-v2-full-tap-discovery-diag.log",
+    "public_content_policy_log": "/opt/cursor/artifacts/a406-discovery-diag-public-content-policy.log",
+    "local_secret_scan_note": "Workspace dir scan may flag gitignored runs/chat-sessions; git-mode gitleaks on tracked history is the release qualification scope"
   }
 }

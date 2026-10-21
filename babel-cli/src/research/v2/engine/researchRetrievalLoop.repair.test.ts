@@ -395,6 +395,7 @@ describe('research retrieval loop repairs', () => {
           }),
         (err: unknown) => err instanceof Error && /aborted during evidence persistence/.test(err.message),
       )
+      assert.equal(passageWrites, 2)
       const events = await store.listEvents(session.mission.mission_id)
       const completions = events.filter((e) => e.kind === 'external_operation_completed')
       const fetchCompletions = completions.filter(
@@ -406,6 +407,20 @@ describe('research retrieval loop repairs', () => {
         'cancelled',
       )
       await store.close()
+
+      const reopened = await DurableResearchStore.open(dir)
+      const reopenedEvents = await reopened.listEvents(session.mission.mission_id)
+      const reopenedFetchCompletions = reopenedEvents.filter(
+        (e) =>
+          e.kind === 'external_operation_completed' &&
+          (e.payload.completion as { operation_id?: string }).operation_id === 'final-pass-fetch',
+      )
+      assert.equal(reopenedFetchCompletions.length, 1)
+      assert.equal(
+        (reopenedFetchCompletions[0]!.payload.completion as { settlement?: string }).settlement,
+        'cancelled',
+      )
+      await reopened.close()
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

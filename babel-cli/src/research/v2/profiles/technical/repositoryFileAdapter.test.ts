@@ -12,9 +12,47 @@ import {
   TechnicalRepositoryFileAdapter,
 } from './repositoryFileAdapter.js'
 import { TECHNICAL_PLAIN_EXTRACTION_VERSION } from './plainTextFromAdmitted.js'
+import type { SourceAcquisitionDiagnostics } from '../../contracts/sourceAcquisitionDiagnostics.js'
 
 describe('technical repository_file adapter', () => {
   const adapter = new TechnicalRepositoryFileAdapter()
+
+  it('discover forwards acquisition_diagnostics on failed GitHub tree search', async () => {
+    const diagnostics: SourceAcquisitionDiagnostics = {
+      evidence_role: 'attempted_source',
+      attempted_url: 'https://api.github.com/repos/o/r/git/trees/sha',
+      http_status: 403,
+    }
+    const access: SourceAccessPort = {
+      async search(request) {
+        return {
+          operationId: request.operationId,
+          status: 'failed',
+          failureCategory: 'rate_limited',
+          message: 'GitHub tree API HTTP 403',
+          acquisition_diagnostics: diagnostics,
+        }
+      },
+      fetchContent: async (request) => ({
+        operationId: request.operationId,
+        status: 'failed',
+        failureCategory: 'not_found',
+        message: 'unexpected fetch in discover test',
+      }),
+    }
+    const result = await adapter.discover(
+      {
+        operationId: 'disc-fail-diag',
+        query: 'contracts',
+        signal: new AbortController().signal,
+      },
+      access,
+    )
+    assert.equal(result.status, 'failed')
+    if (result.status !== 'failed') return
+    assert.equal(result.acquisition_diagnostics?.http_status, 403)
+    assert.equal(result.acquisition_diagnostics?.attempted_url, diagnostics.attempted_url)
+  })
 
   it('discover returns search hits as candidates via SourceAccessPort only', async () => {
     const access = new FakeSourceAccessPort([

@@ -277,6 +277,9 @@ export async function runAdmittedRetrievalIteration(
         settlement: 'failed',
         failureCategory: discover.failureCategory,
         message: discover.message,
+        ...(discover.acquisition_diagnostics
+          ? { acquisition_diagnostics: discover.acquisition_diagnostics }
+          : {}),
         ...(failedSearchReceipt
           ? sourceSearchCompletionOutcome({
               discoverReceipt: failedSearchReceipt,

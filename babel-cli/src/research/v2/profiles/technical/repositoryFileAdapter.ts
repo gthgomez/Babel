@@ -76,6 +76,9 @@ export class TechnicalRepositoryFileAdapter implements SourceAdapter {
         status: 'failed',
         failureCategory: search.failureCategory,
         message: search.message,
+        ...(search.acquisition_diagnostics
+          ? { acquisition_diagnostics: search.acquisition_diagnostics }
+          : {}),
       }
     }
     const candidates: SourceRecord[] = search.hits.map((hit) => hit.source)
