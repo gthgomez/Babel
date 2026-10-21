@@ -1,0 +1,213 @@
+
+> babel-harness@0.1.4 test:research-v2-extraction-lineage-durable
+> node --import tsx --test src/research/v2/engine/retrievalExtractionLineage.test.ts src/research/v2/engine/researchEndToEndPass.extractionLineage.sharedOpId.durable.regression.test.ts src/research/v2/engine/researchEndToEndPass.extractionLineage.nesting.durable.regression.test.ts src/research/v2/engine/researchEndToEndPass.extractionLineage.sharedPassageId.durable.regression.test.ts
+
+TAP version 13
+# Subtest: research e2e extraction lineage @ nested attempts (durable, bb774 gap)
+    # Subtest: lineage filter after close/reopen: same operation_id, intent A then nested B
+    ok 1 - lineage filter after close/reopen: same operation_id, intent A then nested B
+      ---
+      duration_ms: 24.245781
+      type: 'test'
+      ...
+# (node:162760) Warning: Closing file descriptor 21 on garbage collection
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# (node:162760) [DEP0137] DeprecationWarning: Closing a FileHandle object on garbage collection is deprecated. Please close FileHandle objects explicitly using FileHandle.prototype.close(). In the future, an error will be thrown if a file descriptor is closed during garbage collection.
+    # Subtest: e2e extract input after close/reopen: same operation_id, intent A then nested B
+    ok 2 - e2e extract input after close/reopen: same operation_id, intent A then nested B
+      ---
+      duration_ms: 34.393598
+      type: 'test'
+      ...
+    # Subtest: lineage filter after close/reopen: same operation_id, intent B then nested A
+    ok 3 - lineage filter after close/reopen: same operation_id, intent B then nested A
+      ---
+      duration_ms: 5.196779
+      type: 'test'
+      ...
+    # Subtest: e2e extract input after close/reopen: same operation_id, intent B then nested A
+    ok 4 - e2e extract input after close/reopen: same operation_id, intent B then nested A
+      ---
+      duration_ms: 20.919152
+      type: 'test'
+      ...
+    # Subtest: lineage filter after close/reopen: distinct operation_id, intent A then nested B
+    ok 5 - lineage filter after close/reopen: distinct operation_id, intent A then nested B
+      ---
+      duration_ms: 10.410878
+      type: 'test'
+      ...
+    # Subtest: e2e extract input after close/reopen: distinct operation_id, intent A then nested B
+    ok 6 - e2e extract input after close/reopen: distinct operation_id, intent A then nested B
+      ---
+      duration_ms: 17.710177
+      type: 'test'
+      ...
+# (node:162760) Warning: Closing file descriptor 47 on garbage collection
+# (node:162760) Warning: Closing file descriptor 21 on garbage collection
+# (node:162760) Warning: Closing file descriptor 79 on garbage collection
+# (node:162760) Warning: Closing file descriptor 80 on garbage collection
+# (node:162760) Warning: Closing file descriptor 81 on garbage collection
+    # Subtest: lineage filter after close/reopen: distinct operation_id, intent B then nested A
+    ok 7 - lineage filter after close/reopen: distinct operation_id, intent B then nested A
+      ---
+      duration_ms: 6.745133
+      type: 'test'
+      ...
+    # Subtest: e2e extract input after close/reopen: distinct operation_id, intent B then nested A
+    ok 8 - e2e extract input after close/reopen: distinct operation_id, intent B then nested A
+      ---
+      duration_ms: 17.237458
+      type: 'test'
+      ...
+    1..8
+ok 1 - research e2e extraction lineage @ nested attempts (durable, bb774 gap)
+  ---
+  duration_ms: 138.050653
+  type: 'suite'
+  ...
+# Subtest: research e2e extraction lineage @ A bb774 (durable, shared operation_id)
+    # Subtest: sequential attempts: shared operation_id excludes failed attempt A orphan from extract
+    ok 1 - sequential attempts: shared operation_id excludes failed attempt A orphan from extract
+      ---
+      duration_ms: 45.937417
+      type: 'test'
+      ...
+    # Subtest: interleaved intents: shared operation_id excludes failed attempt A orphan from extract
+    ok 2 - interleaved intents: shared operation_id excludes failed attempt A orphan from extract
+      ---
+      duration_ms: 25.099831
+      type: 'test'
+      ...
+    1..2
+ok 2 - research e2e extraction lineage @ A bb774 (durable, shared operation_id)
+  ---
+  duration_ms: 71.720637
+  type: 'suite'
+  ...
+# Subtest: research e2e extraction lineage @ shared passage_id collision (cfe0cd76)
+    # Subtest: lineage filter after durable reopen admits only succeeded attempt record for passage_id
+    not ok 1 - lineage filter after durable reopen admits only succeeded attempt record for passage_id
+      ---
+      duration_ms: 17.967452
+      type: 'test'
+      location: '/workspace/babel-cli/src/research/v2/engine/researchEndToEndPass.extractionLineage.sharedPassageId.durable.regression.test.ts:1:3066'
+      failureType: 'testCodeFailure'
+      error: |-
+        expected exactly one admitted passage record; got 2
+        
+        2 !== 1
+        
+      code: 'ERR_ASSERTION'
+      name: 'AssertionError'
+      expected: 1
+      actual: 2
+      operator: 'strictEqual'
+      stack: |-
+        TestContext.<anonymous> (/workspace/babel-cli/src/research/v2/engine/researchEndToEndPass.extractionLineage.sharedPassageId.durable.regression.test.ts:125:14)
+        async Test.run (node:internal/test_runner/test:1054:7)
+        async Promise.all (index 0)
+        async Suite.run (node:internal/test_runner/test:1442:7)
+        async startSubtestAfterBootstrap (node:internal/test_runner/harness:296:3)
+      ...
+# (node:162765) Warning: Closing file descriptor 21 on garbage collection
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# (node:162765) [DEP0137] DeprecationWarning: Closing a FileHandle object on garbage collection is deprecated. Please close FileHandle objects explicitly using FileHandle.prototype.close(). In the future, an error will be thrown if a file descriptor is closed during garbage collection.
+    # Subtest: e2e extract input after durable reopen uses only succeeded attempt bytes for passage_id
+    not ok 2 - e2e extract input after durable reopen uses only succeeded attempt bytes for passage_id
+      ---
+      duration_ms: 32.673378
+      type: 'test'
+      location: '/workspace/babel-cli/src/research/v2/engine/researchEndToEndPass.extractionLineage.sharedPassageId.durable.regression.test.ts:1:4364'
+      failureType: 'testCodeFailure'
+      error: 'failed attempt text must not appear in extract passages payload'
+      code: 'ERR_ASSERTION'
+      name: 'AssertionError'
+      expected: true
+      actual: false
+      operator: '=='
+      stack: |-
+        TestContext.<anonymous> (/workspace/babel-cli/src/research/v2/engine/researchEndToEndPass.extractionLineage.sharedPassageId.durable.regression.test.ts:249:14)
+        async Test.run (node:internal/test_runner/test:1054:7)
+        async Suite.processPendingSubtests (node:internal/test_runner/test:744:7)
+      ...
+    1..2
+not ok 3 - research e2e extraction lineage @ shared passage_id collision (cfe0cd76)
+  ---
+  duration_ms: 51.377569
+  type: 'suite'
+  location: '/workspace/babel-cli/src/research/v2/engine/researchEndToEndPass.extractionLineage.sharedPassageId.durable.regression.test.ts:1:2977'
+  failureType: 'subtestsFailed'
+  error: '2 subtests failed'
+  code: 'ERR_TEST_FAILURE'
+  ...
+# Subtest: retrievalExtractionLineage
+    # Subtest: admits passages only when write-time owner matches a succeeded source_fetch attempt
+    ok 1 - admits passages only when write-time owner matches a succeeded source_fetch attempt
+      ---
+      duration_ms: 2.662332
+      type: 'test'
+      ...
+    # Subtest: excludes legacy passages without source_fetch_owner (fail closed)
+    ok 2 - excludes legacy passages without source_fetch_owner (fail closed)
+      ---
+      duration_ms: 0.30795
+      type: 'test'
+      ...
+    # Subtest: same operation_id: nested B-then-A completion does not admit B-owned passage on A success
+    ok 3 - same operation_id: nested B-then-A completion does not admit B-owned passage on A success
+      ---
+      duration_ms: 0.253728
+      type: 'test'
+      ...
+    # Subtest: same operation_id: nested A-then-B completion does not admit A-owned orphan on B success
+    ok 4 - same operation_id: nested A-then-B completion does not admit A-owned orphan on B success
+      ---
+      duration_ms: 0.32072
+      type: 'test'
+      ...
+    # Subtest: distinct operation_ids: prefix-like passage_id cannot cross-admit without owner match
+    ok 5 - distinct operation_ids: prefix-like passage_id cannot cross-admit without owner match
+      ---
+      duration_ms: 0.306484
+      type: 'test'
+      ...
+    # Subtest: returns empty extraction set when no succeeded source_fetch attempt keys exist
+    ok 6 - returns empty extraction set when no succeeded source_fetch attempt keys exist
+      ---
+      duration_ms: 0.161737
+      type: 'test'
+      ...
+    # Subtest: durable close/reopen: owner-tagged evidence survives filtering after reopen
+    ok 7 - durable close/reopen: owner-tagged evidence survives filtering after reopen
+      ---
+      duration_ms: 16.840926
+      type: 'test'
+      ...
+    # Subtest: durable close/reopen: same operation_id failed then succeeded retry keeps only retry owner
+    ok 8 - durable close/reopen: same operation_id failed then succeeded retry keeps only retry owner
+      ---
+      duration_ms: 4.060686
+      type: 'test'
+      ...
+    # Subtest: in-memory store retains full passage history while lineage filters extract input
+    ok 9 - in-memory store retains full passage history while lineage filters extract input
+      ---
+      duration_ms: 0.387518
+      type: 'test'
+      ...
+    1..9
+ok 4 - retrievalExtractionLineage
+  ---
+  duration_ms: 26.324762
+  type: 'suite'
+  ...
+1..4
+# tests 21
+# suites 4
+# pass 19
+# fail 2
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 672.200757

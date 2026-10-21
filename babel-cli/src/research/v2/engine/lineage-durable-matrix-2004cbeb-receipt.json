@@ -8,18 +8,42 @@
     "tests": 21,
     "pass": 19,
     "fail": 2,
+    "outer_exit_code": 1,
+    "tap_artifact": "lineage-durable-matrix-pre-2004cbeb.tap.txt",
     "failed_rows": [
       "row_19_shared_passage_id_filter",
       "row_19_shared_passage_id_e2e"
     ],
     "note": "ID-only allow-set collision (d5632091 matrix evidence preserved in git history)"
   },
-  "post_integration": {
+  "lineage_production_commit": {
     "head": "b7dfd848baa57696deec6d157d3035aea88a989d",
     "tree": "2a6bc85ce3af9b3be6c7d90668a82ddf60addbc9",
+    "tap_artifact": "lineage-durable-matrix-b7dfd848-worktree.tap.txt",
+    "tests": 24,
+    "pass": 23,
+    "fail": 1,
+    "outer_exit_code": 1,
+    "note": "Cherry-pick only; collision e2e still expected RED until B test adaptation (73c5478c). Informal 24/0 pass was observed in a dirty worktree before that commit landed — not bound to b7dfd848 tree alone."
+  },
+  "verification_commit": {
+    "head": "73c5478c3eaed9fd6aa595c796e75df8f911ccd2",
+    "tree": "39b79c430bf395195f028c437ab37f7eefb6ef51",
+    "collision_e2e_test_blob": "45c608fcae4ae611e145f93363a5fcbeb50ac05f",
+    "tap_artifact": "lineage-durable-matrix-73c5478c-clean.tap.txt",
     "tests": 24,
     "pass": 24,
     "fail": 0,
-    "note": "B e2e collision test aligned to extract payload shape (text/id assertions unchanged for collision contract)"
+    "outer_exit_code": 0,
+    "assertion_clarification": {
+      "unchanged_collision_contract": [
+        "failed_attempt_text_excluded (zero occurrences of FAIL_TEXT in extract passages payload)",
+        "succeeded_collision_text_once (exactly one OK_TEXT in extract passages payload)"
+      ],
+      "adapted_at_73c5478c": [
+        "removed extract payload source_fetch_owner checks (production extract input carries passage_id + text only)",
+        "passage_id: strict extractPassageIds count === 1 replaced with includes(SHARED_PASSAGE_ID) because e2e also admits retrieval passages alongside seeded collision row"
+      ]
+    }
   }
 }
