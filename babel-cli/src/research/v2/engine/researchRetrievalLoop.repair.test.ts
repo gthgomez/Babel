@@ -13,6 +13,7 @@ import {
   technicalRepositoryCorpusFinalUrl,
   technicalRepositoryCorpusSource,
 } from '../fixtures/technicalRepositoryCorpus.js'
+import { passageWithIntegrityVerification } from '../integrity/passageIntegrityReceipt.js'
 import { buildOfflineRetrievalReport } from './buildOfflineRetrievalReport.js'
 import { runAdmittedRetrievalIteration } from './researchRetrievalLoop.js'
 
@@ -353,11 +354,26 @@ describe('research retrieval loop repairs', () => {
         read: async (req, port) => {
           const result = await inner.read(req, port)
           if (result.status !== 'ok' || result.passages.length < 1) return result
-          const second = {
-            ...result.passages[0]!,
-            passage_id: `${result.passages[0]!.passage_id}-dup`,
+          const first = result.passages[0]!
+          const fetchOperationId = `${req.operationId}:fetch`
+          const fetched = await port.fetchContent({
+            operationId: fetchOperationId,
+            source: req.source,
+            signal: req.signal,
+          })
+          if (fetched.status !== 'ok') {
+            return result
           }
-          return { ...result, passages: [...result.passages, second] }
+          const dupPassage = passageWithIntegrityVerification(
+            { ...first, passage_id: `${first.passage_id}-dup` },
+            {
+              source: req.source,
+              revision: result.revision,
+              admitted: fetched.admitted,
+              extractionVersion: result.extraction_version,
+            },
+          )
+          return { ...result, passages: [...result.passages, dupPassage] }
         },
       }
       await assert.rejects(
