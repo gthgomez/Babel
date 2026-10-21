@@ -4,8 +4,8 @@
   "worktree_realpath": "/workspace",
   "branch": "cursor/agent-b-general-fixtures-f617",
   "git": {
-    "head_sha": "69c8f0673afe412d7f1344db12e1c87425ad8449",
-    "tree_sha": "4b1be0e78e1f07857138fb4d5511f9b83bd412a0",
+    "head_sha": "97b181c9b65017a9f31b9d78a752a7459845528d",
+    "tree_sha": "3de05efe0eed4a25366573cc2263543a033e23fe",
     "rev_parse_commands": [
       "git -C /workspace rev-parse HEAD",
       "git -C /workspace rev-parse HEAD^{tree}"
