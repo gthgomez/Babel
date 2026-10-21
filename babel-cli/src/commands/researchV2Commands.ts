@@ -4,6 +4,10 @@ import { join } from 'node:path'
 import type { Command } from 'commander'
 import { printJsonErrorAndExit, printJsonOrHuman } from './output.js'
 import { assertResearchV2LiveApiEnabled, isResearchV2LiveApiEnabled } from '../research/v2/liveApiGate.js'
+import {
+  createLiveResearchModelPort,
+  resolveLiveResearchModelConfigFromEnv,
+} from '../research/v2/model/researchV2LiveModelPort.js'
 import { openAdmittedOwnerStore } from '../research/v2/control/researchStoreAdmission.js'
 import { FixtureResearchModelBridge } from '../research/v2/model/fixtureModelBridge.js'
 import { FetchSourceAccessPort } from '../research/v2/access/fetchSourceAccessPort.js'
@@ -78,8 +82,16 @@ export function registerResearchV2Commands(program: Command): void {
     .action(async (options: { store: string; json: boolean }) => {
       try {
         assertResearchV2LiveApiEnabled()
+        const liveConfig = resolveLiveResearchModelConfigFromEnv()
+        if (!liveConfig) {
+          printJsonErrorAndExit(
+            'Live plan requires BABEL_RESEARCH_V2_PROVIDER and BABEL_RESEARCH_V2_MODEL_ID (optional BABEL_RESEARCH_V2_API_KEY_ENV).',
+            options.json,
+          )
+        }
+        createLiveResearchModelPort(liveConfig)
         printJsonErrorAndExit(
-          'Provider-backed live plan is not wired in CLI yet; use dry-run-plan for fixture iteration.',
+          'Live plan store iteration is not enabled yet; provider port factory is ready. Use dry-run-plan for admitted fixture iteration.',
           options.json,
         )
       } catch (error) {
