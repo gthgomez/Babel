@@ -1,6 +1,6 @@
 {
   "schema": "b-a1153-union-workspace-prep/v1",
-  "recorded_at_utc": "2026-10-21T08:36:52.589Z",
+  "recorded_at_utc": "2026-10-21T08:38:30.000Z",
   "agent_a_repair": {
     "full_sha": "1153af89f057cf55d608baa8b56be7297035c5e7",
     "branch": "cursor/research-v2-post-review-settlement-fc31",
@@ -8,28 +8,33 @@
   },
   "b_branch_union": {
     "branch": "cursor/agent-b-general-fixtures-f617",
-    "head_sha": "fc6bed292979c9ecf33115c360ca2f4f0b681604",
+    "head_sha": "c511f896f283617712f4e2acfa330a8919da040d",
     "tree_sha": "210d10cd28a4bf2338aa7e8b9eac59e79acfd62f",
-    "integration": "cherry-pick 1153af89 onto B branch (local union, not main)"
+    "integration": "cherry-pick 1153af89 onto B branch (authorized local union, not main)"
   },
   "workspace_realpaths": {
     "repo_root": "/workspace",
     "babel_cli_root": "/workspace/babel-cli",
     "babel_bin": "/workspace/babel-cli/bin/babel.js",
-    "babel_dist_index": "/workspace/babel-cli/dist/index.js"
+    "babel_dist_index": "/workspace/babel-cli/dist/index.js",
+    "isolated_worktree_root": "/workspace/codex/worktrees/b-a1153-union",
+    "isolated_babel_cli_root": "/workspace/codex/worktrees/b-a1153-union/babel-cli",
+    "isolated_babel_bin": "/workspace/codex/worktrees/b-a1153-union/babel-cli/bin/babel.js",
+    "isolated_babel_dist_index": "/workspace/codex/worktrees/b-a1153-union/babel-cli/dist/index.js"
   },
   "content_sha256": {
-    "babel_cli_bin_babel_js": "ee8f9ba2a7bd12b937451c0f4d86503d0b68d9076ed3cd24b9a7138b7039f43f",
-    "babel_cli_dist_index_js": "981e1318e624340e3d3f8c5c816cbd827eec29f689a3024b1d2fb98a41de0970"
+    "primary_bin_babel_js": "ee8f9ba2a7bd12b937451c0f4d86503d0b68d9076ed3cd24b9a7138b7039f43f",
+    "primary_dist_index_js": "981e1318e624340e3d3f8c5c816cbd827eec29f689a3024b1d2fb98a41de0970"
   },
   "offline_proof": {
     "typecheck": "npm --prefix babel-cli run typecheck",
-    "build": "npm --prefix babel-cli run build",
+    "build_primary": "npm --prefix babel-cli run build",
+    "build_isolated_worktree": "npm ci && npm run build in codex/worktrees/b-a1153-union/babel-cli",
     "acceptance_tests": [
       "babel-cli/src/research/v2/model/providerResearchModelBridge.emptyResponseMetadataHandoff.acceptance.test.ts",
       "babel-cli/src/research/v2/model/providerResearchModelBridge.emptyResponseMetadataHandoff.integration.acceptance.test.ts"
     ],
-    "acceptance_result": "4/4 pass, 0 skip",
+    "acceptance_result_primary_and_isolated": "4/4 pass, 0 skip",
     "openrouter_preflight": "review-artifacts/b-a1153-union-openrouter-preflight.json",
     "no_live_model_call": true,
     "attempt3_receipt_preserved": "review-artifacts/general-g-l1-attempt3-live-run-receipt.json"
