@@ -9,6 +9,12 @@ Labeled offline slices derived from the immutable diagnostic-1 evidence subset. 
 
 **Subset pin:** `review-artifacts/general-g-l2-diagnostic-1-evidence-subset.json` (snapshot SHA in each fixture).
 
-**Reciprocal tests:** `babel-cli/src/research/v2/engine/gL2Diagnostic1Quality.originalDerived.reciprocal.test.ts` — loads original rows via `loadGL2Diagnostic1EvidenceSubset()`, applies expected rubric only through production `applySemanticSupportReview` + `researchReportFinalization` helpers.
+**Reciprocal tests:**
+
+- `gL2Diagnostic1Quality.originalDerived.reciprocal.test.ts` — finalization helpers + labeled expected rubric overlay.
+- `gL2Diagnostic1Quality.boundCoverage.reciprocal.test.ts` — A `boundQuestionCoverageFromEvidence` / `enforceBoundQuestionCoverageOnFindings` on **unchanged** diagnostic-1 question + passage wording (contrasts A synthetic derived slice).
+- `reportFinalizationEvidence.gL2.regression.test.ts` — A derived audit slice through `applySemanticSupportReview` with bound context.
+
+Run bound + derived G-L2 regressions: `npm run test:research-v2-g-l2-bound-coverage`.
 
 **Ownership:** Agent A — review contract / runtime after durable lineage repair. Agent B — fixtures and reciprocal tests only (no duplicate semantic implementation).
