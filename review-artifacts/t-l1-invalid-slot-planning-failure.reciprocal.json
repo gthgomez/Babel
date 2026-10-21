@@ -28,9 +28,12 @@
     "tap_log": "review-artifacts/t-l1-invalid-slot-planning-failure.reciprocal-v3.tap.txt",
     "test_source_sha256": "dcd813bdfb44f68a487df531e2b7fe3d72de8526a94d98a7ae50b8eab561cf4b"
   },
-  "git_head_at_receipt_authoring": "669a72c5bd1d957522580dc28e110247c72739b4",
-  "git_tree_at_receipt_authoring": "631912c4619b84ddc438c31a3cf2a6bebab93393",
-  "v4_test_isolation_commit": "a77af452e455a4ebddc8398f3703094772260ab9",
+  "git_head_at_receipt_authoring": "a77af452e455a4ebddc8398f3703094772260ab9",
+  "git_tree_at_receipt_authoring": "bd5c1b6fd665c059b5d34e7d288563fc12927e11",
+  "receipt_metadata_commits": [
+    "669a72c5bd1d957522580dc28e110247c72739b4",
+    "789f487c600aaba0fd19052209b96d1324715c75"
+  ],
   "working_tree_status": "dirty_untracked_present",
   "working_tree_dirty_untracked_paths": 47,
   "exact_source_binding": {
