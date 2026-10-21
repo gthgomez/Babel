@@ -4,7 +4,7 @@
 
 | Track | Draft PR | Published head (exact GitHub) | Owner |
 |-------|----------|-------------------------------|--------|
-| Agent A integration | [#406](https://github.com/gthgomez/Babel/pull/406) | `40dadfa2` (`cursor/research-v2-post-review-settlement-fc31`) | Combined runtime, CLI/engine, registry wiring, **web discover** |
+| Agent A integration | [#406](https://github.com/gthgomez/Babel/pull/406) | `5a2c60a5`+ (`cursor/research-v2-post-review-settlement-fc31`) | Combined runtime, CLI/engine, registry wiring, **web discover**, **pdfjs/canvas pack** |
 | Agent B extraction/tests | [#404](https://github.com/gthgomez/Babel/pull/404) | `b590e115` (engine reciprocal vs #406; 6/6 offline) | Read/HTML/PDF extraction, reciprocal integration tests |
 
 **Discover contract on #406:** `GeneralWebAdapter.discover` delegates to `access.search` and maps hits to web candidates (`generalWebAdapter.test.ts`). **Do not** replace `generalWebAdapter.ts` with B80, whose discover returns `not_supported` without search. `GeneralDocumentAdapter.discover` remains honestly `not_supported` (mission-selected documents).
@@ -55,10 +55,21 @@ Or apply from coordinator-supplied bundle when released.
 cd babel-cli
 npm ci
 npm run typecheck
-node --import tsx --no-warnings=ExperimentalWarning --import ./src/testinfra/register-no-ambient-inference.mjs --test src/research/v2/**/*.test.ts
+node --import tsx --test $(node scripts/research-v2-collect-test-files.mjs)
+npm run test:research-v2-pdfjs-staged-package-smoke
 ```
 
-**Expected:** 22/22 pass (8 prior contract tests expanded; includes store, fetchContent, normalization, negative locators).
+**Expected:** research v2 manifest **259** tests pass (collector output; not a bare `src/research/v2/**/*.test.ts` glob — that pattern does not expand reliably and is not the full suite). Staged PDF smoke prints resolved `module_paths` JSON under `--omit=dev --omit=optional` plus explicit canvas platform binding.
+
+### Validation evidence (Agent A)
+
+| Check | Command | Outcome |
+|-------|---------|---------|
+| Research v2 manifest | `node --import tsx --test $(node scripts/research-v2-collect-test-files.mjs)` | **259** pass @ `5a2c60a5` |
+| Incorrect / hung-style glob | `node --test src/research/v2/**/*.test.ts` | **Do not use** — shell leaves literal `**` or runs a partial set; not authoritative |
+| Packaged PDF runtime | `npm run test:research-v2-pdfjs-staged-package-smoke` | Isolated lockfile `npm ci` + platform binding + pdfjs text extract |
+
+**Canvas packaging (A owns lock/runtime):** direct `@napi-rs/canvas@0.1.80` + `pdfjs-dist@5.4.296` in `dependencies` (aligned with B `b3a6861b5` intent, reconciled with explicit platform-binding install for `--omit=optional` trees). B reciprocal PDF tests should copy runtime into staged `node_modules` and report resolved paths the same way — `NODE_PATH` to checkout `dist` is not packaged proof.
 
 ## B consumption notes
 

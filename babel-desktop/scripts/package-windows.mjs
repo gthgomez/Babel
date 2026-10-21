@@ -6,6 +6,7 @@ import {createHash} from 'node:crypto';
 import {execFileSync} from 'node:child_process';
 import {homedir} from 'node:os';
 import {assertAppImportsResolve} from './lib/verify-app-imports.mjs';
+import {installCanvasPlatformBinding} from '../../babel-cli/scripts/research-v2-canvas-platform-binding.mjs';
 
 const desktop = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const repo = resolve(desktop, '..');
@@ -56,6 +57,8 @@ command('tar.exe', ['-xzf',join(output,pack.filename),'-C',cli,'--strip-componen
 // The same canonical lockfile resolves production dependencies; no lifecycle scripts or downloads at first launch.
 cpSync(join(cliSource,'package-lock.json'), join(cli,'package-lock.json'));
 command(process.execPath, [npmCli,'ci','--omit=dev','--omit=optional','--ignore-scripts','--no-audit','--no-fund'], cli);
+// @napi-rs/canvas platform .node packages are optionalDependencies; --omit=optional skips them.
+installCanvasPlatformBinding({cwd: cli, npmCli, nodeExec: process.execPath});
 const nodeExtract = join(output, `node-${sourceSha.slice(0,12)}`);
 mkdirSync(nodeExtract);
 command('tar.exe', ['-xf',archive,'-C',nodeExtract]);

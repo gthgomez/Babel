@@ -44,7 +44,7 @@ Extraction version strings returned on successful `read()`:
 
 **Observed today (B evidence, read-only):** `pdfjs-dist@5.4.296` is **transitive only** (`promptfoo` → `pdf-parse` → `pdfjs-dist`). See `review-artifacts/extraction-dependency-evidence.txt`.
 
-**A action:** add a **direct** supported runtime dependency on **`pdfjs-dist@5.4.296`** (or a coordinator-agreed compatible 5.4.x pin that preserves the API below) and a **production-install** smoke path that can `import('pdfjs-dist/legacy/build/pdf.mjs')` without dev-only transitive hoisting.
+**A action:** add a **direct** supported runtime dependency on **`pdfjs-dist@5.4.296`** and **`@napi-rs/canvas@0.1.80`** (reconciled with B’s pin — not transitive-only). Platform `.node` bindings remain separate packages; **`npm ci --omit=optional` does not install them**. Windows pack and `scripts/research-v2-pdfjs-staged-package-smoke.mjs` install the host binding explicitly after the staged `npm ci`. Proof uses isolated `node_modules` only (no `NODE_PATH` to checkout `dist`).
 
 **Importer (B slice — do not change without coordinated bump):**
 
