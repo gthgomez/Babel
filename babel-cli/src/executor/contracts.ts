@@ -225,6 +225,7 @@ export function classifyToolEffect(toolName: string): ToolEffectClass {
     'git_context',
     'workspace_map',
     'read_range',
+    'read_artifact',
   ]).has(normalized)) {
     return 'read_only'
   }

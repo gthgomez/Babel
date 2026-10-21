@@ -7,8 +7,12 @@
  */
 
 import { existsSync } from 'node:fs';
+import { pinProjectRootEnv } from './projectRootPin.js';
 import { getExecutionContext } from './executionContext.js';
-import { readFile, writeFile, rm } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
+import { compensatePatchWrites, type PatchRollbackOutcome } from './patchCompensation.js';
+import type { EffectLedgerRecord } from '../executor/effectLedger.js';
+import { captureEffectParentIdentity, type EffectParentIdentity } from '../executor/effectPathIdentity.js';
 import { isAbsolute, resolve } from 'node:path';
 
 import { FileWriteMutex, canonicalizeLockPath, type FileLockHandle } from '../services/editReliability.js';
@@ -139,8 +143,7 @@ export async function governedStrReplace(
 
   // SafeExecutor resolves paths via BABEL_PROJECT_ROOT (same pin as ChatEngine).
   // Honor BABEL_DRY_RUN — never clear it here (safety harness / dry-run must stick).
-  const prevRoot = process.env['BABEL_PROJECT_ROOT'];
-  process.env['BABEL_PROJECT_ROOT'] = options.projectRoot;
+  const restoreRoot = pinProjectRootEnv(options.projectRoot);
 
   let result: PolicyGatedExecutionResult;
   try {
@@ -164,8 +167,7 @@ export async function governedStrReplace(
       },
     );
   } finally {
-    if (prevRoot === undefined) delete process.env['BABEL_PROJECT_ROOT'];
-    else process.env['BABEL_PROJECT_ROOT'] = prevRoot;
+    restoreRoot();
   }
 
   if (result.policyBlocked) {
@@ -264,59 +266,6 @@ export interface ApplyPatchInput {
  * path as other mutations. Whole-patch semantics are transactional: hunks are
  * applied in memory first; any failed hunk means nothing is written.
  */
-interface PatchRollbackOutcome {
-  rolledBack: string[];
-  failures: string[];
-}
-
-/**
- * Restore only the paths this patch still owns. A path is only restored while
- * it still holds the exact bytes the patch wrote; anything else (a newer
- * external write, an external deletion, a non-regular file) is left in place
- * and reported instead. Blindly writing the pre-image over newer content would
- * destroy work this patch does not own while claiming atomicity.
- */
-async function rollbackWrittenPaths(
-  paths: string[],
-  originalContents: Map<string, string>,
-  createdPaths: Set<string>,
-  writtenContents: Map<string, string>,
-): Promise<PatchRollbackOutcome> {
-  const rolledBack: string[] = [];
-  const failures: string[] = [];
-  for (const path of paths) {
-    const expected = writtenContents.get(path);
-    let current: string | null;
-    try {
-      current = await readFile(path, 'utf-8');
-    } catch {
-      current = null;
-    }
-    if (createdPaths.has(path) && current === null && !existsSync(path)) {
-      rolledBack.push(path); // created file is already gone — outcome holds
-      continue;
-    }
-    if (expected === undefined || current !== expected) {
-      failures.push(
-        `${path}: not restored — the file no longer holds the bytes this patch wrote`,
-      );
-      continue;
-    }
-    try {
-      if (createdPaths.has(path)) {
-        await rm(path, { force: true });
-      } else {
-        await writeFile(path, originalContents.get(path) ?? '', 'utf-8');
-      }
-      rolledBack.push(path);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      failures.push(`${path}: restore failed — ${msg}`);
-    }
-  }
-  return { rolledBack, failures };
-}
-
 /** Report a rollback truthfully: restored paths and paths deliberately left in place. */
 function formatRollbackOutcome(rollback: PatchRollbackOutcome): string {
   const sections: string[] = [];
@@ -493,8 +442,7 @@ export async function governedApplyPatch(
   // Phase C: dispatch each file's new content through the write_file gate,
   // identically to str_replace writes. Each file is re-validated under its
   // write lock before dispatch.
-  const prevRoot = process.env['BABEL_PROJECT_ROOT'];
-  process.env['BABEL_PROJECT_ROOT'] = options.projectRoot;
+  const restoreRoot = pinProjectRootEnv(options.projectRoot);
 
   const dispatchOptions = {
     mutationRoot: options.projectRoot,
@@ -516,6 +464,10 @@ export async function governedApplyPatch(
     lastResult: PolicyGatedExecutionResult | null;
   } = { lastResult: null };
   const writtenPaths: string[] = [];
+  const writtenEffects = new Map<string, EffectLedgerRecord>();
+  const writtenParents = new Map<string, EffectParentIdentity>();
+  const rollbackWrittenPaths = (paths: string[], originals: Map<string, string>, created: Set<string>, written: Map<string, string>) =>
+    compensatePatchWrites(paths, originals, created, written, writtenEffects, options.context, writtenParents);
 
   try {
     await runExclusivePaths(absolutePaths, async (lockHandles) => {
@@ -574,6 +526,7 @@ export async function governedApplyPatch(
         };
         let dispatch: PolicyGatedExecutionResult;
         try {
+          writtenParents.set(absolutePath, captureEffectParentIdentity(absolutePath));
           dispatch = await executeActionWithPolicy(action, preset, options.context, {
             ...dispatchOptions,
             lockContext: lockHandles,
@@ -680,6 +633,7 @@ export async function governedApplyPatch(
             } satisfies GovernedApplyPatchResult,
           });
         }
+        if (dispatch.effectLedgerRecord) writtenEffects.set(absolutePath, dispatch.effectLedgerRecord);
         writtenPaths.push(absolutePath);
         observations.push(
           `### apply_patch ${result.path}\nApplied ${hunkCount} hunk${hunkCount === 1 ? '' : 's'} (${result.strategies.join(' → ') || 'none'}).`,
@@ -692,8 +646,7 @@ export async function governedApplyPatch(
     if (failure) return failure;
     throw err;
   } finally {
-    if (prevRoot === undefined) delete process.env['BABEL_PROJECT_ROOT'];
-    else process.env['BABEL_PROJECT_ROOT'] = prevRoot;
+    restoreRoot();
   }
 
   const completedDispatch = dispatchState.lastResult;

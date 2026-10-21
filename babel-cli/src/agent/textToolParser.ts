@@ -20,15 +20,17 @@
 
 import type { ChatToolAction, ChatTurn } from './chatToolDefinitions.js';
 import { RecoveryPlanProposalSchema } from './codingLoop/recoveryPlan.js';
+import { ReadArtifactActionSchema } from './codingLoop/runOutputArtifacts.js';
 
-/** The seven executable tools exposed to text-tool models. */
+/** The executable tools exposed to text-tool models. */
 export const TEXT_TOOL_NAMES = new Set([
-  'read_file', 'write_file', 'str_replace', 'grep', 'glob', 'run_command', 'finish',
+  'read_file', 'read_artifact', 'write_file', 'str_replace', 'grep', 'glob', 'run_command', 'finish',
 ]);
 
 /** Canonical fields accepted by the text parser's action builders. */
 export const TEXT_TOOL_ARGUMENT_SHAPES: Readonly<Record<string, string>> = {
   read_file: 'path',
+  read_artifact: 'artifact_id, query (optional literal search), start_line (optional), end_line (optional), start_column (optional long-line continuation)',
   write_file: 'path, content (multiline), repair_plan (optional single-line JSON)',
   str_replace: 'file_path, old_str (multiline), new_str (multiline), repair_plan (optional single-line JSON)',
   grep: 'pattern, path (optional)',
@@ -237,6 +239,15 @@ function buildAction(toolName: string, params: Record<string, string>): ChatTool
     }
   })();
   switch (toolName) {
+    case 'read_artifact': {
+      const parsed = ReadArtifactActionSchema.safeParse({ type: 'read_artifact', artifact_id: params['artifact_id'],
+        ...(params['query'] !== undefined ? { query: params['query'] } : {}),
+        ...(params['start_line'] !== undefined ? { start_line: Number(params['start_line']) } : {}),
+        ...(params['end_line'] !== undefined ? { end_line: Number(params['end_line']) } : {}),
+        ...(params['start_column'] !== undefined ? { start_column: Number(params['start_column']) } : {}),
+      });
+      return parsed.success ? parsed.data : null;
+    }
     case 'read_file': {
       const path = params['path'];
       if (!path) return null;

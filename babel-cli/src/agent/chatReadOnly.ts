@@ -16,7 +16,7 @@ export function isReadOnlyChat(env: NodeJS.ProcessEnv = process.env): boolean {
 export function deniesReadOnlyChatAction(action: string, env: NodeJS.ProcessEnv = process.env): boolean {
   if (!isReadOnlyChat(env)) return false;
   // No shared memory or delegation outside this fresh read-only capability set.
-  return !['read_file', 'read_range', 'list_dir', 'grep', 'glob'].includes(action)
+  return !['read_file', 'read_range', 'read_artifact', 'list_dir', 'grep', 'glob'].includes(action)
     || classifyToolEffect(action === 'search' ? 'semantic_search' : action) !== 'read_only';
 }
 

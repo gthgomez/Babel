@@ -276,6 +276,7 @@ export function evaluateOwnerHandoff(input: OwnerHandoffInput): OwnerHandoff {
 
 export interface RestoreOperationEvidence {
   readonly operationId: string;
+  readonly compensationState?: 'completed' | 'failed' | 'uncertain';
   readonly commandId?: string;
   readonly admissionId?: string;
   readonly effectClass: ToolEffectClass;
@@ -312,6 +313,14 @@ export interface OperationClassification {
  */
 export function classifyOperation(evidence: RestoreOperationEvidence): OperationClassification {
   const recoveryClass = recoveryClassForEffect(evidence.effectClass);
+  if (evidence.compensationState) {
+    const completed = evidence.compensationState === 'completed';
+    return { recoveryClass, state: completed ? 'completed' : 'indeterminate',
+      action: completed ? 'none_complete' : 'operator_reconciliation_required',
+      automaticRetryAllowed: false,
+      reasons: [completed ? 'effect_compensated' : evidence.compensationState === 'failed'
+        ? 'effect_compensation_failed' : 'effect_compensation_uncertain'] };
+  }
   const unknownReasons = evidence.unknownReasons ?? [];
   const unknownEvidence = unknownReasons.length > 0;
 

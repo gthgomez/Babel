@@ -114,8 +114,15 @@ export function formatCompiledObservation(compiled: CompiledObservation): string
   appendStream(lines, 'stdout', compiled.stdoutPresent, compiled.stdoutHead, compiled.stdoutTail)
   appendStream(lines, 'stderr', compiled.stderrPresent, compiled.stderrHead, compiled.stderrTail)
   if (compiled.rawSpillPath) {
+    if (compiled.rawSpillPath === 'babel-artifact-unavailable') {
+      lines.push('raw_output_unavailable: artifact registration failed or resource bound exceeded; head/tail are partial output')
+    } else if (compiled.rawSpillPath.startsWith('babel-artifact://')) {
+      lines.push(`artifact_id: ${compiled.rawSpillPath.slice('babel-artifact://'.length)}`)
+      lines.push('(use read_artifact with artifact_id and query (literal search) or start_line/end_line; max 200 lines / 16000 characters per result)')
+    } else {
     lines.push(`raw_output: ${compiled.rawSpillPath}`)
     lines.push('(read or grep the raw_output path for the full lossless record)')
+    }
   }
   return lines.join('\n')
 }
@@ -485,7 +492,8 @@ function persistSpillIfNeeded(
   if (!large) return undefined
   const name = `tool-output-${sanitizeId(input.toolCallId ?? input.tool)}.log`
   if (input.writeSpill) {
-    return input.writeSpill(name, combined)
+    try { return input.writeSpill(name, combined) }
+    catch { return 'babel-artifact-unavailable' }
   }
   if (input.spillDir) {
     const path = resolveContainedSpillPath(input.spillDir, name)

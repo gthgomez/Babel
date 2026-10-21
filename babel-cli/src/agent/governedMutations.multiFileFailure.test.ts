@@ -313,6 +313,24 @@ function seedTwoFiles(root: string): { file1: string; file2: string } {
 // ── Fault matrix ───────────────────────────────────────────────────────────
 
 describe('governedApplyPatch multi-file failure and rollback integrity', { concurrency: false }, () => {
+  test('optional runDir callers retain owned multi-file rollback without inventing durable evidence', async () => {
+    resetCircuitBreaker();
+    const root = tmpRoot('babel-m1-ephemeral-');
+    try {
+      const { file1, file2 } = seedTwoFiles(root);
+      const script = scriptedExecutor(root, { faultAt: 2, fault: 'reject' });
+      const context = ctx(root);
+      delete context.runDir;
+      const result = await governedApplyPatch({ patch: TWO_FILE_PATCH }, {
+        projectRoot: root, context, executor: script.executor,
+      });
+      assert.equal(result.exit_code, 1);
+      assert.equal(snapshot(file1).bytes, FILE1_ORIGINAL);
+      assert.equal(snapshot(file2).bytes, FILE2_ORIGINAL);
+      assert.match(result.observation, /Rolled back 1 file/);
+      assert.deepEqual(loadEffectLedger(root), [], 'ephemeral context must not claim a durable ledger');
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
   test('1. fails before any dispatch without touching the workspace', async () => {
     resetCircuitBreaker();
     const root = tmpRoot('babel-m1-pre-dispatch-');
@@ -382,6 +400,15 @@ describe('governedApplyPatch multi-file failure and rollback integrity', { concu
       // Independently observed: the earlier owned write was restored.
       assert.equal(snapshot(file1).bytes, FILE1_ORIGINAL);
       assert.equal(snapshot(file2).bytes, FILE2_ORIGINAL);
+      // Reload the actual durable history, without a cached transaction object.
+      const history = loadEffectLedger(root);
+      const original = history.find(record => record.status === 'completed'
+        && record.targetPaths.includes(file1));
+      assert.ok(original, 'the historical completed write remains recorded');
+      const compensation = history.find(record => record.status === 'completed'
+        && (record as unknown as { compensatesOperationId?: string }).compensatesOperationId === original.operationId);
+      assert.ok(compensation, 'restoration must have a durable linked compensation');
+      assert.equal(compensation.postImageHashes?.[file1], digest(FILE1_ORIGINAL));
       assert.equal(classifyAsCaller(result).status, 'indeterminate');
       assertNoDanglingEffectIntent(root);
     } finally {
