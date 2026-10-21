@@ -1,0 +1,32 @@
+{
+  "schema": "research-v2-t-l1-attempt2-403-retention-diagnosis/v1",
+  "additive_to": "review-artifacts/t-l1-attempt2-923b7ae2-live-diagnostic-receipt.json",
+  "sources_read_only": [
+    "/tmp/babel-t-l1-store-923b7ae2-attempt2-1792596031/research-store.snapshot.json",
+    "/workspace/review-artifacts/t-l1-attempt2-923b7ae2-run-cli.json",
+    "/workspace/review-artifacts/t-l1-attempt2-923b7ae2-evidence-subset.json",
+    "babel-cli/src/research/v2/access/pinnedRepositoryFileSearchProvider.ts @ 923b7ae2",
+    "babel-cli/src/research/v2/access/admittedHttpGet.ts @ 923b7ae2"
+  ],
+  "github_403_response_bodies_retained": false,
+  "github_403_response_headers_retained": false,
+  "bounded_error_message_retained": "GitHub tree API HTTP 403",
+  "retention_locations": [
+    "external_operation_completed.message (both search operations)",
+    "review-artifacts/t-l1-attempt2-923b7ae2-evidence-subset.json"
+  ],
+  "github_request_id_retained": "none_captured",
+  "retry_after_retained": "none_captured",
+  "rate_limit_metadata_retained": "none_captured (no x-ratelimit-* or similar in store or saved CLI output)",
+  "executed_request_profile_from_source": {
+    "transport": "node:https GET via admittedHttpGet",
+    "request_headers_set": ["accept: */*"],
+    "user_agent_sent": "none (not set on RequestOptions.headers)",
+    "authorization_mode": "anonymous (no Authorization wiring on governed repository tree path; no GITHUB token read in research/v2/access at 923b7ae2)",
+    "api_urls_pattern": "https://api.github.com/repos/{full_name}/git/trees/{commit_sha}?recursive=1"
+  },
+  "why_headers_not_in_store": "defaultFetchPinnedRepositoryTree returns only status-derived message on !response.ok; does not persist admittedHttpGet.responseHeaders or error body buffer into external_operation_completed.",
+  "root_cause_from_response_evidence": "unknown",
+  "attempt1_planning_cost": "unknown_unchanged",
+  "actions_taken": "read-only diagnosis; no refetch retry credential or proxy changes"
+}
