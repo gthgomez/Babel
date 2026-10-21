@@ -1,0 +1,58 @@
+{
+  "schema": "general-g-l1-attempt3-live-run-receipt/v1",
+  "attempt": 3,
+  "diagnostic_only": true,
+  "acceptance_state": "not_accepted",
+  "b_branch_head": "63f00038ab002b1e1d2468a61ce5237a23603ed2",
+  "integration_transport_sha": "e912c2f3320de0b6e1c9ff85b95b0f74d8b5323c",
+  "mission_id": "mission-g-l1-general-live-attempt3",
+  "mission_file": "/workspace/codex/missions/general-g-l1-python-stable-attempt3/mission.json",
+  "store_directory": "/workspace/codex/runs/general-g-l1-attempt3/store",
+  "attempt1_store_preserved": "/workspace/codex/worktrees/g-l1-9d97448a/codex/runs/general-g-l1-python-stable/store",
+  "attempt2_store_preserved": "/workspace/codex/worktrees/ec7dce91/codex/runs/general-g-l1-attempt2/store",
+  "prior_attempt3_invocation_before_run": false,
+  "store_state_before_run": "empty_except_gitkeep_removed",
+  "command": "cd /workspace/babel-cli && export BABEL_RESEARCH_V2_ALLOW_LIVE_API=1 && export BABEL_RESEARCH_V2_MODEL_ROUTE_KEY=deepseek-v4-flash-openrouter && node bin/babel.js research v2 run --store /workspace/codex/runs/general-g-l1-attempt3/store --mission-file /workspace/codex/missions/general-g-l1-python-stable-attempt3/mission.json --discover-query 'latest stable Python release python.org download' --json",
+  "utc_start": "2026-10-21T08:01:18Z",
+  "utc_end": "2026-10-21T08:03:32Z",
+  "cli_exit_code": 1,
+  "cli_status": "fail",
+  "cli_error": "[deepInfraApi] Empty response from model \"deepseek/deepseek-v4-flash-0731\".",
+  "blocked_stage": "model_invoke_plan_questions",
+  "precise_failure": "external_operation_completed settlement failed on cli-run-plan (provider_invoke_failed)",
+  "terminal_state": "failed",
+  "terminal_receipt_count": 1,
+  "stopping_reason": "provider_invoke_failed",
+  "model_route": {
+    "route_key": "deepseek-v4-flash-openrouter",
+    "provider": "openrouter",
+    "model_id": "deepseek/deepseek-v4-flash-0731"
+  },
+  "request_local_usage": {
+    "operation_id": "cli-run-plan-wg1-a90ec169",
+    "attempt_id": "cli-run-plan-att-wg1-a90ec169",
+    "input_tokens": 652,
+    "output_tokens": 32000,
+    "cost_usd": 0.004328364,
+    "cost_status": "reported"
+  },
+  "retrieval": {
+    "discover_executed": false,
+    "fetch_executed": false,
+    "admitted_sources": [],
+    "attempted_sources": [],
+    "passages": [],
+    "citations": []
+  },
+  "scoped_proof": {
+    "port_tap": "runs/evidence/gzip-e912c2f-scoped-port.tap.txt",
+    "openrouter_preflight": "review-artifacts/general-g-l1-attempt3-openrouter-preflight.json",
+    "readiness": "review-artifacts/e912c2f-scoped-g-l1-readiness.txt"
+  },
+  "raw_artifacts": {
+    "cli_stdout": "runs/evidence/general-g-l1-attempt3-cli-stdout.json",
+    "cli_stderr": "runs/evidence/general-g-l1-attempt3-cli-stderr.txt",
+    "inspect": "runs/evidence/general-g-l1-attempt3-inspect.json"
+  },
+  "no_automatic_retry": true
+}

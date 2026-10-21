@@ -304,23 +304,25 @@ export async function admittedHttpGet(params: {
     let decodedBuffer = response.body.buffer
     let transportCoding: AdmittedHttpTransportCoding | null = null
     let truncated = response.body.truncated
-    try {
-      const decoded = await decodeAdmittedHttpBody({
-        encodedBody: response.body.buffer,
-        contentEncodingHeader: response.headers['content-encoding'],
-        maxDecodedBytes: params.maxBytes,
-        signal: params.signal,
-      })
-      decodedBuffer = decoded.buffer
-      transportCoding = decoded.transportCoding
-      if (decoded.decodedTruncated) {
-        truncated = true
+    if (status >= 200 && status < 300) {
+      try {
+        const decoded = await decodeAdmittedHttpBody({
+          encodedBody: response.body.buffer,
+          contentEncodingHeader: response.headers['content-encoding'],
+          maxDecodedBytes: params.maxBytes,
+          signal: params.signal,
+        })
+        decodedBuffer = decoded.buffer
+        transportCoding = decoded.transportCoding
+        if (decoded.decodedTruncated) {
+          truncated = true
+        }
+      } catch (err: unknown) {
+        if (err instanceof AdmittedContentCodingError) {
+          throw new AdmittedNetworkPolicyError(err.message)
+        }
+        throw err
       }
-    } catch (err: unknown) {
-      if (err instanceof AdmittedContentCodingError) {
-        throw new AdmittedNetworkPolicyError(err.message)
-      }
-      throw err
     }
 
     return {

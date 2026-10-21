@@ -41,10 +41,14 @@ describe('FetchSourceAccessPort decoded-byte truncation', () => {
     if (result.status === 'ok') {
       assert.equal(result.admitted.revision.completeness, 'truncated')
       assert.equal(result.admitted.revision.truncation_reason, 'host_decoded_byte_limit')
-      assert.equal(result.admitted.truncation?.bytes_received, decodedTotal)
       assert.equal(result.admitted.truncation?.bytes_limit, cap)
-      assert.equal(result.admitted.provenance.http_content_coding?.decoded_byte_length, decodedTotal)
       assert.equal(result.admitted.provenance.http_content_coding?.decoded_truncated, true)
+      assert.equal(
+        result.admitted.provenance.http_content_coding?.decoded_byte_length_is_lower_bound,
+        true,
+      )
+      assert.ok((result.admitted.truncation?.bytes_received ?? 0) >= cap)
+      assert.ok((result.admitted.provenance.http_content_coding?.decoded_byte_length ?? 0) >= cap)
       const admitted = Buffer.from(result.admitted.payload.bytes_base64, 'base64')
       assert.ok(admitted.byteLength <= cap)
       new TextDecoder('utf-8', { fatal: true }).decode(admitted)

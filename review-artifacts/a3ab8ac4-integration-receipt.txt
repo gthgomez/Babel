@@ -1,0 +1,27 @@
+status=historical_superseded_by_e912c2f
+integration_transport_commit=a3ab8ac4e611afc77ceca72c0d8d99981592bbc9
+integration_tree=f413e52f517f10c0dbf3bb1b53206c41df247e4b
+historical_06c_receipt=review-artifacts/a06c18d4-integration-receipt.txt
+
+api_surface=babel-cli/src/research/v2/access/admittedHttpContentCoding.ts
+  exports=decodeAdmittedHttpBody, parseContentEncodings, AdmittedContentCodingError, AdmittedHttpTransportCoding
+  utf8_cap=trimIncompleteUtf8SequenceSuffix (utf8SafeBytePrefix.ts)
+port_tests=A fetchSourceAccessPort.decodeTruncation.test.ts; admittedHttpContentCoding.repair.test.ts (9751 wire → 10MB @ 200k)
+b_reciprocal=fetchSourceAccessPort.gzip.reciprocal.test.ts
+  covers=interior 0xff, invalid final UTF-8 at cap, multibyte boundary trim only, 9751/10MB lower-bound, PDF identity/gzip/truncation, malformed/br/cancel, read hash/locator
+
+targeted_tap=29/29 pass (9 suites)
+  admittedHttpContentCoding.test.ts (3)
+  admittedHttpContentCoding.repair.test.ts (1)
+  utf8SafeBytePrefix.test.ts (2)
+  fetchSourceAccessPort.decodeTruncation.test.ts (1)
+  fetchSourceAccessPort.gzip.reciprocal.test.ts (15)
+  generalWebGzipUtf8Admission.negative.integration.test.ts (1)
+  generalAdapterGL1PlanningFailureReciprocal.integration.test.ts (3)
+  generalAdapterLifecycleReciprocal.integration.test.ts (3)
+
+typecheck=pass (babel-cli npm run typecheck)
+build=pass (babel-cli npm run build)
+
+raw_tap=runs/evidence/gzip-a3ab8ac4-reciprocal.tap.txt (gitignored)
+attempt3_live=not executed (coordinator release; native review in flight)

@@ -1,0 +1,17 @@
+integration_transport_commit=e912c2f3320de0b6e1c9ff85b95b0f74d8b5323c
+integration_worktree_head=e912c2f3320de0b6e1c9ff85b95b0f74d8b5323c
+integration_worktree_path=codex/worktrees/e912-integration
+historical_a3=review-artifacts/a3ab8ac4-integration-receipt.txt
+historical_06c=review-artifacts/a06c18d4-integration-receipt.txt
+
+scoped_port_tap=16/16 pass (4 suites)
+raw_tap=runs/evidence/gzip-e912c2f-scoped-port.tap.txt
+port_command=cd /workspace/babel-cli && node --import tsx --test src/research/v2/access/fetchSourceAccessPort.decodeTruncation.test.ts src/research/v2/access/admittedHttpContentCoding.test.ts src/research/v2/access/admittedHttpContentCoding.repair.test.ts src/research/v2/access/fetchSourceAccessPort.gzip.reciprocal.test.ts
+
+openrouter_preflight=pass
+preflight_json=review-artifacts/general-g-l1-attempt3-openrouter-preflight.json
+preflight_command=cd /workspace/babel-cli && node --import tsx /workspace/codex/missions/general-g-l1-python-stable-attempt3/preflight-search-route.mjs
+
+mission_file=codex/missions/general-g-l1-python-stable-attempt3/mission.json
+store_path=codex/runs/general-g-l1-attempt3/store
+attempt3_live=executed_once see review-artifacts/general-g-l1-attempt3-live-run-receipt.json

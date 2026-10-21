@@ -1,0 +1,54 @@
+{
+  "schema": "general-g-l1-attempt3-preflight/v1",
+  "mission_id": "mission-g-l1-general-live-attempt3",
+  "mission_file": "/workspace/codex/missions/general-g-l1-python-stable-attempt3/mission.json",
+  "store_directory": "/workspace/codex/runs/general-g-l1-attempt3/store",
+  "mission_model_route": {
+    "backend_key": "deepseek-v4-flash-openrouter",
+    "provider": "openrouter",
+    "provider_model_id": "deepseek/deepseek-v4-flash-0731",
+    "fixture_route": false
+  },
+  "effective_cli_route": {
+    "route_key": "deepseek-v4-flash-openrouter",
+    "provider": "openrouter",
+    "model_id": "deepseek/deepseek-v4-flash-0731",
+    "policy_path": "/workspace/config/model-policy.json",
+    "selection_basis": "model_policy_json",
+    "backend_key": "research-v2-cli"
+  },
+  "campaign_openrouter_preflight": {
+    "route_key": "deepseek-v4-flash-openrouter",
+    "provider": "openrouter",
+    "model_id": "deepseek/deepseek-v4-flash-0731",
+    "selection_basis": "model_policy_json",
+    "policy_path": "/workspace/config/model-policy.json"
+  },
+  "mission_route_matches_policy": true,
+  "openrouter_credential": {
+    "configured": true,
+    "env_var": "OPENROUTER_API_KEY"
+  },
+  "search_transport": {
+    "provider_id": "duckduckgo_html_fallback",
+    "expected_provider_id": "duckduckgo_html_fallback",
+    "limitations": [
+      "same_unofficial_html_endpoint_as_babel_web_search_tool",
+      "no_paid_api_key_and_no_result_sla",
+      "html_parser_fragile_coverage_incomplete",
+      "may_return_zero_hits_without_distinct_error",
+      "pinned_repository_tree_listing_requires_public_github_api",
+      "document_discovery_limited_to_mission_selected_document_refs"
+    ],
+    "discover_query": "latest stable Python release python.org download",
+    "example_search_url": "https://duckduckgo.com/html/?q=latest+stable+Python+release+python.org+download"
+  },
+  "evidence_web_domains": [
+    "python.org",
+    "www.python.org",
+    "docs.python.org"
+  ],
+  "live_api_gate_env": "BABEL_RESEARCH_V2_ALLOW_LIVE_API",
+  "live_api_gate_enabled": true
+}
+general-g-l1-attempt3-preflight: ok

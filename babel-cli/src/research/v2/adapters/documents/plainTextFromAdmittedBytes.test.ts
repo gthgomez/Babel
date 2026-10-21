@@ -53,6 +53,24 @@ test('decodeAdmittedUtf8Bytes: rejects revision content_hash mismatch', () => {
   assert.throws(() => decodeAdmittedUtf8Bytes(admitted), /revision content_hash/)
 })
 
+test('decodeAdmittedUtf8Bytes: trims incomplete UTF-8 suffix for host-truncated text/plain', () => {
+  const prefix = Buffer.from('abc', 'utf8')
+  const raw = Buffer.concat([prefix, Buffer.from([0xe2, 0x82])])
+  const admitted = buildAdmittedContent('op', 's', 'r', raw, PLAIN_TEXT_MEDIA_TYPE)
+  admitted.revision.truncation_reason = 'host_decoded_byte_limit'
+  admitted.revision.completeness = 'truncated'
+  const decoded = decodeAdmittedUtf8Bytes(admitted)
+  assert.equal(decoded.toString('utf8'), 'abc')
+})
+
+test('decodeAdmittedUtf8Bytes: does not trim incomplete suffix for truncated application/pdf', () => {
+  const raw = Buffer.concat([Buffer.from('%PDF-', 'utf8'), Buffer.from([0xe2, 0x82])])
+  const admitted = buildAdmittedContent('op', 's', 'r', raw, 'application/pdf')
+  admitted.revision.truncation_reason = 'host_decoded_byte_limit'
+  admitted.revision.completeness = 'truncated'
+  assert.throws(() => decodeAdmittedUtf8Bytes(admitted), /UTF-8/)
+})
+
 test('decodeAdmittedUtf8Bytes: rejects invalid UTF-8', () => {
   const bytes = Buffer.from([0xc3, 0x28])
   const admitted = buildAdmittedContent('op', 's', 'r', bytes, PLAIN_TEXT_MEDIA_TYPE)

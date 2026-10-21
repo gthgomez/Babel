@@ -2,9 +2,9 @@
   "schema": "general-g-l1-attempt3-preflight/v1",
   "status": "ready_not_executed",
   "coordinator_release_required": true,
-  "integration_transport_sha": "06c18d445f172fca8e03cc0307a0748fbb3d4c3d",
-  "integration_tree_sha": "aeacaf9f32e8fb89a307fd8e702654f1b2e2ce9c",
-  "b_merge_sha": "ee157eebcb8d0d0f23f1cf641e08ed7fd1bb7aa9",
+  "integration_transport_sha": "a3ab8ac4e611afc77ceca72c0d8d99981592bbc9",
+  "integration_tree_sha": "f413e52f517f10c0dbf3bb1b53206c41df247e4b",
+  "b_merge_sha": "pending_push",
   "model_route": {
     "route_key": "deepseek-v4-flash-openrouter",
     "provider": "openrouter",
@@ -16,11 +16,12 @@
   "discover_query": "latest stable Python release python.org download",
   "attempt1_store_preserved": "/workspace/codex/worktrees/g-l1-9d97448a/codex/runs/general-g-l1-python-stable/store",
   "attempt2_store_preserved": "/workspace/codex/worktrees/ec7dce91/codex/runs/general-g-l1-attempt2/store",
-  "epistemic_note": "Attempt1/2 original wire bytes unknown; attempt2 refetch 218649-byte class addressed by A decode truncation @ 06c18d44.",
+  "epistemic_note": "Attempt1/2 original wire bytes unknown; attempt2 refetch 218649-byte class addressed by A decoder repair @ a3ab8ac4 (06c evidence preserved in a06c18d4-integration-receipt.txt).",
   "local_proof": {
-    "tap_sanitized": "review-artifacts/a06c18d4-integration-receipt.txt",
-    "tap_raw": "runs/evidence/gzip-a06c18d4-reciprocal.tap.txt",
-    "typecheck": "review-artifacts/gzip-a06c18d4-typecheck.log",
-    "build": "review-artifacts/gzip-a06c18d4-build.log"
+    "tap_sanitized": "review-artifacts/a3ab8ac4-integration-receipt.txt",
+    "tap_raw": "runs/evidence/gzip-a3ab8ac4-reciprocal.tap.txt",
+    "typecheck": "review-artifacts/gzip-a3ab8ac4-typecheck.log",
+    "build": "review-artifacts/gzip-a3ab8ac4-build.log",
+    "historical_06c": "review-artifacts/a06c18d4-integration-receipt.txt"
   }
 }
