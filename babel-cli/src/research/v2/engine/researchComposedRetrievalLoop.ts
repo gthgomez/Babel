@@ -32,6 +32,11 @@ import {
   RetrievalEvidenceBindingError,
   validateRetrievalEvidenceBindings,
 } from './validateRetrievalEvidenceBindings.js'
+import {
+  sourceFetchOwnerFromFetch,
+  stampSourceFetchEvidenceOwnerOnPassage,
+  stampSourceFetchEvidenceOwnerOnRevision,
+} from './retrievalEvidenceOwnership.js'
 import { ResearchPassFailedError } from './researchPassFailure.js'
 
 export interface ComposedRetrievalIterationRequest {
@@ -410,12 +415,23 @@ async function runDocumentRefSlot(
       ctx,
     })
     boundPassages = bound.passages
+    const evidenceOwner = sourceFetchOwnerFromFetch(
+      ctx.mission_id,
+      fetchOperationId,
+      fetchAttemptId,
+    )
     await request.store.appendSource(ctx, candidate)
     throwIfAborted(request.signal, 'document source revision persistence')
-    await request.store.appendSourceRevision(ctx, bound.revision)
+    await request.store.appendSourceRevision(
+      ctx,
+      stampSourceFetchEvidenceOwnerOnRevision(bound.revision, evidenceOwner),
+    )
     for (const passage of boundPassages) {
       throwIfAborted(request.signal, 'document passage persistence')
-      await request.store.appendPassage(ctx, passage)
+      await request.store.appendPassage(
+        ctx,
+        stampSourceFetchEvidenceOwnerOnPassage(passage, evidenceOwner),
+      )
     }
     throwIfAborted(request.signal, 'document evidence persistence completion')
   } catch (err: unknown) {

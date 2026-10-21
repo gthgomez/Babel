@@ -1,6 +1,9 @@
 import type { PassageRecord } from '../contracts/passages.js'
 import type { ExternalOperationCompletion, ExternalOperationIntent } from '../contracts/operations.js'
-import type { SourceRevision } from '../contracts/sources.js'
+import {
+  sourceFetchEvidenceOwnerKey,
+  type SourceFetchEvidenceOwner,
+} from '../contracts/retrievalEvidenceOwnership.js'
 import type { ResearchStoreEvent } from '../ports/researchStore.js'
 
 export interface SourceFetchAttemptRef {
@@ -40,83 +43,80 @@ function completionMatchesAttempt(
   )
 }
 
-function passageOwnedByFetchOperation(passage: PassageRecord, operationId: string): boolean {
-  return passage.passage_id === operationId || passage.passage_id.startsWith(`${operationId}:`)
+function ownerKeyFromRef(ref: SourceFetchAttemptRef): string {
+  return sourceFetchEvidenceOwnerKey({
+    mission_id: ref.missionId,
+    operation_id: ref.operationId,
+    attempt_id: ref.attemptId,
+  })
 }
 
-/** Terminal `succeeded` `source_fetch` operation ids (any attempt). */
-export function succeededSourceFetchOperationIds(
+/** Terminal `succeeded` `source_fetch` attempt keys (mission + operation + attempt). */
+export function succeededSourceFetchAttemptOwnerKeys(
   events: readonly ResearchStoreEvent[],
 ): Set<string> {
-  const fetchOps = new Set<string>()
-  for (const event of events) {
-    const intent = sourceFetchIntent(event)
-    if (intent) fetchOps.add(intent.operation_id)
-  }
   const succeeded = new Set<string>()
-  for (const event of events) {
-    const completion = completionRecord(event)
-    if (!completion) continue
-    if (completion.settlement !== 'succeeded') continue
-    if (fetchOps.has(completion.operation_id)) {
-      succeeded.add(completion.operation_id)
+  for (let i = 0; i < events.length; i++) {
+    const intent = sourceFetchIntent(events[i]!)
+    if (!intent) continue
+    const attempt = attemptRefFromIntent(intent)
+    for (let j = i + 1; j < events.length; j++) {
+      const completion = completionRecord(events[j]!)
+      if (!completion || !completionMatchesAttempt(completion, attempt)) continue
+      if (completion.settlement === 'succeeded') {
+        succeeded.add(ownerKeyFromRef(attempt))
+      }
+      break
     }
   }
   return succeeded
 }
 
+/** @deprecated Use {@link succeededSourceFetchAttemptOwnerKeys}; operation-id-only sets are ambiguous. */
+export function succeededSourceFetchOperationIds(
+  events: readonly ResearchStoreEvent[],
+): Set<string> {
+  const ids = new Set<string>()
+  for (const key of succeededSourceFetchAttemptOwnerKeys(events)) {
+    const parts = key.split('\0')
+    const operationId = parts[1]
+    if (operationId) ids.add(operationId)
+  }
+  return ids
+}
+
+function passageOwnerKey(passage: PassageRecord): string | undefined {
+  const owner = passage.source_fetch_owner
+  if (!owner) return undefined
+  return sourceFetchEvidenceOwnerKey(owner)
+}
+
 /**
- * Passage ids admitted under a specific `source_fetch` attempt that settled `succeeded`.
- * Ownership: revisions recorded on that attempt, then passages in the same attempt span whose
- * `source_revision_id` matches those revisions or whose `passage_id` is bound to the fetch operation.
+ * Passage ids whose write-time `source_fetch_owner` matches a terminal succeeded `source_fetch`
+ * attempt. Legacy passages without explicit ownership are excluded (fail closed).
  */
 export function passageIdsAdmittedUnderSucceededSourceFetches(
   events: readonly ResearchStoreEvent[],
 ): Set<string> {
+  const succeededOwners = succeededSourceFetchAttemptOwnerKeys(events)
+  if (succeededOwners.size === 0) {
+    return new Set()
+  }
   const admitted = new Set<string>()
-
-  for (let i = 0; i < events.length; i++) {
-    const intent = sourceFetchIntent(events[i]!)
-    if (!intent) continue
-    const attempt = attemptRefFromIntent(intent)
-
-    let completionIdx = -1
-    let succeeded = false
-    for (let j = i + 1; j < events.length; j++) {
-      const completion = completionRecord(events[j]!)
-      if (!completion || !completionMatchesAttempt(completion, attempt)) continue
-      completionIdx = j
-      succeeded = completion.settlement === 'succeeded'
-      break
-    }
-    if (completionIdx < 0 || !succeeded) continue
-
-    const revisionIds = new Set<string>()
-    for (let k = i + 1; k < completionIdx; k++) {
-      const mid = events[k]!
-      if (mid.kind !== 'revision_recorded') continue
-      const revision = (mid.payload as { revision: SourceRevision }).revision
-      revisionIds.add(revision.revision_id)
-    }
-
-    for (let k = i + 1; k < completionIdx; k++) {
-      const mid = events[k]!
-      if (mid.kind !== 'passage_recorded') continue
-      const passage = (mid.payload as { passage: PassageRecord }).passage
-      if (
-        revisionIds.has(passage.source_revision_id) ||
-        passageOwnedByFetchOperation(passage, attempt.operationId)
-      ) {
-        admitted.add(passage.passage_id)
-      }
+  for (const event of events) {
+    if (event.kind !== 'passage_recorded') continue
+    const passage = (event.payload as { passage: PassageRecord }).passage
+    const ownerKey = passageOwnerKey(passage)
+    if (!ownerKey) continue
+    if (succeededOwners.has(ownerKey)) {
+      admitted.add(passage.passage_id)
     }
   }
-
   return admitted
 }
 
 /**
- * Extraction may resume after close/reopen; omit passages tied to incomplete or failed fetches.
+ * Extraction may resume after close/reopen; omit passages without succeeded attempt ownership.
  * Original store events are never deleted.
  */
 export function filterPassagesForExtractionLineage(
@@ -135,4 +135,11 @@ export function passageIdsForExtractionLineage(
   events: readonly ResearchStoreEvent[],
 ): string[] {
   return filterPassagesForExtractionLineage(passages, events).map((p) => p.passage_id)
+}
+
+export function ownerMatchesSucceededAttempt(
+  owner: SourceFetchEvidenceOwner,
+  events: readonly ResearchStoreEvent[],
+): boolean {
+  return succeededSourceFetchAttemptOwnerKeys(events).has(sourceFetchEvidenceOwnerKey(owner))
 }

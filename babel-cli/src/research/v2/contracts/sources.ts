@@ -5,6 +5,7 @@ import {
   RecordIdSchema,
   UnknownValueSchema,
 } from './common.js'
+import { SourceFetchEvidenceOwnerSchema } from './retrievalEvidenceOwnership.js'
 import { SourceClassSchema } from './mission.js'
 
 export const SourceCompletenessSchema = z.enum([
@@ -53,6 +54,7 @@ export const SourceRevisionSchema = z
     byte_length_received: z.number().int().nonnegative().optional(),
     truncation_reason: z.string().optional(),
     access_notes: z.string().optional(),
+    source_fetch_owner: SourceFetchEvidenceOwnerSchema.optional(),
   })
   .strict()
 

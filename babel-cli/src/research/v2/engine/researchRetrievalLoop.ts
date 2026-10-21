@@ -20,6 +20,11 @@ import {
   validateRetrievalEvidenceBindings,
 } from './validateRetrievalEvidenceBindings.js'
 import {
+  sourceFetchOwnerFromFetch,
+  stampSourceFetchEvidenceOwnerOnPassage,
+  stampSourceFetchEvidenceOwnerOnRevision,
+} from './retrievalEvidenceOwnership.js'
+import {
   resolveReadAdapterForSource,
   type MissionRegistryBundle,
 } from '../registry/missionAdapterResolution.js'
@@ -444,12 +449,23 @@ export async function runAdmittedRetrievalIteration(
     }
 
     try {
+      const evidenceOwner = sourceFetchOwnerFromFetch(
+        ctx.mission_id,
+        fetchOperationId,
+        fetchAttemptId,
+      )
       await request.store.appendSource(ctx, candidate)
       throwIfAborted(request.signal, 'source revision persistence')
-      await request.store.appendSourceRevision(ctx, revision)
+      await request.store.appendSourceRevision(
+        ctx,
+        stampSourceFetchEvidenceOwnerOnRevision(revision, evidenceOwner),
+      )
       for (const passage of passages) {
         throwIfAborted(request.signal, 'passage persistence')
-        await request.store.appendPassage(ctx, passage)
+        await request.store.appendPassage(
+          ctx,
+          stampSourceFetchEvidenceOwnerOnPassage(passage, evidenceOwner),
+        )
       }
       throwIfAborted(request.signal, 'evidence persistence completion')
     } catch (err: unknown) {

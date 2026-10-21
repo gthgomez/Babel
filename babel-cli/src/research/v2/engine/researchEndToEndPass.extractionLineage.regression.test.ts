@@ -73,6 +73,11 @@ describe('research end-to-end pass extraction lineage (resume regression)', () =
             text: orphanText,
             text_hash: createHash('sha256').update(orphanText).digest('hex'),
           },
+          source_fetch_owner: {
+            mission_id: seedCtx.mission_id,
+            operation_id: failedOp,
+            attempt_id: `${failedOp}-att`,
+          },
         }),
       )
       await store.appendExternalOperationCompleted(seedCtx, {

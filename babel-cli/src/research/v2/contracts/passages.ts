@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { ContentHashSchema, RecordIdSchema } from './common.js'
+import { SourceFetchEvidenceOwnerSchema } from './retrievalEvidenceOwnership.js'
 
 const positiveInt = z.number().int().positive()
 
@@ -66,6 +67,7 @@ export const PassageRecordSchema = z
     text_ref: PassageTextRefSchema,
     heading_path: z.array(z.string()).optional(),
     extraction_notes: z.array(z.string()).optional(),
+    source_fetch_owner: SourceFetchEvidenceOwnerSchema.optional(),
   })
   .strict()
 
