@@ -2,7 +2,11 @@
   "schema": "research-v2-author-tap-receipt/v2",
   "label": "T-L1 invalid discover-primary planning reciprocal (A c27fb39c union)",
   "qualification_status": "author_run_complete_union_v4",
-  "qualification_note": "v4 isolates positive control: tree dispatch gate stops before production admittedGet HTTP. v3 TAP preserved as evidence that reached search/fetch intents (not claimed fully offline acquisition). Not full-suite; working tree not clean at capture.",
+  "qualification_note": "v4 isolates positive control: tree dispatch gate stops before production admittedGet HTTP. v3 TAP preserved as evidence that reached search/fetch intents (not claimed fully offline acquisition). Integrated A923 (923b7ae2) + governed User-Agent transport on #404 branch; focused proof re-run at post-integration HEAD. Not full-suite; working tree not clean at capture.",
+  "integration_a923": {
+    "pr_406_head": "923b7ae2ffade35e8a556703eb93c8dd1c23c1f9",
+    "merge_commit": "a3d569caf7d0d72e8596341ab4640d1a2abc2b2c"
+  },
   "a_canonical_dependency": {
     "commit": "c27fb39cc598e43043310633c04588c795380a42",
     "tree": "d8160b4bf4ca8e9c4fa0e70b36241d2ed464c7a0",
