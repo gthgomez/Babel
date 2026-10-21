@@ -6,8 +6,18 @@ import type { SourceAdapter } from '../ports/sourceAdapter.js'
 import type { SourceAccessPort } from '../ports/sourceAccessPort.js'
 import type { ResearchStore, ResearchStoreMissionHandle } from '../ports/researchStore.js'
 import type { AdmittedPlanningSession } from './researchIterationLoop.js'
-import { buildOfflineRetrievalReport } from './buildOfflineRetrievalReport.js'
-import { settleExternalOperation } from './settleExternalOperation.js'
+import {
+  buildOfflineRetrievalReport,
+  type RetrievalExecutionProvenance,
+} from './buildOfflineRetrievalReport.js'
+import {
+  settleExternalOperation,
+  unknownUsageSettlement,
+} from './settleExternalOperation.js'
+import {
+  RetrievalEvidenceBindingError,
+  validateRetrievalEvidenceBindings,
+} from './validateRetrievalEvidenceBindings.js'
 
 export interface RetrievalIterationRequest {
   session: AdmittedPlanningSession
@@ -24,6 +34,8 @@ export interface RetrievalIterationRequest {
   signal: AbortSignal
   /** When true, append an honest offline partial terminal report after evidence writes. */
   emitOfflineTerminalReport?: boolean
+  /** Labels terminal report limitations; omit to avoid claiming offline-only execution. */
+  executionProvenance?: RetrievalExecutionProvenance
   now?: () => string
 }
 
@@ -44,6 +56,12 @@ function assertActivePlan(session: AdmittedPlanningSession): string {
     throw new Error('retrieval requires an active admitted plan revision on the session')
   }
   return planRevisionId
+}
+
+function throwIfAborted(signal: AbortSignal, phase: string): void {
+  if (signal.aborted) {
+    throw new Error(`retrieval iteration aborted before ${phase}`)
+  }
 }
 
 /**
@@ -81,16 +99,37 @@ export async function runAdmittedRetrievalIteration(
     idempotency_key: request.searchOperationId,
   })
 
-  const discover = await request.adapter.discover(
-    {
-      operationId: request.searchOperationId,
-      query: request.discoverQuery,
-      signal: request.signal,
-    },
-    request.access,
-  )
+  let discover
+  try {
+    discover = await request.adapter.discover(
+      {
+        operationId: request.searchOperationId,
+        query: request.discoverQuery,
+        signal: request.signal,
+      },
+      request.access,
+    )
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err)
+    await settleExternalOperation(
+      request.store,
+      ctx,
+      ctx.mission_id,
+      request.searchOperationId,
+      request.searchAttemptId,
+      {
+        settlement: 'uncertain',
+        message: request.signal.aborted
+          ? `source discover rejected during cancellation: ${message}`
+          : message,
+        usage_settlement: unknownUsageSettlement(request.searchAttemptId),
+      },
+      now(),
+    )
+    throw err instanceof Error ? err : new Error(message)
+  }
 
-  if (discover.status === 'cancelled') {
+  if (discover.status === 'cancelled' || request.signal.aborted) {
     await settleExternalOperation(
       request.store,
       ctx,
@@ -137,6 +176,8 @@ export async function runAdmittedRetrievalIteration(
     throw new Error('discover returned no source candidates')
   }
 
+  throwIfAborted(request.signal, 'source_search settlement')
+
   await settleExternalOperation(
     request.store,
     ctx,
@@ -156,16 +197,37 @@ export async function runAdmittedRetrievalIteration(
     idempotency_key: request.fetchOperationId,
   })
 
-  const read = await request.adapter.read(
-    {
-      operationId: request.fetchOperationId,
-      source: candidate,
-      signal: request.signal,
-    },
-    request.access,
-  )
+  let read
+  try {
+    read = await request.adapter.read(
+      {
+        operationId: request.fetchOperationId,
+        source: candidate,
+        signal: request.signal,
+      },
+      request.access,
+    )
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err)
+    await settleExternalOperation(
+      request.store,
+      ctx,
+      ctx.mission_id,
+      request.fetchOperationId,
+      request.fetchAttemptId,
+      {
+        settlement: 'uncertain',
+        message: request.signal.aborted
+          ? `source read rejected during cancellation: ${message}`
+          : message,
+        usage_settlement: unknownUsageSettlement(request.fetchAttemptId),
+      },
+      now(),
+    )
+    throw err instanceof Error ? err : new Error(message)
+  }
 
-  if (read.status === 'cancelled') {
+  if (read.status === 'cancelled' || request.signal.aborted) {
     await settleExternalOperation(
       request.store,
       ctx,
@@ -194,12 +256,45 @@ export async function runAdmittedRetrievalIteration(
     throw new Error(read.message)
   }
 
+  throwIfAborted(request.signal, 'evidence persistence')
+
+  let revision
+  let passages: PassageRecord[]
+  try {
+    const bound = validateRetrievalEvidenceBindings({
+      searchOperationId: request.searchOperationId,
+      fetchOperationId: request.fetchOperationId,
+      discover,
+      read,
+      candidate,
+      mission: request.session.mission,
+      plan: request.activePlan,
+      ctx,
+    })
+    revision = bound.revision
+    passages = bound.passages
+  } catch (err: unknown) {
+    const message = err instanceof RetrievalEvidenceBindingError ? err.message : String(err)
+    await settleExternalOperation(
+      request.store,
+      ctx,
+      ctx.mission_id,
+      request.fetchOperationId,
+      request.fetchAttemptId,
+      {
+        settlement: 'failed',
+        failureCategory: 'evidence_binding_failed',
+        message,
+      },
+      now(),
+    )
+    throw err instanceof Error ? err : new Error(message)
+  }
+
   await request.store.appendSource(ctx, candidate)
-  await request.store.appendSourceRevision(ctx, read.revision)
-  const passages: PassageRecord[] = []
-  for (const passage of read.passages) {
+  await request.store.appendSourceRevision(ctx, revision)
+  for (const passage of passages) {
     await request.store.appendPassage(ctx, passage)
-    passages.push(passage)
   }
 
   await settleExternalOperation(
@@ -214,12 +309,16 @@ export async function runAdmittedRetrievalIteration(
 
   let terminalReportEmitted = false
   if (request.emitOfflineTerminalReport) {
+    throwIfAborted(request.signal, 'terminal report')
     const report = buildOfflineRetrievalReport({
       mission: request.session.mission,
       plan: request.activePlan,
       ctx,
       passages,
       generatedAt: now(),
+      ...(request.executionProvenance !== undefined
+        ? { executionProvenance: request.executionProvenance }
+        : {}),
     })
     await request.store.appendTerminalReport(ctx, report)
     terminalReportEmitted = true
@@ -229,7 +328,7 @@ export async function runAdmittedRetrievalIteration(
     handle: acquired,
     writeContext: ctx,
     source: candidate,
-    revisionId: read.revision.revision_id,
+    revisionId: revision.revision_id,
     passageIds: passages.map((p) => p.passage_id),
     searchOperationId: request.searchOperationId,
     fetchOperationId: request.fetchOperationId,

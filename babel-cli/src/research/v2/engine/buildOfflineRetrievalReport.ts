@@ -4,12 +4,18 @@ import type { PlanRevision } from '../contracts/plan.js'
 import type { ResearchReportV2 } from '../contracts/plan.js'
 import type { ResearchMissionV2 } from '../contracts/mission.js'
 
+export type RetrievalExecutionProvenance =
+  | { mode: 'offline_injected_access' }
+  | { mode: 'governed_network_access' }
+  | { mode: 'unknown' }
+
 export interface OfflineRetrievalReportInput {
   mission: ResearchMissionV2
   plan: PlanRevision
   ctx: MissionWriteContext
   passages: readonly PassageRecord[]
   generatedAt: string
+  executionProvenance?: RetrievalExecutionProvenance
 }
 
 /**
@@ -34,9 +40,14 @@ export function buildOfflineRetrievalReport(input: OfflineRetrievalReportInput):
       'Evidence limited to host-admitted source search/fetch and profile adapter extraction; no model synthesis in this slice.',
     limitations: [
       'offline_retrieval_slice',
-      'no_live_network',
       'no_model_synthesis',
       'general_profile_extraction_deferred_to_b_owned_adapters',
+      ...(input.executionProvenance?.mode === 'offline_injected_access'
+        ? ['execution_used_injected_offline_source_access']
+        : []),
+      ...(input.executionProvenance?.mode === 'governed_network_access'
+        ? ['execution_used_governed_network_source_access']
+        : []),
     ],
     source_cutoff: 'retrieval_iteration_complete',
     acceptance_state: 'host_admitted_offline_partial',

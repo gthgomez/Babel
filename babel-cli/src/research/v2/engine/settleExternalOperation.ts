@@ -1,11 +1,13 @@
 import type { MissionWriteContext } from '../contracts/common.js'
 import type { ExternalOperationCompletion } from '../contracts/operations.js'
+import type { UsageSettlement } from '../ports/researchModelPort.js'
 import type { ResearchStore } from '../ports/researchStore.js'
 
 export interface ExternalOperationOutcome {
   settlement: ExternalOperationCompletion['settlement']
   failureCategory?: string
   message?: string
+  usage_settlement?: UsageSettlement
 }
 
 /** Persist intent completion for non-model external operations (search/fetch). */
@@ -26,5 +28,10 @@ export async function settleExternalOperation(
     settlement: outcome.settlement,
     ...(outcome.failureCategory ? { failure_category: outcome.failureCategory } : {}),
     ...(outcome.message ? { message: outcome.message } : {}),
+    ...(outcome.usage_settlement ? { usage_settlement: outcome.usage_settlement } : {}),
   })
+}
+
+export function unknownUsageSettlement(attemptId: string): UsageSettlement {
+  return { attempt_id: attemptId, cost: { status: 'unknown' } }
 }
