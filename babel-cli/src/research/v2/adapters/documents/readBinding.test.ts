@@ -121,5 +121,8 @@ test('admitsRequestedUrlForSource: uses observed_urls only', () => {
 
 test('bindingFailed: uses contract_violation category', () => {
   const result = bindingFailed('op', 'test')
-  assert.equal(result.failureCategory, 'contract_violation')
+  assert.equal(result.status, 'failed')
+  if (result.status === 'failed') {
+    assert.equal(result.failureCategory, 'contract_violation')
+  }
 })
