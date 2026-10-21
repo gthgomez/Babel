@@ -25,7 +25,7 @@ import {
   technicalRepositoryCorpusBody,
   technicalRepositoryCorpusFinalUrl,
 } from '../fixtures/technicalRepositoryCorpus.js'
-import { finalizeOwnerResearchRunCancellation } from '../engine/finalizeOwnerResearchRunCancellation.js'
+import { finalizeCancelledOwnerRunAndClose } from '../engine/ownerSessionCancellationFinalize.js'
 import { fixtureModelForOfflineRun } from './researchV2FixtureRunModel.js'
 
 export interface ResearchV2MissionRunResult {
@@ -103,19 +103,22 @@ function injectedOfflineAccess(mission: ResearchMissionV2) {
   return port
 }
 
-const OFFLINE_OPERATION_IDS = {
-  planOperationId: 'cli-run-plan',
-  planAttemptId: 'cli-run-plan-att',
-  retrievalSearchOperationId: 'cli-run-search',
-  retrievalSearchAttemptId: 'cli-run-search-att',
-  retrievalFetchOperationId: 'cli-run-fetch',
-  retrievalFetchAttemptId: 'cli-run-fetch-att',
-  extractOperationId: 'cli-run-extract',
-  extractAttemptId: 'cli-run-extract-att',
-  reviewOperationId: 'cli-run-review',
-  reviewAttemptId: 'cli-run-review-att',
-  synthesizeOperationId: 'cli-run-synth',
-  synthesizeAttemptId: 'cli-run-synth-att',
+function offlineOperationIds(runSuffix: string) {
+  const s = runSuffix.replace(/[^a-zA-Z0-9-]/g, '-').slice(0, 48)
+  return {
+    planOperationId: `cli-run-plan-${s}`,
+    planAttemptId: `cli-run-plan-att-${s}`,
+    retrievalSearchOperationId: `cli-run-search-${s}`,
+    retrievalSearchAttemptId: `cli-run-search-att-${s}`,
+    retrievalFetchOperationId: `cli-run-fetch-${s}`,
+    retrievalFetchAttemptId: `cli-run-fetch-att-${s}`,
+    extractOperationId: `cli-run-extract-${s}`,
+    extractAttemptId: `cli-run-extract-att-${s}`,
+    reviewOperationId: `cli-run-review-${s}`,
+    reviewAttemptId: `cli-run-review-att-${s}`,
+    synthesizeOperationId: `cli-run-synth-${s}`,
+    synthesizeAttemptId: `cli-run-synth-att-${s}`,
+  }
 }
 
 export async function runResearchV2EnginePassOnOwner(options: {
@@ -145,9 +148,11 @@ export async function runResearchV2EnginePassOnOwner(options: {
     ? injectedOfflineAccess(options.mission)
     : productionAccessPort(options.mission, options)
 
-  const runId = injectedOffline ? '' : randomUUID().slice(0, 8)
+  const runId = injectedOffline
+    ? (options.planRevisionId ?? options.activePlanRevisionId ?? 'offline')
+    : randomUUID().slice(0, 8)
   const op = injectedOffline
-    ? OFFLINE_OPERATION_IDS
+    ? offlineOperationIds(String(runId))
     : {
         planOperationId: `cli-run-plan-${runId}`,
         planAttemptId: `cli-run-plan-att-${runId}`,
@@ -251,13 +256,12 @@ export async function runResearchV2MissionWithOwnerSession(
     }
   } finally {
     cancelWatcher?.stop()
-    if (signal.aborted && owner && missionAppended) {
-      await finalizeOwnerResearchRunCancellation({
-        store: owner.store,
-        mission: options.mission,
-      })
-    }
-    await owner?.close()
+    await finalizeCancelledOwnerRunAndClose({
+      owner,
+      mission: options.mission,
+      missionAppended,
+      signal,
+    })
   }
 }
 

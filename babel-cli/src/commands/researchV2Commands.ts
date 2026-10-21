@@ -6,8 +6,8 @@ import { printJsonErrorAndExit, printJsonOrHuman } from './output.js'
 import { assertResearchV2LiveApiEnabled, isResearchV2LiveApiEnabled } from '../research/v2/liveApiGate.js'
 import { createLiveResearchModelPort } from '../research/v2/model/researchV2LiveModelPort.js'
 import {
-  resolveEffectiveResearchV2ModelRouteForCli,
   resolveLiveResearchModelConfigForCli,
+  resolveEffectiveResearchV2ModelRouteForCli,
 } from '../research/v2/model/researchV2ModelRoute.js'
 import {
   cancelResearchV2OwnerSession,

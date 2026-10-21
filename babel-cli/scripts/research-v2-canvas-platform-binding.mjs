@@ -48,6 +48,39 @@ export function canvasNativeBindingLoads(cwd) {
   }
 }
 
+export function resolveCanvasNativeBindingFile(cwd) {
+  const bindingPkg = resolveCanvasPlatformBindingPackage()
+  if (!bindingPkg) return null
+  const pkgRoot = join(cwd, 'node_modules', ...bindingPkg.split('/'))
+  const candidates = [
+    join(pkgRoot, 'skia.linux-x64-gnu.node'),
+    join(pkgRoot, 'skia.linux-arm64-gnu.node'),
+    join(pkgRoot, 'skia.win32-x64-msvc.node'),
+    join(pkgRoot, 'skia.darwin-x64.node'),
+    join(pkgRoot, 'skia.darwin-arm64.node'),
+  ]
+  return candidates.find((p) => existsSync(p)) ?? null
+}
+
+/** Fail closed when platform binding package or import is missing after staged npm ci. */
+export async function assertCanvasNativeBindingLoads(cwd) {
+  const bindingPkg = resolveCanvasPlatformBindingPackage()
+  if (!bindingPkg) {
+    throw new Error(`no canvas platform binding for ${process.platform}/${process.arch}`)
+  }
+  const nativePath = resolveCanvasNativeBindingFile(cwd)
+  if (!nativePath) {
+    throw new Error(
+      `${bindingPkg} native .node missing under ${cwd}; run installCanvasPlatformBinding after npm ci --omit=optional`,
+    )
+  }
+  const loads = await canvasNativeBindingLoads(cwd)
+  if (!loads) {
+    throw new Error(`@napi-rs/canvas import failed in ${cwd} despite ${nativePath}`)
+  }
+  return { bindingPkg, nativePath }
+}
+
 /**
  * Install platform binding into an existing node_modules tree (no package.json mutation).
  * @param {{ cwd: string, npmCli?: string, nodeExec?: string }} options

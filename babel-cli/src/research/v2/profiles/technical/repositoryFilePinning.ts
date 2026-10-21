@@ -74,6 +74,33 @@ export function provenanceBlobUrlFromFetchHop(hopUrl: string, expected: PinnedGi
   }
 }
 
+/** Explicit equivalence: pinned blob URL must map to the immutable raw URL used for fetch. */
+export function assertImmutableRawUrlForPinnedBlob(observedBlobUrl: string, fetchUrl: string): void {
+  const expectedRaw = pinnedGithubBlobUrlToRawContentUrl(observedBlobUrl)
+  if (!expectedRaw) {
+    throw new TechnicalRepositoryPinError('observed URL is not a pinned github blob URL')
+  }
+  if (fetchUrl !== expectedRaw) {
+    throw new TechnicalRepositoryPinError(
+      'repository_file fetch URL must equal immutable raw.githubusercontent.com URL for pinned blob',
+    )
+  }
+}
+
+/** Map a transport hop to blob provenance; reject cross-repo / mismatched hops (no substitution). */
+export function repositoryFileBlobProvenanceFromTransportHop(
+  hopUrl: string,
+  pinnedBlobRef: PinnedGithubBlobRef,
+): string {
+  const mapped = provenanceBlobUrlFromFetchHop(hopUrl, pinnedBlobRef)
+  if (!mapped) {
+    throw new TechnicalRepositoryPinError(
+      `repository_file fetch hop does not match pinned blob identity: ${hopUrl}`,
+    )
+  }
+  return mapped
+}
+
 function expectedBlobRef(source: SourceRecord): PinnedGithubBlobRef {
   const commitSha = source.canonical_identifiers?.github_commit_sha
   if (!commitSha || !/^[a-f0-9]{40}$/i.test(commitSha)) {

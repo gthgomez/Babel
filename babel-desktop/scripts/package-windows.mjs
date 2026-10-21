@@ -7,6 +7,7 @@ import {execFileSync} from 'node:child_process';
 import {homedir} from 'node:os';
 import {assertAppImportsResolve} from './lib/verify-app-imports.mjs';
 import {installCanvasPlatformBinding} from '../../babel-cli/scripts/research-v2-canvas-platform-binding.mjs';
+import {isAllowlistedCanvasVendorNativeArtifact} from '../../babel-cli/scripts/research-v2-canvas-vendor-allowlist.mjs';
 
 const desktop = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const repo = resolve(desktop, '..');
@@ -87,8 +88,7 @@ function inventory(dir, prefix='') {
     else {
       if(/(?:^|\/)(?:\.env(?:\..*)?|\.git|auth\.json|ui-connection\.json|transcript\.jsonl)$|\.(?:log|pem|key)$/i.test(rel)) throw new Error(`Forbidden package file: ${rel}`);
       const bytes = readFileSync(path);
-      const isCanvasPrebuild =
-        /node_modules[/\\]@napi-rs[/\\]canvas/.test(rel.replaceAll('\\', '/')) && rel.endsWith('.node');
+      const isCanvasPrebuild = isAllowlistedCanvasVendorNativeArtifact(rel, bytes);
       if(!isCanvasPrebuild && buildPrefixes.some(prefix => bytes.includes(Buffer.from(prefix)))) throw new Error(`Personal build path in package: ${rel}`);
       files.push({path:rel,bytes:statSync(path).size,sha256:sha(bytes)});
     }
