@@ -35,6 +35,7 @@ import {
   gL2OriginalDerivedFindingQ4_a0cf,
   gL2OriginalDerivedPassages,
   gL2OriginalDerivedPlan,
+  gL2FixtureMissionSourceSlots,
   gL2OriginalDerivedRevisions,
   gL2OriginalDerivedSources,
   gL2PositiveControlModelReview,
@@ -202,6 +203,7 @@ describe('G-L2 obligation API production wiring (27512ba1 / 5d822856)', () => {
         passages: gL2OriginalDerivedPassages,
         sources,
         sourceRevisions: gL2OriginalDerivedRevisions,
+        missionSourceSlots: gL2FixtureMissionSourceSlots,
       },
     )
     assert.equal(reviewed[0]?.question_coverage?.status, 'partial')
@@ -230,6 +232,7 @@ describe('G-L2 obligation API production wiring (27512ba1 / 5d822856)', () => {
         passages: gL2OriginalDerivedPassages,
         sources,
         sourceRevisions: gL2OriginalDerivedRevisions,
+        missionSourceSlots: gL2FixtureMissionSourceSlots,
       },
     )
     const report = buildSynthesizedResearchReport({
@@ -272,6 +275,7 @@ describe('G-L2 obligation API production wiring (27512ba1 / 5d822856)', () => {
         passages: gL2OriginalDerivedPassages,
         sources,
         sourceRevisions: gL2OriginalDerivedRevisions,
+        missionSourceSlots: gL2FixtureMissionSourceSlots,
       },
     )
     assert.deepEqual(
@@ -311,6 +315,7 @@ describe('G-L2 obligation API production wiring (27512ba1 / 5d822856)', () => {
         passages: gL2OriginalDerivedPassages,
         sources: gL2OriginalDerivedSources,
         sourceRevisions: gL2OriginalDerivedRevisions,
+        missionSourceSlots: gL2FixtureMissionSourceSlots,
       },
     )
     assert.equal(reviewed[0]?.question_coverage?.status, 'partial')

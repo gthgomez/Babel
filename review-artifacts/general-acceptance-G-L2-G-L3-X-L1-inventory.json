@@ -5,6 +5,7 @@
   "a_combined_runtime_matrix": {
     "revision": "3245d3d8b01c9a3f0b1deebf4a58d86219828fd8",
     "artifact": "review-artifacts/a3245d3d8-G-L3-T-L1-T-L2-X-L1-readiness-matrix.json",
+    "human_readable": "review-artifacts/a3245d3d8-G-L3-T-L1-T-L2-X-L1-readiness-matrix.md",
     "proof_log": "review-artifacts/a3245d3d8-readiness-matrix-run.log",
     "scenarios": ["G-L3", "T-L1", "T-L2", "X-L1"],
     "note": "Read-only matrix on A settlement runtime; not rebinding attempt4 or 5dbd8700 frozen receipts.",

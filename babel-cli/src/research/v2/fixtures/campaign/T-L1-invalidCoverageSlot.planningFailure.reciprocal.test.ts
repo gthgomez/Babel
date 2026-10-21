@@ -143,7 +143,7 @@ function tL1ProductionShapedModel(fixturePath: string = syntheticInvalidFixtureP
     ): Promise<T> {
       callbacks?.onInvocationCompleted?.({
         inference_id: 't-l1-synthetic-invalid-slot-inf',
-        provider: usageMeta.provider ?? 'openrouter',
+        provider: (usageMeta.provider ?? 'openrouter') as 'openrouter',
         model: usageMeta.provider_model_id ?? 'deepseek/deepseek-v4-flash-0731',
         status: 'delivered',
         usage_metadata: usageMeta,

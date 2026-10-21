@@ -133,12 +133,13 @@ describe('early cancel helper characterization (not actual-runner barrier regres
         signal: cancel.signal,
       })
       assert.equal(model.invokeCount, 0)
-      assert.equal(closeOutcome.cancellation_finalize.status, 'not_appended')
-      if (closeOutcome.cancellation_finalize.status === 'not_appended') {
-        assert.equal(
-          closeOutcome.cancellation_finalize.reason,
-          'pre_bootstrap_no_active_plan',
-        )
+      const cancellationFinalize = closeOutcome.cancellation_finalize
+      assert.notEqual(cancellationFinalize, 'not_attempted')
+      if (cancellationFinalize !== 'not_attempted') {
+        assert.equal(cancellationFinalize.status, 'not_appended')
+        if (cancellationFinalize.status === 'not_appended') {
+          assert.equal(cancellationFinalize.reason, 'pre_bootstrap_no_active_plan')
+        }
       }
 
       const eventsBeforeClose = await owner.store.listEvents(exampleTechnicalMissionFixture.mission_id)
