@@ -23,16 +23,65 @@ export const SourceClassSchema = z.enum([
   'structured',
 ])
 
+export const MissionDocumentContentPinKindSchema = z.enum([
+  'mutable_locator_content_digest',
+  'immutable_versioned_source',
+])
+
+export const MissionAdmittedDocumentSourceSchema = z
+  .object({
+    /** Must match an entry in selected_document_refs (exact mission-selected URL). */
+    document_ref: z.string().url(),
+    content_pin_kind: MissionDocumentContentPinKindSchema,
+    /** Required when content_pin_kind is immutable_versioned_source. */
+    source_version_id: z.string().min(1).optional(),
+    wire_byte_budget: z.number().int().positive(),
+    decompressed_byte_budget: z.number().int().positive(),
+    expected_content_sha256: z
+      .string()
+      .regex(/^[a-f0-9]{64}$/i),
+    expected_byte_length: z.number().int().positive(),
+    require_complete_body: z.literal(true),
+    /** Optional extraction completeness expectation for admitted PDFs. */
+    expected_pdf_page_count: z.number().int().positive().optional(),
+  })
+  .strict()
+  .superRefine((entry, ctx) => {
+    if (
+      entry.content_pin_kind === 'immutable_versioned_source' &&
+      !entry.source_version_id?.trim()
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'source_version_id is required for immutable_versioned_source',
+        path: ['source_version_id'],
+      })
+    }
+  })
+
 export const MissionSourcePolicyV2Schema = z
   .object({
     allowed_source_classes: z.array(SourceClassSchema).min(1),
     /** Host-enforced domain patterns; adapters cannot expand. */
     allowed_web_domains: z.array(z.string().min(1)).optional(),
     selected_document_refs: z.array(z.string().min(1)).optional(),
+    admitted_document_sources: z.array(MissionAdmittedDocumentSourceSchema).optional(),
     selected_repository_refs: z.array(PinnedRepositoryRefSchema).optional(),
     visibility_retention: VisibilityRetentionPolicySchema,
   })
   .strict()
+  .superRefine((policy, ctx) => {
+    const selected = new Set(policy.selected_document_refs ?? [])
+    for (const [index, entry] of (policy.admitted_document_sources ?? []).entries()) {
+      if (!selected.has(entry.document_ref)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'admitted_document_sources.document_ref must be mission-selected',
+          path: ['admitted_document_sources', index, 'document_ref'],
+        })
+      }
+    }
+  })
 
 export const ResearchMissionV2Schema = z
   .object({
@@ -60,3 +109,4 @@ export const ResearchMissionV2Schema = z
   .strict()
 
 export type ResearchMissionV2 = z.infer<typeof ResearchMissionV2Schema>
+export type MissionAdmittedDocumentSource = z.infer<typeof MissionAdmittedDocumentSourceSchema>

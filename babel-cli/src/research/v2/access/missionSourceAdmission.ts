@@ -5,14 +5,9 @@ import {
   parsePinnedGithubRawContentUrl,
 } from '../profiles/technical/repositoryFilePinning.js'
 import { parseAdmittedHttpUrl } from './admittedHttpGet.js'
+import { documentSourceMatchesSelectedRef } from './missionDocumentAdmission.js'
 import { missionPinnedRepositories } from './missionPinnedRepositories.js'
-
-function hostnameAllowed(hostname: string, mission: ResearchMissionV2): boolean {
-  const allowed = mission.source_policy.allowed_web_domains
-  if (!allowed || allowed.length === 0) return false
-  const host = hostname.toLowerCase()
-  return allowed.some((domain) => host === domain.toLowerCase() || host.endsWith(`.${domain.toLowerCase()}`))
-}
+import { hostnameAllowed } from './missionDocumentAdmission.js'
 
 /** Mission admission for a source record (search index filtering and pre-fetch gate). */
 export function sourceAdmittedForMission(source: SourceRecord, mission: ResearchMissionV2): boolean {
@@ -46,6 +41,9 @@ export function sourceAdmittedForMission(source: SourceRecord, mission: Research
     } catch {
       return false
     }
+  }
+  if (source.kind === 'document' || source.kind === 'paper') {
+    return documentSourceMatchesSelectedRef(source, mission)
   }
   return true
 }

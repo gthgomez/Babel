@@ -26,6 +26,14 @@ export interface SourceAdapterReadRequest {
   signal: AbortSignal
 }
 
+export interface DocumentPdfExtractionCoverage {
+  pdf_page_count: number
+  pages_processed: number
+  pages_with_passages: number
+  last_page_with_passage: number | null
+  extraction_complete: boolean
+}
+
 export type SourceAdapterReadResult =
   | {
       operationId: string
@@ -33,6 +41,7 @@ export type SourceAdapterReadResult =
       revision: SourceRevision
       passages: PassageRecord[]
       extraction_version: string
+      document_pdf_extraction_coverage?: DocumentPdfExtractionCoverage
     }
   | {
       operationId: string

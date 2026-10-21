@@ -251,6 +251,10 @@ export type AdmittedHttpGetDispatch = (
 export async function admittedHttpGet(params: {
   url: string
   maxBytes: number
+  /** When set, caps wire bytes independently from decoded body budget. */
+  maxWireBytes?: number
+  /** When set, caps decoded/decompressed bytes independently from wire budget. */
+  maxDecodedBytes?: number
   signal: AbortSignal
   timeoutMs?: number
   env?: NodeJS.ProcessEnv
@@ -265,6 +269,8 @@ export async function admittedHttpGet(params: {
   const redirectChain: string[] = [current.href]
   const timeoutMs = params.timeoutMs ?? 15_000
   const dispatchGet = params.dispatchGet ?? singleGet
+  const maxWireBytes = params.maxWireBytes ?? params.maxBytes
+  const maxDecodedBytes = params.maxDecodedBytes ?? params.maxBytes
 
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
     current = parseAdmittedHttpUrl(current.href, env)
@@ -272,7 +278,7 @@ export async function admittedHttpGet(params: {
       await params.assertHopAdmitted(current)
     }
     const target = await assertPublicNetworkTarget(current, env)
-    const response = await dispatchGet(current, target, params.maxBytes, params.signal, timeoutMs)
+    const response = await dispatchGet(current, target, maxWireBytes, params.signal, timeoutMs)
     const status = response.status
     if (status >= 300 && status < 400) {
       const locationRaw = response.headers.location
@@ -309,7 +315,7 @@ export async function admittedHttpGet(params: {
         const decoded = await decodeAdmittedHttpBody({
           encodedBody: response.body.buffer,
           contentEncodingHeader: response.headers['content-encoding'],
-          maxDecodedBytes: params.maxBytes,
+          maxDecodedBytes,
           signal: params.signal,
         })
         decodedBuffer = decoded.buffer

@@ -34,13 +34,19 @@ import {
 import { acquisitionDiagnosticsFromHttpGet } from './sourceAcquisitionDiagnosticsFromHttp.js'
 import type { SourceAccessFailureCategory } from '../ports/sourceAccessTypes.js'
 import {
-  resolveFetchAdmittedByteLimitForSource,
-  verifyVersionPinnedDocumentAdmission,
-} from './versionPinnedDocumentAcquisition.js'
+  assertDocumentPolicyFetchUrl,
+  assertDocumentPolicyFinalUrl,
+  assertDocumentPolicyRedirectHop,
+  intersectDocumentFetchByteBudgets,
+  resolveMissionDocumentPolicyForFetchUrl,
+  verifyMissionAdmittedDocumentBody,
+} from './missionDocumentAcquisitionPolicy.js'
 
 export type AdmittedHttpGetFn = (params: {
   url: string
   maxBytes: number
+  maxWireBytes?: number
+  maxDecodedBytes?: number
   signal: AbortSignal
   assertHopAdmitted?: (url: URL) => void | Promise<void>
 }) => Promise<AdmittedHttpGetResult>
@@ -48,6 +54,8 @@ export type AdmittedHttpGetFn = (params: {
 export interface FetchSourceAccessPortOptions {
   /** Production path: governed network GET. Tests inject a stub instead of live HTTP. */
   admittedGet?: AdmittedHttpGetFn
+  /** Host decoded/decompressed ceiling (intersected with mission document budgets). */
+  maxDecompressedBytes?: number
   /** Injected transport for the default admittedHttpGet wrapper (tests only). */
   dispatchGet?: AdmittedHttpGetDispatch
   maxAdmittedBytes?: number
@@ -132,6 +140,8 @@ export class FetchSourceAccessPort implements SourceAccessPort {
         admittedHttpGet({
           url: params.url,
           maxBytes: params.maxBytes,
+          ...(params.maxWireBytes !== undefined ? { maxWireBytes: params.maxWireBytes } : {}),
+          ...(params.maxDecodedBytes !== undefined ? { maxDecodedBytes: params.maxDecodedBytes } : {}),
           signal: params.signal,
           ...(params.assertHopAdmitted ? { assertHopAdmitted: params.assertHopAdmitted } : {}),
           ...(dispatchGet ? { dispatchGet } : {}),
@@ -209,17 +219,37 @@ export class FetchSourceAccessPort implements SourceAccessPort {
         }
       }
     }
-    const perSourceLimit = resolveFetchAdmittedByteLimitForSource(
+    const hostWireCeiling = this.options.maxAdmittedBytes ?? DEFAULT_MAX_ADMITTED_BYTES
+    const hostDecodedCeiling = this.options.maxDecompressedBytes ?? hostWireCeiling
+    const mission = this.options.mission
+    const documentPolicy = resolveMissionDocumentPolicyForFetchUrl(
       request.source,
-      this.options.mission,
+      mission,
+      fetchUrl,
     )
-    const limit =
-      perSourceLimit ?? this.options.maxAdmittedBytes ?? DEFAULT_MAX_ADMITTED_BYTES
+    if (documentPolicy) {
+      const preDispatchViolation = assertDocumentPolicyFetchUrl(fetchUrl, documentPolicy)
+      if (preDispatchViolation) {
+        return {
+          operationId: request.operationId,
+          status: 'failed',
+          failureCategory: 'policy_denied',
+          message: preDispatchViolation,
+        }
+      }
+    }
+    const budgets = intersectDocumentFetchByteBudgets(
+      documentPolicy,
+      hostWireCeiling,
+      hostDecodedCeiling,
+    )
+    const limit = Math.max(budgets.maxWireBytes, budgets.maxDecodedBytes)
     try {
-      const mission = this.options.mission
       const response = await this.admittedGet({
         url: fetchUrl,
         maxBytes: limit,
+        maxWireBytes: budgets.maxWireBytes,
+        maxDecodedBytes: budgets.maxDecodedBytes,
         signal: request.signal,
         ...(mission
           ? {
@@ -227,6 +257,16 @@ export class FetchSourceAccessPort implements SourceAccessPort {
                 const violation = validateMissionWebHopUrl(hopUrl.href, request.source, mission)
                 if (violation) {
                   throw new AdmittedNetworkPolicyError(violation)
+                }
+                if (documentPolicy) {
+                  const hopPolicyViolation = assertDocumentPolicyRedirectHop(
+                    hopUrl.href,
+                    documentPolicy,
+                    mission,
+                  )
+                  if (hopPolicyViolation) {
+                    throw new AdmittedNetworkPolicyError(hopPolicyViolation)
+                  }
                 }
               },
             }
@@ -249,21 +289,35 @@ export class FetchSourceAccessPort implements SourceAccessPort {
       const admittedBytes = response.buffer
       const decodeTruncated = response.transportCoding?.decoded_truncated === true
       const truncated = response.truncated || decodeTruncated
-      const pinnedAdmission = verifyVersionPinnedDocumentAdmission(
-        request.source,
-        admittedBytes,
-        truncated,
-      )
-      if (!pinnedAdmission.ok) {
-        return failedFetch(
-          request.operationId,
-          pinnedAdmission.failureCategory,
-          pinnedAdmission.message,
-          acquisitionDiagnosticsFromHttpGet(response, {
-            attemptedUrl: fetchUrl,
-            sourceId: request.source.source_id,
-          }),
+      if (documentPolicy) {
+        const finalUrlViolation = assertDocumentPolicyFinalUrl(response.finalUrl, documentPolicy)
+        if (finalUrlViolation) {
+          return failedFetch(
+            request.operationId,
+            'policy_denied',
+            finalUrlViolation,
+            acquisitionDiagnosticsFromHttpGet(response, {
+              attemptedUrl: fetchUrl,
+              sourceId: request.source.source_id,
+            }),
+          )
+        }
+        const bodyAdmission = verifyMissionAdmittedDocumentBody(
+          documentPolicy,
+          admittedBytes,
+          truncated,
         )
+        if (!bodyAdmission.ok) {
+          return failedFetch(
+            request.operationId,
+            bodyAdmission.failureCategory,
+            bodyAdmission.message,
+            acquisitionDiagnosticsFromHttpGet(response, {
+              attemptedUrl: fetchUrl,
+              sourceId: request.source.source_id,
+            }),
+          )
+        }
       }
       if (admittedBytes.length === 0) {
         return failedFetch(
@@ -351,7 +405,7 @@ export class FetchSourceAccessPort implements SourceAccessPort {
               truncation: {
                 reason: truncationReason ?? 'host_byte_limit',
                 bytes_received: bytesReceivedTotal,
-                bytes_limit: limit,
+                bytes_limit: budgets.maxDecodedBytes,
               },
             }
           : {}),
