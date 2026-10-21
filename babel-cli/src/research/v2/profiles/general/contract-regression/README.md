@@ -16,10 +16,10 @@ export RESEARCH_V2_A_ROOT=/path/to/a/research/v2   # must be checkpoint.1
 export RESEARCH_V2_CHARACTERIZE_PRE_FIX=1
 cd babel-cli && npm ci
 node --import tsx --import ./src/testinfra/register-no-ambient-inference.mjs \
-  --test src/research/v2/profiles/general/contract-regression/aCheckpoint59cd561b.characterization.test.ts
+  --test src/research/v2/profiles/general/contract-regression/aCheckpoint59cd561b.characterization.nonacceptance.probe.ts
 ```
 
-Default `node --test` on this repo **skips** characterization (no intentional failures in combined tree).
+The probe uses **non-`*.test.ts` naming** so unit-shard / TAP inventory does not load it. Default `test:unit` does not include this file.
 
 ## Acceptance (checkpoint.2+, after coordinator agreement)
 
@@ -27,10 +27,12 @@ Default `node --test` on this repo **skips** characterization (no intentional fa
 export RESEARCH_V2_A_ROOT=/path/to/repaired/a/v2
 export RESEARCH_V2_ACCEPTANCE_CONTRACT_VERSION=2026.10.20-checkpoint.2
 export RESEARCH_V2_RUN_ACCEPTANCE=1
-# same node --test invocation for acceptance.checkpoint.test.ts
+cd babel-cli && npm ci
+node --import tsx --import ./src/testinfra/register-no-ambient-inference.mjs \
+  --test src/research/v2/profiles/general/contract-regression/acceptance.checkpoint.test.ts
 ```
 
-Wire acceptance to shared expectations when A’s repaired head is relayed. Until then, acceptance remains skipped.
+`acceptance.checkpoint.test.ts` remains in unit-shard inventory: **default CI passes** without skip markers (acceptance not claimed). Extended placeholder wiring: `acceptance.checkpoint.placeholder.nonacceptance.probe.ts` (opt-in, not inventoried).
 
 ## B-owned fixture tests (always)
 

@@ -9,7 +9,7 @@ export RESEARCH_V2_A_ROOT=/tmp/review-a-contract/babel-cli/src/research/v2
 export RESEARCH_V2_CHARACTERIZE_PRE_FIX=1
 cd /tmp/review-a-contract/babel-cli && npm ci
 node --import tsx --import ./src/testinfra/register-no-ambient-inference.mjs \
-  --test /workspace/babel-cli/src/research/v2/profiles/general/contract-regression/aCheckpoint59cd561b.characterization.test.ts
+  --test /workspace/babel-cli/src/research/v2/profiles/general/contract-regression/aCheckpoint59cd561b.characterization.nonacceptance.probe.ts
 ```
 
 **Result:** 8 subtests failed, 1 passed (G-DEV brief correctly rejected by `ResearchMissionV2Schema` without normalization).
@@ -26,4 +26,4 @@ node --import tsx --import ./src/testinfra/register-no-ambient-inference.mjs \
 | 8 | Integrity vs semantic | Conflated enums on `FindingRecord` |
 | 9 | Brief normalization | Brief invalid (expected); needs explicit B normalization layer |
 
-After A publishes **checkpoint.2**, run `acceptance.checkpoint.test.ts` (same expectations, expect pass). Do not ship intentionally failing characterization tests in the default test path.
+After A publishes a coordinator-agreed checkpoint, run `acceptance.checkpoint.test.ts` with `RESEARCH_V2_RUN_ACCEPTANCE=1` (inventory-safe default when env unset). Do not ship intentionally failing characterization probes in the default test path.

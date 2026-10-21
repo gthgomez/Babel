@@ -1,7 +1,8 @@
 /**
- * PRE-FIX CHARACTERIZATION ONLY — not acceptance, not a B-owned schema.
- * Skipped unless RESEARCH_V2_CHARACTERIZE_PRE_FIX=1 and RESEARCH_V2_A_ROOT set.
- * Requires tsx to import A modules. Evidence: CHARACTERIZATION_EVIDENCE_59cd561b.md
+ * PRE-FIX CHARACTERIZATION ONLY — not acceptance, not CI inventory, not a B-owned schema.
+ * Opt-in manual probe (non-`*.test.ts`); excluded from `test:unit` / unit-shard TAP inventory.
+ * Requires: RESEARCH_V2_CHARACTERIZE_PRE_FIX=1 and RESEARCH_V2_A_ROOT (checkpoint.1 A tree).
+ * Evidence: CHARACTERIZATION_EVIDENCE_59cd561b.md
  */
 import assert from 'node:assert/strict'
 import { existsSync, readFileSync } from 'node:fs'
@@ -14,6 +15,15 @@ const aRoot = process.env.RESEARCH_V2_A_ROOT?.trim() ?? ''
 
 function aPath(...segments: string[]): string {
   return join(aRoot, ...segments)
+}
+
+function assertCharacterizationEnabled(): void {
+  assert.equal(
+    process.env.RESEARCH_V2_CHARACTERIZE_PRE_FIX,
+    '1',
+    'set RESEARCH_V2_CHARACTERIZE_PRE_FIX=1 to run this nonacceptance probe',
+  )
+  assertARoot()
 }
 
 function assertARoot(): void {
@@ -38,16 +48,14 @@ function readContractVersion(): string {
   return captured
 }
 
-const characterize = process.env.RESEARCH_V2_CHARACTERIZE_PRE_FIX === '1' && Boolean(aRoot)
-const suite = characterize ? describe : describe.skip
-
-suite('PRE-FIX characterization: A checkpoint.1 (59cd561b) — not acceptance', () => {
+describe('PRE-FIX characterization probe: A checkpoint.1 (59cd561b) — not acceptance', () => {
   it('guards contract version is checkpoint.1 before characterization', () => {
-    assertARoot()
+    assertCharacterizationEnabled()
     assert.equal(readContractVersion(), '2026.10.20-checkpoint.1')
   })
 
   it('1: store listEvents scopes all writes to mission_id', async () => {
+    assertCharacterizationEnabled()
     const { InMemoryResearchStore } = await importAModule('fixtures/fakePorts.ts')
     const { exampleTechnicalMissionFixture } = await importAModule('fixtures/exampleMission.ts')
     const { SourceRecordSchema } = await importAModule('contracts/sources.ts')
@@ -74,12 +82,12 @@ suite('PRE-FIX characterization: A checkpoint.1 (59cd561b) — not acceptance', 
   })
 
   it('2: ResearchStore exposes typed external operation append APIs', () => {
-    assertARoot()
+    assertCharacterizationEnabled()
     assert.match(readFileSync(aPath('ports', 'researchStore.ts'), 'utf8'), /appendExternalOperation/)
   })
 
   it('3: SourceAdapter read/extract and SourceAccessPort admitted acquisition', () => {
-    assertARoot()
+    assertCharacterizationEnabled()
     const adapterSrc = readFileSync(aPath('ports', 'sourceAdapter.ts'), 'utf8')
     const accessSrc = readFileSync(aPath('ports', 'sourceAccessPort.ts'), 'utf8')
     assert.match(adapterSrc, /read\s*\([^)]*SourceRead|extract\s*\(/)
@@ -88,6 +96,7 @@ suite('PRE-FIX characterization: A checkpoint.1 (59cd561b) — not acceptance', 
   })
 
   it('4: Passage text_ref and locators reject invalid discriminated shapes', async () => {
+    assertCharacterizationEnabled()
     const { PassageRecordSchema } = await importAModule('contracts/passages.ts')
     const parse = PassageRecordSchema as { parse: (v: unknown) => unknown }
     const hash = 'a'.repeat(64)
@@ -102,6 +111,7 @@ suite('PRE-FIX characterization: A checkpoint.1 (59cd561b) — not acceptance', 
   })
 
   it('5: ResearchModelPort rejects malformed structured output', async () => {
+    assertCharacterizationEnabled()
     const { FakeResearchModelPort } = await importAModule('fixtures/fakePorts.ts')
     const Model = FakeResearchModelPort as new () => {
       scriptOutput: (id: string, o: Record<string, unknown>) => void
@@ -120,6 +130,7 @@ suite('PRE-FIX characterization: A checkpoint.1 (59cd561b) — not acceptance', 
   })
 
   it('6: fake read issues new revision_id when body bytes change', async () => {
+    assertCharacterizationEnabled()
     const { FakeSourceAccessPort } = await importAModule('fixtures/fakePorts.ts')
     const { SourceRecordSchema } = await importAModule('contracts/sources.ts')
     const parse = SourceRecordSchema as { parse: (v: unknown) => unknown }
@@ -155,6 +166,7 @@ suite('PRE-FIX characterization: A checkpoint.1 (59cd561b) — not acceptance', 
   })
 
   it('7: usage cost_status unknown cannot carry total_cost_usd', async () => {
+    assertCharacterizationEnabled()
     const { ModelRouteReceiptSchema } = await importAModule('contracts/common.ts')
     const parse = ModelRouteReceiptSchema as { parse: (v: unknown) => unknown }
     assert.throws(() =>
@@ -170,12 +182,14 @@ suite('PRE-FIX characterization: A checkpoint.1 (59cd561b) — not acceptance', 
   })
 
   it('8: citation integrity enum separate from semantic support', () => {
+    assertCharacterizationEnabled()
     const findingsSrc = readFileSync(aPath('contracts', 'findings.ts'), 'utf8')
     assert.match(findingsSrc, /valid.*invalid.*not_checked|CitationIntegrity/i)
     assert.doesNotMatch(findingsSrc, /source_integrity: SourceIntegrityResultSchema/)
   })
 
   it('9: G-DEV brief is not a ResearchMissionV2 without normalization', async () => {
+    assertCharacterizationEnabled()
     const { ResearchMissionV2Schema } = await importAModule('contracts/mission.ts')
     const parse = ResearchMissionV2Schema as { parse: (v: unknown) => unknown }
     const brief = JSON.parse(

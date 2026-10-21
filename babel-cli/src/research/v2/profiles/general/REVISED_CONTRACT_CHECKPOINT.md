@@ -88,7 +88,7 @@ Before contract freeze.2, B will review:
 
 **Pre-fix characterization (not acceptance):** opt-in only; evidence frozen in `contract-regression/CHARACTERIZATION_EVIDENCE_59cd561b.md`. Default repo tests **skip** intentional A checkpoint.1 failures.
 
-**Post-repair acceptance:** after coordinator agrees checkpoint.2, set `RESEARCH_V2_RUN_ACCEPTANCE=1` and run `acceptance.checkpoint.test.ts` against repaired `RESEARCH_V2_A_ROOT`.
+**Post-repair acceptance:** after coordinator agrees a checkpoint version, set `RESEARCH_V2_RUN_ACCEPTANCE=1` and run `acceptance.checkpoint.test.ts` against repaired `RESEARCH_V2_A_ROOT` (default CI passes without claiming acceptance). Placeholder probe: `acceptance.checkpoint.placeholder.nonacceptance.probe.ts`.
 
 Prescribed push guards (no waiver assumed): `agent-preflight`, `check-public-content-policy`, `run-public-secret-scan -Strict -RequireExternalScanner`. Maintainer pre-merge additionally requires `validate-public-release.ps1 -Strict -RequireSupplementalPolicy` with real `BABEL_PRIVATE_SCRUB_POLICY_PATH` or approved `-SupplementalPolicyPath` (absence blocks maintainer pre-merge only, not ordinary push scrub).
 
