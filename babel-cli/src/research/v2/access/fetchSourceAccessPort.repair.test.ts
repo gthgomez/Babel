@@ -38,6 +38,7 @@ describe('FetchSourceAccessPort M1.3 review repairs', () => {
         requestedUrl: 'https://example.test/a',
         finalUrl: 'https://cdn.example.test/b',
         redirectChain: ['https://example.test/a', 'https://cdn.example.test/b'],
+        transportCoding: null,
       }),
     })
     const result = await port.fetchContent({
@@ -75,6 +76,7 @@ describe('FetchSourceAccessPort M1.3 review repairs', () => {
           requestedUrl: 'https://example.test/big',
           finalUrl: 'https://example.test/big',
           redirectChain: ['https://example.test/big'],
+          transportCoding: null,
         }
       },
     })

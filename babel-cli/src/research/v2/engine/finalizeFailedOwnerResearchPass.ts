@@ -2,6 +2,11 @@ import type { MissionWriteContext } from '../contracts/common.js'
 import type { ResearchMissionV2 } from '../contracts/mission.js'
 import type { ResearchReportV2 } from '../contracts/plan.js'
 import type { ResearchStore } from '../ports/researchStore.js'
+import {
+  limitationsForFailedPass,
+  resolveFailedPassStoppingReason,
+  type ResearchPassStoppingReason,
+} from './researchPassFailure.js'
 
 export function buildFailedPassTerminalReport(params: {
   mission: ResearchMissionV2
@@ -9,6 +14,7 @@ export function buildFailedPassTerminalReport(params: {
   generatedAt: string
   failurePhase: string
   message: string
+  stoppingReason: ResearchPassStoppingReason
 }): ResearchReportV2 {
   const summary = `Research pass failed during ${params.failurePhase}. ${params.message}`.slice(0, 4000)
   return {
@@ -19,10 +25,10 @@ export function buildFailedPassTerminalReport(params: {
     unanswered_questions: [],
     coverage_notes:
       'Terminal receipt recorded after admitted pass failure; external operations retain settled failure accounting.',
-    limitations: ['pass_failed_before_retrieval_or_synthesis'],
+    limitations: limitationsForFailedPass(params.stoppingReason),
     source_cutoff: 'unknown',
     acceptance_state: 'not_accepted',
-    stopping_reason: 'provider_invoke_failed',
+    stopping_reason: params.stoppingReason,
     finding_ids: [],
     citation_passage_ids: [],
     generated_at: params.generatedAt,
@@ -38,9 +44,14 @@ export async function finalizeFailedOwnerResearchPass(params: {
   planRevisionId: string
   failurePhase: string
   message: string
+  cause?: unknown
   now?: () => string
 }): Promise<boolean> {
   const now = params.now ?? (() => new Date().toISOString())
+  const stoppingReason = resolveFailedPassStoppingReason(
+    params.cause ?? new Error(params.message),
+    params.failurePhase,
+  )
   const fence = params.store.readMissionWriteFence(params.mission.mission_id)
   if (fence.terminal_report) {
     return false
@@ -60,6 +71,7 @@ export async function finalizeFailedOwnerResearchPass(params: {
       generatedAt: now(),
       failurePhase: params.failurePhase,
       message: params.message,
+      stoppingReason,
     }),
   )
   return true

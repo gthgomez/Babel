@@ -239,6 +239,9 @@ export class FetchSourceAccessPort implements SourceAccessPort {
             final_url: response.finalUrl,
             redirect_chain: response.redirectChain,
             repository_file_pin: { pinned_blob_url: observedUrl },
+            ...(response.transportCoding
+              ? { http_content_coding: response.transportCoding }
+              : {}),
           }
         } catch (err) {
           const message = err instanceof TechnicalRepositoryPinError ? err.message : String(err)
@@ -254,6 +257,9 @@ export class FetchSourceAccessPort implements SourceAccessPort {
           requested_url: response.requestedUrl,
           final_url: response.finalUrl,
           redirect_chain: response.redirectChain,
+          ...(response.transportCoding
+            ? { http_content_coding: response.transportCoding }
+            : {}),
         }
       }
       const admitted: AdmittedContent = {

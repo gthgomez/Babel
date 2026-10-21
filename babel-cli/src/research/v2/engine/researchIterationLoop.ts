@@ -12,6 +12,7 @@ import {
 } from './planFromModelOutput.js'
 import { settleModelOperation } from './settleModelOperation.js'
 import { unknownUsageSettlement } from './settleExternalOperation.js'
+import { researchPassFailedFromModelResult } from './researchPassFailure.js'
 import {
   assertModelInvocationReceiptBound,
   ModelReceiptBindingError,
@@ -189,7 +190,11 @@ export async function runAdmittedPlanningIteration(
       modelResult,
       now(),
     )
-    throw new Error(modelResult.message)
+    throw researchPassFailedFromModelResult(
+      modelResult.message,
+      modelResult.failureCategory,
+      'planning',
+    )
   }
 
   try {

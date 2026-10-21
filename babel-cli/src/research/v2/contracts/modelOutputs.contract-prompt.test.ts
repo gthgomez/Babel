@@ -118,8 +118,10 @@ describe('research model output contract prompt sync', () => {
       '../fixtures/campaign/G-L1-live-malformed-plan-questions-response.json',
     )
     const fixture = JSON.parse(readFileSync(fixturePath, 'utf8')) as {
-      raw_model_payload: unknown
+      representative_validation_failure_payload: unknown
     }
-    assert.throws(() => PlanQuestionsOutputSchema.parse(fixture.raw_model_payload))
+    assert.throws(() =>
+      PlanQuestionsOutputSchema.parse(fixture.representative_validation_failure_payload),
+    )
   })
 })

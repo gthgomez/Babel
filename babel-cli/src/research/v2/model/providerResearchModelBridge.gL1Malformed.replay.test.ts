@@ -15,17 +15,17 @@ const fixturePath = join(
 
 function malformedRunner(): Pick<LlmRunner, 'execute'> {
   const fixture = JSON.parse(readFileSync(fixturePath, 'utf8')) as {
-    raw_model_payload: Record<string, unknown>
+    representative_validation_failure_payload: Record<string, unknown>
   }
   return {
     async execute<T>(_prompt: string, _schema: ZodType<T>): Promise<T> {
-      return fixture.raw_model_payload as T
+      return fixture.representative_validation_failure_payload as T
     },
   }
 }
 
 describe('ProviderResearchModelBridge G-L1 malformed replay (B ac011dea)', () => {
-  it('fails closed with provider_invoke_failed and preserves usage settlement', async () => {
+  it('fails closed with structured_output_validation_failed and preserves usage settlement', async () => {
     const bridge = new ProviderResearchModelBridge({
       runner: malformedRunner(),
       backendKey: 'research-v2-cli',
@@ -51,7 +51,7 @@ describe('ProviderResearchModelBridge G-L1 malformed replay (B ac011dea)', () =>
     })
     assert.equal(result.status, 'failed')
     if (result.status === 'failed') {
-      assert.equal(result.failureCategory, 'provider_invoke_failed')
+      assert.equal(result.failureCategory, 'structured_output_validation_failed')
       assert.match(result.message, /questions|text|importance|Unrecognized|invalid/i)
       assert.equal(result.usageSettlement.attempt_id, 'att-plan')
     }

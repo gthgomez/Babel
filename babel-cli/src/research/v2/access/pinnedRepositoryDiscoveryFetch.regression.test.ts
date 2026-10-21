@@ -48,6 +48,7 @@ describe('pinned repository discovery → raw fetch → technical read', () => {
           requestedUrl: params.url,
           finalUrl: params.url,
           redirectChain: [params.url],
+          transportCoding: null,
         }
       },
     })

@@ -3,6 +3,7 @@ import type {
   RunnerCallbacks,
   RunnerInvocationMetadata,
 } from '../../../runners/base.js'
+import { ZodError } from 'zod'
 import type { CostProvenance } from '../contracts/common.js'
 import { modelOutputSchemaForKind, parseValidatedModelOutput } from '../contracts/modelOutputs.js'
 import { buildResearchV2StructuredModelPrompt } from './researchV2ProviderModelPrompt.js'
@@ -160,10 +161,12 @@ export class ProviderResearchModelBridge implements ResearchModelPort {
           usageSettlement: usageFromMetadata(request.attemptId, invocationMeta),
         }
       }
+      const failureCategory =
+        err instanceof ZodError ? 'structured_output_validation_failed' : 'provider_invoke_failed'
       return {
         status: 'failed',
         operationId: request.operationId,
-        failureCategory: 'provider_invoke_failed',
+        failureCategory,
         message: err instanceof Error ? err.message : String(err),
         usageSettlement: usageFromMetadata(request.attemptId, invocationMeta),
       }

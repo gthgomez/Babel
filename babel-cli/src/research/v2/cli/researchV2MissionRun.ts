@@ -99,6 +99,7 @@ function injectedOfflineAccess(mission: ResearchMissionV2) {
       requestedUrl: technicalRepositoryCorpusFinalUrl,
       finalUrl: technicalRepositoryCorpusFinalUrl,
       redirectChain: [technicalRepositoryCorpusFinalUrl],
+      transportCoding: null,
     }),
   })
   return port
@@ -241,6 +242,7 @@ export async function runResearchV2EnginePassOnOwner(options: {
         planRevisionId,
         failurePhase: 'admitted_research_pass',
         message,
+        cause: err,
       })
       if (appended) {
         terminalReportEmitted = true

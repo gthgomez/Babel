@@ -9,12 +9,22 @@ export const RepositoryFilePinProvenanceSchema = z
   })
   .strict()
 
+export const HttpContentCodingProvenanceSchema = z
+  .object({
+    content_encodings: z.array(z.string().min(1)),
+    encoded_byte_length: z.number().int().nonnegative(),
+    decoded_byte_length: z.number().int().nonnegative(),
+    admitted_representation: z.literal('decoded_bytes'),
+  })
+  .strict()
+
 export const RedirectProvenanceSchema = z
   .object({
     requested_url: z.string().url(),
     final_url: z.string().url(),
     redirect_chain: z.array(z.string().url()),
     repository_file_pin: RepositoryFilePinProvenanceSchema.optional(),
+    http_content_coding: HttpContentCodingProvenanceSchema.optional(),
   })
   .strict()
 

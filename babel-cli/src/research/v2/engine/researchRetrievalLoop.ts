@@ -14,6 +14,7 @@ import {
   settleExternalOperation,
   unknownUsageSettlement,
 } from './settleExternalOperation.js'
+import { ResearchPassFailedError } from './researchPassFailure.js'
 import {
   RetrievalEvidenceBindingError,
   validateRetrievalEvidenceBindings,
@@ -286,7 +287,10 @@ export async function runAdmittedRetrievalIteration(
       },
       now(),
     )
-    throw new Error(read.message)
+    throw new ResearchPassFailedError(read.message, {
+      stoppingReason: 'source_retrieval_failed',
+      failurePhase: 'retrieval',
+    })
   }
 
   throwIfAborted(request.signal, 'evidence persistence')
