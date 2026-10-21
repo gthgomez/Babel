@@ -24,7 +24,11 @@ export type SourceDiscoverResult =
       acquisition_diagnostics?: SourceAcquisitionDiagnostics
       search_provider_receipt?: SourceSearchProviderReceipt
     }
-  | { operationId: string; status: 'cancelled' }
+  | {
+      operationId: string
+      status: 'cancelled'
+      search_provider_receipt?: SourceSearchProviderReceipt
+    }
 
 export interface SourceAdapterReadRequest {
   operationId: string

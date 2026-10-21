@@ -14,8 +14,10 @@ import {
   validateFetchBinding,
 } from '../documents/readBinding.js'
 import {
-  mergeDiscoverSearchReceipts,
-} from '../../engine/sourceDiscoverSearchReceipt.js'
+  cancelledDiscoverResult,
+  receiptFromSourceSearchResult,
+} from './discoverSearchReceiptHandoff.js'
+import { mergeDiscoverSearchReceipts } from '../../engine/sourceDiscoverSearchReceipt.js'
 import {
   passagesFromAdmittedStaticHtml,
   STATIC_HTML_EXTRACTION_VERSION,
@@ -37,7 +39,7 @@ export class GeneralWebAdapter implements SourceAdapter {
     access: SourceAccessPort,
   ): Promise<SourceDiscoverResult> {
     if (request.signal.aborted) {
-      return { operationId: request.operationId, status: 'cancelled' }
+      return cancelledDiscoverResult(request.operationId)
     }
     const search = await access.search({
       operationId: `${request.operationId}:search`,
@@ -45,11 +47,12 @@ export class GeneralWebAdapter implements SourceAdapter {
       sourceClasses: [...this.supportedKinds],
       signal: request.signal,
     })
+    const webSearchReceipt = receiptFromSourceSearchResult(search)
     if (request.signal.aborted) {
-      return { operationId: request.operationId, status: 'cancelled' }
+      return cancelledDiscoverResult(request.operationId, webSearchReceipt)
     }
     if (search.status === 'cancelled') {
-      return { operationId: request.operationId, status: 'cancelled' }
+      return cancelledDiscoverResult(request.operationId, webSearchReceipt)
     }
     if (search.status === 'failed') {
       const failedReceipt = mergeDiscoverSearchReceipts(search.receipt)
@@ -71,10 +74,10 @@ export class GeneralWebAdapter implements SourceAdapter {
         signal: request.signal,
       })
       if (request.signal.aborted) {
-        return { operationId: request.operationId, status: 'cancelled' }
+        return cancelledDiscoverResult(request.operationId, searchReceipt)
       }
       if (docSearch.status === 'cancelled') {
-        return { operationId: request.operationId, status: 'cancelled' }
+        return cancelledDiscoverResult(request.operationId, searchReceipt)
       }
       if (docSearch.status === 'failed') {
         const failedReceipt =

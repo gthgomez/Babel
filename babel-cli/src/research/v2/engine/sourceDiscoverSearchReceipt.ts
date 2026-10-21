@@ -6,6 +6,7 @@ import {
 import type { UsageSettlement } from '../ports/researchModelPort.js'
 import type { ResearchStoreEvent } from '../ports/researchStore.js'
 import type { SourceSearchProviderReceipt as PortSearchReceipt } from '../ports/sourceAccessPort.js'
+import type { SourceDiscoverResult } from '../ports/sourceAdapter.js'
 
 export function sanitizeSourceSearchProviderReceipt(
   receipt: PortSearchReceipt,
@@ -118,6 +119,19 @@ export function deriveSearchProviderReportLimitations(
     limitations.push(...reportLimitationsFromSearchProviderReceipt(completion.search_provider_receipt))
   }
   return limitations
+}
+
+export function searchProviderReceiptFromDiscover(
+  discover: SourceDiscoverResult,
+): SourceSearchProviderReceipt | undefined {
+  if (
+    discover.status === 'ok' ||
+    discover.status === 'failed' ||
+    discover.status === 'cancelled'
+  ) {
+    return discover.search_provider_receipt
+  }
+  return undefined
 }
 
 export function sourceSearchCompletionOutcome(params: {

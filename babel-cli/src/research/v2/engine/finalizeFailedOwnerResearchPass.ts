@@ -7,6 +7,7 @@ import {
   resolveFailedPassStoppingReason,
   type ResearchPassStoppingReason,
 } from './researchPassFailure.js'
+import { deriveSearchProviderReportLimitations } from './sourceDiscoverSearchReceipt.js'
 
 export function buildFailedPassTerminalReport(params: {
   mission: ResearchMissionV2
@@ -15,6 +16,7 @@ export function buildFailedPassTerminalReport(params: {
   failurePhase: string
   message: string
   stoppingReason: ResearchPassStoppingReason
+  searchProviderLimitations?: readonly string[]
 }): ResearchReportV2 {
   const summary = `Research pass failed during ${params.failurePhase}. ${params.message}`.slice(0, 4000)
   return {
@@ -25,7 +27,10 @@ export function buildFailedPassTerminalReport(params: {
     unanswered_questions: [],
     coverage_notes:
       'Terminal receipt recorded after admitted pass failure; external operations retain settled failure accounting.',
-    limitations: limitationsForFailedPass(params.stoppingReason),
+    limitations: [
+      ...limitationsForFailedPass(params.stoppingReason),
+      ...(params.searchProviderLimitations ?? []),
+    ],
     source_cutoff: 'unknown',
     acceptance_state: 'not_accepted',
     stopping_reason: params.stoppingReason,
@@ -58,6 +63,8 @@ export async function finalizeFailedOwnerResearchPass(params: {
   }
   const planRevisionId =
     fence.active_plan_revision_id ?? `${params.planRevisionId}-bootstrap`
+  const events = await params.store.listEvents(params.mission.mission_id)
+  const searchProviderLimitations = deriveSearchProviderReportLimitations(events)
   const ctx: MissionWriteContext = {
     mission_id: params.mission.mission_id,
     plan_revision_id: planRevisionId,
@@ -72,6 +79,7 @@ export async function finalizeFailedOwnerResearchPass(params: {
       failurePhase: params.failurePhase,
       message: params.message,
       stoppingReason,
+      searchProviderLimitations,
     }),
   )
   return true

@@ -179,6 +179,52 @@ test('GeneralWebAdapter.discover: passes search_provider_receipt on failed port 
   assert.equal(result.search_provider_receipt?.exa_lite?.request_id, 'req-billed-empty')
 })
 
+test('GeneralWebAdapter.discover: preserves search_provider_receipt on cancelled discover after billed search', async () => {
+  const controller = new AbortController()
+  const port: SourceAccessPort = {
+    async search(request: SourceSearchRequest) {
+      controller.abort()
+      return {
+        operationId: request.operationId,
+        status: 'ok',
+        hits: [],
+        receipt: {
+          configured_provider_id: 'exa_lite',
+          effective_provider_id: 'exa_lite',
+          exa_participation: 'exa_primary_empty_billed',
+          exa_lite: {
+            request_id: 'req-cancel-preserve',
+            resolved_search_type: null,
+            warnings: [],
+            notices: [],
+            estimated_cost_dollars: 0.003,
+            estimated_cost_detail: null,
+          },
+        },
+      }
+    },
+    async fetchContent(request: SourceFetchRequest) {
+      return {
+        operationId: request.operationId,
+        status: 'failed',
+        failureCategory: 'policy_denied',
+        message: 'discover-only',
+      }
+    },
+  }
+  const result = await new GeneralWebAdapter().discover(
+    {
+      operationId: 'discover-cancel-receipt',
+      query: 'q',
+      signal: controller.signal,
+    },
+    port,
+  )
+  assert.equal(result.status, 'cancelled')
+  if (result.status !== 'cancelled') return
+  assert.equal(result.search_provider_receipt?.exa_lite?.request_id, 'req-cancel-preserve')
+})
+
 test('GeneralWebAdapter.discover: falls back to document search when web hits empty', async () => {
   const docSource: SourceRecord = {
     source_id: 'src-doc-fallback',

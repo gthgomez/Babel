@@ -32,6 +32,7 @@ import { resolveMissionWebRetrievalCandidates } from '../access/missionWebRetrie
 import { stampCoverageSourceSlotOnSource } from './missionCoverageSourceSlots.js'
 import {
   reportLimitationsFromSearchProviderReceipt,
+  searchProviderReceiptFromDiscover,
   sourceSearchCompletionOutcome,
 } from './sourceDiscoverSearchReceipt.js'
 import { slotOperationSuffix } from './technicalRetrievalComposition.js'
@@ -213,13 +214,23 @@ export async function runAdmittedRetrievalIteration(
   }
 
   if (discover.status === 'cancelled' || request.signal.aborted) {
+    const cancelledSearchReceipt = searchProviderReceiptFromDiscover(discover)
     await settleExternalOperation(
       request.store,
       ctx,
       ctx.mission_id,
       request.searchOperationId,
       request.searchAttemptId,
-      { settlement: 'cancelled' },
+      {
+        settlement: 'cancelled',
+        ...(cancelledSearchReceipt
+          ? sourceSearchCompletionOutcome({
+              discoverReceipt: cancelledSearchReceipt,
+              searchAttemptId: request.searchAttemptId,
+              completedAt: now(),
+            })
+          : {}),
+      },
       now(),
     )
     throw RetrievalIterationFailedAfterAcquireError.withMessage(
@@ -299,6 +310,13 @@ export async function runAdmittedRetrievalIteration(
         settlement: 'failed',
         failureCategory: 'no_candidates',
         message: 'discover returned no admitted source candidates',
+        ...(searchProviderReceipt
+          ? sourceSearchCompletionOutcome({
+              discoverReceipt: searchProviderReceipt,
+              searchAttemptId: request.searchAttemptId,
+              completedAt: now(),
+            })
+          : {}),
       },
       now(),
     )
