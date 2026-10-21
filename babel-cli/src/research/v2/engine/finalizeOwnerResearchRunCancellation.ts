@@ -3,6 +3,7 @@ import type { ResearchMissionV2 } from '../contracts/mission.js'
 import type { ResearchReportV2 } from '../contracts/plan.js'
 import type { ExternalOperationIntent } from '../contracts/operations.js'
 import type { ResearchStore, ResearchStoreEvent } from '../ports/researchStore.js'
+import { deriveSearchProviderReportLimitations } from './sourceDiscoverSearchReceipt.js'
 import { settleExternalOperation, unknownUsageSettlement } from './settleExternalOperation.js'
 import { settleModelOperation } from './settleModelOperation.js'
 
@@ -42,6 +43,7 @@ function buildCancelledTerminalReport(params: {
   mission: ResearchMissionV2
   planRevisionId: string
   generatedAt: string
+  searchProviderLimitations?: readonly string[]
 }): ResearchReportV2 {
   return {
     mission_id: params.mission.mission_id,
@@ -50,7 +52,7 @@ function buildCancelledTerminalReport(params: {
     answer_summary: 'Owner session cancelled before research pass completed.',
     unanswered_questions: [],
     coverage_notes: 'cancelled during admitted engine pass',
-    limitations: [],
+    limitations: [...(params.searchProviderLimitations ?? [])],
     source_cutoff: 'unknown',
     acceptance_state: 'not_accepted',
     stopping_reason: 'user_cancel',
@@ -82,7 +84,7 @@ export async function finalizeOwnerResearchRunCancellation(params: {
     plan_revision_id: planRevisionId,
     writer_generation: fence.writer_generation,
   }
-  const events = await params.store.listEvents(params.mission.mission_id)
+  let events = await params.store.listEvents(params.mission.mission_id)
   for (const intent of unsettledOperationIntents(events, params.mission.mission_id)) {
     if (intent.operation_kind === 'model_invoke') {
       await settleModelOperation(
@@ -114,12 +116,15 @@ export async function finalizeOwnerResearchRunCancellation(params: {
       )
     }
   }
+  events = await params.store.listEvents(params.mission.mission_id)
+  const searchProviderLimitations = deriveSearchProviderReportLimitations(events)
   await params.store.appendTerminalReport(
     ctx,
     buildCancelledTerminalReport({
       mission: params.mission,
       planRevisionId,
       generatedAt: now(),
+      searchProviderLimitations,
     }),
   )
   return true

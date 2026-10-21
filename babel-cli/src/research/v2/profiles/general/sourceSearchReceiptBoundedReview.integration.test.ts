@@ -21,6 +21,7 @@ import { createGovernedSourceAccessPort } from '../../access/governedSourceAcces
 import { DurableResearchStore } from '../../persistence/durableResearchStore.js'
 import { GENERAL_WEB_ADAPTER_ID } from '../../adapters/web/generalWebAdapter.js'
 import { finalizeFailedOwnerResearchPass } from '../../engine/finalizeFailedOwnerResearchPass.js'
+import { finalizeOwnerResearchRunCancellation } from '../../engine/finalizeOwnerResearchRunCancellation.js'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const devCorpusRoot = join(here, 'fixtures/dev-corpus')
@@ -276,6 +277,28 @@ describe('source search receipt bounded review (durable)', () => {
           }),
         /cancelled/,
       )
+
+      const completionEvents = await store.listEvents(mission.mission_id)
+      const completionBeforeTerminal = searchCompletion(completionEvents, searchOperationId)
+      assert.equal(completionBeforeTerminal?.settlement, 'cancelled')
+      assert.equal(
+        completionBeforeTerminal?.search_provider_receipt?.exa_lite?.request_id,
+        'exa-req-cancel-accounting',
+      )
+      assert.equal(completionBeforeTerminal?.usage_settlement?.cost.status, 'estimated')
+
+      const appended = await finalizeOwnerResearchRunCancellation({
+        store,
+        mission,
+        now: () => FIXED_NOW,
+      })
+      assert.equal(appended, true)
+      const duplicate = await finalizeOwnerResearchRunCancellation({
+        store,
+        mission,
+        now: () => FIXED_NOW,
+      })
+      assert.equal(duplicate, false)
       await store.close()
 
       const reopened = await DurableResearchStore.open(dir)
@@ -288,6 +311,21 @@ describe('source search receipt bounded review (durable)', () => {
       )
       assert.equal(completion?.usage_settlement?.cost.status, 'estimated')
       assert.equal(events.filter((e) => e.kind === 'passage_recorded').length, 0)
+      const report = terminalReportFromEvents(events)
+      assert.equal(report?.terminal_state, 'cancelled')
+      assert.ok(
+        report?.limitations.some((l) => l.includes('exa_participation:exa_primary_empty_billed')),
+      )
+      assert.ok(report?.limitations.some((l) => l.includes('exa-req-cancel-accounting')))
+      assert.ok(
+        report?.limitations.some((l) => l.includes('exa_lite_provider_estimated_cost_usd:0.001')),
+      )
+      assert.ok(
+        report?.limitations.some((l) =>
+          l.includes('search_provider_degraded:exa_lite->duckduckgo_html_fallback'),
+        ),
+      )
+      assert.equal(events.filter((e) => e.kind === 'terminal_receipt').length, 1)
       await reopened.close()
     } finally {
       await rm(dir, { recursive: true, force: true })
