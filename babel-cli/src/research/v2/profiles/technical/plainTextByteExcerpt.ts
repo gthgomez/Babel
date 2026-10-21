@@ -30,8 +30,15 @@ export function passagesFromValidatedPlainBytes(
   maxPassageBytes = MAX_TECHNICAL_PASSAGE_BYTES,
 ): PassageRecord[] {
   const { prefix, truncated } = utf8SafePrefix(sourceBytes, maxPassageBytes)
+  const excerptBytes = sourceBytes.subarray(0, prefix.length)
+  if (!excerptBytes.equals(prefix)) {
+    throw new Error('technical byte excerpt slice does not match admitted prefix bytes')
+  }
   const text = prefix.toString('utf8')
   const textHash = sha256(prefix)
+  if (sha256(excerptBytes) !== textHash) {
+    throw new Error('technical byte excerpt hash does not match emitted passage hash')
+  }
   const passageId = deterministicPassageId(revision.revision_id, textHash)
   const endOffset = prefix.length
   const locator: PassageRecord['locator'] = truncated

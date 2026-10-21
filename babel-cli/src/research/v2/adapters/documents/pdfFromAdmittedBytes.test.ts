@@ -32,8 +32,22 @@ test('passagesFromAdmittedPdf: two-page fixture with page locators', async () =>
   assert.equal(passages[0]?.locator.start_page, 1)
   assert.match(passages[0]?.text_ref.mode === 'inline' ? passages[0].text_ref.text : '', /retention 90 days/)
   assert.match(passages[1]?.text_ref.mode === 'inline' ? passages[1].text_ref.text : '', /2026-03-15/)
-  for (const p of passages) PassageRecordSchema.parse(p)
+  for (const p of passages) {
+    PassageRecordSchema.parse(p)
+    assert.ok(p.integrity_verification)
+    assert.equal(p.integrity_verification?.extraction_version, PDF_TEXT_EXTRACTION_VERSION)
+  }
   assert.equal(PDF_TEXT_EXTRACTION_VERSION, 'general-pdf-text/0.1.0')
+})
+
+test('passagesFromAdmittedPdf: synthesizePageText hook does not emit parser integrity receipts', async () => {
+  const passages = await passagesFromAdmittedPdf(pdfAdmitted(), undefined, {
+    synthesizePageText: { 1: 'Synthetic page one', 2: 'Synthetic page two' },
+  })
+  assert.equal(passages.length, 2)
+  for (const p of passages) {
+    assert.equal(p.integrity_verification, undefined)
+  }
 })
 
 test('passagesFromAdmittedPdf: cancellation during delayed page loop', async () => {

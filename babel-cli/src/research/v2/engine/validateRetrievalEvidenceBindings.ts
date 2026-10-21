@@ -5,6 +5,7 @@ import type { SourceRecord } from '../contracts/sources.js'
 import type { SourceRevision } from '../contracts/sources.js'
 import type { SourceAdapterReadResult, SourceDiscoverResult } from '../ports/sourceAdapter.js'
 import type { ResearchMissionV2 } from '../contracts/mission.js'
+import { assertPassageIntegrityReceiptMatchesRead } from '../integrity/passageIntegrityReceipt.js'
 
 export class RetrievalEvidenceBindingError extends Error {
   constructor(message: string) {
@@ -51,6 +52,17 @@ export function validateRetrievalEvidenceBindings(params: {
   for (const passage of params.read.passages) {
     if (passage.source_revision_id !== revision.revision_id) {
       throw new RetrievalEvidenceBindingError('passage source_revision_id does not match revision')
+    }
+    try {
+      assertPassageIntegrityReceiptMatchesRead({
+        passage,
+        candidate: params.candidate,
+        revision,
+        extractionVersion: params.read.extraction_version,
+      })
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err)
+      throw new RetrievalEvidenceBindingError(message)
     }
   }
   return { revision, passages: params.read.passages }

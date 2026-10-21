@@ -9,6 +9,7 @@ import {
   type PdfLoadingTaskLike,
 } from './pdfAbortable.js'
 import { buildInlinePassageTextRef } from './passageInlineText.js'
+import { passageWithIntegrityVerification } from '../../integrity/passageIntegrityReceipt.js'
 import { decodeAdmittedInlineBytes } from './plainTextFromAdmittedBytes.js'
 import { PDF_MEDIA_TYPE } from './pdfAdmission.js'
 import {
@@ -204,7 +205,17 @@ async function extractPassagesFromDoc(
       pagesWithoutExtractableText += 1
       continue
     }
-    const passage = buildPassageFromPageText(admitted, pageNum, text)
+    const basePassage = buildPassageFromPageText(admitted, pageNum, text)
+    const passage =
+      options?.synthesizePageText !== undefined
+        ? basePassage
+        : passageWithIntegrityVerification(basePassage, {
+            source: { source_id: admitted.revision.source_id },
+            revision: admitted.revision,
+            admitted,
+            extractionVersion: PDF_TEXT_EXTRACTION_VERSION,
+            preverifiedPageText: text,
+          })
     if (
       passage.extraction_notes?.some((note) => note.startsWith('inline_text_truncated:')) === true
     ) {

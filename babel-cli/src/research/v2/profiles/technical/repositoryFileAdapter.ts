@@ -11,6 +11,7 @@ import {
   assertRepositoryFilePinning,
   TechnicalRepositoryPinError,
 } from './repositoryFilePinning.js'
+import { passageWithIntegrityVerification } from '../../integrity/passageIntegrityReceipt.js'
 import {
   passagesFromAdmittedPlainText,
   TECHNICAL_PLAIN_EXTRACTION_VERSION,
@@ -130,12 +131,20 @@ export class TechnicalRepositoryFileAdapter implements SourceAdapter {
     }
     try {
       const revision = fetched.admitted.revision
-      const passages = passagesFromAdmittedPlainText(
+      const rawPassages = passagesFromAdmittedPlainText(
         request.source,
         fetchOperationId,
         fetched.operationId,
         revision,
         fetched.admitted,
+      )
+      const passages = rawPassages.map((passage) =>
+        passageWithIntegrityVerification(passage, {
+          source: request.source,
+          revision,
+          admitted: fetched.admitted,
+          extractionVersion: TECHNICAL_PLAIN_EXTRACTION_VERSION,
+        }),
       )
       return {
         operationId: request.operationId,

@@ -23,6 +23,7 @@ import {
 } from './findingsFromModelOutput.js'
 import { buildSynthesizedResearchReport } from './buildSynthesizedResearchReport.js'
 import { deriveSearchProviderReportLimitations } from './sourceDiscoverSearchReceipt.js'
+import { applyFindingSourceIntegrityFromEvidence } from './sourceIntegrityFromEvidence.js'
 import { persistModelInvocationEvidence } from './persistModelInvocationEvidence.js'
 import { settleModelOperation } from './settleModelOperation.js'
 import { unknownUsageSettlement } from './settleExternalOperation.js'
@@ -338,6 +339,16 @@ export async function runAdmittedResearchEndToEndPass(
     passages,
     createdAt: now(),
   })
+  const integrityEventsAfterExtract = await request.store.listEvents(request.session.mission.mission_id)
+  const integritySources = listSourcesFromStoreEvents(integrityEventsAfterExtract)
+  const integrityRevisions = listSourceRevisionsFromStoreEvents(integrityEventsAfterExtract)
+  findings = applyFindingSourceIntegrityFromEvidence(
+    findings,
+    passages,
+    integrityRevisions,
+    integritySources,
+    integrityEventsAfterExtract,
+  )
   for (const finding of findings) {
     throwIfAborted(request.signal, 'finding persistence')
     await request.store.appendFinding(ctx, finding)
@@ -376,6 +387,14 @@ export async function runAdmittedResearchEndToEndPass(
     sourceRevisions: reviewRevisions,
     missionSourceSlots: reviewMissionSourceSlots,
   })
+  const integrityEventsAfterReview = await request.store.listEvents(request.session.mission.mission_id)
+  findings = applyFindingSourceIntegrityFromEvidence(
+    findings,
+    passages,
+    reviewRevisions,
+    reviewSources,
+    integrityEventsAfterReview,
+  )
   for (const finding of findings) {
     throwIfAborted(request.signal, 'semantic judgment persistence')
     await request.store.appendFinding(ctx, finding)
