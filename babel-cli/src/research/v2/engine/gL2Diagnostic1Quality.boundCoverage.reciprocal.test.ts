@@ -1,6 +1,10 @@
 /**
  * Verifies A da3b1f5 bound question coverage on immutable diagnostic-1 wording (labeled fixtures).
  * Uses production helpers only — no duplicate rubric implementation in testSupport.
+ *
+ * Characterization history: keyword/heuristic gaps below are not product acceptance. Reconcile
+ * assertions to A general evidence-obligation API when published (expect partial/insufficient
+ * on original q3/q4; keep renamed/non-cache negatives and complete positive control).
  */
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'

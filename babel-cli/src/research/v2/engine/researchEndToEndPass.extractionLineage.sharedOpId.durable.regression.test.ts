@@ -6,13 +6,12 @@
  * must not expose A's orphan passages to extraction (including interleaved intents).
  */
 import assert from 'node:assert/strict'
-import { createHash } from 'node:crypto'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, it } from 'node:test'
 import { createMissionScopedSourceAccessPort } from '../access/missionScopedSourceAccessPort.js'
-import { PassageRecordSchema } from '../contracts/passages.js'
+import { ownedInlinePassage } from './testSupport/lineageDurableSeedHelpers.js'
 import {
   exampleMissionWriteContext,
   examplePlanRevisionFixture,
@@ -51,19 +50,6 @@ function governedAccess() {
   })
 }
 
-function inlinePassage(passageId: string, text: string) {
-  return PassageRecordSchema.parse({
-    passage_id: passageId,
-    source_revision_id: `rev-${passageId}`,
-    locator: { kind: 'line_range', start_line: 1, end_line: 1 },
-    text_ref: {
-      mode: 'inline',
-      text,
-      text_hash: createHash('sha256').update(text).digest('hex'),
-    },
-  })
-}
-
 async function seedSharedOperationLineageConflict(
   store: DurableResearchStore,
   ctx: {
@@ -95,7 +81,16 @@ async function seedSharedOperationLineageConflict(
       dispatched_at: '2026-10-20T12:00:00.100Z',
       idempotency_key: SHARED_FETCH_OP,
     })
-    await store.appendPassage(ctx, inlinePassage(orphanId, orphanText))
+    await store.appendPassage(
+      ctx,
+      ownedInlinePassage({
+        missionId: ctx.mission_id,
+        operationId: SHARED_FETCH_OP,
+        attemptId: `${SHARED_FETCH_OP}-attempt-a`,
+        passageId: orphanId,
+        text: orphanText,
+      }),
+    )
     await store.appendExternalOperationCompleted(ctx, {
       mission_id: ctx.mission_id,
       operation_id: SHARED_FETCH_OP,
@@ -103,7 +98,16 @@ async function seedSharedOperationLineageConflict(
       completed_at: '2026-10-20T12:00:01.000Z',
       settlement: 'failed',
     })
-    await store.appendPassage(ctx, inlinePassage(admittedId, admittedText))
+    await store.appendPassage(
+      ctx,
+      ownedInlinePassage({
+        missionId: ctx.mission_id,
+        operationId: SHARED_FETCH_OP,
+        attemptId: `${SHARED_FETCH_OP}-attempt-b`,
+        passageId: admittedId,
+        text: admittedText,
+      }),
+    )
     await store.appendExternalOperationCompleted(ctx, {
       mission_id: ctx.mission_id,
       operation_id: SHARED_FETCH_OP,
@@ -122,7 +126,16 @@ async function seedSharedOperationLineageConflict(
     dispatched_at: '2026-10-20T12:00:00.000Z',
     idempotency_key: SHARED_FETCH_OP,
   })
-  await store.appendPassage(ctx, inlinePassage(orphanId, orphanText))
+  await store.appendPassage(
+    ctx,
+    ownedInlinePassage({
+      missionId: ctx.mission_id,
+      operationId: SHARED_FETCH_OP,
+      attemptId: `${SHARED_FETCH_OP}-attempt-a`,
+      passageId: orphanId,
+      text: orphanText,
+    }),
+  )
   await store.appendExternalOperationCompleted(ctx, {
     mission_id: ctx.mission_id,
     operation_id: SHARED_FETCH_OP,
@@ -138,7 +151,16 @@ async function seedSharedOperationLineageConflict(
     dispatched_at: '2026-10-20T12:00:01.500Z',
     idempotency_key: SHARED_FETCH_OP,
   })
-  await store.appendPassage(ctx, inlinePassage(admittedId, admittedText))
+  await store.appendPassage(
+    ctx,
+    ownedInlinePassage({
+      missionId: ctx.mission_id,
+      operationId: SHARED_FETCH_OP,
+      attemptId: `${SHARED_FETCH_OP}-attempt-b`,
+      passageId: admittedId,
+      text: admittedText,
+    }),
+  )
   await store.appendExternalOperationCompleted(ctx, {
     mission_id: ctx.mission_id,
     operation_id: SHARED_FETCH_OP,

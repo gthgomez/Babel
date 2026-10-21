@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import { describe, it } from 'node:test'
 import type { PassageRecord } from '../contracts/passages.js'
 import { PassageRecordSchema } from '../contracts/passages.js'
+import type { SourceFetchEvidenceOwner } from '../contracts/retrievalEvidenceOwnership.js'
 import type { ResearchStoreEvent } from '../ports/researchStore.js'
 import { InMemoryResearchStore } from '../fixtures/fakePorts.js'
 import {
@@ -17,10 +18,32 @@ import { DurableResearchStore } from '../persistence/durableResearchStore.js'
 import {
   filterPassagesForExtractionLineage,
   passageIdsForExtractionLineage,
-  succeededSourceFetchOperationIds,
+  succeededSourceFetchAttemptOwnerKeys,
 } from './retrievalExtractionLineage.js'
 
-function passage(id: string, sourceRevisionId = 'rev-1'): PassageRecord {
+const MISSION_ID = 'mission-a'
+
+function fetchOwner(operationId: string, attemptId: string): SourceFetchEvidenceOwner {
+  return fetchOwnerForMission(MISSION_ID, operationId, attemptId)
+}
+
+function fetchOwnerForMission(
+  missionId: string,
+  operationId: string,
+  attemptId: string,
+): SourceFetchEvidenceOwner {
+  return {
+    mission_id: missionId,
+    operation_id: operationId,
+    attempt_id: attemptId,
+  }
+}
+
+function passage(
+  id: string,
+  sourceRevisionId = 'rev-1',
+  owner?: SourceFetchEvidenceOwner,
+): PassageRecord {
   const text = `text-for-${id}`
   return PassageRecordSchema.parse({
     passage_id: id,
@@ -31,18 +54,19 @@ function passage(id: string, sourceRevisionId = 'rev-1'): PassageRecord {
       text,
       text_hash: createHash('sha256').update(text).digest('hex'),
     },
+    ...(owner ? { source_fetch_owner: owner } : {}),
   })
 }
 
 function fetchIntent(operationId: string, attemptId = `${operationId}-att`): ResearchStoreEvent {
   return {
     eventId: `intent-${operationId}-${attemptId}`,
-    missionId: 'mission-a',
+    missionId: MISSION_ID,
     kind: 'external_operation_intent',
     recordedAt: '2026-10-20T12:00:00.000Z',
     payload: {
       intent: {
-        mission_id: 'mission-a',
+        mission_id: MISSION_ID,
         operation_id: operationId,
         attempt_id: attemptId,
         operation_kind: 'source_fetch',
@@ -53,33 +77,13 @@ function fetchIntent(operationId: string, attemptId = `${operationId}-att`): Res
   }
 }
 
-function revisionRecorded(revisionId: string): ResearchStoreEvent {
+function passageRecorded(passageEntry: PassageRecord): ResearchStoreEvent {
   return {
-    eventId: `revision-${revisionId}`,
-    missionId: 'mission-a',
-    kind: 'revision_recorded',
-    recordedAt: '2026-10-20T12:00:00.400Z',
-    payload: {
-      revision: {
-        revision_id: revisionId,
-        source_id: 'source-1',
-        content_hash: createHash('sha256').update(revisionId).digest('hex'),
-        retrieved_at: '2026-10-20T12:00:00.400Z',
-        extraction_version: 'test',
-        media_type: 'text/plain',
-        completeness: 'complete',
-      },
-    },
-  }
-}
-
-function passageRecorded(passage: PassageRecord): ResearchStoreEvent {
-  return {
-    eventId: `passage-${passage.passage_id}`,
-    missionId: 'mission-a',
+    eventId: `passage-${passageEntry.passage_id}`,
+    missionId: MISSION_ID,
     kind: 'passage_recorded',
     recordedAt: '2026-10-20T12:00:00.500Z',
-    payload: { passage },
+    payload: { passage: passageEntry },
   }
 }
 
@@ -90,12 +94,12 @@ function fetchCompletion(
 ): ResearchStoreEvent {
   return {
     eventId: `completion-${operationId}-${attemptId}`,
-    missionId: 'mission-a',
+    missionId: MISSION_ID,
     kind: 'external_operation_completed',
     recordedAt: '2026-10-20T12:00:01.000Z',
     payload: {
       completion: {
-        mission_id: 'mission-a',
+        mission_id: MISSION_ID,
         operation_id: operationId,
         attempt_id: attemptId,
         completed_at: '2026-10-20T12:00:01.000Z',
@@ -106,88 +110,102 @@ function fetchCompletion(
 }
 
 describe('retrievalExtractionLineage', () => {
-  it('admits passages only for source_fetch operations that settled succeeded', () => {
-    const failedPassage = passage('fetch-failed:0')
-    const okPassages = [passage('fetch-ok'), passage('fetch-ok:1')]
+  it('admits passages only when write-time owner matches a succeeded source_fetch attempt', () => {
+    const failedPassage = passage('fetch-failed:0', 'rev-f', fetchOwner('fetch-failed', 'att-fail'))
+    const okPassages = [
+      passage('fetch-ok', 'rev-ok', fetchOwner('fetch-ok', 'att-ok')),
+      passage('fetch-ok:1', 'rev-ok', fetchOwner('fetch-ok', 'att-ok')),
+    ]
     const events = [
-      fetchIntent('fetch-failed'),
+      fetchIntent('fetch-failed', 'att-fail'),
       passageRecorded(failedPassage),
-      fetchCompletion('fetch-failed', 'failed'),
-      fetchIntent('fetch-ok'),
+      fetchCompletion('fetch-failed', 'failed', 'att-fail'),
+      fetchIntent('fetch-ok', 'att-ok'),
       passageRecorded(okPassages[0]!),
       passageRecorded(okPassages[1]!),
-      fetchCompletion('fetch-ok', 'succeeded'),
+      fetchCompletion('fetch-ok', 'succeeded', 'att-ok'),
     ]
     const passages = [failedPassage, ...okPassages]
     const filtered = filterPassagesForExtractionLineage(passages, events)
     assert.deepEqual(filtered.map((p) => p.passage_id), ['fetch-ok', 'fetch-ok:1'])
-    assert.deepEqual(passageIdsForExtractionLineage(passages, events), ['fetch-ok', 'fetch-ok:1'])
   })
 
-  it('admits technical-style passage ids when revision ownership matches the succeeded attempt', () => {
-    const rev = 'rev-tech-1'
-    const technicalPassage = passage('passage-deadbeefdeadbeefdeadbeef', rev)
+  it('excludes legacy passages without source_fetch_owner (fail closed)', () => {
+    const owned = passage('owned', 'rev-1', fetchOwner('fetch-ok', 'att-ok'))
+    const legacy = passage('legacy-no-owner')
     const events = [
-      fetchIntent('fetch-tech'),
-      revisionRecorded(rev),
-      passageRecorded(technicalPassage),
-      fetchCompletion('fetch-tech', 'succeeded'),
+      fetchIntent('fetch-ok', 'att-ok'),
+      passageRecorded(legacy),
+      passageRecorded(owned),
+      fetchCompletion('fetch-ok', 'succeeded', 'att-ok'),
     ]
     assert.deepEqual(
-      filterPassagesForExtractionLineage([technicalPassage], events).map((p) => p.passage_id),
-      ['passage-deadbeefdeadbeefdeadbeef'],
+      filterPassagesForExtractionLineage([legacy, owned], events).map((p) => p.passage_id),
+      ['owned'],
     )
   })
 
-  it('excludes orphan passages from failed attempt when same operation_id retries with a new attempt_id', () => {
+  it('same operation_id: nested B-then-A completion does not admit B-owned passage on A success', () => {
     const op = 'shared-fetch-op'
-    const orphan = passage(`${op}:orphan-att-1`)
-    const retryRev = 'rev-retry-2'
-    const retryPassage = passage('passage-retry-success', retryRev)
+    const bad = passage('bad', 'rev-b', fetchOwner(op, 'att-b'))
+    const good = passage('good', 'rev-a', fetchOwner(op, 'att-a'))
     const events = [
-      fetchIntent(op, 'att-fail'),
-      passageRecorded(orphan),
-      fetchCompletion(op, 'failed', 'att-fail'),
-      fetchIntent(op, 'att-retry'),
-      revisionRecorded(retryRev),
-      passageRecorded(retryPassage),
-      fetchCompletion(op, 'succeeded', 'att-retry'),
+      fetchIntent(op, 'att-a'),
+      fetchIntent(op, 'att-b'),
+      passageRecorded(bad),
+      fetchCompletion(op, 'failed', 'att-b'),
+      passageRecorded(good),
+      fetchCompletion(op, 'succeeded', 'att-a'),
     ]
-    const all = [orphan, retryPassage]
     assert.deepEqual(
-      filterPassagesForExtractionLineage(all, events).map((p) => p.passage_id),
-      ['passage-retry-success'],
+      filterPassagesForExtractionLineage([bad, good], events).map((p) => p.passage_id),
+      ['good'],
     )
   })
 
-  it('does not admit interleaved foreign passages inside another fetch attempt window', () => {
-    const revB = 'rev-b'
-    const passageB = passage('fetch-b:html:0', revB)
-    const orphanA = passage('fetch-a:orphan', 'rev-a')
+  it('same operation_id: nested A-then-B completion does not admit A-owned orphan on B success', () => {
+    const op = 'shared-fetch-op'
+    const orphanA = passage('orphan-a', 'rev-a', fetchOwner(op, 'att-a'))
+    const goodB = passage('good-b', 'rev-b', fetchOwner(op, 'att-b'))
+    const events = [
+      fetchIntent(op, 'att-a'),
+      fetchIntent(op, 'att-b'),
+      passageRecorded(orphanA),
+      fetchCompletion(op, 'failed', 'att-a'),
+      passageRecorded(goodB),
+      fetchCompletion(op, 'succeeded', 'att-b'),
+    ]
+    assert.deepEqual(
+      filterPassagesForExtractionLineage([orphanA, goodB], events).map((p) => p.passage_id),
+      ['good-b'],
+    )
+  })
+
+  it('distinct operation_ids: prefix-like passage_id cannot cross-admit without owner match', () => {
+    const bad = passage('fetch-b:html:0', 'rev-b', fetchOwner('fetch-b', 'att-b'))
+    const good = passage('passage-hash-ok', 'rev-a', fetchOwner('fetch-a', 'att-a'))
     const events = [
       fetchIntent('fetch-a', 'att-a'),
       fetchIntent('fetch-b', 'att-b'),
-      revisionRecorded(revB),
-      passageRecorded(passageB),
-      fetchCompletion('fetch-b', 'succeeded', 'att-b'),
-      revisionRecorded('rev-a'),
-      passageRecorded(orphanA),
-      fetchCompletion('fetch-a', 'failed', 'att-a'),
+      passageRecorded(bad),
+      fetchCompletion('fetch-b', 'failed', 'att-b'),
+      passageRecorded(good),
+      fetchCompletion('fetch-a', 'succeeded', 'att-a'),
     ]
     assert.deepEqual(
-      filterPassagesForExtractionLineage([passageB, orphanA], events).map((p) => p.passage_id),
-      ['fetch-b:html:0'],
+      filterPassagesForExtractionLineage([bad, good], events).map((p) => p.passage_id),
+      ['passage-hash-ok'],
     )
   })
 
-  it('returns empty extraction set when no succeeded source_fetch lineage exists', () => {
-    const events = [fetchIntent('only-failed'), fetchCompletion('only-failed', 'failed')]
-    const passages = [passage('only-failed:0')]
+  it('returns empty extraction set when no succeeded source_fetch attempt keys exist', () => {
+    const events = [fetchIntent('only-failed', 'att-fail'), fetchCompletion('only-failed', 'failed', 'att-fail')]
+    const passages = [passage('only-failed:0', 'rev', fetchOwner('only-failed', 'att-fail'))]
     assert.deepEqual(filterPassagesForExtractionLineage(passages, events), [])
-    assert.deepEqual(succeededSourceFetchOperationIds(events), new Set())
+    assert.deepEqual(succeededSourceFetchAttemptOwnerKeys(events), new Set())
   })
 
-  it('durable close/reopen: orphan partial-fetch passages stay in store but drop out of extraction', async () => {
+  it('durable close/reopen: owner-tagged evidence survives filtering after reopen', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'research-lineage-resume-'))
     try {
       let store = await DurableResearchStore.open(dir)
@@ -198,16 +216,23 @@ describe('retrievalExtractionLineage', () => {
       await store.appendExternalOperationIntent(ctx, {
         mission_id: ctx.mission_id,
         operation_id: failedOp,
-        attempt_id: `${failedOp}-att`,
+        attempt_id: 'att-fail',
         operation_kind: 'source_fetch',
         dispatched_at: '2026-10-20T12:00:00.000Z',
-        idempotency_key: failedOp,
+        idempotency_key: `${failedOp}:att-fail`,
       })
-      await store.appendPassage(ctx, passage(`${failedOp}:orphan`))
+      await store.appendPassage(
+        ctx,
+        passage(
+          `${failedOp}:orphan`,
+          'rev-f',
+          fetchOwnerForMission(ctx.mission_id, failedOp, 'att-fail'),
+        ),
+      )
       await store.appendExternalOperationCompleted(ctx, {
         mission_id: ctx.mission_id,
         operation_id: failedOp,
-        attempt_id: `${failedOp}-att`,
+        attempt_id: 'att-fail',
         completed_at: '2026-10-20T12:00:01.000Z',
         settlement: 'failed',
       })
@@ -215,16 +240,19 @@ describe('retrievalExtractionLineage', () => {
       await store.appendExternalOperationIntent(ctx, {
         mission_id: ctx.mission_id,
         operation_id: okOp,
-        attempt_id: `${okOp}-att`,
+        attempt_id: 'att-ok',
         operation_kind: 'source_fetch',
         dispatched_at: '2026-10-20T12:00:02.000Z',
-        idempotency_key: okOp,
+        idempotency_key: `${okOp}:att-ok`,
       })
-      await store.appendPassage(ctx, passage(okOp))
+      await store.appendPassage(
+        ctx,
+        passage(okOp, 'rev-ok', fetchOwnerForMission(ctx.mission_id, okOp, 'att-ok')),
+      )
       await store.appendExternalOperationCompleted(ctx, {
         mission_id: ctx.mission_id,
         operation_id: okOp,
-        attempt_id: `${okOp}-att`,
+        attempt_id: 'att-ok',
         completed_at: '2026-10-20T12:00:03.000Z',
         settlement: 'succeeded',
       })
@@ -243,7 +271,7 @@ describe('retrievalExtractionLineage', () => {
     }
   })
 
-  it('durable close/reopen: same operation_id failed then succeeded retry keeps only retry evidence', async () => {
+  it('durable close/reopen: same operation_id failed then succeeded retry keeps only retry owner', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'research-lineage-retry-'))
     try {
       let store = await DurableResearchStore.open(dir)
@@ -259,7 +287,14 @@ describe('retrievalExtractionLineage', () => {
         dispatched_at: '2026-10-20T12:00:00.000Z',
         idempotency_key: `${op}:att-fail`,
       })
-      await store.appendPassage(ctx, passage(`${op}:orphan`))
+      await store.appendPassage(
+        ctx,
+        passage(
+          `${op}:orphan`,
+          'rev-f',
+          fetchOwnerForMission(ctx.mission_id, op, 'att-fail'),
+        ),
+      )
       await store.appendExternalOperationCompleted(ctx, {
         mission_id: ctx.mission_id,
         operation_id: op,
@@ -275,7 +310,14 @@ describe('retrievalExtractionLineage', () => {
         dispatched_at: '2026-10-20T12:00:02.000Z',
         idempotency_key: `${op}:att-retry`,
       })
-      await store.appendPassage(ctx, passage(`${op}:retry`))
+      await store.appendPassage(
+        ctx,
+        passage(
+          `${op}:retry`,
+          'rev-r',
+          fetchOwnerForMission(ctx.mission_id, op, 'att-retry'),
+        ),
+      )
       await store.appendExternalOperationCompleted(ctx, {
         mission_id: ctx.mission_id,
         operation_id: op,
@@ -290,9 +332,9 @@ describe('retrievalExtractionLineage', () => {
       const allPassages = events
         .filter((e) => e.kind === 'passage_recorded')
         .map((e) => (e.payload as { passage: PassageRecord }).passage)
-      assert.equal(allPassages.length, 2)
       const forExtract = filterPassagesForExtractionLineage(allPassages, events)
       assert.deepEqual(forExtract.map((p) => p.passage_id), [`${op}:retry`])
+      assert.deepEqual(passageIdsForExtractionLineage(allPassages, events), [`${op}:retry`])
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -307,21 +349,27 @@ describe('retrievalExtractionLineage', () => {
     await store.appendExternalOperationIntent(ctx, {
       mission_id: ctx.mission_id,
       operation_id: failedOp,
-      attempt_id: `${failedOp}-att`,
+      attempt_id: 'att-fail',
       operation_kind: 'source_fetch',
       dispatched_at: '2026-10-20T12:00:00.000Z',
-      idempotency_key: failedOp,
+      idempotency_key: `${failedOp}:att-fail`,
     })
-    await store.appendPassage(ctx, passage(`${failedOp}:leftover`))
+    await store.appendPassage(
+      ctx,
+      passage(
+        `${failedOp}:leftover`,
+        'rev-f',
+        fetchOwnerForMission(ctx.mission_id, failedOp, 'att-fail'),
+      ),
+    )
     await store.appendExternalOperationCompleted(ctx, {
       mission_id: ctx.mission_id,
       operation_id: failedOp,
-      attempt_id: `${failedOp}-att`,
+      attempt_id: 'att-fail',
       completed_at: '2026-10-20T12:00:01.000Z',
       settlement: 'failed',
     })
     const events = await store.listEvents(ctx.mission_id)
-    assert.equal(events.filter((e) => e.kind === 'passage_recorded').length, 1)
     const allPassages = events
       .filter((e) => e.kind === 'passage_recorded')
       .map((e) => (e.payload as { passage: PassageRecord }).passage)

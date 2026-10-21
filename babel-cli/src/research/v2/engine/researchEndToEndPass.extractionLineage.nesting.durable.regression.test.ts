@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, it } from 'node:test'
 import type { PassageRecord } from '../contracts/passages.js'
-import { PassageRecordSchema } from '../contracts/passages.js'
+import { ownedInlinePassage } from './testSupport/lineageDurableSeedHelpers.js'
 import type { SourceRevision } from '../contracts/sources.js'
 import { createMissionScopedSourceAccessPort } from '../access/missionScopedSourceAccessPort.js'
 import {
@@ -33,19 +33,6 @@ import { runAdmittedResearchEndToEndPass } from './researchEndToEndPass.js'
 const FIXED_NOW = '2026-10-20T12:50:00.000Z'
 const REV_RA = 'revision-RA-good'
 const REV_RB = 'revision-RB-bad'
-
-function inlinePassage(passageId: string, revisionId: string, text: string) {
-  return PassageRecordSchema.parse({
-    passage_id: passageId,
-    source_revision_id: revisionId,
-    locator: { kind: 'line_range', start_line: 1, end_line: 1 },
-    text_ref: {
-      mode: 'inline',
-      text,
-      text_hash: createHash('sha256').update(text).digest('hex'),
-    },
-  })
-}
 
 function revisionRecord(revisionId: string): SourceRevision {
   return {
@@ -109,7 +96,17 @@ async function seedNestedRevisionLineage(
     await store.appendExternalOperationIntent(ctx, intentA)
     await store.appendExternalOperationIntent(ctx, intentB)
     await store.appendSourceRevision(ctx, revisionRecord(REV_RB))
-    await store.appendPassage(ctx, inlinePassage(badId, REV_RB, badText))
+    await store.appendPassage(
+      ctx,
+      ownedInlinePassage({
+        missionId: ctx.mission_id,
+        operationId: opB,
+        attemptId: attB,
+        passageId: badId,
+        text: badText,
+        sourceRevisionId: REV_RB,
+      }),
+    )
     await store.appendExternalOperationCompleted(ctx, {
       mission_id: ctx.mission_id,
       operation_id: opB,
@@ -118,7 +115,17 @@ async function seedNestedRevisionLineage(
       settlement: 'failed',
     })
     await store.appendSourceRevision(ctx, revisionRecord(REV_RA))
-    await store.appendPassage(ctx, inlinePassage(goodId, REV_RA, goodText))
+    await store.appendPassage(
+      ctx,
+      ownedInlinePassage({
+        missionId: ctx.mission_id,
+        operationId: opA,
+        attemptId: attA,
+        passageId: goodId,
+        text: goodText,
+        sourceRevisionId: REV_RA,
+      }),
+    )
     await store.appendExternalOperationCompleted(ctx, {
       mission_id: ctx.mission_id,
       operation_id: opA,
@@ -130,7 +137,17 @@ async function seedNestedRevisionLineage(
     await store.appendExternalOperationIntent(ctx, intentB)
     await store.appendExternalOperationIntent(ctx, intentA)
     await store.appendSourceRevision(ctx, revisionRecord(REV_RA))
-    await store.appendPassage(ctx, inlinePassage(goodId, REV_RA, goodText))
+    await store.appendPassage(
+      ctx,
+      ownedInlinePassage({
+        missionId: ctx.mission_id,
+        operationId: opA,
+        attemptId: attA,
+        passageId: goodId,
+        text: goodText,
+        sourceRevisionId: REV_RA,
+      }),
+    )
     await store.appendExternalOperationCompleted(ctx, {
       mission_id: ctx.mission_id,
       operation_id: opA,
@@ -139,7 +156,17 @@ async function seedNestedRevisionLineage(
       settlement: 'succeeded',
     })
     await store.appendSourceRevision(ctx, revisionRecord(REV_RB))
-    await store.appendPassage(ctx, inlinePassage(badId, REV_RB, badText))
+    await store.appendPassage(
+      ctx,
+      ownedInlinePassage({
+        missionId: ctx.mission_id,
+        operationId: opB,
+        attemptId: attB,
+        passageId: badId,
+        text: badText,
+        sourceRevisionId: REV_RB,
+      }),
+    )
     await store.appendExternalOperationCompleted(ctx, {
       mission_id: ctx.mission_id,
       operation_id: opB,
