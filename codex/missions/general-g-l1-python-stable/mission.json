@@ -1,0 +1,42 @@
+{
+  "schema_version": "research-mission-v2",
+  "contract_version": "2026.10.20-checkpoint.3.1.1",
+  "mission_id": "mission-general-g-l1-python-stable",
+  "profile_id": "general",
+  "profile_version": "0.1.0-m0",
+  "created_at": "2026-10-21T06:00:00.000Z",
+  "primary_question": "As of the run's UTC date, what is the latest stable Python release and its release date?",
+  "intended_decision": "Report the latest stable CPython release version and official release date for operator verification.",
+  "constraints": [
+    "hard_requirement:Distinguish stable releases from prereleases (alpha, beta, rc).",
+    "hard_requirement:Cite the official Python release or download page on python.org as primary evidence.",
+    "hard_requirement:Report uncertainty if official pages disagree or cannot be read.",
+    "hard_requirement:Allowed evidence hostnames only: python.org, www.python.org, docs.python.org.",
+    "hard_requirement:DuckDuckGo HTML search is discovery transport only; not an evidence domain.",
+    "campaign_scenario:general-g-l1-canonical-diagnostic"
+  ],
+  "exclusions": [
+    "third-party release trackers as sole authority",
+    "prerelease-only answers without stable-latest qualification"
+  ],
+  "as_of": "2026-10-21",
+  "jurisdiction": "unknown",
+  "source_policy": {
+    "allowed_source_classes": ["web"],
+    "allowed_web_domains": ["python.org", "www.python.org", "docs.python.org"],
+    "visibility_retention": {
+      "source_visibility": "public",
+      "retention": "excerpt_only",
+      "export_may_omit_bytes": true
+    }
+  },
+  "effort_policy": {
+    "preset_name": "normal",
+    "resolved_budget_label": "host-resolved-normal-g-l1"
+  },
+  "model_route": {
+    "backend_key": "deepseek-v4-flash-openrouter",
+    "provider": "openrouter",
+    "provider_model_id": "deepseek/deepseek-v4-flash-0731"
+  }
+}

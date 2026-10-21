@@ -1,0 +1,33 @@
+{
+  "schema": "general-g-l1-preflight-receipt/v1",
+  "runtime_sha": "9d97448a20045b2f4eec7b6f06bac9a533fc5424",
+  "worktree": "/workspace/codex/worktrees/g-l1-9d97448a",
+  "build": {
+    "commands": [
+      "cd /workspace/codex/worktrees/g-l1-9d97448a/babel-cli && npm ci",
+      "cd /workspace/codex/worktrees/g-l1-9d97448a/babel-cli && npm run build",
+      "cd /workspace/codex/worktrees/g-l1-9d97448a/babel-cli && npm run typecheck"
+    ],
+    "outcome": "ok"
+  },
+  "mission_id": "mission-general-g-l1-python-stable",
+  "mission_file_worktree": "/workspace/codex/worktrees/g-l1-9d97448a/codex/missions/general-g-l1-python-stable/mission.json",
+  "schema_validation": "ResearchMissionV2Schema.parse via loadResearchMissionFromFile",
+  "openrouter_route_smoke": {
+    "command": "npm run test:research-v2-openrouter-route-smoke",
+    "route_key": "deepseek-v4-flash-openrouter",
+    "provider": "openrouter",
+    "model_id": "deepseek/deepseek-v4-flash-0731",
+    "selection_basis": "model_policy_json",
+    "env_override_active": false
+  },
+  "search_transport": {
+    "provider_id": "duckduckgo_html_fallback",
+    "evidence_web_domains": ["python.org", "www.python.org", "docs.python.org"],
+    "discover_query_default_first_8_words": "As of the run's UTC date, what is",
+    "example_duckduckgo_url": "https://duckduckgo.com/html/?q=As+of+the+run%27s+UTC+date%2C+what+is"
+  },
+  "openrouter_credential_configured": true,
+  "live_api_gate_enabled_at_preflight": false,
+  "live_run_not_executed": true
+}
