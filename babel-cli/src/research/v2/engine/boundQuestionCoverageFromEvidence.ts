@@ -1,105 +1,21 @@
 import type { FindingRecord } from '../contracts/findings.js'
 import { QuestionCoverageStatusSchema } from '../contracts/findings.js'
 import type { PassageRecord } from '../contracts/passages.js'
-import type { PlanRevision } from '../contracts/plan.js'
+import type { PlanRevision, QuestionRecord } from '../contracts/plan.js'
 import type { SourceRecord, SourceRevision } from '../contracts/sources.js'
 import type { z } from 'zod'
+import {
+  assessPlanCoverageObligations,
+  buildCitedPassageProvenance,
+  obligationsForQuestion,
+  passageSupportsAudienceIntent,
+  passageSupportsTechnicalEffect,
+} from './planCoverageObligations.js'
 
 type QuestionCoverageStatus = z.infer<typeof QuestionCoverageStatusSchema>
 
-export type WebSourceClass = 'mdn' | 'cloudflare' | 'other'
-
-export type QuestionCoverageAspect =
-  | 'cache_control_max_age'
-  | 'audience_browser_vs_edge'
-  | 'general'
-
-export interface QuestionCoverageProfile {
-  aspect: QuestionCoverageAspect
-  /** Cross-source comparison requires relevant admitted evidence per named source class. */
-  crossSourceComparison: boolean
-  requiredSourceClasses: WebSourceClass[]
-}
-
-export interface CitedPassageEvidenceSignals {
-  passage_id: string
-  source_revision_id: string
-  web_source_class: WebSourceClass
-  web_domain?: string
-  revision_completeness?: SourceRevision['completeness']
-  passage_truncated: boolean
-  mentions_max_age_or_cache_control: boolean
-  mentions_audience_or_reader_role: boolean
-}
-
 const HOST_COVERAGE_REVIEWER = 'research-v2-bound-question-coverage'
-const HOST_COVERAGE_REVIEWER_VERSION = '0.1.0-admitted-evidence'
-
-const MAX_AGE_OR_CACHE = /\bmax-age\b|max age|cache-control|s-maxage|\bttl\b/i
-const AUDIENCE_OR_ROLE =
-  /\baudience\b|\breader(s)?\b|written for|intended for|browser(-|\s)?facing|\boperators?\b|who (is|are) (each|the)/i
-
-export function webSourceClassFromHostname(hostname: string): WebSourceClass {
-  const host = hostname.toLowerCase()
-  if (host === 'developer.mozilla.org' || host.endsWith('.mozilla.org')) {
-    return 'mdn'
-  }
-  if (host === 'developers.cloudflare.com' || host.endsWith('.cloudflare.com')) {
-    return 'cloudflare'
-  }
-  return 'other'
-}
-
-export function webSourceClassFromUrl(url: string): WebSourceClass {
-  try {
-    return webSourceClassFromHostname(new URL(url).hostname)
-  } catch {
-    return 'other'
-  }
-}
-
-export function inferQuestionCoverageProfile(
-  questionText: string,
-  evidenceRequirement?: string,
-): QuestionCoverageProfile {
-  const text = questionText.toLowerCase()
-  const requirement = (evidenceRequirement ?? '').toLowerCase()
-  const namesMdn = /\bmdn\b|mozilla/.test(text) || requirement.includes('mozilla')
-  const namesCf = /cloudflare/.test(text) || requirement.includes('cloudflare')
-  const comparison =
-    /\b(agree|differ|compare|comparison|versus|vs\.?)\b/.test(text) ||
-    /\bhow do\b.*\bcompare\b/.test(text)
-  const maxAgeFocus = MAX_AGE_OR_CACHE.test(text)
-  const audienceFocus = AUDIENCE_OR_ROLE.test(text)
-
-  if (namesMdn && namesCf && (comparison || maxAgeFocus)) {
-    return {
-      aspect: 'cache_control_max_age',
-      crossSourceComparison: true,
-      requiredSourceClasses: ['mdn', 'cloudflare'],
-    }
-  }
-  if (audienceFocus && !maxAgeFocus) {
-    return {
-      aspect: 'audience_browser_vs_edge',
-      crossSourceComparison: namesMdn && namesCf,
-      requiredSourceClasses:
-        namesMdn && namesCf ? ['mdn', 'cloudflare'] : namesMdn ? ['mdn'] : namesCf ? ['cloudflare'] : [],
-    }
-  }
-  if (maxAgeFocus) {
-    return {
-      aspect: 'cache_control_max_age',
-      crossSourceComparison: false,
-      requiredSourceClasses: [],
-    }
-  }
-  return {
-    aspect: 'general',
-    crossSourceComparison: false,
-    requiredSourceClasses: [],
-  }
-}
+const HOST_COVERAGE_REVIEWER_VERSION = '0.2.0-plan-obligations'
 
 export function buildRevisionProvenanceIndex(
   sources: readonly SourceRecord[],
@@ -115,32 +31,35 @@ export function buildRevisionProvenanceIndex(
   return index
 }
 
-function passageInlineText(passage: PassageRecord): string | undefined {
-  if (passage.text_ref.mode !== 'inline') return undefined
-  return passage.text_ref.text
-}
-
+/** Neutral passage signals for model review input (no vendor/topic routing). */
 export function citedPassageEvidenceSignals(
   passage: PassageRecord,
   provenance?: { source: SourceRecord; revision: SourceRevision },
-): CitedPassageEvidenceSignals {
-  const primaryUrl = provenance?.source.observed_urls[0]
-  const webDomain = primaryUrl ? new URL(primaryUrl).hostname : undefined
-  const web_source_class = primaryUrl ? webSourceClassFromUrl(primaryUrl) : 'other'
-  const text = passageInlineText(passage) ?? ''
+) {
+  const text = passage.text_ref.mode === 'inline' ? passage.text_ref.text : ''
   const passage_truncated =
     passage.extraction_notes?.some(
       (n) => n.startsWith('inline_text_truncated:') || n.startsWith('excerpt_truncated'),
     ) === true
+  const primaryUrl = provenance?.source.observed_urls[0]
+  let web_domain: string | undefined
+  try {
+    web_domain = primaryUrl ? new URL(primaryUrl).hostname : undefined
+  } catch {
+    web_domain = undefined
+  }
   return {
     passage_id: passage.passage_id,
     source_revision_id: passage.source_revision_id,
-    web_source_class,
-    ...(webDomain ? { web_domain: webDomain } : {}),
-    ...(provenance ? { revision_completeness: provenance.revision.completeness } : {}),
+    coverage_source_slot: provenance?.source.coverage_source_slot,
+    web_domain,
+    revision_completeness: provenance?.revision.completeness,
     passage_truncated,
-    mentions_max_age_or_cache_control: MAX_AGE_OR_CACHE.test(text),
-    mentions_audience_or_reader_role: AUDIENCE_OR_ROLE.test(text),
+    supports_max_age_or_ttl_semantics: passageSupportsTechnicalEffect(text, 'max_age_or_ttl_semantics'),
+    supports_audience_intent: passageSupportsAudienceIntent(text),
+    mentions_cache_control_header_only:
+      /\bcache-control\b/i.test(text) &&
+      !passageSupportsTechnicalEffect(text, 'max_age_or_ttl_semantics'),
   }
 }
 
@@ -151,56 +70,22 @@ export interface BoundCoverageAssessment {
 }
 
 export function assessBoundQuestionCoverageFromAdmittedEvidence(
-  profile: QuestionCoverageProfile,
-  citedSignals: readonly CitedPassageEvidenceSignals[],
+  question: QuestionRecord,
+  citedProvenance: ReturnType<typeof buildCitedPassageProvenance>,
 ): BoundCoverageAssessment {
-  const missingFacets: string[] = []
-
-  if (profile.aspect === 'cache_control_max_age' && profile.crossSourceComparison) {
-    for (const sourceClass of profile.requiredSourceClasses) {
-      const hasRelevant = citedSignals.some(
-        (s) =>
-          s.web_source_class === sourceClass &&
-          s.mentions_max_age_or_cache_control &&
-          !(s.passage_truncated && !s.mentions_max_age_or_cache_control),
-      )
-      if (!hasRelevant) {
-        missingFacets.push(`${sourceClass}_max_age_relevant_evidence`)
-      }
+  const obligations = obligationsForQuestion(question)
+  if (obligations.length === 0) {
+    return {
+      satisfiesRequiredFacets: true,
+      missingFacets: [],
+      wrongAspectEvidenceOnly: false,
     }
   }
-
-  if (profile.aspect === 'audience_browser_vs_edge') {
-    const needsAudienceMention = citedSignals.some((s) => s.mentions_audience_or_reader_role)
-    const onlyCacheDirectives = citedSignals.some(
-      (s) => s.mentions_max_age_or_cache_control && !s.mentions_audience_or_reader_role,
-    )
-    if (!needsAudienceMention) {
-      missingFacets.push('audience_or_reader_role_evidence')
-    }
-    if (onlyCacheDirectives && !needsAudienceMention) {
-      return {
-        satisfiesRequiredFacets: false,
-        missingFacets,
-        wrongAspectEvidenceOnly: true,
-      }
-    }
-    if (profile.crossSourceComparison) {
-      for (const sourceClass of profile.requiredSourceClasses) {
-        const hasAudience = citedSignals.some(
-          (s) => s.web_source_class === sourceClass && s.mentions_audience_or_reader_role,
-        )
-        if (!hasAudience) {
-          missingFacets.push(`${sourceClass}_audience_relevant_evidence`)
-        }
-      }
-    }
-  }
-
+  const assessment = assessPlanCoverageObligations(obligations, citedProvenance)
   return {
-    satisfiesRequiredFacets: missingFacets.length === 0,
-    missingFacets,
-    wrongAspectEvidenceOnly: false,
+    satisfiesRequiredFacets: assessment.satisfiesAllObligations,
+    missingFacets: assessment.missingObligationIds,
+    wrongAspectEvidenceOnly: assessment.wrongAspectOnly,
   }
 }
 
@@ -221,8 +106,8 @@ function downgradeCoverageStatus(
 }
 
 /**
- * Host-side bound on model `question_coverage`: never upgrades; downgrades `answers` when admitted
- * citations do not satisfy required per-source/aspect evidence for the bound plan question.
+ * Host-side bound on model `question_coverage`: never upgrades; downgrades `answers` when cited
+ * passages do not satisfy explicit plan `coverage_obligations` per source slot and aspect.
  */
 export function enforceBoundQuestionCoverageOnFindings(
   findings: readonly FindingRecord[],
@@ -247,23 +132,27 @@ export function enforceBoundQuestionCoverageOnFindings(
     if (modelCoverage === 'not_assessed') {
       return finding
     }
+    const obligations = obligationsForQuestion(question)
+    if (obligations.length === 0) {
+      return finding
+    }
+    if (finding.semantic_support?.status !== 'supported') {
+      return finding
+    }
 
-    const profile = inferQuestionCoverageProfile(question.text, question.evidence_requirement)
-    const citedSignals = finding.passage_ids.flatMap((passageId) => {
-      const passage = passageById.get(passageId)
-      if (!passage) return []
-      const provenance = provenanceIndex.get(passage.source_revision_id)
-      return [citedPassageEvidenceSignals(passage, provenance)]
-    })
-
-    const assessment = assessBoundQuestionCoverageFromAdmittedEvidence(profile, citedSignals)
+    const citedProvenance = buildCitedPassageProvenance(
+      finding.passage_ids,
+      passageById,
+      provenanceIndex,
+    )
+    const assessment = assessBoundQuestionCoverageFromAdmittedEvidence(question, citedProvenance)
     const boundStatus = downgradeCoverageStatus(modelCoverage, assessment)
     if (boundStatus === modelCoverage) {
       return finding
     }
 
     const missing = assessment.missingFacets.join(',')
-    const hostRationale = `Host bound-question coverage: downgraded model "${modelCoverage}" to "${boundStatus}" because admitted citations lack required facet(s): ${missing}.`
+    const hostRationale = `Host bound-question coverage: downgraded model "${modelCoverage}" to "${boundStatus}" because admitted citations lack obligation(s): ${missing}.`
     const priorRationale = finding.question_coverage?.rationale ?? ''
     return {
       ...finding,

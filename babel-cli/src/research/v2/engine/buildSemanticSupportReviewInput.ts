@@ -5,40 +5,34 @@ import type { SourceRecord, SourceRevision } from '../contracts/sources.js'
 import {
   buildRevisionProvenanceIndex,
   citedPassageEvidenceSignals,
-  inferQuestionCoverageProfile,
-  type QuestionCoverageAspect,
 } from './boundQuestionCoverageFromEvidence.js'
+import { obligationsForQuestion } from './planCoverageObligations.js'
 
 export type CitedPassageContent =
   | { passage_id: string; content_status: 'available'; text: string }
   | { passage_id: string; content_status: 'unavailable'; reason: string }
 
 export interface SemanticSupportReviewCoverageRubric {
-  question_aspect: QuestionCoverageAspect
-  cross_source_comparison: boolean
-  required_source_classes: Array<'mdn' | 'cloudflare' | 'other'>
+  coverage_obligations: ReturnType<typeof obligationsForQuestion>
   guidance: string
 }
 
-export function coverageRubricForQuestion(
-  questionText: string,
-  evidenceRequirement?: string,
-): SemanticSupportReviewCoverageRubric {
-  const profile = inferQuestionCoverageProfile(questionText, evidenceRequirement)
+export function coverageRubricForQuestion(question: {
+  text: string
+  evidence_requirement: string
+  coverage_obligations?: import('../contracts/plan.js').QuestionRecord['coverage_obligations']
+}): SemanticSupportReviewCoverageRubric {
+  const obligations = obligationsForQuestion(question as import('../contracts/plan.js').QuestionRecord)
   let guidance =
     'question_coverage answers requires the assertion to address the bound question_text using cited passages; tangential supported facts do not count as answers.'
-  if (profile.crossSourceComparison && profile.aspect === 'cache_control_max_age') {
+  if (obligations.length > 0) {
     guidance +=
-      ' For cross-source max-age/cache-control comparisons, each compared source class (MDN vs Cloudflare) needs its own relevant admitted excerpt mentioning max-age/Cache-Control/TTL — a truncated overview without that content is partial, not answers.'
-  }
-  if (profile.aspect === 'audience_browser_vs_edge') {
-    guidance +=
-      ' Audience/intent questions are not answered by cache-directive semantics alone: distinguish who each document is written for (browser vs edge/CDN) from which directives apply; supported cache-only excerpts are tangential or partial.'
+      ' When coverage_obligations are present, each listed source_slot needs admitted passage support for its aspect (technical_effect vs audience_intent are distinct). Comparative coverage requires every obligation satisfied; missing any obligation is partial, not answers. max_age_or_ttl_semantics requires max-age/s-maxage/TTL substance — Cache-Control header mention alone is insufficient.'
+  } else {
+    guidance += ` Plan evidence_requirement (human): ${question.evidence_requirement}`
   }
   return {
-    question_aspect: profile.aspect,
-    cross_source_comparison: profile.crossSourceComparison,
-    required_source_classes: profile.requiredSourceClasses,
+    coverage_obligations: obligations,
     guidance,
   }
 }
@@ -66,10 +60,7 @@ export function buildSemanticSupportReviewInput(
   }>
 } {
   const passageById = new Map(passages.map((p) => [p.passage_id, p]))
-  const questionTextById = new Map(plan.questions.map((q) => [q.question_id, q.text]))
-  const questionRequirementById = new Map(
-    plan.questions.map((q) => [q.question_id, q.evidence_requirement]),
-  )
+  const questionById = new Map(plan.questions.map((q) => [q.question_id, q]))
   const provenanceIndex =
     options?.sources && options?.sourceRevisions
       ? buildRevisionProvenanceIndex(options.sources, options.sourceRevisions)
@@ -77,17 +68,16 @@ export function buildSemanticSupportReviewInput(
 
   return {
     findings: findings.map((finding) => {
-      const questionText = questionTextById.get(finding.question_id)
-      if (!questionText) {
+      const question = questionById.get(finding.question_id)
+      if (!question) {
         throw new Error(`finding ${finding.finding_id} references unknown plan question ${finding.question_id}`)
       }
-      const evidenceRequirement = questionRequirementById.get(finding.question_id)
       return {
         finding_id: finding.finding_id,
         question_id: finding.question_id,
-        question_text: questionText,
+        question_text: question.text,
         assertion_text: finding.assertion_text,
-        coverage_rubric: coverageRubricForQuestion(questionText, evidenceRequirement),
+        coverage_rubric: coverageRubricForQuestion(question),
         cited_passages: finding.passage_ids.map((passageId) => {
           const passage = passageById.get(passageId)
           if (!passage) {

@@ -37,6 +37,8 @@ export const SourceRecordSchema = z
     language: UnknownValueSchema.optional(),
     license_observed: UnknownValueSchema.optional(),
     syndication_notes: z.string().optional(),
+    /** Logical provider slot for per-source coverage obligations (not a vendor id). */
+    coverage_source_slot: z.string().min(1).optional(),
   })
   .strict()
 
