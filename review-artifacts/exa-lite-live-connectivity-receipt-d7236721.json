@@ -1,0 +1,105 @@
+{
+  "schema": "research-v2-exa-lite-live-connectivity-receipt-sanitized/v1",
+  "receipt_binding": {
+    "frozen": true,
+    "do_not_rebind_to_later_commits": true,
+    "bound_review_head": "d723672192db54b0caf167088fb5cdc857464f18",
+    "bound_review_tree": "2ed97921d2768626f780fe7bb53070fb0f767b0c",
+    "executor": "connectivity-validation-executor-composer-2.5",
+    "implementation_ownership": "agents A (#406) and B (#404); this receipt is evidence-only"
+  },
+  "environment": {
+    "cursor_environment_public_id": "30363159-cb05-11f1-bec7-b2318963e0b6",
+    "label_at_capture": "Personal Environment Oct 21",
+    "repository": "gthgomez/Babel",
+    "exa_api_key_configured_boolean": true
+  },
+  "git": {
+    "head": "d723672192db54b0caf167088fb5cdc857464f18",
+    "tree": "2ed97921d2768626f780fe7bb53070fb0f767b0c",
+    "subject": "fix(research-v2): adopt B reviewed 2bde3a8 Exa transport and timeout semantics"
+  },
+  "runtime_binding": {
+    "execution_babel_cli_root": "/tmp/babel-exa-preflight-d723672/babel-cli",
+    "node_version": "v22.23.3",
+    "node_path_unset": true,
+    "babel_web_search_provider": "exa_lite",
+    "production_exa_transport": true,
+    "fake_transport": false,
+    "live_exa_calls": 1,
+    "live_model_calls": 0
+  },
+  "module_fingerprints_sha256": {
+    "bin/babel.js": "ee8f9ba2a7bd12b937451c0f4d86503d0b68d9076ed3cd24b9a7138b7039f43f",
+    "dist/cliEntryDispatch.js": "f5943d8014b6452390f769bb5ac59fc5fee7ff8655657fa038eb8ec26716d942",
+    "dist/research/v2/access/exaLiteSearchProvider.js": "e620e04592ebd8c8f63854f15ad971bbb970960554bea835788741020cd09a02",
+    "dist/research/v2/access/createAdmittedSourceSearchProvider.js": "c488609729fed80c37fae0035307e8e6085582a9091d381d824080208fea370d",
+    "dist/research/v2/access/babelConfiguredWebSearch.js": "dc646fb84fac3b45acefef1ebe86cc1056c39c376cbdfb7ba146522e19577926",
+    "dist/research/v2/access/admittedExaLiteHttpsPost.js": "eb36485ab26f76d1a4b2b00e47c4be5c311632e52565fbb5a23ba1f104328362"
+  },
+  "preflight_evidence": {
+    "artifact": "review-artifacts/exa-lite-live-connectivity-preflight-d7236721.json",
+    "npm_ci_and_build_exit": 0,
+    "focused_offline_tests_pass": 30,
+    "focused_offline_tests_fail": 0
+  },
+  "invocation": {
+    "harness_script": "review-artifacts/exa-lite-live-connectivity-harness-d7236721.mjs",
+    "shell_wrapper": "review-artifacts/exa-lite-live-connectivity-invocation-d7236721.sh",
+    "factory_entry": "createAdmittedSourceSearchProvider({ mode: 'babel_configured_web' })",
+    "provider_method": "provider.search (single call)",
+    "operation_id": "op-general-exa-lite-connectivity-20261021-001",
+    "query": "Python latest stable release official downloads"
+  },
+  "model_route_metadata_only": {
+    "selection_basis": "model_policy_json",
+    "route_key": "deepseek-v4-flash-openrouter",
+    "backend_key": "research-v2-cli",
+    "provider": "openrouter",
+    "provider_model_id": "deepseek/deepseek-v4-flash-0731",
+    "policy_path_repo_relative": "config/model-policy.json"
+  },
+  "mission": {
+    "mission_id": "mission-general-exa-lite-connectivity-20261021",
+    "profile_id": "general",
+    "allowed_web_domains": ["python.org", "www.python.org", "docs.python.org"]
+  },
+  "run_window_utc": {
+    "harness_started": "2026-10-21T13:07:53.346Z",
+    "search_started": "2026-10-21T13:07:53.352Z",
+    "search_ended": "2026-10-21T13:07:53.989Z"
+  },
+  "cli_exit_code": 0,
+  "connectivity_acceptance": true,
+  "search_outcome": {
+    "result_status": "ok",
+    "configured_provider_id": "exa_lite",
+    "effective_provider_id": "exa_lite",
+    "exa_participation": "exa_primary_ok",
+    "degradation": null,
+    "validated_hit_count": 5,
+    "hit_hostnames": ["www.python.org", "docs.python.org"],
+    "discovery_snippets_are_not_admitted_evidence": true
+  },
+  "exa_lite_receipt_sanitized": {
+    "request_id": "b8db7360e2f8f7a1529c4e11a34df826",
+    "resolved_search_type": null,
+    "estimated_cost_dollars": 0.004,
+    "estimated_cost_label": "exa_lite_estimated_cost_dollars",
+    "warnings": [],
+    "notices": []
+  },
+  "proof_artifacts": {
+    "sanitized_report_json": "review-artifacts/exa-lite-live-connectivity-report-d7236721.json",
+    "original_stdout_json": "review-artifacts/exa-lite-live-connectivity-output-d7236721.json",
+    "module_fingerprints_txt": "review-artifacts/exa-lite-live-connectivity-fingerprints-d7236721.txt",
+    "captured_at_utc": "2026-10-21T13:11:00.000Z"
+  },
+  "limitations_at_run": [
+    "exa_lite_cached_content_only_no_live_freshness",
+    "highlights_are_discovery_snippets_not_verified_passages",
+    "direct_fetch_and_ledger_remain_evidence_authority",
+    "degrades_to_duckduckgo_html_fallback_on_exa_failure"
+  ],
+  "note": "Single live Exa Lite request; DDG fallback not exercised. No headers, env dumps, or credential material in bundled artifacts."
+}

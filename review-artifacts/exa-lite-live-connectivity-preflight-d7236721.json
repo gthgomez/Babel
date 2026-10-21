@@ -1,0 +1,58 @@
+{
+  "schema": "research-v2-exa-lite-connectivity-preflight-evidence/v1",
+  "bound_head": "d723672192db54b0caf167088fb5cdc857464f18",
+  "bound_tree": "2ed97921d2768626f780fe7bb53070fb0f767b0c",
+  "worktree_root": "/tmp/babel-exa-preflight-d723672",
+  "babel_cli_root": "/tmp/babel-exa-preflight-d723672/babel-cli",
+  "dependency_setup": {
+    "command": "npm ci && npm run build",
+    "cwd": "/tmp/babel-exa-preflight-d723672/babel-cli",
+    "exit_code": 0
+  },
+  "exa_api_key_configured_boolean": true,
+  "focused_offline_tests": [
+    {
+      "path": "babel-cli/src/research/v2/access/createAdmittedSourceSearchProvider.test.ts",
+      "pass": 4,
+      "fail": 0,
+      "exit_code": 0
+    },
+    {
+      "path": "babel-cli/src/research/v2/access/exaLiteSearchProvider.test.ts",
+      "pass": 14,
+      "fail": 0,
+      "exit_code": 0
+    },
+    {
+      "path": "babel-cli/src/research/v2/access/exaLiteSearchResponseValidation.test.ts",
+      "pass": 5,
+      "fail": 0,
+      "exit_code": 0
+    },
+    {
+      "path": "babel-cli/src/research/v2/access/admittedExaLiteHttpsPost.test.ts",
+      "pass": 4,
+      "fail": 0,
+      "exit_code": 0
+    },
+    {
+      "path": "babel-cli/src/research/v2/engine/sourceDiscoverSearchReceipt.test.ts",
+      "pass": 3,
+      "fail": 0,
+      "exit_code": 0
+    }
+  ],
+  "focused_offline_tests_total": {
+    "pass": 30,
+    "fail": 0
+  },
+  "offline_test_runner": "node --import tsx --no-warnings=ExperimentalWarning --test <path>",
+  "dist_binding_preflight": {
+    "exa_api_key_present_boolean": true,
+    "babel_web_search_provider_resolved": "exa_lite",
+    "configured_provider_id": "exa_lite",
+    "production_exa_transport": true,
+    "no_search_call": true
+  },
+  "note": "Preflight captured before the single live Exa request; fake transport in unit tests only."
+}

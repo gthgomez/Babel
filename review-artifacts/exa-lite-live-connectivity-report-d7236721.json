@@ -1,0 +1,52 @@
+{
+  "harness": {
+    "worktree_cwd": "/tmp/babel-exa-preflight-d723672/babel-cli",
+    "pinned_head": "d723672192db54b0caf167088fb5cdc857464f18",
+    "pinned_tree": "2ed97921d2768626f780fe7bb53070fb0f767b0c",
+    "command": "cd /tmp/babel-exa-preflight-d723672/babel-cli && unset NODE_PATH && export BABEL_WEB_SEARCH_PROVIDER=exa_lite && node --input-type=module (createAdmittedSourceSearchProvider single search harness)",
+    "module_fingerprints_sha256_file": "review-artifacts/exa-lite-live-connectivity-fingerprints-d7236721.txt",
+    "started_at_utc": "2026-10-21T13:07:53.346Z",
+    "search_started_at_utc": "2026-10-21T13:07:53.352Z",
+    "search_ended_at_utc": "2026-10-21T13:07:53.989Z"
+  },
+  "model_route_resolution": {
+    "selection_basis": "model_policy_json",
+    "route_key": "deepseek-v4-flash-openrouter",
+    "backend_key": "research-v2-cli",
+    "provider": "openrouter",
+    "provider_model_id": "deepseek/deepseek-v4-flash-0731",
+    "policy_path": "config/model-policy.json"
+  },
+  "mission": {
+    "mission_id": "mission-general-exa-lite-connectivity-20261021",
+    "profile_id": "general",
+    "allowed_web_domains": [
+      "python.org",
+      "www.python.org",
+      "docs.python.org"
+    ]
+  },
+  "configured_provider_id": "exa_lite",
+  "limitations": [
+    "exa_lite_cached_content_only_no_live_freshness",
+    "highlights_are_discovery_snippets_not_verified_passages",
+    "direct_fetch_and_ledger_remain_evidence_authority",
+    "degrades_to_duckduckgo_html_fallback_on_exa_failure"
+  ],
+  "result_status": "ok",
+  "validated_hit_count": 5,
+  "hit_hostnames": [
+    "www.python.org",
+    "docs.python.org"
+  ],
+  "effective_provider_id": "exa_lite",
+  "exa_participation": "exa_primary_ok",
+  "degradation": null,
+  "exa_lite_request_id": "b8db7360e2f8f7a1529c4e11a34df826",
+  "exa_lite_resolved_search_type": null,
+  "exa_lite_estimated_cost_dollars": 0.004,
+  "exa_lite_warnings": [],
+  "exa_lite_notices": [],
+  "connectivity_acceptance": true,
+  "exit_code": 0
+}
