@@ -7,6 +7,7 @@ import type { SourceAccessFailureCategory } from './sourceAccessTypes.js'
 import type { z } from 'zod'
 
 export type {
+  SourceSearchExaLiteDiagnosticRecord,
   SourceSearchExaLiteReceiptMetadata,
   SourceSearchExaParticipation,
   SourceSearchProviderReceipt,

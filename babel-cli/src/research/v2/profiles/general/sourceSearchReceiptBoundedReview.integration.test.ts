@@ -66,8 +66,8 @@ function exaLiteMeta(requestId: string, estimated: number) {
   return {
     request_id: requestId,
     resolved_search_type: 'auto' as string | null,
-    warnings: [] as string[],
-    notices: [] as string[],
+    warnings: [],
+    notices: [],
     estimated_cost_dollars: estimated,
     estimated_cost_detail: null as Record<string, number> | null,
   }

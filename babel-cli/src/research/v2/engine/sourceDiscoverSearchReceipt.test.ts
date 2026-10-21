@@ -21,8 +21,8 @@ describe('sourceDiscoverSearchReceipt', () => {
       exa_lite: {
         request_id: 'req-abc',
         resolved_search_type: 'auto',
-        warnings: ['w1'],
-        notices: ['n1'],
+        warnings: [{ code: 'w1', path: null, message: 'warning one', details: null }],
+        notices: [{ code: 'n1', path: null, message: 'notice one', details: null }],
         estimated_cost_dollars: 0.0025,
         estimated_cost_detail: { search: 0.0025 },
       },

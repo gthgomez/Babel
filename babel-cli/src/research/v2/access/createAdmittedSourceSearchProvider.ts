@@ -2,12 +2,13 @@ import type { ResearchMissionV2 } from '../contracts/mission.js'
 import type { AdmittedSourceSearchProvider } from '../ports/admittedSourceSearchProvider.js'
 import type { AdmittedSearchIndexEntry } from './admittedMissionSourceSearch.js'
 import {
-  createDuckDuckGoHtmlFallbackSearchProvider,
+  createBabelConfiguredWebSearchProvider,
   defaultBabelWebSearchTransport,
   resolveProductionSearchProviderId,
   type BabelConfiguredSearchProviderId,
   type BabelWebSearchTransport,
 } from './babelConfiguredWebSearch.js'
+import type { ExaLiteSearchTransport } from './exaLiteSearchProvider.js'
 import { createDeclaredIndexCorpusSearchProvider } from './declaredIndexCorpusSearchProvider.js'
 
 export type ResearchSourceSearchMode = 'declared_index_corpus' | 'babel_configured_web'
@@ -21,6 +22,7 @@ export interface CreateAdmittedSourceSearchProviderOptions {
   configuredProviderId?: BabelConfiguredSearchProviderId
   /** Injected transport for tests; production uses admitted HTTP when omitted. */
   webSearchTransport?: BabelWebSearchTransport
+  exaLiteTransport?: ExaLiteSearchTransport
   env?: NodeJS.ProcessEnv
 }
 
@@ -69,13 +71,16 @@ export function createAdmittedSourceSearchProvider(
     }
   }
 
-  const duck = createDuckDuckGoHtmlFallbackSearchProvider({
-    transport: options.webSearchTransport ?? defaultBabelWebSearchTransport(),
+  const configured = createBabelConfiguredWebSearchProvider({
+    providerId,
+    webSearchTransport: options.webSearchTransport ?? defaultBabelWebSearchTransport(),
+    ...(options.exaLiteTransport ? { exaLiteTransport: options.exaLiteTransport } : {}),
+    ...(options.env ? { env: options.env } : {}),
   })
   return {
     mode: options.mode,
-    configuredProviderId: duck.providerId,
-    limitations: duck.limitations,
-    provider: duck,
+    configuredProviderId: configured.providerId,
+    limitations: configured.limitations,
+    provider: configured,
   }
 }

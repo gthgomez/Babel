@@ -95,8 +95,8 @@ function exaLiteReceiptMeta(
 ): {
   request_id: string
   resolved_search_type: string | null
-  warnings: string[]
-  notices: string[]
+  warnings: []
+  notices: []
   estimated_cost_dollars: number
   estimated_cost_detail: null
 } {

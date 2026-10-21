@@ -10,12 +10,26 @@ export const SourceSearchExaParticipationSchema = z.enum([
 
 export type SourceSearchExaParticipation = z.infer<typeof SourceSearchExaParticipationSchema>
 
+/** Bounded structured diagnostics (B `SourceSearchExaLiteDiagnosticRecord`; handoff add62bfc). */
+export const SourceSearchExaLiteDiagnosticRecordSchema = z
+  .object({
+    code: z.string().min(1),
+    path: z.string().nullable(),
+    message: z.string().min(1),
+    details: z.record(z.string(), z.string()).nullable(),
+  })
+  .strict()
+
+export type SourceSearchExaLiteDiagnosticRecord = z.infer<
+  typeof SourceSearchExaLiteDiagnosticRecordSchema
+>
+
 export const SourceSearchExaLiteReceiptMetadataSchema = z
   .object({
     request_id: z.string().nullable(),
     resolved_search_type: z.string().nullable(),
-    warnings: z.array(z.string()),
-    notices: z.array(z.string()),
+    warnings: z.array(SourceSearchExaLiteDiagnosticRecordSchema),
+    notices: z.array(SourceSearchExaLiteDiagnosticRecordSchema),
     /** Provider-reported estimate only — not an invoice. */
     estimated_cost_dollars: z.number().nullable(),
     estimated_cost_detail: z.record(z.string(), z.number()).nullable(),
