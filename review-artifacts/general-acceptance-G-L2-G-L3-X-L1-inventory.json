@@ -1,0 +1,143 @@
+{
+  "schema": "babel-research-v2-acceptance-inventory/v1",
+  "generated_at": "2026-10-21T09:36:00.000Z",
+  "branch": "cursor/agent-b-general-fixtures-f617",
+  "runtime_checkpoints": {
+    "production_finalizer_go": "08cc2986507b7549be04fe6d49ccfc995080e351",
+    "handoff_artifacts": "f7784353",
+    "one_question_partial_regression": "6c51bbed",
+    "attempt4_evidence_subset": "review-artifacts/general-g-l1-attempt4-evidence-subset.json"
+  },
+  "dependency_bearing_runtime": {
+    "cli_entry": "babel-cli/bin/babel.js research v2 …",
+    "engine_pass": "runResearchV2EnginePassOnOwner / runAdmittedResearchEndToEndPass",
+    "general_profile": "profiles/general + dev-corpus fixtures",
+    "live_gate": "BABEL_RESEARCH_V2_ALLOW_LIVE_API=1 + OpenRouter route (G-L1 only campaign preflight today)",
+    "offline_injected": "research v2 run --injected-offline / cancel-resume-once fixture model"
+  },
+  "scenarios": {
+    "G-L2_constrained_comparison": {
+      "intent": "General missions requiring normalized comparison dimensions (plans, pricing, constraints) with explicit exclusions.",
+      "fixture_proxy": ["G-DEV-01", "G-DEV-02", "G-DEV-03"],
+      "expectations_shape": "profiles/general/fixtures/dev-corpus/G-DEV-*/expectations.json (comparison_dimensions, structural must_* flags)",
+      "enablers": [
+        "Offline adapter reciprocal: generalAdapterEngineReciprocal.integration.test.ts (G-DEV-01 fetch/read)",
+        "generalAdapterReciprocal.integration.test.ts (G-DEV-01 HTML)",
+        "full-journey-regression.test.ts (G-DEV-01 brief cancel/reconcile slice)",
+        "Multi-question plan via model plan_questions op (live or fixture-scripted)",
+        "08cc2986 finalizer: partial when unanswered plan questions or acquisition limits"
+      ],
+      "blockers_or_gaps": [
+        "No campaign/G-L2-mission.json or G-L2 preflight script (only G-L1 in research-v2-campaign-preflight.mjs)",
+        "extract_findings schema has no per-finding question_id; host binds all findings to plan.questions[0] (findingsFromModelOutput.ts)",
+        "Live comparison run needs coordinator-authorized spend (not in this inventory turn)",
+        "Holdout/dev-corpus answers not executed or inspected in this inventory"
+      ],
+      "cli_path_proposed": {
+        "offline_engine": "node --import tsx --test src/research/v2/profiles/general/generalAdapterEngineReciprocal.integration.test.ts",
+        "live_when_authorized": "babel research v2 run --mission-file <G-DEV-0x mission.json> --store <dir> (requires live gate + general mission brief normalization)"
+      }
+    },
+    "G-L3_contradiction_insufficient_evidence": {
+      "intent": "Semantic support contradicted/insufficient surfaces partial terminal_state and limitations; scope mismatch not false contradiction.",
+      "fixture_proxy": ["G-DEV-05", "G-DEV-06"],
+      "enablers": [
+        "semantic_support_review model op + applySemanticSupportReview (findingsFromModelOutput.ts)",
+        "researchEndToEndPass.test.ts: insufficient judgment → partial + semantic_support_insufficient limitation",
+        "findingsFromModelOutput.repair.test.ts: contradicted + omitted → not_checked",
+        "08cc2986 finalizer: hasSemanticInsufficient/hasSemanticContradiction → partial",
+        "nativeReview regressions: integrity/missing passage/incomplete revision → partial (single-question rows)"
+      ],
+      "blockers_or_gaps": [
+        "No G-L3 campaign mission JSON wired to CLI preflight",
+        "G-DEV-05/06 expectations are structural prose only — no automated CLI acceptance runner bound to maps_to_acceptance_scenario G-L3",
+        "Per-question contradiction attribution blocked by extract default question_id = questions[0]",
+        "Paid live extract/review not run in this inventory"
+      ],
+      "cli_path_proposed": {
+        "offline_semantic_slice": "node --import tsx --test src/research/v2/engine/researchEndToEndPass.test.ts",
+        "offline_repair": "node --import tsx --test src/research/v2/engine/findingsFromModelOutput.repair.test.ts",
+        "dev_corpus_static": "node --import tsx --test src/research/v2/contracts/normalization-b-corpus.test.ts"
+      }
+    },
+    "X-L1_cancellation_resume": {
+      "intent": "Cancel terminal → resume continuation once → engine pass on durable store without re-appending mission.",
+      "maps_to_acceptance_scenario": "X-L1",
+      "enablers": [
+        "CLI: babel research v2 cancel-resume-once --store <dir>",
+        "CLI: babel research v2 resume --store … --mission-id … --writer-generation … (researchV2Commands.ts)",
+        "researchV2CliRoutes.test.ts: cancel-resume-once continuation_resumed_count === 1",
+        "cancelResumeControl.test.ts (M1.3 durable store)",
+        "continuation-after-cancel.test.ts (full journey)",
+        "finalizeOwnerResearchRunCancellation.test.ts (distinct attempt ids)",
+        "generalAdapterLifecycleReciprocal.integration.test.ts: owner watcher cancel → resume"
+      ],
+      "blockers_or_gaps": [
+        "Production resume path requires explicit host authorization ref + terminal state match",
+        "Live resume continuation still subject to live API gate when not --injected-offline",
+        "No paid live X-L1 run in this inventory"
+      ],
+      "cli_path_proposed": {
+        "offline_cli": "node --import tsx --test src/commands/researchV2CliRoutes.test.ts (cancel-resume-once case)",
+        "offline_engine": "node --import tsx --test src/research/v2/engine/cancelResumeControl.test.ts src/research/v2/contracts/continuation-after-cancel.test.ts"
+      }
+    }
+  },
+  "deterministic_checks": {
+    "already_run_this_inventory": [
+      {
+        "command": "npm --prefix babel-cli run test:research-v2-campaign-preflight",
+        "expected": "exit 0; acceptance_scenario G-L1; research-v2-campaign-preflight: ok",
+        "status": "pass"
+      },
+      {
+        "command": "node --import tsx --test babel-cli/src/research/v2/engine/findingsFromModelOutput.extractBinding.test.ts babel-cli/src/commands/researchV2CliRoutes.test.ts",
+        "expected": "4 tests pass (extract q[0] binding + CLI offline routes incl. X-L1)",
+        "status": "pass"
+      },
+      {
+        "command": "node --import tsx --test babel-cli/src/research/v2/engine/researchReportFinalization.nativeReview.regression.test.ts",
+        "expected": "10 tests pass (single-question partial predicate + complete control)",
+        "status": "pass"
+      },
+      {
+        "command": "node --import tsx --test babel-cli/src/research/v2/engine/cancelResumeControl.test.ts babel-cli/src/research/v2/contracts/continuation-after-cancel.test.ts babel-cli/src/research/v2/engine/researchEndToEndPass.test.ts",
+        "expected": "7 tests pass (cancel/resume + insufficient semantic partial e2e)",
+        "status": "pass"
+      }
+    ],
+    "proposed_not_run_yet": [
+      {
+        "command": "node --import tsx --test babel-cli/src/research/v2/profiles/general/generalAdapterEngineReciprocal.integration.test.ts",
+        "expected": "G-DEV-01 engine reciprocal pass (comparison-class fixture)",
+        "maps_to": "G-L2 proxy"
+      },
+      {
+        "command": "node --import tsx --test babel-cli/src/research/v2/contracts/normalization-b-corpus.test.ts",
+        "expected": "G-DEV-02/06 brief normalization pass",
+        "maps_to": "G-L2/G-L3 corpus hygiene"
+      },
+      {
+        "command": "node --import tsx --test babel-cli/src/research/v2/profiles/general/generalAdapterLifecycleReciprocal.integration.test.ts",
+        "expected": "cancel → inspect → resume lifecycle on general adapter",
+        "maps_to": "X-L1 integration depth"
+      },
+      {
+        "command": "node --import tsx --test babel-cli/src/research/v2/engine/finalizeOwnerResearchRunCancellation.test.ts",
+        "expected": "cancel/resume/cancel distinct attempt ids",
+        "maps_to": "X-L1 regression 1693fb0d"
+      },
+      {
+        "command": "node babel-cli/scripts/research-v2-campaign-preflight.mjs (extended for G-DEV-01 mission path when added)",
+        "expected": "schema + route lane only; no network",
+        "maps_to": "G-L2 preflight (fixture mission file TBD by A)"
+      }
+    ]
+  },
+  "extract_question1_binding_assessment": {
+    "current_behavior": "findingsFromExtractModelOutput assigns every finding to plan.questions[0].question_id; ExtractFindingsOutputSchema has no question field.",
+    "honest_incompleteness": "08cc2986 report: unanswered_questions lists q2–q5 when only q1 has supported findings; coverage_notes states first-question extract binding does not answer full plan; terminal_state partial with acquisition/integrity limits.",
+    "functional_multi_question_limit": "Cannot attach evidence to q2–q5 at extract time; semantic review and per-question coverage cannot reflect true multi-question attribution until model schema + host mapper accept per-finding question binding. Multi-question plans run but collapse to single-question evidence unless A extends contract.",
+    "not_a_holdout_inspection": true
+  }
+}
