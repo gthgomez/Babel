@@ -19,4 +19,4 @@ Technical missions use **composed retrieval** when slots are planned: each decla
 
 1. **arXiv PDF (~2.2MB, mutable locator + content digest `bdfaa68d…`)** — declare `source_policy.admitted_document_sources` on the mission (see `T-L2-mission.json`); production resolves via `missionDocumentAcquisitionPolicy` bound to the **actual fetch URL** (intersect host wire/decompressed ceilings with mission budgets). General web cap (`DEFAULT_MAX_ADMITTED_BYTES` 200000) unchanged unless host raises it. Offline bytes + manifest: `fixtures/campaign/papers/1706.03762.pdf`.
 2. **`paper` discovery** — use `document` + `selected_document_refs` (no open-web paper crawl).
-3. **Live GitHub tree + PDF fetch** — B-owned campaign execution; A proves injected-transport composition only.
+3. **Live GitHub tree + PDF fetch** — B-owned campaign execution; injected-transport composition tests were run by A and do not establish live retrieval acceptance.
