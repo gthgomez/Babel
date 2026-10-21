@@ -14,6 +14,35 @@ import { captureEffectParentIdentity } from '../executor/effectPathIdentity.js'
 
 const hash = (text: string): string => createHash('sha256').update(text).digest('hex')
 
+for (const replaceParent of [false, true]) {
+  test(`compensation refuses unbound newly created parent directories (replacement=${replaceParent})`, async () => {
+    const root = fs.mkdtempSync(join(tmpdir(), 'babel-compensation-new-parent-'))
+    try {
+      const parent = join(root, 'new', 'nested')
+      const path = join(parent, 'file.txt')
+      const original = recordEffectIntent({ runDir: root, sessionId: 'session', mutationBatchId: 'batch',
+        effectClass: 'reconcilable_mutation', toolName: 'write_file', targetPaths: [path],
+        targetParentIdentities: { [path]: captureEffectParentIdentity(path) },
+        preImageHashes: { [path]: WorkspaceTransactionManager.missingPathDigest() }, intendedContent: 'after' })
+      fs.mkdirSync(parent, { recursive: true }); fs.writeFileSync(path, 'after')
+      recordEffectTerminal(root, original, { status: 'completed', postImageHashes: { [path]: hash('after') } })
+      const moved = join(root, 'new', 'moved')
+      if (replaceParent) {
+        fs.renameSync(parent, moved); fs.mkdirSync(parent); fs.writeFileSync(path, 'after')
+      }
+      const result = await compensatePatchWrites([path], new Map(), new Set([path]),
+        new Map([[path, 'after']]), new Map([[path, original]]),
+        { runDir: root, runId: 'session', agentId: 'test', babelRoot: root })
+      assert.equal(fs.readFileSync(path, 'utf8'), 'after', 'an unbound parent must not authorize moving its file')
+      if (replaceParent) assert.equal(fs.readFileSync(join(moved, 'file.txt'), 'utf8'), 'after')
+      assert.equal(result.rolledBack.length, 0)
+      assert.match(result.failures.join(), /PARENT_IDENTITY/)
+      const compensation = loadEffectLedger(root).filter(record => record.compensatesOperationId === original.operationId).at(-1)
+      assert.equal(compensation?.status, 'failed')
+    } finally { fs.rmSync(root, { recursive: true, force: true }) }
+  })
+}
+
 test('exclusive restoration preserves POSIX mode despite a restrictive umask', {
   skip: process.platform === 'win32' ? 'POSIX mode/umask semantics are not available on Windows' : false,
 }, async () => {

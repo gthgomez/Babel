@@ -35,7 +35,9 @@ export async function compensatePatchWrites(
     const original = effects.get(path)
     const parent = original?.targetParentIdentities?.[path] ?? ephemeralParents?.get(path)
     const ownedTarget = (): string => {
-      if (!parent) throw new Error('EFFECT_PARENT_IDENTITY_UNAVAILABLE')
+      // Missing-at-admission components have names but no owned inode identity.
+      // Never adopt a directory created or replaced after that capture.
+      if (!parent || parent.relativeParent?.length) throw new Error('EFFECT_PARENT_IDENTITY_UNAVAILABLE')
       return resolveOwnedEffectPath(path, parent)
     }
     const expected = written.get(path)
