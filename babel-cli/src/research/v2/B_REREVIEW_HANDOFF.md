@@ -66,7 +66,7 @@ npm run test:research-v2-pdfjs-staged-package-smoke
 | Check | Command | Outcome |
 |-------|---------|---------|
 | Build + typecheck | `npm run build` && `npm run typecheck` | **ok** @ `9d97448a` (logs: `review-artifacts/readiness-9d97448a-build-typecheck.log`) |
-| Research v2 manifest | `node scripts/research-v2-collect-test-files.mjs \| tr '\\n' '\\0' \| xargs -0 node --import tsx --test` | **268** pass / 0 fail, 121 suites @ `9d97448a` (`review-artifacts/readiness-9d97448a-research-v2-tests.log`) |
+| Research v2 manifest | `node scripts/research-v2-collect-test-files.mjs \| tr '\\n' '\\0' \| xargs -0 node --import tsx --test` | **268** pass / 0 fail, 121 suites (incl. raw transport provenance regression) |
 | CLI routes (in manifest) | `researchV2CliRoutes.test.ts`, `researchV2Commands.live.test.ts` | included in manifest above |
 | B reciprocal receipt | `npm run test:research-v2-production-package-reciprocal` | `probe_ok`, `canvas_package_json_present=true` @ prior heads (Linux; not re-run this pass) |
 | Incorrect / hung-style glob | `node --test src/research/v2/**/*.test.ts` | **Do not use** — shell leaves literal `**` or runs a partial set; not authoritative |

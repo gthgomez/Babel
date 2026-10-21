@@ -13,7 +13,7 @@ import {
   parsePinnedGithubBlobUrl,
   assertImmutableRawUrlForPinnedBlob,
   pinnedGithubBlobUrlToRawContentUrl,
-  repositoryFileBlobProvenanceFromTransportHop,
+  assertRepositoryFileTransportHopMatchesPin,
   TechnicalRepositoryPinError,
 } from '../profiles/technical/repositoryFilePinning.js'
 import {
@@ -227,18 +227,18 @@ export class FetchSourceAccessPort implements SourceAccessPort {
       let provenanceUrls: AdmittedContent['provenance']
       if (pinnedBlobRef && request.source.kind === 'repository_file') {
         try {
+          for (const hop of [
+            response.requestedUrl,
+            ...response.redirectChain,
+            response.finalUrl,
+          ]) {
+            assertRepositoryFileTransportHopMatchesPin(hop, pinnedBlobRef)
+          }
           provenanceUrls = {
-            requested_url: repositoryFileBlobProvenanceFromTransportHop(
-              response.requestedUrl,
-              pinnedBlobRef,
-            ),
-            final_url: repositoryFileBlobProvenanceFromTransportHop(
-              response.finalUrl,
-              pinnedBlobRef,
-            ),
-            redirect_chain: response.redirectChain.map((hop) =>
-              repositoryFileBlobProvenanceFromTransportHop(hop, pinnedBlobRef),
-            ),
+            requested_url: response.requestedUrl,
+            final_url: response.finalUrl,
+            redirect_chain: response.redirectChain,
+            repository_file_pin: { pinned_blob_url: observedUrl },
           }
         } catch (err) {
           const message = err instanceof TechnicalRepositoryPinError ? err.message : String(err)

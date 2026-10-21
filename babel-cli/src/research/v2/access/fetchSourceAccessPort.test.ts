@@ -6,6 +6,9 @@ import { FetchSourceAccessPort } from './fetchSourceAccessPort.js'
 describe('FetchSourceAccessPort', () => {
   it('fetches admitted bytes for observed URL via injected admittedGet', async () => {
     const body = 'export const X = 1\n'
+    const sha = 'd9e42b14b00b6dba25f0415ae16b084363386a01'
+    const blob = `https://github.com/gthgomez/Babel/blob/${sha}/babel-cli/src/research/contracts.ts`
+    const raw = `https://raw.githubusercontent.com/gthgomez/Babel/${sha}/babel-cli/src/research/contracts.ts`
     const port = new FetchSourceAccessPort({
       admittedGet: async () => ({
         ok: true,
@@ -19,9 +22,6 @@ describe('FetchSourceAccessPort', () => {
         redirectChain: [raw],
       }),
     })
-    const sha = 'd9e42b14b00b6dba25f0415ae16b084363386a01'
-    const blob = `https://github.com/gthgomez/Babel/blob/${sha}/babel-cli/src/research/contracts.ts`
-    const raw = `https://raw.githubusercontent.com/gthgomez/Babel/${sha}/babel-cli/src/research/contracts.ts`
     const source = SourceRecordSchema.parse({
       source_id: 'src-1',
       kind: 'repository_file',
@@ -45,8 +45,10 @@ describe('FetchSourceAccessPort', () => {
         body,
       )
       assert.equal(result.admitted.operation_id, 'fetch-1')
-      assert.equal(result.admitted.provenance.final_url, blob)
-      assert.deepEqual(result.admitted.provenance.redirect_chain, [blob])
+      assert.equal(result.admitted.provenance.requested_url, raw)
+      assert.equal(result.admitted.provenance.final_url, raw)
+      assert.deepEqual(result.admitted.provenance.redirect_chain, [raw])
+      assert.equal(result.admitted.provenance.repository_file_pin?.pinned_blob_url, blob)
     }
   })
 

@@ -63,6 +63,19 @@ describe('pinned repository discovery → raw fetch → technical read', () => {
     )
     assert.equal(read.status, 'ok')
     assert.match(fetchedUrl, /^https:\/\/raw\.githubusercontent\.com\//)
+    const fetchResult = await access.fetchContent({
+      operationId: 'fetch-provenance-check',
+      source: source!,
+      signal: new AbortController().signal,
+    })
+    assert.equal(fetchResult.status, 'ok')
+    if (fetchResult.status === 'ok') {
+      assert.match(fetchResult.admitted.provenance.requested_url, /^https:\/\/raw\.githubusercontent\.com\//)
+      assert.match(
+        fetchResult.admitted.provenance.repository_file_pin?.pinned_blob_url ?? '',
+        /github\.com\/.*\/blob\/[a-f0-9]{40}\//,
+      )
+    }
     if (read.status === 'ok') {
       assert.ok(
         read.passages.some(

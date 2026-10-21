@@ -2,11 +2,19 @@ import { z } from 'zod'
 import { ContentHashSchema, RecordIdSchema } from './common.js'
 import { SourceRevisionSchema } from './sources.js'
 
+export const RepositoryFilePinProvenanceSchema = z
+  .object({
+    /** Commit-pinned github.com/.../blob/{sha}/... URL from source observed_urls (not transport). */
+    pinned_blob_url: z.string().url(),
+  })
+  .strict()
+
 export const RedirectProvenanceSchema = z
   .object({
     requested_url: z.string().url(),
     final_url: z.string().url(),
     redirect_chain: z.array(z.string().url()),
+    repository_file_pin: RepositoryFilePinProvenanceSchema.optional(),
   })
   .strict()
 
