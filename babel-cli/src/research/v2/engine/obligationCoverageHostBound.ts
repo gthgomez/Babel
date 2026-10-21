@@ -3,6 +3,7 @@ import type { PassageRecord } from '../contracts/passages.js'
 import type { PlanCoverageObligation, QuestionRecord } from '../contracts/plan.js'
 import type { PlanObligationCoverageRecord } from '../contracts/planObligationCoverageRecords.js'
 import type { SourceRecord, SourceRevision } from '../contracts/sources.js'
+import { collectObligationCoverageJudgmentIntegrityIssues } from './obligationCoverageJudgmentIntegrity.js'
 import { obligationsForQuestion, passageSupportsObligationCompleteness } from './planCoverageObligations.js'
 
 export type RevisionProvenanceIndex = Map<
@@ -14,6 +15,8 @@ export interface ObligationHostBoundAssessment {
   satisfiesRequiredFacets: boolean
   missingFacets: string[]
   wrongAspectEvidenceOnly: boolean
+  /** Populated when model obligation_coverage rows fail ID integrity checks (safe downgrade). */
+  judgmentIntegrityIssues?: string[]
 }
 
 function passageInlineText(passage: PassageRecord): string {
@@ -65,6 +68,20 @@ export function assessObligationCoverageHostBound(
   const missingObligationIds: string[] = []
   let sawWrongAspect = false
   const judgments = finding.plan_obligation_coverage
+
+  const judgmentIntegrityIssues = collectObligationCoverageJudgmentIntegrityIssues(
+    question,
+    finding,
+    params.passageById,
+  )
+  if (judgmentIntegrityIssues.length > 0) {
+    return {
+      satisfiesRequiredFacets: false,
+      missingFacets: obligations.map((o) => o.obligation_id),
+      wrongAspectEvidenceOnly: false,
+      judgmentIntegrityIssues,
+    }
+  }
 
   for (const obligation of obligations) {
     const judgment = judgmentForObligation(judgments, obligation.obligation_id)

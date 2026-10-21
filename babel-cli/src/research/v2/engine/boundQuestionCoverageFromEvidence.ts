@@ -67,6 +67,7 @@ export interface BoundCoverageAssessment {
   satisfiesRequiredFacets: boolean
   missingFacets: string[]
   wrongAspectEvidenceOnly: boolean
+  judgmentIntegrityIssues?: string[]
 }
 
 export function assessBoundQuestionCoverageFromAdmittedEvidence(
@@ -158,10 +159,13 @@ export function enforceBoundQuestionCoverageOnFindings(
     }
 
     const missing = assessment.missingFacets.join(',')
+    const integrity = assessment.judgmentIntegrityIssues?.join(',') ?? ''
     const hostRationale =
       obligations.length === 0
         ? `Host bound-question coverage: downgraded model "${modelCoverage}" to "${boundStatus}" because plan question has no coverage_obligations (legacy conservative bound).`
-        : `Host bound-question coverage: downgraded model "${modelCoverage}" to "${boundStatus}" because obligation judgment(s) fail host validation: ${missing}.`
+        : integrity.length > 0
+          ? `Host bound-question coverage: downgraded model "${modelCoverage}" to "${boundStatus}" because obligation_coverage judgment integrity failed: ${integrity}.`
+          : `Host bound-question coverage: downgraded model "${modelCoverage}" to "${boundStatus}" because obligation judgment(s) fail host validation: ${missing}.`
     const priorRationale = finding.question_coverage?.rationale ?? ''
     return {
       ...finding,

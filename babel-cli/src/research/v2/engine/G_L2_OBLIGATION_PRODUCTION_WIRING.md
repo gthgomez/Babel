@@ -6,7 +6,7 @@
 | --- | --- |
 | `buildPlanRevisionFromPlanQuestions` | Persists validated `coverage_obligations` from `plan_questions` model output; rejects unknown mission slots (`PlanCoverageObligationValidationError`). |
 | `missionCoverageSourceSlots` / retrieval | `stampCoverageSourceSlotOnSource` in `researchRetrievalLoop` and `researchComposedRetrievalLoop` stamps `coverage_source_slot` from slot topology (`web-ref-N`, etc.). |
-| Review + host bound | `buildSemanticSupportReviewInput`, `applySemanticSupportReview`, `obligationCoverageHostBound` / `assessObligationCoverageHostBound` bind model `obligation_coverage` judgments to slot + passage completeness. |
+| Review + host bound | `applySemanticSupportReview` → `enforceBoundQuestionCoverageOnFindings`; `collectObligationCoverageJudgmentIntegrityIssues` rejects absent/foreign passage ids, duplicate/unknown obligation rows (safe partial); `assessObligationCoverageHostBound` still calls `passageSupportsObligationCompleteness` regex until A ships per-obligation semantic judgments. |
 | Finalizer | `buildSynthesizedResearchReport` + `deriveUnansweredPlanQuestionIds` conservative partial terminal state when q3/q4 downgraded. |
 
 **Preserved historical evidence (unchanged bytes):**
