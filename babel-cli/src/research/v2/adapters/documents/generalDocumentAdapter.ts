@@ -79,10 +79,6 @@ export class GeneralDocumentAdapter implements SourceAdapter {
           return cancelledRead(request.operationId)
         }
         const coverage = extracted.coverage
-        const extractionComplete =
-          coverage.pages_processed === coverage.pdf_page_count &&
-          coverage.last_page_with_passage === coverage.pdf_page_count &&
-          coverage.pages_with_passages > 0
         return {
           operationId: request.operationId,
           status: 'ok',
@@ -93,8 +89,11 @@ export class GeneralDocumentAdapter implements SourceAdapter {
             pdf_page_count: coverage.pdf_page_count,
             pages_processed: coverage.pages_processed,
             pages_with_passages: coverage.pages_with_passages,
+            pages_without_extractable_text: coverage.pages_without_extractable_text,
+            pages_with_truncated_inline_text: coverage.pages_with_truncated_inline_text,
             last_page_with_passage: coverage.last_page_with_passage,
-            extraction_complete: extractionComplete,
+            page_traversal_complete: coverage.page_traversal_complete,
+            text_extraction_complete: coverage.text_extraction_complete,
           },
         }
       }

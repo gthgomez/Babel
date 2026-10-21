@@ -30,8 +30,11 @@ export interface DocumentPdfExtractionCoverage {
   pdf_page_count: number
   pages_processed: number
   pages_with_passages: number
+  pages_without_extractable_text: number
+  pages_with_truncated_inline_text: number
   last_page_with_passage: number | null
-  extraction_complete: boolean
+  page_traversal_complete: boolean
+  text_extraction_complete: boolean
 }
 
 export type SourceAdapterReadResult =

@@ -22,6 +22,7 @@ import {
   type AdmittedHttpGetDispatch,
   type AdmittedHttpGetResult,
 } from './admittedHttpGet.js'
+import { validateDocumentFetchUrlForMission } from './missionDocumentAdmission.js'
 import {
   validateMissionFetchAdmission,
   validateMissionWebHopUrl,
@@ -216,6 +217,19 @@ export class FetchSourceAccessPort implements SourceAccessPort {
           failureCategory:
             denied.failureCategory === 'pin_binding_failed' ? 'policy_denied' : denied.failureCategory,
           message: denied.message,
+        }
+      }
+      const fetchUrlViolation = validateDocumentFetchUrlForMission(
+        fetchUrl,
+        request.source,
+        this.options.mission,
+      )
+      if (fetchUrlViolation) {
+        return {
+          operationId: request.operationId,
+          status: 'failed',
+          failureCategory: 'policy_denied',
+          message: fetchUrlViolation,
         }
       }
     }

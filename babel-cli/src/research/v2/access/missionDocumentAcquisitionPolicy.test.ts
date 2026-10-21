@@ -99,7 +99,7 @@ describe('mission document acquisition policy', () => {
     assert.equal(budgets.maxDecodedBytes, 5_000_000)
   })
 
-  it('does not apply admitted policy when fetch URL is unrelated first observed_url', async () => {
+  it('rejects unrelated first observed_url with policy_denied and zero dispatch', async () => {
     const mission = loadT2Mission()
     const arxivUrl = paperManifest.canonical_url
     const unrelated = 'https://evil.example.invalid/not-the-paper.pdf'
@@ -109,32 +109,25 @@ describe('mission document acquisition policy', () => {
       canonical_key: arxivUrl,
       observed_urls: [unrelated, arxivUrl],
     }
-    let seenMaxWire: number | undefined
+    let dispatchCount = 0
     const port = new FetchSourceAccessPort({
       mission,
-      maxAdmittedBytes: DEFAULT_MAX_ADMITTED_BYTES,
-      admittedGet: async (params) => {
-        seenMaxWire = params.maxWireBytes ?? params.maxBytes
-        return {
-          ok: false,
-          status: 404,
-          contentType: 'application/octet-stream',
-          buffer: Buffer.alloc(0),
-          bytesReceived: 0,
-          truncated: false,
-          requestedUrl: params.url,
-          finalUrl: params.url,
-          redirectChain: [params.url],
-          transportCoding: null,
-        }
+      maxAdmittedBytes: 10_000_000,
+      dispatchGet: async () => {
+        dispatchCount += 1
+        throw new Error('dispatch must not run for unselected fetch URL')
       },
     })
-    await port.fetchContent({
+    const result = await port.fetchContent({
       operationId: 'unrelated-first',
       source,
       signal: new AbortController().signal,
     })
-    assert.equal(seenMaxWire, DEFAULT_MAX_ADMITTED_BYTES)
+    assert.equal(result.status, 'failed')
+    if (result.status !== 'failed') return
+    assert.equal(result.failureCategory, 'policy_denied')
+    assert.match(result.message, /not a mission-selected document ref/i)
+    assert.equal(dispatchCount, 0)
     assert.equal(
       resolveMissionDocumentPolicyForFetchUrl(source, mission, unrelated),
       undefined,
@@ -144,21 +137,26 @@ describe('mission document acquisition policy', () => {
   it('rejects forbidden redirect hop before body admission', async () => {
     const mission = loadT2Mission()
     const source = await paperSource(mission)
+    let initialDispatchCount = 0
+    let forbiddenTargetDispatchCount = 0
+    const evilRedirect = 'https://evil.example.invalid/redirected.pdf'
     const port = new FetchSourceAccessPort({
       mission,
       maxAdmittedBytes: 10_000_000,
-      admittedGet: async () => {
-        throw new Error('admittedGet should not run when redirect hop is denied')
-      },
       dispatchGet: async (url, _target, _max, signal) => {
         if (url.href === paperManifest.canonical_url) {
+          initialDispatchCount += 1
           return {
             status: 302,
-            headers: { location: 'https://evil.example.invalid/redirected.pdf' },
+            headers: { location: evilRedirect },
             body: { buffer: Buffer.alloc(0), bytesReceived: 0, truncated: false },
           }
         }
-        throw new Error('unexpected hop')
+        if (url.href === evilRedirect) {
+          forbiddenTargetDispatchCount += 1
+          throw new Error('forbidden redirect target must not be fetched')
+        }
+        throw new Error(`unexpected hop: ${url.href}`)
       },
     })
     const result = await port.fetchContent({
@@ -168,7 +166,10 @@ describe('mission document acquisition policy', () => {
     })
     assert.equal(result.status, 'failed')
     if (result.status !== 'failed') return
-    assert.match(result.message, /allowed_web_domains|redirect/i)
+    assert.equal(result.failureCategory, 'policy_denied')
+    assert.match(result.message, /allowed_web_domains/i)
+    assert.equal(initialDispatchCount, 1)
+    assert.equal(forbiddenTargetDispatchCount, 0)
   })
 
   it('real parser extracts multi-page passages including last page (not digest-only proof)', async () => {
@@ -209,7 +210,10 @@ describe('mission document acquisition policy', () => {
     assert.equal(cov.pages_processed, cov.pdf_page_count)
     assert.equal(cov.last_page_with_passage, cov.pdf_page_count)
     assert.ok(cov.pages_with_passages > 1)
-    assert.equal(cov.extraction_complete, true)
+    assert.equal(cov.page_traversal_complete, true)
+    assert.equal(cov.text_extraction_complete, true)
+    assert.equal(cov.pages_without_extractable_text, 0)
+    assert.equal(cov.pages_with_truncated_inline_text, 0)
     for (const passage of read.passages) {
       PassageRecordSchema.parse(passage)
       assert.equal(passage.locator.kind, 'page')
