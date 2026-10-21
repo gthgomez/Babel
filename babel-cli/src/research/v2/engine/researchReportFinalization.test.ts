@@ -85,8 +85,11 @@ describe('researchReportFinalization', () => {
     assert.deepEqual(deriveUnansweredPlanQuestionIds(plan, findings), ['q-2', 'q-3', 'q-4', 'q-5'])
   })
 
-  it('uses latest retrieved_at for source_cutoff', () => {
-    assert.equal(deriveSourceCutoffFromRevisions([truncatedRevision]), '2026-10-21T09:04:02.034Z')
+  it('uses latest retrieved_at instant normalized to UTC for source_cutoff', () => {
+    assert.equal(
+      deriveSourceCutoffFromRevisions([truncatedRevision]),
+      '2026-10-21T09:04:02.034Z',
+    )
   })
 
   it('G-L1-like partial report: truncation + 4/5 sections, model prose not used for cutoff/stopping', () => {

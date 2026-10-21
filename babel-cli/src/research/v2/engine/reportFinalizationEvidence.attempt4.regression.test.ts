@@ -4,23 +4,13 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, it } from 'node:test'
 import type { FindingRecord } from '../contracts/findings.js'
-import { FindingRecordSchema } from '../contracts/findings.js'
 import { ResearchMissionV2Schema } from '../contracts/mission.js'
 import { PlanRevisionSchema } from '../contracts/plan.js'
-import { SourceRecordSchema, SourceRevisionSchema } from '../contracts/sources.js'
 import { buildSynthesizedResearchReport } from './buildSynthesizedResearchReport.js'
-import {
-  buildHostSourceCutoff,
-  buildHostStoppingReason,
-  buildSourceFreshnessLimitations,
-  buildTruncatedSourceDisclosureLimitations,
-  derivePreservedUnresolvedPlanQuestionIds,
-  isExtractDefaultFirstQuestionLump,
-  planQuestionIdsWithExplicitSupportedCoverage,
-} from './reportFinalizationEvidence.js'
+import { deriveUnansweredPlanQuestionIds } from './researchReportFinalization.js'
+import { findingsFromExtractModelOutput } from './findingsFromModelOutput.js'
+import { loadAttempt4EvidenceSubset } from './testSupport/attempt4EvidenceSubset.js'
 
-const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '../../../../..')
-const subsetPath = join(repoRoot, 'review-artifacts/general-g-l1-attempt4-evidence-subset.json')
 const gL1MissionPath = join(
   dirname(fileURLToPath(import.meta.url)),
   '../fixtures/campaign/G-L1-mission.json',
@@ -71,86 +61,51 @@ const attempt4Plan = PlanRevisionSchema.parse({
 })
 
 const ALL_FIVE_QUESTION_IDS = attempt4Plan.questions.map((q) => q.question_id)
+const UNANSWERED_AFTER_Q1_SUPPORTED = ALL_FIVE_QUESTION_IDS.slice(1)
 
-function loadAttempt4Subset() {
-  const subset = JSON.parse(readFileSync(subsetPath, 'utf8'))
-  const source = SourceRecordSchema.parse(subset.source)
-  const revision = SourceRevisionSchema.parse(subset.revision)
-  const findings = subset.findings.map((f: unknown) => FindingRecordSchema.parse(f))
-  return { subset, source, revision, findings }
-}
-
-describe('G-L1 attempt4 report finalization evidence (host-owned, not model self-assertion)', () => {
-  it('loads sanitized ORIGINAL evidence subset fixture with six passages and six findings', () => {
-    const { subset, revision, findings } = loadAttempt4Subset()
-    assert.equal(subset.provenance.source_revision_content_hash, revision.content_hash)
+describe('G-L1 attempt4 evidence subset (historical) + fef78559 finalizer', () => {
+  it('preserves ORIGINAL subset artifact and extract binding on plan.questions[0]', () => {
+    const { provenance, revision, passages, findings } = loadAttempt4EvidenceSubset()
     assert.equal(
       revision.content_hash,
       'a0afa499c0bcfcfad46229c19edd86e0907e0eade9b0f7dbbe939a861254d1dc',
     )
-    assert.equal(subset.passages.length, 6)
+    assert.equal(passages.length, 6)
     assert.equal(findings.length, 6)
-    assert.ok(subset.passages.every((p: { passage_id: string }) => /:html:[0-5]$/.test(p.passage_id)))
-    assert.ok(
-      subset.provenance.extraction_command.includes(
-        'extract-general-g-l1-attempt4-evidence-subset.mjs',
-      ),
-    )
-  })
-
-  it('attempt4 findings are extract-default lump on plan.questions[0] only', () => {
-    const { findings } = loadAttempt4Subset()
     const firstQuestionId = attempt4Plan.questions[0]?.question_id
     assert.ok(firstQuestionId)
     assert.ok(findings.every((f: FindingRecord) => f.question_id === firstQuestionId))
-    assert.ok(isExtractDefaultFirstQuestionLump(attempt4Plan, findings))
-    const explicitCoverage = planQuestionIdsWithExplicitSupportedCoverage(attempt4Plan, findings)
-    assert.deepEqual(explicitCoverage, [firstQuestionId])
-    const preservedUnresolved = derivePreservedUnresolvedPlanQuestionIds(attempt4Plan, findings)
-    assert.deepEqual(preservedUnresolved, ALL_FIVE_QUESTION_IDS)
-  })
-
-  it('does not treat attempt4 as complete: preserves all five unresolved plan questions', () => {
-    const { findings, subset } = loadAttempt4Subset()
-    const preservedUnresolved = derivePreservedUnresolvedPlanQuestionIds(attempt4Plan, findings)
-    assert.deepEqual(preservedUnresolved, ALL_FIVE_QUESTION_IDS)
-    assert.equal(subset.terminal_report.terminal_state, 'partial')
-    assert.deepEqual(subset.terminal_report.unanswered_questions, ALL_FIVE_QUESTION_IDS)
-  })
-
-  it('surfaces truncated-source disclosure and truthful source freshness metadata', () => {
-    const { source, revision } = loadAttempt4Subset()
-    const truncation = buildTruncatedSourceDisclosureLimitations([revision])
-    assert.equal(truncation.length, 1)
-    const truncationLine = truncation[0]
-    assert.ok(truncationLine)
-    assert.match(truncationLine, /host_decoded_byte_limit/)
-    assert.match(truncationLine, /bytes_received=200000/)
-    const freshness = buildSourceFreshnessLimitations([source], [revision])
-    assert.equal(freshness.length, 1)
-    const freshnessLine = freshness[0]
-    assert.ok(freshnessLine)
-    assert.match(freshnessLine, /retrieved_at=2026-10-21T09:04:02.034Z/)
-    assert.match(freshnessLine, /completeness=truncated/)
-  })
-
-  it('uses host retrieval cutoff and stopping reason instead of model synthesis prose', () => {
-    const { revision, findings } = loadAttempt4Subset()
-    const preservedUnresolved = derivePreservedUnresolvedPlanQuestionIds(attempt4Plan, findings)
-    assert.equal(preservedUnresolved.length, 5)
-    const cutoff = buildHostSourceCutoff([revision])
-    assert.ok(!cutoff.includes('mutually consistent'))
-    assert.match(cutoff, /admitted_sources_truncated/)
-    const stopping = buildHostStoppingReason({
-      unansweredQuestionIds: preservedUnresolved,
-      revisions: [revision],
+    assert.ok(
+      String(provenance.extraction_command).includes(
+        'extract-general-g-l1-attempt4-evidence-subset.mjs',
+      ),
+    )
+    const rebound = findingsFromExtractModelOutput({
+      operationId: 'op-attempt4-shape',
+      plan: attempt4Plan,
+      passages,
+      createdAt: '2026-10-21T09:04:28.000Z',
+      modelOutput: {
+        kind: 'extract_findings',
+        findings: findings.map((f) => ({
+          assertion_text: f.assertion_text,
+          assertion_kind: f.assertion_kind,
+          passage_ids: f.passage_ids,
+        })),
+      },
     })
-    assert.equal(stopping, 'host_finalized_with_truncated_admitted_sources')
-    assert.notEqual(stopping, 'host_finalized_all_plan_questions_evidence_backed')
+    assert.ok(rebound.every((f) => f.question_id === firstQuestionId))
   })
 
-  it('documents current synthesized report gap: no truncation disclosure and model prose in source_cutoff', () => {
-    const { findings, subset } = loadAttempt4Subset()
+  it('records historical terminal report (pre-fef78559 builder) with all five unanswered and model prose cutoff', () => {
+    const { terminal_report } = loadAttempt4EvidenceSubset()
+    assert.equal(terminal_report.terminal_state, 'partial')
+    assert.deepEqual(terminal_report.unanswered_questions, ALL_FIVE_QUESTION_IDS)
+    assert.match(String(terminal_report.source_cutoff), /mutually consistent/)
+  })
+
+  it('rebuilds attempt4 with canonical finalizer: partial, per-question unanswered, truncation, corrected coverage_notes', () => {
+    const { revision, passages, findings, terminal_report } = loadAttempt4EvidenceSubset()
     const mission = ResearchMissionV2Schema.parse({
       ...JSON.parse(readFileSync(gL1MissionPath, 'utf8')),
       mission_id: 'mission-g-l1-general-live-attempt4',
@@ -164,21 +119,43 @@ describe('G-L1 attempt4 report finalization evidence (host-owned, not model self
         writer_generation: 3,
       },
       findings,
+      passages,
+      sourceRevisions: [revision],
       modelOutput: {
         kind: 'synthesize_report',
-        answer_summary: subset.terminal_report.limitations[0]?.replace(
-          'unverified_model_synthesis_excluded: ',
-          '',
-        ) ?? 'synthesis',
-        stopping_reason: subset.terminal_report.stopping_reason,
+        answer_summary: 'Model synthesis must not drive coverage.',
+        stopping_reason: String(terminal_report.stopping_reason),
       },
-      generatedAt: subset.terminal_report.generated_at,
+      generatedAt: String(terminal_report.generated_at),
     })
     assert.equal(report.terminal_state, 'partial')
-    assert.deepEqual(report.unanswered_questions, ALL_FIVE_QUESTION_IDS)
-    assert.ok(!report.limitations.some((l) => l.startsWith('source_truncated:')))
-    assert.match(report.source_cutoff ?? '', /mutually consistent/)
-    const preservedUnresolved = derivePreservedUnresolvedPlanQuestionIds(attempt4Plan, findings)
-    assert.deepEqual(preservedUnresolved, report.unanswered_questions)
+    assert.deepEqual(
+      deriveUnansweredPlanQuestionIds(attempt4Plan, findings),
+      UNANSWERED_AFTER_Q1_SUPPORTED,
+    )
+    assert.deepEqual(report.unanswered_questions, UNANSWERED_AFTER_Q1_SUPPORTED)
+    assert.ok(
+      report.coverage_notes.includes(
+        'default extract binding to the first plan question does not answer the full plan',
+      ),
+    )
+    assert.equal(report.source_cutoff, '2026-10-21T09:04:02.034Z')
+    assert.ok(report.stopping_reason.startsWith('single_pass_host_finalization'))
+    assert.ok(
+      report.limitations.some((l) =>
+        l.startsWith('source_revision_truncated:host_decoded_byte_limit'),
+      ),
+    )
+    assert.ok(
+      report.limitations.some((l) =>
+        l.startsWith('finding_source_integrity_not_verified:'),
+      ),
+    )
+    assert.ok(
+      report.limitations.some((l) =>
+        l.startsWith('unverified_model_stopping_prose_excluded:'),
+      ),
+    )
+    assert.notDeepEqual(report.unanswered_questions, terminal_report.unanswered_questions)
   })
 })

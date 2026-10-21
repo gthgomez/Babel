@@ -12,6 +12,7 @@ import {
   deriveSourceCutoffFromRevisions,
   deriveTerminalState,
   deriveUnansweredPlanQuestionIds,
+  deriveVerifiedEvidenceLimitations,
 } from './researchReportFinalization.js'
 
 function supportStatus(finding: FindingRecord): FindingRecord['semantic_support'] | undefined {
@@ -72,14 +73,22 @@ export function buildSynthesizedResearchReport(params: {
   )
   const sourceRevisions = params.sourceRevisions ?? []
   const passages = params.passages ?? []
+  const runtimeLimitations = params.additionalLimitations ?? []
   const acquisitionLimitations = deriveAcquisitionEvidenceLimitations({
     sourceRevisions,
     passages,
+  })
+  const evidenceVerificationLimitations = deriveVerifiedEvidenceLimitations({
+    findings: params.findings,
+    passages,
+    sourceRevisions,
   })
   const unansweredQuestionIds = deriveUnansweredPlanQuestionIds(params.plan, params.findings)
   const terminalState = deriveTerminalState({
     unansweredQuestionIds,
     acquisitionLimitations,
+    evidenceVerificationLimitations,
+    runtimeLimitations,
     hasSemanticInsufficient: hasInsufficient,
     hasSemanticContradiction: hasContradiction,
     hasSemanticNotChecked: hasNotChecked,
@@ -87,6 +96,8 @@ export function buildSynthesizedResearchReport(params: {
   const stoppingReason = deriveSinglePassStoppingReason({
     unansweredQuestionIds,
     acquisitionLimitations,
+    evidenceVerificationLimitations,
+    runtimeLimitations,
     hasSemanticInsufficient: hasInsufficient,
     hasSemanticContradiction: hasContradiction,
     hasSemanticNotChecked: hasNotChecked,
@@ -105,8 +116,9 @@ export function buildSynthesizedResearchReport(params: {
     coverage_notes:
       'answer_summary lists only semantically supported findings with explicit finding_id bindings; unanswered_questions omits plan questions without semantically supported findings (default extract binding to the first plan question does not answer the full plan).',
     limitations: [
-      ...(params.additionalLimitations ?? []),
+      ...runtimeLimitations,
       ...acquisitionLimitations,
+      ...evidenceVerificationLimitations,
       ...(hasInsufficient ? ['semantic_support_insufficient'] : []),
       ...(hasContradiction ? ['semantic_support_contradicted'] : []),
       ...(hasNotChecked ? ['semantic_support_not_checked'] : []),
