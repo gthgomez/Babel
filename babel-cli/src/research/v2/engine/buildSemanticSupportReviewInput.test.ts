@@ -69,5 +69,8 @@ describe('buildSemanticSupportReviewInput', () => {
     }
     assert.equal(cited[1]?.content_status, 'unavailable')
     assert.equal(cited[2]?.content_status, 'unavailable')
+    const rubric = input.findings[0]?.coverage_rubric
+    assert.ok(rubric)
+    assert.match(rubric?.guidance ?? '', /bound question_text/)
   })
 })
