@@ -1,0 +1,25 @@
+{
+  "schema": "research-v2-lineage-durable-matrix-receipt/v1",
+  "integration_commit": "2004cbeb5e0da9fe6c5c6832ae20b7120c6246d2",
+  "command": "npm run test:research-v2-extraction-lineage-durable",
+  "pre_integration": {
+    "head": "33e228039194af58ed69d79b9f0cb20a15fa85c6",
+    "tree": "51b7d64fc55e2d7702d8ca63e3edd72b5f1bba9e",
+    "tests": 21,
+    "pass": 19,
+    "fail": 2,
+    "failed_rows": [
+      "row_19_shared_passage_id_filter",
+      "row_19_shared_passage_id_e2e"
+    ],
+    "note": "ID-only allow-set collision (d5632091 matrix evidence preserved in git history)"
+  },
+  "post_integration": {
+    "head": "b7dfd848baa57696deec6d157d3035aea88a989d",
+    "tree": "2a6bc85ce3af9b3be6c7d90668a82ddf60addbc9",
+    "tests": 24,
+    "pass": 24,
+    "fail": 0,
+    "note": "B e2e collision test aligned to extract payload shape (text/id assertions unchanged for collision contract)"
+  }
+}

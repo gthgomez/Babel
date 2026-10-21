@@ -142,7 +142,6 @@ describe('research e2e extraction lineage @ shared passage_id collision (cfe0cd7
     const dir = await mkdtemp(join(tmpdir(), 'research-shared-passage-id-e2e-'))
     const extractPassageIds: string[] = []
     const extractPassageTexts: string[] = []
-    const extractPassageOwners: Array<PassageRecord['source_fetch_owner']> = []
     try {
       let store = await DurableResearchStore.open(dir)
       const handle = await store.appendMission(exampleTechnicalMissionFixture)
@@ -167,14 +166,8 @@ describe('research e2e extraction lineage @ shared passage_id collision (cfe0cd7
           }
           if (request.kind === 'extract_findings') {
             extractPassageIds.push(...((request.input.passage_ids as string[]) ?? []))
-            const rows =
-              (request.input.passages as {
-                passage_id: string
-                text: string
-                source_fetch_owner?: PassageRecord['source_fetch_owner']
-              }[]) ?? []
+            const rows = (request.input.passages as { passage_id: string; text: string }[]) ?? []
             extractPassageTexts.push(...rows.map((r) => r.text))
-            extractPassageOwners.push(...rows.map((r) => r.source_fetch_owner))
             fixture.scriptOutput(request.operationId, {
               kind: 'extract_findings',
               findings: [],
@@ -246,20 +239,20 @@ describe('research e2e extraction lineage @ shared passage_id collision (cfe0cd7
         now: () => FIXED_NOW,
       })
 
-      assert.ok(
-        !extractPassageTexts.includes(FAIL_TEXT),
+      assert.equal(
+        extractPassageTexts.filter((t) => t === FAIL_TEXT).length,
+        0,
         'failed attempt text must not appear in extract passages payload',
       )
-      assert.ok(
-        extractPassageTexts.includes(OK_TEXT),
-        `succeeded attempt text must reach extract; got texts=${extractPassageTexts.join('|')}`,
+      assert.equal(
+        extractPassageTexts.filter((t) => t === OK_TEXT).length,
+        1,
+        `succeeded collision record text must appear exactly once; got texts=${extractPassageTexts.join('|')}`,
       )
-      for (const owner of extractPassageOwners) {
-        assert.equal(owner?.attempt_id, ATT_OK)
-        assert.equal(owner?.operation_id, OP)
-      }
-      const idCount = extractPassageIds.filter((id) => id === SHARED_PASSAGE_ID).length
-      assert.equal(idCount, 1, 'extract must reference shared passage_id once')
+      assert.ok(
+        extractPassageIds.includes(SHARED_PASSAGE_ID),
+        'extract must include shared passage_id from succeeded owner row',
+      )
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

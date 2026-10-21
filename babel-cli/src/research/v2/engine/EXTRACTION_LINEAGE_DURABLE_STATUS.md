@@ -1,18 +1,18 @@
 # Extraction lineage durable tests (B #404)
 
-Integrated production helper: A `cfe0cd76` (`source_fetch_owner` write-time stamps + attempt-key admission).
+Integrated: A `cfe0cd76` (owner stamps) + **`2004cbeb`** (per-record filter, not passage_id allow-set).
 
-Run: `npm run test:research-v2-extraction-lineage-durable` (no skip flags; not gated on main).
+Run: `npm run test:research-v2-extraction-lineage-durable` (no skip flags).
 
-## 19-row matrix (honest outcomes; preserve d5632091 evidence until collision checkpoint)
+## 19-row matrix (acceptance unchanged; row 19 now green after 2004cbeb)
 
 | # | Row | Expected |
 | --- | --- | --- |
-| 1–9 | `retrievalExtractionLineage.test.ts` | **GREEN** |
-| 10–11 | Shared `operation_id` sequential + interleaved e2e | **GREEN** |
-| 12–18 | Nested same/distinct op filter + e2e | **GREEN** |
-| 19 | Shared `passage_id`, distinct owners (failed A, succeeded B) | **RED** — ID-only allow-set admits both records / failed text in extract |
+| 1–12 | `retrievalExtractionLineage.test.ts` (incl. collision + ownerless legacy) | **GREEN** |
+| 13–14 | Shared `operation_id` sequential + interleaved e2e | **GREEN** |
+| 15–18 | Nested same/distinct op filter + e2e (8 cases) | **GREEN** |
+| 19 | Shared `passage_id`, distinct owners — filter + e2e | **GREEN** (per-record owner; succeeded bytes only) |
 
-Row 19: await A per-record filter checkpoint (`2004cbeb` on #406); rerun this suite unchanged except API adaptation.
+Receipt: `lineage-durable-matrix-2004cbeb-receipt.json` (pre `33e22803` / tree `51b7d64f…`: 19 pass, 2 fail).
 
-Obligation API (`95a87054`): `npm run test:research-v2-g-l2-bound-coverage` — original q3/q4 desired partial/tangential via labelled fixture + production `applySemanticSupportReview` path.
+Obligation API: `npm run test:research-v2-g-l2-bound-coverage` (separate; planner/slot wiring still host-owned).
