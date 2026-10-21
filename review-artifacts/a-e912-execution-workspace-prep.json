@@ -1,0 +1,56 @@
+{
+  "schema": "a-e912-execution-workspace-prep/v1",
+  "status": "offline_ready_no_model_call",
+  "coordinator_release_required": true,
+  "pinned_commit": "e912c2f3320de0b6e1c9ff85b95b0f74d8b5323c",
+  "pinned_tree": "e0c2bf8995d60aba3ddf2dd3608ac50ae842b588",
+  "worktree_path": "/workspace/codex/worktrees/a-e912-execution-prep",
+  "worktree_mode": "detached_HEAD",
+  "prepared_at_utc": "2026-10-21T08:09:41Z",
+  "build": {
+    "command": "cd /workspace/codex/worktrees/a-e912-execution-prep/babel-cli && npm run build",
+    "outcome": "ok",
+    "node_modules": "symlink to /workspace/babel-cli/node_modules"
+  },
+  "absolute_entrypoints": {
+    "cli_bin": {
+      "path": "/workspace/codex/worktrees/a-e912-execution-prep/babel-cli/bin/babel.js",
+      "sha256": "ee8f9ba2a7bd12b937451c0f4d86503d0b68d9076ed3cd24b9a7138b7039f43f"
+    },
+    "cli_dispatch": {
+      "path": "/workspace/codex/worktrees/a-e912-execution-prep/babel-cli/dist/cliEntryDispatch.js",
+      "sha256": "f5943d8014b6452390f769bb5ac59fc5fee7ff8655657fa038eb8ec26716d942"
+    },
+    "research_v2_run_module": {
+      "path": "/workspace/codex/worktrees/a-e912-execution-prep/babel-cli/dist/research/v2/cli/researchV2MissionRun.js",
+      "sha256": "39dcc3d61229a604bd8748098944e965f3d2ba0b7fabdd002e51d60911b4e72c"
+    },
+    "admitted_http_content_coding_dist": {
+      "path": "/workspace/codex/worktrees/a-e912-execution-prep/babel-cli/dist/research/v2/access/admittedHttpContentCoding.js",
+      "sha256": "594040a95f0401a7d54f9a1596c622d56cf25698cbd3f9562a760c93eea7163d",
+      "transport_utf8_trim_in_dist": false
+    }
+  },
+  "focused_built_entrypoint_checks": [
+    {
+      "name": "dist_decode_bounded_gzip",
+      "command": "node -e \"import { decodeAdmittedHttpBody } from '.../dist/research/v2/access/admittedHttpContentCoding.js'; ...\"",
+      "outcome": "ok",
+      "observed": "decodedTruncated true, buffer.length 500"
+    },
+    {
+      "name": "openrouter_route_smoke",
+      "command": "cd .../babel-cli && npm run test:research-v2-openrouter-route-smoke",
+      "outcome": "ok",
+      "policy_path": "/workspace/codex/worktrees/a-e912-execution-prep/config/model-policy.json"
+    }
+  ],
+  "mission_preflight_note": "Mission file for attempt3 lives under /workspace/codex/missions/...; preflight-search-route.mjs resolves repoRoot to /workspace when using that path (imports babel-cli/src from workspace). For coordinator live run, execute CLI from THIS worktree cwd so dist/config match pinned e912; use absolute mission/store paths.",
+  "planned_live_cwd": "/workspace/codex/worktrees/a-e912-execution-prep/babel-cli",
+  "planned_live_template": "cd /workspace/codex/worktrees/a-e912-execution-prep/babel-cli && export BABEL_RESEARCH_V2_ALLOW_LIVE_API=1 && export BABEL_RESEARCH_V2_MODEL_ROUTE_KEY=deepseek-v4-flash-openrouter && node bin/babel.js research v2 run --store <fresh-store> --mission-file /workspace/codex/missions/general-g-l1-python-stable-attempt3/mission.json --discover-query 'latest stable Python release python.org download' --json",
+  "attempt3_preserved": true,
+  "correction_artifacts": [
+    "review-artifacts/general-g-l1-attempt3-binding-correction.txt",
+    "review-artifacts/general-g-l1-attempts-execution-path-audit.txt"
+  ]
+}

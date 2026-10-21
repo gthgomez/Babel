@@ -15,3 +15,8 @@ preflight_command=cd /workspace/babel-cli && node --import tsx /workspace/codex/
 mission_file=codex/missions/general-g-l1-python-stable-attempt3/mission.json
 store_path=codex/runs/general-g-l1-attempt3/store
 attempt3_live=executed_once see review-artifacts/general-g-l1-attempt3-live-run-receipt.json
+
+additive_correction=review-artifacts/general-g-l1-attempt3-binding-correction.txt
+attempt_execution_audit=review-artifacts/general-g-l1-attempts-execution-path-audit.txt
+next_execution_prep=review-artifacts/a-e912-execution-workspace-prep.json
+port_tap_count_correction=15/15 source tsx (not 16/16); see binding-correction

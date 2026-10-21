@@ -1,0 +1,27 @@
+schema=general-g-l1-attempt3-binding-correction/v1
+status=read_only_correction_additive
+preserves_original_receipt=review-artifacts/general-g-l1-attempt3-live-run-receipt.json
+preserves_attempt3_store=codex/runs/general-g-l1-attempt3/store
+
+what_was_claimed_or_implied=
+  - Readiness text named codex/worktrees/e912-integration as integration_worktree for transport e912c2f.
+  - Scoped port proof was described as 16/16 TAP tests in e912c2f-scoped-g-l1-readiness.txt.
+  - Wording could be read as “exact e912 execution” for attempt3 live run.
+
+what_was_actual_attempt3=
+  - Live CLI cwd: /workspace/babel-cli (B branch checkout), NOT the e912-integration worktree.
+  - Transport SOURCE: selected files (e.g. admittedHttpContentCoding.ts) matched e912 blob 2852dee3…; this is NOT full-tree equivalence to e912 — only checked transport module identity, not entire runtime.
+  - COMPILED dist at live run: /workspace/babel-cli/dist/* built 2026-10-21T07:53:20Z (pre-run), still contained transport-time UTF-8 trim (a3-era dist); src at e912 did not. Attempt3 failed at plan model_invoke — retrieval/fetch not exercised.
+  - Port TAP: SOURCE via tsx on /workspace/babel-cli — 15/15 tests (4 suites), independently verified runs/evidence/gzip-e912c2f-scoped-port-rerun.tap.txt tail “# tests 15”. Prior “16/16” count was incorrect.
+
+provider_http_request_count=
+  - Retained receipts/logs do NOT record upstream HTTP attempt counts, OpenRouter router retries, or per-chunk provider metadata for attempt3.
+  - Durable store shows one external_operation_completed for plan model_invoke only — that is one settled CLI operation, NOT proof of exactly one HTTP request (runner may retry internally; uncaptured).
+  - finish_reason, reasoning_tokens split, and root cause of empty visible content: UNKNOWN / unproven from persisted evidence.
+
+costs=
+  - usage_settlement in attempt3 store (652 in, 32000 out, ~$0.004328364 reported) remains REAL reported accounting evidence even though e912/dist binding for fetch was unproven and unused.
+
+next_execution_rule=
+  - Use single detached A-reviewed commit worktree; npm run build IN THAT worktree; record contemporaneous HEAD, tree, absolute bin + dist realpaths and sha256; run live from SAME worktree cwd.
+  - Prepared offline workspace: review-artifacts/a-e912-execution-workspace-prep.json (no model call until coordinator release).

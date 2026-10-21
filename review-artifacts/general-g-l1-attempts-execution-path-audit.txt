@@ -1,0 +1,52 @@
+schema=general-g-l1-attempts-execution-path-audit/v1
+scope=read_only_from_existing_receipts_logs_no_reruns
+note=attempt1_and_attempt2_do_not_inherit_attempt3_root_checkout_dist_mistake
+
+attempt1:
+  receipt=review-artifacts/general-g-l1-live-run-receipt.json
+  preflight_build=review-artifacts/general-g-l1-preflight-receipt.json
+  runtime_sha=9d97448a20045b2f4eec7b6f06bac9a533fc5424
+  original_command_cwd=/workspace/codex/worktrees/g-l1-9d97448a/babel-cli
+  absolute_bin=/workspace/codex/worktrees/g-l1-9d97448a/babel-cli/bin/babel.js
+  absolute_store=/workspace/codex/worktrees/g-l1-9d97448a/codex/runs/general-g-l1-python-stable/store
+  absolute_mission=/workspace/codex/worktrees/g-l1-9d97448a/codex/missions/general-g-l1-python-stable/mission.json
+  dist_built_before_run=preflight documents npm ci + npm run build in same worktree (outcome ok)
+  dist_cliEntryDispatch_mtime_observed_now=2026-10-21T06:35:44Z (worktree frozen artifact; contemporaneous to preflight/run window)
+  source_dist_alignment_at_run=worktree-local build intended; NOT root /workspace/babel-cli
+  durable_external_ops_completed=1 (plan model_invoke failed)
+  provider_http_requests=unknown_not_in_receipt
+  blocked_stage=planning_model_invoke (Zod validation)
+
+attempt2:
+  receipt=review-artifacts/general-g-l1-attempt2-live-run-receipt.json
+  preflight=review-artifacts/general-g-l1-attempt2-preflight.json
+  runtime_sha=ec7dce912eebd1210f762ddc6092de4d199c3c3b
+  worktree=/workspace/codex/worktrees/ec7dce91
+  original_command_cwd=/workspace/codex/worktrees/ec7dce91/babel-cli
+  absolute_bin=/workspace/codex/worktrees/ec7dce91/babel-cli/bin/babel.js
+  absolute_store=/workspace/codex/worktrees/ec7dce91/codex/runs/general-g-l1-attempt2/store
+  absolute_mission=/workspace/codex/missions/general-g-l1-python-stable-attempt2/mission.json
+  dist_cliEntryDispatch_mtime_observed_now=2026-10-21T06:55:38Z
+  source_dist_alignment_at_run=worktree-local; separate from attempt3 root checkout
+  durable_external_ops_completed=3 (plan succeeded, search succeeded, fetch failed utf8)
+  provider_http_requests=unknown_not_in_receipt (search+fetch occurred at product layer; upstream HTTP retry count uncaptured)
+  blocked_stage=retrieval_fetch_admission_utf8
+
+attempt3:
+  receipt=review-artifacts/general-g-l1-attempt3-live-run-receipt.json (unchanged)
+  correction=review-artifacts/general-g-l1-attempt3-binding-correction.txt
+  b_branch_head_at_run=63f00038 (per original receipt)
+  original_command_cwd=/workspace/babel-cli
+  absolute_bin=/workspace/babel-cli/bin/babel.js
+  absolute_store=/workspace/codex/runs/general-g-l1-attempt3/store
+  absolute_mission=/workspace/codex/missions/general-g-l1-python-stable-attempt3/mission.json
+  transport_source_partial_e912_blob=yes admittedHttpContentCoding.ts @ e912
+  dist_stale_vs_src=yes dist built 07:53Z retained a3 transport trim; not e912 dist
+  durable_external_ops_completed=1 (plan model_invoke failed empty response)
+  provider_http_requests=unknown_not_in_receipt
+  port_tap_source_only=15/15 tsx (not dist entrypoint)
+
+cross_cutting:
+  one_cli_process_not_one_http_request=true
+  reported_costs_remain_valid_reported_evidence=true
+  finish_reason_reasoning_split=not_persisted_in_store_for_any_attempt
