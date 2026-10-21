@@ -12,6 +12,7 @@ import { openAdmittedInspectStore } from '../control/researchStoreAdmission.js'
 import { exampleTechnicalMissionFixture } from '../fixtures/exampleMission.js'
 import { ResearchEngineSession } from './researchEngineSession.js'
 import { finalizeCancelledOwnerRunAndClose } from './ownerSessionCancellationFinalize.js'
+import { MissionAdmissionBootstrapBarrier } from './testSupport/missionAdmissionBootstrapBarrier.js'
 import type { ResearchModelPort } from '../ports/researchModelPort.js'
 
 class InvokeCountingModel implements ResearchModelPort {
@@ -68,15 +69,63 @@ describe('early cancel bootstrap union reciprocal (actual runner, offline)', () 
     }
   })
 
-  it('mission admitted before bootstrap init: zero model calls, no terminal until shell, owner released', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'babel-early-cancel-pre-bootstrap-barrier-'))
+  it('runner seam after admission before bootstrap: abort at barrier, zero model calls, cancelled terminal after cold reopen', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'babel-early-cancel-runner-barrier-'))
+    const barrier = new MissionAdmissionBootstrapBarrier()
+    const cancel = new AbortController()
+    const model = new InvokeCountingModel()
+    const planId = 'plan-union-runner-admission-barrier'
+    try {
+      const runPromise = runResearchV2MissionWithOwnerSession({
+        storeDirectory: dir,
+        mission: exampleTechnicalMissionFixture,
+        discoverQuery: 'RESEARCH_CONTRACT',
+        injectedOffline: true,
+        planRevisionId: planId,
+        signal: cancel.signal,
+        model,
+        testSeams: {
+          afterMissionAdmitted: () => barrier.afterMissionAdmitted(),
+        },
+      })
+
+      await barrier.waitUntilBlocked()
+      const midRunInspect = await ResearchEngineSession.openInspect(dir)
+      const midEvents = await midRunInspect.listEvents(exampleTechnicalMissionFixture.mission_id)
+      assert.ok(midEvents.some((e) => e.kind === 'mission_created'))
+      assert.equal(midEvents.filter((e) => e.kind === 'plan_revised').length, 0)
+
+      cancel.abort()
+      barrier.release()
+
+      await assert.rejects(() => runPromise)
+      assert.equal(model.invokeCount, 0)
+
+      const reopened = await ResearchEngineSession.openInspect(dir)
+      const events = await reopened.listEvents(exampleTechnicalMissionFixture.mission_id)
+      const terminals = events.filter((e) => e.kind === 'terminal_receipt')
+      assert.equal(terminals.length, 1)
+      const report = (terminals[0]!.payload as { report: { terminal_state: string; plan_revision_id: string } })
+        .report
+      assert.equal(report.terminal_state, 'cancelled')
+      assert.equal(report.plan_revision_id, `${planId}-bootstrap`)
+      assert.ok(events.some((e) => e.kind === 'plan_revised'))
+      await assertOwnerReleased(dir)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('early cancel helper characterization (not actual-runner barrier regression)', () => {
+  it('finalizeCancelledOwnerRunAndClose before bootstrap shell: pre_bootstrap_no_active_plan, zero terminals', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'babel-early-cancel-pre-bootstrap-helper-'))
     const cancel = new AbortController()
     cancel.abort()
     const model = new InvokeCountingModel()
-    const planId = 'plan-union-pre-bootstrap-barrier'
     try {
       const owner = await ResearchEngineSession.openOwner({ storeDirectory: dir, model })
-      const handle = await owner.appendMission(exampleTechnicalMissionFixture)
+      await owner.appendMission(exampleTechnicalMissionFixture)
       const closeOutcome = await finalizeCancelledOwnerRunAndClose({
         owner,
         mission: exampleTechnicalMissionFixture,

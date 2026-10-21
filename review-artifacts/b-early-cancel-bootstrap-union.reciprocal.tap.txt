@@ -1,0 +1,42 @@
+TAP version 13
+# Subtest: early cancel bootstrap union reciprocal (actual runner, offline)
+    # Subtest: prior-aborted signal: bootstrap shell admitted, zero model calls, cancelled terminal after reopen
+    ok 1 - prior-aborted signal: bootstrap shell admitted, zero model calls, cancelled terminal after reopen
+      ---
+      duration_ms: 16.733644
+      type: 'test'
+      ...
+    # Subtest: runner seam after admission before bootstrap: abort at barrier, zero model calls, cancelled terminal after cold reopen
+    ok 2 - runner seam after admission before bootstrap: abort at barrier, zero model calls, cancelled terminal after cold reopen
+      ---
+      duration_ms: 11.909803
+      type: 'test'
+      ...
+    1..2
+ok 1 - early cancel bootstrap union reciprocal (actual runner, offline)
+  ---
+  duration_ms: 29.402762
+  type: 'suite'
+  ...
+# Subtest: early cancel helper characterization (not actual-runner barrier regression)
+    # Subtest: finalizeCancelledOwnerRunAndClose before bootstrap shell: pre_bootstrap_no_active_plan, zero terminals
+    ok 1 - finalizeCancelledOwnerRunAndClose before bootstrap shell: pre_bootstrap_no_active_plan, zero terminals
+      ---
+      duration_ms: 6.387712
+      type: 'test'
+      ...
+    1..1
+ok 2 - early cancel helper characterization (not actual-runner barrier regression)
+  ---
+  duration_ms: 7.100551
+  type: 'suite'
+  ...
+1..2
+# tests 3
+# suites 2
+# pass 3
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 785.645163

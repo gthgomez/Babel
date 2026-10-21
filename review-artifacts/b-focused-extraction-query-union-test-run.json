@@ -9,6 +9,13 @@
   "exit_code": 0,
   "counts": { "tests": 23, "pass": 23, "fail": 0, "suites": 6 },
   "tap_log": "review-artifacts/b-focused-extraction-query-union-test-run.tap.txt",
+  "supplement_v2": {
+    "counts": { "tests": 24, "pass": 24, "fail": 0, "suites": 7 },
+    "tap_log": "review-artifacts/b-focused-extraction-query-union-test-run-v2.tap.txt",
+    "union_reciprocal_tap_bound_to_source": "review-artifacts/b-early-cancel-bootstrap-union.reciprocal.tap.txt",
+    "union_test_source": "babel-cli/src/research/v2/engine/earlyCancelBootstrapUnion.reciprocal.test.ts",
+    "runner_barrier_seam": "ResearchV2MissionRunOptions.testSeams.afterMissionAdmitted"
+  },
   "new_union_tests": "babel-cli/src/research/v2/engine/earlyCancelBootstrapUnion.reciprocal.test.ts",
   "preserved_prior_receipt": "review-artifacts/b-focused-extraction-query-test-run.json (21-test slice, unchanged counts)",
   "preserved_production_logs": "review-artifacts/b-cce13455-production-typecheck-build-receipt.json (not rerun)"

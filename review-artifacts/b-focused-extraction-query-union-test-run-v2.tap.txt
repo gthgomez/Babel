@@ -1,0 +1,203 @@
+TAP version 13
+# Subtest: verifyMissionAdmittedDocumentBody admission diagnostics
+    # Subtest: surfaces CRLF line-ending hints on digest mismatch without weakening checks
+    ok 1 - surfaces CRLF line-ending hints on digest mismatch without weakening checks
+      ---
+      duration_ms: 1.060925
+      type: 'test'
+      ...
+    # Subtest: surfaces CRLF hints on byte length mismatch
+    ok 2 - surfaces CRLF hints on byte length mismatch
+      ---
+      duration_ms: 0.264712
+      type: 'test'
+      ...
+    1..2
+ok 1 - verifyMissionAdmittedDocumentBody admission diagnostics
+  ---
+  duration_ms: 2.020862
+  type: 'suite'
+  ...
+# Subtest: passagesFromAdmittedStaticHtml: C NEW devguide heading structure (nested headerlink, not byte identity)
+ok 2 - passagesFromAdmittedStaticHtml: C NEW devguide heading structure (nested headerlink, not byte identity)
+  ---
+  duration_ms: 5.002117
+  type: 'test'
+  ...
+# Subtest: passagesFromAdmittedStaticHtml: nested heading markup yields stable section locators (representative, not live bytes)
+ok 3 - passagesFromAdmittedStaticHtml: nested heading markup yields stable section locators (representative, not live bytes)
+  ---
+  duration_ms: 0.72613
+  type: 'test'
+  ...
+# Subtest: passagesFromAdmittedStaticHtml: inline anchor/em inside single heading
+ok 4 - passagesFromAdmittedStaticHtml: inline anchor/em inside single heading
+  ---
+  duration_ms: 0.277919
+  type: 'test'
+  ...
+# Subtest: passagesFromAdmittedStaticHtml: G-DEV-01 plan-a heading sections
+ok 5 - passagesFromAdmittedStaticHtml: G-DEV-01 plan-a heading sections
+  ---
+  duration_ms: 0.949639
+  type: 'test'
+  ...
+# Subtest: passagesFromAdmittedStaticHtml: non-ascii repeated headings get unique section_id
+ok 6 - passagesFromAdmittedStaticHtml: non-ascii repeated headings get unique section_id
+  ---
+  duration_ms: 0.491479
+  type: 'test'
+  ...
+# Subtest: passagesFromAdmittedStaticHtml: repeated headings get unique section_id
+ok 7 - passagesFromAdmittedStaticHtml: repeated headings get unique section_id
+  ---
+  duration_ms: 0.239355
+  type: 'test'
+  ...
+# Subtest: passagesFromAdmittedStaticHtml: inline hash matches emitted text
+ok 8 - passagesFromAdmittedStaticHtml: inline hash matches emitted text
+  ---
+  duration_ms: 9.891448
+  type: 'test'
+  ...
+# Subtest: passagesFromAdmittedStaticHtml: long unicode respects UTF-16 schema max
+ok 9 - passagesFromAdmittedStaticHtml: long unicode respects UTF-16 schema max
+  ---
+  duration_ms: 1.777021
+  type: 'test'
+  ...
+# Subtest: passagesFromAdmittedStaticHtml: rejects login-only html
+ok 10 - passagesFromAdmittedStaticHtml: rejects login-only html
+  ---
+  duration_ms: 0.637419
+  type: 'test'
+  ...
+# Subtest: passagesFromAdmittedStaticHtml: rejects non-html media
+ok 11 - passagesFromAdmittedStaticHtml: rejects non-html media
+  ---
+  duration_ms: 0.342626
+  type: 'test'
+  ...
+# Subtest: early cancel bootstrap union reciprocal (actual runner, offline)
+    # Subtest: prior-aborted signal: bootstrap shell admitted, zero model calls, cancelled terminal after reopen
+    ok 1 - prior-aborted signal: bootstrap shell admitted, zero model calls, cancelled terminal after reopen
+      ---
+      duration_ms: 15.218491
+      type: 'test'
+      ...
+    # Subtest: runner seam after admission before bootstrap: abort at barrier, zero model calls, cancelled terminal after cold reopen
+    ok 2 - runner seam after admission before bootstrap: abort at barrier, zero model calls, cancelled terminal after cold reopen
+      ---
+      duration_ms: 12.598604
+      type: 'test'
+      ...
+    1..2
+ok 12 - early cancel bootstrap union reciprocal (actual runner, offline)
+  ---
+  duration_ms: 28.511708
+  type: 'suite'
+  ...
+# Subtest: early cancel helper characterization (not actual-runner barrier regression)
+    # Subtest: finalizeCancelledOwnerRunAndClose before bootstrap shell: pre_bootstrap_no_active_plan, zero terminals
+    ok 1 - finalizeCancelledOwnerRunAndClose before bootstrap shell: pre_bootstrap_no_active_plan, zero terminals
+      ---
+      duration_ms: 4.584558
+      type: 'test'
+      ...
+    1..1
+ok 13 - early cancel helper characterization (not actual-runner barrier regression)
+  ---
+  duration_ms: 4.719643
+  type: 'suite'
+  ...
+# Subtest: composed retrieval per-pin discover query (T-L1, injected trees)
+    # Subtest: dispatches scoped queries to each repository pin with global fallback unused
+    ok 1 - dispatches scoped queries to each repository pin with global fallback unused
+      ---
+      duration_ms: 10.544443
+      type: 'test'
+      ...
+    # Subtest: uses global discover query when a pin omits discover_query
+    ok 2 - uses global discover query when a pin omits discover_query
+      ---
+      duration_ms: 1.061743
+      type: 'test'
+      ...
+    1..2
+ok 14 - composed retrieval per-pin discover query (T-L1, injected trees)
+  ---
+  duration_ms: 12.229594
+  type: 'suite'
+  ...
+# Subtest: technicalRetrievalComposition discover query
+    # Subtest: uses per-pin discover_query when declared
+    ok 1 - uses per-pin discover_query when declared
+      ---
+      duration_ms: 3.7318
+      type: 'test'
+      ...
+    # Subtest: falls back to global discover query when pin omits discover_query
+    ok 2 - falls back to global discover query when pin omits discover_query
+      ---
+      duration_ms: 0.096374
+      type: 'test'
+      ...
+    1..2
+ok 15 - technicalRetrievalComposition discover query
+  ---
+  duration_ms: 4.497441
+  type: 'suite'
+  ...
+# Subtest: T-L1 discover-query reciprocal (injected trees, no GitHub API)
+    # Subtest: CLI default first-eight-word query matches zero repository paths
+    ok 1 - CLI default first-eight-word query matches zero repository paths
+      ---
+      duration_ms: 4.220847
+      type: 'test'
+      ...
+    # Subtest: explicit production discover-query yields concrete Babel persistence paths
+    ok 2 - explicit production discover-query yields concrete Babel persistence paths
+      ---
+      duration_ms: 1.072444
+      type: 'test'
+      ...
+    # Subtest: mission declares distinct per-pin discover_query terms for Babel vs LangGraph
+    ok 3 - mission declares distinct per-pin discover_query terms for Babel vs LangGraph
+      ---
+      duration_ms: 0.346829
+      type: 'test'
+      ...
+    1..3
+ok 16 - T-L1 discover-query reciprocal (injected trees, no GitHub API)
+  ---
+  duration_ms: 6.314048
+  type: 'suite'
+  ...
+# Subtest: T-L1 architecture-comparison campaign mission
+    # Subtest: parses technical profile mission with two pinned repositories and per-pin discover queries
+    ok 1 - parses technical profile mission with two pinned repositories and per-pin discover queries
+      ---
+      duration_ms: 3.899759
+      type: 'test'
+      ...
+    # Subtest: rejects whitespace-only discover_query instead of silent global fallback
+    ok 2 - rejects whitespace-only discover_query instead of silent global fallback
+      ---
+      duration_ms: 0.982912
+      type: 'test'
+      ...
+    1..2
+ok 17 - T-L1 architecture-comparison campaign mission
+  ---
+  duration_ms: 5.468246
+  type: 'suite'
+  ...
+1..17
+# tests 24
+# suites 7
+# pass 24
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 1051.614747

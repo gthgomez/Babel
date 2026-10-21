@@ -46,6 +46,12 @@ export interface ResearchV2MissionRunResult {
     | 'not_attempted'
 }
 
+/** Optional hooks for deterministic lifecycle tests; not used in production CLI paths. */
+export interface ResearchV2MissionRunTestSeams {
+  /** Runs after `appendMission`, before `ensureAdmittedBootstrapPlanShell`. */
+  afterMissionAdmitted?: () => void | Promise<void>
+}
+
 export interface ResearchV2MissionRunOptions {
   storeDirectory: string
   mission: ResearchMissionV2
@@ -59,6 +65,7 @@ export interface ResearchV2MissionRunOptions {
   signal?: AbortSignal
   webSearchTransport?: BabelWebSearchTransport
   fetchRepositoryTree?: FetchPinnedRepositoryTree
+  testSeams?: ResearchV2MissionRunTestSeams
 }
 
 async function resolveRegistries(mission: ResearchMissionV2): Promise<MissionRegistryBundle> {
@@ -287,6 +294,7 @@ export async function runResearchV2MissionWithOwnerSession(
 
     let handle = await owner.appendMission(options.mission)
     missionAppended = true
+    await options.testSeams?.afterMissionAdmitted?.()
     const admittedAt = new Date().toISOString()
     const planRevisionId =
       options.planRevisionId ??
