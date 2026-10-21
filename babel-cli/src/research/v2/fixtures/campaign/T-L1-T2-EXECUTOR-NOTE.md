@@ -9,6 +9,8 @@
 
 Non-secret preflight: `npm run test:research-v2-technical-campaign-preflight`.
 
+**T-L1 discover query (verified 2026-10-21):** do not rely on CLI default first-eight-word query (`0` repository path hits). Mission pins carry optional `discover_query` on each `pinned_target_repository` / `selected_repository_refs` entry (`T-L1-mission.json`: Babel `research v2 persistence`, LangGraph `libs checkpoint` at commit `3cd57c03…`). Host `--discover-query` remains the **backward-compatible fallback** when a pin omits `discover_query`. LangGraph pin must resolve on GitHub (`3cd57c03…` replaces invalid `d2c584a…`; tree SHA `a8aa3b13…` in pins file).
+
 Offline production wiring proof (injected GitHub tree + document search routing): `technicalCampaignProductionWiring.test.ts` — **not** canonical live acceptance.
 
 ## Composed retrieval (post `fb1c44aa`)

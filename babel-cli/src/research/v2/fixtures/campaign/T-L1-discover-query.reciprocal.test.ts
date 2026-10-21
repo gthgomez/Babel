@@ -86,50 +86,14 @@ describe('T-L1 discover-query reciprocal (injected trees, no GitHub API)', () =>
     assert.ok(keys.some((k) => k.includes('durableResearchStore.ts')))
   })
 
-  it('documents single-query limitation across two repository pins', async () => {
+  it('mission declares distinct per-pin discover_query terms for Babel vs LangGraph', () => {
     const mission = loadMission()
-    const babelQuery = 'research v2 persistence'
-    const langGraphQuery = 'libs checkpoint'
-    const babelPaths = ['babel-cli/src/research/v2/persistence/README.md']
-    const langGraphPaths = ['libs/checkpoint-conformance/README.md']
-    const provider = createPinnedRepositoryFileSearchProvider({
-      fetchTree: async ({ apiUrl }) => {
-        if (apiUrl.includes('gthgomez/Babel')) {
-          return { ok: true, status: 200, entries: treeFromPaths(babelPaths) }
-        }
-        return { ok: true, status: 200, entries: treeFromPaths(langGraphPaths) }
-      },
-    })
-    const babelOnly = await provider.search(
-      {
-        operationId: 'babel',
-        query: babelQuery,
-        sourceClasses: ['repository_file'],
-        signal: new AbortController().signal,
-      },
-      mission,
+    assert.equal(mission.pinned_target_repository?.discover_query, 'research v2 persistence')
+    assert.equal(
+      mission.source_policy.selected_repository_refs?.[0]?.discover_query,
+      'libs checkpoint',
     )
-    const langOnly = await provider.search(
-      {
-        operationId: 'lang',
-        query: langGraphQuery,
-        sourceClasses: ['repository_file'],
-        signal: new AbortController().signal,
-      },
-      mission,
-    )
-    assert.equal(babelOnly.hits.length, 1)
-    assert.equal(langOnly.hits.length, 1)
-    const combined = await provider.search(
-      {
-        operationId: 'combined',
-        query: babelQuery,
-        sourceClasses: ['repository_file'],
-        signal: new AbortController().signal,
-      },
-      mission,
-    )
-    assert.equal(combined.hits.length, 1)
     assert.equal(pins.reference_repository.commit_sha, mission.source_policy.selected_repository_refs?.[0]?.commit_sha)
+    assert.equal(pins.reference_repository.git_tree_sha, 'a8aa3b138b6036c25331712af8ed8b3f0a4a0fda')
   })
 })

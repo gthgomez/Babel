@@ -27,7 +27,8 @@
         "provider": "github",
         "repo_id": "github:langchain-ai/langgraph",
         "full_name": "langchain-ai/langgraph",
-        "commit_sha": "3cd57c038ad827d05f80c6488adea9994156c58c"
+        "commit_sha": "3cd57c038ad827d05f80c6488adea9994156c58c",
+        "discover_query": "libs checkpoint"
       }
     ],
     "visibility_retention": {
@@ -49,6 +50,7 @@
     "provider": "github",
     "repo_id": "github:gthgomez/Babel",
     "full_name": "gthgomez/Babel",
-    "commit_sha": "e912c2f3320de0b6e1c9ff85b95b0f74d8b5323c"
+    "commit_sha": "e912c2f3320de0b6e1c9ff85b95b0f74d8b5323c",
+    "discover_query": "research v2 persistence"
   }
 }
