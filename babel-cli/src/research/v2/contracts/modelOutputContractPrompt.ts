@@ -46,7 +46,7 @@ Each question_id must match one of the active plan question ids; unknown ids are
 }
 Per-judgment allowed keys only: finding_id, status, rationale, question_coverage.
 status judges whether cited passages support the assertion; question_coverage judges whether the assertion addresses the bound plan question text (tangential supported facts do not count as answers).
-Use coverage_rubric on each finding in the request: cross-source comparison questions need relevant admitted evidence per compared source/aspect (missing source/aspect → partial, not answers); audience/intent questions are not answered by cache-directive excerpts alone (wrong aspect → tangential or partial). Host finalization may downgrade model "answers" when admitted citations fail these bounds.`,
+Use coverage_rubric on each finding in the request: when coverage_obligations are listed, each source_slot needs admitted passage support for its aspect (technical_effect vs audience_intent are distinct). Comparative coverage requires every obligation satisfied; missing any obligation is partial, not answers. max_age_or_ttl_semantics requires max-age/s-maxage/TTL substance — Cache-Control header mention alone is insufficient. Wrong-aspect technical evidence for an audience obligation is tangential or partial. Host finalization may downgrade model "answers" when admitted citations fail these bounds.`,
   synthesize_report: `Root object (strict — no extra keys):
 {
   "kind": "synthesize_report",

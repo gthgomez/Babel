@@ -4,38 +4,51 @@ import {
   assessBoundQuestionCoverageFromAdmittedEvidence,
   buildRevisionProvenanceIndex,
   citedPassageEvidenceSignals,
-  inferQuestionCoverageProfile,
 } from './boundQuestionCoverageFromEvidence.js'
+import { buildCitedPassageProvenance } from './planCoverageObligations.js'
 import {
-  gL2AuditDerivedPassages,
-  gL2AuditDerivedPlan,
-  gL2AuditDerivedRevisions,
-  gL2AuditDerivedSources,
-} from './testSupport/gL2AuditDerivedRegression.js'
+  gL2OriginalDerivedFindingQ3_7f3,
+  gL2OriginalDerivedPassages,
+  gL2OriginalDerivedPlan,
+  gL2OriginalDerivedRevisions,
+  gL2OriginalDerivedSources,
+} from './testSupport/gL2OriginalDerivedRegression.js'
 
 describe('boundQuestionCoverageFromEvidence', () => {
-  it('classifies q3 as cross-source max-age comparison', () => {
-    const q3 = gL2AuditDerivedPlan.questions[0]!
-    const profile = inferQuestionCoverageProfile(q3.text, q3.evidence_requirement)
-    assert.equal(profile.crossSourceComparison, true)
-    assert.equal(profile.aspect, 'cache_control_max_age')
+  it('exposes neutral signals: Cache-Control without max-age TTL substance', () => {
+    const index = buildRevisionProvenanceIndex(gL2OriginalDerivedSources, gL2OriginalDerivedRevisions)
+    const mdnOverview = gL2OriginalDerivedPassages.find(
+      (p) => p.passage_id === 'fetch-mdn-original-derived:html:overview',
+    )!
+    const signals = citedPassageEvidenceSignals(mdnOverview, index.get(mdnOverview.source_revision_id))
+    assert.equal(signals.mentions_cache_control_header_only, true)
+    assert.equal(signals.supports_max_age_or_ttl_semantics, false)
   })
 
-  it('classifies q4 as audience intent (distinct from cache directives)', () => {
-    const q4 = gL2AuditDerivedPlan.questions[1]!
-    const profile = inferQuestionCoverageProfile(q4.text, q4.evidence_requirement)
-    assert.equal(profile.aspect, 'audience_browser_vs_edge')
-  })
-
-  it('flags missing MDN max-age facet for derived q3 citations', () => {
-    const index = buildRevisionProvenanceIndex(gL2AuditDerivedSources, gL2AuditDerivedRevisions)
-    const signals = gL2AuditDerivedPassages.map((p) =>
-      citedPassageEvidenceSignals(p, index.get(p.source_revision_id)),
+  it('flags missing MDN max-age obligation for original-derived q3 citations (7f3 replay)', () => {
+    const index = buildRevisionProvenanceIndex(gL2OriginalDerivedSources, gL2OriginalDerivedRevisions)
+    const q3 = gL2OriginalDerivedPlan.questions.find((q) => q.question_id === 'q-g-l2-audit-3')!
+    const cited = buildCitedPassageProvenance(
+      gL2OriginalDerivedFindingQ3_7f3.passage_ids,
+      new Map(gL2OriginalDerivedPassages.map((p) => [p.passage_id, p])),
+      index,
     )
-    const q3 = gL2AuditDerivedPlan.questions[0]!
-    const profile = inferQuestionCoverageProfile(q3.text, q3.evidence_requirement)
-    const assessment = assessBoundQuestionCoverageFromAdmittedEvidence(profile, signals)
+    const assessment = assessBoundQuestionCoverageFromAdmittedEvidence(q3, cited)
     assert.equal(assessment.satisfiesRequiredFacets, false)
-    assert.ok(assessment.missingFacets.includes('mdn_max_age_relevant_evidence'))
+    assert.ok(assessment.missingFacets.includes('ob-mdn-max-age-semantics'))
+    assert.equal(assessment.wrongAspectEvidenceOnly, false)
+  })
+
+  it('satisfies q3 obligations for positive control citations', () => {
+    const index = buildRevisionProvenanceIndex(gL2OriginalDerivedSources, gL2OriginalDerivedRevisions)
+    const q3 = gL2OriginalDerivedPlan.questions.find((q) => q.question_id === 'q-g-l2-audit-3')!
+    const cited = buildCitedPassageProvenance(
+      ['fetch-cf-original-derived:html:max-age', 'fetch-mdn-original-derived:html:max-age'],
+      new Map(gL2OriginalDerivedPassages.map((p) => [p.passage_id, p])),
+      index,
+    )
+    const assessment = assessBoundQuestionCoverageFromAdmittedEvidence(q3, cited)
+    assert.equal(assessment.satisfiesRequiredFacets, true)
+    assert.deepEqual(assessment.missingFacets, [])
   })
 })

@@ -13,6 +13,38 @@ export const QuestionStatusSchema = z.enum([
   'exhausted',
 ])
 
+export const PlanCoverageAspectSchema = z.enum(['technical_effect', 'audience_intent'])
+
+export const PlanCoverageTechnicalEffectSchema = z.enum([
+  'max_age_or_ttl_semantics',
+  'authentication_mechanism',
+  'general_technical',
+])
+
+/** Host-evaluated evidence obligations for bound-question coverage (general; not vendor-specific). */
+export const PlanCoverageObligationSchema = z
+  .object({
+    obligation_id: z.string().min(1),
+    source_slot: z.string().min(1),
+    aspect: PlanCoverageAspectSchema,
+    technical_effect: PlanCoverageTechnicalEffectSchema.optional(),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (value.aspect === 'technical_effect' && !value.technical_effect) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'technical_effect aspect requires technical_effect kind',
+      })
+    }
+    if (value.aspect === 'audience_intent' && value.technical_effect) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'audience_intent obligations must not set technical_effect',
+      })
+    }
+  })
+
 export const QuestionRecordSchema = z
   .object({
     question_id: RecordIdSchema,
@@ -21,6 +53,7 @@ export const QuestionRecordSchema = z
     evidence_requirement: z.string().min(1),
     status: QuestionStatusSchema,
     next_gap: z.string().optional(),
+    coverage_obligations: z.array(PlanCoverageObligationSchema).optional(),
   })
   .strict()
 
@@ -76,6 +109,7 @@ export const ResearchStateSnapshotV2Schema = z
   })
   .strict()
 
+export type PlanCoverageObligation = z.infer<typeof PlanCoverageObligationSchema>
 export type QuestionRecord = z.infer<typeof QuestionRecordSchema>
 export type PlanRevision = z.infer<typeof PlanRevisionSchema>
 export type ResearchReportV2 = z.infer<typeof ResearchReportV2Schema>
