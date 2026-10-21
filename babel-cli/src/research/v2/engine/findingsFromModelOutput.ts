@@ -19,6 +19,7 @@ export function findingsFromExtractModelOutput(params: {
   createdAt: string
 }): FindingRecord[] {
   const parsed = ExtractFindingsOutputSchema.parse(params.modelOutput)
+  /** Extract schema has no per-question binding; host stores findings on the first plan question only. */
   const defaultQuestionId = params.plan.questions[0]?.question_id
   if (!defaultQuestionId) {
     throw new Error('plan has no questions for finding binding')
