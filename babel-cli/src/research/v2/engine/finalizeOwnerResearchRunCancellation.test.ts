@@ -17,9 +17,13 @@ import { FixtureResearchModelBridge } from '../model/fixtureModelBridge.js'
 import type { ResearchModelPort } from '../ports/researchModelPort.js'
 
 class BlockingUntilAbortModel implements ResearchModelPort {
-  constructor(private readonly inner = new FixtureResearchModelBridge()) {}
+  constructor(
+    private readonly inner = new FixtureResearchModelBridge(),
+    private readonly onModelEntry?: (kind: string) => void,
+  ) {}
 
   async invokeStructured(request: Parameters<ResearchModelPort['invokeStructured']>[0]) {
+    this.onModelEntry?.(request.kind)
     await new Promise<void>((resolve) => {
       if (request.signal.aborted) {
         resolve()
@@ -196,13 +200,64 @@ describe('finalizeOwnerResearchRunCancellation', () => {
       const secondAttempts = eventsFinal
         .filter((e) => e.kind === 'external_operation_intent')
         .map((e) => (e.payload as { intent: { attempt_id: string } }).intent.attempt_id)
-      const firstPlanAttempt = firstAttempts.find((id) => /^cli-run-plan-att-wg1-/.test(id))
+      const firstPlanAttempt = firstAttempts.find((id) => /^cli-run-plan-att-wg\d+-/.test(id))
       const secondPlanAttempt = secondAttempts.find((id) =>
         id.startsWith(`cli-run-plan-att-wg${resumed.writer_generation}-`),
       )
       assert.ok(firstPlanAttempt)
       assert.ok(secondPlanAttempt)
       assert.notEqual(firstPlanAttempt, secondPlanAttempt)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('early cancel during plan_questions persists cancelled terminal after durable store reopen', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'babel-research-v2-early-cancel-reopen-'))
+    let planQuestionsEntered = false
+    const model = new BlockingUntilAbortModel(undefined, (kind) => {
+      if (kind === 'plan_questions') {
+        planQuestionsEntered = true
+      }
+    })
+    try {
+      const runPromise = runResearchV2MissionWithOwnerSession({
+        storeDirectory: dir,
+        mission: exampleTechnicalMissionFixture,
+        discoverQuery: 'RESEARCH_CONTRACT',
+        injectedOffline: true,
+        planRevisionId: 'plan-early-cancel-reopen',
+        model,
+      })
+
+      for (let i = 0; i < 80; i += 1) {
+        await new Promise((r) => setTimeout(r, 25))
+        if (planQuestionsEntered) break
+      }
+      assert.equal(planQuestionsEntered, true, 'expected model plan_questions entry latch')
+
+      let sessionId = ''
+      for (let i = 0; i < 40; i += 1) {
+        const inspect = await openAdmittedInspectStore(dir)
+        sessionId = inspect.sessionControl?.session_id ?? ''
+        if (sessionId) break
+        await new Promise((r) => setTimeout(r, 25))
+      }
+      assert.ok(sessionId.length > 0)
+      await submitAdmittedOwnerCancelRequest(dir, sessionId)
+
+      await assert.rejects(() => runPromise)
+
+      const reopened = await ResearchEngineSession.openInspect(dir)
+      const events = await reopened.listEvents(exampleTechnicalMissionFixture.mission_id)
+      const plans = events.filter((e) => e.kind === 'plan_revised')
+      assert.ok(plans.length >= 1)
+      const terminals = events.filter((e) => e.kind === 'terminal_receipt')
+      assert.equal(terminals.length, 1)
+      const report = (terminals[0]!.payload as { report: { terminal_state: string; plan_revision_id: string } })
+        .report
+      assert.equal(report.terminal_state, 'cancelled')
+      assert.equal(report.plan_revision_id, 'plan-early-cancel-reopen-bootstrap')
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

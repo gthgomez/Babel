@@ -23,6 +23,16 @@ export interface TechnicalRetrievalSlot {
 
 const UNSUPPORTED_WITHOUT_ADAPTER: readonly SourceClass[] = ['structured']
 
+export function resolveRepositorySlotDiscoverQuery(
+  pin: PinnedRepositoryRef,
+  globalDiscoverQuery: string,
+): string {
+  const perPin = pin.discover_query?.trim()
+  if (perPin) return perPin
+  const global = globalDiscoverQuery.trim()
+  return global
+}
+
 export function planTechnicalRetrievalSlots(
   mission: ResearchMissionV2,
   discoverQuery: string,
@@ -36,7 +46,7 @@ export function planTechnicalRetrievalSlots(
         slotId: `repository-pin-${index}`,
         kind: 'repository_pin',
         sourceClass: 'repository_file',
-        discoverQuery,
+        discoverQuery: resolveRepositorySlotDiscoverQuery(pin, discoverQuery),
         repositoryPin: pin,
       })
     }

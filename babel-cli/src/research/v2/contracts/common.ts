@@ -112,5 +112,7 @@ export const PinnedRepositoryRefSchema = z
     repo_id: z.string().min(1),
     full_name: z.string().min(1),
     commit_sha: z.string().regex(/^[a-f0-9]{40}$/i),
+    /** Optional per-pin repository discovery terms; host global discover query is the fallback. */
+    discover_query: z.string().min(1).optional(),
   })
   .strict()

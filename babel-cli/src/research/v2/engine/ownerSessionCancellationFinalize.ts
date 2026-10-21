@@ -11,8 +11,8 @@ export type CancelledOwnerRunCloseOutcome =
 
 /**
  * Shared owner teardown: settle cancelled work when aborted, then always close the owner.
- * When cancel happens before any plan revision exists, finalization returns
- * `pre_bootstrap_no_active_plan` and does not append a terminal receipt.
+ * When cancel happens before any plan revision exists (no bootstrap shell admitted),
+ * finalization returns `pre_bootstrap_no_active_plan` and does not append a terminal receipt.
  * Closes even when finalization throws (finalize error is rethrown after close).
  */
 export async function finalizeCancelledOwnerRunAndClose(params: {
