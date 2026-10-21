@@ -9,7 +9,7 @@ export const generalAdapterCatalog = {
   document: {
     adapterId: GENERAL_DOCUMENT_ADAPTER_ID,
     factory: () => new GeneralDocumentAdapter(),
-    extraction: 'text/plain inline bytes (checkpoint); pdf explicitly not implemented',
+    extraction: 'text/plain inline bytes; application/pdf per-page text (pdfjs-dist, offline)',
   },
   web: {
     adapterId: GENERAL_WEB_ADAPTER_ID,

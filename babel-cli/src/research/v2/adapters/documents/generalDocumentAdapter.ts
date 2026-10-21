@@ -9,7 +9,10 @@ import type {
 import {
   PLAIN_TEXT_EXTRACTION_VERSION,
   passagesFromAdmittedPlainText,
+  PLAIN_TEXT_MEDIA_TYPE,
 } from './plainTextFromAdmittedBytes.js'
+import { isPdfMediaType } from './pdfAdmission.js'
+import { PDF_TEXT_EXTRACTION_VERSION, passagesFromAdmittedPdf } from './pdfFromAdmittedBytes.js'
 import {
   assertReadPreconditions,
   cancelledRead,
@@ -66,6 +69,19 @@ export class GeneralDocumentAdapter implements SourceAdapter {
 
     const admitted = fetched.admitted
     try {
+      if (isPdfMediaType(admitted.media_type)) {
+        const passages = await passagesFromAdmittedPdf(admitted)
+        return {
+          operationId: request.operationId,
+          status: 'ok',
+          revision: admitted.revision,
+          passages,
+          extraction_version: PDF_TEXT_EXTRACTION_VERSION,
+        }
+      }
+      if (admitted.media_type !== PLAIN_TEXT_MEDIA_TYPE) {
+        throw new Error(`unsupported media_type for document adapter: ${admitted.media_type}`)
+      }
       const passages = passagesFromAdmittedPlainText(admitted)
       return {
         operationId: request.operationId,

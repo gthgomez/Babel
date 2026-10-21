@@ -10,8 +10,8 @@ function passageTextHash(text: string): string {
   return createHash('sha256').update(text, 'utf8').digest('hex')
 }
 
-/** Decode and integrity-check inline admitted bytes (no network). */
-export function decodeAdmittedUtf8Bytes(admitted: AdmittedContent): Buffer {
+/** Integrity-check inline admitted bytes (binary-safe; no network). */
+export function decodeAdmittedInlineBytes(admitted: AdmittedContent): Buffer {
   if (admitted.payload.mode !== 'inline_bytes') {
     throw new Error(`unsupported payload mode: ${admitted.payload.mode}`)
   }
@@ -26,6 +26,12 @@ export function decodeAdmittedUtf8Bytes(admitted: AdmittedContent): Buffer {
   if (digest !== admitted.revision.content_hash) {
     throw new Error('admitted revision content_hash does not match decoded bytes')
   }
+  return raw
+}
+
+/** Decode and integrity-check inline admitted UTF-8 text bytes (no network). */
+export function decodeAdmittedUtf8Bytes(admitted: AdmittedContent): Buffer {
+  const raw = decodeAdmittedInlineBytes(admitted)
   try {
     new TextDecoder('utf-8', { fatal: true }).decode(raw)
   } catch {
