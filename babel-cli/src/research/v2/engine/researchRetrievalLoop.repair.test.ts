@@ -303,6 +303,55 @@ describe('research retrieval loop repairs', () => {
     assert.equal(completion?.settlement, 'cancelled')
   })
 
+  it('settles fetch cancelled for zero passages when aborted after persistence loop', async () => {
+    const controller = new AbortController()
+    const store = new InMemoryResearchStore()
+    const session = await seedSession(store)
+    const access = new FakeSourceAccessPort([
+      {
+        source: technicalRepositoryCorpusSource,
+        body: technicalRepositoryCorpusBody,
+        mediaType: 'text/plain',
+        finalUrl: technicalRepositoryCorpusFinalUrl,
+      },
+    ])
+    const { TechnicalRepositoryFileAdapter } = await import('../profiles/technical/repositoryFileAdapter.js')
+    const inner = new TechnicalRepositoryFileAdapter()
+    const adapter: SourceAdapter = {
+      adapterId: inner.adapterId,
+      supportedKinds: inner.supportedKinds,
+      discover: (req, port) => inner.discover(req, port),
+      read: async (req, port) => {
+        const result = await inner.read(req, port)
+        if (result.status !== 'ok') return result
+        controller.abort()
+        return { ...result, passages: [] }
+      },
+    }
+    await assert.rejects(() =>
+      runAdmittedRetrievalIteration({
+        session,
+        store,
+        access,
+        adapter,
+        activePlan: examplePlanRevisionFixture,
+        discoverQuery: 'RESEARCH_CONTRACT',
+        searchOperationId: 'zero-pass-search',
+        searchAttemptId: 'zero-pass-search-att',
+        fetchOperationId: 'zero-pass-fetch',
+        fetchAttemptId: 'zero-pass-fetch-att',
+        dispatchedAt: FIXED_NOW,
+        signal: controller.signal,
+        now: () => FIXED_NOW,
+      }),
+    )
+    const completion = completionFor(
+      await store.listEvents(session.mission.mission_id),
+      'zero-pass-fetch',
+    )
+    assert.equal(completion?.settlement, 'cancelled')
+  })
+
   it('offline report records injected offline provenance when provided', () => {
     const report = buildOfflineRetrievalReport({
       mission: exampleTechnicalMissionFixture,

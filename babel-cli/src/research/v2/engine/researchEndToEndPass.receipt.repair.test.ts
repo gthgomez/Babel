@@ -44,6 +44,14 @@ describe('model receipt binding repairs', () => {
     )
     const events = await store.listEvents(exampleTechnicalMissionFixture.mission_id)
     assert.ok(!events.some((e) => e.kind === 'model_invocation_completed'))
+    assert.ok(
+      !events.some(
+        (e) =>
+          e.kind === 'plan_revised' &&
+          (e.payload as { plan: { plan_revision_id: string } }).plan.plan_revision_id ===
+            'plan-bind-001',
+      ),
+    )
     const completion = events.find(
       (e) =>
         e.kind === 'external_operation_completed' &&

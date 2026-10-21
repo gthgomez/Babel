@@ -9,7 +9,12 @@ import type {
   SourceSearchResult,
 } from '../ports/sourceAccessPort.js'
 import type { ResearchMissionV2 } from '../contracts/mission.js'
-import { AdmittedNetworkPolicyError, admittedHttpGet, type AdmittedHttpGetResult } from './admittedHttpGet.js'
+import {
+  AdmittedNetworkPolicyError,
+  admittedHttpGet,
+  type AdmittedHttpGetDispatch,
+  type AdmittedHttpGetResult,
+} from './admittedHttpGet.js'
 import {
   validateMissionFetchAdmission,
   validateMissionWebHopUrl,
@@ -25,6 +30,8 @@ export type AdmittedHttpGetFn = (params: {
 export interface FetchSourceAccessPortOptions {
   /** Production path: governed network GET. Tests inject a stub instead of live HTTP. */
   admittedGet?: AdmittedHttpGetFn
+  /** Injected transport for the default admittedHttpGet wrapper (tests only). */
+  dispatchGet?: AdmittedHttpGetDispatch
   maxAdmittedBytes?: number
   /** When set, enforce mission source classes, pins, and redirect-hop domain policy before dispatch. */
   mission?: ResearchMissionV2
@@ -74,6 +81,7 @@ export class FetchSourceAccessPort implements SourceAccessPort {
   private readonly admittedGet: AdmittedHttpGetFn
 
   constructor(private readonly options: FetchSourceAccessPortOptions = {}) {
+    const dispatchGet = options.dispatchGet
     this.admittedGet =
       options.admittedGet ??
       ((params) =>
@@ -81,6 +89,8 @@ export class FetchSourceAccessPort implements SourceAccessPort {
           url: params.url,
           maxBytes: params.maxBytes,
           signal: params.signal,
+          ...(params.assertHopAdmitted ? { assertHopAdmitted: params.assertHopAdmitted } : {}),
+          ...(dispatchGet ? { dispatchGet } : {}),
         }))
   }
 

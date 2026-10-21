@@ -316,6 +316,18 @@ export async function runAdmittedRetrievalIteration(
       throwIfAborted(request.signal, 'passage persistence')
       await request.store.appendPassage(ctx, passage)
     }
+    if (request.signal.aborted) {
+      await settleExternalOperation(
+        request.store,
+        ctx,
+        ctx.mission_id,
+        request.fetchOperationId,
+        request.fetchAttemptId,
+        { settlement: 'cancelled', message: 'evidence persistence aborted after final passage' },
+        now(),
+      )
+      throw new Error('retrieval iteration aborted during evidence persistence')
+    }
   } catch (err: unknown) {
     if (request.signal.aborted) {
       await settleExternalOperation(
@@ -324,15 +336,17 @@ export async function runAdmittedRetrievalIteration(
         ctx.mission_id,
         request.fetchOperationId,
         request.fetchAttemptId,
-        { settlement: 'cancelled', message: 'evidence persistence aborted' },
+        {
+          settlement: 'cancelled',
+          message: 'evidence persistence aborted',
+          usage_settlement: unknownUsageSettlement(request.fetchAttemptId),
+        },
         now(),
       )
       throw new Error('retrieval iteration aborted during evidence persistence')
     }
     throw err instanceof Error ? err : new Error(String(err))
   }
-
-  throwIfAborted(request.signal, 'fetch success settlement')
 
   await settleExternalOperation(
     request.store,

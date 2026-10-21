@@ -1,9 +1,6 @@
-import {
-  GENERAL_DOCUMENT_ADAPTER_ID,
-  GeneralDocumentAdapter,
-} from '../adapters/documents/generalDocumentAdapter.js'
 import type { SourceAdapter } from '../ports/sourceAdapter.js'
 import type { ResearchProfileDefinition } from '../ports/researchProfileDefinition.js'
+import { generalAdapterCatalog } from '../profiles/general/generalAdapterCatalog.js'
 import {
   GENERAL_PROFILE_ID,
   GENERAL_PROFILE_VERSION,
@@ -14,18 +11,13 @@ import {
   withAdditionalProfiles,
   withAdditionalSourceAdapters,
 } from './frozenRegistries.js'
-import { loadRepairInProgressBWebCatalog } from './loadRepairInProgressBWebCatalog.js'
 
 /**
- * Agent B ownership: profiles/general (except registry wiring), adapters/web, adapters/documents.
- * Reviewed export @ 196098d9: {@link GeneralDocumentAdapter} + {@link generalProfileDefinition}.
- * HTML/PDF catalog slice loads only when B modules exist; ids land in `bAdaptersRepairInProgress`.
+ * Agent B ownership: profiles/general, adapters/web, adapters/documents.
+ * Registry wiring is Agent A; adapters come from {@link generalAdapterCatalog} (B80a7a9ef).
  */
 export interface CombinedResearchRegistries extends ReturnType<typeof createTechnicalResearchRegistries> {
-  /** Independently reviewed B adapter registration keys (Agent A registry wiring). */
   bAdaptersRegistered: string[]
-  /** B HTML/PDF slice present locally but not accepted for review yet. */
-  bAdaptersRepairInProgress: string[]
 }
 
 function asResearchProfileDefinition(): ResearchProfileDefinition {
@@ -38,23 +30,23 @@ function asResearchProfileDefinition(): ResearchProfileDefinition {
   }
 }
 
-/** Technical baseline plus B-reviewed document adapter and optional in-repair web/catalog slice. */
+/** Technical baseline plus B-reviewed general document/web adapters from catalog factories. */
 export async function createCombinedResearchRegistries(): Promise<CombinedResearchRegistries> {
   const technical = createTechnicalResearchRegistries()
-  const reviewedAdapters: SourceAdapter[] = [new GeneralDocumentAdapter()]
-  const registered = [`documents/${GENERAL_DOCUMENT_ADAPTER_ID}`]
+  const reviewedAdapters: SourceAdapter[] = [
+    generalAdapterCatalog.document.factory(),
+    generalAdapterCatalog.web.factory(),
+  ]
+  const registered = [
+    `documents/${generalAdapterCatalog.document.adapterId}`,
+    `web/${generalAdapterCatalog.web.adapterId}`,
+  ]
 
   let registries = withAdditionalProfiles(technical, [asResearchProfileDefinition()])
   registries = withAdditionalSourceAdapters(registries, reviewedAdapters)
 
-  const repairSlice = await loadRepairInProgressBWebCatalog()
-  if (repairSlice.adapters.length > 0) {
-    registries = withAdditionalSourceAdapters(registries, repairSlice.adapters)
-  }
-
   return {
     ...registries,
     bAdaptersRegistered: registered,
-    bAdaptersRepairInProgress: repairSlice.adapterIds,
   }
 }

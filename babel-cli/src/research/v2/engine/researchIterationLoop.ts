@@ -192,19 +192,6 @@ export async function runAdmittedPlanningIteration(
     throw new Error(modelResult.message)
   }
 
-  const planRevision = buildPlanRevisionFromPlanQuestions({
-    mission: request.session.mission,
-    planRevisionId: request.planRevisionId,
-    revisionReason: request.revisionReason,
-    createdAt: now(),
-    modelOutput: modelResult.output,
-  })
-
-  await request.store.appendPlanRevision(ctx, planRevision)
-  const evidenceCtx: MissionWriteContext = {
-    ...ctx,
-    plan_revision_id: planRevision.plan_revision_id,
-  }
   try {
     assertModelInvocationReceiptBound(
       request.modelOperationId,
@@ -215,7 +202,7 @@ export async function runAdmittedPlanningIteration(
     const message = err instanceof ModelReceiptBindingError ? err.message : String(err)
     await settleModelOperation(
       request.store,
-      evidenceCtx,
+      ctx,
       ctx.mission_id,
       request.modelOperationId,
       request.modelAttemptId,
@@ -229,6 +216,20 @@ export async function runAdmittedPlanningIteration(
       now(),
     )
     throw err instanceof Error ? err : new Error(message)
+  }
+
+  const planRevision = buildPlanRevisionFromPlanQuestions({
+    mission: request.session.mission,
+    planRevisionId: request.planRevisionId,
+    revisionReason: request.revisionReason,
+    createdAt: now(),
+    modelOutput: modelResult.output,
+  })
+
+  await request.store.appendPlanRevision(ctx, planRevision)
+  const evidenceCtx: MissionWriteContext = {
+    ...ctx,
+    plan_revision_id: planRevision.plan_revision_id,
   }
   await request.store.appendModelReceipt(evidenceCtx, modelResult.receipt)
   await settleModelOperation(
