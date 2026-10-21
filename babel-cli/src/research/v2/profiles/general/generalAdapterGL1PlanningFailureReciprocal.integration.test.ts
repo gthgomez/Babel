@@ -168,10 +168,8 @@ describe('general G-L1 planning failure reciprocal (A integration runtime, deter
 
   it('malformed fixture is reconstructed from validation trace (offline envelope check)', () => {
     const payload = JSON.parse(readFileSync(malformedPayloadPath, 'utf8')) as Record<string, unknown>
-    assert.equal(
-      payload._provenance,
-      'Reconstructed from live G-L1 durable failure message (2026-10-21T06:41:22Z). Model echoed prompt/mission envelope instead of Research V2 plan_questions output; see review-artifacts/general-g-l1-cli-validation-details.txt for exact Zod trace.',
-    )
+    assert.match(String(payload._provenance), /Reconstructed from live G-L1/)
+    assert.match(String(payload._provenance), /NOT a captured raw model response/)
     delete payload._provenance
     assert.throws(() => parseValidatedModelOutput('plan_questions', payload), /Invalid input|Unrecognized keys/)
   })
