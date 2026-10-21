@@ -1,7 +1,6 @@
 /**
- * Durable regression for A dd544 extraction lineage (B-owned, pre-integration).
- * A owns `retrievalExtractionLineage` production helper; this test exercises
- * `runAdmittedResearchEndToEndPass` extract input against real store events.
+ * Durable regression for A bb774 attempt-scoped extraction lineage (B-owned).
+ * Exercises `runAdmittedResearchEndToEndPass` extract input against real store events.
  *
  * Contract: failed attempt A and succeeded attempt B sharing one `operation_id`
  * must not expose A's orphan passages to extraction (including interleaved intents).
@@ -32,9 +31,6 @@ import { runAdmittedResearchEndToEndPass } from './researchEndToEndPass.js'
 
 const FIXED_NOW = '2026-10-20T12:45:00.000Z'
 const SHARED_FETCH_OP = 'shared-fetch-operation-id'
-
-/** Set when running `npm run test:research-v2-extraction-lineage-blocked-regression` (fails until A dd544 lands). */
-const RUN_BLOCKED_REGRESSION = process.env.BABEL_RESEARCH_V2_RUN_BLOCKED_REGRESSION === '1'
 
 function governedAccess() {
   return createMissionScopedSourceAccessPort({
@@ -153,7 +149,7 @@ async function seedSharedOperationLineageConflict(
   return { orphanId, admittedId, orphanText, admittedText }
 }
 
-describe('research e2e extraction lineage @ A dd544 (durable, shared operation_id)', () => {
+describe('research e2e extraction lineage @ A bb774 (durable, shared operation_id)', () => {
   async function runLineageCase(interleaved: boolean) {
     const dir = await mkdtemp(join(tmpdir(), 'research-e2e-shared-op-lineage-'))
     const extractPassageIds: string[] = []
@@ -268,23 +264,11 @@ describe('research e2e extraction lineage @ A dd544 (durable, shared operation_i
     }
   }
 
-  it('sequential attempts: shared operation_id excludes failed attempt A orphan from extract', async (t) => {
-    if (!RUN_BLOCKED_REGRESSION) {
-      t.skip(
-        'Blocked until A dd544 integrates filterPassagesForExtractionLineage; run npm run test:research-v2-extraction-lineage-blocked-regression',
-      )
-      return
-    }
+  it('sequential attempts: shared operation_id excludes failed attempt A orphan from extract', async () => {
     await runLineageCase(false)
   })
 
-  it('interleaved intents: shared operation_id excludes failed attempt A orphan from extract', async (t) => {
-    if (!RUN_BLOCKED_REGRESSION) {
-      t.skip(
-        'Blocked until A dd544 integrates filterPassagesForExtractionLineage; run npm run test:research-v2-extraction-lineage-blocked-regression',
-      )
-      return
-    }
+  it('interleaved intents: shared operation_id excludes failed attempt A orphan from extract', async () => {
     await runLineageCase(true)
   })
 })

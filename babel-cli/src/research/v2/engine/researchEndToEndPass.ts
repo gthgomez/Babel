@@ -27,6 +27,7 @@ import {
   assertModelInvocationReceiptBound,
   ModelReceiptBindingError,
 } from './validateModelInvocationReceipt.js'
+import { filterPassagesForExtractionLineage } from './retrievalExtractionLineage.js'
 
 export interface ResearchEndToEndPassRequest {
   session: AdmittedPlanningSession
@@ -281,12 +282,12 @@ export async function runAdmittedResearchEndToEndPass(
     'limitations' in retrieved && Array.isArray(retrieved.limitations) ? retrieved.limitations : []
 
   const ctx = retrieved.writeContext
-  const passageEvents = (await request.store.listEvents(request.session.mission.mission_id)).filter(
-    (e) => e.kind === 'passage_recorded',
-  )
-  const passages: PassageRecord[] = passageEvents.map(
-    (e) => (e.payload as { passage: PassageRecord }).passage,
-  )
+  const storeEvents = await request.store.listEvents(request.session.mission.mission_id)
+  const allPassages: PassageRecord[] = storeEvents
+    .filter((e) => e.kind === 'passage_recorded')
+    .map((e) => (e.payload as { passage: PassageRecord }).passage)
+  const passages = filterPassagesForExtractionLineage(allPassages, storeEvents)
+  const extractionPassageIds = passages.map((p) => p.passage_id)
 
   const extractOutput = await invokeModelPhase(request.store, ctx, request.model, {
     operationId: request.extractOperationId,
@@ -296,7 +297,7 @@ export async function runAdmittedResearchEndToEndPass(
       mission_id: request.session.mission.mission_id,
       plan_revision_id: planned.planRevisionId,
       mission_requirements: missionRequirementsPayload(request.session.mission),
-      passage_ids: retrieved.passageIds,
+      passage_ids: extractionPassageIds,
       passages: passages.map((p) => ({
         passage_id: p.passage_id,
         text: p.text_ref.mode === 'inline' ? p.text_ref.text : '',

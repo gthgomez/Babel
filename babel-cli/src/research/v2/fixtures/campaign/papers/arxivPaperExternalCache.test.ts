@@ -14,7 +14,10 @@ import {
   assertRegularFileSizeStableAfterRead,
   readBoundedRegularFileAtPath,
   resolveArxiv170603762PaperBytesFromExternalCache,
+  resolveCacheFileOpenFlags,
   resolveManifestedPaperBytesFromExternalCache,
+  type ArxivPaperCacheReadOptions,
+  type CacheFileOpenPlatformSupport,
 } from './arxivPaperExternalCache.js'
 import { readFileSync } from 'node:fs'
 import { dirname, join as pathJoin } from 'node:path'
@@ -37,7 +40,89 @@ function withTempCacheDir(run: (cacheRoot: string) => void): void {
   }
 }
 
+function missingSafeOpenConstants(): ('O_NOFOLLOW' | 'O_NONBLOCK')[] {
+  const missing: ('O_NOFOLLOW' | 'O_NONBLOCK')[] = []
+  if (typeof constants.O_NOFOLLOW !== 'number') missing.push('O_NOFOLLOW')
+  if (typeof constants.O_NONBLOCK !== 'number') missing.push('O_NONBLOCK')
+  return missing
+}
+
+function injectedSupportedOpenFlags(): CacheFileOpenPlatformSupport {
+  const missing = missingSafeOpenConstants()
+  if (missing.length === 0) {
+    return {
+      supported: true,
+      flags: constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+      platform_qualification: 'linux_open_nofollow_nonblock',
+    }
+  }
+  return {
+    supported: true,
+    flags: constants.O_RDONLY,
+    platform_qualification: 'linux_open_nofollow_nonblock',
+  }
+}
+
+function injectedUnsupportedOpenFlags(
+  missing: ('O_NOFOLLOW' | 'O_NONBLOCK')[],
+): CacheFileOpenPlatformSupport {
+  return {
+    supported: false,
+    status: 'unsupported_platform',
+    message: `test injected missing ${missing.join(' and ')}`,
+    missing_constants: missing,
+    platform_qualification: 'requires_linux_open_nofollow_nonblock',
+  }
+}
+
+function readOptionsWithSupportedFlags(): ArxivPaperCacheReadOptions {
+  return { resolveOpenFlags: injectedSupportedOpenFlags }
+}
+
 describe('arxiv external paper cache (isolated temp dirs)', () => {
+  it('resolveCacheFileOpenFlags mirrors runtime fs.constants (no silent zero fallback)', () => {
+    const flags = resolveCacheFileOpenFlags()
+    const missing = missingSafeOpenConstants()
+    if (missing.length > 0) {
+      assert.equal(flags.supported, false)
+      if (flags.supported) return
+      assert.equal(flags.status, 'unsupported_platform')
+      assert.deepEqual(flags.missing_constants, missing)
+    } else {
+      assert.equal(flags.supported, true)
+      if (!flags.supported) return
+      assert.equal(flags.platform_qualification, 'linux_open_nofollow_nonblock')
+      assert.equal(flags.flags, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
+    }
+  })
+
+  it('readBoundedRegularFileAtPath fails closed when injected open flags are unsupported', () => {
+    withTempCacheDir((cacheRoot) => {
+      const path = join(cacheRoot, tinyManifest.artifact_path)
+      writeFileSync(path, 'hello-paper')
+      const read = readBoundedRegularFileAtPath(path, tinyManifest.byte_length, {
+        resolveOpenFlags: () => injectedUnsupportedOpenFlags(['O_NOFOLLOW', 'O_NONBLOCK']),
+      })
+      assert.equal(read.ok, false)
+      if (read.ok) return
+      assert.equal(read.status, 'unsupported_platform')
+    })
+  })
+
+  it('resolveManifestedPaperBytesFromExternalCache surfaces unsupported_platform from injected flags', () => {
+    withTempCacheDir((cacheRoot) => {
+      const path = join(cacheRoot, tinyManifest.artifact_path)
+      writeFileSync(path, 'hello-paper')
+      const resolved = resolveManifestedPaperBytesFromExternalCache(tinyManifest, {
+        cacheRoot,
+        resolveOpenFlags: () => injectedUnsupportedOpenFlags(['O_NONBLOCK']),
+      })
+      assert.equal(resolved.status, 'unsupported_platform')
+      if (resolved.status !== 'unsupported_platform') return
+      assert.deepEqual(resolved.missing_constants, ['O_NONBLOCK'])
+    })
+  })
+
   it('reports missing cache without reading user home cache', () => {
     withTempCacheDir((cacheRoot) => {
       const resolved = resolveManifestedPaperBytesFromExternalCache(tinyManifest, { cacheRoot })
@@ -52,7 +137,10 @@ describe('arxiv external paper cache (isolated temp dirs)', () => {
     withTempCacheDir((cacheRoot) => {
       const path = join(cacheRoot, tinyManifest.artifact_path)
       writeFileSync(path, 'short')
-      const resolved = resolveManifestedPaperBytesFromExternalCache(tinyManifest, { cacheRoot })
+      const resolved = resolveManifestedPaperBytesFromExternalCache(tinyManifest, {
+        cacheRoot,
+        ...readOptionsWithSupportedFlags(),
+      })
       assert.equal(resolved.status, 'size_mismatch')
       if (resolved.status !== 'size_mismatch') return
       assert.equal(resolved.actualByteLength, 5)
@@ -63,7 +151,10 @@ describe('arxiv external paper cache (isolated temp dirs)', () => {
     withTempCacheDir((cacheRoot) => {
       const path = join(cacheRoot, tinyManifest.artifact_path)
       writeFileSync(path, 'x'.repeat(tinyManifest.byte_length + 1))
-      const resolved = resolveManifestedPaperBytesFromExternalCache(tinyManifest, { cacheRoot })
+      const resolved = resolveManifestedPaperBytesFromExternalCache(tinyManifest, {
+        cacheRoot,
+        ...readOptionsWithSupportedFlags(),
+      })
       assert.equal(resolved.status, 'size_mismatch')
       if (resolved.status !== 'size_mismatch') return
       assert.match(resolved.message, /exceeds manifest/)
@@ -74,7 +165,10 @@ describe('arxiv external paper cache (isolated temp dirs)', () => {
     withTempCacheDir((cacheRoot) => {
       const path = join(cacheRoot, tinyManifest.artifact_path)
       writeFileSync(path, 'x'.repeat(tinyManifest.byte_length))
-      const resolved = resolveManifestedPaperBytesFromExternalCache(tinyManifest, { cacheRoot })
+      const resolved = resolveManifestedPaperBytesFromExternalCache(tinyManifest, {
+        cacheRoot,
+        ...readOptionsWithSupportedFlags(),
+      })
       assert.equal(resolved.status, 'digest_mismatch')
     })
   })
@@ -83,7 +177,10 @@ describe('arxiv external paper cache (isolated temp dirs)', () => {
     withTempCacheDir((cacheRoot) => {
       const path = join(cacheRoot, tinyManifest.artifact_path)
       writeFileSync(path, 'hello-paper')
-      const resolved = resolveManifestedPaperBytesFromExternalCache(tinyManifest, { cacheRoot })
+      const resolved = resolveManifestedPaperBytesFromExternalCache(tinyManifest, {
+        cacheRoot,
+        ...readOptionsWithSupportedFlags(),
+      })
       assert.equal(resolved.status, 'ok')
       if (resolved.status !== 'ok') return
       assert.equal(resolved.bytes.toString('utf8'), 'hello-paper')
@@ -94,29 +191,32 @@ describe('arxiv external paper cache (isolated temp dirs)', () => {
     withTempCacheDir((cacheRoot) => {
       const dirPath = join(cacheRoot, 'not-a-file')
       mkdirSync(dirPath)
-      const read = readBoundedRegularFileAtPath(dirPath, 10)
+      const read = readBoundedRegularFileAtPath(dirPath, 10, readOptionsWithSupportedFlags())
       assert.equal(read.ok, false)
       if (read.ok) return
       assert.equal(read.status, 'not_regular_file')
     })
   })
 
-  it('fails closed on FIFO cache paths without blocking (linux)', () => {
-    if (process.platform !== 'linux') {
+  it('fails closed on FIFO cache paths without blocking when safe open flags are available', () => {
+    const runtime = resolveCacheFileOpenFlags()
+    if (!runtime.supported) {
       return
     }
     withTempCacheDir((cacheRoot) => {
       const fifoPath = join(cacheRoot, tinyManifest.artifact_path)
       execSync(`mkfifo ${JSON.stringify(fifoPath)}`)
-      const read = readBoundedRegularFileAtPath(fifoPath, tinyManifest.byte_length)
+      const read = readBoundedRegularFileAtPath(fifoPath, tinyManifest.byte_length, {
+        resolveOpenFlags: () => runtime,
+      })
       assert.equal(read.ok, false)
       if (read.ok) return
       assert.ok(read.status === 'not_regular_file' || read.status === 'read_failed')
     })
   })
 
-  it('detects file growth after initial stat (linux)', () => {
-    if (process.platform !== 'linux') {
+  it('detects file growth after initial stat when safe open flags are available', () => {
+    if (!resolveCacheFileOpenFlags().supported) {
       return
     }
     withTempCacheDir((cacheRoot) => {
