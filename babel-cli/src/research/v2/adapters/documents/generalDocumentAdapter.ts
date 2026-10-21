@@ -22,6 +22,7 @@ import {
   cancelledRead,
   validateFetchBinding,
 } from './readBinding.js'
+import { passageWithIntegrityVerification } from '../../integrity/passageIntegrityReceipt.js'
 
 export const GENERAL_DOCUMENT_ADAPTER_ID = 'general-document/0.1.0'
 
@@ -100,7 +101,14 @@ export class GeneralDocumentAdapter implements SourceAdapter {
       if (admitted.media_type !== PLAIN_TEXT_MEDIA_TYPE) {
         throw new Error(`unsupported media_type for document adapter: ${admitted.media_type}`)
       }
-      const passages = passagesFromAdmittedPlainText(admitted)
+      const passages = passagesFromAdmittedPlainText(admitted).map((passage) =>
+        passageWithIntegrityVerification(passage, {
+          source: request.source,
+          revision: admitted.revision,
+          admitted,
+          extractionVersion: PLAIN_TEXT_EXTRACTION_VERSION,
+        }),
+      )
       return {
         operationId: request.operationId,
         status: 'ok',

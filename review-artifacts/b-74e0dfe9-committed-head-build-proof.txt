@@ -1,0 +1,30 @@
+=== source fingerprints ===
+HEAD=74e0dfe9aae9848e9e19df9f3c83e354e02a3ddc
+TREE=ba6b5dfa75f931ab48e68870d64c27528f4013a2
+BRANCH=cursor/agent-b-general-fixtures-f617
+STATUS:
+## cursor/agent-b-general-fixtures-f617...origin/cursor/agent-b-general-fixtures-f617
+?? codex/worktrees/
+?? review-artifacts/b-74e0dfe9-committed-head-build-proof.txt
+
+=== npm run typecheck ===
+CWD=/workspace/babel-cli
+
+> babel-harness@0.1.4 typecheck
+> tsc --noEmit && tsc -p tsconfig.scripts.json --noEmit
+
+EXIT_CODE=0
+
+=== npm run build ===
+
+> babel-harness@0.1.4 build
+> npm run clean:dist && tsc && node scripts/copy_playbooks.mjs
+
+
+> babel-harness@0.1.4 clean:dist
+> node scripts/clean_dist.mjs
+
+copy_playbooks: copied *.json → /workspace/babel-cli/dist/services/playbooks
+copy_playbooks: copied owned native oracle asset
+copy_playbooks: copied OpenCode ACP source pin → /workspace/babel-cli/dist/bridge/opencode-acp-source-pin.json
+EXIT_CODE=0

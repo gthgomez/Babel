@@ -18,6 +18,7 @@ import {
   receiptFromSourceSearchResult,
 } from './discoverSearchReceiptHandoff.js'
 import { mergeDiscoverSearchReceipts } from '../../engine/sourceDiscoverSearchReceipt.js'
+import { passageWithIntegrityVerification } from '../../integrity/passageIntegrityReceipt.js'
 import {
   passagesFromAdmittedStaticHtml,
   STATIC_HTML_EXTRACTION_VERSION,
@@ -130,7 +131,14 @@ export class GeneralWebAdapter implements SourceAdapter {
 
     const admitted = fetched.admitted
     try {
-      const passages = passagesFromAdmittedStaticHtml(admitted)
+      const passages = passagesFromAdmittedStaticHtml(admitted).map((passage) =>
+        passageWithIntegrityVerification(passage, {
+          source: request.source,
+          revision: admitted.revision,
+          admitted,
+          extractionVersion: STATIC_HTML_EXTRACTION_VERSION,
+        }),
+      )
       return {
         operationId: request.operationId,
         status: 'ok',

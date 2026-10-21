@@ -31,5 +31,11 @@
   "acceptance_test_matrix_ref": "review-artifacts/b-passage-integrity-verification-acceptance-prep.md",
   "substitution_policy": "no_skip_noop_not_checked_as_acceptance; prep_not_implemented_acceptance",
   "live_diagnostic": "source_only_C_owned_after_parent_review_not_executed",
-  "implemented_on_branch": false
+  "a_canonical_api_checkpoint": "ffbad3fd feat(research-v2): passage integrity receipts and finding derivation",
+  "b_reciprocal_on_branch": [
+    "babel-cli/src/research/v2/fixtures/campaign/passageIntegrityVerification.durable.reciprocal.test.ts",
+    "babel-cli/src/research/v2/engine/sourceIntegrityFromEvidence.test.ts (A-owned, merged)",
+    "babel-cli/src/research/v2/integrity/passageIntegrityReceipt.test.ts (A-owned, merged)"
+  ],
+  "implemented_on_branch": "partial_reciprocal_not_full_section_7"
 }

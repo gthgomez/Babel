@@ -17,6 +17,7 @@ import type {
   ResearchModelPort,
 } from '../ports/researchModelPort.js'
 import { createTechnicalResearchRegistries, resolveSourceAdapterForMission } from '../registry/frozenRegistries.js'
+import { requiredClaimedSourceReviewFields } from './testSupport/requiredClaimedSourceReviewFields.js'
 import { runAdmittedResearchEndToEndPass } from './researchEndToEndPass.js'
 
 const FIXED_NOW = '2026-10-20T12:20:00.000Z'
@@ -75,6 +76,7 @@ function fixtureModelWithE2eScripts(): ResearchModelPort {
               status: 'insufficient',
               rationale: 'Only one pinned file was retrieved; decision remains incomplete.',
               question_coverage: 'partial',
+              ...requiredClaimedSourceReviewFields(['repository-pin-0']),
             },
           ],
         })

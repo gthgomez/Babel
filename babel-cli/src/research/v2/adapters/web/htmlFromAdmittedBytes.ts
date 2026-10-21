@@ -73,3 +73,34 @@ export function passagesFromAdmittedStaticHtml(admitted: AdmittedContent): Passa
   }
   return passages
 }
+
+/** Resolve section locator text from admitted HTML representation (not byte offsets). */
+export function excerptTextForHtmlSectionId(
+  admitted: AdmittedContent,
+  sectionId: string,
+): string | null {
+  if (admitted.media_type !== HTML_MEDIA_TYPE) return null
+  const raw = decodeAdmittedUtf8Bytes(admitted)
+  const html = raw.toString('utf8')
+  const stripped = html
+    .replace(/<script[\s\S]*?<\/script>/gi, '')
+    .replace(/<style[\s\S]*?<\/style>/gi, '')
+  const sectionOccurrence = new Map<string, number>()
+  let match: RegExpExecArray | null
+  HEADING_BLOCK_RE.lastIndex = 0
+  while ((match = HEADING_BLOCK_RE.exec(stripped)) !== null) {
+    const heading = headingInnerText(match[2] ?? '')
+    if (!heading) continue
+    const after = stripped.slice(match.index + match[0].length)
+    const nextHeading = after.search(/<h[1-6]/i)
+    const block = nextHeading >= 0 ? after.slice(0, nextHeading) : after
+    const text = block
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+    if (!text) continue
+    const id = allocateSectionLocatorId(heading, sectionOccurrence)
+    if (id === sectionId) return text
+  }
+  return null
+}
