@@ -8,7 +8,7 @@ All adapter modules import **Agent A** `0ccd1733` modules:
 - `../../ports/sourceAccessPort.js`
 - `../../contracts/admittedContent.js`, `passages.js`, `sources.js`
 
-There is **no** `frozenPorts*` alias file. Proof runs in a disposable worktree at A `0ccd1733` plus B-owned paths.
+There is **no** `frozenPorts*` alias file. Agent A `0ccd1733` `contracts/` and `ports/` are vendored on this branch (read-only); B-owned adapter paths import them directly.
 
 ## Runtime rules
 
