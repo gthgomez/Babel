@@ -5,34 +5,30 @@
     "tree": "4d6a4fef366e6734e9b95eddebbaa57a9e52c234"
   },
   "localHead": {
-    "commit": "3175ba2f28c3cfeeaa905c28d18448506eca8291",
-    "tree": "e69d4477fb322ee66f43331f4bf76dd32cb57302"
+    "commit": "06e7717d3be264badf71cc328553162716d0ffb3",
+    "tree": "a72bc6490ee73c4a0c9f593b685f5037907df21e"
   },
+  "identityBinding": "localHead/localTree from git rev-parse HEAD and HEAD^{tree} at generatedAt",
+  "priorExportIdentityNote": "3175ba2f/e69d4477 was stale; 2d660bf0/9233005b was pre-lifecycle-repair tip",
   "repairHead": {
     "commit": "2e81686d2606709e54b6b1ecdbaf8d793524a088"
   },
-  "handoffDocHead": {
-    "commit": "3175ba2f28c3cfeeaa905c28d18448506eca8291",
-    "path": "babel-cli/src/research/v2/profiles/general/EXTRACTION_SLICE_CANDIDATE_M1.md"
-  },
-  "m1HtmlCatalogHead": {
-    "commit": "7128bd70e217b1700328d2d58060cd374cb806a9"
+  "lifecycleRepairHead": {
+    "commit": "0693cb8f2eb1174432a7449806c4857937199253"
   },
   "commits": [
     "7128bd70 feat(general): M1 static HTML adapter and adapter catalog (local)",
     "6bb8d08d feat(general): M2 admitted PDF page text via pdfjs (local)",
     "2e81686d fix(general): repair HTML/PDF extraction review defects (local)",
-    "3175ba2f docs(general): handoff pdfjs API pin and catalog exports for A (local)"
+    "3175ba2f docs(general): handoff pdfjs API pin and catalog exports for A (local)",
+    "2d660bf0 chore(review): refresh extraction exports with A handoff metadata (local)",
+    "0693cb8f fix(general): UTF-16 inline cap and interruptible PDF parser lifecycle (local)",
+    "06e7717d chore(review): bind extraction exports to HEAD rev-parse identity (local)"
   ],
   "patchFullLocal": {
     "path": "review-artifacts/extraction-local-196098d9-to-HEAD.patch",
-    "sha256": "332fdd45f80774126d85788ffa7d0a83a1ef5936968c30ddcb138557985d852b",
-    "bytes": 113317
-  },
-  "patchM1HtmlCatalogOnly": {
-    "path": "review-artifacts/extraction-M1-html-catalog-196098d9-to-7128bd70.patch",
-    "sha256": "762c0b8f965b23405d5cf416b7a658dff35066a536ba2a868f5354f705740a86",
-    "bytes": 15068
+    "sha256": "6cdde2810b7fc95c7f88ff1ad399d638d778a7245159ec648a8e4dc0d448cfb5",
+    "bytes": 295143
   },
   "blobManifestFull": [
     {
@@ -41,11 +37,15 @@
     },
     {
       "path": "babel-cli/src/research/v2/adapters/documents/passageInlineText.test.ts",
-      "blob": "0b832811b67c09a2785cff750561aed86d64d60f"
+      "blob": "ee1b7d63b796dad178e1a8e0549b05c93075d925"
     },
     {
       "path": "babel-cli/src/research/v2/adapters/documents/passageInlineText.ts",
-      "blob": "9ca6e8834742893f8a174b11c2db862936119886"
+      "blob": "fb42a6c130a38d60b4bb6861df94956d9f034cc1"
+    },
+    {
+      "path": "babel-cli/src/research/v2/adapters/documents/pdfAbortable.ts",
+      "blob": "e36502bb147430aa6bc44a6f47b361fd823de07b"
     },
     {
       "path": "babel-cli/src/research/v2/adapters/documents/pdfAdmission.test.ts",
@@ -57,15 +57,15 @@
     },
     {
       "path": "babel-cli/src/research/v2/adapters/documents/pdfExtractionLimits.ts",
-      "blob": "4bd1a36df53434ac3ab5e3ca7d24947908e4363d"
+      "blob": "c2c026f4893c6f76a904d3127f1ab29c977ed2c9"
     },
     {
       "path": "babel-cli/src/research/v2/adapters/documents/pdfFromAdmittedBytes.test.ts",
-      "blob": "82ea85b3cc8534dd8bf864b82b5130da510542f7"
+      "blob": "6eed94bb2cc275cda6241c0e5f1d87efab31a5d7"
     },
     {
       "path": "babel-cli/src/research/v2/adapters/documents/pdfFromAdmittedBytes.ts",
-      "blob": "d7a53f7fe25ba164504de864f529c2f4d2288e04"
+      "blob": "6d1c996c022e38e82e734237e3d9f22276be6255"
     },
     {
       "path": "babel-cli/src/research/v2/adapters/documents/plainTextFromAdmittedBytes.ts",
@@ -81,7 +81,7 @@
     },
     {
       "path": "babel-cli/src/research/v2/adapters/web/htmlFromAdmittedBytes.test.ts",
-      "blob": "bc691e666c5fee41cad75a4f3beea36dc9edc666"
+      "blob": "3050cb47fd90eb23b9e6d35009c37897f322a287"
     },
     {
       "path": "babel-cli/src/research/v2/adapters/web/htmlFromAdmittedBytes.ts",
@@ -97,7 +97,7 @@
     },
     {
       "path": "babel-cli/src/research/v2/profiles/general/EXTRACTION_SLICE_CANDIDATE_M1.md",
-      "blob": "e850577ce224b41b41000e94f57310d1c5710f73"
+      "blob": "160b2c8c8afe7283dfbc3610ee432ac60b42a649"
     },
     {
       "path": "babel-cli/src/research/v2/profiles/general/generalAdapterCatalog.test.ts",
@@ -113,32 +113,31 @@
     },
     {
       "path": "review-artifacts/extraction-dependency-evidence.txt",
-      "blob": "e71f042708869f9562244be0698eec2e05763557"
+      "blob": "6842a281123deaf04244f879b46616b54ef909dc"
     },
     {
       "path": "review-artifacts/extraction-local-196098d9-EXPORT.json",
-      "blob": "ff989869095461699d61962beee0798e7e70dec9"
+      "blob": "a918e117a1675feb7f3e735c890651002c398684"
     },
     {
       "path": "review-artifacts/extraction-local-196098d9-to-HEAD.patch",
-      "blob": "7c9fac15d4a75c8cd4b3b98cd1bb1a0dba19a40a"
+      "blob": "0dbfaef6025c6a6975d4c5823478b1eacb02a93b"
+    },
+    {
+      "path": "review-artifacts/extraction-local-focused-test-command.txt",
+      "blob": "1ef345f5662b6f0310cde7c9dddc12dc2e1793cb"
     },
     {
       "path": "review-artifacts/extraction-local-test-receipt.tap.txt",
-      "blob": "761eb0badb19fd8d0173c33e30a048f6148ea8fd"
+      "blob": "6e7b87564af2caf5ade5e5c646d08cd861d1f781"
     }
   ],
-  "agentAHandoff": {
-    "pdfjsDistVersionObserved": "5.4.296",
-    "pdfjsImport": "pdfjs-dist/legacy/build/pdf.mjs",
-    "catalogExport": "generalAdapterCatalog",
-    "catalogModule": "babel-cli/src/research/v2/profiles/general/generalAdapterCatalog.ts"
-  },
   "focusedTestReceipt": {
-    "path": "review-artifacts/extraction-local-test-receipt.tap.txt",
-    "tests": 43,
-    "pass": 43,
+    "commandPath": "review-artifacts/extraction-local-focused-test-command.txt",
+    "tapPath": "review-artifacts/extraction-local-test-receipt.tap.txt",
+    "tests": 49,
+    "pass": 49,
     "fail": 0
   },
-  "generatedAt": "2026-10-21T02:47:18Z"
+  "generatedAt": "2026-10-21T02:54:11Z"
 }

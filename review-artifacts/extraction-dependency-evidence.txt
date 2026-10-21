@@ -1,7 +1,7 @@
 === extraction dependency evidence (read-only) ===
-generatedAt: 2026-10-21T02:47:18Z
-localHead: 3175ba2f28c3cfeeaa905c28d18448506eca8291
-localTree: e69d4477fb322ee66f43331f4bf76dd32cb57302
+generatedAt: 2026-10-21T02:54:03Z
+localHead: 0693cb8f2eb1174432a7449806c4857937199253
+localTree: 902ee792ee380e2929e3e89744ad62cefe838283
 
 === package.json direct dependency on pdfjs-dist ===
 pdfjs-dist in package.json: (not a direct dependency key)
