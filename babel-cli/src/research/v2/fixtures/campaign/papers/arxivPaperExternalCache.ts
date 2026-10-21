@@ -115,6 +115,12 @@ type BoundedReadResult =
       missing_constants?: ('O_NOFOLLOW' | 'O_NONBLOCK')[]
     }
 
+export interface ArxivPaperCacheReadOptions {
+  cacheRoot?: string
+  /** Defaults to {@link resolveCacheFileOpenFlags}; inject in tests for capability matrix coverage. */
+  resolveOpenFlags?: () => CacheFileOpenPlatformSupport
+}
+
 export function assertRegularFileSizeStableAfterRead(
   fd: number,
   expectedByteLength: number,
@@ -149,8 +155,9 @@ export function assertRegularFileSizeStableAfterRead(
 export function readBoundedRegularFileAtPath(
   resolvedPath: string,
   expectedByteLength: number,
+  options?: Pick<ArxivPaperCacheReadOptions, 'resolveOpenFlags'>,
 ): BoundedReadResult {
-  const openFlags = resolveCacheFileOpenFlags()
+  const openFlags = (options?.resolveOpenFlags ?? resolveCacheFileOpenFlags)()
   if (!openFlags.supported) {
     return {
       ok: false,
@@ -222,7 +229,7 @@ export function readBoundedRegularFileAtPath(
 
 export function resolveManifestedPaperBytesFromExternalCache(
   manifest: ArxivPaperManifestRef,
-  options?: { cacheRoot?: string },
+  options?: ArxivPaperCacheReadOptions,
 ): ArxivPaperCacheResolveResult {
   const cacheRoot = options?.cacheRoot ?? defaultCacheRoot()
   const expectedPath = resolveArtifactPath(cacheRoot, manifest.artifact_path)
@@ -235,7 +242,7 @@ export function resolveManifestedPaperBytesFromExternalCache(
     }
   }
 
-  const read = readBoundedRegularFileAtPath(expectedPath, manifest.byte_length)
+  const read = readBoundedRegularFileAtPath(expectedPath, manifest.byte_length, options)
   if (!read.ok) {
     if (read.status === 'unsupported_platform') {
       return {
@@ -286,8 +293,8 @@ export function resolveManifestedPaperBytesFromExternalCache(
 }
 
 /** Opt-in: arXiv full-paper bytes are not tracked in Git; verify with BABEL_RESEARCH_V2_VERIFY_ARXIV_PAPER_CACHE=1. */
-export function resolveArxiv170603762PaperBytesFromExternalCache(options?: {
-  cacheRoot?: string
-}): ArxivPaperCacheResolveResult {
+export function resolveArxiv170603762PaperBytesFromExternalCache(
+  options?: ArxivPaperCacheReadOptions,
+): ArxivPaperCacheResolveResult {
   return resolveManifestedPaperBytesFromExternalCache(arxivManifest, options)
 }
