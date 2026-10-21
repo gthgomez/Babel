@@ -1,5 +1,7 @@
 # G-L2 obligation API — production wiring status (B report)
 
+**Frozen:** B production host-bound edits stop @ **`4e9b5f70`**; handoff **`B_HANDOFF_OBLIGATION_COVERAGE_4e9b5f70.md`** + **`g-l2-obligation-coverage-handoff-4e9b5f70.json`**. A canonical checkpoint read-only: **`d490dced`** on `cursor/research-v2-post-review-settlement-fc31`.
+
 **Integrated (27512ba1, docs 5d822856):**
 
 | Stage | Status |

@@ -1,0 +1,46 @@
+{
+  "schema": "research-v2-b-obligation-coverage-handoff/v1",
+  "b_checkpoint": {
+    "head": "4e9b5f7098e2bfd33fdd04fe9c1e58ca21dbdf44",
+    "branch": "cursor/agent-b-general-fixtures-f617",
+    "pr": 404
+  },
+  "a_checkpoint_readonly": {
+    "head": "d490dced8b5679e72115288c6b3fcc7b2ddfe37d",
+    "tree": "68ed3cada2f5fc4d5c3bec75d8a8d0a92e2d2cff",
+    "branch": "cursor/research-v2-post-review-settlement-fc31",
+    "pr": 406,
+    "commit_subject": "fix(research-v2): validate obligation_coverage IDs; drop host topic regex"
+  },
+  "b_production_files_4e9b5f70": [
+    "babel-cli/src/research/v2/engine/obligationCoverageJudgmentIntegrity.ts",
+    "babel-cli/src/research/v2/engine/obligationCoverageHostBound.ts",
+    "babel-cli/src/research/v2/engine/boundQuestionCoverageFromEvidence.ts"
+  ],
+  "b_test_and_wiring_files": [
+    "babel-cli/src/research/v2/engine/gL2ObligationJudgmentIntegrity.boundCoverage.reciprocal.test.ts",
+    "babel-cli/src/research/v2/engine/obligationCoverageJudgmentIntegrity.test.ts",
+    "babel-cli/src/research/v2/engine/gL2Diagnostic1Quality.boundCoverage.reciprocal.test.ts",
+    "babel-cli/src/research/v2/engine/reportFinalizationEvidence.gL2.regression.test.ts",
+    "babel-cli/src/research/v2/engine/boundQuestionCoverageFromEvidence.test.ts",
+    "babel-cli/src/research/v2/engine/planCoverageObligations.test.ts",
+    "babel-cli/package.json",
+    "babel-cli/src/research/v2/engine/g-l2-obligation-wiring-bound-coverage.tap.txt",
+    "babel-cli/src/research/v2/engine/g-l2-obligation-wiring-5d822856-receipt.json"
+  ],
+  "a_canonical_production_d490dced": [
+    "babel-cli/src/research/v2/engine/semanticObligationCoverageValidation.ts",
+    "babel-cli/src/research/v2/engine/findingsFromModelOutput.ts",
+    "babel-cli/src/research/v2/engine/obligationCoverageHostBound.ts",
+    "babel-cli/src/research/v2/engine/boundQuestionCoverageFromEvidence.ts",
+    "babel-cli/src/research/v2/engine/semanticObligationCoverageValidation.test.ts",
+    "babel-cli/src/research/v2/engine/obligationCoverageHostBound.test.ts"
+  ],
+  "lineage_durable_matrix": {
+    "status": "closed",
+    "verification_head": "73c5478c3eaed9fd6aa595c796e75df8f911ccd2",
+    "note": "no further reruns on B"
+  },
+  "npm_script": "test:research-v2-g-l2-bound-coverage",
+  "tests_at_b_4e9b5f70": 31
+}
