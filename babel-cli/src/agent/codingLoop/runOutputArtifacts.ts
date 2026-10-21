@@ -95,7 +95,7 @@ export function readRunOutput(input: {
   checkCancelled()
   if (!z.string().uuid().safeParse(input.artifactId).success) throw new Error('ARTIFACT_DENIED')
   const start = input.startLine ?? 1
-  const end = input.endLine ?? (input.query === undefined ? start + MAX_ARTIFACT_LINES - 1 : Number.MAX_SAFE_INTEGER)
+  const end = input.endLine ?? Number.MAX_SAFE_INTEGER
   const column = input.startColumn ?? 1
   if (!Number.isSafeInteger(start) || start < 1 || !Number.isSafeInteger(end) || end < start
     || !Number.isSafeInteger(column) || column < 1

@@ -8,6 +8,21 @@ import { admitProjectContentRead } from '../chatReadOnly.js'
 
 const owner = { sessionId: 'session', taskOwnerId: 'task-owner', acceptedTaskId: 'task' }
 
+test('default artifact pages advertise continuation until the final line', () => {
+  const runDir = mkdtempSync(join(tmpdir(), 'babel-output-default-page-'))
+  try {
+    const artifact = registerRunOutput({ runDir, owner, content: Array.from({ length: 500 }, (_, index) => `diagnostic ${index + 1}`).join('\n'), tool: 'test_run', callId: 'default-page' })
+    const first = readRunOutput({ runDir, owner, artifactId: artifact.id })
+    assert.match(first, /TRUNCATED: continue with start_line: 201/)
+    const second = readRunOutput({ runDir, owner, artifactId: artifact.id, startLine: 201 })
+    assert.match(second, /TRUNCATED: continue with start_line: 401/)
+    const final = readRunOutput({ runDir, owner, artifactId: artifact.id, startLine: 401 })
+    assert.match(final, /500: diagnostic 500/)
+    assert.doesNotMatch(final, /TRUNCATED/)
+    assert.doesNotMatch(readRunOutput({ runDir, owner, artifactId: artifact.id, endLine: 10 }), /TRUNCATED/)
+  } finally { rmSync(runDir, { recursive: true, force: true }) }
+})
+
 test('column continuation preserves following short lines and their search matches', () => {
   const runDir = mkdtempSync(join(tmpdir(), 'babel-output-next-line-'))
   try {
