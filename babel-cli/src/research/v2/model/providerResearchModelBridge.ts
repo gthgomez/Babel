@@ -1,6 +1,12 @@
-import type { LlmRunner, RunnerInvocationMetadata } from '../../../runners/base.js'
+import type {
+  LlmRunner,
+  RunnerCallbacks,
+  RunnerInvocationMetadata,
+} from '../../../runners/base.js'
+import type { CostProvenance } from '../contracts/common.js'
 import { modelOutputSchemaForKind, parseValidatedModelOutput } from '../contracts/modelOutputs.js'
 import type {
+  ModelRouteReceipt,
   ResearchModelInvocationRequest,
   ResearchModelInvocationResult,
   ResearchModelPort,
@@ -32,16 +38,58 @@ function defaultBuildPrompt(request: ResearchModelInvocationRequest): {
   }
 }
 
+function costProvenanceFromMetadata(meta: RunnerInvocationMetadata | null | undefined): CostProvenance {
+  if (!meta || meta.estimated_cost_usd == null) {
+    return { status: 'unknown' }
+  }
+  if (meta.cost_precision === 'exact') {
+    return { status: 'reported', amount_usd: meta.estimated_cost_usd, currency: 'USD' }
+  }
+  if (meta.cost_precision === 'conservative') {
+    return {
+      status: 'estimated',
+      amount_usd: meta.estimated_cost_usd,
+      method: 'conservative_pinned_rate',
+      as_of: meta.pricing_verified_at ?? new Date().toISOString(),
+    }
+  }
+  return {
+    status: 'estimated',
+    amount_usd: meta.estimated_cost_usd,
+    method: 'provider_usage_estimate',
+    as_of: meta.pricing_verified_at ?? new Date().toISOString(),
+  }
+}
+
 function usageFromMetadata(attemptId: string, meta: RunnerInvocationMetadata | null | undefined): UsageSettlement {
-  const cost =
-    meta?.estimated_cost_usd != null
-      ? { status: 'reported' as const, amount_usd: meta.estimated_cost_usd, currency: 'USD' as const }
-      : { status: 'unknown' as const }
   return {
     attempt_id: attemptId,
     ...(meta?.prompt_tokens != null ? { input_tokens: meta.prompt_tokens } : {}),
     ...(meta?.completion_tokens != null ? { output_tokens: meta.completion_tokens } : {}),
-    cost,
+    cost: costProvenanceFromMetadata(meta),
+  }
+}
+
+function routeReceiptFromMetadata(
+  request: ResearchModelInvocationRequest,
+  meta: RunnerInvocationMetadata | null | undefined,
+  resolvedAt: string,
+  configured: ProviderResearchModelBridgeOptions,
+): ModelRouteReceipt {
+  const provider = meta?.provider ?? configured.provider
+  const providerModelId =
+    meta?.observed_model_id ??
+    meta?.sent_model_id ??
+    meta?.normalized_model_id ??
+    meta?.provider_model_id ??
+    configured.providerModelId
+  return {
+    operation_id: request.operationId,
+    backend_key: configured.backendKey,
+    provider,
+    provider_model_id: providerModelId,
+    resolved_at: resolvedAt,
+    usage_settlement: usageFromMetadata(request.attemptId, meta),
   }
 }
 
@@ -72,42 +120,54 @@ export class ProviderResearchModelBridge implements ResearchModelPort {
     const schema = modelOutputSchemaForKind(request.kind)
     const built = (this.buildPrompt ?? defaultBuildPrompt)(request)
     const { prompt, systemPrompt } = built
+    let invocationMeta: RunnerInvocationMetadata | null = null
+    const callbacks: RunnerCallbacks = {
+      onInvocationCompleted: (event) => {
+        invocationMeta = event.usage_metadata ?? null
+      },
+    }
     try {
       const raw = await this.options.runner.execute(
         prompt,
         schema,
-        undefined,
+        callbacks,
         systemPrompt,
         request.signal,
       )
+      if (request.signal.aborted) {
+        const meta = invocationMeta ?? this.options.runner.getLastInvocationMetadata?.() ?? null
+        return {
+          status: 'cancelled',
+          operationId: request.operationId,
+          usageSettlement: usageFromMetadata(request.attemptId, meta),
+        }
+      }
       const output = parseValidatedModelOutput(request.kind, raw)
-      const meta = this.options.runner.getLastInvocationMetadata?.() ?? null
+      if (request.signal.aborted) {
+        const meta = invocationMeta ?? this.options.runner.getLastInvocationMetadata?.() ?? null
+        return {
+          status: 'cancelled',
+          operationId: request.operationId,
+          usageSettlement: usageFromMetadata(request.attemptId, meta),
+        }
+      }
+      const meta = invocationMeta ?? this.options.runner.getLastInvocationMetadata?.() ?? null
       const resolvedAt = new Date().toISOString()
       return {
         status: 'ok',
         operationId: request.operationId,
         output,
-        receipt: {
-          operation_id: request.operationId,
-          backend_key: this.options.backendKey,
-          provider: this.options.provider,
-          provider_model_id: this.options.providerModelId,
-          resolved_at: resolvedAt,
-          usage_settlement: usageFromMetadata(request.attemptId, meta),
-        },
+        receipt: routeReceiptFromMetadata(request, meta, resolvedAt, this.options),
       }
     } catch (err: unknown) {
+      const meta = invocationMeta ?? this.options.runner.getLastInvocationMetadata?.() ?? null
       if (request.signal.aborted) {
         return {
           status: 'cancelled',
           operationId: request.operationId,
-          usageSettlement: usageFromMetadata(
-            request.attemptId,
-            this.options.runner.getLastInvocationMetadata?.() ?? null,
-          ),
+          usageSettlement: usageFromMetadata(request.attemptId, meta),
         }
       }
-      const meta = this.options.runner.getLastInvocationMetadata?.() ?? null
       return {
         status: 'failed',
         operationId: request.operationId,

@@ -8,21 +8,21 @@ import type {
   SourceSearchRequest,
   SourceSearchResult,
 } from '../ports/sourceAccessPort.js'
+import { AdmittedNetworkPolicyError, admittedHttpGet, type AdmittedHttpGetResult } from './admittedHttpGet.js'
 
-export type FetchLike = (
-  input: string,
-  init?: { signal?: AbortSignal; headers?: Record<string, string> },
-) => Promise<{
-  ok: boolean
-  status: number
-  headers: { get(name: string): string | null }
-  arrayBuffer(): Promise<ArrayBuffer>
-}>
+export type AdmittedHttpGetFn = (params: {
+  url: string
+  maxBytes: number
+  signal: AbortSignal
+}) => Promise<AdmittedHttpGetResult>
 
 export interface FetchSourceAccessPortOptions {
-  fetch: FetchLike
+  /** Production path: governed network GET. Tests inject a stub instead of live HTTP. */
+  admittedGet?: AdmittedHttpGetFn
   maxAdmittedBytes?: number
 }
+
+const DEFAULT_MAX_ADMITTED_BYTES = 200_000
 
 function sha256(bytes: Buffer): string {
   return createHash('sha256').update(bytes).digest('hex')
@@ -32,12 +32,49 @@ function issueRevisionId(sourceId: string, contentHash: string): string {
   return `rev-${sourceId}-${contentHash.slice(0, 16)}`
 }
 
+function policyFailureCategory(err: unknown): SourceFetchResult {
+  if (err instanceof AdmittedNetworkPolicyError) {
+    const message = err.message
+    if (/private network|localhost|DNS resolution/i.test(message)) {
+      return {
+        operationId: '',
+        status: 'failed',
+        failureCategory: 'private_address_blocked',
+        message,
+      }
+    }
+    return {
+      operationId: '',
+      status: 'failed',
+      failureCategory: 'policy_denied',
+      message,
+    }
+  }
+  return {
+    operationId: '',
+    status: 'failed',
+    failureCategory: 'network_error',
+    message: err instanceof Error ? err.message : String(err),
+  }
+}
+
 /**
  * Network {@link SourceAccessPort} for admitted byte fetch (GET). Search is not implemented here;
  * profile adapters perform discover via registry + delegated search policies.
  */
 export class FetchSourceAccessPort implements SourceAccessPort {
-  constructor(private readonly options: FetchSourceAccessPortOptions) {}
+  private readonly admittedGet: AdmittedHttpGetFn
+
+  constructor(private readonly options: FetchSourceAccessPortOptions = {}) {
+    this.admittedGet =
+      options.admittedGet ??
+      ((params) =>
+        admittedHttpGet({
+          url: params.url,
+          maxBytes: params.maxBytes,
+          signal: params.signal,
+        }))
+  }
 
   async search(request: SourceSearchRequest): Promise<SourceSearchResult> {
     if (request.signal.aborted) {
@@ -64,8 +101,16 @@ export class FetchSourceAccessPort implements SourceAccessPort {
         message: 'source has no observed URL',
       }
     }
+    const limit = this.options.maxAdmittedBytes ?? DEFAULT_MAX_ADMITTED_BYTES
     try {
-      const response = await this.options.fetch(url, { signal: request.signal })
+      const response = await this.admittedGet({
+        url,
+        maxBytes: limit,
+        signal: request.signal,
+      })
+      if (request.signal.aborted) {
+        return { operationId: request.operationId, status: 'cancelled' }
+      }
       if (!response.ok) {
         return {
           operationId: request.operationId,
@@ -74,8 +119,8 @@ export class FetchSourceAccessPort implements SourceAccessPort {
           message: `HTTP ${response.status}`,
         }
       }
-      const buf = Buffer.from(await response.arrayBuffer())
-      if (buf.length === 0) {
+      const admittedBytes = response.buffer
+      if (admittedBytes.length === 0) {
         return {
           operationId: request.operationId,
           status: 'failed',
@@ -83,17 +128,15 @@ export class FetchSourceAccessPort implements SourceAccessPort {
           message: 'source has no retrievable bytes',
         }
       }
-      const limit = this.options.maxAdmittedBytes
-      const truncated = typeof limit === 'number' && limit > 0 && buf.byteLength > limit
-      const admittedBytes = truncated ? buf.subarray(0, limit) : buf
+      const truncated = response.truncated
       const contentHash = sha256(admittedBytes)
-      const mediaType = response.headers.get('content-type')?.split(';')[0]?.trim() ?? 'application/octet-stream'
+      const mediaType = response.contentType.split(';')[0]?.trim() ?? 'application/octet-stream'
       const revision: SourceRevision = {
         revision_id: issueRevisionId(request.source.source_id, contentHash),
         source_id: request.source.source_id,
         content_hash: contentHash,
         retrieved_at: new Date().toISOString(),
-        extraction_version: 'fetch-source-access-1',
+        extraction_version: 'fetch-source-access-2',
         media_type: mediaType,
         completeness: truncated ? 'truncated' : 'complete',
         byte_length_received: admittedBytes.byteLength,
@@ -104,9 +147,9 @@ export class FetchSourceAccessPort implements SourceAccessPort {
         revision,
         media_type: mediaType,
         provenance: {
-          requested_url: url,
-          final_url: url,
-          redirect_chain: [url],
+          requested_url: response.requestedUrl,
+          final_url: response.finalUrl,
+          redirect_chain: response.redirectChain,
         },
         payload: {
           mode: 'inline_bytes',
@@ -114,11 +157,11 @@ export class FetchSourceAccessPort implements SourceAccessPort {
           byte_length: admittedBytes.byteLength,
           content_hash: contentHash,
         },
-        ...(truncated && typeof limit === 'number'
+        ...(truncated
           ? {
               truncation: {
                 reason: 'host_byte_limit',
-                bytes_received: buf.byteLength,
+                bytes_received: response.bytesReceived,
                 bytes_limit: limit,
               },
             }
@@ -132,12 +175,8 @@ export class FetchSourceAccessPort implements SourceAccessPort {
       if (request.signal.aborted) {
         return { operationId: request.operationId, status: 'cancelled' }
       }
-      return {
-        operationId: request.operationId,
-        status: 'failed',
-        failureCategory: 'network_error',
-        message: err instanceof Error ? err.message : String(err),
-      }
+      const mapped = policyFailureCategory(err)
+      return { ...mapped, operationId: request.operationId }
     }
   }
 }

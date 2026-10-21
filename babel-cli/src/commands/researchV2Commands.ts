@@ -10,7 +10,6 @@ import {
 } from '../research/v2/model/researchV2LiveModelPort.js'
 import { openAdmittedOwnerStore } from '../research/v2/control/researchStoreAdmission.js'
 import { FixtureResearchModelBridge } from '../research/v2/model/fixtureModelBridge.js'
-import { FetchSourceAccessPort } from '../research/v2/access/fetchSourceAccessPort.js'
 import { runAdmittedPlanningIteration } from '../research/v2/engine/researchIterationLoop.js'
 import { examplePlanRevisionFixture, exampleTechnicalMissionFixture } from '../research/v2/fixtures/exampleMission.js'
 
@@ -24,41 +23,45 @@ export function registerResearchV2Commands(program: Command): void {
     .description('Fixture-only planning iteration into a temp durable store (no live API)')
     .option('--json', 'emit machine-readable output', false)
     .action(async (options: { json: boolean }) => {
+      const storeDirectory = await mkdtemp(join(tmpdir(), 'babel-research-v2-cli-'))
+      let owner: Awaited<ReturnType<typeof openAdmittedOwnerStore>> | undefined
       try {
-        const storeDirectory = await mkdtemp(join(tmpdir(), 'babel-research-v2-cli-'))
-        const owner = await openAdmittedOwnerStore(storeDirectory)
+        owner = await openAdmittedOwnerStore(storeDirectory)
         const model = new FixtureResearchModelBridge()
         model.scriptOutput('cli-plan-op', {
           kind: 'plan_questions',
           questions: [{ text: 'CLI dry-run question', importance: 'medium' }],
         })
-        const access = new FetchSourceAccessPort({
-          fetch: async () => {
-            throw new Error('dry-run does not perform network fetch')
-          },
-        })
+        const missionHandle = await owner.store.appendMission(exampleTechnicalMissionFixture)
         const result = await runAdmittedPlanningIteration({
-          mission: exampleTechnicalMissionFixture,
+          session: { mission: exampleTechnicalMissionFixture, handle: missionHandle },
           store: owner.store,
           model,
-          access,
-          planRevision: examplePlanRevisionFixture,
           modelOperationId: 'cli-plan-op',
           modelAttemptId: 'cli-plan-att',
+          planRevisionId: examplePlanRevisionFixture.plan_revision_id,
+          revisionReason: 'cli_fixture_planning',
+          dispatchedAt: new Date().toISOString(),
           signal: new AbortController().signal,
         })
-        await owner.close()
         const payload = {
           mode: 'fixture_dry_run',
           live_api: false,
           store_directory: storeDirectory,
           session_id: owner.sessionId,
           planned_question_count: result.plannedQuestionCount,
-          note: 'Not a live research run; fixture model + admitted store only.',
+          limitations: {
+            search: 'not_implemented',
+            live_plan: 'not_wired',
+            report: 'not_implemented',
+          },
+          note: 'Planning scaffold only — not a completed research engine or live research run.',
         }
         printJsonOrHuman(payload, JSON.stringify(payload, null, 2), options.json)
       } catch (error) {
         printJsonErrorAndExit(error instanceof Error ? error.message : String(error), options.json)
+      } finally {
+        await owner?.close()
       }
     })
 

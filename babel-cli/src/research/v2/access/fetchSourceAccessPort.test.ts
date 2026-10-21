@@ -4,14 +4,22 @@ import { SourceRecordSchema } from '../contracts/sources.js'
 import { FetchSourceAccessPort } from './fetchSourceAccessPort.js'
 
 describe('FetchSourceAccessPort', () => {
-  it('fetches admitted bytes for observed URL', async () => {
+  it('fetches admitted bytes for observed URL via injected admittedGet', async () => {
     const body = 'export const X = 1\n'
     const port = new FetchSourceAccessPort({
-      fetch: async () => ({
+      admittedGet: async () => ({
         ok: true,
         status: 200,
-        headers: { get: () => 'text/plain' },
-        arrayBuffer: async () => Uint8Array.from(Buffer.from(body, 'utf8')).buffer,
+        contentType: 'text/plain',
+        buffer: Buffer.from(body, 'utf8'),
+        bytesReceived: body.length,
+        truncated: false,
+        requestedUrl: 'https://example.test/raw/file.ts',
+        finalUrl: 'https://cdn.example.test/raw/file.ts',
+        redirectChain: [
+          'https://example.test/raw/file.ts',
+          'https://cdn.example.test/raw/file.ts',
+        ],
       }),
     })
     const source = SourceRecordSchema.parse({
@@ -34,11 +42,28 @@ describe('FetchSourceAccessPort', () => {
         body,
       )
       assert.equal(result.admitted.operation_id, 'fetch-1')
+      assert.equal(result.admitted.provenance.final_url, 'https://cdn.example.test/raw/file.ts')
+      assert.deepEqual(result.admitted.provenance.redirect_chain, [
+        'https://example.test/raw/file.ts',
+        'https://cdn.example.test/raw/file.ts',
+      ])
     }
   })
 
   it('search fails closed with not_supported', async () => {
-    const port = new FetchSourceAccessPort({ fetch: async () => ({ ok: true, status: 200, headers: { get: () => null }, arrayBuffer: async () => new ArrayBuffer(0) }) })
+    const port = new FetchSourceAccessPort({
+      admittedGet: async () => ({
+        ok: true,
+        status: 200,
+        contentType: 'text/plain',
+        buffer: Buffer.alloc(0),
+        bytesReceived: 0,
+        truncated: false,
+        requestedUrl: 'https://example.test',
+        finalUrl: 'https://example.test',
+        redirectChain: ['https://example.test'],
+      }),
+    })
     const result = await port.search({
       operationId: 's-1',
       query: 'q',
