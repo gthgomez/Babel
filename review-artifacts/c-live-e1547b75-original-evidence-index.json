@@ -4,7 +4,7 @@
   "bound_commit": "e1547b756d7de3e41cbad613b95cfc0b62b75af8",
   "extractor": {
     "script": "review-artifacts/c-live-e1547b75-extract-original-evidence.mjs",
-    "script_sha256": "see export.extraction.script_sha256 (regenerated with model cost fix)"
+    "script_sha256": "a597c0bd228f2a8dfaa8f3668f355347912cd3127c2d27d1ef43189837f233a9"
   },
   "t_l1": {
     "snapshot_sha256": "d83840ba9b07a556eba70da2019cb212784d331e51091d12e9d672c608500cf4",
