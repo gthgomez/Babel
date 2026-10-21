@@ -12,6 +12,7 @@ import { InMemoryResearchStore } from '../fixtures/fakePorts.js'
 import { createCombinedResearchRegistries } from '../registry/reviewedBAdapterIntegration.js'
 import { resolveDiscoveryAdapterForMission } from '../registry/missionAdapterResolution.js'
 import { TechnicalRepositoryFileAdapter } from '../profiles/technical/repositoryFileAdapter.js'
+import { ResearchPassFailedError } from './researchPassFailure.js'
 import { runAdmittedComposedRetrievalIteration } from './researchComposedRetrievalLoop.js'
 import pins from '../fixtures/campaign/T-L1-T-L2-PINNED-VERSIONS.json' with { type: 'json' }
 
@@ -177,6 +178,7 @@ describe('composed retrieval regressions (scoped access + settlement)', () => {
     })
 
     const { store, handle } = await seedMissionStore(mission)
+    const generationBefore = handle.writer_generation
     const result = await runAdmittedComposedRetrievalIteration({
       session: {
         mission,
@@ -203,8 +205,97 @@ describe('composed retrieval regressions (scoped access + settlement)', () => {
     const docOutcome = result.slotOutcomes.find((o) => o.kind === 'document_ref')
     assert.equal(docOutcome?.settlement, 'succeeded')
     assert.ok(result.passageIds.length >= 1)
+    assert.ok(result.handle.writer_generation > generationBefore)
     const fence = store.readMissionWriteFence(mission.mission_id)
     assert.equal(fence.writer_generation, result.handle.writer_generation)
+  })
+
+  it('foreign writer replacement after failed child slot fences composed controller out', async () => {
+    const base = loadMission('T-L2-mission.json')
+    const mission = {
+      ...base,
+      source_policy: {
+        ...base.source_policy,
+        allowed_source_classes: ['repository_file' as const, 'document' as const],
+        selected_document_refs: [pins.t_l2_paper.canonical_url],
+      },
+    }
+    const registries = await createCombinedResearchRegistries()
+    const discovery = resolveDiscoveryAdapterForMission(mission, registries)
+    assert.ok(discovery)
+    const pdfFixture = readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), '../adapters/documents/fixtures/two-page-sample.pdf'),
+    )
+    const searchProvider = createMissionProductionSearchProvider({
+      mission,
+      fetchRepositoryTree: async () => ({
+        ok: false,
+        status: 500,
+        entries: [],
+        message: 'tree listing failed for regression',
+      }),
+    })
+    const access = createGovernedSourceAccessPort({
+      mission,
+      searchProvider,
+      admittedGet: async ({ url }) => ({
+        ok: url === pins.t_l2_paper.canonical_url,
+        status: url === pins.t_l2_paper.canonical_url ? 200 : 404,
+        contentType: 'application/pdf',
+        buffer: url === pins.t_l2_paper.canonical_url ? pdfFixture : Buffer.alloc(0),
+        bytesReceived: url === pins.t_l2_paper.canonical_url ? pdfFixture.length : 0,
+        truncated: false,
+        requestedUrl: url,
+        finalUrl: url,
+        redirectChain: [url],
+        transportCoding: null,
+      }),
+    })
+    const { store, handle } = await seedMissionStore(mission)
+    let childOwnGeneration: number | null = null
+    const origAcquire = store.acquireWriterOwnership.bind(store)
+    store.acquireWriterOwnership = async (req) => {
+      const acquired = await origAcquire(req)
+      if (
+        childOwnGeneration === null &&
+        req.expected_writer_generation === handle.writer_generation
+      ) {
+        childOwnGeneration = acquired.writer_generation
+        store.bumpWriterGeneration(req.mission_id)
+      }
+      return acquired
+    }
+
+    await assert.rejects(
+      () =>
+        runAdmittedComposedRetrievalIteration({
+          session: {
+            mission,
+            handle,
+            activePlanRevisionId: examplePlanRevisionFixture.plan_revision_id,
+          },
+          store,
+          access,
+          adapter: discovery,
+          registries,
+          activePlan: { ...examplePlanRevisionFixture, mission_id: mission.mission_id },
+          discoverQuery: 'persistence',
+          searchOperationId: 'foreign-owner-search',
+          searchAttemptId: 'foreign-owner-search-att',
+          fetchOperationId: 'foreign-owner-fetch',
+          fetchAttemptId: 'foreign-owner-fetch-att',
+          dispatchedAt: FIXED_NOW,
+          signal: new AbortController().signal,
+          now: () => FIXED_NOW,
+        }),
+      (err: unknown) =>
+        err instanceof ResearchPassFailedError ||
+        (err instanceof Error && /competing resume rejected/i.test(err.message)),
+    )
+
+    assert.ok(childOwnGeneration !== null)
+    const fence = store.readMissionWriteFence(mission.mission_id)
+    assert.ok(fence.writer_generation > childOwnGeneration!)
   })
 
   it('settles thrown document search exactly once', async () => {

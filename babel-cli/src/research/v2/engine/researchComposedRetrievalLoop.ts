@@ -10,7 +10,10 @@ import type { SourceAdapter } from '../ports/sourceAdapter.js'
 import type { SourceAccessPort } from '../ports/sourceAccessPort.js'
 import type { ResearchStore, ResearchStoreMissionHandle } from '../ports/researchStore.js'
 import type { AdmittedPlanningSession } from './researchIterationLoop.js'
-import { runAdmittedRetrievalIteration } from './researchRetrievalLoop.js'
+import {
+  RetrievalIterationFailedAfterAcquireError,
+  runAdmittedRetrievalIteration,
+} from './researchRetrievalLoop.js'
 import {
   missionUsesComposedTechnicalRetrieval,
   planTechnicalRetrievalSlots,
@@ -75,14 +78,6 @@ function throwIfAborted(signal: AbortSignal, phase: string): void {
   if (signal.aborted) {
     throw new Error(`composed retrieval aborted before ${phase}`)
   }
-}
-
-function syncWriterHandleFromStore(
-  store: ResearchStore,
-  handle: ResearchStoreMissionHandle,
-): ResearchStoreMissionHandle {
-  const fence = store.readMissionWriteFence(handle.mission_id)
-  return { mission_id: handle.mission_id, writer_generation: fence.writer_generation }
 }
 
 async function recordUnsupportedSlot(
@@ -610,12 +605,9 @@ export async function runAdmittedComposedRetrievalIteration(
           sourceId: result.source.source_id,
         })
       } catch (err: unknown) {
-        workingHandle = syncWriterHandleFromStore(request.store, workingHandle)
-        if (writeContext) {
-          writeContext = {
-            ...writeContext,
-            writer_generation: workingHandle.writer_generation,
-          }
+        if (err instanceof RetrievalIterationFailedAfterAcquireError) {
+          workingHandle = err.acquiredHandle
+          writeContext = err.writeContext
         }
         const message = err instanceof Error ? err.message : String(err)
         slotOutcomes.push({
