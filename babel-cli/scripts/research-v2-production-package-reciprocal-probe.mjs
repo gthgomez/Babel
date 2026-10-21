@@ -4,8 +4,8 @@
  * ../dist (packaged layout); pdfjs/canvas must resolve from staged node_modules only.
  */
 import assert from 'node:assert/strict'
-import { readFileSync, realpathSync } from 'node:fs'
-import { join, sep } from 'node:path'
+import { readFileSync, readdirSync, realpathSync } from 'node:fs'
+import { dirname, join, sep } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const stageRoot = process.env.BABEL_STAGED_ROOT
@@ -36,18 +36,43 @@ function assertRealpathUnderStage(label, resolvedUrl) {
   return resolvedReal
 }
 
-const pdfjsPkg = import.meta.resolve('pdfjs-dist/package.json', distPdfModule)
-assertRealpathUnderStage('pdfjs-dist/package.json (from dist parentURL)', pdfjsPkg)
-try {
-  assertRealpathUnderStage(
-    '@napi-rs/canvas/package.json (from dist parentURL)',
-    import.meta.resolve('@napi-rs/canvas/package.json', distPdfModule),
-  )
-} catch {
-  console.error(
-    'staged_probe: @napi-rs/canvas not installed under production flags (expected until A #406 package repair lands)',
-  )
+function resolveCanvasPlatformBindingPackage(platform = process.platform, arch = process.arch) {
+  if (platform === 'linux' && arch === 'x64') return '@napi-rs/canvas-linux-x64-gnu'
+  if (platform === 'linux' && arch === 'arm64') return '@napi-rs/canvas-linux-arm64-gnu'
+  if (platform === 'win32' && arch === 'x64') return '@napi-rs/canvas-win32-x64-msvc'
+  if (platform === 'darwin' && arch === 'arm64') return '@napi-rs/canvas-darwin-arm64'
+  if (platform === 'darwin' && arch === 'x64') return '@napi-rs/canvas-darwin-x64'
+  return null
 }
+
+function assertResolvedUnderStageFromDist(specifier, label) {
+  return assertRealpathUnderStage(label, import.meta.resolve(specifier, distPdfModule))
+}
+
+assertResolvedUnderStageFromDist('pdfjs-dist/package.json', 'pdfjs-dist/package.json (from dist parentURL)')
+assertResolvedUnderStageFromDist(
+  '@napi-rs/canvas/package.json',
+  '@napi-rs/canvas/package.json (from dist parentURL)',
+)
+const platformBindingPkg = resolveCanvasPlatformBindingPackage()
+assert.ok(
+  platformBindingPkg,
+  `no @napi-rs/canvas platform binding mapping for ${process.platform}/${process.arch}`,
+)
+const platformPkgReal = assertResolvedUnderStageFromDist(
+  `${platformBindingPkg}/package.json`,
+  `${platformBindingPkg}/package.json (from dist parentURL)`,
+)
+const platformPkgDir = dirname(platformPkgReal)
+const nativeNodeFiles = readdirSync(platformPkgDir).filter((name) => name.endsWith('.node'))
+assert.ok(
+  nativeNodeFiles.length > 0,
+  `${platformBindingPkg} must contain a .node native binary (found none in ${platformPkgDir})`,
+)
+assertRealpathUnderStage(
+  `${platformBindingPkg} native .node`,
+  pathToFileURL(join(platformPkgDir, nativeNodeFiles[0])),
+)
 
 const { GeneralDocumentAdapter } = await import(
   new URL('research/v2/adapters/documents/generalDocumentAdapter.js', distUrl).href

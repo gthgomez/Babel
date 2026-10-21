@@ -1,19 +1,19 @@
-# generated 2026-10-21T05:56:25.994Z
+# generated 2026-10-21T05:58:58.088Z
 outcome=probe_ok
-stageRoot=/tmp/babel-prod-reciprocal-stage-GYtvnC
+stageRoot=/tmp/babel-prod-reciprocal-stage-sTUDn9
 production_npm_ci=ci --omit=dev --omit=optional --ignore-scripts --no-audit --no-fund
 platform_binding_installed=@napi-rs/canvas-linux-x64-gnu
 canvas_package_json_present=true
 pdfjs_package_json_present=true
 canvas_version=0.1.80
-module_paths={"canvas_package_json":"/tmp/babel-prod-reciprocal-stage-GYtvnC/node_modules/@napi-rs/canvas/package.json","pdfjs_entry":"/tmp/babel-prod-reciprocal-stage-GYtvnC/node_modules/pdfjs-dist/legacy/build/pdf.mjs","canvas_platform_binding_package_json":"/tmp/babel-prod-reciprocal-stage-GYtvnC/node_modules/@napi-rs/canvas-linux-x64-gnu/package.json"}
+module_paths={"canvas_package_json":"/tmp/babel-prod-reciprocal-stage-sTUDn9/node_modules/@napi-rs/canvas/package.json","pdfjs_entry":"/tmp/babel-prod-reciprocal-stage-sTUDn9/node_modules/pdfjs-dist/legacy/build/pdf.mjs","canvas_platform_binding_package_json":"/tmp/babel-prod-reciprocal-stage-sTUDn9/node_modules/@napi-rs/canvas-linux-x64-gnu/package.json"}
 A #406: direct @napi-rs/canvas + pdfjs-dist in dependencies; platform binding installed after npm ci --omit=optional; dist loads canvas before pdfjs (DOMMatrix).
 --- npm ci (tail) ---
 
 added 50 packages in 1s
 
 --- esm isolation stdout ---
-{"marker":"research-v2-production-package-esm-isolation-probe: ok","stageReal":"/tmp/babel-prod-reciprocal-stage-GYtvnC","pdfjsReal":"/tmp/babel-prod-reciprocal-stage-GYtvnC/node_modules/pdfjs-dist/package.json","canvasNativeReal":null}
+{"marker":"research-v2-production-package-esm-isolation-probe: ok","qualification":"linux_staged_production_flags_only_not_windows_pack_qualification","stageReal":"/tmp/babel-prod-reciprocal-stage-sTUDn9","pdfjsReal":"/tmp/babel-prod-reciprocal-stage-sTUDn9/node_modules/pdfjs-dist/package.json","canvasPkgReal":"/tmp/babel-prod-reciprocal-stage-sTUDn9/node_modules/@napi-rs/canvas/package.json","canvasPlatformBindingPackage":"@napi-rs/canvas-linux-x64-gnu","canvasPlatformPkgReal":"/tmp/babel-prod-reciprocal-stage-sTUDn9/node_modules/@napi-rs/canvas-linux-x64-gnu/package.json","canvasPlatformNativeReal":"/tmp/babel-prod-reciprocal-stage-sTUDn9/node_modules/@napi-rs/canvas-linux-x64-gnu/skia.linux-x64-gnu.node"}
 
 --- esm isolation stderr ---
 

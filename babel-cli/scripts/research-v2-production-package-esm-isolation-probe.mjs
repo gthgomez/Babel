@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 /**
- * Staged ESM resolution marker: resolve pdfjs (and canvas when present) from a dist
- * module parentURL, then assert realpaths stay inside BABEL_STAGED_ROOT.
- * Fails if host/workspace node_modules satisfy dist imports.
+ * Staged ESM resolution marker: resolve pdfjs, @napi-rs/canvas wrapper, and the
+ * host platform binding package (e.g. @napi-rs/canvas-linux-x64-gnu) from dist
+ * parentURL; assert realpaths stay inside BABEL_STAGED_ROOT. Fail closed.
  */
 import assert from 'node:assert/strict'
-import { existsSync, readFileSync, realpathSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync, realpathSync } from 'node:fs'
 import { dirname, join, sep } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
@@ -39,47 +39,61 @@ function assertRealpathUnderStage(label, resolvedUrl) {
   return resolvedReal
 }
 
-const pdfjsPkg = import.meta.resolve('pdfjs-dist/package.json', distPdfModule)
-const pdfjsReal = assertRealpathUnderStage('pdfjs-dist/package.json (from dist parentURL)', pdfjsPkg)
-
-let canvasPkg = null
-try {
-  canvasPkg = import.meta.resolve('@napi-rs/canvas/package.json', distPdfModule)
-  assertRealpathUnderStage('@napi-rs/canvas/package.json (from dist parentURL)', canvasPkg)
-} catch {
-  console.error(
-    'esm_isolation_probe: @napi-rs/canvas not resolvable from dist under production flags (A must add direct dep + target-platform install)',
-  )
+function resolveCanvasPlatformBindingPackage(platform = process.platform, arch = process.arch) {
+  if (platform === 'linux' && arch === 'x64') return '@napi-rs/canvas-linux-x64-gnu'
+  if (platform === 'linux' && arch === 'arm64') return '@napi-rs/canvas-linux-arm64-gnu'
+  if (platform === 'win32' && arch === 'x64') return '@napi-rs/canvas-win32-x64-msvc'
+  if (platform === 'darwin' && arch === 'arm64') return '@napi-rs/canvas-darwin-arm64'
+  if (platform === 'darwin' && arch === 'x64') return '@napi-rs/canvas-darwin-x64'
+  return null
 }
 
-let canvasNativeReal = null
-if (canvasPkg) {
-  const canvasRoot = dirname(fileURLToPath(canvasPkg))
-  const nativeCandidates = [
-    join(canvasRoot, 'index.node'),
-    join(canvasRoot, 'skia.node'),
-  ]
-  let nativeFound = null
-  for (const candidate of nativeCandidates) {
-    if (existsSync(candidate)) {
-      nativeFound = candidate
-      break
-    }
-  }
-  if (!nativeFound) {
-    console.error(
-      'esm_isolation_probe: canvas package present but native .node missing; optional @napi-rs/canvas-* platform entries omitted by --omit=optional (A must ensure target-platform install)',
-    )
-  } else {
-    canvasNativeReal = assertRealpathUnderStage('@napi-rs/canvas native binding', pathToFileURL(nativeFound))
-  }
+function assertResolvedUnderStageFromDist(specifier, label) {
+  const resolved = import.meta.resolve(specifier, distPdfModule)
+  return assertRealpathUnderStage(label, resolved)
 }
+
+const pdfjsReal = assertResolvedUnderStageFromDist(
+  'pdfjs-dist/package.json',
+  'pdfjs-dist/package.json (from dist parentURL)',
+)
+
+const canvasPkgReal = assertResolvedUnderStageFromDist(
+  '@napi-rs/canvas/package.json',
+  '@napi-rs/canvas/package.json (from dist parentURL)',
+)
+
+const platformBindingPkg = resolveCanvasPlatformBindingPackage()
+assert.ok(
+  platformBindingPkg,
+  `no @napi-rs/canvas platform binding mapping for ${process.platform}/${process.arch}`,
+)
+
+const platformPkgReal = assertResolvedUnderStageFromDist(
+  `${platformBindingPkg}/package.json`,
+  `${platformBindingPkg}/package.json (from dist parentURL)`,
+)
+
+const platformPkgDir = dirname(platformPkgReal)
+const nativeNodeFiles = readdirSync(platformPkgDir).filter((name) => name.endsWith('.node'))
+assert.ok(
+  nativeNodeFiles.length > 0,
+  `${platformBindingPkg} must contain a .node native binary (found none in ${platformPkgDir})`,
+)
+const canvasPlatformNativeReal = assertRealpathUnderStage(
+  `${platformBindingPkg} native .node`,
+  pathToFileURL(join(platformPkgDir, nativeNodeFiles[0])),
+)
 
 console.log(
   JSON.stringify({
     marker: 'research-v2-production-package-esm-isolation-probe: ok',
+    qualification: 'linux_staged_production_flags_only_not_windows_pack_qualification',
     stageReal,
     pdfjsReal,
-    canvasNativeReal,
+    canvasPkgReal,
+    canvasPlatformBindingPackage: platformBindingPkg,
+    canvasPlatformPkgReal: platformPkgReal,
+    canvasPlatformNativeReal,
   }),
 )
