@@ -32,7 +32,7 @@ export interface AdmittedHttpGetResult {
   finalUrl: string
   redirectChain: string[]
   /** Final-hop response headers (wire names lowercased; values as received). */
-  responseHeaders: Record<string, string | string[] | undefined>
+  responseHeaders?: Record<string, string | string[] | undefined>
 }
 
 export class AdmittedNetworkPolicyError extends Error {
