@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { mkdir } from 'node:fs/promises'
 import type { ResearchMissionV2 } from '../contracts/mission.js'
 import { createGovernedSourceAccessPort } from '../access/governedSourceAccessPort.js'
@@ -103,8 +103,39 @@ function injectedOfflineAccess(mission: ResearchMissionV2) {
   return port
 }
 
-function offlineOperationIds(runSuffix: string) {
-  const s = runSuffix.replace(/[^a-zA-Z0-9-]/g, '-').slice(0, 48)
+/**
+ * Offline CLI/test operation identity: writer generation + plan/run id (hashed).
+ * Plan-id-only suffixes were truncated and reused across generations, breaking snapshot integrity.
+ */
+export function offlineRunOperationSuffix(writerGeneration: number, runSuffix: string): string {
+  const normalized = runSuffix.replace(/[^a-zA-Z0-9-]/g, '-')
+  const digest = createHash('sha256')
+    .update(`${writerGeneration}\0${normalized}`)
+    .digest('hex')
+    .slice(0, 12)
+  return `wg${writerGeneration}-${digest}`
+}
+
+function offlineOperationIds(writerGeneration: number, runSuffix: string) {
+  const s = offlineRunOperationSuffix(writerGeneration, runSuffix)
+  return {
+    planOperationId: `cli-run-plan-${s}`,
+    planAttemptId: `cli-run-plan-att-${s}`,
+    retrievalSearchOperationId: `cli-run-search-${s}`,
+    retrievalSearchAttemptId: `cli-run-search-att-${s}`,
+    retrievalFetchOperationId: `cli-run-fetch-${s}`,
+    retrievalFetchAttemptId: `cli-run-fetch-att-${s}`,
+    extractOperationId: `cli-run-extract-${s}`,
+    extractAttemptId: `cli-run-extract-att-${s}`,
+    reviewOperationId: `cli-run-review-${s}`,
+    reviewAttemptId: `cli-run-review-att-${s}`,
+    synthesizeOperationId: `cli-run-synth-${s}`,
+    synthesizeAttemptId: `cli-run-synth-att-${s}`,
+  }
+}
+
+function productionOperationIds(writerGeneration: number, runToken: string) {
+  const s = `wg${writerGeneration}-${runToken}`
   return {
     planOperationId: `cli-run-plan-${s}`,
     planAttemptId: `cli-run-plan-att-${s}`,
@@ -148,25 +179,13 @@ export async function runResearchV2EnginePassOnOwner(options: {
     ? injectedOfflineAccess(options.mission)
     : productionAccessPort(options.mission, options)
 
+  const writerGeneration = options.handle.writer_generation
   const runId = injectedOffline
     ? (options.planRevisionId ?? options.activePlanRevisionId ?? 'offline')
     : randomUUID().slice(0, 8)
   const op = injectedOffline
-    ? offlineOperationIds(String(runId))
-    : {
-        planOperationId: `cli-run-plan-${runId}`,
-        planAttemptId: `cli-run-plan-att-${runId}`,
-        retrievalSearchOperationId: `cli-run-search-${runId}`,
-        retrievalSearchAttemptId: `cli-run-search-att-${runId}`,
-        retrievalFetchOperationId: `cli-run-fetch-${runId}`,
-        retrievalFetchAttemptId: `cli-run-fetch-att-${runId}`,
-        extractOperationId: `cli-run-extract-${runId}`,
-        extractAttemptId: `cli-run-extract-att-${runId}`,
-        reviewOperationId: `cli-run-review-${runId}`,
-        reviewAttemptId: `cli-run-review-att-${runId}`,
-        synthesizeOperationId: `cli-run-synth-${runId}`,
-        synthesizeAttemptId: `cli-run-synth-att-${runId}`,
-      }
+    ? offlineOperationIds(writerGeneration, String(runId))
+    : productionOperationIds(writerGeneration, runId)
 
   const planRevisionId =
     options.planRevisionId ?? (injectedOffline ? 'plan-cli-run-001' : `plan-${randomUUID()}`)
