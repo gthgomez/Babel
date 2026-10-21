@@ -1,6 +1,10 @@
 import { FixtureResearchModelBridge } from '../model/fixtureModelBridge.js'
 import type { ResearchModelPort } from '../ports/researchModelPort.js'
-import { requiredClaimedSourceReviewFields } from '../engine/testSupport/requiredClaimedSourceReviewFields.js'
+import {
+  claimedSourceReviewFieldsFromSemanticInput,
+  type SemanticReviewFindingInput,
+} from '../engine/testSupport/claimedSourceReviewFieldsFromSemanticInput.js'
+import type { MissionSourceSlotAttribution } from '../engine/sourceAttributionContext.js'
 
 /** Deterministic model scripts for injected offline CLI / test runs. */
 export function fixtureModelForOfflineRun(): ResearchModelPort {
@@ -38,18 +42,19 @@ export function fixtureModelForOfflineRun(): ResearchModelPort {
         })
       }
       if (request.kind === 'semantic_support_review') {
-        const findingId = (request.input.findings as { finding_id: string }[])?.[0]?.finding_id
+        const findings = (request.input.findings as SemanticReviewFindingInput[]) ?? []
+        const missionSourceSlots = request.input.mission_source_slots as
+          | readonly MissionSourceSlotAttribution[]
+          | undefined
         fixture.scriptOutput(request.operationId, {
           kind: 'semantic_support_review',
-          judgments: [
-            {
-              finding_id: findingId ?? 'missing',
-              status: 'insufficient',
-              rationale: 'Offline CLI run — insufficient for a live acceptance decision.',
-              question_coverage: 'partial',
-              ...requiredClaimedSourceReviewFields(['repository-pin-0'], 'not_assessed'),
-            },
-          ],
+          judgments: findings.map((row) => ({
+            finding_id: row.finding_id,
+            status: 'insufficient',
+            rationale: 'Offline CLI run — insufficient for a live acceptance decision.',
+            question_coverage: 'partial',
+            ...claimedSourceReviewFieldsFromSemanticInput(row, missionSourceSlots),
+          })),
         })
       }
       if (request.kind === 'synthesize_report') {
