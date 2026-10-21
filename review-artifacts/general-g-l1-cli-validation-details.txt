@@ -1,0 +1,268 @@
+[deepInfraApi] Zod validation failed (deepseek/deepseek-v4-flash-0731):
+[
+  {
+    "code": "invalid_value",
+    "values": [
+      "plan_questions"
+    ],
+    "path": [
+      "kind"
+    ],
+    "message": "Invalid input: expected \"plan_questions\""
+  },
+  {
+    "expected": "string",
+    "code": "invalid_type",
+    "path": [
+      "questions",
+      0,
+      "text"
+    ],
+    "message": "Invalid input: expected string, received undefined"
+  },
+  {
+    "code": "invalid_value",
+    "values": [
+      "critical",
+      "high",
+      "medium",
+      "low"
+    ],
+    "path": [
+      "questions",
+      0,
+      "importance"
+    ],
+    "message": "Invalid option: expected one of \"critical\"|\"high\"|\"medium\"|\"low\""
+  },
+  {
+    "code": "unrecognized_keys",
+    "keys": [
+      "id",
+      "question",
+      "purpose",
+      "evidence_required",
+      "success_criteria"
+    ],
+    "path": [
+      "questions",
+      0
+    ],
+    "message": "Unrecognized keys: \"id\", \"question\", \"purpose\", \"evidence_required\", \"success_criteria\""
+  },
+  {
+    "expected": "string",
+    "code": "invalid_type",
+    "path": [
+      "questions",
+      1,
+      "text"
+    ],
+    "message": "Invalid input: expected string, received undefined"
+  },
+  {
+    "code": "invalid_value",
+    "values": [
+      "critical",
+      "high",
+      "medium",
+      "low"
+    ],
+    "path": [
+      "questions",
+      1,
+      "importance"
+    ],
+    "message": "Invalid option: expected one of \"critical\"|\"high\"|\"medium\"|\"low\""
+  },
+  {
+    "code": "unrecognized_keys",
+    "keys": [
+      "id",
+      "question",
+      "purpose",
+      "evidence_required",
+      "success_criteria"
+    ],
+    "path": [
+      "questions",
+      1
+    ],
+    "message": "Unrecognized keys: \"id\", \"question\", \"purpose\", \"evidence_required\", \"success_criteria\""
+  },
+  {
+    "expected": "string",
+    "code": "invalid_type",
+    "path": [
+      "questions",
+      2,
+      "text"
+    ],
+    "message": "Invalid input: expected string, received undefined"
+  },
+  {
+    "code": "invalid_value",
+    "values": [
+      "critical",
+      "high",
+      "medium",
+      "low"
+    ],
+    "path": [
+      "questions",
+      2,
+      "importance"
+    ],
+    "message": "Invalid option: expected one of \"critical\"|\"high\"|\"medium\"|\"low\""
+  },
+  {
+    "code": "unrecognized_keys",
+    "keys": [
+      "id",
+      "question",
+      "purpose",
+      "evidence_required",
+      "success_criteria"
+    ],
+    "path": [
+      "questions",
+      2
+    ],
+    "message": "Unrecognized keys: \"id\", \"question\", \"purpose\", \"evidence_required\", \"success_criteria\""
+  },
+  {
+    "expected": "string",
+    "code": "invalid_type",
+    "path": [
+      "questions",
+      3,
+      "text"
+    ],
+    "message": "Invalid input: expected string, received undefined"
+  },
+  {
+    "code": "invalid_value",
+    "values": [
+      "critical",
+      "high",
+      "medium",
+      "low"
+    ],
+    "path": [
+      "questions",
+      3,
+      "importance"
+    ],
+    "message": "Invalid option: expected one of \"critical\"|\"high\"|\"medium\"|\"low\""
+  },
+  {
+    "code": "unrecognized_keys",
+    "keys": [
+      "id",
+      "question",
+      "purpose",
+      "evidence_required",
+      "success_criteria"
+    ],
+    "path": [
+      "questions",
+      3
+    ],
+    "message": "Unrecognized keys: \"id\", \"question\", \"purpose\", \"evidence_required\", \"success_criteria\""
+  },
+  {
+    "expected": "string",
+    "code": "invalid_type",
+    "path": [
+      "questions",
+      4,
+      "text"
+    ],
+    "message": "Invalid input: expected string, received undefined"
+  },
+  {
+    "code": "invalid_value",
+    "values": [
+      "critical",
+      "high",
+      "medium",
+      "low"
+    ],
+    "path": [
+      "questions",
+      4,
+      "importance"
+    ],
+    "message": "Invalid option: expected one of \"critical\"|\"high\"|\"medium\"|\"low\""
+  },
+  {
+    "code": "unrecognized_keys",
+    "keys": [
+      "id",
+      "question",
+      "purpose",
+      "evidence_required",
+      "success_criteria"
+    ],
+    "path": [
+      "questions",
+      4
+    ],
+    "message": "Unrecognized keys: \"id\", \"question\", \"purpose\", \"evidence_required\", \"success_criteria\""
+  },
+  {
+    "expected": "string",
+    "code": "invalid_type",
+    "path": [
+      "questions",
+      5,
+      "text"
+    ],
+    "message": "Invalid input: expected string, received undefined"
+  },
+  {
+    "code": "invalid_value",
+    "values": [
+      "critical",
+      "high",
+      "medium",
+      "low"
+    ],
+    "path": [
+      "questions",
+      5,
+      "importance"
+    ],
+    "message": "Invalid option: expected one of \"critical\"|\"high\"|\"medium\"|\"low\""
+  },
+  {
+    "code": "unrecognized_keys",
+    "keys": [
+      "id",
+      "question",
+      "purpose",
+      "evidence_required",
+      "success_criteria"
+    ],
+    "path": [
+      "questions",
+      5
+    ],
+    "message": "Unrecognized keys: \"id\", \"question\", \"purpose\", \"evidence_required\", \"success_criteria\""
+  },
+  {
+    "code": "unrecognized_keys",
+    "keys": [
+      "operation_kind",
+      "input_mission_id",
+      "profile_id",
+      "primary_question",
+      "as_of",
+      "decision_rule",
+      "evidence_domains",
+      "constraints_acknowledged"
+    ],
+    "path": [],
+    "message": "Unrecognized keys: \"operation_kind\", \"input_mission_id\", \"profile_id\", \"primary_question\", \"as_of\", \"decision_rule\", \"evidence_domains\", \"constraints_acknowledged\""
+  }
+]

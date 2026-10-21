@@ -1,0 +1,29 @@
+{
+  "schema": "general-g-l1-request-local-receipt/v1",
+  "source": "durable store external_operation_completed @ 9d97448a live G-L1 (sanitized)",
+  "mission_id": "mission-general-g-l1-python-stable",
+  "operation_id": "cli-run-plan-6f0b8c48",
+  "attempt_id": "cli-run-plan-att-6f0b8c48",
+  "operation_kind": "model_invoke",
+  "dispatched_at": "2026-10-21T06:41:16.269Z",
+  "completed_at": "2026-10-21T06:41:22.224Z",
+  "settlement": "failed",
+  "failure_category": "provider_invoke_failed",
+  "validation_details_file": "review-artifacts/general-g-l1-cli-validation-details.txt",
+  "malformed_payload_fixture": "codex/missions/general-g-l1-python-stable/g-l1-malformed-plan-questions-payload.json",
+  "usage_settlement": {
+    "attempt_id": "cli-run-plan-att-6f0b8c48",
+    "input_tokens": 429,
+    "output_tokens": 1784,
+    "cost": {
+      "status": "reported",
+      "amount_usd": 0.0002636874,
+      "currency": "USD"
+    }
+  },
+  "model_route_declared": {
+    "backend_key": "deepseek-v4-flash-openrouter",
+    "provider": "openrouter",
+    "provider_model_id": "deepseek/deepseek-v4-flash-0731"
+  }
+}

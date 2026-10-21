@@ -1,0 +1,55 @@
+{
+  "_provenance": "Reconstructed from live G-L1 durable failure message (2026-10-21T06:41:22Z). Model echoed prompt/mission envelope instead of Research V2 plan_questions output; see review-artifacts/general-g-l1-cli-validation-details.txt for exact Zod trace.",
+  "operation_kind": "plan_questions",
+  "input_mission_id": "mission-general-g-l1-python-stable",
+  "profile_id": "general",
+  "primary_question": "As of the run's UTC date, what is the latest stable Python release and its release date?",
+  "as_of": "2026-10-21",
+  "decision_rule": "Report the latest stable CPython release version and official release date for operator verification.",
+  "evidence_domains": ["python.org", "www.python.org", "docs.python.org"],
+  "constraints_acknowledged": true,
+  "questions": [
+    {
+      "id": "q1",
+      "question": "What is the latest stable CPython release version on python.org?",
+      "purpose": "Identify current stable version",
+      "evidence_required": "Official python.org release or download page",
+      "success_criteria": "Version string with stable (non-prerelease) qualification"
+    },
+    {
+      "id": "q2",
+      "question": "What is the official release date for that stable version?",
+      "purpose": "Date for operator verification",
+      "evidence_required": "Official release metadata",
+      "success_criteria": "ISO or documented release date from python.org"
+    },
+    {
+      "id": "q3",
+      "question": "Are any newer prereleases published after that stable release?",
+      "purpose": "Distinguish stable from prerelease",
+      "evidence_required": "python.org release index",
+      "success_criteria": "Explicit prerelease vs stable separation"
+    },
+    {
+      "id": "q4",
+      "question": "Does the download page agree with the release page?",
+      "purpose": "Cross-check official pages",
+      "evidence_required": "www.python.org/downloads and release pages",
+      "success_criteria": "Consistent version or documented uncertainty"
+    },
+    {
+      "id": "q5",
+      "question": "What security or maintenance branch context applies?",
+      "purpose": "Clarify latest stable semantics",
+      "evidence_required": "docs.python.org or release PEP references if cited",
+      "success_criteria": "Stable-latest interpretation stated"
+    },
+    {
+      "id": "q6",
+      "question": "What limitations apply if official pages cannot be read?",
+      "purpose": "Honest uncertainty reporting",
+      "evidence_required": "Mission hard requirements",
+      "success_criteria": "Uncertainty surfaced when fetch fails"
+    }
+  ]
+}
