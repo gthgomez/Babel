@@ -10,7 +10,11 @@ import { PLAIN_TEXT_EXTRACTION_VERSION, passagesFromAdmittedPlainText } from '..
 import { PLAIN_TEXT_MEDIA_TYPE } from '../adapters/documents/plainTextFromAdmittedBytes.js'
 import { buildAdmittedContent } from '../adapters/documents/testAdmittedFixtures.js'
 import { passageWithIntegrityVerification } from '../integrity/passageIntegrityReceipt.js'
-import { stampSourceFetchEvidenceOwnerOnPassage } from './retrievalEvidenceOwnership.js'
+import {
+  stampSourceFetchEvidenceOwnerOnPassage,
+  stampSourceFetchEvidenceOwnerOnRevision,
+} from './retrievalEvidenceOwnership.js'
+import { PASSAGE_INTEGRITY_VERIFIER_VERSION } from '../contracts/passageIntegrity.js'
 import { deriveFindingSourceIntegrity } from './sourceIntegrityFromEvidence.js'
 import {
   gL2OriginalDerivedPassages,
@@ -63,6 +67,16 @@ function fetchSucceeded(operationId: string, attemptId: string): ResearchStoreEv
   }
 }
 
+function revisionRecorded(revision: import('../contracts/sources.js').SourceRevision): ResearchStoreEvent {
+  return {
+    eventId: `revision-${revision.revision_id}-${revision.source_fetch_owner?.attempt_id ?? 'na'}`,
+    missionId: MISSION_ID,
+    kind: 'revision_recorded',
+    recordedAt: '2026-10-20T12:00:00.400Z',
+    payload: { revision },
+  }
+}
+
 function passageRecorded(passage: PassageRecord): ResearchStoreEvent {
   return {
     eventId: `passage-${passage.passage_id}`,
@@ -78,6 +92,8 @@ function verifiedPassageFixture(): {
   sources: typeof gL2OriginalDerivedSources
   revisions: typeof gL2OriginalDerivedRevisions
   events: ResearchStoreEvent[]
+  owner: ReturnType<typeof fetchOwner>
+  revision: import('../contracts/sources.js').SourceRevision
 } {
   const bytes = Buffer.from('export const X = 1\n', 'utf8')
   const admitted = buildAdmittedContent('fetch-ok', 'src-ok', 'rev-ok', bytes, PLAIN_TEXT_MEDIA_TYPE)
@@ -101,13 +117,15 @@ function verifiedPassageFixture(): {
       observed_urls: ['https://example.invalid/ok'],
     },
   ]
-  const revisions = [admitted.revision]
-  const events = [
+  const revision = stampSourceFetchEvidenceOwnerOnRevision(admitted.revision, owner)
+  const revisions = [revision]
+  const events: ResearchStoreEvent[] = [
     fetchIntent('fetch-ok', 'att-ok'),
+    revisionRecorded(revision),
     passageRecorded(verified),
     fetchSucceeded('fetch-ok', 'att-ok'),
   ]
-  return { passage: verified, sources, revisions, events }
+  return { passage: verified, sources, revisions, events, owner, revision }
 }
 
 function finding(passageIds: string[]): FindingRecord {
@@ -136,7 +154,7 @@ describe('deriveFindingSourceIntegrity', () => {
   })
 
   it('returns invalid when persisted text hash does not match inline text', () => {
-    const { passage, sources, revisions, events } = verifiedPassageFixture()
+    const { passage, sources, revisions, revision } = verifiedPassageFixture()
     assert.equal(passage.text_ref.mode, 'inline')
     const tampered = PassageRecordSchema.parse({
       ...passage,
@@ -146,6 +164,11 @@ describe('deriveFindingSourceIntegrity', () => {
         text_hash: createHash('sha256').update('mismatch').digest('hex'),
       },
     })
+    const events: ResearchStoreEvent[] = [
+      fetchIntent('fetch-ok', 'att-ok'),
+      revisionRecorded(revision),
+      fetchSucceeded('fetch-ok', 'att-ok'),
+    ]
     const result = deriveFindingSourceIntegrity(
       finding([tampered.passage_id]),
       [tampered],
@@ -157,7 +180,7 @@ describe('deriveFindingSourceIntegrity', () => {
   })
 
   it('returns invalid when receipt still binds original hash after text tamper', () => {
-    const { passage, sources, revisions, events } = verifiedPassageFixture()
+    const { passage, sources, revisions, revision } = verifiedPassageFixture()
     const newText = 'tampered line\n'
     const tampered = PassageRecordSchema.parse({
       ...passage,
@@ -167,6 +190,11 @@ describe('deriveFindingSourceIntegrity', () => {
         text_hash: createHash('sha256').update(newText, 'utf8').digest('hex'),
       },
     })
+    const events: ResearchStoreEvent[] = [
+      fetchIntent('fetch-ok', 'att-ok'),
+      revisionRecorded(revision),
+      fetchSucceeded('fetch-ok', 'att-ok'),
+    ]
     const result = deriveFindingSourceIntegrity(
       finding([tampered.passage_id]),
       [tampered],
@@ -178,11 +206,16 @@ describe('deriveFindingSourceIntegrity', () => {
   })
 
   it('returns invalid when locator changes but text/hash stay consistent with receipt', () => {
-    const { passage, sources, revisions, events } = verifiedPassageFixture()
+    const { passage, sources, revisions, revision } = verifiedPassageFixture()
     const tampered = PassageRecordSchema.parse({
       ...passage,
       locator: { kind: 'line_range', start_line: 2, end_line: 2 },
     })
+    const events: ResearchStoreEvent[] = [
+      fetchIntent('fetch-ok', 'att-ok'),
+      revisionRecorded(revision),
+      fetchSucceeded('fetch-ok', 'att-ok'),
+    ]
     const result = deriveFindingSourceIntegrity(
       finding([tampered.passage_id]),
       [tampered],
@@ -232,6 +265,116 @@ describe('deriveFindingSourceIntegrity', () => {
     )
     assert.equal(result, 'not_checked')
     assert.equal(legacy.integrity_verification, undefined)
+  })
+
+  it('returns not_checked for unknown integrity verifier_version', () => {
+    const { passage, sources, revisions, revision } = verifiedPassageFixture()
+    assert.ok(passage.integrity_verification)
+    const unknownVersion = {
+      ...passage,
+      integrity_verification: {
+        ...passage.integrity_verification,
+        verifier_version: '9.9.9-unknown',
+      },
+    }
+    const events: ResearchStoreEvent[] = [
+      fetchIntent('fetch-ok', 'att-ok'),
+      revisionRecorded(revision),
+      fetchSucceeded('fetch-ok', 'att-ok'),
+    ]
+    const result = deriveFindingSourceIntegrity(
+      finding([passage.passage_id]),
+      [unknownVersion],
+      revisions,
+      sources,
+      events,
+    )
+    assert.equal(result, 'not_checked')
+    assert.equal(PASSAGE_INTEGRITY_VERIFIER_VERSION, '1.0.0')
+  })
+
+  it('resolves revision by revision_id and fetch owner when id is reused across attempts', () => {
+    const { passage, sources, owner, revision } = verifiedPassageFixture()
+    const failedOwner = fetchOwner('fetch-fail', 'att-fail')
+    const failedRevision = stampSourceFetchEvidenceOwnerOnRevision(
+      { ...revision, content_hash: 'f'.repeat(64) },
+      failedOwner,
+    )
+    const events: ResearchStoreEvent[] = [
+      fetchIntent('fetch-ok', 'att-ok'),
+      revisionRecorded(revision),
+      fetchIntent('fetch-fail', 'att-fail'),
+      revisionRecorded(failedRevision),
+      passageRecorded(passage),
+      fetchSucceeded('fetch-ok', 'att-ok'),
+      {
+        ...fetchSucceeded('fetch-fail', 'att-fail'),
+        payload: {
+          completion: {
+            mission_id: MISSION_ID,
+            operation_id: 'fetch-fail',
+            attempt_id: 'att-fail',
+            completed_at: '2026-10-20T12:00:01.100Z',
+            settlement: 'failed',
+          },
+        },
+      },
+    ]
+    const result = deriveFindingSourceIntegrity(
+      finding([passage.passage_id]),
+      [passage],
+      [revision, failedRevision],
+      sources,
+      events,
+    )
+    assert.equal(result, 'valid')
+  })
+
+  it('returns not_checked when same passage_id maps to materially different records', () => {
+    const { passage, sources, revisions, events, owner } = verifiedPassageFixture()
+    const other = stampSourceFetchEvidenceOwnerOnPassage(
+      PassageRecordSchema.parse({
+        ...passage,
+        passage_id: passage.passage_id,
+        text_ref: {
+          mode: 'inline',
+          text: 'other excerpt',
+          text_hash: createHash('sha256').update('other excerpt', 'utf8').digest('hex'),
+        },
+      }),
+      fetchOwner('fetch-other', 'att-other'),
+    )
+    const result = deriveFindingSourceIntegrity(
+      finding([passage.passage_id]),
+      [passage, other],
+      revisions,
+      sources,
+      [...events, passageRecorded(other)],
+    )
+    assert.equal(result, 'not_checked')
+    assert.notEqual(owner.operation_id, other.source_fetch_owner?.operation_id)
+  })
+
+  it('returns invalid when revision owner contradicts passage owner', () => {
+    const { passage, sources, revision } = verifiedPassageFixture()
+    const wrongOwnerRevision = stampSourceFetchEvidenceOwnerOnRevision(
+      revision,
+      fetchOwner('fetch-wrong', 'att-wrong'),
+    )
+    const events: ResearchStoreEvent[] = [
+      fetchIntent('fetch-ok', 'att-ok'),
+      revisionRecorded(wrongOwnerRevision),
+      passageRecorded(passage),
+      fetchSucceeded('fetch-ok', 'att-ok'),
+    ]
+    const result = deriveFindingSourceIntegrity(
+      finding([passage.passage_id]),
+      [passage],
+      [wrongOwnerRevision],
+      sources,
+      events,
+    )
+    assert.equal(result, 'invalid')
   })
 
   it('G-L3 historical findings stay not_checked on unchanged fixture passages', () => {

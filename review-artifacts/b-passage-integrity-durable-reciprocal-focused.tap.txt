@@ -1,0 +1,41 @@
+TAP version 13
+# Subtest: passage integrity verification durable reciprocal (B @ A canonical API)
+    # Subtest: composed T-L1 retrieval persists repository-pin-0/1 sources (not discover-primary)
+    ok 1 - composed T-L1 retrieval persists repository-pin-0/1 sources (not discover-primary)
+      ---
+      duration_ms: 28.536372
+      type: 'test'
+      ...
+    # Subtest: persists succeeded A then failed B reusing revision/passage ids; A owner-bound evidence stays valid
+    ok 2 - persists succeeded A then failed B reusing revision/passage ids; A owner-bound evidence stays valid
+      ---
+      duration_ms: 10.278659
+      type: 'test'
+      ...
+    # Subtest: runner: verified receipts, valid findings, supported/answers, terminal complete; cold persistence reopen preserves state
+    ok 3 - runner: verified receipts, valid findings, supported/answers, terminal complete; cold persistence reopen preserves state
+      ---
+      duration_ms: 25.391138
+      type: 'test'
+      ...
+    # Subtest: helper deriveFindingSourceIntegrity rejects tamper; finalizer boundary records unverified supported findings
+    ok 4 - helper deriveFindingSourceIntegrity rejects tamper; finalizer boundary records unverified supported findings
+      ---
+      duration_ms: 1.121598
+      type: 'test'
+      ...
+    1..4
+ok 1 - passage integrity verification durable reciprocal (B @ A canonical API)
+  ---
+  duration_ms: 66.165244
+  type: 'suite'
+  ...
+1..1
+# tests 4
+# suites 1
+# pass 4
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 377.040579

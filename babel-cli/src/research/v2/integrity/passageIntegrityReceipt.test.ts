@@ -54,6 +54,28 @@ test('stampSourceFetchEvidenceOwnerOnPassage preserves integrity_verification', 
   assert.deepEqual(stamped.integrity_verification, verified.integrity_verification)
 })
 
+test('buildPassageIntegrityVerification: rejects line_range beyond admitted lines', () => {
+  const bytes = Buffer.from('only\n', 'utf8')
+  const admitted = buildAdmittedContent('op-lines', 'src-l', 'rev-l', bytes, PLAIN_TEXT_MEDIA_TYPE)
+  const passage = passagesFromAdmittedPlainText(admitted)[0]
+  assert.ok(passage)
+  const badLocator = PassageRecordSchema.parse({
+    ...passage,
+    locator: { kind: 'line_range', start_line: 1, end_line: 99 },
+  })
+  assert.throws(
+    () =>
+      buildPassageIntegrityVerification({
+        passage: badLocator,
+        source: { source_id: 'src-l' },
+        revision: admitted.revision,
+        admitted,
+        extractionVersion: PLAIN_TEXT_EXTRACTION_VERSION,
+      }),
+    PassageIntegrityVerificationError,
+  )
+})
+
 test('buildPassageIntegrityVerification: rejects locator/text mismatch', () => {
   const bytes = Buffer.from('one\ntwo\n', 'utf8')
   const admitted = buildAdmittedContent('op-bad', 'src-b', 'rev-b', bytes, PLAIN_TEXT_MEDIA_TYPE)

@@ -34,12 +34,44 @@ describe('technical plain byte excerpt', () => {
     assert.ok(passage)
     assert.equal(passage.locator.kind, 'byte_offset')
     if (passage.locator.kind === 'byte_offset') {
+      assert.equal(passage.locator.start_offset, 0)
       assert.equal(passage.locator.end_offset, MAX_TECHNICAL_PASSAGE_BYTES)
       assert.equal(passage.text_ref.mode, 'inline')
       if (passage.text_ref.mode === 'inline') {
-        assert.equal(Buffer.byteLength(passage.text_ref.text, 'utf8'), passage.locator.end_offset)
+        const excerptBytes = sourceBytes.subarray(
+          passage.locator.start_offset,
+          passage.locator.end_offset,
+        )
+        assert.equal(excerptBytes.toString('utf8'), passage.text_ref.text)
+        assert.equal(
+          passage.locator.end_offset - passage.locator.start_offset,
+          Buffer.byteLength(passage.text_ref.text, 'utf8'),
+        )
       }
     }
     assert.deepEqual(passage.extraction_notes, ['excerpt_truncated_by_byte_limit'])
+  })
+
+  it('full admission under cap uses exclusive end_offset equal to byte length', () => {
+    const sourceBytes = Buffer.from('short technical corpus\n', 'utf8')
+    const revision = SourceRevisionSchema.parse({
+      revision_id: 'rev-short',
+      source_id: 'src-1',
+      content_hash: 'b'.repeat(64),
+      retrieved_at: '2026-10-20T12:00:00.000Z',
+      extraction_version: 'test',
+      media_type: 'text/plain',
+      completeness: 'complete',
+    })
+    const [passage] = passagesFromValidatedPlainBytes(revision, sourceBytes)
+    assert.ok(passage)
+    assert.equal(passage.locator.kind, 'byte_offset')
+    if (passage.locator.kind === 'byte_offset') {
+      assert.equal(passage.locator.end_offset, sourceBytes.length)
+      assert.equal(
+        sourceBytes.subarray(passage.locator.start_offset, passage.locator.end_offset).toString('utf8'),
+        passage.text_ref.mode === 'inline' ? passage.text_ref.text : '',
+      )
+    }
   })
 })

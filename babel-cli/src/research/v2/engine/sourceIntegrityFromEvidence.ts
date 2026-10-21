@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import type { FindingRecord } from '../contracts/findings.js'
 import {
+  isSupportedPassageIntegrityVerifierVersion,
   PASSAGE_INTEGRITY_VERIFICATION_SCOPE,
   PASSAGE_INTEGRITY_VERIFIER,
   type PassageIntegrityVerification,
@@ -10,22 +11,97 @@ import type { SourceRecord } from '../contracts/sources.js'
 import type { SourceRevision } from '../contracts/sources.js'
 import type { ResearchStoreEvent } from '../ports/researchStore.js'
 import { passageTextHash } from '../adapters/documents/passageInlineText.js'
-import { sourceFetchEvidenceOwnerKey } from '../contracts/retrievalEvidenceOwnership.js'
+import {
+  sourceFetchEvidenceOwnerKey,
+  type SourceFetchEvidenceOwner,
+} from '../contracts/retrievalEvidenceOwnership.js'
 import { ownerMatchesSucceededAttempt, succeededSourceFetchAttemptOwnerKeys } from './retrievalExtractionLineage.js'
 
 function sha256Utf8(text: string): string {
   return createHash('sha256').update(text, 'utf8').digest('hex')
 }
 
-function latestPassageRecords(events: readonly ResearchStoreEvent[]): Map<string, PassageRecord> {
+function passageIdentityFingerprint(passage: PassageRecord): string {
+  const ownerKey = passage.source_fetch_owner
+    ? sourceFetchEvidenceOwnerKey(passage.source_fetch_owner)
+    : ''
+  const textHash =
+    passage.text_ref.mode === 'inline' ? passage.text_ref.text_hash : passage.text_ref.text_hash
+  return JSON.stringify({
+    source_revision_id: passage.source_revision_id,
+    locator: passage.locator,
+    text_hash: textHash,
+    owner_key: ownerKey,
+  })
+}
+
+function indexPassagesById(
+  events: readonly ResearchStoreEvent[],
+  extra: readonly PassageRecord[],
+): { byId: Map<string, PassageRecord>; ambiguousIds: Set<string> } {
   const byId = new Map<string, PassageRecord>()
+  const ambiguousIds = new Set<string>()
+  const consider = (passage: PassageRecord) => {
+    const existing = byId.get(passage.passage_id)
+    if (!existing) {
+      byId.set(passage.passage_id, passage)
+      return
+    }
+    if (passageIdentityFingerprint(existing) !== passageIdentityFingerprint(passage)) {
+      ambiguousIds.add(passage.passage_id)
+    }
+  }
   for (const event of events) {
     if (event.kind !== 'passage_recorded') continue
     const passage = (event.payload as { passage?: PassageRecord }).passage
     if (!passage) continue
-    byId.set(passage.passage_id, passage)
+    consider(passage)
   }
-  return byId
+  for (const passage of extra) {
+    consider(passage)
+  }
+  return { byId, ambiguousIds }
+}
+
+function allRevisionsFromEvents(events: readonly ResearchStoreEvent[]): SourceRevision[] {
+  return events
+    .filter((e) => e.kind === 'revision_recorded')
+    .map((e) => (e.payload as { revision: SourceRevision }).revision)
+}
+
+function ownersMatch(
+  a: SourceFetchEvidenceOwner | undefined,
+  b: SourceFetchEvidenceOwner | undefined,
+): boolean {
+  if (!a || !b) return false
+  return sourceFetchEvidenceOwnerKey(a) === sourceFetchEvidenceOwnerKey(b)
+}
+
+function resolveRevisionForPassage(
+  passage: PassageRecord,
+  revisions: readonly SourceRevision[],
+): SourceRevision | undefined {
+  const passageOwner = passage.source_fetch_owner
+  if (!passageOwner) return undefined
+  const ownerKey = sourceFetchEvidenceOwnerKey(passageOwner)
+  const matches = revisions.filter(
+    (r) =>
+      r.revision_id === passage.source_revision_id &&
+      r.source_fetch_owner &&
+      sourceFetchEvidenceOwnerKey(r.source_fetch_owner) === ownerKey,
+  )
+  if (matches.length === 0) return undefined
+  if (matches.length > 1) {
+    const first = matches[0]!
+    const same = matches.every(
+      (r) =>
+        r.content_hash === first.content_hash &&
+        r.source_id === first.source_id &&
+        ownersMatch(r.source_fetch_owner, first.source_fetch_owner),
+    )
+    if (!same) return undefined
+  }
+  return matches[0]
 }
 
 function receiptMatchesPassage(
@@ -43,7 +119,8 @@ function receiptMatchesPassage(
 function isSupportedReceipt(receipt: PassageIntegrityVerification): boolean {
   return (
     receipt.verifier === PASSAGE_INTEGRITY_VERIFIER &&
-    receipt.verification_scope === PASSAGE_INTEGRITY_VERIFICATION_SCOPE
+    receipt.verification_scope === PASSAGE_INTEGRITY_VERIFICATION_SCOPE &&
+    isSupportedPassageIntegrityVerifierVersion(receipt.verifier_version)
   )
 }
 
@@ -54,16 +131,15 @@ export function deriveFindingSourceIntegrity(
   sources: readonly SourceRecord[],
   events: readonly ResearchStoreEvent[],
 ): FindingRecord['source_integrity'] {
-  const passageById = latestPassageRecords(events)
-  for (const p of passages) {
-    passageById.set(p.passage_id, p)
-  }
-  const revisionById = new Map(revisions.map((r) => [r.revision_id, r]))
+  const { byId: passageById, ambiguousIds } = indexPassagesById(events, passages)
+  const revisionCatalog = [...allRevisionsFromEvents(events), ...revisions]
   const sourceById = new Map(sources.map((s) => [s.source_id, s]))
   const succeededOwners = succeededSourceFetchAttemptOwnerKeys(events)
 
   let sawReceipt = false
   for (const passageId of finding.passage_ids) {
+    if (ambiguousIds.has(passageId)) return 'not_checked'
+
     const passage = passageById.get(passageId)
     if (!passage) return 'not_checked'
 
@@ -74,8 +150,25 @@ export function deriveFindingSourceIntegrity(
 
     if (!receiptMatchesPassage(receipt, passage)) return 'invalid'
 
-    const revision = revisionById.get(passage.source_revision_id)
-    if (!revision || revision.revision_id !== receipt.source_revision_id) return 'invalid'
+    const passageOwner = passage.source_fetch_owner
+    if (!passageOwner) return 'not_checked'
+    const ownerKey = sourceFetchEvidenceOwnerKey(passageOwner)
+    if (!succeededOwners.has(ownerKey)) return 'not_checked'
+    if (!ownerMatchesSucceededAttempt(passageOwner, events)) return 'invalid'
+
+    const revision = resolveRevisionForPassage(passage, revisionCatalog)
+    if (!revision) {
+      const ownerConflict = revisionCatalog.some(
+        (r) =>
+          r.revision_id === passage.source_revision_id &&
+          r.source_fetch_owner &&
+          sourceFetchEvidenceOwnerKey(r.source_fetch_owner) !== ownerKey,
+      )
+      return ownerConflict ? 'invalid' : 'not_checked'
+    }
+    if (!ownersMatch(revision.source_fetch_owner, passageOwner)) return 'invalid'
+
+    if (revision.revision_id !== receipt.source_revision_id) return 'invalid'
     if (revision.content_hash !== receipt.source_content_hash) return 'invalid'
     if (revision.source_id !== receipt.source_id) return 'invalid'
 
@@ -85,19 +178,6 @@ export function deriveFindingSourceIntegrity(
     if (passage.text_ref.mode !== 'inline') return 'not_checked'
     if (sha256Utf8(passage.text_ref.text) !== passage.text_ref.text_hash) return 'invalid'
     if (passageTextHash(passage.text_ref.text) !== passage.text_ref.text_hash) return 'invalid'
-
-    const owner = passage.source_fetch_owner
-    if (!owner) return 'not_checked'
-    const ownerKey = sourceFetchEvidenceOwnerKey(owner)
-    if (!succeededOwners.has(ownerKey)) return 'not_checked'
-    if (!ownerMatchesSucceededAttempt(owner, events)) return 'invalid'
-
-    const receiptOwnerKey = sourceFetchEvidenceOwnerKey({
-      mission_id: owner.mission_id,
-      operation_id: owner.operation_id,
-      attempt_id: owner.attempt_id,
-    })
-    if (receiptOwnerKey !== ownerKey) return 'invalid'
   }
 
   return sawReceipt ? 'valid' : 'not_checked'

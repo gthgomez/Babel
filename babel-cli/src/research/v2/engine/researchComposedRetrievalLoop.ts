@@ -210,9 +210,6 @@ async function runDocumentRefSlot(
         settlement: 'failed',
         failureCategory: search.failureCategory,
         message: search.message,
-        ...(search.acquisition_diagnostics
-          ? { acquisition_diagnostics: search.acquisition_diagnostics }
-          : {}),
       },
       now(),
     )
@@ -629,6 +626,7 @@ export async function runAdmittedComposedRetrievalIteration(
           searchAttemptId,
           fetchOperationId,
           fetchAttemptId,
+          coverageSourceSlotId: slot.slotId,
           dispatchedAt: request.dispatchedAt,
           signal: request.signal,
           now,

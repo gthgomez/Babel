@@ -1,21 +1,31 @@
 /**
- * B-owned reciprocal integrity tests on A canonical PassageRecord.integrity_verification (ffbad3).
- * Real DurableResearchStore; stub model/network only. Historical G-L2/G-L3 bytes unchanged elsewhere.
+ * B-owned durable reciprocals on A canonical PassageRecord.integrity_verification.
+ * Agent A ffbad3 already wired technical repository receipt emission; B’s earlier selective
+ * file-level union omitted that production slice (restored from A ef9655cf, not fe52 replay).
+ * Real DurableResearchStore; stub network/model only. Historical G-L2/G-L3 bytes unchanged elsewhere.
  */
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
+import { readFileSync } from 'node:fs'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { describe, it } from 'node:test'
+import { createGovernedSourceAccessPort } from '../../access/governedSourceAccessPort.js'
+import { createMissionProductionSearchProvider } from '../../access/createMissionProductionSearchProvider.js'
+import type { GitHubTreeEntry } from '../../access/pinnedRepositoryFileSearchProvider.js'
 import { createMissionScopedSourceAccessPort } from '../../access/missionScopedSourceAccessPort.js'
 import { FindingRecordSchema } from '../../contracts/findings.js'
 import type { FindingRecord } from '../../contracts/findings.js'
 import { PlanRevisionSchema } from '../../contracts/plan.js'
 import type { PassageRecord } from '../../contracts/passages.js'
 import { PassageRecordSchema } from '../../contracts/passages.js'
+import { ResearchMissionV2Schema } from '../../contracts/mission.js'
+import type { SourceRecord, SourceRevision } from '../../contracts/sources.js'
 import {
   exampleMissionWriteContext,
+  examplePlanRevisionFixture,
   exampleTechnicalMissionFixture,
 } from '../../fixtures/exampleMission.js'
 import {
@@ -25,47 +35,50 @@ import {
 import { searchIndexForTechnicalMission } from '../../fixtures/technicalSearchIndex.js'
 import { passageWithIntegrityVerification } from '../../integrity/passageIntegrityReceipt.js'
 import { FixtureResearchModelBridge } from '../../model/fixtureModelBridge.js'
-import type { ResearchModelInvocationRequest, ResearchModelInvocationResult } from '../../ports/researchModelPort.js'
+import type {
+  ResearchModelInvocationRequest,
+  ResearchModelInvocationResult,
+  ResearchModelPort,
+} from '../../ports/researchModelPort.js'
 import { DurableResearchStore } from '../../persistence/durableResearchStore.js'
 import { createTechnicalResearchRegistries, resolveSourceAdapterForMission } from '../../registry/frozenRegistries.js'
+import { createCombinedResearchRegistries } from '../../registry/reviewedBAdapterIntegration.js'
+import { resolveDiscoveryAdapterForMission } from '../../registry/missionAdapterResolution.js'
 import { PLAIN_TEXT_EXTRACTION_VERSION, PLAIN_TEXT_MEDIA_TYPE, passagesFromAdmittedPlainText } from '../../adapters/documents/plainTextFromAdmittedBytes.js'
-import { buildAdmittedContent, buildSourceRevision } from '../../adapters/documents/testAdmittedFixtures.js'
+import { buildAdmittedContent } from '../../adapters/documents/testAdmittedFixtures.js'
 import { buildSemanticSupportReviewInput } from '../../engine/buildSemanticSupportReviewInput.js'
+import { listSourceRevisionsFromStoreEvents, listSourcesFromStoreEvents } from '../../engine/listSourceRevisionsFromStoreEvents.js'
 import { runAdmittedResearchEndToEndPass } from '../../engine/researchEndToEndPass.js'
-import { deriveFindingSourceIntegrity } from '../../engine/sourceIntegrityFromEvidence.js'
-import { stampSourceFetchEvidenceOwnerOnPassage } from '../../engine/retrievalEvidenceOwnership.js'
-import { ownedInlinePassage } from '../../engine/testSupport/lineageDurableSeedHelpers.js'
+import { runAdmittedComposedRetrievalIteration } from '../../engine/researchComposedRetrievalLoop.js'
+import { deriveFindingSourceIntegrity, applyFindingSourceIntegrityFromEvidence } from '../../engine/sourceIntegrityFromEvidence.js'
+import {
+  stampSourceFetchEvidenceOwnerOnPassage,
+  stampSourceFetchEvidenceOwnerOnRevision,
+} from '../../engine/retrievalEvidenceOwnership.js'
 import { requiredClaimedSourceReviewFields } from '../../engine/testSupport/requiredClaimedSourceReviewFields.js'
-import { planTechnicalRetrievalSlots } from '../../engine/technicalRetrievalComposition.js'
-import { ResearchMissionV2Schema } from '../../contracts/mission.js'
-import { readFileSync } from 'node:fs'
-import { dirname } from 'node:path'
-import { fileURLToPath } from 'node:url'
-import { filterPassagesForExtractionLineage } from '../../engine/retrievalExtractionLineage.js'
-
+import { deriveVerifiedEvidenceLimitations } from '../../engine/researchReportFinalization.js'
 const MISSION_ID = exampleTechnicalMissionFixture.mission_id
-const FIXED_NOW = '2026-10-21T16:10:00.000Z'
-const SHARED_PASSAGE_ID = 'integrity-shared-passage-id'
-const FETCH_OP = 'integrity-fetch-op'
-const ATT_FAIL = `${FETCH_OP}-failed-a`
-const ATT_OK = `${FETCH_OP}-succeeded-b`
-
+const FIXED_NOW = '2026-10-21T16:30:00.000Z'
 const campaignDir = dirname(fileURLToPath(import.meta.url))
-const tL1Mission = ResearchMissionV2Schema.parse(
-  JSON.parse(readFileSync(join(campaignDir, 'T-L1-mission.json'), 'utf8')),
-)
+
+const SHARED_PASSAGE_ID = 'integrity-shared-passage-id'
+const SHARED_REVISION_ID = 'rev-shared-integrity'
+const FETCH_OK = 'integrity-fetch-ok'
+const ATT_OK = 'integrity-att-ok'
+const FETCH_FAIL = 'integrity-fetch-fail'
+const ATT_FAIL = 'integrity-att-fail'
 
 const singleQuestionPlan = PlanRevisionSchema.parse({
-  plan_revision_id: 'plan-integrity-one-q',
+  plan_revision_id: 'plan-integrity-e2e',
   mission_id: MISSION_ID,
   created_at: FIXED_NOW,
   revision_reason: 'integrity_reciprocal_single_question',
   questions: [
     {
-      question_id: 'q-integrity-only',
-      text: 'What constant does the pinned contracts file export?',
+      question_id: 'q-integrity-1',
+      text: 'What does the pinned contracts file export?',
       importance: 'critical',
-      evidence_requirement: 'Admitted repository file excerpt',
+      evidence_requirement: 'Quoted export from admitted repository file',
       status: 'open',
     },
   ],
@@ -75,97 +88,324 @@ function fetchOwner(operationId: string, attemptId: string) {
   return { mission_id: MISSION_ID, operation_id: operationId, attempt_id: attemptId }
 }
 
-function verifiedPlainPassage(passageId: string, operationId: string, attemptId: string): {
-  passage: PassageRecord
-  admitted: ReturnType<typeof buildAdmittedContent>
-} {
-  const bytes = Buffer.from('export const RESEARCH_CONTRACT = 1\n', 'utf8')
-  const admitted = buildAdmittedContent(operationId, `src-${passageId}`, `rev-${passageId}`, bytes, PLAIN_TEXT_MEDIA_TYPE)
+function verifiedRepositoryPassage(params: {
+  passageId: string
+  revisionId: string
+  sourceId: string
+  operationId: string
+  attemptId: string
+  lineText: string
+}): { passage: PassageRecord; revision: SourceRevision; source: SourceRecord } {
+  const bytes = Buffer.from(params.lineText, 'utf8')
+  const admitted = buildAdmittedContent(
+    params.operationId,
+    params.sourceId,
+    params.revisionId,
+    bytes,
+    PLAIN_TEXT_MEDIA_TYPE,
+  )
   const raw = passagesFromAdmittedPlainText(admitted)[0]
   assert.ok(raw)
+  const owner = fetchOwner(params.operationId, params.attemptId)
+  const revision = stampSourceFetchEvidenceOwnerOnRevision(admitted.revision, owner)
   const verified = passageWithIntegrityVerification(
-    { ...raw, passage_id: passageId, source_revision_id: admitted.revision.revision_id },
     {
-      source: { source_id: admitted.revision.source_id },
+      ...raw,
+      passage_id: params.passageId,
+      source_revision_id: params.revisionId,
+    },
+    {
+      source: { source_id: params.sourceId },
       revision: admitted.revision,
       admitted,
       extractionVersion: PLAIN_TEXT_EXTRACTION_VERSION,
     },
   )
+  const passage = stampSourceFetchEvidenceOwnerOnPassage(verified, owner)
+  const source: SourceRecord = {
+    source_id: params.sourceId,
+    kind: 'repository_file',
+    canonical_key: `github:test/${params.sourceId}`,
+    observed_urls: ['https://example.invalid/repo/file'],
+    coverage_source_slot: 'repository-pin-0',
+  }
+  return { passage, revision, source }
+}
+
+function latestFindings(events: Awaited<ReturnType<DurableResearchStore['listEvents']>>): FindingRecord[] {
+  const byId = new Map<string, FindingRecord>()
+  for (const event of events) {
+    if (event.kind !== 'finding_recorded') continue
+    const finding = (event.payload as { finding: FindingRecord }).finding
+    byId.set(finding.finding_id, finding)
+  }
+  return [...byId.values()]
+}
+
+function governedTechnicalAccess() {
+  return createMissionScopedSourceAccessPort({
+    mission: exampleTechnicalMissionFixture,
+    searchIndex: searchIndexForTechnicalMission(exampleTechnicalMissionFixture),
+    admittedGet: async () => ({
+      ok: true,
+      status: 200,
+      contentType: 'text/plain',
+      buffer: Buffer.from(technicalRepositoryCorpusBody, 'utf8'),
+      bytesReceived: technicalRepositoryCorpusBody.length,
+      truncated: false,
+      requestedUrl: technicalRepositoryCorpusFinalUrl,
+      finalUrl: technicalRepositoryCorpusFinalUrl,
+      redirectChain: [technicalRepositoryCorpusFinalUrl],
+      transportCoding: null,
+    }),
+  })
+}
+
+function completePathFixtureModel(): ResearchModelPort {
+  const fixture = new FixtureResearchModelBridge()
+  fixture.scriptOutput('integrity-plan', {
+    kind: 'plan_questions',
+    questions: [
+      {
+        text: singleQuestionPlan.questions[0]!.text,
+        importance: 'critical',
+        coverage_obligations: [
+          {
+            obligation_id: 'ob-integrity-repository-pin-0',
+            source_slot: 'repository-pin-0',
+            criterion_id: 'research_contract_export',
+            evidence_requirement: 'Repository excerpt documents RESEARCH_CONTRACT export.',
+          },
+        ],
+      },
+    ],
+  })
   return {
-    passage: stampSourceFetchEvidenceOwnerOnPassage(verified, fetchOwner(operationId, attemptId)),
-    admitted,
+    async invokeStructured(request: ResearchModelInvocationRequest): Promise<ResearchModelInvocationResult> {
+      if (request.kind === 'plan_questions') {
+        return fixture.invokeStructured(request)
+      }
+      if (request.kind === 'extract_findings') {
+        const passageIds = (request.input.passage_ids as string[]) ?? []
+        const planQuestions =
+          (request.input.plan_questions as { question_id: string }[] | undefined) ?? []
+        const questionId = planQuestions[0]?.question_id ?? 'q-integrity-1'
+        fixture.scriptOutput(request.operationId, {
+          kind: 'extract_findings',
+          findings: [
+            {
+              assertion_text: 'The file exports a RESEARCH_CONTRACT constant.',
+              assertion_kind: 'source_observation',
+              passage_ids: passageIds,
+              question_id: questionId,
+            },
+          ],
+        })
+      }
+      if (request.kind === 'semantic_support_review') {
+        type ReviewFinding = {
+          finding_id: string
+          cited_passages: Array<{ passage_id: string; content_status: string }>
+          coverage_rubric?: { coverage_obligations: Array<{ obligation_id: string }> }
+        }
+        const findingsInput = (request.input.findings as ReviewFinding[]) ?? []
+        fixture.scriptOutput(request.operationId, {
+          kind: 'semantic_support_review',
+          judgments: findingsInput.map((row) => {
+            const passageIds = row.cited_passages
+              .filter((p) => p.content_status === 'available')
+              .map((p) => p.passage_id)
+            return {
+              finding_id: row.finding_id,
+              status: 'supported',
+              rationale: 'Cited excerpt states the export.',
+              question_coverage: 'answers',
+              ...requiredClaimedSourceReviewFields(['repository-pin-0']),
+              obligation_coverage: (row.coverage_rubric?.coverage_obligations ?? []).map((o) => ({
+                obligation_id: o.obligation_id,
+                status: 'met',
+                supporting_passage_ids: passageIds,
+              })),
+            }
+          }),
+        })
+      }
+      if (request.kind === 'synthesize_report') {
+        fixture.scriptOutput(request.operationId, {
+          kind: 'synthesize_report',
+          answer_summary: 'The admitted repository excerpt documents the export.',
+          stopping_reason: 'coverage_sufficient',
+        })
+      }
+      return fixture.invokeStructured(request)
+    },
   }
 }
 
-async function seedDuplicatePassageIdCollision(
-  store: DurableResearchStore,
-  ctx: { mission_id: string; plan_revision_id: string; writer_generation: number },
-) {
-  const failPassage = ownedInlinePassage({
-    missionId: ctx.mission_id,
-    operationId: FETCH_OP,
-    attemptId: ATT_FAIL,
-    passageId: SHARED_PASSAGE_ID,
-    text: 'failed-attempt-must-not-win',
-    sourceRevisionId: 'rev-fail',
-  })
-  await store.appendExternalOperationIntent(ctx, {
-    mission_id: ctx.mission_id,
-    operation_id: FETCH_OP,
-    attempt_id: ATT_FAIL,
-    operation_kind: 'source_fetch',
-    dispatched_at: FIXED_NOW,
-    idempotency_key: `${FETCH_OP}:${ATT_FAIL}`,
-  })
-  await store.appendPassage(ctx, failPassage)
-  await store.appendExternalOperationCompleted(ctx, {
-    mission_id: ctx.mission_id,
-    operation_id: FETCH_OP,
-    attempt_id: ATT_FAIL,
-    completed_at: FIXED_NOW,
-    settlement: 'failed',
-  })
-
-  const { passage: okPassage, admitted: okAdmitted } = verifiedPlainPassage(SHARED_PASSAGE_ID, FETCH_OP, ATT_OK)
-  await store.appendExternalOperationIntent(ctx, {
-    mission_id: ctx.mission_id,
-    operation_id: FETCH_OP,
-    attempt_id: ATT_OK,
-    operation_kind: 'source_fetch',
-    dispatched_at: FIXED_NOW,
-    idempotency_key: `${FETCH_OP}:${ATT_OK}`,
-  })
-  await store.appendPassage(ctx, okPassage)
-  await store.appendExternalOperationCompleted(ctx, {
-    mission_id: ctx.mission_id,
-    operation_id: FETCH_OP,
-    attempt_id: ATT_OK,
-    completed_at: FIXED_NOW,
-    settlement: 'succeeded',
-  })
-  return {
-    okPassage,
-    okRevision: okAdmitted.revision,
-    okSourceId: okPassage.integrity_verification!.source_id,
-  }
+function treeFromPaths(paths: string[]): GitHubTreeEntry[] {
+  return paths.map((path) => ({ path, type: 'blob' }))
 }
 
-function findingForPassage(passageId: string): FindingRecord {
-  return FindingRecordSchema.parse({
-    finding_id: 'f-integrity-durable',
-    question_id: 'q-integrity-only',
-    assertion_text: 'observed constant export',
-    assertion_kind: 'source_observation',
-    passage_ids: [passageId],
-    source_integrity: 'not_checked',
-    created_at: FIXED_NOW,
-  })
+function assertTerminalComplete(events: Awaited<ReturnType<DurableResearchStore['listEvents']>>): void {
+  const terminal = events.find((e) => e.kind === 'terminal_receipt')
+  const report = (
+    terminal?.payload as {
+      report: {
+        terminal_state: string
+        limitations?: string[]
+      }
+    }
+  ).report
+  assert.ok(report)
+  assert.ok(
+    !report.limitations?.some((l) => l.startsWith('finding_source_integrity_not_verified:')),
+  )
+  assert.equal(report.terminal_state, 'complete', JSON.stringify(report))
 }
 
 describe('passage integrity verification durable reciprocal (B @ A canonical API)', () => {
-  it('duplicate passage_id across attempts: lineage admits succeeded receipt only after cold reopen', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'integrity-dup-passage-id-'))
+  it('composed T-L1 retrieval persists repository-pin-0/1 sources (not discover-primary)', async () => {
+    const mission = ResearchMissionV2Schema.parse(
+      JSON.parse(readFileSync(join(campaignDir, 'T-L1-mission.json'), 'utf8')),
+    )
+    const babelPath = 'babel-cli/src/research/v2/persistence/durableResearchStore.ts'
+    const langPath = 'libs/langgraph/langgraph/pregel/_checkpoint.py'
+    const globalUnused = 'compare pinned repositories persistence execution policy'
+
+    const baseSearch = createMissionProductionSearchProvider({
+      mission,
+      fetchRepositoryTree: async ({ apiUrl }) => {
+        if (apiUrl.includes('gthgomez/Babel')) {
+          return { ok: true, status: 200, entries: treeFromPaths([babelPath]) }
+        }
+        if (apiUrl.includes('langchain-ai/langgraph')) {
+          return { ok: true, status: 200, entries: treeFromPaths([langPath]) }
+        }
+        return { ok: false, status: 404, entries: [], message: `unexpected tree ${apiUrl}` }
+      },
+    })
+
+    const babelRaw = `https://raw.githubusercontent.com/${mission.pinned_target_repository!.full_name}/${mission.pinned_target_repository!.commit_sha}/${babelPath}`
+    const langRaw = `https://raw.githubusercontent.com/${mission.source_policy.selected_repository_refs![0]!.full_name}/${mission.source_policy.selected_repository_refs![0]!.commit_sha}/${langPath}`
+
+    const access = createGovernedSourceAccessPort({
+      mission,
+      searchProvider: baseSearch,
+      admittedGet: async ({ url }: { url: string }) => {
+        const body =
+          url === babelRaw || url.includes(babelPath)
+            ? Buffer.from('export const durable = 1\n', 'utf8')
+            : url === langRaw || url.includes(langPath)
+              ? Buffer.from('# pregel checkpoint module\n', 'utf8')
+              : null
+        if (!body) {
+          return {
+            ok: false,
+            status: 404,
+            contentType: 'text/plain',
+            buffer: Buffer.alloc(0),
+            bytesReceived: 0,
+            truncated: false,
+            requestedUrl: url,
+            finalUrl: url,
+            redirectChain: [url],
+            transportCoding: null,
+          }
+        }
+        return {
+          ok: true,
+          status: 200,
+          contentType: 'text/plain',
+          buffer: body,
+          bytesReceived: body.length,
+          truncated: false,
+          requestedUrl: url,
+          finalUrl: url,
+          redirectChain: [url],
+          transportCoding: null,
+        }
+      },
+    })
+
+    const registries = await createCombinedResearchRegistries()
+    const discovery = resolveDiscoveryAdapterForMission(mission, registries)
+    assert.ok(discovery)
+
+    const dir = await mkdtemp(join(tmpdir(), 'integrity-tl1-composed-slots-'))
+    try {
+      const store = await DurableResearchStore.open(dir)
+      const handle = await store.appendMission(mission)
+      const plan = { ...examplePlanRevisionFixture, mission_id: mission.mission_id }
+      await store.appendPlanRevision(
+        {
+          mission_id: mission.mission_id,
+          plan_revision_id: plan.plan_revision_id,
+          writer_generation: handle.writer_generation,
+        },
+        plan,
+      )
+
+      await runAdmittedComposedRetrievalIteration({
+        session: {
+          mission,
+          handle,
+          activePlanRevisionId: plan.plan_revision_id,
+        },
+        store,
+        access,
+        adapter: discovery,
+        registries,
+        activePlan: plan,
+        discoverQuery: globalUnused,
+        searchOperationId: 'integrity-tl1-search',
+        searchAttemptId: 'integrity-tl1-search-att',
+        fetchOperationId: 'integrity-tl1-fetch',
+        fetchAttemptId: 'integrity-tl1-fetch-att',
+        dispatchedAt: FIXED_NOW,
+        signal: new AbortController().signal,
+        now: () => FIXED_NOW,
+      })
+
+      const events = await store.listEvents(mission.mission_id)
+      const sources = listSourcesFromStoreEvents(events)
+      const slots = sources.map((s) => s.coverage_source_slot).filter(Boolean)
+      assert.deepEqual([...new Set(slots)].sort(), ['repository-pin-0', 'repository-pin-1'])
+      assert.ok(!slots.includes('discover-primary'))
+
+      const revisions = listSourceRevisionsFromStoreEvents(events)
+      const passages = events
+        .filter((e) => e.kind === 'passage_recorded')
+        .map((e) => (e.payload as { passage: PassageRecord }).passage)
+      assert.ok(passages.length >= 2)
+
+      const reviewInput = buildSemanticSupportReviewInput(
+        [
+          FindingRecordSchema.parse({
+            finding_id: 'f-slot-bind',
+            question_id: plan.questions[0]!.question_id,
+            assertion_text: 'synthetic',
+            assertion_kind: 'source_observation',
+            passage_ids: [passages[0]!.passage_id],
+            source_integrity: 'not_checked',
+            created_at: FIXED_NOW,
+          }),
+        ],
+        passages,
+        plan,
+        { mission, sources, sourceRevisions: revisions },
+      )
+      const directorySlots = (reviewInput.mission_source_slots ?? []).map((r) => r.source_slot)
+      assert.ok(directorySlots.includes('repository-pin-0'))
+      assert.ok(directorySlots.includes('repository-pin-1'))
+      const cited = reviewInput.findings[0]?.cited_passages[0]?.source_attribution?.coverage_source_slot
+      assert.ok(cited === 'repository-pin-0' || cited === 'repository-pin-1')
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('persists succeeded A then failed B reusing revision/passage ids; A owner-bound evidence stays valid', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'integrity-a-then-b-dup-'))
     try {
       let store = await DurableResearchStore.open(dir)
       const handle = await store.appendMission(exampleTechnicalMissionFixture)
@@ -175,62 +415,167 @@ describe('passage integrity verification durable reciprocal (B @ A canonical API
         plan_revision_id: singleQuestionPlan.plan_revision_id,
       }
       await store.appendPlanRevision(ctx, singleQuestionPlan)
-      const { okPassage, okRevision, okSourceId } = await seedDuplicatePassageIdCollision(store, ctx)
-      await store.close()
 
+      const sourceId = 'src-shared-integrity'
+      const a = verifiedRepositoryPassage({
+        passageId: SHARED_PASSAGE_ID,
+        revisionId: SHARED_REVISION_ID,
+        sourceId,
+        operationId: FETCH_OK,
+        attemptId: ATT_OK,
+        lineText: 'export const RESEARCH_CONTRACT = 1\n',
+      })
+
+      await store.appendExternalOperationIntent(ctx, {
+        mission_id: MISSION_ID,
+        operation_id: FETCH_OK,
+        attempt_id: ATT_OK,
+        operation_kind: 'source_fetch',
+        dispatched_at: FIXED_NOW,
+        idempotency_key: `${FETCH_OK}:${ATT_OK}`,
+      })
+      await store.appendSource(ctx, a.source)
+      await store.appendSourceRevision(ctx, a.revision)
+      await store.appendPassage(ctx, a.passage)
+      await store.appendExternalOperationCompleted(ctx, {
+        mission_id: MISSION_ID,
+        operation_id: FETCH_OK,
+        attempt_id: ATT_OK,
+        completed_at: FIXED_NOW,
+        settlement: 'succeeded',
+      })
+
+      const failOwner = fetchOwner(FETCH_FAIL, ATT_FAIL)
+      const failedRevision = stampSourceFetchEvidenceOwnerOnRevision(
+        { ...a.revision, content_hash: 'f'.repeat(64) },
+        failOwner,
+      )
+      await store.appendExternalOperationIntent(ctx, {
+        mission_id: MISSION_ID,
+        operation_id: FETCH_FAIL,
+        attempt_id: ATT_FAIL,
+        operation_kind: 'source_fetch',
+        dispatched_at: FIXED_NOW,
+        idempotency_key: `${FETCH_FAIL}:${ATT_FAIL}`,
+      })
+      await store.appendSourceRevision(ctx, failedRevision)
+      await store.appendExternalOperationCompleted(ctx, {
+        mission_id: MISSION_ID,
+        operation_id: FETCH_FAIL,
+        attempt_id: ATT_FAIL,
+        completed_at: FIXED_NOW,
+        settlement: 'failed',
+      })
+
+      await store.close()
       store = await DurableResearchStore.open(dir)
       const events = await store.listEvents(MISSION_ID)
-      const allPassages = events
-        .filter((e) => e.kind === 'passage_recorded')
-        .map((e) => (e.payload as { passage: PassageRecord }).passage)
-      const admitted = filterPassagesForExtractionLineage(allPassages, events)
-      assert.equal(admitted.length, 1)
-      assert.ok(admitted[0]!.integrity_verification)
-      assert.equal(admitted[0]!.source_fetch_owner?.attempt_id, ATT_OK)
+      const revisions = listSourceRevisionsFromStoreEvents(events)
+      const sources = listSourcesFromStoreEvents(events)
 
       const integrity = deriveFindingSourceIntegrity(
-        findingForPassage(SHARED_PASSAGE_ID),
-        admitted,
-        [okRevision],
-        [{ source_id: okSourceId, kind: 'document', canonical_key: 'k', observed_urls: ['https://example.invalid/x'] }],
+        FindingRecordSchema.parse({
+          finding_id: 'f-dup-ab',
+          question_id: 'q-integrity-1',
+          assertion_text: 'export observed',
+          assertion_kind: 'source_observation',
+          passage_ids: [SHARED_PASSAGE_ID],
+          source_integrity: 'not_checked',
+          created_at: FIXED_NOW,
+        }),
+        [a.passage],
+        revisions,
+        sources,
         events,
       )
       assert.equal(integrity, 'valid')
+
+      const ambiguousOther = stampSourceFetchEvidenceOwnerOnPassage(
+        PassageRecordSchema.parse({
+          ...a.passage,
+          text_ref: {
+            mode: 'inline',
+            text: 'materially different eligible excerpt',
+            text_hash: createHash('sha256').update('materially different eligible excerpt', 'utf8').digest('hex'),
+          },
+        }),
+        fetchOwner('fetch-other', 'att-other'),
+      )
+      const ambiguous = deriveFindingSourceIntegrity(
+        FindingRecordSchema.parse({
+          finding_id: 'f-ambiguous',
+          question_id: 'q-integrity-1',
+          assertion_text: 'ambiguous',
+          assertion_kind: 'source_observation',
+          passage_ids: [SHARED_PASSAGE_ID],
+          source_integrity: 'not_checked',
+          created_at: FIXED_NOW,
+        }),
+        [a.passage, ambiguousOther],
+        revisions,
+        sources,
+        events,
+      )
+      assert.equal(ambiguous, 'not_checked')
+
+      const failPassageOwner = fetchOwner(FETCH_FAIL, `${ATT_FAIL}-passage`)
+      await store.appendExternalOperationIntent(ctx, {
+        mission_id: MISSION_ID,
+        operation_id: FETCH_FAIL,
+        attempt_id: `${ATT_FAIL}-passage`,
+        operation_kind: 'source_fetch',
+        dispatched_at: FIXED_NOW,
+        idempotency_key: `${FETCH_FAIL}:${ATT_FAIL}-passage`,
+      })
+      await store.appendPassage(
+        ctx,
+        stampSourceFetchEvidenceOwnerOnPassage(
+          PassageRecordSchema.parse({
+            ...a.passage,
+            text_ref: {
+              mode: 'inline',
+              text: 'failed-attempt-passage-row',
+              text_hash: createHash('sha256').update('failed-attempt-passage-row', 'utf8').digest('hex'),
+            },
+          }),
+          failPassageOwner,
+        ),
+      )
+      await store.appendExternalOperationCompleted(ctx, {
+        mission_id: MISSION_ID,
+        operation_id: FETCH_FAIL,
+        attempt_id: `${ATT_FAIL}-passage`,
+        completed_at: FIXED_NOW,
+        settlement: 'failed',
+      })
+      const eventsWithFailedPassageRow = await store.listEvents(MISSION_ID)
+      const withFailedRow = deriveFindingSourceIntegrity(
+        FindingRecordSchema.parse({
+          finding_id: 'f-dup-failed-row',
+          question_id: 'q-integrity-1',
+          assertion_text: 'export observed',
+          assertion_kind: 'source_observation',
+          passage_ids: [SHARED_PASSAGE_ID],
+          source_integrity: 'not_checked',
+          created_at: FIXED_NOW,
+        }),
+        [a.passage],
+        revisions,
+        sources,
+        eventsWithFailedPassageRow,
+      )
+      assert.equal(
+        withFailedRow,
+        'not_checked',
+        'materially different passage_id reuse in store is conservatively not_checked (B row excluded)',
+      )
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
   })
 
-  it('model source directories expose repository-pin-0 and repository-pin-1 slots', () => {
-    const slots = planTechnicalRetrievalSlots(tL1Mission, 'checkpoint persistence')
-    const pinIds = slots.filter((s) => s.kind === 'repository_pin').map((s) => s.slotId)
-    assert.deepEqual(pinIds, ['repository-pin-0', 'repository-pin-1'])
-
-    const finding = findingForPassage('p-slot-check')
-    const passages = [
-      PassageRecordSchema.parse({
-        passage_id: 'p-slot-check',
-        source_revision_id: 'rev-slot',
-        locator: { kind: 'line_range', start_line: 1, end_line: 1 },
-        text_ref: { mode: 'inline', text: 'x', text_hash: createHash('sha256').update('x').digest('hex') },
-      }),
-    ]
-    const input = buildSemanticSupportReviewInput([finding], passages, singleQuestionPlan, {
-      mission: tL1Mission,
-      sources: [
-        { source_id: 'src-pin-0', kind: 'repository_file', canonical_key: 'pin0', observed_urls: ['https://example.invalid/0'] },
-        { source_id: 'src-pin-1', kind: 'repository_file', canonical_key: 'pin1', observed_urls: ['https://example.invalid/1'] },
-      ],
-      sourceRevisions: [buildSourceRevision('src-pin-0', 'rev-slot', 'a'.repeat(64))],
-    })
-    const slotIds = (input.mission_source_slots ?? []).map((row) => row.source_slot)
-    assert.ok(slotIds.includes('repository-pin-0'))
-    assert.ok(slotIds.includes('repository-pin-1'))
-  })
-
-  it('runner durable: verified passages and findings survive cold reopen (offline)', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'integrity-e2e-durable-'))
-    const fixture = new FixtureResearchModelBridge()
+  it('runner: verified receipts, valid findings, supported/answers, terminal complete; cold persistence reopen preserves state', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'integrity-runner-complete-reopen-'))
     try {
       let store = await DurableResearchStore.open(dir)
       const handle = await store.appendMission(exampleTechnicalMissionFixture)
@@ -239,85 +584,17 @@ describe('passage integrity verification durable reciprocal (B @ A canonical API
       const adapter = resolveSourceAdapterForMission(exampleTechnicalMissionFixture, registries)
       assert.ok(adapter)
 
-      const model = {
-        async invokeStructured(request: ResearchModelInvocationRequest): Promise<ResearchModelInvocationResult> {
-          if (request.kind === 'plan_questions') {
-            fixture.scriptOutput(request.operationId, {
-              kind: 'plan_questions',
-              questions: [{ text: singleQuestionPlan.questions[0]!.text, importance: 'critical' }],
-            })
-          }
-          if (request.kind === 'extract_findings') {
-            const passageIds = (request.input.passage_ids as string[]) ?? []
-            const planQuestions =
-              (request.input.plan_questions as { question_id: string }[] | undefined) ?? []
-            const questionId = planQuestions[0]?.question_id ?? 'q-integrity-only'
-            fixture.scriptOutput(request.operationId, {
-              kind: 'extract_findings',
-              findings: [
-                {
-                  assertion_text: 'RESEARCH_CONTRACT is exported.',
-                  assertion_kind: 'source_observation',
-                  passage_ids: passageIds,
-                  question_id: questionId,
-                },
-              ],
-            })
-          }
-          if (request.kind === 'semantic_support_review') {
-            const findingId = (request.input.findings as { finding_id: string }[])?.[0]?.finding_id
-            fixture.scriptOutput(request.operationId, {
-              kind: 'semantic_support_review',
-              judgments: [
-                {
-                  finding_id: findingId ?? 'missing',
-                  status: 'supported',
-                  rationale: 'Cited excerpt states the export.',
-                  question_coverage: 'answers',
-                  ...requiredClaimedSourceReviewFields(['repository-pin-0']),
-                },
-              ],
-            })
-          }
-          if (request.kind === 'synthesize_report') {
-            fixture.scriptOutput(request.operationId, {
-              kind: 'synthesize_report',
-              answer_summary: 'The pinned file exports RESEARCH_CONTRACT.',
-              stopping_reason: 'evidence_complete',
-            })
-          }
-          return fixture.invokeStructured(request)
-        },
-      }
-
-      const access = createMissionScopedSourceAccessPort({
-        mission: exampleTechnicalMissionFixture,
-        searchIndex: searchIndexForTechnicalMission(exampleTechnicalMissionFixture),
-        admittedGet: async () => ({
-          ok: true,
-          status: 200,
-          contentType: 'text/plain',
-          buffer: Buffer.from(technicalRepositoryCorpusBody, 'utf8'),
-          bytesReceived: technicalRepositoryCorpusBody.length,
-          truncated: false,
-          requestedUrl: technicalRepositoryCorpusFinalUrl,
-          finalUrl: technicalRepositoryCorpusFinalUrl,
-          redirectChain: [technicalRepositoryCorpusFinalUrl],
-          transportCoding: null,
-        }),
-      })
-
       await runAdmittedResearchEndToEndPass({
         session,
         store,
-        model,
-        access,
+        model: completePathFixtureModel(),
+        access: governedTechnicalAccess(),
         adapter,
         registries,
         discoverQuery: 'RESEARCH_CONTRACT',
         planOperationId: 'integrity-plan',
         planAttemptId: 'integrity-plan-att',
-        planRevisionId: 'plan-integrity-e2e',
+        planRevisionId: singleQuestionPlan.plan_revision_id,
         retrievalSearchOperationId: 'integrity-search',
         retrievalSearchAttemptId: 'integrity-search-att',
         retrievalFetchOperationId: 'integrity-fetch',
@@ -333,96 +610,110 @@ describe('passage integrity verification durable reciprocal (B @ A canonical API
         now: () => FIXED_NOW,
       })
 
-      const eventsBefore = await store.listEvents(MISSION_ID)
-      const findingsBefore = eventsBefore
-        .filter((e) => e.kind === 'finding_recorded')
-        .map((e) => FindingRecordSchema.parse((e.payload as { finding: FindingRecord }).finding))
-      const verifiedPassages = eventsBefore
+      let events = await store.listEvents(MISSION_ID)
+      const passages = events
         .filter((e) => e.kind === 'passage_recorded')
         .map((e) => (e.payload as { passage: PassageRecord }).passage)
-        .filter((p) => p.integrity_verification)
-      const latestFindingBefore = findingsBefore[findingsBefore.length - 1]!
-      if (verifiedPassages.length === 0) {
-        assert.equal(
-          latestFindingBefore.source_integrity,
-          'not_checked',
-          'technical repository-file read path does not yet emit integrity_verification at ffbad3',
-        )
-      } else {
-        assert.equal(latestFindingBefore.source_integrity, 'valid')
-      }
+      const verified = passages.filter((p) => p.integrity_verification)
+      assert.ok(verified.length > 0, 'adapter must emit integrity_verification receipts on admitted passages')
+
+      const findings = latestFindings(events)
+      assert.ok(findings.length > 0)
+      assert.ok(findings.every((f) => f.source_integrity === 'valid'))
+      assert.ok(
+        findings.every((f) => f.semantic_support?.status === 'supported' && f.question_coverage?.status === 'answers'),
+      )
+      assertTerminalComplete(events)
 
       await store.close()
       store = await DurableResearchStore.open(dir)
-      const eventsAfter = await store.listEvents(MISSION_ID)
-      const findingsAfter = eventsAfter
-        .filter((e) => e.kind === 'finding_recorded')
-        .map((e) => FindingRecordSchema.parse((e.payload as { finding: FindingRecord }).finding))
-      const latestFinding = findingsAfter[findingsAfter.length - 1]!
-      assert.equal(latestFinding.source_integrity, latestFindingBefore.source_integrity)
-      const passageAfter = eventsAfter
+      events = await store.listEvents(MISSION_ID)
+      const reopenedPassages = events
         .filter((e) => e.kind === 'passage_recorded')
         .map((e) => (e.payload as { passage: PassageRecord }).passage)
-        .find((p) => latestFinding.passage_ids.includes(p.passage_id))
-      assert.ok(passageAfter)
-      if (passageAfter?.integrity_verification) {
-        assert.equal(
-          passageAfter.integrity_verification.passage_text_hash,
-          passageAfter.text_ref.mode === 'inline' ? passageAfter.text_ref.text_hash : '',
-        )
-      }
+      assert.ok(reopenedPassages.some((p) => p.integrity_verification))
+
+      const sources = listSourcesFromStoreEvents(events)
+      const revisions = listSourceRevisionsFromStoreEvents(events)
+      const reopenedFindings = applyFindingSourceIntegrityFromEvidence(
+        latestFindings(events),
+        reopenedPassages,
+        revisions,
+        sources,
+        events,
+      )
+      assert.ok(reopenedFindings.every((f) => f.source_integrity === 'valid'))
+      assertTerminalComplete(events)
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
   })
 
-  it('isolated tamper: text hash mismatch stays invalid after durable persistence', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'integrity-tamper-durable-'))
-    try {
-      const store = await DurableResearchStore.open(dir)
-      const handle = await store.appendMission(exampleTechnicalMissionFixture)
-      const ctx = {
-        ...exampleMissionWriteContext,
-        writer_generation: handle.writer_generation,
-        plan_revision_id: singleQuestionPlan.plan_revision_id,
-      }
-      await store.appendPlanRevision(ctx, singleQuestionPlan)
-      const { passage: okPassage, admitted: tamperAdmitted } = verifiedPlainPassage('p-tamper', FETCH_OP, ATT_OK)
-      await store.appendExternalOperationIntent(ctx, {
-        mission_id: MISSION_ID,
-        operation_id: FETCH_OP,
-        attempt_id: ATT_OK,
-        operation_kind: 'source_fetch',
-        dispatched_at: FIXED_NOW,
-        idempotency_key: `${FETCH_OP}:${ATT_OK}`,
-      })
-      const tampered = PassageRecordSchema.parse({
-        ...okPassage,
-        text_ref: {
-          mode: 'inline',
-          text: okPassage.text_ref.mode === 'inline' ? okPassage.text_ref.text : '',
-          text_hash: createHash('sha256').update('stale-hash-bind').digest('hex'),
-        },
-      })
-      await store.appendPassage(ctx, tampered)
-      await store.appendExternalOperationCompleted(ctx, {
-        mission_id: MISSION_ID,
-        operation_id: FETCH_OP,
-        attempt_id: ATT_OK,
-        completed_at: FIXED_NOW,
-        settlement: 'succeeded',
-      })
-      const events = await store.listEvents(MISSION_ID)
-      const integrity = deriveFindingSourceIntegrity(
-        findingForPassage('p-tamper'),
-        [tampered],
-        [tamperAdmitted.revision],
-        [{ source_id: tampered.integrity_verification!.source_id, kind: 'document', canonical_key: 'k', observed_urls: ['https://example.invalid/x'] }],
-        events,
-      )
-      assert.equal(integrity, 'invalid')
-    } finally {
-      await rm(dir, { recursive: true, force: true })
-    }
+  it('helper deriveFindingSourceIntegrity rejects tamper; finalizer boundary records unverified supported findings', () => {
+    const { passage, revision, source } = verifiedRepositoryPassage({
+      passageId: 'p-tamper-helper',
+      revisionId: 'rev-tamper',
+      sourceId: 'src-tamper',
+      operationId: FETCH_OK,
+      attemptId: ATT_OK,
+      lineText: 'line one\n',
+    })
+    const tampered = PassageRecordSchema.parse({
+      ...passage,
+      text_ref: {
+        mode: 'inline',
+        text: passage.text_ref.mode === 'inline' ? passage.text_ref.text : '',
+        text_hash: createHash('sha256').update('stale-hash-bind').digest('hex'),
+      },
+    })
+    const helperResult = deriveFindingSourceIntegrity(
+      FindingRecordSchema.parse({
+        finding_id: 'f-tamper',
+        question_id: 'q-integrity-1',
+        assertion_text: 'tampered',
+        assertion_kind: 'source_observation',
+        passage_ids: [tampered.passage_id],
+        source_integrity: 'not_checked',
+        created_at: FIXED_NOW,
+      }),
+      [tampered],
+      [revision],
+      [source],
+      [],
+    )
+    assert.equal(helperResult, 'invalid')
+
+    const supportedTamperedFinding = FindingRecordSchema.parse({
+      finding_id: 'f-finalizer-boundary',
+      question_id: 'q-integrity-1',
+      assertion_text: 'supported but integrity invalid',
+      assertion_kind: 'source_observation',
+      passage_ids: [tampered.passage_id],
+      source_integrity: 'invalid',
+      semantic_support: {
+        status: 'supported',
+        rationale: 'fixture',
+        reviewed_at: FIXED_NOW,
+        reviewer: 'fixture',
+        reviewer_version: 'fixture/1',
+      },
+      question_coverage: {
+        status: 'answers',
+        rationale: 'fixture',
+        reviewed_at: FIXED_NOW,
+        reviewer: 'fixture',
+        reviewer_version: 'fixture/1',
+      },
+      created_at: FIXED_NOW,
+    })
+    const limitations = deriveVerifiedEvidenceLimitations({
+      findings: [supportedTamperedFinding],
+      passages: [tampered],
+      sourceRevisions: [revision],
+    })
+    assert.ok(
+      limitations.some((l) => l.startsWith('finding_source_integrity_not_verified:f-finalizer-boundary:invalid')),
+      'finalizer/host report path refuses complete on supported finding with invalid integrity',
+    )
   })
 })

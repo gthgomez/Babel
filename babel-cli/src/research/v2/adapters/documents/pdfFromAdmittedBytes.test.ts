@@ -111,6 +111,25 @@ test('passagesFromAdmittedPdf: long unicode page text satisfies PassageRecordSch
   }
 })
 
+test('passagesFromAdmittedPdf: createLoadingTask hook does not emit parser integrity receipts', async () => {
+  const passages = await passagesFromAdmittedPdf(pdfAdmitted(), undefined, {
+    testHooks: {
+      createLoadingTask: () => ({
+        promise: Promise.resolve({
+          numPages: 1,
+          getPage: async () => ({
+            getTextContent: async () => ({ items: [{ str: 'hook page text' }] }),
+          }),
+          destroy: async () => {},
+        }),
+        destroy: () => Promise.resolve(),
+      }),
+    },
+  })
+  assert.equal(passages.length, 1)
+  assert.equal(passages[0]?.integrity_verification, undefined)
+})
+
 test('passagesFromAdmittedPdf: rejected load destroys loading task', async () => {
   let destroyCalls = 0
   const admitted = pdfAdmitted()
