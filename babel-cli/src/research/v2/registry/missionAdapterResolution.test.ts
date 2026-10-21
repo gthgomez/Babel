@@ -69,5 +69,16 @@ describe('mission adapter resolution', () => {
       { mediaType: 'application/pdf' },
     )
     assert.equal(docRead?.adapterId, GENERAL_DOCUMENT_ADAPTER_ID)
+    const paperRead = resolveReadAdapterForSource(
+      {
+        source_id: 's3',
+        kind: 'paper',
+        canonical_key: 'https://arxiv.org/pdf/1706.03762.pdf',
+        observed_urls: ['https://arxiv.org/pdf/1706.03762.pdf'],
+      },
+      registries,
+      { mediaType: 'application/pdf' },
+    )
+    assert.equal(paperRead?.adapterId, GENERAL_DOCUMENT_ADAPTER_ID)
   })
 })

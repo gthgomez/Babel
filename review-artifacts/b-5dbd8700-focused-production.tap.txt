@@ -1,0 +1,267 @@
+TAP version 13
+# Subtest: missionWebRetrievalSelection
+    # Subtest: matches selected refs on primary observed_urls[0] only
+    ok 1 - matches selected refs on primary observed_urls[0] only
+      ---
+      duration_ms: 0.700078
+      type: 'test'
+      ...
+    # Subtest: resolves mission ref order with dedupe and binds fetch URL to observed_urls[0]
+    ok 2 - resolves mission ref order with dedupe and binds fetch URL to observed_urls[0]
+      ---
+      duration_ms: 1.389608
+      type: 'test'
+      ...
+    # Subtest: dedupes duplicate mission refs to a single fetch target
+    ok 3 - dedupes duplicate mission refs to a single fetch target
+      ---
+      duration_ms: 0.575195
+      type: 'test'
+      ...
+    # Subtest: direct-acquires selected refs when discover omits them
+    ok 4 - direct-acquires selected refs when discover omits them
+      ---
+      duration_ms: 0.545062
+      type: 'test'
+      ...
+    # Subtest: rebinds discover alias hits to mission ref before fetch
+    ok 5 - rebinds discover alias hits to mission ref before fetch
+      ---
+      duration_ms: 0.090992
+      type: 'test'
+      ...
+    # Subtest: legacy mode keeps first discover candidate (fetch-time admission unchanged)
+    ok 6 - legacy mode keeps first discover candidate (fetch-time admission unchanged)
+      ---
+      duration_ms: 0.245249
+      type: 'test'
+      ...
+    1..6
+ok 1 - missionWebRetrievalSelection
+  ---
+  duration_ms: 4.385503
+  type: 'suite'
+  ...
+# Subtest: buildSynthesizeReportModelInput
+    # Subtest: includes semantic_support and question_coverage separately for synthesis
+    ok 1 - includes semantic_support and question_coverage separately for synthesis
+      ---
+      duration_ms: 0.510333
+      type: 'test'
+      ...
+    # Subtest: defaults missing judgments to not_checked and not_assessed
+    ok 2 - defaults missing judgments to not_checked and not_assessed
+      ---
+      duration_ms: 0.124996
+      type: 'test'
+      ...
+    1..2
+ok 2 - buildSynthesizeReportModelInput
+  ---
+  duration_ms: 1.325195
+  type: 'suite'
+  ...
+# Subtest: G-L1 attempt4 evidence subset (historical) + fef78559 finalizer
+    # Subtest: preserves ORIGINAL subset artifact and historical stored Q[0] host binding (pre-b0194564)
+    ok 1 - preserves ORIGINAL subset artifact and historical stored Q[0] host binding (pre-b0194564)
+      ---
+      duration_ms: 3.970085
+      type: 'test'
+      ...
+    # Subtest: records historical terminal report (pre-fef78559 builder) with all five unanswered and model prose cutoff
+    ok 2 - records historical terminal report (pre-fef78559 builder) with all five unanswered and model prose cutoff
+      ---
+      duration_ms: 1.238773
+      type: 'test'
+      ...
+    # Subtest: rebuilds attempt4 with canonical finalizer using synthetic question_coverage (not historical re-review)
+    ok 3 - rebuilds attempt4 with canonical finalizer using synthetic question_coverage (not historical re-review)
+      ---
+      duration_ms: 2.526197
+      type: 'test'
+      ...
+    1..3
+ok 3 - G-L1 attempt4 evidence subset (historical) + fef78559 finalizer
+  ---
+  duration_ms: 8.363148
+  type: 'suite'
+  ...
+# Subtest: composed retrieval composition ownership (B reciprocal @ A 16198419)
+    # Subtest: foreign replacement during dispatched failing repository slot blocks later dispatch and evidence
+    ok 1 - foreign replacement during dispatched failing repository slot blocks later dispatch and evidence
+      ---
+      duration_ms: 3.520695
+      type: 'test'
+      ...
+    1..1
+ok 4 - composed retrieval composition ownership (B reciprocal @ A 16198419)
+  ---
+  duration_ms: 4.038464
+  type: 'suite'
+  ...
+# Subtest: general multi-web production routing (G-L2 fixture)
+    # Subtest: direct-acquires both selected_web_refs when discover returns no hits
+    ok 1 - direct-acquires both selected_web_refs when discover returns no hits
+      ---
+      duration_ms: 6.366602
+      type: 'test'
+      ...
+    1..1
+ok 5 - general multi-web production routing (G-L2 fixture)
+  ---
+  duration_ms: 6.891329
+  type: 'suite'
+  ...
+# Subtest: research retrieval loop (admitted ports)
+    # Subtest: runs discover → read → evidence through technical adapter and fake access
+    ok 1 - runs discover → read → evidence through technical adapter and fake access
+      ---
+      duration_ms: 8.52884
+      type: 'test'
+      ...
+    # Subtest: persists retrieval and offline terminal report on durable admitted session
+    ok 2 - persists retrieval and offline terminal report on durable admitted session
+      ---
+      duration_ms: 21.708357
+      type: 'test'
+      ...
+    # Subtest: chains planning then retrieval without duplicating general adapters
+    ok 3 - chains planning then retrieval without duplicating general adapters
+      ---
+      duration_ms: 1.748413
+      type: 'test'
+      ...
+    # Subtest: fetches each mission selected_web_ref with distinct fetch operations
+    ok 4 - fetches each mission selected_web_ref with distinct fetch operations
+      ---
+      duration_ms: 1.746984
+      type: 'test'
+      ...
+    # Subtest: multi-web: persistence failure settles fetch once and does not continue
+    ok 5 - multi-web: persistence failure settles fetch once and does not continue
+      ---
+      duration_ms: 1.279812
+      type: 'test'
+      ...
+    1..5
+ok 6 - research retrieval loop (admitted ports)
+  ---
+  duration_ms: 35.920644
+  type: 'suite'
+  ...
+# Subtest: semantic question coverage (production c3c553a reciprocal)
+    # Subtest: buildSemanticSupportReviewInput binds question_text from active plan
+    ok 1 - buildSemanticSupportReviewInput binds question_text from active plan
+      ---
+      duration_ms: 0.6063
+      type: 'test'
+      ...
+    # Subtest: supported + tangential does not close plan question coverage
+    ok 2 - supported + tangential does not close plan question coverage
+      ---
+      duration_ms: 1.019141
+      type: 'test'
+      ...
+    # Subtest: supported + partial on multi-part question keeps question unanswered
+    ok 3 - supported + partial on multi-part question keeps question unanswered
+      ---
+      duration_ms: 0.184422
+      type: 'test'
+      ...
+    # Subtest: supported + answers closes only the bound question with answered coverage
+    ok 4 - supported + answers closes only the bound question with answered coverage
+      ---
+      duration_ms: 0.098744
+      type: 'test'
+      ...
+    # Subtest: legacy not_assessed on supported finding cannot close coverage
+    ok 5 - legacy not_assessed on supported finding cannot close coverage
+      ---
+      duration_ms: 0.079314
+      type: 'test'
+      ...
+    # Subtest: synthesized report stays partial when tangential supported finding would have closed Q[0] under legacy rules
+    ok 6 - synthesized report stays partial when tangential supported finding would have closed Q[0] under legacy rules
+      ---
+      duration_ms: 0.864103
+      type: 'test'
+      ...
+    1..6
+ok 7 - semantic question coverage (production c3c553a reciprocal)
+  ---
+  duration_ms: 3.567133
+  type: 'suite'
+  ...
+# Subtest: G-L2 campaign mission fixture
+    # Subtest: parses constrained-comparison mission with public MDN + Cloudflare scope
+    ok 1 - parses constrained-comparison mission with public MDN + Cloudflare scope
+      ---
+      duration_ms: 3.260004
+      type: 'test'
+      ...
+    1..1
+ok 8 - G-L2 campaign mission fixture
+  ---
+  duration_ms: 3.769044
+  type: 'suite'
+  ...
+# Subtest: G-L3 campaign mission fixture
+    # Subtest: parses contradiction/insufficiency mission with official python.org scope
+    ok 1 - parses contradiction/insufficiency mission with official python.org scope
+      ---
+      duration_ms: 3.473359
+      type: 'test'
+      ...
+    1..1
+ok 9 - G-L3 campaign mission fixture
+  ---
+  duration_ms: 4.051353
+  type: 'suite'
+  ...
+# Subtest: durable research store question_coverage persistence
+    # Subtest: preserves question_coverage across close and reopen
+    ok 1 - preserves question_coverage across close and reopen
+      ---
+      duration_ms: 22.323049
+      type: 'test'
+      ...
+    1..1
+ok 10 - durable research store question_coverage persistence
+  ---
+  duration_ms: 23.15263
+  type: 'suite'
+  ...
+# Subtest: general actual-port: two distinct admitted canonical sources (offline, production loop)
+    # Subtest: two separate retrieval iterations each persist evidence from a distinct canonical page
+    ok 1 - two separate retrieval iterations each persist evidence from a distinct canonical page
+      ---
+      duration_ms: 9.354382
+      type: 'test'
+      ...
+    # Subtest: production discover still admits only candidates[0] in a single iteration (no multi-source controller)
+    ok 2 - production discover still admits only candidates[0] in a single iteration (no multi-source controller)
+      ---
+      duration_ms: 1.046395
+      type: 'test'
+      ...
+    # Subtest: deterministic insufficiency fixture documents single-page offline slice (not live conflict)
+    ok 3 - deterministic insufficiency fixture documents single-page offline slice (not live conflict)
+      ---
+      duration_ms: 0.203104
+      type: 'test'
+      ...
+    1..3
+ok 11 - general actual-port: two distinct admitted canonical sources (offline, production loop)
+  ---
+  duration_ms: 11.309862
+  type: 'suite'
+  ...
+1..11
+# tests 30
+# suites 11
+# pass 30
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 1243.091666

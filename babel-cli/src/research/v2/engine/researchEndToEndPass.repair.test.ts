@@ -34,7 +34,7 @@ function governedAccess() {
       requestedUrl: technicalRepositoryCorpusFinalUrl,
       finalUrl: technicalRepositoryCorpusFinalUrl,
       redirectChain: [technicalRepositoryCorpusFinalUrl],
-    transportCoding: null,
+      transportCoding: null,
     }),
   })
 }
@@ -51,9 +51,9 @@ function modelPort(): import('../ports/researchModelPort.js').ResearchModelPort 
       }
       if (request.kind === 'extract_findings') {
         const passageIds = (request.input.passages as { passage_id: string }[])?.map((p) => p.passage_id) ?? []
-        const questionId =
-          (request.input.plan_questions as { question_id: string }[])?.[0]?.question_id ??
-          'missing-plan-question'
+        const planQuestions =
+          (request.input.plan_questions as { question_id: string }[] | undefined) ?? []
+        const questionId = planQuestions[0]?.question_id ?? 'q-plan-repair-001-1'
         fixture.scriptOutput(request.operationId, {
           kind: 'extract_findings',
           findings: [
@@ -78,6 +78,12 @@ function modelPort(): import('../ports/researchModelPort.js').ResearchModelPort 
         })
       }
       if (request.kind === 'synthesize_report') {
+        const synthFindings = request.input.findings as {
+          semantic_support?: string
+          question_coverage?: string
+        }[]
+        assert.equal(synthFindings[0]?.semantic_support, 'not_checked')
+        assert.equal(synthFindings[0]?.question_coverage, 'not_assessed')
         fixture.scriptOutput(request.operationId, {
           kind: 'synthesize_report',
           answer_summary: 'Unqualified summary.',

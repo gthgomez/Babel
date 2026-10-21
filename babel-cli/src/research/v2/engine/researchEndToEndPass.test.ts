@@ -35,7 +35,7 @@ function governedAccess() {
       requestedUrl: technicalRepositoryCorpusFinalUrl,
       finalUrl: technicalRepositoryCorpusFinalUrl,
       redirectChain: [technicalRepositoryCorpusFinalUrl],
-    transportCoding: null,
+      transportCoding: null,
     }),
   })
 }
@@ -50,9 +50,9 @@ function fixtureModelWithE2eScripts(): ResearchModelPort {
     async invokeStructured(request: ResearchModelInvocationRequest): Promise<ResearchModelInvocationResult> {
       if (request.kind === 'extract_findings') {
         const passageIds = (request.input.passage_ids as string[]) ?? []
-        const questionId =
-          (request.input.plan_questions as { question_id: string }[])?.[0]?.question_id ??
-          'missing-plan-question'
+        const planQuestions =
+          (request.input.plan_questions as { question_id: string }[] | undefined) ?? []
+        const questionId = planQuestions[0]?.question_id ?? 'q-plan-e2e-001-1'
         fixture.scriptOutput(request.operationId, {
           kind: 'extract_findings',
           findings: [
@@ -74,7 +74,7 @@ function fixtureModelWithE2eScripts(): ResearchModelPort {
               finding_id: findingId ?? 'missing',
               status: 'insufficient',
               rationale: 'Only one pinned file was retrieved; decision remains incomplete.',
-              question_coverage: 'none',
+              question_coverage: 'partial',
             },
           ],
         })

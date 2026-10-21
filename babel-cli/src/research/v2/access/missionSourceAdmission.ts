@@ -8,7 +8,7 @@ import { parseAdmittedHttpUrl } from './admittedHttpGet.js'
 import { documentSourceMatchesSelectedRef } from './missionDocumentAdmission.js'
 import { missionPinnedRepositories } from './missionPinnedRepositories.js'
 import { hostnameAllowed } from './missionDocumentAdmission.js'
-import { sourceMatchesSelectedWebRef } from './missionWebRetrievalSelection.js'
+import { primaryObservedWebUrl, normalizedWebTargetKey } from './missionWebRetrievalSelection.js'
 
 /** Mission admission for a source record (search index filtering and pre-fetch gate). */
 export function sourceAdmittedForMission(source: SourceRecord, mission: ResearchMissionV2): boolean {
@@ -44,7 +44,10 @@ export function sourceAdmittedForMission(source: SourceRecord, mission: Research
     }
     const selectedWeb = mission.source_policy.selected_web_refs ?? []
     if (selectedWeb.length > 0) {
-      if (!selectedWeb.some((ref) => sourceMatchesSelectedWebRef(source, ref))) {
+      const primary = primaryObservedWebUrl(source)
+      if (!primary) return false
+      const primaryKey = normalizedWebTargetKey(primary)
+      if (!selectedWeb.some((ref) => normalizedWebTargetKey(ref) === primaryKey)) {
         return false
       }
     }

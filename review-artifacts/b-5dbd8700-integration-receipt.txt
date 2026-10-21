@@ -1,0 +1,44 @@
+B branch integration receipt (offline prep)
+==========================================
+Base B HEAD before integration: 239801cbf39d792f604468ab77134c4a7d1d8a38
+Integrated A published checkpoint: origin/pr-406-head @ 5dbd870070bba0a5d0ba16b8b2feed203afcebf3
+  - e5f028ce: multi-web selected_web_refs, retrieval persistence fence, G-L2 mission refs
+  - 5dbd8700: buildSynthesizeReportModelInput + question_coverage in synthesis path
+
+Conflict reconciliation (explicit)
+----------------------------------
+Preserved B-owned:
+  - semanticQuestionCoverage.production.reciprocal.test.ts
+  - durableResearchStore.questionCoverage.conformance.test.ts
+  - reportFinalizationEvidence.attempt4.regression.test.ts + blob b772baa5 (unchanged bytes)
+  - generalAdapterTwoCanonicalSources.actualPort.reciprocal.test.ts (legacy candidates[0] slice)
+  - missionWebRetrieval.actualPort.reciprocal.test.ts
+  - campaign preflight scripts + PROPOSED-B-CAMPAIGN-PREFLIGHT-SHARED.md
+
+Taken from A (production + A negative-row tests):
+  - missionWebRetrievalSelection.ts + .test.ts (alias vs ref, duplicate refs/URLs, discover miss direct acquire)
+  - researchRetrievalLoop.ts + .test.ts + .multiWeb.production.test.ts (dispatch counts, persistence fence)
+  - buildSynthesizeReportModelInput.ts + .test.ts
+  - researchEndToEndPass.ts + related tests
+  - G-L2-mission.json + arxiv cache fixtures; fetch/admission/resolution deps
+
+Excluded from A import:
+  - review-artifacts/general-g-l1-attempt4-evidence-subset.json (same blob as B; B regression semantics retained)
+  - A attempt4QuestionCoverageDerived overlay (unused; B uses synthetic question_coverage slice in test)
+
+Negative / ownership rows exercised (production path, not testSupport substitutes)
+---------------------------------------------------------------------------------
+  - missionWebRetrievalSelection.test.ts: selected-ref vs alias URL, duplicate refs, direct acquire on discover miss
+  - researchRetrievalLoop.test.ts: distinct fetch op IDs; persistence failure after partial write (single settlement, no second fetch/passages)
+  - researchComposedRetrievalLoop.compositionOwnership.reciprocal.test.ts: foreign-owner replacement fences later dispatch/evidence
+  - durableResearchStore.questionCoverage.conformance.test.ts: close + new-store reopen retains question_coverage
+
+Proof (this workspace; not a claim of independent full CI)
+----------------------------------------------------------
+  npm --prefix babel-cli run typecheck  -> exit 0
+  npm --prefix babel-cli run build      -> exit 0
+  npm --prefix babel-cli run test:research-v2-g-l2-preflight -> ok
+  npm --prefix babel-cli run test:research-v2-g-l3-preflight -> ok
+  Focused node --test suite: 30 pass / 0 fail (see b-5dbd8700-focused-production.tap.txt)
+
+A owns further production fixes; B reports concrete failures via tests only.

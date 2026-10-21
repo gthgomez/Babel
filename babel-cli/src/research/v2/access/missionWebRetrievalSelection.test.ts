@@ -4,8 +4,9 @@ import { ResearchMissionV2Schema } from '../contracts/mission.js'
 import { RESEARCH_V2_CONTRACT_VERSION } from '../contracts/version.js'
 import type { SourceRecord } from '../contracts/sources.js'
 import {
+  bindWebSourceToMissionRef,
   resolveMissionWebRetrievalCandidates,
-  sourceMatchesSelectedWebRef,
+  sourcePrimaryUrlMatchesSelectedWebRef,
 } from './missionWebRetrievalSelection.js'
 
 const baseMission = ResearchMissionV2Schema.parse({
@@ -46,44 +47,75 @@ const baseMission = ResearchMissionV2Schema.parse({
   },
 })
 
-function webSource(id: string, url: string): SourceRecord {
+function webSource(id: string, primaryUrl: string, extraUrls: string[] = []): SourceRecord {
   return {
     source_id: id,
     kind: 'web',
-    canonical_key: url,
-    observed_urls: [url],
+    canonical_key: extraUrls[0] ?? primaryUrl,
+    observed_urls: [primaryUrl, ...extraUrls],
     title: id,
   }
 }
 
 describe('missionWebRetrievalSelection', () => {
-  it('matches selected refs with normalized URL keys', () => {
+  it('matches selected refs on primary observed_urls[0] only', () => {
     const url = 'https://developer.mozilla.org/en-US/docs/Web/API/Fetch_API'
     const source = webSource('a', url)
-    assert.ok(sourceMatchesSelectedWebRef(source, url))
+    assert.ok(sourcePrimaryUrlMatchesSelectedWebRef(source, url))
+    const aliasOnly = webSource(
+      'b',
+      'https://developer.mozilla.org/en-US/docs/other',
+      [url],
+    )
+    assert.equal(sourcePrimaryUrlMatchesSelectedWebRef(aliasOnly, url), false)
   })
 
-  it('resolves mission ref order with dedupe and missing-ref limitations', () => {
+  it('resolves mission ref order with dedupe and binds fetch URL to observed_urls[0]', () => {
     const mdn = webSource('mdn', 'https://developer.mozilla.org/en-US/docs/Web/API/Fetch_API')
     const cf = webSource('cf', 'https://developers.cloudflare.com/workers/')
     const resolution = resolveMissionWebRetrievalCandidates([cf, mdn, mdn], baseMission)
     assert.equal(resolution.slots.length, 2)
-    assert.equal(resolution.slots[0]?.slotId, 'web-ref-0')
-    assert.equal(resolution.slots[0]?.candidate.source_id, 'mdn')
-    assert.equal(resolution.slots[1]?.slotId, 'web-ref-1')
-    assert.equal(resolution.slots[1]?.candidate.source_id, 'cf')
+    assert.equal(resolution.slots[0]?.candidate.observed_urls[0], mdn.observed_urls[0])
+    assert.equal(resolution.slots[1]?.candidate.observed_urls[0], cf.observed_urls[0])
     assert.deepEqual(resolution.limitations, [])
   })
 
-  it('records missing refs when discover lacks an admitted hit', () => {
+  it('dedupes duplicate mission refs to a single fetch target', () => {
+    const mission = ResearchMissionV2Schema.parse({
+      ...baseMission,
+      source_policy: {
+        ...baseMission.source_policy,
+        selected_web_refs: [
+          'https://developer.mozilla.org/en-US/docs/Web/API/Fetch_API',
+          'https://developer.mozilla.org/en-US/docs/Web/API/Fetch_API',
+        ],
+      },
+    })
+    const mdn = webSource('mdn', 'https://developer.mozilla.org/en-US/docs/Web/API/Fetch_API')
+    const resolution = resolveMissionWebRetrievalCandidates([mdn], mission)
+    assert.equal(resolution.slots.length, 1)
+    assert.ok(resolution.limitations.some((l) => l.startsWith('retrieval_web_ref_duplicate:')))
+  })
+
+  it('direct-acquires selected refs when discover omits them', () => {
     const mdn = webSource('mdn', 'https://developer.mozilla.org/en-US/docs/Web/API/Fetch_API')
     const resolution = resolveMissionWebRetrievalCandidates([mdn], baseMission)
-    assert.equal(resolution.slots.length, 1)
-    assert.ok(
-      resolution.limitations.some((l) =>
-        l.startsWith('retrieval_web_ref_missing:https://developers.cloudflare.com/workers'),
-      ),
+    assert.equal(resolution.slots.length, 2)
+    assert.equal(
+      resolution.slots[1]?.candidate.observed_urls[0],
+      'https://developers.cloudflare.com/workers/',
     )
+  })
+
+  it('rebinds discover alias hits to mission ref before fetch', () => {
+    const ref = 'https://developer.mozilla.org/en-US/docs/Web/API/Fetch_API'
+    const discoverHit = webSource(
+      'alias',
+      'https://developer.mozilla.org/en-US/docs/alias-primary',
+      [ref],
+    )
+    const bound = bindWebSourceToMissionRef(discoverHit, ref)
+    assert.equal(bound.observed_urls[0], ref)
   })
 
   it('legacy mode keeps first discover candidate (fetch-time admission unchanged)', () => {

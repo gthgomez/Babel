@@ -19,6 +19,7 @@ describe('G-L2 campaign mission fixture', () => {
     const domains = mission.source_policy.allowed_web_domains ?? []
     assert.ok(domains.includes('developer.mozilla.org'))
     assert.ok(domains.includes('developers.cloudflare.com'))
+    assert.equal((mission.source_policy.selected_web_refs ?? []).length, 2)
     assert.deepEqual(outcomes.acceptance_scenario, 'G-L2')
   })
 })

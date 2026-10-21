@@ -27,6 +27,10 @@
       "developer.mozilla.org",
       "developers.cloudflare.com"
     ],
+    "selected_web_refs": [
+      "https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Cache-Control",
+      "https://developers.cloudflare.com/cache/concepts/cache-control/"
+    ],
     "visibility_retention": {
       "source_visibility": "public",
       "retention": "excerpt_only",

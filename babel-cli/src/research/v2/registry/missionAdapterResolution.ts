@@ -58,7 +58,7 @@ export function resolveReadAdapterForSource(
   if (source.kind === 'web') {
     return byId(GENERAL_WEB_ADAPTER_ID)
   }
-  if (source.kind === 'document') {
+  if (source.kind === 'document' || source.kind === 'paper') {
     return byId(GENERAL_DOCUMENT_ADAPTER_ID)
   }
   const mediaType = options?.mediaType?.toLowerCase() ?? ''
