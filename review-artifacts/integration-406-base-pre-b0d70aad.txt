@@ -1,0 +1,28 @@
+integration_base_pr=406
+integration_base_branch=cursor/research-v2-post-review-settlement-fc31
+integration_base_commit=5a2c60a5317751cc43b141e68feb3ba116447b22
+integration_base_subject=fix(research-v2): pre-live review repairs for cancel, fetch, route, and pdfjs
+merged_into=cursor/agent-b-general-fixtures-f617
+merge_commit=f26e5d05
+recorded_at=2026-10-21T05:29:00Z
+
+production_package_flags=ci --omit=dev --omit=optional --ignore-scripts --no-audit --no-fund
+production_package_command=review-artifacts/production-package-reciprocal-command.txt
+
+prior_artifacts_preserved=
+  integration-406-production-package-reciprocal-run-pre-5a2c60a5.txt
+  integration-406-base-pre-5a2c60a5.txt
+
+offline_reciprocal_tap_5a2c60a5=review-artifacts/integration-406-reciprocal-5a2c60a5.tap.txt (13/13)
+staged_proof_receipt_5a2c60a5=review-artifacts/integration-406-production-package-reciprocal-run-5a2c60a5.txt
+
+staged_resolved_paths_5a2c60a5 (esm isolation JSON in receipt):
+  stageReal=/tmp/babel-prod-reciprocal-stage-*/ 
+  pdfjsReal=.../node_modules/pdfjs-dist/package.json
+  canvasPkgReal=.../node_modules/@napi-rs/canvas/package.json (canvas_version=0.1.80)
+  canvasNativeReal=null — probe stderr: Failed to load native binding; optional platform packages still omitted by --omit=optional
+
+staged_outcome_5a2c60a5=probe_failed extraction_failed: DOMMatrix is not defined
+  stderr: Failed to load native binding (@napi-rs/canvas)
+
+live_model_policy=OpenRouter ONLY (no OpenCode credits/calls); B work remains offline package/fixture validation

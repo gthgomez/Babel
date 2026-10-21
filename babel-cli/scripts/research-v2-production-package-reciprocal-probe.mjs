@@ -107,9 +107,19 @@ if (readResult.status !== 'ok') {
   throw new Error(`production-package reciprocal PDF read failed: ${detail}`)
 }
 assert.equal(readResult.passages.length, 2, 'expected two page passages from two-page fixture')
+const extractedPageText = []
 for (const passage of readResult.passages) {
   assert.equal(passage.locator.kind, 'page')
+  if (passage.text_ref.mode === 'inline') {
+    extractedPageText.push(passage.text_ref.text ?? '')
+  }
 }
+console.log(
+  JSON.stringify({
+    pdf_extracted_page_text: extractedPageText,
+    qualification: 'linux_staged_production_flags_only_not_windows_pack_qualification',
+  }),
+)
 
 // Deterministic control hook (injected stall at load stage) — not evidence of pdfjs destroy/cleanup.
 const admitted = buildAdmittedContent('op-cancel-prod', source.source_id, 'rev', pdfBytes, 'application/pdf')

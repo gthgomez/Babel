@@ -1,0 +1,47 @@
+# generated 2026-10-21T05:29:53.525Z
+outcome=probe_failed
+stageRoot=/tmp/babel-prod-reciprocal-stage-5Lteev
+production_npm_ci=ci --omit=dev --omit=optional --ignore-scripts --no-audit --no-fund
+canvas_package_json_present=true
+pdfjs_package_json_present=true
+canvas_version=0.1.80
+Authoritative @napi-rs/canvas direct dependency + target-platform native install are Agent A #406 package repair (optional platform lock entries remain omitted by --omit=optional until A fixes). B does not edit package.json.
+--- npm ci (tail) ---
+
+added 50 packages in 1s
+
+--- esm isolation stdout ---
+{"marker":"research-v2-production-package-esm-isolation-probe: ok","stageReal":"/tmp/babel-prod-reciprocal-stage-5Lteev","pdfjsReal":"/tmp/babel-prod-reciprocal-stage-5Lteev/node_modules/pdfjs-dist/package.json","canvasPkgReal":"/tmp/babel-prod-reciprocal-stage-5Lteev/node_modules/@napi-rs/canvas/package.json","canvasNativeReal":null}
+
+--- esm isolation stderr ---
+
+--- probe error ---
+Command failed: /exec-daemon/node /tmp/babel-prod-reciprocal-stage-5Lteev/reciprocal/probe.mjs
+Warning: Cannot load "@napi-rs/canvas" package: "Error: Failed to load native binding".
+Warning: Cannot polyfill `DOMMatrix`, rendering may be broken.
+Warning: Cannot polyfill `ImageData`, rendering may be broken.
+Warning: Cannot polyfill `Path2D`, rendering may be broken.
+file:///tmp/babel-prod-reciprocal-stage-5Lteev/reciprocal/probe.mjs:107
+  throw new Error(`production-package reciprocal PDF read failed: ${detail}`)
+        ^
+
+Error: production-package reciprocal PDF read failed: extraction_failed: DOMMatrix is not defined
+    at file:///tmp/babel-prod-reciprocal-stage-5Lteev/reciprocal/probe.mjs:107:9
+
+Node.js v22.23.3
+
+--- probe stdout ---
+
+--- probe stderr ---
+Warning: Cannot load "@napi-rs/canvas" package: "Error: Failed to load native binding".
+Warning: Cannot polyfill `DOMMatrix`, rendering may be broken.
+Warning: Cannot polyfill `ImageData`, rendering may be broken.
+Warning: Cannot polyfill `Path2D`, rendering may be broken.
+file:///tmp/babel-prod-reciprocal-stage-5Lteev/reciprocal/probe.mjs:107
+  throw new Error(`production-package reciprocal PDF read failed: ${detail}`)
+        ^
+
+Error: production-package reciprocal PDF read failed: extraction_failed: DOMMatrix is not defined
+    at file:///tmp/babel-prod-reciprocal-stage-5Lteev/reciprocal/probe.mjs:107:9
+
+Node.js v22.23.3

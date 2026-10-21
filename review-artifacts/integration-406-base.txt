@@ -1,27 +1,32 @@
 integration_base_pr=406
-integration_base_branch=cursor/research-v2-post-review-settlement-fc31
-integration_base_commit=5a2c60a5317751cc43b141e68feb3ba116447b22
-integration_base_subject=fix(research-v2): pre-live review repairs for cancel, fetch, route, and pdfjs
+integration_base_checkpoint=b0d70aaddb6c77b80d6942a1086afd883f761b65
+integration_head=4b426cd34759b55a9a629cf02bf4cd2f4a6215a1
+integration_head_note=merge commit integrating A b0d70aad; probe PDF text log in follow-up commit on branch
 merged_into=cursor/agent-b-general-fixtures-f617
-merge_commit=f26e5d05
-recorded_at=2026-10-21T05:29:00Z
-
-production_package_flags=ci --omit=dev --omit=optional --ignore-scripts --no-audit --no-fund
-production_package_command=review-artifacts/production-package-reciprocal-command.txt
+recorded_at=2026-10-21T05:57:00Z
 
 prior_artifacts_preserved=
+  integration-406-production-package-reciprocal-run-pre-b0d70aad.txt (copy of 5a2c60a5 run)
+  integration-406-production-package-reciprocal-run-5a2c60a5.txt
   integration-406-production-package-reciprocal-run-pre-5a2c60a5.txt
-  integration-406-base-pre-5a2c60a5.txt
+  integration-406-base-pre-b0d70aad.txt
 
-offline_reciprocal_tap_5a2c60a5=review-artifacts/integration-406-reciprocal-5a2c60a5.tap.txt (13/13)
-staged_proof_receipt_5a2c60a5=review-artifacts/integration-406-production-package-reciprocal-run-5a2c60a5.txt
+production_package_flags=ci --omit=dev --omit=optional --ignore-scripts --no-audit --no-fund
+platform_binding_after_ci_linux=@napi-rs/canvas-linux-x64-gnu (A-owned installCanvasPlatformBinding)
 
-staged_resolved_paths_5a2c60a5=
-  pdfjsReal=/tmp/.../node_modules/pdfjs-dist/package.json (under stage; see receipt esm isolation JSON)
-  canvas_package_json_present=true canvas_version=0.1.80
-  canvasNativeReal=null (optional @napi-rs/canvas-* omitted by --omit=optional; native binding load failed)
+linux_staged_proof_b0d70aad=review-artifacts/integration-406-production-package-reciprocal-run-b0d70aad.txt
+linux_staged_outcome=probe_ok
+linux_not_windows_qualification=explicit in probe JSON qualification field; Windows pack qualification remains separate (babel-desktop package-windows.mjs)
 
-staged_outcome_5a2c60a5=probe_failed extraction_failed: DOMMatrix is not defined
-  stderr: Failed to load native binding (@napi-rs/canvas)
+resolved_module_paths_b0d70aad=
+  canvas_package_json=.../node_modules/@napi-rs/canvas/package.json
+  pdfjs_entry=.../node_modules/pdfjs-dist/legacy/build/pdf.mjs
+  canvas_platform_binding_package_json=.../node_modules/@napi-rs/canvas-linux-x64-gnu/package.json
 
-live_model_policy=OpenRouter ONLY (no OpenCode credits/calls); B work remains offline package/fixture validation
+pdf_extracted_page_text_b0d70aad=
+  Page one: retention 90 days.
+  Page two: effective 2026-03-15.
+
+offline_reciprocal_b0d70aad=review-artifacts/integration-406-reciprocal-b0d70aad.tap.txt (13/13)
+
+live_model_policy=OpenRouter ONLY; no live calls in this slice

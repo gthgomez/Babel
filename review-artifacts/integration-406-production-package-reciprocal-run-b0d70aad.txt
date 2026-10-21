@@ -1,0 +1,24 @@
+# generated 2026-10-21T05:56:25.994Z
+outcome=probe_ok
+stageRoot=/tmp/babel-prod-reciprocal-stage-GYtvnC
+production_npm_ci=ci --omit=dev --omit=optional --ignore-scripts --no-audit --no-fund
+platform_binding_installed=@napi-rs/canvas-linux-x64-gnu
+canvas_package_json_present=true
+pdfjs_package_json_present=true
+canvas_version=0.1.80
+module_paths={"canvas_package_json":"/tmp/babel-prod-reciprocal-stage-GYtvnC/node_modules/@napi-rs/canvas/package.json","pdfjs_entry":"/tmp/babel-prod-reciprocal-stage-GYtvnC/node_modules/pdfjs-dist/legacy/build/pdf.mjs","canvas_platform_binding_package_json":"/tmp/babel-prod-reciprocal-stage-GYtvnC/node_modules/@napi-rs/canvas-linux-x64-gnu/package.json"}
+A #406: direct @napi-rs/canvas + pdfjs-dist in dependencies; platform binding installed after npm ci --omit=optional; dist loads canvas before pdfjs (DOMMatrix).
+--- npm ci (tail) ---
+
+added 50 packages in 1s
+
+--- esm isolation stdout ---
+{"marker":"research-v2-production-package-esm-isolation-probe: ok","stageReal":"/tmp/babel-prod-reciprocal-stage-GYtvnC","pdfjsReal":"/tmp/babel-prod-reciprocal-stage-GYtvnC/node_modules/pdfjs-dist/package.json","canvasNativeReal":null}
+
+--- esm isolation stderr ---
+
+--- probe stdout ---
+{"pdf_extracted_page_text":["Page one: retention 90 days.","Page two: effective 2026-03-15."],"qualification":"linux_staged_production_flags_only_not_windows_pack_qualification"}
+research-v2-production-package-reciprocal-probe: ok
+
+--- probe stderr ---
