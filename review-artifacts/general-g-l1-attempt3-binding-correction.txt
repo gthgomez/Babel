@@ -22,6 +22,9 @@ provider_http_request_count=
 costs=
   - usage_settlement in attempt3 store (652 in, 32000 out, ~$0.004328364 reported) remains REAL reported accounting evidence even though e912/dist binding for fetch was unproven and unused.
 
+empty_response_metadata_handoff=review-artifacts/a-empty-response-metadata-handoff.txt
+empty_response_regression_test=babel-cli/src/research/v2/model/providerResearchModelBridge.emptyResponseMetadataHandoff.test.ts
+
 next_execution_rule=
   - Use single detached A-reviewed commit worktree; npm run build IN THAT worktree; record contemporaneous HEAD, tree, absolute bin + dist realpaths and sha256; run live from SAME worktree cwd.
   - Prepared offline workspace: review-artifacts/a-e912-execution-workspace-prep.json (no model call until coordinator release).

@@ -1,0 +1,51 @@
+schema=research-v2-empty-response-metadata-handoff/v1
+owner_implementation=Agent_A_shared_runner_and_research_v2_contracts
+owner_regression_evidence=Agent_B
+no_model_call_for_diagnosis=true
+attempt3_context=provider_invoke_failed empty_response; usage_settlement 652/32000 persisted; finish_reason and reasoning split not in store
+
+request_local_hook_source=
+  RunnerCallbacks.onInvocationCompleted receives ProviderInvocationCompleted (babel-cli/src/runners/base.ts).
+  DeepInfra/OpenRouter path: deepInfraApi notifyCompleted() builds completion with:
+    - status delivered|failed
+    - usage_metadata (only when status===delivered) via getLastInvocationMetadata()
+    - normalized_finish_reason, failure_attribution on event (not only inside usage_metadata)
+    - provider_request_id, actual_attempt, max_attempts on failed path via failure_receipt
+    - requested_output_budget, effective_output_budget on event
+    - output_digest (sha256 of visible assembled text; content-free)
+  Empty visible text path: _executeRequest still calls notifyCompleted('delivered', ..., text='', ...) before execute() throws empty_response StructuredOutputError.
+
+research_v2_bridge_gap=
+  providerResearchModelBridge.ts captures only event.usage_metadata into invocationMeta.
+  usageFromMetadata maps prompt_tokens→input_tokens, completion_tokens→output_tokens, cost only.
+  Does NOT map: actual_reasoning_tokens→usage_settlement.reasoning_tokens (schema allows reasoning_tokens).
+  Does NOT persist: event.normalized_finish_reason, provider_request_id, output_digest length/presence, effective_output_budget.
+  settleExternalOperation / ExternalOperationCompletionSchema has no provider_invoke_diagnostics field today.
+
+attempt3_store_observed=
+  Only usage_settlement on external_operation_completed; no finish_reason, no reasoning_tokens, no request id, no content length.
+
+proposed_bounded_persist_fields (A contract + bridge; never secrets or full reasoning):
+  provider_invoke_diagnostics optional on ExternalOperationCompletion:
+    normalized_finish_reason: string (babel-normalized enum string)
+    visible_content_present: boolean
+    visible_content_byte_length: non-negative int (UTF-8 bytes of assembled visible model text pre-validation)
+    output_digest: hex sha256 (already computed in hook; no body)
+    input_tokens, output_tokens, reasoning_tokens: non-negative ints (from usage_metadata / usage block)
+    requested_output_budget: int|null
+    effective_output_budget: int|null
+    provider_request_id: string|null (gateway request id when exposed; NOT auth headers)
+    inference_id: string (runner-local correlation; optional if redundant with provider_request_id)
+  EXCLUDE: authorization headers, raw reasoning/thinking text, full model payload, tool args bodies.
+
+proposed_runner_touchpoints (A owns; B does not fork runner):
+  - Ensure delivered-path onInvocationCompleted always includes usage_metadata with actual_reasoning_tokens when provider reports them.
+  - Optional: map completion_tokens vs reasoning split per OpenRouter usage accounting docs into RunnerInvocationMetadata.
+  - Bridge: extend usageFromMetadata OR attach provider_invoke_diagnostics from full ProviderInvocationCompleted event on both failed and ok outcomes.
+
+bounded_regression (B):
+  babel-cli/src/research/v2/model/providerResearchModelBridge.emptyResponseMetadataHandoff.test.ts
+  Characterizes current drop of hook fields; documents expected persistence contract for A follow-up.
+
+upstream_http_retry_count=
+  Hooks expose actual_attempt/max_attempts on failure_receipt path; attempt3 empty path used delivered status — retry count remains uncaptured in store unless A persists failure_receipt or diagnostics.
