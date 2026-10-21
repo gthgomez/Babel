@@ -21,3 +21,12 @@
 ## Configuration note (not matrix base)
 
 `ba45f328` makes **`exa_lite`** the default admitted search provider with DDG fallback; matrix preflight @ `3245d3d8` still observed **`duckduckgo_html_fallback`** unless env overrides.
+
+## Advance (2026-10-21)
+
+Corrections and new offline proofs: [`ba45f328-readiness-matrix-advance.json`](./ba45f328-readiness-matrix-advance.json)
+
+- **G-L3:** removed erroneous “separate discover iterations” blocker; both python.org `selected_web_refs` fetch in one loop @ ba45.
+- **T-L1:** LangGraph pin fixed (`3cd57c03…`); default 8-word discover query **0 hits**; use `--discover-query "research v2 persistence"` for Babel; single-query / two-pin limitation documented.
+- **T-L2:** **BLOCKED** by 200KB host clamp vs 2.2MB paper (not merely unrun).
+- **X-L1:** owner lifecycle harness test (not `cancel-resume-once` fixture journey).

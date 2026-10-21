@@ -7,7 +7,14 @@
     "artifact": "review-artifacts/a3245d3d8-G-L3-T-L1-T-L2-X-L1-readiness-matrix.json",
     "proof_log": "review-artifacts/a3245d3d8-readiness-matrix-run.log",
     "scenarios": ["G-L3", "T-L1", "T-L2", "X-L1"],
-    "note": "Read-only matrix on A settlement runtime; not rebinding attempt4 or 5dbd8700 frozen receipts."
+    "note": "Read-only matrix on A settlement runtime; not rebinding attempt4 or 5dbd8700 frozen receipts.",
+    "advance": {
+      "revision": "ba45f3280d32765979c43995006d77ad0f8443aa",
+      "artifact": "review-artifacts/ba45f328-readiness-matrix-advance.json",
+      "proof_log": "review-artifacts/ba45f328-readiness-matrix-run.log",
+      "t_l1_pin_resolution": "review-artifacts/t-l1-langgraph-pin-resolution.json",
+      "t_l1_discover_query": "review-artifacts/t-l1-discover-query-verification.json"
+    }
   },
   "runtime_checkpoints": {
     "production_finalizer_go": "08cc2986507b7549be04fe6d49ccfc995080e351",

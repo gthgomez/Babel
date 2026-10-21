@@ -1,0 +1,72 @@
+{
+  "schema": "research-v2-acceptance-readiness-matrix-advance/v1",
+  "generated_at_utc": "2026-10-21T13:42:00.000Z",
+  "supersedes_partially": "review-artifacts/a3245d3d8-G-L3-T-L1-T-L2-X-L1-readiness-matrix.json",
+  "preserves_additively": [
+    "review-artifacts/a3245d3d8-readiness-matrix-run.log",
+    "review-artifacts/a3245d3d8-technical-campaign-preflight.json"
+  ],
+  "authority_revision": "ba45f3280d32765979c43995006d77ad0f8443aa",
+  "authority_subject": "feat(research-v2): default admitted web search to exa_lite with DDG fallback",
+  "prior_revision": "3245d3d8b01c9a3f0b1deebf4a58d86219828fd8",
+  "build_proof_note": "3245d3d8 typecheck in a3245d3d8-readiness-matrix-run.log is historical; current built-runtime proof is B-branch tests @ matrix advance commit (see ba45f328-readiness-matrix-run.log).",
+  "not_run_at_ba45": [
+    "generalAdapterTwoCanonicalSources.actualPort.reciprocal.test.ts (absent on settlement SHA — B-branch-only path; status not_run not fail)"
+  ],
+  "corrections": {
+    "G-L3": {
+      "removed_blockers": ["sequential_discover_iterations"],
+      "verified_behavior": "G-L3-mission.json selected_web_refs lists both python.org URLs; researchRetrievalLoop resolves slots and fetches each sequentially in one admitted iteration when selected_web_refs is set (missionWebRetrievalSelection + slot loop).",
+      "c_executor": "Agent C preparing one authorized G-L3 diagnostic (out of scope for B; no live model/Exa here).",
+      "search_at_ba45": "default production provider exa_lite with DDG fallback (ba45f328)"
+    },
+    "technical_composed_retrieval": {
+      "removed_blockers": ["blanket_single_candidate_per_pass"],
+      "verified_behavior": "technicalRetrievalComposition plans multiple repository_pin and document_ref slots; researchComposedRetrievalLoop executes distinct operation IDs per slot."
+    },
+    "T-L1": {
+      "concrete_blockers": [
+        {
+          "id": "invalid_langgraph_pin_resolved",
+          "status": "mitigated_in_fixtures",
+          "detail": "d2c584a… → 3cd57c03… (see t-l1-langgraph-pin-resolution.json)"
+        },
+        {
+          "id": "default_eight_word_discover_query_zero_hits",
+          "status": "active",
+          "detail": "CLI default first-8-word query matches 0 repo paths; use --discover-query \"research v2 persistence\" for Babel (see t-l1-discover-query-verification.json)"
+        },
+        {
+          "id": "single_discover_query_two_pins",
+          "status": "active",
+          "detail": "One --discover-query cannot simultaneously hit Babel persistence paths and LangGraph libs/checkpoint paths; per-pin queries or multiple passes required."
+        }
+      ],
+      "live_acceptance": "unrun"
+    },
+    "T-L2": {
+      "status": "blocked_not_unrun",
+      "detail": "DEFAULT_MAX_ADMITTED_BYTES=200000 clamps mission 2.3MB admitted_document_sources; full 2,215,244-byte paper cannot pass production host fetch until A wires explicit scoped CLI document budget.",
+      "offline_proof": "T-L2-document-byte-budget.reciprocal.test.ts (default rejection + raised-ceiling characterization)",
+      "arxiv_cache_11_11": "mutable-locator synthetic / manifest only — not full-paper extraction acceptance"
+    },
+    "X-L1": {
+      "offline_harness": "babel-cli/src/research/v2/contracts/x-l1-owner-lifecycle.harness.test.ts",
+      "not_live_proof": "babel research v2 cancel-resume-once manufactures terminal; harness uses owner cancel request + resumeResearchContinuation + host_authorization_ref",
+      "live_acceptance": "unrun"
+    }
+  },
+  "new_offline_tests": {
+    "commands": [
+      "node --import tsx --test babel-cli/src/research/v2/fixtures/campaign/T-L1-discover-query.reciprocal.test.ts",
+      "node --import tsx --test babel-cli/src/research/v2/fixtures/campaign/T-L2-document-byte-budget.reciprocal.test.ts",
+      "node --import tsx --test babel-cli/src/research/v2/contracts/x-l1-owner-lifecycle.harness.test.ts"
+    ],
+    "result": "8/8 pass on B branch advance commit"
+  },
+  "supporting_artifacts": [
+    "review-artifacts/t-l1-langgraph-pin-resolution.json",
+    "review-artifacts/t-l1-discover-query-verification.json",
+    "review-artifacts/ba45f328-readiness-matrix-run.log"
+  ]
+}

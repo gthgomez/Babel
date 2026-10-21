@@ -27,7 +27,7 @@
         "provider": "github",
         "repo_id": "github:langchain-ai/langgraph",
         "full_name": "langchain-ai/langgraph",
-        "commit_sha": "d2c584a238566d2bfd7d28e053a94e3a9af1ffd7"
+        "commit_sha": "3cd57c038ad827d05f80c6488adea9994156c58c"
       }
     ],
     "visibility_retention": {

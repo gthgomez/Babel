@@ -23,6 +23,18 @@
     "allowed_source_classes": ["repository_file", "document", "structured"],
     "allowed_web_domains": ["github.com", "raw.githubusercontent.com", "arxiv.org"],
     "selected_document_refs": ["https://arxiv.org/pdf/1706.03762.pdf"],
+    "admitted_document_sources": [
+      {
+        "document_ref": "https://arxiv.org/pdf/1706.03762.pdf",
+        "content_pin_kind": "mutable_locator_content_digest",
+        "wire_byte_budget": 2300000,
+        "decompressed_byte_budget": 2300000,
+        "expected_content_sha256": "bdfaa68d8984f0dc02beaca527b76f207d99b666d31d1da728ee0728182df697",
+        "expected_byte_length": 2215244,
+        "require_complete_body": true,
+        "expected_pdf_page_count": 15
+      }
+    ],
     "visibility_retention": {
       "source_visibility": "public",
       "retention": "excerpt_only",

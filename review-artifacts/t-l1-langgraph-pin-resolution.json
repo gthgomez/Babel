@@ -1,0 +1,25 @@
+{
+  "schema": "research-v2-t-l1-langgraph-pin-resolution/v1",
+  "verified_at_utc": "2026-10-21T13:40:00.000Z",
+  "invalid_pin": {
+    "commit_sha": "d2c584a238566d2bfd7d28e053a94e3a9af1ffd7",
+    "github_api": "GET https://api.github.com/repos/langchain-ai/langgraph/commits/d2c584a238566d2bfd7d28e053a94e3a9af1ffd7",
+    "http_status": 422,
+    "message": "No commit found for SHA"
+  },
+  "replacement": {
+    "commit_sha": "3cd57c038ad827d05f80c6488adea9994156c58c",
+    "git_tree_sha": "a8aa3b138b6036c25331712af8ed8b3f0a4a0fda",
+    "commit_subject": "fix(checkpoint): reject NUL bytes in namespace labels (#9383)",
+    "committer_date": "2026-10-21T12:22:40Z",
+    "rationale": "First reviewable public commit on langchain-ai/langgraph default branch at verification time; replaces non-resolving placeholder SHA."
+  },
+  "babel_pin_verified": {
+    "commit_sha": "e912c2f3320de0b6e1c9ff85b95b0f74d8b5323c",
+    "github_api_status": 200
+  },
+  "mission_files_updated": [
+    "babel-cli/src/research/v2/fixtures/campaign/T-L1-mission.json",
+    "babel-cli/src/research/v2/fixtures/campaign/T-L1-T-L2-PINNED-VERSIONS.json"
+  ]
+}

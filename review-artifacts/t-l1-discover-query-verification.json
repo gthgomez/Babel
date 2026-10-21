@@ -1,0 +1,25 @@
+{
+  "schema": "research-v2-t-l1-discover-query-verification/v1",
+  "verified_at_utc": "2026-10-21T13:40:00.000Z",
+  "method": "GitHub git trees API recursive=1 token-match (terms.every in path)",
+  "babel_commit": "e912c2f3320de0b6e1c9ff85b95b0f74d8b5323c",
+  "langgraph_commit": "3cd57c038ad827d05f80c6488adea9994156c58c",
+  "cli_default_eight_word_query": "Compare how the pinned Babel repository and the",
+  "default_query_babel_hits": 0,
+  "recommended_babel_discover_query": "research v2 persistence",
+  "babel_sample_paths": [
+    "babel-cli/src/research/v2/persistence/README.md",
+    "babel-cli/src/research/v2/persistence/durableResearchStore.ts"
+  ],
+  "recommended_langgraph_discover_query": "libs checkpoint",
+  "langgraph_sample_paths": [
+    "libs/checkpoint-conformance/README.md",
+    "libs/langgraph/langgraph/pregel/_checkpoint.py"
+  ],
+  "single_cli_discover_query_limitation": "Composed technical retrieval applies one discoverQuery to every repository_pin slot; Babel-optimized query does not token-match LangGraph paths in the same pass.",
+  "executor_guidance": {
+    "babel": "--discover-query \"research v2 persistence\"",
+    "langgraph_follow_up": "requires second pass or per-pin query support from A (not one eight-word default)"
+  },
+  "offline_reciprocal_test": "babel-cli/src/research/v2/fixtures/campaign/T-L1-discover-query.reciprocal.test.ts"
+}

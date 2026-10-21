@@ -20,8 +20,15 @@
     "provider": "github",
     "full_name": "langchain-ai/langgraph",
     "repo_id": "github:langchain-ai/langgraph",
-    "commit_sha": "d2c584a238566d2bfd7d28e053a94e3a9af1ffd7",
-    "commit_subject": "pinned for T-L1 architecture comparison (declared selected_repository_refs)"
+    "commit_sha": "3cd57c038ad827d05f80c6488adea9994156c58c",
+    "commit_subject": "fix(checkpoint): reject NUL bytes in namespace labels (#9383)",
+    "git_tree_sha": "a8aa3b138b6036c25331712af8ed8b3f0a4a0fda",
+    "pin_resolution": {
+      "replaced_commit_sha": "d2c584a238566d2bfd7d28e053a94e3a9af1ffd7",
+      "replaced_commit_verification": "GitHub REST GET /repos/langchain-ai/langgraph/commits/{sha} → HTTP 422 No commit found",
+      "resolved_at_utc": "2026-10-21T13:35:00.000Z",
+      "resolution_basis": "official langchain-ai/langgraph default branch tip at verification (reviewable public commit)"
+    }
   },
   "profile": {
     "profile_id": "technical",

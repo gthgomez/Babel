@@ -1,0 +1,18 @@
+# authority_revision=ba45f3280d32765979c43995006d77ad0f8443aa
+# advance_over=3245d3d8b01c9a3f0b1deebf4a58d86219828fd8
+# started=2026-10-21T13:42:00Z
+
+>>> B-branch offline tests (current built runtime for matrix advance)
+cd /workspace/babel-cli
+node --import tsx --test \
+  src/research/v2/fixtures/campaign/T-L1-discover-query.reciprocal.test.ts \
+  src/research/v2/fixtures/campaign/T-L2-document-byte-budget.reciprocal.test.ts \
+  src/research/v2/contracts/x-l1-owner-lifecycle.harness.test.ts \
+  src/research/v2/fixtures/campaign/T-L1-mission.test.ts
+# tests 8 pass 8 fail 0 exit=0
+
+>>> historical note
+# a3245d3d8-readiness-matrix-run.log typecheck @ 3245d3d8 — not rebinding current runtime proof
+
+>>> ba45 G-L3 preflight (no inference)
+# see review-artifacts/ba45f328-g-l3-preflight-snippet.json
