@@ -53,7 +53,7 @@ import {
 import { mutationPathsFromSessionEvents } from "../evidence/chatRevisionBinding.js";
 import {
   executeActionWithPolicy,
-  defaultToolExecutor,
+  chatToolExecutor,
   type PolicyGatedExecutionResult,
 } from "./toolExecutor.js";
 import { governedStrReplace } from "./governedMutations.js";
@@ -775,7 +775,7 @@ export class ChatEngineActionExecutor {
             projectRoot: requireProjectRoot(this.host.options),
             context: toolContext,
             preset: "workspace_write",
-            executor: defaultToolExecutor,
+            executor: chatToolExecutor,
             onDispatchAuthorized: () => recoveredAuthorization,
             onBeforeExecutorExecute: () =>
               this.host.persistToolStartedAtExecutorDispatch(action, meta),
@@ -1309,7 +1309,7 @@ export class ChatEngineActionExecutor {
           : "workspace_write",
         toolContext,
         {
-          executor: defaultToolExecutor,
+          executor: chatToolExecutor,
           mode:
             this.host.executionProfile === "plan"
               ? "plan"
@@ -1388,7 +1388,7 @@ export class ChatEngineActionExecutor {
         if (action.type === "read_file") {
           if (r.exit_code === 0) {
             const window = selectReadWindow(r.stdout ?? "", { kind: "full" });
-            obsParts.push(formatReadObservation("read_file", target, window));
+            obsParts.push(formatReadObservation("read_file", target, window, r.stderr || undefined));
           } else {
             obsParts.push(
               formatReadFailureObservation({

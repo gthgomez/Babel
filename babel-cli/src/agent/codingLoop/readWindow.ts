@@ -203,6 +203,7 @@ export function formatReadObservation(
   tool: string,
   target: string,
   window: ReadWindow,
+  notice?: string,
 ): string {
   const banner = formatReadWindowBanner(target, window)
   const body = window.numberedText.length > 0 ? window.numberedText : '(empty window)'
@@ -210,6 +211,7 @@ export function formatReadObservation(
     `### ${tool} ${target} ${window.startLine}-${window.endLine}`,
     `exit_code: 0`,
     banner,
+    ...(notice ? [`notice: ${notice}`] : []),
     '```',
     body,
     '```',

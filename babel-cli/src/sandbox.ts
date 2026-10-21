@@ -1494,7 +1494,7 @@ export class SafeExecutor {
 
   // ── File operations ──────────────────────────────────────────────────────────
 
-  fileRead(inputPath: string, options?: { offset?: number; limit?: number }): ToolResult {
+  fileRead(inputPath: string, options?: { offset?: number; limit?: number; raw?: boolean }): ToolResult {
     try {
       const safePath = this.resolveSafeRead(inputPath);
 
@@ -1548,7 +1548,7 @@ export class SafeExecutor {
    */
   private formatFileContent(
     content: string,
-    options?: { offset?: number; limit?: number },
+    options?: { offset?: number; limit?: number; raw?: boolean },
   ): ToolResult {
     const MAX_BYTES = 100 * 1024;
     const totalBytes = Buffer.byteLength(content, 'utf-8');
@@ -1565,6 +1565,14 @@ export class SafeExecutor {
         truncatedContent = truncatedContent.substring(0, lastNewline);
       }
       capMessage = ` [truncated at ${MAX_BYTES / 1024} KB]`;
+    }
+
+    if (options?.raw) {
+      return {
+        exit_code: 0,
+        stdout: truncatedContent,
+        stderr: capMessage ? `File read limited by the ${MAX_BYTES / 1024} KB safety cap.` : '',
+      };
     }
 
     // Split into lines; remove the trailing empty element from a final \n

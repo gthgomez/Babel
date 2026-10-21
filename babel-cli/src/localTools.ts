@@ -337,6 +337,7 @@ export const ToolCallRequestSchema = z.discriminatedUnion('tool', [
   z.object({
     tool: z.literal('file_read'),
     path: z.string().min(1),
+    raw: z.boolean().optional(),
   }),
   z.object({
     tool: z.literal('file_write'),
@@ -576,7 +577,10 @@ function handleDirectoryList(
 
 function handleFileRead(req: Extract<ToolCallRequest, { tool: 'file_read' }>, context: ToolContext): ToolResult {
   // file_read is always live — reading is non-destructive.
-  return getExecutor(context.projectRoot).fileRead(req.path);
+  return getExecutor(context.projectRoot).fileRead(
+    req.path,
+    req.raw !== undefined ? { raw: req.raw } : {},
+  );
 }
 
 function handleFileWrite(req: Extract<ToolCallRequest, { tool: 'file_write' }>, context: ToolContext): ToolResult {

@@ -353,11 +353,21 @@ function runCommandToolRequest(
 }
 
 /** Map one agent action to zero or more executor tool calls (terminal actions map to none). */
-export function mapAgentActionToToolCalls(action: AgentAction): MappedToolCall[] {
+export function mapAgentActionToToolCalls(
+  action: AgentAction,
+  options: { rawFileReads?: boolean } = {},
+): MappedToolCall[] {
   const executorName = modelToolNameToExecutor(action.type);
   switch (action.type) {
     case 'read_file':
-      return [{ kind: 'execute', request: { tool: (executorName ?? 'file_read') as 'file_read', path: action.path } }];
+      return [{
+        kind: 'execute',
+        request: {
+          tool: (executorName ?? 'file_read') as 'file_read',
+          path: action.path,
+          ...(options.rawFileReads ? { raw: true } : {}),
+        },
+      }];
     case 'list_dir':
       return [{ kind: 'execute', request: { tool: (executorName ?? 'directory_list') as 'directory_list', path: action.path } }];
     case 'search':
@@ -456,13 +466,14 @@ export function isTerminalAgentAction(action: AgentAction): action is TerminalAg
 export function createToolExecutor(
   deps: {
     executeTool?: typeof executeTool;
+    rawFileReads?: boolean;
   } = {},
 ): ToolExecutor {
   const runTool = deps.executeTool ?? executeTool;
 
   return {
     mapAction(action: AgentAction): MappedToolCall[] {
-      return mapAgentActionToToolCalls(action);
+      return mapAgentActionToToolCalls(action, deps.rawFileReads ? { rawFileReads: true } : {});
     },
 
     async execute(
@@ -470,7 +481,7 @@ export function createToolExecutor(
       context: ToolContext,
       budget?: ToolExecutionBudget,
     ): Promise<ToolExecutionResult> {
-      const mapped = mapAgentActionToToolCalls(action);
+      const mapped = mapAgentActionToToolCalls(action, deps.rawFileReads ? { rawFileReads: true } : {});
       const terminal = mapped.find(
         (entry): entry is Extract<MappedToolCall, { kind: 'terminal' }> =>
           entry.kind === 'terminal',
@@ -544,6 +555,9 @@ export function createToolExecutor(
 }
 
 export const defaultToolExecutor = createToolExecutor();
+
+/** Chat formats source windows itself; other executor consumers keep the legacy presentation. */
+export const chatToolExecutor = createToolExecutor({ rawFileReads: true });
 
 function policyBlockedToolResult(
   action: AgentAction,

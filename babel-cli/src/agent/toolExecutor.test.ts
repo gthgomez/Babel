@@ -7,6 +7,7 @@ import { describe, it } from 'node:test';
 import type { ToolCallRequest, ToolContext, ToolResult } from '../localTools.js';
 import type { AgentAction } from './actions.js';
 import {
+  chatToolExecutor,
   createToolExecutor,
   executeActionWithPolicy,
   isTerminalAgentAction,
@@ -18,6 +19,7 @@ import {
   ToolExecutionCapacityError,
   DEFAULT_TOOL_BUDGET,
 } from './toolExecutor.js';
+import { formatReadObservation, selectReadWindow } from './codingLoop/readWindow.js';
 
 const context: ToolContext = {
   agentId: 'agent-b',
@@ -65,6 +67,16 @@ describe('mapAgentActionToToolCalls', () => {
         },
       ],
     );
+  });
+
+  it('requests raw source only for the Chat executor', () => {
+    const action = { type: 'read_file', path: 'src/a.ts' } as const;
+    assert.deepEqual(chatToolExecutor.mapAction(action), [
+      { kind: 'execute', request: { tool: 'file_read', path: 'src/a.ts', raw: true } },
+    ]);
+    assert.deepEqual(mapAgentActionToToolCalls(action), [
+      { kind: 'execute', request: { tool: 'file_read', path: 'src/a.ts' } },
+    ]);
   });
 
   it('maps mutating actions to file_write, patch staging, and shell_exec', () => {
@@ -127,6 +139,48 @@ describe('mapAgentActionToToolCalls', () => {
 });
 
 describe('createToolExecutor', () => {
+  it('reads original source through the local executor before applying one Chat window', async () => {
+    const projectRoot = mkdtempSync(join(tmpdir(), 'babel-chat-raw-read-'));
+    try {
+      const source = Array.from({ length: 650 }, (_, index) => `source-line-${index + 1}`).join('\n');
+      writeFileSync(join(projectRoot, 'large.txt'), source, 'utf8');
+      writeFileSync(
+        join(projectRoot, 'capped.txt'),
+        Array.from({ length: 5000 }, (_, index) => `capped-source-line-${index + 1}`.padEnd(40, 'x')).join('\n'),
+        'utf8',
+      );
+      const result = await chatToolExecutor.execute(
+        { type: 'read_file', path: 'large.txt' },
+        { ...context, projectRoot },
+      );
+      assert.equal(result.results[0]?.exit_code, 0);
+      assert.equal(result.results[0]?.stdout, source);
+      const window = selectReadWindow(result.results[0]!.stdout, { kind: 'full' });
+      const observation = formatReadObservation('read_file', 'large.txt', window);
+      assert.match(observation, /source-line-200/);
+      assert.doesNotMatch(observation, /source-line-201/);
+      assert.match(observation, /of 650/);
+      assert.doesNotMatch(observation, /1│\[Showing lines/);
+
+      const capped = await chatToolExecutor.execute(
+        { type: 'read_file', path: 'capped.txt' },
+        { ...context, projectRoot },
+      );
+      const cappedResult = capped.results[0]!;
+      assert.match(cappedResult.stderr, /100 KB safety cap/);
+      assert.ok(Buffer.byteLength(cappedResult.stdout) <= 100 * 1024);
+      const cappedObservation = formatReadObservation(
+        'read_file',
+        'capped.txt',
+        selectReadWindow(cappedResult.stdout, { kind: 'full' }),
+        cappedResult.stderr,
+      );
+      assert.match(cappedObservation, /notice: File read limited by the 100 KB safety cap/);
+    } finally {
+      rmSync(projectRoot, { recursive: true, force: true });
+    }
+  });
+
   for (const action of [
     { type: 'test_run', command: 'npm test' },
     { type: 'run_command', command: 'npm test' },
