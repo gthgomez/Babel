@@ -48,11 +48,22 @@ describe('research v2 OpenRouter model route', () => {
   it('resolveLiveResearchModelConfigForCli uses complete OpenRouter env override', () => {
     const { config, route_report } = resolveLiveResearchModelConfigForCli({
       BABEL_RESEARCH_V2_PROVIDER: 'openrouter',
-      BABEL_RESEARCH_V2_MODEL_ID: 'vendor/model',
+      BABEL_RESEARCH_V2_MODEL_ID: 'deepseek/deepseek-v4-flash-0731',
     })
     assert.equal(route_report.selection_basis, 'env_override')
     assert.equal(config.engine.provider, 'openrouter')
-    assert.equal(config.engine.modelId, 'vendor/model')
+    assert.equal(config.engine.modelId, 'deepseek/deepseek-v4-flash-0731')
+  })
+
+  it('rejects env override model_id not present in configured openrouter routes', () => {
+    assert.throws(
+      () =>
+        resolveLiveResearchModelConfigForCli({
+          BABEL_RESEARCH_V2_PROVIDER: 'openrouter',
+          BABEL_RESEARCH_V2_MODEL_ID: 'vendor/not-in-policy',
+        }),
+      /must match a configured enabled openrouter route/,
+    )
   })
 
   it('rejects non-OpenRouter env override (no silent OpenCode fallback)', () => {

@@ -50,6 +50,34 @@ export function assertCompleteResearchV2ModelEnvOverride(env: NodeJS.ProcessEnv 
   }
 }
 
+/** Runtime validation: env override model_id must match an enabled OpenRouter route in model-policy. */
+export function assertResearchV2EnvOverrideMatchesConfiguredOpenRouterRoute(
+  env: NodeJS.ProcessEnv = process.env,
+  babelRoot?: string,
+): void {
+  const provider = env.BABEL_RESEARCH_V2_PROVIDER?.trim()
+  const modelId = env.BABEL_RESEARCH_V2_MODEL_ID?.trim()
+  if (!provider || !modelId) return
+  assertResearchV2LiveModelProviderIsOpenRouter(provider)
+  const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..', '..')
+  const { config } = loadModelPolicyConfig(babelRoot ?? repoRoot)
+  const models = config.models as Record<
+    string,
+    { provider?: string; model_id?: string; enabled?: boolean }
+  >
+  const allowed = new Set<string>()
+  for (const entry of Object.values(models)) {
+    if (entry?.provider === 'openrouter' && entry.enabled !== false && entry.model_id) {
+      allowed.add(entry.model_id)
+    }
+  }
+  if (!allowed.has(modelId)) {
+    throw new Error(
+      `research v2 BABEL_RESEARCH_V2_MODEL_ID must match a configured enabled openrouter route in model-policy (got ${modelId})`,
+    )
+  }
+}
+
 /** Resolve an explicit OpenRouter backend from configured model-policy routes (no network, no secrets). */
 export function resolveResearchV2OpenRouterRouteFromPolicy(
   routeKey?: string,
@@ -122,7 +150,7 @@ export function resolveEffectiveResearchV2ModelRouteForCli(
   const provider = env.BABEL_RESEARCH_V2_PROVIDER?.trim()
   const modelId = env.BABEL_RESEARCH_V2_MODEL_ID?.trim()
   if (provider && modelId) {
-    assertResearchV2LiveModelProviderIsOpenRouter(provider)
+    assertResearchV2EnvOverrideMatchesConfiguredOpenRouterRoute(env)
     const backendKey = env.BABEL_RESEARCH_V2_BACKEND_KEY ?? 'research-v2-cli'
     return {
       route_key: null,
@@ -152,7 +180,7 @@ export function resolveLiveResearchModelConfigForCli(
       config: {
         backendKey: effective.backend_key,
         engine: {
-          provider: effective.provider as LiveResearchModelPortConfig['engine']['provider'],
+          provider: 'openrouter',
           modelId: effective.model_id,
           ...(env.BABEL_RESEARCH_V2_API_KEY_ENV
             ? { apiKeyEnvVar: env.BABEL_RESEARCH_V2_API_KEY_ENV }

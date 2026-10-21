@@ -11,9 +11,10 @@ import type {
 import type { ResearchMissionV2 } from '../contracts/mission.js'
 import {
   parsePinnedGithubBlobUrl,
+  assertImmutableRawUrlForPinnedBlob,
   pinnedGithubBlobUrlToRawContentUrl,
-  pinnedGithubRefToBlobUrl,
-  provenanceBlobUrlFromFetchHop,
+  repositoryFileBlobProvenanceFromTransportHop,
+  TechnicalRepositoryPinError,
 } from '../profiles/technical/repositoryFilePinning.js'
 import {
   AdmittedNetworkPolicyError,
@@ -125,12 +126,40 @@ export class FetchSourceAccessPort implements SourceAccessPort {
         message: 'source has no observed URL',
       }
     }
-    const fetchUrl =
-      request.source.kind === 'repository_file'
-        ? (pinnedGithubBlobUrlToRawContentUrl(observedUrl) ?? observedUrl)
-        : observedUrl
-    const pinnedBlobRef =
-      request.source.kind === 'repository_file' ? parsePinnedGithubBlobUrl(observedUrl) : null
+    let fetchUrl = observedUrl
+    let pinnedBlobRef = null
+    if (request.source.kind === 'repository_file') {
+      pinnedBlobRef = parsePinnedGithubBlobUrl(observedUrl)
+      if (!pinnedBlobRef) {
+        return {
+          operationId: request.operationId,
+          status: 'failed',
+          failureCategory: 'policy_denied',
+          message: 'repository_file observed URL is not a pinned github blob URL',
+        }
+      }
+      const rawUrl = pinnedGithubBlobUrlToRawContentUrl(observedUrl)
+      if (!rawUrl) {
+        return {
+          operationId: request.operationId,
+          status: 'failed',
+          failureCategory: 'policy_denied',
+          message: 'repository_file observed URL cannot map to immutable raw content URL',
+        }
+      }
+      try {
+        assertImmutableRawUrlForPinnedBlob(observedUrl, rawUrl)
+      } catch (err) {
+        const message = err instanceof TechnicalRepositoryPinError ? err.message : String(err)
+        return {
+          operationId: request.operationId,
+          status: 'failed',
+          failureCategory: 'policy_denied',
+          message,
+        }
+      }
+      fetchUrl = rawUrl
+    }
     if (this.options.mission) {
       const denied = validateMissionFetchAdmission(request.source, this.options.mission)
       if (denied) {
@@ -195,26 +224,38 @@ export class FetchSourceAccessPort implements SourceAccessPort {
         byte_length_received: admittedBytes.byteLength,
         truncation_reason: truncated ? 'host_byte_limit' : undefined,
       }
-      const provenanceUrls =
-        pinnedBlobRef && request.source.kind === 'repository_file'
-          ? {
-              requested_url:
-                provenanceBlobUrlFromFetchHop(response.requestedUrl, pinnedBlobRef) ??
-                pinnedGithubRefToBlobUrl(pinnedBlobRef),
-              final_url:
-                provenanceBlobUrlFromFetchHop(response.finalUrl, pinnedBlobRef) ??
-                pinnedGithubRefToBlobUrl(pinnedBlobRef),
-              redirect_chain: response.redirectChain.map(
-                (hop) =>
-                  provenanceBlobUrlFromFetchHop(hop, pinnedBlobRef) ??
-                  pinnedGithubRefToBlobUrl(pinnedBlobRef),
-              ),
-            }
-          : {
-              requested_url: response.requestedUrl,
-              final_url: response.finalUrl,
-              redirect_chain: response.redirectChain,
-            }
+      let provenanceUrls: AdmittedContent['provenance']
+      if (pinnedBlobRef && request.source.kind === 'repository_file') {
+        try {
+          provenanceUrls = {
+            requested_url: repositoryFileBlobProvenanceFromTransportHop(
+              response.requestedUrl,
+              pinnedBlobRef,
+            ),
+            final_url: repositoryFileBlobProvenanceFromTransportHop(
+              response.finalUrl,
+              pinnedBlobRef,
+            ),
+            redirect_chain: response.redirectChain.map((hop) =>
+              repositoryFileBlobProvenanceFromTransportHop(hop, pinnedBlobRef),
+            ),
+          }
+        } catch (err) {
+          const message = err instanceof TechnicalRepositoryPinError ? err.message : String(err)
+          return {
+            operationId: request.operationId,
+            status: 'failed',
+            failureCategory: 'policy_denied',
+            message,
+          }
+        }
+      } else {
+        provenanceUrls = {
+          requested_url: response.requestedUrl,
+          final_url: response.finalUrl,
+          redirect_chain: response.redirectChain,
+        }
+      }
       const admitted: AdmittedContent = {
         operation_id: request.operationId,
         revision,

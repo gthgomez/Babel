@@ -19,6 +19,7 @@ import {
   runResearchV2MissionWithOwnerSession,
 } from './researchV2MissionRun.js'
 import { fixtureModelForOfflineRun } from './researchV2FixtureRunModel.js'
+import { finalizeCancelledOwnerRunAndClose } from '../engine/ownerSessionCancellationFinalize.js'
 
 export async function runResearchV2ProductionRun(options: {
   store: string
@@ -151,6 +152,9 @@ export async function resumeResearchV2Continuation(options: {
 }): Promise<void> {
   const model = options.model ?? new FixtureResearchModelBridge()
   let owner: ResearchEngineSession | undefined
+  const cancelController = new AbortController()
+  let continuationMission: ResearchMissionV2 | null = null
+  let continuationMissionActive = false
   try {
     owner = await ResearchEngineSession.openOwner({ storeDirectory: options.store, model })
     const handle = await owner.resumeResearchContinuation({
@@ -161,40 +165,39 @@ export async function resumeResearchV2Continuation(options: {
       acknowledged_terminal_state: options.terminalState,
     })
 
-    const cancelController = new AbortController()
     const cancelWatcher = owner.watchExternalCancelRequests(cancelController)
     const signal = AbortSignal.any([cancelController.signal])
 
     let runResult: Awaited<ReturnType<typeof runResearchV2EnginePassOnOwner>> | undefined
     const shouldContinue = options.continueRun !== false
     try {
-    if (shouldContinue) {
-      let mission: ResearchMissionV2 | null = null
-      if (options.missionFile) {
-        mission = await loadResearchMissionFromFile(options.missionFile)
-      } else {
-        const inspect = await openAdmittedInspectStore(options.store)
-        const events = await inspect.listEvents(options.missionId)
-        mission = missionFromStoreEvents(events)
+      if (shouldContinue) {
+        if (options.missionFile) {
+          continuationMission = await loadResearchMissionFromFile(options.missionFile)
+        } else {
+          const inspect = await openAdmittedInspectStore(options.store)
+          const events = await inspect.listEvents(options.missionId)
+          continuationMission = missionFromStoreEvents(events)
+        }
+        if (!continuationMission) {
+          throw new Error('resume continuation requires mission.json via --mission-file or mission_created in store')
+        }
+        continuationMissionActive = true
+        const discoverQuery =
+          options.discoverQuery?.trim() ||
+          continuationMission.primary_question.split(/\s+/).slice(0, 8).join(' ')
+        runResult = await runResearchV2EnginePassOnOwner({
+          owner,
+          mission: continuationMission,
+          handle,
+          discoverQuery,
+          ...(options.model ? { model: options.model } : {}),
+          injectedOffline: options.injectedOffline === true,
+          activePlanRevisionId: options.planRevisionId,
+          planRevisionId: `${options.planRevisionId}-continued`,
+          signal,
+        })
       }
-      if (!mission) {
-        throw new Error('resume continuation requires mission.json via --mission-file or mission_created in store')
-      }
-      const discoverQuery =
-        options.discoverQuery?.trim() ||
-        mission.primary_question.split(/\s+/).slice(0, 8).join(' ')
-      runResult = await runResearchV2EnginePassOnOwner({
-        owner,
-        mission,
-        handle,
-        discoverQuery,
-        ...(options.model ? { model: options.model } : {}),
-        injectedOffline: options.injectedOffline === true,
-        activePlanRevisionId: options.planRevisionId,
-        planRevisionId: `${options.planRevisionId}-continued`,
-        signal,
-      })
-    }
     } finally {
       cancelWatcher.stop()
     }
@@ -211,7 +214,16 @@ export async function resumeResearchV2Continuation(options: {
     }
     options.print(payload, JSON.stringify(payload, null, 2))
   } finally {
-    await owner?.close()
+    if (continuationMission) {
+      await finalizeCancelledOwnerRunAndClose({
+        owner,
+        mission: continuationMission,
+        missionAppended: continuationMissionActive,
+        signal: cancelController.signal,
+      })
+    } else {
+      await owner?.close()
+    }
   }
 }
 

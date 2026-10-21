@@ -67,12 +67,33 @@ if (canvasPkg) {
     }
   }
   if (!nativeFound) {
-    console.error(
-      'esm_isolation_probe: canvas package present but native .node missing; optional @napi-rs/canvas-* platform entries omitted by --omit=optional (A must ensure target-platform install)',
-    )
-  } else {
-    canvasNativeReal = assertRealpathUnderStage('@napi-rs/canvas native binding', pathToFileURL(nativeFound))
+    const bindingPkg = process.env.BABEL_STAGED_CANVAS_BINDING_PKG
+    const platformNative = bindingPkg
+      ? join(stageReal, 'node_modules', ...bindingPkg.split('/'))
+      : null
+    const platformCandidates = platformNative
+      ? [
+          join(platformNative, 'skia.linux-x64-gnu.node'),
+          join(platformNative, 'skia.linux-arm64-gnu.node'),
+          join(platformNative, 'skia.win32-x64-msvc.node'),
+          join(platformNative, 'skia.darwin-x64.node'),
+          join(platformNative, 'skia.darwin-arm64.node'),
+        ]
+      : []
+    for (const candidate of platformCandidates) {
+      if (existsSync(candidate)) {
+        nativeFound = candidate
+        break
+      }
+    }
   }
+  if (!nativeFound) {
+    throw new Error(
+      'esm_isolation_probe: canvas platform .node missing under staged node_modules after binding install',
+    )
+  }
+  canvasNativeReal = assertRealpathUnderStage('@napi-rs/canvas platform native binding', pathToFileURL(nativeFound))
+  await import('@napi-rs/canvas')
 }
 
 console.log(

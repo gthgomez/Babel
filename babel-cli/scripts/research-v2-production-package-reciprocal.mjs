@@ -21,6 +21,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
+  assertCanvasNativeBindingLoads,
   installCanvasPlatformBinding,
   resolveCanvasPlatformBindingPackage,
   resolveInstalledModulePaths,
@@ -44,18 +45,18 @@ function parseArg(name) {
   return hit ? hit.slice(name.length + 3) : undefined
 }
 
-function stagedChildEnv(stageRoot) {
-  const env = { BABEL_STAGED_ROOT: stageRoot }
+function stagedChildEnv(stageRoot, extra = {}) {
+  const env = { BABEL_STAGED_ROOT: stageRoot, ...extra }
   for (const key of ['PATH', 'HOME', 'LANG', 'LC_ALL', 'TMPDIR', 'SYSTEMROOT', 'TEMP', 'TMP']) {
     if (process.env[key]) env[key] = process.env[key]
   }
   return env
 }
 
-function runStagedScript(stageRoot, scriptPath) {
+function runStagedScript(stageRoot, scriptPath, extraEnv = {}) {
   return execFileSync(process.execPath, [scriptPath], {
     cwd: stageRoot,
-    env: stagedChildEnv(stageRoot),
+    env: stagedChildEnv(stageRoot, extraEnv),
     encoding: 'utf8',
     stdio: 'pipe',
     timeout: 300_000,
@@ -82,7 +83,7 @@ function canvasInstallEvidence(stageRoot) {
   }
 }
 
-function main() {
+async function main() {
   const keepStage = process.argv.includes('--keep-stage')
   const receiptPath =
     parseArg('receipt') ?? join(repoRoot, 'review-artifacts/integration-406-production-package-reciprocal-run.txt')
@@ -153,6 +154,7 @@ function main() {
       npmCli,
       nodeExec: process.execPath,
     })
+    process.env.BABEL_STAGED_CANVAS_BINDING_PKG = platformBindingInstalled
   } catch (error) {
     platformBindingError = error instanceof Error ? error.message : String(error)
     writeReceipt(receiptPath, {
@@ -169,14 +171,34 @@ function main() {
   const stageReal = realpathSync(stageRoot)
   writeFileSync(join(stageRoot, 'node_modules', '.babel-staged-esm-marker'), `${stageReal}\n`)
 
-  const canvas = canvasInstallEvidence(stageRoot)
+  let canvasNative = null
+  let canvasNativeError = ''
+  try {
+    canvasNative = await assertCanvasNativeBindingLoads(stageRoot)
+  } catch (error) {
+    canvasNativeError = error instanceof Error ? error.message : String(error)
+    writeReceipt(receiptPath, {
+      stageRoot,
+      outcome: 'canvas_native_binding_missing',
+      productionNpmCiArgs: PRODUCTION_NPM_CI_ARGS.join(' '),
+      platformBindingInstalled,
+      canvasNativeError,
+      canvas: canvasInstallEvidence(stageRoot),
+    })
+    if (!keepStage) rmSync(stageRoot, { recursive: true, force: true })
+    process.exit(1)
+  }
+
+  const canvas = { ...canvasInstallEvidence(stageRoot), canvasNativePath: canvasNative.nativePath }
 
   let esmStdout = ''
   let esmStderr = ''
   let esmExit = 0
   let esmError = ''
   try {
-    esmStdout = runStagedScript(stageRoot, join(reciprocalDir, 'esm-isolation-probe.mjs'))
+    esmStdout = runStagedScript(stageRoot, join(reciprocalDir, 'esm-isolation-probe.mjs'), {
+      BABEL_STAGED_CANVAS_BINDING_PKG: platformBindingInstalled ?? '',
+    })
   } catch (error) {
     esmExit = 1
     const err = error
@@ -275,4 +297,7 @@ function writeReceipt(path, body) {
   writeFileSync(path, text)
 }
 
-main()
+main().catch((err) => {
+  console.error(err)
+  process.exit(1)
+})
