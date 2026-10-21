@@ -9,10 +9,7 @@ explicit review/adoption — not a parallel runtime.
 | Role | SHA | Notes |
 |------|-----|--------|
 | A canonical base | `fef78559dc4a2e45ee4356c6d4269123d5a2941b` | Cherry-picked honest finalizer on B branch |
-| **B corrected candidate (production on PR #404)** | **`08cc2986`** (superseded by handoff commit after reconciliation) | Full correction in shared runtime + reciprocal tests |
-
-After handoff commit lands, use **`git rev-parse HEAD`** on `cursor/agent-b-general-fixtures-f617` for the
-authoritative corrected candidate SHA (content matches `08cc2986` production finalizer).
+| **B corrected candidate (production on PR #404)** | **`34e296709d9a84c0b8c04642c67656672c91dba7`** | Handoff: production finalizer + reciprocal tests + patch artifact (`08cc2986` carries the same runtime delta) |
 
 ## Bounded delta for A (apply or reconcile)
 
