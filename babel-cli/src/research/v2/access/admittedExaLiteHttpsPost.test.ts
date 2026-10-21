@@ -7,7 +7,8 @@ import {
   defaultAdmittedExaLiteHttpsPostDispatch,
   EXA_LITE_API_HOSTNAME,
 } from './admittedExaLiteHttpsPost.js'
-import { assertPublicNetworkTarget } from './admittedHttpGet.js'
+import { assertPublicNetworkTarget, type PublicNetworkTarget } from './admittedHttpGet.js'
+import { ExaLiteOperationDeadlineError } from './exaLiteOperationAbort.js'
 import { setExaLiteHttpsRequestForTests, type ExaLiteHttpsRequestFn } from './exaLiteHttpsClient.js'
 
 function stubHttpsRequest(onResponse: (res: IncomingMessage) => void): ExaLiteHttpsRequestFn {
@@ -141,7 +142,7 @@ describe('admittedExaLiteHttpsPost default transport', () => {
             timeoutMs: 50,
             env: { BABEL_WEB_ALLOW_PRIVATE: '1' },
           }),
-        /deadline exceeded|aborted|destroyed/i,
+        ExaLiteOperationDeadlineError,
       )
       assert.equal(reqDestroyed, true)
     } finally {
@@ -149,37 +150,38 @@ describe('admittedExaLiteHttpsPost default transport', () => {
     }
   })
 
-  it('does not dispatch HTTPS after deadline during slow admission', async () => {
+  it('settles promptly when admission never resolves, then consumes late resolution without dispatch', async () => {
     let dispatchCalled = false
-    try {
-      await assert.rejects(
-        () =>
-          admittedExaLiteHttpsPost({
-            apiKey: 'k',
-            jsonBody: { type: 'lite', query: 'q' },
-            signal: new AbortController().signal,
-            timeoutMs: 40,
-            env: { BABEL_WEB_ALLOW_PRIVATE: '1' },
-            admissionTargetResolver: async (_url, _env, signal) => {
-              await new Promise((resolve) => setTimeout(resolve, 200))
-              if (signal.aborted) {
-                throw new Error('DNS admission aborted')
-              }
-              return await assertPublicNetworkTarget(
-                new URL(`https://${EXA_LITE_API_HOSTNAME}/search`),
-                { BABEL_WEB_ALLOW_PRIVATE: '1' },
-              )
-            },
-            dispatch: async () => {
-              dispatchCalled = true
-              return { status: 200, headers: {}, bodyText: '{"results":[]}' }
-            },
-          }),
-        /DNS admission aborted|deadline exceeded|aborted/i,
-      )
-      assert.equal(dispatchCalled, false)
-    } finally {
-      setExaLiteHttpsRequestForTests(null)
-    }
+    let resolveAdmission!: (target: PublicNetworkTarget) => void
+    const admissionPending = new Promise<PublicNetworkTarget>((resolve) => {
+      resolveAdmission = resolve
+    })
+    const started = Date.now()
+    await assert.rejects(
+      () =>
+        admittedExaLiteHttpsPost({
+          apiKey: 'k',
+          jsonBody: { type: 'lite', query: 'q' },
+          signal: new AbortController().signal,
+          timeoutMs: 40,
+          env: { BABEL_WEB_ALLOW_PRIVATE: '1' },
+          admissionTargetResolver: () => admissionPending,
+          dispatch: async () => {
+            dispatchCalled = true
+            return { status: 200, headers: {}, bodyText: '{"results":[]}' }
+          },
+        }),
+      ExaLiteOperationDeadlineError,
+    )
+    assert.ok(Date.now() - started < 120, 'public await must not wait on pending admission')
+    assert.equal(dispatchCalled, false)
+    resolveAdmission(
+      await assertPublicNetworkTarget(
+        new URL(`https://${EXA_LITE_API_HOSTNAME}/search`),
+        { BABEL_WEB_ALLOW_PRIVATE: '1' },
+      ),
+    )
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    assert.equal(dispatchCalled, false)
   })
 })

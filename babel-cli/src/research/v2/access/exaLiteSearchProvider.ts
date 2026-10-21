@@ -14,7 +14,6 @@ import {
   DEFAULT_EXA_LITE_RESPONSE_MAX_BYTES,
   type AdmittedExaLiteHttpsPostDispatch,
 } from './admittedExaLiteHttpsPost.js'
-import { AdmittedNetworkPolicyError } from './admittedHttpGet.js'
 import { parseAdmittedHttpUrl } from './admittedHttpGet.js'
 import {
   createDuckDuckGoHtmlFallbackSearchProvider,
@@ -26,6 +25,7 @@ import {
   validateExaLiteSearchResponseBody,
   type SanitizedExaLiteReceiptMetadata,
 } from './exaLiteSearchResponseValidation.js'
+import { classifyExaLiteTransportFailure } from './exaLiteTransportFailure.js'
 
 export const EXA_LITE_SEARCH_PROVIDER_ID = 'exa_lite'
 
@@ -97,26 +97,6 @@ function buildExaReceipt(
   }
 }
 
-function mapTransportError(err: unknown): {
-  failureCategory: SourceAccessFailureCategory
-  message: string
-} {
-  const text = err instanceof Error ? err.message : String(err)
-  if (/aborted/i.test(text)) {
-    return { failureCategory: 'cancelled', message: 'search cancelled' }
-  }
-  if (/timed out|deadline exceeded/i.test(text)) {
-    return { failureCategory: 'timeout', message: 'configured search provider request timed out' }
-  }
-  if (/exceeds configured maxBytes/i.test(text)) {
-    return { failureCategory: 'truncated', message: 'configured search provider response exceeded size limit' }
-  }
-  if (err instanceof AdmittedNetworkPolicyError) {
-    return { failureCategory: 'policy_denied', message: 'configured search provider network policy blocked request' }
-  }
-  return { failureCategory: 'network_error', message: 'configured search provider transport failed' }
-}
-
 function isBilledEmptyExa(metadata: SanitizedExaLiteReceiptMetadata, hitCount: number): boolean {
   if (hitCount > 0) return false
   return (
@@ -131,6 +111,7 @@ export function createExaLiteSearchProvider(options: {
   transport: ExaLiteSearchTransport
   maxResults?: number
   maxResponseBytes?: number
+  postTimeoutMs?: number
   env?: NodeJS.ProcessEnv
 }): AdmittedSourceSearchProvider & {
   providerId: typeof EXA_LITE_SEARCH_PROVIDER_ID
@@ -183,6 +164,7 @@ export function createExaLiteSearchProvider(options: {
           signal: request.signal,
           env,
           maxBytes: maxResponseBytes,
+          ...(options.postTimeoutMs !== undefined ? { timeoutMs: options.postTimeoutMs } : {}),
           ...(options.transport.post ? { dispatch: options.transport.post } : {}),
         })
         if (request.signal.aborted) {
@@ -226,9 +208,6 @@ export function createExaLiteSearchProvider(options: {
         )
         return { operationId: request.operationId, status: 'ok', hits, receipt }
       } catch (err: unknown) {
-        if (request.signal.aborted) {
-          return { operationId: request.operationId, status: 'cancelled' }
-        }
         if (err instanceof ExaLiteResponseValidationError) {
           return {
             operationId: request.operationId,
@@ -237,8 +216,8 @@ export function createExaLiteSearchProvider(options: {
             message: err.message,
           }
         }
-        const mapped = mapTransportError(err)
-        if (mapped.failureCategory === 'cancelled') {
+        const mapped = classifyExaLiteTransportFailure(err)
+        if (mapped.callerCancelled) {
           return { operationId: request.operationId, status: 'cancelled' }
         }
         return {
@@ -290,6 +269,7 @@ export function createExaLiteWithDuckDuckGoFallbackSearchProvider(options: {
   duckTransport: BabelWebSearchTransport
   maxResults?: number
   maxResponseBytes?: number
+  postTimeoutMs?: number
   env?: NodeJS.ProcessEnv
 }): AdmittedSourceSearchProvider & {
   providerId: typeof EXA_LITE_SEARCH_PROVIDER_ID
@@ -300,6 +280,7 @@ export function createExaLiteWithDuckDuckGoFallbackSearchProvider(options: {
     transport: options.exaTransport,
     ...(options.maxResults !== undefined ? { maxResults: options.maxResults } : {}),
     ...(options.maxResponseBytes !== undefined ? { maxResponseBytes: options.maxResponseBytes } : {}),
+    ...(options.postTimeoutMs !== undefined ? { postTimeoutMs: options.postTimeoutMs } : {}),
     ...(options.env ? { env: options.env } : {}),
   })
   const duck = createDuckDuckGoHtmlFallbackSearchProvider({

@@ -24,8 +24,8 @@
 | `resolved_search_type` | string \| null |
 | `warnings` | `SourceSearchExaLiteDiagnosticRecord[]` (`code`, `path`, `message`, bounded `details`) |
 | `notices` | `SourceSearchExaLiteDiagnosticRecord[]` |
-| `estimated_cost_dollars` | number \| null (provider estimate, **not** an invoice) |
-| `estimated_cost_detail` | Record<string, number> \| null |
+| `estimated_cost_dollars` | number \| null — official `costDollars.total` when present (provider estimate, **not** an invoice) |
+| `estimated_cost_detail` | Record<string, number> \| null — non-`total` breakdown keys from `costDollars` (e.g. `search`, `contents`); `total` is not duplicated here |
 
 **Invariant:** When Exa returns HTTP 200 with billing metadata but zero in-policy hits (`exa_primary_empty_billed`), B **preserves** `receipt` even if DuckDuckGo fallback subsequently fails.
 

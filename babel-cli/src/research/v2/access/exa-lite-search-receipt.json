@@ -6,8 +6,8 @@
   "provider_id": "exa_lite",
   "api_endpoint": "https://api.exa.ai/search",
   "credential_env": "EXA_API_KEY",
-  "tests": 25,
-  "pass": 25,
+  "tests": 27,
+  "pass": 27,
   "outer_exit_code": 0,
   "tap_artifact": "exa-lite-search.tap.txt",
   "note": "Fake-transport only; OpenRouter DeepSeek route unchanged."

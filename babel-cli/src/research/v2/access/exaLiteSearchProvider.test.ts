@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict'
+import { EventEmitter } from 'node:events'
+import type { ClientRequest, IncomingMessage } from 'node:http'
 import { describe, it } from 'node:test'
 import { exampleTechnicalMissionFixture } from '../fixtures/exampleMission.js'
 import {
@@ -14,7 +16,12 @@ import {
   EXA_LITE_SEARCH_PROVIDER_ID,
   resolveProductionSearchProviderId,
 } from './babelConfiguredWebSearch.js'
-import { createExaLiteSearchProvider } from './exaLiteSearchProvider.js'
+import {
+  createExaLiteSearchProvider,
+  createExaLiteWithDuckDuckGoFallbackSearchProvider,
+} from './exaLiteSearchProvider.js'
+import { setExaLiteHttpsRequestForTests, type ExaLiteHttpsRequestFn } from './exaLiteHttpsClient.js'
+import { ExaLiteCallerAbortError } from './exaLiteOperationAbort.js'
 import {
   ExaLiteResponseValidationError,
   validateExaLiteSearchResponseBody,
@@ -37,7 +44,7 @@ function exaSuccessBody(overrides: Record<string, unknown> = {}): string {
       },
     ],
     notices: [{ code: 'cached_content', path: null, message: 'cached-only', details: null }],
-    costDollars: { total: 0.001 },
+    costDollars: { total: 0.001, search: 0.0005, contents: 0.0005 },
     results: [
       {
         title: 'Babel',
@@ -128,6 +135,9 @@ describe('exa lite search provider (fake transport)', () => {
       assert.equal(result.receipt?.exa_lite?.request_id, 'req-test-1')
       assert.equal(result.receipt?.exa_lite?.resolved_search_type, 'lite')
       assert.equal(result.receipt?.exa_participation, 'exa_primary_ok')
+      assert.equal(result.receipt?.exa_lite?.estimated_cost_dollars, 0.001)
+      assert.equal(result.receipt?.exa_lite?.estimated_cost_detail?.search, 0.0005)
+      assert.equal(result.receipt?.exa_lite?.estimated_cost_detail?.contents, 0.0005)
     }
   })
 
@@ -230,7 +240,7 @@ describe('exa lite search provider (fake transport)', () => {
         post: async (params) => {
           await new Promise((r) => setTimeout(r, 30))
           if (params.signal.aborted) {
-            return { status: 499, headers: {}, bodyText: '{}' }
+            throw new ExaLiteCallerAbortError()
           }
           return { status: 200, headers: {}, bodyText: exaSuccessBody() }
         },
@@ -349,6 +359,105 @@ describe('exa lite search provider (fake transport)', () => {
       assert.equal(result.receipt?.configured_provider_id, EXA_LITE_SEARCH_PROVIDER_ID)
       assert.equal(result.receipt?.effective_provider_id, DUCKDUCKGO_HTML_FALLBACK_PROVIDER_ID)
       assert.match(result.receipt?.degradation?.reason ?? '', /exa_zero_hits/)
+    }
+  })
+
+  function installTricklingDefaultHttpsMock(): void {
+    setExaLiteHttpsRequestForTests(
+      ((_url, _options, callback) => {
+        const res = new EventEmitter() as IncomingMessage
+        res.statusCode = 200
+        let trickle: NodeJS.Timeout | undefined
+        res.destroy = () => {
+          if (trickle) clearInterval(trickle)
+          res.removeAllListeners()
+          return res
+        }
+        callback?.(res)
+        const req = new EventEmitter() as ClientRequest
+        Object.assign(req, {
+          write: () => req,
+          end: () => {
+            trickle = setInterval(() => res.emit('data', Buffer.from('x')), 25)
+            return req
+          },
+          setTimeout: () => req,
+          destroy: () => {
+            res.destroy()
+            req.emit('error', new Error('destroyed'))
+            return req
+          },
+        })
+        return req
+      }) as ExaLiteHttpsRequestFn,
+    )
+  }
+
+  it('default HTTPS deadline fails timeout and composite degrades to DDG', async () => {
+    installTricklingDefaultHttpsMock()
+    let duckCalls = 0
+    try {
+      const composite = createExaLiteWithDuckDuckGoFallbackSearchProvider({
+        resolveApiKey: () => 'k',
+        exaTransport: {},
+        postTimeoutMs: 50,
+        env: { BABEL_WEB_ALLOW_PRIVATE: '1' },
+        duckTransport: async () => {
+          duckCalls += 1
+          return { ok: true, status: 200, html: SAMPLE_HTML }
+        },
+      })
+      const result = await composite.search(
+        {
+          operationId: 'deadline-fallback',
+          query: 'babel research',
+          sourceClasses: ['web'],
+          signal: new AbortController().signal,
+        },
+        exampleTechnicalMissionFixture,
+      )
+      assert.equal(duckCalls, 1)
+      assert.equal(result.status, 'ok')
+      if (result.status === 'ok') {
+        assert.equal(result.receipt?.exa_participation, 'exa_degraded_fallback')
+        assert.match(result.receipt?.degradation?.reason ?? '', /exa_failed:timeout/)
+        assert.equal(result.receipt?.effective_provider_id, DUCKDUCKGO_HTML_FALLBACK_PROVIDER_ID)
+      }
+    } finally {
+      setExaLiteHttpsRequestForTests(null)
+    }
+  })
+
+  it('caller abort on default HTTPS cancels without DDG fallback', async () => {
+    installTricklingDefaultHttpsMock()
+    let duckCalls = 0
+    try {
+      const composite = createExaLiteWithDuckDuckGoFallbackSearchProvider({
+        resolveApiKey: () => 'k',
+        exaTransport: {},
+        postTimeoutMs: 5_000,
+        env: { BABEL_WEB_ALLOW_PRIVATE: '1' },
+        duckTransport: async () => {
+          duckCalls += 1
+          return { ok: true, status: 200, html: SAMPLE_HTML }
+        },
+      })
+      const controller = new AbortController()
+      const resultPromise = composite.search(
+        {
+          operationId: 'caller-abort',
+          query: 'babel research',
+          sourceClasses: ['web'],
+          signal: controller.signal,
+        },
+        exampleTechnicalMissionFixture,
+      )
+      controller.abort()
+      const result = await resultPromise
+      assert.equal(result.status, 'cancelled')
+      assert.equal(duckCalls, 0)
+    } finally {
+      setExaLiteHttpsRequestForTests(null)
     }
   })
 

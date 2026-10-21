@@ -10,7 +10,9 @@ import {
 } from './admittedHttpGet.js'
 import {
   assertOperationSignalActive,
+  awaitWithLinkedOperationSignal,
   createLinkedOperationAbort,
+  operationErrorFromAbortSignal,
 } from './exaLiteOperationAbort.js'
 
 export const EXA_LITE_API_SEARCH_URL = 'https://api.exa.ai/search'
@@ -73,12 +75,12 @@ function readBodyText(
       reject(err)
     }
 
-    const onAbort = () => fail(new AdmittedNetworkPolicyError('search aborted'))
+    const onAbort = () => fail(operationErrorFromAbortSignal(signal))
     signal.addEventListener('abort', onAbort, { once: true })
 
     response.on('data', (chunk: Buffer) => {
       if (signal.aborted) {
-        fail(new AdmittedNetworkPolicyError('search aborted'))
+        fail(operationErrorFromAbortSignal(signal))
         return
       }
       total += chunk.length
@@ -133,7 +135,7 @@ export function defaultAdmittedExaLiteHttpsPostDispatch(
       req?.destroy(err)
     }
 
-    const onAbort = () => tearDown(new AdmittedNetworkPolicyError('search aborted'))
+    const onAbort = () => tearDown(operationErrorFromAbortSignal(signal))
     signal.addEventListener('abort', onAbort, { once: true })
 
     req = exaLiteHttpsRequest(url, options, async (response) => {
@@ -194,12 +196,17 @@ export async function admittedExaLiteHttpsPost(params: {
     const url = parseAdmittedHttpUrl(EXA_LITE_API_SEARCH_URL, env)
     assertExaApiHostname(url)
     const resolveTarget = params.admissionTargetResolver ?? defaultAdmissionTargetResolver
-    const target = await resolveTarget(url, env, linked.signal)
+    const target = await awaitWithLinkedOperationSignal(
+      linked.signal,
+      resolveTarget(url, env, linked.signal),
+    )
 
     assertOperationSignalActive(linked.signal, 'HTTPS POST')
     const dispatch = params.dispatch ?? defaultAdmittedExaLiteHttpsPostDispatch
     const body = JSON.stringify(params.jsonBody)
-    const response = await dispatch({
+    const response = await awaitWithLinkedOperationSignal(
+      linked.signal,
+      dispatch({
       url,
       target,
       headers: { 'x-api-key': params.apiKey },
@@ -207,7 +214,8 @@ export async function admittedExaLiteHttpsPost(params: {
       signal: linked.signal,
       timeoutMs: remainingMs(),
       maxBytes,
-    })
+      }),
+    )
 
     const location = response.headers.location
     if (location && response.status >= 300 && response.status < 400) {
