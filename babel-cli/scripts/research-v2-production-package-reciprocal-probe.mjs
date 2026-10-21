@@ -1,41 +1,48 @@
 #!/usr/bin/env node
 /**
- * Runs inside a staged package root (BABEL_STAGED_ROOT): imports dist from
- * ./runtime/dist only; pdfjs/canvas resolve from ./node_modules (no host fallback).
+ * Runs inside a staged package root (BABEL_STAGED_ROOT): imports built dist from
+ * ../dist (packaged layout); pdfjs/canvas must resolve from staged node_modules only.
  */
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { readFileSync, realpathSync } from 'node:fs'
+import { join, sep } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const stageRoot = process.env.BABEL_STAGED_ROOT
 if (!stageRoot) {
-  throw new Error('BABEL_STAGED_ROOT is required (staged package root with node_modules + runtime/dist)')
+  throw new Error('BABEL_STAGED_ROOT is required (staged package root with node_modules + dist)')
 }
 if (process.env.NODE_PATH) {
   throw new Error('NODE_PATH must be unset for staged reciprocal probe (no host dependency fallback)')
 }
-
-const probeDir = dirname(fileURLToPath(import.meta.url))
-const stageRootResolved = join(stageRoot, '.')
-const distRoot = join(stageRootResolved, 'runtime', 'dist')
-const distUrl = pathToFileURL(join(distRoot, '/')).href
-const fixturePath = join(stageRootResolved, 'reciprocal', 'fixtures', 'two-page-sample.pdf')
-
-async function assertDependencyResolvedUnderStage(specifier) {
-  const resolved = import.meta.resolve(specifier, import.meta.url)
-  const resolvedPath = fileURLToPath(resolved)
-  const nm = join(stageRootResolved, 'node_modules')
-  assert.ok(
-    resolvedPath.startsWith(nm + '/') || resolvedPath.startsWith(nm + '\\'),
-    `${specifier} must resolve under staged node_modules, got ${resolvedPath}`,
-  )
-  return resolvedPath
+if (process.env.NODE_OPTIONS) {
+  throw new Error('NODE_OPTIONS must be unset for staged reciprocal probe')
 }
 
-await assertDependencyResolvedUnderStage('pdfjs-dist/package.json')
+const stageReal = realpathSync(stageRoot)
+const distRoot = join(stageReal, 'dist')
+const distUrl = pathToFileURL(join(distRoot, '/')).href
+const distPdfModule = new URL('research/v2/adapters/documents/pdfFromAdmittedBytes.js', distUrl)
+const fixturePath = join(stageReal, 'reciprocal', 'fixtures', 'two-page-sample.pdf')
+
+function assertRealpathUnderStage(label, resolvedUrl) {
+  const resolvedPath = fileURLToPath(resolvedUrl)
+  const resolvedReal = realpathSync(resolvedPath)
+  const prefix = stageReal.endsWith(sep) ? stageReal : stageReal + sep
+  assert.ok(
+    resolvedReal === stageReal || resolvedReal.startsWith(prefix),
+    `${label} resolved outside stage: ${resolvedReal} (stage ${stageReal})`,
+  )
+  return resolvedReal
+}
+
+const pdfjsPkg = import.meta.resolve('pdfjs-dist/package.json', distPdfModule)
+assertRealpathUnderStage('pdfjs-dist/package.json (from dist parentURL)', pdfjsPkg)
 try {
-  await assertDependencyResolvedUnderStage('@napi-rs/canvas/package.json')
+  assertRealpathUnderStage(
+    '@napi-rs/canvas/package.json (from dist parentURL)',
+    import.meta.resolve('@napi-rs/canvas/package.json', distPdfModule),
+  )
 } catch {
   console.error(
     'staged_probe: @napi-rs/canvas not installed under production flags (expected until A #406 package repair lands)',
@@ -104,6 +111,7 @@ for (const passage of readResult.passages) {
   assert.equal(passage.locator.kind, 'page')
 }
 
+// Deterministic control hook (injected stall at load stage) — not evidence of pdfjs destroy/cleanup.
 const admitted = buildAdmittedContent('op-cancel-prod', source.source_id, 'rev', pdfBytes, 'application/pdf')
 const controller = new AbortController()
 const cancelPromise = passagesFromAdmittedPdf(admitted, controller.signal, { stallStage: 'loading' })

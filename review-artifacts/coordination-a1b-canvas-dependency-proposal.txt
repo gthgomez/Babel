@@ -11,6 +11,10 @@ Observed without direct @napi-rs/canvas (review-artifacts/integration-406-produc
 Proposed authoritative A repair (package.json dependencies, pin aligned with pdfjs optional peer):
   "@napi-rs/canvas": "0.1.80"
 
+Lockfile note (native review): adding a direct canvas dependency is not sufficient while
+@napi-rs/canvas-* platform packages remain optionalDependencies — Windows packaging uses
+--omit=optional, so A must ensure exact target-platform native bindings install under those flags.
+
 Integrated proof requirement:
   - Merge A's exact package.json + package-lock.json change (no B-authored package edits).
   - Run: node babel-cli/scripts/research-v2-production-package-reciprocal.mjs

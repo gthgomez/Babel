@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /**
  * Explicit packaging integration: stage a production npm ci tree (Windows package flags),
- * copy built dist + probe + fixture inside the stage, run reciprocal PDF probe with no
- * host node_modules fallback. Writes a receipt path via --receipt= or stdout.
+ * copy built dist + probes + fixture inside the stage, run ESM isolation then PDF probe
+ * with NODE_PATH/NODE_OPTIONS cleared (no host fallback). Writes a receipt path.
  *
  * Not part of default unit-test shards (may use network for npm ci).
  */
@@ -13,6 +13,7 @@ import {
   mkdtempSync,
   mkdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from 'node:fs'
@@ -38,6 +39,24 @@ function parseArg(name) {
   return hit ? hit.slice(name.length + 3) : undefined
 }
 
+function stagedChildEnv(stageRoot) {
+  const env = { BABEL_STAGED_ROOT: stageRoot }
+  for (const key of ['PATH', 'HOME', 'LANG', 'LC_ALL', 'TMPDIR', 'SYSTEMROOT', 'TEMP', 'TMP']) {
+    if (process.env[key]) env[key] = process.env[key]
+  }
+  return env
+}
+
+function runStagedScript(stageRoot, scriptPath) {
+  return execFileSync(process.execPath, [scriptPath], {
+    cwd: stageRoot,
+    env: stagedChildEnv(stageRoot),
+    encoding: 'utf8',
+    stdio: 'pipe',
+    timeout: 300_000,
+  })
+}
+
 function canvasInstallEvidence(stageRoot) {
   const canvasPkg = join(stageRoot, 'node_modules', '@napi-rs', 'canvas', 'package.json')
   const pdfjsPkg = join(stageRoot, 'node_modules', 'pdfjs-dist', 'package.json')
@@ -52,7 +71,8 @@ function canvasInstallEvidence(stageRoot) {
 
 function main() {
   const keepStage = process.argv.includes('--keep-stage')
-  const receiptPath = parseArg('receipt') ?? join(repoRoot, 'review-artifacts/integration-406-production-package-reciprocal-run.txt')
+  const receiptPath =
+    parseArg('receipt') ?? join(repoRoot, 'review-artifacts/integration-406-production-package-reciprocal-run.txt')
 
   execFileSync('npm', ['run', 'build'], {
     cwd: babelCliRoot,
@@ -64,14 +84,13 @@ function main() {
   const stageRoot = resolve(parseArg('stage') ?? mkdtempSync(join(tmpdir(), 'babel-prod-reciprocal-stage-')))
   const reciprocalDir = join(stageRoot, 'reciprocal')
   const fixtureDir = join(reciprocalDir, 'fixtures')
-  const runtimeDist = join(stageRoot, 'runtime', 'dist')
+  const stagedDist = join(stageRoot, 'dist')
 
   mkdirSync(fixtureDir, { recursive: true })
-  mkdirSync(dirname(runtimeDist), { recursive: true })
 
   cpSync(join(babelCliRoot, 'package.json'), join(stageRoot, 'package.json'))
   cpSync(join(babelCliRoot, 'package-lock.json'), join(stageRoot, 'package-lock.json'))
-  cpSync(join(babelCliRoot, 'dist'), runtimeDist, { recursive: true })
+  cpSync(join(babelCliRoot, 'dist'), stagedDist, { recursive: true })
   cpSync(
     join(babelCliRoot, 'src/research/v2/adapters/documents/fixtures/two-page-sample.pdf'),
     join(fixtureDir, 'two-page-sample.pdf'),
@@ -79,6 +98,10 @@ function main() {
   cpSync(
     join(babelCliRoot, 'scripts/research-v2-production-package-reciprocal-probe.mjs'),
     join(reciprocalDir, 'probe.mjs'),
+  )
+  cpSync(
+    join(babelCliRoot, 'scripts/research-v2-production-package-esm-isolation-probe.mjs'),
+    join(reciprocalDir, 'esm-isolation-probe.mjs'),
   )
 
   let npmCiOutput = ''
@@ -103,40 +126,54 @@ function main() {
     process.exit(1)
   }
 
+  const stageReal = realpathSync(stageRoot)
+  writeFileSync(join(stageRoot, 'node_modules', '.babel-staged-esm-marker'), `${stageReal}\n`)
+
   const canvas = canvasInstallEvidence(stageRoot)
-  const env = {
-    ...process.env,
-    BABEL_STAGED_ROOT: stageRoot,
-    // Explicitly strip host resolution hacks.
-    NODE_PATH: '',
+
+  let esmStdout = ''
+  let esmStderr = ''
+  let esmExit = 0
+  let esmError = ''
+  try {
+    esmStdout = runStagedScript(stageRoot, join(reciprocalDir, 'esm-isolation-probe.mjs'))
+  } catch (error) {
+    esmExit = 1
+    const err = error
+    esmStdout = err.stdout ?? ''
+    esmStderr = err.stderr ?? ''
+    esmError = err.message ?? String(err)
+    if (typeof err.status === 'number') esmExit = err.status
   }
-  delete env.NODE_PATH
 
   let probeStdout = ''
   let probeStderr = ''
   let probeExit = 0
   let probeError = ''
-  try {
-    probeStdout = execFileSync(process.execPath, [join(reciprocalDir, 'probe.mjs')], {
-      cwd: stageRoot,
-      env,
-      encoding: 'utf8',
-      stdio: 'pipe',
-      timeout: 300_000,
-    })
-  } catch (error) {
+  if (esmExit === 0) {
+    try {
+      probeStdout = runStagedScript(stageRoot, join(reciprocalDir, 'probe.mjs'))
+    } catch (error) {
+      probeExit = 1
+      const err = error
+      probeStdout = err.stdout ?? ''
+      probeStderr = err.stderr ?? ''
+      probeError = err.message ?? String(err)
+      if (typeof err.status === 'number') probeExit = err.status
+    }
+  } else {
     probeExit = 1
-    const err = error
-    probeStdout = err.stdout ?? ''
-    probeStderr = err.stderr ?? ''
-    probeError = err.message ?? String(err)
-    if (typeof err.status === 'number') probeExit = err.status
+    probeError = 'skipped: ESM isolation probe failed'
   }
 
   const outcome =
-    probeExit === 0 && probeStdout.includes('research-v2-production-package-reciprocal-probe: ok')
+    esmExit === 0 &&
+    probeExit === 0 &&
+    probeStdout.includes('research-v2-production-package-reciprocal-probe: ok')
       ? 'probe_ok'
-      : 'probe_failed'
+      : esmExit !== 0
+        ? 'esm_isolation_failed'
+        : 'probe_failed'
 
   writeReceipt(receiptPath, {
     stageRoot,
@@ -144,19 +181,23 @@ function main() {
     productionNpmCiArgs: PRODUCTION_NPM_CI_ARGS.join(' '),
     npmCiOutputTail: npmCiOutput.split('\n').slice(-8).join('\n'),
     canvas,
+    esmExit,
+    esmStdout,
+    esmStderr,
+    esmError,
     probeExit,
     probeStdout,
     probeStderr,
     probeError,
     coordinationNote:
-      'Authoritative @napi-rs/canvas direct dependency is Agent A #406 package repair (in progress at f00db4c5); B does not edit package.json.',
+      'Authoritative @napi-rs/canvas direct dependency + target-platform native install are Agent A #406 package repair (optional platform lock entries remain omitted by --omit=optional until A fixes). B does not edit package.json.',
   })
 
   if (!keepStage) rmSync(stageRoot, { recursive: true, force: true })
 
   if (outcome !== 'probe_ok') {
     console.error(`production-package reciprocal: ${outcome} (receipt: ${receiptPath})`)
-    process.exit(probeExit || 1)
+    process.exit(esmExit || probeExit || 1)
   }
   console.log(`production-package reciprocal: ok (receipt: ${receiptPath})`)
 }
@@ -176,6 +217,9 @@ function writeReceipt(path, body) {
     body.npmCiOutputTail ? `--- npm ci (tail) ---\n${body.npmCiOutputTail}` : '',
     body.npmCiStdout ? `--- npm ci stdout ---\n${body.npmCiStdout}` : '',
     body.npmCiStderr ? `--- npm ci stderr ---\n${body.npmCiStderr}` : '',
+    body.esmError ? `--- esm isolation error ---\n${body.esmError}` : '',
+    `--- esm isolation stdout ---\n${body.esmStdout ?? ''}`,
+    `--- esm isolation stderr ---\n${body.esmStderr ?? ''}`,
     body.probeError ? `--- probe error ---\n${body.probeError}` : '',
     `--- probe stdout ---\n${body.probeStdout ?? ''}`,
     `--- probe stderr ---\n${body.probeStderr ?? ''}`,

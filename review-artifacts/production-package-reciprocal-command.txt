@@ -4,4 +4,7 @@ cd babel-cli && npm run build
 node scripts/research-v2-production-package-reciprocal.mjs \
   --receipt=../review-artifacts/integration-406-production-package-reciprocal-run.txt
 
+Stages dist/ + reciprocal probes under the production npm ci root; child clears NODE_PATH
+and NODE_OPTIONS; esm-isolation-probe asserts pdfjs/canvas realpaths from dist parentURL.
+
 Optional: --keep-stage --stage=/tmp/babel-prod-reciprocal-stage for inspection

@@ -284,7 +284,7 @@ describe('general adapter reciprocal integration (B80 catalog, offline)', () => 
     assert.ok(Date.now() - started < 5_000)
   })
 
-  it('read: stalled PDF load abort rejects with PdfExtractionCancelled via adapter', async () => {
+  it('read: stallStage loading abort control rejects with PdfExtractionCancelled (not pdfjs destroy/cleanup evidence)', async () => {
     const { passagesFromAdmittedPdf } = await import('../../adapters/documents/pdfFromAdmittedBytes.js')
     const bytes = readFileSync(pdfFixture)
     const admitted = buildAdmittedContent('op', 's', 'r', bytes, 'application/pdf')
