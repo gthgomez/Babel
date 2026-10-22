@@ -13,7 +13,7 @@ Choose an install path:
 - **Windows x64 — Babel Desktop 0.1.3:** download it from the
   [v0.1.3 release](https://github.com/gthgomez/Babel/releases/tag/v0.1.3). It includes Node and the Babel CLI. Follow the
   [setup guide for that release](https://github.com/gthgomez/Babel/blob/v0.1.3/babel-desktop/docs/INSTALL-WINDOWS.md), then skip to
-  [step 2](#2-first-useful-task-in-your-own-repository).
+  [step 2](#2-first-useful-request-in-your-own-repository).
 - **Current source:** follow the build instructions below. Source builds can
   contain behavior that is not included in the published Desktop application.
   After build, the documented command is `node <Babel clone>/babel-cli/dist/index.js`
@@ -60,7 +60,7 @@ and a configured image. `dev_local` permits supported host inspection
 enable repository test or build commands. Details:
 [CHAT_MODE.md](./docs/CHAT_MODE.md#execution-profile-and-isolation-h13).
 
-## 2. First useful task in your own repository
+## 2. First useful request in your own repository
 
 Pick the repository you want Babel to work on. In Desktop, use **Open project**
 and trust that exact folder. In the CLI, change into it first, so Babel targets
