@@ -54,14 +54,19 @@ function mockChunkChild(chunks: string[]): ChildProcess {
 }
 
 describe('Windows helper diagnostic protocol (STAGE introduced by this patch)', () => {
-  test('line parser accepts STAGE-prefixed transcript with fragmented stdout chunks', async () => {
+  test('line parser accepts transcript fragmented within STAGE and READY tokens', async () => {
     await __testResetChildProcessSpawn()
     const bound = fixtureBoundDirectory('babel-anchor-frag-')
     const readyLine = __testWindowsReadyLineForBoundDirectories([bound])
+    const readyPrefix = readyLine.slice(0, readyLine.length - 1)
+    const readySuffix = readyLine.slice(-1)
     __testSetChildProcessSpawn(((..._args: Parameters<typeof spawn>) => mockChunkChild([
-      'STAGE:boot\n',
-      'STAGE:typed\nSTAGE:open\n',
-      `${readyLine}\n`,
+      'STAGE:bo',
+      'ot\nSTAGE:ty',
+      'ped\nSTAGE:op',
+      'en\n',
+      readyPrefix,
+      `${readySuffix}\n`,
     ]) as ReturnType<typeof spawn>) as typeof spawn)
 
     const anchors = await __testPinWindowsDirectories([bound])
@@ -113,6 +118,23 @@ describe('Windows helper diagnostic protocol (STAGE introduced by this patch)', 
 
     __testSetChildProcessSpawn(((..._args: Parameters<typeof spawn>) => mockChunkChild([
       `STAGE:boot\nSTAGE:typed\nSTAGE:open\n${readyLine}\nGARBAGE\n`,
+    ]) as ReturnType<typeof spawn>) as typeof spawn)
+    await assert.rejects(() => __testPinWindowsDirectories([bound]), /refused/)
+    await __testResetChildProcessSpawn()
+  })
+
+  test('rejects unterminated trailing bytes after READY without a final newline', async () => {
+    await __testResetChildProcessSpawn()
+    const bound = fixtureBoundDirectory('babel-anchor-suffix-')
+    const readyLine = __testWindowsReadyLineForBoundDirectories([bound])
+    const prefix = `STAGE:boot\nSTAGE:typed\nSTAGE:open\n${readyLine}\n`
+    __testSetChildProcessSpawn(((..._args: Parameters<typeof spawn>) => mockChunkChild([
+      `${prefix}ERROR:1:5`,
+    ]) as ReturnType<typeof spawn>) as typeof spawn)
+    await assert.rejects(() => __testPinWindowsDirectories([bound]), /refused/)
+
+    __testSetChildProcessSpawn(((..._args: Parameters<typeof spawn>) => mockChunkChild([
+      `${prefix}GARBAGE`,
     ]) as ReturnType<typeof spawn>) as typeof spawn)
     await assert.rejects(() => __testPinWindowsDirectories([bound]), /refused/)
     await __testResetChildProcessSpawn()

@@ -156,7 +156,13 @@ function processPendingStdoutLines(
   while (true) {
     const { line, rest: next } = takeStdoutLine(rest)
     if (line === undefined) {
-      return afterReady ? { pending: rest, ready: true } : { pending: rest }
+      if (afterReady) {
+        if (rest.length > 0) {
+          return { pending: rest, error: refuseLine(rest) }
+        }
+        return { pending: rest, ready: true }
+      }
+      return { pending: rest }
     }
     rest = next
     if (!afterReady) {
