@@ -3,13 +3,14 @@
   "algorithm": "sha256",
   "purpose": "drift_detection_not_authorization",
   "normalization": "utf8_crlf_to_lf",
-  "policy_bundle_id": "242cb161007542f6f88ba7b770c73e24e8245a1fc8072f457f28121ce597cdc7",
+  "policy_bundle_id": "381dfb020c7e7b62b8fcd1a71c02b34fabb9542a83bac2624cd1f28785ee9c64",
   "files": {
     ".github/workflows/public-pr-metadata.yml": "67e630d700055533ee77157ed05fc347161c7c041e35151f2652ffd9b9973023",
     ".github/workflows/publish-npm.yml": "54036b704d59e513cbbb981efa00e82121e40871d6dfe789c8636bd0159f8c9e",
     ".github/workflows/release.yml": "6d0c4591f8c57497c9c8a33d2d069219d9fc02d05cae18f63d271f5ca839a20d",
     ".github/workflows/trusted-control-plane.yml": "8bff01509072149173b486cf976dc0b8bdc6e13f05491bf267e11800a85325be",
     ".github/workflows/typecheck.yml": "d8b8fcb7ea73217fa011d89711640070b9386d00b23b9a1d00bb91417b8b45a8",
+    ".github/workflows/windows-directory-anchor-diagnostic.yml": "1d0c6b524c2daaf0f14c14928b004238b4ec80cfb8bfd8685a1734e2539f8cc9",
     "AGENTS.md": "d8ac18573ddc1bc8f538d91adec66dfe078016beaa78ac54c612f8520e49fc34",
     "babel-cli/src/agent/autonomyEnforcement.ts": "942e1f789c54c7c8d6d8ffeb0dfe48974932bddc0ad2da989aa845b8baa92928",
     "babel-cli/src/authority/actionRequest.ts": "e17df5cebed675ebfff4bc512d280d0a0bd38fd2b968fc9f19e5a397deda8335",
@@ -144,7 +145,7 @@
     "tools/babel-pr-orchestrate-opencode.mts": "52b030c4ada9940ad8290872d453ef518bc5989475095787cc21ee579b62cf29",
     "tools/babel-pr-orchestrate.mts": "e2b8f541f807e5e7544534a3eb5804ec14395b05a6fc97a813c82269f7fc32a0",
     "tools/host-review-worker.mts": "751b80e69888ec098ff2e190bf487f1962bbb104ea87d7494b68e654009b336a",
-    "tools/policy-integrity-manifest.mjs": "92265be48a6bffff43e48e30e6b4486193ad71bcce2f90e923bb88e439e20bc9",
+    "tools/policy-integrity-manifest.mjs": "adc1c0254d145301de9c6f991844aab71bb00b328125f16013b162c1fd282066",
     "tools/resolve-release-tag.mjs": "9b5f769ed1b49c3f829c9a4e4b9a982803ead642180a3941559967bd0f4347e2"
   }
 }

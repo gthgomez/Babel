@@ -29,6 +29,7 @@ const paths = [
   ".github/workflows/release.yml",
   ".github/workflows/trusted-control-plane.yml",
   ".github/workflows/typecheck.yml",
+  ".github/workflows/windows-directory-anchor-diagnostic.yml",
   "AGENTS.md",
   "babel-cli/src/agent/autonomyEnforcement.ts",
   "babel-cli/src/authority/actionRequest.ts",
