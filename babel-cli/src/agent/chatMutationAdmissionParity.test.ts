@@ -38,7 +38,9 @@ if (!isSyntheticProviderFixtureReady()) {
       // Export only the finite rollback category, never its underlying error.
       t.diagnostic(JSON.stringify({ rollbackFailureCategories:
         [...new Set([...output.matchAll(/BABEL_PATCH_ROLLBACK_(timeout|refused|identity|other)\b/g)]
-          .map(match => match[1]))] }))
+          .map(match => match[1]))],
+        failureSourceLines: [...new Set([...output.matchAll(/chatMutationAdmissionParity\.test\.ts:(\d+):\d+/g)]
+          .map(match => Number(match[1])))].slice(0, 16) }))
     }
     assert.equal(code, 0)
   })
