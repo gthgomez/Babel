@@ -80,4 +80,11 @@ describe('phaseToolPolicy', () => {
     });
     assert.equal(r.blocked, false);
   });
+
+  it('reopens repair searches without bypassing the investigate write gate', () => {
+    for (const toolName of ['grep', 'glob', 'semantic_search']) {
+      assert.equal(evaluatePhaseToolGate({ toolName, phase: 'verify', enabled: true, repairInvestigation: true }).blocked, false);
+    }
+    assert.equal(evaluatePhaseToolGate({ toolName: 'write_file', phase: 'investigate', enabled: true, repairInvestigation: true }).blocked, true);
+  });
 });

@@ -3,7 +3,6 @@ import {requireProjectRoot,denyConversationAction} from './chatToolScopeAdmissio
 import { evaluatePlanThenExecuteGate } from "./planThenExecute.js";
 import { evaluateHardPlanModeGate } from "./planExecuteMode.js";
 import { evaluatePhaseToolGate } from "./phaseToolPolicy.js";
-import { makeFailureCapsule } from "./taskContract.js";
 import { getChatTaskTune } from "../config/chatTaskClass.js";
 import { appendPatchRecovery } from "./patchRecovery.js";
 import {
@@ -15,7 +14,6 @@ import {
   decideReadInjection,
   formatReadFailureObservation,
   formatReadObservation,
-  formatVerifierReceiptSummary,
   invalidateReadCacheForPath,
   recordControllerRecoveryStrategy,
   sameRecoveryBinding,
@@ -23,7 +21,6 @@ import {
   selectReadWindow,
 } from "./codingLoop/index.js";
 import {
-  ingestVerifierResult,
   rememberFullReadWindow,
 } from "./codingLoop/chatBindings.js";
 import {
@@ -50,12 +47,12 @@ import {
   chatActionTarget,
   type ChatToolAction,
 } from "./chatToolDefinitions.js";
-import { mutationPathsFromSessionEvents } from "../evidence/chatRevisionBinding.js";
 import {
   executeActionWithPolicy,
   defaultToolExecutor,
   type PolicyGatedExecutionResult,
 } from "./toolExecutor.js";
+import { settleChatVerifierResult } from "./chatVerifierSettlement.js";
 import { chatReadToolExecutor } from "./chatReadExecutor.js";
 import { governedStrReplace } from "./governedMutations.js";
 import { executeGovernedApplyPatchAction } from "./codingLoop/applyPatchExecutor.js";
@@ -69,7 +66,7 @@ import {
 import { createHash } from "node:crypto";
 import {
   executeChatAwaitCommandAction,
-  executeBackgroundRunCommandAction,
+  executeChatBackgroundRunCommandAction,
 } from "./chatBackgroundShell.js";
 import {
   executeSubAgentAction,
@@ -93,7 +90,6 @@ import {
   logPlatformUnusableResult,
 } from "./verifierFailFast.js";
 import {
-  captureAndRecordVerifierReceipt,
   resolveVerifierCacheIdentity,
   shouldReuseCachedVerifierReceipt,
 } from "./chatEngineVerifierAdapter.js";
@@ -250,6 +246,7 @@ export class ChatEngineActionExecutor {
         toolName: tool,
         phase: this.host._lastPhase,
         isMutationSubAgent,
+        repairInvestigation: this.host.lastVerifierFailed,
       });
       if (phaseGate.blocked) {
         this.host.policyEventLog.record({
@@ -1136,7 +1133,7 @@ export class ChatEngineActionExecutor {
 
       // Background shell — handlers in chatBackgroundShell.ts (size ratchet)
       if (action.type === "await_command") {
-        return executeChatAwaitCommandAction(action, {
+        return await executeChatAwaitCommandAction(action, {
           host: this.host,
           projectRoot: requireProjectRoot(this.host.options),
           tool,
@@ -1150,23 +1147,9 @@ export class ChatEngineActionExecutor {
         });
       }
       if (action.type === "run_command" && action.background === true) {
-        return executeBackgroundRunCommandAction(action, {
-          projectRoot: requireProjectRoot(this.host.options),
-          tool,
-          target,
-          toolId,
-          index: meta.index,
-          ownerId: this.host.engineRunId,
-          toolCallId: meta.idempotencyKey,
-          pushLog: (entry) => {
-            // R0-8: a superseded submission must not append the settled row to
-            // the new task's tool log.
-            if (this.host.isSubmissionCurrent(ownerGeneration))
-              this.host.toolCallLog.push(entry);
-          },
-          onToolComplete: callbacks.onToolComplete,
-          onBeforeSpawn: () =>
-            this.host.persistToolStartedAtExecutorDispatch(action, meta),
+        return executeChatBackgroundRunCommandAction(action, {
+          host: this.host, projectRoot: requireProjectRoot(this.host.options),
+          tool, target, toolId, index: meta.index, ownerGeneration, meta, callbacks,
         });
       }
 
@@ -1662,179 +1645,11 @@ export class ChatEngineActionExecutor {
             noteChatWorkspaceMutation(this.host as never);
           }
 
-          // B1/B2: only authoritative verifier commands update the completion receipt.
-          if (isFatalWindowsProcessExit(lastResult.exit_code) && target) {
-            this.host.platformUnusableVerifiers.add(target);
-          }
-          let receipt: Awaited<
-            ReturnType<typeof captureAndRecordVerifierReceipt>
-          > = null;
-          try {
-            receipt = await captureAndRecordVerifierReceipt({
-              projectRoot: requireProjectRoot(this.host.options),
-              command: target,
-              exitCode: lastResult.exit_code,
-              simulated: lastResult.simulated === true,
-              summary: formatVerifierReceiptSummary({
-                verifierId: target,
-                command: target,
-                exitCode: lastResult.exit_code,
-                stdout: lastResult.stdout,
-                stderr: lastResult.stderr,
-              }),
-              ...(lastResult.stdout !== undefined ? { stdout: lastResult.stdout } : {}),
-              ...(lastResult.stderr !== undefined ? { stderr: lastResult.stderr } : {}),
-              mutationPaths: mutationPathsFromSessionEvents(
-                this.host.parity.sessionEvents.events,
-              ),
-              allowRepositoryScopeForRedRecovery: lastResult.exit_code !== 0,
-              allowRepositoryScopeForGreenNoChange:
-                lastResult.exit_code === 0 && this.host.writeCount === 0,
-              sessionEvents: this.host.parity.sessionEvents,
-              turnId: String(this.host.parity.turnId ?? this.host._turnIndex),
-              ledger: this.host.executedVerifierLedger,
-              cache: this.host.verifierReceiptCache,
-              writeCount: this.host.writeCount,
-              cacheIdentity: resolveVerifierCacheIdentity({
-                projectRoot: requireProjectRoot(this.host.options),
-                command: target,
-                ...((action.type === "run_command" || action.type === "test_run") &&
-                  action.cwd !== undefined
-                  ? { cwd: action.cwd }
-                  : {}),
-              }),
-              toolCallId:
-                meta.idempotencyKey ??
-                this.host._streamNativeToolCallIds[meta.index] ??
-                `tool_call_${this.host._turnIndex}_${meta.index}`,
-            });
-          } catch (verifierErr) {
-            // R0-7/R0-8: a superseded submission must not invalidate the live
-            // task's verifier ledger from a stale capture failure.
-            if (!this.host.isSubmissionCurrent(ownerGeneration)) {
-              return this.host.settleStaleActionResult(
-                tool,
-                target,
-                meta.index,
-                "parent submission superseded before the verifier settled",
-              );
-            }
-            // A verifier-receipt capture failure must degrade to "no receipt",
-            // never fall through to the generic catch: that path records a
-            // second terminal for an already-settled tool call and corrupts the
-            // outbound tool protocol on the next provider request.
-            invalidateVerifierLedger(
-              this.host as never,
-              "verifier receipt capture failed",
-            );
-            obsParts.push(
-              `### verifier_receipt_unavailable\n${
-                verifierErr instanceof Error
-                  ? verifierErr.message
-                  : String(verifierErr)
-              }`,
-            );
-          }
-          // R0-7/R0-8: verifier capture is a suspension point. A superseded
-          // submission must not install its receipt, working state or ledger
-          // invalidation on the task that now owns the engine.
-          if (!this.host.isSubmissionCurrent(ownerGeneration)) {
-            return this.host.settleStaleActionResult(
-              tool,
-              target,
-              meta.index,
-              "parent submission superseded before the verifier settled",
-            );
-          }
-          if (receipt) {
-            this.host.lastVerifierReceipt = receipt;
-            const previousFailureSignature =
-              this.host.workingState.failureSurface?.errorSignature;
-            const recoveryBinding =
-              lastResult.exit_code !== 0
-                ? this.host.currentRecoveryBinding()
-                : null;
-            const ingested = ingestVerifierResult({
-              state: this.host.workingState,
-              tool: action.type,
-              target,
-              exitCode: lastResult.exit_code,
-              stdout: lastResult.stdout,
-              stderr: lastResult.stderr,
-              summary: receipt.summary ?? String(lastResult.exit_code),
-              verifierId: target,
-              recoveryProjectRoot: requireProjectRoot(this.host.options),
-              ...(recoveryBinding ? { recoveryBinding } : {}),
-              ...(receipt.boundRevision?.compositeTreeHash
-                ? {
-                    workspaceRevision: String(
-                      receipt.boundRevision.compositeTreeHash,
-                    ),
-                  }
-                : {}),
-            });
-            this.host.workingState = ingested.state;
-            this.host.persistRecoveryWorkingState();
-            this.host.lastVerifierFailed = ingested.lastVerifierFailed;
-            const surfaceKind = this.host.workingState.failureSurface?.kind;
-            // Only a *classified* implementation failure spends implementation
-            // repair budget. An unclassified/unknown failure may be a transport
-            // or environment error after a mutation; charging it would blame the
-            // repair strategy for something it did not cause.
-            const implementationRepairSurface =
-              surfaceKind === "TEST_FAILURE" ||
-              surfaceKind === "TYPECHECK_FAILURE" ||
-              surfaceKind === "BUILD_FAILURE" ||
-              surfaceKind === "LINT_FAILURE" ||
-              surfaceKind === "RUNTIME_FAILURE";
-            if (
-              implementationRepairSurface &&
-              this.host.workingState.failureSurface &&
-              this.host.workingState.failureSurface.causality !==
-                "pre_existing" &&
-              this.host.workingState.failureSurface.errorSignature !==
-                previousFailureSignature
-            ) {
-              this.host.consumeFailureBudget(
-                makeFailureCapsule(
-                  "implementation",
-                  this.host.workingState.failureSurface.kind,
-                  this.host.workingState.failureSurface.errorSignature,
-                  {
-                    evidence_refs:
-                      this.host.workingState.failureSurface.evidenceRefs,
-                  },
-                ),
-              );
-            }
-          } else if (
-            lastResult.exit_code !== 0 &&
-            this.host.workingState.lastMutation
-          ) {
-            // A red command without a durable verifier receipt cannot grant
-            // recovery authority. Keep the failed candidate closed until an
-            // authoritative verifier can bind a fresh failure and revision.
-            this.host.workingState = applyWorkingStateEvent(
-              this.host.workingState,
-              {
-                type: "recovery_gate",
-                failureSignature: "unbound-red-verifier",
-                requiredEvidence:
-                  "Rerun an authoritative verifier to bind this failure to the current candidate.",
-              },
-            );
-            this.host.persistRecoveryWorkingState();
-            this.host.lastVerifierFailed = true;
-          } else if (
-            lastResult.exit_code === 0 &&
-            !confirmedShellMutation &&
-            lastResult.simulated !== true
-          ) {
-            invalidateVerifierLedger(
-              this.host as never,
-              "non-verifier shell command executed",
-            );
-          }
+          const staleSettlement = await settleChatVerifierResult({
+            host: this.host, action, result: lastResult, target, tool, meta,
+            ownerGeneration, confirmedShellMutation, obsParts,
+          });
+          if (staleSettlement) return staleSettlement;
 
           // A command can mutate files and then fail. Prefer the executor's
           // changed-path receipt; without one, invalidate conservatively.

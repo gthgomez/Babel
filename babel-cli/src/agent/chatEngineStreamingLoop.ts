@@ -1503,11 +1503,6 @@ export class ChatEngineStreamingLoop {
         const turnSlice = this.host.toolCallLog.slice(
           this.host._turnToolCallLogStart,
         );
-        const isReadTool = (name: string) =>
-          name === "read_file" ||
-          name === "file_read" ||
-          name === "read_range" ||
-          name === "grep";
         const projected = projectDurableToolBatch({
           turnSlice,
           observationsByActionIndex: observationList,
@@ -1520,10 +1515,6 @@ export class ChatEngineStreamingLoop {
             `batch_${turn}_${this.host._turnToolCallLogStart}`,
           ...(providerToolCallIds ? { providerToolCallIds } : {}),
           streamNativeToolCallIds: this.host._streamNativeToolCallIds,
-          contentHashFor: (toolName, content) =>
-            isReadTool(toolName) && content.length > 0
-              ? createHash("sha256").update(content).digest("hex").slice(0, 16)
-              : undefined,
         });
         let cycleReceipt: ProgressReceipt | null = null;
         try {

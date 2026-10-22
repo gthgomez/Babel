@@ -11,6 +11,9 @@ import {
   capObservationText,
   DEFAULT_BACKGROUND_JOB_TIMEOUT_MS,
   startBackgroundShell,
+  getBackgroundShellJob,
+  type BackgroundShellJob,
+  type AwaitBackgroundShellResult,
 } from './backgroundShell.js';
 import { SafeExecutor, validateExecutorShellCommand } from '../sandbox.js';
 import { readRuntimeMode } from '../config/runtimeMode.js';
@@ -25,6 +28,7 @@ import type {
   ChatCallbacks,
   ChatEngineActionExecutorHost,
 } from './chatEngineContracts.js';
+import { isChatBackgroundOwnerCurrent, prepareChatBackgroundDispatch, settleChatBackgroundVerifier } from './chatBackgroundVerifier.js';
 
 export interface BackgroundShellLogEntry {
   tool: string;
@@ -59,6 +63,8 @@ export interface BackgroundShellActionCtx {
   settleStale?: (() => BackgroundShellActionResult) | undefined;
   artifactAccess?: RunArtifactAccess | undefined;
   artifactCallId?: string | undefined;
+  onStarted?: ((job: BackgroundShellJob) => void) | undefined;
+  onResult?: ((result: AwaitBackgroundShellResult) => Promise<string[]>) | undefined;
 }
 
 export type BackgroundShellActionResult = { index: number; observation: string };
@@ -75,7 +81,13 @@ export async function executeAwaitCommandAction(
   if (ctx.isSubmissionCurrent && !ctx.isSubmissionCurrent()) {
     return ctx.settleStale?.() ?? { index: ctx.index, observation: '' };
   }
-  const exitCode = result.timed_out ? null : result.exit_code;
+  const settlementNotes = await ctx.onResult?.(result) ?? [];
+  if (ctx.isSubmissionCurrent && !ctx.isSubmissionCurrent()) {
+    return ctx.settleStale?.() ?? { index: ctx.index, observation: '' };
+  }
+  // Null describes a running process. An unknown job is a local tool failure,
+  // not a still-running verifier with a fabricated process status.
+  const exitCode = result.status === 'running' ? null : result.exit_code ?? 1;
   const detail = result.timed_out
     ? 'timed_out (still running)'
     : `exit ${result.exit_code ?? -1} (${result.status})`;
@@ -131,7 +143,7 @@ export async function executeAwaitCommandAction(
       ].join('\n');
   return {
     index: ctx.index,
-    observation,
+    observation: [observation, ...settlementNotes].join('\n'),
   };
 }
 
@@ -152,6 +164,12 @@ export function executeChatAwaitCommandAction(
   },
 ): Promise<BackgroundShellActionResult> {
   const { host, ownerGeneration } = ctx;
+  const job = getBackgroundShellJob(action.task_id);
+  const isCurrent = () => host.isSubmissionCurrent(ownerGeneration) &&
+    (!job || isChatBackgroundOwnerCurrent(host, job, ownerGeneration));
+  const settleStale = () => host.settleStaleActionResult(ctx.tool, ctx.target, ctx.index,
+    'background command does not belong to the current submission');
+  if (!isCurrent()) return Promise.resolve(settleStale());
   return executeAwaitCommandAction(action, {
     projectRoot: ctx.projectRoot,
     tool: ctx.tool,
@@ -159,20 +177,42 @@ export function executeChatAwaitCommandAction(
     toolId: ctx.toolId,
     index: ctx.index,
     pushLog: entry => {
-      if (host.isSubmissionCurrent(ownerGeneration)) host.toolCallLog.push(entry);
+      if (isCurrent()) host.toolCallLog.push(entry);
     },
     onToolComplete: ctx.callbacks.onToolComplete,
     onBeforeAwait: () => host.persistToolStartedAtExecutorDispatch(action, ctx.meta),
-    isSubmissionCurrent: () => host.isSubmissionCurrent(ownerGeneration),
-    settleStale: () =>
-      host.settleStaleActionResult(
-        ctx.tool,
-        ctx.target,
-        ctx.index,
-        'parent submission superseded while awaiting background command',
-      ),
+    isSubmissionCurrent: isCurrent,
+    settleStale,
     artifactAccess: ctx.artifactAccess,
     artifactCallId: String(ctx.meta.idempotencyKey ?? ctx.toolId),
+    onResult: result => settleChatBackgroundVerifier({
+      host, job: getBackgroundShellJob(action.task_id), result,
+      generation: ownerGeneration, index: ctx.index,
+    }),
+  });
+}
+/** Bind background dispatch provenance and invalidation to the submitting Chat task. */
+export function executeChatBackgroundRunCommandAction(
+  action: Extract<ChatToolAction, { type: 'run_command' }>,
+  ctx: Parameters<typeof executeChatAwaitCommandAction>[1],
+): BackgroundShellActionResult {
+  const { host, ownerGeneration } = ctx;
+  let register: ((job: BackgroundShellJob) => void) | undefined;
+  return executeBackgroundRunCommandAction(action, {
+    projectRoot: ctx.projectRoot, tool: ctx.tool, target: ctx.target,
+    toolId: ctx.toolId, index: ctx.index,
+    ownerId: host.engineRunId,
+    toolCallId: ctx.meta.idempotencyKey,
+    pushLog: entry => {
+      if (host.isSubmissionCurrent(ownerGeneration)) host.toolCallLog.push(entry);
+    },
+    onToolComplete: ctx.callbacks.onToolComplete,
+    onBeforeSpawn: () => {
+      register = prepareChatBackgroundDispatch(host, action.command, action.cwd,
+        ownerGeneration, ctx.meta.idempotencyKey ?? String(ctx.toolId));
+      host.persistToolStartedAtExecutorDispatch(action, ctx.meta);
+    },
+    onStarted: job => register?.(job),
   });
 }
 /** run_command(background=true) — non-blocking shell with sandbox parity gates. */
@@ -252,6 +292,7 @@ export function executeBackgroundRunCommandAction(
       ...(ctx.ownerId !== undefined ? { ownerId: ctx.ownerId } : {}),
       ...(ctx.toolCallId !== undefined ? { toolCallId: ctx.toolCallId } : {}),
     });
+    ctx.onStarted?.(job);
     ctx.pushLog({
       tool: ctx.tool,
       target: ctx.target,
@@ -267,7 +308,7 @@ export function executeBackgroundRunCommandAction(
         `Started background job ${job.id} (hard timeout ${DEFAULT_BACKGROUND_JOB_TIMEOUT_MS / 1000}s).\n` +
         `Use await_command with task_id="${job.id}" to collect exit code and output.\n` +
         `The agent loop is free to continue while this command runs.\n` +
-        `Argv is whitespace-split only (same as shellExec — avoid quoted multi-arg syntax).\n\`\`\``,
+        `Arguments use the shared quote-aware parser; quote paths containing spaces. Shell operators and expansion are unsupported.\n\`\`\``,
     };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

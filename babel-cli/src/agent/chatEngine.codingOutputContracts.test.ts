@@ -5,6 +5,7 @@
  */
 import assert from 'node:assert/strict';
 import { createHash, randomUUID } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 import {
   existsSync,
   mkdirSync,
@@ -27,6 +28,8 @@ import type {
 } from './chatEngineContracts.js';
 import type { ChatToolAction } from './chatToolDefinitions.js';
 import { createWorkingState } from './codingLoop/workingState.js';
+import { recordMutationBatch } from './sessionEvents.js';
+import { evaluateExecuteCompletionHonesty } from './completionGatePolicy.js';
 import {
   killAllBackgroundShells,
   startBackgroundShell,
@@ -275,6 +278,7 @@ describe('Chat coding output contracts (executor dispatch)', { concurrency: fals
         'run_tests',
         'edit_task_files',
         'inspect_repository',
+        'search_repository',
       ],
     });
   });
@@ -286,6 +290,149 @@ describe('Chat coding output contracts (executor dispatch)', { concurrency: fals
       else process.env[key] = value;
     }
     for (const dir of cleanup) rmSync(dir, { recursive: true, force: true });
+  });
+
+  function verifierFixture(expected = '1', delayMs = 0, extraFiles = 0) {
+    const storage = mkdtempSync(join(tmpdir(), 'babel-background-verifier-'));
+    cleanup.push(storage);
+    const projectRoot = join(storage, 'project');
+    const runDir = join(storage, 'run');
+    mkdirSync(projectRoot);
+    mkdirSync(runDir);
+    const controls: HostControls = { ownerGeneration: 1, taskAllowance: allowance('owner', 'task') };
+    writeFileSync(join(projectRoot, 'package.json'), JSON.stringify({ scripts: { test: 'node --test verify.test.mjs' } }));
+    writeFileSync(join(projectRoot, '.gitignore'), 'node_modules\n');
+    writeFileSync(join(projectRoot, 'source.txt'), '0');
+    for (let i = 0; i < extraFiles; i += 1) writeFileSync(join(projectRoot, `input-${i}.txt`), 'fixture input');
+    writeFileSync(join(projectRoot, 'verify.test.mjs'),
+      `import { test } from 'node:test'; import assert from 'node:assert/strict'; import { readFileSync } from 'node:fs';\n` +
+      `test('source value', async () => { await new Promise(r => setTimeout(r, ${delayMs})); assert.equal(readFileSync('source.txt', 'utf8'), ${JSON.stringify(expected)}); });`);
+    // Disposable fixture only; every native failure throws immediately.
+    for (const args of [['init', '-q'], ['add', '.'], ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.test', 'commit', '-qm', 'fixture']]) {
+      execFileSync('git', args, { cwd: projectRoot, stdio: 'pipe', windowsHide: true });
+    }
+    const { host, close } = makeHost(storage, projectRoot, runDir, controls);
+    writeFileSync(join(projectRoot, 'source.txt'), '1');
+    host.writeCount = 1;
+    host.workingState.lastMutation = { path: 'source.txt', at: Date.now() };
+    recordMutationBatch(host.parity.sessionEvents, '0', { paths: ['source.txt'] });
+    const executor = new ChatEngineActionExecutor(host);
+    const run = (action: ChatToolAction) => dispatch(executor, projectRoot, runDir, action, controls.ownerGeneration);
+    const start = async () => {
+      const result = await run({ type: 'run_command', command: 'npm test', background: true });
+      const taskId = result.observation.match(/task_id="(bg-\d+)"/)?.[1];
+      assert.ok(taskId, result.observation);
+      return taskId;
+    };
+    return { host, close, controls, projectRoot, run, start };
+  }
+
+  test('background verifier completion supplies the canonical ledger exactly once', async () => {
+    const f = verifierFixture();
+    try {
+      const taskId = await f.start();
+      assert.equal(f.host.executedVerifierLedger.length, 0, 'starting a job is not verification');
+      const completed = await f.run({ type: 'await_command', task_id: taskId });
+      assert.equal(f.host.executedVerifierLedger.length, 1, completed.observation);
+      assert.equal(f.host.lastVerifierReceipt?.command, 'npm test');
+      assert.equal(f.host.lastVerifierReceipt?.exit_code, 0);
+      assert.equal(f.host.lastVerifierReceipt?.working_directory, '.');
+      assert.equal(f.host.lastVerifierFailed, false);
+      assert.equal(evaluateExecuteCompletionHonesty({
+        hasWrite: f.host.writeCount > 0, policy: 'strict',
+        lastVerifierReceipt: f.host.lastVerifierReceipt,
+        executedVerifierLedger: f.host.executedVerifierLedger, toolCallLog: f.host.toolCallLog,
+      }).allow, true);
+      const attempts = f.host.parity.sessionEvents.events.filter(e => e.kind === 'verifier_attempt').length;
+      await f.run({ type: 'await_command', task_id: taskId });
+      assert.equal(f.host.parity.sessionEvents.events.filter(e => e.kind === 'verifier_attempt').length, attempts);
+    } finally { f.close(); }
+  });
+
+  test('failed background verifier enters repair and phase-gated search executes', async () => {
+    const f = verifierFixture('2');
+    const previous = process.env['BABEL_PHASE_GATED_TOOLS'];
+    try {
+      f.host._lastPhase = 'verify';
+      process.env['BABEL_PHASE_GATED_TOOLS'] = '1';
+      const before = await f.run({ type: 'grep', pattern: '1', path: 'source.txt' });
+      assert.match(before.observation, /phase-gated tools/);
+      const taskId = await f.start();
+      const failed = await f.run({ type: 'await_command', task_id: taskId });
+      assert.equal(f.host.lastVerifierReceipt?.exit_code, 1, failed.observation);
+      assert.equal(f.host.lastVerifierFailed, true);
+      assert.ok(f.host.workingState.failureSurface);
+      const afterFailure = await f.run({ type: 'grep', pattern: '1', path: 'source.txt' });
+      assert.doesNotMatch(afterFailure.observation, /phase-gated tools/);
+      assert.match(afterFailure.observation, /exit_code: 0/);
+      assert.match(afterFailure.observation, /1/);
+    } finally {
+      if (previous === undefined) delete process.env['BABEL_PHASE_GATED_TOOLS'];
+      else process.env['BABEL_PHASE_GATED_TOOLS'] = previous;
+      f.close();
+    }
+  });
+
+  test('background verification uses fresh proof beyond the small reusable-closure limit', async () => {
+    const f = verifierFixture('1', 0, 45);
+    try {
+      const taskId = await f.start();
+      const completed = await f.run({ type: 'await_command', task_id: taskId });
+      assert.equal(f.host.executedVerifierLedger.length, 1, completed.observation);
+      assert.equal(f.host.lastVerifierReceipt?.exit_code, 0);
+      assert.equal(f.host.lastVerifierReceipt?.inputClosure?.mode, 'bound');
+    } finally { f.close(); }
+  });
+
+  for (const changed of ['candidate', 'owner', 'generation', 'session', 'environment', 'cancelled'] as const) {
+    test(`background result cannot certify after ${changed} changes`, async () => {
+      const f = verifierFixture('1', 100);
+      const priorNodeEnv = process.env['NODE_ENV'];
+      try {
+        const taskId = await f.start();
+        if (changed === 'candidate') writeFileSync(join(f.projectRoot, 'added.txt'), 'new candidate');
+        if (changed === 'owner') f.controls.taskAllowance = allowance('new-owner', 'new-task');
+        if (changed === 'generation') f.controls.ownerGeneration = 2;
+        if (changed === 'session') f.host.engineRunId = 'other-session';
+        if (changed === 'environment') process.env['NODE_ENV'] = 'changed-fixture-environment';
+        if (changed === 'cancelled') killAllBackgroundShells({ ownerId: f.host.engineRunId, includeDetached: true });
+        const settled = await f.run({ type: 'await_command', task_id: taskId });
+        if (changed === 'owner' || changed === 'generation' || changed === 'session') {
+          assert.match(settled.observation, /stale await_command/);
+          assert.doesNotMatch(settled.observation, /source value/);
+        }
+        assert.equal(f.host.executedVerifierLedger.length, 0);
+        assert.equal(f.host.lastVerifierReceipt, null);
+        assert.equal(f.host.verifierReceiptCache.size, 0);
+      } finally {
+        if (priorNodeEnv === undefined) delete process.env['NODE_ENV'];
+        else process.env['NODE_ENV'] = priorNodeEnv;
+        f.close();
+      }
+    });
+  }
+
+  test('timed-out await stays receipt-free until the process really finishes', async () => {
+    const f = verifierFixture('1', 1500);
+    try {
+      const taskId = await f.start();
+      const waiting = await f.run({ type: 'await_command', task_id: taskId, timeout_seconds: 1 });
+      assert.match(waiting.observation, /exit_code: null/);
+      assert.equal(f.host.executedVerifierLedger.length, 0);
+      await f.run({ type: 'await_command', task_id: taskId });
+      assert.equal(f.host.executedVerifierLedger.length, 1);
+    } finally { f.close(); }
+  });
+
+  test('unknown background job is a tool failure, never a running verifier', async () => {
+    const f = verifierFixture();
+    try {
+      const missing = await f.run({ type: 'await_command', task_id: 'missing-background-job' });
+      assert.match(missing.observation, /Unknown background task_id/);
+      assert.doesNotMatch(missing.observation, /still running/);
+      assert.equal(parseCompiledObservation(missing.observation).topExit, '1');
+      assert.equal(f.host.executedVerifierLedger.length, 0);
+    } finally { f.close(); }
   });
 
   test('await_command via Chat executor drops stale logs, callbacks, and spill enrollment', async () => {

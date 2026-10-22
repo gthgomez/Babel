@@ -5,6 +5,8 @@
  * Completion order of parallel reads must never rewrite that identity.
  */
 
+import { hashDiscoveryContent } from './discoveryProgress.js'
+
 export interface ToolExecutionIdentity {
   batchId: string
   actionIndex: number
@@ -129,7 +131,7 @@ export function projectDurableToolBatch(input: {
       function: { name: row.tool, arguments: JSON.stringify(argsObj) },
       actionIndex,
     })
-    const hashed = input.contentHashFor?.(row.tool, content)
+    const hashed = (input.contentHashFor ?? hashDiscoveryContent)(row.tool, content)
     results.push({
       tool_call_id: toolCallId,
       tool_name: row.tool,
