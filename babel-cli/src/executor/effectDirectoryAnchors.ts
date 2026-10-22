@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process'
+import { spawn, type ChildProcess, type SpawnOptions } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { open, lstat, stat } from 'node:fs/promises'
 import type { FileHandle } from 'node:fs/promises'
@@ -9,11 +9,27 @@ export interface EffectDirectoryAnchors {
   release(): Promise<void>
 }
 
+type ChildProcessSpawn = typeof spawn
+
+let childProcessSpawn: ChildProcessSpawn = spawn
+
+/** @internal Inject spawn for deterministic Windows helper lifecycle tests. */
+export function __testSetChildProcessSpawn(factory: ChildProcessSpawn): void {
+  childProcessSpawn = factory
+}
+
+/** @internal Restore production spawn hook after tests. */
+export function __testResetChildProcessSpawn(): void {
+  childProcessSpawn = spawn
+}
+
 // Node does not expose Windows directory sharing flags. This trusted helper
 // opens directory-list/read-attribute handles without FILE_SHARE_DELETE, preventing
 // ancestor rename/junction replacement until this owned helper exits.
 const WINDOWS_LOCK_SCRIPT = String.raw`
 $ErrorActionPreference = 'Stop'
+[Console]::Out.WriteLine('STAGE:boot')
+[Console]::Out.Flush()
 Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
@@ -28,9 +44,13 @@ public static class BabelDirectoryGuard {
   }
 }
 '@
+[Console]::Out.WriteLine('STAGE:typed')
+[Console]::Out.Flush()
 $handles = New-Object 'System.Collections.Generic.List[Microsoft.Win32.SafeHandles.SafeFileHandle]'
 try {
   $request = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('__BABEL_PATHS__')) | ConvertFrom-Json
+  [Console]::Out.WriteLine('STAGE:open')
+  [Console]::Out.Flush()
   foreach ($path in $request.paths) {
     [int]$nativeError = 0
     $handle = [BabelDirectoryGuard]::OpenDirectory($path, [ref]$nativeError)
@@ -44,6 +64,41 @@ try {
 finally { foreach ($handle in $handles) { $handle.Dispose() } }
 `
 
+let windowsAcquireTimeoutMs = 15000
+
+/** @internal Linux-only: shorten the deadline to test timeout error shape, not Windows timing. */
+export function __testSetWindowsAcquireTimeoutMs(timeoutMs: number): void {
+  windowsAcquireTimeoutMs = timeoutMs
+}
+
+/** @internal Restore the production acquisition deadline after tests. */
+export function __testResetWindowsAcquireTimeoutMs(): void {
+  windowsAcquireTimeoutMs = 15000
+}
+
+// Candidate mitigation for overlapping helper spawns (unproven on Windows CI).
+let windowsPinRelease: (() => void) | undefined
+let windowsPinWait: Promise<void> = Promise.resolve()
+
+async function withWindowsPinLock<T>(work: () => Promise<T>): Promise<T> {
+  await windowsPinWait
+  let release!: () => void
+  windowsPinWait = new Promise<void>(resolve => { release = resolve })
+  windowsPinRelease = release
+  try {
+    return await work()
+  } catch (error) {
+    release()
+    windowsPinRelease = undefined
+    throw error
+  }
+}
+
+function releaseWindowsPinLock(): void {
+  windowsPinRelease?.()
+  windowsPinRelease = undefined
+}
+
 function ancestors(path: string): string[] {
   const result: string[] = []
   let current = resolve(path)
@@ -55,48 +110,130 @@ function ancestors(path: string): string[] {
   }
 }
 
-async function pinWindowsDirectories(paths: string[]): Promise<EffectDirectoryAnchors> {
-  const directories = [...new Set(paths.flatMap(ancestors))].sort((a, b) => a.length - b.length)
+function windowsPowerShellExecutable(): string {
   const powerShell7 = join(process.env['ProgramFiles'] ?? 'C:\\Program Files', 'PowerShell', '7', 'pwsh.exe')
-  const executable = existsSync(powerShell7) ? powerShell7
-    : join(process.env['SystemRoot'] ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
-  const script = WINDOWS_LOCK_SCRIPT.replace('__BABEL_PATHS__', Buffer.from(JSON.stringify({ paths: directories }), 'utf8').toString('base64'))
-    .replace('__BABEL_PARENT_PID__', String(process.pid))
-  const readyLine = `READY:${directories.length}`
-  const child = spawn(executable, ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], {
-    windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'],
-  })
-  let diagnostic = ''
-  child.stderr.on('data', (chunk: Buffer) => { diagnostic = (diagnostic + chunk.toString('utf8')).slice(0, 1000) })
-  let exited = false
-  const exit = new Promise<void>(resolveExit => {
-    child.once('exit', () => { exited = true; resolveExit() })
-    child.once('error', () => { exited = true; resolveExit() })
-  })
-  try {
-    await new Promise<void>((ready, reject) => {
-      let output = ''
-      const timeout = setTimeout(() => { child.kill(); reject(new Error('EFFECT_DIRECTORY_ANCHOR_UNAVAILABLE: Windows handle acquisition timed out')) }, 15000)
-      const finish = (error?: Error): void => { clearTimeout(timeout); error ? reject(error) : ready() }
-      child.once('error', () => finish(new Error('EFFECT_DIRECTORY_ANCHOR_UNAVAILABLE: Windows helper unavailable')))
-      child.once('exit', () => { if (!output.startsWith(readyLine)) finish(new Error(`EFFECT_DIRECTORY_ANCHOR_UNAVAILABLE: Windows handles refused ${output.trim() || diagnostic}`)) })
-      child.stdout.on('data', (chunk: Buffer) => {
-        output += chunk.toString('utf8')
-        if (output.trim() === readyLine) finish()
-        else if (output.includes('\n') || output.length > 1024) finish(new Error(`EFFECT_DIRECTORY_ANCHOR_UNAVAILABLE: Windows handles refused ${output.trim().slice(0, 100)}`))
-      })
-    })
-    return {
-      path: path => {
-        if (exited || !paths.includes(dirname(path))) throw new Error('EFFECT_DIRECTORY_ANCHOR_LOST')
-        return path
-      },
-      release: async () => { if (!exited) child.kill(); await exit },
-    }
-  } catch (error) {
-    child.kill(); await exit
-    throw error
+  if (existsSync(powerShell7)) return powerShell7
+  return join(process.env['SystemRoot'] ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
+}
+
+function spawnWindowsPowerShell(script: string): ChildProcess {
+  const executable = windowsPowerShellExecutable()
+  const args = ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')]
+  const options: SpawnOptions = { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] }
+  return childProcessSpawn(executable, args, options)
+}
+
+function takeStdoutLine(buffer: string): { line?: string; rest: string } {
+  const newline = buffer.indexOf('\n')
+  if (newline < 0) return { rest: buffer }
+  const line = buffer.slice(0, newline).replace(/\r$/, '')
+  return { line, rest: buffer.slice(newline + 1) }
+}
+
+function latestStage(output: string): string | undefined {
+  const lines = output.split(/\r?\n/).filter(Boolean)
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const line = lines[index] ?? ''
+    if (line.startsWith('STAGE:')) return line.slice('STAGE:'.length)
   }
+  return undefined
+}
+
+async function waitForWindowsReadyLine(
+  child: ChildProcess,
+  readyLine: string,
+  state: { output: string; transcript: string; diagnostic: string; exited: boolean },
+): Promise<void> {
+  await new Promise<void>((ready, reject) => {
+    const timeout = setTimeout(() => {
+      child.kill()
+      const stage = latestStage(state.transcript)
+      const detail = state.transcript.trim() || state.diagnostic.trim() || 'no helper output'
+      const stageSuffix = stage ? ` (last stage: ${stage})` : ''
+      reject(new Error(`EFFECT_DIRECTORY_ANCHOR_UNAVAILABLE: Windows handle acquisition timed out${stageSuffix}: ${detail.slice(0, 200)}`))
+    }, windowsAcquireTimeoutMs)
+    const finish = (error?: Error): void => {
+      clearTimeout(timeout)
+      error ? reject(error) : ready()
+    }
+    const onStdout = (chunk: Buffer): void => {
+      const text = chunk.toString('utf8')
+      state.transcript += text
+      state.output += text
+      let pending = state.output
+      while (true) {
+        const { line, rest } = takeStdoutLine(pending)
+        pending = rest
+        if (line === undefined) break
+        if (line === readyLine) {
+          state.output = pending
+          child.stdout?.off('data', onStdout)
+          finish()
+          return
+        }
+        if (line.startsWith('ERROR:')) {
+          state.output = pending
+          child.stdout?.off('data', onStdout)
+          finish(new Error(`EFFECT_DIRECTORY_ANCHOR_UNAVAILABLE: Windows handles refused ${line}`))
+          return
+        }
+      }
+      state.output = pending
+    }
+    child.stdout?.on('data', onStdout)
+    child.once('error', () => finish(new Error('EFFECT_DIRECTORY_ANCHOR_UNAVAILABLE: Windows helper unavailable')))
+    child.once('exit', () => {
+      child.stdout?.off('data', onStdout)
+      if (!state.output.split(/\r?\n/).some(line => line.replace(/\r$/, '') === readyLine)) {
+        finish(new Error(`EFFECT_DIRECTORY_ANCHOR_UNAVAILABLE: Windows handles refused ${state.output.trim() || state.diagnostic}`))
+      }
+    })
+  })
+}
+
+async function pinWindowsDirectories(paths: string[]): Promise<EffectDirectoryAnchors> {
+  return withWindowsPinLock(async () => {
+    const directories = [...new Set(paths.flatMap(ancestors))].sort((a, b) => a.length - b.length)
+    const readyLine = `READY:${directories.length}`
+    const script = WINDOWS_LOCK_SCRIPT.replace('__BABEL_PATHS__', Buffer.from(JSON.stringify({ paths: directories }), 'utf8').toString('base64'))
+      .replace('__BABEL_PARENT_PID__', String(process.pid))
+    const child = spawnWindowsPowerShell(script)
+    const state = { output: '', transcript: '', diagnostic: '', exited: false }
+    child.stderr?.on('data', (chunk: Buffer) => {
+      state.diagnostic = (state.diagnostic + chunk.toString('utf8')).slice(0, 1000)
+    })
+    const exit = new Promise<void>(resolveExit => {
+      child.once('exit', () => { state.exited = true; resolveExit() })
+      child.once('error', () => { state.exited = true; resolveExit() })
+    })
+    try {
+      await waitForWindowsReadyLine(child, readyLine, state)
+      return {
+        path: path => {
+          if (state.exited || !paths.includes(dirname(path))) throw new Error('EFFECT_DIRECTORY_ANCHOR_LOST')
+          return path
+        },
+        release: async () => {
+          try {
+            if (!state.exited) child.kill()
+            await exit
+          } finally {
+            releaseWindowsPinLock()
+          }
+        },
+      }
+    } catch (error) {
+      child.kill()
+      await exit
+      releaseWindowsPinLock()
+      throw error
+    }
+  })
+}
+
+/** @internal Exercise the production Windows pin path on Linux via spawn injection. */
+export async function __testPinWindowsDirectories(paths: string[]): Promise<EffectDirectoryAnchors> {
+  return pinWindowsDirectories(paths.map(path => resolve(path)))
 }
 
 /** Bind path operations to stable directories instead of check/use pathnames. */
