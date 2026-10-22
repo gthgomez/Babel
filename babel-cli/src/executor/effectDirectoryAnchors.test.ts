@@ -20,7 +20,7 @@ function fixtureBoundDirectory(prefix: string): string {
   return resolve(mkdtempSync(join(tmpdir(), prefix)))
 }
 
-function mockHelperChild(write: (stdout: PassThrough) => void): ChildProcess {
+function mockHelperChild(write: (stdout: PassThrough) => void, options?: { delayedExitMs?: number }): ChildProcess {
   const stdin = new PassThrough()
   const stdout = new PassThrough()
   const stderr = new PassThrough()
@@ -32,7 +32,8 @@ function mockHelperChild(write: (stdout: PassThrough) => void): ChildProcess {
   child.kill = () => {
     if (!killed) {
       killed = true
-      setImmediate(() => { child.emit('exit', 0) })
+      const delay = options?.delayedExitMs ?? 0
+      setTimeout(() => { child.emit('exit', 0) }, delay)
     }
     return true
   }
@@ -40,10 +41,10 @@ function mockHelperChild(write: (stdout: PassThrough) => void): ChildProcess {
   return child
 }
 
-function mockLineChild(lines: string[]): ChildProcess {
+function mockLineChild(lines: string[], options?: { delayedExitMs?: number }): ChildProcess {
   return mockHelperChild(stdout => {
     for (const line of lines) stdout.write(`${line}\n`)
-  })
+  }, options)
 }
 
 function mockChunkChild(chunks: string[]): ChildProcess {
@@ -58,8 +59,8 @@ describe('Windows helper diagnostic protocol (STAGE introduced by this patch)', 
     const bound = fixtureBoundDirectory('babel-anchor-frag-')
     const readyLine = __testWindowsReadyLineForBoundDirectories([bound])
     __testSetChildProcessSpawn(((..._args: Parameters<typeof spawn>) => mockChunkChild([
-      'STAGE:boot\nST',
-      'AGE:typed\nSTAGE:open\n',
+      'STAGE:boot\n',
+      'STAGE:typed\nSTAGE:open\n',
       `${readyLine}\n`,
     ]) as ReturnType<typeof spawn>) as typeof spawn)
 
@@ -70,7 +71,7 @@ describe('Windows helper diagnostic protocol (STAGE introduced by this patch)', 
     await __testResetChildProcessSpawn()
   })
 
-  test('fail-closed when helper stdout exceeds bounded transcript', async () => {
+  test('fail-closed when helper stdout exceeds UTF-8 byte bound', async () => {
     await __testResetChildProcessSpawn()
     const bound = fixtureBoundDirectory('babel-anchor-bound-')
     __testSetChildProcessSpawn(((..._args: Parameters<typeof spawn>) => mockHelperChild(stdout => {
@@ -79,8 +80,41 @@ describe('Windows helper diagnostic protocol (STAGE introduced by this patch)', 
 
     await assert.rejects(
       () => __testPinWindowsDirectories([bound]),
-      /stdout exceeded bounds/,
+      /exceeded 1024-byte bound/,
     )
+    await __testResetChildProcessSpawn()
+  })
+
+  test('rejects garbage, malformed STAGE, and wrong READY count before a later valid READY', async () => {
+    await __testResetChildProcessSpawn()
+    const bound = fixtureBoundDirectory('babel-anchor-negative-')
+    const readyLine = __testWindowsReadyLineForBoundDirectories([bound])
+    const wrongReady = readyLine.replace(/\d+$/, '1')
+    const cases = [
+      ['STAGE:boot', 'STAGE:typed', 'STAGE:open', 'GARBAGE', readyLine],
+      ['STAGE:boot', 'STAGE:evil', 'STAGE:open', readyLine],
+      ['STAGE:boot', 'STAGE:typed', 'STAGE:open', wrongReady, readyLine],
+    ]
+    for (const lines of cases) {
+      __testSetChildProcessSpawn(((..._args: Parameters<typeof spawn>) => mockLineChild(lines) as ReturnType<typeof spawn>) as typeof spawn)
+      await assert.rejects(() => __testPinWindowsDirectories([bound]), /refused/)
+    }
+    await __testResetChildProcessSpawn()
+  })
+
+  test('rejects ERROR or garbage trailing READY in the same stdout chunk', async () => {
+    await __testResetChildProcessSpawn()
+    const bound = fixtureBoundDirectory('babel-anchor-trailing-')
+    const readyLine = __testWindowsReadyLineForBoundDirectories([bound])
+    __testSetChildProcessSpawn(((..._args: Parameters<typeof spawn>) => mockChunkChild([
+      `STAGE:boot\nSTAGE:typed\nSTAGE:open\n${readyLine}\nERROR:1:5\n`,
+    ]) as ReturnType<typeof spawn>) as typeof spawn)
+    await assert.rejects(() => __testPinWindowsDirectories([bound]), /refused/)
+
+    __testSetChildProcessSpawn(((..._args: Parameters<typeof spawn>) => mockChunkChild([
+      `STAGE:boot\nSTAGE:typed\nSTAGE:open\n${readyLine}\nGARBAGE\n`,
+    ]) as ReturnType<typeof spawn>) as typeof spawn)
+    await assert.rejects(() => __testPinWindowsDirectories([bound]), /refused/)
     await __testResetChildProcessSpawn()
   })
 
@@ -146,16 +180,22 @@ describe('Windows anchor ownership without process-global gate', () => {
     await __testResetChildProcessSpawn()
   })
 
-  test('release is idempotent for one owner', async () => {
+  test('sequential release calls are idempotent and each await helper exit', async () => {
     await __testResetChildProcessSpawn()
     const bound = fixtureBoundDirectory('babel-anchor-idempotent-')
     const readyLine = __testWindowsReadyLineForBoundDirectories([bound])
     __testSetChildProcessSpawn(((..._args: Parameters<typeof spawn>) => mockLineChild([
       'STAGE:boot', 'STAGE:typed', 'STAGE:open', readyLine,
-    ]) as ReturnType<typeof spawn>) as typeof spawn)
+    ], { delayedExitMs: 40 }) as ReturnType<typeof spawn>) as typeof spawn)
 
     const anchors = await __testPinWindowsDirectories([bound])
-    await anchors.release()
+    const first = anchors.release()
+    const second = anchors.release()
+    let secondSettled = false
+    void second.then(() => { secondSettled = true })
+    await new Promise(resolve => setImmediate(resolve))
+    assert.equal(secondSettled, false, 'concurrent release must stay pending until helper exit')
+    await Promise.all([first, second])
     await anchors.release()
     await __testResetChildProcessSpawn()
   })

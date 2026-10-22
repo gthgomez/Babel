@@ -23,7 +23,10 @@ export function __testResetChildProcessSpawn(): void {
   childProcessSpawn = spawn
 }
 
-const WINDOWS_HELPER_STDOUT_LIMIT = 1024
+/** Maximum UTF-8 bytes retained from helper stdout (not JavaScript string length). */
+const WINDOWS_HELPER_STDOUT_BYTE_LIMIT = 1024
+
+const ALLOWED_STAGE_LINES = new Set(['STAGE:boot', 'STAGE:typed', 'STAGE:open'])
 const WINDOWS_ACQUIRE_TIMEOUT_MS = 15000
 
 let windowsAcquireTimeoutMs = WINDOWS_ACQUIRE_TIMEOUT_MS
@@ -125,9 +128,48 @@ function latestStage(transcript: string): string {
   return 'startup'
 }
 
-function appendBounded(current: string, chunk: string, limit: number): string | undefined {
-  if (current.length + chunk.length > limit) return undefined
-  return current + chunk
+function appendBoundedUtf8(current: string, chunk: Buffer, limitBytes: number): string | undefined {
+  const text = chunk.toString('utf8')
+  const combined = current + text
+  if (Buffer.byteLength(combined, 'utf8') > limitBytes) return undefined
+  return combined
+}
+
+function classifyStdoutLine(line: string, readyLine: string): 'stage' | 'ready' | 'error' | 'invalid' {
+  if (ALLOWED_STAGE_LINES.has(line)) return 'stage'
+  if (line.startsWith('ERROR:')) return 'error'
+  if (line.startsWith('READY:')) return line === readyLine ? 'ready' : 'invalid'
+  return 'invalid'
+}
+
+function refuseLine(line: string): Error {
+  return new Error(`EFFECT_DIRECTORY_ANCHOR_UNAVAILABLE: Windows handles refused ${line.slice(0, 100)}`)
+}
+
+/** Process every complete line currently in pending; fail-closed on protocol violations. */
+function processPendingStdoutLines(
+  pending: string,
+  readyLine: string,
+): { pending: string; ready?: true; error?: Error } {
+  let afterReady = false
+  let rest = pending
+  while (true) {
+    const { line, rest: next } = takeStdoutLine(rest)
+    if (line === undefined) {
+      return afterReady ? { pending: rest, ready: true } : { pending: rest }
+    }
+    rest = next
+    if (!afterReady) {
+      const kind = classifyStdoutLine(line, readyLine)
+      if (kind === 'invalid' || kind === 'error') return { pending: rest, error: refuseLine(line) }
+      if (kind === 'ready') {
+        afterReady = true
+        continue
+      }
+      continue
+    }
+    return { pending: rest, error: refuseLine(line) }
+  }
 }
 
 async function waitForWindowsReadyLine(
@@ -151,34 +193,30 @@ async function waitForWindowsReadyLine(
       finish(new Error(`EFFECT_DIRECTORY_ANCHOR_UNAVAILABLE: Windows handle acquisition timed out (last stage: ${stage}): ${detail.slice(0, 200)}`))
     }, windowsAcquireTimeoutMs)
     const onStdout = (chunk: Buffer): void => {
-      const text = chunk.toString('utf8')
-      const nextTranscript = appendBounded(state.transcript, text, WINDOWS_HELPER_STDOUT_LIMIT)
+      const nextTranscript = appendBoundedUtf8(state.transcript, chunk, WINDOWS_HELPER_STDOUT_BYTE_LIMIT)
       if (nextTranscript === undefined) {
         child.kill()
-        finish(new Error('EFFECT_DIRECTORY_ANCHOR_UNAVAILABLE: Windows helper stdout exceeded bounds'))
+        finish(new Error(`EFFECT_DIRECTORY_ANCHOR_UNAVAILABLE: Windows helper stdout exceeded ${WINDOWS_HELPER_STDOUT_BYTE_LIMIT}-byte bound`))
         return
       }
       state.transcript = nextTranscript
-      const nextPending = appendBounded(state.pending, text, WINDOWS_HELPER_STDOUT_LIMIT)
+      const nextPending = appendBoundedUtf8(state.pending, chunk, WINDOWS_HELPER_STDOUT_BYTE_LIMIT)
       if (nextPending === undefined) {
         child.kill()
-        finish(new Error('EFFECT_DIRECTORY_ANCHOR_UNAVAILABLE: Windows helper stdout exceeded bounds'))
+        finish(new Error(`EFFECT_DIRECTORY_ANCHOR_UNAVAILABLE: Windows helper stdout exceeded ${WINDOWS_HELPER_STDOUT_BYTE_LIMIT}-byte bound`))
         return
       }
       state.pending = nextPending
-      while (true) {
-        const { line, rest } = takeStdoutLine(state.pending)
-        if (line === undefined) break
-        state.pending = rest
-        if (line === readyLine) {
-          state.ready = true
-          finish()
-          return
-        }
-        if (line.startsWith('ERROR:')) {
-          finish(new Error(`EFFECT_DIRECTORY_ANCHOR_UNAVAILABLE: Windows handles refused ${line}`))
-          return
-        }
+      const parsed = processPendingStdoutLines(state.pending, readyLine)
+      state.pending = parsed.pending
+      if (parsed.error) {
+        child.kill()
+        finish(parsed.error)
+        return
+      }
+      if (parsed.ready) {
+        state.ready = true
+        finish()
       }
     }
     child.stdout?.on('data', onStdout)
@@ -209,16 +247,17 @@ async function pinWindowsDirectories(paths: string[]): Promise<EffectDirectoryAn
   })
   try {
     await waitForWindowsReadyLine(child, readyLine, state)
-    let released = false
+    let killRequested = false
     return {
       path: path => {
         if (state.exited || !paths.includes(dirname(path))) throw new Error('EFFECT_DIRECTORY_ANCHOR_LOST')
         return path
       },
       release: async () => {
-        if (released) return
-        released = true
-        if (!state.exited) child.kill()
+        if (!killRequested) {
+          killRequested = true
+          if (!state.exited) child.kill()
+        }
         await exit
       },
     }
