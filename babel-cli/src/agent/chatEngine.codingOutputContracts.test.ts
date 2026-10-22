@@ -43,6 +43,7 @@ import { loadLeaseFromEnv } from '../authority/lease.js';
 import { createParityRuntime } from './chatEngineParityBridge.js';
 import { resolveLiveSessionAuthority } from './liveSessionBridge.js';
 import { openAdmissionStore, type AdmissionStore } from '../runtime/admission.js';
+import { resetDockerAvailabilityCache, setDockerAvailableForTest } from '../config/benchmarkContainer.js';
 
 function shellArg(value: string): string {
   if (process.platform === 'win32') return `"${value.replaceAll('"', '\\"')}"`;
@@ -394,6 +395,48 @@ describe('Chat coding output contracts (executor dispatch)', { concurrency: fals
       assert.match(stale.observation, /stale|cancelled/i);
       assert.equal(f.host.executedVerifierLedger.length, 0);
     } finally { process.env['BABEL_DRY_RUN'] = prior; f.close(); }
+  });
+
+  test('background cancellation at dispatch cannot manufacture a failed verifier', async () => {
+    const f = verifierFixture();
+    const controller = new AbortController();
+    f.host.persistToolStartedAtExecutorDispatch = () => controller.abort();
+    try {
+      const cancelled = await f.run({ type: 'run_command', command: 'npm test', background: true }, controller.signal);
+      assert.doesNotMatch(cancelled.observation, /Started background job/);
+      assert.match(cancelled.observation, /cancelled/i);
+      assert.equal(f.host.executedVerifierLedger.length, 0, cancelled.observation);
+      assert.equal(f.host.lastVerifierReceipt, null);
+      assert.notEqual(f.host.lastVerifierFailed, true);
+      assert.equal(f.host.workingState.failureSurface, undefined);
+    } finally { f.close(); }
+  });
+
+  test('background-only Docker denial cannot manufacture a failed verifier', async () => {
+    const f = verifierFixture();
+    const priorProfile = process.env['BABEL_EXECUTION_PROFILE'];
+    const priorImage = process.env['BABEL_BENCHMARK_DOCKER_IMAGE'];
+    const priorDisable = process.env['BABEL_DOCKER_DISABLE'];
+    try {
+      process.env['BABEL_EXECUTION_PROFILE'] = 'benchmark_container';
+      process.env['BABEL_BENCHMARK_DOCKER_IMAGE'] = 'fixture-unused-image';
+      delete process.env['BABEL_DOCKER_DISABLE'];
+      setDockerAvailableForTest(true);
+      const denied = await f.run({ type: 'run_command', command: 'npm test', background: true });
+      assert.match(denied.observation, /Background shell is not available under Docker sandbox profiles/);
+      assert.doesNotMatch(denied.observation, /Started background job/);
+      assert.equal(f.host.executedVerifierLedger.length, 0, denied.observation);
+      assert.equal(f.host.lastVerifierReceipt, null);
+      assert.notEqual(f.host.lastVerifierFailed, true);
+      assert.equal(f.host.workingState.failureSurface, undefined);
+    } finally {
+      for (const [key, value] of Object.entries({ BABEL_EXECUTION_PROFILE: priorProfile, BABEL_BENCHMARK_DOCKER_IMAGE: priorImage, BABEL_DOCKER_DISABLE: priorDisable })) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+      resetDockerAvailabilityCache();
+      f.close();
+    }
   });
 
   test('background child receives the governed unprivileged Git environment', async () => {

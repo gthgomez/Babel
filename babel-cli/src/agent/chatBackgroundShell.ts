@@ -16,7 +16,7 @@ import {
   type BackgroundShellJob,
   type AwaitBackgroundShellResult,
 } from './backgroundShell.js';
-import { SafeExecutor, validateExecutorShellCommand } from '../sandbox.js';
+import { SafeExecutor, validateExecutorShellCommand, type ToolResult } from '../sandbox.js';
 import { readRuntimeMode } from '../config/runtimeMode.js';
 import { isToolAllowedForExecutionProfile } from '../config/executionProfiles.js';
 import { shouldUseDockerSandbox } from '../config/benchmarkContainer.js';
@@ -202,6 +202,13 @@ export function createChatBackgroundExecutor(
 ): { executor: ToolExecutor; waitForStart: (completion: Promise<PolicyGatedExecutionResult>) => Promise<BackgroundShellActionResult | null> } {
   const { host, ownerGeneration } = ctx;
   let startedJob: BackgroundShellJob | undefined;
+  const notStarted = (reasonCode: string, message: string): ToolResult => ({
+    exit_code: 1, stdout: '', stderr: message,
+    denial: {
+      category: 'executor_policy', reason_code: reasonCode, message,
+      tool: 'shell_exec', active_mode: null, required_mode: null, evidence: null,
+    },
+  });
   let announceStart!: (result: BackgroundShellActionResult) => void;
   const started = new Promise<BackgroundShellActionResult>(resolve => { announceStart = resolve; });
   const executor: ToolExecutor = {
@@ -212,11 +219,13 @@ export function createChatBackgroundExecutor(
         return (host.options.toolExecutorForTesting ?? defaultToolExecutor).execute(agentAction, context, budget);
       }
       if (context.signal?.aborted || !host.isSubmissionCurrent(ownerGeneration)) {
-        return { action: agentAction, terminal: false, results: [{ exit_code: 1, stdout: '', stderr: 'Background dispatch cancelled before spawn.' }] };
+        return { action: agentAction, terminal: false, results: [notStarted('BACKGROUND_DISPATCH_CANCELLED', 'Background dispatch cancelled before spawn.')] };
       }
       const startResult = startChatBackgroundCommand(action, ctx, job => { startedJob = job; }, context.signal);
       const job = startedJob;
-      if (!job) return { action: agentAction, terminal: false, results: [{ exit_code: 1, stdout: '', stderr: startResult.observation }] };
+      // No child ran: preserve denial metadata so the governed caller cannot
+      // promote this dispatch failure into an executed red verifier receipt.
+      if (!job) return { action: agentAction, terminal: false, results: [notStarted('BACKGROUND_DISPATCH_NOT_STARTED', startResult.observation)] };
       const onAbort = () => { if (!action.detached) killBackgroundShell(job.id); };
       context.signal?.addEventListener('abort', onAbort, { once: true });
       if (context.signal?.aborted) onAbort();
