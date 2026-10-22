@@ -21,6 +21,10 @@ import {
   type RunArtifactAccess,
 } from './codingLoop/readArtifactExecutor.js';
 import type { ChatToolAction } from './chatToolDefinitions.js';
+import type {
+  ChatCallbacks,
+  ChatEngineActionExecutorHost,
+} from './chatEngineContracts.js';
 
 export interface BackgroundShellLogEntry {
   tool: string;
@@ -128,6 +132,47 @@ export async function executeAwaitCommandAction(
     index: ctx.index,
     observation,
   };
+}
+
+/** Binds await_command to the submission that dispatched it in Chat. */
+export function executeChatAwaitCommandAction(
+  action: Extract<ChatToolAction, { type: 'await_command' }>,
+  ctx: {
+    host: ChatEngineActionExecutorHost;
+    projectRoot: string;
+    tool: string;
+    target: string;
+    toolId: number;
+    index: number;
+    ownerGeneration: number;
+    meta: { index: number; idempotencyKey?: string };
+    callbacks: ChatCallbacks;
+    artifactAccess?: RunArtifactAccess | undefined;
+  },
+): Promise<BackgroundShellActionResult> {
+  const { host, ownerGeneration } = ctx;
+  return executeAwaitCommandAction(action, {
+    projectRoot: ctx.projectRoot,
+    tool: ctx.tool,
+    target: ctx.target,
+    toolId: ctx.toolId,
+    index: ctx.index,
+    pushLog: entry => {
+      if (host.isSubmissionCurrent(ownerGeneration)) host.toolCallLog.push(entry);
+    },
+    onToolComplete: ctx.callbacks.onToolComplete,
+    onBeforeAwait: () => host.persistToolStartedAtExecutorDispatch(action, ctx.meta),
+    isSubmissionCurrent: () => host.isSubmissionCurrent(ownerGeneration),
+    settleStale: () =>
+      host.settleStaleActionResult(
+        ctx.tool,
+        ctx.target,
+        ctx.index,
+        'parent submission superseded while awaiting background command',
+      ),
+    artifactAccess: ctx.artifactAccess,
+    artifactCallId: String(ctx.meta.idempotencyKey ?? ctx.toolId),
+  });
 }
 /** run_command(background=true) — non-blocking shell with sandbox parity gates. */
 export function executeBackgroundRunCommandAction(

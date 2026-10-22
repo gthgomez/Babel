@@ -54,9 +54,9 @@ import { mutationPathsFromSessionEvents } from "../evidence/chatRevisionBinding.
 import {
   executeActionWithPolicy,
   defaultToolExecutor,
-  createToolExecutor,
   type PolicyGatedExecutionResult,
 } from "./toolExecutor.js";
+import { chatReadToolExecutor } from "./chatReadExecutor.js";
 import { governedStrReplace } from "./governedMutations.js";
 import { executeGovernedApplyPatchAction } from "./codingLoop/applyPatchExecutor.js";
 import { executeReadRangeAction } from "./codingLoop/readRangeExecutor.js";
@@ -68,7 +68,7 @@ import {
 } from "../bridge/remoteApproval.js";
 import { createHash } from "node:crypto";
 import {
-  executeAwaitCommandAction,
+  executeChatAwaitCommandAction,
   executeBackgroundRunCommandAction,
 } from "./chatBackgroundShell.js";
 import {
@@ -121,13 +121,6 @@ export class ChatEngineActionExecutor {
   private editFormatSawOutcome = false;
 
   constructor(private readonly host: ChatEngineActionExecutorHost) {}
-
-  private readonly chatReadToolExecutor = createToolExecutor({
-    executeTool: (request, context) => executeTool(
-      request.tool === "file_read" ? { ...request, raw: true } : request,
-      context,
-    ),
-  });
 
   /**
    * Packet D2: feed one edit-format outcome into the per-session tracker and
@@ -1143,32 +1136,17 @@ export class ChatEngineActionExecutor {
 
       // Background shell — handlers in chatBackgroundShell.ts (size ratchet)
       if (action.type === "await_command") {
-        return executeAwaitCommandAction(action, {
+        return executeChatAwaitCommandAction(action, {
+          host: this.host,
           projectRoot: requireProjectRoot(this.host.options),
           tool,
           target,
           toolId,
           index: meta.index,
-          pushLog: (entry) => {
-            // R0-8: the await is a suspension point; a superseded submission
-            // must not append the settled row to the new task's tool log.
-            if (this.host.isSubmissionCurrent(ownerGeneration))
-              this.host.toolCallLog.push(entry);
-          },
-          onToolComplete: callbacks.onToolComplete,
-          onBeforeAwait: () =>
-            this.host.persistToolStartedAtExecutorDispatch(action, meta),
-          isSubmissionCurrent: () =>
-            this.host.isSubmissionCurrent(ownerGeneration),
-          settleStale: () =>
-            this.host.settleStaleActionResult(
-              tool,
-              target,
-              meta.index,
-              "parent submission superseded while awaiting background command",
-            ),
+          ownerGeneration,
+          meta,
+          callbacks,
           artifactAccess,
-          artifactCallId: String(meta.idempotencyKey ?? toolId),
         });
       }
       if (action.type === "run_command" && action.background === true) {
@@ -1334,7 +1312,7 @@ export class ChatEngineActionExecutor {
           : "workspace_write",
         toolContext,
         {
-          executor: this.host.options.toolExecutorForTesting ?? this.chatReadToolExecutor,
+          executor: this.host.options.toolExecutorForTesting ?? chatReadToolExecutor,
           mode:
             this.host.executionProfile === "plan"
               ? "plan"
@@ -1413,15 +1391,8 @@ export class ChatEngineActionExecutor {
         if (action.type === "read_file") {
           if (r.exit_code === 0) {
             const window = selectReadWindow(r.stdout ?? "", { kind: "full" });
-            const completeness = r.output_completeness
-              ? {
-                  complete: r.output_completeness.complete,
-                  originalBytes: r.output_completeness.original_bytes,
-                  returnedBytes: r.output_completeness.returned_bytes,
-                }
-              : undefined;
             obsParts.push(
-              formatReadObservation("read_file", target, window, completeness),
+              formatReadObservation("read_file", target, window, r.output_completeness),
             );
           } else {
             obsParts.push(
