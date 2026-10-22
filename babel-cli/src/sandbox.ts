@@ -153,6 +153,13 @@ export interface ToolResult {
   exit_code: number;
   stdout: string;
   stderr: string;
+  /** Source completeness for capped file reads; absent for other tools. */
+  output_completeness?: {
+    complete: boolean;
+    original_bytes: number;
+    returned_bytes: number;
+    reason?: 'byte_limit';
+  };
   /**
    * Present only when the sandbox itself failed to launch the process. Absent
    * for every child-produced result, including a child that prints a
@@ -1489,7 +1496,10 @@ export class SafeExecutor {
 
   // ── File operations ──────────────────────────────────────────────────────────
 
-  fileRead(inputPath: string, options?: { offset?: number; limit?: number }): ToolResult {
+  fileRead(
+    inputPath: string,
+    options?: { offset?: number; limit?: number; raw?: boolean },
+  ): ToolResult {
     try {
       const safePath = this.resolveSafeRead(inputPath);
 
@@ -1543,7 +1553,7 @@ export class SafeExecutor {
    */
   private formatFileContent(
     content: string,
-    options?: { offset?: number; limit?: number },
+    options?: { offset?: number; limit?: number; raw?: boolean },
   ): ToolResult {
     const MAX_BYTES = 100 * 1024;
     const totalBytes = Buffer.byteLength(content, 'utf-8');
@@ -1551,6 +1561,7 @@ export class SafeExecutor {
     // Safety cap: truncate to 100 KB at the nearest newline boundary
     let truncatedContent = content;
     let capMessage = '';
+    let capped = false;
     if (totalBytes > MAX_BYTES) {
       const buf = Buffer.from(content, 'utf-8');
       truncatedContent = buf.subarray(0, MAX_BYTES).toString('utf-8');
@@ -1559,7 +1570,23 @@ export class SafeExecutor {
       if (lastNewline > 0) {
         truncatedContent = truncatedContent.substring(0, lastNewline);
       }
+      capped = true;
       capMessage = ` [truncated at ${MAX_BYTES / 1024} KB]`;
+    }
+
+    if (options?.raw) {
+      const bytes = Buffer.byteLength(truncatedContent, 'utf8');
+      return {
+        exit_code: 0,
+        stdout: truncatedContent,
+        stderr: '',
+        output_completeness: {
+          complete: !capped,
+          original_bytes: totalBytes,
+          returned_bytes: bytes,
+          ...(capped ? { reason: 'byte_limit' as const } : {}),
+        },
+      };
     }
 
     // Split into lines; remove the trailing empty element from a final \n
@@ -1578,12 +1605,28 @@ export class SafeExecutor {
 
     if (selectedLines.length === 0) {
       if (totalLines === 0) {
-        return { exit_code: 0, stdout: '', stderr: '' };
+        return {
+          exit_code: 0,
+          stdout: '',
+          stderr: '',
+          output_completeness: {
+            complete: !capped,
+            original_bytes: totalBytes,
+            returned_bytes: Buffer.byteLength(truncatedContent, 'utf8'),
+            ...(capped ? { reason: 'byte_limit' as const } : {}),
+          },
+        };
       }
       return {
         exit_code: 0,
         stdout: `[File has ${totalLines} lines; lines ${startLine}–${startLine + maxLines - 1} are out of range]`,
         stderr: '',
+        output_completeness: {
+          complete: !capped,
+          original_bytes: totalBytes,
+          returned_bytes: Buffer.byteLength(truncatedContent, 'utf8'),
+          ...(capped ? { reason: 'byte_limit' as const } : {}),
+        },
       };
     }
 
@@ -1610,6 +1653,12 @@ export class SafeExecutor {
       exit_code: 0,
       stdout: [...headerParts, ...resultLines].join('\n'),
       stderr: '',
+      output_completeness: {
+        complete: !capped,
+        original_bytes: totalBytes,
+        returned_bytes: Buffer.byteLength(truncatedContent, 'utf8'),
+        ...(capped ? { reason: 'byte_limit' as const } : {}),
+      },
     };
   }
 

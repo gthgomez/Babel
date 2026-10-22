@@ -322,6 +322,7 @@ describe('Live monomorphic ChatEngine loop', () => {
           content: 'hello world',
           target: 'hello.txt',
           contentHash: 'abc123',
+          exit_code: 0,
         },
       ],
     });
@@ -341,6 +342,7 @@ describe('Live monomorphic ChatEngine loop', () => {
           content: 'hello world',
           target: 'hello.txt',
           contentHash: 'abc123',
+          exit_code: 0,
         },
       ],
     });

@@ -270,6 +270,8 @@ export async function captureAndRecordVerifierReceipt(input: {
   cacheIdentity?: { key: string; cwd: string; envKey: string };
   /** The command was not started. A synthetic exit must not enter the ledger. */
   simulated?: boolean;
+  /** Recheck suspended execution ownership/candidate immediately before publishing evidence. */
+  canPublish?: () => boolean;
 }): Promise<BoundChatVerifierReceipt | null> {
   if (input.simulated === true) return null;
   const identity =
@@ -304,6 +306,7 @@ export async function captureAndRecordVerifierReceipt(input: {
     },
   });
   if (!receipt) return null;
+  if (input.canPublish && !input.canPublish()) return null;
   const caveats = verifierEvidenceCaveats(receipt);
   if (caveats.length > 0 && !receipt.summary.includes(caveats[0]!)) {
     receipt.summary = [receipt.summary, ...caveats].join('\n');

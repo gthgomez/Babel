@@ -37,6 +37,8 @@ export function evaluatePhaseToolGate(opts: {
   phase: ChatPhase | null;
   enabled?: boolean;
   isMutationSubAgent?: boolean;
+  /** Same controller-owned red-verifier state that reopens post-write investigation. */
+  repairInvestigation?: boolean;
 }): PhaseToolGateResult {
   if (!(opts.enabled ?? isPhaseGatedToolsEnabled())) {
     return { blocked: false };
@@ -58,7 +60,7 @@ export function evaluatePhaseToolGate(opts: {
   }
 
   // verify: discourage broad search thrash — still allow run_command / test_run
-  if (opts.phase === 'verify' && (name === 'grep' || name === 'glob' || name === 'semantic_search')) {
+  if (opts.phase === 'verify' && !opts.repairInvestigation && (name === 'grep' || name === 'glob' || name === 'semantic_search')) {
     return {
       blocked: true,
       observation:

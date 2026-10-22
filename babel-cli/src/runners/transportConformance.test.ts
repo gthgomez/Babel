@@ -337,7 +337,15 @@ test('transport: transports only EMIT tool_use events — the agent lane execute
   assert.match(providerRuntime, /nativeActions\.push\(action\)/, 'agent provider owner retains actions for execution');
   assert.match(chatEngine, /new ChatEngineActionExecutor\(/, 'agent lane retains its governed action executor');
   assert.match(chatEngine, /return this\.actionExecutor\.executeOneAction\(/, 'agent lane forwards actions to its governed owner');
-  assert.match(actionExecutor, /await executeActionWithPolicy\(/, 'agent action owner dispatches through the boundary');
+  const awaitsGovernedDispatch = (source: string): boolean => {
+    const retained = source.match(/\bconst\s+(\w+)\s*=\s*executeActionWithPolicy\(/);
+    return /await executeActionWithPolicy\(/.test(source) ||
+      (retained !== null && new RegExp(`\\bawait\\s+${retained[1]}\\b`).test(source));
+  };
+  assert.equal(awaitsGovernedDispatch('await executeActionWithPolicy(action)'), true);
+  assert.equal(awaitsGovernedDispatch('const pending = executeActionWithPolicy(action); await unrelated'), false,
+    'an unawaited governed result must still fail this architecture guard');
+  assert.ok(awaitsGovernedDispatch(actionExecutor), 'agent action owner awaits the governed boundary directly or through its retained result');
 });
 
 // ─── Registry ↔ implementation coherence ────────────────────────────────────

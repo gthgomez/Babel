@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { spawn, spawnSync } from 'node:child_process';
 import {
@@ -23,7 +24,8 @@ import { executeTool } from '../localTools.js';
 import { loadEffectLedger } from '../executor/effectLedger.js';
 import type { ChatEvent } from './chatEngine.js';
 import { persistTranscriptToDisk } from './chatEngineObservability.js';
-import { getBackgroundShellJob, killAllBackgroundShells } from './backgroundShell.js';
+import { getBackgroundShellJob, killAllBackgroundShells, startBackgroundShell } from './backgroundShell.js';
+import { executeAwaitCommandAction } from './chatBackgroundShell.js';
 import type { ChatMessage } from './chatToolDefinitions.js';
 import { CompactionManager } from './chatCompaction.js';
 import { recordUserMessage } from './threadEventLog.js';
@@ -199,9 +201,11 @@ function makeFixture() {
   process.env['BABEL_BENCHMARK_MODE'] = '1';
   process.env['BABEL_AUTONOMY_LEASE'] = JSON.stringify({
     version: 2,
-    leaseId: 'lifecycle-fixture-lease',
+    // Each independent fixture owns its authority. A prior background job's
+    // fail-closed drift revocation must not revoke a later fixture's lease.
+    leaseId: `lifecycle-fixture-${randomUUID()}`,
     scope: { repository: 'lifecycle-fixture', objective: 'deterministic lifecycle qualification' },
-    allowedCapabilities: ['run_arbitrary_code', 'run_local_command', 'run_tests', 'edit_task_files'],
+    allowedCapabilities: ['run_arbitrary_code', 'run_local_command', 'run_tests', 'edit_task_files', 'inspect_repository'],
   });
   // This is an explicit test-only host boundary for real child-process fixtures;
   // production defaults and safety policy remain unchanged.
@@ -342,6 +346,211 @@ await engine.submitMessage('Create the marker with the crash-after-effect lifecy
 }
 
 describe('ChatEngine lifecycle and crash qualification', { concurrency: false }, () => {
+  test('Chat repeats a byte-capped long-line read and reports incomplete source', async () => {
+    const fixture = makeFixture();
+    writeFileSync(
+      join(fixture.project, 'long-lines.txt'),
+      `${'A'.repeat(60_000)}\n${'B'.repeat(60_000)}\n`,
+      'utf8',
+    );
+    let calls = 0;
+    const runner: TestRunner = {
+      ...makeRunner(() => []),
+      async *executeWithToolsStream(..._args: unknown[]) {
+        if (calls++ === 0) {
+          yield {
+            type: 'tool_use', id: 'read-long-1', name: 'read_file',
+            input: { path: 'long-lines.txt' },
+          };
+        } else if (calls === 2) {
+          yield {
+            type: 'tool_use', id: 'read-long-2', name: 'read_file',
+            input: { path: 'long-lines.txt' },
+          };
+        } else {
+          yield { type: 'text_delta', text: 'The capped source was reported accurately.' };
+          yield { type: 'done', finishReason: 'stop' };
+          return;
+        }
+        yield { type: 'done', finishReason: 'tool_calls' };
+      },
+    };
+    const engine = makeEngine(fixture.project, 'long-line-read-cap', runner, {
+      maxTurns: 5,
+      toolExecutorForTesting: createToolExecutor({
+        executeTool: (request, context) =>
+          executeTool(
+            request.tool === 'file_read' ? { ...request, raw: true } : request,
+            context,
+          ),
+      }),
+    });
+    try {
+      await collectStream(
+        engine.submitMessageStream('Read long-lines.txt twice and report its contents.'),
+      );
+      assert.equal(calls, 3, 'both repeated read actions reached the Chat executor');
+      const readObservations = engine.getConversation()
+        .filter(message =>
+          message.role === 'tool' &&
+          message.content.startsWith('### read_file long-lines.txt'))
+        .map(message => message.content);
+      assert.equal(readObservations.length, 2, 'both tool calls produced a Chat observation');
+      assert.equal(
+        readObservations.filter(observation => observation.includes('source byte-capped')).length,
+        2,
+        'each real Chat observation identifies the byte-capped source');
+      assert.equal(
+        readObservations.some(observation => observation.includes('complete file')),
+        false,
+        'a byte-capped result is never described as a complete file');
+      assert.equal(
+        engine['fullReadCounts'].size,
+        0,
+        'an incomplete source read does not consume the full-read allowance');
+    } finally { fixture.cleanup(); }
+  });
+
+  test('await_command enrolls large output for owner-bound artifact retrieval', async () => {
+    const fixture = makeFixture();
+    const sentinel = 'BACKGROUND_MIDDLE_ONLY_91ac';
+    const script = writeNodeFixture(
+      fixture.root,
+      'background-output.mjs',
+      `console.log(Array.from({ length: 1200 }, (_, i) => i === 600 ? '${sentinel}' : 'diagnostic row ' + i + ' ' + 'x'.repeat(40)).join('\\n'));`,
+    );
+    let engine!: ChatEngine;
+    let turn = 0;
+    let artifactId = '';
+    let retrieved = false;
+    const runner: TestRunner = {
+      ...makeRunner(() => []),
+      async *executeWithToolsStream(...args: unknown[]) {
+        const request = JSON.stringify(args);
+        if (turn++ === 0) {
+          yield {
+            type: 'tool_use', id: 'background-large-output', name: 'run_command',
+            input: { command: `node ${shellArg(script)}`, background: true },
+          };
+        } else if (turn === 2) {
+          const started = (engine as any).toolCallLog.find(
+            (entry: { detail?: string }) => entry.detail?.startsWith('background started '),
+          );
+          const taskId = started?.detail?.match(/bg-\d+/)?.[0];
+          assert.ok(taskId, 'background job started before await');
+          yield {
+            type: 'tool_use', id: 'await-large-output', name: 'await_command',
+            input: { task_id: taskId },
+          };
+        } else if (turn === 3) {
+          assert.equal(
+            request.includes(sentinel), false,
+            'middle output is omitted from the bounded preview',
+          );
+          const id = request.match(/artifact_id:\s*([a-f0-9-]{36})/)?.[1];
+          assert.ok(id, 'await observation includes its enrolled artifact handle');
+          artifactId = id;
+          yield {
+            type: 'tool_use', id: 'read-background-artifact', name: 'read_artifact',
+            input: { artifact_id: artifactId, query: sentinel },
+          };
+        } else {
+          assert.equal(
+            request.includes(sentinel), true,
+            'read_artifact retrieves the omitted background diagnostic',
+          );
+          retrieved = true;
+          yield { type: 'text_delta', text: 'The background diagnostic was retrieved.' };
+          yield { type: 'done', finishReason: 'stop' };
+          return;
+        }
+        yield { type: 'done', finishReason: 'tool_calls' };
+      },
+    };
+    engine = makeEngine(
+      fixture.project,
+      'background-artifact-retrieval',
+      runner,
+      { maxTurns: 8, operatorMode: 'default', hardPlanMode: false },
+    );
+    try {
+      await collectStream(
+        engine.submitMessageStream(
+          'Implement the background output feature by running the diagnostic and retrieving its middle output.',
+          'execute',
+        ),
+      );
+      assert.equal(retrieved, true);
+      assert.match(artifactId, /^[a-f0-9-]{36}$/);
+    } finally {
+      const killed = killAllBackgroundShells({
+        ownerId: (engine as any).engineRunId,
+        includeDetached: true,
+      });
+      engine.cancel();
+      await Promise.all(killed.killed.map(id => getBackgroundShellJob(id)?.done));
+      fixture.cleanup();
+    }
+  });
+
+  test('await_command drops results when submission ownership changes during wait', async () => {
+    const fixture = makeFixture();
+    const spillWrites: string[] = [];
+    try {
+      for (const output of ['small output', 'spill-sized output '.repeat(400)]) {
+        const script = writeNodeFixture(
+          fixture.root,
+          `stale-await-${output.length}.mjs`,
+          `console.log(${JSON.stringify(output)}); await new Promise(resolve => setTimeout(resolve, 50));`,
+        );
+        const job = startBackgroundShell({
+          command: `node ${shellArg(script)}`,
+          cwd: fixture.project,
+          timeoutMs: 10_000,
+          ownerId: 'stale-await-fixture',
+        });
+        let current = true;
+        let logged = false;
+        let completed = false;
+        let settledStale = false;
+        const result = await executeAwaitCommandAction(
+          { task_id: job.id },
+          {
+            projectRoot: fixture.project,
+            tool: 'await_command',
+            target: job.id,
+            toolId: 1,
+            index: 1,
+            pushLog: () => { logged = true; },
+            onToolComplete: () => { completed = true; },
+            onBeforeAwait: () => { setImmediate(() => { current = false; }); },
+            isSubmissionCurrent: () => current,
+            settleStale: () => {
+              settledStale = true;
+              return { index: 1, observation: 'stale action settled' };
+            },
+            artifactAccess: {
+              read: () => '',
+              writeSpill: (name, content) => {
+                spillWrites.push(name);
+                return content;
+              },
+            },
+          },
+        );
+        assert.deepEqual(result, { index: 1, observation: 'stale action settled' });
+        assert.equal(settledStale, true);
+        assert.equal(logged, false, 'stale output is not added to the tool log');
+        assert.equal(completed, false, 'stale output does not complete the old tool call');
+      }
+      assert.deepEqual(spillWrites, [], 'stale output is never enrolled as an artifact');
+    } finally {
+      const killed = killAllBackgroundShells({ ownerId: 'stale-await-fixture', includeDetached: true });
+      await Promise.all(killed.killed.map(id => getBackgroundShellJob(id)?.done));
+      fixture.cleanup();
+    }
+  });
+
   test('overlapping engines retain command cwd, fallback reads, evidence roots and ambient restoration', { timeout: 30_000 }, async () => {
     const fixture = makeFixture();
     const previousRoot = process.env['BABEL_PROJECT_ROOT'];

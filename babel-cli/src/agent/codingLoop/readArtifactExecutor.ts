@@ -11,10 +11,20 @@ export interface RunArtifactAccess {
 
 /** Format command evidence with enrollment scoped to its captured dispatch. */
 export function formatRegisteredToolObservation(
-  action: ChatToolAction, result: ToolResult, access: RunArtifactAccess, toolCallId: string,
+  action: ChatToolAction,
+  result: ToolResult,
+  access: RunArtifactAccess,
+  toolCallId: string,
+  /** When set, overrides ToolResult.exit_code for the compiled observation (null = still running). */
+  observationExitCode?: number | null,
 ): string {
-  return formatChatToolObservation(action, { stdout: result.stdout, stderr: result.stderr, exitCode: result.exit_code },
-    { toolCallId, writeSpill: access.writeSpill })
+  const exitCode =
+    observationExitCode !== undefined ? observationExitCode : result.exit_code
+  return formatChatToolObservation(
+    action,
+    { stdout: result.stdout, stderr: result.stderr, exitCode },
+    { toolCallId, writeSpill: access.writeSpill },
+  )
 }
 
 /** Capture the dispatching durable owner before any operation can suspend. */
