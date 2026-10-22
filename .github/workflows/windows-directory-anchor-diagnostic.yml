@@ -12,6 +12,9 @@ concurrency:
   group: windows-directory-anchor-diagnostic-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
   measure:
     name: windows anchor diagnostic (instance ${{ matrix.instance }})
@@ -21,8 +24,12 @@ jobs:
       fail-fast: false
       matrix:
         instance: [0, 1]
+    env:
+      GITHUB_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
         with:
           node-version: '22'
@@ -43,6 +50,8 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: windows-anchor-diagnostic-instance-${{ matrix.instance }}
-          path: babel-cli/artifacts/windows-anchor-diagnostic/report-instance-${{ matrix.instance }}.json
+          path: |
+            babel-cli/artifacts/windows-anchor-diagnostic/report-instance-${{ matrix.instance }}.json
+            babel-cli/artifacts/windows-anchor-diagnostic/samples-instance-${{ matrix.instance }}.jsonl
           if-no-files-found: error
           retention-days: 14
