@@ -1,0 +1,7 @@
+{
+  "immutable_paths": {
+    "tests/greet.test.js": "0edf38757c5adc8e92eb081681c88ad4061a6fffa3a552a4505025a953e4807d",
+    "package.json": "d9dc1bf4d09f12a0cc87ffa7f10c1f18df862289c1ce8e342ac721d7f4a5e686",
+    "src/decoy.ts": "28c24301312d61647ece9e34bb49bf2e3b478c41b5d17a2b304c34a53e00c90d"
+  }
+}

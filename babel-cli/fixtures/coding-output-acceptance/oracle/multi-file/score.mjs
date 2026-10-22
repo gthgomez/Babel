@@ -12,24 +12,21 @@ if (!workspace) {
   process.exit(2);
 }
 
-const templateRoot = join(dirname(fileURLToPath(import.meta.url)), '../../workspaces/multi-file');
+const oracleRoot = dirname(fileURLToPath(import.meta.url));
+const expected = JSON.parse(readFileSync(join(oracleRoot, 'expected-hashes.json'), 'utf8'));
 
-execFileSync('npm', ['test'], { cwd: workspace, stdio: 'inherit', windowsHide: true });
-
-assert.match(
-  readFileSync(join(workspace, 'src/greet.ts'), 'utf8'),
-  /Hello,\s*\$\{name\}!/,
-);
-assert.match(readFileSync(join(workspace, 'src/index.ts'), 'utf8'), /formatGreeting/);
-
-for (const rel of ['src/decoy.ts', 'package.json']) {
-  const expected = readFileSync(join(templateRoot, rel), 'utf8');
-  const actual = readFileSync(join(workspace, rel), 'utf8');
+for (const [rel, hash] of Object.entries(expected.immutable_paths)) {
+  const actual = readFileSync(join(workspace, rel));
   assert.equal(
     createHash('sha256').update(actual).digest('hex'),
-    createHash('sha256').update(expected).digest('hex'),
-    `${rel} must remain unchanged`,
+    hash,
+    `${rel} must match the operator template (agent may not mutate visible tests or decoys)`,
   );
 }
+
+execFileSync(process.execPath, [join(oracleRoot, 'invoke-greeting.mjs'), workspace], {
+  stdio: 'inherit',
+  windowsHide: true,
+});
 
 console.log(JSON.stringify({ functional_success: true, oracle: 'multi-file' }));

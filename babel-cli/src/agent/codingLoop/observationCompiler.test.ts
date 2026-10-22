@@ -197,6 +197,26 @@ describe('observation compiler (shipped formatChatToolObservation path)', () => 
   })
 })
 
+test('await timeout preserves null top-level exit_code and timed_out summary', () => {
+  const header = [
+    'task_id: bg-1',
+    'status: running',
+    'timed_out: true',
+    'exit_code: null',
+  ].join('\n')
+  const rendered = formatCompiledObservation(
+    compileObservation({
+      tool: 'await_command',
+      target: 'bg-1',
+      exitCode: null,
+      stdout: `${header}\n--- stdout ---\npartial`,
+      stderr: '',
+    }),
+  )
+  assert.match(rendered, /^### await_command bg-1\nexit_code: null\nsummary: timed_out/)
+  assert.doesNotMatch(rendered, /^### await_command bg-1\nexit_code: -1/m)
+})
+
 test('Node 22 TAP stack frames retain failure location and column without an at prefix', () => {
   const stdout = [
     'TAP version 13',

@@ -6,8 +6,10 @@
 import assert from 'node:assert/strict';
 import { createHash, randomUUID } from 'node:crypto';
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -47,6 +49,21 @@ function writeNodeFixture(root: string, name: string, source: string): string {
   const path = join(root, name);
   writeFileSync(path, source, 'utf8');
   return path;
+}
+
+function artifactEnrollmentCount(runDir: string): number {
+  const root = join(runDir, 'tool-output-artifacts');
+  if (!existsSync(root)) return 0;
+  return readdirSync(root).filter((name) => name.endsWith('.json')).length;
+}
+
+/** Parsed top-level compiled observation fields (authoritative model contract). */
+function parseCompiledObservation(observation: string): { topExit: string | undefined; summary: string | undefined } {
+  const lines = observation.split('\n');
+  return {
+    topExit: lines.find((line) => line.startsWith('exit_code: '))?.slice('exit_code: '.length),
+    summary: lines.find((line) => line.startsWith('summary: '))?.slice('summary: '.length),
+  };
 }
 
 function allowance(
@@ -265,7 +282,7 @@ describe('Chat coding output contracts (executor dispatch)', { concurrency: fals
     for (const dir of cleanup) rmSync(dir, { recursive: true, force: true });
   });
 
-  test('await_command via Chat executor drops stale logs, callbacks, and artifact enrollment', async () => {
+  test('await_command via Chat executor drops stale logs, callbacks, and spill enrollment', async () => {
     const storage = mkdtempSync(join(tmpdir(), 'babel-await-stale-chat-'));
     cleanup.push(storage);
     const projectRoot = join(storage, 'project');
@@ -274,8 +291,9 @@ describe('Chat coding output contracts (executor dispatch)', { concurrency: fals
     mkdirSync(runDir);
     const script = writeNodeFixture(
       storage,
-      'slow-await.mjs',
-      `await new Promise(resolve => setTimeout(resolve, 200)); console.log('done');`,
+      'stale-spill-await.mjs',
+      `console.log(Array.from({ length: 3000 }, (_, i) => 'spill-row ' + i).join('\\n'));\n` +
+        `await new Promise(resolve => setTimeout(resolve, 400));`,
     );
     const job = startBackgroundShell({
       command: `node ${shellArg(script)}`,
@@ -284,13 +302,12 @@ describe('Chat coding output contracts (executor dispatch)', { concurrency: fals
       ownerId: 'stale-chat-fixture',
     });
     const controls: HostControls = { ownerGeneration: 1, taskAllowance: allowance('owner-1', 'task-1') };
-    let superseded = false;
+    const enrollmentBefore = artifactEnrollmentCount(runDir);
     const { host, close } = makeHost(storage, projectRoot, runDir, controls);
     try {
     const originalPersist = host.persistToolStartedAtExecutorDispatch.bind(host);
     host.persistToolStartedAtExecutorDispatch = (...args) => {
       originalPersist(...args);
-      superseded = true;
       controls.ownerGeneration = 2;
     };
     const executor = new ChatEngineActionExecutor(host);
@@ -298,19 +315,59 @@ describe('Chat coding output contracts (executor dispatch)', { concurrency: fals
       executor,
       projectRoot,
       runDir,
-      { type: 'await_command', task_id: job.id },
+      { type: 'await_command', task_id: job.id, timeout_seconds: 30 },
       1,
       'await-stale',
     );
-    assert.equal(superseded, true);
     assert.match(observation, /stale await_command/);
-    assert.equal(host.toolCallLog.length, 0, 'superseded await must not append toolCallLog');
-    assert.equal(callbacks.completes.length, 0, 'superseded await must not call onToolComplete');
+    assert.equal(host.toolCallLog.length, 0, 'toolCallLog: superseded await must not append rows');
+    assert.equal(callbacks.completes.length, 0, 'onToolComplete: superseded await must not fire');
     assert.equal(
-      host.toolCallLog.some(entry => entry.detail?.includes('artifact')),
-      false,
+      artifactEnrollmentCount(runDir),
+      enrollmentBefore,
+      'tool-output-artifacts: stale await must not enroll spill output',
     );
     await job.done;
+    } finally { close(); }
+  });
+
+  test('spill-sized await_command enrolls artifact when submission stays current', async () => {
+    const storage = mkdtempSync(join(tmpdir(), 'babel-await-spill-control-'));
+    cleanup.push(storage);
+    const projectRoot = join(storage, 'project');
+    const runDir = join(storage, 'run');
+    mkdirSync(projectRoot);
+    mkdirSync(runDir);
+    const script = writeNodeFixture(
+      storage,
+      'spill-complete.mjs',
+      `console.log(Array.from({ length: 3000 }, (_, i) => 'spill-row ' + i).join('\\n'));`,
+    );
+    const controls: HostControls = { ownerGeneration: 1, taskAllowance: allowance('owner-1', 'task-1') };
+    const { host, close } = makeHost(storage, projectRoot, runDir, controls);
+    try {
+    const executor = new ChatEngineActionExecutor(host);
+    const bg = await dispatch(
+      executor,
+      projectRoot,
+      runDir,
+      { type: 'run_command', command: `node ${shellArg(script)}`, background: true },
+      1,
+      'spill-bg',
+    );
+    const taskId = bg.observation.match(/task_id="(bg-\d+)"/)?.[1];
+    assert.ok(taskId);
+    const before = artifactEnrollmentCount(runDir);
+    const settled = await dispatch(
+      executor,
+      projectRoot,
+      runDir,
+      { type: 'await_command', task_id: taskId, timeout_seconds: 30 },
+      1,
+      'spill-await',
+    );
+    assert.ok(settled.observation.includes('artifact_id:'));
+    assert.ok(artifactEnrollmentCount(runDir) > before);
     } finally { close(); }
   });
 
@@ -353,8 +410,21 @@ describe('Chat coding output contracts (executor dispatch)', { concurrency: fals
       1,
       'await-running',
     );
+    const firstParsed = parseCompiledObservation(first.observation);
+    assert.equal(firstParsed.topExit, 'null', 'authoritative top-level exit must be null while running');
+    assert.match(firstParsed.summary ?? '', /timed_out \(still running/);
+    assert.doesNotMatch(first.observation, /^### await_command[^\n]*\nexit_code: -1/m);
     assert.match(first.observation, /timed_out: true/);
-    assert.match(first.observation, /exit_code: null/);
+    assert.match(first.observation, /\nexit_code: null\n/);
+    assert.equal(first.callbacks.completes.length, 1);
+    assert.equal(
+      first.callbacks.completes[0]?.exitCode,
+      1,
+      'onToolComplete uses exit code 1 when timed_out (UI/log operational semantics)',
+    );
+    const logAfterFirst = host.toolCallLog.find((entry) => entry.tool === 'await_command');
+    assert.equal(logAfterFirst?.exit_code, 1, 'toolCallLog exit_code uses 1 when process exit is unknown');
+    assert.match(logAfterFirst?.detail ?? '', /timed_out \(still running\)/);
     const second = await dispatch(
       executor,
       projectRoot,
@@ -363,9 +433,12 @@ describe('Chat coding output contracts (executor dispatch)', { concurrency: fals
       1,
       'await-complete',
     );
+    const secondParsed = parseCompiledObservation(second.observation);
+    assert.equal(secondParsed.topExit, '0');
+    assert.match(secondParsed.summary ?? '', /^ok /);
     assert.match(second.observation, /timed_out: false/);
-    assert.match(second.observation, /exit_code: 0/);
     assert.match(second.observation, /finished/);
+    assert.equal(second.callbacks.completes[0]?.exitCode, 0);
     } finally { close(); }
   });
 
@@ -454,7 +527,7 @@ describe('Chat coding output contracts (executor dispatch)', { concurrency: fals
     } finally { close(); }
   });
 
-  test('read_file uses production Chat wrapper: byte cap, full-read accounting, and cache on repeat', async () => {
+  test('read_file uses production Chat wrapper: byte cap and full-read accounting on repeat (no readCache claim)', async () => {
     const storage = mkdtempSync(join(tmpdir(), 'babel-read-wrapper-'));
     cleanup.push(storage);
     const projectRoot = join(storage, 'project');

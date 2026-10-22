@@ -116,6 +116,7 @@ export async function executeAwaitCommandAction(
         },
         ctx.artifactAccess,
         ctx.artifactCallId ?? String(ctx.toolId),
+        exitCode,
       )
     : [
         `### await_command ${action.task_id}`,

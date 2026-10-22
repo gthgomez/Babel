@@ -645,7 +645,7 @@ const OBSERVATION_COMPILER_TOOLS = new Set([
 
 export function formatChatToolObservation(
   action: ChatToolAction,
-  result: { stdout?: string; stderr?: string; exitCode?: number },
+  result: { stdout?: string; stderr?: string; exitCode?: number | null },
   opts?: { spillDir?: string; toolCallId?: string; writeSpill?: (name: string, content: string) => string },
 ): string {
   const tool = chatActionToolName(action);
@@ -657,7 +657,7 @@ export function formatChatToolObservation(
         tool,
         target,
         ...(command !== undefined ? { command } : {}),
-        exitCode: result.exitCode ?? -1,
+        exitCode: result.exitCode === undefined ? -1 : result.exitCode,
         stdout: result.stdout ?? '',
         stderr: result.stderr ?? '',
         ...(opts?.spillDir !== undefined ? { spillDir: opts.spillDir } : {}),
