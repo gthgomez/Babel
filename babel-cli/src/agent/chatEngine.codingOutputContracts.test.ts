@@ -33,6 +33,7 @@ import { evaluateExecuteCompletionHonesty } from './completionGatePolicy.js';
 import {
   killAllBackgroundShells,
   startBackgroundShell,
+  getBackgroundShellJob,
 } from './backgroundShell.js';
 import { MAX_RUN_OUTPUT_BYTES } from './codingLoop/runOutputArtifacts.js';
 import type { ToolContext } from '../localTools.js';
@@ -234,11 +235,12 @@ async function dispatch(
   action: ChatToolAction,
   ownerGeneration: number,
   idempotencyKey: string = randomUUID(),
+  signal?: AbortSignal,
 ): Promise<{ observation: string; callbacks: ReturnType<typeof trackCallbacks> }> {
   const callbacks = trackCallbacks();
   const result = await executor.executeOneAction(
     action,
-    toolContext(projectRoot, runDir),
+    { ...toolContext(projectRoot, runDir), ...(signal ? { signal } : {}) },
     callbacks,
     { index: 0, ownerGeneration, idempotencyKey },
   );
@@ -317,9 +319,9 @@ describe('Chat coding output contracts (executor dispatch)', { concurrency: fals
     host.workingState.lastMutation = { path: 'source.txt', at: Date.now() };
     recordMutationBatch(host.parity.sessionEvents, '0', { paths: ['source.txt'] });
     const executor = new ChatEngineActionExecutor(host);
-    const run = (action: ChatToolAction) => dispatch(executor, projectRoot, runDir, action, controls.ownerGeneration);
-    const start = async () => {
-      const result = await run({ type: 'run_command', command: 'npm test', background: true });
+    const run = (action: ChatToolAction, signal?: AbortSignal) => dispatch(executor, projectRoot, runDir, action, controls.ownerGeneration, randomUUID(), signal);
+    const start = async (detached = false, signal?: AbortSignal) => {
+      const result = await run({ type: 'run_command', command: 'npm test', background: true, detached }, signal);
       const taskId = result.observation.match(/task_id="(bg-\d+)"/)?.[1];
       assert.ok(taskId, result.observation);
       return taskId;
@@ -497,6 +499,25 @@ describe('Chat coding output contracts (executor dispatch)', { concurrency: fals
       assert.equal(f.host.executedVerifierLedger.length, 0);
       await f.run({ type: 'await_command', task_id: taskId });
       assert.equal(f.host.executedVerifierLedger.length, 1);
+    } finally { f.close(); }
+  });
+
+  test('cancellation while awaiting a detached verifier permanently retires certification', async () => {
+    const f = verifierFixture('1', 200);
+    const controller = new AbortController();
+    try {
+      const taskId = await f.start(true, controller.signal);
+      const waiting = f.run({ type: 'await_command', task_id: taskId }, controller.signal);
+      controller.abort();
+      const result = await waiting;
+      assert.match(result.observation, /stale await_command/);
+      assert.equal(getBackgroundShellJob(taskId)?.exitCode, 0, 'detached child may finish normally');
+      assert.equal(f.host.executedVerifierLedger.length, 0);
+      assert.equal(f.host.lastVerifierReceipt, null);
+      assert.equal(f.host.verifierReceiptCache.size, 0);
+      const later = await f.run({ type: 'await_command', task_id: taskId });
+      assert.match(later.observation, /stale await_command/);
+      assert.equal(f.host.executedVerifierLedger.length, 0);
     } finally { f.close(); }
   });
 

@@ -18,6 +18,7 @@ interface BackgroundDispatch {
   toolCallId: string
   identity: ReturnType<typeof resolveVerifierCacheIdentity>
   candidate: WorkspaceRevision | null
+  signal: AbortSignal | undefined
   settled: boolean
 }
 
@@ -35,7 +36,7 @@ export function bindChatBackgroundPolicy(job: BackgroundShellJob, completion: Pr
 export function isChatBackgroundOwnerCurrent(host: ChatEngineActionExecutorHost, job: BackgroundShellJob, generation: number): boolean {
   const dispatch = dispatches.get(job.done)
   return host.isSubmissionCurrent(generation) && job.ownerId === host.engineRunId &&
-    (dispatch === undefined || (dispatch.generation === generation &&
+    (dispatch === undefined || (dispatch.signal?.aborted !== true && dispatch.generation === generation &&
       dispatch.engineRunId === host.engineRunId &&
       dispatch.taskOwnerId === host.taskAllowance?.taskOwnerId &&
       dispatch.acceptedTaskId === host.taskAllowance?.acceptedTaskId))
@@ -61,6 +62,7 @@ export function prepareChatBackgroundDispatch(
   cwd: string | undefined,
   generation: number,
   toolCallId: string,
+  signal?: AbortSignal,
 ): (job: BackgroundShellJob) => void {
   const projectRoot = requireProjectRoot(host.options)
   const dispatch: BackgroundDispatch = {
@@ -73,6 +75,7 @@ export function prepareChatBackgroundDispatch(
     toolCallId,
     identity: resolveVerifierCacheIdentity({ projectRoot, command, ...(cwd !== undefined ? { cwd } : {}) }),
     candidate: isAuthoritativeVerifierCommand(command) ? candidateRevision(projectRoot) : null,
+    signal,
     settled: false,
   }
   // A running shell can change the tree before it is awaited. Old evidence and

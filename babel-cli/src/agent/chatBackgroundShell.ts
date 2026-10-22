@@ -214,7 +214,7 @@ export function createChatBackgroundExecutor(
       if (context.signal?.aborted || !host.isSubmissionCurrent(ownerGeneration)) {
         return { action: agentAction, terminal: false, results: [{ exit_code: 1, stdout: '', stderr: 'Background dispatch cancelled before spawn.' }] };
       }
-      const startResult = startChatBackgroundCommand(action, ctx, job => { startedJob = job; });
+      const startResult = startChatBackgroundCommand(action, ctx, job => { startedJob = job; }, context.signal);
       const job = startedJob;
       if (!job) return { action: agentAction, terminal: false, results: [{ exit_code: 1, stdout: '', stderr: startResult.observation }] };
       const onAbort = () => { if (!action.detached) killBackgroundShell(job.id); };
@@ -246,6 +246,7 @@ function startChatBackgroundCommand(
   action: Extract<ChatToolAction, { type: 'run_command' }>,
   ctx: Parameters<typeof executeChatAwaitCommandAction>[1],
   onStarted: (job: BackgroundShellJob) => void,
+  signal?: AbortSignal,
 ): BackgroundShellActionResult {
   const { host, ownerGeneration } = ctx;
   let register: ((job: BackgroundShellJob) => void) | undefined;
@@ -263,7 +264,7 @@ function startChatBackgroundCommand(
     },
     onBeforeSpawn: () => {
       register = prepareChatBackgroundDispatch(host, action.command, action.cwd,
-        ownerGeneration, ctx.meta.idempotencyKey ?? String(ctx.toolId));
+        ownerGeneration, ctx.meta.idempotencyKey ?? String(ctx.toolId), signal);
     },
     onStarted: job => { register?.(job); onStarted(job); didStart = true; },
   });
