@@ -1,0 +1,599 @@
+/**
+ * Independent qualification of Chat dispatch wiring for background output and
+ * read_file contracts (#411). Exercises ChatEngineActionExecutor.executeOneAction
+ * (executeChatAwaitCommandAction path), not direct await helpers alone.
+ */
+import assert from 'node:assert/strict';
+import { createHash, randomUUID } from 'node:crypto';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { after, before, describe, test } from 'node:test';
+
+import { OBSERVATION_OUTPUT_CAP_CHARS } from './backgroundShell.js';
+import { ChatEngineActionExecutor } from './chatEngineActionExecutor.js';
+import type {
+  ChatEngineActionExecutorHost,
+  ChatCallbacks,
+  ChatTaskAllowanceSnapshot,
+} from './chatEngineContracts.js';
+import type { ChatToolAction } from './chatToolDefinitions.js';
+import { createWorkingState } from './codingLoop/workingState.js';
+import {
+  killAllBackgroundShells,
+  startBackgroundShell,
+} from './backgroundShell.js';
+import { MAX_RUN_OUTPUT_BYTES } from './codingLoop/runOutputArtifacts.js';
+import type { ToolContext } from '../localTools.js';
+import { registerRunOutput, readRunOutput } from './codingLoop/runOutputArtifacts.js';
+import { establishAuthoritySession, AUTHORITY_SESSION_FILENAME } from '../authority/sessionContext.js';
+import { loadLeaseFromEnv } from '../authority/lease.js';
+import { createParityRuntime } from './chatEngineParityBridge.js';
+import { resolveLiveSessionAuthority } from './liveSessionBridge.js';
+import { openAdmissionStore, type AdmissionStore } from '../runtime/admission.js';
+
+function shellArg(value: string): string {
+  if (process.platform === 'win32') return `"${value.replaceAll('"', '\\"')}"`;
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+function writeNodeFixture(root: string, name: string, source: string): string {
+  const path = join(root, name);
+  writeFileSync(path, source, 'utf8');
+  return path;
+}
+
+function allowance(
+  taskOwnerId: string,
+  acceptedTaskId: string,
+): ChatTaskAllowanceSnapshot {
+  return {
+    schemaVersion: 2,
+    taskOwnerId,
+    acceptedTaskId,
+    accountingEpoch: 'contract-test',
+    grant: {
+      grantId: 'grant',
+      provenance: 'fixture',
+      costCap: { kind: 'unlimited' },
+      wallCapMs: 120_000,
+      turnCap: 20,
+    },
+    consumed: { costUsd: 0, activeWallMs: 0, turns: 0 },
+    repair: {
+      criticRepairCostCapUsd: null,
+      postWriteRepairWallCapMs: null,
+      postWriteRepairRestrict: false,
+    },
+    accountedChargeIds: [],
+    activeExecution: true,
+    taskCostBaselineUsd: 0,
+  };
+}
+
+type HostControls = {
+  ownerGeneration: number;
+  taskAllowance: ChatTaskAllowanceSnapshot | null;
+};
+
+function makeHost(
+  authorizedRoot: string,
+  projectRoot: string,
+  runDir: string,
+  controls: HostControls,
+): { host: ChatEngineActionExecutorHost; close: () => void } {
+  const engineRunId = `contract-${randomUUID()}`;
+  writeFileSync(join(projectRoot, '.gitignore'), 'node_modules\n');
+  const parity = createParityRuntime(engineRunId);
+  const opened = openAdmissionStore({ authorizedRoot, runDir });
+  if (!opened.ok) throw new Error(`admission store unavailable: ${opened.reasonCode}`);
+  parity.admissionStore = opened.store;
+  parity.liveAuthority = resolveLiveSessionAuthority({
+    mode: 'chat',
+    projectRoot,
+    task: 'coding output contract fixture',
+  });
+  parity.authoritySession = establishAuthoritySession({
+    repoRoot: projectRoot,
+    lease: loadLeaseFromEnv(),
+    persistPath: join(runDir, AUTHORITY_SESSION_FILENAME),
+  });
+  const host = {
+    _lastPhase: null,
+    _turnIndex: 0,
+    _streamNativeToolCallIds: [],
+    activeSubmissionGeneration: controls.ownerGeneration,
+    dedupeHitCount: 0,
+    engineRunDir: runDir,
+    engineRunId,
+    executionProfile: 'chat',
+    hardPlanMode: false,
+    requireTodoBeforeMutate: false,
+    isolationBrokerFlags: () => ({ hostFallbackAllowed: true }),
+    readContextEpoch: 0,
+    recoveryStatePersistenceUnavailable: false,
+    taskClass: 'general_swe',
+    todos: new Map(),
+    toolCallLog: [],
+    fullReadCounts: new Map(),
+    readCache: new Map(),
+    readCacheKey: (filePath: string) => filePath,
+    options: { projectRoot, task: 'coding output contract fixture' },
+    parity,
+    policyEventLog: { record: () => {}, events: [] } as never,
+    progressController: {
+      recordFailure: () => ({ notice: undefined }),
+      recordSuccess: () => {},
+    } as never,
+    workingState: createWorkingState('coding output contract fixture'),
+    writeCount: 0,
+    consecutiveReadOnlyTools: 0,
+    lastVerifierReceipt: null,
+    executedVerifierLedger: [],
+    platformUnusableVerifiers: new Set(),
+    patchRecoveryPath: null,
+    verifierReceiptCache: new Map(),
+    taskAllowance: controls.taskAllowance,
+    beginRecoveryLocalizationInspection: () => true,
+    checkVerifierTamper: () => null,
+    consumeFailureBudget: () => true,
+    currentRecoveryBinding: () => null,
+    finishRecoveryLocalizationInspection: () => {},
+    getResolvedRequiredVerifiers: () => [],
+    getTurnRuntimeSnapshot: () => null,
+    getLiveSession: () => ({
+      tools: { completed_idempotency_keys: [] },
+      authorized_observation_ids: [],
+      verifier: { attempts: 0 },
+    }),
+    hashContent: (content: string) => content,
+    hashFilePath: async (filePath: string) =>
+      createHash('sha256')
+        .update(readFileSync(join(projectRoot, filePath)))
+        .digest('hex'),
+    isSubmissionCurrent: (generation: number) =>
+      generation === controls.ownerGeneration,
+    recoveredOperationDispatchAuthorization: () => ({ allowed: true }),
+    noteToolForReadThrash: () => {},
+    persistRecoveryWorkingState: () => {},
+    persistToolStartedAtExecutorDispatch: () => {},
+    settleStaleActionResult: (tool: string, target: string, index: number, reason: string) => ({
+      index,
+      observation: `stale ${tool} ${target}: ${reason}`,
+    }),
+    runPostEditStaticCheck: async () => null,
+    invalidateRepositoryContext: () => {},
+  } as unknown as ChatEngineActionExecutorHost;
+  return {
+    host,
+    close: () => {
+      (opened.store as AdmissionStore).close();
+    },
+  };
+}
+
+function toolContext(projectRoot: string, runDir: string): ToolContext {
+  return {
+    agentId: 'contract-test',
+    runId: 'contract-test',
+    runDir,
+    babelRoot: projectRoot,
+    projectRoot,
+  };
+}
+
+function trackCallbacks(): ChatCallbacks & {
+  completes: Array<{ detail?: string; error?: string; exitCode?: number }>;
+} {
+  const completes: Array<{ detail?: string; error?: string; exitCode?: number }> = [];
+  return {
+    completes,
+    onToolStart: () => 1,
+    onToolComplete: (id, detail, error, exitCode) => {
+      completes.push({ detail, error, exitCode });
+    },
+  };
+}
+
+async function dispatch(
+  executor: ChatEngineActionExecutor,
+  projectRoot: string,
+  runDir: string,
+  action: ChatToolAction,
+  ownerGeneration: number,
+  idempotencyKey = randomUUID(),
+): Promise<{ observation: string; callbacks: ReturnType<typeof trackCallbacks> }> {
+  const callbacks = trackCallbacks();
+  const result = await executor.executeOneAction(
+    action,
+    toolContext(projectRoot, runDir),
+    callbacks,
+    { index: 0, ownerGeneration, idempotencyKey },
+  );
+  return { observation: result.observation, callbacks };
+}
+
+describe('Chat coding output contracts (executor dispatch)', { concurrency: false }, () => {
+  const cleanup: string[] = [];
+  const envBackup: Record<string, string | undefined> = {};
+
+  before(() => {
+    for (const key of [
+      'BABEL_EXECUTION_PROFILE',
+      'BABEL_BENCHMARK_AUTO_APPROVE',
+      'BABEL_BENCHMARK_MODE',
+      'BABEL_ALLOW_HOST_FALLBACK',
+      'BABEL_DRY_RUN',
+      'BABEL_DRY_RUN_SOURCE',
+      'BABEL_PROJECT_ROOT',
+      'BABEL_AUTONOMY_LEASE',
+    ]) {
+      envBackup[key] = process.env[key];
+    }
+    process.env['BABEL_EXECUTION_PROFILE'] = 'dev_local';
+    process.env['BABEL_BENCHMARK_AUTO_APPROVE'] = '1';
+    process.env['BABEL_BENCHMARK_MODE'] = '1';
+    process.env['BABEL_ALLOW_HOST_FALLBACK'] = '1';
+    process.env['BABEL_DRY_RUN'] = '0';
+    process.env['BABEL_DRY_RUN_SOURCE'] = 'session';
+    process.env['BABEL_AUTONOMY_LEASE'] = JSON.stringify({
+      version: 2,
+      leaseId: 'coding-output-contract-lease',
+      scope: { repository: 'contract-fixture', objective: 'coding output contract tests' },
+      allowedCapabilities: [
+        'run_arbitrary_code',
+        'run_local_command',
+        'run_tests',
+        'edit_task_files',
+        'inspect_repository',
+      ],
+    });
+  });
+
+  after(() => {
+    killAllBackgroundShells({ includeDetached: true });
+    for (const [key, value] of Object.entries(envBackup)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    for (const dir of cleanup) rmSync(dir, { recursive: true, force: true });
+  });
+
+  test('await_command via Chat executor drops stale logs, callbacks, and artifact enrollment', async () => {
+    const storage = mkdtempSync(join(tmpdir(), 'babel-await-stale-chat-'));
+    cleanup.push(storage);
+    const projectRoot = join(storage, 'project');
+    const runDir = join(storage, 'run');
+    mkdirSync(projectRoot);
+    mkdirSync(runDir);
+    const script = writeNodeFixture(
+      storage,
+      'slow-await.mjs',
+      `await new Promise(resolve => setTimeout(resolve, 200)); console.log('done');`,
+    );
+    const job = startBackgroundShell({
+      command: `node ${shellArg(script)}`,
+      cwd: projectRoot,
+      timeoutMs: 10_000,
+      ownerId: 'stale-chat-fixture',
+    });
+    const controls: HostControls = { ownerGeneration: 1, taskAllowance: allowance('owner-1', 'task-1') };
+    let superseded = false;
+    const { host, close } = makeHost(storage, projectRoot, runDir, controls);
+    try {
+    const originalPersist = host.persistToolStartedAtExecutorDispatch.bind(host);
+    host.persistToolStartedAtExecutorDispatch = (...args) => {
+      originalPersist(...args);
+      superseded = true;
+      controls.ownerGeneration = 2;
+    };
+    const executor = new ChatEngineActionExecutor(host);
+    const { observation, callbacks } = await dispatch(
+      executor,
+      projectRoot,
+      runDir,
+      { type: 'await_command', task_id: job.id },
+      1,
+      'await-stale',
+    );
+    assert.equal(superseded, true);
+    assert.match(observation, /stale await_command/);
+    assert.equal(host.toolCallLog.length, 0, 'superseded await must not append toolCallLog');
+    assert.equal(callbacks.completes.length, 0, 'superseded await must not call onToolComplete');
+    assert.equal(
+      host.toolCallLog.some(entry => entry.detail?.includes('artifact')),
+      false,
+    );
+    await job.done;
+    } finally { close(); }
+  });
+
+  test('repeated await_command: timed_out preserves null exit status, completion settles truthfully', async () => {
+    const storage = mkdtempSync(join(tmpdir(), 'babel-await-repeat-'));
+    cleanup.push(storage);
+    const projectRoot = join(storage, 'project');
+    const runDir = join(storage, 'run');
+    mkdirSync(projectRoot);
+    mkdirSync(runDir);
+    const script = writeNodeFixture(
+      storage,
+      'slow-complete.mjs',
+      `await new Promise(resolve => setTimeout(resolve, 2500)); console.log('finished');`,
+    );
+    const controls: HostControls = { ownerGeneration: 1, taskAllowance: allowance('owner-1', 'task-1') };
+    const { host, close } = makeHost(storage, projectRoot, runDir, controls);
+    try {
+    host.engineRunId = 'repeat-await-owner';
+    const executor = new ChatEngineActionExecutor(host);
+    const bg = await dispatch(
+      executor,
+      projectRoot,
+      runDir,
+      {
+        type: 'run_command',
+        command: `node ${shellArg(script)}`,
+        background: true,
+      },
+      1,
+      'bg-start',
+    );
+    const taskId = bg.observation.match(/task_id="(bg-\d+)"/)?.[1];
+    assert.ok(taskId, bg.observation);
+    const first = await dispatch(
+      executor,
+      projectRoot,
+      runDir,
+      { type: 'await_command', task_id: taskId, timeout_seconds: 1 },
+      1,
+      'await-running',
+    );
+    assert.match(first.observation, /timed_out: true/);
+    assert.match(first.observation, /exit_code: null/);
+    const second = await dispatch(
+      executor,
+      projectRoot,
+      runDir,
+      { type: 'await_command', task_id: taskId, timeout_seconds: 30 },
+      1,
+      'await-complete',
+    );
+    assert.match(second.observation, /timed_out: false/);
+    assert.match(second.observation, /exit_code: 0/);
+    assert.match(second.observation, /finished/);
+    } finally { close(); }
+  });
+
+  test('failed command with >32k stderr enrolls artifact; read_artifact recovers without rerunning', async () => {
+    const storage = mkdtempSync(join(tmpdir(), 'babel-huge-error-'));
+    cleanup.push(storage);
+    const projectRoot = join(storage, 'project');
+    const runDir = join(storage, 'run');
+    mkdirSync(projectRoot);
+    mkdirSync(runDir);
+    const sentinel = 'HUGE_ERROR_SENTINEL_4c2a';
+    const script = writeNodeFixture(
+      storage,
+      'huge-stderr.mjs',
+      `const pad = ${JSON.stringify('x'.repeat(OBSERVATION_OUTPUT_CAP_CHARS))};\n` +
+        `console.error(pad + ${JSON.stringify(sentinel)} + ${JSON.stringify('y'.repeat(4000))});\nprocess.exit(9);`,
+    );
+    const controls: HostControls = { ownerGeneration: 1, taskAllowance: allowance('owner-1', 'task-1') };
+    const { host, close } = makeHost(storage, projectRoot, runDir, controls);
+    try {
+    const executor = new ChatEngineActionExecutor(host);
+    const ran = await dispatch(
+      executor,
+      projectRoot,
+      runDir,
+      { type: 'run_command', command: `node ${shellArg(script)}` },
+      1,
+      'huge-error-cmd',
+    );
+    assert.equal(
+      ran.observation.includes(sentinel),
+      false,
+      'bounded preview must not expose the middle diagnostic',
+    );
+    const artifactId = ran.observation.match(/artifact_id:\s*([a-f0-9-]{36})/)?.[1];
+    assert.ok(artifactId, ran.observation);
+    const read = await dispatch(
+      executor,
+      projectRoot,
+      runDir,
+      { type: 'read_artifact', artifact_id: artifactId, query: sentinel },
+      1,
+      'huge-error-read',
+    );
+    assert.match(read.observation, new RegExp(sentinel));
+    assert.match(read.observation, /sha256:/);
+    } finally { close(); }
+  });
+
+  test('cross-owner read_artifact is denied after accepted-task replacement', async () => {
+    const storage = mkdtempSync(join(tmpdir(), 'babel-artifact-owner-'));
+    cleanup.push(storage);
+    const projectRoot = join(storage, 'project');
+    const runDir = join(storage, 'run');
+    mkdirSync(projectRoot);
+    mkdirSync(runDir);
+    const controls: HostControls = { ownerGeneration: 1, taskAllowance: allowance('owner-a', 'task-a') };
+    const { host, close } = makeHost(storage, projectRoot, runDir, controls);
+    try {
+    const executor = new ChatEngineActionExecutor(host);
+    const rowScript = writeNodeFixture(
+      storage,
+      'secret-row.mjs',
+      `console.log(Array.from({ length: 3000 }, (_, i) => i === 1500 ? 'secret-row' : 'row ' + i).join('\\n'));`,
+    );
+    const enroll = await dispatch(
+      executor,
+      projectRoot,
+      runDir,
+      { type: 'run_command', command: `node ${shellArg(rowScript)}` },
+      1,
+      'owner-a-cmd',
+    );
+    const artifactId = enroll.observation.match(/artifact_id:\s*([a-f0-9-]{36})/)?.[1];
+    assert.ok(artifactId);
+    host.taskAllowance = allowance('owner-b', 'task-b');
+    const denied = await dispatch(
+      executor,
+      projectRoot,
+      runDir,
+      { type: 'read_artifact', artifact_id: artifactId!, query: 'secret-row' },
+      1,
+      'owner-b-read',
+    );
+    assert.match(denied.observation, /ARTIFACT_DENIED|denied/i);
+    } finally { close(); }
+  });
+
+  test('read_file uses production Chat wrapper: byte cap, full-read accounting, and cache on repeat', async () => {
+    const storage = mkdtempSync(join(tmpdir(), 'babel-read-wrapper-'));
+    cleanup.push(storage);
+    const projectRoot = join(storage, 'project');
+    const runDir = join(storage, 'run');
+    mkdirSync(projectRoot);
+    mkdirSync(runDir);
+    writeFileSync(
+      join(projectRoot, 'long-lines.txt'),
+      `${'A'.repeat(60_000)}\n${'B'.repeat(60_000)}\n`,
+      'utf8',
+    );
+    const controls: HostControls = { ownerGeneration: 1, taskAllowance: allowance('owner-1', 'task-1') };
+    const { host, close } = makeHost(storage, projectRoot, runDir, controls);
+    try {
+    const executor = new ChatEngineActionExecutor(host);
+    const first = await dispatch(
+      executor,
+      projectRoot,
+      runDir,
+      { type: 'read_file', path: 'long-lines.txt' },
+      1,
+      'read-1',
+    );
+    assert.match(first.observation, /source byte-capped/);
+    assert.equal(first.observation.includes('complete file'), false);
+    assert.equal(host.fullReadCounts.size, 0);
+    const second = await dispatch(
+      executor,
+      projectRoot,
+      runDir,
+      { type: 'read_file', path: 'long-lines.txt' },
+      1,
+      'read-2',
+    );
+    assert.match(second.observation, /source byte-capped/);
+    assert.equal(host.fullReadCounts.size, 0, 'incomplete reads never consume full-read allowance');
+    assert.equal(
+      second.observation.includes('complete file'),
+      false,
+      'repeated reads stay explicitly incomplete',
+    );
+    } finally { close(); }
+  });
+
+  test('missing task allowance surfaces explicit artifact loss instead of silent spill', async () => {
+    const storage = mkdtempSync(join(tmpdir(), 'babel-no-artifact-access-'));
+    cleanup.push(storage);
+    const projectRoot = join(storage, 'project');
+    const runDir = join(storage, 'run');
+    mkdirSync(projectRoot);
+    mkdirSync(runDir);
+    const script = writeNodeFixture(
+      storage,
+      'spill.mjs',
+      `console.log(${JSON.stringify('y'.repeat(5000))});`,
+    );
+    const { host, close } = makeHost(storage, projectRoot, runDir, { ownerGeneration: 1, taskAllowance: null });
+    try {
+    const executor = new ChatEngineActionExecutor(host);
+    const result = await dispatch(
+      executor,
+      projectRoot,
+      runDir,
+      { type: 'run_command', command: `node ${shellArg(script)}` },
+      1,
+      'no-access',
+    );
+    assert.match(result.observation, /raw_output_unavailable: artifact registration failed/);
+    assert.equal(result.observation.match(/artifact_id:\s*[a-f0-9-]{36}/g)?.length ?? 0, 0);
+    } finally { close(); }
+  });
+
+  test('retention cap reports explicit resource-bound loss (registerRunOutput contract)', () => {
+    const storage = mkdtempSync(join(tmpdir(), 'babel-retention-cap-'));
+    cleanup.push(storage);
+    const runDir = join(storage, 'run');
+    mkdirSync(runDir);
+    const owner = { sessionId: 's', taskOwnerId: 'o', acceptedTaskId: 't' };
+    assert.throws(
+      () =>
+        registerRunOutput({
+          runDir,
+          owner,
+          content: 'x'.repeat(MAX_RUN_OUTPUT_BYTES + 1),
+          tool: 'run_command',
+          callId: 'oversize',
+        }),
+      /ARTIFACT_RESOURCE_BOUND_EXCEEDED/,
+    );
+    const artifact = registerRunOutput({
+      runDir,
+      owner,
+      content: 'immutable-body',
+      tool: 'run_command',
+      callId: 'immutable',
+    });
+    writeFileSync(join(runDir, 'tool-output-artifacts', `${artifact.id}.log`), 'mutated', 'utf8');
+    assert.throws(
+      () => readRunOutput({ runDir, owner, artifactId: artifact.id }),
+      /ARTIFACT_CONTENT_IDENTITY_CHANGED/,
+    );
+  });
+
+  test('second engine session cannot read the first engine enrolled artifact (cross-session)', async () => {
+    const storage = mkdtempSync(join(tmpdir(), 'babel-cross-session-'));
+    cleanup.push(storage);
+    const projectRoot = join(storage, 'project');
+    const runDir = join(storage, 'run');
+    mkdirSync(projectRoot);
+    mkdirSync(runDir);
+    const controls: HostControls = { ownerGeneration: 1, taskAllowance: allowance('shared-owner', 'task-1') };
+    const { host, close } = makeHost(storage, projectRoot, runDir, controls);
+    try {
+    const executor = new ChatEngineActionExecutor(host);
+    const rowsScript = writeNodeFixture(
+      storage,
+      'many-rows.mjs',
+      `console.log(Array.from({ length: 3000 }, (_, i) => 'row ' + i).join('\\n'));`,
+    );
+    const spill = await dispatch(
+      executor,
+      projectRoot,
+      runDir,
+      { type: 'run_command', command: `node ${shellArg(rowsScript)}` },
+      1,
+      'session-a',
+    );
+    const artifactId = spill.observation.match(/artifact_id:\s*([a-f0-9-]{36})/)?.[1];
+    assert.ok(artifactId);
+    host.engineRunId = 'other-session-id';
+    const denied = await dispatch(
+      executor,
+      projectRoot,
+      runDir,
+      { type: 'read_artifact', artifact_id: artifactId!, query: 'row' },
+      1,
+      'session-b',
+    );
+    assert.match(denied.observation, /ARTIFACT_DENIED|denied/i);
+    } finally { close(); }
+  });
+});
