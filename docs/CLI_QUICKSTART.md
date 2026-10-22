@@ -15,17 +15,19 @@ Babel is a **local coding agent**. The primary interface is the interactive
 **TUI/REPL**. Daily work uses three product modes: **chat**, **plan**, and
 **deep**.
 
-These commands are for a **source clone**. Babel is not published as an npm
-registry package. After build, use `node .\babel-cli\dist\index.js` from the
-repo root unless you have installed the package binary yourself.
+These commands are for a **current-source clone**. The published Windows x64
+Desktop [0.1.3](https://github.com/gthgomez/Babel/releases/tag/v0.1.3) bundles Node and the CLI; see [START_HERE.md](../START_HERE.md)
+for choosing between them. After build, run `node <Babel clone>/babel-cli/dist/index.js`
+from the repository you want Babel to work on (the examples below abbreviate it
+as `node .\babel-cli\dist\index.js`).
 
 ## Requirements
 
 - Node.js **22.19.0+ in the 22.x line, or 24.13.1+ in the 24.x line**
 - PowerShell (`pwsh`) for the helper scripts in this guide
 - A provider API key for model-backed sessions
-- Docker plus a sandbox image **or** `dev_local` / host fallback before
-  mutating work (see [Execution profile](#execution-profile-read-this-before-the-first-edit))
+- Docker plus a sandbox image containing your project's tools before
+  running project tests or builds (see [Execution profile](#execution-profile-read-this-before-the-first-edit))
 
 ## Clone, install, build
 
@@ -76,15 +78,19 @@ Default profile is **`safe_repo`**. It expects Docker isolation. Without
 Docker and a configured image (`BABEL_BENCHMARK_DOCKER_IMAGE`) it
 **fail-closes** unless you opt into host execution.
 
-For ordinary local coding in repositories you trust:
+Keep the default `safe_repo` profile for project execution and prepare an
+image containing your project's tools. `dev_local` permits supported host
+inspection without Docker; selecting it alone does **not** enable repository
+test or build commands:
 
 ```powershell
 $env:BABEL_EXECUTION_PROFILE = 'dev_local'
 # or pass --execution-profile dev_local on a one-shot command
 ```
 
-`BABEL_ALLOW_HOST_FALLBACK=1` is the explicit host-escalation switch when
-you keep `safe_repo` but Docker is unavailable.
+`BABEL_ALLOW_HOST_FALLBACK=1` is an explicit host-escalation switch when
+you keep `safe_repo` but Docker is unavailable. It is not the recommended
+first-use path.
 
 Details: [CHAT_MODE.md](./CHAT_MODE.md#execution-profile-and-isolation-h13).
 
