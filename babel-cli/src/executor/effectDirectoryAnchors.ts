@@ -10,8 +10,10 @@ export interface EffectDirectoryAnchors {
 }
 
 // Node does not expose Windows directory sharing flags. This trusted helper
-// opens directory-list/read-attribute handles without FILE_SHARE_DELETE, preventing
+// opens traverse/read-attribute handles without FILE_SHARE_DELETE, preventing
 // ancestor rename/junction replacement until this owned helper exits.
+// Ancestors can allow traversal and attributes while denying directory listing.
+// Attribute-only handles do not enforce delete sharing on empty directories.
 const WINDOWS_LOCK_SCRIPT = String.raw`
 $ErrorActionPreference = 'Stop'
 Add-Type -TypeDefinition @'
@@ -22,7 +24,7 @@ public static class BabelDirectoryGuard {
   [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
   public static extern SafeFileHandle CreateFile(string name, uint access, uint share, IntPtr security, uint disposition, uint flags, IntPtr template);
   public static SafeFileHandle OpenDirectory(string name, out int error) {
-    var handle = CreateFile(name, 129, 3, IntPtr.Zero, 3, 33554432, IntPtr.Zero);
+    var handle = CreateFile(name, 160, 3, IntPtr.Zero, 3, 33554432, IntPtr.Zero);
     error = Marshal.GetLastWin32Error();
     return handle;
   }
