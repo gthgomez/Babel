@@ -281,7 +281,7 @@ function renderConversation(forceBottom = false, reset = false) {
   const previousTop = scroller.scrollTop;
   const session = activeSession();
   if (!session.fixture && session.messages.length === 0) {
-    scroller.innerHTML = `<div class="empty-state"><img src="${LOGO}" alt=""><h1>Run. Verify. Understand.</h1><p>${nativeInfo?.ready?'Send a task to Babel.<br>Responses, tool activity, and verification appear here.':'Open a project and choose your provider to begin.'}</p><div class="empty-actions"><button data-action="draft" data-text="Investigate the review timeout behavior.">Investigate a problem</button><button data-action="draft" data-text="Review the current project architecture.">Explore the project</button></div><div class="preview-note">${icon('info')}${'Babel CLI · permissions and verification built in'}</div></div>`;
+    scroller.innerHTML = `<div class="empty-state"><img src="${LOGO}" alt=""><h1>Run. Verify. Understand.</h1>${emptyStateBody()}<div class="preview-note">${icon('info')}${'Babel CLI · permissions and verification built in'}</div></div>`;
   } else {
     const viewingOlder=(session.history?.olderOffset ?? 0) > 0;
     const historyWarnings=[session.history?.tailOnly?'Legacy archive reader returned a tail window only.':null,session.history?.skippedOversizedLines?'Oversized archive records could not be displayed; the original archive is preserved.':null,session.history?.snapshotChanged?'The archive changed while loading. Reload the latest messages before relying on this view.':null,session.history?.outcomesBounded?'Terminal evidence exceeds this reader’s limit; status remains unverified where evidence is unavailable.':null].filter(Boolean).map(text=>`<p class="fine-print history-banner">${e(text)}</p>`).join('');
@@ -305,6 +305,13 @@ function newSession(initializing=false) {
   state.activeId = session.id;$('#composer-input').value='';
   persist(); renderAll(true); resizeComposer(); $('#composer-input').focus();
   $('.workspace').classList.remove('show-left');
+}
+const TRACE_BEHAVIOR_PROMPT="Using this repository's README and code, trace one small documented behavior from its entry point to its implementation and nearest relevant test. Cite file paths and identify the test command documented or configured in the repository. Do not change files, install dependencies, or run tests or builds. If you cannot find a test or command, say so.";
+/** Empty-state copy and starters matched to the known project scope; missing data is never treated as a trusted project. */
+function emptyStateBody(){
+  if(isConversationOnlyConnection(nativeInfo))return `<p>No project is open. You can ask a general question, or open a project for code questions.</p><div class="empty-actions"><button data-action="open-project">Open project</button></div>`;
+  if(nativeInfo?.ready&&nativeInfo.projectRoot&&nativeInfo.projectAuthority?.trusted===true)return `<p>Send a task to Babel.<br>Responses, tool activity, and verification appear here.</p><div class="empty-actions"><button data-action="draft" data-text="${escapeHtml(TRACE_BEHAVIOR_PROMPT)}">Trace a behavior</button></div>`;
+  return `<p>Open Setup to select and trust a project and choose your provider.</p><div class="empty-actions"><button data-action="connection">Open Setup</button></div>`;
 }
 function draft(text) { if(projectSwitching)return;closeDialog(); $('#composer-input').value = text; resizeComposer();persist(); $('#composer-input').focus(); }
 function resizeComposer() {

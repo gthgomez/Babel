@@ -8,16 +8,16 @@ import {parseTranscriptMessages} from '../native/sessions.mjs';
 
 const html = readFileSync(new URL('../dist/index.html', import.meta.url), 'utf8');
 
-async function renderer(diagnostics, body, handshake = 'ready',scope=null,draftSeed=null) {
+async function renderer(diagnostics, body, handshake = 'ready',scope=null,draftSeed=null,infoOverride=null) {
   const browser = await chromium.launch({headless: true, executablePath: process.env.CHROMIUM_EXECUTABLE});
   try {
     const page = await browser.newPage();
     const errors = [];
     page.on('pageerror', error => errors.push(error.message));
-    await page.evaluate(({diagnostics, handshake,scope,draftSeed}) => {
+    await page.evaluate(({diagnostics, handshake,scope,draftSeed,infoOverride}) => {
       window.__runs = [];
       window.__projectReads=[];
-      window.__info = {packaged: true, ready: true, officialCliReady: true, projectName: 'fixture-project', diagnostics,...(scope?{projectRoot:null,projectName:null,projectAuthority:scope}:{})};
+      window.__info = {packaged: true, ready: true, officialCliReady: true, projectName: 'fixture-project', diagnostics,...(scope?{projectRoot:null,projectName:null,projectAuthority:scope}:{}),...(infoOverride??{})};
       window.babelDesktop = {
         getInfo: async () => {
           if (handshake === 'rejected') throw new Error('Fixture handshake rejected');
@@ -50,7 +50,7 @@ async function renderer(diagnostics, body, handshake = 'ready',scope=null,draftS
         window.babelDesktop.onPrepareDraftClose=callback=>{window.__prepareDraftClose=callback;};
         window.babelDesktop.completeDraftClose=async receipt=>{window.__draftCloseReceipt=receipt;};
       }
-    }, {diagnostics, handshake,scope,draftSeed});
+    }, {diagnostics, handshake,scope,draftSeed,infoOverride});
     await page.setContent(html);
     if (handshake === 'ready') await page.waitForFunction(()=>!document.querySelector('#status-detail').textContent.includes('Connecting'));
     await body(page);
@@ -166,11 +166,39 @@ test('explicit packaged conversation binding admits Chat without project reads o
     assert.equal(await page.locator('.top-tab[data-mode="plan"]').isDisabled(),true);
     assert.equal(await page.locator('.top-tab[data-mode="deep"]').isDisabled(),true);
     assert.deepEqual(await page.evaluate(()=>window.__projectReads),[]);
+    assert.match(await page.locator('.empty-state').innerText(),/No project is open\. You can ask a general question, or open a project for code questions\./);
+    assert.deepEqual(await page.locator('.empty-actions button').evaluateAll(buttons=>buttons.map(button=>button.dataset.action)),['open-project']);
+    assert.equal(await page.locator('.empty-state [data-action="draft"]').count(),0);
     await page.locator('#composer-input').fill('Hello without a project');
     await page.keyboard.press('Enter');
     await page.waitForFunction(()=>window.__runs.length===1);
     assert.equal(await page.evaluate(()=>window.__runs[0].task),'Hello without a project');
   },'ready',{scope:'conversation',identity:null,trusted:false});
+});
+
+test('empty state offers one repository starter only for a known trusted project',async()=>{
+  await renderer({ready:true},async page=>{
+    await connect(page);
+    assert.doesNotMatch(await page.locator('.empty-state').innerText(),/Send a task/);
+    assert.equal(await page.locator('.empty-state [data-action="draft"]').count(),0);
+    assert.equal(await page.locator('.empty-state [data-action="connection"]').count(),1);
+  });
+  await renderer({ready:true},async page=>{
+    await connect(page);
+    assert.doesNotMatch(await page.locator('.empty-state').innerText(),/No project is open/);
+    const starters=page.locator('.empty-state [data-action="draft"]');
+    assert.equal(await starters.count(),1);
+    assert.equal(await starters.innerText(),'Trace a behavior');
+    await starters.click();
+    assert.match(await page.locator('#composer-input').inputValue(),/^Using this repository's README and code, trace one small documented behavior.*Do not change files, install dependencies, or run tests or builds\./s);
+    assert.equal(await page.evaluate(()=>document.activeElement?.id),'composer-input');
+    assert.deepEqual(await page.evaluate(()=>window.__runs),[]);
+  },'ready',null,null,{projectRoot:'/fixture-project',projectAuthority:{scope:'project',trusted:true,identity:{branch:'main'}}});
+  await renderer({ready:true},async page=>{
+    await connect(page);
+    assert.doesNotMatch(await page.locator('.empty-state').innerText(),/Send a task/);
+    assert.equal(await page.locator('.empty-state [data-action="draft"]').count(),0);
+  },'ready',null,null,{projectRoot:'/fixture-project',projectAuthority:{scope:'project',trusted:false,identity:null,reason:'Not trusted'}});
 });
 
 test('archive search opens a matching earlier page from a session outside the sidebar',async()=>renderer({ready:true},async page=>{
