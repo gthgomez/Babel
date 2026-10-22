@@ -109,6 +109,8 @@ function spawnWindowsPowerShell(script: string): ChildProcess {
   const executable = windowsPowerShellExecutable()
   const args = ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')]
   const options: SpawnOptions = { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] }
+  // Direct spawn call site for host-process manifest scanning; tests inject via childProcessSpawn.
+  if (childProcessSpawn === spawn) return spawn(executable, args, options)
   return childProcessSpawn(executable, args, options)
 }
 
