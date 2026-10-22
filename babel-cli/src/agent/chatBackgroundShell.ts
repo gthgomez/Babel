@@ -16,6 +16,11 @@ import { SafeExecutor, validateExecutorShellCommand } from '../sandbox.js';
 import { readRuntimeMode } from '../config/runtimeMode.js';
 import { isToolAllowedForExecutionProfile } from '../config/executionProfiles.js';
 import { shouldUseDockerSandbox } from '../config/benchmarkContainer.js';
+import {
+  formatRegisteredToolObservation,
+  type RunArtifactAccess,
+} from './codingLoop/readArtifactExecutor.js';
+import type { ChatToolAction } from './chatToolDefinitions.js';
 
 export interface BackgroundShellLogEntry {
   tool: string;
@@ -44,6 +49,12 @@ export interface BackgroundShellActionCtx {
   onBeforeSpawn?: (() => void) | undefined;
   /** Invoked immediately before awaiting a validated known background job. */
   onBeforeAwait?: (() => void) | undefined;
+  /** Checks whether the submission still owns this suspended action. */
+  isSubmissionCurrent?: (() => boolean) | undefined;
+  /** Settles the action without exposing output after its owner was replaced. */
+  settleStale?: (() => BackgroundShellActionResult) | undefined;
+  artifactAccess?: RunArtifactAccess | undefined;
+  artifactCallId?: string | undefined;
 }
 
 export type BackgroundShellActionResult = { index: number; observation: string };
@@ -57,6 +68,9 @@ export async function executeAwaitCommandAction(
   // Unknown ids are local validation failures, not an external await effect.
   if (hasBackgroundShellJob(action.task_id)) ctx.onBeforeAwait?.();
   const result = await awaitBackgroundShell(action.task_id, timeoutMs);
+  if (ctx.isSubmissionCurrent && !ctx.isSubmissionCurrent()) {
+    return ctx.settleStale?.() ?? { index: ctx.index, observation: '' };
+  }
   const exitCode = result.timed_out ? null : result.exit_code;
   const detail = result.timed_out
     ? 'timed_out (still running)'
@@ -76,21 +90,43 @@ export async function executeAwaitCommandAction(
     result.timed_out || (exitCode !== null && exitCode !== 0) ? (result.stderr || detail) : undefined,
     exitCode ?? (result.timed_out ? 1 : 0),
   );
-  const body = [
+  const resultHeader = [
     `task_id: ${result.id}`,
     `command: ${result.command || '(unknown)'}`,
     `status: ${result.status}`,
     `timed_out: ${result.timed_out}`,
     `elapsed_ms: ${result.elapsed_ms}`,
     `exit_code: ${result.exit_code ?? 'null'}`,
-    '--- stdout ---',
-    capObservationText(result.stdout || '(empty)'),
-    '--- stderr ---',
-    capObservationText(result.stderr || '(empty)'),
   ].join('\n');
+  const actionForObservation: ChatToolAction = {
+    type: 'await_command',
+    task_id: action.task_id,
+  };
+  const observation = ctx.artifactAccess
+    ? formatRegisteredToolObservation(
+        actionForObservation,
+        {
+          exit_code: exitCode ?? -1,
+          stdout: `${resultHeader}\n--- stdout ---\n${result.stdout || '(empty)'}`,
+          stderr: result.stderr || '',
+        },
+        ctx.artifactAccess,
+        ctx.artifactCallId ?? String(ctx.toolId),
+      )
+    : [
+        `### await_command ${action.task_id}`,
+        `exit_code: ${exitCode ?? 'null'}`,
+        '```',
+        resultHeader,
+        '--- stdout ---',
+        capObservationText(result.stdout || '(empty)'),
+        '--- stderr ---',
+        capObservationText(result.stderr || '(empty)'),
+        '```',
+      ].join('\n');
   return {
     index: ctx.index,
-    observation: `### await_command ${action.task_id}\nexit_code: ${exitCode ?? 'null'}\n\`\`\`\n${body}\n\`\`\``,
+    observation,
   };
 }
 /** run_command(background=true) — non-blocking shell with sandbox parity gates. */

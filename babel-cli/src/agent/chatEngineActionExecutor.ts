@@ -54,6 +54,7 @@ import { mutationPathsFromSessionEvents } from "../evidence/chatRevisionBinding.
 import {
   executeActionWithPolicy,
   defaultToolExecutor,
+  createToolExecutor,
   type PolicyGatedExecutionResult,
 } from "./toolExecutor.js";
 import { governedStrReplace } from "./governedMutations.js";
@@ -120,6 +121,13 @@ export class ChatEngineActionExecutor {
   private editFormatSawOutcome = false;
 
   constructor(private readonly host: ChatEngineActionExecutorHost) {}
+
+  private readonly chatReadToolExecutor = createToolExecutor({
+    executeTool: (request, context) => executeTool(
+      request.tool === "file_read" ? { ...request, raw: true } : request,
+      context,
+    ),
+  });
 
   /**
    * Packet D2: feed one edit-format outcome into the per-session tracker and
@@ -1150,6 +1158,17 @@ export class ChatEngineActionExecutor {
           onToolComplete: callbacks.onToolComplete,
           onBeforeAwait: () =>
             this.host.persistToolStartedAtExecutorDispatch(action, meta),
+          isSubmissionCurrent: () =>
+            this.host.isSubmissionCurrent(ownerGeneration),
+          settleStale: () =>
+            this.host.settleStaleActionResult(
+              tool,
+              target,
+              meta.index,
+              "parent submission superseded while awaiting background command",
+            ),
+          artifactAccess,
+          artifactCallId: String(meta.idempotencyKey ?? toolId),
         });
       }
       if (action.type === "run_command" && action.background === true) {
@@ -1315,7 +1334,7 @@ export class ChatEngineActionExecutor {
           : "workspace_write",
         toolContext,
         {
-          executor: this.host.options.toolExecutorForTesting ?? defaultToolExecutor,
+          executor: this.host.options.toolExecutorForTesting ?? this.chatReadToolExecutor,
           mode:
             this.host.executionProfile === "plan"
               ? "plan"
@@ -1394,7 +1413,16 @@ export class ChatEngineActionExecutor {
         if (action.type === "read_file") {
           if (r.exit_code === 0) {
             const window = selectReadWindow(r.stdout ?? "", { kind: "full" });
-            obsParts.push(formatReadObservation("read_file", target, window));
+            const completeness = r.output_completeness
+              ? {
+                  complete: r.output_completeness.complete,
+                  originalBytes: r.output_completeness.original_bytes,
+                  returnedBytes: r.output_completeness.returned_bytes,
+                }
+              : undefined;
+            obsParts.push(
+              formatReadObservation("read_file", target, window, completeness),
+            );
           } else {
             obsParts.push(
               formatReadFailureObservation({
@@ -1852,6 +1880,7 @@ export class ChatEngineActionExecutor {
           action.type === "read_file" &&
           lastResult &&
           lastResult.exit_code === 0 &&
+          lastResult.output_completeness?.complete !== false &&
           fileReadCacheHash
         ) {
           const pathKey = this.host.readCacheKey(action.path);

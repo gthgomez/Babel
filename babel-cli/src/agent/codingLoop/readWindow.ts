@@ -203,8 +203,16 @@ export function formatReadObservation(
   tool: string,
   target: string,
   window: ReadWindow,
+  completeness?: {
+    complete: boolean;
+    originalBytes: number;
+    returnedBytes: number;
+  },
 ): string {
-  const banner = formatReadWindowBanner(target, window)
+  const banner =
+    completeness && !completeness.complete
+      ? `returned lines ${window.startLine}-${window.endLine} of at least ${window.totalLines} (source byte-capped: ${completeness.returnedBytes} of ${completeness.originalBytes} bytes; use read_range to inspect more)`
+      : formatReadWindowBanner(target, window)
   const body = window.numberedText.length > 0 ? window.numberedText : '(empty window)'
   return [
     `### ${tool} ${target} ${window.startLine}-${window.endLine}`,
