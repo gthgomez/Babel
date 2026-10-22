@@ -44,7 +44,8 @@ export interface FailureSurface {
   errorSignature: string
   failingTests: string[]
   failingFiles: string[]
-  exitCode: number
+  /** Null when the underlying process has not exited yet (e.g. await_command timed_out). */
+  exitCode: number | null
   verifierId?: string
   workspaceRevision?: string
   changedSincePrevious: boolean
@@ -111,6 +112,12 @@ function surfaceFromObservation(
   const blob = `${obs.tool} ${obs.target} ${obs.command ?? ''} ${obs.summary} ${obs.stderrHead} ${obs.stdoutHead}`.toLowerCase()
   const parser = obs.parserName ?? ''
 
+  if (obs.exitCode === null) {
+    if (/timed_out|still running|exit code not available/i.test(obs.summary)) {
+      return 'TOOL_FAILURE'
+    }
+    return 'UNKNOWN_FAILURE'
+  }
   if (obs.exitCode === 0) return 'UNKNOWN_FAILURE'
 
   const baselineSignature = buildErrorSignature('BASELINE_FAILURE', obs)

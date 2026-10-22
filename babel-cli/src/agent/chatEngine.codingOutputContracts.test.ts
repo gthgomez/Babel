@@ -156,7 +156,9 @@ function makeHost(
     platformUnusableVerifiers: new Set(),
     patchRecoveryPath: null,
     verifierReceiptCache: new Map(),
-    taskAllowance: controls.taskAllowance,
+    get taskAllowance() {
+      return controls.taskAllowance;
+    },
     beginRecoveryLocalizationInspection: () => true,
     checkVerifierTamper: () => null,
     consumeFailureBudget: () => true,
@@ -213,7 +215,11 @@ function trackCallbacks(): ChatCallbacks & {
     completes,
     onToolStart: () => 1,
     onToolComplete: (id, detail, error, exitCode) => {
-      completes.push({ detail, error, exitCode });
+      const entry: { detail?: string; error?: string; exitCode?: number } = {};
+      if (detail !== undefined) entry.detail = detail;
+      if (error !== undefined) entry.error = error;
+      if (exitCode !== undefined) entry.exitCode = exitCode;
+      completes.push(entry);
     },
   };
 }
@@ -224,7 +230,7 @@ async function dispatch(
   runDir: string,
   action: ChatToolAction,
   ownerGeneration: number,
-  idempotencyKey = randomUUID(),
+  idempotencyKey: string = randomUUID(),
 ): Promise<{ observation: string; callbacks: ReturnType<typeof trackCallbacks> }> {
   const callbacks = trackCallbacks();
   const result = await executor.executeOneAction(
@@ -514,7 +520,7 @@ describe('Chat coding output contracts (executor dispatch)', { concurrency: fals
     );
     const artifactId = enroll.observation.match(/artifact_id:\s*([a-f0-9-]{36})/)?.[1];
     assert.ok(artifactId);
-    host.taskAllowance = allowance('owner-b', 'task-b');
+    controls.taskAllowance = allowance('owner-b', 'task-b');
     const denied = await dispatch(
       executor,
       projectRoot,
