@@ -349,6 +349,82 @@ describe('Chat coding output contracts (executor dispatch)', { concurrency: fals
     } finally { f.close(); }
   });
 
+  test('background verifier obeys the same lease denial as foreground execution', async () => {
+    const prior = process.env['BABEL_AUTONOMY_LEASE'];
+    const lease = JSON.parse(prior!);
+    lease.leaseId = randomUUID();
+    lease.allowedCapabilities = ['inspect_repository'];
+    process.env['BABEL_AUTONOMY_LEASE'] = JSON.stringify(lease);
+    const f = verifierFixture();
+    try {
+      for (const background of [false, true]) {
+        const denied = await f.run({ type: 'run_command', command: 'npm test', background });
+        assert.match(denied.observation, /DENY_|denied/i);
+        assert.doesNotMatch(denied.observation, /Started background job/);
+      }
+      assert.equal(f.host.executedVerifierLedger.length, 0);
+    } finally { process.env['BABEL_AUTONOMY_LEASE'] = prior; f.close(); }
+  });
+
+  test('background verifier requires the governed isolation boundary', async () => {
+    const f = verifierFixture();
+    f.host.isolationBrokerFlags = () => ({ dirtyTree: false, isolationRequired: true, isolationAvailable: false, hostFallbackAllowed: false });
+    try {
+      const denied = await f.run({ type: 'run_command', command: 'npm test', background: true });
+      assert.match(denied.observation, /DENY_|isolation/i);
+      assert.doesNotMatch(denied.observation, /Started background job/);
+      assert.equal(f.host.executedVerifierLedger.length, 0);
+    } finally { f.close(); }
+  });
+
+  test('background dispatch preserves explicit dry-run and rejects retired owners before spawn', async () => {
+    const f = verifierFixture();
+    const prior = process.env['BABEL_DRY_RUN'];
+    try {
+      process.env['BABEL_DRY_RUN'] = '1';
+      const simulated = await f.run({ type: 'run_command', command: 'npm test', background: true });
+      assert.doesNotMatch(simulated.observation, /Started background job/);
+      assert.match(simulated.observation, /DRY.?RUN|simulat/i);
+      process.env['BABEL_DRY_RUN'] = '0';
+      f.host.persistToolStartedAtExecutorDispatch = () => { f.controls.ownerGeneration += 1; };
+      const stale = await f.run({ type: 'run_command', command: 'npm test', background: true });
+      assert.doesNotMatch(stale.observation, /Started background job/);
+      assert.match(stale.observation, /stale|cancelled/i);
+      assert.equal(f.host.executedVerifierLedger.length, 0);
+    } finally { process.env['BABEL_DRY_RUN'] = prior; f.close(); }
+  });
+
+  test('background child receives the governed unprivileged Git environment', async () => {
+    const f = verifierFixture();
+    try {
+      writeFileSync(join(f.projectRoot, 'verify.test.mjs'),
+        "import assert from 'node:assert/strict'; assert.equal(process.env.GIT_CONFIG_NOSYSTEM, '1'); assert.equal(process.env.GH_PROMPT_DISABLED, '1');");
+      const taskId = await f.start();
+      const completed = await f.run({ type: 'await_command', task_id: taskId });
+      assert.equal(f.host.lastVerifierReceipt?.exit_code, 0, completed.observation);
+    } finally { f.close(); }
+  });
+
+  test('background completion waits for governance reconciliation before certifying', async () => {
+    const prior = process.env['BABEL_AUTONOMY_LEASE'];
+    const lease = JSON.parse(prior!);
+    lease.leaseId = randomUUID();
+    process.env['BABEL_AUTONOMY_LEASE'] = JSON.stringify(lease);
+    const f = verifierFixture();
+    try {
+      writeFileSync(join(f.projectRoot, 'verify.test.mjs'), "import { writeFileSync } from 'node:fs'; writeFileSync('AGENTS.md', 'changed by child');");
+      const taskId = await f.start();
+      const result = await f.run({ type: 'await_command', task_id: taskId });
+      assert.match(result.observation, /DENY_POLICY_SELF_MUTATION/);
+      assert.equal(parseCompiledObservation(result.observation).topExit, '1');
+      const repeated = await f.run({ type: 'await_command', task_id: taskId });
+      assert.equal(parseCompiledObservation(repeated.observation).topExit, '1');
+      assert.equal(existsSync(join(f.projectRoot, 'AGENTS.md')), false);
+      assert.equal(f.host.executedVerifierLedger.length, 0);
+      assert.equal(f.host.lastVerifierReceipt, null);
+    } finally { process.env['BABEL_AUTONOMY_LEASE'] = prior; f.close(); }
+  });
+
   test('failed background verifier enters repair and phase-gated search executes', async () => {
     const f = verifierFixture('2');
     const previous = process.env['BABEL_PHASE_GATED_TOOLS'];

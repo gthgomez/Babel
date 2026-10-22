@@ -775,7 +775,8 @@ export function parityRecordToolBatch(
           isDiscoveryTool(r.tool_name) && r.exit_code === 0 && r.content.trim().length > 0,
       )
       .map((r) => ({
-        path: discoveryObservationKey(r.tool_name, r.target ?? r.tool_name,
+        path: r.target ?? r.tool_name,
+        observationKey: discoveryObservationKey(r.tool_name, r.target ?? r.tool_name,
           acceptedToolCalls.find(call => call.id === r.tool_call_id)?.function.arguments),
         contentHash: r.contentHash ?? hashDiscoveryContent(r.tool_name, r.content)!,
       })),

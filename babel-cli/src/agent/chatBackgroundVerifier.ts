@@ -6,6 +6,7 @@ import { resolveVerifierCacheIdentity } from './chatEngineVerifierAdapter.js'
 import { settleChatVerifierResult } from './chatVerifierSettlement.js'
 import { invalidateChatPathReads, invalidateVerifierLedger } from './chatEngineSupport.js'
 import { discoverVerifierInputClosure, RevisionManager, compareRevisions, type WorkspaceRevision } from '../evidence/revisionBoundReceipt.js'
+import type { PolicyGatedExecutionResult } from './toolExecutor.js'
 
 interface BackgroundDispatch {
   engineRunId: string
@@ -23,6 +24,12 @@ interface BackgroundDispatch {
 // Weak ownership: clearing the job registry also releases its dispatch evidence.
 // Public job reads are snapshots; the completion promise is the stable process identity.
 const dispatches = new WeakMap<Promise<void>, BackgroundDispatch>()
+const policyCompletions = new WeakMap<Promise<void>, Promise<PolicyGatedExecutionResult>>()
+
+/** Bind the process to its complete governed execution, including postconditions. */
+export function bindChatBackgroundPolicy(job: BackgroundShellJob, completion: Promise<PolicyGatedExecutionResult>): void {
+  policyCompletions.set(job.done, completion)
+}
 
 /** Output and receipts stay with the task that actually spawned the job. */
 export function isChatBackgroundOwnerCurrent(host: ChatEngineActionExecutorHost, job: BackgroundShellJob, generation: number): boolean {
@@ -83,13 +90,24 @@ export async function settleChatBackgroundVerifier(input: {
   result: AwaitBackgroundShellResult
   generation: number
   index: number
-}): Promise<string[]> {
+}): Promise<{ notes: string[]; policyRejected?: boolean }> {
   const { host, job, result, generation } = input
   const dispatch = job && dispatches.get(job.done)
   const ownsDispatch = () => dispatch !== undefined && job !== undefined &&
     isChatBackgroundOwnerCurrent(host, job, generation)
-  if (!dispatch || !job || !ownsDispatch() || dispatch.settled || result.timed_out ||
-    result.exit_code === null || !['completed', 'failed'].includes(result.status) || job.error) return []
+  if (!dispatch || !job || !ownsDispatch() || result.timed_out ||
+    result.exit_code === null || !['completed', 'failed'].includes(result.status) || job.error) return { notes: [] }
+  const completion = policyCompletions.get(job.done)
+  if (!completion) return { notes: ['### verifier_receipt_unavailable\nBackground execution has no governed completion.'], policyRejected: true }
+  let governed: PolicyGatedExecutionResult
+  try { governed = await completion } catch {
+    return { notes: ownsDispatch() ? ['### verifier_receipt_unavailable\nGoverned background execution did not settle successfully.'] : [], policyRejected: true }
+  }
+  if (!ownsDispatch()) return { notes: [] }
+  if (governed.policyBlocked || governed.results.some(r => r.denial !== undefined || r.simulated === true)) {
+    return { notes: ['### background_execution_denied', ...governed.results.map(r => r.stderr)], policyRejected: true }
+  }
+  if (dispatch.settled) return { notes: [] }
   dispatch.settled = true
   const projectRoot = requireProjectRoot(host.options)
   const notes: string[] = []
@@ -114,11 +132,11 @@ export async function settleChatBackgroundVerifier(input: {
     canPublish: candidateIsCurrent,
     isOwnerCurrent: ownsDispatch,
   })
-  if (!ownsDispatch()) return []
+  if (!ownsDispatch()) return { notes: [] }
   if (isAuthoritativeVerifierCommand(dispatch.command) && !candidateIsCurrent()) {
     notes.push('### verifier_receipt_unavailable\nBackground verification could not bind the unchanged dispatch candidate. Run the verifier again against the current files.')
   }
   host.invalidateRepositoryContext([], 'background command settled')
   invalidateChatPathReads(host, [])
-  return notes
+  return { notes }
 }

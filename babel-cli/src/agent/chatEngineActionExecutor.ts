@@ -66,7 +66,7 @@ import {
 import { createHash } from "node:crypto";
 import {
   executeChatAwaitCommandAction,
-  executeChatBackgroundRunCommandAction,
+  createChatBackgroundExecutor,
 } from "./chatBackgroundShell.js";
 import {
   executeSubAgentAction,
@@ -1146,12 +1146,6 @@ export class ChatEngineActionExecutor {
           artifactAccess,
         });
       }
-      if (action.type === "run_command" && action.background === true) {
-        return executeChatBackgroundRunCommandAction(action, {
-          host: this.host, projectRoot: requireProjectRoot(this.host.options),
-          tool, target, toolId, index: meta.index, ownerGeneration, meta, callbacks,
-        });
-      }
 
       // Capability check: reject recursive shell enumeration if shell.recursive_enumeration is DEGRADED/UNAVAILABLE
       if ("command" in action && typeof action.command === "string") {
@@ -1284,7 +1278,13 @@ export class ChatEngineActionExecutor {
       const classC = resolveClassCGateDecision({
         executionProfile: this.host.executionProfile,
       });
-      const result: PolicyGatedExecutionResult = await executeActionWithPolicy(
+      const background = action.type === 'run_command' && action.background === true
+        ? createChatBackgroundExecutor(action, {
+            host: this.host, projectRoot: requireProjectRoot(this.host.options),
+            tool, target, toolId, index: meta.index, ownerGeneration, meta, callbacks,
+          })
+        : null;
+      const pendingResult = executeActionWithPolicy(
         agentAction,
         // Task/profile scope only narrows capability; executor authority,
         // isolation, network and approval decisions still govern dispatch.
@@ -1295,7 +1295,7 @@ export class ChatEngineActionExecutor {
           : "workspace_write",
         toolContext,
         {
-          executor: this.host.options.toolExecutorForTesting ?? chatReadToolExecutor,
+          executor: background?.executor ?? this.host.options.toolExecutorForTesting ?? chatReadToolExecutor,
           mode:
             this.host.executionProfile === "plan"
               ? "plan"
@@ -1332,6 +1332,11 @@ export class ChatEngineActionExecutor {
           ...(classC === "allow" ? { onAskApproval: async () => true } : {}),
         },
       );
+      if (background) {
+        const started = await background.waitForStart(pendingResult);
+        if (started) return started;
+      }
+      const result: PolicyGatedExecutionResult = await pendingResult;
 
       // R0-7/R0-8: the governed action was a suspension point; a superseded
       // submission must not record a mutation batch or write the current

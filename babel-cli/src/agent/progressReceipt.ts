@@ -84,7 +84,7 @@ export interface CycleObservation {
   /** External blocker with evidence. */
   externalBlocker?: string;
   /** Read targets this cycle with optional content hash. */
-  reads?: Array<{ path: string; contentHash?: string }>;
+  reads?: Array<{ path: string; contentHash?: string; observationKey?: string }>;
   /**
    * Context epoch for this cycle (read-injection epoch). When it advances,
    * prior read fingerprints/localization are invalidated so necessary
@@ -172,26 +172,29 @@ export function recordProgressCycle(
   // Same-target repeated reads of unchanged content do NOT count as progress.
   for (const read of observation.reads ?? []) {
     targetsRead.push(read.path);
-    const prev = ledger.readFingerprints.get(read.path);
+    // Preserve real targets in public receipts; query/range identity is internal.
+    const fingerprintKey = read.observationKey ?? read.path;
+    const prev = ledger.readFingerprints.get(fingerprintKey);
     if (read.contentHash !== undefined) {
       if (prev === undefined) {
         // First read of a path can contribute to localization if not already.
-        if (!deltas.includes('localization') && !ledger.localizedPaths.has(read.path)) {
+        if (!deltas.includes('localization') &&
+            (read.observationKey !== undefined || !ledger.localizedPaths.has(read.path))) {
           deltas.push('localization');
           evidence.push(`first_read:${read.path}`);
           ledger.localizedPaths.add(read.path);
         }
-        ledger.readFingerprints.set(read.path, read.contentHash);
+        ledger.readFingerprints.set(fingerprintKey, read.contentHash);
       } else if (prev !== read.contentHash) {
         // Content changed under us — meaningful.
         deltas.push('target_change');
         evidence.push(`content_changed:${read.path}`);
-        ledger.readFingerprints.set(read.path, read.contentHash);
+        ledger.readFingerprints.set(fingerprintKey, read.contentHash);
       }
       // else: same hash → no progress delta from this read
     } else if (prev === undefined) {
       // No content hash: first encounter only (cannot detect re-read fidelity).
-      ledger.readFingerprints.set(read.path, '');
+      ledger.readFingerprints.set(fingerprintKey, '');
       if (!deltas.includes('localization') && !ledger.localizedPaths.has(read.path)) {
         deltas.push('localization');
         evidence.push(`first_read:${read.path}`);

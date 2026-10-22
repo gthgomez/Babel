@@ -15,7 +15,7 @@ if (!workspace) {
 const templateRoot = join(dirname(fileURLToPath(import.meta.url)), '../../workspaces/ordinary-bug');
 const unchanged = ['tests/math.test.js', 'package.json', 'README.md'];
 
-execFileSync('npm', ['test'], { cwd: workspace, stdio: 'inherit', windowsHide: true });
+execFileSync(process.execPath, ['--test'], { cwd: workspace, stdio: 'inherit', windowsHide: true });
 
 const math = readFileSync(join(workspace, 'src/math.js'), 'utf8');
 assert.match(math, /\+\s*b/, 'math.js must implement addition with +');

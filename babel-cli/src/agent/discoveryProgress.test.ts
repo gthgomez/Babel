@@ -29,6 +29,7 @@ for (const tool of ['read_artifact', 'glob', 'list_dir', 'semantic_search', 'lsp
     const f = fixture()
     for (let i = 0; i < 10; i += 1) {
       const receipt = f.observe(tool, { query: 'failure' }, `fresh diagnostic ${i}`)
+      assert.deepEqual(receipt.targetsRead, ['same-target'])
       assert.equal(receipt.hasDelta, true, `novel ${tool} observation ${i}`)
       assert.equal(parityArbitrateCycle({ rt: f.rt, fuseLabels: [] }).terminalAnswer, null)
     }

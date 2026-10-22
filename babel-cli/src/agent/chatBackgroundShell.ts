@@ -12,6 +12,7 @@ import {
   DEFAULT_BACKGROUND_JOB_TIMEOUT_MS,
   startBackgroundShell,
   getBackgroundShellJob,
+  killBackgroundShell,
   type BackgroundShellJob,
   type AwaitBackgroundShellResult,
 } from './backgroundShell.js';
@@ -28,7 +29,9 @@ import type {
   ChatCallbacks,
   ChatEngineActionExecutorHost,
 } from './chatEngineContracts.js';
-import { isChatBackgroundOwnerCurrent, prepareChatBackgroundDispatch, settleChatBackgroundVerifier } from './chatBackgroundVerifier.js';
+import { bindChatBackgroundPolicy, isChatBackgroundOwnerCurrent, prepareChatBackgroundDispatch, settleChatBackgroundVerifier } from './chatBackgroundVerifier.js';
+import { defaultToolExecutor, type ToolExecutor, type PolicyGatedExecutionResult } from './toolExecutor.js';
+import { isInvocationLive, refreshDryRunState } from '../localTools.js';
 
 export interface BackgroundShellLogEntry {
   tool: string;
@@ -64,7 +67,7 @@ export interface BackgroundShellActionCtx {
   artifactAccess?: RunArtifactAccess | undefined;
   artifactCallId?: string | undefined;
   onStarted?: ((job: BackgroundShellJob) => void) | undefined;
-  onResult?: ((result: AwaitBackgroundShellResult) => Promise<string[]>) | undefined;
+  onResult?: ((result: AwaitBackgroundShellResult) => Promise<{ notes: string[]; policyRejected?: boolean }>) | undefined;
 }
 
 export type BackgroundShellActionResult = { index: number; observation: string };
@@ -81,14 +84,14 @@ export async function executeAwaitCommandAction(
   if (ctx.isSubmissionCurrent && !ctx.isSubmissionCurrent()) {
     return ctx.settleStale?.() ?? { index: ctx.index, observation: '' };
   }
-  const settlementNotes = await ctx.onResult?.(result) ?? [];
+  const settlement = await ctx.onResult?.(result) ?? { notes: [] };
   if (ctx.isSubmissionCurrent && !ctx.isSubmissionCurrent()) {
     return ctx.settleStale?.() ?? { index: ctx.index, observation: '' };
   }
   // Null describes a running process. An unknown job is a local tool failure,
   // not a still-running verifier with a fabricated process status.
-  const exitCode = result.status === 'running' ? null : result.exit_code ?? 1;
-  const detail = result.timed_out
+  const exitCode = settlement.policyRejected ? 1 : result.status === 'running' ? null : result.exit_code ?? 1;
+  const detail = settlement.policyRejected ? 'background execution denied after process settlement' : result.timed_out
     ? 'timed_out (still running)'
     : `exit ${result.exit_code ?? -1} (${result.status})`;
   ctx.pushLog({
@@ -109,10 +112,11 @@ export async function executeAwaitCommandAction(
   const resultHeader = [
     `task_id: ${result.id}`,
     `command: ${result.command || '(unknown)'}`,
-    `status: ${result.status}`,
+    `status: ${settlement.policyRejected ? 'policy_rejected' : result.status}`,
     `timed_out: ${result.timed_out}`,
     `elapsed_ms: ${result.elapsed_ms}`,
-    `exit_code: ${result.exit_code ?? 'null'}`,
+    `exit_code: ${exitCode ?? 'null'}`,
+    ...(settlement.policyRejected ? [`process_exit_code: ${result.exit_code ?? 'null'}`] : []),
   ].join('\n');
   const actionForObservation: ChatToolAction = {
     type: 'await_command',
@@ -143,7 +147,7 @@ export async function executeAwaitCommandAction(
       ].join('\n');
   return {
     index: ctx.index,
-    observation: [observation, ...settlementNotes].join('\n'),
+    observation: [observation, ...settlement.notes].join('\n'),
   };
 }
 
@@ -192,27 +196,76 @@ export function executeChatAwaitCommandAction(
   });
 }
 /** Bind background dispatch provenance and invalidation to the submitting Chat task. */
-export function executeChatBackgroundRunCommandAction(
+export function createChatBackgroundExecutor(
   action: Extract<ChatToolAction, { type: 'run_command' }>,
   ctx: Parameters<typeof executeChatAwaitCommandAction>[1],
+): { executor: ToolExecutor; waitForStart: (completion: Promise<PolicyGatedExecutionResult>) => Promise<BackgroundShellActionResult | null> } {
+  const { host, ownerGeneration } = ctx;
+  let startedJob: BackgroundShellJob | undefined;
+  let announceStart!: (result: BackgroundShellActionResult) => void;
+  const started = new Promise<BackgroundShellActionResult>(resolve => { announceStart = resolve; });
+  const executor: ToolExecutor = {
+    mapAction: defaultToolExecutor.mapAction,
+    async execute(agentAction, context, budget) {
+      refreshDryRunState();
+      if (!isInvocationLive() || process.env['BABEL_SHADOW_ROOT'] || host.options.toolExecutorForTesting) {
+        return (host.options.toolExecutorForTesting ?? defaultToolExecutor).execute(agentAction, context, budget);
+      }
+      if (context.signal?.aborted || !host.isSubmissionCurrent(ownerGeneration)) {
+        return { action: agentAction, terminal: false, results: [{ exit_code: 1, stdout: '', stderr: 'Background dispatch cancelled before spawn.' }] };
+      }
+      const startResult = startChatBackgroundCommand(action, ctx, job => { startedJob = job; });
+      const job = startedJob;
+      if (!job) return { action: agentAction, terminal: false, results: [{ exit_code: 1, stdout: '', stderr: startResult.observation }] };
+      const onAbort = () => { if (!action.detached) killBackgroundShell(job.id); };
+      context.signal?.addEventListener('abort', onAbort, { once: true });
+      if (context.signal?.aborted) onAbort();
+      announceStart(startResult);
+      try {
+        await job.done;
+        const completed = await awaitBackgroundShell(job.id, 1);
+        return { action: agentAction, terminal: false, results: [{
+          exit_code: completed.exit_code ?? 1, stdout: completed.stdout, stderr: completed.stderr,
+        }] };
+      } finally { context.signal?.removeEventListener('abort', onAbort); }
+    },
+  };
+  return {
+    executor,
+    async waitForStart(completion) {
+      // Attach rejection handling immediately: a caller may await the job much later.
+      const settled = completion.then(() => null, () => null);
+      const result = await Promise.race([started, settled]);
+      if (startedJob) bindChatBackgroundPolicy(startedJob, completion);
+      return result;
+    },
+  };
+}
+
+function startChatBackgroundCommand(
+  action: Extract<ChatToolAction, { type: 'run_command' }>,
+  ctx: Parameters<typeof executeChatAwaitCommandAction>[1],
+  onStarted: (job: BackgroundShellJob) => void,
 ): BackgroundShellActionResult {
   const { host, ownerGeneration } = ctx;
   let register: ((job: BackgroundShellJob) => void) | undefined;
+  let didStart = false;
   return executeBackgroundRunCommandAction(action, {
     projectRoot: ctx.projectRoot, tool: ctx.tool, target: ctx.target,
     toolId: ctx.toolId, index: ctx.index,
     ownerId: host.engineRunId,
     toolCallId: ctx.meta.idempotencyKey,
     pushLog: entry => {
-      if (host.isSubmissionCurrent(ownerGeneration)) host.toolCallLog.push(entry);
+      if (didStart && host.isSubmissionCurrent(ownerGeneration)) host.toolCallLog.push(entry);
     },
-    onToolComplete: ctx.callbacks.onToolComplete,
+    onToolComplete: (id, detail, error, exitCode) => {
+      if (didStart && host.isSubmissionCurrent(ownerGeneration)) ctx.callbacks.onToolComplete?.(id, detail, error, exitCode);
+    },
     onBeforeSpawn: () => {
       register = prepareChatBackgroundDispatch(host, action.command, action.cwd,
         ownerGeneration, ctx.meta.idempotencyKey ?? String(ctx.toolId));
-      host.persistToolStartedAtExecutorDispatch(action, ctx.meta);
     },
-    onStarted: job => register?.(job),
+    onStarted: job => { register?.(job); onStarted(job); didStart = true; },
   });
 }
 /** run_command(background=true) — non-blocking shell with sandbox parity gates. */
