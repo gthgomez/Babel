@@ -591,6 +591,7 @@ export function parityRecordToolBatch(
       exit_code?: number;
       target?: string;
       contentHash?: string;
+      discoverySuppressed?: boolean;
       action_index?: number;
       batch_id?: string;
     }>;
@@ -772,7 +773,8 @@ export function parityRecordToolBatch(
     reads: acceptedResults
       .filter(
         (r) =>
-          isDiscoveryTool(r.tool_name) && r.exit_code === 0 && r.content.trim().length > 0,
+          isDiscoveryTool(r.tool_name) && r.discoverySuppressed !== true &&
+          r.exit_code === 0 && r.content.trim().length > 0,
       )
       .map((r) => ({
         path: r.target ?? r.tool_name,

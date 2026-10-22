@@ -9,12 +9,12 @@ function fixture() {
   let turn = 0
   return {
     rt,
-    observe(tool: string, args: Record<string, unknown>, content: string, exitCode = 0, epoch = 0) {
+    observe(tool: string, args: Record<string, unknown>, content: string, exitCode = 0, epoch = 0, detail?: string) {
       turn += 1
       const batch = projectDurableToolBatch({
         turn,
         actions: [{ type: tool, ...args }],
-        turnSlice: [{ tool, target: 'same-target', index: 0, exit_code: exitCode }],
+        turnSlice: [{ tool, target: 'same-target', index: 0, exit_code: exitCode, ...(detail ? { detail } : {}) }],
         observationsByActionIndex: [content],
       })
       return parityRecordToolBatch(rt, {
@@ -59,4 +59,13 @@ test('alternating artifact ranges retain separate fingerprints and do not manufa
   assert.equal(f.observe('read_artifact', second, 'second range').hasDelta, true)
   assert.equal(f.observe('read_artifact', { end_line: 10, start_line: 1, artifact_id: 'artifact' }, 'first range').hasDelta, false)
   assert.equal(f.observe('read_artifact', second, 'second range').hasDelta, false)
+})
+
+test('cached and read-limit notices cannot supply even first-read localization', () => {
+  const f = fixture()
+  for (const detail of ['cached', 'read_limit']) {
+    const receipt = f.observe('read_file', { path: 'source.txt' }, `No source injected (${detail})`, 0, 0, detail)
+    assert.equal(receipt.hasDelta, false)
+    assert.deepEqual(receipt.targetsRead, [])
+  }
 })

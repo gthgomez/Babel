@@ -40,7 +40,8 @@ import type { ToolContext } from '../localTools.js';
 import { registerRunOutput, readRunOutput } from './codingLoop/runOutputArtifacts.js';
 import { establishAuthoritySession, AUTHORITY_SESSION_FILENAME } from '../authority/sessionContext.js';
 import { loadLeaseFromEnv } from '../authority/lease.js';
-import { createParityRuntime } from './chatEngineParityBridge.js';
+import { createParityRuntime, parityOnUserTurn, parityRecordToolBatch, parityArbitrateCycle } from './chatEngineParityBridge.js';
+import { projectDurableToolBatch } from './toolExecutionIdentity.js';
 import { resolveLiveSessionAuthority } from './liveSessionBridge.js';
 import { openAdmissionStore, type AdmissionStore } from '../runtime/admission.js';
 import { resetDockerAvailabilityCache, setDockerAvailableForTest } from '../config/benchmarkContainer.js';
@@ -329,6 +330,31 @@ describe('Chat coding output contracts (executor dispatch)', { concurrency: fals
     };
     return { host, close, controls, projectRoot, run, start };
   }
+
+  test('real cached file observations never turn elapsed time into discovery progress', async () => {
+    const f = verifierFixture();
+    const progress = createParityRuntime(`cached-progress-${randomUUID()}`);
+    parityOnUserTurn(progress, { task: 'Inspect source.txt', model: 'mock', provider: 'mock', projectRoot: f.projectRoot });
+    const action = { type: 'read_file' as const, path: 'source.txt' };
+    try {
+      for (let turn = 1; turn <= 9; turn += 1) {
+        if (turn > 1) {
+          for (const cached of f.host.readCache.values()) cached.timestamp = Date.now() - turn * 5000;
+        }
+        const startIndex = f.host.toolCallLog.length;
+        const result = await f.run(action);
+        if (turn > 1) assert.match(result.observation, /Skipping re-injection/);
+        const batch = projectDurableToolBatch({
+          turn, actions: [action], turnSlice: f.host.toolCallLog.slice(startIndex),
+          observationsByActionIndex: [result.observation],
+        });
+        const receipt = parityRecordToolBatch(progress, { at_turn: turn, toolCalls: batch.toolCalls, results: batch.results });
+        assert.equal(receipt.hasDelta, turn === 1, result.observation);
+        parityArbitrateCycle({ rt: progress, fuseLabels: [] });
+      }
+      assert.equal(parityArbitrateCycle({ rt: progress, fuseLabels: [] }).policySource, 'progress_terminal');
+    } finally { f.close(); }
+  });
 
   test('background verifier completion supplies the canonical ledger exactly once', async () => {
     const f = verifierFixture();

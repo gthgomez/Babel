@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { spawn, spawnSync } from 'node:child_process';
 import {
@@ -200,7 +201,9 @@ function makeFixture() {
   process.env['BABEL_BENCHMARK_MODE'] = '1';
   process.env['BABEL_AUTONOMY_LEASE'] = JSON.stringify({
     version: 2,
-    leaseId: 'lifecycle-fixture-lease',
+    // Each independent fixture owns its authority. A prior background job's
+    // fail-closed drift revocation must not revoke a later fixture's lease.
+    leaseId: `lifecycle-fixture-${randomUUID()}`,
     scope: { repository: 'lifecycle-fixture', objective: 'deterministic lifecycle qualification' },
     allowedCapabilities: ['run_arbitrary_code', 'run_local_command', 'run_tests', 'edit_task_files', 'inspect_repository'],
   });
