@@ -358,13 +358,42 @@ const intentMarkdown = new Marked({
   tokenizer: { html: () => undefined, tag: () => undefined },
 });
 
+/**
+ * Once any fence appears in the document, Markdown parses 4-space/tab-indented
+ * prose as an `indented` code block; dropping the whole block silently erased
+ * standalone natural-language restrictions ("Do not edit any files.") and
+ * flipped explicit repairs to mutating. Project restriction clauses out of
+ * indented blocks: a line is retained only when a no-edit directive starts the
+ * clause and no positive mutation/destructive verb survives outside the
+ * directive match, so the projection can neither add nor lose mutation
+ * authority from the rest of the example. Fenced and codespan bodies remain
+ * evidence and are dropped in full.
+ */
+function indentedRestrictionProjection(text: string): string {
+  const directive = new RegExp(READ_ONLY_DIRECTIVE_SOURCE, 'i');
+  const positiveVerb = new RegExp(`\\b(?:${MUTATION_VERB_SOURCE}|${DESTRUCTIVE_VERB_SOURCE})\\b`, 'i');
+  const retained: string[] = [];
+  for (const line of text.split('\n')) {
+    const clause = line.replace(/^\s*(?:[-*+]|\d+[.)])?\s*/, '');
+    const match = directive.exec(clause);
+    if (!match || match.index !== 0) continue;
+    const outside = clause.slice(match[0].length);
+    if (positiveVerb.test(outside)) continue;
+    retained.push(clause);
+  }
+  return retained.join('\n');
+}
+
 export function stripFencedCodeBodies(text: string): string {
   if (!/`{3,}|~{3,}/.test(text)) return text;
   // Reuse the renderer's parser for block widths, indentation, containers and
   // multiline code spans. A separate fence scanner can hide real denials or
   // expose instructions inside examples. Do not modify global marked options.
   const prose = (tokens: Token[], separator = ''): string => tokens.map(token => {
-    if (token.type === 'code' || (token.type === 'codespan' && token.raw.startsWith('```'))) return ' ';
+    if (token.type === 'code') {
+      return token.codeBlockStyle === 'indented' ? indentedRestrictionProjection(token.text) : ' ';
+    }
+    if (token.type === 'codespan' && token.raw.startsWith('```')) return ' ';
     if (token.type === 'list') return token.items.map((item: Tokens.ListItem) => prose(item.tokens, '\n')).join('\n');
     if ('tokens' in token && token.tokens) {
       // Keep source delimiters around inline children. Flattening formatting
