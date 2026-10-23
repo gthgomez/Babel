@@ -114,6 +114,11 @@ export interface ProductBenchmarkOptions {
   readinessGate?: 'fail' | 'off';
 }
 
+export type ReadinessCommandRunner = (
+  command: string[],
+  options: { cliRoot: string; maxOutputBytes: number; id: string },
+) => { status: number | null; signal?: string | null; error?: { name: string; code?: string }; stdout?: string | null; stderr?: string | null };
+
 interface CliInvocation {
   executable: string;
   baseArgs: string[];
@@ -1183,9 +1188,29 @@ function runScenario(
   };
 }
 
+/** Execute one readiness command without a shell or an implicit successful spawn error. */
+export const executeReadinessCommand: ReadinessCommandRunner = (command, options) => {
+  let [executable, ...args] = command;
+  if (!executable) return { status: null, error: { name: 'Error', code: 'ENOENT' } };
+  if (process.platform === 'win32' && executable.toLowerCase() === 'npm.cmd') {
+    const npmCli = process.env['npm_execpath'] ?? join(dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js');
+    if (!existsSync(npmCli)) return { status: null, error: { name: 'Error', code: 'ENOENT' } };
+    executable = process.execPath;
+    args = [npmCli, ...args];
+  }
+  return spawnSync(executable, args, {
+    cwd: options.cliRoot,
+    env: { ...getSafeEnv(), BABEL_ROOT, BABEL_RUNS_DIR, NODE_NO_WARNINGS: '1' },
+    // Display truncation must not terminate an otherwise successful command.
+    // Retain the previous spawn transport bound independently of report size.
+    encoding: 'utf8', timeout: READINESS_TIMEOUT_MS, maxBuffer: 1024 * 1024,
+    windowsHide: true,
+  });
+};
+
 function runReadinessCommand(
   command: string[],
-  options: { cliRoot: string; maxOutputBytes: number; id: string },
+  options: { cliRoot: string; maxOutputBytes: number; id: string; run: ReadinessCommandRunner },
 ): BenchmarkScenarioResult['checks'][number] {
   const [executable, ...args] = command;
   if (!executable) {
@@ -1196,23 +1221,12 @@ function runReadinessCommand(
     };
   }
 
-  const result = spawnSync(executable, args, {
-    cwd: options.cliRoot,
-    env: {
-      ...getSafeEnv(),
-      BABEL_ROOT,
-      BABEL_RUNS_DIR,
-      NODE_NO_WARNINGS: '1',
-    },
-    encoding: 'utf8',
-    timeout: READINESS_TIMEOUT_MS,
-    windowsHide: true,
-  });
+  const result = options.run([executable, ...args], options);
   const output = limitOutput(
     `${result.stdout ?? ''}${result.stderr ?? ''}`,
     options.maxOutputBytes,
   ).text.trim();
-  const exitCode = result.status ?? (result.signal ? 1 : 0);
+  const exitCode = result.error || result.signal ? 1 : (result.status ?? 1);
   return {
     id: options.id,
     status: exitCode === 0 ? 'pass' : 'fail',
@@ -1227,6 +1241,7 @@ function buildReadinessGateScenario(options: {
   cliRoot: string;
   maxOutputBytes: number;
   cliInvocation: CliInvocation;
+  run: ReadinessCommandRunner;
 }): BenchmarkScenarioResult {
   const started = performance.now();
   const npmExecutable = process.platform === 'win32' ? 'npm.cmd' : 'npm';
@@ -1312,7 +1327,10 @@ function buildCapabilityScorecard(
   }));
 }
 
-export function runProductBenchmark(options: ProductBenchmarkOptions = {}): ProductBenchmarkReport {
+export function runProductBenchmark(
+  options: ProductBenchmarkOptions = {},
+  dependencies: { runReadinessCommand?: ReadinessCommandRunner } = {},
+): ProductBenchmarkReport {
   const cliRoot = getCliRoot();
   const now = options.now ?? new Date();
   const outputDir = resolve(options.outputDir ?? join(BABEL_RUNS_DIR, 'benchmarks'));
@@ -1340,7 +1358,7 @@ export function runProductBenchmark(options: ProductBenchmarkOptions = {}): Prod
     }),
   );
   if (options.readinessGate !== 'off') {
-    scenarios.unshift(buildReadinessGateScenario({ cliRoot, maxOutputBytes, cliInvocation }));
+    scenarios.unshift(buildReadinessGateScenario({ cliRoot, maxOutputBytes, cliInvocation, run: dependencies.runReadinessCommand ?? executeReadinessCommand }));
   }
 
   const report: ProductBenchmarkReport = {

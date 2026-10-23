@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from 'node:fs'
+import { copyFileSync, mkdtempSync, writeFileSync, mkdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -17,6 +17,8 @@ test('rejected source and scanner output never appear in hook diagnostics', () =
   }
   try {
     git('init', '-q')
+    mkdirSync(join(root, 'tools/security'), { recursive: true })
+    copyFileSync(fileURLToPath(new URL('../security/tracked-scan-common.psm1', import.meta.url)), join(root, 'tools/security/tracked-scan-common.psm1'))
     writeFileSync(join(root, 'sample.txt'), canaries.slice(0, 3).join('\n') + '\napi_key="' + canaries[3] + '"\n')
     git('add', 'sample.txt')
     mkdirSync(join(root, 'bin'))

@@ -16,6 +16,7 @@ param(
   [string[]]$RequiredCheck = @(),
   [string[]]$AllowedPath = @(),
   [switch]$RequireIsolatedWorktree,
+  [ValidateRange(0, 1800)][int]$CheckWaitSeconds = 0,
   [ValidateSet('json', 'text')][string]$OutputFormat = 'json'
 )
 
@@ -40,6 +41,7 @@ $ciSnapshot = [pscustomobject]@{ available = $false; observations = @(); workflo
 $ciEvaluation = [pscustomobject]@{ state = 'not_checked'; results = @() }
 $requiredChecksReady = [pscustomobject]@{ ready = $false; attempts = 0; reason = 'not_checked' }
 $strictBaseFreshness = $true
+$immutableCIJobs = @{}
 $integrationOverlap = [pscustomobject]@{ available = $false; overlap = @(); error = 'not_evaluated' }
 
 function Add-AgentCheck {
@@ -147,7 +149,7 @@ function Get-AgentCurrentCandidateIdentity {
 function Get-AgentCurrentCISnapshot {
   param([DateTimeOffset]$Deadline = ([DateTimeOffset]::UtcNow.AddSeconds(60)))
   $appIds = @($requiredCheckPolicies | Where-Object { $null -ne $_.integration_id -and [int64]$_.integration_id -gt 0 } | ForEach-Object { [int64]$_.integration_id })
-  Get-AgentCISnapshot -Repository $ExpectedRepository -TargetSha $prHead -Deadline $Deadline -AuthorityAppIds $appIds -ReadJson {
+  Get-AgentCISnapshot -Repository $ExpectedRepository -TargetSha $prHead -Deadline $Deadline -AuthorityAppIds $appIds -JobMetadataCache $immutableCIJobs -ReadJson {
     param($Endpoint)
     Get-AgentJsonFromGh -Deadline $Deadline -Arguments @('api', $Endpoint)
   }
@@ -160,7 +162,7 @@ function Wait-AgentRequiredChecksReady {
     param($Deadline)
     $snapshot = Get-AgentCurrentCISnapshot -Deadline $Deadline
     Get-AgentCIState -Snapshot $snapshot -Policies $peers -TargetSha $prHead
-  } -TimeoutSeconds 1800 -DelaySeconds 10
+  } -TimeoutSeconds $CheckWaitSeconds -DelaySeconds 10
 }
 
 function Get-AgentReviewThreadStatus {
@@ -293,8 +295,6 @@ try {
   $remoteOk = [string]::Equals($remoteSlug, $ExpectedRepository, [StringComparison]::OrdinalIgnoreCase)
   Add-AgentCheck -Name 'REMOTE_OK' -Passed $remoteOk -Blocker 'unexpected_origin_repository'
   Add-AgentCheck -Name 'REMOTE_CREDENTIAL_FREE' -Passed (Test-AgentRemoteCredentialFree -RemoteUrl $remoteUrl) -Blocker 'token_bearing_remote_url'
-  $fetchResult = if ($remoteOk) { Invoke-AgentGit -GitPath $GitPath -RepoRoot $resolvedRepoRoot -Arguments @('fetch', $ExpectedRemote, '--prune') } else { $null }
-  Add-AgentCheck -Name 'FETCH_OK' -Passed ($null -ne $fetchResult -and $fetchResult.exitCode -eq 0) -Blocker 'fetch_failed'
   $localHead = Get-AgentGitText -GitPath $GitPath -RepoRoot $resolvedRepoRoot -Arguments @('rev-parse', 'HEAD')
   Add-AgentCheck -Name 'LOCAL_HEAD_KNOWN' -Passed (Test-AgentShaValue $localHead) -Blocker 'local_head_unknown'
   $topology = Get-AgentWorktreeTopology -GitPath $GitPath -RepoRoot $resolvedRepoRoot
@@ -333,6 +333,9 @@ try {
   Add-AgentCheck -Name 'PR_READABLE' -Passed $prAvailable -Blocker 'pull_request_not_readable'
   $prHead = if ($prAvailable) { [string]$prView.headRefOid } else { '' }
   $prBase = if ($prAvailable) { [string]$prView.baseRefOid } else { '' }
+  # Read-only helpers never mutate shared refs. The caller fetches once in a
+  # separate operation when live base evidence actually differs.
+  Add-AgentCheck -Name 'REMOTE_BASE_CURRENT' -Passed ((Test-AgentShaValue $prBase) -and $prBase -eq $originMain) -Blocker 'remote_base_stale_fetch_required'
   $executionBase = if ([string]::IsNullOrWhiteSpace($ExpectedExecutionBaseSha)) { $originMain } else { $ExpectedExecutionBaseSha }
   $rulesetPolicy = if ($ghAvailable -and $authOk) { Get-AgentRulesetPolicy } else {
     [pscustomobject]@{ available = $false; error = 'active_ruleset_unreadable'; required_review_thread_resolution = $false; required_approving_review_count = -1; required_status_checks = @(); required_status_check_policies = @(); strict_required_status_checks_policy = $null; id = $null; name = $null; enforcement = $null }
@@ -406,7 +409,14 @@ try {
     [string]::Equals([string]$env:GITHUB_JOB, 'trusted-control-plane', [StringComparison]::OrdinalIgnoreCase)
   $mergeStateAcceptable = ($prAvailable -and [string]$prView.mergeStateStatus -eq 'CLEAN') -or
     ($runningTrustedControlPlane -and $prAvailable -and [string]$prView.mergeable -eq 'MERGEABLE')
-  Add-AgentCheck -Name 'MERGE_STATE_CLEAN' -Passed $mergeStateAcceptable -Blocker 'pr_merge_state_not_clean'
+  # Defer only this aggregate state while explicitly waiting: pending required
+  # CI itself makes GitHub report BLOCKED. All concrete prerequisites still gate
+  # admission, and the refreshed merge state remains mandatory afterward.
+  $deferMergeState = $CheckWaitSeconds -gt 0 -and $prAvailable -and
+    [string]$prView.mergeable -eq 'MERGEABLE' -and [string]$prView.mergeStateStatus -eq 'BLOCKED'
+  if (-not $deferMergeState) {
+    Add-AgentCheck -Name 'MERGE_STATE_CLEAN' -Passed $mergeStateAcceptable -Blocker 'pr_merge_state_not_clean'
+  }
 
   Add-AgentCheck -Name 'ACTIVE_RULESET_READABLE' -Passed ([bool]$rulesetPolicy.available) -Blocker 'active_ruleset_unreadable'
   Add-AgentCheck -Name 'STATUS_CHECK_FRESHNESS_POLICY_READABLE' -Passed ([bool]$rulesetPolicy.available) -Blocker 'required_status_checks_policy_unreadable'
@@ -428,8 +438,6 @@ try {
     }
   }
   Add-AgentCheck -Name 'REQUIRED_CHECK_PRODUCERS_BOUND' -Passed $producerBindingsComplete -Blocker 'required_check_producer_binding_incomplete'
-  $requiredChecksReady = if ($rulesetPolicy.available -and $authOk -and (Test-AgentShaValue $prHead) -and $blockers.Count -eq 0) { Wait-AgentRequiredChecksReady } else { [pscustomobject]@{ ready = $false; attempts = 0; reason = 'required_check_wait_prerequisite_missing' } }
-  if (-not $requiredChecksReady.ready) { $warnings += ('peer_wait:' + $requiredChecksReady.reason) }
   $githubApprovalCount = if ($rulesetPolicy.available) { [int]$rulesetPolicy.required_approving_review_count } else { -1 }
   $observedApprovalCount = if ($prAvailable) { Get-AgentLatestApprovalCount -PRData $prView } else { 0 }
   $threads = if ($rulesetPolicy.available -and $rulesetPolicy.required_review_thread_resolution) { Get-AgentReviewThreadStatus } else { [pscustomobject]@{ available = $true; resolved = $true; count = 0; unresolved = 0; error = '' } }
@@ -471,6 +479,46 @@ try {
     if ($remotePrHeadResult.exitCode -eq 0) { $remotePrHead = (($remotePrHeadResult.text -split '\s+')[0]).Trim() }
   }
   Add-AgentCheck -Name 'REMOTE_HEAD_MATCH' -Passed ((Test-AgentShaValue $remotePrHead) -and [string]::Equals($remotePrHead, $prHead, [StringComparison]::OrdinalIgnoreCase)) -Blocker 'remote_branch_head_differs_from_pr_head'
+
+  # Cheap blockers are reported before waiting. Default calls take one current
+  # snapshot; workflow_run already resumes the trusted audit when CI completes.
+  $requiredChecksReady = if ($CheckWaitSeconds -eq 0) { [pscustomobject]@{ ready = $false; attempts = 0; reason = 'snapshot_only' } }
+    elseif ($rulesetPolicy.available -and $authOk -and (Test-AgentShaValue $prHead) -and $blockers.Count -eq 0) { Wait-AgentRequiredChecksReady }
+    else { [pscustomobject]@{ ready = $false; attempts = 0; reason = 'required_check_wait_prerequisite_missing' } }
+  if ($CheckWaitSeconds -gt 0 -and -not $requiredChecksReady.ready) { $warnings += ('peer_wait:' + $requiredChecksReady.reason) }
+
+  if ($requiredChecksReady.ready -and $requiredChecksReady.attempts -gt 0) {
+    # A wait cannot freeze approvals, threads, base policy or remote identity.
+    $freshPR = Get-AgentJsonFromGh -Arguments @('pr', 'view', [string]$PR, '--repo', $ExpectedRepository, '--json', $prFields)
+    $freshIdentity = if ($freshPR.available) { Test-AgentCandidateIdentity -Candidate $freshPR.value -HeadSha $prHead -BaseSha $prBase -StrictBaseFreshness $true }
+      else { [pscustomobject]@{ valid = $false } }
+    Add-AgentCheck -Name 'POST_WAIT_CANDIDATE_CURRENT' -Passed ([bool]$freshIdentity.valid) -Blocker 'candidate_or_base_changed_during_wait'
+    Add-AgentCheck -Name 'POST_WAIT_MERGE_STATE_CLEAN' -Passed ($freshPR.available -and
+      ([string]$freshPR.value.mergeStateStatus -eq 'CLEAN' -or
+        ($runningTrustedControlPlane -and [string]$freshPR.value.mergeable -eq 'MERGEABLE'))) -Blocker 'merge_state_changed_during_wait'
+    if ($deferMergeState) {
+      $freshMergeStateAcceptable = $freshPR.available -and
+        ([string]$freshPR.value.mergeStateStatus -eq 'CLEAN' -or
+          ($runningTrustedControlPlane -and [string]$freshPR.value.mergeable -eq 'MERGEABLE'))
+      Add-AgentCheck -Name 'MERGE_STATE_CLEAN' -Passed $freshMergeStateAcceptable -Blocker 'pr_merge_state_not_clean'
+    }
+    $freshRules = Get-AgentRulesetPolicy
+    $ruleFields = @('id', 'enforcement', 'required_review_thread_resolution', 'required_approving_review_count', 'required_status_check_policies', 'strict_required_status_checks_policy')
+    $oldRuleIdentity = $rulesetPolicy | Select-Object $ruleFields | ConvertTo-Json -Depth 10 -Compress
+    $newRuleIdentity = $freshRules | Select-Object $ruleFields | ConvertTo-Json -Depth 10 -Compress
+    Add-AgentCheck -Name 'POST_WAIT_RULES_CURRENT' -Passed ($freshRules.available -and $oldRuleIdentity -ceq $newRuleIdentity) -Blocker 'rules_changed_or_unavailable_during_wait'
+    $freshThreads = if ($rulesetPolicy.required_review_thread_resolution) { Get-AgentReviewThreadStatus } else { [pscustomobject]@{ available = $true; resolved = $true } }
+    Add-AgentCheck -Name 'POST_WAIT_THREADS_RESOLVED' -Passed ($freshThreads.available -and $freshThreads.resolved) -Blocker 'review_threads_changed_during_wait'
+    $freshApprovals = if ($freshPR.available) { Get-AgentLatestApprovalCount -PRData $freshPR.value } else { -1 }
+    Add-AgentCheck -Name 'POST_WAIT_APPROVALS_CURRENT' -Passed ($freshApprovals -ge $githubApprovalCount) -Blocker 'required_approvals_changed_during_wait'
+    $freshRemote = Invoke-AgentGit -GitPath $GitPath -RepoRoot $resolvedRepoRoot -Arguments @('ls-remote', $ExpectedRemote, "refs/heads/$prHeadBranch")
+    $freshRemoteSha = if ($freshRemote.exitCode -eq 0) { (($freshRemote.text -split '\s+')[0]).Trim() } else { '' }
+    Add-AgentCheck -Name 'POST_WAIT_REMOTE_CURRENT' -Passed ($freshRemoteSha -ceq $prHead) -Blocker 'remote_head_changed_during_wait'
+  }
+
+  if ($deferMergeState -and -not ($requiredChecksReady.ready -and $requiredChecksReady.attempts -gt 0)) {
+    Add-AgentCheck -Name 'MERGE_STATE_CLEAN' -Passed $false -Blocker 'pr_merge_state_not_clean'
+  }
 
 
   $ciSnapshot = if ($ghAvailable -and $authOk -and (Test-AgentShaValue $prHead)) { Get-AgentCurrentCISnapshot }

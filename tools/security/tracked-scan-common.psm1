@@ -15,19 +15,14 @@ function Get-FileSha256 {
   return (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash.ToLowerInvariant()
 }
 
-function Test-ByteSequenceEqual {
-  param(
-    [object[]]$Left,
-    [object[]]$Right,
-    [int]$RightOffset = 0
-  )
-  if ($null -eq $Left) { $Left = @() }
-  if ($null -eq $Right) { $Right = @() }
-  if ($RightOffset -lt 0 -or $RightOffset -gt $Right.Count -or $Left.Count -ne ($Right.Count - $RightOffset)) { return $false }
-  for ($index = 0; $index -lt $Left.Count; $index++) {
-    if ([int]$Left[$index] -ne [int]$Right[$index + $RightOffset]) { return $false }
-  }
-  return $true
+function Test-CredentialClassPath {
+  param([Parameter(Mandatory)][string]$Path)
+  $relative = $Path.Replace('\', '/').ToLowerInvariant()
+  $leaf = ($relative -split '/')[-1]
+  return $leaf -eq '.env' -or ($leaf.StartsWith('.env.') -and $leaf -ne '.env.example') -or
+    $relative -match '(^|/)\.codex/(auth\.json|\.env)$' -or
+    $relative -match '(^|/)(?:\.ssh|\.aws|\.azure|\.gnupg|secrets)/' -or
+    $relative -match '\.(?:pem|p12|pfx|key)$'
 }
 
 function Get-TrackedScanInventory {
@@ -38,40 +33,39 @@ function Get-TrackedScanInventory {
     [int]$MaxLineCharacters = 1048576,
     [AllowNull()][string[]]$CommittedPaths = $null
   )
-  $records = @()
-  $issues = @()
+  $records = [Collections.Generic.List[object]]::new()
+  $issues = [Collections.Generic.List[object]]::new()
+  $strictUtf8 = [Text.UTF8Encoding]::new($false, $true)
   $trackedPaths = @(if ($null -eq $CommittedPaths) { Get-TrackedPathList -RepoRoot $RepoRoot } else { $CommittedPaths })
   foreach ($relative in $trackedPaths) {
     if ([string]::IsNullOrWhiteSpace($relative) -or [IO.Path]::IsPathRooted($relative) -or
         $relative.Contains('\') -or $relative.Contains(':') -or $relative.Split('/') -contains '..' -or
         $relative.Split('/') -contains '.' -or $relative.Contains([char]0)) { throw 'Invalid committed path inventory.' }
-    $leaf = ($relative -split '/')[-1]
-    if ($leaf -eq '.env' -or ($leaf -like '.env.*' -and $leaf -ne '.env.example') -or
-        $relative -match '(^|/)\.codex/(auth\.json|\.env)$') { throw 'Credential-class tracked path rejected before content access.' }
+    if (Test-CredentialClassPath $relative) { throw 'Credential-class tracked path rejected before content access.' }
   }
   if (@($trackedPaths | Select-Object -Unique).Count -ne $trackedPaths.Count) { throw 'Duplicate committed path inventory.' }
   foreach ($relative in $trackedPaths) {
     $full = Join-Path $RepoRoot $relative
     if (-not (Test-Path -LiteralPath $full -PathType Leaf)) {
-      $issues += [pscustomobject]@{ path = $relative; reason = 'missing-worktree-file' }
+      $issues.Add([pscustomobject]@{ path = $relative; reason = 'missing-worktree-file' })
       continue
     }
     $item = Get-Item -Force -LiteralPath $full
     if ($item.Length -gt $MaxFileBytes) {
-      $issues += [pscustomobject]@{ path = $relative; reason = 'file-size-limit' }
+      $issues.Add([pscustomobject]@{ path = $relative; reason = 'file-size-limit' })
       continue
     }
     try {
-      $bytes = [byte[]](Get-Content -LiteralPath $item.FullName -AsByteStream -Raw)
-      if ($null -eq $bytes) { $bytes = [byte[]]@() }
+      $bytes = [IO.File]::ReadAllBytes($item.FullName)
     } catch {
-      $issues += [pscustomobject]@{ path = $relative; reason = 'unreadable-file' }
+      $issues.Add([pscustomobject]@{ path = $relative; reason = 'unreadable-file' })
       continue
     }
-    $isBinary = $false
-    foreach ($byte in $bytes) {
-      if ([int]$byte -eq 0) { $isBinary = $true; break }
+    if ($bytes.Length -gt $MaxFileBytes) {
+      $issues.Add([pscustomobject]@{ path = $relative; reason = 'file-size-limit' })
+      continue
     }
+    $isBinary = [Array]::IndexOf($bytes, [byte]0) -ge 0
     $text = $null
     $decodeReason = ''
     if (-not $isBinary) {
@@ -82,9 +76,7 @@ function Get-TrackedScanInventory {
           $text = [Text.Encoding]::BigEndianUnicode.GetString($bytes, 2, $bytes.Length - 2)
         } else {
           $offset = if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) { 3 } else { 0 }
-          $text = [Text.Encoding]::UTF8.GetString($bytes, $offset, $bytes.Length - $offset)
-          $roundTrip = [byte[]][Text.Encoding]::UTF8.GetBytes($text)
-          if (-not (Test-ByteSequenceEqual -Left $roundTrip -Right $bytes -RightOffset $offset)) { throw 'invalid UTF-8 byte sequence' }
+          $text = $strictUtf8.GetString($bytes, $offset, $bytes.Length - $offset)
         }
       } catch { $decodeReason = 'invalid-text-encoding' }
     }
@@ -94,7 +86,7 @@ function Get-TrackedScanInventory {
         $_.path -eq $relative -and $_.sha256 -eq $hash -and -not [string]::IsNullOrWhiteSpace([string]$_.rationale)
       }).Count -gt 0
       if (-not $allowed) {
-        $issues += [pscustomobject]@{ path = $relative; reason = $(if ($isBinary) { 'binary-file' } else { $decodeReason }) }
+        $issues.Add([pscustomobject]@{ path = $relative; reason = $(if ($isBinary) { 'binary-file' } else { $decodeReason }) })
       }
       continue
     }
@@ -102,17 +94,18 @@ function Get-TrackedScanInventory {
     $oversized = $false
     foreach ($line in $lines) { if ($line.Length -gt $MaxLineCharacters) { $oversized = $true; break } }
     if ($oversized) {
-      $issues += [pscustomobject]@{ path = $relative; reason = 'line-size-limit' }
+      $issues.Add([pscustomobject]@{ path = $relative; reason = 'line-size-limit' })
       continue
     }
-    $records += [pscustomobject]@{
+    $records.Add([pscustomobject]@{
       path = $relative
       full_path = $item.FullName
       extension = [IO.Path]::GetExtension($relative).ToLowerInvariant()
       lines = $lines
-    }
+      content_sha256 = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($bytes)).ToLowerInvariant()
+    })
   }
-  return [pscustomobject]@{ records = @($records); issues = @($issues); tracked_count = $trackedPaths.Count }
+  return [pscustomobject]@{ records = $records.ToArray(); issues = $issues.ToArray(); tracked_count = $trackedPaths.Count }
 }
 
 function Test-PolicyException {
@@ -128,4 +121,4 @@ function Test-PolicyException {
   return $false
 }
 
-Export-ModuleMember -Function Get-TrackedPathList, Get-FileSha256, Get-TrackedScanInventory, Test-PolicyException
+Export-ModuleMember -Function Get-TrackedPathList, Get-FileSha256, Get-TrackedScanInventory, Test-PolicyException, Test-CredentialClassPath

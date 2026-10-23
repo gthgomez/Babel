@@ -248,7 +248,9 @@ export async function runResearchV2EnginePassOnOwner(options: {
       mode: injectedOffline ? 'injected_offline_run' : 'production_mission_run',
     }
   } catch (err: unknown) {
-    if (!signal.aborted) {
+    const cancelPending =
+      signal.aborted || (await options.owner.externalCancelTargetsThisSession())
+    if (!cancelPending) {
       const message = err instanceof Error ? err.message : String(err)
       const appended = await finalizeFailedOwnerResearchPass({
         store: options.owner.store,

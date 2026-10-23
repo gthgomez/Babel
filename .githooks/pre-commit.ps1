@@ -2,7 +2,7 @@
 .SYNOPSIS
 Babel pre-commit hook (PowerShell) — fast local leak scan.
 Called by .githooks/pre-commit (bash wrapper).
-CI is authoritative; hooks are optional. Use --no-verify to bypass.
+Local checks complement the authoritative current-candidate merge checks.
 #>
 [CmdletBinding()]
 param()
@@ -28,12 +28,10 @@ function Write-Finding([string]$Label, [string]$Detail) {
 $stagedOutput = @(git -C $repoRoot -c core.quotepath=false diff --cached --name-only -z --diff-filter=ACMR)
 if ($LASTEXITCODE -ne 0) { Write-Host 'BLOCKED: staged path inventory unavailable'; exit 1 }
 $staged = @(($stagedOutput -join "`n").Split([char]0, [StringSplitOptions]::RemoveEmptyEntries))
-$badEnv = $staged | Where-Object {
-    $name = Split-Path $_ -Leaf
-    ($name -eq '.env') -or ($name -match '^\.env\.' -and $name -ne '.env.example')
-}
+Import-Module (Join-Path $repoRoot 'tools/security/tracked-scan-common.psm1') -Force
+$badEnv = $staged | Where-Object { Test-CredentialClassPath $_ }
 if ($badEnv) {
-    Write-Host 'Staged .env file(s):' -ForegroundColor Red
+    Write-Host 'Staged credential-class file(s):' -ForegroundColor Red
     $badEnv | ForEach-Object { Write-Host "  $_" -ForegroundColor Yellow }
     # Reject by name before reading a prohibited credential file's diff.
     exit 1
@@ -58,19 +56,31 @@ if ($gitleaks) {
 
 # ── 3. Scan added lines for machine paths ──
 # Retain only safe location metadata in diagnostics, even for scanner errors.
-$addedLines = @()
-foreach ($path in $staged) {
-    $lineNumber = 0
-    $diff = @(git -C $repoRoot diff --cached -U0 --no-ext-diff --no-textconv -- $path)
-    if ($LASTEXITCODE -ne 0) { Write-Finding 'staged diff unavailable' $path; exit 1 }
-    foreach ($entry in $diff) {
-        if ($entry -match '^@@ .* \+(\d+)(?:,\d+)? @@') {
+$addedLines = [Collections.Generic.List[object]]::new()
+$stagedSet = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+foreach ($path in $staged) { [void]$stagedSet.Add($path) }
+$diff = @(git -C $repoRoot -c core.quotepath=false diff --cached -U0 --no-ext-diff --no-textconv --no-renames)
+if ($LASTEXITCODE -ne 0) { Write-Finding 'staged diff unavailable'; exit 1 }
+$path = $null; $lineNumber = 0; $inHunk = $false
+foreach ($entry in $diff) {
+        if ($entry.StartsWith('diff --git ')) { $path = $null; $inHunk = $false }
+        elseif (-not $inHunk -and $entry.StartsWith('+++ ')) {
+            # Git appends a tab separator to unquoted headers with spaces.
+            $header = $entry.Substring(4).TrimEnd([char]9)
+            if ($header -eq '/dev/null') { continue }
+            if ($header.StartsWith('"')) {
+                try { $header = $header | ConvertFrom-Json } catch { Write-Finding 'staged path framing unavailable'; exit 1 }
+            }
+            if (-not $header.StartsWith('b/') -or -not $stagedSet.Contains($header.Substring(2))) { Write-Finding 'staged path framing unavailable'; exit 1 }
+            $path = $header.Substring(2)
+        } elseif ($entry -match '^@@ .* \+(\d+)(?:,\d+)? @@') {
+            $inHunk = $true
             $lineNumber = [int]$Matches[1]
-        } elseif ($entry.StartsWith('+') -and -not $entry.StartsWith('+++')) {
-            $addedLines += @{ Text = $entry.Substring(1); Path = $path; Line = $lineNumber }
+        } elseif ($inHunk -and $entry.StartsWith('+')) {
+            if (-not $path) { Write-Finding 'staged path framing unavailable'; exit 1 }
+            $addedLines.Add(@{ Text = $entry.Substring(1); Path = $path; Line = $lineNumber })
             $lineNumber++
         } elseif ($entry.StartsWith(' ')) { $lineNumber++ }
-    }
 }
 $machinePathPatterns = @(
     @{ Label = 'Windows machine path'; Pattern = '[A-Za-z]:[\\/](Users|Workspace|Projects)[\\/]' },
@@ -129,7 +139,7 @@ if ($stagedLocks -and $fingerprints.Count -gt 0) {
 
 if ($exitCode -ne 0) {
     Write-Host ''
-    Write-Host 'CI is the authoritative gate. Hooks are optional - use --no-verify to bypass.' -ForegroundColor Gray
+    Write-Host 'Repair the reported staged inputs before committing.' -ForegroundColor Gray
 }
 
 exit $exitCode

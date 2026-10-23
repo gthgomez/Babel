@@ -10,7 +10,7 @@ const repoRoot = rootOption < 0 ? resolve(dirname(fileURLToPath(import.meta.url)
 const manifestPath = join(repoRoot, "POLICY_MANIFEST.json");
 // Explicit snapshot reconciled with the promoted host-protected prefixes.
 // New protected files require a reviewed registration and regeneration.
-const coveredPaths = [
+export const coveredPaths = [
   ".github/workflows/public-pr-metadata.yml",
   ".github/workflows/publish-npm.yml",
   ".github/workflows/release.yml",
@@ -162,10 +162,13 @@ const sha256 = (text) =>
 // Preserve BOM, lone CR, whitespace and final-newline distinctions. Only CRLF
 // varies legitimately across clean checkouts, including *.ps1 eol=crlf.
 function hashFile(path) {
+  return hashBytes(readFileSync(path));
+}
+function hashBytes(bytes) {
   const text = new TextDecoder("utf-8", {
     fatal: true,
     ignoreBOM: true,
-  }).decode(readFileSync(path));
+  }).decode(bytes);
   return sha256(text.replace(/\r\n/g, "\n"));
 }
 function bundleId(files) {
@@ -203,17 +206,15 @@ function buildManifest() {
     files,
   };
 }
-function verify() {
+export function verifyPolicyManifest(readPath = (path) => readFileSync(join(repoRoot, path))) {
   let manifest;
   try {
-    manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    manifest = JSON.parse(new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(readPath("POLICY_MANIFEST.json")));
   } catch {
-    failure(["manifest_unreadable"]);
-    return;
+    return { status: "FAIL", problems: ["manifest_unreadable"] };
   }
   if (!isObject(manifest)) {
-    failure(["manifest_shape_invalid"]);
-    return;
+    return { status: "FAIL", problems: ["manifest_shape_invalid"] };
   }
   const problems = [];
   for (const [key, expected] of Object.entries({
@@ -244,7 +245,7 @@ function verify() {
     for (const path of coveredPaths) {
       if (!Object.hasOwn(files, path)) problems.push(`unregistered:${path}`);
       try {
-        const actual = hashFile(join(repoRoot, path));
+        const actual = hashBytes(readPath(path));
         if (Object.hasOwn(files, path) && actual !== files[path])
           problems.push(`drift:${path}`);
       } catch {
@@ -255,17 +256,15 @@ function verify() {
       problems.push("policy_bundle_id_mismatch");
   }
   if (problems.length) {
-    failure(problems);
-    return;
+    return { status: "FAIL", problems };
   }
-  console.log(
-    JSON.stringify({
+  return {
       status: "VERIFIED",
       policy_bundle_id: manifest.policy_bundle_id,
       covered: coveredPaths.length,
-    }),
-  );
+    };
 }
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
 const mode = process.argv[2] ?? "verify";
 if (mode === "generate") {
   const manifest = buildManifest();
@@ -283,8 +282,13 @@ if (mode === "generate") {
       failure(["manifest_write_failed"]);
     }
   }
-} else if (mode === "verify") verify();
+} else if (mode === "verify") {
+  const result = verifyPolicyManifest();
+  console.log(JSON.stringify(result));
+  if (result.status !== "VERIFIED") process.exitCode = 1;
+}
 else {
   console.log(JSON.stringify({ status: "FAIL", problems: ["unknown_mode"] }));
   process.exitCode = 2;
+}
 }

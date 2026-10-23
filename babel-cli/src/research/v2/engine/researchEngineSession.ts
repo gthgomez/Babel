@@ -14,6 +14,7 @@ import {
   type StaleOwnerRecoveryAdmission,
 } from '../control/researchStoreAdmission.js'
 import {
+  readAdmittedOwnerCancelRequest,
   submitAdmittedOwnerCancelRequest,
   watchAdmittedOwnerCancelRequest,
   type StoreCancelRequest,
@@ -72,6 +73,12 @@ export class ResearchEngineSession {
       this.sessionId,
       abortController,
     )
+  }
+
+  /** Cancel-request file still targets this owner (AbortSignal may lag on slow hosts). */
+  async externalCancelTargetsThisSession(): Promise<boolean> {
+    const request = await readAdmittedOwnerCancelRequest(this.storeDirectory)
+    return request?.target_session_id === this.sessionId
   }
 
   async close(): Promise<void> {

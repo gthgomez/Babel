@@ -116,10 +116,6 @@ try {
     Add-AgentCheck -Name 'EXPECTED_BASE_BRANCH' -Passed $false -Blocker 'default_branch_not_checked'
   }
 
-  $fetchResult = Invoke-AgentGit -GitPath $GitPath -RepoRoot $resolvedRepoRoot -Arguments @('fetch', $ExpectedRemote, '--prune')
-  $fetchOk = $fetchResult.exitCode -eq 0
-  Add-AgentCheck -Name 'FETCH_OK' -Passed $fetchOk -Blocker 'fetch_failed'
-
   $head = Get-AgentGitText -GitPath $GitPath -RepoRoot $resolvedRepoRoot -Arguments @('rev-parse', 'HEAD')
   $headKnown = Test-AgentSha -Value $head
   Add-AgentCheck -Name 'LOCAL_HEAD_KNOWN' -Passed $headKnown -Blocker 'local_head_unknown'
@@ -133,12 +129,19 @@ try {
   $baseKnown = Test-AgentSha -Value $originMain
   Add-AgentCheck -Name 'EXPECTED_BASE_SHA_AVAILABLE' -Passed $baseKnown -Blocker 'expected_base_sha_unavailable'
 
-  $lsRemoteResult = Invoke-AgentGit -GitPath $GitPath -RepoRoot $resolvedRepoRoot -Arguments @('ls-remote', $ExpectedRemote, 'HEAD')
+  $lsRemoteResult = Invoke-AgentGit -GitPath $GitPath -RepoRoot $resolvedRepoRoot -Arguments @('ls-remote', $ExpectedRemote, 'HEAD', "refs/heads/$ExpectedBaseBranch")
+  $remoteBase = ''
   if ($lsRemoteResult.exitCode -eq 0) {
-    $remoteHead = (($lsRemoteResult.text -split '\s+')[0]).Trim()
+    foreach ($row in ($lsRemoteResult.text -split '\r?\n')) {
+      if ($row -match '^([a-f0-9]{40})\s+(.+)$') {
+        if ($Matches[2] -eq 'HEAD') { $remoteHead = $Matches[1] }
+        if ($Matches[2] -eq "refs/heads/$ExpectedBaseBranch") { $remoteBase = $Matches[1] }
+      }
+    }
   }
   $remoteReachable = $lsRemoteResult.exitCode -eq 0 -and (Test-AgentSha -Value $remoteHead)
   Add-AgentCheck -Name 'REMOTE_REACHABLE' -Passed $remoteReachable -Blocker 'remote_unreachable'
+  Add-AgentCheck -Name 'REMOTE_BASE_CURRENT' -Passed ($baseKnown -and $remoteBase -eq $originMain) -Blocker 'remote_base_stale_fetch_required'
 
   $statusSnapshot = Get-AgentStatusSnapshot -GitPath $GitPath -RepoRoot $resolvedRepoRoot
   Add-AgentCheck -Name 'STATUS_READABLE' -Passed $statusSnapshot.commandOk -Blocker 'git_status_failed'

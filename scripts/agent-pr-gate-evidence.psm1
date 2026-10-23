@@ -7,7 +7,7 @@ function Get-CIProperty($Object, [string]$Name) {
 }
 
 function Get-AgentCISnapshot {
-  param([string]$Repository, [string]$TargetSha, [scriptblock]$ReadJson, [DateTimeOffset]$Deadline = ([DateTimeOffset]::UtcNow.AddSeconds(120)), [int64[]]$AuthorityAppIds = @(15368))
+  param([string]$Repository, [string]$TargetSha, [scriptblock]$ReadJson, [DateTimeOffset]$Deadline = ([DateTimeOffset]::UtcNow.AddSeconds(120)), [int64[]]$AuthorityAppIds = @(15368), [hashtable]$JobMetadataCache = $null)
   $observations = @(); $workflows = @(); $cache = @{}; $apiCalls = 0
   try {
     foreach ($kind in @('checks', 'workflows')) {
@@ -70,7 +70,10 @@ function Get-AgentCISnapshot {
           if ($url -notmatch $jobPattern) { throw 'workflow_check_attempt_unavailable' }
           $jobId = $Matches.jobId
           if ([DateTimeOffset]::UtcNow -ge $Deadline) { throw 'github_snapshot_deadline_exceeded' }
-          $apiCalls++; $jobResult = & $ReadJson "repos/$Repository/actions/jobs/$jobId"
+          $jobKey = $Repository + ':' + $jobId
+          if ($null -ne $JobMetadataCache -and $JobMetadataCache.ContainsKey($jobKey)) {
+            $jobResult = [pscustomobject]@{ available = $true; value = $JobMetadataCache[$jobKey] }
+          } else { $apiCalls++; $jobResult = & $ReadJson "repos/$Repository/actions/jobs/$jobId" }
           if (-not $jobResult.available) { throw 'workflow_check_attempt_unavailable' }
           $job = $jobResult.value
           $jobAttempt = [string](Get-CIProperty $job 'run_attempt')
@@ -79,6 +82,9 @@ function Get-AgentCISnapshot {
               [string](Get-CIProperty $job 'check_run_url') -ne $checkUrl -or
               $jobAttempt -notmatch '^[1-9]\d*$' -or [int64]$jobAttempt -gt [int64](Get-CIProperty $run 'run_attempt')) { throw 'workflow_check_attempt_unavailable' }
           $metadata['workflow_run_attempt'] = $jobAttempt
+          # Job ids and attempt bindings are immutable; run state and latest
+          # attempt are still fetched live on every snapshot.
+          if ($null -ne $JobMetadataCache) { $JobMetadataCache[$jobKey] = $job }
         }
       }
       $raw = [pscustomobject]@{}
@@ -177,7 +183,7 @@ function Test-AgentCandidateIdentity {
 function Wait-AgentCIState {
   param([scriptblock]$ReadState, [scriptblock]$ReadCandidate,
     [scriptblock]$Now = { [DateTimeOffset]::UtcNow }, [scriptblock]$Sleep = { param($Seconds) Start-Sleep -Seconds $Seconds },
-    # Trusted-control-plane peer wait: 180 attempts at 10s (see docs/guides/REVIEW_MARKERS.md).
+    # Optional bounded peer wait. Normal audit invocations take one snapshot.
     [ValidateRange(0, 3600)][int]$TimeoutSeconds = 1800, [ValidateRange(1, 60)][int]$DelaySeconds = 10)
   $deadline = (& $Now).AddSeconds($TimeoutSeconds); $attempts = 0; $last = $null
   while ($true) {
@@ -193,7 +199,8 @@ function Wait-AgentCIState {
     }
     $remaining = ($deadline - (& $Now)).TotalSeconds
     if ($remaining -le 0) { break }
-    & $Sleep ([Math]::Min($DelaySeconds, $remaining))
+    $backoff = [Math]::Min(60, $DelaySeconds * [Math]::Pow(2, [Math]::Min(3, $attempts - 1)))
+    & $Sleep ([Math]::Min($backoff, $remaining))
   }
   return [pscustomobject]@{ ready = $false; attempts = $attempts; reason = $(if ($null -ne $last -and $last.state -eq 'source_unavailable') { $last.reason } else { 'required_check_wait_timeout' }); last = $last }
 }

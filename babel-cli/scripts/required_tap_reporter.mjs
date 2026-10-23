@@ -8,11 +8,16 @@ import { dirname, relative, resolve } from 'node:path'
 export default async function* requiredTapReporter(source) {
   const files = new Map()
   const skips = []
+  const timings = []
   const outputPath = process.env.BABEL_TAP_EXECUTION_PATH
   const selection = outputPath ? JSON.parse(readFileSync(resolve(dirname(outputPath), 'selection.json'), 'utf8')).files : []
   const selected = new Set(selection.map(file => file.path))
   async function* observe() {
     for await (const event of source) {
+      if (event.type === 'test:summary' && event.data.file && Number.isFinite(event.data.duration_ms) && event.data.duration_ms > 0) {
+        const path = relative(process.cwd(), event.data.file).replaceAll('\\', '/')
+        if (selected.has(path) && files.has(path)) timings.push({ path, sha256: files.get(path), durationMs: event.data.duration_ms })
+      }
       if (['test:pass', 'test:fail'].includes(event.type) && event.data.file) {
         const path = event.data.entryFile || event.data.file
         const name = relative(process.cwd(), path).replaceAll('\\', '/')
@@ -36,7 +41,7 @@ export default async function* requiredTapReporter(source) {
       mkdirSync(dirname(resolve(path)), { recursive: true })
       writeFileSync(path, JSON.stringify({ schemaVersion: 1, complete: true, nodeVersion: process.version,
         platform: process.platform, arch: process.arch,
-        files: [...files].map(([path, sha256]) => ({ path, sha256 })), skips }, null, 2) + '\n')
+        files: [...files].map(([path, sha256]) => ({ path, sha256 })), skips, timings }, null, 2) + '\n')
     }
   }
   yield* tap(observe())
