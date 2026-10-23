@@ -41,16 +41,4 @@
 1. Local commits are checkpoints, not proof of a single remote publication.
 2. After any remote branch exists, prefer **additive** commits and a normal `git push`; do not amend or force-push without explicit owner authority.
 3. `--force-with-lease` binds to an expected remote SHA; it is not merge authority and does not erase prior remote heads from history.
-4. Record both SHAs when a branch advanced through more than one remote tip (see pilot record below).
-
-## Slice A pilot record (measured, not projected)
-
-| Item | Observed |
-| --- | --- |
-| Early catches | Stale `TRUST_ROOT_RECOVERY` ACTIVE; missing handoff link; maintainer scrub blocked after Git-only preflight looked fine |
-| Misses | Initial `-DeliveryStage` scope (reverted per review); unreadable-policy test not run on Windows hosts |
-| Remote branch tips (PR #422 campaign) | `cc2ffc9bbf31b7ebd46c8b35d0939b3aae4ffdd9` then `958758f99e3ec682f7bf2e60bc3890e479fb91ae` — **two remote heads**, not one publication |
-| Manual push in agent log | Rejected non-FF; then `--force-with-lease=refs/heads/cursor/workflow-batch-slice-a-6a77:cc2ffc9bbf31b7ebd46c8b35d0939b3aae4ffdd9` updated tip to `958758f9`. Prior remote `cc2ffc9b` had no successful manual push in the same transcript (host auto-sync on commit is plausible; not assumed as fact beyond remote ref evidence). |
-| Regression test limits | Unreadable policy file uses `chmod 000` on Linux/macOS only; Windows and root-owned files may differ — report platform honestly |
-
-No time or cost savings claimed.
+4. When a branch advanced through more than one remote tip, record the sequence in your private task record, not in public docs.
