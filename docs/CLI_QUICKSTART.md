@@ -17,9 +17,8 @@ Babel is a **local coding agent**. The primary interface is the interactive
 
 These commands are for a **current-source clone**. The published Windows x64
 Desktop [0.1.3](https://github.com/gthgomez/Babel/releases/tag/v0.1.3) bundles Node and the CLI; see [START_HERE.md](../START_HERE.md)
-for choosing between them. After build, run `node <Babel clone>/babel-cli/dist/index.js`
-from the repository you want Babel to work on (the examples below abbreviate it
-as `node .\babel-cli\dist\index.js`).
+for choosing between them. The PowerShell examples use an absolute `$BabelCli`
+path defined after the build below, so they also work outside the Babel checkout.
 
 ## Requirements
 
@@ -31,19 +30,31 @@ as `node .\babel-cli\dist\index.js`).
 
 ## Clone, install, build
 
-From the repository root:
+Clone from a parent directory, then build inside the Babel checkout:
 
 ```powershell
 git clone https://github.com/gthgomez/Babel.git
 cd Babel
 npm --prefix .\babel-cli ci
 npm --prefix .\babel-cli run build
+$BabelRoot = (Get-Location).Path
+$BabelCli = Join-Path $BabelRoot 'babel-cli\dist\index.js'
 
 # macOS/Linux equivalent:
 npm --prefix ./babel-cli ci && npm --prefix ./babel-cli run build
 ```
 
 Authoritative package root is `babel-cli/`. There is no root `package.json`.
+Keep `$BabelRoot` and `$BabelCli` in this PowerShell session. Before the CLI
+commands below, select your own repository:
+
+```powershell
+Set-Location -LiteralPath 'C:\path with spaces\your-repo'
+```
+
+Target resolution uses the nearest recognized project at or above the working
+directory, falling back to the working directory. Explicit project/target
+selection and session resume can override it; check the displayed target.
 
 ## Provider credentials
 
@@ -64,9 +75,9 @@ the example file are optional.
 ## Doctor / ping
 
 ```powershell
-node .\babel-cli\dist\index.js doctor
-node .\babel-cli\dist\index.js setup --json
-node .\babel-cli\dist\index.js models ping --json
+node "$BabelCli" doctor
+node "$BabelCli" setup --json
+node "$BabelCli" models ping --json
 ```
 
 `models ping` needs a configured provider. Skip it when you only want the
@@ -97,9 +108,9 @@ Details: [CHAT_MODE.md](./CHAT_MODE.md#execution-profile-and-isolation-h13).
 ## Start Babel (interactive TUI)
 
 ```powershell
-node .\babel-cli\dist\index.js interactive
+node "$BabelCli" interactive
 # same as:
-node .\babel-cli\dist\index.js
+node "$BabelCli"
 ```
 
 What you get:
@@ -107,7 +118,7 @@ What you get:
 - multi-turn coding session in the terminal
 - default mode: **chat**
 - slash commands (`/help` inside the session)
-- session resume via `node .\babel-cli\dist\index.js resume`
+- session resume via `node "$BabelCli" resume`
 
 Try:
 
@@ -135,16 +146,16 @@ use CLI `undo` or `/checkpoint` / `/restore`.
 ## Chat (default one-shot path)
 
 ```powershell
-node .\babel-cli\dist\index.js "Fix webhook retry handling"
+node "$BabelCli" "Fix webhook retry handling"
 # explicit:
-node .\babel-cli\dist\index.js run "Fix webhook retry handling" --mode chat
+node "$BabelCli" run "Fix webhook retry handling" --mode chat
 ```
 
 Headless / CI-friendly chat output:
 
 ```powershell
-node .\babel-cli\dist\index.js run "Summarize the failing test" --mode chat-headless
-node .\babel-cli\dist\index.js chat --headless "Summarize the failing test"
+node "$BabelCli" run "Summarize the failing test" --mode chat-headless
+node "$BabelCli" chat --headless "Summarize the failing test"
 ```
 
 ## Plan
@@ -152,7 +163,7 @@ node .\babel-cli\dist\index.js chat --headless "Summarize the failing test"
 Plan first, approve, then apply:
 
 ```powershell
-node .\babel-cli\dist\index.js plan "Split the auth module safely"
+node "$BabelCli" plan "Split the auth module safely"
 ```
 
 Use when you want an explicit plan gate before mutations.
@@ -162,7 +173,7 @@ Use when you want an explicit plan gate before mutations.
 Higher-ceremony path with extra critique and execution structure:
 
 ```powershell
-node .\babel-cli\dist\index.js deep "Harden the migration path and verify it"
+node "$BabelCli" deep "Harden the migration path and verify it"
 ```
 
 Use for riskier changes when you want more structure than chat. Route availability does **not** mean Deep is more reliable than chat for ordinary tasks (see [STATUS.md](./STATUS.md) when present; [ROADMAP.md](./ROADMAP.md)).
@@ -170,8 +181,8 @@ Use for riskier changes when you want more structure than chat. Route availabili
 ## Resume and recovery
 
 ```powershell
-node .\babel-cli\dist\index.js resume
-node .\babel-cli\dist\index.js undo
+node "$BabelCli" resume
+node "$BabelCli" undo
 ```
 
 `undo` restores the last checkpoint. Inside the TUI, inspect or restore with
@@ -198,7 +209,7 @@ Legacy names still accepted as aliases with deprecation warnings
 ## MCP (integrations)
 
 ```powershell
-node .\babel-cli\dist\index.js mcp
+node "$BabelCli" mcp
 ```
 
 Read-only control-plane server for other tools — not the everyday coding
@@ -206,9 +217,10 @@ entrypoint.
 
 ## Stack preview (no model)
 
-From the repo root, still useful without credentials:
+From the Babel checkout, still useful without credentials:
 
 ```powershell
+Set-Location -LiteralPath $BabelRoot
 pwsh -File .\tools\resolve-local-stack.ps1 `
   -TaskCategory backend `
   -Project example_saas_backend `
@@ -225,7 +237,8 @@ Authenticated ADR-010 JSON-RPC on `127.0.0.1` only. Not a public server.
 Not a remote desktop. Not part of first-run.
 
 ```powershell
-node .\babel-cli\dist\index.js remote serve --port 4545 --project $PWD
+Set-Location -LiteralPath 'C:\path with spaces\your-repo'
+node "$BabelCli" remote serve --port 4545 --project $PWD
 # Tailscale Serve to that loopback port; never Funnel; never 0.0.0.0
 ```
 

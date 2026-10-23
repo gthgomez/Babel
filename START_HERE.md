@@ -21,6 +21,9 @@ Choose an install path:
 
 ## Requirements
 
+These prerequisites apply to the current-source path. Desktop 0.1.3 includes
+its runtime; follow its release-pinned setup guide above.
+
 - Node.js **22.19.0+ (22.x) or 24.13.1+ (24.x)** (see `babel-cli/package.json` `engines.node`)
 - A clone of this repository
 - For model-backed sessions: a provider key (see `babel-cli/.env.example`)
@@ -29,14 +32,17 @@ Choose an install path:
 
 ## 1. First success: talk to Babel
 
-Install, build, and check the environment:
+For the current-source path, install, build, and check the environment. Keep
+these absolute paths in the same PowerShell session for the later examples:
 
 ```powershell
 git clone https://github.com/gthgomez/Babel.git
 cd Babel
 npm --prefix .\babel-cli ci
 npm --prefix .\babel-cli run build
-node .\babel-cli\dist\index.js doctor
+$BabelRoot = (Get-Location).Path
+$BabelCli = Join-Path $BabelRoot 'babel-cli\dist\index.js'
+node "$BabelCli" doctor
 ```
 
 macOS/Linux equivalent: `git clone https://github.com/gthgomez/Babel.git && cd Babel && npm --prefix ./babel-cli ci && npm --prefix ./babel-cli run build && node ./babel-cli/dist/index.js doctor`
@@ -63,23 +69,29 @@ enable repository test or build commands. Details:
 ## 2. First useful request in your own repository
 
 Pick the repository you want Babel to work on. In Desktop, use **Open project**
-and trust that exact folder. In the CLI, change into it first, so Babel targets
-it instead of the Babel checkout:
+and trust that exact folder. For the source CLI, use the absolute `$BabelCli`
+defined in step 1 and change into your repository first:
 
 ```powershell
-cd C:\path\to\your-repo
-node C:\path\to\Babel\babel-cli\dist\index.js interactive
+Set-Location -LiteralPath 'C:\path with spaces\your-repo'
+node "$BabelCli" interactive
 ```
 
-Then send one bounded, read-only investigation whose result you can check:
+CLI target resolution starts from the working directory and selects the nearest
+recognized project at or above it, falling back to that directory. An explicit
+project/target selection or a resumed session can override this. Check the
+displayed target before sending the request.
+
+Then request one bounded investigation without changes, whose result you can check:
 
 ```text
 > Using this repository's README and code, trace one small documented behavior from its entry point to its implementation and nearest relevant test. Cite file paths and identify the test command documented or configured in the repository. Do not change files, install dependencies, or run tests or builds. If you cannot find a test or command, say so.
 ```
 
 Check two of the cited files and the named test command yourself. This asks
-Babel to inspect and report; it does not edit files or run anything. Ask for
-explanation, a plan, or a change as explicit follow-ups, for example:
+Babel to inspect and report. The prompt is an instruction, not an enforced
+read-only security mode; normal permissions and execution restrictions still
+apply. Ask for explanation, a plan, or a change as explicit follow-ups, for example:
 
 ```text
 > Propose a fix for <issue> and the checks you would run; do not edit yet
@@ -101,15 +113,16 @@ Useful commands inside the session (`/help` lists the rest):
 /help          see everything
 ```
 
-One-shot (run from your target repository):
+Source CLI one-shot (run from your target repository, using step 1's path):
 
 ```powershell
-node <Babel clone>\babel-cli\dist\index.js "Explain this repository and identify the highest-risk test gap"
-node <Babel clone>\babel-cli\dist\index.js plan "Split the auth module safely"
-node <Babel clone>\babel-cli\dist\index.js deep "Harden the migration path and verify it"
+node "$BabelCli" "Explain this repository and identify the highest-risk test gap"
+node "$BabelCli" plan "Split the auth module safely"
+node "$BabelCli" deep "Harden the migration path and verify it"
 ```
 
-Recovery: `node .\babel-cli\dist\index.js undo` restores the last checkpoint.
+Source CLI recovery: `node "$BabelCli" undo` restores the last checkpoint.
+Run it from the intended target repository and confirm the checkpoint before restoring.
 The TUI does not currently expose `/undo`; use `/checkpoint` and `/restore`
 inside a session, or `undo` from the CLI.
 
@@ -119,9 +132,12 @@ full operational guide.
 
 ## 3. Optional: inspect the harness without a model
 
-This checks catalog and stack resolution. It does not replace talking to Babel.
+This current-source path checks catalog and stack resolution. Return to the
+Babel checkout using step 1's absolute path before running checkout helpers.
+Desktop download users need a source checkout to follow this optional section.
 
 ```powershell
+Set-Location -LiteralPath $BabelRoot
 pwsh -File .\tools\validate-public-release.ps1
 
 pwsh -File .\tools\resolve-local-stack.ps1 `
