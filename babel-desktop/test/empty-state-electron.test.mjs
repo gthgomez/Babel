@@ -9,7 +9,7 @@ import {_electron} from 'playwright';
 import electronExecutable from 'electron';
 import {saveProviderRoute} from '../native/provider-routing.mjs';
 
-test('Electron empty guidance follows project trust and selection without reload or inference',{timeout:60000},async()=>{
+for(const [width,height] of [[1440,900],[960,700]])test(`Electron empty guidance follows project trust and selection without reload or inference (${width}x${height})`,{timeout:60000},async()=>{
   const root=await mkdtemp(join(tmpdir(),'babel-empty-state-'));
   let application;
   try{
@@ -29,19 +29,17 @@ test('Electron empty guidance follows project trust and selection without reload
     env.BABEL_RUNS_DIR=runs;
     application=await _electron.launch({executablePath:process.env.BABEL_TEST_ELECTRON_EXECUTABLE??electronExecutable,args:[bootstrap,`--profile-dir=${profile}`],env,timeout:20000});
     const page=await application.firstWindow();
+    await application.evaluate(({BrowserWindow},{width,height})=>BrowserWindow.getAllWindows()[0].setContentSize(width,height),{width,height});
+    await page.waitForFunction(({width,height})=>innerWidth===width&&innerHeight===height,{width,height});
     await page.waitForFunction(()=>document.querySelector('#status-detail')&&!document.querySelector('#status-detail').textContent.includes('Connecting'));
     await application.evaluate(({dialog})=>{dialog.showMessageBox=async()=>({response:1,checkboxChecked:false});dialog.showOpenDialog=async()=>({canceled:false,filePaths:[globalThis.__selectedProject]});});
     const dismiss=async()=>{if(await page.locator('#dialog[open]').count())await page.keyboard.press('Escape');await page.locator('#dialog').waitFor({state:'hidden'});};
     const screenshot=async name=>{
       if(!process.env.BABEL_TEST_EVIDENCE_DIR)return;
       await mkdir(process.env.BABEL_TEST_EVIDENCE_DIR,{recursive:true});
-      for(const [width,height] of [[1440,900],[960,700]]){
-        await application.evaluate(({BrowserWindow},{width,height})=>BrowserWindow.getAllWindows()[0].setContentSize(width,height),{width,height});
-        await page.waitForFunction(({width,height})=>innerWidth===width&&innerHeight===height,{width,height});
-        await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
-        assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
-        await page.screenshot({path:join(process.env.BABEL_TEST_EVIDENCE_DIR,`${name}-${width}.png`)});
-      }
+      await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+      assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
+      await page.screenshot({path:join(process.env.BABEL_TEST_EVIDENCE_DIR,`${name}-${width}.png`)});
     };
     await dismiss();
     assert.match(await page.locator('.empty-state').innerText(),/No project is open/);
