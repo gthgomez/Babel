@@ -69,6 +69,8 @@ export function designatedWitnessProtectedInputs(
       if (!script) continue;
       for (const token of script.matchAll(TEST_FILE_TOKEN_RE)) {
         const relative = token[0].replace(/\\/g, '/');
+        // Containment: never protect paths escaping the project root.
+        if (relative.startsWith('../') || /^[A-Za-z]:|^\//.test(relative) || /(^|\/)\.\.(\/|$)/.test(relative)) continue;
         if (fs.exists(join(projectRoot, relative))) protectedPaths.add(relative);
       }
     }

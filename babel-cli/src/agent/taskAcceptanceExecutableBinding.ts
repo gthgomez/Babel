@@ -364,7 +364,8 @@ export function designatedWitnessCommands(meaning: TaskAcceptanceMeaning): strin
   return commands
 }
 
-export function mergeTrustedVerifierCommands(input: {  requiredVerifierCommands?: readonly string[] | null
+export function mergeTrustedVerifierCommands(input: {
+  requiredVerifierCommands?: readonly string[] | null
   projectTestCommands?: readonly string[] | null
 }): string[] {
   return [
