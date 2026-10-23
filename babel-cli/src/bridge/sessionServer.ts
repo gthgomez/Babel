@@ -24,6 +24,7 @@
  *   - Port:    BABEL_BRIDGE_PORT env var, or bridge.json port, or 4545
  *   - Token:   bridge.json authToken (auto-generated on first start)
  *   - Origins: bridge.json allowedOrigins (defaults to ['http://localhost:*'])
+ *   - Claude:  BABEL_CLAUDE_HOST_BINDINGS_PATH — trusted host profile bindings (v1 JSON)
  */
 
 import { createHash, randomUUID } from 'node:crypto';
@@ -76,6 +77,13 @@ import {
   type OpenCodeAcpLaunchOverride,
 } from './openCodeAcpRuntime.js';
 import { createHarnessAwareEngineFactory } from './harnessEngineFactory.js';
+import {
+  ClaudeCodeAgentRuntimeRegistry,
+  type ClaudeCodeCredentialResolver,
+} from './claudeCodeAgentRuntime.js';
+import type { ClaudeCodeSessionAdmissionDeps } from './claudeCodeSessionAdmission.js';
+import type { ClaudeCodeSdkPort } from './claudeCodeSdkPort.js';
+import { resolveClaudeCodeHostLaunchRegistryFromEnv } from './claudeCodeHostLaunchRegistry.js';
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
 export interface BridgeServerOptions {
@@ -135,6 +143,11 @@ export interface BridgeServerOptions {
   openCodeInstallProbe?: () => Promise<import('./openCodeCliDiscovery.js').OpenCodeInstallProbe>;
   /** Test-only: injected prompt RPC timeout for OpenCode death-fence gateway proofs. */
   openCodeTestRpcTimeoutMs?: number;
+  claudeCodeRegistry?: ClaudeCodeAgentRuntimeRegistry;
+  claudeCodeTestSdkPort?: ClaudeCodeSdkPort;
+  claudeCodeTestCredentialResolver?: ClaudeCodeCredentialResolver;
+  claudeCodeAdmissionDeps?: ClaudeCodeSessionAdmissionDeps;
+  claudeCodeHostLaunchRegistry?: import('./claudeCodeHostLaunchRegistry.js').ClaudeCodeHostLaunchRegistry;
 }
 
 /** Test-only hooks for post-initial-auth / pre-body-read synchronization. */
@@ -260,6 +273,7 @@ export class BridgeServer {
   readonly devicePairing: DevicePairingService;
   readonly commandCodeRegistry: CommandCodeAcpRuntimeRegistry;
   readonly openCodeRegistry: OpenCodeAcpRuntimeRegistry;
+  readonly claudeCodeRegistry: ClaudeCodeAgentRuntimeRegistry;
 
   /** Active WebSocket transports keyed by session ID. */
   private wsTransports = new Map<string, BridgeTransport>();
@@ -308,6 +322,18 @@ export class BridgeServer {
           ? { testRpcTimeoutMs: this.options.openCodeTestRpcTimeoutMs }
           : {}),
       });
+    this.claudeCodeRegistry =
+      this.options.claudeCodeRegistry ??
+      new ClaudeCodeAgentRuntimeRegistry({
+        ...(this.options.claudeCodeTestSdkPort
+          ? { sdkPort: this.options.claudeCodeTestSdkPort }
+          : {}),
+        ...(this.options.claudeCodeTestCredentialResolver
+          ? { credentialResolver: this.options.claudeCodeTestCredentialResolver }
+          : {}),
+      });
+    const claudeCodeHostLaunchRegistry =
+      this.options.claudeCodeHostLaunchRegistry ?? resolveClaudeCodeHostLaunchRegistryFromEnv();
     this.protocolGateway =
       this.options.protocolGateway ??
       new ProtocolGateway({
@@ -318,9 +344,20 @@ export class BridgeServer {
         ...(this.options.openCodeInstallProbe
           ? { openCodeInstallProbe: this.options.openCodeInstallProbe }
           : {}),
+        claudeCodeRegistry: this.claudeCodeRegistry,
+        ...(this.options.claudeCodeAdmissionDeps
+          ? { claudeCodeAdmissionDeps: this.options.claudeCodeAdmissionDeps }
+          : {}),
+        ...(claudeCodeHostLaunchRegistry
+          ? { claudeCodeHostLaunchRegistry }
+          : {}),
         engineFactory:
           this.options.engineFactory ??
-          createHarnessAwareEngineFactory(this.commandCodeRegistry, this.openCodeRegistry),
+          createHarnessAwareEngineFactory(
+            this.commandCodeRegistry,
+            this.openCodeRegistry,
+            this.claudeCodeRegistry,
+          ),
       });
     this.devicePairing =
       this.options.devicePairing ?? new DevicePairingService(this.authToken);
@@ -434,6 +471,7 @@ export class BridgeServer {
     closeProtocolHostState(this.protocolGateway.host);
     await this.commandCodeRegistry.closeAll();
     await this.openCodeRegistry.closeAll();
+    await this.claudeCodeRegistry.closeAll();
 
     if (typeof this.server.closeAllConnections === 'function') {
       this.server.closeAllConnections();

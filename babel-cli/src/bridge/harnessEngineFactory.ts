@@ -4,8 +4,10 @@ import type { ProtocolHostState } from '../protocol/client/host.js';
 import { buildPreparedTurn } from '../executor/modeAdapters.js';
 import { createCommandCodeHarnessEngine } from './commandCodeHarnessEngine.js';
 import { createOpenCodeHarnessEngine } from './openCodeHarnessEngine.js';
+import { createClaudeCodeHarnessEngine } from './claudeCodeHarnessEngine.js';
 import type { CommandCodeAcpRuntimeRegistry } from './commandCodeAcpRuntime.js';
 import type { OpenCodeAcpRuntimeRegistry } from './openCodeAcpRuntime.js';
+import type { ClaudeCodeAgentRuntimeRegistry } from './claudeCodeAgentRuntime.js';
 import { probeCommandCodeInstallation } from './commandCodeCliDiscovery.js';
 import { probeOpenCodeInstallation } from './openCodeCliDiscovery.js';
 
@@ -30,6 +32,7 @@ function defaultNativeEngine(descriptor: SessionDescriptor): ChatEngine {
 export function createHarnessAwareEngineFactory(
   commandCodeRegistry: CommandCodeAcpRuntimeRegistry,
   openCodeRegistry: OpenCodeAcpRuntimeRegistry,
+  claudeCodeRegistry?: ClaudeCodeAgentRuntimeRegistry,
 ): ProtocolHostState['engineFactory'] {
   return (descriptor: SessionDescriptor) => {
     if (descriptor.harness_adapter_id === 'command-code') {
@@ -37,6 +40,12 @@ export function createHarnessAwareEngineFactory(
     }
     if (descriptor.harness_adapter_id === 'opencode') {
       return createOpenCodeHarnessEngine({ descriptor, registry: openCodeRegistry });
+    }
+    if (descriptor.harness_adapter_id === 'claude-code') {
+      if (!claudeCodeRegistry) {
+        throw new Error('CLAUDE_CODE_REGISTRY_UNAVAILABLE');
+      }
+      return createClaudeCodeHarnessEngine({ descriptor, registry: claudeCodeRegistry });
     }
     return defaultNativeEngine(descriptor);
   };

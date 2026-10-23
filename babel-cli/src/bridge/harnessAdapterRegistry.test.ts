@@ -27,6 +27,26 @@ describe('harnessAdapterRegistry', () => {
     assert.ok(external.every((entry) => entry.descriptor.capabilities.attachLive === false));
   });
 
+  it('attaches campaign profile ids to claude-code only', async () => {
+    const catalog = await buildHarnessAdapterCatalog({
+      commandCodeProbe: { state: 'verified', version: '1.0.0', executable: '/bin/cc' },
+      openCodeProbe: { state: 'verified', version: '1.0.0', executable: '/bin/oc' },
+      claudeCodeProbe: {
+        state: 'verified',
+        sdkVersion: '0.3.304',
+        cliVersion: '2.1.304',
+        executablePath: '/bin/claude',
+      },
+    });
+    const commandCode = catalog.find((entry) => entry.descriptor.id === 'command-code');
+    const opencode = catalog.find((entry) => entry.descriptor.id === 'opencode');
+    const claude = catalog.find((entry) => entry.descriptor.id === 'claude-code');
+    assert.equal(commandCode?.profile_ids, undefined);
+    assert.equal(opencode?.profile_ids, undefined);
+    assert.ok(claude?.profile_ids?.includes('command-code-goat'));
+    assert.ok(claude?.profile_ids?.includes('opencode-go'));
+  });
+
   it('exposes antigravity offline foundation without probe, profile, or execution', async () => {
     const catalog = await buildHarnessAdapterCatalog({
       commandCodeProbe: { state: 'missing' },

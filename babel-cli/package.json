@@ -179,7 +179,8 @@
     "test:harness-runtime:raw": "tsx --no-warnings=ExperimentalWarning --test-reporter=./scripts/required_tap_reporter.mjs --test-concurrency=1 --test src/agent/liveSession.test.ts src/agent/liveSession.controller.test.ts src/agent/liveSession.failClosed.test.ts src/agent/toolExecutor.h4live.test.ts src/agent/harnessHardening.h3h7.test.ts src/agent/compactionCommit.test.ts src/agent/p11ContextAuthority.test.ts src/agent/p11AdmissionWiring.test.ts src/agent/inTurnContextOrdering.test.ts src/agent/failureRecoveryStrategy.test.ts src/agent/checkpointWindowsPersistence.test.ts src/runtime/contextCheckpoints.test.ts src/runtime/contextCheckpointInstalledAuthority.test.ts src/runtime/contextCheckpointLineageCurrency.test.ts src/runtime/admissionLifecycle.test.ts src/evidence/observationCheckpointIntegration.test.ts src/pipeline/liveSessionParity.test.ts src/runners/providerEngine.test.ts src/agent/modelRouter.test.ts src/runners/providerRegistry.test.ts src/evidence/episodeStream.test.ts src/agent/chatGate.test.ts src/config/chatTaskClassAdversarial.test.ts src/interactive/testing/**/*.test.ts src/agent/chatPerformanceScenarios.test.ts src/interactive/projection/**/*.test.ts src/ui/dailyDriverPolish.test.ts src/agent/chatTrivialTurnRegression.test.ts src/agent/governedMutations.lock.test.ts src/services/workspaceTransactions.test.ts src/agent/processTreeTermination.test.ts src/interactive/execution/chatTerminalTruth.test.ts src/interactive/execution/chatPreparationParity.test.ts src/interactive/execution/chatIntentGuidance.test.ts src/agent/chatOperationPolicy.test.ts src/agent/progressEvidenceAlignment.test.ts src/agent/childConclusion.test.ts src/agent/childSpec.test.ts src/agent/childHandoffDispatch.test.ts src/agent/instructionDisposition.test.ts src/agent/instructionManifestRefresh.test.ts src/agent/chatEngine.freshTaskRecovery.test.ts src/agent/executionContext.test.ts src/agent/chatAutonomyLimits.test.ts src/agent/compactionOracle.test.ts src/agent/chatAstraResidual.test.ts src/runners/providerFaultTable.test.ts src/agent/terminalOutcomeGolden.test.ts src/agent/codingLoop/recoveryPlan.test.ts src/agent/codingLoop/failureLocalization.test.ts src/services/indexer.test.ts src/agent/s07OrdinaryLoop.test.ts src/agent/verifierReceiptLoop.test.ts src/agent/r0ChildMutationFreshness.test.ts src/agent/r0FreshTaskWorkingState.test.ts src/agent/r0TerminalAuthority.test.ts src/agent/repoIdentityResume.test.ts src/interactive/chatSessionResume.identity.test.ts src/agent/toolSettlementIdentity.test.ts src/agent/verifierSettlementFaultMatrix.test.ts src/agent/r0HarnessBlockedReason.test.ts src/agent/r0RealChildRace.test.ts src/agent/r0LateTaskRace.test.ts src/agent/r0TerminalOwnership.test.ts src/agent/r0CriticOwnership.test.ts src/protocol/client/hostRepoIdentity.test.ts src/agent/abandonedCapsuleAuthority.test.ts src/protocol/client/hostResumeReconstruction.test.ts"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.91.1",
+    "@anthropic-ai/claude-agent-sdk": "0.3.304",
+    "@anthropic-ai/sdk": "^0.101.0",
     "@napi-rs/canvas": "0.1.80",
     "@opentelemetry/api": "^1.9.1",
     "@opentelemetry/exporter-trace-otlp-http": "^0.223.0",
@@ -225,6 +226,8 @@
     "bin/babel.js",
     "dist/**/*.js",
     "dist/bridge/opencode-acp-source-pin.json",
+    "dist/bridge/claude-agent-sdk-pin.json",
+    "dist/bridge/claudeCodeIsolatedResolveWorker.mjs",
     "dist/authority/ownedFileAssertion.windows.ps1",
     "dist/voice/audio-capture-worker.mjs",
     "dist/voice/vad-worker.mjs",
