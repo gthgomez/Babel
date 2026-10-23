@@ -11,6 +11,7 @@ param(
   [string]$ExpectedHeadSha = '',
   [switch]$AllowDirtyWorktree,
   [switch]$RequireIsolatedWorktree,
+  [switch]$CheckSupplementalScrubPolicyPath,
   [ValidateSet('json', 'text')][string]$OutputFormat = 'json'
 )
 
@@ -173,6 +174,45 @@ try {
     Add-AgentCheck -Name 'EXPECTED_HEAD_SHA' -Passed ([string]::Equals($head, $ExpectedHeadSha, [StringComparison]::OrdinalIgnoreCase)) -Blocker 'head_sha_mismatch'
   }
 
+  $supplementalScrubDiagnostic = $null
+  if ($CheckSupplementalScrubPolicyPath) {
+    $policyPath = [string]$env:BABEL_PRIVATE_SCRUB_POLICY_PATH
+    $policyConfigured = -not [string]::IsNullOrWhiteSpace($policyPath)
+    Add-AgentCheck -Name 'SUPPLEMENTAL_SCRUB_POLICY_CONFIGURED' -Passed $policyConfigured -Blocker 'supplemental_scrub_policy_not_configured'
+
+    $policyPresent = $false
+    $policyReadable = $false
+    if ($policyConfigured) {
+      if (-not (Test-Path -LiteralPath $policyPath)) {
+        Add-AgentCheck -Name 'SUPPLEMENTAL_SCRUB_POLICY_PRESENT' -Passed $false -Blocker 'supplemental_scrub_policy_missing'
+      } elseif (-not (Test-Path -LiteralPath $policyPath -PathType Leaf)) {
+        Add-AgentCheck -Name 'SUPPLEMENTAL_SCRUB_POLICY_PRESENT' -Passed $false -Blocker 'supplemental_scrub_policy_not_a_file'
+      } else {
+        $policyPresent = $true
+        Add-AgentCheck -Name 'SUPPLEMENTAL_SCRUB_POLICY_PRESENT' -Passed $true
+        try {
+          $stream = [IO.File]::Open($policyPath, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite)
+          $stream.Dispose()
+          $policyReadable = $true
+        } catch {
+          $policyReadable = $false
+        }
+        Add-AgentCheck -Name 'SUPPLEMENTAL_SCRUB_POLICY_READABLE' -Passed $policyReadable -Blocker 'supplemental_scrub_policy_unreadable'
+      }
+    } else {
+      $checks['SUPPLEMENTAL_SCRUB_POLICY_PRESENT'] = $false
+      $checks['SUPPLEMENTAL_SCRUB_POLICY_READABLE'] = $false
+    }
+
+    $supplementalScrubDiagnostic = [ordered]@{
+      requested = $true
+      contentValidated = $false
+      schemaValidated = $false
+      validator = 'tools/check-public-scrub.ps1 -RequireSupplementalPolicy'
+      note = 'Path presence/readability only; use check-public-scrub for policy content and schema.'
+    }
+  }
+
   $ok = $blockers.Count -eq 0
   $pushReady = $ok -and $worktreeClean -and $branchKnown -and $headKnown -and $baseKnown -and $remoteReachable
   $result = [ordered]@{
@@ -203,6 +243,9 @@ try {
     checks = $checks
     blockers = @($blockers | Select-Object -Unique)
     warnings = @($warnings | Select-Object -Unique)
+  }
+  if ($null -ne $supplementalScrubDiagnostic) {
+    $result['supplementalScrubDiagnostic'] = $supplementalScrubDiagnostic
   }
   Write-AgentResult -Result $result -OutputFormat $OutputFormat
   if (-not $ok) { exit 1 }
