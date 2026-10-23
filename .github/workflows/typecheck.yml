@@ -12,6 +12,8 @@ name: Public Release Gate
       - opened
       - synchronize
       - reopened
+      - ready_for_review
+      - converted_to_draft
       - labeled
       - unlabeled
   push:
