@@ -54,6 +54,10 @@ Before committing policy paths, run (or rely on an installed pre-commit hook):
 node tools/validate-push-candidates.mjs --staged-manifest
 ```
 
+Staged/committed checks measure the **single repository-root `AGENTS.md` body**
+(UTF-16 code units after Node UTF-8 decode). They do not replace
+`chatStackCompile` canonical LF/CRLF admission when instruction text changes.
+
 Before push, run the read-only helper (configured hook ownership label, cheap
 checks, then ls-remote frontier for the **current branch**). `--candidate`
 must equal current `HEAD`; frontier runs before success:

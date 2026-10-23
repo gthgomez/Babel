@@ -30,7 +30,7 @@ Copy the [batch handoff template](./AGENT_BATCH_HANDOFF.md) table into your priv
 
 **Maintainer supplemental scrub:** validate JSON with `tools/check-public-scrub.ps1 -RequireSupplementalPolicy`. Optional readable-path preflight only: `-CheckSupplementalScrubPolicyPath` on `scripts/agent-preflight.ps1` (default preflight unchanged; path check does not replace scrub validation).
 
-**Execution vs planning:** `agent-preflight.ps1` is planning/readiness only. Cheap execution reuses `validate-push-candidates.mjs` (`--staged-manifest`, push preflight); `verify-changed-publication-surface.mjs` reports configured hook ownership (`repo:.githooks` / `host-managed` / `unset`) with execution unverified, runs cheap checks, and (for `--candidate` equal to current `HEAD`) branch frontier before success. Full publication scans stay in [REVIEW_MARKERS.md](./REVIEW_MARKERS.md). Do not swap host hook dispatchers; install `.githooks` only when authorized.
+**Execution vs planning:** `agent-preflight.ps1` is planning/readiness only. Cheap execution reuses `validate-push-candidates.mjs` (`--staged-manifest`, push preflight); budget there is the **single root `AGENTS.md` blob** only—not nested instruction compilation. Instruction edits still need `chatStackCompile` canonical LF/CRLF tests. `verify-changed-publication-surface.mjs` reports configured hook ownership with execution unverified, runs cheap checks, and (for `--candidate` equal to current `HEAD`) branch frontier before success; `unknown` ancestry fails closed. Full publication scans stay in [REVIEW_MARKERS.md](./REVIEW_MARKERS.md). Do not swap host hook dispatchers; install `.githooks` only when authorized.
 
 | Symptom | Where to look |
 | --- | --- |

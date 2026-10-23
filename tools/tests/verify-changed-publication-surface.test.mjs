@@ -113,6 +113,10 @@ test('missing ancestry objects yield unknown, not proven divergence', () => {
     assert.equal(report.status, 'unknown')
     assert.equal(report.remoteTip, remoteTip)
     assert.notEqual(report.status, 'diverged')
+    assert.throws(
+      () => assertPublicationFrontierAllowsPush(root),
+      /ancestry unavailable/,
+    )
   } finally {
     rmSync(bare, { recursive: true, force: true })
     rmSync(publisher, { recursive: true, force: true })

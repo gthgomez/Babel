@@ -104,6 +104,9 @@ export function assertPublicationFrontierAllowsPush(root, { localSha } = {}) {
   console.error(`[publication-surface] branch=${report.branch} status=${report.status}`)
   console.error(`[publication-surface] local=${report.localSha} remote_tip=${report.remoteTip ?? 'none'}`)
   if (report.hint) console.error(`[publication-surface] ${report.hint}`)
+  if (report.status === 'unknown') {
+    throw new Error('publication frontier ancestry unavailable; fetch, reconcile, and rerun checks')
+  }
   if (report.status === 'remote_ahead' || report.status === 'diverged') {
     throw new Error('remote publication frontier differs; fetch and reconcile before push')
   }

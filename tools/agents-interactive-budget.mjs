@@ -10,7 +10,11 @@ export function requiredIdentityLengthFromUtf8(bytes) {
   return Buffer.from(bytes).toString('utf8').length
 }
 
-/** Fail closed when committed/staged AGENTS.md exceeds the interactive stack budget. */
+/**
+ * Fail closed when a single repository-root AGENTS.md body (exact committed or staged
+ * bytes) exceeds the interactive budget. Does not compile nested instruction sources or
+ * substitute for chatStackCompile LF/CRLF canonical admission tests on policy edits.
+ */
 export function assertInteractiveAgentsBudget(bytes, { label = 'AGENTS.md' } = {}) {
   const length = requiredIdentityLengthFromUtf8(bytes)
   if (length > INTERACTIVE_STACK_BUDGET) {
