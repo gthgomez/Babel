@@ -9,7 +9,7 @@ import {_electron} from 'playwright';
 import electronExecutable from 'electron';
 import {saveProviderRoute} from '../native/provider-routing.mjs';
 
-for(const [width,height] of [[1440,900],[960,700]])test(`Electron empty guidance follows project trust and selection without reload or inference (${width}x${height})`,{timeout:60000},async()=>{
+for(const [width,height] of [[1200,680],[960,700]])test(`Electron empty guidance follows project trust and selection without reload or inference (${width}x${height})`,{timeout:60000},async()=>{
   const root=await mkdtemp(join(tmpdir(),'babel-empty-state-'));
   let application;
   try{
@@ -29,8 +29,10 @@ for(const [width,height] of [[1440,900],[960,700]])test(`Electron empty guidance
     env.BABEL_RUNS_DIR=runs;
     application=await _electron.launch({executablePath:process.env.BABEL_TEST_ELECTRON_EXECUTABLE??electronExecutable,args:[bootstrap,`--profile-dir=${profile}`],env,timeout:20000});
     const page=await application.firstWindow();
-    await application.evaluate(({BrowserWindow},{width,height})=>BrowserWindow.getAllWindows()[0].setContentSize(width,height),{width,height});
-    await page.waitForFunction(({width,height})=>innerWidth===width&&innerHeight===height,{width,height});
+    await application.evaluate(({BrowserWindow},{width,height})=>{const window=BrowserWindow.getAllWindows()[0];window.setContentSize(width,height);window.setPosition(0,0);},{width,height});
+    // Fractional Windows display scaling can round the client size by one CSS pixel.
+    try{await page.waitForFunction(({width,height})=>Math.abs(innerWidth-width)<=1&&Math.abs(innerHeight-height)<=1,{width,height});}
+    catch(error){console.error('Native size diagnostic',JSON.stringify({requested:{width,height},renderer:await page.evaluate(()=>({width:innerWidth,height:innerHeight,scale:devicePixelRatio})),native:await application.evaluate(({BrowserWindow})=>({bounds:BrowserWindow.getAllWindows()[0].getBounds(),content:BrowserWindow.getAllWindows()[0].getContentSize()}))}));throw error;}
     await page.waitForFunction(()=>document.querySelector('#status-detail')&&!document.querySelector('#status-detail').textContent.includes('Connecting'));
     await application.evaluate(({dialog})=>{dialog.showMessageBox=async()=>({response:1,checkboxChecked:false});dialog.showOpenDialog=async()=>({canceled:false,filePaths:[globalThis.__selectedProject]});});
     const dismiss=async()=>{if(await page.locator('#dialog[open]').count())await page.keyboard.press('Escape');await page.locator('#dialog').waitFor({state:'hidden'});};
