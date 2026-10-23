@@ -70,26 +70,39 @@ test('cancellation terminates the owned producer tree and returns failed evidenc
 
 test('descendants retaining pipes cannot hang capture after their producer exits', { timeout: 120000 }, async t => {
   const root = mkdtempSync(join(tmpdir(), 'babel-logged-tap-orphan-'))
-  const output = new PassThrough(), errors = new PassThrough(), controller = new AbortController()
+  const output = new PassThrough(), errors = new PassThrough()
   errors.resume()
-  let descendant, timer
+  let descendant
   output.on('data', chunk => {
     descendant = Number(chunk.toString().trim())
-    timer = setTimeout(() => controller.abort(), 250)
   })
-  // The direct producer exits immediately; cancellation is intentionally later.
+  // The direct producer exits immediately; cleanup must not need an abort.
   try {
     const source = 'const {spawn}=require("node:child_process");const c=spawn(process.execPath,["-e","setInterval(()=>{},1000)"],{stdio:["ignore","inherit","inherit"]});console.log(c.pid);process.exit(0)'
     const result = await runLoggedTapChild(process.execPath, ['-e', source], {
-      cwd: root, tapPath: join(root, 'full.tap'), stdout: output, stderr: errors, signal: AbortSignal.any([controller.signal, t.signal]),
+      cwd: root, tapPath: join(root, 'full.tap'), stdout: output, stderr: errors, signal: t.signal,
     })
     assert.ok(Number.isInteger(descendant) && descendant > 0)
-    if (process.platform === 'win32') {
-      assert.equal(result.status, 0)
-      assert.throws(() => process.kill(descendant, 0), /ESRCH/)
-    } else {
-      assert.equal(result.signal, 'SIGTERM')
-      assert.match(result.error?.message, /interrupted/)
-    }
-  } finally { clearTimeout(timer); rmSync(root, { recursive: true, force: true }) }
+    assert.equal(result.status, 0)
+    assert.equal(result.error, undefined)
+    if (process.platform === 'win32') assert.throws(() => process.kill(descendant, 0), /ESRCH/)
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
+
+test('successful completion cleans descendants even when they hold no output pipes', { timeout: 120000 }, async t => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-logged-tap-background-'))
+  const heartbeat = join(root, 'heartbeat'), output = new PassThrough(), errors = new PassThrough()
+  output.resume(); errors.resume()
+  try {
+    const background = 'const fs=require("node:fs");fs.writeFileSync(process.argv[1],String(Date.now()));setInterval(()=>fs.writeFileSync(process.argv[1],String(Date.now())),10);process.send("ready")'
+    const source = 'const {spawn}=require("node:child_process");const c=spawn(process.execPath,["-e",process.argv[1],process.argv[2]],{stdio:["ignore","ignore","ignore","ipc"]});c.once("message",()=>process.exit(0))'
+    const result = await runLoggedTapChild(process.execPath, ['-e', source, background, heartbeat], {
+      cwd: root, tapPath: join(root, 'full.tap'), stdout: output, stderr: errors, signal: t.signal,
+    })
+    assert.equal(result.status, 0)
+    assert.equal(result.error, undefined)
+    const stopped = readFileSync(heartbeat, 'utf8')
+    await new Promise(resolve => setTimeout(resolve, 100))
+    assert.equal(readFileSync(heartbeat, 'utf8'), stopped)
+  } finally { rmSync(root, { recursive: true, force: true }) }
 })

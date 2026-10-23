@@ -46,6 +46,9 @@ export async function runLoggedTapChild(command, args, { cwd, env, tapPath, stdo
     }
   }
   function cancel(reason) { interrupted = reason; captureError ??= new Error('TAP producer interrupted'); stopOwnedTree() }
+  // Exit precedes close: surviving descendants may still hold the pipes open.
+  // Clean the group now while preserving the direct producer's real outcome.
+  child.once('exit', () => { if (!windows) stopOwnedTree() })
   const onInterrupt = () => cancel('SIGINT'), onTerminate = () => cancel('SIGTERM'), onAbort = () => cancel('SIGTERM')
   process.once('SIGINT', onInterrupt); process.once('SIGTERM', onTerminate)
   signal?.addEventListener('abort', onAbort, { once: true })
