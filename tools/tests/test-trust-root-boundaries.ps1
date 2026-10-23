@@ -85,19 +85,21 @@ $events = @($trustedEvents.Groups['events'].Value.Split(',') | ForEach-Object { 
 foreach ($event in @('opened', 'synchronize', 'reopened', 'ready_for_review', 'converted_to_draft')) {
   if ($events -notcontains $event) { throw "Trusted audit must refresh mutable readiness on $event." }
 }
-# Product work runs for source events. Readiness transitions (ready_for_review,
-# converted_to_draft, labeled) deliberately re-run product CI since #365: a
-# draft leaving ready_for_review or gaining full-ci must be qualified on the
-# exact head. The waste the old ban prevented is instead bounded by the
-# PR-scoped concurrency group, which cancels the superseded run — so the
-# boundary now requires that group to exist rather than banning the events.
+# Product CI qualifies source-changing events only. Draft/readiness transitions
+# refresh the trusted audit (pull_request_target) without re-running the full
+# product matrix on identical bytes (AGENTS step 5: identical-source readiness
+# changes refresh trusted audit, not product CI).
 $productWorkflow = Get-Content -Raw -LiteralPath (Join-Path $RepoRoot '.github/workflows/typecheck.yml')
+$productEvents = [regex]::Match($productWorkflow, '(?ms)^  pull_request:\r?\n    types:\r?\n(?<body>(?:      - .+\r?\n)+)')
+if (-not $productEvents.Success) { throw 'Product CI pull_request types unavailable.' }
 foreach ($event in @('ready_for_review', 'converted_to_draft')) {
-  if ($productWorkflow -notmatch [regex]::Escape($event)) { throw "Product CI must re-qualify on $event (fast-iteration merge workflow)." }
+  if ($productEvents.Groups['body'].Value -match [regex]::Escape($event)) {
+    throw "Product CI must not re-qualify on $event; trusted audit owns readiness refresh."
+  }
 }
 $productConcurrency = [regex]::Match($productWorkflow, '(?ms)^concurrency:\r?\n(?<body>  .*(?:\r?\n|$))*')
 if (-not $productConcurrency.Success -or $productConcurrency.Value -notmatch [regex]::Escape('github.event.pull_request.number')) {
-  throw 'Product CI readiness triggers require a PR-scoped concurrency group to cancel superseded runs.'
+  throw 'Product CI requires a PR-scoped concurrency group to cancel superseded runs.'
 }
 if ($workflow -match [regex]::Escape('materialize-independent-review-receipt.ps1')) { throw 'Advisory certification must not be a workflow prerequisite.' }
 if ($workflow -match 'BABEL_REVIEW_CONTROLLER_(LOGIN|APP_ID)') { throw 'Trusted workflow must not retain App-controller configuration.' }
