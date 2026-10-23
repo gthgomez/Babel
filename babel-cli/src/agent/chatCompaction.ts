@@ -348,6 +348,8 @@ export class HeuristicTruncationStrategy implements CompactionStrategy {
  * Provider configuration for LLM-based compaction.
  */
 export interface LlmCompactionProvider {
+  /** Known summarizer identity for attribution; never selects the transport. */
+  providerId?: ProviderId;
   /** Base URL for the chat completions API */
   baseUrl: string;
   /** API key */
@@ -630,6 +632,7 @@ export class LLMSummarizeCompaction implements CompactionStrategy {
       signal,
       options.callbacks,
       options.onUsageRecorded,
+      injected?.providerId,
     );
   }
 
@@ -645,6 +648,7 @@ export class LLMSummarizeCompaction implements CompactionStrategy {
     signal?: AbortSignal,
     callbacks?: RunnerCallbacks,
     onUsageRecorded?: CompactionOptions['onUsageRecorded'],
+    providerId?: ProviderId,
   ): Promise<CompactionApiResult> {
     const timeoutMs = 30_000; // compaction should be fast
     const controller = new AbortController();
@@ -656,11 +660,11 @@ export class LLMSummarizeCompaction implements CompactionStrategy {
       signal.addEventListener('abort', onExternalAbort, { once: true });
     }
 
-    const provider: ProviderId = baseUrl.toLowerCase().includes('openrouter')
+    const provider: ProviderId = providerId ?? (baseUrl.toLowerCase().includes('openrouter')
       ? 'openrouter'
       : baseUrl.toLowerCase().includes('api.deepseek.com')
         ? 'deepseek'
-        : 'deepinfra';
+        : 'deepinfra');
     const inferenceId = randomUUID();
     const requestBody = {
       model,
@@ -1120,6 +1124,7 @@ export function resolveCompactionSummarizationProvider(input: {
 
   if (provider === 'openrouter' && process.env['OPENROUTER_API_KEY']?.trim()) {
     return {
+      providerId: 'openrouter',
       apiKey: process.env['OPENROUTER_API_KEY']!.trim(),
       baseUrl: 'https://openrouter.ai/api/v1/chat/completions',
       defaultModel: model,
@@ -1127,6 +1132,7 @@ export function resolveCompactionSummarizationProvider(input: {
   }
   if (provider === 'deepinfra' && process.env['DEEPINFRA_API_KEY']?.trim()) {
     return {
+      providerId: 'deepinfra',
       apiKey: process.env['DEEPINFRA_API_KEY']!.trim(),
       baseUrl: 'https://api.deepinfra.com/v1/openai/chat/completions',
       defaultModel: model,
@@ -1137,12 +1143,14 @@ export function resolveCompactionSummarizationProvider(input: {
     // endpoint with its own credential rather than degrading to heuristic.
     return {
       apiKey: process.env['DEEPSEEK_API_KEY']!.trim(),
+      providerId: 'deepseek',
       baseUrl: 'https://api.deepseek.com/v1/chat/completions',
       defaultModel: model,
     };
   }
   if (provider === 'anthropic' && process.env['ANTHROPIC_API_KEY']?.trim()) {
     return {
+      providerId: 'anthropic',
       apiKey: process.env['ANTHROPIC_API_KEY']!.trim(),
       baseUrl: 'https://api.anthropic.com',
       defaultModel: model,

@@ -33,6 +33,7 @@ import {
   type ChatMessage,
   type CompactionOptions,
   type CompactionStrategy,
+  type LlmCompactionProvider,
   resolveCompactionModelId,
   resolveCompactionSummarizationProvider,
 } from './chatCompaction.js';
@@ -138,6 +139,113 @@ it('attributes a DeepSeek summarizer inference to the deepseek provider identity
 });
 
 // ─── Fixtures ──────────────────────────────────────────────────────────────
+
+it('carries known resolver identities while leaving custom endpoint attribution optional', (t) => {
+  const names = ['OPENROUTER_API_KEY', 'DEEPINFRA_API_KEY', 'DEEPSEEK_API_KEY', 'ANTHROPIC_API_KEY',
+    'BABEL_COMPACTION_API_KEY', 'BABEL_COMPACTION_API_BASE', 'BABEL_DESKTOP_PROVIDER'];
+  const previous = names.map(name => process.env[name]);
+  t.after(() => names.forEach((name, index) => {
+    if (previous[index] === undefined) delete process.env[name];
+    else process.env[name] = previous[index];
+  }));
+  names.forEach(name => { delete process.env[name]; });
+  for (const [provider, name, url] of [
+    ['openrouter', 'OPENROUTER_API_KEY', 'https://openrouter.ai/api/v1/chat/completions'],
+    ['deepinfra', 'DEEPINFRA_API_KEY', 'https://api.deepinfra.com/v1/openai/chat/completions'],
+    ['deepseek', 'DEEPSEEK_API_KEY', 'https://api.deepseek.com/v1/chat/completions'],
+    ['anthropic', 'ANTHROPIC_API_KEY', 'https://api.anthropic.com'],
+  ] as const) {
+    process.env[name] = 'synthetic-only';
+    const route = resolveCompactionSummarizationProvider({ chatProvider: provider, compactionModel: 'fixture-model' });
+    assert.equal(route?.providerId, provider);
+    assert.equal(route?.baseUrl, url);
+    assert.equal(route?.defaultModel, 'fixture-model');
+    assert.equal(route?.apiKey === 'synthetic-only', true);
+    delete process.env[name];
+  }
+  process.env['BABEL_COMPACTION_API_KEY'] = 'synthetic-only';
+  process.env['BABEL_COMPACTION_API_BASE'] = 'https://summary.invalid/chat';
+  const custom = resolveCompactionSummarizationProvider({ chatProvider: 'openrouter', compactionModel: 'fixture-model' });
+  assert.equal(custom?.providerId, undefined);
+  assert.equal(custom?.baseUrl, 'https://summary.invalid/chat');
+});
+
+const summarizerRoutes: Array<{
+  name: string;
+  descriptor: LlmCompactionProvider;
+  expected: NonNullable<LlmCompactionProvider['providerId']>;
+}> = [
+  ...(['openrouter', 'deepinfra', 'deepseek'] as const).map(providerId => ({
+    name: `explicit ${providerId} at a neutral endpoint`,
+    descriptor: { providerId, apiKey: 'synthetic-only', baseUrl: 'https://summary.invalid/chat', defaultModel: 'fixture-model' },
+    expected: providerId,
+  })),
+  ...([
+    ['https://OPENROUTER.ai/api/v1/chat/completions', 'openrouter'],
+    ['https://API.DEEPSEEK.COM/v1/chat/completions', 'deepseek'],
+    ['https://summary.invalid/chat', 'deepinfra'],
+  ] as const).map(([baseUrl, expected]) => ({
+    name: `legacy ${expected} URL fallback`,
+    descriptor: { apiKey: 'synthetic-only', baseUrl, defaultModel: 'fixture-model' },
+    expected,
+  })),
+  {
+    name: 'native Anthropic protocol retains its identity',
+    descriptor: { providerId: 'openrouter', apiKey: 'synthetic-only', baseUrl: 'https://api.anthropic.com', defaultModel: 'fixture-model' },
+    expected: 'anthropic',
+  },
+];
+
+for (const route of summarizerRoutes) {
+  for (const failed of [false, true]) {
+    it(`${route.name}: consistent ${failed ? 'failed' : 'successful'} lifecycle attribution`, async (t) => {
+      const previousFetch = globalThis.fetch;
+      t.after(() => { globalThis.fetch = previousFetch; });
+      const identities: string[] = [];
+      const statuses: string[] = [];
+      const charges: Array<{ input: number | null; output: number | null; cost?: number }> = [];
+      let requests = 0;
+      globalThis.fetch = (async (url, init) => {
+        requests++;
+        assert.equal(String(url), route.expected === 'anthropic'
+          ? 'https://api.anthropic.com/v1/messages' : route.descriptor.baseUrl);
+        assert.equal(JSON.parse(String(init?.body)).model, 'fixture-model');
+        const headers = new Headers(init?.headers);
+        assert.equal(route.expected === 'anthropic'
+          ? headers.get('x-api-key') === 'synthetic-only'
+          : headers.get('authorization') === 'Bearer synthetic-only', true);
+        return failed ? new Response('fixture failure', { status: 503 }) : Response.json({
+          model: 'fixture-model', choices: [{ message: { content: 'Structured summary' } }],
+          content: [{ type: 'text', text: 'Structured summary' }],
+          usage: { prompt_tokens: 11, completion_tokens: 7, input_tokens: 11, output_tokens: 7, cost: 0 },
+        });
+      }) as typeof fetch;
+      const options: CompactionOptions = {
+        model: '', maxTokens: 100, allowAmbientProvider: false, summarizationProvider: route.descriptor,
+        callbacks: {
+          onInvocationStarted: event => { identities.push(event.provider); },
+          onInvocationPhase: event => { identities.push(event.provider); },
+          onInvocationCompleted: event => { identities.push(event.provider); statuses.push(event.status); },
+        },
+        onUsageRecorded: charge => {
+          identities.push(charge.provider ?? 'missing');
+          charges.push({ input: charge.inputTokens, output: charge.outputTokens,
+            ...(charge.reportedCostUsd !== undefined ? { cost: charge.reportedCostUsd } : {}) });
+        },
+      };
+      const strategy = new LLMSummarizeCompaction({ keepRecentMessages: 2 });
+      const operation = strategy.compact(makeLongConversation(6), options);
+      if (failed) await assert.rejects(operation, /503/);
+      else await operation;
+      assert.equal(requests, 1);
+      assert.ok(identities.length >= 4);
+      assert.deepEqual([...new Set(identities)], [route.expected]);
+      assert.deepEqual(statuses, [failed ? 'failed' : 'delivered']);
+      assert.deepEqual(charges, failed ? [] : [{ input: 11, output: 7,
+        ...(route.expected === 'anthropic' ? {} : { cost: 0 }) }]);
+    });
+  }
+}
 
 function makeMessages(overrides?: Partial<ChatMessage>[]): ChatMessage[] {
   const defaults: ChatMessage[] = [
