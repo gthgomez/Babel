@@ -14,7 +14,7 @@
 | Dependencies · active CI run IDs | |
 | Known related failures | |
 
-**Quick links:** Git helpers and preflight → [AGENT_GIT_OPERATIONS.md](./AGENT_GIT_OPERATIONS.md). Maintainer supplemental scrub uses `tools/check-public-scrub.ps1 -RequireSupplementalPolicy` (content/schema); optional path-only preflight → `-CheckSupplementalScrubPolicyPath`.
+**Quick links:** Git helpers and preflight → [AGENT_GIT_OPERATIONS.md](./AGENT_GIT_OPERATIONS.md). Product proof uses `npm --prefix babel-cli run typecheck` for source and `tsconfig.scripts.json` (scripts-only drift). Maintainer supplemental scrub: validate JSON with `tools/check-public-scrub.ps1 -RequireSupplementalPolicy`; optional readable-path preflight only → `-CheckSupplementalScrubPolicyPath` (does not replace scrub validation).
 
 **Footer when handing off:** changed/excluded paths; commands + exit results; reuse basis; blocker + stage; next owner/action.
 
