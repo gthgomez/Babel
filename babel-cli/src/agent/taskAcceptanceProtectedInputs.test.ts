@@ -93,15 +93,19 @@ test('ordinary meanings derive no protected inputs', () => {
 
 const mockExecutor: ToolExecutor = {
   mapAction: () => [],
-  execute: async () => ({ results: [{ stdout: '', stderr: '', exitCode: 0 }] }),
+  execute: async action => ({
+    action,
+    terminal: false,
+    results: [{ exit_code: 0, stdout: '', stderr: '' }],
+  }),
 };
 
-function policyCtx(requestId: string, projectRoot: string): ToolContext {
+function policyCtx(runId: string, projectRoot: string): ToolContext {
   return {
-    requestId,
+    agentId: 'witness-protected-inputs',
+    runId,
+    babelRoot: projectRoot,
     projectRoot,
-    cwd: projectRoot,
-    readOnly: false,
   };
 }
 

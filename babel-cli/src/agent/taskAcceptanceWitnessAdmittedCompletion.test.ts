@@ -45,10 +45,7 @@ function policyCtx(runId: string, projectRoot: string): ToolContext {
     agentId: 'witness-admitted',
     runId,
     babelRoot: projectRoot,
-    requestId: runId,
     projectRoot,
-    cwd: projectRoot,
-    readOnly: false,
   }
 }
 
@@ -309,7 +306,7 @@ test('kernel positive: paired executor receipts refresh criterion evidence for V
   assert.equal(evaluateCriterionCompletionV1(request).verified, true)
   const last = receipts.at(-1)!
   const adapted = toExecutorVerifierReceipt(last)
-  assert.equal(adapted.ok, true, adapted.reason)
+  assert.ok(adapted.ok, adapted.ok ? '' : adapted.errors.join('; '))
   const kernel = createExecutorKernel('chat')
   const decision = kernel.completion.decide({
     mode: 'chat',
@@ -337,7 +334,7 @@ test('kernel negative: single executor witness run keeps VERIFIED_COMPLETE downg
     scripts: ['test:alpha'],
   })
   const adapted = toExecutorVerifierReceipt(receipts[0]!)
-  assert.equal(adapted.ok, true)
+  assert.ok(adapted.ok, adapted.ok ? '' : adapted.errors.join('; '))
   const kernel = createExecutorKernel('chat')
   const decision = kernel.completion.decide({
     mode: 'chat',
