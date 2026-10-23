@@ -58,8 +58,9 @@ selection and session resume can override it; check the displayed target.
 
 ## Provider credentials
 
-Create `~/.babel/config` first and copy the blank `babel-cli/.env.example`
-into the private `~/.babel/config/.env`
+Create `~/.babel/config` first and copy the blank template from the Babel
+checkout (`Join-Path $BabelRoot 'babel-cli\.env.example'`) into the private
+`~/.babel/config/.env`
 (or `%USERPROFILE%\.babel\config\.env` on Windows) and set only the
 provider keys you use. On macOS/Linux, set file permissions with
 `chmod 600 ~/.babel/config/.env` after copying. `BABEL_CONFIG_DIR` selects an explicit profile.
