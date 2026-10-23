@@ -109,6 +109,20 @@ test('snapshot transitions reuse unchanged blobs and preserve exact trees in eit
     writeFileSync(sentinel, 'preserve')
     await assert.rejects(materializePushSnapshot(root, snapshot, second, [{ ...first[0], path: '../sentinel' }]), /escaped owned directory/)
     assert.equal(readFileSync(sentinel, 'utf8'), 'preserve')
+    const aliasSnapshot = join(workspace, 'alias-snapshot')
+    const aliases = [
+      { ...first.find(entry => entry.path === 'keep.txt'), path: 'A/keep.txt' },
+      { ...first.find(entry => entry.path === 'remove.txt'), path: 'a/gone.txt' },
+    ]
+    await materializePushSnapshot(root, aliasSnapshot, aliases)
+    await materializePushSnapshot(root, aliasSnapshot, aliases.slice(0, 1), aliases)
+    assert.equal(readFileSync(join(aliasSnapshot, 'A/keep.txt'), 'utf8'), 'same')
+    assert.equal(existsSync(join(aliasSnapshot, 'a/gone.txt')), false)
+    // Removing both aliases must remove the physical directory only once.
+    const removedAliasSnapshot = join(workspace, 'removed-alias-snapshot')
+    await materializePushSnapshot(root, removedAliasSnapshot, aliases)
+    await materializePushSnapshot(root, removedAliasSnapshot, [], aliases)
+    assert.deepEqual(paths(removedAliasSnapshot), [])
   } finally { rmSync(workspace, { recursive: true, force: true }) }
 })
 

@@ -207,8 +207,13 @@ export async function materializePushSnapshot(root, snapshot, inventory, previou
     const parts = entry.path.split('/')
     return parts.slice(0, -1).map((_, index) => parts.slice(0, index + 1).join('/'))
   }))
-  const nextDirectories = directories(inventory)
-  for (const path of [...directories(previous)].filter(path => !nextDirectories.has(path)).sort((a, b) => b.length - a.length)) {
+  // Windows merges differently cased directory spellings into one identity.
+  const directoryIdentity = path => process.platform === 'win32' ? path.toLowerCase() : path
+  const nextDirectories = new Set([...directories(inventory)].map(directoryIdentity))
+  const removedDirectories = new Map([...directories(previous)]
+    .filter(path => !nextDirectories.has(directoryIdentity(path)))
+    .map(path => [directoryIdentity(path), path]))
+  for (const path of [...removedDirectories.values()].sort((a, b) => b.length - a.length)) {
     rmdirSync(destination(path))
   }
   const changed = inventory.filter(entry => !same(entry, before.get(entry.path)))
