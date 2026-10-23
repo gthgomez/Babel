@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { coveredPaths } from '../policy-integrity-manifest.mjs'
+import { INTERACTIVE_STACK_BUDGET } from '../agents-interactive-budget.mjs'
 import { preflightPushCandidates, collectPushCandidates, runValidationStage, verifyStagedManifest, observeValidationWork, materializePushSnapshot } from '../validate-push-candidates.mjs'
 import { readCommittedBlobs, readCommittedInventory } from '../committed-object-reader.mjs'
 
@@ -126,6 +127,32 @@ test('snapshot transitions reuse unchanged blobs and preserve exact trees in eit
     await materializePushSnapshot(root, removedAliasSnapshot, [], aliases)
     assert.deepEqual(paths(removedAliasSnapshot), [])
   } finally { rmSync(workspace, { recursive: true, force: true }) }
+})
+
+test('preflight rejects over-budget AGENTS.md even when the manifest still verifies', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-agents-budget-preflight-'))
+  const git = (...args) => {
+    const r = spawnSync('git', ['-c', 'user.name=fixture', '-c', 'user.email=fixture@example.invalid', '-c', 'core.hooksPath=' + join(root, 'hooks'), '-C', root, ...args], { encoding: 'utf8', windowsHide: true })
+    assert.equal(r.status, 0)
+    return r.stdout.trim()
+  }
+  try {
+    for (const path of coveredPaths) {
+      mkdirSync(dirname(join(root, path)), { recursive: true })
+      copyFileSync(fileURLToPath(new URL('../../' + path, import.meta.url)), join(root, path))
+    }
+    spawnSync(process.execPath, [fileURLToPath(new URL('../policy-integrity-manifest.mjs', import.meta.url)), 'generate', '--repo-root', root], { windowsHide: true })
+    git('init', '-q')
+    git('add', '--all')
+    git('commit', '-qm', 'baseline')
+    writeFileSync(join(root, 'AGENTS.md'), 'a'.repeat(INTERACTIVE_STACK_BUDGET + 1))
+    spawnSync(process.execPath, [fileURLToPath(new URL('../policy-integrity-manifest.mjs', import.meta.url)), 'generate', '--repo-root', root], { windowsHide: true })
+    git('add', 'AGENTS.md', 'POLICY_MANIFEST.json')
+    await assert.rejects(verifyStagedManifest(root), /required_instruction_exceeds_prompt_budget/)
+    git('commit', '-qm', 'oversize agents consistent manifest')
+    const sha = git('rev-parse', 'HEAD')
+    await assert.rejects(preflightPushCandidates([sha], root), /required_instruction_exceeds_prompt_budget/)
+  } finally { rmSync(root, { recursive: true, force: true }) }
 })
 
 test('stage errors preserve exit status and never echo child source or diagnostics', async () => {

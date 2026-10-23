@@ -30,6 +30,8 @@ Copy the [batch handoff template](./AGENT_BATCH_HANDOFF.md) table into your priv
 
 **Maintainer supplemental scrub:** validate JSON with `tools/check-public-scrub.ps1 -RequireSupplementalPolicy`. Optional readable-path preflight only: `-CheckSupplementalScrubPolicyPath` on `scripts/agent-preflight.ps1` (default preflight unchanged; path check does not replace scrub validation).
 
+**Execution vs planning:** `agent-preflight.ps1` is planning/readiness only. Before commit/push, run `node tools/verify-changed-publication-surface.mjs` (staged manifest + committed `AGENTS.md` interactive budget + remote tip diagnostic) and, before publication, `node tools/validate-push-candidates.mjs` as documented in [REVIEW_MARKERS.md](./REVIEW_MARKERS.md). Install `.githooks` locally when hooks are not already active.
+
 | Symptom | Where to look |
 | --- | --- |
 | Scripts-only type errors | `npm --prefix babel-cli run typecheck` (both tsconfigs) |

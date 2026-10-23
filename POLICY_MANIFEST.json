@@ -3,7 +3,7 @@
   "algorithm": "sha256",
   "purpose": "drift_detection_not_authorization",
   "normalization": "utf8_crlf_to_lf",
-  "policy_bundle_id": "5a0075768d2d6d4032fe3210b7d35fb9dc4c3d09b5b0dabc4a184fc12bb25580",
+  "policy_bundle_id": "eb7c1ebfd4352b96959948eb7cc5d448409cceec281e30f052c752d45b2f79f5",
   "files": {
     ".github/workflows/public-pr-metadata.yml": "67e630d700055533ee77157ed05fc347161c7c041e35151f2652ffd9b9973023",
     ".github/workflows/publish-npm.yml": "54036b704d59e513cbbb981efa00e82121e40871d6dfe789c8636bd0159f8c9e",
@@ -130,7 +130,7 @@
     "docs/AUTONOMY_POLICY_CHANGELOG.md": "24441db937e714358f251f057fd3e0ae115891e48bb9985ee83e46ba1c95a190",
     "docs/BABEL_PR_REVIEW.md": "5ad04b68da42fbe4c28b64b710ee7b41a80082fbaead8c55cd2eb75dc954b109",
     "docs/architecture/MERGE_CONTROL_PLANE_V1.md": "9e63d1e16fd7037d69a4778eb9e13f8b7749e8e52d8519e408c127bb6fca2cfe",
-    "docs/guides/AGENT_GIT_OPERATIONS.md": "e57aa7f9ff017a4882d90baccd71213be30f90721c8dca880476fc0f5d91ee95",
+    "docs/guides/AGENT_GIT_OPERATIONS.md": "97c633cc4e9f8ab31b03fb9824aa47d92dcbeda79deb528f909d9688f2d1f370",
     "scripts/agent-git-common.psm1": "98eb9e8d46e0ca59e4fb06da4175eea2c964c17b19c17668f626cadb3b37e931",
     "scripts/agent-pr-gate-common.psm1": "9db58d817fa2589098737719c8411485fa462d8bf10a5c55c342f9a48b974e9d",
     "scripts/agent-pr-gate-evidence.psm1": "87836077f66e06f851e34cfc759cc9dfc5ff99a77997914b807159dd79273791",
