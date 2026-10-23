@@ -6,6 +6,7 @@ import {
   assertClaudeResolveSettingsRootParity,
   verifyClaudeManagedPolicySources,
 } from './claudeCodePolicyLaunchGates.js';
+import { assertClaudeStrictMcpQueryTransportAvailable } from './claudeCodeQueryTransportOptions.js';
 import type { ClaudeCodeLaunchPolicySpec } from './claudeCodePolicyEvidence.js';
 
 const ALLOWED_EFFECTIVE_SECURITY_KEYS = new Set([
@@ -68,6 +69,17 @@ export interface ClaudeIsolatedPolicyResolveResult {
 export async function resolveClaudeCodePolicyIsolated(
   input: ClaudeIsolatedPolicyResolveInput,
 ): Promise<ClaudeIsolatedPolicyResolveResult> {
+  const strictMcpTransport = assertClaudeStrictMcpQueryTransportAvailable(input.launchSpec);
+  if (!strictMcpTransport.ok) {
+    return {
+      ok: false,
+      digest: sha256(
+        stableJson({ phase: 'strict_mcp_transport', detail: strictMcpTransport.detail }),
+      ),
+      detail: strictMcpTransport.detail,
+    };
+  }
+
   const rootParity = assertClaudeResolveSettingsRootParity({
     launchCwd: input.launchCwd,
     projectPolicyRoot: input.projectPolicyRoot,
@@ -172,7 +184,8 @@ export async function resolveClaudeCodePolicyIsolated(
       rootsBinding,
       managedSourceIdentity: managedCheck.managedSourceIdentity,
       pinnedManagedDigest: managedCheck.pinnedManagedDigest,
-      sdkIdentity: 'isolatedChildEnvResolveSettings+configHomeAudit+managedSourceIdentity',
+      queryTransportDigest: managedCheck.queryTransportDigest,
+      sdkIdentity: 'isolatedChildEnvResolveSettings+queryStrictMcpTransport+managedSourceIdentity',
     }),
   );
 

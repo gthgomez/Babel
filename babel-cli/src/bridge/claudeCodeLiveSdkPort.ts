@@ -10,6 +10,7 @@ import type {
   ClaudeCodeTurnRequest,
   ClaudeSdkStreamMessage,
 } from './claudeCodeSdkPort.js';
+import { buildClaudeCodeQueryTransportOptions } from './claudeCodeQueryTransportOptions.js';
 
 interface ActiveClaudeQuery {
   query: Query;
@@ -78,17 +79,14 @@ export function createClaudeCodeLiveSdkPort(): ClaudeCodeSdkPort {
       const abortController = new AbortController();
       const spawnClaudeCodeProcess = spawnFactory(key);
       const nativeId = request.admitted.harness_native_session_id?.trim();
+      const transport = buildClaudeCodeQueryTransportOptions({
+        admitted: request.admitted,
+        policy: request.policy,
+      });
       const q = query({
         prompt: request.message,
         options: {
-          cwd: request.admitted.cwd,
-          projectConfigRoot: request.admitted.project_policy_root,
-          model: request.admitted.harness_model_profile,
-          pathToClaudeCodeExecutable: request.admitted.cli_executable_path,
-          settingSources: request.policy.settingSources,
-          permissionMode: request.policy.permissionMode,
-          permissionPrompts: request.policy.permissionPrompts,
-          managedSettings: request.policy.managedSettings as import('@anthropic-ai/claude-agent-sdk').Settings,
+          ...transport,
           env: request.childEnv,
           abortController,
           spawnClaudeCodeProcess,

@@ -25,7 +25,7 @@ function seedConfigHome(dir: string): void {
 }
 
 describe('claudeCode SDK 0.3.304 policy semantics (pinned)', () => {
-  it('managed source omits strictMcpConfig while launch spec pins it (regression)', async () => {
+  it('managed source omits strictMcpConfig; enforcement is query() transport option (regression)', async () => {
     assert.equal(loadClaudeAgentSdkPin().sdkVersion, '0.3.304');
     const launchCwd = mkdtempSync(join(tmpdir(), 'babel-strict-mcp-'));
     const configHome = mkdtempSync(join(tmpdir(), 'babel-strict-mcp-cfg-'));
@@ -45,7 +45,7 @@ describe('claudeCode SDK 0.3.304 policy semantics (pinned)', () => {
     const managed = resolved.sources.find((s) => s.source === 'managed');
     assert.ok(managed);
     assert.equal(managed.settings.strictMcpConfig, undefined);
-    assert.equal(spec.managedSettings.strictMcpConfig, true);
+    assert.equal(spec.strictMcpConfig, true);
     const check = verifyClaudeManagedPolicySources({
       sources: resolved.sources,
       filtered: resolved.filtered,

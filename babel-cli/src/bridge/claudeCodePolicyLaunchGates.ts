@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { realpathSync } from 'node:fs';
 
 import type { ClaudeCodeLaunchPolicySpec } from './claudeCodePolicyEvidence.js';
-import { loadClaudeAgentSdkPin } from './claudeCodeSdkPin.js';
+import { assertClaudeStrictMcpQueryTransportAvailable } from './claudeCodeQueryTransportOptions.js';
 
 function stableJson(value: unknown): string {
   if (value === null || typeof value !== 'object') return JSON.stringify(value);
@@ -55,6 +55,18 @@ export function digestClaudePinnedManagedSettings(launchSpec: ClaudeCodeLaunchPo
   return sha256(stableJson(launchSpec.managedSettings));
 }
 
+/** Binds live `query()` transport knobs including top-level strictMcpConfig. */
+export function digestClaudeQueryTransportOptions(launchSpec: ClaudeCodeLaunchPolicySpec): string {
+  return sha256(
+    stableJson({
+      strictMcpConfig: launchSpec.strictMcpConfig,
+      settingSources: launchSpec.settingSources,
+      permissionMode: launchSpec.permissionMode,
+      permissionPrompts: launchSpec.permissionPrompts,
+    }),
+  );
+}
+
 export type PolicySourceRow = {
   source: string;
   settings: Record<string, unknown>;
@@ -64,23 +76,24 @@ export type PolicySourceRow = {
 /**
  * Validates resolveSettings source identity for admission (SDK pin 0.3.304).
  *
- * strictMcpConfig: the managed tier restrictive allowlist may omit this key from
- * `sources[].settings` even when `managedSettings.strictMcpConfig` is true on input.
- * Proof therefore pins the launch managedSettings digest and rejects explicit
- * effective `strictMcpConfig === false`; missing effective field is not treated as off.
+ * strictMcpConfig enforcement is via `query()` {@link Options.strictMcpConfig}, not
+ * managedSettings (resolveSettings drops that key from managed source rows on 0.3.304).
  */
 export function verifyClaudeManagedPolicySources(input: {
   sources: PolicySourceRow[];
   filtered: Record<string, unknown>;
   launchSpec: ClaudeCodeLaunchPolicySpec;
 }):
-  | { ok: true; managedSourceIdentity: string; pinnedManagedDigest: string }
+  | {
+      ok: true;
+      managedSourceIdentity: string;
+      pinnedManagedDigest: string;
+      queryTransportDigest: string;
+    }
   | { ok: false; detail: string } {
-  const pin = loadClaudeAgentSdkPin();
-  void pin.sdkVersion;
-
-  if (input.launchSpec.managedSettings.strictMcpConfig !== true) {
-    return { ok: false, detail: 'Launch managedSettings.strictMcpConfig must be true' };
+  const strictMcpTransport = assertClaudeStrictMcpQueryTransportAvailable(input.launchSpec);
+  if (!strictMcpTransport.ok) {
+    return strictMcpTransport;
   }
 
   const managed = input.sources.filter((s) => s.source === 'managed');
@@ -122,5 +135,6 @@ export function verifyClaudeManagedPolicySources(input: {
     ok: true,
     managedSourceIdentity,
     pinnedManagedDigest: digestClaudePinnedManagedSettings(input.launchSpec),
+    queryTransportDigest: digestClaudeQueryTransportOptions(input.launchSpec),
   };
 }

@@ -11,6 +11,8 @@ export interface ClaudeCodeLaunchPolicySpec {
   settingSources: [];
   permissionMode: 'default';
   permissionPrompts: 'host';
+  /** query() option; SDK pin 0.3.304 maps to `--strict-mcp-config`. */
+  strictMcpConfig: true;
   envSuppressors: Record<string, string>;
   managedSettings: Record<string, unknown>;
 }
@@ -22,13 +24,13 @@ export function buildClaudeCodeLaunchPolicySpec(
     settingSources: [],
     permissionMode: 'default',
     permissionPrompts: 'host',
+    strictMcpConfig: true,
     envSuppressors: {
       CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1',
       ENABLE_CLAUDEAI_MCP_SERVERS: 'false',
     },
     managedSettings: {
       disableClaudeAiConnectors: true,
-      strictMcpConfig: true,
       permissions: {
         deny: [],
         ask: [],

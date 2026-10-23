@@ -25,6 +25,7 @@ export interface ClaudeLaunchParityBinding {
   settingSources: readonly [];
   permissionMode: 'default';
   permissionPrompts: 'host';
+  strictMcpConfig: true;
   managedSettings: Record<string, unknown>;
   childEnvPolicyKeys: string[];
 }
@@ -46,6 +47,7 @@ export function collectClaudeLaunchParityBinding(input: {
     settingSources: input.policy.settingSources,
     permissionMode: input.policy.permissionMode,
     permissionPrompts: input.policy.permissionPrompts,
+    strictMcpConfig: input.policy.strictMcpConfig,
     managedSettings: input.policy.managedSettings,
     childEnvPolicyKeys: Object.keys(childEnv).sort(),
   };
