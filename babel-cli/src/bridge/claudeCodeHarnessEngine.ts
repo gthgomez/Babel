@@ -4,6 +4,7 @@ import type { SessionDescriptor } from '../executor/contracts.js';
 import { writeSessionDescriptor } from '../services/threadStore/sessionDescriptor.js';
 import { getRemoteSurface } from './remoteApproval.js';
 import type { ClaudeCodeAgentRuntimeRegistry } from './claudeCodeAgentRuntime.js';
+import { syncClaudeNativeSessionToDescriptor } from './claudeCodeDescriptorSync.js';
 
 export interface ClaudeCodeHarnessEngineOptions {
   descriptor: SessionDescriptor;
@@ -101,9 +102,13 @@ export function createClaudeCodeHarnessEngine(options: ClaudeCodeHarnessEngineOp
       }
     } finally {
       const nativeId = registry.consumeNativeSessionId(descriptor.threadId);
-      if (nativeId && descriptor.harness_native_session_id !== nativeId) {
-        descriptor.harness_native_session_id = nativeId;
-        writeSessionDescriptor(descriptor);
+      if (nativeId) {
+        const synced = syncClaudeNativeSessionToDescriptor({
+          registry,
+          descriptor,
+          nativeSessionId: nativeId,
+        });
+        if (synced) writeSessionDescriptor(descriptor);
       }
     }
   };

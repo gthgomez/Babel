@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 
-import { filterEscalatingDefaultMode, resolveSettings } from '@anthropic-ai/claude-agent-sdk';
-
+import { auditClaudeConfigHomePolicyNeutral } from './claudeCodeConfigHomePolicy.js';
+import { resolveSettingsInIsolatedChildEnv } from './claudeCodeIsolatedResolveSubprocess.js';
 import type { ClaudeCodeLaunchPolicySpec } from './claudeCodePolicyEvidence.js';
 
 const ALLOWED_EFFECTIVE_SECURITY_KEYS = new Set([
@@ -40,7 +40,9 @@ function hashSources(
 }
 
 export interface ClaudeIsolatedPolicyResolveInput {
-  /** Project policy tree (hooks/.claude); not config HOME. */
+  /** query() options.cwd (session project root). */
+  launchCwd: string;
+  /** query() options.projectConfigRoot (hooks/.claude policy tree). */
   projectPolicyRoot: string;
   configHome: string;
   launchSpec: ClaudeCodeLaunchPolicySpec;
@@ -62,25 +64,51 @@ export interface ClaudeIsolatedPolicyResolveResult {
 export async function resolveClaudeCodePolicyIsolated(
   input: ClaudeIsolatedPolicyResolveInput,
 ): Promise<ClaudeIsolatedPolicyResolveResult> {
+  const configAudit = auditClaudeConfigHomePolicyNeutral(input.configHome);
+  if (!configAudit.ok) {
+    return {
+      ok: false,
+      digest: sha256(
+        stableJson({
+          phase: 'config_home_audit',
+          configHome: input.configHome,
+          projectPolicyRoot: input.projectPolicyRoot,
+          detail: configAudit.detail,
+        }),
+      ),
+      detail: configAudit.detail,
+    };
+  }
+
   const childEnv = {
     ...input.childEnvBaseline,
     CLAUDE_CONFIG_DIR: input.configHome,
   };
+  const rootsBinding = {
+    launchCwd: input.launchCwd,
+    projectConfigRoot: input.projectPolicyRoot,
+    configHome: input.configHome,
+    claudeConfigDir: childEnv.CLAUDE_CONFIG_DIR,
+  };
   const launchOpts = {
-    cwd: input.projectPolicyRoot,
+    ...rootsBinding,
     settingSources: input.launchSpec.settingSources,
     managedSettings: input.launchSpec.managedSettings,
+    serverManagedSettings: null,
     childEnvKeys: Object.keys(childEnv).sort(),
   };
 
-  let resolved;
+  let filtered: Record<string, unknown>;
+  let sourceList: Array<{ source: string; settings: Record<string, unknown>; path?: string }>;
   try {
-    resolved = await resolveSettings({
-      cwd: input.projectPolicyRoot,
-      settingSources: input.launchSpec.settingSources,
-      managedSettings:
-        input.launchSpec.managedSettings as import('@anthropic-ai/claude-agent-sdk').Settings,
+    const resolved = await resolveSettingsInIsolatedChildEnv({
+      cwd: input.launchCwd,
+      projectConfigRoot: input.projectPolicyRoot,
+      childEnv,
+      launchSpec: input.launchSpec,
     });
+    filtered = resolved.filtered;
+    sourceList = resolved.sources;
   } catch (error) {
     return {
       ok: false,
@@ -89,20 +117,18 @@ export async function resolveClaudeCodePolicyIsolated(
     };
   }
 
-  const filtered = filterEscalatingDefaultMode(resolved) as Record<string, unknown>;
   const projection = projectSecurityProjection(filtered);
-  const sourceHashes = hashSources(
-    resolved.sources.map((s) => ({
-      source: String(s.source),
-      settings: s.settings as Record<string, unknown>,
-      ...(s.path ? { path: s.path } : {}),
-    })),
-  );
+  const sourceHashes = hashSources(sourceList);
 
   const connectors = filtered.disableClaudeAiConnectors;
   const strictMcp = filtered.strictMcpConfig;
   const sandbox = (filtered.sandbox as { enabled?: boolean } | undefined)?.enabled;
-  if (connectors !== true || strictMcp !== true || sandbox !== true) {
+  const strictMcpRequired = input.launchSpec.managedSettings.strictMcpConfig === true;
+  if (
+    connectors !== true ||
+    sandbox !== true ||
+    (strictMcpRequired && strictMcp === false)
+  ) {
     return {
       ok: false,
       digest: sha256(stableJson({ launchOpts, projection, sourceHashes })),
@@ -126,7 +152,8 @@ export async function resolveClaudeCodePolicyIsolated(
       projection,
       sourceHashes,
       launchOpts,
-      sdkIdentity: 'resolveSettings+filterEscalatingDefaultMode',
+      rootsBinding,
+      sdkIdentity: 'isolatedChildEnvResolveSettings+configHomeAudit',
     }),
   );
 

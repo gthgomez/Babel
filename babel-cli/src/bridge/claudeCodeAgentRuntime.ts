@@ -1,7 +1,7 @@
 import type { SessionDescriptor } from '../executor/contracts.js';
 import type { ChatEvent } from '../agent/chatEngineContracts.js';
 import type { SessionUsageSummary } from '../services/costTracker.js';
-import type { ClaudeCodeAdmittedSession } from './claudeCodeAdmission.js';
+import { claudeAdmittedWithNativeSession, type ClaudeCodeAdmittedSession } from './claudeCodeAdmission.js';
 import { buildClaudeCodeChildEnv } from './claudeCodeChildEnv.js';
 import { resolveClaudeCodeHarnessCredentialEnv } from './claudeCodeCredentialResolver.js';
 import { buildClaudeCodeLaunchPolicySpec } from './claudeCodePolicyEvidence.js';
@@ -285,11 +285,9 @@ export class ClaudeCodeAgentRuntimeRegistry {
           };
           if (result.session_id) {
             session.nativeSessionId = result.session_id;
-            session.admitted = {
-              ...session.admitted,
-              harness_native_session_id: result.session_id,
-            };
-            this.admittedByThread.set(session.threadId, session.admitted);
+            const admitted = claudeAdmittedWithNativeSession(session.admitted, result.session_id);
+            session.admitted = admitted;
+            this.admittedByThread.set(session.threadId, admitted);
           }
 
           let turnCost: number | undefined;

@@ -5,6 +5,7 @@ import {
 } from './harnessAdapterContract.js';
 import type { ClaudeSdkIntegrityProbe } from './claudeCodeIntegrity.js';
 import { probeClaudeSdkIntegrity } from './claudeCodeIntegrity.js';
+import { CLAUDE_HOST_BROKERED_TOOLS } from './claudeCodePermissionBridge.js';
 
 export const CLAUDE_CODE_ATTACH_LIVE_UNSUPPORTED_REASON = COMMAND_CODE_ATTACH_LIVE_UNSUPPORTED_REASON;
 
@@ -54,7 +55,7 @@ export function buildClaudeCodeAdapterDescriptor(probe: ClaudeSdkIntegrityProbe)
       usage: enabled,
     },
     unsupportedReason: enabled
-      ? `${CLAUDE_CODE_ATTACH_LIVE_UNSUPPORTED_REASON} Auto-approved read-only vendor tools may bypass remote broker.`
+      ? `${CLAUDE_CODE_ATTACH_LIVE_UNSUPPORTED_REASON} Host brokers ${CLAUDE_HOST_BROKERED_TOOLS.join(', ')} at canUseTool; unmapped tool names are denied by the bridge.`
       : probe.state === 'missing'
         ? 'Claude Agent SDK pin is not installed on this host.'
         : probe.detail ?? 'Claude Agent SDK installation could not be verified locally.',

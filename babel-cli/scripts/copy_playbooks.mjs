@@ -55,3 +55,18 @@ if (!existsSync(claudePinSource)) {
 mkdirSync(dirname(claudePinDestination), { recursive: true });
 cpSync(claudePinSource, claudePinDestination);
 console.log(`copy_playbooks: copied Claude Agent SDK pin → ${claudePinDestination}`);
+
+const claudeWorkerSource = resolve(packageRoot, 'src', 'bridge', 'claudeCodeIsolatedResolveWorker.mjs');
+const claudeWorkerDestination = resolve(
+  packageRoot,
+  'dist',
+  'bridge',
+  'claudeCodeIsolatedResolveWorker.mjs',
+);
+if (!existsSync(claudeWorkerSource)) {
+  console.error(`copy_playbooks: Claude isolated resolve worker missing: ${claudeWorkerSource}`);
+  process.exit(1);
+}
+mkdirSync(dirname(claudeWorkerDestination), { recursive: true });
+cpSync(claudeWorkerSource, claudeWorkerDestination);
+console.log(`copy_playbooks: copied Claude isolated resolve worker → ${claudeWorkerDestination}`);

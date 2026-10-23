@@ -77,6 +77,7 @@ export async function resolveClaudeCodePolicyEvidence(input: {
   const resolveFn = input.resolveSettings ?? defaultClaudeResolveSettings;
   try {
     const resolved = await resolveFn({
+      launchCwd: input.cwd,
       projectPolicyRoot: input.project_policy_root,
       configHome: input.config_root,
       launchSpec: spec,

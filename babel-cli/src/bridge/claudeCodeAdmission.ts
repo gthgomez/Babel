@@ -92,6 +92,27 @@ function isProviderProfile(value: string): value is ClaudeHarnessProviderProfile
   return (CLAUDE_HARNESS_PROVIDER_PROFILES as readonly string[]).includes(value);
 }
 
+/** Recompute admission digest when the vendor native session id is learned after first turn. */
+export function claudeAdmittedWithNativeSession(
+  admitted: ClaudeCodeAdmittedSession,
+  nativeSessionId: string,
+): ClaudeCodeAdmittedSession {
+  const trimmed = nativeSessionId.trim();
+  if (!trimmed) return admitted;
+  if (admitted.harness_native_session_id === trimmed) {
+    const check = computeAdmissionDigest({
+      ...admitted,
+      harness_native_session_id: trimmed,
+    });
+    if (check === admitted.admission_digest) return admitted;
+  }
+  const base: Omit<ClaudeCodeAdmittedSession, 'admission_digest'> = {
+    ...admitted,
+    harness_native_session_id: trimmed,
+  };
+  return { ...base, admission_digest: computeAdmissionDigest(base) };
+}
+
 export function computeAdmissionDigest(admitted: Omit<ClaudeCodeAdmittedSession, 'admission_digest'>): string {
   return stableDigest({
     harness_adapter_id: admitted.harness_adapter_id,

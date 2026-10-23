@@ -729,6 +729,8 @@ const HOST_PROCESS_SURFACE = new Set([
   'bridge/openCodeCliDiscovery.ts',
   // Claude Code SDK pin probe: fixed --version argv on bundled CLI; reviewer-scoped env; 4s timeout.
   'bridge/claudeCodeIntegrity.ts',
+  // Claude isolated policy proof: child env full-replace + fixed worker argv; bounded timeout.
+  'bridge/claudeCodeIsolatedResolveSubprocess.ts',
   'bridge/workspaceChanges.ts',
   'eval/canary/liveCell.ts',
   'eval/cleanRoomGrade.ts',

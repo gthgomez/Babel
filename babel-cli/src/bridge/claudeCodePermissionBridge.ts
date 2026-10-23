@@ -4,6 +4,16 @@ import type { AgentAction } from '../agent/actions.js';
 import type { RemoteApprovalBroker } from './remoteApproval.js';
 import type { ClaudeCanUseToolDecision, ClaudeCanUseToolRequest } from './claudeCodeSdkPort.js';
 
+/** Tools routed through the remote approval broker; all other SDK tools fail closed here. */
+export const CLAUDE_HOST_BROKERED_TOOLS = [
+  'Read',
+  'Glob',
+  'Grep',
+  'Bash',
+  'Write',
+  'Edit',
+] as const;
+
 function sha256Utf8(text: string): string {
   return createHash('sha256').update(text, 'utf8').digest('hex');
 }
