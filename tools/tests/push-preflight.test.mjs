@@ -45,7 +45,9 @@ test('all candidate manifests fail early, before scanning, using committed rathe
     const objects = []
     await readCommittedBlobs(root, [oid, oid], (_oid, bytes) => objects.push(bytes))
     assert.equal(objects.length, 1)
-    assert.deepEqual(objects[0], readFileSync(fileURLToPath(new URL('../../AGENTS.md', import.meta.url))))
+    const expected = spawnSync('git', ['-C', root, 'cat-file', 'blob', oid], { windowsHide: true })
+    assert.equal(expected.status, 0)
+    assert.equal(objects[0].equals(expected.stdout), true, 'batch reader must preserve exact committed bytes despite checkout line-ending filters')
   } finally { rmSync(root, { recursive: true, force: true }) }
 })
 
