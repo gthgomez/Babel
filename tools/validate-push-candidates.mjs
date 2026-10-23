@@ -17,21 +17,29 @@ function git(root, args, input) {
   return r.stdout.trim()
 }
 
+/** Git pre-push stdin: local_ref local_sha remote_ref remote_sha (exact SHAs only). */
+export function parsePrePushRecordLine(line) {
+  const fields = line.trim().split(/\s+/)
+  if (fields.length !== 4 || !fields[0].startsWith('refs/') || !fields[2].startsWith('refs/')) {
+    throw new Error('malformed push record')
+  }
+  const [localRef, localSha, remoteRef, remoteSha] = fields
+  if (!/^[a-f0-9]{40}$/.test(localSha) || !/^[a-f0-9]{40}$/.test(remoteSha)) {
+    throw new Error('malformed push sha')
+  }
+  return { localRef, localSha, remoteRef, remoteSha, isDelete: /^0+$/.test(localSha) }
+}
+
 /** Resolve pre-push ref/SHA records to committed objects, without using HEAD or the index. */
 export function collectPushCandidates(records, root, remote, { publishedTips = [] } = {}) {
   if (!/^[A-Za-z0-9._-]+$/.test(remote)) throw new Error('unsupported remote name')
   const commits = new Set()
   for (const line of records.split(/\r?\n/).filter(Boolean)) {
-    const fields = line.trim().split(/\s+/)
-    // Git can report a revision expression (for example HEAD~1), and uses
-    // (delete) for local deletions. Names are metadata; only exact SHAs execute.
-    if (fields.length !== 4 || !fields[2].startsWith('refs/') ||
-      ![fields[1], fields[3]].every(s => /^[a-f0-9]{40}$/.test(s))) throw new Error('malformed push record')
-    const [, local, , previous] = fields
-    if (/^0+$/.test(local)) continue
-    const tip = git(root, ['rev-parse', '--verify', `${local}^{commit}`])
+    const { localSha, remoteSha, isDelete } = parsePrePushRecordLine(line)
+    if (isDelete) continue
+    const tip = git(root, ['rev-parse', '--verify', `${localSha}^{commit}`])
     const excluded = []
-    if (!/^0+$/.test(previous)) excluded.push(git(root, ['rev-parse', '--verify', `${previous}^{commit}`]))
+    if (!/^0+$/.test(remoteSha)) excluded.push(git(root, ['rev-parse', '--verify', `${remoteSha}^{commit}`]))
     if (publishedTips.some(sha => !/^[a-f0-9]{40}$/.test(sha))) throw new Error('invalid publication frontier')
     excluded.push(...publishedTips)
     // Validate even an already-reachable tip being sent to a different ref.

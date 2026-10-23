@@ -54,13 +54,15 @@ Before committing policy paths, run (or rely on an installed pre-commit hook):
 node tools/validate-push-candidates.mjs --staged-manifest
 ```
 
-Before push, run cheap changed-surface checks on the current index/branch:
+Before push, run the read-only helper (hook ownership label + optional staged
+cheap checks + ls-remote frontier for the **current branch**):
 
 ```bash
-node tools/verify-changed-publication-surface.mjs
+node tools/verify-changed-publication-surface.mjs --candidate "$(git rev-parse HEAD)"
 ```
 
-Full push validation (manifest per candidate, gitleaks, public-content) remains:
+Full push validation (manifest per candidate, gitleaks, public-content) remains the
+real execution stage:
 
 ```bash
 node tools/validate-push-candidates.mjs origin < push-records.txt
@@ -69,8 +71,10 @@ node tools/validate-push-candidates.mjs origin < push-records.txt
 **Hook activation:** Babel hooks live in `.githooks/` (pre-commit runs
 `--staged-manifest` then leak scans). They run only when
 `core.hooksPath` points at `.githooks` (`pwsh tools/install-hooks.ps1`).
-Other hosts (including some agent workspaces) may override `core.hooksPath`;
-that is an activation gap, not missing manifest logic in the repository.
+Do **not** replace or chain-swap a host-managed hook dispatcher; code changes
+do not activate hooks. When `core.hooksPath` is host-managed, run the explicit
+CLI validators above. The helper reports only `repo:.githooks`, `host-managed`,
+or `unset` — never host-specific absolute paths in public output.
 
 ## Pre-push hook
 

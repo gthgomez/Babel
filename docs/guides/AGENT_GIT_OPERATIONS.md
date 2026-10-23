@@ -30,7 +30,7 @@ Copy the [batch handoff template](./AGENT_BATCH_HANDOFF.md) table into your priv
 
 **Maintainer supplemental scrub:** validate JSON with `tools/check-public-scrub.ps1 -RequireSupplementalPolicy`. Optional readable-path preflight only: `-CheckSupplementalScrubPolicyPath` on `scripts/agent-preflight.ps1` (default preflight unchanged; path check does not replace scrub validation).
 
-**Execution vs planning:** `agent-preflight.ps1` is planning/readiness only. Before commit/push, run `node tools/verify-changed-publication-surface.mjs` (staged manifest + committed `AGENTS.md` interactive budget + remote tip diagnostic) and, before publication, `node tools/validate-push-candidates.mjs` as documented in [REVIEW_MARKERS.md](./REVIEW_MARKERS.md). Install `.githooks` locally when hooks are not already active.
+**Execution vs planning:** `agent-preflight.ps1` is planning/readiness only. Cheap execution reuses `validate-push-candidates.mjs` (`--staged-manifest`, push preflight); the helper `verify-changed-publication-surface.mjs` only reports hook ownership (`repo:.githooks` / `host-managed` / `unset`) and calls those stages. Full publication scans stay in [REVIEW_MARKERS.md](./REVIEW_MARKERS.md). Do not swap host hook dispatchers; install `.githooks` only when authorized.
 
 | Symptom | Where to look |
 | --- | --- |

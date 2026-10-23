@@ -5,15 +5,29 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { diagnoseBranchPublicationFrontier, parsePushRecordLine } from '../verify-changed-publication-surface.mjs'
+import { describeHookOwnership, diagnoseBranchPublicationFrontier } from '../verify-changed-publication-surface.mjs'
+import { parsePrePushRecordLine } from '../validate-push-candidates.mjs'
 
-test('parsePushRecordLine reads advertised new and old SHAs', () => {
+test('parsePrePushRecordLine matches git pre-push stdin field order', () => {
   const local = 'a'.repeat(40)
   const prev = 'b'.repeat(40)
-  const parsed = parsePushRecordLine(`${local} ${local} refs/heads/x ${prev}`)
+  const parsed = parsePrePushRecordLine(`refs/heads/x ${local} refs/heads/x ${prev}`)
   assert.equal(parsed.localSha, local)
-  assert.equal(parsed.previousSha, prev)
-  assert.equal(parsed.ref, 'refs/heads/x')
+  assert.equal(parsed.remoteSha, prev)
+  assert.equal(parsed.localRef, 'refs/heads/x')
+})
+
+test('describeHookOwnership never labels repo .githooks as host-managed', () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-hook-ownership-'))
+  try {
+    spawnSync('git', ['-C', root, 'init', '-q'], { windowsHide: true })
+    spawnSync('git', ['-C', root, 'config', 'core.hooksPath', '.githooks'], { windowsHide: true })
+    const report = describeHookOwnership(root)
+    assert.equal(report.hooksPath, 'repo:.githooks')
+    assert.equal(report.babelHooksActive, true)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
 })
 
 test('diagnoseBranchPublicationFrontier reports local_ahead vs aligned tips', () => {
