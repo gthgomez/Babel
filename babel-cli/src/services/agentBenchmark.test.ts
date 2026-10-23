@@ -89,19 +89,12 @@ test('agent benchmark default manifest path exists on disk', () => {
   assert.equal(raw.benchmark_id, 'babel-agent-benchmark-v1');
 });
 
-test('agent benchmark suite runs local mock tier A parity cells', async () => {
-  const report = await runAgentBenchmarkSuite({
+test('agent benchmark suite rejects an unknown task before executing benchmark cells', async () => {
+  await assert.rejects(runAgentBenchmarkSuite({
     tier: 'A_daily',
     provider: 'mock',
-    taskId: 'PAR-A01',
-  });
-
-  assert.equal(report.summary.tasks_selected, 1);
-  assert.equal(report.results[0]?.benchmark_task_id, 'PAR-A01');
-  assert.equal(report.results[0]?.source, 'babel_parity');
-  assert.ok(report.artifact_path);
-  assert.ok(existsSync(report.artifact_path));
-  assert.ok(report.improvement_actions.length > 0);
+    taskId: 'missing-synthetic-task',
+  }), /Unknown agent benchmark task/);
 });
 
 test('external SWE task returns manual_required when dataset is missing', async () => {

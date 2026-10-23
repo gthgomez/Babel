@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 
 test('push records select initial, non-HEAD, tag and multiple refs without mutating dirty files', async () => {
-  const { collectPushCandidates } = await import('../validate-push-candidates.mjs')
+  const { collectPushCandidates, readPublishedTips } = await import('../validate-push-candidates.mjs')
   const root = mkdtempSync(join(tmpdir(), 'babel-push-'))
   const zero = '0'.repeat(40)
   function git(...args) {
@@ -31,6 +31,14 @@ test('push records select initial, non-HEAD, tag and multiple refs without mutat
     assert.throws(() => collectPushCandidates(`refs/heads/main ${two} refs/heads/main ${'f'.repeat(40)}`, root, 'origin'), /object unavailable/)
     assert.throws(() => collectPushCandidates('malformed', root, 'origin'), /record/)
     assert.equal(git('diff', '--binary', 'HEAD'), before)
+    const pullOnly = git('commit-tree', `${two}^{tree}`, '-p', two, '-m', 'pull-only fixture')
+    git('update-ref', 'refs/pull/42/head', pullOnly)
+    git('remote', 'add', 'destination', root)
+    assert.match(git('ls-remote', '--refs', 'destination'), /refs\/pull\/42\/head/)
+    const published = readPublishedTips(root, 'destination')
+    assert.ok(published.includes(two))
+    assert.ok(published.includes(tag))
+    assert.ok(!published.includes(pullOnly), 'pull-only history is not an accepted publication frontier')
   } finally { rmSync(root, { recursive: true, force: true }) }
 })
 
@@ -54,7 +62,7 @@ test('candidate credential path guard rejects case variants before archive expor
     return { root: candidateRoot, sha: git('rev-parse', 'HEAD') }
   }
   try {
-    for (const path of ['.ENV', '.env.LOCAL', '.CODEX/AUTH.JSON']) {
+    for (const path of ['.ENV', '.env.LOCAL', '.CODEX/AUTH.JSON', '.SSH/id_rsa', '.aws/credentials', 'secrets/store.json', 'signing.KEY']) {
       const { root: candidateRoot, sha } = candidate(path)
       assert.throws(() => assertExportableCandidate(candidateRoot, sha), /credential-class.*before export/, path)
     }

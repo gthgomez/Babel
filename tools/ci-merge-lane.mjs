@@ -5,7 +5,7 @@
 // On pull requests the candidate classifier is unioned with the merge-base copy
 // of this module so a PR cannot weaken lane requirements by editing this file.
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
@@ -94,16 +94,26 @@ export function changedFilesForLane({ event, baseSha }) {
   return out.split("\n").map((line) => line.trim()).filter(Boolean);
 }
 
-async function classifyFromBaseSha(baseSha, input) {
-  const src = execFileSync("git", ["show", `${baseSha}:tools/ci-merge-lane.mjs`], { encoding: "utf8" });
+export async function classifyFromBaseSha(baseSha, input, root = process.cwd()) {
+  if (!/^[0-9a-f]{40}$/i.test(baseSha || "")) throw new Error("Exact base commit required");
+  const read = (path) => execFileSync("git", ["show", `${baseSha}:${path}`], { cwd: root, encoding: "utf8", windowsHide: true });
+  const src = read("tools/ci-merge-lane.mjs");
+  const policy = read("config/review-risk-policy.json");
   const dir = mkdtempSync(join(tmpdir(), "babel-base-lane-"));
-  const modulePath = join(dir, "ci-merge-lane.mjs");
-  writeFileSync(modulePath, src);
-  const mod = await import(pathToFileURL(modulePath).href);
-  if (typeof mod.classifyMergeLane !== "function") {
-    throw new Error("Base merge-lane module is missing classifyMergeLane");
+  try {
+    mkdirSync(join(dir, "tools"));
+    mkdirSync(join(dir, "config"));
+    const modulePath = join(dir, "tools", "ci-merge-lane.mjs");
+    writeFileSync(modulePath, src);
+    writeFileSync(join(dir, "config", "review-risk-policy.json"), policy);
+    const mod = await import(pathToFileURL(modulePath).href);
+    if (typeof mod.classifyMergeLane !== "function") {
+      throw new Error("Base merge-lane module is missing classifyMergeLane");
+    }
+    return mod.classifyMergeLane(input);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
-  return mod.classifyMergeLane(input);
 }
 
 async function main() {
@@ -121,10 +131,9 @@ async function main() {
       if (lane.full !== headLane.full || lane.installer !== headLane.installer) {
         process.stderr.write(`merge lane base binding raised head=${JSON.stringify(headLane)} base=${JSON.stringify(baseLane)}\n`);
       }
-    } catch (error) {
-      if (error?.status !== 128 && !String(error?.message || "").includes("exists on disk")) {
-        throw error;
-      }
+    } catch {
+      lane = { full: true, installer: true };
+      process.stderr.write("Trusted base classification unavailable; requiring full qualification\n");
     }
   }
   const lines = [`full=${lane.full}`, `installer=${lane.installer}`];

@@ -31,7 +31,9 @@ Readiness diagnostic:
 
 The command emits JSON with the repository, branch, local and base SHAs, Git and GitHub CLI paths, authentication result, credential-provider result, worktree state, and named readiness checks. It exits nonzero when a required check is blocked. Use `-AllowDirtyWorktree` only for inspection when an existing dirty tree is intentional; that mode does not make the tree mutation- or push-ready.
 
-This diagnostic includes a fetch and GitHub reads. AGENTS.md determines when its
+This diagnostic performs read-only Git and GitHub queries. If local remote refs
+are stale it reports `remote_base_stale_fetch_required`; fetch once in a separate
+Git operation and retry the affected diagnostic. AGENTS.md determines when its
 evidence needs refreshing; invoking another wrapper or staging unchanged inputs
 does not itself require repeating it. Its readiness verdict describes delivery
 state, not authority to continue local engineering.
@@ -111,19 +113,20 @@ checked before polling, during polling and again before the verdict.
 workflow-not-observed and source-unavailable states. A waiting workflow does
 not by itself establish a pending approval. API denial, rate limiting,
 malformed responses or incomplete pagination remain unavailable evidence.
-Check and workflow lists are paginated; workflow metadata is cached only
-within one snapshot. Waiting and final evaluation use the same authoritative
+Check and workflow lists are paginated; mutable workflow state and latest
+attempts are read live. Validated immutable job/attempt bindings can be reused
+within one invocation. Waiting and final evaluation use the same authoritative
 producer resolver. Foreign checks and older pending attempts cannot delay a
 newer authoritative success; newer authoritative pending work cannot be
 hidden by an older success.
 
-The diagnostic wait has a 120-second wall-clock budget, with each API request
-bounded by the remaining budget and a 15-second maximum. It exits promptly for
-terminal failures, missing workflows, waiting workflows and superseded
-candidates. A later successful peer run can leave this advisory audit stale;
-it does not change GitHub's required check conclusions. Ordinary comments no
-longer trigger cancellation or reruns. Completion-driven reconciliation is
-deferred by the owner; the bounded diagnostic audit remains the selected path.
+The default diagnostic takes one snapshot without sleeping. Set
+`-CheckWaitSeconds <0..1800>` for an explicit wait; polling backs off to at most
+one minute, and API requests remain bounded. Review threads, risk, approvals and
+remote identity are checked before waiting. Terminal failures, missing workflows
+and superseded candidates return early. The existing `workflow_run` listener
+reconciles completed product checks. Final evaluation still reads current
+identity and authoritative results; a successful request is not a passing check.
 
 For missing Release Gate checks, first inspect the current PR head, subscribed
 workflow state, run queue and approval state. Preserve the existing recovery
@@ -182,6 +185,31 @@ rebalancing and further suite deduplication require repeated comparable
 timings and coverage/loader equivalence before adoption.
 
 ## Troubleshooting hangs
+
+Read hook configuration and implementation once per unchanged revision. An owned
+long-running check should retain its process/session handle, complete logs,
+producer exit status and stage progress. Continue independent affordable work;
+resume that operation instead of restarting it. Diagnose the failed stage before
+retrying, and rerun checks whose inputs the repair actually invalidates.
+
+Use `npm --prefix babel-cli run check:dependencies` to detect installed version
+drift without reinstalling. Use `qualify:build` for one emitting source typecheck
+plus the scripts typecheck; the ordinary `typecheck` command remains useful while
+editing. `test:audit-integration` owns the real catalog and parity benchmark
+execution separately from focused unit fixtures. CI runs it in the shorter
+package-components job after a fresh CLI build, alongside platform qualification.
+Required TAP runners stream
+progress and retain stdout, stderr, selection and execution records.
+
+Unit shards use content-bound OS duration hints in
+`babel-cli/config/ci-unit-durations.json`. Refresh those hints with
+`node babel-cli/scripts/update_ci_unit_durations.mjs <execution.json> [...]`
+from completed unit artifacts. Hints change scheduling only; unknown, changed or
+invalid entries fall back to deterministic weights and cannot omit a file.
+Dedicated suites with different setup remain distinct qualification inputs;
+filename overlap alone is insufficient evidence for removing them.
+The portable workflow file is owned by the canonical unit inventory; `npm test`
+does not invoke it a second time. Its focused script remains available.
 
 If `gh auth status` succeeds but `git push` hangs, Git may be invoking an inherited credential helper such as Git Credential Manager before the GitHub CLI helper. Inspect the repo-local helper state; any configuration change follows AGENTS.md authorization. Keep the global helper intact for other repositories. With noninteractive defaults enabled, an unresolved credential or editor problem should fail with a command result rather than waiting for input.
 

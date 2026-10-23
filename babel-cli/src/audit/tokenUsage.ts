@@ -131,6 +131,13 @@ export interface RunTokenUsageAuditOptions {
   generatedAt?: string;
 }
 
+export interface TokenUsageAuditDependencies {
+  loadCatalog: typeof parseCatalog;
+  loadSupplements: typeof parseCatalogSupplements;
+  measureEntry: typeof countEntryTokens;
+  analyze: typeof analyzeScenario;
+}
+
 function unique<T>(values: T[]): T[] {
   return Array.from(new Set(values));
 }
@@ -579,9 +586,12 @@ function createMarkdownReport(result: TokenUsageAuditResult): string {
   return `${lines.join('\n')}\n`;
 }
 
-export function runTokenUsageAudit(options: RunTokenUsageAuditOptions = {}): TokenUsageAuditResult {
-  const catalogEntries = parseCatalog(CATALOG_PATH);
-  const supplements = parseCatalogSupplements(CATALOG_PATH);
+export function runTokenUsageAudit(
+  options: RunTokenUsageAuditOptions = {},
+  dependencies: Partial<TokenUsageAuditDependencies> = {},
+): TokenUsageAuditResult {
+  const catalogEntries = (dependencies.loadCatalog ?? parseCatalog)(CATALOG_PATH);
+  const supplements = (dependencies.loadSupplements ?? parseCatalogSupplements)(CATALOG_PATH);
   const activeSkills = catalogEntries.filter(
     (entry) => entry.layer === 'skill' && entry.status === 'active',
   );
@@ -592,7 +602,7 @@ export function runTokenUsageAudit(options: RunTokenUsageAuditOptions = {}): Tok
 
   const entryMeasurements = catalogEntries
     .filter((entry) => entry.status === 'active' && entry.path)
-    .map((entry) => countEntryTokens(entry, BABEL_ROOT))
+    .map((entry) => (dependencies.measureEntry ?? countEntryTokens)(entry, BABEL_ROOT))
     .sort((left, right) =>
       compareNumbersDescending(left.actualCompiledTokens, right.actualCompiledTokens),
     );
@@ -623,7 +633,7 @@ export function runTokenUsageAudit(options: RunTokenUsageAuditOptions = {}): Tok
   const scenarioFailures: ScenarioFailure[] = [];
   for (const scenario of scenarios) {
     try {
-      scenarioResults.push(analyzeScenario(scenario));
+      scenarioResults.push((dependencies.analyze ?? analyzeScenario)(scenario));
     } catch (error: unknown) {
       scenarioFailures.push({
         scenarioId: scenario.id,

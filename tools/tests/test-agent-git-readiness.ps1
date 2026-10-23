@@ -136,7 +136,7 @@ try {
     'exit 1') | Set-Content -LiteralPath $fakeGh -Encoding utf8
 
   $preflightScript = Join-Path $repoRoot 'scripts\agent-preflight.ps1'
-  $preflightRun = Invoke-TestScript -Script $preflightScript -Arguments @(
+  $preflightArguments = @(
     '-RepoRoot', $fixture,
     '-GitPath', $git,
     '-GhPath', $fakeGh,
@@ -144,6 +144,22 @@ try {
     '-ExpectedHeadSha', $headSha,
     '-ExpectedBaseSha', $mainSha
   )
+  $missingBaseRun = Invoke-TestScript -Script $preflightScript -Arguments $preflightArguments
+  $missingBase = $missingBaseRun.text | ConvertFrom-Json
+  Assert-AgentTest ($missingBaseRun.exitCode -ne 0 -and $missingBase.blockers -contains 'remote_base_stale_fetch_required') 'missing base must request a separate fetch'
+  $trackingRefs = Invoke-TestGit -WorkingDirectory $fixture -Arguments @('for-each-ref', '--format=%(objectname)', 'refs/remotes/origin/main')
+  Assert-AgentTest ([string]::IsNullOrWhiteSpace($trackingRefs)) 'preflight must not fetch or create tracking refs'
+  # Explicit fixture mutation prepares the evidence that the read-only helper
+  # previously fetched for itself. Production callers make this a separate step.
+  Invoke-TestGit -WorkingDirectory $fixture -Arguments @('fetch', '--no-tags', 'origin', '+refs/heads/main:refs/remotes/origin/main') | Out-Null
+  Invoke-TestGit -WorkingDirectory $fixture -Arguments @('update-ref', 'refs/remotes/origin/main', $headSha) | Out-Null
+  $staleBaseRun = Invoke-TestScript -Script $preflightScript -Arguments $preflightArguments
+  $staleBase = $staleBaseRun.text | ConvertFrom-Json
+  Assert-AgentTest ($staleBaseRun.exitCode -ne 0 -and $staleBase.blockers -contains 'remote_base_stale_fetch_required') 'stale base must request a separate fetch'
+  $unchangedTracking = Invoke-TestGit -WorkingDirectory $fixture -Arguments @('rev-parse', 'refs/remotes/origin/main')
+  Assert-AgentTest ($unchangedTracking -eq $headSha) 'preflight must leave stale refs unchanged'
+  Invoke-TestGit -WorkingDirectory $fixture -Arguments @('update-ref', 'refs/remotes/origin/main', $mainSha) | Out-Null
+  $preflightRun = Invoke-TestScript -Script $preflightScript -Arguments $preflightArguments
   Assert-AgentTest ($preflightRun.exitCode -eq 0) "preflight should pass: $($preflightRun.text)"
   $preflight = $preflightRun.text | ConvertFrom-Json
   Assert-AgentTest ([bool]$preflight.ok) 'preflight result should be ok'
@@ -319,7 +335,8 @@ try {
       $baseResult = $baseRun.text | ConvertFrom-Json
       Assert-AgentTest ($baseRun.exitCode -eq 1 -and -not $baseResult.mergeReady) 'malformed base evidence remains blocking'
       Assert-AgentTest (@($baseResult.blockers) -notcontains 'pr_gate_exception') 'malformed base schema must produce a source-unavailable diagnosis'
-      Assert-AgentTest ($baseResult.ciEvidence.wait.reason -eq 'base_source_unavailable') 'malformed base must retain its unavailable source state'
+      Assert-AgentTest (@($baseResult.blockers) -contains 'base_source_unavailable') 'malformed base must retain its unavailable source diagnosis'
+      Assert-AgentTest ($baseResult.ciEvidence.wait.reason -eq 'snapshot_only') 'default gate must report no wait even when base evidence is malformed'
     } finally { $fakeGhHealthy | Set-Content -LiteralPath $fakeGh -Encoding utf8 }
   }
   try {

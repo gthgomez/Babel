@@ -5,6 +5,7 @@
     "rootDir": ".."
   },
   "include": [
+    "integration/*.test.ts",
     "scripts/analyze_chat_calibration.ts",
     "scripts/build_historical_calibration.ts",
     "scripts/run_chat_calibration.ts",

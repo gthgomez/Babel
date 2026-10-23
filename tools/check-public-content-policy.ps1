@@ -6,7 +6,8 @@ param(
   [string]$OutputFormat = 'human',
   [switch]$WarningsAsErrors,
   [string]$SourceRepository = '',
-  [string]$SourceCommit = ''
+  [string]$SourceCommit = '',
+  [hashtable]$FileCache = $null
 )
 
 Set-StrictMode -Version Latest
@@ -117,7 +118,7 @@ function Test-IsExcluded {
 
 function Get-TrackedActiveFiles {
   foreach ($record in @($inventory.records)) {
-    [pscustomobject]@{ Relative = $record.path; Full = $record.full_path; Extension = $record.extension; Lines = $record.lines }
+    [pscustomobject]@{ Relative = $record.path; Full = $record.full_path; Extension = $record.extension; Lines = $record.lines; ContentHash = $record.content_sha256 }
   }
 }
 
@@ -228,19 +229,44 @@ foreach ($entry in @($policy.fixture_exceptions)) {
 }
 
 $titles = @{}
+$cacheIdentity = if ($null -ne $FileCache) {
+  # The worker owns this in-memory cache. Never load candidate-writable PASS files.
+  @((Get-FileSha256 $PolicyPath), (Get-FileSha256 $PSCommandPath), (Get-FileSha256 $commonModule), [datetime]::UtcNow.ToString('yyyy-MM-dd'), [string][bool]$WarningsAsErrors) -join ':'
+} else { '' }
+$compiledRules = @($policy.rules | ForEach-Object {
+  [pscustomobject]@{ rule = $_; regex = [regex]::new([string]$_.pattern, ([Text.RegularExpressions.RegexOptions]::IgnoreCase -bor [Text.RegularExpressions.RegexOptions]::Compiled)) }
+})
+function Add-FileFinding {
+  param([string]$Id, [string]$Category, [string]$Path, [int]$Line, [string]$Severity = 'error')
+  $entry = @{ Id = $Id; Category = $Category; Path = $Path; Line = $Line; Severity = $Severity }
+  $fileFindings.Add($entry)
+  Add-Finding @entry
+}
 foreach ($file in @(Get-TrackedActiveFiles)) {
   $lines = @($file.Lines)
   $isHistorical = Test-IsExcluded $file.Relative
   $hasTitle = $false
+  $cacheKey = $cacheIdentity + ':' + $file.Relative + ':' + $file.ContentHash
+  $cached = if ($null -ne $FileCache) { $FileCache[$cacheKey] } else { $null }
+  $fileFindings = [Collections.Generic.List[object]]::new()
+  $fileDiagnostics = @{}
+  if ($null -ne $cached) {
+    foreach ($finding in $cached.findings) { Add-Finding @finding }
+    foreach ($key in $cached.diagnostics.Keys) { $pc007Diagnostics[$key] = $cached.diagnostics[$key] }
+  }
+  $fixtureExceptionsForFile = @($validFixtureExceptions | Where-Object { $file.Relative -like [string]$_.path })
   for ($index = 0; $index -lt $lines.Count; $index++) {
     $line = [string]$lines[$index]
     $lineNumber = $index + 1
-    foreach ($rule in @($policy.rules)) {
+    if ($null -eq $cached) {
+    foreach ($compiled in $compiledRules) {
+      $rule = $compiled.rule
+      if ($isHistorical -or -not $compiled.regex.IsMatch($line)) { continue }
       $severity = if ($rule.PSObject.Properties.Name -contains 'severity' -and [string]$rule.severity -eq 'warning') { 'warning' } else { 'error' }
       $excepted = (Test-IsTemporarilyExcepted -RuleId ([string]$rule.id) -Path $file.Relative -Line $line) -or
-        (Test-PolicyException -Exceptions @($validFixtureExceptions) -RuleId ([string]$rule.id) -Path $file.Relative -Line $line)
-      if (-not $isHistorical -and $line -match [string]$rule.pattern -and -not $excepted) {
-        Add-Finding -Id ([string]$rule.id) -Category ([string]$rule.category) -Path $file.Relative -Line $lineNumber -Severity $severity
+        (Test-PolicyException -Exceptions $fixtureExceptionsForFile -RuleId ([string]$rule.id) -Path $file.Relative -Line $line)
+      if (-not $excepted) {
+        Add-FileFinding -Id ([string]$rule.id) -Category ([string]$rule.category) -Path $file.Relative -Line $lineNumber -Severity $severity
       }
     }
 
@@ -252,8 +278,10 @@ foreach ($file in @(Get-TrackedActiveFiles)) {
           classification = if (@($unallowedSpans | Where-Object classification -eq 'clear_unsupported_claim').Count -gt 0) { 'clear_unsupported_claim' } else { 'ambiguous_certainty_claim' }
           matched = @($unallowedSpans | ForEach-Object { $_.text })
         }
-        Add-Finding -Id ([string]$policy.absolute_claim.id) -Category ([string]$policy.absolute_claim.category) -Path $file.Relative -Line $lineNumber
+        $fileDiagnostics["{0}:{1}" -f $file.Relative, $lineNumber] = $pc007Diagnostics["{0}:{1}" -f $file.Relative, $lineNumber]
+        Add-FileFinding -Id ([string]$policy.absolute_claim.id) -Category ([string]$policy.absolute_claim.category) -Path $file.Relative -Line $lineNumber
       }
+    }
     }
 
     if (-not $isHistorical -and $file.Extension -eq '.md') {
@@ -278,6 +306,9 @@ foreach ($file in @(Get-TrackedActiveFiles)) {
         }
       }
     }
+  }
+  if ($null -ne $FileCache -and $null -eq $cached) {
+    $FileCache[$cacheKey] = @{ findings = $fileFindings.ToArray(); diagnostics = $fileDiagnostics }
   }
 }
 

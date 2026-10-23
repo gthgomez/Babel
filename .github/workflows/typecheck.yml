@@ -12,8 +12,6 @@ name: Public Release Gate
       - opened
       - synchronize
       - reopened
-      - ready_for_review
-      - converted_to_draft
       - labeled
       - unlabeled
   push:
@@ -30,8 +28,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
-      - name: Run local public scrub
-        run: pwsh -NoProfile -ExecutionPolicy Bypass -File tools/check-public-scrub.ps1 -Strict
       - name: Install pinned gitleaks
         shell: pwsh
         run: |
@@ -241,7 +237,7 @@ jobs:
           node --test --test-reporter=tap tools/tests/qualified-consumer-promotion.test.mjs tools/tests/package-metadata-drift.test.mjs tools/tests/architectural-boundaries.test.mjs
           tools/tests/architectural-budget.test.mjs tools/tests/ci-package-coverage.test.mjs
           tools/tests/ci-hosted-parallel.test.mjs tools/tests/ci-unit-sharding.test.mjs tools/tests/ci-workflow-coverage.test.mjs
-          tools/tests/package-scripts-and-tests.test.mjs tools/tests/hook-redaction.test.mjs tools/tests/push-candidates.test.mjs tools/tests/committed-content-policy.test.mjs tools/tests/consumer-environment.test.mjs tools/tests/native-rg-setup.test.mjs tools/tests/required-tap-coverage.test.mjs tools/tests/required-skip-policy.test.mjs tools/tests/required-tap-reporter.test.mjs tools/tests/consumer-archive.test.mjs tools/tests/dist-content.test.mjs tools/tests/review-summary.test.mjs tools/tests/release-package-validation.test.mjs tools/tests/release-tag-identity.test.mjs tools/tests/release-workflow-contract.test.mjs 2>&1 | Tee-Object
+          tools/tests/package-scripts-and-tests.test.mjs tools/tests/hook-redaction.test.mjs tools/tests/push-candidates.test.mjs tools/tests/push-preflight.test.mjs tools/tests/public-content-worker.test.mjs tools/tests/pre-commit-batch.test.mjs tools/tests/logged-tap-child.test.mjs tools/tests/installed-dependencies.test.mjs tools/tests/unit-scheduling.test.mjs tools/tests/committed-content-policy.test.mjs tools/tests/consumer-environment.test.mjs tools/tests/native-rg-setup.test.mjs tools/tests/required-tap-coverage.test.mjs tools/tests/required-skip-policy.test.mjs tools/tests/required-tap-reporter.test.mjs tools/tests/consumer-archive.test.mjs tools/tests/dist-content.test.mjs tools/tests/review-summary.test.mjs tools/tests/release-package-validation.test.mjs tools/tests/release-tag-identity.test.mjs tools/tests/release-workflow-contract.test.mjs 2>&1 | Tee-Object
           artifacts/architecture-regressions/full.tap
 
           exit $LASTEXITCODE
@@ -345,6 +341,15 @@ jobs:
           }
 
           exit $failure
+        working-directory: babel-cli
+      - name: Build CLI for real audit integration
+        run: npm run build
+        working-directory: babel-cli
+      - name: Run complete audit and benchmark integration
+        shell: pwsh
+        run: |
+          npm run test:audit-integration 2>&1 | Tee-Object ../artifacts/ci-package/audit-integration.log
+          exit $LASTEXITCODE
         working-directory: babel-cli
       - name: Upload portable package evidence
         if: always()
@@ -651,11 +656,8 @@ jobs:
           src/services/controllerMediatedHarnessReview.test.ts src/services/trustedReviewInstallation.test.ts
         working-directory: babel-cli
         if: matrix.os == 'ubuntu-latest'
-      - name: Typecheck CLI
-        run: npm run typecheck
-        working-directory: babel-cli
-      - name: Build CLI
-        run: npm run build
+      - name: Build and typecheck CLI and scripts once
+        run: npm run qualify:build
         working-directory: babel-cli
       - name: Check harness architecture package
         run: pwsh -NoProfile -ExecutionPolicy Bypass -File tools/check-harness-architecture.ps1

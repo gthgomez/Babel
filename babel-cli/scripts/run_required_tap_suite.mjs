@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 // License: Apache-2.0 - see LICENSE
-import { spawnSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { runLoggedTapChild } from './run_logged_tap_child.mjs'
 import { captureRequiredTapSelection } from './capture_required_tap_selection.mjs'
 import { requiredTapSuiteGate } from './required_tap_suite_gate.mjs'
 
@@ -35,9 +35,14 @@ const tapEnv = {
   BABEL_TAP_EXECUTION_PATH: executionPath,
 }
 const npmCli = process.env.npm_execpath
+
+async function captureTap(command, args) {
+  return runLoggedTapChild(command, args, { cwd: cliRoot, env: tapEnv, tapPath, label: suite })
+}
+
 const result =
   process.platform === 'win32'
-    ? (() => {
+    ? await (async () => {
         if (!npmCli || !existsSync(npmCli)) {
           return {
             stdout: '',
@@ -47,21 +52,9 @@ const result =
             signal: null,
           }
         }
-        return spawnSync(process.execPath, [npmCli, 'run', '--silent', rawScript], {
-          cwd: cliRoot,
-          encoding: 'utf8',
-          env: tapEnv,
-          maxBuffer: 64 * 1024 * 1024,
-          shell: false,
-        })
+        return captureTap(process.execPath, [npmCli, 'run', '--silent', rawScript])
       })()
-    : spawnSync('npm', ['run', '--silent', rawScript], {
-        cwd: cliRoot,
-        encoding: 'utf8',
-        env: tapEnv,
-        maxBuffer: 64 * 1024 * 1024,
-        shell: false,
-      })
+    : await captureTap('npm', ['run', '--silent', rawScript])
 
 const gate = requiredTapSuiteGate(suite, result.stdout, {
   error: result.error,
@@ -69,7 +62,7 @@ const gate = requiredTapSuiteGate(suite, result.stdout, {
   status: result.status,
 })
 
-writeFileSync(tapPath, gate.tap, 'utf8')
+if (!existsSync(tapPath)) writeFileSync(tapPath, gate.tap, 'utf8')
 
 function finish(exitCode) {
   const stderrChunk = result.stderr ?? ''
@@ -94,15 +87,7 @@ function finish(exitCode) {
     )
   }
 
-  const tapChunk = gate.tap
-  const setExit = () => {
-    process.exitCode = exitCode
-  }
-  if (!tapChunk) {
-    setExit()
-    return
-  }
-  process.stdout.write(tapChunk, 'utf8', setExit)
+  process.exitCode = exitCode
 }
 
 if (gate.failed) {
