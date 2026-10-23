@@ -344,7 +344,8 @@ function assertRemoteReachable(root, remote, lsRemoteFn) {
 }
 
 /**
- * Abort push when the published remote tip still has an in-flight Public Release Gate.
+ * Legacy inspection API retained for existing consumers. Publication no longer
+ * waits for prior-head CI; validate-push-candidates owns that path.
  */
 export function assertBranchPriorGateComplete(root, remote = 'origin', deps = {}) {
   const gitFn = deps.git ?? git
@@ -420,7 +421,8 @@ export function assertBranchPriorGateComplete(root, remote = 'origin', deps = {}
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
     const root = git(process.cwd(), ['rev-parse', '--show-toplevel'])
-    assertBranchPriorGateComplete(root, process.argv[2] || 'origin')
+    assertRemotePushFetchRepoAligned(root, process.argv[2] || 'origin', git)
+    console.error('[pre-push] destination verified; current-candidate checks gate merge without a prior-head wait')
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error))
     process.exitCode = 1

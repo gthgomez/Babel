@@ -112,7 +112,7 @@ Assert-CI ($failure.error -eq 'github_snapshot_invalid') 'Unexpected API excepti
 $clock = @{ now = [DateTimeOffset]::Parse('2026-10-07T12:00:00Z'); reads = 0 }
 $pending = State @((Observation '2' 'in_progress' ''))
 $wait = Wait-AgentCIState -ReadState { $clock.reads++; $pending } -ReadCandidate { [pscustomobject]@{ valid = $true; reason = '' } } -Now { $clock.now } -Sleep { param($Seconds) $clock.now = $clock.now.AddSeconds($Seconds) } -TimeoutSeconds 12 -DelaySeconds 5
-Assert-CI (-not $wait.ready -and $wait.reason -eq 'required_check_wait_timeout' -and $clock.reads -eq 3) 'Wait must honor wall-clock deadline'
+Assert-CI (-not $wait.ready -and $wait.reason -eq 'required_check_wait_timeout' -and $clock.reads -eq 2) 'Backoff must reduce polls while honoring the wall-clock deadline'
 $wait = Wait-AgentCIState -ReadState { throw 'must not poll superseded candidate' } -ReadCandidate { [pscustomobject]@{ valid = $false; reason = 'execution_base_superseded' } }
 Assert-CI (-not $wait.ready -and $wait.reason -eq 'execution_base_superseded') 'Stale execution base must stop before polling'
 $identityReads = @{ count = 0 }

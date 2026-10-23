@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -9,7 +9,29 @@ import {
   combineMergeLanes,
   trustedPathForcesFullLane,
   installerSensitiveChange,
+  classifyFromBaseSha,
 } from "../ci-merge-lane.mjs";
+
+test("trusted base materialization preserves policy and ignores candidate policy edits", async () => {
+  const root = mkdtempSync(join(tmpdir(), "babel-lane-base-"));
+  const git = (args) => execFileSync("git", ["-c", "core.hooksPath=" + join(root, "hooks"), "-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", ...args], { cwd: root, encoding: "utf8", windowsHide: true, stdio: ["pipe", "pipe", "pipe"] }).trim();
+  try {
+    mkdirSync(join(root, "hooks"));
+    mkdirSync(join(root, "tools"));
+    mkdirSync(join(root, "config"));
+    copyFileSync(new URL("../ci-merge-lane.mjs", import.meta.url), join(root, "tools", "ci-merge-lane.mjs"));
+    copyFileSync(new URL("../../config/review-risk-policy.json", import.meta.url), join(root, "config", "review-risk-policy.json"));
+    git(["init", "--quiet"]);
+    git(["add", "tools/ci-merge-lane.mjs", "config/review-risk-policy.json"]);
+    git(["commit", "--quiet", "-m", "base"]);
+    const base = git(["rev-parse", "HEAD"]);
+    writeFileSync(join(root, "config", "review-risk-policy.json"), '{"installerSensitivePrefixes":["README.md"]}');
+    for (const [file, expected] of [["README.md", { full: false, installer: false }], ["babel-cli/src/agent.ts", { full: true, installer: false }], ["babel-desktop/package.json", { full: true, installer: true }]]) {
+      assert.deepEqual(await classifyFromBaseSha(base, { event: "pull_request", files: [file] }, root), expected);
+    }
+    await assert.rejects(classifyFromBaseSha("HEAD", { event: "pull_request", files: ["README.md"] }, root), /Exact base/);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
 
 test("docs and skill pull requests use the fast lane", () => {
   const lane = classifyMergeLane({

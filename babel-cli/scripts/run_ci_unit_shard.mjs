@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Exhaustive, disjoint selection from the canonical package unit command.
 import { createHash } from 'node:crypto';
-import { globSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, globSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve, sep } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -9,7 +9,20 @@ import { parseArgs } from 'node:util';
 
 const hash = files => createHash('sha256').update(files.join('\n')).digest('hex');
 
-export function prepareUnitShard(packageRoot, index, count) {
+/** Duration hints affect scheduling only; every file is assigned exactly once. */
+export function balanceUnitInventory(inventory, count, durations = {}) {
+  if (!Number.isInteger(count) || count < 1 || count > inventory.length || new Set(inventory).size !== inventory.length) throw new Error('Invalid shard inventory');
+  const weight = path => typeof durations[path] === 'number' && Number.isFinite(durations[path]) && durations[path] > 0 && durations[path] <= 86400000 ? durations[path] : 1000;
+  const shards = Array.from({ length: count }, () => ({ files: [], estimatedMs: 0 }));
+  for (const file of [...inventory].sort((a, b) => weight(b) - weight(a) || (a < b ? -1 : a > b ? 1 : 0))) {
+    let target = shards[0];
+    for (const shard of shards) if (shard.estimatedMs < target.estimatedMs || (shard.estimatedMs === target.estimatedMs && shard.files.length < target.files.length)) target = shard;
+    target.files.push(file); target.estimatedMs += weight(file);
+  }
+  return shards.map(shard => ({ ...shard, files: shard.files.sort() }));
+}
+
+export function prepareUnitShard(packageRoot, index, count, { platform = process.platform } = {}) {
   if (!Number.isInteger(index) || !Number.isInteger(count) || count < 1 || index < 0 || index >= count) {
     throw new Error('Invalid unit shard coordinates');
   }
@@ -38,9 +51,20 @@ export function prepareUnitShard(packageRoot, index, count) {
   }
   const inventory = [...files].sort();
   if (count > inventory.length) throw new Error('Unit shard count would produce empty shards');
-  const selected = inventory.filter((_, position) => position % count === index);
+  const durations = {};
+  const durationPath = join(packageRoot, 'config', 'ci-unit-durations.json');
+  if (existsSync(durationPath)) {
+    try {
+      const hints = JSON.parse(readFileSync(durationPath, 'utf8'));
+      for (const [path, hint] of Object.entries(hints.schemaVersion === 1 ? hints.platforms?.[platform] ?? {} : {})) {
+        if (files.has(path) && hint?.sha256 === createHash('sha256').update(readFileSync(join(packageRoot, path))).digest('hex')) durations[path] = hint.durationMs;
+      }
+    } catch { /* Advisory hints never remove work or fail a correctness gate. */ }
+  }
+  const plan = balanceUnitInventory(inventory, count, durations);
+  const selected = plan[index].files;
   const args = [...tokens.slice(1, testIndex), '--test-reporter=./scripts/required_tap_reporter.mjs', '--test-concurrency=1', '--test', ...selected];
-  return { index, count, patterns, inventory, selected, args, inventoryHash: hash(inventory), selectionHash: hash(selected) };
+  return { index, count, patterns, inventory, selected, args, inventoryHash: hash(inventory), selectionHash: hash(selected), scheduling: { platform, measuredFiles: Object.keys(durations).length, estimatedMs: plan[index].estimatedMs } };
 }
 
 function main() {

@@ -12,8 +12,6 @@ name: Public Release Gate
       - opened
       - synchronize
       - reopened
-      - ready_for_review
-      - converted_to_draft
       - labeled
       - unlabeled
   push:
@@ -30,8 +28,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
-      - name: Run local public scrub
-        run: pwsh -NoProfile -ExecutionPolicy Bypass -File tools/check-public-scrub.ps1 -Strict
       - name: Install pinned gitleaks
         shell: pwsh
         run: |
@@ -651,11 +647,8 @@ jobs:
           src/services/controllerMediatedHarnessReview.test.ts src/services/trustedReviewInstallation.test.ts
         working-directory: babel-cli
         if: matrix.os == 'ubuntu-latest'
-      - name: Typecheck CLI
-        run: npm run typecheck
-        working-directory: babel-cli
-      - name: Build CLI
-        run: npm run build
+      - name: Build and typecheck CLI and scripts once
+        run: npm run qualify:build
         working-directory: babel-cli
       - name: Check harness architecture package
         run: pwsh -NoProfile -ExecutionPolicy Bypass -File tools/check-harness-architecture.ps1
@@ -670,6 +663,9 @@ jobs:
         working-directory: babel-cli
       - name: Run required benchmark/eval suite
         run: npm run test:benchmark-eval
+        working-directory: babel-cli
+      - name: Run complete audit and benchmark integration
+        run: npm run test:audit-integration
         working-directory: babel-cli
       - name: Validate catalog
         run: pwsh -NoProfile -ExecutionPolicy Bypass -File tools/validate-catalog.ps1

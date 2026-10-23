@@ -49,7 +49,15 @@ function Invoke-Gate([string]$Script, [string]$Root, [switch]$WarningsAsErrors) 
   if (Get-Variable -Name LASTEXITCODE -ErrorAction SilentlyContinue) { $exitCode = $LASTEXITCODE }
   return [pscustomobject]@{ ExitCode = $exitCode; Text = ($output -join "`n") }
 }
-function Invoke-Script([string]$Script, [string]$Root, [string]$Arguments = '') {
+function Invoke-Script([string]$Script, [string]$Root, [string]$Arguments = '', [switch]$UseConfiguredSupplemental) {
+  if ((Split-Path -Leaf $Script) -eq 'check-public-scrub.ps1' -and -not $UseConfiguredSupplemental -and $Arguments -notmatch 'SupplementalPolicyPath') {
+    # Only disposable fixture scans get synthetic supplemental inputs. Never
+    # depend on or change the operator's real policy for these tests.
+    if (-not ([IO.Path]::GetFullPath($Root)).StartsWith(([IO.Path]::GetFullPath($tempRoot) + [IO.Path]::DirectorySeparatorChar), [StringComparison]::OrdinalIgnoreCase)) { throw 'supplemental_fixture_scope_invalid' }
+    $fixtureSupplemental = Join-Path $tempRoot 'ordinary-fixture-supplemental.json'
+    Set-Content -LiteralPath $fixtureSupplemental -Value '{"forbidden_private_identifiers":["SyntheticSupplementalFixtureDenyMarker"],"forbidden_dependency_fingerprints":[]}'
+    $Arguments += " -SupplementalPolicyPath '" + $fixtureSupplemental.Replace("'", "''") + "'"
+  }
   $scriptLiteral = $Script.Replace("'", "''")
   $rootLiteral = $Root.Replace("'", "''")
   $exitCode = 0
@@ -182,7 +190,7 @@ try {
   Assert-True ($gpguardContent.ExitCode -eq 0) "GPCGuard in doc unexpectedly failed content-policy: $($gpguardContent.Text)"
   $gpguardCanonical = Invoke-Gate (Join-Path $gpguardDocs 'tools/check-canonical-independence.ps1') $gpguardDocs
   Assert-True ($gpguardCanonical.ExitCode -eq 0) "GPCGuard in doc unexpectedly failed canonical-independence: $($gpguardCanonical.Text)"
-  $gpguardScrub = Invoke-Gate (Join-Path $gpguardDocs 'tools/check-public-scrub.ps1') $gpguardDocs
+  $gpguardScrub = Invoke-Script (Join-Path $gpguardDocs 'tools/check-public-scrub.ps1') $gpguardDocs
   Assert-True ($gpguardScrub.ExitCode -eq 0) "GPCGuard allowed in docs: scrub should pass (doc mention NOT a leak) but exit $($gpguardScrub.ExitCode): $($gpguardScrub.Text)"
   Assert-True ($gpguardScrub.Text -notmatch 'GPCGuard') 'GPCGuard in doc was flagged as a leak (scrub output exposed the project name)'
 
@@ -314,12 +322,12 @@ const inferred = join(workspaceRoot, family, projectFolderName)
   Assert-True (($scrubOutput -join "`n") -match 'identifier: .github/hidden.yml:') 'supplemental scan skipped a hidden tracked file'
   Assert-True (($scrubOutput -join "`n") -match 'identifier: ignored.txt:') 'supplemental scan skipped a forced ignored tracked file'
 
-  $missingResult = Invoke-Script (Join-Path $scrubRoot 'tools/check-public-scrub.ps1') $scrubRoot
+  $missingResult = Invoke-Script (Join-Path $scrubRoot 'tools/check-public-scrub.ps1') $scrubRoot -UseConfiguredSupplemental
   $missingOutput = $missingResult.Text
   Assert-True ($missingResult.ExitCode -ne 0) 'configured missing supplemental policy did not fail closed'
   Assert-True (($missingOutput -join "`n") -notmatch [regex]::Escape($env:BABEL_PRIVATE_SCRUB_POLICY_PATH)) 'missing supplemental failure exposed its configured path'
   Remove-Item Env:BABEL_PRIVATE_SCRUB_POLICY_PATH -ErrorAction SilentlyContinue
-  $requiredMissingResult = Invoke-Script (Join-Path $scrubRoot 'tools/check-public-scrub.ps1') $scrubRoot '-RequireSupplementalPolicy'
+  $requiredMissingResult = Invoke-Script (Join-Path $scrubRoot 'tools/check-public-scrub.ps1') $scrubRoot '-RequireSupplementalPolicy' -UseConfiguredSupplemental
   Assert-True ($requiredMissingResult.ExitCode -ne 0) 'required supplemental policy absence did not fail closed'
   $malformedPolicy = Join-Path $tempRoot 'malformed-supplemental.json'
   Set-Content -LiteralPath $malformedPolicy -Value '{'

@@ -54,7 +54,7 @@ test('candidate credential path guard rejects case variants before archive expor
     return { root: candidateRoot, sha: git('rev-parse', 'HEAD') }
   }
   try {
-    for (const path of ['.ENV', '.env.LOCAL', '.CODEX/AUTH.JSON']) {
+    for (const path of ['.ENV', '.env.LOCAL', '.CODEX/AUTH.JSON', '.SSH/id_rsa', '.aws/credentials', 'secrets/store.json', 'signing.KEY']) {
       const { root: candidateRoot, sha } = candidate(path)
       assert.throws(() => assertExportableCandidate(candidateRoot, sha), /credential-class.*before export/, path)
     }
