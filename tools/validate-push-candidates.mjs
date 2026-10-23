@@ -9,6 +9,7 @@ import { readCommittedInventory, readCommittedBlobs } from './committed-object-r
 import { coveredPaths, verifyPolicyManifest } from './policy-integrity-manifest.mjs'
 import { assertRemotePushFetchRepoAligned } from './assert-branch-prior-gate-complete.mjs'
 import { createPublicContentWorker } from './public-content-worker.mjs'
+import { assertInteractiveAgentsBudget } from './agents-interactive-budget.mjs'
 
 function git(root, args, input) {
   const r = spawnSync('git', ['-C', root, ...args], { input, encoding: 'utf8', windowsHide: true, maxBuffer: 16 * 1024 * 1024 })
@@ -16,21 +17,32 @@ function git(root, args, input) {
   return r.stdout.trim()
 }
 
+/**
+ * Git pre-push stdin: local_ref local_sha remote_ref remote_sha.
+ * Local ref may be a revision expression (HEAD, HEAD~1) or (delete); only SHAs execute.
+ */
+export function parsePrePushRecordLine(line) {
+  const fields = line.trim().split(/\s+/)
+  if (fields.length !== 4 || !fields[2].startsWith('refs/')) {
+    throw new Error('malformed push record')
+  }
+  const [localRef, localSha, remoteRef, remoteSha] = fields
+  if (!/^[a-f0-9]{40}$/.test(localSha) || !/^[a-f0-9]{40}$/.test(remoteSha)) {
+    throw new Error('malformed push sha')
+  }
+  return { localRef, localSha, remoteRef, remoteSha, isDelete: /^0+$/.test(localSha) }
+}
+
 /** Resolve pre-push ref/SHA records to committed objects, without using HEAD or the index. */
 export function collectPushCandidates(records, root, remote, { publishedTips = [] } = {}) {
   if (!/^[A-Za-z0-9._-]+$/.test(remote)) throw new Error('unsupported remote name')
   const commits = new Set()
   for (const line of records.split(/\r?\n/).filter(Boolean)) {
-    const fields = line.trim().split(/\s+/)
-    // Git can report a revision expression (for example HEAD~1), and uses
-    // (delete) for local deletions. Names are metadata; only exact SHAs execute.
-    if (fields.length !== 4 || !fields[2].startsWith('refs/') ||
-      ![fields[1], fields[3]].every(s => /^[a-f0-9]{40}$/.test(s))) throw new Error('malformed push record')
-    const [, local, , previous] = fields
-    if (/^0+$/.test(local)) continue
-    const tip = git(root, ['rev-parse', '--verify', `${local}^{commit}`])
+    const { localSha, remoteSha, isDelete } = parsePrePushRecordLine(line)
+    if (isDelete) continue
+    const tip = git(root, ['rev-parse', '--verify', `${localSha}^{commit}`])
     const excluded = []
-    if (!/^0+$/.test(previous)) excluded.push(git(root, ['rev-parse', '--verify', `${previous}^{commit}`]))
+    if (!/^0+$/.test(remoteSha)) excluded.push(git(root, ['rev-parse', '--verify', `${remoteSha}^{commit}`]))
     if (publishedTips.some(sha => !/^[a-f0-9]{40}$/.test(sha))) throw new Error('invalid publication frontier')
     excluded.push(...publishedTips)
     // Validate even an already-reachable tip being sent to a different ref.
@@ -143,6 +155,18 @@ export function assertExportableCandidate(root, sha) {
   return readCommittedInventory(root, sha)
 }
 
+/** DATA-only AGENTS.md budget check on exact committed bytes (not the worktree). */
+export async function assertCommittedAgentsInteractiveBudget(root, inventory, emit = console.error) {
+  const agents = inventory.find(entry => entry.path === 'AGENTS.md')
+  if (!agents) return null
+  let bytes = null
+  await readCommittedBlobs(root, [agents.oid], (_oid, blob) => { bytes = blob })
+  if (!bytes) throw new Error('committed AGENTS.md unavailable')
+  const length = assertInteractiveAgentsBudget(bytes)
+  emit(`[pre-push] AGENTS.md committed length=${length} budget=ok`)
+  return length
+}
+
 /** Verify every candidate's cheap invariants before any content scan or extraction. */
 export async function preflightPushCandidates(commits, root, emit = console.error) {
   const plans = []
@@ -160,6 +184,7 @@ export async function preflightPushCandidates(commits, root, emit = console.erro
       })
       if (verdict.status !== 'VERIFIED') throw new Error(`policy integrity rejected candidate ${sha.slice(0, 12)} during preflight`)
       emit(`[pre-push] preflight ${index + 1}/${commits.length} ${sha} manifest=verified files=${inventory.length}`)
+      await assertCommittedAgentsInteractiveBudget(root, inventory, emit)
       return { sha, inventory }
     }, emit)
     plans.push(plan)
@@ -183,6 +208,9 @@ export async function verifyStagedManifest(root) {
     return blobs.get(entries.get(path))
   })
   if (result.status !== 'VERIFIED') throw new Error('staged policy integrity mismatch; regenerate and stage the matching manifest')
+  if (entries.has('AGENTS.md')) {
+    assertInteractiveAgentsBudget(blobs.get(entries.get('AGENTS.md')))
+  }
   return result
 }
 

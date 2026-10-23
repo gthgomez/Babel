@@ -42,6 +42,46 @@ retain ordinary `pull_request` product qualification because `full-ci` raises
 the required matrix and installer coverage. A newer eligible run still
 invalidates an older success for the same head until it completes.
 
+## Local execution vs planning preflight
+
+`scripts/agent-preflight.ps1` emits readiness JSON (auth, branch, worktree). It
+does **not** verify policy-manifest drift, committed `AGENTS.md` interactive
+budget, or push-candidate scans. Those are execution checks.
+
+Before committing policy paths, run (or rely on an installed pre-commit hook):
+
+```bash
+node tools/validate-push-candidates.mjs --staged-manifest
+```
+
+Staged/committed checks measure the **single repository-root `AGENTS.md` body**
+(UTF-16 code units after Node UTF-8 decode). They do not replace
+`chatStackCompile` canonical LF/CRLF admission when instruction text changes.
+
+Before push, run the read-only helper (configured hook ownership label, cheap
+checks, then ls-remote frontier for the **current branch**). `--candidate`
+must equal current `HEAD`; frontier runs before success:
+
+```bash
+node tools/verify-changed-publication-surface.mjs --candidate "$(git rev-parse HEAD)"
+```
+
+Full push validation (manifest per candidate, gitleaks, public-content) remains the
+real execution stage:
+
+```bash
+node tools/validate-push-candidates.mjs origin < push-records.txt
+```
+
+**Hook activation:** Babel hooks live in `.githooks/` (pre-commit runs
+`--staged-manifest` then leak scans). They run only when a host actually
+invokes that path on commit/push. The helper reports configured
+`core.hooksPath` as `repo:.githooks`, `host-managed`, or `unset`, always with
+`hook_execution=unverified` — presence of files or config does not prove the
+publisher runs them. Do **not** replace or chain-swap a host-managed hook
+dispatcher; run the explicit CLI validators above when execution is unverified.
+Never print host-specific absolute paths in public output.
+
 ## Pre-push hook
 
 Install with `pwsh tools/install-hooks.ps1` (or
