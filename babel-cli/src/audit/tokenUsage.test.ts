@@ -15,8 +15,11 @@ test('token audit reports scenario failures without claiming successful measurem
   }, {
     loadCatalog: () => [{ ...domain, defaultSkillIds: ['fixture-skill'] }],
     loadSupplements: () => new Map(),
-    measureEntry: entry => ({ id: entry.id, layer: entry.layer, relativePath: entry.path,
-      declaredTokenBudget: 10, actualCompiledTokens: 12, deltaFromDeclared: 2, tags: [] }),
+    measureEntry: entry => {
+      assert.ok(entry.path, 'fixture domain must have a prompt path');
+      return { id: entry.id, layer: entry.layer, relativePath: entry.path,
+        declaredTokenBudget: 10, actualCompiledTokens: 12, deltaFromDeclared: 2, tags: [] };
+    },
     analyze: () => { throw new Error('synthetic scenario failure'); },
   });
 
