@@ -68,9 +68,10 @@ enable repository test or build commands. Details:
 
 ## 2. First useful request in your own repository
 
-Pick the repository you want Babel to work on. In Desktop, use **Open project**
-and trust that exact folder. For the source CLI, use the absolute `$BabelCli`
-defined in step 1 and change into your repository first:
+Pick the repository you want Babel to work on. In Desktop 0.1.3, use **Open
+project** and complete the release-pinned setup above. Current-source Desktop
+also requires granting trust to the selected folder. For the source CLI, use
+the absolute `$BabelCli` defined in step 1 and change into your repository first:
 
 ```powershell
 Set-Location -LiteralPath 'C:\path with spaces\your-repo'
