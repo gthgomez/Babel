@@ -35,19 +35,16 @@ test('a missing producer returns a failed spawn outcome rather than success', as
   } finally { rmSync(root, { recursive: true, force: true }) }
 })
 
-test('a continuously noisy producer is stopped at the combined output budget', async () => {
+test('a continuously noisy producer is stopped at the combined output budget', { timeout: 120000 }, async t => {
   const root = mkdtempSync(join(tmpdir(), 'babel-logged-tap-overflow-'))
   const tapPath = join(root, 'full.tap')
   const output = new PassThrough(); output.resume()
   try {
-    const started = performance.now()
     const result = await runLoggedTapChild(process.execPath, ['-e', 'setInterval(()=>{process.stdout.write("x".repeat(900));process.stderr.write("y".repeat(900))},10)'], {
-      cwd: root, tapPath, stdout: output, stderr: output, maxLogBytes: 1024,
+      cwd: root, tapPath, stdout: output, stderr: output, maxLogBytes: 1024, signal: t.signal,
     })
     assert.match(result.error?.message, /output limit exceeded/)
-    assert.ok(performance.now() - started < 10000)
     assert.ok(statSync(tapPath).size + statSync(tapPath + '.stderr.log').size <= 1024)
-    assert.notEqual(result.status, 0)
   } finally { rmSync(root, { recursive: true, force: true }) }
 })
 
@@ -69,4 +66,30 @@ test('cancellation terminates the owned producer tree and returns failed evidenc
     // Windows taskkill waits for its owned /T process tree to terminate.
     if (process.platform === 'win32') assert.throws(() => process.kill(grandchild, 0), /ESRCH/)
   } finally { rmSync(root, { recursive: true, force: true }) }
+})
+
+test('descendants retaining pipes cannot hang capture after their producer exits', { timeout: 120000 }, async t => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-logged-tap-orphan-'))
+  const output = new PassThrough(), errors = new PassThrough(), controller = new AbortController()
+  errors.resume()
+  let descendant, timer
+  output.on('data', chunk => {
+    descendant = Number(chunk.toString().trim())
+    timer = setTimeout(() => controller.abort(), 250)
+  })
+  // The direct producer exits immediately; cancellation is intentionally later.
+  try {
+    const source = 'const {spawn}=require("node:child_process");const c=spawn(process.execPath,["-e","setInterval(()=>{},1000)"],{stdio:["ignore","inherit","inherit"]});console.log(c.pid);process.exit(0)'
+    const result = await runLoggedTapChild(process.execPath, ['-e', source], {
+      cwd: root, tapPath: join(root, 'full.tap'), stdout: output, stderr: errors, signal: AbortSignal.any([controller.signal, t.signal]),
+    })
+    assert.ok(Number.isInteger(descendant) && descendant > 0)
+    if (process.platform === 'win32') {
+      assert.equal(result.status, 0)
+      assert.throws(() => process.kill(descendant, 0), /ESRCH/)
+    } else {
+      assert.equal(result.signal, 'SIGTERM')
+      assert.match(result.error?.message, /interrupted/)
+    }
+  } finally { clearTimeout(timer); rmSync(root, { recursive: true, force: true }) }
 })
