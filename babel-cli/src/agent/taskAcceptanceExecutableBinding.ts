@@ -334,8 +334,37 @@ export function bindExecutableVerifiersToTaskAcceptance(input: {
   }
 }
 
-export function mergeTrustedVerifierCommands(input: {
-  requiredVerifierCommands?: readonly string[] | null
+const WITNESS_STRATEGY_MARKER = 'regression witness for this preservation requirement'
+
+/** Criteria whose preservation obligation was bound to its own designated witness. */
+function witnessBoundCriteria(meaning: TaskAcceptanceMeaning): AcceptanceRequirementV1[] {
+  return meaning.criteria.filter(
+    (criterion) =>
+      !criterion.verification.verifier_id.startsWith('meaning:') &&
+      criterion.verification_strategy.includes(WITNESS_STRATEGY_MARKER),
+  )
+}
+
+/** True when the binding froze a designated regression witness for this meaning. */
+export function hasDesignatedRegressionWitnessBinding(meaning: TaskAcceptanceMeaning): boolean {
+  return witnessBoundCriteria(meaning).length > 0
+}
+
+/**
+ * The designated commands of witness-bound criteria, parsed from each
+ * criterion's own description. Feeds the narrowly declared protected-input set
+ * (script definition surface plus resolvable test files) captured at freeze.
+ */
+export function designatedWitnessCommands(meaning: TaskAcceptanceMeaning): string[] {
+  const commands: string[] = []
+  for (const criterion of witnessBoundCriteria(meaning)) {
+    const command = criterionDesignatedCommand(criterion.description)
+    if (command) commands.push(command)
+  }
+  return commands
+}
+
+export function mergeTrustedVerifierCommands(input: {  requiredVerifierCommands?: readonly string[] | null
   projectTestCommands?: readonly string[] | null
 }): string[] {
   return [
