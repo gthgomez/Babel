@@ -1,0 +1,31 @@
+{
+  "case_id": "BRPCB-A",
+  "rubric_version": "1.0.0",
+  "status": "needs_human_review",
+  "reviewer": null,
+  "reviewed_at_utc": null,
+  "candidate_answer_sha256": null,
+  "mechanical_receipt": null,
+  "criteria": [
+    {"id": "A1", "judgment": "not_reviewed", "reason": null, "evidence": []},
+    {"id": "A2", "judgment": "not_reviewed", "reason": null, "evidence": []},
+    {"id": "A3", "judgment": "not_reviewed", "reason": null, "evidence": []},
+    {"id": "A4", "judgment": "not_reviewed", "reason": null, "evidence": []},
+    {"id": "A5", "judgment": "not_reviewed", "reason": null, "evidence": []},
+    {"id": "A6", "judgment": "not_reviewed", "reason": null, "evidence": []},
+    {"id": "A7", "judgment": "not_reviewed", "reason": null, "evidence": []},
+    {"id": "A8", "judgment": "not_reviewed", "reason": null, "evidence": []},
+    {"id": "A9", "judgment": "not_reviewed", "reason": null, "evidence": []},
+    {"id": "A10", "judgment": "not_reviewed", "reason": null, "evidence": []}
+  ],
+  "unsupported_claims_reviewed": false,
+  "material_unsupported_claims": [],
+  "optional_observations": [],
+  "factual_trace_correct": null,
+  "functional_success": null,
+  "source_preserved": null,
+  "session_completed": null,
+  "strict_completion": null,
+  "truthful_claims": null,
+  "decision_reason": null
+}

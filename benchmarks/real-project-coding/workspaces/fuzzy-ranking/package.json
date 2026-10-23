@@ -1,0 +1,11 @@
+{
+  "name": "babel-real-project-fuzzy-ranking",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": "24.x"
+  },
+  "scripts": {
+    "test": "node --test tests/public.test.mjs"
+  }
+}

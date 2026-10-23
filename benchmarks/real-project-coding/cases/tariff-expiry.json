@@ -1,0 +1,112 @@
+{
+  "id": "BRPCB-B",
+  "version": "1.0.0",
+  "title": "Inclusive UTC tariff expiry",
+  "kind": "historical-bug",
+  "source": {
+    "repo": "https://github.com/gthgomez/Prismatix",
+    "revision": "150f4446aa7ec001acba3087593a3e6ea38b49d5",
+    "path": "supabase/functions/_shared/model_tariff.ts",
+    "classification": "Genuine historical defect in a dependency-free extraction",
+    "correction": "b1219549ff6253391b458279c176c39abd4b26ac",
+    "blob_sha": "41103804a52afba76bd3a9f18d4b738880cbdce4"
+  },
+  "workspace": "workspaces/tariff-expiry",
+  "prompt": "workspaces/tariff-expiry/PROMPT.md",
+  "evaluator": "oracle/tariff-expiry/check.py",
+  "reference": "reference/tariff-expiry/upstream",
+  "alternative_reference": "reference/tariff-expiry/equivalent",
+  "negative_controls": [
+    "negative-controls/tariff-expiry/strict-after",
+    "negative-controls/tariff-expiry/local-midnight",
+    "negative-controls/tariff-expiry/permissive-parse",
+    "negative-controls/tariff-expiry/last-second",
+    "negative-controls/tariff-expiry/forged-receipt",
+    "negative-controls/tariff-expiry/mutates-now-properties"
+  ],
+  "negative_control_expectations": "negative-controls/tariff-expiry/expected-rejections.json",
+  "provenance": "PROVENANCE.md",
+  "license": "licenses/Prismatix-MIT.txt",
+  "mutable_paths": [
+    "src/**"
+  ],
+  "public_command": [
+    "node",
+    "--test",
+    "tests/public.test.mjs"
+  ],
+  "baseline": {
+    "public_exit": 1,
+    "evaluator_exit": 1
+  },
+  "evaluator_timezones": [
+    "UTC",
+    "America/Los_Angeles"
+  ],
+  "success": [
+    "A valid effectiveTo date stays current for its entire final UTC day, including its last millisecond.",
+    "Expiry begins at exactly the following UTC midnight and is independent of the process timezone.",
+    "The evaluator passes in UTC and America/Los_Angeles without depending on one particular implementation."
+  ],
+  "preservation": [
+    "Absent/null entries and absent/undefined/null/empty-string effectiveTo values remain unbounded.",
+    "Valid YYYY-MM-DD strings retain surrounding-whitespace trimming.",
+    "Malformed, impossible, and non-string non-null/non-undefined effectiveTo values remain expired.",
+    "The result is boolean and input objects and the supplied Date remain unchanged."
+  ],
+  "exclusions": [
+    "Valid expiry years outside 0100 through 9998.",
+    "Omitted or invalid now objects.",
+    "Entry values other than ordinary objects, null, or undefined; exotic accessors and proxies.",
+    "The original application's registry, prices, provider code, network behavior, and other exports."
+  ],
+  "adaptations": [
+    "Copy the historical parser and expiry function bodies verbatim; omit unrelated source declarations.",
+    "Narrow TariffEntry to effectiveTo?: string and add an explicit extraction notice.",
+    "Add native Node public tests and a Python stdlib supervisor with a separate Node transport worker; no third-party dependencies.",
+    "Include the full upstream MIT license."
+  ],
+  "fixture_sha256": "5bee620154bd2077219b190c491c5a2c0aac1f5977185f0e0ef11d10673a5ed2",
+  "prompt_sha256": "3d1e72ad66adeacf098962833e47de40e3e82219b99c53a5f541e478f48466e4",
+  "toolchain": "toolchain.json",
+  "dependencies": [],
+  "network_required": false,
+  "setup_notes": "No installation. Run doctor, then prepare copies only the frozen agent-visible files into a nonexistent absolute directory.",
+  "commands": {
+    "operator_working_directory": "extracted package root",
+    "setup": [
+      "python3",
+      "scripts/bench.py",
+      "prepare",
+      "BRPCB-B",
+      "--workspace",
+      "/tmp/brpcb-brpcb-b"
+    ],
+    "public_working_directory": "/tmp/brpcb-brpcb-b",
+    "public": [
+      "node",
+      "--test",
+      "tests/public.test.mjs"
+    ],
+    "independent_evaluation": [
+      "python3",
+      "scripts/bench.py",
+      "evaluate",
+      "BRPCB-B",
+      "--workspace",
+      "/tmp/brpcb-brpcb-b",
+      "--scratch-root",
+      "/tmp",
+      "--output",
+      "/tmp/brpcb-brpcb-b-grade.json"
+    ],
+    "reset": [
+      "python3",
+      "scripts/bench.py",
+      "reset",
+      "BRPCB-B",
+      "--workspace",
+      "/tmp/brpcb-brpcb-b"
+    ]
+  }
+}

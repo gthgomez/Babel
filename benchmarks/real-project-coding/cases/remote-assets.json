@@ -1,0 +1,116 @@
+{
+  "id": "BRPCB-A",
+  "version": "1.0.1",
+  "title": "Trace Remote UI asset responses and service-worker cache behavior",
+  "kind": "repository_comprehension",
+  "source": {
+    "repo": "gthgomez/Babel",
+    "revision": "34dd34d9d5bca03550eae9c1e59a73942c932957",
+    "paths": [
+      "babel-cli/src/bridge/remoteUiAssets.ts",
+      "babel-cli/src/bridge/remoteUiCachePolicy.ts",
+      "babel-cli/src/bridge/remote-ui/sw.js"
+    ],
+    "classification": "public_upstream_source_extract_with_disclosed_adaptation_and_synthetic_payloads"
+  },
+  "workspace": "workspaces/remote-assets",
+  "prompt": "workspaces/remote-assets/PROMPT.md",
+  "prompt_version": "1.0.1",
+  "evaluator": "oracle/remote-assets/check.mjs",
+  "reference": "reference/remote-assets/answer",
+  "negative_controls": [
+    "negative-controls/remote-assets/incomplete",
+    "negative-controls/remote-assets/unsupported"
+  ],
+  "mutable_paths": [
+    "ANSWER.md"
+  ],
+  "public_command": [
+    "node",
+    "--test",
+    "tests/public.test.mjs"
+  ],
+  "baseline": {
+    "public_exit": 0,
+    "evaluator_exit": 1
+  },
+  "success": {
+    "mechanical_receipt_status": "needs_human_review",
+    "mechanical_exit": 3,
+    "automatic_semantic_pass": false,
+    "human_rubric": "oracle/remote-assets/RUBRIC.md",
+    "human_review_template": "oracle/remote-assets/human-review-template.json",
+    "requirements": [
+      "A nonempty UTF-8 ANSWER.md is present and immutable files are preserved.",
+      "All 17 source probes pass against the frozen candidate copy.",
+      "A human reviews all critical factual relationships and unsupported claims using the rubric; a mechanically valid answer alone is not semantic success."
+    ],
+    "reference_expected_evaluator_exit": 3,
+    "negative_control_expected_evaluator_exit": 3
+  },
+  "preservation": [
+    "Only ANSWER.md may be added or changed; all other solver-visible files are immutable.",
+    "The common wrapper validates immutable bytes and uses canonical public tests.",
+    "Oracle, reference, and negative-control directories stay outside the solver workspace."
+  ],
+  "exclusions": [
+    "No live model/provider or inference run.",
+    "No credentials, networking, remote edits, dependency installation, or production build.",
+    "No active Remote UI app, caller/authentication implementation, browser/offline installation test, session/cancellation coverage, or active PR changes.",
+    "No automatic prose semantic pass, reference overlap score, or qualification claim."
+  ],
+  "adaptations": [
+    "remoteUiAssets.ts: added one prominent first-line modification notice and changed only the local import from remoteUiCachePolicy.js to remoteUiCachePolicy.ts for Node 24 native type stripping; function bodies are preserved.",
+    "remoteUiCachePolicy.ts and remote-ui/sw.js are unmodified pinned upstream bytes.",
+    "remote-ui/index.html and remote-ui/app.js are clearly labeled new synthetic fixture bytes.",
+    "Dependency-free Node 24 package, prompt, public filesystem/VM probes, operator rubric, reference answer and negative controls are newly authored benchmark material."
+  ],
+  "runtime": {
+    "node": ">=24 <25",
+    "third_party_dependencies": [],
+    "network_required": false
+  },
+  "fixture_sha256": "6fa4825704897030c807a0199c4c53cf5d1842cac80e6d448fb13cb2309feab8",
+  "prompt_sha256": "a38a66967da58adad4a0c4d5ad175e68d8d254060a278818671c4b2d3491df61",
+  "toolchain": "toolchain.json",
+  "dependencies": [],
+  "network_required": false,
+  "setup_notes": "No installation. Run doctor, then prepare copies only the frozen agent-visible files into a nonexistent absolute directory.",
+  "commands": {
+    "operator_working_directory": "extracted package root",
+    "setup": [
+      "python3",
+      "scripts/bench.py",
+      "prepare",
+      "BRPCB-A",
+      "--workspace",
+      "/tmp/brpcb-brpcb-a"
+    ],
+    "public_working_directory": "/tmp/brpcb-brpcb-a",
+    "public": [
+      "node",
+      "--test",
+      "tests/public.test.mjs"
+    ],
+    "independent_evaluation": [
+      "python3",
+      "scripts/bench.py",
+      "evaluate",
+      "BRPCB-A",
+      "--workspace",
+      "/tmp/brpcb-brpcb-a",
+      "--scratch-root",
+      "/tmp",
+      "--output",
+      "/tmp/brpcb-brpcb-a-grade.json"
+    ],
+    "reset": [
+      "python3",
+      "scripts/bench.py",
+      "reset",
+      "BRPCB-A",
+      "--workspace",
+      "/tmp/brpcb-brpcb-a"
+    ]
+  }
+}

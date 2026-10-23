@@ -1,0 +1,99 @@
+{
+  "schema_version": 1,
+  "suite": "babel-real-project-coding-benchmark-v1",
+  "run_id": null,
+  "attempt_index": null,
+  "case_id": null,
+  "case_version": "1.0.0",
+  "run_kind": "future_authorized_model_run",
+  "status": "not_run",
+  "babel": {
+    "source_repository": "https://github.com/gthgomez/Babel",
+    "source_commit_sha": null,
+    "dirty_tree": null,
+    "installed_version": null,
+    "executable_path": null,
+    "executable_or_package_sha256": null,
+    "installation_identity_evidence": null
+  },
+  "fixture": {
+    "source_revision": null,
+    "baseline_sha256": null,
+    "candidate_sha256": null,
+    "package_zip_sha256": null,
+    "prompt_sha256": null,
+    "grader_sha256": null,
+    "workspace_path": null
+  },
+  "configuration": {
+    "route": "openrouter",
+    "requested_model_id": null,
+    "sent_model_id": null,
+    "observed_model_id": null,
+    "endpoint": null,
+    "wire_protocol": null,
+    "provider_parameters": null,
+    "routed_fallbacks": null,
+    "production_profile": null,
+    "permissions": null,
+    "sandbox": null,
+    "normal_limits": null,
+    "config_sha256": null,
+    "credential_reference_only": null
+  },
+  "environment": {
+    "os": null,
+    "python": null,
+    "node": null,
+    "toolchain_matches_validated_pins": null,
+    "setup_status": "unknown",
+    "failure_reason": null
+  },
+  "outcome": {
+    "functional_success": null,
+    "patch_correct": null,
+    "session_completed": null,
+    "strict_completion": null,
+    "truthful_claims": null,
+    "false_complete": null,
+    "raw_terminal_status": null,
+    "raw_engine_outcome": null,
+    "explicit_completion_claim": null,
+    "unauthorized_changes": null,
+    "regressions": null,
+    "unsupported_claims": null,
+    "environment_failure": null
+  },
+  "measurements": {
+    "started_at_utc": null,
+    "ended_at_utc": null,
+    "wall_time_seconds": null,
+    "requests": null,
+    "tool_calls": null,
+    "retries": null,
+    "input_tokens": null,
+    "output_tokens": null,
+    "cached_input_tokens": null,
+    "provider_reported_cost_usd": null,
+    "accounting_source": null,
+    "missing_measurement_reason": "Not run; all unavailable measurements remain null."
+  },
+  "human_interventions": null,
+  "evaluator": {
+    "command": null,
+    "exit_code": null,
+    "receipt_path": null,
+    "receipt_sha256": null,
+    "explanation_rubric_review_path": null,
+    "reviewer": null
+  },
+  "evidence": {
+    "invocation_path": null,
+    "events_path": null,
+    "transcript_path": null,
+    "final_response_path": null,
+    "patch_or_candidate_snapshot_path": null,
+    "checksums_path": null
+  },
+  "notes": []
+}

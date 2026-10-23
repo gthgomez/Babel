@@ -1,0 +1,95 @@
+{
+  "case_id": "BRPCB-B",
+  "case_version": "1.0.0",
+  "timezones": [
+    "UTC",
+    "America/Los_Angeles"
+  ],
+  "note": "Each negative control must be rejected by the combined evaluator result across both timezones. Local midnight intentionally passes in UTC; the last-second control intentionally passes the public examples.",
+  "controls": [
+    {
+      "name": "strict-after",
+      "category": "exact-cutoff-off-by-one",
+      "description": "Advances to the following UTC midnight but uses >, incorrectly accepting the exact cutoff.",
+      "expected_public_exit_by_timezone": {
+        "UTC": 1,
+        "America/Los_Angeles": 1
+      },
+      "expected_evaluator_exit_by_timezone": {
+        "UTC": 1,
+        "America/Los_Angeles": 1
+      },
+      "path": "negative-controls/tariff-expiry/strict-after"
+    },
+    {
+      "name": "local-midnight",
+      "category": "local-timezone-cutoff",
+      "description": "Constructs the next midnight in the local timezone. It agrees in UTC but must fail in America/Los_Angeles.",
+      "expected_public_exit_by_timezone": {
+        "UTC": 0,
+        "America/Los_Angeles": 1
+      },
+      "expected_evaluator_exit_by_timezone": {
+        "UTC": 0,
+        "America/Los_Angeles": 1
+      },
+      "path": "negative-controls/tariff-expiry/local-midnight"
+    },
+    {
+      "name": "permissive-parse",
+      "category": "invalid-input-preservation",
+      "description": "Uses permissive Date parsing, accepting normalized impossible dates and timestamp-shaped strings.",
+      "expected_public_exit_by_timezone": {
+        "UTC": 1,
+        "America/Los_Angeles": 1
+      },
+      "expected_evaluator_exit_by_timezone": {
+        "UTC": 1,
+        "America/Los_Angeles": 1
+      },
+      "path": "negative-controls/tariff-expiry/permissive-parse"
+    },
+    {
+      "name": "last-second",
+      "category": "millisecond-precision",
+      "description": "Expires one second too early, losing the end of the inclusive final day.",
+      "expected_public_exit_by_timezone": {
+        "UTC": 0,
+        "America/Los_Angeles": 0
+      },
+      "expected_evaluator_exit_by_timezone": {
+        "UTC": 1,
+        "America/Los_Angeles": 1
+      },
+      "path": "negative-controls/tariff-expiry/last-second"
+    },
+    {
+      "name": "forged-receipt",
+      "category": "candidate-forged-grading-receipt",
+      "description": "Prints a fake successful grading receipt and exits before returning per-input results. The Python supervisor must reject it.",
+      "expected_public_exit_by_timezone": {
+        "UTC": 0,
+        "America/Los_Angeles": 0
+      },
+      "expected_evaluator_exit_by_timezone": {
+        "UTC": 1,
+        "America/Los_Angeles": 1
+      },
+      "path": "negative-controls/tariff-expiry/forged-receipt"
+    },
+    {
+      "name": "mutates-now-properties",
+      "category": "date-object-preservation",
+      "description": "Computes the correct result but adds a memo property to the supplied Date. Its timestamp is unchanged; the complete input object must still be preserved.",
+      "expected_public_exit_by_timezone": {
+        "UTC": 0,
+        "America/Los_Angeles": 0
+      },
+      "expected_evaluator_exit_by_timezone": {
+        "UTC": 1,
+        "America/Los_Angeles": 1
+      },
+      "path": "negative-controls/tariff-expiry/mutates-now-properties"
+    }
+  ]
+}

@@ -1,0 +1,39 @@
+{
+  "suite": "babel-real-project-coding-benchmark-v1",
+  "version": "1.0.1",
+  "title": "Babel's Real-Project Coding Benchmark v1",
+  "inspection_date_utc": "2026-10-23",
+  "case_count": 3,
+  "cases": [
+    {
+      "id": "BRPCB-A",
+      "version": "1.0.1",
+      "manifest": "cases/remote-assets.json",
+      "fixture_sha256": "6fa4825704897030c807a0199c4c53cf5d1842cac80e6d448fb13cb2309feab8",
+      "prompt_sha256": "a38a66967da58adad4a0c4d5ad175e68d8d254060a278818671c4b2d3491df61"
+    },
+    {
+      "id": "BRPCB-B",
+      "version": "1.0.0",
+      "manifest": "cases/tariff-expiry.json",
+      "fixture_sha256": "5bee620154bd2077219b190c491c5a2c0aac1f5977185f0e0ef11d10673a5ed2",
+      "prompt_sha256": "3d1e72ad66adeacf098962833e47de40e3e82219b99c53a5f541e478f48466e4"
+    },
+    {
+      "id": "BRPCB-C",
+      "version": "1.0.0",
+      "manifest": "cases/fuzzy-ranking.json",
+      "fixture_sha256": "03d4769b5270b7b9c541a4005fccb600966646fc0fabd436f4499047398b630d",
+      "prompt_sha256": "be50d5258c650797890b0eee2bb15eb0939b8d7e1d152189c55c5a3fd53f5dcf"
+    }
+  ],
+  "entrypoint": "scripts/bench.py",
+  "fixture_validation": "scripts/validate.py",
+  "toolchain": "toolchain.json",
+  "results_template": "results-template.json",
+  "live_model_runs": "not_run",
+  "automatic_explanation_semantics": false,
+  "comparison_policy": "Per-case diagnostic outcomes; no weighted aggregate or general model ranking.",
+  "separation": "Only prepared workspace enters agent context. Oracle/reference/negative controls remain operator-side. Leakage reduction, not a hostile-code security boundary.",
+  "source_provenance": "PROVENANCE.md"
+}

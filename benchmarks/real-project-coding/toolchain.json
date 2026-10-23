@@ -1,0 +1,7 @@
+{
+  "python": "3.12.14",
+  "node": "24.19.0",
+  "external_dependencies": [],
+  "installation": "None. Use existing Python 3.12 and Node 24; native TypeScript stripping is sufficient.",
+  "reproduction_policy": "Exact pins reproduce the validated environment. Other 3.12.x/24.x patch releases are recorded as a variation and require fixture revalidation before comparison. Other major/minor families are rejected by doctor."
+}

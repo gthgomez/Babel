@@ -1,0 +1,38 @@
+{
+  "case_id": "BRPCB-A",
+  "repository": "gthgomez/Babel",
+  "revision": "34dd34d9d5bca03550eae9c1e59a73942c932957",
+  "classification": "public_upstream_source_extract_with_disclosed_adaptation_and_synthetic_payloads",
+  "license": "Apache-2.0",
+  "files": [
+    {
+      "upstream_path": "babel-cli/src/bridge/remoteUiAssets.ts",
+      "local_path": "babel-cli/src/bridge/remoteUiAssets.ts",
+      "upstream_git_blob_sha": "29ca9eff8b411507ae4215b66cd7b08b8135cc6c",
+      "immutable_url": "https://github.com/gthgomez/Babel/blob/34dd34d9d5bca03550eae9c1e59a73942c932957/babel-cli/src/bridge/remoteUiAssets.ts",
+      "modifications": [
+        "Prepended one prominent benchmark modification comment.",
+        "Changed only import specifier './remoteUiCachePolicy.js' to './remoteUiCachePolicy.ts' for Node 24 native type stripping."
+      ]
+    },
+    {
+      "upstream_path": "babel-cli/src/bridge/remoteUiCachePolicy.ts",
+      "local_path": "babel-cli/src/bridge/remoteUiCachePolicy.ts",
+      "upstream_git_blob_sha": "fddc34c354011a62957ce7d43414716026bab608",
+      "immutable_url": "https://github.com/gthgomez/Babel/blob/34dd34d9d5bca03550eae9c1e59a73942c932957/babel-cli/src/bridge/remoteUiCachePolicy.ts",
+      "modifications": []
+    },
+    {
+      "upstream_path": "babel-cli/src/bridge/remote-ui/sw.js",
+      "local_path": "babel-cli/src/bridge/remote-ui/sw.js",
+      "upstream_git_blob_sha": "3fe3d8a295134264ca1982dd3d9cae194ee9ce57",
+      "immutable_url": "https://github.com/gthgomez/Babel/blob/34dd34d9d5bca03550eae9c1e59a73942c932957/babel-cli/src/bridge/remote-ui/sw.js",
+      "modifications": []
+    }
+  ],
+  "synthetic_files": [
+    "babel-cli/src/bridge/remote-ui/index.html",
+    "babel-cli/src/bridge/remote-ui/app.js"
+  ],
+  "scope": "New benchmark extraction, not an upstream build. No active app, caller/auth implementation, sessions/cancellation code, or private research text is included."
+}

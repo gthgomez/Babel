@@ -1,0 +1,112 @@
+{
+  "id": "BRPCB-C",
+  "version": "1.0.0",
+  "title": "Stable ranked fuzzy candidates",
+  "kind": "adapted_real_project_feature_proposal",
+  "source": {
+    "repo": "https://github.com/gthgomez/Babel",
+    "revision": "34dd34d9d5bca03550eae9c1e59a73942c932957",
+    "path": "babel-cli/src/utils/fuzzy.ts",
+    "classification": "Exact upstream scorer extract with an authored feature proposal and authored throwing starter; not a historical pending issue.",
+    "blob": "4f7c4ebb0d3836b3c16713b84354357c3dd2e669",
+    "license": "Apache-2.0"
+  },
+  "workspace": "workspaces/fuzzy-ranking",
+  "evaluator": "oracle/fuzzy-ranking/check.py",
+  "reference": "reference/fuzzy-ranking/primary",
+  "alternative_reference": "reference/fuzzy-ranking/alternate",
+  "negative_controls": [
+    "negative-controls/fuzzy-ranking/truncation-before-sort",
+    "negative-controls/fuzzy-ranking/limit-zero-unset",
+    "negative-controls/fuzzy-ranking/alphabetical-ties-and-dedupe",
+    "negative-controls/fuzzy-ranking/changed-scorer",
+    "negative-controls/fuzzy-ranking/forged-receipt",
+    "negative-controls/fuzzy-ranking/public-samples-only",
+    "negative-controls/fuzzy-ranking/boxed-scorer-return"
+  ],
+  "mutable_paths": [
+    "src/**"
+  ],
+  "public_command": [
+    "node",
+    "--test",
+    "tests/public.test.mjs"
+  ],
+  "baseline": {
+    "public_exit": 1,
+    "evaluator_exit": 1
+  },
+  "success": [
+    "Export rankCandidates(query, candidates, options?) from src/rankCandidates.ts with item, score and original zero-based index for each returned row.",
+    "For a nonempty literal query, include only fuzzyScore > 0 and >= minScore; order by descending score and stable input-index ties, with duplicates distinct.",
+    "For query exactly empty string, retain candidates in input order with score 0, then apply minScore and limit.",
+    "Default minScore is 0 and absent or undefined limit is unlimited; explicit 0 or -0 limit returns no results. Undefined optional fields are treated as omitted.",
+    "Validate finite nonnegative numeric minScore and finite nonnegative integer limit; reject invalid values with RangeError before empty-input or zero-limit shortcuts.",
+    "Pass public tests and independent evaluator without unauthorized workspace changes."
+  ],
+  "preservation": [
+    "Existing fuzzyScore behavior is preserved against fixed expectations and the exact pinned operator-side source across deterministic generated inputs.",
+    "Do not mutate input arrays or option objects; frozen inputs must work.",
+    "Preserve supplied tests, README and package metadata; no dependencies or external services.",
+    "Equivalent algorithms and additional or edited source files under src/** are permitted; no preferred patch shape is enforced."
+  ],
+  "exclusions": [
+    "This is a small diagnostic extracted from a real project, not a full Babel repository maintenance task or product/UI integration qualification.",
+    "No WASM, ui/fuzzyMatcher, installed Babel, provider route, inference or external service is involved.",
+    "Deterministic fixture controls establish evaluator behavior, not live model performance or a sandbox security boundary."
+  ],
+  "adaptations": [
+    "Moved exact 1240-byte upstream babel-cli/src/utils/fuzzy.ts to workspace src/fuzzy.ts without byte changes.",
+    "Added a benchmark-authored src/rankCandidates.ts throwing Not implemented stub to make an unimplemented feature baseline explicit.",
+    "Added minimal immutable Node 24 native-TypeScript package metadata, task README and public tests; no upstream build system or test suite is reproduced.",
+    "Created operator-only behavioral oracle, exact baseline scorer copy, two equivalent valid overlays and seven negative overlays.",
+    "The ranking API is an authored proposal useful for ranked fallback lookup; no claim is made that upstream maintainers requested it.",
+    "A Python supervisor compares all expected per-call values from a trusted Node vector generator; candidate code runs only in a separate Node worker and never receives the expected values."
+  ],
+  "prompt": "workspaces/fuzzy-ranking/PROMPT.md",
+  "negative_control_expectations": "negative-controls/fuzzy-ranking/expected-rejections.json",
+  "provenance": "PROVENANCE.md",
+  "fixture_sha256": "03d4769b5270b7b9c541a4005fccb600966646fc0fabd436f4499047398b630d",
+  "prompt_sha256": "be50d5258c650797890b0eee2bb15eb0939b8d7e1d152189c55c5a3fd53f5dcf",
+  "toolchain": "toolchain.json",
+  "dependencies": [],
+  "network_required": false,
+  "setup_notes": "No installation. Run doctor, then prepare copies only the frozen agent-visible files into a nonexistent absolute directory.",
+  "commands": {
+    "operator_working_directory": "extracted package root",
+    "setup": [
+      "python3",
+      "scripts/bench.py",
+      "prepare",
+      "BRPCB-C",
+      "--workspace",
+      "/tmp/brpcb-brpcb-c"
+    ],
+    "public_working_directory": "/tmp/brpcb-brpcb-c",
+    "public": [
+      "node",
+      "--test",
+      "tests/public.test.mjs"
+    ],
+    "independent_evaluation": [
+      "python3",
+      "scripts/bench.py",
+      "evaluate",
+      "BRPCB-C",
+      "--workspace",
+      "/tmp/brpcb-brpcb-c",
+      "--scratch-root",
+      "/tmp",
+      "--output",
+      "/tmp/brpcb-brpcb-c-grade.json"
+    ],
+    "reset": [
+      "python3",
+      "scripts/bench.py",
+      "reset",
+      "BRPCB-C",
+      "--workspace",
+      "/tmp/brpcb-brpcb-c"
+    ]
+  }
+}

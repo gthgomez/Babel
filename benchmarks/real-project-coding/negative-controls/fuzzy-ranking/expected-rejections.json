@@ -1,0 +1,62 @@
+{
+  "case_id": "BRPCB-C",
+  "controls": [
+    {
+      "overlay": "negative-controls/fuzzy-ranking/truncation-before-sort",
+      "expected_public_exit": 0,
+      "expected_evaluator_exit": 1,
+      "rejects": [
+        "Applying limit before global scoring and sorting can omit a later higher-ranked or first-matching candidate."
+      ]
+    },
+    {
+      "overlay": "negative-controls/fuzzy-ranking/limit-zero-unset",
+      "expected_public_exit": 0,
+      "expected_evaluator_exit": 1,
+      "rejects": [
+        "Treating numeric zero as an absent limit returns rows instead of an empty array."
+      ]
+    },
+    {
+      "overlay": "negative-controls/fuzzy-ranking/alphabetical-ties-and-dedupe",
+      "expected_public_exit": 1,
+      "expected_evaluator_exit": 1,
+      "rejects": [
+        "Alphabetical tie sorting violates original-index stability.",
+        "Deduplication erases distinct candidates and their original indices."
+      ]
+    },
+    {
+      "overlay": "negative-controls/fuzzy-ranking/changed-scorer",
+      "expected_public_exit": 1,
+      "expected_evaluator_exit": 1,
+      "rejects": [
+        "Changing the legacy word-boundary score from 3 to 4 violates scorer preservation."
+      ]
+    },
+    {
+      "overlay": "negative-controls/fuzzy-ranking/forged-receipt",
+      "expected_public_exit": 0,
+      "expected_evaluator_exit": 1,
+      "rejects": [
+        "A case-level passing receipt followed by process.exit(0) is not the complete per-call behavioral response."
+      ]
+    },
+    {
+      "overlay": "negative-controls/fuzzy-ranking/public-samples-only",
+      "expected_public_exit": 0,
+      "expected_evaluator_exit": 1,
+      "rejects": [
+        "Hardcoding only the public ranking sample does not satisfy unseen query, ordering, option and error cases."
+      ]
+    },
+    {
+      "overlay": "negative-controls/fuzzy-ranking/boxed-scorer-return",
+      "expected_public_exit": 0,
+      "expected_evaluator_exit": 1,
+      "rejects": [
+        "Returning a boxed Number for a legacy scorer query changes the observable return type even when JSON and arithmetic coerce it to the expected value."
+      ]
+    }
+  ]
+}
