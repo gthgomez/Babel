@@ -54,8 +54,9 @@ Before committing policy paths, run (or rely on an installed pre-commit hook):
 node tools/validate-push-candidates.mjs --staged-manifest
 ```
 
-Before push, run the read-only helper (hook ownership label + optional staged
-cheap checks + ls-remote frontier for the **current branch**):
+Before push, run the read-only helper (configured hook ownership label, cheap
+checks, then ls-remote frontier for the **current branch**). `--candidate`
+must equal current `HEAD`; frontier runs before success:
 
 ```bash
 node tools/verify-changed-publication-surface.mjs --candidate "$(git rev-parse HEAD)"
@@ -69,12 +70,13 @@ node tools/validate-push-candidates.mjs origin < push-records.txt
 ```
 
 **Hook activation:** Babel hooks live in `.githooks/` (pre-commit runs
-`--staged-manifest` then leak scans). They run only when
-`core.hooksPath` points at `.githooks` (`pwsh tools/install-hooks.ps1`).
-Do **not** replace or chain-swap a host-managed hook dispatcher; code changes
-do not activate hooks. When `core.hooksPath` is host-managed, run the explicit
-CLI validators above. The helper reports only `repo:.githooks`, `host-managed`,
-or `unset` — never host-specific absolute paths in public output.
+`--staged-manifest` then leak scans). They run only when a host actually
+invokes that path on commit/push. The helper reports configured
+`core.hooksPath` as `repo:.githooks`, `host-managed`, or `unset`, always with
+`hook_execution=unverified` — presence of files or config does not prove the
+publisher runs them. Do **not** replace or chain-swap a host-managed hook
+dispatcher; run the explicit CLI validators above when execution is unverified.
+Never print host-specific absolute paths in public output.
 
 ## Pre-push hook
 

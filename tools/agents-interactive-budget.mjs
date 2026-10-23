@@ -3,12 +3,11 @@
 export const INTERACTIVE_STACK_BUDGET = 12_000
 
 /**
- * Required identity length for a single AGENTS.md body: JavaScript UTF-16 code units
- * after strict UTF-8 decode (same as readFileSync(..., 'utf8').length in compileChatStack).
+ * Required identity length for committed AGENTS.md bytes: JavaScript UTF-16 code units
+ * after Node's UTF-8 decode (readFileSync(..., 'utf8').length), including a preserved BOM.
  */
 export function requiredIdentityLengthFromUtf8(bytes) {
-  const text = new TextDecoder('utf-8', { fatal: true }).decode(bytes)
-  return text.length
+  return Buffer.from(bytes).toString('utf8').length
 }
 
 /** Fail closed when committed/staged AGENTS.md exceeds the interactive stack budget. */

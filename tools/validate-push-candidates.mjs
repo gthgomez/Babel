@@ -17,10 +17,13 @@ function git(root, args, input) {
   return r.stdout.trim()
 }
 
-/** Git pre-push stdin: local_ref local_sha remote_ref remote_sha (exact SHAs only). */
+/**
+ * Git pre-push stdin: local_ref local_sha remote_ref remote_sha.
+ * Local ref may be a revision expression (HEAD, HEAD~1) or (delete); only SHAs execute.
+ */
 export function parsePrePushRecordLine(line) {
   const fields = line.trim().split(/\s+/)
-  if (fields.length !== 4 || !fields[0].startsWith('refs/') || !fields[2].startsWith('refs/')) {
+  if (fields.length !== 4 || !fields[2].startsWith('refs/')) {
     throw new Error('malformed push record')
   }
   const [localRef, localSha, remoteRef, remoteSha] = fields
