@@ -1,9 +1,10 @@
 import type { SessionDescriptor } from '../executor/contracts.js';
 import type { ProtocolHostState } from '../protocol/client/host.js';
 import {
-  assertResumeClaudeAdmissionCompatible,
+  type ClaudeCodeAdmissionInput,
   type ClaudeCodeAdmittedSession,
 } from './claudeCodeAdmission.js';
+import { resolveClaudeCodeTrustedLaunchFields } from './claudeCodeHostLaunchRegistry.js';
 import { admitClaudeCodeSession } from './claudeCodeSessionAdmission.js';
 
 export function claudeAdmissionInputFromDescriptor(
@@ -27,6 +28,32 @@ export function claudeAdmissionInputFromDescriptor(
   };
 }
 
+function enrichClaudeAdmissionFromHostRegistry(
+  input: ClaudeCodeAdmissionInput,
+  state: ProtocolHostState,
+): ClaudeCodeAdmissionInput | { error: string } {
+  const registry = state.claudeCodeHostLaunchRegistry;
+  if (!registry) return input;
+  const trusted = resolveClaudeCodeTrustedLaunchFields({
+    registry,
+    harness_provider_profile: input.harness_provider_profile,
+    project_root: input.project_root,
+  });
+  if (!trusted.ok) {
+    return { error: trusted.detail };
+  }
+  return {
+    ...input,
+    harness_model_profile: trusted.harness_model_profile,
+    harness_credential_ref: trusted.harness_credential_ref,
+    harness_config_root: trusted.harness_config_root,
+    project_policy_root: trusted.project_policy_root,
+    trusted_auth_host_env: trusted.binding.auth_host_env,
+    trusted_auth_child_env: trusted.binding.auth_child_env,
+    ...(trusted.binding.endpoint_env ? { endpoint_env: trusted.binding.endpoint_env } : {}),
+  };
+}
+
 export async function ensureClaudeCodeThreadAdmissionBound(
   state: ProtocolHostState,
   descriptor: SessionDescriptor,
@@ -47,19 +74,17 @@ export async function ensureClaudeCodeThreadAdmissionBound(
     }
     return existing;
   }
-  const input = claudeAdmissionInputFromDescriptor(descriptor);
-  if (!input) {
+  const baseInput = claudeAdmissionInputFromDescriptor(descriptor);
+  if (!baseInput) {
     return { error: 'Claude Code descriptor is incomplete' };
   }
-  const admission = await admitClaudeCodeSession(input, state.claudeCodeAdmissionDeps);
+  const enriched = enrichClaudeAdmissionFromHostRegistry(baseInput, state);
+  if ('error' in enriched) {
+    return enriched;
+  }
+  const admission = await admitClaudeCodeSession(enriched, state.claudeCodeAdmissionDeps);
   if (admission.status === 'rejected') {
     return { error: `${admission.reason}: ${admission.detail}` };
-  }
-  if (existing) {
-    const compat = assertResumeClaudeAdmissionCompatible(existing, admission.admitted);
-    if (compat.status === 'rejected') {
-      return { error: `${compat.reason}: ${compat.detail}` };
-    }
   }
   state.claudeCodeRegistry.bindAdmitted(descriptor.threadId, admission.admitted);
   return admission.admitted;
