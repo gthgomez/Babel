@@ -536,10 +536,10 @@ try {
     $validRun = Invoke-TestScript -Script $preflightScript -Arguments @(
       '-RepoRoot', $fixture, '-GitPath', $git, '-GhPath', $fakeGh, '-CheckSupplementalScrubPolicyPath'
     )
-    Assert-AgentTest ($validRun.exitCode -eq 0) "valid policy file should pass opt-in diagnostic: $($validRun.text)"
+    Assert-AgentTest ($validRun.text -notmatch 'CANARY_MUST_NOT_APPEAR_IN_PREFLIGHT_OUTPUT_7f3a') 'preflight output must not echo policy contents'
+    Assert-AgentTest ($validRun.exitCode -eq 0) 'valid policy file should pass opt-in diagnostic'
     $valid = $validRun.text | ConvertFrom-Json
     Assert-AgentTest ([bool]$valid.supplementalScrubDiagnostic.contentValidated -eq $false) 'preflight must not claim content validation'
-    Assert-AgentTest ($validRun.text -notmatch 'CANARY_MUST_NOT_APPEAR_IN_PREFLIGHT_OUTPUT_7f3a') 'preflight output must not echo policy contents'
   } finally {
     if ([string]::IsNullOrWhiteSpace($priorPolicy)) { Remove-Item Env:BABEL_PRIVATE_SCRUB_POLICY_PATH -ErrorAction SilentlyContinue } else { $env:BABEL_PRIVATE_SCRUB_POLICY_PATH = $priorPolicy }
   }
