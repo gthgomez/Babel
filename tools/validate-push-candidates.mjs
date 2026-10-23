@@ -44,7 +44,7 @@ export function collectPushCandidates(records, root, remote, { publishedTips = [
 
 /** Remote advertisement, not mutable/stale remote-tracking refs, defines published history. */
 export function readPublishedTips(root, remote) {
-  const advertised = git(root, ['ls-remote', '--refs', remote])
+  const advertised = git(root, ['ls-remote', '--refs', remote, 'refs/heads/*', 'refs/tags/*'])
   const ids = [...new Set(advertised.split('\n').filter(Boolean).map(row => {
     const match = row.match(/^([a-f0-9]{40})\trefs\/(?:heads|tags)\/.+$/)
     if (!match) throw new Error('invalid destination advertisement')

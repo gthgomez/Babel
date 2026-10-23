@@ -124,4 +124,43 @@ Assert-CI (-not $wait.ready) 'Base movement during final read must invalidate co
 Import-Module (Join-Path $PSScriptRoot '../../scripts/agent-git-common.psm1') -Force
 $request = Invoke-AgentGh -GhPath (Get-Command pwsh).Source -RepoRoot $PSScriptRoot -Arguments @('-NoProfile', '-Command', 'Start-Sleep -Seconds 10') -TimeoutSeconds 1
 Assert-CI ($request.exitCode -eq 124 -and $request.text -eq 'agent_request_timeout') 'Owned API process must have a hard request deadline'
+# Exercise the installed gate's actual admission/final-state statements with
+# controlled API results, without invoking a network or copying its conditions.
+$parseErrors = $null; $tokens = $null
+$gateAst = [Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '../../scripts/agent-pr-gate.ps1'), [ref]$tokens, [ref]$parseErrors)
+Assert-CI ($parseErrors.Count -eq 0) 'Gate must parse'
+function Gate-Statement([string]$Pattern) {
+  $nodes = @($gateAst.FindAll({ param($node) $node -is [Management.Automation.Language.StatementAst] -and $node.Extent.Text -match $Pattern }, $true) | ForEach-Object { $_.Extent.Text } | Select-Object -Unique)
+  Assert-CI ($nodes.Count -eq 1) "Expected one gate statement: $Pattern"
+  [scriptblock]::Create($nodes[0])
+}
+$deferStatement = Gate-Statement '^\$deferMergeState ='
+$initialState = Gate-Statement '^if \(-not \$deferMergeState\)'
+$waitStatement = Gate-Statement '^\$requiredChecksReady = if \(\$CheckWaitSeconds -eq 0\)'
+$finalState = Gate-Statement '^if \(\$deferMergeState\)'
+$refreshedState = Gate-Statement "^Add-AgentCheck -Name 'POST_WAIT_MERGE_STATE_CLEAN'"
+$failedWait = Gate-Statement '^if \(\$deferMergeState -and -not'
+function Test-GateWaitCase($Seconds, $Mergeable, $Initial, $Final, $OtherBlocker, $Ready, $ExpectedWait, $ExpectedPass) {
+  $CheckWaitSeconds = $Seconds; $prAvailable = $true; $authOk = $true
+  $prHead = 'a' * 40; $runningTrustedControlPlane = $false
+  $prView = [pscustomobject]@{ mergeable = $Mergeable; mergeStateStatus = $Initial }
+  $freshPR = [pscustomobject]@{ available = $true; value = [pscustomobject]@{ mergeable = $Mergeable; mergeStateStatus = $Final } }
+  $rulesetPolicy = [pscustomobject]@{ available = $true }
+  $blockers = @(); if ($OtherBlocker) { $blockers += 'fixture_blocker' }
+  $mergeStateAcceptable = $Initial -eq 'CLEAN'; $observed = @{ waits = 0; passed = $null }
+  function Test-AgentShaValue($Value) { $Value -match '^[a-f0-9]{40}$' }
+  function Add-AgentCheck($Name, $Passed, $Blocker) { $observed.passed = $Passed; if (-not $Passed) { $script:unused = $Blocker } }
+  function Wait-AgentRequiredChecksReady { $observed.waits++; [pscustomobject]@{ ready = $Ready; attempts = 1 } }
+  . $deferStatement; . $initialState; . $waitStatement
+  if ($requiredChecksReady.ready -and $requiredChecksReady.attempts -gt 0) { . $refreshedState; . $finalState }
+  . $failedWait
+  Assert-CI ($observed.waits -eq $ExpectedWait) "Wait admission: $Initial/$OtherBlocker/$Seconds"
+  Assert-CI ($observed.passed -eq $ExpectedPass) "Final merge state: $Initial/$Final/$Ready"
+}
+Test-GateWaitCase 30 MERGEABLE BLOCKED CLEAN $false $true 1 $true
+Test-GateWaitCase 30 MERGEABLE BLOCKED BLOCKED $false $true 1 $false
+Test-GateWaitCase 30 MERGEABLE BLOCKED CLEAN $true $true 0 $false
+Test-GateWaitCase 30 MERGEABLE BLOCKED CLEAN $false $false 1 $false
+Test-GateWaitCase 0 MERGEABLE BLOCKED CLEAN $false $true 0 $false
+Test-GateWaitCase 30 MERGEABLE CLEAN BLOCKED $false $true 1 $false
 Write-Output 'AGENT_CI_EVIDENCE_TEST_PASS'

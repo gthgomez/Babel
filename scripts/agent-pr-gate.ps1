@@ -409,7 +409,14 @@ try {
     [string]::Equals([string]$env:GITHUB_JOB, 'trusted-control-plane', [StringComparison]::OrdinalIgnoreCase)
   $mergeStateAcceptable = ($prAvailable -and [string]$prView.mergeStateStatus -eq 'CLEAN') -or
     ($runningTrustedControlPlane -and $prAvailable -and [string]$prView.mergeable -eq 'MERGEABLE')
-  Add-AgentCheck -Name 'MERGE_STATE_CLEAN' -Passed $mergeStateAcceptable -Blocker 'pr_merge_state_not_clean'
+  # Defer only this aggregate state while explicitly waiting: pending required
+  # CI itself makes GitHub report BLOCKED. All concrete prerequisites still gate
+  # admission, and the refreshed merge state remains mandatory afterward.
+  $deferMergeState = $CheckWaitSeconds -gt 0 -and $prAvailable -and
+    [string]$prView.mergeable -eq 'MERGEABLE' -and [string]$prView.mergeStateStatus -eq 'BLOCKED'
+  if (-not $deferMergeState) {
+    Add-AgentCheck -Name 'MERGE_STATE_CLEAN' -Passed $mergeStateAcceptable -Blocker 'pr_merge_state_not_clean'
+  }
 
   Add-AgentCheck -Name 'ACTIVE_RULESET_READABLE' -Passed ([bool]$rulesetPolicy.available) -Blocker 'active_ruleset_unreadable'
   Add-AgentCheck -Name 'STATUS_CHECK_FRESHNESS_POLICY_READABLE' -Passed ([bool]$rulesetPolicy.available) -Blocker 'required_status_checks_policy_unreadable'
@@ -486,6 +493,15 @@ try {
     $freshIdentity = if ($freshPR.available) { Test-AgentCandidateIdentity -Candidate $freshPR.value -HeadSha $prHead -BaseSha $prBase -StrictBaseFreshness $true }
       else { [pscustomobject]@{ valid = $false } }
     Add-AgentCheck -Name 'POST_WAIT_CANDIDATE_CURRENT' -Passed ([bool]$freshIdentity.valid) -Blocker 'candidate_or_base_changed_during_wait'
+    Add-AgentCheck -Name 'POST_WAIT_MERGE_STATE_CLEAN' -Passed ($freshPR.available -and
+      ([string]$freshPR.value.mergeStateStatus -eq 'CLEAN' -or
+        ($runningTrustedControlPlane -and [string]$freshPR.value.mergeable -eq 'MERGEABLE'))) -Blocker 'merge_state_changed_during_wait'
+    if ($deferMergeState) {
+      $freshMergeStateAcceptable = $freshPR.available -and
+        ([string]$freshPR.value.mergeStateStatus -eq 'CLEAN' -or
+          ($runningTrustedControlPlane -and [string]$freshPR.value.mergeable -eq 'MERGEABLE'))
+      Add-AgentCheck -Name 'MERGE_STATE_CLEAN' -Passed $freshMergeStateAcceptable -Blocker 'pr_merge_state_not_clean'
+    }
     $freshRules = Get-AgentRulesetPolicy
     $ruleFields = @('id', 'enforcement', 'required_review_thread_resolution', 'required_approving_review_count', 'required_status_check_policies', 'strict_required_status_checks_policy')
     $oldRuleIdentity = $rulesetPolicy | Select-Object $ruleFields | ConvertTo-Json -Depth 10 -Compress
@@ -498,6 +514,10 @@ try {
     $freshRemote = Invoke-AgentGit -GitPath $GitPath -RepoRoot $resolvedRepoRoot -Arguments @('ls-remote', $ExpectedRemote, "refs/heads/$prHeadBranch")
     $freshRemoteSha = if ($freshRemote.exitCode -eq 0) { (($freshRemote.text -split '\s+')[0]).Trim() } else { '' }
     Add-AgentCheck -Name 'POST_WAIT_REMOTE_CURRENT' -Passed ($freshRemoteSha -ceq $prHead) -Blocker 'remote_head_changed_during_wait'
+  }
+
+  if ($deferMergeState -and -not ($requiredChecksReady.ready -and $requiredChecksReady.attempts -gt 0)) {
+    Add-AgentCheck -Name 'MERGE_STATE_CLEAN' -Passed $false -Blocker 'pr_merge_state_not_clean'
   }
 
 

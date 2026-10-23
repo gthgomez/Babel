@@ -9,6 +9,22 @@ import { commandCoverage, parseWorkflow } from '../ci-workflow-coverage.mjs';
 
 const workflow = parseWorkflow(readFileSync(new URL('../../.github/workflows/typecheck.yml', import.meta.url), 'utf8'));
 const command = 'npm run test:harness-acceptance';
+
+test('publication and scheduling regressions execute on both hosted platforms', () => {
+  const job = workflow.jobs['architecture-regressions'];
+  assert.deepEqual(job.strategy.matrix.os, ['ubuntu-latest', 'windows-latest']);
+  assert.equal(job['continue-on-error'], undefined);
+  const step = job.steps.find(step => step.run?.startsWith('node --test --test-reporter=tap '));
+  assert.equal(step.if, undefined);
+  assert.equal(step['continue-on-error'], undefined);
+  assert.match(step.run.replace(/\s+/g, ' ').trim(), /^node --test --test-reporter=tap(?: tools\/tests\/[a-z0-9-]+\.test\.mjs)+ 2>&1 \| Tee-Object artifacts\/architecture-regressions\/full\.tap exit \$LASTEXITCODE$/);
+  for (const file of ['push-preflight', 'public-content-worker', 'pre-commit-batch', 'logged-tap-child', 'installed-dependencies', 'unit-scheduling']) {
+    assert.ok(step.run.includes(` tools/tests/${file}.test.mjs `));
+  }
+  for (const gate of ['linux-validation', 'windows-portability']) {
+    assert.ok(workflow.jobs[gate].needs.includes('architecture-regressions'));
+  }
+});
 test('desktop has independent discovery and a blocking command on both platforms', () => {
   assert.deepEqual(commandCoverage(workflow, 'npm run test'), {
     'ubuntu-latest': ['desktop-tests'], 'windows-latest': ['desktop-tests'],
