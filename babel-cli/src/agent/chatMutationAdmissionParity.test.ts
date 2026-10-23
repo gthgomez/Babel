@@ -35,6 +35,12 @@ if (!isSyntheticProviderFixtureReady()) {
       // filesystem paths, provider objects, or synthetic credential canaries.
       t.diagnostic(JSON.stringify({ failedCases: [...output.matchAll(/^not ok (\d+) - /gm)]
         .map(match => Number(match[1])) }))
+      // Export only the finite rollback category, never its underlying error.
+      t.diagnostic(JSON.stringify({ rollbackFailureCategories:
+        [...new Set([...output.matchAll(/BABEL_PATCH_ROLLBACK_(timeout|refused|identity|other)\b/g)]
+          .map(match => match[1]))],
+        failureSourceLines: [...new Set([...output.matchAll(/chatMutationAdmissionParity\.test\.ts:(\d+):\d+/g)]
+          .map(match => Number(match[1])))].slice(0, 16) }))
     }
     assert.equal(code, 0)
   })
@@ -361,7 +367,10 @@ if (!isSyntheticProviderFixtureReady()) {
     f.failOther()
     const result = await f.patchBoth()
     assert.equal(result.exit_code, 1)
-    assert.equal(readFileSync(join(f.root, 'notes.txt'), 'utf8'), 'one\n')
+    const category = result.observation.includes('Windows handle acquisition timed out') ? 'timeout'
+      : result.observation.includes('Windows handles refused') ? 'refused'
+      : result.observation.includes('PARENT_IDENTITY') ? 'identity' : 'other'
+    assert.equal(readFileSync(join(f.root, 'notes.txt'), 'utf8'), 'one\n', `BABEL_PATCH_ROLLBACK_${category}`)
     assert.equal((await f.write('continued\n')).results[0]?.exit_code, 0)
   })
 
@@ -372,6 +381,17 @@ if (!isSyntheticProviderFixtureReady()) {
     try { assert.equal((await f.replace('owned', 'denied')).policyBlocked, true) }
     finally { delete process.env['BABEL_REQUIRE_CLEAN_TREE'] }
     assert.equal(readFileSync(join(f.root, 'notes.txt'), 'utf8'), 'owned\n')
+  })
+
+  test('an unrelated compensation-named directory still blocks mutation admission', async t => {
+    const f = fixture(t)
+    assert.equal((await f.write('owned\n')).results[0]?.exit_code, 0)
+    const unrelated = join(f.root, '.babel-compensation-external')
+    mkdirSync(unrelated)
+    writeFileSync(join(unrelated, 'captured'), 'external\n')
+    assert.equal((await f.write('denied\n')).policyBlocked, true)
+    assert.equal(readFileSync(join(f.root, 'notes.txt'), 'utf8'), 'owned\n')
+    assert.equal(readFileSync(join(unrelated, 'captured'), 'utf8'), 'external\n')
   })
 
   test('a newly hard-linked owned target is not admitted as an ordinary file', async t => {

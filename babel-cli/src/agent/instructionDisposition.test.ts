@@ -210,7 +210,7 @@ describe('delivered project instructions', () => {
     }
   });
 
-  it('omits an oversized ancestor AGENTS.md instead of failing the whole stack', () => {
+  it('fails closed when the accumulated identity set exceeds the budget instead of omitting an ancestor', () => {
     const repo = makeRoot('babel-id-accum-budget-');
     mkdirSync(join(repo, '.git'), { recursive: true });
     const pkg = join(repo, 'pkg');
@@ -219,26 +219,109 @@ describe('delivered project instructions', () => {
     writeFileSync(join(pkg, 'AGENTS.md'), '# Package\nNESTED_REQUIRED\n', 'utf-8');
     process.env['BABEL_USER_CONTEXT'] = join(repo, 'missing-user-context.md');
 
+    // Selecting the nested package selects the repository-root ancestor too.
+    // Every selected identity source is mandatory, so an over-budget combined
+    // set refuses before provider dispatch instead of silently dropping the
+    // ancestor fragment to make room.
+    assert.throws(
+      () => compileChatStack({
+        projectRoot: pkg,
+        includeDomainSkill: false,
+        promptBudgetChars: 12_000,
+      }),
+      /required_instruction_exceeds_prompt_budget/,
+    );
+
+    // The same selection compiles once the combined identity text fits, and both
+    // fragments are delivered in full (repository-root first).
     const stack = compileChatStack({
       projectRoot: pkg,
       includeDomainSkill: false,
-      promptBudgetChars: 12_000,
+      promptBudgetChars: 24_000,
     });
-
-    // The nearest (governing) file is required and delivered; the oversized
-    // ancestor is optional and omitted rather than throwing for the whole stack.
+    assert.match(stack.system_context, /ROOT_OVERFLOW/);
     assert.match(stack.system_context, /NESTED_REQUIRED/);
-    assert.doesNotMatch(stack.system_context, /ROOT_OVERFLOW/);
-    assert.equal(
-      stack.content_disposition.find((item) => item.id === 'identity:agents')?.status,
-      'included',
+    assert.ok(
+      stack.system_context.indexOf('ROOT_OVERFLOW') < stack.system_context.indexOf('NESTED_REQUIRED'),
+      'repository-root ancestor must precede the nested override',
     );
-    const ancestor = stack.selected_entries.find((entry) => entry.path === join(repo, 'AGENTS.md'));
-    assert.ok(ancestor);
-    assert.equal(
-      stack.content_disposition.find((item) => item.id === ancestor!.id)?.status,
-      'omitted',
+    for (const entry of stack.selected_entries.filter((item) => item.layer === 'identity')) {
+      assert.equal(
+        stack.content_disposition.find((item) => item.id === entry.id)?.status,
+        'included',
+        entry.id,
+      );
+    }
+  });
+
+  it('delivers two and three accumulated ancestors in full, root first, or refuses', () => {
+    const repo = makeRoot('babel-id-multi-ancestor-');
+    mkdirSync(join(repo, '.git'), { recursive: true });
+    const mid = join(repo, 'packages');
+    const leaf = join(mid, 'api');
+    mkdirSync(leaf, { recursive: true });
+    writeFileSync(join(repo, 'AGENTS.md'), 'ROOT_RULE_SENTINEL\n', 'utf-8');
+    writeFileSync(join(mid, 'AGENTS.md'), 'MID_RULE_SENTINEL\n', 'utf-8');
+    writeFileSync(join(leaf, 'AGENTS.md'), 'LEAF_RULE_SENTINEL\n', 'utf-8');
+    process.env['BABEL_USER_CONTEXT'] = join(repo, 'missing-user-context.md');
+
+    const stack = compileChatStack({ projectRoot: leaf, includeDomainSkill: false });
+    const identityEntries = stack.selected_entries.filter((entry) => entry.layer === 'identity');
+    assert.equal(identityEntries.length, 3, 'root, mid and leaf fragments are all selected');
+    assert.equal(identityEntries.find((entry) => entry.id === 'identity:agents')?.path, join(leaf, 'AGENTS.md'));
+    assert.equal(identityEntries.filter((entry) => entry.id.startsWith('identity:agents:')).length, 2);
+    for (const token of ['ROOT_RULE_SENTINEL', 'MID_RULE_SENTINEL', 'LEAF_RULE_SENTINEL']) {
+      assert.match(stack.system_context, new RegExp(token));
+    }
+    const order = ['ROOT_RULE_SENTINEL', 'MID_RULE_SENTINEL', 'LEAF_RULE_SENTINEL'].map((token) =>
+      stack.system_context.indexOf(token),
     );
+    assert.ok(order[0]! < order[1]! && order[1]! < order[2]!, 'root → mid → leaf precedence order');
+    for (const entry of identityEntries) {
+      assert.equal(stack.content_disposition.find((item) => item.id === entry.id)?.status, 'included', entry.id);
+    }
+
+    // A budget one UTF-16 code unit below the accumulated identity total refuses.
+    const total = identityEntries
+      .map((entry) => stack.content_disposition.find((item) => item.id === entry.id)!.included_chars)
+      .reduce((sum, chars) => sum + chars, 0) + 2 * (identityEntries.length - 1);
+    assert.throws(
+      () => compileChatStack({ projectRoot: leaf, includeDomainSkill: false, promptBudgetChars: total - 1 }),
+      /required_instruction_exceeds_prompt_budget/,
+    );
+    // Exactly at the boundary the stack still compiles.
+    const exact = compileChatStack({ projectRoot: leaf, includeDomainSkill: false, promptBudgetChars: total });
+    assert.equal(exact.system_context.length, total);
+  });
+
+  it('keeps every mandatory identity fragment while optional engineering and memory degrade by omission', () => {
+    const repo = makeRoot('babel-id-optional-disposition-');
+    mkdirSync(join(repo, '.git'), { recursive: true });
+    const pkg = join(repo, 'pkg');
+    mkdirSync(pkg, { recursive: true });
+    writeFileSync(join(repo, 'AGENTS.md'), 'ROOT_IDENTITY_RULE\n', 'utf-8');
+    writeFileSync(join(pkg, 'AGENTS.md'), 'LEAF_IDENTITY_RULE\n', 'utf-8');
+    writeFileSync(join(repo, 'ENGINEERING.md'), 'ENGINEERING_OPTIONAL\n' + 'e'.repeat(4_000), 'utf-8');
+    process.env['BABEL_USER_CONTEXT'] = join(repo, 'missing-user-context.md');
+
+    // The budget fits both mandatory identity fragments but not the oversized
+    // optional engineering doc or the pre-fetched memory context. Optional
+    // sources degrade by omission; mandatory identity is never demoted.
+    const stack = compileChatStack({
+      projectRoot: pkg,
+      includeDomainSkill: false,
+      promptBudgetChars: 128,
+      memoryContext: 'MEMORY_OPTIONAL\n' + 'm'.repeat(4_000),
+    });
+    assert.match(stack.system_context, /ROOT_IDENTITY_RULE/);
+    assert.match(stack.system_context, /LEAF_IDENTITY_RULE/);
+    assert.doesNotMatch(stack.system_context, /ENGINEERING_OPTIONAL/);
+    assert.doesNotMatch(stack.system_context, /MEMORY_OPTIONAL/);
+    for (const entry of stack.selected_entries.filter((item) => item.layer === 'identity')) {
+      assert.equal(stack.content_disposition.find((item) => item.id === entry.id)?.status, 'included', entry.id);
+    }
+    assert.equal(stack.content_disposition.find((item) => item.id === 'project:engineering')?.status, 'omitted');
+    assert.equal(stack.content_disposition.find((item) => item.id === 'project:memory')?.status, 'omitted');
   });
 
   it('records identity:agents on the manifest and reloads it', () => {

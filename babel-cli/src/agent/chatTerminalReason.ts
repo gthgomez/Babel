@@ -95,8 +95,15 @@ const GUIDANCE: Record<TerminalReasonCode, TerminalReasonGuidance> = {
     nextActions: ['Inspect response diagnostics', 'Retry with an evidence-grounded answer'],
   },
   context_preparation_failed: {
-    message: 'Could not prepare context: workspace snapshot or context authority unavailable',
-    nextActions: ['Select the intended repository with --project-root', 'Inspect run evidence and resolve the snapshot prerequisite before retrying'],
+    // A context-preparation refusal is emitted only when dispatch was refused:
+    // unavailable repository coverage alone installs V2 continuation and
+    // dispatches, so it never reaches here. Do not promise a continuation that
+    // was not admitted — name the operational failure and the repair instead.
+    message: 'Could not prepare the required repository context: the operational authority or durable state required to dispatch is unavailable',
+    nextActions: [
+      'Inspect run evidence for the preparation/install failure before retrying repository-grounded work',
+      'Restore the required operational state (or durable install) and retry',
+    ],
   },
   unknown: {
     message: 'Cause was not established',

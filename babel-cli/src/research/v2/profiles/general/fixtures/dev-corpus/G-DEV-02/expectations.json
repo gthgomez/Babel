@@ -1,0 +1,10 @@
+{
+  "structural": {
+    "must_reject_incompatible_cheaper_option": true,
+    "must_separate_facts_from_recommendation": true
+  },
+  "required_evidence": [
+    { "claim": "Orion Lite lacks DisplayPort Alt Mode", "source": "orion-lite.html" },
+    { "claim": "Helio Tab Pro supports DisplayPort Alt Mode", "source": "helio-tab-pro.html" }
+  ]
+}

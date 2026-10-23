@@ -1,5 +1,5 @@
 #!/bin/bash
-# Optional feedback. Server-side checks remain authoritative.
+# Local publication checks complement the authoritative current-candidate merge checks.
 # Read actual ref/SHA records; never regenerate tracked files here.
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -9,5 +9,6 @@ for tool in node pwsh; do
     exit 1
   fi
 done
-node "$SCRIPT_DIR/../tools/assert-branch-prior-gate-complete.mjs" "${1:-origin}"
+# A correction may supersede an older CI run. Git checks the advertised ref update;
+# the merge gate still requires the new candidate's authoritative results.
 node "$SCRIPT_DIR/../tools/validate-push-candidates.mjs" "${1:-origin}"

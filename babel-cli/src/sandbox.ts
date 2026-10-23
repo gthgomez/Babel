@@ -53,12 +53,12 @@ import {
 } from 'node:fs';
 import { resolve, sep, dirname, basename, isAbsolute, relative } from 'node:path';
 import {
-  buildBenchmarkContainerCommand,
   evaluateGovernedIsolation,
   getDockerUnavailableReason,
   isBenchmarkProjectExecutableCommand,
   shouldUseDockerSandbox,
 } from './config/benchmarkContainer.js';
+import { prepareOwnedContainerInvocation, removeOwnedContainer, removeOwnedContainerSync, type PreparedShellInvocation } from './sandboxContainerLifecycle.js';
 import {
   getExecutionProfileCommandAdditions,
   isToolAllowedForExecutionProfile,
@@ -82,6 +82,12 @@ import { sanitizePath } from './cli/constants.js';
 import { isCanonicalMcpSuccessResult } from './tools/mcpTransport.js';
 import { OutputBuffer } from './ui/outputBuffer.js';
 import type { ProcessWitness, ProcessWitnessInput } from './diagnostics/bdns/processWitness.js';
+import { MAX_SHELL_OUTPUT_BYTES, normalizeShellOutput } from './shellOutputNormalize.js';
+import {
+  isChildRuntimeSupervisorError,
+  isSpawnSyncRuntimeSupervisorError,
+  normalizeSupervisorTerminatedShellOutput,
+} from './sandboxSupervisorTermination.js';
 
 // ─── Shared result type ───────────────────────────────────────────────────────
 
@@ -131,10 +137,35 @@ export interface ToolResultFailure {
   tool: string;
 }
 
+/**
+ * Host-origin record that a command's process could not be launched at all.
+ *
+ * Set only by this sandbox boundary — never derived from child stdout/stderr,
+ * tool arguments or a model-supplied label — so it is the trusted discriminator
+ * for a genuine launch (capability) failure. A child that prints a lookalike
+ * `[sandbox] Spawn error:` line in its own output does not produce it.
+ */
+export interface HostLaunchFailure {
+  code: 'spawn_error' | 'transient_spawn_error';
+}
+
 export interface ToolResult {
   exit_code: number;
   stdout: string;
   stderr: string;
+  /** Source completeness for capped file reads; absent for other tools. */
+  output_completeness?: {
+    complete: boolean;
+    original_bytes: number;
+    returned_bytes: number;
+    reason?: 'byte_limit';
+  };
+  /**
+   * Present only when the sandbox itself failed to launch the process. Absent
+   * for every child-produced result, including a child that prints a
+   * lookalike diagnostic.
+   */
+  launch_failure?: HostLaunchFailure | undefined;
   denial?: StructuredDenial;
   mcp_lifecycle?: McpLifecycle;
   checkpoint_ids?: string[];
@@ -228,13 +259,6 @@ export interface ShellCommandValidationOptions {
 }
 
 // ─── Configuration ────────────────────────────────────────────────────────────
-
-/**
- * Hard cap on combined stdout + stderr bytes returned from shellExec.
- * Prevents runaway commands from flooding the executor context window.
- * Excess bytes are dropped and a sentinel notice is appended.
- */
-const MAX_SHELL_OUTPUT_BYTES = 5 * 1024 * 1024; // 5 MB
 
 /**
  * Patterns that indicate a transient infrastructure error during spawn.
@@ -332,13 +356,12 @@ interface AsyncSpawnResult {
   stdoutTruncated: boolean;
   stderrTruncated: boolean;
   aborted: boolean;
-}
-
-interface PreparedShellInvocation {
-  executable: string;
-  args: string[];
-  cwd: string;
-  env: NodeJS.ProcessEnv;
+  /** Process reached the spawn callback before the error (runtime, not launch). */
+  processStarted: boolean;
+  /** Wall-clock supervisor timeout after a successful launch. */
+  timedOut: boolean;
+  /** Particular aborted client closure; daemon cleanup must follow this barrier. */
+  termination?: Promise<void>;
 }
 
 function appendCappedChunk(
@@ -461,6 +484,8 @@ export function spawnCommandAsync(
       stdoutTruncated: false,
       stderrTruncated: false,
       aborted: true,
+      processStarted: false,
+      timedOut: false,
     });
   }
 
@@ -488,6 +513,8 @@ export function spawnCommandAsync(
         stdoutTruncated: false,
         stderrTruncated: false,
         aborted: false,
+        processStarted: false,
+        timedOut: false,
       });
       return;
     }
@@ -509,6 +536,7 @@ export function spawnCommandAsync(
     let witnessTerminalRecorded = false;
     let timeout: NodeJS.Timeout | null = null;
     let abortSettle: NodeJS.Timeout | null = null;
+    let termination: Promise<void> | undefined;
     let releaseAbortPhysicalClose: (() => void) | undefined;
     const abortPhysicalClose = new Promise<void>((resolveAbortPhysicalClose) => {
       releaseAbortPhysicalClose = resolveAbortPhysicalClose;
@@ -544,6 +572,9 @@ export function spawnCommandAsync(
         stdoutTruncated,
         stderrTruncated,
         aborted,
+        processStarted,
+        timedOut,
+        ...(termination ? { termination } : {}),
       });
     };
 
@@ -554,8 +585,7 @@ export function spawnCommandAsync(
       // event-loop turn so spawnSync(taskkill) cannot hold the promise microtask
       // queue — otherwise Windows cancel latency is dominated by taskkill, not
       // by AbortSignal delivery.
-      finish(1, new Error(`spawn ${executable} aborted`));
-      const termination = new Promise<void>((resolveTermination, rejectTermination) => {
+      termination = new Promise<void>((resolveTermination, rejectTermination) => {
         let complete = false;
         const closeTimeout = setTimeout(() => {
           if (complete) return;
@@ -593,6 +623,7 @@ export function spawnCommandAsync(
         options.processContext?.sessionId ?? 'unscoped',
         executionId ?? `${executable}:${child.pid ?? 'unknown'}`,
       );
+      finish(1, new Error(`spawn ${executable} aborted`));
     };
 
     if (options.timeoutMs > 0) {
@@ -645,37 +676,8 @@ export function spawnCommandAsync(
   });
 }
 
-function normalizeShellOutput(
-  status: number | null,
-  rawStdout: string,
-  rawStderr: string,
-  stdoutWasTruncated = false,
-  stderrWasTruncated = false,
-): ToolResult {
-  let stdout = rawStdout;
-  let stderr = rawStderr;
-  if (process.platform === 'win32') {
-    stdout = stdout.replace(/\r\n/g, '\n');
-    stderr = stderr.replace(/\r\n/g, '\n');
-  }
-
-  const stdoutBytes = Buffer.byteLength(stdout, 'utf8');
-  const stderrBytes = Buffer.byteLength(stderr, 'utf8');
-  if (stdoutBytes > MAX_SHELL_OUTPUT_BYTES || stdoutWasTruncated) {
-    stdout =
-      Buffer.from(stdout, 'utf8').subarray(0, MAX_SHELL_OUTPUT_BYTES).toString('utf8') +
-      `\n[sandbox] stdout truncated — output exceeded ${MAX_SHELL_OUTPUT_BYTES / (1024 * 1024)} MB cap.`;
-  }
-  if (stderrBytes > MAX_SHELL_OUTPUT_BYTES || stderrWasTruncated) {
-    stderr =
-      Buffer.from(stderr, 'utf8').subarray(0, MAX_SHELL_OUTPUT_BYTES).toString('utf8') +
-      `\n[sandbox] stderr truncated — output exceeded ${MAX_SHELL_OUTPUT_BYTES / (1024 * 1024)} MB cap.`;
-  }
-  return { exit_code: status ?? 1, stdout, stderr };
-}
-
 /** @visibleForTesting */
-export { isTransientSpawnError };
+export { isTransientSpawnError, normalizeSupervisorTerminatedShellOutput };
 
 /**
  * Commands allowed in shellExec / testRun. Checked against argv[0] basename.
@@ -1494,7 +1496,10 @@ export class SafeExecutor {
 
   // ── File operations ──────────────────────────────────────────────────────────
 
-  fileRead(inputPath: string, options?: { offset?: number; limit?: number }): ToolResult {
+  fileRead(
+    inputPath: string,
+    options?: { offset?: number; limit?: number; raw?: boolean },
+  ): ToolResult {
     try {
       const safePath = this.resolveSafeRead(inputPath);
 
@@ -1548,7 +1553,7 @@ export class SafeExecutor {
    */
   private formatFileContent(
     content: string,
-    options?: { offset?: number; limit?: number },
+    options?: { offset?: number; limit?: number; raw?: boolean },
   ): ToolResult {
     const MAX_BYTES = 100 * 1024;
     const totalBytes = Buffer.byteLength(content, 'utf-8');
@@ -1556,6 +1561,7 @@ export class SafeExecutor {
     // Safety cap: truncate to 100 KB at the nearest newline boundary
     let truncatedContent = content;
     let capMessage = '';
+    let capped = false;
     if (totalBytes > MAX_BYTES) {
       const buf = Buffer.from(content, 'utf-8');
       truncatedContent = buf.subarray(0, MAX_BYTES).toString('utf-8');
@@ -1564,7 +1570,23 @@ export class SafeExecutor {
       if (lastNewline > 0) {
         truncatedContent = truncatedContent.substring(0, lastNewline);
       }
+      capped = true;
       capMessage = ` [truncated at ${MAX_BYTES / 1024} KB]`;
+    }
+
+    if (options?.raw) {
+      const bytes = Buffer.byteLength(truncatedContent, 'utf8');
+      return {
+        exit_code: 0,
+        stdout: truncatedContent,
+        stderr: '',
+        output_completeness: {
+          complete: !capped,
+          original_bytes: totalBytes,
+          returned_bytes: bytes,
+          ...(capped ? { reason: 'byte_limit' as const } : {}),
+        },
+      };
     }
 
     // Split into lines; remove the trailing empty element from a final \n
@@ -1583,12 +1605,28 @@ export class SafeExecutor {
 
     if (selectedLines.length === 0) {
       if (totalLines === 0) {
-        return { exit_code: 0, stdout: '', stderr: '' };
+        return {
+          exit_code: 0,
+          stdout: '',
+          stderr: '',
+          output_completeness: {
+            complete: !capped,
+            original_bytes: totalBytes,
+            returned_bytes: Buffer.byteLength(truncatedContent, 'utf8'),
+            ...(capped ? { reason: 'byte_limit' as const } : {}),
+          },
+        };
       }
       return {
         exit_code: 0,
         stdout: `[File has ${totalLines} lines; lines ${startLine}–${startLine + maxLines - 1} are out of range]`,
         stderr: '',
+        output_completeness: {
+          complete: !capped,
+          original_bytes: totalBytes,
+          returned_bytes: Buffer.byteLength(truncatedContent, 'utf8'),
+          ...(capped ? { reason: 'byte_limit' as const } : {}),
+        },
       };
     }
 
@@ -1615,6 +1653,12 @@ export class SafeExecutor {
       exit_code: 0,
       stdout: [...headerParts, ...resultLines].join('\n'),
       stderr: '',
+      output_completeness: {
+        complete: !capped,
+        original_bytes: totalBytes,
+        returned_bytes: Buffer.byteLength(truncatedContent, 'utf8'),
+        ...(capped ? { reason: 'byte_limit' as const } : {}),
+      },
     };
   }
 
@@ -1882,19 +1926,10 @@ export class SafeExecutor {
     const useDockerSandbox =
       isolation.kind === 'docker' &&
       shouldUseDockerSandbox(process.env['BABEL_EXECUTION_PROFILE']);
-    const containerCommand = useDockerSandbox
-      ? buildBenchmarkContainerCommand({
-          dockerImage: benchmarkDockerImage!,
-          projectRoot: this.projectRoot,
-          cwd: safeCwd,
-          command,
-        })
-      : null;
-
     // Legacy one-time warning path (host_escalated already logged above).
     if (
       isolation.kind === 'host_escalated' &&
-      !containerCommand &&
+      !useDockerSandbox &&
       !dockerFallbackWarningEmitted &&
       process.env['BABEL_DOCKER_DISABLE'] !== 'true'
     ) {
@@ -1940,13 +1975,8 @@ export class SafeExecutor {
       env = hardenGitHostEnvironment(env);
     }
 
-    return containerCommand
-      ? {
-          executable: containerCommand.executable,
-          args: containerCommand.args,
-          cwd: this.projectRoot,
-          env,
-        }
+    return useDockerSandbox
+      ? prepareOwnedContainerInvocation({ dockerImage: benchmarkDockerImage!, projectRoot: this.projectRoot, cwd: safeCwd, command }, env)
       : { executable: spawnCmd, args: spawnArgs, cwd: resolvedCwd, env };
   }
 
@@ -1977,6 +2007,8 @@ export class SafeExecutor {
         break; // Spawn succeeded — no spawn-level error.
       }
 
+      if (result.pid > 0 && isSpawnSyncRuntimeSupervisorError(result.error)) break;
+
       if (!isTransientSpawnError(result.error.message)) {
         break; // Non-transient error — fail immediately without retry.
       }
@@ -1991,7 +2023,18 @@ export class SafeExecutor {
       sleep(delayMs);
     }
 
+    if (prepared.ownedContainerName && (result.error || result.status !== 0)) {
+      try { removeOwnedContainerSync(prepared.ownedContainerName, prepared.env, Boolean(result.error && result.pid > 0)); }
+      catch (error) { return { exit_code: 1, stdout: result.stdout ?? '', stderr: String(error) }; }
+    }
     if (result.error) {
+      if (isSpawnSyncRuntimeSupervisorError(result.error)) {
+        return normalizeSupervisorTerminatedShellOutput(
+          result.status,
+          result.stdout ?? '',
+          result.stderr ?? '',
+        );
+      }
       const isTransient = transientRetryCount > 0 && isTransientSpawnError(result.error.message);
       const prefix = isTransient
         ? '[sandbox] Transient spawn error (retries exhausted):'
@@ -2000,6 +2043,7 @@ export class SafeExecutor {
         exit_code: 1,
         stdout: '',
         stderr: `${prefix} ${result.error.message}`,
+        launch_failure: { code: isTransient ? 'transient_spawn_error' : 'spawn_error' },
       };
     }
 
@@ -2030,20 +2074,16 @@ export class SafeExecutor {
         timeoutMs,
         env: prepared.env,
         ...(signal ? { signal } : {}),
-        ...(this.processWitness
-          ? {
-              processWitness: this.processWitness,
-              processContext: {
-                projectRoot: this.projectRoot,
-                toolName,
-                ...(sessionId ? { sessionId } : {}),
-                ...(processContext?.turnId ? { turnId: processContext.turnId } : {}),
-                ...(processContext?.toolCallId ? { toolCallId: processContext.toolCallId } : {}),
-              },
-            }
-          : {}),
+        ...(this.processWitness ? { processWitness: this.processWitness } : {}),
+        processContext: {
+          projectRoot: this.projectRoot,
+          toolName,
+          ...(sessionId ? { sessionId } : {}),
+          ...(processContext?.turnId ? { turnId: processContext.turnId } : {}),
+          ...(processContext?.toolCallId ? { toolCallId: processContext.toolCallId } : {}),
+        },
       });
-      if (!result.error || result.aborted || !isTransientSpawnError(result.error.message)) break;
+      if (!result.error || result.aborted || isChildRuntimeSupervisorError(result.error, result.processStarted, result.timedOut) || !isTransientSpawnError(result.error.message)) break;
       transientRetryCount += 1;
       if (transientRetryCount > MAX_TRANSIENT_SPAWN_RETRIES) break;
       const delayMs = 1000 * Math.pow(2, transientRetryCount - 1) + Math.floor(Math.random() * 500);
@@ -2057,13 +2097,44 @@ export class SafeExecutor {
       }
     }
 
+    if (prepared.ownedContainerName && (result.error || result.aborted || result.status !== 0)) {
+      const cleanup = (async () => {
+        let clientFailure: unknown;
+        try { await result.termination; } catch (error) { clientFailure = error; }
+        await removeOwnedContainer(prepared.ownedContainerName!, prepared.env,
+          Boolean(result.termination || (result.error && result.processStarted)));
+        if (clientFailure) throw clientFailure;
+      })();
+      registerPendingProcessTermination(cleanup, sessionId ?? 'unscoped', prepared.ownedContainerName);
+      try { await cleanup; }
+      catch (error) { return { exit_code: 1, stdout: result.stdout, stderr: String(error) }; }
+    }
     if (result.error) {
+      if (result.aborted) {
+        return {
+          exit_code: 1,
+          stdout: '',
+          stderr: `[sandbox] Spawn error: ${result.error.message}`,
+        };
+      }
+      if (isChildRuntimeSupervisorError(result.error, result.processStarted, result.timedOut)) {
+        return normalizeSupervisorTerminatedShellOutput(
+          result.status,
+          result.stdout,
+          result.stderr,
+          result.stdoutTruncated,
+          result.stderrTruncated,
+        );
+      }
       const transient =
-        !result.aborted && transientRetryCount > 0 && isTransientSpawnError(result.error.message);
+        transientRetryCount > 0 && isTransientSpawnError(result.error.message);
       return {
         exit_code: 1,
         stdout: '',
         stderr: `${transient ? '[sandbox] Transient spawn error (retries exhausted):' : '[sandbox] Spawn error:'} ${result.error.message}`,
+        launch_failure: {
+          code: transient ? ('transient_spawn_error' as const) : ('spawn_error' as const),
+        },
       };
     }
     return normalizeShellOutput(

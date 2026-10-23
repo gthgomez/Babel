@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import { runProductBenchmark } from './productBenchmark.js';
+import { executeReadinessCommand, runProductBenchmark } from './productBenchmark.js';
 
 test('product benchmark scorecard preserves market evidence fields', () => {
   const outputDir = mkdtempSync(join(tmpdir(), 'babel-product-benchmark-'));
@@ -56,13 +56,40 @@ test('product benchmark scorecard preserves market evidence fields', () => {
 
 test('product benchmark can include release readiness as a first-class scenario', () => {
   const outputDir = mkdtempSync(join(tmpdir(), 'babel-product-benchmark-'));
+  const commands: string[][] = [];
   const report = runProductBenchmark({
     outputDir,
     now: new Date('2026-04-24T00:00:00.000Z'),
     scenarios: [],
-  });
+  }, { runReadinessCommand: command => { commands.push(command); return { status: 0 }; } });
 
   const readiness = report.scenarios[0];
   assert.equal(readiness?.id, 'release_readiness_gate');
   assert.ok(readiness.checks.some((check) => check.id === 'release_readiness.doctor_all'));
+  assert.equal(readiness.status, 'pass');
+  assert.deepEqual(commands[0]?.slice(1), ['run', 'typecheck']);
+  assert.ok(commands[1]?.includes('doctor'));
+  rmSync(outputDir, { recursive: true, force: true });
+});
+
+test('readiness never treats a spawn error, signal, absent exit status, or nonzero exit as success', () => {
+  for (const outcome of [{ status: null }, { status: 1 }, { status: 0, signal: 'SIGTERM' },
+    { status: null, error: { name: 'Error', code: 'ETIMEDOUT' } },
+    { status: null, error: { name: 'Error', code: 'ENOENT' } }]) {
+    const outputDir = mkdtempSync(join(tmpdir(), 'babel-readiness-failure-'));
+    try {
+      const report = runProductBenchmark({ outputDir, scenarios: [] }, { runReadinessCommand: () => outcome });
+      assert.equal(report.scenarios[0]?.status, 'fail');
+      assert.equal(report.scenarios[0]?.checks.every(check => check.status === 'fail'), true);
+    } finally { rmSync(outputDir, { recursive: true, force: true }); }
+  }
+});
+
+test('production readiness runner observes real subprocess success and failure', () => {
+  const options = { cliRoot: process.cwd(), maxOutputBytes: 4096, id: 'synthetic-process' };
+  assert.equal(executeReadinessCommand([process.execPath, '-e', 'process.exitCode=0'], options).status, 0);
+  assert.equal(executeReadinessCommand([process.execPath, '-e', 'process.exitCode=7'], options).status, 7);
+  const verbose = executeReadinessCommand([process.execPath, '-e', 'process.stdout.write("x".repeat(64000))'], { ...options, maxOutputBytes: 16 });
+  assert.equal(verbose.status, 0, 'small report limits must not kill successful verbose commands');
+  assert.equal(verbose.stdout?.length, 64000);
 });

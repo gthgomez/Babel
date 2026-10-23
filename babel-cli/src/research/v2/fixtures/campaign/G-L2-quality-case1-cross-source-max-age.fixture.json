@@ -1,0 +1,49 @@
+{
+  "schema": "research-v2-g-l2-quality-original-derived/v1",
+  "label": "G_L2_QUALITY_CASE1_CROSS_SOURCE_MAX_AGE",
+  "synthetic_test_id": "g-l2-quality-case1-cross-source-max-age",
+  "acceptance_scenario": "G-L2",
+  "campaign_attempt": "general-g-l2-diagnostic-1",
+  "immutable_evidence_subset": "review-artifacts/general-g-l2-diagnostic-1-evidence-subset.json",
+  "subset_snapshot_sha256": "d07551a20d2bc94b5c0d1ccf9e21f4f4b297a677ec7a096c30218736fb5d0e2a",
+  "plan_question_id": "q-plan-136a705e-a33b-45c8-9c3f-e97b9bc7eab1-3",
+  "finding_id": "finding-7f3b2733cd9d640be75867f5",
+  "question_text_anchor": "On which dimensions do MDN and Cloudflare agree or differ regarding max-age semantics",
+  "cited_passage_ids": [
+    "cli-run-fetch-wg1-b982cb0c--web-ref-0:html:0",
+    "cli-run-fetch-wg1-b982cb0c--web-ref-1:html:2",
+    "cli-run-fetch-wg1-b982cb0c--web-ref-1:html:9"
+  ],
+  "evidence_characterization": {
+    "mdn_revision_completeness": "truncated",
+    "mdn_passage_role": "cache_control_overview_without_max_age_semantics_in_excerpt",
+    "cloudflare_passage_roles": [
+      "expiration_and_max_age_semantics",
+      "cache_control_examples"
+    ],
+    "independent_audit_passage_hashes_verified": true,
+    "comparison_acceptance_met": false
+  },
+  "stored_original_judgment": {
+    "semantic_support": "supported",
+    "question_coverage": "answers",
+    "source": "immutable_subset_row",
+    "gap_note": "Diagnostic pass on citations; cross-source comparison acceptance requires per-source relevant evidence for each compared aspect."
+  },
+  "expected_canonical_reviewer_rubric": {
+    "semantic_support": "supported",
+    "question_coverage": "partial",
+    "must_not_classify_question_coverage_as": ["answers"],
+    "rationale_themes": [
+      "excerpt_limited_cross_source_statement_may_be_semantically_supported",
+      "mdn_side_lacks_relevant_max_age_evidence_in_admitted_excerpt",
+      "cloudflare_side_has_concrete_max_age_and_edge_browser_semantics",
+      "cross_source_agreement_difference_requires_relevant_evidence_per_source_and_aspect"
+    ]
+  },
+  "rules": {
+    "do_not_mutate_evidence_subset": true,
+    "do_not_alter_live_findings_or_paid_rerun": true,
+    "use_subset_loader_only_for_original_rows": true
+  }
+}

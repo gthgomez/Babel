@@ -32,7 +32,6 @@ import {
 import { detectAndBuildBlockedReport } from '../../agent/chatEngineSupport.js';
 import { BABEL_RUNS_DIR } from '../../cli/constants.js';
 import { desktopApprovalEnabled, setDesktopCancelHandler, startDesktopIpc, stopDesktopIpc } from '../../agent/desktopApproval.js';
-import { getProtocolClient } from '../../protocol/client/index.js';
 import {
   classifyFailureText,
   dispatchChatEvent,
@@ -43,6 +42,7 @@ import {
 import type { TerminalOutcome } from '../../schemas/agentContracts.js';
 import {
   attachSessionAdmissionStore,
+  cancelChatEngineTurn,
   finalizeProtocolTurn,
   getEngineThreadId,
   prepareHeadlessTurn,
@@ -810,10 +810,7 @@ export async function runChatEngineOnce(input: {
 
   const threadId = getEngineThreadId(engine);
   const cancelViaProtocol = () => {
-    if (threadId) {
-      void getProtocolClient().turnCancel({ thread_id: threadId });
-    }
-    engine.cancel();
+    void cancelChatEngineTurn(engine, protocolSession);
   };
 
   if (input.onCancel) {

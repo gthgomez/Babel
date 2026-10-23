@@ -77,7 +77,7 @@ export async function resolveClaudeCodePolicyIsolated(
   try {
     resolved = await resolveSettings({
       cwd: input.projectPolicyRoot,
-      settingSources: [],
+      settingSources: input.launchSpec.settingSources,
       managedSettings:
         input.launchSpec.managedSettings as import('@anthropic-ai/claude-agent-sdk').Settings,
     });

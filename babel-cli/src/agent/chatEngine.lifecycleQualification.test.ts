@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { spawn, spawnSync } from 'node:child_process';
 import {
@@ -18,9 +19,13 @@ import { pathToFileURL } from 'node:url';
 import { describe, test } from 'node:test';
 
 import { ChatEngine } from './chatEngine.js';
+import { createToolExecutor } from './toolExecutor.js';
+import { executeTool } from '../localTools.js';
+import { loadEffectLedger } from '../executor/effectLedger.js';
 import type { ChatEvent } from './chatEngine.js';
 import { persistTranscriptToDisk } from './chatEngineObservability.js';
-import { getBackgroundShellJob, killAllBackgroundShells } from './backgroundShell.js';
+import { getBackgroundShellJob, killAllBackgroundShells, startBackgroundShell } from './backgroundShell.js';
+import { executeAwaitCommandAction } from './chatBackgroundShell.js';
 import type { ChatMessage } from './chatToolDefinitions.js';
 import { CompactionManager } from './chatCompaction.js';
 import { recordUserMessage } from './threadEventLog.js';
@@ -196,9 +201,11 @@ function makeFixture() {
   process.env['BABEL_BENCHMARK_MODE'] = '1';
   process.env['BABEL_AUTONOMY_LEASE'] = JSON.stringify({
     version: 2,
-    leaseId: 'lifecycle-fixture-lease',
+    // Each independent fixture owns its authority. A prior background job's
+    // fail-closed drift revocation must not revoke a later fixture's lease.
+    leaseId: `lifecycle-fixture-${randomUUID()}`,
     scope: { repository: 'lifecycle-fixture', objective: 'deterministic lifecycle qualification' },
-    allowedCapabilities: ['run_arbitrary_code', 'run_local_command', 'run_tests', 'edit_task_files'],
+    allowedCapabilities: ['run_arbitrary_code', 'run_local_command', 'run_tests', 'edit_task_files', 'inspect_repository'],
   });
   // This is an explicit test-only host boundary for real child-process fixtures;
   // production defaults and safety policy remain unchanged.
@@ -339,6 +346,361 @@ await engine.submitMessage('Create the marker with the crash-after-effect lifecy
 }
 
 describe('ChatEngine lifecycle and crash qualification', { concurrency: false }, () => {
+  test('Chat repeats a byte-capped long-line read and reports incomplete source', async () => {
+    const fixture = makeFixture();
+    writeFileSync(
+      join(fixture.project, 'long-lines.txt'),
+      `${'A'.repeat(60_000)}\n${'B'.repeat(60_000)}\n`,
+      'utf8',
+    );
+    let calls = 0;
+    const runner: TestRunner = {
+      ...makeRunner(() => []),
+      async *executeWithToolsStream(..._args: unknown[]) {
+        if (calls++ === 0) {
+          yield {
+            type: 'tool_use', id: 'read-long-1', name: 'read_file',
+            input: { path: 'long-lines.txt' },
+          };
+        } else if (calls === 2) {
+          yield {
+            type: 'tool_use', id: 'read-long-2', name: 'read_file',
+            input: { path: 'long-lines.txt' },
+          };
+        } else {
+          yield { type: 'text_delta', text: 'The capped source was reported accurately.' };
+          yield { type: 'done', finishReason: 'stop' };
+          return;
+        }
+        yield { type: 'done', finishReason: 'tool_calls' };
+      },
+    };
+    const engine = makeEngine(fixture.project, 'long-line-read-cap', runner, {
+      maxTurns: 5,
+      toolExecutorForTesting: createToolExecutor({
+        executeTool: (request, context) =>
+          executeTool(
+            request.tool === 'file_read' ? { ...request, raw: true } : request,
+            context,
+          ),
+      }),
+    });
+    try {
+      await collectStream(
+        engine.submitMessageStream('Read long-lines.txt twice and report its contents.'),
+      );
+      assert.equal(calls, 3, 'both repeated read actions reached the Chat executor');
+      const readObservations = engine.getConversation()
+        .filter(message =>
+          message.role === 'tool' &&
+          message.content.startsWith('### read_file long-lines.txt'))
+        .map(message => message.content);
+      assert.equal(readObservations.length, 2, 'both tool calls produced a Chat observation');
+      assert.equal(
+        readObservations.filter(observation => observation.includes('source byte-capped')).length,
+        2,
+        'each real Chat observation identifies the byte-capped source');
+      assert.equal(
+        readObservations.some(observation => observation.includes('complete file')),
+        false,
+        'a byte-capped result is never described as a complete file');
+      assert.equal(
+        engine['fullReadCounts'].size,
+        0,
+        'an incomplete source read does not consume the full-read allowance');
+    } finally { fixture.cleanup(); }
+  });
+
+  test('await_command enrolls large output for owner-bound artifact retrieval', async () => {
+    const fixture = makeFixture();
+    const sentinel = 'BACKGROUND_MIDDLE_ONLY_91ac';
+    const script = writeNodeFixture(
+      fixture.root,
+      'background-output.mjs',
+      `console.log(Array.from({ length: 1200 }, (_, i) => i === 600 ? '${sentinel}' : 'diagnostic row ' + i + ' ' + 'x'.repeat(40)).join('\\n'));`,
+    );
+    let engine!: ChatEngine;
+    let turn = 0;
+    let artifactId = '';
+    let retrieved = false;
+    const runner: TestRunner = {
+      ...makeRunner(() => []),
+      async *executeWithToolsStream(...args: unknown[]) {
+        const request = JSON.stringify(args);
+        if (turn++ === 0) {
+          yield {
+            type: 'tool_use', id: 'background-large-output', name: 'run_command',
+            input: { command: `node ${shellArg(script)}`, background: true },
+          };
+        } else if (turn === 2) {
+          const started = (engine as any).toolCallLog.find(
+            (entry: { detail?: string }) => entry.detail?.startsWith('background started '),
+          );
+          const taskId = started?.detail?.match(/bg-\d+/)?.[0];
+          assert.ok(taskId, 'background job started before await');
+          yield {
+            type: 'tool_use', id: 'await-large-output', name: 'await_command',
+            input: { task_id: taskId },
+          };
+        } else if (turn === 3) {
+          assert.equal(
+            request.includes(sentinel), false,
+            'middle output is omitted from the bounded preview',
+          );
+          const id = request.match(/artifact_id:\s*([a-f0-9-]{36})/)?.[1];
+          assert.ok(id, 'await observation includes its enrolled artifact handle');
+          artifactId = id;
+          yield {
+            type: 'tool_use', id: 'read-background-artifact', name: 'read_artifact',
+            input: { artifact_id: artifactId, query: sentinel },
+          };
+        } else {
+          assert.equal(
+            request.includes(sentinel), true,
+            'read_artifact retrieves the omitted background diagnostic',
+          );
+          retrieved = true;
+          yield { type: 'text_delta', text: 'The background diagnostic was retrieved.' };
+          yield { type: 'done', finishReason: 'stop' };
+          return;
+        }
+        yield { type: 'done', finishReason: 'tool_calls' };
+      },
+    };
+    engine = makeEngine(
+      fixture.project,
+      'background-artifact-retrieval',
+      runner,
+      { maxTurns: 8, operatorMode: 'default', hardPlanMode: false },
+    );
+    try {
+      await collectStream(
+        engine.submitMessageStream(
+          'Implement the background output feature by running the diagnostic and retrieving its middle output.',
+          'execute',
+        ),
+      );
+      assert.equal(retrieved, true);
+      assert.match(artifactId, /^[a-f0-9-]{36}$/);
+    } finally {
+      const killed = killAllBackgroundShells({
+        ownerId: (engine as any).engineRunId,
+        includeDetached: true,
+      });
+      engine.cancel();
+      await Promise.all(killed.killed.map(id => getBackgroundShellJob(id)?.done));
+      fixture.cleanup();
+    }
+  });
+
+  test('await_command drops results when submission ownership changes during wait', async () => {
+    const fixture = makeFixture();
+    const spillWrites: string[] = [];
+    try {
+      for (const output of ['small output', 'spill-sized output '.repeat(400)]) {
+        const script = writeNodeFixture(
+          fixture.root,
+          `stale-await-${output.length}.mjs`,
+          `console.log(${JSON.stringify(output)}); await new Promise(resolve => setTimeout(resolve, 50));`,
+        );
+        const job = startBackgroundShell({
+          command: `node ${shellArg(script)}`,
+          cwd: fixture.project,
+          timeoutMs: 10_000,
+          ownerId: 'stale-await-fixture',
+        });
+        let current = true;
+        let logged = false;
+        let completed = false;
+        let settledStale = false;
+        const result = await executeAwaitCommandAction(
+          { task_id: job.id },
+          {
+            projectRoot: fixture.project,
+            tool: 'await_command',
+            target: job.id,
+            toolId: 1,
+            index: 1,
+            pushLog: () => { logged = true; },
+            onToolComplete: () => { completed = true; },
+            onBeforeAwait: () => { setImmediate(() => { current = false; }); },
+            isSubmissionCurrent: () => current,
+            settleStale: () => {
+              settledStale = true;
+              return { index: 1, observation: 'stale action settled' };
+            },
+            artifactAccess: {
+              read: () => '',
+              writeSpill: (name, content) => {
+                spillWrites.push(name);
+                return content;
+              },
+            },
+          },
+        );
+        assert.deepEqual(result, { index: 1, observation: 'stale action settled' });
+        assert.equal(settledStale, true);
+        assert.equal(logged, false, 'stale output is not added to the tool log');
+        assert.equal(completed, false, 'stale output does not complete the old tool call');
+      }
+      assert.deepEqual(spillWrites, [], 'stale output is never enrolled as an artifact');
+    } finally {
+      const killed = killAllBackgroundShells({ ownerId: 'stale-await-fixture', includeDetached: true });
+      await Promise.all(killed.killed.map(id => getBackgroundShellJob(id)?.done));
+      fixture.cleanup();
+    }
+  });
+
+  test('overlapping engines retain command cwd, fallback reads, evidence roots and ambient restoration', { timeout: 30_000 }, async () => {
+    const fixture = makeFixture();
+    const previousRoot = process.env['BABEL_PROJECT_ROOT'];
+    process.env['BABEL_PROJECT_ROOT'] = fixture.root;
+    const barrier = () => {
+      let release!: () => void;
+      const promise = new Promise<void>(resolve => { release = resolve; });
+      return { promise, release };
+    };
+    const entered = [barrier(), barrier()];
+    const releases = [barrier(), barrier()];
+    const projects = ['a', 'b'].map(name => join(fixture.project, name));
+    const results: Array<{ cwd: string; fallback: string }> = [];
+    const engines = projects.map((project, index) => {
+      mkdirSync(project);
+      writeFileSync(join(project, 'cwd.mjs'), 'console.log(process.cwd())');
+      const runner = makeRunner(call => call < 2 ? [{ type: 'tool_use', id: `root-${index}-${call}`,
+        name: call === 0 ? 'write_file' : 'run_command',
+        input: call === 0 ? { path: 'result.txt', content: `engine-${index}` } : { command: 'node cwd.mjs' },
+      }, { type: 'done', finishReason: 'tool_calls' }] : [
+        { type: 'text_delta', text: 'Root inspection complete.' }, { type: 'done', finishReason: 'stop' },
+      ]);
+      return makeEngine(project, `root-engine-${index}`, runner, {
+        task: 'Write result.txt then inspect command cwd with node cwd.mjs',
+        toolExecutorForTesting: createToolExecutor({ executeTool: async (request, context) => {
+          if (request.tool === 'file_write') {
+            entered[index]!.release();
+            await releases[index]!.promise;
+          }
+          assert.equal(context.projectRoot, project);
+          const result = await executeTool(request, context);
+          if (request.tool === 'shell_exec') {
+            const { projectRoot: _explicitRoot, ...fallbackContext } = context;
+            const fallback = await executeTool({ tool: 'file_read', path: 'result.txt' }, fallbackContext);
+            assert.equal(fallback.exit_code, 0);
+            results[index] = { cwd: result.stdout.trim(), fallback: fallback.stdout };
+          }
+          return result;
+        } }),
+      });
+    });
+    const pending: Array<Promise<ChatEvent[]>> = [];
+    try {
+      pending.push(collectStream(engines[0]!.submitMessageStream('Write result.txt then inspect command cwd with node cwd.mjs')));
+      await entered[0]!.promise;
+      pending.push(collectStream(engines[1]!.submitMessageStream('Write result.txt then inspect command cwd with node cwd.mjs')));
+      await entered[1]!.promise;
+      releases[0]!.release(); await pending[0];
+      assert.equal(process.env['BABEL_PROJECT_ROOT'], projects[1]);
+      releases[1]!.release(); await pending[1];
+      for (const [index, project] of projects.entries()) {
+        assert.equal(readFileSync(join(project, 'result.txt'), 'utf8'), `engine-${index}`);
+        assert.equal(results[index]?.cwd.toLowerCase(), project.toLowerCase());
+        assert.equal(results[index]?.fallback.includes(`engine-${index}`), true);
+        const effects = loadEffectLedger(chatSessionDir(`root-engine-${index}`));
+        assert.equal(effects.some(record => record.status === 'completed' && record.targetPaths.includes(join(project, 'result.txt'))), true);
+        assert.equal(effects.some(record => record.targetPaths.some(path => path.startsWith(projects[1 - index]!))), false);
+      }
+      assert.equal(process.env['BABEL_PROJECT_ROOT'], fixture.root);
+    } finally {
+      releases.forEach(release => release.release());
+      await Promise.allSettled(pending);
+      if (previousRoot === undefined) delete process.env['BABEL_PROJECT_ROOT'];
+      else process.env['BABEL_PROJECT_ROOT'] = previousRoot;
+      fixture.cleanup();
+    }
+  });
+  test('scripted provider retrieves an omitted middle diagnostic through governed artifact dispatch', async () => {
+    const fixture = makeFixture();
+    let request = 0;
+    let observedDiagnostic = false;
+    let artifactId = '';
+    let readNext = false;
+    let expectDenied = false;
+    let observedDenial = false;
+    const sentinel = 'MIDDLE_ONLY_DIAGNOSTIC_7f31';
+    const output = Array.from({ length: 1200 }, (_, index) => index === 600
+      ? sentinel : `ordinary log row ${index} ${'x'.repeat(30)}`).join('\n');
+    const runner: TestRunner = {
+      ...makeRunner(() => []),
+      async *executeWithToolsStream(...args: unknown[]) {
+        const input = JSON.stringify(args);
+        if (request++ === 0) {
+          yield { type: 'tool_use', id: 'long-output', name: 'run_command', input: { command: 'node diagnostic.mjs' } };
+        } else if (request === 2) {
+          assert.equal(input.includes(sentinel), false, 'sentinel must be absent from head/tail');
+          const id = input.match(/artifact_id:\s*([a-f0-9-]{36})/)?.[1];
+          assert.ok(id, 'provider must receive a discoverable artifact handle');
+          artifactId = id;
+          assert.equal(input.includes('read_artifact'), true);
+          yield { type: 'tool_use', id: 'middle-read', name: 'read_artifact', input: { artifact_id: id, query: sentinel } };
+        } else {
+          if (readNext) {
+            readNext = false;
+            yield { type: 'tool_use', id: `continued-read-${request}`, name: 'read_artifact', input: { artifact_id: artifactId, query: sentinel } };
+            yield { type: 'done', finishReason: 'tool_calls' };
+            return;
+          }
+          if (expectDenied) {
+            const messages = args[0] as Array<{ role: string; content?: unknown }>;
+            const toolResult = messages.filter(message => message.role === 'tool').at(-1)?.content;
+            assert.equal(typeof toolResult === 'string' && !toolResult.includes(sentinel) && toolResult.includes('ARTIFACT_DENIED'), true);
+            observedDenial = true;
+            yield { type: 'text_delta', text: 'Prior task artifact was denied.' };
+            yield { type: 'done', finishReason: 'stop' };
+            return;
+          }
+          // The raw record adds command, exit and stdout header lines.
+          assert.equal(input.includes(`604: ${sentinel}`), true, 'next provider request contains middle diagnostic');
+          assert.equal(input.includes('sha256:'), true, 'next provider request contains content provenance');
+          assert.equal(input.includes('source: run_command call=long-output'), true);
+          observedDiagnostic = true;
+          yield { type: 'text_delta', text: 'The diagnostic is now visible.' };
+          yield { type: 'done', finishReason: 'stop' };
+          return;
+        }
+        yield { type: 'done', finishReason: 'tool_calls' };
+      },
+    };
+    const engine = makeEngine(fixture.project, 'middle-diagnostic', runner, {
+      task: 'Repair diagnostic.mjs and verify with node diagnostic.mjs',
+      maxTurns: 32,
+      toolExecutorForTesting: createToolExecutor({ executeTool: async () => ({ exit_code: 0, stdout: output, stderr: '' }) }),
+    });
+    try {
+      const events = await collectStream(engine.submitMessageStream('Repair diagnostic.mjs and verify with node diagnostic.mjs. First run it and inspect the complete diagnostic output.'));
+      assert.equal(observedDiagnostic, true, JSON.stringify({ request, events: events.map(event => ({ type: event.type,
+        ...('message' in event ? { message: event.message } : {}), ...('error' in event ? { error: event.error } : {}),
+        ...('text' in event ? { text: event.text } : {}),
+      })) }));
+      const ownerBefore = engine['taskAllowance']?.taskOwnerId;
+      const runRead = async (target: ChatEngine, continueTask: boolean) => {
+        readNext = true;
+        const nextEvents = await collectStream(target.submitMessageStream(continueTask ? 'Continue repairing diagnostic.mjs' : 'Implement an unrelated new feature', 'execute', { continueTask }));
+        assert.equal(readNext, false, JSON.stringify({ request, terminal: nextEvents.filter(event => event.type === 'failed').map(event => ({type:event.type, error:event.error})) }));
+      };
+      await runRead(engine, true);
+      assert.equal(engine['taskAllowance']?.taskOwnerId, ownerBefore, 'same-task continuation retains ownership');
+      const restored = await ChatEngine.restore('middle-diagnostic', {
+        task: 'Repair diagnostic.mjs and verify with node diagnostic.mjs', projectRoot: fixture.project,
+        maxTurns: 32,
+        model: 'deepseek-v4-flash', providerRunner: runner as never, providerPolicy: FIXTURE_PROVIDER_POLICY,
+      });
+      assert.equal(restored['taskAllowance']?.taskOwnerId, ownerBefore, 'cold restore uses durable task ownership');
+      await runRead(restored, true);
+      expectDenied = true;
+      await runRead(restored, false);
+      assert.equal(observedDenial, true, 'replacement task cannot retrieve prior evidence');
+    } finally { fixture.cleanup(); }
+  });
   test('cancellation with prior real proof preserves a detached late effect and requires fresh resumed verification', async () => {
     const fixture = makeFixture();
     const runId = 'late-effect-cancel';

@@ -1,0 +1,12 @@
+{
+  "profile_id": "general",
+  "primary_question": "Which fictional cloud plan fits a solo developer who needs 500 GB storage and can pay either monthly or annually?",
+  "intended_decision": "Choose Plan A or Plan B for the next 12 months.",
+  "as_of": "2026-04-01",
+  "jurisdiction": "unknown",
+  "constraints": {
+    "currency": "USD",
+    "billing_periods_to_compare": ["monthly", "annual"]
+  },
+  "exclusions": ["signup", "purchase", "live pricing APIs"]
+}

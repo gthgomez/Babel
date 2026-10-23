@@ -87,6 +87,18 @@ export function createClaudeCodeHostLaunchRegistryFromBindings(
   };
 }
 
+/**
+ * Production host binding: `BABEL_CLAUDE_HOST_BINDINGS_PATH` points at a version-1 JSON file.
+ * Missing or invalid path yields an empty registry (thread.create rejects unknown profiles).
+ */
+export function resolveClaudeCodeHostLaunchRegistryFromEnv(
+  env: NodeJS.ProcessEnv = process.env,
+): ClaudeCodeHostLaunchRegistry | undefined {
+  const configured = env['BABEL_CLAUDE_HOST_BINDINGS_PATH']?.trim();
+  if (!configured) return undefined;
+  return loadClaudeCodeHostLaunchRegistryFromFile(resolve(configured));
+}
+
 export function loadClaudeCodeHostLaunchRegistryFromFile(path: string): ClaudeCodeHostLaunchRegistry {
   if (!existsSync(path)) {
     return createClaudeCodeHostLaunchRegistryFromBindings([]);

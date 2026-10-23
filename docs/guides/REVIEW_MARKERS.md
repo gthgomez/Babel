@@ -24,18 +24,23 @@ Evidence binds to the head it names; after remediation commits, post the
 remediation mapping and re-run. The `trusted-control-plane` workflow calls
 `scripts/trusted-merge-gate.ps1`, which materializes the trusted-base gate
 components and invokes `scripts/agent-pr-gate.ps1`. Its
-`Wait-AgentRequiredChecksReady` step polls required peer checks for the target
-SHA for up to 180 attempts at 10 seconds each (30 minutes) before evaluating
-authoritative results. Marker comments provide review evidence; they do not
-re-trigger CI timing.
+default invocation takes one current snapshot and reports pending checks.
+`-CheckWaitSeconds <0..1800>` explicitly requests a bounded wait with backoff;
+cheap review and identity blockers are checked first. The `workflow_run`
+listener resumes the trusted audit when product CI completes. Marker comments
+provide review evidence and do not restart product checks.
 
 ## Required CI scope
 
-The current `.github/workflows/typecheck.yml` does not have a `changes` job or
-path-based classifier for skipping required jobs. Documentation-only and
-release-preparation changes therefore follow the workflow's configured job
-matrix; do not assume that runtime jobs will be skipped. Keep this description
-aligned with the workflow when its job-selection rules change.
+`typecheck.yml` uses `tools/ci-merge-lane.mjs`: docs and skills can take the fast
+lane; runtime and tooling changes require the full matrix. The trusted base
+classifier and its policy are materialized together and unioned with the head
+decision. Missing trusted inputs require full qualification.
+
+Readiness and draft transitions rerun the trusted metadata audit. Label changes
+retain ordinary `pull_request` product qualification because `full-ci` raises
+the required matrix and installer coverage. A newer eligible run still
+invalidates an older success for the same head until it completes.
 
 ## Pre-push hook
 
@@ -43,6 +48,15 @@ Install with `pwsh tools/install-hooks.ps1` (or
 `git config core.hooksPath .githooks`). The pre-push hook requires both Node.js
 and PowerShell and fails closed if either is unavailable. It validates the
 exact committed candidates being pushed against the content policy and
-policy-integrity manifest, then runs gitleaks when available. It does not
-regenerate tracked files. CI remains the authoritative gate; hooks are
-convenience.
+policy-integrity manifest, then requires gitleaks. Every candidate's cheap path
+and manifest checks run before expensive scanning. The validator uses the actual
+pushed ref records and an authenticated destination advertisement; corrections
+can supersede older CI. Merge still requires the current candidate's results.
+
+Committed blobs are materialized without checkout filters or candidate code;
+symlinks are inspected as target text. A push-owned in-memory cache reuses
+file-local content decisions bound to bytes, path, validator, policy and UTC
+date. Links, titles and other tree-wide rules are checked for every snapshot.
+No persistent PASS file is trusted. Stage timing, heartbeats, exit status and
+bounded rule/path-digest diagnostics make progress observable without exposing
+rejected source. The hook never regenerates tracked files.

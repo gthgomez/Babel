@@ -15,6 +15,7 @@ import type { ToolDefinition } from '../../runners/base.js'
 export const INVESTIGATION_TOOL_NAMES = [
   'read_file',
   'read_range',
+  'read_artifact',
   'list_dir',
   'grep',
   'glob',

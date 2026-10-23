@@ -1,5 +1,7 @@
 # Babel Desktop — Windows installation
 
+> **Version note:** these steps match the published [0.1.3 release](https://github.com/gthgomez/Babel/releases/tag/v0.1.3), including its private plaintext `.env` credential storage. Current-source builds may differ (for example OS-protected credential storage); see the [Desktop README](../README.md).
+
 The installer and portable package include Babel Desktop, the authoritative Babel CLI, prompt assets, production dependencies, and Node 24.13.1. They require Windows x64. You do not need Node, npm, a source checkout, or a separate CLI build to launch them.
 
 ## Install with Setup.exe (per-user, unsigned package)
@@ -11,7 +13,7 @@ The release workflow now builds and attaches the Setup.exe alongside the portabl
 3. Open **Babel Desktop.exe**. First launch shows setup status. Choose your project with **Open project**.
 4. Open **Providers and models**, choose DeepSeek, OpenRouter, DeepInfra, or OpenCode Go, and enter your API key in the masked input. By default Babel creates a private `.env` under the Desktop profile's `engine/config` directory, **not** in the project. Existing provider values are not overwritten. The optional **Selected project .env** choice is explicit and available only after selecting a Git repository where `.env` is untracked and Git-ignored. Project-local secrets can be read by project code and are not recommended. Do not paste credentials into chat, Git commits, screenshots or logs. Desktop does not import secrets from other apps. Existing process environment variables take precedence.
 5. Install and start Docker Desktop separately with Linux containers for the default `safe_repo` execution profile. In **Setup**, choose **Prepare recommended image** to download and verify the pinned Linux amd64 Node 24 Bookworm image, including shell, Git, Node and npm. Preparation may take several minutes. Alternatively, expand **Use an existing local image**, enter an image reference, and choose **Validate and use image**. Validation runs an isolated shell/Git probe without project mounts or network access. The exact verified local image ID is saved for both Desktop and `Babel Harness.cmd`. Other languages or project tools require an appropriate custom image. Desktop does not start Docker, change Windows policy, or switch to unrestricted host execution.
-6. Enable your models, choose a default, and save. The app connects to the harness automatically. Use **Recheck setup** if prerequisites need attention. Credential presence is not authentication; actual provider errors remain errors. A task may send project content to your configured provider and incur charges. Review Babel's normal run confirmation and tool approvals.
+6. Enable your models, choose a default, and save. The app connects to the harness automatically. Use **Recheck setup** if prerequisites need attention. Credential presence is not authentication, and a listed model does not confirm account access or successful inference; actual provider errors remain errors. A task may send project content to your configured provider and incur charges. Review Babel's normal run confirmation and tool approvals.
 
 Credential-free Ollama routes do not require a cloud key. Start Ollama, choose Ollama in Providers and models, refresh its installed models, then enable and select a default.
 

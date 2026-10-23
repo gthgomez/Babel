@@ -24,6 +24,7 @@
  *   - Port:    BABEL_BRIDGE_PORT env var, or bridge.json port, or 4545
  *   - Token:   bridge.json authToken (auto-generated on first start)
  *   - Origins: bridge.json allowedOrigins (defaults to ['http://localhost:*'])
+ *   - Claude:  BABEL_CLAUDE_HOST_BINDINGS_PATH — trusted host profile bindings (v1 JSON)
  */
 
 import { createHash, randomUUID } from 'node:crypto';
@@ -82,6 +83,7 @@ import {
 } from './claudeCodeAgentRuntime.js';
 import type { ClaudeCodeSessionAdmissionDeps } from './claudeCodeSessionAdmission.js';
 import type { ClaudeCodeSdkPort } from './claudeCodeSdkPort.js';
+import { resolveClaudeCodeHostLaunchRegistryFromEnv } from './claudeCodeHostLaunchRegistry.js';
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
 export interface BridgeServerOptions {
@@ -330,6 +332,8 @@ export class BridgeServer {
           ? { credentialResolver: this.options.claudeCodeTestCredentialResolver }
           : {}),
       });
+    const claudeCodeHostLaunchRegistry =
+      this.options.claudeCodeHostLaunchRegistry ?? resolveClaudeCodeHostLaunchRegistryFromEnv();
     this.protocolGateway =
       this.options.protocolGateway ??
       new ProtocolGateway({
@@ -344,8 +348,8 @@ export class BridgeServer {
         ...(this.options.claudeCodeAdmissionDeps
           ? { claudeCodeAdmissionDeps: this.options.claudeCodeAdmissionDeps }
           : {}),
-        ...(this.options.claudeCodeHostLaunchRegistry
-          ? { claudeCodeHostLaunchRegistry: this.options.claudeCodeHostLaunchRegistry }
+        ...(claudeCodeHostLaunchRegistry
+          ? { claudeCodeHostLaunchRegistry }
           : {}),
         engineFactory:
           this.options.engineFactory ??

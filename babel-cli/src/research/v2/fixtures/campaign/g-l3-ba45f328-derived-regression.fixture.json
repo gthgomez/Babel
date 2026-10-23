@@ -1,0 +1,813 @@
+{
+  "schema": "g-l3-ba45f328-derived-regression/v1",
+  "provenance": {
+    "immutable_commit": "446027429c00fb395e5045ab0e4a67432218ee42",
+    "original_evidence_subset": "g-l3-ba45f328-original-evidence-subset.json",
+    "revision_content_hash": "c97ffea4e143fd19e55c5be35411a994af406e887651328b93bc796652b538c6",
+    "html4_passage_id": "cli-run-fetch-wg1-ba51ff60--web-ref-0:html:4",
+    "html4_text_hash": "47d6420173944faa7fa4aa64e1826a7a15c600f5cba866a3f8bad2df5f649e81",
+    "html4_heading": "Active Python releases",
+    "html4_utf8_bytes": 536
+  },
+  "plan": {
+    "plan_revision_id": "plan-ad20edb0-c6f8-461e-b7ec-1c8cf3f53f36",
+    "mission_id": "mission-g-l3-validation-ba45f328-001",
+    "created_at": "2026-10-21T13:34:04.971Z",
+    "questions": [
+      {
+        "question_id": "q-plan-ad20edb0-c6f8-461e-b7ec-1c8cf3f53f36-1",
+        "text": "Do the downloads landing page and the developer guide versions table state the same latest stable CPython release version number?",
+        "importance": "critical",
+        "evidence_requirement": "Host-admitted plan question; refine locators during retrieval",
+        "status": "open",
+        "coverage_obligations": [
+          {
+            "obligation_id": "q1-oblig-web-ref-0",
+            "source_slot": "web-ref-0",
+            "aspect": "technical_effect",
+            "technical_effect": "general_technical"
+          },
+          {
+            "obligation_id": "q1-oblig-web-ref-1",
+            "source_slot": "web-ref-1",
+            "aspect": "technical_effect",
+            "technical_effect": "general_technical"
+          }
+        ]
+      },
+      {
+        "question_id": "q-plan-ad20edb0-c6f8-461e-b7ec-1c8cf3f53f36-2",
+        "text": "Do the downloads landing page and the developer guide versions table state the same release date for the latest stable CPython release, and are the temporal semantics of that date consistent (e.g., release date vs. page update date)?",
+        "importance": "critical",
+        "evidence_requirement": "Host-admitted plan question; refine locators during retrieval",
+        "status": "open",
+        "coverage_obligations": [
+          {
+            "obligation_id": "q2-oblig-web-ref-0",
+            "source_slot": "web-ref-0",
+            "aspect": "technical_effect",
+            "technical_effect": "max_age_or_ttl_semantics"
+          },
+          {
+            "obligation_id": "q2-oblig-web-ref-1",
+            "source_slot": "web-ref-1",
+            "aspect": "technical_effect",
+            "technical_effect": "max_age_or_ttl_semantics"
+          }
+        ]
+      },
+      {
+        "question_id": "q-plan-ad20edb0-c6f8-461e-b7ec-1c8cf3f53f36-3",
+        "text": "Do both pages explicitly identify the latest stable CPython release as stable and distinguish it from prerelease versions such as release candidates or betas?",
+        "importance": "high",
+        "evidence_requirement": "Host-admitted plan question; refine locators during retrieval",
+        "status": "open",
+        "coverage_obligations": [
+          {
+            "obligation_id": "q3-oblig-web-ref-0",
+            "source_slot": "web-ref-0",
+            "aspect": "technical_effect",
+            "technical_effect": "general_technical"
+          },
+          {
+            "obligation_id": "q3-oblig-web-ref-1",
+            "source_slot": "web-ref-1",
+            "aspect": "technical_effect",
+            "technical_effect": "general_technical"
+          }
+        ]
+      },
+      {
+        "question_id": "q-plan-ad20edb0-c6f8-461e-b7ec-1c8cf3f53f36-4",
+        "text": "If the two pages differ in the stated version or release date, is the difference a contradiction or an insufficiency (e.g., one page omits the release date)?",
+        "importance": "high",
+        "evidence_requirement": "Host-admitted plan question; refine locators during retrieval",
+        "status": "open",
+        "coverage_obligations": [
+          {
+            "obligation_id": "q4-oblig-web-ref-0",
+            "source_slot": "web-ref-0",
+            "aspect": "technical_effect",
+            "technical_effect": "general_technical"
+          },
+          {
+            "obligation_id": "q4-oblig-web-ref-1",
+            "source_slot": "web-ref-1",
+            "aspect": "technical_effect",
+            "technical_effect": "general_technical"
+          }
+        ]
+      },
+      {
+        "question_id": "q-plan-ad20edb0-c6f8-461e-b7ec-1c8cf3f53f36-5",
+        "text": "Are the version and release date statements on both pages attributable to official python.org pages rather than third-party mirrors or non-official content?",
+        "importance": "high",
+        "evidence_requirement": "Host-admitted plan question; refine locators during retrieval",
+        "status": "open",
+        "coverage_obligations": [
+          {
+            "obligation_id": "q5-oblig-web-ref-0",
+            "source_slot": "web-ref-0",
+            "aspect": "technical_effect",
+            "technical_effect": "authentication_mechanism"
+          },
+          {
+            "obligation_id": "q5-oblig-web-ref-1",
+            "source_slot": "web-ref-1",
+            "aspect": "technical_effect",
+            "technical_effect": "authentication_mechanism"
+          }
+        ]
+      },
+      {
+        "question_id": "q-plan-ad20edb0-c6f8-461e-b7ec-1c8cf3f53f36-6",
+        "text": "Should differences in wording or emphasis between the downloads-oriented landing page and the developer-oriented status table be interpreted as complementary audience-specific presentations rather than factual contradictions?",
+        "importance": "medium",
+        "evidence_requirement": "Host-admitted plan question; refine locators during retrieval",
+        "status": "open",
+        "coverage_obligations": [
+          {
+            "obligation_id": "q6-oblig-web-ref-0",
+            "source_slot": "web-ref-0",
+            "aspect": "audience_intent"
+          },
+          {
+            "obligation_id": "q6-oblig-web-ref-1",
+            "source_slot": "web-ref-1",
+            "aspect": "audience_intent"
+          }
+        ]
+      }
+    ],
+    "revision_reason": "e2e_model_planning"
+  },
+  "sources": [
+    {
+      "source_id": "src-web-84ed1861359f79ce6123ebc1",
+      "kind": "web",
+      "canonical_key": "https://www.python.org/downloads/",
+      "observed_urls": [
+        "https://www.python.org/downloads/"
+      ],
+      "title": "Download Python | Python.org",
+      "syndication_notes": "exa_lite_discovery_snippet_not_admitted_evidence",
+      "coverage_source_slot": "web-ref-0"
+    }
+  ],
+  "source_revisions": [
+    {
+      "revision_id": "rev-src-web-84ed1861359f79ce6123ebc1-c97ffea4e143fd19",
+      "source_id": "src-web-84ed1861359f79ce6123ebc1",
+      "content_hash": "c97ffea4e143fd19e55c5be35411a994af406e887651328b93bc796652b538c6",
+      "retrieved_at": "2026-10-21T13:34:05.577Z",
+      "extraction_version": "fetch-source-access-2",
+      "media_type": "text/html",
+      "completeness": "truncated",
+      "byte_length_received": 200000,
+      "truncation_reason": "host_decoded_byte_limit",
+      "source_fetch_owner": {
+        "mission_id": "mission-g-l3-validation-ba45f328-001",
+        "operation_id": "cli-run-fetch-wg1-ba51ff60--web-ref-0",
+        "attempt_id": "cli-run-fetch-att-wg1-ba51ff60--web-ref-0"
+      }
+    }
+  ],
+  "passages": [
+    {
+      "passage_id": "cli-run-fetch-wg1-ba51ff60--web-ref-0:html:0",
+      "source_revision_id": "rev-src-web-84ed1861359f79ce6123ebc1-c97ffea4e143fd19",
+      "locator": {
+        "kind": "section",
+        "section_id": "download-the-latest-source-release"
+      },
+      "heading_path": [
+        "Download the latest source release"
+      ],
+      "extraction_notes": [
+        "heading_level:1",
+        "static_html_extractor"
+      ],
+      "source_fetch_owner": {
+        "mission_id": "mission-g-l3-validation-ba45f328-001",
+        "operation_id": "cli-run-fetch-wg1-ba51ff60--web-ref-0",
+        "attempt_id": "cli-run-fetch-att-wg1-ba51ff60--web-ref-0"
+      },
+      "text_ref": {
+        "mode": "inline",
+        "text": "Download Python 3.15.1",
+        "text_hash": "9675bf4ec312333228f20ca8ed26238fb175f0257656bda54643321117b58448"
+      }
+    },
+    {
+      "passage_id": "cli-run-fetch-wg1-ba51ff60--web-ref-0:html:1",
+      "source_revision_id": "rev-src-web-84ed1861359f79ce6123ebc1-c97ffea4e143fd19",
+      "locator": {
+        "kind": "section",
+        "section_id": "download-the-latest-version-for-windows"
+      },
+      "heading_path": [
+        "Download the latest version for Windows"
+      ],
+      "extraction_notes": [
+        "heading_level:1",
+        "static_html_extractor"
+      ],
+      "source_fetch_owner": {
+        "mission_id": "mission-g-l3-validation-ba45f328-001",
+        "operation_id": "cli-run-fetch-wg1-ba51ff60--web-ref-0",
+        "attempt_id": "cli-run-fetch-att-wg1-ba51ff60--web-ref-0"
+      },
+      "text_ref": {
+        "mode": "inline",
+        "text": "Download Python install manager Or get the standalone installer for Python 3.15.1",
+        "text_hash": "8d1129b15159f9c96587d0ca459fb2fbc6ce7692bffc13a3034965e68b89807f"
+      }
+    },
+    {
+      "passage_id": "cli-run-fetch-wg1-ba51ff60--web-ref-0:html:2",
+      "source_revision_id": "rev-src-web-84ed1861359f79ce6123ebc1-c97ffea4e143fd19",
+      "locator": {
+        "kind": "section",
+        "section_id": "download-the-latest-version-for-macos"
+      },
+      "heading_path": [
+        "Download the latest version for macOS"
+      ],
+      "extraction_notes": [
+        "heading_level:1",
+        "static_html_extractor"
+      ],
+      "source_fetch_owner": {
+        "mission_id": "mission-g-l3-validation-ba45f328-001",
+        "operation_id": "cli-run-fetch-wg1-ba51ff60--web-ref-0",
+        "attempt_id": "cli-run-fetch-att-wg1-ba51ff60--web-ref-0"
+      },
+      "text_ref": {
+        "mode": "inline",
+        "text": "Download Python 3.15.1",
+        "text_hash": "9675bf4ec312333228f20ca8ed26238fb175f0257656bda54643321117b58448"
+      }
+    },
+    {
+      "passage_id": "cli-run-fetch-wg1-ba51ff60--web-ref-0:html:3",
+      "source_revision_id": "rev-src-web-84ed1861359f79ce6123ebc1-c97ffea4e143fd19",
+      "locator": {
+        "kind": "section",
+        "section_id": "download-the-latest-version-of-python"
+      },
+      "heading_path": [
+        "Download the latest version of Python"
+      ],
+      "extraction_notes": [
+        "heading_level:1",
+        "static_html_extractor"
+      ],
+      "source_fetch_owner": {
+        "mission_id": "mission-g-l3-validation-ba45f328-001",
+        "operation_id": "cli-run-fetch-wg1-ba51ff60--web-ref-0",
+        "attempt_id": "cli-run-fetch-att-wg1-ba51ff60--web-ref-0"
+      },
+      "text_ref": {
+        "mode": "inline",
+        "text": "Download Python 3.15.1 Looking for Python with a different OS? Python for Windows , Linux/Unix , macOS , Android , iOS , other Want to help test development versions of Python 3.16? Pre-releases , Docker images Security notice: the emSign root CA has been removed from certifi. Upgrade certifi, pip, uv and sigstore now. &nbsp;&nbsp; See more",
+        "text_hash": "b607e73ee458afcef8e9d979c476317c87f2853847ce140ea9e359caa1440915"
+      }
+    },
+    {
+      "passage_id": "cli-run-fetch-wg1-ba51ff60--web-ref-0:html:4",
+      "source_revision_id": "rev-src-web-84ed1861359f79ce6123ebc1-c97ffea4e143fd19",
+      "locator": {
+        "kind": "section",
+        "section_id": "active-python-releases"
+      },
+      "heading_path": [
+        "Active Python releases"
+      ],
+      "extraction_notes": [
+        "heading_level:2",
+        "static_html_extractor"
+      ],
+      "source_fetch_owner": {
+        "mission_id": "mission-g-l3-validation-ba45f328-001",
+        "operation_id": "cli-run-fetch-wg1-ba51ff60--web-ref-0",
+        "attempt_id": "cli-run-fetch-att-wg1-ba51ff60--web-ref-0"
+      },
+      "text_ref": {
+        "mode": "inline",
+        "text": "For more information visit the Python Developer's Guide . Python version Maintenance status &nbsp; First released End of support Release schedule 3.16 pre-release Download 2027-10-06 (planned) 2032-10 PEP 826 3.15 bugfix Download 2026-10-09 2031-10 PEP 790 3.14 bugfix Download 2025-10-07 2030-10 PEP 745 3.13 security Download 2024-10-07 2029-10 PEP 719 3.12 security Download 2023-10-02 2028-10 PEP 693 3.11 security Download 2022-10-24 2027-10 PEP 664 3.10 end-of-life, last release was 3.10.22 Download 2021-10-04 2026-10-01 PEP 619",
+        "text_hash": "47d6420173944faa7fa4aa64e1826a7a15c600f5cba866a3f8bad2df5f649e81"
+      }
+    },
+    {
+      "passage_id": "cli-run-fetch-wg1-ba51ff60--web-ref-0:html:5",
+      "source_revision_id": "rev-src-web-84ed1861359f79ce6123ebc1-c97ffea4e143fd19",
+      "locator": {
+        "kind": "section",
+        "section_id": "looking-for-a-specific-release"
+      },
+      "heading_path": [
+        "Looking for a specific release?"
+      ],
+      "extraction_notes": [
+        "heading_level:2",
+        "static_html_extractor"
+      ],
+      "source_fetch_owner": {
+        "mission_id": "mission-g-l3-validation-ba45f328-001",
+        "operation_id": "cli-run-fetch-wg1-ba51ff60--web-ref-0",
+        "attempt_id": "cli-run-fetch-att-wg1-ba51ff60--web-ref-0"
+      },
+      "text_ref": {
+        "mode": "inline",
+        "text": "Python releases by version number: Release version Release date &nbsp; Click for more Python 3.15.1 Oct. 21, 2026 Download Release notes Python 3.15.0 Oct. 9, 2026 Download Release notes Python 3.14.8 Sept. 30, 2026 Download Release notes Python 3.14.7 Aug. 5, 2026 Download Release notes Python 3.14.6 June 10, 2026 Download Release notes Python 3.14.5 May 10, 2026 Download Release notes Python 3.14.4 April 7, 2026 Download Release notes Python 3.14.3 Feb. 3, 2026 Download Release notes Python 3.14.2 Dec. 5, 2025 Download Release notes Python 3.14.1 Dec. 2, 2025 Download Release notes Python 3.14.0 Oct. 7, 2025 Download Release notes Python 3.13.16 Sept. 30, 2026 Download Release notes Python 3.13.15 Aug. 5, 2026 Download Release notes Python 3.13.14 June 10, 2026 Download Release notes Python 3.13.13 April 7, 2026 Download Release notes Python 3.13.12 Feb. 3, 2026 Download Release notes Python 3.13.11 Dec. 5, 2025 Download Release notes Python 3.13.10 Dec. 2, 2025 Download Release notes Python 3.13.9 Oct. 14, 2025 Download Release notes Python 3.13.8 Oct. 7, 2025 Download Release notes Python 3.13.7 Aug. 14, 2025 Download Release notes Python 3.13.6 Aug. 6, 2025 Download Release notes Python 3.13.5 June 11, 2025 Download Release notes Python 3.13.4 June 3, 2025 Download Release notes Python 3.13.3 April 8, 2025 Download Release notes Python 3.13.2 Feb. 4, 2025 Download Release notes Python 3.13.1 Dec. 3, 2024 Download Release notes Python 3.13.0 Oct. 7, 2024 Download Release notes Python 3.12.15 Sept. 30, 2026 Download Release notes Python 3.12.14 Aug. 12, 2026 Download Release notes Python 3.12.13 March 3, 2026 Download Release notes Python 3.12.12 Oct. 9, 2025 Download Release notes Python 3.12.11 June 3, 2025 Download Release notes Python 3.12.10 April 8, 2025 Download Release notes Python 3.12.9 Feb. 4, 2025 Download Release notes Python 3.12.8 Dec. 3, 2024 Download Release notes Python 3.12.7 Oct. 1, 2024 Download Release notes Python 3.12.6 Sept. 6, 2024 Download Release notes Python 3.12.5 Aug. 6, 2024 Download Release notes Python 3.12.4 June 6, 2024 Download Release notes Python 3.12.3 April 9, 2024 Download Release notes Python 3.12.2 Feb. 6, 2024 Download Release notes Python 3.12.1 Dec. 8, 2023 Download Release notes Python 3.12.0 Oct. 2, 2023 Download Release notes Python 3.11.17 Oct. 1, 2026 Download Release notes Python 3.11.16 Aug. 12, 2026 Download Release notes Python 3.11.15 March 3, 2026 Download Release notes Python 3.11.14 Oct. 9, 2025 Download Release notes Python 3.11.13 June 3, 2025 Download Release notes Python 3.11.12 April 8, 2025 Download Release notes Python 3.11.11 Dec. 3, 2024 Download Release notes Python 3.11.10 Sept. 7, 2024 Download Release notes Python 3.11.9 April 2, 2024 Download Release notes Python 3.11.8 Feb. 6, 2024 Download Release notes Python 3.11.7 Dec. 4, 2023 Download Release notes Python 3.11.6 Oct. 2, 2023 Download Release notes Python 3.11.5 Aug. 24, 2023 Download Release notes Python 3.11.4 June 6, 2023 Download Release notes Python 3.11.3 April 5, 2023 Download Release notes Python 3.11.2 Feb. 8, 2023 Download Release notes Python 3.11.1 Dec. 6, 2022 Download Release notes Python 3.11.0 Oct. 24, 2022 Download Release notes Python 3.10.22 Oct. 1, 2026 Download Release notes Python 3.10.21 Aug. 12, 2026 Download Release notes Python 3.10.20 March 3, 2026 Download Release notes Python 3.10.19 Oct. 9, 2025 Download Release notes Python 3.10.18 June 3, 2025 Download Release notes Python 3.10.17 April 8, 2025 Download Release notes Python 3.10.16 Dec. 3, 2024 Download Release notes Python 3.10.15 Sept. 7, 2024 Download Release notes Python 3.10.14 March 19, 2024 Download Release notes Python 3.10.13 Aug. 24, 2023 Download Release notes Python 3.10.12 June 6, 2023 Download Release notes Python 3.10.11 April 5, 2023 Download Release notes Python 3.10.10 Feb. 8, 2023 Download Release notes Python 3.10.9 Dec. 6, 2022 Download Release notes Python 3.10.8 Oct. 11, 2022 Download Release notes Python 3.10.7 Sept. 6, 2022 Download Release notes Python 3.10.6 Aug. 2, 2022 Download Release notes Python 3.10.5 June 6, 2022 Download Release notes Python 3.10.4 March 24, 2022 Download Release notes Python 3.10.3 March 16, 2022 Download Release notes Python 3.10.2 Jan. 14, 2022 Download Release notes Python 3.10.1 Dec. 6, 2021 Download Release notes Python 3.10.0 Oct. 4, 2021 Download Release notes Python 3.9.25 Oct. 31, 2025 Download Release notes Python 3.9.24 Oct. 9, 2025 Download Release notes Python 3.9.23 June 3, 2025 Download Release notes Python 3.9.22 April 8, 2025 Download Release notes Python 3.9.21 Dec. 3, 2024 Download Release notes Python 3.9.20 Sept. 6, 2024 Download Release notes Python 3.9.19 March 19, 2024 Download Release notes Python 3.9.18 Aug. 24, 2023 Download Release notes Python 3.9.17 June 6, 2023 Download Release notes Python 3.9.16 Dec. 6, 2022 Download Release notes Python 3.9.15 Oct. 11, 2022 Download Release notes Python 3.9.14 Sept. 6, 2022 Download Release notes Python 3.9.13 May 17, 2022 Download Release notes Python 3.9.12 March 23, 2022 Download Release notes Python 3.9.11 March 16, 2022 Download Release notes Python 3.9.10 Jan. 14, 2022 Download Release notes Python 3.9.9 Nov. 15, 2021 Download Release notes Python 3.9.8 Nov. 5, 2021 Download Release notes Python 3.9.7 Aug. 30, 2021 Download Release notes Python 3.9.6 June 28, 2021 Download Release notes Python 3.9.5 May 3, 2021 Download Release notes Python 3.9.4 April 4, 2021 Download Release notes Python 3.9.2 Feb. 19, 2021 Download Release notes Python 3.9.1 Dec. 7, 2020 Download Release notes Python 3.9.0 Oct. 5, 2020 Download Release notes Python 3.8.20 Sept. 6, 2024 Download Release notes Python 3.8.19 March 19, 2024 Download Release notes Python 3.8.18 Aug. 24, 2023 Download Release notes Python 3.8.17 June 6, 2023 Download Release notes Python 3.8.16 Dec. 6, 2022 Download Release notes Python 3.8.15 Oct. 11, 2022 Download Release notes Python 3.8.14 Sept. 6, 2022 Download Release notes Python 3.8.13 March 16, 2022 Download Release notes Python 3.8.12 Aug. 30, 2021 Download Release notes Python 3.8.11 June 28, 2021 Download Release notes Python 3.8.10 May 3, 2021 Download Release notes Python 3.8.9 April 2, 2021 Download Release notes Python 3.8.8 Feb. 19, 2021 Download Release notes Python 3.8.7 Dec. 21, 2020 Download Release notes Python 3.8.6 Sept. 24, 2020 Download Release notes Python 3.8.5 July 20, 2020 Download Release notes Python 3.8.4 July 13, 2020 Download Release notes Python 3.8.3 May 13, 2020 Download Release notes Python 3.8.2 Feb. 24, 2020 Download Release notes Python 3.8.1 Dec. 18, 2019 Download Release notes Python 3.8.0 Oct. 14, 2019 Download Release notes Python 3.7.17 June 6, 2023 Download Release notes Python 3.7.16 Dec. 6, 2022 Download Release notes Python 3.7.15 Oct. 11, 2022 Download Release notes Python 3.7.14 Sept. 6, 2022 Download Release notes Python 3.7.13 March 16, 2022 Download Release notes Python 3.7.12 Sept. 4, 2021 Download Release notes Python 3.7.11 June 28, 2021 Download Release notes Python 3.7.10 Feb. 15, 2021 Download Release notes Python 3.7.9 Aug. 17, 2020 Download Release notes Python 3.7.8 June 27, 2020 Download Release notes Python 3.7.7 March 10, 2020 Download Release notes Python 3.7.6 Dec. 18, 2019 Download Release notes Python 3.7.5 Oct. 15, 2019 Download Release notes Python 3.7.4 July 8, 2019 Download Release notes Python 3.7.3 March 25, 2019 Download Release notes Python 3.7.2 Dec. 24, 2018 Download Release notes Python 3.7.1 Oct. 20, 2018 Download Release notes Python 3.7.0 June 27, 2018 Download Release notes Python 3.6.15 Sept. 4, 2021 Download Release notes Python 3.6.14 June 28, 2021 Download Release notes Python 3.6.13 Feb. 15, 2021 Download Release notes Python 3.6.12 Aug. 17, 2020 Download Release notes Python 3.6.11 June 27, 2020 Download Release notes Python 3.6.10 Dec. 18, 2019 Download Release notes Python 3.6.9 July 2, 2019 Download Release notes Python 3.6.8 Dec. 24, 2018 Download Release notes Python 3.6.7 Oct. 20, 2018 Download Release notes Python 3.6.6 June 27, 2018 Download Release notes Python 3.6.5 March 28, 2018 Download Release notes Python 3.6.4 Dec. 19, 2017 Download Release notes Python 3.6.3 Oct. 3, 2017 Download Release notes Python 3.6.2 July 17, 2017 Download Release notes Python 3.6.1 March 21, 2017 Download Release notes Python 3.6.0 Dec. 23, 2016 Download Release notes Python 3.5.10 Sept. 5, 2020 Download Release notes Python 3.5.9 Nov. 2, 2019 Download Release notes Python 3.5.8 Oct. 29, 2019 Download Release notes Python 3.5.7 March 18, 2019 Download Release notes Python 3.5.6 Aug. 2, 2018 Download Release notes Python 3.5.5 Feb. 5, 2018 Download Release notes Python 3.5.4 Aug. 8, 2017 Download Release notes Python 3.5.3 Jan. 17, 2017 Download Release notes Python 3.5.2 June 27, 2016 Download Release notes Python 3.5.1 Dec. 7, 2015 Download Release notes Python 3.5.0 Sept. 13, 2015 Download Release notes Python 3.4.10 March 18, 2019 Download Release notes Python 3.4.9 Aug. 2, 2018 Download Release notes Python 3.4.8 Feb. 5, 2018 Download Release notes Python 3.4.7 Aug. 9, 2017 Download Release notes Python 3.4.6 Jan. 17, 2017 Download Release notes Python 3.4.5 June 27, 2016 Download Release notes Python 3.4.4 Dec. 21, 2015 Download Release notes Python 3.4.3 Feb. 25, 2015 Download Release notes Python 3.4.2 Oct. 13, 2014 Download Release notes Python 3.4.1 May 19, 2014 Download Release notes Python 3.4.0 March 17, 2014 Download Release notes Python 3.3.7 Sept. 19, 2017 Download Release notes Python 3.3.6 Oct. 12, 2014 Download Release notes Python 3.3.5 March 9, 2014 Download Release notes Python 3.3.4 Feb. 9, 2014 Download Release notes Python 3.3.3 Nov. 17, 2013 Download Release notes Python 3.3.2 May 15, 2013 Download Release notes Python 3.3.1 April 6, 2013 Download Release notes Python 3.3.0 Sept. 29, 2012 Download Release notes Python 3.2.6 Oct. 12, 2014 Download Release notes Python 3.2.5 May 15, 2013 Download Release notes Python 3.2.4 April 6, 2013 Download Release notes Python 3.2.3 April 10, 2012 Download Release notes Python 3.2.2 Sept. 3, 2011 Download Release notes Python 3.2.1 July 9, 2011 Download Release notes Python 3.2.0 Feb. 20, 2011 Download Release notes Python 3.1.5 April 9, 2012 Download Release notes Python 3.1.4 June 11, 2011 Download Release notes Python 3.1.3 Nov. 27, 2010 Download Release notes Python 3.1.2 March 20, 2010 Download Release notes Python 3.1.1 Aug. 17, 2009 Download Release notes Python 3.1.0 June 26, 2009 Download Release notes Python 3.0.1 Feb. 13, 2009 Download Release notes Python 3.0.0 Dec. 3, 2008 Download Release notes Python 2.7.18 April 20, 2020 Download Release notes Python 2.7.17 Oct. 19, 2019 Download Release notes Python 2.7.16 March 4, 2019 Download Release notes Python 2.7.15 May 1, 2018 Download Release notes Python 2.7.14 Sept. 16, 2017 Download Release notes Python 2.7.13 Dec. 17, 2016 Download Release notes Python 2.7.12 June 25, 2016 Download Release notes Python 2.7.11 Dec. 5, 2015 Download Release notes Python 2.7.10 May 23, 2015 Download Release notes Python 2.7.9 Dec. 10, 2014 Download Release notes Python 2.7.8 July 2, 2014 Download Release notes Python 2.7.7 June 1, 2014 Download Release notes Python 2.7.6 Nov. 10, 2013 Download Release notes Python 2.7.5 May 12, 2013 Download Release notes Python 2.7.4 April 6, 2013 Download Release notes Python 2.7.3 April 9, 2012 Download Release notes Python 2.7.2 June 11, 2011 Download Release notes Python 2.7.1 Nov. 27, 2010 Download Release notes Python 2.7.0 July 3, 2010 Download Release notes Python 2.6.9 Oct. 29, 2013 Download Release notes Python 2.6.8 April 10, 2012 Download Release notes Python 2.6.7 June 3, 2011 Download Release notes Python 2.6.6 Aug. 24, 2010 Download Release notes Python 2.6.5 March 18, 2010 Download Release notes Python 2.6.4 Oct. 26, 2009 Download Release notes Python 2.6.3 Oct. 2, 2009 Download Release notes Python 2.6.2 April 14, 2009 Download Release notes Python 2.6.1 Dec. 4, 2008 Download Release notes Python 2.6.0 Oct. 2, 2008 Download Release notes Python 2.5.6 May 26, 2011 Download Release notes Python 2.5.5 Jan. 31, 2010 Download Release notes Python 2.5.4 Dec. 23, 2008 Download Release notes Python 2.5.3 Dec. 19, 2008 Download Release notes Python 2.5.2 Feb. 21, 2008 Download Release notes Python 2.5.1 April 19, 2007 Download Release notes Python 2.5.0 Sept. 19, 2006 Download Release notes Python 2.4.6 Dec. 19, 2008 Download Release notes Python 2.4.5 March 11, 2008 Download Release notes Python 2.4.4 Oct. 18, 2006 Download Release notes Python 2.4.3 April 15, 2006 Download Release notes Python 2.4.2 Sept. 27, 2005 Download Release notes Python 2.4.1 March 30, 2005 Download Release notes Python 2.4.0 Nov. 30, 2004 Download Release notes Python 2.3.7 March 11, 2008 Download Release notes Python 2.3.6 Nov. 1, 2006 Download Release notes Python 2.3.5 Feb. 8, 2005 Download Release notes Python 2.3.4 May 27, 2004 Download Release notes Python 2.3.3 Dec. 19, 2003 Download Release notes Python 2.3.2 Oct. 3, 2003 Download Release notes Python 2.3.1 Sept. 23, 2003 Download Release notes Python 2.3.0 July 29, 2003 Download Release notes Python 2.2.3 May 30, 2003 Download Release notes Python 2.2.2 Oct. 14, 2002 Download Release notes Python 2.2.1 April 10, 2002 Download Release notes Python 2.2.0 Dec. 21, 2001 Download Release notes Python 2.1.3 April 9, 2002 Download Release notes Python 2.0.1 June 22, 2001 Download Release notes View older releases Older releases: Source releases, binaries-1.1 , binaries-1.2 , binaries-1.3 , binaries-1.4 , binaries-1.5 -->",
+        "text_hash": "fd8e518b186eb4c713e3f7ce354ba7070cb4d58d6ca18ee7da99f5dc2c0bd8ad"
+      }
+    },
+    {
+      "passage_id": "cli-run-fetch-wg1-ba51ff60--web-ref-0:html:6",
+      "source_revision_id": "rev-src-web-84ed1861359f79ce6123ebc1-c97ffea4e143fd19",
+      "locator": {
+        "kind": "section",
+        "section_id": "sponsors"
+      },
+      "heading_path": [
+        "Sponsors"
+      ],
+      "extraction_notes": [
+        "heading_level:2",
+        "static_html_extractor"
+      ],
+      "source_fetch_owner": {
+        "mission_id": "mission-g-l3-validation-ba45f328-001",
+        "operation_id": "cli-run-fetch-wg1-ba51ff60--web-ref-0",
+        "attempt_id": "cli-run-fetch-att-wg1-ba51ff60--web-ref-0"
+      },
+      "text_ref": {
+        "mode": "inline",
+        "text": "Visionary sponsors help to host Python downloads. Google Anthropic, PBC Bloomberg NVIDIA Meta Fastly",
+        "text_hash": "9203f8d3077c4f9ee906aca365f908a9415d830a2304efc410429beb3761952e"
+      }
+    }
+  ],
+  "mission_source_slots": [
+    {
+      "source_slot": "web-ref-0",
+      "configured_url": "https://www.python.org/downloads/",
+      "fetch_status": "admitted_fetched",
+      "admitted_source_id": "src-web-84ed1861359f79ce6123ebc1",
+      "admitted_title": "Download Python | Python.org",
+      "admitted_canonical_url": "https://www.python.org/downloads/",
+      "revision_completeness": "truncated"
+    },
+    {
+      "source_slot": "web-ref-1",
+      "configured_url": "https://devguide.python.org/versions/",
+      "fetch_status": "fetch_failed_or_missing"
+    }
+  ],
+  "findings_extract_base": {
+    "finding-a458cc25e3c4633ac9862829": {
+      "finding_id": "finding-a458cc25e3c4633ac9862829",
+      "question_id": "q-plan-ad20edb0-c6f8-461e-b7ec-1c8cf3f53f36-1",
+      "assertion_text": "The python.org downloads landing page contains the text 'Download Python 3.15.1' and 'get the standalone installer for Python 3.15.1', identifying 3.15.1 as the current release offered for download.",
+      "assertion_kind": "source_observation",
+      "passage_ids": [
+        "cli-run-fetch-wg1-ba51ff60--web-ref-0:html:0",
+        "cli-run-fetch-wg1-ba51ff60--web-ref-0:html:1",
+        "cli-run-fetch-wg1-ba51ff60--web-ref-0:html:2",
+        "cli-run-fetch-wg1-ba51ff60--web-ref-0:html:3"
+      ],
+      "source_integrity": "not_checked",
+      "created_at": "2026-10-21T13:34:41.787Z"
+    },
+    "finding-f6141bbd69702e076a81e190": {
+      "finding_id": "finding-f6141bbd69702e076a81e190",
+      "question_id": "q-plan-ad20edb0-c6f8-461e-b7ec-1c8cf3f53f36-1",
+      "assertion_text": "The developer guide versions table on the page lists '3.16 pre-release' and '3.15 bugfix', showing 3.15 as the highest non-prerelease maintenance version line, but it does not state the patch version 3.15.1.",
+      "assertion_kind": "source_observation",
+      "passage_ids": [
+        "cli-run-fetch-wg1-ba51ff60--web-ref-0:html:4"
+      ],
+      "source_integrity": "not_checked",
+      "created_at": "2026-10-21T13:34:41.787Z"
+    },
+    "finding-5568d5e515443e7b1cb213cd": {
+      "finding_id": "finding-5568d5e515443e7b1cb213cd",
+      "question_id": "q-plan-ad20edb0-c6f8-461e-b7ec-1c8cf3f53f36-2",
+      "assertion_text": "The page's release-by-version table lists 'Python 3.15.1 Oct. 21, 2026' as the latest 3.15.x entry, so the latest stable patch release is 3.15.1 released on Oct. 21, 2026.",
+      "assertion_kind": "inference",
+      "passage_ids": [
+        "cli-run-fetch-wg1-ba51ff60--web-ref-0:html:5"
+      ],
+      "source_integrity": "not_checked",
+      "created_at": "2026-10-21T13:34:41.787Z"
+    },
+    "finding-f0bb8c5bf7d1325a3bb1ace1": {
+      "finding_id": "finding-f0bb8c5bf7d1325a3bb1ace1",
+      "question_id": "q-plan-ad20edb0-c6f8-461e-b7ec-1c8cf3f53f36-2",
+      "assertion_text": "The developer guide versions table gives 'First released' as 2026-10-09 for the 3.15 line, but it does not give a release date for 3.15.1; the 3.15.1 date appears only in the releases-by-version list as Oct. 21, 2026.",
+      "assertion_kind": "source_observation",
+      "passage_ids": [
+        "cli-run-fetch-wg1-ba51ff60--web-ref-0:html:4",
+        "cli-run-fetch-wg1-ba51ff60--web-ref-0:html:5"
+      ],
+      "source_integrity": "not_checked",
+      "created_at": "2026-10-21T13:34:41.787Z"
+    },
+    "finding-802abc3fd045bc6ee75d48b6": {
+      "finding_id": "finding-802abc3fd045bc6ee75d48b6",
+      "question_id": "q-plan-ad20edb0-c6f8-461e-b7ec-1c8cf3f53f36-3",
+      "assertion_text": "The landing page distinguishes the stable release from prereleases by saying 'Want to help test development versions of Python 3.16? Pre-releases', and the developer guide table labels 3.16 as 'pre-release' and 3.15 as 'bugfix'.",
+      "assertion_kind": "source_observation",
+      "passage_ids": [
+        "cli-run-fetch-wg1-ba51ff60--web-ref-0:html:3",
+        "cli-run-fetch-wg1-ba51ff60--web-ref-0:html:4"
+      ],
+      "source_integrity": "not_checked",
+      "created_at": "2026-10-21T13:34:41.787Z"
+    },
+    "finding-0fcd8fd29444b134fc3cc56e": {
+      "finding_id": "finding-0fcd8fd29444b134fc3cc56e",
+      "question_id": "q-plan-ad20edb0-c6f8-461e-b7ec-1c8cf3f53f36-4",
+      "assertion_text": "The apparent difference between the downloads page's '3.15.1' and the developer guide table's '3.15 bugfix' is a granularity difference (patch release vs minor-version line), not a factual contradiction; the developer guide table omits the patch-level release date.",
+      "assertion_kind": "inference",
+      "passage_ids": [
+        "cli-run-fetch-wg1-ba51ff60--web-ref-0:html:0",
+        "cli-run-fetch-wg1-ba51ff60--web-ref-0:html:4",
+        "cli-run-fetch-wg1-ba51ff60--web-ref-0:html:5"
+      ],
+      "source_integrity": "not_checked",
+      "created_at": "2026-10-21T13:34:41.787Z"
+    },
+    "finding-7f198c86e7cfaa5c781d4ef2": {
+      "finding_id": "finding-7f198c86e7cfaa5c781d4ef2",
+      "question_id": "q-plan-ad20edb0-c6f8-461e-b7ec-1c8cf3f53f36-5",
+      "assertion_text": "All cited passages are from the python.org downloads page listed in the mission's allowed domains, so the statements are attributable to official python.org content rather than a third-party mirror.",
+      "assertion_kind": "inference",
+      "passage_ids": [
+        "cli-run-fetch-wg1-ba51ff60--web-ref-0:html:0",
+        "cli-run-fetch-wg1-ba51ff60--web-ref-0:html:4",
+        "cli-run-fetch-wg1-ba51ff60--web-ref-0:html:5"
+      ],
+      "source_integrity": "not_checked",
+      "created_at": "2026-10-21T13:34:41.787Z"
+    },
+    "finding-f09cea1f696ea97e577ef43d": {
+      "finding_id": "finding-f09cea1f696ea97e577ef43d",
+      "question_id": "q-plan-ad20edb0-c6f8-461e-b7ec-1c8cf3f53f36-6",
+      "assertion_text": "The downloads landing page and the developer guide versions table use different presentation formats (download-oriented buttons and release list vs maintenance-status table), so wording and emphasis differences are audience-specific rather than factual contradictions.",
+      "assertion_kind": "inference",
+      "passage_ids": [
+        "cli-run-fetch-wg1-ba51ff60--web-ref-0:html:3",
+        "cli-run-fetch-wg1-ba51ff60--web-ref-0:html:4",
+        "cli-run-fetch-wg1-ba51ff60--web-ref-0:html:5"
+      ],
+      "source_integrity": "not_checked",
+      "created_at": "2026-10-21T13:34:41.787Z"
+    }
+  },
+  "findings_historical_final": [
+    {
+      "finding_id": "finding-a458cc25e3c4633ac9862829",
+      "question_id": "q-plan-ad20edb0-c6f8-461e-b7ec-1c8cf3f53f36-1",
+      "assertion_text": "The python.org downloads landing page contains the text 'Download Python 3.15.1' and 'get the standalone installer for Python 3.15.1', identifying 3.15.1 as the current release offered for download.",
+      "assertion_kind": "source_observation",
+      "passage_ids": [
+        "cli-run-fetch-wg1-ba51ff60--web-ref-0:html:0",
+        "cli-run-fetch-wg1-ba51ff60--web-ref-0:html:1",
+        "cli-run-fetch-wg1-ba51ff60--web-ref-0:html:2",
+        "cli-run-fetch-wg1-ba51ff60--web-ref-0:html:3"
+      ],
+      "source_integrity": "not_checked",
+      "semantic_support": {
+        "status": "supported",
+        "reviewer": "research-v2-semantic-review",
+        "reviewer_version": "0.1.0-offline",
+        "rationale": "Cited passages contain the exact 'Download Python 3.15.1' and standalone installer strings, supporting the landing-page assertion; however only web-ref-0 is admitted, so the comparison with the developer-guide source is incomplete.",
+        "reviewed_at": "2026-10-21T13:36:04.809Z"
+      },
+      "question_coverage": {
+        "status": "partial",
+        "reviewer": "research-v2-semantic-review",
+        "reviewer_version": "0.1.0-question-coverage",
+        "rationale": "Cited passages contain the exact 'Download Python 3.15.1' and standalone installer strings, supporting the landing-page assertion; however only web-ref-0 is admitted, so the comparison with the developer-guide source is incomplete.",
+        "reviewed_at": "2026-10-21T13:36:04.809Z"
+      },
+      "plan_obligation_coverage": [
+        {
+          "obligation_id": "q1-oblig-web-ref-0",
+          "status": "met",
+          "supporting_passage_ids": [
+            "cli-run-fetch-wg1-ba51ff60--web-ref-0:html:0",
+            "cli-run-fetch-wg1-ba51ff60--web-ref-0:html:1",
+            "cli-run-fetch-wg1-ba51ff60--web-ref-0:html:2",
+            "cli-run-fetch-wg1-ba51ff60--web-ref-0:html:3"
+          ]
+        },
+        {
+          "obligation_id": "q1-oblig-web-ref-1",
+          "status": "unmet",
+          "supporting_passage_ids": []
+        }
+      ],
+      "created_at": "2026-10-21T13:34:41.787Z",
+      "revised_at": "2026-10-21T13:36:04.809Z"
+    },
+    {
+      "finding_id": "finding-f6141bbd69702e076a81e190",
+      "question_id": "q-plan-ad20edb0-c6f8-461e-b7ec-1c8cf3f53f36-1",
+      "assertion_text": "The developer guide versions table on the page lists '3.16 pre-release' and '3.15 bugfix', showing 3.15 as the highest non-prerelease maintenance version line, but it does not state the patch version 3.15.1.",
+      "assertion_kind": "source_observation",
+      "passage_ids": [
+        "cli-run-fetch-wg1-ba51ff60--web-ref-0:html:4"
+      ],
+      "source_integrity": "not_checked",
+      "semantic_support": {
+        "status": "supported",
+        "reviewer": "research-v2-semantic-review",
+        "reviewer_version": "0.1.0-offline",
+        "rationale": "html:4 lists '3.16 pre-release' and '3.15 bugfix' without a patch-level 3.15.1, matching the assertion; web-ref-1 is not cited, so full coverage is not achieved.",
+        "reviewed_at": "2026-10-21T13:36:04.809Z"
+      },
+      "question_coverage": {
+        "status": "partial",
+        "reviewer": "research-v2-semantic-review",
+        "reviewer_version": "0.1.0-question-coverage",
+        "rationale": "html:4 lists '3.16 pre-release' and '3.15 bugfix' without a patch-level 3.15.1, matching the assertion; web-ref-1 is not cited, so full coverage is not achieved.",
+        "reviewed_at": "2026-10-21T13:36:04.809Z"
+      },
+      "plan_obligation_coverage": [
+        {
+          "obligation_id": "q1-oblig-web-ref-0",
+          "status": "met",
+          "supporting_passage_ids": [
+            "cli-run-fetch-wg1-ba51ff60--web-ref-0:html:4"
+          ]
+        },
+        {
+          "obligation_id": "q1-oblig-web-ref-1",
+          "status": "unmet",
+          "supporting_passage_ids": []
+        }
+      ],
+      "created_at": "2026-10-21T13:34:41.787Z",
+      "revised_at": "2026-10-21T13:36:04.809Z"
+    },
+    {
+      "finding_id": "finding-5568d5e515443e7b1cb213cd",
+      "question_id": "q-plan-ad20edb0-c6f8-461e-b7ec-1c8cf3f53f36-2",
+      "assertion_text": "The page's release-by-version table lists 'Python 3.15.1 Oct. 21, 2026' as the latest 3.15.x entry, so the latest stable patch release is 3.15.1 released on Oct. 21, 2026.",
+      "assertion_kind": "inference",
+      "passage_ids": [
+        "cli-run-fetch-wg1-ba51ff60--web-ref-0:html:5"
+      ],
+      "source_integrity": "not_checked",
+      "semantic_support": {
+        "status": "supported",
+        "reviewer": "research-v2-semantic-review",
+        "reviewer_version": "0.1.0-offline",
+        "rationale": "html:5 directly states 'Python 3.15.1 Oct. 21, 2026', but this is release-date content rather than max-age/TTL semantics, and web-ref-1 is absent.",
+        "reviewed_at": "2026-10-21T13:36:04.809Z"
+      },
+      "question_coverage": {
+        "status": "partial",
+        "reviewer": "research-v2-semantic-review",
+        "reviewer_version": "0.1.0-question-coverage",
+        "rationale": "html:5 directly states 'Python 3.15.1 Oct. 21, 2026', but this is release-date content rather than max-age/TTL semantics, and web-ref-1 is absent.",
+        "reviewed_at": "2026-10-21T13:36:04.809Z"
+      },
+      "plan_obligation_coverage": [
+        {
+          "obligation_id": "q2-oblig-web-ref-0",
+          "status": "wrong_aspect",
+          "supporting_passage_ids": [
+            "cli-run-fetch-wg1-ba51ff60--web-ref-0:html:5"
+          ]
+        },
+        {
+          "obligation_id": "q2-oblig-web-ref-1",
+          "status": "unmet",
+          "supporting_passage_ids": []
+        }
+      ],
+      "created_at": "2026-10-21T13:34:41.787Z",
+      "revised_at": "2026-10-21T13:36:04.809Z"
+    },
+    {
+      "finding_id": "finding-f0bb8c5bf7d1325a3bb1ace1",
+      "question_id": "q-plan-ad20edb0-c6f8-461e-b7ec-1c8cf3f53f36-2",
+      "assertion_text": "The developer guide versions table gives 'First released' as 2026-10-09 for the 3.15 line, but it does not give a release date for 3.15.1; the 3.15.1 date appears only in the releases-by-version list as Oct. 21, 2026.",
+      "assertion_kind": "source_observation",
+      "passage_ids": [
+        "cli-run-fetch-wg1-ba51ff60--web-ref-0:html:4",
+        "cli-run-fetch-wg1-ba51ff60--web-ref-0:html:5"
+      ],
+      "source_integrity": "not_checked",
+      "semantic_support": {
+        "status": "supported",
+        "reviewer": "research-v2-semantic-review",
+        "reviewer_version": "0.1.0-offline",
+        "rationale": "html:4 and html:5 support the granularity/difference observation, but the obligations require max-age/TTL substance and web-ref-1 is not cited.",
+        "reviewed_at": "2026-10-21T13:36:04.809Z"
+      },
+      "question_coverage": {
+        "status": "partial",
+        "reviewer": "research-v2-semantic-review",
+        "reviewer_version": "0.1.0-question-coverage",
+        "rationale": "html:4 and html:5 support the granularity/difference observation, but the obligations require max-age/TTL substance and web-ref-1 is not cited.",
+        "reviewed_at": "2026-10-21T13:36:04.809Z"
+      },
+      "plan_obligation_coverage": [
+        {
+          "obligation_id": "q2-oblig-web-ref-0",
+          "status": "wrong_aspect",
+          "supporting_passage_ids": [
+            "cli-run-fetch-wg1-ba51ff60--web-ref-0:html:4",
+            "cli-run-fetch-wg1-ba51ff60--web-ref-0:html:5"
+          ]
+        },
+        {
+          "obligation_id": "q2-oblig-web-ref-1",
+          "status": "unmet",
+          "supporting_passage_ids": []
+        }
+      ],
+      "created_at": "2026-10-21T13:34:41.787Z",
+      "revised_at": "2026-10-21T13:36:04.809Z"
+    },
+    {
+      "finding_id": "finding-802abc3fd045bc6ee75d48b6",
+      "question_id": "q-plan-ad20edb0-c6f8-461e-b7ec-1c8cf3f53f36-3",
+      "assertion_text": "The landing page distinguishes the stable release from prereleases by saying 'Want to help test development versions of Python 3.16? Pre-releases', and the developer guide table labels 3.16 as 'pre-release' and 3.15 as 'bugfix'.",
+      "assertion_kind": "source_observation",
+      "passage_ids": [
+        "cli-run-fetch-wg1-ba51ff60--web-ref-0:html:3",
+        "cli-run-fetch-wg1-ba51ff60--web-ref-0:html:4"
+      ],
+      "source_integrity": "not_checked",
+      "semantic_support": {
+        "status": "supported",
+        "reviewer": "research-v2-semantic-review",
+        "reviewer_version": "0.1.0-offline",
+        "rationale": "html:3 and html:4 support the stable-versus-prerelease distinction claimed for both views; web-ref-1 has no admitted passages.",
+        "reviewed_at": "2026-10-21T13:36:04.809Z"
+      },
+      "question_coverage": {
+        "status": "partial",
+        "reviewer": "research-v2-semantic-review",
+        "reviewer_version": "0.1.0-question-coverage",
+        "rationale": "html:3 and html:4 support the stable-versus-prerelease distinction claimed for both views; web-ref-1 has no admitted passages.",
+        "reviewed_at": "2026-10-21T13:36:04.809Z"
+      },
+      "plan_obligation_coverage": [
+        {
+          "obligation_id": "q3-oblig-web-ref-0",
+          "status": "met",
+          "supporting_passage_ids": [
+            "cli-run-fetch-wg1-ba51ff60--web-ref-0:html:3",
+            "cli-run-fetch-wg1-ba51ff60--web-ref-0:html:4"
+          ]
+        },
+        {
+          "obligation_id": "q3-oblig-web-ref-1",
+          "status": "unmet",
+          "supporting_passage_ids": []
+        }
+      ],
+      "created_at": "2026-10-21T13:34:41.787Z",
+      "revised_at": "2026-10-21T13:36:04.809Z"
+    },
+    {
+      "finding_id": "finding-0fcd8fd29444b134fc3cc56e",
+      "question_id": "q-plan-ad20edb0-c6f8-461e-b7ec-1c8cf3f53f36-4",
+      "assertion_text": "The apparent difference between the downloads page's '3.15.1' and the developer guide table's '3.15 bugfix' is a granularity difference (patch release vs minor-version line), not a factual contradiction; the developer guide table omits the patch-level release date.",
+      "assertion_kind": "inference",
+      "passage_ids": [
+        "cli-run-fetch-wg1-ba51ff60--web-ref-0:html:0",
+        "cli-run-fetch-wg1-ba51ff60--web-ref-0:html:4",
+        "cli-run-fetch-wg1-ba51ff60--web-ref-0:html:5"
+      ],
+      "source_integrity": "not_checked",
+      "semantic_support": {
+        "status": "supported",
+        "reviewer": "research-v2-semantic-review",
+        "reviewer_version": "0.1.0-offline",
+        "rationale": "html:0, html:4 and html:5 show 3.15.1 on the download/release list and '3.15 bugfix' in the maintenance table, consistent with a granularity rather than contradiction reading; web-ref-1 is not cited.",
+        "reviewed_at": "2026-10-21T13:36:04.809Z"
+      },
+      "question_coverage": {
+        "status": "partial",
+        "reviewer": "research-v2-semantic-review",
+        "reviewer_version": "0.1.0-question-coverage",
+        "rationale": "html:0, html:4 and html:5 show 3.15.1 on the download/release list and '3.15 bugfix' in the maintenance table, consistent with a granularity rather than contradiction reading; web-ref-1 is not cited.",
+        "reviewed_at": "2026-10-21T13:36:04.809Z"
+      },
+      "plan_obligation_coverage": [
+        {
+          "obligation_id": "q4-oblig-web-ref-0",
+          "status": "met",
+          "supporting_passage_ids": [
+            "cli-run-fetch-wg1-ba51ff60--web-ref-0:html:0",
+            "cli-run-fetch-wg1-ba51ff60--web-ref-0:html:4",
+            "cli-run-fetch-wg1-ba51ff60--web-ref-0:html:5"
+          ]
+        },
+        {
+          "obligation_id": "q4-oblig-web-ref-1",
+          "status": "unmet",
+          "supporting_passage_ids": []
+        }
+      ],
+      "created_at": "2026-10-21T13:34:41.787Z",
+      "revised_at": "2026-10-21T13:36:04.809Z"
+    },
+    {
+      "finding_id": "finding-7f198c86e7cfaa5c781d4ef2",
+      "question_id": "q-plan-ad20edb0-c6f8-461e-b7ec-1c8cf3f53f36-5",
+      "assertion_text": "All cited passages are from the python.org downloads page listed in the mission's allowed domains, so the statements are attributable to official python.org content rather than a third-party mirror.",
+      "assertion_kind": "inference",
+      "passage_ids": [
+        "cli-run-fetch-wg1-ba51ff60--web-ref-0:html:0",
+        "cli-run-fetch-wg1-ba51ff60--web-ref-0:html:4",
+        "cli-run-fetch-wg1-ba51ff60--web-ref-0:html:5"
+      ],
+      "source_integrity": "not_checked",
+      "semantic_support": {
+        "status": "supported",
+        "reviewer": "research-v2-semantic-review",
+        "reviewer_version": "0.1.0-offline",
+        "rationale": "All cited passages have web_domain www.python.org, supporting official attribution for web-ref-0; no passages are admitted for web-ref-1.",
+        "reviewed_at": "2026-10-21T13:36:04.809Z"
+      },
+      "question_coverage": {
+        "status": "partial",
+        "reviewer": "research-v2-semantic-review",
+        "reviewer_version": "0.1.0-question-coverage",
+        "rationale": "All cited passages have web_domain www.python.org, supporting official attribution for web-ref-0; no passages are admitted for web-ref-1.",
+        "reviewed_at": "2026-10-21T13:36:04.809Z"
+      },
+      "plan_obligation_coverage": [
+        {
+          "obligation_id": "q5-oblig-web-ref-0",
+          "status": "met",
+          "supporting_passage_ids": [
+            "cli-run-fetch-wg1-ba51ff60--web-ref-0:html:0",
+            "cli-run-fetch-wg1-ba51ff60--web-ref-0:html:4",
+            "cli-run-fetch-wg1-ba51ff60--web-ref-0:html:5"
+          ]
+        },
+        {
+          "obligation_id": "q5-oblig-web-ref-1",
+          "status": "unmet",
+          "supporting_passage_ids": []
+        }
+      ],
+      "created_at": "2026-10-21T13:34:41.787Z",
+      "revised_at": "2026-10-21T13:36:04.809Z"
+    },
+    {
+      "finding_id": "finding-f09cea1f696ea97e577ef43d",
+      "question_id": "q-plan-ad20edb0-c6f8-461e-b7ec-1c8cf3f53f36-6",
+      "assertion_text": "The downloads landing page and the developer guide versions table use different presentation formats (download-oriented buttons and release list vs maintenance-status table), so wording and emphasis differences are audience-specific rather than factual contradictions.",
+      "assertion_kind": "inference",
+      "passage_ids": [
+        "cli-run-fetch-wg1-ba51ff60--web-ref-0:html:3",
+        "cli-run-fetch-wg1-ba51ff60--web-ref-0:html:4",
+        "cli-run-fetch-wg1-ba51ff60--web-ref-0:html:5"
+      ],
+      "source_integrity": "not_checked",
+      "semantic_support": {
+        "status": "insufficient",
+        "reviewer": "research-v2-semantic-review",
+        "reviewer_version": "0.1.0-offline",
+        "rationale": "The passages show different presentation formats, but they do not provide audience-intent evidence for the interpretive conclusion, and web-ref-1 is missing.",
+        "reviewed_at": "2026-10-21T13:36:04.809Z"
+      },
+      "question_coverage": {
+        "status": "partial",
+        "reviewer": "research-v2-semantic-review",
+        "reviewer_version": "0.1.0-question-coverage",
+        "rationale": "The passages show different presentation formats, but they do not provide audience-intent evidence for the interpretive conclusion, and web-ref-1 is missing.",
+        "reviewed_at": "2026-10-21T13:36:04.809Z"
+      },
+      "plan_obligation_coverage": [
+        {
+          "obligation_id": "q6-oblig-web-ref-0",
+          "status": "wrong_aspect",
+          "supporting_passage_ids": [
+            "cli-run-fetch-wg1-ba51ff60--web-ref-0:html:3",
+            "cli-run-fetch-wg1-ba51ff60--web-ref-0:html:4",
+            "cli-run-fetch-wg1-ba51ff60--web-ref-0:html:5"
+          ]
+        },
+        {
+          "obligation_id": "q6-oblig-web-ref-1",
+          "status": "unmet",
+          "supporting_passage_ids": []
+        }
+      ],
+      "created_at": "2026-10-21T13:34:41.787Z",
+      "revised_at": "2026-10-21T13:36:04.809Z"
+    }
+  ]
+}

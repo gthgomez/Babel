@@ -1,0 +1,36 @@
+{
+  "source": "Agent B dev-corpus mission.json (verbatim LF bytes; do not edit without B coordination)",
+  "checkout": "babel-cli/src/research/v2/fixtures/general-dev-brief-corpus/**/mission.json text eol=lf",
+  "cases": {
+    "G-DEV-01": {
+      "sha256": "3f2ffd46c07c67f7fbe9766c8124ca78e7e1bf02a55457ffa35720f836afe075",
+      "byte_length": 461,
+      "crlf_mis_checkout_sha256": "2bfd039924d1c5cde963be507ca763f3350d502366d6e012b0004651ae6c04cc"
+    },
+    "G-DEV-02": {
+      "sha256": "98409d2466dc21153d1e4e153fc8be280177877b44cd9236fa7afc09acb47676",
+      "byte_length": 290,
+      "crlf_mis_checkout_sha256": "5fda04c05b464306d220c9b3b417736cafee74bb049b8386cef3d5796faedf82"
+    },
+    "G-DEV-03": {
+      "sha256": "a70356b099d6dc173e64504f7b90371f072baff75e2ff3796bc6ae6a51f30367",
+      "byte_length": 190,
+      "crlf_mis_checkout_sha256": "a8201f7efa381863c45741b229d3b207ca10935f19922118cf4f57fcf32d6ca2"
+    },
+    "G-DEV-04": {
+      "sha256": "0b2ee25d87b582d8c3f865254eb2805e231e3fd86606af51d2782228b7e831eb",
+      "byte_length": 130,
+      "crlf_mis_checkout_sha256": "efe97d6134781dcbd63302a870f8b1f1a1b8615752ee413331efb728a1f9b8ad"
+    },
+    "G-DEV-05": {
+      "sha256": "a44ca47a1e40d5ca04bc7894470f8db0890b71f1d8c24a3964a4a06d0e806d1d",
+      "byte_length": 133,
+      "crlf_mis_checkout_sha256": "07bb3c80de1ee141f38ac5e8465f606ad9165c487cc77e82054494fa8f7558ca"
+    },
+    "G-DEV-06": {
+      "sha256": "75ce3222794f0b47f13ce3b21d891e93518132918d74af59fdb034439401f375",
+      "byte_length": 208,
+      "crlf_mis_checkout_sha256": "53532910668a33ad1d9017002d0b20efd009c88f0bdb85585810c01db44ebbc1"
+    }
+  }
+}

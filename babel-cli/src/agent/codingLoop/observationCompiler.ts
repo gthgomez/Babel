@@ -27,7 +27,8 @@ export interface CompiledObservation {
   target: string
   command?: string
   cwd?: string
-  exitCode: number
+  /** Null when the process is still running and no exit code is available yet. */
+  exitCode: number | null
   stdoutPresent: boolean
   stderrPresent: boolean
   stdoutHead: string
@@ -45,7 +46,8 @@ export interface CompileObservationInput {
   target: string
   command?: string
   cwd?: string
-  exitCode: number
+  /** Undefined falls back to -1; null means exit not yet available. */
+  exitCode?: number | null
   stdout?: string
   stderr?: string
   toolCallId?: string
@@ -63,20 +65,21 @@ export function compileObservation(input: CompileObservationInput): CompiledObse
   const stderr = input.stderr ?? ''
   const stdoutPresent = stdout.trim().length > 0
   const stderrPresent = stderr.trim().length > 0
-  const combined = buildRawRecord(input.command ?? input.target, input.exitCode, stdout, stderr)
+  const exitCode = input.exitCode === undefined ? -1 : input.exitCode
+  const combined = buildRawRecord(input.command ?? input.target, exitCode, stdout, stderr)
   const parsed = parseStructuredFailures(stdout, stderr, input.tool, input.command ?? input.target)
   const spillPath = persistSpillIfNeeded(input, combined)
 
   const stdoutParts = splitHeadTail(stdout)
   const stderrParts = splitHeadTail(stderr)
-  const summary = buildSummary(input.exitCode, parsed.failures, stdoutPresent, stderrPresent)
+  const summary = buildSummary(exitCode, parsed.failures, stdoutPresent, stderrPresent)
 
   return {
     tool: input.tool,
     target: input.target,
     ...(input.command !== undefined ? { command: input.command } : {}),
     ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
-    exitCode: input.exitCode,
+    exitCode,
     stdoutPresent,
     stderrPresent,
     stdoutHead: stdoutParts.head,
@@ -97,7 +100,7 @@ export function compileObservation(input: CompileObservationInput): CompiledObse
 export function formatCompiledObservation(compiled: CompiledObservation): string {
   const lines: string[] = [
     `### ${compiled.tool} ${compiled.target}`,
-    `exit_code: ${compiled.exitCode}`,
+    `exit_code: ${formatObservationExitCode(compiled.exitCode)}`,
     `summary: ${compiled.summary}`,
   ]
   if (compiled.command) lines.push(`command: ${compiled.command}`)
@@ -114,8 +117,15 @@ export function formatCompiledObservation(compiled: CompiledObservation): string
   appendStream(lines, 'stdout', compiled.stdoutPresent, compiled.stdoutHead, compiled.stdoutTail)
   appendStream(lines, 'stderr', compiled.stderrPresent, compiled.stderrHead, compiled.stderrTail)
   if (compiled.rawSpillPath) {
+    if (compiled.rawSpillPath === 'babel-artifact-unavailable') {
+      lines.push('raw_output_unavailable: artifact registration failed or resource bound exceeded; head/tail are partial output')
+    } else if (compiled.rawSpillPath.startsWith('babel-artifact://')) {
+      lines.push(`artifact_id: ${compiled.rawSpillPath.slice('babel-artifact://'.length)}`)
+      lines.push('(use read_artifact with artifact_id and query (literal search) or start_line/end_line; max 200 lines / 16000 characters per result)')
+    } else {
     lines.push(`raw_output: ${compiled.rawSpillPath}`)
     lines.push('(read or grep the raw_output path for the full lossless record)')
+    }
   }
   return lines.join('\n')
 }
@@ -427,12 +437,19 @@ function appendStream(
   }
 }
 
+export function formatObservationExitCode(exitCode: number | null): string {
+  return exitCode === null ? 'null' : String(exitCode)
+}
+
 function buildSummary(
-  exitCode: number,
+  exitCode: number | null,
   failures: CompiledFailure[],
   stdoutPresent: boolean,
   stderrPresent: boolean,
 ): string {
+  if (exitCode === null) {
+    return 'timed_out (still running; process exit code not available yet)'
+  }
   if (exitCode === 0) {
     return `ok (stdout=${stdoutPresent ? 'yes' : 'no'}, stderr=${stderrPresent ? 'yes' : 'no'})`
   }
@@ -444,13 +461,13 @@ function buildSummary(
 
 function buildRawRecord(
   command: string,
-  exitCode: number,
+  exitCode: number | null,
   stdout: string,
   stderr: string,
 ): string {
   return [
     `command: ${command}`,
-    `exit_code: ${exitCode}`,
+    `exit_code: ${formatObservationExitCode(exitCode)}`,
     '--- stdout ---',
     stdout,
     '--- stderr ---',
@@ -485,7 +502,8 @@ function persistSpillIfNeeded(
   if (!large) return undefined
   const name = `tool-output-${sanitizeId(input.toolCallId ?? input.tool)}.log`
   if (input.writeSpill) {
-    return input.writeSpill(name, combined)
+    try { return input.writeSpill(name, combined) }
+    catch { return 'babel-artifact-unavailable' }
   }
   if (input.spillDir) {
     const path = resolveContainedSpillPath(input.spillDir, name)

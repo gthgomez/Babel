@@ -337,6 +337,8 @@ export const ToolCallRequestSchema = z.discriminatedUnion('tool', [
   z.object({
     tool: z.literal('file_read'),
     path: z.string().min(1),
+    /** Internal Chat presentation mode. Never included in model tool schemas. */
+    raw: z.boolean().optional(),
   }),
   z.object({
     tool: z.literal('file_write'),
@@ -574,9 +576,12 @@ function handleDirectoryList(
   return getExecutor(context.projectRoot).listDirectory(req.path);
 }
 
-function handleFileRead(req: Extract<ToolCallRequest, { tool: 'file_read' }>, context: ToolContext): ToolResult {
+function handleFileRead(
+  req: Extract<ToolCallRequest, { tool: 'file_read' }>,
+  context: ToolContext,
+): ToolResult {
   // file_read is always live — reading is non-destructive.
-  return getExecutor(context.projectRoot).fileRead(req.path);
+  return getExecutor(context.projectRoot).fileRead(req.path, req.raw ? { raw: true } : undefined);
 }
 
 function handleFileWrite(req: Extract<ToolCallRequest, { tool: 'file_write' }>, context: ToolContext): ToolResult {

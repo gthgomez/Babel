@@ -397,6 +397,13 @@ test('A-6: explicit continuation preserves owner, grant, active wall, turns, and
     access.beginActiveExecution()
     await new Promise((resolve) => setTimeout(resolve, 5))
     access.pauseActiveExecution()
+    // Finding 1: the repair window requires evidence of repair.
+    const internals = engine as unknown as {
+      lastVerifierFailed: boolean
+      currentTurnHasMutation: () => boolean
+    }
+    internals.currentTurnHasMutation = () => true
+    internals.lastVerifierFailed = true
     access.applyPostWriteRepairBudget()
     const before = access.getTaskAllowanceSnapshot()!
 
@@ -412,6 +419,56 @@ test('A-6: explicit continuation preserves owner, grant, active wall, turns, and
     assert.equal(after.consumed.turns, 1)
     assert.ok(after.consumed.activeWallMs >= 1)
     assert.equal(after.repair.postWriteRepairRestrict, true)
+    assert.ok(after.repair.postWriteRepairWallCapMs !== null)
+  } finally {
+    if (previousRunsDir === undefined) delete process.env['BABEL_RUNS_DIR']
+    else process.env['BABEL_RUNS_DIR'] = previousRunsDir
+    rmSync(runsRoot, { recursive: true, force: true })
+    rmSync(projectRoot, { recursive: true, force: true })
+  }
+})
+
+test('A-6b: a fresh non-continued submission clears the repair window and latch', async () => {
+  const runsRoot = mkdtempSync(join(tmpdir(), 'babel-chat-allowance-a6b-'))
+  const projectRoot = mkdtempSync(join(tmpdir(), 'babel-chat-allowance-project-'))
+  const previousRunsDir = process.env['BABEL_RUNS_DIR']
+  process.env['BABEL_RUNS_DIR'] = runsRoot
+  try {
+    const engine = new ChatEngine({
+      task: 'implement a continued code fix',
+      projectRoot,
+      model: 'deepseek-v4-flash',
+      maxTurns: 8,
+      maxWallMs: 60_000,
+    })
+    engine.applyUserSubmission({ userInput: 'implement the continued code fix' })
+    const access = allowanceAccess(engine)
+    const internals = engine as unknown as {
+      lastVerifierFailed: boolean
+      currentTurnHasMutation: () => boolean
+    }
+    internals.currentTurnHasMutation = () => true
+    internals.lastVerifierFailed = true
+    access.applyPostWriteRepairBudget()
+    const entered = access.getTaskAllowanceSnapshot()!
+    assert.ok(entered.repair.postWriteRepairWallCapMs !== null)
+    assert.equal(entered.repair.postWriteRepairRestrict, true)
+
+    // A stale critic rejection from the previous objective must not survive
+    // into the fresh task and re-open the repair window on its first write.
+    const criticState = engine as unknown as { lastCriticReceipt: unknown }
+    criticState.lastCriticReceipt = { verdict: 'reject' }
+
+    // A fresh, non-continued submission must clear task-local repair punishment.
+    engine.applyUserSubmission({ userInput: 'a different, unrelated task' })
+    const fresh = access.getTaskAllowanceSnapshot()!
+    assert.equal(fresh.repair.postWriteRepairWallCapMs, null)
+    assert.equal(fresh.repair.postWriteRepairRestrict, false)
+    assert.equal(
+      criticState.lastCriticReceipt,
+      null,
+      'a fresh task must not inherit a stale critic verdict',
+    )
   } finally {
     if (previousRunsDir === undefined) delete process.env['BABEL_RUNS_DIR']
     else process.env['BABEL_RUNS_DIR'] = previousRunsDir

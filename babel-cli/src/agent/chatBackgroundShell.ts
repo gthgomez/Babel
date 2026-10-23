@@ -11,11 +11,27 @@ import {
   capObservationText,
   DEFAULT_BACKGROUND_JOB_TIMEOUT_MS,
   startBackgroundShell,
+  getBackgroundShellJob,
+  killBackgroundShell,
+  type BackgroundShellJob,
+  type AwaitBackgroundShellResult,
 } from './backgroundShell.js';
-import { SafeExecutor, validateExecutorShellCommand } from '../sandbox.js';
+import { SafeExecutor, validateExecutorShellCommand, type ToolResult } from '../sandbox.js';
 import { readRuntimeMode } from '../config/runtimeMode.js';
 import { isToolAllowedForExecutionProfile } from '../config/executionProfiles.js';
 import { shouldUseDockerSandbox } from '../config/benchmarkContainer.js';
+import {
+  formatRegisteredToolObservation,
+  type RunArtifactAccess,
+} from './codingLoop/readArtifactExecutor.js';
+import type { ChatToolAction } from './chatToolDefinitions.js';
+import type {
+  ChatCallbacks,
+  ChatEngineActionExecutorHost,
+} from './chatEngineContracts.js';
+import { bindChatBackgroundPolicy, isChatBackgroundOwnerCurrent, prepareChatBackgroundDispatch, settleChatBackgroundVerifier } from './chatBackgroundVerifier.js';
+import { defaultToolExecutor, type ToolExecutor, type PolicyGatedExecutionResult } from './toolExecutor.js';
+import { isInvocationLive, refreshDryRunState } from '../localTools.js';
 
 export interface BackgroundShellLogEntry {
   tool: string;
@@ -44,6 +60,14 @@ export interface BackgroundShellActionCtx {
   onBeforeSpawn?: (() => void) | undefined;
   /** Invoked immediately before awaiting a validated known background job. */
   onBeforeAwait?: (() => void) | undefined;
+  /** Checks whether the submission still owns this suspended action. */
+  isSubmissionCurrent?: (() => boolean) | undefined;
+  /** Settles the action without exposing output after its owner was replaced. */
+  settleStale?: (() => BackgroundShellActionResult) | undefined;
+  artifactAccess?: RunArtifactAccess | undefined;
+  artifactCallId?: string | undefined;
+  onStarted?: ((job: BackgroundShellJob) => void) | undefined;
+  onResult?: ((result: AwaitBackgroundShellResult) => Promise<{ notes: string[]; policyRejected?: boolean }>) | undefined;
 }
 
 export type BackgroundShellActionResult = { index: number; observation: string };
@@ -57,8 +81,17 @@ export async function executeAwaitCommandAction(
   // Unknown ids are local validation failures, not an external await effect.
   if (hasBackgroundShellJob(action.task_id)) ctx.onBeforeAwait?.();
   const result = await awaitBackgroundShell(action.task_id, timeoutMs);
-  const exitCode = result.timed_out ? null : result.exit_code;
-  const detail = result.timed_out
+  if (ctx.isSubmissionCurrent && !ctx.isSubmissionCurrent()) {
+    return ctx.settleStale?.() ?? { index: ctx.index, observation: '' };
+  }
+  const settlement = await ctx.onResult?.(result) ?? { notes: [] };
+  if (ctx.isSubmissionCurrent && !ctx.isSubmissionCurrent()) {
+    return ctx.settleStale?.() ?? { index: ctx.index, observation: '' };
+  }
+  // Null describes a running process. An unknown job is a local tool failure,
+  // not a still-running verifier with a fabricated process status.
+  const exitCode = settlement.policyRejected ? 1 : result.status === 'running' ? null : result.exit_code ?? 1;
+  const detail = settlement.policyRejected ? 'background execution denied after process settlement' : result.timed_out
     ? 'timed_out (still running)'
     : `exit ${result.exit_code ?? -1} (${result.status})`;
   ctx.pushLog({
@@ -76,22 +109,174 @@ export async function executeAwaitCommandAction(
     result.timed_out || (exitCode !== null && exitCode !== 0) ? (result.stderr || detail) : undefined,
     exitCode ?? (result.timed_out ? 1 : 0),
   );
-  const body = [
+  const resultHeader = [
     `task_id: ${result.id}`,
     `command: ${result.command || '(unknown)'}`,
-    `status: ${result.status}`,
+    `status: ${settlement.policyRejected ? 'policy_rejected' : result.status}`,
     `timed_out: ${result.timed_out}`,
     `elapsed_ms: ${result.elapsed_ms}`,
-    `exit_code: ${result.exit_code ?? 'null'}`,
-    '--- stdout ---',
-    capObservationText(result.stdout || '(empty)'),
-    '--- stderr ---',
-    capObservationText(result.stderr || '(empty)'),
+    `exit_code: ${exitCode ?? 'null'}`,
+    ...(settlement.policyRejected ? [`process_exit_code: ${result.exit_code ?? 'null'}`] : []),
   ].join('\n');
+  const actionForObservation: ChatToolAction = {
+    type: 'await_command',
+    task_id: action.task_id,
+  };
+  const observation = ctx.artifactAccess
+    ? formatRegisteredToolObservation(
+        actionForObservation,
+        {
+          exit_code: exitCode ?? -1,
+          stdout: `${resultHeader}\n--- stdout ---\n${result.stdout || '(empty)'}`,
+          stderr: result.stderr || '',
+        },
+        ctx.artifactAccess,
+        ctx.artifactCallId ?? String(ctx.toolId),
+        exitCode,
+      )
+    : [
+        `### await_command ${action.task_id}`,
+        `exit_code: ${exitCode ?? 'null'}`,
+        '```',
+        resultHeader,
+        '--- stdout ---',
+        capObservationText(result.stdout || '(empty)'),
+        '--- stderr ---',
+        capObservationText(result.stderr || '(empty)'),
+        '```',
+      ].join('\n');
   return {
     index: ctx.index,
-    observation: `### await_command ${action.task_id}\nexit_code: ${exitCode ?? 'null'}\n\`\`\`\n${body}\n\`\`\``,
+    observation: [observation, ...settlement.notes].join('\n'),
   };
+}
+
+/** Binds await_command to the submission that dispatched it in Chat. */
+export function executeChatAwaitCommandAction(
+  action: Extract<ChatToolAction, { type: 'await_command' }>,
+  ctx: {
+    host: ChatEngineActionExecutorHost;
+    projectRoot: string;
+    tool: string;
+    target: string;
+    toolId: number;
+    index: number;
+    ownerGeneration: number;
+    meta: { index: number; idempotencyKey?: string };
+    callbacks: ChatCallbacks;
+    artifactAccess?: RunArtifactAccess | undefined;
+  },
+): Promise<BackgroundShellActionResult> {
+  const { host, ownerGeneration } = ctx;
+  const job = getBackgroundShellJob(action.task_id);
+  const isCurrent = () => host.isSubmissionCurrent(ownerGeneration) &&
+    (!job || isChatBackgroundOwnerCurrent(host, job, ownerGeneration));
+  const settleStale = () => host.settleStaleActionResult(ctx.tool, ctx.target, ctx.index,
+    'background command does not belong to the current submission');
+  if (!isCurrent()) return Promise.resolve(settleStale());
+  return executeAwaitCommandAction(action, {
+    projectRoot: ctx.projectRoot,
+    tool: ctx.tool,
+    target: ctx.target,
+    toolId: ctx.toolId,
+    index: ctx.index,
+    pushLog: entry => {
+      if (isCurrent()) host.toolCallLog.push(entry);
+    },
+    onToolComplete: ctx.callbacks.onToolComplete,
+    onBeforeAwait: () => host.persistToolStartedAtExecutorDispatch(action, ctx.meta),
+    isSubmissionCurrent: isCurrent,
+    settleStale,
+    artifactAccess: ctx.artifactAccess,
+    artifactCallId: String(ctx.meta.idempotencyKey ?? ctx.toolId),
+    onResult: result => settleChatBackgroundVerifier({
+      host, job: getBackgroundShellJob(action.task_id), result,
+      generation: ownerGeneration, index: ctx.index,
+    }),
+  });
+}
+/** Bind background dispatch provenance and invalidation to the submitting Chat task. */
+export function createChatBackgroundExecutor(
+  action: Extract<ChatToolAction, { type: 'run_command' }>,
+  ctx: Parameters<typeof executeChatAwaitCommandAction>[1],
+): { executor: ToolExecutor; waitForStart: (completion: Promise<PolicyGatedExecutionResult>) => Promise<BackgroundShellActionResult | null> } {
+  const { host, ownerGeneration } = ctx;
+  let startedJob: BackgroundShellJob | undefined;
+  const notStarted = (reasonCode: string, message: string): ToolResult => ({
+    exit_code: 1, stdout: '', stderr: message,
+    denial: {
+      category: 'executor_policy', reason_code: reasonCode, message,
+      tool: 'shell_exec', active_mode: null, required_mode: null, evidence: null,
+    },
+  });
+  let announceStart!: (result: BackgroundShellActionResult) => void;
+  const started = new Promise<BackgroundShellActionResult>(resolve => { announceStart = resolve; });
+  const executor: ToolExecutor = {
+    mapAction: defaultToolExecutor.mapAction,
+    async execute(agentAction, context, budget) {
+      refreshDryRunState();
+      if (!isInvocationLive() || process.env['BABEL_SHADOW_ROOT'] || host.options.toolExecutorForTesting) {
+        return (host.options.toolExecutorForTesting ?? defaultToolExecutor).execute(agentAction, context, budget);
+      }
+      if (context.signal?.aborted || !host.isSubmissionCurrent(ownerGeneration)) {
+        return { action: agentAction, terminal: false, results: [notStarted('BACKGROUND_DISPATCH_CANCELLED', 'Background dispatch cancelled before spawn.')] };
+      }
+      const startResult = startChatBackgroundCommand(action, ctx, job => { startedJob = job; }, context.signal);
+      const job = startedJob;
+      // No child ran: preserve denial metadata so the governed caller cannot
+      // promote this dispatch failure into an executed red verifier receipt.
+      if (!job) return { action: agentAction, terminal: false, results: [notStarted('BACKGROUND_DISPATCH_NOT_STARTED', startResult.observation)] };
+      const onAbort = () => { if (!action.detached) killBackgroundShell(job.id); };
+      context.signal?.addEventListener('abort', onAbort, { once: true });
+      if (context.signal?.aborted) onAbort();
+      announceStart(startResult);
+      try {
+        await job.done;
+        const completed = await awaitBackgroundShell(job.id, 1);
+        return { action: agentAction, terminal: false, results: [{
+          exit_code: completed.exit_code ?? 1, stdout: completed.stdout, stderr: completed.stderr,
+        }] };
+      } finally { context.signal?.removeEventListener('abort', onAbort); }
+    },
+  };
+  return {
+    executor,
+    async waitForStart(completion) {
+      // Attach rejection handling immediately: a caller may await the job much later.
+      const settled = completion.then(() => null, () => null);
+      const result = await Promise.race([started, settled]);
+      if (startedJob) bindChatBackgroundPolicy(startedJob, completion);
+      return result;
+    },
+  };
+}
+
+function startChatBackgroundCommand(
+  action: Extract<ChatToolAction, { type: 'run_command' }>,
+  ctx: Parameters<typeof executeChatAwaitCommandAction>[1],
+  onStarted: (job: BackgroundShellJob) => void,
+  signal?: AbortSignal,
+): BackgroundShellActionResult {
+  const { host, ownerGeneration } = ctx;
+  let register: ((job: BackgroundShellJob) => void) | undefined;
+  let didStart = false;
+  return executeBackgroundRunCommandAction(action, {
+    projectRoot: ctx.projectRoot, tool: ctx.tool, target: ctx.target,
+    toolId: ctx.toolId, index: ctx.index,
+    ownerId: host.engineRunId,
+    toolCallId: ctx.meta.idempotencyKey,
+    pushLog: entry => {
+      if (didStart && host.isSubmissionCurrent(ownerGeneration)) host.toolCallLog.push(entry);
+    },
+    onToolComplete: (id, detail, error, exitCode) => {
+      if (didStart && host.isSubmissionCurrent(ownerGeneration)) ctx.callbacks.onToolComplete?.(id, detail, error, exitCode);
+    },
+    onBeforeSpawn: () => {
+      register = prepareChatBackgroundDispatch(host, action.command, action.cwd,
+        ownerGeneration, ctx.meta.idempotencyKey ?? String(ctx.toolId), signal);
+    },
+    onStarted: job => { register?.(job); onStarted(job); didStart = true; },
+  });
 }
 /** run_command(background=true) — non-blocking shell with sandbox parity gates. */
 export function executeBackgroundRunCommandAction(
@@ -170,6 +355,7 @@ export function executeBackgroundRunCommandAction(
       ...(ctx.ownerId !== undefined ? { ownerId: ctx.ownerId } : {}),
       ...(ctx.toolCallId !== undefined ? { toolCallId: ctx.toolCallId } : {}),
     });
+    ctx.onStarted?.(job);
     ctx.pushLog({
       tool: ctx.tool,
       target: ctx.target,
@@ -185,7 +371,7 @@ export function executeBackgroundRunCommandAction(
         `Started background job ${job.id} (hard timeout ${DEFAULT_BACKGROUND_JOB_TIMEOUT_MS / 1000}s).\n` +
         `Use await_command with task_id="${job.id}" to collect exit code and output.\n` +
         `The agent loop is free to continue while this command runs.\n` +
-        `Argv is whitespace-split only (same as shellExec — avoid quoted multi-arg syntax).\n\`\`\``,
+        `Arguments use the shared quote-aware parser; quote paths containing spaces. Shell operators and expansion are unsupported.\n\`\`\``,
     };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

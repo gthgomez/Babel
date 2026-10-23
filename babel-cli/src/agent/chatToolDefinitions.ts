@@ -11,6 +11,7 @@
  */
 
 import { z } from 'zod';
+import { ReadArtifactActionSchema } from './codingLoop/runOutputArtifacts.js';
 import { extractJson } from '../utils/extractJson.js';
 import type { AgentAction } from './actions.js';
 import type { ProviderMessage, ProviderToolCall, ToolDefinition } from '../runners/base.js';
@@ -55,6 +56,7 @@ import {
  * from actions.ts and adds `sub_agent` for parallel read-only investigation.
  */
 export const ChatToolActionSchema = z.discriminatedUnion('type', [
+  ReadArtifactActionSchema,
   BaseReadFileSchema,
   BaseListDirSchema,
   BaseGrepSchema,
@@ -190,6 +192,8 @@ export function chatActionToolName(action: ChatToolAction): string {
 
 export function chatActionTarget(action: ChatToolAction): string {
   switch (action.type) {
+    case 'read_artifact':
+      return action.artifact_id;
     case 'read_file':
     case 'write_file':
     case 'list_dir':
@@ -259,6 +263,7 @@ export function mapChatActionToAgentAction(action: ChatToolAction): AgentAction 
     case 'git_context':
     case 'test_run':
       return action as unknown as AgentAction;
+    case 'read_artifact':
     case 'str_replace':
     case 'read_range':
     case 'todo_write':
@@ -640,8 +645,8 @@ const OBSERVATION_COMPILER_TOOLS = new Set([
 
 export function formatChatToolObservation(
   action: ChatToolAction,
-  result: { stdout?: string; stderr?: string; exitCode?: number },
-  opts?: { spillDir?: string; toolCallId?: string },
+  result: { stdout?: string; stderr?: string; exitCode?: number | null },
+  opts?: { spillDir?: string; toolCallId?: string; writeSpill?: (name: string, content: string) => string },
 ): string {
   const tool = chatActionToolName(action);
   const target = chatActionTarget(action);
@@ -652,11 +657,12 @@ export function formatChatToolObservation(
         tool,
         target,
         ...(command !== undefined ? { command } : {}),
-        exitCode: result.exitCode ?? -1,
+        exitCode: result.exitCode === undefined ? -1 : result.exitCode,
         stdout: result.stdout ?? '',
         stderr: result.stderr ?? '',
         ...(opts?.spillDir !== undefined ? { spillDir: opts.spillDir } : {}),
         ...(opts?.toolCallId !== undefined ? { toolCallId: opts.toolCallId } : {}),
+        ...(opts?.writeSpill !== undefined ? { writeSpill: opts.writeSpill } : {}),
       }),
     );
   }
@@ -757,6 +763,16 @@ const RECOVERY_PLAN_PARAMETER = {
  */
 function buildAllChatToolDefinitions(): ToolDefinition[] {
   return [
+    { type: 'function', function: {
+      name: 'read_artifact',
+      description: 'Read registered output from this task. Use artifact_id from a tool observation; query searches the whole artifact literally. Ranges are 1-indexed, inclusive; the evidence body is bounded to 200 lines and 16000 characters, plus provenance and continuation markers.',
+      parameters: { type: 'object', properties: {
+        artifact_id: { type: 'string', format: 'uuid' },
+        start_line: { type: 'integer', minimum: 1 }, end_line: { type: 'integer', minimum: 1 },
+        start_column: { type: 'integer', minimum: 1, description: '1-indexed character column for long-line continuation' },
+        query: { type: 'string', minLength: 1, maxLength: 256 },
+      }, required: ['artifact_id'], additionalProperties: false },
+    } },
     {
       type: 'function',
       function: {

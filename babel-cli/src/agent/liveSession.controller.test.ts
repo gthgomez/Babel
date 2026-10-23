@@ -840,13 +840,13 @@ describe('H2 forced-termination at controller-visible boundaries', () => {
     ];
     for (const entry of cases) {
       const runId = `b2-direct-${entry.suffix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+      const engine = new ChatEngine({ task: `direct ${entry.suffix}`, projectRoot: process.cwd(), runId });
       const awaitJob = entry.suffix === 'await'
-        ? startBackgroundShell({ command: 'echo babel-b2-await', cwd: process.cwd(), timeoutMs: 5_000 })
+        ? startBackgroundShell({ command: 'echo babel-b2-await', cwd: process.cwd(), timeoutMs: 5_000, ownerId: runId })
         : undefined;
       const action = entry.suffix === 'await'
         ? { type: 'await_command' as const, task_id: awaitJob!.id }
         : entry.action;
-      const engine = new ChatEngine({ task: `direct ${entry.suffix}`, projectRoot: process.cwd(), runId });
       const runDir = (engine as unknown as { engineRunDir: string }).engineRunDir;
       const toolName = action.type;
       const fingerprint = operationFingerprint(toolName, action);
@@ -865,9 +865,13 @@ describe('H2 forced-termination at controller-visible boundaries', () => {
       runtime.sessionEvents = log;
       runtime.turnId = 't';
       const faultingEngine = engine as unknown as {
+        isolationBrokerFlags: () => { dirtyTree: boolean; hostFallbackAllowed: boolean };
         persistToolStartedAtExecutorDispatch: (...args: unknown[]) => void;
         executeOneAction: (input: typeof action, context: object, callbacks: object, meta: { index: number; subAgentCounter: number; idempotencyKey: string }) => Promise<{ observation: string }>;
       };
+      // This fixture faults before execution; explicitly admit the host boundary
+      // so it reaches the persisted-start boundary through the real policy gate.
+      faultingEngine.isolationBrokerFlags = () => ({ dirtyTree: false, hostFallbackAllowed: true });
       const persist = faultingEngine.persistToolStartedAtExecutorDispatch.bind(engine);
       faultingEngine.persistToolStartedAtExecutorDispatch = (...args) => {
         persist(...args);

@@ -1,0 +1,6 @@
+{
+  "independent_evidence_clusters_expected": 1,
+  "underlying_dataset_source": "widgetship-2025.csv",
+  "syndicated_articles": ["press-wire-a.html", "press-wire-b.html", "local-blog.html"],
+  "must_not_count_syndication_as_independent_corroboration": true
+}

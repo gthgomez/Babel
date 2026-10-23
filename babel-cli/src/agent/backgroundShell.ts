@@ -18,7 +18,7 @@ import { resolve as pathResolve } from 'node:path';
 
 import { terminateChildTree } from '../sandbox.js';
 import { buildWindowsCommandShellArgs, parseCommandArgv } from '../utils/commandArgv.js';
-import { getSafeEnv } from '../utils/safeEnv.js';
+import { childEnvForSandbox } from '../authority/unprivilegedChildEnv.js';
 import { getDefaultProcessWitness, type ProcessWitness } from '../diagnostics/bdns/processWitness.js';
 
 /** Cap retained on the job record (same ballpark as SafeExecutor maxBuffer). */
@@ -204,7 +204,7 @@ export function startBackgroundShell(input: StartBackgroundShellInput): Backgrou
     child = spawn(spawnCmd, spawnArgs, {
       cwd,
       // M10 parity with SafeExecutor.shellExec — strip secrets from child env.
-      env: getSafeEnv(),
+      env: childEnvForSandbox(),
       windowsHide: true,
       ...(isWin ? { windowsVerbatimArguments: true } : {}),
       // POSIX: new process group so terminateChildTree can SIGTERM -pid.

@@ -25,6 +25,7 @@ import type { ParityRuntime } from './chatEngineParityBridge.js'
 import type { TurnRuntimeSnapshot } from './turnRuntime.js'
 import type { PolicyEventLog } from './policyEventLog.js'
 import type { ToolCallLogEntry } from './chatEngineObservability.js'
+import type { DiffCriticVerdict } from './diffCritic.js'
 
 export interface FreshTaskIsolationHost {
   taskMutationOwnership?: import('./taskMutationOwnership.js').TaskMutationOwnership | null
@@ -55,6 +56,7 @@ export interface FreshTaskIsolationHost {
   _logIndexToTurn: Map<number, number>
   _cancelled: boolean
   lastVerifierFailed: boolean
+  lastCriticReceipt: DiffCriticVerdict | null
   investigateSoftNudgeDone: boolean
   childAttempts: Map<string, number>
   _lastPhase: import('./chatPhaseNudge.js').ChatPhase | null
@@ -105,6 +107,10 @@ export function isolateEngineForFreshUserSubmission(
   host._logIndexToTurn.clear()
   host._cancelled = false
   host.lastVerifierFailed = false
+  // A fresh objective must not inherit the previous task's critic verdict:
+  // a stale rejection would re-open the post-write repair window on the new
+  // task's first productive write.
+  host.lastCriticReceipt = null
   host.investigateSoftNudgeDone = false
   host.childAttempts.clear()
   host._lastPhase = null

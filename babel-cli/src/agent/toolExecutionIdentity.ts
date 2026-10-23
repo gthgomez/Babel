@@ -5,6 +5,8 @@
  * Completion order of parallel reads must never rewrite that identity.
  */
 
+import { hashDiscoveryContent, isDiscoveryTool } from './discoveryProgress.js'
+
 export interface ToolExecutionIdentity {
   batchId: string
   actionIndex: number
@@ -38,6 +40,8 @@ export interface DurableToolResultProjection {
   target: string
   exit_code?: number
   contentHash?: string
+  /** A cached/read-limit notice injected no new discovery evidence. */
+  discoverySuppressed?: boolean
   action_index: number
   batch_id: string
   identity: ToolExecutionIdentity
@@ -129,7 +133,10 @@ export function projectDurableToolBatch(input: {
       function: { name: row.tool, arguments: JSON.stringify(argsObj) },
       actionIndex,
     })
-    const hashed = input.contentHashFor?.(row.tool, content)
+    const discoverySuppressed = isDiscoveryTool(row.tool) &&
+      (row.detail === 'cached' || row.detail === 'read_limit')
+    const hashed = discoverySuppressed ? undefined :
+      (input.contentHashFor ?? hashDiscoveryContent)(row.tool, content)
     results.push({
       tool_call_id: toolCallId,
       tool_name: row.tool,
@@ -137,6 +144,7 @@ export function projectDurableToolBatch(input: {
       target: row.target,
       ...(row.exit_code !== undefined ? { exit_code: row.exit_code } : {}),
       ...(hashed !== undefined ? { contentHash: hashed } : {}),
+      ...(discoverySuppressed ? { discoverySuppressed: true } : {}),
       action_index: actionIndex,
       batch_id: batchId,
       identity,

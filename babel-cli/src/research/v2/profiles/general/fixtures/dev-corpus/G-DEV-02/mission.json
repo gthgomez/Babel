@@ -1,0 +1,7 @@
+{
+  "profile_id": "general",
+  "primary_question": "Which fictional tablet should I buy if I require USB-C DisplayPort Alt Mode?",
+  "intended_decision": "Pick one device for field demos.",
+  "hard_requirements": ["usb_c_displayport_alt_mode"],
+  "constraints": { "max_budget_usd": 400 }
+}

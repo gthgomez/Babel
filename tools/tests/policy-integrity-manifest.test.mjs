@@ -14,6 +14,15 @@ const source = readFileSync(
   new URL("../policy-integrity-manifest.mjs", import.meta.url),
   "utf8",
 );
+
+test('manifest JSON with a UTF-8 BOM remains rejected', (t) => {
+  const f = fixture(t);
+  const bytes = readFileSync(f.manifestPath);
+  writeFileSync(f.manifestPath, Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), bytes]));
+  const result = f.run();
+  assert.equal(result.status, 1);
+  assert.ok(result.json.problems.includes('manifest_unreadable'));
+});
 test('every tracked host-protected path has a manifest registration', () => {
   const root = new URL('../../', import.meta.url);
   const policy = JSON.parse(readFileSync(new URL('config/review-risk-policy.json', root)));
@@ -191,7 +200,8 @@ function fixture(t, verifierSource = source) {
       })(),
     };
   };
-  assert.equal(run("generate").status, 0);
+  const generated = run("generate");
+  assert.equal(generated.status, 0, JSON.stringify(generated.json));
   const manifestPath = join(root, "POLICY_MANIFEST.json");
   return {
     root,

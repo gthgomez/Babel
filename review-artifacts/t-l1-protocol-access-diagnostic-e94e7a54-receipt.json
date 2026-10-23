@@ -1,0 +1,40 @@
+{
+  "schema": "research-v2-protocol-access-diagnostic-receipt/v1",
+  "label": "NEW protocol/access diagnostic — not attempt2 research/model rerun",
+  "bound_b_commit": "e94e7a54c1f5ee316341575c6fc895e367788985",
+  "bound_tree": "3cfc654f3130eaa8338a1f1f389924e1d8c21d8c",
+  "attempt2_artifacts_unchanged": {
+    "store_snapshot_sha256": "044e673ec448df63c57597f9acf6a8fafd1b9cad0409bdd9062cf26e5c16a979"
+  },
+  "prerequisite_build_on_exact_bound_tree": {
+    "npm_ci_after_local_package_json_merge_only": 0,
+    "typecheck_exit": 2,
+    "build_exit": 2,
+    "blocker": "merge conflict markers remain in bound tree (package.json and other TS files); only access-module dist emitted for diagnostic loader",
+    "log": "review-artifacts/t-l1-protocol-access-diagnostic-e94e7a54-build-typecheck.log"
+  },
+  "loaded_module_sha256": {
+    "admittedHttpGet.js": "d465c832a47439b28c1a403babacf82ba6e4f21fca7b115811d70fc77a6b1303",
+    "governedHttpClientIdentity.js": "b2f639df8d239b79ff0435aaa0b0126be0b9b3f27867e29a19284fe10dd46bb8",
+    "sanitizedHttpFailureMetadata.js": "591b66f7013011e93036521f3704613b69b941534cc809051f780e0cc41783f6",
+    "parseAcquisitionDiagnosticsFromHttpGet.js": "a8cbf2ec3814ff942268fdd945c705b56877028dddbf47c1b8b701cdb983864d"
+  },
+  "single_get": {
+    "meta": "review-artifacts/t-l1-protocol-access-diagnostic-e94e7a54-run-meta.txt",
+    "result": "review-artifacts/t-l1-protocol-access-diagnostic-e94e7a54-run.json",
+    "exit": 0,
+    "http_status": 200,
+    "user_agent_sent": "Babel-Research/0.1.4 (+https://github.com/gthgomez/Babel; governed-admitted-http-get)",
+    "authorization": "none",
+    "bytes_received": 1006582,
+    "truncated": false,
+    "body_sha256": "5d9e9b0a332c01a15983bf93cf1fb20be23e159c6e2f8882db715d63f6f991df",
+    "tree_json_usable": true,
+    "tree_entry_count": 4039,
+    "tree_sha_field": "e912c2f3320de0b6e1c9ff85b95b0f74d8b5323c",
+    "bounded_http_failure_metadata": null
+  },
+  "qualification_status": "partial_emitted_transport_evidence_only_not_clean_build",
+  "prerequisite_correction": "review-artifacts/t-l1-protocol-access-diagnostic-e94e7a54-prerequisite-correction.json",
+  "interpretation": "Suggestive transport contrast only; not clean-build qualified; attempt2 403 cause not proven. See prerequisite_correction."
+}

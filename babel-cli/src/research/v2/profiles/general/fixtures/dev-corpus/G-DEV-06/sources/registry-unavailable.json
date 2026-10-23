@@ -1,0 +1,5 @@
+{
+  "simulated_fetch": "unavailable",
+  "reason": "primary_registry_403",
+  "instruction_to_engine": "do_not_upgrade_snippets_to_primary_confirmation"
+}

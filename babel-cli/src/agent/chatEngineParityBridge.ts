@@ -8,6 +8,7 @@ import { FailureDomainSchema, TerminalReasonCodeSchema, type TerminalOutcome } f
 import { classifyPolicySource, type TerminalReason } from './chatTerminalReason.js';
 import { projectChatTerminal, type ChatStatus } from './chatFailureClassification.js';
 import { classifyToolEffect } from '../executor/contracts.js';
+import { discoveryObservationKey, hashDiscoveryContent, isDiscoveryTool } from './discoveryProgress.js';
 import type { ProviderMessage, ProviderToolCall } from '../runners/base.js';
 import type { ProviderId } from '../runners/providerRegistry.js';
 import {
@@ -590,6 +591,7 @@ export function parityRecordToolBatch(
       exit_code?: number;
       target?: string;
       contentHash?: string;
+      discoverySuppressed?: boolean;
       action_index?: number;
       batch_id?: string;
     }>;
@@ -771,14 +773,14 @@ export function parityRecordToolBatch(
     reads: acceptedResults
       .filter(
         (r) =>
-          r.tool_name === 'read_file' ||
-          r.tool_name === 'file_read' ||
-          r.tool_name === 'read_range' ||
-          r.tool_name === 'grep',
+          isDiscoveryTool(r.tool_name) && r.discoverySuppressed !== true &&
+          r.exit_code === 0 && r.content.trim().length > 0,
       )
       .map((r) => ({
         path: r.target ?? r.tool_name,
-        ...(r.contentHash !== undefined ? { contentHash: r.contentHash } : {}),
+        observationKey: discoveryObservationKey(r.tool_name, r.target ?? r.tool_name,
+          acceptedToolCalls.find(call => call.id === r.tool_call_id)?.function.arguments),
+        contentHash: r.contentHash ?? hashDiscoveryContent(r.tool_name, r.content)!,
       })),
   });
   parityReduce(rt, { type: 'progress', hasDelta: receipt.hasDelta });

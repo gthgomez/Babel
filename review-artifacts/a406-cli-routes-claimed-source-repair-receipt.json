@@ -1,0 +1,53 @@
+{
+  "schema": "research-v2-ci-repair-receipt/v1",
+  "pr": 406,
+  "branch": "cursor/research-v2-post-review-settlement-fc31",
+  "root_cause": "fixtureModelForOfflineRun semantic_support_review judgments omitted required claimed_source_attribution and claimed_source_slots after SemanticSupportReviewOutputSchema tightened; validation failed before cancel-resume journey completed on CI shard0.",
+  "changed_files": [
+    "babel-cli/src/research/v2/cli/researchV2FixtureRunModel.ts",
+    "babel-cli/src/research/v2/cli/researchV2CliOperations.ts",
+    "babel-cli/src/research/v2/engine/testSupport/claimedSourceReviewFieldsFromSemanticInput.ts",
+    "babel-cli/src/research/v2/engine/testSupport/claimedSourceReviewFieldsFromSemanticInput.test.ts"
+  ],
+  "fix_summary": "Derive claimed_source_slots from semantic_support_review input cited_passages.source_attribution.coverage_source_slot and mission_source_slots via claimedSourceReviewFieldsFromSemanticInput; missing or unavailable cited attribution returns not_assessed (no admitted_fetched directory fallback); stop cancel watcher in finally during X-L1 journey.",
+  "follow_up": "Evidence-derived slots in researchV2FixtureRunModel.ts; helper negative when unrelated admitted_fetched slot exists without available cited coverage_source_slot.",
+  "preserved": [
+    "e1547b756d7de3e41cbad613b95cfc0b62b75af8 evidence bindings",
+    "main merge fe5d699ab7758580f90fee17e3bb3df998d37b2b",
+    "production validation and researchV2CliRoutes.test.ts assertions",
+    "valid cited branch and cancelWatcher.stop() finally cleanup"
+  ],
+  "offline_proof": {
+    "role": "historical_shard0_cli_only_first_green",
+    "tested_source_commit": "89e9591f2411b86ba95ffa59e8bd65c7381bef03",
+    "tested_source_tree": "22f1045531dfbbcdfb28b09adbda2969bc3f59a2",
+    "working_tree_note": "Proof captured against branch metadata tip 89e9591f before evidence-derived helper and not_assessed fallback fix; not the repaired code candidate at receipt commit 70d625fd.",
+    "command": "cd babel-cli && node --import tsx --test src/commands/researchV2CliRoutes.test.ts",
+    "outer_exit": 0,
+    "tap_summary": "# tests 3; # pass 3; # fail 0",
+    "raw_log": "/opt/cursor/artifacts/a406-cli-routes-shard0-repair.log",
+    "sanitized_receipt": "/opt/cursor/artifacts/a406-cli-routes-shard0-repair-receipt.txt"
+  },
+  "receipt_metadata_correction": {
+    "prior_receipt_commit": "70d625fd6cc9207e4c47da7b71fe594283da5a52",
+    "prior_receipt_parent_code_commit": "835cd3971a1d8c6430557cdf89f72c96665de13e",
+    "mislabeled_field": "offline_proof.tested_parent_commit",
+    "recorded_value": "89e9591f2411b86ba95ffa59e8bd65c7381bef03",
+    "should_have_named": "835cd3971a1d8c6430557cdf89f72c96665de13e as repaired candidate under test when receipt was authored (70d625fd was metadata-only on that tree)"
+  },
+  "verified_checkpoint": {
+    "descends_from_receipt_commit": "70d625fd6cc9207e4c47da7b71fe594283da5a52",
+    "tested_parent_commit": "70d625fd6cc9207e4c47da7b71fe594283da5a52",
+    "proof_binding": {
+      "test_source_equivalent_to_commit": "a580d38748dae8d580224f417a1a3e9ca351cabf",
+      "test_source_equivalent_to_tree": "8ed20464acd46b7f91497585b16fd155feba0bbf",
+      "execution_index_clean": true,
+      "captured_at": "2026-10-21T18:35:00.000Z"
+    },
+    "command": "cd babel-cli && node --import tsx --test src/commands/researchV2CliRoutes.test.ts src/research/v2/engine/testSupport/claimedSourceReviewFieldsFromSemanticInput.test.ts",
+    "outer_exit": 0,
+    "tap_summary": "# tests 6; # pass 6; # fail 0",
+    "raw_log": "/opt/cursor/artifacts/a406-cli-routes-not-assessed-repair.log"
+  },
+  "excluded": ["live model/search/fetch", "permission-held live evidence export", "pr_merge_to_main"]
+}
