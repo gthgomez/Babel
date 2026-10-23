@@ -17,8 +17,10 @@ const expected = JSON.parse(readFileSync(join(oracleRoot, 'expected-hashes.json'
 
 for (const [rel, hash] of Object.entries(expected.immutable_paths)) {
   const actual = readFileSync(join(workspace, rel));
+  // Compare LF-normalized bytes, matching the checkout-independent oracle.
+  const normalized = Buffer.from(actual.toString('utf8').replace(/\r\n/g, '\n'), 'utf8');
   assert.equal(
-    createHash('sha256').update(actual).digest('hex'),
+    createHash('sha256').update(normalized).digest('hex'),
     hash,
     `${rel} must match the operator template (agent may not mutate visible tests or decoys)`,
   );
