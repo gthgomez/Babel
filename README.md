@@ -42,9 +42,14 @@ Babel
   Completed · 2 files changed · verified
 ```
 
+## Choose an install path
+
+- **Windows x64 — Babel Desktop 0.1.3 (published release):** download the Setup.exe or portable ZIP from the [v0.1.3 release](https://github.com/gthgomez/Babel/releases/tag/v0.1.3). It bundles Node and the Babel CLI; you do not need to clone or build. Follow the [setup guide for that release](https://github.com/gthgomez/Babel/blob/v0.1.3/babel-desktop/docs/INSTALL-WINDOWS.md).
+- **Current source (any OS):** follow the build instructions below. Source builds can contain behavior that is not included in the published Desktop application.
+
 ## Quick start (from source)
 
-There is **no published npm package** for this CLI today. Run from a clone.
+The instructions in this section build the CLI from a clone of current source.
 
 **Requirements:** Node.js 22.19.0+ in the 22.x line, or 24.13.1+ in the 24.x line, a clone of this repo, and (for model sessions) a provider key.
 
@@ -53,7 +58,9 @@ git clone https://github.com/gthgomez/Babel.git
 cd Babel
 npm --prefix .\babel-cli ci
 npm --prefix .\babel-cli run build
-node .\babel-cli\dist\index.js doctor
+$BabelRoot = (Get-Location).Path
+$BabelCli = Join-Path $BabelRoot 'babel-cli\dist\index.js'
+node "$BabelCli" doctor
 ```
 
 ```bash
@@ -61,33 +68,43 @@ node .\babel-cli\dist\index.js doctor
 git clone https://github.com/gthgomez/Babel.git
 cd Babel
 npm --prefix ./babel-cli ci && npm --prefix ./babel-cli run build
-node ./babel-cli/dist/index.js doctor
+BabelRoot="$PWD"
+BabelCli="$BabelRoot/babel-cli/dist/index.js"
+node "$BabelCli" doctor
 ```
 
 1. Configure only the providers you use in the private CLI profile (`~/.babel/config/.env` or `%USERPROFILE%\.babel\config\.env` on Windows). The old source-checkout `babel-cli/.env` requires explicit `BABEL_LEGACY_CLI_ENV=1` compatibility opt-in. Installed Desktop now provides a masked **Configure provider** action, saving outside the target project by default.
-2. For ordinary host coding on repos you own, set `$env:BABEL_EXECUTION_PROFILE = 'dev_local'` (PowerShell) or `export BABEL_EXECUTION_PROFILE=dev_local`. The default `safe_repo` profile expects Docker and fail-closes without it.
-3. Start the TUI:
+2. Keep the default `safe_repo` profile for project execution and prepare a Docker image containing your project's tools (`BABEL_BENCHMARK_DOCKER_IMAGE`); `safe_repo` fail-closes without Docker and an image. `dev_local` permits supported host inspection (for example `rg`, `git status`) without Docker; selecting it alone does **not** enable repository test or build commands.
+3. A saved credential and a listed model do not confirm account access or successful inference. Select the provider and model you intend to use, then send your first useful task.
+4. Change into **your own** repository and start the TUI there, keeping the absolute paths defined above in the same shell:
 
 ```powershell
-node .\babel-cli\dist\index.js interactive
+Set-Location -LiteralPath 'C:\path with spaces\your-repo'
+node "$BabelCli" interactive
 ```
 
 ```bash
-node ./babel-cli/dist/index.js interactive
+cd '/path with spaces/your-repo'
+node "$BabelCli" interactive
 ```
 
-Then talk to it:
+The CLI selects the nearest recognized project at or above the working directory,
+falling back to that directory. Explicit project/target selection and session
+resume can override it; check the displayed target.
+
+A good first task requests a bounded investigation without changes. This prompt
+does not enforce a read-only security mode; normal permissions still apply:
 
 ```text
-> Explain this repository
-> Fix the failing auth test
-> Review the changes you just made
+> Using this repository's README and code, trace one small documented behavior from its entry point to its implementation and nearest relevant test. Cite file paths and identify the test command documented or configured in the repository. Do not change files, install dependencies, or run tests or builds. If you cannot find a test or command, say so.
 ```
+
+Ask for changes (for example `Fix the failing auth test`) as an explicit follow-up once the execution prerequisites above are in place.
 
 Full first-success path (profiles, one-shots, recovery): **[START_HERE.md](./START_HERE.md)**.  
 Operational command reference: **[docs/CLI_QUICKSTART.md](./docs/CLI_QUICKSTART.md)**.
 
-The North Star desktop shell lives in [`babel-desktop/`](./babel-desktop/README.md). Its opening screen is a visual reference. Coding behavior remains in `babel-cli`.
+Babel Desktop lives in [`babel-desktop/`](./babel-desktop/README.md): a Windows UI that runs the real Babel CLI harness. The published Windows x64 build is [0.1.3](https://github.com/gthgomez/Babel/releases/tag/v0.1.3); the Desktop README describes current source, which may include behavior not in 0.1.3. Coding behavior remains in `babel-cli`.
 
 ## What Babel does
 
@@ -100,10 +117,10 @@ The North Star desktop shell lives in [`babel-desktop/`](./babel-desktop/README.
 Also available as CLI entrypoints: headless chat for scripts/CI, checkpoints / `undo`, cost and diagnostics, and a read-only MCP control-plane surface. Entrypoint availability is not a reliability claim.
 
 ```powershell
-node .\babel-cli\dist\index.js "Fix the failing webhook retry test"
-node .\babel-cli\dist\index.js plan "Split the auth module safely"
-node .\babel-cli\dist\index.js deep "Harden the migration path and verify it"
-node .\babel-cli\dist\index.js chat --headless "Summarize the failing test"
+node "$BabelCli" "Fix the failing webhook retry test"
+node "$BabelCli" plan "Split the auth module safely"
+node "$BabelCli" deep "Harden the migration path and verify it"
+node "$BabelCli" chat --headless "Summarize the failing test"
 ```
 
 ## Why the harness matters
@@ -117,9 +134,11 @@ Most coding agents expose a model and a tool loop. Babel also exposes the harnes
 
 You should be able to **use Babel before you understand Babel's architecture**. Deeper design lives under [docs/architecture](./docs/architecture/ARCHITECTURE.md).
 
-Optional: validate the public tree and preview an instruction stack **without** a model key:
+Optional for source users: return to the Babel checkout to validate the public
+tree and preview an instruction stack **without** a model key:
 
 ```powershell
+Set-Location -LiteralPath $BabelRoot
 pwsh -File .\tools\validate-public-release.ps1
 pwsh -File .\tools\resolve-local-stack.ps1 -TaskCategory backend -Project example_saas_backend -Model codex -PipelineMode deep -Format json
 ```
@@ -129,10 +148,10 @@ pwsh -File .\tools\resolve-local-stack.ps1 -TaskCategory backend -Project exampl
 | | |
 |---|---|
 | **Maturity** | Pre-1.0 public source |
-| **Install** | Clone + build (npm package not published yet) |
+| **Install** | Windows x64 Desktop 0.1.3 download, or clone + build from current source |
 | **Present in the public tree** | CLI entrypoints (chat / plan / deep), catalog/stack validation tooling, typed contracts, read-only MCP inspection, release/scrub/secret-scan gates |
 | **Still under active qualification** | Ordinary coding-loop reliability |
-| **Depends on your environment** | Provider credentials, Docker vs `dev_local`, repo policy |
+| **Depends on your environment** | Provider credentials, Docker image with your project tools (`dev_local` alone does not run tests/builds), repo policy |
 
 Honest detail: **[docs/STATUS.md](./docs/STATUS.md)**. Product direction: **[docs/VISION.md](./docs/VISION.md)**.
 

@@ -169,7 +169,7 @@ Chat uses the same default execution profile as other run paths: **`safe_repo`**
 | Profile / control | Behavior |
 |-------------------|----------|
 | **`safe_repo` (default)** | Docker isolation required when the profile is active. Proceeds only if Docker is available **and** a sandbox image is configured (`BABEL_BENCHMARK_DOCKER_IMAGE`). Without daemon/image, shell execution **fail-closes** unless host escalation env is set. |
-| **`dev_local`** | Host-friendly local coding (`dockerSandbox: false`). No Docker requirement; use for day-to-day host work without isolation containers; executes directly on your host — trusted repositories only. |
+| **`dev_local`** | Host-local profile (`dockerSandbox: false`). No Docker requirement. Permits supported intrinsic host inspection (`rg`, `git status`, `cat`); project-code test/build commands (npm/cargo/go/gradle, etc.) are **denied** without Docker isolation. Selecting it alone does not enable repository tests or builds. Trusted repositories only. |
 | **`BABEL_ALLOW_HOST_FALLBACK=1`** | Explicit host escalation (preferred). Allows host execution when isolation would otherwise fail closed. Also accepts `true` / `yes`. |
 | **`BABEL_DOCKER_DISABLE=true`** | Legacy isolation opt-out; also counts as explicit host escalation under H13. Disables Docker sandbox selection for the process. |
 
@@ -180,16 +180,16 @@ Chat uses the same default execution profile as other run paths: **`safe_repo`**
 $env:BABEL_EXECUTION_PROFILE = 'dev_local'
 
 # Or per-run CLI flag (babel run / advanced surfaces that expose the option)
-babel run "Fix tests" --execution-profile dev_local
+babel run "Explain the test layout" --execution-profile dev_local
 ```
 
 Default remains `safe_repo` when neither env nor `--execution-profile` is set.
 
 ### Practical defaults for operators
 
-- **Docker ready + image configured** → keep `safe_repo` (default guarded posture).
-- **Host-only day-to-day coding** → use `dev_local` (`BABEL_EXECUTION_PROFILE=dev_local` or `--execution-profile dev_local`).
-- **Keep `safe_repo` but temporarily allow host** → set `BABEL_ALLOW_HOST_FALLBACK=1` (prefer over `BABEL_DOCKER_DISABLE`).
+- **Project tests/builds** → keep `safe_repo` (default guarded posture) and configure an image that contains your project's tools.
+- **Host inspection without Docker** → `dev_local` (`BABEL_EXECUTION_PROFILE=dev_local` or `--execution-profile dev_local`); it does not by itself run repository tests or builds.
+- **Keep `safe_repo` but explicitly allow host** → `BABEL_ALLOW_HOST_FALLBACK=1` (prefer over `BABEL_DOCKER_DISABLE`). This is an explicit escalation, not the normal first-use recovery path.
 
 Normative isolation rule (H13) and maturity notes: [architecture/HARNESS_ARCHITECTURE_V1.md](./architecture/HARNESS_ARCHITECTURE_V1.md) §6.9 Isolation architecture. Runtime decision lives in `babel-cli/src/config/benchmarkContainer.ts` (`evaluateGovernedIsolation`).
 
