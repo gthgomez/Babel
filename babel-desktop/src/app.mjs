@@ -127,6 +127,7 @@ function renderControls() {
   $('#preview-badge').textContent = 'BABEL CLI';
   renderRuntime();
   renderStatus();
+  refreshEmptyState();
 }
 function shortSha(sha) { return typeof sha === 'string' && sha ? sha.slice(0, 12) : 'unknown'; }
 function runtimeUpdateText(update) {
@@ -281,7 +282,7 @@ function renderConversation(forceBottom = false, reset = false) {
   const previousTop = scroller.scrollTop;
   const session = activeSession();
   if (!session.fixture && session.messages.length === 0) {
-    scroller.innerHTML = `<div class="empty-state"><img src="${LOGO}" alt=""><h1>Run. Verify. Understand.</h1>${emptyStateBody()}<div class="preview-note">${icon('info')}${'Babel CLI · permissions and verification built in'}</div></div>`;
+    scroller.innerHTML = `<div class="empty-state"><img src="${LOGO}" alt=""><h1>Run. Verify. Understand.</h1><div class="empty-state-body">${emptyStateBody()}</div><div class="preview-note">${icon('info')}${'Babel CLI · permissions and verification built in'}</div></div>`;
   } else {
     const viewingOlder=(session.history?.olderOffset ?? 0) > 0;
     const historyWarnings=[session.history?.tailOnly?'Legacy archive reader returned a tail window only.':null,session.history?.skippedOversizedLines?'Oversized archive records could not be displayed; the original archive is preserved.':null,session.history?.snapshotChanged?'The archive changed while loading. Reload the latest messages before relying on this view.':null,session.history?.outcomesBounded?'Terminal evidence exceeds this reader’s limit; status remains unverified where evidence is unavailable.':null].filter(Boolean).map(text=>`<p class="fine-print history-banner">${e(text)}</p>`).join('');
@@ -312,6 +313,13 @@ function emptyStateBody(){
   if(isConversationOnlyConnection(nativeInfo))return `<p>No project is open. You can ask a general question, or open a project for code questions.</p><div class="empty-actions"><button data-action="open-project">Open project</button></div>`;
   if(nativeInfo?.ready&&nativeInfo.projectRoot&&nativeInfo.projectAuthority?.trusted===true)return `<p>Send a task to Babel.<br>Responses, tool activity, and verification appear here.</p><div class="empty-actions"><button data-action="draft" data-text="${escapeHtml(TRACE_BEHAVIOR_PROMPT)}">Trace a behavior</button></div>`;
   return `<p>Open Setup to select and trust a project and choose your provider.</p><div class="empty-actions"><button data-action="connection">Open Setup</button></div>`;
+}
+const emptyStateMarkup=new WeakMap();
+function refreshEmptyState(){
+  const body=$('#conversation .empty-state-body');
+  if(!body)return;
+  const markup=emptyStateBody();
+  if(emptyStateMarkup.get(body)!==markup){body.innerHTML=markup;emptyStateMarkup.set(body,markup);}
 }
 function draft(text) { if(projectSwitching)return;closeDialog(); $('#composer-input').value = text; resizeComposer();persist(); $('#composer-input').focus(); }
 function resizeComposer() {
