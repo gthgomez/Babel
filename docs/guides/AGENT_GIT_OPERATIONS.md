@@ -11,6 +11,17 @@ This non-authoritative technical reference describes Git/GitHub helper inputs
 and outputs. [AGENTS.md](../../AGENTS.md) alone owns contributor operating policy;
 examples here do not grant authorization. The scripts own executable behavior.
 
+## Fresh agent entry sequence
+
+1. Read [AGENTS.md](../../AGENTS.md) and copy the [batch handoff template](./AGENT_BATCH_HANDOFF.md) into your task record.
+2. `git fetch origin main` and confirm no conflicting open PR or duplicate writer on your branch.
+3. Run Git preflight (below) with explicit `-GitPath` / `-GhPath` on non-Windows hosts.
+4. Classify the batch (product / test / environment / authority) before editing.
+5. Run stage-appropriate qualification (implementation vs maintainer pre-merge); see the handoff table for canonical CLI commands and known early failures.
+6. One qualified publication per coherent batch; merge only through `scripts/trusted-merge-gate.ps1` then `scripts/agent-pr-merge.ps1` when authorized.
+
+Optional V3 or signed review publication is not mandatory setup for contributors. Actual independent exact-head review remains required; the live gate treats custom review evidence as advisory unless separately governed.
+
 ## Resource-aware iteration
 
 Apply [AGENTS.md](../../AGENTS.md) on the machine running the tools. Inspect available physical memory and effective CPU capacity, including container/VM/job and parent limits; retain reserve for the coordinator, OS, background work, and uncertainty. Swap is not spare capacity. Use recent observed peak incremental costs from comparable required runs, including child processes and nested pools. Account for pending reservations and expected growth without subtracting usage already reflected in available memory twice. Unknown expensive work starts with one conservative useful run, not an extra benchmark.
@@ -27,6 +38,13 @@ Readiness diagnostic:
 
 ```powershell
 .\scripts\agent-preflight.ps1
+```
+
+Optional maintainer pre-merge path diagnostic (default unchanged; does not validate policy JSON—use `tools/check-public-scrub.ps1 -RequireSupplementalPolicy` for that):
+
+```powershell
+$env:BABEL_PRIVATE_SCRUB_POLICY_PATH = 'C:\path\outside\repo\policy.json'
+.\scripts\agent-preflight.ps1 -CheckSupplementalScrubPolicyPath
 ```
 
 The command emits JSON with the repository, branch, local and base SHAs, Git and GitHub CLI paths, authentication result, credential-provider result, worktree state, and named readiness checks. It exits nonzero when a required check is blocked. Use `-AllowDirtyWorktree` only for inspection when an existing dirty tree is intentional; that mode does not make the tree mutation- or push-ready.

@@ -1,9 +1,16 @@
 # Trust Root Recovery (break-glass rekey)
 
 <!--
-status: ACTIVE
-last_verified: 2026-09-05
+status: HISTORICAL
+last_verified: 2026-10-23
 -->
+
+> **Contributor merge path:** Ordinary PRs merge only after the immutable-base
+> gate reports `MERGE_READY` and `scripts/agent-pr-merge.ps1` succeeds. Optional
+> V3/signed review publication and break-glass recovery below are **not**
+> day-to-day contributor requirements. For agent dispatch, use
+> [AGENT_BATCH_HANDOFF.md](../guides/AGENT_BATCH_HANDOFF.md) and
+> [TRUST_ROOT_UPGRADE.md](./TRUST_ROOT_UPGRADE.md) (historical upgrade narrative).
 
 Formal lost/compromised-key recovery mode for the Babel trust root. This
 document designs the protocol; it does not execute it. Companion docs:

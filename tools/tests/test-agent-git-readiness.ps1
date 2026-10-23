@@ -479,6 +479,71 @@ try {
   $unknownPlan = $unknownPlanRun.text | ConvertFrom-Json
   Assert-AgentTest (-not $unknownPlan.safeToStage -and $unknownPlan.nextAction -match 'resolve investigate/vault') 'unknown-path staging guard must remain independent of size guidance'
 
+  $defaultNoPolicyRun = Invoke-TestScript -Script $preflightScript -Arguments @(
+    '-RepoRoot', $fixture,
+    '-GitPath', $git,
+    '-GhPath', $fakeGh
+  )
+  $defaultNoPolicy = $defaultNoPolicyRun.text | ConvertFrom-Json
+  Assert-AgentTest (-not ($defaultNoPolicy.checks.PSObject.Properties.Name -contains 'SUPPLEMENTAL_SCRUB_POLICY_CONFIGURED')) 'default preflight must not run supplemental policy checks'
+
+  $priorPolicy = $env:BABEL_PRIVATE_SCRUB_POLICY_PATH
+  $policyFixtureRoot = Join-Path $tempRoot 'supplemental-policy-fixtures'
+  New-Item -ItemType Directory -Path $policyFixtureRoot -Force | Out-Null
+  $canaryPolicy = Join-Path $policyFixtureRoot 'canary-policy.json'
+  $canaryText = '{"forbidden_private_identifiers":["CANARY_MUST_NOT_APPEAR_IN_PREFLIGHT_OUTPUT_7f3a"]}'
+  Set-Content -LiteralPath $canaryPolicy -Value $canaryText -Encoding utf8 -NoNewline
+  $policyDir = Join-Path $policyFixtureRoot 'policy-dir'
+  New-Item -ItemType Directory -Path $policyDir -Force | Out-Null
+
+  try {
+    $env:BABEL_PRIVATE_SCRUB_POLICY_PATH = ''
+    $unsetRun = Invoke-TestScript -Script $preflightScript -Arguments @(
+      '-RepoRoot', $fixture, '-GitPath', $git, '-GhPath', $fakeGh, '-CheckSupplementalScrubPolicyPath'
+    )
+    Assert-AgentTest ($unsetRun.exitCode -ne 0) 'opt-in diagnostic must fail when policy path unset'
+    $unset = $unsetRun.text | ConvertFrom-Json
+    Assert-AgentTest ($unset.blockers -contains 'supplemental_scrub_policy_not_configured') 'unset env should name not_configured'
+
+    $env:BABEL_PRIVATE_SCRUB_POLICY_PATH = Join-Path $policyFixtureRoot 'missing.json'
+    $missingRun = Invoke-TestScript -Script $preflightScript -Arguments @(
+      '-RepoRoot', $fixture, '-GitPath', $git, '-GhPath', $fakeGh, '-CheckSupplementalScrubPolicyPath'
+    )
+    Assert-AgentTest ($missingRun.exitCode -ne 0) 'opt-in diagnostic must fail when policy file missing'
+    Assert-AgentTest (($missingRun.text | ConvertFrom-Json).blockers -contains 'supplemental_scrub_policy_missing') 'missing file blocker'
+
+    $env:BABEL_PRIVATE_SCRUB_POLICY_PATH = $policyDir
+    $dirRun = Invoke-TestScript -Script $preflightScript -Arguments @(
+      '-RepoRoot', $fixture, '-GitPath', $git, '-GhPath', $fakeGh, '-CheckSupplementalScrubPolicyPath'
+    )
+    Assert-AgentTest ($dirRun.exitCode -ne 0) 'opt-in diagnostic must reject directory path'
+    Assert-AgentTest (($dirRun.text | ConvertFrom-Json).blockers -contains 'supplemental_scrub_policy_not_a_file') 'directory blocker'
+
+    $unreadablePolicy = Join-Path $policyFixtureRoot 'unreadable-policy.json'
+    Set-Content -LiteralPath $unreadablePolicy -Value '{}' -Encoding utf8 -NoNewline
+    if ($IsLinux -or $IsMacOS) {
+      & chmod 000 $unreadablePolicy
+      $env:BABEL_PRIVATE_SCRUB_POLICY_PATH = $unreadablePolicy
+      $unreadableRun = Invoke-TestScript -Script $preflightScript -Arguments @(
+        '-RepoRoot', $fixture, '-GitPath', $git, '-GhPath', $fakeGh, '-CheckSupplementalScrubPolicyPath'
+      )
+      & chmod 644 $unreadablePolicy
+      Assert-AgentTest ($unreadableRun.exitCode -ne 0) 'opt-in diagnostic must fail when policy file is unreadable on this platform'
+      Assert-AgentTest (($unreadableRun.text | ConvertFrom-Json).blockers -contains 'supplemental_scrub_policy_unreadable') 'unreadable blocker'
+    }
+
+    $env:BABEL_PRIVATE_SCRUB_POLICY_PATH = $canaryPolicy
+    $validRun = Invoke-TestScript -Script $preflightScript -Arguments @(
+      '-RepoRoot', $fixture, '-GitPath', $git, '-GhPath', $fakeGh, '-CheckSupplementalScrubPolicyPath'
+    )
+    Assert-AgentTest ($validRun.exitCode -eq 0) "valid policy file should pass opt-in diagnostic: $($validRun.text)"
+    $valid = $validRun.text | ConvertFrom-Json
+    Assert-AgentTest ([bool]$valid.supplementalScrubDiagnostic.contentValidated -eq $false) 'preflight must not claim content validation'
+    Assert-AgentTest ($validRun.text -notmatch 'CANARY_MUST_NOT_APPEAR_IN_PREFLIGHT_OUTPUT_7f3a') 'preflight output must not echo policy contents'
+  } finally {
+    if ([string]::IsNullOrWhiteSpace($priorPolicy)) { Remove-Item Env:BABEL_PRIVATE_SCRUB_POLICY_PATH -ErrorAction SilentlyContinue } else { $env:BABEL_PRIVATE_SCRUB_POLICY_PATH = $priorPolicy }
+  }
+
   Write-Output 'agent-git-readiness: PASS'
   exit 0
 } catch {
