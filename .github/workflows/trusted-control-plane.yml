@@ -160,25 +160,8 @@ jobs:
           exit $code
       - name: Test trusted-root boundary
         shell: pwsh
-        env:
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          $ErrorActionPreference = 'Stop'
-          git fetch --no-tags origin $env:HEAD_SHA
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $candidateRoot = Join-Path $env:RUNNER_TEMP 'trusted-boundary-candidate'
-          if (Test-Path -LiteralPath $candidateRoot) {
-            git worktree remove --force $candidateRoot
-          }
-          git worktree add --detach $candidateRoot $env:HEAD_SHA
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          try {
-            pwsh -NoProfile -NonInteractive -File tools/tests/test-trust-root-boundaries.ps1 `
-              -RepoRoot . `
-              -ProductWorkflowRepoRoot $candidateRoot
-          } finally {
-            git worktree remove --force $candidateRoot
-          }
+          pwsh -NoProfile -NonInteractive -File tools/tests/test-trust-root-boundaries.ps1 -RepoRoot .
   merge-audit-after-release-gate:
     name: trusted-control-plane
     if: >-

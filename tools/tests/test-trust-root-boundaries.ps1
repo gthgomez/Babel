@@ -1,13 +1,5 @@
 [CmdletBinding()]
-param(
-  [string]$RepoRoot = (Join-Path $PSScriptRoot '..\..'),
-  # Product CI lifecycle is validated on the merge candidate when supplied so a
-  # base regression can be repaired on the PR head without weakening this assertion.
-  [string]$ProductWorkflowRepoRoot = ''
-)
-if ([string]::IsNullOrWhiteSpace($ProductWorkflowRepoRoot)) {
-  $ProductWorkflowRepoRoot = $RepoRoot
-}
+param([string]$RepoRoot = (Join-Path $PSScriptRoot '..\..'))
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $launcher = Get-Content -Raw -LiteralPath (Join-Path $RepoRoot 'scripts/trusted-merge-gate.ps1')
@@ -99,7 +91,7 @@ foreach ($event in @('opened', 'synchronize', 'reopened', 'ready_for_review', 'c
 # exact head. The waste the old ban prevented is instead bounded by the
 # PR-scoped concurrency group, which cancels the superseded run — so the
 # boundary now requires that group to exist rather than banning the events.
-$productWorkflow = Get-Content -Raw -LiteralPath (Join-Path $ProductWorkflowRepoRoot '.github/workflows/typecheck.yml')
+$productWorkflow = Get-Content -Raw -LiteralPath (Join-Path $RepoRoot '.github/workflows/typecheck.yml')
 foreach ($event in @('ready_for_review', 'converted_to_draft')) {
   if ($productWorkflow -notmatch [regex]::Escape($event)) { throw "Product CI must re-qualify on $event (fast-iteration merge workflow)." }
 }
