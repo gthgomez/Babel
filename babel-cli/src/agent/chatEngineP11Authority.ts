@@ -10,6 +10,7 @@ import { ContextPreparationError } from './chatContextFailure.js';
 import { evaluateChatVerifierReceiptCurrencySync } from '../evidence/chatRevisionBinding.js';
 import { canonicalizeContained } from '../bridge/workspaceBound.js';
 import type { ChatEngineOptions, ChatTaskAllowanceSnapshot } from './chatEngine.js';
+import type { ChatActionResult } from './chatEngineContracts.js';
 import type { ChatExecutionProfile } from './chatEngineServices.js';
 import type { ChatTaskClass } from '../config/chatTaskClass.js';
 import type { BoundChatVerifierReceipt } from '../evidence/chatRevisionBinding.js';
@@ -437,7 +438,7 @@ export class ChatEngineP11Authority {
 
   captureP11Observation(
     action: ChatToolAction,
-    result: { index: number; observation: string },
+    result: ChatActionResult,
     meta: { index: number; idempotencyKey: string; ownerGeneration: number },
   ): void {
     if (!result.observation || !this.host.isSubmissionCurrent(meta.ownerGeneration)) return;
@@ -460,6 +461,9 @@ export class ChatEngineP11Authority {
           attempt_id: operationId,
         },
         sections: [{ channel: 'stdout', content: result.observation }],
+        ...(result.admittedProjectRead === true && result.index === meta.index &&
+          (action.type === 'read_file' || action.type === 'read_range')
+          ? { admitted_project_read: true as const } : {}),
         execution_status: logEntry?.exit_code === 0 || logEntry?.exit_code === undefined ? 'succeeded' : 'failed',
         permitted_principals: ['agent:main'],
         data_policy: {

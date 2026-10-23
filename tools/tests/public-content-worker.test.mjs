@@ -39,5 +39,5 @@ test('worker reuses only local decisions and rechecks changed bytes, links, and 
     const duplicate = await worker.check(snapshot, sha)
     assert.equal(duplicate.exitCode, 1)
     assert.ok(duplicate.result.findings.some(f => f.path === 'second.md'))
-  } finally { worker.close(); rmSync(root, { recursive: true, force: true }) }
+  } finally { await worker.close(); rmSync(root, { recursive: true, force: true }) }
 })

@@ -40,6 +40,7 @@ function fixture(t: TestContext, committed = true, runInside = false) {
   parityOnUserTurn(parity, {
     task: 'Inspect the fixture source.', model: 'fixture-model', provider: 'fixture', projectRoot, policyPreset: 'workspace_write',
   })
+  const toolCallLog: Array<ChatEngineP11Host['toolCallLog'][number]> = []
   const host = {
     _cancelled: false, _turnIndex: 0, activeAdmissionClaim: null,
     activeSubmissionGeneration: 1, admissionEpoch: 'fixture-epoch', admissionLease: null,
@@ -47,14 +48,14 @@ function fixture(t: TestContext, committed = true, runInside = false) {
     lastVerifierReceipt: null, options: { projectRoot, task: 'Inspect the fixture source.' },
     p11InstallBlock: null, p11ObservationCaptureIssues: [], p11ObservationRefs: [], parity,
     taskAllowance: { taskOwnerId: 'fixture-task', grant: { turnCap: 10 }, consumed: { turns: 0 } },
-    taskClass: 'Chat', toolCallLog: [], workingState: createWorkingState('Inspect the fixture source.'),
+    taskClass: 'Chat', toolCallLog, workingState: createWorkingState('Inspect the fixture source.'),
     isSubmissionCurrent: (generation: number) => generation === 1,
     shouldUseTextTools: () => false,
     buildP11Sources: (override: Parameters<ChatEngineP11Host['buildP11Sources']>[0]) => authority.buildP11Sources(override),
   } as unknown as ChatEngineP11Host
   const authority = new ChatEngineP11Authority(host)
   assert.ok(authority.admitCurrentSubmission(1, 'Inspect the fixture source.'))
-  return { projectRoot, authority, host, parity }
+  return { projectRoot, authority, host, parity, toolCallLog }
 }
 
 function observe(authority: ChatEngineP11Authority): void {
@@ -64,6 +65,53 @@ function observe(authority: ChatEngineP11Authority): void {
     { index: 0, idempotencyKey: 'fixture-read', ownerGeneration: 1 },
   )
 }
+
+test('successful admitted source reads may quote credential-denial diagnostics', async t => {
+  const { authority, host, parity, toolCallLog } = fixture(t)
+  toolCallLog.push({ tool: 'read_file', index: 0, exit_code: 0 })
+  authority.captureP11Observation(
+    { type: 'read_file', path: 'source.ts' },
+    { index: 0, observation: '// credential store: [AUTONOMY_DENIED:CLASS_D]', admittedProjectRead: true },
+    { index: 0, idempotencyKey: 'source-diagnostic', ownerGeneration: 1 },
+  )
+  assert.equal(host.p11ObservationRefs.length, 1)
+  assert.deepEqual(host.p11ObservationCaptureIssues, [])
+  assert.equal(await authority.installP11ContextCheckpoint(route), true)
+  assert.ok(parity.contextCheckpoint)
+})
+
+test('a prior successful read cannot approve a later credential denial', t => {
+  const { authority, host, toolCallLog } = fixture(t)
+  toolCallLog.push({ tool: 'read_file', index: 0, exit_code: 0 })
+  authority.captureP11Observation(
+    { type: 'read_file', path: '.env' },
+    { index: 0, observation: '[AUTONOMY_DENIED:CLASS_D] credential store' },
+    { index: 0, idempotencyKey: 'denied-read', ownerGeneration: 1 },
+  )
+  assert.equal(host.p11ObservationRefs.length, 0)
+  assert.equal(host.p11ObservationCaptureIssues.length, 1)
+})
+
+test('read provenance cannot cross tool, invocation index, failure, or owner boundaries', t => {
+  const { authority, host, toolCallLog } = fixture(t)
+  toolCallLog.push({ tool: 'read_file', index: 0, exit_code: 1 })
+  const observation = '[AUTONOMY_DENIED:CLASS_D] credential store'
+  authority.captureP11Observation({ type: 'read_file', path: 'source.ts' },
+    { index: 0, observation, admittedProjectRead: true },
+    { index: 0, idempotencyKey: 'failed-read', ownerGeneration: 1 })
+  authority.captureP11Observation({ type: 'read_file', path: 'source.ts' },
+    { index: 1, observation, admittedProjectRead: true },
+    { index: 2, idempotencyKey: 'wrong-index', ownerGeneration: 1 })
+  authority.captureP11Observation({ type: 'run_command', command: 'fixture' },
+    { index: 3, observation, admittedProjectRead: true },
+    { index: 3, idempotencyKey: 'wrong-tool', ownerGeneration: 1 })
+  assert.equal(host.p11ObservationCaptureIssues.length, 3)
+  authority.captureP11Observation({ type: 'read_file', path: 'source.ts' },
+    { index: 0, observation, admittedProjectRead: true },
+    { index: 0, idempotencyKey: 'stale-owner', ownerGeneration: 0 })
+  assert.equal(host.p11ObservationCaptureIssues.length, 3)
+  assert.equal(host.p11ObservationRefs.length, 0)
+})
 
 test('physical recovery proof stays separate from a conversation checkpoint', async t => {
   const { projectRoot, authority, host, parity } = fixture(t)

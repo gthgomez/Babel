@@ -172,8 +172,103 @@ function pickTrustedCommand(
 }
 
 /**
+ * A preservation obligation whose regression witness the task's own text designates.
+ * The task states the regression tests already exist and names the exact command
+ * that must run them. The witness may only re-freeze a command that an explicit
+ * criterion of the same meaning already froze verbatim, so it grants no new
+ * command authority; every other inferred obligation stays fail-closed (meaning:*).
+ */
+const PRESERVATION_MARKER_RE = /\bpreserve\b/i
+const TESTS_ALREADY_PRESENT_RE = /\btests?\s+are\s+already\s+present\b/i
+const DESIGNATED_TEST_COMMAND_RE =
+  /\brun\b[^;`]*?\btests?\b[^;`]*?\busing:\s*`?([^`;\n]+?)`?\s*(?=[.;]|$)/i
+
+export function extractDesignatedRegressionWitness(
+  activeProse: readonly string[],
+): string | null {
+  if (!activeProse.some((line) => TESTS_ALREADY_PRESENT_RE.test(line))) return null
+  for (const line of activeProse) {
+    const match = line.match(DESIGNATED_TEST_COMMAND_RE)
+    if (match?.[1]) return match[1].trim()
+  }
+  return null
+}
+
+function frozenVerificationIdentity(
+  verification: AcceptanceRequirementV1['verification'],
+): string | null {
+  if (!verification.executable_id || !verification.argv || verification.argv.length === 0) {
+    return null
+  }
+  return sha256Canonical({
+    executable: verification.executable_id.toLowerCase(),
+    argv: verification.argv,
+  })
+}
+
+/** The one designated witness command stated in the criterion's own text; null when absent or ambiguous. */
+function criterionDesignatedCommand(description: string): string | null {
+  const matches = [
+    ...description.matchAll(new RegExp(DESIGNATED_TEST_COMMAND_RE.source, 'gi')),
+  ]
+  if (matches.length !== 1) return null
+  const command = matches[0]![1]?.trim()
+  return command || null
+}
+
+/**
+ * The first-pass explicit verification that froze exactly this designated
+ * command. Equivalent-argv snapshots with conflicting execution metadata stay
+ * fail-closed; they are never collapsed by an overwrite.
+ */
+function frozenWitnessVerification(
+  designated: string,
+  explicitBound: readonly AcceptanceRequirementV1[],
+): AcceptanceRequirementV1['verification'] | null {
+  const identity = structuredCommandIdentity(designated)
+  if (!identity) return null
+  let snapshot: AcceptanceRequirementV1['verification'] | null = null
+  for (const criterion of explicitBound) {
+    if (frozenVerificationIdentity(criterion.verification) !== identity) continue
+    if (snapshot && JSON.stringify(snapshot) !== JSON.stringify(criterion.verification)) {
+      return null
+    }
+    snapshot = criterion.verification
+  }
+  return snapshot
+}
+
+function bindDesignatedWitnessToCriterion(
+  criterion: AcceptanceRequirementV1,
+  sources: readonly AcceptanceMeaningSource[],
+  explicitBound: readonly AcceptanceRequirementV1[],
+): AcceptanceRequirementV1 | null {
+  if (!criterion.verification.verifier_id.startsWith('meaning:')) return null
+  if (isUnresolvedCriterion(criterion)) return null
+  const source = sources.find((item) => item.criterion_id === criterion.id)
+  if (!source || source.status !== 'inferred') return null
+  // The obligation's own text must carry the preservation claim and the
+  // designation; surrounding prose never binds a criterion it does not describe.
+  if (!PRESERVATION_MARKER_RE.test(criterion.description)) return null
+  if (!TESTS_ALREADY_PRESENT_RE.test(criterion.description)) return null
+  const designated = criterionDesignatedCommand(criterion.description)
+  if (!designated) return null
+  if (!isAuthoritativeVerifierCommand(designated)) return null
+  const witness = frozenWitnessVerification(designated, explicitBound)
+  if (!witness) return null
+  return {
+    ...criterion,
+    type: requirementTypeForCommand(designated),
+    verification_strategy: `The task text designates ${designated} as the regression witness for this preservation requirement; the already-present regression tests must stay unchanged and pass on the candidate revision.`,
+    verification: structuredClone(witness),
+  }
+}
+
+/**
  * Bind session-trusted verifier commands onto explicit observable criteria before freeze.
- * Inferred/unresolved meaning stays fail-closed (meaning:* verifier ids).
+ * A preservation criterion whose own text designates the regression witness may then
+ * re-freeze the already-explicit command. Inferred/unresolved meaning stays fail-closed
+ * (meaning:* verifier ids) in every other case.
  */
 export function bindExecutableVerifiersToTaskAcceptance(input: {
   meaning: TaskAcceptanceMeaning
@@ -190,7 +285,7 @@ export function bindExecutableVerifiersToTaskAcceptance(input: {
   if (trusted.length === 0 || input.meaning.unresolved) return input.meaning
 
   const bindingProvenance: TaskAcceptanceMeaning['provenance'] = []
-  const criteria = input.meaning.criteria.map((criterion) => {
+  const explicitBound = input.meaning.criteria.map((criterion) => {
     const command = pickTrustedCommand(criterion, trusted, input.meaning.sources)
     if (!command) return criterion
     const bound = bindCriterion(criterion, command, input.defaultWorkingDirectory)
@@ -205,12 +300,68 @@ export function bindExecutableVerifiersToTaskAcceptance(input: {
     return bound
   })
 
+  // Second pass sees the frozen explicit commands, so a witness can only
+  // re-freeze what the first pass already froze — never a new command. Each
+  // inferred criterion resolves from its own designated command; a criterion
+  // whose designation was never explicitly frozen stays fail-closed.
+  const witnessEligible =
+    input.meaning.structurallyComplete &&
+    extractDesignatedRegressionWitness(input.meaning.activeProse) !== null
+  let criteria = explicitBound
+  if (witnessEligible) {
+    const witnessed = explicitBound.map((criterion) =>
+      bindDesignatedWitnessToCriterion(criterion, input.meaning.sources, explicitBound),
+    )
+    criteria = explicitBound.map((criterion, index) => witnessed[index] ?? criterion)
+    for (const [index, bound] of witnessed.entries()) {
+      if (!bound) continue
+      const designated = criterionDesignatedCommand(input.meaning.criteria[index]!.description)
+      bindingProvenance.push({
+        kind: 'derived_acceptance',
+        ref: `${ACCEPTANCE_EXECUTABLE_BINDING_REF}:witness:${sha256Canonical({
+          criterion_id: input.meaning.criteria[index]!.id,
+          command: designated ?? '',
+        }).slice(0, 32)}`,
+      })
+    }
+  }
+
   if (!bindingProvenance.length) return input.meaning
   return {
     ...input.meaning,
     criteria,
     provenance: [...input.meaning.provenance, ...bindingProvenance],
   }
+}
+
+const WITNESS_STRATEGY_MARKER = 'regression witness for this preservation requirement'
+
+/** Criteria whose preservation obligation was bound to its own designated witness. */
+function witnessBoundCriteria(meaning: TaskAcceptanceMeaning): AcceptanceRequirementV1[] {
+  return meaning.criteria.filter(
+    (criterion) =>
+      !criterion.verification.verifier_id.startsWith('meaning:') &&
+      criterion.verification_strategy.includes(WITNESS_STRATEGY_MARKER),
+  )
+}
+
+/** True when the binding froze a designated regression witness for this meaning. */
+export function hasDesignatedRegressionWitnessBinding(meaning: TaskAcceptanceMeaning): boolean {
+  return witnessBoundCriteria(meaning).length > 0
+}
+
+/**
+ * The designated commands of witness-bound criteria, parsed from each
+ * criterion's own description. Feeds the narrowly declared protected-input set
+ * (script definition surface plus resolvable test files) captured at freeze.
+ */
+export function designatedWitnessCommands(meaning: TaskAcceptanceMeaning): string[] {
+  const commands: string[] = []
+  for (const criterion of witnessBoundCriteria(meaning)) {
+    const command = criterionDesignatedCommand(criterion.description)
+    if (command) commands.push(command)
+  }
+  return commands
 }
 
 export function mergeTrustedVerifierCommands(input: {

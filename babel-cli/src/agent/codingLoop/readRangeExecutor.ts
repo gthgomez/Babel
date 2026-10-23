@@ -20,7 +20,7 @@ import { isDiscriminatingInspectionEvidence } from "../chatEngineHelpers.js";
 import { recoveryTargetIdentity } from "./recoveryIdentity.js";
 import type { ChatEngineActionExecutorHost } from "../chatEngineContracts.js";
 import type { ChatToolAction } from "../chatToolDefinitions.js";
-import type { ChatCallbacks } from "../chatEngineContracts.js";
+import type { ChatActionResult, ChatCallbacks } from "../chatEngineContracts.js";
 
 export interface ReadRangeActionContext {
   host: ChatEngineActionExecutorHost;
@@ -36,7 +36,7 @@ export interface ReadRangeActionContext {
 /** Execute a read_range action: windowed read with cache + recovery evidence. */
 export async function executeReadRangeAction(
   ctx: ReadRangeActionContext,
-): Promise<{ index: number; observation: string }> {
+): Promise<ChatActionResult> {
   const { host, action, tool, target, toolId, meta } = ctx;
   const rPath = resolveChatRangePath(requireProjectRoot(host.options), action.file_path);
   host.persistToolStartedAtExecutorDispatch(action, meta);
@@ -134,5 +134,6 @@ export async function executeReadRangeAction(
   return {
     index: meta.index,
     observation: formatReadObservation("read_range", target, evaluated.window),
+    admittedProjectRead: true,
   };
 }

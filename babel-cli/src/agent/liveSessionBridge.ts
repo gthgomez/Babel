@@ -22,6 +22,7 @@ import {
   bindExecutableVerifiersToTaskAcceptance,
   mergeTrustedVerifierCommands,
 } from './taskAcceptanceExecutableBinding.js';
+import { designatedWitnessProtectedInputs } from './taskAcceptanceProtectedInputs.js';
 import { join } from 'node:path';
 import {
   buildInstructionManifestV1,
@@ -337,8 +338,17 @@ export function resolveLiveSessionAuthority(input: {
       requiredVerifierCommands: input.verifierRequirements ?? [],
       projectTestCommands: input.projectTestCommands ?? [],
     }),
-    ...(input.projectRoot ? { defaultWorkingDirectory: '.' } : {}),
+      ...(input.projectRoot ? { defaultWorkingDirectory: '.' } : {}),
   });
+  // A designated regression witness makes the already-present tests and their
+  // script definitions protected inputs, enforced by the execution gate from
+  // admission through completion. Ordinary tasks keep the default set.
+  const protectedPaths = new Set(input.protectedPaths ?? ['.env', '.git']);
+  if (input.projectRoot) {
+    for (const path of designatedWitnessProtectedInputs(input.projectRoot, meaning)) {
+      protectedPaths.add(path);
+    }
+  }
   const contract = freezeTaskContract(
     buildTaskContractV1({
       mode: input.mode,
@@ -348,7 +358,7 @@ export function resolveLiveSessionAuthority(input: {
         (input.taskClass as TaskContractV1['task_class'] | undefined) ?? 'unknown',
       acceptance: meaning.criteria,
       non_goals: ['Do not expand scope beyond the user request'],
-      protected_paths: input.protectedPaths ?? ['.env', '.git'],
+      protected_paths: [...protectedPaths],
       verifier_requirements: input.verifierRequirements ?? [],
       ...(input.maxTurns !== undefined ? { max_turns: input.maxTurns } : {}),
       allowed_effects:

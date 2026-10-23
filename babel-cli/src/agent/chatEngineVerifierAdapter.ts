@@ -22,7 +22,7 @@ import {
   recordVerifierAttempt,
   type SessionEventLog,
 } from './sessionEvents.js';
-import { discoverVerifierInputClosure } from '../evidence/revisionBoundReceipt.js';
+import { discoverVerifierInputClosure, RevisionManager } from '../evidence/revisionBoundReceipt.js';
 import {
   analyzeVerifierIdentity,
   verifierExecutionFingerprint,
@@ -36,6 +36,30 @@ import {
 
 export { parseExecutedTestCounts };
 
+/** Capture the live revision used by the streaming completion gate. */
+export function captureCompletionWorkspaceRevisionHash(
+  scope: ChatScopeInput,
+  mutationPaths: string[],
+  receipt: BoundChatVerifierReceipt | null,
+): string | undefined {
+  if (mutationPaths.length === 0) return undefined;
+  const root = requireProjectRoot(scope);
+  const bound = receipt?.boundRevision;
+  if (!bound?.scope || (bound.gitBinding !== 'required' && bound.gitBinding !== 'optional')) return undefined;
+  const relativePaths = toRepositoryRelativePaths(root, mutationPaths);
+  if (!relativePaths?.length) return undefined;
+  const verifierScope = bound.scope;
+  const mutations = RevisionManager.computeRevisionSync(root, relativePaths);
+  if (verifierScope.kind === 'files') {
+    if (mutations.scope?.kind !== 'files' ||
+      mutations.scope.paths.some(file => !verifierScope.paths.includes(file))) return undefined;
+  } else if (verifierScope.kind !== 'repository' || bound.gitBinding !== 'required') return undefined;
+  return RevisionManager.computeRevisionSync(root,
+    verifierScope.kind === 'files' ? verifierScope.paths : [],
+    { scope_kind: verifierScope.kind, git_binding: bound.gitBinding },
+  ).compositeTreeHash;
+}
+
 /** Recheck current receipt inputs before completion, retaining project-scope denial. */
 export function refreshChatCompletionVerifierCurrency(
   scope: ChatScopeInput,
@@ -45,8 +69,9 @@ export function refreshChatCompletionVerifierCurrency(
 ): void {
   if (scope.projectRoot) {
     const root = requireProjectRoot(scope);
-    refreshChatVerifierReceiptStalenessSync(root, lastReceipt);
-    for (const receipt of ledger) refreshChatVerifierReceiptStalenessSync(root, receipt);
+    for (const receipt of new Set([lastReceipt, ...ledger])) {
+      refreshChatVerifierReceiptStalenessSync(root, receipt);
+    }
   } else if (hasMutation || lastReceipt || ledger.length) {
     throw new Error('PROJECT_REQUIRED: Conversation cannot certify project effects');
   }

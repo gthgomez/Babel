@@ -13,7 +13,7 @@ test('actual chat dispatch denies adversarial tools and out-of-snapshot reads', 
   const root = mkdtempSync(join(tmpdir(), 'babel-review-adversarial-'));
   const source = join(root, 'source');
   const { mkdirSync } = await import('node:fs'); mkdirSync(source);
-  const content = 'unchanged\n// ENV_BLOCKED: pytest command not found\n// ImportError while loading conftest';
+  const content = 'unchanged\n// credential store: [AUTONOMY_DENIED:CLASS_D]\n// DENY_CREDENTIAL_READ is a diagnostic in public source';
   writeFileSync(join(source, 'fixture.txt'), content);
   for (const args of [['init', '-q'], ['add', 'fixture.txt'], ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.test', 'commit', '-qm', 'fixture']]) {
     execFileSync('git', args, { cwd: source, stdio: 'ignore', windowsHide: true });
@@ -34,6 +34,8 @@ test('actual chat dispatch denies adversarial tools and out-of-snapshot reads', 
     { name: 'semantic_search', args: { query: 'shared private memory' } },
     { name: 'read_range', args: { file_path: join(source, 'fixture.txt'), start_line: 2, end_line: 3 } },
     { name: 'read_file', args: { path: join(source, 'fixture.txt') } },
+    { name: 'read_file', args: { path: join(source, 'fixture.txt') } },
+    { name: 'read_range', args: { file_path: join(source, 'fixture.txt'), start_line: 2, end_line: 3 } },
     { name: 'read_artifact', args: { artifact_id: '00000000-0000-4000-8000-000000000000' } },
   ];
   globalThis.fetch = async (_url, init) => {

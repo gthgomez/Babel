@@ -1,4 +1,5 @@
 import type { FailureCapsuleV1 } from './taskContract.js'
+
 import type {ChatExecutionScope} from './chatExecutionScope.js'
 import type {
   RecoveryCandidateBinding,
@@ -69,6 +70,15 @@ import type { PromptFingerprint } from './chatEngineObservability.js'
 import type { TurnRuntimeSnapshot } from './turnRuntime.js'
 
 // ─── Types ────────────────────────────────────────────────────────────────
+
+/** Host settlement metadata; never populated from model arguments or tool text. */
+export interface ChatActionResult {
+  index: number
+  observation: string
+  stop?: boolean
+  /** Only successful project reads that passed path admission may set this. */
+  admittedProjectRead?: true
+}
 
 /** Classifies the user's intent for a chat turn.
  *  'execute' = user wants code changes → gate active in headless mode

@@ -79,6 +79,9 @@ export async function executeGovernedApplyPatchAction(
       ...(host.parity.authoritySession
         ? { authoritySession: host.parity.authoritySession }
         : {}),
+      ...(host.parity.liveAuthority?.taskContract.protected_paths
+        ? { protectedPaths: host.parity.liveAuthority.taskContract.protected_paths }
+        : {}),
       ...(classC === "allow" ? { onAskApproval: async () => true } : {}),
     },
   );

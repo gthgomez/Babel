@@ -123,13 +123,23 @@ export function publishCriterionEvidenceFromChatExecution(input: {
   const required = input.contract.acceptance.filter(item => item.required)
   if (required.length === 0) return null
 
-  const nodes: EvidenceNode[] = []
-  let revisionSha: string | null = null
+  const dispatches: Array<{
+    requirement: TaskContractV1['acceptance'][number]
+    receipt: BoundChatVerifierReceipt
+  }> = []
+  // Missing dispatch coverage cannot publish evidence. Check it before reading
+  // revision contents for earlier requirements that would be discarded.
   for (const requirement of required) {
     const receipt = ledger.find((entry) =>
       chatReceiptDispatchesToRequirement(entry, requirement),
     )
     if (!receipt) return null
+    dispatches.push({ requirement, receipt })
+  }
+
+  const nodes: EvidenceNode[] = []
+  let revisionSha: string | null = null
+  for (const { requirement, receipt } of dispatches) {
     const candidateRevision = resolveGovernedCriterionCandidateRevisionSha(
       repository,
       receipt,

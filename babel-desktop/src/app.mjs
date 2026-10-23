@@ -276,7 +276,20 @@ function messageMarkup(m, index) {
   const evidence = m.result && ['failed','blocked','unverified'].includes(m.status) ? `<details class="raw-result"><summary>CLI result / evidence</summary><pre class="tool-detail">${e(JSON.stringify(m.result,null,2))}</pre></details>` : '';
   return `<article class="message assistant-message"${identity}><img class="assistant-avatar" src="${LOGO}" alt=""><div class="message-label">BABEL</div><div class="message-body">${assistantBody(m)}${expansion}${archiveInfo}${m.toolsTruncated?'<p class="fine-print">Tool preview limited to 100 entries. Complete retained details are available in message sections.</p>':''}${m.terminalConflict?'<p class="fine-print">Terminal records disagree. Refresh or inspect the session evidence.</p>':''}${review}${approval}${m.status && m.status !== 'running' ? `<div class="message-status ${e(m.status)}">${''}${e(({complete:'Response complete',no_change:'No change required',failed:'Run failed',blocked:'Approval or environment action required',cancelled:'Response stopped',unverified:'Run ended · not verified'})[m.status] ?? m.status)}</div>` : ''}${evidence}</div><div class="message-actions"><button data-action="copy-message" data-index="${index}" ${!m.text || m.status === 'running' ? 'disabled' : ''}>${icon('copy')} Copy</button></div></article>`;
 }
+let conversationFrame = null;
+function scheduleConversationRender() {
+  if (conversationFrame !== null) return;
+  conversationFrame = requestAnimationFrame(() => {
+    conversationFrame = null;
+    renderConversation();
+    renderStatus();
+  });
+}
 function renderConversation(forceBottom = false, reset = false) {
+  if (conversationFrame !== null) {
+    cancelAnimationFrame(conversationFrame);
+    conversationFrame = null;
+  }
   const scroller = $('#conversation');
   const atBottom = scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop < 90;
   const previousTop = scroller.scrollTop;
@@ -715,7 +728,13 @@ function handleNativeEvent(packet) {
       const row = absorbFileChange(message.tools, item);
       if (row && !message.tools?.includes(row)) upsertLiveTool(message, row);
     }
-    if(ev.kind==='delta')appendLiveText(message,ev.text);
+    if(ev.kind==='delta'){
+      appendLiveText(message,ev.text);
+      // Keep every chunk in state; paint bursts once per frame. Other events
+      // render immediately, including approvals, terminal evidence and exit.
+      if(state.activeId===run.sessionId)scheduleConversationRender();
+      return;
+    }
     else if(ev.kind==='thought' || ev.kind==='progress') appendNote(message, ev.text);
     else if(ev.kind==='start' && ev.model && ev.model !== 'default' && ev.model !== 'unknown'){liveModel=ev.model;}
     else if(ev.kind==='approval'){

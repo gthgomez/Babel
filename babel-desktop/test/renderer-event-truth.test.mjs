@@ -36,6 +36,80 @@ async function withRun(body) {
   } finally { await browser.close(); }
 }
 const started = {type:'tool.started',item:{id:'pending',tool:'shell',target:'fixture test'}};
+
+async function holdAnimationFrames(page) {
+  await page.evaluate(() => {
+    window.__frames = new Map();
+    let nextFrame = 1;
+    window.requestAnimationFrame = callback => {const id=nextFrame++;window.__frames.set(id,callback);return id;};
+    window.cancelAnimationFrame = id => window.__frames.delete(id);
+  });
+}
+
+test('streamed text shares one render per frame without losing or reordering chunks',async()=>withRun(async(page)=>{
+  await holdAnimationFrames(page);
+  const result=await page.evaluate(()=>{
+    const conversation=document.querySelector('#conversation');
+    const observer=new MutationObserver(()=>{});
+    observer.observe(conversation,{childList:true});
+    const chunks=Array.from({length:100},(_,index)=>`chunk-${index} `);
+    for(const chunk of chunks)window.__event({runId:window.__runs[0].runId,kind:'event',event:{type:'assistant_chunk',chunk}});
+    const before={renders:observer.takeRecords().length,frames:window.__frames.size};
+    for(const [id,callback] of window.__frames){window.__frames.delete(id);callback();}
+    const after={renders:observer.takeRecords().length,text:conversation.querySelector('.assistant-message .message-text').textContent,
+      detail:document.querySelector('#status-detail').textContent};
+    observer.disconnect();
+    return {before,after,expected:chunks.join('')};
+  });
+  assert.deepEqual(result.before,{renders:0,frames:1});
+  assert.equal(result.after.renders,1);
+  assert.equal(result.after.text,result.expected);
+  assert.match(result.after.detail,/working on this task/);
+}));
+
+for(const packet of [
+  {kind:'event',event:{type:'approval.required',message:'Inspect this operation'}},
+  {kind:'event',event:{type:'run_error',error:'Fixture failure'}},
+  {kind:'event',event:{type:'run_complete',result:{terminal_outcome:'NO_CHANGE_REQUIRED'}}},
+  {kind:'exit',code:1},
+])test(`pending text is flushed immediately on ${packet.event?.type??'exit'}`,async()=>withRun(async(page)=>{
+  await holdAnimationFrames(page);
+  const result=await page.evaluate(packet=>{
+    const runId=window.__runs[0].runId;
+    window.__event({runId,kind:'event',event:{type:'assistant_chunk',chunk:'Retained streamed answer.'}});
+    const queued=window.__frames.size;
+    window.__event({runId,...packet});
+    return {queued,remaining:window.__frames.size,text:document.querySelector('#conversation').textContent,
+      approval:!!document.querySelector('.approval-card'),status:document.querySelector('.message-status')?.textContent};
+  },packet);
+  assert.equal(result.queued,1);
+  assert.equal(result.remaining,0);
+  assert.match(result.text,/Retained streamed answer\./);
+  if(packet.event?.type==='approval.required')assert.equal(result.approval,true);
+  else assert.ok(result.status);
+}));
+
+test('Stop flushes pending text and keeps admission closed until exit',async()=>withRun(async(page)=>{
+  await holdAnimationFrames(page);
+  const result=await page.evaluate(()=>{
+    let cancelled=0;
+    window.babelDesktop.cancel=()=>{cancelled++;};
+    const runId=window.__runs[0].runId;
+    window.__event({runId,kind:'event',event:{type:'assistant_chunk',chunk:'Answer before cancellation.'}});
+    document.querySelector('[data-action="stop"]').click();
+    const stopping={cancelled,frames:window.__frames.size,text:document.querySelector('#conversation').textContent,
+      disabled:document.querySelector('#send-button').disabled};
+    window.__event({runId,kind:'exit',code:0});
+    return {stopping,status:document.querySelector('.message-status').textContent,enabled:!document.querySelector('#send-button').disabled};
+  });
+  assert.equal(result.stopping.cancelled,1);
+  assert.equal(result.stopping.frames,0);
+  assert.match(result.stopping.text,/Answer before cancellation\./);
+  assert.equal(result.stopping.disabled,true);
+  assert.equal(result.status,'Response stopped');
+  assert.equal(result.enabled,true);
+}));
+
 test('Changed opens an escaped diff with its baseline and does not masquerade as verification',async()=>withRun(async(page,emit)=>{
   await page.evaluate(()=>{window.babelDesktop.readDiff=async path=>({path,baseRevision:'a'.repeat(40),diff:'-before\n+<script>after</script>\n',truncated:false,hasChanges:true});});
   await emit({kind:'event',event:{type:'file.changed',item:{path:'fixture.txt',additions:1,deletions:1}}});

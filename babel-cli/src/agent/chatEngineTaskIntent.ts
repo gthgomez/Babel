@@ -1,6 +1,6 @@
 /** Task-text intent policy, separate from submission and completion authority. */
 import type { TaskIntent } from './chatEngineContracts.js'
-import { hasExplicitEditDenial, analyzeTaskShape, isReadOnlyTaskFrame } from '../config/chatTaskClass.js'
+import { hasExplicitEditDenial, analyzeTaskShape, isReadOnlyTaskFrame, stripFencedCodeBodies } from '../config/chatTaskClass.js'
 
 const PUNCTUATION_ONLY_TURN_RE = /^[\s\p{P}\p{S}\p{C}]*$/u
 
@@ -35,7 +35,7 @@ export function classifyChatTaskIntent(task: string): TaskIntent {
   if (hasExplicitEditDenial(task)) return 'explain'
   // Classify user prose only. Code/diffs and prohibited clauses are evidence,
   // never positive authority (including a standalone scoped prohibition).
-  task = task.replace(/```[\s\S]*?(?:```|$)/g, ' ')
+  task = stripFencedCodeBodies(task)
     .replace(/\b(?:do\s+not|don't|never)\s+(?:edit|modify|change|write|delete|remove)[\s\S]*?(?:\.(?=\s|$)|[;!?\r\n]|$)/gi, ' ')
   if (!task.trim()) return 'explain'
   if (isReadOnlyTaskFrame(task)) return 'explain'

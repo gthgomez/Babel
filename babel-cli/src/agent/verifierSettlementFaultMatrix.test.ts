@@ -20,6 +20,8 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 import { ChatEngine, type ChatEvent } from './chatEngine.js';
+import { ChatEngineActionExecutor, type ChatEngineActionExecutorHost } from './chatEngineActionExecutor.js';
+import { ChatTurnTelemetryCollector } from './chatTurnTelemetry.js';
 import { OpenCodeGoApiRunner } from '../runners/openCodeGoApi.js';
 import type { ResolvedModelPolicy } from '../modelPolicy.js';
 import { chatSessionDir } from '../cli/runsLayout.js';
@@ -191,6 +193,16 @@ function makeEngine(root: string, runId: string, task: string): ChatEngine {
     providerRunner: runner,
     providerPolicy: FIXTURE_POLICY,
   });
+}
+
+function deferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
+function telemetryCounts(collector: ChatTurnTelemetryCollector) {
+  return collector.finalize({ turnId: 'settlement', taskClass: 'quick_inspect', cumulativeSessionTokens: 0 }).counts;
 }
 
 function readSessionEvents(runId: string): SessionEvent[] {
@@ -555,6 +567,140 @@ describe('verifier settlement fault matrix', { concurrency: false }, () => {
         'one action settles exactly one execution-truth row even when a callback throws',
       );
     } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('a delegated range read settles before its telemetry is finalized', async () => {
+    const root = makeFixture();
+    process.env['BABEL_RUNS_DIR'] = join(root, 'runs');
+    const engine = makeEngine(root, 'matrix-range-settlement', 'read a.txt');
+    const host = engine as unknown as ChatEngineActionExecutorHost;
+    const telemetry = new ChatTurnTelemetryCollector();
+    host.currentTurnTelemetry = telemetry;
+    try {
+      const result = await new ChatEngineActionExecutor(host).executeOneAction(
+        { type: 'read_range', file_path: 'a.txt', start_line: 1, end_line: 1 },
+        { agentId: 'chat', runId: 'matrix-range-settlement', babelRoot: root }, {}, { index: 0 },
+      );
+      assert.match(result.observation, /alpha/);
+      assert.equal(host.toolCallLog.length, 1);
+      assert.equal(host.toolCallLog[0]?.exit_code, 0);
+      const counts = telemetryCounts(telemetry);
+      assert.equal(counts.toolCalls, 1);
+      assert.equal(counts.successfulToolCalls, 1);
+      assert.equal(counts.failedToolCalls, 0);
+    } finally {
+      engine.closeAdmissionStore();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('a delegated range read fault settles through the executor catch', async (t) => {
+    const root = makeFixture();
+    process.env['BABEL_RUNS_DIR'] = join(root, 'runs');
+    const engine = makeEngine(root, 'matrix-range-fault', 'read a.txt');
+    const host = engine as unknown as ChatEngineActionExecutorHost;
+    const telemetry = new ChatTurnTelemetryCollector();
+    host.currentTurnTelemetry = telemetry;
+    t.mock.method(host, 'hashContent', () => { throw new Error('FAULT_INJECTED_RANGE_HASH'); });
+    try {
+      const result = await new ChatEngineActionExecutor(host).executeOneAction(
+        { type: 'read_range', file_path: 'a.txt', start_line: 1, end_line: 1 },
+        { agentId: 'chat', runId: 'matrix-range-fault', babelRoot: root }, {}, { index: 0 },
+      );
+      assert.match(result.observation, /FAULT_INJECTED_RANGE_HASH/);
+      assert.equal(host.toolCallLog.length, 1);
+      assert.equal(host.toolCallLog[0]?.exit_code, 1);
+      const counts = telemetryCounts(telemetry);
+      assert.equal(counts.toolCalls, 1);
+      assert.equal(counts.successfulToolCalls, 0);
+      assert.equal(counts.failedToolCalls, 1);
+    } finally {
+      engine.closeAdmissionStore();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('a parallel read fault keeps its own failure row after its sibling settles', async (t) => {
+    const root = makeFixture();
+    writeFileSync(join(root, 'bad.txt'), 'fixture\n');
+    process.env['BABEL_RUNS_DIR'] = join(root, 'runs');
+    const engine = makeEngine(root, 'matrix-parallel-failure', 'read a.txt and bad.txt');
+    const host = engine as unknown as ChatEngineActionExecutorHost;
+    const executor = new ChatEngineActionExecutor(host);
+    const entered = deferred();
+    const release = deferred();
+    const originalHash = host.hashFilePath.bind(host);
+    const telemetry = new ChatTurnTelemetryCollector();
+    host.currentTurnTelemetry = telemetry;
+    // Action indices restart every provider round. This earlier row is not this invocation.
+    host.toolCallLog.push({ tool: 'read_file', target: 'earlier-round.txt', index: 0, exit_code: 0 });
+    t.mock.method(host, 'hashFilePath', async (path: string) => {
+      if (path !== 'bad.txt') return originalHash(path);
+      entered.resolve();
+      await release.promise;
+      throw new Error('FAULT_INJECTED_READ_HASH');
+    });
+    const context = { agentId: 'chat', runId: 'matrix-parallel-failure', babelRoot: root };
+    const failedRead = executor.executeOneAction({ type: 'read_file', path: 'bad.txt' }, context, {}, { index: 0 });
+    try {
+      await Promise.race([entered.promise, failedRead.then(() => { throw new Error('read settled before hash checkpoint'); })]);
+      const goodRead = await executor.executeOneAction({ type: 'read_file', path: 'a.txt' }, context, {}, { index: 1 });
+      assert.match(goodRead.observation, /alpha/);
+      release.resolve();
+      assert.match((await failedRead).observation, /FAULT_INJECTED_READ_HASH/);
+      assert.equal(host.toolCallLog.length, 3);
+      const failure = host.toolCallLog.find(row => row.target === 'bad.txt');
+      assert.equal(failure?.index, 0);
+      assert.equal(failure?.exit_code, 1);
+      assert.equal(failure?.error, 'error');
+      const counts = telemetryCounts(telemetry);
+      assert.equal(counts.toolCalls, 2);
+      assert.equal(counts.successfulToolCalls, 1);
+      assert.equal(counts.failedToolCalls, 1);
+    } finally {
+      release.resolve();
+      await failedRead;
+      engine.closeAdmissionStore();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('a superseded read cannot add telemetry to the next submission', async (t) => {
+    const root = makeFixture();
+    process.env['BABEL_RUNS_DIR'] = join(root, 'runs');
+    const engine = makeEngine(root, 'matrix-telemetry-owner', 'read a.txt');
+    const host = engine as unknown as ChatEngineActionExecutorHost;
+    const executor = new ChatEngineActionExecutor(host);
+    const entered = deferred();
+    const release = deferred();
+    const originalHash = host.hashFilePath.bind(host);
+    const oldTelemetry = new ChatTurnTelemetryCollector();
+    const newTelemetry = new ChatTurnTelemetryCollector();
+    host.currentTurnTelemetry = oldTelemetry;
+    t.mock.method(host, 'hashFilePath', async (path: string) => {
+      const hash = await originalHash(path);
+      entered.resolve();
+      await release.promise;
+      return hash;
+    });
+    const read = executor.executeOneAction({ type: 'read_file', path: 'a.txt' }, { agentId: 'chat', runId: 'matrix-telemetry-owner', babelRoot: root }, {}, { index: 0 });
+    try {
+      await Promise.race([entered.promise, read.then(() => { throw new Error('read settled before hash checkpoint'); })]);
+      host.activeSubmissionGeneration++;
+      host.currentTurnTelemetry = newTelemetry;
+      host.toolCallLog = [{ tool: 'read_file', target: 'new-task.txt', index: 0, exit_code: 0 }];
+      release.resolve();
+      assert.match((await read).observation, /status: stale/);
+      assert.deepEqual(host.toolCallLog, [{ tool: 'read_file', target: 'new-task.txt', index: 0, exit_code: 0 }]);
+      assert.equal(telemetryCounts(newTelemetry).toolCalls, 0);
+      assert.equal(telemetryCounts(oldTelemetry).toolCalls, 1);
+      assert.equal(telemetryCounts(oldTelemetry).successfulToolCalls, 0);
+    } finally {
+      release.resolve();
+      await read;
+      engine.closeAdmissionStore();
       rmSync(root, { recursive: true, force: true });
     }
   });

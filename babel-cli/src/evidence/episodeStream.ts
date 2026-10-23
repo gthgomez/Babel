@@ -92,6 +92,8 @@ export interface EpisodeEventLog {
   hashLink: boolean;
   /** SHA-256 of the last appended event JSON (for chain continuation). */
   lastEventHash: string | null;
+  /** Failed cold projection stays inert until a fresh runtime retries it. */
+  projectionRestoreError?: string;
 }
 
 export interface CreateEpisodeEventLogOptions {
@@ -527,6 +529,27 @@ export function syncAndFlushEpisodeFromSession(
   episodeLog: EpisodeEventLog,
   sessionLog: SessionEventLog,
 ): { path: string; projected: number; wrote: number; error?: string } {
+  const path = join(runDir, EPISODE_EVENTS_FILENAME);
+  if (episodeLog.projectionRestoreError) {
+    return { path, projected: 0, wrote: 0, error: episodeLog.projectionRestoreError };
+  }
+  // A cold Chat runtime starts with an empty projection. Continue the validated
+  // durable stream rather than appending all prior session events from seq 0.
+  if (episodeLog.events.length === 0 && existsSync(path)) {
+    const restored = loadEpisodeEventLogFromDir(runDir, { hashLink: episodeLog.hashLink });
+    if (!restored || restored.sessionId !== episodeLog.sessionId) {
+      episodeLog.projectionRestoreError = 'Existing episode stream is invalid or belongs to another session.';
+      return { path, projected: 0, wrote: 0, error: episodeLog.projectionRestoreError };
+    }
+    // Capped legacy payloads can omit sourceSessionSeq. Envelope identities
+    // survive capping, so recover the cursor from the primary session log.
+    const durableIds = new Set(restored.events.map(event => event.eventId));
+    restored.syncedSessionSeq = sessionLog.events.reduce(
+      (cursor, event) => durableIds.has(event.event_id) ? Math.max(cursor, event.seq) : cursor,
+      -1,
+    );
+    Object.assign(episodeLog, restored);
+  }
   const projected = syncEpisodeFromSessionEvents(episodeLog, sessionLog);
   const result = flushEpisodeEventLog(runDir, episodeLog);
   return {

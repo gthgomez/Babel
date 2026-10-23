@@ -8,6 +8,9 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+# Resolve before Set-Location: a relative -RepoRoot (e.g. "..") must anchor to
+# the caller's cwd, not to the post-Set-Location directory it is joined onto.
+$RepoRoot = (Resolve-Path -LiteralPath $RepoRoot).Path
 Set-Location $RepoRoot
 
 $rgCommand = Get-Command rg -ErrorAction SilentlyContinue

@@ -32,15 +32,15 @@ export function resolveIsolationBrokerFlags(projectRoot: string): IsolationBroke
     d.kind === 'fail_closed' || d.kind === 'docker' || d.kind === 'host_escalated';
   const isolationAvailable = d.kind === 'docker';
   const hostFallbackAllowed = d.kind === 'host_escalated' || d.kind === 'host_profile';
-  const gitDirty = detectWorkingTreeDirty(projectRoot);
+  const enforceClean =
+    process.env['BABEL_REQUIRE_CLEAN_TREE'] === '1' || isolationRequired;
+  const gitDirty = enforceClean && detectWorkingTreeDirty(projectRoot);
   const ownership = getExecutionContext()?.mutationOwnership;
   const changes = gitDirty && ownership?.matchesRoot(projectRoot)
     ? ownership.classifyChanges() : null;
   const unexpectedDirty = changes
     ? changes.unexpectedPaths.length > 0 || changes.unverifiablePaths.length > 0
     : gitDirty;
-  const enforceClean =
-    process.env['BABEL_REQUIRE_CLEAN_TREE'] === '1' || isolationRequired;
   const dirtyTree =
     process.env['BABEL_DIRTY_TREE'] === '1'
       ? true

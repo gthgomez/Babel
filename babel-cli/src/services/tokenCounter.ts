@@ -1,7 +1,8 @@
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { basename, join } from 'node:path';
 
-import { getEncoding } from 'js-tiktoken';
+import { Tiktoken } from 'js-tiktoken/lite';
+import o200kBase from 'js-tiktoken/ranks/o200k_base';
 
 import type { CatalogEntry } from '../control-plane/catalog.js';
 
@@ -35,7 +36,9 @@ export interface TokenCountEntryInput {
   absolutePath: string;
 }
 
-const encoder = getEncoding(TOKENIZER_ENCODING);
+// Command discovery and session startup do not need tokenization. Construct
+// the single supported encoding only when a caller actually counts text.
+let encoder: Tiktoken | undefined;
 
 /** Cache of token counts keyed on `${resolvedFilePath}:${mtimeMs}`. */
 const tokenCountCache = new Map<string, number>();
@@ -45,6 +48,7 @@ export function clearTokenCountCache(): void {
 }
 
 export function countTextTokens(text: string): number {
+  encoder ??= new Tiktoken(o200kBase);
   return encoder.encode(text).length;
 }
 

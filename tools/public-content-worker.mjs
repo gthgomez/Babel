@@ -35,6 +35,21 @@ export function createPublicContentWorker(root) {
         child.stdin.write(JSON.stringify({ snapshot, sha }) + '\n')
       })
     },
-    close() { lines.close(); child.stdin.end(); child.kill() },
+    close() {
+      return new Promise((resolve) => {
+        const finish = () => {
+          lines.removeAllListeners('line')
+          lines.close()
+          resolve()
+        }
+        if (child.exitCode !== null || child.killed) {
+          finish()
+          return
+        }
+        child.once('close', finish)
+        child.stdin.end()
+        child.kill()
+      })
+    },
   }
 }

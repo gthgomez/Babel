@@ -18,6 +18,7 @@
  */
 
 import { CAPABILITY_KINDS, type CapabilityId } from './capabilities.js';
+import { parseCommandArgv } from '../utils/commandArgv.js';
 import {
   classifyExecutionRisk,
   classifyGitExecutionRisk,
@@ -346,7 +347,51 @@ const DANGEROUS_TOOL_PATTERNS: Array<{ re: RegExp; capability: CapabilityId; sem
 ];
 
 const TEST_RUNNER_RE =
-  /^(?:pytest|python3?\s+-m\s+pytest|npx\s+jest|npx\s+vitest|npx\s+mocha|jest\b|vitest\b|mocha\b|cargo\s+test|go\s+test|dotnet\s+test|node\s+--test|tsx\s+--test|npm\s+test|npm\s+run\s+test|pnpm\s+(?:run\s+)?test|yarn\s+(?:run\s+)?test)/i;
+  /^(?:pytest|python3?\s+-m\s+pytest|npx\s+jest|npx\s+vitest|npx\s+mocha|jest\b|vitest\b|mocha\b|cargo\s+test|go\s+test|dotnet\s+test|tsx\s+--test|npm\s+test|npm\s+run\s+test|pnpm\s+(?:run\s+)?test|yarn\s+(?:run\s+)?test)/i;
+
+const NODE_TEST_VALUE_OPTIONS = new Set([
+  '--test-concurrency', '--test-reporter', '--test-reporter-destination',
+  '--test-name-pattern', '--test-skip-pattern', '--test-timeout', '--test-isolation',
+  '--test-shard', '--test-coverage-branches', '--test-coverage-functions', '--test-coverage-lines',
+]);
+const NODE_TEST_BOOLEAN_OPTIONS = new Set([
+  '--test-only', '--test-force-exit', '--test-update-snapshots',
+  '--experimental-test-coverage', '--experimental-test-module-mocks', '--experimental-test-snapshots',
+]);
+
+/** A conservative direct Node test prefix, shared by dispatch and verifier recognition. */
+export function isNodeTestCommand(raw: string, original: string): boolean {
+  // Wrapper normalization can lose argv quoting; it cannot establish test authority.
+  if (raw !== original.trim()) return false;
+  // Container profiles may evaluate these through a shell instead of direct argv.
+  if (/[;&|><`$(){}!\\\r\n%^]/.test(raw)) return false;
+  let tokens: string[];
+  try {
+    tokens = parseCommandArgv(raw);
+  } catch {
+    return false;
+  }
+  if (tokens[0]?.toLowerCase() !== 'node') return false;
+  let testMode = false;
+  for (let i = 1; i < tokens.length; i++) {
+    const flag = tokens[i]!;
+    if (flag === '--' || !flag.startsWith('-')) break;
+    if (flag === '--test') {
+      testMode = true;
+      continue;
+    }
+    const equals = flag.indexOf('=');
+    const option = equals === -1 ? flag : flag.slice(0, equals);
+    if (option === '--import' || NODE_TEST_VALUE_OPTIONS.has(option)) {
+      const value = equals === -1 ? tokens[++i] : flag.slice(equals + 1);
+      if (!value || value.startsWith('-')) return false;
+    } else if (!NODE_TEST_BOOLEAN_OPTIONS.has(flag)) {
+      // Includes --no-test/--no_test, alternative entry modes and unknown options.
+      return false;
+    }
+  }
+  return testMode;
+}
 const BUILD_RE =
   /^(?:npm\s+run\s+build|pnpm\s+run\s+build|yarn\s+build|cargo\s+build|go\s+build|dotnet\s+build|make(?:\s|$))/i;
 const LINT_RE =
@@ -697,7 +742,7 @@ function decodeHostDevice(tokens: string[]): DecodedCommand | null {
   return null;
 }
 
-function decodeNonGit(tokens: string[], raw: string): DecodedCommand {
+function decodeNonGit(tokens: string[], raw: string, original: string): DecodedCommand {
   const base = tokens[0]?.toLowerCase() ?? '';
 
   // Credential reads: merged tool list + credential-path reference.
@@ -746,7 +791,7 @@ function decodeNonGit(tokens: string[], raw: string): DecodedCommand {
 
   // Test / build / lint / typecheck runners execute repository-controlled
   // code. Capability stays local for lease usability; execution is isolated.
-  if (TEST_RUNNER_RE.test(raw)) return cmd('run_tests', 'test_local', { requiresIsolation: true });
+  if ((base === 'node' && isNodeTestCommand(raw, original)) || TEST_RUNNER_RE.test(raw)) return cmd('run_tests', 'test_local', { requiresIsolation: true });
   if (TYPECHECK_RE.test(raw)) return cmd('run_typecheck', 'test_local', { requiresIsolation: true });
   if (LINT_RE.test(raw)) return cmd('run_lint', 'test_local', { requiresIsolation: true });
   if (BUILD_RE.test(raw)) return cmd('run_build', 'test_local', { requiresIsolation: true });
@@ -970,7 +1015,7 @@ export function decodeCommand(command: string, opts: { repoRoot?: string } = {})
             ? decodeGit(tokens, opts.repoRoot)
             : firstBase === 'gh'
               ? decodeGh(tokens)
-              : decodeNonGit(tokens, inner),
+              : decodeNonGit(tokens, inner, segment),
         inner,
         opts.repoRoot,
       );

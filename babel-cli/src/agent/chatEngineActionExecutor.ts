@@ -5,10 +5,7 @@ import { evaluateHardPlanModeGate } from "./planExecuteMode.js";
 import { evaluatePhaseToolGate } from "./phaseToolPolicy.js";
 import { getChatTaskTune } from "../config/chatTaskClass.js";
 import { appendPatchRecovery } from "./patchRecovery.js";
-import {
-  buildFullRereadSkipObservation,
-  shouldSkipFullReread,
-} from "./readThrashPolicy.js";
+import { buildFullRereadSkipObservation, shouldSkipFullReread } from "./readThrashPolicy.js";
 import {
   applyWorkingStateEvent,
   decideReadInjection,
@@ -104,9 +101,7 @@ import {
   isDiscriminatingInspectionEvidence,
   wrapPresentationCallbacks,
 } from "./chatEngineHelpers.js";
-import type { ChatCallbacks } from "./chatEngineContracts.js";
-
-import type { ChatEngineActionExecutorHost } from "./chatEngineContracts.js";
+import type { ChatActionResult, ChatCallbacks, ChatEngineActionExecutorHost } from "./chatEngineContracts.js";
 import { captureRunArtifactAccess, executeReadArtifactAction, formatRegisteredToolObservation } from './codingLoop/readArtifactExecutor.js';
 export type { ChatEngineActionExecutorHost } from "./chatEngineContracts.js";
 
@@ -157,7 +152,7 @@ export class ChatEngineActionExecutor {
     toolContext: ToolContext,
     callbacks: ChatCallbacks,
     meta: { index: number; idempotencyKey?: string; ownerGeneration?: number },
-  ): Promise<{ index: number; observation: string; stop?: boolean }> {
+  ): Promise<ChatActionResult> {
     // R0-10: a throwing presentation callback must not unwind settlement or
     // duplicate execution truth. All callbacks below are the safe wrappers.
     callbacks = wrapPresentationCallbacks(callbacks);
@@ -175,10 +170,11 @@ export class ChatEngineActionExecutor {
     // attributed to the turn that produced it, never to whatever turn is live
     // when the child finally resolves.
     const dispatchTurnId = this.host.parity.turnId;
-    // R0-10: baseline for "did this invocation already record an execution
-    // row?". `meta.index` is not unique across a turn (it is per-round), so the
-    // catch must compare against this invocation's own baseline.
-    const toolCallLogStart = this.host.toolCallLog.length;
+    // R0-10: indices restart each round. Match this invocation's index only
+    // in rows appended to its dispatch log after this baseline.
+    const toolCallLog = this.host.toolCallLog;
+    const toolCallLogStart = toolCallLog.length;
+    const turnTelemetry = this.host.currentTurnTelemetry;
     const tool = chatActionToolName(action);
     const target = chatActionTarget(action);
     const toolId = callbacks.onToolStart?.(tool, target) ?? -1;
@@ -716,6 +712,7 @@ export class ChatEngineActionExecutor {
               priorFull,
               maxFull,
             ),
+            admittedProjectRead: true,
           };
         }
         fileReadCacheHash = await this.host.hashFilePath(action.path);
@@ -756,6 +753,7 @@ export class ChatEngineActionExecutor {
             observation:
               `### ${tool} ${target}\nexit_code: 0\n\`\`\`\n` +
               `File ${target} unchanged since last identical full read (${secs}s ago). Skipping re-injection.\n\`\`\``,
+            admittedProjectRead: true,
           };
         }
       }
@@ -781,6 +779,12 @@ export class ChatEngineActionExecutor {
               this.host.persistToolStartedAtExecutorDispatch(action, meta),
             ...(this.host.parity.authoritySession
               ? { authoritySession: this.host.parity.authoritySession }
+              : {}),
+            ...(this.host.parity.liveAuthority?.taskContract.protected_paths
+              ? {
+                  protectedPaths:
+                    this.host.parity.liveAuthority.taskContract.protected_paths,
+                }
               : {}),
             ...(classC === "allow" ? { onAskApproval: async () => true } : {}),
           },
@@ -1079,7 +1083,7 @@ export class ChatEngineActionExecutor {
         applyPatchAction !== undefined &&
         (applyPatchAction as { type: string }).type === "apply_patch";
       if (isApplyPatch) {
-        return executeGovernedApplyPatchAction({
+        return await executeGovernedApplyPatchAction({
           host: this.host,
           action: action as Extract<ChatToolAction, { type: "apply_patch" }>,
           patchText: (action as Extract<ChatToolAction, { type: "apply_patch" }>).patch,
@@ -1106,7 +1110,7 @@ export class ChatEngineActionExecutor {
       if (action.type === "read_range") {
         // Extracted to codingLoop/readRangeExecutor.ts to respect the
         // file-size ratchet (same pattern as the background-shell handlers).
-        return executeReadRangeAction({
+        return await executeReadRangeAction({
           host: this.host,
           action,
           tool,
@@ -1797,7 +1801,10 @@ export class ChatEngineActionExecutor {
         }
       }
 
-      return { index: meta.index, observation: obsParts.join("\n") };
+      return { index: meta.index, observation: obsParts.join("\n"),
+        ...(action.type === 'read_file' && !result.policyBlocked && result.results.length > 0 &&
+          result.results.every(r => r.exit_code === 0 && !r.denial) ? { admittedProjectRead: true as const } : {}),
+      };
     } catch (err) {
       // R0-7/R0-8: an action that throws after its submission was superseded
       // must not append a failure row to the current task's tool log.
@@ -1814,7 +1821,7 @@ export class ChatEngineActionExecutor {
       // appending a second row would duplicate execution truth. One action
       // settles exactly one log row; only a genuine executor fault with no
       // prior row adds a failure row here.
-      const alreadySettled = this.host.toolCallLog.length > toolCallLogStart;
+      const alreadySettled = toolCallLog.slice(toolCallLogStart).some(entry => entry.index === meta.index);
       if (!alreadySettled) {
         this.host.toolCallLog.push({
           tool,
@@ -1844,11 +1851,11 @@ export class ChatEngineActionExecutor {
       };
     } finally {
       const toolEnd = performance.now();
-      const lastEntry = this.host.toolCallLog[this.host.toolCallLog.length - 1];
+      const lastEntry = toolCallLog.slice(toolCallLogStart).find(entry => entry.index === meta.index);
       const success =
-        !lastEntry?.error &&
+        lastEntry !== undefined && !lastEntry.error &&
         (lastEntry?.exit_code === 0 || lastEntry?.exit_code === undefined);
-      this.host.currentTurnTelemetry?.recordToolSpan(
+      turnTelemetry?.recordToolSpan(
         tool,
         target,
         Math.max(0, toolEnd - toolStart),
