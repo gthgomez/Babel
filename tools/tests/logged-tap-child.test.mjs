@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PassThrough } from 'node:stream'
@@ -32,5 +32,41 @@ test('a missing producer returns a failed spawn outcome rather than success', as
     const result = await runLoggedTapChild(join(root, 'nonexistent-producer'), [], { cwd: root, tapPath: join(root, 'full.tap'), stdout: output, stderr: output })
     assert.equal(result.status, null)
     assert.ok(result.error)
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
+
+test('a continuously noisy producer is stopped at the combined output budget', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-logged-tap-overflow-'))
+  const tapPath = join(root, 'full.tap')
+  const output = new PassThrough(); output.resume()
+  try {
+    const started = performance.now()
+    const result = await runLoggedTapChild(process.execPath, ['-e', 'setInterval(()=>{process.stdout.write("x".repeat(900));process.stderr.write("y".repeat(900))},10)'], {
+      cwd: root, tapPath, stdout: output, stderr: output, maxLogBytes: 1024,
+    })
+    assert.match(result.error?.message, /output limit exceeded/)
+    assert.ok(performance.now() - started < 10000)
+    assert.ok(statSync(tapPath).size + statSync(tapPath + '.stderr.log').size <= 1024)
+    assert.notEqual(result.status, 0)
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
+
+test('cancellation terminates the owned producer tree and returns failed evidence', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-logged-tap-cancel-'))
+  const output = new PassThrough(), controller = new AbortController()
+  let grandchild
+  output.on('data', chunk => { grandchild = Number(chunk.toString().trim()); controller.abort() })
+  const errors = new PassThrough(); errors.resume()
+  try {
+    const source = 'const {spawn}=require("node:child_process");const c=spawn(process.execPath,["-e","setInterval(()=>{},1000)"],{stdio:"ignore"});console.log(c.pid);setInterval(()=>{},1000)'
+    const result = await runLoggedTapChild(process.execPath, ['-e', source], {
+      cwd: root, tapPath: join(root, 'full.tap'), stdout: output, stderr: errors, signal: controller.signal,
+    })
+    assert.equal(result.signal, 'SIGTERM')
+    assert.match(result.error?.message, /interrupted/)
+    assert.ok(Number.isInteger(grandchild) && grandchild > 0)
+    // A terminated POSIX descendant may briefly remain as a reaped zombie;
+    // Windows taskkill waits for its owned /T process tree to terminate.
+    if (process.platform === 'win32') assert.throws(() => process.kill(grandchild, 0), /ESRCH/)
   } finally { rmSync(root, { recursive: true, force: true }) }
 })

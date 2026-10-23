@@ -1201,7 +1201,9 @@ export const executeReadinessCommand: ReadinessCommandRunner = (command, options
   return spawnSync(executable, args, {
     cwd: options.cliRoot,
     env: { ...getSafeEnv(), BABEL_ROOT, BABEL_RUNS_DIR, NODE_NO_WARNINGS: '1' },
-    encoding: 'utf8', timeout: READINESS_TIMEOUT_MS, maxBuffer: options.maxOutputBytes,
+    // Display truncation must not terminate an otherwise successful command.
+    // Retain the previous spawn transport bound independently of report size.
+    encoding: 'utf8', timeout: READINESS_TIMEOUT_MS, maxBuffer: 1024 * 1024,
     windowsHide: true,
   });
 };

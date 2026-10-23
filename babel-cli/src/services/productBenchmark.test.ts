@@ -89,4 +89,7 @@ test('production readiness runner observes real subprocess success and failure',
   const options = { cliRoot: process.cwd(), maxOutputBytes: 4096, id: 'synthetic-process' };
   assert.equal(executeReadinessCommand([process.execPath, '-e', 'process.exitCode=0'], options).status, 0);
   assert.equal(executeReadinessCommand([process.execPath, '-e', 'process.exitCode=7'], options).status, 7);
+  const verbose = executeReadinessCommand([process.execPath, '-e', 'process.stdout.write("x".repeat(64000))'], { ...options, maxOutputBytes: 16 });
+  assert.equal(verbose.status, 0, 'small report limits must not kill successful verbose commands');
+  assert.equal(verbose.stdout?.length, 64000);
 });

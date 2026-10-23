@@ -15,6 +15,31 @@ const original = spawnSync('git', ['-c', 'core.fsmonitor=false', 'show', '260e94
 assert.ifError(original.error);
 assert.equal(original.status, 0, original.stderr);
 const baseline = load(original.stdout);
+const cliPackage = JSON.parse(readFileSync(new URL('babel-cli/package.json', root), 'utf8'));
+
+function assertCombinedQualification(candidate, manifest, os) {
+  const job = candidate.jobs['platform-core'];
+  assert.ok(job.strategy.matrix.os.includes(os));
+  assert.ok(candidate.jobs[os === 'ubuntu-latest' ? 'linux-validation' : 'windows-portability'].needs.includes('platform-core'));
+  const step = job.steps.find(step => step.run === 'npm run qualify:build');
+  assert.ok(step);
+  assert.equal(step.if, undefined);
+  assert.equal(step['continue-on-error'], undefined);
+  assert.equal(step['working-directory'], 'babel-cli');
+  assert.equal(manifest.scripts['qualify:build'], 'npm run build && npm run typecheck:scripts');
+  assert.equal(manifest.scripts.build, 'npm run clean:dist && tsc && node scripts/copy_playbooks.mjs');
+  assert.equal(manifest.scripts['typecheck:scripts'], 'tsc -p tsconfig.scripts.json --noEmit');
+}
+
+test('combined qualification preserves emitting compiler and scripts checks with failure propagation', () => {
+  assertCombinedQualification(workflow, cliPackage, 'ubuntu-latest');
+  const missing = structuredClone(cliPackage);
+  missing.scripts['qualify:build'] = 'npm run build';
+  assert.throws(() => assertCombinedQualification(workflow, missing, 'ubuntu-latest'));
+  const skipped = structuredClone(workflow);
+  skipped.jobs['platform-core'].steps.find(step => step.run === 'npm run qualify:build').if = 'false';
+  assert.throws(() => assertCombinedQualification(skipped, cliPackage, 'ubuntu-latest'));
+});
 
 test('the final combined stack enforces all real architecture budgets on Linux and Windows', () => {
   const job = workflow.jobs['architecture-regressions'];
@@ -66,6 +91,12 @@ test('every pre-optimization Linux and Windows command remains covered on its or
       }
     }
     for (const signature of expected) {
+      const [stepName, run] = JSON.parse(signature);
+      if ((stepName === 'Typecheck CLI' && run === 'npm run typecheck') ||
+          (stepName === 'Build CLI' && run === 'npm run build')) {
+        assertCombinedQualification(workflow, cliPackage, os);
+        continue;
+      }
       // These suites still run under pwsh in babel-cli and still publish
       // artifacts/<suite>/full.tap. The live Tee-Object target is outside that
       // project so a growing log cannot change repository capture mid-run.
@@ -111,9 +142,15 @@ test('standalone review contract can be removed only with the complete required 
   assert.throws(() => assertRequiredReviewUnion(missing));
 });
 test('security, public policy, review contracts, dual-OS manifest and metadata retain coverage', () => {
-  for (const name of ['security', 'public-content-policy', 'policy-integrity']) {
+  for (const name of ['public-content-policy', 'policy-integrity']) {
     assert.deepEqual(workflow.jobs[name], baseline.jobs[name], `Protected coverage changed: ${name}`);
   }
+  const security = structuredClone(baseline.jobs.security);
+  security.steps = security.steps.filter(step => step.name !== 'Run local public scrub');
+  assert.deepEqual(workflow.jobs.security, security, 'Only the duplicate scrub step may change');
+  const wrapper = readFileSync(new URL('tools/run-public-secret-scan.ps1', root), 'utf8');
+  assert.match(wrapper, /if \(\$Strict\)\s*\{\s*\$scrubArgs \+= '-Strict'/);
+  assert.match(wrapper, /& \$shellPath -NoProfile -ExecutionPolicy Bypass -File \$scrubScriptPath @scrubArgs\s*\$scrubExitCode = \$LASTEXITCODE\s*if \(\$scrubExitCode -ne 0\)\s*\{[^}]*exit 1/s);
   assertRequiredReviewUnion(workflow);
   const metadata = structuredClone(workflow.jobs['public-pr-metadata-tests']);
   assert.equal(metadata.if, undefined);
@@ -124,11 +161,11 @@ test('security, public policy, review contracts, dual-OS manifest and metadata r
   metadata.if = "github.event_name == 'pull_request'";
   assert.deepEqual(metadata, baseline.jobs['public-pr-metadata-tests']);
   assert.deepEqual(workflow.permissions, { contents: 'read' });
-  // Triggers deliberately expanded by the fast-iteration-merge-workflow review:
-  // qualification must re-run when a draft leaves ready_for_review or full-ci labels flip.
+  // Candidate bytes do not change on draft/readiness transitions. Label events
+  // remain necessary because full-ci changes lane applicability.
   assert.deepEqual(workflow.on, {
     pull_request: {
-      types: ['opened', 'synchronize', 'reopened', 'ready_for_review', 'converted_to_draft', 'labeled', 'unlabeled'],
+      types: ['opened', 'synchronize', 'reopened', 'labeled', 'unlabeled'],
     },
     push: { branches: ['main'] },
   });
