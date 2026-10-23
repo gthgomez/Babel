@@ -342,6 +342,15 @@ jobs:
 
           exit $failure
         working-directory: babel-cli
+      - name: Build CLI for real audit integration
+        run: npm run build
+        working-directory: babel-cli
+      - name: Run complete audit and benchmark integration
+        shell: pwsh
+        run: |
+          npm run test:audit-integration 2>&1 | Tee-Object ../artifacts/ci-package/audit-integration.log
+          exit $LASTEXITCODE
+        working-directory: babel-cli
       - name: Upload portable package evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -663,9 +672,6 @@ jobs:
         working-directory: babel-cli
       - name: Run required benchmark/eval suite
         run: npm run test:benchmark-eval
-        working-directory: babel-cli
-      - name: Run complete audit and benchmark integration
-        run: npm run test:audit-integration
         working-directory: babel-cli
       - name: Validate catalog
         run: pwsh -NoProfile -ExecutionPolicy Bypass -File tools/validate-catalog.ps1

@@ -1,9 +1,9 @@
 // License: Apache-2.0 — see LICENSE
 import { spawn, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, rmdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { dirname, join, resolve } from 'node:path'
+import { dirname, join, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { readCommittedInventory, readCommittedBlobs } from './committed-object-reader.mjs'
 import { coveredPaths, verifyPolicyManifest } from './policy-integrity-manifest.mjs'
@@ -60,6 +60,23 @@ export function readPublishedTips(root, remote) {
     if (fields[0] !== ids[index] || !['missing', 'commit', 'tag', 'tree', 'blob'].includes(fields[1])) throw new Error('invalid publication frontier object')
     return ['commit', 'tag'].includes(fields[1]) ? [fields[0]] : []
   })
+}
+
+/** Observe local object work as well as child validators; never echo source. */
+export async function observeValidationWork(label, work, emit = console.error, heartbeatMs = 10000) {
+  if (!Number.isSafeInteger(heartbeatMs) || heartbeatMs < 1) throw new Error('invalid progress interval')
+  const started = performance.now()
+  emit(`[pre-push] ${label} started`)
+  const heartbeat = setInterval(() => emit(`[pre-push] ${label} running elapsed_s=${Math.round((performance.now() - started) / 1000)}`), heartbeatMs)
+  let status = 'failed'
+  try {
+    const value = await work()
+    status = 'complete'
+    return value
+  } finally {
+    clearInterval(heartbeat)
+    emit(`[pre-push] ${label} finished elapsed_ms=${Math.round(performance.now() - started)} status=${status}`)
+  }
 }
 
 export async function runValidationStage(binary, args, root, label, emit = console.error, timeout = 120000) {
@@ -130,19 +147,22 @@ export function assertExportableCandidate(root, sha) {
 export async function preflightPushCandidates(commits, root, emit = console.error) {
   const plans = []
   for (const [index, sha] of commits.entries()) {
-    const inventory = assertExportableCandidate(root, sha)
-    const byPath = new Map(inventory.map(entry => [entry.path, entry]))
-    const required = ['POLICY_MANIFEST.json', ...coveredPaths]
-    const blobs = new Map()
-    await readCommittedBlobs(root, required.flatMap(path => byPath.has(path) ? [byPath.get(path).oid] : []), (oid, bytes) => blobs.set(oid, bytes))
-    const verdict = verifyPolicyManifest(path => {
-      const entry = byPath.get(path)
-      if (!entry || !blobs.has(entry.oid)) throw new Error('manifest input unavailable')
-      return blobs.get(entry.oid)
-    })
-    if (verdict.status !== 'VERIFIED') throw new Error(`policy integrity rejected candidate ${sha.slice(0, 12)} during preflight`)
-    emit(`[pre-push] preflight ${index + 1}/${commits.length} ${sha} manifest=verified files=${inventory.length}`)
-    plans.push({ sha, inventory })
+    const plan = await observeValidationWork(`preflight ${index + 1}/${commits.length} ${sha.slice(0, 12)}`, async () => {
+      const inventory = assertExportableCandidate(root, sha)
+      const byPath = new Map(inventory.map(entry => [entry.path, entry]))
+      const required = ['POLICY_MANIFEST.json', ...coveredPaths]
+      const blobs = new Map()
+      await readCommittedBlobs(root, required.flatMap(path => byPath.has(path) ? [byPath.get(path).oid] : []), (oid, bytes) => blobs.set(oid, bytes))
+      const verdict = verifyPolicyManifest(path => {
+        const entry = byPath.get(path)
+        if (!entry || !blobs.has(entry.oid)) throw new Error('manifest input unavailable')
+        return blobs.get(entry.oid)
+      })
+      if (verdict.status !== 'VERIFIED') throw new Error(`policy integrity rejected candidate ${sha.slice(0, 12)} during preflight`)
+      emit(`[pre-push] preflight ${index + 1}/${commits.length} ${sha} manifest=verified files=${inventory.length}`)
+      return { sha, inventory }
+    }, emit)
+    plans.push(plan)
   }
   return plans
 }
@@ -166,6 +186,49 @@ export async function verifyStagedManifest(root) {
   return result
 }
 
+/** Update the push-owned snapshot from preflighted inventories; never execute it. */
+export async function materializePushSnapshot(root, snapshot, inventory, previous = []) {
+  const target = resolve(snapshot), prefix = target + sep
+  const destination = path => {
+    const full = resolve(target, path)
+    if (!full.startsWith(prefix)) throw new Error('snapshot path escaped owned directory')
+    return full
+  }
+  // Validate every destination before performing any file removal.
+  for (const entry of [...previous, ...inventory]) destination(entry.path)
+  const before = new Map(previous.map(entry => [entry.path, entry]))
+  const after = new Map(inventory.map(entry => [entry.path, entry]))
+  const same = (a, b) => a && b && a.oid === b.oid && a.mode === b.mode
+  if (!previous.length) mkdirSync(target)
+  for (const entry of previous) {
+    if (!same(entry, after.get(entry.path))) rmSync(destination(entry.path))
+  }
+  const directories = entries => new Set(entries.flatMap(entry => {
+    const parts = entry.path.split('/')
+    return parts.slice(0, -1).map((_, index) => parts.slice(0, index + 1).join('/'))
+  }))
+  const nextDirectories = directories(inventory)
+  for (const path of [...directories(previous)].filter(path => !nextDirectories.has(path)).sort((a, b) => b.length - a.length)) {
+    rmdirSync(destination(path))
+  }
+  const changed = inventory.filter(entry => !same(entry, before.get(entry.path)))
+  const blobs = new Map()
+  for (const entry of changed) {
+    if (!blobs.has(entry.oid)) blobs.set(entry.oid, [])
+    blobs.get(entry.oid).push(entry.path)
+  }
+  await readCommittedBlobs(root, [...blobs.keys()], (oid, bytes) => {
+    for (const path of blobs.get(oid)) {
+      const full = destination(path)
+      mkdirSync(dirname(full), { recursive: true })
+      // Symlink objects remain ordinary target text and are never followed.
+      writeFileSync(full, bytes, { flag: 'wx' })
+    }
+  })
+  return { changed: changed.length, reused: inventory.length - changed.length,
+    removed: previous.filter(entry => !after.has(entry.path)).length }
+}
+
 /** Validate exported committed contents with host-side validators, without running candidate scripts. */
 export async function validatePushCandidates(records, root, remote, { emit = console.error } = {}) {
   assertRemotePushFetchRepoAligned(root, remote, git)
@@ -173,32 +236,20 @@ export async function validatePushCandidates(records, root, remote, { emit = con
   if (!commits.length) return
   emit(`[pre-push] candidates=${commits.length}; checking cheap invariants before scanning`)
   const plans = await preflightPushCandidates(commits, root, emit)
-  const tools = dirname(fileURLToPath(import.meta.url))
   const scratch = mkdtempSync(join(tmpdir(), 'babel-push-check-'))
+  const snapshot = join(scratch, 'snapshot')
   const worker = createPublicContentWorker(root)
+  let previous = []
   try {
     const scanner = spawnSync('gitleaks', ['version'], { encoding: 'utf8', windowsHide: true })
     if (scanner.error || scanner.status !== 0) throw new Error('required gitleaks scanner unavailable')
     for (const [index, { sha, inventory }] of plans.entries()) {
-      const snapshot = join(scratch, 'snapshot')
-      mkdirSync(snapshot)
-      const paths = new Map()
-      for (const entry of inventory) {
-        if (!paths.has(entry.oid)) paths.set(entry.oid, [])
-        paths.get(entry.oid).push(entry.path)
-      }
       emit(`[pre-push] candidate ${index + 1}/${commits.length} ${sha} materializing committed blobs`)
-      await readCommittedBlobs(root, [...paths.keys()], (oid, bytes) => {
-        for (const path of paths.get(oid)) {
-          const full = join(snapshot, path)
-          mkdirSync(dirname(full), { recursive: true })
-          // Symlink objects are inspected as their committed target text; never followed.
-          writeFileSync(full, bytes, { flag: 'wx' })
-        }
-      })
+      const changes = await observeValidationWork(`${sha.slice(0, 12)} materialize`, () => materializePushSnapshot(root, snapshot, inventory, previous), emit)
+      emit(`[pre-push] snapshot changed=${changes.changed} reused=${changes.reused} removed=${changes.removed}`)
       await scanPublicContent(worker, snapshot, sha, emit)
       await runValidationStage('gitleaks', ['dir', '--redact', '--no-banner', snapshot], root, `${sha.slice(0, 12)} secrets`, emit)
-      rmSync(snapshot, { recursive: true, force: true })
+      previous = inventory
       emit(`[pre-push] verified committed candidate ${sha}`)
     }
   } finally { worker.close(); rmSync(scratch, { recursive: true, force: true }) }

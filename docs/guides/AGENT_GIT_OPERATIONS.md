@@ -196,7 +196,9 @@ Use `npm --prefix babel-cli run check:dependencies` to detect installed version
 drift without reinstalling. Use `qualify:build` for one emitting source typecheck
 plus the scripts typecheck; the ordinary `typecheck` command remains useful while
 editing. `test:audit-integration` owns the real catalog and parity benchmark
-execution separately from focused unit fixtures. Required TAP runners stream
+execution separately from focused unit fixtures. CI runs it in the shorter
+package-components job after a fresh CLI build, alongside platform qualification.
+Required TAP runners stream
 progress and retain stdout, stderr, selection and execution records.
 
 Unit shards use content-bound OS duration hints in
