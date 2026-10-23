@@ -148,6 +148,84 @@ test('unresolved acceptance is not upgraded by trusted verifiers alone', () => {
   assert.equal(bound.criteria[0]!.verification.verifier_id.startsWith('meaning:'), true)
 })
 
+test('each preservation criterion binds only its own designated command', () => {
+  const task = [
+    'Preserve alpha. Tests are already present. Run both tests using: npm run test:alpha.',
+    'Preserve beta. Tests are already present. Run both tests using: npm run test:beta.',
+    'Acceptance criteria:',
+    '- `npm run test:alpha` must pass.',
+  ].join('\n')
+  const meaning = inferTaskAcceptance(task)
+  assert.equal(meaning.unresolved, false)
+  const bound = bindExecutableVerifiersToTaskAcceptance({
+    meaning,
+    trustedVerifierCommands: ['npm run test:alpha', 'npm run test:beta'],
+    defaultWorkingDirectory: '.',
+  })
+  const alpha = bound.criteria.find(item => item.description.includes('alpha'))!
+  const beta = bound.criteria.find(item => item.description.includes('beta'))!
+  assert.ok(alpha && beta)
+  // Alpha's own designation was explicitly frozen, so it re-freezes that exact argv.
+  assert.deepEqual(alpha.verification.argv, ['run', 'test:alpha'])
+  // Beta's designated command was never explicitly frozen: fail-closed, and
+  // alpha's receipt must never satisfy it.
+  assert.ok(beta.verification.verifier_id.startsWith('meaning:'))
+})
+
+test('per-criterion binding is order-invariant when both designations are frozen', () => {
+  for (const criteriaOrder of [
+    ['- `npm run test:alpha` must pass.', '- `npm run test:beta` must pass.'],
+    ['- `npm run test:beta` must pass.', '- `npm run test:alpha` must pass.'],
+  ]) {
+    const task = [
+      'Preserve alpha. Tests are already present. Run both tests using: npm run test:alpha.',
+      'Preserve beta. Tests are already present. Run both tests using: npm run test:beta.',
+      'Acceptance criteria:',
+      ...criteriaOrder,
+    ].join('\n')
+    const bound = bindExecutableVerifiersToTaskAcceptance({
+      meaning: inferTaskAcceptance(task),
+      trustedVerifierCommands: ['npm run test:alpha', 'npm run test:beta'],
+      defaultWorkingDirectory: '.',
+    })
+    const alpha = bound.criteria.find(item => item.description.includes('alpha'))!
+    const beta = bound.criteria.find(item => item.description.includes('beta'))!
+    assert.deepEqual(alpha.verification.argv, ['run', 'test:alpha'], criteriaOrder.join(';'))
+    assert.deepEqual(beta.verification.argv, ['run', 'test:beta'], criteriaOrder.join(';'))
+  }
+})
+
+test('multiple designated commands inside one criterion stay fail-closed', () => {
+  const task = [
+    'Preserve alpha. Tests are already present. Run both tests using: npm run test:alpha. Then run both tests using: npm run test:beta.',
+    'Acceptance criteria:',
+    '- `npm run test:alpha` must pass.',
+    '- `npm run test:beta` must pass.',
+  ].join('\n')
+  const bound = bindExecutableVerifiersToTaskAcceptance({
+    meaning: inferTaskAcceptance(task),
+    trustedVerifierCommands: ['npm run test:alpha', 'npm run test:beta'],
+    defaultWorkingDirectory: '.',
+  })
+  const preserved = bound.criteria.find(item => item.description.includes('Preserve alpha'))!
+  assert.ok(preserved.verification.verifier_id.startsWith('meaning:'))
+})
+
+test('quoted designation text never binds a witness command', () => {
+  const task = [
+    "Preserve alpha. Tests are already present. Run both tests using: 'npm run test:alpha'.",
+    'Acceptance criteria:',
+    '- `npm run test:alpha` must pass.',
+  ].join('\n')
+  const bound = bindExecutableVerifiersToTaskAcceptance({
+    meaning: inferTaskAcceptance(task),
+    trustedVerifierCommands: ['npm run test:alpha'],
+    defaultWorkingDirectory: '.',
+  })
+  const preserved = bound.criteria.find(item => item.description.includes('Preserve alpha'))!
+  assert.ok(preserved.verification.verifier_id.startsWith('meaning:'))
+})
+
 test('task-designated regression witness binds a preservation criterion to the frozen command', () => {
   const task = [
     'Fix the parser regression in src/parser.ts: the request drops the governed header. Preserve Accept and the existing safe transport, diagnostics and authorization behavior. The default-transport regression tests are already present. Make the smallest production fix and run both tests using: npm run test:parser. Do not modify regression tests or unrelated code.',
