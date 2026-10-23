@@ -26,7 +26,8 @@ test('same-version replaced archives are rejected before consumer installation',
 test('consumer inventory preserves required assets and rejects development or private files', async () => {
   const { verifyConsumerContents } = await import('../../babel-cli/scripts/consumer_archive.mjs')
   const files = ['package.json', 'README.md', 'LICENSE', 'bin/babel.js', 'resources/prompt_catalog.yaml',
-    'dist/voice/audio-capture-worker.mjs', 'dist/voice/vad-worker.mjs'].map(path => ({path}))
+    'dist/voice/audio-capture-worker.mjs', 'dist/voice/vad-worker.mjs',
+    'dist/bridge/claude-agent-sdk-pin.json', 'dist/bridge/claudeCodeIsolatedResolveWorker.mjs'].map(path => ({path}))
   verifyConsumerContents(files)
   for (const path of ['resources/.env.local', 'dist/example.test.js', 'dist/source.ts', 'resources/../outside', 'resources/logs/private.log']) {
     assert.throws(() => verifyConsumerContents([...files, {path}]), undefined, path)

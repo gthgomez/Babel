@@ -133,6 +133,30 @@ try {
   writeFileSync(join(output, 'manifest.json'), JSON.stringify({...identity, consumerNode: process.version, consumerPlatform: process.platform, consumerArch: process.arch}, null, 2) + '\n')
   writeFileSync(join(output, 'SHA256SUMS'), `${identity.sha256}  ${identity.tarball}\n`)
   installArtifact(artifact)
+  const claudeSdkPin = join(installed, 'dist/bridge/claude-agent-sdk-pin.json')
+  const claudeResolveWorker = join(installed, 'dist/bridge/claudeCodeIsolatedResolveWorker.mjs')
+  assert.ok(existsSync(claudeSdkPin), 'Claude SDK pin shipped in consumer tarball')
+  assert.ok(existsSync(claudeResolveWorker), 'Claude isolated resolve worker shipped in consumer tarball')
+  assert.equal(JSON.parse(readFileSync(claudeSdkPin, 'utf8')).sdkVersion, '0.3.304')
+  const bridgePackagingProbe = join(scratch, 'bridge-packaging-probe.mjs')
+  writeFileSync(bridgePackagingProbe, `
+    import assert from 'node:assert/strict';
+    import { mkdtempSync, writeFileSync } from 'node:fs';
+    import { tmpdir } from 'node:os';
+    import { join } from 'node:path';
+    import { buildClaudeCodePolicyProofChildEnv } from ${JSON.stringify(pathToFileURL(join(installed, 'dist/bridge/claudeCodeChildEnv.js')).href)};
+    import { buildClaudeCodeLaunchPolicySpec } from ${JSON.stringify(pathToFileURL(join(installed, 'dist/bridge/claudeCodePolicyEvidence.js')).href)};
+    import { resolveSettingsInIsolatedChildEnv } from ${JSON.stringify(pathToFileURL(join(installed, 'dist/bridge/claudeCodeIsolatedResolveSubprocess.js')).href)};
+    import { CLAUDE_HARNESS_MANIFEST_FILENAME } from ${JSON.stringify(pathToFileURL(join(installed, 'dist/bridge/claudeCodeHarnessManifest.js')).href)};
+    const launchCwd = mkdtempSync(join(tmpdir(), 'babel-consumer-bridge-'));
+    const configHome = mkdtempSync(join(tmpdir(), 'babel-consumer-bridge-cfg-'));
+    writeFileSync(join(configHome, CLAUDE_HARNESS_MANIFEST_FILENAME), JSON.stringify({ version: 1, credential_refs: {} }));
+    const spec = buildClaudeCodeLaunchPolicySpec('command-code-goat');
+    const childEnv = buildClaudeCodePolicyProofChildEnv({ configHome, providerProfile: 'command-code-goat', launchSpec: spec });
+    const resolved = await resolveSettingsInIsolatedChildEnv({ cwd: launchCwd, projectConfigRoot: launchCwd, childEnv, launchSpec: spec });
+    assert.ok(resolved.sources.some((s) => s.source === 'managed'));
+  `)
+  command(process.execPath, [bridgePackagingProbe], { env: guardedEnv, timeout: 120000 })
   assert.ok(!existsSync(join(prefix, 'node_modules/tsx')), 'No development runner installed')
   const original = treeDigest(installed)
   readonly(installed, true)

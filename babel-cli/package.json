@@ -227,6 +227,7 @@
     "dist/**/*.js",
     "dist/bridge/opencode-acp-source-pin.json",
     "dist/bridge/claude-agent-sdk-pin.json",
+    "dist/bridge/claudeCodeIsolatedResolveWorker.mjs",
     "dist/authority/ownedFileAssertion.windows.ps1",
     "dist/voice/audio-capture-worker.mjs",
     "dist/voice/vad-worker.mjs",
