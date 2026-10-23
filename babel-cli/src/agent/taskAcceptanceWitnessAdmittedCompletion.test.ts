@@ -4,9 +4,9 @@
  */
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import test, { type TestContext } from 'node:test'
 import {
   createCriterionCompletionServiceV1,
@@ -97,6 +97,19 @@ function writeDualWitnessTree(root: string, betaExitsZero = true) {
   writeFileSync(join(root, 'src', 'fix.ts'), 'export const v = 1;\n')
 }
 
+/** Portable npm run spawn (avoids EINVAL from direct npm.cmd on Windows). */
+function npmRunHostInvocation(script: string): { executable: string; args: string[] } {
+  const npmExecPath = process.env.npm_execpath
+  if (npmExecPath && existsSync(npmExecPath)) {
+    return { executable: process.execPath, args: [npmExecPath, 'run', script] }
+  }
+  const bundledNpmCli = join(dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js')
+  if (existsSync(bundledNpmCli)) {
+    return { executable: process.execPath, args: [bundledNpmCli, 'run', script] }
+  }
+  return { executable: 'npm', args: ['run', script] }
+}
+
 function createRealNpmRunExecutor(root: string) {
   return createToolExecutor({
     executeTool: async (request) => {
@@ -104,12 +117,13 @@ function createRealNpmRunExecutor(root: string) {
       const command = request.command ?? ''
       assert.match(command, /^npm run test:(alpha|beta)$/)
       const script = command.slice('npm run '.length)
-      const npmCmd = process.platform === 'win32' ? 'npm.cmd' : 'npm'
-      const child = spawnSync(npmCmd, ['run', script], {
+      const { executable, args } = npmRunHostInvocation(script)
+      const child = spawnSync(executable, args, {
         cwd: root,
         encoding: 'utf8',
         env: { ...process.env },
         timeout: 30_000,
+        windowsHide: true,
       })
       assert.ifError(child.error)
       return {
