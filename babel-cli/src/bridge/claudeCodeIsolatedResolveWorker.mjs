@@ -16,6 +16,9 @@ for (const [key, value] of Object.entries(input.childEnv ?? {})) {
   if (typeof value === 'string') process.env[key] = value;
 }
 
+// SDK 0.3.304 resolveSettings accepts cwd only (no projectConfigRoot). When
+// settingSources is [], project/local tiers are omitted; projectConfigRoot on
+// query() is enforced separately via admission root-parity fail-closed.
 const resolved = await resolveSettings({
   cwd: input.cwd,
   settingSources: input.settingSources ?? [],

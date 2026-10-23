@@ -2,6 +2,10 @@ import { createHash } from 'node:crypto';
 
 import { auditClaudeConfigHomePolicyNeutral } from './claudeCodeConfigHomePolicy.js';
 import { resolveSettingsInIsolatedChildEnv } from './claudeCodeIsolatedResolveSubprocess.js';
+import {
+  assertClaudeResolveSettingsRootParity,
+  verifyClaudeManagedPolicySources,
+} from './claudeCodePolicyLaunchGates.js';
 import type { ClaudeCodeLaunchPolicySpec } from './claudeCodePolicyEvidence.js';
 
 const ALLOWED_EFFECTIVE_SECURITY_KEYS = new Set([
@@ -46,8 +50,8 @@ export interface ClaudeIsolatedPolicyResolveInput {
   projectPolicyRoot: string;
   configHome: string;
   launchSpec: ClaudeCodeLaunchPolicySpec;
-  /** Non-secret child env baseline (suppressors/markers/endpoint); copied, not process.env. */
-  childEnvBaseline: Record<string, string>;
+  /** Live-shaped proof env (allowlisted PATH/HOME/… + suppressors + CLAUDE_CONFIG_DIR). */
+  proofChildEnv: Record<string, string>;
 }
 
 export interface ClaudeIsolatedPolicyResolveResult {
@@ -64,6 +68,26 @@ export interface ClaudeIsolatedPolicyResolveResult {
 export async function resolveClaudeCodePolicyIsolated(
   input: ClaudeIsolatedPolicyResolveInput,
 ): Promise<ClaudeIsolatedPolicyResolveResult> {
+  const rootParity = assertClaudeResolveSettingsRootParity({
+    launchCwd: input.launchCwd,
+    projectPolicyRoot: input.projectPolicyRoot,
+    settingSources: input.launchSpec.settingSources,
+  });
+  if (!rootParity.ok) {
+    return {
+      ok: false,
+      digest: sha256(
+        stableJson({
+          phase: 'root_parity',
+          launchCwd: input.launchCwd,
+          projectPolicyRoot: input.projectPolicyRoot,
+          detail: rootParity.detail,
+        }),
+      ),
+      detail: rootParity.detail,
+    };
+  }
+
   const configAudit = auditClaudeConfigHomePolicyNeutral(input.configHome);
   if (!configAudit.ok) {
     return {
@@ -80,10 +104,7 @@ export async function resolveClaudeCodePolicyIsolated(
     };
   }
 
-  const childEnv = {
-    ...input.childEnvBaseline,
-    CLAUDE_CONFIG_DIR: input.configHome,
-  };
+  const childEnv = { ...input.proofChildEnv };
   const rootsBinding = {
     launchCwd: input.launchCwd,
     projectConfigRoot: input.projectPolicyRoot,
@@ -117,25 +138,21 @@ export async function resolveClaudeCodePolicyIsolated(
     };
   }
 
-  const projection = projectSecurityProjection(filtered);
-  const sourceHashes = hashSources(sourceList);
-
-  const connectors = filtered.disableClaudeAiConnectors;
-  const strictMcp = filtered.strictMcpConfig;
-  const sandbox = (filtered.sandbox as { enabled?: boolean } | undefined)?.enabled;
-  const strictMcpRequired = input.launchSpec.managedSettings.strictMcpConfig === true;
-  if (
-    connectors !== true ||
-    sandbox !== true ||
-    (strictMcpRequired && strictMcp === false)
-  ) {
+  const managedCheck = verifyClaudeManagedPolicySources({
+    sources: sourceList,
+    filtered,
+    launchSpec: input.launchSpec,
+  });
+  if (!managedCheck.ok) {
     return {
       ok: false,
-      digest: sha256(stableJson({ launchOpts, projection, sourceHashes })),
-      detail: 'Baseline sandbox/deny/connectors restrictions not satisfied in effective settings',
-      sourceHashes,
+      digest: sha256(stableJson({ launchOpts, detail: managedCheck.detail })),
+      detail: managedCheck.detail,
     };
   }
+
+  const projection = projectSecurityProjection(filtered);
+  const sourceHashes = hashSources(sourceList);
 
   const mode = (filtered.permissions as { defaultMode?: string } | undefined)?.defaultMode;
   if (mode && mode !== 'default' && mode !== 'plan') {
@@ -153,7 +170,9 @@ export async function resolveClaudeCodePolicyIsolated(
       sourceHashes,
       launchOpts,
       rootsBinding,
-      sdkIdentity: 'isolatedChildEnvResolveSettings+configHomeAudit',
+      managedSourceIdentity: managedCheck.managedSourceIdentity,
+      pinnedManagedDigest: managedCheck.pinnedManagedDigest,
+      sdkIdentity: 'isolatedChildEnvResolveSettings+configHomeAudit+managedSourceIdentity',
     }),
   );
 

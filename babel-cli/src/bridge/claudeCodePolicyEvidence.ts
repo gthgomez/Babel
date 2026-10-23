@@ -5,7 +5,7 @@ import {
   resolveClaudeCodePolicyIsolated,
   type ClaudeIsolatedPolicyResolveInput,
 } from './claudeCodeIsolatedPolicyResolve.js';
-import { profileChildEnvMarkers } from './claudeCodeProfileCatalog.js';
+import { buildClaudeCodePolicyProofChildEnv } from './claudeCodeChildEnv.js';
 
 export interface ClaudeCodeLaunchPolicySpec {
   settingSources: [];
@@ -69,11 +69,12 @@ export async function resolveClaudeCodePolicyEvidence(input: {
   resolveSettings?: ClaudeResolveSettingsFn;
 }): Promise<{ ok: boolean; digest: string; detail?: string }> {
   const spec = buildClaudeCodeLaunchPolicySpec(input.provider_profile);
-  const childEnvBaseline = {
-    ...spec.envSuppressors,
-    ...profileChildEnvMarkers(input.provider_profile),
-    ...(input.endpoint_env ?? {}),
-  };
+  const proofChildEnv = buildClaudeCodePolicyProofChildEnv({
+    configHome: input.config_root,
+    providerProfile: input.provider_profile,
+    launchSpec: spec,
+    ...(input.endpoint_env ? { endpointEnv: input.endpoint_env } : {}),
+  });
   const resolveFn = input.resolveSettings ?? defaultClaudeResolveSettings;
   try {
     const resolved = await resolveFn({
@@ -81,7 +82,7 @@ export async function resolveClaudeCodePolicyEvidence(input: {
       projectPolicyRoot: input.project_policy_root,
       configHome: input.config_root,
       launchSpec: spec,
-      childEnvBaseline,
+      proofChildEnv,
     });
     if (!resolved.ok) {
       return {

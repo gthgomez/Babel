@@ -14,6 +14,12 @@ export const CLAUDE_HOST_BROKERED_TOOLS = [
   'Edit',
 ] as const;
 
+const BROKERED_SET = new Set<string>(CLAUDE_HOST_BROKERED_TOOLS);
+
+export function isClaudeHostBrokeredToolName(toolName: string): boolean {
+  return BROKERED_SET.has(toolName);
+}
+
 function sha256Utf8(text: string): string {
   return createHash('sha256').update(text, 'utf8').digest('hex');
 }

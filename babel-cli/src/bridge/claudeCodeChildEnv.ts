@@ -1,3 +1,4 @@
+import type { ClaudeHarnessProviderProfile } from './claudeCodeAdmission.js';
 import type { ClaudeCodeAdmittedSession } from './claudeCodeAdmission.js';
 import type { ClaudeCodeLaunchPolicySpec } from './claudeCodePolicyEvidence.js';
 import { profileChildEnvMarkers } from './claudeCodeProfileCatalog.js';
@@ -36,6 +37,30 @@ function allowlistedHostPathEnv(hostEnv: NodeJS.ProcessEnv = process.env): Recor
     if (typeof value === 'string' && value.length > 0) env[name] = value;
   }
   return env;
+}
+
+/**
+ * Non-credential child env for admission policy proof (same allowlisted host path
+ * keys as live turns). Never spreads raw process.env.
+ */
+export function buildClaudeCodePolicyProofChildEnv(input: {
+  configHome: string;
+  providerProfile: ClaudeHarnessProviderProfile;
+  launchSpec: ClaudeCodeLaunchPolicySpec;
+  hostEnv?: NodeJS.ProcessEnv;
+  endpointEnv?: Record<string, string>;
+}): Record<string, string> {
+  const base = allowlistedHostPathEnv(input.hostEnv);
+  for (const name of INHERITED_AUTH_STRIP) {
+    delete base[name];
+  }
+  return {
+    ...base,
+    ...input.launchSpec.envSuppressors,
+    ...profileChildEnvMarkers(input.providerProfile),
+    ...(input.endpointEnv ?? {}),
+    CLAUDE_CONFIG_DIR: input.configHome,
+  };
 }
 
 /**

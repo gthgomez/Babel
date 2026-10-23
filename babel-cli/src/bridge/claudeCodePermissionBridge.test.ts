@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { bridgeClaudeCanUseTool } from './claudeCodePermissionBridge.js';
+import {
+  bridgeClaudeCanUseTool,
+  CLAUDE_HOST_BROKERED_TOOLS,
+  isClaudeHostBrokeredToolName,
+} from './claudeCodePermissionBridge.js';
 import { RemoteApprovalBroker } from './remoteApproval.js';
 
 describe('claudeCodePermissionBridge', () => {
@@ -18,6 +22,30 @@ describe('claudeCodePermissionBridge', () => {
     });
     assert.equal(decision.behavior, 'deny');
     assert.match(decision.message ?? '', /unknown_tool_representation/);
+    assert.equal(broker.listPending('t1').length, 0);
+  });
+
+  it('only brokers the bounded host tool surface', () => {
+    assert.equal(isClaudeHostBrokeredToolName('Read'), true);
+    assert.equal(isClaudeHostBrokeredToolName('WebFetch'), false);
+    assert.equal(CLAUDE_HOST_BROKERED_TOOLS.length, 6);
+  });
+
+  it('denies representative side-effectful SDK tools without broker pending', async () => {
+    const broker = new RemoteApprovalBroker();
+    for (const toolName of ['WebFetch', 'Task', 'NotebookEdit', 'mcp__foo__bar']) {
+      const decision = await bridgeClaudeCanUseTool({
+        req: { toolName, input: {} },
+        cwd: '/tmp',
+        threadId: 't1',
+        turnId: 'turn-1',
+        broker,
+        generation: 1,
+        activeGeneration: () => 1,
+      });
+      assert.equal(decision.behavior, 'deny');
+      assert.match(decision.message ?? '', /unknown_tool_representation/);
+    }
     assert.equal(broker.listPending('t1').length, 0);
   });
 
