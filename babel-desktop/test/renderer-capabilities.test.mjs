@@ -8,16 +8,16 @@ import {parseTranscriptMessages} from '../native/sessions.mjs';
 
 const html = readFileSync(new URL('../dist/index.html', import.meta.url), 'utf8');
 
-async function renderer(diagnostics, body, handshake = 'ready',scope=null,draftSeed=null) {
+async function renderer(diagnostics, body, handshake = 'ready',scope=null,draftSeed=null,infoOverride=null) {
   const browser = await chromium.launch({headless: true, executablePath: process.env.CHROMIUM_EXECUTABLE});
   try {
     const page = await browser.newPage();
     const errors = [];
     page.on('pageerror', error => errors.push(error.message));
-    await page.evaluate(({diagnostics, handshake,scope,draftSeed}) => {
+    await page.evaluate(({diagnostics, handshake,scope,draftSeed,infoOverride}) => {
       window.__runs = [];
       window.__projectReads=[];
-      window.__info = {packaged: true, ready: true, officialCliReady: true, projectName: 'fixture-project', diagnostics,...(scope?{projectRoot:null,projectName:null,projectAuthority:scope}:{})};
+      window.__info = {packaged: true, ready: true, officialCliReady: true, projectName: 'fixture-project', diagnostics,...(scope?{projectRoot:null,projectName:null,projectAuthority:scope}:{}),...(infoOverride??{})};
       window.babelDesktop = {
         getInfo: async () => {
           if (handshake === 'rejected') throw new Error('Fixture handshake rejected');
@@ -25,6 +25,9 @@ async function renderer(diagnostics, body, handshake = 'ready',scope=null,draftS
           return window.__info;
         },
         refreshDiagnostics: async () => window.__info,
+        trustProject: async () => {window.__info={...window.__info,projectAuthority:{...window.__info.projectAuthority,trusted:true}};return window.__info;},
+        revokeProjectTrust: async () => {window.__info={...window.__info,projectAuthority:{...window.__info.projectAuthority,trusted:false}};return window.__info;},
+        chooseProject: async () => window.__info,
         listDirectory: async () => {window.__projectReads.push('directory');return [{name: 'README.md', type: 'file'}];},
         listSessions: async () => ({sessions: [{id: 'history', title: 'Saved history fixture'}], total: 1}),
         readProviderRoute: async () => ({provider:'openrouter',model:'fixture-openrouter'}),
@@ -50,7 +53,7 @@ async function renderer(diagnostics, body, handshake = 'ready',scope=null,draftS
         window.babelDesktop.onPrepareDraftClose=callback=>{window.__prepareDraftClose=callback;};
         window.babelDesktop.completeDraftClose=async receipt=>{window.__draftCloseReceipt=receipt;};
       }
-    }, {diagnostics, handshake,scope,draftSeed});
+    }, {diagnostics, handshake,scope,draftSeed,infoOverride});
     await page.setContent(html);
     if (handshake === 'ready') await page.waitForFunction(()=>!document.querySelector('#status-detail').textContent.includes('Connecting'));
     await body(page);
@@ -166,12 +169,104 @@ test('explicit packaged conversation binding admits Chat without project reads o
     assert.equal(await page.locator('.top-tab[data-mode="plan"]').isDisabled(),true);
     assert.equal(await page.locator('.top-tab[data-mode="deep"]').isDisabled(),true);
     assert.deepEqual(await page.evaluate(()=>window.__projectReads),[]);
+    assert.match(await page.locator('.empty-state').innerText(),/No project is open\. You can ask a general question, or open a project for code questions\./);
+    assert.deepEqual(await page.locator('.empty-actions button').evaluateAll(buttons=>buttons.map(button=>button.dataset.action)),['open-project']);
+    assert.equal(await page.locator('.empty-state [data-action="draft"]').count(),0);
     await page.locator('#composer-input').fill('Hello without a project');
     await page.keyboard.press('Enter');
     await page.waitForFunction(()=>window.__runs.length===1);
     assert.equal(await page.evaluate(()=>window.__runs[0].task),'Hello without a project');
   },'ready',{scope:'conversation',identity:null,trusted:false});
 });
+
+test('empty state offers one repository starter only for a known trusted project',async()=>{
+  await renderer({ready:true},async page=>{
+    await connect(page);
+    assert.doesNotMatch(await page.locator('.empty-state').innerText(),/Send a task/);
+    assert.equal(await page.locator('.empty-state [data-action="draft"]').count(),0);
+    assert.equal(await page.locator('.empty-state [data-action="connection"]').count(),1);
+  });
+  await renderer({ready:true},async page=>{
+    await connect(page);
+    assert.doesNotMatch(await page.locator('.empty-state').innerText(),/No project is open/);
+    const starters=page.locator('.empty-state [data-action="draft"]');
+    assert.equal(await starters.count(),1);
+    assert.equal(await starters.innerText(),'Trace a behavior');
+    await starters.click();
+    assert.match(await page.locator('#composer-input').inputValue(),/^Using this repository's README and code, trace one small documented behavior.*Do not change files, install dependencies, or run tests or builds\./s);
+    assert.equal(await page.evaluate(()=>document.activeElement?.id),'composer-input');
+    assert.deepEqual(await page.evaluate(()=>window.__runs),[]);
+  },'ready',null,null,{projectRoot:'/fixture-project',projectAuthority:{scope:'project',trusted:true,identity:{branch:'main'}}});
+  await renderer({ready:true},async page=>{
+    await connect(page);
+    assert.doesNotMatch(await page.locator('.empty-state').innerText(),/Send a task/);
+    assert.equal(await page.locator('.empty-state [data-action="draft"]').count(),0);
+  },'ready',null,null,{projectRoot:'/fixture-project',projectAuthority:{scope:'project',trusted:false,identity:null,reason:'Not trusted'}});
+});
+
+const projectInfo=trusted=>({projectRoot:'/fixture-project',projectAuthority:{scope:'project',trusted,identity:{branch:'main'}}});
+async function changeTrust(page,trust){
+  await page.locator('[data-action="connection"]').first().click();
+  await page.locator(`#dialog [data-action="${trust?'trust-project':'revoke-trust'}"]`).click();
+  await page.locator(`#dialog [data-action="${trust?'revoke-trust':'trust-project'}"]`).waitFor();
+  await page.keyboard.press('Escape');
+}
+test('empty guidance follows both trust transitions without reconnecting and retains the composer',async()=>renderer({ready:true},async page=>{
+  await connect(page);
+  await page.locator('#composer-input').fill('Keep my unsent draft');
+  await page.locator('#composer-input').evaluate(input=>{input.focus();input.setSelectionRange(3,8);});
+  const selection=await page.locator('#composer-input').evaluate(input=>[input.selectionStart,input.selectionEnd]);
+  await changeTrust(page,true);
+  assert.equal(await page.locator('.empty-actions [data-action="draft"]').count(),1);
+  assert.equal(await page.locator('#composer-input').inputValue(),'Keep my unsent draft');
+  assert.deepEqual(await page.locator('#composer-input').evaluate(input=>[input.selectionStart,input.selectionEnd]),selection);
+  await changeTrust(page,false);
+  assert.equal(await page.locator('.empty-actions [data-action="draft"]').count(),0);
+  assert.equal(await page.locator('.empty-actions [data-action="connection"]').count(),1);
+  assert.equal(await page.locator('#composer-input').inputValue(),'Keep my unsent draft');
+  assert.deepEqual(await page.evaluate(()=>window.__runs),[]);
+},'ready',null,null,projectInfo(false)));
+
+test('same-project diagnostics refreshes empty guidance without disturbing focused input',async()=>renderer({ready:true},async page=>{
+  await connect(page);
+  await page.locator('#composer-input').fill('Still drafting');
+  await page.evaluate(()=>{window.__info={...window.__info,ready:false};});
+  await page.locator('[data-action="connection"]').first().click();
+  await page.locator('#dialog [data-action="refresh-diagnostics"]').click();
+  await page.locator('.empty-actions [data-action="connection"]').waitFor();
+  await page.keyboard.press('Escape');
+  assert.equal(await page.locator('.empty-actions [data-action="draft"]').count(),0);
+  assert.equal(await page.locator('#composer-input').inputValue(),'Still drafting');
+},'ready',null,null,projectInfo(true)));
+
+test('project switching selects current guidance including conversation-only state',async()=>renderer({ready:true},async page=>{
+  await connect(page);
+  for(const info of [
+    {...projectInfo(true),projectRoot:'/second-project',projectName:'second-project'},
+    {projectRoot:null,projectName:null,projectAuthority:{scope:'conversation',trusted:false,identity:null}},
+    {...projectInfo(false),projectRoot:'/third-project',projectName:'third-project'},
+  ]){
+    await page.evaluate(info=>{window.__info={...window.__info,...info};},info);
+    await page.locator('[data-action="open-project"]').first().click();
+    await page.keyboard.press('Escape');
+    if(info.projectAuthority.scope==='conversation')assert.match(await page.locator('.empty-state').innerText(),/No project is open/);
+    else assert.equal(await page.locator('.empty-actions [data-action="draft"]').count(),info.projectAuthority.trusted?1:0);
+  }
+  assert.deepEqual(await page.evaluate(()=>window.__runs),[]);
+},'ready',null,null,projectInfo(false)));
+
+test('trust changes preserve populated history nodes, reading position and draft',async()=>renderer({ready:true},async page=>{
+  await connect(page);
+  await page.locator('#sessions .session-button').filter({hasText:'Saved history fixture'}).click();
+  await page.locator('#composer-input').fill('Draft alongside history');
+  await page.locator('#conversation').evaluate(element=>{element.scrollTo({top:220,behavior:'instant'});window.__historyNode=element.querySelector('.message');window.__historyHtml=element.innerHTML;window.__historyTop=element.scrollTop;});
+  for(const trust of [false,true]){
+    await changeTrust(page,trust);
+    assert.equal(await page.locator('#conversation').evaluate(element=>element.querySelector('.message')===window.__historyNode&&element.innerHTML===window.__historyHtml&&element.scrollTop===window.__historyTop),true);
+    assert.equal(await page.locator('#composer-input').inputValue(),'Draft alongside history');
+  }
+  assert.deepEqual(await page.evaluate(()=>window.__runs),[]);
+},'ready',null,null,projectInfo(true)));
 
 test('archive search opens a matching earlier page from a session outside the sidebar',async()=>renderer({ready:true},async page=>{
   await connect(page);
