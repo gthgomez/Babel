@@ -46,6 +46,6 @@ Authorized local-main sync: fetch/freeze SHA; clean tracked tree/index; no untra
 
 ## References
 
-Task refs: product `PROJECT_CONTEXT.md`; CLI `babel-cli/PROJECT_CONTEXT.md`/source; layout `STRUCTURE.md`/workflows; invocation `INTEGRATION.md`/catalog/layers; router/OS/memory catalog contracts, `LLM_COLLABORATION_SYSTEM/RULES_CORE.md`/`RULES_GUARD.md`; harness normative `docs/architecture/HARNESS_ARCHITECTURE_V1.md`, explanatory `HARNESS_OVERVIEW.md`; Git hardware guide above/`docs/BABEL_PR_REVIEW.md`; batch dispatch `docs/guides/AGENT_BATCH_HANDOFF.md`; operations `.agents/skills/*/SKILL.md` (workspace helpers need installation/config).
+Task refs: product `PROJECT_CONTEXT.md`; CLI `babel-cli/PROJECT_CONTEXT.md`/source; layout `STRUCTURE.md`/workflows; invocation `INTEGRATION.md`/catalog/layers; router/OS/memory catalog contracts, `LLM_COLLABORATION_SYSTEM/RULES_CORE.md`/`RULES_GUARD.md`; harness normative `docs/architecture/HARNESS_ARCHITECTURE_V1.md`, explanatory `HARNESS_OVERVIEW.md`; Git hardware guide above/`docs/BABEL_PR_REVIEW.md`; operations `.agents/skills/*/SKILL.md` (workspace helpers need installation/config).
 
 Clean clones build independently. Gitignored `WORKSPACE_CONTEXT.local.md`: optional unpublished routing data, never authority/prerequisite. Consumers own instructions. Search affected sources excluding `runs/`/`artifacts/`/`runtime/`/`node_modules/`/`dist/`. Use actual host tools/syntax/Bash forward-slash paths; no assumed vendor APIs.
