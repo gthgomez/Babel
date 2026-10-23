@@ -23,6 +23,7 @@ const coveredPaths = [
   "babel-cli/src/authority/authorityMapping.test.ts",
   "babel-cli/src/authority/capabilities.ts",
   "babel-cli/src/authority/ciRepair.ts",
+  "babel-cli/src/authority/commandDecoder.nodeTest.test.ts",
   "babel-cli/src/authority/commandDecoder.ts",
   "babel-cli/src/authority/commandSpec.test.ts",
   "babel-cli/src/authority/commandSpec.ts",

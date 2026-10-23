@@ -4,6 +4,23 @@ import assert from 'node:assert/strict'
 import { reviewedSkip, skipPolicySha256 } from '../../babel-cli/scripts/required_skip_policy.mjs'
 
 const windows = { path: 'src/ui/terminalProbe.test.ts', name: 'Windows Terminal defaults dec2026Sync to false', reason: 'Windows-specific fixture' }
+test('native directory sharing exclusions bind only the two Windows contracts off Windows', () => {
+  for (const name of [
+    'Windows directory anchors prevent leaf and ancestor rename until released',
+    'Windows directory anchors refuse an already open DELETE handle',
+  ]) {
+    const record = { path: 'src/executor/effectDirectoryAnchors.test.ts', name, reason: 'Windows native directory sharing requires Windows' }
+    for (const platform of ['linux', 'darwin']) {
+      assert.ok(reviewedSkip(record, platform, 'unit', true))
+      assert.equal(reviewedSkip(record, platform, 'chat-truth', true), null)
+      for (const override of [{ path: 'src/other.test.ts' }, { name: 'new title' }, { reason: 'optional' }]) {
+        assert.equal(reviewedSkip({ ...record, ...override }, platform, 'unit', true), null)
+      }
+    }
+    assert.equal(reviewedSkip(record, 'win32', 'unit', true), null)
+  }
+})
+
 test('skip policy binds exact source, name, reason, platform and suite', () => {
   assert.ok(reviewedSkip(windows, 'linux', 'unit', true))
   assert.match(skipPolicySha256, /^[a-f0-9]{64}$/)

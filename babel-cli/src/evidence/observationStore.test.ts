@@ -313,6 +313,32 @@ test('data policy denial writes nothing and never archives denied contents', () 
   }
 });
 
+test('admitted read provenance only permits successful stdout source bytes', t => {
+  const root = tempRoot('admitted-read');
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const content = '// credential store: DENY_CREDENTIAL_READ [AUTONOMY_DENIED:CLASS_D]';
+  for (const execution_status of ['failed', 'denied', 'cancelled', 'unknown', 'indeterminate'] as const) {
+    assert.equal(captureApprovedObservation(baseInput({
+      admitted_project_read: true, execution_status, sections: [{ channel: 'stdout', content }],
+    }), storage(root)).status, 'blocked', execution_status);
+  }
+  for (const channel of ['stderr', 'structured', 'summary', 'checkpoint'] as const) {
+    assert.equal(captureApprovedObservation(baseInput({
+      admitted_project_read: true, sections: [{ channel, content }],
+    }), storage(root)).status, 'blocked', channel);
+  }
+  assert.equal(listStoredPayloadObjects(storage(root)).length, 0);
+  assert.equal(captureApprovedObservation(baseInput({
+    admitted_project_read: true, sections: [{ channel: 'stdout', content }],
+    data_policy: { approved: false, policy_version: 'policy-v1', redaction_policy_version: 'redaction-v1' },
+  }), storage(root)).status, 'blocked');
+  const captured = captureApprovedObservation(baseInput({
+    admitted_project_read: true, sections: [{ channel: 'stdout', content }],
+  }), storage(root));
+  assert.equal(captured.status, 'captured');
+  assert.equal(listStoredPayloadObjects(storage(root)).length, 1);
+});
+
 test('per-object limit blocks without writing', () => {
   const root = tempRoot('object-limit');
   try {

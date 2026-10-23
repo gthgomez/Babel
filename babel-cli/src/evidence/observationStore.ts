@@ -357,6 +357,8 @@ export interface CaptureApprovedObservationInputV1 {
   execution_status: ObservationExecutionStatusV1;
   permitted_principals: readonly string[];
   data_policy: ObservationDataPolicyV1;
+  /** Host-only provenance from a successful, path-admitted project read. */
+  admitted_project_read?: true;
   snapshot_ref?: string;
   coverage_ref?: string;
   /** The currently visible approved observation to retain on any failure. */
@@ -801,9 +803,11 @@ export function captureApprovedObservation(
 
   for (const section of input.sections) {
     const { bytes } = sectionBytes(section);
-    // The denial detector is applied to every string section, not just stderr,
-    // so denied content cannot slip into model-readable storage via stdout.
-    if (typeof section.content === 'string' && isCredentialDeniedOutput(section.content)) {
+    // Source code may quote these diagnostics. Only a successful admitted read
+    // can distinguish those bytes from a denial; legacy callers stay conservative.
+    const admittedRead = input.admitted_project_read === true &&
+      input.execution_status === 'succeeded' && section.channel === 'stdout';
+    if (!admittedRead && typeof section.content === 'string' && isCredentialDeniedOutput(section.content)) {
       return blocked(
         'credential-denied output is never archived under an approved capture',
         'data_policy',

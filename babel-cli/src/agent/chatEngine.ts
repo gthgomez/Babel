@@ -30,6 +30,7 @@ import {
   type ChatProviderUsageEffects,
 } from "./chatEngineProviderRuntime.js";
 import type {
+  ChatActionResult,
   TaskIntent,
   ChatAllowanceGrant,
   ChatTaskAllowanceSnapshot,
@@ -410,6 +411,7 @@ import { RepetitionDetector } from "./repetitionDetector.js";
 import { captureThought } from "./thoughtCapture.js";
 import { persistPreambleBudget } from "./preambleBudgetDiagnostics.js";
 import {
+  captureCompletionWorkspaceRevisionHash,
   prepareKernelVerifierInput,
   resolveEngineRequiredVerifiers,
   restorePersistedVerifierEvidence,
@@ -1137,10 +1139,9 @@ export class ChatEngine {
           this.parity.sessionEvents.events,
         );
         if (paths.length > 0) {
-          currentWorkspaceRevisionHash = RevisionManager.computeRevisionSync(
-            requireProjectRoot(this.options),
-            paths,
-          ).compositeTreeHash;
+          currentWorkspaceRevisionHash = captureCompletionWorkspaceRevisionHash(
+            this.options, paths, this.lastVerifierReceipt,
+          );
         }
       } catch {
         /* best-effort */
@@ -3372,7 +3373,7 @@ export class ChatEngine {
 
   private captureP11Observation(
     action: ChatToolAction,
-    result: { index: number; observation: string },
+    result: ChatActionResult,
     meta: { index: number; idempotencyKey: string; ownerGeneration: number },
   ): void {
     this.p11Authority.captureP11Observation(action, result, meta);
@@ -3822,7 +3823,7 @@ export class ChatEngine {
     toolContext: ToolContext,
     callbacks: ChatCallbacks,
     meta: { index: number; idempotencyKey?: string; ownerGeneration?: number },
-  ): Promise<{ index: number; observation: string; stop?: boolean }> {
+  ): Promise<ChatActionResult> {
     return this.actionExecutor.executeOneAction(
       action,
       toolContext,

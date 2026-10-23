@@ -12,6 +12,7 @@ import {
   resolveChatTaskClass,
   resolveChatTaskTune,
   resolveTaskShape,
+  stripFencedCodeBodies,
 } from './chatTaskClass.js';
 import { resolveChatEngineLimits, isSweChatProfileEnabled } from './chatEngineLimits.js';
 
@@ -47,6 +48,51 @@ describe('chatTaskClass', () => {
     const mixed = 'Fix the implementation. Do not edit the tests. Do not change any files.';
     assert.equal(resolveTaskShape(mixed, 'CHANGE').operation, 'READ_ONLY');
     assert.equal(resolveTaskShape('Fix the implementation. Do not edit the tests.', 'READ_ONLY').operation, 'READ_ONLY');
+  });
+
+  test('historical repair constraints protect named inputs without cancelling the repair', () => {
+    for (const objects of ['regression tests', 'regression tests or unrelated code',
+      'the regression tests, permissions, verification gates, dependencies, or unrelated code',
+      'regression tests, permission or verification gates, provider accounting, dependencies, or unrelated code']) {
+      const constraint = `Do not change ${objects}.`;
+      assert.equal(hasExplicitEditDenial(`Fix the implementation. ${constraint}`), false, objects);
+      assert.equal(resolveTaskShape(`Fix the implementation. ${constraint}`, 'CHANGE').operation, 'MUTATING', objects);
+      assert.equal(resolveTaskShape(constraint).operation, 'READ_ONLY', objects);
+    }
+    for (const objects of ['regression tests or any files', 'regression tests and code',
+      'unrelated code and the entire filesystem', 'permissions or anything else',
+      'verification gates beyond this point', 'provider accounting except the implementation']) {
+      const task = `Fix the implementation. Do not change ${objects}.`;
+      assert.equal(hasExplicitEditDenial(task), true, objects);
+      assert.equal(resolveTaskShape(task, 'CHANGE').operation, 'READ_ONLY', objects);
+    }
+  });
+
+  test('fence stripping respects block delimiters and preserves outside instructions', () => {
+    for (const example of ['~~~text~~~\nfix the implementation\n~~~',
+      '```text\n~~~\nfix the implementation\n~~~\n```',
+      '````text\n```\nfix the implementation\n```\n````',
+      '```text\nliteral ``` marker\nfix the implementation\n```']) {
+      const result = stripFencedCodeBodies(`Inspect source.\n${example}\nUpdate main.js.`);
+      assert.doesNotMatch(result, /fix the implementation/, example);
+      assert.match(result, /Inspect source\./, example);
+      assert.match(result, /Update main\.js\./, example);
+    }
+    assert.equal(stripFencedCodeBodies('Read ```fix``` and ~~~write~~~ examples.'), 'Read   and   examples.');
+  });
+
+  test('fence stripping keeps Markdown line, container and inline boundaries', () => {
+    for (const example of ['```text\n\t```\nfix the implementation\n```',
+      '```text\n> ```\nfix the implementation\n```',
+      '> ```text\n> fix the implementation\n> ```',
+      '- ```text\n  fix the implementation\n  ```']) {
+      const result = stripFencedCodeBodies(`Inspect source.\n${example}\n\nUpdate main.js.`);
+      assert.doesNotMatch(result, /fix the implementation/, example);
+      assert.match(result, /Update main\.js\./, example);
+    }
+    assert.doesNotMatch(stripFencedCodeBodies('```text\rliteral ``` marker\rfix the implementation\r```'), /fix/);
+    assert.match(stripFencedCodeBodies('Fix main.js. Example: ```\nsample\n``` Do not edit files.'), /Do not edit files\./);
+    assert.match(stripFencedCodeBodies('> ```text\n> sample\nFix main.js.'), /Fix main\.js\./);
   });
 
   test('aliases map legacy swe names to general_swe', () => {

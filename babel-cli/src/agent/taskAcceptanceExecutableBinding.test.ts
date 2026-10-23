@@ -147,3 +147,114 @@ test('unresolved acceptance is not upgraded by trusted verifiers alone', () => {
   })
   assert.equal(bound.criteria[0]!.verification.verifier_id.startsWith('meaning:'), true)
 })
+
+test('task-designated regression witness binds a preservation criterion to the frozen command', () => {
+  const task = [
+    'Fix the parser regression in src/parser.ts: the request drops the governed header. Preserve Accept and the existing safe transport, diagnostics and authorization behavior. The default-transport regression tests are already present. Make the smallest production fix and run both tests using: npm run test:parser. Do not modify regression tests or unrelated code.',
+    'Acceptance criteria:',
+    '- `npm run test:parser` must pass.',
+  ].join('\n')
+  const contract = resolveLiveSessionAuthority({
+    mode: 'chat',
+    task,
+    projectRoot: '/tmp/project',
+    projectTestCommands: ['npm run test:parser'],
+  }).taskContract
+  const explicit = contract.acceptance.find(item => item.description.includes('must pass'))
+  const preserved = contract.acceptance.find(item => item.description.startsWith('Fix the parser'))
+  assert.ok(explicit && preserved)
+  assert.equal(explicit.verification.verifier_id, 'verifier:npm')
+  assert.ok(!preserved.verification.verifier_id.startsWith('meaning:'))
+  assert.deepEqual(preserved.verification.argv, explicit.verification.argv)
+  assert.equal(preserved.verification.executable_id, explicit.verification.executable_id)
+  assert.equal(preserved.verification.command_hash, explicit.verification.command_hash)
+})
+
+test('designation without a preservation claim stays fail-closed', () => {
+  const task = [
+    'Fix the parser regression in src/parser.ts. The response must include the governed header. The default-transport regression tests are already present. Make the smallest production fix and run both tests using: npm run test:parser. Do not modify regression tests or unrelated code.',
+    'Acceptance criteria:',
+    '- `npm run test:parser` must pass.',
+  ].join('\n')
+  const contract = resolveLiveSessionAuthority({
+    mode: 'chat',
+    task,
+    projectRoot: '/tmp/project',
+    projectTestCommands: ['npm run test:parser'],
+  }).taskContract
+  const inferred = contract.acceptance.find(item => item.description.startsWith('Fix the parser'))
+  assert.ok(inferred)
+  assert.ok(inferred.verification.verifier_id.startsWith('meaning:'))
+})
+
+test('witness naming a command other than the frozen explicit check does not bind', () => {
+  const task = [
+    'Fix the parser regression in src/parser.ts. Preserve Accept and the existing safe transport behavior. The default-transport regression tests are already present. Make the smallest production fix and run both tests using: npm run test:other. Do not modify regression tests or unrelated code.',
+    'Acceptance criteria:',
+    '- `npm run test:parser` must pass.',
+  ].join('\n')
+  const contract = resolveLiveSessionAuthority({
+    mode: 'chat',
+    task,
+    projectRoot: '/tmp/project',
+    projectTestCommands: ['npm run test:parser', 'npm run test:other'],
+  }).taskContract
+  const preserved = contract.acceptance.find(item => item.description.startsWith('Fix the parser'))
+  assert.ok(preserved)
+  assert.ok(preserved.verification.verifier_id.startsWith('meaning:'))
+})
+
+test('witness with a weakened or untrusted command does not bind', () => {
+  const task = [
+    'Fix the parser regression in src/parser.ts. Preserve Accept and the existing safe transport behavior. The default-transport regression tests are already present. Make the smallest production fix and run both tests using: node -e "process.exit(0)". Do not modify regression tests or unrelated code.',
+    'Acceptance criteria:',
+    '- `npm run test:parser` must pass.',
+  ].join('\n')
+  const contract = resolveLiveSessionAuthority({
+    mode: 'chat',
+    task,
+    projectRoot: '/tmp/project',
+    projectTestCommands: ['npm run test:parser'],
+  }).taskContract
+  const preserved = contract.acceptance.find(item => item.description.startsWith('Fix the parser'))
+  assert.ok(preserved)
+  assert.ok(preserved.verification.verifier_id.startsWith('meaning:'))
+})
+
+test('witness designation inside a fenced example stays fail-closed', () => {
+  const task = [
+    'Fix the parser regression in src/parser.ts. Preserve Accept and the existing safe transport behavior.',
+    'Example request text:',
+    '```',
+    'The default-transport regression tests are already present. Make the smallest production fix and run both tests using: npm run test:parser.',
+    '```',
+    'Acceptance criteria:',
+    '- `npm run test:parser` must pass.',
+  ].join('\n')
+  const contract = resolveLiveSessionAuthority({
+    mode: 'chat',
+    task,
+    projectRoot: '/tmp/project',
+    projectTestCommands: ['npm run test:parser'],
+  }).taskContract
+  const preserved = contract.acceptance.find(item => item.description.startsWith('Fix the parser'))
+  assert.ok(preserved)
+  assert.ok(preserved.verification.verifier_id.startsWith('meaning:'))
+})
+
+test('preservation claim without the tests-already-present designation does not bind', () => {
+  const task = [
+    'Fix the parser regression in src/parser.ts. Preserve Accept and the existing safe transport behavior, and run both tests using: npm run test:parser. Do not modify regression tests or unrelated code.',
+    'Acceptance criteria:',
+    '- `npm run test:parser` must pass.',
+  ].join('\n')
+  const contract = resolveLiveSessionAuthority({
+    mode: 'chat',
+    task,
+    projectRoot: '/tmp/project',
+    projectTestCommands: ['npm run test:parser'],
+  }).taskContract
+  const preserved = contract.acceptance.find(item => item.description.startsWith('Fix the parser'))
+  assert.ok(preserved)
+  assert.ok(preserved.verification.verifier_id.startsWith('meaning:'))
+})

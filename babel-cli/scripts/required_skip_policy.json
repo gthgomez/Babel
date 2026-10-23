@@ -2,6 +2,19 @@
   "schemaVersion": 1,
   "rules": [
     {
+      "id": "windows-directory-sharing",
+      "platforms": ["linux", "darwin"],
+      "reasons": ["Windows native directory sharing requires Windows"],
+      "rationale": "The Windows unit lane executes the native deny-delete directory sharing contracts.",
+      "suites": ["unit"],
+      "files": {
+        "src/executor/effectDirectoryAnchors.test.ts": [
+          "Windows directory anchors prevent leaf and ancestor rename until released",
+          "Windows directory anchors refuse an already open DELETE handle"
+        ]
+      }
+    },
+    {
       "id": "windows-specific",
       "platforms": [
         "linux",

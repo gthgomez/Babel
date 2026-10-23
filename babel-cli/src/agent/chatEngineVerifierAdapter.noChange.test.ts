@@ -7,7 +7,8 @@ import * as fs from 'node:fs'
 import { syncBuiltinESMExports } from 'node:module'
 import { after, describe, mock, test, type TestContext } from 'node:test'
 
-import { captureChatVerifierReceipt, shouldReuseCachedVerifierReceipt } from './chatEngineVerifierAdapter.js'
+import { captureChatVerifierReceipt, captureCompletionWorkspaceRevisionHash, prepareKernelVerifierInput, refreshChatCompletionVerifierCurrency, shouldReuseCachedVerifierReceipt } from './chatEngineVerifierAdapter.js'
+import { evaluateCompletionGateForEngine } from './completionGatePolicy.js'
 import {
   bindChatVerifierReceipt,
   refreshChatVerifierReceiptStalenessSync,
@@ -17,11 +18,106 @@ import {
 const temporaryRoots: string[] = []
 const git = (root: string, args: string[]) => spawnSync('git', args, { cwd: root, encoding: 'utf8' })
 
+test('completion refresh checks each receipt object once per invocation and observes later changes', async () => {
+  const root = project()
+  const file = join(root, 'value.txt')
+  writeFileSync(file, 'original\n')
+  const receipt = await captureChatVerifierReceipt({
+    projectRoot: root, command: 'npm test', exitCode: 0, summary: 'green',
+    mutationPaths: ['value.txt'], stdout: '# tests 1\n# skipped 0',
+  })
+  assert.ok(receipt)
+  const other = structuredClone(receipt)
+  const mutableFs = (fs as unknown as { default: typeof fs }).default
+  const open = mutableFs.openSync
+  let opens = 0
+  mock.method(mutableFs, 'openSync', ((path: fs.PathLike, ...args: unknown[]) => {
+    if (path === file) opens++
+    return (open as (...values: unknown[]) => unknown)(path, ...args)
+  }) as typeof fs.openSync)
+  syncBuiltinESMExports()
+  try {
+    refreshChatCompletionVerifierCurrency({ projectRoot: root }, true, receipt, [])
+    const singleOpens = opens
+    assert.ok(singleOpens > 0, 'the real bound file is checked')
+    opens = 0
+    refreshChatCompletionVerifierCurrency({ projectRoot: root }, true, receipt, [receipt, receipt])
+    assert.equal(opens, singleOpens, 'repeated aliases do not repeat filesystem proof')
+    opens = 0
+    refreshChatCompletionVerifierCurrency({ projectRoot: root }, true, receipt, [other])
+    assert.equal(opens, singleOpens * 2, 'distinct receipt objects each retain their own proof')
+    writeFileSync(file, 'changed\n')
+    refreshChatCompletionVerifierCurrency({ projectRoot: root }, true, receipt, [receipt, other])
+    assert.equal(receipt.stale, true)
+    assert.equal(other.stale, true)
+  } finally { mock.restoreAll(); syncBuiltinESMExports() }
+})
+
 function project(): string {
   const root = mkdtempSync(join(tmpdir(), 'babel-green-nochange-verifier-'))
   temporaryRoots.push(root)
   return root
 }
+
+for (const repositoryScope of [false, true]) {
+  test(`live completion hash uses the verifier's ${repositoryScope ? 'repository' : 'file-set'} scope`, async () => {
+    const root = repositoryScope ? largeProject() : project()
+    writeFileSync(join(root, 'changed.txt'), 'current\n')
+    writeFileSync(join(root, 'dependency.txt'), 'original dependency\n')
+    initializeGit(root)
+    const receipt = await captureChatVerifierReceipt({
+      projectRoot: root, command: 'npm test', exitCode: 0, summary: 'green',
+      mutationPaths: ['changed.txt'], stdout: '# tests 1\n# skipped 0',
+    })
+    assert.ok(receipt)
+    assert.equal(receipt.boundRevision?.scope?.kind, repositoryScope ? 'repository' : 'files')
+    const captured = captureCompletionWorkspaceRevisionHash({ projectRoot: root }, ['changed.txt'], receipt)
+    assert.equal(captured, receipt.boundRevision?.compositeTreeHash)
+    assert.equal(
+      captureCompletionWorkspaceRevisionHash({ projectRoot: root }, [join(root, 'changed.txt')], receipt), captured,
+      'governed mutation events report absolute paths',
+    )
+    const kernel = prepareKernelVerifierInput(receipt, [receipt])
+    const decide = (revisionHash: string | undefined) => evaluateCompletionGateForEngine({
+      turnType: 'completion', taskIntent: 'execute', task: 'Fix changed.txt and run npm test before completing.',
+      taskClass: 'general_swe', lastVerifierReceipt: receipt,
+      executedVerifierLedger: kernel.executedVerifierLedger, verifierEvidenceErrors: kernel.verifierEvidenceErrors,
+      requiredVerifierCommands: ['npm test'], projectTestCommands: ['npm test'],
+      toolCallLog: [
+        { tool: 'write_file', target: 'changed.txt', exit_code: 0, effect_status: 'confirmed_change' },
+        { tool: 'test_run', target: 'npm test', exit_code: 0 },
+      ],
+      ...(revisionHash ? { currentWorkspaceRevisionHash: revisionHash } : {}),
+    })
+    assert.equal(decide(captured), 'allow')
+    writeFileSync(join(root, 'dependency.txt'), 'changed dependency\n')
+    const changed = captureCompletionWorkspaceRevisionHash({ projectRoot: root }, ['changed.txt'], receipt)
+    assert.notEqual(
+      changed, captured,
+      'an unchanged edited file cannot hide a changed verifier input',
+    )
+    assert.equal(decide(changed), 'reject')
+  })
+}
+
+test('live completion hash refuses missing scope and mutations outside a file receipt', async () => {
+  const root = project()
+  writeFileSync(join(root, 'checked.txt'), 'checked\n')
+  const receipt = await captureChatVerifierReceipt({
+    projectRoot: root, command: 'npm test', exitCode: 0, summary: 'green',
+    mutationPaths: ['checked.txt'], stdout: '# tests 1\n# skipped 0',
+  })
+  assert.ok(receipt?.boundRevision)
+  assert.equal(captureCompletionWorkspaceRevisionHash({ projectRoot: root }, ['checked.txt'], null), undefined)
+  const legacy = structuredClone(receipt)
+  delete legacy.boundRevision!.scope
+  assert.equal(captureCompletionWorkspaceRevisionHash({ projectRoot: root }, ['checked.txt'], legacy), undefined)
+  writeFileSync(join(root, 'unbound.txt'), 'another mutation\n')
+  assert.equal(captureCompletionWorkspaceRevisionHash({ projectRoot: root }, ['unbound.txt'], receipt), undefined)
+  assert.equal(captureCompletionWorkspaceRevisionHash({ projectRoot: root }, [join(root, '..', 'outside.txt')], receipt), undefined)
+  assert.throws(() => captureCompletionWorkspaceRevisionHash({ projectRoot: root }, ['../outside.txt'], receipt), /traverses the repository/)
+  assert.throws(() => captureCompletionWorkspaceRevisionHash({}, ['checked.txt'], receipt), /explicit conversation scope or absolute project root/)
+})
 
 function createFileSymlink(t: TestContext, target: string, path: string): boolean {
   try { symlinkSync(target, path, 'file'); return true } catch (error) {

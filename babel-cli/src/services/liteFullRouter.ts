@@ -1,4 +1,4 @@
-import { isScopedEditObject } from '../config/chatTaskClass.js';
+import { isScopedEditObject, stripFencedCodeBodies } from '../config/chatTaskClass.js';
 
 export type LiteFullSelectedLane =
   | 'lite_ask'
@@ -219,7 +219,7 @@ export function inferIntentContract(
   task: string,
   options: { requestedVerb?: LiteFullRouteOptions['requestedVerb']; forceNoWrite?: boolean } = {},
 ): BabelIntentContract {
-  const normalizedTask = task.trim();
+  const normalizedTask = stripFencedCodeBodies(task).trim();
   const requestedVerb = options.requestedVerb;
   const noWriteRequested =
     options.forceNoWrite === true ||

@@ -28,6 +28,66 @@ test('recognizes actionable work attached to a greeting or review request', () =
   }
 })
 
+test('scoped regression and safety preservation clauses retain explicit repair intent', () => {
+  for (const objects of ['regression tests or unrelated code',
+    'the regression tests, permissions, verification gates, dependencies, or unrelated code',
+    'regression tests, permission or verification gates, provider accounting, dependencies, or unrelated code']) {
+    const constraint = `Do not change ${objects}.`
+    assert.equal(classifyChatTaskIntent(`Fix the implementation. ${constraint}`), 'execute', objects)
+    assert.equal(classifyChatTaskIntent(constraint), 'explain', objects)
+    assert.equal(classifyChatTaskIntent(`Explain the failure. ${constraint}`), 'explain', objects)
+    assert.equal(classifyChatTaskIntent(`Fix the implementation. ${constraint} Do not edit files.`), 'explain', objects)
+    assert.equal(classifyChatTaskIntent(`Inspect the source. ${constraint}\n\`\`\`\nfix the implementation\n\`\`\``), 'explain', objects)
+  }
+})
+
+test('scoped prohibitions and fenced repair examples alone stay read-only', () => {
+  for (const example of ['~~~\nfix the implementation\n~~~', '~~~\nfix the implementation',
+    '~~~text~~~\nfix the implementation\n~~~',
+    '````text\n```\nfix the implementation\n```\n````',
+    '~~~~text\n~~~\nfix the implementation\n~~~\n~~~~',
+    '```text\nliteral ``` marker\nfix the implementation\n```']) {
+    const task = `Do not modify permissions.\n${example}`
+    assert.equal(classifyChatTaskIntent(task), 'explain', task)
+    assert.equal(classifyChatTaskIntent(`Fix src/main.js. ${task}`), 'execute', task)
+  }
+})
+
+test('Markdown boundaries cannot hide denials or create repair intent', () => {
+  for (const example of ['```text\n\t```\nfix the implementation\n```',
+    '```text\n> ```\nfix the implementation\n```',
+    '> ```text\n> fix the implementation\n> ```',
+    '- ```text\n  fix the implementation\n  ```',
+    '```text\rliteral ``` marker\rfix the implementation\r```']) {
+    assert.equal(classifyChatTaskIntent(`Inspect source. Do not modify permissions.\n${example}`), 'explain', example)
+  }
+  assert.equal(classifyChatTaskIntent('Fix main.js. Example: ```\nsample\n``` Do not edit files.'), 'explain')
+  assert.equal(classifyChatTaskIntent('Explain this example.\n> ```text\n> sample\n> ```\nFix main.js.'), 'execute')
+})
+
+test('HTML wrappers neither expose fenced repair examples nor hide prose denials', () => {
+  for (const [open, close] of [['<pre>', '</pre>'], ['<!--', '-->'], ['<div>', '</div>']]) {
+    const example = `${open}\n\`\`\`text\nfix the implementation\n\`\`\`\n${close}`
+    assert.equal(classifyChatTaskIntent(`Inspect source. Do not modify permissions.\n\n${example}`), 'explain', open)
+    assert.equal(classifyChatTaskIntent(`Fix main.js.\n${example}\n${open}Do not edit files.${close}`), 'explain', open)
+  }
+})
+
+test('ordinary quoted path constraints retain their scope alongside fenced examples', () => {
+  for (const quote of ['`', '``']) {
+    // The existing object grammar admits one quoting delimiter, not two.
+    const expected = quote.length === 1 ? 'execute' : 'explain'
+    const plain = `Fix main.js. Do not edit ${quote}main.test.js${quote}.`
+    assert.equal(classifyChatTaskIntent(plain), expected, quote)
+    assert.equal(classifyChatTaskIntent(`${plain}\n\`\`\`text\nsample\n\`\`\``), expected, quote)
+  }
+})
+
+test('formatting cannot manufacture a fence that hides a global denial', () => {
+  const task = 'Fix main.js. ~**~**~ Do not edit files.\n```text\nsample\n```'
+  assert.equal(classifyChatTaskIntent(task), 'explain')
+})
+
 
 test('coordinated repair predicates accept ordinary nouns and paths without turning topics into commands',()=>{
   for(const task of ['Review parser.js and fix bugs.','Explain the failure and fix parser.js.',

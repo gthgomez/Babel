@@ -1258,6 +1258,7 @@ export function buildChatRunPayload(
   const turnRouting = Array.isArray(result.turnRouting) ? result.turnRouting : [];
   payload['turnRouting'] = turnRouting;
   payload['turn_routing'] = turnRouting;
+  if (result.turnTelemetry !== undefined) payload['turnTelemetry'] = result.turnTelemetry;
 
   // Policy events: dual keys for harness extractors (policy_events / policyEvents)
   const policyEventsOut = Array.isArray(result.policyEvents)

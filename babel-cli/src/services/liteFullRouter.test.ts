@@ -285,3 +285,51 @@ test('inferIntentContract: independent implementation survives scoped prohibitio
     assert.equal(intent.write_intent, true, task);
   }
 });
+
+test('inferIntentContract: fenced examples cannot supply repair intent outside a scoped prohibition', () => {
+  for (const object of ['permissions', 'verification gates', 'provider accounting', 'regression tests', 'the test file']) {
+    for (const [open, close] of [['```', '```'], ['~~~', '~~~'], ['```', ''], ['~~~', '']]) {
+      const task = `Inspect the source. Do not modify ${object}.\n${open}\nfix the implementation\n${close}`;
+      const intent = inferIntentContract(task);
+      assert.equal(intent.no_write_requested, true, task);
+      assert.equal(intent.mutation_allowed, false, task);
+      const repair = inferIntentContract(`Fix the implementation. ${task}`);
+      assert.equal(repair.no_write_requested, false, task);
+      assert.equal(repair.mutation_allowed, true, task);
+    }
+  }
+  assert.equal(inferIntentContract('Explain the source.\n```\nfix the implementation\n```').mutation_allowed, false);
+  assert.equal(inferIntentContract('Fix the implementation. Do not modify files.\n```\nwrite code\n```').mutation_allowed, false);
+  for (const example of ['````text\n```\nfix the implementation\n```\n````',
+    '~~~text~~~\nfix the implementation\n~~~',
+    '~~~~text\n~~~\nfix the implementation\n~~~\n~~~~',
+    '```text\nliteral ``` marker\nfix the implementation\n```']) {
+    const task = `Inspect the source. Do not modify permissions.\n${example}`;
+    assert.equal(inferIntentContract(task).mutation_allowed, false, task);
+    assert.equal(inferIntentContract(`Fix src/main.js. ${task}`).mutation_allowed, true, task);
+  }
+});
+
+test('inferIntentContract: Markdown boundaries preserve denials and outside repairs', () => {
+  for (const example of ['```text\n\t```\nfix the implementation\n```',
+    '```text\n> ```\nfix the implementation\n```',
+    '> ```text\n> fix the implementation\n> ```',
+    '- ```text\n  fix the implementation\n  ```',
+    '```text\rliteral ``` marker\rfix the implementation\r```']) {
+    assert.equal(inferIntentContract(`Inspect source. Do not modify permissions.\n${example}`).mutation_allowed, false, example);
+  }
+  assert.equal(inferIntentContract('Fix main.js. Example: ```\nsample\n``` Do not edit files.').mutation_allowed, false);
+  assert.equal(inferIntentContract('Explain this example.\n> ```text\n> sample\n> ```\nFix main.js.').mutation_allowed, true);
+});
+
+test('inferIntentContract: HTML wrappers preserve fenced evidence and prose denials', () => {
+  for (const [open, close] of [['<pre>', '</pre>'], ['<!--', '-->'], ['<div>', '</div>']]) {
+    const example = `${open}\n\`\`\`text\nfix the implementation\n\`\`\`\n${close}`;
+    assert.equal(inferIntentContract(`Inspect source. Do not modify permissions.\n\n${example}`).mutation_allowed, false, open);
+    assert.equal(inferIntentContract(`Fix main.js.\n${example}\n${open}Do not edit files.${close}`).mutation_allowed, false, open);
+  }
+});
+
+test('inferIntentContract: formatting cannot manufacture a fence hiding a denial', () => {
+  assert.equal(inferIntentContract('Fix main.js. ~**~**~ Do not edit files.\n```text\nsample\n```').mutation_allowed, false);
+});

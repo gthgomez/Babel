@@ -11,6 +11,7 @@
 
 import type { ChatEngineLimits } from './chatEngineLimits.js';
 import { autonomyClassFromEnv, autonomyTaskClassFor } from './autonomyPolicy.js';
+import { Marked, type Token, type Tokens } from 'marked';
 
 /** Supported chat task classes (product-facing). */
 export type ChatTaskClass =
@@ -350,13 +351,44 @@ function stripPathLikeTokens(text: string): string {
  * (closed or unterminated) before scanning for imperative mutation verbs; a
  * mutation verb outside the fence ("implement this: ```…```") still counts.
  */
-function stripFencedCodeBodies(text: string): string {
-  return text
-    .replace(/```[\s\S]*?```/g, ' ')
-    .replace(/~~~[\s\S]*?~~~/g, ' ')
-    // Unterminated fence: treat the rest as evidence.
-    .replace(/```[\s\S]*$/g, ' ')
-    .replace(/~~~[\s\S]*$/g, ' ');
+const intentMarkdown = new Marked({
+  gfm: false,
+  // HTML wrappers are still task prose: they must not conceal either fenced
+  // examples or ordinary no-edit instructions. This instance is private.
+  tokenizer: { html: () => undefined, tag: () => undefined },
+});
+
+export function stripFencedCodeBodies(text: string): string {
+  if (!/`{3,}|~{3,}/.test(text)) return text;
+  // Reuse the renderer's parser for block widths, indentation, containers and
+  // multiline code spans. A separate fence scanner can hide real denials or
+  // expose instructions inside examples. Do not modify global marked options.
+  const prose = (tokens: Token[], separator = ''): string => tokens.map(token => {
+    if (token.type === 'code' || (token.type === 'codespan' && token.raw.startsWith('```'))) return ' ';
+    if (token.type === 'list') return token.items.map((item: Tokens.ListItem) => prose(item.tokens, '\n')).join('\n');
+    if ('tokens' in token && token.tokens) {
+      // Keep source delimiters around inline children. Flattening formatting
+      // could turn ~**~**~ into a new fence and hide a following no-edit clause.
+      let content = '';
+      let offset = 0;
+      if (token.type === 'blockquote') content = prose(token.tokens, '\n');
+      else {
+        for (const child of token.tokens) {
+          const start = token.raw.indexOf(child.raw, offset);
+          if (start < 0) continue;
+          content += token.raw.slice(offset, start) + prose([child]);
+          offset = start + child.raw.length;
+        }
+        content += token.raw.slice(offset);
+      }
+      // Historical inline ~~~snippets~~~ are not Markdown fences. Retain this
+      // compatibility only in prose, after the parser has removed code blocks.
+      return content.replace(/(?<!~)(~{3,})(?!~)[\s\S]*?(?<!~)\1(?!~)/g, ' ')
+        .replace(/(?:`{3,}|~{3,})[\s\S]*$/, ' ');
+    }
+    return token.raw;
+  }).join(separator);
+  return prose(intentMarkdown.lexer(text.replace(/\r\n?/g, '\n')), '\n');
 }
 
 /**
@@ -420,7 +452,10 @@ const SEQUENCED_MUTATION_SOURCE =
 // Protecting these inputs is compatible with a production repair. Admit only
 // a complete known object list: unknown objects or trailing qualifications
 // remain global denials. This never supplies positive mutation intent.
-const PROTECTED_EDIT_OBJECT = '(?:(?:the|any|our|your|this|that)\\s+)?(?:tests?(?:\\s+file)?|test\\s+suite|package\\s+scripts?|dependencies|unrelated\\s+files?|[`"\\\']?[\\w./\\\\-]+\\.[A-Za-z0-9_-]{1,12}[`"\\\']?)';
+const PROTECTED_EDIT_OBJECT = '(?:(?:the|any|our|your|this|that)\\s+)?(?:' +
+  '(?:regression\\s+)?tests?(?:\\s+file)?|test\\s+suite|package\\s+scripts?|dependencies|' +
+  'permissions?|verification\\s+gates?|provider\\s+accounting|unrelated\\s+(?:files?|code)|' +
+  '[`"\\\']?[\\w./\\\\-]+\\.[A-Za-z0-9_-]{1,12}[`"\\\']?)';
 const PROTECTED_EDIT_OBJECT_LIST = new RegExp(
   `^${PROTECTED_EDIT_OBJECT}(?:${COORD_SEPARATOR}(?:${READ_ONLY_VERB_SOURCE}\\s+)?${PROTECTED_EDIT_OBJECT})*$`, 'i',
 );

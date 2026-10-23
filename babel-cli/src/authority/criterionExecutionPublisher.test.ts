@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import fs from 'node:fs'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -220,6 +221,36 @@ test('multiple required criteria require every frozen check to have executed', a
     has_mutation: true,
   })
   assert.equal(evaluateCriterionCompletionV1(request).verified, false)
+})
+
+test('an unmatched later criterion rejects before reading revision contents', async t => {
+  const { root, service, receipt, request } = await fixtureWithAcceptance(t, [
+    npmTestRequirement('acceptance:npm', 'npm test passes'),
+    {
+      ...npmTestRequirement('acceptance:missing', 'npm run lint passes'),
+      verification: {
+        ...npmTestRequirement('acceptance:missing', 'npm run lint passes').verification,
+        argv: ['run', 'lint'],
+        command_hash: sha256Canonical({ executable_id: 'npm', argv: ['run', 'lint'] }),
+      },
+    },
+  ])
+  // Keep the first check dispatchable and the later check unmatched.
+  const { RevisionManager } = await import('../evidence/revisionBoundReceipt.js')
+  const candidate = RevisionManager.computeRevisionSync(root, ['parser.ts']).compositeTreeHash
+  let contentOpens = 0
+  const originalOpen = fs.openSync
+  const spy = t.mock.method(fs, 'openSync', (...args: Parameters<typeof fs.openSync>) => {
+    if (String(args[0]).endsWith('parser.ts')) contentOpens++
+    return originalOpen(...args)
+  })
+  service.refreshPrivateEvidence({
+    proof: { compliant: true }, receipt,
+    candidate_sha: candidate, has_mutation: true,
+  })
+  spy.mock.restore()
+  assert.equal(evaluateCriterionCompletionV1(request).verified, false)
+  assert.equal(contentOpens, 0)
 })
 
 test('non-compliant proof refresh does not publish criterion evidence', async t => {

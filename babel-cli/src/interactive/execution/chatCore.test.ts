@@ -6,6 +6,7 @@ import { describe, it, test } from 'node:test';
 
 import type { ChatEngineOptions, ChatEvent, ChatResult } from '../../agent/chatEngine.js';
 import { ChatEngine } from '../../agent/chatEngine.js';
+import { ChatTurnTelemetryCollector } from '../../agent/chatTurnTelemetry.js';
 import { globalCostTracker } from '../../services/costTracker.js';
 import type { AgentTargetContext } from '../../services/targetResolver.js';
 import {
@@ -100,6 +101,33 @@ test('buildChatRunPayload surfaces turnRouting effort fields for headless JSON',
   assert.equal(tr[0]!['effort_aliased'], true);
   const pe = payload['policy_events'] as Array<Record<string, unknown>>;
   assert.equal(pe[0]!['kind'], 'force_mutate_shadow');
+});
+
+test('buildChatRunPayload exports existing turn telemetry without changing overlap or unknown values', () => {
+  const collector = new ChatTurnTelemetryCollector(0, () => 10);
+  collector.recordProviderSpan(8, 0, 8);
+  collector.recordToolSpan('read_file', 'sample.ts', 4, true, 4, 8);
+  const telemetry = collector.finalize({ turnId: 'headless-turn', taskClass: 'quick_inspect', cumulativeSessionTokens: 0 });
+  for (const result of [completedResult('inspected'), failedResult('failed'), { ...failedResult('cancelled'), outcome: 'CANCELLED' as const }]) {
+    const payload = buildChatRunPayload({ ...result, turnTelemetry: telemetry }, { task: 'inspect', projectRoot: '/tmp/project' });
+    assert.deepEqual(payload['turnTelemetry'], telemetry);
+    const serialized = JSON.parse(JSON.stringify(payload));
+    assert.equal(serialized.turnTelemetry.timing.totalWallTimeMs, 10);
+    assert.equal(serialized.turnTelemetry.timing.providerDurationMs, 8);
+    assert.equal(serialized.turnTelemetry.timing.toolDurationMs, 4);
+    assert.equal(serialized.turnTelemetry.timing.orchestrationOverheadMs, 2);
+    assert.equal(serialized.turnTelemetry.timing.ttftMs, null);
+    assert.equal(serialized.turnTelemetry.promptTokens, null);
+    assert.equal(serialized.turnTelemetry.completionTokens, null);
+  }
+});
+
+test('buildChatRunPayload omits unavailable turn telemetry', () => {
+  for (const result of [completedResult('inspected'), failedResult('failed')]) {
+    const payload = buildChatRunPayload(result, { task: 'inspect', projectRoot: '/tmp/project' });
+    assert.equal(Object.hasOwn(payload, 'turnTelemetry'), false);
+    assert.equal(Object.hasOwn(JSON.parse(JSON.stringify(payload)), 'turnTelemetry'), false);
+  }
 });
 
 test('buildChatRunPayload maps failed ChatResult to NEEDS_MORE_CONTEXT', () => {

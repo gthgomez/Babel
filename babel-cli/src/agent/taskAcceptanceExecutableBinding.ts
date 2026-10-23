@@ -172,8 +172,95 @@ function pickTrustedCommand(
 }
 
 /**
+ * A preservation obligation whose regression witness the task's own text designates.
+ * The task states the regression tests already exist and names the exact command
+ * that must run them. The witness may only re-freeze a command that an explicit
+ * criterion of the same meaning already froze verbatim, so it grants no new
+ * command authority; every other inferred obligation stays fail-closed (meaning:*).
+ */
+const PRESERVATION_MARKER_RE = /\bpreserve\b/i
+const TESTS_ALREADY_PRESENT_RE = /\btests?\s+are\s+already\s+present\b/i
+const DESIGNATED_TEST_COMMAND_RE =
+  /\brun\b[^;`]*?\btests?\b[^;`]*?\busing:\s*`?([^`;\n]+?)`?\s*(?=[.;]|$)/i
+
+export function extractDesignatedRegressionWitness(
+  activeProse: readonly string[],
+): string | null {
+  if (!activeProse.some((line) => TESTS_ALREADY_PRESENT_RE.test(line))) return null
+  for (const line of activeProse) {
+    const match = line.match(DESIGNATED_TEST_COMMAND_RE)
+    if (match?.[1]) return match[1].trim()
+  }
+  return null
+}
+
+function frozenVerificationIdentity(
+  verification: AcceptanceRequirementV1['verification'],
+): string | null {
+  if (!verification.executable_id || !verification.argv || verification.argv.length === 0) {
+    return null
+  }
+  return sha256Canonical({
+    executable: verification.executable_id.toLowerCase(),
+    argv: verification.argv,
+  })
+}
+
+function designatedRegressionWitness(
+  meaning: TaskAcceptanceMeaning,
+  trusted: readonly string[],
+): { command: string; verification: AcceptanceRequirementV1['verification'] } | null {
+  if (!meaning.structurallyComplete) return null
+  const designated = extractDesignatedRegressionWitness(meaning.activeProse)
+  if (!designated) return null
+  if (!isAuthoritativeVerifierCommand(designated)) return null
+  const parsed = parseStructuredVerifierCommand(designated, {
+    authoritySource: 'built_in_runner',
+  })
+  if (!parsed || parsed.authoritySource !== 'built_in_runner') return null
+  if (!trusted.some((command) => commandsMatchForExecutableBinding(designated, command))) {
+    return null
+  }
+  const identity = structuredCommandIdentity(designated)
+  if (!identity) return null
+  const frozen = new Map<string, AcceptanceRequirementV1['verification']>()
+  for (const criterion of meaning.criteria) {
+    const frozenIdentity = frozenVerificationIdentity(criterion.verification)
+    if (frozenIdentity && frozenIdentity === identity) {
+      frozen.set(frozenIdentity, criterion.verification)
+    }
+  }
+  if (frozen.size !== 1) return null
+  return { command: designated, verification: [...frozen.values()][0]! }
+}
+
+function bindDesignatedWitnessToCriterion(
+  criterion: AcceptanceRequirementV1,
+  sources: readonly AcceptanceMeaningSource[],
+  witness: { command: string; verification: AcceptanceRequirementV1['verification'] },
+): AcceptanceRequirementV1 | null {
+  if (!criterion.verification.verifier_id.startsWith('meaning:')) return null
+  if (isUnresolvedCriterion(criterion)) return null
+  const source = sources.find((item) => item.criterion_id === criterion.id)
+  if (!source || source.status !== 'inferred') return null
+  // The obligation's own text must carry the preservation claim and the
+  // designation; surrounding prose never binds a criterion it does not describe.
+  if (!PRESERVATION_MARKER_RE.test(criterion.description)) return null
+  if (!TESTS_ALREADY_PRESENT_RE.test(criterion.description)) return null
+  if (!DESIGNATED_TEST_COMMAND_RE.test(criterion.description)) return null
+  return {
+    ...criterion,
+    type: requirementTypeForCommand(witness.command),
+    verification_strategy: `The task text designates ${witness.command} as the regression witness for this preservation requirement; the already-present regression tests must stay unchanged and pass on the candidate revision.`,
+    verification: structuredClone(witness.verification),
+  }
+}
+
+/**
  * Bind session-trusted verifier commands onto explicit observable criteria before freeze.
- * Inferred/unresolved meaning stays fail-closed (meaning:* verifier ids).
+ * A preservation criterion whose own text designates the regression witness may then
+ * re-freeze the already-explicit command. Inferred/unresolved meaning stays fail-closed
+ * (meaning:* verifier ids) in every other case.
  */
 export function bindExecutableVerifiersToTaskAcceptance(input: {
   meaning: TaskAcceptanceMeaning
@@ -190,7 +277,7 @@ export function bindExecutableVerifiersToTaskAcceptance(input: {
   if (trusted.length === 0 || input.meaning.unresolved) return input.meaning
 
   const bindingProvenance: TaskAcceptanceMeaning['provenance'] = []
-  const criteria = input.meaning.criteria.map((criterion) => {
+  const explicitBound = input.meaning.criteria.map((criterion) => {
     const command = pickTrustedCommand(criterion, trusted, input.meaning.sources)
     if (!command) return criterion
     const bound = bindCriterion(criterion, command, input.defaultWorkingDirectory)
@@ -204,6 +291,30 @@ export function bindExecutableVerifiersToTaskAcceptance(input: {
     })
     return bound
   })
+
+  // Second pass sees the frozen explicit command, so the witness can only
+  // re-freeze what the first pass already froze — never a new command.
+  const witness = designatedRegressionWitness(
+    { ...input.meaning, criteria: explicitBound },
+    trusted,
+  )
+  let criteria = explicitBound
+  if (witness) {
+    const witnessed = explicitBound.map((criterion) =>
+      bindDesignatedWitnessToCriterion(criterion, input.meaning.sources, witness),
+    )
+    criteria = explicitBound.map((criterion, index) => witnessed[index] ?? criterion)
+    for (const [index, bound] of witnessed.entries()) {
+      if (!bound) continue
+      bindingProvenance.push({
+        kind: 'derived_acceptance',
+        ref: `${ACCEPTANCE_EXECUTABLE_BINDING_REF}:witness:${sha256Canonical({
+          criterion_id: input.meaning.criteria[index]!.id,
+          command: witness.command,
+        }).slice(0, 32)}`,
+      })
+    }
+  }
 
   if (!bindingProvenance.length) return input.meaning
   return {

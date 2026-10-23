@@ -34,6 +34,7 @@ import {
   recordToolStarted,
   recordToolTerminal,
   recordTurnEnded,
+  recordVerifierAttempt,
 } from '../agent/sessionEvents.js';
 import {
   createParityRuntime,
@@ -282,6 +283,95 @@ describe('episodeStream session projection', () => {
     assert.equal(ep.eventId, se.event_id);
     assert.equal(ep.payload['sourceEventId'], se.event_id);
   });
+});
+
+describe('episode projection after cold restore', () => {
+  test('cold restores do not duplicate a capped final verifier event without source cursor metadata', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'babel-episode-capped-resume-'));
+    try {
+      const session = createSessionEventLog('capped-chat');
+      recordVerifierAttempt(session, {
+        turn_id: 'verify', command_preview: 'npm test', authoritative: true,
+        receipt: { command: 'npm test', exit_code: 0, summary: 'x'.repeat(EPISODE_PAYLOAD_MAX_BYTES * 2) },
+      });
+      const initial = createEpisodeEventLog('capped-chat');
+      assert.equal(syncAndFlushEpisodeFromSession(dir, initial, session).wrote, 1);
+      assert.equal(initial.events[0]!.payload['truncated'], true);
+      assert.equal(initial.events[0]!.payload['sourceSessionSeq'], undefined);
+      const file = join(dir, EPISODE_EVENTS_FILENAME);
+      const original = readFileSync(file, 'utf-8');
+      for (let i = 0; i < 3; i++) {
+        const result = syncAndFlushEpisodeFromSession(dir, createEpisodeEventLog('capped-chat'), session);
+        assert.equal(result.projected, 0);
+        assert.equal(result.wrote, 0);
+        assert.equal(readFileSync(file, 'utf-8'), original);
+      }
+      recordUserSubmitted(session, { turn_id: 'next', task: 'continue reading' });
+      assert.equal(syncAndFlushEpisodeFromSession(dir, createEpisodeEventLog('capped-chat'), session).wrote, 1);
+      const loaded = loadEpisodeEventLogFromDir(dir);
+      assert.ok(loaded);
+      assert.equal(loaded.events.length, 2);
+      assert.equal(new Set(loaded.events.map(event => event.eventId)).size, 2);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  test('restores the durable cursor and hash chain before projecting only new source events', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'babel-episode-chat-resume-'));
+    try {
+      const session = createSessionEventLog('cold-chat');
+      recordUserSubmitted(session, { turn_id: 'first', task: 'read the fixture' });
+      const initial = createEpisodeEventLog('cold-chat');
+      assert.equal(syncAndFlushEpisodeFromSession(dir, initial, session).wrote, 1);
+      const file = join(dir, EPISODE_EVENTS_FILENAME);
+      const prefix = readFileSync(file, 'utf-8');
+      recordUserSubmitted(session, { turn_id: 'second', task: 'read it again' });
+      const restored = createEpisodeEventLog('cold-chat');
+      const result = syncAndFlushEpisodeFromSession(dir, restored, session);
+      assert.equal(result.error, undefined);
+      assert.equal(result.projected, 1);
+      assert.equal(result.wrote, 1);
+      assert.ok(readFileSync(file, 'utf-8').startsWith(prefix));
+      const loaded = loadEpisodeEventLogFromDir(dir);
+      assert.ok(loaded);
+      assert.equal(loaded.events.length, 2);
+      assert.equal(new Set(loaded.events.map(event => event.eventId)).size, 2);
+      assert.equal(validateEpisodeEventLog(loaded.events, 'cold-chat').valid, true);
+      const unchanged = readFileSync(file, 'utf-8');
+      assert.equal(syncAndFlushEpisodeFromSession(dir, createEpisodeEventLog('cold-chat'), session).wrote, 0);
+      assert.equal(readFileSync(file, 'utf-8'), unchanged);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  for (const invalid of ['malformed', 'wrong-session', 'invalid-chain'] as const) {
+    test(`cold projection preserves an existing ${invalid} stream without appending`, () => {
+      const dir = mkdtempSync(join(tmpdir(), 'babel-episode-chat-invalid-'));
+      try {
+        const file = join(dir, EPISODE_EVENTS_FILENAME);
+        const other = createEpisodeEventLog('other-chat');
+        appendEpisodeEvent(other, { kind: 'session', type: 'user_submitted' });
+        const serialized = serializeEpisodeEventLog(other);
+        writeFileSync(file, invalid === 'malformed' ? '{broken\n' : invalid === 'invalid-chain' ? serialized + serialized : serialized);
+        const original = readFileSync(file, 'utf-8');
+        const session = createSessionEventLog('cold-chat');
+        recordUserSubmitted(session, { turn_id: 'first', task: 'read the fixture' });
+        const runtime = createEpisodeEventLog('cold-chat');
+        const result = syncAndFlushEpisodeFromSession(dir, runtime, session);
+        assert.equal(result.wrote, 0);
+        assert.equal(result.projected, 0);
+        assert.ok(result.error);
+        assert.equal(readFileSync(file, 'utf-8'), original);
+        // A fresh valid file does not silently re-enable a runtime that failed
+        // restoration. A new runtime is the explicit retry boundary.
+        const repaired = createEpisodeEventLog('cold-chat');
+        syncEpisodeFromSessionEvents(repaired, session);
+        writeFileSync(file, serializeEpisodeEventLog(repaired));
+        const repairedBytes = readFileSync(file, 'utf-8');
+        assert.ok(syncAndFlushEpisodeFromSession(dir, runtime, session).error);
+        assert.equal(readFileSync(file, 'utf-8'), repairedBytes);
+        assert.equal(syncAndFlushEpisodeFromSession(dir, createEpisodeEventLog('cold-chat'), session).error, undefined);
+      } finally { rmSync(dir, { recursive: true, force: true }); }
+    });
+  }
 });
 
 describe('parity bridge dual-write choke point', () => {
