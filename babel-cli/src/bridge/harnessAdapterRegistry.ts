@@ -11,6 +11,11 @@ import { probeOpenCodeInstallation, type OpenCodeInstallProbe } from './openCode
 import { buildAntigravityAdapterDescriptor } from './antigravityOwnCliAdapter.js';
 import { buildCommandCodeAdapterDescriptor } from './commandCodeOwnCliAdapter.js';
 import { buildOpenCodeAdapterDescriptor } from './openCodeOwnCliAdapter.js';
+import {
+  buildClaudeCodeAdapterDescriptor,
+  probeClaudeCodeInstallation,
+} from './claudeCodeOwnCliAdapter.js';
+import type { ClaudeSdkIntegrityProbe } from './claudeCodeIntegrity.js';
 
 export type HarnessAdapterInstallationState =
   | 'native'
@@ -78,12 +83,16 @@ const STUB_DISPLAY: Record<
 export async function buildHarnessAdapterCatalog(options?: {
   commandCodeProbe?: CommandCodeInstallProbe;
   openCodeProbe?: OpenCodeInstallProbe;
+  claudeCodeProbe?: ClaudeSdkIntegrityProbe;
 }): Promise<HarnessAdapterCatalogEntry[]> {
   const commandCodeProbe =
     options?.commandCodeProbe ?? (await probeCommandCodeInstallation());
   const openCodeProbe = options?.openCodeProbe ?? (await probeOpenCodeInstallation());
+  const claudeCodeProbe =
+    options?.claudeCodeProbe ?? (await probeClaudeCodeInstallation());
   const commandCodeDescriptor = buildCommandCodeAdapterDescriptor(commandCodeProbe);
   const openCodeDescriptor = buildOpenCodeAdapterDescriptor(openCodeProbe);
+  const claudeCodeDescriptor = buildClaudeCodeAdapterDescriptor(claudeCodeProbe);
   const antigravityDescriptor = buildAntigravityAdapterDescriptor();
   const commandCodeInstallation: HarnessAdapterInstallationState =
     commandCodeProbe.state === 'verified'
@@ -107,23 +116,43 @@ export async function buildHarnessAdapterCatalog(options?: {
     descriptor: commandCodeDescriptor,
     installation: commandCodeInstallation,
     campaign_order: 1,
-    profile_ids: [EXTERNAL_ADAPTER_PROFILE_IDS.commandCodeGoat],
   });
   byId.set('opencode', {
     descriptor: openCodeDescriptor,
     installation: openCodeInstallation,
     campaign_order: 2,
-    profile_ids: [EXTERNAL_ADAPTER_PROFILE_IDS.openCodeGo],
   });
   byId.set('antigravity', {
     descriptor: antigravityDescriptor,
     installation: 'not_implemented',
     campaign_order: 3,
   });
+  const claudeInstallation: HarnessAdapterInstallationState =
+    claudeCodeProbe.state === 'verified'
+      ? 'verified'
+      : claudeCodeProbe.state === 'missing'
+        ? 'missing'
+        : 'unverified';
+  byId.set('claude-code', {
+    descriptor: claudeCodeDescriptor,
+    installation: claudeInstallation,
+    campaign_order: 4,
+    profile_ids: [
+      EXTERNAL_ADAPTER_PROFILE_IDS.commandCodeGoat,
+      EXTERNAL_ADAPTER_PROFILE_IDS.openCodeGo,
+    ],
+  });
 
-  let order = 4;
+  let order = 5;
   for (const id of EXTERNAL_ADAPTER_CAMPAIGN_ORDER) {
-    if (id === 'command-code' || id === 'opencode' || id === 'antigravity') continue;
+    if (
+      id === 'command-code' ||
+      id === 'opencode' ||
+      id === 'antigravity' ||
+      id === 'claude-code'
+    ) {
+      continue;
+    }
     const profileIds = undefined;
     const displayName = STUB_DISPLAY[id as keyof typeof STUB_DISPLAY];
     byId.set(id, {

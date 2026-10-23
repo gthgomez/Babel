@@ -26,6 +26,7 @@ export type HarnessAdapterBinding =
   | 'babel-native'
   | 'command-code'
   | 'opencode'
+  | 'claude-code'
 
 /** Durable descriptor sufficient to reconstruct a server-owned session. */
 export interface SessionDescriptor {
@@ -49,6 +50,13 @@ export interface SessionDescriptor {
   /** Effective provider/model profile pinned for this harness run. */
   harness_provider_profile?: string
   harness_model_profile?: string
+  /** User-owned Claude config root (frozen at admission). */
+  harness_config_root?: string
+  harness_project_policy_root?: string
+  /** Opaque credential reference (resolved only after admission). */
+  harness_credential_ref?: string
+  /** Frozen admission tuple digest for resume compatibility. */
+  harness_admission_digest?: string
 }
 
 /** In-process conversation descriptor; legacy project protocol stays unchanged. */

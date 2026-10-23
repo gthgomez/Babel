@@ -1,0 +1,6 @@
+{
+  "sdkPackage": "@anthropic-ai/claude-agent-sdk",
+  "sdkVersion": "0.3.304",
+  "cliVersion": "2.1.304",
+  "platformPackagePrefix": "@anthropic-ai/claude-agent-sdk-"
+}
