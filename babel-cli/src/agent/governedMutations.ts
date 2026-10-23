@@ -86,6 +86,7 @@ export async function governedStrReplace(
     lease?: AutonomyLease | null;
     baseline?: BaselineManifest;
     baselineRepoRoot?: string;
+    protectedPaths?: readonly string[];
   },
 ): Promise<GovernedStrReplaceResult> {
   const preset = options.preset ?? 'workspace_write';
@@ -164,6 +165,7 @@ export async function governedStrReplace(
         ...(options.baseline && options.baselineRepoRoot
           ? { baseline: options.baseline, baselineRepoRoot: options.baselineRepoRoot }
           : {}),
+        ...(options.protectedPaths?.length ? { protectedPaths: options.protectedPaths } : {}),
       },
     );
   } finally {
@@ -339,6 +341,7 @@ export async function governedApplyPatch(
     lease?: AutonomyLease | null;
     baseline?: BaselineManifest;
     baselineRepoRoot?: string;
+    protectedPaths?: readonly string[];
   },
 ): Promise<GovernedApplyPatchResult> {
   const preset = options.preset ?? 'workspace_write';
@@ -456,6 +459,7 @@ export async function governedApplyPatch(
     ...(options.baseline && options.baselineRepoRoot
       ? { baseline: options.baseline, baselineRepoRoot: options.baselineRepoRoot }
       : {}),
+    ...(options.protectedPaths?.length ? { protectedPaths: options.protectedPaths } : {}),
   };
 
   const observations: string[] = [];

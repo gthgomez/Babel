@@ -780,6 +780,12 @@ export class ChatEngineActionExecutor {
             ...(this.host.parity.authoritySession
               ? { authoritySession: this.host.parity.authoritySession }
               : {}),
+            ...(this.host.parity.liveAuthority?.taskContract.protected_paths
+              ? {
+                  protectedPaths:
+                    this.host.parity.liveAuthority.taskContract.protected_paths,
+                }
+              : {}),
             ...(classC === "allow" ? { onAskApproval: async () => true } : {}),
           },
         );

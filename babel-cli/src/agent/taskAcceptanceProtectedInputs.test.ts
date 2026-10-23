@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { createWorktreeSafetyController } from '../services/worktreeSafety.js';
 import { resolveLiveSessionAuthority } from './liveSessionBridge.js';
+import { governedStrReplace } from './governedMutations.js';
 import { executeActionWithPolicy, type ToolExecutor } from './toolExecutor.js';
 import type { ToolContext } from '../localTools.js';
 import {
@@ -140,6 +141,18 @@ test('admitted execution matrix: witness freeze denies mutating protected script
     { executor: mockExecutor, mode: 'chat', protectedPaths },
   );
   assert.equal(allowed.policyBlocked, false);
+
+  const governed = await governedStrReplace(
+    { file_path: 'package.json', old_str: 'test:parser', new_str: 'test:evil' },
+    {
+      projectRoot: root,
+      context: policyCtx('witness-protected-str-replace', root),
+      protectedPaths,
+      executor: mockExecutor,
+    },
+  );
+  assert.equal(governed.policyBlocked, true);
+  assert.ok(governed.observation.includes('protected_path'));
 });
 
 test('admitted execution matrix: worktree safety refuses protected witness paths before snapshot', () => {
