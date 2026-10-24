@@ -1,11 +1,12 @@
 {
   "schemaVersion": 1,
-  "purpose": "Two-provider qualification fixture: a deliberately vague repair task over a tiny moved project with a stale repo map and an excluded stale-exports directory. The candidate must discover the real project, make a real edit, and run a verification command. The evaluator is frozen and hashed by the runner; the candidate cannot edit it.",
+  "purpose": "Two-provider qualification fixture: a deliberately vague repair task over a tiny moved project with a stale repo map and an excluded old-exports directory. Use the trusted external runner to freeze inputs before candidate execution and qualify functional and provider evidence separately.",
   "task": "The ledger in this workspace has been reporting a wrong total for a while. Some notes and maps here may be out of date. Make the total right again, make sure the project's own checks actually pass, and report what you changed.",
   "taskCharacter": "vague_discovery_repair",
   "fixtureRootRelative": "workspace",
-  "evaluatorCommand": ["node", "evaluator/verify.mjs"],
-  "verifierOutput": "evaluator/verdict.json",
+  "qualificationRunner": "babel-cli/scripts/provider_switch_qualification.mjs",
+  "workingDirectoryContract": "Runner and evaluator accept absolute paths and run from any cwd. Only workspace contents are materialized as the candidate project root; evaluator and evidence remain external.",
+  "verifierOutput": "External evidence directory supplied at preparation; no in-fixture default",
   "excludedDirectories": ["old-exports"],
   "cellPassRequirements": {
     "minModelRequests": 2,
@@ -21,7 +22,8 @@
     "workspace/current/package.json",
     "workspace/legacy/ledger.mjs",
     "workspace/old-exports/old-export.txt",
-    "evaluator/verify.mjs"
+    "evaluator/verify.mjs",
+    "evaluator/probe.mjs"
   ],
   "budgetDefaults": {
     "campaignCapUsd": 5,

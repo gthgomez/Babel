@@ -2,12 +2,13 @@
  * Offline regression for the historical run stop (chat-3ae78bda3098, 2026-10-23).
  *
  * Observed chain: one successful OpenRouter dispatch reported usage; the old
- * executable's metadata adapter omitted `usage.cost`, the model had no static
+ * executable's metadata adapter could omit `usage.cost`, the model had no static
  * pricing row, and the accounting gate refused the second paid dispatch under
  * a finite dollar cap. This suite freezes the complete boundary: a reported
  * charge permits continuation and stays authoritative; a missing or invalid
  * charge stays unknown with the typed accounting reason and never projects a
- * zero bill.
+ * zero bill. The historical raw billing field was not retained; omission is a
+ * reproduced failure mechanism, not proof of that response's original cost.
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'

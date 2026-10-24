@@ -143,7 +143,8 @@ test('OpenRouter telemetry reports the OpenRouter retry provider and pinned cost
   assert.equal(startedEvent.context_limit_source, 'policy')
   assert.equal(runner.getLastInvocationMetadata()?.observed_model_id, 'z-ai/glm-5.3-flash')
   assert.equal(runner.getLastInvocationMetadata()?.upstream_provider, 'ExampleProvider')
-  assert.equal(runner.getLastInvocationMetadata()?.estimated_cost_usd, 0.325)
+  // One million input/output tokens at the pinned $0.15 / $0.50 rates.
+  assert.equal(runner.getLastInvocationMetadata()?.estimated_cost_usd, 0.65)
 })
 
 test('scientific OpenRouter routing disables silent upstream fallback', async () => {
