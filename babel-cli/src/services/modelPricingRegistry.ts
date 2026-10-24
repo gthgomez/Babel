@@ -1,4 +1,4 @@
-export type PricingProvider = 'deepinfra' | 'deepseek' | 'openrouter' | 'opencode-go';
+export type PricingProvider = 'deepinfra' | 'deepseek' | 'openrouter' | 'opencode-go' | 'commandcode';
 export type CostPrecision = 'exact' | 'conservative' | 'unknown';
 
 export interface ModelPricingEntry {
@@ -42,7 +42,10 @@ export const DEEPSEEK_PRICING_SOURCE_URL = 'https://api-docs.deepseek.com/quick_
 export const DEEPINFRA_PRICING_SOURCE_URL =
   'https://docs.deepinfra.com/api-reference/models/models-list';
 export const OPENROUTER_PRICING_SOURCE_URL = 'https://openrouter.ai/api/v1/models';
+export const COMMANDCODE_PRICING_SOURCE_URL =
+  'https://commandcode.ai/docs/resources/pricing-limits';
 export const MODEL_PRICING_VERIFIED_AT = '2026-06-04';
+export const CAMPAIGN_PRICING_VERIFIED_AT = '2026-10-23';
 
 export const DEEPSEEK_SUPPORTED_MODELS = ['deepseek-v4-flash', 'deepseek-v4-pro'] as const;
 export type DeepSeekModelId = (typeof DEEPSEEK_SUPPORTED_MODELS)[number];
@@ -135,10 +138,129 @@ export const MODEL_PRICING_REGISTRY: Record<string, ModelPricingEntry> = {
   'openrouter:z-ai/glm-5.3-flash': {
     provider: 'openrouter',
     modelId: 'z-ai/glm-5.3-flash',
-    inputCostPer1M: 0.075,
-    outputCostPer1M: 0.25,
+    inputCostPer1M: 0.15,
+    outputCostPer1M: 0.5,
+    inputCacheHitCostPer1M: 0.03,
+    inputCacheMissCostPer1M: 0.15,
+    cacheInputDiscountAvailable: true,
     sourceUrl: OPENROUTER_PRICING_SOURCE_URL,
-    verifiedAt: '2026-08-26',
+    verifiedAt: CAMPAIGN_PRICING_VERIFIED_AT,
+  },
+  // ── Two-provider campaign routes (verified against live catalogs 2026-10-23).
+  // DeepSeek peak/off-peak weekday windows exist on both gateways; the peak
+  // rate is used as the documented accounting ceiling, never as an invoice.
+  'openrouter:deepseek/deepseek-v4.1-flash-1017': {
+    provider: 'openrouter',
+    modelId: 'deepseek/deepseek-v4.1-flash-1017',
+    inputCostPer1M: 0.3,
+    outputCostPer1M: 1.2,
+    inputCacheHitCostPer1M: 0.006,
+    inputCacheMissCostPer1M: 0.3,
+    cacheInputDiscountAvailable: true,
+    sourceUrl: OPENROUTER_PRICING_SOURCE_URL,
+    verifiedAt: CAMPAIGN_PRICING_VERIFIED_AT,
+    conservativeWarning:
+      'OpenRouter V4.1 Flash applies weekday peak rates (01:00-04:00 and 06:00-10:00 UTC); this entry uses the peak rate as a ceiling. Off-peak is 0.15/0.60 per 1M with 0.003 cache reads.',
+  },
+  'openrouter:xiaomi/mimo-v2.6-flash': {
+    provider: 'openrouter',
+    modelId: 'xiaomi/mimo-v2.6-flash',
+    inputCostPer1M: 0.14,
+    outputCostPer1M: 0.28,
+    inputCacheHitCostPer1M: 0.0028,
+    inputCacheMissCostPer1M: 0.14,
+    cacheInputDiscountAvailable: true,
+    sourceUrl: OPENROUTER_PRICING_SOURCE_URL,
+    verifiedAt: CAMPAIGN_PRICING_VERIFIED_AT,
+  },
+  'openrouter:openai/gpt-6-luna': {
+    provider: 'openrouter',
+    modelId: 'openai/gpt-6-luna',
+    inputCostPer1M: 0.2,
+    outputCostPer1M: 0.75,
+    inputCacheHitCostPer1M: 0.02,
+    inputCacheMissCostPer1M: 0.2,
+    cacheInputDiscountAvailable: true,
+    sourceUrl: OPENROUTER_PRICING_SOURCE_URL,
+    verifiedAt: CAMPAIGN_PRICING_VERIFIED_AT,
+    conservativeWarning:
+      'GPT-6 Luna long-context requests (>272k prompt tokens) bill at double the base rate; this entry uses the long-context rate as a ceiling. Base is 0.10/0.50 per 1M.',
+  },
+  'openrouter:anthropic/claude-haiku-5.5': {
+    provider: 'openrouter',
+    modelId: 'anthropic/claude-haiku-5.5',
+    inputCostPer1M: 0.5,
+    outputCostPer1M: 2.5,
+    inputCacheHitCostPer1M: 0.05,
+    inputCacheMissCostPer1M: 0.5,
+    cacheInputDiscountAvailable: true,
+    sourceUrl: OPENROUTER_PRICING_SOURCE_URL,
+    verifiedAt: CAMPAIGN_PRICING_VERIFIED_AT,
+    conservativeWarning:
+      'Claude Haiku 5.5 requests above 100k prompt tokens bill at 5x the base rate; this entry uses the long-context rate as a ceiling. Base is 0.10/0.50 per 1M.',
+  },
+  // Command Code Provider API tariffs (official pricing-limits documentation,
+  // verified 2026-10-23). DeepSeek peak weekday windows apply; peak is ceiling.
+  'commandcode:deepseek/deepseek-v4.1-flash': {
+    provider: 'commandcode',
+    modelId: 'deepseek/deepseek-v4.1-flash',
+    inputCostPer1M: 0.3,
+    outputCostPer1M: 1.2,
+    inputCacheHitCostPer1M: 0.006,
+    inputCacheMissCostPer1M: 0.3,
+    cacheInputDiscountAvailable: true,
+    sourceUrl: COMMANDCODE_PRICING_SOURCE_URL,
+    verifiedAt: CAMPAIGN_PRICING_VERIFIED_AT,
+    conservativeWarning:
+      'Command Code V4.1 Flash weekday peak rates are roughly double off-peak (0.15/0.60 per 1M, cache read 0.003); this entry uses the peak rate as a ceiling.',
+  },
+  'commandcode:z-ai/glm-5.3-flash': {
+    provider: 'commandcode',
+    modelId: 'z-ai/glm-5.3-flash',
+    inputCostPer1M: 0.15,
+    outputCostPer1M: 0.5,
+    inputCacheHitCostPer1M: 0.03,
+    inputCacheMissCostPer1M: 0.15,
+    cacheInputDiscountAvailable: true,
+    sourceUrl: COMMANDCODE_PRICING_SOURCE_URL,
+    verifiedAt: CAMPAIGN_PRICING_VERIFIED_AT,
+  },
+  'commandcode:xiaomi/mimo-v2.6-flash': {
+    provider: 'commandcode',
+    modelId: 'xiaomi/mimo-v2.6-flash',
+    inputCostPer1M: 0.14,
+    outputCostPer1M: 0.28,
+    inputCacheHitCostPer1M: 0.0028,
+    inputCacheMissCostPer1M: 0.14,
+    cacheInputDiscountAvailable: true,
+    sourceUrl: COMMANDCODE_PRICING_SOURCE_URL,
+    verifiedAt: CAMPAIGN_PRICING_VERIFIED_AT,
+  },
+  'commandcode:gpt-6-luna': {
+    provider: 'commandcode',
+    modelId: 'gpt-6-luna',
+    inputCostPer1M: 0.1,
+    outputCostPer1M: 0.5,
+    inputCacheHitCostPer1M: 0.01,
+    inputCacheMissCostPer1M: 0.1,
+    cacheInputDiscountAvailable: true,
+    sourceUrl: COMMANDCODE_PRICING_SOURCE_URL,
+    verifiedAt: CAMPAIGN_PRICING_VERIFIED_AT,
+    conservativeWarning:
+      'GPT-6 Luna cache writes bill at 0.125 per 1M; the registry has no cache-write field, so a cache-write-heavy request may exceed this estimate.',
+  },
+  'commandcode:claude-haiku-5-5': {
+    provider: 'commandcode',
+    modelId: 'claude-haiku-5-5',
+    inputCostPer1M: 0.1,
+    outputCostPer1M: 0.5,
+    inputCacheHitCostPer1M: 0.01,
+    inputCacheMissCostPer1M: 0.1,
+    cacheInputDiscountAvailable: true,
+    sourceUrl: COMMANDCODE_PRICING_SOURCE_URL,
+    verifiedAt: CAMPAIGN_PRICING_VERIFIED_AT,
+    conservativeWarning:
+      'Command Code tariffs do not document a long-context surcharge for Haiku 5.5; OpenRouter bills 5x above 100k prompt tokens. Treat large-context estimates as unverified.',
   },
 };
 
