@@ -247,7 +247,7 @@ test('finite task dollar cap refuses another request after unknown-price usage',
     const budget = allowanceAccess(engine).checkBudgets()
     assert.equal(budget.ok, false)
     assert.equal(budget.limiter, 'cost')
-    assert.match(budget.reason ?? '', /unknown pricing/)
+    assert.match(budget.reason ?? '', /^COST_ACCOUNTING_INCOMPLETE:.*unknown pricing/)
   } finally {
     globalCostTracker.resetSession()
     globalCostTracker.restoreSessionCost({
@@ -256,6 +256,35 @@ test('finite task dollar cap refuses another request after unknown-price usage',
       totalOutputTokens: previousUsage.totalOutputTokens,
       totalTokens: previousUsage.totalTokens,
     })
+    if (previousRunsDir === undefined) delete process.env['BABEL_RUNS_DIR']
+    else process.env['BABEL_RUNS_DIR'] = previousRunsDir
+    rmSync(runsRoot, { recursive: true, force: true })
+    rmSync(projectRoot, { recursive: true, force: true })
+  }
+})
+
+test('the production admission gate allows reported cost below the cap and blocks genuine dollar exhaustion', () => {
+  const runsRoot = mkdtempSync(join(tmpdir(), 'babel-real-dollar-cap-'))
+  const projectRoot = mkdtempSync(join(tmpdir(), 'babel-real-dollar-project-'))
+  const previousRunsDir = process.env['BABEL_RUNS_DIR']
+  process.env['BABEL_RUNS_DIR'] = runsRoot
+  globalCostTracker.resetSession()
+  try {
+    const engine = new ChatEngine({ task: 'finite cap task', projectRoot, model: 'deepseek-v4-flash', maxCostUsd: 2 })
+    engine.applyUserSubmission({ userInput: 'start finite cap task' })
+    const owner = allowanceAccess(engine).getTaskAllowanceSnapshot()!.taskOwnerId
+    globalCostTracker.trackUsage('unpriced-control', 10, 5, 0, 10,
+      { taskOwnerId: owner, chargeId: 'reported-first' }, true, 'openrouter', 0.007)
+    assert.equal(allowanceAccess(engine).checkBudgets().ok, true)
+    globalCostTracker.trackUsage('unpriced-control', 10, 5, 0, 10,
+      { taskOwnerId: owner, chargeId: 'reported-second' }, true, 'openrouter', 2)
+    const budget = allowanceAccess(engine).checkBudgets()
+    assert.equal(budget.ok, false)
+    assert.equal(budget.limiter, 'cost')
+    assert.doesNotMatch(budget.reason ?? '', /COST_ACCOUNTING_INCOMPLETE|unknown pricing/)
+    assert.equal(globalCostTracker.getTaskSummary(owner).costComplete, true)
+  } finally {
+    globalCostTracker.resetSession()
     if (previousRunsDir === undefined) delete process.env['BABEL_RUNS_DIR']
     else process.env['BABEL_RUNS_DIR'] = previousRunsDir
     rmSync(runsRoot, { recursive: true, force: true })
