@@ -1,6 +1,6 @@
 // Execution adapter only. The parent owns expected values and verdict authority.
 // Process separation/resource bounds are not an OS security sandbox.
-import { readFileSync } from 'node:fs'
+import { readFileSync, writeSync } from 'node:fs'
 import { pathToFileURL } from 'node:url'
 import { isDeepStrictEqual } from 'node:util'
 
@@ -9,7 +9,8 @@ const input = JSON.parse(readFileSync(0, 'utf8'))
 // Native JSON.stringify still invokes hostile toJSON hooks on objects, so only
 // primitive numbers/strings are encoded below. Containers never enter stringify.
 const stringify = JSON.stringify
-const write = process.stdout.write.bind(process.stdout)
+// A bound stream.write still consults candidate-replaceable stream internals.
+const write = writeSync
 const finite = Number.isFinite
 const equal = isDeepStrictEqual
 const snapshots = input.cases.map(entries => structuredClone(entries))
@@ -29,4 +30,4 @@ for (let i = 0; i < input.cases.length; i++) {
   preserved += (i ? ',' : '') + (firstPreserved && equal(entries, snapshots[i]) ? 'true' : 'false')
 }
 append(total())
-write('{"nonce":' + stringify(input.nonce) + ',"results":[' + results + '],"preserved":[' + preserved + ']}')
+write(1, '{"nonce":' + stringify(input.nonce) + ',"results":[' + results + '],"preserved":[' + preserved + ']}')

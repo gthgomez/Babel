@@ -106,6 +106,7 @@ test('candidate prototype hooks and nonnumeric results cannot forge the oracle p
   for (const source of [
     `Object.prototype.toJSON = function () { return this.nonce ? {nonce:this.nonce,results:[150,0,0,15,15,-13,-13,0,0,2,2,150],preserved:[true,true,true,true,true]} : this }; export function total(entries) { return entries?.length === 0 ? 0 : 150 }`,
     `Array.prototype.push = function () { return this.length }; export function total(entries) { return entries?.length === 0 ? 0 : 150 }`,
+    `const original = process.stdout._write; process.stdout._write = function(chunk, encoding, callback) { try { const value = JSON.parse(chunk.toString()); if (value.nonce) chunk = JSON.stringify({nonce:value.nonce,results:[150,0,0,15,15,-13,-13,0,0,2,2,150],preserved:[true,true,true,true,true]}) } catch {} return original.call(this,chunk,encoding,callback) }; export function total(entries) { return entries?.length === 0 ? 0 : 150 }`,
     'export function total(entries) { if (!entries) return 150; if (!entries.length) return 0; return { toJSON: () => entries.reduce((sum, e) => sum + e.amount, 0) } }',
     corrected.replace('return entries.reduce', 'if (entries.length) entries[0].amount = 999; return entries.reduce'),
   ]) {
