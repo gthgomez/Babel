@@ -142,12 +142,21 @@ export type ChargeUpdate =
   | { kind: 'duplicate' }
   | { kind: 'conflict'; reason: string };
 
+/** Why a charge carries the dollar amount it does. Never relabeled after the fact. */
+export type ChargeBillingBasis = 'tariff_estimate' | 'provider_reported' | 'unknown';
+
 /** Durable observation of one provider attempt, scoped to its immutable owner. */
 export interface ChargeReceipt {
   attribution: UsageAttribution;
   modelId: string;
   /** Exact transport identity when observed; legacy receipts may omit it. */
   provider?: string | null;
+  /** Campaign receipts stamp the basis explicitly; legacy receipts derive it. */
+  billingBasis?: ChargeBillingBasis;
+  /** When the basis was determined (ISO 8601). */
+  billingBasisAt?: string;
+  /** Pricing source URL for tariff estimates; null/absent for reported or unknown. */
+  billingBasisSource?: string | null;
   inputTokens: number;
   outputTokens: number;
   cacheHitTokens: number;
@@ -177,9 +186,47 @@ function receiptAllowanceCost(receipt: ChargeReceipt): number | null {
   return receipt.costEstimate ? receipt.estimatedCostUSD ?? null : receipt.knownCostUSD;
 }
 
+const CHARGE_BILLING_BASES = ['tariff_estimate', 'provider_reported', 'unknown'] as const;
+
+function validBillingBasisFields(receipt: ChargeReceipt): boolean {
+  if (receipt.billingBasis === undefined) {
+    return receipt.billingBasisAt === undefined && receipt.billingBasisSource === undefined;
+  }
+  if (!CHARGE_BILLING_BASES.includes(receipt.billingBasis)) return false;
+  if (receipt.billingBasisAt !== undefined &&
+      (typeof receipt.billingBasisAt !== 'string' || receipt.billingBasisAt.length === 0)) return false;
+  if (receipt.billingBasisSource !== undefined && receipt.billingBasisSource !== null &&
+      (typeof receipt.billingBasisSource !== 'string' || receipt.billingBasisSource.length === 0)) return false;
+  return true;
+}
+
+/** Explicit basis when stamped; legacy receipts may be tariff-based or reported. */
+export function chargeBillingBasis(receipt: ChargeReceipt): ChargeBillingBasis {
+  if (receipt.billingBasis) return receipt.billingBasis;
+  if (receipt.costEstimate) return 'tariff_estimate';
+  return 'unknown';
+}
+
+/**
+ * A stamped receipt must agree with its own cost fields: tariff estimates are
+ * never labeled as provider invoices and unknown receipts carry no amount.
+ */
+function validReceiptCostBasisInvariant(receipt: ChargeReceipt): boolean {
+  if (!validBillingBasisFields(receipt)) return false;
+  if (receipt.billingBasis === undefined) return true;
+  if (receipt.billingBasis === 'unknown') return receipt.knownCostUSD === null;
+  if (receipt.billingBasis === 'provider_reported') {
+    return typeof receipt.knownCostUSD === 'number' && receipt.knownCostUSD >= 0 &&
+      (receipt.billingBasisSource ?? 'provider_reported') === 'provider_reported';
+  }
+  // tariff_estimate: an amount from the pinned registry, or an unknown-precision estimate.
+  return receipt.knownCostUSD !== null || receipt.estimatedCostUSD != null;
+}
+
 function validReceiptCost(receipt: ChargeReceipt): boolean {
   const validCost = (value: unknown) => value === null ||
     (typeof value === 'number' && Number.isFinite(value) && value >= 0);
+  if (!validReceiptCostBasisInvariant(receipt)) return false;
   if (!validCost(receipt.knownCostUSD)) return false;
   if (!receipt.costEstimate) return receipt.estimatedCostUSD === undefined;
   const source = receipt.costEstimate;
@@ -225,7 +272,8 @@ function sameChargeReceipt(a: ChargeReceipt, b: ChargeReceipt): boolean {
     a.knownCostUSD === b.knownCostUSD && a.estimatedCostUSD === b.estimatedCostUSD &&
     a.costEstimate?.basis === b.costEstimate?.basis && a.costEstimate?.precision === b.costEstimate?.precision &&
     a.costEstimate?.pricingSourceUrl === b.costEstimate?.pricingSourceUrl &&
-    a.costEstimate?.pricingVerifiedAt === b.costEstimate?.pricingVerifiedAt;
+    a.costEstimate?.pricingVerifiedAt === b.costEstimate?.pricingVerifiedAt &&
+    a.billingBasis === b.billingBasis && a.billingBasisSource === b.billingBasisSource;
 }
 
 interface ChargeObservation extends ChargeReceipt {
@@ -401,12 +449,25 @@ export class CostTracker {
     this.sessionUnknownCharges += sessionUnknownDelta;
     if (attribution) {
       this.recordedChargeIds.add(attribution.chargeId);
+      const billingBasis: ChargeBillingBasis = goEstimate || registryCost !== null
+        ? 'tariff_estimate'
+        : reportedCost !== null
+          ? 'provider_reported'
+          : 'unknown';
       this.chargeObservations.set(attribution.chargeId, {
         attribution: { ...attribution }, modelId, inputTokens, outputTokens,
         ...(provider !== undefined ? { provider } : {}),
         cacheHitTokens: cacheHitTokens ?? 0, cacheMissTokens: cacheMissTokens ?? 0,
         knownCostUSD: goEstimate ? null : cost,
-        ...(goEstimate ? { estimatedCostUSD: cost, costEstimate: goEstimate } : {}), projectedInSession: true,
+        ...(goEstimate ? { estimatedCostUSD: cost, costEstimate: goEstimate } : {}),
+        billingBasis,
+        billingBasisAt: new Date().toISOString(),
+        ...(billingBasis === 'tariff_estimate'
+          ? { billingBasisSource: goEstimate?.pricingSourceUrl ?? estimate.pricingSourceUrl }
+          : billingBasis === 'provider_reported'
+            ? { billingBasisSource: 'provider_reported' }
+            : { billingBasisSource: null }),
+        projectedInSession: true,
       });
       const owners = new Set([
         attribution.taskOwnerId,
