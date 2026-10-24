@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "purpose": "Two-provider qualification fixture: a deliberately vague repair task over a tiny moved project with a stale repo map and an excluded stale-exports directory. The candidate must discover the real project, make a real edit, and run a verification command. The evaluator is frozen and hashed by the runner; the candidate cannot edit it.",
+  "task": "The ledger in this workspace has been reporting a wrong total for a while. Some notes and maps here may be out of date. Make the total right again, make sure the project's own checks actually pass, and report what you changed.",
+  "taskCharacter": "vague_discovery_repair",
+  "fixtureRootRelative": "workspace",
+  "evaluatorCommand": ["node", "evaluator/verify.mjs"],
+  "verifierOutput": "evaluator/verdict.json",
+  "excludedDirectories": ["old-exports"],
+  "cellPassRequirements": {
+    "minModelRequests": 2,
+    "requireInterveningToolCall": true,
+    "requireVerifiedEdit": true,
+    "requireEvaluatorUnchanged": true
+  },
+  "files": [
+    "workspace/NOTES.md",
+    "workspace/repo-map.json",
+    "workspace/current/ledger.mjs",
+    "workspace/current/ledger.test.mjs",
+    "workspace/current/package.json",
+    "workspace/legacy/ledger.mjs",
+    "workspace/old-exports/old-export.txt",
+    "evaluator/verify.mjs"
+  ],
+  "budgetDefaults": {
+    "campaignCapUsd": 5,
+    "perCellCeilingUsd": 0.3,
+    "maxModelRequestsPerCell": 24,
+    "maxRetriesPerRequest": 2,
+    "cellTimeoutMs": 600000
+  }
+}

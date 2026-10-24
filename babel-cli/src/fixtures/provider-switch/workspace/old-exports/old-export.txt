@@ -1,0 +1,4 @@
+archived ledger export 2026-07-11
+total: 116
+entries: seed 120, coffee -4
+(do not edit; historical export only)

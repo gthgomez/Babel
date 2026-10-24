@@ -1,0 +1,9 @@
+{
+  "generatedAt": "2026-08-02T09:14:00.000Z",
+  "entries": [
+    { "path": "ledger/ledger.mjs", "role": "ledger implementation", "status": "active" },
+    { "path": "ledger/ledger.test.mjs", "role": "ledger checks", "status": "active" },
+    { "path": "artifacts/", "role": "old exports", "status": "archived" }
+  ],
+  "notes": "Project map from an earlier layout. Paths may no longer exist."
+}
