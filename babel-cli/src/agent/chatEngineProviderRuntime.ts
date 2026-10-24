@@ -77,6 +77,8 @@ export type ChatProviderUsageEffects = {
   retryCallbacks: (context: ChatProviderRetryContext) => RunnerCallbacks
   settleUsage: (runner: ChatProviderRunner, scope: ChatUsageScope) => void
   getAbortController: () => AbortController
+  /** Bounded ceilings for pre-dispatch cost reservation (0 disables reservation). */
+  reservationBounds: { inputTokens: number; outputTokens: number }
 }
 const TURN_TIMEOUT_MS = 120_000
 
@@ -412,6 +414,7 @@ export async function synthesizeChatAnswer(
     conversationState: prompt,
     executionStage: 'synthesis',
     usageScope,
+    reservation: effects.reservationBounds,
     ...(usageScope.isOwnerCurrent
       ? { isOwnerCurrent: usageScope.isOwnerCurrent }
       : {}),
@@ -575,6 +578,7 @@ export async function deliberateChatTurn(
         toolSchema: toolDefs,
         executionStage: 'chat',
         usageScope,
+        reservation: effects.reservationBounds,
       }),
     )) {
       switch (event.type) {
@@ -627,6 +631,7 @@ export async function deliberateChatTurn(
         systemPolicyPrompt: systemPrompt,
         executionStage: 'chat',
         usageScope,
+        reservation: effects.reservationBounds,
       }),
       systemPrompt,
     )
@@ -643,6 +648,7 @@ export async function deliberateChatTurn(
       conversationState: promptOrMessages,
       executionStage: 'chat',
       usageScope,
+      reservation: effects.reservationBounds,
     }),
     ...(callbacks.onThought || callbacks.onAnswerChunk
       ? {

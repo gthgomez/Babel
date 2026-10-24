@@ -688,6 +688,13 @@ export class ChatEngine {
   private operatorMode: ChatOperatorMode = "default";
   private _lastPhase: ChatPhase | null = null;
   private investigateRunner: ChatProviderRunner | null = null;
+  /**
+   * Pre-dispatch cost reservations keyed by inference id. Encumbered spend the
+   * budget check treats as spent until the invocation settles; released on any
+   * terminal outcome. In-memory only: a restart keeps the durable pending
+   * charges (the unknown-usage reservation) but drops estimate overhead.
+   */
+  private dispatchReservations = new Map<string, number>();
   private mutateRunner: ChatProviderRunner | null = null;
   private repetitionDetector: RepetitionDetector;
   private policyEventLog = new PolicyEventLog(); // A2: policy event log
@@ -1565,7 +1572,9 @@ export class ChatEngine {
       this.terminalLimiterReason = reason;
       return { ok: false, reason, limiter: "turns" };
     }
-    const taskCost = this.currentTaskCostUsd();
+    let reservationUsd = 0;
+    for (const value of this.dispatchReservations.values()) reservationUsd += value;
+    const taskCost = this.currentTaskCostUsd() + reservationUsd;
     const taskWallMs = this.currentTaskActiveWallMs();
     // After first critic reject or post-write repair, use the tighter cost cap.
     const grantedCostCapUsd = allowanceCostCapUsd(
@@ -4094,6 +4103,17 @@ export class ChatEngine {
           reason,
           appliesToCurrent,
         ),
+      reserveDispatchCost: (chargeId, reservedUsd) => {
+        engine.dispatchReservations.set(chargeId, reservedUsd);
+      },
+      releaseDispatchCost: (chargeId) => {
+        engine.dispatchReservations.delete(chargeId);
+      },
+      get outstandingDispatchReservationUsd() {
+        let total = 0;
+        for (const value of engine.dispatchReservations.values()) total += value;
+        return total;
+      },
     };
   }
 
@@ -4567,6 +4587,10 @@ export class ChatEngine {
       retryCallbacks: (context) => this.providerRetryCallbacks(context),
       settleUsage: (runner, scope) => this.trackRunnerUsage(runner, scope),
       getAbortController: () => this.abortController,
+      reservationBounds: {
+        inputTokens: this.limits.maxEstimatedTokens,
+        outputTokens: this.modelPolicy?.maxOutputTokens ?? 8192,
+      },
     };
   }
 

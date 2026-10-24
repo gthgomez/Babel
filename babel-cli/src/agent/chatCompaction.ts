@@ -30,6 +30,7 @@
 
 import { createHash, randomUUID } from 'node:crypto';
 import type { RunnerCallbacks } from '../runners/base.js';
+import { COMMANDCODE_API_BASE } from '../runners/commandCodeApi.js';
 import type { ProviderId } from '../runners/providerRegistry.js';
 import type { CompactionRecoveryPressure } from './compactionRequestPressure.js';
 
@@ -1145,6 +1146,18 @@ export function resolveCompactionSummarizationProvider(input: {
     return {
       apiKey: process.env['ANTHROPIC_API_KEY']!.trim(),
       baseUrl: 'https://api.anthropic.com',
+      defaultModel: model,
+    };
+  }
+  if (provider === 'commandcode' && process.env['CMD_API_KEY']?.trim()) {
+    // Campaign Command Code routes compact on their own gateway with their own
+    // credential. Claude-family Messages routes have no Chat Completions
+    // compaction path here — compaction stays disabled (heuristic) rather than
+    // dispatching a Claude id to the wrong endpoint.
+    if (/^claude/i.test(model)) return null;
+    return {
+      apiKey: process.env['CMD_API_KEY']!.trim(),
+      baseUrl: `${COMMANDCODE_API_BASE}/chat/completions`,
       defaultModel: model,
     };
   }

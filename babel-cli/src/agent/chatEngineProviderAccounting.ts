@@ -11,6 +11,7 @@ import type { ChatPhase } from './chatPhaseNudge.js';
 import type { TurnRoutingReceiptLog } from './turnRoutingReceipt.js';
 import type { ProviderInvocationStarted, RunnerCallbacks, RunnerInvocationMetadata } from '../runners/base.js';
 import { globalCostTracker, type UsageAttribution } from '../services/costTracker.js';
+import { estimateProviderUsageCost } from '../services/modelPricingRegistry.js';
 import { buildContextManifest, type ContextDeliveryMode } from './contextManifest.js';
 import { buildModelRouteReceipt, hashRouteReference, type ModelRouteStage } from './modelRouteReceipt.js';
 import {
@@ -67,6 +68,11 @@ export interface ChatProviderRetryHost {
     reason: string,
     appliesToCurrent: boolean,
   ): void;
+  /** Reserve conservative spend for a dispatch before its response arrives. */
+  reserveDispatchCost(chargeId: string, reservedUsd: number): void;
+  releaseDispatchCost(chargeId: string): void;
+  /** Sum of outstanding reservations; budgets must treat it as encumbered. */
+  readonly outstandingDispatchReservationUsd: number;
 }
 
 export function captureUsageAttribution(
@@ -106,6 +112,8 @@ export function buildProviderRetryCallbacks(host: ChatProviderRetryHost, context
   substitutionOrFallback?: boolean;
   isOwnerCurrent?: () => boolean;
   usageScope?: ChatUsageScope;
+  /** Bounded input/output token ceilings used to size the dispatch reservation. */
+  reservation?: { inputTokens: number; outputTokens: number };
 } = {}): RunnerCallbacks {
     let startedInvocation: ProviderInvocationStarted | null = null;
     let retryCount = 0;
@@ -161,6 +169,21 @@ export function buildProviderRetryCallbacks(host: ChatProviderRetryHost, context
                   ownerId === host.taskAllowance?.taskOwnerId && isOwnerCurrent(),
                 );
                 throw new Error('Provider dispatch blocked because its charge receipt could not be saved');
+              }
+              // Conservative pre-dispatch reservation: bounded input/output
+              // ceilings at the route's pinned (ceiling) rates. Released once
+              // the invocation settles; the pending charge itself is the
+              // durable unknown-usage reservation.
+              if (context.reservation) {
+                const reservation = estimateProviderUsageCost({
+                  provider: event.provider ?? null,
+                  modelId: event.sent_model_id,
+                  promptTokens: context.reservation.inputTokens,
+                  completionTokens: context.reservation.outputTokens,
+                });
+                if (reservation.estimatedCostUsd !== null && reservation.estimatedCostUsd > 0) {
+                  host.reserveDispatchCost(event.inference_id, reservation.estimatedCostUsd);
+                }
               }
             }
           }
@@ -275,6 +298,7 @@ export function buildProviderRetryCallbacks(host: ChatProviderRetryHost, context
         checkpointParityEventLog(host.parity, host.engineRunDir);
       },
       onInvocationCompleted: (event) => {
+        host.releaseDispatchCost(event.inference_id);
         if (event.status === 'failed' && context.usageScope?.chargeId === event.inference_id) {
           context.usageScope.usageMetadata = null;
           context.usageScope.modelId = event.model;
@@ -301,6 +325,7 @@ export function buildProviderRetryCallbacks(host: ChatProviderRetryHost, context
                 scope.taskOwnerId === host.taskAllowance?.taskOwnerId && isOwnerCurrent(),
               );
             }
+            if (cleared) host.releaseDispatchCost(event.inference_id);
             if (!chargeStillPending || cleared) context.usageScope.chargeId = null;
           }
         }

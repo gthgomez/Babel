@@ -176,6 +176,7 @@ test('settles a late synthesis against its captured owner after a successor arri
     settleUsage: (_runner, owner) => {
       settled.push(owner.taskOwnerId ?? '')
     },
+    reservationBounds: { inputTokens: 0, outputTokens: 0 },
   })
   currentOwner = 'owner-2'
   deliver('answer for original owner')
