@@ -30,6 +30,8 @@ processes with restricted environments, output limits and failure handling.
 `providerCellPass` additionally requires fresh, workspace/task/session/turn-bound
 host-captured events: at least two distinct dispatched requests with delivered
 results and a completed tool call with a matching start between dispatches.
+Every dispatched request must use the expected route and have a matching delivered
+result; mixed routes and unsettled requests fail qualification.
 Missing trace never qualifies a provider cell. The test suite's synthetic trace
 only tests this validator; it is not a live qualification receipt.
 

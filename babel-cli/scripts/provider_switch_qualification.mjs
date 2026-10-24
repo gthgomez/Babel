@@ -72,13 +72,16 @@ export function checkTrace(events, challenge, task) {
   if (!events.every((event, i) => event.session_id === user.session_id && event.turn_id === user.turn_id &&
       Number.isInteger(event.seq) && (i === 0 || event.seq > events[i - 1].seq) &&
       Number.isFinite(Date.parse(event.ts)) && Date.parse(event.ts) >= challenge.createdAt && Date.parse(event.ts) <= Date.now())) return false
-  const dispatched = events.filter((event) => event.kind === 'model_invocation_phase' && event.phase === 'request_dispatched' &&
+  const dispatched = events.filter((event) => event.kind === 'model_invocation_phase' && event.phase === 'request_dispatched')
+  // A cell certifies this exact route, not a matching subset of a mixed session.
+  // Unsettled dispatches cannot be silently omitted from qualification either.
+  if (!dispatched.every((event) =>
     event.provider === challenge.expectedRoute?.provider && event.model === challenge.expectedRoute?.model &&
     typeof event.provider === 'string' && event.provider.length > 0 && typeof event.model === 'string' && event.model.length > 0 &&
     events.some((input) => input.kind === 'model_input_receipt' && input.inference_id === event.inference_id && input.seq < event.seq &&
       input.provider === event.provider && input.sent_model_id === event.model) &&
     events.some((result) => result.kind === 'model_result_delivery' && result.inference_id === event.inference_id &&
-      result.provider === event.provider && result.model === event.model && result.status === 'delivered' && result.seq > event.seq))
+      result.provider === event.provider && result.model === event.model && result.status === 'delivered' && result.seq > event.seq))) return false
   if (new Set(dispatched.map((event) => event.inference_id)).size < 2) return false
   return dispatched.some((first) => dispatched.some((second) => second.inference_id !== first.inference_id &&
     events.some((tool) => tool.kind === 'tool_completed' && tool.seq > first.seq && tool.seq < second.seq &&

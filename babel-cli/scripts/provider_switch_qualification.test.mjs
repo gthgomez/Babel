@@ -7,11 +7,20 @@ import { fileURLToPath } from 'node:url'
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { prepare, qualify, checkTrace } from './provider_switch_qualification.mjs'
+import { prepareUnitShard } from './run_ci_unit_shard.mjs'
 
 const fixture = fileURLToPath(new URL('../src/fixtures/provider-switch/', import.meta.url))
 const pristine = readFileSync(join(fixture, 'workspace/current/ledger.mjs'), 'utf8')
 const corrected = pristine.replace('(entry.amount > 0 ? entry.amount : 0)', 'entry.amount')
 const hash = (path) => createHash('sha256').update(readFileSync(path)).digest('hex')
+
+test('the actual CI shard selector discovers both qualification and accounting regressions', () => {
+  const packageRoot = fileURLToPath(new URL('../', import.meta.url))
+  const selection = prepareUnitShard(packageRoot, 0, 4)
+  assert.ok(selection.inventory.includes('src/providerSwitchQualification.test.ts'))
+  assert.ok(selection.inventory.includes('src/interactive/projection/accountingTitle.test.ts'))
+  assert.ok(selection.inventory.includes('src/interactive/testing/providerSwitchContinuity.test.ts'))
+})
 function cell(t) {
   const root = mkdtempSync(join(tmpdir(), 'provider-switch ü space-'))
   t.after(() => rmSync(root, { recursive: true, force: true }))
@@ -78,6 +87,31 @@ test('altered and deleted project tests are rejected independently of evaluator 
     if (deleted) rmSync(tests)
     else writeFileSync(tests, '// all tests removed')
     assert.throws(() => qualify(c.evidence), /Protected candidate files changed/)
+  }
+})
+
+test('candidate cannot forge probe results by replacing JSON serialization', (t) => {
+  const c = cell(t)
+  writeFileSync(c.ledger, `
+    const original = JSON.stringify
+    JSON.stringify = (value, ...args) => value?.nonce
+      ? original({ nonce: value.nonce, results: [150,0,0,15,15,-13,-13,0,0,2,2,150], preserved: [true,true,true,true,true] })
+      : original(value, ...args)
+    export function total(entries) { return entries?.length === 0 ? 0 : 150 }
+  `)
+  assert.equal(qualify(c.evidence).functionalPass, false)
+})
+
+test('candidate prototype hooks and nonnumeric results cannot forge the oracle protocol', (t) => {
+  for (const source of [
+    `Object.prototype.toJSON = function () { return this.nonce ? {nonce:this.nonce,results:[150,0,0,15,15,-13,-13,0,0,2,2,150],preserved:[true,true,true,true,true]} : this }; export function total(entries) { return entries?.length === 0 ? 0 : 150 }`,
+    `Array.prototype.push = function () { return this.length }; export function total(entries) { return entries?.length === 0 ? 0 : 150 }`,
+    'export function total(entries) { if (!entries) return 150; if (!entries.length) return 0; return { toJSON: () => entries.reduce((sum, e) => sum + e.amount, 0) } }',
+    corrected.replace('return entries.reduce', 'if (entries.length) entries[0].amount = 999; return entries.reduce'),
+  ]) {
+    const c = cell(t)
+    writeFileSync(c.ledger, source)
+    assert.equal(qualify(c.evidence).functionalPass, false)
   }
 })
 
@@ -155,6 +189,9 @@ test('stale verdict rejected; manifest request minimum and intervening tool evid
   assert.equal(checkTrace(events.filter(e => e.inference_id !== 'request-2'), c.challenge, task), false)
   assert.equal(checkTrace(events.filter(e => e.kind !== 'tool_completed'), c.challenge, task), false)
   assert.equal(checkTrace(events.map(e => ({ ...e, provider: 'commandcode' })), c.challenge, task), false)
+  const extra = events.slice(6).map((event, i) => ({ ...event, inference_id: 'extra', seq: events.length + i }))
+  assert.equal(checkTrace([...events, ...extra.map(e => ({ ...e, provider: 'commandcode' }))], c.challenge, task), false)
+  assert.equal(checkTrace([...events, ...extra.filter(e => e.kind !== 'model_result_delivery')], c.challenge, task), false)
   assert.equal(checkTrace(events.map(e => ({ ...e, ts: '2000-01-01T00:00:00Z' })), c.challenge, task), false)
   assert.equal(checkTrace(events.map(e => e.seq === 0 ? { ...e, task_preview: 'unrelated' } : e), c.challenge, task), false)
   // Deterministic validator control only: this is not a live provider receipt.
