@@ -31,6 +31,14 @@ import {
   renderAvailableModelsTable,
 } from './modelDetail.js';
 import { formatModelPricing } from './modelCatalog.js';
+import {
+  applySessionModelRoute,
+  listCampaignRouteChoices,
+  refreshModelCatalogs,
+  resolveCampaignRouteByKey,
+} from '../modelRouteSwitch.js';
+import { REQUESTED_SELECTOR_KEYS } from '../../intelligence/providerCatalog.js';
+import { resolveChatRouteFromPolicy } from '../../agent/chatModelPolicy.js';
 import { wrapPrefixedBlock } from '../../ui/textLayout.js';
 import { loadInspectBundle, buildInspectRunView } from '../../inspect/loaders.js';
 import { renderInspectRun } from '../../ui/inspection.js';
@@ -271,6 +279,29 @@ export function handleModel(ctx: ReplContext, args: string[]): void {
     } else {
       console.log(renderModelDetail(snapshot));
     }
+    if (ctx.state.model && (REQUESTED_SELECTOR_KEYS as readonly string[]).includes(ctx.state.model)) {
+      try {
+        const { policy, route } = resolveCampaignRouteByKey(ctx.state.model);
+        console.log(primary('\n  Campaign route: ' + accentBright(route.selectorKey)));
+        console.log(`  Requested selector: ${route.selectorKey}`);
+        console.log(`  Resolved: ${policy.provider} → ${route.modelId} (${route.protocol})`);
+        console.log(`  Credential: ${route.credentialEnvVar} ${process.env[route.credentialEnvVar] ? '(present)' : '(MISSING)'}`);
+        console.log(`  Route hash: ${route.routeHash.slice(0, 16)}…`);
+        console.log(`  Catalog freshness: ${route.catalog.url} @ ${route.catalog.fetchedAt || 'unknown'}`);
+        console.log(`  Evidence: ${route.capabilities.source} (revision kind ${route.revisionKind})`);
+      } catch (error) {
+        console.log(warning(`  Campaign route could not be resolved: ${error instanceof Error ? error.message : String(error)}`));
+      }
+    }
+    return;
+  }
+  if (sub === 'refresh') {
+    console.log(muted('\n  Refreshing official provider catalogs…'));
+    void refreshModelCatalogs().then((result) => {
+      if (result.ok) console.log(primary(`  Catalogs refreshed: ${result.summary}`));
+      else console.log(warning(`  ${result.summary}`));
+      console.log(muted('  The current pinned selection is unchanged; use /model <key> to reselect.'));
+    });
     return;
   }
   if (sub === 'why') {
@@ -289,6 +320,30 @@ export function handleModel(ctx: ReplContext, args: string[]): void {
   }
   if (sub && sub !== 'clear') {
     const requested = sub;
+    if ((REQUESTED_SELECTOR_KEYS as readonly string[]).includes(requested)) {
+      const result = applySessionModelRoute(ctx, requested);
+      if (result.status === 'busy') {
+        console.log(warning(`\n  ⚠ Model switch deferred: ${result.reason}`));
+        return;
+      }
+      if (result.status === 'rejected') {
+        console.log(accentBright(`\n  Model switch rejected: ${result.reason}`));
+        console.log(muted('  The previous selection is unchanged. Use /model to list the ten campaign routes.'));
+        return;
+      }
+      const { policy, route } = resolveCampaignRouteByKey(requested);
+      console.log(
+        primary(
+          `\n  Route selected: ${accentBright(route.selectorKey)} (${policy.provider} → ${route.modelId}, ${route.protocol})`,
+        ),
+      );
+      console.log(
+        process.env[route.credentialEnvVar]
+          ? muted(`  Credential ${route.credentialEnvVar}: present. Session history, tool state and cost totals preserved.`)
+          : warning(`  ⚠ ${route.credentialEnvVar} is not set — the next turn will fail until it is added.`),
+      );
+      return;
+    }
     try {
       // Check alias shorthand before resolving by key
       const aliasResolution = resolveModelAlias(requested);
@@ -376,6 +431,18 @@ export function handleModel(ctx: ReplContext, args: string[]): void {
       }
     }
     const activeKey = ctx.state.model ?? resolveModelSnapshot(undefined)?.policy.resolvedBackendKey;
+    const campaign = listCampaignRouteChoices();
+    if (campaign.length > 0) {
+      console.log(primary('\n  Two-provider campaign routes:'));
+      for (const choice of campaign) {
+        const active = choice.selectorKey === activeKey ? ' ← active' : '';
+        const key = choice.credentialPresent ? '' : `  ⚠ ${choice.credentialEnvVar} missing`;
+        console.log(
+          `    ${choice.selectorKey}  ${muted(`${choice.provider} → ${choice.modelId} · ${choice.protocol}${key}`)}${accentBright(active)}`,
+        );
+      }
+      console.log(muted('  Select with /model <selector-key>; credential presence is a key-presence check only.'));
+    }
     const available = renderAvailableModelsTable(getAvailableModels(), activeKey);
     const aliases = Object.keys(MODEL_ALIASES)
       .sort()
