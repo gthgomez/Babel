@@ -23,11 +23,15 @@ describe('provider credential hub', () => {
         'gemini',
         'groq',
         'ollama',
+        'commandcode',
       ],
     )
     assert.equal(getProviderSpec('opencode').credentialEnvVar, 'OPENCODE_API_KEY')
     assert.equal(getProviderSpec('opencode').protocol, 'openai_compatible')
     assert.equal(getProviderSpec('openrouter').credentialEnvVar, 'OPENROUTER_API_KEY')
+    assert.equal(getProviderSpec('commandcode').credentialEnvVar, 'CMD_API_KEY')
+    // The gateway's wire protocol belongs to the resolved route, not the provider.
+    assert.equal(getProviderSpec('commandcode').protocol, 'model_selected')
     assert.deepEqual(
       getProviderCredentialStatus('openrouter', { OPENROUTER_API_KEY: 'synthetic-value' }),
       {

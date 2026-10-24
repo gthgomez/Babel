@@ -10,6 +10,7 @@ export const PROVIDER_IDS = [
   'gemini',
   'groq',
   'ollama',
+  'commandcode',
 ] as const
 
 export type ProviderId = (typeof PROVIDER_IDS)[number]
@@ -25,6 +26,12 @@ export type ProviderProtocol =
   | 'gemini'
   | 'groq'
   | 'ollama'
+  /**
+   * The gateway's concrete wire protocol belongs to the resolved route
+   * (Chat Completions or Anthropic Messages), not to the provider identity.
+   * Transport selection must consult the route, never default a model family.
+   */
+  | 'model_selected'
 
 export type ProviderOperation =
   | 'structured'
@@ -84,6 +91,17 @@ const PROVIDER_SPECS: Readonly<Record<ProviderId, ProviderSpec>> = Object.freeze
     id: 'openrouter',
     credentialEnvVar: 'OPENROUTER_API_KEY',
     protocol: 'openai_compatible',
+    requiresCredential: true,
+    operations: ['structured', 'raw', 'raw_stream', 'native_tool_stream'],
+    authorityConformance: 'certified',
+  },
+  // Command Code Provider API: the wire protocol is resolved per model route
+  // (Chat Completions for most selectors, Anthropic Messages for Haiku).
+  // Credential and origin are fixed to CMD_API_KEY / api.commandcode.ai.
+  commandcode: {
+    id: 'commandcode',
+    credentialEnvVar: 'CMD_API_KEY',
+    protocol: 'model_selected',
     requiresCredential: true,
     operations: ['structured', 'raw', 'raw_stream', 'native_tool_stream'],
     authorityConformance: 'certified',

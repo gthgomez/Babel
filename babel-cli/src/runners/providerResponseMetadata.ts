@@ -121,10 +121,12 @@ export function buildInvocationMetadata(
   });
   const router = routerMetadataProvenance(routerMetadata);
   // https://openrouter.ai/docs/cookbook/administration/usage-accounting
-  // OpenRouter documents usage.cost as the actual charge. Preserve missing
-  // costs as estimates/unknown; malformed reported costs cannot downgrade to
-  // a seemingly complete estimate. Other provider contracts are unchanged.
-  const hasReportedCost = provider === 'openrouter' && usage?.cost !== undefined && usage.cost !== null;
+  // OpenRouter documents usage.cost as the actual charge; Command Code emits
+  // the same field at stream termination. Preserve missing costs as
+  // estimates/unknown; malformed reported costs cannot downgrade to a
+  // seemingly complete estimate. Other provider contracts are unchanged.
+  const hasReportedCost = (provider === 'openrouter' || provider === 'commandcode') &&
+    usage?.cost !== undefined && usage.cost !== null;
   const reportedCost = typeof usage?.cost === 'number' && Number.isFinite(usage.cost) && usage.cost >= 0
     ? usage.cost : null;
   const reasoningTokens =

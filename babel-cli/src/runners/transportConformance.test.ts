@@ -72,6 +72,7 @@ const API_TRANSPORT_MODULES = [
   'geminiApi.ts',
   'groqApi.js',
   'openRouterApi.ts',
+  'commandCodeApi.ts',
   'openCodeApi.ts',
   'openCodeGoApi.ts',
   'providerMessages.ts',
@@ -127,6 +128,7 @@ const ADAPTER_INDEX: Readonly<Record<ProviderId, { module: string; adapterClass:
   deepseek: { module: 'deepSeekApi.ts', adapterClass: 'DeepSeekApiRunner' },
   deepinfra: { module: 'deepInfraApi.ts', adapterClass: 'DeepInfraApiRunner' },
   openrouter: { module: 'openRouterApi.ts', adapterClass: 'OpenRouterApiRunner' },
+  commandcode: { module: 'commandCodeApi.ts', adapterClass: 'CommandCodeApiRunner' },
   opencode: { module: 'openCodeApi.ts', adapterClass: 'OpenCodeApiRunner' },
   'opencode-go': { module: 'openCodeGoApi.ts', adapterClass: 'OpenCodeGoApiRunner' },
   openai: { module: 'openAiApi.ts', adapterClass: 'OpenAiApiRunner' },
@@ -146,6 +148,7 @@ const CLASS_EXTENDS: Readonly<Record<string, string | null>> = {
   DeepInfraApiRunner: null,
   OllamaApiRunner: 'DeepInfraApiRunner',
   OpenRouterApiRunner: 'DeepInfraApiRunner',
+  CommandCodeApiRunner: 'DeepInfraApiRunner',
   OpenCodeApiRunner: 'DeepInfraApiRunner',
   OpenCodeGoApiRunner: 'DeepInfraApiRunner',
   OpenAiApiRunner: null,
@@ -169,7 +172,7 @@ const OPERATION_METHOD: Readonly<Record<ProviderOperation, RegExp>> = {
  * structural check below. Certifying a new provider means adding it here AND
  * to ADAPTER_INDEX AND wiring it in providerEngine.ts — all enforced.
  */
-const EVIDENCE_VETTED_PROVIDERS: readonly ProviderId[] = ['deepseek', 'deepinfra', 'ollama', 'openrouter', 'opencode-go'];
+const EVIDENCE_VETTED_PROVIDERS: readonly ProviderId[] = ['deepseek', 'deepinfra', 'ollama', 'openrouter', 'opencode-go', 'commandcode'];
 
 /** Independent evidence record — registry claims must agree with it. */
 const EVIDENCE_EXPECTATIONS: Readonly<
@@ -179,6 +182,9 @@ const EVIDENCE_EXPECTATIONS: Readonly<
   deepinfra: { protocol: 'openai_compatible', requiresCredential: true },
   ollama: { protocol: 'ollama', requiresCredential: false },
   openrouter: { protocol: 'openai_compatible', requiresCredential: true },
+  // The gateway's concrete wire protocol belongs to the resolved model route;
+  // the provider identity itself carries no default protocol.
+  commandcode: { protocol: 'model_selected', requiresCredential: true },
   // Dormant providers carry no evidence expectations until they are vetted.
   opencode: { protocol: 'openai_compatible', requiresCredential: true },
   'opencode-go': { protocol: 'openai_compatible', requiresCredential: true },

@@ -211,7 +211,10 @@ test('conformance: live providers are authority-certified', () => {
   // The live lanes today (per execute.ts liveOnly filtering and modelPolicy):
   // Go additionally exercises real Chat native-tool denial/result delivery in
   // chatOpenCodeGoProvider.test.ts; transport identity/budget controls remain separate.
-  for (const live of ['deepseek', 'deepinfra', 'ollama', 'openrouter', 'opencode-go'] as const) {
+  // Command Code additionally proves per-protocol credential/origin isolation
+  // and native-tool proposal delivery in commandCodeApi.test.ts; its concrete
+  // wire protocol belongs to the resolved route, not the provider identity.
+  for (const live of ['deepseek', 'deepinfra', 'ollama', 'openrouter', 'opencode-go', 'commandcode'] as const) {
     assert.equal(specs[live]!.authorityConformance, 'certified', `${live} must be certified`);
   }
   // Dormant providers must NOT be certified until they pass this suite.
