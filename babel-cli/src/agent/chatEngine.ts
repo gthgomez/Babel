@@ -466,24 +466,9 @@ export class ChatEngine {
   /** Mutable: P0-C re-resolves limits on isolated user submissions (task class change). */
   private limits: ChatEngineLimits;
   private modelPolicy: ResolvedModelPolicy | undefined;
-  private synthesisRunner:
-    | DeepInfraApiRunner
-    | DeepSeekApiRunner
-    | OllamaApiRunner
-    | OpenRouterApiRunner
-    | null = null;
-  private deliberationRunner:
-    | DeepInfraApiRunner
-    | DeepSeekApiRunner
-    | OllamaApiRunner
-    | OpenRouterApiRunner
-    | null = null;
-  private fallbackRunner:
-    | DeepInfraApiRunner
-    | DeepSeekApiRunner
-    | OllamaApiRunner
-    | OpenRouterApiRunner
-    | null = null;
+  private synthesisRunner: ChatProviderRunner | null = null;
+  private deliberationRunner: ChatProviderRunner | null = null;
+  private fallbackRunner: ChatProviderRunner | null = null;
   private toolCallLog: Array<{
     toolCallId?: string;
     tool: string;
@@ -702,18 +687,8 @@ export class ChatEngine {
   private forceMutateTurnsOverride: number | null = null;
   private operatorMode: ChatOperatorMode = "default";
   private _lastPhase: ChatPhase | null = null;
-  private investigateRunner:
-    | DeepInfraApiRunner
-    | DeepSeekApiRunner
-    | OllamaApiRunner
-    | OpenRouterApiRunner
-    | null = null;
-  private mutateRunner:
-    | DeepInfraApiRunner
-    | DeepSeekApiRunner
-    | OllamaApiRunner
-    | OpenRouterApiRunner
-    | null = null;
+  private investigateRunner: ChatProviderRunner | null = null;
+  private mutateRunner: ChatProviderRunner | null = null;
   private repetitionDetector: RepetitionDetector;
   private policyEventLog = new PolicyEventLog(); // A2: policy event log
   /** Packet D2: per-model edit-format selection; family set when model policy resolves. */
@@ -3906,11 +3881,7 @@ export class ChatEngine {
   /** Record token usage from a runner invocation into the global cost tracker.
    *  #12: Also accumulates API-reported token counts for accurate estimation. */
   private trackRunnerUsage(
-    runner:
-      | DeepInfraApiRunner
-      | DeepSeekApiRunner
-      | OllamaApiRunner
-      | OpenRouterApiRunner,
+    runner: ChatProviderRunner,
     usageScope?: ChatUsageScope,
   ): void {
     trackProviderRunnerUsage(this.providerAccountingHost(), runner, usageScope);
@@ -4035,10 +4006,7 @@ export class ChatEngine {
   private parseChatTurnLenient(rawText: string): ChatTurn {
     return parseChatTurnLenient(rawText);
   }
-  private resolveDeliberationRunner():
-    | DeepInfraApiRunner
-    | DeepSeekApiRunner
-    | OllamaApiRunner {
+  private resolveDeliberationRunner(): ChatProviderRunner {
     this.deliberationRunner = resolveChatDeliberationRunner(
       this.deliberationRunner,
       this.modelPolicy,
@@ -4212,7 +4180,7 @@ export class ChatEngine {
     ownerGeneration?: number,
   ): AsyncGenerator<
     ChatEvent,
-    DeepInfraApiRunner | DeepSeekApiRunner | OpenRouterApiRunner | null,
+    ChatProviderRunner | null,
     undefined
   > {
     return yield* resolveChatFallbackOrFail({
@@ -4496,11 +4464,7 @@ export class ChatEngine {
 
   /** B4: Resolve runner with phase-aware model routing.
    *  Model-name resolution extracted to phaseModelRouting.ts for testability. */
-  private resolveRoutedRunner():
-    | DeepInfraApiRunner
-    | DeepSeekApiRunner
-    | OllamaApiRunner
-    | OpenRouterApiRunner {
+  private resolveRoutedRunner(): ChatProviderRunner {
     // Desktop settings admit one primary route. Legacy phase overrides loaded
     // during CLI bootstrap cannot replace it, including after a task reset.
     if (process.env["BABEL_DESKTOP_PROVIDER"] || this.options.model !== undefined || this.options.providerPolicy !== undefined)

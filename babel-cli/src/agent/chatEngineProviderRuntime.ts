@@ -5,6 +5,13 @@ import { OllamaApiRunner } from '../runners/ollamaApi.js'
 import { OpenCodeApiRunner } from '../runners/openCodeApi.js'
 import { OpenCodeGoApiRunner, type OpenCodeGoRunnerOptions } from '../runners/openCodeGoApi.js'
 import { OpenRouterApiRunner } from '../runners/openRouterApi.js'
+import {
+  CommandCodeApiRunner,
+  COMMANDCODE_CREDENTIAL_ENV_VAR,
+} from '../runners/commandCodeApi.js'
+import { AnthropicMessagesRunner } from '../runners/anthropicMessages.js'
+import { createCommandCodeRunnerForRoute } from '../runners/anthropicMessages.js'
+import { resolveChatRouteFromPolicy } from './chatModelPolicy.js'
 import type { ProviderMessage, RunnerCallbacks } from '../runners/base.js'
 import {
   assertLiveModelId,
@@ -49,6 +56,20 @@ export type ChatProviderRunner =
   | DeepSeekApiRunner
   | OllamaApiRunner
   | OpenRouterApiRunner
+  | CommandCodeApiRunner
+  | AnthropicMessagesRunner
+
+/** Route-aware Command Code runner construction shared by every chat stage. */
+function createCommandCodeChatRunner(
+  modelPolicy: ResolvedModelPolicy,
+): ChatProviderRunner {
+  const route = resolveChatRouteFromPolicy(modelPolicy)
+  return createCommandCodeRunnerForRoute(
+    route,
+    {},
+    { apiKeyEnvVar: COMMANDCODE_CREDENTIAL_ENV_VAR },
+  )
+}
 export type ChatProviderRetryContext = NonNullable<
   Parameters<typeof buildProviderRetryCallbacks>[1]
 >
@@ -64,7 +85,7 @@ export function resolveChatDeliberationRunner(
   current: ChatProviderRunner | null,
   modelPolicy: ResolvedModelPolicy | undefined,
   goOptions?: OpenCodeGoRunnerOptions,
-): DeepInfraApiRunner | DeepSeekApiRunner | OllamaApiRunner {
+): ChatProviderRunner {
   let runner = current
 
   if (modelPolicy?.provider === 'opencode-go' && goOptions?.budget &&
@@ -142,6 +163,20 @@ export function resolveChatDeliberationRunner(
             `  Use /model to see available providers.`,
         )
       }
+    } else if (provider === 'commandcode' && modelId) {
+      // Two-provider campaign: the resolved route selects the concrete wire
+      // protocol (Chat Completions or Anthropic Messages); the credential is
+      // fixed to CMD_API_KEY by provider identity, never by model name.
+      try {
+        return createCommandCodeChatRunner(modelPolicy)
+      } catch (err) {
+        throw new Error(
+          `Cannot start chat: Command Code runner failed to initialize.\n` +
+            `  ${err instanceof Error ? err.message : String(err)}\n` +
+            `  Set CMD_API_KEY in your environment.\n` +
+            `  Use /model to see available models.`,
+        )
+      }
     } else if (provider === 'openrouter' && modelId) {
       try {
         runner = new OpenRouterApiRunner(modelId)
@@ -214,6 +249,9 @@ export function resolveChatFallbackRunner(
 
   if (options.providerRunner) return options.providerRunner
   if (modelPolicy?.provider === 'opencode-go') return null
+  // Campaign Command Code routes are exact-locked: retry the already-selected
+  // runner if one exists, but never resolve a different provider or model.
+  if (modelPolicy?.provider === 'commandcode') return runner
   if (
     !isOfflineChatMode() &&
     modelPolicy?.provider === 'openrouter' &&
@@ -319,6 +357,18 @@ export function resolveChatSynthesisRunner(
       runner = new OpenCodeGoApiRunner(modelId!, {}, goOptions)
     } else if (provider === 'opencode' && modelId) {
       runner = new OpenCodeApiRunner(modelId)
+    } else if (provider === 'commandcode' && modelId) {
+      // Same route-aware transport selection as deliberation; synthesis may
+      // not silently re-home onto another provider's credential or gateway.
+      try {
+        runner = createCommandCodeChatRunner(modelPolicy)
+      } catch (err) {
+        throw new Error(
+          `Cannot start live chat synthesis: Command Code runner is unavailable.\n` +
+            `  ${err instanceof Error ? err.message : String(err)}\n` +
+            `  Set CMD_API_KEY in your environment.`,
+        )
+      }
     } else if (provider === 'openrouter' && modelId) {
       try {
         runner = new OpenRouterApiRunner(modelId)
@@ -649,7 +699,7 @@ export async function* resolveChatFallbackOrFail(
   input: ChatFallbackInput,
 ): AsyncGenerator<
   ChatEvent,
-  DeepInfraApiRunner | DeepSeekApiRunner | OpenRouterApiRunner | null,
+  ChatProviderRunner | null,
   undefined
 > {
   const { err, turn, ownerGeneration } = input
@@ -692,6 +742,12 @@ export async function* resolveChatFallbackOrFail(
   }
   if (input.modelPolicy?.provider === 'opencode-go') {
     yield input.failed(`${err.message} [LIVE_MODEL_POLICY] exact Go route refuses provider substitution`)
+    return null
+  }
+  if (input.modelPolicy?.provider === 'commandcode') {
+    yield input.failed(
+      `${err.message} [LIVE_MODEL_POLICY] campaign Command Code route refuses provider substitution`,
+    )
     return null
   }
   // Runtime Pro → Flash failover with visible reason (not verification)

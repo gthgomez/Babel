@@ -770,8 +770,10 @@ export interface RouteCapabilityEvidence {
   contextLength: number | null;
   maxOutputTokens: number | null;
   supportedEndpoints: readonly string[];
-  /** Fixed identity of the evidence source; catalog data cannot extend it. */
-  source: "official_catalog";
+  /** Fixed identity of the evidence source; catalog data cannot extend it.
+   *  `policy_pinned` marks capabilities carried by a frozen model-policy
+   *  selection; it never claims a fresh catalog verification. */
+  source: "official_catalog" | "policy_pinned";
 }
 
 /** Credential reference derived from the provider identity, never from catalog data. */

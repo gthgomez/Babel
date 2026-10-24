@@ -631,7 +631,9 @@ export function buildProviderRetryCallbacks(host: ChatProviderRetryHost, context
 
 export function trackRunnerUsage(
   host: ChatProviderRetryHost,
-  runner: DeepInfraApiRunner | DeepSeekApiRunner | OllamaApiRunner | OpenRouterApiRunner,
+  runner: {
+    getLastInvocationMetadata?: () => RunnerInvocationMetadata | null;
+  },
   usageScope?: ChatUsageScope,
 ): void {
     // A task charge must be tied to an observed invocation start. Test/offline

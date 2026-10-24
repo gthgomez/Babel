@@ -31,6 +31,14 @@ import { isConfirmedMutation, isConfirmedParentChildMutation, type MutationEffec
 import type { ChatMessage } from './chatToolDefinitions.js';
 import { isChatOpenCodeGoRoute, isOfflineChatMode } from './chatModelPolicy.js';
 import {
+  COMMANDCODE_CREDENTIAL_ENV_VAR,
+} from '../runners/commandCodeApi.js';
+import { AnthropicMessagesRunner, createCommandCodeRunnerForRoute } from '../runners/anthropicMessages.js';
+import {
+  campaignSelectorKeyFor,
+  routeFromPolicySelection,
+} from '../intelligence/providerCatalog.js';
+import {
   LIVE_OPENROUTER_BACKEND_KEY,
   LIVE_OPENROUTER_MODEL_ID,
   assertLiveModelId,
@@ -355,7 +363,39 @@ export function mutationTargetsFromLog(toolCallLog: CriticToolLogEntry[]): strin
   return targets.filter((target, index, all) => target.length > 0 && all.indexOf(target) === index);
 }
 
-export type CriticRunner = DeepInfraApiRunner | DeepSeekApiRunner | OpenRouterApiRunner;
+export type CriticRunner =
+  | DeepInfraApiRunner
+  | DeepSeekApiRunner
+  | OllamaApiRunner
+  | OpenRouterApiRunner
+  | CommandCodeApiRunner
+  | AnthropicMessagesRunner;
+
+import { CommandCodeApiRunner } from '../runners/commandCodeApi.js';
+
+/**
+ * Campaign routes pin their critic to the exact selected provider/model: an
+ * OpenRouter campaign model stays on OpenRouter, and a Command Code campaign
+ * model keeps its resolved transport with CMD_API_KEY. Substitution is refused.
+ */
+function createCampaignCriticRunner(
+  primaryProvider: 'openrouter' | 'commandcode',
+  modelId: string,
+): CriticRunner | null {
+  const selectorKey = campaignSelectorKeyFor(primaryProvider, modelId);
+  if (!selectorKey) return null;
+  if (primaryProvider === 'openrouter') return new OpenRouterApiRunner(modelId);
+  const route = routeFromPolicySelection({
+    selectorKey,
+    provider: 'commandcode',
+    modelId,
+    sourceUrl: null,
+    verifiedAt: null,
+    contextLength: null,
+    maxOutputTokens: null,
+  });
+  return createCommandCodeRunnerForRoute(route, {}, { apiKeyEnvVar: COMMANDCODE_CREDENTIAL_ENV_VAR });
+}
 
 export function resolveOrCreateCriticRunner(
   modelId: string,
@@ -373,6 +413,10 @@ export function resolveOrCreateCriticRunner(
       throw new Error('[LIVE_MODEL_POLICY] Go critic refuses provider/model substitution.')
     }
     return { runner, cache: runner }
+  }
+  if (primaryProvider === 'openrouter' || primaryProvider === 'commandcode') {
+    const campaignRunner = createCampaignCriticRunner(primaryProvider, modelId);
+    if (campaignRunner) return { runner: campaignRunner, cache: campaignRunner };
   }
   // Explicit provider selection wins over model-name heuristics and ambient keys.
   if (primaryProvider && primaryProvider !== 'openrouter') {

@@ -8,6 +8,8 @@ import {
   type ResolvedModelPolicy,
 } from '../modelPolicy.js';
 import { getProviderSpec, providerSupportsOperation } from '../runners/providerRegistry.js';
+import { routeFromPolicySelection } from '../intelligence/providerCatalog.js';
+import type { ResolvedModelRoute } from '../intelligence/types.js';
 
 /** Exact existing Go routes allowed for explicit Chat selection; native budget gates still apply. */
 export function isChatOpenCodeGoRoute(
@@ -146,4 +148,32 @@ export function resolveFallbackModelId(): string {
   return isOfflineChatMode()
     ? 'deepseek-v4-flash'
     : 'deepseek/deepseek-v4-flash-0731';
+}
+
+/**
+ * Build the campaign ResolvedModelRoute for a policy-selected two-provider
+ * backend. The pinned model-policy entry (provider, model id, evidence
+ * freshness) is validated against the same exact-family identities the
+ * catalog resolver enforces; anything outside the ten campaign selector keys
+ * fails explicitly instead of dispatching under a guessed route.
+ */
+export function resolveChatRouteFromPolicy(
+  policy: Pick<ResolvedModelPolicy, 'provider' | 'providerModelId' | 'resolvedBackendKey'>,
+  options?: { babelRoot?: string },
+): ResolvedModelRoute {
+  if (policy.provider !== 'openrouter' && policy.provider !== 'commandcode') {
+    throw new Error(
+      `[LIVE_MODEL_POLICY] Provider "${policy.provider}" is not a two-provider campaign gateway.`,
+    );
+  }
+  const entry = loadModelPolicyConfig(options?.babelRoot).config.models?.[policy.resolvedBackendKey];
+  return routeFromPolicySelection({
+    selectorKey: policy.resolvedBackendKey,
+    provider: policy.provider,
+    modelId: policy.providerModelId,
+    sourceUrl: entry?.source_url ?? null,
+    verifiedAt: entry?.verified_at ?? null,
+    contextLength: entry?.context_window ?? null,
+    maxOutputTokens: entry?.max_output_tokens ?? null,
+  });
 }

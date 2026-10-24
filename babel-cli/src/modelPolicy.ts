@@ -6,6 +6,10 @@ import {
   evaluateModelBackendPolicy,
   formatEnterprisePolicyDecision,
 } from './config/enterprisePolicy.js';
+import {
+  REQUESTED_SELECTOR_KEYS,
+  routeFromPolicySelection,
+} from './intelligence/providerCatalog.js';
 
 export const MODEL_POLICY_TIERS = [
   'cheap',
@@ -306,11 +310,38 @@ export function isOpenRouterDeepSeekLiveBackend(
   );
 }
 
+/**
+ * The ten two-provider campaign routes are qualified explicit live backends:
+ * provider identity and model id must both match the pinned campaign route,
+ * validated by the same exact-family rules the catalog resolver enforces.
+ */
+export function isTwoProviderCampaignBackend(
+  entry: Pick<ResolvedModelPolicyEntry, 'backendKey' | 'provider' | 'providerModelId'>,
+): boolean {
+  if (entry.provider !== 'openrouter' && entry.provider !== 'commandcode') return false;
+  if (!(REQUESTED_SELECTOR_KEYS as readonly string[]).includes(entry.backendKey)) return false;
+  try {
+    const route = routeFromPolicySelection({
+      selectorKey: entry.backendKey,
+      provider: entry.provider,
+      modelId: entry.providerModelId,
+      sourceUrl: null,
+      verifiedAt: null,
+      contextLength: null,
+      maxOutputTokens: null,
+    });
+    return route.modelId === entry.providerModelId;
+  } catch {
+    return false;
+  }
+}
+
 export function isLiveModelBackend(
   entry: Pick<ResolvedModelPolicyEntry, 'backendKey' | 'provider' | 'providerModelId'>,
 ): boolean {
   if (isDeepSeekLiveBackend(entry)) return true;
   if (isOpenRouterDeepSeekLiveBackend(entry)) return true;
+  if (isTwoProviderCampaignBackend(entry)) return true;
   return (
     entry.provider === 'openrouter' &&
     entry.backendKey === LIVE_OPENROUTER_BACKEND_KEY &&

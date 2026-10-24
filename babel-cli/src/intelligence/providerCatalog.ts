@@ -497,3 +497,163 @@ export function resolveRequestedRoutes(
     resolveModelRoute(key, catalogs, resolvedAt),
   );
 }
+
+/**
+ * Build a route from a frozen model-policy selection without a network fetch.
+ *
+ * The campaign pins its ten routes into `config/model-policy.json`; this maps
+ * one pinned selection back onto the shared `ResolvedModelRoute` contract so
+ * the chat runtime can construct the exact transport for a policy-selected
+ * backend. Evidence is marked `policy_pinned` and must never be described as
+ * a freshly verified catalog resolution. The pinned model id is validated
+ * against the same exact-family identities the catalog resolver enforces — a
+ * stale or wrong pin fails explicitly instead of dispatching to another model.
+ */
+export function routeFromPolicySelection(input: {
+  selectorKey: string;
+  provider: RouteProviderId;
+  modelId: string;
+  sourceUrl: string | null;
+  verifiedAt: string | null;
+  contextLength: number | null;
+  maxOutputTokens: number | null;
+}): ResolvedModelRoute {
+  const { family, provider } = parseSelectorKey(input.selectorKey);
+  if (provider !== input.provider) {
+    throw new RouteResolutionError(
+      "unknown_selector_key",
+      input.selectorKey,
+      `selector key declares provider ${provider} but the policy entry says ${input.provider}`,
+    );
+  }
+  if (!(REQUESTED_SELECTOR_KEYS as readonly string[]).includes(input.selectorKey)) {
+    throw new RouteResolutionError(
+      "unknown_selector_key",
+      input.selectorKey,
+      "only the ten campaign selector keys may be resolved from policy pins",
+    );
+  }
+
+  let canonicalRevision: string | null = null;
+  let revisionKind: ResolvedModelRoute["revisionKind"];
+  if (family === "deepseek-v4.1-flash-latest") {
+    if (provider === "commandcode") {
+      if (input.modelId !== "deepseek/deepseek-v4.1-flash") {
+        throw new RouteResolutionError(
+          "model_missing_from_catalog",
+          input.selectorKey,
+          `pinned Command Code latest alias must be deepseek/deepseek-v4.1-flash, got ${input.modelId}`,
+        );
+      }
+      revisionKind = "provider_alias";
+    } else {
+      // The pinned OpenRouter id must still satisfy the family-latest filter.
+      const valid = input.modelId.startsWith("deepseek/deepseek-v4.1-flash") &&
+        !input.modelId.startsWith("~") &&
+        !input.modelId.includes(":") &&
+        !/(flashx|fast|free|pro)/i.test(input.modelId);
+      if (!valid) {
+        throw new RouteResolutionError(
+          "ambiguous_latest_revision",
+          input.selectorKey,
+          `pinned model ${input.modelId} is not an unambiguous V4.1 Flash family revision`,
+        );
+      }
+      revisionKind = "dated_id";
+    }
+  } else {
+    const exact = EXACT_MODEL_IDS[family];
+    if (!exact || input.modelId !== exact[provider]) {
+      throw new RouteResolutionError(
+        "model_missing_from_catalog",
+        input.selectorKey,
+        `pinned model ${input.modelId} does not match the exact ${family} identity for ${provider}`,
+      );
+    }
+    revisionKind = "catalog_id";
+  }
+
+  const protocol: ModelRouteProtocol =
+    provider === "openrouter"
+      ? "chat_completions"
+      : family === "claude-haiku-5.5"
+        ? "anthropic_messages"
+        : "chat_completions";
+
+  return {
+    selectorKey: input.selectorKey,
+    provider,
+    modelId: input.modelId,
+    protocol,
+    apiBase: ROUTE_API_BASES[provider],
+    canonicalRevision,
+    revisionKind,
+    catalog: {
+      url: input.sourceUrl ?? ROUTE_API_BASES[provider],
+      fetchedAt: input.verifiedAt ?? "",
+      sha256: sha256(
+        JSON.stringify([
+          "policy_pinned",
+          input.selectorKey,
+          input.modelId,
+          input.sourceUrl,
+          input.verifiedAt,
+        ]),
+      ),
+    },
+    capabilities: {
+      contextLength: input.contextLength,
+      maxOutputTokens: input.maxOutputTokens,
+      supportedEndpoints:
+        protocol === "anthropic_messages" ? ["/messages"] : ["/chat/completions"],
+      source: "policy_pinned",
+    },
+    routeHash: routeHash({
+      selectorKey: input.selectorKey,
+      provider,
+      modelId: input.modelId,
+      protocol,
+      apiBase: ROUTE_API_BASES[provider],
+      canonicalRevision,
+      catalogSha256: sha256(
+        JSON.stringify([
+          "policy_pinned",
+          input.selectorKey,
+          input.modelId,
+          input.sourceUrl,
+          input.verifiedAt,
+        ]),
+      ),
+    }),
+    credentialEnvVar: ROUTE_CREDENTIAL_ENV_VARS[provider],
+  };
+}
+
+/**
+ * Reverse lookup: the unique campaign selector key whose pinned identity is
+ * this provider/model pair, or null when the pair is not one of the ten
+ * campaign routes. Used to bind auxiliary calls (critic, repair) to the exact
+ * selected route instead of model-name heuristics.
+ */
+export function campaignSelectorKeyFor(
+  provider: RouteProviderId,
+  modelId: string,
+): string | null {
+  for (const key of REQUESTED_SELECTOR_KEYS) {
+    const { family, provider: keyProvider } = parseSelectorKey(key);
+    if (keyProvider !== provider) continue;
+    if (family === "deepseek-v4.1-flash-latest") {
+      if (
+        provider === "commandcode" && modelId === "deepseek/deepseek-v4.1-flash"
+      ) return key;
+      if (
+        provider === "openrouter" &&
+        modelId.startsWith("deepseek/deepseek-v4.1-flash") &&
+        !modelId.includes(":") && !/(flashx|fast|free|pro)/i.test(modelId)
+      ) return key;
+    } else if (EXACT_MODEL_IDS[family]?.[provider] === modelId) {
+      return key;
+    }
+  }
+  return null;
+}

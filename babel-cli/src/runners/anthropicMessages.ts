@@ -233,13 +233,17 @@ export class AnthropicMessagesRunner implements LlmRunner {
     throw lastError ?? new Error('[anthropicMessages] request failed without a response')
   }
 
-  async execute<T>(
+  /**
+   * Plain-text completion used by the chat synthesis/legacy paths. A Messages
+   * route must serve it over /messages, never by falling back to another
+   * runner's Chat Completions endpoint.
+   */
+  async executeRaw(
     prompt: string,
-    schema: ZodType<T, unknown>,
     callbacks?: RunnerCallbacks,
     systemPrompt?: string,
     signal?: AbortSignal,
-  ): Promise<T> {
+  ): Promise<string> {
     const startedAt = Date.now()
     const { system, messages } = mapProviderMessagesToAnthropic(
       [{ role: 'user', content: prompt }],
@@ -276,6 +280,17 @@ export class AnthropicMessagesRunner implements LlmRunner {
       this.maxTokens,
     )
     callbacks?.onChunk?.(text)
+    return text
+  }
+
+  async execute<T>(
+    prompt: string,
+    schema: ZodType<T, unknown>,
+    callbacks?: RunnerCallbacks,
+    systemPrompt?: string,
+    signal?: AbortSignal,
+  ): Promise<T> {
+    const text = await this.executeRaw(prompt, callbacks, systemPrompt, signal)
     return schema.parse(extractJson(text))
   }
 
@@ -445,7 +460,7 @@ export function createCommandCodeRunnerForRoute(
     env?: NodeJS.ProcessEnv;
     executionEnvelope?: ResolvedExecutionEnvelope;
   },
-): LlmRunner {
+): CommandCodeApiRunner | AnthropicMessagesRunner {
   if (route.protocol === 'anthropic_messages') {
     return new AnthropicMessagesRunner(route.modelId, {
       apiKeyEnvVar: credential.apiKeyEnvVar,
