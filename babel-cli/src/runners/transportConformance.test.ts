@@ -73,6 +73,7 @@ const API_TRANSPORT_MODULES = [
   'groqApi.js',
   'openRouterApi.ts',
   'commandCodeApi.ts',
+  'anthropicMessages.ts',
   'openCodeApi.ts',
   'openCodeGoApi.ts',
   'providerMessages.ts',

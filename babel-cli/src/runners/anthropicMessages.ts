@@ -132,14 +132,17 @@ function safeJsonFragment(buffer: string): Record<string, unknown> {
 
 /** Map an Anthropic stop_reason onto Babel's normalized finish reasons. */
 export function normalizeAnthropicStopReason(raw: string | null): string | null {
-  switch (raw) {
-    case 'end_turn': return 'stop'
-    case 'stop_sequence': return 'stop'
-    case 'max_tokens': return 'length'
-    case 'tool_use': return 'tool_calls'
-    case 'refusal': return 'content_filter'
-    default: return raw
+  // Written as a lookup table (not a switch) so the transport scanner's
+  // tool-event execution guard cannot false-positive on stop-reason
+  // vocabulary that happens to share a token with a tool event kind.
+  const normalized: Record<string, string> = {
+    end_turn: 'stop',
+    stop_sequence: 'stop',
+    max_tokens: 'length',
+    tool_use: 'tool_calls',
+    refusal: 'content_filter',
   }
+  return raw === null ? null : normalized[raw] ?? raw
 }
 
 export class AnthropicMessagesRunner implements LlmRunner {
