@@ -218,6 +218,198 @@
       "verified_at": "2026-08-21",
       "expires_at": "2026-11-21",
       "selection_reason": "Free OpenCode Zen preview model (Ox Alpha Free); requires OPENCODE_API_KEY."
+    },
+    "deepseek-v4.1-flash-latest-openrouter": {
+      "provider": "openrouter",
+      "model_id": "deepseek/deepseek-v4.1-flash-1017",
+      "tier": "standard",
+      "enabled": true,
+      "experimental": true,
+      "native_tool_use": true,
+      "context_window": 1048576,
+      "max_output_tokens": 943717,
+      "source_url": "https://openrouter.ai/api/v1/models",
+      "verified_at": "2026-10-23",
+      "expires_at": "2026-11-22",
+      "selection_reason": "Dated DeepSeek V4.1 Flash revision resolved from the OpenRouter catalog (family-latest filter, 2026-10-23 snapshot); no other family may be substituted.",
+      "notes": [
+        "Two-provider qualification route; select by exact backend key.",
+        "No model, family, or provider fallback when this backend is requested.",
+        "Pricing is not statically pinned; costs stay provider-reported or unknown.",
+        "Credential reference is OPENROUTER_API_KEY."
+      ]
+    },
+    "deepseek-v4.1-flash-latest-commandcode": {
+      "provider": "commandcode",
+      "model_id": "deepseek/deepseek-v4.1-flash",
+      "tier": "standard",
+      "enabled": true,
+      "experimental": true,
+      "native_tool_use": true,
+      "context_window": 1000000,
+      "source_url": "https://api.commandcode.ai/provider/v1/models",
+      "verified_at": "2026-10-23",
+      "expires_at": "2026-11-22",
+      "selection_reason": "Command Code V4.1 Flash latest alias; concrete upstream revision is unknown until stronger provider evidence arrives.",
+      "notes": [
+        "Two-provider qualification route; select by exact backend key.",
+        "No model, family, or provider fallback when this backend is requested.",
+        "Pricing is not statically pinned; costs stay provider-reported or unknown.",
+        "Credential reference is CMD_API_KEY; never reuse OPENROUTER_API_KEY."
+      ]
+    },
+    "glm-5.3-flash-openrouter": {
+      "provider": "openrouter",
+      "model_id": "z-ai/glm-5.3-flash",
+      "tier": "standard",
+      "enabled": true,
+      "experimental": true,
+      "native_tool_use": true,
+      "context_window": 1048576,
+      "max_output_tokens": 943717,
+      "source_url": "https://openrouter.ai/api/v1/models",
+      "verified_at": "2026-10-23",
+      "expires_at": "2026-11-22",
+      "selection_reason": "Exact z-ai/glm-5.3-flash catalog identity via OpenRouter.",
+      "notes": [
+        "Two-provider qualification route; select by exact backend key.",
+        "No model, family, or provider fallback when this backend is requested.",
+        "Pricing is not statically pinned; costs stay provider-reported or unknown.",
+        "Credential reference is OPENROUTER_API_KEY."
+      ]
+    },
+    "glm-5.3-flash-commandcode": {
+      "provider": "commandcode",
+      "model_id": "z-ai/glm-5.3-flash",
+      "tier": "standard",
+      "enabled": true,
+      "experimental": true,
+      "native_tool_use": true,
+      "context_window": 1048576,
+      "source_url": "https://api.commandcode.ai/provider/v1/models",
+      "verified_at": "2026-10-23",
+      "expires_at": "2026-11-22",
+      "selection_reason": "Exact z-ai/glm-5.3-flash catalog identity via the Command Code Provider API.",
+      "notes": [
+        "Two-provider qualification route; select by exact backend key.",
+        "No model, family, or provider fallback when this backend is requested.",
+        "Pricing is not statically pinned; costs stay provider-reported or unknown.",
+        "Credential reference is CMD_API_KEY; never reuse OPENROUTER_API_KEY."
+      ]
+    },
+    "mimo-v2.6-flash-openrouter": {
+      "provider": "openrouter",
+      "model_id": "xiaomi/mimo-v2.6-flash",
+      "tier": "standard",
+      "enabled": true,
+      "experimental": true,
+      "native_tool_use": true,
+      "context_window": 1050000,
+      "source_url": "https://openrouter.ai/api/v1/models",
+      "verified_at": "2026-10-23",
+      "expires_at": "2026-11-22",
+      "selection_reason": "Exact xiaomi/mimo-v2.6-flash catalog identity via OpenRouter.",
+      "notes": [
+        "Two-provider qualification route; select by exact backend key.",
+        "No model, family, or provider fallback when this backend is requested.",
+        "Pricing is not statically pinned; costs stay provider-reported or unknown.",
+        "Credential reference is OPENROUTER_API_KEY."
+      ]
+    },
+    "mimo-v2.6-flash-commandcode": {
+      "provider": "commandcode",
+      "model_id": "xiaomi/mimo-v2.6-flash",
+      "tier": "standard",
+      "enabled": true,
+      "experimental": true,
+      "native_tool_use": true,
+      "context_window": 1048576,
+      "source_url": "https://api.commandcode.ai/provider/v1/models",
+      "verified_at": "2026-10-23",
+      "expires_at": "2026-11-22",
+      "selection_reason": "Exact xiaomi/mimo-v2.6-flash catalog identity via the Command Code Provider API.",
+      "notes": [
+        "Two-provider qualification route; select by exact backend key.",
+        "No model, family, or provider fallback when this backend is requested.",
+        "Pricing is not statically pinned; costs stay provider-reported or unknown.",
+        "Credential reference is CMD_API_KEY; never reuse OPENROUTER_API_KEY."
+      ]
+    },
+    "gpt-6-luna-openrouter": {
+      "provider": "openrouter",
+      "model_id": "openai/gpt-6-luna",
+      "tier": "standard",
+      "enabled": true,
+      "experimental": true,
+      "native_tool_use": true,
+      "context_window": 1050000,
+      "source_url": "https://openrouter.ai/api/v1/models",
+      "verified_at": "2026-10-23",
+      "expires_at": "2026-11-22",
+      "selection_reason": "Exact openai/gpt-6-luna catalog identity via OpenRouter.",
+      "notes": [
+        "Two-provider qualification route; select by exact backend key.",
+        "No model, family, or provider fallback when this backend is requested.",
+        "Pricing is not statically pinned; costs stay provider-reported or unknown.",
+        "Credential reference is OPENROUTER_API_KEY."
+      ]
+    },
+    "gpt-6-luna-commandcode": {
+      "provider": "commandcode",
+      "model_id": "gpt-6-luna",
+      "tier": "standard",
+      "enabled": true,
+      "experimental": true,
+      "native_tool_use": true,
+      "context_window": 1050000,
+      "source_url": "https://api.commandcode.ai/provider/v1/models",
+      "verified_at": "2026-10-23",
+      "expires_at": "2026-11-22",
+      "selection_reason": "Exact gpt-6-luna catalog identity via the Command Code Provider API.",
+      "notes": [
+        "Two-provider qualification route; select by exact backend key.",
+        "No model, family, or provider fallback when this backend is requested.",
+        "Pricing is not statically pinned; costs stay provider-reported or unknown.",
+        "Credential reference is CMD_API_KEY; never reuse OPENROUTER_API_KEY."
+      ]
+    },
+    "claude-haiku-5.5-openrouter": {
+      "provider": "openrouter",
+      "model_id": "anthropic/claude-haiku-5.5",
+      "tier": "standard",
+      "enabled": true,
+      "experimental": true,
+      "native_tool_use": true,
+      "context_window": 1000000,
+      "source_url": "https://openrouter.ai/api/v1/models",
+      "verified_at": "2026-10-23",
+      "expires_at": "2026-11-22",
+      "selection_reason": "Exact anthropic/claude-haiku-5.5 catalog identity via OpenRouter (Chat Completions-compatible route).",
+      "notes": [
+        "Two-provider qualification route; select by exact backend key.",
+        "No model, family, or provider fallback when this backend is requested.",
+        "Pricing is not statically pinned; costs stay provider-reported or unknown.",
+        "Credential reference is OPENROUTER_API_KEY."
+      ]
+    },
+    "claude-haiku-5.5-commandcode": {
+      "provider": "commandcode",
+      "model_id": "claude-haiku-5-5",
+      "tier": "standard",
+      "enabled": true,
+      "experimental": true,
+      "native_tool_use": true,
+      "context_window": 1000000,
+      "source_url": "https://api.commandcode.ai/provider/v1/models",
+      "verified_at": "2026-10-23",
+      "expires_at": "2026-11-22",
+      "selection_reason": "Exact claude-haiku-5-5 catalog identity via the Command Code Provider API (Anthropic Messages wire protocol).",
+      "notes": [
+        "Two-provider qualification route; select by exact backend key.",
+        "No model, family, or provider fallback when this backend is requested.",
+        "Pricing is not statically pinned; costs stay provider-reported or unknown.",
+        "Credential reference is CMD_API_KEY; never reuse OPENROUTER_API_KEY."
+      ]
     }
   },
   "stages": {

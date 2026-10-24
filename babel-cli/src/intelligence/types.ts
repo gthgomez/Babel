@@ -758,3 +758,57 @@ export interface ProviderOperationalProfile {
   availabilityObservations?: ObservationDistribution;
   lastValidatedAt?: string;
 }
+
+/** Wire protocol of a resolved model route's gateway endpoint. */
+export type ModelRouteProtocol = "chat_completions" | "anthropic_messages";
+
+/** The two independently authenticated gateway identities used for route resolution. */
+export type RouteProviderId = "openrouter" | "commandcode";
+
+/** Capability provenance captured with the catalog snapshot that declared it. */
+export interface RouteCapabilityEvidence {
+  contextLength: number | null;
+  maxOutputTokens: number | null;
+  supportedEndpoints: readonly string[];
+  /** Fixed identity of the evidence source; catalog data cannot extend it. */
+  source: "official_catalog";
+}
+
+/** Credential reference derived from the provider identity, never from catalog data. */
+export type RouteCredentialReference = "OPENROUTER_API_KEY" | "CMD_API_KEY";
+
+/** One frozen, catalog-evidenced model route selected by a Babel selector key. */
+export interface ResolvedModelRoute {
+  selectorKey: string;
+  provider: RouteProviderId;
+  modelId: string;
+  protocol: ModelRouteProtocol;
+  apiBase: string;
+  /** Concrete upstream revision when the catalog exposes one; null stays unknown. */
+  canonicalRevision: string | null;
+  revisionKind: "dated_id" | "provider_alias" | "catalog_id";
+  catalog: { url: string; fetchedAt: string; sha256: string };
+  capabilities: RouteCapabilityEvidence;
+  routeHash: string;
+  /** Fixed by provider identity; a catalog entry can never supply or change this. */
+  credentialEnvVar: RouteCredentialReference;
+}
+
+/** Why a selector key could not be resolved; never substitutes another family. */
+export type RouteResolutionFailureReason =
+  | "unknown_selector_key"
+  | "catalog_not_loaded"
+  | "model_missing_from_catalog"
+  | "ambiguous_latest_revision"
+  | "endpoint_unsupported";
+
+export class RouteResolutionError extends Error {
+  constructor(
+    public readonly reason: RouteResolutionFailureReason,
+    public readonly selectorKey: string,
+    public readonly detail: string,
+  ) {
+    super(`${selectorKey}: ${reason} (${detail})`);
+    this.name = "RouteResolutionError";
+  }
+}
