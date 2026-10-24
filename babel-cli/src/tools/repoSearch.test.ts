@@ -166,3 +166,51 @@ test('searchSymbols finds code symbols across multiple languages', async () => {
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('broad glob search in a large tree stays bounded and skips ignored directories', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-grep-bounded-'));
+  const priorTask = process.env['BABEL_TASK'];
+  try {
+    // A tree with real sources plus generated/artifact forests that discovery
+    // must not walk synchronously.
+    mkdirSync(join(root, 'src'), { recursive: true });
+    writeFileSync(join(root, 'src/app.ts'), 'const NEEDLE_TOKEN = 1;\n');
+    // Generated/artifact directories are excluded by the project's ignore file.
+    writeFileSync(join(root, '.gitignore'), 'node_modules/\ndist/\n');
+    for (const dir of ['node_modules/leftpad', 'node_modules/rightpad', 'dist', '.git/objects']) {
+      mkdirSync(join(root, dir), { recursive: true });
+      writeFileSync(join(root, dir, 'noise.js'), 'const NEEDLE_TOKEN = 2;\n');
+    }
+    process.env['BABEL_TASK'] = '';
+    const result = await grepContent(root, 'NEEDLE_TOKEN', { maxMatches: 10 });
+    // Scoped discovery: only the resolved project's real source matched.
+    assert.equal(result.matches.length, 1);
+    assert.equal(result.matches[0]?.path, 'src/app.ts');
+    assert.equal(result.truncated, false);
+  } finally {
+    if (priorTask === undefined) delete process.env['BABEL_TASK'];
+    else process.env['BABEL_TASK'] = priorTask;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('cancellation during a scoped search settles quickly and aborts cleanly', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-grep-cancel-'));
+  try {
+    // Enough files that a full fallback walk would exceed a second.
+    for (let i = 0; i < 300; i++) {
+      const dir = join(root, `src/mod-${i}`);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, 'file.ts'), 'export const filler = 1;\n');
+    }
+    const controller = new AbortController();
+    // Abort before the search starts; the search must reject as aborted.
+    controller.abort();
+    await assert.rejects(
+      () => grepContent(root, 'filler', { signal: controller.signal }),
+      /aborted/i,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

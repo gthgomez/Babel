@@ -47,6 +47,8 @@ export interface RipgrepResult {
   matches: RipgrepMatch[];
   truncated: boolean;
   elapsedMs: number;
+  /** True when the search hit the deadline: matches are partial evidence. */
+  timedOut?: boolean;
 }
 
 // ─── Detection cache ────────────────────────────────────────────────────────────
@@ -103,7 +105,7 @@ function runRipgrepProcess(
   projectRoot: string,
   args: string[],
   signal?: AbortSignal,
-): Promise<{ stdout: string; stderr: string; status: number | null }> {
+): Promise<{ stdout: string; stderr: string; status: number | null; timedOut: boolean }> {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) {
       reject(new RipgrepAbortedError());
@@ -128,9 +130,12 @@ function runRipgrepProcess(
       finish(() => reject(new RipgrepAbortedError()));
     };
     signal?.addEventListener('abort', onAbort, { once: true });
+    let timedOut = false;
     const timer = setTimeout(() => {
+      // A deadline is a partial observation, not empty evidence: keep the
+      // stdout streamed so far and let the caller report the truncation.
+      timedOut = true;
       child.kill();
-      finish(() => reject(new Error(`ripgrep timed out after ${DEFAULT_RIPGREP_TIMEOUT_MS}ms`)));
     }, DEFAULT_RIPGREP_TIMEOUT_MS);
     child.stdout?.setEncoding('utf-8');
     child.stderr?.setEncoding('utf-8');
@@ -151,7 +156,7 @@ function runRipgrepProcess(
     child.on('close', (status) => {
       clearTimeout(timer);
       signal?.removeEventListener('abort', onAbort);
-      finish(() => resolve({ stdout, stderr, status }));
+      finish(() => resolve({ stdout, stderr, status, timedOut }));
     });
   });
 }
@@ -213,7 +218,9 @@ export async function ripgrep(
 
   const elapsedMs = Date.now() - startTime;
 
-  if (result.status !== 0 && result.status !== 1) {
+  // A timed-out search keeps whatever streamed before the deadline; the null
+  // status is the deadline's, not an rg failure.
+  if (result.status !== 0 && result.status !== 1 && !result.timedOut) {
     throw new Error(`ripgrep failed: ${result.stderr?.trim() || `exit ${result.status}`}`);
   }
 
@@ -259,7 +266,7 @@ export async function ripgrep(
     }
   }
 
-  return { matches, truncated, elapsedMs };
+  return { matches, truncated: truncated || result.timedOut, elapsedMs, ...(result.timedOut ? { timedOut: true } : {}) };
 }
 
 /**

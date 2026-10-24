@@ -2,6 +2,7 @@ import {
   accentHigh,
   muted,
   primary,
+  warning,
   getEffectiveTerminalWidth,
   visibleLength,
   truncate,
@@ -352,6 +353,12 @@ export function renderStatusBar(state: StatusBarState): string {
 
   const leftParts: string[] = [primary(state.model)];
   if (policy.showMode) leftParts.push(accentHigh(state.mode));
+  // Truthful state: a blocked/failed/cancelled/budget-stopped turn must never
+  // render as an unchanged (ready-looking) bar. 'ready' itself is silent —
+  // an idle bar is ready, so printing READY would only add noise.
+  if (state.status !== undefined && state.status !== "ready") {
+    leftParts.push(warning(state.status.toUpperCase()));
+  }
   if (policy.showBranch && state.gitBranch) {
     leftParts.push(muted(`${state.gitBranch}${state.gitDirty ? "*" : ""}`));
   }

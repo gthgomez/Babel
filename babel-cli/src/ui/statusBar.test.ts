@@ -62,6 +62,38 @@ function firstLineAnsi(text: string): string {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// 0. Truthful run state (campaign Task 7)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+describe('renderStatusBar — truthful run state', () => {
+  it('shows FAILED instead of an unchanged ready-looking bar', () => {
+    const line = firstLine(renderStatusBar(defaultState({ width: 80, status: 'failed' })));
+    assert.match(line, /FAILED/);
+    assert.doesNotMatch(line, /READY/);
+  });
+  it('shows BLOCKED, CANCELLED, and BUDGET_EXHAUSTED states', () => {
+    for (const status of ['blocked', 'cancelled', 'budget_exhausted']) {
+      const line = firstLine(renderStatusBar(defaultState({ width: 80, status })));
+      assert.match(line, new RegExp(status.toUpperCase()));
+    }
+  });
+  it('stays silent for ready so an idle bar never fakes a state', () => {
+    const line = firstLine(renderStatusBar(defaultState({ width: 80, status: 'ready' })));
+    assert.doesNotMatch(line, /READY|FAILED|BLOCKED/);
+  });
+  it('shows unknown-cost basis instead of presenting estimates as invoices', () => {
+    const line = firstLine(renderStatusBar(defaultState({
+      width: 120,
+      totalCost: 0.007,
+      hasUnknownCost: true,
+      unknownChargeCount: 2,
+    })));
+    assert.match(line, /known \$0\.0070/);
+    assert.match(line, /2 unresolved/);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // 1. Basic formatting
 // ═══════════════════════════════════════════════════════════════════════════════
 

@@ -128,7 +128,7 @@ export async function grepContent(
   pattern: string,
   options: GrepContentOptions = {},
   approvedReadRoots?: string[],
-): Promise<{ matches: GrepMatch[]; truncated: boolean }> {
+): Promise<{ matches: GrepMatch[]; truncated: boolean; timedOut?: boolean }> {
   const root = resolve(projectRoot);
   const allowedRoots = [root, ...(approvedReadRoots ?? [])];
   let searchPaths = allowedRoots;
@@ -288,11 +288,21 @@ export async function globPaths(
   return paths.slice(0, limit);
 }
 
-export function formatGrepMatches(matches: GrepMatch[], truncated: boolean): string {
+export function formatGrepMatches(
+  matches: GrepMatch[],
+  truncated: boolean,
+  timedOut?: boolean,
+): string {
   if (matches.length === 0) {
-    return 'No matches found.';
+    // A deadline is partial evidence, never empty evidence.
+    return timedOut
+      ? 'Search timed out before any match was collected; the pattern space could not be fully searched.'
+      : 'No matches found.';
   }
   const lines: string[] = [];
+  if (timedOut) {
+    lines.push(`[search deadline hit; ${matches.length} partial match(es) shown — the search did not complete]`);
+  }
   for (const match of matches) {
     lines.push(`${match.path}:${match.line}: ${match.text}`);
     for (const c of match.contextBefore ?? []) lines.push(`  - ${c}`);
@@ -353,8 +363,8 @@ export async function handleGrepTool(
     );
     const output =
       input.output_format === 'json'
-        ? JSON.stringify({ matches: result.matches, truncated: result.truncated })
-        : formatGrepMatches(result.matches, result.truncated);
+        ? JSON.stringify({ matches: result.matches, truncated: result.truncated, ...(result.timedOut ? { timedOut: true } : {}) })
+        : formatGrepMatches(result.matches, result.truncated, result.timedOut);
     return {
       exit_code: 0,
       stdout: output,
