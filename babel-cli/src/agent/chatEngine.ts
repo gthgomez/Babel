@@ -75,13 +75,17 @@ import type { ProviderMessage, RunnerCallbacks } from "../runners/base.js";
 import { mapProviderMessagesToWire } from "../runners/providerMessages.js";
 import {
   assertLiveModelId,
+  resolveModelByKey,
   LIVE_OPENROUTER_MODEL_ID,
   type ResolvedModelPolicy,
 } from "../modelPolicy.js";
 import {
   isOfflineChatMode,
   resolveChatModelPolicy,
+  resolveChatRouteFromPolicy,
 } from "./chatModelPolicy.js";
+import { resolveProviderCredential } from "../runners/credentialHub.js";
+import type { ResolvedModelRoute } from "../intelligence/types.js";
 import { globalCostTracker } from "../services/costTracker.js";
 
 import {
@@ -228,6 +232,7 @@ import {
   isCircuitBreakerObservation,
 } from "./agentLoopReducer.js";
 import {
+  checkpointParityEventLog,
   createParityRuntime,
   paritySettleToolStarted,
   paritySettleToolNotStarted,
@@ -246,6 +251,7 @@ import {
   loadSessionEventLogForResume,
   loadSessionEventLogIfPresentForResume,
   recordModelFailover,
+  recordModelRouteChange,
   recordWorkingStateSnapshot,
   flushSessionEventLogStrict,
   resumedToolRecoveryGuidance,
@@ -451,6 +457,11 @@ const PENDING_COMPILED_REQUEST_IDENTITY = "pending-compiled-request-identity";
 
 const TURN_TIMEOUT_MS = 120_000; // per-turn LLM call deadline
 const MAX_TOOL_CONCURRENCY = 6;
+
+/** Result of an idle model-route selection on a live engine. */
+export type ModelSwitchResult =
+  | { status: 'applied'; routeHash: string }
+  | { status: 'busy' | 'rejected'; reason: string };
 
 export class ChatEngine {
   // TODO: once ProviderMessage[] path is stable, remove legacy ChatMessage[]
@@ -695,6 +706,13 @@ export class ChatEngine {
    * charges (the unknown-usage reservation) but drops estimate overhead.
    */
   private dispatchReservations = new Map<string, number>();
+  /**
+   * Number of chat turns currently executing through submitMessageStreamBody.
+   * A model route change is only permitted between turns.
+   */
+  private activeTurnCount = 0;
+  /** Durable route identity of the currently selected campaign route, if any. */
+  private currentRouteHash: string | null = null;
   private mutateRunner: ChatProviderRunner | null = null;
   private repetitionDetector: RepetitionDetector;
   private policyEventLog = new PolicyEventLog(); // A2: policy event log
@@ -2215,6 +2233,7 @@ export class ChatEngine {
     const claim = this.admitCurrentSubmission(submissionGeneration, userInput, {
       taskId: objective.taskId, taskClass: objective.submission.runtime.taskClass,
     });
+    this.activeTurnCount += 1;
     try {
       yield* this.submitMessageStreamLoop(userInput, taskIntent, {
         ...submitOpts,
@@ -2225,6 +2244,7 @@ export class ChatEngine {
       const captured = captureSessionEventAppendFailure(error, this.engineRunDir);
       yield this.streamFailed(captured?.operatorMessage ?? (error instanceof Error ? error.message : String(error)), error instanceof ContextPreparationError ? error.reason : undefined);
     } finally {
+      this.activeTurnCount -= 1;
       this.settleClaimOnExit(claim);
     }
   }
@@ -3887,8 +3907,134 @@ export class ChatEngine {
     );
   }
 
-  /** Record token usage from a runner invocation into the global cost tracker.
-   *  #12: Also accumulates API-reported token counts for accurate estimation. */
+  /**
+   * Campaign Task 6: replace the selected model route between turns without
+   * disposing the engine. Session identity, durable conversation, tool
+   * call/result pairing, repository identity, authority and cumulative
+   * accounting are preserved; provider-dependent runner caches are reset so
+   * the next dispatch constructs the exact transport for the new route.
+   * A busy or rejected attempt leaves the previous selection fully intact.
+   */
+  selectModelRoute(route: ResolvedModelRoute): ModelSwitchResult {
+    if (this.activeTurnCount > 0) {
+      return {
+        status: 'busy',
+        reason: 'A model or tool turn is currently active. Wait for it to settle, or cancel it, before switching routes.',
+      };
+    }
+    const previousRouteHash = this.currentRouteHash ?? this.routeHashFromPolicy(this.modelPolicy);
+    try {
+      const policy = resolveModelByKey({
+        key: route.selectorKey,
+        bindStagesToSelectedModel: true,
+        liveOnly: !isOfflineChatMode(),
+      });
+      if (policy.provider !== route.provider || policy.providerModelId !== route.modelId) {
+        return {
+          status: 'rejected',
+          reason: `Policy entry for "${route.selectorKey}" resolves to ${policy.provider}/${policy.providerModelId}, not the requested ${route.provider}/${route.modelId}.`,
+        };
+      }
+      // Credential preflight: key-presence only, through the same credential
+      // hub the transport will use. Absence blocks the switch instead of
+      // queueing a dispatch that would fail with the wrong provider.
+      const credential = resolveProviderCredential(
+        route.provider,
+        route.provider === 'commandcode'
+          ? { envVarOverride: route.credentialEnvVar }
+          : {},
+      );
+      if (!credential) {
+        return {
+          status: 'rejected',
+          reason: `${route.credentialEnvVar} is not set for the ${route.provider} route. Add it to the environment before selecting this model.`,
+        };
+      }
+      // Context-limit validation: an outgoing conversation that cannot fit in
+      // the new route's window is blocked honestly rather than truncated.
+      const contextLimit = route.capabilities.contextLength ?? policy.contextWindow ?? null;
+      if (contextLimit !== null && this.apiTokenCount > 0) {
+        // apiTokenCount is the cumulative reported token count; the latest
+        // request's prompt size is the best available conversation estimate.
+        const estimatedConversationTokens = Math.max(
+          this.lastRequestPromptTokens ?? 0,
+          Math.min(this.apiTokenCount, this.limits.maxEstimatedTokens),
+        );
+        if (estimatedConversationTokens > contextLimit) {
+          return {
+            status: 'rejected',
+            reason: `The conversation (~${estimatedConversationTokens} tokens) exceeds the selected model's ${contextLimit}-token context window. Compact the conversation or choose a model with a larger window.`,
+          };
+        }
+      }
+      const nextRouteHash = route.routeHash;
+      if (nextRouteHash === previousRouteHash && this.modelPolicy?.resolvedBackendKey === route.selectorKey) {
+        return { status: 'applied', routeHash: nextRouteHash };
+      }
+      // Persist the route change durably BEFORE committing engine state: a
+      // failed event append leaves the previous selection untouched.
+      recordModelRouteChange(this.parity.sessionEvents, {
+        turnId: this.parity.turnId,
+        selectorKey: route.selectorKey,
+        provider: route.provider,
+        modelId: route.modelId,
+        protocol: route.protocol,
+        routeHash: nextRouteHash,
+        previousRouteHash: previousRouteHash ?? null,
+        apiBase: route.apiBase,
+        credentialEnvVar: route.credentialEnvVar,
+        routeEvidence: {
+          ...(route.catalog.url ? { catalog_url: route.catalog.url } : {}),
+          ...(route.catalog.fetchedAt ? { catalog_fetched_at: route.catalog.fetchedAt } : {}),
+          ...(route.catalog.sha256 ? { catalog_sha256: route.catalog.sha256 } : {}),
+          ...(route.canonicalRevision !== null ? { canonical_revision: route.canonicalRevision } : {}),
+          revision_kind: route.revisionKind,
+          ...(route.capabilities.contextLength !== null ? { context_length: route.capabilities.contextLength } : {}),
+          ...(route.capabilities.maxOutputTokens !== null ? { max_output_tokens: route.capabilities.maxOutputTokens } : {}),
+          capabilities_source: route.capabilities.source,
+          ...(policy.selectionReason !== undefined ? { selection_reason: policy.selectionReason } : {}),
+        },
+      });
+      try {
+        checkpointParityEventLog(this.parity, this.engineRunDir);
+      } catch (error) {
+        return {
+          status: 'rejected',
+          reason: `The route change could not be persisted: ${error instanceof Error ? error.message : String(error)}. The previous selection is unchanged.`,
+        };
+      }
+      // Commit: new policy, reset provider-dependent caches, keep everything
+      // else (conversation, parity, authority, accounting, task allowance).
+      this.modelPolicy = policy;
+      this.deliberationRunner = null;
+      this.synthesisRunner = null;
+      this.fallbackRunner = null;
+      this.investigateRunner = null;
+      this.mutateRunner = null;
+      this.currentRouteHash = nextRouteHash;
+      return { status: 'applied', routeHash: nextRouteHash };
+    } catch (error) {
+      return {
+        status: 'rejected',
+        reason: `Model route "${route.selectorKey}" could not be resolved: ${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
+  }
+
+  /** Route hash of the current policy when it is one of the campaign routes. */
+  private routeHashFromPolicy(
+    policy: ResolvedModelPolicy | undefined,
+  ): string | null {
+    if (!policy || (policy.provider !== 'openrouter' && policy.provider !== 'commandcode')) {
+      return null;
+    }
+    try {
+      return resolveChatRouteFromPolicy(policy).routeHash;
+    } catch {
+      return null;
+    }
+  }
+
   private trackRunnerUsage(
     runner: ChatProviderRunner,
     usageScope?: ChatUsageScope,

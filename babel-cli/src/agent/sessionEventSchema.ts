@@ -65,6 +65,8 @@ export type SessionEventKind =
   | 'approval_decision'
   /** H2: typed repair attempt (failure-class keyed). */
   | 'repair_attempt'
+  /** Campaign Task 6: durable between-turn model route selection. */
+  | 'model_route_change'
   | 'working_state_snapshot';
 
 export interface SessionEventBase {
@@ -350,6 +352,19 @@ export type SessionEvent =
       reason_code?: TerminalReasonCode;
       /** D03: separate model-vs-harness cause axis; null = not established. */
       cause_class?: 'model' | 'provider' | 'environment' | 'harness' | 'verification' | null;
+    })
+  | (SessionEventBase & {
+      kind: 'model_route_change';
+      selector_key: string;
+      provider: string;
+      model_id: string;
+      protocol: string;
+      route_hash: string;
+      previous_route_hash: string | null;
+      api_base: string;
+      credential_env_var: string;
+      /** Full nonsecret route evidence (catalog url/freshness, capabilities). */
+      route_evidence: Record<string, unknown>;
     })
   | (SessionEventBase & {
       kind: 'model_failover';

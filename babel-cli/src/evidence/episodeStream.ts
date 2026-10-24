@@ -157,6 +157,8 @@ export function mapSessionKindToEpisode(
       return { kind: 'completion', type: 'completion_decision' };
     case 'model_failover':
       return { kind: 'recovery', type: 'model_failover' };
+    case 'model_route_change':
+      return { kind: 'session', type: 'model_route_change' };
     case 'model_input_receipt':
     case 'model_invocation_phase':
     case 'capability_binding_receipt':

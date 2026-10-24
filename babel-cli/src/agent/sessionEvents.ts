@@ -1393,3 +1393,39 @@ export function planToolSettle(
   }
   return { skip, execute, interrupted };
 }
+
+/**
+ * Campaign Task 6: durable between-turn model route selection. Carries the
+ * full nonsecret route evidence (identity, protocol, catalog freshness and
+ * previous/new route hashes) so a resumed session can display exactly what
+ * was selected without substituting a different provider.
+ */
+export function recordModelRouteChange(
+  log: SessionEventLog,
+  input: {
+    turnId: string | null;
+    selectorKey: string;
+    provider: string;
+    modelId: string;
+    protocol: string;
+    routeHash: string;
+    previousRouteHash: string | null;
+    apiBase: string;
+    credentialEnvVar: string;
+    routeEvidence: Record<string, unknown>;
+  },
+): SessionEvent {
+  return appendSessionEvent(log, {
+    kind: 'model_route_change',
+    turn_id: input.turnId,
+    selector_key: input.selectorKey,
+    provider: input.provider,
+    model_id: input.modelId,
+    protocol: input.protocol,
+    route_hash: input.routeHash,
+    previous_route_hash: input.previousRouteHash,
+    api_base: input.apiBase,
+    credential_env_var: input.credentialEnvVar,
+    route_evidence: input.routeEvidence,
+  });
+}

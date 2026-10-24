@@ -66,7 +66,7 @@ export function parseSessionEventLog(
     'tool_completed', 'tool_failed', 'tool_cancelled', 'recovery_reconciled', 'mutation_batch',
     'verifier_attempt', 'gate_decision', 'policy_intervened', 'progress_recovery',
     'completion_decision', 'model_failover', 'compaction_started', 'compaction_summary', 'compaction_committed', 'compaction_created', 'turn_ended',
-    'budget_snapshot', 'approval_decision', 'repair_attempt', 'working_state_snapshot',
+    'budget_snapshot', 'approval_decision', 'repair_attempt', 'working_state_snapshot', 'model_route_change',
   ])
 
   for (const [index, line] of lines.entries()) {
@@ -118,12 +118,14 @@ export function parseSessionEventLog(
       completion_decision: ['requested_outcome', 'final_outcome', 'allowed', 'reason', 'evidence_refs', 'policy_version'],
       model_failover: [], compaction_started: ['operation_id', 'strategy', 'replaces_thread_seq_start', 'replaces_thread_seq_end', 'replaces_message_count'], compaction_summary: ['operation_id', 'capsule_digest', 'raw_observation_refs', 'preserved_tool_call_ids'], compaction_committed: ['operation_id', 'thread_event_id', 'capsule_digest', 'replaces_thread_seq_start', 'replaces_thread_seq_end', 'replaces_message_count', 'preserved_tool_call_ids'], compaction_created: [], turn_ended: ['status'], budget_snapshot: [],
       approval_decision: ['request_id', 'decision'], repair_attempt: ['failure_class', 'attempt'],
+      model_route_change: ['selector_key', 'provider', 'model_id', 'protocol', 'route_hash', 'previous_route_hash', 'api_base', 'credential_env_var', 'route_evidence'],
       working_state_snapshot: ['state_schema_version', 'state'],
     }
     const arrayFields = new Set(['paths', 'signals', 'evidence_refs', 'raw_observation_refs', 'preserved_tool_call_ids', 'delivered_tool_call_ids'])
-    const objectFields = new Set(['receipt', 'state'])
+    const objectFields = new Set(['receipt', 'state', 'route_evidence'])
     const booleanFields = new Set(['authoritative', 'allowed', 'advertised', 'continued_task'])
     const nullableBooleanFields = new Set(['authorized', 'effective'])
+    const nullableStringFields = new Set(['previous_route_hash'])
     const numberFields = new Set(['score', 'attempt', 'backoff_ms', 'replaces_thread_seq_start', 'replaces_thread_seq_end', 'replaces_message_count', 'status_code', 'state_schema_version'])
     for (const field of required[ev.kind as SessionEventKind]) {
       if (!(field in ev)) throw new Error(`Invalid session event at line ${index + 1}: ${field} is required`)
@@ -140,7 +142,10 @@ export function parseSessionEventLog(
       if (numberFields.has(field) && typeof fieldValue !== 'number') {
         throw new Error(`Invalid session event at line ${index + 1}: ${field} must be a number`)
       }
-      if (!arrayFields.has(field) && !objectFields.has(field) && !booleanFields.has(field) && !nullableBooleanFields.has(field) && !numberFields.has(field) && typeof fieldValue !== 'string') {
+      if (nullableStringFields.has(field) && fieldValue !== null && typeof fieldValue !== 'string') {
+        throw new Error(`Invalid session event at line ${index + 1}: ${field} must be a string or null`)
+      }
+      if (!arrayFields.has(field) && !objectFields.has(field) && !booleanFields.has(field) && !nullableBooleanFields.has(field) && !nullableStringFields.has(field) && !numberFields.has(field) && typeof fieldValue !== 'string') {
         throw new Error(`Invalid session event at line ${index + 1}: ${field} must be a string`)
       }
     }
