@@ -229,3 +229,31 @@ test('live backend admission covers the ten campaign routes only with exact ids'
     providerModelId: 'z-ai/glm-5.3-flash',
   }), false)
 })
+
+test('commandcode compaction binds to its own gateway, Claude routes stay disabled', async () => {
+  const { resolveCompactionSummarizationProvider } = await import('./chatCompaction.js')
+  const saved = process.env[COMMANDCODE_CREDENTIAL_ENV_VAR]
+  process.env[COMMANDCODE_CREDENTIAL_ENV_VAR] = 'synthetic-commandcode-key'
+  try {
+    const glm = resolveCompactionSummarizationProvider({
+      pinSelection: true,
+      chatProvider: 'commandcode',
+      compactionModel: 'z-ai/glm-5.3-flash',
+    })
+    assert.ok(glm)
+    assert.equal(glm.baseUrl, 'https://api.commandcode.ai/provider/v1/chat/completions')
+    // Credential provenance is proven by behavior, not by echoing keys.
+    assert.ok(!JSON.stringify(glm).includes('OPENROUTER'))
+
+    // A Claude Messages route has no Chat Completions compaction path: refuse
+    // instead of dispatching a Claude id to the wrong endpoint.
+    assert.equal(resolveCompactionSummarizationProvider({
+      pinSelection: true,
+      chatProvider: 'commandcode',
+      compactionModel: 'claude-haiku-5-5',
+    }), null)
+  } finally {
+    if (saved === undefined) delete process.env[COMMANDCODE_CREDENTIAL_ENV_VAR]
+    else process.env[COMMANDCODE_CREDENTIAL_ENV_VAR] = saved
+  }
+})
