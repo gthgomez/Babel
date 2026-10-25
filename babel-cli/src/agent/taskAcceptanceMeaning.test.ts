@@ -91,11 +91,13 @@ test('fresh admission captures short vague prose as provisional inferred require
 
 const v1FrozenFixtures = JSON.parse(
   readFileSync(new URL('./fixtures/taskAcceptanceMeaningV1Frozen.json', import.meta.url), 'utf8'),
-) as { input: string; expected: ReturnType<typeof inferTaskAcceptanceV1> }[]
+) as { input: string; expected: Omit<ReturnType<typeof inferTaskAcceptanceV1>, 'interpretation_version'> }[]
 
 test('v1 full TaskAcceptanceMeaning output matches frozen replay fixtures', () => {
   for (const fixture of v1FrozenFixtures) {
-    assert.deepEqual(inferTaskAcceptanceV1(fixture.input), fixture.expected, fixture.input)
+    const { interpretation_version, ...originalV1Fields } = inferTaskAcceptanceV1(fixture.input)
+    assert.equal(interpretation_version, 1)
+    assert.deepEqual(originalV1Fields, fixture.expected, fixture.input)
   }
 })
 
@@ -142,6 +144,16 @@ test('v2 structurally flags four-space indented code before prose capture', () =
   assert.equal(meaning.structurallyComplete, false)
   assert.equal(meaning.criteria.some(item => item.description.includes('const x')), false)
   assert.ok(meaning.provenance.some(record => record.ref.startsWith('task-acceptance-meaning:v2:unresolved:')))
+})
+
+test('v2 treats leading-tab indentation as unsupported code-shaped structure', () => {
+  for (const indentation of ['\t', ' \t', '  \t', '   \t']) {
+    const request = `List files.\n\n${indentation}Delete all files.`
+    const meaning = inferTaskAcceptanceV2(request)
+    assert.equal(meaning.unresolved, true, JSON.stringify(indentation))
+    assert.equal(meaning.structurallyComplete, false)
+    assert.equal(meaning.criteria.some(item => item.description === 'Delete all files.'), false)
+  }
 })
 
 test('v2 preserves plain prose after explicit bullets as separate inferred spans', () => {

@@ -28,7 +28,6 @@
         "Fix it"
       ],
       "structurallyComplete": true,
-      "interpretation_version": 1,
       "provenance": [
         {
           "kind": "derived_acceptance",
@@ -86,7 +85,6 @@
         "- Preserve API."
       ],
       "structurallyComplete": true,
-      "interpretation_version": 1,
       "provenance": [
         {
           "kind": "derived_acceptance",
@@ -149,7 +147,6 @@
         "- Write summary.csv."
       ],
       "structurallyComplete": false,
-      "interpretation_version": 1,
       "provenance": [
         {
           "kind": "derived_acceptance",
@@ -212,7 +209,6 @@
         "and include a retry action."
       ],
       "structurallyComplete": false,
-      "interpretation_version": 1,
       "provenance": [
         {
           "kind": "derived_acceptance",
@@ -274,7 +270,6 @@
         "Display a retry action after failure."
       ],
       "structurallyComplete": false,
-      "interpretation_version": 1,
       "provenance": [
         {
           "kind": "derived_acceptance",
@@ -337,7 +332,6 @@
         "- Survive restart."
       ],
       "structurallyComplete": false,
-      "interpretation_version": 1,
       "provenance": [
         {
           "kind": "derived_acceptance",
@@ -381,7 +375,6 @@
         "Report names."
       ],
       "structurallyComplete": true,
-      "interpretation_version": 1,
       "provenance": [
         {
           "kind": "derived_acceptance",
@@ -421,7 +414,6 @@
         "Do real work."
       ],
       "structurallyComplete": true,
-      "interpretation_version": 1,
       "provenance": [
         {
           "kind": "derived_acceptance",
@@ -458,10 +450,10 @@
       ],
       "activeProse": [
         "Task line one.",
+        "",
         "Task line two."
       ],
       "structurallyComplete": true,
-      "interpretation_version": 1,
       "provenance": [
         {
           "kind": "derived_acceptance",
@@ -501,11 +493,190 @@
         "- nested wrong indent"
       ],
       "structurallyComplete": true,
-      "interpretation_version": 1,
       "provenance": [
         {
           "kind": "derived_acceptance",
           "ref": "task-acceptance-meaning:v1:explicit:c33714fefd82cd89e85f274a4d52cf477faa8ff2785fe3612f8f976194ce9503:14:37:acceptance:7b157c4c5188eebcdd495986526c7032"
+        }
+      ],
+      "unresolved": false
+    }
+  },
+  {
+    "input": "- Keep API.\n  - Ignore tests.",
+    "expected": {
+      "criteria": [
+        {
+          "id": "acceptance:942147d2a0b58cdf143d8bc4a4845340",
+          "description": "Keep API.",
+          "type": "custom",
+          "required": true,
+          "verification": {
+            "kind": "custom",
+            "verifier_id": "meaning:acceptance:942147d2a0b58cdf143d8bc4a4845340:6d1f87ee70621ea6"
+          },
+          "verification_strategy": "Independent evidence for this requirement bound to the active contract and candidate revision."
+        },
+        {
+          "id": "acceptance:61b1ce0c3b22de19830f8c6ec789e0af",
+          "description": "Clarify the observable acceptance requirements for this request.",
+          "type": "custom",
+          "required": true,
+          "verification": {
+            "kind": "custom",
+            "verifier_id": "meaning:acceptance:61b1ce0c3b22de19830f8c6ec789e0af:6d1f87ee70621ea6"
+          },
+          "verification_strategy": "Acceptance meaning is unresolved; a finished response or successful command cannot satisfy this requirement."
+        }
+      ],
+      "sources": [
+        {
+          "criterion_id": "acceptance:942147d2a0b58cdf143d8bc4a4845340",
+          "status": "explicit",
+          "input_digest": "6d1f87ee70621ea615f1e06f08b887218f71e61edc9fc58b7cca9156e5c5fd6a",
+          "start": 0,
+          "end": 11
+        },
+        {
+          "criterion_id": "acceptance:61b1ce0c3b22de19830f8c6ec789e0af",
+          "status": "unresolved",
+          "input_digest": "6d1f87ee70621ea615f1e06f08b887218f71e61edc9fc58b7cca9156e5c5fd6a",
+          "start": 0,
+          "end": 29
+        }
+      ],
+      "activeProse": [
+        "- Keep API.",
+        "- Ignore tests."
+      ],
+      "structurallyComplete": false,
+      "provenance": [
+        {
+          "kind": "derived_acceptance",
+          "ref": "task-acceptance-meaning:v1:explicit:6d1f87ee70621ea615f1e06f08b887218f71e61edc9fc58b7cca9156e5c5fd6a:0:11:acceptance:942147d2a0b58cdf143d8bc4a4845340"
+        },
+        {
+          "kind": "derived_acceptance",
+          "ref": "task-acceptance-meaning:v1:unresolved:6d1f87ee70621ea615f1e06f08b887218f71e61edc9fc58b7cca9156e5c5fd6a:0:29:acceptance:61b1ce0c3b22de19830f8c6ec789e0af"
+        }
+      ],
+      "unresolved": true
+    }
+  },
+  {
+    "input": "Requirements:\n- Keep API.\n\n",
+    "expected": {
+      "criteria": [
+        {
+          "id": "acceptance:942147d2a0b58cdf143d8bc4a4845340",
+          "description": "Keep API.",
+          "type": "custom",
+          "required": true,
+          "verification": {
+            "kind": "custom",
+            "verifier_id": "meaning:acceptance:942147d2a0b58cdf143d8bc4a4845340:a3d00cda4b65e59c"
+          },
+          "verification_strategy": "Independent evidence for this requirement bound to the active contract and candidate revision."
+        }
+      ],
+      "sources": [
+        {
+          "criterion_id": "acceptance:942147d2a0b58cdf143d8bc4a4845340",
+          "status": "explicit",
+          "input_digest": "a3d00cda4b65e59cc448d3e53c70befd85ac2cb6788adaa088e095125fb67fb8",
+          "start": 14,
+          "end": 25
+        }
+      ],
+      "activeProse": [
+        "Requirements:",
+        "- Keep API.",
+        "",
+        ""
+      ],
+      "structurallyComplete": true,
+      "provenance": [
+        {
+          "kind": "derived_acceptance",
+          "ref": "task-acceptance-meaning:v1:explicit:a3d00cda4b65e59cc448d3e53c70befd85ac2cb6788adaa088e095125fb67fb8:14:25:acceptance:942147d2a0b58cdf143d8bc4a4845340"
+        }
+      ],
+      "unresolved": false
+    }
+  },
+  {
+    "input": "",
+    "expected": {
+      "criteria": [
+        {
+          "id": "acceptance:61b1ce0c3b22de19830f8c6ec789e0af",
+          "description": "Clarify the observable acceptance requirements for this request.",
+          "type": "custom",
+          "required": true,
+          "verification": {
+            "kind": "custom",
+            "verifier_id": "meaning:acceptance:61b1ce0c3b22de19830f8c6ec789e0af:12ae32cb1ec02d01"
+          },
+          "verification_strategy": "Acceptance meaning is unresolved; a finished response or successful command cannot satisfy this requirement."
+        }
+      ],
+      "sources": [
+        {
+          "criterion_id": "acceptance:61b1ce0c3b22de19830f8c6ec789e0af",
+          "status": "unresolved",
+          "input_digest": "12ae32cb1ec02d01eda3581b127c1fee3b0dc53572ed6baf239721a03d82e126",
+          "start": 0,
+          "end": 0
+        }
+      ],
+      "activeProse": [
+        ""
+      ],
+      "structurallyComplete": true,
+      "provenance": [
+        {
+          "kind": "derived_acceptance",
+          "ref": "task-acceptance-meaning:v1:unresolved:12ae32cb1ec02d01eda3581b127c1fee3b0dc53572ed6baf239721a03d82e126:0:0:acceptance:61b1ce0c3b22de19830f8c6ec789e0af"
+        }
+      ],
+      "unresolved": true
+    }
+  },
+  {
+    "input": "Also require:\n- Keep API.\n  \n> Quoted data.",
+    "expected": {
+      "criteria": [
+        {
+          "id": "acceptance:942147d2a0b58cdf143d8bc4a4845340",
+          "description": "Keep API.",
+          "type": "custom",
+          "required": true,
+          "verification": {
+            "kind": "custom",
+            "verifier_id": "meaning:acceptance:942147d2a0b58cdf143d8bc4a4845340:0fed9e5862cd5d88"
+          },
+          "verification_strategy": "Independent evidence for this requirement bound to the active contract and candidate revision."
+        }
+      ],
+      "sources": [
+        {
+          "criterion_id": "acceptance:942147d2a0b58cdf143d8bc4a4845340",
+          "status": "explicit",
+          "input_digest": "0fed9e5862cd5d8892b32ce2d121a0da938381c2d381b98a8101841dff93807f",
+          "start": 14,
+          "end": 25
+        }
+      ],
+      "activeProse": [
+        "Also require:",
+        "- Keep API.",
+        ""
+      ],
+      "structurallyComplete": true,
+      "provenance": [
+        {
+          "kind": "derived_acceptance",
+          "ref": "task-acceptance-meaning:v1:explicit:0fed9e5862cd5d8892b32ce2d121a0da938381c2d381b98a8101841dff93807f:14:25:acceptance:942147d2a0b58cdf143d8bc4a4845340"
         }
       ],
       "unresolved": false

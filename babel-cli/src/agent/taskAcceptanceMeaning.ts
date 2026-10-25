@@ -115,8 +115,10 @@ function interpretTaskAcceptance(request: string, opts: InterpretOptions): TaskA
       if (/^(?:acceptance criteria|requirements?)\s*:?\s*$/i.test(heading)) { activeProse.push(line.trim()); example = false; requirementRegion = true; listIndent = undefined; continue }
       if (/^(?:(?:for )?examples?(?: (?:input|output|text|code)| of [^:]{1,100})?|sample(?: (?:input|output|text|code))?|logs?|quoted (?:text|content))(?:\s*:|\s*$)/i.test(heading)) { example = true; exampleDepth = sectionDepth; plainExample = headingDepth === undefined; continue }
       if (/^(?:non[-\s]*goals?|out[-\s]+of[-\s]+scope|exclusions?|not required)(?:\s*:|\s*$)/i.test(heading)) { activeProse.push(line.trim()); exclusionDepth = sectionDepth; plainExclusion = headingDepth === undefined; continue }
+      // Frozen v1 records active lines before heading/list handling, including blanks.
+      if (opts.version === 1) activeProse.push(line.trim())
       if (/^\s{0,3}#{1,6}\s+/.test(line)) {
-        activeProse.push(line.trim())
+        if (opts.version === 2) activeProse.push(line.trim())
         example = false
         listIndent = undefined
         continue
@@ -124,7 +126,7 @@ function interpretTaskAcceptance(request: string, opts: InterpretOptions): TaskA
       if (/^\s{0,3}(?:also|additionally|and)\b[\s,:]*/i.test(line)) {
         requirementRegion = true
         if (/^\s{0,3}(?:also|additionally|and)\b[\s,:]*require\s*:\s*$/i.test(line)) {
-          activeProse.push(line.trim())
+          if (opts.version === 2) activeProse.push(line.trim())
           continue
         }
       }
@@ -133,22 +135,22 @@ function interpretTaskAcceptance(request: string, opts: InterpretOptions): TaskA
         const indent = bullet[1]!.length
         listIndent ??= indent
         if (indent > listIndent || indent > 3) { incomplete = true; continue }
-        activeProse.push(line.trim())
+        if (opts.version === 2) activeProse.push(line.trim())
         add(bullet[2]!, 'explicit', start, end)
         continue
       }
       const inline = line.match(/^\s{0,3}(?:acceptance criteria|requirements?)\s*:\s*(.+?)\s*$/i)
-      if (inline) { requirementRegion = true; activeProse.push(line.trim()); add(inline[1]!, 'explicit', start, end); continue }
+      if (inline) { requirementRegion = true; if (opts.version === 2) activeProse.push(line.trim()); add(inline[1]!, 'explicit', start, end); continue }
       const trimmedLine = line.trim()
       const lineIndent = line.match(/^( *)/)?.[1]?.length ?? 0
-      const indentedCodeLine = lineIndent >= 4
+      const indentedCodeLine = lineIndent >= 4 || /^ {0,3}\t/.test(line)
       const listContinuation =
         listIndent !== undefined &&
         trimmedLine.length > 0 &&
         lineIndent > listIndent &&
         lineIndent < 4 &&
         !/^\s*(?:[-*+•]|\d+[.)])\s+/.test(line)
-      if (trimmedLine) activeProse.push(trimmedLine)
+      if (opts.version === 2 && trimmedLine) activeProse.push(trimmedLine)
       if (opts.admitActiveProseSpans && trimmedLine && !indentedCodeLine) {
         admissibleProse.push({ start, end, text: trimmedLine })
       }
