@@ -60,6 +60,7 @@ import {
   getRequestTimeoutMs,
   isAbortError,
   isCallerCancelError,
+  linkExternalAbortSignal,
   retryDelayMs,
   sleep,
   type FetchRedirectPolicy,
@@ -637,11 +638,7 @@ export class DeepInfraApiRunner implements LlmRunner {
       lastAttempt = attempt;
       const controller = new AbortController();
       // Link external abort signal so Esc/Ctrl+C cancels in-flight HTTP requests
-      let onExternalAbort: (() => void) | undefined;
-      if (signal) {
-        onExternalAbort = () => controller.abort();
-        signal.addEventListener('abort', onExternalAbort, { once: true });
-      }
+      const onExternalAbort = linkExternalAbortSignal(controller, signal);
       const timeout = setTimeout(() => controller.abort(), requestTimeoutMs);
       try {
         notifyPhase('request_dispatched', undefined, `attempt ${attempt}`);
@@ -873,11 +870,7 @@ export class DeepInfraApiRunner implements LlmRunner {
             throw error;
           });
           const controller = new AbortController();
-          let onStreamRetryAbort: (() => void) | undefined;
-          if (signal) {
-            onStreamRetryAbort = () => controller.abort();
-            signal.addEventListener('abort', onStreamRetryAbort, { once: true });
-          }
+          const onStreamRetryAbort = linkExternalAbortSignal(controller, signal);
           const timeout = setTimeout(() => controller.abort(), requestTimeoutMs);
           lastAttempt += 1;
           try {
@@ -1451,11 +1444,7 @@ export class DeepInfraApiRunner implements LlmRunner {
       lastAttempt = attempt;
       attemptDeadlineAt = Date.now() + requestTimeoutMs;
       const controller = new AbortController();
-      let onExternalAbort: (() => void) | undefined;
-      if (signal) {
-        onExternalAbort = () => controller.abort();
-        signal.addEventListener('abort', onExternalAbort, { once: true });
-      }
+      const onExternalAbort = linkExternalAbortSignal(controller, signal);
       const timeout = setTimeout(() => controller.abort(), requestTimeoutMs);
       try {
         notifyPhase('request_dispatched', undefined, `attempt ${attempt}`);
