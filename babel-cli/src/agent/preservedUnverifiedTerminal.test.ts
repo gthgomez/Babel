@@ -1,3 +1,22 @@
+/**
+ * Gate-seam preserved-UNVERIFIED regressions.
+ *
+ * Base proof (PR434 green, unchanged): `115c0895c3867c90c64edc32707cc217d9be2d27`
+ * Successor branch: `cursor/j08-preserve-candidate-freshness-f97b`
+ *
+ * Initial RED on exact base implementation (`115c0895` `preservedUnverifiedTerminal.ts`),
+ * current regression tests only, agent-run 2026-10-25:
+ *   # tests 12 / # pass 10 / # fail 2
+ *   not ok — after confirmed mutation…: actual `stale_revision`, expected `retain`
+ *   not ok — relevant indeterminate…: actual `retain`, expected `stale_revision`
+ *
+ * Independent root reproduction on `115c0895` (same matrix): same-revision 190→200 stays 190;
+ * capture→confirmed write→new genuine completion stays `stale_revision`; indeterminate→`retain`;
+ * other submission generation→`absent`. The two failing expectations above are the assigned defects.
+ *
+ * Intentional gap (not reopened here): same-revision replacement of a gate-rejected capture still
+ * requires a trustworthy host-recognized answer-repair context — not prose ranking or model flags.
+ */
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
@@ -84,7 +103,26 @@ test('unit: collectConfirmedMutationArtifactPaths ignores reads and shell target
   )
 })
 
-test('unit: gate seam capture freezes first completion; recovery prose does not replace', () => {
+test('regression(115c0895): same-revision revised totals 190 then 200 retains first capture', () => {
+  const log = [{
+    tool: 'str_replace',
+    effect_status: 'confirmed_change' as const,
+    mutation_paths: ['数据/summary.csv'],
+  }]
+  const generation = 6
+  const at190 = 'Net revenue totals 190 (A=120, B=70).'
+  const at200 = 'Net revenue totals 200 (A=130, B=70).'
+  let capture = tryRecordGateRejectedCompletionCapture(null, at190, log, generation)
+  capture = tryRecordGateRejectedCompletionCapture(capture, at200, log, generation)
+  const resolved = resolveGateRejectedCompletionCapture(capture, log, generation)
+  assert.equal(resolved.kind, 'retain')
+  if (resolved.kind === 'retain') {
+    assert.equal(resolved.candidate, at190)
+    assert.notEqual(resolved.candidate, at200)
+  }
+})
+
+test('regression(115c0895): recovery chatter does not replace gate-rejected completion at same revision', () => {
   const log = [{
     tool: 'str_replace',
     effect_status: 'confirmed_change' as const,
@@ -115,7 +153,7 @@ test('unit: gate seam capture freezes first completion; recovery prose does not 
   }
 })
 
-test('unit: after confirmed mutation, a later genuine gate reject may capture a new current candidate', () => {
+test('regression(115c0895): confirmed write then new gate reject retains current candidate not stale_revision', () => {
   const logV1 = [{
     tool: 'str_replace',
     effect_status: 'confirmed_change' as const,
@@ -142,7 +180,7 @@ test('unit: after confirmed mutation, a later genuine gate reject may capture a 
   }
 })
 
-test('unit: relevant indeterminate mutation must not retain as unchanged revision', () => {
+test('regression(115c0895): relevant indeterminate mutation resolves stale_revision not retain', () => {
   const logConfirmed = [{
     tool: 'str_replace',
     effect_status: 'confirmed_change' as const,
@@ -174,7 +212,7 @@ test('unit: relevant indeterminate mutation must not retain as unchanged revisio
   )
 })
 
-test('unit: post-capture confirmed mutation clears retained candidate and artifact binding', () => {
+test('regression(115c0895): stale capture without re-record stays stale_revision after confirmed write', () => {
   const logBefore = [{
     tool: 'str_replace',
     effect_status: 'confirmed_change' as const,
@@ -206,7 +244,7 @@ test('unit: post-capture confirmed mutation clears retained candidate and artifa
   )
 })
 
-test('unit: capture does not resolve under a different submission generation', () => {
+test('regression(115c0895): capture does not resolve under a different submission generation', () => {
   const log = [{
     tool: 'str_replace',
     effect_status: 'confirmed_change' as const,
