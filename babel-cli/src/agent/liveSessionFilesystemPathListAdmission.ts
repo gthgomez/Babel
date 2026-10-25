@@ -111,8 +111,16 @@ export function taskContractBindsPathListAdmission(contract: TaskContractV1): bo
   return findPathListAdmissionProvenanceRecord(contract) !== undefined
 }
 
+/** ChatEngine options after scope normalization (executionScope is always defined). */
+export type ChatEngineOptionsWithExecutionScope = ChatEngineOptions & {
+  executionScope: ChatExecutionScope
+  projectRoot: string | null
+}
+
 /** ChatEngine constructor: scope normalization plus pre-runDir path-list guards. */
-export function assignChatEngineScopeAndPathList(options: ChatEngineOptions): ChatEngineOptions {
+export function assignChatEngineScopeAndPathList(
+  options: ChatEngineOptions,
+): ChatEngineOptionsWithExecutionScope {
   const { executionScope, projectRoot } = resolveChatEngineExecutionScopeAndPathList(options)
   return { ...options, executionScope, projectRoot }
 }

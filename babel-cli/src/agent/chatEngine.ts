@@ -885,9 +885,9 @@ export class ChatEngine {
     this.taskAllowanceOwner.markChildBudgetExhausted(limiter, reason);
   }
   constructor(options: ChatEngineOptions) {
-    options = assignChatEngineScopeAndPathList(options);
-    if(options.executionScope.kind==="conversation"&&(options.instructionRoot||options.workspaceRoot||options.compiledChatStack?.project_root))throw new Error("Conflicting project context in conversation scope");
-    options = { ...options, compiledChatStack: resolveChatInstructionContext(options) };
+    const scoped = assignChatEngineScopeAndPathList(options);
+    if(scoped.executionScope.kind==="conversation"&&(scoped.instructionRoot||scoped.workspaceRoot||scoped.compiledChatStack?.project_root))throw new Error("Conflicting project context in conversation scope");
+    options = { ...scoped, compiledChatStack: resolveChatInstructionContext(scoped) };
     this.options = options;
     this.ownerAccounting = new ChatEngineOwnerAccounting(
       this as unknown as ChatEngineOwnerAccountingHost,
