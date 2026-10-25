@@ -173,8 +173,6 @@ export interface ChatEngineOptions {
   runId?: string
   /** Existing P05 durable owner/fencing authority supplied by the host. */
   admissionStore?: AdmissionStore
-  /** Native pilot campaign budget gate for routed API providers. */
-  campaignDispatchGate?: import('../runners/campaignDispatchGate.js').CampaignDispatchGate | null
   resumeExisting?: boolean
   /** Retained sources exist even when a legacy session has no saved authority.
    * Requires source reconciliation before a mode checkpoint; grants no effects. */
@@ -670,6 +668,7 @@ export interface ChatEngineStreamingLoopHost {
     ownerGeneration?: number,
   ) => Promise<ChatResult | null>
   readonly hasAnyWrites: () => boolean
+  readonly lastSubstantiveCompletionCandidate: () => string | undefined
   readonly hasPendingCompactionAuthority: () => boolean
   readonly installP11ContextCheckpoint: (
     routeOverride?: NonNullable<LiveOperationalSourcesV1['route']>,

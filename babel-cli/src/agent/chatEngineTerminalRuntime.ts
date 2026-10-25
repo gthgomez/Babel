@@ -170,6 +170,11 @@ export type ChatStreamDoneExtra = {
   verifierTampered?: boolean
   criticReceipt?: import('./diffCritic.js').DiffCriticVerdict | null
   reason?: TerminalReason
+  /**
+   * Turn cap after a recorded patch: gate honesty failed but the substantive
+   * completion candidate is retained and terminal outcome stays UNVERIFIED_PATCH.
+   */
+  preservedUnverifiedTerminal?: boolean
 }
 
 /** Inspection can prove no change is needed; zero writes alone cannot. */
@@ -252,7 +257,13 @@ export function completeChatStream(
   // verified); `outcomeFromReasonCode` carries the failed-path mapping
   // (AGENT_FAILURE), so the gate decision stays authoritative there.
   const reasonOutcome =
-    terminalReason?.code && terminalReason.code !== 'verification_failed'
+    terminalReason?.code &&
+    terminalReason.code !== 'verification_failed' &&
+    !(
+      extra?.preservedUnverifiedTerminal === true &&
+      decisionOutcome === 'UNVERIFIED_PATCH' &&
+      terminalReason.code === 'budget_exhausted'
+    )
       ? outcomeFromReasonCode(terminalReason.code)
       : undefined
   const outcome = reasonOutcome ?? decisionOutcome

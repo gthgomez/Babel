@@ -211,6 +211,19 @@ test('the terminal owner cannot certify a generic green hint without criterion e
   assert.equal(decisions, 1)
 })
 
+test('preserved unverified terminal keeps UNVERIFIED_PATCH when turn limit reason would remap to budget exhausted', (t) => {
+  const input = terminalInput(t)
+  input.snapshot.outcome.hasMutation = true
+  input.snapshot.outcome.readOnly = false
+  input.snapshot.outcome.terminatingLimiter = 'turns'
+  input.snapshot.outcome.terminalLimiterReason = 'Turn limit reached (2 of 2).'
+  const event = completeChatStream(input, 'Turn limit reached (2 of 2).\n\n---\nUNVERIFIED retained candidate:\nkept', {
+    preservedUnverifiedTerminal: true,
+  })
+  assert.ok(event.type === 'done')
+  assert.equal(event.outcome, 'UNVERIFIED_PATCH')
+})
+
 test('keeps plan completion separate from executor verified completion', (t) => {
   const input = terminalInput(t)
   input.snapshot.context.executionProfile = 'plan'
