@@ -277,7 +277,12 @@ test('OpenCode Go classifies auth and quota failures and never switches provider
 test('OpenCode Go classifies timeout and external cancellation', async () => {
   process.env['BABEL_DEEPINFRA_REQUEST_MAX_RETRIES'] = '1'
   globalThis.fetch = (async (_input, init) => await new Promise((_resolve, reject) => {
-    init?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')), { once: true })
+    const signal = init?.signal
+    if (signal?.aborted) {
+      reject(new DOMException('aborted', 'AbortError'))
+      return
+    }
+    signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')), { once: true })
   })) as typeof fetch
   const timeoutRunner = new OpenCodeGoApiRunner('mimo-v2.5', {}, { credentialSource: 'explicit-test', explicitCredential: 'synthetic-go-key', requestTimeoutMs: 10 })
   await assert.rejects(timeoutRunner.executeRaw('respond'), (error: unknown) => error instanceof OpenCodeGoError && error.code === 'TIMEOUT')
