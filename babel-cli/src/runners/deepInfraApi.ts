@@ -87,6 +87,12 @@ import {
   type OpenRouterResponseMetadata,
   upstreamProviderFromResponse,
 } from './providerResponseMetadata.js';
+import {
+  CampaignBudgetDeniedError,
+  CampaignRouteUnsupportedError,
+  type CampaignDispatchGate,
+} from './campaignDispatchGate.js';
+import type { PreparedProviderRequest } from './preparedProviderRequest.js';
 export type { OpenRouterResponseMetadata } from './providerResponseMetadata.js';
 export type { FetchRedirectPolicy } from './providerResponsePolicy.js';
 
@@ -118,6 +124,8 @@ export class DeepInfraApiRunner implements LlmRunner {
   private readonly temperature: number;
   private lastInvocationMetadata: RunnerInvocationMetadata | null = null;
   private lastWirePolicyHash: string | null = null;
+  private activeCampaignGate: CampaignDispatchGate | null = null;
+  private activeCampaignPrepared: PreparedProviderRequest | null = null;
 
   /** Override in subclasses for alternate OpenAI-compatible providers. */
   protected get apiUrl(): string {
@@ -262,9 +270,40 @@ export class DeepInfraApiRunner implements LlmRunner {
     return process.env['BABEL_DESKTOP_PROVIDER'] ? 'error' : 'follow';
   }
 
+  protected async admitCampaignBeforeInvocation(
+    callbacks: RunnerCallbacks | undefined,
+    preparedRequest: PreparedProviderRequest,
+  ): Promise<void> {
+    const meter = callbacks?.campaignMeter;
+    if (!meter) {
+      this.activeCampaignGate = null;
+      this.activeCampaignPrepared = null;
+      return;
+    }
+    await meter.gate.admitBeforeDispatch({
+      executionStage: meter.executionStage,
+      preparedRequest,
+      ...(callbacks?.runControl ? { runControl: callbacks.runControl } : {}),
+    });
+    this.activeCampaignGate = meter.gate;
+    this.activeCampaignPrepared = preparedRequest;
+  }
+
+  protected settleCampaignUnknown(callbacks: RunnerCallbacks | undefined): void {
+    const meter = callbacks?.campaignMeter;
+    const prepared = this.activeCampaignPrepared;
+    if (!meter || !prepared) return;
+    meter.gate.settleUnknownOnTransportFailure({
+      executionStage: meter.executionStage,
+      requestId: prepared.request_id,
+      attemptId: prepared.attempt_id,
+    });
+  }
+
   /** Dispatch unchanged by default; specialized transports may gate every request. */
   protected dispatchFetch(url: string, init: RequestInit, control?: RunControl, operationId = 'provider_fetch'): Promise<Response> {
-    return dispatchRunOperation(control, 'model', operationId, () => fetch(url, init))
+    this.activeCampaignGate?.repeatRunControlBeforeFetch(control);
+    return dispatchRunOperation(control, 'model', operationId, () => fetch(url, init));
   }
 
   // ── Shared request/response logic ──────────────────────────────────────────
@@ -340,6 +379,14 @@ export class DeepInfraApiRunner implements LlmRunner {
       ? hashWirePolicy(JSON.parse(requestBody) as WireRequest)
       : null;
     const inputDigest = requestAccounting.request_digest;
+    try {
+      await this.admitCampaignBeforeInvocation(callbacks, preparedRequest);
+    } catch (error) {
+      if (error instanceof RunStoppedError) {
+        this.settleCampaignUnknown(callbacks);
+      }
+      throw error;
+    }
     callbacks?.onInvocationStarted?.({
       inference_id: inferenceId,
       request_id: preparedRequest.request_id,
@@ -1169,6 +1216,14 @@ export class DeepInfraApiRunner implements LlmRunner {
       ? hashWirePolicy(JSON.parse(requestBody) as WireRequest)
       : null;
     const inputDigest = requestAccounting.request_digest;
+    try {
+      await this.admitCampaignBeforeInvocation(callbacks, preparedRequest);
+    } catch (error) {
+      if (error instanceof RunStoppedError) {
+        this.settleCampaignUnknown(callbacks);
+      }
+      throw error;
+    }
     callbacks?.onInvocationStarted?.({
       inference_id: inferenceId,
       request_id: preparedRequest.request_id,

@@ -30,6 +30,8 @@
 
 import { createHash, randomUUID } from 'node:crypto';
 import { dispatchRunOperation, RunStoppedError } from '../runtime/run-control.js';
+import { prepareProviderRequest } from '../runners/preparedProviderRequest.js';
+import { CampaignBudgetDeniedError, CampaignRouteUnsupportedError } from '../runners/campaignDispatchGate.js';
 import type { RunnerCallbacks } from '../runners/base.js';
 import type { ProviderId } from '../runners/providerRegistry.js';
 import type { CompactionRecoveryPressure } from './compactionRequestPressure.js';
@@ -675,9 +677,35 @@ export class LLMSummarizeCompaction implements CompactionStrategy {
         { role: 'user', content: prompt },
       ],
     };
-    const inputDigest = createHash('sha256')
-      .update(JSON.stringify(requestBody))
-      .digest('hex');
+    const preparedRequest = prepareProviderRequest({
+      body: JSON.stringify(requestBody),
+      mode: 'text',
+      provider,
+      requestedModelId: model,
+      requestId: inferenceId,
+      reservedCompletionTokens: requestBody.max_tokens,
+    });
+    try {
+      await callbacks?.campaignMeter?.gate.admitBeforeDispatch({
+        executionStage: callbacks.campaignMeter.executionStage,
+        preparedRequest,
+        ...(callbacks?.runControl ? { runControl: callbacks.runControl } : {}),
+      });
+    } catch (error) {
+      if (error instanceof CampaignBudgetDeniedError || error instanceof CampaignRouteUnsupportedError) {
+        throw error;
+      }
+      if (error instanceof RunStoppedError && callbacks?.campaignMeter) {
+        callbacks.campaignMeter.gate.settleUnknownOnTransportFailure({
+          executionStage: callbacks.campaignMeter.executionStage,
+          requestId: preparedRequest.request_id,
+          attemptId: preparedRequest.attempt_id,
+        });
+      }
+      throw error;
+    }
+    callbacks?.campaignMeter?.gate.repeatRunControlBeforeFetch(callbacks?.runControl);
+    const inputDigest = preparedRequest.body_digest;
     const phase = (
       phaseName: Parameters<NonNullable<RunnerCallbacks['onInvocationPhase']>>[0]['phase'],
       statusCode?: number,
@@ -694,6 +722,8 @@ export class LLMSummarizeCompaction implements CompactionStrategy {
     };
     callbacks?.onInvocationStarted?.({
       inference_id: inferenceId,
+      request_id: preparedRequest.request_id,
+      attempt_id: preparedRequest.attempt_id,
       provider,
       requested_model_id: model,
       normalized_model_id: model,
@@ -706,6 +736,7 @@ export class LLMSummarizeCompaction implements CompactionStrategy {
     let failurePhaseRecorded = false;
     let completed = false;
     try {
+      callbacks?.campaignMeter?.gate.repeatRunControlBeforeFetch(callbacks?.runControl);
       const response = await dispatchRunOperation(callbacks?.runControl, 'model', inferenceId, () => fetch(baseUrl, {
         method: 'POST',
         redirect: process.env['BABEL_DESKTOP_PROVIDER'] ? 'error' : 'follow',

@@ -4135,6 +4135,9 @@ export class ChatEngine {
       set pendingUsageChargeId(value) {
         engine.pendingUsageChargeId = value;
       },
+      get campaignDispatchGate() {
+        return engine.options.campaignDispatchGate ?? null;
+      },
       checkBudgets: (skipTurnLimit) => engine.checkBudgets(skipTurnLimit),
       persistOwnerCharges: (ownerId, runDir) =>
         engine.persistOwnerCharges(ownerId, runDir),

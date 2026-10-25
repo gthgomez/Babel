@@ -173,6 +173,8 @@ export interface ChatEngineOptions {
   runId?: string
   /** Existing P05 durable owner/fencing authority supplied by the host. */
   admissionStore?: AdmissionStore
+  /** Native pilot campaign budget gate for routed API providers. */
+  campaignDispatchGate?: import('../runners/campaignDispatchGate.js').CampaignDispatchGate | null
   resumeExisting?: boolean
   /** Retained sources exist even when a legacy session has no saved authority.
    * Requires source reconciliation before a mode checkpoint; grants no effects. */

@@ -49,6 +49,7 @@ export interface ChatProviderRetryHost {
   readonly options: { projectRoot: string | null; task: string };
   readonly parity: ParityRuntime;
   readonly taskAllowance: { taskOwnerId: string } | null;
+  readonly campaignDispatchGate?: import('../runners/campaignDispatchGate.js').CampaignDispatchGate | null;
   readonly _turnIndex: number;
   readonly _lastPhase: ChatPhase | null;
   readonly routingReceiptLog: TurnRoutingReceiptLog;
@@ -133,9 +134,47 @@ export function buildProviderRetryCallbacks(host: ChatProviderRetryHost, context
       (context.substitutionOrFallback && host.lastLogicalRequestId !== null
         ? host.lastLogicalRequestId
         : null);
+    const settleCampaignLedger = (event: import('../runners/base.js').ProviderInvocationCompleted): void => {
+      const gate = host.campaignDispatchGate;
+      if (!gate || !startedInvocation?.request_id || !startedInvocation.attempt_id) return;
+      const stage = context.executionStage ?? 'chat';
+      try {
+        if (event.status === 'failed' && event.inference_started === false) {
+          gate.settleUnknownOnTransportFailure({
+            executionStage: stage,
+            requestId: startedInvocation.request_id,
+            attemptId: startedInvocation.attempt_id,
+          });
+          return;
+        }
+        gate.settleFromCompleted({
+          executionStage: stage,
+          requestId: startedInvocation.request_id,
+          attemptId: startedInvocation.attempt_id,
+          completed: event,
+        });
+      } catch (error) {
+        if (context.usageScope?.taskOwnerId) {
+          host.recordOwnerAccountingFault(
+            context.usageScope,
+            'persistence-failure',
+            error instanceof Error ? error.message : String(error),
+            context.usageScope.taskOwnerId === host.taskAllowance?.taskOwnerId && isOwnerCurrent(),
+          );
+        }
+      }
+    };
     return {
       parentRequestId,
       ...(context.usageScope?.runControl ? { runControl: context.usageScope.runControl } : {}),
+      ...(host.campaignDispatchGate
+        ? {
+            campaignMeter: {
+              executionStage: context.executionStage ?? 'chat',
+              gate: host.campaignDispatchGate,
+            },
+          }
+        : {}),
       onInvocationStarted: (event) => {
         if (context.usageScope) {
           context.usageScope.chargeId = event.inference_id;
@@ -479,6 +518,7 @@ export function buildProviderRetryCallbacks(host: ChatProviderRetryHost, context
             : {}),
           ...(observedRouteReceipt ? { route_receipt: observedRouteReceipt } : {}),
         });
+        settleCampaignLedger(event);
         checkpointParityEventLog(host.parity, host.engineRunDir);
       },
       onInvocationPhase: (event) => {
