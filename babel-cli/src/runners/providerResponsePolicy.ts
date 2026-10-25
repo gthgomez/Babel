@@ -68,6 +68,24 @@ export function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === 'AbortError';
 }
 
+/**
+ * Forward a caller-owned {@link AbortSignal} onto a per-attempt controller.
+ * Already-aborted signals must abort immediately; listeners alone do not replay.
+ */
+export function linkExternalAbortSignal(
+  controller: AbortController,
+  signal?: AbortSignal,
+): (() => void) | undefined {
+  if (!signal) return undefined;
+  if (signal.aborted) {
+    controller.abort();
+    return undefined;
+  }
+  const onExternalAbort = () => controller.abort();
+  signal.addEventListener('abort', onExternalAbort, { once: true });
+  return onExternalAbort;
+}
+
 
 export function isCallerCancelError(error: unknown, signal?: AbortSignal): boolean {
   if (signal?.aborted) return true;
