@@ -268,7 +268,7 @@ test('an additive edge cannot erase inherited acceptance provenance',()=>
     engine.admitUserSubmission({userInput:addition},route)
     const current=engine.getTaskContract()!
     const {provenance,...body}=current
-    const inherited=new Set(before.provenance.records.filter(record=>record.ref.startsWith('task-acceptance-meaning:v1:')).map(record=>record.ref))
+    const inherited=new Set(before.provenance.records.filter(record=>record.ref.startsWith('task-acceptance-meaning:v1:')||record.ref.startsWith('task-acceptance-meaning:v2:')).map(record=>record.ref))
     assert.ok(inherited.size>0)
     const forged=freezeTaskContract(buildTaskContractV1({...body,
       provenance:provenance.records.filter(record=>!inherited.has(record.ref)),
@@ -347,7 +347,7 @@ test('a mode successor cannot erase inherited meaning provenance',()=>
     const authority=engine.getParityRuntime().liveAuthority!,current=authority.taskContract
     const {provenance,...body}=current
     const forged=freezeTaskContract(buildTaskContractV1({...body,
-      provenance:provenance.records.filter(record=>!record.ref.startsWith('task-acceptance-meaning:v1:')),
+      provenance:provenance.records.filter(record=>!record.ref.startsWith('task-acceptance-meaning:v1:')&&!record.ref.startsWith('task-acceptance-meaning:v2:')),
       source:provenance.source,parent_contract_id:provenance.parent_contract_id!,
       failure_class_budgets:current.budgets.failure_class_budgets,
       ...(current.budgets.max_turns!==undefined?{max_turns:current.budgets.max_turns}:{}),
@@ -560,7 +560,7 @@ test(`V${version} mode history rejects ${corruption} meaning provenance`,()=>
     engine.applyTurnPreparation({task:'continue',executionProfile:'plan'})
     const authority=engine.getParityRuntime().liveAuthority!,current=authority.taskContract
     const {provenance,...body}=current
-    const records=corruption==='drop'?provenance.records.filter(record=>!record.ref.startsWith('task-acceptance-meaning:v1:')):
+    const records=corruption==='drop'?provenance.records.filter(record=>!record.ref.startsWith('task-acceptance-meaning:v1:')&&!record.ref.startsWith('task-acceptance-meaning:v2:')):
       [...provenance.records,{kind:'derived_acceptance' as const,ref:`task-acceptance-meaning:v1:explicit:${'c'.repeat(64)}:0:1:${current.acceptance[0]!.id}`}]
     const forged=freezeTaskContract(buildTaskContractV1({...body,provenance:records,
       source:provenance.source,parent_contract_id:provenance.parent_contract_id!,
