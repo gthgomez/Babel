@@ -1,12 +1,19 @@
 /**
  * H4 — general-purpose artifact deliverable on an explicit ephemeral project workspace.
  * Proves the existing project-scoped grant (non-Git disposable root); no conversation upgrade.
+ *
+ * Scope split (review):
+ * - **Artifact delivery / scope:** native tools may read sources and write deliverables inside the
+ *   granted project root (file bytes + mutation-path containment); not completion certification.
+ * - **Completion:** execute CHANGE keeps normal task-class verification (`required`) and headless
+ *   hard-gate honesty; without an authoritative verifier, completion correctly ends blocked
+ *   (`BLOCKED_POLICY`) — not evidence of successful journey completion (P09/P10).
  */
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { isAbsolute, join, relative, resolve, win32 as pathWin32 } from 'node:path'
 import test from 'node:test'
 import { ChatEngine } from './chatEngine.js'
 import type { ChatEvent } from './chatEngine.js'
@@ -52,10 +59,8 @@ const MANAGED_ENV = [
   'BABEL_DIRTY_TREE',
 ] as const
 
-const ARTIFACT_TERMINAL_OUTCOMES = new Set<TerminalOutcome>([
-  'UNVERIFIED_PATCH',
-  'NO_CHANGE_REQUIRED',
-  'NEEDS_HUMAN_DECISION',
+/** Authoritative terminal when headless completion gate blocks after writes without verifier. */
+const ARTIFACT_HEADLESS_COMPLETION_BLOCKED_OUTCOMES = new Set<TerminalOutcome>([
   'BLOCKED_POLICY',
 ])
 
@@ -129,20 +134,23 @@ function buildSourcedMarkdownSummary(): string {
   ].join('\n')
 }
 
-/** Independent artifact oracle — does not read model narrative. */
-function assertHtmlArtifactIndependent(html: string): void {
-  assert.match(html, /<table\b/i, 'HTML deliverable must include a data table')
-  assert.match(html, /<th[^>]*scope="col"/i, 'table must expose column headers')
-  assert.ok(html.includes(SOURCE_ALPHA), 'HTML must embed alpha source quote')
-  assert.ok(html.includes(SOURCE_BETA), 'HTML must embed beta source quote')
-  assert.ok(html.includes('6 GiB') && html.includes('4 GiB'), 'table cells must carry numeric memory facts')
+/**
+ * File/shape regression on disk (regex/string only). Shared scripted constants —
+ * not parse/render validation or independent semantic quality (P09/P10).
+ */
+function assertHtmlArtifactFileShapeRegression(html: string): void {
+  assert.match(html, /<table\b/i, 'HTML file must include a table element')
+  assert.match(html, /<th[^>]*scope="col"/i, 'HTML file must expose column header markup')
+  assert.ok(html.includes(SOURCE_ALPHA), 'HTML file must contain alpha source string')
+  assert.ok(html.includes(SOURCE_BETA), 'HTML file must contain beta source string')
+  assert.ok(html.includes('6 GiB') && html.includes('4 GiB'), 'HTML file must contain scripted memory strings')
   assert.doesNotMatch(html, /\.pptx|powerpoint/i, 'fixture does not claim PPTX/media deliverables')
 }
 
-function assertMarkdownArtifactIndependent(markdown: string): void {
-  assert.match(markdown, /^# Summary/m, 'markdown summary must have a title')
-  assert.ok(markdown.includes(SOURCE_ALPHA) && markdown.includes(SOURCE_BETA), 'markdown must cite both sources')
-  assert.match(markdown, /^## Conclusion/m, 'markdown must separate conclusion section')
+function assertMarkdownArtifactFileShapeRegression(markdown: string): void {
+  assert.match(markdown, /^# Summary/m, 'markdown file must include summary heading')
+  assert.ok(markdown.includes(SOURCE_ALPHA) && markdown.includes(SOURCE_BETA), 'markdown file must contain scripted source strings')
+  assert.match(markdown, /^## Conclusion/m, 'markdown file must include conclusion heading')
 }
 
 async function collectStream(stream: AsyncGenerator<ChatEvent, unknown, undefined>): Promise<ChatEvent[]> {
@@ -188,6 +196,50 @@ function buildRunner(plan: ToolStreamEvent[][]): {
   }
 }
 
+function isPathContainedInRoot(root: string, candidatePath: string): boolean {
+  const rootResolved = resolve(root)
+  const abs = isAbsolute(candidatePath) ? resolve(candidatePath) : resolve(rootResolved, candidatePath)
+  const rel = relative(rootResolved, abs)
+  if (rel === '') return true
+  if (isAbsolute(rel)) return false
+  const segments = rel.split(/[/\\]/).filter(segment => segment.length > 0)
+  return !segments.includes('..')
+}
+
+function assertPathContainedInRoot(root: string, candidatePath: string, message?: string): void {
+  assert.ok(
+    isPathContainedInRoot(root, candidatePath),
+    message ?? `mutation path must stay inside workspace: ${candidatePath}`,
+  )
+}
+
+function isPathContainedInRootWin32(root: string, candidatePath: string): boolean {
+  const rootResolved = pathWin32.resolve(root)
+  const abs = pathWin32.isAbsolute(candidatePath)
+    ? pathWin32.resolve(candidatePath)
+    : pathWin32.resolve(rootResolved, candidatePath)
+  const rel = pathWin32.relative(rootResolved, abs)
+  if (rel === '') return true
+  if (pathWin32.isAbsolute(rel)) return false
+  const segments = rel.split('\\').filter(segment => segment.length > 0)
+  return !segments.includes('..')
+}
+
+function assertHeadlessCompletionBlockedAfterArtifactDelivery(events: ChatEvent[]): TerminalOutcome {
+  const outcome = assertAuthoritativeTerminalOutcome(events, ARTIFACT_HEADLESS_COMPLETION_BLOCKED_OUTCOMES)
+  const terminal = events.find(event => event.type === 'done' || event.type === 'failed')
+  assert.equal(terminal?.type, 'done', 'expected a done terminal carrying blocked completion authority')
+  if (terminal?.type === 'done') {
+    assert.equal(terminal.status, 'blocked', 'headless required-policy completion must not soft-allow without verifier')
+    assert.match(
+      terminal.answer,
+      /verifier|completion gate|Gate blocked/i,
+      'blocked answer must cite verifier/completion gate (not mere file existence)',
+    )
+  }
+  return outcome
+}
+
 function assertAuthoritativeTerminalOutcome(
   events: ChatEvent[],
   allowed: ReadonlySet<TerminalOutcome>,
@@ -208,21 +260,23 @@ function assertMutationsStayInWorkspace(
   workspace: string,
   log: Array<{ tool: string; target?: string; exit_code?: number }>,
 ): void {
-  const root = resolve(workspace)
   for (const entry of log) {
     if (entry.exit_code !== 0) continue
     if (!['write_file', 'str_replace', 'apply_patch'].includes(entry.tool)) continue
     const target = entry.target?.trim()
     if (!target) continue
-    const abs = resolve(root, target)
-    assert.ok(
-      abs === root || abs.startsWith(root + '/'),
-      `mutation path must stay inside workspace: ${target} -> ${abs}`,
-    )
+    assertPathContainedInRoot(workspace, target)
   }
 }
 
-test('H4: ephemeral non-Git project workspace delivers sourced HTML+Markdown via native ChatEngine', async t => {
+test('H4: path containment helper rejects parent escape (win32 paths)', () => {
+  const root = 'C:\\workspace\\artifact'
+  assert.equal(isPathContainedInRootWin32(root, 'deliverables\\report.html'), true)
+  assert.equal(isPathContainedInRootWin32(root, 'C:\\outside\\escaped.html'), false)
+  assert.equal(isPathContainedInRootWin32(root, '..\\outside\\escaped.html'), false)
+})
+
+test('H4: ephemeral non-Git project workspace writes sourced artifacts; headless completion blocks without verifier', async t => {
   const prior = Object.fromEntries(MANAGED_ENV.map(key => [key, process.env[key]]))
   const workspace = mkdtempSync(join(tmpdir(), 'babel-h4-artifact-'))
   t.after(() => {
@@ -236,6 +290,8 @@ test('H4: ephemeral non-Git project workspace delivers sourced HTML+Markdown via
 
   applyBenchmarkFixtureEnv('sourced artifact report without Git')
   const { reportRel, summaryRel } = seedNonGitWorkspace(workspace)
+  const alphaBytesBefore = readFileSync(join(workspace, 'sources', 'alpha.md'))
+  const betaBytesBefore = readFileSync(join(workspace, 'sources', 'beta.md'))
   const htmlBody = buildSourcedHtmlReport()
   const mdBody = buildSourcedMarkdownSummary()
 
@@ -284,7 +340,6 @@ test('H4: ephemeral non-Git project workspace delivers sourced HTML+Markdown via
   const events = await collectStream(engine.submitMessageStream(
     'Read sources/alpha.md and sources/beta.md; write deliverables/report.html and deliverables/summary.md with cited facts.',
   ))
-  assertAuthoritativeTerminalOutcome(events, ARTIFACT_TERMINAL_OUTCOMES)
 
   const log = (engine as unknown as {
     toolCallLog: Array<{ tool: string; target?: string; exit_code?: number; error?: string }>
@@ -297,11 +352,16 @@ test('H4: ephemeral non-Git project workspace delivers sourced HTML+Markdown via
   assert.equal(writes.every(entry => entry.exit_code === 0), true)
   assertMutationsStayInWorkspace(workspace, log)
 
+  assert.equal(existsSync(join(workspace, reportRel)), true, 'artifact delivery: report file must exist on disk')
+  assert.equal(existsSync(join(workspace, summaryRel)), true, 'artifact delivery: summary file must exist on disk')
   const html = readFileSync(join(workspace, reportRel), 'utf8')
   const markdown = readFileSync(join(workspace, summaryRel), 'utf8')
-  assertHtmlArtifactIndependent(html)
-  assertMarkdownArtifactIndependent(markdown)
-  // Dishonest model prose may repeat VERIFIED_COMPLETE; authoritative terminal outcome above is the proof boundary.
+  assertHtmlArtifactFileShapeRegression(html)
+  assertMarkdownArtifactFileShapeRegression(markdown)
+  assert.equal(readFileSync(join(workspace, 'sources', 'alpha.md')).compare(alphaBytesBefore), 0)
+  assert.equal(readFileSync(join(workspace, 'sources', 'beta.md')).compare(betaBytesBefore), 0)
+
+  assertHeadlessCompletionBlockedAfterArtifactDelivery(events)
 })
 
 test('H4: conversation scope denies project tools and leaves workspace artifacts untouched', async t => {
@@ -318,6 +378,8 @@ test('H4: conversation scope denies project tools and leaves workspace artifacts
 
   applyBenchmarkFixtureEnv('conversation scope control')
   const { reportRel } = seedNonGitWorkspace(workspace)
+  const alphaBytesBefore = readFileSync(join(workspace, 'sources', 'alpha.md'))
+  const betaBytesBefore = readFileSync(join(workspace, 'sources', 'beta.md'))
   const outsideRoot = mkdtempSync(join(tmpdir(), 'babel-h4-outside-'))
 
   const { runner } = buildRunner([
@@ -366,6 +428,8 @@ test('H4: conversation scope denies project tools and leaves workspace artifacts
   assert.match(log.map(entry => `${entry.error ?? ''}`).join('\n'), /PROJECT_REQUIRED/i)
   assert.equal(existsSync(join(workspace, reportRel)), false)
   assert.equal(existsSync(join(outsideRoot, 'escaped.html')), false)
+  assert.equal(readFileSync(join(workspace, 'sources', 'alpha.md')).compare(alphaBytesBefore), 0)
+  assert.equal(readFileSync(join(workspace, 'sources', 'beta.md')).compare(betaBytesBefore), 0)
   rmSync(outsideRoot, { recursive: true, force: true })
 })
 
