@@ -45,6 +45,7 @@ import { projectDurableToolBatch } from './toolExecutionIdentity.js';
 import { resolveLiveSessionAuthority } from './liveSessionBridge.js';
 import { openAdmissionStore, type AdmissionStore } from '../runtime/admission.js';
 import { resetDockerAvailabilityCache, setDockerAvailableForTest } from '../config/benchmarkContainer.js';
+import { ProgressController } from './progressController.js';
 
 function shellArg(value: string): string {
   if (process.platform === 'win32') return `"${value.replaceAll('"', '\\"')}"`;
@@ -127,6 +128,7 @@ function makeHost(
     lease: loadLeaseFromEnv(),
     persistPath: join(runDir, AUTHORITY_SESSION_FILENAME),
   });
+  const progressController = new ProgressController();
   const host = {
     _lastPhase: null,
     _turnIndex: 0,
@@ -150,10 +152,7 @@ function makeHost(
     options: { projectRoot, task: 'coding output contract fixture' },
     parity,
     policyEventLog: { record: () => {}, events: [] } as never,
-    progressController: {
-      recordFailure: () => ({ notice: undefined }),
-      recordSuccess: () => {},
-    } as never,
+    progressController,
     workingState: createWorkingState('coding output contract fixture'),
     writeCount: 0,
     consecutiveReadOnlyTools: 0,
