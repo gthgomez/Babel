@@ -21,6 +21,7 @@ import {
   type ChatEngineRunAllowanceReport,
   type ChatRunLimiter,
 } from '../config/chatEngineLimits.js'
+import type { RunControl, StopRequest } from '../runtime/run-control.js'
 import type {
   ChatCallbacks,
   ChatEngineOptions,
@@ -453,6 +454,39 @@ export function cancelChatStream(input: ChatTerminalInput): ChatEvent {
     cause_class: null,
     ...(finalizedTelemetry ? { turnTelemetry: finalizedTelemetry } : {}),
   }
+}
+
+/** Render the recorded winner through the existing single finalizer, without inference. */
+export function stoppedChatStream(
+  inputForTerminal: () => ChatTerminalInput,
+  stop: StopRequest,
+): ChatEvent {
+  if (stop.kind === 'cancelled' || stop.kind === 'superseded') {
+    return cancelChatStream(inputForTerminal())
+  }
+  if (stop.kind === 'failed') {
+    return failChatStream(inputForTerminal(), `Execution stopped: ${stop.reasonCode}.`)
+  }
+  return completeChatStream(inputForTerminal(), `Execution stopped: ${stop.reasonCode}.`, {
+    stopRequest: stop,
+  })
+}
+
+export function cancelledChatStream(
+  inputForTerminal: () => ChatTerminalInput,
+  runControl: RunControl | null,
+): ChatEvent {
+  const prior = runControl?.stop()
+  if (prior && prior.kind !== 'cancelled' && prior.kind !== 'superseded') {
+    return stoppedChatStream(inputForTerminal, prior)
+  }
+  runControl?.requestStop({
+    owner: runControl.owner,
+    kind: 'cancelled',
+    reasonCode: 'cancelled',
+    source: 'user',
+  })
+  return cancelChatStream(inputForTerminal())
 }
 
 /** Resolve explicit, evidence-backed, and limiter terminal reasons in their existing order. */
