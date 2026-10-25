@@ -104,6 +104,9 @@
         ],
         "src/services/reviewProcessContainment.test.ts": [
           "Windows assignment failures retain only bounded helper stage diagnostics"
+        ],
+        "src/utils/atomicCheckpointFile.test.ts": [
+          "win32 read-only directory handle rejects fsync with EPERM"
         ]
       }
     },
