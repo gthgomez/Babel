@@ -28,7 +28,11 @@ import {
 } from "./codingLoop/reflection.js";
 import type { EditFormatId } from "./codingLoop/editFormatPolicy.js";
 import { recoveryTargetIdentity } from "./codingLoop/recoveryIdentity.js";
-import { bindCapabilityRecoveryScope } from "./capabilityRecoveryScope.js";
+import {
+  bindCapabilityRecoveryScope,
+  bindIsolationPrerequisiteScope,
+  shellBlockedByIsolation,
+} from "./capabilityRecoveryScope.js";
 import {
   actualRecoveryEdit,
   admitRecoveryPlan,
@@ -1279,6 +1283,37 @@ export class ChatEngineActionExecutor {
               `Verifier result unchanged — command, directory, environment and bound workspace bytes are identical since the last run.\n` +
               `${cachedVerifier.receipt.summary}\n\`\`\``,
           };
+        }
+      }
+
+      if (action.type === "run_command" || action.type === "test_run") {
+        const isolationFlags = this.host.isolationBrokerFlags();
+        if (shellBlockedByIsolation(isolationFlags)) {
+          const probeScope = bindIsolationPrerequisiteScope(this.host);
+          const prerequisiteAdmitted =
+            this.host.progressController.admitPrerequisiteDenialProbe(probeScope);
+          if (!prerequisiteAdmitted) {
+            const observation =
+              `### ${tool} ${target}\nexit_code: 1\n\`\`\`\n` +
+              `[BABEL ADVISORY] Shell prerequisite unchanged: isolation is still unavailable with host fallback forbidden. ` +
+              `This attempt was suppressed at the execution boundary without re-running policy. ` +
+              `Revise isolation prerequisites before retrying shell execution.\n\`\`\``;
+            this.host.toolCallLog.push({
+              tool,
+              target,
+              detail: "prerequisite_suppressed",
+              index: meta.index,
+              exit_code: 1,
+              error: "prerequisite_suppressed",
+            });
+            callbacks?.onToolComplete?.(
+              toolId,
+              "prerequisite_suppressed",
+              "prerequisite_suppressed",
+              1,
+            );
+            return { index: meta.index, observation };
+          }
         }
       }
 

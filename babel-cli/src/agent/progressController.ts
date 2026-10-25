@@ -135,6 +135,8 @@ export interface ProgressControllerSnapshot {
   capabilities?: Record<string, CapabilityHealth> | undefined;
   /** Consumed bounded-recovery probe keys; preserved verbatim across restore. */
   consumedRecoveryProbes?: string[] | undefined;
+  /** Consumed prerequisite-denial probe keys; preserved verbatim across restore. */
+  consumedPrerequisiteDenials?: string[] | undefined;
 }
 
 /** A bounded recovery probe scope: capability × task × trusted environment. */
@@ -142,6 +144,14 @@ export interface CapabilityRecoveryProbeRequest {
   capability: string;
   taskId: string;
   environmentIdentity: string;
+}
+
+/** Bounded probe for an unchanged prerequisite denial (e.g. isolation still unavailable). */
+export interface PrerequisiteDenialProbeRequest {
+  prerequisiteKey: string;
+  taskId: string;
+  environmentIdentity: string;
+  revisionKey: string;
 }
 
 export interface ShellCapabilityClassification {
@@ -213,6 +223,7 @@ export class ProgressController {
   private lastSignals: ProgressSignal[] = [];
   private capabilities: Map<string, CapabilityHealth> = new Map();
   private consumedRecoveryProbes: Set<string> = new Set();
+  private consumedPrerequisiteDenials: Set<string> = new Set();
   private trustedEnvironmentIdentity: string | null = null;
 
   public get InterventionLevel(): ProgressInterventionLevel {
@@ -296,6 +307,45 @@ export class ProgressController {
     return [...this.consumedRecoveryProbes];
   }
 
+  private prerequisiteDenialProbeKey(
+    request: PrerequisiteDenialProbeRequest,
+  ): string | null {
+    const prerequisiteKey =
+      typeof request?.prerequisiteKey === 'string' ? request.prerequisiteKey.trim() : '';
+    const taskId = typeof request?.taskId === 'string' ? request.taskId.trim() : '';
+    const environmentIdentity =
+      typeof request?.environmentIdentity === 'string' ? request.environmentIdentity.trim() : '';
+    const revisionKey =
+      typeof request?.revisionKey === 'string' ? request.revisionKey.trim() : '';
+    if (!prerequisiteKey || !taskId || !environmentIdentity || !revisionKey) return null;
+    if (
+      this.trustedEnvironmentIdentity !== null &&
+      environmentIdentity !== this.trustedEnvironmentIdentity
+    ) {
+      return null;
+    }
+    return `${prerequisiteKey}\u0000${taskId}\u0000${environmentIdentity}\u0000${revisionKey}`;
+  }
+
+  /**
+   * Reserve the single bounded evaluation for an unchanged prerequisite denial
+   * (prerequisite × task × trusted environment × revision). Returns false when
+   * the same denial was already evaluated — callers must suppress re-dispatch.
+   */
+  public admitPrerequisiteDenialProbe(request: PrerequisiteDenialProbeRequest): boolean {
+    const key = this.prerequisiteDenialProbeKey(request);
+    if (!key) return false;
+    if (this.consumedPrerequisiteDenials.has(key)) return false;
+    this.consumedPrerequisiteDenials.add(key);
+    return true;
+  }
+
+  public hasConsumedPrerequisiteDenialProbe(request: PrerequisiteDenialProbeRequest): boolean {
+    const key = this.prerequisiteDenialProbeKey(request);
+    if (!key) return false;
+    return this.consumedPrerequisiteDenials.has(key);
+  }
+
   public recordFailure(sig: FailureSignature): {
     capability: string;
     state: CapabilityHealthState;
@@ -362,6 +412,7 @@ export class ProgressController {
       lastSignals: [...this.lastSignals],
       capabilities: caps,
       consumedRecoveryProbes: [...this.consumedRecoveryProbes],
+      consumedPrerequisiteDenials: [...this.consumedPrerequisiteDenials],
     };
   }
 
@@ -381,6 +432,7 @@ export class ProgressController {
     // genuinely changed trusted environment yields a fresh capability×task×env
     // key. Restoring therefore never re-arms a consumed probe.
     this.consumedRecoveryProbes = new Set(snapshot.consumedRecoveryProbes ?? []);
+    this.consumedPrerequisiteDenials = new Set(snapshot.consumedPrerequisiteDenials ?? []);
   }
 
   /**

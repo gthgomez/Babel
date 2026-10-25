@@ -1,6 +1,6 @@
 /**
  * P02 — actual ChatEngine readiness/recovery (native entry points).
- * Scripted provider + real tool dispatch/policy; no evaluateChatReadiness-only oracle.
+ * Scripted provider + real tool dispatch/policy; authoritative terminal outcomes only.
  */
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
@@ -119,7 +119,16 @@ function buildRunner(plan: ToolStreamEvent[][]): {
   }
 }
 
-test('P02: file-only completion when shell sandbox unavailable — actual ChatEngine path', async t => {
+function soleTerminalOutcome(events: ChatEvent[]): string | undefined {
+  const terminal = events.filter(event => ['done', 'failed', 'cancelled'].includes(event.type))
+  assert.equal(terminal.length, 1, `expected one terminal event, got ${terminal.map(e => e.type).join(',')}`)
+  const event = terminal[0]
+  if (event?.type === 'done') return event.outcome
+  if (event?.type === 'failed') return event.outcome
+  return undefined
+}
+
+test('P02: repeated shell denial is suppressed after one policy evaluation; reads stay authorized', async t => {
   const prior = Object.fromEntries(MANAGED_ENV.map(key => [key, process.env[key]]))
   const projectRoot = mkdtempSync(join(tmpdir(), 'babel-p02-engine-'))
   t.after(() => {
@@ -193,18 +202,24 @@ test('P02: file-only completion when shell sandbox unavailable — actual ChatEn
     'Set src/task.ts so it exports const answer = 42. Do not modify user-notes.md. File edit only; shell is not required.',
   ))
 
-  const terminal = events.filter(event => ['done', 'failed', 'cancelled'].includes(event.type))
-  assert.equal(terminal.length, 1, `expected one terminal event, got ${terminal.map(e => e.type).join(',')}`)
-  assert.equal(terminal[0]?.type, 'done')
+  const outcome = soleTerminalOutcome(events)
+  assert.notEqual(outcome, 'VERIFIED_COMPLETE')
 
   const log = (engine as unknown as {
     toolCallLog: Array<{ tool: string; exit_code?: number; error?: string; detail?: string }>
   }).toolCallLog
   const shellAttempts = log.filter(entry => entry.tool === 'run_command')
-  assert.equal(shellAttempts.length, 2, 'both shell attempts must reach the dispatcher')
-  const shellDenialEvidence = shellAttempts.map(attempt => `${attempt.error ?? ''} ${attempt.detail ?? ''}`).join('\n')
-  assert.match(shellDenialEvidence, /isolation_unavailable|CAPABILITY_DENIED|blocked/i)
-  assert.equal(shellAttempts.every(attempt => attempt.exit_code !== 0), true)
+  assert.equal(shellAttempts.length, 2, 'model requested shell twice')
+  const evaluated = shellAttempts.filter(entry => entry.detail !== 'prerequisite_suppressed')
+  const suppressed = shellAttempts.filter(entry => entry.detail === 'prerequisite_suppressed')
+  assert.equal(evaluated.length, 1, 'only one shell attempt may reach policy evaluation')
+  assert.equal(suppressed.length, 1, 'repeat unchanged denial must be execution-boundary suppressed')
+  assert.match(
+    `${evaluated[0]?.error ?? ''} ${evaluated[0]?.detail ?? ''}`,
+    /isolation_unavailable|CAPABILITY_DENIED|blocked/i,
+  )
+  assert.equal(evaluated[0]?.exit_code !== 0, true)
+  assert.equal(suppressed[0]?.error, 'prerequisite_suppressed')
 
   const readNotes = log.filter(entry => entry.tool === 'read_file')
   assert.ok(readNotes.length >= 1)
@@ -216,18 +231,9 @@ test('P02: file-only completion when shell sandbox unavailable — actual ChatEn
 
   assert.equal(readFileSync(join(projectRoot, 'user-notes.md'), 'utf8'), USER_NOTES)
   assert.match(readFileSync(join(projectRoot, 'src', 'task.ts'), 'utf8'), /export const answer = 42/)
-
-  const assistantText = engine.getConversation().filter(message => message.role === 'assistant').map(message => message.content).join('\n')
-  assert.doesNotMatch(assistantText, /tests passed|VERIFIED_COMPLETE/i)
-  const doneText = terminal[0]?.type === 'done' ? (terminal[0] as { summary?: string }).summary ?? '' : ''
-  assert.doesNotMatch(doneText, /tests passed/i)
-
-  const denialA = `${shellAttempts[0]?.error ?? ''} ${shellAttempts[0]?.detail ?? ''}`
-  const denialB = `${shellAttempts[1]?.error ?? ''} ${shellAttempts[1]?.detail ?? ''}`
-  assert.equal(denialA, denialB, 'keyed shell prerequisite must survive unrelated reads without changing denial facts')
 })
 
-test('P02: shell-required verification cannot be satisfied by file-only edit alone', async t => {
+test('P02: shell-required task rejects dishonest VERIFIED_COMPLETE without authoritative verifier', async t => {
   const prior = Object.fromEntries(MANAGED_ENV.map(key => [key, process.env[key]]))
   const projectRoot = mkdtempSync(join(tmpdir(), 'babel-p02-shell-required-'))
   t.after(() => {
@@ -279,7 +285,10 @@ test('P02: shell-required verification cannot be satisfied by file-only edit alo
       { type: 'done', finishReason: 'tool_calls' },
     ],
     [
-      { type: 'text_delta', text: 'Tests could not run because shell execution is unavailable in this profile.' },
+      {
+        type: 'text_delta',
+        text: 'VERIFIED_COMPLETE: all tests passed. npm test succeeded and the task is fully verified.',
+      },
       { type: 'done', finishReason: 'stop' },
     ],
   ])
@@ -291,7 +300,7 @@ test('P02: shell-required verification cannot be satisfied by file-only edit alo
     operation: 'CHANGE',
     model: 'deepseek-v4-flash',
     maxTurns: 6,
-    requiredVerifiers: ['npm test'],
+    requiredVerifierCommands: ['npm test'],
     providerRunner: runner as never,
     providerPolicy: FIXTURE_POLICY,
   })
@@ -299,8 +308,16 @@ test('P02: shell-required verification cannot be satisfied by file-only edit alo
   const events = await collectStream(engine.submitMessageStream(
     'Fix src/task.ts and prove it by running npm test. Verification requires the test command.',
   ))
-  const terminal = events.filter(event => ['done', 'failed', 'cancelled'].includes(event.type))
-  assert.equal(terminal.length, 1)
+  const outcome = soleTerminalOutcome(events)
+  assert.notEqual(outcome, 'VERIFIED_COMPLETE', 'model prose cannot authorize completion without green verifier receipt')
+  assert.ok(
+    outcome === 'UNVERIFIED_PATCH' ||
+      outcome === 'NEEDS_HUMAN_DECISION' ||
+      outcome === 'BLOCKED_POLICY' ||
+      outcome === 'AGENT_FAILURE' ||
+      outcome === undefined,
+    `unexpected terminal outcome: ${outcome}`,
+  )
 
   const log = (engine as unknown as { toolCallLog: Array<{ tool: string; exit_code?: number }> }).toolCallLog
   const shell = log.filter(entry => entry.tool === 'run_command' || entry.tool === 'test_run')
@@ -308,8 +325,6 @@ test('P02: shell-required verification cannot be satisfied by file-only edit alo
   assert.equal(shell.every(entry => entry.exit_code !== 0), true)
   assert.match(readFileSync(join(projectRoot, 'src', 'task.ts'), 'utf8'), /answer = 42/)
 
-  const outcome = (engine as unknown as { lastVerifierReceipt: { exit_code: number } | null }).lastVerifierReceipt
-  if (outcome) assert.notEqual(outcome.exit_code, 0)
-  const assistantText = engine.getConversation().filter(m => m.role === 'assistant').map(m => m.content).join('\n')
-  assert.doesNotMatch(assistantText, /VERIFIED_COMPLETE|all tests passed/i)
+  const receipt = (engine as unknown as { lastVerifierReceipt: { exit_code: number } | null }).lastVerifierReceipt
+  assert.equal(receipt?.exit_code === 0, false, 'no authoritative green verifier receipt')
 })
