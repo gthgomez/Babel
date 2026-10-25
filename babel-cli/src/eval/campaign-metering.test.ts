@@ -21,21 +21,34 @@ test('reservation upper bound uses verified max input context and reserved compl
   assert.equal(micro, reservationUpperBoundMicroUsd(prepared))
 })
 
-test('reservation rejects routes without verified context ceiling', () => {
-  const prepared = prepareProviderRequest({
-    body: JSON.stringify({
-      model: CAMPAIGN_QUALIFIED_OPENROUTER_MODEL_ID,
-      max_tokens: 8,
-      messages: [{ role: 'user', content: 'x' }],
-    }),
+test('configured policy context cannot shrink campaign reservation hold', () => {
+  const body = JSON.stringify({
+    model: CAMPAIGN_QUALIFIED_OPENROUTER_MODEL_ID,
+    max_tokens: 32,
+    messages: [{ role: 'user', content: 'hello campaign bound' }],
+  })
+  const smallPolicyHint = prepareProviderRequest({
+    body,
     mode: 'text',
     provider: 'openrouter',
     requestedModelId: CAMPAIGN_QUALIFIED_OPENROUTER_MODEL_ID,
-    reservedCompletionTokens: 8,
-    contextLimitTokens: null,
-    contextLimitSource: 'unknown',
+    reservedCompletionTokens: 32,
+    contextLimitTokens: 8_192,
+    contextLimitSource: 'explicit',
   })
-  assert.throws(() => reservationUpperBoundMicroUsd(prepared), /verified input context bound/)
+  const largePolicyHint = prepareProviderRequest({
+    body,
+    mode: 'text',
+    provider: 'openrouter',
+    requestedModelId: CAMPAIGN_QUALIFIED_OPENROUTER_MODEL_ID,
+    reservedCompletionTokens: 32,
+    contextLimitTokens: 1_000_000,
+    contextLimitSource: 'explicit',
+  })
+  const holdSmall = reservationUpperBoundMicroUsd(smallPolicyHint)
+  const holdLarge = reservationUpperBoundMicroUsd(largePolicyHint)
+  assert.equal(holdSmall, holdLarge)
+  assert.ok(holdSmall > 100_000)
 })
 
 test('actualMicroUsdFromUsage ignores registry estimates masquerading as exact cost', () => {

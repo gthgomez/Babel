@@ -3,6 +3,7 @@ import type { PreparedProviderRequest } from './preparedProviderRequest.js'
 import type { RunControl } from '../runtime/run-control.js'
 import { RunStoppedError } from '../runtime/run-control.js'
 import { CampaignBudgetStore, CampaignBudgetStoreError } from '../eval/campaign-budget-store.js'
+import { assertCampaignOpenRouterWireFrozen } from '../eval/campaign-openrouter-wire.js'
 import { assertCampaignQualifiedPreparedRequest } from '../eval/campaign-qualified-routes.js'
 import {
   actualMicroUsdFromUsage,
@@ -58,6 +59,7 @@ export class CampaignDispatchGate {
     this.assertRoutedProvider(prepared.provider)
     try {
       assertCampaignQualifiedPreparedRequest(prepared)
+      assertCampaignOpenRouterWireFrozen(prepared)
     } catch {
       throw new CampaignRouteUnsupportedError()
     }

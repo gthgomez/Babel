@@ -76,11 +76,11 @@ test('settlement persistence failure poisons gate and blocks later dispatch with
     limitMicroUsd: PILOT_CAMPAIGN_LIMIT_MICRO_USD,
   })
   const { CampaignDispatchGate } = await import('../runners/campaignDispatchGate.js')
-  const { prepareProviderRequest } = await import('../runners/preparedProviderRequest.js')
   const { CAMPAIGN_QUALIFIED_OPENROUTER_MODEL_ID } = await import('./campaign-qualified-routes.js')
+  const { prepareCampaignOpenRouterProviderRequest } = await import('./campaign-openrouter-wire.js')
   const gate = new CampaignDispatchGate({ campaignId: 'pilot', store, taskOwnerId: 'owner-1' })
-  const prepared = prepareProviderRequest({
-    body: JSON.stringify({ model: CAMPAIGN_QUALIFIED_OPENROUTER_MODEL_ID, messages: [{ role: 'user', content: 'hi' }], max_tokens: 16 }),
+  const prepared = prepareCampaignOpenRouterProviderRequest({
+    bodyObject: { model: CAMPAIGN_QUALIFIED_OPENROUTER_MODEL_ID, messages: [{ role: 'user', content: 'hi' }], max_tokens: 16 },
     mode: 'text',
     provider: 'openrouter',
     requestedModelId: CAMPAIGN_QUALIFIED_OPENROUTER_MODEL_ID,
@@ -130,12 +130,12 @@ test('second campaign gate process fails closed after durable poison from persis
     limitMicroUsd: PILOT_CAMPAIGN_LIMIT_MICRO_USD,
   })
   const { CampaignDispatchGate } = await import('../runners/campaignDispatchGate.js')
-  const { prepareProviderRequest } = await import('../runners/preparedProviderRequest.js')
   const { CAMPAIGN_QUALIFIED_OPENROUTER_MODEL_ID } = await import('./campaign-qualified-routes.js')
+  const { prepareCampaignOpenRouterProviderRequest } = await import('./campaign-openrouter-wire.js')
   const ownerA = 'owner-a'
   const gateA = new CampaignDispatchGate({ campaignId: 'pilot', store, taskOwnerId: ownerA })
-  const prepared = prepareProviderRequest({
-    body: JSON.stringify({ model: CAMPAIGN_QUALIFIED_OPENROUTER_MODEL_ID, messages: [{ role: 'user', content: 'hi' }], max_tokens: 16 }),
+  const prepared = prepareCampaignOpenRouterProviderRequest({
+    bodyObject: { model: CAMPAIGN_QUALIFIED_OPENROUTER_MODEL_ID, messages: [{ role: 'user', content: 'hi' }], max_tokens: 16 },
     mode: 'text',
     provider: 'openrouter',
     requestedModelId: CAMPAIGN_QUALIFIED_OPENROUTER_MODEL_ID,
