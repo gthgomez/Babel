@@ -15,6 +15,8 @@ import {
   parseTrustedHostFilesystemPathListDeclaration,
   type TrustedHostFilesystemPathListDeclarationV1,
 } from '../authority/trustedHostFilesystemPathList.js'
+import type { ChatEngineOptions } from './chatEngineContracts.js'
+import { normalizeChatExecutionScope, type ChatExecutionScope } from './chatExecutionScope.js'
 import type { TaskContractV1 } from './taskContract.js'
 import { LiveSessionAuthorityError } from './liveSessionAuthorityError.js'
 
@@ -107,6 +109,72 @@ export function expectedAdmissionDigestFromContract(contract: TaskContractV1): s
 
 export function taskContractBindsPathListAdmission(contract: TaskContractV1): boolean {
   return findPathListAdmissionProvenanceRecord(contract) !== undefined
+}
+
+/** ChatEngine constructor: scope normalization plus pre-runDir path-list guards. */
+export function assignChatEngineScopeAndPathList(options: ChatEngineOptions): ChatEngineOptions {
+  const { executionScope, projectRoot } = resolveChatEngineExecutionScopeAndPathList(options)
+  return { ...options, executionScope, projectRoot }
+}
+
+function resolveChatEngineExecutionScopeAndPathList(
+  options: ChatEngineOptions,
+): { executionScope: ChatExecutionScope; projectRoot: string | null } {
+  let scope: ChatExecutionScope
+  try {
+    scope = normalizeChatExecutionScope(options)
+  } catch (error) {
+    if (options.trustedHostFilesystemPathListDeclaration !== undefined) {
+      throw new LiveSessionAuthorityError(
+        'PATH_LIST_DECLARATION_REQUIRES_PROJECT_ROOT',
+        'PATH_LIST_DECLARATION_REQUIRES_PROJECT_ROOT: A trusted host filesystem path-list declaration requires a non-null project root.',
+      )
+    }
+    throw error
+  }
+  const projectRoot = scope.kind === 'project' ? scope.projectRoot : null
+  assertPathListDeclarationRequiresEffectiveProjectRoot({
+    trustedHostFilesystemPathListDeclaration: options.trustedHostFilesystemPathListDeclaration,
+    projectRoot,
+  })
+  if (
+    options.trustedHostFilesystemPathListDeclaration !== undefined &&
+    projectRoot !== null
+  ) {
+    validatePathListDeclarationInput(options.task, options.trustedHostFilesystemPathListDeclaration)
+  }
+  return { executionScope: scope, projectRoot }
+}
+
+/** ChatEngine resumeExisting: bind loaded admission to current options without recapture. */
+export function reconcileChatEngineResumePathListBinding(
+  authority: {
+    taskContract: TaskContractV1
+    filesystemPathListAdmission?: LiveSessionFilesystemPathListAdmissionV1
+  },
+  options: {
+    projectRoot: string | null
+    task: string
+    trustedHostFilesystemPathListDeclaration?: unknown
+  },
+): void {
+  if (
+    !authority.filesystemPathListAdmission &&
+    options.trustedHostFilesystemPathListDeclaration === undefined
+  ) {
+    return
+  }
+  assertPathListSessionBinding({
+    projectRoot: options.projectRoot,
+    task: options.task,
+    contract: authority.taskContract,
+    ...(authority.filesystemPathListAdmission
+      ? { admission: authority.filesystemPathListAdmission }
+      : {}),
+    ...(options.trustedHostFilesystemPathListDeclaration !== undefined
+      ? { incomingDeclaration: options.trustedHostFilesystemPathListDeclaration }
+      : {}),
+  })
 }
 
 /** After execution scope normalization — declaration requires an effective project root. */

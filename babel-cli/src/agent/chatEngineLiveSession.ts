@@ -22,7 +22,10 @@ import {
   canMutateWithIdempotencyKey,
   type LiveSessionAuthority,
 } from './liveSessionBridge.js';
-import { assertPathListSessionBinding } from './liveSessionFilesystemPathListAdmission.js';
+import {
+  assertPathListSessionBinding,
+  reconcileChatEngineResumePathListBinding,
+} from './liveSessionFilesystemPathListAdmission.js';
 import { paritySettleInterruptedOnResume,checkpointParityEventLogStrictSync } from './chatEngineParityBridge.js';
 import {reviseTaskModeCompanion} from './taskModeRevision.js';
 import {advanceObjectiveMode} from './taskObjectiveLifecycle.js';
@@ -51,6 +54,16 @@ export interface LiveAuthorityOptionsSlice {
   projectTestCommands?: readonly string[] | null;
   compiledChatStack?: ChatCompiledStack;
   trustedHostFilesystemPathListDeclaration?: unknown;
+}
+
+/** Load strict live authority for resume and bind path-list admission to options. */
+export function resumeChatEngineLiveAuthority(
+  runDir: string,
+  options: LiveAuthorityOptionsSlice & { task: string },
+): LiveSessionAuthority {
+  const authority = loadLiveSessionAuthorityStrict(runDir)
+  reconcileChatEngineResumePathListBinding(authority, options)
+  return authority
 }
 
 export interface RefreshableAuthorityInput {

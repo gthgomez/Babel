@@ -117,19 +117,14 @@ import {
   refreshRestoredEngineMode,
   restoreEngineSessionEvents,
   engineCanMutateKey,
+  resumeChatEngineLiveAuthority,
 } from "./chatEngineLiveSession.js";
-import { LiveSessionAuthorityError } from "./liveSessionAuthorityError.js";
-import {
-  assertPathListDeclarationRequiresEffectiveProjectRoot,
-  assertPathListSessionBinding,
-  validatePathListDeclarationInput,
-} from "./liveSessionFilesystemPathListAdmission.js";
+import { assignChatEngineScopeAndPathList } from "./liveSessionFilesystemPathListAdmission.js";
 import {
   AUTHORITY_SESSION_FILENAME,
   restoreAuthoritySession,
 } from "../authority/sessionContext.js";
 import {
-  loadLiveSessionAuthorityStrict,
   persistLiveSessionAuthority,
   recoverCheckpointArtifacts,
 } from "./liveSessionBridge.js";
@@ -890,33 +885,8 @@ export class ChatEngine {
     this.taskAllowanceOwner.markChildBudgetExhausted(limiter, reason);
   }
   constructor(options: ChatEngineOptions) {
-    let scope: import("./chatExecutionScope.js").ChatExecutionScope;
-    try {
-      scope = normalizeChatExecutionScope(options);
-    } catch (error) {
-      if (options.trustedHostFilesystemPathListDeclaration !== undefined) {
-        throw new LiveSessionAuthorityError(
-          "PATH_LIST_DECLARATION_REQUIRES_PROJECT_ROOT",
-          "PATH_LIST_DECLARATION_REQUIRES_PROJECT_ROOT: A trusted host filesystem path-list declaration requires a non-null project root.",
-        );
-      }
-      throw error;
-    }
-    options={...options,executionScope:scope,projectRoot:scope.kind==="project"?scope.projectRoot:null};
-    assertPathListDeclarationRequiresEffectiveProjectRoot({
-      trustedHostFilesystemPathListDeclaration: options.trustedHostFilesystemPathListDeclaration,
-      projectRoot: options.projectRoot,
-    });
-    if (
-      options.trustedHostFilesystemPathListDeclaration !== undefined &&
-      options.projectRoot !== null
-    ) {
-      validatePathListDeclarationInput(
-        options.task,
-        options.trustedHostFilesystemPathListDeclaration,
-      );
-    }
-    if(scope.kind==="conversation"&&(options.instructionRoot||options.workspaceRoot||options.compiledChatStack?.project_root))throw new Error("Conflicting project context in conversation scope");
+    options = assignChatEngineScopeAndPathList(options);
+    if(options.executionScope.kind==="conversation"&&(options.instructionRoot||options.workspaceRoot||options.compiledChatStack?.project_root))throw new Error("Conflicting project context in conversation scope");
     options = { ...options, compiledChatStack: resolveChatInstructionContext(options) };
     this.options = options;
     this.ownerAccounting = new ChatEngineOwnerAccounting(
@@ -1004,7 +974,7 @@ export class ChatEngine {
     this.discoveredTestCommands = this.options.projectRoot
       ? discoverProjectTestCommands(requireProjectRoot(this.options))
       : [];
-    if(options.resumeExisting){recoverCheckpointArtifacts(this.engineRunDir);this.parity.liveAuthority=loadLiveSessionAuthorityStrict(this.engineRunDir);}
+    if(options.resumeExisting){recoverCheckpointArtifacts(this.engineRunDir);this.parity.liveAuthority=resumeChatEngineLiveAuthority(this.engineRunDir,options);}
     let persistedTaskBudget = options.resumeExisting
       ? this.readPersistedTaskBudget(this.engineRunDir)
       : null;
@@ -1031,22 +1001,6 @@ export class ChatEngine {
         repoRoot: requireProjectRoot(options),
         persistPath: join(this.engineRunDir, AUTHORITY_SESSION_FILENAME),
       });
-      if (
-        this.parity.liveAuthority.filesystemPathListAdmission ||
-        options.trustedHostFilesystemPathListDeclaration !== undefined
-      ) {
-        assertPathListSessionBinding({
-          projectRoot: options.projectRoot,
-          task: options.task,
-          contract: this.parity.liveAuthority.taskContract,
-          ...(this.parity.liveAuthority.filesystemPathListAdmission
-            ? { admission: this.parity.liveAuthority.filesystemPathListAdmission }
-            : {}),
-          ...(options.trustedHostFilesystemPathListDeclaration !== undefined
-            ? { incomingDeclaration: options.trustedHostFilesystemPathListDeclaration }
-            : {}),
-        });
-      }
       if(this.parity.liveAuthority.taskContract.mode!==this.executionProfile)refreshRestoredEngineMode({
         parity:this.parity,options,taskClass:this.taskClass,executionProfile:this.executionProfile,engineRunDir:this.engineRunDir,
       });
