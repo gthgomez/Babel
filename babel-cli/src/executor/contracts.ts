@@ -150,6 +150,8 @@ export interface ExecutorCompletionInput {
     mutation_paths?: string[]
   }[]
   proof?: { compliant: boolean; errors?: string[] }
+  /** Native path-list owner satisfied shell-free completion honesty. */
+  nativePathListCompletionSatisfied?: boolean
   /** Opaque per-engine authority plus the current accepted task/run/project. */
   acceptance?: CriterionCompletionRequestV1 | undefined
   workspaceRevision?: WorkspaceRevisionIdentity

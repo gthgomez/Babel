@@ -12,6 +12,8 @@ import {
   type CapabilityId,
 } from "../authority/capabilities.js";
 import type { EvidenceProducerRole } from "./evidenceGraph.js";
+import type { AcceptanceRequirementV1 } from "../agent/taskContract.js";
+import { HOST_PATH_LIST_ACCEPTANCE_VERIFIER_ID } from "../agent/pathListHostDeclaredClarification.js";
 export { isTrustedExecutionReadPort } from "../authority/trustedExecutionPort.js";
 
 export type TrustedExecutionLifecycle =
@@ -388,6 +390,15 @@ export function loadTrustedExecutionSupervisorV1(
         .map(cloneAssignment);
     },
   });
+}
+
+export function requiredCapabilityForAcceptanceRequirement(
+  requirement: AcceptanceRequirementV1,
+): CapabilityId | undefined {
+  if (requirement.verification.verifier_id === HOST_PATH_LIST_ACCEPTANCE_VERIFIER_ID) {
+    return "inspect_repository";
+  }
+  return requiredCapabilityForAcceptanceType(requirement.type);
 }
 
 export function requiredCapabilityForAcceptanceType(

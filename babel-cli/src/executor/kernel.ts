@@ -178,6 +178,9 @@ function decideCompletion(input: ExecutorCompletionInput): CompletionDecision {
     requiredVerifierCommands: input.requiredVerifierCommands ?? null,
     executedVerifierLedger: input.executedVerifierLedger ?? null,
     verifierEvidenceErrors: input.verifierEvidenceErrors ?? null,
+    ...(input.nativePathListCompletionSatisfied
+      ? { nativePathListCompletionSatisfied: input.nativePathListCompletionSatisfied }
+      : {}),
   });
   const acceptance = input.requestedOutcome === 'VERIFIED_COMPLETE'
     ? evaluateCriterionCompletionV1(input.acceptance) : undefined;

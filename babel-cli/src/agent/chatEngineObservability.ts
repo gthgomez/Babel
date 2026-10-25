@@ -868,6 +868,8 @@ export function computeTerminalOutcome(input: {
     | undefined;
   /** W1 C: production writes present — collect fail is failed-with-evidence, not pure env. */
   hasAnyWrites?: boolean;
+  /** Owned native path-list verification (not shell receipt fiction). */
+  nativePathListVerified?: boolean;
 }): TerminalOutcome {
   if (input.budgetExceeded || input.finalStatus === 'budget_exhausted') {
     return 'BUDGET_EXHAUSTED';
@@ -882,6 +884,7 @@ export function computeTerminalOutcome(input: {
   switch (input.finalStatus) {
     case 'completed':
       if (input.readOnly && input.hasAnyWrites === false) return 'NO_CHANGE_REQUIRED';
+      if (input.nativePathListVerified && input.hasAnyWrites) return 'VERIFIED_COMPLETE';
       return (input.lastVerifierReceipt && input.lastVerifierReceipt.exit_code === 0)
         ? 'VERIFIED_COMPLETE'
         : 'UNVERIFIED_PATCH';

@@ -631,6 +631,8 @@ export function evaluateExecuteCompletionHonesty(opts: {
   executedVerifierLedger?: readonly VerifierReceipt[] | readonly import('../executor/contracts.js').ExecutorVerifierReceipt[] | null;
   /** Errors produced during evidence adaptation (optional). */
   verifierEvidenceErrors?: readonly string[] | null;
+  /** Native path-list completion owner satisfied the criterion without shell proof. */
+  nativePathListCompletionSatisfied?: boolean;
 }): { allow: boolean; reason: CompletionGateRejectReason } {
   // Precedence 1: Receipt adaptation failures deterministically reject completion.
   if (opts.verifierEvidenceErrors && opts.verifierEvidenceErrors.length > 0) {
@@ -639,6 +641,9 @@ export function evaluateExecuteCompletionHonesty(opts: {
 
   if (!opts.hasWrite && !(opts.allowInspectedNoChange && hasInspectedNoChangeEvidence(opts.toolCallLog))) {
     return { allow: false, reason: 'no_writes' };
+  }
+  if (opts.nativePathListCompletionSatisfied === true) {
+    return { allow: true, reason: null };
   }
   if (opts.policy === 'none') {
     return { allow: true, reason: null };
@@ -1276,6 +1281,7 @@ export function evaluateCompletionGateForEngine(opts: {
    * Must NOT be taken from the receipt itself (that makes wrong_revision tautological).
    */
   currentWorkspaceRevisionHash?: string | null;
+  nativePathListCompletionSatisfied?: boolean;
   /**
    * Optional explicit adversarial signals (specialized detectors / tests).
    * Live path also derives mechanical signals via deriveAdversarialSignals.
@@ -1321,6 +1327,9 @@ export function evaluateCompletionGateForEngine(opts: {
     requiredVerifierCommands,
     executedVerifierLedger: opts.executedVerifierLedger ?? null,
     verifierEvidenceErrors: opts.verifierEvidenceErrors ?? null,
+    ...(opts.nativePathListCompletionSatisfied
+      ? { nativePathListCompletionSatisfied: opts.nativePathListCompletionSatisfied }
+      : {}),
   });
   if (!honesty.allow) return 'reject';
   if (opts.lastVerifierReceipt && isCatOrTypeCommand(opts.lastVerifierReceipt.command)) {

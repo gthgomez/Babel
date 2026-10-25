@@ -597,26 +597,32 @@ export function evaluateChatCompletionProof(input: {
    * from env (or process.env when env is also omitted).
    */
   executionProfile?: string;
+  /** Owned native path-list verification satisfied the completion proof obligations. */
+  nativePathListSatisfied?: boolean;
 }): { compliant: boolean; errors?: string[] } {
   const errors: string[] = [];
   if (!input.hasMutation) errors.push('missing production mutation evidence');
   if (input.verifierTampered) errors.push('verifier integrity violation');
 
+  const nativePathList = input.nativePathListSatisfied === true;
   const receipt = input.receipt;
-  if (!receipt || receipt.exit_code !== 0) {
-    errors.push('missing green verifier receipt');
-  } else if (!input.isAuthoritativeCommand(receipt.command)) {
-    errors.push('verifier receipt is not authoritative');
-  } else if (!receipt.verifier_id || !receipt.argv) {
-    errors.push('verifier receipt is not durably structured');
-  } else {
-    errors.push(...revisionBindingProofErrors(receipt));
+  if (!nativePathList) {
+    if (!receipt || receipt.exit_code !== 0) {
+      errors.push('missing green verifier receipt');
+    } else if (!input.isAuthoritativeCommand(receipt.command)) {
+      errors.push('verifier receipt is not authoritative');
+    } else if (!receipt.verifier_id || !receipt.argv) {
+      errors.push('verifier receipt is not durably structured');
+    } else {
+      errors.push(...revisionBindingProofErrors(receipt));
+    }
   }
 
   if (!input.events.some((event) => event.kind === 'mutation_batch')) {
     errors.push('missing mutation transaction evidence');
   }
   if (
+    !nativePathList &&
     !input.events.some(
       (event) =>
         event.kind === 'verifier_attempt' &&
@@ -627,23 +633,25 @@ export function evaluateChatCompletionProof(input: {
     errors.push('missing canonical verifier-attempt evidence');
   }
 
-  // Shared kernel evidence authority (contract coverage + revision-bound graph).
-  const evidence = evaluateChatEvidenceGraph({
-    projectRoot: input.projectRoot,
-    receipt: input.receipt,
-    events: input.events,
-    hasMutation: input.hasMutation,
-  });
-  for (const missing of evidence.missing) {
-    errors.push(`missing evidence: ${missing}`);
-  }
-  for (const err of evidence.errors) {
-    if (!errors.includes(err)) errors.push(err);
+  if (!nativePathList) {
+    // Shared kernel evidence authority (contract coverage + revision-bound graph).
+    const evidence = evaluateChatEvidenceGraph({
+      projectRoot: input.projectRoot,
+      receipt: input.receipt,
+      events: input.events,
+      hasMutation: input.hasMutation,
+    });
+    for (const missing of evidence.missing) {
+      errors.push(`missing evidence: ${missing}`);
+    }
+    for (const err of evidence.errors) {
+      if (!errors.includes(err)) errors.push(err);
+    }
   }
 
   // Opt-in clean-room IndependentVerifier (default off — no hot-path tree copy).
   // High-assurance profiles may default ON; env still overrides.
-  if (receipt && receipt.exit_code === 0) {
+  if (!nativePathList && receipt && receipt.exit_code === 0) {
     const mutationPaths = mutationPathsFromSessionEvents(input.events);
     const env = input.env ?? process.env;
     const executionProfile =

@@ -947,11 +947,20 @@ export class ChatEngine {
     if (!options.resumeExisting) resetCircuitBreakerForRun(this.engineRunId);
     // definite assignment: engineRunId set immediately above
     this.parity = createParityRuntime(this.engineRunId);
-    this.criterionCompletion = this.services.acceptance?.createCompletionService(() => ({
-      contract: this.parity.liveAuthority?.taskContract,
-      runId: this.engineRunId,
-      projectRoot: this.options.projectRoot ?? null,
-    }));
+    this.criterionCompletion = this.services.acceptance?.createCompletionService(() => {
+      const admission = this.parity.liveAuthority?.filesystemPathListAdmission;
+      return {
+        contract: this.parity.liveAuthority?.taskContract,
+        runId: this.engineRunId,
+        projectRoot: this.options.projectRoot ?? null,
+        ...(admission ? { filesystemPathListAdmission: admission } : {}),
+        candidateRevisionSha: () => this.criterionCandidateRevisionSha(),
+        hasGovernedMutationLineage: () =>
+          this.parity.sessionEvents.events.some(
+            (event) => event.kind === "mutation_batch",
+          ),
+      };
+    });
     if (options.admissionStore)
       this.parity.admissionStore = options.admissionStore;
     this.runtimeInvariants = new RuntimeInvariantRegistry(
@@ -1148,6 +1157,9 @@ export class ChatEngine {
       } catch {
         /* best-effort */
       }
+      this.criterionCompletion?.refreshNativePathListEvidence();
+      const nativePathListCompletionSatisfied =
+        this.criterionCompletion?.nativePathListProofCompliant() === true;
       return evaluateCompletionGateForEngine({
         turnType: turnResult.type,
         taskIntent,
@@ -1161,6 +1173,9 @@ export class ChatEngine {
         projectTestCommands,
         ...(currentWorkspaceRevisionHash
           ? { currentWorkspaceRevisionHash }
+          : {}),
+        ...(nativePathListCompletionSatisfied
+          ? { nativePathListCompletionSatisfied }
           : {}),
       });
     } finally {
@@ -1427,6 +1442,7 @@ export class ChatEngine {
     compliant: boolean;
     errors?: string[];
   } {
+    this.criterionCompletion?.refreshNativePathListEvidence();
     return evaluateChatCompletionProof({
       projectRoot: requireProjectRoot(this.options),
       hasMutation,
@@ -1434,6 +1450,8 @@ export class ChatEngine {
       receipt: this.lastVerifierReceipt,
       events: this.parity.sessionEvents.events,
       isAuthoritativeCommand: isAuthoritativeVerifierCommand,
+      nativePathListSatisfied:
+        this.criterionCompletion?.nativePathListProofCompliant() === true,
     });
   }
 
@@ -2737,6 +2755,9 @@ export class ChatEngine {
       requestedOutcome === "VERIFIED_COMPLETE"
         ? this.buildCompletionProof(hasMutation)
         : { compliant: false, errors: ["requested outcome was not verified"] };
+    this.criterionCompletion?.refreshNativePathListEvidence();
+    const nativePathListCompletionSatisfied =
+      this.criterionCompletion?.nativePathListProofCompliant() === true;
     if (requestedOutcome === 'VERIFIED_COMPLETE') {
       this.criterionCompletion?.refreshPrivateEvidence({
         proof,
@@ -2762,6 +2783,9 @@ export class ChatEngine {
         ? { workspaceRevision: this.lastVerifierReceipt.boundRevision }
         : {}),
       proof,
+      ...(nativePathListCompletionSatisfied
+        ? { nativePathListCompletionSatisfied }
+        : {}),
     });
   }
   private streamDone(answer: string, extra?: ChatStreamDoneExtra): ChatEvent {
@@ -4647,6 +4671,12 @@ export class ChatEngine {
           lastCriticReceipt: this.lastCriticReceipt,
           verifierTampered: this.verifierTampered,
           writeCount: this.writeCount,
+          nativePathListVerified: (() => {
+            this.criterionCompletion?.refreshNativePathListEvidence();
+            return (
+              this.criterionCompletion?.nativePathListProofCompliant() === true
+            );
+          })(),
         },
         presentation: {
           conversation: this.conversation,
@@ -4699,6 +4729,12 @@ export class ChatEngine {
           this.isSubmissionCurrent(generation),
         currentTaskCostUsd: () => this.currentTaskCostUsd(),
         persistTaskCostBaseline: () => this.persistTaskCostBaseline(),
+        nativePathListVerified: () => {
+          this.criterionCompletion?.refreshNativePathListEvidence();
+          return (
+            this.criterionCompletion?.nativePathListProofCompliant() === true
+          );
+        },
       },
     };
   }

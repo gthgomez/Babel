@@ -112,6 +112,7 @@ export interface ChatTerminalSnapshot {
     lastCriticReceipt: import('./diffCritic.js').DiffCriticVerdict | null
     verifierTampered: boolean
     writeCount: number
+    nativePathListVerified?: boolean
   }
   presentation: {
     conversation: import('./chatToolDefinitions.js').ChatMessage[]
@@ -156,6 +157,8 @@ export interface ChatTerminalEffects {
   isSubmissionCurrent: (generation: number) => boolean
   currentTaskCostUsd: () => number
   persistTaskCostBaseline: () => void
+  /** Recompute owned native path-list verification at terminal finalize time. */
+  nativePathListVerified?: () => boolean
 }
 export type ChatTerminalInput = {
   snapshot: ChatTerminalSnapshot
@@ -201,6 +204,8 @@ export function completeChatStream(
   const stoppedOutcome: TerminalOutcome | undefined = stop?.kind === 'blocked' ? stop.reasonCode === 'permission_denied' ? 'BLOCKED_POLICY' : 'BLOCKED_EXTERNAL'
     : stop?.kind === 'budget_exhausted' ? 'BUDGET_EXHAUSTED' : stop?.kind === 'failed' ? 'AGENT_FAILURE'
     : stop?.kind === 'cancelled' || stop?.kind === 'superseded' ? 'CANCELLED' : undefined
+  const nativePathListVerified =
+    effects.nativePathListVerified?.() ?? snapshot.outcome.nativePathListVerified ?? false
   let requestedOutcome = stoppedOutcome ?? computeTerminalOutcome({
     readOnly: snapshot.outcome.readOnly,
     finalStatus: extra?.blockedReport
@@ -212,6 +217,7 @@ export function completeChatStream(
     lastVerifierReceipt: snapshot.outcome.lastVerifierReceipt,
     blockedReport: extra?.blockedReport,
     hasAnyWrites: hasMutation,
+    nativePathListVerified,
   })
   requestedOutcome = applyHonestTaskOutcomeToCompletion({
     contract: snapshot.context.taskContract,
@@ -661,6 +667,10 @@ export function assembleChatResult(
           lastVerifierReceipt: snapshot.outcome.lastVerifierReceipt,
           blockedReport: finalBlockedReport,
           hasAnyWrites: hasMutation,
+          nativePathListVerified:
+            effects.nativePathListVerified?.() ??
+            snapshot.outcome.nativePathListVerified ??
+            false,
         }))
   if (outcome !== undefined && finalStatus !== 'failed') {
     outcome = applyHonestTaskOutcomeToCompletion({

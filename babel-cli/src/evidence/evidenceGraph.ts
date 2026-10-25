@@ -16,7 +16,7 @@ import { canonicalJson, sha256Canonical } from "../acceptance/canonical.js";
 import { redactEvidenceValue } from "../utils/redaction.js";
 import {
   isTrustedExecutionReadPort,
-  requiredCapabilityForAcceptanceType,
+  requiredCapabilityForAcceptanceRequirement,
   type TrustedExecutionReadPortV1,
 } from "./trustedExecutionIdentity.js";
 
@@ -249,7 +249,11 @@ function certifyingEvidenceError(
   if (node.type === "verifier_receipt") {
     return undefined;
   }
-  if (node.type !== "runtime_observation" && data["exit_code"] !== 0)
+  if (
+    node.type !== "runtime_observation" &&
+    data["exit_code"] !== undefined &&
+    data["exit_code"] !== 0
+  )
     return "certifying evidence has a non-zero exit_code";
   if (node.type === "runtime_observation") {
     if (
@@ -607,8 +611,8 @@ export function evaluateCompletionGateV1(input: {
         continue;
       }
       const certificationError = certifyingEvidenceError(node, requirement);
-      const requiredCapability = requiredCapabilityForAcceptanceType(
-        requirement.type,
+      const requiredCapability = requiredCapabilityForAcceptanceRequirement(
+        requirement,
       );
       const registryResult = certificationError
         ? null

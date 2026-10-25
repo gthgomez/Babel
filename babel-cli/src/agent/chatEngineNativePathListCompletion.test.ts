@@ -1,12 +1,15 @@
 /**
- * Native path-list completion (stage 2): real ChatEngine + governed edits + deterministic provider only.
- * Not a benchmark/scripted-admission proof — production authority paths with transport substituted.
+ * Native path-list completion (stage 2): production ChatEngine admission, lease, runner,
+ * and submitMessageStream. Transport is mocked only; no benchmark mode or injected runner.
+ *
+ * Lease: BABEL_AUTONOMY_LEASE_FILE points at host-owned JSON on disk — the same
+ * production admission path documented in authority/lease.ts (not inline BABEL_AUTONOMY_LEASE).
  */
 import assert from 'node:assert/strict'
-import { createHash, randomUUID } from 'node:crypto'
+import { randomUUID } from 'node:crypto'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import test from 'node:test'
 import { sha256Canonical } from '../acceptance/canonical.js'
@@ -20,7 +23,6 @@ import {
   type CriterionCompletionRequestV1,
 } from '../authority/criterionCompletion.js'
 import type { ResolvedModelPolicy } from '../modelPolicy.js'
-import type { ToolStreamEvent } from '../runners/base.js'
 import type { TerminalOutcome } from '../schemas/agentContracts.js'
 import { refreshDryRunState } from '../localTools.js'
 import { ChatEngine } from './chatEngine.js'
@@ -29,20 +31,22 @@ import { inferTaskAcceptance } from './taskAcceptanceMeaning.js'
 import { HOST_PATH_LIST_ACCEPTANCE_VERIFIER_ID } from './pathListHostDeclaredClarification.js'
 import { loadLiveSessionAuthorityStrict } from './liveSessionBridge.js'
 import { chatSessionDir } from '../cli/runsLayout.js'
+import { OpenRouterApiRunner } from '../runners/openRouterApi.js'
+import { CAMPAIGN_QUALIFIED_OPENROUTER_MODEL_ID } from '../eval/campaign-qualified-routes.js'
 
 const USER_REQUEST =
   'Update the path index to match the current tree. Use another method if a command cannot run; confirm listed paths.'
 
-const FIXTURE_POLICY: ResolvedModelPolicy = {
-  policyPath: 'native-path-list-completion-fixture',
-  family: 'native-path-list-completion-fixture',
+const QUALIFIED_OPENROUTER_POLICY: ResolvedModelPolicy = {
+  policyPath: 'campaign-qualified-openrouter',
+  family: 'openrouter',
   selectedTier: 'cheap',
-  resolvedBackendKey: 'native-path-list-completion-fixture',
-  provider: 'deepinfra',
-  providerModelId: 'native-path-list-completion-fixture-model',
+  resolvedBackendKey: 'deepseek-v4-flash-openrouter',
+  provider: 'openrouter',
+  providerModelId: CAMPAIGN_QUALIFIED_OPENROUTER_MODEL_ID,
   expensive: false,
   enabled: true,
-  experimental: true,
+  experimental: false,
   blockedWithoutExplicitOptIn: false,
   approximateInputTokens: 0,
   approximateOutputTokens: 0,
@@ -62,17 +66,20 @@ const MANAGED_ENV = [
   'BABEL_BENCHMARK_MODE',
   'BABEL_BENCHMARK_AUTO_APPROVE',
   'BABEL_AUTONOMY_LEASE',
+  'BABEL_AUTONOMY_LEASE_FILE',
   'BABEL_DRY_RUN',
   'BABEL_DRY_RUN_SOURCE',
   'BABEL_DIFF_CRITIC',
   'BABEL_COMPACTION',
   'BABEL_DIRTY_TREE',
   'BABEL_RUNS_DIR',
+  'BABEL_OFFLINE',
+  'BABEL_CHAT_MAX_COST',
 ] as const
 
 const PROVIDER_ROUTE = {
-  model: FIXTURE_POLICY.providerModelId,
-  provider: FIXTURE_POLICY.provider,
+  model: CAMPAIGN_QUALIFIED_OPENROUTER_MODEL_ID,
+  provider: 'openrouter' as const,
 }
 
 function git(projectRoot: string, args: string[]): void {
@@ -121,6 +128,41 @@ function declarationPayload(binding: ReturnType<typeof hostClarificationBinding>
   }
 }
 
+/** Host-issued lease file — canonical production admission, not an inline test bypass. */
+function writeCanonicalProductionLeaseFile(projectRoot: string): string {
+  const leasePath = join(projectRoot, 'host-admission', 'autonomy-lease.json')
+  mkdirSync(dirname(leasePath), { recursive: true })
+  const lease = {
+    version: 2,
+    leaseId: `native-path-list-${randomUUID()}`,
+    scope: {
+      repository: 'native-path-list-fixture',
+      remote: 'origin',
+      worktree: 'current',
+      objective: USER_REQUEST,
+    },
+    allowedCapabilities: ['edit_task_files', 'inspect_repository'],
+    branchPrefixes: ['feat/', 'fix/', 'test/'],
+    constraints: {
+      protectedBranches: ['main'],
+      forcePush: false,
+      remoteRefDelete: false,
+      releasePublish: false,
+      productionDeploy: false,
+      repositoryAdmin: false,
+      secretsAccess: false,
+      billing: false,
+      destructiveDb: false,
+      scopeExpansion: false,
+      securityPolicyChange: false,
+      historyRewrite: false,
+      allowedProtectedTargets: [],
+    },
+  }
+  writeFileSync(leasePath, `${JSON.stringify(lease, null, 2)}\n`, 'utf8')
+  return leasePath
+}
+
 function seedRepository(projectRoot: string): void {
   mkdirSync(join(projectRoot, 'apps', 'web'), { recursive: true })
   mkdirSync(join(projectRoot, 'docs'), { recursive: true })
@@ -139,62 +181,43 @@ function treeIndexBody(): string {
   return '- apps/web/entry.mjs\n'
 }
 
-function buildRunner(): {
-  runner: {
-    executeWithToolsStream: () => AsyncGenerator<ToolStreamEvent>
-    execute: () => Promise<{ type: 'completion'; answer: string }>
-    executeRaw: () => Promise<string>
-    getLastInvocationMetadata: () => null
-    buildNativeToolsWireBody: () => string
-    getNativeRequestReservedCompletionTokens: () => number
+function sseLine(value: Record<string, unknown>): string {
+  return `data: ${JSON.stringify(value)}\n\n`
+}
+
+function openRouterSseBody(turn: number): string {
+  const model = CAMPAIGN_QUALIFIED_OPENROUTER_MODEL_ID
+  const usage = { prompt_tokens: 12, completion_tokens: 6, cost: 0.00001 }
+  if (turn === 0) {
+    const args = JSON.stringify({
+      file_path: 'meta/tree-index.md',
+      old_str: '- apps/web/stale.mjs\n',
+      new_str: treeIndexBody(),
+    })
+    return (
+      sseLine({
+        model,
+        choices: [{
+          delta: {
+            tool_calls: [{
+              index: 0,
+              id: 'call-tree-index',
+              type: 'function',
+              function: { name: 'str_replace', arguments: args },
+            }],
+          },
+        }],
+      }) +
+      sseLine({ model, choices: [{ delta: {}, finish_reason: 'tool_calls' }], usage }) +
+      'data: [DONE]\n\n'
+    )
   }
-} {
-  let turn = 0
-  return {
-    runner: {
-      async *executeWithToolsStream() {
-        if (turn === 0) {
-          turn++
-          yield {
-            type: 'tool_use',
-            id: 'write-tree-index',
-            name: 'str_replace',
-            input: {
-              file_path: 'meta/tree-index.md',
-              old_str: '- apps/web/stale.mjs\n',
-              new_str: treeIndexBody(),
-            },
-          }
-          yield { type: 'done', finishReason: 'tool_calls' }
-          return
-        }
-        turn++
-        yield {
-          type: 'text_delta',
-          text: 'Updated meta/tree-index.md to list the scoped inventory under apps/.',
-        }
-        yield { type: 'done', finishReason: 'stop' }
-      },
-      async execute() {
-        return {
-          type: 'completion',
-          answer: 'Updated meta/tree-index.md to list the scoped inventory under apps/.',
-        }
-      },
-      async executeRaw() {
-        return 'Updated meta/tree-index.md to list the scoped inventory under apps/.'
-      },
-      getLastInvocationMetadata() {
-        return null
-      },
-      buildNativeToolsWireBody() {
-        return '{}'
-      },
-      getNativeRequestReservedCompletionTokens() {
-        return 4_096
-      },
-    },
-  }
+  const text = 'Updated meta/tree-index.md to list the scoped inventory under apps/.'
+  return (
+    sseLine({ model, choices: [{ delta: { content: text } }] }) +
+    sseLine({ model, choices: [{ delta: {}, finish_reason: 'stop' }], usage }) +
+    'data: [DONE]\n\n'
+  )
 }
 
 async function collectStream(stream: AsyncGenerator<ChatEvent, unknown, undefined>): Promise<ChatEvent[]> {
@@ -213,11 +236,36 @@ function terminalOutcome(events: ChatEvent[]): TerminalOutcome {
   return outcome
 }
 
+function applyProductionPathListEnv(projectRoot: string, runsRoot: string): string {
+  for (const key of MANAGED_ENV) delete process.env[key]
+  process.env['BABEL_EXECUTION_PROFILE'] = 'safe_repo'
+  process.env['BABEL_ALLOW_HOST_FALLBACK'] = '0'
+  process.env['BABEL_DOCKER_DISABLE'] = 'false'
+  process.env['BABEL_DRY_RUN'] = '0'
+  process.env['BABEL_DRY_RUN_SOURCE'] = 'session'
+  process.env['BABEL_DIFF_CRITIC'] = '0'
+  process.env['BABEL_COMPACTION'] = 'off'
+  process.env['BABEL_DIRTY_TREE'] = '0'
+  process.env['BABEL_RUNS_DIR'] = runsRoot
+  process.env['BABEL_OFFLINE'] = '1'
+  process.env['BABEL_CHAT_MAX_COST'] = 'unlimited'
+  assert.equal(process.env['BABEL_BENCHMARK_MODE'], undefined)
+  assert.equal(process.env['BABEL_BENCHMARK_AUTO_APPROVE'], undefined)
+  assert.equal(process.env['BABEL_AUTONOMY_LEASE'], undefined)
+  const leasePath = writeCanonicalProductionLeaseFile(projectRoot)
+  process.env['BABEL_AUTONOMY_LEASE_FILE'] = leasePath
+  refreshDryRunState()
+  return leasePath
+}
+
 test('native path-list criterion: VERIFIED_COMPLETE via governed index update without shell verifier', async t => {
   const prior = Object.fromEntries(MANAGED_ENV.map(key => [key, process.env[key]]))
   const projectRoot = mkdtempSync(join(tmpdir(), 'babel-native-path-list-completion-'))
   const runsRoot = join(projectRoot, 'runs')
+  let physicalFetch = 0
+  const savedFetch = globalThis.fetch
   t.after(() => {
+    globalThis.fetch = savedFetch
     for (const key of MANAGED_ENV) {
       if (prior[key] === undefined) delete process.env[key]
       else process.env[key] = prior[key]
@@ -226,41 +274,32 @@ test('native path-list criterion: VERIFIED_COMPLETE via governed index update wi
     rmSync(projectRoot, { recursive: true, force: true })
   })
 
-  for (const key of MANAGED_ENV) delete process.env[key]
-  process.env['BABEL_EXECUTION_PROFILE'] = 'safe_repo'
-  process.env['BABEL_ALLOW_HOST_FALLBACK'] = '0'
-  process.env['BABEL_DOCKER_DISABLE'] = 'false'
-  process.env['BABEL_BENCHMARK_MODE'] = '1'
-  process.env['BABEL_DRY_RUN'] = '0'
-  process.env['BABEL_DRY_RUN_SOURCE'] = 'session'
-  process.env['BABEL_DIFF_CRITIC'] = '0'
-  process.env['BABEL_COMPACTION'] = 'off'
-  process.env['BABEL_DIRTY_TREE'] = '0'
-  process.env['BABEL_RUNS_DIR'] = runsRoot
-  assert.equal(process.env['BABEL_BENCHMARK_AUTO_APPROVE'], undefined)
-  process.env['BABEL_AUTONOMY_LEASE'] = JSON.stringify({
-    version: 2,
-    leaseId: `native-path-list-${randomUUID()}`,
-    scope: { repository: 'native-path-list-fixture', objective: USER_REQUEST },
-    allowedCapabilities: ['edit_task_files', 'inspect_repository'],
-  })
-  refreshDryRunState()
-
+  applyProductionPathListEnv(projectRoot, runsRoot)
   seedRepository(projectRoot)
   const binding = hostClarificationBinding()
   const declaration = declarationPayload(binding)
-  const { runner } = buildRunner()
   const runId = `native-path-list-${randomUUID()}`
+
+  const runner = new OpenRouterApiRunner(CAMPAIGN_QUALIFIED_OPENROUTER_MODEL_ID, { maxTokens: 4_096 }, {
+    explicitCredential: 'synthetic-fixture',
+    env: { OPENROUTER_API_KEY: 'synthetic-fixture' },
+  })
+
+  globalThis.fetch = async () => {
+    physicalFetch++
+    const body = openRouterSseBody(physicalFetch - 1)
+    return new Response(body, { headers: { 'Content-Type': 'text/event-stream' } })
+  }
 
   const engine = new ChatEngine({
     runId,
     task: USER_REQUEST,
     projectRoot,
     operation: 'CHANGE',
-    model: 'deepseek-v4-flash',
+    model: CAMPAIGN_QUALIFIED_OPENROUTER_MODEL_ID,
     maxTurns: 6,
-    providerRunner: runner as never,
-    providerPolicy: FIXTURE_POLICY,
+    providerRunner: runner,
+    providerPolicy: QUALIFIED_OPENROUTER_POLICY,
     trustedHostFilesystemPathListDeclaration: declaration,
   })
 
@@ -283,18 +322,27 @@ test('native path-list criterion: VERIFIED_COMPLETE via governed index update wi
   const completionBox = engine as unknown as {
     criterionCompletion?: {
       currentRequest: () => CriterionCompletionRequestV1 | undefined
+      refreshNativePathListEvidence(): void
+      pathListVerificationRequest(): unknown
+      evaluateOwnedPathListVerification(req: unknown): { verified: boolean; errors: string[] }
+      nativePathListProofCompliant(): boolean
     }
     lastVerifierReceipt: { exit_code: number; command?: string } | null
     executedVerifierLedger: readonly unknown[]
+    toolCallLog: Array<{ tool: string; error?: string }>
   }
   const evaluation = completionBox.criterionCompletion?.currentRequest()
     ? evaluateCriterionCompletionV1(completionBox.criterionCompletion.currentRequest())
     : undefined
 
-  assert.equal(
-    readFileSync(join(projectRoot, 'meta', 'tree-index.md'), 'utf8'),
-    treeIndexBody(),
-    'governed write must update the path index document',
+  const indexBody = readFileSync(join(projectRoot, 'meta', 'tree-index.md'), 'utf8')
+
+  assert.equal(indexBody, treeIndexBody(), 'governed write must update the path index document')
+  assert.ok(physicalFetch >= 2, `expected at least tool+completion transport calls, saw ${physicalFetch}`)
+  assert.ok(
+    (engine as unknown as { parity: { sessionEvents: { events: Array<{ kind: string }> } } })
+      .parity.sessionEvents.events.some(event => event.kind === 'mutation_batch'),
+    'governed str_replace must emit mutation_batch session evidence',
   )
 
   assert.equal(streamOutcome, 'VERIFIED_COMPLETE', 'stream terminal must certify native path-list completion')
@@ -310,4 +358,145 @@ test('native path-list criterion: VERIFIED_COMPLETE via governed index update wi
   assert.equal(completionBox.lastVerifierReceipt, null, 'shell verifier receipt must not stand in for native path-list proof')
   assert.equal(completionBox.executedVerifierLedger?.length ?? 0, 0)
   assert.ok(durable.filesystemPathListAdmission)
+})
+
+test('native path-list: shell verifier attempt stays blocked under safe_repo isolation', async t => {
+  const prior = Object.fromEntries(MANAGED_ENV.map(key => [key, process.env[key]]))
+  const projectRoot = mkdtempSync(join(tmpdir(), 'babel-native-path-list-shell-'))
+  const runsRoot = join(projectRoot, 'runs')
+  let physicalFetch = 0
+  const savedFetch = globalThis.fetch
+  t.after(() => {
+    globalThis.fetch = savedFetch
+    for (const key of MANAGED_ENV) {
+      if (prior[key] === undefined) delete process.env[key]
+      else process.env[key] = prior[key]
+    }
+    refreshDryRunState()
+    rmSync(projectRoot, { recursive: true, force: true })
+  })
+
+  applyProductionPathListEnv(projectRoot, runsRoot)
+  seedRepository(projectRoot)
+  const declaration = declarationPayload(hostClarificationBinding())
+  const runId = `native-path-list-shell-${randomUUID()}`
+  const runner = new OpenRouterApiRunner(CAMPAIGN_QUALIFIED_OPENROUTER_MODEL_ID, { maxTokens: 4_096 }, {
+    explicitCredential: 'synthetic-fixture',
+    env: { OPENROUTER_API_KEY: 'synthetic-fixture' },
+  })
+  globalThis.fetch = async () => {
+    physicalFetch++
+    const model = CAMPAIGN_QUALIFIED_OPENROUTER_MODEL_ID
+    const usage = { prompt_tokens: 12, completion_tokens: 6, cost: 0.00001 }
+    const args = JSON.stringify({ command: 'find apps -type f' })
+    const body =
+      sseLine({
+        model,
+        choices: [{
+          delta: {
+            tool_calls: [{
+              index: 0,
+              id: 'call-shell',
+              type: 'function',
+              function: { name: 'run_command', arguments: args },
+            }],
+          },
+        }],
+      }) +
+      sseLine({ model, choices: [{ delta: {}, finish_reason: 'tool_calls' }], usage }) +
+      'data: [DONE]\n\n'
+    return new Response(body, { headers: { 'Content-Type': 'text/event-stream' } })
+  }
+
+  const engine = new ChatEngine({
+    runId,
+    task: USER_REQUEST,
+    projectRoot,
+    operation: 'CHANGE',
+    model: CAMPAIGN_QUALIFIED_OPENROUTER_MODEL_ID,
+    maxTurns: 4,
+    providerRunner: runner,
+    providerPolicy: QUALIFIED_OPENROUTER_POLICY,
+    trustedHostFilesystemPathListDeclaration: declaration,
+  })
+  engine.admitUserSubmission({ userInput: USER_REQUEST }, PROVIDER_ROUTE)
+  const events = await collectStream(engine.submitMessageStream(USER_REQUEST))
+  const outcome = terminalOutcome(events)
+  const box = engine as unknown as {
+    lastVerifierReceipt: unknown
+    executedVerifierLedger: readonly unknown[]
+    toolCallLog: Array<{ tool: string; error?: string }>
+  }
+
+  assert.ok(physicalFetch >= 1)
+  assert.notEqual(outcome, 'VERIFIED_COMPLETE')
+  assert.equal(box.lastVerifierReceipt, null)
+  assert.equal(box.executedVerifierLedger.length, 0)
+  assert.ok(
+    box.toolCallLog.some(entry => entry.tool === 'run_command' && entry.error),
+    'shell must be policy-blocked without isolation',
+  )
+  assert.equal(
+    readFileSync(join(projectRoot, 'meta', 'tree-index.md'), 'utf8'),
+    '- apps/web/stale.mjs\n',
+    'shell must not mutate the index when blocked',
+  )
+})
+
+test('native path-list: copied verification request is not authoritative', async t => {
+  const prior = Object.fromEntries(MANAGED_ENV.map(key => [key, process.env[key]]))
+  const projectRoot = mkdtempSync(join(tmpdir(), 'babel-native-path-list-forged-'))
+  const runsRoot = join(projectRoot, 'runs')
+  const savedFetch = globalThis.fetch
+  t.after(() => {
+    globalThis.fetch = savedFetch
+    for (const key of MANAGED_ENV) {
+      if (prior[key] === undefined) delete process.env[key]
+      else process.env[key] = prior[key]
+    }
+    refreshDryRunState()
+    rmSync(projectRoot, { recursive: true, force: true })
+  })
+
+  applyProductionPathListEnv(projectRoot, runsRoot)
+  seedRepository(projectRoot)
+  const declaration = declarationPayload(hostClarificationBinding())
+  let physicalFetch = 0
+  globalThis.fetch = async () => {
+    physicalFetch++
+    return new Response(openRouterSseBody(physicalFetch - 1), {
+      headers: { 'Content-Type': 'text/event-stream' },
+    })
+  }
+  const engine = new ChatEngine({
+    runId: `native-path-list-forged-${randomUUID()}`,
+    task: USER_REQUEST,
+    projectRoot,
+    operation: 'CHANGE',
+    model: CAMPAIGN_QUALIFIED_OPENROUTER_MODEL_ID,
+    maxTurns: 6,
+    providerRunner: new OpenRouterApiRunner(CAMPAIGN_QUALIFIED_OPENROUTER_MODEL_ID, { maxTokens: 4_096 }, {
+      explicitCredential: 'synthetic-fixture',
+      env: { OPENROUTER_API_KEY: 'synthetic-fixture' },
+    }),
+    providerPolicy: QUALIFIED_OPENROUTER_POLICY,
+    trustedHostFilesystemPathListDeclaration: declaration,
+  })
+  engine.admitUserSubmission({ userInput: USER_REQUEST }, PROVIDER_ROUTE)
+  await collectStream(engine.submitMessageStream(USER_REQUEST))
+
+  const service = (engine as unknown as {
+    criterionCompletion?: {
+      pathListVerificationRequest(): unknown
+      evaluateOwnedPathListVerification(req: unknown): { verified: boolean; errors: string[] }
+    }
+  }).criterionCompletion
+  const owned = service?.pathListVerificationRequest()
+  assert.ok(owned)
+  const forged = Object.freeze({ schema_version: 1, kind: 'path-list-verification:v1' })
+  assert.deepEqual(service?.evaluateOwnedPathListVerification(forged), {
+    verified: false,
+    errors: ['PATH_LIST_REQUEST_UNTRUSTED'],
+  })
+  assert.equal(service?.evaluateOwnedPathListVerification(owned)?.verified, true)
 })
