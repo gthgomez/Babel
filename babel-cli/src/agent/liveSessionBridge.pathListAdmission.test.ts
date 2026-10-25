@@ -8,7 +8,12 @@ import { sha256Canonical } from '../acceptance/canonical.js'
 import { TRUSTED_HOST_FILESYSTEM_PATH_LIST_DECLARATION_KIND } from '../authority/trustedHostFilesystemPathList.js'
 import { chatSessionDir } from '../cli/runsLayout.js'
 import { ChatEngine } from './chatEngine.js'
-import { TRUSTED_HOST_PATH_LIST_ADMISSION_REF } from './liveSessionFilesystemPathListAdmission.js'
+import {
+  TRUSTED_HOST_PATH_LIST_ADMISSION_REF_PREFIX,
+  assertPathListSessionBinding,
+  pathListBaselineCaptureCountForTests,
+  resetPathListBaselineCaptureCountForTests,
+} from './liveSessionFilesystemPathListAdmission.js'
 import {
   LiveSessionAuthorityError,
   TRUSTED_HOST_PATH_LIST_ADMISSION_FILENAME,
@@ -22,7 +27,19 @@ import type { ParityRuntime } from './chatEngineParityBridge.js'
 const USER_REQUEST =
   'Update the path index to match the current tree. Use another method if a command cannot run; confirm listed paths.'
 
-function declarationPayload(overrides: { userRequest?: string } = {}) {
+function contractBindsPathListAdmission(
+  contract: { provenance: { records: Array<{ ref: string }> } },
+): boolean {
+  return contract.provenance.records.some(record =>
+    record.ref.startsWith(TRUSTED_HOST_PATH_LIST_ADMISSION_REF_PREFIX),
+  )
+}
+
+function declarationPayload(overrides: {
+  userRequest?: string
+  targetDocument?: string
+  preservedSelectors?: string[]
+} = {}) {
   const user_request = overrides.userRequest ?? USER_REQUEST
   return {
     schema_version: 1,
@@ -30,11 +47,11 @@ function declarationPayload(overrides: { userRequest?: string } = {}) {
     declaration_id: randomUUID(),
     user_request,
     user_request_digest: sha256Canonical(user_request),
-    target_document: 'meta/tree-index.md',
+    target_document: overrides.targetDocument ?? 'meta/tree-index.md',
     format_profile: 'markdown_bullet_paths',
     inventory_scope: { roots: ['apps'] },
     coverage: { mode: 'complete_scoped_inventory' },
-    preserved_input_selectors: ['docs/notes.md'],
+    preserved_input_selectors: overrides.preservedSelectors ?? ['docs/notes.md'],
     limits: { max_document_bytes: 32_000, max_entries: 128 },
   }
 }
@@ -96,7 +113,7 @@ test('ChatEngine constructor rejects task drift and leaves no path-list admissio
         provenance?: { records?: Array<{ ref?: string }> }
       }
       assert.equal(
-        contract.provenance?.records?.some(record => record.ref === TRUSTED_HOST_PATH_LIST_ADMISSION_REF),
+        contractBindsPathListAdmission(contract as { provenance: { records: Array<{ ref: string }> } }),
         false,
       )
     }
@@ -123,7 +140,7 @@ test('ChatEngine without declaration keeps prior authority shape', t => {
   const contract = engine.getTaskContract()
   assert.ok(contract)
   assert.equal(
-    contract.provenance.records.some(record => record.ref === TRUSTED_HOST_PATH_LIST_ADMISSION_REF),
+    contractBindsPathListAdmission(contract),
     false,
   )
   assert.equal(existsSync(join(runDir, TRUSTED_HOST_PATH_LIST_ADMISSION_FILENAME)), false)
@@ -146,9 +163,7 @@ test('ChatEngine constructor admits declaration when task and root bind', t => {
     projectRoot: root,
     trustedHostFilesystemPathListDeclaration: declarationPayload(),
   })
-  assert.ok(engine.getTaskContract()?.provenance.records.some(
-    record => record.ref === TRUSTED_HOST_PATH_LIST_ADMISSION_REF,
-  ))
+  assert.ok(contractBindsPathListAdmission(engine.getTaskContract()!))
   const reloaded = loadLiveSessionAuthorityStrict(runDir)
   assert.equal(
     reloaded.filesystemPathListAdmission?.preserved_baseline.preserved['docs/notes.md']?.content_sha256,
@@ -206,41 +221,154 @@ test('captures preserved baseline before mutation and keeps it on reload', t => 
   )
 })
 
-test('refresh does not recapture preserved baseline after disk mutation', t => {
+test('refresh does not perform a second baseline capture when admission exists', t => {
   const root = mkdtempSync(join(tmpdir(), 'path-list-admit-refresh-'))
   const runDir = mkdtempSync(join(tmpdir(), 'path-list-admit-refresh-run-'))
   t.after(() => {
     rmSync(root, { recursive: true, force: true })
     rmSync(runDir, { recursive: true, force: true })
   })
+  resetPathListBaselineCaptureCountForTests()
   seedRepo(root)
-  const notesPath = join(root, 'docs', 'notes.md')
+  const decl = declarationPayload()
   const authority = resolveLiveSessionAuthority({
     mode: 'chat',
     projectRoot: root,
     task: USER_REQUEST,
-    trustedHostFilesystemPathListDeclaration: declarationPayload(),
+    trustedHostFilesystemPathListDeclaration: decl,
   })
+  assert.equal(pathListBaselineCaptureCountForTests(), 1)
   const beforeHash =
     authority.filesystemPathListAdmission!.preserved_baseline.preserved['docs/notes.md']?.content_sha256
   persistLiveSessionAuthority(runDir, authority)
-  writeFileSync(notesPath, '# mutated before refresh\n', 'utf8')
   const parity = { liveAuthority: authority } as ParityRuntime
   refreshEngineInstructionManifest({
     parity,
     options: {
       projectRoot: root,
       task: USER_REQUEST,
-      trustedHostFilesystemPathListDeclaration: declarationPayload(),
+      trustedHostFilesystemPathListDeclaration: decl,
     },
     taskClass: 'unknown',
     executionProfile: 'chat',
     engineRunDir: runDir,
   })
+  assert.equal(pathListBaselineCaptureCountForTests(), 1)
   assert.equal(
     parity.liveAuthority?.filesystemPathListAdmission?.preserved_baseline.preserved['docs/notes.md']
       ?.content_sha256,
     beforeHash,
+  )
+})
+
+test('refresh rejects deleted preserved input instead of retaining stale baseline', t => {
+  const root = mkdtempSync(join(tmpdir(), 'path-list-admit-refresh-del-'))
+  const runDir = mkdtempSync(join(tmpdir(), 'path-list-admit-refresh-del-run-'))
+  t.after(() => {
+    rmSync(root, { recursive: true, force: true })
+    rmSync(runDir, { recursive: true, force: true })
+  })
+  seedRepo(root)
+  const notesPath = join(root, 'docs', 'notes.md')
+  const decl = declarationPayload()
+  const authority = resolveLiveSessionAuthority({
+    mode: 'chat',
+    projectRoot: root,
+    task: USER_REQUEST,
+    trustedHostFilesystemPathListDeclaration: decl,
+  })
+  persistLiveSessionAuthority(runDir, authority)
+  rmSync(notesPath)
+  const parity = { liveAuthority: authority } as ParityRuntime
+  assert.throws(
+    () =>
+      refreshEngineInstructionManifest({
+        parity,
+        options: {
+          projectRoot: root,
+          task: USER_REQUEST,
+          trustedHostFilesystemPathListDeclaration: decl,
+        },
+        taskClass: 'unknown',
+        executionProfile: 'chat',
+        engineRunDir: runDir,
+      }),
+    (error: unknown) =>
+      error instanceof LiveSessionAuthorityError && error.code === 'PATH_LIST_PRESERVED_INPUT_MISSING',
+  )
+})
+
+test('refresh rejects preserved input drift without recapturing baseline', t => {
+  const root = mkdtempSync(join(tmpdir(), 'path-list-admit-refresh-drift-'))
+  const runDir = mkdtempSync(join(tmpdir(), 'path-list-admit-refresh-drift-run-'))
+  t.after(() => {
+    rmSync(root, { recursive: true, force: true })
+    rmSync(runDir, { recursive: true, force: true })
+  })
+  resetPathListBaselineCaptureCountForTests()
+  seedRepo(root)
+  const decl = declarationPayload()
+  const authority = resolveLiveSessionAuthority({
+    mode: 'chat',
+    projectRoot: root,
+    task: USER_REQUEST,
+    trustedHostFilesystemPathListDeclaration: decl,
+  })
+  persistLiveSessionAuthority(runDir, authority)
+  writeFileSync(join(root, 'docs', 'notes.md'), '# mutated\n', 'utf8')
+  const parity = { liveAuthority: authority } as ParityRuntime
+  assert.throws(
+    () =>
+      refreshEngineInstructionManifest({
+        parity,
+        options: {
+          projectRoot: root,
+          task: USER_REQUEST,
+          trustedHostFilesystemPathListDeclaration: decl,
+        },
+        taskClass: 'unknown',
+        executionProfile: 'chat',
+        engineRunDir: runDir,
+      }),
+    (error: unknown) =>
+      error instanceof LiveSessionAuthorityError && error.code === 'PATH_LIST_PRESERVED_INPUT_DRIFT',
+  )
+  assert.equal(pathListBaselineCaptureCountForTests(), 1)
+})
+
+test('rejects conflicting declaration identity on refresh when selectors differ', t => {
+  const root = mkdtempSync(join(tmpdir(), 'path-list-admit-conflict-sel-'))
+  const runDir = mkdtempSync(join(tmpdir(), 'path-list-admit-conflict-sel-run-'))
+  t.after(() => {
+    rmSync(root, { recursive: true, force: true })
+    rmSync(runDir, { recursive: true, force: true })
+  })
+  seedRepo(root)
+  const authority = resolveLiveSessionAuthority({
+    mode: 'chat',
+    projectRoot: root,
+    task: USER_REQUEST,
+    trustedHostFilesystemPathListDeclaration: declarationPayload(),
+  })
+  persistLiveSessionAuthority(runDir, authority)
+  const parity = { liveAuthority: authority } as ParityRuntime
+  assert.throws(
+    () =>
+      refreshEngineInstructionManifest({
+        parity,
+        options: {
+          projectRoot: root,
+          task: USER_REQUEST,
+          trustedHostFilesystemPathListDeclaration: declarationPayload({
+            targetDocument: 'docs/notes.md',
+          }),
+        },
+        taskClass: 'unknown',
+        executionProfile: 'chat',
+        engineRunDir: runDir,
+      }),
+    (error: unknown) =>
+      error instanceof LiveSessionAuthorityError && error.code === 'PATH_LIST_DECLARATION_CONFLICT',
   )
 })
 
@@ -325,6 +453,125 @@ test('strict load fails when admission file missing but contract binds one', t =
     (error: unknown) =>
       error instanceof LiveSessionAuthorityError && error.code === 'PATH_LIST_ADMISSION_MISSING',
   )
+})
+
+test('admission record deep-freezes nested declaration limits and preserved entries', () => {
+  const root = mkdtempSync(join(tmpdir(), 'path-list-admit-freeze-'))
+  try {
+    seedRepo(root)
+    const authority = resolveLiveSessionAuthority({
+      mode: 'chat',
+      projectRoot: root,
+      task: USER_REQUEST,
+      trustedHostFilesystemPathListDeclaration: declarationPayload(),
+    })
+    const admission = authority.filesystemPathListAdmission!
+    assert.throws(() => {
+      (admission.declaration.limits as { max_entries: number }).max_entries = 999
+    }, /Cannot assign to read only property/)
+    assert.throws(() => {
+      admission.preserved_baseline.preserved['docs/notes.md']!.content_sha256 = '0'.repeat(64)
+    }, /Cannot assign to read only property/)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('same-mode ChatEngine resume validates declaration without recapturing baseline', t => {
+  const root = mkdtempSync(join(tmpdir(), 'path-list-engine-resume-'))
+  const runId = `path-list-engine-resume-${randomUUID()}`
+  const runDir = chatSessionDir(runId)
+  t.after(() => {
+    rmSync(root, { recursive: true, force: true })
+    if (existsSync(runDir)) rmSync(runDir, { recursive: true, force: true })
+  })
+  resetPathListBaselineCaptureCountForTests()
+  seedRepo(root)
+  const decl = declarationPayload()
+  new ChatEngine({
+    runId,
+    task: USER_REQUEST,
+    projectRoot: root,
+    trustedHostFilesystemPathListDeclaration: decl,
+  })
+  assert.equal(pathListBaselineCaptureCountForTests(), 1)
+  rmSync(join(root, 'docs', 'notes.md'))
+  assert.throws(
+    () =>
+  new ChatEngine({
+    runId,
+    resumeExisting: true,
+    task: USER_REQUEST,
+    projectRoot: root,
+    trustedHostFilesystemPathListDeclaration: decl,
+  }),
+    (error: unknown) =>
+      error instanceof LiveSessionAuthorityError && error.code === 'PATH_LIST_PRESERVED_INPUT_MISSING',
+  )
+  assert.equal(pathListBaselineCaptureCountForTests(), 1)
+})
+
+test('rejects cross-root binding with same user prompt and valid sidecar', t => {
+  const rootA = mkdtempSync(join(tmpdir(), 'path-list-root-a-'))
+  const rootB = mkdtempSync(join(tmpdir(), 'path-list-root-b-'))
+  const runDir = mkdtempSync(join(tmpdir(), 'path-list-cross-run-'))
+  t.after(() => {
+    rmSync(rootA, { recursive: true, force: true })
+    rmSync(rootB, { recursive: true, force: true })
+    rmSync(runDir, { recursive: true, force: true })
+  })
+  seedRepo(rootA)
+  seedRepo(rootB)
+  const decl = declarationPayload()
+  const authorityA = resolveLiveSessionAuthority({
+    mode: 'chat',
+    projectRoot: rootA,
+    task: USER_REQUEST,
+    trustedHostFilesystemPathListDeclaration: decl,
+  })
+  persistLiveSessionAuthority(runDir, authorityA)
+  const reloaded = loadLiveSessionAuthorityStrict(runDir)
+  assert.ok(reloaded.filesystemPathListAdmission)
+  assert.throws(
+    () =>
+      assertPathListSessionBinding({
+        projectRoot: rootB,
+        task: USER_REQUEST,
+        contract: reloaded.taskContract,
+        admission: reloaded.filesystemPathListAdmission!,
+        incomingDeclaration: decl,
+      }),
+    (error: unknown) =>
+      error instanceof LiveSessionAuthorityError && error.code === 'PATH_LIST_SESSION_ROOT_MISMATCH',
+  )
+})
+
+test('same-mode ChatEngine resume on matching root does not recapture baseline', t => {
+  const root = mkdtempSync(join(tmpdir(), 'path-list-engine-resume-ok-'))
+  const runId = `path-list-engine-resume-ok-${randomUUID()}`
+  const runDir = chatSessionDir(runId)
+  t.after(() => {
+    rmSync(root, { recursive: true, force: true })
+    if (existsSync(runDir)) rmSync(runDir, { recursive: true, force: true })
+  })
+  resetPathListBaselineCaptureCountForTests()
+  seedRepo(root)
+  const decl = declarationPayload()
+  new ChatEngine({
+    runId,
+    task: USER_REQUEST,
+    projectRoot: root,
+    trustedHostFilesystemPathListDeclaration: decl,
+  })
+  assert.equal(pathListBaselineCaptureCountForTests(), 1)
+  new ChatEngine({
+    runId,
+    resumeExisting: true,
+    task: USER_REQUEST,
+    projectRoot: root,
+    trustedHostFilesystemPathListDeclaration: decl,
+  })
+  assert.equal(pathListBaselineCaptureCountForTests(), 1)
 })
 
 test('declaration does not change inferred acceptance criteria', () => {

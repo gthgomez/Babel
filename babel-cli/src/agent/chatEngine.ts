@@ -119,6 +119,7 @@ import {
   engineCanMutateKey,
 } from "./chatEngineLiveSession.js";
 import { LiveSessionAuthorityError } from "./liveSessionAuthorityError.js";
+import { assertPathListSessionBinding } from "./liveSessionFilesystemPathListAdmission.js";
 import {
   AUTHORITY_SESSION_FILENAME,
   restoreAuthoritySession,
@@ -1011,6 +1012,22 @@ export class ChatEngine {
         repoRoot: requireProjectRoot(options),
         persistPath: join(this.engineRunDir, AUTHORITY_SESSION_FILENAME),
       });
+      if (
+        this.parity.liveAuthority.filesystemPathListAdmission ||
+        options.trustedHostFilesystemPathListDeclaration !== undefined
+      ) {
+        assertPathListSessionBinding({
+          projectRoot: options.projectRoot,
+          task: options.task,
+          contract: this.parity.liveAuthority.taskContract,
+          ...(this.parity.liveAuthority.filesystemPathListAdmission
+            ? { admission: this.parity.liveAuthority.filesystemPathListAdmission }
+            : {}),
+          ...(options.trustedHostFilesystemPathListDeclaration !== undefined
+            ? { incomingDeclaration: options.trustedHostFilesystemPathListDeclaration }
+            : {}),
+        });
+      }
       if(this.parity.liveAuthority.taskContract.mode!==this.executionProfile)refreshRestoredEngineMode({
         parity:this.parity,options,taskClass:this.taskClass,executionProfile:this.executionProfile,engineRunDir:this.engineRunDir,
       });

@@ -400,7 +400,9 @@ export function resolveLiveSessionAuthority(input: {
       provenance:[
         ...meaning.provenance,
         ...(input.objectiveLifecycle ? [{ kind: 'risk_analysis' as const, ref: OBJECTIVE_LIFECYCLE_REF }] : []),
-        ...(filesystemPathListAdmission ? [pathListAdmissionProvenanceRecord()] : []),
+        ...(filesystemPathListAdmission
+          ? [pathListAdmissionProvenanceRecord(filesystemPathListAdmission.admission_record_digest)]
+          : []),
       ],
     }),
   );

@@ -2,10 +2,11 @@
  * Admission-only trusted host filesystem path-list binding for live sessions.
  * Inspection/persistence only — not completion authority.
  */
-import { readFileSync, existsSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { existsSync, readFileSync } from 'node:fs'
+import { realpathSync } from 'node:fs'
 import { join } from 'node:path'
 import { sha256Canonical } from '../acceptance/canonical.js'
-import { deepFreeze } from '../acceptance/freeze.js'
 import {
   captureFilesystemSourceBaseline,
   type FilesystemSourceBaselineV1,
@@ -21,6 +22,10 @@ import { LiveSessionAuthorityError } from './liveSessionAuthorityError.js'
 export const TRUSTED_HOST_PATH_LIST_ADMISSION_FILENAME =
   'trusted-host-filesystem-path-list-admission.json'
 
+export const TRUSTED_HOST_PATH_LIST_ADMISSION_REF_PREFIX =
+  'trusted-host-filesystem-path-list-admission:v1#'
+
+/** @deprecated use pathListAdmissionProvenanceRef */
 export const TRUSTED_HOST_PATH_LIST_ADMISSION_REF =
   'trusted-host-filesystem-path-list-admission:v1'
 
@@ -37,17 +42,72 @@ export interface LiveSessionFilesystemPathListAdmissionV1 {
   readonly admission_record_digest: string
 }
 
-export function pathListAdmissionProvenanceRecord(): {
+let pathListBaselineCaptureCount = 0
+
+/** Test-only: count baseline capture invocations for admission. */
+export function resetPathListBaselineCaptureCountForTests(): void {
+  pathListBaselineCaptureCount = 0
+}
+
+export function pathListBaselineCaptureCountForTests(): number {
+  return pathListBaselineCaptureCount
+}
+
+/** Freeze nested admission data even when stage-1 parents are already shallow-frozen. */
+export function deepFreezeAdmissionRecord<T>(value: T): T {
+  if (!value || typeof value !== 'object') return value
+  for (const child of Object.values(value as Record<string, unknown>)) {
+    deepFreezeAdmissionRecord(child)
+  }
+  if (!Object.isFrozen(value)) Object.freeze(value)
+  return value
+}
+
+export function pathListAdmissionProvenanceRef(admissionRecordDigest: string): string {
+  if (!/^[0-9a-f]{64}$/i.test(admissionRecordDigest)) {
+    throw new Error('PATH_LIST_ADMISSION_INTERNAL: invalid admission record digest')
+  }
+  return `${TRUSTED_HOST_PATH_LIST_ADMISSION_REF_PREFIX}${admissionRecordDigest.toLowerCase()}`
+}
+
+export function pathListAdmissionProvenanceRecord(admissionRecordDigest: string): {
   kind: 'repository_policy'
   ref: string
 } {
-  return { kind: 'repository_policy', ref: TRUSTED_HOST_PATH_LIST_ADMISSION_REF }
+  return { kind: 'repository_policy', ref: pathListAdmissionProvenanceRef(admissionRecordDigest) }
+}
+
+export function findPathListAdmissionProvenanceRecord(
+  contract: TaskContractV1,
+): { kind: string; ref: string } | undefined {
+  return contract.provenance.records.find(record =>
+    record.ref.startsWith(TRUSTED_HOST_PATH_LIST_ADMISSION_REF_PREFIX) ||
+    record.ref === TRUSTED_HOST_PATH_LIST_ADMISSION_REF,
+  )
+}
+
+export function expectedAdmissionDigestFromContract(contract: TaskContractV1): string | undefined {
+  const record = findPathListAdmissionProvenanceRecord(contract)
+  if (!record) return undefined
+  if (record.ref === TRUSTED_HOST_PATH_LIST_ADMISSION_REF) {
+    throw new LiveSessionAuthorityError(
+      'PATH_LIST_ADMISSION_PROVENANCE_MISMATCH',
+      'Path-list admission provenance is not bound to an admission record digest',
+    )
+  }
+  if (!record.ref.startsWith(TRUSTED_HOST_PATH_LIST_ADMISSION_REF_PREFIX)) return undefined
+  const digest = record.ref.slice(TRUSTED_HOST_PATH_LIST_ADMISSION_REF_PREFIX.length)
+  if (!/^[0-9a-f]{64}$/i.test(digest)) {
+    throw new LiveSessionAuthorityError(
+      'PATH_LIST_ADMISSION_PROVENANCE_MISMATCH',
+      'Path-list admission provenance digest is malformed',
+    )
+  }
+  return digest.toLowerCase()
 }
 
 export function taskContractBindsPathListAdmission(contract: TaskContractV1): boolean {
-  return contract.provenance.records.some(
-    record => record.ref === TRUSTED_HOST_PATH_LIST_ADMISSION_REF,
-  )
+  return findPathListAdmissionProvenanceRecord(contract) !== undefined
 }
 
 type AdmissionBody = Omit<LiveSessionFilesystemPathListAdmissionV1, 'admission_record_digest'>
@@ -58,7 +118,100 @@ function admissionRecordDigest(body: AdmissionBody): string {
 
 function sealAdmissionRecord(body: AdmissionBody): LiveSessionFilesystemPathListAdmissionV1 {
   const admission_record_digest = admissionRecordDigest(body)
-  return deepFreeze({ ...body, admission_record_digest })
+  return deepFreezeAdmissionRecord({ ...body, admission_record_digest })
+}
+
+function sessionProjectRootReal(projectRoot: string): string {
+  return realpathSync.native(projectRoot)
+}
+
+function hashFileAtProjectRoot(projectRootReal: string, relPath: string): string {
+  const absolute = join(projectRootReal, relPath)
+  return createHash('sha256').update(readFileSync(absolute)).digest('hex')
+}
+
+/** Verify preserved inputs still exist and match the admitted baseline (no recapture). */
+export function assertPathListAdmissionPreservedInputsIntact(
+  projectRoot: string,
+  admission: LiveSessionFilesystemPathListAdmissionV1,
+): void {
+  const rootReal = sessionProjectRootReal(projectRoot)
+  if (rootReal !== admission.project_root_real) {
+    throw new LiveSessionAuthorityError(
+      'PATH_LIST_SESSION_ROOT_MISMATCH',
+      'Session project root does not match path-list admission project_root_real',
+    )
+  }
+  for (const [relPath, snapshot] of Object.entries(admission.preserved_baseline.preserved)) {
+    const absolute = join(rootReal, relPath)
+    if (!existsSync(absolute)) {
+      throw new LiveSessionAuthorityError(
+        'PATH_LIST_PRESERVED_INPUT_MISSING',
+        `Preserved path-list input is missing on disk: ${relPath}`,
+      )
+    }
+    const currentHash = hashFileAtProjectRoot(rootReal, relPath)
+    if (currentHash !== snapshot.content_sha256) {
+      throw new LiveSessionAuthorityError(
+        'PATH_LIST_PRESERVED_INPUT_DRIFT',
+        `Preserved path-list input drifted on disk: ${relPath}`,
+      )
+    }
+  }
+}
+
+function assertAdmissionMatchesContractProvenance(
+  admission: LiveSessionFilesystemPathListAdmissionV1,
+  contract: TaskContractV1,
+): void {
+  const expected = expectedAdmissionDigestFromContract(contract)
+  if (!expected) return
+  if (admission.admission_record_digest.toLowerCase() !== expected) {
+    throw new LiveSessionAuthorityError(
+      'PATH_LIST_ADMISSION_PROVENANCE_MISMATCH',
+      'Path-list admission sidecar digest does not match frozen contract provenance',
+    )
+  }
+}
+
+export function assertPathListSessionBinding(input: {
+  projectRoot: string | null
+  task: string
+  contract: TaskContractV1
+  admission?: LiveSessionFilesystemPathListAdmissionV1
+  incomingDeclaration?: unknown
+}): void {
+  const binds = taskContractBindsPathListAdmission(input.contract)
+  if (!binds && input.incomingDeclaration === undefined && !input.admission) return
+  if (binds && !input.admission) {
+    throw new LiveSessionAuthorityError(
+      'PATH_LIST_ADMISSION_MISSING',
+      'Task contract binds path-list admission but no admission record is loaded',
+    )
+  }
+  if (!input.admission) {
+    if (input.incomingDeclaration !== undefined) return
+    return
+  }
+  const admission = input.admission
+  assertAdmissionMatchesContractProvenance(admission, input.contract)
+  const taskDigest = sha256Canonical(input.task)
+  if (taskDigest !== admission.user_request_digest || input.task !== admission.declaration.user_request) {
+    throw new LiveSessionAuthorityError(
+      'PATH_LIST_REQUEST_MISMATCH',
+      'Task text does not match path-list admission binding',
+    )
+  }
+  if (input.incomingDeclaration !== undefined) {
+    assertPathListRefreshDeclarationCompatible(admission, input.incomingDeclaration)
+  }
+  if (input.projectRoot === null) {
+    throw new LiveSessionAuthorityError(
+      'PATH_LIST_DECLARATION_REQUIRES_PROJECT_ROOT',
+      'PATH_LIST_DECLARATION_REQUIRES_PROJECT_ROOT: Path-list admission requires a non-null project root',
+    )
+  }
+  assertPathListAdmissionPreservedInputsIntact(input.projectRoot, admission)
 }
 
 function parseAdmissionRecord(raw: unknown): LiveSessionFilesystemPathListAdmissionV1 {
@@ -175,6 +328,7 @@ export function admitFilesystemPathListForLiveSession(
       'Task text does not match trusted host filesystem path-list declaration user_request',
     )
   }
+  pathListBaselineCaptureCount += 1
   const preserved_baseline = captureFilesystemSourceBaseline(projectRoot, declaration)
   const body: AdmissionBody = {
     schema_version: 1,
@@ -192,7 +346,9 @@ export function assertPathListRefreshDeclarationCompatible(
   declarationInput: unknown,
 ): void {
   const incoming = parseTrustedHostFilesystemPathListDeclaration(declarationInput)
-  if (incoming.user_request_digest !== existing.user_request_digest) {
+  const existingDeclarationHash = declarationContentHash(existing.declaration)
+  const incomingDeclarationHash = declarationContentHash(incoming)
+  if (incomingDeclarationHash !== existingDeclarationHash) {
     throw new LiveSessionAuthorityError(
       'PATH_LIST_DECLARATION_CONFLICT',
       'Conflicting trusted host filesystem path-list declaration on refresh',
@@ -223,6 +379,7 @@ export function loadFilesystemPathListAdmissionStrict(
   }
   const admission = parseAdmissionRecord(raw)
   assertTaskMatchesAdmission(contract, admission)
+  assertAdmissionMatchesContractProvenance(admission, contract)
   return admission
 }
 
