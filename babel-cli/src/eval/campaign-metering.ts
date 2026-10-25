@@ -11,6 +11,7 @@ import {
   isCampaignNativeProvider,
   isCampaignQualifiedModelRoute,
 } from './campaign-qualified-routes.js'
+import { campaignQualifiedMaxInputContextTokens } from './campaign-qualified-context.js'
 
 export const CAMPAIGN_METERED_PROVIDER_IDS: readonly ProviderId[] = [
   'openrouter',
@@ -40,13 +41,14 @@ export function buildCampaignOperationId(input: {
 }
 
 function verifiedMaxInputContextTokens(prepared: PreparedProviderRequest): number {
-  if (
-    prepared.context_limit_tokens === null ||
-    prepared.context_limit_source === 'unknown'
-  ) {
+  const pinned = campaignQualifiedMaxInputContextTokens(
+    prepared.provider,
+    prepared.sent_model_id,
+  )
+  if (pinned === null) {
     throw new Error('campaign route missing verified input context bound')
   }
-  return prepared.context_limit_tokens
+  return pinned
 }
 
 /** Reservation ceiling from verified max input context and enforced max output (separate bounds). */

@@ -94,6 +94,8 @@ import {
 import type { PreparedProviderRequest } from './preparedProviderRequest.js';
 import { CampaignPhysicalFetchSession } from './providerCampaignPhysicalFetch.js';
 import type { ProviderInvocationCompleted } from './base.js';
+import { applyCampaignOpenRouterWireBody } from '../eval/campaign-openrouter-wire.js';
+import { isCampaignQualifiedModelRoute } from '../eval/campaign-qualified-routes.js';
 export type { OpenRouterResponseMetadata } from './providerResponseMetadata.js';
 export type { FetchRedirectPolicy } from './providerResponsePolicy.js';
 
@@ -211,6 +213,20 @@ export class DeepInfraApiRunner implements LlmRunner {
   /** Provider-specific request fields, empty for generic OpenAI-compatible APIs. */
   protected getRequestBodyExtras(): Record<string, unknown> {
     return {};
+  }
+
+  /** Campaign OpenRouter caps must be on the object before serialize/prepare/hash. */
+  protected sealCampaignWireBody(
+    body: Record<string, unknown>,
+    callbacks?: RunnerCallbacks,
+  ): Record<string, unknown> {
+    if (!callbacks?.campaignMeter || this.providerId !== 'openrouter') {
+      return body;
+    }
+    if (!isCampaignQualifiedModelRoute('openrouter', this.model)) {
+      throw new CampaignRouteUnsupportedError();
+    }
+    return applyCampaignOpenRouterWireBody(body, this.model);
   }
 
   /**
@@ -345,15 +361,16 @@ export class DeepInfraApiRunner implements LlmRunner {
             ...(this.maxTokens === null ? {} : { max_tokens: this.maxTokens }),
             temperature: this.temperature,
           };
-      return JSON.stringify({
+      const bodyObject = this.sealCampaignWireBody({
         ...envelopeBody,
         stream: isStreaming,
-        ...this.getRequestBodyExtras(),
+        ...(callbacks?.campaignMeter ? {} : this.getRequestBodyExtras()),
         messages: ('messages' in envelopeBody ? envelopeBody.messages : undefined) ?? [
           { role: 'system', content: systemPrompt },
           { role: 'user', content: prompt },
         ],
-      });
+      }, callbacks);
+      return JSON.stringify(bodyObject);
     };
     const inferenceId = randomUUID();
     const preparedRequest = prepareProviderRequest({
@@ -1213,11 +1230,13 @@ export class DeepInfraApiRunner implements LlmRunner {
     const streamIdleTimeoutMs = getStreamIdleTimeoutMs();
     const maxAttempts = requestMaxRetries;
 
-    const buildBody = () =>
-      this.buildNativeToolsWireBody(messages, tools, systemPrompt, {
+    const buildBody = () => {
+      const parsed = JSON.parse(this.buildNativeToolsWireBody(messages, tools, systemPrompt, {
         stream: true,
         toolChoice: toolChoice ?? 'auto',
-      });
+      })) as Record<string, unknown>;
+      return JSON.stringify(this.sealCampaignWireBody(parsed, callbacks));
+    };
     const inferenceId = randomUUID();
     const preparedRequest = prepareProviderRequest({
       body: buildBody(),

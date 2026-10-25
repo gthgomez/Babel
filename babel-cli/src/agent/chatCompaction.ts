@@ -32,6 +32,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { dispatchRunOperation, RunStoppedError } from '../runtime/run-control.js';
 import { prepareProviderRequest } from '../runners/preparedProviderRequest.js';
 import { CampaignBudgetDeniedError, CampaignRouteUnsupportedError } from '../runners/campaignDispatchGate.js';
+import { applyCampaignOpenRouterWireBody } from '../eval/campaign-openrouter-wire.js';
 import { buildInvocationMetadata } from '../runners/providerResponseMetadata.js';
 import type { RunnerCallbacks } from '../runners/base.js';
 import type { ProviderId } from '../runners/providerRegistry.js';
@@ -666,7 +667,7 @@ export class LLMSummarizeCompaction implements CompactionStrategy {
         ? 'deepseek'
         : 'deepinfra';
     const inferenceId = randomUUID();
-    const requestBody = {
+    let requestBody: Record<string, unknown> = {
       model,
       max_tokens: Math.max(1, Math.min(this.maxSummaryTokens, targetTokens)),
       temperature: 0.3,
@@ -678,13 +679,16 @@ export class LLMSummarizeCompaction implements CompactionStrategy {
         { role: 'user', content: prompt },
       ],
     };
+    if (callbacks?.campaignMeter && provider === 'openrouter') {
+      requestBody = applyCampaignOpenRouterWireBody(requestBody, model);
+    }
     const preparedRequest = prepareProviderRequest({
       body: JSON.stringify(requestBody),
       mode: 'text',
       provider,
       requestedModelId: model,
       requestId: inferenceId,
-      reservedCompletionTokens: requestBody.max_tokens,
+      reservedCompletionTokens: requestBody.max_tokens as number,
     });
     try {
       await callbacks?.campaignMeter?.gate.admitBeforeDispatch({

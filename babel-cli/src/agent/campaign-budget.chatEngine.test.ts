@@ -77,7 +77,49 @@ function seedCampaignEngine(t: test.TestContext, limitMicroUsd: number): {
   return { root, owner, gate, store, engine, runner }
 }
 
-test('ChatEngine main path blocks provider fetch when campaign budget is exhausted', async (t) => {
+test('ChatEngine submitMessageStream runs one qualified native turn under campaign gate', async (t) => {
+  const priorOffline = process.env['BABEL_OFFLINE']
+  const priorMaxCost = process.env['BABEL_CHAT_MAX_COST']
+  const priorCompaction = process.env['BABEL_COMPACTION']
+  process.env['BABEL_OFFLINE'] = '1'
+  process.env['BABEL_CHAT_MAX_COST'] = 'unlimited'
+  process.env['BABEL_COMPACTION'] = 'off'
+  t.after(() => {
+    if (priorOffline === undefined) delete process.env['BABEL_OFFLINE']
+    else process.env['BABEL_OFFLINE'] = priorOffline
+    if (priorMaxCost === undefined) delete process.env['BABEL_CHAT_MAX_COST']
+    else process.env['BABEL_CHAT_MAX_COST'] = priorMaxCost
+    if (priorCompaction === undefined) delete process.env['BABEL_COMPACTION']
+    else process.env['BABEL_COMPACTION'] = priorCompaction
+  })
+  const { engine, store } = seedCampaignEngine(t, PILOT_CAMPAIGN_LIMIT_MICRO_USD)
+  let physicalFetch = 0
+  let postedBody = ''
+  const saved = globalThis.fetch
+  globalThis.fetch = async (_input, init) => {
+    physicalFetch++
+    postedBody = String(init?.body ?? '')
+    const frame = {
+      model: CAMPAIGN_QUALIFIED_OPENROUTER_MODEL_ID,
+      choices: [{ delta: { content: 'Campaign pilot ok.' }, finish_reason: 'stop' }],
+      usage: { prompt_tokens: 4, completion_tokens: 2, cost: 0.00001 },
+    }
+    return new Response(`data: ${JSON.stringify(frame)}\n\ndata: [DONE]\n\n`, {
+      headers: { 'Content-Type': 'text/event-stream' },
+    })
+  }
+  t.after(() => { globalThis.fetch = saved })
+  const { consumeChatStream } = await import('../interactive/execution/chatCore.js')
+  const result = await consumeChatStream(engine.submitMessageStream('Say ok', 'explain'), null)
+  assert.equal(physicalFetch, 1)
+  assert.match(result.answer ?? '', /Campaign pilot ok/)
+  assert.equal(store.readSnapshot().operations.length, 1)
+  const parsed = JSON.parse(postedBody) as { provider?: { max_price?: { prompt?: number; completion?: number } } }
+  assert.equal(parsed.provider?.max_price?.prompt, 0.14)
+  assert.equal(parsed.provider?.max_price?.completion, 0.28)
+})
+
+test('engine-owned callback integration: main path blocks fetch when campaign budget is exhausted', async (t) => {
   const { store, engine, runner } = seedCampaignEngine(t, 500)
   store.transact((budget) => budget.reserve('prefill', 500))
   let physicalFetch = 0
@@ -117,7 +159,7 @@ test('ChatEngine main path blocks provider fetch when campaign budget is exhaust
   assert.equal(physicalFetch, 0)
 })
 
-test('ChatEngine critic path attaches campaign meter from engine options', async (t) => {
+test('engine-owned callback integration: critic path attaches campaign meter from engine options', async (t) => {
   const { engine, runner, store } = seedCampaignEngine(t, PILOT_CAMPAIGN_LIMIT_MICRO_USD)
   let physicalFetch = 0
   const saved = globalThis.fetch
@@ -156,7 +198,7 @@ test('ChatEngine critic path attaches campaign meter from engine options', async
   assert.equal(store.readSnapshot().operations.length, 1)
 })
 
-test('ChatEngine retry callbacks reserve once per physical transport attempt', async (t) => {
+test('engine-owned callback integration: retry reserves once per physical transport attempt', async (t) => {
   const priorMaxCost = process.env['BABEL_CHAT_MAX_COST']
   process.env['BABEL_CHAT_MAX_COST'] = 'unlimited'
   t.after(() => {
