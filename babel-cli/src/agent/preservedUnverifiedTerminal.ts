@@ -168,6 +168,21 @@ export function buildConfirmedMutationRevisionKey(
   return parts.join('|')
 }
 
+/** Indeterminate mutation metadata means the harness cannot treat the revision as current. */
+function hasRelevantIndeterminateMutation(
+  log: ReadonlyArray<{
+    mutation_paths?: readonly string[]
+    effect_status?: MutationEffectStatus
+  }>,
+): boolean {
+  for (const entry of log) {
+    if (entry.effect_status !== 'indeterminate') continue
+    const paths = (entry.mutation_paths ?? []).map(p => p.trim()).filter(Boolean)
+    if (paths.length > 0) return true
+  }
+  return false
+}
+
 function isEligibleGateRejectedCompletionAnswer(answer: string): boolean {
   const trimmed = answer.trim()
   if (!trimmed) return false
@@ -176,7 +191,13 @@ function isEligibleGateRejectedCompletionAnswer(answer: string): boolean {
   return true
 }
 
-/** Record the first gate-rejected completion attempt for this submission (never overwritten). */
+/**
+ * Record the gate-rejected completion for this submission at the current confirmed-mutation revision.
+ * Frozen per (submission, revision): recovery prose on the same revision does not replace; a later
+ * confirmed mutation allows a new capture at the advanced revision.
+ * Same-revision corrected explanations are not re-ranked here — no host answer-repair channel is
+ * wired at this seam; supersede only when the confirmed-mutation revision advances.
+ */
 export function tryRecordGateRejectedCompletionCapture(
   existing: GateRejectedCompletionCapture | null,
   answer: string,
@@ -187,11 +208,14 @@ export function tryRecordGateRejectedCompletionCapture(
   }>,
   submissionGeneration: number,
 ): GateRejectedCompletionCapture | null {
+  const mutationRevisionKey = buildConfirmedMutationRevisionKey(log)
   const frozen =
-    existing?.submissionGeneration === submissionGeneration ? existing : null
+    existing?.submissionGeneration === submissionGeneration
+    && existing.mutationRevisionKey === mutationRevisionKey
+      ? existing
+      : null
   if (frozen) return frozen
   if (!isEligibleGateRejectedCompletionAnswer(answer)) return frozen
-  const mutationRevisionKey = buildConfirmedMutationRevisionKey(log)
   return {
     submissionGeneration,
     candidateText: answer.trim(),
@@ -212,6 +236,7 @@ export function resolveGateRejectedCompletionCapture(
 ): PreservedUnverifiedTurnLimitResolution {
   if (!capture) return { kind: 'absent' }
   if (capture.submissionGeneration !== submissionGeneration) return { kind: 'absent' }
+  if (hasRelevantIndeterminateMutation(log)) return { kind: 'stale_revision' }
   if (buildConfirmedMutationRevisionKey(log) !== capture.mutationRevisionKey) {
     return { kind: 'stale_revision' }
   }

@@ -115,6 +115,65 @@ test('unit: gate seam capture freezes first completion; recovery prose does not 
   }
 })
 
+test('unit: after confirmed mutation, a later genuine gate reject may capture a new current candidate', () => {
+  const logV1 = [{
+    tool: 'str_replace',
+    effect_status: 'confirmed_change' as const,
+    mutation_paths: ['数据/summary.csv'],
+  }]
+  const logV2 = [
+    ...logV1,
+    {
+      tool: 'str_replace',
+      effect_status: 'confirmed_change' as const,
+      mutation_paths: ['数据/other.csv'],
+    },
+  ]
+  const generation = 7
+  const first = 'FIRST_GATE_REJECT explanation for summary only.'
+  const second = 'SECOND_GATE_REJECT explanation after other.csv write.'
+  let capture = tryRecordGateRejectedCompletionCapture(null, first, logV1, generation)
+  capture = tryRecordGateRejectedCompletionCapture(capture, second, logV2, generation)
+  const resolved = resolveGateRejectedCompletionCapture(capture, logV2, generation)
+  assert.equal(resolved.kind, 'retain')
+  if (resolved.kind === 'retain') {
+    assert.equal(resolved.candidate, second)
+    assert.deepEqual(resolved.artifactRefs, ['数据/other.csv', '数据/summary.csv'])
+  }
+})
+
+test('unit: relevant indeterminate mutation must not retain as unchanged revision', () => {
+  const logConfirmed = [{
+    tool: 'str_replace',
+    effect_status: 'confirmed_change' as const,
+    mutation_paths: ['数据/summary.csv'],
+  }]
+  const logWithIndeterminate = [
+    ...logConfirmed,
+    {
+      tool: 'str_replace',
+      effect_status: 'indeterminate' as const,
+      mutation_paths: ['数据/summary.csv'],
+    },
+  ]
+  const generation = 8
+  const capture = tryRecordGateRejectedCompletionCapture(
+    null,
+    'Explanation bound to first confirmed revision.',
+    logConfirmed,
+    generation,
+  )
+  assert.ok(capture)
+  assert.equal(
+    buildConfirmedMutationRevisionKey(logConfirmed),
+    buildConfirmedMutationRevisionKey(logWithIndeterminate),
+  )
+  assert.equal(
+    resolveGateRejectedCompletionCapture(capture, logWithIndeterminate, generation).kind,
+    'stale_revision',
+  )
+})
+
 test('unit: post-capture confirmed mutation clears retained candidate and artifact binding', () => {
   const logBefore = [{
     tool: 'str_replace',
