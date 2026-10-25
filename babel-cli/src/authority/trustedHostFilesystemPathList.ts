@@ -55,6 +55,23 @@ export interface DeclarationLimitsV1 {
   readonly max_entries: number
 }
 
+export const TRUSTED_HOST_ACCEPTANCE_CLARIFICATION_KIND =
+  'trusted_host_acceptance_clarification_v1' as const
+
+export const HOST_DECLARED_ACCEPTANCE_CLARIFICATION_MODE =
+  'host_declared_acceptance_clarification' as const
+
+/** Host-declared clarification of one acceptance row — not natural-language inference. */
+export interface TrustedHostAcceptanceClarificationBindingV1 {
+  readonly schema_version: 1
+  readonly kind: typeof TRUSTED_HOST_ACCEPTANCE_CLARIFICATION_KIND
+  readonly clarification_mode: typeof HOST_DECLARED_ACCEPTANCE_CLARIFICATION_MODE
+  readonly target_criterion_id: string
+  readonly task_request_digest: string
+  readonly meaning_input_digest: string
+  readonly meaning_provenance_ref?: string
+}
+
 export interface TrustedHostFilesystemPathListDeclarationV1 {
   readonly schema_version: 1
   readonly kind: typeof TRUSTED_HOST_FILESYSTEM_PATH_LIST_DECLARATION_KIND
@@ -69,6 +86,7 @@ export interface TrustedHostFilesystemPathListDeclarationV1 {
   /** Literal repo-relative regular-file paths only (no globs, no directories). */
   readonly preserved_input_selectors: readonly string[]
   readonly limits: DeclarationLimitsV1
+  readonly acceptance_clarification?: TrustedHostAcceptanceClarificationBindingV1
 }
 
 const MAX_ROOTS = 64
@@ -114,6 +132,54 @@ function parseRepoRelativePathField(raw: unknown, field: string): string {
   return normalized
 }
 
+/** Parse optional host-declared acceptance clarification binding. */
+export function parseTrustedHostAcceptanceClarificationBinding(
+  value: unknown,
+  declarationUserRequestDigest: string,
+): TrustedHostAcceptanceClarificationBindingV1 {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) invalid('acceptance_clarification')
+  const input = value as Record<string, unknown>
+  if (input['schema_version'] !== 1) invalid('acceptance_clarification.schema_version')
+  if (input['kind'] !== TRUSTED_HOST_ACCEPTANCE_CLARIFICATION_KIND) invalid('acceptance_clarification.kind')
+  if (input['clarification_mode'] !== HOST_DECLARED_ACCEPTANCE_CLARIFICATION_MODE) {
+    invalid('acceptance_clarification.clarification_mode')
+  }
+  if (typeof input['target_criterion_id'] !== 'string' || !input['target_criterion_id'].trim()) {
+    invalid('acceptance_clarification.target_criterion_id')
+  }
+  if (
+    typeof input['task_request_digest'] !== 'string' ||
+    !/^[0-9a-f]{64}$/i.test(input['task_request_digest'])
+  ) {
+    invalid('acceptance_clarification.task_request_digest')
+  }
+  if (input['task_request_digest'].toLowerCase() !== declarationUserRequestDigest) {
+    invalid('acceptance_clarification.task_request_digest mismatch')
+  }
+  if (
+    typeof input['meaning_input_digest'] !== 'string' ||
+    !/^[0-9a-f]{64}$/i.test(input['meaning_input_digest'])
+  ) {
+    invalid('acceptance_clarification.meaning_input_digest')
+  }
+  const meaning_provenance_ref =
+    input['meaning_provenance_ref'] === undefined
+      ? undefined
+      : typeof input['meaning_provenance_ref'] === 'string' &&
+          input['meaning_provenance_ref'].trim()
+        ? input['meaning_provenance_ref'].trim()
+        : invalid('acceptance_clarification.meaning_provenance_ref')
+  return Object.freeze({
+    schema_version: 1,
+    kind: TRUSTED_HOST_ACCEPTANCE_CLARIFICATION_KIND,
+    clarification_mode: HOST_DECLARED_ACCEPTANCE_CLARIFICATION_MODE,
+    target_criterion_id: input['target_criterion_id'].trim(),
+    task_request_digest: input['task_request_digest'].toLowerCase(),
+    meaning_input_digest: input['meaning_input_digest'].toLowerCase(),
+    ...(meaning_provenance_ref ? { meaning_provenance_ref } : {}),
+  })
+}
+
 /** Parse and validate a trusted-host declaration; binds exact request digest. */
 export function parseTrustedHostFilesystemPathListDeclaration(
   value: unknown,
@@ -152,6 +218,11 @@ export function parseTrustedHostFilesystemPathListDeclaration(
     return path
   })
 
+  const acceptance_clarification =
+    input['acceptance_clarification'] === undefined
+      ? undefined
+      : parseTrustedHostAcceptanceClarificationBinding(input['acceptance_clarification'], digest)
+
   return Object.freeze({
     schema_version: 1,
     kind: TRUSTED_HOST_FILESYSTEM_PATH_LIST_DECLARATION_KIND,
@@ -164,6 +235,7 @@ export function parseTrustedHostFilesystemPathListDeclaration(
     coverage: Object.freeze({ mode: 'complete_scoped_inventory' as const }),
     preserved_input_selectors: Object.freeze([...new Set(preserved_input_selectors)]),
     limits: parseLimits(input['limits']),
+    ...(acceptance_clarification ? { acceptance_clarification } : {}),
   })
 }
 
@@ -181,5 +253,8 @@ export function declarationContentHash(
     coverage: declaration.coverage,
     preserved_input_selectors: declaration.preserved_input_selectors,
     limits: declaration.limits,
+    ...(declaration.acceptance_clarification
+      ? { acceptance_clarification: declaration.acceptance_clarification }
+      : {}),
   })
 }

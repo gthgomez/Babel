@@ -5,7 +5,16 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 import { sha256Canonical } from '../acceptance/canonical.js'
-import { TRUSTED_HOST_FILESYSTEM_PATH_LIST_DECLARATION_KIND } from '../authority/trustedHostFilesystemPathList.js'
+import {
+  HOST_DECLARED_ACCEPTANCE_CLARIFICATION_MODE,
+  TRUSTED_HOST_ACCEPTANCE_CLARIFICATION_KIND,
+  TRUSTED_HOST_FILESYSTEM_PATH_LIST_DECLARATION_KIND,
+} from '../authority/trustedHostFilesystemPathList.js'
+import { inferTaskAcceptance } from './taskAcceptanceMeaning.js'
+import {
+  TRUSTED_HOST_ACCEPTANCE_CLARIFICATION_REF_PREFIX,
+  formatHostDeclaredPathListClarificationDescription,
+} from './pathListHostDeclaredClarification.js'
 import { chatSessionDir } from '../cli/runsLayout.js'
 import { ChatEngine } from './chatEngine.js'
 import {
@@ -65,6 +74,7 @@ function declarationPayload(overrides: {
   userRequest?: string
   targetDocument?: string
   preservedSelectors?: string[]
+  acceptanceClarification?: Record<string, unknown>
 } = {}) {
   const user_request = overrides.userRequest ?? USER_REQUEST
   return {
@@ -79,6 +89,24 @@ function declarationPayload(overrides: {
     coverage: { mode: 'complete_scoped_inventory' },
     preserved_input_selectors: overrides.preservedSelectors ?? ['docs/notes.md'],
     limits: { max_document_bytes: 32_000, max_entries: 128 },
+    ...(overrides.acceptanceClarification
+      ? { acceptance_clarification: overrides.acceptanceClarification }
+      : {}),
+  }
+}
+
+function hostClarificationBindingForTask(task: string = USER_REQUEST) {
+  const meaning = inferTaskAcceptance(task)
+  const unresolved = meaning.sources.filter(source => source.status === 'unresolved')
+  assert.equal(unresolved.length, 1)
+  const source = unresolved[0]!
+  return {
+    schema_version: 1,
+    kind: TRUSTED_HOST_ACCEPTANCE_CLARIFICATION_KIND,
+    clarification_mode: HOST_DECLARED_ACCEPTANCE_CLARIFICATION_MODE,
+    target_criterion_id: source.criterion_id,
+    task_request_digest: sha256Canonical(task),
+    meaning_input_digest: source.input_digest,
   }
 }
 
@@ -815,7 +843,7 @@ test('objective admission rejects a new task while path-list declaration remains
   assert.equal(reloaded.filesystemPathListAdmission?.declaration.user_request, USER_REQUEST)
 })
 
-test('declaration does not change inferred acceptance criteria', () => {
+test('declaration without host clarification does not change inferred acceptance criteria', () => {
   const root = mkdtempSync(join(tmpdir(), 'path-list-admit-accept-'))
   try {
     seedRepo(root)
@@ -832,6 +860,190 @@ test('declaration does not change inferred acceptance criteria', () => {
     })
     assert.deepEqual(withDecl.taskContract.acceptance, without.taskContract.acceptance)
     assert.deepEqual(withDecl.taskContract.verifier_requirements, without.taskContract.verifier_requirements)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('host-declared clarification binds at resolve and persists through admission', t => {
+  const root = mkdtempSync(join(tmpdir(), 'path-list-clarify-admit-'))
+  const runDir = mkdtempSync(join(tmpdir(), 'path-list-clarify-admit-run-'))
+  t.after(() => {
+    rmSync(root, { recursive: true, force: true })
+    rmSync(runDir, { recursive: true, force: true })
+  })
+  seedRepo(root)
+  const binding = hostClarificationBindingForTask()
+  const decl = declarationPayload({ acceptanceClarification: binding })
+  const authority = resolveLiveSessionAuthority({
+    mode: 'chat',
+    projectRoot: root,
+    task: USER_REQUEST,
+    trustedHostFilesystemPathListDeclaration: decl,
+  })
+  persistLiveSessionAuthority(runDir, authority)
+  const row = authority.taskContract.acceptance.find(c => c.id === binding.target_criterion_id)
+  assert.ok(row)
+  assert.equal(row!.description, formatHostDeclaredPathListClarificationDescription(authority.filesystemPathListAdmission!.declaration))
+  assert.ok(
+    authority.taskContract.provenance.records.some(record =>
+      record.ref.startsWith(TRUSTED_HOST_ACCEPTANCE_CLARIFICATION_REF_PREFIX),
+    ),
+  )
+  assert.ok(
+    authority.instructionManifest.fragments.some(
+      fragment => fragment.rule_id === 'host:acceptance-clarification',
+    ),
+  )
+  const reloaded = loadLiveSessionAuthorityStrict(runDir)
+  assert.equal(
+    reloaded.taskContract.acceptance.find(c => c.id === binding.target_criterion_id)?.description,
+    row!.description,
+  )
+})
+
+test('host clarification survives objective admission without recapture', t => {
+  const restoreEnv = enableScriptedObjectiveAdmissionEnv()
+  const root = mkdtempSync(join(tmpdir(), 'path-list-clarify-obj-admit-'))
+  const runId = `path-list-clarify-obj-${randomUUID()}`
+  const runDir = chatSessionDir(runId)
+  t.after(() => {
+    restoreEnv()
+    rmSync(root, { recursive: true, force: true })
+    if (existsSync(runDir)) rmSync(runDir, { recursive: true, force: true })
+  })
+  resetPathListBaselineCaptureCountForTests()
+  seedRepo(root)
+  const binding = hostClarificationBindingForTask()
+  const engine = new ChatEngine({
+    runId,
+    task: USER_REQUEST,
+    projectRoot: root,
+    trustedHostFilesystemPathListDeclaration: declarationPayload({
+      acceptanceClarification: binding,
+    }),
+  })
+  const described = engine.getTaskContract()!.acceptance.find(c => c.id === binding.target_criterion_id)!.description
+  engine.admitUserSubmission({ userInput: USER_REQUEST }, SCRIPTED_OBJECTIVE_ADMISSION_ROUTE)
+  const reloaded = loadLiveSessionAuthorityStrict(runDir)
+  assert.equal(
+    reloaded.taskContract.acceptance.find(c => c.id === binding.target_criterion_id)?.description,
+    described,
+  )
+  assert.equal(pathListBaselineCaptureCountForTests(), 1)
+})
+
+test('refresh rejects host clarification drift on declaration hash', t => {
+  const root = mkdtempSync(join(tmpdir(), 'path-list-clarify-refresh-'))
+  const runDir = mkdtempSync(join(tmpdir(), 'path-list-clarify-refresh-run-'))
+  t.after(() => {
+    rmSync(root, { recursive: true, force: true })
+    rmSync(runDir, { recursive: true, force: true })
+  })
+  seedRepo(root)
+  const binding = hostClarificationBindingForTask()
+  const decl = declarationPayload({ acceptanceClarification: binding })
+  const authority = resolveLiveSessionAuthority({
+    mode: 'chat',
+    projectRoot: root,
+    task: USER_REQUEST,
+    trustedHostFilesystemPathListDeclaration: decl,
+  })
+  persistLiveSessionAuthority(runDir, authority)
+  const parity = { liveAuthority: authority } as ParityRuntime
+  refreshEngineInstructionManifest({
+    parity,
+    options: {
+      projectRoot: root,
+      task: USER_REQUEST,
+      trustedHostFilesystemPathListDeclaration: decl,
+    },
+    taskClass: 'unknown',
+    executionProfile: 'chat',
+    engineRunDir: runDir,
+  })
+  const drifted = {
+    ...decl,
+    acceptance_clarification: {
+      ...binding,
+      target_criterion_id: 'acceptance:deadbeefdeadbeefdeadbeefdeadbeef',
+    },
+  }
+  assert.throws(
+    () =>
+      refreshEngineInstructionManifest({
+        parity,
+        options: {
+          projectRoot: root,
+          task: USER_REQUEST,
+          trustedHostFilesystemPathListDeclaration: drifted,
+        },
+        taskClass: 'unknown',
+        executionProfile: 'chat',
+        engineRunDir: runDir,
+      }),
+    (error: unknown) =>
+      error instanceof LiveSessionAuthorityError && error.code === 'PATH_LIST_DECLARATION_CONFLICT',
+  )
+})
+
+test('resume retains host-declared clarification binding', t => {
+  const root = mkdtempSync(join(tmpdir(), 'path-list-clarify-resume-'))
+  const runId = `path-list-clarify-resume-${randomUUID()}`
+  const runDir = chatSessionDir(runId)
+  t.after(() => {
+    rmSync(root, { recursive: true, force: true })
+    if (existsSync(runDir)) rmSync(runDir, { recursive: true, force: true })
+  })
+  seedRepo(root)
+  const binding = hostClarificationBindingForTask()
+  const decl = declarationPayload({ acceptanceClarification: binding })
+  new ChatEngine({
+    runId,
+    task: USER_REQUEST,
+    projectRoot: root,
+    trustedHostFilesystemPathListDeclaration: decl,
+  })
+  const described = loadLiveSessionAuthorityStrict(runDir).taskContract.acceptance.find(
+    c => c.id === binding.target_criterion_id,
+  )!.description
+  new ChatEngine({
+    runId,
+    resumeExisting: true,
+    task: USER_REQUEST,
+    projectRoot: root,
+    trustedHostFilesystemPathListDeclaration: decl,
+  })
+  assert.equal(
+    loadLiveSessionAuthorityStrict(runDir).taskContract.acceptance.find(
+      c => c.id === binding.target_criterion_id,
+    )?.description,
+    described,
+  )
+})
+
+test('invalid host clarification rejects before path-list capture', () => {
+  const root = mkdtempSync(join(tmpdir(), 'path-list-clarify-invalid-'))
+  try {
+    seedRepo(root)
+    resetPathListBaselineCaptureCountForTests()
+    const binding = hostClarificationBindingForTask()
+    binding.meaning_input_digest = '0'.repeat(64)
+    assert.throws(
+      () =>
+        resolveLiveSessionAuthority({
+          mode: 'chat',
+          projectRoot: root,
+          task: USER_REQUEST,
+          trustedHostFilesystemPathListDeclaration: declarationPayload({
+            acceptanceClarification: binding,
+          }),
+        }),
+      (error: unknown) =>
+        error instanceof LiveSessionAuthorityError &&
+        error.code === 'PATH_LIST_CLARIFICATION_MEANING_DIGEST_MISMATCH',
+    )
+    assert.equal(pathListBaselineCaptureCountForTests(), 0)
   } finally {
     rmSync(root, { recursive: true, force: true })
   }

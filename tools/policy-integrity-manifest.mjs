@@ -20,6 +20,8 @@ export const coveredPaths = [
   "babel-cli/src/agent/autonomyEnforcement.ts",
   "babel-cli/src/agent/liveSessionAuthorityError.ts",
   "babel-cli/src/agent/liveSessionBridge.pathListAdmission.test.ts",
+  "babel-cli/src/agent/pathListHostDeclaredClarification.ts",
+  "babel-cli/src/agent/pathListHostDeclaredClarification.test.ts",
   "babel-cli/src/agent/liveSessionFilesystemPathListAdmission.ts",
   "babel-cli/src/authority/actionRequest.ts",
   "babel-cli/src/authority/authority.test.ts",

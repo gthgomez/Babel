@@ -23,6 +23,12 @@ import {
   mergeTrustedVerifierCommands,
 } from './taskAcceptanceExecutableBinding.js';
 import { designatedWitnessProtectedInputs } from './taskAcceptanceProtectedInputs.js';
+import { parseTrustedHostFilesystemPathListDeclaration } from '../authority/trustedHostFilesystemPathList.js';
+import {
+  applyHostDeclaredPathListClarification,
+  buildHostClarificationManifestRule,
+  pathListClarificationProvenanceRecord,
+} from './pathListHostDeclaredClarification.js';
 import { join } from 'node:path';
 import {
   buildInstructionManifestV1,
@@ -325,6 +331,47 @@ export function resolveLiveSessionAuthority(input: {
     included_chars: fragment.delivered_chars,
   }));
 
+  let meaning = bindExecutableVerifiersToTaskAcceptance({
+    meaning: inferTaskAcceptance(input.task),
+    trustedVerifierCommands: mergeTrustedVerifierCommands({
+      requiredVerifierCommands: input.verifierRequirements ?? [],
+      projectTestCommands: input.projectTestCommands ?? [],
+    }),
+      ...(input.projectRoot ? { defaultWorkingDirectory: '.' } : {}),
+  });
+
+  let pathListClarificationProvenance:
+    | ReturnType<typeof pathListClarificationProvenanceRecord>
+    | undefined
+  const hostClarificationManifestRules: Array<{
+    rule_id: string
+    source: string
+    content: string
+    precedence: 'verifier'
+    selection_reason: string
+    policy_class: 'mechanical'
+  }> = []
+  if (input.trustedHostFilesystemPathListDeclaration !== undefined) {
+    const pathListDeclaration = parseTrustedHostFilesystemPathListDeclaration(
+      input.trustedHostFilesystemPathListDeclaration,
+    )
+    if (pathListDeclaration.acceptance_clarification) {
+      meaning = applyHostDeclaredPathListClarification({
+        meaning,
+        declaration: pathListDeclaration,
+      })
+      pathListClarificationProvenance = pathListClarificationProvenanceRecord(
+        pathListDeclaration.acceptance_clarification,
+      )
+      hostClarificationManifestRules.push(
+        buildHostClarificationManifestRule(
+          pathListDeclaration.acceptance_clarification,
+          pathListDeclaration,
+        ),
+      )
+    }
+  }
+
   const instructionManifest = buildInstructionManifestV1({
     mode: input.mode,
     ...(input.taskClass ? { taskClass: input.taskClass } : {}),
@@ -347,16 +394,8 @@ export function resolveLiveSessionAuthority(input: {
         selection_reason: 'always_on_verifier',
         policy_class: 'mechanical',
       },
+      ...hostClarificationManifestRules,
     ],
-  });
-
-  const meaning = bindExecutableVerifiersToTaskAcceptance({
-    meaning: inferTaskAcceptance(input.task),
-    trustedVerifierCommands: mergeTrustedVerifierCommands({
-      requiredVerifierCommands: input.verifierRequirements ?? [],
-      projectTestCommands: input.projectTestCommands ?? [],
-    }),
-      ...(input.projectRoot ? { defaultWorkingDirectory: '.' } : {}),
   });
   // A designated regression witness makes the already-present tests and their
   // script definitions protected inputs, enforced by the execution gate from
@@ -403,6 +442,7 @@ export function resolveLiveSessionAuthority(input: {
         ...(filesystemPathListAdmission
           ? [pathListAdmissionProvenanceRecord(filesystemPathListAdmission.admission_record_digest)]
           : []),
+        ...(pathListClarificationProvenance ? [pathListClarificationProvenance] : []),
       ],
     }),
   );
