@@ -28,6 +28,31 @@ import type { ParityRuntime } from './chatEngineParityBridge.js'
 const USER_REQUEST =
   'Update the path index to match the current tree. Use another method if a command cannot run; confirm listed paths.'
 
+/** Scripted offline provider route; pairs with benchmark env (no network). */
+const SCRIPTED_OBJECTIVE_ADMISSION_ROUTE = {
+  model: 'fixture-model',
+  provider: 'ollama',
+}
+
+function enableScriptedObjectiveAdmissionEnv(): () => void {
+  const prior = {
+    BABEL_BENCHMARK_MODE: process.env['BABEL_BENCHMARK_MODE'],
+    BABEL_BENCHMARK_AUTO_APPROVE: process.env['BABEL_BENCHMARK_AUTO_APPROVE'],
+    BABEL_EXECUTION_PROFILE: process.env['BABEL_EXECUTION_PROFILE'],
+    BABEL_DIFF_CRITIC: process.env['BABEL_DIFF_CRITIC'],
+  }
+  process.env['BABEL_BENCHMARK_MODE'] = '1'
+  process.env['BABEL_BENCHMARK_AUTO_APPROVE'] = '1'
+  process.env['BABEL_EXECUTION_PROFILE'] = 'dev_local'
+  process.env['BABEL_DIFF_CRITIC'] = '0'
+  return () => {
+    for (const [key, value] of Object.entries(prior)) {
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
+  }
+}
+
 function contractBindsPathListAdmission(
   contract: { provenance: { records: Array<{ ref: string }> } },
 ): boolean {
@@ -669,11 +694,13 @@ test('same-mode ChatEngine resume on matching root does not recapture baseline',
   assert.equal(pathListBaselineCaptureCountForTests(), 1)
 })
 
-test('first native submit retains path-list admission without second baseline capture', t => {
-  const root = mkdtempSync(join(tmpdir(), 'path-list-submit-once-'))
-  const runId = `path-list-submit-once-${randomUUID()}`
+test('objective admission via admitUserSubmission does not recapture path-list baseline', t => {
+  const restoreEnv = enableScriptedObjectiveAdmissionEnv()
+  const root = mkdtempSync(join(tmpdir(), 'path-list-admit-submit-once-'))
+  const runId = `path-list-admit-submit-once-${randomUUID()}`
   const runDir = chatSessionDir(runId)
   t.after(() => {
+    restoreEnv()
     rmSync(root, { recursive: true, force: true })
     if (existsSync(runDir)) rmSync(runDir, { recursive: true, force: true })
   })
@@ -688,7 +715,11 @@ test('first native submit retains path-list admission without second baseline ca
   })
   assert.equal(pathListBaselineCaptureCountForTests(), 1)
   const beforeHash = fileSha256(join(root, 'docs', 'notes.md'))
-  engine.applyUserSubmission({ userInput: USER_REQUEST })
+  const admitted = engine.admitUserSubmission(
+    { userInput: USER_REQUEST },
+    SCRIPTED_OBJECTIVE_ADMISSION_ROUTE,
+  )
+  assert.equal(admitted.status, 'committed')
   assert.equal(pathListBaselineCaptureCountForTests(), 1)
   const reloaded = loadLiveSessionAuthorityStrict(runDir)
   assert.equal(
@@ -697,11 +728,13 @@ test('first native submit retains path-list admission without second baseline ca
   )
 })
 
-test('Continue submit retains admitted baseline after preserved input deleted', t => {
-  const root = mkdtempSync(join(tmpdir(), 'path-list-continue-'))
-  const runId = `path-list-continue-${randomUUID()}`
+test('Continue objective admission retains baseline after preserved input deleted', t => {
+  const restoreEnv = enableScriptedObjectiveAdmissionEnv()
+  const root = mkdtempSync(join(tmpdir(), 'path-list-admit-continue-'))
+  const runId = `path-list-admit-continue-${randomUUID()}`
   const runDir = chatSessionDir(runId)
   t.after(() => {
+    restoreEnv()
     rmSync(root, { recursive: true, force: true })
     if (existsSync(runDir)) rmSync(runDir, { recursive: true, force: true })
   })
@@ -716,19 +749,70 @@ test('Continue submit retains admitted baseline after preserved input deleted', 
     projectRoot: root,
     trustedHostFilesystemPathListDeclaration: decl,
   })
-  engine.applyUserSubmission({ userInput: USER_REQUEST })
+  assert.equal(pathListBaselineCaptureCountForTests(), 1)
+  const first = engine.admitUserSubmission(
+    { userInput: USER_REQUEST },
+    SCRIPTED_OBJECTIVE_ADMISSION_ROUTE,
+  )
+  assert.equal(first.status, 'committed')
   assert.equal(pathListBaselineCaptureCountForTests(), 1)
   rmSync(notesPath)
-  engine.applyUserSubmission({
-    userInput: USER_REQUEST,
-    continueTask: true,
-  })
+  const continued = engine.admitUserSubmission(
+    {
+      userInput: USER_REQUEST,
+      continueTask: true,
+    },
+    SCRIPTED_OBJECTIVE_ADMISSION_ROUTE,
+  )
+  assert.equal(continued.status, 'committed')
   assert.equal(pathListBaselineCaptureCountForTests(), 1)
   const reloaded = loadLiveSessionAuthorityStrict(runDir)
   assert.equal(
     reloaded.filesystemPathListAdmission?.preserved_baseline.preserved['docs/notes.md']?.content_sha256,
     beforeHash,
   )
+})
+
+test('objective admission rejects a new task while path-list declaration remains on engine options', t => {
+  const restoreEnv = enableScriptedObjectiveAdmissionEnv()
+  const root = mkdtempSync(join(tmpdir(), 'path-list-admit-new-objective-'))
+  const runId = `path-list-admit-new-objective-${randomUUID()}`
+  const runDir = chatSessionDir(runId)
+  t.after(() => {
+    restoreEnv()
+    rmSync(root, { recursive: true, force: true })
+    if (existsSync(runDir)) rmSync(runDir, { recursive: true, force: true })
+  })
+  resetPathListBaselineCaptureCountForTests()
+  seedRepo(root)
+  const decl = declarationPayload()
+  const engine = new ChatEngine({
+    runId,
+    task: USER_REQUEST,
+    projectRoot: root,
+    trustedHostFilesystemPathListDeclaration: decl,
+  })
+  assert.equal(
+    engine.admitUserSubmission(
+      { userInput: USER_REQUEST },
+      SCRIPTED_OBJECTIVE_ADMISSION_ROUTE,
+    ).status,
+    'committed',
+  )
+  assert.equal(pathListBaselineCaptureCountForTests(), 1)
+  assert.throws(
+    () =>
+      engine.admitUserSubmission(
+        { userInput: 'Enumerate every package entrypoint under apps/' },
+        SCRIPTED_OBJECTIVE_ADMISSION_ROUTE,
+      ),
+    (error: unknown) =>
+      error instanceof LiveSessionAuthorityError &&
+      error.code === 'PATH_LIST_REQUEST_MISMATCH',
+  )
+  assert.equal(pathListBaselineCaptureCountForTests(), 1)
+  const reloaded = loadLiveSessionAuthorityStrict(runDir)
+  assert.equal(reloaded.filesystemPathListAdmission?.declaration.user_request, USER_REQUEST)
 })
 
 test('declaration does not change inferred acceptance criteria', () => {
