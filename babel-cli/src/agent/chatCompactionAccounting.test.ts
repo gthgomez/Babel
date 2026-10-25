@@ -8,21 +8,27 @@ import { randomUUID } from 'node:crypto'
 import { runChatEngineCompactionFor, type ChatEngineCompactionBinding } from './chatEngineCompactionHost.js'
 import { createParityRuntime } from './chatEngineParityBridge.js'
 import { globalCostTracker } from '../services/costTracker.js'
+import { captureChatUsageScope } from './chatEngineProviderAccounting.js'
 
 for (const reportedCostUsd of [0.002, 0, undefined]) {
   test(`compaction host settles provider reported amount ${reportedCostUsd} with immutable inference identity`, async t => {
     const root = mkdtempSync(join(tmpdir(), 'babel-compaction-charge-'))
     t.after(() => rmSync(root, { recursive: true, force: true }))
     const owner = randomUUID(); const inference = randomUUID()
+    const taskAllowance = { taskOwnerId: owner }
     const engine = {
       options: { task: 'Inspect current app', projectRoot: root, model: 'deepseek/deepseek-v4-flash-0731' },
       modelPolicy: { provider: 'openrouter', providerModelId: 'deepseek/deepseek-v4-flash-0731' },
       limits: { maxEstimatedTokens: 1000 }, conversation: [{ role: 'user', content: 'Inspect current app' }],
       abortController: new AbortController(), writeCount: 0, _turnIndex: 1, toolCallLog: [],
-      parity: createParityRuntime(owner), engineRunDir: root, taskAllowance: { taskOwnerId: owner },
+      parity: createParityRuntime(owner), engineRunDir: root, taskAllowance,
       activeSubmissionGeneration: 1, lastLogicalRequestId: null, pendingParentRequestId: null, apiTokenCount: 0,
       isSubmissionCurrent: () => true, shouldUseTextTools: () => true, prepareCompactionGuard: () => () => true,
       resolveDeliberationRunnerForCompaction: () => ({}), compactConversation: () => {},
+      captureProviderUsageScope: (generation: number) => captureChatUsageScope({
+        options: engine.options, parity: engine.parity, taskAllowance,
+        isSubmissionCurrent: value => engine.isSubmissionCurrent(value),
+      }, generation),
       providerRetryCallbacks: ({ usageScope }: { usageScope: Record<string, unknown> }) => ({
         onInvocationStarted: () => Object.assign(usageScope, { chargeId: inference, requestId: 'request', attemptId: 'attempt', provider: 'openrouter' }),
       }),

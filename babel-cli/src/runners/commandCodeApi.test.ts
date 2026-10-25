@@ -139,7 +139,9 @@ if (!isSyntheticProviderFixtureReady()) {
     process.env['BABEL_OFFLINE'] = '1'
     try {
       const engine = new ChatEngine({ task: 'Inspect the supplied fixture.', projectRoot: process.env['BABEL_PROJECT_ROOT']!, model: backendKey, providerRunner: selected, providerPolicy: policy })
-      const state = (engine as unknown as { criticState(onThought: undefined, generation: number): { primaryProvider?: string; primaryModel?: string } }).criticState(undefined, 1)
+      const host = engine as unknown as { activeSubmissionGeneration: number; criticState(onThought: undefined, generation: number): { primaryProvider?: string; primaryModel?: string } }
+      const state = host.criticState(undefined, host.activeSubmissionGeneration)
+      assert.throws(() => host.criticState(undefined, host.activeSubmissionGeneration + 1), /retired submission/)
       assert.equal(state.primaryProvider, 'command-code')
       assert.equal(resolveOrCreateCriticRunner(state.primaryModel!, null, () => selected, state.primaryProvider).runner, selected)
     } finally {

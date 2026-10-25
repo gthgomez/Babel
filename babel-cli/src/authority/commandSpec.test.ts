@@ -733,6 +733,9 @@ const HOST_PROCESS_SURFACE = new Set([
   'bridge/claudeCodeIsolatedResolveSubprocess.ts',
   'bridge/workspaceChanges.ts',
   'eval/canary/liveCell.ts',
+  // Frozen journey evaluator: pinned isolated grading and owned fixture setup.
+  'eval/harness-journey-code-oracle.ts',
+  'eval/harness-journey-fixtures.ts',
   'eval/cleanRoomGrade.ts',
   'agent/capabilityBroker.ts',
   'agent/chatEngineSupport.ts',
