@@ -347,15 +347,17 @@ test('refresh does not perform a second baseline capture when admission exists',
   )
 })
 
-test('refresh rejects deleted preserved input instead of retaining stale baseline', t => {
+test('refresh retains admitted baseline after preserved input deleted on disk', t => {
   const root = mkdtempSync(join(tmpdir(), 'path-list-admit-refresh-del-'))
   const runDir = mkdtempSync(join(tmpdir(), 'path-list-admit-refresh-del-run-'))
   t.after(() => {
     rmSync(root, { recursive: true, force: true })
     rmSync(runDir, { recursive: true, force: true })
   })
+  resetPathListBaselineCaptureCountForTests()
   seedRepo(root)
   const notesPath = join(root, 'docs', 'notes.md')
+  const beforeHash = fileSha256(notesPath)
   const decl = declarationPayload()
   const authority = resolveLiveSessionAuthority({
     mode: 'chat',
@@ -363,28 +365,30 @@ test('refresh rejects deleted preserved input instead of retaining stale baselin
     task: USER_REQUEST,
     trustedHostFilesystemPathListDeclaration: decl,
   })
+  assert.equal(pathListBaselineCaptureCountForTests(), 1)
   persistLiveSessionAuthority(runDir, authority)
   rmSync(notesPath)
   const parity = { liveAuthority: authority } as ParityRuntime
-  assert.throws(
-    () =>
-      refreshEngineInstructionManifest({
-        parity,
-        options: {
-          projectRoot: root,
-          task: USER_REQUEST,
-          trustedHostFilesystemPathListDeclaration: decl,
-        },
-        taskClass: 'unknown',
-        executionProfile: 'chat',
-        engineRunDir: runDir,
-      }),
-    (error: unknown) =>
-      error instanceof LiveSessionAuthorityError && error.code === 'PATH_LIST_PRESERVED_INPUT_MISSING',
+  refreshEngineInstructionManifest({
+    parity,
+    options: {
+      projectRoot: root,
+      task: USER_REQUEST,
+      trustedHostFilesystemPathListDeclaration: decl,
+    },
+    taskClass: 'unknown',
+    executionProfile: 'chat',
+    engineRunDir: runDir,
+  })
+  assert.equal(pathListBaselineCaptureCountForTests(), 1)
+  assert.equal(
+    parity.liveAuthority?.filesystemPathListAdmission?.preserved_baseline.preserved['docs/notes.md']
+      ?.content_sha256,
+    beforeHash,
   )
 })
 
-test('refresh rejects preserved input drift without recapturing baseline', t => {
+test('refresh retains admitted baseline after preserved input changed on disk', t => {
   const root = mkdtempSync(join(tmpdir(), 'path-list-admit-refresh-drift-'))
   const runDir = mkdtempSync(join(tmpdir(), 'path-list-admit-refresh-drift-run-'))
   t.after(() => {
@@ -393,6 +397,8 @@ test('refresh rejects preserved input drift without recapturing baseline', t => 
   })
   resetPathListBaselineCaptureCountForTests()
   seedRepo(root)
+  const notesPath = join(root, 'docs', 'notes.md')
+  const beforeHash = fileSha256(notesPath)
   const decl = declarationPayload()
   const authority = resolveLiveSessionAuthority({
     mode: 'chat',
@@ -401,25 +407,26 @@ test('refresh rejects preserved input drift without recapturing baseline', t => 
     trustedHostFilesystemPathListDeclaration: decl,
   })
   persistLiveSessionAuthority(runDir, authority)
-  writeFileSync(join(root, 'docs', 'notes.md'), '# mutated\n', 'utf8')
+  writeFileSync(notesPath, '# mutated on disk after admission\n', 'utf8')
+  assert.notEqual(fileSha256(notesPath), beforeHash)
   const parity = { liveAuthority: authority } as ParityRuntime
-  assert.throws(
-    () =>
-      refreshEngineInstructionManifest({
-        parity,
-        options: {
-          projectRoot: root,
-          task: USER_REQUEST,
-          trustedHostFilesystemPathListDeclaration: decl,
-        },
-        taskClass: 'unknown',
-        executionProfile: 'chat',
-        engineRunDir: runDir,
-      }),
-    (error: unknown) =>
-      error instanceof LiveSessionAuthorityError && error.code === 'PATH_LIST_PRESERVED_INPUT_DRIFT',
-  )
+  refreshEngineInstructionManifest({
+    parity,
+    options: {
+      projectRoot: root,
+      task: USER_REQUEST,
+      trustedHostFilesystemPathListDeclaration: decl,
+    },
+    taskClass: 'unknown',
+    executionProfile: 'chat',
+    engineRunDir: runDir,
+  })
   assert.equal(pathListBaselineCaptureCountForTests(), 1)
+  assert.equal(
+    parity.liveAuthority?.filesystemPathListAdmission?.preserved_baseline.preserved['docs/notes.md']
+      ?.content_sha256,
+    beforeHash,
+  )
 })
 
 test('rejects conflicting declaration identity on refresh when selectors differ', t => {
@@ -563,7 +570,7 @@ test('admission record deep-freezes nested declaration limits and preserved entr
   }
 })
 
-test('same-mode ChatEngine resume validates declaration without recapturing baseline', t => {
+test('same-mode ChatEngine resume retains baseline when preserved input deleted on disk', t => {
   const root = mkdtempSync(join(tmpdir(), 'path-list-engine-resume-'))
   const runId = `path-list-engine-resume-${randomUUID()}`
   const runDir = chatSessionDir(runId)
@@ -573,6 +580,8 @@ test('same-mode ChatEngine resume validates declaration without recapturing base
   })
   resetPathListBaselineCaptureCountForTests()
   seedRepo(root)
+  const notesPath = join(root, 'docs', 'notes.md')
+  const beforeHash = fileSha256(notesPath)
   const decl = declarationPayload()
   new ChatEngine({
     runId,
@@ -581,20 +590,20 @@ test('same-mode ChatEngine resume validates declaration without recapturing base
     trustedHostFilesystemPathListDeclaration: decl,
   })
   assert.equal(pathListBaselineCaptureCountForTests(), 1)
-  rmSync(join(root, 'docs', 'notes.md'))
-  assert.throws(
-    () =>
+  rmSync(notesPath)
   new ChatEngine({
     runId,
     resumeExisting: true,
     task: USER_REQUEST,
     projectRoot: root,
     trustedHostFilesystemPathListDeclaration: decl,
-  }),
-    (error: unknown) =>
-      error instanceof LiveSessionAuthorityError && error.code === 'PATH_LIST_PRESERVED_INPUT_MISSING',
-  )
+  })
   assert.equal(pathListBaselineCaptureCountForTests(), 1)
+  const reloaded = loadLiveSessionAuthorityStrict(runDir)
+  assert.equal(
+    reloaded.filesystemPathListAdmission?.preserved_baseline.preserved['docs/notes.md']?.content_sha256,
+    beforeHash,
+  )
 })
 
 test('rejects cross-root binding with same user prompt and valid sidecar', t => {

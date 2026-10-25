@@ -2,7 +2,6 @@
  * Admission-only trusted host filesystem path-list binding for live sessions.
  * Inspection/persistence only — not completion authority.
  */
-import { createHash } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
 import { realpathSync } from 'node:fs'
 import { join } from 'node:path'
@@ -158,41 +157,6 @@ function sessionProjectRootReal(projectRoot: string): string {
   return realpathSync.native(projectRoot)
 }
 
-function hashFileAtProjectRoot(projectRootReal: string, relPath: string): string {
-  const absolute = join(projectRootReal, relPath)
-  return createHash('sha256').update(readFileSync(absolute)).digest('hex')
-}
-
-/** Verify preserved inputs still exist and match the admitted baseline (no recapture). */
-export function assertPathListAdmissionPreservedInputsIntact(
-  projectRoot: string,
-  admission: LiveSessionFilesystemPathListAdmissionV1,
-): void {
-  const rootReal = sessionProjectRootReal(projectRoot)
-  if (rootReal !== admission.project_root_real) {
-    throw new LiveSessionAuthorityError(
-      'PATH_LIST_SESSION_ROOT_MISMATCH',
-      'Session project root does not match path-list admission project_root_real',
-    )
-  }
-  for (const [relPath, snapshot] of Object.entries(admission.preserved_baseline.preserved)) {
-    const absolute = join(rootReal, relPath)
-    if (!existsSync(absolute)) {
-      throw new LiveSessionAuthorityError(
-        'PATH_LIST_PRESERVED_INPUT_MISSING',
-        `Preserved path-list input is missing on disk: ${relPath}`,
-      )
-    }
-    const currentHash = hashFileAtProjectRoot(rootReal, relPath)
-    if (currentHash !== snapshot.content_sha256) {
-      throw new LiveSessionAuthorityError(
-        'PATH_LIST_PRESERVED_INPUT_DRIFT',
-        `Preserved path-list input drifted on disk: ${relPath}`,
-      )
-    }
-  }
-}
-
 function assertAdmissionMatchesContractProvenance(
   admission: LiveSessionFilesystemPathListAdmissionV1,
   contract: TaskContractV1,
@@ -244,7 +208,13 @@ export function assertPathListSessionBinding(input: {
       'PATH_LIST_DECLARATION_REQUIRES_PROJECT_ROOT: Path-list admission requires a non-null project root',
     )
   }
-  assertPathListAdmissionPreservedInputsIntact(input.projectRoot, admission)
+  const rootReal = sessionProjectRootReal(input.projectRoot)
+  if (rootReal !== admission.project_root_real) {
+    throw new LiveSessionAuthorityError(
+      'PATH_LIST_SESSION_ROOT_MISMATCH',
+      'Session project root does not match path-list admission project_root_real',
+    )
+  }
 }
 
 function parseAdmissionRecord(raw: unknown): LiveSessionFilesystemPathListAdmissionV1 {
