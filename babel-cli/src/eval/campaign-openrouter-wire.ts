@@ -14,6 +14,8 @@ import {
 export interface CampaignOpenRouterMaxPriceUsdPerMillion {
   readonly prompt: number
   readonly completion: number
+  /** Per-request surcharge cap (USD); zero refuses priced per-request upstreams. */
+  readonly request: 0
 }
 
 export interface CampaignOpenRouterProviderWire {
@@ -21,6 +23,8 @@ export interface CampaignOpenRouterProviderWire {
   readonly require_parameters: true
   readonly max_price: CampaignOpenRouterMaxPriceUsdPerMillion
 }
+
+export const CAMPAIGN_OPENROUTER_MAX_PRICE_REQUEST_USD = 0 as const
 
 export function campaignOpenRouterRegistryMaxPriceUsdPerMillion(
   modelId: string = CAMPAIGN_QUALIFIED_OPENROUTER_MODEL_ID,
@@ -32,6 +36,7 @@ export function campaignOpenRouterRegistryMaxPriceUsdPerMillion(
   return {
     prompt: pricing.inputCostPer1M,
     completion: pricing.outputCostPer1M,
+    request: CAMPAIGN_OPENROUTER_MAX_PRICE_REQUEST_USD,
   }
 }
 
@@ -68,6 +73,7 @@ export function applyCampaignOpenRouterWireBody(
       max_price: {
         prompt: providerWire.max_price.prompt,
         completion: providerWire.max_price.completion,
+        request: providerWire.max_price.request,
       },
     },
   }
@@ -91,9 +97,11 @@ function readMaxPrice(
   const record = maxPrice as Record<string, unknown>
   const prompt = record.prompt
   const completion = record.completion
+  const request = record.request
   if (typeof prompt !== 'number' || typeof completion !== 'number') return null
+  if (request !== CAMPAIGN_OPENROUTER_MAX_PRICE_REQUEST_USD) return null
   if (!Number.isFinite(prompt) || !Number.isFinite(completion)) return null
-  return { prompt, completion }
+  return { prompt, completion, request: CAMPAIGN_OPENROUTER_MAX_PRICE_REQUEST_USD }
 }
 
 /** Gate verification on the exact serialized body bytes. */
@@ -131,7 +139,8 @@ export function assertCampaignOpenRouterWireFrozen(prepared: PreparedProviderReq
   }
   if (
     maxPrice.prompt !== expected.max_price.prompt ||
-    maxPrice.completion !== expected.max_price.completion
+    maxPrice.completion !== expected.max_price.completion ||
+    maxPrice.request !== expected.max_price.request
   ) {
     throw new Error('campaign openrouter wire max_price mismatch')
   }
