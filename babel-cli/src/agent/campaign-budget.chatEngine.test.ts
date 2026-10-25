@@ -114,9 +114,12 @@ test('ChatEngine submitMessageStream runs one qualified native turn under campai
   assert.equal(physicalFetch, 1)
   assert.match(result.answer ?? '', /Campaign pilot ok/)
   assert.equal(store.readSnapshot().operations.length, 1)
-  const parsed = JSON.parse(postedBody) as { provider?: { max_price?: { prompt?: number; completion?: number } } }
+  const parsed = JSON.parse(postedBody) as {
+    provider?: { max_price?: { prompt?: number; completion?: number; request?: number } }
+  }
   assert.equal(parsed.provider?.max_price?.prompt, 0.14)
   assert.equal(parsed.provider?.max_price?.completion, 0.28)
+  assert.equal(parsed.provider?.max_price?.request, 0)
 })
 
 test('engine-owned callback integration: main path blocks fetch when campaign budget is exhausted', async (t) => {
