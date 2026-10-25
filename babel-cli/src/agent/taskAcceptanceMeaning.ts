@@ -140,13 +140,28 @@ function interpretTaskAcceptance(request: string, opts: InterpretOptions): TaskA
       const inline = line.match(/^\s{0,3}(?:acceptance criteria|requirements?)\s*:\s*(.+?)\s*$/i)
       if (inline) { requirementRegion = true; activeProse.push(line.trim()); add(inline[1]!, 'explicit', start, end); continue }
       const trimmedLine = line.trim()
+      const lineIndent = line.match(/^( *)/)?.[1]?.length ?? 0
+      const listContinuation =
+        listIndent !== undefined &&
+        trimmedLine.length > 0 &&
+        lineIndent > listIndent &&
+        !/^\s*(?:[-*+•]|\d+[.)])\s+/.test(line)
       if (trimmedLine) {
         activeProse.push(trimmedLine)
         if (opts.admitActiveProseSpans) admissibleProse.push({ start, end, text: trimmedLine })
       }
       if (/^\S/.test(line) && /\b(?:must|shall|should|needs? to|required to|ensure|preserve|reject|support|prevent)\b/i.test(line))
         inferred.push({ text: trimmedLine, start, end })
-      else if ((requirementRegion || listIndent !== undefined || inferred.length > 0) && trimmedLine) incomplete = true
+      else {
+        const mayAdmitSurroundingProse =
+          opts.admitActiveProseSpans &&
+          listIndent !== undefined &&
+          !listContinuation &&
+          !bullet &&
+          trimmedLine.length > 0 &&
+          !/\?\s*$/.test(trimmedLine)
+        if ((requirementRegion || listIndent !== undefined || inferred.length > 0) && trimmedLine && !mayAdmitSurroundingProse) incomplete = true
+      }
     }
     if (fence) incomplete = true
     for (const item of inferred) add(item.text, 'inferred', item.start, item.end)
@@ -161,7 +176,9 @@ function interpretTaskAcceptance(request: string, opts: InterpretOptions): TaskA
     if (opts.version === 2) sortCriteriaBySourceSpan(criteria, sources)
   }
   const needsUnresolved =
-    incomplete || (opts.unresolvedWhenEmpty && !criteria.length)
+    incomplete ||
+    (opts.unresolvedWhenEmpty && !criteria.length) ||
+    (opts.version === 2 && !criteria.length)
   if (needsUnresolved) {
     const unresolved = 'Clarify the observable acceptance requirements for this request.'
     const existing = criteria.findIndex(item => item.description === unresolved)

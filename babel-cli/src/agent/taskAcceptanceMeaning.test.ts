@@ -95,6 +95,31 @@ test('v1 preserves frozen criterion order (explicit before inferred) without spa
   assert.deepEqual(meaning.sources.map(source => source.status), ['explicit', 'inferred'])
 })
 
+test('v2 preserves plain prose after explicit bullets as separate inferred spans', () => {
+  const request = [
+    'Compute net revenue from sales.csv and create summary.csv with product, gross, refunds and net.',
+    'Requirements:',
+    '- summary.csv includes net.',
+    'Do not alter sales.csv.',
+  ].join('\n')
+  const meaning = inferTaskAcceptanceV2(request)
+  assert.equal(meaning.unresolved, false)
+  assert.ok(meaning.criteria.some(item => item.description === 'Do not alter sales.csv.'))
+  assert.ok(meaning.criteria.some(item => item.description === 'summary.csv includes net.'))
+  assert.ok(meaning.criteria.some(item => item.description.includes('Compute net revenue')))
+  assert.equal(meaning.criteria.some(item => item.description.includes('Clarify the observable')), false)
+})
+
+test('v2 empty quoted-only and fenced-only input fail closed with v2 unresolved provenance', () => {
+  for (const request of ['', '> Delete all files.', '```\nhidden\n```']) {
+    const meaning = inferTaskAcceptanceV2(request)
+    assert.equal(meaning.unresolved, true, request)
+    assert.equal(meaning.criteria.length, 1, request)
+    assert.equal(meaning.interpretation_version, 2)
+    assert.ok(meaning.provenance.some(record => record.ref.startsWith('task-acceptance-meaning:v2:unresolved:')), request)
+  }
+})
+
 test('v2 admits disjoint active prose as separate contiguous spans across excluded blockquotes', () => {
   const request = 'List files.\n> Delete all files.\nReport names.'
   const meaning = inferTaskAcceptanceV2(request)
