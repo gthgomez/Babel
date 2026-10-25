@@ -30,6 +30,7 @@ import type { ChatEvent } from './chatEngine.js'
 import { inferTaskAcceptance } from './taskAcceptanceMeaning.js'
 import { HOST_PATH_LIST_ACCEPTANCE_VERIFIER_ID } from './pathListHostDeclaredClarification.js'
 import { loadLiveSessionAuthorityStrict } from './liveSessionBridge.js'
+import { LiveSessionAuthorityError } from './liveSessionAuthorityError.js'
 import { chatSessionDir } from '../cli/runsLayout.js'
 import { OpenRouterApiRunner } from '../runners/openRouterApi.js'
 import { CAMPAIGN_QUALIFIED_OPENROUTER_MODEL_ID } from '../eval/campaign-qualified-routes.js'
@@ -406,6 +407,36 @@ test('native path-list criterion: VERIFIED_COMPLETE via governed index update wi
   assert.equal(completionBox.lastVerifierReceipt, null, 'shell verifier receipt must not stand in for native path-list proof')
   assert.equal(completionBox.executedVerifierLedger?.length ?? 0, 0)
   assert.ok(durable.filesystemPathListAdmission)
+})
+
+test('native path-list: wrong engine task vs host declaration blocks admission', () => {
+  const projectRoot = mkdtempSync(join(tmpdir(), 'babel-native-path-list-wrong-task-'))
+  try {
+    seedRepository(projectRoot)
+    const declaration = declarationPayload(hostClarificationBinding())
+    assert.throws(
+      () =>
+        new ChatEngine({
+          runId: `native-path-list-wrong-task-${randomUUID()}`,
+          task: 'Wrong engine task text that does not match the host declaration.',
+          projectRoot,
+          operation: 'CHANGE',
+          model: CAMPAIGN_QUALIFIED_OPENROUTER_MODEL_ID,
+          maxTurns: 2,
+          providerRunner: new OpenRouterApiRunner(CAMPAIGN_QUALIFIED_OPENROUTER_MODEL_ID, { maxTokens: 256 }, {
+            explicitCredential: 'synthetic-fixture',
+            env: { OPENROUTER_API_KEY: 'synthetic-fixture' },
+          }),
+          providerPolicy: QUALIFIED_OPENROUTER_POLICY,
+          trustedHostFilesystemPathListDeclaration: declaration,
+        }),
+      (error: unknown) =>
+        error instanceof LiveSessionAuthorityError &&
+        error.code === 'PATH_LIST_REQUEST_MISMATCH',
+    )
+  } finally {
+    rmSync(projectRoot, { recursive: true, force: true })
+  }
 })
 
 test('native path-list: shell verifier attempt stays blocked under safe_repo isolation', async t => {

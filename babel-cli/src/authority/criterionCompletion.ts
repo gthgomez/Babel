@@ -83,8 +83,37 @@ interface CompletionAuthority {
 const contexts = new WeakMap<object, CompletionAuthority>()
 const pathListVerificationBindings = new WeakMap<
   PathListVerificationRequestV1,
-  { serviceContext: CriterionCompletionContextV1 }
+  { serviceContext: CriterionCompletionContextV1; epoch: string }
 >()
+
+function computeOwnerAuthorityEpoch(owner: CriterionCompletionOwnerV1): string | undefined {
+  try {
+    if (!owner.contract?.frozen || !owner.projectRoot || !isAbsolute(owner.projectRoot)) {
+      return undefined
+    }
+    const root = realpathSync.native(owner.projectRoot)
+    const physicalRoot = statSync(root)
+    if (!physicalRoot.isDirectory()) return undefined
+    return sha256Canonical({
+      contract: owner.contract.contract_hash,
+      run: owner.runId,
+      root,
+      device: physicalRoot.dev,
+      inode: physicalRoot.ino,
+    })
+  } catch {
+    return undefined
+  }
+}
+
+/** Revoke path-list handles when owner run/contract/root epoch changes. */
+function reconcileCompletionAuthorityEpoch(authority: CompletionAuthority): void {
+  const next = computeOwnerAuthorityEpoch(authority.readOwner())
+  if (authority.epoch === next) return
+  if (next === undefined) delete authority.epoch
+  else authority.epoch = next
+  clearNativePathListAuthorityState(authority)
+}
 
 function snapshotNativePathListNodes(graph: EvidenceGraph): EvidenceNode[] {
   return [...graph.getNodesMap().values()].filter(node =>
@@ -132,6 +161,7 @@ function refreshNativePathListEvidenceOnAuthority(
   serviceContext: CriterionCompletionContextV1,
 ): void {
   try {
+    reconcileCompletionAuthorityEpoch(authority)
     const owner = authority.readOwner()
     if (!owner.contract?.frozen || !owner.projectRoot || !owner.filesystemPathListAdmission) {
       clearNativePathListAuthorityState(authority)
@@ -188,7 +218,10 @@ function refreshNativePathListEvidenceOnAuthority(
         schema_version: 1,
         kind: 'path-list-verification:v1',
       })
-      pathListVerificationBindings.set(authority.pathListRequest, { serviceContext })
+      pathListVerificationBindings.set(authority.pathListRequest, {
+        serviceContext,
+        epoch: authority.epoch ?? '',
+      })
     }
   } catch {
     clearNativePathListAuthorityState(authority)
@@ -258,12 +291,17 @@ export function createCriterionCompletionServiceV1(
       request: PathListVerificationRequestV1 | undefined,
     ): PathListVerificationEvaluationV1 {
       if (!request) return { verified: false, errors: ['PATH_LIST_REQUEST_MISSING'] }
-      const binding = pathListVerificationBindings.get(request)
       const authority = contexts.get(context)
+      if (!authority) {
+        return { verified: false, errors: ['PATH_LIST_REQUEST_UNTRUSTED'] }
+      }
+      reconcileCompletionAuthorityEpoch(authority)
+      const binding = pathListVerificationBindings.get(request)
       if (
         !binding ||
         binding.serviceContext !== context ||
-        !authority ||
+        !authority.epoch ||
+        binding.epoch !== authority.epoch ||
         request !== authority.pathListRequest
       ) {
         return { verified: false, errors: ['PATH_LIST_REQUEST_UNTRUSTED'] }

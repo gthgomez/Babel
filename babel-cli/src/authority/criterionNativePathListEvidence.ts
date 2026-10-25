@@ -3,6 +3,8 @@ import { sha256Canonical } from '../acceptance/canonical.js'
 import { verifyFilesystemPathList } from './filesystemPathListVerifier.js'
 import {
   assertPathListSessionBinding,
+  expectedAdmissionDigestFromContract,
+  findPathListAdmissionProvenanceRecord,
   type LiveSessionFilesystemPathListAdmissionV1,
 } from '../agent/liveSessionFilesystemPathListAdmission.js'
 import { LiveSessionAuthorityError } from '../agent/liveSessionAuthorityError.js'
@@ -98,6 +100,72 @@ function resultDigest(result: FilesystemPathListVerifierResultV1): string {
   })
 }
 
+/** Native certification owner: frozen contract must bind admission digest before verify/publish. */
+export function requireNativePathListCertificationProvenance(
+  contract: TaskContractV1,
+  admission: LiveSessionFilesystemPathListAdmissionV1,
+): void {
+  if (!contractUsesNativePathListCompletion(contract)) return
+  if (!findPathListAdmissionProvenanceRecord(contract)) {
+    throw new LiveSessionAuthorityError(
+      'PATH_LIST_ADMISSION_PROVENANCE_MISMATCH',
+      'Native path-list certification requires frozen admission provenance on the contract',
+    )
+  }
+  const expected = expectedAdmissionDigestFromContract(contract)
+  if (!expected) {
+    throw new LiveSessionAuthorityError(
+      'PATH_LIST_ADMISSION_PROVENANCE_MISMATCH',
+      'Native path-list certification requires a bound admission record digest in contract provenance',
+    )
+  }
+  if (admission.admission_record_digest.toLowerCase() !== expected) {
+    throw new LiveSessionAuthorityError(
+      'PATH_LIST_ADMISSION_PROVENANCE_MISMATCH',
+      'Path-list admission sidecar digest does not match frozen contract provenance',
+    )
+  }
+}
+
+/** Exact admitted native path-list policy evidence (not ID-suffix spoof). */
+export function isValidatedAdmittedNativePathListPolicyNode(
+  node: EvidenceNode,
+  requirement: AcceptanceRequirementV1,
+  contract: TaskContractV1,
+): boolean {
+  if (node.type !== 'policy_result' || !isHostPathListAcceptanceRequirement(requirement)) {
+    return false
+  }
+  if (node.id !== `criterion:${requirement.id}:native-path-list`) return false
+  if (!node.data || typeof node.data !== 'object' || Array.isArray(node.data)) return false
+  const data = node.data as Record<string, unknown>
+  if (data['verifier_id'] !== HOST_PATH_LIST_ACCEPTANCE_VERIFIER_ID) return false
+  if (data['verifier_spec_hash'] !== verificationSpecHash(requirement)) return false
+  if (data['target'] !== requirement.verification.target) return false
+  const status = String(data['status'] ?? '').toLowerCase()
+  if (status !== 'passed' && data['passed'] !== true) return false
+  const identity = node.producer_identity
+  if (
+    !identity ||
+    identity.kind !== 'agent_endpoint' ||
+    identity.endpoint_id !== NATIVE_PATH_LIST_COMPLETION_ENDPOINT_ID ||
+    identity.role !== 'verifier' ||
+    identity.execution_domain !== 'host-process'
+  ) {
+    return false
+  }
+  const binding = node.binding
+  if (
+    !binding ||
+    binding.requirement_id !== requirement.id ||
+    binding.task_id !== contract.task_id ||
+    binding.contract_hash !== contract.contract_hash
+  ) {
+    return false
+  }
+  return true
+}
+
 export function buildHostPathListPolicyEvidenceNode(input: {
   requirement: AcceptanceRequirementV1
   contract: TaskContractV1
@@ -158,6 +226,7 @@ export function runOwnedHostPathListVerification(input: {
     return { ok: false, code: 'PATH_LIST_MUTATION_LINEAGE_MISSING' }
   }
   try {
+    requireNativePathListCertificationProvenance(input.contract, input.admission)
     assertPathListSessionBinding({
       projectRoot: input.projectRoot,
       task: input.contract.user_request,

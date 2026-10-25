@@ -19,6 +19,7 @@ import {
   requiredCapabilityForAcceptanceRequirement,
   type TrustedExecutionReadPortV1,
 } from "./trustedExecutionIdentity.js";
+import { isValidatedAdmittedNativePathListPolicyNode } from "../authority/criterionNativePathListEvidence.js";
 
 export const EVIDENCE_GRAPH_SCHEMA_VERSION = 1 as const;
 export const EVIDENCE_GRAPH_MAX_BYTES = 256 * 1024;
@@ -234,6 +235,7 @@ function verifierSpecError(
 function certifyingEvidenceError(
   node: EvidenceNode,
   requirement: AcceptanceRequirementV1,
+  contract: TaskContractV1,
 ): string | undefined {
   if (!CERTIFYING_TYPES.has(node.type))
     return `${node.type} is not a certifying evidence type`;
@@ -250,8 +252,11 @@ function certifyingEvidenceError(
     return undefined;
   }
   if (node.type !== "runtime_observation") {
-    const admittedNativePathList =
-      node.type === "policy_result" && node.id.endsWith(":native-path-list");
+    const admittedNativePathList = isValidatedAdmittedNativePathListPolicyNode(
+      node,
+      requirement,
+      contract,
+    );
     if (!admittedNativePathList && data["exit_code"] !== 0) {
       return "certifying evidence has a non-zero exit_code";
     }
@@ -621,7 +626,11 @@ export function evaluateCompletionGateV1(input: {
         errors.push(`${node.id}: ${mismatch}`);
         continue;
       }
-      const certificationError = certifyingEvidenceError(node, requirement);
+      const certificationError = certifyingEvidenceError(
+        node,
+        requirement,
+        input.contract,
+      );
       const requiredCapability = requiredCapabilityForAcceptanceRequirement(
         requirement,
       );

@@ -198,3 +198,86 @@ test('admitted native path-list policy_result may omit exit_code', () => {
   assert.equal(evaluation.verified, true)
   assert.deepEqual(evaluation.satisfied_requirements, ['paths'])
 })
+
+test('negative: policy_result cannot omit exit_code using only native-path-list id suffix', () => {
+  const verification = {
+    kind: 'policy' as const,
+    verifier_id: HOST_PATH_LIST_ACCEPTANCE_VERIFIER_ID,
+    target: 'target-hash',
+  }
+  const contract = freezeTaskContract(
+    buildTaskContractV1({
+      mode: 'chat',
+      task_id: 'task-paths',
+      user_request: 'paths',
+      acceptance: [
+        {
+          id: 'paths',
+          description: 'paths',
+          type: 'policy',
+          required: true,
+          verification_strategy: 'native path list',
+          verification,
+        },
+      ],
+    }),
+  )
+  const supervisor = createTrustedExecutionSupervisorV1()
+  const endpoint = buildAgentEndpointV1({
+    endpoint_id: 'verifier:spoof',
+    identity: 'verifier:spoof',
+    harness: 'babel-chat',
+    model: 'governed',
+    provider: 'babel',
+    capabilities: ['inspect_repository'],
+    location: 'local',
+    execution_domain: 'host-process',
+  })
+  supervisor.assign({
+    run_id: RUN_ID,
+    task_id: contract.task_id,
+    contract_hash: contract.contract_hash,
+    role: 'verifier',
+    endpoint,
+  })
+  const graph = new EvidenceGraph()
+  graph.addNode({
+    id: 'criterion:paths:native-path-list',
+    type: 'policy_result',
+    data: {
+      verifier_id: HOST_PATH_LIST_ACCEPTANCE_VERIFIER_ID,
+      verifier_spec_hash: sha256Canonical(verification),
+      target: 'target-hash',
+      status: 'passed',
+      passed: true,
+    },
+    parents: [],
+    binding: {
+      run_id: RUN_ID,
+      task_id: contract.task_id,
+      contract_hash: contract.contract_hash,
+      repository: '/repo',
+      base_sha: null,
+      candidate_sha: 'candidate',
+      requirement_id: 'paths',
+    },
+    producer_role: 'verifier',
+    producer_identity: {
+      kind: 'agent_endpoint',
+      endpoint_id: 'verifier:spoof',
+      role: 'verifier',
+      execution_domain: 'host-process',
+    },
+  })
+  const evaluation = evaluateCompletionGateV1({
+    graph,
+    contract,
+    run_id: RUN_ID,
+    project_root: '/repo',
+    candidate_sha: 'candidate',
+    repository: '/repo',
+    trusted_execution: supervisor.read,
+  })
+  assert.equal(evaluation.verified, false)
+  assert.match(evaluation.errors.join(' '), /exit_code/)
+})

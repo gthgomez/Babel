@@ -10,14 +10,15 @@ import {
   HOST_DECLARED_ACCEPTANCE_CLARIFICATION_MODE,
   TRUSTED_HOST_ACCEPTANCE_CLARIFICATION_KIND,
   TRUSTED_HOST_FILESYSTEM_PATH_LIST_DECLARATION_KIND,
-  declarationContentHash,
 } from './trustedHostFilesystemPathList.js'
-import { LIVE_SESSION_FILESYSTEM_PATH_LIST_ADMISSION_KIND } from '../agent/liveSessionFilesystemPathListAdmission.js'
+import {
+  admitFilesystemPathListForLiveSession,
+  pathListAdmissionProvenanceRecord,
+} from '../agent/liveSessionFilesystemPathListAdmission.js'
 import { applyHostDeclaredPathListClarification } from '../agent/pathListHostDeclaredClarification.js'
 import { inferTaskAcceptance } from '../agent/taskAcceptanceMeaning.js'
 import { buildTaskContractV1, freezeTaskContract } from '../agent/taskContract.js'
 import { createExecutorKernel } from '../executor/kernel.js'
-import { captureFilesystemSourceBaseline } from './filesystemPathListVerifier.js'
 import {
   createCriterionCompletionServiceV1, evaluateCriterionCompletionV1,
   type CriterionCompletionOwnerV1, type CriterionCompletionRequestV1,
@@ -184,24 +185,24 @@ test('same-epoch refreshPrivateEvidence clears native path-list verification han
     acceptance_clarification: binding,
   }
   const clarified = applyHostDeclaredPathListClarification({ meaning, declaration })
+  const projectRootReal = realpathSync.native(root)
+  const admission = admitFilesystemPathListForLiveSession(
+    projectRootReal,
+    USER_REQUEST,
+    declaration,
+  )
   const frozen = freezeTaskContract(
     buildTaskContractV1({
       mode: 'chat',
       user_request: USER_REQUEST,
       acceptance: clarified.criteria,
       acceptance_criteria: clarified.criteria.map(row => row.description),
+      provenance: [
+        ...clarified.provenance,
+        pathListAdmissionProvenanceRecord(admission.admission_record_digest),
+      ],
     }),
   )
-  const projectRootReal = realpathSync.native(root)
-  const admission = {
-    schema_version: 1 as const,
-    kind: LIVE_SESSION_FILESYSTEM_PATH_LIST_ADMISSION_KIND,
-    user_request_digest: sha256Canonical(USER_REQUEST),
-    project_root_real: projectRootReal,
-    admission_record_digest: declarationContentHash(declaration),
-    declaration,
-    preserved_baseline: captureFilesystemSourceBaseline(projectRootReal, declaration),
-  }
   const candidateSha = 'f'.repeat(64)
   let lineage = true
   const owner: CriterionCompletionOwnerV1 = {
@@ -226,4 +227,79 @@ test('same-epoch refreshPrivateEvidence clears native path-list verification han
   assert.equal(service.evaluateOwnedPathListVerification(handle).verified, false)
   lineage = false
   assert.equal(service.nativePathListProofCompliant(), false)
+})
+
+test('owner run replacement revokes prior path-list handle without refresh', t => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-criterion-path-list-epoch-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const USER_REQUEST =
+    'Update the path index to match the current tree. Use another method if a command cannot run; confirm listed paths.'
+  assert.equal(spawnSync('git', ['init'], { cwd: root, encoding: 'utf-8' }).status, 0)
+  mkdirSync(join(root, 'apps', 'web'), { recursive: true })
+  mkdirSync(join(root, 'docs'), { recursive: true })
+  mkdirSync(join(root, 'meta'), { recursive: true })
+  writeFileSync(join(root, 'apps', 'web', 'entry.mjs'), 'export {}\n', 'utf8')
+  writeFileSync(join(root, 'docs', 'notes.md'), '# notes\n', 'utf8')
+  writeFileSync(join(root, 'meta', 'tree-index.md'), '- apps/web/entry.mjs\n', 'utf8')
+
+  const meaning = inferTaskAcceptance(USER_REQUEST)
+  const unresolved = meaning.sources.filter(source => source.status === 'unresolved')[0]!
+  const binding = {
+    schema_version: 1 as const,
+    kind: TRUSTED_HOST_ACCEPTANCE_CLARIFICATION_KIND,
+    clarification_mode: HOST_DECLARED_ACCEPTANCE_CLARIFICATION_MODE,
+    target_criterion_id: unresolved.criterion_id,
+    task_request_digest: sha256Canonical(USER_REQUEST),
+    meaning_input_digest: unresolved.input_digest,
+  }
+  const declaration = {
+    schema_version: 1 as const,
+    kind: TRUSTED_HOST_FILESYSTEM_PATH_LIST_DECLARATION_KIND,
+    declaration_id: randomUUID(),
+    user_request: USER_REQUEST,
+    user_request_digest: sha256Canonical(USER_REQUEST),
+    target_document: 'meta/tree-index.md',
+    format_profile: 'markdown_bullet_paths' as const,
+    inventory_scope: { roots: ['apps'] },
+    coverage: { mode: 'complete_scoped_inventory' as const },
+    preserved_input_selectors: ['docs/notes.md'],
+    limits: { max_document_bytes: 32_000, max_entries: 128 },
+    acceptance_clarification: binding,
+  }
+  const clarified = applyHostDeclaredPathListClarification({ meaning, declaration })
+  const projectRootReal = realpathSync.native(root)
+  const admission = admitFilesystemPathListForLiveSession(
+    projectRootReal,
+    USER_REQUEST,
+    declaration,
+  )
+  const frozen = freezeTaskContract(
+    buildTaskContractV1({
+      mode: 'chat',
+      user_request: USER_REQUEST,
+      acceptance: clarified.criteria,
+      acceptance_criteria: clarified.criteria.map(row => row.description),
+      provenance: [
+        ...clarified.provenance,
+        pathListAdmissionProvenanceRecord(admission.admission_record_digest),
+      ],
+    }),
+  )
+  const candidateSha = 'f'.repeat(64)
+  const owner: CriterionCompletionOwnerV1 = {
+    contract: frozen,
+    runId: 'path-list-run-a',
+    projectRoot: root,
+    filesystemPathListAdmission: admission,
+    hasGovernedMutationLineage: () => true,
+    candidateRevisionSha: () => candidateSha,
+  }
+  const service = createCriterionCompletionServiceV1(() => owner)
+  service.refreshNativePathListEvidence()
+  const handle = service.pathListVerificationRequest()
+  assert.ok(handle)
+  owner.runId = 'path-list-run-b'
+  assert.deepEqual(service.evaluateOwnedPathListVerification(handle).errors, [
+    'PATH_LIST_REQUEST_UNTRUSTED',
+  ])
 })
