@@ -63,8 +63,24 @@ export function createProgressLedger(): ProgressLedger {
   };
 }
 
+/** Host-observed tool execution; discovery reads are not verifier evidence by themselves. */
+export interface ExecutedToolReceipt {
+  toolName: string;
+  dispatched: boolean;
+  completed: boolean;
+  denied: boolean;
+  denialReasonCode?: string;
+}
+
+export function executedToolsProvideProgress(
+  receipts: readonly ExecutedToolReceipt[],
+): boolean {
+  return receipts.some(receipt => receipt.dispatched && receipt.completed && !receipt.denied);
+}
+
 export interface CycleObservation {
   at_turn: number;
+  executedTools?: ExecutedToolReceipt[];
   /** Paths newly identified as task-relevant (localization). */
   localizedPaths?: string[];
   /** Changed hypothesis / plan key. */
@@ -103,6 +119,13 @@ export function recordProgressCycle(
   const deltas: ProgressDeltaKind[] = [];
   const evidence: string[] = [];
   const targetsRead: string[] = [];
+
+  if (observation.executedTools?.length) {
+    if (executedToolsProvideProgress(observation.executedTools)) {
+      deltas.push('patch_attempt');
+      evidence.push('executed_tool_completed');
+    }
+  }
 
   // Context replacement (compaction / branch) discards what the model retained:
   // previously read bytes are no longer in context, so re-reads are necessary

@@ -23,18 +23,22 @@ export interface IsolationBrokerFlags {
  * Dirty-tree fail-closed applies when isolation is required or
  * BABEL_REQUIRE_CLEAN_TREE=1 (everyday host_profile may still mutate dirty).
  */
-export function resolveIsolationBrokerFlags(projectRoot: string): IsolationBrokerFlags {
+export function resolveIsolationBrokerFlags(
+  projectRoot: string,
+  env: NodeJS.ProcessEnv = process.env,
+): IsolationBrokerFlags {
   const d = evaluateGovernedIsolation(
-    process.env['BABEL_EXECUTION_PROFILE'],
-    process.env['BABEL_BENCHMARK_DOCKER_IMAGE'] ?? null,
+    env['BABEL_EXECUTION_PROFILE'],
+    env['BABEL_BENCHMARK_DOCKER_IMAGE'] ?? null,
+    env,
   );
   const isolationRequired =
     d.kind === 'fail_closed' || d.kind === 'docker' || d.kind === 'host_escalated';
   const isolationAvailable = d.kind === 'docker';
   const hostFallbackAllowed = d.kind === 'host_escalated' || d.kind === 'host_profile';
   const enforceClean =
-    process.env['BABEL_REQUIRE_CLEAN_TREE'] === '1' || isolationRequired;
-  const gitDirty = enforceClean && detectWorkingTreeDirty(projectRoot);
+    env['BABEL_REQUIRE_CLEAN_TREE'] === '1' || isolationRequired;
+  const gitDirty = enforceClean && detectWorkingTreeDirty(projectRoot, env);
   const ownership = getExecutionContext()?.mutationOwnership;
   const changes = gitDirty && ownership?.matchesRoot(projectRoot)
     ? ownership.classifyChanges() : null;
@@ -42,11 +46,11 @@ export function resolveIsolationBrokerFlags(projectRoot: string): IsolationBroke
     ? changes.unexpectedPaths.length > 0 || changes.unverifiablePaths.length > 0
     : gitDirty;
   const dirtyTree =
-    process.env['BABEL_DIRTY_TREE'] === '1'
+    env['BABEL_DIRTY_TREE'] === '1'
       ? true
-      : process.env['BABEL_DIRTY_TREE'] === '0'
+      : env['BABEL_DIRTY_TREE'] === '0'
         ? false
-        : enforceClean && (process.env['BABEL_REQUIRE_CLEAN_TREE'] === '1' ? gitDirty : unexpectedDirty);
+        : enforceClean && (env['BABEL_REQUIRE_CLEAN_TREE'] === '1' ? gitDirty : unexpectedDirty);
   return {
     isolationRequired,
     isolationAvailable,

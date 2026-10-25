@@ -139,4 +139,26 @@ describe('D02 progress evidence alignment', () => {
     assert.equal(newEpoch.hasDelta, true);
     assert.ok(newEpoch.deltas.includes('localization'));
   });
+
+  test('git status style reads alone are not verifier progress; executed tools are', () => {
+    const ledger = createProgressLedger();
+    const discoveryOnly = recordProgressCycle(ledger, {
+      at_turn: 1,
+      reads: [{ path: 'src/status-output.txt', contentHash: 'git-status-snapshot' }],
+    });
+    assert.equal(discoveryOnly.hasDelta, true);
+    assert.ok(!discoveryOnly.deltas.includes('patch_attempt'));
+
+    const denied = recordProgressCycle(ledger, {
+      at_turn: 2,
+      executedTools: [{ toolName: 'run_command', dispatched: true, completed: false, denied: true, denialReasonCode: 'PREREQUISITE' }],
+    });
+    assert.equal(denied.hasDelta, false);
+
+    const completed = recordProgressCycle(ledger, {
+      at_turn: 3,
+      executedTools: [{ toolName: 'edit_file', dispatched: true, completed: true, denied: false }],
+    });
+    assert.ok(completed.deltas.includes('patch_attempt'));
+  });
 });

@@ -22,9 +22,12 @@ import { isCredentialReadPath } from '../sandbox.js';
  * Returns false when git is unavailable / not a repo (fail-open on detection).
  * Env overrides for tests: BABEL_DIRTY_TREE=1 force dirty, =0 force clean.
  */
-export function detectWorkingTreeDirty(projectRoot: string): boolean {
-  if (process.env['BABEL_DIRTY_TREE'] === '1') return true;
-  if (process.env['BABEL_DIRTY_TREE'] === '0') return false;
+export function detectWorkingTreeDirty(
+  projectRoot: string,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  if (env['BABEL_DIRTY_TREE'] === '1') return true;
+  if (env['BABEL_DIRTY_TREE'] === '0') return false;
   try {
     const result = spawnSync('git', ['status', '--porcelain'], {
       cwd: projectRoot,
