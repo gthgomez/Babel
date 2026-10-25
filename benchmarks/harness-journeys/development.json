@@ -462,16 +462,29 @@
       "git": true,
       "files": {
         "BASELINE.md": "src/main.mjs previously returned version 1.\n",
-        "src/main.mjs": "export const version = 2\n"
+        "src/main.mjs": "export const version = 1\n"
       },
       "dirtyFiles": {},
       "untrackedFiles": {},
       "siblings": {
         "Boreal": {
-          "src/main.mjs": "export const version = 99\n"
+          "src/main.mjs": "export const version = 10\n"
         }
       },
-      "rootName": "Atlas"
+      "rootName": "Atlas",
+      "history": [
+        {
+          "src/main.mjs": "export const version = 2\n"
+        }
+      ],
+      "siblingHistories": {
+        "Boreal": [
+          {
+            "src/main.mjs": "export const version = 99\n"
+          }
+        ]
+      },
+      "workspaceLayout": true
     },
     "J18": {
       "git": false,

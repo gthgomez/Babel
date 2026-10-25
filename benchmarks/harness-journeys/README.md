@@ -25,9 +25,39 @@ observation callback reads host evidence, not model claims. Each attempted cell
 is retained before another starts. Missing usage is unknown, never free.
 Adapters enforce the supplied execution limits and own cancellation/settlement.
 
-Preparation does not start source servers, connected test services, steering or
-fault injectors. It does not claim executable graders, rendered HTML acceptance,
-blind prose scores or product task completion. Those host integrations are
-required before the relevant journey can qualify a backend. A rubric's presence
-alone is never a passing oracle. `npm run test:harness-journeys` exercises the
-evaluation boundary and fixture preparation without paid inference.
+The preparation command records steering schedules without executing them.
+`withJourneyResources` starts owned loopback source/record services, persists
+their read/effect receipts outside candidate grants, and closes them on failure.
+It includes one-shot source failure and commit-then-lost-reply controls. Atlas
+and Boreal have distinct Git histories with supplied-baseline tags; their
+discoverable workspace excludes the protected evaluator directory.
+
+Executable development oracles inspect host-captured immutable snapshots.
+They never open candidate-selected filesystem paths. Code runs through the
+existing hardened Docker clean-room executor with a host-selected pinned image;
+expected values remain in the host, and exit zero alone cannot pass. HTML uses
+an optional local Playwright renderer with script disabled and requests blocked.
+Missing isolated execution, renderer or independent blind assessment remains
+unavailable. Blind jobs exclude route identity and bind answer, artifact and
+rubric hashes. The host must obtain scores in a separate trusted context; helper
+objects and calibration scores do not establish reviewer independence.
+
+The development code oracle supports synchronous computational ESM exports and
+their captured relative JavaScript dependency closure (up to 64 files/4 MiB).
+Other runtime envelopes, including external packages, dynamic imports and async
+return values, remain unavailable. Inside Docker, a closed VM realm receives
+only source and literal arguments; primitive results cross to trusted worker
+serialization without candidate process/stdout access or host callbacks.
+Node's VM is not the OS security boundary. Atlas/Boreal inspection additionally
+compares captured HEAD, working-tree status and Git metadata hashes, and resume
+grading requires one later settlement for every admitted submission identity.
+Git capture requires stopped writers and the protected preparation digest;
+changed metadata is rejected before host Git interprets any repository config.
+
+`npm run test:harness-journeys` exercises the grading boundary and fixtures
+without paid inference. Docker/browser calibration requires explicit admission
+via `BABEL_JOURNEY_ORACLE_TEST_IMAGE` (local pinned image) and
+`BABEL_JOURNEY_HTML_TEST=1`; run sequentially with a resource budget. Scripted
+reference observations calibrate the oracles, never qualify a backend. Actual
+engine steering, provider execution, held-out outcomes and default selection
+remain separate qualification work. A rubric or prepared schedule is not a pass.

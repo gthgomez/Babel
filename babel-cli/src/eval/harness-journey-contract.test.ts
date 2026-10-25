@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import test from 'node:test'
 import {
@@ -177,4 +177,17 @@ test('unsafe journey IDs and portable ID collisions are refused before preparati
   const file = join(root, 'corpus.json')
   await writeFile(file, JSON.stringify(corpus))
   await assert.rejects(readJourneyCorpus(file), /collision/i)
+})
+
+test('named repository discovery has two sibling Git histories and a protected external baseline', async () => {
+  const corpus = await readJourneyCorpus(fileURLToPath(new URL('../../../benchmarks/harness-journeys/development.json', import.meta.url)))
+  const spec = corpus.journeys.find(row => row.id === 'J17')!
+  const root = await mkdtemp(join(tmpdir(), 'babel-journey-histories-'))
+  const prepared = await prepareJourneyFixture(spec, corpus.fixtures[spec.fixtureId]!, join(root, 'cell'))
+  assert.notEqual(prepared.gitHead, prepared.gitBaselineHead)
+  assert.equal(dirname(prepared.candidateRoot), prepared.workingDirectory)
+  assert.equal(prepared.protectedRoot.startsWith(prepared.workingDirectory), false)
+  const boreal = prepared.siblingRepositories['Boreal']!
+  assert.notEqual(boreal.head, boreal.baselineHead)
+  assert.equal(await readFile(join(boreal.root, 'src/main.mjs'), 'utf8'), 'export const version = 99\n')
 })
