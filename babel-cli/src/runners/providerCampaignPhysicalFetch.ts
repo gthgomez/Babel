@@ -77,18 +77,19 @@ export class CampaignPhysicalFetchSession {
       })
     } catch (error) {
       if (error instanceof RunStoppedError) {
-        this.settleOpenAdmissionAfterRunStopped(this.physicalFetchCallbackEntered)
+        try {
+          this.settleOpenAdmissionAfterRunStopped()
+        } catch (settleError) {
+          throw settleError
+        }
       }
       throw error
     }
   }
 
-  /**
-   * Physical-session owner settlement after handoff: zero when the fetch callback
-   * never ran; unknown only when transmission may have started.
-   */
-  settleOpenAdmissionAfterRunStopped(physicalFetchCallbackEntered: boolean): void {
-    if (physicalFetchCallbackEntered) {
+  /** Physical-session owner settlement after handoff; uses owned callback-entry state only. */
+  private settleOpenAdmissionAfterRunStopped(): void {
+    if (this.physicalFetchCallbackEntered) {
       this.settleUnknownOnOpenAdmission()
       return
     }
