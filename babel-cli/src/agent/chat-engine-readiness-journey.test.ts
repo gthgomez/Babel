@@ -11,6 +11,7 @@ import { spawnSync } from 'node:child_process'
 import test from 'node:test'
 import { ChatEngine } from './chatEngine.js'
 import type { ChatEvent } from './chatEngine.js'
+import type { TerminalOutcome } from '../schemas/agentContracts.js'
 import type { ResolvedModelPolicy } from '../modelPolicy.js'
 import type { ToolStreamEvent } from '../runners/base.js'
 import { refreshDryRunState } from '../localTools.js'
@@ -119,13 +120,35 @@ function buildRunner(plan: ToolStreamEvent[][]): {
   }
 }
 
-function soleTerminalOutcome(events: ChatEvent[]): string | undefined {
+const FILE_EDIT_WITHOUT_VERIFIER_OUTCOMES = new Set<TerminalOutcome>([
+  'UNVERIFIED_PATCH',
+  'NO_CHANGE_REQUIRED',
+  'NEEDS_HUMAN_DECISION',
+  'BLOCKED_POLICY',
+])
+
+const REQUIRED_VERIFIER_BLOCKED_OUTCOMES = new Set<TerminalOutcome>([
+  'UNVERIFIED_PATCH',
+  'NEEDS_HUMAN_DECISION',
+  'BLOCKED_POLICY',
+  'AGENT_FAILURE',
+  'BLOCKED_EXTERNAL',
+])
+
+function assertAuthoritativeTerminalOutcome(
+  events: ChatEvent[],
+  allowed: ReadonlySet<TerminalOutcome>,
+): TerminalOutcome {
   const terminal = events.filter(event => ['done', 'failed', 'cancelled'].includes(event.type))
   assert.equal(terminal.length, 1, `expected one terminal event, got ${terminal.map(e => e.type).join(',')}`)
   const event = terminal[0]
-  if (event?.type === 'done') return event.outcome
-  if (event?.type === 'failed') return event.outcome
-  return undefined
+  assert.notEqual(event?.type, 'cancelled', 'cancelled terminal is not authoritative fulfillment')
+  assert.ok(event?.type === 'done' || event?.type === 'failed', `unexpected terminal type: ${event?.type}`)
+  const outcome = event.type === 'done' ? event.outcome : event.outcome
+  assert.ok(outcome !== undefined, 'terminal must include an authoritative outcome')
+  assert.notEqual(outcome, 'VERIFIED_COMPLETE')
+  assert.ok(allowed.has(outcome), `outcome ${outcome} not in allowed set ${[...allowed].join(',')}`)
+  return outcome
 }
 
 test('P02: repeated shell denial is suppressed after one policy evaluation; reads stay authorized', async t => {
@@ -202,8 +225,7 @@ test('P02: repeated shell denial is suppressed after one policy evaluation; read
     'Set src/task.ts so it exports const answer = 42. Do not modify user-notes.md. File edit only; shell is not required.',
   ))
 
-  const outcome = soleTerminalOutcome(events)
-  assert.notEqual(outcome, 'VERIFIED_COMPLETE')
+  assertAuthoritativeTerminalOutcome(events, FILE_EDIT_WITHOUT_VERIFIER_OUTCOMES)
 
   const log = (engine as unknown as {
     toolCallLog: Array<{ tool: string; exit_code?: number; error?: string; detail?: string }>
@@ -308,15 +330,9 @@ test('P02: shell-required task rejects dishonest VERIFIED_COMPLETE without autho
   const events = await collectStream(engine.submitMessageStream(
     'Fix src/task.ts and prove it by running npm test. Verification requires the test command.',
   ))
-  const outcome = soleTerminalOutcome(events)
-  assert.notEqual(outcome, 'VERIFIED_COMPLETE', 'model prose cannot authorize completion without green verifier receipt')
-  assert.ok(
-    outcome === 'UNVERIFIED_PATCH' ||
-      outcome === 'NEEDS_HUMAN_DECISION' ||
-      outcome === 'BLOCKED_POLICY' ||
-      outcome === 'AGENT_FAILURE' ||
-      outcome === undefined,
-    `unexpected terminal outcome: ${outcome}`,
+  assertAuthoritativeTerminalOutcome(
+    events,
+    REQUIRED_VERIFIER_BLOCKED_OUTCOMES,
   )
 
   const log = (engine as unknown as { toolCallLog: Array<{ tool: string; exit_code?: number }> }).toolCallLog

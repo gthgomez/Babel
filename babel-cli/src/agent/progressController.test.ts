@@ -514,7 +514,7 @@ describe("ProgressController prerequisite denial probe", () => {
     prerequisiteKey: "isolation_unavailable:shell",
     taskId: "task-1",
     environmentIdentity: "env-a",
-    revisionKey: "1:0:0:0",
+    revisionKey: "1:0:0",
     ...over,
   });
 
@@ -530,7 +530,7 @@ describe("ProgressController prerequisite denial probe", () => {
     const pc = new ProgressController();
     pc.setTrustedEnvironmentIdentity("env-a");
     assert.strictEqual(pc.admitPrerequisiteDenialProbe(scope()), true);
-    assert.strictEqual(pc.admitPrerequisiteDenialProbe(scope({ revisionKey: "1:1:0:0" })), true);
-    assert.strictEqual(pc.admitPrerequisiteDenialProbe(scope({ revisionKey: "1:1:0:0" })), false);
+    assert.strictEqual(pc.admitPrerequisiteDenialProbe(scope({ revisionKey: "1:1:0" })), true);
+    assert.strictEqual(pc.admitPrerequisiteDenialProbe(scope({ revisionKey: "1:1:0" })), false);
   });
 });

@@ -41,11 +41,12 @@ export function bindCapabilityRecoveryScope(
 
 /** Fingerprint of governed isolation facts; changes re-arm shell prerequisite probes. */
 export function isolationPrerequisiteRevisionKey(flags: IsolationBrokerFlags): string {
+  // Dirty-tree is a separate broker gate; unrelated edits must not re-admit the
+  // same isolation_unavailable shell denial.
   return [
     flags.isolationRequired ? '1' : '0',
     flags.isolationAvailable ? '1' : '0',
     flags.hostFallbackAllowed ? '1' : '0',
-    flags.dirtyTree ? '1' : '0',
   ].join(':');
 }
 
