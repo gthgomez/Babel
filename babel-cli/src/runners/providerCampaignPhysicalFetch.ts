@@ -8,6 +8,8 @@ import type { RunControl } from '../runtime/run-control.js'
 /** Immutable per-invocation campaign state; never stored on the runner instance. */
 export class CampaignPhysicalFetchSession {
   private openAdmission: PreparedProviderRequest | null = null
+  /** True only after dispatchRunOperation invoked the physical fetch callback. */
+  private physicalFetchCallbackEntered = false
 
   constructor(private readonly callbacks: RunnerCallbacks | undefined) {}
 
@@ -62,19 +64,48 @@ export class CampaignPhysicalFetchSession {
     fetch: () => Promise<Response>
   }): Promise<Response> {
     const meter = this.meter
+    this.physicalFetchCallbackEntered = false
     await this.admitBeforeWire(input.basePrepared, input.physicalAttemptId, input.runControl)
     if (!meter) {
       return input.fetch()
     }
     try {
       meter.gate.repeatRunControlBeforeFetch(input.runControl)
-      return await dispatchRunOperation(input.runControl, 'model', input.operationId, input.fetch)
+      return await dispatchRunOperation(input.runControl, 'model', input.operationId, () => {
+        this.physicalFetchCallbackEntered = true
+        return input.fetch()
+      })
     } catch (error) {
       if (error instanceof RunStoppedError) {
-        this.settleUnknownOnOpenAdmission()
+        this.settleOpenAdmissionAfterRunStopped(this.physicalFetchCallbackEntered)
       }
       throw error
     }
+  }
+
+  /**
+   * Physical-session owner settlement after handoff: zero when the fetch callback
+   * never ran; unknown only when transmission may have started.
+   */
+  settleOpenAdmissionAfterRunStopped(physicalFetchCallbackEntered: boolean): void {
+    if (physicalFetchCallbackEntered) {
+      this.settleUnknownOnOpenAdmission()
+      return
+    }
+    this.settleZeroOnOpenAdmission()
+  }
+
+  settleZeroOnOpenAdmission(): void {
+    const meter = this.meter
+    const prepared = this.openAdmission
+    if (!meter || !prepared) return
+    meter.gate.settleZeroForProvableNoWire({
+      executionStage: meter.executionStage,
+      requestId: prepared.request_id,
+      attemptId: prepared.attempt_id,
+    })
+    this.openAdmission = null
+    this.physicalFetchCallbackEntered = false
   }
 
   settleUnknownOnOpenAdmission(): void {
@@ -87,6 +118,7 @@ export class CampaignPhysicalFetchSession {
       attemptId: prepared.attempt_id,
     })
     this.openAdmission = null
+    this.physicalFetchCallbackEntered = false
   }
 
   settleFromCompleted(completed: ProviderInvocationCompleted): void {
@@ -100,6 +132,7 @@ export class CampaignPhysicalFetchSession {
       completed,
     })
     this.openAdmission = null
+    this.physicalFetchCallbackEntered = false
   }
 
   finalizeInvocation(status: 'delivered' | 'failed', completed: ProviderInvocationCompleted): void {

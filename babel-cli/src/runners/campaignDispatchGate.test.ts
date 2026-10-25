@@ -100,7 +100,7 @@ test('gate pre-wire stop after reserve zero-settles without physical fetch', asy
   assert.equal(reloaded.readSnapshot().operations[0]?.actualMicroUsd, 0)
 })
 
-test('physical session pre-fetch stop after handoff keeps unknown exposure', async (t) => {
+test('physical session stop before fetch callback zero-settles after handoff', async (t) => {
   const root = mkdtempSync(join(tmpdir(), 'babel-campaign-physical-prewire-stop-'))
   t.after(() => rmSync(root, { recursive: true, force: true }))
   const owner = randomUUID()
@@ -130,12 +130,54 @@ test('physical session pre-fetch stop after handoff keeps unknown exposure', asy
     }),
     (error: unknown) => error instanceof RunStoppedError,
   )
-  session.settleUnknownOnOpenAdmission()
+  session.settleOpenAdmissionAfterRunStopped(false)
+  session.settleOpenAdmissionAfterRunStopped(false)
   assert.equal(physicalFetch, 0)
+  const operation = store.readSnapshot().operations[0]!
+  assert.equal(operation.actualMicroUsd, 0)
+  assert.equal(operation.settledUnknown, false)
+  assert.equal(committedMicroUsd(store), 0)
+})
+
+test('physical session stop after fetch callback entered keeps unknown exposure', async (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-campaign-physical-callback-stop-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const owner = randomUUID()
+  const store = new CampaignBudgetStore({
+    statePath: join(root, 'campaign-budget.json'),
+    campaignId: 'pilot',
+    limitMicroUsd: PILOT_CAMPAIGN_LIMIT_MICRO_USD,
+  })
+  const gate = new CampaignDispatchGate({ campaignId: 'pilot', store, taskOwnerId: owner })
+  const prepared = qualifiedPreparedRequest()
+  const session = new CampaignPhysicalFetchSession({
+    campaignMeter: { executionStage: 'chat', gate },
+  })
+  const control = createRunControl({ runId: 'run-3', turnId: 'turn-3', generation: 1 })
+  const stop = {
+    owner: control.owner,
+    kind: 'cancelled' as const,
+    reasonCode: 'cancelled',
+    source: 'user' as const,
+  }
+  let physicalFetch = 0
+  await assert.rejects(
+    () => session.dispatchAdmittedFetch({
+      basePrepared: prepared,
+      physicalAttemptId: prepared.attempt_id,
+      operationId: 'provider_fetch',
+      runControl: control,
+      fetch: async () => {
+        physicalFetch += 1
+        throw new RunStoppedError(stop)
+      },
+    }),
+    (error: unknown) => error instanceof RunStoppedError,
+  )
+  assert.equal(physicalFetch, 1)
   const operation = store.readSnapshot().operations[0]!
   assert.equal(operation.actualMicroUsd, null)
   assert.equal(operation.settledUnknown, true)
-  assert.ok(operation.upperBoundMicroUsd > 0)
   assert.equal(committedMicroUsd(store), operation.upperBoundMicroUsd)
 })
 
