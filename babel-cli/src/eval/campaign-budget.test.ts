@@ -137,3 +137,51 @@ test('large safe integers cannot wrap the cap arithmetic into an admission', () 
   assert.equal(budget.reserve('last', 1), true)
   assert.equal(budget.remainingMicroUsd(), 0)
 })
+
+test('zero actual settlement is valid and restores through snapshots', () => {
+  const budget = new CampaignBudget(options)
+  assert.equal(budget.reserve('noop', 40), true)
+  assert.equal(budget.settle('noop', 0), 'settled')
+  assert.equal(budget.remainingMicroUsd(), 100)
+  assert.equal(budget.settle('noop', 0), 'unchanged')
+  const snapshot = budget.snapshot()
+  assert.equal(snapshot.operations[0]?.actualMicroUsd, 0)
+  const restored = new CampaignBudget({ ...options, snapshot })
+  assert.equal(restored.remainingMicroUsd(), 100)
+  assert.equal(restored.reserve('after-zero', 1), true)
+})
+
+test('snapshot import rejects non-boolean admissionClosed and admission drift', () => {
+  const budget = new CampaignBudget(options)
+  budget.reserve('underestimated', 30)
+  budget.settle('underestimated', 45)
+  const valid = budget.snapshot()
+  assert.throws(
+    () => new CampaignBudget({ ...options, snapshot: { ...valid, admissionClosed: 'yes' as unknown as boolean } }),
+    /snapshot admission/,
+  )
+  assert.throws(
+    () => new CampaignBudget({ ...options, snapshot: { ...valid, admissionClosed: false } }),
+    /snapshot admission/,
+  )
+  const open = new CampaignBudget(options)
+  open.reserve('held', 10)
+  const openSnapshot = open.snapshot()
+  assert.throws(
+    () => new CampaignBudget({ ...options, snapshot: { ...openSnapshot, admissionClosed: true } }),
+    /snapshot admission/,
+  )
+})
+
+test('failed persistence of an over-bound settlement keeps admission closed', () => {
+  let failSettleRecording = false
+  const budget = new CampaignBudget({ ...options, persist: () => {
+    if (failSettleRecording) throw new Error('recording unavailable')
+  } })
+  assert.equal(budget.reserve('underestimated', 30), true)
+  failSettleRecording = true
+  assert.throws(() => budget.settle('underestimated', 45), /recording unavailable/)
+  assert.equal(budget.remainingMicroUsd(), 70)
+  assert.equal(budget.snapshot().operations[0]?.actualMicroUsd, null)
+  assert.equal(budget.reserve('must-not-admit', 1), false)
+})

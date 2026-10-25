@@ -39,8 +39,14 @@ function assertIdentity(value: string): void {
   }
 }
 
-function assertAmount(amount: number): void {
+function assertReserveBound(amount: number): void {
   if (!Number.isSafeInteger(amount) || amount <= 0) {
+    throw new Error('amount')
+  }
+}
+
+function assertSettledActual(amount: number): void {
+  if (!Number.isSafeInteger(amount) || amount < 0) {
     throw new Error('amount')
   }
 }
@@ -82,27 +88,43 @@ function freezeSnapshot(input: {
   })
 }
 
+function mustCloseAdmission(operations: readonly MutableOperation[], limitMicroUsd: number): boolean {
+  for (const operation of operations) {
+    if (operation.actualMicroUsd !== null && operation.actualMicroUsd > operation.upperBoundMicroUsd) {
+      return true
+    }
+  }
+  const committed = operations.reduce((sum, operation) => sum + chargeMicroUsd(operation), 0)
+  return limitMicroUsd - committed < 0
+}
+
 function validateImportedSnapshot(
   options: CampaignBudgetOptions,
   snapshot: CampaignBudgetSnapshot,
-): MutableOperation[] {
+): { operations: MutableOperation[]; admissionClosed: boolean } {
   if (snapshot.campaignId !== options.campaignId || snapshot.limitMicroUsd !== options.limitMicroUsd) {
     throw new Error('snapshot identity')
   }
   assertLimitMicroUsd(snapshot.limitMicroUsd)
+  if (typeof snapshot.admissionClosed !== 'boolean') {
+    throw new Error('snapshot admission')
+  }
   const seen = new Set<string>()
-  return snapshot.operations.map((operation) => {
+  const operations = snapshot.operations.map((operation) => {
     if (seen.has(operation.operationId)) {
       throw new Error('duplicate operation')
     }
     seen.add(operation.operationId)
     assertIdentity(operation.operationId)
-    assertAmount(operation.upperBoundMicroUsd)
+    assertReserveBound(operation.upperBoundMicroUsd)
     if (operation.actualMicroUsd !== null) {
-      assertAmount(operation.actualMicroUsd)
+      assertSettledActual(operation.actualMicroUsd)
     }
     if (typeof operation.settledUnknown !== 'boolean') {
       throw new Error('snapshot identity')
+    }
+    if (operation.settledUnknown && operation.actualMicroUsd !== null) {
+      throw new Error('snapshot admission')
     }
     return {
       operationId: operation.operationId,
@@ -111,6 +133,11 @@ function validateImportedSnapshot(
       settledUnknown: operation.settledUnknown,
     }
   })
+  const derivedAdmissionClosed = mustCloseAdmission(operations, snapshot.limitMicroUsd)
+  if (snapshot.admissionClosed !== derivedAdmissionClosed) {
+    throw new Error('snapshot admission')
+  }
+  return { operations, admissionClosed: snapshot.admissionClosed }
 }
 
 export class CampaignBudget {
@@ -130,8 +157,9 @@ export class CampaignBudget {
       this.persist = options.persist
     }
     if (options.snapshot) {
-      this.operations.push(...validateImportedSnapshot(options, options.snapshot))
-      this.admissionClosed = options.snapshot.admissionClosed
+      const imported = validateImportedSnapshot(options, options.snapshot)
+      this.operations.push(...imported.operations)
+      this.admissionClosed = imported.admissionClosed
     }
   }
 
@@ -142,7 +170,7 @@ export class CampaignBudget {
 
   reserve(operationId: string, upperBoundMicroUsd: number): boolean {
     assertIdentity(operationId)
-    assertAmount(upperBoundMicroUsd)
+    assertReserveBound(upperBoundMicroUsd)
     if (this.mutating) {
       throw new Error('mutation in progress')
     }
@@ -200,7 +228,7 @@ export class CampaignBudget {
       })
     }
 
-    assertAmount(actualMicroUsd)
+    assertSettledActual(actualMicroUsd)
     if (existing.actualMicroUsd !== null) {
       if (existing.actualMicroUsd === actualMicroUsd) {
         return 'unchanged'
@@ -254,9 +282,13 @@ export class CampaignBudget {
       try {
         this.persist?.(this.snapshot())
       } catch (error) {
+        const closedAdmission = this.admissionClosed
         this.operations.length = 0
         this.operations.push(...before)
         this.admissionClosed = admissionBefore
+        if (closedAdmission && !admissionBefore) {
+          this.admissionClosed = true
+        }
         throw error
       }
       return result
