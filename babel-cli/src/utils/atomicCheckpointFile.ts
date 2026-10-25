@@ -27,7 +27,9 @@ export function renameCheckpointSync(source: string, destination: string, option
 
 /**
  * Flush directory metadata after rename so the new entry is durable.
- * Windows FlushFileBuffers rejects a read-only directory handle (EPERM).
+ * Matches `observationStore` `syncDir` / `syncFile` (`babel-cli/src/evidence/observationStore.ts`):
+ * `openSync(path, process.platform === 'win32' ? 'r+' : 'r')` then `fsyncSync`.
+ * On Windows, a read-only directory handle opens but `fsyncSync` fails with EPERM.
  */
 export function fsyncDirectoryEntrySync(directoryPath: string): void {
   const fd = openSync(directoryPath, process.platform === 'win32' ? 'r+' : 'r')
