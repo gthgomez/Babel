@@ -81,8 +81,12 @@ export async function readCommittedBlobs(root, requested, consume) {
     const result = await exited
     if (result.failed || index !== ids.length || header.length || remaining !== null || stderrBytes) throw new Error('committed blob read incomplete')
   } catch (error) {
-    child.kill()
-    await exited
+    if (child.exitCode === null) child.kill()
     throw error
+  } finally {
+    await exited.catch(() => {})
+    child.stdout?.destroy()
+    child.stderr?.destroy()
+    child.stdin?.destroy()
   }
 }
