@@ -9,7 +9,9 @@ import { CampaignBudgetDeniedError } from './campaignDispatchGate.js'
 import { CampaignBudgetStore } from '../eval/campaign-budget-store.js'
 import { CampaignDispatchGate } from './campaignDispatchGate.js'
 import { PILOT_CAMPAIGN_LIMIT_MICRO_USD } from '../eval/campaign-budget.js'
-import { LIVE_OPENROUTER_MODEL_ID } from '../modelPolicy.js'
+import { CAMPAIGN_QUALIFIED_OPENROUTER_MODEL_ID } from '../eval/campaign-qualified-routes.js'
+import { CommandCodeApiRunner } from './commandCodeApi.js'
+import { CampaignRouteUnsupportedError } from './campaignDispatchGate.js'
 
 test('rejected campaign reservation never reaches physical fetch on runner path', async (t) => {
   const root = mkdtempSync(join(tmpdir(), 'babel-campaign-gate-'))
@@ -31,7 +33,7 @@ test('rejected campaign reservation never reaches physical fetch on runner path'
     return new Response(JSON.stringify({ choices: [{ message: { content: 'ok' } }] }), { status: 200 })
   }
   t.after(() => { globalThis.fetch = saved })
-  const model = LIVE_OPENROUTER_MODEL_ID
+  const model = CAMPAIGN_QUALIFIED_OPENROUTER_MODEL_ID
   const runner = new OpenRouterApiRunner(model, {}, {
     explicitCredential: 'synthetic-fixture',
     env: { OPENROUTER_API_KEY: 'synthetic-fixture' },
@@ -62,13 +64,13 @@ test('admitted reservation reaches fetch once and leaves durable ledger evidence
   globalThis.fetch = async () => {
     physicalFetch++
     return new Response(JSON.stringify({
-      model: LIVE_OPENROUTER_MODEL_ID,
+      model: CAMPAIGN_QUALIFIED_OPENROUTER_MODEL_ID,
       choices: [{ message: { content: 'ok' } }],
       usage: { prompt_tokens: 10, completion_tokens: 5, cost: 0.00001 },
     }), { status: 200, headers: { 'Content-Type': 'application/json' } })
   }
   t.after(() => { globalThis.fetch = saved })
-  const model = LIVE_OPENROUTER_MODEL_ID
+  const model = CAMPAIGN_QUALIFIED_OPENROUTER_MODEL_ID
   const runner = new OpenRouterApiRunner(model, {}, {
     explicitCredential: 'synthetic-fixture',
     env: { OPENROUTER_API_KEY: 'synthetic-fixture' },
@@ -109,13 +111,13 @@ test('each physical transport retry reserves before wire', async (t) => {
       return new Response('timeout', { status: 408 })
     }
     return new Response(JSON.stringify({
-      model: LIVE_OPENROUTER_MODEL_ID,
+      model: CAMPAIGN_QUALIFIED_OPENROUTER_MODEL_ID,
       choices: [{ message: { content: 'ok' } }],
       usage: { prompt_tokens: 10, completion_tokens: 5, cost: 0.00001 },
     }), { status: 200, headers: { 'Content-Type': 'application/json' } })
   }
   t.after(() => { globalThis.fetch = saved })
-  const runner = new RetryOnceRunner(LIVE_OPENROUTER_MODEL_ID, {}, {
+  const runner = new RetryOnceRunner(CAMPAIGN_QUALIFIED_OPENROUTER_MODEL_ID, {}, {
     explicitCredential: 'synthetic-fixture',
     env: { OPENROUTER_API_KEY: 'synthetic-fixture' },
   })
@@ -124,4 +126,64 @@ test('each physical transport retry reserves before wire', async (t) => {
   })
   assert.equal(calls, 2)
   assert.equal(store.readSnapshot().operations.length, 2)
+})
+
+test('campaign gate admits Command Code qualified deepseek route only', async (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-campaign-command-code-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const owner = randomUUID()
+  const store = new CampaignBudgetStore({
+    statePath: join(root, 'campaign-budget.json'),
+    campaignId: 'pilot',
+    limitMicroUsd: PILOT_CAMPAIGN_LIMIT_MICRO_USD,
+  })
+  const gate = new CampaignDispatchGate({ campaignId: 'pilot', store, taskOwnerId: owner })
+  let physicalFetch = 0
+  const saved = globalThis.fetch
+  globalThis.fetch = async () => {
+    physicalFetch++
+    return new Response(JSON.stringify({
+      model: 'deepseek/deepseek-v4.1-flash',
+      choices: [{ message: { content: 'ok' } }],
+      usage: { prompt_tokens: 10, completion_tokens: 5 },
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+  }
+  t.after(() => { globalThis.fetch = saved })
+  const model = 'deepseek/deepseek-v4.1-flash'
+  const runner = new CommandCodeApiRunner(model, { maxTokens: 128 }, {
+    explicitCredential: 'synthetic-fixture',
+    env: { COMMAND_CODE_API_KEY: 'synthetic-fixture' },
+  })
+  await runner.executeRaw('hello', {
+    campaignMeter: { executionStage: 'chat', gate },
+  })
+  assert.equal(physicalFetch, 1)
+})
+
+test('non-qualified OpenRouter models reject before physical fetch', async (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-campaign-route-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const owner = randomUUID()
+  const store = new CampaignBudgetStore({
+    statePath: join(root, 'campaign-budget.json'),
+    campaignId: 'pilot',
+    limitMicroUsd: PILOT_CAMPAIGN_LIMIT_MICRO_USD,
+  })
+  const gate = new CampaignDispatchGate({ campaignId: 'pilot', store, taskOwnerId: owner })
+  let physicalFetch = 0
+  const saved = globalThis.fetch
+  globalThis.fetch = async () => {
+    physicalFetch++
+    return new Response('{}', { status: 200 })
+  }
+  t.after(() => { globalThis.fetch = saved })
+  const runner = new OpenRouterApiRunner('z-ai/glm-5.3-flash', {}, {
+    explicitCredential: 'synthetic-fixture',
+    env: { OPENROUTER_API_KEY: 'synthetic-fixture' },
+  })
+  await assert.rejects(
+    () => runner.executeRaw('hello', { campaignMeter: { executionStage: 'chat', gate } }),
+    (error: unknown) => error instanceof CampaignRouteUnsupportedError,
+  )
+  assert.equal(physicalFetch, 0)
 })

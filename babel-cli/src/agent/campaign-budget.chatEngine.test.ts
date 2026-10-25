@@ -1,30 +1,84 @@
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import test from 'node:test'
 import { buildProviderRetryCallbacks } from './chatEngineProviderAccounting.js'
 import { createParityRuntime } from './chatEngineParityBridge.js'
+import { ChatEngine } from './chatEngine.js'
+import type { ResolvedModelPolicy } from '../modelPolicy.js'
 import { OpenRouterApiRunner } from '../runners/openRouterApi.js'
 import { CampaignBudgetStore } from '../eval/campaign-budget-store.js'
 import { CampaignDispatchGate, CampaignBudgetDeniedError } from '../runners/campaignDispatchGate.js'
 import { buildCampaignOperationId } from '../eval/campaign-metering.js'
 import { PILOT_CAMPAIGN_LIMIT_MICRO_USD } from '../eval/campaign-budget.js'
-import { LIVE_OPENROUTER_MODEL_ID } from '../modelPolicy.js'
+import { CAMPAIGN_QUALIFIED_OPENROUTER_MODEL_ID } from '../eval/campaign-qualified-routes.js'
 import { globalCostTracker } from '../services/costTracker.js'
 import { TurnRoutingReceiptLog } from './turnRoutingReceipt.js'
 
-test('provider accounting callbacks block main chat fetch when campaign budget is exhausted', async (t) => {
+const QUALIFIED_OPENROUTER_POLICY: ResolvedModelPolicy = {
+  policyPath: 'campaign-qualified-openrouter',
+  family: 'openrouter',
+  selectedTier: 'cheap',
+  resolvedBackendKey: 'deepseek-v4-flash-openrouter',
+  provider: 'openrouter',
+  providerModelId: CAMPAIGN_QUALIFIED_OPENROUTER_MODEL_ID,
+  expensive: false,
+  enabled: true,
+  experimental: false,
+  blockedWithoutExplicitOptIn: false,
+  approximateInputTokens: 0,
+  approximateOutputTokens: 0,
+  warnings: [],
+  waterfall: [],
+  stagePolicies: [],
+  contextWindow: 128_000,
+  contextLimit: 128_000,
+  maxOutputTokens: 4096,
+  nativeToolUse: true,
+}
+
+function seedCampaignEngine(t: test.TestContext, limitMicroUsd: number): {
+  root: string
+  owner: string
+  gate: CampaignDispatchGate
+  store: CampaignBudgetStore
+  engine: ChatEngine
+  runner: OpenRouterApiRunner
+} {
   const root = mkdtempSync(join(tmpdir(), 'babel-campaign-engine-'))
+  mkdirSync(join(root, 'src'), { recursive: true })
   t.after(() => rmSync(root, { recursive: true, force: true }))
   const owner = randomUUID()
   const store = new CampaignBudgetStore({
     statePath: join(root, 'campaign-budget.json'),
     campaignId: 'pilot',
-    limitMicroUsd: 500,
+    limitMicroUsd,
   })
   const gate = new CampaignDispatchGate({ campaignId: 'pilot', store, taskOwnerId: owner })
+  const runner = new OpenRouterApiRunner(CAMPAIGN_QUALIFIED_OPENROUTER_MODEL_ID, { maxTokens: 128 }, {
+    explicitCredential: 'synthetic-fixture',
+    env: { OPENROUTER_API_KEY: 'synthetic-fixture' },
+  })
+  const engine = new ChatEngine({
+    task: 'Say ok',
+    projectRoot: root,
+    model: CAMPAIGN_QUALIFIED_OPENROUTER_MODEL_ID,
+    providerRunner: runner,
+    providerPolicy: QUALIFIED_OPENROUTER_POLICY,
+    campaignDispatchGate: gate,
+    maxTurns: 2,
+  })
+  const parity = (engine as unknown as { parity: ReturnType<typeof createParityRuntime> }).parity
+  parity.turnId = 'turn-1'
+  const allowance = (engine as unknown as { taskAllowance: { taskOwnerId: string } }).taskAllowance
+  allowance.taskOwnerId = owner
+  return { root, owner, gate, store, engine, runner }
+}
+
+test('ChatEngine main path blocks provider fetch when campaign budget is exhausted', async (t) => {
+  const { store, engine, runner } = seedCampaignEngine(t, 500)
   store.transact((budget) => budget.reserve('prefill', 500))
   let physicalFetch = 0
   const saved = globalThis.fetch
@@ -36,43 +90,25 @@ test('provider accounting callbacks block main chat fetch when campaign budget i
     }), { status: 200, headers: { 'Content-Type': 'application/json' } })
   }
   t.after(() => { globalThis.fetch = saved })
-  const parity = createParityRuntime(owner)
-  parity.turnId = 'turn-1'
-  const host = {
-    conversation: [],
-    engineRunDir: root,
-    options: { projectRoot: root, task: 'Say ok' },
-    parity,
-    taskAllowance: { taskOwnerId: owner },
-    campaignDispatchGate: gate,
-    _turnIndex: 1,
-    _lastPhase: null,
-    routingReceiptLog: new TurnRoutingReceiptLog(),
-    apiTokenCount: 0,
-    lastRequestCompletionTokens: null,
-    lastRequestPromptTokens: null,
-    lastRequestModelId: null,
-    lastLogicalRequestId: null,
-    pendingParentRequestId: null,
-    pendingUsageChargeId: null,
-    checkBudgets: () => ({ ok: true }),
-    persistOwnerCharges: () => {},
-    persistTaskCostBaseline: () => {},
-    recordOwnerAccountingFault: () => {},
+  const enginePrivate = engine as unknown as {
+    providerRetryCallbacks: (context: Record<string, unknown>) => import('../runners/base.js').RunnerCallbacks
+    activeSubmissionGeneration: number
+    isSubmissionCurrent: (generation: number) => boolean
+    parity: { turnId: string | null }
+    taskAllowance: { taskOwnerId: string }
   }
-  const callbacks = buildProviderRetryCallbacks(host, {
+  const generation = enginePrivate.activeSubmissionGeneration
+  const ownerCurrent = () => enginePrivate.isSubmissionCurrent(generation)
+  const callbacks = enginePrivate.providerRetryCallbacks({
     executionStage: 'chat',
     usageScope: {
-      taskOwnerId: owner,
+      taskOwnerId: enginePrivate.taskAllowance.taskOwnerId,
       accountingEpoch: globalCostTracker.getAccountingEpoch(),
-      turnId: parity.turnId,
+      turnId: enginePrivate.parity.turnId,
       chargeId: null,
-      isOwnerCurrent: () => true,
+      isOwnerCurrent: ownerCurrent,
     },
-  })
-  const runner = new OpenRouterApiRunner(LIVE_OPENROUTER_MODEL_ID, {}, {
-    explicitCredential: 'synthetic-fixture',
-    env: { OPENROUTER_API_KEY: 'synthetic-fixture' },
+    isOwnerCurrent: ownerCurrent,
   })
   await assert.rejects(
     () => runner.executeRaw('hello', callbacks),
@@ -81,50 +117,99 @@ test('provider accounting callbacks block main chat fetch when campaign budget i
   assert.equal(physicalFetch, 0)
 })
 
-test('critic-stage provider callbacks attach the shared campaign meter', () => {
-  const owner = randomUUID()
-  const gate = new CampaignDispatchGate({
-    campaignId: 'pilot',
-    taskOwnerId: owner,
-    store: new CampaignBudgetStore({
-      statePath: join(mkdtempSync(join(tmpdir(), 'babel-campaign-meter-')), 'campaign-budget.json'),
-      campaignId: 'pilot',
-    }),
-  })
-  const parity = createParityRuntime(owner)
-  const host = {
-    conversation: [],
-    engineRunDir: '/tmp/unused',
-    options: { projectRoot: null, task: 't' },
-    parity,
-    taskAllowance: { taskOwnerId: owner },
-    campaignDispatchGate: gate,
-    _turnIndex: 1,
-    _lastPhase: null,
-    routingReceiptLog: new TurnRoutingReceiptLog(),
-    apiTokenCount: 0,
-    lastRequestCompletionTokens: null,
-    lastRequestPromptTokens: null,
-    lastRequestModelId: null,
-    lastLogicalRequestId: null,
-    pendingParentRequestId: null,
-    pendingUsageChargeId: null,
-    checkBudgets: () => ({ ok: true }),
-    persistOwnerCharges: () => {},
-    persistTaskCostBaseline: () => {},
-    recordOwnerAccountingFault: () => {},
+test('ChatEngine critic path attaches campaign meter from engine options', async (t) => {
+  const { engine, runner, store } = seedCampaignEngine(t, PILOT_CAMPAIGN_LIMIT_MICRO_USD)
+  let physicalFetch = 0
+  const saved = globalThis.fetch
+  globalThis.fetch = async () => {
+    physicalFetch++
+    return new Response(JSON.stringify({
+      model: CAMPAIGN_QUALIFIED_OPENROUTER_MODEL_ID,
+      choices: [{ message: { content: 'critic ok' } }],
+      usage: { prompt_tokens: 8, completion_tokens: 4, cost: 0.00001 },
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } })
   }
-  const callbacks = buildProviderRetryCallbacks(host, {
+  t.after(() => { globalThis.fetch = saved })
+  const enginePrivate = engine as unknown as {
+    providerRetryCallbacks: (context: Record<string, unknown>) => import('../runners/base.js').RunnerCallbacks
+    activeSubmissionGeneration: number
+    isSubmissionCurrent: (generation: number) => boolean
+    parity: { turnId: string | null }
+    taskAllowance: { taskOwnerId: string }
+  }
+  const generation = enginePrivate.activeSubmissionGeneration
+  const ownerCurrent = () => enginePrivate.isSubmissionCurrent(generation)
+  const callbacks = enginePrivate.providerRetryCallbacks({
     executionStage: 'critic',
     usageScope: {
-      taskOwnerId: owner,
+      taskOwnerId: enginePrivate.taskAllowance.taskOwnerId,
       accountingEpoch: globalCostTracker.getAccountingEpoch(),
-      turnId: null,
+      turnId: enginePrivate.parity.turnId,
       chargeId: null,
+      isOwnerCurrent: ownerCurrent,
     },
+    isOwnerCurrent: ownerCurrent,
   })
   assert.equal(callbacks.campaignMeter?.executionStage, 'critic')
-  assert.equal(callbacks.campaignMeter?.gate, gate)
+  await runner.executeRaw('critic prompt', callbacks)
+  assert.equal(physicalFetch, 1)
+  assert.equal(store.readSnapshot().operations.length, 1)
+})
+
+test('ChatEngine retry callbacks reserve once per physical transport attempt', async (t) => {
+  const priorMaxCost = process.env['BABEL_CHAT_MAX_COST']
+  process.env['BABEL_CHAT_MAX_COST'] = 'unlimited'
+  t.after(() => {
+    if (priorMaxCost === undefined) delete process.env['BABEL_CHAT_MAX_COST']
+    else process.env['BABEL_CHAT_MAX_COST'] = priorMaxCost
+  })
+  class RetryOnceRunner extends OpenRouterApiRunner {
+    protected override getRequestMaxRetries(): number {
+      return 2
+    }
+  }
+  const { store, engine } = seedCampaignEngine(t, PILOT_CAMPAIGN_LIMIT_MICRO_USD)
+  const runner = new RetryOnceRunner(CAMPAIGN_QUALIFIED_OPENROUTER_MODEL_ID, { maxTokens: 128 }, {
+    explicitCredential: 'synthetic-fixture',
+    env: { OPENROUTER_API_KEY: 'synthetic-fixture' },
+  })
+  let calls = 0
+  const saved = globalThis.fetch
+  globalThis.fetch = async () => {
+    calls += 1
+    if (calls === 1) {
+      return new Response('timeout', { status: 408 })
+    }
+    return new Response(JSON.stringify({
+      model: CAMPAIGN_QUALIFIED_OPENROUTER_MODEL_ID,
+      choices: [{ message: { content: 'ok' } }],
+      usage: { prompt_tokens: 10, completion_tokens: 5, cost: 0.00001 },
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+  }
+  t.after(() => { globalThis.fetch = saved })
+  const enginePrivate = engine as unknown as {
+    providerRetryCallbacks: (context: Record<string, unknown>) => import('../runners/base.js').RunnerCallbacks
+    activeSubmissionGeneration: number
+    isSubmissionCurrent: (generation: number) => boolean
+    parity: { turnId: string | null }
+    taskAllowance: { taskOwnerId: string }
+  }
+  const generation = enginePrivate.activeSubmissionGeneration
+  const ownerCurrent = () => enginePrivate.isSubmissionCurrent(generation)
+  const callbacks = enginePrivate.providerRetryCallbacks({
+    executionStage: 'chat',
+    usageScope: {
+      taskOwnerId: enginePrivate.taskAllowance.taskOwnerId,
+      accountingEpoch: globalCostTracker.getAccountingEpoch(),
+      turnId: enginePrivate.parity.turnId,
+      chargeId: null,
+      isOwnerCurrent: ownerCurrent,
+    },
+    isOwnerCurrent: ownerCurrent,
+  })
+  await runner.executeRaw('hello', callbacks)
+  assert.equal(calls, 2)
+  assert.equal(store.readSnapshot().operations.length, 2)
 })
 
 test('late completion settles captured campaign gate before owner supersession guard', async (t) => {
@@ -180,9 +265,9 @@ test('late completion settles captured campaign gate before owner supersession g
     request_id: requestId,
     attempt_id: attemptId,
     provider: 'openrouter',
-    requested_model_id: LIVE_OPENROUTER_MODEL_ID,
-    normalized_model_id: LIVE_OPENROUTER_MODEL_ID,
-    sent_model_id: LIVE_OPENROUTER_MODEL_ID,
+    requested_model_id: CAMPAIGN_QUALIFIED_OPENROUTER_MODEL_ID,
+    normalized_model_id: CAMPAIGN_QUALIFIED_OPENROUTER_MODEL_ID,
+    sent_model_id: CAMPAIGN_QUALIFIED_OPENROUTER_MODEL_ID,
     input_digest: 'digest',
   })
   const operationId = buildCampaignOperationId({
@@ -199,11 +284,11 @@ test('late completion settles captured campaign gate before owner supersession g
   callbacks.onInvocationCompleted?.({
     inference_id: randomUUID(),
     provider: 'openrouter',
-    model: LIVE_OPENROUTER_MODEL_ID,
+    model: CAMPAIGN_QUALIFIED_OPENROUTER_MODEL_ID,
     status: 'delivered',
     usage_metadata: {
       provider: 'openrouter',
-      provider_model_id: LIVE_OPENROUTER_MODEL_ID,
+      provider_model_id: CAMPAIGN_QUALIFIED_OPENROUTER_MODEL_ID,
       latency_ms: 1,
       prompt_tokens: 3,
       completion_tokens: 2,

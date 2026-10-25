@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { fork, type ChildProcess } from 'node:child_process'
-import { closeSync, openSync, unlinkSync } from 'node:fs'
+import { closeSync, existsSync, openSync, readFileSync, unlinkSync } from 'node:fs'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -8,6 +8,7 @@ import { once } from 'node:events'
 import { fileURLToPath } from 'node:url'
 import test from 'node:test'
 import { CampaignBudgetStore } from './campaign-budget-store.js'
+import { PILOT_CAMPAIGN_LIMIT_MICRO_USD } from './campaign-budget.js'
 
 const workerPath = fileURLToPath(new URL('./campaign-budget-store.worker.mjs', import.meta.url))
 
@@ -72,17 +73,17 @@ test('settlement persistence failure poisons gate and blocks later dispatch with
   const store = new CampaignBudgetStore({
     statePath,
     campaignId: 'pilot',
-    limitMicroUsd: 10_000,
+    limitMicroUsd: PILOT_CAMPAIGN_LIMIT_MICRO_USD,
   })
   const { CampaignDispatchGate } = await import('../runners/campaignDispatchGate.js')
   const { prepareProviderRequest } = await import('../runners/preparedProviderRequest.js')
-  const { LIVE_OPENROUTER_MODEL_ID } = await import('../modelPolicy.js')
+  const { CAMPAIGN_QUALIFIED_OPENROUTER_MODEL_ID } = await import('./campaign-qualified-routes.js')
   const gate = new CampaignDispatchGate({ campaignId: 'pilot', store, taskOwnerId: 'owner-1' })
   const prepared = prepareProviderRequest({
-    body: JSON.stringify({ model: LIVE_OPENROUTER_MODEL_ID, messages: [{ role: 'user', content: 'hi' }], max_tokens: 16 }),
+    body: JSON.stringify({ model: CAMPAIGN_QUALIFIED_OPENROUTER_MODEL_ID, messages: [{ role: 'user', content: 'hi' }], max_tokens: 16 }),
     mode: 'text',
     provider: 'openrouter',
-    requestedModelId: LIVE_OPENROUTER_MODEL_ID,
+    requestedModelId: CAMPAIGN_QUALIFIED_OPENROUTER_MODEL_ID,
     reservedCompletionTokens: 16,
   })
   await gate.admitBeforeDispatch({ executionStage: 'chat', preparedRequest: prepared })
@@ -95,11 +96,11 @@ test('settlement persistence failure poisons gate and blocks later dispatch with
       completed: {
         inference_id: prepared.request_id,
         provider: 'openrouter',
-        model: LIVE_OPENROUTER_MODEL_ID,
+        model: CAMPAIGN_QUALIFIED_OPENROUTER_MODEL_ID,
         status: 'delivered',
         usage_metadata: {
           provider: 'openrouter',
-          provider_model_id: LIVE_OPENROUTER_MODEL_ID,
+          provider_model_id: CAMPAIGN_QUALIFIED_OPENROUTER_MODEL_ID,
           latency_ms: 1,
           prompt_tokens: 1,
           completion_tokens: 1,
@@ -126,18 +127,18 @@ test('second campaign gate process fails closed after durable poison from persis
   const store = new CampaignBudgetStore({
     statePath,
     campaignId: 'pilot',
-    limitMicroUsd: 10_000,
+    limitMicroUsd: PILOT_CAMPAIGN_LIMIT_MICRO_USD,
   })
   const { CampaignDispatchGate } = await import('../runners/campaignDispatchGate.js')
   const { prepareProviderRequest } = await import('../runners/preparedProviderRequest.js')
-  const { LIVE_OPENROUTER_MODEL_ID } = await import('../modelPolicy.js')
+  const { CAMPAIGN_QUALIFIED_OPENROUTER_MODEL_ID } = await import('./campaign-qualified-routes.js')
   const ownerA = 'owner-a'
   const gateA = new CampaignDispatchGate({ campaignId: 'pilot', store, taskOwnerId: ownerA })
   const prepared = prepareProviderRequest({
-    body: JSON.stringify({ model: LIVE_OPENROUTER_MODEL_ID, messages: [{ role: 'user', content: 'hi' }], max_tokens: 16 }),
+    body: JSON.stringify({ model: CAMPAIGN_QUALIFIED_OPENROUTER_MODEL_ID, messages: [{ role: 'user', content: 'hi' }], max_tokens: 16 }),
     mode: 'text',
     provider: 'openrouter',
-    requestedModelId: LIVE_OPENROUTER_MODEL_ID,
+    requestedModelId: CAMPAIGN_QUALIFIED_OPENROUTER_MODEL_ID,
     reservedCompletionTokens: 16,
   })
   await gateA.admitBeforeDispatch({ executionStage: 'chat', preparedRequest: prepared })
@@ -149,11 +150,11 @@ test('second campaign gate process fails closed after durable poison from persis
     completed: {
       inference_id: prepared.request_id,
       provider: 'openrouter',
-      model: LIVE_OPENROUTER_MODEL_ID,
+      model: CAMPAIGN_QUALIFIED_OPENROUTER_MODEL_ID,
       status: 'delivered',
       usage_metadata: {
         provider: 'openrouter',
-        provider_model_id: LIVE_OPENROUTER_MODEL_ID,
+        provider_model_id: CAMPAIGN_QUALIFIED_OPENROUTER_MODEL_ID,
         latency_ms: 1,
         prompt_tokens: 1,
         completion_tokens: 1,
@@ -170,4 +171,34 @@ test('second campaign gate process fails closed after durable poison from persis
   await assert.rejects(
     () => gateB.admitBeforeDispatch({ executionStage: 'chat', preparedRequest: prepared }),
   )
+})
+
+test('waiter blocked on lock does not reserve after durable poison is written', async (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-campaign-store-poison-barrier-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const statePath = join(root, 'ledger.json')
+  const lockPath = `${statePath}.lock`
+  const store = new CampaignBudgetStore({
+    statePath,
+    campaignId: 'pilot',
+    limitMicroUsd: 10_000,
+  })
+  const holderFd = openSync(lockPath, 'wx', 0o600)
+  let waiterError: unknown
+  const waiter = store.transactAsync((budget) => {
+    budget.reserve('waiter-op', 1)
+  }).catch((error) => {
+    waiterError = error
+  })
+  await new Promise((resolve) => setTimeout(resolve, 50))
+  store.persistPoisonMarker()
+  closeSync(holderFd)
+  try { unlinkSync(lockPath) } catch { /* empty */ }
+  await waiter
+  assert.ok(waiterError)
+  assert.equal(existsSync(`${statePath}.poison`), true)
+  const snapshot = existsSync(statePath)
+    ? JSON.parse(readFileSync(statePath, 'utf8')) as { operations: unknown[] }
+    : { operations: [] }
+  assert.equal(snapshot.operations.length, 0)
 })

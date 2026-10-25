@@ -108,7 +108,6 @@ export class CampaignBudgetStore {
   }
 
   transact<T>(mutate: (budget: CampaignBudget) => T): T {
-    this.assertStoreHealthy()
     const lockPath = `${this.options.statePath}.lock`
     let lockFd: number | undefined
     try {
@@ -119,6 +118,9 @@ export class CampaignBudgetStore {
     const tempPath = `${this.options.statePath}.${randomUUID()}.tmp`
     let mutated = false
     try {
+      if (existsSync(this.poisonPath())) {
+        throw new CampaignBudgetStoreError()
+      }
       mkdirSync(dirname(this.options.statePath), { recursive: true })
       let budget: CampaignBudget
       try {

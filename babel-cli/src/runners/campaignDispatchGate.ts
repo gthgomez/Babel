@@ -3,6 +3,7 @@ import type { PreparedProviderRequest } from './preparedProviderRequest.js'
 import type { RunControl } from '../runtime/run-control.js'
 import { RunStoppedError } from '../runtime/run-control.js'
 import { CampaignBudgetStore, CampaignBudgetStoreError } from '../eval/campaign-budget-store.js'
+import { assertCampaignQualifiedPreparedRequest } from '../eval/campaign-qualified-routes.js'
 import {
   actualMicroUsdFromUsage,
   buildCampaignOperationId,
@@ -53,6 +54,15 @@ export class CampaignDispatchGate {
     }
   }
 
+  assertQualifiedPreparedRequest(prepared: PreparedProviderRequest): void {
+    this.assertRoutedProvider(prepared.provider)
+    try {
+      assertCampaignQualifiedPreparedRequest(prepared)
+    } catch {
+      throw new CampaignRouteUnsupportedError()
+    }
+  }
+
   isLedgerPoisoned(): boolean {
     return this.ledgerPoisoned
   }
@@ -79,7 +89,7 @@ export class CampaignDispatchGate {
     runControl?: RunControl | undefined
   }): Promise<{ operationId: string }> {
     this.assertLedgerHealthy()
-    this.assertRoutedProvider(input.preparedRequest.provider)
+    this.assertQualifiedPreparedRequest(input.preparedRequest)
     const operationId = buildCampaignOperationId({
       campaignId: this.campaignId,
       taskOwnerId: this.taskOwnerId,
