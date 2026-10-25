@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import type { RunnerInvocationMetadata } from '../runners/base.js'
+import { buildInvocationMetadata } from '../runners/providerResponseMetadata.js'
 import type { OpenRouterApiRunner } from '../runners/openRouterApi.js'
 import { globalCostTracker } from '../services/costTracker.js'
 import { settlementReportedCostUsd } from '../services/settlementReportedCost.js'
@@ -129,6 +130,75 @@ test('trackRunnerUsage keeps explicit unknown when provider_reported_total_charg
   const summary = globalCostTracker.getTaskSummary(owner)
   assert.equal(summary.unknownChargeCount, 1)
   assert.equal(summary.totalCostUSD, 0)
+})
+
+test('metadata builder malformed OpenRouter cost settles unknown, not registry estimate', () => {
+  globalCostTracker.resetSession()
+  const owner = 'owner-malformed-openrouter-cost'
+  const chargeId = 'inf-malformed-cost'
+  const host = mockHost(owner)
+  const scope: ChatUsageScope = {
+    taskOwnerId: owner,
+    accountingEpoch: globalCostTracker.getAccountingEpoch(),
+    turnId: 'turn-1',
+    chargeId,
+    provider: 'openrouter',
+  }
+  globalCostTracker.settleUsage(
+    'deepseek/deepseek-v4-flash-0731', 0, 0, null, null,
+    captureUsageAttribution(scope, chargeId)!,
+    false,
+    'openrouter',
+  )
+  for (const cost of ['bad', Number.NaN] as const) {
+    const metadata = buildInvocationMetadata('openrouter', 'deepseek/deepseek-v4-flash-0731', 1, {
+      prompt_tokens: 100,
+      completion_tokens: 10,
+      cost,
+    })
+    assert.equal(metadata.cost_precision, 'unknown')
+    assert.equal(metadata.provider_reported_total_charge_usd, null)
+    trackRunnerUsage(host, runnerStub(metadata), scope)
+    const summary = globalCostTracker.getTaskSummary(owner)
+    assert.equal(summary.unknownChargeCount, 1)
+    assert.equal(summary.totalCostUSD, 0)
+    globalCostTracker.resetSession()
+    globalCostTracker.settleUsage(
+      'deepseek/deepseek-v4-flash-0731', 0, 0, null, null,
+      captureUsageAttribution(scope, chargeId)!,
+      false,
+      'openrouter',
+    )
+  }
+})
+
+test('metadata builder without usage.cost still allows registry settlement', () => {
+  globalCostTracker.resetSession()
+  const owner = 'owner-missing-openrouter-cost'
+  const chargeId = 'inf-missing-cost'
+  const host = mockHost(owner)
+  const scope: ChatUsageScope = {
+    taskOwnerId: owner,
+    accountingEpoch: globalCostTracker.getAccountingEpoch(),
+    turnId: 'turn-1',
+    chargeId,
+    provider: 'openrouter',
+  }
+  globalCostTracker.settleUsage(
+    'deepseek/deepseek-v4-flash-0731', 0, 0, null, null,
+    captureUsageAttribution(scope, chargeId)!,
+    false,
+    'openrouter',
+  )
+  const metadata = buildInvocationMetadata('openrouter', 'deepseek/deepseek-v4-flash-0731', 1, {
+    prompt_tokens: 100,
+    completion_tokens: 10,
+  })
+  assert.equal(metadata.provider_reported_total_charge_usd, undefined)
+  trackRunnerUsage(host, runnerStub(metadata), scope)
+  const summary = globalCostTracker.getTaskSummary(owner)
+  assert.equal(summary.unknownChargeCount, 0)
+  assert.ok(summary.totalCostUSD > 0 && summary.totalCostUSD < 1)
 })
 
 test('trackRunnerUsage uses registry when provider charge is absent, not estimated_cost_usd as reported', () => {
