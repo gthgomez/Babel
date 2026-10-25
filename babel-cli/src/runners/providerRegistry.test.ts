@@ -18,6 +18,7 @@ describe('provider credential hub', () => {
       'opencode',
       'opencode-go',
         'openrouter',
+        'command-code',
         'openai',
         'anthropic',
         'gemini',

@@ -80,6 +80,11 @@ export function resolveChatModelPolicy(options: ChatModelPolicyOptions): {
   // Explicit opencode requests skip the DeepSeek-only live assertion: naming
   // the backend key IS the opt-in (operator supplies OPENCODE_API_KEY).
   const explicitOpenCodeRequest = requestedBackendEntry?.provider === 'opencode';
+  const explicitCommandCodeRequest = requestedBackendEntry?.provider === 'command-code' &&
+    requestedBackendKey === 'command-code/deepseek-v4.1-flash' &&
+    requestedBackendEntry.model_id === 'deepseek/deepseek-v4.1-flash' &&
+    getProviderSpec('command-code').authorityConformance === 'certified' &&
+    providerSupportsOperation('command-code', 'native_tool_stream');
   const explicitGoRequest = requestedBackendEntry !== undefined && isChatOpenCodeGoRoute({
     provider: requestedBackendEntry.provider,
     providerModelId: requestedBackendEntry.model_id,
@@ -95,6 +100,7 @@ export function resolveChatModelPolicy(options: ChatModelPolicyOptions): {
         key: requestedBackendKey!,
         bindStagesToSelectedModel: true,
         ...(explicitOpenCodeRequest ||
+        explicitCommandCodeRequest ||
         explicitGoRequest ||
         desktopProvider === 'deepseek' ||
         desktopProvider === 'deepinfra' ||
@@ -113,7 +119,7 @@ export function resolveChatModelPolicy(options: ChatModelPolicyOptions): {
 
   assertSelectedProvider(policy.provider);
 
-  if (explicitGoRequest) {
+  if (explicitGoRequest || explicitCommandCodeRequest) {
     const backend = policy.waterfall[0]!;
     policy.stagePolicies = policy.stagePolicies.map(stage => ({
       ...stage,
@@ -121,7 +127,7 @@ export function resolveChatModelPolicy(options: ChatModelPolicyOptions): {
       primaryProvider: backend.provider,
       primaryProviderModelId: backend.providerModelId,
       orderedBackends: [backend],
-      selectionReason: 'Explicit OpenCode Go Chat route stays on the requested model.',
+      selectionReason: `Explicit ${policy.provider} Chat route stays on the requested model.`,
     }));
   }
   return { policy, offline };

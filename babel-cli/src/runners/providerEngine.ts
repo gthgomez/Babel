@@ -19,6 +19,7 @@ import { OpenCodeGoApiRunner } from './openCodeGoApi.js'
 import type { OpenCodeGoCredentialSource } from './openCodeGoCredential.js'
 import type { OpenCodeGoBudget } from './openCodeGoBudget.js'
 import { OpenRouterApiRunner } from './openRouterApi.js'
+import { CommandCodeApiRunner } from './commandCodeApi.js'
 import {
   providerSupportsOperation,
   type BenchmarkProviderId,
@@ -72,6 +73,11 @@ function createAdapter(options: ProviderEngineOptions): RawLlmRunner {
     ...credential,
   }
   switch (options.provider) {
+    case 'command-code':
+      return new CommandCodeApiRunner(options.modelId, options.sampling, {
+        ...(options.apiKeyEnvVar ? { apiKeyEnvVar: options.apiKeyEnvVar } : {}),
+        ...credential,
+      })
     case 'deepinfra':
       return new DeepInfraApiRunner(
         options.modelId,

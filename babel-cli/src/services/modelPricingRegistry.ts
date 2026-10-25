@@ -1,4 +1,4 @@
-export type PricingProvider = 'deepinfra' | 'deepseek' | 'openrouter' | 'opencode-go';
+export type PricingProvider = 'deepinfra' | 'deepseek' | 'openrouter' | 'opencode-go' | 'command-code';
 export type CostPrecision = 'exact' | 'conservative' | 'unknown';
 
 export interface ModelPricingEntry {
@@ -48,6 +48,18 @@ export const DEEPSEEK_SUPPORTED_MODELS = ['deepseek-v4-flash', 'deepseek-v4-pro'
 export type DeepSeekModelId = (typeof DEEPSEEK_SUPPORTED_MODELS)[number];
 
 export const MODEL_PRICING_REGISTRY: Record<string, ModelPricingEntry> = {
+  'command-code:deepseek/deepseek-v4.1-flash': {
+    provider: 'command-code',
+    modelId: 'deepseek/deepseek-v4.1-flash',
+    inputCostPer1M: 0.30,
+    outputCostPer1M: 1.20,
+    inputCacheHitCostPer1M: 0.006,
+    inputCacheMissCostPer1M: 0.30,
+    cacheInputDiscountAvailable: true,
+    sourceUrl: 'https://commandcode.ai/models',
+    verifiedAt: '2026-10-24',
+    conservativeWarning: 'Published peak rates bound usage estimates; billing-window rates and plan discounts are not observed charges.',
+  },
   'opencode-go:deepseek-v4.1-flash': {
     provider: 'opencode-go',
     modelId: 'deepseek-v4.1-flash',
