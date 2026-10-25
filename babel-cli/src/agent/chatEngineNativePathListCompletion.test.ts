@@ -185,6 +185,58 @@ function sseLine(value: Record<string, unknown>): string {
   return `data: ${JSON.stringify(value)}\n\n`
 }
 
+const FIXTURE_CRITIC_PASS = JSON.stringify({
+  verdict: 'pass',
+  confidence: 0.95,
+  reasons: ['fixture critic pass'],
+})
+
+function fixtureJsonCompletion(content: string): Response {
+  return new Response(
+    JSON.stringify({
+      model: CAMPAIGN_QUALIFIED_OPENROUTER_MODEL_ID,
+      choices: [{ message: { content }, finish_reason: 'stop' }],
+      usage: { prompt_tokens: 8, completion_tokens: 12, cost: 0.00001 },
+    }),
+    { headers: { 'Content-Type': 'application/json' } },
+  )
+}
+
+/** Mock transport only: OpenRouter SSE for streaming turns, JSON for critic/compaction auxiliaries. */
+function installPathListFixtureFetch(
+  openRouterSseForTurn: (turn: number) => string,
+): { fetch: typeof globalThis.fetch; openRouterCalls: () => number } {
+  let openRouterTurn = 0
+  const fetchImpl: typeof globalThis.fetch = async (input, init) => {
+    const url = String(input)
+    const rawBody = init?.body ? String(init.body) : ''
+    let stream = false
+    try {
+      stream = (JSON.parse(rawBody) as { stream?: boolean }).stream === true
+    } catch {
+      stream = false
+    }
+    if (url.includes('openrouter.ai') || url.includes('chat/completions')) {
+      if (stream) {
+        openRouterTurn += 1
+        return new Response(openRouterSseForTurn(openRouterTurn - 1), {
+          headers: { 'Content-Type': 'text/event-stream' },
+        })
+      }
+      return fixtureJsonCompletion(FIXTURE_CRITIC_PASS)
+    }
+    if (
+      url.includes('anthropic.com') ||
+      url.includes('deepinfra.com') ||
+      url.includes('compaction')
+    ) {
+      return fixtureJsonCompletion('Compaction summary fixture.')
+    }
+    throw new Error(`unexpected fetch in path-list fixture: ${url}`)
+  }
+  return { fetch: fetchImpl, openRouterCalls: () => openRouterTurn }
+}
+
 function openRouterSseBody(turn: number): string {
   const model = CAMPAIGN_QUALIFIED_OPENROUTER_MODEL_ID
   const usage = { prompt_tokens: 12, completion_tokens: 6, cost: 0.00001 }
@@ -243,12 +295,12 @@ function applyProductionPathListEnv(projectRoot: string, runsRoot: string): stri
   process.env['BABEL_DOCKER_DISABLE'] = 'false'
   process.env['BABEL_DRY_RUN'] = '0'
   process.env['BABEL_DRY_RUN_SOURCE'] = 'session'
-  process.env['BABEL_DIFF_CRITIC'] = '0'
-  process.env['BABEL_COMPACTION'] = 'off'
   process.env['BABEL_DIRTY_TREE'] = '0'
   process.env['BABEL_RUNS_DIR'] = runsRoot
-  process.env['BABEL_OFFLINE'] = '1'
-  process.env['BABEL_CHAT_MAX_COST'] = 'unlimited'
+  assert.equal(process.env['BABEL_DIFF_CRITIC'], undefined)
+  assert.equal(process.env['BABEL_COMPACTION'], undefined)
+  assert.equal(process.env['BABEL_OFFLINE'], undefined)
+  assert.equal(process.env['BABEL_CHAT_MAX_COST'], undefined)
   assert.equal(process.env['BABEL_BENCHMARK_MODE'], undefined)
   assert.equal(process.env['BABEL_BENCHMARK_AUTO_APPROVE'], undefined)
   assert.equal(process.env['BABEL_AUTONOMY_LEASE'], undefined)
@@ -262,8 +314,8 @@ test('native path-list criterion: VERIFIED_COMPLETE via governed index update wi
   const prior = Object.fromEntries(MANAGED_ENV.map(key => [key, process.env[key]]))
   const projectRoot = mkdtempSync(join(tmpdir(), 'babel-native-path-list-completion-'))
   const runsRoot = join(projectRoot, 'runs')
-  let physicalFetch = 0
   const savedFetch = globalThis.fetch
+  const transport = installPathListFixtureFetch(openRouterSseBody)
   t.after(() => {
     globalThis.fetch = savedFetch
     for (const key of MANAGED_ENV) {
@@ -285,11 +337,7 @@ test('native path-list criterion: VERIFIED_COMPLETE via governed index update wi
     env: { OPENROUTER_API_KEY: 'synthetic-fixture' },
   })
 
-  globalThis.fetch = async () => {
-    physicalFetch++
-    const body = openRouterSseBody(physicalFetch - 1)
-    return new Response(body, { headers: { 'Content-Type': 'text/event-stream' } })
-  }
+  globalThis.fetch = transport.fetch
 
   const engine = new ChatEngine({
     runId,
@@ -338,7 +386,7 @@ test('native path-list criterion: VERIFIED_COMPLETE via governed index update wi
   const indexBody = readFileSync(join(projectRoot, 'meta', 'tree-index.md'), 'utf8')
 
   assert.equal(indexBody, treeIndexBody(), 'governed write must update the path index document')
-  assert.ok(physicalFetch >= 2, `expected at least tool+completion transport calls, saw ${physicalFetch}`)
+  assert.ok(transport.openRouterCalls() >= 2, `expected at least tool+completion transport calls, saw ${transport.openRouterCalls()}`)
   assert.ok(
     (engine as unknown as { parity: { sessionEvents: { events: Array<{ kind: string }> } } })
       .parity.sessionEvents.events.some(event => event.kind === 'mutation_batch'),
@@ -364,8 +412,8 @@ test('native path-list: shell verifier attempt stays blocked under safe_repo iso
   const prior = Object.fromEntries(MANAGED_ENV.map(key => [key, process.env[key]]))
   const projectRoot = mkdtempSync(join(tmpdir(), 'babel-native-path-list-shell-'))
   const runsRoot = join(projectRoot, 'runs')
-  let physicalFetch = 0
   const savedFetch = globalThis.fetch
+  const transport = installPathListFixtureFetch(openRouterSseBody)
   t.after(() => {
     globalThis.fetch = savedFetch
     for (const key of MANAGED_ENV) {
@@ -384,12 +432,12 @@ test('native path-list: shell verifier attempt stays blocked under safe_repo iso
     explicitCredential: 'synthetic-fixture',
     env: { OPENROUTER_API_KEY: 'synthetic-fixture' },
   })
-  globalThis.fetch = async () => {
-    physicalFetch++
+  globalThis.fetch = installPathListFixtureFetch((turn) => {
+    if (turn !== 0) return openRouterSseBody(turn)
     const model = CAMPAIGN_QUALIFIED_OPENROUTER_MODEL_ID
     const usage = { prompt_tokens: 12, completion_tokens: 6, cost: 0.00001 }
     const args = JSON.stringify({ command: 'find apps -type f' })
-    const body =
+    return (
       sseLine({
         model,
         choices: [{
@@ -405,8 +453,8 @@ test('native path-list: shell verifier attempt stays blocked under safe_repo iso
       }) +
       sseLine({ model, choices: [{ delta: {}, finish_reason: 'tool_calls' }], usage }) +
       'data: [DONE]\n\n'
-    return new Response(body, { headers: { 'Content-Type': 'text/event-stream' } })
-  }
+    )
+  }).fetch
 
   const engine = new ChatEngine({
     runId,
@@ -428,7 +476,6 @@ test('native path-list: shell verifier attempt stays blocked under safe_repo iso
     toolCallLog: Array<{ tool: string; error?: string }>
   }
 
-  assert.ok(physicalFetch >= 1)
   assert.notEqual(outcome, 'VERIFIED_COMPLETE')
   assert.equal(box.lastVerifierReceipt, null)
   assert.equal(box.executedVerifierLedger.length, 0)
@@ -448,6 +495,7 @@ test('native path-list: copied verification request is not authoritative', async
   const projectRoot = mkdtempSync(join(tmpdir(), 'babel-native-path-list-forged-'))
   const runsRoot = join(projectRoot, 'runs')
   const savedFetch = globalThis.fetch
+  const transport = installPathListFixtureFetch(openRouterSseBody)
   t.after(() => {
     globalThis.fetch = savedFetch
     for (const key of MANAGED_ENV) {
@@ -461,13 +509,7 @@ test('native path-list: copied verification request is not authoritative', async
   applyProductionPathListEnv(projectRoot, runsRoot)
   seedRepository(projectRoot)
   const declaration = declarationPayload(hostClarificationBinding())
-  let physicalFetch = 0
-  globalThis.fetch = async () => {
-    physicalFetch++
-    return new Response(openRouterSseBody(physicalFetch - 1), {
-      headers: { 'Content-Type': 'text/event-stream' },
-    })
-  }
+  globalThis.fetch = transport.fetch
   const engine = new ChatEngine({
     runId: `native-path-list-forged-${randomUUID()}`,
     task: USER_REQUEST,

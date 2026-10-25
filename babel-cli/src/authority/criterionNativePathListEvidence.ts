@@ -1,15 +1,42 @@
 import { realpathSync } from 'node:fs'
 import { sha256Canonical } from '../acceptance/canonical.js'
 import { verifyFilesystemPathList } from './filesystemPathListVerifier.js'
-import type { LiveSessionFilesystemPathListAdmissionV1 } from '../agent/liveSessionFilesystemPathListAdmission.js'
+import {
+  assertPathListSessionBinding,
+  type LiveSessionFilesystemPathListAdmissionV1,
+} from '../agent/liveSessionFilesystemPathListAdmission.js'
+import { LiveSessionAuthorityError } from '../agent/liveSessionAuthorityError.js'
+import { declarationContentHash } from './trustedHostFilesystemPathList.js'
 import type { AcceptanceRequirementV1, TaskContractV1 } from '../agent/taskContract.js'
 import { HOST_PATH_LIST_ACCEPTANCE_VERIFIER_ID } from '../agent/pathListHostDeclaredClarification.js'
 import { buildAgentEndpointV1 } from '../agent/agentEndpoint.js'
 import type { EvidenceGraph, EvidenceNode } from '../evidence/evidenceGraph.js'
 import type { TrustedExecutionAuthorityV1 } from './trustedExecutionSupervisor.js'
 import type { FilesystemPathListVerifierResultV1 } from './filesystemPathListVerifier.js'
+import { mutationPathsFromSessionEvents } from '../evidence/chatRevisionBinding.js'
 
 export const NATIVE_PATH_LIST_COMPLETION_ENDPOINT_ID = HOST_PATH_LIST_ACCEPTANCE_VERIFIER_ID
+
+/** Governed mutation must touch the admitted target document or scoped inventory roots. */
+export function hasScopedPathListGovernedMutationLineage(input: {
+  events: ReadonlyArray<{ kind: string; paths?: readonly string[] }>
+  admission: LiveSessionFilesystemPathListAdmissionV1
+}): boolean {
+  const paths = mutationPathsFromSessionEvents(input.events)
+  if (paths.length === 0) return false
+  const target = input.admission.declaration.target_document.replace(/\\/g, '/')
+  const roots = input.admission.declaration.inventory_scope.roots.map(root =>
+    root.replace(/\\/g, '/').replace(/\/$/, ''),
+  )
+  const rootPrefix = input.admission.project_root_real.replace(/\\/g, '/').replace(/\/$/, '')
+  return paths.some(pathValue => {
+    let norm = pathValue.replace(/\\/g, '/')
+    if (norm.startsWith(`${rootPrefix}/`)) norm = norm.slice(rootPrefix.length + 1)
+    else if (norm === rootPrefix) norm = ''
+    if (norm === target) return true
+    return roots.some(root => norm === root || norm.startsWith(`${root}/`))
+  })
+}
 
 export function isHostPathListAcceptanceRequirement(
   requirement: AcceptanceRequirementV1,
@@ -130,6 +157,22 @@ export function runOwnedHostPathListVerification(input: {
   if (!input.candidateSha) {
     return { ok: false, code: 'PATH_LIST_MUTATION_LINEAGE_MISSING' }
   }
+  try {
+    assertPathListSessionBinding({
+      projectRoot: input.projectRoot,
+      task: input.admission.declaration.user_request,
+      contract: input.contract,
+      admission: input.admission,
+    })
+  } catch (err) {
+    const code =
+      err instanceof LiveSessionAuthorityError ? err.code : 'PATH_LIST_SESSION_BINDING_FAILED'
+    return { ok: false, code }
+  }
+  const expectedTarget = declarationContentHash(input.admission.declaration)
+  if (row.verification.target !== expectedTarget) {
+    return { ok: false, code: 'PATH_LIST_VERIFICATION_TARGET_MISMATCH' }
+  }
   const root = realpathSync.native(input.projectRoot)
   const result = verifyFilesystemPathList(
     root,
@@ -170,6 +213,6 @@ export function publishOwnedHostPathListEvidence(input: {
     candidateSha: input.candidateSha,
     result: input.result,
   })
-  if (input.graph.getNode(node.id)) return
-  input.graph.addNode(node)
+  if (input.graph.getNode(node.id)) input.graph.replaceNode(node)
+  else input.graph.addNode(node)
 }

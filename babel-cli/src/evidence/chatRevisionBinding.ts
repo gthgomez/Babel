@@ -16,7 +16,7 @@ import {
   evaluateCompletionEvidenceSync,
   type CompletionEvidenceEvaluation,
 } from './completionEvidence.js';
-import { EvidenceGraph } from './evidenceGraph.js';
+import { EvidenceGraph, type CompletionEvaluationV1 } from './evidenceGraph.js';
 import { independentVerifierProofErrors } from './independentVerifier.js';
 import { discoverVerifierInputClosure } from './revisionBoundReceipt.js';
 import { analyzeVerifierIdentity } from '../services/verifierIdentity.js';
@@ -599,6 +599,8 @@ export function evaluateChatCompletionProof(input: {
   executionProfile?: string;
   /** Owned native path-list verification satisfied the completion proof obligations. */
   nativePathListSatisfied?: boolean;
+  /** Private criterion oracle evaluation; required when nativePathListSatisfied is true. */
+  criterionEvaluation?: CompletionEvaluationV1;
 }): { compliant: boolean; errors?: string[] } {
   const errors: string[] = [];
   if (!input.hasMutation) errors.push('missing production mutation evidence');
@@ -631,6 +633,16 @@ export function evaluateChatCompletionProof(input: {
     )
   ) {
     errors.push('missing canonical verifier-attempt evidence');
+  }
+
+  if (nativePathList) {
+    const evaluation = input.criterionEvaluation
+    if (!evaluation || evaluation.verified !== true) {
+      errors.push('native path-list criterion oracle not verified')
+      for (const err of evaluation?.errors ?? []) {
+        if (!errors.includes(err)) errors.push(err)
+      }
+    }
   }
 
   if (!nativePathList) {

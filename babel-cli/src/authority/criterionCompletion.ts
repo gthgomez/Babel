@@ -92,9 +92,9 @@ function snapshotNativePathListNodes(graph: EvidenceGraph): EvidenceNode[] {
   )
 }
 
-function restoreNativePathListNodes(graph: EvidenceGraph, nodes: EvidenceNode[]): void {
-  for (const node of nodes) {
-    if (!graph.getNode(node.id)) graph.addNode(node)
+function stripNativePathListEvidenceNodes(graph: EvidenceGraph): void {
+  for (const id of graph.getNodesMap().keys()) {
+    if (id.endsWith(':native-path-list')) graph.removeNode(id)
   }
 }
 
@@ -111,11 +111,17 @@ function resyncNativePathListVerifierTrust(authority: CompletionAuthority): void
   } catch { /* fail closed */ }
 }
 
-function resetGraphPreservingNativePathList(authority: CompletionAuthority): void {
-  const retained = snapshotNativePathListNodes(authority.graph)
+function clearNativePathListAuthorityState(authority: CompletionAuthority): void {
+  stripNativePathListEvidenceNodes(authority.graph)
+  delete authority.pathListRequest
+      delete authority.pathListState
+    }
+
+function resetCompletionAuthorityWorkspace(authority: CompletionAuthority): void {
   authority.graph = new EvidenceGraph()
-  restoreNativePathListNodes(authority.graph, retained)
-  resyncNativePathListVerifierTrust(authority)
+  authority.supervisor = createTrustedExecutionSupervisorV1()
+  delete authority.candidateSha
+  clearNativePathListAuthorityState(authority)
 }
 
 function refreshNativePathListEvidenceOnAuthority(
@@ -125,19 +131,23 @@ function refreshNativePathListEvidenceOnAuthority(
   try {
     const owner = authority.readOwner()
     if (!owner.contract?.frozen || !owner.projectRoot || !owner.filesystemPathListAdmission) {
+      clearNativePathListAuthorityState(authority)
       authority.pathListState = { verified: false, candidateSha: '', errors: ['PATH_LIST_ADMISSION_MISSING'] }
       return
     }
     if (!contractUsesNativePathListCompletion(owner.contract)) {
+      clearNativePathListAuthorityState(authority)
       authority.pathListState = { verified: false, candidateSha: '', errors: ['PATH_LIST_CONTRACT_UNSUPPORTED'] }
       return
     }
     if (owner.hasGovernedMutationLineage && !owner.hasGovernedMutationLineage()) {
+      clearNativePathListAuthorityState(authority)
       authority.pathListState = { verified: false, candidateSha: '', errors: ['PATH_LIST_MUTATION_LINEAGE_MISSING'] }
       return
     }
     const revisionBefore = owner.candidateRevisionSha?.() ?? null
     if (!revisionBefore) {
+      clearNativePathListAuthorityState(authority)
       authority.pathListState = { verified: false, candidateSha: '', errors: ['PATH_LIST_MUTATION_LINEAGE_MISSING'] }
       return
     }
@@ -149,10 +159,12 @@ function refreshNativePathListEvidenceOnAuthority(
     })
     const revisionAfter = owner.candidateRevisionSha?.() ?? null
     if (!verified.ok) {
+      clearNativePathListAuthorityState(authority)
       authority.pathListState = { verified: false, candidateSha: '', errors: [verified.code] }
       return
     }
     if (revisionAfter !== revisionBefore) {
+      clearNativePathListAuthorityState(authority)
       authority.pathListState = { verified: false, candidateSha: '', errors: ['PATH_LIST_MUTATION_DURING_VERIFY'] }
       return
     }
@@ -176,6 +188,7 @@ function refreshNativePathListEvidenceOnAuthority(
       pathListVerificationBindings.set(authority.pathListRequest, { serviceContext })
     }
   } catch {
+    clearNativePathListAuthorityState(authority)
     authority.pathListState = { verified: false, candidateSha: '', errors: ['PATH_LIST_REFRESH_FAILED'] }
   }
 }
@@ -209,12 +222,11 @@ export function createCriterionCompletionServiceV1(
           root, device: physicalRoot.dev, inode: physicalRoot.ino })
         if (authority.epoch !== epoch) {
           authority.epoch = epoch
-          resetGraphPreservingNativePathList(authority)
-          authority.supervisor = createTrustedExecutionSupervisorV1()
+          resetCompletionAuthorityWorkspace(authority)
+        } else {
+          authority.graph = new EvidenceGraph()
           delete authority.candidateSha
         }
-        resetGraphPreservingNativePathList(authority)
-        delete authority.candidateSha
         const published = publishCriterionEvidenceFromChatExecution({
           graph: authority.graph,
           supervisor: authority.supervisor,
@@ -300,13 +312,17 @@ export function evaluateCriterionCompletionV1(
       root, device: physicalRoot.dev, inode: physicalRoot.ino })
     if (authority.epoch !== epoch) {
       authority.epoch = epoch
-      authority.supervisor = createTrustedExecutionSupervisorV1()
-      resetGraphPreservingNativePathList(authority)
-      delete authority.candidateSha
+      resetCompletionAuthorityWorkspace(authority)
     }
     resyncNativePathListVerifierTrust(authority)
+    if (contractUsesNativePathListCompletion(owner.contract)) {
+      refreshNativePathListEvidenceOnAuthority(authority, request.context)
+    }
     const candidateSha =
-      authority.pathListState?.candidateSha ?? authority.candidateSha ?? 'unobserved'
+      authority.pathListState?.candidateSha ?? authority.candidateSha ?? null
+    if (!candidateSha || !/^[0-9a-f]{64}$/i.test(candidateSha)) {
+      return unknown('acceptance_candidate_revision_missing', owner.contract)
+    }
     return evaluateCompletionGateV1({
       contract: owner.contract, graph: authority.graph, repository: root,
       candidate_sha: candidateSha, run_id: owner.runId,

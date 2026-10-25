@@ -316,6 +316,16 @@ export class EvidenceGraph {
     this.nodes.set(node.id, { ...node, parents: [...node.parents] });
   }
 
+  replaceNode(node: EvidenceNode): void {
+    if (this.sealed) throw new Error("Evidence graph is sealed and immutable.");
+    this.nodes.set(node.id, { ...node, parents: [...node.parents] });
+  }
+
+  removeNode(id: string): boolean {
+    if (this.sealed) throw new Error("Evidence graph is sealed and immutable.");
+    return this.nodes.delete(id);
+  }
+
   addEdge(edge: EvidenceEdge): void {
     if (this.sealed) throw new Error("Evidence graph is sealed and immutable.");
     if (this.edges.has(edge.id))

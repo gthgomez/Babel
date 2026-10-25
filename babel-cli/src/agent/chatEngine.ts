@@ -215,7 +215,6 @@ import {
   type ExecutorKernel,
 } from "../executor/kernel.js";
 import {
-  evaluateChatCompletionProof,
   mutationPathsFromSessionEvents,
   resolveGovernedCriterionCandidateRevisionSha,
   toGateToolLog,
@@ -235,7 +234,6 @@ import {
   paritySettleToolNotStarted,
   parityAuthorizeRecoveredOutcomeRetry,
   parityTryFailover,
-  finalizeParityTurnSync,
   finalizeParityCancel,
   type ParityRuntime,
 } from "./chatEngineParityBridge.js";
@@ -428,6 +426,9 @@ import {
 import {restoreTurnRuntime} from './restoreTurnRuntime.js';
 import {admitObjectiveSubmission,prepareObjectiveSubmission,type PreparedObjectiveSubmission,type ObjectiveAdmissionHost,type ObjectiveAdmissionResult} from './chatEngineObjectiveAdmission.js';
 import type { CriterionCompletionServiceV1 } from '../authority/criterionCompletion.js';
+import { buildCriterionBackedChatCompletionProof } from './criterionCompletionChatBridge.js';
+import { buildChatEngineTerminalInput } from './chatEngineTerminalInput.js';
+import { hasScopedPathListGovernedMutationLineage } from '../authority/criterionNativePathListEvidence.js';
 import {requiresObjectiveLifecycle,activeObjectiveSessionLog,activeAcceptanceSessionLog} from './taskObjectiveLifecycle.js';
 
 import { admitProjectContentRead, isReadOnlyChat } from "./chatReadOnly.js";
@@ -955,10 +956,14 @@ export class ChatEngine {
         projectRoot: this.options.projectRoot ?? null,
         ...(admission ? { filesystemPathListAdmission: admission } : {}),
         candidateRevisionSha: () => this.criterionCandidateRevisionSha(),
-        hasGovernedMutationLineage: () =>
-          this.parity.sessionEvents.events.some(
-            (event) => event.kind === "mutation_batch",
-          ),
+        hasGovernedMutationLineage: () => {
+          const pathAdmission = this.parity.liveAuthority?.filesystemPathListAdmission;
+          if (!pathAdmission) return false;
+          return hasScopedPathListGovernedMutationLineage({
+            events: this.parity.sessionEvents.events,
+            admission: pathAdmission,
+          });
+        },
       };
     });
     if (options.admissionStore)
@@ -1442,16 +1447,14 @@ export class ChatEngine {
     compliant: boolean;
     errors?: string[];
   } {
-    this.criterionCompletion?.refreshNativePathListEvidence();
-    return evaluateChatCompletionProof({
+    return buildCriterionBackedChatCompletionProof({
       projectRoot: requireProjectRoot(this.options),
       hasMutation,
       verifierTampered: this.verifierTampered,
       receipt: this.lastVerifierReceipt,
       events: this.parity.sessionEvents.events,
       isAuthoritativeCommand: isAuthoritativeVerifierCommand,
-      nativePathListSatisfied:
-        this.criterionCompletion?.nativePathListProofCompliant() === true,
+      criterionCompletion: this.criterionCompletion,
     });
   }
 
@@ -3761,12 +3764,6 @@ export class ChatEngine {
     return this.activeSubmissionGeneration === ownerGeneration;
   }
 
-  /**
-   * R0-7: the current parent candidate revision, derived from the existing
-   * session mutation batches and RevisionManager. Returns null when the parent
-   * has no mutation scope yet (nothing to compare). Never invents a revision
-   * authority — this is the same computation the completion gate performs.
-   */
   /** Live recheck of mutation + verifier-input-closure revision at completion. */
   private criterionCandidateRevisionSha(): string | null {
     try {
@@ -4645,98 +4642,60 @@ export class ChatEngine {
     };
   }
 
-  /** Supply terminal evidence and explicit effects without exposing the engine to the result owner. */
   private terminalRuntimeInput(): ChatTerminalInput {
-    return {
-      snapshot: {
-        context: {
-          options: this.options,
-          executionProfile: this.executionProfile,
-          taskClass: this.taskClass,
-          engineRunId: this.engineRunId,
-          engineRunDir: this.engineRunDir,
-          turnIndex: this._turnIndex,
-          turnId: this.parity.turnId,
-          taskContract: this.parity.liveAuthority?.taskContract,
-          acceptedOperation: this.lastTurnRuntime?.effectiveOperation ?? this.lastTurnRuntime?.taskShape?.operation,
-        },
-        outcome: {
-          hasMutation: this.hasAnyWrites(),
-          readOnly: this.isAcceptedReadOnlyTerminal(),
-          budgetExceeded: this.budgetExceeded,
-          terminatingLimiter: this.terminatingLimiter,
-          terminalLimiterReason: this.terminalLimiterReason,
-          lastVerifierReceipt: this.lastVerifierReceipt,
-          gatePolicy: this.gatePolicy,
-          lastCriticReceipt: this.lastCriticReceipt,
-          verifierTampered: this.verifierTampered,
-          writeCount: this.writeCount,
-          nativePathListVerified: (() => {
-            this.criterionCompletion?.refreshNativePathListEvidence();
-            return (
-              this.criterionCompletion?.nativePathListProofCompliant() === true
-            );
-          })(),
-        },
-        presentation: {
-          conversation: this.conversation,
-          cachedSystemPromptNative: this.cachedSystemPromptNative,
-          playbookId: this.activePlaybook?.id ?? null,
-          dedupeHitCount: this.dedupeHitCount,
-          lastRequestPromptTokens: this.lastRequestPromptTokens,
-          lastRequestCompletionTokens: this.lastRequestCompletionTokens,
-          lastRequestModelId: this.lastRequestModelId,
-          currentTurnTelemetry: this.currentTurnTelemetry,
-          lastTurnTelemetry: this.lastTurnTelemetry,
-        },
-        evidence: {
-          sessionEvents: this.parity.sessionEvents,
-          policyEventLog: this.policyEventLog,
-          observability: this.obsHandles(),
-        },
-        allowance: {
-          limits: this.limits,
-          postWriteRepairWallCapMs: this.postWriteRepairWallCapMs,
-          criticRepairCostCapUsd: this.criticRepairCostCapUsd,
-          taskCostBaselineUsd: this.taskCostBaselineUsd,
-        },
+    return buildChatEngineTerminalInput({
+      options: this.options,
+      executionProfile: this.executionProfile,
+      taskClass: this.taskClass,
+      engineRunId: this.engineRunId,
+      engineRunDir: this.engineRunDir,
+      turnIndex: this._turnIndex,
+      turnId: this.parity.turnId,
+      taskContract: this.parity.liveAuthority?.taskContract,
+      acceptedOperation: this.lastTurnRuntime?.effectiveOperation ?? this.lastTurnRuntime?.taskShape?.operation,
+      hasAnyWrites: () => this.hasAnyWrites(),
+      isAcceptedReadOnlyTerminal: () => this.isAcceptedReadOnlyTerminal(),
+      budgetExceeded: this.budgetExceeded,
+      terminatingLimiter: this.terminatingLimiter,
+      terminalLimiterReason: this.terminalLimiterReason,
+      lastVerifierReceipt: this.lastVerifierReceipt,
+      gatePolicy: this.gatePolicy,
+      lastCriticReceipt: this.lastCriticReceipt,
+      verifierTampered: this.verifierTampered,
+      writeCount: this.writeCount,
+      criterionCompletion: this.criterionCompletion,
+      conversation: this.conversation,
+      cachedSystemPromptNative: this.cachedSystemPromptNative,
+      playbookId: this.activePlaybook?.id ?? null,
+      dedupeHitCount: this.dedupeHitCount,
+      lastRequestPromptTokens: this.lastRequestPromptTokens,
+      lastRequestCompletionTokens: this.lastRequestCompletionTokens,
+      lastRequestModelId: this.lastRequestModelId,
+      currentTurnTelemetry: this.currentTurnTelemetry,
+      lastTurnTelemetry: this.lastTurnTelemetry,
+      parity: this.parity,
+      policyEventLog: this.policyEventLog,
+      observabilityHandles: () => this.obsHandles(),
+      limits: this.limits,
+      postWriteRepairWallCapMs: this.postWriteRepairWallCapMs,
+      criticRepairCostCapUsd: this.criticRepairCostCapUsd,
+      taskCostBaselineUsd: this.taskCostBaselineUsd,
+      decideCompletion: (requested, hasMutation) => this.decideCompletion(requested, hasMutation),
+      settleActiveExecutionForTerminal: () => this.settleActiveExecutionForTerminal(),
+      isSubmissionCurrent: (generation) => this.isSubmissionCurrent(generation),
+      currentTaskCostUsd: () => this.currentTaskCostUsd(),
+      persistTaskCostBaseline: () => this.persistTaskCostBaseline(),
+      storeTelemetry: (record) => {
+        this.lastTurnTelemetry = record;
       },
-      effects: {
-        decideCompletion: (requested, hasMutation) =>
-          this.decideCompletion(requested, hasMutation),
-        settleActiveExecution: () => this.settleActiveExecutionForTerminal(),
-        finalizeTurn: (outcome, status, reason, response, extras) =>
-          finalizeParityTurnSync(
-            this.parity,
-            this.engineRunDir,
-            outcome,
-            status,
-            reason,
-            response,
-            extras,
-          ),
-        storeTelemetry: (record) => {
-          this.lastTurnTelemetry = record;
-        },
-        setLimiter: (limiter, reason) => {
-          this.terminatingLimiter = limiter;
-          this.terminalLimiterReason = reason;
-        },
-        setBudgetExceeded: () => {
-          this.budgetExceeded = true;
-        },
-        isSubmissionCurrent: (generation) =>
-          this.isSubmissionCurrent(generation),
-        currentTaskCostUsd: () => this.currentTaskCostUsd(),
-        persistTaskCostBaseline: () => this.persistTaskCostBaseline(),
-        nativePathListVerified: () => {
-          this.criterionCompletion?.refreshNativePathListEvidence();
-          return (
-            this.criterionCompletion?.nativePathListProofCompliant() === true
-          );
-        },
+      setLimiter: (limiter, reason) => {
+        this.terminatingLimiter = limiter;
+        this.terminalLimiterReason = reason;
       },
-    };
+      setBudgetExceeded: () => {
+        this.budgetExceeded = true;
+      },
+    });
   }
 }
 

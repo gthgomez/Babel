@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 import {
   buildGreenVerifierRejectionMessage,
+  evaluateCompletionGateForEngine,
   evaluateExecuteCompletionHonesty,
   hasGreenVerifierReceipt,
   hasVerifierShellComposition,
@@ -957,5 +958,64 @@ describe('planCompletionGateReject', () => {
     });
     assert.equal(incomplete.allow, false);
     assert.equal(incomplete.reason, 'verifier_scope');
+  });
+
+  test('native-only strict completion allows when owned oracle satisfied and shell plan empty', () => {
+    const gate = evaluateCompletionGateForEngine({
+      turnType: 'completion',
+      taskIntent: 'execute',
+      task: 'fix and run tests before completing',
+      taskClass: 'general_swe',
+      toolCallLog: [{
+        tool: 'str_replace',
+        target: 'meta/tree-index.md',
+        effect_status: 'confirmed_change',
+      }],
+      lastVerifierReceipt: null,
+      requiredVerifierCommands: [],
+      nativePathListCompletionSatisfied: true,
+    });
+    assert.equal(gate, 'allow');
+  });
+
+  test('native satisfied does not bypass independent shell requirements on strict gate', () => {
+    const gate = evaluateCompletionGateForEngine({
+      turnType: 'completion',
+      taskIntent: 'execute',
+      task: 'fix and run tests before completing',
+      taskClass: 'general_swe',
+      toolCallLog: [{
+        tool: 'str_replace',
+        target: 'meta/tree-index.md',
+        effect_status: 'confirmed_change',
+      }],
+      lastVerifierReceipt: null,
+      requiredVerifierCommands: ['npm test'],
+      nativePathListCompletionSatisfied: true,
+    });
+    assert.equal(gate, 'reject');
+  });
+
+  test('native path-list honesty allows empty shell plan but not unrelated writes alone', () => {
+    const nativeOnly = evaluateExecuteCompletionHonesty({
+      hasWrite: true,
+      policy: 'required',
+      lastVerifierReceipt: null,
+      toolCallLog: [],
+      requiredVerifierCommands: [],
+      nativePathListCompletionSatisfied: true,
+    });
+    assert.equal(nativeOnly.allow, true);
+
+    const shellRequired = evaluateExecuteCompletionHonesty({
+      hasWrite: true,
+      policy: 'strict',
+      lastVerifierReceipt: null,
+      toolCallLog: [],
+      requiredVerifierCommands: ['npm test'],
+      nativePathListCompletionSatisfied: true,
+    });
+    assert.equal(shellRequired.allow, false);
+    assert.equal(shellRequired.reason, 'verifier_missing');
   });
 });

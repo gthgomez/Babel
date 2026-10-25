@@ -642,9 +642,6 @@ export function evaluateExecuteCompletionHonesty(opts: {
   if (!opts.hasWrite && !(opts.allowInspectedNoChange && hasInspectedNoChangeEvidence(opts.toolCallLog))) {
     return { allow: false, reason: 'no_writes' };
   }
-  if (opts.nativePathListCompletionSatisfied === true) {
-    return { allow: true, reason: null };
-  }
   if (opts.policy === 'none') {
     return { allow: true, reason: null };
   }
@@ -675,6 +672,9 @@ export function evaluateExecuteCompletionHonesty(opts: {
       );
 
   if (required.length === 0) {
+    if (opts.nativePathListCompletionSatisfied === true) {
+      return { allow: true, reason: null };
+    }
     const attempts = hasCanonicalEvidence ? authoritativeReceipts : legacyLogEntries;
     const staleAttempts = attempts.filter((entry) => isStaleVerifierEvidence(entry));
     const activeAttempts = attempts.filter((entry) => !isStaleVerifierEvidence(entry));
@@ -1351,7 +1351,7 @@ export function evaluateCompletionGateForEngine(opts: {
   }
   // H5: when mutating work requires verifiers, empty required plans cannot green.
   if (hasWrite && requiredVerifierCommands.length === 0 && policy === 'strict') {
-    return 'reject';
+    if (opts.nativePathListCompletionSatisfied !== true) return 'reject';
   }
   if (hasWrite && requiredVerifierCommands.length > 0 && policy === 'strict') {
     const rawReceipts =
@@ -1473,6 +1473,13 @@ export function evaluateCompletionGateForEngine(opts: {
       adversarial,
     });
     if (!promo.authorize_verified_complete) return 'reject';
+  } else if (
+    hasWrite &&
+    policy === 'strict' &&
+    requiredVerifierCommands.length === 0 &&
+    opts.nativePathListCompletionSatisfied === true
+  ) {
+    // Native-only strict obligation: honesty/kernel already certified the owned oracle.
   }
   return 'allow';
 }
