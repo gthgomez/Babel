@@ -10,8 +10,26 @@ import { INTERACTIVE_STACK_BUDGET } from '../agents-interactive-budget.mjs'
 import { preflightPushCandidates, collectPushCandidates, runValidationStage, verifyStagedManifest, observeValidationWork, materializePushSnapshot } from '../validate-push-candidates.mjs'
 import { readCommittedBlobs, readCommittedInventory } from '../committed-object-reader.mjs'
 
+const FIXTURE_TREE_REMOVE_MAX_ATTEMPTS = 5
+const FIXTURE_TREE_REMOVE_RETRY_MS = 25
+
+/** Bounded ENOTEMPTY retry for temp git fixture trees; rethrow all other errors immediately. */
+async function removeFixtureTree(path) {
+  for (let attempt = 1; attempt <= FIXTURE_TREE_REMOVE_MAX_ATTEMPTS; attempt += 1) {
+    try {
+      rmSync(path, { recursive: true, force: true })
+      return
+    } catch (error) {
+      const code = error && typeof error === 'object' && 'code' in error ? error.code : undefined
+      if (code !== 'ENOTEMPTY' || attempt === FIXTURE_TREE_REMOVE_MAX_ATTEMPTS) throw error
+      await new Promise(resolve => setTimeout(resolve, FIXTURE_TREE_REMOVE_RETRY_MS))
+    }
+  }
+}
+
 test('all candidate manifests fail early, before scanning, using committed rather than dirty bytes', async () => {
   const root = mkdtempSync(join(tmpdir(), 'babel-push-preflight-'))
+  let primaryError
   const git = (...args) => {
     const r = spawnSync('git', ['-c', 'user.name=fixture', '-c', 'user.email=fixture@example.invalid', '-c', 'core.hooksPath=' + join(root, 'hooks'), '-C', root, ...args], { encoding: 'utf8', windowsHide: true })
     assert.equal(r.status, 0)
@@ -49,7 +67,16 @@ test('all candidate manifests fail early, before scanning, using committed rathe
     const expected = spawnSync('git', ['-C', root, 'cat-file', 'blob', oid], { windowsHide: true })
     assert.equal(expected.status, 0)
     assert.equal(objects[0].equals(expected.stdout), true, 'batch reader must preserve exact committed bytes despite checkout line-ending filters')
-  } finally { rmSync(root, { recursive: true, force: true }) }
+  } catch (error) {
+    primaryError = error
+  } finally {
+    try {
+      await removeFixtureTree(root)
+    } catch (cleanupError) {
+      if (!primaryError) throw cleanupError
+    }
+  }
+  if (primaryError) throw primaryError
 })
 
 test('object work reports live progress, preserves results and withholds failure details', async () => {
@@ -71,6 +98,7 @@ test('object work reports live progress, preserves results and withholds failure
 
 test('snapshot transitions reuse unchanged blobs and preserve exact trees in either history order', async () => {
   const workspace = mkdtempSync(join(tmpdir(), 'babel-snapshot-transition-'))
+  let primaryError
   const root = join(workspace, 'source'), snapshot = join(workspace, 'snapshot')
   mkdirSync(root)
   const git = (...args) => {
@@ -126,11 +154,21 @@ test('snapshot transitions reuse unchanged blobs and preserve exact trees in eit
     await materializePushSnapshot(root, removedAliasSnapshot, aliases)
     await materializePushSnapshot(root, removedAliasSnapshot, [], aliases)
     assert.deepEqual(paths(removedAliasSnapshot), [])
-  } finally { rmSync(workspace, { recursive: true, force: true }) }
+  } catch (error) {
+    primaryError = error
+  } finally {
+    try {
+      await removeFixtureTree(workspace)
+    } catch (cleanupError) {
+      if (!primaryError) throw cleanupError
+    }
+  }
+  if (primaryError) throw primaryError
 })
 
 test('preflight rejects over-budget AGENTS.md even when the manifest still verifies', async () => {
   const root = mkdtempSync(join(tmpdir(), 'babel-agents-budget-preflight-'))
+  let primaryError
   const git = (...args) => {
     const r = spawnSync('git', ['-c', 'user.name=fixture', '-c', 'user.email=fixture@example.invalid', '-c', 'core.hooksPath=' + join(root, 'hooks'), '-C', root, ...args], { encoding: 'utf8', windowsHide: true })
     assert.equal(r.status, 0)
@@ -152,7 +190,16 @@ test('preflight rejects over-budget AGENTS.md even when the manifest still verif
     git('commit', '-qm', 'oversize agents consistent manifest')
     const sha = git('rev-parse', 'HEAD')
     await assert.rejects(preflightPushCandidates([sha], root), /required_instruction_exceeds_prompt_budget/)
-  } finally { rmSync(root, { recursive: true, force: true }) }
+  } catch (error) {
+    primaryError = error
+  } finally {
+    try {
+      await removeFixtureTree(root)
+    } catch (cleanupError) {
+      if (!primaryError) throw cleanupError
+    }
+  }
+  if (primaryError) throw primaryError
 })
 
 test('stage errors preserve exit status and never echo child source or diagnostics', async () => {
