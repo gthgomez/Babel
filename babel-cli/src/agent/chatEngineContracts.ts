@@ -173,6 +173,8 @@ export interface ChatEngineOptions {
   runId?: string
   /** Existing P05 durable owner/fencing authority supplied by the host. */
   admissionStore?: AdmissionStore
+  /** Native pilot campaign budget gate for routed API providers. */
+  campaignDispatchGate?: import('../runners/campaignDispatchGate.js').CampaignDispatchGate | null
   resumeExisting?: boolean
   /** Retained sources exist even when a legacy session has no saved authority.
    * Requires source reconciliation before a mode checkpoint; grants no effects. */
@@ -575,6 +577,7 @@ export interface ChatEngineStreamingLoopHost {
   _turnToolCallLogStart: number
   readonly abortController: AbortController
   activeSubmissionGeneration: number
+  submissionConversationStartIndex: number
   readonly apiTokenCount: number
   apiTokenCountAtTurnStart: number
   readonly applyCriticRepairCostBudget: () => void
@@ -770,7 +773,11 @@ export interface ChatEngineStreamingLoopHost {
     answer: string,
     extra?: ChatStreamDoneExtra,
   ) => ChatEvent
-  readonly streamFailed: (error: string, reason?: import('./chatTerminalReason.js').TerminalReason) => ChatEvent
+  readonly streamFailed: (
+    error: string,
+    reason?: import('./chatTerminalReason.js').TerminalReason,
+    presentationError?: string,
+  ) => ChatEvent
   readonly synthesizeAnswer: (
     toolObservations: string,
     callbacks: ChatCallbacks,

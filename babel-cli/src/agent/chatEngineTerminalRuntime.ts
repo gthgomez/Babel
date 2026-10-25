@@ -170,11 +170,6 @@ export type ChatStreamDoneExtra = {
   verifierTampered?: boolean
   criticReceipt?: import('./diffCritic.js').DiffCriticVerdict | null
   reason?: TerminalReason
-  /**
-   * Turn cap after a recorded patch: gate honesty failed but the substantive
-   * completion candidate is retained and terminal outcome stays UNVERIFIED_PATCH.
-   */
-  preservedUnverifiedTerminal?: boolean
 }
 
 /** Inspection can prove no change is needed; zero writes alone cannot. */
@@ -257,13 +252,7 @@ export function completeChatStream(
   // verified); `outcomeFromReasonCode` carries the failed-path mapping
   // (AGENT_FAILURE), so the gate decision stays authoritative there.
   const reasonOutcome =
-    terminalReason?.code &&
-    terminalReason.code !== 'verification_failed' &&
-    !(
-      extra?.preservedUnverifiedTerminal === true &&
-      decisionOutcome === 'UNVERIFIED_PATCH' &&
-      terminalReason.code === 'budget_exhausted'
-    )
+    terminalReason?.code && terminalReason.code !== 'verification_failed'
       ? outcomeFromReasonCode(terminalReason.code)
       : undefined
   const outcome = reasonOutcome ?? decisionOutcome
@@ -361,8 +350,10 @@ export function failChatStream(
   input: ChatTerminalInput,
   error: string,
   explicitReason?: import('./chatTerminalReason.js').TerminalReason,
+  presentationError?: string,
 ): ChatEvent {
   const { snapshot, effects } = input
+  const displayError = presentationError ?? error
   effects.settleActiveExecution()
   const providerOutputLimit = isProviderOutputLimitText(error)
   if (providerOutputLimit && snapshot.outcome.terminatingLimiter == null) {
@@ -383,7 +374,9 @@ export function failChatStream(
   // Preserve an unknown terminal cause when no classifier or limiter proves
   // one. Durable validation accepts this explicit absence; guessing would
   // make the model-visible outcome less truthful.
-  const classifiedOutcome = classifyFailureText(error) ?? limiterOutcome
+  const classifiedOutcome = explicitReason
+    ? (outcomeFromReasonCode(explicitReason.code) ?? limiterOutcome)
+    : (classifyFailureText(error) ?? limiterOutcome)
   const terminalReason =
     explicitReason ?? terminalReasonFromFailureText(error) ??
     resolveChatTerminalReason(input, classifiedOutcome)
@@ -407,7 +400,7 @@ export function failChatStream(
   try {
     effects.finalizeTurn(terminal.outcome, terminal.status, terminalReason, {
       kind: 'error',
-      content: error,
+      content: displayError,
     })
   } catch (failure) {
     // A broken primary log cannot certify completion. Still deliver its
@@ -425,7 +418,7 @@ export function failChatStream(
         globalCostTracker.getSessionSummary().totalTokens,
     })
   effects.storeTelemetry(finalizedTelemetry ?? null)
-  return buildStreamFailed(snapshot.evidence.observability, error, {
+  return buildStreamFailed(snapshot.evidence.observability, displayError, {
     ...(outcome !== undefined ? { outcome } : {}),
     status: terminal.status,
     ...(snapshot.allowance.limits.costBudget

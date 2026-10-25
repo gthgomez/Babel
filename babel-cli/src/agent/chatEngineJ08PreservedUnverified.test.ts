@@ -1,7 +1,6 @@
 /**
  * P1 — J08-class answer loss at turn cap: production ChatEngine + OpenRouterApiRunner,
- * mocked HTTP transport only (dispatchFetch). No benchmark lease, admission priming,
- * or session admission store overrides.
+ * mocked HTTP transport only (dispatchFetch). Critic/compaction use production defaults.
  */
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
@@ -15,10 +14,16 @@ import type { ResolvedModelPolicy } from '../modelPolicy.js'
 import { LIVE_OPENROUTER_MODEL_ID } from '../modelPolicy.js'
 import { OpenRouterApiRunner } from '../runners/openRouterApi.js'
 import { refreshDryRunState } from '../localTools.js'
+import { chatSessionDir } from '../cli/runsLayout.js'
+import { loadThreadEventLogFromDir } from './threadEventLog.js'
 
 const J08_TASK =
   'Compute net revenue from 数据/sales.csv and create 数据/summary.csv with product, gross, refunds and net. Explain the total.'
 const J08_MARKER = 'J08_PRESERVED_NET_200_EXPLANATION'
+/** Untrusted model prose must not reclassify the authoritative failure tuple. */
+const J08_UNTRUSTED_CLASSIFIER_TOKENS =
+  'RESPONSE_EVIDENCE_INVALID NATIVE_TOOL_PROTOCOL_INVALID'
+const OLD_SUBMISSION_MARKER = 'J08_OLD_SUBMISSION_STALE_CANDIDATE'
 const SUMMARY_CSV = [
   'product,gross,refunds,net',
   'A,100,20,130',
@@ -52,8 +57,6 @@ const OPENROUTER_POLICY: ResolvedModelPolicy = {
 const MANAGED_ENV = [
   'BABEL_DRY_RUN',
   'BABEL_DRY_RUN_SOURCE',
-  'BABEL_DIFF_CRITIC',
-  'BABEL_COMPACTION',
   'BABEL_NATIVE_TOOLS',
   'BABEL_TOOL_PROFILE',
   'OPENROUTER_API_KEY',
@@ -166,7 +169,7 @@ class J08OpenRouterTransportRunner extends OpenRouterApiRunner {
       })
     }
     return makeTextCompletionSse(
-      `${J08_MARKER} Product A net revenue is 130, product B net is 70, and total net is 200.`,
+      `${J08_MARKER} ${J08_UNTRUSTED_CLASSIFIER_TOKENS} Product A net revenue is 130, product B net is 70, and total net is 200.`,
     )
   }
 }
@@ -183,7 +186,22 @@ function terminalEvent(events: ChatEvent[]) {
   return terminals[0]!
 }
 
-test('J08: turn-cap verifier_missing preserves substantive answer via UNVERIFIED terminal', async t => {
+function assertUnchangedAuthoritativeTurnCapFailure(terminal: ChatEvent): string {
+  assert.equal(terminal.type, 'failed')
+  assert.equal(terminal.type === 'failed' ? terminal.status : undefined, 'budget_exhausted')
+  assert.equal(terminal.type === 'failed' ? terminal.outcome : undefined, 'BUDGET_EXHAUSTED')
+  assert.equal(terminal.type === 'failed' ? terminal.reason_code : undefined, 'budget_exhausted')
+  assert.equal(terminal.type === 'failed' ? terminal.cause_class : undefined, 'harness')
+  const error = terminal.type === 'failed' ? terminal.error : ''
+  assert.match(error, /^Turn limit exceeded\./)
+  assert.match(error, /Run the verifier \(test_run or run_command\) before completing\./)
+  assert.notEqual(terminal.type === 'failed' ? terminal.outcome : undefined, 'VERIFIED_COMPLETE')
+  assert.notEqual(terminal.type, 'done')
+  assert.notEqual(terminal.type, 'cancelled')
+  return error
+}
+
+test('J08: turn-cap gate reject keeps authoritative failure and preserves substantive candidate in error', async t => {
   const prior = Object.fromEntries(MANAGED_ENV.map(key => [key, process.env[key]]))
   const projectRoot = mkdtempSync(join(tmpdir(), 'babel-j08-preserve-'))
   t.after(() => {
@@ -198,8 +216,6 @@ test('J08: turn-cap verifier_missing preserves substantive answer via UNVERIFIED
   for (const key of MANAGED_ENV) delete process.env[key]
   process.env['BABEL_DRY_RUN'] = '0'
   process.env['BABEL_DRY_RUN_SOURCE'] = 'session'
-  process.env['BABEL_DIFF_CRITIC'] = '0'
-  process.env['BABEL_COMPACTION'] = 'off'
   process.env['BABEL_NATIVE_TOOLS'] = 'enabled'
   process.env['BABEL_TOOL_PROFILE'] = 'legacy'
   process.env['OPENROUTER_API_KEY'] = 'synthetic-fixture'
@@ -219,21 +235,36 @@ test('J08: turn-cap verifier_missing preserves substantive answer via UNVERIFIED
     providerRunner: runner,
     providerPolicy: OPENROUTER_POLICY,
   })
+  ;(engine as unknown as { conversation: Array<{ role: string; content: string }> }).conversation.push({
+    role: 'assistant',
+    content: `${OLD_SUBMISSION_MARKER} stale prior-submission explanation.`,
+  })
 
   const events = await collectStream(engine.submitMessageStream(J08_TASK))
   const terminal = terminalEvent(events)
+  const error = assertUnchangedAuthoritativeTurnCapFailure(terminal)
 
-  assert.equal(terminal.type, 'done', 'must use nonverified terminal path, not streamFailed turn-limit loss')
-  assert.equal(terminal.type === 'done' ? terminal.outcome : undefined, 'UNVERIFIED_PATCH')
-  assert.notEqual(terminal.type === 'done' ? terminal.outcome : undefined, 'VERIFIED_COMPLETE')
-
-  const answer = terminal.type === 'done' ? terminal.answer : ''
-  assert.match(answer, /Turn limit reached/i)
-  assert.match(answer, /verifier|COMPLETION_GATE_REJECTED/i)
-  assert.match(answer, /UNVERIFIED retained candidate/i)
-  assert.match(answer, new RegExp(J08_MARKER))
-  assert.doesNotMatch(answer, /^Turn limit exceeded\./)
-  assert.doesNotMatch(answer, /VERIFIED_COMPLETE/i)
+  const markerIndex = error.indexOf(J08_MARKER)
+  assert.ok(markerIndex > 0, 'substantive candidate must appear in the failure payload')
+  assert.doesNotMatch(error, new RegExp(OLD_SUBMISSION_MARKER))
+  const authorityPrefix = error.slice(0, markerIndex)
+  assert.match(authorityPrefix, /^Turn limit exceeded\./)
+  assert.doesNotMatch(authorityPrefix, new RegExp(J08_MARKER))
+  assert.match(error, /UNVERIFIED retained candidate/i)
+  assert.match(error, /RESPONSE_EVIDENCE_INVALID/)
+  assert.match(error, /NATIVE_TOOL_PROTOCOL_INVALID/)
+  assert.notEqual(terminal.type === 'failed' ? terminal.reason_code : undefined, 'response_evidence_invalid')
+  assert.notEqual(terminal.type === 'failed' ? terminal.reason_code : undefined, 'native_tool_protocol_invalid')
+  assert.match(error, /数据\/summary\.csv/)
+  assert.doesNotMatch(error, /npm test|read_file|run_command.*artifact/i)
+  assert.doesNotMatch(error, /VERIFIED_COMPLETE/i)
 
   assert.equal(readFileSync(join(projectRoot, '数据', 'summary.csv'), 'utf8'), SUMMARY_CSV)
+
+  const disk = loadThreadEventLogFromDir(chatSessionDir(engine.getEngineRunId()))
+  assert.ok(disk, 'thread event log required')
+  const ended = disk.events.filter(event => event.kind === 'turn_ended').at(-1)
+  assert.ok(ended, 'durable turn_ended required')
+  assert.equal(ended.outcome, 'BUDGET_EXHAUSTED')
+  assert.equal(ended.outcome, terminal.type === 'failed' ? terminal.outcome : undefined)
 })

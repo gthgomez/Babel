@@ -646,6 +646,8 @@ export class ChatEngine {
    * Projected from `generationCounter`; not a second authority.
    */
   private activeSubmissionGeneration = 0;
+  /** Conversation index where the current admitted submission begins. */
+  submissionConversationStartIndex = 0;
   private runControl: RunControl | null = null;
   /** Pending cancellation survives preparation until its submission latch exists. */
   private _cancelled = false;
@@ -1421,7 +1423,9 @@ export class ChatEngine {
   }
 
   lastSubstantiveCompletionCandidate(): string | undefined {
-    return findLastSubstantiveCompletionCandidate(this.conversation);
+    return findLastSubstantiveCompletionCandidate(this.conversation, {
+      submissionStartIndex: this.submissionConversationStartIndex,
+    });
   }
 
   /**
@@ -2775,9 +2779,13 @@ export class ChatEngine {
     this.runControl?.requestStop({ owner: this.runControl.owner, kind: 'completed', reasonCode: 'completed', source: 'completion' });
     return completeChatStream(this.terminalRuntimeInput(), answer, extra);
   }
-  private streamFailed(error: string, reason?: import('./chatTerminalReason.js').TerminalReason): ChatEvent {
+  private streamFailed(
+    error: string,
+    reason?: import('./chatTerminalReason.js').TerminalReason,
+    presentationError?: string,
+  ): ChatEvent {
     this.runControl?.requestStop({ owner: this.runControl.owner, kind: 'failed', reasonCode: reason?.code ?? 'unknown', source: 'runtime' });
-    return failChatStream(this.terminalRuntimeInput(), error, reason);
+    return failChatStream(this.terminalRuntimeInput(), error, reason, presentationError);
   }
   private streamCancelled(): ChatEvent {
     const prior = this.runControl?.stop();
@@ -4139,6 +4147,9 @@ export class ChatEngine {
       },
       set pendingUsageChargeId(value) {
         engine.pendingUsageChargeId = value;
+      },
+      get campaignDispatchGate() {
+        return engine.options.campaignDispatchGate ?? null;
       },
       checkBudgets: (skipTurnLimit) => engine.checkBudgets(skipTurnLimit),
       persistOwnerCharges: (ownerId, runDir) =>

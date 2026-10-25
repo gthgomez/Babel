@@ -4,7 +4,7 @@ import type {
   TaskIntent,
 } from "./chatEngine.js";
 import {
-  collectArtifactRefsFromToolLog,
+  collectConfirmedMutationArtifactPaths,
   formatPreservedUnverifiedTerminalAnswer,
 } from "./preservedUnverifiedTerminal.js";
 
@@ -43,28 +43,18 @@ export async function* finalizeStreamingTurnLimit(input: {
       preservedCandidate &&
       preservedCandidate.trim().length > 0
     ) {
-      const authorityReason = [
-        host.terminalLimiterReason ?? "",
-        host.buildRejectionMessage(),
-      ]
-        .filter(part => part.trim().length > 0)
-        .join("\n\n");
-      const terminalAnswer = formatPreservedUnverifiedTerminalAnswer({
+      const authorityReason = `Turn limit exceeded. ${host.buildRejectionMessage()}`;
+      const presentationError = formatPreservedUnverifiedTerminalAnswer({
         authorityReason,
         retainedCandidate: preservedCandidate,
-        artifactRefs: collectArtifactRefsFromToolLog(host.toolCallLog),
+        artifactRefs: collectConfirmedMutationArtifactPaths(host.toolCallLog),
       });
       if (!host.isSubmissionCurrent(submissionGeneration)) return;
-      host.conversation.push({
-        role: "assistant",
-        content: terminalAnswer,
-        provenance: "controller",
-        authoritative: true,
-        name: "preserved_unverified_terminal",
-      });
-      yield host.streamDone(terminalAnswer, {
-        preservedUnverifiedTerminal: true,
-      });
+      yield host.streamFailed(
+        authorityReason,
+        { code: 'budget_exhausted', cause_class: 'harness' },
+        presentationError,
+      );
       return;
     }
   }
