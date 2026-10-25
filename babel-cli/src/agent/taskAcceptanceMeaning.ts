@@ -148,14 +148,14 @@ function interpretTaskAcceptance(request: string, opts: InterpretOptions): TaskA
         lineIndent > listIndent &&
         lineIndent < 4 &&
         !/^\s*(?:[-*+•]|\d+[.)])\s+/.test(line)
-      if (trimmedLine && !indentedCodeLine) {
-        activeProse.push(trimmedLine)
-        if (opts.admitActiveProseSpans) admissibleProse.push({ start, end, text: trimmedLine })
+      if (trimmedLine) activeProse.push(trimmedLine)
+      if (opts.admitActiveProseSpans && trimmedLine && !indentedCodeLine) {
+        admissibleProse.push({ start, end, text: trimmedLine })
       }
       if (/^\S/.test(line) && /\b(?:must|shall|should|needs? to|required to|ensure|preserve|reject|support|prevent)\b/i.test(line))
         inferred.push({ text: trimmedLine, start, end })
       else if (!opts.admitActiveProseSpans && (requirementRegion || listIndent !== undefined || inferred.length > 0) && trimmedLine) incomplete = true
-      else if (opts.admitActiveProseSpans && listContinuation) incomplete = true
+      else if (opts.admitActiveProseSpans && trimmedLine && (listContinuation || indentedCodeLine)) incomplete = true
     }
     if (fence) incomplete = true
     for (const item of inferred) add(item.text, 'inferred', item.start, item.end)

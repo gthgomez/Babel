@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import test from 'node:test'
 import { resolveLiveSessionAuthority } from './liveSessionBridge.js'
 import { bindExecutableVerifiersToTaskAcceptance } from './taskAcceptanceExecutableBinding.js'
@@ -88,6 +89,16 @@ test('fresh admission captures short vague prose as provisional inferred require
   assert.equal(contract.acceptance[0]!.required, true)
 })
 
+const v1FrozenFixtures = JSON.parse(
+  readFileSync(new URL('./fixtures/taskAcceptanceMeaningV1Frozen.json', import.meta.url), 'utf8'),
+) as { input: string; expected: ReturnType<typeof inferTaskAcceptanceV1> }[]
+
+test('v1 full TaskAcceptanceMeaning output matches frozen replay fixtures', () => {
+  for (const fixture of v1FrozenFixtures) {
+    assert.deepEqual(inferTaskAcceptanceV1(fixture.input), fixture.expected, fixture.input)
+  }
+})
+
 test('v1 preserves frozen criterion order (explicit before inferred) without span sort', () => {
   const request = 'The task must survive restart.\n- Preserve API.'
   const meaning = inferTaskAcceptanceV1(request)
@@ -124,12 +135,13 @@ test('v2 admits polite question trailers as separate top-level inferred spans', 
   assert.deepEqual(meaning.criteria.map(item => item.description), ['Survive restart.', 'Can you do that?'])
 })
 
-test('v2 excludes four-space indented code lines from admissible prose capture', () => {
+test('v2 structurally flags four-space indented code before prose capture', () => {
   const request = '    const x = 1;\nDo real work.'
   const meaning = inferTaskAcceptanceV2(request)
-  assert.equal(meaning.unresolved, false)
-  assert.deepEqual(meaning.criteria.map(item => item.description), ['Do real work.'])
+  assert.equal(meaning.unresolved, true)
+  assert.equal(meaning.structurallyComplete, false)
   assert.equal(meaning.criteria.some(item => item.description.includes('const x')), false)
+  assert.ok(meaning.provenance.some(record => record.ref.startsWith('task-acceptance-meaning:v2:unresolved:')))
 })
 
 test('v2 preserves plain prose after explicit bullets as separate inferred spans', () => {

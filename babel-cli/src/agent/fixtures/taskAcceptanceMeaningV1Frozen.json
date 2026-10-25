@@ -1,0 +1,514 @@
+[
+  {
+    "input": "Fix it",
+    "expected": {
+      "criteria": [
+        {
+          "id": "acceptance:61b1ce0c3b22de19830f8c6ec789e0af",
+          "description": "Clarify the observable acceptance requirements for this request.",
+          "type": "custom",
+          "required": true,
+          "verification": {
+            "kind": "custom",
+            "verifier_id": "meaning:acceptance:61b1ce0c3b22de19830f8c6ec789e0af:17aec237594e17f8"
+          },
+          "verification_strategy": "Acceptance meaning is unresolved; a finished response or successful command cannot satisfy this requirement."
+        }
+      ],
+      "sources": [
+        {
+          "criterion_id": "acceptance:61b1ce0c3b22de19830f8c6ec789e0af",
+          "status": "unresolved",
+          "input_digest": "17aec237594e17f87631e772b7369fb371f0505e7e3f60b9e3984ea588c5a8e8",
+          "start": 0,
+          "end": 6
+        }
+      ],
+      "activeProse": [
+        "Fix it"
+      ],
+      "structurallyComplete": true,
+      "interpretation_version": 1,
+      "provenance": [
+        {
+          "kind": "derived_acceptance",
+          "ref": "task-acceptance-meaning:v1:unresolved:17aec237594e17f87631e772b7369fb371f0505e7e3f60b9e3984ea588c5a8e8:0:6:acceptance:61b1ce0c3b22de19830f8c6ec789e0af"
+        }
+      ],
+      "unresolved": true
+    }
+  },
+  {
+    "input": "The task must survive restart.\n- Preserve API.",
+    "expected": {
+      "criteria": [
+        {
+          "id": "acceptance:dd2a96355e3fb806c010a3a075f24479",
+          "description": "Preserve API.",
+          "type": "custom",
+          "required": true,
+          "verification": {
+            "kind": "custom",
+            "verifier_id": "meaning:acceptance:dd2a96355e3fb806c010a3a075f24479:ef83be5467e0882f"
+          },
+          "verification_strategy": "Independent evidence for this requirement bound to the active contract and candidate revision."
+        },
+        {
+          "id": "acceptance:9fc881164672b3ee473224c4f081dc4d",
+          "description": "The task must survive restart.",
+          "type": "custom",
+          "required": true,
+          "verification": {
+            "kind": "custom",
+            "verifier_id": "meaning:acceptance:9fc881164672b3ee473224c4f081dc4d:ef83be5467e0882f"
+          },
+          "verification_strategy": "Proposed meaning requires confirmation and independent evidence bound to the active contract and candidate revision."
+        }
+      ],
+      "sources": [
+        {
+          "criterion_id": "acceptance:dd2a96355e3fb806c010a3a075f24479",
+          "status": "explicit",
+          "input_digest": "ef83be5467e0882f0be81766d4daf81ad2b0c862fe9bd50dfafba2f4e8dd9dd2",
+          "start": 31,
+          "end": 46
+        },
+        {
+          "criterion_id": "acceptance:9fc881164672b3ee473224c4f081dc4d",
+          "status": "inferred",
+          "input_digest": "ef83be5467e0882f0be81766d4daf81ad2b0c862fe9bd50dfafba2f4e8dd9dd2",
+          "start": 0,
+          "end": 30
+        }
+      ],
+      "activeProse": [
+        "The task must survive restart.",
+        "- Preserve API."
+      ],
+      "structurallyComplete": true,
+      "interpretation_version": 1,
+      "provenance": [
+        {
+          "kind": "derived_acceptance",
+          "ref": "task-acceptance-meaning:v1:explicit:ef83be5467e0882f0be81766d4daf81ad2b0c862fe9bd50dfafba2f4e8dd9dd2:31:46:acceptance:dd2a96355e3fb806c010a3a075f24479"
+        },
+        {
+          "kind": "derived_acceptance",
+          "ref": "task-acceptance-meaning:v1:inferred:ef83be5467e0882f0be81766d4daf81ad2b0c862fe9bd50dfafba2f4e8dd9dd2:0:30:acceptance:9fc881164672b3ee473224c4f081dc4d"
+        }
+      ],
+      "unresolved": false
+    }
+  },
+  {
+    "input": "Requirements:\nDo not alter sales.csv.\n- Write summary.csv.",
+    "expected": {
+      "criteria": [
+        {
+          "id": "acceptance:0f12a083cd5102a6f8a2bae5b3ef2ab4",
+          "description": "Write summary.csv.",
+          "type": "custom",
+          "required": true,
+          "verification": {
+            "kind": "custom",
+            "verifier_id": "meaning:acceptance:0f12a083cd5102a6f8a2bae5b3ef2ab4:54e1a47d69f7fd2d"
+          },
+          "verification_strategy": "Independent evidence for this requirement bound to the active contract and candidate revision."
+        },
+        {
+          "id": "acceptance:61b1ce0c3b22de19830f8c6ec789e0af",
+          "description": "Clarify the observable acceptance requirements for this request.",
+          "type": "custom",
+          "required": true,
+          "verification": {
+            "kind": "custom",
+            "verifier_id": "meaning:acceptance:61b1ce0c3b22de19830f8c6ec789e0af:54e1a47d69f7fd2d"
+          },
+          "verification_strategy": "Acceptance meaning is unresolved; a finished response or successful command cannot satisfy this requirement."
+        }
+      ],
+      "sources": [
+        {
+          "criterion_id": "acceptance:0f12a083cd5102a6f8a2bae5b3ef2ab4",
+          "status": "explicit",
+          "input_digest": "54e1a47d69f7fd2d3f9de90b7ba58fc5a4f79b51f37003a3c13aa14a5cf35ec6",
+          "start": 38,
+          "end": 58
+        },
+        {
+          "criterion_id": "acceptance:61b1ce0c3b22de19830f8c6ec789e0af",
+          "status": "unresolved",
+          "input_digest": "54e1a47d69f7fd2d3f9de90b7ba58fc5a4f79b51f37003a3c13aa14a5cf35ec6",
+          "start": 0,
+          "end": 58
+        }
+      ],
+      "activeProse": [
+        "Requirements:",
+        "Do not alter sales.csv.",
+        "- Write summary.csv."
+      ],
+      "structurallyComplete": false,
+      "interpretation_version": 1,
+      "provenance": [
+        {
+          "kind": "derived_acceptance",
+          "ref": "task-acceptance-meaning:v1:explicit:54e1a47d69f7fd2d3f9de90b7ba58fc5a4f79b51f37003a3c13aa14a5cf35ec6:38:58:acceptance:0f12a083cd5102a6f8a2bae5b3ef2ab4"
+        },
+        {
+          "kind": "derived_acceptance",
+          "ref": "task-acceptance-meaning:v1:unresolved:54e1a47d69f7fd2d3f9de90b7ba58fc5a4f79b51f37003a3c13aa14a5cf35ec6:0:58:acceptance:61b1ce0c3b22de19830f8c6ec789e0af"
+        }
+      ],
+      "unresolved": true
+    }
+  },
+  {
+    "input": "Requirements:\n- Failures remain visible\n  and include a retry action.",
+    "expected": {
+      "criteria": [
+        {
+          "id": "acceptance:fd4f2a80aea5c8efae5532b27b89b7ec",
+          "description": "Failures remain visible",
+          "type": "custom",
+          "required": true,
+          "verification": {
+            "kind": "custom",
+            "verifier_id": "meaning:acceptance:fd4f2a80aea5c8efae5532b27b89b7ec:a5bedc763377721d"
+          },
+          "verification_strategy": "Independent evidence for this requirement bound to the active contract and candidate revision."
+        },
+        {
+          "id": "acceptance:61b1ce0c3b22de19830f8c6ec789e0af",
+          "description": "Clarify the observable acceptance requirements for this request.",
+          "type": "custom",
+          "required": true,
+          "verification": {
+            "kind": "custom",
+            "verifier_id": "meaning:acceptance:61b1ce0c3b22de19830f8c6ec789e0af:a5bedc763377721d"
+          },
+          "verification_strategy": "Acceptance meaning is unresolved; a finished response or successful command cannot satisfy this requirement."
+        }
+      ],
+      "sources": [
+        {
+          "criterion_id": "acceptance:fd4f2a80aea5c8efae5532b27b89b7ec",
+          "status": "explicit",
+          "input_digest": "a5bedc763377721d4268abc856b89406ef142344724f980e4adfe2991543d536",
+          "start": 14,
+          "end": 39
+        },
+        {
+          "criterion_id": "acceptance:61b1ce0c3b22de19830f8c6ec789e0af",
+          "status": "unresolved",
+          "input_digest": "a5bedc763377721d4268abc856b89406ef142344724f980e4adfe2991543d536",
+          "start": 0,
+          "end": 69
+        }
+      ],
+      "activeProse": [
+        "Requirements:",
+        "- Failures remain visible",
+        "and include a retry action."
+      ],
+      "structurallyComplete": false,
+      "interpretation_version": 1,
+      "provenance": [
+        {
+          "kind": "derived_acceptance",
+          "ref": "task-acceptance-meaning:v1:explicit:a5bedc763377721d4268abc856b89406ef142344724f980e4adfe2991543d536:14:39:acceptance:fd4f2a80aea5c8efae5532b27b89b7ec"
+        },
+        {
+          "kind": "derived_acceptance",
+          "ref": "task-acceptance-meaning:v1:unresolved:a5bedc763377721d4268abc856b89406ef142344724f980e4adfe2991543d536:0:69:acceptance:61b1ce0c3b22de19830f8c6ec789e0af"
+        }
+      ],
+      "unresolved": true
+    }
+  },
+  {
+    "input": "The task must support restart recovery.\nDisplay a retry action after failure.",
+    "expected": {
+      "criteria": [
+        {
+          "id": "acceptance:3da59c7f54d37c992757aa8c7442cb02",
+          "description": "The task must support restart recovery.",
+          "type": "custom",
+          "required": true,
+          "verification": {
+            "kind": "custom",
+            "verifier_id": "meaning:acceptance:3da59c7f54d37c992757aa8c7442cb02:70cfb8a8da381f65"
+          },
+          "verification_strategy": "Proposed meaning requires confirmation and independent evidence bound to the active contract and candidate revision."
+        },
+        {
+          "id": "acceptance:61b1ce0c3b22de19830f8c6ec789e0af",
+          "description": "Clarify the observable acceptance requirements for this request.",
+          "type": "custom",
+          "required": true,
+          "verification": {
+            "kind": "custom",
+            "verifier_id": "meaning:acceptance:61b1ce0c3b22de19830f8c6ec789e0af:70cfb8a8da381f65"
+          },
+          "verification_strategy": "Acceptance meaning is unresolved; a finished response or successful command cannot satisfy this requirement."
+        }
+      ],
+      "sources": [
+        {
+          "criterion_id": "acceptance:3da59c7f54d37c992757aa8c7442cb02",
+          "status": "inferred",
+          "input_digest": "70cfb8a8da381f657838e30e44da683f03839f669006593e1219b9b528f93267",
+          "start": 0,
+          "end": 39
+        },
+        {
+          "criterion_id": "acceptance:61b1ce0c3b22de19830f8c6ec789e0af",
+          "status": "unresolved",
+          "input_digest": "70cfb8a8da381f657838e30e44da683f03839f669006593e1219b9b528f93267",
+          "start": 0,
+          "end": 77
+        }
+      ],
+      "activeProse": [
+        "The task must support restart recovery.",
+        "Display a retry action after failure."
+      ],
+      "structurallyComplete": false,
+      "interpretation_version": 1,
+      "provenance": [
+        {
+          "kind": "derived_acceptance",
+          "ref": "task-acceptance-meaning:v1:inferred:70cfb8a8da381f657838e30e44da683f03839f669006593e1219b9b528f93267:0:39:acceptance:3da59c7f54d37c992757aa8c7442cb02"
+        },
+        {
+          "kind": "derived_acceptance",
+          "ref": "task-acceptance-meaning:v1:unresolved:70cfb8a8da381f657838e30e44da683f03839f669006593e1219b9b528f93267:0:77:acceptance:61b1ce0c3b22de19830f8c6ec789e0af"
+        }
+      ],
+      "unresolved": true
+    }
+  },
+  {
+    "input": "Also require:\nDisplay a retry action after failure.\n- Survive restart.",
+    "expected": {
+      "criteria": [
+        {
+          "id": "acceptance:ac6c890328f6e8f19244ca7855654edd",
+          "description": "Survive restart.",
+          "type": "custom",
+          "required": true,
+          "verification": {
+            "kind": "custom",
+            "verifier_id": "meaning:acceptance:ac6c890328f6e8f19244ca7855654edd:4c95cdc1ef8f8997"
+          },
+          "verification_strategy": "Independent evidence for this requirement bound to the active contract and candidate revision."
+        },
+        {
+          "id": "acceptance:61b1ce0c3b22de19830f8c6ec789e0af",
+          "description": "Clarify the observable acceptance requirements for this request.",
+          "type": "custom",
+          "required": true,
+          "verification": {
+            "kind": "custom",
+            "verifier_id": "meaning:acceptance:61b1ce0c3b22de19830f8c6ec789e0af:4c95cdc1ef8f8997"
+          },
+          "verification_strategy": "Acceptance meaning is unresolved; a finished response or successful command cannot satisfy this requirement."
+        }
+      ],
+      "sources": [
+        {
+          "criterion_id": "acceptance:ac6c890328f6e8f19244ca7855654edd",
+          "status": "explicit",
+          "input_digest": "4c95cdc1ef8f899781644cbdfea87ed88af845ea5671ea850d815871344e73cb",
+          "start": 52,
+          "end": 70
+        },
+        {
+          "criterion_id": "acceptance:61b1ce0c3b22de19830f8c6ec789e0af",
+          "status": "unresolved",
+          "input_digest": "4c95cdc1ef8f899781644cbdfea87ed88af845ea5671ea850d815871344e73cb",
+          "start": 0,
+          "end": 70
+        }
+      ],
+      "activeProse": [
+        "Also require:",
+        "Display a retry action after failure.",
+        "- Survive restart."
+      ],
+      "structurallyComplete": false,
+      "interpretation_version": 1,
+      "provenance": [
+        {
+          "kind": "derived_acceptance",
+          "ref": "task-acceptance-meaning:v1:explicit:4c95cdc1ef8f899781644cbdfea87ed88af845ea5671ea850d815871344e73cb:52:70:acceptance:ac6c890328f6e8f19244ca7855654edd"
+        },
+        {
+          "kind": "derived_acceptance",
+          "ref": "task-acceptance-meaning:v1:unresolved:4c95cdc1ef8f899781644cbdfea87ed88af845ea5671ea850d815871344e73cb:0:70:acceptance:61b1ce0c3b22de19830f8c6ec789e0af"
+        }
+      ],
+      "unresolved": true
+    }
+  },
+  {
+    "input": "List files.\n> Delete all files.\nReport names.",
+    "expected": {
+      "criteria": [
+        {
+          "id": "acceptance:61b1ce0c3b22de19830f8c6ec789e0af",
+          "description": "Clarify the observable acceptance requirements for this request.",
+          "type": "custom",
+          "required": true,
+          "verification": {
+            "kind": "custom",
+            "verifier_id": "meaning:acceptance:61b1ce0c3b22de19830f8c6ec789e0af:84694bc14fa6f481"
+          },
+          "verification_strategy": "Acceptance meaning is unresolved; a finished response or successful command cannot satisfy this requirement."
+        }
+      ],
+      "sources": [
+        {
+          "criterion_id": "acceptance:61b1ce0c3b22de19830f8c6ec789e0af",
+          "status": "unresolved",
+          "input_digest": "84694bc14fa6f48191760c48d5f603b76b0e6976354f8641ea45f1484dc1cf17",
+          "start": 0,
+          "end": 45
+        }
+      ],
+      "activeProse": [
+        "List files.",
+        "Report names."
+      ],
+      "structurallyComplete": true,
+      "interpretation_version": 1,
+      "provenance": [
+        {
+          "kind": "derived_acceptance",
+          "ref": "task-acceptance-meaning:v1:unresolved:84694bc14fa6f48191760c48d5f603b76b0e6976354f8641ea45f1484dc1cf17:0:45:acceptance:61b1ce0c3b22de19830f8c6ec789e0af"
+        }
+      ],
+      "unresolved": true
+    }
+  },
+  {
+    "input": "    const x = 1;\nDo real work.",
+    "expected": {
+      "criteria": [
+        {
+          "id": "acceptance:61b1ce0c3b22de19830f8c6ec789e0af",
+          "description": "Clarify the observable acceptance requirements for this request.",
+          "type": "custom",
+          "required": true,
+          "verification": {
+            "kind": "custom",
+            "verifier_id": "meaning:acceptance:61b1ce0c3b22de19830f8c6ec789e0af:0786b3713d7d54ac"
+          },
+          "verification_strategy": "Acceptance meaning is unresolved; a finished response or successful command cannot satisfy this requirement."
+        }
+      ],
+      "sources": [
+        {
+          "criterion_id": "acceptance:61b1ce0c3b22de19830f8c6ec789e0af",
+          "status": "unresolved",
+          "input_digest": "0786b3713d7d54ac974c68d3e3306b8577713ab93fcd50d84d03057761c95917",
+          "start": 0,
+          "end": 30
+        }
+      ],
+      "activeProse": [
+        "const x = 1;",
+        "Do real work."
+      ],
+      "structurallyComplete": true,
+      "interpretation_version": 1,
+      "provenance": [
+        {
+          "kind": "derived_acceptance",
+          "ref": "task-acceptance-meaning:v1:unresolved:0786b3713d7d54ac974c68d3e3306b8577713ab93fcd50d84d03057761c95917:0:30:acceptance:61b1ce0c3b22de19830f8c6ec789e0af"
+        }
+      ],
+      "unresolved": true
+    }
+  },
+  {
+    "input": "Task line one.\n\nTask line two.",
+    "expected": {
+      "criteria": [
+        {
+          "id": "acceptance:61b1ce0c3b22de19830f8c6ec789e0af",
+          "description": "Clarify the observable acceptance requirements for this request.",
+          "type": "custom",
+          "required": true,
+          "verification": {
+            "kind": "custom",
+            "verifier_id": "meaning:acceptance:61b1ce0c3b22de19830f8c6ec789e0af:431b500bef1b17d1"
+          },
+          "verification_strategy": "Acceptance meaning is unresolved; a finished response or successful command cannot satisfy this requirement."
+        }
+      ],
+      "sources": [
+        {
+          "criterion_id": "acceptance:61b1ce0c3b22de19830f8c6ec789e0af",
+          "status": "unresolved",
+          "input_digest": "431b500bef1b17d174b5c745520645d4dd3c7a349cd474b8b3f2092d9dd1429e",
+          "start": 0,
+          "end": 30
+        }
+      ],
+      "activeProse": [
+        "Task line one.",
+        "Task line two."
+      ],
+      "structurallyComplete": true,
+      "interpretation_version": 1,
+      "provenance": [
+        {
+          "kind": "derived_acceptance",
+          "ref": "task-acceptance-meaning:v1:unresolved:431b500bef1b17d174b5c745520645d4dd3c7a349cd474b8b3f2092d9dd1429e:0:30:acceptance:61b1ce0c3b22de19830f8c6ec789e0af"
+        }
+      ],
+      "unresolved": true
+    }
+  },
+  {
+    "input": "Requirements:\n  - nested wrong indent",
+    "expected": {
+      "criteria": [
+        {
+          "id": "acceptance:7b157c4c5188eebcdd495986526c7032",
+          "description": "nested wrong indent",
+          "type": "custom",
+          "required": true,
+          "verification": {
+            "kind": "custom",
+            "verifier_id": "meaning:acceptance:7b157c4c5188eebcdd495986526c7032:c33714fefd82cd89"
+          },
+          "verification_strategy": "Independent evidence for this requirement bound to the active contract and candidate revision."
+        }
+      ],
+      "sources": [
+        {
+          "criterion_id": "acceptance:7b157c4c5188eebcdd495986526c7032",
+          "status": "explicit",
+          "input_digest": "c33714fefd82cd89e85f274a4d52cf477faa8ff2785fe3612f8f976194ce9503",
+          "start": 14,
+          "end": 37
+        }
+      ],
+      "activeProse": [
+        "Requirements:",
+        "- nested wrong indent"
+      ],
+      "structurallyComplete": true,
+      "interpretation_version": 1,
+      "provenance": [
+        {
+          "kind": "derived_acceptance",
+          "ref": "task-acceptance-meaning:v1:explicit:c33714fefd82cd89e85f274a4d52cf477faa8ff2785fe3612f8f976194ce9503:14:37:acceptance:7b157c4c5188eebcdd495986526c7032"
+        }
+      ],
+      "unresolved": false
+    }
+  }
+]
