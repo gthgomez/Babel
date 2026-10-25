@@ -110,6 +110,39 @@ export function taskContractBindsPathListAdmission(contract: TaskContractV1): bo
   return findPathListAdmissionProvenanceRecord(contract) !== undefined
 }
 
+/** After execution scope normalization — declaration requires an effective project root. */
+export function assertPathListDeclarationRequiresEffectiveProjectRoot(input: {
+  trustedHostFilesystemPathListDeclaration?: unknown
+  projectRoot: string | null
+}): void {
+  if (input.trustedHostFilesystemPathListDeclaration === undefined) return
+  if (input.projectRoot === null) {
+    throw new LiveSessionAuthorityError(
+      'PATH_LIST_DECLARATION_REQUIRES_PROJECT_ROOT',
+      'PATH_LIST_DECLARATION_REQUIRES_PROJECT_ROOT: A trusted host filesystem path-list declaration requires a non-null project root.',
+    )
+  }
+}
+
+/** Parse and bind task text without filesystem capture (constructor preflight). */
+export function validatePathListDeclarationInput(task: string, declarationInput: unknown): void {
+  let declaration: TrustedHostFilesystemPathListDeclarationV1
+  try {
+    declaration = parseTrustedHostFilesystemPathListDeclaration(declarationInput)
+  } catch (error) {
+    throw new LiveSessionAuthorityError(
+      'PATH_LIST_DECLARATION_INVALID',
+      error instanceof Error ? error.message : String(error),
+    )
+  }
+  if (task !== declaration.user_request) {
+    throw new LiveSessionAuthorityError(
+      'PATH_LIST_REQUEST_MISMATCH',
+      'Task text does not match trusted host filesystem path-list declaration user_request',
+    )
+  }
+}
+
 type AdmissionBody = Omit<LiveSessionFilesystemPathListAdmissionV1, 'admission_record_digest'>
 
 function admissionRecordDigest(body: AdmissionBody): string {

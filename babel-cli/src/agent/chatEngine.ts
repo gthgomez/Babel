@@ -119,7 +119,11 @@ import {
   engineCanMutateKey,
 } from "./chatEngineLiveSession.js";
 import { LiveSessionAuthorityError } from "./liveSessionAuthorityError.js";
-import { assertPathListSessionBinding } from "./liveSessionFilesystemPathListAdmission.js";
+import {
+  assertPathListDeclarationRequiresEffectiveProjectRoot,
+  assertPathListSessionBinding,
+  validatePathListDeclarationInput,
+} from "./liveSessionFilesystemPathListAdmission.js";
 import {
   AUTHORITY_SESSION_FILENAME,
   restoreAuthoritySession,
@@ -886,17 +890,32 @@ export class ChatEngine {
     this.taskAllowanceOwner.markChildBudgetExhausted(limiter, reason);
   }
   constructor(options: ChatEngineOptions) {
+    let scope: import("./chatExecutionScope.js").ChatExecutionScope;
+    try {
+      scope = normalizeChatExecutionScope(options);
+    } catch (error) {
+      if (options.trustedHostFilesystemPathListDeclaration !== undefined) {
+        throw new LiveSessionAuthorityError(
+          "PATH_LIST_DECLARATION_REQUIRES_PROJECT_ROOT",
+          "PATH_LIST_DECLARATION_REQUIRES_PROJECT_ROOT: A trusted host filesystem path-list declaration requires a non-null project root.",
+        );
+      }
+      throw error;
+    }
+    options={...options,executionScope:scope,projectRoot:scope.kind==="project"?scope.projectRoot:null};
+    assertPathListDeclarationRequiresEffectiveProjectRoot({
+      trustedHostFilesystemPathListDeclaration: options.trustedHostFilesystemPathListDeclaration,
+      projectRoot: options.projectRoot,
+    });
     if (
       options.trustedHostFilesystemPathListDeclaration !== undefined &&
-      (options.projectRoot === null || options.projectRoot === undefined)
+      options.projectRoot !== null
     ) {
-      throw new LiveSessionAuthorityError(
-        "PATH_LIST_DECLARATION_REQUIRES_PROJECT_ROOT",
-        "PATH_LIST_DECLARATION_REQUIRES_PROJECT_ROOT: A trusted host filesystem path-list declaration requires a non-null project root.",
+      validatePathListDeclarationInput(
+        options.task,
+        options.trustedHostFilesystemPathListDeclaration,
       );
     }
-    const scope=normalizeChatExecutionScope(options);
-    options={...options,executionScope:scope,projectRoot:scope.kind==="project"?scope.projectRoot:null};
     if(scope.kind==="conversation"&&(options.instructionRoot||options.workspaceRoot||options.compiledChatStack?.project_root))throw new Error("Conflicting project context in conversation scope");
     options = { ...options, compiledChatStack: resolveChatInstructionContext(options) };
     this.options = options;

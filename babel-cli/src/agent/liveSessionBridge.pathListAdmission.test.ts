@@ -17,6 +17,7 @@ import {
 import {
   LiveSessionAuthorityError,
   TRUSTED_HOST_PATH_LIST_ADMISSION_FILENAME,
+  TASK_CONTRACT_FILENAME,
   loadLiveSessionAuthorityStrict,
   persistLiveSessionAuthority,
   resolveLiveSessionAuthority,
@@ -67,6 +68,17 @@ function fileSha256(path: string): string {
   return createHash('sha256').update(readFileSync(path)).digest('hex')
 }
 
+function assertNoPathListAuthorityBypass(runDir: string): void {
+  assert.equal(existsSync(join(runDir, TRUSTED_HOST_PATH_LIST_ADMISSION_FILENAME)), false)
+  const contractPath = join(runDir, TASK_CONTRACT_FILENAME)
+  if (existsSync(contractPath)) {
+    const contract = JSON.parse(readFileSync(contractPath, 'utf8')) as {
+      provenance?: { records?: Array<{ ref: string }> }
+    }
+    assert.equal(contractBindsPathListAdmission(contract as { provenance: { records: Array<{ ref: string }> } }), false)
+  }
+}
+
 test('ChatEngine constructor rejects declaration when projectRoot is null', () => {
   const runId = `path-list-null-root-${randomUUID()}`
   const runDir = chatSessionDir(runId)
@@ -85,6 +97,80 @@ test('ChatEngine constructor rejects declaration when projectRoot is null', () =
   assert.equal(caught.code, 'PATH_LIST_DECLARATION_REQUIRES_PROJECT_ROOT')
   assert.equal(existsSync(runDir), false)
   assert.equal(existsSync(join(runDir, TRUSTED_HOST_PATH_LIST_ADMISSION_FILENAME)), false)
+})
+
+test('ChatEngine constructor rejects declaration when conversation scope normalizes project root away', () => {
+  const runId = `path-list-conversation-scope-${randomUUID()}`
+  const runDir = chatSessionDir(runId)
+  let caught: unknown
+  try {
+    new ChatEngine({
+      runId,
+      task: USER_REQUEST,
+      projectRoot: null,
+      executionScope: { kind: 'conversation' },
+      trustedHostFilesystemPathListDeclaration: declarationPayload(),
+    })
+  } catch (error) {
+    caught = error
+  }
+  assert.ok(caught instanceof LiveSessionAuthorityError)
+  assert.equal(caught.code, 'PATH_LIST_DECLARATION_REQUIRES_PROJECT_ROOT')
+  assert.equal(existsSync(runDir), false)
+  assertNoPathListAuthorityBypass(runDir)
+})
+
+test('ChatEngine constructor rejects conflicting conversation scope before path-list authority', () => {
+  const root = mkdtempSync(join(tmpdir(), 'path-list-conv-conflict-'))
+  const runId = `path-list-conv-conflict-${randomUUID()}`
+  const runDir = chatSessionDir(runId)
+  try {
+    seedRepo(root)
+    let caught: unknown
+    try {
+      new ChatEngine({
+        runId,
+        task: USER_REQUEST,
+        projectRoot: root,
+        executionScope: { kind: 'conversation' },
+        trustedHostFilesystemPathListDeclaration: declarationPayload(),
+      })
+    } catch (error) {
+      caught = error
+    }
+    assert.ok(caught instanceof LiveSessionAuthorityError)
+    assert.equal(caught.code, 'PATH_LIST_DECLARATION_REQUIRES_PROJECT_ROOT')
+    assert.equal(existsSync(runDir), false)
+    assertNoPathListAuthorityBypass(runDir)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('ChatEngine constructor rejects invalid declaration before durable path-list authority', t => {
+  const root = mkdtempSync(join(tmpdir(), 'path-list-invalid-decl-'))
+  const runId = `path-list-invalid-decl-${randomUUID()}`
+  const runDir = chatSessionDir(runId)
+  t.after(() => {
+    rmSync(root, { recursive: true, force: true })
+    if (existsSync(runDir)) rmSync(runDir, { recursive: true, force: true })
+  })
+  seedRepo(root)
+  let caught: unknown
+  try {
+    new ChatEngine({
+      runId,
+      task: USER_REQUEST,
+      projectRoot: root,
+      trustedHostFilesystemPathListDeclaration: { not_a_declaration: true },
+    })
+  } catch (error) {
+    caught = error
+  }
+  assert.ok(caught instanceof LiveSessionAuthorityError)
+  assert.equal(caught.code, 'PATH_LIST_DECLARATION_INVALID')
+  assert.equal(existsSync(runDir), false)
+  assertNoPathListAuthorityBypass(runDir)
 })
 
 test('ChatEngine constructor rejects task drift and leaves no path-list admission artifact', () => {
