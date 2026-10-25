@@ -19,6 +19,7 @@ import {
   hydrateRetainedModeSources,
   prepareEngineInstructionAuthority,
 } from './chatEngineLiveSession.js'
+import { assertPathListSessionBinding } from './liveSessionFilesystemPathListAdmission.js'
 import {
   bindInitialObjective,
   assertObjectiveLifecycle,
@@ -152,7 +153,7 @@ export function admitObjectiveSubmission(
   }
   const authority = previous.liveAuthority
   if (!authority) throw new Error('OBJECTIVE_AUTHORITY_MISSING')
-  const options = { ...host.options, task: runtime.taskText }
+  let options: ChatEngineOptions = { ...host.options, task: runtime.taskText }
   const context = {
     parity: staged,
     options,
@@ -180,20 +181,34 @@ export function admitObjectiveSubmission(
     authority.taskContract.user_request === runtime.taskText
   const preserve = prepared.objectiveDisposition === 'preserve'
   if (!preserve && !initialSeed) staged.authorizedObservationIds = new Set()
-  const delivered = prepareEngineInstructionAuthority(context)
-  if (
-    (preserve || initialSeed) &&
-    delivered.taskContract.mode !== authority.taskContract.mode
-  ) {
-    throw new Error('MODE_TRANSITION_REQUIRED')
+  if ((preserve || initialSeed) && authority.filesystemPathListAdmission) {
+    if (options.trustedHostFilesystemPathListDeclaration !== undefined) {
+      assertPathListSessionBinding({
+        projectRoot: options.projectRoot,
+        task: runtime.taskText,
+        contract: authority.taskContract,
+        admission: authority.filesystemPathListAdmission,
+        incomingDeclaration: options.trustedHostFilesystemPathListDeclaration,
+      })
+    }
+    const { trustedHostFilesystemPathListDeclaration: _pathListDecl, ...stripped } = options
+    options = stripped
+    context.options = options
   }
-  let candidate = {
-    ...authority,
-    instructionManifest: delivered.instructionManifest,
-    ...(delivered.chatStack ? { chatStack: delivered.chatStack } : {}),
-  }
-  if (!preserve && !initialSeed) {
+  let candidate: typeof authority
+  if (preserve || initialSeed) {
+    const delivered = prepareEngineInstructionAuthority(context)
+    if (delivered.taskContract.mode !== authority.taskContract.mode) {
+      throw new Error('MODE_TRANSITION_REQUIRED')
+    }
+    candidate = {
+      ...authority,
+      instructionManifest: delivered.instructionManifest,
+      ...(delivered.chatStack ? { chatStack: delivered.chatStack } : {}),
+    }
+  } else {
     delete options.compiledChatStack
+    context.options = options
     candidate = prepareEngineInstructionAuthority({
       ...context,
       options,

@@ -3,7 +3,7 @@
   "algorithm": "sha256",
   "purpose": "drift_detection_not_authorization",
   "normalization": "utf8_crlf_to_lf",
-  "policy_bundle_id": "da345b7d2d7fcdf035c1104d7d654fadd994feadb44f835ba4b72461653455c3",
+  "policy_bundle_id": "871ae22ea604a406d55be812387668b566674930967c085930d0edf4ae0849ea",
   "files": {
     ".github/workflows/public-pr-metadata.yml": "67e630d700055533ee77157ed05fc347161c7c041e35151f2652ffd9b9973023",
     ".github/workflows/publish-npm.yml": "54036b704d59e513cbbb981efa00e82121e40871d6dfe789c8636bd0159f8c9e",
@@ -13,7 +13,7 @@
     "AGENTS.md": "d8ac18573ddc1bc8f538d91adec66dfe078016beaa78ac54c612f8520e49fc34",
     "babel-cli/src/agent/autonomyEnforcement.ts": "942e1f789c54c7c8d6d8ffeb0dfe48974932bddc0ad2da989aa845b8baa92928",
     "babel-cli/src/agent/liveSessionAuthorityError.ts": "3df6cb544cc911b4aeeb16e04454edd6b5e20358e76fd803e8c2fad2d7a62eb2",
-    "babel-cli/src/agent/liveSessionBridge.pathListAdmission.test.ts": "12fb7a87964fc1054c940f4cd35153d7fe29430f857700f61020ceed1e54b481",
+    "babel-cli/src/agent/liveSessionBridge.pathListAdmission.test.ts": "0b4f0abde623ac62e73b39501ab1d48b025f2aeeb95d7645e60ab10d3ab97fda",
     "babel-cli/src/agent/liveSessionFilesystemPathListAdmission.ts": "0690e6cb436d21f56dca27f1d19a87e532a782b5aae5aca3ea8a5b8d4b8aa6fa",
     "babel-cli/src/authority/actionRequest.ts": "e17df5cebed675ebfff4bc512d280d0a0bd38fd2b968fc9f19e5a397deda8335",
     "babel-cli/src/authority/authority.test.ts": "932606bc3f8c5e2d40d6fd47b4e9be8764eb04abc2f982816767428846f0829b",

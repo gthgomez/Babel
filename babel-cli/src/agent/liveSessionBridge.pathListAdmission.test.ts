@@ -669,6 +669,68 @@ test('same-mode ChatEngine resume on matching root does not recapture baseline',
   assert.equal(pathListBaselineCaptureCountForTests(), 1)
 })
 
+test('first native submit retains path-list admission without second baseline capture', t => {
+  const root = mkdtempSync(join(tmpdir(), 'path-list-submit-once-'))
+  const runId = `path-list-submit-once-${randomUUID()}`
+  const runDir = chatSessionDir(runId)
+  t.after(() => {
+    rmSync(root, { recursive: true, force: true })
+    if (existsSync(runDir)) rmSync(runDir, { recursive: true, force: true })
+  })
+  resetPathListBaselineCaptureCountForTests()
+  seedRepo(root)
+  const decl = declarationPayload()
+  const engine = new ChatEngine({
+    runId,
+    task: USER_REQUEST,
+    projectRoot: root,
+    trustedHostFilesystemPathListDeclaration: decl,
+  })
+  assert.equal(pathListBaselineCaptureCountForTests(), 1)
+  const beforeHash = fileSha256(join(root, 'docs', 'notes.md'))
+  engine.applyUserSubmission({ userInput: USER_REQUEST })
+  assert.equal(pathListBaselineCaptureCountForTests(), 1)
+  const reloaded = loadLiveSessionAuthorityStrict(runDir)
+  assert.equal(
+    reloaded.filesystemPathListAdmission?.preserved_baseline.preserved['docs/notes.md']?.content_sha256,
+    beforeHash,
+  )
+})
+
+test('Continue submit retains admitted baseline after preserved input deleted', t => {
+  const root = mkdtempSync(join(tmpdir(), 'path-list-continue-'))
+  const runId = `path-list-continue-${randomUUID()}`
+  const runDir = chatSessionDir(runId)
+  t.after(() => {
+    rmSync(root, { recursive: true, force: true })
+    if (existsSync(runDir)) rmSync(runDir, { recursive: true, force: true })
+  })
+  resetPathListBaselineCaptureCountForTests()
+  seedRepo(root)
+  const notesPath = join(root, 'docs', 'notes.md')
+  const beforeHash = fileSha256(notesPath)
+  const decl = declarationPayload()
+  const engine = new ChatEngine({
+    runId,
+    task: USER_REQUEST,
+    projectRoot: root,
+    trustedHostFilesystemPathListDeclaration: decl,
+  })
+  engine.applyUserSubmission({ userInput: USER_REQUEST })
+  assert.equal(pathListBaselineCaptureCountForTests(), 1)
+  rmSync(notesPath)
+  engine.applyUserSubmission({
+    userInput: USER_REQUEST,
+    continueTask: true,
+  })
+  assert.equal(pathListBaselineCaptureCountForTests(), 1)
+  const reloaded = loadLiveSessionAuthorityStrict(runDir)
+  assert.equal(
+    reloaded.filesystemPathListAdmission?.preserved_baseline.preserved['docs/notes.md']?.content_sha256,
+    beforeHash,
+  )
+})
+
 test('declaration does not change inferred acceptance criteria', () => {
   const root = mkdtempSync(join(tmpdir(), 'path-list-admit-accept-'))
   try {
