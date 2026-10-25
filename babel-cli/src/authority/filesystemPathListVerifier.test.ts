@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { sep } from 'node:path'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -8,12 +9,14 @@ import { sha256Canonical } from '../acceptance/canonical.js'
 import {
   INVENTORY_VERIFICATION_EVIDENCE_MODE,
   captureFilesystemSourceBaseline,
-  normalizeDeclarationRepoRelativePath,
   parseMarkdownBulletPaths,
+  setVerifierReadAttemptRecorder,
+  type VerifierReadAttemptV1,
   verifyFilesystemPathList,
 } from './filesystemPathListVerifier.js'
 import {
   declarationContentHash,
+  normalizeDeclarationRepoRelativePath,
   parseTrustedHostFilesystemPathListDeclaration,
   TRUSTED_HOST_FILESYSTEM_PATH_LIST_DECLARATION_KIND,
 } from './trustedHostFilesystemPathList.js'
@@ -276,6 +279,20 @@ test('parse failure skips preserved check', t => {
   assert.equal(result.checks.preserved_inputs_unchanged.reason_code, 'not_evaluated')
 })
 
+function secretSegmentPath(root: string): string {
+  return `${root}${sep}secrets${sep}`
+}
+
+function assertNoSecretReadAttempts(attempts: readonly VerifierReadAttemptV1[], root: string): void {
+  const secretSegment = secretSegmentPath(root)
+  const secretAttempts = attempts.filter(attempt => attempt.absolute_path.includes(secretSegment))
+  assert.deepEqual(
+    secretAttempts,
+    [],
+    `expected no verifier read attempts under secrets; observed: ${JSON.stringify(secretAttempts)}`,
+  )
+}
+
 function linkDirOrSkip(t: import('node:test').TestContext, target: string, linkPath: string): boolean {
   try {
     symlinkSync(target, linkPath, process.platform === 'win32' ? 'junction' : 'dir')
@@ -290,35 +307,39 @@ function linkDirOrSkip(t: import('node:test').TestContext, target: string, linkP
   }
 }
 
-test('ancestor alias into secrets does not read credential bytes for target document', t => {
+test('ancestor alias into secrets denies target before verifier read seam (observed)', t => {
   const root = mkdtempSync(join(tmpdir(), 'fs-path-list-anc-target-'))
   t.after(() => rmSync(root, { recursive: true, force: true }))
+  const attempts: VerifierReadAttemptV1[] = []
+  setVerifierReadAttemptRecorder(attempt => attempts.push(attempt))
+  t.after(() => setVerifierReadAttemptRecorder(undefined))
   mkdirSync(join(root, 'secrets'), { recursive: true })
-  const secretFile = join(root, 'secrets', 'index.md')
-  writeFileSync(secretFile, 'CANARY_SECRET_TARGET\n', 'utf8')
+  writeFileSync(join(root, 'secrets', 'index.md'), 'CANARY_SECRET_TARGET\n', 'utf8')
   if (!linkDirOrSkip(t, join(root, 'secrets'), join(root, 'meta'))) return
   const paths = seedTree(root)
   const decl = declaration({ target: 'meta/index.md', roots: ['apps'], preserved: [] })
   writeMap(root, decl.target_document, paths)
-  chmodSync(secretFile, 0o000)
   const baseline = captureFilesystemSourceBaseline(root, decl)
   const result = verifyFilesystemPathList(root, decl, baseline)
   assert.equal(result.status, 'failed')
   assert.equal(result.reason_code, 'target_document_symlink')
+  assertNoSecretReadAttempts(attempts, root)
 })
 
-test('ancestor alias into secrets does not read credential bytes for preserved capture', t => {
+test('ancestor alias into secrets denies preserved capture before verifier read seam (observed)', t => {
   const root = mkdtempSync(join(tmpdir(), 'fs-path-list-anc-preserved-'))
   t.after(() => rmSync(root, { recursive: true, force: true }))
+  const attempts: VerifierReadAttemptV1[] = []
+  setVerifierReadAttemptRecorder(attempt => attempts.push(attempt))
+  t.after(() => setVerifierReadAttemptRecorder(undefined))
   seedTree(root)
   rmSync(join(root, 'docs'), { recursive: true, force: true })
   mkdirSync(join(root, 'secrets'), { recursive: true })
-  const secretFile = join(root, 'secrets', 'notes.md')
-  writeFileSync(secretFile, 'CANARY_SECRET_PRESERVED\n', 'utf8')
-  chmodSync(secretFile, 0o000)
+  writeFileSync(join(root, 'secrets', 'notes.md'), 'CANARY_SECRET_PRESERVED\n', 'utf8')
   if (!linkDirOrSkip(t, join(root, 'secrets'), join(root, 'docs'))) return
   const decl = declaration({ preserved: ['docs/notes.md'], roots: ['apps'] })
   assert.throws(() => captureFilesystemSourceBaseline(root, decl), /symlink_preserved:docs\/notes\.md/)
+  assertNoSecretReadAttempts(attempts, root)
 })
 
 test('directory symlink inside scope fails inventory listing', t => {

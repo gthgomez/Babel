@@ -4,7 +4,34 @@
  */
 import { sha256Canonical } from '../acceptance/canonical.js'
 import { isCredentialTargetPath } from './protectedPath.js'
-import { normalizeDeclarationRepoRelativePath } from './filesystemPathListVerifier.js'
+
+function hasGlobOrEscapeSyntax(raw: string): boolean {
+  return /[*?[\]{}]/.test(raw) || raw.includes('**')
+}
+
+/** Normalize a repo-relative path from document bullets or runtime checks. */
+export function normalizeRepoRelativePath(raw: string): string | null {
+  const trimmed = raw.trim()
+  if (!trimmed) return null
+  const norm = trimmed.replace(/\\/g, '/')
+  if (norm.startsWith('/') || /^[a-zA-Z]:/.test(norm)) return null
+  if (norm.includes('..') || norm.includes('\0')) return null
+  const parts = norm.split('/').filter(Boolean)
+  if (parts.some(part => part === '.' || part === '..')) return null
+  const joined = parts.join('/')
+  if (joined.length > 512) return null
+  if (isCredentialTargetPath(joined)) return null
+  return joined
+}
+
+/** Stricter normalization for declaration-bound path fields (rejects rooted backslash absolutes). */
+export function normalizeDeclarationRepoRelativePath(raw: string): string | null {
+  const trimmed = raw.trim()
+  if (!trimmed) return null
+  if (trimmed.startsWith('\\') || /^[a-zA-Z]:[\\/]/.test(trimmed)) return null
+  if (hasGlobOrEscapeSyntax(trimmed.replace(/\\/g, '/'))) return null
+  return normalizeRepoRelativePath(trimmed)
+}
 
 export const TRUSTED_HOST_FILESYSTEM_PATH_LIST_DECLARATION_KIND =
   'trusted_host_filesystem_path_list_declaration_v1' as const

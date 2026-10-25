@@ -18,13 +18,38 @@ import {
   realpathSync,
   readdirSync,
 } from 'node:fs'
-import { join, relative, resolve, sep } from 'node:path'
-import { admitProjectRelativePath } from '../sandbox.js'
+import { isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { sanitizePath } from '../cli/constants.js'
+import { isCredentialReadPath } from '../sandbox.js'
 import { isCredentialTargetPath } from './protectedPath.js'
 import {
   declarationContentHash,
+  normalizeDeclarationRepoRelativePath,
+  normalizeRepoRelativePath,
   type TrustedHostFilesystemPathListDeclarationV1,
 } from './trustedHostFilesystemPathList.js'
+
+export { normalizeDeclarationRepoRelativePath, normalizeRepoRelativePath } from './trustedHostFilesystemPathList.js'
+
+export type VerifierReadAttemptKind = 'read_file' | 'open_read'
+
+export interface VerifierReadAttemptV1 {
+  readonly absolute_path: string
+  readonly kind: VerifierReadAttemptKind
+}
+
+let verifierReadAttemptRecorder: ((attempt: VerifierReadAttemptV1) => void) | undefined
+
+/** Test-only hook: observe verifier read attempts after path admission. */
+export function setVerifierReadAttemptRecorder(
+  recorder: ((attempt: VerifierReadAttemptV1) => void) | undefined,
+): void {
+  verifierReadAttemptRecorder = recorder
+}
+
+function recordVerifierReadAttempt(absolutePath: string, kind: VerifierReadAttemptKind): void {
+  verifierReadAttemptRecorder?.({ absolute_path: absolutePath, kind })
+}
 
 export const FILESYSTEM_PATH_LIST_VERIFIER_RESULT_KIND =
   'filesystem_path_list_verifier_result_v1' as const
@@ -106,32 +131,75 @@ function isContainedInRoot(rootReal: string, candidateReal: string): boolean {
   return candidateReal === rootReal || candidateReal.startsWith(prefix)
 }
 
-function hasGlobOrEscapeSyntax(raw: string): boolean {
-  return /[*?[\]{}]/.test(raw) || raw.includes('**')
+function isWithinProjectRootPath(root: string, candidate: string): boolean {
+  if (process.platform === 'win32') {
+    const rootNorm = root.toLowerCase()
+    const targetNorm = candidate.toLowerCase()
+    return targetNorm === rootNorm || targetNorm.startsWith(rootNorm + sep)
+  }
+  const prefix = root.endsWith(sep) ? root : root + sep
+  return candidate === root || candidate.startsWith(prefix)
 }
 
-/** Normalize a repo-relative path from document bullets or runtime checks. */
-export function normalizeRepoRelativePath(raw: string): string | null {
-  const trimmed = raw.trim()
-  if (!trimmed) return null
-  const norm = trimmed.replace(/\\/g, '/')
-  if (norm.startsWith('/') || /^[a-zA-Z]:/.test(norm)) return null
-  if (norm.includes('..') || norm.includes('\0')) return null
-  const parts = norm.split('/').filter(Boolean)
-  if (parts.some(part => part === '.' || part === '..')) return null
-  const joined = parts.join('/')
-  if (joined.length > 512) return null
-  if (isCredentialTargetPath(joined)) return null
-  return joined
+function assertNoSymlinkAncestors(projectRoot: string, absolutePath: string, inputLabel: string): void {
+  const rel = relative(projectRoot, absolutePath)
+  if (rel.startsWith('..') || isAbsolute(rel)) {
+    throw new Error(
+      `FILESYSTEM_PATH_LIST_ADMISSION: path traversal denied for "${inputLabel}"`,
+    )
+  }
+  let current = projectRoot
+  for (const segment of rel.split(/[\\/]+/).filter(part => part.length > 0)) {
+    current = resolve(current, segment)
+    if (existsSync(current) && lstatSync(current).isSymbolicLink()) {
+      throw new Error(
+        `FILESYSTEM_PATH_LIST_ADMISSION: symlink ancestor "${segment}" on "${inputLabel}"`,
+      )
+    }
+  }
 }
 
-/** Stricter normalization for declaration-bound path fields (rejects rooted backslash absolutes). */
-export function normalizeDeclarationRepoRelativePath(raw: string): string | null {
-  const trimmed = raw.trim()
-  if (!trimmed) return null
-  if (trimmed.startsWith('\\') || /^[a-zA-Z]:[\\/]/.test(trimmed)) return null
-  if (hasGlobOrEscapeSyntax(trimmed.replace(/\\/g, '/'))) return null
-  return normalizeRepoRelativePath(trimmed)
+/**
+ * Stage-1 verifier path admission (not SafeExecutor). Aligns with sandbox credential
+ * policy via `isCredentialReadPath`; does not change sandbox callers.
+ */
+function admitVerifierProjectRelativePath(
+  projectRoot: string,
+  repoRelativePath: string,
+  kind: 'file' | 'directory',
+): string {
+  const trimmed = repoRelativePath.trim()
+  if (!trimmed) {
+    throw new Error('FILESYSTEM_PATH_LIST_ADMISSION: empty path')
+  }
+  const root = existsSync(projectRoot) ? realpathSync.native(projectRoot) : resolve(projectRoot)
+  if (existsSync(root) && lstatSync(root).isSymbolicLink()) {
+    throw new Error('FILESYSTEM_PATH_LIST_ADMISSION: project root is a symlink')
+  }
+  const absolute = resolve(root, sanitizePath(trimmed))
+  assertNoSymlinkAncestors(root, absolute, trimmed)
+  if (!existsSync(absolute)) {
+    throw new Error(`FILESYSTEM_PATH_LIST_ADMISSION: path not found "${trimmed}"`)
+  }
+  const stats = lstatSync(absolute)
+  if (stats.isSymbolicLink()) {
+    throw new Error(`FILESYSTEM_PATH_LIST_ADMISSION: symlink leaf "${trimmed}"`)
+  }
+  if (kind === 'file' && !stats.isFile()) {
+    throw new Error(`FILESYSTEM_PATH_LIST_ADMISSION: not a regular file "${trimmed}"`)
+  }
+  if (kind === 'directory' && !stats.isDirectory()) {
+    throw new Error(`FILESYSTEM_PATH_LIST_ADMISSION: not a directory "${trimmed}"`)
+  }
+  const real = realpathSync.native(absolute)
+  if (!isWithinProjectRootPath(root, real)) {
+    throw new Error(`FILESYSTEM_PATH_LIST_ADMISSION: resolves outside root "${trimmed}"`)
+  }
+  const resolvedRelative = relative(root, real).split(sep).join('/')
+  if (isCredentialReadPath(real) || isCredentialReadPath(resolvedRelative)) {
+    throw new Error(`FILESYSTEM_PATH_LIST_ADMISSION: credential read denied "${trimmed}"`)
+  }
+  return real
 }
 
 /** Parse markdown bullet paths from document bytes. */
@@ -163,16 +231,16 @@ export function parseMarkdownBulletPaths(
 }
 
 function admissionErrorCode(message: string): string {
-  if (message.includes('Credential read denied')) return 'credential_denied'
-  if (message.includes('Symlink traversal denied')) return 'symlink'
-  if (message.includes('Path traversal denied')) return 'escape'
-  if (message.includes('Path not found')) return 'missing'
+  if (message.includes('credential read denied')) return 'credential_denied'
+  if (message.includes('symlink')) return 'symlink'
+  if (message.includes('path traversal denied') || message.includes('resolves outside root')) return 'escape'
+  if (message.includes('path not found')) return 'missing'
   return 'path_denied'
 }
 
 function admitRepoRelativeFile(rootReal: string, repoRelative: string): { ok: true; real: string } | { ok: false; code: string } {
   try {
-    return { ok: true, real: admitProjectRelativePath(rootReal, repoRelative, 'file') }
+    return { ok: true, real: admitVerifierProjectRelativePath(rootReal, repoRelative, 'file') }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     return { ok: false, code: admissionErrorCode(message) }
@@ -184,7 +252,7 @@ function admitRepoRelativeDirectory(
   repoRelative: string,
 ): { ok: true; real: string } | { ok: false; code: string } {
   try {
-    return { ok: true, real: admitProjectRelativePath(rootReal, repoRelative, 'directory') }
+    return { ok: true, real: admitVerifierProjectRelativePath(rootReal, repoRelative, 'directory') }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     return { ok: false, code: admissionErrorCode(message) }
@@ -192,12 +260,14 @@ function admitRepoRelativeDirectory(
 }
 
 function hashAdmittedFileContent(absolutePath: string): string {
+  recordVerifierReadAttempt(absolutePath, 'read_file')
   return createHash('sha256').update(readFileSync(absolutePath)).digest('hex')
 }
 
 function readBoundedUtf8FileSync(absolutePath: string, maxBytes: number): { ok: true; text: string } | { ok: false; reason: string } {
   let fd: number | undefined
   try {
+    recordVerifierReadAttempt(absolutePath, 'open_read')
     fd = openSync(absolutePath, 'r')
     const st = fstatSync(fd)
     if (!st.isFile()) return { ok: false, reason: 'target_not_regular_file' }
