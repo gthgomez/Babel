@@ -221,4 +221,95 @@ test('P02: file-only completion when shell sandbox unavailable — actual ChatEn
   assert.doesNotMatch(assistantText, /tests passed|VERIFIED_COMPLETE/i)
   const doneText = terminal[0]?.type === 'done' ? (terminal[0] as { summary?: string }).summary ?? '' : ''
   assert.doesNotMatch(doneText, /tests passed/i)
+
+  const denialA = `${shellAttempts[0]?.error ?? ''} ${shellAttempts[0]?.detail ?? ''}`
+  const denialB = `${shellAttempts[1]?.error ?? ''} ${shellAttempts[1]?.detail ?? ''}`
+  assert.equal(denialA, denialB, 'keyed shell prerequisite must survive unrelated reads without changing denial facts')
+})
+
+test('P02: shell-required verification cannot be satisfied by file-only edit alone', async t => {
+  const prior = Object.fromEntries(MANAGED_ENV.map(key => [key, process.env[key]]))
+  const projectRoot = mkdtempSync(join(tmpdir(), 'babel-p02-shell-required-'))
+  t.after(() => {
+    for (const key of MANAGED_ENV) {
+      if (prior[key] === undefined) delete process.env[key]
+      else process.env[key] = prior[key]
+    }
+    refreshDryRunState()
+    rmSync(projectRoot, { recursive: true, force: true })
+  })
+
+  for (const key of MANAGED_ENV) delete process.env[key]
+  process.env['BABEL_EXECUTION_PROFILE'] = 'safe_repo'
+  process.env['BABEL_ALLOW_HOST_FALLBACK'] = '0'
+  process.env['BABEL_DOCKER_DISABLE'] = 'false'
+  delete process.env['BABEL_BENCHMARK_DOCKER_IMAGE']
+  process.env['BABEL_BENCHMARK_MODE'] = '1'
+  process.env['BABEL_BENCHMARK_AUTO_APPROVE'] = '1'
+  process.env['BABEL_DRY_RUN'] = '0'
+  process.env['BABEL_DIFF_CRITIC'] = '0'
+  process.env['BABEL_COMPACTION'] = 'off'
+  process.env['BABEL_DIRTY_TREE'] = '0'
+  process.env['BABEL_AUTONOMY_LEASE'] = JSON.stringify({
+    version: 2,
+    leaseId: `p02-shell-required-${randomUUID()}`,
+    scope: { repository: 'p02-readiness-fixture', objective: 'verifier required' },
+    allowedCapabilities: ['edit_task_files', 'inspect_repository', 'run_local_command', 'run_tests'],
+  })
+  refreshDryRunState()
+  seedRepository(projectRoot)
+  writeFileSync(
+    join(projectRoot, 'package.json'),
+    JSON.stringify({ private: true, scripts: { test: 'node --test fixture.test.mjs' } }),
+    'utf8',
+  )
+  writeFileSync(join(projectRoot, 'fixture.test.mjs'), 'import test from "node:test"; test("x", () => {});\n', 'utf8')
+  git(projectRoot, ['add', 'package.json', 'fixture.test.mjs'])
+  git(projectRoot, ['commit', '-qm', 'add verifier script'])
+
+  const { runner } = buildRunner([
+    [
+      { type: 'tool_use', id: 'edit-only', name: 'str_replace', input: {
+        file_path: 'src/task.ts', old_str: 'export const answer = 0;', new_str: 'export const answer = 42;',
+      } },
+      { type: 'done', finishReason: 'tool_calls' },
+    ],
+    [
+      { type: 'tool_use', id: 'need-test', name: 'run_command', input: { command: 'npm test' } },
+      { type: 'done', finishReason: 'tool_calls' },
+    ],
+    [
+      { type: 'text_delta', text: 'Tests could not run because shell execution is unavailable in this profile.' },
+      { type: 'done', finishReason: 'stop' },
+    ],
+  ])
+
+  const engine = new ChatEngine({
+    task: 'Fix src/task.ts and prove it by running npm test. Verification requires the test command.',
+    projectRoot,
+    runId: `p02-shell-required-${randomUUID()}`,
+    operation: 'CHANGE',
+    model: 'deepseek-v4-flash',
+    maxTurns: 6,
+    requiredVerifiers: ['npm test'],
+    providerRunner: runner as never,
+    providerPolicy: FIXTURE_POLICY,
+  })
+
+  const events = await collectStream(engine.submitMessageStream(
+    'Fix src/task.ts and prove it by running npm test. Verification requires the test command.',
+  ))
+  const terminal = events.filter(event => ['done', 'failed', 'cancelled'].includes(event.type))
+  assert.equal(terminal.length, 1)
+
+  const log = (engine as unknown as { toolCallLog: Array<{ tool: string; exit_code?: number }> }).toolCallLog
+  const shell = log.filter(entry => entry.tool === 'run_command' || entry.tool === 'test_run')
+  assert.ok(shell.length >= 1)
+  assert.equal(shell.every(entry => entry.exit_code !== 0), true)
+  assert.match(readFileSync(join(projectRoot, 'src', 'task.ts'), 'utf8'), /answer = 42/)
+
+  const outcome = (engine as unknown as { lastVerifierReceipt: { exit_code: number } | null }).lastVerifierReceipt
+  if (outcome) assert.notEqual(outcome.exit_code, 0)
+  const assistantText = engine.getConversation().filter(m => m.role === 'assistant').map(m => m.content).join('\n')
+  assert.doesNotMatch(assistantText, /VERIFIED_COMPLETE|all tests passed/i)
 })
