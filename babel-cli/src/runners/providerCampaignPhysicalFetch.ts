@@ -96,7 +96,7 @@ export class CampaignPhysicalFetchSession {
     this.settleZeroOnOpenAdmission()
   }
 
-  settleZeroOnOpenAdmission(): void {
+  private settleZeroOnOpenAdmission(): void {
     const meter = this.meter
     const prepared = this.openAdmission
     if (!meter || !prepared) return
