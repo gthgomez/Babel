@@ -22,13 +22,13 @@ test('invalid reported billing stays unknown even when a pricing estimate exists
       { prompt_tokens: 10, completion_tokens: 5, cost })
     assert.equal(metadata.estimated_cost_usd, null)
     assert.equal(metadata.cost_precision, 'unknown')
-    assert.equal(metadata.provider_reported_total_charge_usd, undefined)
+    assert.equal(metadata.provider_reported_total_charge_usd, null)
   }
 })
 
 test('malformed OpenRouter cost does not expose a provider total for campaign settlement', () => {
   const metadata = buildInvocationMetadata('openrouter', 'z-ai/glm-5.3-flash', 1,
     { prompt_tokens: 10, completion_tokens: 5, cost: 'not-a-number' })
-  assert.equal(metadata.provider_reported_total_charge_usd, undefined)
+  assert.equal(metadata.provider_reported_total_charge_usd, null)
   assert.equal(metadata.cost_precision, 'unknown')
 })
