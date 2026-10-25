@@ -1,4 +1,6 @@
 import {normalizeChatExecutionScope,requireProjectRoot,assertConversationRestoreScope} from './chatExecutionScope.js';
+import type { RunControl, StopRequest } from '../runtime/run-control.js';
+import { initializeChatSubmissionControl, activateChatSubmissionGeneration, type ChatSubmissionControlHost } from './chatEngineRunControl.js';
 import {providerMessagesToChatMessages,legacyArchiveToChatMessages} from './providerMessagesToChatMessages.js';
 import {retainedLegacyArchive} from './chatArchiveLegacy.js';
 import { buildChatEngineExecutionContext, type ChatExecutionContextHost } from './chatEngineExecutionContext.js';
@@ -50,11 +52,11 @@ import {
 import { classifyChatTaskIntent } from "./chatEngineTaskIntent.js";
 import { isolateEngineForFreshUserSubmission } from "./chatEngineFreshTaskIsolation.js";
 import { resolveChatInstructionContext } from "./chatInstructionContext.js";
-import { retireLiveCertificationForRun } from "./toolExecutor.js";
+import { resetCircuitBreakerForRun, retireLiveCertificationForRun } from "./toolExecutor.js";
 import { TEXT_TOOL_NAMES } from "./textToolParser.js";
 
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
-import { existsSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 
 import { resolveProjectPath } from "../utils/projectPath.js";
@@ -225,7 +227,6 @@ import { resolveIsolationBrokerFlags } from "./chatEngineIsolationFlags.js";
 import {
   planToolBatches,
   orderChatToolActions,
-  isCircuitBreakerObservation,
 } from "./agentLoopReducer.js";
 import {
   createParityRuntime,
@@ -294,6 +295,7 @@ import { type ModelRouteStage } from "./modelRouteReceipt.js";
 
 import {
   buildProviderRetryCallbacks,
+  captureChatUsageScope,
   captureUsageAttribution,
   trackRunnerUsage as trackProviderRunnerUsage,
   type ChatProviderRetryHost,
@@ -643,9 +645,8 @@ export class ChatEngine {
    * Projected from `generationCounter`; not a second authority.
    */
   private activeSubmissionGeneration = 0;
-  /** Flag set by cancel() to signal pending work should stop immediately.
-   *  Used alongside AbortController to close the race window where a new
-   *  controller replaces the aborted one before the loop re-checks it. */
+  private runControl: RunControl | null = null;
+  /** Pending cancellation survives preparation until its submission latch exists. */
   private _cancelled = false;
   /** LLM-based conversation compaction (from chatCompaction.ts).
    *  Undefined when BABEL_COMPACTION=off — falls back to heuristic truncation. */
@@ -943,6 +944,7 @@ export class ChatEngine {
     );
     this.abortController = new AbortController();
     this.engineRunId = options.runId ?? allocateThreadId();
+    if (!options.resumeExisting) resetCircuitBreakerForRun(this.engineRunId);
     // definite assignment: engineRunId set immediately above
     this.parity = createParityRuntime(this.engineRunId);
     this.criterionCompletion = this.services.acceptance?.createCompletionService(() => ({
@@ -1203,15 +1205,7 @@ export class ChatEngine {
     }));
     const isOwnerCurrent = (): boolean =>
       this.isSubmissionCurrent(ownerGeneration);
-    const usageScope = {
-      taskOwnerId: this.taskAllowance?.taskOwnerId ?? null,
-      ...(this.options.projectRoot?{projectRoot:realpathSync(requireProjectRoot(this.options))}:{}),
-      accountingEpoch: globalCostTracker.getAccountingEpoch(),
-      turnId: this.parity.turnId,
-      chargeId: null as string | null,
-      ownerGeneration,
-      isOwnerCurrent,
-    };
+    const usageScope = this.captureProviderUsageScope(ownerGeneration);
     return {
       toolCallLog,
       conversation,
@@ -1844,23 +1838,13 @@ export class ChatEngine {
     callbacks: ChatCallbacks,
     taskIntent?: TaskIntent,
   ): Promise<ChatResult> {
-    this._cancelled = false;
     const generation = ++this.generationCounter;
     // R0-7/R0-8: publish the owning generation synchronously so any async
     // continuation during this submission (including before the lazy stream
     // body first runs) is bound to it.
-    this.activeSubmissionGeneration = generation;
-
-    // Packet B1: refresh the repo map for this turn (cheap once the per-file
-    // tag cache is warm; nulled by runPostEditStaticCheck on writes).
-    // A superseded submission must not publish its map into the new task.
-    if (this.options.projectRoot && this.repoMapCache === null) {
-      this.repoMapInvalidated = false;
-      const map = await this.generateRepoMap(userInput);
-      if (this.isSubmissionCurrent(generation) && this.repoMapCache === null && !this.repoMapInvalidated) {
-        this.repoMapCache = map;
-      }
-    }
+    this.activateSubmissionGeneration(generation);
+    // Streaming preparation refreshes the map after canonical admission. Do
+    // not suspend here before the replacement has retired its predecessor.
 
     const cb: ChatCallbacks = {};
     if (callbacks.onAnswerChunk) {
@@ -2219,6 +2203,7 @@ export class ChatEngine {
   ): AsyncGenerator<ChatEvent, void, undefined> {
     const submissionGeneration =
       submitOpts?.submissionGeneration ?? ++this.generationCounter;
+    this.activateSubmissionGeneration(submissionGeneration);
     // Capture THIS wrapper's own claim: the finally must settle this exact
     // claim, never `activeAdmissionClaim` — during task replacement that slot
     // belongs to the successor, and settling it would record a false terminal
@@ -2261,8 +2246,7 @@ export class ChatEngine {
 
   /**
    * Map operator abort / in-flight cancel to a cancelled stream event.
-   * cancel() replaces AbortController, so signal.aborted on the new
-   * controller is not sufficient — also honor _cancelled and runner wrap.
+   * Preserve the typed winner; cancellation never changes a prior stop kind.
    */
   private emitCancelledIfOperatorAbort(err?: unknown): ChatEvent | null {
     if (
@@ -2270,6 +2254,8 @@ export class ChatEngine {
       this.abortController.signal.aborted ||
       isOperatorAbortError(err)
     ) {
+      const winning = this.runControl?.stop();
+      if (winning && winning.kind !== 'cancelled' && winning.kind !== 'superseded') return this.streamStopped(winning);
       this._cancelled = true;
       finalizeParityCancel(this.parity, this.engineRunDir);
       return this.streamCancelled();
@@ -2284,6 +2270,9 @@ export class ChatEngine {
    */
   abortTurn(): void {
     this._cancelled = true;
+    if (this.runControl?.owner.generation === this.activeSubmissionGeneration) {
+      this.runControl.requestStop({ owner: this.runControl.owner, kind: 'cancelled', reasonCode: 'cancelled', source: 'user' });
+    }
     this.settleActiveExecutionForTerminal();
     this.abortController.abort();
     try {
@@ -2293,8 +2282,7 @@ export class ChatEngine {
     } catch {
       // Best-effort: session must remain usable after cancel.
     }
-    finalizeParityCancel(this.parity, this.engineRunDir);
-    this.abortController = new AbortController();
+    if (!this.runControl || this.runControl.stop()?.kind === 'cancelled') finalizeParityCancel(this.parity, this.engineRunDir);
   }
 
   cancel(): void {
@@ -2777,13 +2765,26 @@ export class ChatEngine {
     });
   }
   private streamDone(answer: string, extra?: ChatStreamDoneExtra): ChatEvent {
+    const prior = this.runControl?.stop();
+    if (prior && prior.kind !== 'completed') return this.streamStopped(prior);
+    this.runControl?.requestStop({ owner: this.runControl.owner, kind: 'completed', reasonCode: 'completed', source: 'completion' });
     return completeChatStream(this.terminalRuntimeInput(), answer, extra);
   }
   private streamFailed(error: string, reason?: import('./chatTerminalReason.js').TerminalReason): ChatEvent {
+    this.runControl?.requestStop({ owner: this.runControl.owner, kind: 'failed', reasonCode: reason?.code ?? 'unknown', source: 'runtime' });
     return failChatStream(this.terminalRuntimeInput(), error, reason);
   }
   private streamCancelled(): ChatEvent {
+    const prior = this.runControl?.stop();
+    if (prior && prior.kind !== 'cancelled' && prior.kind !== 'superseded') return this.streamStopped(prior);
+    this.runControl?.requestStop({ owner: this.runControl.owner, kind: 'cancelled', reasonCode: 'cancelled', source: 'user' });
     return cancelChatStream(this.terminalRuntimeInput());
+  }
+  /** Render the recorded winner through the existing single finalizer, without inference. */
+  private streamStopped(stop: StopRequest): ChatEvent {
+    if (stop.kind === 'cancelled' || stop.kind === 'superseded') return cancelChatStream(this.terminalRuntimeInput());
+    if (stop.kind === 'failed') return failChatStream(this.terminalRuntimeInput(), `Execution stopped: ${stop.reasonCode}.`);
+    return completeChatStream(this.terminalRuntimeInput(), `Execution stopped: ${stop.reasonCode}.`, { stopRequest: stop });
   }
 
   getConversation(): ChatMessage[] {
@@ -2884,11 +2885,11 @@ export class ChatEngine {
   }
 
   resyncTurnStateAfterBranch(): void {
+    this.runControl?.requestStop({ owner: this.runControl.owner, kind: 'superseded', reasonCode: 'branch_resync', source: 'runtime' });
     this._cancelled = false;
     this.apiTokenCount = 0;
     this.compactionConsecutiveFailures = 0;
     this.clearSystemPromptCache();
-    this.abortController = new AbortController();
     this.toolCallLog = [];
     this._turnToolCallLogStart = 0;
     // A branch resync discards retained context. Advance the epoch as well as
@@ -2971,6 +2972,16 @@ export class ChatEngine {
 
   admitUserSubmission(input:import('./turnRuntime.js').UserSubmissionInput,route:{model:string;provider:string},objective?:PreparedObjectiveSubmission):ObjectiveAdmissionResult {
     return admitObjectiveSubmission(this as unknown as ObjectiveAdmissionHost,input,route,objective);
+  }
+
+  /** Bind execution only after canonical objective admission, before preparation can await. */
+  private initializeSubmissionControl(generation: number): void {
+    initializeChatSubmissionControl(this as unknown as ChatSubmissionControlHost, generation);
+  }
+
+  /** Retire the previous owner synchronously, before any replacement await. */
+  private activateSubmissionGeneration(generation: number): void {
+    activateChatSubmissionGeneration(this as unknown as ChatSubmissionControlHost, generation);
   }
 
   /** Install one prepared snapshot; durable admission may precede this step. */
@@ -3387,13 +3398,16 @@ export class ChatEngine {
     observations: string;
     observationList: string[];
     count: number;
+    stopRequest?: StopRequest;
   }> {
+    const control = this.runControl?.owner.generation === ownerGeneration ? this.runControl : null;
     const toolContext: ToolContext = {
       agentId: `chat-${this.engineRunId}`,
       runId: this.engineRunId,
       runDir: this.engineRunDir,
       babelRoot: process.env["BABEL_ROOT"] ?? process.cwd(),
-      signal: this.abortController.signal,
+      signal: control?.signal ?? this.abortController.signal,
+      ...(control ? { runControl: control } : {}),
       ...(this.options.projectRoot?{projectRoot:requireProjectRoot(this.options)}:{}),
       sessionId: this.engineRunId,
       ...(this.parity.turnId ? { turnId: this.parity.turnId } : {}),
@@ -3401,7 +3415,7 @@ export class ChatEngine {
     if(this.options.executionScope?.kind==='conversation'){
       const observations:string[]=[];
       for(const [index,action] of actions.entries()){
-        if(!this.isSubmissionCurrent(ownerGeneration))break;
+        if(!this.isSubmissionCurrent(ownerGeneration) || control?.stop())break;
         const result=await this.executeOneAction(action,toolContext,callbacks,{index,ownerGeneration,idempotencyKey:this._streamNativeToolCallIds[index]??`tool_call_${this._turnIndex}_${index}`});
         observations.push(result.observation);
       }
@@ -3420,7 +3434,11 @@ export class ChatEngine {
     );
 
     const allResults: Awaited<ReturnType<typeof this.executeOneAction>>[] = [];
-    let stopTerminal = false;
+    let stopTerminal = control?.stop() != null;
+    const settleStop = (result: ChatActionResult): void => {
+      if (result.stopRequest) control?.requestStop(result.stopRequest);
+      if (result.stop || control?.stop()) stopTerminal = true;
+    };
     // R0-8: a superseded generator must not run the new owner's tools. The
     // generation check runs between every action and batch, including after
     // an awaited tool/child returns.
@@ -3471,7 +3489,7 @@ export class ChatEngine {
                 this._streamNativeToolCallIds[index] ??
                 `tool_call_${this._turnIndex}_${index}`,
             });
-            if (result.stop) stopTerminal = true;
+            settleStop(result);
           }
           continue;
         }
@@ -3479,6 +3497,7 @@ export class ChatEngine {
           if (
             this._cancelled ||
             this.abortController.signal.aborted ||
+            stopTerminal || control?.stop() ||
             superseded()
           )
             break;
@@ -3495,6 +3514,7 @@ export class ChatEngine {
             ),
           );
           allResults.push(...parallelResults);
+          for (const result of parallelResults) settleStop(result);
           for (const index of chunk) {
             const result = parallelResults.find((item) => item.index === index);
             if (result) {
@@ -3529,8 +3549,7 @@ export class ChatEngine {
             this._streamNativeToolCallIds[batch.index] ??
             `tool_call_${this._turnIndex}_${batch.index}`,
         });
-        if (result.stop || isCircuitBreakerObservation(result.observation))
-          stopTerminal = true;
+        settleStop(result);
       }
     }
 
@@ -3547,6 +3566,7 @@ export class ChatEngine {
         .join("\n\n"),
       observationList,
       count: allResults.length,
+      ...(control?.stop() ? { stopRequest: control.stop()! } : {}),
     };
   }
 
@@ -4588,15 +4608,7 @@ export class ChatEngine {
   private captureProviderUsageScope(
     ownerGeneration = this.activeSubmissionGeneration,
   ): ChatUsageScope {
-    return {
-      taskOwnerId: this.taskAllowance?.taskOwnerId ?? null,
-      ...(this.options.projectRoot?{projectRoot:realpathSync(requireProjectRoot(this.options))}:{}),
-      accountingEpoch: globalCostTracker.getAccountingEpoch(),
-      turnId: this.parity.turnId,
-      chargeId: null,
-      ownerGeneration,
-      isOwnerCurrent: () => this.isSubmissionCurrent(ownerGeneration),
-    };
+    return captureChatUsageScope(this as unknown as Parameters<typeof captureChatUsageScope>[0], ownerGeneration);
   }
   private providerUsageEffects(): ChatProviderUsageEffects {
     return {

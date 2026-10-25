@@ -17,7 +17,7 @@ import { recoverStreamingRequestAdmission } from './chatEngineRequestRecovery.js
 import { settleStreamingCompletion } from "./chatEngineStreamingCompletion.js";
 import { normalizeChatAnswer, requestedChatJsonKind } from './chatResponseContract.js';
 import { recordChatHarnessFeedback } from "./chatHarnessFeedback.js";
-import { realpathSync, writeFileSync } from "node:fs";
+import { writeFileSync } from "node:fs";
 import { join } from 'node:path';
 import { describeNativeToolRejection, nativeSchemaRepairFeedback } from './nativeToolRejection.js';
 import { unsupportedTestClaim, responseEvidenceCorrection, responseVerifierFacts } from './chatResponseEvidence.js';
@@ -179,6 +179,8 @@ export class ChatEngineStreamingLoop {
       }
       // R0-8: the repo-map await is a suspension point; re-check ownership.
       if (!this.host.isSubmissionCurrent(submissionGeneration)) return;
+      const winningStop = this.host.runControl?.owner.generation === submissionGeneration ? this.host.runControl.stop() : null;
+      if (winningStop) { yield this.host.streamStopped(winningStop); return; }
       if (this.host._cancelled || this.host.abortController.signal.aborted) {
         // AC3: stream cancel path flushes disk (idempotent if cancel() already did)
         finalizeParityCancel(this.host.parity, this.host.engineRunDir);
@@ -310,16 +312,7 @@ export class ChatEngineStreamingLoop {
       }
       const hadInstalledP11Context =
         this.host.parity.contextCheckpoint !== undefined;
-      const usageScope: ChatUsageScope = {
-        taskOwnerId: this.host.taskAllowance?.taskOwnerId ?? null,
-        ...(this.host.options.projectRoot?{projectRoot:realpathSync(this.host.options.projectRoot)}:{}),
-        accountingEpoch: globalCostTracker.getAccountingEpoch(),
-        turnId: this.host.parity.turnId,
-        chargeId: null as string | null,
-        ownerGeneration: submissionGeneration,
-        isOwnerCurrent: () =>
-          this.host.isSubmissionCurrent(submissionGeneration),
-      };
+      const usageScope: ChatUsageScope = this.host.captureProviderUsageScope(submissionGeneration);
       const settleRetiredUsage = (usedRunner: typeof runner): void => {
         if (!("usageMetadata" in usageScope))
           Object.assign(usageScope, { usageMetadata: null });
@@ -1221,6 +1214,7 @@ export class ChatEngineStreamingLoop {
 
         let observations = "";
         let observationList: string[] = [];
+        let executedStop: import('../runtime/run-control.js').StopRequest | undefined;
         try {
           const executed = await this.host.executeActions(
             turnResult.actions,
@@ -1267,6 +1261,7 @@ export class ChatEngineStreamingLoop {
           );
           observations = executed.observations;
           observationList = executed.observationList;
+          executedStop = executed.stopRequest;
         } catch (err: unknown) {
           const message = err instanceof Error ? err.message : String(err);
           if (
@@ -1380,6 +1375,82 @@ export class ChatEngineStreamingLoop {
               : {}),
           };
           if (!this.host.isSubmissionCurrent(submissionGeneration)) return;
+        }
+
+        // Record progress + durable tool results (contentHash for re-read fidelity).
+        // Identity is the original action index, never completion-order slice position.
+        const turnSlice = this.host.toolCallLog.slice(
+          this.host._turnToolCallLogStart,
+        );
+        const projected = projectDurableToolBatch({
+          turnSlice,
+          observationsByActionIndex: observationList,
+          ...(turnResult.type === "tool_calls"
+            ? { actions: turnResult.actions as Array<Record<string, unknown>> }
+            : {}),
+          turn,
+          batchId:
+            this.host._activeToolBatchId ??
+            `batch_${turn}_${this.host._turnToolCallLogStart}`,
+          ...(providerToolCallIds ? { providerToolCallIds } : {}),
+          streamNativeToolCallIds: this.host._streamNativeToolCallIds,
+        });
+        let cycleReceipt: ProgressReceipt | null = null;
+        try {
+          cycleReceipt = parityRecordToolBatch(this.host.parity, {
+            at_turn: turn,
+            ...(turnResult.type === "tool_calls" && turnResult.thinking
+              ? { thinking: turnResult.thinking }
+              : {}),
+            toolCalls: projected.toolCalls,
+            results: projected.results,
+            patchAttempted: turnSlice.some((t) =>
+              isConfirmedMutation({
+                tool: t.tool,
+                error: t.error,
+                effectStatus: t.effect_status,
+                effectScope: t.effect_scope,
+                mutationPaths: t.mutation_paths,
+              }),
+            ),
+            patchFailed: turnSlice.some(
+              (t) =>
+                t.tool === "str_replace" && t.error != null && t.error !== "",
+            ),
+            verifierChanged: this.host.computeVerifierChanged(
+              projected.results,
+            ),
+            // Context epoch: advancing it makes necessary re-reads count again.
+            contextEpoch: this.host.readContextEpoch,
+            // W2.2: propose+start already flushed before executeActions.
+            settleAlreadyProposed: turnResult.actions.length > 0,
+            // Do NOT pass every read as localizedPaths — re-reads use contentHash only.
+          });
+          // Operator cancellation can already have committed the terminal.
+          // Persist admitted work's late settlement before the early stop return.
+          if (executedStop) checkpointParityEventLog(this.host.parity, this.host.engineRunDir);
+        } catch (err) {
+          const captured = captureSessionEventAppendFailure(
+            err,
+            this.host.engineRunDir,
+          );
+          this.host._streamNativeToolCallIds = [];
+          this.host._activeToolBatchId = null;
+          if (captured) {
+            if (!this.host.isSubmissionCurrent(submissionGeneration)) return;
+            yield this.host.streamFailed(captured.operatorMessage);
+            return;
+          }
+          throw err;
+        }
+        this.host._streamNativeToolCallIds = [];
+        this.host._activeToolBatchId = null;
+
+        if (executedStop) {
+          endSpan(_turnSpan, SpanStatusCode.OK);
+          _turnSpan = null;
+          yield this.host.streamStopped(executedStop);
+          return;
         }
 
         await new Promise((resolve) => setImmediate(resolve));
@@ -1497,72 +1568,6 @@ export class ChatEngineStreamingLoop {
           };
           if (!this.host.isSubmissionCurrent(submissionGeneration)) return;
         }
-
-        // Record progress + durable tool results (contentHash for re-read fidelity).
-        // Identity is the original action index, never completion-order slice position.
-        const turnSlice = this.host.toolCallLog.slice(
-          this.host._turnToolCallLogStart,
-        );
-        const projected = projectDurableToolBatch({
-          turnSlice,
-          observationsByActionIndex: observationList,
-          ...(turnResult.type === "tool_calls"
-            ? { actions: turnResult.actions as Array<Record<string, unknown>> }
-            : {}),
-          turn,
-          batchId:
-            this.host._activeToolBatchId ??
-            `batch_${turn}_${this.host._turnToolCallLogStart}`,
-          ...(providerToolCallIds ? { providerToolCallIds } : {}),
-          streamNativeToolCallIds: this.host._streamNativeToolCallIds,
-        });
-        let cycleReceipt: ProgressReceipt | null = null;
-        try {
-          cycleReceipt = parityRecordToolBatch(this.host.parity, {
-            at_turn: turn,
-            ...(turnResult.type === "tool_calls" && turnResult.thinking
-              ? { thinking: turnResult.thinking }
-              : {}),
-            toolCalls: projected.toolCalls,
-            results: projected.results,
-            patchAttempted: turnSlice.some((t) =>
-              isConfirmedMutation({
-                tool: t.tool,
-                error: t.error,
-                effectStatus: t.effect_status,
-                effectScope: t.effect_scope,
-                mutationPaths: t.mutation_paths,
-              }),
-            ),
-            patchFailed: turnSlice.some(
-              (t) =>
-                t.tool === "str_replace" && t.error != null && t.error !== "",
-            ),
-            verifierChanged: this.host.computeVerifierChanged(
-              projected.results,
-            ),
-            // Context epoch: advancing it makes necessary re-reads count again.
-            contextEpoch: this.host.readContextEpoch,
-            // W2.2: propose+start already flushed before executeActions.
-            settleAlreadyProposed: turnResult.actions.length > 0,
-            // Do NOT pass every read as localizedPaths — re-reads use contentHash only.
-          });
-        } catch (err) {
-          const captured = captureSessionEventAppendFailure(
-            err,
-            this.host.engineRunDir,
-          );
-          this.host._streamNativeToolCallIds = [];
-          this.host._activeToolBatchId = null;
-          if (captured) {
-            if (!this.host.isSubmissionCurrent(submissionGeneration)) return;
-            yield this.host.streamFailed(captured.operatorMessage);
-            return;
-          }
-          throw err;
-        }
-        this.host._streamNativeToolCallIds = [];
-        this.host._activeToolBatchId = null;
 
         if(this.host.options.executionScope?.kind==='conversation'){
           endSpan(_turnSpan,SpanStatusCode.OK);

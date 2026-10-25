@@ -104,6 +104,7 @@ import {
 } from './ui/inputCoordinator.js';
 import { getActiveRenderer } from './ui/waterfall.js';
 import { ConfirmDialog } from './ui/dialog.js';
+import { dispatchRunOperation, RunStoppedError } from './runtime/run-control.js';
 import { isRunningInDaemon } from './daemon/client.js';
 import { logContext } from './pipeline/logging.js';
 import { isPathInside } from './services/targetResolver.js';
@@ -117,6 +118,8 @@ import {
 export type { ToolResult };
 
 export interface ToolContext {
+  /** Host-only continuation latch; never supplied by model tool arguments. */
+  runControl?: import('./runtime/run-control.js').RunControl;
   agentId: string;
   runId: string;
   runDir?: string;
@@ -127,6 +130,8 @@ export interface ToolContext {
   signal?: AbortSignal;
   /** Called after local validation/cache gates, immediately before a real tool handler dispatches. */
   onBeforeDispatch?: () => void;
+  /** Host-owned receipt shared by one policy invocation; never tool arguments. */
+  dispatchObservation?: { started: boolean };
   /** Canonical session id for BDNS process correlation; defaults to runId. */
   sessionId?: string;
   /** Canonical tool-call / idempotency key for BDNS process correlation. */
@@ -1742,6 +1747,8 @@ export function renderGitDiff(
  * stdio I/O) can be awaited cleanly alongside the synchronous handlers.
  */
 export async function executeTool(req: ToolCallRequest, context: ToolContext): Promise<ToolResult> {
+  const stopped = context.runControl?.stop();
+  if (stopped) throw new RunStoppedError(stopped);
   refreshDryRunState();
 
   // ── Phase 1a: Task envelope enforcement ─────────────────────────────
@@ -1754,6 +1761,7 @@ export async function executeTool(req: ToolCallRequest, context: ToolContext): P
   // ── Phase 1b: Circuit breaker enforcement ───────────────────────────
   const breakerState = getCircuitBreakerState(context.runId);
   if (breakerState.tripped) {
+    context.runControl?.requestStop({ owner: context.runControl.owner, kind: 'blocked', reasonCode: 'permission_denied', source: 'executor' });
     return {
       exit_code: 1,
       stdout: '',
@@ -1934,7 +1942,10 @@ export async function executeTool(req: ToolCallRequest, context: ToolContext): P
     : null;
 
   context.onBeforeDispatch?.();
-  const dispatch = () => EXECUTOR_TOOL_REGISTRY.dispatch(req, context);
+  const dispatch = () => dispatchRunOperation(context.runControl, 'tool', context.toolCallId ?? req.tool, () => {
+    if (context.dispatchObservation) context.dispatchObservation.started = true;
+    return EXECUTOR_TOOL_REGISTRY.dispatch(req, context);
+  });
   if (!cacheable) getSessionCache().invalidate();
   let result: ToolResult;
   try {

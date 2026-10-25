@@ -35,6 +35,7 @@ Without a frozen contract, agents and humans re-discover or accidentally weaken 
 5. Enforce the freeze with **conformance tests**, a **golden harness example**, and **`tools/check-harness-architecture.ps1`** drift detection.
 6. Resolve contributor policy via **`AGENTS.md`** and package implementation facts via **`babel-cli/PROJECT_CONTEXT.md`**; neither duplicates harness norms.
 7. Use one validated, hash-linked `episode-events.jsonl` producer per Chat/pipeline run. Pipeline episode persistence is supplemental to the authoritative `EvidenceBundle`, reports degradation, and fails closed on invalid resume/quarantine boundaries. This remains **PARTIAL** until phase instrumentation, offline integration, and full-suite release gates are green.
+8. Give each Chat submission one monotonic `RunControl` bound to existing run/turn/generation identities. It owns continuation only; durable admission, permissions and completion retain their current owners. Recheck at every physical tool/provider start after suspension, including retries and compaction. Preserve settlement of already-started work under its original owner. Typed host stops replace tool-prose control. A mutable shared abort controller alone cannot fence approval races or prevent a new session from resetting old terminal state; this small latch adds no persisted identity or parallel completion evaluator.
 
 ## Alternatives considered
 

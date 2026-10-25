@@ -6,6 +6,7 @@
  * waterfalls; this runner covers current direct DeepSeek v4 models.
  */
 
+import { dispatchRunOperation, RunStoppedError } from '../runtime/run-control.js';
 import { createHash, randomUUID } from 'node:crypto';
 import type { ZodType } from 'zod';
 import { parseRetryAfterHeader, isRetryableStatus, normalizeFinishReason, classifyProviderError } from './providerNormalize.js';
@@ -561,6 +562,8 @@ export class DeepSeekApiRunner implements LlmRunner {
   }> {
     const startedAt = Date.now();
     this.lastInvocationMetadata = null;
+    const stopped = callbacks?.runControl?.stop();
+    if (stopped) throw new RunStoppedError(stopped);
     if (callbacks?.onProgress) {
       callbacks.onProgress({ state: 'Contacting model' });
     }
@@ -636,6 +639,7 @@ export class DeepSeekApiRunner implements LlmRunner {
         failureStage?: import('./base.js').ProviderFailureStage;
         partialModelOutput?: boolean;
         toolCallCount?: number;
+        inferenceStarted?: boolean;
         outputMaterial?: string;
       } = {},
     ): void => {
@@ -653,7 +657,7 @@ export class DeepSeekApiRunner implements LlmRunner {
               maxAttempts: requestMaxRetries,
               stream: isStreaming,
               failureStage: options.failureStage ?? 'unknown',
-              inferenceStarted: true,
+              inferenceStarted: options.inferenceStarted ?? true,
               partialModelOutput: options.partialModelOutput ?? false,
               toolCallCount: options.toolCallCount,
               outputMaterial: options.outputMaterial ?? outputText,
@@ -797,7 +801,7 @@ export class DeepSeekApiRunner implements LlmRunner {
       const timeout = setTimeout(() => controller.abort(), requestTimeoutMs);
       try {
         notifyPhase('request_dispatched', undefined, `attempt ${attempt}`);
-        response = await fetch(API_URL, {
+        response = await dispatchRunOperation(callbacks?.runControl, 'model', inferenceId, () => fetch(API_URL, {
           method: 'POST',
           redirect: process.env['BABEL_DESKTOP_PROVIDER'] ? 'error' : 'follow',
           signal: controller.signal,
@@ -806,8 +810,13 @@ export class DeepSeekApiRunner implements LlmRunner {
             'Content-Type': 'application/json',
           },
           body: requestBody,
-        });
+        }));
       } catch (err) {
+        if (err instanceof RunStoppedError) {
+          settleRetry('cancelled');
+          notifyCompleted('failed', '', { actualAttempt: attempt, details: { message: err.message }, failureStage: 'request', inferenceStarted: false });
+          throw err;
+        }
         this.lastInvocationMetadata = buildInvocationMetadata(this.model, Date.now() - startedAt);
         lastError = new Error(
           isAbortError(err)
@@ -1210,6 +1219,8 @@ export class DeepSeekApiRunner implements LlmRunner {
   ): AsyncGenerator<ToolStreamEvent, void, undefined> {
     const startedAt = Date.now();
     this.lastInvocationMetadata = null;
+    const stopped = callbacks?.runControl?.stop();
+    if (stopped) throw new RunStoppedError(stopped);
     const requestTimeoutMs = getRequestTimeoutMs();
     const requestMaxRetries = getRequestMaxRetries();
     const streamIdleTimeoutMs = getStreamIdleTimeoutMs();
@@ -1291,6 +1302,7 @@ export class DeepSeekApiRunner implements LlmRunner {
         failureStage?: import('./base.js').ProviderFailureStage;
         partialModelOutput?: boolean;
         toolCallCount?: number;
+        inferenceStarted?: boolean;
         outputMaterial?: string;
       } = {},
     ): void => {
@@ -1308,7 +1320,7 @@ export class DeepSeekApiRunner implements LlmRunner {
               maxAttempts: requestMaxRetries,
               stream: true,
               failureStage: options.failureStage ?? 'unknown',
-              inferenceStarted: true,
+              inferenceStarted: options.inferenceStarted ?? true,
               partialModelOutput: options.partialModelOutput ?? false,
               toolCallCount: options.toolCallCount,
               outputMaterial: options.outputMaterial ?? outputText,
@@ -1400,7 +1412,7 @@ export class DeepSeekApiRunner implements LlmRunner {
       const timeout = setTimeout(() => controller.abort(), requestTimeoutMs);
       try {
         notifyPhase('request_dispatched', undefined, `attempt ${attempt}`);
-        response = await fetch(API_URL, {
+        response = await dispatchRunOperation(callbacks?.runControl, 'model', inferenceId, () => fetch(API_URL, {
           method: 'POST',
           redirect: process.env['BABEL_DESKTOP_PROVIDER'] ? 'error' : 'follow',
           signal: controller.signal,
@@ -1409,8 +1421,13 @@ export class DeepSeekApiRunner implements LlmRunner {
             'Content-Type': 'application/json',
           },
           body: requestBody,
-        });
+        }));
       } catch (err) {
+        if (err instanceof RunStoppedError) {
+          settleRetry('cancelled');
+          notifyCompleted('failed', '', { actualAttempt: attempt, details: { message: err.message }, failureStage: 'request', inferenceStarted: false });
+          throw err;
+        }
         this.lastInvocationMetadata = buildInvocationMetadata(this.model, Date.now() - startedAt);
         if (isCallerCancelError(err, signal)) {
           lastError = new Error('[deepSeekApi] Request cancelled');

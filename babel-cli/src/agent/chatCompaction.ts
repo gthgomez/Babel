@@ -29,6 +29,7 @@
  */
 
 import { createHash, randomUUID } from 'node:crypto';
+import { dispatchRunOperation, RunStoppedError } from '../runtime/run-control.js';
 import type { RunnerCallbacks } from '../runners/base.js';
 import type { ProviderId } from '../runners/providerRegistry.js';
 import type { CompactionRecoveryPressure } from './compactionRequestPressure.js';
@@ -705,7 +706,7 @@ export class LLMSummarizeCompaction implements CompactionStrategy {
     let failurePhaseRecorded = false;
     let completed = false;
     try {
-      const response = await fetch(baseUrl, {
+      const response = await dispatchRunOperation(callbacks?.runControl, 'model', inferenceId, () => fetch(baseUrl, {
         method: 'POST',
         redirect: process.env['BABEL_DESKTOP_PROVIDER'] ? 'error' : 'follow',
         signal: controller.signal,
@@ -714,7 +715,7 @@ export class LLMSummarizeCompaction implements CompactionStrategy {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify(requestBody),
-      });
+      }));
       responseStarted = true;
       phase('response_started', response.status);
 
@@ -780,6 +781,7 @@ export class LLMSummarizeCompaction implements CompactionStrategy {
           model,
           status: 'failed',
           observed_model_id: null,
+          ...(error instanceof RunStoppedError ? { inference_started: false } : {}),
         });
         completed = true;
       }
@@ -854,7 +856,7 @@ export class LLMSummarizeCompaction implements CompactionStrategy {
     let failurePhaseRecorded = false;
     let completed = false;
     try {
-      const response = await fetch('https://api.anthropic.com/v1/messages', {
+      const response = await dispatchRunOperation(callbacks?.runControl, 'model', inferenceId, () => fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
         redirect: process.env['BABEL_DESKTOP_PROVIDER'] ? 'error' : 'follow',
         signal: controller.signal,
@@ -864,7 +866,7 @@ export class LLMSummarizeCompaction implements CompactionStrategy {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify(requestBody),
-      });
+      }));
       responseStarted = true;
       phase('response_started', response.status);
 
@@ -933,6 +935,7 @@ export class LLMSummarizeCompaction implements CompactionStrategy {
           model,
           status: 'failed',
           observed_model_id: null,
+          ...(error instanceof RunStoppedError ? { inference_started: false } : {}),
         });
         completed = true;
       }

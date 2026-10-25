@@ -38,7 +38,7 @@ export interface StrReplaceInput {
   new_str: string;
 }
 
-export interface GovernedStrReplaceResult {
+export interface GovernedStrReplaceResult extends Pick<PolicyGatedExecutionResult, 'stopRequest' | 'notStarted'> {
   observation: string;
   exit_code: number;
   error?: string;
@@ -64,6 +64,12 @@ export interface GovernedStrReplaceResult {
 function resolveProjectPath(projectRoot: string, filePath: string): string {
   if (isAbsolute(filePath)) return filePath;
   return resolve(projectRoot, filePath);
+}
+
+function governedControl(result: PolicyGatedExecutionResult | null | undefined, whollyUnstarted = true): Pick<PolicyGatedExecutionResult, 'stopRequest' | 'notStarted'> {
+  return { ...(result?.stopRequest ? { stopRequest: result.stopRequest } : {}),
+    ...(whollyUnstarted && result?.notStarted ? { notStarted: result.notStarted } : {}),
+  };
 }
 
 /**
@@ -180,6 +186,7 @@ export async function governedStrReplace(
       error: 'blocked',
       policyBlocked: true,
       terminal: result.terminal === true,
+      ...governedControl(result),
       absolutePath,
       policyDecision: result.policyDecision,
       ...(result.mutationPaths ? { mutationPaths: result.mutationPaths } : {}),
@@ -199,6 +206,7 @@ export async function governedStrReplace(
       error: last?.stderr ?? 'write failed',
       policyBlocked: false,
       terminal: result.terminal === true,
+      ...governedControl(result),
       absolutePath,
       ...(result.mutationPaths ? { mutationPaths: result.mutationPaths } : {}),
       ...(result.preBatchHash ? { preBatchHash: result.preBatchHash } : {}),
@@ -213,6 +221,7 @@ export async function governedStrReplace(
       exit_code: 0,
       policyBlocked: false,
       terminal: result.terminal === true,
+      ...governedControl(result),
       lineNumber,
       absolutePath,
       policyDecision: result.policyDecision,
@@ -239,7 +248,7 @@ export function governedResultToToolResult(
 
 // ── apply_patch: governed unified-diff application ─────────────────────────
 
-export interface GovernedApplyPatchResult {
+export interface GovernedApplyPatchResult extends Pick<PolicyGatedExecutionResult, 'stopRequest' | 'notStarted'> {
   observation: string;
   exit_code: number;
   error?: string;
@@ -591,6 +600,7 @@ export async function governedApplyPatch(
               error: 'blocked',
               policyBlocked: true,
               terminal: dispatch.terminal === true,
+              ...governedControl(dispatch, writtenPaths.length === 0),
               absolutePaths,
               policyDecision: dispatch.policyDecision,
               preDispatchNoEffect: writtenPaths.length === 0,
@@ -624,6 +634,7 @@ export async function governedApplyPatch(
               error: stderr,
               policyBlocked: false,
               terminal: dispatch.terminal === true,
+              ...governedControl(dispatch, writtenPaths.length === 0),
               absolutePaths,
               // The executor ran, so an effect may exist even though this
               // dispatch reported failure — `writtenPaths` only tracks files
@@ -659,6 +670,7 @@ export async function governedApplyPatch(
     exit_code: 0,
     policyBlocked: false,
     terminal: completedDispatch?.terminal === true,
+    ...governedControl(completedDispatch, false),
     absolutePaths,
     ...(dispatchState.lastPolicyDecision !== undefined
       ? { policyDecision: dispatchState.lastPolicyDecision }

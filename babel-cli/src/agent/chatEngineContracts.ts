@@ -73,6 +73,7 @@ import type { TurnRuntimeSnapshot } from './turnRuntime.js'
 
 /** Host settlement metadata; never populated from model arguments or tool text. */
 export interface ChatActionResult {
+  stopRequest?: import('../runtime/run-control.js').StopRequest
   index: number
   observation: string
   stop?: boolean
@@ -562,6 +563,8 @@ export interface ChatResult {
 }
 
 export interface ChatEngineStreamingLoopHost {
+  readonly runControl?: import('../runtime/run-control.js').RunControl | null
+  readonly captureProviderUsageScope: (ownerGeneration?: number) => ChatUsageScope
   _activeToolBatchId: string | null
   _cancelled: boolean
   _hadToolCallsThisTurn: boolean
@@ -587,6 +590,7 @@ export interface ChatEngineStreamingLoopHost {
     continueTask?: boolean
   }) => TurnRuntimeSnapshot
   readonly admitUserSubmission: (input:import('./turnRuntime.js').UserSubmissionInput,route:{model:string;provider:string},objective?:import('./chatEngineObjectiveAdmission.js').PreparedObjectiveSubmission)=>import('./chatEngineObjectiveAdmission.js').ObjectiveAdmissionResult
+  readonly initializeSubmissionControl: (generation: number) => void
   readonly assertNativeRequestMatchesDurable: (
     outbound: readonly ProviderMessage[],
     systemPrompt: string,
@@ -646,6 +650,7 @@ export interface ChatEngineStreamingLoopHost {
     observations: string
     observationList: string[]
     count: number
+    stopRequest?: import('../runtime/run-control.js').StopRequest
   }>
   gatePolicy: VerificationPolicy | null
   gateStrikes: number
@@ -759,6 +764,7 @@ export interface ChatEngineStreamingLoopHost {
   readonly shouldUseTextTools: () => boolean
   stallState: StallState
   readonly streamCancelled: () => ChatEvent
+  readonly streamStopped: (stop: import('../runtime/run-control.js').StopRequest) => ChatEvent
   readonly streamDone: (
     answer: string,
     extra?: ChatStreamDoneExtra,

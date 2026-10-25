@@ -1,10 +1,11 @@
 /** Terminal projection, result assembly, and durable evidence settlement. */
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import type {
-  BlockedReport,
-  TerminalOutcome,
-  TerminalReasonCode,
+import {
+  TerminalReasonCodeSchema,
+  type BlockedReport,
+  type TerminalOutcome,
+  type TerminalReasonCode,
 } from '../schemas/agentContracts.js'
 import { globalCostTracker } from '../services/costTracker.js'
 import { proposeProjectMemoryWriteback } from '../services/projectMemory.js'
@@ -161,6 +162,8 @@ export type ChatTerminalInput = {
   effects: ChatTerminalEffects
 }
 export type ChatStreamDoneExtra = {
+  /** Host-owned winning continuation decision; does not certify fulfillment. */
+  stopRequest?: import('../runtime/run-control.js').StopRequest
   /** Controller-only deferral; never accepted as a model tool argument. */
   needsHumanDecision?: boolean
   blockedReport?: BlockedReport | null
@@ -194,8 +197,11 @@ export function completeChatStream(
   const hasMutation = snapshot.outcome.hasMutation
   const needsHumanDecision = extra?.needsHumanDecision === true && !hasMutation &&
     !snapshot.outcome.budgetExceeded && !snapshot.outcome.verifierTampered && !extra?.blockedReport && !extra?.verifierTampered
-  const { needsHumanDecision: _privateDecision, ...publicExtra } = extra ?? {}
-  let requestedOutcome = computeTerminalOutcome({
+  const { needsHumanDecision: _privateDecision, stopRequest: stop, ...publicExtra } = extra ?? {}
+  const stoppedOutcome: TerminalOutcome | undefined = stop?.kind === 'blocked' ? stop.reasonCode === 'permission_denied' ? 'BLOCKED_POLICY' : 'BLOCKED_EXTERNAL'
+    : stop?.kind === 'budget_exhausted' ? 'BUDGET_EXHAUSTED' : stop?.kind === 'failed' ? 'AGENT_FAILURE'
+    : stop?.kind === 'cancelled' || stop?.kind === 'superseded' ? 'CANCELLED' : undefined
+  let requestedOutcome = stoppedOutcome ?? computeTerminalOutcome({
     readOnly: snapshot.outcome.readOnly,
     finalStatus: extra?.blockedReport
       ? 'blocked'
@@ -213,10 +219,11 @@ export function completeChatStream(
     hasMutation,
     planMode: snapshot.context.executionProfile === 'plan',
   })
-  if (needsHumanDecision) requestedOutcome = 'NEEDS_HUMAN_DECISION'
+  if (needsHumanDecision && !stoppedOutcome) requestedOutcome = 'NEEDS_HUMAN_DECISION'
   requestedOutcome = normalizeInspectedNoChange(snapshot, requestedOutcome)
   const planCompletion =
     snapshot.context.executionProfile === 'plan' &&
+    !stoppedOutcome &&
     !needsHumanDecision &&
     !extra?.blockedReport &&
     !snapshot.outcome.budgetExceeded
@@ -232,7 +239,11 @@ export function completeChatStream(
     input,
     decisionOutcome,
     extra?.blockedReport,
-    extra?.reason,
+    extra?.reason ?? (stoppedOutcome && stop ? {
+      code: stop.kind === 'budget_exhausted' ? 'budget_exhausted' : stop.kind === 'cancelled' || stop.kind === 'superseded' ? 'cancelled'
+        : TerminalReasonCodeSchema.safeParse(stop.reasonCode).success ? stop.reasonCode as TerminalReasonCode : 'unknown',
+      cause_class: null, detail: stop.reasonCode,
+    } : undefined),
   )
   // R0-9: keep the tuple coherent. A read-only hard-cap that resolves a
   // `budget_exhausted` reason must not project `NO_CHANGE_REQUIRED` alongside

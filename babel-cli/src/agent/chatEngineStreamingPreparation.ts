@@ -58,7 +58,6 @@ export async function prepareStreamingSubmission(
   const submissionGeneration =
     submitOpts?.submissionGeneration ?? ++host.generationCounter;
   host.activeSubmissionGeneration = submissionGeneration;
-  host._cancelled = false;
   host.preparedAdmissionCompactionAttempts = 0;
   host.currentTurnTelemetry = new ChatTurnTelemetryCollector(performance.now());
   host.currentTurnTelemetry.markStarted();
@@ -76,6 +75,7 @@ export async function prepareStreamingSubmission(
       : {}),
   },{model:modelName,provider:providerName},objective);
   if(admission.status==='halted')return {halted:true,haltEvent:admission.haltEvent} as const;
+  host.initializeSubmissionControl(submissionGeneration);
   const runtime=admission.runtime;
   // Accepted host operation (AUTO falls back to task shape) narrows tools and
   // completion behavior. It grants no execution authority; profile/lease and

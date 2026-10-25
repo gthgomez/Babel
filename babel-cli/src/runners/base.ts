@@ -315,6 +315,8 @@ export interface ProviderInvocationPhaseEvent {
 }
 
 export interface RunnerCallbacks {
+  /** Host-only owner control, never included in a provider wire payload. */
+  runControl?: import('../runtime/run-control.js').RunControl;
   /** Prior logical request when the runner is rebuilding after compaction or fallback. */
   parentRequestId?: string | null;
   onChunk?: (chunk: string) => void | Promise<void>;

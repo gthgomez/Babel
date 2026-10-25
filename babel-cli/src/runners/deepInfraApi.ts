@@ -21,6 +21,7 @@
  *   jittered backoff. Schema and JSON failures are not retried here because
  *   they need prompt/schema repair, not another identical provider call.
  */
+import { dispatchRunOperation, RunStoppedError, type RunControl } from '../runtime/run-control.js';
 import { createHash, randomUUID } from 'node:crypto';
 import type { ZodType } from 'zod';
 import { isRetryableStatus, normalizeFinishReason } from './providerNormalize.js';
@@ -262,8 +263,8 @@ export class DeepInfraApiRunner implements LlmRunner {
   }
 
   /** Dispatch unchanged by default; specialized transports may gate every request. */
-  protected dispatchFetch(url: string, init: RequestInit): Promise<Response> {
-    return fetch(url, init)
+  protected dispatchFetch(url: string, init: RequestInit, control?: RunControl, operationId = 'provider_fetch'): Promise<Response> {
+    return dispatchRunOperation(control, 'model', operationId, () => fetch(url, init))
   }
 
   // ── Shared request/response logic ──────────────────────────────────────────
@@ -284,6 +285,8 @@ export class DeepInfraApiRunner implements LlmRunner {
   }> {
     const startedAt = Date.now();
     this.lastInvocationMetadata = null;
+    const stopped = callbacks?.runControl?.stop();
+    if (stopped) throw new RunStoppedError(stopped);
     if (callbacks?.onProgress) {
       callbacks.onProgress({ state: 'Contacting model' });
     }
@@ -383,6 +386,7 @@ export class DeepInfraApiRunner implements LlmRunner {
         failureStage?: import('./base.js').ProviderFailureStage;
         partialModelOutput?: boolean;
         toolCallCount?: number;
+        inferenceStarted?: boolean;
         outputMaterial?: string;
       } = {},
     ): void => {
@@ -410,7 +414,7 @@ export class DeepInfraApiRunner implements LlmRunner {
               maxAttempts,
               stream: isStreaming,
               failureStage: options.failureStage ?? 'unknown',
-              inferenceStarted: true,
+              inferenceStarted: options.inferenceStarted ?? true,
               partialModelOutput: options.partialModelOutput ?? false,
               toolCallCount: options.toolCallCount,
               requestedOutputBudget: this.executionEnvelope?.output.requested,
@@ -596,8 +600,15 @@ export class DeepInfraApiRunner implements LlmRunner {
             ...this.getRequestHeadersExtras(),
           },
           body: requestBody,
-        });
+        }, callbacks?.runControl, inferenceId);
       } catch (err) {
+        if (err instanceof RunStoppedError) {
+          settleRetry('cancelled');
+          notifyCompleted('failed', null, '', null, null, null, this.maxTokens, {
+            actualAttempt: attempt, details: { message: err.message }, failureStage: 'request', inferenceStarted: false,
+          });
+          throw err;
+        }
         this.lastInvocationMetadata = buildInvocationMetadata(this.providerId, this.model, Date.now() - startedAt);
         lastError = new Error(
           isAbortError(err)
@@ -797,6 +808,7 @@ export class DeepInfraApiRunner implements LlmRunner {
           const timeout = setTimeout(() => controller.abort(), requestTimeoutMs);
           lastAttempt += 1;
           try {
+            notifyPhase('request_dispatched', undefined, `stream retry ${lastAttempt}`);
             response = await this.dispatchFetch(this.apiUrl, {
               method: 'POST',
               redirect: this.getRequestRedirect(),
@@ -807,7 +819,7 @@ export class DeepInfraApiRunner implements LlmRunner {
                 ...this.getRequestHeadersExtras(),
               },
               body: requestBody,
-            });
+            }, callbacks?.runControl, inferenceId);
           } catch (error) {
             settleRetry(signal?.aborted ? 'cancelled' : 'failed');
             notifyPhase('provider_error', undefined, signal?.aborted ? 'timeout' : 'transport');
@@ -815,6 +827,7 @@ export class DeepInfraApiRunner implements LlmRunner {
               actualAttempt: lastAttempt,
               details: { message: error instanceof Error ? error.message : String(error) },
               failureStage: 'request',
+              inferenceStarted: !(error instanceof RunStoppedError),
               partialModelOutput: streamState.partialModelOutput,
               outputMaterial: streamState.outputReceipt,
             });
@@ -1125,6 +1138,8 @@ export class DeepInfraApiRunner implements LlmRunner {
   ): AsyncGenerator<ToolStreamEvent, void, undefined> {
     const startedAt = Date.now();
     this.lastInvocationMetadata = null;
+    const stopped = callbacks?.runControl?.stop();
+    if (stopped) throw new RunStoppedError(stopped);
     const requestTimeoutMs = this.getRequestTimeoutMs();
     const requestMaxRetries = this.getRequestMaxRetries();
     const streamIdleTimeoutMs = getStreamIdleTimeoutMs();
@@ -1209,6 +1224,7 @@ export class DeepInfraApiRunner implements LlmRunner {
         failureStage?: import('./base.js').ProviderFailureStage;
         partialModelOutput?: boolean;
         toolCallCount?: number;
+        inferenceStarted?: boolean;
         outputMaterial?: string;
       } = {},
     ): void => {
@@ -1236,7 +1252,7 @@ export class DeepInfraApiRunner implements LlmRunner {
               maxAttempts,
               stream: true,
               failureStage: options.failureStage ?? 'unknown',
-              inferenceStarted: true,
+              inferenceStarted: options.inferenceStarted ?? true,
               partialModelOutput: options.partialModelOutput ?? false,
               toolCallCount: options.toolCallCount,
               requestedOutputBudget: this.executionEnvelope?.output.requested,
@@ -1362,8 +1378,15 @@ export class DeepInfraApiRunner implements LlmRunner {
             ...this.getRequestHeadersExtras(),
           },
           body: requestBody,
-        });
+        }, callbacks?.runControl, inferenceId);
       } catch (err) {
+        if (err instanceof RunStoppedError) {
+          settleRetry('cancelled');
+          notifyCompleted('failed', null, '', null, null, null, this.maxTokens, {
+            actualAttempt: attempt, details: { message: err.message }, failureStage: 'request', inferenceStarted: false,
+          });
+          throw err;
+        }
         this.lastInvocationMetadata = buildInvocationMetadata(this.providerId, this.model, Date.now() - startedAt);
         if (isCallerCancelError(err, signal)) {
           lastError = new Error('[deepInfraApi] Request cancelled');

@@ -25,6 +25,7 @@ import {
 } from "./contracts.js";
 import { createExecutorKernel } from "./kernel.js";
 import { createRuntimeCoordinator } from "../runtime/coordinator.js";
+import { createRunControl } from "../runtime/run-control.js";
 import {
   evaluateExecuteCompletionHonesty,
   parseStructuredVerifierCommand,
@@ -80,6 +81,30 @@ test("H3 chat, plan, deep receive fixed distinct mode policies", () => {
 });
 
 // ── Proxy/runtime facade (P03) ─────────────────────────────────────────────
+
+test("H19/H20 a stopped submission cannot dispatch or accept a late completion reset", async () => {
+  const control = createRunControl({ runId: "conformance", turnId: "existing-turn", generation: 1 });
+  control.requestStop({ owner: control.owner, kind: "blocked", source: "executor", reasonCode: "permission_denied" });
+  const winner = control.stop();
+  assert.equal(control.requestStop({ owner: control.owner, kind: "completed", source: "completion", reasonCode: "completed" }), false);
+  const dispatch = await control.dispatchIfRunning({ owner: control.owner, kind: "tool", operationId: "proposed-tool" }, async () => {
+    assert.fail("a terminal submission cannot start a new effect");
+  });
+  assert.equal(dispatch.kind, "not_started");
+  assert.equal(control.stop(), winner);
+});
+
+test("H21 ending continuation does not certify task correctness", () => {
+  const control = createRunControl({ runId: "conformance", turnId: "existing-turn", generation: 1 });
+  control.requestStop({ owner: control.owner, kind: "completed", source: "completion", reasonCode: "completed" });
+  const decision = createExecutorKernel("chat").completion.decide({
+    mode: "chat", requestedOutcome: "VERIFIED_COMPLETE", hasWrite: true,
+    verificationPolicy: "strict", requiredVerifierCommands: ["npm test"],
+    toolCallLog: [], proof: { compliant: false, errors: ["No independent mutation or verifier evidence"] },
+  });
+  assert.notEqual(decision.finalOutcome, "VERIFIED_COMPLETE");
+  assert.equal(decision.allowed, false);
+});
 
 // ── Recovery (P06) ─────────────────────────────────────────────────────────
 

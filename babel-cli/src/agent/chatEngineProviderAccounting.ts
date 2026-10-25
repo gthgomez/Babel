@@ -27,6 +27,7 @@ import {
 } from './chatEngineParityBridge.js';
 
 export type ChatUsageScope = {
+  runControl?: import('../runtime/run-control.js').RunControl;
   taskOwnerId: string | null;
   projectRoot?: string;
   accountingEpoch: string;
@@ -67,6 +68,21 @@ export interface ChatProviderRetryHost {
     reason: string,
     appliesToCurrent: boolean,
   ): void;
+}
+
+/** Capture continuation and billing ownership once, before any inference suspension. */
+export function captureChatUsageScope(host: Pick<ChatProviderRetryHost, 'options' | 'parity' | 'taskAllowance'> & {
+  readonly runControl?: import('../runtime/run-control.js').RunControl | null;
+  isSubmissionCurrent(generation: number): boolean;
+}, generation: number): ChatUsageScope {
+  if (!host.isSubmissionCurrent(generation)) throw new Error('Provider scope requested by a retired submission');
+  return {
+    ...(host.runControl ? { runControl: host.runControl } : {}),
+    taskOwnerId: host.taskAllowance?.taskOwnerId ?? null,
+    ...(host.options.projectRoot ? { projectRoot: realpathSync(host.options.projectRoot) } : {}),
+    accountingEpoch: globalCostTracker.getAccountingEpoch(), turnId: host.parity.turnId,
+    chargeId: null, ownerGeneration: generation, isOwnerCurrent: () => host.isSubmissionCurrent(generation),
+  };
 }
 
 export function captureUsageAttribution(
@@ -119,6 +135,7 @@ export function buildProviderRetryCallbacks(host: ChatProviderRetryHost, context
         : null);
     return {
       parentRequestId,
+      ...(context.usageScope?.runControl ? { runControl: context.usageScope.runControl } : {}),
       onInvocationStarted: (event) => {
         if (context.usageScope) {
           context.usageScope.chargeId = event.inference_id;

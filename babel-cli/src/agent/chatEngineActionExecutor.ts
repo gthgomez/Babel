@@ -50,6 +50,8 @@ import {
   type PolicyGatedExecutionResult,
 } from "./toolExecutor.js";
 import { settleChatVerifierResult } from "./chatVerifierSettlement.js";
+import { acceptToolStop, settlePreventedChatAction } from './chatEngineRunControl.js';
+import { RunStoppedError } from '../runtime/run-control.js';
 import { chatReadToolExecutor } from "./chatReadExecutor.js";
 import { governedStrReplace } from "./governedMutations.js";
 import { executeGovernedApplyPatchAction } from "./codingLoop/applyPatchExecutor.js";
@@ -792,6 +794,7 @@ export class ChatEngineActionExecutor {
 
         // R0-7/R0-8: governedStrReplace is a suspension point; a superseded
         // submission must not record a mutation batch from it.
+        acceptToolStop(toolContext.runControl, gov);
         if (!this.host.isSubmissionCurrent(ownerGeneration)) {
           return this.host.settleStaleActionResult(
             tool,
@@ -800,6 +803,8 @@ export class ChatEngineActionExecutor {
             "parent submission superseded before the action settled",
           );
         }
+        const prevented = settlePreventedChatAction({ host: this.host, control: toolContext.runControl, notStarted: gov.notStarted, tool, target, toolId, meta, callbacks });
+        if (prevented) return prevented;
         if (gov.mutationPaths && gov.mutationPaths.length > 0) {
           recordMutationBatch(
             this.host.parity.sessionEvents,
@@ -1341,6 +1346,8 @@ export class ChatEngineActionExecutor {
         if (started) return started;
       }
       const result: PolicyGatedExecutionResult = await pendingResult;
+      const control = toolContext.runControl;
+      acceptToolStop(control, result);
 
       // R0-7/R0-8: the governed action was a suspension point; a superseded
       // submission must not record a mutation batch or write the current
@@ -1353,6 +1360,9 @@ export class ChatEngineActionExecutor {
           "parent submission superseded before the action settled",
         );
       }
+
+      const prevented = settlePreventedChatAction({ host: this.host, control, notStarted: result.notStarted, tool, target, toolId, meta, callbacks });
+      if (prevented) return prevented;
       if (result.mutationPaths && result.mutationPaths.length > 0) {
         recordMutationBatch(
           this.host.parity.sessionEvents,
@@ -1802,6 +1812,7 @@ export class ChatEngineActionExecutor {
       }
 
       return { index: meta.index, observation: obsParts.join("\n"),
+        ...(control?.stop() ? { stopRequest: control.stop()! } : {}),
         ...(action.type === 'read_file' && !result.policyBlocked && result.results.length > 0 &&
           result.results.every(r => r.exit_code === 0 && !r.denial) ? { admittedProjectRead: true as const } : {}),
       };
@@ -1815,6 +1826,12 @@ export class ChatEngineActionExecutor {
           meta.index,
           "parent submission superseded before the action settled",
         );
+      }
+      if (err instanceof RunStoppedError && (isMcpChatAction(action) || action.type === 'web_search' || action.type === 'web_fetch')) {
+        const prevented = settlePreventedChatAction({ host: this.host, control: toolContext.runControl,
+          notStarted: { owner: err.stopRequest.owner, operationId: toolContext.toolCallId ?? tool, kind: 'tool' },
+          tool, target, toolId, meta, callbacks });
+        if (prevented) return prevented;
       }
       // R0-10: presentation callbacks are an observational side channel. If a
       // callback threw AFTER this action already recorded its execution row,

@@ -1,3 +1,4 @@
+import { RunStoppedError, type RunControl } from '../runtime/run-control.js'
 import { OpenCodeGoBudget, OpenCodeGoBudgetError } from './openCodeGoBudget.js'
 import type { ResolvedExecutionEnvelope } from '../intelligence/types.js'
 import { randomUUID } from 'node:crypto'
@@ -170,7 +171,7 @@ export class OpenCodeGoApiRunner extends DeepInfraApiRunner {
       : OPENCODE_GO_DEFAULT_TIMEOUT_MS
   }
 
-  protected override async dispatchFetch(url: string, init: RequestInit): Promise<Response> {
+  protected override async dispatchFetch(url: string, init: RequestInit, control?: RunControl, operationId?: string): Promise<Response> {
     if (url !== this.apiUrl || init.method !== 'POST' || init.redirect !== 'error' || typeof init.body !== 'string') {
       throw new OpenCodeGoBudgetError()
     }
@@ -181,11 +182,13 @@ export class OpenCodeGoApiRunner extends DeepInfraApiRunner {
       throw new OpenCodeGoBudgetError()
     }
     if (this.pinnedModel === 'deepseek-v4.1-flash' && !this.budget) throw new OpenCodeGoBudgetError()
+    if (control?.stop()) throw new RunStoppedError(control.stop()!)
     if (init.signal?.aborted) throw new OpenCodeGoError('ABORTED', 'OpenCode Go request was interrupted.')
     await this.budget?.reserve(Buffer.byteLength(init.body, 'utf8'), body.max_tokens as number)
+    if (control?.stop()) throw new RunStoppedError(control.stop()!)
     if (init.signal?.aborted) throw new OpenCodeGoError('ABORTED', 'OpenCode Go request was interrupted.')
     this.budget?.assertCurrentAuthority()
-    return super.dispatchFetch(url, init)
+    return super.dispatchFetch(url, init, control, operationId)
   }
 
   /** Return the stable session header assigned to this runner. */
@@ -248,7 +251,7 @@ export class OpenCodeGoApiRunner extends DeepInfraApiRunner {
       if (signal?.aborted) throw new OpenCodeGoError('ABORTED', 'OpenCode Go request was interrupted.')
       return await super.execute(prompt, schema, callbacks, systemPrompt, signal)
     } catch (error) {
-      if (error instanceof PreparedRequestAdmissionError) throw error
+      if (error instanceof PreparedRequestAdmissionError || error instanceof RunStoppedError) throw error
       throw classifyError(error)
     }
   }
@@ -263,7 +266,7 @@ export class OpenCodeGoApiRunner extends DeepInfraApiRunner {
       if (signal?.aborted) throw new OpenCodeGoError('ABORTED', 'OpenCode Go request was interrupted.')
       return await super.executeRaw(prompt, callbacks, systemPrompt, signal)
     } catch (error) {
-      if (error instanceof PreparedRequestAdmissionError) throw error
+      if (error instanceof PreparedRequestAdmissionError || error instanceof RunStoppedError) throw error
       throw classifyError(error)
     }
   }
@@ -278,7 +281,7 @@ export class OpenCodeGoApiRunner extends DeepInfraApiRunner {
       if (signal?.aborted) throw new OpenCodeGoError('ABORTED', 'OpenCode Go request was interrupted.')
       yield* super.executeRawStream(prompt, systemPrompt, signal, callbacks)
     } catch (error) {
-      if (error instanceof PreparedRequestAdmissionError) throw error
+      if (error instanceof PreparedRequestAdmissionError || error instanceof RunStoppedError) throw error
       throw classifyError(error)
     }
   }
@@ -295,7 +298,7 @@ export class OpenCodeGoApiRunner extends DeepInfraApiRunner {
       if (signal?.aborted) throw new OpenCodeGoError('ABORTED', 'OpenCode Go request was interrupted.')
       yield* super.executeWithToolsStream(messages, tools, systemPrompt, signal, toolChoice, callbacks)
     } catch (error) {
-      if (error instanceof PreparedRequestAdmissionError) throw error
+      if (error instanceof PreparedRequestAdmissionError || error instanceof RunStoppedError) throw error
       throw classifyError(error)
     }
   }

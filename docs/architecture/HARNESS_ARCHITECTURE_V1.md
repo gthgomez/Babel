@@ -314,6 +314,31 @@ Language: **MUST** / **MUST NOT** / **SHOULD** / **MAY** / **OWNS** / **SUPERSED
 | H16 | Architecture-changing runtime modifications MUST update this specification, ADR status where relevant, and conformance tests. | **PROCESS** (this package) |
 | H17 | Deprecated or historical execution paths MUST NOT be described as active without current runtime support and tests. | **PROCESS** |
 | H18 | Documentation MUST NOT point to nonexistent authority files. | **PROCESS** + drift checker |
+| H19 | Each Chat submission MUST own one monotonic continuation latch bound to its existing run, turn and submission generation. Only the first owner-matching terminal request wins; session startup and late successful work MUST NOT reset it. | **IMPLEMENTED** (`runtime/run-control.ts`) |
+| H20 | New Chat tool effects and native provider requests MUST recheck that captured latch at the physical start, after suspending preparation/approval/persistence, including each retry and compaction request. Already-started work MUST retain its original settlement/accounting owner. | **IMPLEMENTED** (Chat executor, compatible/DeepSeek transports and compaction); other controllers retain their existing cancellation contracts |
+| H21 | Only typed host results may request a parent stop. Tool prose and child completion MUST NOT grant parent continuation or verified completion. A stopped submission MUST use the existing finalizer and completion evaluator without further model synthesis. | **IMPLEMENTED** (Chat) |
+
+### Submission continuation ownership
+
+`RunControl` owns whether a Chat submission may start more work. It does not
+grant tool permissions, replace durable admission ownership, or decide task
+correctness. `runId` and `turnId` come from the existing engine/thread and turn;
+`generation` is the existing submission generation. Replacement stops the old
+control before publishing the new generation. No reset operation exists.
+
+Preparation, approval and durable dispatch intent precede the final synchronous
+check-and-start boundary. `TOOL_NOT_STARTED` requires a proposal with no durable
+start. A durable start intent remains in history; the host dispatcher may settle
+it as cancelled when its matching owner/operation callback never ran. An
+unresolved physical effect stays unknown. Already-started operations
+may settle after stop, with late usage charged to their captured original owner.
+They cannot reopen the latch or write a replacement submission's results.
+
+Rendered observations remain presentation. Host-only `StopRequest` values carry
+terminal intent through action/batch results. Local prerequisite denials remain
+local unless existing policy explicitly requests a terminal stop. A completed
+latch means dispatch ended; the existing completion gate and executor kernel
+still determine whether any success claim is justified.
 
 ---
 
@@ -473,6 +498,7 @@ Do not create a second active implementation backlog for these gaps.
 | 15 | `babel-cli/src/services/requiredVerifierContract.ts` / `verifierIdentity.ts` / `evidence/episodeStream.ts` / `evidence/independentVerifier.ts` |
 | 16 | `babel-cli/src/schemas/agentContracts.ts` |
 | 17 | `babel-cli/src/config/chatEngineLimits.ts` |
+| 18 | `babel-cli/src/runtime/run-control.ts` / `agent/chat-engine-stop-admission.test.ts` |
 
 ---
 

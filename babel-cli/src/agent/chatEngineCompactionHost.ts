@@ -3,7 +3,6 @@
  * under the architectural size ratchet.
  */
 
-import { realpathSync } from 'node:fs';
 import { createCompactionSourceFence } from './compactionSourceContinuity.js';
 
 import {
@@ -43,6 +42,7 @@ export interface ChatEngineCompactionBinding {
   engineRunDir: string;
   taskAllowance?: { taskOwnerId: string | null };
   activeSubmissionGeneration: number;
+  captureProviderUsageScope(generation?: number): import('./chatEngineProviderAccounting.js').ChatUsageScope;
   compactionManager?: import('./chatCompaction.js').CompactionManager;
   condensationFacts?: import('../services/condensationFacts.js').CondensationFactChannel;
   lastLogicalRequestId: string | null;
@@ -101,31 +101,11 @@ export async function runChatEngineCompactionFor(
   const compactionParity = engine.parity;
   const compactionRunDir = engine.engineRunDir;
   const compactionOwnerId = engine.taskAllowance?.taskOwnerId ?? null;
-  const compactionEpoch = globalCostTracker.getAccountingEpoch();
-  const compactionTurnId = engine.parity.turnId;
   const sourceFence = createCompactionSourceFence({
     getConversation: () => engine.conversation,
     thread: compactionParity.eventLog, session: compactionParity.sessionEvents,
   });
-  const usageScope: {
-    taskOwnerId: string | null;
-    projectRoot?: string;
-    accountingEpoch: string;
-    turnId: string | null;
-    chargeId: string | null;
-    provider?: string | null;
-    requestId?: string;
-    attemptId?: string;
-    runDir?: string;
-    ownerGeneration: number;
-  } = {
-    taskOwnerId: compactionOwnerId,
-    ...(engine.options.projectRoot?{projectRoot:realpathSync(engine.options.projectRoot)}:{}),
-    accountingEpoch: compactionEpoch,
-    turnId: compactionTurnId,
-    chargeId: null as string | null,
-    ownerGeneration,
-  };
+  const usageScope = engine.captureProviderUsageScope(ownerGeneration);
   const compactionModelId = resolveCompactionModelId({
     pinSelection: engine.options.model !== undefined || engine.options.providerPolicy !== undefined,
     ...(engine.modelPolicy?.providerModelId
