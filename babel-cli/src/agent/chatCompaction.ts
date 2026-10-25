@@ -32,6 +32,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { dispatchRunOperation, RunStoppedError } from '../runtime/run-control.js';
 import { prepareProviderRequest } from '../runners/preparedProviderRequest.js';
 import { CampaignBudgetDeniedError, CampaignRouteUnsupportedError } from '../runners/campaignDispatchGate.js';
+import { buildInvocationMetadata } from '../runners/providerResponseMetadata.js';
 import type { RunnerCallbacks } from '../runners/base.js';
 import type { ProviderId } from '../runners/providerRegistry.js';
 import type { CompactionRecoveryPressure } from './compactionRequestPressure.js';
@@ -781,6 +782,20 @@ export class LLMSummarizeCompaction implements CompactionStrategy {
       }
 
       phase('response_normalized');
+      const usageMetadata = buildInvocationMetadata(
+        provider,
+        model,
+        0,
+        {
+          ...(data.usage?.prompt_tokens !== undefined ? { prompt_tokens: data.usage.prompt_tokens } : {}),
+          ...(data.usage?.completion_tokens !== undefined ? { completion_tokens: data.usage.completion_tokens } : {}),
+          ...(data.usage?.cost !== undefined ? { cost: data.usage.cost } : {}),
+        },
+        null,
+        null,
+        null,
+        typeof data.model === 'string' ? data.model : null,
+      );
       callbacks?.onInvocationCompleted?.({
         inference_id: inferenceId,
         provider,
@@ -788,6 +803,7 @@ export class LLMSummarizeCompaction implements CompactionStrategy {
         status: 'delivered',
         observed_model_id: typeof data.model === 'string' ? data.model : null,
         output_digest: createHash('sha256').update(summary.trim()).digest('hex'),
+        usage_metadata: usageMetadata,
       });
       completed = true;
 
@@ -847,6 +863,9 @@ export class LLMSummarizeCompaction implements CompactionStrategy {
       signal.addEventListener('abort', onExternalAbort, { once: true });
     }
 
+    if (callbacks?.campaignMeter) {
+      throw new CampaignRouteUnsupportedError();
+    }
     const provider: ProviderId = 'anthropic';
     const inferenceId = randomUUID();
     const requestBody = {

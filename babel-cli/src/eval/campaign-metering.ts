@@ -6,16 +6,27 @@ import {
 } from '../services/modelPricingRegistry.js'
 import type { ModelRouteStage } from '../agent/modelRouteReceipt.js'
 import type { ProviderId } from '../runners/providerRegistry.js'
+import {
+  assertCampaignQualifiedPreparedRequest,
+  isCampaignNativeProvider,
+  isCampaignQualifiedModelRoute,
+} from './campaign-qualified-routes.js'
 
 export const CAMPAIGN_METERED_PROVIDER_IDS: readonly ProviderId[] = [
   'openrouter',
-  'deepinfra',
-  'deepseek',
+  'command-code',
 ]
 
 export function isCampaignMeteredProvider(provider: string | null | undefined): boolean {
-  if (!provider) return false
-  return (CAMPAIGN_METERED_PROVIDER_IDS as readonly string[]).includes(provider)
+  return isCampaignNativeProvider(provider)
+}
+
+export function isCampaignQualifiedProviderRoute(
+  provider: string | null | undefined,
+  sentModelId: string | null | undefined,
+): boolean {
+  if (!provider || !sentModelId) return false
+  return isCampaignQualifiedModelRoute(provider, sentModelId)
 }
 
 export function buildCampaignOperationId(input: {
@@ -28,15 +39,19 @@ export function buildCampaignOperationId(input: {
   return `${input.campaignId}:${input.taskOwnerId}:${input.executionStage}:${input.requestId}:${input.attemptId}`
 }
 
-function preparedInputTokenUpperBound(prepared: PreparedProviderRequest): number {
-  if (prepared.accounting.estimated_input_tokens !== null) {
-    return prepared.accounting.estimated_input_tokens
+function verifiedMaxInputContextTokens(prepared: PreparedProviderRequest): number {
+  if (
+    prepared.context_limit_tokens === null ||
+    prepared.context_limit_source === 'unknown'
+  ) {
+    throw new Error('campaign route missing verified input context bound')
   }
-  return Math.max(1, Math.ceil(prepared.body_bytes / 4))
+  return prepared.context_limit_tokens
 }
 
-/** Reservation ceiling from the frozen prepared body and pinned pricing caps (no fudge multipliers). */
+/** Reservation ceiling from verified max input context and enforced max output (separate bounds). */
 export function reservationUpperBoundMicroUsd(prepared: PreparedProviderRequest): number {
+  assertCampaignQualifiedPreparedRequest(prepared)
   const reservedCompletion = prepared.accounting.reserved_completion_tokens
   if (reservedCompletion === null || reservedCompletion <= 0) {
     throw new Error('campaign route missing reserved completion bound')
@@ -44,7 +59,7 @@ export function reservationUpperBoundMicroUsd(prepared: PreparedProviderRequest)
   if (!getModelPricing(prepared.provider, prepared.sent_model_id)) {
     throw new Error('campaign route pricing unknown')
   }
-  const promptTokens = preparedInputTokenUpperBound(prepared)
+  const promptTokens = verifiedMaxInputContextTokens(prepared)
   const estimate = estimateProviderUsageCost({
     provider: prepared.provider,
     modelId: prepared.sent_model_id,
