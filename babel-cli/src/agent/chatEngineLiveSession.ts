@@ -22,6 +22,7 @@ import {
   canMutateWithIdempotencyKey,
   type LiveSessionAuthority,
 } from './liveSessionBridge.js';
+import { assertPathListRefreshDeclarationCompatible } from './liveSessionFilesystemPathListAdmission.js';
 import { paritySettleInterruptedOnResume,checkpointParityEventLogStrictSync } from './chatEngineParityBridge.js';
 import {reviseTaskModeCompanion} from './taskModeRevision.js';
 import {advanceObjectiveMode} from './taskObjectiveLifecycle.js';
@@ -49,6 +50,7 @@ export interface LiveAuthorityOptionsSlice {
   requiredVerifierCommands?: readonly string[] | null;
   projectTestCommands?: readonly string[] | null;
   compiledChatStack?: ChatCompiledStack;
+  trustedHostFilesystemPathListDeclaration?: unknown;
 }
 
 export interface RefreshableAuthorityInput {
@@ -112,12 +114,27 @@ export function prepareEngineInstructionAuthority(
       ? { projectTestCommands: [...input.options.projectTestCommands] }
       : {}),
     systemContextFragments: identity.fragments,
+    ...(input.options.trustedHostFilesystemPathListDeclaration !== undefined
+      ? {
+          trustedHostFilesystemPathListDeclaration:
+            input.options.trustedHostFilesystemPathListDeclaration,
+        }
+      : {}),
   });
 }
 
 export function refreshEngineInstructionManifest(input:RefreshableAuthorityInput):LiveSessionAuthority{
-  const resolved=prepareEngineInstructionAuthority(input),mode=resolved.taskContract.mode;
   const current = input.parity.liveAuthority;
+  if (
+    current?.filesystemPathListAdmission &&
+    input.options.trustedHostFilesystemPathListDeclaration !== undefined
+  ) {
+    assertPathListRefreshDeclarationCompatible(
+      current.filesystemPathListAdmission,
+      input.options.trustedHostFilesystemPathListDeclaration,
+    );
+  }
+  const resolved=prepareEngineInstructionAuthority(input),mode=resolved.taskContract.mode;
   const authority: LiveSessionAuthority = current
     ? {
         ...current,

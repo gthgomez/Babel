@@ -249,6 +249,11 @@ export interface ChatEngineOptions {
   }
   /** Truthful delivery surface for the model-visible runtime metadata. */
   runtimeMode?: ChatRuntimeMode
+  /**
+   * Trusted-host filesystem path-list declaration (admission-only; requires projectRoot).
+   * Does not alter inferred acceptance or grant completion authority.
+   */
+  trustedHostFilesystemPathListDeclaration?: unknown
 }
 
 /** Shared TUI/headless/direct preparation applied to a live or reused engine. */

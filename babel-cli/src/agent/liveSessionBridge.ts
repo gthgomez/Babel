@@ -60,6 +60,21 @@ import type { BabelMode } from '../executor/contracts.js';
 import {validateTaskModeCompanion,MODE_REVISION_HISTORY_REF,type TaskModeHistory} from './taskModeRevision.js';
 import {assertObjectiveLifecycle,activeObjectiveSessionLog,activeAcceptanceSessionLog,TASK_OBJECTIVE_LIFECYCLE_FILENAME,OBJECTIVE_LIFECYCLE_REF,type TaskObjectiveLifecycleV1} from './taskObjectiveLifecycle.js';
 import { renameCheckpointSync, writeCheckpointFileSync, type AtomicCheckpointRenameOptions } from '../utils/atomicCheckpointFile.js';
+import {
+  admitFilesystemPathListForLiveSession,
+  admissionRecordForPersistence,
+  loadFilesystemPathListAdmissionStrict,
+  pathListAdmissionProvenanceRecord,
+  TRUSTED_HOST_PATH_LIST_ADMISSION_FILENAME,
+  type LiveSessionFilesystemPathListAdmissionV1,
+} from './liveSessionFilesystemPathListAdmission.js';
+import { LiveSessionAuthorityError } from './liveSessionAuthorityError.js';
+
+export { LiveSessionAuthorityError } from './liveSessionAuthorityError.js';
+export {
+  TRUSTED_HOST_PATH_LIST_ADMISSION_FILENAME,
+  type LiveSessionFilesystemPathListAdmissionV1,
+} from './liveSessionFilesystemPathListAdmission.js';
 
 export const INSTRUCTION_MANIFEST_FILENAME = 'instruction-manifest.json';
 export const TASK_CONTRACT_FILENAME = 'task-contract.json';
@@ -163,6 +178,8 @@ export interface LiveSessionAuthority {
   taskModeHistory?: TaskModeHistory;
   taskObjectiveLifecycle?: TaskObjectiveLifecycleV1;
   chatStack?: ChatCompiledStack;
+  /** Trusted-host path-list admission (inspection only; not completion authority). */
+  filesystemPathListAdmission?: LiveSessionFilesystemPathListAdmissionV1;
 }
 
 /** Mode-derived authority is unusable without its complete original ceiling. */
@@ -193,16 +210,6 @@ function loadAuthorityModeHistory(runDir:string,authority:LiveSessionAuthority):
     assertObjectiveLifecycle(authority,authority.taskObjectiveLifecycle,thread?{thread,session:loadSessionEventLogForResume(runDir,thread.thread_id)}:undefined);
   }catch{throw new LiveSessionAuthorityError('OBJECTIVE_LIFECYCLE_INVALID','The objective lifecycle or its canonical attempt binding is missing, invalid or unsupported');}
   return authority;
-}
-
-export class LiveSessionAuthorityError extends Error {
-  readonly code: string
-
-  constructor(code: string, message: string) {
-    super(message)
-    this.name = 'LiveSessionAuthorityError'
-    this.code = code
-  }
 }
 
 function writeJsonAtomic(path: string, value: unknown): void {
@@ -282,7 +289,18 @@ export function resolveLiveSessionAuthority(input: {
    * instructions actually delivered to the provider.
    */
   systemContextFragments?: readonly IdentityDeliveredFragment[];
+  /** Trusted-host path-list declaration; requires non-null projectRoot. */
+  trustedHostFilesystemPathListDeclaration?: unknown;
 }): LiveSessionAuthority {
+  if (
+    input.trustedHostFilesystemPathListDeclaration !== undefined &&
+    input.projectRoot === null
+  ) {
+    throw new LiveSessionAuthorityError(
+      'PATH_LIST_DECLARATION_REQUIRES_PROJECT_ROOT',
+      'PATH_LIST_DECLARATION_REQUIRES_PROJECT_ROOT: A trusted host filesystem path-list declaration requires a non-null project root.',
+    );
+  }
   const scope=normalizeChatExecutionScope(input);
   if(scope.kind==='conversation'&&(input.instructionRoot||(input.compiledChatStack&&input.compiledChatStack.project_root!==null)))throw new Error('Conflicting project context in conversation authority');
   const chatStack = input.compiledChatStack ?? compileChatStack({
@@ -349,6 +367,14 @@ export function resolveLiveSessionAuthority(input: {
       protectedPaths.add(path);
     }
   }
+  const filesystemPathListAdmission =
+    input.trustedHostFilesystemPathListDeclaration !== undefined && input.projectRoot
+      ? admitFilesystemPathListForLiveSession(
+          input.projectRoot,
+          input.task,
+          input.trustedHostFilesystemPathListDeclaration,
+        )
+      : undefined;
   const contract = freezeTaskContract(
     buildTaskContractV1({
       mode: input.mode,
@@ -371,11 +397,20 @@ export function resolveLiveSessionAuthority(input: {
               'non_idempotent_local_effect',
             ],
       source: 'liveSessionBridge.resolveLiveSessionAuthority',
-      provenance:[...meaning.provenance,...(input.objectiveLifecycle?[{kind:'risk_analysis' as const,ref:OBJECTIVE_LIFECYCLE_REF}]:[])],
+      provenance:[
+        ...meaning.provenance,
+        ...(input.objectiveLifecycle ? [{ kind: 'risk_analysis' as const, ref: OBJECTIVE_LIFECYCLE_REF }] : []),
+        ...(filesystemPathListAdmission ? [pathListAdmissionProvenanceRecord()] : []),
+      ],
     }),
   );
 
-  return { instructionManifest, taskContract: contract, chatStack };
+  return {
+    instructionManifest,
+    taskContract: contract,
+    chatStack,
+    ...(filesystemPathListAdmission ? { filesystemPathListAdmission } : {}),
+  };
 }
 
 /** Persist authority artifacts next to session-events.jsonl. */
@@ -392,6 +427,12 @@ export function persistLiveSessionAuthority(
   writeJsonAtomic(join(runDir, TASK_CONTRACT_FILENAME), authority.taskContract);
   if(authority.taskModeHistory)writeJsonAtomic(join(runDir,TASK_MODE_HISTORY_FILENAME),authority.taskModeHistory);
   if(authority.taskObjectiveLifecycle)writeJsonAtomic(join(runDir,TASK_OBJECTIVE_LIFECYCLE_FILENAME),authority.taskObjectiveLifecycle);
+  if (authority.filesystemPathListAdmission) {
+    writeJsonAtomic(
+      join(runDir, TRUSTED_HOST_PATH_LIST_ADMISSION_FILENAME),
+      admissionRecordForPersistence(authority.filesystemPathListAdmission),
+    );
+  }
 }
 
 export function loadLiveSessionAuthority(
@@ -446,7 +487,9 @@ export function loadLiveSessionAuthorityStrict(runDir: string): LiveSessionAutho
       'Instruction manifest and task contract modes do not match',
     )
   }
-  return loadAuthorityModeHistory(runDir,{ instructionManifest, taskContract })
+  const authority = loadAuthorityModeHistory(runDir, { instructionManifest, taskContract });
+  const admission = loadFilesystemPathListAdmissionStrict(runDir, authority.taskContract);
+  return admission ? { ...authority, filesystemPathListAdmission: admission } : authority;
 }
 
 /**
