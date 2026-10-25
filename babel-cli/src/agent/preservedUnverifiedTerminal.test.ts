@@ -1,24 +1,9 @@
-/**
- * Gate-seam preserved-UNVERIFIED regressions.
- *
- * Base proof (PR434 green, unchanged): `115c0895c3867c90c64edc32707cc217d9be2d27`
- * Successor branch: `cursor/j08-preserve-candidate-freshness-f97b`
- *
- * Initial RED on exact base implementation (`115c0895` `preservedUnverifiedTerminal.ts`),
- * current regression tests only, agent-run 2026-10-25:
- *   # tests 12 / # pass 10 / # fail 2
- *   not ok — after confirmed mutation…: actual `stale_revision`, expected `retain`
- *   not ok — relevant indeterminate…: actual `retain`, expected `stale_revision`
- *
- * Independent root reproduction on `115c0895` (same matrix): same-revision 190→200 stays 190;
- * capture→confirmed write→new genuine completion stays `stale_revision`; indeterminate→`retain`;
- * other submission generation→`absent`. The two failing expectations above are the assigned defects.
- *
- * Intentional gap (not reopened here): same-revision replacement of a gate-rejected capture still
- * requires a trustworthy host-recognized answer-repair context — not prose ranking or model flags.
- */
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import {
+  DIRECT_MUTATION_TOOLS,
+  VERIFIER_ATTEMPT_TOOLS,
+} from './mutationTools.js'
 import {
   buildConfirmedMutationRevisionKey,
   collectConfirmedMutationArtifactPaths,
@@ -29,6 +14,147 @@ import {
   resolveGateRejectedCompletionCapture,
   tryRecordGateRejectedCompletionCapture,
 } from './preservedUnverifiedTerminal.js'
+
+const INDETERMINATE_FRESHNESS_BASE_LOG = [{
+  tool: 'str_replace',
+  effect_status: 'confirmed_change' as const,
+  mutation_paths: ['数据/summary.csv'],
+}]
+
+function assertIndeterminateWorkspaceMutatorYieldsStaleRevision(
+  tool: string,
+  mutation_paths: readonly string[] | undefined,
+): void {
+  const generation = 11
+  const capture = tryRecordGateRejectedCompletionCapture(
+    null,
+    'Explanation at confirmed revision.',
+    INDETERMINATE_FRESHNESS_BASE_LOG,
+    generation,
+  )
+  assert.ok(capture)
+  const indeterminateEntry = mutation_paths === undefined
+    ? { tool, effect_status: 'indeterminate' as const }
+    : { tool, effect_status: 'indeterminate' as const, mutation_paths }
+  const logWithIndeterminate = [...INDETERMINATE_FRESHNESS_BASE_LOG, indeterminateEntry]
+  assert.equal(
+    buildConfirmedMutationRevisionKey(INDETERMINATE_FRESHNESS_BASE_LOG),
+    buildConfirmedMutationRevisionKey(logWithIndeterminate),
+  )
+  assert.equal(
+    resolveGateRejectedCompletionCapture(capture, logWithIndeterminate, generation).kind,
+    'stale_revision',
+  )
+}
+
+for (const tool of DIRECT_MUTATION_TOOLS) {
+  test(`regression: indeterminate ${tool} omitted mutation_paths → stale_revision at resolve`, () => {
+    assertIndeterminateWorkspaceMutatorYieldsStaleRevision(tool, undefined)
+  })
+  test(`regression: indeterminate ${tool} empty mutation_paths → stale_revision at resolve`, () => {
+    assertIndeterminateWorkspaceMutatorYieldsStaleRevision(tool, [])
+  })
+}
+
+for (const tool of VERIFIER_ATTEMPT_TOOLS) {
+  test(`regression: indeterminate ${tool} omitted mutation_paths → stale_revision at resolve`, () => {
+    assertIndeterminateWorkspaceMutatorYieldsStaleRevision(tool, undefined)
+  })
+  test(`regression: indeterminate ${tool} empty mutation_paths → stale_revision at resolve`, () => {
+    assertIndeterminateWorkspaceMutatorYieldsStaleRevision(tool, [])
+  })
+}
+
+test('regression: indeterminate sub_agent parent_candidate with named mutation_paths → stale_revision', () => {
+  const generation = 12
+  const capture = tryRecordGateRejectedCompletionCapture(
+    null,
+    'Explanation at confirmed revision.',
+    INDETERMINATE_FRESHNESS_BASE_LOG,
+    generation,
+  )
+  assert.ok(capture)
+  const logWithChild = [
+    ...INDETERMINATE_FRESHNESS_BASE_LOG,
+    {
+      tool: 'sub_agent',
+      target: 'child-spec-1',
+      detail: 'failed: timeout, attribution=child_failed',
+      index: 2,
+      exit_code: 1,
+      error: 'timeout',
+      effect_scope: 'parent_candidate' as const,
+      effect_status: 'indeterminate' as const,
+      mutation_paths: ['src/parent-affected.ts'],
+    },
+  ]
+  assert.equal(
+    buildConfirmedMutationRevisionKey(INDETERMINATE_FRESHNESS_BASE_LOG),
+    buildConfirmedMutationRevisionKey(logWithChild),
+  )
+  assert.equal(
+    resolveGateRejectedCompletionCapture(capture, logWithChild, generation).kind,
+    'stale_revision',
+  )
+})
+
+test('regression: indeterminate sub_agent parent_candidate without mutation_paths → stale_revision', () => {
+  const generation = 13
+  const capture = tryRecordGateRejectedCompletionCapture(
+    null,
+    'Explanation at confirmed revision.',
+    INDETERMINATE_FRESHNESS_BASE_LOG,
+    generation,
+  )
+  assert.ok(capture)
+  const logWithChild = [
+    ...INDETERMINATE_FRESHNESS_BASE_LOG,
+    {
+      tool: 'sub_agent',
+      target: 'child-spec-2',
+      detail: 'failed, attribution=child_threw',
+      error: 'error',
+      effect_status: 'indeterminate' as const,
+      effect_scope: 'parent_candidate' as const,
+      index: 3,
+      exit_code: 1,
+    },
+  ]
+  assert.equal(
+    resolveGateRejectedCompletionCapture(capture, logWithChild, generation).kind,
+    'stale_revision',
+  )
+})
+
+test('regression: indeterminate sub_agent isolated_child does not force stale_revision at resolve', () => {
+  const generation = 14
+  const capture = tryRecordGateRejectedCompletionCapture(
+    null,
+    'Explanation at confirmed revision.',
+    INDETERMINATE_FRESHNESS_BASE_LOG,
+    generation,
+  )
+  assert.ok(capture)
+  const logWithIsolatedChild = [
+    ...INDETERMINATE_FRESHNESS_BASE_LOG,
+    {
+      tool: 'sub_agent',
+      target: 'child-spec-3',
+      detail: 'failed, attribution=child_threw',
+      error: 'error',
+      effect_status: 'indeterminate' as const,
+      effect_scope: 'isolated_child' as const,
+      index: 4,
+      exit_code: 1,
+    },
+  ]
+  assert.equal(
+    buildConfirmedMutationRevisionKey(INDETERMINATE_FRESHNESS_BASE_LOG),
+    buildConfirmedMutationRevisionKey(logWithIsolatedChild),
+  )
+  const resolved = resolveGateRejectedCompletionCapture(capture, logWithIsolatedChild, generation)
+  assert.equal(resolved.kind, 'retain')
+})
 
 test('formatPreservedUnverifiedTerminalAnswer leads with authority reason and UNVERIFIED label', () => {
   const formatted = formatPreservedUnverifiedTerminalAnswer({
@@ -153,7 +279,7 @@ test('regression(115c0895): recovery chatter does not replace gate-rejected comp
   }
 })
 
-test('regression(115c0895): confirmed write then new gate reject retains current candidate not stale_revision', () => {
+test('regression: confirmed write then gate reject does not replace first capture record', () => {
   const logV1 = [{
     tool: 'str_replace',
     effect_status: 'confirmed_change' as const,
@@ -172,44 +298,39 @@ test('regression(115c0895): confirmed write then new gate reject retains current
   const second = 'SECOND_GATE_REJECT explanation after other.csv write.'
   let capture = tryRecordGateRejectedCompletionCapture(null, first, logV1, generation)
   capture = tryRecordGateRejectedCompletionCapture(capture, second, logV2, generation)
-  const resolved = resolveGateRejectedCompletionCapture(capture, logV2, generation)
-  assert.equal(resolved.kind, 'retain')
-  if (resolved.kind === 'retain') {
-    assert.equal(resolved.candidate, second)
-    assert.deepEqual(resolved.artifactRefs, ['数据/other.csv', '数据/summary.csv'])
-  }
+  assert.ok(capture)
+  assert.equal(capture?.candidateText, first)
+  assert.equal(resolveGateRejectedCompletionCapture(capture, logV2, generation).kind, 'stale_revision')
 })
 
-test('regression(115c0895): relevant indeterminate mutation resolves stale_revision not retain', () => {
-  const logConfirmed = [{
+test('regression: recovery tooling then gate-rejected chatter does not replace first capture', () => {
+  const logV1 = [{
     tool: 'str_replace',
     effect_status: 'confirmed_change' as const,
     mutation_paths: ['数据/summary.csv'],
   }]
-  const logWithIndeterminate = [
-    ...logConfirmed,
+  const logV2 = [
+    ...logV1,
     {
       tool: 'str_replace',
-      effect_status: 'indeterminate' as const,
-      mutation_paths: ['数据/summary.csv'],
+      effect_status: 'confirmed_change' as const,
+      mutation_paths: ['数据/other.csv'],
+    },
+    {
+      tool: 'read_file',
+      target: '数据/summary.csv',
+      effect_status: 'not_applicable' as const,
     },
   ]
-  const generation = 8
-  const capture = tryRecordGateRejectedCompletionCapture(
-    null,
-    'Explanation bound to first confirmed revision.',
-    logConfirmed,
-    generation,
-  )
+  const generation = 9
+  const substantive = 'SUBSTANTIVE_GATE_REJECT Net revenue totals 200.'
+  const recovery = 'I will run npm test and try completing again.'
+  let capture = tryRecordGateRejectedCompletionCapture(null, substantive, logV1, generation)
+  capture = tryRecordGateRejectedCompletionCapture(capture, recovery, logV2, generation)
   assert.ok(capture)
-  assert.equal(
-    buildConfirmedMutationRevisionKey(logConfirmed),
-    buildConfirmedMutationRevisionKey(logWithIndeterminate),
-  )
-  assert.equal(
-    resolveGateRejectedCompletionCapture(capture, logWithIndeterminate, generation).kind,
-    'stale_revision',
-  )
+  assert.equal(capture?.candidateText, substantive)
+  assert.notEqual(capture?.candidateText, recovery)
+  assert.equal(resolveGateRejectedCompletionCapture(capture, logV2, generation).kind, 'stale_revision')
 })
 
 test('regression(115c0895): stale capture without re-record stays stale_revision after confirmed write', () => {
