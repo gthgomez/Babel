@@ -6,12 +6,12 @@ import {
   mkdirSync,
   openSync,
   readFileSync,
-  renameSync,
   unlinkSync,
   writeFileSync,
 } from 'node:fs'
 import { mkdir } from 'node:fs/promises'
 import { dirname } from 'node:path'
+import { fsyncDirectoryEntrySync, renameCheckpointSync } from '../utils/atomicCheckpointFile.js'
 import {
   CampaignBudget,
   type CampaignBudgetSnapshot,
@@ -74,13 +74,8 @@ export class CampaignBudgetStore {
       } finally {
         closeSync(fileFd)
       }
-      renameSync(tempPath, this.poisonPath())
-      const directoryFd = openSync(dirname(this.options.statePath), 'r')
-      try {
-        fsyncSync(directoryFd)
-      } finally {
-        closeSync(directoryFd)
-      }
+      renameCheckpointSync(tempPath, this.poisonPath())
+      fsyncDirectoryEntrySync(dirname(this.options.statePath))
     } catch {
       /* fail closed on next read */
     }
@@ -151,14 +146,9 @@ export class CampaignBudgetStore {
       } finally {
         closeSync(fileFd)
       }
-      renameSync(tempPath, this.options.statePath)
+      renameCheckpointSync(tempPath, this.options.statePath)
       this.stateEstablished = true
-      const directoryFd = openSync(dirname(this.options.statePath), 'r')
-      try {
-        fsyncSync(directoryFd)
-      } finally {
-        closeSync(directoryFd)
-      }
+      fsyncDirectoryEntrySync(dirname(this.options.statePath))
       return result
     } catch (error) {
       if (mutated) {

@@ -25,6 +25,19 @@ export function renameCheckpointSync(source: string, destination: string, option
   }
 }
 
+/**
+ * Flush directory metadata after rename so the new entry is durable.
+ * Windows FlushFileBuffers rejects a read-only directory handle (EPERM).
+ */
+export function fsyncDirectoryEntrySync(directoryPath: string): void {
+  const fd = openSync(directoryPath, process.platform === 'win32' ? 'r+' : 'r')
+  try {
+    fsyncSync(fd)
+  } finally {
+    closeSync(fd)
+  }
+}
+
 /** Synchronous staging avoids overlapping open handles from fire-and-forget checkpoints. */
 export function writeCheckpointFileSync(destination: string, contents: string): void {
   mkdirSync(dirname(destination), { recursive: true })
