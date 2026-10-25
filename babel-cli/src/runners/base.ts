@@ -314,9 +314,16 @@ export interface ProviderInvocationPhaseEvent {
   detail?: string;
 }
 
+export interface CampaignRunnerMeter {
+  executionStage: import('../agent/modelRouteReceipt.js').ModelRouteStage;
+  gate: import('./campaignDispatchGate.js').CampaignDispatchGate;
+}
+
 export interface RunnerCallbacks {
   /** Host-only owner control, never included in a provider wire payload. */
   runControl?: import('../runtime/run-control.js').RunControl;
+  /** Campaign pilot admission for routed native API providers only. */
+  campaignMeter?: CampaignRunnerMeter;
   /** Prior logical request when the runner is rebuilding after compaction or fallback. */
   parentRequestId?: string | null;
   onChunk?: (chunk: string) => void | Promise<void>;
