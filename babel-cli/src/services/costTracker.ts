@@ -303,14 +303,13 @@ export class CostTracker {
       promptCacheHitTokens: cacheHitTokens,
       promptCacheMissTokens: cacheMissTokens,
     });
-    const registryCost = usageKnown ? estimate.estimatedCostUsd : null;
-    // A provider-reported amount is accepted only when this route has no pinned
-    // price. Unknown or invalid reports stay unresolved instead of becoming $0.
-    const reportedCost = registryCost === null && usageKnown &&
-      typeof reportedCostUsd === 'number' && Number.isFinite(reportedCostUsd) && reportedCostUsd >= 0
-      ? reportedCostUsd
+    const costUnreported = reportedCostUsd === null;
+    const hasReportedCost = usageKnown &&
+      typeof reportedCostUsd === 'number' && Number.isFinite(reportedCostUsd) && reportedCostUsd >= 0;
+    const registryCost = usageKnown && !hasReportedCost && !costUnreported
+      ? estimate.estimatedCostUsd
       : null;
-    const cost = registryCost ?? reportedCost;
+    const cost = hasReportedCost ? reportedCostUsd! : registryCost;
     const goEstimate: CostEstimateSource | undefined = provider === 'opencode-go' ? {
       basis: 'published_usage_estimate', precision: cost === null ? 'unknown' : estimate.precision,
       pricingSourceUrl: estimate.pricingSourceUrl, pricingVerifiedAt: estimate.pricingVerifiedAt,
