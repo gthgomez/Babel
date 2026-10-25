@@ -11,6 +11,7 @@ import type { ChatPhase } from './chatPhaseNudge.js';
 import type { TurnRoutingReceiptLog } from './turnRoutingReceipt.js';
 import type { ProviderInvocationStarted, RunnerCallbacks, RunnerInvocationMetadata } from '../runners/base.js';
 import { globalCostTracker, type UsageAttribution } from '../services/costTracker.js';
+import { settlementReportedCostUsd } from '../services/settlementReportedCost.js';
 import { buildContextManifest, type ContextDeliveryMode } from './contextManifest.js';
 import { buildModelRouteReceipt, hashRouteReference, type ModelRouteStage } from './modelRouteReceipt.js';
 import {
@@ -385,6 +386,7 @@ export function buildProviderRetryCallbacks(host: ChatProviderRetryHost, context
               attribution,
               known,
               metadata?.provider ?? scope.provider ?? event.provider,
+              settlementReportedCostUsd(metadata),
             );
             if (update.kind === 'conflict') {
               const scope = context.usageScope;
@@ -726,7 +728,7 @@ export function trackRunnerUsage(
           : undefined,
         true,
         metadata.provider ?? usageScope?.provider ?? null,
-        metadata.estimated_cost_usd,
+        settlementReportedCostUsd(metadata),
       );
       if (chargeUpdate.kind === 'duplicate') return;
       if (chargeUpdate.kind === 'conflict') {
