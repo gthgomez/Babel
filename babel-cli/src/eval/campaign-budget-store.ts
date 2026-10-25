@@ -1,6 +1,16 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { closeSync, existsSync, fsyncSync, lstatSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
-import { mkdir, open, rename, unlink } from 'node:fs/promises'
+import {
+  closeSync,
+  existsSync,
+  fsyncSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs'
+import { mkdir } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import {
   CampaignBudget,
@@ -38,6 +48,44 @@ export class CampaignBudgetStore {
     })
   }
 
+  private poisonPath(): string {
+    return `${this.options.statePath}.poison`
+  }
+
+  private assertStoreHealthy(): void {
+    if (existsSync(this.poisonPath())) {
+      throw new CampaignBudgetStoreError()
+    }
+  }
+
+  /** Campaign-wide fail-closed marker after ledger persistence could not complete. */
+  persistPoisonMarker(): void {
+    this.markStorePoisoned()
+  }
+
+  private markStorePoisoned(): void {
+    try {
+      mkdirSync(dirname(this.options.statePath), { recursive: true })
+      const tempPath = `${this.poisonPath()}.${randomUUID()}.tmp`
+      const fileFd = openSync(tempPath, 'wx', 0o600)
+      try {
+        writeFileSync(fileFd, JSON.stringify({ closedAtMs: Date.now() }), 'utf8')
+        fsyncSync(fileFd)
+      } finally {
+        closeSync(fileFd)
+      }
+      renameSync(tempPath, this.poisonPath())
+      const directoryFd = openSync(dirname(this.options.statePath), 'r')
+      try {
+        fsyncSync(directoryFd)
+      } finally {
+        closeSync(directoryFd)
+      }
+    } catch {
+      /* fail closed on next read */
+    }
+  }
+
   private loadSnapshot(bytes: string): CampaignBudgetSnapshot {
     const parsed = JSON.parse(bytes) as CampaignBudgetSnapshot
     return new CampaignBudget({
@@ -47,16 +95,31 @@ export class CampaignBudgetStore {
     }).snapshot()
   }
 
+  private acquireTransactionLock(lockPath: string): number {
+    const deadlineMs = Date.now() + 5_000
+    while (Date.now() < deadlineMs) {
+      try {
+        return openSync(lockPath, 'wx', 0o600)
+      } catch {
+        /* cross-process contention; retry until deadline */
+      }
+    }
+    throw new CampaignBudgetStoreError()
+  }
+
   transact<T>(mutate: (budget: CampaignBudget) => T): T {
+    this.assertStoreHealthy()
     const lockPath = `${this.options.statePath}.lock`
     let lockFd: number | undefined
     try {
-      lockFd = openSync(lockPath, 'wx', 0o600)
+      lockFd = this.acquireTransactionLock(lockPath)
     } catch {
       throw new CampaignBudgetStoreError()
     }
     const tempPath = `${this.options.statePath}.${randomUUID()}.tmp`
+    let mutated = false
     try {
+      mkdirSync(dirname(this.options.statePath), { recursive: true })
       let budget: CampaignBudget
       try {
         const bytes = readFileSync(this.options.statePath, 'utf8')
@@ -77,6 +140,7 @@ export class CampaignBudgetStore {
         })
       }
       const result = mutate(budget)
+      mutated = true
       const snapshot = budget.snapshot()
       const fileFd = openSync(tempPath, 'wx', 0o600)
       try {
@@ -95,6 +159,9 @@ export class CampaignBudgetStore {
       }
       return result
     } catch (error) {
+      if (mutated) {
+        this.markStorePoisoned()
+      }
       if (error instanceof CampaignBudgetStoreError) throw error
       throw new CampaignBudgetStoreError()
     } finally {
@@ -108,45 +175,13 @@ export class CampaignBudgetStore {
 
   async transactAsync<T>(mutate: (budget: CampaignBudget) => T): Promise<T> {
     await mkdir(dirname(this.options.statePath), { recursive: true })
-    if (!existsSync(this.options.statePath)) {
-      if (this.options.requireExistingState || this.stateEstablished) {
-        throw new CampaignBudgetStoreError()
-      }
-      closeSync(openSync(this.options.statePath, 'wx', 0o600))
-      const initial = new CampaignBudget({
-        campaignId: this.options.campaignId,
-        limitMicroUsd: this.options.limitMicroUsd ?? PILOT_CAMPAIGN_LIMIT_MICRO_USD,
-      }).snapshot()
-      await writeAtomic(this.options.statePath, JSON.stringify(initial))
-      this.stateEstablished = true
-    } else {
-      const stat = lstatSync(this.options.statePath)
-      if (!stat.isFile() || stat.isSymbolicLink()) throw new CampaignBudgetStoreError()
-    }
     return this.transact(mutate)
   }
 
   readSnapshot(): CampaignBudgetSnapshot {
+    this.assertStoreHealthy()
     if (!existsSync(this.options.statePath)) throw new CampaignBudgetStoreError()
     return this.loadSnapshot(readFileSync(this.options.statePath, 'utf8'))
-  }
-}
-
-async function writeAtomic(path: string, payload: string): Promise<void> {
-  const tempPath = `${path}.${randomUUID()}.tmp`
-  const file = await open(tempPath, 'wx', 0o600)
-  try {
-    await file.writeFile(payload)
-    await file.sync()
-  } finally {
-    await file.close()
-  }
-  await rename(tempPath, path)
-  const directory = await open(dirname(path), 'r')
-  try {
-    await directory.sync()
-  } finally {
-    await directory.close()
   }
 }
 

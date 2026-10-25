@@ -79,15 +79,49 @@ test('admitted reservation reaches fetch once and leaves durable ledger evidence
       requestId = event.request_id ?? ''
       attemptId = event.attempt_id ?? ''
     },
-    onInvocationCompleted: (event) => {
-      gate.settleFromCompleted({
-        executionStage: 'critic',
-        requestId,
-        attemptId,
-        completed: event,
-      })
-    },
   })
   assert.equal(physicalFetch, 1)
   assert.equal(store.readSnapshot().operations.length, 1)
+  const operation = store.readSnapshot().operations[0]!
+  assert.ok(operation.actualMicroUsd !== null || operation.settledUnknown)
+})
+
+test('each physical transport retry reserves before wire', async (t) => {
+  class RetryOnceRunner extends OpenRouterApiRunner {
+    protected override getRequestMaxRetries(): number {
+      return 2
+    }
+  }
+  const root = mkdtempSync(join(tmpdir(), 'babel-campaign-retry-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const owner = randomUUID()
+  const store = new CampaignBudgetStore({
+    statePath: join(root, 'campaign-budget.json'),
+    campaignId: 'pilot',
+    limitMicroUsd: PILOT_CAMPAIGN_LIMIT_MICRO_USD,
+  })
+  const gate = new CampaignDispatchGate({ campaignId: 'pilot', store, taskOwnerId: owner })
+  let calls = 0
+  const saved = globalThis.fetch
+  globalThis.fetch = async () => {
+    calls += 1
+    if (calls === 1) {
+      return new Response('timeout', { status: 408 })
+    }
+    return new Response(JSON.stringify({
+      model: LIVE_OPENROUTER_MODEL_ID,
+      choices: [{ message: { content: 'ok' } }],
+      usage: { prompt_tokens: 10, completion_tokens: 5, cost: 0.00001 },
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+  }
+  t.after(() => { globalThis.fetch = saved })
+  const runner = new RetryOnceRunner(LIVE_OPENROUTER_MODEL_ID, {}, {
+    explicitCredential: 'synthetic-fixture',
+    env: { OPENROUTER_API_KEY: 'synthetic-fixture' },
+  })
+  await runner.executeRaw('hello', {
+    campaignMeter: { executionStage: 'chat', gate },
+  })
+  assert.equal(calls, 2)
+  assert.equal(store.readSnapshot().operations.length, 2)
 })

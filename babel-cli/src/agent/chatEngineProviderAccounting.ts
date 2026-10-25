@@ -134,23 +134,27 @@ export function buildProviderRetryCallbacks(host: ChatProviderRetryHost, context
       (context.substitutionOrFallback && host.lastLogicalRequestId !== null
         ? host.lastLogicalRequestId
         : null);
+    const capturedCampaignGate = host.campaignDispatchGate ?? null;
+    const capturedCampaignStage = context.executionStage ?? 'chat';
     const settleCampaignLedger = (event: import('../runners/base.js').ProviderInvocationCompleted): void => {
-      const gate = host.campaignDispatchGate;
-      if (!gate || !startedInvocation?.request_id || !startedInvocation.attempt_id) return;
-      const stage = context.executionStage ?? 'chat';
+      if (event.campaign_ledger_settled_by_transport) return;
+      const gate = capturedCampaignGate;
+      const requestId = startedInvocation?.request_id;
+      const attemptId = startedInvocation?.attempt_id;
+      if (!gate || !requestId || !attemptId) return;
       try {
         if (event.status === 'failed' && event.inference_started === false) {
           gate.settleUnknownOnTransportFailure({
-            executionStage: stage,
-            requestId: startedInvocation.request_id,
-            attemptId: startedInvocation.attempt_id,
+            executionStage: capturedCampaignStage,
+            requestId,
+            attemptId,
           });
           return;
         }
         gate.settleFromCompleted({
-          executionStage: stage,
-          requestId: startedInvocation.request_id,
-          attemptId: startedInvocation.attempt_id,
+          executionStage: capturedCampaignStage,
+          requestId,
+          attemptId,
           completed: event,
         });
       } catch (error) {
@@ -167,11 +171,11 @@ export function buildProviderRetryCallbacks(host: ChatProviderRetryHost, context
     return {
       parentRequestId,
       ...(context.usageScope?.runControl ? { runControl: context.usageScope.runControl } : {}),
-      ...(host.campaignDispatchGate
+      ...(capturedCampaignGate
         ? {
             campaignMeter: {
-              executionStage: context.executionStage ?? 'chat',
-              gate: host.campaignDispatchGate,
+              executionStage: capturedCampaignStage,
+              gate: capturedCampaignGate,
             },
           }
         : {}),
@@ -444,6 +448,7 @@ export function buildProviderRetryCallbacks(host: ChatProviderRetryHost, context
             if (isOwnerCurrent()) host.persistTaskCostBaseline();
           }
         }
+        settleCampaignLedger(event);
         if (!isOwnerCurrent()) return;
         if (!host.parity.turnId) return;
         const observedRouteReceipt = startedInvocation
@@ -518,7 +523,6 @@ export function buildProviderRetryCallbacks(host: ChatProviderRetryHost, context
             : {}),
           ...(observedRouteReceipt ? { route_receipt: observedRouteReceipt } : {}),
         });
-        settleCampaignLedger(event);
         checkpointParityEventLog(host.parity, host.engineRunDir);
       },
       onInvocationPhase: (event) => {
