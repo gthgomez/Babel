@@ -38,6 +38,7 @@ export class CampaignDispatchGate {
   private readonly campaignId: string
   private readonly store: CampaignBudgetStore
   private readonly taskOwnerId: string
+  private ledgerPoisoned = false
 
   constructor(options: CampaignDispatchGateOptions) {
     if (!options.taskOwnerId.trim()) throw new CampaignBudgetDeniedError()
@@ -52,11 +53,32 @@ export class CampaignDispatchGate {
     }
   }
 
+  isLedgerPoisoned(): boolean {
+    return this.ledgerPoisoned
+  }
+
+  private assertLedgerHealthy(): void {
+    if (this.ledgerPoisoned) {
+      throw new CampaignBudgetDeniedError('Campaign budget gate is closed after a persistence failure.')
+    }
+  }
+
+  private poisonLedger(message: string): never {
+    this.ledgerPoisoned = true
+    try {
+      this.store.persistPoisonMarker()
+    } catch {
+      /* durable poison is best-effort; in-process gate remains closed */
+    }
+    throw new CampaignBudgetDeniedError(message)
+  }
+
   async admitBeforeDispatch(input: {
     executionStage: ModelRouteStage
     preparedRequest: PreparedProviderRequest
     runControl?: RunControl | undefined
   }): Promise<{ operationId: string }> {
+    this.assertLedgerHealthy()
     this.assertRoutedProvider(input.preparedRequest.provider)
     const operationId = buildCampaignOperationId({
       campaignId: this.campaignId,
@@ -70,7 +92,12 @@ export class CampaignDispatchGate {
       const admitted = await this.store.transactAsync((budget) => budget.reserve(operationId, upperBoundMicroUsd))
       if (!admitted) throw new CampaignBudgetDeniedError()
     } catch (error) {
-      if (error instanceof CampaignBudgetStoreError) throw new CampaignBudgetDeniedError()
+      if (error instanceof CampaignBudgetStoreError) {
+        this.poisonLedger('Campaign budget admission could not be persisted.')
+      }
+      if (error instanceof CampaignBudgetDeniedError) {
+        throw error
+      }
       throw error
     }
     if (input.runControl) {
@@ -86,6 +113,7 @@ export class CampaignDispatchGate {
     attemptId: string
     completed: ProviderInvocationCompleted
   }): void {
+    this.assertLedgerHealthy()
     const operationId = buildCampaignOperationId({
       campaignId: this.campaignId,
       taskOwnerId: this.taskOwnerId,
@@ -99,12 +127,16 @@ export class CampaignDispatchGate {
       modelId: usage?.observed_model_id ?? usage?.sent_model_id ?? input.completed.model,
       promptTokens: usage?.prompt_tokens,
       completionTokens: usage?.completion_tokens,
-      reportedCostUsd: usage?.estimated_cost_usd,
+      providerReportedTotalChargeUsd: usage?.provider_reported_total_charge_usd ?? null,
+      costPrecision: usage?.cost_precision ?? null,
     })
     try {
       this.store.transact((budget) => budget.settle(operationId, actual))
-    } catch {
-      throw new CampaignBudgetDeniedError('Campaign budget settlement could not be persisted.')
+    } catch (error) {
+      if (error instanceof CampaignBudgetStoreError) {
+        this.poisonLedger('Campaign budget settlement could not be persisted.')
+      }
+      this.poisonLedger('Campaign budget settlement could not be persisted.')
     }
   }
 
@@ -113,6 +145,7 @@ export class CampaignDispatchGate {
     requestId: string
     attemptId: string
   }): void {
+    this.assertLedgerHealthy()
     const operationId = buildCampaignOperationId({
       campaignId: this.campaignId,
       taskOwnerId: this.taskOwnerId,
@@ -122,8 +155,11 @@ export class CampaignDispatchGate {
     })
     try {
       this.store.transact((budget) => budget.settle(operationId, 'unknown'))
-    } catch {
-      throw new CampaignBudgetDeniedError('Campaign budget unknown settlement could not be persisted.')
+    } catch (error) {
+      if (error instanceof CampaignBudgetStoreError) {
+        this.poisonLedger('Campaign budget unknown settlement could not be persisted.')
+      }
+      this.poisonLedger('Campaign budget unknown settlement could not be persisted.')
     }
   }
 
