@@ -577,7 +577,6 @@ export interface ChatEngineStreamingLoopHost {
   _turnToolCallLogStart: number
   readonly abortController: AbortController
   activeSubmissionGeneration: number
-  submissionConversationStartIndex: number
   gateRejectedCompletionCapture: import('./preservedUnverifiedTerminal.js').GateRejectedCompletionCapture | null
   readonly apiTokenCount: number
   apiTokenCountAtTurnStart: number

@@ -91,7 +91,10 @@ export function collectConfirmedMutationArtifactPaths(
   return [...paths].sort()
 }
 
-/** Stable fingerprint of confirmed mutations at capture or terminalization time. */
+/**
+ * Fingerprint of recorded confirmed mutations in the tool call log at capture or resolve time.
+ * Compares harness-recorded mutation metadata only — not on-disk file hashes and not out-of-band edits.
+ */
 export function buildConfirmedMutationRevisionKey(
   log: ReadonlyArray<{
     tool: string
@@ -184,14 +187,4 @@ export function formatPreservedUnverifiedTerminalAnswer(input: {
     lines.push('', 'Artifacts referenced in this submission:', ...input.artifactRefs.map(ref => `- ${ref}`))
   }
   return lines.join('\n')
-}
-
-/** Display-only notice when mutations moved on after a gate-rejected completion capture. */
-export function formatSupersededArtifactRevisionNotice(authorityReason: string): string {
-  return [
-    authorityReason.trim(),
-    '',
-    '---',
-    'UNVERIFIED retained candidate superseded: confirmed workspace mutations changed after the gate-rejected completion attempt; no explanation is attached to current artifact bytes.',
-  ].join('\n')
 }

@@ -650,8 +650,6 @@ export class ChatEngine {
    * Projected from `generationCounter`; not a second authority.
    */
   private activeSubmissionGeneration = 0;
-  /** Conversation index where the current admitted submission begins. */
-  submissionConversationStartIndex = 0;
   /** First gate reject_continue completion in the current submission (frozen at seam). */
   gateRejectedCompletionCapture: GateRejectedCompletionCapture | null = null;
   private runControl: RunControl | null = null;
