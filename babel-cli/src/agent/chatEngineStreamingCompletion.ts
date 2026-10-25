@@ -113,7 +113,9 @@ export async function* settleStreamingCompletion(input: {
     }
     if (plan.kind === "reject_continue") {
       host.gateStrikes = plan.gateStrikesAfter;
-      host.captureGateRejectedCompletionAttempt(answer, submissionGeneration);
+      if (turnResult.type === "completion") {
+        host.captureGateRejectedCompletionAttempt(answer, submissionGeneration);
+      }
 
       // W3 Phase 3 Progress and Recovery Controller
       const pcResult = host.progressController.scoreTurn(

@@ -3,10 +3,7 @@ import type {
   ChatEngineStreamingLoopHost,
   TaskIntent,
 } from "./chatEngine.js";
-import {
-  formatPreservedUnverifiedTerminalAnswer,
-  formatSupersededArtifactRevisionNotice,
-} from "./preservedUnverifiedTerminal.js";
+import { formatPreservedUnverifiedTerminalAnswer } from "./preservedUnverifiedTerminal.js";
 
 /** Emit the terminal outcome when a submission exhausts its turn allowance. */
 export async function* finalizeStreamingTurnLimit(input: {
@@ -47,17 +44,6 @@ export async function* finalizeStreamingTurnLimit(input: {
           retainedCandidate: preserved.candidate,
           artifactRefs: preserved.artifactRefs,
         });
-        if (!host.isSubmissionCurrent(submissionGeneration)) return;
-        yield host.streamFailed(
-          authorityReason,
-          { code: 'budget_exhausted', cause_class: 'harness' },
-          presentationError,
-        );
-        return;
-      }
-      if (preserved.kind === "stale_revision") {
-        const presentationError =
-          formatSupersededArtifactRevisionNotice(authorityReason);
         if (!host.isSubmissionCurrent(submissionGeneration)) return;
         yield host.streamFailed(
           authorityReason,
