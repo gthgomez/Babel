@@ -5,6 +5,34 @@
  * (`executeWithToolsStream`). Tool dispatch, isolation policy, prerequisite
  * probes (`bindIsolationPrerequisiteScope` / `admitPrerequisiteDenialProbe`),
  * and completion gate run for real.
+ *
+ * ## Offline RED (base 115c0895…, commit ed211b33…)
+ *
+ * Focused TAP: `node --import tsx --test src/agent/chat-engine-p2-verifier-prerequisite-recovery.test.ts`
+ * Expected exit **1**: RED asserts `providerTurnCount() === 3`, observed **4** (extra batch after
+ * completion-gate `reject_continue` on dishonest VERIFIED_COMPLETE prose).
+ *
+ * Prerequisite seam evidence in RED: exactly one evaluated shell + one `prerequisite_suppressed`;
+ * `progress_recovery` events **0** (ProgressController does not escalate; provider loop still continues).
+ *
+ * ## Smallest conditional wiring proposal (root review — not implemented here)
+ *
+ * In `settleStreamingCompletion` when `plan.kind === 'reject_continue'`:
+ *
+ * 1. Keep using explicit `host.options.requiredVerifierCommands` (non-empty array only; never infer
+ *    from empty manifest / tool log alone).
+ * 2. If `areAllRequiredVerifiersSatisfied(required, authoritativeExecutedCommands)` is already false
+ *    **and** `shellBlockedByIsolation(host.isolationBrokerFlags())` **and**
+ *    `host.progressController.hasConsumedPrerequisiteDenialProbe(bindIsolationPrerequisiteScope(host))`,
+ *    then do **not** `return 'continue'`.
+ * 3. Instead terminate via existing nonverified preservation: `captureGateRejectedCompletionAttempt`
+ *    (already called), then `resolvePreservedUnverifiedAtTurnLimit` / `formatPreservedUnverifiedTerminalAnswer`
+ *    when retainable, else `streamDone` / `streamFailed` with gate rejection + blocked verifier report —
+ *    same authority as turn-limit path in `chatEngineStreamingFinalizer.ts`, without `VERIFIED_COMPLETE`.
+ *
+ * Must not fire when: host fallback allows runnable shell (`dev_local` control), prerequisite
+ * `revisionKey` changes (`bindIsolationPrerequisiteScope` + `admitPrerequisiteDenialProbe` control),
+ * `admitCapabilityRecoveryProbe` temporary failure path, or native edit with no required verifier.
  */
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
