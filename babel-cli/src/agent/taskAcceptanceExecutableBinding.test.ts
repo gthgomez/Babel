@@ -49,7 +49,9 @@ test('binds a clearly accepted positive command-success criterion with exact arg
   const bound = contract.acceptance.find(item => item.verification.verifier_id === 'verifier:npm')
   assert.ok(bound)
   assert.deepEqual(bound!.verification.argv, ['test'])
-  assert.ok(contract.acceptance.some(item => item.description === 'Fix the parser bug.'))
+  assert.equal(contract.user_request, task)
+  assert.deepEqual(contract.acceptance_criteria, ['`npm test` must pass.'])
+  assert.equal(contract.acceptance.some(item => item.description === 'Fix the parser bug.'), false)
 })
 
 test('negated command-success assertions do not bind', () => {

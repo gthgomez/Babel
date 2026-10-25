@@ -210,8 +210,38 @@ export function inferTaskAcceptanceV1(request: string): TaskAcceptanceMeaning {
   })
 }
 
-/** v2 fresh admission: provisional inferred capture from active prose spans. */
+function relabelMeaningProvenanceV1ToV2(
+  provenance: TaskAcceptanceMeaning['provenance'],
+): TaskAcceptanceMeaning['provenance'] {
+  const v1Prefix = `${ACCEPTANCE_MEANING_REF_V1}:`
+  const v2Prefix = `${ACCEPTANCE_MEANING_REF_V2}:`
+  return provenance.map((record) => ({
+    ...record,
+    ref: record.ref.startsWith(v1Prefix)
+      ? record.ref.replace(v1Prefix, v2Prefix)
+      : record.ref,
+  }))
+}
+
+/** Promote a v1 projection to v2 admission without changing criteria, sources, or unresolved shape. */
+function promoteV1ProjectionToV2Admission(legacy: TaskAcceptanceMeaning): TaskAcceptanceMeaning {
+  return {
+    ...legacy,
+    interpretation_version: 2,
+    provenance: relabelMeaningProvenanceV1ToV2(legacy.provenance),
+  }
+}
+
+/**
+ * v2 fresh admission: use v1 when it already yields real criteria or structural incompleteness;
+ * otherwise fall back to provisional active-prose capture (short vague requests only).
+ */
 export function inferTaskAcceptanceV2(request: string): TaskAcceptanceMeaning {
+  const legacy = inferTaskAcceptanceV1(request)
+  const hasRealCriterion = legacy.sources.some((source) => source.status !== 'unresolved')
+  if (hasRealCriterion || !legacy.structurallyComplete) {
+    return promoteV1ProjectionToV2Admission(legacy)
+  }
   return interpretTaskAcceptance(request, {
     version: 2,
     meaningRef: ACCEPTANCE_MEANING_REF_V2,

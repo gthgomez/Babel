@@ -377,24 +377,24 @@ test(`legacy acceptance requires ${target} start before its admission and public
     assert.throws(()=>loadLiveSessionAuthorityStrict(runDir),error=>error instanceof Error&&'code' in error&&error.code==='OBJECTIVE_LIFECYCLE_INVALID')
   },'chat',true))
 
-test('v2 additive amendment admits each top-level prose obligation alongside inferred lines',()=>
+test('v2 additive amendment rejects v1-unresolved amendment shapes instead of admitting prose',()=>
   fixture(engine=>{
     const before=engine.getTaskContract()!
-    engine.admitUserSubmission({userInput:'Also support restart recovery.\nDisplay a retry action after failure.'},route)
-    const criteria=engine.getTaskContract()!.acceptance_criteria
-    assert.ok(criteria.includes('Also support restart recovery.'))
-    assert.ok(criteria.includes('Display a retry action after failure.'))
-    assert.notEqual(engine.getTaskContract(),before)
+    assert.throws(
+      () => engine.admitUserSubmission({userInput:'Also support restart recovery.\nDisplay a retry action after failure.'},route),
+      /TASK_ACCEPTANCE_AMENDMENT_UNSUPPORTED/,
+    )
+    assert.equal(engine.getTaskContract(),before)
   }))
 
-test('v2 additive amendment retains leading prose before explicit bullets',()=>
+test('v2 additive amendment rejects unsupported leading prose even when a bullet is explicit',()=>
   fixture(engine=>{
     const before=engine.getTaskContract()!
-    engine.admitUserSubmission({userInput:'Also require:\nDisplay a retry action after failure.\n- Survive restart.'},route)
-    const criteria=engine.getTaskContract()!.acceptance_criteria
-    assert.ok(criteria.includes('Display a retry action after failure.'))
-    assert.ok(criteria.includes('Survive restart.'))
-    assert.notEqual(engine.getTaskContract(),before)
+    assert.throws(
+      () => engine.admitUserSubmission({userInput:'Also require:\nDisplay a retry action after failure.\n- Survive restart.'},route),
+      /TASK_ACCEPTANCE_AMENDMENT_UNSUPPORTED/,
+    )
+    assert.equal(engine.getTaskContract(),before)
   }))
 
 test('nested example headings cannot add example bullets to an amendment',()=>
@@ -414,14 +414,14 @@ test('plain requirement sections after examples cannot be omitted from an amendm
   }))
 
 const compoundQuestion='Also require:\n- Survive restart.\nCan you do that?'
-test('v2 trailing polite question prose is retained with the explicit bullet amendment',()=>
+test('v2 trailing polite question rejects additive amendments that stay v1-unresolved',()=>
   fixture(engine=>{
     const before=engine.getTaskContract()!
-    engine.admitUserSubmission({userInput:compoundQuestion},route)
-    const criteria=engine.getTaskContract()!.acceptance_criteria
-    assert.ok(criteria.includes('Survive restart.'))
-    assert.ok(criteria.includes('Can you do that?'))
-    assert.notEqual(engine.getTaskContract(),before)
+    assert.throws(
+      () => engine.admitUserSubmission({userInput:compoundQuestion},route),
+      /TASK_ACCEPTANCE_AMENDMENT_UNSUPPORTED/,
+    )
+    assert.equal(engine.getTaskContract(),before)
   }))
 
 test('legacy replay cannot silently omit an additive requirement followed by a question',()=>

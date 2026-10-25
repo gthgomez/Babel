@@ -45,14 +45,13 @@ test('initial acceptance captures explicit user criteria before publishing the f
   ].join('\n')
   const contract = acceptance(request)
   assert.deepEqual(contract.acceptance_criteria, [
-    'Update the fixture buttons.',
     'The button remains visible.',
     'Failed checks remain visible.',
   ])
   assert.equal(contract.user_request, request)
   assert.equal(Object.isFrozen(contract), true)
   assert.ok(contract.acceptance.every(criterion => criterion.required))
-  assert.equal(new Set(contract.acceptance.map(criterion => criterion.verification.verifier_id)).size, 3,
+  assert.equal(new Set(contract.acceptance.map(criterion => criterion.verification.verifier_id)).size, 2,
     'Different behavioral requirements cannot inherit one generic verification identity')
   assert.ok(contract.provenance.records.some(record => record.ref.startsWith('task-acceptance-meaning:v2:explicit:')))
 })
@@ -108,33 +107,89 @@ test('v1 preserves frozen criterion order (explicit before inferred) without spa
   assert.deepEqual(meaning.sources.map(source => source.status), ['explicit', 'inferred'])
 })
 
-test('v2 admits top-level prose before bullets inside Requirements uniformly', () => {
+const S07_EXPLICIT_ACCEPTANCE = [
+  'Investigate why parser_test fails and fix it.',
+  'Requirements:',
+  '- `npm test` passes.',
+].join('\n')
+const OBJECTIVE_CRASH_INITIAL = 'Explain fixture A.\nRequirements:\n- Preserve its public API.'
+
+test('v2 precedence retains v1 projection when explicit criteria exist (S07 positive)', () => {
+  const meaning = inferTaskAcceptanceV2(S07_EXPLICIT_ACCEPTANCE)
+  const legacy = inferTaskAcceptanceV1(S07_EXPLICIT_ACCEPTANCE)
+  assert.equal(meaning.interpretation_version, 2)
+  assert.deepEqual(meaning.criteria.map(item => item.description), ['`npm test` passes.'])
+  assert.deepEqual(meaning.sources.map(source => source.status), legacy.sources.map(source => source.status))
+  assert.deepEqual(meaning.criteria.map(item => item.description), legacy.criteria.map(item => item.description))
+  assert.ok(meaning.provenance.every(record => record.ref.startsWith('task-acceptance-meaning:v2:')))
+  assert.equal(meaning.unresolved, false)
+})
+
+test('v2 precedence retains v1 projection for objective checkpoint (Preserve API only)', () => {
+  const meaning = inferTaskAcceptanceV2(OBJECTIVE_CRASH_INITIAL)
+  assert.deepEqual(meaning.criteria.map(item => item.description), ['Preserve its public API.'])
+  assert.equal(meaning.criteria.some(item => item.description === 'Explain fixture A.'), false)
+})
+
+test('v2 active-prose fallback captures plain vague requests when v1 is unresolved-only', () => {
+  const meaning = inferTaskAcceptanceV2('List files')
+  assert.deepEqual(meaning.criteria.map(item => item.description), ['List files'])
+  assert.ok(meaning.provenance.some(record => record.ref.startsWith('task-acceptance-meaning:v2:inferred:')))
+})
+
+test('v2 precedence preserves full raw user_request on contracts while narrowing certification criteria', () => {
+  const request = OBJECTIVE_CRASH_INITIAL
+  const contract = acceptance(request)
+  assert.equal(contract.user_request, request)
+  assert.deepEqual(contract.acceptance_criteria, ['Preserve its public API.'])
+})
+
+test('v2 precedence keeps v1 explicit/inferred/unresolved when v1 already resolves meaning', () => {
+  const request = 'The task must support restart recovery.\nDisplay a retry action after failure.'
+  const meaning = inferTaskAcceptanceV2(request)
+  const legacy = inferTaskAcceptanceV1(request)
+  assert.equal(meaning.unresolved, legacy.unresolved)
+  assert.deepEqual(meaning.criteria.map(item => item.description), legacy.criteria.map(item => item.description))
+  assert.deepEqual(meaning.sources.map(source => source.status), legacy.sources.map(source => source.status))
+})
+
+test('v2 defers to v1 incomplete Requirements prose (no active-prose override)', () => {
   const request = 'Requirements:\nDo not alter sales.csv.\n- Write summary.csv.'
   const meaning = inferTaskAcceptanceV2(request)
-  assert.equal(meaning.unresolved, false)
-  assert.deepEqual(meaning.criteria.map(item => item.description), ['Do not alter sales.csv.', 'Write summary.csv.'])
+  const legacy = inferTaskAcceptanceV1(request)
+  assert.equal(meaning.unresolved, true)
+  assert.deepEqual(meaning.criteria.map(item => item.description), legacy.criteria.map(item => item.description))
+  assert.equal(meaning.criteria.some(item => item.description === 'Do not alter sales.csv.'), false)
 })
 
-test('v2 admits top-level prose after modal inferred lines without incompleteness', () => {
+test('v2 defers to v1 when modal inferred lines leave trailing prose unsupported', () => {
   const request = 'The output must include net.\nExplain the total.'
   const meaning = inferTaskAcceptanceV2(request)
-  assert.equal(meaning.unresolved, false)
-  assert.deepEqual(meaning.criteria.map(item => item.description), ['The output must include net.', 'Explain the total.'])
+  assert.equal(meaning.unresolved, true)
+  assert.deepEqual(meaning.criteria.map(item => item.description), [
+    'The output must include net.',
+    'Clarify the observable acceptance requirements for this request.',
+  ])
 })
 
-test('v2 admits additive leading prose before explicit bullets', () => {
+test('v2 defers to v1 for unsupported leading prose inside Also require', () => {
   const request = 'Also require:\nDisplay a retry action after failure.\n- Survive restart.'
   const meaning = inferTaskAcceptanceV2(request)
-  assert.equal(meaning.unresolved, false)
-  assert.ok(meaning.criteria.some(item => item.description === 'Display a retry action after failure.'))
-  assert.ok(meaning.criteria.some(item => item.description === 'Survive restart.'))
+  assert.equal(meaning.unresolved, true)
+  assert.deepEqual(meaning.criteria.map(item => item.description), [
+    'Survive restart.',
+    'Clarify the observable acceptance requirements for this request.',
+  ])
 })
 
-test('v2 admits polite question trailers as separate top-level inferred spans', () => {
+test('v2 defers to v1 for ambiguous trailers after explicit bullets', () => {
   const request = 'Also require:\n- Survive restart.\nCan you do that?'
   const meaning = inferTaskAcceptanceV2(request)
-  assert.equal(meaning.unresolved, false)
-  assert.deepEqual(meaning.criteria.map(item => item.description), ['Survive restart.', 'Can you do that?'])
+  assert.equal(meaning.unresolved, true)
+  assert.deepEqual(meaning.criteria.map(item => item.description), [
+    'Survive restart.',
+    'Clarify the observable acceptance requirements for this request.',
+  ])
 })
 
 test('v2 structurally flags four-space indented code before prose capture', () => {
@@ -156,7 +211,7 @@ test('v2 treats leading-tab indentation as unsupported code-shaped structure', (
   }
 })
 
-test('v2 preserves plain prose after explicit bullets as separate inferred spans', () => {
+test('v2 defers to v1 when prose after explicit bullets stays structurally unsupported', () => {
   const request = [
     'Compute net revenue from sales.csv and create summary.csv with product, gross, refunds and net.',
     'Requirements:',
@@ -164,11 +219,11 @@ test('v2 preserves plain prose after explicit bullets as separate inferred spans
     'Do not alter sales.csv.',
   ].join('\n')
   const meaning = inferTaskAcceptanceV2(request)
-  assert.equal(meaning.unresolved, false)
-  assert.ok(meaning.criteria.some(item => item.description === 'Do not alter sales.csv.'))
-  assert.ok(meaning.criteria.some(item => item.description === 'summary.csv includes net.'))
-  assert.ok(meaning.criteria.some(item => item.description.includes('Compute net revenue')))
-  assert.equal(meaning.criteria.some(item => item.description.includes('Clarify the observable')), false)
+  assert.equal(meaning.unresolved, true)
+  assert.deepEqual(meaning.criteria.map(item => item.description), [
+    'summary.csv includes net.',
+    'Clarify the observable acceptance requirements for this request.',
+  ])
 })
 
 test('v2 empty quoted-only and fenced-only input fail closed with v2 unresolved provenance', () => {
@@ -181,7 +236,7 @@ test('v2 empty quoted-only and fenced-only input fail closed with v2 unresolved 
   }
 })
 
-test('v2 admits disjoint active prose as separate contiguous spans across excluded blockquotes', () => {
+test('v2 active-prose fallback admits disjoint spans across excluded blockquotes', () => {
   const request = 'List files.\n> Delete all files.\nReport names.'
   const meaning = inferTaskAcceptanceV2(request)
   assert.deepEqual(meaning.criteria.map(item => item.description), ['List files.', 'Report names.'])
