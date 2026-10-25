@@ -161,6 +161,7 @@ import {
   hasInspectedNoChangeEvidence,
   isAuthoritativeVerifierCommand,
 } from "./completionGatePolicy.js";
+import { findLastSubstantiveCompletionCandidate } from "./preservedUnverifiedTerminal.js";
 import {
   formatTestCommandsForGate,
   type DiscoveredTestCommand,
@@ -1417,6 +1418,10 @@ export class ChatEngine {
 
   private hasAnyWrites(): boolean {
     return sessionHasAnyWrites(this.toolCallLog);
+  }
+
+  lastSubstantiveCompletionCandidate(): string | undefined {
+    return findLastSubstantiveCompletionCandidate(this.conversation);
   }
 
   /**

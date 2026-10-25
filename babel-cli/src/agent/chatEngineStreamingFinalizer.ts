@@ -3,6 +3,10 @@ import type {
   ChatEngineStreamingLoopHost,
   TaskIntent,
 } from "./chatEngine.js";
+import {
+  collectArtifactRefsFromToolLog,
+  formatPreservedUnverifiedTerminalAnswer,
+} from "./preservedUnverifiedTerminal.js";
 
 /** Emit the terminal outcome when a submission exhausts its turn allowance. */
 export async function* finalizeStreamingTurnLimit(input: {
@@ -27,11 +31,37 @@ export async function* finalizeStreamingTurnLimit(input: {
     host.terminalLimiterReason ??
     `Turn limit reached (${host.taskAllowance?.consumed.turns ?? maxTurns} of ` +
       `${host.taskAllowance?.grant.turnCap ?? maxTurns}).`;
-  const maxTurnAnswer = await host
-    .synthesizeAnswer(allToolObservations, {
-      onAnswerChunk: (_chunk) => {},
-    })
-    .catch(() => "");
+  const preservedCandidate = host.lastSubstantiveCompletionCandidate();
+  if (effectiveExecutePolicy) {
+    const gateResult = host.evaluateCompletionGate(
+      { type: "completion", answer: "" },
+      effectiveIntent,
+    );
+    if (
+      gateResult === "reject" &&
+      host.hasAnyWrites() &&
+      preservedCandidate &&
+      preservedCandidate.trim().length > 0
+    ) {
+      const authorityReason = `Turn limit exceeded. ${host.buildRejectionMessage()}`;
+      const terminalPayload = formatPreservedUnverifiedTerminalAnswer({
+        authorityReason,
+        retainedCandidate: preservedCandidate,
+        artifactRefs: collectArtifactRefsFromToolLog(host.toolCallLog),
+      });
+      if (!host.isSubmissionCurrent(submissionGeneration)) return;
+      yield host.streamFailed(terminalPayload);
+      return;
+    }
+  }
+
+  const maxTurnAnswer = preservedCandidate
+    ? preservedCandidate
+    : await host
+        .synthesizeAnswer(allToolObservations, {
+          onAnswerChunk: (_chunk) => {},
+        })
+        .catch(() => "");
   // R0-8: synthesis is a suspension point; a superseded generator must not
   // append to the new task's conversation.
   if (!host.isSubmissionCurrent(submissionGeneration)) return;

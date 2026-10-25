@@ -670,6 +670,7 @@ export interface ChatEngineStreamingLoopHost {
     ownerGeneration?: number,
   ) => Promise<ChatResult | null>
   readonly hasAnyWrites: () => boolean
+  readonly lastSubstantiveCompletionCandidate: () => string | undefined
   readonly hasPendingCompactionAuthority: () => boolean
   readonly installP11ContextCheckpoint: (
     routeOverride?: NonNullable<LiveOperationalSourcesV1['route']>,

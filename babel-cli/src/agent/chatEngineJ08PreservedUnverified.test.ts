@@ -2,6 +2,10 @@
  * P1 — J08-class answer loss at turn cap: production ChatEngine + OpenRouterApiRunner,
  * mocked HTTP transport only (dispatchFetch). No benchmark lease, admission priming,
  * or session admission store overrides.
+ *
+ * Regression contract: authoritative terminal failure tuple is unchanged (failed /
+ * BUDGET_EXHAUSTED / budget_exhausted); only the user-visible failure payload must
+ * retain the substantive completion candidate, reason-first and explicitly unverified.
  */
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
@@ -183,7 +187,20 @@ function terminalEvent(events: ChatEvent[]) {
   return terminals[0]!
 }
 
-test('J08: turn-cap verifier_missing preserves substantive answer via UNVERIFIED terminal', async t => {
+/** Authoritative failure tuple on green59204 turn-cap + gate-reject path (must not change). */
+function assertUnchangedAuthoritativeTurnCapFailure(terminal: ChatEvent): string {
+  assert.equal(terminal.type, 'failed', 'turn-cap gate reject must remain streamFailed, not streamDone')
+  assert.equal(terminal.type === 'failed' ? terminal.outcome : undefined, 'BUDGET_EXHAUSTED')
+  assert.equal(terminal.type === 'failed' ? terminal.reason_code : undefined, 'budget_exhausted')
+  assert.equal(terminal.type === 'failed' ? terminal.cause_class : undefined, 'harness')
+  const error = terminal.type === 'failed' ? terminal.error : ''
+  assert.match(error, /^Turn limit exceeded\./)
+  assert.match(error, /Run the verifier \(test_run or run_command\) before completing\./)
+  assert.notEqual(terminal.type === 'failed' ? terminal.outcome : undefined, 'VERIFIED_COMPLETE')
+  return error
+}
+
+test('J08: turn-cap gate reject keeps authoritative failure and preserves substantive candidate in error', async t => {
   const prior = Object.fromEntries(MANAGED_ENV.map(key => [key, process.env[key]]))
   const projectRoot = mkdtempSync(join(tmpdir(), 'babel-j08-preserve-'))
   t.after(() => {
@@ -222,18 +239,15 @@ test('J08: turn-cap verifier_missing preserves substantive answer via UNVERIFIED
 
   const events = await collectStream(engine.submitMessageStream(J08_TASK))
   const terminal = terminalEvent(events)
+  const error = assertUnchangedAuthoritativeTurnCapFailure(terminal)
 
-  assert.equal(terminal.type, 'done', 'must use nonverified terminal path, not streamFailed turn-limit loss')
-  assert.equal(terminal.type === 'done' ? terminal.outcome : undefined, 'UNVERIFIED_PATCH')
-  assert.notEqual(terminal.type === 'done' ? terminal.outcome : undefined, 'VERIFIED_COMPLETE')
-
-  const answer = terminal.type === 'done' ? terminal.answer : ''
-  assert.match(answer, /Turn limit reached/i)
-  assert.match(answer, /verifier|COMPLETION_GATE_REJECTED/i)
-  assert.match(answer, /UNVERIFIED retained candidate/i)
-  assert.match(answer, new RegExp(J08_MARKER))
-  assert.doesNotMatch(answer, /^Turn limit exceeded\./)
-  assert.doesNotMatch(answer, /VERIFIED_COMPLETE/i)
+  const markerIndex = error.indexOf(J08_MARKER)
+  assert.ok(markerIndex > 0, 'substantive candidate must appear in the failure payload')
+  const authorityPrefix = error.slice(0, markerIndex)
+  assert.match(authorityPrefix, /^Turn limit exceeded\./)
+  assert.doesNotMatch(authorityPrefix, new RegExp(J08_MARKER))
+  assert.match(error, /UNVERIFIED retained candidate/i)
+  assert.doesNotMatch(error, /VERIFIED_COMPLETE/i)
 
   assert.equal(readFileSync(join(projectRoot, '数据', 'summary.csv'), 'utf8'), SUMMARY_CSV)
 })
