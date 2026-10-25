@@ -95,6 +95,43 @@ test('v1 preserves frozen criterion order (explicit before inferred) without spa
   assert.deepEqual(meaning.sources.map(source => source.status), ['explicit', 'inferred'])
 })
 
+test('v2 admits top-level prose before bullets inside Requirements uniformly', () => {
+  const request = 'Requirements:\nDo not alter sales.csv.\n- Write summary.csv.'
+  const meaning = inferTaskAcceptanceV2(request)
+  assert.equal(meaning.unresolved, false)
+  assert.deepEqual(meaning.criteria.map(item => item.description), ['Do not alter sales.csv.', 'Write summary.csv.'])
+})
+
+test('v2 admits top-level prose after modal inferred lines without incompleteness', () => {
+  const request = 'The output must include net.\nExplain the total.'
+  const meaning = inferTaskAcceptanceV2(request)
+  assert.equal(meaning.unresolved, false)
+  assert.deepEqual(meaning.criteria.map(item => item.description), ['The output must include net.', 'Explain the total.'])
+})
+
+test('v2 admits additive leading prose before explicit bullets', () => {
+  const request = 'Also require:\nDisplay a retry action after failure.\n- Survive restart.'
+  const meaning = inferTaskAcceptanceV2(request)
+  assert.equal(meaning.unresolved, false)
+  assert.ok(meaning.criteria.some(item => item.description === 'Display a retry action after failure.'))
+  assert.ok(meaning.criteria.some(item => item.description === 'Survive restart.'))
+})
+
+test('v2 admits polite question trailers as separate top-level inferred spans', () => {
+  const request = 'Also require:\n- Survive restart.\nCan you do that?'
+  const meaning = inferTaskAcceptanceV2(request)
+  assert.equal(meaning.unresolved, false)
+  assert.deepEqual(meaning.criteria.map(item => item.description), ['Survive restart.', 'Can you do that?'])
+})
+
+test('v2 excludes four-space indented code lines from admissible prose capture', () => {
+  const request = '    const x = 1;\nDo real work.'
+  const meaning = inferTaskAcceptanceV2(request)
+  assert.equal(meaning.unresolved, false)
+  assert.deepEqual(meaning.criteria.map(item => item.description), ['Do real work.'])
+  assert.equal(meaning.criteria.some(item => item.description.includes('const x')), false)
+})
+
 test('v2 preserves plain prose after explicit bullets as separate inferred spans', () => {
   const request = [
     'Compute net revenue from sales.csv and create summary.csv with product, gross, refunds and net.',
