@@ -4,8 +4,8 @@ import type {
   TaskIntent,
 } from "./chatEngine.js";
 import {
-  collectConfirmedMutationArtifactPaths,
   formatPreservedUnverifiedTerminalAnswer,
+  formatSupersededArtifactRevisionNotice,
 } from "./preservedUnverifiedTerminal.js";
 
 /** Emit the terminal outcome when a submission exhausts its turn allowance. */
@@ -31,41 +31,49 @@ export async function* finalizeStreamingTurnLimit(input: {
     host.terminalLimiterReason ??
     `Turn limit reached (${host.taskAllowance?.consumed.turns ?? maxTurns} of ` +
       `${host.taskAllowance?.grant.turnCap ?? maxTurns}).`;
-  const preservedCandidate = host.lastSubstantiveCompletionCandidate();
   if (effectiveExecutePolicy) {
     const gateResult = host.evaluateCompletionGate(
       { type: "completion", answer: "" },
       effectiveIntent,
     );
-    if (
-      gateResult === "reject" &&
-      host.hasAnyWrites() &&
-      preservedCandidate &&
-      preservedCandidate.trim().length > 0
-    ) {
+    if (gateResult === "reject" && host.hasAnyWrites()) {
       const authorityReason = `Turn limit exceeded. ${host.buildRejectionMessage()}`;
-      const presentationError = formatPreservedUnverifiedTerminalAnswer({
-        authorityReason,
-        retainedCandidate: preservedCandidate,
-        artifactRefs: collectConfirmedMutationArtifactPaths(host.toolCallLog),
-      });
-      if (!host.isSubmissionCurrent(submissionGeneration)) return;
-      yield host.streamFailed(
-        authorityReason,
-        { code: 'budget_exhausted', cause_class: 'harness' },
-        presentationError,
+      const preserved = host.resolvePreservedUnverifiedAtTurnLimit(
+        submissionGeneration,
       );
-      return;
+      if (preserved.kind === "retain" && preserved.candidate.trim().length > 0) {
+        const presentationError = formatPreservedUnverifiedTerminalAnswer({
+          authorityReason,
+          retainedCandidate: preserved.candidate,
+          artifactRefs: preserved.artifactRefs,
+        });
+        if (!host.isSubmissionCurrent(submissionGeneration)) return;
+        yield host.streamFailed(
+          authorityReason,
+          { code: 'budget_exhausted', cause_class: 'harness' },
+          presentationError,
+        );
+        return;
+      }
+      if (preserved.kind === "stale_revision") {
+        const presentationError =
+          formatSupersededArtifactRevisionNotice(authorityReason);
+        if (!host.isSubmissionCurrent(submissionGeneration)) return;
+        yield host.streamFailed(
+          authorityReason,
+          { code: 'budget_exhausted', cause_class: 'harness' },
+          presentationError,
+        );
+        return;
+      }
     }
   }
 
-  const maxTurnAnswer = preservedCandidate
-    ? preservedCandidate
-    : await host
-        .synthesizeAnswer(allToolObservations, {
-          onAnswerChunk: (_chunk) => {},
-        })
-        .catch(() => "");
+  const maxTurnAnswer = await host
+    .synthesizeAnswer(allToolObservations, {
+      onAnswerChunk: (_chunk) => {},
+    })
+    .catch(() => "");
   // R0-8: synthesis is a suspension point; a superseded generator must not
   // append to the new task's conversation.
   if (!host.isSubmissionCurrent(submissionGeneration)) return;

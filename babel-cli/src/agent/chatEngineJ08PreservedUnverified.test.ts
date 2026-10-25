@@ -24,6 +24,7 @@ const J08_MARKER = 'J08_PRESERVED_NET_200_EXPLANATION'
 const J08_UNTRUSTED_CLASSIFIER_TOKENS =
   'RESPONSE_EVIDENCE_INVALID NATIVE_TOOL_PROTOCOL_INVALID'
 const OLD_SUBMISSION_MARKER = 'J08_OLD_SUBMISSION_STALE_CANDIDATE'
+const RECOVERY_CHATTER_MARKER = 'J08_RECOVERY_CHATTER_NOT_PRESERVED'
 const SUMMARY_CSV = [
   'product,gross,refunds,net',
   'A,100,20,130',
@@ -267,4 +268,83 @@ test('J08: turn-cap gate reject keeps authoritative failure and preserves substa
   assert.ok(ended, 'durable turn_ended required')
   assert.equal(ended.outcome, 'BUDGET_EXHAUSTED')
   assert.equal(ended.outcome, terminal.type === 'failed' ? terminal.outcome : undefined)
+})
+
+class J08RecoveryChatterRunner extends OpenRouterApiRunner {
+  private providerCalls = 0
+
+  constructor() {
+    super(
+      LIVE_OPENROUTER_MODEL_ID,
+      { maxTokens: 4_096 },
+      {
+        explicitCredential: 'synthetic-fixture',
+        env: { OPENROUTER_API_KEY: 'synthetic-fixture' },
+      },
+    )
+  }
+
+  protected override async dispatchFetch(_url: string, _init: RequestInit): Promise<Response> {
+    const phase = this.providerCalls
+    this.providerCalls += 1
+    if (phase === 0) {
+      return makeToolCallSse('str_replace', {
+        file_path: '数据/summary.csv',
+        old_str: 'placeholder',
+        new_str: SUMMARY_CSV.trimEnd(),
+      })
+    }
+    if (phase === 1) {
+      return makeTextCompletionSse(
+        `${J08_MARKER} ${J08_UNTRUSTED_CLASSIFIER_TOKENS} Product A net revenue is 130, product B net is 70, and total net is 200.`,
+      )
+    }
+    return makeTextCompletionSse(
+      `${RECOVERY_CHATTER_MARKER} I will run npm test and try completing again.`,
+    )
+  }
+}
+
+test('J08: gate-captured completion survives later recovery chatter at turn cap', async t => {
+  const prior = Object.fromEntries(MANAGED_ENV.map(key => [key, process.env[key]]))
+  const projectRoot = mkdtempSync(join(tmpdir(), 'babel-j08-recovery-'))
+  t.after(() => {
+    for (const key of MANAGED_ENV) {
+      if (prior[key] === undefined) delete process.env[key]
+      else process.env[key] = prior[key]
+    }
+    refreshDryRunState()
+    rmSync(projectRoot, { recursive: true, force: true })
+  })
+
+  for (const key of MANAGED_ENV) delete process.env[key]
+  process.env['BABEL_DRY_RUN'] = '0'
+  process.env['BABEL_DRY_RUN_SOURCE'] = 'session'
+  process.env['BABEL_NATIVE_TOOLS'] = 'enabled'
+  process.env['BABEL_TOOL_PROFILE'] = 'legacy'
+  process.env['OPENROUTER_API_KEY'] = 'synthetic-fixture'
+  refreshDryRunState()
+  seedJ08Repository(projectRoot)
+
+  const runner = new J08RecoveryChatterRunner()
+  const engine = new ChatEngine({
+    task: J08_TASK,
+    projectRoot,
+    runId: `j08-recovery-${randomUUID()}`,
+    operation: 'CHANGE',
+    model: LIVE_OPENROUTER_MODEL_ID,
+    maxTurns: 3,
+    maxCostUsd: 1,
+    runtimeMode: 'direct',
+    providerRunner: runner,
+    providerPolicy: OPENROUTER_POLICY,
+  })
+
+  const events = await collectStream(engine.submitMessageStream(J08_TASK))
+  const terminal = terminalEvent(events)
+  const error = assertUnchangedAuthoritativeTurnCapFailure(terminal)
+
+  assert.match(error, new RegExp(J08_MARKER))
+  assert.doesNotMatch(error, new RegExp(RECOVERY_CHATTER_MARKER))
+  assert.match(error, /数据\/summary\.csv/)
 })

@@ -578,6 +578,7 @@ export interface ChatEngineStreamingLoopHost {
   readonly abortController: AbortController
   activeSubmissionGeneration: number
   submissionConversationStartIndex: number
+  gateRejectedCompletionCapture: import('./preservedUnverifiedTerminal.js').GateRejectedCompletionCapture | null
   readonly apiTokenCount: number
   apiTokenCountAtTurnStart: number
   readonly applyCriticRepairCostBudget: () => void
@@ -671,7 +672,13 @@ export interface ChatEngineStreamingLoopHost {
     ownerGeneration?: number,
   ) => Promise<ChatResult | null>
   readonly hasAnyWrites: () => boolean
-  readonly lastSubstantiveCompletionCandidate: () => string | undefined
+  readonly captureGateRejectedCompletionAttempt: (
+    answer: string,
+    submissionGeneration: number,
+  ) => void
+  readonly resolvePreservedUnverifiedAtTurnLimit: (
+    submissionGeneration: number,
+  ) => import('./preservedUnverifiedTerminal.js').PreservedUnverifiedTurnLimitResolution
   readonly hasPendingCompactionAuthority: () => boolean
   readonly installP11ContextCheckpoint: (
     routeOverride?: NonNullable<LiveOperationalSourcesV1['route']>,

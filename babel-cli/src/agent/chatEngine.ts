@@ -161,7 +161,11 @@ import {
   hasInspectedNoChangeEvidence,
   isAuthoritativeVerifierCommand,
 } from "./completionGatePolicy.js";
-import { findLastSubstantiveCompletionCandidate } from "./preservedUnverifiedTerminal.js";
+import {
+  resolveGateRejectedCompletionCapture,
+  tryRecordGateRejectedCompletionCapture,
+  type GateRejectedCompletionCapture,
+} from "./preservedUnverifiedTerminal.js";
 import {
   formatTestCommandsForGate,
   type DiscoveredTestCommand,
@@ -648,6 +652,8 @@ export class ChatEngine {
   private activeSubmissionGeneration = 0;
   /** Conversation index where the current admitted submission begins. */
   submissionConversationStartIndex = 0;
+  /** First gate reject_continue completion in the current submission (frozen at seam). */
+  gateRejectedCompletionCapture: GateRejectedCompletionCapture | null = null;
   private runControl: RunControl | null = null;
   /** Pending cancellation survives preparation until its submission latch exists. */
   private _cancelled = false;
@@ -1422,10 +1428,27 @@ export class ChatEngine {
     return sessionHasAnyWrites(this.toolCallLog);
   }
 
-  lastSubstantiveCompletionCandidate(): string | undefined {
-    return findLastSubstantiveCompletionCandidate(this.conversation, {
-      submissionStartIndex: this.submissionConversationStartIndex,
-    });
+  captureGateRejectedCompletionAttempt(
+    answer: string,
+    submissionGeneration: number,
+  ): void {
+    if (!this.isSubmissionCurrent(submissionGeneration)) return;
+    this.gateRejectedCompletionCapture = tryRecordGateRejectedCompletionCapture(
+      this.gateRejectedCompletionCapture,
+      answer,
+      this.toolCallLog,
+      submissionGeneration,
+    );
+  }
+
+  resolvePreservedUnverifiedAtTurnLimit(
+    submissionGeneration: number,
+  ): import("./preservedUnverifiedTerminal.js").PreservedUnverifiedTurnLimitResolution {
+    return resolveGateRejectedCompletionCapture(
+      this.gateRejectedCompletionCapture,
+      this.toolCallLog,
+      submissionGeneration,
+    );
   }
 
   /**

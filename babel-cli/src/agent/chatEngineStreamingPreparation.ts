@@ -85,6 +85,7 @@ export async function prepareStreamingSubmission(
   const isReadOnlyInspection = effectiveOperation === "READ_ONLY";
 
   host.submissionConversationStartIndex = host.conversation.length;
+  host.gateRejectedCompletionCapture = null;
   host.conversation.push({ role: "user", content: userInput });
   // S01/#211: harness-generated repair guidance is only ever injected for an
   // execute-like operation. A READ_ONLY submission never receives the

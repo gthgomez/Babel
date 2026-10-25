@@ -1,11 +1,14 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
+  buildConfirmedMutationRevisionKey,
   collectConfirmedMutationArtifactPaths,
   findLastSubstantiveCompletionCandidate,
   formatPreservedUnverifiedTerminalAnswer,
   isGenuineCompletionAttemptMessage,
   isRetainedCompletionCandidateMessage,
+  resolveGateRejectedCompletionCapture,
+  tryRecordGateRejectedCompletionCapture,
 } from './preservedUnverifiedTerminal.js'
 
 test('formatPreservedUnverifiedTerminalAnswer leads with authority reason and UNVERIFIED label', () => {
@@ -79,6 +82,84 @@ test('unit: collectConfirmedMutationArtifactPaths ignores reads and shell target
     ]),
     ['数据/summary.csv'],
   )
+})
+
+test('unit: gate seam capture freezes first completion; recovery prose does not replace', () => {
+  const log = [{
+    tool: 'str_replace',
+    effect_status: 'confirmed_change' as const,
+    mutation_paths: ['数据/summary.csv'],
+  }]
+  const first = 'J08_GATE_CAPTURE first substantive completion.'
+  const recovery = 'RECOVERY_CHATTER I will run npm test and try again.'
+  const generation = 3
+  let capture = tryRecordGateRejectedCompletionCapture(null, first, log, generation)
+  capture = tryRecordGateRejectedCompletionCapture(capture, recovery, log, generation)
+  const resolved = resolveGateRejectedCompletionCapture(capture, log, generation)
+  assert.equal(resolved.kind, 'retain')
+  if (resolved.kind === 'retain') {
+    assert.equal(resolved.candidate, first)
+    assert.deepEqual(resolved.artifactRefs, ['数据/summary.csv'])
+  }
+  const tailWouldPickRecovery = findLastSubstantiveCompletionCandidate([
+    { role: 'user', content: 'task' },
+    { role: 'tool', content: 'wrote summary' },
+    { role: 'assistant', content: first },
+    { role: 'assistant', content: recovery, name: 'harness_feedback', provenance: 'controller' },
+    { role: 'tool', content: 'harness nudge' },
+    { role: 'assistant', content: recovery },
+  ], { submissionStartIndex: 0 })
+  assert.equal(tailWouldPickRecovery, recovery)
+  if (resolved.kind === 'retain') {
+    assert.notEqual(resolved.candidate, tailWouldPickRecovery)
+  }
+})
+
+test('unit: post-capture confirmed mutation clears retained candidate and artifact binding', () => {
+  const logBefore = [{
+    tool: 'str_replace',
+    effect_status: 'confirmed_change' as const,
+    mutation_paths: ['数据/summary.csv'],
+  }]
+  const generation = 2
+  const capture = tryRecordGateRejectedCompletionCapture(
+    null,
+    'Explanation for first revision.',
+    logBefore,
+    generation,
+  )
+  assert.ok(capture)
+  const logAfter = [
+    ...logBefore,
+    {
+      tool: 'str_replace',
+      effect_status: 'confirmed_change' as const,
+      mutation_paths: ['数据/other.csv'],
+    },
+  ]
+  assert.notEqual(
+    buildConfirmedMutationRevisionKey(logBefore),
+    buildConfirmedMutationRevisionKey(logAfter),
+  )
+  assert.equal(
+    resolveGateRejectedCompletionCapture(capture, logAfter, generation).kind,
+    'stale_revision',
+  )
+})
+
+test('unit: capture does not resolve under a different submission generation', () => {
+  const log = [{
+    tool: 'str_replace',
+    effect_status: 'confirmed_change' as const,
+    mutation_paths: ['a.csv'],
+  }]
+  const capture = tryRecordGateRejectedCompletionCapture(
+    null,
+    'bound to generation 4',
+    log,
+    4,
+  )
+  assert.equal(resolveGateRejectedCompletionCapture(capture, log, 5).kind, 'absent')
 })
 
 test('isRetainedCompletionCandidateMessage rejects controller harness lines', () => {

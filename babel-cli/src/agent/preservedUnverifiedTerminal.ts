@@ -3,6 +3,19 @@ import type { MutationEffectStatus } from './mutationTools.js'
 
 const GATE_REJECT_MARKER = 'COMPLETION_GATE_REJECTED:'
 
+/** Snapshot taken at the first completion gate reject_continue in a submission. */
+export type GateRejectedCompletionCapture = {
+  submissionGeneration: number
+  candidateText: string
+  mutationRevisionKey: string
+  artifactRefs: readonly string[]
+}
+
+export type PreservedUnverifiedTurnLimitResolution =
+  | { kind: 'retain'; candidate: string; artifactRefs: readonly string[] }
+  | { kind: 'stale_revision' }
+  | { kind: 'absent' }
+
 export type RetainedCandidateScope = {
   /** First conversation index owned by the current admitted submission. */
   submissionStartIndex: number
@@ -78,6 +91,77 @@ export function collectConfirmedMutationArtifactPaths(
   return [...paths].sort()
 }
 
+/** Stable fingerprint of confirmed mutations at capture or terminalization time. */
+export function buildConfirmedMutationRevisionKey(
+  log: ReadonlyArray<{
+    tool: string
+    mutation_paths?: readonly string[]
+    effect_status?: MutationEffectStatus
+  }>,
+): string {
+  const parts: string[] = []
+  for (const entry of log) {
+    if (entry.effect_status !== 'confirmed_change') continue
+    const paths = [...(entry.mutation_paths ?? [])].map(p => p.trim()).filter(Boolean).sort()
+    parts.push(`${entry.tool}:${paths.join(',')}`)
+  }
+  return parts.join('|')
+}
+
+function isEligibleGateRejectedCompletionAnswer(answer: string): boolean {
+  const trimmed = answer.trim()
+  if (!trimmed) return false
+  if (trimmed.startsWith('BLOCKED:')) return false
+  if (trimmed.includes(GATE_REJECT_MARKER)) return false
+  return true
+}
+
+/** Record the first gate-rejected completion attempt for this submission (never overwritten). */
+export function tryRecordGateRejectedCompletionCapture(
+  existing: GateRejectedCompletionCapture | null,
+  answer: string,
+  log: ReadonlyArray<{
+    tool: string
+    mutation_paths?: readonly string[]
+    effect_status?: MutationEffectStatus
+  }>,
+  submissionGeneration: number,
+): GateRejectedCompletionCapture | null {
+  const frozen =
+    existing?.submissionGeneration === submissionGeneration ? existing : null
+  if (frozen) return frozen
+  if (!isEligibleGateRejectedCompletionAnswer(answer)) return frozen
+  const mutationRevisionKey = buildConfirmedMutationRevisionKey(log)
+  return {
+    submissionGeneration,
+    candidateText: answer.trim(),
+    mutationRevisionKey,
+    artifactRefs: collectConfirmedMutationArtifactPaths(log),
+  }
+}
+
+/** Resolve capture for turn-limit preservation (submission generation + mutation revision). */
+export function resolveGateRejectedCompletionCapture(
+  capture: GateRejectedCompletionCapture | null,
+  log: ReadonlyArray<{
+    tool: string
+    mutation_paths?: readonly string[]
+    effect_status?: MutationEffectStatus
+  }>,
+  submissionGeneration: number,
+): PreservedUnverifiedTurnLimitResolution {
+  if (!capture) return { kind: 'absent' }
+  if (capture.submissionGeneration !== submissionGeneration) return { kind: 'absent' }
+  if (buildConfirmedMutationRevisionKey(log) !== capture.mutationRevisionKey) {
+    return { kind: 'stale_revision' }
+  }
+  return {
+    kind: 'retain',
+    candidate: capture.candidateText,
+    artifactRefs: capture.artifactRefs,
+  }
+}
+
 /**
  * User-visible failure payload: authoritative limit/gate failure first, then explicit UNVERIFIED retained work.
  * Does not assert verification or passing tests.
@@ -100,4 +184,14 @@ export function formatPreservedUnverifiedTerminalAnswer(input: {
     lines.push('', 'Artifacts referenced in this submission:', ...input.artifactRefs.map(ref => `- ${ref}`))
   }
   return lines.join('\n')
+}
+
+/** Display-only notice when mutations moved on after a gate-rejected completion capture. */
+export function formatSupersededArtifactRevisionNotice(authorityReason: string): string {
+  return [
+    authorityReason.trim(),
+    '',
+    '---',
+    'UNVERIFIED retained candidate superseded: confirmed workspace mutations changed after the gate-rejected completion attempt; no explanation is attached to current artifact bytes.',
+  ].join('\n')
 }
