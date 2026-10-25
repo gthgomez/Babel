@@ -18,7 +18,8 @@ import {
   realpathSync,
   readdirSync,
 } from 'node:fs'
-import { dirname, join, relative, resolve, sep } from 'node:path'
+import { join, relative, resolve, sep } from 'node:path'
+import { admitProjectRelativePath } from '../sandbox.js'
 import { isCredentialTargetPath } from './protectedPath.js'
 import {
   declarationContentHash,
@@ -161,7 +162,36 @@ export function parseMarkdownBulletPaths(
   return { ok: true, paths }
 }
 
-function hashFileContent(absolutePath: string): string {
+function admissionErrorCode(message: string): string {
+  if (message.includes('Credential read denied')) return 'credential_denied'
+  if (message.includes('Symlink traversal denied')) return 'symlink'
+  if (message.includes('Path traversal denied')) return 'escape'
+  if (message.includes('Path not found')) return 'missing'
+  return 'path_denied'
+}
+
+function admitRepoRelativeFile(rootReal: string, repoRelative: string): { ok: true; real: string } | { ok: false; code: string } {
+  try {
+    return { ok: true, real: admitProjectRelativePath(rootReal, repoRelative, 'file') }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    return { ok: false, code: admissionErrorCode(message) }
+  }
+}
+
+function admitRepoRelativeDirectory(
+  rootReal: string,
+  repoRelative: string,
+): { ok: true; real: string } | { ok: false; code: string } {
+  try {
+    return { ok: true, real: admitProjectRelativePath(rootReal, repoRelative, 'directory') }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    return { ok: false, code: admissionErrorCode(message) }
+  }
+}
+
+function hashAdmittedFileContent(absolutePath: string): string {
   return createHash('sha256').update(readFileSync(absolutePath)).digest('hex')
 }
 
@@ -196,24 +226,17 @@ type InventoryListResult =
 function validateScopeRoot(rootReal: string, scopeRoot: string): { ok: true; dirReal: string } | { ok: false; error: string } {
   const normalized = normalizeDeclarationRepoRelativePath(scopeRoot)
   if (!normalized) return { ok: false, error: `invalid_scope_root:${scopeRoot}` }
-  const abs = resolve(rootReal, normalized)
-  if (!existsSync(abs)) return { ok: false, error: `missing_scope_root:${normalized}` }
-  let lst: ReturnType<typeof lstatSync>
-  try {
-    lst = lstatSync(abs)
-  } catch {
-    return { ok: false, error: `missing_scope_root:${normalized}` }
+  const admitted = admitRepoRelativeDirectory(rootReal, normalized)
+  if (!admitted.ok) {
+    const suffix =
+      admitted.code === 'missing'
+        ? `missing_scope_root:${normalized}`
+        : admitted.code === 'symlink'
+          ? `symlink_scope_root:${normalized}`
+          : `${admitted.code}_scope_root:${normalized}`
+    return { ok: false, error: suffix }
   }
-  if (lst.isSymbolicLink()) return { ok: false, error: `symlink_scope_root:${normalized}` }
-  if (!lst.isDirectory()) return { ok: false, error: `not_directory_scope_root:${normalized}` }
-  let dirReal: string
-  try {
-    dirReal = realpathSync.native(abs)
-  } catch {
-    return { ok: false, error: `missing_scope_root:${normalized}` }
-  }
-  if (!isContainedInRoot(rootReal, dirReal)) return { ok: false, error: `escape_scope_root:${normalized}` }
-  return { ok: true, dirReal }
+  return { ok: true, dirReal: admitted.real }
 }
 
 function listScopedInventoryFiles(rootReal: string, scopeRoots: readonly string[]): InventoryListResult {
@@ -276,25 +299,18 @@ function resolveDeclaredPath(
   declared: string,
 ): { status: ResolveStatus; exists: boolean } {
   if (isCredentialTargetPath(declared)) return { status: 'credential_denied', exists: false }
-  const abs = resolve(rootReal, declared)
-  if (!existsSync(abs)) return { status: 'missing', exists: false }
-  let lst: ReturnType<typeof lstatSync>
-  try {
-    lst = lstatSync(abs)
-  } catch {
-    return { status: 'missing', exists: false }
+  const admitted = admitRepoRelativeFile(rootReal, declared)
+  if (!admitted.ok) {
+    const status: ResolveStatus =
+      admitted.code === 'credential_denied'
+        ? 'credential_denied'
+        : admitted.code === 'symlink'
+          ? 'symlink'
+          : admitted.code === 'escape'
+            ? 'escape'
+            : 'missing'
+    return { status, exists: false }
   }
-  if (lst.isSymbolicLink()) return { status: 'symlink', exists: false }
-  let real: string
-  try {
-    real = realpathSync.native(abs)
-  } catch {
-    return { status: 'missing', exists: false }
-  }
-  if (!isContainedInRoot(rootReal, real)) return { status: 'escape', exists: false }
-  const rel = posixRelative(rootReal, real)
-  if (!rel || isCredentialTargetPath(rel)) return { status: 'credential_denied', exists: false }
-  if (!lst.isFile()) return { status: 'missing', exists: false }
   return { status: 'ok', exists: true }
 }
 
@@ -306,25 +322,24 @@ function validateTargetDocumentForRead(
   if (!normalized || normalized !== targetDocument) {
     return { ok: false, reason_code: 'target_document_invalid' }
   }
-  const abs = resolve(rootReal, normalized)
-  if (!existsSync(abs)) return { ok: false, reason_code: 'target_document_missing' }
-  let lst: ReturnType<typeof lstatSync>
-  try {
-    lst = lstatSync(abs)
-  } catch {
-    return { ok: false, reason_code: 'target_document_missing' }
+  if (isCredentialTargetPath(normalized)) {
+    return { ok: false, reason_code: 'target_document_credential_denied' }
   }
-  if (lst.isSymbolicLink()) return { ok: false, reason_code: 'target_document_symlink' }
-  if (!lst.isFile()) return { ok: false, reason_code: 'target_not_regular_file' }
-  let fileReal: string
-  try {
-    fileReal = realpathSync.native(abs)
-  } catch {
-    return { ok: false, reason_code: 'target_document_missing' }
+  const admitted = admitRepoRelativeFile(rootReal, normalized)
+  if (!admitted.ok) {
+    const reason_code =
+      admitted.code === 'missing'
+        ? 'target_document_missing'
+        : admitted.code === 'symlink'
+          ? 'target_document_symlink'
+          : admitted.code === 'escape'
+            ? 'target_document_escape'
+            : admitted.code === 'credential_denied'
+              ? 'target_document_credential_denied'
+              : 'target_document_invalid'
+    return { ok: false, reason_code }
   }
-  if (!isContainedInRoot(rootReal, fileReal)) return { ok: false, reason_code: 'target_document_escape' }
-  if (isCredentialTargetPath(normalized)) return { ok: false, reason_code: 'target_document_credential_denied' }
-  return { ok: true, fileReal }
+  return { ok: true, fileReal: admitted.real }
 }
 
 function capturePreservedFile(
@@ -333,28 +348,15 @@ function capturePreservedFile(
 ): { ok: true; rel: string; content_sha256: string } | { ok: false; error: string } {
   const normalized = normalizeDeclarationRepoRelativePath(selector)
   if (!normalized) return { ok: false, error: `invalid_preserved_selector:${selector}` }
-  const abs = resolve(rootReal, normalized)
-  if (!existsSync(abs)) return { ok: false, error: `missing_preserved:${normalized}` }
-  let lst: ReturnType<typeof lstatSync>
-  try {
-    lst = lstatSync(abs)
-  } catch {
-    return { ok: false, error: `missing_preserved:${normalized}` }
+  const admitted = admitRepoRelativeFile(rootReal, normalized)
+  if (!admitted.ok) {
+    return { ok: false, error: `${admitted.code}_preserved:${normalized}` }
   }
-  if (lst.isSymbolicLink()) return { ok: false, error: `symlink_preserved:${normalized}` }
-  if (!lst.isFile()) return { ok: false, error: `not_file_preserved:${normalized}` }
-  let real: string
-  try {
-    real = realpathSync.native(abs)
-  } catch {
-    return { ok: false, error: `missing_preserved:${normalized}` }
-  }
-  if (!isContainedInRoot(rootReal, real)) return { ok: false, error: `escape_preserved:${normalized}` }
-  const rel = posixRelative(rootReal, real)
-  if (!rel || rel !== normalized || isCredentialTargetPath(rel)) {
+  const rel = posixRelative(rootReal, admitted.real)
+  if (!rel || rel !== normalized) {
     return { ok: false, error: `escape_preserved:${normalized}` }
   }
-  return { ok: true, rel, content_sha256: hashFileContent(real) }
+  return { ok: true, rel, content_sha256: hashAdmittedFileContent(admitted.real) }
 }
 
 /** Capture baselines from the actual filesystem (not declaration-embedded answers). */
@@ -577,34 +579,12 @@ export function verifyFilesystemPathList(
 
   const preserved_drift_paths: string[] = []
   for (const [rel, snapshot] of Object.entries(baseline.preserved)) {
-    const abs = resolve(rootReal, rel)
-    if (!existsSync(abs)) {
+    const admitted = admitRepoRelativeFile(rootReal, rel)
+    if (!admitted.ok) {
       preserved_drift_paths.push(rel)
       continue
     }
-    let lst: ReturnType<typeof lstatSync>
-    try {
-      lst = lstatSync(abs)
-    } catch {
-      preserved_drift_paths.push(rel)
-      continue
-    }
-    if (lst.isSymbolicLink() || !lst.isFile()) {
-      preserved_drift_paths.push(rel)
-      continue
-    }
-    let real: string
-    try {
-      real = realpathSync.native(abs)
-    } catch {
-      preserved_drift_paths.push(rel)
-      continue
-    }
-    if (!isContainedInRoot(rootReal, real)) {
-      preserved_drift_paths.push(rel)
-      continue
-    }
-    if (hashFileContent(real) !== snapshot.content_sha256) preserved_drift_paths.push(rel)
+    if (hashAdmittedFileContent(admitted.real) !== snapshot.content_sha256) preserved_drift_paths.push(rel)
   }
 
   const scopeOk = inventoryListed.ok

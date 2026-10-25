@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -274,6 +274,51 @@ test('parse failure skips preserved check', t => {
   const result = verifyFilesystemPathList(root, decl, baseline)
   assert.equal(result.checks.preserved_inputs_unchanged.status, 'skip')
   assert.equal(result.checks.preserved_inputs_unchanged.reason_code, 'not_evaluated')
+})
+
+function linkDirOrSkip(t: import('node:test').TestContext, target: string, linkPath: string): boolean {
+  try {
+    symlinkSync(target, linkPath, process.platform === 'win32' ? 'junction' : 'dir')
+    return true
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code
+    if (code === 'EPERM' || code === 'EACCES' || code === 'ENOTSUP') {
+      t.skip(`symlink creation unavailable: ${code}`)
+      return false
+    }
+    throw error
+  }
+}
+
+test('ancestor alias into secrets does not read credential bytes for target document', t => {
+  const root = mkdtempSync(join(tmpdir(), 'fs-path-list-anc-target-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  mkdirSync(join(root, 'secrets'), { recursive: true })
+  const secretFile = join(root, 'secrets', 'index.md')
+  writeFileSync(secretFile, 'CANARY_SECRET_TARGET\n', 'utf8')
+  if (!linkDirOrSkip(t, join(root, 'secrets'), join(root, 'meta'))) return
+  const paths = seedTree(root)
+  const decl = declaration({ target: 'meta/index.md', roots: ['apps'], preserved: [] })
+  writeMap(root, decl.target_document, paths)
+  chmodSync(secretFile, 0o000)
+  const baseline = captureFilesystemSourceBaseline(root, decl)
+  const result = verifyFilesystemPathList(root, decl, baseline)
+  assert.equal(result.status, 'failed')
+  assert.equal(result.reason_code, 'target_document_symlink')
+})
+
+test('ancestor alias into secrets does not read credential bytes for preserved capture', t => {
+  const root = mkdtempSync(join(tmpdir(), 'fs-path-list-anc-preserved-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  seedTree(root)
+  rmSync(join(root, 'docs'), { recursive: true, force: true })
+  mkdirSync(join(root, 'secrets'), { recursive: true })
+  const secretFile = join(root, 'secrets', 'notes.md')
+  writeFileSync(secretFile, 'CANARY_SECRET_PRESERVED\n', 'utf8')
+  chmodSync(secretFile, 0o000)
+  if (!linkDirOrSkip(t, join(root, 'secrets'), join(root, 'docs'))) return
+  const decl = declaration({ preserved: ['docs/notes.md'], roots: ['apps'] })
+  assert.throws(() => captureFilesystemSourceBaseline(root, decl), /symlink_preserved:docs\/notes\.md/)
 })
 
 test('directory symlink inside scope fails inventory listing', t => {
