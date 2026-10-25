@@ -59,6 +59,7 @@ function expectReject(
   code: string,
   meaningBefore: ReturnType<typeof inferTaskAcceptance>,
 ) {
+  const snapshot = structuredClone(meaningBefore)
   let caught: unknown
   try {
     fn()
@@ -67,8 +68,7 @@ function expectReject(
   }
   assert.ok(caught instanceof LiveSessionAuthorityError)
   assert.equal(caught.code, code)
-  const after = structuredClone(meaningBefore)
-  assert.deepEqual(after, meaningBefore)
+  assert.deepEqual(meaningBefore, snapshot)
 }
 
 test('R12 absent clarification leaves meaning unchanged', () => {

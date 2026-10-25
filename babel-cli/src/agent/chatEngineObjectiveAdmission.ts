@@ -20,6 +20,7 @@ import {
   prepareEngineInstructionAuthority,
 } from './chatEngineLiveSession.js'
 import { assertPathListSessionBinding } from './liveSessionFilesystemPathListAdmission.js'
+import { augmentInstructionManifestWithHostPathListClarification } from './pathListHostDeclaredClarification.js'
 import {
   bindInitialObjective,
   assertObjectiveLifecycle,
@@ -201,9 +202,15 @@ export function admitObjectiveSubmission(
     if (delivered.taskContract.mode !== authority.taskContract.mode) {
       throw new Error('MODE_TRANSITION_REQUIRED')
     }
+    const pathListAdmission = authority.filesystemPathListAdmission
     candidate = {
       ...authority,
-      instructionManifest: delivered.instructionManifest,
+      instructionManifest: pathListAdmission
+        ? augmentInstructionManifestWithHostPathListClarification(
+            delivered.instructionManifest,
+            pathListAdmission.declaration,
+          )
+        : delivered.instructionManifest,
       ...(delivered.chatStack ? { chatStack: delivered.chatStack } : {}),
     }
   } else {

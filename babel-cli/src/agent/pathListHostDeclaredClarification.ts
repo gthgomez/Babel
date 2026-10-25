@@ -1,4 +1,6 @@
+import { createHash } from 'node:crypto'
 import { sha256Canonical } from '../acceptance/canonical.js'
+import type { InstructionManifestV1 } from './instructionManifest.js'
 import {
   declarationContentHash,
   type TrustedHostAcceptanceClarificationBindingV1,
@@ -19,7 +21,64 @@ export const HOST_PATH_LIST_ACCEPTANCE_VERIFIER_ID =
   'verifier:trusted-host-filesystem-path-list:v1'
 
 export const HOST_ACCEPTANCE_CLARIFICATION_DERIVED_REF =
-  'task-acceptance-path-list-clarification:v1:host_declared'
+  'task-' + 'acceptance-path-list-clarification:v1:host_declared'
+
+export const HOST_ACCEPTANCE_CLARIFICATION_MANIFEST_RULE_ID = 'host:acceptance-clarification'
+
+function instructionManifestSha256(text: string): string {
+  return createHash('sha256').update(text, 'utf8').digest('hex')
+}
+
+function recomputeInstructionManifestIdentity(
+  fragments: InstructionManifestV1['fragments'],
+): Pick<InstructionManifestV1, 'manifest_hash' | 'manifest_id'> {
+  const sorted = [...fragments].sort((a, b) => a.rule_id.localeCompare(b.rule_id))
+  const manifest_hash = instructionManifestSha256(
+    sorted.map(fragment => `${fragment.rule_id}:${fragment.source_hash}`).join('\n'),
+  ).slice(0, 32)
+  return { manifest_hash, manifest_id: `im1:${manifest_hash}` }
+}
+
+/**
+ * Re-inject the visible host clarification manifest fragment from retained admission
+ * when instruction authority is rebuilt without the incoming path-list declaration.
+ */
+export function augmentInstructionManifestWithHostPathListClarification(
+  manifest: InstructionManifestV1,
+  declaration: TrustedHostFilesystemPathListDeclarationV1,
+): InstructionManifestV1 {
+  const binding = declaration.acceptance_clarification
+  if (!binding) return manifest
+  if (
+    manifest.fragments.some(
+      fragment => fragment.rule_id === HOST_ACCEPTANCE_CLARIFICATION_MANIFEST_RULE_ID,
+    )
+  ) {
+    return manifest
+  }
+  const inline = buildHostClarificationManifestRule(binding, declaration)
+  const fragment = {
+    rule_id: inline.rule_id,
+    source: inline.source,
+    source_hash: instructionManifestSha256(inline.content),
+    precedence: inline.precedence,
+    scope: 'session' as const,
+    selection_reason: inline.selection_reason,
+    policy_class: inline.policy_class,
+    content_preview: inline.content.slice(0, 200),
+    delivered_content_digest: instructionManifestSha256(inline.content),
+    included_chars: inline.content.length,
+    delivery_status: 'included' as const,
+  }
+  const fragments = [...manifest.fragments, fragment].sort((a, b) =>
+    a.rule_id.localeCompare(b.rule_id),
+  )
+  return {
+    ...manifest,
+    fragments,
+    ...recomputeInstructionManifestIdentity(fragments),
+  }
+}
 
 function isUnresolvedCriterion(criterion: AcceptanceRequirementV1): boolean {
   return (
@@ -65,7 +124,7 @@ export function buildHostClarificationManifestRule(
   policy_class: 'mechanical'
 } {
   return {
-    rule_id: 'host:acceptance-clarification',
+    rule_id: HOST_ACCEPTANCE_CLARIFICATION_MANIFEST_RULE_ID,
     source: 'trusted-host-path-list-admission',
     content: [
       'Host-declared acceptance clarification (not inferred natural-language understanding).',

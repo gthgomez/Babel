@@ -12,9 +12,11 @@ import {
 } from '../authority/trustedHostFilesystemPathList.js'
 import { inferTaskAcceptance } from './taskAcceptanceMeaning.js'
 import {
+  HOST_ACCEPTANCE_CLARIFICATION_MANIFEST_RULE_ID,
   TRUSTED_HOST_ACCEPTANCE_CLARIFICATION_REF_PREFIX,
   formatHostDeclaredPathListClarificationDescription,
 } from './pathListHostDeclaredClarification.js'
+import type { LiveSessionAuthority } from './liveSessionBridge.js'
 import { chatSessionDir } from '../cli/runsLayout.js'
 import { ChatEngine } from './chatEngine.js'
 import {
@@ -36,6 +38,30 @@ import type { ParityRuntime } from './chatEngineParityBridge.js'
 
 const USER_REQUEST =
   'Update the path index to match the current tree. Use another method if a command cannot run; confirm listed paths.'
+
+function assertHostClarificationManifestVisible(
+  authority: LiveSessionAuthority,
+  targetCriterionId: string,
+) {
+  assert.ok(authority.filesystemPathListAdmission)
+  assert.ok(
+    authority.instructionManifest.fragments.some(
+      fragment => fragment.rule_id === HOST_ACCEPTANCE_CLARIFICATION_MANIFEST_RULE_ID,
+    ),
+  )
+  assert.ok(
+    authority.taskContract.provenance.records.some(record =>
+      record.ref.startsWith(TRUSTED_HOST_ACCEPTANCE_CLARIFICATION_REF_PREFIX),
+    ),
+  )
+  assert.equal(
+    authority.taskContract.acceptance.find(criterion => criterion.id === targetCriterionId)
+      ?.description,
+    formatHostDeclaredPathListClarificationDescription(
+      authority.filesystemPathListAdmission.declaration,
+    ),
+  )
+}
 
 /** Scripted offline provider route; pairs with benchmark env (no network). */
 const SCRIPTED_OBJECTIVE_ADMISSION_ROUTE = {
@@ -930,6 +956,7 @@ test('host clarification survives objective admission without recapture', t => {
     reloaded.taskContract.acceptance.find(c => c.id === binding.target_criterion_id)?.description,
     described,
   )
+  assertHostClarificationManifestVisible(reloaded, binding.target_criterion_id)
   assert.equal(pathListBaselineCaptureCountForTests(), 1)
 })
 
@@ -962,6 +989,7 @@ test('refresh rejects host clarification drift on declaration hash', t => {
     executionProfile: 'chat',
     engineRunDir: runDir,
   })
+  assertHostClarificationManifestVisible(parity.liveAuthority!, binding.target_criterion_id)
   const drifted = {
     ...decl,
     acceptance_clarification: {
@@ -1020,6 +1048,52 @@ test('resume retains host-declared clarification binding', t => {
     )?.description,
     described,
   )
+  assertHostClarificationManifestVisible(
+    loadLiveSessionAuthorityStrict(runDir),
+    binding.target_criterion_id,
+  )
+})
+
+test('Continue objective admission retains host clarification manifest', t => {
+  const restoreEnv = enableScriptedObjectiveAdmissionEnv()
+  const root = mkdtempSync(join(tmpdir(), 'path-list-clarify-continue-'))
+  const runId = `path-list-clarify-continue-${randomUUID()}`
+  const runDir = chatSessionDir(runId)
+  t.after(() => {
+    restoreEnv()
+    rmSync(root, { recursive: true, force: true })
+    if (existsSync(runDir)) rmSync(runDir, { recursive: true, force: true })
+  })
+  resetPathListBaselineCaptureCountForTests()
+  seedRepo(root)
+  const binding = hostClarificationBindingForTask()
+  const engine = new ChatEngine({
+    runId,
+    task: USER_REQUEST,
+    projectRoot: root,
+    trustedHostFilesystemPathListDeclaration: declarationPayload({
+      acceptanceClarification: binding,
+    }),
+  })
+  assert.equal(
+    engine.admitUserSubmission(
+      { userInput: USER_REQUEST },
+      SCRIPTED_OBJECTIVE_ADMISSION_ROUTE,
+    ).status,
+    'committed',
+  )
+  assert.equal(
+    engine.admitUserSubmission(
+      { userInput: USER_REQUEST, continueTask: true },
+      SCRIPTED_OBJECTIVE_ADMISSION_ROUTE,
+    ).status,
+    'committed',
+  )
+  assertHostClarificationManifestVisible(
+    loadLiveSessionAuthorityStrict(runDir),
+    binding.target_criterion_id,
+  )
+  assert.equal(pathListBaselineCaptureCountForTests(), 1)
 })
 
 test('invalid host clarification rejects before path-list capture', () => {

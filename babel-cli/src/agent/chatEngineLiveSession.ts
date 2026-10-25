@@ -26,6 +26,7 @@ import {
   assertPathListSessionBinding,
   reconcileChatEngineResumePathListBinding,
 } from './liveSessionFilesystemPathListAdmission.js';
+import { augmentInstructionManifestWithHostPathListClarification } from './pathListHostDeclaredClarification.js';
 import { paritySettleInterruptedOnResume,checkpointParityEventLogStrictSync } from './chatEngineParityBridge.js';
 import {reviseTaskModeCompanion} from './taskModeRevision.js';
 import {advanceObjectiveMode} from './taskObjectiveLifecycle.js';
@@ -165,6 +166,12 @@ export function refreshEngineInstructionManifest(input:RefreshableAuthorityInput
         ...(resolved.chatStack ? { chatStack: resolved.chatStack } : {}),
       }
     : resolved;
+  if (authority.filesystemPathListAdmission) {
+    authority.instructionManifest = augmentInstructionManifestWithHostPathListClarification(
+      authority.instructionManifest,
+      authority.filesystemPathListAdmission.declaration,
+    )
+  }
   if(current&&current.taskContract.mode!==mode){
     const revised=reviseTaskModeCompanion(current.taskContract,mode,current.taskModeHistory??{schema_version:1,revisions:[current.taskContract]});
     if(input.options.resumeExisting===true||input.options.retainedHistory===true)hydrateRetainedModeSources(input);
