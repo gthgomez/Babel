@@ -960,7 +960,7 @@ export class ChatEngine {
           const pathAdmission = this.parity.liveAuthority?.filesystemPathListAdmission;
           if (!pathAdmission) return false;
           return hasScopedPathListGovernedMutationLineage({
-            events: this.parity.sessionEvents.events,
+            events: this.activeObjectiveScopedSessionEvents(),
             admission: pathAdmission,
           });
         },
@@ -3779,10 +3779,17 @@ export class ChatEngine {
     return this.currentCandidateRevisionHash();
   }
 
+  private activeObjectiveScopedSessionEvents(): SessionEventLog['events'] {
+    return activeObjectiveSessionLog(
+      this.parity.sessionEvents,
+      this.parity.liveAuthority?.taskObjectiveLifecycle,
+    ).events;
+  }
+
   private currentCandidateRevisionHash(): string | null {
     try {
       const raw = mutationPathsFromSessionEvents(
-        this.parity.sessionEvents.events,
+        this.activeObjectiveScopedSessionEvents(),
       );
       if (raw.length === 0) return null;
       // Session mutation batches may carry absolute or repo-relative paths;

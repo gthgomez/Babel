@@ -113,9 +113,12 @@ function resyncNativePathListVerifierTrust(authority: CompletionAuthority): void
 
 function clearNativePathListAuthorityState(authority: CompletionAuthority): void {
   stripNativePathListEvidenceNodes(authority.graph)
+  if (authority.pathListRequest) {
+    pathListVerificationBindings.delete(authority.pathListRequest)
+  }
   delete authority.pathListRequest
-      delete authority.pathListState
-    }
+  delete authority.pathListState
+}
 
 function resetCompletionAuthorityWorkspace(authority: CompletionAuthority): void {
   authority.graph = new EvidenceGraph()
@@ -226,6 +229,7 @@ export function createCriterionCompletionServiceV1(
         } else {
           authority.graph = new EvidenceGraph()
           delete authority.candidateSha
+          clearNativePathListAuthorityState(authority)
         }
         const published = publishCriterionEvidenceFromChatExecution({
           graph: authority.graph,
@@ -256,7 +260,12 @@ export function createCriterionCompletionServiceV1(
       if (!request) return { verified: false, errors: ['PATH_LIST_REQUEST_MISSING'] }
       const binding = pathListVerificationBindings.get(request)
       const authority = contexts.get(context)
-      if (!binding || binding.serviceContext !== context || !authority) {
+      if (
+        !binding ||
+        binding.serviceContext !== context ||
+        !authority ||
+        request !== authority.pathListRequest
+      ) {
         return { verified: false, errors: ['PATH_LIST_REQUEST_UNTRUSTED'] }
       }
       refreshNativePathListEvidenceOnAuthority(authority, context)
@@ -267,7 +276,9 @@ export function createCriterionCompletionServiceV1(
     },
     nativePathListProofCompliant(): boolean {
       const authority = contexts.get(context)
-      return authority?.pathListState?.verified === true
+      if (!authority) return false
+      refreshNativePathListEvidenceOnAuthority(authority, context)
+      return authority.pathListState?.verified === true
     },
   })
 }
@@ -279,6 +290,37 @@ function unknown(code: string, contract?: TaskContractV1): CompletionEvaluationV
       ? contract.acceptance.filter(item => item.required).map(item => item.id) : [],
     errors: [code],
   }
+}
+
+function unverified(code: string, contract?: TaskContractV1): CompletionEvaluationV1 {
+  const required = Array.isArray(contract?.acceptance)
+    ? contract.acceptance.filter(item => item.required).map(item => item.id)
+    : []
+  return {
+    status: 'UNVERIFIED',
+    verified: false,
+    satisfied_requirements: [],
+    missing_requirements: required,
+    errors: [code],
+  }
+}
+
+function resolveCriterionEvaluationCandidateSha(input: {
+  contract: TaskContractV1
+  repository: string
+  authority: CompletionAuthority
+}): string | null {
+  const bound =
+    input.authority.pathListState?.candidateSha ??
+    input.authority.candidateSha ??
+    null
+  if (bound && /^[0-9a-f]{64}$/i.test(bound)) return bound.toLowerCase()
+  if (contractUsesNativePathListCompletion(input.contract)) return null
+  return sha256Canonical({
+    repository: input.repository,
+    mode: 'criterion_evaluation_without_mutation_closure',
+    contract_hash: input.contract.contract_hash,
+  })
 }
 
 /** Resolve the owned context and delegate criterion truth to the existing V1 oracle. */
@@ -318,10 +360,13 @@ export function evaluateCriterionCompletionV1(
     if (contractUsesNativePathListCompletion(owner.contract)) {
       refreshNativePathListEvidenceOnAuthority(authority, request.context)
     }
-    const candidateSha =
-      authority.pathListState?.candidateSha ?? authority.candidateSha ?? null
-    if (!candidateSha || !/^[0-9a-f]{64}$/i.test(candidateSha)) {
-      return unknown('acceptance_candidate_revision_missing', owner.contract)
+    const candidateSha = resolveCriterionEvaluationCandidateSha({
+      contract: owner.contract,
+      repository: root,
+      authority,
+    })
+    if (!candidateSha) {
+      return unverified('acceptance_candidate_revision_missing', owner.contract)
     }
     return evaluateCompletionGateV1({
       contract: owner.contract, graph: authority.graph, repository: root,

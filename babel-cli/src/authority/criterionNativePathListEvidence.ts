@@ -160,7 +160,7 @@ export function runOwnedHostPathListVerification(input: {
   try {
     assertPathListSessionBinding({
       projectRoot: input.projectRoot,
-      task: input.admission.declaration.user_request,
+      task: input.contract.user_request,
       contract: input.contract,
       admission: input.admission,
     })

@@ -238,7 +238,15 @@ function assertAdmissionMatchesContractProvenance(
   contract: TaskContractV1,
 ): void {
   const expected = expectedAdmissionDigestFromContract(contract)
-  if (!expected) return
+  if (!expected) {
+    if (taskContractBindsPathListAdmission(contract)) {
+      throw new LiveSessionAuthorityError(
+        'PATH_LIST_ADMISSION_PROVENANCE_MISMATCH',
+        'Frozen contract binds path-list admission but provenance digest is missing',
+      )
+    }
+    return
+  }
   if (admission.admission_record_digest.toLowerCase() !== expected) {
     throw new LiveSessionAuthorityError(
       'PATH_LIST_ADMISSION_PROVENANCE_MISMATCH',

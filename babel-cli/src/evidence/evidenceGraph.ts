@@ -249,12 +249,13 @@ function certifyingEvidenceError(
   if (node.type === "verifier_receipt") {
     return undefined;
   }
-  if (
-    node.type !== "runtime_observation" &&
-    data["exit_code"] !== undefined &&
-    data["exit_code"] !== 0
-  )
-    return "certifying evidence has a non-zero exit_code";
+  if (node.type !== "runtime_observation") {
+    const admittedNativePathList =
+      node.type === "policy_result" && node.id.endsWith(":native-path-list");
+    if (!admittedNativePathList && data["exit_code"] !== 0) {
+      return "certifying evidence has a non-zero exit_code";
+    }
+  }
   if (node.type === "runtime_observation") {
     if (
       String(data["status"] ?? "").toLowerCase() !== "observed" ||
@@ -673,7 +674,8 @@ export function evaluateCompletionGateV1(input: {
           typeof node.data === "object" &&
           node.data !== null &&
           !Array.isArray(node.data) &&
-          (((node.data as Record<string, unknown>)["exit_code"] !== undefined &&
+          ((typeof (node.data as Record<string, unknown>)["exit_code"] ===
+              "number" &&
             (node.data as Record<string, unknown>)["exit_code"] !== 0) ||
             (node.type === "verifier_receipt" &&
               (node.data as Record<string, unknown>)["exitCode"] !==
