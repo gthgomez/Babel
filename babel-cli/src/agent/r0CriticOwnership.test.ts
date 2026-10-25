@@ -66,12 +66,17 @@ function createModifiedGitProject(): string {
 
 function usageMetadata() {
   return {
+    provider: 'openrouter',
     provider_model_id: 'deepseek-v4-flash',
+    latency_ms: 1,
     prompt_tokens: 90_000,
     completion_tokens: 12_000,
+    total_tokens: 102_000,
     prompt_cache_hit_tokens: 0,
     prompt_cache_miss_tokens: 90_000,
     estimated_cost_usd: 4.25,
+    cost_precision: 'exact' as const,
+    provider_reported_total_charge_usd: 4.25,
   }
 }
 
