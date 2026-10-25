@@ -152,13 +152,13 @@ function interpretTaskAcceptance(request: string, opts: InterpretOptions): TaskA
     for (const item of inferred) add(item.text, 'inferred', item.start, item.end)
     if (opts.admitActiveProseSpans && !incomplete && admissibleProse.length > 0) {
       const admitted = new Set(criteria.map(item => item.description))
-      const spans = admissibleProse.filter(span => !admitted.has(span.text))
-      if (spans.length > 0) {
-        const text = spans.map(span => span.text).join('\n')
-        if (!admitted.has(text)) add(text, 'inferred', spans[0]!.start, spans[spans.length - 1]!.end)
+      for (const span of admissibleProse) {
+        if (admitted.has(span.text)) continue
+        add(span.text, 'inferred', span.start, span.end)
+        admitted.add(span.text)
       }
     }
-    sortCriteriaBySourceSpan(criteria, sources)
+    if (opts.version === 2) sortCriteriaBySourceSpan(criteria, sources)
   }
   const needsUnresolved =
     incomplete || (opts.unresolvedWhenEmpty && !criteria.length)
@@ -231,13 +231,25 @@ export type AcceptanceMeaningVersionResolution =
   | { kind: 'version'; version: TaskAcceptanceMeaningVersion }
   | { kind: 'legacy_absent_ref'; version: 1 }
 
-function meaningVersionFlags(records: readonly TaskContractProvenanceRecord[]): { v1: boolean; v2: boolean } {
+const ACCEPTANCE_MEANING_NAMESPACE_PREFIX = 'task-acceptance-meaning:'
+
+function recordedMeaningVersionFlags(records: readonly TaskContractProvenanceRecord[]): { v1: boolean; v2: boolean } {
   let v1 = false
   let v2 = false
   for (const record of records) {
     if (record.kind !== 'derived_acceptance') continue
-    if (record.ref.startsWith(`${ACCEPTANCE_MEANING_REF_V2}:`)) v2 = true
-    else if (record.ref.startsWith(`${ACCEPTANCE_MEANING_REF_V1}:`)) v1 = true
+    const ref = record.ref
+    if (ref.startsWith(`${ACCEPTANCE_MEANING_REF_V2}:`)) {
+      v2 = true
+      continue
+    }
+    if (ref.startsWith(`${ACCEPTANCE_MEANING_REF_V1}:`)) {
+      v1 = true
+      continue
+    }
+    if (ref.startsWith(ACCEPTANCE_MEANING_NAMESPACE_PREFIX)) {
+      throw new Error('TASK_ACCEPTANCE_MEANING_VERSION_UNSUPPORTED: Malformed or unknown acceptance-meaning provenance ref')
+    }
   }
   return { v1, v2 }
 }
@@ -250,7 +262,7 @@ export function resolveAcceptanceMeaningVersion(
   records: readonly TaskContractProvenanceRecord[],
   contract?: TaskContractV1,
 ): AcceptanceMeaningVersionResolution {
-  const { v1, v2 } = meaningVersionFlags(records)
+  const { v1, v2 } = recordedMeaningVersionFlags(records)
   if (v1 && v2) {
     throw new Error('TASK_ACCEPTANCE_MEANING_VERSION_MIXED: Contract provenance records both v1 and v2 acceptance-meaning refs')
   }
@@ -280,5 +292,5 @@ export function isLegacyAcceptancePlaceholderContract(contract: TaskContractV1):
   }
   return sha256Canonical(contract.acceptance) === sha256Canonical([placeholder]) &&
     sha256Canonical(contract.acceptance_criteria) === sha256Canonical([description]) &&
-    !contract.provenance.records.some(record => isAcceptanceMeaningDerivedRef(record.ref))
+    !contract.provenance.records.some(record => record.ref.startsWith(ACCEPTANCE_MEANING_NAMESPACE_PREFIX))
 }

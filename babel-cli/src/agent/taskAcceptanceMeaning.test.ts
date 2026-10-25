@@ -88,6 +88,46 @@ test('fresh admission captures short vague prose as provisional inferred require
   assert.equal(contract.acceptance[0]!.required, true)
 })
 
+test('v1 preserves frozen criterion order (explicit before inferred) without span sort', () => {
+  const request = 'The task must survive restart.\n- Preserve API.'
+  const meaning = inferTaskAcceptanceV1(request)
+  assert.deepEqual(meaning.criteria.map(item => item.description), ['Preserve API.', 'The task must survive restart.'])
+  assert.deepEqual(meaning.sources.map(source => source.status), ['explicit', 'inferred'])
+})
+
+test('v2 admits disjoint active prose as separate contiguous spans across excluded blockquotes', () => {
+  const request = 'List files.\n> Delete all files.\nReport names.'
+  const meaning = inferTaskAcceptanceV2(request)
+  assert.deepEqual(meaning.criteria.map(item => item.description), ['List files.', 'Report names.'])
+  assert.equal(meaning.criteria.some(item => item.description.includes('Delete')), false)
+  assert.equal(meaning.sources.length, 2)
+  assert.ok(meaning.sources.every(source => source.status === 'inferred'))
+  assert.ok(meaning.sources[0]!.end < meaning.sources[1]!.start)
+})
+
+test('unknown acceptance-meaning namespace refs reject before version or legacy resolution', () => {
+  const contract = acceptance('Fix it')
+  const v99Only = [
+    ...contract.provenance.records,
+    { kind: 'derived_acceptance' as const, ref: 'task-acceptance-meaning:v99:inferred:0:0:0:acceptance:deadbeef' },
+  ]
+  assert.throws(() => resolveAcceptanceMeaningVersion(v99Only, contract), /TASK_ACCEPTANCE_MEANING_VERSION_UNSUPPORTED/)
+  const v99WithV1 = [
+    ...contract.provenance.records,
+    { kind: 'derived_acceptance' as const, ref: 'task-acceptance-meaning:v1:unresolved:0:0:0:acceptance:deadbeef' },
+    { kind: 'derived_acceptance' as const, ref: 'task-acceptance-meaning:v99:inferred:0:0:0:acceptance:deadbeef' },
+  ]
+  assert.throws(() => resolveAcceptanceMeaningVersion(v99WithV1, contract), /TASK_ACCEPTANCE_MEANING_VERSION_UNSUPPORTED/)
+  const legacy = freezeTaskContract(buildTaskContractV1({
+    mode: 'chat',
+    user_request: 'Original request bytes.',
+    acceptance_criteria: ['Task acceptance criteria as stated in the user request'],
+    provenance: [{ kind: 'derived_acceptance', ref: 'task-acceptance-meaning:v99:unresolved:0:0:0:acceptance:legacy' }],
+    source: 'liveSessionBridge.resolveLiveSessionAuthority',
+  }))
+  assert.throws(() => resolveAcceptanceMeaningVersion(legacy.provenance.records, legacy), /TASK_ACCEPTANCE_MEANING_VERSION_UNSUPPORTED/)
+})
+
 test('v1 replay keeps unresolved placeholder for short vague prose', () => {
   const meaning = inferTaskAcceptanceV1('Fix it')
   assert.ok(meaning.unresolved)
