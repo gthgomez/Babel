@@ -6,7 +6,9 @@ import test from 'node:test'
 import { randomUUID } from 'node:crypto'
 import { sha256Canonical } from '../acceptance/canonical.js'
 import {
+  INVENTORY_VERIFICATION_EVIDENCE_MODE,
   captureFilesystemSourceBaseline,
+  normalizeDeclarationRepoRelativePath,
   parseMarkdownBulletPaths,
   verifyFilesystemPathList,
 } from './filesystemPathListVerifier.js'
@@ -85,7 +87,9 @@ test('parseMarkdownBulletPaths rejects empty and malformed documents', () => {
   const limits = { max_document_bytes: 1000, max_entries: 10 }
   assert.equal(parseMarkdownBulletPaths('', limits).ok, false)
   assert.equal(parseMarkdownBulletPaths('- ../escape\n', limits).ok, false)
-  assert.equal(parseMarkdownBulletPaths('- valid/ok\n- \n', limits).ok, true)
+  assert.equal(parseMarkdownBulletPaths('- valid/ok\n- \n', limits).ok, false)
+  assert.equal(normalizeDeclarationRepoRelativePath('apps\\web'), 'apps/web')
+  assert.equal(normalizeDeclarationRepoRelativePath('\\apps\\web'), null)
 })
 
 test('valid complete inventory passes with arbitrary target layout', t => {
@@ -142,7 +146,7 @@ test('extra declared paths fail coverage', t => {
   assert.deepEqual(result.inventory_extra_paths, ['apps/web/phantom.mjs'])
 })
 
-test('inventory changes after baseline fail coverage', t => {
+test('inventory drift vs current tree fails coverage (baseline snapshot not compared)', t => {
   const root = mkdtempSync(join(tmpdir(), 'fs-path-list-inv-change-'))
   t.after(() => rmSync(root, { recursive: true, force: true }))
   const paths = seedTree(root)
@@ -152,7 +156,24 @@ test('inventory changes after baseline fail coverage', t => {
   writeFileSync(join(root, 'packages', 'api', 'new-module.mjs'), 'export {}\n', 'utf8')
   const result = verifyFilesystemPathList(root, decl, baseline)
   assert.equal(result.status, 'failed')
+  assert.equal(result.inventory_evidence_mode, INVENTORY_VERIFICATION_EVIDENCE_MODE)
   assert.ok(result.inventory_missing_paths.includes('packages/api/new-module.mjs'))
+})
+
+test('stale baseline inventory_snapshot does not fail when document matches current tree', t => {
+  const root = mkdtempSync(join(tmpdir(), 'fs-path-list-inv-stale-base-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const paths = seedTree(root)
+  const decl = declaration()
+  writeMap(root, decl.target_document, paths)
+  const baseline = captureFilesystemSourceBaseline(root, decl)
+  const staleBaseline = {
+    ...baseline,
+    inventory_snapshot: Object.freeze(['phantom/only-in-snapshot.mjs']),
+  }
+  const result = verifyFilesystemPathList(root, decl, staleBaseline)
+  assert.equal(result.status, 'passed')
+  assert.equal(result.inventory_evidence_mode, INVENTORY_VERIFICATION_EVIDENCE_MODE)
 })
 
 test('symlink escape outside project root is rejected', t => {
@@ -163,15 +184,17 @@ test('symlink escape outside project root is rejected', t => {
     rmSync(outside, { recursive: true, force: true })
   })
   seedTree(root)
+  const decl = declaration({ roots: ['apps'], preserved: [] })
+  writeMap(root, decl.target_document, ['apps/web/entry.mjs'])
+  const baseline = captureFilesystemSourceBaseline(root, decl)
   const escapeLink = join(root, 'apps', 'web', 'outside-link.mjs')
   writeFileSync(join(outside, 'secret.mjs'), 'export {}\n', 'utf8')
   symlinkSync(join(outside, 'secret.mjs'), escapeLink)
-  const decl = declaration({ roots: ['apps'] })
   writeMap(root, decl.target_document, ['apps/web/entry.mjs', 'apps/web/outside-link.mjs'])
-  const baseline = captureFilesystemSourceBaseline(root, decl)
   const result = verifyFilesystemPathList(root, decl, baseline)
   assert.equal(result.status, 'failed')
-  assert.ok(result.entries.some(entry => entry.resolve_status === 'escape'))
+  assert.equal(result.reason_code, 'inventory_scope_invalid')
+  assert.ok(result.inventory_scope_errors.some(err => err.includes('symlink_in_inventory_scope')))
 })
 
 test('credential-class declared paths are denied at parse and resolve', t => {
@@ -214,6 +237,52 @@ test('baseline captured from actual filesystem not host answer list', t => {
   assert.equal(baseline.preserved['docs/notes.md']?.kind, 'file')
   assert.match(baseline.preserved['docs/notes.md']?.content_sha256 ?? '', /^[0-9a-f]{64}$/)
   assert.equal(baseline.declaration_hash, declarationContentHash(decl))
+})
+
+test('missing inventory scope root fails closed', t => {
+  const root = mkdtempSync(join(tmpdir(), 'fs-path-list-scope-miss-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  seedTree(root)
+  const decl = declaration({ roots: ['apps', 'packages', 'missing-root'] })
+  assert.throws(() => captureFilesystemSourceBaseline(root, decl), (err: unknown) => {
+    return err instanceof Error && err.message.includes('missing_scope_root:missing-root')
+  })
+})
+
+test('target document over byte limit fails before full parse', t => {
+  const root = mkdtempSync(join(tmpdir(), 'fs-path-list-big-doc-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  seedTree(root)
+  const decl = declaration({ roots: ['apps'], preserved: [] })
+  const huge = '- apps/web/entry.mjs\n' + 'x'.repeat(decl.limits.max_document_bytes)
+  mkdirSync(join(root, 'meta'), { recursive: true })
+  writeFileSync(join(root, decl.target_document), huge, 'utf8')
+  const baseline = captureFilesystemSourceBaseline(root, decl)
+  const result = verifyFilesystemPathList(root, decl, baseline)
+  assert.equal(result.status, 'failed')
+  assert.equal(result.reason_code, 'document_too_large')
+})
+
+test('parse failure skips preserved check', t => {
+  const root = mkdtempSync(join(tmpdir(), 'fs-path-list-parse-fail-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  seedTree(root)
+  const decl = declaration({ preserved: ['docs/notes.md'] })
+  mkdirSync(join(root, 'meta'), { recursive: true })
+  writeFileSync(join(root, decl.target_document), '- ../escape\n', 'utf8')
+  const baseline = captureFilesystemSourceBaseline(root, decl)
+  const result = verifyFilesystemPathList(root, decl, baseline)
+  assert.equal(result.checks.preserved_inputs_unchanged.status, 'skip')
+  assert.equal(result.checks.preserved_inputs_unchanged.reason_code, 'not_evaluated')
+})
+
+test('directory symlink inside scope fails inventory listing', t => {
+  const root = mkdtempSync(join(tmpdir(), 'fs-path-list-dir-sym-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  seedTree(root)
+  symlinkSync(join(root, 'apps'), join(root, 'apps', 'self'))
+  const decl = declaration({ roots: ['apps'] })
+  assert.throws(() => captureFilesystemSourceBaseline(root, decl), /symlink_in_inventory_scope/)
 })
 
 test('stage-1 result is diagnostic only (kind label)', t => {
