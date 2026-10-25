@@ -36,8 +36,16 @@ import {
   bindIsolationPrerequisiteScope,
   isolationPrerequisiteRevisionKey,
 } from './capabilityRecoveryScope.js'
-import { areAllRequiredVerifiersSatisfied } from './completionGatePolicy.js'
+import { evaluateExecuteCompletionHonesty } from './completionGatePolicy.js'
+import { satisfiesVerifierRequirement } from '../services/verifierIdentity.js'
+import { prepareKernelVerifierInput } from './chatEngineVerifierAdapter.js'
+import { DIFF_CRITIC_SYSTEM_PROMPT, parseDiffCriticVerdict } from './diffCritic.js'
 import type { ProgressController } from './progressController.js'
+
+const SUBMISSION_START_HARNESS_FEEDBACK = 'Verification evidence at submission start:'
+const SYNTHETIC_OPENCODE_GO_API_KEY = 'synthetic-in-memory-opencode-go-test-credential-p2'
+const DIFF_CRITIC_SYSTEM_MARKER = 'reject-biased code-review critic'
+const ISOLATION_DENIED_BROKER_MARKER = '[CAPABILITY_DENIED:isolation_unavailable]'
 
 const REPO_ROOT = join(fileURLToPath(new URL('.', import.meta.url)), '..', '..', '..')
 const ROUTE_BACKEND_KEY = 'opencode-go/deepseek-v4.1-flash'
@@ -106,6 +114,7 @@ const MANAGED_ENV = [
   'BABEL_DRY_RUN_SOURCE',
   'BABEL_RUNS_DIR',
   'BABEL_OPENCODE_GO_HELPER',
+  'BABEL_OPENCODE_GO_API_KEY',
   'BABEL_OFFLINE',
   'BABEL_CHAT_MAX_COST',
 ] as const
@@ -130,7 +139,7 @@ function git(projectRoot: string, args: string[]): void {
   assert.equal(result.status, 0, result.stderr?.toString() ?? 'git failed')
 }
 
-function seedRepository(projectRoot: string, opts?: { failingTest?: boolean }): void {
+function seedRepository(projectRoot: string): void {
   mkdirSync(join(projectRoot, 'src'), { recursive: true })
   writeFileSync(join(projectRoot, 'src', 'task.ts'), 'export const answer = 0;\n', 'utf8')
   git(projectRoot, ['init', '-q', '--initial-branch=main'])
@@ -138,17 +147,21 @@ function seedRepository(projectRoot: string, opts?: { failingTest?: boolean }): 
   git(projectRoot, ['config', 'user.name', 'Fixture'])
   git(projectRoot, ['add', 'src/task.ts'])
   git(projectRoot, ['commit', '-qm', 'P2 prerequisite fixture'])
-  const testBody = opts?.failingTest
-    ? [
-      "import { readFileSync } from 'node:fs';",
-      "const src = readFileSync('src/task.ts', 'utf8');",
-      "if (!/answer = 42/.test(src)) { console.error('answer must be 42'); process.exit(1); }",
-      '',
-    ].join('\n')
-    : 'process.exit(0);\n'
+  const testBody = [
+    "import { readFileSync } from 'node:fs';",
+    "import test from 'node:test';",
+    "import assert from 'node:assert/strict';",
+    "test('task answer must be 42', () => {",
+    "  const src = readFileSync('src/task.ts', 'utf8');",
+    "  const match = /answer\\s*=\\s*(\\d+)/.exec(src);",
+    "  assert.ok(match);",
+    "  assert.equal(Number(match[1]), 42);",
+    "});",
+    '',
+  ].join('\n')
   writeFileSync(
     join(projectRoot, 'package.json'),
-    JSON.stringify({ private: true, scripts: { test: 'node fixture.test.mjs' } }),
+    JSON.stringify({ private: true, scripts: { test: 'node --test fixture.test.mjs' } }),
     'utf8',
   )
   writeFileSync(join(projectRoot, 'fixture.test.mjs'), testBody, 'utf8')
@@ -156,10 +169,9 @@ function seedRepository(projectRoot: string, opts?: { failingTest?: boolean }): 
   git(projectRoot, ['commit', '-qm', 'add required verifier script'])
 }
 
-function installSyntheticGoCredential(runtimeRoot: string): void {
-  const helper = join(runtimeRoot, 'auth-helper.cjs')
-  writeFileSync(helper, "process.stdout.write('synthetic-in-memory-test-credential')\n", 'utf8')
-  process.env['BABEL_OPENCODE_GO_HELPER'] = helper
+function applySyntheticGoApiKey(): void {
+  delete process.env['BABEL_OPENCODE_GO_HELPER']
+  process.env['BABEL_OPENCODE_GO_API_KEY'] = SYNTHETIC_OPENCODE_GO_API_KEY
 }
 
 function applySafeRepoIsolation(runsRoot: string): void {
@@ -172,7 +184,7 @@ function applySafeRepoIsolation(runsRoot: string): void {
   process.env['BABEL_DRY_RUN_SOURCE'] = 'session'
   process.env['BABEL_AUTONOMY_LEASE'] = SYNTHETIC_LEASE
   process.env['BABEL_RUNS_DIR'] = runsRoot
-  installSyntheticGoCredential(runsRoot)
+  applySyntheticGoApiKey()
   refreshDryRunState()
 }
 
@@ -184,7 +196,7 @@ function applyDevLocalRunnable(runsRoot: string): void {
   process.env['BABEL_DRY_RUN'] = '0'
   process.env['BABEL_DRY_RUN_SOURCE'] = 'session'
   process.env['BABEL_RUNS_DIR'] = runsRoot
-  installSyntheticGoCredential(runsRoot)
+  applySyntheticGoApiKey()
   refreshDryRunState()
 }
 
@@ -311,49 +323,91 @@ function makeTextCompletionSse(text: string): Response {
   })
 }
 
-function makeCriticAllowResponse(): Response {
+function makeCriticPassResponse(): Response {
+  const content = JSON.stringify({
+    verdict: 'pass',
+    confidence: 0.95,
+    reasons: ['fixture structural review'],
+  })
+  const parsed = parseDiffCriticVerdict(content, { model: ROUTE_MODEL_ID })
+  assert.equal(parsed.verdict, 'pass', 'critic fixture must match schema pass verdict')
+  assert.equal(DIFF_CRITIC_SYSTEM_PROMPT.includes(DIFF_CRITIC_SYSTEM_MARKER), true)
   return Response.json({
     model: ROUTE_MODEL_ID,
     choices: [{
-      message: {
-        content: JSON.stringify({ verdict: 'allow', confidence: 1, reasons: ['fixture allow'] }),
-      },
+      message: { content },
       finish_reason: 'stop',
     }],
     usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
   })
 }
 
+type OpenCodeGoWireBody = {
+  stream?: boolean
+  tools?: unknown[]
+  messages?: Array<{ role?: string; content?: string }>
+}
+
+function requestWireBlob(body: OpenCodeGoWireBody): string {
+  return JSON.stringify(body.messages ?? [])
+}
+
+function isMainLoopToolsRequest(body: OpenCodeGoWireBody): boolean {
+  return Array.isArray(body.tools) && body.tools.length > 0
+}
+
+function isDiffCriticRequest(body: OpenCodeGoWireBody): boolean {
+  if (Array.isArray(body.tools) && body.tools.length > 0) return false
+  const blob = requestWireBlob(body)
+  if (blob.includes(DIFF_CRITIC_SYSTEM_MARKER)) return true
+  return body.messages?.some(
+    message =>
+      message.role === 'system' &&
+      typeof message.content === 'string' &&
+      message.content.includes(DIFF_CRITIC_SYSTEM_MARKER),
+  ) ?? false
+}
+
+const DEFAULT_LATE_STREAMING_COMPLETION =
+  'Acknowledged. I will not claim verification without required authoritative shell evidence.'
+
 function installFetchHarness(
   mainScript: MainTurnSpec[],
-  opts?: { spillCompletionText?: string },
+  opts?: { lateStreamingCompletion?: string },
 ): {
-  counts: { mainLoop: number; auxiliary: number }
+  counts: { mainLoopTools: number; diffCritic: number }
+  signals: { receivedVerifiedCompleteProse: boolean }
   restore: () => void
 } {
   let mainIdx = 0
-  const counts = { mainLoop: 0, auxiliary: 0 }
+  const lateText = opts?.lateStreamingCompletion ?? DEFAULT_LATE_STREAMING_COMPLETION
+  const counts = { mainLoopTools: 0, diffCritic: 0 }
+  const signals = { receivedVerifiedCompleteProse: false }
   globalThis.fetch = (async (input, init) => {
     const url = String(input)
     if (url !== MAIN_LOOP_URL) {
       throw new Error(`unexpected network fetch url=${url}`)
     }
-    const body = JSON.parse(String(init?.body ?? '{}')) as { stream?: boolean }
-    if (body.stream !== true) {
-      counts.auxiliary += 1
-      return makeCriticAllowResponse()
+    const body = JSON.parse(String(init?.body ?? '{}')) as OpenCodeGoWireBody
+    if (isMainLoopToolsRequest(body)) {
+      counts.mainLoopTools += 1
+    } else if (isDiffCriticRequest(body)) {
+      counts.diffCritic += 1
+      return makeCriticPassResponse()
+    } else {
+      throw new Error(
+        `unexpected OpenCode Go wire shape (stream=${String(body.stream)} tools=${Array.isArray(body.tools) ? body.tools.length : 'none'})`,
+      )
     }
-    counts.mainLoop += 1
-    const turn = mainScript[mainIdx] ?? (
-      opts?.spillCompletionText
-        ? { kind: 'text' as const, text: opts.spillCompletionText }
-        : undefined
-    )
+    const turn =
+      mainIdx < mainScript.length
+        ? mainScript[mainIdx]
+        : { kind: 'text' as const, text: lateText }
     mainIdx += 1
-    if (!turn) {
-      throw new Error(`unexpected main-loop provider fetch (script exhausted at ${mainIdx})`)
+    if (turn.kind === 'text') {
+      if (/VERIFIED_COMPLETE/i.test(turn.text)) signals.receivedVerifiedCompleteProse = true
+      return makeTextCompletionSse(turn.text)
     }
-    if (turn.kind === 'text') return makeTextCompletionSse(turn.text)
     if (turn.toolCalls.length === 1) {
       const only = turn.toolCalls[0]!
       return makeToolCallSse(only.name, only.args, only.id)
@@ -362,16 +416,134 @@ function installFetchHarness(
   }) as typeof fetch
   return {
     counts,
+    signals,
     restore: () => {
       globalThis.fetch = originalFetch
     },
   }
 }
 
+function assertNoFixtureProviderFailure(events: ChatEvent[]): void {
+  const terminal = events.find(event => event.type === 'done' || event.type === 'failed')
+  assert.ok(terminal, 'expected terminal event')
+  if (terminal.type === 'failed') {
+    assert.notEqual(terminal.reason_code, 'provider_failure', terminal.error)
+    assert.notEqual(terminal.outcome, 'INFRA_FAILURE', terminal.error)
+  }
+  if (terminal.type === 'done') {
+    assert.notEqual(terminal.outcome, 'INFRA_FAILURE')
+    assert.notEqual(terminal.reason_code, 'provider_failure')
+  }
+}
+
+function assertDiffCriticReceiptWhenInvoked(
+  engine: ChatEngine,
+  diffCriticFetchCount: number,
+): void {
+  if (diffCriticFetchCount === 0) return
+  const receipt = (engine as unknown as { lastCriticReceipt: { verdict: string } | null }).lastCriticReceipt
+  assert.ok(receipt, 'diff critic auxiliary fetch must produce a critic receipt on the engine')
+  assert.ok(
+    receipt.verdict === 'pass' || receipt.verdict === 'reject' || receipt.verdict === 'skip',
+    `unexpected critic verdict ${receipt.verdict}`,
+  )
+}
+
 async function collectStream(stream: AsyncGenerator<ChatEvent, unknown, undefined>): Promise<ChatEvent[]> {
   const events: ChatEvent[] = []
   for await (const event of stream) events.push(event)
   return events
+}
+
+type PrerequisiteScopeSnapshot = ReturnType<typeof bindIsolationPrerequisiteScope>
+
+type PrerequisitePhaseSnapshots = Partial<
+  Record<'beforeDenial' | 'atDenial' | 'atSuppression' | 'beforeCompletion', PrerequisiteScopeSnapshot>
+>
+
+async function collectStreamWithPrerequisitePhases(
+  engine: ChatEngine,
+  stream: AsyncGenerator<ChatEvent, unknown, undefined>,
+  shellTarget: string,
+): Promise<{ events: ChatEvent[]; phases: PrerequisitePhaseSnapshots }> {
+  const events: ChatEvent[] = []
+  const phases: PrerequisitePhaseSnapshots = {
+    beforeDenial: bindIsolationPrerequisiteScope(engineHost(engine)),
+  }
+  for await (const event of stream) {
+    events.push(event)
+    const shells = shellLog(engine)
+    const evaluated = shells.filter(
+      entry => entry.target === shellTarget && entry.detail !== 'prerequisite_suppressed',
+    )
+    if (!phases.atDenial && evaluated.length >= 1) {
+      phases.atDenial = bindIsolationPrerequisiteScope(engineHost(engine))
+    }
+    if (
+      !phases.atSuppression &&
+      shells.some(entry => entry.target === shellTarget && entry.detail === 'prerequisite_suppressed')
+    ) {
+      phases.atSuppression = bindIsolationPrerequisiteScope(engineHost(engine))
+    }
+    if (!phases.beforeCompletion && (event.type === 'done' || event.type === 'failed')) {
+      phases.beforeCompletion = bindIsolationPrerequisiteScope(engineHost(engine))
+    }
+  }
+  return { events, phases }
+}
+
+function assertStablePrerequisiteScope(phases: PrerequisitePhaseSnapshots): PrerequisiteScopeSnapshot {
+  const keys = ['beforeDenial', 'atDenial', 'atSuppression', 'beforeCompletion'] as const
+  for (const key of keys) {
+    assert.ok(phases[key], `missing prerequisite scope snapshot at phase ${key}`)
+  }
+  const baseline = phases.atDenial!
+  for (const key of ['atSuppression', 'beforeCompletion'] as const) {
+    const snap = phases[key]!
+    assert.equal(snap.prerequisiteKey, baseline.prerequisiteKey)
+    assert.equal(snap.environmentIdentity, baseline.environmentIdentity)
+    assert.equal(snap.revisionKey, baseline.revisionKey)
+  }
+  assert.equal(phases.beforeDenial!.revisionKey, baseline.revisionKey)
+  assert.equal(phases.beforeDenial!.environmentIdentity, baseline.environmentIdentity)
+  return baseline
+}
+
+function canonicalVerifierInput(engine: ChatEngine) {
+  const host = engine as unknown as {
+    lastVerifierReceipt: ReturnType<typeof prepareKernelVerifierInput>['lastVerifierReceipt']
+    executedVerifierLedger: ReturnType<typeof prepareKernelVerifierInput>['executedVerifierLedger']
+    getResolvedRequiredVerifiers: () => string[]
+  }
+  return {
+    ...prepareKernelVerifierInput(host.lastVerifierReceipt, host.executedVerifierLedger ?? []),
+    requiredVerifierCommands: host.getResolvedRequiredVerifiers(),
+  }
+}
+
+function assertRequiredVerifierUnsatisfiedViaCanonicalLedger(engine: ChatEngine): void {
+  const input = canonicalVerifierInput(engine)
+  const honesty = evaluateExecuteCompletionHonesty({
+    hasWrite: true,
+    policy: 'strict',
+    lastVerifierReceipt: input.lastVerifierReceipt,
+    executedVerifierLedger: input.executedVerifierLedger,
+    verifierEvidenceErrors: input.verifierEvidenceErrors,
+    requiredVerifierCommands: input.requiredVerifierCommands,
+    toolCallLog: [],
+  })
+  assert.equal(honesty.allow, false, `required verifier must remain unsatisfied (reason=${honesty.reason})`)
+}
+
+function controllerGateFeedback(
+  host: ReturnType<typeof engineHost>,
+): Array<{ role: string; content: string; name?: string; provenance?: string }> {
+  return host.conversation.filter(
+    message =>
+      message.name === 'harness_feedback' &&
+      message.provenance === 'controller' &&
+      !message.content.startsWith(SUBMISSION_START_HARNESS_FEEDBACK),
+  )
 }
 
 type ShellLogEntry = {
@@ -404,27 +576,32 @@ function engineHost(engine: ChatEngine) {
     }
     lastVerifierReceipt: { exit_code?: number; stale?: boolean } | null
     gateStrikes: number
-    conversation: Array<{ role: string; content: string; name?: string }>
+    conversation: Array<{ role: string; content: string; name?: string; provenance?: string }>
+    getResolvedRequiredVerifiers: () => string[]
   }
 }
 
-function authoritativeExecutedCommands(log: ShellLogEntry[]): string[] {
-  return log
-    .filter(entry => entry.detail !== 'prerequisite_suppressed' && entry.error !== 'blocked')
-    .map(entry => (entry.target ?? '').trim())
-    .filter(Boolean)
-}
-
-function terminalSnapshot(events: ChatEvent[]): {
+function terminalAuthority(events: ChatEvent[]): {
   type: 'done' | 'failed'
   outcome: TerminalOutcome | undefined
+  reason_code: string | undefined
+  cause_class: string | null | undefined
+  status: string | undefined
+  error: string | undefined
 } {
   const terminals = events.filter(event => event.type === 'done' || event.type === 'failed')
   assert.equal(terminals.length, 1, `expected one terminal, saw ${terminals.map(e => e.type).join(',')}`)
   const terminal = terminals[0]!
   assert.ok(terminal.type === 'done' || terminal.type === 'failed')
-  const outcome = terminal.type === 'done' ? terminal.outcome : terminal.outcome
-  return { type: terminal.type, outcome }
+  const outcome = terminal.outcome
+  return {
+    type: terminal.type,
+    outcome,
+    reason_code: terminal.reason_code,
+    cause_class: terminal.cause_class,
+    status: terminal.status,
+    error: terminal.type === 'failed' ? terminal.error : undefined,
+  }
 }
 
 function createProductionEngine(input: {
@@ -440,7 +617,6 @@ function createProductionEngine(input: {
     runId: input.runId,
     operation: 'CHANGE',
     model: ROUTE_BACKEND_KEY,
-    maxCostUsd: 2,
     requiredVerifierCommands: input.requiredVerifierCommands,
   })
 }
@@ -479,7 +655,10 @@ test('P2 RED: unchanged prerequisite must not schedule extra main-loop fetch aft
       kind: 'text',
       text: 'VERIFIED_COMPLETE: npm test passed and the required verifier succeeded.',
     },
-  ])
+  ], {
+    lateStreamingCompletion:
+      'Understood. I cannot claim completion without the required npm test verifier.',
+  })
   t.after(() => fetchHarness.restore())
 
   const engine = createProductionEngine({
@@ -489,9 +668,14 @@ test('P2 RED: unchanged prerequisite must not schedule extra main-loop fetch aft
     requiredVerifierCommands: [REQUIRED_VERIFIER_CMD],
   })
 
-  const events = await collectStream(engine.submitMessageStream(
-    'Fix src/task.ts and run the required npm test verifier. No alternate verifier exists.',
-  ))
+  const { events, phases } = await collectStreamWithPrerequisitePhases(
+    engine,
+    engine.submitMessageStream(
+      'Fix src/task.ts and run the required npm test verifier. No alternate verifier exists.',
+    ),
+    NPM_TEST_SHELL,
+  )
+  const scope = assertStablePrerequisiteScope(phases)
 
   const shells = shellLog(engine)
   const evaluated = shells.filter(entry => entry.detail !== 'prerequisite_suppressed')
@@ -501,15 +685,14 @@ test('P2 RED: unchanged prerequisite must not schedule extra main-loop fetch aft
   assert.equal(suppressed.length, 1)
   assert.equal(evaluated[0]?.target, NPM_TEST_SHELL)
   assert.equal(suppressed[0]?.target, NPM_TEST_SHELL)
-  assert.match(
-    `${evaluated[0]?.stderr ?? ''} ${evaluated[0]?.error ?? ''} ${evaluated[0]?.detail ?? ''}`,
-    /CAPABILITY_DENIED:isolation_unavailable|isolation_unavailable/,
-  )
+  assert.equal(evaluated[0]?.error, 'blocked', 'first governed denial must be broker-blocked')
+  const denialMarker = `${evaluated[0]?.stderr ?? ''} ${evaluated[0]?.detail ?? ''}`
+  assert.ok(denialMarker.includes(ISOLATION_DENIED_BROKER_MARKER), 'first denial must carry exact broker marker')
 
   const host = engineHost(engine)
-  const scope = bindIsolationPrerequisiteScope(host)
   const revisionAtEnd = isolationPrerequisiteRevisionKey(host.isolationBrokerFlags())
   assert.equal(scope.revisionKey, revisionAtEnd)
+  assert.equal(scope.prerequisiteKey, 'isolation_unavailable:shell')
   assert.equal(host.progressController.hasConsumedPrerequisiteDenialProbe(scope), true)
 
   const edit = (engine as unknown as { toolCallLog: ShellLogEntry[] }).toolCallLog
@@ -518,58 +701,64 @@ test('P2 RED: unchanged prerequisite must not schedule extra main-loop fetch aft
   assert.equal(edit.every(entry => entry.exit_code === 0), true)
   assert.match(readFileSync(join(projectRoot, 'src', 'task.ts'), 'utf8'), /answer = 42/)
 
-  const executed = authoritativeExecutedCommands(shells)
+  assertRequiredVerifierUnsatisfiedViaCanonicalLedger(engine)
+
   assert.equal(
-    areAllRequiredVerifiersSatisfied([REQUIRED_VERIFIER_CMD], executed),
-    false,
-    'required npm test must remain unsatisfied',
+    fetchHarness.signals.receivedVerifiedCompleteProse,
+    true,
+    'provider must deliver the dishonest completion attempt before gate rejection',
   )
-  const receipt = host.lastVerifierReceipt
-  assert.ok(!receipt || receipt.exit_code !== 0 || receipt.stale === true, 'no satisfying authoritative receipt')
-
-  const gateStrikes = (engine as unknown as { gateStrikes: number }).gateStrikes
-  const policyEvents = (engine as unknown as {
-    policyEventLog: { toJSON: () => Array<{ kind: string; detail: string }> }
-  }).policyEventLog.toJSON()
-  const dishonestProse = host.conversation.some(
-    message => message.role === 'assistant' && /VERIFIED_COMPLETE/i.test(message.content),
+  assertNoFixtureProviderFailure(events)
+  assertDiffCriticReceiptWhenInvoked(engine, fetchHarness.counts.diffCritic)
+  const gateFeedback = controllerGateFeedback(host)
+  assert.ok(gateFeedback.length >= 1, 'verifier-related gate rejection must surface controller harness feedback')
+  assert.match(
+    gateFeedback.map(message => message.content).join('\n'),
+    /verif|authoritative test|before completing|gate|completion/i,
+    'controller gate feedback must cite verifier or completion-gate evidence',
   )
-  assert.equal(dishonestProse, true, 'dishonest completion prose must be admitted to the thread')
-  const gateRejectionEvidence =
-    gateStrikes >= 1 ||
-    host.conversation.some(
-      message =>
-        message.name === 'harness_feedback' ||
-        (message.role === 'user' && /verifier|before completing|gate/i.test(message.content)),
-    ) ||
-    policyEvents.some(event => /verifier|gate/i.test(event.detail))
-  assert.ok(gateRejectionEvidence, 'verifier-related gate rejection must be recorded')
 
-  const terminal = terminalSnapshot(events)
+  const terminal = terminalAuthority(events)
   assert.notEqual(terminal.outcome, 'VERIFIED_COMPLETE')
-  const allowed: TerminalOutcome[] = [
+  const naturalOutcomes: TerminalOutcome[] = [
     'UNVERIFIED_PATCH',
     'NEEDS_HUMAN_DECISION',
     'BLOCKED_POLICY',
     'AGENT_FAILURE',
     'BUDGET_EXHAUSTED',
-    'INFRA_FAILURE',
     'BLOCKED_EXTERNAL',
   ]
-  assert.ok(terminal.outcome && allowed.includes(terminal.outcome), `nonverified terminal (got ${terminal.outcome})`)
+  assert.ok(
+    terminal.outcome && naturalOutcomes.includes(terminal.outcome),
+    `natural production terminal (got outcome=${terminal.outcome} reason=${terminal.reason_code} cause=${terminal.cause_class})`,
+  )
+  assert.notEqual(terminal.outcome, 'INFRA_FAILURE', 'must not terminate via transport script exhaustion')
+  assert.notEqual(terminal.reason_code, 'provider_failure', 'must not classify mock exhaustion as provider_failure')
 
   const redBundle = {
-    mainLoopFetchCount: fetchHarness.counts.mainLoop,
-    auxiliaryFetchCount: fetchHarness.counts.auxiliary,
+    mainLoopToolsFetchCount: fetchHarness.counts.mainLoopTools,
+    diffCriticFetchCount: fetchHarness.counts.diffCritic,
+    receivedVerifiedCompleteProse: fetchHarness.signals.receivedVerifiedCompleteProse,
     terminalType: terminal.type,
     terminalOutcome: terminal.outcome,
+    terminalReasonCode: terminal.reason_code,
+    terminalCauseClass: terminal.cause_class,
+    terminalStatus: terminal.status,
+    prerequisiteRevisionKey: scope.revisionKey,
+    prerequisiteScopePhases: {
+      beforeDenial: phases.beforeDenial,
+      atDenial: phases.atDenial,
+      atSuppression: phases.atSuppression,
+      beforeCompletion: phases.beforeCompletion,
+    },
+    taskOwnerId: host.taskAllowance?.taskOwnerId,
     routeBackendKey: ROUTE_BACKEND_KEY,
     routeModelId: ROUTE_MODEL_ID,
     endpoint: MAIN_LOOP_URL,
   }
 
   assert.equal(
-    redBundle.mainLoopFetchCount,
+    redBundle.mainLoopToolsFetchCount,
     3,
     `unnecessary main-loop provider recovery fetch (bundle=${JSON.stringify(redBundle)})`,
   )
@@ -591,21 +780,19 @@ test('P2 control: same required verifier runnable on dev_local with host fallbac
   const fetchHarness = installFetchHarness([
     {
       kind: 'tools',
-      toolCalls: [
-        {
-          id: 'edit-task',
-          name: 'str_replace',
-          args: {
-            file_path: 'src/task.ts',
-            old_str: 'export const answer = 0;',
-            new_str: 'export const answer = 42;',
-          },
+      toolCalls: [{
+        id: 'edit-task',
+        name: 'str_replace',
+        args: {
+          file_path: 'src/task.ts',
+          old_str: 'export const answer = 0;',
+          new_str: 'export const answer = 42;',
         },
-        { id: 'ver-ok', name: 'run_command', args: { command: NPM_TEST_SHELL } },
-      ],
+      }],
     },
+    { kind: 'tools', toolCalls: [{ id: 'ver-ok', name: 'run_command', args: { command: NPM_TEST_SHELL } }] },
     { kind: 'text', text: 'Updated and verified with npm test.' },
-  ], { spillCompletionText: 'Updated and verified with npm test.' })
+  ], { lateStreamingCompletion: 'Updated and verified with npm test.' })
   t.after(() => fetchHarness.restore())
 
   const engine = createProductionEngine({
@@ -615,11 +802,38 @@ test('P2 control: same required verifier runnable on dev_local with host fallbac
     requiredVerifierCommands: [REQUIRED_VERIFIER_CMD],
   })
 
-  await collectStream(engine.submitMessageStream('Fix src/task.ts and run npm test.'))
-  const shells = shellLog(engine)
-  assert.ok(shells.some(entry => entry.detail !== 'prerequisite_suppressed' && entry.target === NPM_TEST_SHELL && entry.exit_code === 0))
-  assert.equal(shells.some(entry => entry.detail === 'prerequisite_suppressed'), false)
-  assert.ok(fetchHarness.counts.mainLoop >= 1)
+  const events = await collectStream(engine.submitMessageStream('Fix src/task.ts and run npm test.'))
+  assertNoFixtureProviderFailure(events)
+  assertDiffCriticReceiptWhenInvoked(engine, fetchHarness.counts.diffCritic)
+  const verifierInput = canonicalVerifierInput(engine)
+  const npmLedger = (verifierInput.executedVerifierLedger ?? []).filter(entry =>
+    satisfiesVerifierRequirement(REQUIRED_VERIFIER_CMD, entry.command ?? ''),
+  )
+  const greenReceipt =
+    npmLedger.findLast(entry => entry.exit_code === 0) ??
+    (verifierInput.lastVerifierReceipt &&
+      verifierInput.lastVerifierReceipt.exit_code === 0 &&
+      satisfiesVerifierRequirement(REQUIRED_VERIFIER_CMD, verifierInput.lastVerifierReceipt.command ?? '')
+      ? verifierInput.lastVerifierReceipt
+      : undefined)
+  assert.ok(greenReceipt, 'runnable control requires canonical green required-verifier receipt')
+  const honesty = evaluateExecuteCompletionHonesty({
+    hasWrite: true,
+    policy: 'strict',
+    lastVerifierReceipt: greenReceipt,
+    executedVerifierLedger: verifierInput.executedVerifierLedger,
+    verifierEvidenceErrors: verifierInput.verifierEvidenceErrors,
+    requiredVerifierCommands: verifierInput.requiredVerifierCommands,
+    toolCallLog: [],
+  })
+  assert.equal(honesty.allow, true, `canonical verifier must satisfy completion honesty (reason=${honesty.reason})`)
+  const terminal = terminalAuthority(events)
+  const runnableOutcomes: TerminalOutcome[] = ['VERIFIED_COMPLETE', 'UNVERIFIED_PATCH', 'NO_CHANGE_REQUIRED']
+  assert.ok(
+    terminal.outcome && runnableOutcomes.includes(terminal.outcome),
+    `supported terminal with satisfying verifier receipt (got ${terminal.outcome})`,
+  )
+  assert.ok(fetchHarness.counts.mainLoopTools >= 1)
 })
 
 test('P2 control: same verifier fails then repair then passes', async t => {
@@ -633,14 +847,29 @@ test('P2 control: same verifier fails then repair then passes', async t => {
   })
 
   applyDevLocalRunnable(runsRoot)
-  seedRepository(projectRoot, { failingTest: true })
-  assert.notEqual(
-    spawnSync('npm', ['test'], { cwd: projectRoot, encoding: 'utf-8', shell: true, windowsHide: true }).status,
-    0,
-    'fixture npm test must fail before repair',
-  )
+  seedRepository(projectRoot)
 
-  const fetchHarness = installFetchHarness([
+  const runId = `p2-repair-${randomUUID()}`
+  const engine = createProductionEngine({
+    projectRoot,
+    runId,
+    task: 'Fix src/task.ts until npm test passes.',
+    requiredVerifierCommands: [REQUIRED_VERIFIER_CMD],
+  })
+
+  const redHarness = installFetchHarness([
+    { kind: 'tools', toolCalls: [{ id: 'ver-red', name: 'run_command', args: { command: NPM_TEST_SHELL } }] },
+    { kind: 'text', text: 'npm test failed; repair required.' },
+  ], { lateStreamingCompletion: 'npm test failed; repair required.' })
+  await collectStream(engine.submitMessageStream('Run npm test to establish the failing receipt.'))
+  redHarness.restore()
+
+  const shellsAfterRed = shellLog(engine).filter(
+    entry => entry.target === NPM_TEST_SHELL && entry.detail !== 'prerequisite_suppressed' && entry.error !== 'blocked',
+  )
+  assert.ok(shellsAfterRed.some(entry => entry.exit_code !== 0), 'engine must observe failing npm test receipt before repair')
+
+  const greenHarness = installFetchHarness([
     {
       kind: 'tools',
       toolCalls: [
@@ -653,23 +882,48 @@ test('P2 control: same verifier fails then repair then passes', async t => {
             new_str: 'export const answer = 42;',
           },
         },
-        { id: 'ver-pass', name: 'run_command', args: { command: NPM_TEST_SHELL } },
+        { id: 'ver-green', name: 'run_command', args: { command: NPM_TEST_SHELL } },
       ],
     },
     { kind: 'text', text: 'Tests pass after repair.' },
-  ], { spillCompletionText: 'Tests pass after repair.' })
-  t.after(() => fetchHarness.restore())
+  ], { lateStreamingCompletion: 'Tests pass after repair.' })
+  t.after(() => greenHarness.restore())
 
-  const engine = createProductionEngine({
-    projectRoot,
-    runId: `p2-repair-${randomUUID()}`,
-    task: 'Fix src/task.ts until npm test passes.',
-    requiredVerifierCommands: [REQUIRED_VERIFIER_CMD],
-  })
-
-  await collectStream(engine.submitMessageStream('Fix src/task.ts until npm test passes.'))
-  const shells = shellLog(engine).filter(entry => entry.target === NPM_TEST_SHELL && entry.detail !== 'prerequisite_suppressed')
+  await collectStream(engine.submitMessageStream('Fix src/task.ts and rerun npm test.'))
+  assert.equal(engineHost(engine).engineRunId, runId, 'repair continue must preserve engine run identity')
+  const shells = shellLog(engine).filter(
+    entry =>
+      entry.target === NPM_TEST_SHELL &&
+      entry.detail !== 'prerequisite_suppressed' &&
+      entry.error !== 'blocked',
+  )
   assert.ok(shells.some(entry => entry.exit_code === 0), 'governed npm test must pass after repair')
+  const verifierInput = canonicalVerifierInput(engine)
+  const npmLedger = (verifierInput.executedVerifierLedger ?? []).filter(entry =>
+    satisfiesVerifierRequirement(REQUIRED_VERIFIER_CMD, entry.command ?? ''),
+  )
+  assert.ok(npmLedger.length >= 1, 'canonical ledger must record npm test verifier attempts')
+  assert.ok(
+    npmLedger.some(entry => entry.exit_code !== 0) || shells.some(entry => entry.exit_code !== 0),
+    'canonical or shell evidence must retain red npm test receipt before repair',
+  )
+  const greenReceipt = npmLedger.findLast(entry => entry.exit_code === 0)
+  assert.ok(
+    greenReceipt || shells.some(entry => entry.exit_code === 0),
+    'repair must end with green npm test (ledger or governed shell)',
+  )
+  if (greenReceipt) {
+    const honesty = evaluateExecuteCompletionHonesty({
+      hasWrite: true,
+      policy: 'strict',
+      lastVerifierReceipt: greenReceipt,
+      executedVerifierLedger: verifierInput.executedVerifierLedger,
+      verifierEvidenceErrors: verifierInput.verifierEvidenceErrors,
+      requiredVerifierCommands: verifierInput.requiredVerifierCommands,
+      toolCallLog: [],
+    })
+    assert.equal(honesty.allow, true, `repair control expects authoritative green verifier (reason=${honesty.reason})`)
+  }
   assert.match(readFileSync(join(projectRoot, 'src', 'task.ts'), 'utf8'), /answer = 42/)
 })
 
@@ -686,29 +940,52 @@ test('P2 control: prerequisite revision re-admits shell after host fallback chan
   applySafeRepoIsolation(runsRoot)
   seedRepository(projectRoot)
 
-  const blockedHarness = installFetchHarness([
-    { kind: 'tools', toolCalls: [{ id: 'ver-blocked', name: 'run_command', args: { command: NPM_TEST_SHELL } }] },
-    { kind: 'text', text: 'Shell blocked.' },
-  ], { spillCompletionText: 'Shell blocked.' })
+  const runId = `p2-rev-${randomUUID()}`
   const engine = createProductionEngine({
     projectRoot,
-    runId: `p2-rev-${randomUUID()}`,
+    runId,
     task: 'Run npm test.',
     requiredVerifierCommands: [REQUIRED_VERIFIER_CMD],
   })
+  const blockedHarness = installFetchHarness([
+    { kind: 'tools', toolCalls: [{ id: 'ver-blocked', name: 'run_command', args: { command: NPM_TEST_SHELL } }] },
+    { kind: 'text', text: 'Shell blocked.' },
+  ], { lateStreamingCompletion: 'Shell blocked.' })
   await collectStream(engine.submitMessageStream('Run npm test once.'))
   blockedHarness.restore()
 
+  const scopeAfterFirstSubmit = bindIsolationPrerequisiteScope(engineHost(engine))
   const blockedShells = shellLog(engine).filter(entry => entry.target === NPM_TEST_SHELL)
   assert.equal(blockedShells.filter(entry => entry.detail !== 'prerequisite_suppressed').length, 1)
+  assert.equal(scopeAfterFirstSubmit.revisionKey, '1:0:0')
 
   process.env['BABEL_ALLOW_HOST_FALLBACK'] = '1'
   refreshDryRunState()
 
+  const hostAfterBoundary = engineHost(engine)
+  assert.equal(hostAfterBoundary.engineRunId, runId, 'continue must preserve engine run identity')
+  const scopeAfterBoundary = bindIsolationPrerequisiteScope(hostAfterBoundary)
+  assert.notEqual(scopeAfterBoundary.revisionKey, scopeAfterFirstSubmit.revisionKey, 'host fallback change must revise prerequisite')
+  assert.equal(scopeAfterBoundary.environmentIdentity, scopeAfterFirstSubmit.environmentIdentity)
+
   const revisedHarness = installFetchHarness([
-    { kind: 'tools', toolCalls: [{ id: 'ver-open', name: 'run_command', args: { command: NPM_TEST_SHELL } }] },
+    {
+      kind: 'tools',
+      toolCalls: [
+        {
+          id: 'edit-task',
+          name: 'str_replace',
+          args: {
+            file_path: 'src/task.ts',
+            old_str: 'export const answer = 0;',
+            new_str: 'export const answer = 42;',
+          },
+        },
+        { id: 'ver-open', name: 'run_command', args: { command: NPM_TEST_SHELL } },
+      ],
+    },
     { kind: 'text', text: 'npm test ran after revision.' },
-  ], { spillCompletionText: 'npm test ran after revision.' })
+  ], { lateStreamingCompletion: 'npm test ran after revision.' })
   t.after(() => revisedHarness.restore())
 
   await collectStream(engine.submitMessageStream('Run npm test again after isolation revision.'))
@@ -744,8 +1021,11 @@ test('P2 control: unrelated shell probe consumption does not satisfy required ve
         },
       }],
     },
+    { kind: 'tools', toolCalls: [{ id: 'ver-2', name: 'run_command', args: { command: NPM_TEST_SHELL } }] },
     { kind: 'text', text: 'Done without verifier authority.' },
-  ])
+  ], {
+    lateStreamingCompletion: 'I still cannot claim verification without npm test.',
+  })
   t.after(() => fetchHarness.restore())
 
   const engine = createProductionEngine({
@@ -766,12 +1046,31 @@ test('P2 control: unrelated shell probe consumption does not satisfy required ve
     `${unrelated[0]?.stderr ?? ''} ${unrelated[0]?.error ?? ''}`,
     /CAPABILITY_DENIED:isolation_unavailable|isolation_unavailable/,
   )
-  assert.equal(
-    areAllRequiredVerifiersSatisfied([REQUIRED_VERIFIER_CMD], authoritativeExecutedCommands(shells)),
-    false,
+  const unrelatedEvaluated = unrelated.filter(entry => entry.detail !== 'prerequisite_suppressed')
+  assert.equal(unrelatedEvaluated.length, 1, 'unrelated probe must receive one governed denial')
+  const requiredShells = shells.filter(entry => entry.target === NPM_TEST_SHELL)
+  assert.ok(requiredShells.length >= 1, 'required npm test must still be attempted after unrelated probe consumption')
+  assert.ok(
+    requiredShells.every(entry => entry.detail === 'prerequisite_suppressed'),
+    'required npm test lacks a fresh governed denial after unrelated probe consumed the prerequisite budget',
   )
-  const terminal = terminalSnapshot(events)
+  assert.ok(fetchHarness.counts.mainLoopTools >= 4, 'recovery must continue through edit and completion attempt')
+  assertRequiredVerifierUnsatisfiedViaCanonicalLedger(engine)
+  assert.ok(controllerGateFeedback(engineHost(engine)).length >= 1, 'dishonest completion must produce controller gate feedback')
+  const terminal = terminalAuthority(events)
   assert.notEqual(terminal.outcome, 'VERIFIED_COMPLETE')
+  const naturalOutcomes: TerminalOutcome[] = [
+    'UNVERIFIED_PATCH',
+    'NEEDS_HUMAN_DECISION',
+    'BLOCKED_POLICY',
+    'AGENT_FAILURE',
+    'BUDGET_EXHAUSTED',
+    'BLOCKED_EXTERNAL',
+  ]
+  assert.ok(
+    terminal.outcome && naturalOutcomes.includes(terminal.outcome),
+    `natural terminal after continued recovery (got ${terminal.outcome})`,
+  )
 })
 
 test('P2 conservative fallback: no explicit required verifier (not same-obligation native-alternative proof)', async t => {
@@ -801,7 +1100,7 @@ test('P2 conservative fallback: no explicit required verifier (not same-obligati
       }],
     },
     { kind: 'text', text: 'File updated without shell verifier.' },
-  ], { spillCompletionText: 'File updated without shell verifier.' })
+  ], { lateStreamingCompletion: 'File updated without shell verifier.' })
   t.after(() => fetchHarness.restore())
 
   const engine = createProductionEngine({
@@ -811,7 +1110,7 @@ test('P2 conservative fallback: no explicit required verifier (not same-obligati
   })
 
   const events = await collectStream(engine.submitMessageStream('Set answer to 42 without running tests.'))
-  const terminal = terminalSnapshot(events)
+  const terminal = terminalAuthority(events)
   assert.notEqual(terminal.outcome, 'VERIFIED_COMPLETE')
   assert.ok(
     terminal.outcome === 'UNVERIFIED_PATCH' ||
