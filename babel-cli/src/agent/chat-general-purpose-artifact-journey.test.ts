@@ -270,7 +270,7 @@ function assertMutationsStayInWorkspace(
 }
 
 test('H4: path containment helper rejects parent escape (win32 paths)', () => {
-  const root = 'C:\\workspace\\artifact'
+  const root = 'C:\\fixture\\artifact'
   assert.equal(isPathContainedInRootWin32(root, 'deliverables\\report.html'), true)
   assert.equal(isPathContainedInRootWin32(root, 'C:\\outside\\escaped.html'), false)
   assert.equal(isPathContainedInRootWin32(root, '..\\outside\\escaped.html'), false)
