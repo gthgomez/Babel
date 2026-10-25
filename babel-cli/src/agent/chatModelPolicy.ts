@@ -70,6 +70,9 @@ export function resolveChatModelPolicy(options: ChatModelPolicyOptions): {
   const requestedBackendEntry = requestedBackendKey
     ? configuredModels[requestedBackendKey]
     : undefined;
+  if (offline && requestedBackendEntry?.provider === 'command-code') {
+    throw new Error('Command Code is a remote API route and cannot be selected in offline mode.');
+  }
   const assertSelectedProvider = (provider: string): void => {
     if (desktopProvider && provider !== desktopProvider) {
       throw new Error('The requested model does not belong to the selected provider. Choose its provider in Desktop Settings before running this profile.');

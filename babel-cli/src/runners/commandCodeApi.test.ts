@@ -121,6 +121,33 @@ if (!isSyntheticProviderFixtureReady()) {
     assert.equal(resolveChatModelPolicy({}).policy.provider, 'openrouter')
   })
 
+  test('offline selection rejects the remote Command Code API route', () => {
+    const previous = process.env['BABEL_OFFLINE']
+    process.env['BABEL_OFFLINE'] = '1'
+    try {
+      assert.throws(() => resolveChatModelPolicy({ model: backendKey }), /Command Code.*offline/i)
+    } finally {
+      if (previous === undefined) delete process.env['BABEL_OFFLINE']
+      else process.env['BABEL_OFFLINE'] = previous
+    }
+  })
+
+  test('actual embedded ChatEngine always binds its Command Code critic provider', () => {
+    const { policy } = resolveChatModelPolicy({ model: backendKey })
+    const selected = new CommandCodeApiRunner(model, { maxTokens: 128 })
+    const previous = process.env['BABEL_OFFLINE']
+    process.env['BABEL_OFFLINE'] = '1'
+    try {
+      const engine = new ChatEngine({ task: 'Inspect the supplied fixture.', projectRoot: process.env['BABEL_PROJECT_ROOT']!, model: backendKey, providerRunner: selected, providerPolicy: policy })
+      const state = (engine as unknown as { criticState(onThought: undefined, generation: number): { primaryProvider?: string; primaryModel?: string } }).criticState(undefined, 1)
+      assert.equal(state.primaryProvider, 'command-code')
+      assert.equal(resolveOrCreateCriticRunner(state.primaryModel!, null, () => selected, state.primaryProvider).runner, selected)
+    } finally {
+      if (previous === undefined) delete process.env['BABEL_OFFLINE']
+      else process.env['BABEL_OFFLINE'] = previous
+    }
+  })
+
   test('deliberation and synthesis both construct Command Code runners', async () => {
     const { policy } = resolveChatModelPolicy({ model: backendKey })
     globalThis.fetch = async () => buffered()

@@ -1232,10 +1232,10 @@ export class ChatEngine {
             primaryModel: this.modelPolicy.providerModelId,
             pinSelectedModel: this.options.model !== undefined || this.options.providerPolicy !== undefined,
             // Offline CLI compatibility keeps its injected/cached critic. Desktop
-            // (including local Ollama), live calls and Go still bind the provider.
+            // (including Ollama), live calls, Go and Command Code bind the provider.
             ...(!isOfflineChatMode() || process.env['BABEL_DESKTOP_IPC'] === '1' ||
                 Boolean(process.env['BABEL_DESKTOP_PROVIDER']) ||
-                this.modelPolicy.provider === 'opencode-go'
+                this.modelPolicy.provider === 'opencode-go' || this.modelPolicy.provider === 'command-code'
               ? { primaryProvider: this.modelPolicy.provider }
               : {}),
           }
