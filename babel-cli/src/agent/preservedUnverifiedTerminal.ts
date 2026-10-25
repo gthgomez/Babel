@@ -16,6 +16,63 @@ export type PreservedUnverifiedTurnLimitResolution =
   | { kind: 'stale_revision' }
   | { kind: 'absent' }
 
+type ConfirmedMutationLogEntry = ReadonlyArray<{
+  tool: string
+  mutation_paths?: readonly string[]
+  effect_status?: MutationEffectStatus
+}>
+
+const gateRejectedCompletionByHost = new WeakMap<
+  object,
+  GateRejectedCompletionCapture | null
+>()
+
+/** Streaming host surface for gate-seam capture (submission generation + tool log). */
+export type GateRejectedCompletionCaptureHost = {
+  toolCallLog: ConfirmedMutationLogEntry
+  isSubmissionCurrent: (submissionGeneration: number) => boolean
+}
+
+function readGateRejectedCompletion(
+  host: GateRejectedCompletionCaptureHost,
+): GateRejectedCompletionCapture | null {
+  return gateRejectedCompletionByHost.get(host) ?? null
+}
+
+export function resetGateRejectedCompletionCapture(
+  host: GateRejectedCompletionCaptureHost,
+): void {
+  gateRejectedCompletionByHost.set(host, null)
+}
+
+export function captureGateRejectedCompletionAttempt(
+  host: GateRejectedCompletionCaptureHost,
+  answer: string,
+  submissionGeneration: number,
+): void {
+  if (!host.isSubmissionCurrent(submissionGeneration)) return
+  gateRejectedCompletionByHost.set(
+    host,
+    tryRecordGateRejectedCompletionCapture(
+      readGateRejectedCompletion(host),
+      answer,
+      host.toolCallLog,
+      submissionGeneration,
+    ),
+  )
+}
+
+export function resolvePreservedUnverifiedAtTurnLimit(
+  host: GateRejectedCompletionCaptureHost,
+  submissionGeneration: number,
+): PreservedUnverifiedTurnLimitResolution {
+  return resolveGateRejectedCompletionCapture(
+    readGateRejectedCompletion(host),
+    host.toolCallLog,
+    submissionGeneration,
+  )
+}
+
 export type RetainedCandidateScope = {
   /** First conversation index owned by the current admitted submission. */
   submissionStartIndex: number

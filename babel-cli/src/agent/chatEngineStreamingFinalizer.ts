@@ -3,7 +3,10 @@ import type {
   ChatEngineStreamingLoopHost,
   TaskIntent,
 } from "./chatEngine.js";
-import { formatPreservedUnverifiedTerminalAnswer } from "./preservedUnverifiedTerminal.js";
+import {
+  formatPreservedUnverifiedTerminalAnswer,
+  resolvePreservedUnverifiedAtTurnLimit,
+} from "./preservedUnverifiedTerminal.js";
 
 /** Emit the terminal outcome when a submission exhausts its turn allowance. */
 export async function* finalizeStreamingTurnLimit(input: {
@@ -35,7 +38,8 @@ export async function* finalizeStreamingTurnLimit(input: {
     );
     if (gateResult === "reject" && host.hasAnyWrites()) {
       const authorityReason = `Turn limit exceeded. ${host.buildRejectionMessage()}`;
-      const preserved = host.resolvePreservedUnverifiedAtTurnLimit(
+      const preserved = resolvePreservedUnverifiedAtTurnLimit(
+        host,
         submissionGeneration,
       );
       if (preserved.kind === "retain" && preserved.candidate.trim().length > 0) {
