@@ -170,7 +170,7 @@ export async function runChatEngineCompactionFor(
         attribution,
         usage.inputTokens !== null && usage.outputTokens !== null,
         usage.provider ?? usageScope.provider ?? null,
-        usage.reportedCostUsd,
+        usage.reportedCostUsd === undefined ? null : usage.reportedCostUsd,
       );
       if (update.kind === 'conflict') {
         engine.recordOwnerAccountingFault(
