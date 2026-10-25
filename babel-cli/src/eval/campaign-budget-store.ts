@@ -11,6 +11,7 @@ import {
 } from 'node:fs'
 import { mkdir } from 'node:fs/promises'
 import { dirname } from 'node:path'
+// Directory durability: same win32 r+ / unix r rule as observationStore.syncDir (see observationStore.ts).
 import { fsyncDirectoryEntrySync, renameCheckpointSync } from '../utils/atomicCheckpointFile.js'
 import {
   CampaignBudget,

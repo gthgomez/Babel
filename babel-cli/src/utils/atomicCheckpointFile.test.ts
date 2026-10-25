@@ -44,6 +44,8 @@ test('fsyncDirectoryEntrySync flushes a directory on this platform', () => {
   rmSync(root, { recursive: true, force: true })
 })
 
+// Source diagnosis: observationStore documents EPERM for read-only handles on win32.
+// Fresh Windows execution proof: this subtest only (skipped on Linux CI agents).
 test('win32 read-only directory handle rejects fsync with EPERM', { skip: process.platform !== 'win32' }, () => {
   const root = mkdtempSync(join(tmpdir(), 'babel-checkpoint-win32-fsync-'))
   const directory = join(root, 'ledger')
