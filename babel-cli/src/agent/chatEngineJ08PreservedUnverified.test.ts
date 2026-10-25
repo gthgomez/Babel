@@ -33,6 +33,14 @@ const SUMMARY_CSV = [
   '',
 ].join('\n')
 
+/** Retained artifact refs may use OS-native separators in the presentation payload. */
+const J08_RETAINED_SUMMARY_ARTIFACT = /数据[\\/]summary\.csv/
+
+test('J08 retained summary artifact matcher accepts POSIX and Windows separators', () => {
+  assert.match('数据/summary.csv', J08_RETAINED_SUMMARY_ARTIFACT)
+  assert.match('数据\\summary.csv', J08_RETAINED_SUMMARY_ARTIFACT)
+})
+
 const OPENROUTER_POLICY: ResolvedModelPolicy = {
   policyPath: 'j08-preserve-unverified-fixture',
   family: 'openrouter',
@@ -256,7 +264,7 @@ test('J08: turn-cap gate reject keeps authoritative failure and preserves substa
   assert.match(error, /NATIVE_TOOL_PROTOCOL_INVALID/)
   assert.notEqual(terminal.type === 'failed' ? terminal.reason_code : undefined, 'response_evidence_invalid')
   assert.notEqual(terminal.type === 'failed' ? terminal.reason_code : undefined, 'native_tool_protocol_invalid')
-  assert.match(error, /数据\/summary\.csv/)
+  assert.match(error, J08_RETAINED_SUMMARY_ARTIFACT)
   assert.doesNotMatch(error, /npm test|read_file|run_command.*artifact/i)
   assert.doesNotMatch(error, /VERIFIED_COMPLETE/i)
 
@@ -346,5 +354,5 @@ test('J08: gate-captured completion survives later recovery chatter at turn cap'
 
   assert.match(error, new RegExp(J08_MARKER))
   assert.doesNotMatch(error, new RegExp(RECOVERY_CHATTER_MARKER))
-  assert.match(error, /数据\/summary\.csv/)
+  assert.match(error, J08_RETAINED_SUMMARY_ARTIFACT)
 })
