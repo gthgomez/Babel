@@ -214,9 +214,10 @@ test('proven unstarted Go dispatch clears the unknown attempt without a fictitio
   const attribution = { taskOwnerId: 'go', chargeId: 'unstarted' };
   tracker.settleUsage('deepseek-v4.1-flash', 0, 0, null, null, attribution, false, 'opencode-go');
   assert.equal(tracker.clearUnstartedCharge(attribution), true);
-  assert.equal(tracker.getTaskSummary('go').completeCostUSD, 0);
-  assert.equal(tracker.getSessionSummary().completeCostUSD, 0);
-  assert.equal(tracker.getSessionSummary().costComplete, true);
+  assert.equal(tracker.getTaskSummary('go').completeCostUSD, null);
+  assert.equal(tracker.getSessionSummary().completeCostUSD, null);
+  assert.equal(tracker.getSessionSummary().costComplete, false);
+  assert.equal(tracker.getTaskSummary('go').unknownChargeCount, 0);
 });
 
 test('CostTracker prices direct DeepSeek v4 Flash with conservative cache-miss input', () => {
@@ -393,7 +394,9 @@ test('a pending dispatch survives cold restore and can clear only on proven refu
   assert.equal(resumed.getTaskSummary('A').unknownChargeCount, 1);
   assert.equal(resumed.clearUnstartedCharge({ ...attribution, chargeId: 'wrong' }), false);
   assert.equal(resumed.clearUnstartedCharge(attribution), true);
-  assert.equal(resumed.getTaskSummary('A').costComplete, true);
+  assert.equal(resumed.getTaskSummary('A').costComplete, false);
+  assert.equal(resumed.getTaskSummary('A').completeCostUSD, null);
+  assert.equal(resumed.getTaskSummary('A').unknownChargeCount, 0);
   assert.deepEqual(resumed.getTaskChargeIds('A'), []);
 });
 
@@ -751,8 +754,8 @@ test('a later run refines an earlier unknown in one session snapshot', () => {
     assert.equal(session.completeCostUSD, null);
     assert.equal(session.costComplete, false);
     assert.equal(session.estimateComplete, true);
-    assert.ok(Math.abs(stats.completeCostUSD! - session.totalCostUSD) < 1e-12);
-    assert.ok(Math.abs(tracker.getProjectHistoricalCost(root)! - session.totalCostUSD) < 1e-12);
+    assert.equal(stats.completeCostUSD, null);
+    assert.equal(tracker.getProjectHistoricalCost(root), null);
     assert.deepEqual(Object.keys(stats.sessionSnapshots), [sessionId]);
   } finally {
     rmSync(root, { recursive: true, force: true });

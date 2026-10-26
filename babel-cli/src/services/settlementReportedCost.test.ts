@@ -21,7 +21,7 @@ test('settlementReportedCostUsd returns undefined only when report field is abse
   assert.equal(settlementReportedCostUsd(undefined), undefined)
   assert.equal(settlementReportedCostUsd(null), undefined)
   assert.equal(settlementReportedCostUsd(meta()), undefined)
-  assert.equal(settlementReportedCostUsd(meta({ provider_reported_total_charge_usd: undefined })), undefined)
+  assert.equal(settlementReportedCostUsd({ ...meta(), provider_reported_total_charge_usd: undefined as never }), undefined)
 })
 
 test('settlementReportedCostUsd returns null for explicit unavailable or invalid reports', () => {

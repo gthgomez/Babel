@@ -25,6 +25,8 @@ export interface ModelUsage {
 
 export interface ProjectStats {
   totalCostUSD: number;
+  knownCostUSD?: number;
+  usageComplete?: boolean;
   completeCostUSD?: number | null;
   actualCostUSD?: number | null;
   estimatedCostUSD?: number;
@@ -207,7 +209,7 @@ function registrySettlementUsesEstimateBasis(_provider: string | null | undefine
 function receiptUsesEstimateProjection(receipt: ChargeReceipt): boolean {
   if (receipt.costBasis === 'published_usage_estimate') return true;
   if (receipt.costBasis === 'provider_reported') return false;
-  return providerUsesEstimateAllowance(receipt.provider);
+  return true; // Missing provenance never establishes a provider invoice.
 }
 
 function parseReportedSubtotal(reportedCostUsd: number | null | undefined): number | null {
@@ -220,7 +222,7 @@ function parseReportedSubtotal(reportedCostUsd: number | null | undefined): numb
 
 function sessionUsageCompleteFromReceipts(receipts: readonly ChargeReceipt[]): boolean | undefined {
   if (receipts.length === 0) return undefined;
-  return receipts.every((receipt) => receipt.usageComplete !== false);
+  return receipts.every((receipt) => receipt.usageComplete !== false && receipt.usageKnown !== false);
 }
 
 function validReceiptCost(receipt: ChargeReceipt): boolean {
@@ -233,12 +235,16 @@ function validReceiptCost(receipt: ChargeReceipt): boolean {
   }
   if (receipt.usageKnown !== undefined && typeof receipt.usageKnown !== 'boolean') return false;
   if (receipt.usageComplete !== undefined && typeof receipt.usageComplete !== 'boolean') return false;
-  if (receipt.usageKnown === false && receipt.usageComplete === true) return false;
+  if (receipt.usageKnown !== undefined && receipt.usageComplete !== undefined &&
+      receipt.usageKnown !== receipt.usageComplete) return false;
   if (receipt.costBasis !== undefined &&
       receipt.costBasis !== 'published_usage_estimate' && receipt.costBasis !== 'provider_reported') {
     return false;
   }
-  if (receipt.costBasis === 'provider_reported' && receipt.costEstimate) return false;
+  if (receipt.costBasis === 'provider_reported' &&
+      (receipt.costEstimate || typeof receipt.reportedCostUSD !== 'number' ||
+       receipt.reportedCostBasis !== 'provider_reported' || receipt.knownCostUSD !== receipt.reportedCostUSD)) return false;
+  if (receipt.costBasis === 'published_usage_estimate' && !receipt.costEstimate) return false;
   if (receipt.costBasis === 'published_usage_estimate' && receipt.costEstimate && receipt.knownCostUSD !== null) {
     return false;
   }
@@ -260,16 +266,24 @@ function uniqueEstimateSources(sources: CostEstimateSource[]): CostEstimateSourc
 
 /** Projection only: budgets still use totalCostUSD and missing-usage counts. */
 function projectGoEstimates(summary: SessionUsageSummary, receipts: readonly ChargeReceipt[]): SessionUsageSummary {
+  summary = { ...summary };
+  delete summary.reportedCostUSD; // Recompute only from positive report evidence.
   const allowanceReceipts = receipts.filter((receipt) => receiptUsesEstimateProjection(receipt));
-  const pricedEstimateReceipts = allowanceReceipts.filter((receipt) => receipt.costEstimate);
   const modelSources = Object.values(summary.modelBreakdown).flatMap((model) => model.costEstimates ?? []);
   const modelEstimate = Object.values(summary.modelBreakdown).reduce((sum, model) => sum + (model.estimatedCostUSD ?? 0), 0);
   const reportedSubtotal = receipts.reduce(
-    (sum, receipt) => sum + (typeof receipt.reportedCostUSD === 'number' ? receipt.reportedCostUSD : 0),
+    (sum, receipt) => sum + (receipt.costBasis === 'provider_reported' &&
+      typeof receipt.reportedCostUSD === 'number' ? receipt.reportedCostUSD : 0),
     0,
   );
   const usageComplete = sessionUsageCompleteFromReceipts(receipts);
-  const allKnownInvoices = receipts.length > 0 && (summary.unknownChargeCount ?? 0) === 0 &&
+  const receiptAllowance = receipts.reduce((sum, receipt) => sum + (receiptAllowanceCost(receipt) ?? 0), 0);
+  const residualEstimate = Math.max(0, summary.totalCostUSD - receiptAllowance - modelEstimate);
+  const allowanceComplete = summary.projectionComplete !== false &&
+    (summary.estimateComplete ?? summary.costComplete ?? false);
+  const allKnownInvoices = allowanceComplete && receipts.length > 0 &&
+    modelEstimate === 0 && modelSources.length === 0 && residualEstimate <= 1e-9 &&
+    Math.abs(reportedSubtotal - summary.totalCostUSD) <= 1e-9 && (summary.unknownChargeCount ?? 0) === 0 &&
     receipts.every((receipt) => receipt.costBasis === 'provider_reported' &&
       typeof receipt.reportedCostUSD === 'number' && receipt.knownCostUSD !== null &&
       !receipt.costEstimate && !receiptUsesEstimateProjection(receipt));
@@ -277,48 +291,46 @@ function projectGoEstimates(summary: SessionUsageSummary, receipts: readonly Cha
     return {
       ...summary,
       knownCostUSD: summary.totalCostUSD,
-      estimatedCostUSD: summary.estimatedCostUSD ?? 0,
+      estimatedCostUSD: 0,
+      costEstimates: [],
       actualCostUSD: reportedSubtotal,
-      estimateComplete: true,
-      costComplete: summary.costComplete ?? true,
-      completeCostUSD: summary.completeCostUSD ?? summary.totalCostUSD,
+      estimateComplete: allowanceComplete,
+      costComplete: true,
+      completeCostUSD: summary.totalCostUSD,
       ...(usageComplete !== undefined ? { usageComplete } : {}),
       ...(receipts.some((receipt) => typeof receipt.reportedCostUSD === 'number')
         ? { reportedCostUSD: reportedSubtotal } : {}),
     };
   }
-  if (allowanceReceipts.length === 0 && modelSources.length === 0 && modelEstimate === 0 && reportedSubtotal === 0) {
+  if (receipts.length === 0 && Object.keys(summary.modelBreakdown).length === 0 &&
+      summary.totalCostUSD === 0 && (summary.unknownChargeCount ?? 0) === 0) {
     const actualCostUSD = summary.actualCostUSD ?? null;
-    return usageComplete === undefined ? { ...summary, actualCostUSD }
-      : { ...summary, usageComplete, actualCostUSD };
+    return { ...summary, actualCostUSD, estimateComplete: allowanceComplete };
   }
-  const sources = uniqueEstimateSources([...modelSources, ...allowanceReceipts.map((receipt) => receipt.costEstimate ?? {
+  const unknownSource: CostEstimateSource = { basis: 'published_usage_estimate', precision: 'unknown',
+    pricingSourceUrl: null, pricingVerifiedAt: null };
+  const sources = uniqueEstimateSources([...modelSources, ...(residualEstimate > 1e-9 ? [unknownSource] : []),
+    ...allowanceReceipts.map((receipt) => receipt.costEstimate ?? {
     basis: 'published_usage_estimate' as const, precision: 'unknown' as const,
     pricingSourceUrl: null, pricingVerifiedAt: null,
   })]);
   const receiptEstimate = allowanceReceipts.reduce((sum, receipt) => sum + (receiptAllowanceCost(receipt) ?? 0), 0);
   // Model evidence covers only unattributed calls; receipts cover owned calls.
-  const estimate = receiptEstimate + modelEstimate;
+  const estimate = receiptEstimate + modelEstimate + residualEstimate;
   for (const [modelId, model] of Object.entries(summary.modelBreakdown)) {
-    if ((model.estimatedCostUSD ?? 0) > 0 || model.costEstimates?.length ||
+    if (residualEstimate > 1e-9 || (model.estimatedCostUSD ?? 0) > 0 || model.costEstimates?.length ||
         allowanceReceipts.some((receipt) => receipt.modelId === modelId) ||
         (modelId === '__restored__' && allowanceReceipts.length > 0)) {
       model.completeCostUSD = null;
     }
   }
-  const pricedEstimateComplete = summary.unknownChargeCount === 0 && pricedEstimateReceipts.length > 0 &&
-    pricedEstimateReceipts.every((receipt) => receipt.costEstimate?.precision !== 'unknown');
-  const estimateOnlyComplete = (summary.unknownChargeCount ?? 0) === 0 && allowanceReceipts.length > 0 &&
-    pricedEstimateReceipts.length === allowanceReceipts.length;
-  const projectionBlocksEstimates = summary.projectionComplete === false;
   return {
     ...summary,
-    knownCostUSD: Math.max(0, summary.totalCostUSD - estimate),
+    knownCostUSD: reportedSubtotal,
     estimatedCostUSD: estimate,
     actualCostUSD: null,
     costEstimates: sources,
-    estimateComplete: projectionBlocksEstimates ? false
-      : summary.estimateComplete ?? pricedEstimateComplete ?? estimateOnlyComplete ?? false,
+    estimateComplete: allowanceComplete,
     ...(receipts.some((receipt) => typeof receipt.reportedCostUSD === 'number')
       ? { reportedCostUSD: reportedSubtotal } : {}),
     ...(usageComplete !== undefined ? { usageComplete } : {}),
@@ -453,14 +465,11 @@ export class CostTracker {
     let settledOutputTokens = outputTokens;
     let settledCacheHitTokens = cacheHitTokens ?? 0;
     let settledCacheMissTokens = cacheMissTokens ?? 0;
-    if (previous && settledInputTokens === 0 && settledOutputTokens === 0 &&
-        (previous.inputTokens > 0 || previous.outputTokens > 0)) {
+    if (previous && !usageKnown) {
       settledInputTokens = previous.inputTokens;
       settledOutputTokens = previous.outputTokens;
-      if (settledCacheHitTokens === 0 && settledCacheMissTokens === 0) {
-        settledCacheHitTokens = previous.cacheHitTokens;
-        settledCacheMissTokens = previous.cacheMissTokens;
-      }
+      settledCacheHitTokens = previous.cacheHitTokens;
+      settledCacheMissTokens = previous.cacheMissTokens;
     }
     let settledUsageKnown = usageKnown;
     let settledUsageComplete = usageKnown;
@@ -492,34 +501,12 @@ export class CostTracker {
         return { kind: 'conflict', reason: 'Charge identity differs from the recorded attempt' };
       }
       if (receiptAllowanceCost(previous) !== null) {
-        const prevAllowance = receiptAllowanceCost(previous)!;
-        const tokensMatch = previous.inputTokens === settledInputTokens &&
-          previous.outputTokens === settledOutputTokens &&
-          previous.cacheHitTokens === settledCacheHitTokens &&
-          previous.cacheMissTokens === settledCacheMissTokens;
-        if (previous.costEstimate && hasValidReport && authoritativeReport !== null) {
-          if (prevAllowance === authoritativeReport && tokensMatch) {
-            return { kind: 'duplicate' };
-          }
-          return { kind: 'conflict', reason: 'A priced estimate cannot be replaced by a provider report' };
-        }
-        if (hasValidReport && authoritativeReport !== null &&
-            previous.costBasis === 'provider_reported' && !previous.costEstimate &&
-            previous.reportedCostUSD !== undefined &&
-            authoritativeReport !== previous.reportedCostUSD) {
-          return { kind: 'conflict', reason: 'Confirmed reported subtotal changed' };
-        }
-        if (cost === null) return { kind: 'duplicate' }; // A stale unknown cannot downgrade a known receipt.
-        if (prevAllowance === cost && tokensMatch &&
-          (previous.reportedCostUSD ?? null) === (hasValidReport ? authoritativeReport : null)) {
-          return { kind: 'duplicate' };
-        }
-        if (!previous.costEstimate && previous.costBasis === 'provider_reported' && prevAllowance !== cost) {
-          return { kind: 'conflict', reason: 'Confirmed reported subtotal changed' };
-        }
-        if (!previous.costEstimate && !hasValidReport && prevAllowance !== cost) {
-          return { kind: 'conflict', reason: 'Confirmed charge telemetry changed' };
-        }
+        if (cost === null) return { kind: 'duplicate' }; // Stale unknown cannot downgrade priced telemetry.
+        return receiptAllowanceCost(previous) === cost && previous.inputTokens === settledInputTokens &&
+          previous.outputTokens === settledOutputTokens && previous.cacheHitTokens === settledCacheHitTokens &&
+          previous.cacheMissTokens === settledCacheMissTokens
+          ? { kind: 'duplicate' }
+          : { kind: 'conflict', reason: 'Confirmed charge telemetry changed' };
       }
       if (cost === null) {
         if (settledInputTokens === previous.inputTokens && settledOutputTokens === previous.outputTokens &&
@@ -537,12 +524,8 @@ export class CostTracker {
         return { kind: 'conflict', reason: 'Refinement lost previously observed tokens' };
       }
     }
-    const prevAllowanceForDelta = previous ? receiptAllowanceCost(previous) : null;
-    const knownCostDelta = cost === null ? 0
-      : prevAllowanceForDelta === null ? cost
-        : cost - prevAllowanceForDelta;
-    const unknownDelta = cost === null ? (previous ? 0 : 1)
-      : (prevAllowanceForDelta === null && previous ? -1 : 0);
+    const knownCostDelta = cost ?? 0;
+    const unknownDelta = cost === null ? previous ? 0 : 1 : previous ? -1 : 0;
     const inputDelta = settledInputTokens - (previous?.inputTokens ?? 0);
     const outputDelta = settledOutputTokens - (previous?.outputTokens ?? 0);
     const cacheHitDelta = settledCacheHitTokens - (previous?.cacheHitTokens ?? 0);
@@ -727,6 +710,9 @@ export class CostTracker {
     totalInputTokens: number;
     totalOutputTokens: number;
     totalTokens: number;
+    totalCacheHitTokens?: number;
+    totalCacheMissTokens?: number;
+    modelBreakdown?: Record<string, ModelUsage>;
     unknownChargeCount?: number;
     accountedChargeIds?: string[];
     chargeObservations?: ChargeReceipt[];
@@ -767,6 +753,34 @@ export class CostTracker {
       sum + (receiptUsesEstimateProjection(receipt) ? receiptAllowanceCost(receipt) ?? 0 : 0), 0);
     const residualEstimate = totals.estimatedCostUSD === undefined ? undefined : totals.estimatedCostUSD - receiptEstimate;
     if (residualEstimate !== undefined && residualEstimate < -1e-9) throw new Error('Saved session estimate disagrees with receipts');
+    const models = totals.modelBreakdown === undefined ? undefined : Object.values(totals.modelBreakdown);
+    const validCount = (value: number) => Number.isSafeInteger(value) && value >= 0;
+    if (models && (models.some((model) => !model ||
+        !validCount(model.inputTokens) || !validCount(model.outputTokens) ||
+        !validCount(model.unknownChargeCount ?? 0) ||
+        !validCount(model.promptCacheHitTokens ?? 0) || !validCount(model.promptCacheMissTokens ?? 0) ||
+        !Number.isFinite(model.costUSD) || model.costUSD < 0 ||
+        !Number.isFinite(model.estimatedCostUSD ?? 0) || (model.estimatedCostUSD ?? 0) < 0 ||
+        (model.estimatedCostUSD ?? 0) > model.costUSD + 1e-9 ||
+        (model.costEstimates !== undefined && (!Array.isArray(model.costEstimates) || !model.costEstimates.every(validEstimateSource)))) ||
+        Math.abs(models.reduce((sum, model) => sum + model.costUSD, 0) - totals.totalCostUSD) > 1e-9 ||
+        models.reduce((sum, model) => sum + model.inputTokens, 0) !== totals.totalInputTokens ||
+        models.reduce((sum, model) => sum + model.outputTokens, 0) !== totals.totalOutputTokens ||
+        models.reduce((sum, model) => sum + (model.unknownChargeCount ?? 0), 0) !== (totals.unknownChargeCount ?? 0))) {
+      throw new Error('Saved session model decomposition disagrees with totals');
+    }
+    // Existing model metadata identifies unowned estimates, including zero amounts.
+    // Old union-only snapshots cannot prove which sources belonged to receipts.
+    const modelEstimate = models?.reduce((sum, model) => sum + (model.estimatedCostUSD ?? 0), 0);
+    const residualSources = models && Math.abs((modelEstimate ?? 0) - (residualEstimate ?? 0)) <= 1e-9
+      ? models.flatMap((model) => model.costEstimates ?? []) : totals.costEstimates ?? [];
+    const ownedCacheHits = [...(restoredObservations?.values() ?? [])].reduce((sum, receipt) => sum + receipt.cacheHitTokens, 0);
+    const ownedCacheMisses = [...(restoredObservations?.values() ?? [])].reduce((sum, receipt) => sum + receipt.cacheMissTokens, 0);
+    const cacheHits = totals.totalCacheHitTokens ?? models?.reduce((sum, model) => sum + (model.promptCacheHitTokens ?? 0), 0) ?? ownedCacheHits;
+    const cacheMisses = totals.totalCacheMissTokens ?? models?.reduce((sum, model) => sum + (model.promptCacheMissTokens ?? 0), 0) ?? ownedCacheMisses;
+    if (!validCount(cacheHits) || !validCount(cacheMisses) || cacheHits < ownedCacheHits || cacheMisses < ownedCacheMisses) {
+      throw new Error('Saved session cache usage disagrees with receipts');
+    }
     this.sessionTotalCost = totals.totalCostUSD;
     if (typeof totals.projectSessionId === 'string' && totals.projectSessionId.length > 0) this.projectSessionId = totals.projectSessionId;
     this.sessionUnknownCharges = totals.unknownChargeCount ?? 0;
@@ -780,13 +794,11 @@ export class CostTracker {
         outputTokens: totals.totalOutputTokens,
         costUSD: totals.totalCostUSD,
         ...(residualEstimate !== undefined ? { estimatedCostUSD: Math.max(0, residualEstimate) } : {}),
-        ...(totals.costEstimates ? { costEstimates: uniqueEstimateSources(totals.costEstimates) } : {}),
+        ...(residualSources.length > 0 ? { costEstimates: uniqueEstimateSources(residualSources) } : {}),
         unknownChargeCount: this.sessionUnknownCharges,
         completeCostUSD: this.sessionUnknownCharges === 0 ? totals.totalCostUSD : null,
-        // Cache fields set to 0 since they can't be recovered from a previous session
-        // but the structure must be consistent with ModelUsage.
-        promptCacheHitTokens: 0,
-        promptCacheMissTokens: 0,
+        promptCacheHitTokens: cacheHits,
+        promptCacheMissTokens: cacheMisses,
       };
     }
   }
@@ -1188,27 +1200,7 @@ export class CostTracker {
       const latest = byId.get(saved.attribution.chargeId);
       if (!latest || latest.modelId !== saved.modelId || latest.provider !== saved.provider ||
           !sameUsageAttribution(latest.attribution, saved.attribution)) return false;
-      if (receiptAllowanceCost(saved) !== null) {
-        if (receiptAllowanceCost(latest) === null) return false;
-        const savedAllowance = receiptAllowanceCost(saved)!;
-        const latestAllowance = receiptAllowanceCost(latest)!;
-        if (latestAllowance + 1e-9 < savedAllowance) return false;
-        const estimateToReported = Boolean(saved.costEstimate) &&
-          latest.costBasis === 'provider_reported' && !latest.costEstimate;
-        if (!estimateToReported && Math.abs(latestAllowance - savedAllowance) > 1e-9) return false;
-        const tokensOk = latest.inputTokens >= saved.inputTokens && latest.outputTokens >= saved.outputTokens &&
-          latest.cacheHitTokens >= saved.cacheHitTokens && latest.cacheMissTokens >= saved.cacheMissTokens;
-        const reportedOk = saved.reportedCostUSD === undefined || latest.reportedCostUSD === saved.reportedCostUSD ||
-          (saved.reportedCostUSD === undefined && latest.reportedCostUSD !== undefined);
-        const basisOk = saved.costBasis === undefined || latest.costBasis === saved.costBasis || estimateToReported;
-        const usageCompleteOk = saved.usageComplete === undefined || latest.usageComplete === saved.usageComplete ||
-          (saved.usageComplete === false && latest.usageComplete === true);
-        const usageKnownOk = saved.usageKnown === undefined || latest.usageKnown === saved.usageKnown ||
-          (saved.usageKnown === false && latest.usageKnown === true);
-        if (latest.usageKnown === false && latest.usageComplete === true) return false;
-        return tokensOk && reportedOk && basisOk && usageCompleteOk && usageKnownOk &&
-          (saved.reportedCostBasis === undefined || latest.reportedCostBasis === saved.reportedCostBasis);
-      }
+      if (receiptAllowanceCost(saved) !== null) return sameChargeReceipt(saved, latest);
       return latest.inputTokens >= saved.inputTokens && latest.outputTokens >= saved.outputTokens &&
         latest.cacheHitTokens >= saved.cacheHitTokens && latest.cacheMissTokens >= saved.cacheMissTokens;
     });
@@ -1370,21 +1362,19 @@ export class CostTracker {
     const projected = projectGoEstimates({ ...stats,
       totalTokens: stats.totalInputTokens + stats.totalOutputTokens,
       costComplete: stats.completeCostUSD !== null,
+      estimateComplete: stats.completeCostUSD !== null,
     }, Object.values(stats.sessionReceipts ?? {}).flat());
-    if (typeof projected.actualCostUSD === 'number') {
-      stats.actualCostUSD = projected.actualCostUSD;
-      if (projected.reportedCostUSD !== undefined) stats.reportedCostUSD = projected.reportedCostUSD;
-      stats.completeCostUSD = projected.completeCostUSD ?? stats.completeCostUSD;
-      if (projected.costComplete === true) stats.costComplete = true;
-      else if (projected.costComplete === false) stats.costComplete = false;
-      if (projected.estimateComplete !== undefined) stats.estimateComplete = projected.estimateComplete;
-    } else if (projected.costEstimates && projected.costEstimates.length > 0) {
-      stats.completeCostUSD = null;
-      stats.actualCostUSD = null;
-      if (projected.estimatedCostUSD !== undefined) stats.estimatedCostUSD = projected.estimatedCostUSD;
-      stats.costEstimates = projected.costEstimates;
-      stats.estimateComplete = projected.estimateComplete === true;
-    }
+    stats.completeCostUSD = projected.completeCostUSD ?? null;
+    stats.actualCostUSD = projected.actualCostUSD ?? null;
+    stats.costComplete = projected.costComplete === true;
+    stats.estimateComplete = projected.estimateComplete === true;
+    stats.knownCostUSD = projected.knownCostUSD ?? 0;
+    if (projected.reportedCostUSD !== undefined) stats.reportedCostUSD = projected.reportedCostUSD;
+    else delete stats.reportedCostUSD;
+    if (projected.usageComplete !== undefined) stats.usageComplete = projected.usageComplete;
+    else delete stats.usageComplete;
+    stats.estimatedCostUSD = projected.estimatedCostUSD ?? 0;
+    stats.costEstimates = projected.costEstimates ?? [];
 
     const tmpPath = `${statsPath}.tmp-${process.pid}-${randomUUID()}`;
     try {
