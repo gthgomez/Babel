@@ -32,8 +32,8 @@ if (!isSyntheticProviderFixtureReady()) {
     if (code !== 0) t.diagnostic(output)
     assert.equal(code, 0)
     const inventory = JSON.parse(diagnostic) as { tests: number; passed: number; failed: number; skipped: number }
-    assert.equal(inventory.tests, 5)
-    assert.equal(inventory.passed, 5)
+    assert.equal(inventory.tests, 7)
+    assert.equal(inventory.passed, 7)
     assert.equal(inventory.failed, 0)
     assert.equal(inventory.skipped, 0)
   })
@@ -113,12 +113,13 @@ if (!isSyntheticProviderFixtureReady()) {
   const warning = 'Owner charge journal unavailable; telemetry may be unpersisted'
   const pricedUsage = { prompt_tokens: 30, completion_tokens: 5, total_tokens: 35 }
 
-  function journalFault(t: TestContext) {
+  function journalFault(t: TestContext, failOnSecondCharge = false) {
     const original = fs.writeFileSync
     let active = false
     let failures = 0
     fs.writeFileSync = ((path, ...args) => {
-      if (active && String(path).replaceAll('\\', '/').includes('/task-charges/')) {
+      if (String(path).replaceAll('\\', '/').includes('/task-charges/') &&
+          (active || (failOnSecondCharge && JSON.parse(String(args[0])).chargeIds?.length >= 2))) {
         failures++
         throw Object.assign(new Error('fixture financial journal I/O failure'), { code: 'EIO' })
       }
@@ -207,11 +208,12 @@ if (!isSyntheticProviderFixtureReady()) {
     assert.ok(!budget.accountingFaults?.length, 'runtime failure is not misclassified as financial-only')
   })
 
-  for (const missingJournal of [false, true]) test(`cold process restores ${missingJournal ? 'missing' : 'stale'} financial journal with consumed unlimited state`, async t => {
+  for (const journal of ['pending', 'missing', 'complete-cost', 'complete-ids'] as const) test(`cold process restores ${journal} financial journal with consumed unlimited state`, async t => {
     const root = fixture(t)
-    const fault = journalFault(t)
-    if (missingJournal) fault.activate()
-    const bodies = usefulFetch(fault.activate)
+    const completeJournal = journal.startsWith('complete-')
+    const fault = journalFault(t, completeJournal)
+    if (journal === 'missing') fault.activate()
+    const bodies = usefulFetch(completeJournal ? undefined : fault.activate)
     const first = await runCliChatTask({ task, projectRoot: root, model: backendKey, outputFormat: 'json' })
     assert.equal(first.exitCode, 0)
     assert.equal(bodies.length, 2)
@@ -219,6 +221,17 @@ if (!isSyntheticProviderFixtureReady()) {
     assert.ok(saved.consumed.turns > 0)
     assert.ok(saved.consumed.costUsd > 0)
     assert.ok(saved.accountingFaults.length > 0)
+    if (completeJournal) {
+      const journals = readdirSync(join(chatSessionDir(first.payload['session_id'] as string), 'task-charges'))
+        .filter(name => name.endsWith('.json'))
+        .map(name => JSON.parse(readFileSync(join(chatSessionDir(first.payload['session_id'] as string), 'task-charges', name), 'utf8')))
+      const stale = journals.find(entry => entry.taskOwnerId === saved.taskOwnerId)
+      assert.ok(stale)
+      assert.equal(stale.unknownChargeCount, 0)
+      assert.equal(stale.chargeIds.length, 1)
+      assert.equal(saved.accountedChargeIds.length, 2)
+      assert.ok(stale.totalCostUSD > 0 && stale.totalCostUSD < saved.consumed.costUsd)
+    }
     fault.restore()
     const script = `
       import assert from 'node:assert/strict';
@@ -235,9 +248,23 @@ if (!isSyntheticProviderFixtureReady()) {
       assert.ok(restored);
       assert.equal(restored.taskOwnerId, ${JSON.stringify(saved.taskOwnerId)});
       assert.deepEqual(restored.grant, ${JSON.stringify(saved.grant)});
+      const assertIds = () => assert.deepEqual(globalCostTracker.getTaskChargeIds(restored.taskOwnerId).sort(), ${JSON.stringify(saved.accountedChargeIds)}.slice().sort(), 'newer checkpoint charge IDs must survive');
+      const assertCost = () => assert.equal(restored.consumed.costUsd, ${JSON.stringify(saved.consumed.costUsd)}, 'newer checkpoint consumed cost must survive');
+      if (${JSON.stringify(journal === 'complete-ids')}) { assertIds(); assertCost(); }
+      else { assertCost(); assertIds(); }
 
       assert.deepEqual(restored.accountingFaults, ${JSON.stringify(saved.accountingFaults)});
       const usage = globalCostTracker.getTaskSummary(restored.taskOwnerId);
+      const observations = globalCostTracker.getTaskChargeObservations(restored.taskOwnerId);
+      const missingId = restored.accountedChargeIds.find(id => !observations.some(receipt => receipt.attribution.chargeId === id));
+      assert.ok(missingId, 'the lost financial receipt must remain absent');
+      const duplicate = globalCostTracker.settleUsage(${JSON.stringify(model)}, 30, 5, null, null,
+        {taskOwnerId:restored.taskOwnerId,chargeId:missingId},true,'command-code');
+      assert.equal(duplicate.kind,'duplicate','replaying a retained charge ID must not count it again');
+      assert.deepEqual(globalCostTracker.getTaskSummary(restored.taskOwnerId),usage);
+      assert.equal(globalCostTracker.getTaskChargeObservations(restored.taskOwnerId).length,observations.length);
+      assert.ok(usage.totalCostUSD >= restored.consumed.costUsd);
+
 
       engine.closeAdmissionStore();
       let fetches = 0;

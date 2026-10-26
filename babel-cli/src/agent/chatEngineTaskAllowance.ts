@@ -295,6 +295,12 @@ export class ChatEngineTaskAllowance {
             persisted.accountedChargeIds.length - globalCostTracker.getTaskChargeObservations(persisted.taskOwnerId).length)
         : persisted.consumed.unknownChargeCount ?? 1,
     });
+    if (!this.host.taskCostScopeUnavailable && this.hasUnpersistedFinancialJournal()) {
+      globalCostTracker.retainUnjournaledTaskCheckpoint(persisted.taskOwnerId, {
+        totalCostUSD: persisted.consumed.costUsd,
+        chargeIds: persisted.accountedChargeIds,
+      });
+    }
     this.host.limits = {
       ...this.host.limits,
       maxCostUsd: allowanceCostCapUsd(persisted.grant.costCap),
