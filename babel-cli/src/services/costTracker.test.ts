@@ -422,7 +422,8 @@ test('an unknown charge refines to one known charge without duplicating tokens o
   assert.equal(tracker.getTaskSummary('child').totalTokens, 120);
   assert.equal(tracker.getTaskSummary('parent').totalCostUSD, tracker.getTaskSummary('child').totalCostUSD);
   assert.equal(tracker.getSessionSummary().totalTokens, 120);
-  assert.equal(tracker.getSessionSummary().costComplete, true);
+  assert.equal(tracker.getSessionSummary().costComplete, false);
+  assert.equal(tracker.getSessionSummary().estimateComplete, true);
   assert.deepEqual(tracker.settleUsage('deepseek-v4-flash', 100, 20, null, null, attribution), { kind: 'duplicate' });
   assert.equal(tracker.getSessionSummary().totalTokens, 120);
 });

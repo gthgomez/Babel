@@ -52,7 +52,8 @@ for (const row of PROVIDERS) {
       assert.equal(summary.unknownChargeCount, 0)
       assert.equal(receipt.costBasis, 'published_usage_estimate')
       assert.ok(receipt.costEstimate)
-      assert.ok(summary.totalCostUSD > 0)
+      assert.equal(summary.actualCostUSD, null)
+      assert.ok(summary.totalCostUSD >= 0)
     })
   }
 }
@@ -68,10 +69,11 @@ test('second confirmed actual rejects even when tokens match', () => {
   )
 })
 
-test('later bill without tokens preserves measured usage on refinement', () => {
+test('later bill without tokens preserves measured usage on first provider report', () => {
   const tracker = new CostTracker()
   const attribution = { taskOwnerId: 'cc', chargeId: 'cc-bill-only' }
-  tracker.settleUsage('deepseek/deepseek-v4.1-flash', 1000, 2000, 40, 60, attribution, true, 'command-code')
+  tracker.recordUnknownCharge('deepseek/deepseek-v4.1-flash', attribution)
+  tracker.settleUsage('deepseek/deepseek-v4.1-flash', 1000, 2000, 40, 60, attribution, true, 'command-code', 0.01)
   tracker.settleUsage('deepseek/deepseek-v4.1-flash', 0, 0, null, null, attribution, false, 'command-code', 0.01)
   const receipt = tracker.getTaskChargeObservations('cc')[0]!
   assert.equal(receipt.inputTokens, 1000)
@@ -79,20 +81,26 @@ test('later bill without tokens preserves measured usage on refinement', () => {
   assert.equal(receipt.cacheHitTokens, 40)
   assert.equal(receipt.cacheMissTokens, 60)
   assert.equal(receipt.knownCostUSD, 0.01)
+  assert.equal(receipt.usageKnown, true)
 })
 
-test('receipt view covers estimate-to-reported refinement with signed allowance delta', () => {
+test('receipt view does not treat deferred estimate-to-reported replacement as coverage', () => {
   const tracker = new CostTracker()
   const attribution = { taskOwnerId: 'or', chargeId: 'or-cover' }
   const model = 'deepseek/deepseek-v4-flash-0731'
   tracker.settleUsage(model, 100, 10, null, null, attribution, true, 'openrouter')
   const prior = tracker.getSessionChargeObservations()
-  tracker.settleUsage(model, 100, 10, null, null, attribution, true, 'openrouter', 0.01)
+  const allowance = tracker.getTaskSummary('or').totalCostUSD
+  assert.equal(
+    tracker.settleUsage(model, 100, 10, null, null, attribution, true, 'openrouter', allowance).kind,
+    'duplicate',
+  )
   const current = tracker.getSessionChargeObservations()
   const covers = (tracker as unknown as {
     receiptViewCovers: (a: typeof prior, b: typeof current) => boolean
   }).receiptViewCovers.bind(tracker)
   assert.equal(covers(prior, current), true)
+  assert.equal(current[0]?.costBasis, 'published_usage_estimate')
 })
 
 test('restore checkpoints reconcile null-to-priced owner receipt over stale session', () => {

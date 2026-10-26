@@ -23,7 +23,7 @@ test('Command Code registry estimate is allowance with estimateComplete and sepa
   assert.equal(receipt.reportedCostUSD, undefined)
 })
 
-test('estimate then provider_reported refinement applies signed estimate-to-actual allowance delta once', () => {
+test('late provider report after priced estimate is duplicate or conflict without provenance promotion', () => {
   const tracker = new CostTracker()
   const attribution = { taskOwnerId: 'cc', chargeId: 'cc-refine' }
   assert.equal(
@@ -31,21 +31,15 @@ test('estimate then provider_reported refinement applies signed estimate-to-actu
     'inserted',
   )
   const estimateAllowance = tracker.getTaskSummary('cc').totalCostUSD
-  const refine = tracker.settleUsage(
-    CC_MODEL, 1000, 2000, null, null, attribution, true, CC_PROVIDER, 0.0025,
+  const sameBill = tracker.settleUsage(
+    CC_MODEL, 1000, 2000, null, null, attribution, true, CC_PROVIDER, estimateAllowance,
   )
-  assert.equal(refine.kind, 'refined')
-  assert.ok(Math.abs(refine.knownCostDelta - (0.0025 - estimateAllowance)) < 1e-12)
-  const summary = tracker.getTaskSummary('cc')
-  assert.equal(summary.totalCostUSD, 0.0025)
-  assert.equal(summary.reportedCostUSD, 0.0025)
-  assert.equal(summary.costComplete, true)
+  assert.equal(sameBill.kind, 'duplicate')
   const receipt = tracker.getTaskChargeObservations('cc')[0]!
-  assert.equal(receipt.reportedCostBasis, 'provider_reported')
-  assert.equal(receipt.reportedCostUSD, 0.0025)
-  assert.equal(receipt.costBasis, 'provider_reported')
-  assert.equal(receipt.knownCostUSD, 0.0025)
-  assert.equal(receipt.costEstimate, undefined)
+  assert.equal(receipt.costBasis, 'published_usage_estimate')
+  assert.equal(receipt.reportedCostUSD, undefined)
+  assert.equal(tracker.getTaskSummary('cc').totalCostUSD, estimateAllowance)
+  assert.equal(tracker.getTaskSummary('cc').actualCostUSD, null)
   assert.equal(
     tracker.settleUsage(CC_MODEL, 1000, 2000, null, null, attribution, true, CC_PROVIDER, 0.003).kind,
     'conflict',
@@ -65,14 +59,17 @@ test('explicit provider_reported zero without tokens is priced allowance on Comm
   assert.equal(receipt.reportedCostUSD, 0)
 })
 
-test('positive explicit report without usageKnown replaces zero-dollar report once', () => {
+test('positive explicit report after confirmed zero-dollar report conflicts', () => {
   const tracker = new CostTracker()
   const attribution = { taskOwnerId: 'cc', chargeId: 'cc-dollars' }
   tracker.settleUsage(CC_MODEL, 0, 0, null, null, attribution, false, CC_PROVIDER, 0)
-  tracker.settleUsage(CC_MODEL, 0, 0, null, null, attribution, false, CC_PROVIDER, 0.001)
+  assert.equal(
+    tracker.settleUsage(CC_MODEL, 0, 0, null, null, attribution, false, CC_PROVIDER, 0.001).kind,
+    'conflict',
+  )
   const summary = tracker.getTaskSummary('cc')
-  assert.equal(summary.reportedCostUSD, 0.001)
-  assert.equal(summary.totalCostUSD, 0.001)
+  assert.equal(summary.reportedCostUSD, 0)
+  assert.equal(summary.totalCostUSD, 0)
   assert.equal(summary.unknownChargeCount, 0)
 })
 

@@ -45,8 +45,11 @@ test('registry estimate applies only when usageKnown and report undefined', () =
   const attribution = { taskOwnerId: 'or', chargeId: 'or-est' }
   tracker.settleUsage(model, 100, 10, null, null, attribution, true, 'openrouter')
   assert.ok(tracker.getTaskSummary('or').totalCostUSD > 0)
-  tracker.settleUsage(model, 100, 10, null, null, attribution, true, 'openrouter', 0.01)
-  assert.equal(tracker.getTaskSummary('or').totalCostUSD, 0.01)
+  assert.equal(
+    tracker.settleUsage(model, 100, 10, null, null, attribution, true, 'openrouter', 0.01).kind,
+    'conflict',
+  )
+  assert.ok(tracker.getTaskSummary('or').totalCostUSD > 0)
 })
 
 test('null or malformed explicit report stays unknown (not free)', () => {
@@ -149,19 +152,19 @@ test('registry estimate keeps billing actual unknown until provider report settl
   assert.equal(summary.costComplete, false)
 })
 
-test('registry estimate refines to reported actual with signed allowance delta', () => {
+test('registry estimate rejects late provider report replacement', () => {
   const tracker = new CostTracker()
   const model = 'deepseek/deepseek-v4-flash-0731'
   const attribution = { taskOwnerId: 'or', chargeId: 'or-refine' }
   tracker.settleUsage(model, 100, 10, null, null, attribution, true, 'openrouter')
   const before = tracker.getTaskSummary('or').totalCostUSD
   assert.ok(before > 0 && before < 0.01)
-  tracker.settleUsage(model, 100, 10, null, null, attribution, true, 'openrouter', 0.01)
-  assert.equal(tracker.getTaskSummary('or').totalCostUSD, 0.01)
   assert.equal(
-    tracker.settleUsage(model, 100, 10, null, null, attribution, true, 'openrouter', 0.02).kind,
+    tracker.settleUsage(model, 100, 10, null, null, attribution, true, 'openrouter', 0.01).kind,
     'conflict',
   )
+  assert.equal(tracker.getTaskSummary('or').totalCostUSD, before)
+  assert.equal(tracker.getTaskChargeObservations('or')[0]?.costBasis, 'published_usage_estimate')
 })
 
 test('formatUsageCost labels explicit zero-dollar provider reports', () => {
