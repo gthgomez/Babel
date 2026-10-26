@@ -259,9 +259,11 @@ export function buildReviewCard(input: ReviewCardInput): ReviewCard {
   const kind = classifyReviewCard(input);
   const files = input.changedFiles ?? [];
   const v = input.verification;
+  const hasDeliveryMutations = files.length > 0 || input.mutated === true;
   const isVerificationNotApplicable =
     !v?.ran &&
     v?.status !== 'blocked' &&
+    !hasDeliveryMutations &&
     (input.verificationApplicability === 'not_applicable' ||
       input.verificationPolicy === 'none' ||
       input.verificationPolicy === 'not_applicable' ||

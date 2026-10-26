@@ -737,6 +737,68 @@ describe('planCompletionGateReject', () => {
     assert.equal(p.kind, 'soft_allow');
   });
 
+  test('mandatory verifier contract blocks interactive recovery after max strikes', async () => {
+    const { planCompletionGateReject } = await import('./completionGatePolicy.js');
+    const p = planCompletionGateReject({
+      hasWrites: true,
+      policy: 'required',
+      hardGate: false,
+      hadToolCallsThisTurn: true,
+      gateStrikes: 5,
+      maxGateStrikes: 3,
+      mandatoryVerifierContract: true,
+    });
+    assert.equal(p.kind, 'blocked');
+  });
+
+  test('mandatory verifier contract reject_continue on inspected no-change before max strikes', async () => {
+    const { planCompletionGateReject } = await import('./completionGatePolicy.js');
+    const p = planCompletionGateReject({
+      hasWrites: false,
+      hasInspectedNoChange: true,
+      policy: 'required',
+      hardGate: false,
+      hadToolCallsThisTurn: true,
+      gateStrikes: 1,
+      maxGateStrikes: 3,
+      mandatoryVerifierContract: true,
+    });
+    assert.equal(p.kind, 'reject_continue');
+  });
+
+  test('mandatory verifier contract blocks interactive soft_allow on inspected no-change after max strikes', async () => {
+    const { planCompletionGateReject } = await import('./completionGatePolicy.js');
+    const p = planCompletionGateReject({
+      hasWrites: false,
+      hasInspectedNoChange: true,
+      policy: 'required',
+      hardGate: false,
+      hadToolCallsThisTurn: true,
+      gateStrikes: 5,
+      maxGateStrikes: 3,
+      mandatoryVerifierContract: true,
+    });
+    assert.equal(p.kind, 'blocked');
+    if (p.kind === 'blocked') {
+      assert.match(p.reason, /verifier/i);
+    }
+  });
+
+  test('inspected no-change without mandatory contract may still interactive soft_allow after max strikes', async () => {
+    const { planCompletionGateReject } = await import('./completionGatePolicy.js');
+    const p = planCompletionGateReject({
+      hasWrites: false,
+      hasInspectedNoChange: true,
+      policy: 'required',
+      hardGate: false,
+      hadToolCallsThisTurn: true,
+      gateStrikes: 5,
+      maxGateStrikes: 3,
+      mandatoryVerifierContract: false,
+    });
+    assert.equal(p.kind, 'soft_allow');
+  });
+
   test('required + hardGate reject_continue before max strikes', async () => {
     const { planCompletionGateReject } = await import('./completionGatePolicy.js');
     const p = planCompletionGateReject({

@@ -3,6 +3,7 @@ import type {
   ChatEngineStreamingLoopHost,
   TaskIntent,
 } from "./chatEngine.js";
+import { syncEffectiveGatePolicyAtCompletion } from "./completionGatePolicy.js";
 import {
   formatPreservedUnverifiedTerminalAnswer,
   resolvePreservedUnverifiedAtTurnLimit,
@@ -32,6 +33,12 @@ export async function* finalizeStreamingTurnLimit(input: {
     `Turn limit reached (${host.taskAllowance?.consumed.turns ?? maxTurns} of ` +
       `${host.taskAllowance?.grant.turnCap ?? maxTurns}).`;
   if (effectiveExecutePolicy) {
+    host.gatePolicy = syncEffectiveGatePolicyAtCompletion({
+      taskClass: host.taskClass,
+      task: host.options.task,
+      requiredVerifierCommands: host.getResolvedRequiredVerifiers(),
+      toolCallLog: host.toolCallLog,
+    });
     const gateResult = host.evaluateCompletionGate(
       { type: "completion", answer: "" },
       effectiveIntent,
@@ -82,6 +89,12 @@ export async function* finalizeStreamingTurnLimit(input: {
   }
 
   if (effectiveExecutePolicy) {
+    host.gatePolicy = syncEffectiveGatePolicyAtCompletion({
+      taskClass: host.taskClass,
+      task: host.options.task,
+      requiredVerifierCommands: host.getResolvedRequiredVerifiers(),
+      toolCallLog: host.toolCallLog,
+    });
     const gateResult = host.evaluateCompletionGate(
       { type: "completion", answer: "" },
       effectiveIntent,

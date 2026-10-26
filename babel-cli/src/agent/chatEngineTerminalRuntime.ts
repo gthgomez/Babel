@@ -343,6 +343,9 @@ export function completeChatStream(
     runAllowance,
     ...(finalizedTelemetry ? { turnTelemetry: finalizedTelemetry } : {}),
     ...(terminalReason !== undefined ? { reason: terminalReason } : {}),
+    ...(snapshot.outcome.gatePolicy != null
+      ? { gatePolicy: snapshot.outcome.gatePolicy }
+      : {}),
   })
 }
 
@@ -857,7 +860,7 @@ export function assembleChatResult(
     ...(snapshot.outcome.budgetExceeded
       ? { budgetExceeded: true as const }
       : {}),
-    ...(snapshot.outcome.gatePolicy
+    ...(snapshot.outcome.gatePolicy != null
       ? { gatePolicy: snapshot.outcome.gatePolicy }
       : {}),
     ...(snapshot.presentation.lastTurnTelemetry
