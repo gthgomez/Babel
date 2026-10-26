@@ -47,3 +47,10 @@ export function formatSessionCostHud(usage: Pick<SessionUsageSummary,
   else if (incomplete && estimate <= 0 && known <= 0) bits.push('incomplete');
   return bits.join('; ') || '$0.0000';
 }
+
+const LEGACY_HUD_NUMERIC = /^\d+\.\d{4}$/;
+
+/** Prefix only legacy bare `toFixed(4)` cache values; preformatted HUD labels pass through. */
+export function formatHudCostDisplay(cachedCostStr: string): string {
+  return LEGACY_HUD_NUMERIC.test(cachedCostStr) ? `$${cachedCostStr}` : cachedCostStr;
+}

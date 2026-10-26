@@ -16,7 +16,7 @@ import {
   stripAnsi,
   truncate,
 } from './theme.js';
-import { formatSessionCostHud } from '../cli/usageCost.js';
+import { formatHudCostDisplay, formatSessionCostHud } from '../cli/usageCost.js';
 import { globalCostTracker } from '../services/costTracker.js';
 import { renderMarkdown } from './highlight.js';
 import { RawModeManager } from './rawMode.js';
@@ -58,12 +58,6 @@ function dispatchSessionCostHud(
     costUSD: stats.knownCostUSD ?? stats.totalCostUSD,
     costHudLabel: formatSessionCostHud(stats),
   });
-}
-
-function formatHudCostDisplay(cachedCostStr: string): string {
-  return cachedCostStr.startsWith('$') || cachedCostStr === 'incomplete'
-    ? cachedCostStr
-    : `$${cachedCostStr}`;
 }
 
 /**
@@ -462,7 +456,7 @@ export class WaterfallRenderer extends BaseRenderer {
 
     const lines: string[] = [
       sectionLabel('── Run Complete ──'),
-      `${muted('Duration')} ${elapsed}  ${muted('Cost')} ${muted('$' + s.cachedCostStr)}  ${muted('Tools')} ${String(s.completedToolCalls)}`,
+      `${muted('Duration')} ${elapsed}  ${muted('Cost')} ${muted(formatHudCostDisplay(s.cachedCostStr))}  ${muted('Tools')} ${String(s.completedToolCalls)}`,
       '',
       sectionLabel('Stages:'),
       `  ${stageSummary}`,
