@@ -26,6 +26,32 @@ import {
   paritySettleProviderRetry,
   type ParityRuntime,
 } from './chatEngineParityBridge.js';
+import type { TerminalReason } from './chatTerminalReason.js';
+
+/** Authoritative harness stop when finite task accounting refuses retry or dispatch. */
+export function taskAllowanceStopReasonFromError(error: unknown): TerminalReason | undefined {
+  const message = error instanceof Error ? error.message : String(error ?? '');
+  if (message.startsWith('Provider retry blocked by task allowance:')) {
+    const detail = message.slice('Provider retry blocked by task allowance: '.length).trim();
+    if (detail.startsWith('COST_ACCOUNTING_INCOMPLETE:')) {
+      return {
+        code: 'cost_accounting_incomplete',
+        cause_class: 'harness',
+        detail: 'provider_retry_blocked',
+      };
+    }
+  }
+  if (message.startsWith('COST_ACCOUNTING_INCOMPLETE:')) {
+    return { code: 'cost_accounting_incomplete', cause_class: 'harness' };
+  }
+  return undefined;
+}
+
+export function isAuthoritativeTaskAllowanceStopError(error: unknown): boolean {
+  if (taskAllowanceStopReasonFromError(error) !== undefined) return true;
+  const message = error instanceof Error ? error.message : String(error ?? '');
+  return message.startsWith('Provider retry blocked by retired task owner');
+}
 
 export type ChatUsageScope = {
   runControl?: import('../runtime/run-control.js').RunControl;

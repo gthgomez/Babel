@@ -685,7 +685,19 @@ export class DeepInfraApiRunner implements LlmRunner {
           retryAttempt = attempt + 1;
           retryAttemptId = randomUUID();
           physicalAttemptId = retryAttemptId;
-          callbacks?.onRetry?.({ provider: this.providerId, model: this.model, attempt: retryAttempt, reason: isAbortError(err) ? 'timeout' : 'transport', backoff_ms: retryDelay, request_id: preparedRequest.request_id, attempt_id: retryAttemptId, body_digest: preparedRequest.body_digest });
+          const transportRetryEvent = { provider: this.providerId, model: this.model, attempt: retryAttempt, reason: (isAbortError(err) ? 'timeout' : 'transport') as 'timeout' | 'transport', backoff_ms: retryDelay, request_id: preparedRequest.request_id, attempt_id: retryAttemptId, body_digest: preparedRequest.body_digest };
+          try {
+            callbacks?.onRetry?.(transportRetryEvent);
+          } catch (retryErr) {
+            settleRetry('failed');
+            notifyPhase('provider_error', undefined, isAbortError(err) ? 'timeout' : 'transport');
+            notifyCompleted('failed', null, '', null, null, null, this.maxTokens, {
+              actualAttempt: attempt,
+              details: { message: lastError.message },
+              failureStage: 'request',
+            });
+            throw retryErr;
+          }
           await sleep(retryDelay, signal).catch((error: unknown) => {
             if (isAbortError(error)) settleRetry('cancelled');
             throw error;
@@ -721,7 +733,24 @@ export class DeepInfraApiRunner implements LlmRunner {
       retryAttempt = attempt + 1;
       retryAttemptId = randomUUID();
       physicalAttemptId = retryAttemptId;
-      callbacks?.onRetry?.({ provider: this.providerId, model: this.model, attempt: retryAttempt, reason: response.status === 429 ? 'rate_limit' : response.status === 408 ? 'timeout' : 'server_error', backoff_ms: retryDelay, request_id: preparedRequest.request_id, attempt_id: retryAttemptId, body_digest: preparedRequest.body_digest });
+      const httpRetryEvent = { provider: this.providerId, model: this.model, attempt: retryAttempt, reason: (response.status === 429 ? 'rate_limit' : response.status === 408 ? 'timeout' : 'server_error') as 'rate_limit' | 'timeout' | 'server_error', backoff_ms: retryDelay, request_id: preparedRequest.request_id, attempt_id: retryAttemptId, body_digest: preparedRequest.body_digest };
+      try {
+        callbacks?.onRetry?.(httpRetryEvent);
+      } catch (retryErr) {
+        settleRetry('failed');
+        const body = await readErrorBody(response);
+        notifyPhase('provider_error', response.status, 'http_error');
+        notifyCompleted('failed', null, body, null, null, null, this.maxTokens, {
+          actualAttempt: attempt,
+          details: {
+            status: response.status,
+            message: body,
+            providerRequestId: providerRequestIdFromResponse(response),
+          },
+          failureStage: 'response',
+        });
+        throw retryErr;
+      }
       await sleep(retryDelay, signal).catch((error: unknown) => {
             if (isAbortError(error)) settleRetry('cancelled');
             throw error;
@@ -1497,7 +1526,19 @@ export class DeepInfraApiRunner implements LlmRunner {
           retryAttempt = attempt + 1;
           retryAttemptId = randomUUID();
           physicalAttemptId = retryAttemptId;
-          callbacks?.onRetry?.({ provider: this.providerId, model: this.model, attempt: retryAttempt, reason: isAbortError(err) ? 'timeout' : 'transport', backoff_ms: retryDelay, request_id: preparedRequest.request_id, attempt_id: retryAttemptId, body_digest: preparedRequest.body_digest });
+          const streamTransportRetryEvent = { provider: this.providerId, model: this.model, attempt: retryAttempt, reason: (isAbortError(err) ? 'timeout' : 'transport') as 'timeout' | 'transport', backoff_ms: retryDelay, request_id: preparedRequest.request_id, attempt_id: retryAttemptId, body_digest: preparedRequest.body_digest };
+          try {
+            callbacks?.onRetry?.(streamTransportRetryEvent);
+          } catch (retryErr) {
+            settleRetry('failed');
+            notifyPhase('provider_error', undefined, isAbortError(err) ? 'timeout' : 'transport');
+            notifyCompleted('failed', null, '', null, null, null, this.maxTokens, {
+              actualAttempt: attempt,
+              details: { message: lastError.message },
+              failureStage: 'request',
+            });
+            throw retryErr;
+          }
           await sleep(retryDelay, signal).catch((error: unknown) => {
             if (isAbortError(error)) settleRetry('cancelled');
             throw error;
@@ -1530,7 +1571,24 @@ export class DeepInfraApiRunner implements LlmRunner {
       retryAttempt = attempt + 1;
       retryAttemptId = randomUUID();
       physicalAttemptId = retryAttemptId;
-      callbacks?.onRetry?.({ provider: this.providerId, model: this.model, attempt: retryAttempt, reason: response.status === 429 ? 'rate_limit' : response.status === 408 ? 'timeout' : 'server_error', backoff_ms: retryDelay, request_id: preparedRequest.request_id, attempt_id: retryAttemptId, body_digest: preparedRequest.body_digest });
+      const streamHttpRetryEvent = { provider: this.providerId, model: this.model, attempt: retryAttempt, reason: (response.status === 429 ? 'rate_limit' : response.status === 408 ? 'timeout' : 'server_error') as 'rate_limit' | 'timeout' | 'server_error', backoff_ms: retryDelay, request_id: preparedRequest.request_id, attempt_id: retryAttemptId, body_digest: preparedRequest.body_digest };
+      try {
+        callbacks?.onRetry?.(streamHttpRetryEvent);
+      } catch (retryErr) {
+        settleRetry('failed');
+        const body = await readErrorBody(response);
+        notifyPhase('provider_error', response.status, 'http_error');
+        notifyCompleted('failed', null, body, null, null, null, this.maxTokens, {
+          actualAttempt: attempt,
+          details: {
+            status: response.status,
+            message: body,
+            providerRequestId: providerRequestIdFromResponse(response),
+          },
+          failureStage: 'response',
+        });
+        throw retryErr;
+      }
       await sleep(retryDelay, signal).catch((error: unknown) => {
             if (isAbortError(error)) settleRetry('cancelled');
             throw error;

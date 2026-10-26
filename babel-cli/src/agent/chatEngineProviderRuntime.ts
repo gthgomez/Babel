@@ -39,6 +39,7 @@ import {
 } from './chatNativeTurn.js'
 import { nativeToolUseToChatAction } from './chatEngineSupport.js'
 import { terminalReasonFromFailureText } from './chatTerminalReason.js'
+import { taskAllowanceStopReasonFromError } from './chatEngineProviderAccounting.js'
 import { parseTextToolTurn } from './textToolParser.js'
 import { parseChatTurnLenient } from './chatEngineHelpers.js'
 import { type NextTurnToolPolicy } from './codingLoop/index.js'
@@ -685,6 +686,10 @@ export async function* resolveChatFallbackOrFail(
     return null
   }
   const errorMessage = err?.message ?? String(err)
+  if (taskAllowanceStopReasonFromError(err)) {
+    yield input.failed(errorMessage)
+    return null
+  }
   if (
     terminalReasonFromFailureText(errorMessage)?.code ===
     'unsupported_operation'
