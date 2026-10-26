@@ -27,6 +27,7 @@ import type { ChatUsageScope } from './chatEngineProviderAccounting.js';
 import { trace, SpanStatusCode, type Span } from "@opentelemetry/api";
 import { endSpan } from "../telemetry/tracing.js";
 import { globalCostTracker } from "../services/costTracker.js";
+import { allowanceCostCapUsd } from "./chatEngineTaskAllowance.js";
 
 import {
   extractToolEnvBlockedSignal,
@@ -599,8 +600,12 @@ export class ChatEngineStreamingLoop {
         const canRepairNativeProtocol = (finishReason: string): boolean => {
           const owner = this.host.taskAllowance?.taskOwnerId, metadata = usageScope.usageMetadata;
           if (!owner || metadata?.prompt_tokens == null || metadata.completion_tokens == null) return false;
+          const grantCap = this.host.taskAllowance
+            ? allowanceCostCapUsd(this.host.taskAllowance.grant.costCap)
+            : Infinity;
           const costSummary = globalCostTracker.getTaskSummary(owner);
           const allowanceAccountingComplete =
+            !Number.isFinite(grantCap) ||
             (costSummary.estimateComplete ?? costSummary.costComplete) === true;
           return nativeStreamExhausted && !nativeIdentityNormalized && !nativeProtocolRepairUsed &&
             nativeFinishReason === finishReason && !this.host.abortController.signal.aborted &&

@@ -4,6 +4,9 @@ import { closeSync, existsSync, lstatSync, openSync, readFileSync, realpathSync,
 import { dirname, isAbsolute, join, basename } from 'node:path'
 import type { DatabaseSync as SqliteDatabase } from 'node:sqlite'
 
+/** Approved campaign reservation ceiling for offline Go holds (binding; not an implicit task default). */
+export const OPENCODE_GO_CAMPAIGN_RESERVATION_CEILING_USD = 2
+
 /** Caller-owned persistent reservation state; never contains request data or credentials. */
 export interface OpenCodeGoBudgetOptions {
   statePath: string
@@ -43,7 +46,8 @@ export class OpenCodeGoBudget {
   private readonly options: Readonly<OpenCodeGoBudgetOptions>
   constructor(options: OpenCodeGoBudgetOptions) {
     if (!isAbsolute(options.statePath) || !options.jobId.trim() ||
-      !Number.isFinite(options.limitUsd) || options.limitUsd <= 0 || options.limitUsd > 2) {
+      !Number.isFinite(options.limitUsd) || options.limitUsd <= 0 ||
+      options.limitUsd > OPENCODE_GO_CAMPAIGN_RESERVATION_CEILING_USD) {
       throw new OpenCodeGoBudgetError()
     }
     this.options = Object.freeze({ ...options })
@@ -53,7 +57,8 @@ export class OpenCodeGoBudget {
     const grant = this.options.currentGrant?.()
     if (!grant) return null
     if (!grant.grantId.trim() || !Number.isSafeInteger(grant.revision) || grant.revision < 0 ||
-      !Number.isFinite(grant.limitUsd) || grant.limitUsd <= 0 || grant.limitUsd > 2) throw new OpenCodeGoBudgetError()
+      !Number.isFinite(grant.limitUsd) || grant.limitUsd <= 0 ||
+      grant.limitUsd > OPENCODE_GO_CAMPAIGN_RESERVATION_CEILING_USD) throw new OpenCodeGoBudgetError()
     const current = { grantId: grant.grantId, revision: grant.revision, limitNanoUsd: Math.floor(grant.limitUsd * 1e9) }
     if (this.lastGrant && (current.revision < this.lastGrant.revision ||
       (current.revision === this.lastGrant.revision && (current.grantId !== this.lastGrant.grantId || current.limitNanoUsd !== this.lastGrant.limitNanoUsd)) ||
@@ -79,7 +84,8 @@ export class OpenCodeGoBudget {
     const grant = this.currentGrant()
     const limitNanoUsd = grant?.limitNanoUsd ?? Math.floor(this.options.limitUsd * 1e9)
     if (state.schema !== 1 || state.jobId !== this.options.jobId ||
-      !Number.isSafeInteger(state.limitNanoUsd) || state.limitNanoUsd <= 0 || state.limitNanoUsd > 2e9 ||
+      !Number.isSafeInteger(state.limitNanoUsd) || state.limitNanoUsd <= 0 ||
+      state.limitNanoUsd > Math.floor(OPENCODE_GO_CAMPAIGN_RESERVATION_CEILING_USD * 1e9) ||
       (!grant && (state.limitNanoUsd !== limitNanoUsd || state.grantId !== undefined || state.grantRevision !== undefined)) ||
       (grant && (state.limitNanoUsd > grant.limitNanoUsd ||
         ((state.grantId !== undefined || state.grantRevision !== undefined) &&

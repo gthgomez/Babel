@@ -202,7 +202,7 @@ export function createRunAllowanceReport(
 
   const declaredCostUsd = limits.costBudget?.requestedCostUsd ?? limits.maxCostUsd;
   const effectiveCostCapUsd =
-    state?.criticRepairCostCapUsd != null
+    state?.criticRepairCostCapUsd != null && Number.isFinite(limits.maxCostUsd)
       ? Math.min(limits.maxCostUsd, state.criticRepairCostCapUsd)
       : limits.maxCostUsd;
   const costAllowance = Number.isFinite(declaredCostUsd)
@@ -351,7 +351,7 @@ export const DEFAULT_CHAT_ENGINE_LIMITS: ChatEngineLimits = {
   maxTurns: 200,                       // safety ceiling — budgets stop the loop
   maxConversationMessages: 20,
   maxEstimatedTokens: 128_000,         // prevent compaction thrash on real repos
-  maxCostUsd: 2.00,
+  maxCostUsd: Infinity,
   maxWallMs: 10 * 60 * 1000,           // 10 minutes
   stallTurns: 8,
   investigateModel: undefined,
@@ -439,7 +439,7 @@ function parseRawFloat(
  * - BABEL_CHAT_MAX_TURNS (default 200, safety ceiling)
  * - BABEL_CHAT_MAX_MESSAGES (default 20)
  * - BABEL_CHAT_MAX_TOKENS (default 128000)
- * - BABEL_CHAT_MAX_COST (default 2.00 USD; explicit 'unlimited' disables only the monetary cap)
+ * - BABEL_CHAT_MAX_COST (default unlimited; explicit finite USD or 'unlimited' opt-in/out)
  * - BABEL_CHAT_MAX_WALL_MS (default 600000, 10 minutes)
  * - BABEL_CHAT_LONG_TASK=1 → explicitly authorized long-task profile: wall
  *   requests may go up to LONG_TASK_WALL_CEILING_MS (4h) instead of one hour.
@@ -514,12 +514,12 @@ export function resolveChatEngineLimits(
       4_000,
       200_000,
     ),
-    maxCostUsd: parseBoundedFloat(
-      process.env['BABEL_CHAT_MAX_COST'],
-      baseDefaults.maxCostUsd,
-      0.01,
-      100.00,
-    ),
+    maxCostUsd: (() => {
+      const raw = process.env['BABEL_CHAT_MAX_COST'];
+      if (raw === undefined || raw.trim() === '') return baseDefaults.maxCostUsd;
+      if (raw.trim().toLowerCase() === 'unlimited') return Infinity;
+      return parseBoundedFloat(raw, baseDefaults.maxCostUsd, 0.01, 100.00);
+    })(),
     maxWallMs: parseBoundedInt(
       process.env['BABEL_CHAT_MAX_WALL_MS'],
       baseDefaults.maxWallMs,
@@ -592,7 +592,7 @@ export function resolveChatEngineLimits(
       : parseRawFloat(rawEnvCost, baseDefaults.maxCostUsd));
 
   const resolvedMaxCostUsd =
-    rawEnvCost?.trim().toLowerCase() === 'unlimited' && overrides.maxCostUsd === undefined
+    requestedMaxCostUsd === Infinity
       ? Infinity
       : Math.min(
           100.00,

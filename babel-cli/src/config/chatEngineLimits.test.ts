@@ -80,11 +80,9 @@ test('resolveChatEngineLimits uses defaults when env unset', () => {
     assert.deepEqual(expectedBase.costBudget, costBudgetFor(DEFAULT_CHAT_ENGINE_LIMITS.maxCostUsd));
     assert.ok(expectedBase.runAllowance);
     assert.equal(expectedBase.runAllowance?.declaredWallMs, DEFAULT_CHAT_ENGINE_LIMITS.maxWallMs);
-    assert.equal(expectedBase.runAllowance?.declaredCostUsd, DEFAULT_CHAT_ENGINE_LIMITS.maxCostUsd);
-    assert.deepEqual(expectedBase.runAllowance?.costAllowance, {
-      kind: 'finite',
-      usd: DEFAULT_CHAT_ENGINE_LIMITS.maxCostUsd,
-    });
+    assert.equal(expectedBase.runAllowance?.declaredCostUsd, Infinity);
+    assert.deepEqual(expectedBase.runAllowance?.costAllowance, { kind: 'unlimited' });
+    assert.equal(expectedBase.maxCostUsd, Infinity);
     const withTurns = resolveChatEngineLimits({ maxTurns: 12 });
     assert.equal(withTurns.maxTurns, 12);
     assert.deepEqual(withTurns.wallBudget, wallBudgetFor(DEFAULT_CHAT_ENGINE_LIMITS.maxWallMs));

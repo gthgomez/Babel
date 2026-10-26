@@ -21,7 +21,11 @@ import type {
   ChatAllowanceGrant,
 } from "./chatEngineContracts.js";
 import type { TurnRuntimeSnapshot } from "./turnRuntime.js";
-import { OpenCodeGoBudget, OpenCodeGoBudgetError } from "../runners/openCodeGoBudget.js";
+import {
+  OpenCodeGoBudget,
+  OpenCodeGoBudgetError,
+  OPENCODE_GO_CAMPAIGN_RESERVATION_CEILING_USD,
+} from "../runners/openCodeGoBudget.js";
 import type { OpenCodeGoRunnerOptions } from "../runners/openCodeGoApi.js";
 import {
   parseOwnerAccountingFaults,
@@ -68,7 +72,10 @@ export class ChatEngineTaskAllowance {
     if (!allowance || this.host.taskCostScopeUnavailable) throw new OpenCodeGoBudgetError();
     const taskOwnerId = allowance.taskOwnerId;
     if (this.goReservation?.taskOwnerId !== taskOwnerId) {
-      const limitUsd = allowanceCostCapUsd(allowance.grant.costCap);
+      const grantUsd = allowanceCostCapUsd(allowance.grant.costCap);
+      const limitUsd = Number.isFinite(grantUsd)
+        ? Math.min(grantUsd, OPENCODE_GO_CAMPAIGN_RESERVATION_CEILING_USD)
+        : OPENCODE_GO_CAMPAIGN_RESERVATION_CEILING_USD;
       this.goReservation = {
         taskOwnerId,
         budget: new OpenCodeGoBudget({
@@ -111,36 +118,62 @@ export class ChatEngineTaskAllowance {
 
   persistTaskAllowance(): void {
     const allowance = this.host.taskAllowance;
-    if (this.host.taskCostScopeUnavailable || !allowance) return;
+    if (!allowance) return;
+    if (this.host.taskCostScopeUnavailable) return;
+    this.checkpointActiveWall();
+    allowance.accountingEpoch = globalCostTracker.getAccountingEpoch();
+    allowance.consumed.costUsd = this.currentTaskCostUsd();
+    allowance.consumed.unknownChargeCount =
+      globalCostTracker.getTaskSummary(allowance.taskOwnerId)
+        .unknownChargeCount ?? 0;
+    allowance.accountedChargeIds = globalCostTracker.getTaskChargeIds(
+      allowance.taskOwnerId,
+    );
+    allowance.activeExecution =
+      this.host.activeExecutionCheckpointMs !== null;
+    allowance.repair = {
+      criticRepairCostCapUsd: this.host.criticRepairCostCapUsd,
+      postWriteRepairWallCapMs: this.host.postWriteRepairWallCapMs,
+      postWriteRepairRestrict: this.host.postWriteRepairRestrict,
+    };
+    if (this.host.lastTurnRuntime)
+      allowance.lastTurnRuntime = this.host.lastTurnRuntime;
+    const ownerFaults = [...this.host.ownerAccountingFaults.values()].flat();
+    if (ownerFaults.length > 0) allowance.accountingFaults = ownerFaults;
+    else delete allowance.accountingFaults;
+    const finiteCost = allowance.grant.costCap.kind === "finite";
     try {
-      this.checkpointActiveWall();
-      allowance.accountingEpoch = globalCostTracker.getAccountingEpoch();
-      allowance.consumed.costUsd = this.currentTaskCostUsd();
-      allowance.consumed.unknownChargeCount =
-        globalCostTracker.getTaskSummary(allowance.taskOwnerId)
-          .unknownChargeCount ?? 0;
-      allowance.accountedChargeIds = globalCostTracker.getTaskChargeIds(
-        allowance.taskOwnerId,
-      );
-      allowance.activeExecution =
-        this.host.activeExecutionCheckpointMs !== null;
-      allowance.repair = {
-        criticRepairCostCapUsd: this.host.criticRepairCostCapUsd,
-        postWriteRepairWallCapMs: this.host.postWriteRepairWallCapMs,
-        postWriteRepairRestrict: this.host.postWriteRepairRestrict,
-      };
-      if (this.host.lastTurnRuntime)
-        allowance.lastTurnRuntime = this.host.lastTurnRuntime;
-      const ownerFaults = [...this.host.ownerAccountingFaults.values()].flat();
-      if (ownerFaults.length > 0) allowance.accountingFaults = ownerFaults;
-      else delete allowance.accountingFaults;
       this.host.ownerAccounting.persistOwnerCharges(allowance.taskOwnerId);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      const financialJournalOnly =
+        code === "EACCES" || code === "EPERM";
+      if (finiteCost || !financialJournalOnly) {
+        this.host.taskCostScopeUnavailable = true;
+        return;
+      }
+      const faultScope: import("./chatEngineProviderAccounting.js").ChatUsageScope = {
+        taskOwnerId: allowance.taskOwnerId,
+        accountingEpoch: allowance.accountingEpoch,
+        chargeId: null,
+        turnId: null,
+      };
+      if (allowance.grant.revision !== undefined) {
+        faultScope.ownerGeneration = allowance.grant.revision;
+      }
+      this.host.ownerAccounting.recordOwnerAccountingFault(
+        faultScope,
+        "persistence-failure",
+        "Owner charge journal unavailable; telemetry may be unpersisted",
+        false,
+      );
+    }
+    try {
       const path = join(this.host.engineRunDir, "task-budget.json");
       const tmpPath = `${path}.tmp-${process.pid}`;
       writeFileSync(tmpPath, JSON.stringify(allowance), "utf8");
       renameSync(tmpPath, path);
     } catch {
-      // A missing durable write removes our authority to continue spending.
       this.host.taskCostScopeUnavailable = true;
     }
   }
@@ -328,9 +361,14 @@ export class ChatEngineTaskAllowance {
   }
 
   effectiveCostCapUsd(): number {
+    const allowance = this.host.taskAllowance;
+    const granted = allowance
+      ? allowanceCostCapUsd(allowance.grant.costCap)
+      : this.host.limits.maxCostUsd;
+    if (!Number.isFinite(granted)) return granted;
     return this.host.criticRepairCostCapUsd == null
-      ? this.host.limits.maxCostUsd
-      : Math.min(this.host.limits.maxCostUsd, this.host.criticRepairCostCapUsd);
+      ? granted
+      : Math.min(granted, this.host.criticRepairCostCapUsd);
   }
 
   effectiveWallCapMs(): number {
