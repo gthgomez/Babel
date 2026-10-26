@@ -1424,16 +1424,24 @@ export class CostTracker {
     try {
       const root = projectRoot ?? dirname(this.projectStatsPath);
       const statsPath = join(root, 'project_stats.json');
-      let statsComplete: number | null = null;
-      if (existsSync(statsPath)) {
-        const stats = JSON.parse(readFileSync(statsPath, 'utf-8')) as ProjectStats;
-        if (stats.projectionComplete === false || stats.completeCostUSD === null) return null;
-        statsComplete = stats.completeCostUSD ?? null;
-      }
       const db = getGlobalTokenHistoryDb();
       const cost = db.getProjectCostSummary(root);
-      if (cost && cost.unknownChargeCount === 0) return cost.knownCostUSD;
-      return statsComplete;
+      if (!cost || !Number.isFinite(cost.knownCostUSD) || cost.knownCostUSD < 0 ||
+          !Number.isSafeInteger(cost.unknownChargeCount) || cost.unknownChargeCount !== 0) return null;
+      if (!existsSync(statsPath)) return null;
+      const stats = JSON.parse(readFileSync(statsPath, 'utf-8')) as ProjectStats;
+      const allowanceComplete = stats.projectionComplete === true && (stats.unknownChargeCount ?? 0) === 0;
+      const summary: SessionUsageSummary = { ...stats,
+        totalTokens: stats.totalInputTokens + stats.totalOutputTokens,
+        costComplete: allowanceComplete, estimateComplete: allowanceComplete,
+      };
+      const receipts = Object.values(stats.sessionReceipts ?? {}).flat();
+      if (!allowanceComplete || !receipts.every(validReceiptCost) || !this.receiptsMatchSummary(receipts, summary)) return null;
+      if (receipts.length === 0) return null;
+      const projected = projectGoEstimates(summary, receipts);
+      if (!projected.costComplete || typeof projected.actualCostUSD !== 'number' ||
+          Math.abs(cost.knownCostUSD - projected.actualCostUSD) > 1e-9) return null;
+      return cost.knownCostUSD;
     } catch {
       return null;
     }
