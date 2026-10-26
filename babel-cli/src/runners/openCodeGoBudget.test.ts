@@ -28,6 +28,13 @@ function state(path: string): { reservedNanoUsd: number; attempts: number; limit
   finally { db.close() }
 }
 
+function ledgerLimitNanoUsd(statePath: string): number {
+  if (process.platform === 'win32') {
+    return state(statePath).limitNanoUsd
+  }
+  return (JSON.parse(readFileSync(statePath, 'utf8')) as { limitNanoUsd: number }).limitNanoUsd
+}
+
 async function child(script: string, barrier = false) {
   const processChild = spawn(process.execPath, [...childImports, script], {
     windowsHide: true, env: process.env, stdio: ['ignore', 'pipe', 'pipe'],
@@ -207,8 +214,31 @@ test('Go budget honors finite grants above the legacy two-dollar ceiling', async
   const statePath = join(root, 'budget.json')
   const budget = new OpenCodeGoBudget({ statePath, jobId: 'owner', limitUsd: 5 })
   await budget.reserve(1, 1)
-  const bytes = JSON.parse(readFileSync(statePath, 'utf8')) as { limitNanoUsd: number }
-  assert.equal(bytes.limitNanoUsd, 5_000_000_000)
+  assert.equal(ledgerLimitNanoUsd(statePath), 5_000_000_000)
+})
+
+test('Go budget rejects non-finite currentLimitUsd', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-go-invalid-limit-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const statePath = join(root, 'budget.json')
+  const budget = new OpenCodeGoBudget({
+    statePath,
+    jobId: 'owner',
+    limitUsd: 5,
+    currentLimitUsd: () => Number.NaN,
+  })
+  await assert.rejects(() => budget.reserve(1, 1), /budget denied/i)
+})
+
+test('finite Go grant enforces monetary exhaustion on supported ledger', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-go-exhaust-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const statePath = join(root, 'budget.json')
+  const limitUsd = 0.00001
+  const budget = new OpenCodeGoBudget({ statePath, jobId: 'owner', limitUsd })
+  await budget.reserve(1, 1)
+  await assert.rejects(() => budget.reserve(9000, 9000), /budget denied/i)
+  assert.equal(ledgerLimitNanoUsd(statePath), 10_000)
 })
 
 test('unlimited Go grant dispatches without a monetary reservation ledger file', async t => {

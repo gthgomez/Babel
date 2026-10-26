@@ -7,6 +7,7 @@ import {
   isChatStreamingEnabled,
   isSweChatProfileEnabled,
   resolveChatEngineLimits,
+  ChatEngineLimitsConfigurationError,
   createRunAllowanceReport,
   evaluateTimelineLimiter,
   shouldShrinkWallForPostWriteRepair,
@@ -170,26 +171,36 @@ test('explicit unlimited override wins over finite env cost', () => {
   }
 });
 
-test('explicit NaN cost override does not become unlimited', () => {
+test('explicit invalid cost overrides fail closed with configuration errors', () => {
   const previous = process.env['BABEL_CHAT_MAX_COST'];
   delete process.env['BABEL_CHAT_MAX_COST'];
   try {
-    const resolved = resolveChatEngineLimits({ maxCostUsd: Number.NaN });
-    assert.equal(resolved.maxCostUsd, 2.0);
-    assert.notEqual(resolved.costBudget?.requestedCostUsd, Number.NaN);
+    assert.throws(
+      () => resolveChatEngineLimits({ maxCostUsd: Number.NaN }),
+      ChatEngineLimitsConfigurationError,
+    );
+    assert.throws(
+      () => resolveChatEngineLimits({ maxCostUsd: Number.NEGATIVE_INFINITY }),
+      ChatEngineLimitsConfigurationError,
+    );
+    assert.throws(
+      () => resolveChatEngineLimits({ maxCostUsd: 0 }),
+      ChatEngineLimitsConfigurationError,
+    );
   } finally {
     if (previous === undefined) delete process.env['BABEL_CHAT_MAX_COST'];
     else process.env['BABEL_CHAT_MAX_COST'] = previous;
   }
 });
 
-test('malformed env cost does not silently resolve to unlimited', () => {
+test('malformed explicit env cost strings reject configuration', () => {
   const previous = process.env['BABEL_CHAT_MAX_COST'];
   delete process.env['BABEL_CHAT_MAX_COST'];
   try {
-    process.env['BABEL_CHAT_MAX_COST'] = 'not-a-number';
-    const resolved = resolveChatEngineLimits();
-    assert.equal(resolved.maxCostUsd, 2.0);
+    for (const raw of ['not-a-number', '1junk', '   ']) {
+      process.env['BABEL_CHAT_MAX_COST'] = raw;
+      assert.throws(() => resolveChatEngineLimits(), ChatEngineLimitsConfigurationError);
+    }
   } finally {
     if (previous === undefined) delete process.env['BABEL_CHAT_MAX_COST'];
     else process.env['BABEL_CHAT_MAX_COST'] = previous;
@@ -221,9 +232,10 @@ test('budget fields are clamped to valid ranges', () => {
   delete process.env['BABEL_CHAT_STALL_TURNS'];
   delete process.env['BABEL_CHAT_LONG_TASK'];
   try {
-    // Below-min cost should clamp to floor
-    const low = resolveChatEngineLimits({ maxCostUsd: 0 });
-    assert.ok(low.maxCostUsd >= 0.01);
+    assert.throws(
+      () => resolveChatEngineLimits({ maxCostUsd: 0 }),
+      ChatEngineLimitsConfigurationError,
+    );
     // Negative wall clock should clamp to floor
     const neg = resolveChatEngineLimits({ maxWallMs: -1 });
     assert.ok(neg.maxWallMs >= 10_000);
