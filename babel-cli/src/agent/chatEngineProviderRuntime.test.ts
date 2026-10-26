@@ -155,6 +155,80 @@ test('retains the exact GLM provider route when a generic failover is proposed',
     assert.match(event.error, /exact GLM route refuses provider substitution/)
 })
 
+async function collectFallbackEvents(
+  input: ChatFallbackInput,
+): Promise<{ events: Array<{ type: string; error?: string }>; runner: unknown }> {
+  const events: Array<{ type: string; error?: string }> = []
+  const stream = resolveChatFallbackOrFail(input)
+  let runner: unknown = null
+  for (;;) {
+    const step = await stream.next()
+    if (step.done) {
+      runner = step.value
+      break
+    }
+    const event = step.value as { type: string; error?: string }
+    events.push(event)
+  }
+  return { events, runner }
+}
+
+test('resolveChatFallbackOrFail blocks allowance stops without failover or fallback dispatch', async () => {
+  const cases = [
+    {
+      label: 'bare accounting incomplete',
+      err: new Error('COST_ACCOUNTING_INCOMPLETE: fixture unknown charge'),
+    },
+    {
+      label: 'accounting incomplete wrapper',
+      err: new Error(
+        'Provider retry blocked by task allowance: COST_ACCOUNTING_INCOMPLETE: fixture',
+      ),
+    },
+    {
+      label: 'known-cost denial wrapper',
+      err: new Error(
+        'Provider retry blocked by task allowance: Cost budget exceeded ($2.00 of $2.00) [cost].',
+      ),
+    },
+    {
+      label: 'wall denial wrapper',
+      err: new Error(
+        'Provider retry blocked by task allowance: Time budget exceeded (720s of 720s) [wall].',
+      ),
+    },
+    {
+      label: 'unknown allowance wrapper',
+      err: new Error(
+        'Provider retry blocked by task allowance: Task turn allowance exhausted (120 of 120).',
+      ),
+    },
+  ] as const
+  for (const { label, err } of cases) {
+    let failoverCalls = 0
+    let fallbackCalls = 0
+    const { events, runner } = await collectFallbackEvents(
+      fallbackInput({
+        err,
+        tryFailover: () => {
+          failoverCalls++
+          return null
+        },
+        resolveFallback: () => {
+          fallbackCalls++
+          return null
+        },
+      }),
+    )
+    assert.equal(failoverCalls, 0, `${label}: tryFailover must not run`)
+    assert.equal(fallbackCalls, 0, `${label}: resolveFallback must not run`)
+    assert.equal(events.length, 1, `${label}: exactly one terminal event`)
+    assert.equal(events[0]?.type, 'failed', `${label}: failed terminal`)
+    assert.equal(events[0]?.error, err.message, `${label}: preserves error message`)
+    assert.equal(runner, null, `${label}: no fallback runner`)
+  }
+})
+
 test('settles a late synthesis against its captured owner after a successor arrives', async () => {
   let deliver!: (value: string) => void
   const response = new Promise<string>((resolve) => {

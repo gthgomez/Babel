@@ -25,7 +25,7 @@ import { refreshChatVerifierReceiptStalenessSync } from '../evidence/chatRevisio
 import {
   type ChatUsageScope,
   isAuthoritativeTaskAllowanceStopError,
-  terminalReasonForAuthoritativeTaskAllowanceStop,
+  terminalReasonForAuthoritativeTaskAllowanceStopRequired,
 } from './chatEngineProviderAccounting.js';
 
 import { trace, SpanStatusCode, type Span } from "@opentelemetry/api";
@@ -779,12 +779,12 @@ export class ChatEngineStreamingLoop {
             continue;
           }
           if (isAuthoritativeTaskAllowanceStopError(err)) {
-            const allowanceReason = terminalReasonForAuthoritativeTaskAllowanceStop(err);
             endSpan(_turnSpan, SpanStatusCode.ERROR);
             _turnSpan = null;
-            if (allowanceReason) {
-              yield this.host.streamFailed(err?.message ?? String(err), allowanceReason);
-            }
+            yield this.host.streamFailed(
+              err?.message ?? String(err),
+              terminalReasonForAuthoritativeTaskAllowanceStopRequired(err),
+            );
             return;
           }
           const fb = yield* this.host.resolveFallbackOrFail(
@@ -1072,12 +1072,12 @@ export class ChatEngineStreamingLoop {
           if (admissionRecovery === 'stopped') return;
           if (!this.host.isSubmissionCurrent(submissionGeneration)) return;
           if (isAuthoritativeTaskAllowanceStopError(err)) {
-            const legacyAllowanceReason = terminalReasonForAuthoritativeTaskAllowanceStop(err);
             endSpan(_turnSpan, SpanStatusCode.ERROR);
             _turnSpan = null;
-            if (legacyAllowanceReason) {
-              yield this.host.streamFailed(err?.message ?? String(err), legacyAllowanceReason);
-            }
+            yield this.host.streamFailed(
+              err?.message ?? String(err),
+              terminalReasonForAuthoritativeTaskAllowanceStopRequired(err),
+            );
             return;
           }
           const fb = yield* this.host.resolveFallbackOrFail(

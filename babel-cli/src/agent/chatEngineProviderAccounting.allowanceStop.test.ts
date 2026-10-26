@@ -9,6 +9,12 @@ import {
 test('isAuthoritativeTaskAllowanceStopError matches every task-allowance retry wrapper', () => {
   assert.equal(
     isAuthoritativeTaskAllowanceStopError(
+      new Error('COST_ACCOUNTING_INCOMPLETE: unknown pricing'),
+    ),
+    true,
+  )
+  assert.equal(
+    isAuthoritativeTaskAllowanceStopError(
       new Error(
         'Provider retry blocked by task allowance: COST_ACCOUNTING_INCOMPLETE: unknown pricing',
       ),

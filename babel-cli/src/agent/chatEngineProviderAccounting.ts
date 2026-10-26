@@ -51,10 +51,17 @@ export function taskAllowanceStopReasonFromError(error: unknown): TerminalReason
 }
 
 export function isAuthoritativeTaskAllowanceStopError(error: unknown): boolean {
+  if (taskAllowanceStopReasonFromError(error) !== undefined) return true;
   const message = error instanceof Error ? error.message : String(error ?? '');
   if (message.startsWith('Provider retry blocked by task allowance:')) return true;
   return message.startsWith('Provider retry blocked by retired task owner');
 }
+
+const authoritativeAllowanceStopFallbackReason: TerminalReason = {
+  code: 'unknown',
+  cause_class: 'harness',
+  detail: 'provider_retry_blocked',
+};
 
 /** Terminal reason for stream/fallback stop after {@link isAuthoritativeTaskAllowanceStopError}. */
 export function terminalReasonForAuthoritativeTaskAllowanceStop(
@@ -72,6 +79,16 @@ export function terminalReasonForAuthoritativeTaskAllowanceStop(
     return terminalReasonFromFailureText(message);
   }
   return undefined;
+}
+
+/** Always returns a terminal reason once {@link isAuthoritativeTaskAllowanceStopError} is true. */
+export function terminalReasonForAuthoritativeTaskAllowanceStopRequired(
+  error: unknown,
+): TerminalReason {
+  return (
+    terminalReasonForAuthoritativeTaskAllowanceStop(error) ??
+    authoritativeAllowanceStopFallbackReason
+  );
 }
 
 export type ChatUsageScope = {
