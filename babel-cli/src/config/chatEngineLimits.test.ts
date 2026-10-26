@@ -175,8 +175,21 @@ test('explicit NaN cost override does not become unlimited', () => {
   delete process.env['BABEL_CHAT_MAX_COST'];
   try {
     const resolved = resolveChatEngineLimits({ maxCostUsd: Number.NaN });
-    assert.equal(resolved.maxCostUsd, Infinity);
+    assert.equal(resolved.maxCostUsd, 2.0);
     assert.notEqual(resolved.costBudget?.requestedCostUsd, Number.NaN);
+  } finally {
+    if (previous === undefined) delete process.env['BABEL_CHAT_MAX_COST'];
+    else process.env['BABEL_CHAT_MAX_COST'] = previous;
+  }
+});
+
+test('malformed env cost does not silently resolve to unlimited', () => {
+  const previous = process.env['BABEL_CHAT_MAX_COST'];
+  delete process.env['BABEL_CHAT_MAX_COST'];
+  try {
+    process.env['BABEL_CHAT_MAX_COST'] = 'not-a-number';
+    const resolved = resolveChatEngineLimits();
+    assert.equal(resolved.maxCostUsd, 2.0);
   } finally {
     if (previous === undefined) delete process.env['BABEL_CHAT_MAX_COST'];
     else process.env['BABEL_CHAT_MAX_COST'] = previous;

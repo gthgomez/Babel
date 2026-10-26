@@ -5,6 +5,10 @@ import { globalCostTracker, type ChargeReceipt } from '../services/costTracker.j
 import type { ChatTaskAllowanceSnapshot } from './chatEngine.js';
 import type { ChatUsageScope } from './chatEngineProviderAccounting.js';
 
+export type OwnerAccountingPersistenceFailureClass =
+  | 'financial-journal-io'
+  | 'authority';
+
 export interface OwnerAccountingFault {
   taskOwnerId: string;
   ownerGeneration: number | null;
@@ -13,6 +17,8 @@ export interface OwnerAccountingFault {
   persistenceScope: 'owner-charge-receipt';
   kind: 'settlement-conflict' | 'persistence-failure';
   reason: string;
+  /** Classifies persistence-failure for restore/runtime policy; absent means legacy conservative. */
+  persistenceFailureClass?: OwnerAccountingPersistenceFailureClass;
 }
 
 export interface ChatEngineOwnerAccountingHost {
@@ -41,6 +47,7 @@ export class ChatEngineOwnerAccounting {
     reason: string,
     appliesToCurrent: boolean,
     blocksRuntimeAuthority?: boolean,
+    persistenceFailureClass?: OwnerAccountingPersistenceFailureClass,
   ): void {
     const ownerId = scope.taskOwnerId;
     if (!ownerId) {
@@ -55,6 +62,9 @@ export class ChatEngineOwnerAccounting {
       persistenceScope: 'owner-charge-receipt',
       kind,
       reason,
+      ...(kind === 'persistence-failure' && persistenceFailureClass !== undefined
+        ? { persistenceFailureClass }
+        : {}),
     };
     const faults = this.host.ownerAccountingFaults.get(ownerId) ?? [];
     if (!faults.some((existing) => JSON.stringify(existing) === JSON.stringify(fault))) {
@@ -168,7 +178,9 @@ export function parseOwnerAccountingFaults(value: unknown): OwnerAccountingFault
       !(entry['chargeId'] === null || typeof entry['chargeId'] === 'string') ||
       entry['persistenceScope'] !== 'owner-charge-receipt' ||
       !['settlement-conflict', 'persistence-failure'].includes(String(entry['kind'])) ||
-      typeof entry['reason'] !== 'string';
+      typeof entry['reason'] !== 'string' ||
+      (entry['persistenceFailureClass'] !== undefined &&
+        !['financial-journal-io', 'authority'].includes(String(entry['persistenceFailureClass'])));
   })) return null;
   return value as OwnerAccountingFault[];
 }

@@ -210,3 +210,14 @@ test('Go budget honors finite grants above the legacy two-dollar ceiling', async
   const bytes = JSON.parse(readFileSync(statePath, 'utf8')) as { limitNanoUsd: number }
   assert.equal(bytes.limitNanoUsd, 5_000_000_000)
 })
+
+test('unlimited Go grant dispatches without a monetary reservation ledger file', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-go-unlimited-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const statePath = join(root, 'budget.json')
+  const budget = new OpenCodeGoBudget({ statePath, jobId: 'owner', limitUsd: Infinity })
+  assert.equal(budget.hasMonetaryReservationLedger(), false)
+  await budget.reserve(1_000, 16)
+  assert.equal(existsSync(statePath), false)
+  budget.assertCurrentAuthority()
+})

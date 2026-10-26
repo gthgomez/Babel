@@ -1,172 +1,303 @@
 import assert from 'node:assert/strict'
-import test from 'node:test'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { ChatEngine } from './chatEngine.js'
-import { runCliChatTask } from '../interactive/execution/chatCore.js'
-import { globalCostTracker } from '../services/costTracker.js'
-import { resolveChatEngineLimits } from '../config/chatEngineLimits.js'
-import { initMinimalGitProject, mkExternalRunsDir } from '../testUtils/chatAdmissionFixture.js'
+import test, { type TestContext } from 'node:test'
+import { spawn } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
+import {
+  isSyntheticProviderFixtureReady,
+  prepareSyntheticProviderFixture,
+  removeSyntheticProviderFixture,
+  summarizeSyntheticProviderOutput,
+} from '../testinfra/synthetic-provider-fixture.mjs'
 
-const task = 'Explain fixture.txt without changing it.'
-const model = 'glm-5.3-flash'
-const endpoint = 'openrouter.ai/api/v1/chat/completions'
-
-function liveHeadlessFixture(t: test.TestContext) {
-  const keys = ['BABEL_LIVE', 'BABEL_HEADLESS', 'BABEL_EXECUTION_PROFILE', 'BABEL_RUNS_DIR', 'BABEL_CHAT_MAX_COST'] as const
-  const prior = new Map(keys.map((key) => [key, process.env[key]]))
-  const priorFetch = globalThis.fetch
-  t.after(() => {
-    globalThis.fetch = priorFetch
-    for (const [key, value] of prior) {
-      if (value === undefined) delete process.env[key]
-      else process.env[key] = value
-    }
+if (!isSyntheticProviderFixtureReady()) {
+  test('unlimited-defaults factory acceptance runs in an isolated synthetic fixture', async t => {
+    const fixture = prepareSyntheticProviderFixture()
+    t.after(() => removeSyntheticProviderFixture(fixture.root))
+    const child = spawn(process.execPath, [
+      '--experimental-wasm-modules',
+      '--import', new URL('../testinfra/synthetic-provider-fixture.mjs', import.meta.url).href,
+      '--import', import.meta.resolve('tsx'),
+      '--import', new URL('../testinfra/register-no-ambient-inference.mjs', import.meta.url).href,
+      '--test', '--test-concurrency=1', '--test-reporter=tap', fileURLToPath(import.meta.url),
+    ], { cwd: fixture.cwd, env: fixture.env, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
+    let output = ''
+    child.stdout.on('data', chunk => { output += String(chunk) })
+    child.stderr.on('data', chunk => { output += String(chunk) })
+    const code = await new Promise<number>(resolve => {
+      child.once('error', () => resolve(1))
+      child.once('close', value => resolve(value ?? 1))
+    })
+    const diagnostic = summarizeSyntheticProviderOutput(output, code)
+    t.diagnostic(diagnostic)
+    if (code !== 0) t.diagnostic(output)
+    assert.equal(code, 0)
+    const inventory = JSON.parse(diagnostic) as { tests: number; passed: number; failed: number; skipped: number }
+    assert.equal(inventory.tests, 5)
+    assert.equal(inventory.passed, 5)
+    assert.equal(inventory.failed, 0)
+    assert.equal(inventory.skipped, 0)
   })
+} else {
+  process.env['COMMAND_CODE_API_KEY'] = 'synthetic-command-code-credential'
   process.env['BABEL_LIVE'] = '1'
   process.env['BABEL_HEADLESS'] = '1'
   process.env['BABEL_EXECUTION_PROFILE'] = 'safe_repo'
-  delete process.env['BABEL_CHAT_MAX_COST']
-  const root = mkdtempSync(join(tmpdir(), 'babel-unlimited-factory-'))
-  initMinimalGitProject(root)
-  const runsDir = mkExternalRunsDir('babel-unlimited-factory-runs-')
-  process.env['BABEL_RUNS_DIR'] = runsDir
-  t.after(() => {
-    rmSync(runsDir, { recursive: true, force: true })
-    rmSync(root, { recursive: true, force: true })
+  const { execFileSync } = await import('node:child_process')
+  const { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } = await import('node:fs')
+  const { join } = await import('node:path')
+  const { runCliChatTask } = await import('../interactive/execution/chatCore.js')
+  const { chatSessionDir } = await import('../cli/runsLayout.js')
+  const { initMinimalGitProject } = await import('../testUtils/chatAdmissionFixture.js')
+  const { globalCostTracker } = await import('../services/costTracker.js')
+  const task = 'Explain README.md and its stated purpose without changing any files.'
+  const backendKey = 'command-code/deepseek-v4.1-flash'
+  const model = 'deepseek/deepseek-v4.1-flash'
+  const endpoint = 'https://api.commandcode.ai/provider/v1/chat/completions'
+  const contents = '# Inspection fixture\n\nPurpose: preserve the cobalt-lantern evidence marker.\n'
+  const toolCallId = 'read-readme-unlimited-defaults'
+  type WireBody = {
+    model: string
+    stream?: boolean
+    tools?: Array<{ function: { name: string } }>
+    messages: Array<{ role: string; tool_call_id?: string; content?: unknown }>
+  }
+  type Usage = { prompt_tokens: number; completion_tokens: number; total_tokens: number }
+  function sse(delta: object, finishReason: 'tool_calls' | 'stop', usage?: Usage): Response {
+    return new Response(`data: ${JSON.stringify({ model,
+      choices: [{ index: 0, delta, finish_reason: finishReason }],
+      ...(usage === undefined ? {} : { usage }),
+    })}\n\ndata: [DONE]\n\n`, { headers: { 'content-type': 'text/event-stream' } })
+  }
+  function fixture(t: TestContext): string {
+    globalCostTracker.resetSession()
+    delete process.env['BABEL_CHAT_MAX_COST']
+    const fixtureRoot = process.env['BABEL_SYNTHETIC_PROVIDER_FIXTURE_ROOT']
+    assert.ok(fixtureRoot)
+    const root = mkdtempSync(join(fixtureRoot, 'tmp', 'unlimited-defaults-factory-'))
+    t.after(() => rmSync(root, { recursive: true, force: true }))
+    initMinimalGitProject(root)
+    writeFileSync(join(root, 'README.md'), contents)
+    execFileSync('git', ['add', 'README.md'], { cwd: root, windowsHide: true })
+    execFileSync('git', ['commit', '-q', '-m', 'inspection input'], { cwd: root, windowsHide: true })
+    const originalFetch = globalThis.fetch
+    t.after(() => { globalThis.fetch = originalFetch })
+    return root
+  }
+  function captureRequest(input: Parameters<typeof fetch>[0], init: Parameters<typeof fetch>[1]): WireBody {
+    assert.equal(String(input), endpoint)
+    assert.equal(init?.redirect, 'error')
+    const body = JSON.parse(String(init?.body)) as WireBody
+    assert.equal(body.model, model)
+    assert.equal(body.stream, true)
+    assert.ok(body.tools?.some(tool => tool.function.name === 'read_file'))
+    return body
+  }
+  function persistedBudget(payload: Record<string, unknown>) {
+    assert.equal(typeof payload['session_id'], 'string')
+    const budget = JSON.parse(readFileSync(join(chatSessionDir(payload['session_id'] as string), 'task-budget.json'), 'utf8'))
+    assert.equal(budget.lastTurnRuntime.effectiveOperation, 'READ_ONLY')
+    assert.equal(budget.lastTurnRuntime.taskClass, 'investigate')
+    assert.equal(budget.grant.turnCap, 120)
+    assert.equal(budget.grant.wallCapMs, 720_000)
+    assert.equal(typeof budget.taskOwnerId, 'string')
+    return budget
+  }
+  const toolDelta = { tool_calls: [{ index: 0, id: toolCallId, type: 'function',
+    function: { name: 'read_file', arguments: JSON.stringify({ path: 'README.md' }) },
+  }] }
+
+  test('default unlimited grant continues after natural unknown usage on first native SSE', async t => {
+    const root = fixture(t)
+    const bodies: WireBody[] = []
+    globalThis.fetch = async (input, init) => {
+      const body = captureRequest(input, init)
+      bodies.push(body)
+      assert.ok(bodies.length <= 2, 'no unexpected critic, retry, fallback or third inference')
+      if (bodies.length === 1) return sse(toolDelta, 'tool_calls')
+      const observation = body.messages.find(message => message.role === 'tool' && message.tool_call_id === toolCallId)
+      assert.ok(observation, 'second native request must contain the actual read_file result')
+      assert.match(String(observation.content), /cobalt-lantern/)
+      assert.match(String(observation.content), /exit_code: 0/)
+      return sse({ content: 'README.md states that this inspection fixture preserves the cobalt-lantern evidence marker. No files were changed.' }, 'stop', {
+        prompt_tokens: 30, completion_tokens: 5, total_tokens: 35,
+      })
+    }
+    const result = await runCliChatTask({ task, projectRoot: root, model: backendKey, outputFormat: 'json' })
+    assert.equal(bodies.length, 2)
+    assert.equal(result.exitCode, 0)
+    assert.equal(result.payload['terminal_outcome'], 'NO_CHANGE_REQUIRED')
+    assert.equal(readFileSync(join(root, 'README.md'), 'utf8'), contents)
+    const budget = persistedBudget(result.payload)
+    assert.deepEqual(budget.grant.costCap, { kind: 'unlimited' })
+    const summary = globalCostTracker.getTaskSummary(budget.taskOwnerId)
+    assert.equal(summary.unknownChargeCount, 1)
+    assert.equal(summary.estimateComplete, false)
   })
-  const target = join(root, 'fixture.txt')
-  writeFileSync(target, 'unchanged\n')
-  return { root, target }
-}
 
-test('normal runCliChatTask factory: default unlimited grant survives unknown settlement', async (t) => {
-  assert.equal(resolveChatEngineLimits().maxCostUsd, Infinity)
-  const { root, target } = liveHeadlessFixture(t)
-  let engine: ChatEngine | undefined
-  let fetchCount = 0
-  globalThis.fetch = (async (input, init) => {
-    if (!String(input).includes(endpoint)) throw new Error(`unexpected route: ${String(input)}`)
-    const body = JSON.parse(String(init?.body)) as { model: string; stream?: boolean }
-    assert.equal(body.model, 'z-ai/glm-5.3-flash')
-    if (body.stream !== true) {
-      return Response.json({
-        model: body.model,
-        choices: [{ message: { content: '{"verdict":"reject","confidence":0.9,"reasons":["verification absent"]}' } }],
-        usage: { prompt_tokens: 10, completion_tokens: 5 },
-      })
+  test('explicit finite env cap stops before a second inference when usage is unknown', async t => {
+    const root = fixture(t)
+    process.env['BABEL_CHAT_MAX_COST'] = '0.75'
+    let fetches = 0
+    globalThis.fetch = async (input, init) => {
+      captureRequest(input, init)
+      fetches++
+      assert.equal(fetches, 1, 'unknown accounting must not dispatch the next request')
+      return sse(toolDelta, 'tool_calls')
     }
-    fetchCount += 1
-    if (fetchCount === 1 && engine) {
-      const owner = (engine as unknown as { taskAllowance: { taskOwnerId: string } }).taskAllowance.taskOwnerId
-      globalCostTracker.recordUnknownCharge('fixture-unpriced-model', {
-        taskOwnerId: owner,
-        chargeId: 'factory-unknown-charge',
-      })
-    }
-    const delta = fetchCount === 1
-      ? {
-          tool_calls: [{
-            index: 0,
-            id: 'factory-read',
-            type: 'function',
-            function: {
-              name: 'read_file',
-              arguments: JSON.stringify({ path: target }),
-            },
-          }],
-        }
-      : { content: 'The fixture contains the text unchanged.' }
-    return new Response(
-      `data: ${JSON.stringify({
-        model: body.model,
-        choices: [{
-          delta,
-          finish_reason: fetchCount === 1 ? 'tool_calls' : 'stop',
-        }],
-        usage: { prompt_tokens: 12, completion_tokens: 6 },
-      })}\n\ndata: [DONE]\n\n`,
-      { headers: { 'content-type': 'text/event-stream' } },
-    )
-  }) as typeof fetch
-
-  const result = await runCliChatTask({
-    task,
-    projectRoot: root,
-    model,
-    outputFormat: 'json',
-    engineFactory: (options) => {
-      engine = new ChatEngine(options)
-      return engine
-    },
+    const result = await runCliChatTask({ task, projectRoot: root, model: backendKey, outputFormat: 'json' })
+    assert.equal(fetches, 1)
+    assert.notEqual(result.exitCode, 0)
+    assert.equal(result.payload['reason_code'], 'cost_accounting_incomplete')
+    const budget = persistedBudget(result.payload)
+    assert.deepEqual(budget.grant.costCap, { kind: 'finite', usd: 0.75 })
   })
 
-  assert.equal(readFileSync(target, 'utf8'), 'unchanged\n')
-  assert.equal(fetchCount, 2)
-  assert.equal(result.exitCode, 0)
-  const answer = result.payload['answer']
-  const answerText = typeof answer === 'string' ? answer : JSON.stringify(answer)
-  assert.match(answerText, /unchanged/i)
-  const budgets = (engine as unknown as { checkBudgets: (skip?: boolean) => { ok: boolean } }).checkBudgets(true)
-  assert.equal(budgets.ok, true)
-})
+  test('unlimited grant survives EACCES on owner-charge journal and still writes task-budget', async t => {
+    const root = fixture(t)
+    const { ChatEngineOwnerAccounting } = await import('./chatEngineOwnerAccounting.js')
+    const originalPersist = ChatEngineOwnerAccounting.prototype.persistOwnerCharges
+    ChatEngineOwnerAccounting.prototype.persistOwnerCharges = function persistOwnerChargesEacces() {
+      const err = new Error('EACCES') as NodeJS.ErrnoException
+      err.code = 'EACCES'
+      throw err
+    }
+    t.after(() => { ChatEngineOwnerAccounting.prototype.persistOwnerCharges = originalPersist })
+    const bodies: WireBody[] = []
+    globalThis.fetch = async (input, init) => {
+      const body = captureRequest(input, init)
+      bodies.push(body)
+      if (bodies.length === 1) return sse(toolDelta, 'tool_calls')
+      return sse({ content: 'README.md preserves the cobalt-lantern evidence marker without edits.' }, 'stop', {
+        prompt_tokens: 20, completion_tokens: 4, total_tokens: 24,
+      })
+    }
+    const result = await runCliChatTask({ task, projectRoot: root, model: backendKey, outputFormat: 'json' })
+    assert.equal(result.exitCode, 0)
+    assert.equal(bodies.length, 2)
+    const budget = persistedBudget(result.payload)
+    assert.deepEqual(budget.grant.costCap, { kind: 'unlimited' })
+    assert.ok(Array.isArray(budget.accountingFaults) && budget.accountingFaults.length > 0)
+    assert.ok(budget.accountingFaults.some((fault: { persistenceFailureClass?: string }) =>
+      fault.persistenceFailureClass === 'financial-journal-io'))
+    assert.ok(existsSync(join(chatSessionDir(result.payload['session_id'] as string), 'task-budget.json')))
+  })
 
-test('normal runCliChatTask factory: finite explicit cap blocks unknown pricing', async (t) => {
-  const { root, target } = liveHeadlessFixture(t)
-  let engine: ChatEngine | undefined
-  let streamCount = 0
-  globalThis.fetch = (async (input, init) => {
-    if (!String(input).includes(endpoint)) throw new Error(`unexpected route: ${String(input)}`)
-    const body = JSON.parse(String(init?.body)) as { model: string; stream?: boolean }
-    if (body.stream !== true) {
-      return Response.json({
-        model: body.model,
-        choices: [{ message: { content: '{"verdict":"reject","confidence":0.9,"reasons":["verification absent"]}' } }],
-        usage: { prompt_tokens: 10, completion_tokens: 5 },
-      })
-    }
-    streamCount += 1
-    if (streamCount === 1 && engine) {
-      const owner = (engine as unknown as { taskAllowance: { taskOwnerId: string } }).taskAllowance.taskOwnerId
-      globalCostTracker.recordUnknownCharge('fixture-unpriced-model', {
-        taskOwnerId: owner,
-        chargeId: 'finite-unknown-charge',
-      })
-    }
-    const delta = {
-      tool_calls: [{
-        index: 0,
-        id: 'finite-read',
-        type: 'function',
-        function: {
-          name: 'read_file',
-          arguments: JSON.stringify({ path: target }),
-        },
+  test('cold restore keeps unlimited runtime authority after financial-journal-io fault', async t => {
+    const { ChatEngineTaskAllowance } = await import('./chatEngineTaskAllowance.js')
+    const { ownerAccountingFaultBlocksRuntime } = await import('./ownerChargePersistPolicy.js')
+    const persisted = {
+      schemaVersion: 2,
+      taskOwnerId: 'restore-owner',
+      accountingEpoch: globalCostTracker.getAccountingEpoch(),
+      grant: {
+        grantId: 'g1',
+        revision: 0,
+        provenance: 'test',
+        costCap: { kind: 'unlimited' },
+        wallCapMs: 720_000,
+        turnCap: 120,
+      },
+      consumed: { costUsd: 0, unknownChargeCount: 1, activeWallMs: 0, turns: 1 },
+      repair: { criticRepairCostCapUsd: null, postWriteRepairWallCapMs: null, postWriteRepairRestrict: false },
+      accountedChargeIds: [],
+      lastTurnRuntime: {
+        submissionIndex: 0,
+        writeCount: 0,
+        gateStrikes: 0,
+        effectiveOperation: 'READ_ONLY',
+        taskClass: 'investigate',
+      },
+      accountingFaults: [{
+        taskOwnerId: 'restore-owner',
+        ownerGeneration: 0,
+        accountingEpoch: globalCostTracker.getAccountingEpoch(),
+        chargeId: null,
+        persistenceScope: 'owner-charge-receipt',
+        kind: 'persistence-failure',
+        reason: 'Owner charge journal unavailable; telemetry may be unpersisted',
+        persistenceFailureClass: 'financial-journal-io' as const,
       }],
     }
-    return new Response(
-      `data: ${JSON.stringify({
-        model: body.model,
-        choices: [{ delta, finish_reason: 'tool_calls' }],
-        usage: { prompt_tokens: 12, completion_tokens: 6 },
-      })}\n\ndata: [DONE]\n\n`,
-      { headers: { 'content-type': 'text/event-stream' } },
-    )
-  }) as typeof fetch
-
-  await runCliChatTask({
-    task,
-    projectRoot: root,
-    model,
-    outputFormat: 'json',
-    engineFactory: (options) => {
-      engine = new ChatEngine({ ...options, maxCostUsd: 0.75 })
-      return engine
-    },
+    const host = {
+      engineRunDir: mkdtempSync(join(process.env['BABEL_SYNTHETIC_PROVIDER_FIXTURE_ROOT']!, 'tmp', 'restore-allowance-')),
+      limits: { maxCostUsd: Infinity, maxWallMs: 720_000, maxTurns: 120 },
+      taskAllowance: null as typeof persisted | null,
+      taskCostBaselineUsd: 0,
+      taskCostScopeUnavailable: true,
+      activeExecutionCheckpointMs: null as number | null,
+      lastTurnRuntime: null as typeof persisted.lastTurnRuntime | null,
+      criticRepairCostCapUsd: null as number | null,
+      postWriteRepairWallCapMs: null as number | null,
+      postWriteRepairRestrict: false,
+      budgetExceeded: false,
+      budgetLastChanceDone: false,
+      terminatingLimiter: null,
+      terminalLimiterReason: null,
+      ownerAccountingFaults: new Map(),
+      ownerAccounting: { recordOwnerAccountingFault: () => {}, persistOwnerCharges: () => {} },
+    }
+    const allowance = new ChatEngineTaskAllowance(host as never)
+    allowance.restorePersistedTaskBudget(persisted as never)
+    assert.equal(host.taskCostScopeUnavailable, false)
+    const restoredFault = persisted.accountingFaults[0]!
+    assert.ok(!ownerAccountingFaultBlocksRuntime({
+      ...restoredFault,
+      persistenceScope: 'owner-charge-receipt',
+      kind: 'persistence-failure',
+    }, { kind: 'unlimited' }))
   })
 
-  const budgets = (engine as unknown as { checkBudgets: () => { ok: boolean; reason?: string } }).checkBudgets()
-  assert.equal(budgets.ok, false)
-  assert.match(budgets.reason ?? '', /COST_ACCOUNTING_INCOMPLETE/)
-})
+  test('cold restore blocks finite runtime authority for the same financial-journal-io fault', async t => {
+    const { ChatEngineTaskAllowance } = await import('./chatEngineTaskAllowance.js')
+    const { ownerAccountingFaultBlocksRuntime } = await import('./ownerChargePersistPolicy.js')
+    const fault = {
+      taskOwnerId: 'finite-owner',
+      ownerGeneration: 0,
+      accountingEpoch: globalCostTracker.getAccountingEpoch(),
+      chargeId: null,
+      persistenceScope: 'owner-charge-receipt' as const,
+      kind: 'persistence-failure' as const,
+      reason: 'Owner charge journal unavailable; telemetry may be unpersisted',
+      persistenceFailureClass: 'financial-journal-io' as const,
+    }
+    assert.ok(ownerAccountingFaultBlocksRuntime(fault, { kind: 'finite', usd: 0.75 }))
+    const lastTurnRuntime = {
+      submissionIndex: 0,
+      writeCount: 0,
+      gateStrikes: 0,
+      effectiveOperation: 'READ_ONLY',
+      taskClass: 'investigate',
+    }
+    const host = {
+      engineRunDir: mkdtempSync(join(process.env['BABEL_SYNTHETIC_PROVIDER_FIXTURE_ROOT']!, 'tmp', 'restore-finite-')),
+      limits: { maxCostUsd: 0.75, maxWallMs: 720_000, maxTurns: 120 },
+      taskAllowance: null,
+      taskCostBaselineUsd: 0,
+      taskCostScopeUnavailable: true,
+      activeExecutionCheckpointMs: null,
+      lastTurnRuntime: null,
+      criticRepairCostCapUsd: null,
+      postWriteRepairWallCapMs: null,
+      postWriteRepairRestrict: false,
+      budgetExceeded: false,
+      budgetLastChanceDone: false,
+      terminatingLimiter: null,
+      terminalLimiterReason: null,
+      ownerAccountingFaults: new Map(),
+      ownerAccounting: { recordOwnerAccountingFault: () => {}, persistOwnerCharges: () => {} },
+    }
+    const allowance = new ChatEngineTaskAllowance(host as never)
+    allowance.restorePersistedTaskBudget({
+      schemaVersion: 2,
+      taskOwnerId: 'finite-owner',
+      accountingEpoch: fault.accountingEpoch,
+      grant: { grantId: 'g', revision: 0, provenance: 't', costCap: { kind: 'finite', usd: 0.75 }, wallCapMs: 720_000, turnCap: 120 },
+      consumed: { costUsd: 0, unknownChargeCount: 1, activeWallMs: 0, turns: 0 },
+      repair: { criticRepairCostCapUsd: null, postWriteRepairWallCapMs: null, postWriteRepairRestrict: false },
+      accountedChargeIds: [],
+      lastTurnRuntime,
+      accountingFaults: [fault],
+    } as never)
+    assert.equal(host.taskCostScopeUnavailable, true)
+  })
+}

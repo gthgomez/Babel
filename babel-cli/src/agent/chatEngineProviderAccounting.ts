@@ -134,6 +134,8 @@ export interface ChatProviderRetryHost {
     kind: 'settlement-conflict' | 'persistence-failure',
     reason: string,
     appliesToCurrent: boolean,
+    blocksRuntimeAuthority?: boolean,
+    persistenceFailureClass?: import('./chatEngineOwnerAccounting.js').OwnerAccountingPersistenceFailureClass,
   ): void;
 }
 

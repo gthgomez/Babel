@@ -1,5 +1,8 @@
 import type { ChatAllowanceCostCap } from './chatEngineContracts.js'
-import type { OwnerAccountingFault } from './chatEngineOwnerAccounting.js'
+import type {
+  OwnerAccountingFault,
+  OwnerAccountingPersistenceFailureClass,
+} from './chatEngineOwnerAccounting.js'
 
 /** Filesystem journal failures on owner-charge receipt writes (not authority/settlement). */
 export function isOwnerChargeJournalIoError(error: unknown): boolean {
@@ -40,6 +43,7 @@ export interface OwnerChargePersistFaultHost {
     reason: string,
     appliesToCurrent: boolean,
     blocksRuntimeAuthority?: boolean,
+    persistenceFailureClass?: OwnerAccountingPersistenceFailureClass,
   ): void;
 }
 
@@ -50,16 +54,19 @@ export function handleOwnerChargePersistFailure(
   error: unknown,
   appliesToCurrent: boolean,
 ): boolean {
-  const costCap = host.taskAllowance?.grant?.costCap ?? { kind: 'finite', usd: 0 };
-  const blocks = ownerChargePersistBlocksRuntime(error, costCap);
+  const costCap = host.taskAllowance?.grant?.costCap ?? { kind: 'finite', usd: 0 }
+  const blocks = ownerChargePersistBlocksRuntime(error, costCap)
+  const persistenceFailureClass: OwnerAccountingPersistenceFailureClass | undefined =
+    blocks ? 'authority' : 'financial-journal-io'
   host.recordOwnerAccountingFault(
     scope,
     'persistence-failure',
     ownerChargePersistFailureReason(error, blocks),
     appliesToCurrent,
     blocks,
-  );
-  return blocks;
+    persistenceFailureClass,
+  )
+  return blocks
 }
 
 export function ownerAccountingFaultBlocksRuntime(
@@ -67,7 +74,8 @@ export function ownerAccountingFaultBlocksRuntime(
   costCap: ChatAllowanceCostCap,
 ): boolean {
   if (fault.kind === 'settlement-conflict') return true
-  if (fault.kind !== 'persistence-failure') return true
   if (costCap.kind === 'finite') return true
-  return fault.reason !== OWNER_CHARGE_JOURNAL_UNAVAILABLE_REASON
+  if (fault.kind !== 'persistence-failure') return true
+  if (fault.persistenceFailureClass === 'financial-journal-io') return false
+  return true
 }

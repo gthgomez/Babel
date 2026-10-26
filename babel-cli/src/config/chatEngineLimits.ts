@@ -579,6 +579,10 @@ export function resolveChatEngineLimits(
     Math.max(10_000, requestedOverrideMaxWallMs ?? fromEnv.maxWallMs),
   );
 
+  const invalidExplicitFiniteUsd =
+    Number.isFinite(baseDefaults.maxCostUsd) && baseDefaults.maxCostUsd !== Infinity
+      ? baseDefaults.maxCostUsd
+      : 2.0;
   const overrideCost = overrides.maxCostUsd;
   const requestedOverrideMaxCostUsd =
     overrideCost === Infinity
@@ -586,16 +590,26 @@ export function resolveChatEngineLimits(
       : Number.isFinite(overrideCost)
         ? overrideCost
         : overrideCost !== undefined
-          ? baseDefaults.maxCostUsd
+          ? invalidExplicitFiniteUsd
           : undefined;
   const rawEnvCost = process.env['BABEL_CHAT_MAX_COST'];
   const explicitCostCeiling =
     requestedOverrideMaxCostUsd !== undefined || rawEnvCost !== undefined;
   const requestedMaxCostUsd =
     requestedOverrideMaxCostUsd ??
-    (rawEnvCost?.trim().toLowerCase() === 'unlimited'
-      ? Infinity
-      : parseRawFloat(rawEnvCost, baseDefaults.maxCostUsd));
+    (() => {
+      if (rawEnvCost === undefined || rawEnvCost.trim() === '') {
+        return baseDefaults.maxCostUsd;
+      }
+      if (rawEnvCost.trim().toLowerCase() === 'unlimited') {
+        return Infinity;
+      }
+      const parsed = Number.parseFloat(rawEnvCost.trim());
+      if (!Number.isFinite(parsed) || parsed <= 0) {
+        return invalidExplicitFiniteUsd;
+      }
+      return parsed;
+    })();
 
   const resolvedMaxCostUsd =
     requestedMaxCostUsd === Infinity
