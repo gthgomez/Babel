@@ -394,7 +394,19 @@ test('unknown settlement keeps the invocation physical root and does not conflic
       internal.trackRunnerUsage({ getLastInvocationMetadata: () => null }, scope)
       const refined = globalCostTracker.getTaskChargeObservations(owner)
         .find((item) => item.attribution.chargeId === 'rooted-unknown-charge')
-      assert.ok(refined && refined.knownCostUSD !== null)
+      assert.ok(refined)
+      const refinedSummary = globalCostTracker.getTaskSummary(owner)
+      const allowanceTotal = refinedSummary.totalCostUSD
+      assert.ok(allowanceTotal > 0)
+      assert.equal(refined.inputTokens, 100)
+      assert.equal(refined.outputTokens, 10)
+      assert.equal(refined.knownCostUSD, null)
+      assert.equal(refined.costBasis, 'published_usage_estimate')
+      assert.ok(refined.estimatedCostUSD !== undefined && refined.estimatedCostUSD > 0)
+      assert.equal(refinedSummary.unknownChargeCount, 0)
+      assert.equal(refinedSummary.estimateComplete, true)
+      assert.equal(refinedSummary.costComplete, false)
+      assert.equal(refinedSummary.completeCostUSD, null)
       assert.equal(refined?.attribution.projectRoot, realpathSync(root))
       assert.equal(refined?.attribution.requestId, 'rooted-unknown-request')
       assert.equal(refined?.attribution.attemptId, 'rooted-unknown-attempt')
@@ -1603,14 +1615,20 @@ test("an old-owner conflict survives a separate-process resume after its receipt
         { getLastInvocationMetadata: () => null },
         scope,
       );
-      assert.equal(
-        globalCostTracker.getTaskSummary(ownerA).unknownChargeCount,
-        0,
-      );
-      assert.ok(
-        globalCostTracker.getTaskChargeObservations(ownerA)[0]?.knownCostUSD !==
-          null,
-      );
+      const ownerASummary = globalCostTracker.getTaskSummary(ownerA)
+      assert.equal(ownerASummary.unknownChargeCount, 0)
+      const receiptA = globalCostTracker.getTaskChargeObservations(ownerA)[0]
+      assert.ok(receiptA)
+      const allowanceTotalA = ownerASummary.totalCostUSD
+      assert.ok(allowanceTotalA > 0)
+      assert.equal(receiptA.inputTokens, 100)
+      assert.equal(receiptA.outputTokens, 10)
+      assert.equal(receiptA.knownCostUSD, null)
+      assert.equal(receiptA.costBasis, 'published_usage_estimate')
+      assert.ok(receiptA.estimatedCostUSD !== undefined && receiptA.estimatedCostUSD > 0)
+      assert.equal(ownerASummary.estimateComplete, true)
+      assert.equal(ownerASummary.costComplete, false)
+      assert.equal(ownerASummary.completeCostUSD, null)
 
       chat.applyUserSubmission({ userInput: "Healthy successor B" });
       const ownerB = chat.getTaskAllowanceSnapshot()!.taskOwnerId;
