@@ -136,7 +136,8 @@ export async function executeChatTask(
     process.env['BABEL_CHAT_TASK_CLASS'] ||
     process.env['BABEL_CHAT_SWE_PROFILE'] ||
     activeProfile === 'governance' ||
-    activeProfile === 'general_swe';
+    activeProfile === 'general_swe' ||
+    activeProfile === 'ordinary_delivery';
 
   if (isExplicitOrSpecialized) {
     console.log(muted(`  coding profile: ${describeInteractiveCodingProfile(activeProfile)}`));

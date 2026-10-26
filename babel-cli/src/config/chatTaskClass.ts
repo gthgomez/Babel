@@ -20,7 +20,8 @@ export type ChatTaskClass =
   | 'quick_fix'
   | 'general_swe'
   | 'investigate'
-  | 'governance';
+  | 'governance'
+  | 'ordinary_delivery';
 
 export const CHAT_TASK_CLASSES: readonly ChatTaskClass[] = [
   'default',
@@ -29,6 +30,7 @@ export const CHAT_TASK_CLASSES: readonly ChatTaskClass[] = [
   'general_swe',
   'investigate',
   'governance',
+  'ordinary_delivery',
 ] as const;
 
 /**
@@ -273,6 +275,24 @@ const TUNES: Record<ChatTaskClass, ChatTaskTune> = {
     description:
       'Policy / injection-sensitive work — strict critic + green verifier + phase gates.',
   },
+  ordinary_delivery: {
+    class: 'ordinary_delivery',
+    limits: {},
+    strictCritic: false,
+    forceMutateTurns: 5,
+    phaseGatedToolsDefault: false,
+    verificationPolicy: 'none',
+    readThrashToolBudget: 24,
+    shellSoftBudget: 4,
+    investigateToolBudget: 14,
+    investigateToolHardCap: 28,
+    maxFullReadsPerFile: 3,
+    zeroWriteHardStopTurns: 12,
+    restrictToolsOnPolicyFire: false,
+    stallShadowMode: true,
+    description:
+      'Opt-in non-software artifact delivery — default execution posture with verification none (honest UNVERIFIED_PATCH).',
+  },
 };
 
 /** Alias map: env strings → product classes (includes legacy names). */
@@ -303,6 +323,11 @@ const CLASS_ALIASES: Record<string, ChatTaskClass> = {
   gov: 'governance',
   security: 'governance',
   injection: 'governance',
+  ordinary_delivery: 'ordinary_delivery',
+  ordinary_deliver: 'ordinary_delivery',
+  ordinary: 'ordinary_delivery',
+  deliverable: 'ordinary_delivery',
+  artifact_delivery: 'ordinary_delivery',
 };
 
 export function normalizeChatTaskClass(raw: string | undefined | null): ChatTaskClass | null {
@@ -696,6 +721,7 @@ const MUTATION_EXECUTION_CLASSES: ReadonlySet<ChatTaskClass> = new Set([
   'default',
   'quick_fix',
   'general_swe',
+  'ordinary_delivery',
 ]);
 
 /**
@@ -728,6 +754,8 @@ export function resolveChatTaskClass(opts?: {
    */
   autoClassify?: boolean;
   operation?: RequestedTaskOperation | undefined;
+  /** Host-selected class (opt-in profiles). Env and SWE profile still win. */
+  explicitClass?: ChatTaskClass | null;
 }): ChatTaskClass {
   const env = opts?.env ?? process.env;
   const auto = opts?.autoClassify !== false;
@@ -740,6 +768,8 @@ export function resolveChatTaskClass(opts?: {
 
   const fromEnv = normalizeChatTaskClass(env['BABEL_CHAT_TASK_CLASS']);
   if (fromEnv) return fromEnv;
+
+  if (opts?.explicitClass) return opts.explicitClass;
 
   // Cross-harness autonomy class (A–D): maps onto the native task-class tune.
   // Additive and env-gated; explicit BABEL_CHAT_TASK_CLASS above wins (more

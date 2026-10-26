@@ -913,6 +913,7 @@ export class ChatEngine {
       taskText: options.task,
       autoClassify: true,
       operation: options.operation,
+      ...(options.taskClass !== undefined ? { explicitClass: options.taskClass } : {}),
     });
     // P0: Initialize gatePolicy from task class so the result payload always
     // reflects the effective verification policy, even when the gate is never
@@ -2937,6 +2938,9 @@ export class ChatEngine {
       userInput: input.userInput,
       projectRoot: this.options.projectRoot,
       ...(this.options.executionScope?{executionScope:this.options.executionScope}:{}),
+      ...(this.options.taskClass !== undefined
+        ? { explicitTaskClass: this.options.taskClass }
+        : {}),
       operation: input.operation ?? this.options.operation,
       ...(this.options.model !== undefined
         ? { model: this.options.model }

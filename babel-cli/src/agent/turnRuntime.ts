@@ -84,6 +84,8 @@ export interface BeginUserSubmissionInput {
   projectRoot: string | null;
   executionScope?: import('./chatExecutionScope.js').ChatExecutionScope;
   model?: string;
+  /** Host-selected task class when env does not override (see resolveChatTaskClass). */
+  explicitTaskClass?: ChatTaskClass;
   /** Explicit intent override from the caller. */
   taskIntent?: TurnTaskIntent;
   operation?: RequestedTaskOperation | undefined;
@@ -205,6 +207,9 @@ export function beginUserSubmission(input: BeginUserSubmissionInput): TurnRuntim
         taskText,
         autoClassify: true,
         operation: input.operation,
+        ...(input.explicitTaskClass !== undefined
+          ? { explicitClass: input.explicitTaskClass }
+          : {}),
       });
 
   const gatePolicy = getChatTaskTune(taskClass).verificationPolicy;

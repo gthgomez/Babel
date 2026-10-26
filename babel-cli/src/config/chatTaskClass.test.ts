@@ -160,6 +160,8 @@ describe('chatTaskClass', () => {
     assert.equal(normalizeChatTaskClass('requires_dataset'), 'general_swe');
     assert.equal(normalizeChatTaskClass('gov'), 'governance');
     assert.equal(normalizeChatTaskClass('quick'), 'quick_fix');
+    assert.equal(normalizeChatTaskClass('ordinary_delivery'), 'ordinary_delivery');
+    assert.equal(normalizeChatTaskClass('artifact_delivery'), 'ordinary_delivery');
   });
 
   test('env BABEL_CHAT_TASK_CLASS wins over task text', () => {
@@ -363,9 +365,17 @@ describe('chatTaskClass', () => {
 
   test('listCodingProfileSummaries returns one row per class', () => {
     const summaries = listCodingProfileSummaries();
-    assert.equal(summaries.length, 6);
+    assert.equal(summaries.length, 7);
     const classes = summaries.map((s) => s.class);
-    assert.deepEqual(classes, ['default', 'quick_inspect', 'quick_fix', 'general_swe', 'investigate', 'governance']);
+    assert.deepEqual(classes, [
+      'default',
+      'quick_inspect',
+      'quick_fix',
+      'general_swe',
+      'investigate',
+      'governance',
+      'ordinary_delivery',
+    ]);
   });
 
   test('listCodingProfileSummaries rows match runtime tunes', () => {
@@ -515,5 +525,36 @@ describe('chatTaskClass', () => {
     const taskText = 'analyze the architecture of the billing system and identify risks';
     const taskClass = classifyChatTaskClassFromText(taskText);
     assert.equal(taskClass, 'investigate');
+  });
+
+  test('ordinary_delivery is opt-in only — artifact tasks still auto-classify to default', () => {
+    const taskText = 'Create summary.csv from data/sales.csv with net totals.';
+    assert.equal(classifyChatTaskClassFromText(taskText), 'default');
+    assert.equal(
+      resolveChatTaskClass({
+        env: { BABEL_CHAT_TASK_CLASS: 'ordinary_delivery' } as NodeJS.ProcessEnv,
+        taskText,
+        autoClassify: true,
+      }),
+      'ordinary_delivery',
+    );
+  });
+
+  test('ordinary_delivery tune mirrors default budgets with verification none', () => {
+    const base = getChatTaskTune('default');
+    const delivery = getChatTaskTune('ordinary_delivery');
+    assert.equal(delivery.verificationPolicy, 'none');
+    assert.equal(delivery.limits.maxWallMs, base.limits.maxWallMs);
+    assert.equal(delivery.forceMutateTurns, base.forceMutateTurns);
+    assert.equal(delivery.strictCritic, base.strictCritic);
+    assert.equal(delivery.phaseGatedToolsDefault, base.phaseGatedToolsDefault);
+  });
+
+  test('BABEL_CHAT_SWE_PROFILE wins over ordinary_delivery env class', () => {
+    const env = {
+      BABEL_CHAT_SWE_PROFILE: '1',
+      BABEL_CHAT_TASK_CLASS: 'ordinary_delivery',
+    } as NodeJS.ProcessEnv;
+    assert.equal(resolveChatTaskClass({ env, autoClassify: false }), 'general_swe');
   });
 });

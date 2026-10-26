@@ -227,6 +227,11 @@ export interface ChatEngineOptions {
   planHandoff?: import('./planExecuteMode.js').ChatPlanExecuteHandoff
   /** Shared kernel profile. Plan is read-only; deep retains governed writes. */
   executionProfile?: ChatExecutionProfile
+  /**
+   * Host-selected chat task class (opt-in profiles such as ordinary_delivery).
+   * `BABEL_CHAT_TASK_CLASS` and `BABEL_CHAT_SWE_PROFILE` still take precedence.
+   */
+  taskClass?: import('../config/chatTaskClass.js').ChatTaskClass
   /** Externally supplied required verifier commands for completion gate scope. */
   requiredVerifierCommands?: readonly string[] | null
   /** C1/B7 rollout: enforce in development/CI, shadow in production by default. */
