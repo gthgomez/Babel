@@ -838,14 +838,22 @@ export function trackRunnerUsage(
         host.persistTaskCostBaseline();
       }
 
-      // Feed token history tracker
+      // Feed token history tracker (allowance subtotal, including explicit $0 reports)
       const tokenTracker = getGlobalTokenTracker();
-      if (metadata.estimated_cost_usd !== null) tokenTracker.record({
-        inputTokens: metadata.prompt_tokens,
-        outputTokens: metadata.completion_tokens,
-        cost: metadata.estimated_cost_usd,
-        modelId: metadata.provider_model_id,
-      });
+      const reportedTurnCost = settlementReportedCostUsd(metadata);
+      const turnCost = reportedTurnCost !== null && reportedTurnCost !== undefined
+        ? reportedTurnCost
+        : (chargeUpdate.kind === 'inserted' || chargeUpdate.kind === 'refined')
+          ? chargeUpdate.knownCostDelta
+          : metadata.estimated_cost_usd ?? undefined;
+      if (turnCost !== undefined && Number.isFinite(turnCost)) {
+        tokenTracker.record({
+          inputTokens: metadata.prompt_tokens,
+          outputTokens: metadata.completion_tokens,
+          cost: turnCost,
+          modelId: metadata.provider_model_id,
+        });
+      }
 
       if (!appliesToCurrent) return;
       host.lastRequestPromptTokens = metadata.prompt_tokens;
@@ -877,6 +885,7 @@ export function trackRunnerUsage(
         const update = globalCostTracker.settleUsage(
           usageScope?.modelId ?? metadata?.provider_model_id ?? 'unknown-provider-model',
           0, 0, null, null, attribution, false, usageScope?.provider ?? metadata?.provider ?? null,
+          metadata ? settlementReportedCostUsd(metadata) : undefined,
         );
         if (update.kind === 'conflict') {
           const faultScope: ChatUsageScope = usageScope ?? {

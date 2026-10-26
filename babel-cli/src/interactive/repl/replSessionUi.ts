@@ -55,6 +55,7 @@ export function renderTurnStatusBar(ctx: ReplContext): void {
     totalTokens: ctx.state.costTotals.totalTokens,
     totalCost: ctx.state.costTotals.knownCostUSD ?? ctx.state.costTotals.totalCostUSD,
     estimatedCost: ctx.state.costTotals.estimatedCostUSD,
+    reportedCostUSD: ctx.state.costTotals.reportedCostUSD,
     hasUnknownCost: (ctx.state.costTotals.unknownChargeCount ?? 0) > 0 || ctx.state.costTotals.completeCostUSD === null,
     unknownChargeCount: ctx.state.costTotals.unknownChargeCount,
     turnCount: ctx.turnCounter,

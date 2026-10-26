@@ -26,6 +26,7 @@ export interface StatusBarState {
   hasUnknownCost?: boolean;
   unknownChargeCount?: number | undefined;
   estimatedCost?: number | undefined;
+  reportedCostUSD?: number | undefined;
   /** Active model name (e.g. "DeepSeek v4 Flash") */
   model: string;
   /** Active model ID for context limit lookup (e.g. "deepseek-v4-flash") */
@@ -371,7 +372,11 @@ export function renderStatusBar(state: StatusBarState): string {
         ? state.totalCost > 0
           ? `session known $${state.totalCost.toFixed(4)}; ${(state.unknownChargeCount ?? 0) > 0 ? `${state.unknownChargeCount} unresolved` : 'cost incomplete'}`
           : `session cost unavailable${(state.unknownChargeCount ?? 0) > 0 ? `; ${state.unknownChargeCount} unresolved` : ''}`
-        : `session est. $${state.totalCost.toFixed(4)}`) + muted(Number.isFinite(state.estimatedCost) && (state.estimatedCost ?? 0) > 0 ? `; $${state.estimatedCost!.toFixed(4)} usage estimate` : ''),
+        : `session est. $${state.totalCost.toFixed(4)}`) +
+        muted(Number.isFinite(state.estimatedCost) && (state.estimatedCost ?? 0) > 0
+          ? `; $${state.estimatedCost!.toFixed(4)} usage estimate` : '') +
+        muted(Number.isFinite(state.reportedCostUSD)
+          ? `; $${state.reportedCostUSD!.toFixed(4)} provider-reported` : ''),
     });
   }
   if (policy.showTurn) {

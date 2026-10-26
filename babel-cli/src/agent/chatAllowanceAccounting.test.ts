@@ -229,6 +229,44 @@ test('late provider usage remains billed to the cancelled owner after a new task
   }
 })
 
+const CC_MODEL = 'deepseek/deepseek-v4.1-flash'
+const CC_PROVIDER = 'command-code'
+
+test('finite Command Code grant blocks after absent usage leaves an unknown charge', () => {
+  const runsRoot = mkdtempSync(join(tmpdir(), 'babel-cc-absent-runs-'))
+  const projectRoot = mkdtempSync(join(tmpdir(), 'babel-cc-absent-project-'))
+  const previousRunsDir = process.env['BABEL_RUNS_DIR']
+  const previousUsage = globalCostTracker.getSessionSummary()
+  process.env['BABEL_RUNS_DIR'] = runsRoot
+  globalCostTracker.resetSession()
+  try {
+    const engine = new ChatEngine({ task: 'finite cc absent usage', projectRoot, model: 'command-code/deepseek-v4.1-flash' })
+    engine.applyUserSubmission({ userInput: 'start finite cc task' })
+    const owner = allowanceAccess(engine).getTaskAllowanceSnapshot()!.taskOwnerId
+    globalCostTracker.settleUsage(CC_MODEL, 0, 0, null, null,
+      { taskOwnerId: owner, chargeId: 'cc-absent-usage' }, false, CC_PROVIDER, undefined)
+    const summary = globalCostTracker.getTaskSummary(owner)
+    assert.equal(summary.unknownChargeCount, 1)
+    assert.equal(summary.completeCostUSD, null)
+    const budget = allowanceAccess(engine).checkBudgets()
+    assert.equal(budget.ok, false)
+    assert.equal(budget.limiter, 'cost')
+    assert.match(budget.reason ?? '', /unknown pricing/)
+  } finally {
+    globalCostTracker.resetSession()
+    globalCostTracker.restoreSessionCost({
+      totalCostUSD: previousUsage.totalCostUSD,
+      totalInputTokens: previousUsage.totalInputTokens,
+      totalOutputTokens: previousUsage.totalOutputTokens,
+      totalTokens: previousUsage.totalTokens,
+    })
+    if (previousRunsDir === undefined) delete process.env['BABEL_RUNS_DIR']
+    else process.env['BABEL_RUNS_DIR'] = previousRunsDir
+    rmSync(runsRoot, { recursive: true, force: true })
+    rmSync(projectRoot, { recursive: true, force: true })
+  }
+})
+
 test('finite task dollar cap refuses another request after unknown-price usage', () => {
   const runsRoot = mkdtempSync(join(tmpdir(), 'babel-chat-unknown-cost-'))
   const projectRoot = mkdtempSync(join(tmpdir(), 'babel-chat-unknown-project-'))

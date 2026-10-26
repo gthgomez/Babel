@@ -210,7 +210,9 @@ export interface LiteOutputContext extends RunOutputContext {
   routeDecision?: LiteRouteMetadata;
 }
 
-export interface LiteUsagePayload extends Pick<SessionUsageSummary, 'unknownChargeCount' | 'completeCostUSD' | 'costComplete' | 'knownCostUSD' | 'estimatedCostUSD'> {
+export interface LiteUsagePayload extends Pick<SessionUsageSummary,
+  'unknownChargeCount' | 'completeCostUSD' | 'costComplete' | 'knownCostUSD' | 'estimatedCostUSD' |
+  'reportedCostUSD' | 'usageComplete' | 'estimateComplete'> {
   totalCostUSD: number;
   totalInputTokens: number;
   totalOutputTokens: number;

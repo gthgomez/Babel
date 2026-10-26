@@ -32,7 +32,9 @@ export interface SessionState {
     totalCostUSD: number;
     knownCostUSD?: number;
     estimatedCostUSD?: number;
+    reportedCostUSD?: number;
     costEstimates?: import('../services/costTracker.js').CostEstimateSource[];
+    usageComplete?: boolean;
     completeCostUSD?: number | null;
     unknownChargeCount?: number;
     totalInputTokens: number;

@@ -328,6 +328,8 @@ export async function executeChatTask(
           : undefined,
       costUsd: taskUsage?.knownCostUSD ?? taskUsage?.totalCostUSD ?? perRunCost,
       estimatedCostUsd: taskUsage?.estimatedCostUSD,
+      reportedCostUsd: taskUsage?.reportedCostUSD,
+      usageComplete: taskUsage?.usageComplete,
       unknownChargeCount: taskUsage?.unknownChargeCount,
       costComplete: taskUsage?.costComplete,
       usageScope: taskUsage ? 'task' : 'turn',

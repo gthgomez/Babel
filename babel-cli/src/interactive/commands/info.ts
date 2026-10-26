@@ -23,6 +23,7 @@ import { copyToClipboardWithFeedback, isClipboardSupported } from '../../ui/clip
 import { renderChatTranscript } from '../../ui/chatPanel.js';
 import { highlightCodeBlocks } from '../../ui/highlight.js';
 import { renderErrorPanel, renderOperatorHeader } from '../../ui/renderers.js';
+import { formatUsageCost } from '../../cli/usageCost.js';
 import {
   accentBright,
   muted,
@@ -345,7 +346,7 @@ export function handleStats(ctx: ReplContext, args: string[]): void {
   console.log(primary('\n  Session Stats:'));
   console.log(`    ${muted(padRight('Stages', 14))} ${ctx.currentStageIdx}/4`);
   console.log(
-    `    ${muted(padRight('Session Cost', 14))} ${accentBright('$' + summary.totalCostUSD.toFixed(6))}`,
+    `    ${muted(padRight('Session Cost', 14))} ${accentBright(formatUsageCost(summary))}`,
   );
   if (ctx.lastRunDir) {
     console.log(`    ${muted(padRight('Last Run', 14))} ${muted(path.basename(ctx.lastRunDir))}`);
@@ -404,7 +405,7 @@ export function handleDashboard(ctx: ReplContext, _args: string[]): void {
 
   console.log(primary(`\n  ${bold('FINANCIALS')} ${muted('─'.repeat(Math.max(0, width - 15)))}\n`));
   console.log(
-    `    ${muted(padRight('Total Spend', col1))} ${accentBright('$' + stats.totalCostUSD.toFixed(6))}`,
+    `    ${muted(padRight('Total Spend', col1))} ${accentBright(formatUsageCost(stats))}`,
   );
   console.log(`    ${muted(padRight('Tokens In', col1))} ${tokenIn.toLocaleString()}`);
   console.log(`    ${muted(padRight('Tokens Out', col1))} ${tokenOut.toLocaleString()}`);

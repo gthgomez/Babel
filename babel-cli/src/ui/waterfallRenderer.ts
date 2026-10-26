@@ -141,7 +141,7 @@ export class WaterfallRenderer extends BaseRenderer {
       this.thinking = false;
       this.recordActivity(stageAction(index));
       const stats = globalCostTracker.getSessionSummary();
-      this._store.dispatch({ type: 'cost:update', costUSD: stats.totalCostUSD });
+      this._store.dispatch({ type: 'cost:update', costUSD: stats.knownCostUSD ?? stats.totalCostUSD });
       this.lastCostUpdateTime = Date.now();
       FrameScheduler.getInstance().markComponentDirty('waterfall-hud');
       if (isA11yMode()) {
@@ -195,7 +195,7 @@ export class WaterfallRenderer extends BaseRenderer {
       if (event?.event_type === 'tool.completed') {
         this._store.dispatch({ type: 'tools:increment' });
         const stats = globalCostTracker.getSessionSummary();
-        this._store.dispatch({ type: 'cost:update', costUSD: stats.totalCostUSD });
+        this._store.dispatch({ type: 'cost:update', costUSD: stats.knownCostUSD ?? stats.totalCostUSD });
         this.lastCostUpdateTime = Date.now();
       }
       if (event?.event_type === 'verification.decision') {
@@ -515,7 +515,7 @@ export class WaterfallRenderer extends BaseRenderer {
       if (!this.lastCostUpdateTime) this.lastCostUpdateTime = Date.now();
       if (Date.now() - this.lastCostUpdateTime > 30000) {
         const stats = globalCostTracker.getSessionSummary();
-        this._store.dispatch({ type: 'cost:update', costUSD: stats.totalCostUSD });
+        this._store.dispatch({ type: 'cost:update', costUSD: stats.knownCostUSD ?? stats.totalCostUSD });
         this.lastCostUpdateTime = Date.now();
       }
 
