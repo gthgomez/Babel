@@ -202,7 +202,7 @@ export function createRunAllowanceReport(
 
   const declaredCostUsd = limits.costBudget?.requestedCostUsd ?? limits.maxCostUsd;
   const effectiveCostCapUsd =
-    state?.criticRepairCostCapUsd != null
+    state?.criticRepairCostCapUsd != null && Number.isFinite(limits.maxCostUsd)
       ? Math.min(limits.maxCostUsd, state.criticRepairCostCapUsd)
       : limits.maxCostUsd;
   const costAllowance = Number.isFinite(declaredCostUsd)
@@ -299,11 +299,11 @@ export function evaluateTimelineLimiter(input: {
       ? Math.min(limits.maxWallMs, input.postWriteRepairWallCapMs)
       : limits.maxWallMs;
   const effectiveCost =
-    input.criticRepairCostCapUsd != null
+    input.criticRepairCostCapUsd != null && Number.isFinite(limits.maxCostUsd)
       ? Math.min(limits.maxCostUsd, input.criticRepairCostCapUsd)
       : limits.maxCostUsd;
 
-  if (spentUsd >= effectiveCost) {
+  if (Number.isFinite(effectiveCost) && spentUsd >= effectiveCost) {
     const isRepair =
       input.criticRepairCostCapUsd != null && effectiveCost < limits.maxCostUsd;
     const limiter: ChatRunLimiter = isRepair ? 'cost_repair' : 'cost';
@@ -347,11 +347,79 @@ export function evaluateTimelineLimiter(input: {
   };
 }
 
+/** Caller or env supplied an explicit cost ceiling that cannot be honored. */
+export class ChatEngineLimitsConfigurationError extends Error {
+  readonly code = 'CHAT_LIMITS_CONFIG';
+  constructor(message: string) {
+    super(message);
+    this.name = 'ChatEngineLimitsConfigurationError';
+  }
+}
+
+const STRICT_COST_USD_PATTERN = /^(?:\d+(?:\.\d+)?|\.\d+)$/;
+
+function parseStrictCostUsdToken(raw: string, source: 'BABEL_CHAT_MAX_COST' | 'maxCostUsd'): number {
+  const trimmed = raw.trim();
+  if (trimmed === '') {
+    throw new ChatEngineLimitsConfigurationError(
+      `Explicit chat cost limit is blank (${source})`,
+    );
+  }
+  if (trimmed.toLowerCase() === 'unlimited') {
+    return Infinity;
+  }
+  if (!STRICT_COST_USD_PATTERN.test(trimmed)) {
+    throw new ChatEngineLimitsConfigurationError(
+      `Malformed chat cost limit "${raw}" (${source})`,
+    );
+  }
+  const parsed = Number.parseFloat(trimmed);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    throw new ChatEngineLimitsConfigurationError(
+      `Invalid chat cost limit "${raw}" (${source})`,
+    );
+  }
+  return parsed;
+}
+
+function parseExplicitCostOverrideUsd(
+  overrideCost: number | undefined,
+): number | undefined {
+  if (overrideCost === undefined) return undefined;
+  if (overrideCost === Infinity) return Infinity;
+  if (!Number.isFinite(overrideCost)) {
+    throw new ChatEngineLimitsConfigurationError(
+      'Invalid chat cost limit override (maxCostUsd)',
+    );
+  }
+  if (overrideCost <= 0) {
+    throw new ChatEngineLimitsConfigurationError(
+      'Explicit chat cost limit override must be positive (maxCostUsd)',
+    );
+  }
+  return overrideCost;
+}
+
+function parseEnvCostUsd(
+  raw: string | undefined,
+  baseDefaultUsd: number,
+): number {
+  if (raw === undefined) {
+    return baseDefaultUsd;
+  }
+  if (raw.trim() === '') {
+    throw new ChatEngineLimitsConfigurationError(
+      'Explicit chat cost limit is blank (BABEL_CHAT_MAX_COST)',
+    );
+  }
+  return parseStrictCostUsdToken(raw, 'BABEL_CHAT_MAX_COST');
+}
+
 export const DEFAULT_CHAT_ENGINE_LIMITS: ChatEngineLimits = {
   maxTurns: 200,                       // safety ceiling — budgets stop the loop
   maxConversationMessages: 20,
   maxEstimatedTokens: 128_000,         // prevent compaction thrash on real repos
-  maxCostUsd: 2.00,
+  maxCostUsd: Infinity,
   maxWallMs: 10 * 60 * 1000,           // 10 minutes
   stallTurns: 8,
   investigateModel: undefined,
@@ -439,7 +507,7 @@ function parseRawFloat(
  * - BABEL_CHAT_MAX_TURNS (default 200, safety ceiling)
  * - BABEL_CHAT_MAX_MESSAGES (default 20)
  * - BABEL_CHAT_MAX_TOKENS (default 128000)
- * - BABEL_CHAT_MAX_COST (default 2.00 USD; explicit 'unlimited' disables only the monetary cap)
+ * - BABEL_CHAT_MAX_COST (default unlimited; explicit finite USD or 'unlimited' opt-in/out)
  * - BABEL_CHAT_MAX_WALL_MS (default 600000, 10 minutes)
  * - BABEL_CHAT_LONG_TASK=1 → explicitly authorized long-task profile: wall
  *   requests may go up to LONG_TASK_WALL_CEILING_MS (4h) instead of one hour.
@@ -514,11 +582,9 @@ export function resolveChatEngineLimits(
       4_000,
       200_000,
     ),
-    maxCostUsd: parseBoundedFloat(
+    maxCostUsd: parseEnvCostUsd(
       process.env['BABEL_CHAT_MAX_COST'],
       baseDefaults.maxCostUsd,
-      0.01,
-      100.00,
     ),
     maxWallMs: parseBoundedInt(
       process.env['BABEL_CHAT_MAX_WALL_MS'],
@@ -579,25 +645,18 @@ export function resolveChatEngineLimits(
     Math.max(10_000, requestedOverrideMaxWallMs ?? fromEnv.maxWallMs),
   );
 
-  const requestedOverrideMaxCostUsd = Number.isFinite(overrides.maxCostUsd)
-    ? overrides.maxCostUsd
-    : undefined;
+  const requestedOverrideMaxCostUsd = parseExplicitCostOverrideUsd(
+    overrides.maxCostUsd,
+  );
   const rawEnvCost = process.env['BABEL_CHAT_MAX_COST'];
   const explicitCostCeiling =
-    requestedOverrideMaxCostUsd !== undefined || rawEnvCost !== undefined;
+    requestedOverrideMaxCostUsd !== undefined ||
+    (rawEnvCost !== undefined && rawEnvCost.trim() !== '');
   const requestedMaxCostUsd =
     requestedOverrideMaxCostUsd ??
-    (rawEnvCost?.trim().toLowerCase() === 'unlimited'
-      ? Infinity
-      : parseRawFloat(rawEnvCost, baseDefaults.maxCostUsd));
+    parseEnvCostUsd(rawEnvCost, baseDefaults.maxCostUsd);
 
-  const resolvedMaxCostUsd =
-    rawEnvCost?.trim().toLowerCase() === 'unlimited' && overrides.maxCostUsd === undefined
-      ? Infinity
-      : Math.min(
-          100.00,
-          Math.max(0.01, overrides.maxCostUsd ?? fromEnv.maxCostUsd),
-        );
+  const resolvedMaxCostUsd = requestedMaxCostUsd;
 
   const resolvedLimits: ChatEngineLimits = {
     maxTurns: Math.min(500, Math.max(1, overrides.maxTurns ?? fromEnv.maxTurns)),
@@ -627,7 +686,7 @@ export function resolveChatEngineLimits(
     costBudget: {
       effectiveCostUsd: resolvedMaxCostUsd,
       requestedCostUsd: requestedMaxCostUsd,
-      ceilingCostUsd: 100.00,
+      ceilingCostUsd: resolvedMaxCostUsd,
       explicitCostCeiling,
       // Wall long-task does not imply a cost long-task; only an explicit
       // cost-budget long-task profile skips the finite cost-repair cap.

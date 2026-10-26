@@ -89,7 +89,7 @@ if (!isSyntheticProviderFixtureReady()) {
     const budget = JSON.parse(readFileSync(join(chatSessionDir(payload['session_id'] as string), 'task-budget.json'), 'utf8'))
     assert.equal(budget.lastTurnRuntime.effectiveOperation, 'READ_ONLY')
     assert.equal(budget.lastTurnRuntime.taskClass, 'investigate')
-    assert.deepEqual(budget.grant.costCap, { kind: 'finite', usd: 2 })
+    assert.deepEqual(budget.grant.costCap, { kind: 'unlimited' })
     assert.equal(budget.grant.turnCap, 120)
     assert.equal(budget.grant.wallCapMs, 720_000)
     assert.equal(typeof budget.taskOwnerId, 'string')
@@ -146,6 +146,7 @@ if (!isSyntheticProviderFixtureReady()) {
 
   test('the same valid native SSE without usage or bill stops before another inference', async t => {
     const root = fixture(t)
+    process.env['BABEL_CHAT_MAX_COST'] = '2'
     let fetches = 0
     globalThis.fetch = async (input, init) => {
       captureRequest(input, init)
@@ -158,7 +159,10 @@ if (!isSyntheticProviderFixtureReady()) {
     assert.notEqual(result.exitCode, 0)
     assert.equal(result.payload['reason_code'], 'cost_accounting_incomplete')
     assert.equal(readFileSync(join(root, 'README.md'), 'utf8'), contents)
-    const owner = persistedOwner(result.payload)
+    assert.equal(typeof result.payload['session_id'], 'string')
+    const budget = JSON.parse(readFileSync(join(chatSessionDir(result.payload['session_id'] as string), 'task-budget.json'), 'utf8'))
+    assert.deepEqual(budget.grant.costCap, { kind: 'finite', usd: 2 })
+    const owner = budget.taskOwnerId as string
     const summary = globalCostTracker.getTaskSummary(owner)
     const receipts = globalCostTracker.getTaskChargeObservations(owner)
     assert.equal(receipts.length, 1)

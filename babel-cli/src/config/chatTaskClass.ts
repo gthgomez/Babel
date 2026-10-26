@@ -165,7 +165,6 @@ const TUNES: Record<ChatTaskClass, ChatTaskTune> = {
     limits: {
       maxWallMs: 10 * 1000, // 10s fast initial target
       maxTurns: 12,
-      maxCostUsd: 0.15,
       stallTurns: 4,
     },
     strictCritic: false,
@@ -187,7 +186,6 @@ const TUNES: Record<ChatTaskClass, ChatTaskTune> = {
     limits: {
       maxWallMs: 8 * 60 * 1000, // 8 min
       maxTurns: 80,
-      maxCostUsd: 1.5,
       stallTurns: 10,
     },
     strictCritic: false,
@@ -209,7 +207,6 @@ const TUNES: Record<ChatTaskClass, ChatTaskTune> = {
     limits: {
       maxWallMs: 10 * 60 * 1000, // 600s
       maxTurns: 250,
-      maxCostUsd: 3.0,
       stallTurns: 25,
       maxTokensPerRound: 200_000,
     },
@@ -235,7 +232,6 @@ const TUNES: Record<ChatTaskClass, ChatTaskTune> = {
     limits: {
       maxWallMs: 12 * 60 * 1000,
       maxTurns: 120,
-      maxCostUsd: 2.0,
       stallTurns: 15,
     },
     strictCritic: false,
@@ -257,7 +253,6 @@ const TUNES: Record<ChatTaskClass, ChatTaskTune> = {
     limits: {
       maxWallMs: 12 * 60 * 1000,
       maxTurns: 100,
-      maxCostUsd: 2.0,
       stallTurns: 12,
     },
     strictCritic: true,

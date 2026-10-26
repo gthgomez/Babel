@@ -776,20 +776,6 @@ export class ChatEngine {
     return this.ownerAccounting.ownerChargePath(ownerId, runDir);
   }
 
-  private recordOwnerAccountingFault(
-    scope: ChatUsageScope,
-    kind: OwnerAccountingFault["kind"],
-    reason: string,
-    appliesToCurrent: boolean,
-  ): void {
-    this.ownerAccounting.recordOwnerAccountingFault(
-      scope,
-      kind,
-      reason,
-      appliesToCurrent,
-    );
-  }
-
   private persistOwnerAccountingFaultCheckpoint(): void {
     this.ownerAccounting.persistOwnerAccountingFaultCheckpoint();
   }
@@ -4145,13 +4131,8 @@ export class ChatEngine {
       persistOwnerCharges: (ownerId, runDir) =>
         engine.persistOwnerCharges(ownerId, runDir),
       persistTaskCostBaseline: () => engine.persistTaskCostBaseline(),
-      recordOwnerAccountingFault: (scope, kind, reason, appliesToCurrent) =>
-        engine.recordOwnerAccountingFault(
-          scope,
-          kind,
-          reason,
-          appliesToCurrent,
-        ),
+      recordOwnerAccountingFault:
+        engine.ownerAccounting.recordOwnerAccountingFault.bind(engine.ownerAccounting),
     };
   }
 
@@ -4651,6 +4632,7 @@ export class ChatEngine {
           writeCount: this.writeCount,
         },
         presentation: {
+          accountingWarnings: this.ownerAccounting.getAccountingWarnings(),
           conversation: this.conversation,
           cachedSystemPromptNative: this.cachedSystemPromptNative,
           playbookId: this.activePlaybook?.id ?? null,

@@ -402,10 +402,10 @@ describe('chatTaskClass', () => {
     const swe = listCodingProfileSummaries().find((s) => s.class === 'general_swe')!;
     assert.equal(quick.maxWallMs, 8 * 60 * 1000);
     assert.equal(quick.maxTurns, 80);
-    assert.equal(quick.maxCostUsd, 1.5);
+    assert.equal(quick.maxCostUsd, null);
     assert.equal(swe.maxWallMs, 10 * 60 * 1000);
     assert.equal(swe.maxTurns, 250);
-    assert.equal(swe.maxCostUsd, 3.0);
+    assert.equal(swe.maxCostUsd, null);
   });
 
   test('listCodingProfileSummaries null budget caps for default', () => {

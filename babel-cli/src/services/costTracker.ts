@@ -198,6 +198,17 @@ function receiptAllowanceCost(receipt: ChargeReceipt): number | null {
   return receipt.costEstimate ? receipt.estimatedCostUSD ?? null : receipt.knownCostUSD;
 }
 
+/** Require durable totals to be substantiated by the receipts' selected allowance ledger. */
+export function chargeReceiptsMatchTotals(
+  receipts: readonly ChargeReceipt[],
+  totalCostUSD: number,
+  unknownChargeCount: number,
+): boolean {
+  const knownTotal = receipts.reduce((sum, receipt) => sum + (receiptAllowanceCost(receipt) ?? 0), 0);
+  const unknownTotal = receipts.filter((receipt) => receiptAllowanceCost(receipt) === null).length;
+  return Math.abs(knownTotal - totalCostUSD) <= 1e-9 && unknownTotal === unknownChargeCount;
+}
+
 function providerUsesEstimateAllowance(provider: string | null | undefined): boolean {
   return provider === 'opencode-go' || provider === 'command-code';
 }
@@ -960,6 +971,42 @@ export class CostTracker {
     return true;
   }
 
+  /** Retain an admitted unlimited checkpoint after journal loss, without inventing receipts or bills. */
+  public retainUnjournaledTaskCheckpoint(
+    taskOwnerId: string,
+    input: { totalCostUSD: number; chargeIds: readonly string[] },
+  ): void {
+    if (!taskOwnerId || !Number.isFinite(input.totalCostUSD) || input.totalCostUSD < 0 ||
+        input.chargeIds.some(id => typeof id !== 'string' || id.length === 0)) {
+      throw new Error('Invalid task checkpoint accounting');
+    }
+    const charges = this.taskChargeIds.get(taskOwnerId) ?? new Set<string>();
+    for (const id of input.chargeIds) {
+      const receipt = this.chargeObservations.get(id);
+      if (receipt ? receipt.attribution.taskOwnerId !== taskOwnerId &&
+          receipt.attribution.parentTaskOwnerId !== taskOwnerId :
+          this.recordedChargeIds.has(id) && !charges.has(id)) {
+        throw new Error('Task checkpoint charge identity conflict');
+      }
+    }
+    const missingIds = [...new Set(input.chargeIds)].filter(id => !charges.has(id));
+    const currentCost = this.taskTotalCost.get(taskOwnerId) ?? 0;
+    const delta = Math.max(0, input.totalCostUSD - currentCost);
+    if (delta === 0 && missingIds.length === 0) return;
+    const usage = this.taskUsage.get(taskOwnerId) ?? {};
+    const restored = usage['__restored__'] ?? { inputTokens: 0, outputTokens: 0, costUSD: 0 };
+    usage['__restored__'] = { ...restored, costUSD: restored.costUSD + delta,
+      unknownChargeCount: (restored.unknownChargeCount ?? 0) + missingIds.length };
+    this.taskUsage.set(taskOwnerId, usage);
+    this.taskTotalCost.set(taskOwnerId, currentCost + delta);
+    this.taskUnknownCharges.set(taskOwnerId, (this.taskUnknownCharges.get(taskOwnerId) ?? 0) + missingIds.length);
+    for (const id of missingIds) {
+      charges.add(id);
+      this.recordedChargeIds.add(id);
+    }
+    this.taskChargeIds.set(taskOwnerId, charges);
+  }
+
   /**
    * Seed durable task spend after cold resume without adding it to this
    * process's global aggregate. Existing in-process task usage wins.
@@ -1007,10 +1054,7 @@ export class CostTracker {
            receipt.attribution.parentTaskOwnerId !== taskOwnerId))) {
         throw new Error('Durable charge observations do not match the task owner snapshot');
       }
-      const knownTotal = receipts.reduce((sum, receipt) => sum + (receiptAllowanceCost(receipt) ?? 0), 0);
-      const unknownTotal = receipts.filter((receipt) => receiptAllowanceCost(receipt) === null).length;
-      if (Math.abs(knownTotal - input.totalCostUSD) > 1e-9 ||
-          unknownTotal !== (input.unknownChargeCount ?? 0)) {
+      if (!chargeReceiptsMatchTotals(receipts, input.totalCostUSD, input.unknownChargeCount ?? 0)) {
         throw new Error('Durable charge observations disagree with the task totals');
       }
       // Either durable file can be the newer checkpoint. Prefer a confirmed

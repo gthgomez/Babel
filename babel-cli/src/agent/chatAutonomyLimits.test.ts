@@ -431,9 +431,9 @@ describe('PRODUCTION PATH: ChatEngine.checkBudgets / repair budgets', () => {
     assert.equal(h.criticRepairCostCapUsd, 10.0);
   });
 
-  it('applyCriticRepairCostBudget still shrinks default $2 cap after first reject', () => {
+  it('applyCriticRepairCostBudget shrinks a selected $2 cap after repeated rejects', () => {
     delete process.env['BABEL_CHAT_MAX_COST'];
-    const engine = makeEngine({ maxWallMs: 600_000 });
+    const engine = makeEngine({ maxCostUsd: 2.0, maxWallMs: 600_000 });
     const h = harness(engine);
     globalCostTracker.resetSession();
     assert.ok(h.taskAllowance);
@@ -441,15 +441,8 @@ describe('PRODUCTION PATH: ChatEngine.checkBudgets / repair budgets', () => {
       totalCostUSD: 1.0,
       chargeIds: [],
     });
-    h.criticStrikes = 1;
-    // Default engine may have task-class cost; force a non-explicit $2 cap.
-    h.limits.maxCostUsd = 2.0;
-    if (h.limits.costBudget) {
-      h.limits.costBudget.explicitCostCeiling = false;
-      h.limits.costBudget.requestedCostUsd = 2.0;
-      h.limits.costBudget.effectiveCostUsd = 2.0;
-      h.limits.costBudget.longTaskProfile = false;
-    }
+    h.criticStrikes = 2;
+    assert.equal(h.limits.costBudget?.explicitCostCeiling, true);
     h.applyCriticRepairCostBudget();
     assert.equal(h.criticRepairCostCapUsd, 1.35);
   });
@@ -475,7 +468,8 @@ describe('PRODUCTION PATH: ChatEngine.checkBudgets / repair budgets', () => {
     assert.equal(disk.declaredCostUsd, 4.0);
   });
 
-  it('long-task wall skip does not skip cost-repair on ChatEngine without explicit cost ceiling', () => {
+  it('long-task unbudgeted repair preserves unlimited dollars and the selected wall', () => {
+    delete process.env['BABEL_CHAT_MAX_COST'];
     process.env['BABEL_CHAT_LONG_TASK'] = '1';
     const engine = makeEngine({ maxWallMs: 7_200_000 });
     const h = harness(engine);
@@ -496,10 +490,9 @@ describe('PRODUCTION PATH: ChatEngine.checkBudgets / repair budgets', () => {
     // Wall should not shrink (cap stays at session wall).
     assert.equal(h.postWriteRepairWallCapMs, h.limits.maxWallMs);
     assert.equal(h.limits.costBudget?.longTaskProfile, false);
-    assert.ok(
-      h.criticRepairCostCapUsd != null && h.criticRepairCostCapUsd <= 1.0 + 0.75 + 1e-9,
-      `long-task wall must not disable cost-repair; cap=${h.criticRepairCostCapUsd}`,
-    );
+    assert.equal(h.limits.maxCostUsd, Infinity);
+    assert.equal(h.criticRepairCostCapUsd, Infinity);
+    assert.equal(h.postWriteRepairRestrict, true);
   });
 
   // ─── finding 1: repair budget on evidence of repair/non-progress ─────────

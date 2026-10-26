@@ -410,6 +410,7 @@ export async function consumeChatStream(
   let doneOutcome: ChatResult['outcome'];
   let doneBudgetExceeded = false;
   let doneTurnTelemetry: import('../../agent/chatTurnTelemetry.js').ChatTurnTelemetryRecord | undefined;
+  let doneAccountingWarnings: string[] | undefined;
   let doneCostBudget: ChatResult['costBudget'];
   let doneRunAllowance: ChatResult['runAllowance'];
   let donePolicyEvents: ChatResult['policyEvents'];
@@ -497,6 +498,7 @@ export async function consumeChatStream(
         doneStatus = event.status;
         doneBudgetExceeded = event.budgetExceeded === true;
         doneTurnTelemetry = event.turnTelemetry ?? doneTurnTelemetry;
+        doneAccountingWarnings = event.accountingWarnings ?? doneAccountingWarnings;
         doneCostBudget = event.costBudget ?? doneCostBudget;
         doneRunAllowance = event.runAllowance ?? doneRunAllowance;
         donePolicyEvents = event.policyEvents ?? donePolicyEvents;
@@ -552,6 +554,7 @@ export async function consumeChatStream(
     ...(verifierTampered ? { verifierTampered: true } : {}),
     ...(turnRouting ? { turnRouting } : {}),
     ...(doneTurnTelemetry !== undefined ? { turnTelemetry: doneTurnTelemetry } : {}),
+    ...(doneAccountingWarnings?.length ? { accountingWarnings: doneAccountingWarnings } : {}),
     ...(doneCostBudget ? { costBudget: doneCostBudget } : {}),
     ...(doneRunAllowance ? { runAllowance: doneRunAllowance } : {}),
     ...(donePolicyEvents ? { policyEvents: donePolicyEvents } : {}),
@@ -1149,6 +1152,7 @@ export function buildChatRunPayload(
     ...(result.outcome !== undefined ? { outcome: result.outcome } : {}),
   }) as unknown as Record<string, unknown>;
 
+  if (result.accountingWarnings?.length) payload['warnings'] = result.accountingWarnings;
   payload['command'] = 'run';
   payload['project_root'] = context.projectRoot;
   payload['execution_scope'] = normalizeChatExecutionScope(context);
@@ -1567,6 +1571,7 @@ function finishConversationalRenderer(
 ): void {
   if (!convRenderer) return;
 
+  for (const message of result.accountingWarnings ?? []) console.warn(`Warning: ${message}`);
   const postRunCost = globalCostTracker.getSessionSummary().totalCostUSD;
   if (result.status === 'failed') {
     convRenderer.fail(new Error(result.answer || 'Chat task failed'));

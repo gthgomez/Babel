@@ -7,6 +7,45 @@ import { join } from 'node:path';
 import { CostTracker, usageDelta } from './costTracker.js';
 import { resetGlobalTokenHistoryDb, TokenHistoryDb } from './tokenHistoryDb.js';
 
+test('unjournaled checkpoint retains a cost floor and IDs once without inventing receipts', () => {
+  const tracker = new CostTracker();
+  tracker.settleUsage('deepseek-v4.1-flash', 30, 5, null, null,
+    { taskOwnerId: 'owner', chargeId: 'first' }, true, 'opencode-go');
+  const before = tracker.getTaskSummary('owner');
+  const session = tracker.getSessionSummary();
+  const checkpoint = { totalCostUSD: before.totalCostUSD * 2, chargeIds: ['first', 'missing'] };
+  tracker.retainUnjournaledTaskCheckpoint('owner', checkpoint);
+  const retained = tracker.getTaskSummary('owner');
+  assert.equal(retained.totalCostUSD, checkpoint.totalCostUSD);
+  assert.equal(retained.unknownChargeCount, 1);
+  assert.equal(retained.estimateComplete, false);
+  assert.equal(retained.costComplete, false);
+  assert.equal(tracker.getTaskChargeObservations('owner').length, 1);
+  assert.deepEqual(tracker.getTaskChargeIds('owner'), checkpoint.chargeIds);
+  tracker.retainUnjournaledTaskCheckpoint('owner', checkpoint);
+  assert.deepEqual(tracker.getTaskSummary('owner'), retained);
+  assert.equal(tracker.settleUsage('deepseek-v4.1-flash', 30, 5, null, null,
+    { taskOwnerId: 'owner', chargeId: 'missing' }, true, 'opencode-go').kind, 'duplicate');
+  assert.deepEqual(tracker.getTaskSummary('owner'), retained);
+  assert.deepEqual(tracker.getSessionSummary(), session);
+});
+
+test('unjournaled checkpoint cannot lower newer known usage or steal another owner charge', () => {
+  const tracker = new CostTracker();
+  tracker.settleUsage('deepseek-v4.1-flash', 30, 5, null, null,
+    { taskOwnerId: 'owner', chargeId: 'first' }, true, 'opencode-go');
+  tracker.settleUsage('deepseek-v4.1-flash', 30, 5, null, null,
+    { taskOwnerId: 'other', chargeId: 'foreign' }, true, 'opencode-go');
+  const before = tracker.getTaskSummary('owner');
+  tracker.retainUnjournaledTaskCheckpoint('owner', { totalCostUSD: 0, chargeIds: ['first'] });
+  assert.deepEqual(tracker.getTaskSummary('owner'), before);
+  assert.throws(() => tracker.retainUnjournaledTaskCheckpoint('owner', {
+    totalCostUSD: 1, chargeIds: ['first', 'foreign'],
+  }), /identity conflict/);
+  assert.deepEqual(tracker.getTaskSummary('owner'), before);
+  assert.deepEqual(tracker.getTaskChargeIds('owner'), ['first']);
+});
+
 // Historical totals require an owned SQLite store, independent of ambient user state.
 let historyRoot = '';
 let priorHistoryPath: string | undefined;

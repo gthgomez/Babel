@@ -255,7 +255,14 @@ test('Go budget persists reservations and rejects contention, exhaustion and job
   await writeFile(path + '.lock', 'synthetic-lock')
   await assert.rejects(a.reserve(1, 1), /budget/i)
   assert.equal(await readFile(path + '.lock', 'utf8'), 'synthetic-lock')
-  assert.throws(() => new OpenCodeGoBudget({ statePath: path, jobId: 'job', limitUsd: 2.01 }), /budget/i)
+  const selectedPath = join(dir, 'selected-limit.json')
+  const selected = new OpenCodeGoBudget({ statePath: selectedPath, jobId: 'selected-owner', limitUsd: 5 })
+  await selected.reserve(1, 1)
+  const selectedState = JSON.parse(await readFile(selectedPath, 'utf8'))
+  assert.equal(selectedState.limitNanoUsd, 5_000_000_000)
+  assert.equal(selectedState.reservedNanoUsd, 1500)
+  await assert.rejects(selected.reserve(1, 4_166_666), /budget/i)
+  assert.equal(JSON.parse(await readFile(selectedPath, 'utf8')).reservedNanoUsd, 1500)
 })
 
 test('Go reservations retain spent state across resume, respect a reduced task ceiling and refuse deleted state', { skip: process.platform === 'win32' ? 'Native POSIX persistence contract; Windows remains denied' : false }, async t => {
@@ -418,6 +425,52 @@ test('Go does not dispatch or debit a request cancelled before entry', async (t)
   assert.equal(calls, 0)
   await assert.rejects(access(path))
 })
+
+for (const limitUsd of [Infinity, 5]) {
+  test(`actual Go runner preserves owner and cancellation with ${limitUsd === Infinity ? 'unlimited' : 'selected $5'} authority`, async t => {
+    const { mkdtemp, access, rm } = await import('node:fs/promises')
+    const { tmpdir } = await import('node:os')
+    const { join } = await import('node:path')
+    const { OpenCodeGoBudget, OpenCodeGoBudgetError } = await import('./openCodeGoBudget.js')
+    const dir = await mkdtemp(join(tmpdir(), 'go-grant-runner-'))
+    t.after(() => rm(dir, { recursive: true, force: true }))
+    const statePath = join(dir, 'reservations.json')
+    let currentOwner = true
+    const budget = new OpenCodeGoBudget({ statePath, jobId: 'current-owner', limitUsd,
+      currentGrant: () => {
+        if (!currentOwner) throw new OpenCodeGoBudgetError()
+        return { grantId: 'selected-grant', revision: 0, limitUsd }
+      } })
+    let fetches = 0
+    globalThis.fetch = async () => {
+      fetches++
+      return new Response(JSON.stringify({ model: 'deepseek-v4.1-flash',
+        choices: [{ message: { content: 'A useful read-only explanation.' }, finish_reason: 'stop' }],
+        usage: { prompt_tokens: 20, completion_tokens: 5, total_tokens: 25 } }))
+    }
+    const runner = new OpenCodeGoApiRunner('deepseek-v4.1-flash', { maxTokens: 16 }, {
+      budget, credentialSource: 'explicit-test', explicitCredential: 'synthetic' })
+    assert.equal(await runner.executeRaw('Explain this read-only input.'), 'A useful read-only explanation.')
+    assert.equal(fetches, 1)
+    assert.equal(budget.hasMonetaryReservationLedger(), Number.isFinite(limitUsd))
+    if (limitUsd === Infinity) await assert.rejects(access(statePath))
+    else {
+      await access(statePath)
+      const excessive = new OpenCodeGoApiRunner('deepseek-v4.1-flash', { maxTokens: 4_166_666 }, {
+        budget, credentialSource: 'explicit-test', explicitCredential: 'synthetic' })
+      await assert.rejects(excessive.executeRaw('The selected finite grant is still bounded.'), /budget denied/i)
+      assert.equal(fetches, 1)
+    }
+    const controller = new AbortController()
+    controller.abort()
+    await assert.rejects(runner.executeRaw('Cancelled input.', undefined, undefined, controller.signal))
+    assert.equal(fetches, 1)
+    currentOwner = false
+    await assert.rejects(runner.executeRaw('Retired owner input.'), /budget denied/i)
+    assert.equal(fetches, 1)
+    if (limitUsd === Infinity) await assert.rejects(access(statePath))
+  })
+}
 
 
 test('Windows Go corrupt reservation state denies transport without replacing evidence', { skip: process.platform !== 'win32' ? 'Native Windows SQLite contract' : false }, async (t) => {

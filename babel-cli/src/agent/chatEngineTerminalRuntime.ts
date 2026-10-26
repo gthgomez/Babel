@@ -115,6 +115,7 @@ export interface ChatTerminalSnapshot {
     writeCount: number
   }
   presentation: {
+    accountingWarnings?: string[]
     conversation: import('./chatToolDefinitions.js').ChatMessage[]
     cachedSystemPromptNative: string | null
     playbookId: string | null
@@ -340,6 +341,7 @@ export function completeChatStream(
     ...(snapshot.allowance.limits.costBudget
       ? { costBudget: snapshot.allowance.limits.costBudget }
       : {}),
+    ...(snapshot.presentation.accountingWarnings?.length ? { accountingWarnings: snapshot.presentation.accountingWarnings } : {}),
     runAllowance,
     ...(finalizedTelemetry ? { turnTelemetry: finalizedTelemetry } : {}),
     ...(terminalReason !== undefined ? { reason: terminalReason } : {}),
@@ -428,6 +430,7 @@ export function failChatStream(
     ...(snapshot.allowance.limits.costBudget
       ? { costBudget: snapshot.allowance.limits.costBudget }
       : {}),
+    ...(snapshot.presentation.accountingWarnings?.length ? { accountingWarnings: snapshot.presentation.accountingWarnings } : {}),
     runAllowance,
     ...(finalizedTelemetry ? { turnTelemetry: finalizedTelemetry } : {}),
     ...(terminalReason !== undefined ? { reason: terminalReason } : {}),
@@ -869,6 +872,7 @@ export function assembleChatResult(
     ...(snapshot.allowance.limits.costBudget
       ? { costBudget: snapshot.allowance.limits.costBudget }
       : {}),
+    ...(snapshot.presentation.accountingWarnings?.length ? { accountingWarnings: snapshot.presentation.accountingWarnings } : {}),
     runAllowance,
     ...(terminalReason !== undefined
       ? {

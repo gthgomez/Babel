@@ -173,6 +173,7 @@ export type StreamDoneEvent = {
   blockedAttempts?: BlockedAttempt[];
   turnSummaries?: TurnSummary[];
   turnTelemetry?: import('./chatTurnTelemetry.js').ChatTurnTelemetryRecord;
+  accountingWarnings?: string[];
   costBudget?: ChatEngineLimits['costBudget'];
   runAllowance?: ChatEngineRunAllowanceReport;
   /** D03: structured terminal reason code (UI authority; prose stays diagnostic). */
@@ -192,6 +193,7 @@ export type StreamFailedEvent = {
   turnTelemetry?: import('./chatTurnTelemetry.js').ChatTurnTelemetryRecord;
   /** Present only when the cause is established. Unknown stays omitted. */
   outcome?: TerminalOutcome;
+  accountingWarnings?: string[];
   costBudget?: ChatEngineLimits['costBudget'];
   runAllowance?: ChatEngineRunAllowanceReport;
   /** D03: structured terminal reason code. */
@@ -295,6 +297,7 @@ export function buildStreamDone(
     verifierTampered?: boolean;
     criticReceipt?: DiffCriticVerdict | null;
     turnTelemetry?: import('./chatTurnTelemetry.js').ChatTurnTelemetryRecord;
+    accountingWarnings?: string[];
     costBudget?: ChatEngineLimits['costBudget'];
     runAllowance?: ChatEngineRunAllowanceReport;
     /** D03: structured terminal reason. */
@@ -331,6 +334,7 @@ export function buildStreamDone(
   if (extra.planOutcome) event.planOutcome = extra.planOutcome;
   if (extra.turnTelemetry) event.turnTelemetry = extra.turnTelemetry;
   if (extra.costBudget) event.costBudget = extra.costBudget;
+  if (extra.accountingWarnings?.length) event.accountingWarnings = extra.accountingWarnings;
   if (extra.runAllowance) event.runAllowance = extra.runAllowance;
   if (extra.reason) {
     event.reason_code = extra.reason.code;
@@ -349,6 +353,7 @@ export function buildStreamFailed(
     turnTelemetry?: import('./chatTurnTelemetry.js').ChatTurnTelemetryRecord;
     outcome?: TerminalOutcome;
     status?: ChatStatus;
+    accountingWarnings?: string[];
     costBudget?: ChatEngineLimits['costBudget'];
     runAllowance?: ChatEngineRunAllowanceReport;
     /** D03: structured terminal reason. */
@@ -369,6 +374,7 @@ export function buildStreamFailed(
   if (extra?.turnTelemetry) event.turnTelemetry = extra.turnTelemetry;
   if (extra?.outcome) event.outcome = extra.outcome;
   if (extra?.costBudget) event.costBudget = extra.costBudget;
+  if (extra?.accountingWarnings?.length) event.accountingWarnings = extra.accountingWarnings;
   if (extra?.runAllowance) event.runAllowance = extra.runAllowance;
   if (extra?.reason) {
     event.reason_code = extra.reason.code;
