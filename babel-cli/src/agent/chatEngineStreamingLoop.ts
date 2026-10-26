@@ -22,11 +22,7 @@ import { join } from 'node:path';
 import { describeNativeToolRejection, nativeSchemaRepairFeedback } from './nativeToolRejection.js';
 import { unsupportedTestClaim, responseEvidenceCorrection, responseVerifierFacts } from './chatResponseEvidence.js';
 import { refreshChatVerifierReceiptStalenessSync } from '../evidence/chatRevisionBinding.js';
-import {
-  type ChatUsageScope,
-  isAuthoritativeTaskAllowanceStopError,
-  terminalReasonForAuthoritativeTaskAllowanceStopRequired,
-} from './chatEngineProviderAccounting.js';
+import type { ChatUsageScope } from './chatEngineProviderAccounting.js';
 
 import { trace, SpanStatusCode, type Span } from "@opentelemetry/api";
 import { endSpan } from "../telemetry/tracing.js";
@@ -778,15 +774,6 @@ export class ChatEngineStreamingLoop {
             _turnSpan = null;
             continue;
           }
-          if (isAuthoritativeTaskAllowanceStopError(err)) {
-            endSpan(_turnSpan, SpanStatusCode.ERROR);
-            _turnSpan = null;
-            yield this.host.streamFailed(
-              err?.message ?? String(err),
-              terminalReasonForAuthoritativeTaskAllowanceStopRequired(err),
-            );
-            return;
-          }
           const fb = yield* this.host.resolveFallbackOrFail(
             err,
             turn,
@@ -1071,15 +1058,6 @@ export class ChatEngineStreamingLoop {
           if (admissionRecovery === 'recovered') continue;
           if (admissionRecovery === 'stopped') return;
           if (!this.host.isSubmissionCurrent(submissionGeneration)) return;
-          if (isAuthoritativeTaskAllowanceStopError(err)) {
-            endSpan(_turnSpan, SpanStatusCode.ERROR);
-            _turnSpan = null;
-            yield this.host.streamFailed(
-              err?.message ?? String(err),
-              terminalReasonForAuthoritativeTaskAllowanceStopRequired(err),
-            );
-            return;
-          }
           const fb = yield* this.host.resolveFallbackOrFail(
             err,
             turn,

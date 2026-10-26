@@ -4248,7 +4248,7 @@ export class ChatEngine {
       modelPolicy: this.modelPolicy,
       isSubmissionCurrent: (generation) => this.isSubmissionCurrent(generation),
       cancelled: (error) => this.emitCancelledIfOperatorAbort(error),
-      failed: (error) => this.streamFailed(error),
+      failed: (error, reason) => this.streamFailed(error, reason),
       tryFailover: (modelId, error) =>
         parityTryFailover(this.parity, modelId, error),
       resolveFallback: () => this.resolveFallbackRunner(),

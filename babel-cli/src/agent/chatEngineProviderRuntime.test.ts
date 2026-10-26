@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
+import { notifyProviderRetryOrFinalizeOnCallbackError } from '../runners/providerRetryCallback.js'
 import {
   LIVE_OPENROUTER_MODEL_ID,
   type ResolvedModelPolicy,
@@ -229,6 +230,37 @@ test('resolveChatFallbackOrFail blocks allowance stops without failover or fallb
   }
 })
 
+test('allowance stop preserves the existing cancellation or prior-stop winner', async () => {
+  for (const winner of [
+    { type: 'cancelled', outcome: 'CANCELLED' } as const,
+    { type: 'failed', error: 'Execution stopped: existing winner.' } as const,
+  ]) {
+    const { events, runner } = await collectFallbackEvents(fallbackInput({
+      err: new Error('Provider retry blocked by task allowance: COST_ACCOUNTING_INCOMPLETE: fixture'),
+      cancelled: () => winner,
+      failed: () => { throw new Error('existing winner was replaced') },
+      tryFailover: () => { throw new Error('failover considered after stop') },
+      resolveFallback: () => { throw new Error('fallback considered after stop') },
+    }))
+    assert.equal(events.length, 1)
+    assert.equal(events[0], winner)
+    assert.equal(runner, null)
+  }
+})
+
+test('allowance fallback owner forwards an explicit harness reason for an unmapped denial', async () => {
+  let reason: unknown
+  const { events, runner } = await collectFallbackEvents(fallbackInput({
+    err: new Error('Provider retry blocked by task allowance: unavailable'),
+    failed: (error, value) => { reason = value; return { type: 'failed', error } },
+    tryFailover: () => { throw new Error('failover considered after stop') },
+    resolveFallback: () => { throw new Error('fallback considered after stop') },
+  }))
+  assert.equal(events.length, 1)
+  assert.equal(runner, null)
+  assert.deepEqual(reason, { code: 'unknown', cause_class: 'harness', detail: 'provider_retry_blocked' })
+})
+
 test('settles a late synthesis against its captured owner after a successor arrives', async () => {
   let deliver!: (value: string) => void
   const response = new Promise<string>((resolve) => {
@@ -256,4 +288,33 @@ test('settles a late synthesis against its captured owner after a successor arri
   assert.equal(await answer, 'answer for original owner')
   assert.deepEqual(settled, ['owner-1'])
   assert.equal(scope.isOwnerCurrent?.(), false)
+})
+
+// A secondary receipt-write failure must not turn the control stop into fallback input.
+test('an allowance stop with retained finalization failures still blocks every fallback', async () => {
+  const original = new Error('Provider retry blocked by task allowance: COST_ACCOUNTING_INCOMPLETE: fixture')
+  const receiptFailure = new Error('session event persistence failed: fixture')
+  let controlError: unknown
+  try {
+    await notifyProviderRetryOrFinalizeOnCallbackError({
+      notifyRetry: () => { throw original },
+      settleRetry: () => { throw receiptFailure },
+      notifyPhase: () => {},
+      notifyCompleted: () => {},
+      actualAttempt: 1,
+      outputBudget: 100,
+      failure: { kind: 'transport', transportErrorMessage: 'ECONNRESET', transportPhase: 'transport' },
+    })
+  } catch (error) { controlError = error }
+  assert.ok(controlError instanceof AggregateError)
+  assert.equal(controlError.cause, original)
+  const { events, runner } = await collectFallbackEvents(fallbackInput({
+    err: controlError,
+    tryFailover: () => { throw new Error('failover considered after authoritative stop') },
+    resolveFallback: () => { throw new Error('fallback considered after authoritative stop') },
+  }))
+  assert.equal(events.length, 1)
+  assert.equal(events[0]?.type, 'failed')
+  assert.equal(events[0]?.error, original.message)
+  assert.equal(runner, null)
 })

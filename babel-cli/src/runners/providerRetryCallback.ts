@@ -4,7 +4,6 @@ import {
   type ProviderFailureDetails,
 } from './providerFailureReceipt.js'
 import type { OpenRouterResponseMetadata } from './providerResponseMetadata.js'
-import { readErrorBody } from './providerResponseStream.js'
 
 type RetrySettleOutcome = 'succeeded' | 'failed' | 'cancelled'
 
@@ -33,34 +32,62 @@ type RetryFailureReceipt = {
     | { kind: 'http'; response: Response }
 }
 
-/** Finalize the active attempt when an onRetry callback throws; rethrow that callback error. */
+type FinalizationFailure = Readonly<{
+  step: 'settleRetry' | 'notifyPhase' | 'notifyCompleted'
+  error: unknown
+}>
+
+/** Keep the control denial primary while retaining every secondary notification failure. */
+export class ProviderRetryFinalizationError extends AggregateError {
+  readonly finalizationFailures: readonly FinalizationFailure[]
+
+  constructor(retryError: unknown, failures: readonly FinalizationFailure[]) {
+    super(
+      failures.map(failure => failure.error),
+      retryError instanceof Error ? retryError.message : String(retryError),
+      { cause: retryError },
+    )
+    this.name = 'ProviderRetryFinalizationError'
+    this.finalizationFailures = Object.freeze(failures.map(failure => Object.freeze({ ...failure })))
+  }
+}
+
+/** Finalize once; preserve the original stop, with secondary failures attached only when needed. */
 export async function notifyProviderRetryOrFinalizeOnCallbackError(
   input: RetryFailureReceipt,
 ): Promise<void> {
   try {
     input.notifyRetry()
-  } catch (retryErr) {
-    input.settleRetry('failed')
-    if (input.failure.kind === 'transport') {
-      input.notifyPhase('provider_error', undefined, input.failure.transportPhase)
+  } catch (retryError) {
+    const failures: FinalizationFailure[] = []
+    const attempt = (step: FinalizationFailure['step'], action: () => void): void => {
+      try { action() } catch (error) { failures.push({ step, error }) }
+    }
+    const failure = input.failure
+    attempt('settleRetry', () => input.settleRetry('failed'))
+    attempt('notifyPhase', () => {
+      input.notifyPhase(
+        'provider_error',
+        failure.kind === 'http' ? failure.response.status : undefined,
+        failure.kind === 'http' ? 'http_error' : failure.transportPhase,
+      )
+    })
+    attempt('notifyCompleted', () => {
+      // Diagnostic body reads must never delay or replace an authoritative stop.
+      const details: ProviderFailureDetails = failure.kind === 'transport'
+        ? { message: failure.transportErrorMessage }
+        : {
+            status: failure.response.status,
+            message: `HTTP ${failure.response.status} (error body unavailable: retry callback stopped dispatch)`,
+            providerRequestId: providerRequestIdFromResponse(failure.response),
+          }
       input.notifyCompleted('failed', null, '', null, null, null, input.outputBudget, {
         actualAttempt: input.actualAttempt,
-        details: { message: input.failure.transportErrorMessage },
-        failureStage: 'request',
+        details,
+        failureStage: failure.kind === 'http' ? 'response' : 'request',
       })
-    } else {
-      const body = await readErrorBody(input.failure.response)
-      input.notifyPhase('provider_error', input.failure.response.status, 'http_error')
-      input.notifyCompleted('failed', null, body, null, null, null, input.outputBudget, {
-        actualAttempt: input.actualAttempt,
-        details: {
-          status: input.failure.response.status,
-          message: body,
-          providerRequestId: providerRequestIdFromResponse(input.failure.response),
-        },
-        failureStage: 'response',
-      })
-    }
-    throw retryErr
+    })
+    if (failures.length > 0) throw new ProviderRetryFinalizationError(retryError, failures)
+    throw retryError
   }
 }

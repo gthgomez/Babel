@@ -38,8 +38,8 @@ import {
   ProviderOutputTruncatedError,
 } from './chatNativeTurn.js'
 import { nativeToolUseToChatAction } from './chatEngineSupport.js'
-import { terminalReasonFromFailureText } from './chatTerminalReason.js'
-import { isAuthoritativeTaskAllowanceStopError } from './chatEngineProviderAccounting.js'
+import { terminalReasonFromFailureText, type TerminalReason } from './chatTerminalReason.js'
+import { isAuthoritativeTaskAllowanceStopError, terminalReasonForAuthoritativeTaskAllowanceStopRequired } from './chatEngineProviderAccounting.js'
 import { parseTextToolTurn } from './textToolParser.js'
 import { parseChatTurnLenient } from './chatEngineHelpers.js'
 import { type NextTurnToolPolicy } from './codingLoop/index.js'
@@ -647,7 +647,7 @@ export interface ChatFallbackInput {
   modelPolicy: ResolvedModelPolicy | undefined
   isSubmissionCurrent: (generation: number) => boolean
   cancelled: (error: unknown) => ChatEvent | null
-  failed: (error: string) => ChatEvent
+  failed: (error: string, reason?: TerminalReason) => ChatEvent
   tryFailover: (modelId: string, error: unknown) => FailoverDecision | null
   resolveFallback: () => ChatProviderRunner | null
   installFailover: (
@@ -687,7 +687,7 @@ export async function* resolveChatFallbackOrFail(
   }
   const errorMessage = err?.message ?? String(err)
   if (isAuthoritativeTaskAllowanceStopError(err)) {
-    yield input.failed(errorMessage)
+    yield input.failed(errorMessage, terminalReasonForAuthoritativeTaskAllowanceStopRequired(err))
     return null
   }
   if (
