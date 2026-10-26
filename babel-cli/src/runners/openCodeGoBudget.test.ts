@@ -9,6 +9,7 @@ import { spawn } from 'node:child_process'
 import { DatabaseSync } from 'node:sqlite'
 import { OpenCodeGoBudget } from './openCodeGoBudget.js'
 import { OpenCodeGoApiRunner } from './openCodeGoApi.js'
+import { resolveChatEngineLimits } from '../config/chatEngineLimits.js'
 
 const windows = { skip: process.platform !== 'win32' ? 'Native Windows SQLite boundary' : false }
 const moduleUrl = new URL('./openCodeGoBudget.ts', import.meta.url).href
@@ -21,6 +22,32 @@ function fixture(t: test.TestContext) {
   t.after(() => rmSync(root, { recursive: true, force: true }))
   return { root, statePath: join(root, 'budget.json'), jobId: 'owner', limitUsd: 0.00001 }
 }
+
+test('selected finite Go caps preserve representable amounts and reject unsupported precision clearly', t => {
+  const options = fixture(t)
+  for (const amount of [0.001, 0.00000001, 1.000000001, 101, 1_000_000.25]) {
+    const limits = resolveChatEngineLimits({ maxCostUsd: amount })
+    assert.equal(limits.maxCostUsd, amount)
+    assert.equal(new OpenCodeGoBudget({ ...options, limitUsd: limits.maxCostUsd }).hasMonetaryReservationLedger(), true)
+  }
+  for (const amount of [10_000_000, 0.0000000001, 0.0000000015]) {
+    const limits = resolveChatEngineLimits({ maxCostUsd: amount })
+    assert.equal(limits.maxCostUsd, amount, 'other routes retain the selected numeric amount')
+    assert.throws(() => new OpenCodeGoBudget({ ...options, limitUsd: limits.maxCostUsd }),
+      { code: 'GO_BUDGET_DENIED', message: /Invalid OpenCode Go cost limit.*representable/ })
+    assert.equal(existsSync(options.statePath), false)
+  }
+})
+
+test('a representable fractional Go cap permits its exact reservation without rounding down', async t => {
+  const options = fixture(t)
+  const limitUsd = resolveChatEngineLimits({ maxCostUsd: 0.0000633 }).maxCostUsd
+  const budget = new OpenCodeGoBudget({ ...options, limitUsd })
+  await budget.reserve(207, 1) // 207 * 300 + 1 * 1200 = exactly 63300 nanodollars.
+  assert.equal(ledgerLimitNanoUsd(options.statePath), 63300)
+  budget.assertCurrentAuthority()
+  await assert.rejects(budget.reserve(0, 1), { code: 'GO_BUDGET_DENIED' })
+})
 
 function state(path: string): { reservedNanoUsd: number; attempts: number; limitNanoUsd: number; grantRevision?: number } {
   const db = new DatabaseSync(path, { readOnly: true })

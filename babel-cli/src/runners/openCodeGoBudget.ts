@@ -5,9 +5,12 @@ import { dirname, isAbsolute, join, basename } from 'node:path'
 import type { DatabaseSync as SqliteDatabase } from 'node:sqlite'
 
 function finiteReservationLimitNanoUsd(limitUsd: number): number {
-  if (!Number.isFinite(limitUsd) || limitUsd <= 0) throw new OpenCodeGoBudgetError()
-  const nano = Math.floor(limitUsd * 1e9)
-  if (!Number.isSafeInteger(nano) || nano <= 0) throw new OpenCodeGoBudgetError()
+  const invalidLimit = 'Invalid OpenCode Go cost limit: use a positive finite amount exactly representable in safe integer nanodollars.'
+  if (!Number.isFinite(limitUsd) || limitUsd <= 0) throw new OpenCodeGoBudgetError(invalidLimit)
+  const nano = Math.round(limitUsd * 1e9)
+  if (!Number.isSafeInteger(nano) || nano <= 0 || nano / 1e9 !== limitUsd) {
+    throw new OpenCodeGoBudgetError(invalidLimit)
+  }
   return nano
 }
 
@@ -37,8 +40,8 @@ interface ReservationState {
 /** Content-free, fail-closed budget error; callers must not select another provider. */
 export class OpenCodeGoBudgetError extends Error {
   readonly code = 'GO_BUDGET_DENIED'
-  constructor() {
-    super('OpenCode Go budget denied the request.')
+  constructor(message = 'OpenCode Go budget denied the request.') {
+    super(message)
   }
 }
 
@@ -106,7 +109,7 @@ export class OpenCodeGoBudget {
       finiteReservationLimitNanoUsd(this.monetaryReservationUsd)
     const currentLimitUsd = this.options.currentLimitUsd?.() ?? grantLimitNanoUsd / 1e9
     if (!Number.isFinite(currentLimitUsd) || currentLimitUsd <= 0) throw new OpenCodeGoBudgetError()
-    const currentNano = Math.floor(currentLimitUsd * 1e9)
+    const currentNano = finiteReservationLimitNanoUsd(currentLimitUsd)
     if (currentNano > grantLimitNanoUsd) throw new OpenCodeGoBudgetError()
     return currentNano
   }
