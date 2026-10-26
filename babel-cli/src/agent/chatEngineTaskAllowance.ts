@@ -123,9 +123,10 @@ export class ChatEngineTaskAllowance {
     allowance.consumed.unknownChargeCount =
       globalCostTracker.getTaskSummary(allowance.taskOwnerId)
         .unknownChargeCount ?? 0;
-    allowance.accountedChargeIds = globalCostTracker.getTaskChargeIds(
-      allowance.taskOwnerId,
-    );
+    const chargeIds = globalCostTracker.getTaskChargeIds(allowance.taskOwnerId);
+    allowance.accountedChargeIds = this.hasUnpersistedFinancialJournal()
+      ? [...new Set([...allowance.accountedChargeIds, ...chargeIds])]
+      : chargeIds;
     allowance.activeExecution =
       this.host.activeExecutionCheckpointMs !== null;
     allowance.repair = {
@@ -217,9 +218,21 @@ export class ChatEngineTaskAllowance {
 
   currentTaskCostUsd(): number {
     const allowance = this.host.taskAllowance;
-    return allowance
-      ? globalCostTracker.getTaskSummary(allowance.taskOwnerId).totalCostUSD
-      : 0;
+    if (!allowance) return 0;
+    const summary = globalCostTracker.getTaskSummary(allowance.taskOwnerId);
+    // A stale journal cannot erase the runtime checkpoint's known lower bound.
+    // Missing receipts remain unknown; no invoice or per-charge usage is invented.
+    return this.hasUnpersistedFinancialJournal() && !summary.estimateComplete
+      ? Math.max(allowance.consumed.costUsd, summary.totalCostUSD)
+      : summary.totalCostUSD;
+  }
+
+  private hasUnpersistedFinancialJournal(): boolean {
+    const allowance = this.host.taskAllowance;
+    return allowance?.grant.costCap.kind === 'unlimited' &&
+      this.host.ownerAccountingFaults.get(allowance.taskOwnerId)?.some(
+        fault => fault.kind === 'persistence-failure' && fault.persistenceFailureClass === 'financial-journal-io',
+      ) === true;
   }
 
   currentTaskActiveWallMs(nowMs = Date.now()): number {
@@ -277,7 +290,10 @@ export class ChatEngineTaskAllowance {
     globalCostTracker.restoreTaskUsage(persisted.taskOwnerId, {
       totalCostUSD: persisted.consumed.costUsd,
       chargeIds: persisted.accountedChargeIds,
-      unknownChargeCount: persisted.consumed.unknownChargeCount ?? 1,
+      unknownChargeCount: this.hasUnpersistedFinancialJournal()
+        ? Math.max(persisted.consumed.unknownChargeCount ?? 1,
+            persisted.accountedChargeIds.length - globalCostTracker.getTaskChargeObservations(persisted.taskOwnerId).length)
+        : persisted.consumed.unknownChargeCount ?? 1,
     });
     this.host.limits = {
       ...this.host.limits,

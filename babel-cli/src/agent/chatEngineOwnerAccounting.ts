@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { globalCostTracker, type ChargeReceipt } from '../services/costTracker.js';
 import type { ChatTaskAllowanceSnapshot } from './chatEngine.js';
 import type { ChatUsageScope } from './chatEngineProviderAccounting.js';
+import { OWNER_CHARGE_JOURNAL_UNAVAILABLE_REASON } from './ownerChargePersistPolicy.js';
 
 export type OwnerAccountingPersistenceFailureClass =
   | 'financial-journal-io'
@@ -30,6 +31,13 @@ export interface ChatEngineOwnerAccountingHost {
 
 export class ChatEngineOwnerAccounting {
   constructor(private readonly host: ChatEngineOwnerAccountingHost) {}
+
+  /** Keep financial uncertainty visible without changing execution authority. */
+  getAccountingWarnings(): string[] {
+    return [...this.host.ownerAccountingFaults.values()].flat().some(
+      fault => fault.kind === 'persistence-failure' && fault.persistenceFailureClass === 'financial-journal-io',
+    ) ? [OWNER_CHARGE_JOURNAL_UNAVAILABLE_REASON] : [];
+  }
 
   /** A task can be retired while its provider still reports a billable result. */
   ownerChargeDir(runDir = this.host.engineRunDir): string {
@@ -107,6 +115,14 @@ export class ChatEngineOwnerAccounting {
     // An old ID-only snapshot cannot safely be rewritten as a complete
     // receipt ledger. Keep its task budget conservative on this path.
     if (chargeObservations.length !== chargeIds.length) {
+      const allowance = this.host.taskAllowance;
+      const faults = this.host.ownerAccountingFaults.get(ownerId) ?? [];
+      // A valid unlimited runtime checkpoint can outlive a failed first journal
+      // write. Keep the warning and its IDs; do not invent or overwrite receipts.
+      if (!this.host.taskCostScopeUnavailable && allowance?.taskOwnerId === ownerId &&
+          allowance.grant.costCap.kind === 'unlimited' && allowance.lastTurnRuntime &&
+          faults.length > 0 && faults.every(fault => fault.kind === 'persistence-failure' &&
+            fault.persistenceFailureClass === 'financial-journal-io')) return;
       throw new Error('Owner charge receipts are incomplete');
     }
     const dir = this.ownerChargeDir(runDir);

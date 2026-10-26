@@ -4632,6 +4632,7 @@ export class ChatEngine {
           writeCount: this.writeCount,
         },
         presentation: {
+          accountingWarnings: this.ownerAccounting.getAccountingWarnings(),
           conversation: this.conversation,
           cachedSystemPromptNative: this.cachedSystemPromptNative,
           playbookId: this.activePlaybook?.id ?? null,

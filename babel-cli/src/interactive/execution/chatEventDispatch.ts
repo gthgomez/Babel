@@ -170,6 +170,7 @@ export function dispatchChatEvent(
     return {
       status: terminal.status,
       ...(terminal.outcome !== undefined ? { outcome: terminal.outcome } : {}),
+      ...(event.accountingWarnings?.length ? { accountingWarnings: event.accountingWarnings } : {}),
       answer: event.error,
       usage: globalCostTracker.getSessionSummary(),
       conversation: [],
@@ -229,6 +230,7 @@ export function terminalResultFromDoneEvent(
     verifierTampered?: boolean;
     turnRouting?: TurnRoutingReceipt[];
     turnTelemetry?: import('../../agent/chatTurnTelemetry.js').ChatTurnTelemetryRecord;
+    accountingWarnings?: string[];
     costBudget?: ChatResult['costBudget'];
     runAllowance?: ChatResult['runAllowance'];
     policyEvents?: ChatResult['policyEvents'];
@@ -280,6 +282,7 @@ export function terminalResultFromDoneEvent(
     ...(opts?.verifierTampered ? { verifierTampered: true as const } : {}),
     ...(opts?.turnRouting ? { turnRouting: opts.turnRouting } : {}),
     ...(opts?.turnTelemetry !== undefined ? { turnTelemetry: opts.turnTelemetry } : {}),
+    ...(opts?.accountingWarnings?.length ? { accountingWarnings: opts.accountingWarnings } : {}),
     ...(opts?.costBudget ? { costBudget: opts.costBudget } : {}),
     ...(opts?.runAllowance ? { runAllowance: opts.runAllowance } : {}),
     ...(opts?.policyEvents ? { policyEvents: opts.policyEvents } : {}),

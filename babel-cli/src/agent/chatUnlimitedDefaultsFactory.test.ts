@@ -498,7 +498,7 @@ if (!isSyntheticProviderFixtureReady()) {
       captureRequest(input, init)
       fetches++
       assert.ok(fetches <= 2, 'finite journal failure must not admit a third inference')
-      if (fetches === 1) return sse(toolDelta, 'tool_calls')
+      if (fetches === 1) return sse(toolDelta, 'tool_calls', { prompt_tokens: 30, completion_tokens: 5, total_tokens: 35 })
       return sse({ content: 'Should not run after finite journal refusal.' }, 'stop', {
         prompt_tokens: 10, completion_tokens: 4, total_tokens: 14,
       })
@@ -575,7 +575,7 @@ if (!isSyntheticProviderFixtureReady()) {
   test('task-budget checkpoint failure blocks runtime authority', async t => {
     const { ChatEngineTaskAllowance } = await import('./chatEngineTaskAllowance.js')
     const { OpenCodeGoBudgetError } = await import('../runners/openCodeGoBudget.js')
-    const { chmodSync } = await import('node:fs')
+    const { mkdirSync } = await import('node:fs')
     const runDir = mkdtempSync(join(process.env['BABEL_SYNTHETIC_PROVIDER_FIXTURE_ROOT']!, 'tmp', 'checkpoint-fail-'))
     const lastTurnRuntime = {
       submissionIndex: 0,
@@ -619,8 +619,9 @@ if (!isSyntheticProviderFixtureReady()) {
       ownerAccountingFaults: new Map(),
       ownerAccounting: { recordOwnerAccountingFault: () => {}, persistOwnerCharges: () => {} },
     }
-    chmodSync(runDir, 0o500)
-    t.after(() => { chmodSync(runDir, 0o700) })
+    const blockedTemporary = join(runDir, `task-budget.json.tmp-${process.pid}`)
+    mkdirSync(blockedTemporary)
+    t.after(() => rmSync(runDir, { recursive: true, force: true }))
     const allowance = new ChatEngineTaskAllowance(host as never)
     allowance.persistTaskAllowance()
     assert.equal(host.taskCostScopeUnavailable, true)
