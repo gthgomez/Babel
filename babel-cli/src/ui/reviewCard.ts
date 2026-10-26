@@ -340,8 +340,10 @@ export function buildReviewCard(input: ReviewCardInput): ReviewCard {
   const usageScope = input.usageScope ?? 'turn';
   const hasEstimate = Number.isFinite(input.estimatedCostUsd) && (input.estimatedCostUsd ?? 0) > 0;
   const hasReported = Number.isFinite(input.reportedCostUsd);
-  const usageUnconfirmed = input.usageComplete === false && !hasRealTokens;
-  const costIncomplete = unknownCharges > 0 || input.costComplete === false || usageUnconfirmed;
+  const usageUnconfirmed = input.usageComplete === false;
+  const fullyReportedBill = hasReported && input.costComplete === true && unknownCharges === 0;
+  const costIncomplete = !fullyReportedBill &&
+    (unknownCharges > 0 || input.costComplete === false);
   const showCostSection = hasRealCost || hasRealTokens || costIncomplete || hasEstimate || hasReported ||
     (costAvailable && (input.costUsd ?? 0) === 0);
   if (showCostSection) {

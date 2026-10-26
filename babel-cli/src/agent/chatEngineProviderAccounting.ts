@@ -756,6 +756,21 @@ export function buildProviderRetryCallbacks(host: ChatProviderRetryHost, context
     };
 }
 
+/** Token-history cost for one runner settlement (explicit report or priced delta only). */
+export function runnerTokenHistoryCostUsd(
+  reportedTurnCost: number | null | undefined,
+  chargeUpdate: { kind: string; knownCostDelta?: number },
+): number | undefined {
+  if (reportedTurnCost !== null && reportedTurnCost !== undefined && Number.isFinite(reportedTurnCost)) {
+    return reportedTurnCost;
+  }
+  if (chargeUpdate.kind === 'inserted' || chargeUpdate.kind === 'refined') {
+    const delta = chargeUpdate.knownCostDelta ?? 0;
+    if (delta > 0) return delta;
+  }
+  return undefined;
+}
+
 export function trackRunnerUsage(
   host: ChatProviderRetryHost,
   runner: DeepInfraApiRunner | DeepSeekApiRunner | OllamaApiRunner | OpenRouterApiRunner,
@@ -838,14 +853,9 @@ export function trackRunnerUsage(
         host.persistTaskCostBaseline();
       }
 
-      // Feed token history tracker (allowance subtotal, including explicit $0 reports)
       const tokenTracker = getGlobalTokenTracker();
       const reportedTurnCost = settlementReportedCostUsd(metadata);
-      const turnCost = reportedTurnCost !== null && reportedTurnCost !== undefined
-        ? reportedTurnCost
-        : (chargeUpdate.kind === 'inserted' || chargeUpdate.kind === 'refined')
-          ? chargeUpdate.knownCostDelta
-          : metadata.estimated_cost_usd ?? undefined;
+      const turnCost = runnerTokenHistoryCostUsd(reportedTurnCost, chargeUpdate);
       if (turnCost !== undefined && Number.isFinite(turnCost)) {
         tokenTracker.record({
           inputTokens: metadata.prompt_tokens,

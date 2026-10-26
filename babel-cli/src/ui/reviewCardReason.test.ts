@@ -134,3 +134,28 @@ test('published usage estimates remain separate from known task charges', () => 
   assert.match(card.body, /0.0100 usage estimate/)
   assert.doesNotMatch(card.body, /0.0100 known/)
 })
+
+test('usage uncertainty shows with known tokens but not on fully reported bills', () => {
+  const uncertain = buildReviewCard({
+    outcome: 'BLOCKED_POLICY',
+    costUsd: 0.05,
+    reportedCostUsd: 0.05,
+    costComplete: true,
+    usageComplete: false,
+    tokens: 1200,
+  })
+  assert.match(uncertain.body, /usage unconfirmed/)
+  assert.doesNotMatch(uncertain.body, /cost incomplete/)
+
+  const reported = buildReviewCard({
+    outcome: 'VERIFIED_COMPLETE',
+    costUsd: 0.05,
+    reportedCostUsd: 0.05,
+    costComplete: true,
+    usageComplete: false,
+    tokens: 1200,
+  })
+  assert.match(reported.body, /0.0500 provider-reported/)
+  assert.match(reported.body, /usage unconfirmed/)
+  assert.doesNotMatch(reported.body, /cost incomplete/)
+})

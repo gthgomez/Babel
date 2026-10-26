@@ -490,6 +490,15 @@ test('cost:update no-ops when cost string unchanged', () => {
   assert.equal(state, initial);
 });
 
+test('cost:update prefers costHudLabel for estimate-only HUD', () => {
+  const state = tuiStateReducer(freshState(), {
+    type: 'cost:update',
+    costUSD: 0,
+    costHudLabel: '$0.0027 usage est.; incomplete',
+  });
+  assert.equal(state.cachedCostStr, '$0.0027 usage est.; incomplete');
+});
+
 test('error mutation sets renderState to failed and stores message', () => {
   const state = tuiStateReducer(freshState(), {
     type: 'error',

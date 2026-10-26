@@ -19,3 +19,31 @@ export function formatUsageCost(usage: Pick<SessionUsageSummary,
   const incomplete = usage.costComplete === false || usage.completeCostUSD === null;
   return (incomplete ? `${known} known subtotal; cost incomplete` : known) + estimate + reported;
 }
+
+/** Compact session cost line for waterfall / TUI HUD (not plain CLI tables). */
+export function formatSessionCostHud(usage: Pick<SessionUsageSummary,
+  'totalCostUSD' | 'knownCostUSD' | 'estimatedCostUSD' | 'reportedCostUSD' | 'unknownChargeCount' |
+  'costComplete' | 'completeCostUSD'>): string {
+  const known = usage.knownCostUSD ?? usage.totalCostUSD;
+  const estimate = usage.estimatedCostUSD ?? 0;
+  const reported = usage.reportedCostUSD;
+  const unknown = usage.unknownChargeCount ?? 0;
+  const billingComplete = usage.costComplete === true && Number.isFinite(reported) && unknown === 0;
+  if (billingComplete) {
+    return `$${reported!.toFixed(4)} reported`;
+  }
+  const incomplete = usage.costComplete === false || usage.completeCostUSD === null;
+  const bits: string[] = [];
+  if (estimate > 0 && (incomplete || known <= 0)) {
+    bits.push(`$${estimate.toFixed(4)} usage est.`);
+  } else if (Number.isFinite(known) && known > 0) {
+    bits.push(`$${known.toFixed(4)}${incomplete ? ' known' : ''}`);
+  }
+  if (Number.isFinite(reported) && !billingComplete) {
+    bits.push(`$${reported!.toFixed(4)} reported`);
+  }
+  if (unknown > 0) bits.push(`${unknown} unresolved`);
+  else if (incomplete && bits.length === 0) bits.push('incomplete');
+  else if (incomplete && estimate <= 0 && known <= 0) bits.push('incomplete');
+  return bits.join('; ') || '$0.0000';
+}
