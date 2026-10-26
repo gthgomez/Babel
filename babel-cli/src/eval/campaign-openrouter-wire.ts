@@ -3,12 +3,12 @@ import {
   prepareProviderRequest,
   type PrepareProviderRequestInput,
 } from '../runners/preparedProviderRequest.js'
-import { getModelPricing } from '../services/modelPricingRegistry.js'
 import {
   assertCampaignQualifiedPreparedRequest,
   CAMPAIGN_QUALIFIED_OPENROUTER_MODEL_ID,
   isCampaignQualifiedModelRoute,
 } from './campaign-qualified-routes.js'
+import { resolveCampaignLegacyReservationRates } from './campaign-legacy-reservation-rates.js'
 
 /** Registry-backed OpenRouter USD/M-token caps (refuses higher-priced upstreams). */
 export interface CampaignOpenRouterMaxPriceUsdPerMillion {
@@ -29,13 +29,13 @@ export const CAMPAIGN_OPENROUTER_MAX_PRICE_REQUEST_USD = 0 as const
 export function campaignOpenRouterRegistryMaxPriceUsdPerMillion(
   modelId: string = CAMPAIGN_QUALIFIED_OPENROUTER_MODEL_ID,
 ): CampaignOpenRouterMaxPriceUsdPerMillion {
-  const pricing = getModelPricing('openrouter', modelId)
-  if (!pricing) {
-    throw new Error('campaign openrouter route pricing unknown')
+  const legacyRates = resolveCampaignLegacyReservationRates('openrouter', modelId)
+  if (!legacyRates) {
+    throw new Error('campaign legacy reservation rates unknown')
   }
   return {
-    prompt: pricing.inputCostPer1M,
-    completion: pricing.outputCostPer1M,
+    prompt: legacyRates.inputUsdPerMillion,
+    completion: legacyRates.outputUsdPerMillion,
     request: CAMPAIGN_OPENROUTER_MAX_PRICE_REQUEST_USD,
   }
 }
