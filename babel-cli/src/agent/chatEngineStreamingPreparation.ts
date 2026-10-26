@@ -8,6 +8,7 @@ import type { TaskOperation } from "../config/chatTaskClass.js";
 import { formatPlanHandoffUserMessage } from "./planExecuteMode.js";
 import { recordUserMessage } from "./threadEventLog.js";
 import { ChatTurnTelemetryCollector } from "./chatTurnTelemetry.js";
+import { resetGateRejectedCompletionCapture } from "./preservedUnverifiedTerminal.js";
 
 /**
  * Fill a missing repository map for this submission.
@@ -84,6 +85,7 @@ export async function prepareStreamingSubmission(
     runtime.effectiveOperation ?? runtime.taskShape?.operation ?? "READ_ONLY";
   const isReadOnlyInspection = effectiveOperation === "READ_ONLY";
 
+  resetGateRejectedCompletionCapture(host);
   host.conversation.push({ role: "user", content: userInput });
   // S01/#211: harness-generated repair guidance is only ever injected for an
   // execute-like operation. A READ_ONLY submission never receives the

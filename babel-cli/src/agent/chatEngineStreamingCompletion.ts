@@ -18,6 +18,7 @@ import {
 import { recordProgressRecovery } from "./sessionEvents.js";
 import { reconcileStreamedAnswer } from "./chatEngineStreamingProtocol.js";
 import { recordChatHarnessFeedback } from "./chatHarnessFeedback.js";
+import { captureGateRejectedCompletionAttempt } from "./preservedUnverifiedTerminal.js";
 import { PROJECT_REQUIRED_MESSAGE, conversationScopeRequiredReport } from './chatToolScopeAdmission.js';
 import { requestsRequiredUserDecision } from './chatResponseContract.js';
 
@@ -121,6 +122,9 @@ export async function* settleStreamingCompletion(input: {
     }
     if (plan.kind === "reject_continue") {
       host.gateStrikes = plan.gateStrikesAfter;
+      if (turnResult.type === "completion") {
+        captureGateRejectedCompletionAttempt(host, answer, submissionGeneration);
+      }
 
       // W3 Phase 3 Progress and Recovery Controller
       const pcResult = host.progressController.scoreTurn(

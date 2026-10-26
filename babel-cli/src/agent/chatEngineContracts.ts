@@ -772,7 +772,11 @@ export interface ChatEngineStreamingLoopHost {
     answer: string,
     extra?: ChatStreamDoneExtra,
   ) => ChatEvent
-  readonly streamFailed: (error: string, reason?: import('./chatTerminalReason.js').TerminalReason) => ChatEvent
+  readonly streamFailed: (
+    error: string,
+    reason?: import('./chatTerminalReason.js').TerminalReason,
+    presentationError?: string,
+  ) => ChatEvent
   readonly synthesizeAnswer: (
     toolObservations: string,
     callbacks: ChatCallbacks,

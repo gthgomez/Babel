@@ -85,6 +85,30 @@ export class CampaignDispatchGate {
     throw new CampaignBudgetDeniedError(message)
   }
 
+  /** Provable no-wire cancellation while the gate still owns the reservation (before admission returns). */
+  settleZeroForProvableNoWire(input: {
+    executionStage: ModelRouteStage
+    requestId: string
+    attemptId: string
+  }): void {
+    this.assertLedgerHealthy()
+    const operationId = buildCampaignOperationId({
+      campaignId: this.campaignId,
+      taskOwnerId: this.taskOwnerId,
+      executionStage: input.executionStage,
+      requestId: input.requestId,
+      attemptId: input.attemptId,
+    })
+    try {
+      this.store.transact((budget) => budget.settle(operationId, 0))
+    } catch (error) {
+      if (error instanceof CampaignBudgetStoreError) {
+        this.poisonLedger('Campaign budget no-wire release could not be persisted.')
+      }
+      this.poisonLedger('Campaign budget no-wire release could not be persisted.')
+    }
+  }
+
   async admitBeforeDispatch(input: {
     executionStage: ModelRouteStage
     preparedRequest: PreparedProviderRequest
@@ -114,7 +138,14 @@ export class CampaignDispatchGate {
     }
     if (input.runControl) {
       const stopped = input.runControl.stop()
-      if (stopped) throw new RunStoppedError(stopped)
+      if (stopped) {
+        this.settleZeroForProvableNoWire({
+          executionStage: input.executionStage,
+          requestId: input.preparedRequest.request_id,
+          attemptId: input.preparedRequest.attempt_id,
+        })
+        throw new RunStoppedError(stopped)
+      }
     }
     return { operationId }
   }
