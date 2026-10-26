@@ -776,24 +776,6 @@ export class ChatEngine {
     return this.ownerAccounting.ownerChargePath(ownerId, runDir);
   }
 
-  private recordOwnerAccountingFault(
-    scope: ChatUsageScope,
-    kind: OwnerAccountingFault["kind"],
-    reason: string,
-    appliesToCurrent: boolean,
-    blocksRuntimeAuthority?: boolean,
-    persistenceFailureClass?: import("./chatEngineOwnerAccounting.js").OwnerAccountingPersistenceFailureClass,
-  ): void {
-    this.ownerAccounting.recordOwnerAccountingFault(
-      scope,
-      kind,
-      reason,
-      appliesToCurrent,
-      blocksRuntimeAuthority,
-      persistenceFailureClass,
-    );
-  }
-
   private persistOwnerAccountingFaultCheckpoint(): void {
     this.ownerAccounting.persistOwnerAccountingFaultCheckpoint();
   }
@@ -4149,22 +4131,8 @@ export class ChatEngine {
       persistOwnerCharges: (ownerId, runDir) =>
         engine.persistOwnerCharges(ownerId, runDir),
       persistTaskCostBaseline: () => engine.persistTaskCostBaseline(),
-      recordOwnerAccountingFault: (
-        scope,
-        kind,
-        reason,
-        appliesToCurrent,
-        blocksRuntimeAuthority,
-        persistenceFailureClass,
-      ) =>
-        engine.recordOwnerAccountingFault(
-          scope,
-          kind,
-          reason,
-          appliesToCurrent,
-          blocksRuntimeAuthority,
-          persistenceFailureClass,
-        ),
+      recordOwnerAccountingFault:
+        engine.ownerAccounting.recordOwnerAccountingFault.bind(engine.ownerAccounting),
     };
   }
 
