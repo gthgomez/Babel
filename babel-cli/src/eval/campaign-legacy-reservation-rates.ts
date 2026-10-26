@@ -5,11 +5,18 @@ import {
   CAMPAIGN_QUALIFIED_OPENROUTER_MODEL_ID,
   isCampaignQualifiedModelRoute,
 } from './campaign-qualified-routes.js'
-import { CAMPAIGN_QUALIFIED_CONTEXT_EVIDENCE } from './campaign-qualified-context.js'
-
 /** Independent owner for legacy campaign ceilings — not usage-estimate registry rates. */
 export const CAMPAIGN_LEGACY_RESERVATION_RATES_OWNER =
   'campaign_legacy_reservation_ceiling_table_v1' as const
+
+/**
+ * Preserved baseline adoption (Task1 pin). Numeric rates match registry snapshot at adoption;
+ * not an assertion of current market verification.
+ */
+export const CAMPAIGN_LEGACY_RESERVATION_BASELINE_ADOPTION_SOURCE =
+  'preserved_model_pricing_registry_snapshot_at_legacy_ceiling_adoption' as const
+
+export const CAMPAIGN_LEGACY_RESERVATION_ADOPTED_AT = '2026-10-26' as const
 
 /** Legacy holds are conservative reservation math only; not bounded-continuation certification. */
 export type CampaignLegacyReservationRateRole = 'legacy_non_certifying_reservation'
@@ -21,13 +28,20 @@ export interface CampaignLegacyReservationRateEntry {
   readonly modelId: string
   readonly inputUsdPerMillion: number
   readonly outputUsdPerMillion: number
-  readonly configuredAt: string
-  readonly configurationSource: string
+  readonly adoptedAt: string
+  readonly baselineAdoptionSource: string
 }
 
-export type CampaignLegacyReservationRateIdentity = Omit<
+export type CampaignLegacyReservationRateIdentity = Pick<
   CampaignLegacyReservationRateEntry,
-  'owner' | 'role'
+  | 'owner'
+  | 'role'
+  | 'provider'
+  | 'modelId'
+  | 'inputUsdPerMillion'
+  | 'outputUsdPerMillion'
+  | 'adoptedAt'
+  | 'baselineAdoptionSource'
 >
 
 const OPENROUTER_LEGACY_RATES: CampaignLegacyReservationRateEntry = {
@@ -37,8 +51,8 @@ const OPENROUTER_LEGACY_RATES: CampaignLegacyReservationRateEntry = {
   modelId: CAMPAIGN_QUALIFIED_OPENROUTER_MODEL_ID,
   inputUsdPerMillion: 0.14,
   outputUsdPerMillion: 0.28,
-  configuredAt: '2026-06-04',
-  configurationSource: CAMPAIGN_QUALIFIED_CONTEXT_EVIDENCE.openrouterDeepSeekFlash,
+  adoptedAt: CAMPAIGN_LEGACY_RESERVATION_ADOPTED_AT,
+  baselineAdoptionSource: CAMPAIGN_LEGACY_RESERVATION_BASELINE_ADOPTION_SOURCE,
 }
 
 const COMMAND_CODE_LEGACY_RATES: CampaignLegacyReservationRateEntry = {
@@ -48,8 +62,8 @@ const COMMAND_CODE_LEGACY_RATES: CampaignLegacyReservationRateEntry = {
   modelId: CAMPAIGN_QUALIFIED_COMMAND_CODE_MODEL_ID,
   inputUsdPerMillion: 0.3,
   outputUsdPerMillion: 1.2,
-  configuredAt: '2026-10-24',
-  configurationSource: CAMPAIGN_QUALIFIED_CONTEXT_EVIDENCE.commandCodeLimits,
+  adoptedAt: CAMPAIGN_LEGACY_RESERVATION_ADOPTED_AT,
+  baselineAdoptionSource: CAMPAIGN_LEGACY_RESERVATION_BASELINE_ADOPTION_SOURCE,
 }
 
 const CAMPAIGN_LEGACY_RESERVATION_RATE_TABLE: Readonly<
@@ -67,12 +81,14 @@ export function campaignLegacyReservationRateContentHash(
   identity: CampaignLegacyReservationRateIdentity,
 ): string {
   const payload = {
+    owner: identity.owner,
+    role: identity.role,
     provider: identity.provider,
     modelId: identity.modelId,
     inputUsdPerMillion: identity.inputUsdPerMillion,
     outputUsdPerMillion: identity.outputUsdPerMillion,
-    configuredAt: identity.configuredAt,
-    configurationSource: identity.configurationSource,
+    adoptedAt: identity.adoptedAt,
+    baselineAdoptionSource: identity.baselineAdoptionSource,
   }
   return createHash('sha256').update(JSON.stringify(payload), 'utf8').digest('hex')
 }
