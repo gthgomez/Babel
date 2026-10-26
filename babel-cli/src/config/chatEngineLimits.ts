@@ -656,13 +656,7 @@ export function resolveChatEngineLimits(
     requestedOverrideMaxCostUsd ??
     parseEnvCostUsd(rawEnvCost, baseDefaults.maxCostUsd);
 
-  const resolvedMaxCostUsd =
-    requestedMaxCostUsd === Infinity
-      ? Infinity
-      : Math.min(
-          100.00,
-          Math.max(0.01, requestedMaxCostUsd),
-        );
+  const resolvedMaxCostUsd = requestedMaxCostUsd;
 
   const resolvedLimits: ChatEngineLimits = {
     maxTurns: Math.min(500, Math.max(1, overrides.maxTurns ?? fromEnv.maxTurns)),
@@ -692,7 +686,7 @@ export function resolveChatEngineLimits(
     costBudget: {
       effectiveCostUsd: resolvedMaxCostUsd,
       requestedCostUsd: requestedMaxCostUsd,
-      ceilingCostUsd: 100.00,
+      ceilingCostUsd: resolvedMaxCostUsd,
       explicitCostCeiling,
       // Wall long-task does not imply a cost long-task; only an explicit
       // cost-budget long-task profile skips the finite cost-repair cap.

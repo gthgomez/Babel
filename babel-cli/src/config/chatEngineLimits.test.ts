@@ -72,7 +72,7 @@ test('resolveChatEngineLimits uses defaults when env unset', () => {
     const costBudgetFor = (maxCostUsd: number) => ({
       effectiveCostUsd: maxCostUsd,
       requestedCostUsd: maxCostUsd,
-      ceilingCostUsd: 100.00,
+      ceilingCostUsd: maxCostUsd,
       explicitCostCeiling: false,
       longTaskProfile: false,
     });
@@ -169,6 +169,83 @@ test('explicit unlimited override wins over finite env cost', () => {
     if (previous === undefined) delete process.env['BABEL_CHAT_MAX_COST'];
     else process.env['BABEL_CHAT_MAX_COST'] = previous;
   }
+});
+
+test('caller finite cost limits retain the selected amount and nonfinancial controls', () => {
+  const previous = process.env['BABEL_CHAT_MAX_COST'];
+  delete process.env['BABEL_CHAT_MAX_COST'];
+  try {
+    const baseline = resolveChatEngineLimits();
+    for (const amount of [0.001, 0.00000001, 101, 101.125, 1_000_000.25]) {
+      const limits = resolveChatEngineLimits({ maxCostUsd: amount });
+      assert.equal(limits.maxCostUsd, amount);
+      assert.equal(limits.costBudget?.requestedCostUsd, amount);
+      assert.equal(limits.costBudget?.effectiveCostUsd, amount);
+      assert.equal(limits.costBudget?.ceilingCostUsd, amount);
+      assert.equal(limits.costBudget?.explicitCostCeiling, true);
+      assert.deepEqual(limits.runAllowance?.costAllowance, { kind: 'finite', usd: amount });
+      assert.equal(limits.maxTurns, baseline.maxTurns);
+      assert.equal(limits.maxWallMs, baseline.maxWallMs);
+      assert.equal(limits.maxEstimatedTokens, baseline.maxEstimatedTokens);
+      assert.equal(limits.maxTokensPerRound, baseline.maxTokensPerRound);
+      assert.equal(limits.stallTurns, baseline.stallTurns);
+      const runtime = { limits, elapsedMs: 0, turns: 0, consecutiveStallTurns: 0 };
+      assert.equal(evaluateTimelineLimiter({ ...runtime, spentUsd: amount / 2 }).limiter, 'none');
+      assert.equal(evaluateTimelineLimiter({ ...runtime, spentUsd: amount }).limiter, 'cost');
+    }
+    assert.equal(baseline.maxCostUsd, Infinity);
+  } finally {
+    if (previous === undefined) delete process.env['BABEL_CHAT_MAX_COST'];
+    else process.env['BABEL_CHAT_MAX_COST'] = previous;
+  }
+});
+
+test('environment finite cost limits retain decimal precision and the selected ceiling', () => {
+  const previous = process.env['BABEL_CHAT_MAX_COST'];
+  try {
+    for (const raw of ['0.001', '0.00000001', '101', '101.125', '1000000.25']) {
+      process.env['BABEL_CHAT_MAX_COST'] = raw;
+      const amount = Number(raw);
+      const limits = resolveChatEngineLimits();
+      assert.equal(limits.maxCostUsd, amount);
+      assert.equal(limits.costBudget?.requestedCostUsd, amount);
+      assert.equal(limits.costBudget?.effectiveCostUsd, amount);
+      assert.equal(limits.costBudget?.ceilingCostUsd, amount);
+      assert.deepEqual(limits.runAllowance?.costAllowance, { kind: 'finite', usd: amount });
+    }
+  } finally {
+    if (previous === undefined) delete process.env['BABEL_CHAT_MAX_COST'];
+    else process.env['BABEL_CHAT_MAX_COST'] = previous;
+  }
+});
+
+test('new explicit cost limits reject zero, negative and unrepresentable amounts', () => {
+  const previous = process.env['BABEL_CHAT_MAX_COST'];
+  delete process.env['BABEL_CHAT_MAX_COST'];
+  try {
+    for (const amount of [0, -0, -1, Number.NaN, Number.NEGATIVE_INFINITY]) {
+      assert.throws(() => resolveChatEngineLimits({ maxCostUsd: amount }),
+        { name: 'ChatEngineLimitsConfigurationError', code: 'CHAT_LIMITS_CONFIG' });
+    }
+    for (const raw of ['0', '0.000', '-1', 'Infinity', 'NaN', '9'.repeat(400), `0.${'0'.repeat(400)}1`]) {
+      process.env['BABEL_CHAT_MAX_COST'] = raw;
+      assert.throws(() => resolveChatEngineLimits(),
+        { name: 'ChatEngineLimitsConfigurationError', code: 'CHAT_LIMITS_CONFIG' });
+    }
+  } finally {
+    if (previous === undefined) delete process.env['BABEL_CHAT_MAX_COST'];
+    else process.env['BABEL_CHAT_MAX_COST'] = previous;
+  }
+});
+
+test('an already granted zero cost allowance remains finite and exhausted', () => {
+  // Restored grants can contain zero even though new explicit configuration rejects it.
+  const limits = { ...resolveChatEngineLimits({ maxCostUsd: 1 }), maxCostUsd: 0 };
+  delete limits.costBudget;
+  assert.deepEqual(createRunAllowanceReport(limits).costAllowance, { kind: 'finite', usd: 0 });
+  const result = evaluateTimelineLimiter({ limits, elapsedMs: 0, spentUsd: 0, turns: 0, consecutiveStallTurns: 0 });
+  assert.equal(result.limiter, 'cost');
+  assert.equal(result.classification, 'limit_cost');
 });
 
 test('explicit invalid cost overrides fail closed with configuration errors', () => {
