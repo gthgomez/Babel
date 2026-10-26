@@ -343,6 +343,30 @@ test(`no-change currency is checked before ${surface} normalization: changed=${c
 })
 
 
+test('failChatStream presentationError does not reclassify explicit turn-cap authority', (t) => {
+  const input = terminalInput(t)
+  input.snapshot.outcome.hasMutation = true
+  input.snapshot.outcome.terminatingLimiter = 'turns'
+  input.snapshot.outcome.terminalLimiterReason = 'Turn limit reached (3 of 3).'
+  const authority = 'Turn limit exceeded. Gate check: verifier_missing'
+  const presentation = [
+    authority,
+    '',
+    '---',
+    'UNVERIFIED retained candidate (required authoritative checks were not satisfied):',
+    'J08_PRESERVED_NET_200_EXPLANATION RESPONSE_EVIDENCE_INVALID NATIVE_TOOL_PROTOCOL_INVALID',
+  ].join('\n')
+  const event = failChatStream(input, authority, { code: 'budget_exhausted', cause_class: 'harness' }, presentation)
+  assert.equal(event.type, 'failed')
+  if (event.type !== 'failed') return
+  assert.equal(event.status, 'budget_exhausted')
+  assert.equal(event.outcome, 'BUDGET_EXHAUSTED')
+  assert.equal(event.reason_code, 'budget_exhausted')
+  assert.equal(event.cause_class, 'harness')
+  assert.match(event.error, /RESPONSE_EVIDENCE_INVALID/)
+  assert.match(event.error, /UNVERIFIED retained candidate/)
+})
+
 test('typed context preparation failure survives terminal persistence and stream projection', t => {
   const input = terminalInput(t)
   let persisted: unknown[] = []
