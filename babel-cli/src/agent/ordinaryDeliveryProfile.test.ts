@@ -29,6 +29,8 @@ import { projectTurnViewState, renderProjectedReviewCard } from '../interactive/
 import { consumeChatStream } from '../interactive/execution/chatCore.js';
 import { getModelPricing } from '../services/modelPricingRegistry.js';
 import { parseLeaseJson } from '../authority/lease.js';
+import { DIFF_CRITIC_SYSTEM_PROMPT } from './diffCritic.js';
+import { isBabelHeadlessEnv } from '../utils/envFlags.js';
 
 /** Product route id — not registered under opencode-go in baseline registry metadata. */
 const UNREGISTERED_GO_MODEL =
@@ -106,18 +108,66 @@ type FetchStep = {
   text?: string;
 };
 
+type GoChatWireBody = {
+  model?: string;
+  stream?: boolean;
+  messages?: Array<{ role?: string; content?: unknown }>;
+};
+
+function wireBodyUsesDiffCriticSystem(body: GoChatWireBody): boolean {
+  return (body.messages ?? []).some(
+    (message) =>
+      message.role === 'system' &&
+      typeof message.content === 'string' &&
+      message.content.includes(DIFF_CRITIC_SYSTEM_PROMPT),
+  );
+}
+
+function buildDiffCriticFixtureResponse(modelId: string): Response {
+  return new Response(
+    JSON.stringify({
+      model: modelId,
+      choices: [
+        {
+          message: {
+            role: 'assistant',
+            content: JSON.stringify({
+              verdict: 'pass',
+              confidence: 1,
+              reasons: ['Fixture transport: independent critic pass for ordinary_delivery offline loop.'],
+            }),
+          },
+          finish_reason: 'stop',
+        },
+      ],
+      usage: { prompt_tokens: 20, completion_tokens: 8, total_tokens: 28 },
+    }),
+    { status: 200, headers: { 'content-type': 'application/json' } },
+  );
+}
+
 function stubGlobalFetchForGoChat(
   modelId: string,
   steps: FetchStep[],
-): () => void {
+): { restore: () => void; criticObserved: () => boolean } {
   const originalFetch = globalThis.fetch;
-  let call = 0;
+  let streamCall = 0;
+  let criticObserved = false;
   globalThis.fetch = (async (input, init) => {
     const url = String(input);
     assert.equal(url, GO_CHAT_COMPLETIONS, `unexpected fetch url: ${url}`);
-    const body = JSON.parse(String(init?.body ?? '{}')) as { model?: string; stream?: boolean };
+    const body = JSON.parse(String(init?.body ?? '{}')) as GoChatWireBody;
     assert.equal(body.model, modelId, `model normalization mismatch: sent=${body.model}`);
-    const index = call++;
+    if (wireBodyUsesDiffCriticSystem(body)) {
+      criticObserved = true;
+      return buildDiffCriticFixtureResponse(modelId);
+    }
+    if (body.stream !== true) {
+      throw new Error(
+        `unexpected Go chat wire shape (expected stream=true or diff critic system): stream=${String(body.stream)}`,
+      );
+    }
+    const index = streamCall++;
     const step = steps[index] ?? { name: null, args: null, text: 'Done.' };
     const args = step.args;
     const delta =
@@ -142,9 +192,21 @@ function stubGlobalFetchForGoChat(
       { status: 200, headers: { 'content-type': 'text/event-stream' } },
     );
   }) as typeof fetch;
-  return () => {
-    globalThis.fetch = originalFetch;
+  return {
+    restore: () => {
+      globalThis.fetch = originalFetch;
+    },
+    criticObserved: () => criticObserved,
   };
+}
+
+function assertHeadlessDiffCriticObserved(criticObserved: () => boolean): void {
+  if (!isBabelHeadlessEnv()) return;
+  assert.equal(
+    criticObserved(),
+    true,
+    'headless CI must observe a non-stream diff critic provider call via DIFF_CRITIC_SYSTEM_PROMPT',
+  );
 }
 
 /** Production OpenCodeGoApiRunner + durable budget ledger (required for v4.1-flash). */
@@ -204,7 +266,7 @@ describe('ordinary_delivery profile', { concurrency: false }, () => {
     withOrdinaryDeliveryEnv();
     installNarrowFixtureLease();
 
-    const restoreFetch = stubGlobalFetchForGoChat(UNREGISTERED_GO_MODEL, [
+    const { restore: restoreFetch } = stubGlobalFetchForGoChat(UNREGISTERED_GO_MODEL, [
       { name: null, args: null, text: 'noop' },
     ]);
 
@@ -243,7 +305,7 @@ describe('ordinary_delivery profile', { concurrency: false }, () => {
     withOrdinaryDeliveryEnv();
     installNarrowFixtureLease();
 
-    const restoreFetch = stubGlobalFetchForGoChat(REGISTERED_GO_MODEL_ID, [
+    const { restore: restoreFetch, criticObserved } = stubGlobalFetchForGoChat(REGISTERED_GO_MODEL_ID, [
       {
         name: 'write_file',
         args: {
@@ -303,6 +365,7 @@ describe('ordinary_delivery profile', { concurrency: false }, () => {
       });
       assert.match(review.title, /unverified/i);
       assert.match(review.body, /Not run/);
+      assertHeadlessDiffCriticObserved(criticObserved);
     } finally {
       restoreFetch();
       rmSync(root, { recursive: true, force: true });
@@ -350,7 +413,7 @@ describe('ordinary_delivery profile', { concurrency: false }, () => {
           : { name: null, args: null, text: 'Done without running tests.' },
       );
     }
-    const restoreFetch = stubGlobalFetchForGoChat(REGISTERED_GO_MODEL_ID, steps);
+    const { restore: restoreFetch } = stubGlobalFetchForGoChat(REGISTERED_GO_MODEL_ID, steps);
 
     try {
       const budgetPath = join(runtime, 'go-budget.json');
@@ -510,7 +573,7 @@ describe('ordinary_delivery profile', { concurrency: false }, () => {
     withOrdinaryDeliveryEnv();
     installNarrowFixtureLease();
 
-    const restoreFetch = stubGlobalFetchForGoChat(REGISTERED_GO_MODEL_ID, [
+    const { restore: restoreFetch, criticObserved } = stubGlobalFetchForGoChat(REGISTERED_GO_MODEL_ID, [
       { name: 'write_file', args: { path: 'summary.csv', content: 'x\n' } },
       { name: null, args: null, text: 'All tests passed. Summary ready.' },
       { name: null, args: null, text: 'Summary ready without claiming tests.' },
@@ -550,6 +613,7 @@ describe('ordinary_delivery profile', { concurrency: false }, () => {
         'harness must observe evidence correction for unsupported test claim',
       );
       assertFixtureTaskAllowanceComplete(engine);
+      assertHeadlessDiffCriticObserved(criticObserved);
     } finally {
       restoreFetch();
       rmSync(root, { recursive: true, force: true });
