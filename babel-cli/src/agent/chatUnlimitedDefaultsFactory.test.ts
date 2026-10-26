@@ -32,8 +32,8 @@ if (!isSyntheticProviderFixtureReady()) {
     if (code !== 0) t.diagnostic(output)
     assert.equal(code, 0)
     const inventory = JSON.parse(diagnostic) as { tests: number; passed: number; failed: number; skipped: number }
-    assert.equal(inventory.tests, 5)
-    assert.equal(inventory.passed, 5)
+    assert.equal(inventory.tests, 8)
+    assert.equal(inventory.passed, 8)
     assert.equal(inventory.failed, 0)
     assert.equal(inventory.skipped, 0)
   })
@@ -299,5 +299,178 @@ if (!isSyntheticProviderFixtureReady()) {
       accountingFaults: [fault],
     } as never)
     assert.equal(host.taskCostScopeUnavailable, true)
+  })
+
+  test('cold restore blocks unlimited runtime for legacy unclassified persistence fault', async t => {
+    const { ChatEngineTaskAllowance } = await import('./chatEngineTaskAllowance.js')
+    const { ownerAccountingFaultBlocksRuntime } = await import('./ownerChargePersistPolicy.js')
+    const fault = {
+      taskOwnerId: 'legacy-owner',
+      ownerGeneration: 0,
+      accountingEpoch: globalCostTracker.getAccountingEpoch(),
+      chargeId: null,
+      persistenceScope: 'owner-charge-receipt' as const,
+      kind: 'persistence-failure' as const,
+      reason: 'Owner charge receipts are incomplete',
+    }
+    assert.ok(ownerAccountingFaultBlocksRuntime(fault, { kind: 'unlimited' }))
+    const lastTurnRuntime = {
+      submissionIndex: 0,
+      writeCount: 0,
+      gateStrikes: 0,
+      effectiveOperation: 'READ_ONLY',
+      taskClass: 'investigate',
+    }
+    const host = {
+      engineRunDir: mkdtempSync(join(process.env['BABEL_SYNTHETIC_PROVIDER_FIXTURE_ROOT']!, 'tmp', 'restore-legacy-')),
+      limits: { maxCostUsd: Infinity, maxWallMs: 720_000, maxTurns: 120 },
+      taskAllowance: null,
+      taskCostBaselineUsd: 0,
+      taskCostScopeUnavailable: true,
+      activeExecutionCheckpointMs: null,
+      lastTurnRuntime: null,
+      criticRepairCostCapUsd: null,
+      postWriteRepairWallCapMs: null,
+      postWriteRepairRestrict: false,
+      budgetExceeded: false,
+      budgetLastChanceDone: false,
+      terminatingLimiter: null,
+      terminalLimiterReason: null,
+      ownerAccountingFaults: new Map(),
+      ownerAccounting: { recordOwnerAccountingFault: () => {}, persistOwnerCharges: () => {} },
+    }
+    const allowance = new ChatEngineTaskAllowance(host as never)
+    allowance.restorePersistedTaskBudget({
+      schemaVersion: 2,
+      taskOwnerId: 'legacy-owner',
+      accountingEpoch: fault.accountingEpoch,
+      grant: {
+        grantId: 'g',
+        revision: 0,
+        provenance: 't',
+        costCap: { kind: 'unlimited' },
+        wallCapMs: 720_000,
+        turnCap: 120,
+      },
+      consumed: { costUsd: 0, unknownChargeCount: 0, activeWallMs: 0, turns: 1 },
+      repair: { criticRepairCostCapUsd: null, postWriteRepairWallCapMs: null, postWriteRepairRestrict: false },
+      accountedChargeIds: [],
+      lastTurnRuntime,
+      accountingFaults: [fault],
+      taskCostBaselineUsd: 0,
+    } as never)
+    assert.equal(host.taskCostScopeUnavailable, true)
+  })
+
+  test('cold restore blocks unlimited runtime for authority-class persistence fault', async t => {
+    const { ChatEngineTaskAllowance } = await import('./chatEngineTaskAllowance.js')
+    const { ownerAccountingFaultBlocksRuntime } = await import('./ownerChargePersistPolicy.js')
+    const fault = {
+      taskOwnerId: 'authority-owner',
+      ownerGeneration: 0,
+      accountingEpoch: globalCostTracker.getAccountingEpoch(),
+      chargeId: null,
+      persistenceScope: 'owner-charge-receipt' as const,
+      kind: 'persistence-failure' as const,
+      reason: 'Owner charge receipt authority conflict',
+      persistenceFailureClass: 'authority' as const,
+    }
+    assert.ok(ownerAccountingFaultBlocksRuntime(fault, { kind: 'unlimited' }))
+    const lastTurnRuntime = {
+      submissionIndex: 0,
+      writeCount: 0,
+      gateStrikes: 0,
+      effectiveOperation: 'READ_ONLY',
+      taskClass: 'investigate',
+    }
+    const host = {
+      engineRunDir: mkdtempSync(join(process.env['BABEL_SYNTHETIC_PROVIDER_FIXTURE_ROOT']!, 'tmp', 'restore-authority-')),
+      limits: { maxCostUsd: Infinity, maxWallMs: 720_000, maxTurns: 120 },
+      taskAllowance: null,
+      taskCostBaselineUsd: 0,
+      taskCostScopeUnavailable: true,
+      activeExecutionCheckpointMs: null,
+      lastTurnRuntime: null,
+      criticRepairCostCapUsd: null,
+      postWriteRepairWallCapMs: null,
+      postWriteRepairRestrict: false,
+      budgetExceeded: false,
+      budgetLastChanceDone: false,
+      terminatingLimiter: null,
+      terminalLimiterReason: null,
+      ownerAccountingFaults: new Map(),
+      ownerAccounting: { recordOwnerAccountingFault: () => {}, persistOwnerCharges: () => {} },
+    }
+    const allowance = new ChatEngineTaskAllowance(host as never)
+    allowance.restorePersistedTaskBudget({
+      schemaVersion: 2,
+      taskOwnerId: 'authority-owner',
+      accountingEpoch: fault.accountingEpoch,
+      grant: {
+        grantId: 'g',
+        revision: 0,
+        provenance: 't',
+        costCap: { kind: 'unlimited' },
+        wallCapMs: 720_000,
+        turnCap: 120,
+      },
+      consumed: { costUsd: 0, unknownChargeCount: 0, activeWallMs: 0, turns: 1 },
+      repair: { criticRepairCostCapUsd: null, postWriteRepairWallCapMs: null, postWriteRepairRestrict: false },
+      accountedChargeIds: [],
+      lastTurnRuntime,
+      accountingFaults: [fault],
+      taskCostBaselineUsd: 0,
+    } as never)
+    assert.equal(host.taskCostScopeUnavailable, true)
+  })
+
+  test('cold restore admits unlimited task when checkpoint has no blocking faults', async t => {
+    const { ChatEngineTaskAllowance } = await import('./chatEngineTaskAllowance.js')
+    const lastTurnRuntime = {
+      submissionIndex: 0,
+      writeCount: 0,
+      gateStrikes: 0,
+      effectiveOperation: 'READ_ONLY',
+      taskClass: 'investigate',
+    }
+    const host = {
+      engineRunDir: mkdtempSync(join(process.env['BABEL_SYNTHETIC_PROVIDER_FIXTURE_ROOT']!, 'tmp', 'restore-clean-')),
+      limits: { maxCostUsd: Infinity, maxWallMs: 720_000, maxTurns: 120 },
+      taskAllowance: null,
+      taskCostBaselineUsd: 0,
+      taskCostScopeUnavailable: true,
+      activeExecutionCheckpointMs: null,
+      lastTurnRuntime: null,
+      criticRepairCostCapUsd: null,
+      postWriteRepairWallCapMs: null,
+      postWriteRepairRestrict: false,
+      budgetExceeded: false,
+      budgetLastChanceDone: false,
+      terminatingLimiter: null,
+      terminalLimiterReason: null,
+      ownerAccountingFaults: new Map(),
+      ownerAccounting: { recordOwnerAccountingFault: () => {}, persistOwnerCharges: () => {} },
+    }
+    const allowance = new ChatEngineTaskAllowance(host as never)
+    allowance.restorePersistedTaskBudget({
+      schemaVersion: 2,
+      taskOwnerId: 'clean-owner',
+      accountingEpoch: globalCostTracker.getAccountingEpoch(),
+      grant: {
+        grantId: 'g',
+        revision: 0,
+        provenance: 't',
+        costCap: { kind: 'unlimited' },
+        wallCapMs: 720_000,
+        turnCap: 120,
+      },
+      consumed: { costUsd: 0, unknownChargeCount: 0, activeWallMs: 0, turns: 1 },
+      repair: { criticRepairCostCapUsd: null, postWriteRepairWallCapMs: null, postWriteRepairRestrict: false },
+      accountedChargeIds: [],
+      lastTurnRuntime,
+      taskCostBaselineUsd: 0,
+    } as never)
+    assert.equal(host.taskCostScopeUnavailable, false)
+    assert.deepEqual(host.taskAllowance?.grant.costCap, { kind: 'unlimited' })
   })
 }
