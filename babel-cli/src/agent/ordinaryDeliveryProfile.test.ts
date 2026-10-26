@@ -281,6 +281,7 @@ describe('ordinary_delivery profile', { concurrency: false }, () => {
         runId,
         model: UNREGISTERED_GO_MODEL,
         providerRunner: runner,
+        maxCostUsd: 2,
       });
 
       const result = await consumeChatStream(

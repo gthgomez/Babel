@@ -32,8 +32,8 @@ test('fresh finite Chat: OpenRouter 429 cannot dispatch a fallback after account
     '-c', 'user.email=fixture@example.invalid', '-c', 'commit.gpgsign=false',
     'commit', '-qm', 'fixture'])
 
-  // Restore ordinary production defaults, never substitute unlimited accounting
-  // or disable native execution/critic/compaction. Only the artifact root is isolated.
+  // Preserve native execution/critic/compaction defaults. This negative control
+  // explicitly selects a finite cap; ordinary tasks remain unbudgeted.
   const keys = [
     'BABEL_RUNS_DIR', 'BABEL_OFFLINE', 'BABEL_COMPACTION',
     'BABEL_DESKTOP_PROVIDER', 'BABEL_DESKTOP_MODEL_ROUTE',
@@ -106,6 +106,7 @@ test('fresh finite Chat: OpenRouter 429 cannot dispatch a fallback after account
   engine = await createChatEngineForSession({
     task, projectRoot, runId: randomUUID(), model: 'deepseek-v4-flash-openrouter',
     providerRunner: runner, providerPolicy: policy,
+    maxCostUsd: 2,
     operation: 'READ_ONLY', runtimeMode: 'direct', campaignDispatchGate: gate,
   }, options => new ChatEngine(options))
   const initial = engine.getTaskAllowanceSnapshot()

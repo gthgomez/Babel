@@ -17,6 +17,9 @@ class CapturingRunner extends DeepInfraApiRunner {
   announceNativeCall = false
   denyNativeWrite = false
   invalidNativeInput: 'arguments' | 'id' | 'duplicate' | null = null
+  repairNativeArguments = false
+  repeatInvalidArguments = false
+  cancelOnInvalidArguments: (() => void) | null = null
 
   constructor() {
     super('fixture-model', 'UNUSED_FIXTURE_KEY', {}, { explicitCredential: '', env: {} })
@@ -39,10 +42,18 @@ class CapturingRunner extends DeepInfraApiRunner {
   override async *executeWithToolsStream(): AsyncGenerator<ToolStreamEvent, void, undefined> {
     this.nativeFailures++
     if (this.invalidNativeInput) {
-      if (this.nativeFailures === 1) {
-        const call = { type: 'tool_use' as const, id: this.invalidNativeInput === 'id' ? '' : 'invalid-call', name: 'read_file', input: this.invalidNativeInput === 'arguments' ? {} : { path: 'src/main.ts' } }
+      if (this.nativeFailures === 1 || this.repeatInvalidArguments) {
+        // A valid call before the malformed call must remain undispatched too.
+        if (this.invalidNativeInput === 'arguments') {
+          yield { type: 'tool_use', id: `valid-before-invalid-${this.nativeFailures}`, name: 'read_file', input: { path: 'src/main.ts' } }
+        }
+        const call = { type: 'tool_use' as const, id: this.invalidNativeInput === 'id' ? '' : `invalid-call-${this.nativeFailures}`, name: 'read_file', input: this.invalidNativeInput === 'arguments' ? {} : { path: 'src/main.ts' } }
         yield call
         if (this.invalidNativeInput === 'duplicate') yield call
+        this.cancelOnInvalidArguments?.()
+        yield { type: 'done', finishReason: 'tool_calls' }
+      } else if (this.repairNativeArguments && this.nativeFailures === 2) {
+        yield { type: 'tool_use', id: 'corrected-read', name: 'read_file', input: { path: 'src/main.ts' } }
         yield { type: 'done', finishReason: 'tool_calls' }
       } else {
         yield { type: 'text_delta', text: 'Inspection finished.' }
@@ -65,14 +76,15 @@ class CapturingRunner extends DeepInfraApiRunner {
   }
 }
 
-for (const route of ['ordinary_raw', 'legacy_fallback', 'native_downgrade', 'go_refusal', 'announced_native_failure', 'denied_native_write', 'invalid_arguments', 'missing_id', 'duplicate_id'] as const) {
+for (const route of ['ordinary_raw', 'legacy_fallback', 'native_downgrade', 'go_refusal', 'announced_native_failure', 'denied_native_write', 'invalid_arguments', 'unbudgeted_arguments_repair', 'unbudgeted_arguments_repeated', 'unbudgeted_arguments_cancelled', 'missing_id', 'duplicate_id'] as const) {
   test(`${route}: final HTTP body preserves policy and destination protocol`, async t => {
     const root = mkdtempSync(join(tmpdir(), 'babel-fallback-context-'))
-    const keys = ['BABEL_NATIVE_TOOLS', 'BABEL_TOOL_PROFILE', 'BABEL_COMPACTION']
+    const keys = ['BABEL_NATIVE_TOOLS', 'BABEL_TOOL_PROFILE', 'BABEL_COMPACTION', 'BABEL_CHAT_MAX_COST']
     const prior = keys.map(key => process.env[key])
     process.env.BABEL_NATIVE_TOOLS = ['ordinary_raw', 'legacy_fallback', 'go_refusal'].includes(route) ? 'disabled' : 'enabled'
     process.env.BABEL_TOOL_PROFILE = 'legacy'
     process.env.BABEL_COMPACTION = 'off'
+    delete process.env.BABEL_CHAT_MAX_COST
     t.after(() => {
       keys.forEach((key, index) => {
         if (prior[index] === undefined) delete process.env[key]
@@ -87,7 +99,9 @@ for (const route of ['ordinary_raw', 'legacy_fallback', 'native_downgrade', 'go_
     runner.failRaw = route === 'legacy_fallback' || route === 'go_refusal'
     runner.announceNativeCall = route === 'announced_native_failure'
     runner.denyNativeWrite = route === 'denied_native_write'
-    runner.invalidNativeInput = route === 'invalid_arguments' ? 'arguments' : route === 'missing_id' ? 'id' : route === 'duplicate_id' ? 'duplicate' : null
+    runner.invalidNativeInput = route === 'invalid_arguments' || route.startsWith('unbudgeted_arguments_') ? 'arguments' : route === 'missing_id' ? 'id' : route === 'duplicate_id' ? 'duplicate' : null
+    runner.repairNativeArguments = route === 'unbudgeted_arguments_repair'
+    runner.repeatInvalidArguments = route === 'unbudgeted_arguments_repeated'
     const policy = route === 'go_refusal'
       ? { provider: 'opencode-go', providerModelId: 'deepseek-v4-flash', nativeToolUse: false } as ResolvedModelPolicy
       : undefined
@@ -98,15 +112,24 @@ for (const route of ['ordinary_raw', 'legacy_fallback', 'native_downgrade', 'go_
       systemContext: 'POLICY_COMPILED_SENTINEL', runtimeMode: 'direct',
       compiledChatStack: compileChatStack({ projectRoot: root, babelRoot: root }),
       maxTurns: 4,
+      ...(route === 'invalid_arguments' ? { maxCostUsd: 2 } : {}),
     })
+    if (route === 'unbudgeted_arguments_cancelled') runner.cancelOnInvalidArguments = () => engine.cancel()
     ;(engine as any).repoMapCache = '## Project map\nPOLICY_MAP_SENTINEL\n'
     const events = []
     const announced: string[] = []
     const settled: string[] = []
+    const completed: string[] = []
     let failureReason: string | undefined
+    let finalAnswer: string | undefined
+    let finalOutcome: string | undefined
     for await (const event of engine.submitMessageStream('Inspect GOAL_SENTINEL; preserve USER_SENTINEL', 'explain')) {
       events.push(event.type)
       if (event.type === 'failed') failureReason = event.reason_code
+      if (event.type === 'done') {
+        finalAnswer = event.answer
+        finalOutcome = event.outcome
+      }
       if (event.type === 'tool_start') {
         assert.ok(event.toolCallId)
         announced.push(event.toolCallId)
@@ -115,6 +138,7 @@ for (const route of ['ordinary_raw', 'legacy_fallback', 'native_downgrade', 'go_
         assert.ok(event.toolCallId)
         settled.push(event.toolCallId)
       }
+      if (event.type === 'tool_complete') completed.push(event.toolCallId!)
     }
     if (route === 'announced_native_failure') {
       assert.equal(runner.bodies.length, 0, 'a failed announced native batch cannot downgrade into another actionable response')
@@ -129,15 +153,35 @@ for (const route of ['ordinary_raw', 'legacy_fallback', 'native_downgrade', 'go_
       return
     }
     if (runner.invalidNativeInput) {
-      assert.equal(failureReason, 'native_tool_protocol_invalid')
-      assert.ok(events.includes('failed'), 'invalid native calls fail before any executor dispatch or protocol retry')
-      assert.equal(events.includes('tool_complete'), false)
-      assert.equal(runner.nativeFailures, 1)
-      assert.equal(runner.bodies.length, 0)
-      assert.deepEqual(settled, announced)
+      assert.equal(readFileSync(join(root, 'src/main.ts'), 'utf8'), 'export const example = 1\n')
+      const allowance = engine.getTaskAllowanceSnapshot()
+      assert.ok(allowance)
+      assert.deepEqual(allowance.grant.costCap, route === 'invalid_arguments' ? { kind: 'finite', usd: 2 } : { kind: 'unlimited' })
+      assert.equal(runner.bodies.length, 0, 'invalid native input never downgrades to raw HTTP')
+      if (route === 'unbudgeted_arguments_cancelled') {
+        assert.ok(events.includes('cancelled'))
+        assert.deepEqual(completed, [])
+        assert.equal(runner.nativeFailures, 1, 'cancelled owner cannot dispatch a repair')
+        return
+      }
       const rejection = JSON.parse(readFileSync(join((engine as unknown as { engineRunDir: string }).engineRunDir, 'native-tool-rejection.json'), 'utf8'))
       assert.equal(rejection.dispatched, false)
-      assert.equal(rejection.reason, route === 'invalid_arguments' ? 'arguments_schema_invalid' : 'call_identity_invalid')
+      assert.equal(rejection.reason, runner.invalidNativeInput === 'arguments' ? 'arguments_schema_invalid' : 'call_identity_invalid')
+      if (route === 'unbudgeted_arguments_repair') {
+        assert.equal(failureReason, undefined)
+        assert.ok(events.includes('done'))
+        assert.equal(finalOutcome, 'NO_CHANGE_REQUIRED')
+        assert.equal(finalAnswer, 'Inspection finished.')
+        assert.deepEqual(completed, ['corrected-read'], 'only the corrected batch may execute')
+        assert.equal(runner.nativeFailures, 3, 'one correction request, then a final answer')
+        return
+      }
+      assert.equal(failureReason, 'native_tool_protocol_invalid')
+      assert.ok(events.includes('failed'), 'invalid native batches fail without executor dispatch')
+      assert.equal(events.includes('tool_complete'), false)
+      assert.equal(runner.nativeFailures, route === 'unbudgeted_arguments_repeated' ? 2 : 1)
+      assert.equal(runner.bodies.length, 0)
+      assert.deepEqual(settled, announced)
       return
     }
     if (route === 'go_refusal') {

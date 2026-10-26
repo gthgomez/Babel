@@ -255,7 +255,14 @@ test('Go budget persists reservations and rejects contention, exhaustion and job
   await writeFile(path + '.lock', 'synthetic-lock')
   await assert.rejects(a.reserve(1, 1), /budget/i)
   assert.equal(await readFile(path + '.lock', 'utf8'), 'synthetic-lock')
-  assert.throws(() => new OpenCodeGoBudget({ statePath: path, jobId: 'job', limitUsd: 2.01 }), /budget/i)
+  const selectedPath = join(dir, 'selected-limit.json')
+  const selected = new OpenCodeGoBudget({ statePath: selectedPath, jobId: 'selected-owner', limitUsd: 5 })
+  await selected.reserve(1, 1)
+  const selectedState = JSON.parse(await readFile(selectedPath, 'utf8'))
+  assert.equal(selectedState.limitNanoUsd, 5_000_000_000)
+  assert.equal(selectedState.reservedNanoUsd, 1500)
+  await assert.rejects(selected.reserve(1, 4_166_666), /budget/i)
+  assert.equal(JSON.parse(await readFile(selectedPath, 'utf8')).reservedNanoUsd, 1500)
 })
 
 test('Go reservations retain spent state across resume, respect a reduced task ceiling and refuse deleted state', { skip: process.platform === 'win32' ? 'Native POSIX persistence contract; Windows remains denied' : false }, async t => {

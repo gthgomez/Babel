@@ -240,7 +240,7 @@ test('finite Command Code grant blocks after absent usage leaves an unknown char
   process.env['BABEL_RUNS_DIR'] = runsRoot
   globalCostTracker.resetSession()
   try {
-    const engine = new ChatEngine({ task: 'finite cc absent usage', projectRoot, model: 'command-code/deepseek-v4.1-flash' })
+    const engine = new ChatEngine({ task: 'finite cc absent usage', projectRoot, model: 'command-code/deepseek-v4.1-flash', maxCostUsd: 2 })
     engine.applyUserSubmission({ userInput: 'start finite cc task' })
     const owner = allowanceAccess(engine).getTaskAllowanceSnapshot()!.taskOwnerId
     globalCostTracker.settleUsage(CC_MODEL, 0, 0, null, null,
@@ -275,7 +275,7 @@ test('finite task dollar cap refuses another request after unknown-price usage',
   process.env['BABEL_RUNS_DIR'] = runsRoot
   globalCostTracker.resetSession()
   try {
-    const engine = new ChatEngine({ task: 'finite cap task', projectRoot, model: 'deepseek-v4-flash' })
+    const engine = new ChatEngine({ task: 'finite cap task', projectRoot, model: 'deepseek-v4-flash', maxCostUsd: 2 })
     engine.applyUserSubmission({ userInput: 'start finite cap task' })
     const owner = allowanceAccess(engine).getTaskAllowanceSnapshot()!.taskOwnerId
     globalCostTracker.recordUnknownCharge('unlisted-provider-model', { taskOwnerId: owner, chargeId: 'unknown-priced-request' })
@@ -309,7 +309,7 @@ test('finite task cap uses the Go usage estimate while the actual invoice remain
   process.env['BABEL_RUNS_DIR'] = runsRoot
   globalCostTracker.resetSession()
   try {
-    const engine = new ChatEngine({ task: 'finite cap task', projectRoot, model: 'deepseek-v4-flash' })
+    const engine = new ChatEngine({ task: 'finite cap task', projectRoot, model: 'deepseek-v4-flash', maxCostUsd: 2 })
     engine.applyUserSubmission({ userInput: 'start finite cap task' })
     const owner = allowanceAccess(engine).getTaskAllowanceSnapshot()!.taskOwnerId
     globalCostTracker.settleUsage('deepseek-v4.1-flash', 1000, 100, null, null,
