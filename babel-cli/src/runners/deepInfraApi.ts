@@ -21,6 +21,7 @@
  *   jittered backoff. Schema and JSON failures are not retried here because
  *   they need prompt/schema repair, not another identical provider call.
  */
+import { dispatchRunOperation, RunStoppedError, type RunControl } from '../runtime/run-control.js';
 import { createHash, randomUUID } from 'node:crypto';
 import type { ZodType } from 'zod';
 import { isRetryableStatus, normalizeFinishReason } from './providerNormalize.js';
@@ -59,6 +60,7 @@ import {
   getRequestTimeoutMs,
   isAbortError,
   isCallerCancelError,
+  linkExternalAbortSignal,
   retryDelayMs,
   sleep,
   type FetchRedirectPolicy,
@@ -86,6 +88,15 @@ import {
   type OpenRouterResponseMetadata,
   upstreamProviderFromResponse,
 } from './providerResponseMetadata.js';
+import {
+  CampaignBudgetDeniedError,
+  CampaignRouteUnsupportedError,
+} from './campaignDispatchGate.js';
+import type { PreparedProviderRequest } from './preparedProviderRequest.js';
+import { CampaignPhysicalFetchSession } from './providerCampaignPhysicalFetch.js';
+import type { ProviderInvocationCompleted } from './base.js';
+import { applyCampaignOpenRouterWireBody } from '../eval/campaign-openrouter-wire.js';
+import { isCampaignQualifiedModelRoute } from '../eval/campaign-qualified-routes.js';
 export type { OpenRouterResponseMetadata } from './providerResponseMetadata.js';
 export type { FetchRedirectPolicy } from './providerResponsePolicy.js';
 
@@ -205,6 +216,20 @@ export class DeepInfraApiRunner implements LlmRunner {
     return {};
   }
 
+  /** Campaign OpenRouter caps must be on the object before serialize/prepare/hash. */
+  protected sealCampaignWireBody(
+    body: Record<string, unknown>,
+    callbacks?: RunnerCallbacks,
+  ): Record<string, unknown> {
+    if (!callbacks?.campaignMeter || this.providerId !== 'openrouter') {
+      return body;
+    }
+    if (!isCampaignQualifiedModelRoute('openrouter', this.model)) {
+      throw new CampaignRouteUnsupportedError();
+    }
+    return applyCampaignOpenRouterWireBody(body, this.model);
+  }
+
   /**
    * Exact native tool-stream JSON body (shared with compaction admission).
    * Matches `executeWithToolsStream` before transport.
@@ -261,9 +286,29 @@ export class DeepInfraApiRunner implements LlmRunner {
     return process.env['BABEL_DESKTOP_PROVIDER'] ? 'error' : 'follow';
   }
 
+  protected async campaignPhysicalFetch(
+    session: CampaignPhysicalFetchSession,
+    callbacks: RunnerCallbacks | undefined,
+    basePrepared: PreparedProviderRequest,
+    physicalAttemptId: string,
+    url: string,
+    init: RequestInit,
+    control?: RunControl,
+    operationId = 'provider_fetch',
+  ): Promise<Response> {
+    const runControl = control ?? callbacks?.runControl;
+    return await session.dispatchAdmittedFetch({
+      basePrepared,
+      physicalAttemptId,
+      operationId,
+      ...(runControl ? { runControl } : {}),
+      fetch: () => this.dispatchFetch(url, init, control, operationId),
+    });
+  }
+
   /** Dispatch unchanged by default; specialized transports may gate every request. */
-  protected dispatchFetch(url: string, init: RequestInit): Promise<Response> {
-    return fetch(url, init)
+  protected dispatchFetch(url: string, init: RequestInit, control?: RunControl, operationId = 'provider_fetch'): Promise<Response> {
+    return dispatchRunOperation(control, 'model', operationId, () => fetch(url, init));
   }
 
   // ── Shared request/response logic ──────────────────────────────────────────
@@ -284,6 +329,8 @@ export class DeepInfraApiRunner implements LlmRunner {
   }> {
     const startedAt = Date.now();
     this.lastInvocationMetadata = null;
+    const stopped = callbacks?.runControl?.stop();
+    if (stopped) throw new RunStoppedError(stopped);
     if (callbacks?.onProgress) {
       callbacks.onProgress({ state: 'Contacting model' });
     }
@@ -308,15 +355,16 @@ export class DeepInfraApiRunner implements LlmRunner {
             ...(this.maxTokens === null ? {} : { max_tokens: this.maxTokens }),
             temperature: this.temperature,
           };
-      return JSON.stringify({
+      const bodyObject = this.sealCampaignWireBody({
         ...envelopeBody,
         stream: isStreaming,
-        ...this.getRequestBodyExtras(),
+        ...(callbacks?.campaignMeter ? {} : this.getRequestBodyExtras()),
         messages: ('messages' in envelopeBody ? envelopeBody.messages : undefined) ?? [
           { role: 'system', content: systemPrompt },
           { role: 'user', content: prompt },
         ],
-      });
+      }, callbacks);
+      return JSON.stringify(bodyObject);
     };
     const inferenceId = randomUUID();
     const preparedRequest = prepareProviderRequest({
@@ -337,6 +385,7 @@ export class DeepInfraApiRunner implements LlmRunner {
       ? hashWirePolicy(JSON.parse(requestBody) as WireRequest)
       : null;
     const inputDigest = requestAccounting.request_digest;
+    const campaignSession = new CampaignPhysicalFetchSession(callbacks);
     callbacks?.onInvocationStarted?.({
       inference_id: inferenceId,
       request_id: preparedRequest.request_id,
@@ -383,6 +432,7 @@ export class DeepInfraApiRunner implements LlmRunner {
         failureStage?: import('./base.js').ProviderFailureStage;
         partialModelOutput?: boolean;
         toolCallCount?: number;
+        inferenceStarted?: boolean;
         outputMaterial?: string;
       } = {},
     ): void => {
@@ -410,7 +460,7 @@ export class DeepInfraApiRunner implements LlmRunner {
               maxAttempts,
               stream: isStreaming,
               failureStage: options.failureStage ?? 'unknown',
-              inferenceStarted: true,
+              inferenceStarted: options.inferenceStarted ?? true,
               partialModelOutput: options.partialModelOutput ?? false,
               toolCallCount: options.toolCallCount,
               requestedOutputBudget: this.executionEnvelope?.output.requested,
@@ -462,7 +512,9 @@ export class DeepInfraApiRunner implements LlmRunner {
               retryable: failureReceipt.retryable,
               tool_call_count: failureReceipt.tool_call_count,
             }),
+        ...(callbacks?.campaignMeter ? { campaign_ledger_settled_by_transport: true } : {}),
       };
+      campaignSession.finalizeInvocation(status, completion as ProviderInvocationCompleted);
       callbacks?.onInvocationCompleted?.(completion);
     };
     const notifyPhase = (
@@ -563,6 +615,7 @@ export class DeepInfraApiRunner implements LlmRunner {
     let lastError: Error | null = null;
     let retryAttempt: number | null = null;
     let retryAttemptId: string | null = null;
+    let physicalAttemptId = preparedRequest.attempt_id;
     const settleRetry = (outcome: 'succeeded' | 'failed' | 'cancelled'): void => {
       if (retryAttempt === null) return;
       callbacks?.onRetrySettled?.({
@@ -578,26 +631,42 @@ export class DeepInfraApiRunner implements LlmRunner {
       lastAttempt = attempt;
       const controller = new AbortController();
       // Link external abort signal so Esc/Ctrl+C cancels in-flight HTTP requests
-      let onExternalAbort: (() => void) | undefined;
-      if (signal) {
-        onExternalAbort = () => controller.abort();
-        signal.addEventListener('abort', onExternalAbort, { once: true });
-      }
+      const onExternalAbort = linkExternalAbortSignal(controller, signal);
       const timeout = setTimeout(() => controller.abort(), requestTimeoutMs);
       try {
         notifyPhase('request_dispatched', undefined, `attempt ${attempt}`);
-        response = await this.dispatchFetch(this.apiUrl, {
-          method: 'POST',
-          redirect: this.getRequestRedirect(),
-          signal: controller.signal,
-          headers: {
-            Authorization: `Bearer ${this.apiKey}`,
-            'Content-Type': 'application/json',
-            ...this.getRequestHeadersExtras(),
+        response = await this.campaignPhysicalFetch(
+          campaignSession,
+          callbacks,
+          preparedRequest,
+          physicalAttemptId,
+          this.apiUrl,
+          {
+            method: 'POST',
+            redirect: this.getRequestRedirect(),
+            signal: controller.signal,
+            headers: {
+              Authorization: `Bearer ${this.apiKey}`,
+              'Content-Type': 'application/json',
+              ...this.getRequestHeadersExtras(),
+            },
+            body: requestBody,
           },
-          body: requestBody,
-        });
+          callbacks?.runControl,
+          inferenceId,
+        );
       } catch (err) {
+        if (err instanceof RunStoppedError) {
+          settleRetry('cancelled');
+          notifyCompleted('failed', null, '', null, null, null, this.maxTokens, {
+            actualAttempt: attempt, details: { message: err.message }, failureStage: 'request', inferenceStarted: false,
+          });
+          throw err;
+        }
+        if (err instanceof CampaignBudgetDeniedError || err instanceof CampaignRouteUnsupportedError) {
+          throw err;
+        }
+        campaignSession.settleUnknownOnOpenAdmission();
         this.lastInvocationMetadata = buildInvocationMetadata(this.providerId, this.model, Date.now() - startedAt);
         lastError = new Error(
           isAbortError(err)
@@ -615,6 +684,7 @@ export class DeepInfraApiRunner implements LlmRunner {
           settleRetry('failed');
           retryAttempt = attempt + 1;
           retryAttemptId = randomUUID();
+          physicalAttemptId = retryAttemptId;
           callbacks?.onRetry?.({ provider: this.providerId, model: this.model, attempt: retryAttempt, reason: isAbortError(err) ? 'timeout' : 'transport', backoff_ms: retryDelay, request_id: preparedRequest.request_id, attempt_id: retryAttemptId, body_digest: preparedRequest.body_digest });
           await sleep(retryDelay, signal).catch((error: unknown) => {
             if (isAbortError(error)) settleRetry('cancelled');
@@ -647,8 +717,10 @@ export class DeepInfraApiRunner implements LlmRunner {
       }
       const retryDelay = retryDelayMs(attempt, response);
       settleRetry('failed');
-          retryAttempt = attempt + 1;
+      campaignSession.settleUnknownOnOpenAdmission();
+      retryAttempt = attempt + 1;
       retryAttemptId = randomUUID();
+      physicalAttemptId = retryAttemptId;
       callbacks?.onRetry?.({ provider: this.providerId, model: this.model, attempt: retryAttempt, reason: response.status === 429 ? 'rate_limit' : response.status === 408 ? 'timeout' : 'server_error', backoff_ms: retryDelay, request_id: preparedRequest.request_id, attempt_id: retryAttemptId, body_digest: preparedRequest.body_digest });
       await sleep(retryDelay, signal).catch((error: unknown) => {
             if (isAbortError(error)) settleRetry('cancelled');
@@ -781,40 +853,52 @@ export class DeepInfraApiRunner implements LlmRunner {
           }
           const retryDelay = retryDelayMs(streamAttempt + 1);
           settleRetry('failed');
+          campaignSession.settleUnknownOnOpenAdmission();
           retryAttempt = streamAttempt + 2;
           retryAttemptId = randomUUID();
+          physicalAttemptId = retryAttemptId;
           callbacks?.onRetry?.({ provider: this.providerId, model: this.model, attempt: retryAttempt, reason: 'stream_idle', backoff_ms: retryDelay, request_id: preparedRequest.request_id, attempt_id: retryAttemptId, body_digest: preparedRequest.body_digest });
           await sleep(retryDelay, signal).catch((error: unknown) => {
             if (isAbortError(error)) settleRetry('cancelled');
             throw error;
           });
           const controller = new AbortController();
-          let onStreamRetryAbort: (() => void) | undefined;
-          if (signal) {
-            onStreamRetryAbort = () => controller.abort();
-            signal.addEventListener('abort', onStreamRetryAbort, { once: true });
-          }
+          const onStreamRetryAbort = linkExternalAbortSignal(controller, signal);
           const timeout = setTimeout(() => controller.abort(), requestTimeoutMs);
           lastAttempt += 1;
           try {
-            response = await this.dispatchFetch(this.apiUrl, {
-              method: 'POST',
-              redirect: this.getRequestRedirect(),
-              signal: controller.signal,
-              headers: {
-                Authorization: `Bearer ${this.apiKey}`,
-                'Content-Type': 'application/json',
-                ...this.getRequestHeadersExtras(),
+            notifyPhase('request_dispatched', undefined, `stream retry ${lastAttempt}`);
+            response = await this.campaignPhysicalFetch(
+              campaignSession,
+              callbacks,
+              preparedRequest,
+              physicalAttemptId,
+              this.apiUrl,
+              {
+                method: 'POST',
+                redirect: this.getRequestRedirect(),
+                signal: controller.signal,
+                headers: {
+                  Authorization: `Bearer ${this.apiKey}`,
+                  'Content-Type': 'application/json',
+                  ...this.getRequestHeadersExtras(),
+                },
+                body: requestBody,
               },
-              body: requestBody,
-            });
+              callbacks?.runControl,
+              inferenceId,
+            );
           } catch (error) {
+            if (!(error instanceof RunStoppedError)) {
+              campaignSession.settleUnknownOnOpenAdmission();
+            }
             settleRetry(signal?.aborted ? 'cancelled' : 'failed');
             notifyPhase('provider_error', undefined, signal?.aborted ? 'timeout' : 'transport');
             notifyCompleted('failed', streamState.observedModelId, text, streamState.upstreamProvider, null, null, this.maxTokens, {
               actualAttempt: lastAttempt,
               details: { message: error instanceof Error ? error.message : String(error) },
               failureStage: 'request',
+              inferenceStarted: !(error instanceof RunStoppedError),
               partialModelOutput: streamState.partialModelOutput,
               outputMaterial: streamState.outputReceipt,
             });
@@ -1125,16 +1209,20 @@ export class DeepInfraApiRunner implements LlmRunner {
   ): AsyncGenerator<ToolStreamEvent, void, undefined> {
     const startedAt = Date.now();
     this.lastInvocationMetadata = null;
+    const stopped = callbacks?.runControl?.stop();
+    if (stopped) throw new RunStoppedError(stopped);
     const requestTimeoutMs = this.getRequestTimeoutMs();
     const requestMaxRetries = this.getRequestMaxRetries();
     const streamIdleTimeoutMs = getStreamIdleTimeoutMs();
     const maxAttempts = requestMaxRetries;
 
-    const buildBody = () =>
-      this.buildNativeToolsWireBody(messages, tools, systemPrompt, {
+    const buildBody = () => {
+      const parsed = JSON.parse(this.buildNativeToolsWireBody(messages, tools, systemPrompt, {
         stream: true,
         toolChoice: toolChoice ?? 'auto',
-      });
+      })) as Record<string, unknown>;
+      return JSON.stringify(this.sealCampaignWireBody(parsed, callbacks));
+    };
     const inferenceId = randomUUID();
     const preparedRequest = prepareProviderRequest({
       body: buildBody(),
@@ -1154,6 +1242,7 @@ export class DeepInfraApiRunner implements LlmRunner {
       ? hashWirePolicy(JSON.parse(requestBody) as WireRequest)
       : null;
     const inputDigest = requestAccounting.request_digest;
+    const campaignSession = new CampaignPhysicalFetchSession(callbacks);
     callbacks?.onInvocationStarted?.({
       inference_id: inferenceId,
       request_id: preparedRequest.request_id,
@@ -1209,6 +1298,7 @@ export class DeepInfraApiRunner implements LlmRunner {
         failureStage?: import('./base.js').ProviderFailureStage;
         partialModelOutput?: boolean;
         toolCallCount?: number;
+        inferenceStarted?: boolean;
         outputMaterial?: string;
       } = {},
     ): void => {
@@ -1236,7 +1326,7 @@ export class DeepInfraApiRunner implements LlmRunner {
               maxAttempts,
               stream: true,
               failureStage: options.failureStage ?? 'unknown',
-              inferenceStarted: true,
+              inferenceStarted: options.inferenceStarted ?? true,
               partialModelOutput: options.partialModelOutput ?? false,
               toolCallCount: options.toolCallCount,
               requestedOutputBudget: this.executionEnvelope?.output.requested,
@@ -1288,7 +1378,9 @@ export class DeepInfraApiRunner implements LlmRunner {
               retryable: failureReceipt.retryable,
               tool_call_count: failureReceipt.tool_call_count,
             }),
+        ...(callbacks?.campaignMeter ? { campaign_ledger_settled_by_transport: true } : {}),
       };
+      campaignSession.finalizeInvocation(status, completion as ProviderInvocationCompleted);
       callbacks?.onInvocationCompleted?.(completion);
     };
     const notifyPhase = (
@@ -1327,6 +1419,7 @@ export class DeepInfraApiRunner implements LlmRunner {
     let lastError: Error | null = null;
     let retryAttempt: number | null = null;
     let retryAttemptId: string | null = null;
+    let physicalAttemptId = preparedRequest.attempt_id;
     let attemptDeadlineAt = Date.now() + requestTimeoutMs;
     const settleRetry = (outcome: 'succeeded' | 'failed' | 'cancelled'): void => {
       if (retryAttempt === null) return;
@@ -1344,26 +1437,42 @@ export class DeepInfraApiRunner implements LlmRunner {
       lastAttempt = attempt;
       attemptDeadlineAt = Date.now() + requestTimeoutMs;
       const controller = new AbortController();
-      let onExternalAbort: (() => void) | undefined;
-      if (signal) {
-        onExternalAbort = () => controller.abort();
-        signal.addEventListener('abort', onExternalAbort, { once: true });
-      }
+      const onExternalAbort = linkExternalAbortSignal(controller, signal);
       const timeout = setTimeout(() => controller.abort(), requestTimeoutMs);
       try {
         notifyPhase('request_dispatched', undefined, `attempt ${attempt}`);
-        response = await this.dispatchFetch(this.apiUrl, {
-          method: 'POST',
-          redirect: this.getRequestRedirect(),
-          signal: controller.signal,
-          headers: {
-            Authorization: `Bearer ${this.apiKey}`,
-            'Content-Type': 'application/json',
-            ...this.getRequestHeadersExtras(),
+        response = await this.campaignPhysicalFetch(
+          campaignSession,
+          callbacks,
+          preparedRequest,
+          physicalAttemptId,
+          this.apiUrl,
+          {
+            method: 'POST',
+            redirect: this.getRequestRedirect(),
+            signal: controller.signal,
+            headers: {
+              Authorization: `Bearer ${this.apiKey}`,
+              'Content-Type': 'application/json',
+              ...this.getRequestHeadersExtras(),
+            },
+            body: requestBody,
           },
-          body: requestBody,
-        });
+          callbacks?.runControl,
+          inferenceId,
+        );
       } catch (err) {
+        if (err instanceof RunStoppedError) {
+          settleRetry('cancelled');
+          notifyCompleted('failed', null, '', null, null, null, this.maxTokens, {
+            actualAttempt: attempt, details: { message: err.message }, failureStage: 'request', inferenceStarted: false,
+          });
+          throw err;
+        }
+        if (err instanceof CampaignBudgetDeniedError || err instanceof CampaignRouteUnsupportedError) {
+          throw err;
+        }
+        campaignSession.settleUnknownOnOpenAdmission();
         this.lastInvocationMetadata = buildInvocationMetadata(this.providerId, this.model, Date.now() - startedAt);
         if (isCallerCancelError(err, signal)) {
           lastError = new Error('[deepInfraApi] Request cancelled');
@@ -1387,6 +1496,7 @@ export class DeepInfraApiRunner implements LlmRunner {
           settleRetry('failed');
           retryAttempt = attempt + 1;
           retryAttemptId = randomUUID();
+          physicalAttemptId = retryAttemptId;
           callbacks?.onRetry?.({ provider: this.providerId, model: this.model, attempt: retryAttempt, reason: isAbortError(err) ? 'timeout' : 'transport', backoff_ms: retryDelay, request_id: preparedRequest.request_id, attempt_id: retryAttemptId, body_digest: preparedRequest.body_digest });
           await sleep(retryDelay, signal).catch((error: unknown) => {
             if (isAbortError(error)) settleRetry('cancelled');
@@ -1416,8 +1526,10 @@ export class DeepInfraApiRunner implements LlmRunner {
       }
       const retryDelay = retryDelayMs(attempt, response);
       settleRetry('failed');
-          retryAttempt = attempt + 1;
+      campaignSession.settleUnknownOnOpenAdmission();
+      retryAttempt = attempt + 1;
       retryAttemptId = randomUUID();
+      physicalAttemptId = retryAttemptId;
       callbacks?.onRetry?.({ provider: this.providerId, model: this.model, attempt: retryAttempt, reason: response.status === 429 ? 'rate_limit' : response.status === 408 ? 'timeout' : 'server_error', backoff_ms: retryDelay, request_id: preparedRequest.request_id, attempt_id: retryAttemptId, body_digest: preparedRequest.body_digest });
       await sleep(retryDelay, signal).catch((error: unknown) => {
             if (isAbortError(error)) settleRetry('cancelled');

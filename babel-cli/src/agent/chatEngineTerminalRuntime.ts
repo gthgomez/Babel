@@ -1,10 +1,11 @@
 /** Terminal projection, result assembly, and durable evidence settlement. */
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import type {
-  BlockedReport,
-  TerminalOutcome,
-  TerminalReasonCode,
+import {
+  TerminalReasonCodeSchema,
+  type BlockedReport,
+  type TerminalOutcome,
+  type TerminalReasonCode,
 } from '../schemas/agentContracts.js'
 import { globalCostTracker } from '../services/costTracker.js'
 import { proposeProjectMemoryWriteback } from '../services/projectMemory.js'
@@ -20,6 +21,7 @@ import {
   type ChatEngineRunAllowanceReport,
   type ChatRunLimiter,
 } from '../config/chatEngineLimits.js'
+import type { RunControl, StopRequest } from '../runtime/run-control.js'
 import type {
   ChatCallbacks,
   ChatEngineOptions,
@@ -161,6 +163,8 @@ export type ChatTerminalInput = {
   effects: ChatTerminalEffects
 }
 export type ChatStreamDoneExtra = {
+  /** Host-owned winning continuation decision; does not certify fulfillment. */
+  stopRequest?: import('../runtime/run-control.js').StopRequest
   /** Controller-only deferral; never accepted as a model tool argument. */
   needsHumanDecision?: boolean
   blockedReport?: BlockedReport | null
@@ -194,8 +198,11 @@ export function completeChatStream(
   const hasMutation = snapshot.outcome.hasMutation
   const needsHumanDecision = extra?.needsHumanDecision === true && !hasMutation &&
     !snapshot.outcome.budgetExceeded && !snapshot.outcome.verifierTampered && !extra?.blockedReport && !extra?.verifierTampered
-  const { needsHumanDecision: _privateDecision, ...publicExtra } = extra ?? {}
-  let requestedOutcome = computeTerminalOutcome({
+  const { needsHumanDecision: _privateDecision, stopRequest: stop, ...publicExtra } = extra ?? {}
+  const stoppedOutcome: TerminalOutcome | undefined = stop?.kind === 'blocked' ? stop.reasonCode === 'permission_denied' ? 'BLOCKED_POLICY' : 'BLOCKED_EXTERNAL'
+    : stop?.kind === 'budget_exhausted' ? 'BUDGET_EXHAUSTED' : stop?.kind === 'failed' ? 'AGENT_FAILURE'
+    : stop?.kind === 'cancelled' || stop?.kind === 'superseded' ? 'CANCELLED' : undefined
+  let requestedOutcome = stoppedOutcome ?? computeTerminalOutcome({
     readOnly: snapshot.outcome.readOnly,
     finalStatus: extra?.blockedReport
       ? 'blocked'
@@ -213,10 +220,11 @@ export function completeChatStream(
     hasMutation,
     planMode: snapshot.context.executionProfile === 'plan',
   })
-  if (needsHumanDecision) requestedOutcome = 'NEEDS_HUMAN_DECISION'
+  if (needsHumanDecision && !stoppedOutcome) requestedOutcome = 'NEEDS_HUMAN_DECISION'
   requestedOutcome = normalizeInspectedNoChange(snapshot, requestedOutcome)
   const planCompletion =
     snapshot.context.executionProfile === 'plan' &&
+    !stoppedOutcome &&
     !needsHumanDecision &&
     !extra?.blockedReport &&
     !snapshot.outcome.budgetExceeded
@@ -232,7 +240,11 @@ export function completeChatStream(
     input,
     decisionOutcome,
     extra?.blockedReport,
-    extra?.reason,
+    extra?.reason ?? (stoppedOutcome && stop ? {
+      code: stop.kind === 'budget_exhausted' ? 'budget_exhausted' : stop.kind === 'cancelled' || stop.kind === 'superseded' ? 'cancelled'
+        : TerminalReasonCodeSchema.safeParse(stop.reasonCode).success ? stop.reasonCode as TerminalReasonCode : 'unknown',
+      cause_class: null, detail: stop.reasonCode,
+    } : undefined),
   )
   // R0-9: keep the tuple coherent. A read-only hard-cap that resolves a
   // `budget_exhausted` reason must not project `NO_CHANGE_REQUIRED` alongside
@@ -339,8 +351,10 @@ export function failChatStream(
   input: ChatTerminalInput,
   error: string,
   explicitReason?: import('./chatTerminalReason.js').TerminalReason,
+  presentationError?: string,
 ): ChatEvent {
   const { snapshot, effects } = input
+  const displayError = presentationError ?? error
   effects.settleActiveExecution()
   const providerOutputLimit = isProviderOutputLimitText(error)
   if (providerOutputLimit && snapshot.outcome.terminatingLimiter == null) {
@@ -361,7 +375,9 @@ export function failChatStream(
   // Preserve an unknown terminal cause when no classifier or limiter proves
   // one. Durable validation accepts this explicit absence; guessing would
   // make the model-visible outcome less truthful.
-  const classifiedOutcome = classifyFailureText(error) ?? limiterOutcome
+  const classifiedOutcome = explicitReason
+    ? (outcomeFromReasonCode(explicitReason.code) ?? limiterOutcome)
+    : (classifyFailureText(error) ?? limiterOutcome)
   const terminalReason =
     explicitReason ?? terminalReasonFromFailureText(error) ??
     resolveChatTerminalReason(input, classifiedOutcome)
@@ -385,7 +401,7 @@ export function failChatStream(
   try {
     effects.finalizeTurn(terminal.outcome, terminal.status, terminalReason, {
       kind: 'error',
-      content: error,
+      content: displayError,
     })
   } catch (failure) {
     // A broken primary log cannot certify completion. Still deliver its
@@ -403,7 +419,7 @@ export function failChatStream(
         globalCostTracker.getSessionSummary().totalTokens,
     })
   effects.storeTelemetry(finalizedTelemetry ?? null)
-  return buildStreamFailed(snapshot.evidence.observability, error, {
+  return buildStreamFailed(snapshot.evidence.observability, displayError, {
     ...(outcome !== undefined ? { outcome } : {}),
     status: terminal.status,
     ...(snapshot.allowance.limits.costBudget
@@ -438,6 +454,39 @@ export function cancelChatStream(input: ChatTerminalInput): ChatEvent {
     cause_class: null,
     ...(finalizedTelemetry ? { turnTelemetry: finalizedTelemetry } : {}),
   }
+}
+
+/** Render the recorded winner through the existing single finalizer, without inference. */
+export function stoppedChatStream(
+  inputForTerminal: () => ChatTerminalInput,
+  stop: StopRequest,
+): ChatEvent {
+  if (stop.kind === 'cancelled' || stop.kind === 'superseded') {
+    return cancelChatStream(inputForTerminal())
+  }
+  if (stop.kind === 'failed') {
+    return failChatStream(inputForTerminal(), `Execution stopped: ${stop.reasonCode}.`)
+  }
+  return completeChatStream(inputForTerminal(), `Execution stopped: ${stop.reasonCode}.`, {
+    stopRequest: stop,
+  })
+}
+
+export function cancelledChatStream(
+  inputForTerminal: () => ChatTerminalInput,
+  runControl: RunControl | null,
+): ChatEvent {
+  const prior = runControl?.stop()
+  if (prior && prior.kind !== 'cancelled' && prior.kind !== 'superseded') {
+    return stoppedChatStream(inputForTerminal, prior)
+  }
+  runControl?.requestStop({
+    owner: runControl.owner,
+    kind: 'cancelled',
+    reasonCode: 'cancelled',
+    source: 'user',
+  })
+  return cancelChatStream(inputForTerminal())
 }
 
 /** Resolve explicit, evidence-backed, and limiter terminal reasons in their existing order. */

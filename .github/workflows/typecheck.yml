@@ -236,7 +236,7 @@ jobs:
         run: >
           node --test --test-reporter=tap tools/tests/qualified-consumer-promotion.test.mjs tools/tests/package-metadata-drift.test.mjs tools/tests/architectural-boundaries.test.mjs
           tools/tests/architectural-budget.test.mjs tools/tests/ci-package-coverage.test.mjs
-          tools/tests/ci-hosted-parallel.test.mjs tools/tests/ci-unit-sharding.test.mjs tools/tests/ci-workflow-coverage.test.mjs
+          tools/tests/ci-hosted-parallel.test.mjs tools/tests/journey-qualification-ci.test.mjs tools/tests/ci-unit-sharding.test.mjs tools/tests/ci-workflow-coverage.test.mjs
           tools/tests/package-scripts-and-tests.test.mjs tools/tests/hook-redaction.test.mjs tools/tests/push-candidates.test.mjs tools/tests/push-preflight.test.mjs tools/tests/public-content-worker.test.mjs tools/tests/pre-commit-batch.test.mjs tools/tests/logged-tap-child.test.mjs tools/tests/installed-dependencies.test.mjs tools/tests/unit-scheduling.test.mjs tools/tests/committed-content-policy.test.mjs tools/tests/consumer-environment.test.mjs tools/tests/native-rg-setup.test.mjs tools/tests/required-tap-coverage.test.mjs tools/tests/required-skip-policy.test.mjs tools/tests/required-tap-reporter.test.mjs tools/tests/consumer-archive.test.mjs tools/tests/dist-content.test.mjs tools/tests/review-summary.test.mjs tools/tests/release-package-validation.test.mjs tools/tests/release-tag-identity.test.mjs tools/tests/release-workflow-contract.test.mjs 2>&1 | Tee-Object
           artifacts/architecture-regressions/full.tap
 
@@ -1169,6 +1169,43 @@ jobs:
       - name: Build CLI for dist-backed integration probes
         run: npm run build
         working-directory: babel-cli
+      - name: Prepare selected journey oracle prerequisites
+        shell: pwsh
+        working-directory: babel-cli
+        run: |
+          $ErrorActionPreference = 'Stop'
+          node scripts/run_ci_unit_shard.mjs --shard-index ${{ matrix.shard }} --shard-count 4 --list
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $journeySelection = (Get-Content -LiteralPath 'artifacts/ci-unit/selection.json' -Raw | ConvertFrom-Json).selected
+          $journeyCalibration = $journeySelection -contains 'src/eval/harness-journey-calibration.test.ts'
+          if ($journeyCalibration -or $journeySelection -contains 'src/eval/harness-journey-oracle.test.ts') {
+            $linuxDocker = $env:RUNNER_OS -eq 'Linux'
+            if (-not $linuxDocker -and (Get-Command docker -ErrorAction SilentlyContinue)) {
+              try {
+                $containerOs = docker info --format '{{.OSType}}' 2>$null
+                $dockerProbeExit = $LASTEXITCODE
+              } catch { $containerOs = ''; $dockerProbeExit = 1 }
+              $linuxDocker = $dockerProbeExit -eq 0 -and ($containerOs -join '').Trim() -eq 'linux'
+            }
+            if ($linuxDocker) {
+              $journeyImage = 'node@sha256:9af606de2e947cfb3f276633b7c5130c4cd22365aa10f5a647b7675d5cfce0c0'
+              docker pull $journeyImage
+              if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+              "BABEL_JOURNEY_ORACLE_TEST_IMAGE=$journeyImage" | Out-File -LiteralPath $env:GITHUB_ENV -Encoding utf8 -Append
+            } else {
+              Write-Host 'Linux-container oracle qualification is unavailable in this Windows unit shard.'
+            }
+          }
+          if ($journeyCalibration -or $journeySelection -contains 'src/eval/harness-journey-html.test.ts') {
+            $journeyBrowserArgs = @('node_modules/playwright/cli.js', 'install', 'chromium')
+            if ($env:RUNNER_OS -eq 'Linux') { $journeyBrowserArgs += '--with-deps' }
+            node @journeyBrowserArgs
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            'BABEL_JOURNEY_HTML_TEST=1' | Out-File -LiteralPath $env:GITHUB_ENV -Encoding utf8 -Append
+          }
+          # Required acquisition failures exit above; an unavailable Windows
+          # Docker probe is recorded by the four exact reviewed unit skips.
+          exit 0
       - name: Run complete unit shard
         id: unit_shard
         shell: pwsh

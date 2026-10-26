@@ -50,15 +50,69 @@ async function waitUntilDead(pid: number, timeoutMs = 5_000): Promise<boolean> {
   return !isProcessAlive(pid);
 }
 
-async function waitForStdoutPid(jobId: string, timeoutMs = 8_000): Promise<number> {
+const OWNERSHIP_READY_RE = /OWNERSHIP_READY\t(\d+)/;
+
+function readOwnedPidsOrThrow(ownershipPath: string): { parent?: number; grandchild?: number } {
+  const raw = readFileSync(ownershipPath, 'utf8').trim();
+  if (raw.length === 0) {
+    throw new Error(`${ownershipPath}: ownership file empty (never atomically published)`);
+  }
+  try {
+    return JSON.parse(raw) as { parent?: number; grandchild?: number };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new Error(`${ownershipPath}: malformed ownership JSON: ${message}`, { cause: err });
+  }
+}
+
+/** Wait until the parent publishes ownership atomically and signals readiness on stdout. */
+async function waitForOwnershipReady(
+  jobId: string,
+  ownershipPath: string,
+  timeoutMs = 8_000,
+): Promise<number> {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     const snap = await awaitBackgroundShell(jobId, 50);
-    const match = snap.stdout.trim().match(/^\d+$/m);
-    if (match) return Number(match[0]);
+    const match = snap.stdout.match(OWNERSHIP_READY_RE);
+    if (match) {
+      const grandchildPid = Number(match[1]);
+      assert.ok(Number.isSafeInteger(grandchildPid) && grandchildPid > 0);
+      const pids = readOwnedPidsOrThrow(ownershipPath);
+      assert.equal(pids.grandchild, grandchildPid, 'handshake pid must match atomically published ownership');
+      return grandchildPid;
+    }
     await new Promise((resolve) => setTimeout(resolve, 40));
   }
-  throw new Error(`Timed out waiting for grandchild PID in stdout for ${jobId}`);
+  throw new Error(`Timed out waiting for ownership ready handshake for ${jobId}`);
+}
+
+async function withOwnedFixtureTeardown<T>(
+  dir: string,
+  jobRef: { job?: BackgroundShellJob },
+  run: () => Promise<T>,
+): Promise<T> {
+  let primary: unknown;
+  let cleanupError: unknown;
+  try {
+    return await run();
+  } catch (err) {
+    primary = err;
+  } finally {
+    try {
+      await cleanupOwnedTree(dir, jobRef.job);
+      rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
+    } catch (err) {
+      cleanupError = err;
+    }
+    if (primary !== undefined) {
+      throw primary;
+    }
+    if (cleanupError !== undefined) {
+      throw cleanupError;
+    }
+  }
+  throw new Error('withOwnedFixtureTeardown: unreachable');
 }
 
 function writeTreeScripts(dir: string, markerPath: string): { parent: string; grandchild: string } {
@@ -74,16 +128,23 @@ function writeTreeScripts(dir: string, markerPath: string): { parent: string; gr
     ].join('\n'),
     'utf8',
   );
+  const ownershipPath = join(dir, 'owned-pids.json');
+  const ownershipTmpPath = join(dir, 'owned-pids.json.tmp');
   writeFileSync(
     parent,
     [
       "const cp = require('child_process');",
       "const fs = require('fs');",
-      `const ownership = ${JSON.stringify(join(dir, 'owned-pids.json'))};`,
-      'fs.writeFileSync(ownership, JSON.stringify({ parent: process.pid }));',
+      `const ownership = ${JSON.stringify(ownershipPath)};`,
+      `const ownershipTmp = ${JSON.stringify(ownershipTmpPath)};`,
+      'function publishOwnership(record) {',
+      '  fs.writeFileSync(ownershipTmp, JSON.stringify(record));',
+      '  fs.renameSync(ownershipTmp, ownership);',
+      '}',
       'const gc = cp.spawn(process.execPath, [process.argv[2]], { stdio: "ignore", windowsHide: true });',
-      'fs.writeFileSync(ownership, JSON.stringify({ parent: process.pid, grandchild: gc.pid }));',
-      'if (gc.pid) console.log(String(gc.pid));',
+      'if (!gc.pid) process.exit(1);',
+      'publishOwnership({ parent: process.pid, grandchild: gc.pid });',
+      "process.stdout.write('OWNERSHIP_READY\\t' + String(gc.pid) + '\\n');",
       'setInterval(() => {}, 1000);',
     ].join('\n'),
     'utf8',
@@ -94,8 +155,8 @@ function writeTreeScripts(dir: string, markerPath: string): { parent: string; gr
 async function cleanupOwnedTree(dir: string, job?: BackgroundShellJob): Promise<void> {
   const ownership = join(dir, 'owned-pids.json');
   if (existsSync(ownership)) {
-    const pids = JSON.parse(readFileSync(ownership, 'utf8')) as { parent?: number; grandchild?: number };
-    // Keep ownership even when a failed tree kill already marked the job killed.
+    const pids = readOwnedPidsOrThrow(ownership);
+    // Fixture-owned PIDs only; never touch user processes outside this record.
     for (const pid of [pids.parent, pids.grandchild]) {
       if (!Number.isSafeInteger(pid) || !pid || pid <= 0) continue;
       try { process.kill(pid, 'SIGKILL'); } catch (error) {
@@ -126,17 +187,17 @@ describe('real process-tree termination (qualifying)', () => {
   it('timeout kills descendant; delayed write does not appear', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'babel-ptree-timeout-'));
     const marker = join(dir, 'post-terminal.txt');
+    const ownership = join(dir, 'owned-pids.json');
     const scripts = writeTreeScripts(dir, marker);
-    let grandchildPid: number | undefined;
-    let job: BackgroundShellJob | undefined;
-    try {
-      job = startBackgroundShell({
+    const jobRef: { job?: BackgroundShellJob } = {};
+    await withOwnedFixtureTeardown(dir, jobRef, async () => {
+      jobRef.job = startBackgroundShell({
         command: `node ${scripts.parent} ${scripts.grandchild}`,
         cwd: dir,
         timeoutMs: 400,
       });
-      grandchildPid = await waitForStdoutPid(job.id);
-      const result = await awaitBackgroundShell(job.id, 8_000);
+      const grandchildPid = await waitForOwnershipReady(jobRef.job.id, ownership);
+      const result = await awaitBackgroundShell(jobRef.job.id, 8_000);
       assert.equal(result.status, 'killed');
       assert.ok(await waitUntilDead(grandchildPid), 'grandchild should die after tree kill');
       await new Promise((resolve) => setTimeout(resolve, POST_KILL_WAIT_MS));
@@ -145,10 +206,7 @@ describe('real process-tree termination (qualifying)', () => {
         false,
         'descendant must not write after Babel terminated the process tree',
       );
-    } finally {
-      await cleanupOwnedTree(dir, job);
-      rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
-    }
+    });
   });
 
   it('cancellation DURING execution kills descendant; delayed write does not appear', async () => {
@@ -161,20 +219,20 @@ describe('real process-tree termination (qualifying)', () => {
       projectRoot: dir,
       runId,
     });
-    let grandchildPid: number | undefined;
-    let job: BackgroundShellJob | undefined;
-    try {
-      job = startBackgroundShell({
+    const ownership = join(dir, 'owned-pids.json');
+    const jobRef: { job?: BackgroundShellJob } = {};
+    await withOwnedFixtureTeardown(dir, jobRef, async () => {
+      jobRef.job = startBackgroundShell({
         command: `node ${scripts.parent} ${scripts.grandchild}`,
         cwd: dir,
         timeoutMs: 60_000,
         ownerId: runId,
       });
-      grandchildPid = await waitForStdoutPid(job.id);
+      const grandchildPid = await waitForOwnershipReady(jobRef.job.id, ownership);
       assert.ok(isProcessAlive(grandchildPid), 'grandchild should be running before cancel');
       // Cancel while the tree is live — not an already-aborted signal.
       engine.abortTurn();
-      await awaitBackgroundShell(job.id, 8_000);
+      await awaitBackgroundShell(jobRef.job.id, 8_000);
       assert.ok(await waitUntilDead(grandchildPid), 'grandchild should die after abortTurn tree kill');
       await new Promise((resolve) => setTimeout(resolve, POST_KILL_WAIT_MS));
       assert.equal(
@@ -182,35 +240,29 @@ describe('real process-tree termination (qualifying)', () => {
         false,
         'descendant must not write after abortTurn terminated the process tree',
       );
-    } finally {
       killAllBackgroundShells({ ownerId: runId, includeDetached: true });
-      await cleanupOwnedTree(dir, job);
-      rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
-    }
+    });
   });
 
   it('explicit killBackgroundShell prevents delayed descendant write', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'babel-ptree-kill-'));
     const marker = join(dir, 'post-terminal.txt');
     const scripts = writeTreeScripts(dir, marker);
-    let grandchildPid: number | undefined;
-    let job: BackgroundShellJob | undefined;
-    try {
-      job = startBackgroundShell({
+    const ownership = join(dir, 'owned-pids.json');
+    const jobRef: { job?: BackgroundShellJob } = {};
+    await withOwnedFixtureTeardown(dir, jobRef, async () => {
+      jobRef.job = startBackgroundShell({
         command: `node ${scripts.parent} ${scripts.grandchild}`,
         cwd: dir,
         timeoutMs: 60_000,
       });
-      grandchildPid = await waitForStdoutPid(job.id);
-      killBackgroundShell(job.id);
-      await awaitBackgroundShell(job.id, 8_000);
+      const grandchildPid = await waitForOwnershipReady(jobRef.job.id, ownership);
+      killBackgroundShell(jobRef.job.id);
+      await awaitBackgroundShell(jobRef.job.id, 8_000);
       assert.ok(await waitUntilDead(grandchildPid));
       await new Promise((resolve) => setTimeout(resolve, POST_KILL_WAIT_MS));
       assert.equal(existsSync(marker), false);
-    } finally {
-      await cleanupOwnedTree(dir, job);
-      rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
-    }
+    });
   });
 
 });
@@ -276,22 +328,26 @@ describe('Windows tree termination failure handling', () => {
 
 it('fixture cleanup releases an owned interval parent after a failed tree kill', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'babel-ptree-cleanup-'));
+  const ownership = join(dir, 'owned-pids.json');
   const scripts = writeTreeScripts(dir, join(dir, 'marker.txt'));
   const parent = childProcess.spawn(process.execPath, [scripts.parent, scripts.grandchild], { stdio: 'pipe', windowsHide: true });
   const closed = new Promise<void>(resolve => parent.once('close', () => resolve()));
   parent.stderr.resume();
   try {
     let timer: NodeJS.Timeout | undefined;
-    let onData: () => void = () => {};
+    let onData: (chunk: Buffer | string) => void = () => {};
     let onError: (error: Error) => void = () => {};
     try {
       await new Promise<void>((resolve, reject) => {
         timer = setTimeout(() => reject(new Error('owned parent handshake timed out')), 8_000);
-        onData = resolve;
+        onData = (chunk) => {
+          if (OWNERSHIP_READY_RE.test(String(chunk))) resolve();
+        };
         onError = reject;
-        parent.stdout.once('data', onData);
+        parent.stdout.on('data', onData);
         parent.once('error', onError);
       });
+      readOwnedPidsOrThrow(ownership);
     } finally {
       clearTimeout(timer);
       parent.stdout.off('data', onData);

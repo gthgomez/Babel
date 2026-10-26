@@ -1,4 +1,5 @@
 import {requireProjectRoot} from '../chatExecutionScope.js';
+import { acceptToolStop, settlePreventedChatAction } from '../chatEngineRunControl.js';
 /**
  * apply_patch executor path — extracted from chatEngineActionExecutor.ts to
  * stay under the repo's 2,000-line file-size ratchet (packet D1).
@@ -86,6 +87,7 @@ export async function executeGovernedApplyPatchAction(
     },
   );
 
+  acceptToolStop(toolContext.runControl, gov);
   // governedApplyPatch is a suspension point; a superseded submission
   // must not record a mutation batch or write the current task's log.
   if (!host.isSubmissionCurrent(ctx.ownerGeneration)) {
@@ -96,6 +98,8 @@ export async function executeGovernedApplyPatchAction(
       "parent submission superseded before the action settled",
     );
   }
+  const prevented = settlePreventedChatAction({ host, control: toolContext.runControl, notStarted: gov.notStarted, tool, target, toolId, meta, callbacks: ctx.callbacks });
+  if (prevented) return prevented;
   if (gov.mutationPaths && gov.mutationPaths.length > 0) {
     recordMutationBatch(
       host.parity.sessionEvents,

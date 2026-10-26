@@ -11,6 +11,7 @@ import type { ChatPhase } from './chatPhaseNudge.js';
 import type { TurnRoutingReceiptLog } from './turnRoutingReceipt.js';
 import type { ProviderInvocationStarted, RunnerCallbacks, RunnerInvocationMetadata } from '../runners/base.js';
 import { globalCostTracker, type UsageAttribution } from '../services/costTracker.js';
+import { settlementReportedCostUsd } from '../services/settlementReportedCost.js';
 import { buildContextManifest, type ContextDeliveryMode } from './contextManifest.js';
 import { buildModelRouteReceipt, hashRouteReference, type ModelRouteStage } from './modelRouteReceipt.js';
 import {
@@ -27,6 +28,7 @@ import {
 } from './chatEngineParityBridge.js';
 
 export type ChatUsageScope = {
+  runControl?: import('../runtime/run-control.js').RunControl;
   taskOwnerId: string | null;
   projectRoot?: string;
   accountingEpoch: string;
@@ -48,6 +50,7 @@ export interface ChatProviderRetryHost {
   readonly options: { projectRoot: string | null; task: string };
   readonly parity: ParityRuntime;
   readonly taskAllowance: { taskOwnerId: string } | null;
+  readonly campaignDispatchGate?: import('../runners/campaignDispatchGate.js').CampaignDispatchGate | null;
   readonly _turnIndex: number;
   readonly _lastPhase: ChatPhase | null;
   readonly routingReceiptLog: TurnRoutingReceiptLog;
@@ -67,6 +70,21 @@ export interface ChatProviderRetryHost {
     reason: string,
     appliesToCurrent: boolean,
   ): void;
+}
+
+/** Capture continuation and billing ownership once, before any inference suspension. */
+export function captureChatUsageScope(host: Pick<ChatProviderRetryHost, 'options' | 'parity' | 'taskAllowance'> & {
+  readonly runControl?: import('../runtime/run-control.js').RunControl | null;
+  isSubmissionCurrent(generation: number): boolean;
+}, generation: number): ChatUsageScope {
+  if (!host.isSubmissionCurrent(generation)) throw new Error('Provider scope requested by a retired submission');
+  return {
+    ...(host.runControl ? { runControl: host.runControl } : {}),
+    taskOwnerId: host.taskAllowance?.taskOwnerId ?? null,
+    ...(host.options.projectRoot ? { projectRoot: realpathSync(host.options.projectRoot) } : {}),
+    accountingEpoch: globalCostTracker.getAccountingEpoch(), turnId: host.parity.turnId,
+    chargeId: null, ownerGeneration: generation, isOwnerCurrent: () => host.isSubmissionCurrent(generation),
+  };
 }
 
 export function captureUsageAttribution(
@@ -117,8 +135,51 @@ export function buildProviderRetryCallbacks(host: ChatProviderRetryHost, context
       (context.substitutionOrFallback && host.lastLogicalRequestId !== null
         ? host.lastLogicalRequestId
         : null);
+    const capturedCampaignGate = host.campaignDispatchGate ?? null;
+    const capturedCampaignStage = context.executionStage ?? 'chat';
+    const settleCampaignLedger = (event: import('../runners/base.js').ProviderInvocationCompleted): void => {
+      if (event.campaign_ledger_settled_by_transport) return;
+      const gate = capturedCampaignGate;
+      const requestId = startedInvocation?.request_id;
+      const attemptId = startedInvocation?.attempt_id;
+      if (!gate || !requestId || !attemptId) return;
+      try {
+        if (event.status === 'failed' && event.inference_started === false) {
+          gate.settleUnknownOnTransportFailure({
+            executionStage: capturedCampaignStage,
+            requestId,
+            attemptId,
+          });
+          return;
+        }
+        gate.settleFromCompleted({
+          executionStage: capturedCampaignStage,
+          requestId,
+          attemptId,
+          completed: event,
+        });
+      } catch (error) {
+        if (context.usageScope?.taskOwnerId) {
+          host.recordOwnerAccountingFault(
+            context.usageScope,
+            'persistence-failure',
+            error instanceof Error ? error.message : String(error),
+            context.usageScope.taskOwnerId === host.taskAllowance?.taskOwnerId && isOwnerCurrent(),
+          );
+        }
+      }
+    };
     return {
       parentRequestId,
+      ...(context.usageScope?.runControl ? { runControl: context.usageScope.runControl } : {}),
+      ...(capturedCampaignGate
+        ? {
+            campaignMeter: {
+              executionStage: capturedCampaignStage,
+              gate: capturedCampaignGate,
+            },
+          }
+        : {}),
       onInvocationStarted: (event) => {
         if (context.usageScope) {
           context.usageScope.chargeId = event.inference_id;
@@ -325,6 +386,7 @@ export function buildProviderRetryCallbacks(host: ChatProviderRetryHost, context
               attribution,
               known,
               metadata?.provider ?? scope.provider ?? event.provider,
+              settlementReportedCostUsd(metadata),
             );
             if (update.kind === 'conflict') {
               const scope = context.usageScope;
@@ -388,6 +450,7 @@ export function buildProviderRetryCallbacks(host: ChatProviderRetryHost, context
             if (isOwnerCurrent()) host.persistTaskCostBaseline();
           }
         }
+        settleCampaignLedger(event);
         if (!isOwnerCurrent()) return;
         if (!host.parity.turnId) return;
         const observedRouteReceipt = startedInvocation
@@ -665,7 +728,7 @@ export function trackRunnerUsage(
           : undefined,
         true,
         metadata.provider ?? usageScope?.provider ?? null,
-        metadata.estimated_cost_usd,
+        settlementReportedCostUsd(metadata),
       );
       if (chargeUpdate.kind === 'duplicate') return;
       if (chargeUpdate.kind === 'conflict') {

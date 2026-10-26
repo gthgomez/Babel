@@ -66,12 +66,17 @@ function createModifiedGitProject(): string {
 
 function usageMetadata() {
   return {
+    provider: 'openrouter',
     provider_model_id: 'deepseek-v4-flash',
+    latency_ms: 1,
     prompt_tokens: 90_000,
     completion_tokens: 12_000,
+    total_tokens: 102_000,
     prompt_cache_hit_tokens: 0,
     prompt_cache_miss_tokens: 90_000,
     estimated_cost_usd: 4.25,
+    cost_precision: 'exact' as const,
+    provider_reported_total_charge_usd: 4.25,
   }
 }
 
@@ -150,6 +155,8 @@ test('stale critic inference cannot mutate the current task owner', async () => 
     box.apiTokenCount = 0
     box.activeSubmissionGeneration = 1
     box.generationCounter = 1
+    // Production captures callback ownership before inference can suspend.
+    const staleCallbacks = box.criticState(undefined, 1).providerCallbacks as CriticProviderCallbacks
     box.toolCallLog.push({
       tool: 'write_file',
       target: 'main.ts',
@@ -192,7 +199,7 @@ test('stale critic inference cannot mutate the current task owner', async () => 
       sessionEvents: box.parity.sessionEvents.events.length,
     }
 
-    const staleCallbacks = box.criticState(undefined, 1).providerCallbacks as CriticProviderCallbacks
+    assert.throws(() => box.criticState(undefined, 1), /retired submission/)
     staleCallbacks.onInvocationStarted?.({
       inference_id: 'critic-inference-a',
       request_id: 'critic-request-a',
@@ -310,6 +317,7 @@ test('stale critic inference cannot mutate the current task owner', async () => 
       true,
     )
   } finally {
+    releaseCritic.resolve()
     rmSync(root, { recursive: true, force: true })
   }
 })

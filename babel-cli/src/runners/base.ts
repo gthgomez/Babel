@@ -117,6 +117,8 @@ export interface RunnerInvocationMetadata {
   cache_hit_rate?: number | null;
   estimated_cost_usd: number | null;
   cost_precision?: CostPrecision | null;
+  /** Provider-reported total account charge (e.g. OpenRouter usage.cost), not a local estimate. */
+  provider_reported_total_charge_usd?: number | null;
   pricing_source_url?: string | null;
   pricing_verified_at?: string | null;
   input_cost_per_1m?: number | null;
@@ -252,6 +254,8 @@ export interface ProviderInvocationCompleted {
   max_attempts?: number | null;
   stream?: boolean;
   inference_started?: boolean;
+  /** Set when the native transport already persisted campaign ledger settlement. */
+  campaign_ledger_settled_by_transport?: boolean;
   partial_model_output?: boolean;
   retryable?: boolean;
   tool_call_count?: number | null;
@@ -314,7 +318,16 @@ export interface ProviderInvocationPhaseEvent {
   detail?: string;
 }
 
+export interface CampaignRunnerMeter {
+  executionStage: import('../agent/modelRouteReceipt.js').ModelRouteStage;
+  gate: import('./campaignDispatchGate.js').CampaignDispatchGate;
+}
+
 export interface RunnerCallbacks {
+  /** Host-only owner control, never included in a provider wire payload. */
+  runControl?: import('../runtime/run-control.js').RunControl;
+  /** Campaign pilot admission for routed native API providers only. */
+  campaignMeter?: CampaignRunnerMeter;
   /** Prior logical request when the runner is rebuilding after compaction or fallback. */
   parentRequestId?: string | null;
   onChunk?: (chunk: string) => void | Promise<void>;

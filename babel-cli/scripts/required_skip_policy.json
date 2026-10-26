@@ -2,6 +2,24 @@
   "schemaVersion": 1,
   "rules": [
     {
+      "id": "windows-linux-container-grader",
+      "platforms": ["win32"],
+      "reasons": [
+        "Isolated code qualification requires an explicitly selected local pinned image",
+        "Requires the explicitly selected local pinned image"
+      ],
+      "rationale": "Linux unit shards require the pinned Docker grader. Windows shards probe for that Linux boundary and execute it when available; these four resource qualifications remain explicitly unqualified when it is absent. Browser and other deterministic oracle contracts still execute.",
+      "suites": ["unit"],
+      "files": {
+        "src/eval/harness-journey-oracle.test.ts": [
+          "pinned isolated code grader measures actual values; exit-zero is not a verdict",
+          "candidate stdout cannot impersonate captured function values",
+          "captured added production helpers remain available to isolated grading",
+          "measurement accepts only primitives without exposing host constructors or thenable callbacks"
+        ]
+      }
+    },
+    {
       "id": "windows-directory-sharing",
       "platforms": ["linux", "darwin"],
       "reasons": ["Windows native directory sharing requires Windows"],
@@ -86,6 +104,9 @@
         ],
         "src/services/reviewProcessContainment.test.ts": [
           "Windows assignment failures retain only bounded helper stage diagnostics"
+        ],
+        "src/utils/atomicCheckpointFile.test.ts": [
+          "win32 read-only directory handle rejects fsync with EPERM"
         ]
       }
     },

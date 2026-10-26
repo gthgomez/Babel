@@ -201,12 +201,26 @@ test('compaction settlement preserves the observed provider when refining its pe
       internal.compactionManager = {
         compactWithResult: async (messages: unknown[], options: {
           callbacks?: RunnerCallbacks
-          onUsageRecorded?: (usage: { inferenceId: string; modelId: string; inputTokens: number; outputTokens: number }) => void
+          onUsageRecorded?: (usage: {
+            inferenceId: string
+            modelId: string
+            inputTokens: number
+            outputTokens: number
+            provider?: string
+            reportedCostUsd?: number
+          }) => void
         }) => {
           options.callbacks?.onInvocationStarted?.({ inference_id: 'compaction-go', request_id: 'compaction-request',
             attempt_id: 'compaction-attempt', provider: 'opencode-go', requested_model_id: 'deepseek-v4.1-flash',
             normalized_model_id: 'deepseek-v4.1-flash', sent_model_id: 'deepseek-v4.1-flash', input_digest: 'fixture-input' })
-          options.onUsageRecorded?.({ inferenceId: 'compaction-go', modelId: 'deepseek-v4.1-flash', inputTokens: 1000, outputTokens: 2000 })
+          options.onUsageRecorded?.({
+            inferenceId: 'compaction-go',
+            modelId: 'deepseek-v4.1-flash',
+            inputTokens: 1000,
+            outputTokens: 2000,
+            provider: 'opencode-go',
+            reportedCostUsd: 0.0027,
+          })
           return { messages, strategy: 'llm-summarize', tokensBefore: 2, tokensAfter: 2, changed: false }
         },
       }
@@ -214,6 +228,53 @@ test('compaction settlement preserves the observed provider when refining its pe
       assert.equal(internal.taskCostScopeUnavailable, false)
       assert.equal(globalCostTracker.getTaskSummary(owner).unknownChargeCount, 0)
       assert.ok(Math.abs(globalCostTracker.getTaskSummary(owner).totalCostUSD - 0.0027) < 1e-12)
+      assert.equal(globalCostTracker.getTaskChargeObservations(owner)[0]?.provider, 'opencode-go')
+    } finally { globalCostTracker.resetSession() }
+  })
+})
+
+test('compaction settlement without reported billing stays unknown while preserving provider', async () => {
+  await withFixture(async root => {
+    globalCostTracker.resetSession()
+    try {
+      const chat = engine(root, () => {}, 1)
+      primeAdmission(chat, 'compaction unknown billing fixture')
+      const owner = chat.getTaskAllowanceSnapshot()!.taskOwnerId
+      const internal = chat as unknown as {
+        activeSubmissionGeneration: number
+        compactionManager: unknown
+        compactIfNeeded(callbacks: undefined, force: boolean, generation: number): Promise<unknown>
+      }
+      internal.compactionManager = {
+        compactWithResult: async (messages: unknown[], options: {
+          callbacks?: RunnerCallbacks
+          onUsageRecorded?: (usage: {
+            inferenceId: string
+            modelId: string
+            inputTokens: number
+            outputTokens: number
+            provider?: string
+          }) => void
+        }) => {
+          options.callbacks?.onInvocationStarted?.({
+            inference_id: 'compaction-go-unknown', request_id: 'compaction-request-unknown',
+            attempt_id: 'compaction-attempt-unknown', provider: 'opencode-go',
+            requested_model_id: 'deepseek-v4.1-flash', normalized_model_id: 'deepseek-v4.1-flash',
+            sent_model_id: 'deepseek-v4.1-flash', input_digest: 'fixture-input',
+          })
+          options.onUsageRecorded?.({
+            inferenceId: 'compaction-go-unknown',
+            modelId: 'deepseek-v4.1-flash',
+            inputTokens: 1000,
+            outputTokens: 2000,
+            provider: 'opencode-go',
+          })
+          return { messages, strategy: 'llm-summarize', tokensBefore: 2, tokensAfter: 2, changed: false }
+        },
+      }
+      await internal.compactIfNeeded(undefined, true, internal.activeSubmissionGeneration)
+      assert.equal(globalCostTracker.getTaskSummary(owner).unknownChargeCount, 1)
+      assert.equal(globalCostTracker.getTaskSummary(owner).totalCostUSD, 0)
       assert.equal(globalCostTracker.getTaskChargeObservations(owner)[0]?.provider, 'opencode-go')
     } finally { globalCostTracker.resetSession() }
   })

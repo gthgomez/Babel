@@ -41,7 +41,6 @@ import type {
 } from './contracts.js';
 import { isProposalVerb } from './contracts.js';
 import { executionProfileForPreset, presetForVerb } from './policy.js';
-import { resetCircuitBreaker } from './toolExecutor.js';
 import { resetCompactionCircuitBreaker } from '../services/compaction.js';
 import { runPlanLane } from './lanes/planLane.js';
 import { runReportLane } from './lanes/reportLane.js';
@@ -361,9 +360,8 @@ export class AgentSession {
   }
 
   private async runDispatch(): Promise<AgentSessionResult> {
-    // Reset circuit-breakers at the start of each new dispatch so a fresh
-    // session is never immediately terminated by a prior session's blocks.
-    resetCircuitBreaker();
+    // New runtimes initialize their own run-scoped counters. Another session
+    // must not erase live owners' denial state or verifier certification.
     resetCompactionCircuitBreaker();
 
     // Ensure resolveToolBudget is exercised so the executionProfiles plumbing is validated.

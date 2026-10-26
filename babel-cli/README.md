@@ -231,11 +231,21 @@ one engine entry point without pretending that Anthropic, Gemini, and
 OpenAI-compatible HTTP bodies are identical.
 
 Canonical credential variables are `DEEPINFRA_API_KEY`, `DEEPSEEK_API_KEY`,
-`OPENCODE_API_KEY`, `OPENROUTER_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`,
+`OPENCODE_API_KEY`, `OPENROUTER_API_KEY`, `COMMAND_CODE_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`,
 `GEMINI_API_KEY`, and `GROQ_API_KEY`. Ollama is credential-free by default and
 uses `BABEL_OLLAMA_BASE_URL` for an optional endpoint override. The `opencode`
 provider targets OpenCode Zen (`https://opencode.ai/zen/v1`) with an optional
 `BABEL_OPENCODE_BASE_URL` endpoint override.
+
+For the experimental native Command Code API route, set `COMMAND_CODE_API_KEY`
+in the private profile, then run
+`babel run "Inspect this repository" --model command-code/deepseek-v4.1-flash`.
+Babel sends Chat Completions requests to
+`https://api.commandcode.ai/provider/v1/chat/completions`; Babel owns the tool
+loop and permission checks. This is separate from launching the Command Code
+CLI as an external harness. The explicit route rejects model substitution and
+does not fall back to another provider. Usage estimates use published peak
+rates and remain distinct from reported charges; missing usage stays unknown.
 
 ## Daily Interactive Loop
 

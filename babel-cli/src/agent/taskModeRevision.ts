@@ -2,7 +2,7 @@ import {sha256Canonical} from '../acceptance/canonical.js';
 import type {BabelMode} from '../executor/contracts.js';
 import {buildTaskContractV1,freezeTaskContract,validateTaskContractV1,OBJECTIVE_LIFECYCLE_REF,type TaskContractV1,type TaskContractProvenanceRecord} from './taskContract.js';
 import {ACCEPTANCE_AMENDMENT_REF,validateTaskAcceptanceRevision,type TaskAcceptanceDescriptorV1,type TaskModeHistoryV2,type TaskRevisionEdgeV2} from './taskAcceptanceRevision.js';
-import {ACCEPTANCE_MEANING_REF} from './taskAcceptanceMeaning.js';
+import {isAcceptanceMeaningDerivedRef} from './taskAcceptanceMeaning.js';
 
 /** Versioned companion to the frozen head; original execution ceiling is retained. */
 export interface TaskModeHistoryV1 {schema_version:1;revisions:TaskContractV1[]}
@@ -88,7 +88,7 @@ function retainsProvenance(previous:TaskContractV1,current:TaskContractV1):boole
 }
 
 function meaningDigest(contract:TaskContractV1):string{
-  return sha256Canonical(contract.provenance.records.filter(record=>record.ref.startsWith(`${ACCEPTANCE_MEANING_REF}:`)));
+  return sha256Canonical(contract.provenance.records.filter(record=>isAcceptanceMeaningDerivedRef(record.ref)));
 }
 
 /** V1 keeps its original strict semantics; V2 admits only typed, linked edges. */

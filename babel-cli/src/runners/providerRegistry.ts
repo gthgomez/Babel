@@ -5,6 +5,7 @@ export const PROVIDER_IDS = [
   'opencode',
   'opencode-go',
   'openrouter',
+  'command-code',
   'openai',
   'anthropic',
   'gemini',
@@ -86,6 +87,16 @@ const PROVIDER_SPECS: Readonly<Record<ProviderId, ProviderSpec>> = Object.freeze
     protocol: 'openai_compatible',
     requiresCredential: true,
     operations: ['structured', 'raw', 'raw_stream', 'native_tool_stream'],
+    authorityConformance: 'certified',
+  },
+  'command-code': {
+    id: 'command-code',
+    credentialEnvVar: 'COMMAND_CODE_API_KEY',
+    protocol: 'openai_compatible',
+    requiresCredential: true,
+    operations: ['structured', 'raw', 'raw_stream', 'native_tool_stream'],
+    // Shared executor conformance plus actual Chat denial/result-delivery tests.
+    // This does not certify live task quality or all models in the vendor catalog.
     authorityConformance: 'certified',
   },
   // Dormant / legacy transports — NOT authority-certified. They must pass the

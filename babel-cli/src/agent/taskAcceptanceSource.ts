@@ -1,5 +1,8 @@
 import { sha256Canonical } from '../acceptance/canonical.js'
-import { inferTaskAcceptance } from './taskAcceptanceMeaning.js'
+import {
+  inferTaskAcceptanceForVersion,
+  requireAcceptanceMeaningVersion,
+} from './taskAcceptanceMeaning.js'
 import { isAcceptanceAddition } from './taskAcceptanceRevision.js'
 import type { ObjectiveAuthorityRecord, ObjectiveAttempt } from './taskObjectiveLifecycle.js'
 import type { ThreadEventLog, ThreadEvent } from './threadEventLog.js'
@@ -92,7 +95,10 @@ export function assertCanonicalAcceptanceAmendments(
         let additive = false
         try { additive = isAcceptanceAddition(priorStart.task) } catch { fail() }
         if (!additive) continue
-        const meaning = inferTaskAcceptance(priorStart.task)
+        const meaning = inferTaskAcceptanceForVersion(
+          priorStart.task,
+          requireAcceptanceMeaningVersion(previous.provenance.records, previous),
+        )
         if (meaning.unresolved) fail()
         const added = meaning.criteria.filter(item => !descriptions.has(item.description))
         if (added.length) group.pendingMigrations.push(prior.attempt_id)
@@ -107,7 +113,11 @@ export function assertCanonicalAcceptanceAmendments(
       } else if (!group.initialized || sourceRecord.index >= publisherRecord.index || sourceRecord.index <= group.lastSourceIndex ||
         group.pendingMigrations.shift() !== source.attempt_id) fail()
     }
-    const meaning = inferTaskAcceptance(started.task)
+    const predecessorVersion = requireAcceptanceMeaningVersion(previous.provenance.records, previous)
+    try {
+      if (requireAcceptanceMeaningVersion(current.provenance.records, current) !== predecessorVersion) fail()
+    } catch { fail() }
+    const meaning = inferTaskAcceptanceForVersion(started.task, predecessorVersion)
     const prior = new Set(descriptor.kind === 'initialize' ? [] : previous.acceptance_criteria)
     const added = meaning.criteria.filter(item => !prior.has(item.description))
     const ids = new Set(added.map(item => item.id))

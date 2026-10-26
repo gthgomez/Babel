@@ -28,6 +28,7 @@ const BLOCKED_INFERENCE_HOSTS = new Set([
   'api.deepseek.com',
   'api.openai.com',
   'openrouter.ai',
+  'api.commandcode.ai',
   'api.anthropic.com',
   'generativelanguage.googleapis.com',
   'api.mistral.ai',

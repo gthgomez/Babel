@@ -167,6 +167,7 @@ export function buildInvocationMetadata(
     actual_reasoning_tokens: reasoningTokens,
     estimated_cost_usd: hasReportedCost ? reportedCost : estimate.estimatedCostUsd,
     cost_precision: hasReportedCost ? reportedCost === null ? 'unknown' : 'exact' : estimate.precision,
+    ...(hasReportedCost ? { provider_reported_total_charge_usd: reportedCost } : {}),
     pricing_source_url: estimate.pricingSourceUrl,
     pricing_verified_at: estimate.pricingVerifiedAt,
     input_cost_per_1m: estimate.inputCostPer1M,

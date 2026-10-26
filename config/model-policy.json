@@ -85,6 +85,17 @@
     }
   },
   "models": {
+    "command-code/deepseek-v4.1-flash": {
+      "provider": "command-code",
+      "model_id": "deepseek/deepseek-v4.1-flash",
+      "tier": "standard",
+      "enabled": true,
+      "experimental": true,
+      "native_tool_use": true,
+      "context_window": 1000000,
+      "source_url": "https://api.commandcode.ai/provider/v1/models",
+      "selection_reason": "Explicit experimental Command Code API route; never selected as a default or substituted across providers."
+    },
     "qwen3": {
       "provider": "deepinfra",
       "model_id": "Qwen/Qwen3-235B-A22B-Instruct-2507",

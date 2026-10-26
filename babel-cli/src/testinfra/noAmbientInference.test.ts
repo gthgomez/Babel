@@ -50,6 +50,17 @@ test('guard normalizes DNS-absolute and encoded hostnames before classification'
   assert.ok(!shouldBlockAmbientInference('https://example.com/health', {}));
 });
 
+test('Command Code API requests require explicit live-suite opt-in', () => {
+  for (const url of [
+    'https://api.commandcode.ai/provider/v1/chat/completions',
+    'https://api.commandcode.ai./provider/v1/responses',
+    'https://sub.api.commandcode.ai/provider/v1/messages',
+  ]) {
+    assert.equal(shouldBlockAmbientInference(url, {}), true);
+    assert.equal(shouldBlockAmbientInference(url, { [ALLOW_ENV]: '1' }), false);
+  }
+});
+
 test('explicit live-suite opt-in disables only the guard decision', async () => {
   assert.ok(shouldBlockAmbientInference('https://api.deepinfra.com/v1/chat', {}));
   assert.ok(!shouldBlockAmbientInference('https://api.deepinfra.com/v1/chat', { [ALLOW_ENV]: '1' }));

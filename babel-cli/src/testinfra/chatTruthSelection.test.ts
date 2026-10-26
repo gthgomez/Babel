@@ -11,6 +11,8 @@ test('required Chat truth selection includes focused accounting, Chronicle and b
   const selector = packageJson.scripts['test:chat-truth:raw'] as string
   const files = new Set(selector.slice(selector.indexOf(' --test ') + 8).trim().split(/\s+/))
   for (const required of [
+    'src/runtime/run-control.test.ts',
+    'src/agent/chat-engine-stop-admission.test.ts',
     'src/agent/chatAllowanceAccounting.test.ts',
     'src/execute.test.ts',
     'src/services/costTracker.test.ts',

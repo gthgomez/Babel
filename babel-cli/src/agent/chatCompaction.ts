@@ -29,6 +29,11 @@
  */
 
 import { createHash, randomUUID } from 'node:crypto';
+import { dispatchRunOperation, RunStoppedError } from '../runtime/run-control.js';
+import { prepareProviderRequest } from '../runners/preparedProviderRequest.js';
+import { CampaignBudgetDeniedError, CampaignRouteUnsupportedError } from '../runners/campaignDispatchGate.js';
+import { applyCampaignOpenRouterWireBody } from '../eval/campaign-openrouter-wire.js';
+import { buildInvocationMetadata } from '../runners/providerResponseMetadata.js';
 import type { RunnerCallbacks } from '../runners/base.js';
 import type { ProviderId } from '../runners/providerRegistry.js';
 import type { CompactionRecoveryPressure } from './compactionRequestPressure.js';
@@ -662,7 +667,7 @@ export class LLMSummarizeCompaction implements CompactionStrategy {
         ? 'deepseek'
         : 'deepinfra';
     const inferenceId = randomUUID();
-    const requestBody = {
+    let requestBody: Record<string, unknown> = {
       model,
       max_tokens: Math.max(1, Math.min(this.maxSummaryTokens, targetTokens)),
       temperature: 0.3,
@@ -674,9 +679,38 @@ export class LLMSummarizeCompaction implements CompactionStrategy {
         { role: 'user', content: prompt },
       ],
     };
-    const inputDigest = createHash('sha256')
-      .update(JSON.stringify(requestBody))
-      .digest('hex');
+    if (callbacks?.campaignMeter && provider === 'openrouter') {
+      requestBody = applyCampaignOpenRouterWireBody(requestBody, model);
+    }
+    const preparedRequest = prepareProviderRequest({
+      body: JSON.stringify(requestBody),
+      mode: 'text',
+      provider,
+      requestedModelId: model,
+      requestId: inferenceId,
+      reservedCompletionTokens: requestBody.max_tokens as number,
+    });
+    try {
+      await callbacks?.campaignMeter?.gate.admitBeforeDispatch({
+        executionStage: callbacks.campaignMeter.executionStage,
+        preparedRequest,
+        ...(callbacks?.runControl ? { runControl: callbacks.runControl } : {}),
+      });
+    } catch (error) {
+      if (error instanceof CampaignBudgetDeniedError || error instanceof CampaignRouteUnsupportedError) {
+        throw error;
+      }
+      if (error instanceof RunStoppedError && callbacks?.campaignMeter) {
+        callbacks.campaignMeter.gate.settleUnknownOnTransportFailure({
+          executionStage: callbacks.campaignMeter.executionStage,
+          requestId: preparedRequest.request_id,
+          attemptId: preparedRequest.attempt_id,
+        });
+      }
+      throw error;
+    }
+    callbacks?.campaignMeter?.gate.repeatRunControlBeforeFetch(callbacks?.runControl);
+    const inputDigest = preparedRequest.body_digest;
     const phase = (
       phaseName: Parameters<NonNullable<RunnerCallbacks['onInvocationPhase']>>[0]['phase'],
       statusCode?: number,
@@ -693,6 +727,8 @@ export class LLMSummarizeCompaction implements CompactionStrategy {
     };
     callbacks?.onInvocationStarted?.({
       inference_id: inferenceId,
+      request_id: preparedRequest.request_id,
+      attempt_id: preparedRequest.attempt_id,
       provider,
       requested_model_id: model,
       normalized_model_id: model,
@@ -705,7 +741,8 @@ export class LLMSummarizeCompaction implements CompactionStrategy {
     let failurePhaseRecorded = false;
     let completed = false;
     try {
-      const response = await fetch(baseUrl, {
+      callbacks?.campaignMeter?.gate.repeatRunControlBeforeFetch(callbacks?.runControl);
+      const response = await dispatchRunOperation(callbacks?.runControl, 'model', inferenceId, () => fetch(baseUrl, {
         method: 'POST',
         redirect: process.env['BABEL_DESKTOP_PROVIDER'] ? 'error' : 'follow',
         signal: controller.signal,
@@ -714,7 +751,7 @@ export class LLMSummarizeCompaction implements CompactionStrategy {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify(requestBody),
-      });
+      }));
       responseStarted = true;
       phase('response_started', response.status);
 
@@ -749,6 +786,20 @@ export class LLMSummarizeCompaction implements CompactionStrategy {
       }
 
       phase('response_normalized');
+      const usageMetadata = buildInvocationMetadata(
+        provider,
+        model,
+        0,
+        {
+          ...(data.usage?.prompt_tokens !== undefined ? { prompt_tokens: data.usage.prompt_tokens } : {}),
+          ...(data.usage?.completion_tokens !== undefined ? { completion_tokens: data.usage.completion_tokens } : {}),
+          ...(data.usage?.cost !== undefined ? { cost: data.usage.cost } : {}),
+        },
+        null,
+        null,
+        null,
+        typeof data.model === 'string' ? data.model : null,
+      );
       callbacks?.onInvocationCompleted?.({
         inference_id: inferenceId,
         provider,
@@ -756,6 +807,7 @@ export class LLMSummarizeCompaction implements CompactionStrategy {
         status: 'delivered',
         observed_model_id: typeof data.model === 'string' ? data.model : null,
         output_digest: createHash('sha256').update(summary.trim()).digest('hex'),
+        usage_metadata: usageMetadata,
       });
       completed = true;
 
@@ -780,6 +832,7 @@ export class LLMSummarizeCompaction implements CompactionStrategy {
           model,
           status: 'failed',
           observed_model_id: null,
+          ...(error instanceof RunStoppedError ? { inference_started: false } : {}),
         });
         completed = true;
       }
@@ -814,6 +867,9 @@ export class LLMSummarizeCompaction implements CompactionStrategy {
       signal.addEventListener('abort', onExternalAbort, { once: true });
     }
 
+    if (callbacks?.campaignMeter) {
+      throw new CampaignRouteUnsupportedError();
+    }
     const provider: ProviderId = 'anthropic';
     const inferenceId = randomUUID();
     const requestBody = {
@@ -854,7 +910,7 @@ export class LLMSummarizeCompaction implements CompactionStrategy {
     let failurePhaseRecorded = false;
     let completed = false;
     try {
-      const response = await fetch('https://api.anthropic.com/v1/messages', {
+      const response = await dispatchRunOperation(callbacks?.runControl, 'model', inferenceId, () => fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
         redirect: process.env['BABEL_DESKTOP_PROVIDER'] ? 'error' : 'follow',
         signal: controller.signal,
@@ -864,7 +920,7 @@ export class LLMSummarizeCompaction implements CompactionStrategy {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify(requestBody),
-      });
+      }));
       responseStarted = true;
       phase('response_started', response.status);
 
@@ -933,6 +989,7 @@ export class LLMSummarizeCompaction implements CompactionStrategy {
           model,
           status: 'failed',
           observed_model_id: null,
+          ...(error instanceof RunStoppedError ? { inference_started: false } : {}),
         });
         completed = true;
       }

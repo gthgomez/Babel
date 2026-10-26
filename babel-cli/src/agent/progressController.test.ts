@@ -501,3 +501,36 @@ describe("ProgressController bounded recovery probe", () => {
     assert.strictEqual(pc.admitCapabilityRecoveryProbe(scope({ environmentIdentity: "env-b" })), false);
   });
 });
+
+describe("ProgressController prerequisite denial probe", () => {
+  const scope = (
+    over: Partial<{
+      prerequisiteKey: string;
+      taskId: string;
+      environmentIdentity: string;
+      revisionKey: string;
+    }> = {},
+  ) => ({
+    prerequisiteKey: "isolation_unavailable:shell",
+    taskId: "task-1",
+    environmentIdentity: "env-a",
+    revisionKey: "1:0:0",
+    ...over,
+  });
+
+  it("admits one evaluation per prerequisite revision and suppresses repeats", () => {
+    const pc = new ProgressController();
+    pc.setTrustedEnvironmentIdentity("env-a");
+    assert.strictEqual(pc.admitPrerequisiteDenialProbe(scope()), true);
+    assert.strictEqual(pc.admitPrerequisiteDenialProbe(scope()), false);
+    assert.strictEqual(pc.hasConsumedPrerequisiteDenialProbe(scope()), true);
+  });
+
+  it("re-arms when the isolation revision changes", () => {
+    const pc = new ProgressController();
+    pc.setTrustedEnvironmentIdentity("env-a");
+    assert.strictEqual(pc.admitPrerequisiteDenialProbe(scope()), true);
+    assert.strictEqual(pc.admitPrerequisiteDenialProbe(scope({ revisionKey: "1:1:0" })), true);
+    assert.strictEqual(pc.admitPrerequisiteDenialProbe(scope({ revisionKey: "1:1:0" })), false);
+  });
+});

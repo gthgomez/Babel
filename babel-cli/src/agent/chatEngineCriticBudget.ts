@@ -6,6 +6,7 @@
 import { DeepInfraApiRunner } from '../runners/deepInfraApi.js';
 import { DeepSeekApiRunner } from '../runners/deepSeekApi.js';
 import { OpenRouterApiRunner } from '../runners/openRouterApi.js';
+import { CommandCodeApiRunner } from '../runners/commandCodeApi.js';
 import { OpenCodeGoApiRunner } from '../runners/openCodeGoApi.js';
 import {OllamaApiRunner} from '../runners/ollamaApi.js';
 import type { BlockedReport } from '../schemas/agentContracts.js';
@@ -363,6 +364,13 @@ export function resolveOrCreateCriticRunner(
   fallback: () => CriticRunner,
   primaryProvider?: string,
 ): { runner: CriticRunner; cache: CriticRunner } {
+  if (primaryProvider === 'command-code') {
+    const runner = fallback()
+    if (!(runner instanceof CommandCodeApiRunner)) {
+      throw new Error('[LIVE_MODEL_POLICY] Command Code critic refuses provider substitution.')
+    }
+    return { runner, cache: runner }
+  }
   if (primaryProvider === 'opencode-go') {
     if (!isChatOpenCodeGoRoute({ provider: primaryProvider, providerModelId: modelId })) {
       throw new Error('[LIVE_MODEL_POLICY] Go critic requires the exact admitted route.')

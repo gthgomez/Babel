@@ -447,7 +447,7 @@ export function paritySettleToolStarted(
   return true;
 }
 
-/** Close a proposed child that was denied before crossing the dispatch boundary. */
+/** Close a proposal, or settle a matching host-confirmed prevented executor entry. */
 export function paritySettleToolNotStarted(
   rt: ParityRuntime,
   tool: {
@@ -459,6 +459,7 @@ export function paritySettleToolNotStarted(
   },
   runDir?: string,
   reason = 'inherited_budget_exhausted_before_dispatch',
+  prevented?: import('../runtime/run-control.js').DispatchRequest,
 ): boolean {
   if (!rt.turnId || completedToolIdempotencyKeys(rt.sessionEvents).has(tool.id)) return false;
   const alreadyProposed = rt.sessionEvents.events.some(
@@ -481,7 +482,11 @@ export function paritySettleToolNotStarted(
   const alreadyStarted = rt.sessionEvents.events.some(
     (event) => event.kind === 'tool_started' && event.idempotency_key === tool.id,
   );
-  if (alreadyStarted) return false;
+  // Keep durable start history intact. Only the trusted dispatcher may cancel
+  // an admitted intent whose matching physical callback was never entered.
+  const confirmedPrevention = prevented?.kind === 'tool' && prevented.operationId === tool.id &&
+    prevented.owner.runId === rt.eventLog.thread_id && prevented.owner.turnId === rt.turnId;
+  if (alreadyStarted && !confirmedPrevention) return false;
   recordToolTerminal(rt.sessionEvents, {
     turn_id: rt.turnId,
     tool_call_id: tool.id,
@@ -489,7 +494,7 @@ export function paritySettleToolNotStarted(
     idempotency_key: tool.id,
     cancelled: true,
     reason,
-    recovery_state: 'TOOL_NOT_STARTED',
+    ...(!alreadyStarted ? { recovery_state: 'TOOL_NOT_STARTED' as const } : {}),
     effect_class: classifyToolEffect(tool.name),
     ...(tool.action_index !== undefined ? { action_index: tool.action_index } : {}),
     ...(tool.batch_id !== undefined ? { batch_id: tool.batch_id } : {}),

@@ -1,4 +1,5 @@
 import {getExecutionContext} from './executionContext.js';
+import { dispatchRunOperation, RunStoppedError } from '../runtime/run-control.js';
 import { resolveIsolationBrokerFlags } from './chatEngineIsolationFlags.js';
 /**
  * Tool executor lane — maps normalized `AgentAction` values to `executeTool` calls.
@@ -190,6 +191,10 @@ export type MappedToolCall =
   | { kind: 'terminal'; action: TerminalAgentAction };
 
 export interface ToolExecutionResult {
+  /** Trusted executor control, separate from rendered tool output. */
+  stopRequest?: import('../runtime/run-control.js').StopRequest;
+  /** Trusted dispatcher observation that its executor callback was not entered. */
+  notStarted?: import('../runtime/run-control.js').DispatchRequest;
   action: AgentAction;
   terminal: boolean;
   results: ToolResult[];
@@ -233,6 +238,8 @@ export function defaultIdempotencyKeyForAction(action: AgentAction): string | un
 }
 
 export interface ToolExecutor {
+  /** Canonical local handlers report final dispatch after their own JIT approval. */
+  readonly tracksPhysicalDispatch?: true;
   mapAction(action: AgentAction): MappedToolCall[];
   execute(
     action: AgentAction,
@@ -459,11 +466,14 @@ export function isTerminalAgentAction(action: AgentAction): action is TerminalAg
 export function createToolExecutor(
   deps: {
     executeTool?: typeof executeTool;
+    /** Leave Chat's line windows to its observation formatter. */
+    rawFileReads?: boolean;
   } = {},
 ): ToolExecutor {
   const runTool = deps.executeTool ?? executeTool;
 
   return {
+    ...(deps.executeTool ? {} : { tracksPhysicalDispatch: true as const }),
     mapAction(action: AgentAction): MappedToolCall[] {
       return mapAgentActionToToolCalls(action);
     },
@@ -510,11 +520,14 @@ export function createToolExecutor(
             ...context,
             signal: toolController.signal,
           };
+          const request = deps.rawFileReads && entry.request.tool === 'file_read'
+            ? { ...entry.request, raw: true }
+            : entry.request;
           const promise = executionContext.projectRoot
             ? runWithProjectRoot(executionContext.projectRoot, () =>
-                runTool(entry.request, executionContext),
+                runTool(request, executionContext),
               )
-            : runTool(entry.request, executionContext);
+            : runTool(request, executionContext);
           const result =
             effectiveTimeout > 0
               ? await withTimeout(promise, effectiveTimeout, toolName, context.signal, () =>
@@ -760,6 +773,18 @@ export async function executeActionWithPolicy(
     lockContext?: FileLockContext | undefined;
   } = {},
 ): Promise<PolicyGatedExecutionResult> {
+  const dispatchId = deps.idempotencyKey ?? context.toolCallId ?? defaultIdempotencyKeyForAction(action) ?? action.type;
+  const stoppedBeforeDispatch = (decision: PermissionDecision = 'deny'): PolicyGatedExecutionResult | null => {
+    const control = context.runControl;
+    const stopRequest = control?.stop();
+    return control && stopRequest ? { action, terminal: false, stopRequest,
+      notStarted: { owner: control.owner, operationId: dispatchId, kind: 'tool' },
+      results: [{ exit_code: 1, stdout: '', stderr: 'Operation was not started because its submission stopped.' }],
+      policyDecision: decision, policyBlocked: false,
+    } : null;
+  };
+  const alreadyStopped = stoppedBeforeDispatch();
+  if (alreadyStopped) return alreadyStopped;
   if(getExecutionContext()?.executionScope?.kind==='conversation'||getExecutionContext()?.root===null){
     return {action,terminal:true,results:[policyBlockedToolResult(action,'deny','PROJECT_REQUIRED: Conversation scope grants no tool effects')],policyDecision:'deny',policyBlocked:true};
   }
@@ -989,6 +1014,8 @@ export async function executeActionWithPolicy(
       policyDecision = 'deny';
     }
   }
+  const stoppedAfterApproval = stoppedBeforeDispatch(policyDecision);
+  if (stoppedAfterApproval) return stoppedAfterApproval;
 
   if (policyDecision !== 'allow') {
     incrementBlocks(context.runId);
@@ -1213,6 +1240,8 @@ export async function executeActionWithPolicy(
     }
   }
 
+  let executionStarted = false;
+  const physicalDispatch = { started: false };
   try {
     deps.onBeforeExecutorExecute?.();
     const mapped = actionRequestFromAction(action);
@@ -1269,15 +1298,20 @@ export async function executeActionWithPolicy(
         isCertificationCommand(action));
     const executionContext: ToolContext = {
       ...context,
+      dispatchObservation: physicalDispatch,
       sessionId: context.sessionId ?? context.runId,
       ...(idempotencyKey ? { toolCallId: context.toolCallId ?? idempotencyKey } : {}),
     };
-    const executeInvocation = () => executor.execute(action, executionContext, budget);
+    const executeInvocation = () => dispatchRunOperation(context.runControl, 'tool', dispatchId, () => {
+      executionStarted = true;
+      return executor.execute(action, executionContext, budget);
+    });
     const execution = isolateLocal
       ? await runWithUnprivilegedChildEnv(() =>
           invocationLive ? runWithLiveExecution(executeInvocation) : executeInvocation(),
         )
       : await (invocationLive ? runWithLiveExecution(executeInvocation) : executeInvocation());
+    if (execution.stopRequest) context.runControl?.requestStop(execution.stopRequest);
 
     if (governanceSnapshot && governanceRepoRoot) {
       let recon: ReturnType<typeof reconcileGovernanceAfterEffect>;
@@ -1567,9 +1601,13 @@ export async function executeActionWithPolicy(
   } catch (error) {
     if (effectIntent && context.runDir) {
       recordEffectTerminal(context.runDir, effectIntent, {
-        status: context.signal?.aborted ? 'cancelled' : 'failed',
+        status: context.signal?.aborted || error instanceof RunStoppedError ? 'cancelled' : 'failed',
         error: error instanceof Error ? error.message : String(error),
       });
+    }
+    if (error instanceof RunStoppedError && (!executionStarted || executor.tracksPhysicalDispatch && !physicalDispatch.started)) {
+      const prevented = stoppedBeforeDispatch(policyDecision);
+      if (prevented) return prevented;
     }
     if (effectTx) {
       // True rollback result — never assume success.

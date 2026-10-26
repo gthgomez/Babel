@@ -5,6 +5,7 @@ import { OllamaApiRunner } from '../runners/ollamaApi.js'
 import { OpenCodeApiRunner } from '../runners/openCodeApi.js'
 import { OpenCodeGoApiRunner, type OpenCodeGoRunnerOptions } from '../runners/openCodeGoApi.js'
 import { OpenRouterApiRunner } from '../runners/openRouterApi.js'
+import { CommandCodeApiRunner } from '../runners/commandCodeApi.js'
 import type { ProviderMessage, RunnerCallbacks } from '../runners/base.js'
 import {
   assertLiveModelId,
@@ -67,6 +68,8 @@ export function resolveChatDeliberationRunner(
 ): DeepInfraApiRunner | DeepSeekApiRunner | OllamaApiRunner {
   let runner = current
 
+  if (modelPolicy?.provider === 'command-code' &&
+    (!(runner instanceof CommandCodeApiRunner) || runner.getPinnedModelId() !== modelPolicy.providerModelId)) runner = null
   if (modelPolicy?.provider === 'opencode-go' && goOptions?.budget &&
     (!(runner instanceof OpenCodeGoApiRunner) || !runner.usesBudget(goOptions.budget) ||
       runner.getPinnedModelId() !== modelPolicy.providerModelId)) runner = null
@@ -142,6 +145,8 @@ export function resolveChatDeliberationRunner(
             `  Use /model to see available providers.`,
         )
       }
+    } else if (provider === 'command-code' && modelId) {
+      runner = new CommandCodeApiRunner(modelId)
     } else if (provider === 'openrouter' && modelId) {
       try {
         runner = new OpenRouterApiRunner(modelId)
@@ -213,6 +218,7 @@ export function resolveChatFallbackRunner(
   let runner = current
 
   if (options.providerRunner) return options.providerRunner
+  if (modelPolicy?.provider === 'command-code') return null
   if (modelPolicy?.provider === 'opencode-go') return null
   if (
     !isOfflineChatMode() &&
@@ -271,6 +277,8 @@ export function resolveChatSynthesisRunner(
   goOptions?: OpenCodeGoRunnerOptions,
 ): ChatProviderRunner {
   let runner = current
+  if (modelPolicy?.provider === 'command-code' &&
+    (!(runner instanceof CommandCodeApiRunner) || runner.getPinnedModelId() !== modelPolicy.providerModelId)) runner = null
   if (modelPolicy?.provider === 'opencode-go' && goOptions?.budget &&
     (!(runner instanceof OpenCodeGoApiRunner) || !runner.usesBudget(goOptions.budget) ||
       runner.getPinnedModelId() !== modelPolicy.providerModelId)) runner = null
@@ -319,6 +327,8 @@ export function resolveChatSynthesisRunner(
       runner = new OpenCodeGoApiRunner(modelId!, {}, goOptions)
     } else if (provider === 'opencode' && modelId) {
       runner = new OpenCodeApiRunner(modelId)
+    } else if (provider === 'command-code' && modelId) {
+      runner = new CommandCodeApiRunner(modelId)
     } else if (provider === 'openrouter' && modelId) {
       try {
         runner = new OpenRouterApiRunner(modelId)
@@ -688,6 +698,10 @@ export async function* resolveChatFallbackOrFail(
   }
   if (process.env['BABEL_DESKTOP_PROVIDER']) {
     yield input.failed(`${err.message} [LIVE_MODEL_POLICY] The selected Desktop route failed; automatic provider or model substitution is disabled. Retry or choose another enabled model in Settings.`)
+    return null
+  }
+  if (input.modelPolicy?.provider === 'command-code') {
+    yield input.failed(`${err.message} [LIVE_MODEL_POLICY] exact Command Code route refuses provider substitution`)
     return null
   }
   if (input.modelPolicy?.provider === 'opencode-go') {
