@@ -2937,6 +2937,7 @@ export class ChatEngine {
       userInput: input.userInput,
       projectRoot: this.options.projectRoot,
       ...(this.options.executionScope?{executionScope:this.options.executionScope}:{}),
+      requiredVerifierCommands: this.options.requiredVerifierCommands ?? null,
       operation: input.operation ?? this.options.operation,
       ...(this.options.model !== undefined
         ? { model: this.options.model }

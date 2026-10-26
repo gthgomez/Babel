@@ -179,6 +179,8 @@ export type StreamDoneEvent = {
   reason_code?: TerminalReasonCode;
   /** D03: separate model-vs-harness cause axis; null = not established. */
   cause_class?: 'model' | 'provider' | 'environment' | 'harness' | 'verification' | null;
+  /** Effective completion verification policy for this turn (includes host overrides). */
+  gatePolicy?: import('../config/chatTaskClass.js').VerificationPolicy;
 };
 
 export type StreamFailedEvent = {
@@ -297,6 +299,7 @@ export function buildStreamDone(
     runAllowance?: ChatEngineRunAllowanceReport;
     /** D03: structured terminal reason. */
     reason?: import('./chatTerminalReason.js').TerminalReason;
+    gatePolicy?: import('../config/chatTaskClass.js').VerificationPolicy;
   },
 ): StreamDoneEvent {
   if (!extra?.outcome) {
@@ -332,6 +335,9 @@ export function buildStreamDone(
   if (extra.reason) {
     event.reason_code = extra.reason.code;
     event.cause_class = extra.reason.cause_class;
+  }
+  if (extra.gatePolicy != null) {
+    event.gatePolicy = extra.gatePolicy;
   }
   return event;
 }

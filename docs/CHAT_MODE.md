@@ -71,6 +71,27 @@ babel run --mode chat-headless "task"
 
 Under headless/CI, missing authoritative verification hard-blocks after gate strikes (`required` and `strict`) — no soft-allow of `_verify*.py`-only greens.
 
+## Chat task classes (coding profiles)
+
+Interactive chat resolves a **task class** tune (budgets, verification policy, soft fuses). Unless you set a class explicitly, the product **auto-classifies from task text** (for example `quick_fix`, `investigate`, `general_swe`).
+
+### Opt-in: `ordinary_delivery` (non-software artifact delivery)
+
+Use this when the host or operator intentionally selects **non-software deliverable work** (reports, CSV exports, memos, tables) that should complete as an **honest unverified delivery** (`UNVERIFIED_PATCH`) without a software test gate.
+
+**Enable (explicit only — no natural-language auto-routing):**
+
+- Environment: `BABEL_CHAT_TASK_CLASS=ordinary_delivery` (aliases: `ordinary_deliver`, `artifact_delivery`, `deliverable`) via the same launch ingress as other task classes (`BABEL_CHAT_SWE_PROFILE` still wins over env)
+
+**Behavior:**
+
+- Same default execution budgets, routing, tools, critic/compaction, and sandbox posture as `default`
+- `verificationPolicy: none` — completion does not require a verifier attempt; terminal outcome stays **unverified** (not `VERIFIED_COMPLETE`)
+- Task text that asks to run tests, host `requiredVerifierCommands`, or `BABEL_CHAT_SWE_PROFILE` still escalates verification like other classes
+- Unsupported test-result claims in answers are still corrected (`unsupportedTestClaim`); semantic “quality” of prose is not verified
+
+**Not implemented:** inferring `ordinary_delivery` from task wording, file extensions, or benchmark flags. Deliverable-shaped tasks without this opt-in continue to use `default` (`verificationPolicy: required`).
+
 ## What Loads
 
 Chat mode uses a minimal prompt stack to keep context slim and latency low:

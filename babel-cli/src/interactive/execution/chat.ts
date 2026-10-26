@@ -136,7 +136,8 @@ export async function executeChatTask(
     process.env['BABEL_CHAT_TASK_CLASS'] ||
     process.env['BABEL_CHAT_SWE_PROFILE'] ||
     activeProfile === 'governance' ||
-    activeProfile === 'general_swe';
+    activeProfile === 'general_swe' ||
+    activeProfile === 'ordinary_delivery';
 
   if (isExplicitOrSpecialized) {
     console.log(muted(`  coding profile: ${describeInteractiveCodingProfile(activeProfile)}`));
@@ -316,7 +317,9 @@ export async function executeChatTask(
     const costOwnerId = ctx.chatEngine?.getTaskAllowanceSnapshot()?.taskOwnerId;
     const taskUsage = costOwnerId ? globalCostTracker.getTaskSummary(costOwnerId) : null;
     const review = renderProjectedReviewCard(projectedState, {
-      verificationPolicy: activeProfile ? getChatTaskTune(activeProfile).verificationPolicy : undefined,
+      verificationPolicy:
+        result.gatePolicy ??
+        (activeProfile ? getChatTaskTune(activeProfile).verificationPolicy : undefined),
       verificationApplicability:
         changedFiles.length === 0 &&
         !result.verifierReceipt &&

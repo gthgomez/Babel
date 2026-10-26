@@ -415,6 +415,7 @@ export async function consumeChatStream(
   let donePolicyEvents: ChatResult['policyEvents'];
   let doneReasonCode: ChatResult['reason_code'];
   let doneCauseClass: ChatResult['cause_class'];
+  let doneGatePolicy: ChatResult['gatePolicy'];
   const toolIdQueue: number[] = [];
   const toolIdsByCallId = new Map<string, number>();
   let doneStatus: ChatResult['status'] | undefined;
@@ -501,6 +502,7 @@ export async function consumeChatStream(
         donePolicyEvents = event.policyEvents ?? donePolicyEvents;
         doneReasonCode = event.reason_code ?? doneReasonCode;
         doneCauseClass = event.cause_class ?? doneCauseClass;
+        doneGatePolicy = event.gatePolicy ?? doneGatePolicy;
         receivedTerminalEvent = true;
       }
 
@@ -556,6 +558,7 @@ export async function consumeChatStream(
     ...(doneStatus !== undefined ? { status: doneStatus } : {}),
     ...(doneReasonCode !== undefined ? { reason_code: doneReasonCode } : {}),
     ...(doneCauseClass !== undefined ? { cause_class: doneCauseClass } : {}),
+    ...(doneGatePolicy != null ? { gatePolicy: doneGatePolicy } : {}),
   });
 }
 

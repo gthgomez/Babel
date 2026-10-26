@@ -1,7 +1,6 @@
 import { SpanStatusCode, type Span } from "@opentelemetry/api";
 import { endSpan } from "../telemetry/tracing.js";
 import { isBabelHeadlessEnv } from "../utils/envFlags.js";
-import { getChatTaskTune } from "../config/chatTaskClass.js";
 import type {
   ChatEngineStreamingLoopHost,
   ChatEvent,
@@ -12,8 +11,9 @@ import {
   buildCompletionEvidenceBlockedReport,
   MAX_COMPLETION_RECOVERY_RETRIES,
   planCompletionGateReject,
-  resolveVerificationPolicy,
+  resolveCompletionVerificationContext,
   hasInspectedNoChangeEvidence,
+  syncEffectiveGatePolicyAtCompletion,
 } from "./completionGatePolicy.js";
 import { recordProgressRecovery } from "./sessionEvents.js";
 import { reconcileStreamedAnswer } from "./chatEngineStreamingProtocol.js";
@@ -74,6 +74,12 @@ export async function* settleStreamingCompletion(input: {
     return 'done';
   }
   // Execution gate: buffer streaming answer until gate check passes
+  host.gatePolicy = syncEffectiveGatePolicyAtCompletion({
+    taskClass: host.taskClass,
+    task: host.options.task,
+    requiredVerifierCommands: host.getResolvedRequiredVerifiers(),
+    toolCallLog: host.toolCallLog,
+  });
   const gateResult = host.evaluateCompletionGate(
     turnResult,
     effectiveIntent,
@@ -81,20 +87,22 @@ export async function* settleStreamingCompletion(input: {
   const hardGate = isBabelHeadlessEnv() || !process.stdout.isTTY;
 
   if (gateResult === "reject") {
-    const tuneStream = getChatTaskTune(host.taskClass);
-    const policyStream = resolveVerificationPolicy({
-      policy: tuneStream.verificationPolicy,
+    const verification = resolveCompletionVerificationContext({
+      taskClass: host.taskClass,
       task: host.options.task,
+      requiredVerifierCommands: host.getResolvedRequiredVerifiers(),
+      toolCallLog: host.toolCallLog,
     });
-    host.gatePolicy = policyStream;
+    host.gatePolicy = verification.effectiveGatePolicy;
     const plan = planCompletionGateReject({
       hasWrites: host.hasAnyWrites(),
       hasInspectedNoChange: hasInspectedNoChangeEvidence(host.toolCallLog),
-      policy: policyStream,
+      policy: verification.effectiveGatePolicy,
       hardGate,
       hadToolCallsThisTurn: host._hadToolCallsThisTurn,
       gateStrikes: host.gateStrikes,
       maxGateStrikes: MAX_COMPLETION_RECOVERY_RETRIES,
+      mandatoryVerifierContract: verification.mandatoryVerifierContract,
     });
     if (plan.kind === "blocked") {
       turnSpan.setAttribute("babel.chat.gate_blocked", "true");

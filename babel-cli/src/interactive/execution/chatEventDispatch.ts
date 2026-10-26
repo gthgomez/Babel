@@ -236,6 +236,7 @@ export function terminalResultFromDoneEvent(
     /** D03: structured terminal reason code. */
     reason_code?: ChatResult['reason_code'];
     cause_class?: ChatResult['cause_class'];
+    gatePolicy?: ChatResult['gatePolicy'];
   },
 ): ChatResult {
   // Prefer the engine's authoritative TerminalOutcome. Only recompute when
@@ -284,5 +285,6 @@ export function terminalResultFromDoneEvent(
     ...(opts?.policyEvents ? { policyEvents: opts.policyEvents } : {}),
     ...(opts?.reason_code !== undefined ? { reason_code: opts.reason_code } : {}),
     ...(opts?.cause_class !== undefined ? { cause_class: opts.cause_class } : {}),
+    ...(opts?.gatePolicy != null ? { gatePolicy: opts.gatePolicy } : {}),
   };
 }

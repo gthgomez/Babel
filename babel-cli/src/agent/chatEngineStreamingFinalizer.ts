@@ -3,6 +3,7 @@ import type {
   ChatEngineStreamingLoopHost,
   TaskIntent,
 } from "./chatEngine.js";
+import { syncEffectiveGatePolicyAtCompletion } from "./completionGatePolicy.js";
 
 /** Emit the terminal outcome when a submission exhausts its turn allowance. */
 export async function* finalizeStreamingTurnLimit(input: {
@@ -50,6 +51,12 @@ export async function* finalizeStreamingTurnLimit(input: {
   }
 
   if (effectiveExecutePolicy) {
+    host.gatePolicy = syncEffectiveGatePolicyAtCompletion({
+      taskClass: host.taskClass,
+      task: host.options.task,
+      requiredVerifierCommands: host.getResolvedRequiredVerifiers(),
+      toolCallLog: host.toolCallLog,
+    });
     const gateResult = host.evaluateCompletionGate(
       { type: "completion", answer: "" },
       effectiveIntent,

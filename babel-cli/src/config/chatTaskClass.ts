@@ -20,7 +20,8 @@ export type ChatTaskClass =
   | 'quick_fix'
   | 'general_swe'
   | 'investigate'
-  | 'governance';
+  | 'governance'
+  | 'ordinary_delivery';
 
 export const CHAT_TASK_CLASSES: readonly ChatTaskClass[] = [
   'default',
@@ -29,6 +30,7 @@ export const CHAT_TASK_CLASSES: readonly ChatTaskClass[] = [
   'general_swe',
   'investigate',
   'governance',
+  'ordinary_delivery',
 ] as const;
 
 /**
@@ -273,6 +275,24 @@ const TUNES: Record<ChatTaskClass, ChatTaskTune> = {
     description:
       'Policy / injection-sensitive work — strict critic + green verifier + phase gates.',
   },
+  ordinary_delivery: {
+    class: 'ordinary_delivery',
+    limits: {},
+    strictCritic: false,
+    forceMutateTurns: 5,
+    phaseGatedToolsDefault: false,
+    verificationPolicy: 'none',
+    readThrashToolBudget: 24,
+    shellSoftBudget: 4,
+    investigateToolBudget: 14,
+    investigateToolHardCap: 28,
+    maxFullReadsPerFile: 3,
+    zeroWriteHardStopTurns: 12,
+    restrictToolsOnPolicyFire: false,
+    stallShadowMode: true,
+    description:
+      'Opt-in non-software artifact delivery — default execution posture with verification none (honest UNVERIFIED_PATCH).',
+  },
 };
 
 /** Alias map: env strings → product classes (includes legacy names). */
@@ -303,6 +323,11 @@ const CLASS_ALIASES: Record<string, ChatTaskClass> = {
   gov: 'governance',
   security: 'governance',
   injection: 'governance',
+  ordinary_delivery: 'ordinary_delivery',
+  ordinary_deliver: 'ordinary_delivery',
+  ordinary: 'ordinary_delivery',
+  deliverable: 'ordinary_delivery',
+  artifact_delivery: 'ordinary_delivery',
 };
 
 export function normalizeChatTaskClass(raw: string | undefined | null): ChatTaskClass | null {
@@ -696,6 +721,7 @@ const MUTATION_EXECUTION_CLASSES: ReadonlySet<ChatTaskClass> = new Set([
   'default',
   'quick_fix',
   'general_swe',
+  'ordinary_delivery',
 ]);
 
 /**
@@ -739,6 +765,19 @@ export function resolveChatTaskClass(opts?: {
   }
 
   const fromEnv = normalizeChatTaskClass(env['BABEL_CHAT_TASK_CLASS']);
+
+  if (fromEnv === 'governance') return 'governance';
+
+  // Opt-in ordinary_delivery is env-only; autonomy C/D conflicts map to governance.
+  if (fromEnv === 'ordinary_delivery') {
+    const autonomyClass = autonomyClassFromEnv(env);
+    if (autonomyClass === 'C' || autonomyClass === 'D') {
+      return 'governance';
+    }
+    if (autonomyClass) return autonomyTaskClassFor(autonomyClass);
+    return 'ordinary_delivery';
+  }
+
   if (fromEnv) return fromEnv;
 
   // Cross-harness autonomy class (A–D): maps onto the native task-class tune.

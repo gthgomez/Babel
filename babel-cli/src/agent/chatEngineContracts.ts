@@ -430,6 +430,7 @@ export type ChatEvent =
         | 'harness'
         | 'verification'
         | null
+      gatePolicy?: VerificationPolicy
     }
   | {
       type: 'failed'
