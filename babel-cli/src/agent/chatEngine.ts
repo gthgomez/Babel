@@ -4213,14 +4213,13 @@ export class ChatEngine {
     hooks: { onStreamedChunks?: (text: string) => void } = {},
   ): Promise<ChatTurn> {
     resetOneShotSnapshot(this.logicalTurnToolPolicy);
-    const usageScope = this.captureProviderUsageScope();
     return deliberateChatTurn({
       runner,
       promptOrMessages,
       useNativeTools,
       callbacks,
       hooks,
-      usageScope,
+      usageScope: this.captureProviderUsageScope(),
       tools: this.services.tools,
       takeToolPolicy: () => this.nextTurnToolPolicy(),
       acceptedOperation: this.getTurnRuntimeSnapshot()?.effectiveOperation,
