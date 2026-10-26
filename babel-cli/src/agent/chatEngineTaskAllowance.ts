@@ -11,6 +11,7 @@ import type {
 } from "../config/chatEngineLimits.js";
 import {
   deriveChildAllowance,
+  taskOwnerAllowanceAccountingComplete,
   type ChildBudgetLimiter,
   type InheritedChildAllowance,
 } from "./childBudget.js";
@@ -359,7 +360,7 @@ export class ChatEngineTaskAllowance {
 
   markChildBudgetExhausted(limiter: ChildBudgetLimiter, reason: string): void {
     const owner = this.host.taskAllowance?.taskOwnerId;
-    if (limiter === 'cost' && owner && globalCostTracker.getTaskSummary(owner).costComplete === false) {
+    if (limiter === 'cost' && owner && !taskOwnerAllowanceAccountingComplete(owner)) {
       reason = 'COST_ACCOUNTING_INCOMPLETE: spending stopped because settled usage or pricing is incomplete; the cap is not proven exhausted';
     }
     this.host.budgetExceeded = true;

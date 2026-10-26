@@ -134,3 +134,45 @@ test('published usage estimates remain separate from known task charges', () => 
   assert.match(card.body, /0.0100 usage estimate/)
   assert.doesNotMatch(card.body, /0.0100 known/)
 })
+
+test('omits legacy zero cost and zero tokens when no report or uncertainty', () => {
+  const empty = buildReviewCard({ outcome: 'VERIFIED_COMPLETE', costUsd: 0, tokens: 0, costComplete: true })
+  assert.doesNotMatch(empty.body, /Cost \/ cumulative usage/)
+  assert.doesNotMatch(empty.body, /\$0\.0000/)
+})
+
+test('shows explicit reported zero independently of billing completeness', () => {
+  const reportedZero = buildReviewCard({
+    outcome: 'VERIFIED_COMPLETE',
+    costUsd: 0,
+    reportedCostUsd: 0,
+    costComplete: true,
+    tokens: 0,
+  })
+  assert.match(reportedZero.body, /0\.0000 provider-reported/)
+})
+
+test('usage uncertainty shows with known tokens but not on fully reported bills', () => {
+  const uncertain = buildReviewCard({
+    outcome: 'BLOCKED_POLICY',
+    costUsd: 0.05,
+    reportedCostUsd: 0.05,
+    costComplete: true,
+    usageComplete: false,
+    tokens: 1200,
+  })
+  assert.match(uncertain.body, /usage unconfirmed/)
+  assert.doesNotMatch(uncertain.body, /cost incomplete/)
+
+  const reported = buildReviewCard({
+    outcome: 'VERIFIED_COMPLETE',
+    costUsd: 0.05,
+    reportedCostUsd: 0.05,
+    costComplete: true,
+    usageComplete: false,
+    tokens: 1200,
+  })
+  assert.match(reported.body, /0.0500 provider-reported/)
+  assert.match(reported.body, /usage unconfirmed/)
+  assert.doesNotMatch(reported.body, /cost incomplete/)
+})

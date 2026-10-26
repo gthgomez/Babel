@@ -13,6 +13,12 @@ import {
   globalCostTracker,
 } from '../services/costTracker.js';
 
+/** Priced allowance estimates count as complete for delegation; unknown accounting does not. */
+export function taskOwnerAllowanceAccountingComplete(taskOwnerId: string): boolean {
+  const summary = globalCostTracker.getTaskSummary(taskOwnerId);
+  return (summary.estimateComplete ?? summary.costComplete) !== false;
+}
+
 export type ChildBudgetLimiter = 'wall' | 'cost';
 
 export interface InheritedChildAllowance {
@@ -48,7 +54,7 @@ export function deriveChildAllowance(input: {
     ? globalCostTracker.getTaskSummary(input.parentTaskOwnerId).totalCostUSD
     : 0;
   const remainingCostUsd = Number.isFinite(input.parentEffectiveCostCapUsd)
-    ? input.parentTaskOwnerId && globalCostTracker.getTaskSummary(input.parentTaskOwnerId).costComplete !== false
+    ? input.parentTaskOwnerId && taskOwnerAllowanceAccountingComplete(input.parentTaskOwnerId)
       ? Math.max(0, input.parentEffectiveCostCapUsd - parentSpentUsd)
       : 0
     : null;
@@ -70,7 +76,7 @@ export function deriveChildAllowance(input: {
     costBaselineUsd: globalCost,
     remainingCostUsd,
     accountingComplete: !!input.parentTaskOwnerId &&
-      globalCostTracker.getTaskSummary(input.parentTaskOwnerId).costComplete !== false,
+      taskOwnerAllowanceAccountingComplete(input.parentTaskOwnerId),
     deadlineAtMs,
     maxRounds: Math.max(1, Math.trunc(input.childMaxRounds)),
   };
@@ -87,7 +93,7 @@ export function inheritedChildBudgetLimiter(
   if (
     allowance.remainingCostUsd !== null &&
     (!allowance.taskOwnerId ||
-      globalCostTracker.getTaskSummary(allowance.taskOwnerId).costComplete === false ||
+      !taskOwnerAllowanceAccountingComplete(allowance.taskOwnerId) ||
       globalCostTracker.getTaskSummary(allowance.taskOwnerId).totalCostUSD >= allowance.remainingCostUsd)
   ) {
     return 'cost';

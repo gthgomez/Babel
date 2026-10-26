@@ -526,6 +526,11 @@ test('campaign gate admits Command Code qualified deepseek route only', async (t
     campaignMeter: { executionStage: 'chat', gate },
   })
   assert.equal(physicalFetch, 1)
+  assert.equal(store.readSnapshot().operations.length, 1)
+  const operation = store.readSnapshot().operations[0]!
+  assert.equal(operation.actualMicroUsd, null)
+  assert.equal(operation.settledUnknown, true)
+  assert.ok(operation.upperBoundMicroUsd > 0)
 })
 
 test('non-qualified OpenRouter models reject before physical fetch', async (t) => {

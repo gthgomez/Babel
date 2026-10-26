@@ -90,6 +90,42 @@ describe('renderStatusBar — basic format', () => {
     assert.ok(result.endsWith('\n'));
   });
 
+  it('labels reported complete billing without session est prefix', () => {
+    const plain = stripAnsi(renderStatusBar(defaultState({
+      width: 160,
+      totalCost: 0.02,
+      reportedCostUSD: 0.02,
+      costComplete: true,
+      hasUnknownCost: false,
+    })));
+    assert.match(plain, /session \$0\.0200 reported/);
+    assert.doesNotMatch(plain, /session est\./);
+  });
+
+  it('labels legacy numeric allowance without report provenance as session est', () => {
+    const plain = stripAnsi(renderStatusBar(defaultState({
+      width: 160,
+      totalCost: 0.0031,
+      hasUnknownCost: false,
+      costComplete: false,
+    })));
+    assert.match(plain, /session est\. \$0\.0031/);
+    assert.doesNotMatch(plain, /session known/);
+    assert.doesNotMatch(plain, /reported/);
+  });
+
+  it('shows estimate allowance when known subtotal is zero and billing incomplete', () => {
+    const plain = stripAnsi(renderStatusBar(defaultState({
+      width: 160,
+      totalCost: 0,
+      estimatedCost: 0.0027,
+      hasUnknownCost: true,
+      costComplete: false,
+    })));
+    assert.match(plain, /session est\. \$0\.0027/);
+    assert.match(plain, /cost incomplete/);
+  });
+
   it('is strictly single-line (no sparkline second row)', () => {
     const result = renderStatusBar(
       defaultState({

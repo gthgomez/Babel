@@ -756,6 +756,21 @@ export function buildProviderRetryCallbacks(host: ChatProviderRetryHost, context
     };
 }
 
+/** Token-history cost for one runner settlement (explicit report or priced delta only). */
+export function runnerTokenHistoryCostUsd(
+  reportedTurnCost: number | null | undefined,
+  chargeUpdate: { kind: string; knownCostDelta?: number },
+): number | undefined {
+  if (reportedTurnCost !== null && reportedTurnCost !== undefined && Number.isFinite(reportedTurnCost)) {
+    return reportedTurnCost;
+  }
+  if (chargeUpdate.kind === 'inserted' || chargeUpdate.kind === 'refined') {
+    const delta = chargeUpdate.knownCostDelta ?? 0;
+    if (delta > 0) return delta;
+  }
+  return undefined;
+}
+
 export function trackRunnerUsage(
   host: ChatProviderRetryHost,
   runner: DeepInfraApiRunner | DeepSeekApiRunner | OllamaApiRunner | OpenRouterApiRunner,
@@ -838,14 +853,17 @@ export function trackRunnerUsage(
         host.persistTaskCostBaseline();
       }
 
-      // Feed token history tracker
       const tokenTracker = getGlobalTokenTracker();
-      if (metadata.estimated_cost_usd !== null) tokenTracker.record({
-        inputTokens: metadata.prompt_tokens,
-        outputTokens: metadata.completion_tokens,
-        cost: metadata.estimated_cost_usd,
-        modelId: metadata.provider_model_id,
-      });
+      const reportedTurnCost = settlementReportedCostUsd(metadata);
+      const turnCost = runnerTokenHistoryCostUsd(reportedTurnCost, chargeUpdate);
+      if (turnCost !== undefined && Number.isFinite(turnCost)) {
+        tokenTracker.record({
+          inputTokens: metadata.prompt_tokens,
+          outputTokens: metadata.completion_tokens,
+          cost: turnCost,
+          modelId: metadata.provider_model_id,
+        });
+      }
 
       if (!appliesToCurrent) return;
       host.lastRequestPromptTokens = metadata.prompt_tokens;
@@ -877,6 +895,7 @@ export function trackRunnerUsage(
         const update = globalCostTracker.settleUsage(
           usageScope?.modelId ?? metadata?.provider_model_id ?? 'unknown-provider-model',
           0, 0, null, null, attribution, false, usageScope?.provider ?? metadata?.provider ?? null,
+          metadata ? settlementReportedCostUsd(metadata) : undefined,
         );
         if (update.kind === 'conflict') {
           const faultScope: ChatUsageScope = usageScope ?? {
