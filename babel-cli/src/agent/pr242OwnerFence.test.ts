@@ -402,7 +402,9 @@ test('unknown settlement keeps the invocation physical root and does not conflic
       assert.equal(refined.outputTokens, 10)
       assert.equal(refined.knownCostUSD, null)
       assert.equal(refined.costBasis, 'published_usage_estimate')
-      assert.ok(refined.estimatedCostUSD !== undefined && refined.estimatedCostUSD > 0)
+      const refinedEstimate = refined.estimatedCostUSD
+      assert.ok(refinedEstimate !== undefined && refinedEstimate !== null && refinedEstimate > 0)
+      assert.ok(Math.abs(refinedEstimate - allowanceTotal) < 1e-9)
       assert.equal(refinedSummary.unknownChargeCount, 0)
       assert.equal(refinedSummary.estimateComplete, true)
       assert.equal(refinedSummary.costComplete, false)
@@ -1626,7 +1628,9 @@ test("an old-owner conflict survives a separate-process resume after its receipt
       assert.equal(receiptA.outputTokens, 10)
       assert.equal(receiptA.knownCostUSD, null)
       assert.equal(receiptA.costBasis, 'published_usage_estimate')
-      assert.ok(receiptA.estimatedCostUSD !== undefined && receiptA.estimatedCostUSD > 0)
+      const receiptEstimate = receiptA.estimatedCostUSD
+      assert.ok(receiptEstimate !== undefined && receiptEstimate !== null && receiptEstimate > 0)
+      assert.ok(Math.abs(receiptEstimate - allowanceTotalA) < 1e-9)
       assert.equal(ownerASummary.estimateComplete, true)
       assert.equal(ownerASummary.costComplete, false)
       assert.equal(ownerASummary.completeCostUSD, null)

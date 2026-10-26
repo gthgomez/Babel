@@ -334,7 +334,7 @@ export function renderResultSummary(result: ResultData, mode?: string): string {
             ]
           : []),
         { label: "Tokens", value: formatInteger(usageSummary.totalTokens) },
-        { label: "Cost", value: formatUsageCost(usageSummary) },
+        { label: "Cost", value: formatUsageCost(usageSummary, { fractionDigits: 4 }) },
       ]),
       "",
       renderStatusRows([

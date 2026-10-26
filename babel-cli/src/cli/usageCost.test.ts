@@ -1,7 +1,20 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { formatHudCostDisplay, formatSessionCostHud } from './usageCost.js'
+import { formatHudCostDisplay, formatSessionCostHud, formatUsageCost } from './usageCost.js'
+
+test('formatUsageCost optional fractionDigits preserves CLI default six decimals', () => {
+  const usage = {
+    totalCostUSD: 0.0123456,
+    knownCostUSD: 0.0123456,
+    costComplete: true,
+    completeCostUSD: 0.0123456,
+    unknownChargeCount: 0,
+  }
+  assert.match(formatUsageCost(usage), /0\.012346/)
+  assert.match(formatUsageCost(usage, { fractionDigits: 4 }), /0\.0123/)
+  assert.doesNotMatch(formatUsageCost(usage, { fractionDigits: 4 }), /0\.012346/)
+})
 
 test('formatSessionCostHud surfaces usage estimate when known subtotal is zero', () => {
   const label = formatSessionCostHud({

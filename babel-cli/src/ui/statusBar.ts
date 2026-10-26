@@ -386,6 +386,9 @@ export function renderStatusBar(state: StatusBarState): string {
         : (state.estimatedCost ?? 0) > 0
           ? `session est. $${state.estimatedCost!.toFixed(4)}; cost incomplete`
           : `session cost unavailable${unknown > 0 ? `; ${unknown} unresolved` : ''}`;
+    } else if (!reported) {
+      const estAmount = (state.estimatedCost ?? 0) > 0 ? state.estimatedCost! : state.totalCost;
+      costLine = `session est. $${estAmount.toFixed(4)}`;
     } else {
       costLine = `session known $${state.totalCost.toFixed(4)}`;
     }

@@ -102,6 +102,18 @@ describe('renderStatusBar — basic format', () => {
     assert.doesNotMatch(plain, /session est\./);
   });
 
+  it('labels legacy numeric allowance without report provenance as session est', () => {
+    const plain = stripAnsi(renderStatusBar(defaultState({
+      width: 160,
+      totalCost: 0.0031,
+      hasUnknownCost: false,
+      costComplete: false,
+    })));
+    assert.match(plain, /session est\. \$0\.0031/);
+    assert.doesNotMatch(plain, /session known/);
+    assert.doesNotMatch(plain, /reported/);
+  });
+
   it('shows estimate allowance when known subtotal is zero and billing incomplete', () => {
     const plain = stripAnsi(renderStatusBar(defaultState({
       width: 160,

@@ -344,11 +344,14 @@ export function buildReviewCard(input: ReviewCardInput): ReviewCard {
   const fullyReportedBill = hasReported && input.costComplete === true && unknownCharges === 0;
   const costIncomplete = !fullyReportedBill &&
     (unknownCharges > 0 || input.costComplete === false);
+  const hasUsageUncertainty = usageUnconfirmed || unknownCharges > 0;
   const showCostSection = hasRealCost || hasRealTokens || costIncomplete || hasEstimate || hasReported ||
-    (costAvailable && (input.costUsd ?? 0) === 0);
+    hasUsageUncertainty;
   if (showCostSection) {
     const bits: string[] = [];
-    if (costAvailable && (hasRealCost || costIncomplete || (input.costUsd ?? 0) === 0)) {
+    const showKnownSubtotal = costAvailable && (hasRealCost || costIncomplete ||
+      (hasReported && input.reportedCostUsd === 0));
+    if (showKnownSubtotal) {
       bits.push(`$${input.costUsd!.toFixed(4)}${costIncomplete ? ` known subtotal this ${usageScope}` : ` this ${usageScope}`}`);
     } else if (costIncomplete) bits.push('cost unavailable');
     if (hasEstimate) bits.push(`$${input.estimatedCostUsd!.toFixed(4)} usage estimate this ${usageScope}`);
