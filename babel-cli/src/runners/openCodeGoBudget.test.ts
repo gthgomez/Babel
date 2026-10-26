@@ -28,6 +28,13 @@ function state(path: string): { reservedNanoUsd: number; attempts: number; limit
   finally { db.close() }
 }
 
+function ledgerLimitNanoUsd(statePath: string): number {
+  if (process.platform === 'win32') {
+    return state(statePath).limitNanoUsd
+  }
+  return (JSON.parse(readFileSync(statePath, 'utf8')) as { limitNanoUsd: number }).limitNanoUsd
+}
+
 async function child(script: string, barrier = false) {
   const processChild = spawn(process.execPath, [...childImports, script], {
     windowsHide: true, env: process.env, stdio: ['ignore', 'pipe', 'pipe'],
@@ -207,8 +214,7 @@ test('Go budget honors finite grants above the legacy two-dollar ceiling', async
   const statePath = join(root, 'budget.json')
   const budget = new OpenCodeGoBudget({ statePath, jobId: 'owner', limitUsd: 5 })
   await budget.reserve(1, 1)
-  const bytes = JSON.parse(readFileSync(statePath, 'utf8')) as { limitNanoUsd: number }
-  assert.equal(bytes.limitNanoUsd, 5_000_000_000)
+  assert.equal(ledgerLimitNanoUsd(statePath), 5_000_000_000)
 })
 
 test('unlimited Go grant dispatches without a monetary reservation ledger file', async t => {
