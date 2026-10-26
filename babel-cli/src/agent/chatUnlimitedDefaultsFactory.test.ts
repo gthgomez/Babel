@@ -177,8 +177,9 @@ if (!isSyntheticProviderFixtureReady()) {
     const budget = persistedBudget(result.payload)
     assert.deepEqual(budget.grant.costCap, { kind: 'unlimited' })
     assert.ok(Array.isArray(budget.accountingFaults) && budget.accountingFaults.length > 0)
-    assert.ok(budget.accountingFaults.some((fault: { persistenceFailureClass?: string }) =>
-      fault.persistenceFailureClass === 'financial-journal-io'))
+    assert.ok(budget.accountingFaults.some((fault: { persistenceFailureClass?: string; reason?: string }) =>
+      fault.persistenceFailureClass === 'financial-journal-io' &&
+      fault.reason === 'Owner charge journal unavailable; telemetry may be unpersisted'))
     assert.ok(existsSync(join(chatSessionDir(result.payload['session_id'] as string), 'task-budget.json')))
   })
 
@@ -507,6 +508,9 @@ if (!isSyntheticProviderFixtureReady()) {
     assert.notEqual(result.exitCode, 0)
     const budget = persistedBudget(result.payload)
     assert.deepEqual(budget.grant.costCap, { kind: 'finite', usd: 0.75 })
+    assert.ok(Array.isArray(budget.accountingFaults) && budget.accountingFaults.length > 0)
+    assert.ok(budget.accountingFaults.some((fault: { persistenceFailureClass?: string }) =>
+      fault.persistenceFailureClass === 'authority'))
   })
 
   test('cold restore blocks runtime for settlement-conflict faults', async t => {
@@ -623,62 +627,13 @@ if (!isSyntheticProviderFixtureReady()) {
     assert.throws(() => allowance.resolveGoRunnerOptions(), OpenCodeGoBudgetError)
   })
 
-  test('saved finite and unlimited grants reload from task-budget.json', async t => {
+  test('on-disk session task-budget restores unlimited and finite grants', async t => {
     const { ChatEngineTaskAllowance } = await import('./chatEngineTaskAllowance.js')
-    const lastTurnRuntime = {
-      submissionIndex: 0,
-      writeCount: 0,
-      gateStrikes: 0,
-      effectiveOperation: 'READ_ONLY',
-      taskClass: 'investigate',
-    }
-    for (const costCap of [{ kind: 'finite' as const, usd: 2.5 }, { kind: 'unlimited' as const }]) {
-      const runDir = mkdtempSync(join(process.env['BABEL_SYNTHETIC_PROVIDER_FIXTURE_ROOT']!, 'tmp', `grant-roundtrip-${costCap.kind}-`))
-      const host = {
-        engineRunDir: runDir,
-        limits: {
-          maxCostUsd: costCap.kind === 'finite' ? costCap.usd : Infinity,
-          maxWallMs: 720_000,
-          maxTurns: 120,
-        },
-        taskAllowance: {
-          schemaVersion: 2,
-          taskOwnerId: `roundtrip-${costCap.kind}`,
-          accountingEpoch: globalCostTracker.getAccountingEpoch(),
-          grant: {
-            grantId: 'g',
-            revision: 0,
-            provenance: 't',
-            costCap,
-            wallCapMs: 720_000,
-            turnCap: 120,
-          },
-          consumed: { costUsd: 0, unknownChargeCount: 0, activeWallMs: 0, turns: 1 },
-          repair: { criticRepairCostCapUsd: null, postWriteRepairWallCapMs: null, postWriteRepairRestrict: false },
-          accountedChargeIds: [],
-          lastTurnRuntime,
-          taskCostBaselineUsd: 0,
-        },
-        taskCostBaselineUsd: 0,
-        taskCostScopeUnavailable: false,
-        activeExecutionCheckpointMs: null,
-        lastTurnRuntime,
-        criticRepairCostCapUsd: null,
-        postWriteRepairWallCapMs: null,
-        postWriteRepairRestrict: false,
-        budgetExceeded: false,
-        budgetLastChanceDone: false,
-        terminatingLimiter: null,
-        terminalLimiterReason: null,
-        ownerAccountingFaults: new Map(),
-        ownerAccounting: { recordOwnerAccountingFault: () => {}, persistOwnerCharges: () => {} },
-      }
-      const allowance = new ChatEngineTaskAllowance(host as never)
-      allowance.persistTaskAllowance()
+    const restoreFromRunDir = (runDir: string, limits: { maxCostUsd: number; maxWallMs: number; maxTurns: number }) => {
       const persisted = JSON.parse(readFileSync(join(runDir, 'task-budget.json'), 'utf8'))
       const reloadHost = {
         engineRunDir: runDir,
-        limits: host.limits,
+        limits,
         taskAllowance: null,
         taskCostBaselineUsd: 0,
         taskCostScopeUnavailable: true,
@@ -696,8 +651,47 @@ if (!isSyntheticProviderFixtureReady()) {
       }
       const reloaded = new ChatEngineTaskAllowance(reloadHost as never)
       reloaded.restorePersistedTaskBudget(persisted)
-      assert.equal(reloadHost.taskCostScopeUnavailable, false)
-      assert.deepEqual(reloaded.getTaskAllowanceSnapshot()?.grant.costCap, costCap)
+      return { reloadHost, reloaded, persisted }
     }
+
+    const unlimitedRoot = fixture(t)
+    const unlimitedBodies: WireBody[] = []
+    globalThis.fetch = async (input, init) => {
+      const body = captureRequest(input, init)
+      unlimitedBodies.push(body)
+      if (unlimitedBodies.length === 1) return sse(toolDelta, 'tool_calls')
+      return sse({ content: 'README preserves cobalt-lantern without edits.' }, 'stop', {
+        prompt_tokens: 20, completion_tokens: 4, total_tokens: 24,
+      })
+    }
+    const unlimitedRun = await runCliChatTask({ task, projectRoot: unlimitedRoot, model: backendKey, outputFormat: 'json' })
+    assert.equal(unlimitedRun.exitCode, 0)
+    const unlimitedSession = unlimitedRun.payload['session_id'] as string
+    const unlimitedDir = chatSessionDir(unlimitedSession)
+    assert.ok(existsSync(join(unlimitedDir, 'task-budget.json')))
+    const unlimitedLimits = { maxCostUsd: Infinity, maxWallMs: 720_000, maxTurns: 120 }
+    const unlimitedReload = restoreFromRunDir(unlimitedDir, unlimitedLimits)
+    assert.equal(unlimitedReload.reloadHost.taskCostScopeUnavailable, false)
+    assert.deepEqual(unlimitedReload.reloaded.getTaskAllowanceSnapshot()?.grant.costCap, { kind: 'unlimited' })
+    assert.deepEqual(unlimitedReload.persisted.grant.costCap, { kind: 'unlimited' })
+
+    const finiteRoot = fixture(t)
+    process.env['BABEL_CHAT_MAX_COST'] = '0.75'
+    let finiteFetches = 0
+    globalThis.fetch = async (input, init) => {
+      captureRequest(input, init)
+      finiteFetches++
+      return sse(toolDelta, 'tool_calls')
+    }
+    const finiteRun = await runCliChatTask({ task, projectRoot: finiteRoot, model: backendKey, outputFormat: 'json' })
+    assert.equal(finiteFetches, 1)
+    assert.notEqual(finiteRun.exitCode, 0)
+    const finiteSession = finiteRun.payload['session_id'] as string
+    const finiteDir = chatSessionDir(finiteSession)
+    assert.ok(existsSync(join(finiteDir, 'task-budget.json')))
+    const finiteLimits = { maxCostUsd: 0.75, maxWallMs: 720_000, maxTurns: 120 }
+    const finiteReload = restoreFromRunDir(finiteDir, finiteLimits)
+    assert.deepEqual(finiteReload.persisted.grant.costCap, { kind: 'finite', usd: 0.75 })
+    assert.deepEqual(finiteReload.reloaded.getTaskAllowanceSnapshot()?.grant.costCap, { kind: 'finite', usd: 0.75 })
   })
 }

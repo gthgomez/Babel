@@ -217,6 +217,30 @@ test('Go budget honors finite grants above the legacy two-dollar ceiling', async
   assert.equal(ledgerLimitNanoUsd(statePath), 5_000_000_000)
 })
 
+test('Go budget rejects non-finite currentLimitUsd', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-go-invalid-limit-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const statePath = join(root, 'budget.json')
+  const budget = new OpenCodeGoBudget({
+    statePath,
+    jobId: 'owner',
+    limitUsd: 5,
+    currentLimitUsd: () => Number.NaN,
+  })
+  await assert.rejects(() => budget.reserve(1, 1), /budget denied/i)
+})
+
+test('finite Go grant enforces monetary exhaustion on supported ledger', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-go-exhaust-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const statePath = join(root, 'budget.json')
+  const limitUsd = 0.00001
+  const budget = new OpenCodeGoBudget({ statePath, jobId: 'owner', limitUsd })
+  await budget.reserve(1, 1)
+  await assert.rejects(() => budget.reserve(9000, 9000), /budget denied/i)
+  assert.equal(ledgerLimitNanoUsd(statePath), 10_000)
+})
+
 test('unlimited Go grant dispatches without a monetary reservation ledger file', async t => {
   const root = mkdtempSync(join(tmpdir(), 'babel-go-unlimited-'))
   t.after(() => rmSync(root, { recursive: true, force: true }))
