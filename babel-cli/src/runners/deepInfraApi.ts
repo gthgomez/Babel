@@ -296,21 +296,14 @@ export class DeepInfraApiRunner implements LlmRunner {
     control?: RunControl,
     operationId = 'provider_fetch',
   ): Promise<Response> {
-    try {
-      const runControl = control ?? callbacks?.runControl;
-      return await session.dispatchAdmittedFetch({
-        basePrepared,
-        physicalAttemptId,
-        operationId,
-        ...(runControl ? { runControl } : {}),
-        fetch: () => this.dispatchFetch(url, init, control, operationId),
-      });
-    } catch (error) {
-      if (error instanceof RunStoppedError) {
-        session.settleUnknownOnOpenAdmission();
-      }
-      throw error;
-    }
+    const runControl = control ?? callbacks?.runControl;
+    return await session.dispatchAdmittedFetch({
+      basePrepared,
+      physicalAttemptId,
+      operationId,
+      ...(runControl ? { runControl } : {}),
+      fetch: () => this.dispatchFetch(url, init, control, operationId),
+    });
   }
 
   /** Dispatch unchanged by default; specialized transports may gate every request. */
