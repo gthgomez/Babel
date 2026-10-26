@@ -200,3 +200,13 @@ test('Windows Go death during first-store creation cannot become an empty resume
   await assert.rejects(new OpenCodeGoBudget({ ...options, requireExistingState: true }).reserve(1, 1), /budget denied/i)
   await assert.rejects(new OpenCodeGoBudget(options).reserve(1, 1), /budget denied/i)
 })
+
+test('Go budget honors finite grants above the legacy two-dollar ceiling', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-go-grant-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const statePath = join(root, 'budget.json')
+  const budget = new OpenCodeGoBudget({ statePath, jobId: 'owner', limitUsd: 5 })
+  await budget.reserve(1, 1)
+  const bytes = JSON.parse(readFileSync(statePath, 'utf8')) as { limitNanoUsd: number }
+  assert.equal(bytes.limitNanoUsd, 5_000_000_000)
+})

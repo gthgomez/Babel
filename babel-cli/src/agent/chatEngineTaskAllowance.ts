@@ -21,11 +21,11 @@ import type {
   ChatAllowanceGrant,
 } from "./chatEngineContracts.js";
 import type { TurnRuntimeSnapshot } from "./turnRuntime.js";
+import { OpenCodeGoBudget, OpenCodeGoBudgetError } from "../runners/openCodeGoBudget.js";
 import {
-  OpenCodeGoBudget,
-  OpenCodeGoBudgetError,
-  OPENCODE_GO_CAMPAIGN_RESERVATION_CEILING_USD,
-} from "../runners/openCodeGoBudget.js";
+  handleOwnerChargePersistFailure,
+  ownerAccountingFaultBlocksRuntime,
+} from "./ownerChargePersistPolicy.js";
 import type { OpenCodeGoRunnerOptions } from "../runners/openCodeGoApi.js";
 import {
   parseOwnerAccountingFaults,
@@ -72,10 +72,7 @@ export class ChatEngineTaskAllowance {
     if (!allowance || this.host.taskCostScopeUnavailable) throw new OpenCodeGoBudgetError();
     const taskOwnerId = allowance.taskOwnerId;
     if (this.goReservation?.taskOwnerId !== taskOwnerId) {
-      const grantUsd = allowanceCostCapUsd(allowance.grant.costCap);
-      const limitUsd = Number.isFinite(grantUsd)
-        ? Math.min(grantUsd, OPENCODE_GO_CAMPAIGN_RESERVATION_CEILING_USD)
-        : OPENCODE_GO_CAMPAIGN_RESERVATION_CEILING_USD;
+      const limitUsd = allowanceCostCapUsd(allowance.grant.costCap);
       this.goReservation = {
         taskOwnerId,
         budget: new OpenCodeGoBudget({
@@ -145,13 +142,6 @@ export class ChatEngineTaskAllowance {
     try {
       this.host.ownerAccounting.persistOwnerCharges(allowance.taskOwnerId);
     } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      const financialJournalOnly =
-        code === "EACCES" || code === "EPERM";
-      if (finiteCost || !financialJournalOnly) {
-        this.host.taskCostScopeUnavailable = true;
-        return;
-      }
       const faultScope: import("./chatEngineProviderAccounting.js").ChatUsageScope = {
         taskOwnerId: allowance.taskOwnerId,
         accountingEpoch: allowance.accountingEpoch,
@@ -161,12 +151,21 @@ export class ChatEngineTaskAllowance {
       if (allowance.grant.revision !== undefined) {
         faultScope.ownerGeneration = allowance.grant.revision;
       }
-      this.host.ownerAccounting.recordOwnerAccountingFault(
+      const blocks = handleOwnerChargePersistFailure(
+        {
+          taskAllowance: this.host.taskAllowance,
+          recordOwnerAccountingFault: this.host.ownerAccounting.recordOwnerAccountingFault.bind(
+            this.host.ownerAccounting,
+          ),
+        },
         faultScope,
-        "persistence-failure",
-        "Owner charge journal unavailable; telemetry may be unpersisted",
-        false,
+        error,
+        true,
       );
+      if (blocks) {
+        this.host.taskCostScopeUnavailable = true;
+        return;
+      }
     }
     try {
       const path = join(this.host.engineRunDir, "task-budget.json");
@@ -248,10 +247,18 @@ export class ChatEngineTaskAllowance {
         faults.push(fault);
       this.host.ownerAccountingFaults.set(fault.taskOwnerId, faults);
     }
+    const persistedFaults =
+      this.host.ownerAccountingFaults.get(persisted?.taskOwnerId ?? "") ?? [];
+    const blockingFaults =
+      persisted === null
+        ? []
+        : persistedFaults.filter((fault) =>
+            ownerAccountingFaultBlocksRuntime(fault, persisted.grant.costCap),
+          );
     this.host.taskCostScopeUnavailable =
       persisted === null ||
       persisted.lastTurnRuntime === undefined ||
-      this.host.ownerAccountingFaults.has(persisted.taskOwnerId);
+      blockingFaults.length > 0;
     this.host.activeExecutionCheckpointMs = null;
     if (!persisted) {
       this.host.taskAllowance = null;

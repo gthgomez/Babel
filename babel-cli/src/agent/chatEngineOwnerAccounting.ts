@@ -40,6 +40,7 @@ export class ChatEngineOwnerAccounting {
     kind: OwnerAccountingFault['kind'],
     reason: string,
     appliesToCurrent: boolean,
+    blocksRuntimeAuthority?: boolean,
   ): void {
     const ownerId = scope.taskOwnerId;
     if (!ownerId) {
@@ -60,7 +61,8 @@ export class ChatEngineOwnerAccounting {
       faults.push(fault);
       this.host.ownerAccountingFaults.set(ownerId, faults);
     }
-    if (appliesToCurrent && ownerId === this.host.taskAllowance?.taskOwnerId) {
+    const blocks = blocksRuntimeAuthority ?? appliesToCurrent;
+    if (blocks && appliesToCurrent && ownerId === this.host.taskAllowance?.taskOwnerId) {
       this.host.taskCostScopeUnavailable = true;
     }
     this.persistOwnerAccountingFaultCheckpoint();

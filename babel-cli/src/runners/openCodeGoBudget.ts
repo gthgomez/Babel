@@ -4,8 +4,18 @@ import { closeSync, existsSync, lstatSync, openSync, readFileSync, realpathSync,
 import { dirname, isAbsolute, join, basename } from 'node:path'
 import type { DatabaseSync as SqliteDatabase } from 'node:sqlite'
 
-/** Approved campaign reservation ceiling for offline Go holds (binding; not an implicit task default). */
-export const OPENCODE_GO_CAMPAIGN_RESERVATION_CEILING_USD = 2
+/** Internal nano ceiling when the task grant has no finite monetary cap. */
+export const OPENCODE_GO_UNLIMITED_RESERVATION_NANO_USD = 9_007_199_254_740_000
+
+function reservationLimitNanoUsd(limitUsd: number): number {
+  if (!Number.isFinite(limitUsd)) {
+    return OPENCODE_GO_UNLIMITED_RESERVATION_NANO_USD
+  }
+  if (limitUsd <= 0) throw new OpenCodeGoBudgetError()
+  const nano = Math.floor(limitUsd * 1e9)
+  if (!Number.isSafeInteger(nano) || nano <= 0) throw new OpenCodeGoBudgetError()
+  return nano
+}
 
 /** Caller-owned persistent reservation state; never contains request data or credentials. */
 export interface OpenCodeGoBudgetOptions {
@@ -16,7 +26,7 @@ export interface OpenCodeGoBudgetOptions {
   requireExistingState?: boolean
   /** Trusted current effective task ceiling, bounded by the current grant. */
   currentLimitUsd?: () => number
-  /** Existing owner-authorized grant renewal; the native USD 2 ceiling remains unchanged. */
+  /** Existing owner-authorized grant renewal bounded by the current grant. */
   currentGrant?: () => { grantId: string; revision: number; limitUsd: number }
 }
 
@@ -45,21 +55,24 @@ export class OpenCodeGoBudget {
   private lastGrant: { grantId: string; revision: number; limitNanoUsd: number } | null = null
   private readonly options: Readonly<OpenCodeGoBudgetOptions>
   constructor(options: OpenCodeGoBudgetOptions) {
-    if (!isAbsolute(options.statePath) || !options.jobId.trim() ||
-      !Number.isFinite(options.limitUsd) || options.limitUsd <= 0 ||
-      options.limitUsd > OPENCODE_GO_CAMPAIGN_RESERVATION_CEILING_USD) {
+    if (!isAbsolute(options.statePath) || !options.jobId.trim()) {
       throw new OpenCodeGoBudgetError()
     }
+    reservationLimitNanoUsd(options.limitUsd)
     this.options = Object.freeze({ ...options })
   }
 
   private currentGrant(): { grantId: string; revision: number; limitNanoUsd: number } | null {
     const grant = this.options.currentGrant?.()
     if (!grant) return null
-    if (!grant.grantId.trim() || !Number.isSafeInteger(grant.revision) || grant.revision < 0 ||
-      !Number.isFinite(grant.limitUsd) || grant.limitUsd <= 0 ||
-      grant.limitUsd > OPENCODE_GO_CAMPAIGN_RESERVATION_CEILING_USD) throw new OpenCodeGoBudgetError()
-    const current = { grantId: grant.grantId, revision: grant.revision, limitNanoUsd: Math.floor(grant.limitUsd * 1e9) }
+    if (!grant.grantId.trim() || !Number.isSafeInteger(grant.revision) || grant.revision < 0) {
+      throw new OpenCodeGoBudgetError()
+    }
+    const current = {
+      grantId: grant.grantId,
+      revision: grant.revision,
+      limitNanoUsd: reservationLimitNanoUsd(grant.limitUsd),
+    }
     if (this.lastGrant && (current.revision < this.lastGrant.revision ||
       (current.revision === this.lastGrant.revision && (current.grantId !== this.lastGrant.grantId || current.limitNanoUsd !== this.lastGrant.limitNanoUsd)) ||
       current.limitNanoUsd < this.lastGrant.limitNanoUsd)) throw new OpenCodeGoBudgetError()
@@ -67,12 +80,15 @@ export class OpenCodeGoBudget {
   }
 
   private currentLimitNanoUsd(): number {
-    const grantLimitNanoUsd = this.currentGrant()?.limitNanoUsd ?? Math.floor(this.options.limitUsd * 1e9)
+    const grantLimitNanoUsd = this.currentGrant()?.limitNanoUsd ?? reservationLimitNanoUsd(this.options.limitUsd)
     const currentLimitUsd = this.options.currentLimitUsd?.() ?? grantLimitNanoUsd / 1e9
-    if (!Number.isFinite(currentLimitUsd) || currentLimitUsd <= 0 || Math.floor(currentLimitUsd * 1e9) > grantLimitNanoUsd) {
-      throw new OpenCodeGoBudgetError()
+    if (!Number.isFinite(currentLimitUsd)) {
+      return grantLimitNanoUsd
     }
-    return Math.floor(currentLimitUsd * 1e9)
+    if (currentLimitUsd <= 0) throw new OpenCodeGoBudgetError()
+    const currentNano = Math.floor(currentLimitUsd * 1e9)
+    if (currentNano > grantLimitNanoUsd) throw new OpenCodeGoBudgetError()
+    return currentNano
   }
 
   /** Recheck the trusted task owner immediately before dispatch after asynchronous reservation. */
@@ -82,10 +98,10 @@ export class OpenCodeGoBudget {
 
   private reserveState(state: ReservationState, amount: number): ReservationState {
     const grant = this.currentGrant()
-    const limitNanoUsd = grant?.limitNanoUsd ?? Math.floor(this.options.limitUsd * 1e9)
+    const limitNanoUsd = grant?.limitNanoUsd ?? reservationLimitNanoUsd(this.options.limitUsd)
     if (state.schema !== 1 || state.jobId !== this.options.jobId ||
       !Number.isSafeInteger(state.limitNanoUsd) || state.limitNanoUsd <= 0 ||
-      state.limitNanoUsd > Math.floor(OPENCODE_GO_CAMPAIGN_RESERVATION_CEILING_USD * 1e9) ||
+      state.limitNanoUsd > limitNanoUsd ||
       (!grant && (state.limitNanoUsd !== limitNanoUsd || state.grantId !== undefined || state.grantRevision !== undefined)) ||
       (grant && (state.limitNanoUsd > grant.limitNanoUsd ||
         ((state.grantId !== undefined || state.grantRevision !== undefined) &&
@@ -108,7 +124,7 @@ export class OpenCodeGoBudget {
     const legacyPath = `${statePath}.legacy.json`
     const migrationLock = `${statePath}.migration.lock`
     const initial = (): ReservationState => ({ schema: 1, jobId: this.options.jobId,
-      limitNanoUsd: this.currentGrant()?.limitNanoUsd ?? Math.floor(this.options.limitUsd * 1e9),
+      limitNanoUsd: this.currentGrant()?.limitNanoUsd ?? reservationLimitNanoUsd(this.options.limitUsd),
       reservedNanoUsd: 0, attempts: 0 })
     const transact = (path: string, seed?: ReservationState, legacyHash: string | null = null, debit = amount): ReservationState => {
       let db: SqliteDatabase | undefined
@@ -203,7 +219,7 @@ export class OpenCodeGoBudget {
     const tempPath = `${this.options.statePath}.${randomUUID()}.tmp`
     try {
       const grant = this.currentGrant()
-      const limitNanoUsd = grant?.limitNanoUsd ?? Math.floor(this.options.limitUsd * 1e9)
+      const limitNanoUsd = grant?.limitNanoUsd ?? reservationLimitNanoUsd(this.options.limitUsd)
       let state: ReservationState = { schema: 1, jobId: this.options.jobId, limitNanoUsd, reservedNanoUsd: 0, attempts: 0 }
       try {
         const bytes = await readFile(this.options.statePath, 'utf8')

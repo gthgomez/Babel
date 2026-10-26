@@ -299,11 +299,11 @@ export function evaluateTimelineLimiter(input: {
       ? Math.min(limits.maxWallMs, input.postWriteRepairWallCapMs)
       : limits.maxWallMs;
   const effectiveCost =
-    input.criticRepairCostCapUsd != null
+    input.criticRepairCostCapUsd != null && Number.isFinite(limits.maxCostUsd)
       ? Math.min(limits.maxCostUsd, input.criticRepairCostCapUsd)
       : limits.maxCostUsd;
 
-  if (spentUsd >= effectiveCost) {
+  if (Number.isFinite(effectiveCost) && spentUsd >= effectiveCost) {
     const isRepair =
       input.criticRepairCostCapUsd != null && effectiveCost < limits.maxCostUsd;
     const limiter: ChatRunLimiter = isRepair ? 'cost_repair' : 'cost';
@@ -579,9 +579,15 @@ export function resolveChatEngineLimits(
     Math.max(10_000, requestedOverrideMaxWallMs ?? fromEnv.maxWallMs),
   );
 
-  const requestedOverrideMaxCostUsd = Number.isFinite(overrides.maxCostUsd)
-    ? overrides.maxCostUsd
-    : undefined;
+  const overrideCost = overrides.maxCostUsd;
+  const requestedOverrideMaxCostUsd =
+    overrideCost === Infinity
+      ? Infinity
+      : Number.isFinite(overrideCost)
+        ? overrideCost
+        : overrideCost !== undefined
+          ? baseDefaults.maxCostUsd
+          : undefined;
   const rawEnvCost = process.env['BABEL_CHAT_MAX_COST'];
   const explicitCostCeiling =
     requestedOverrideMaxCostUsd !== undefined || rawEnvCost !== undefined;
@@ -596,7 +602,7 @@ export function resolveChatEngineLimits(
       ? Infinity
       : Math.min(
           100.00,
-          Math.max(0.01, overrides.maxCostUsd ?? fromEnv.maxCostUsd),
+          Math.max(0.01, requestedMaxCostUsd),
         );
 
   const resolvedLimits: ChatEngineLimits = {

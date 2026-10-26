@@ -8,6 +8,7 @@ import {
   isSweChatProfileEnabled,
   resolveChatEngineLimits,
   createRunAllowanceReport,
+  evaluateTimelineLimiter,
   shouldShrinkWallForPostWriteRepair,
 } from './chatEngineLimits.js';
 
@@ -155,6 +156,44 @@ test('resolveChatEngineLimits reads bounded env overrides', () => {
     if (previous.stall === undefined) delete process.env['BABEL_CHAT_STALL_TURNS'];
     else process.env['BABEL_CHAT_STALL_TURNS'] = previous.stall;
   }
+});
+
+test('explicit unlimited override wins over finite env cost', () => {
+  const previous = process.env['BABEL_CHAT_MAX_COST'];
+  process.env['BABEL_CHAT_MAX_COST'] = '100';
+  try {
+    const resolved = resolveChatEngineLimits({ maxCostUsd: Infinity });
+    assert.equal(resolved.maxCostUsd, Infinity);
+  } finally {
+    if (previous === undefined) delete process.env['BABEL_CHAT_MAX_COST'];
+    else process.env['BABEL_CHAT_MAX_COST'] = previous;
+  }
+});
+
+test('explicit NaN cost override does not become unlimited', () => {
+  const previous = process.env['BABEL_CHAT_MAX_COST'];
+  delete process.env['BABEL_CHAT_MAX_COST'];
+  try {
+    const resolved = resolveChatEngineLimits({ maxCostUsd: Number.NaN });
+    assert.equal(resolved.maxCostUsd, Infinity);
+    assert.notEqual(resolved.costBudget?.requestedCostUsd, Number.NaN);
+  } finally {
+    if (previous === undefined) delete process.env['BABEL_CHAT_MAX_COST'];
+    else process.env['BABEL_CHAT_MAX_COST'] = previous;
+  }
+});
+
+test('evaluateTimelineLimiter ignores critic repair cap when parent cost is unlimited', () => {
+  const limits = resolveChatEngineLimits({ maxCostUsd: Infinity });
+  const result = evaluateTimelineLimiter({
+    limits,
+    elapsedMs: 0,
+    spentUsd: 50,
+    turns: 0,
+    consecutiveStallTurns: 0,
+    criticRepairCostCapUsd: 1,
+  });
+  assert.equal(result.limiter, 'none');
 });
 
 test('budget fields are clamped to valid ranges', () => {
