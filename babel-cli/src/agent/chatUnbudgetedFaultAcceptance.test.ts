@@ -32,8 +32,8 @@ if (!isSyntheticProviderFixtureReady()) {
     if (code !== 0) t.diagnostic(output)
     assert.equal(code, 0)
     const inventory = JSON.parse(diagnostic) as { tests: number; passed: number; failed: number; skipped: number }
-    assert.equal(inventory.tests, 7)
-    assert.equal(inventory.passed, 7)
+    assert.equal(inventory.tests, 8)
+    assert.equal(inventory.passed, 8)
     assert.equal(inventory.failed, 0)
     assert.equal(inventory.skipped, 0)
   })
@@ -206,6 +206,71 @@ if (!isSyntheticProviderFixtureReady()) {
     const budget = persistedBudget(result.payload)
     assert.equal(globalCostTracker.getTaskSummary(budget.taskOwnerId).unknownChargeCount, 0)
     assert.ok(!budget.accountingFaults?.length, 'runtime failure is not misclassified as financial-only')
+  })
+
+  test('refined pending receipt survives repeated cold restore without corrupting its owner journal', async t => {
+    const root = fixture(t)
+    const { ChatEngineOwnerAccounting } = await import('./chatEngineOwnerAccounting.js')
+    const { ChatEngineTaskAllowance, parseTaskAllowance } = await import('./chatEngineTaskAllowance.js')
+    const { beginUserSubmission } = await import('./turnRuntime.js')
+    const { DEFAULT_CHAT_ENGINE_LIMITS } = await import('../config/chatEngineLimits.js')
+    const createOwner = () => {
+      const host = {
+        engineRunDir: root,
+        limits: { ...DEFAULT_CHAT_ENGINE_LIMITS, maxCostUsd: Infinity, maxWallMs: 720_000, maxTurns: 120 },
+        taskAllowance: null as import('./chatEngineContracts.js').ChatTaskAllowanceSnapshot | null,
+        taskCostBaselineUsd: 0, taskCostScopeUnavailable: true,
+        activeExecutionCheckpointMs: null as number | null,
+        lastTurnRuntime: beginUserSubmission({ userInput: task, projectRoot: root, classifyIntent: () => 'explain' }),
+        criticRepairCostCapUsd: null as number | null, postWriteRepairWallCapMs: null as number | null,
+        postWriteRepairRestrict: false, budgetExceeded: false, budgetLastChanceDone: false,
+        terminatingLimiter: null, terminalLimiterReason: null,
+        ownerAccountingFaults: new Map(),
+        ownerAccounting: undefined as unknown as InstanceType<typeof ChatEngineOwnerAccounting>,
+      }
+      host.ownerAccounting = new ChatEngineOwnerAccounting(host)
+      return { host, allowance: new ChatEngineTaskAllowance(host) }
+    }
+    const live = createOwner()
+    live.allowance.startIndependentTaskCostScope()
+    const ownerId = live.host.taskAllowance!.taskOwnerId
+    const attribution = { taskOwnerId: ownerId, chargeId: 'refined-pending-attempt' }
+    globalCostTracker.recordUnknownCharge('deepseek-v4.1-flash', attribution)
+    live.allowance.persistTaskAllowance()
+    const journalPath = live.host.ownerAccounting.ownerChargePath(ownerId)
+    const originalJournal = readFileSync(journalPath, 'utf8')
+    const pending = JSON.parse(originalJournal)
+    assert.equal(pending.totalCostUSD, 0)
+    assert.equal(pending.unknownChargeCount, 1)
+    assert.equal(pending.chargeObservations[0].knownCostUSD, null)
+
+    const fault = journalFault(t)
+    fault.activate()
+    assert.equal(globalCostTracker.settleUsage('deepseek-v4.1-flash', 30, 5, null, null,
+      attribution, true, undefined, 0.25).kind, 'refined')
+    live.allowance.persistTaskAllowance()
+    assert.ok(fault.failures() > 0)
+    assert.equal(live.host.taskCostScopeUnavailable, false)
+    fault.restore()
+
+    for (let restore = 0; restore < 2; restore++) {
+      const saved = parseTaskAllowance(JSON.parse(readFileSync(join(root, 'task-budget.json'), 'utf8')))
+      assert.ok(saved)
+      assert.equal(saved.consumed.costUsd, 0.25)
+      assert.deepEqual(saved.accountedChargeIds, [attribution.chargeId])
+      globalCostTracker.resetSession()
+      const cold = createOwner()
+      assert.equal(cold.host.ownerAccounting.restoreOwnerCharges(root), true)
+      cold.allowance.restorePersistedTaskBudget(saved)
+      assert.equal(cold.host.taskCostScopeUnavailable, false)
+      cold.allowance.persistTaskAllowance()
+      assert.equal(readFileSync(journalPath, 'utf8'), originalJournal,
+        'a checkpoint cost floor must not replace a still-pending receipt ledger')
+      assert.equal(globalCostTracker.getTaskSummary(ownerId).totalCostUSD, 0.25)
+      assert.equal(globalCostTracker.getTaskSummary(ownerId).unknownChargeCount, 1)
+      assert.equal(globalCostTracker.getTaskSummary(ownerId).estimateComplete, false)
+      assert.deepEqual(cold.host.ownerAccounting.getAccountingWarnings(), [warning])
+    }
   })
 
   for (const journal of ['pending', 'missing', 'complete-cost', 'complete-ids'] as const) test(`cold process restores ${journal} financial journal with consumed unlimited state`, async t => {

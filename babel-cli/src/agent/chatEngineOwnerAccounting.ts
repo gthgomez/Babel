@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { globalCostTracker, type ChargeReceipt } from '../services/costTracker.js';
+import { chargeReceiptsMatchTotals, globalCostTracker, type ChargeReceipt } from '../services/costTracker.js';
 import type { ChatTaskAllowanceSnapshot } from './chatEngine.js';
 import type { ChatUsageScope } from './chatEngineProviderAccounting.js';
 import { OWNER_CHARGE_JOURNAL_UNAVAILABLE_REASON } from './ownerChargePersistPolicy.js';
@@ -112,9 +112,10 @@ export class ChatEngineOwnerAccounting {
     const summary = globalCostTracker.getTaskSummary(ownerId);
     const chargeIds = globalCostTracker.getTaskChargeIds(ownerId);
     const chargeObservations = globalCostTracker.getTaskChargeObservations(ownerId);
-    // An old ID-only snapshot cannot safely be rewritten as a complete
-    // receipt ledger. Keep its task budget conservative on this path.
-    if (chargeObservations.length !== chargeIds.length) {
+    // Missing receipts and checkpoint cost floors cannot safely be rewritten
+    // as a complete receipt ledger. Preserve the conservative task budget.
+    if (chargeObservations.length !== chargeIds.length ||
+        !chargeReceiptsMatchTotals(chargeObservations, summary.totalCostUSD, summary.unknownChargeCount ?? 0)) {
       const allowance = this.host.taskAllowance;
       const faults = this.host.ownerAccountingFaults.get(ownerId) ?? [];
       // A valid unlimited runtime checkpoint can outlive a failed first journal

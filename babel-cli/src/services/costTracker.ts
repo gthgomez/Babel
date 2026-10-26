@@ -198,6 +198,17 @@ function receiptAllowanceCost(receipt: ChargeReceipt): number | null {
   return receipt.costEstimate ? receipt.estimatedCostUSD ?? null : receipt.knownCostUSD;
 }
 
+/** Require durable totals to be substantiated by the receipts' selected allowance ledger. */
+export function chargeReceiptsMatchTotals(
+  receipts: readonly ChargeReceipt[],
+  totalCostUSD: number,
+  unknownChargeCount: number,
+): boolean {
+  const knownTotal = receipts.reduce((sum, receipt) => sum + (receiptAllowanceCost(receipt) ?? 0), 0);
+  const unknownTotal = receipts.filter((receipt) => receiptAllowanceCost(receipt) === null).length;
+  return Math.abs(knownTotal - totalCostUSD) <= 1e-9 && unknownTotal === unknownChargeCount;
+}
+
 function providerUsesEstimateAllowance(provider: string | null | undefined): boolean {
   return provider === 'opencode-go' || provider === 'command-code';
 }
@@ -1043,10 +1054,7 @@ export class CostTracker {
            receipt.attribution.parentTaskOwnerId !== taskOwnerId))) {
         throw new Error('Durable charge observations do not match the task owner snapshot');
       }
-      const knownTotal = receipts.reduce((sum, receipt) => sum + (receiptAllowanceCost(receipt) ?? 0), 0);
-      const unknownTotal = receipts.filter((receipt) => receiptAllowanceCost(receipt) === null).length;
-      if (Math.abs(knownTotal - input.totalCostUSD) > 1e-9 ||
-          unknownTotal !== (input.unknownChargeCount ?? 0)) {
+      if (!chargeReceiptsMatchTotals(receipts, input.totalCostUSD, input.unknownChargeCount ?? 0)) {
         throw new Error('Durable charge observations disagree with the task totals');
       }
       // Either durable file can be the newer checkpoint. Prefer a confirmed
