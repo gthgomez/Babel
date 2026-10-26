@@ -599,9 +599,12 @@ export class ChatEngineStreamingLoop {
         const canRepairNativeProtocol = (finishReason: string): boolean => {
           const owner = this.host.taskAllowance?.taskOwnerId, metadata = usageScope.usageMetadata;
           if (!owner || metadata?.prompt_tokens == null || metadata.completion_tokens == null) return false;
+          const costSummary = globalCostTracker.getTaskSummary(owner);
+          const allowanceAccountingComplete =
+            (costSummary.estimateComplete ?? costSummary.costComplete) === true;
           return nativeStreamExhausted && !nativeIdentityNormalized && !nativeProtocolRepairUsed &&
             nativeFinishReason === finishReason && !this.host.abortController.signal.aborted &&
-            globalCostTracker.getTaskSummary(owner).costComplete === true && this.host.checkBudgets(true).ok;
+            allowanceAccountingComplete && this.host.checkBudgets(true).ok;
         };
         const systemPrompt = this.host.getOrBuildSystemPrompt("native");
 

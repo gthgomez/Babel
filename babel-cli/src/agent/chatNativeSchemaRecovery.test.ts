@@ -88,7 +88,10 @@ test(`native schema recovery: ${scenario} preserves whole-batch denial and settl
     assert.equal(completed.length,0)
     assert.ok(events.some(event=>event.type===(scenario==='cancelled'?'cancelled':'failed')))
   }
-  if(['corrected','repeated','late_duplicate','raw_missing_id','raw_duplicate_id'].includes(scenario))assert.equal(summary.costComplete,true,JSON.stringify(summary))
+  if(['corrected','repeated','late_duplicate','raw_missing_id','raw_duplicate_id'].includes(scenario)){
+    assert.equal(summary.estimateComplete,true,JSON.stringify(summary))
+    assert.equal(summary.costComplete,false,JSON.stringify(summary))
+  }
   if(scenario==='unknown_usage')assert.equal(summary.costComplete,false)
   for(const body of runner.bodies)assert.deepEqual(validateProviderMessageProtocol(body.messages).filter(issue=>issue.code!=='system_in_user_content'),[])
   if(!accountingOnly&&scenario!=='truncated'){

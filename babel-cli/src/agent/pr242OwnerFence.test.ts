@@ -413,6 +413,7 @@ test('unknown settlement keeps the invocation physical root and does not conflic
       const settledTokens = refined?.inputTokens
       internal.trackRunnerUsage({ getLastInvocationMetadata: () => null }, scope)
       assert.equal(globalCostTracker.getTaskSummary(owner).unknownChargeCount, 0)
+      assert.equal(globalCostTracker.getTaskSummary(owner).totalCostUSD, allowanceTotal)
       assert.equal(globalCostTracker.getTaskChargeObservations(owner)
         .find((item) => item.attribution.chargeId === 'rooted-unknown-charge')?.inputTokens, settledTokens)
     } finally {

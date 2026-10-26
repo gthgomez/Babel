@@ -316,7 +316,10 @@ if (!isSyntheticProviderFixtureReady()) {
       assert.equal(cancellationObserved, true)
       assert.equal(physicalStarts, stage === 'chat' ? 0 : 1)
       const allowance = (engine as unknown as { taskAllowance: { taskOwnerId: string } }).taskAllowance
-      assert.equal(globalCostTracker.getTaskSummary(allowance.taskOwnerId).costComplete, true)
+      const cancelSummary = globalCostTracker.getTaskSummary(allowance.taskOwnerId)
+      assert.equal(cancelSummary.unknownChargeCount, 0)
+      assert.equal(cancelSummary.costComplete, false)
+      assert.equal(cancelSummary.completeCostUSD, null)
       assert.equal(events.filter(event => ['done', 'failed', 'cancelled'].includes(event.type)).length, 1)
     } finally { globalThis.fetch = savedFetch; process.env['BABEL_COMPACTION'] = 'off'; delete process.env['DEEPINFRA_API_KEY'] }
   })

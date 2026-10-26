@@ -86,7 +86,10 @@ test(`native working-state completion: ${scenario} preserves stream and bounded 
   const host=engine as unknown as {taskAllowance:{taskOwnerId:string};engineRunDir:string}
   const summary=globalCostTracker.getTaskSummary(host.taskAllowance.taskOwnerId)
   if(scenario.endsWith('unknown_usage'))assert.equal(summary.costComplete,false)
-  if(scenario==='corrected'||scenario==='repeated')assert.equal(summary.costComplete,true)
+  if(scenario==='corrected'||scenario==='repeated'){
+    assert.equal(summary.estimateComplete,true)
+    assert.equal(summary.costComplete,false)
+  }
   if(scenario==='corrected'||scenario==='repeated'){
     const diagnostic=readFileSync(join(host.engineRunDir,'native-completion-rejection.json'),'utf8')
     assert.doesNotMatch(diagnostic,/PRIVATE_CONTROLLER_VALUE/)
