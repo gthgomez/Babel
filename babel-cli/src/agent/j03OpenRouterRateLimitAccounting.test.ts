@@ -1,194 +1,171 @@
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
-import { dirname } from 'node:path'
 import { ChatEngine } from './chatEngine.js'
-import { resolveModelByKey } from '../modelPolicy.js'
+import { resolveChatModelPolicy } from './chatModelPolicy.js'
 import { OpenRouterApiRunner } from '../runners/openRouterApi.js'
 import { CampaignBudgetStore } from '../eval/campaign-budget-store.js'
 import { CampaignDispatchGate } from '../runners/campaignDispatchGate.js'
-import { PILOT_CAMPAIGN_LIMIT_MICRO_USD } from '../eval/campaign-budget.js'
-import { CAMPAIGN_QUALIFIED_OPENROUTER_MODEL_ID } from '../eval/campaign-qualified-routes.js'
 import { globalCostTracker } from '../services/costTracker.js'
-import { attachSessionAdmissionStore } from '../interactive/execution/chatTransport.js'
+import { createChatEngineForSession } from '../interactive/execution/chatTransport.js'
+import { chatSessionDir } from '../cli/runsLayout.js'
 
 const babelRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
+const task = 'Inspect this repository and identify the stale entries in REPO_MAP.md. Report corrections without editing files.'
 
-function seedFiniteCampaignEngine(t: test.TestContext): {
-  root: string
-  owner: string
-  store: CampaignBudgetStore
-  engine: ChatEngine
-} {
-  const root = mkdtempSync(join(tmpdir(), 'babel-j03-rate-limit-'))
-  mkdirSync(join(root, 'src'), { recursive: true })
-  t.after(() => rmSync(root, { recursive: true, force: true }))
-  const owner = randomUUID()
-  const store = new CampaignBudgetStore({
-    statePath: join(root, 'campaign-budget.json'),
-    campaignId: 'pilot',
-    limitMicroUsd: PILOT_CAMPAIGN_LIMIT_MICRO_USD,
-  })
-  const gate = new CampaignDispatchGate({ campaignId: 'pilot', store, taskOwnerId: owner })
-  const policy = resolveModelByKey({
-    key: 'deepseek-v4-flash-openrouter',
-    babelRoot,
-    liveOnly: true,
-  })
-  assert.equal(policy.providerModelId, CAMPAIGN_QUALIFIED_OPENROUTER_MODEL_ID)
-  const runner = new OpenRouterApiRunner(policy.providerModelId, {}, {
-    explicitCredential: 'synthetic-fixture',
-    env: { OPENROUTER_API_KEY: 'synthetic-fixture' },
-  })
-  const engine = new ChatEngine({
-    task: 'Say ok',
-    projectRoot: root,
-    model: policy.resolvedBackendKey,
-    providerRunner: runner,
-    providerPolicy: policy,
-    campaignDispatchGate: gate,
-    maxCostUsd: 2,
-    maxTurns: 12,
-  })
-  attachSessionAdmissionStore(engine)
-  const allowance = (engine as unknown as { taskAllowance: { taskOwnerId: string } }).taskAllowance
-  allowance.taskOwnerId = owner
-  return { root, owner, store, engine }
-}
+test('fresh finite Chat: OpenRouter 429 cannot dispatch a fallback after accounting stops retry', async (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-j03-fresh-429-'))
+  const projectRoot = join(root, 'project')
+  mkdirSync(join(projectRoot, 'apps', 'web'), { recursive: true })
+  mkdirSync(join(projectRoot, 'packages', 'api'), { recursive: true })
+  writeFileSync(join(projectRoot, 'apps', 'web', 'main.mjs'), 'export const app = true\n')
+  writeFileSync(join(projectRoot, 'packages', 'api', 'server.mjs'), 'export const server = true\n')
+  writeFileSync(join(projectRoot, 'REPO_MAP.md'), '# Repository map\n- src/client\n- src/server\n')
+  execFileSync('git', ['init', '-q', projectRoot])
+  execFileSync('git', ['-C', projectRoot, 'add', '.'])
+  execFileSync('git', ['-C', projectRoot, '-c', 'user.name=Fixture',
+    '-c', 'user.email=fixture@example.invalid', '-c', 'commit.gpgsign=false',
+    'commit', '-qm', 'fixture'])
 
-test('J03: OpenRouter HTTP 429 with incomplete task accounting blocks retry and fallback', async (t) => {
-  const priorOffline = process.env['BABEL_OFFLINE']
-  const priorCompaction = process.env['BABEL_COMPACTION']
-  const priorMaxCost = process.env['BABEL_CHAT_MAX_COST']
-  process.env['BABEL_OFFLINE'] = '1'
-  process.env['BABEL_COMPACTION'] = 'off'
-  delete process.env['BABEL_CHAT_MAX_COST']
+  // Restore ordinary production defaults, never substitute unlimited accounting
+  // or disable native execution/critic/compaction. Only the artifact root is isolated.
+  const keys = [
+    'BABEL_RUNS_DIR', 'BABEL_OFFLINE', 'BABEL_COMPACTION',
+    'BABEL_DESKTOP_PROVIDER', 'BABEL_DESKTOP_MODEL_ROUTE',
+    'BABEL_NATIVE_TOOLS', 'BABEL_TOOL_PROFILE',
+    'BABEL_CHAT_MAX_COST', 'BABEL_CHAT_MAX_TURNS', 'BABEL_CHAT_MAX_WALL_MS',
+    'BABEL_CHAT_LONG_TASK', 'BABEL_CHAT_TASK_CLASS',
+  ] as const
+  const previous = new Map(keys.map(key => [key, process.env[key]]))
+  for (const key of keys) delete process.env[key]
+  process.env['BABEL_RUNS_DIR'] = join(root, 'runs')
+  const savedFetch = globalThis.fetch
+  let engine: ChatEngine | undefined
   globalCostTracker.resetSession()
   t.after(() => {
+    engine?.closeAdmissionStore()
+    globalThis.fetch = savedFetch
     globalCostTracker.resetSession()
-    if (priorOffline === undefined) delete process.env['BABEL_OFFLINE']
-    else process.env['BABEL_OFFLINE'] = priorOffline
-    if (priorCompaction === undefined) delete process.env['BABEL_COMPACTION']
-    else process.env['BABEL_COMPACTION'] = priorCompaction
-    if (priorMaxCost === undefined) delete process.env['BABEL_CHAT_MAX_COST']
-    else process.env['BABEL_CHAT_MAX_COST'] = priorMaxCost
+    for (const key of keys) {
+      const value = previous.get(key)
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
+    rmSync(root, { recursive: true, force: true })
   })
 
-  const { owner, store, engine } = seedFiniteCampaignEngine(t)
-  const priorInferenceId = 'j03-prior-inference'
-  const priorRequestId = 'j03-logical-request'
-  const priorAttemptId = 'attempt-1'
-  const priorLogicalChargeId = `${priorInferenceId}:${priorAttemptId}`
-  globalCostTracker.recordUnknownCharge(CAMPAIGN_QUALIFIED_OPENROUTER_MODEL_ID, {
-    taskOwnerId: owner,
-    chargeId: priorLogicalChargeId,
-    requestId: priorRequestId,
-    attemptId: priorAttemptId,
+  const { policy, offline } = resolveChatModelPolicy({
+    model: 'deepseek-v4-flash-openrouter', babelRoot,
   })
-  const chargeIdsBeforeSubmit = [...globalCostTracker.getTaskChargeIds(owner)].sort()
+  assert.equal(offline, false)
+  assert.equal(policy.provider, 'openrouter')
+  assert.equal(policy.providerModelId, 'deepseek/deepseek-v4-flash-0731')
+  const runner = new OpenRouterApiRunner(policy.providerModelId, {}, {
+    explicitCredential: 'synthetic-fixture', env: {},
+  })
+  const store = new CampaignBudgetStore({
+    statePath: join(root, 'campaign-budget.json'),
+    campaignId: 'fresh-429', limitMicroUsd: 4_290_000,
+  })
+  const gate = new CampaignDispatchGate({
+    campaignId: 'fresh-429', store, taskOwnerId: randomUUID(),
+  })
   let physicalFetch = 0
-  const saved = globalThis.fetch
-  globalThis.fetch = async () => {
+  globalThis.fetch = async (input) => {
+    assert.equal(String(input), 'https://openrouter.ai/api/v1/chat/completions')
     physicalFetch++
-    return new Response(JSON.stringify({ error: { message: 'rate limited' } }), {
-      status: 429,
-      headers: {
-        'Content-Type': 'application/json',
-        'retry-after': '0',
-      },
+    if (physicalFetch === 1) {
+      return new Response(JSON.stringify({ error: { code: 429, message: 'fixture rate limit' } }), {
+        status: 429, headers: { 'Content-Type': 'application/json' },
+      })
+    }
+    // Only unfixed code reaches this successful, same-model response. It allows
+    // the baseline to expose the extra fetch without relying on repeated 429s.
+    const frame = {
+      model: policy.providerModelId,
+      choices: [{
+        delta: { tool_calls: [{
+          index: 0, id: 'call_fixture_read', type: 'function',
+          function: { name: 'read_file',
+            arguments: JSON.stringify({ path: join(projectRoot, 'REPO_MAP.md') }) },
+        }] },
+        finish_reason: 'tool_calls',
+      }],
+      usage: { prompt_tokens: 10, completion_tokens: 5, cost: 0.00001 },
+    }
+    return new Response(`data: ${JSON.stringify(frame)}\n\ndata: [DONE]\n\n`, {
+      headers: { 'Content-Type': 'text/event-stream' },
     })
   }
-  t.after(() => {
-    globalThis.fetch = saved
-  })
 
-  const { consumeChatStream } = await import('../interactive/execution/chatCore.js')
-  const events = []
-  for await (const event of engine.submitMessageStream('Say ok', 'explain')) {
-    events.push(event)
-  }
+  engine = await createChatEngineForSession({
+    task, projectRoot, runId: randomUUID(), model: 'deepseek-v4-flash-openrouter',
+    providerRunner: runner, providerPolicy: policy,
+    operation: 'READ_ONLY', runtimeMode: 'direct', campaignDispatchGate: gate,
+  }, options => new ChatEngine(options))
+  const initial = engine.getTaskAllowanceSnapshot()
+  assert.ok(initial)
+  assert.deepEqual(initial.grant.costCap, { kind: 'finite', usd: 2 })
+  assert.equal(initial.grant.turnCap, 120)
+  assert.equal(initial.grant.wallCapMs, 720_000)
+  assert.deepEqual(globalCostTracker.getTaskChargeIds(initial.taskOwnerId), [])
+  assert.equal(existsSync(join(root, 'campaign-budget.json')), false, 'fresh campaign has no prior admission file')
 
-  assert.equal(physicalFetch, 1, 'must not dispatch a fallback or retry physical fetch')
-  assert.ok(!events.some((event) => event.type === 'thought' && /Failover|fallback model/i.test(String((event as { text?: string }).text ?? ''))))
+  const result = await engine.submitMessage(task, {
+    onThought: () => {}, onAnswerChunk: () => {},
+  }, 'explain')
 
-  const terminal = events.at(-1)!
-  assert.equal(terminal.type, 'failed')
-  assert.equal(terminal.outcome, 'INFRA_FAILURE')
-  assert.equal(terminal.reason_code, 'cost_accounting_incomplete')
-  const terminalError = String((terminal as { error?: string }).error ?? '')
-  assert.match(
-    terminalError,
-    /Provider retry blocked by task allowance|COST_ACCOUNTING_INCOMPLETE:/,
-    'terminal must preserve authoritative accounting denial, not a generic provider transport label',
-  )
-  assert.doesNotMatch(
-    terminalError,
-    /^\[deepInfraApi\] HTTP 429/,
-    'accounting denial must not be replaced by bare HTTP 429 text that could route to fallback',
-  )
-  assert.doesNotMatch(JSON.stringify(terminal), /budget_exhausted|Failover|fallback model/i)
+  // Keep this first: the same unchanged test on f3eb must fail here with 2,
+  // not at an assertion depending on newly introduced production helpers.
+  assert.equal(physicalFetch, 1, 'fresh 429 must not trigger another physical fetch')
+  assert.equal(result.status, 'failed')
+  assert.equal(result.reason_code, 'cost_accounting_incomplete')
+  assert.equal(result.cause_class, 'harness')
+  assert.notEqual(result.budgetExceeded, true)
 
-  const summary = globalCostTracker.getTaskSummary(owner)
+  // Submission may create its own task owner. Read that public snapshot rather
+  // than overwriting private owner identity or injecting a pre-existing charge.
   const allowance = engine.getTaskAllowanceSnapshot()
+  assert.ok(allowance)
+  assert.deepEqual(allowance.grant.costCap, { kind: 'finite', usd: 2 })
+  const charges = globalCostTracker.getTaskChargeObservations(allowance.taskOwnerId)
+  const summary = globalCostTracker.getTaskSummary(allowance.taskOwnerId)
+  assert.equal(charges.length, 1)
+  assert.equal(charges[0]!.knownCostUSD, null)
+  assert.equal(summary.unknownChargeCount, 1)
   assert.equal(summary.costComplete, false)
-  assert.ok(
-    (summary.unknownChargeCount ?? 0) >= 1 ||
-      (allowance?.consumed.unknownChargeCount ?? 0) >= 1,
-    'unknown liability must be retained',
-  )
+  const operations = store.readSnapshot().operations
+  assert.equal(operations.length, 1)
+  assert.equal(operations[0]!.actualMicroUsd, null)
+  assert.equal(operations[0]!.settledUnknown, true)
 
-  const observations = globalCostTracker.getTaskChargeObservations(owner)
-  const logicalKey = (requestId: string | undefined, attemptId: string | undefined) =>
-    `${requestId ?? ''}\0${attemptId ?? ''}`
-  const priorLogicalKey = logicalKey(priorRequestId, priorAttemptId)
-  assert.equal(
-    observations.filter(
-      (row) => logicalKey(row.attribution.requestId, row.attribution.attemptId) === priorLogicalKey,
-    ).length,
-    1,
-    'prior request:attempt unknown must remain a single logical charge after late completion',
-  )
-  assert.equal(
-    globalCostTracker.getTaskChargeIds(owner).filter((id) => id === priorLogicalChargeId).length,
-    1,
-  )
-  const chargeIdsAfter = [...globalCostTracker.getTaskChargeIds(owner)].sort()
-  for (const id of chargeIdsBeforeSubmit) {
-    assert.equal(chargeIdsAfter.filter((entry) => entry === id).length, 1)
-  }
-
-  assert.equal(store.readSnapshot().operations.length, 1, 'no phantom campaign retry operation')
-
-  const parity = (engine as unknown as {
-    parity: {
-      sessionEvents: {
-        events: Array<{
-          kind: string
-          outcome?: string
-          attempt?: number
-          status?: string
-          failure_receipt?: { details?: { status?: number } }
-        }>
-      }
-    }
-  }).parity.sessionEvents.events
-  const retrySettled = parity.filter((event) => event.kind === 'provider_retry_settled')
-  assert.ok(retrySettled.some((event) => event.outcome === 'failed'), 'scheduled retry must settle failed, not started')
-  assert.ok(
-    parity.some((event) => event.kind === 'provider_retry_scheduled' && event.attempt === 2),
-    'rate-limit retry must be scheduled before accounting stop',
-  )
-
-  const deliveries = parity.filter((event) => event.kind === 'model_result_delivery')
-  assert.equal(deliveries.length, 1, 'primary invocation must complete exactly once')
-  assert.equal(deliveries[0]?.status, 'failed')
-  const delivery = deliveries[0] as { http_status?: number; failure_class?: string }
-  assert.equal(delivery.http_status, 429)
-  assert.equal(delivery.failure_class, 'HTTP_429')
-  assert.equal(terminal.reason_code, 'cost_accounting_incomplete', 'user-visible stop is accounting incomplete')
-  assert.equal(delivery.http_status, 429, 'primary provider receipt retains HTTP 429 alongside accounting stop')
+  const events = readFileSync(join(chatSessionDir(engine.getEngineRunId()), 'session-events.jsonl'), 'utf8')
+    .trim().split('\n').map(line => JSON.parse(line) as Record<string, unknown>)
+  const inputs = events.filter(event => event.kind === 'model_input_receipt')
+  const dispatches = events.filter(event =>
+    event.kind === 'model_invocation_phase' && event.phase === 'request_dispatched')
+  const scheduled = events.filter(event => event.kind === 'provider_retry_scheduled')
+  const settled = events.filter(event => event.kind === 'provider_retry_settled')
+  const deliveries = events.filter(event => event.kind === 'model_result_delivery')
+  assert.equal(inputs.length, 1, 'no fallback logical invocation')
+  assert.equal(dispatches.length, 1, 'scheduled retry never reached wire')
+  assert.equal(scheduled.length, 1)
+  assert.equal(scheduled[0]!.attempt, 2)
+  assert.equal(scheduled[0]!.reason, 'rate_limit')
+  assert.equal(settled.length, 1)
+  assert.equal(settled[0]!.attempt_id, scheduled[0]!.attempt_id)
+  assert.equal(settled[0]!.outcome, 'failed')
+  assert.equal(deliveries.length, 1)
+  assert.equal(deliveries[0]!.inference_id, inputs[0]!.inference_id)
+  assert.equal(deliveries[0]!.status, 'failed')
+  assert.equal(deliveries[0]!.http_status, 429)
+  assert.equal(deliveries[0]!.failure_class, 'HTTP_429')
+  assert.equal(charges[0]!.attribution.requestId, inputs[0]!.request_id)
+  assert.equal(charges[0]!.attribution.attemptId, inputs[0]!.attempt_id)
+  assert.notEqual(charges[0]!.attribution.attemptId, scheduled[0]!.attempt_id)
 })

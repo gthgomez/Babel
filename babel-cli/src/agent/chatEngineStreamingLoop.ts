@@ -24,7 +24,8 @@ import { unsupportedTestClaim, responseEvidenceCorrection, responseVerifierFacts
 import { refreshChatVerifierReceiptStalenessSync } from '../evidence/chatRevisionBinding.js';
 import {
   type ChatUsageScope,
-  taskAllowanceStopReasonFromError,
+  isAuthoritativeTaskAllowanceStopError,
+  terminalReasonForAuthoritativeTaskAllowanceStop,
 } from './chatEngineProviderAccounting.js';
 
 import { trace, SpanStatusCode, type Span } from "@opentelemetry/api";
@@ -777,11 +778,13 @@ export class ChatEngineStreamingLoop {
             _turnSpan = null;
             continue;
           }
-          const allowanceReason = taskAllowanceStopReasonFromError(err);
-          if (allowanceReason) {
+          if (isAuthoritativeTaskAllowanceStopError(err)) {
+            const allowanceReason = terminalReasonForAuthoritativeTaskAllowanceStop(err);
             endSpan(_turnSpan, SpanStatusCode.ERROR);
             _turnSpan = null;
-            yield this.host.streamFailed(err?.message ?? String(err), allowanceReason);
+            if (allowanceReason) {
+              yield this.host.streamFailed(err?.message ?? String(err), allowanceReason);
+            }
             return;
           }
           const fb = yield* this.host.resolveFallbackOrFail(
@@ -1068,11 +1071,13 @@ export class ChatEngineStreamingLoop {
           if (admissionRecovery === 'recovered') continue;
           if (admissionRecovery === 'stopped') return;
           if (!this.host.isSubmissionCurrent(submissionGeneration)) return;
-          const legacyAllowanceReason = taskAllowanceStopReasonFromError(err);
-          if (legacyAllowanceReason) {
+          if (isAuthoritativeTaskAllowanceStopError(err)) {
+            const legacyAllowanceReason = terminalReasonForAuthoritativeTaskAllowanceStop(err);
             endSpan(_turnSpan, SpanStatusCode.ERROR);
             _turnSpan = null;
-            yield this.host.streamFailed(err?.message ?? String(err), legacyAllowanceReason);
+            if (legacyAllowanceReason) {
+              yield this.host.streamFailed(err?.message ?? String(err), legacyAllowanceReason);
+            }
             return;
           }
           const fb = yield* this.host.resolveFallbackOrFail(

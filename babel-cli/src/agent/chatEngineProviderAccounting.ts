@@ -26,7 +26,10 @@ import {
   paritySettleProviderRetry,
   type ParityRuntime,
 } from './chatEngineParityBridge.js';
-import type { TerminalReason } from './chatTerminalReason.js';
+import {
+  type TerminalReason,
+  terminalReasonFromFailureText,
+} from './chatTerminalReason.js';
 
 /** Authoritative harness stop when finite task accounting refuses retry or dispatch. */
 export function taskAllowanceStopReasonFromError(error: unknown): TerminalReason | undefined {
@@ -48,9 +51,27 @@ export function taskAllowanceStopReasonFromError(error: unknown): TerminalReason
 }
 
 export function isAuthoritativeTaskAllowanceStopError(error: unknown): boolean {
-  if (taskAllowanceStopReasonFromError(error) !== undefined) return true;
   const message = error instanceof Error ? error.message : String(error ?? '');
+  if (message.startsWith('Provider retry blocked by task allowance:')) return true;
   return message.startsWith('Provider retry blocked by retired task owner');
+}
+
+/** Terminal reason for stream/fallback stop after {@link isAuthoritativeTaskAllowanceStopError}. */
+export function terminalReasonForAuthoritativeTaskAllowanceStop(
+  error: unknown,
+): TerminalReason | undefined {
+  const direct = taskAllowanceStopReasonFromError(error);
+  if (direct) return direct;
+  const message = error instanceof Error ? error.message : String(error ?? '');
+  if (message.startsWith('Provider retry blocked by task allowance:')) {
+    return terminalReasonFromFailureText(
+      message.slice('Provider retry blocked by task allowance: '.length).trim(),
+    );
+  }
+  if (message.startsWith('Provider retry blocked by retired task owner')) {
+    return terminalReasonFromFailureText(message);
+  }
+  return undefined;
 }
 
 export type ChatUsageScope = {
