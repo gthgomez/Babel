@@ -328,6 +328,60 @@ test('finite task cap uses the Go usage estimate while the actual invoice remain
   }
 })
 
+test('priced-estimate parent exposes finite child remaining allowance while billing stays incomplete', () => {
+  globalCostTracker.resetSession()
+  try {
+    const parentId = 'parent-priced-estimate'
+    globalCostTracker.settleUsage('deepseek-v4-flash', 100, 10, null, null, {
+      taskOwnerId: parentId,
+      chargeId: 'registry-priced',
+    })
+    const parentSummary = globalCostTracker.getTaskSummary(parentId)
+    assert.equal(parentSummary.costComplete, false)
+    assert.equal(parentSummary.estimateComplete, true)
+    assert.ok(parentSummary.totalCostUSD > 0)
+    const allowance = deriveChildAllowance({
+      parentTaskOwnerId: parentId,
+      parentTaskBaselineUsd: 0,
+      parentEffectiveCostCapUsd: 1,
+      parentDeadlineAtMs: null,
+      childMaxRounds: 3,
+    })
+    assert.equal(allowance.accountingComplete, true)
+    assert.ok((allowance.remainingCostUsd ?? 0) > 0)
+    assert.equal(inheritedChildBudgetLimiter(allowance), null)
+  } finally {
+    globalCostTracker.resetSession()
+  }
+})
+
+test('unknown parent accounting blocks finite child remaining allowance and stops immediately', () => {
+  globalCostTracker.resetSession()
+  try {
+    const parentId = 'parent-unknown-accounting'
+    globalCostTracker.recordUnknownCharge('unlisted-provider-model', {
+      taskOwnerId: parentId,
+      chargeId: 'unknown-priced',
+    })
+    const parentSummary = globalCostTracker.getTaskSummary(parentId)
+    assert.equal(parentSummary.estimateComplete, false)
+    assert.equal(parentSummary.costComplete, false)
+    assert.equal(parentSummary.unknownChargeCount, 1)
+    const allowance = deriveChildAllowance({
+      parentTaskOwnerId: parentId,
+      parentTaskBaselineUsd: 0,
+      parentEffectiveCostCapUsd: 1,
+      parentDeadlineAtMs: null,
+      childMaxRounds: 3,
+    })
+    assert.equal(allowance.accountingComplete, false)
+    assert.equal(allowance.remainingCostUsd, 0)
+    assert.equal(inheritedChildBudgetLimiter(allowance), 'cost')
+  } finally {
+    globalCostTracker.resetSession()
+  }
+})
+
 test('finite child cost allowance without an owner fails closed despite unrelated session spend', () => {
   const allowance = deriveChildAllowance({
     parentTaskBaselineUsd: 0,
