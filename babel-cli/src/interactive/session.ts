@@ -27,11 +27,15 @@ export function updateCostTotals(ctx: ReplContext): void {
     ...(summary.reportedCostUSD !== undefined ? { reportedCostUSD: summary.reportedCostUSD } : {}),
     ...(summary.costEstimates !== undefined ? { costEstimates: summary.costEstimates } : {}),
     ...(summary.usageComplete !== undefined ? { usageComplete: summary.usageComplete } : {}),
+    ...(summary.costComplete !== undefined ? { costComplete: summary.costComplete } : {}),
     completeCostUSD: summary.completeCostUSD ?? null,
     unknownChargeCount: summary.unknownChargeCount ?? 0,
     totalInputTokens: summary.totalInputTokens,
     totalOutputTokens: summary.totalOutputTokens,
     totalTokens: summary.totalTokens,
+    ...(summary.totalCacheHitTokens !== undefined ? { totalCacheHitTokens: summary.totalCacheHitTokens } : {}),
+    ...(summary.totalCacheMissTokens !== undefined ? { totalCacheMissTokens: summary.totalCacheMissTokens } : {}),
+    ...(summary.modelBreakdown !== undefined ? { modelBreakdown: summary.modelBreakdown } : {}),
     projectSessionId: globalCostTracker.getProjectSessionId(),
     ...(globalCostTracker.isSessionProjectionComplete()
       ? {
