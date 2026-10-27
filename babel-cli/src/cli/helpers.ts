@@ -52,6 +52,9 @@ export function normalizeModelName(value: string | undefined): string | undefine
   const trimmed=value.trim();
   // Local model names are case-sensitive identifiers, unlike family aliases.
   if(trimmed.toLowerCase().startsWith('ollama/')) return `ollama/${trimmed.slice(7)}`;
+  // Explicit provider-bound model IDs retain the provider's case-sensitive identity.
+  const route = /^(openrouter|command-code)\/(.+)$/i.exec(trimmed);
+  if (route) return `${route[1]!.toLowerCase()}/${route[2]!}`;
   if(trimmed.includes(':')) return trimmed;
   return trimmed.toLowerCase();
 }

@@ -403,6 +403,8 @@ async function providerCredentialsDialog() {
     <p class="fine-print" id="provider-key-hint">Private credentials use OS protection when available. Saved keys are never returned to this dialog.</p>
     <div class="dialog-actions"><button class="button" data-action="refresh-models" id="refresh-models">Refresh available models</button></div>
     <p id="provider-catalog-status" class="fine-print"></p><label class="credential-label" for="credential-model">Default model</label><select class="credential-control" id="credential-model"></select>
+    <label class="credential-label" for="credential-model-source">Model choice</label><select class="credential-control" id="credential-model-source"><option value="catalog">Saved or catalog model</option><option value="manual">Enter a model ID · unverified</option></select>
+    <div id="manual-model-fields" hidden><label class="credential-label" for="credential-manual-model">Provider model ID</label><input class="credential-control" id="credential-manual-model" maxlength="200" spellcheck="false" placeholder="vendor/model-id"><p class="fine-print">Unverified model. Availability, pricing, context and capabilities may be unknown. The provider can reject this ID.</p></div>
     <label class="credential-label" for="model-search">Enabled models</label><input class="credential-control" id="model-search" type="search" placeholder="Search models">
     <div id="enabled-models" class="enabled-model-list"></div>
     <p id="provider-error" class="provider-error" role="alert"></p>
@@ -411,21 +413,33 @@ async function providerCredentialsDialog() {
   const providerSelect=$('#credential-provider'),modelSelect=$('#credential-model');
   $('#credential-scope').value=nativeInfo?.projectCredentialsSelected&&nativeInfo?.projectName?'project':'private';
   providerSelect.value=selectedProvider;
+  const modelSource=$('#credential-model-source'),manualInput=$('#credential-manual-model');
+  const renderModelSource=()=>{
+    const manual=modelSource.value==='manual';
+    $('#manual-model-fields').hidden=!manual;
+    modelSelect.disabled=manual;
+  };
   const renderModels=()=>{
     const spec=providers.find(spec=>spec.id===providerSelect.value);
     const routes=spec?.routes??[];
     const defaultId=currentRoute?.provider===spec?.id?currentRoute.model:spec?.defaultModel??routes.find(route=>route.enabled!==false)?.id??routes[0]?.id;
     modelSelect.innerHTML=routes.map(route=>`<option value="${e(route.id)}" ${route.selectable===false?'disabled':''}>${e(route.label)}${route.selectable===false?' · unavailable':''}</option>`).join('');
     if(defaultId)modelSelect.value=defaultId;
+    const selected=routes.find(route=>route.id===defaultId);
+    modelSource.querySelector('[value="manual"]').disabled=!spec?.manualModels;
+    modelSource.value=selected?.source==='manual'?'manual':'catalog';
+    manualInput.value=selected?.source==='manual'?selected.modelId:'';
+    renderModelSource();
     $('#enabled-models').innerHTML=routes.map(route=>`<label class="enabled-model" data-model-label="${e((route.label+' '+route.id).toLowerCase())}"><input type="checkbox" value="${e(route.id)}" ${route.enabled!==false||route.id===defaultId?'checked':''} ${route.selectable===false?'disabled':''}><span>${e(route.label)}<small>${e(route.modelId??route.id)}</small><small>${e(route.unavailableReason || (route.qualification==='unverified' ? 'Not live-tested · tools '+(route.capabilities?.tools===true?'listed':route.capabilities?.tools===false?'not listed':'unknown') : ''))}</small></span></label>`).join('')||'<p class="fine-print">Refresh available models to load this provider’s catalog.</p>';
     $('#credential-key').disabled=spec?.requiresApiKey===false;
     $('#credential-scope').disabled=spec?.requiresApiKey===false;
     $('#provider-key-hint').textContent=spec?.local?'Lists models registered with the local Ollama daemon. Execution may be local or cloud-backed; locality needs separate verification.':'Leave the key blank to retain it. Choose Add or Replace for the selected destination.';
     $('#provider-error').textContent='';
-    $('#refresh-models').disabled=!native.refreshModels;
+    $('#refresh-models').disabled=!native.refreshModels||spec?.catalogRefresh===false;
     const catalog=spec?.catalog;
     $('#provider-catalog-status').textContent=catalog?.fetchedAt?`${catalog.status==='cached'?'Cached catalog':'Catalog refreshed'}: ${catalog.fetchedAt}. Discovery does not establish account access or live qualification.`:'Bundled choices; refresh official metadata for current availability.';
   };
+  modelSource.addEventListener('change',renderModelSource);
   const scopeSelect=$('#credential-scope');
   let statusRevision=0;
   const refreshCredentialStatus=async()=>{
@@ -462,7 +476,8 @@ async function providerCredentialsDialog() {
   $('#model-search').addEventListener('input',ev=>{const query=ev.target.value.toLowerCase();for(const row of $('#enabled-models').querySelectorAll('label'))row.hidden=!row.dataset.modelLabel.includes(query);});
   $('#refresh-models').addEventListener('click',async ev=>{
     const button=ev.currentTarget;button.disabled=true;button.textContent='Loading models…';
-    try {await native.refreshModels(providerSelect.value);providers=await native.listQualifiedProviders();renderModels();}
+    const source=modelSource.value,manualId=manualInput.value;
+    try {await native.refreshModels(providerSelect.value);providers=await native.listQualifiedProviders();renderModels();if(source==='manual'){modelSource.value=source;manualInput.value=manualId;renderModelSource();}}
     catch(error){$('#provider-error').textContent=error.message||'Could not refresh models. Retry when connected.';}
     finally{button.textContent='Refresh available models';button.disabled=false;}
   });
@@ -471,13 +486,17 @@ async function providerCredentialsDialog() {
 async function saveProviderFromDialog(button) {
   const keyInput=$('#credential-key');
   const provider=$('#credential-provider')?.value;
-  const model=$('#credential-model')?.value;
+  const manual=$('#credential-model-source')?.value==='manual';
+  const manualModelId=manual?$('#credential-manual-model')?.value.trim():undefined;
+  const model=manual?`${provider}/${manualModelId}`:$('#credential-model')?.value;
   const scope=$('#credential-scope')?.value ?? 'private';
   const apiKey=keyInput?.value??'';
   keyInput.value=''; // Clear the DOM before crossing the narrow native bridge.
   button.disabled=true;
   try {
-    const result=await native.saveProviderRoute({provider,apiKey,scope,model,binding:$('#credential-scope')?.dataset.binding,credentialOperation:$('#credential-operation')?.value??'add',enabledModels:[...document.querySelectorAll('#enabled-models input:checked:not(:disabled)')].map(input=>input.value)});
+    const enabledModels=[...document.querySelectorAll('#enabled-models input:checked:not(:disabled)')].map(input=>input.value);
+    if(manual&&!enabledModels.includes(model))enabledModels.push(model);
+    const result=await native.saveProviderRoute({provider,apiKey,scope,model,...(manual?{manualModelId}:{}),binding:$('#credential-scope')?.dataset.binding,credentialOperation:$('#credential-operation')?.value??'add',enabledModels});
     const route=result?.route ?? {provider, model};
     configuredRoute=route;state.model=route.model;
     if(modeBlockReason(state.mode,route.provider)) {state.mode='chat';announce('Chat selected. Plan and Deep need an authorized project and a supported provider.');}

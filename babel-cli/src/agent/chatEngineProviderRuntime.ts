@@ -69,6 +69,9 @@ export function resolveChatDeliberationRunner(
 ): DeepInfraApiRunner | DeepSeekApiRunner | OllamaApiRunner {
   let runner = current
 
+  if (modelPolicy?.provider === 'openrouter' && modelPolicy.resolvedBackendKey?.startsWith('openrouter/') &&
+    (!(runner instanceof OpenRouterApiRunner) || runner.getPinnedModelId() !== modelPolicy.providerModelId)) runner = null
+
   if (modelPolicy?.provider === 'command-code' &&
     (!(runner instanceof CommandCodeApiRunner) || runner.getPinnedModelId() !== modelPolicy.providerModelId)) runner = null
   if (modelPolicy?.provider === 'opencode-go' && goOptions?.budget &&
@@ -150,7 +153,7 @@ export function resolveChatDeliberationRunner(
       runner = new CommandCodeApiRunner(modelId)
     } else if (provider === 'openrouter' && modelId) {
       try {
-        runner = new OpenRouterApiRunner(modelId)
+        runner = new OpenRouterApiRunner(modelId, {}, { requireExactModelId: modelPolicy.resolvedBackendKey?.startsWith('openrouter/') === true })
       } catch (err) {
         throw new Error(
           `Cannot start chat: OpenRouter runner failed to initialize.\n` +
@@ -278,6 +281,8 @@ export function resolveChatSynthesisRunner(
   goOptions?: OpenCodeGoRunnerOptions,
 ): ChatProviderRunner {
   let runner = current
+  if (modelPolicy?.provider === 'openrouter' && modelPolicy.resolvedBackendKey?.startsWith('openrouter/') &&
+    (!(runner instanceof OpenRouterApiRunner) || runner.getPinnedModelId() !== modelPolicy.providerModelId)) runner = null
   if (modelPolicy?.provider === 'command-code' &&
     (!(runner instanceof CommandCodeApiRunner) || runner.getPinnedModelId() !== modelPolicy.providerModelId)) runner = null
   if (modelPolicy?.provider === 'opencode-go' && goOptions?.budget &&
@@ -332,7 +337,7 @@ export function resolveChatSynthesisRunner(
       runner = new CommandCodeApiRunner(modelId)
     } else if (provider === 'openrouter' && modelId) {
       try {
-        runner = new OpenRouterApiRunner(modelId)
+        runner = new OpenRouterApiRunner(modelId, {}, { requireExactModelId: modelPolicy.resolvedBackendKey?.startsWith('openrouter/') === true })
       } catch {
         throw new Error(
           'Cannot start live chat synthesis: OpenRouter runner is unavailable. Set OPENROUTER_API_KEY in your environment.',
@@ -707,6 +712,10 @@ export async function* resolveChatFallbackOrFail(
   }
   if (input.modelPolicy?.provider === 'command-code') {
     yield input.failed(`${err.message} [LIVE_MODEL_POLICY] exact Command Code route refuses provider substitution`)
+    return null
+  }
+  if (input.modelPolicy?.provider === 'openrouter' && input.modelPolicy.resolvedBackendKey?.startsWith('openrouter/')) {
+    yield input.failed(`${err.message} [LIVE_MODEL_POLICY] exact configured OpenRouter route refuses provider substitution`)
     return null
   }
   if (input.modelPolicy?.provider === 'opencode-go') {

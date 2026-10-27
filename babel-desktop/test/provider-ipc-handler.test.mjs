@@ -9,9 +9,28 @@ import {readFileSync, mkdtempSync, rmSync,writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {runInNewContext} from 'node:vm';
-import {saveProviderCredential} from '../native/credentials.mjs';
+import {saveProviderCredential,applyNativeCredentialEnvironment} from '../native/credentials.mjs';
 import {extractBusyBinding} from './main-busy-source.mjs';
 const FIXTURE_VALUE = 'BabelTestCredentialPlaceholder0000';
+
+test('registered save callback admits explicit manual IDs through the real save boundary',async()=>{
+  const config=mkdtempSync(join(tmpdir(),'babel-ipc-manual-model-'));
+  try{
+    const source=readFileSync(new URL('../native/main.mjs',import.meta.url),'utf8');
+    const handler=await registeredHandler(source,config,'babel:save-provider-route');
+    for(const provider of ['openrouter','command-code']){
+      const manualModelId='Vendor/New-Model',model=`${provider}/${manualModelId}`;
+      const result=await handler({provider,model,manualModelId,enabledModels:[model],scope:'private',apiKey:FIXTURE_VALUE});
+      assert.equal(result.route.provider,provider);assert.equal(result.route.model,model);
+      const policy=JSON.parse(readFileSync(join(config,'model-policy.json'),'utf8'));
+      assert.equal(policy.models[model].model_id,manualModelId);
+    }
+    const env=applyNativeCredentialEnvironment({OPENROUTER_API_KEY:'discarded-fixture',COMMAND_CODE_API_KEY:'discarded-fixture'}, {provider:'command-code',scope:'private',configDirectory:config});
+    assert.equal(env.COMMAND_CODE_API_KEY,FIXTURE_VALUE);
+    assert.equal(env.OPENROUTER_API_KEY,undefined);
+    assert.equal(env.BABEL_DESKTOP_CREDENTIALS_RESOLVED,'1');
+  }finally{rmSync(config,{recursive:true,force:true});}
+});
 
 async function registeredHandler(source, config, channel = 'babel:save-provider-credential', lifecycle = {}) {
   writeFileSync(join(config,'desktop-model-catalog.json'),JSON.stringify({models:[{id:'ollama/local-fixture',provider:'ollama',modelId:'local-fixture',label:'Local fixture',enabled:true}]}));

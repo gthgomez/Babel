@@ -5,7 +5,7 @@ import {spawnSync} from 'node:child_process';
 import {dirname,isAbsolute,join,resolve} from 'node:path';
 import {randomUUID} from 'node:crypto';
 
-const PROVIDERS=Object.freeze({deepseek:'DEEPSEEK_API_KEY',deepinfra:'DEEPINFRA_API_KEY',openrouter:'OPENROUTER_API_KEY','opencode-go':'BABEL_OPENCODE_GO_API_KEY',ollama:null});
+const PROVIDERS=Object.freeze({deepseek:'DEEPSEEK_API_KEY',deepinfra:'DEEPINFRA_API_KEY',openrouter:'OPENROUTER_API_KEY','command-code':'COMMAND_CODE_API_KEY','opencode-go':'BABEL_OPENCODE_GO_API_KEY',ollama:null});
 const FILE_LIMIT=256*1024;
 export const PROTECTED_CREDENTIAL_FILE='desktop-credentials.json';
 let protection=null;

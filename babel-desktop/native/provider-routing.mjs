@@ -3,7 +3,7 @@
 import {existsSync, mkdirSync, readFileSync, renameSync, writeFileSync, lstatSync} from 'node:fs';
 import {dirname, join, resolve} from 'node:path';
 import {randomUUID} from 'node:crypto';
-import {DESKTOP_ROUTE_CATALOG, listDesktopProviderDescriptors, normalizeProviderRoute,defaultModelPolicy} from './desktop-route-catalog.mjs';
+import {DESKTOP_ROUTE_CATALOG, listDesktopProviderDescriptors, normalizeProviderRoute,defaultModelPolicy,manualProviderModel} from './desktop-route-catalog.mjs';
 import {MODEL_CATALOG_ENDPOINTS,parseModelCatalog} from './model-catalog.mjs';
 
 const ROUTE_FILE = 'desktop-routing.json';
@@ -34,8 +34,30 @@ function writePrivateJson(path,value){
   renameSync(temporary,path);
 }
 
+function privateModelPolicy(configDirectory){
+  if(!configDirectory)return defaultModelPolicy();
+  const path=join(resolve(configDirectory),'model-policy.json');
+  if(!existsSync(path))return defaultModelPolicy();
+  const info=lstatSync(path);
+  if(!info.isFile()||info.isSymbolicLink()||info.nlink>1||info.size>4*1024*1024)throw new Error('Model policy is unsafe.');
+  const policy=JSON.parse(readFileSync(path,'utf8'));
+  if(!policy.models||typeof policy.models!=='object'||Array.isArray(policy.models))throw new Error('Model policy is invalid.');
+  return policy;
+}
+
+function routeModels(configDirectory){
+  const policy=privateModelPolicy(configDirectory),manual=[],bundledModels=defaultModelPolicy().models;
+  for(const [id,entry] of Object.entries(policy.models)){
+    if(entry.desktop_manual!==true)continue;
+    const model=manualProviderModel(entry.provider,entry.model_id),bundled=bundledModels?.[id];
+    if(id!==model.id||(bundled&&(bundled.provider!==entry.provider||bundled.model_id!==entry.model_id)))throw new Error('Saved manual model conflicts with its provider identity.');
+    manual.push({...model,enabled:entry.enabled!==false});
+  }
+  return [...cachedModels(configDirectory),...manual];
+}
+
 export function qualifiedProviders(configDirectory=null) {
-  const providers=listDesktopProviderDescriptors(cachedModels(configDirectory));
+  const providers=listDesktopProviderDescriptors(routeModels(configDirectory));
   const catalog=readCatalogCache(configDirectory);
   for(const provider of providers){
     provider.catalog=catalog.providers?.[provider.id]??{status:'bundled',fetchedAt:null};
@@ -113,18 +135,28 @@ function routingPath(configDirectory) {
   return join(resolve(configDirectory), ROUTE_FILE);
 }
 
+function routingSettings(configDirectory){
+  if(!configDirectory)return {};
+  const path=routingPath(configDirectory);
+  try{
+    const info=lstatSync(path);
+    if(!info.isFile()||info.isSymbolicLink()||info.nlink>1||info.size>256*1024)throw new Error('Routing settings are unsafe.');
+    const value=JSON.parse(readFileSync(path,'utf8'));
+    if(!value||typeof value!=='object'||Array.isArray(value))throw new Error('Routing settings are invalid.');
+    return value;
+  }catch(error){if(error.code==='ENOENT')return {};throw error;}
+}
+
 export function readProviderRoute(configDirectory) {
-  const path = routingPath(configDirectory);
-  if (!existsSync(path)) return null;
   try {
-    const value = JSON.parse(readFileSync(path, 'utf8'));
+    const value = routingSettings(configDirectory);
     if (!value || typeof value !== 'object') return null;
     const provider = typeof value.provider === 'string' ? value.provider : null;
     const model = typeof value.model === 'string' ? value.model : null;
     if (!provider || !Object.prototype.hasOwnProperty.call(DESKTOP_ROUTE_CATALOG, provider)) return null;
     if (!model) return null;
     try {
-      return normalizeProviderRoute({provider, model},cachedModels(configDirectory));
+      return normalizeProviderRoute({provider, model},routeModels(configDirectory));
     } catch {
       return null;
     }
@@ -133,24 +165,33 @@ export function readProviderRoute(configDirectory) {
   }
 }
 
-export function validateProviderRoute({provider, model,enabledModels} = {},configDirectory=null) {
-  const extra=cachedModels(configDirectory),route=normalizeProviderRoute({provider, model},extra);
+export function validateProviderRoute({provider, model,enabledModels,manualModelId} = {},configDirectory=null) {
+  routingSettings(configDirectory);
+  const extra=routeModels(configDirectory),route=normalizeProviderRoute({provider, model,manualModelId},extra);
+  if(manualModelId!==undefined)extra.push(manualProviderModel(provider,manualModelId));
   const bundled=defaultModelPolicy();
   const catalogAccepted=extra.some(entry=>
     entry.id===route.model&&entry.provider===provider&&entry.selectable!==false&&entry.adapterSupport!=='unsupported');
   if(!bundled.models?.[route.model]&&!catalogAccepted)throw new Error(`Model route "${route.model}" is not supported for ${DESKTOP_ROUTE_CATALOG[provider]?.label ?? provider}. Refresh models and select one.`);
   const available=qualifiedProviders(configDirectory).find(spec=>spec.id===provider)?.routes.find(entry=>entry.id===model);
-  if(available?.selectable===false)throw new Error(available.unavailableReason||'This model is unavailable.');
+  if(manualModelId===undefined&&available?.selectable===false)throw new Error(available.unavailableReason||'This model is unavailable.');
   if(enabledModels!==undefined){
     if(!Array.isArray(enabledModels)||!enabledModels.length||enabledModels.length>1000||!enabledModels.includes(route.model))throw new Error('The default model must be enabled.');
     for(const id of enabledModels)normalizeProviderRoute({provider,model:id},extra);
   }
+  // Identity conflicts must fail before the save boundary can mutate credentials.
+  const policy=privateModelPolicy(configDirectory);
+  for(const entry of listDesktopProviderDescriptors(extra).find(spec=>spec.id===provider)?.routes??[]){
+    const saved=policy.models[entry.id];
+    if(saved&&(saved.provider!==provider||saved.model_id!==entry.modelId))throw new Error('Saved model policy conflicts with the selected provider identity.');
+  }
   return route;
 }
 
-export function saveProviderRoute({configDirectory, provider, model,enabledModels} = {}) {
-  const extra=cachedModels(configDirectory);
-  const route = validateProviderRoute({provider, model,enabledModels},configDirectory);
+export function saveProviderRoute({configDirectory, provider, model,enabledModels,manualModelId} = {}) {
+  const extra=routeModels(configDirectory);
+  const route = validateProviderRoute({provider, model,enabledModels,manualModelId},configDirectory);
+  if(manualModelId!==undefined)extra.push(manualProviderModel(provider,manualModelId));
   if(enabledModels!==undefined){
     if(!Array.isArray(enabledModels)||!enabledModels.length||enabledModels.length>1000||!enabledModels.includes(route.model))throw new Error('The default model must be enabled.');
     for(const id of enabledModels)normalizeProviderRoute({provider,model:id},extra);
@@ -160,19 +201,20 @@ export function saveProviderRoute({configDirectory, provider, model,enabledModel
   const info = lstatSync(dir);
   if (!info.isDirectory() || info.isSymbolicLink()) throw new Error('Configuration directory is unsafe.');
   const path = join(dir, ROUTE_FILE);
-  let previous={};try{const info=lstatSync(path);if(!info.isFile()||info.isSymbolicLink()||info.nlink>1||info.size>256*1024)throw new Error('Routing settings are unsafe.');previous=JSON.parse(readFileSync(path,'utf8'));}catch(error){if(error.code!=='ENOENT')throw error;}
+  const previous=routingSettings(configDirectory);
   const enabled=enabledModels?[...new Set(enabledModels)]:[route.model];
-  let policy=defaultModelPolicy();
+  const policy=privateModelPolicy(configDirectory);
   const policyPath=join(dir,'model-policy.json');
-  if(existsSync(policyPath)){const info=lstatSync(policyPath);if(!info.isFile()||info.isSymbolicLink()||info.nlink>1||info.size>4*1024*1024)throw new Error('Model policy is unsafe.');policy=JSON.parse(readFileSync(policyPath,'utf8'));if(!policy.models||typeof policy.models!=='object')throw new Error('Model policy is invalid.');}
   for(const descriptor of listDesktopProviderDescriptors(extra))for(const entry of descriptor.routes){
     if(entry.selectable===false)continue;
-    if(!policy.models[entry.id])policy.models[entry.id]={provider:entry.provider,model_id:entry.modelId,tier:'standard',enabled:false,native_tool_use:entry.capabilities?.tools===true,
+    if(!policy.models[entry.id])policy.models[entry.id]={provider:entry.provider,model_id:entry.modelId,tier:'standard',enabled:false,
+      ...(entry.source==='manual'?{}:{native_tool_use:entry.capabilities?.tools===true}),
       ...(Number.isFinite(entry.contextWindow)?{context_window:entry.contextWindow}:{}),
       ...(Number.isFinite(entry.inputPrice)?{estimated_cost_per_1m_input:entry.inputPrice}:{}),
       ...(Number.isFinite(entry.outputPrice)?{estimated_cost_per_1m_output:entry.outputPrice}:{})};
     if(entry.provider===provider){
       if(policy.models[entry.id].provider!==provider||policy.models[entry.id].model_id!==entry.modelId)throw new Error('Saved model policy conflicts with the selected provider identity.');
+      if(entry.source==='manual')policy.models[entry.id].desktop_manual=true;
       policy.models[entry.id].enabled=enabled.includes(entry.id);
     }
   }

@@ -28,7 +28,7 @@ setTimeout(()=>process.exit(2),30000).unref();`);
     await writeFile(bootstrap,`const {app,dialog}=require('electron');dialog.showErrorBox=(title,message)=>{console.error(title+': '+message);app.quit();};import(${JSON.stringify(new URL('../native/main.mjs',import.meta.url).href)}).catch(error=>{console.error(error);app.quit();});`);
     saveProviderRoute({configDirectory:config,provider:'openrouter',model:'deepseek-v4-pro-openrouter'});
     const env={};
-    for(const name of ['PATH','SystemRoot','WINDIR','TEMP','TMP','LOCALAPPDATA','APPDATA','USERPROFILE','HOME','COMSPEC','PATHEXT'])if(process.env[name])env[name]=process.env[name];
+    for(const name of ['PATH','SystemRoot','WINDIR','TEMP','TMP','LOCALAPPDATA','APPDATA','USERPROFILE','HOME','COMSPEC','PATHEXT','DISPLAY','XAUTHORITY'])if(process.env[name])env[name]=process.env[name];
     env.BABEL_RUNS_DIR=join(profile,'engine','state','runs');
     application=await _electron.launch({executablePath:process.env.BABEL_TEST_ELECTRON_EXECUTABLE,args:[bootstrap,`--profile-dir=${profile}`],env,timeout:20000});
     const page=await application.firstWindow();
@@ -166,7 +166,7 @@ process.stdout.write(JSON.stringify({type:'run_complete',result:{session_id:'con
     await writeFile(bootstrap,`const {app,dialog}=require('electron');dialog.showErrorBox=()=>app.exit(2);import(${JSON.stringify(new URL('../native/main.mjs',import.meta.url).href)}).catch(()=>app.exit(2));`);
     saveProviderRoute({configDirectory:config,provider:'openrouter',model:'deepseek-v4-pro-openrouter'});
     const env={};
-    for(const name of ['PATH','SystemRoot','WINDIR','TEMP','TMP','LOCALAPPDATA','APPDATA','USERPROFILE','HOME','COMSPEC','PATHEXT'])if(process.env[name])env[name]=process.env[name];
+    for(const name of ['PATH','SystemRoot','WINDIR','TEMP','TMP','LOCALAPPDATA','APPDATA','USERPROFILE','HOME','COMSPEC','PATHEXT','DISPLAY','XAUTHORITY'])if(process.env[name])env[name]=process.env[name];
     env.BABEL_RUNS_DIR=join(profile,'engine','state','runs');
     application=await _electron.launch({executablePath:process.env.BABEL_TEST_ELECTRON_EXECUTABLE,args:[bootstrap,`--profile-dir=${profile}`],env,timeout:20000});
     const page=await application.firstWindow();

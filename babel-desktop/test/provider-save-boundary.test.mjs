@@ -16,6 +16,24 @@ import {execFileSync} from 'node:child_process';
 
 const FIXTURE_VALUE = 'BabelTestCredentialPlaceholder0000';
 
+test('manual route identity conflicts and invalid defaults fail before credential mutation',async()=>{
+  const config=mkdtempSync(join(tmpdir(),'babel-manual-save-boundary-'));
+  try{
+    const valid={provider:'openrouter',model:'openrouter/vendor/manual',manualModelId:'vendor/manual',enabledModels:['openrouter/vendor/manual'],apiKey:FIXTURE_VALUE,scope:'private',configDirectory:config};
+    for(const change of [{manualModelId:'bad model'},{manualModelId:'x'.repeat(201)},{provider:'deepseek'},{model:'command-code/vendor/manual'},{enabledModels:[]},{enabledModels:['openrouter/missing'] }]){
+      await assert.rejects(()=>save({...valid,...change}));
+      assert.equal(existsSync(join(config,'desktop-credentials.json')),false);
+    }
+    writeFileSync(join(config,'model-policy.json'),JSON.stringify({models:{[valid.model]:{provider:'deepseek',model_id:'different',enabled:true}}}));
+    await assert.rejects(()=>save(valid),/conflict/i);
+    assert.equal(existsSync(join(config,'desktop-credentials.json')),false);
+    writeFileSync(join(config,'model-policy.json'),JSON.stringify({models:{}}));
+    writeFileSync(join(config,'desktop-routing.json'),'{invalid');
+    await assert.rejects(()=>save(valid));
+    assert.equal(existsSync(join(config,'desktop-credentials.json')),false);
+  }finally{rmSync(config,{recursive:true,force:true});}
+});
+
 test('route-only scope changes load the chosen existing credential and clear prior opt-in', async () => {
   const root = mkdtempSync(join(tmpdir(), 'babel-provider-scope-'));
   const project = join(root, 'project');

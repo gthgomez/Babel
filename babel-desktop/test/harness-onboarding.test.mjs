@@ -6,7 +6,7 @@ import {chromium} from 'playwright';
 const html = readFileSync(new URL('../dist/index.html', import.meta.url), 'utf8');
 
 test('Setup prepares or validates a sandbox and keeps execution blocked after a failed check',async()=>{
-  const browser=await chromium.launch({headless:true});
+  const browser=await chromium.launch({headless:true,executablePath:process.env.CHROMIUM_EXECUTABLE});
   try{
     const page=await browser.newPage();
     await page.evaluate(()=>{
@@ -43,7 +43,7 @@ test('Setup prepares or validates a sandbox and keeps execution blocked after a 
 });
 
 test('Go permits Chat and explains unavailable pipeline modes before sending',async()=>{
-  const browser=await chromium.launch({headless:true});
+  const browser=await chromium.launch({headless:true,executablePath:process.env.CHROMIUM_EXECUTABLE});
   try{
     const page=await browser.newPage();
     await page.evaluate(()=>{
@@ -61,7 +61,7 @@ test('Go permits Chat and explains unavailable pipeline modes before sending',as
 });
 
 test('Setup Done and Recheck preserve the active same-project mode and completed transcript',async()=>{
-  const browser=await chromium.launch({headless:true});
+  const browser=await chromium.launch({headless:true,executablePath:process.env.CHROMIUM_EXECUTABLE});
   try{
     const page=await browser.newPage();const errors=[];page.on('pageerror',error=>errors.push(error.message));
     await page.evaluate(()=>{
@@ -85,7 +85,7 @@ test('Setup Done and Recheck preserve the active same-project mode and completed
 });
 
 test('first project onboarding loads its files and switching roots starts a new CLI chat',async()=>{
-  const browser=await chromium.launch({headless:true});
+  const browser=await chromium.launch({headless:true,executablePath:process.env.CHROMIUM_EXECUTABLE});
   try{
     const page=await browser.newPage();const errors=[];page.on('pageerror',error=>errors.push(error.message));
     await page.evaluate(()=>{
@@ -114,7 +114,7 @@ test('first project onboarding loads its files and switching roots starts a new 
 });
 
 test('native startup is a real harness and provider save makes the selected route usable', async () => {
-  const browser = await chromium.launch({headless:true});
+  const browser = await chromium.launch({headless:true,executablePath:process.env.CHROMIUM_EXECUTABLE});
   try {
     const page = await browser.newPage({viewport:{width:1280,height:800}});
     const errors=[];page.on('pageerror',error=>errors.push(error.message));
@@ -164,7 +164,7 @@ test('native startup is a real harness and provider save makes the selected rout
 });
 
 test('native missing project explains setup without any simulated conversation or model choices', async () => {
-  const browser = await chromium.launch({headless:true});
+  const browser = await chromium.launch({headless:true,executablePath:process.env.CHROMIUM_EXECUTABLE});
   try {
     const page=await browser.newPage();
     await page.evaluate(()=>{window.babelDesktop={getInfo:async()=>({packaged:true,ready:false,officialCliReady:true,projectName:null,diagnostics:{ready:true}}),listSessions:async()=>({sessions:[]}),readProviderRoute:async()=>null,onEvent(){}};});
@@ -179,7 +179,7 @@ test('native missing project explains setup without any simulated conversation o
 });
 
 test('a real CLI terminal review result renders safely and releases the composer on exit',async()=>{
-  const browser=await chromium.launch({headless:true});
+  const browser=await chromium.launch({headless:true,executablePath:process.env.CHROMIUM_EXECUTABLE});
   try {
     const page=await browser.newPage(),errors=[];page.on('pageerror',error=>errors.push(error.message));
     await page.evaluate(()=>{

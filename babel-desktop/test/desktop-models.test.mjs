@@ -6,6 +6,38 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {qualifiedProviders,saveProviderRoute,readProviderRoute} from '../native/provider-routing.mjs';
 import * as routing from '../native/provider-routing.mjs';
+import {execFileSync} from 'node:child_process';
+
+test('manual OpenRouter and Command Code IDs persist outside discovery with honest unknown metadata',async()=>{
+  const config=mkdtempSync(join(tmpdir(),'babel-manual-models-'));
+  try{
+    for(const provider of ['openrouter','command-code']){
+      const manualModelId='Vendor/Unlisted-Case',model=`${provider}/${manualModelId}`;
+      saveProviderRoute({configDirectory:config,provider,model,manualModelId,enabledModels:[model]});
+      assert.deepEqual(readProviderRoute(config),{provider,model});
+      await routing.refreshModelCatalog({configDirectory:config,provider:'openrouter',fetchImpl:async()=>({ok:true,text:async()=>JSON.stringify({data:[]})})});
+      const saved=qualifiedProviders(config).find(p=>p.id===provider);
+      const entry=saved.routes.find(m=>m.id===model);
+      assert.equal(saved.defaultModel,model);assert.equal(entry.enabled,true);
+      assert.equal(entry.source,'manual');assert.equal(entry.qualification,'unverified');
+      assert.equal(entry.modelId,manualModelId);assert.equal(entry.inputPrice,undefined);
+      assert.equal(entry.contextWindow,undefined);assert.equal(entry.capabilities,undefined);
+      const policy=JSON.parse(readFileSync(join(config,'model-policy.json'),'utf8')).models[model];
+      assert.equal(policy.native_tool_use,undefined);assert.equal(policy.enabled,true);
+      assert.equal(JSON.parse(readFileSync(join(config,'desktop-model-catalog.json'),'utf8')).models.some(m=>m.id===model),false);
+      const secondId='Vendor/Second',second=`${provider}/${secondId}`;
+      saveProviderRoute({configDirectory:config,provider,model:second,manualModelId:secondId,enabledModels:[second]});
+      const restarted=JSON.parse(execFileSync(process.execPath,['--input-type=module','-e',`import {qualifiedProviders,readProviderRoute} from ${JSON.stringify(new URL('../native/provider-routing.mjs',import.meta.url).href)}; const config=process.argv[1]; console.log(JSON.stringify({route:readProviderRoute(config),provider:qualifiedProviders(config).find(p=>p.id===${JSON.stringify(provider)})}));`,config],{encoding:'utf8'}));
+      assert.deepEqual(restarted.route,{provider,model:second});
+      assert.equal(restarted.provider.defaultModel,second);
+      assert.equal(restarted.provider.routes.find(m=>m.id===model).enabled,false);
+      assert.equal(restarted.provider.routes.find(m=>m.id===second).enabled,true);
+      saveProviderRoute({configDirectory:config,provider,model,enabledModels:[model]});
+    }
+    const openrouter=qualifiedProviders(config).find(p=>p.id==='openrouter');
+    assert.equal(openrouter.defaultModel,'openrouter/Vendor/Unlisted-Case');
+  }finally{rmSync(config,{recursive:true,force:true});}
+});
 
 test('public catalog byte ceiling cancels streaming before EOF and leaves no cache',async()=>{
   const config=mkdtempSync(join(tmpdir(),'babel-model-stream-limit-'));

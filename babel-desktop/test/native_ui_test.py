@@ -1,8 +1,41 @@
 """Renderer integration with an explicit native API test double, not Electron or a real model."""
 import json, os, shutil
 from pathlib import Path
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import sync_playwright, expect
 ROOT=Path(__file__).resolve().parents[1]
+
+def check_manual_models(page):
+    page.evaluate('''() => {
+      window.__manualSaves=[];
+      window.babelDesktop.listQualifiedProviders=async()=>[
+        {id:'openrouter',label:'OpenRouter',requiresApiKey:true,manualModels:true,routes:[]},
+        {id:'command-code',label:'Command Code',requiresApiKey:true,manualModels:true,catalogRefresh:false,routes:[]}
+      ];
+      window.babelDesktop.readProviderRoute=async()=>({provider:'openrouter',model:'openrouter/vendor/saved'});
+      window.babelDesktop.refreshDiagnostics=async()=>({cliName:'index.js',projectName:'fixture-project',ready:true});
+      window.babelDesktop.saveProviderRoute=async options=>{
+        window.__manualSaves.push(options);
+        return {route:{provider:options.provider,model:options.model},credentialUpdated:false};
+      };
+    }''')
+    for provider in ['openrouter','command-code']:
+        page.locator('[data-action="settings"]').click()
+        page.locator('[data-action="configure-provider"]').click()
+        page.locator('#credential-provider').select_option(provider)
+        page.locator('#credential-model-source').select_option('manual')
+        assert page.locator('#manual-model-fields').is_visible()
+        assert 'Unverified model' in page.locator('#manual-model-fields').inner_text()
+        assert page.locator('#credential-model').is_disabled()
+        page.locator('#credential-manual-model').fill('Vendor/Unlisted-Case')
+        page.locator('[data-action="save-provider-credential"]').click()
+        page.locator('#dialog').wait_for(state='hidden')
+        saved=page.evaluate('window.__manualSaves.at(-1)')
+        assert saved['provider']==provider
+        assert saved['model']==provider+'/Vendor/Unlisted-Case'
+        assert saved['manualModelId']=='Vendor/Unlisted-Case'
+        assert saved['model'] in saved['enabledModels']
+        assert saved['apiKey']==''
+    return 'manual ID UI submits exact provider-bound unverified routes without a credential value'
 
 def main():
     checks=[]; errors=[]
@@ -46,7 +79,7 @@ def main():
         emit('stale-run',kind='event',event={'type':'assistant_chunk','chunk':'SHOULD NOT APPEAR'})
         emit(run_id,kind='event',event={'type':'assistant_chunk','chunk':'Streamed fixture text.'})
         assert 'SHOULD NOT APPEAR' not in page.locator('#conversation').inner_text()
-        assert 'Streamed fixture text.' in page.locator('#conversation').inner_text()
+        expect(page.locator('#conversation')).to_contain_text('Streamed fixture text.')
         emit(run_id,kind='event',event={'type':'run_complete','result':{}})
         assert page.locator('#main-status').inner_text()=='Finishing'
         assert page.locator('#send-button').is_disabled()
@@ -87,6 +120,7 @@ def main():
         page.locator('#dialog [data-action="close-dialog"].button').click()
         assert page.locator('#dialog').is_hidden()
         checks.append('provider dialog can cancel without saving')
+        checks.append(check_manual_models(page))
         page.evaluate('''() => {
           window.__sessionCalls = [];
           window.__openCalls = [];
@@ -129,25 +163,53 @@ def main():
         page.wait_for_function("document.querySelector('#preview-badge').textContent === 'BABEL CLI'")
         page.locator('button.session-button[data-action="session"]', has_text='Paged chat').click()
         conv = page.locator('#conversation')
-        assert 'm-159' in conv.inner_text()
-        assert 'm-009' not in conv.inner_text()
+        expect(conv).to_contain_text('m-159')
+        expect(conv).not_to_contain_text('m-009')
         page.locator('[data-action="load-older-messages"]').click()
-        assert 'm-009' in conv.inner_text()
-        assert 'm-159' not in conv.inner_text()
+        expect(conv).to_contain_text('m-009')
+        expect(conv).not_to_contain_text('m-159')
         page.locator('[data-action="load-latest-messages"]').click()
-        assert 'm-159' in conv.inner_text()
+        expect(conv).to_contain_text('m-159')
         page.locator('[data-action="load-older-messages"]').click()
+        expect(conv).to_contain_text('m-009')
         page.locator('button.session-button[data-action="session"]', has_text='Paged chat').click()
-        assert 'm-159' in conv.inner_text()
+        # Session selection restores the retained reading window; Latest is explicit.
+        expect(conv).to_contain_text('m-009')
+        expect(conv).not_to_contain_text('m-159')
+        assert page.evaluate('window.__openCalls.at(-1).olderOffset') == 150
+        page.locator('[data-action="load-latest-messages"]').click()
+        expect(conv).to_contain_text('m-159')
         assert page.evaluate('window.__openCalls.at(-1).olderOffset') == 0
         page.locator('#show-more').click()
         assert page.evaluate('window.__sessionCalls.some(call => call.offset === 1)') is True
         assert page.locator('#show-more').is_visible()
         assert 'Show less' in page.locator('#show-more').inner_text()
-        checks.append('saved-chat paging requests offsets and latest→older→latest navigation stays readable')
+        checks.append('saved-chat paging retains the reading window and returns to latest on explicit request')
         assert not errors,errors
         browser.close()
     report={'passed':len(checks),'basis':'Native API test double; not a real Babel or Electron execution','checks':checks,'errors':errors}
     (ROOT/'artifacts/native-ui-test-results.json').write_text(json.dumps(report,indent=2))
     print(json.dumps(report,indent=2))
-if __name__=='__main__':main()
+
+def manual_models_only():
+    errors=[]
+    with sync_playwright() as p:
+        browser=p.chromium.launch(executable_path=os.environ.get('CHROMIUM_EXECUTABLE') or shutil.which('chromium'),headless=True,args=['--no-sandbox'])
+        page=browser.new_page(viewport={'width':1536,'height':1024})
+        page.on('pageerror',lambda error:errors.append(str(error)))
+        page.evaluate("""() => { window.babelDesktop={
+          getInfo:async()=>({cliName:'index.js',projectName:'fixture-project',ready:true}),
+          readProviderRoute:async()=>({provider:'openrouter',model:'fixture-route'}),
+          listDirectory:async()=>[],onEvent:()=>{},run:async()=>({started:true})
+        }; }""")
+        page.set_content((ROOT/'dist/index.html').read_text())
+        page.wait_for_function("() => document.querySelector('#preview-badge').textContent === 'BABEL CLI'")
+        check=check_manual_models(page)
+        assert not errors,errors
+        browser.close()
+    report={'passed':1,'basis':'Chromium renderer with native API double; no Electron or provider execution','checks':[check],'errors':errors}
+    print(json.dumps(report,indent=2))
+
+if __name__=='__main__':
+    import sys
+    manual_models_only() if '--manual-models-only' in sys.argv else main()
