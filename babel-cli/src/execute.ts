@@ -79,6 +79,7 @@ import {
 } from './modelPolicy.js';
 import { loadModelPolicyConfig } from './modelPolicy.js';
 import { randomUUID } from 'node:crypto';
+import { getExecutionContext } from './agent/executionContext.js';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import {
   globalCostTracker,
@@ -961,6 +962,11 @@ async function runWaterfall<T>(
   onUsageRecorded?: (metadata: RunnerInvocationMetadata) => void,
   usageAttribution?: Pick<UsageAttribution, 'taskOwnerId' | 'parentTaskOwnerId' | 'projectRoot' | 'projectRootVersion'>,
 ): Promise<WaterfallRunResult<T>> {
+  // Capture the parent's external cell gate once. All tiers/retries retain the
+  // same boundary; child task-cost attribution remains independently owned.
+  const campaignContext = getExecutionContext();
+  const campaignMeter = campaignContext?.campaignMeter;
+  const campaignRunControl = campaignContext?.campaignRunControl;
   const verboseFallbackLogs =
     process.env['BABEL_VERBOSE_WATERFALLS'] === 'true' || !evidence;
   const startedAtMs = Date.now();
@@ -1098,6 +1104,8 @@ async function runWaterfall<T>(
         );
 
         const runnerCallbacks: RunnerCallbacks = {
+          ...(campaignMeter ? { campaignMeter } : {}),
+          ...(campaignMeter && campaignRunControl ? { runControl: campaignRunControl } : {}),
           onInvocationPhase: (event) => {
             if (event.phase !== 'request_dispatched' || !usageAttribution) return;
             dispatchedChargeId = `${usageAttribution.taskOwnerId}:${label}:${++usageAttempt}:${randomUUID()}`;
