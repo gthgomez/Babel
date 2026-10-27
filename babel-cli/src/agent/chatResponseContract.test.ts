@@ -32,8 +32,27 @@ test('mandatory deferral excludes completed answers, examples and hypothetical r
   ]) assert.equal(requestsRequiredUserDecision(answer), false, answer)
 })
 
-for (const scenario of ['json_format', 'deferred_choice'] as const)
+test('standalone product-choice questions do not require a stock deferral preface', () => {
+  for (const answer of [
+    'Should invalid rows be skipped or fail the export?',
+    'Which date format should the export use?',
+    '> **Do you want invalid rows skipped or treated as an error?**',
+  ]) assert.equal(requestsRequiredUserDecision(answer), true, answer)
+  for (const answer of [
+    'I implemented the fix. Should invalid rows be skipped or fail the export?',
+    'Would you like more improvements?',
+    'What is 2 + 2?',
+    'Which files changed?',
+    'What is the current status?',
+    'Should I summarize the findings?',
+    '> The document asks: Should invalid rows be skipped or fail the export?',
+    '```\nShould invalid rows be skipped or fail the export?\n```',
+  ]) assert.equal(requestsRequiredUserDecision(answer), false, answer)
+})
+
+for (const scenario of ['json_format', 'deferred_choice', 'plain_choice', 'alternative_choice'] as const)
 test(`response contract ${scenario} settles without speculative continuation`, async t => {
+  const isChoice = scenario !== 'json_format'
   const root = mkdtempSync(join(tmpdir(), 'chat-response-contract-'))
   const names = ['BABEL_NATIVE_TOOLS', 'BABEL_EXECUTION_PROFILE', 'BABEL_BENCHMARK_DOCKER_IMAGE',
     'BABEL_DOCKER_DISABLE', 'BABEL_ALLOW_HOST_FALLBACK', 'BABEL_BENCHMARK_DOCKER_EXTRA_ARGS'] as const
@@ -66,7 +85,11 @@ test(`response contract ${scenario} settles without speculative continuation`, a
     return { exit_code: 0, stdout: '# tests 1\n# pass 1\n# fail 0\n# skipped 0\n', stderr: '' }
   })
   const payload = '{\n  "value": 1\n}\n'
-  const clarification = "I'm not editing yet because the requested direction is unspecified. What I need from you:\n\n> Which direction should I implement?"
+  const clarification = scenario === 'plain_choice'
+    ? 'Should invalid rows be skipped or fail the export?'
+    : scenario === 'alternative_choice'
+      ? 'Which date format should the export use?'
+      : "I'm not editing yet because the requested direction is unspecified. What I need from you:\n\n> Which direction should I implement?"
   class Runner extends DeepInfraApiRunner {
     turns = 0
     constructor() { super('fixture-model', 'UNUSED_FIXTURE_KEY', {}, { explicitCredential: '', env: {} }) }
@@ -75,11 +98,11 @@ test(`response contract ${scenario} settles without speculative continuation`, a
       if (this.turns === 1) {
         yield { type: 'tool_use', id: 'inspect-example', name: 'read_file', input: { path: 'example.js' } }
         yield { type: 'done', finishReason: 'tool_calls' }
-      } else if (scenario === 'deferred_choice' && this.turns === 2) {
+      } else if (isChoice && this.turns === 2) {
         yield { type: 'tool_use', id: 'baseline-verifier', name: 'test_run', input: { command: 'npm test' } }
         yield { type: 'done', finishReason: 'tool_calls' }
       } else {
-        if (this.turns > (scenario === 'deferred_choice' ? 3 : 2))
+        if (this.turns > (isChoice ? 3 : 2))
           throw new Error('A valid final answer must not prompt speculative continuation')
         for (const text of scenario === 'json_format' ? ['```json\n', payload, '```'] : [clarification])
           yield { type: 'text_delta', text }
@@ -93,8 +116,8 @@ test(`response contract ${scenario} settles without speculative continuation`, a
   let streamedAnswer=''
   const result = await engine.submitMessage(task, {onAnswerChunk:chunk=>{streamedAnswer+=chunk}})
   assert.equal(result.answer, scenario === 'json_format' ? payload : clarification)
-  assert.equal(runner.turns, scenario === 'deferred_choice' ? 3 : 2)
-  if (scenario === 'deferred_choice') {
+  assert.equal(runner.turns, isChoice ? 3 : 2)
+  if (isChoice) {
     assert.equal(result.outcome, 'NEEDS_HUMAN_DECISION')
     assert.equal(result.status, 'blocked')
     assert.equal(verifiers, 1, JSON.stringify(result.toolCalls))
