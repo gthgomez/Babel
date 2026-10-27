@@ -19,6 +19,8 @@
 
 import { CAPABILITY_KINDS, type CapabilityId } from './capabilities.js';
 import { parseCommandArgv } from '../utils/commandArgv.js';
+import { literalSearchFileOperands } from './literalSearch.js';
+import { isCredentialTargetPath } from './protectedPath.js';
 import {
   classifyExecutionRisk,
   classifyGitExecutionRisk,
@@ -744,6 +746,20 @@ function decodeHostDevice(tokens: string[]): DecodedCommand | null {
 
 function decodeNonGit(tokens: string[], raw: string, original: string): DecodedCommand {
   const base = tokens[0]?.toLowerCase() ?? '';
+
+  // Only a direct, bounded rg invocation may treat its patterns as data.
+  // Actual file operands retain the credential boundary; wrappers never use
+  // this exception because unwrapping can discard quoting semantics.
+  const searchFiles = raw === original.trim() ? literalSearchFileOperands(raw) : null;
+  if (searchFiles) {
+    if (searchFiles.some((path) =>
+      isCredentialTargetPath(path) ||
+      path.replace(/\\/g, '/').toLowerCase().split('/').includes('.aws') ||
+      CREDENTIAL_PATH_RE.test(`rg ${path}`))) {
+      return cmd('expose_credentials', 'credential_access');
+    }
+    return cmd('run_local_command', 'unrecognized');
+  }
 
   // Credential reads: merged tool list + credential-path reference.
   if (isCredentialExposureCommand(raw)) {

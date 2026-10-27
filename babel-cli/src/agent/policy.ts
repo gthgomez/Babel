@@ -1,3 +1,4 @@
+import { literalSearchFileOperands } from '../authority/literalSearch.js';
 import type { ExecutionProfileName } from '../config/executionProfiles.js';
 import type { AgentAction } from './actions.js';
 import type { LiteSessionVerb } from './contracts.js';
@@ -63,6 +64,7 @@ export function decideAction(action: AgentAction, preset: PermissionPreset): Per
   }
   if (
     action.type === 'run_command' &&
+    literalSearchFileOperands(action.command) === null &&
     /\b(curl|wget|npm\s+install|pnpm\s+add|yarn\s+add)\b/i.test(action.command)
   ) {
     const decision = preset === 'auto_safe' ? ('ask' as const) : ('deny' as const);

@@ -8,6 +8,7 @@
  */
 
 import { parseCommandArgv } from '../utils/commandArgv.js';
+import { searchRequiresIsolation } from './literalSearch.js';
 
 export type ExecutionRisk = 'intrinsic' | 'project_code' | 'container_only' | 'forbidden';
 
@@ -524,6 +525,9 @@ export function classifyExecutionRisk(
   if (envWrapped) return envWrapped;
   const base = normalizeExecutionBase(tokens[0] ?? '');
   if (base === 'git') return classifyGitExecutionRisk(tokens, opts.repoRoot);
+  if (searchRequiresIsolation(trimmed)) {
+    return { base, executionRisk: 'project_code', effectFamily: 'compiler_or_build', reason: 'search_external_helper' };
+  }
   const found = COMMAND_SPECS[base];
   if (!found) {
     return { base, executionRisk: 'forbidden', effectFamily: 'none', reason: 'unclassified_executable' };
