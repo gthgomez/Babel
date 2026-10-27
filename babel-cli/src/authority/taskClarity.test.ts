@@ -207,3 +207,68 @@ test('evaluateSessionTaskGate: merge it with #88/#90 → clarification; producti
   });
   assert.equal(deploy.kind, 'deny');
 });
+
+
+for (const prohibition of [
+  'Do not commit, push, change credentials/security settings, or make unrelated edits.',
+  'Do not commit or push.',
+  "Don't commit and push.",
+  'Never commit, or push.',
+  'Do not commit and do not push.',
+]) {
+  test(`coding request retains a coordinated publication prohibition: ${prohibition}`, () => {
+    assert.equal(resolveHumanEscalation({
+      task: `Fix the glob feedback and run its existing tests. ${prohibition}`,
+      allowedCapabilities: CODING,
+    }).kind, 'autonomous');
+  });
+}
+for (const task of [
+  'Commit and push this feature branch.',
+  'Push this feature branch.',
+  'Do not commit, but push this feature branch.',
+  'Do not commit or push. Then commit and push the fix.',
+  'Commit and push the fix. Do not commit or push unrelated changes.',
+  'Do not commit unless tests pass, then push this feature branch.',
+]) {
+  test(`publication still requires publication authority: ${task}`, () => {
+    const result = resolveHumanEscalation({ task, allowedCapabilities: CODING });
+    assert.equal(result.kind, 'deny');
+    assert.equal(result.reasonCode, 'DENY_MISSING_AUTHORITY');
+  });
+}
+
+
+for (const task of [
+  'Explain this example: "Commit and push this feature branch." Do not execute it.',
+  "Describe the phrase 'commit and push this feature branch' in plain English.",
+  'Review this command: `commit and push this feature branch` for risks.',
+  'Fix the parser. Explain this example: "commit and push this feature branch"; leave changes local.',
+  'Explain this example: "If tests pass, commit and push this feature branch."',
+  'Explain this example: "commit and push this feature branch". Do not run the quoted command.',
+  'Fix the parser and run tests. Explain this example: "commit and push this feature branch".',
+  'Explain this example: "commit and push this feature branch". Run tests on the parser.',
+  'Explain this example: "commit and push this feature branch". Do not run any commands.',
+  'Explain this example: "commit and push this feature branch". Execute this test.',
+]) {
+  test(`publication examples are information, not requested actions: ${task}`, () => {
+    assert.equal(resolveHumanEscalation({ task, allowedCapabilities: CODING }).kind, 'autonomous');
+  });
+}
+for (const task of [
+  '"Commit and push this feature branch."',
+  'Run "commit and push this feature branch".',
+  'Explain this example: "commit and push this feature branch". Then commit and push this feature branch.',
+  'Explain this example: "commit and push this feature branch". Then execute it.',
+  'Explain this example: "commit and push this feature branch"; if tests pass, execute it.',
+  'Explain this example: "commit and push this feature branch" and then do it.',
+  'Do not commit or push. Explain this example: "commit and push". Then push this feature branch.',
+  'If tests pass, commit and push this feature branch.',
+  'Explain this example: "commit and push this feature branch". Then execute the above command.',
+  'Explain this example: "commit and push this feature branch". Then run the quoted command.',
+  'Explain this example: "commit and push this feature branch". Please carry it out.',
+]) {
+  test(`quoted context cannot hide affirmative publication: ${task}`, () => {
+    assert.equal(resolveHumanEscalation({ task, allowedCapabilities: CODING }).kind, 'deny');
+  });
+}

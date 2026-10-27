@@ -70,7 +70,27 @@ const MERGE_IT = /\bmerge\s+it\b/i;
 const DEPLOY_IT = /\bdeploy\s+it\b/i;
 const PR_MERGE_SIGNAL = /\b(pr|pull request|#\d+)\b/i;
 const CI_OR_TESTS = /\b(fix\s+(the\s+)?(failing\s+)?(ci|tests)|implement|refactor|choose the best)\b/i;
+// Remove only an unconditional coordinated publication prohibition. Mixed or
+// conditional directives remain subject to the existing authority check. This
+// intent projection never adds capabilities to the concrete-action lease.
+const NO_COMMIT_PUSH = /\b(?:do\s+not|don't|never)\s+commit\s*(?:,\s*(?:(?:and|or)\s+)?|\s+(?:and|or)\s+)(?:(?:do\s+not|don't|never)\s+)?push\b(?=\s*(?:$|[.;!?\n]|,\s*(?:change|modify|make|touch)\b))/gi;
 const COMMIT_PUSH = /\bcommit\b.*\bpush\b|\bpush\b.*\bfeature branch\b/i;
+
+/** Publication examples are data only when explicitly introduced as explanation.
+ * A later instruction to execute the quoted command keeps the original check.
+ * This intent projection grants no capability and changes no action-time PDP.
+ */
+function publicationIntentText(task: string): string {
+  const text = task.replace(NO_COMMIT_PUSH, '');
+  const projected = text.replace(/\b(?:explain|describe|review|analyze|discuss)\s+(?:(?:this|the|following|an?|quoted)\s+)*(?:example|phrase|text|snippet|command)\s*:?\s*(["'`])(?:\\.|(?!\1)[\s\S])*\1/gi, ' ');
+  const pronoun = '(?:it|that|this)';
+  const namedReference = String.raw`(?:the\s+(?:(?:above|quoted|preceding|same)\s+)*|(?:that|this)\s+)(?:example|command|operation)`;
+  const reference = String.raw`(?:${pronoun}(?=\s*(?:$|[.;!?,]|now\b|after\b|when\b|if\b|for\b|through\b))|${namedReference})`;
+  const execution = String.raw`(?:(?:run|execute|perform|do)\s+${reference}|carry\s+(?:${pronoun}|${namedReference})\s+out)\b`;
+  const references = projected.replace(new RegExp(String.raw`\b(?:do\s+not|don't|never)\s+${execution}`, 'gi'), ' ');
+  // Tests or other named actions are not an instruction to run the example.
+  return new RegExp(String.raw`\b${execution}`, 'i').test(references) ? text : projected;
+}
 
 function unique(values: readonly string[]): string[] {
   return [...new Set(values.filter((v) => v.trim() !== ''))];
@@ -254,7 +274,7 @@ export function resolveHumanEscalation(input: HumanEscalationInput): HumanEscala
     return { kind: 'autonomous', clarity };
   }
 
-  if (COMMIT_PUSH.test(task)) {
+  if (COMMIT_PUSH.test(publicationIntentText(task))) {
     if (!allowed.has('push_feature_branch') && !allowed.has('commit_ship_set')) {
       return { kind: 'deny', clarity, reasonCode: 'DENY_MISSING_AUTHORITY' };
     }
