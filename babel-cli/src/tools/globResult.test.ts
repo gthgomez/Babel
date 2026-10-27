@@ -4,16 +4,12 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 import { handleGlobTool } from './repoSearch.js'
-import { detectRipgrep, resetRipgrepDetection } from './ripgrep.js'
+import { resetRipgrepDetection } from './ripgrep.js'
 import { formatResultDetail } from '../agent/chatEngineSupport.js'
 import { formatRegisteredToolObservation } from '../agent/codingLoop/readArtifactExecutor.js'
 
 for (const fallback of [false, true]) {
-  test(`glob preserves structured filenames, counts and truncation (${fallback ? 'fallback' : 'ripgrep'})`, async (t) => {
-    if (!fallback && !detectRipgrep()) {
-      t.skip('ripgrep unavailable; exact extensionless filename coverage is not provided by the legacy text-only fallback')
-      return
-    }
+  test(`glob preserves structured filenames, counts and truncation (${fallback ? 'forced fallback' : 'automatic backend'})`, async () => {
     const root = mkdtempSync(join(tmpdir(), 'babel-glob-result-'))
     const previousRoot = process.env.BABEL_PROJECT_ROOT
     const previousPath = process.env.PATH
@@ -27,11 +23,10 @@ for (const fallback of [false, true]) {
       assert.equal(formatResultDetail(action, empty), '0 matches')
       assert.deepEqual(empty.glob_result, { paths: [], returned_count: 0, truncated: false })
       // The legacy pure-JS fallback enumerates recognized text extensions only.
-      const sentinel = fallback ? 'No paths matched..txt' : 'No paths matched.'
+      const sentinel = 'No paths matched..txt'
       writeFileSync(join(root, sentinel), 'synthetic')
       const one = await run()
       assert.equal(one.stdout, sentinel, 'legacy display remains compatible')
-      if (!fallback) assert.equal(one.stdout, empty.stdout, 'exact sentinel collision is preserved only in display')
       assert.equal(formatResultDetail(action, one), '1 matches')
       assert.deepEqual(one.glob_result, { paths: [sentinel], returned_count: 1, truncated: false })
       for (const name of ['a.ts', '数据.txt', ...(process.platform === 'win32' ? [] : ['line\nbreak.txt'])]) writeFileSync(join(root, name), 'synthetic')
