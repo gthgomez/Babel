@@ -11,8 +11,8 @@ for (const entrypoint of ['submitMessage', 'submitMessageStream'] as const) {
   test(`${entrypoint} sends real structured glob results in the next native request`, async () => {
     const root = mkdtempSync(join(tmpdir(), 'babel-glob-wire-'))
     const source = join(root, 'source'); mkdirSync(source)
-    writeFileSync(join(source, 'No paths matched.'), 'synthetic public fixture')
-    writeFileSync(join(source, '数据.csv'), 'synthetic public fixture')
+    writeFileSync(join(source, 'No paths matched..txt'), 'synthetic public fixture')
+    writeFileSync(join(source, '数据.txt'), 'synthetic public fixture')
     const environment = { BABEL_EXECUTION_PROFILE: 'read_only_audit', BABEL_READ_ONLY: 'true', BABEL_PROJECT_ROOT: source, BABEL_RUNS_DIR: join(root, 'runs'), BABEL_COMPACTION: 'off', BABEL_MEMORY_WRITEBACK: '0', BABEL_CHAT_TASK_CLASS: 'investigate' }
     const prior = Object.fromEntries(Object.keys(environment).map(key => [key, process.env[key]]))
     Object.assign(process.env, environment)
@@ -25,7 +25,7 @@ for (const entrypoint of ['submitMessage', 'submitMessageStream'] as const) {
         const line = results.find((message: any) => message.tool_call_id === 'glob-actual')?.content.split('\n').find((line: string) => line.startsWith('glob_result: '))
         assert.ok(line, 'CONTROL_GLOB_DATA_MUST_REACH_PROVIDER')
         const data = JSON.parse(line.slice('glob_result: '.length))
-        assert.deepEqual(data.paths, ['No paths matched.', '数据.csv'])
+        assert.deepEqual(data.paths, ['No paths matched..txt', '数据.txt'])
         assert.equal(data.returned_count, 2)
         assert.equal(data.truncated, false)
       }

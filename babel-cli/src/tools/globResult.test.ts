@@ -4,12 +4,16 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 import { handleGlobTool } from './repoSearch.js'
-import { resetRipgrepDetection } from './ripgrep.js'
+import { detectRipgrep, resetRipgrepDetection } from './ripgrep.js'
 import { formatResultDetail } from '../agent/chatEngineSupport.js'
 import { formatRegisteredToolObservation } from '../agent/codingLoop/readArtifactExecutor.js'
 
 for (const fallback of [false, true]) {
-  test(`glob preserves structured filenames, counts and truncation (${fallback ? 'fallback' : 'ripgrep'})`, async () => {
+  test(`glob preserves structured filenames, counts and truncation (${fallback ? 'fallback' : 'ripgrep'})`, async (t) => {
+    if (!fallback && !detectRipgrep()) {
+      t.skip('ripgrep unavailable; exact extensionless filename coverage is not provided by the legacy text-only fallback')
+      return
+    }
     const root = mkdtempSync(join(tmpdir(), 'babel-glob-result-'))
     const previousRoot = process.env.BABEL_PROJECT_ROOT
     const previousPath = process.env.PATH
