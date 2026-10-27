@@ -1,0 +1,699 @@
+/**
+ * Pure read-only filesystem path-list verifier (stage 1).
+ * Result is diagnostic only — not trusted completion evidence until stage 2 wiring.
+ *
+ * Inventory coverage compares the parsed target document to the **current** scoped
+ * inventory on disk. `baseline.inventory_snapshot` is capture metadata only and is
+ * not consulted during verification (no unchanged-since-baseline inventory evidence).
+ */
+import { createHash } from 'node:crypto'
+import {
+  closeSync,
+  existsSync,
+  fstatSync,
+  lstatSync,
+  openSync,
+  readFileSync,
+  readSync,
+  realpathSync,
+  readdirSync,
+} from 'node:fs'
+import { isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { sanitizePath } from '../cli/constants.js'
+import { isCredentialReadPath } from '../sandbox.js'
+import { isCredentialTargetPath } from './protectedPath.js'
+import {
+  declarationContentHash,
+  normalizeDeclarationRepoRelativePath,
+  normalizeRepoRelativePath,
+  type TrustedHostFilesystemPathListDeclarationV1,
+} from './trustedHostFilesystemPathList.js'
+
+export { normalizeDeclarationRepoRelativePath, normalizeRepoRelativePath } from './trustedHostFilesystemPathList.js'
+
+export type VerifierReadAttemptKind = 'read_file' | 'open_read'
+
+export interface VerifierReadAttemptV1 {
+  readonly absolute_path: string
+  readonly kind: VerifierReadAttemptKind
+}
+
+let verifierReadAttemptRecorder: ((attempt: VerifierReadAttemptV1) => void) | undefined
+
+/** Test-only hook: observe verifier read attempts after path admission. */
+export function setVerifierReadAttemptRecorder(
+  recorder: ((attempt: VerifierReadAttemptV1) => void) | undefined,
+): void {
+  verifierReadAttemptRecorder = recorder
+}
+
+function recordVerifierReadAttempt(absolutePath: string, kind: VerifierReadAttemptKind): void {
+  verifierReadAttemptRecorder?.({ absolute_path: absolutePath, kind })
+}
+
+export const FILESYSTEM_PATH_LIST_VERIFIER_RESULT_KIND =
+  'filesystem_path_list_verifier_result_v1' as const
+
+export const INVENTORY_VERIFICATION_EVIDENCE_MODE =
+  'current_document_vs_current_inventory' as const
+
+export type InventoryVerificationEvidenceMode = typeof INVENTORY_VERIFICATION_EVIDENCE_MODE
+
+export type ResolveStatus =
+  | 'ok'
+  | 'missing'
+  | 'escape'
+  | 'credential_denied'
+  | 'duplicate'
+  | 'malformed'
+  | 'symlink'
+
+export interface CheckOutcomeV1 {
+  status: 'pass' | 'fail' | 'skip'
+  reason_code?: string
+}
+
+export interface DeclaredEntryV1 {
+  declared_path: string
+  resolve_status: ResolveStatus
+}
+
+export interface FilesystemSourceBaselineV1 {
+  readonly schema_version: 1
+  readonly kind: 'filesystem_source_baseline_v1'
+  readonly declaration_hash: string
+  /** Canonical project root at capture; must match verifier `projectRoot`. */
+  readonly project_root_real: string
+  readonly captured_at: string
+  /** Content sha256 for preserved regular files at capture (literal paths only). */
+  readonly preserved: Readonly<Record<string, { kind: 'file'; content_sha256: string }>>
+  /**
+   * Repo-relative file paths under inventory scope at capture (sorted).
+   * Not used by `verifyFilesystemPathList` — diagnostic / stage-2 provenance only.
+   */
+  readonly inventory_snapshot: readonly string[]
+}
+
+export interface FilesystemPathListVerifierResultV1 {
+  readonly schema_version: 1
+  readonly kind: typeof FILESYSTEM_PATH_LIST_VERIFIER_RESULT_KIND
+  readonly status: 'passed' | 'failed' | 'unsupported'
+  readonly reason_code: string
+  readonly declaration_hash: string
+  readonly target_document: string
+  readonly inventory_evidence_mode: InventoryVerificationEvidenceMode
+  readonly checks: {
+    document_parseable: CheckOutcomeV1
+    all_entries_resolve: CheckOutcomeV1
+    no_duplicate_entries: CheckOutcomeV1
+    coverage_complete: CheckOutcomeV1
+    preserved_inputs_unchanged: CheckOutcomeV1
+  }
+  readonly entries: readonly DeclaredEntryV1[]
+  readonly inventory_extra_paths: readonly string[]
+  readonly inventory_missing_paths: readonly string[]
+  readonly preserved_drift_paths: readonly string[]
+  readonly inventory_scope_errors: readonly string[]
+}
+
+function posixRelative(root: string, absolute: string): string | null {
+  const rel = relative(root, absolute).replace(/\\/g, '/')
+  if (!rel || rel.startsWith('..') || rel.includes('/..')) return null
+  return rel
+}
+
+function projectRootReal(projectRoot: string): string {
+  return realpathSync.native(projectRoot)
+}
+
+function isContainedInRoot(rootReal: string, candidateReal: string): boolean {
+  const prefix = rootReal.endsWith(sep) ? rootReal : rootReal + sep
+  return candidateReal === rootReal || candidateReal.startsWith(prefix)
+}
+
+function isWithinProjectRootPath(root: string, candidate: string): boolean {
+  if (process.platform === 'win32') {
+    const rootNorm = root.toLowerCase()
+    const targetNorm = candidate.toLowerCase()
+    return targetNorm === rootNorm || targetNorm.startsWith(rootNorm + sep)
+  }
+  const prefix = root.endsWith(sep) ? root : root + sep
+  return candidate === root || candidate.startsWith(prefix)
+}
+
+function assertNoSymlinkAncestors(projectRoot: string, absolutePath: string, inputLabel: string): void {
+  const rel = relative(projectRoot, absolutePath)
+  if (rel.startsWith('..') || isAbsolute(rel)) {
+    throw new Error(
+      `FILESYSTEM_PATH_LIST_ADMISSION: path traversal denied for "${inputLabel}"`,
+    )
+  }
+  let current = projectRoot
+  for (const segment of rel.split(/[\\/]+/).filter(part => part.length > 0)) {
+    current = resolve(current, segment)
+    if (existsSync(current) && lstatSync(current).isSymbolicLink()) {
+      throw new Error(
+        `FILESYSTEM_PATH_LIST_ADMISSION: symlink ancestor "${segment}" on "${inputLabel}"`,
+      )
+    }
+  }
+}
+
+/**
+ * Stage-1 verifier path admission (not SafeExecutor). Aligns with sandbox credential
+ * policy via `isCredentialReadPath`; does not change sandbox callers.
+ */
+function admitVerifierProjectRelativePath(
+  projectRoot: string,
+  repoRelativePath: string,
+  kind: 'file' | 'directory',
+): string {
+  const trimmed = repoRelativePath.trim()
+  if (!trimmed) {
+    throw new Error('FILESYSTEM_PATH_LIST_ADMISSION: empty path')
+  }
+  const root = existsSync(projectRoot) ? realpathSync.native(projectRoot) : resolve(projectRoot)
+  if (existsSync(root) && lstatSync(root).isSymbolicLink()) {
+    throw new Error('FILESYSTEM_PATH_LIST_ADMISSION: project root is a symlink')
+  }
+  const absolute = resolve(root, sanitizePath(trimmed))
+  assertNoSymlinkAncestors(root, absolute, trimmed)
+  if (!existsSync(absolute)) {
+    throw new Error(`FILESYSTEM_PATH_LIST_ADMISSION: path not found "${trimmed}"`)
+  }
+  const stats = lstatSync(absolute)
+  if (stats.isSymbolicLink()) {
+    throw new Error(`FILESYSTEM_PATH_LIST_ADMISSION: symlink leaf "${trimmed}"`)
+  }
+  if (kind === 'file' && !stats.isFile()) {
+    throw new Error(`FILESYSTEM_PATH_LIST_ADMISSION: not a regular file "${trimmed}"`)
+  }
+  if (kind === 'directory' && !stats.isDirectory()) {
+    throw new Error(`FILESYSTEM_PATH_LIST_ADMISSION: not a directory "${trimmed}"`)
+  }
+  const real = realpathSync.native(absolute)
+  if (!isWithinProjectRootPath(root, real)) {
+    throw new Error(`FILESYSTEM_PATH_LIST_ADMISSION: resolves outside root "${trimmed}"`)
+  }
+  const resolvedRelative = relative(root, real).split(sep).join('/')
+  if (isCredentialReadPath(real) || isCredentialReadPath(resolvedRelative)) {
+    throw new Error(`FILESYSTEM_PATH_LIST_ADMISSION: credential read denied "${trimmed}"`)
+  }
+  return real
+}
+
+/** Parse markdown bullet paths from document bytes. */
+export function parseMarkdownBulletPaths(
+  text: string,
+  limits: TrustedHostFilesystemPathListDeclarationV1['limits'],
+): { ok: true; paths: string[] } | { ok: false; reason: string } {
+  const bytes = Buffer.byteLength(text, 'utf8')
+  if (bytes === 0) return { ok: false, reason: 'empty_document' }
+  if (bytes > limits.max_document_bytes) return { ok: false, reason: 'document_too_large' }
+  const paths: string[] = []
+  for (const line of text.split(/\r?\n/)) {
+    const trimmed = line.trim()
+    if (!trimmed || trimmed.startsWith('#')) continue
+    const match = trimmed.match(/^(?:[-*+]|\d+[.)])\s+(.+?)\s*$/)
+    if (!match) {
+      if (/^(?:[-*+]|\d+[.)])\s*$/.test(trimmed)) return { ok: false, reason: 'malformed_entry' }
+      continue
+    }
+    const payload = match[1]?.trim()
+    if (!payload) return { ok: false, reason: 'malformed_entry' }
+    const normalized = normalizeRepoRelativePath(payload)
+    if (!normalized) return { ok: false, reason: 'malformed_entry' }
+    paths.push(normalized)
+    if (paths.length > limits.max_entries) return { ok: false, reason: 'too_many_entries' }
+  }
+  if (paths.length === 0) return { ok: false, reason: 'no_entries' }
+  return { ok: true, paths }
+}
+
+function admissionErrorCode(message: string): string {
+  if (message.includes('credential read denied')) return 'credential_denied'
+  if (message.includes('symlink')) return 'symlink'
+  if (message.includes('path traversal denied') || message.includes('resolves outside root')) return 'escape'
+  if (message.includes('path not found')) return 'missing'
+  return 'path_denied'
+}
+
+function admitRepoRelativeFile(rootReal: string, repoRelative: string): { ok: true; real: string } | { ok: false; code: string } {
+  try {
+    return { ok: true, real: admitVerifierProjectRelativePath(rootReal, repoRelative, 'file') }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    return { ok: false, code: admissionErrorCode(message) }
+  }
+}
+
+function admitRepoRelativeDirectory(
+  rootReal: string,
+  repoRelative: string,
+): { ok: true; real: string } | { ok: false; code: string } {
+  try {
+    return { ok: true, real: admitVerifierProjectRelativePath(rootReal, repoRelative, 'directory') }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    return { ok: false, code: admissionErrorCode(message) }
+  }
+}
+
+function hashAdmittedFileContent(absolutePath: string): string {
+  recordVerifierReadAttempt(absolutePath, 'read_file')
+  return createHash('sha256').update(readFileSync(absolutePath)).digest('hex')
+}
+
+function readBoundedUtf8FileSync(absolutePath: string, maxBytes: number): { ok: true; text: string } | { ok: false; reason: string } {
+  let fd: number | undefined
+  try {
+    recordVerifierReadAttempt(absolutePath, 'open_read')
+    fd = openSync(absolutePath, 'r')
+    const st = fstatSync(fd)
+    if (!st.isFile()) return { ok: false, reason: 'target_not_regular_file' }
+    if (st.size > maxBytes) return { ok: false, reason: 'document_too_large' }
+    const buf = Buffer.alloc(st.size)
+    const read = readSync(fd, buf, 0, st.size, 0)
+    if (read !== st.size) return { ok: false, reason: 'target_document_unreadable' }
+    return { ok: true, text: buf.toString('utf8') }
+  } catch {
+    return { ok: false, reason: 'target_document_unreadable' }
+  } finally {
+    if (fd !== undefined) {
+      try {
+        closeSync(fd)
+      } catch {
+        // ignore
+      }
+    }
+  }
+}
+
+type InventoryListResult =
+  | { ok: true; files: string[] }
+  | { ok: false; errors: string[] }
+
+function validateScopeRoot(rootReal: string, scopeRoot: string): { ok: true; dirReal: string } | { ok: false; error: string } {
+  const normalized = normalizeDeclarationRepoRelativePath(scopeRoot)
+  if (!normalized) return { ok: false, error: `invalid_scope_root:${scopeRoot}` }
+  const admitted = admitRepoRelativeDirectory(rootReal, normalized)
+  if (!admitted.ok) {
+    const suffix =
+      admitted.code === 'missing'
+        ? `missing_scope_root:${normalized}`
+        : admitted.code === 'symlink'
+          ? `symlink_scope_root:${normalized}`
+          : `${admitted.code}_scope_root:${normalized}`
+    return { ok: false, error: suffix }
+  }
+  return { ok: true, dirReal: admitted.real }
+}
+
+function listScopedInventoryFiles(rootReal: string, scopeRoots: readonly string[]): InventoryListResult {
+  const inventory = new Set<string>()
+  const errors: string[] = []
+
+  for (const scopeRoot of scopeRoots) {
+    const validated = validateScopeRoot(rootReal, scopeRoot)
+    if (!validated.ok) {
+      errors.push(validated.error)
+      continue
+    }
+    const walk = (dirReal: string): boolean => {
+      for (const name of readdirSync(dirReal)) {
+        if (name === '.git') continue
+        const abs = join(dirReal, name)
+        let lst: ReturnType<typeof lstatSync>
+        try {
+          lst = lstatSync(abs)
+        } catch {
+          errors.push(`unreadable_inventory_entry:${join(scopeRoot, name)}`)
+          return false
+        }
+        if (lst.isSymbolicLink()) {
+          errors.push(`symlink_in_inventory_scope:${posixRelative(rootReal, abs) ?? name}`)
+          return false
+        }
+        let entryReal: string
+        try {
+          entryReal = realpathSync.native(abs)
+        } catch {
+          errors.push(`unreadable_inventory_entry:${name}`)
+          return false
+        }
+        if (!isContainedInRoot(rootReal, entryReal)) {
+          errors.push(`escape_inventory_entry:${name}`)
+          return false
+        }
+        const rel = posixRelative(rootReal, entryReal)
+        if (!rel || isCredentialTargetPath(rel)) continue
+        if (lst.isDirectory()) {
+          if (!walk(entryReal)) return false
+        } else if (lst.isFile()) {
+          inventory.add(rel)
+        }
+      }
+      return true
+    }
+    if (!walk(validated.dirReal)) {
+      // errors already recorded
+    }
+  }
+
+  if (errors.length > 0) return { ok: false, errors }
+  return { ok: true, files: [...inventory].sort() }
+}
+
+function resolveDeclaredPath(
+  rootReal: string,
+  declared: string,
+): { status: ResolveStatus; exists: boolean } {
+  if (isCredentialTargetPath(declared)) return { status: 'credential_denied', exists: false }
+  const admitted = admitRepoRelativeFile(rootReal, declared)
+  if (!admitted.ok) {
+    const status: ResolveStatus =
+      admitted.code === 'credential_denied'
+        ? 'credential_denied'
+        : admitted.code === 'symlink'
+          ? 'symlink'
+          : admitted.code === 'escape'
+            ? 'escape'
+            : 'missing'
+    return { status, exists: false }
+  }
+  return { status: 'ok', exists: true }
+}
+
+function validateTargetDocumentForRead(
+  rootReal: string,
+  targetDocument: string,
+): { ok: true; fileReal: string } | { ok: false; reason_code: string } {
+  const normalized = normalizeDeclarationRepoRelativePath(targetDocument)
+  if (!normalized || normalized !== targetDocument) {
+    return { ok: false, reason_code: 'target_document_invalid' }
+  }
+  if (isCredentialTargetPath(normalized)) {
+    return { ok: false, reason_code: 'target_document_credential_denied' }
+  }
+  const admitted = admitRepoRelativeFile(rootReal, normalized)
+  if (!admitted.ok) {
+    const reason_code =
+      admitted.code === 'missing'
+        ? 'target_document_missing'
+        : admitted.code === 'symlink'
+          ? 'target_document_symlink'
+          : admitted.code === 'escape'
+            ? 'target_document_escape'
+            : admitted.code === 'credential_denied'
+              ? 'target_document_credential_denied'
+              : 'target_document_invalid'
+    return { ok: false, reason_code }
+  }
+  return { ok: true, fileReal: admitted.real }
+}
+
+function capturePreservedFile(
+  rootReal: string,
+  selector: string,
+): { ok: true; rel: string; content_sha256: string } | { ok: false; error: string } {
+  const normalized = normalizeDeclarationRepoRelativePath(selector)
+  if (!normalized) return { ok: false, error: `invalid_preserved_selector:${selector}` }
+  const admitted = admitRepoRelativeFile(rootReal, normalized)
+  if (!admitted.ok) {
+    return { ok: false, error: `${admitted.code}_preserved:${normalized}` }
+  }
+  const rel = posixRelative(rootReal, admitted.real)
+  if (!rel || rel !== normalized) {
+    return { ok: false, error: `escape_preserved:${normalized}` }
+  }
+  return { ok: true, rel, content_sha256: hashAdmittedFileContent(admitted.real) }
+}
+
+/** Capture baselines from the actual filesystem (not declaration-embedded answers). */
+export function captureFilesystemSourceBaseline(
+  projectRoot: string,
+  declaration: TrustedHostFilesystemPathListDeclarationV1,
+): FilesystemSourceBaselineV1 {
+  const rootReal = projectRootReal(projectRoot)
+  const preserved: Record<string, { kind: 'file'; content_sha256: string }> = {}
+  for (const selector of declaration.preserved_input_selectors) {
+    const captured = capturePreservedFile(rootReal, selector)
+    if (!captured.ok) {
+      throw new Error(`FILESYSTEM_SOURCE_BASELINE_CAPTURE_FAILED: ${captured.error}`)
+    }
+    preserved[captured.rel] = { kind: 'file', content_sha256: captured.content_sha256 }
+  }
+  const inventory = listScopedInventoryFiles(rootReal, declaration.inventory_scope.roots)
+  if (!inventory.ok) {
+    throw new Error(`FILESYSTEM_SOURCE_BASELINE_CAPTURE_FAILED: ${inventory.errors.join(';')}`)
+  }
+  return Object.freeze({
+    schema_version: 1,
+    kind: 'filesystem_source_baseline_v1',
+    declaration_hash: declarationContentHash(declaration),
+    project_root_real: rootReal,
+    captured_at: new Date().toISOString(),
+    preserved: Object.freeze(preserved),
+    inventory_snapshot: Object.freeze(inventory.files),
+  })
+}
+
+function check(pass: boolean, reason: string): CheckOutcomeV1 {
+  return pass ? { status: 'pass' } : { status: 'fail', reason_code: reason }
+}
+
+function skip(reason: string): CheckOutcomeV1 {
+  return { status: 'skip', reason_code: reason }
+}
+
+function failedResult(
+  partial: Omit<FilesystemPathListVerifierResultV1, 'status' | 'reason_code'> & { reason_code: string },
+): FilesystemPathListVerifierResultV1 {
+  return Object.freeze({ ...partial, status: 'failed' })
+}
+
+function emptyChecksSkipped(reason: string): FilesystemPathListVerifierResultV1['checks'] {
+  return {
+    document_parseable: skip(reason),
+    all_entries_resolve: skip(reason),
+    no_duplicate_entries: skip(reason),
+    coverage_complete: skip(reason),
+    preserved_inputs_unchanged: skip(reason),
+  }
+}
+
+function failAllChecks(reason: string): FilesystemPathListVerifierResultV1['checks'] {
+  return {
+    document_parseable: check(false, reason),
+    all_entries_resolve: check(false, reason),
+    no_duplicate_entries: check(false, reason),
+    coverage_complete: check(false, reason),
+    preserved_inputs_unchanged: check(false, reason),
+  }
+}
+
+/** Pure verifier — result is not completion authority (stage 1). */
+export function verifyFilesystemPathList(
+  projectRoot: string,
+  declaration: TrustedHostFilesystemPathListDeclarationV1,
+  baseline: FilesystemSourceBaselineV1,
+): FilesystemPathListVerifierResultV1 {
+  const declaration_hash = declarationContentHash(declaration)
+  const inventory_evidence_mode = INVENTORY_VERIFICATION_EVIDENCE_MODE
+
+  if (baseline.declaration_hash !== declaration_hash) {
+    return Object.freeze({
+      schema_version: 1,
+      kind: FILESYSTEM_PATH_LIST_VERIFIER_RESULT_KIND,
+      status: 'unsupported',
+      reason_code: 'baseline_declaration_mismatch',
+      declaration_hash,
+      target_document: declaration.target_document,
+      inventory_evidence_mode,
+      checks: emptyChecksSkipped('baseline_declaration_mismatch'),
+      entries: [],
+      inventory_extra_paths: [],
+      inventory_missing_paths: [],
+      preserved_drift_paths: [],
+      inventory_scope_errors: [],
+    })
+  }
+
+  const rootReal = projectRootReal(projectRoot)
+  if (baseline.project_root_real !== rootReal) {
+    return Object.freeze({
+      schema_version: 1,
+      kind: FILESYSTEM_PATH_LIST_VERIFIER_RESULT_KIND,
+      status: 'unsupported',
+      reason_code: 'baseline_project_root_mismatch',
+      declaration_hash,
+      target_document: declaration.target_document,
+      inventory_evidence_mode,
+      checks: emptyChecksSkipped('baseline_project_root_mismatch'),
+      entries: [],
+      inventory_extra_paths: [],
+      inventory_missing_paths: [],
+      preserved_drift_paths: [],
+      inventory_scope_errors: [],
+    })
+  }
+
+  const targetValidated = validateTargetDocumentForRead(rootReal, declaration.target_document)
+  if (!targetValidated.ok) {
+    return failedResult({
+      schema_version: 1,
+      kind: FILESYSTEM_PATH_LIST_VERIFIER_RESULT_KIND,
+      reason_code: targetValidated.reason_code,
+      declaration_hash,
+      target_document: declaration.target_document,
+      inventory_evidence_mode,
+      checks: failAllChecks(targetValidated.reason_code),
+      entries: [],
+      inventory_extra_paths: [],
+      inventory_missing_paths: [],
+      preserved_drift_paths: [],
+      inventory_scope_errors: [],
+    })
+  }
+
+  const documentRead = readBoundedUtf8FileSync(targetValidated.fileReal, declaration.limits.max_document_bytes)
+  if (!documentRead.ok) {
+    return failedResult({
+      schema_version: 1,
+      kind: FILESYSTEM_PATH_LIST_VERIFIER_RESULT_KIND,
+      reason_code: documentRead.reason,
+      declaration_hash,
+      target_document: declaration.target_document,
+      inventory_evidence_mode,
+      checks: failAllChecks(documentRead.reason),
+      entries: [],
+      inventory_extra_paths: [],
+      inventory_missing_paths: [],
+      preserved_drift_paths: [],
+      inventory_scope_errors: [],
+    })
+  }
+
+  const parsed = parseMarkdownBulletPaths(documentRead.text, declaration.limits)
+  if (!parsed.ok) {
+    return failedResult({
+      schema_version: 1,
+      kind: FILESYSTEM_PATH_LIST_VERIFIER_RESULT_KIND,
+      reason_code: parsed.reason,
+      declaration_hash,
+      target_document: declaration.target_document,
+      inventory_evidence_mode,
+      checks: {
+        document_parseable: check(false, parsed.reason),
+        all_entries_resolve: check(false, parsed.reason),
+        no_duplicate_entries: check(false, parsed.reason),
+        coverage_complete: check(false, parsed.reason),
+        preserved_inputs_unchanged: skip('not_evaluated'),
+      },
+      entries: [],
+      inventory_extra_paths: [],
+      inventory_missing_paths: [],
+      preserved_drift_paths: [],
+      inventory_scope_errors: [],
+    })
+  }
+
+  const inventoryListed = listScopedInventoryFiles(rootReal, declaration.inventory_scope.roots)
+  if (!inventoryListed.ok) {
+    return failedResult({
+      schema_version: 1,
+      kind: FILESYSTEM_PATH_LIST_VERIFIER_RESULT_KIND,
+      reason_code: 'inventory_scope_invalid',
+      declaration_hash,
+      target_document: declaration.target_document,
+      inventory_evidence_mode,
+      checks: {
+        document_parseable: check(true, 'ok'),
+        all_entries_resolve: check(false, 'inventory_scope_invalid'),
+        no_duplicate_entries: check(false, 'inventory_scope_invalid'),
+        coverage_complete: check(false, 'inventory_scope_invalid'),
+        preserved_inputs_unchanged: check(false, 'inventory_scope_invalid'),
+      },
+      entries: [],
+      inventory_extra_paths: [],
+      inventory_missing_paths: [],
+      preserved_drift_paths: [],
+      inventory_scope_errors: Object.freeze([...inventoryListed.errors]),
+    })
+  }
+
+  const entries: DeclaredEntryV1[] = []
+  const seen = new Set<string>()
+  let hasDuplicate = false
+  let allResolve = true
+  for (const declared_path of parsed.paths) {
+    let resolve_status: ResolveStatus
+    if (seen.has(declared_path)) {
+      hasDuplicate = true
+      resolve_status = 'duplicate'
+      allResolve = false
+    } else {
+      seen.add(declared_path)
+      const resolved = resolveDeclaredPath(rootReal, declared_path)
+      resolve_status = resolved.status
+      if (resolve_status !== 'ok') allResolve = false
+    }
+    entries.push({ declared_path, resolve_status })
+  }
+
+  const declaredSet = new Set(parsed.paths)
+  const currentInventory = inventoryListed.files
+  const currentSet = new Set(currentInventory)
+  const inventory_missing_paths = currentInventory.filter(path => !declaredSet.has(path))
+  const inventory_extra_paths = [...declaredSet].filter(path => !currentSet.has(path)).sort()
+
+  const preserved_drift_paths: string[] = []
+  for (const [rel, snapshot] of Object.entries(baseline.preserved)) {
+    const admitted = admitRepoRelativeFile(rootReal, rel)
+    if (!admitted.ok) {
+      preserved_drift_paths.push(rel)
+      continue
+    }
+    if (hashAdmittedFileContent(admitted.real) !== snapshot.content_sha256) preserved_drift_paths.push(rel)
+  }
+
+  const scopeOk = inventoryListed.ok
+  const coverageOk =
+    scopeOk &&
+    inventory_missing_paths.length === 0 &&
+    inventory_extra_paths.length === 0 &&
+    allResolve &&
+    !hasDuplicate
+  const preservedOk = preserved_drift_paths.length === 0
+
+  const checks = {
+    document_parseable: check(true, 'ok'),
+    all_entries_resolve: check(allResolve, 'entry_resolve_failed'),
+    no_duplicate_entries: check(!hasDuplicate, 'duplicate_entry'),
+    coverage_complete: check(coverageOk, scopeOk ? 'inventory_mismatch' : 'inventory_scope_invalid'),
+    preserved_inputs_unchanged: check(preservedOk, 'preserved_input_drift'),
+  }
+
+  const passed =
+    checks.document_parseable.status === 'pass' &&
+    checks.all_entries_resolve.status === 'pass' &&
+    checks.no_duplicate_entries.status === 'pass' &&
+    checks.coverage_complete.status === 'pass' &&
+    checks.preserved_inputs_unchanged.status === 'pass'
+
+  return Object.freeze({
+    schema_version: 1,
+    kind: FILESYSTEM_PATH_LIST_VERIFIER_RESULT_KIND,
+    status: passed ? 'passed' : 'failed',
+    reason_code: passed ? 'all_checks_passed' : 'verification_failed',
+    declaration_hash,
+    target_document: declaration.target_document,
+    inventory_evidence_mode,
+    checks,
+    entries: Object.freeze(entries),
+    inventory_extra_paths: Object.freeze(inventory_extra_paths),
+    inventory_missing_paths: Object.freeze(inventory_missing_paths),
+    preserved_drift_paths: Object.freeze([...preserved_drift_paths].sort()),
+    inventory_scope_errors: Object.freeze([]),
+  })
+}
