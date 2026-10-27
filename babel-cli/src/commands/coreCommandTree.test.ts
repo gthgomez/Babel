@@ -31,7 +31,9 @@ function withoutIntentionalCommandExtensions(contract: CommandContract): Command
       .filter(child => child.name !== 'research')
       .map(child => child.name === 'evidence'
         ? { ...child, children: child.children.filter(sub => sub.name !== 'replay') }
-        : child),
+        : child.name === 'runs'
+          ? { ...child, children: child.children.filter(sub => sub.name !== 'review') }
+          : child),
   };
 }
 
@@ -46,6 +48,23 @@ test('core registration preserves the complete existing command contract', () =>
   assert.ok(evidence);
   const replay = evidence.children.filter(child => child.name === 'replay');
   assert.equal(replay.length, 1);
+  const runs = contract.children.find(child => child.name === 'runs');
+  assert.ok(runs);
+  assert.deepEqual(runs.children.map(child => child.name), ['inventory', 'review', 'coverage', 'query', 'show', 'failures', 'verify']);
+  const runReview = runs.children.filter(child => child.name === 'review');
+  assert.equal(runReview.length, 1);
+  assert.deepEqual(runReview[0], {
+    name: 'review', aliases: [], description: 'Review a local evidence window without replay, execution or network calls',
+    args: [],
+    options: [
+      { flags: '--catalog <path>', description: 'Existing derived SQLite catalog', mandatory: false },
+      { flags: '--last-hours <hours>', description: 'Window size, default 24', mandatory: false },
+      { flags: '--until <timestamp>', description: 'Window end (ISO timestamp; default now)', mandatory: false },
+      { flags: '--json', description: 'Emit minimized structured review', mandatory: false },
+    ],
+    children: [],
+  });
+  assert.equal(program.commands.find(child => child.name() === 'runs')?.commands.find(child => child.name() === 'review')?.options.find(option => option.flags === '--last-hours <hours>')?.defaultValue, '24');
   const legacy = withoutIntentionalCommandExtensions(contract);
   const digest = createHash('sha256').update(JSON.stringify(legacy)).digest('hex');
   assert.equal(digest, '5a7149653f90ac455439e49e107a93853b16c738aa04bf07674c23ceb0fa6541');
