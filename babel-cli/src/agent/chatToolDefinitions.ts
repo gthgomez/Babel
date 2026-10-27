@@ -389,6 +389,8 @@ export interface ChatTurnPromptOptions {
   nativeTools?: boolean;
   /** When true, use simplified text-tool format for small local models. */
   textTools?: boolean;
+  /** Bounded terminal synthesis uses retained evidence without requesting tools. */
+  answerOnly?: boolean;
 }
 
 export function buildChatTurnPrompt(options: ChatTurnPromptOptions): string {
@@ -429,7 +431,9 @@ export function buildChatTurnPrompt(options: ChatTurnPromptOptions): string {
   sections.push('## Current Request');
   sections.push(options.task);
 
-  if (options.textTools) {
+  if (options.answerOnly) {
+    sections.push('', 'Answer the current request from the retained evidence. No further tools are available; preserve uncertainty and the requested output format.');
+  } else if (options.textTools) {
     sections.push(
       '',
       'Respond with [TOOL:name] to use a tool, or answer in plain text.',
@@ -571,67 +575,11 @@ export function buildAnswerSynthesisPrompt(options: {
   task: string;
   toolObservations: string;
 }): string {
-  const sections: string[] = [];
-
-  sections.push(
-    '# Synthesize Answer',
-    '',
-    'You are an expert senior software engineer. The user asked:',
-    '',
-    `> ${options.task}`,
-    '',
-    'Below are the results of your investigation. Synthesize a clear, ' +
-      'concise answer in natural language. Use markdown for formatting. ' +
-      'Be specific — reference file paths, code snippets, and evidence.',
-    '',
-    '## Investigation Results',
-    options.toolObservations,
-    '',
-    '## Answer Formatting Guidance',
-    '',
-    '### File Paths',
-    'When referencing file paths, wrap them in backticks: `src/services/indexer.ts`. ' +
-      'Use project-relative paths when possible (e.g., `babel-cli/src/agent/actions.ts`) rather than ' +
-      'absolute paths to keep the answer readable.',
-    '',
-    '### Citing Evidence',
-    'Always cite the source of your findings. When referencing content from a tool observation, ' +
-      'name the tool call that produced it (e.g., `read_file` on `src/auth.ts`) and quote or paraphrase ' +
-      'the relevant evidence. Include specific line numbers if the observation provided them. ' +
-      'For `grep` results, mention the search pattern and the files where matches were found.',
-    '',
-    '### Contradictory or Uncertain Findings',
-    'If you encounter conflicting evidence, acknowledge the contradiction explicitly rather than ' +
-      'picking one side. Explain what each source says and, if possible, suggest how to resolve ' +
-      'the discrepancy (e.g., "the type signature says X but the runtime check at line 42 says Y — ' +
-      'this may be a bug or dead code"). When you are uncertain, state your confidence level and ' +
-      'what additional information would help.',
-    '',
-    '### Length',
-    'Aim for 3–8 paragraphs. Be thorough but concise — favor specific evidence over general ' +
-      'statements. If the topic is simple, a single paragraph is fine; if complex, use the full range. ' +
-      'Avoid filler phrases like "based on the provided information" or "as we can see."',
-    '',
-    '### Code Snippets vs. Descriptions',
-    'Include a code snippet when the exact code matters (e.g., a bug, a function signature, ' +
-      'a configuration value). Use a description when the concept is more important than the ' +
-      'exact characters (e.g., "the module exports three helper functions"). For multi-line snippets, ' +
-      'use fenced code blocks with the language specified. Keep snippets focused — extract only the ' +
-      'relevant lines rather than dumping entire files.',
-    '',
-    '### Answer Structure',
-    'Structure your answer as follows:',
-    "1. **Summary** (1–2 sentences) — Directly answer the user's question.",
-    '2. **Details** (2–5 paragraphs) — Explain your findings, reference evidence, ' +
-      'discuss trade-offs or alternatives.',
-    '3. **Recommendations** (1 paragraph) — Suggest next steps, workarounds, or actions ' +
-      'the user should take.',
-    '',
-    '## Answer',
-    'Write your answer below. Follow the formatting guidance above.',
-  );
-
-  return sections.join('\n');
+  return buildChatTurnPrompt({
+    ...options,
+    nativeTools: true,
+    answerOnly: true,
+  });
 }
 
 // ─── Tool Observation Formatters ──────────────────────────────────────────
