@@ -360,6 +360,8 @@ function stripPathLikeTokens(text: string): string {
   // misread as positive mutation authority.
   const normalized = text.replace(/\b(?:and|or)\s*\/\s*(?:and|or)\b/gi, ' or ');
   return normalized
+    // Preserve explicit file-target intent before path operands are discarded.
+    .replace(new RegExp(`\\b(?:${FILE_ARTIFACT_VERB_SOURCE})\\b`, 'gi'), 'write')
     .replace(/\b[\w.-]*[\\/][\w.-]+/g, ' ')
     .replace(/\b[\w-]+\.[a-z0-9]{1,8}\b/gi, ' ');
 }
@@ -450,8 +452,8 @@ function stripInformationalFrames(text: string): string {
   // Consume the frame body up to sentence punctuation, but stop at a sequenced
   // imperative ("and then fix …", "then delete …") so explicit follow-up
   // actions keep their mutation intent.
-  return text.replace(
-    /\b(?:how\s+(?:to|do\s+(?:i|we|you)|can\s+(?:i|we|you)|should\s+(?:i|we|you))|best\s+way\s+to|ways?\s+to|whether\s+(?:i|we|you)\s+should)\b(?:(?!\b(?:and\s+then|then|afterwards)\b)[^.;!?])*/gi,
+  return text.replace(/\bif\s+(?:i|we)\b[^.;!?\n]*\?/gi, ' ').replace(
+    /\b(?:should\s+(?:i|we)|whether\s+to|how\s+(?:to|do\s+(?:i|we|you)|can\s+(?:i|we|you)|should\s+(?:i|we|you))|best\s+way\s+to|ways?\s+to|whether\s+(?:i|we|you)\s+should)\b(?:(?!\b(?:and\s+then|then|afterwards)\b)[^.;!?])*/gi,
     ' ',
   );
 }
@@ -481,14 +483,18 @@ function stripInformationalFrames(text: string): string {
 // itself — execution authority remains with the policy/lease gates.
 const NOUN_GUARD_PREFIX =
   '(?<!\\b(?:this|that|the|these|those|a|an|any|your|my|our|their|its|said|such|same|net)\\s)';
+// File-saving is an explicit artifact request, not a request to publish or fetch.
+// Keep conversational uses such as "save time/money" outside mutation intent.
+const ARTIFACT_OBJECT_SOURCE = String.raw`(?:(?:one|a|an|the|this|that|any|my|our|your)\s+)?(?:(?:new|updated|final|resulting|local|self-contained|standalone|plain|text|html|csv|json|pdf|markdown)\s+){0,4}(?:files?|documents?|reports?|briefs?|copies)\b|[\x60"']?[^\s\x60"'<>]+\.[a-z0-9]{1,12}(?=[\s\x60"',.;!?]|$)`;
+const FILE_ARTIFACT_VERB_SOURCE = String.raw`save(?=\s+(?:${ARTIFACT_OBJECT_SOURCE}))|turn(?=\s+[^.;!?\n]{1,100}\binto\s+(?:${ARTIFACT_OBJECT_SOURCE}))`;
 const GUARDED_MUTATION_VERBS =
   `${NOUN_GUARD_PREFIX}(?:change|patch|fix|update|repair|resolve|optimize|bump|convert|migrate)`;
 const MUTATION_VERB_SOURCE =
-  `implement|create|write|refactor|apply|modify|edit|add|replace|rename|${GUARDED_MUTATION_VERBS}`;
+  `implement|create|write|refactor|apply|modify|edit|add|replace|rename|${FILE_ARTIFACT_VERB_SOURCE}|${GUARDED_MUTATION_VERBS}`;
 const DESTRUCTIVE_VERB_SOURCE = 'delete|remove|rm|drop|erase|unlink';
-const READ_ONLY_VERB_SOURCE = `(?:${MUTATION_VERB_SOURCE}|${DESTRUCTIVE_VERB_SOURCE}|change|touch|alter|clean)`;
+const READ_ONLY_VERB_SOURCE = `(?:${MUTATION_VERB_SOURCE}|${DESTRUCTIVE_VERB_SOURCE}|save|turn|change|touch|alter|clean)`;
 const READ_ONLY_VERB_GERUND_SOURCE =
-  '(?:editing|modifying|changing|writing|deleting|removing|fixing|patching|repairing|refactoring|touching|altering|creating|updating|adding|replacing|renaming|implementing|applying|dropping|erasing|unlinking|cleaning)';
+  '(?:saving|turning|editing|modifying|changing|writing|deleting|removing|fixing|patching|repairing|refactoring|touching|altering|creating|updating|adding|replacing|renaming|implementing|applying|dropping|erasing|unlinking|cleaning)';
 // Coordinates verb lists including the Oxford comma form (", or" / ", and"):
 // a serial-comma list must be consumed in full or its trailing verb survives
 // stripping and is misread as positive mutation authority.
@@ -544,8 +550,10 @@ export function hasExplicitEditDenial(taskText: string): boolean {
 
 /** An explanation/review topic is not an imperative, even if named add/fix. */
 export function isReadOnlyTaskFrame(taskText: string): boolean {
-  const prose = stripInformationalFrames(stripFencedCodeBodies(taskText));
-  if (!/^\s*(?:explain|describe|summarize|review|audit|what|why|how)\b/i.test(prose)) return false;
+  const unfenced = stripFencedCodeBodies(taskText);
+  const adviceQuestion = /^\s*(?:should\s+(?:i|we)\b|tell\s+me\s+whether\b|if\s+(?:i|we)\b[^.;!?\n]*\?)/i.test(unfenced);
+  const prose = stripInformationalFrames(unfenced);
+  if (!adviceQuestion && !/^\s*(?:explain|describe|summarize|review|audit|what|why|how)\b/i.test(prose)) return false;
   // Bare coordinated names ("explain add and remove behavior") are topics.
   // A separate imperative, an immediate "review and fix", or an explicit
   // object after the paired verb is needed to leave the read-only frame.
