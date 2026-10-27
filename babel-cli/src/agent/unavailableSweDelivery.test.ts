@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { resolve } from 'node:path'
+import { join, resolve } from 'node:path'
 import { resolveCompletionVerificationContext, type GateToolLogEntry } from './completionGatePolicy.js'
 import { unverifiedFileDeliveryPaths } from './unverifiedFileDelivery.js'
 
@@ -14,7 +14,7 @@ const input = () => ({ projectRoot: resolve('fixture'), taskClass: 'general_swe'
 
 test('ordinary SWE retains a confirmed native edit and same-path readback when default verification cannot launch', () => {
   assert.equal(input().verification.mandatoryVerifierContract, false)
-  assert.deepEqual(unverifiedFileDeliveryPaths(input()), ['src/feedback.ts'])
+  assert.deepEqual(unverifiedFileDeliveryPaths(input()), [join('src', 'feedback.ts')])
 })
 
 test('unverified SWE delivery preserves strict verification and actual effect boundaries', () => {
