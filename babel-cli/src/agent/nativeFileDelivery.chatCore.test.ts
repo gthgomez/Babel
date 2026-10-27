@@ -2,7 +2,6 @@ import assert from 'node:assert/strict'
 import { spawnSync, execFileSync } from 'node:child_process'
 import { mkdirSync, writeFileSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { fileURLToPath } from 'node:url'
 import test from 'node:test'
 import { prepareSyntheticProviderFixture, removeSyntheticProviderFixture } from '../testinfra/synthetic-provider-fixture.mjs'
 
@@ -10,7 +9,7 @@ if (!process.env['BABEL_SYNTHETIC_PROVIDER_FIXTURE_ROOT']) {
   test('normal native file delivery in a credential-free transport fixture', () => {
     const fixture = prepareSyntheticProviderFixture()
     try {
-      const result = spawnSync(process.execPath, ['--experimental-wasm-modules', '--import', fileURLToPath(new URL('../testinfra/synthetic-provider-fixture.mjs', import.meta.url)), '--import', 'tsx', '--test', import.meta.filename], { cwd: process.cwd(), env: fixture.env, encoding: 'utf8', timeout: 120000 })
+      const result = spawnSync(process.execPath, ['--experimental-wasm-modules', '--import', new URL('../testinfra/synthetic-provider-fixture.mjs', import.meta.url).href, '--import', import.meta.resolve('tsx'), '--test', import.meta.filename], { cwd: process.cwd(), env: fixture.env, encoding: 'utf8', timeout: 120000 })
       process.stdout.write(result.stdout)
       process.stderr.write(result.stderr)
       assert.equal(result.status, 0)
