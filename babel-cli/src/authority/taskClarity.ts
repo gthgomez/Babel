@@ -70,6 +70,10 @@ const MERGE_IT = /\bmerge\s+it\b/i;
 const DEPLOY_IT = /\bdeploy\s+it\b/i;
 const PR_MERGE_SIGNAL = /\b(pr|pull request|#\d+)\b/i;
 const CI_OR_TESTS = /\b(fix\s+(the\s+)?(failing\s+)?(ci|tests)|implement|refactor|choose the best)\b/i;
+// Remove only an unconditional coordinated publication prohibition. Mixed or
+// conditional directives remain subject to the existing authority check. This
+// intent projection never adds capabilities to the concrete-action lease.
+const NO_COMMIT_PUSH = /\b(?:do\s+not|don't|never)\s+commit\s*(?:,\s*(?:(?:and|or)\s+)?|\s+(?:and|or)\s+)(?:(?:do\s+not|don't|never)\s+)?push\b(?=\s*(?:$|[.;!?\n]|,\s*(?:change|modify|make|touch)\b))/gi;
 const COMMIT_PUSH = /\bcommit\b.*\bpush\b|\bpush\b.*\bfeature branch\b/i;
 
 function unique(values: readonly string[]): string[] {
@@ -254,7 +258,7 @@ export function resolveHumanEscalation(input: HumanEscalationInput): HumanEscala
     return { kind: 'autonomous', clarity };
   }
 
-  if (COMMIT_PUSH.test(task)) {
+  if (COMMIT_PUSH.test(task.replace(NO_COMMIT_PUSH, ''))) {
     if (!allowed.has('push_feature_branch') && !allowed.has('commit_ship_set')) {
       return { kind: 'deny', clarity, reasonCode: 'DENY_MISSING_AUTHORITY' };
     }

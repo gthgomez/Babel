@@ -207,3 +207,33 @@ test('evaluateSessionTaskGate: merge it with #88/#90 → clarification; producti
   });
   assert.equal(deploy.kind, 'deny');
 });
+
+
+for (const prohibition of [
+  'Do not commit, push, change credentials/security settings, or make unrelated edits.',
+  'Do not commit or push.',
+  "Don't commit and push.",
+  'Never commit, or push.',
+  'Do not commit and do not push.',
+]) {
+  test(`coding request retains a coordinated publication prohibition: ${prohibition}`, () => {
+    assert.equal(resolveHumanEscalation({
+      task: `Fix the glob feedback and run its existing tests. ${prohibition}`,
+      allowedCapabilities: CODING,
+    }).kind, 'autonomous');
+  });
+}
+for (const task of [
+  'Commit and push this feature branch.',
+  'Push this feature branch.',
+  'Do not commit, but push this feature branch.',
+  'Do not commit or push. Then commit and push the fix.',
+  'Commit and push the fix. Do not commit or push unrelated changes.',
+  'Do not commit unless tests pass, then push this feature branch.',
+]) {
+  test(`publication still requires publication authority: ${task}`, () => {
+    const result = resolveHumanEscalation({ task, allowedCapabilities: CODING });
+    assert.equal(result.kind, 'deny');
+    assert.equal(result.reasonCode, 'DENY_MISSING_AUTHORITY');
+  });
+}
