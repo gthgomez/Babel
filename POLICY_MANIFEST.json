@@ -3,7 +3,7 @@
   "algorithm": "sha256",
   "purpose": "drift_detection_not_authorization",
   "normalization": "utf8_crlf_to_lf",
-  "policy_bundle_id": "f877337acd0a915b04343acf211c23a4f76fa9850850d51b049864d80a6395ad",
+  "policy_bundle_id": "917e99f042481bd44072383399c2deca0b682eb1c59668f59931af3ccf2eacd0",
   "files": {
     ".github/workflows/public-pr-metadata.yml": "67e630d700055533ee77157ed05fc347161c7c041e35151f2652ffd9b9973023",
     ".github/workflows/publish-npm.yml": "54036b704d59e513cbbb981efa00e82121e40871d6dfe789c8636bd0159f8c9e",
@@ -48,6 +48,7 @@
     "babel-cli/src/authority/pdp.ts": "9052279572a512e512b562312270266896a40f11b58b0ef7db2104ac45bab5fa",
     "babel-cli/src/authority/privilegedTargetBinding.test.ts": "5534756477d8ffa4997bc8ca58c22148ad3fa0678e4c6b64e11007598f6a8a6c",
     "babel-cli/src/authority/protectedPath.ts": "6dc251b39f868396db34ee28ee357b45c0c97c81ed83c2cf9d83bbc83368663f",
+    "babel-cli/src/authority/publicationProhibition.cli.test.ts": "33706ad59be52f00a198efc39c71867b783c8ba0124effeeb1ea8105304891d5",
     "babel-cli/src/authority/reasonCodes.ts": "2cf6e26e5043f4e461374801cfea86993e69f6e1638f722164970c346683b675",
     "babel-cli/src/authority/remoteClarification.test.ts": "5514d7b30979c501217f3a60849fd404789f7af20b87e75819a305092ba8e86e",
     "babel-cli/src/authority/scriptPrivilegeEscape.test.ts": "39cc0e565f8500084928d8f0a4cfab2fea0ee540d6a017eb59ae606108747124",
@@ -148,7 +149,7 @@
     "tools/babel-pr-orchestrate-opencode.mts": "52b030c4ada9940ad8290872d453ef518bc5989475095787cc21ee579b62cf29",
     "tools/babel-pr-orchestrate.mts": "e2b8f541f807e5e7544534a3eb5804ec14395b05a6fc97a813c82269f7fc32a0",
     "tools/host-review-worker.mts": "751b80e69888ec098ff2e190bf487f1962bbb104ea87d7494b68e654009b336a",
-    "tools/policy-integrity-manifest.mjs": "10a704780bb6895bef6fe0cba302beb6ebbf779b28cb312062bff854cbbdabca",
+    "tools/policy-integrity-manifest.mjs": "486120cf28be4cd0b5e34ace9dd0cf3fd05b1aaee899e55572e12146f885cf0b",
     "tools/resolve-release-tag.mjs": "9b5f769ed1b49c3f829c9a4e4b9a982803ead642180a3941559967bd0f4347e2"
   }
 }
