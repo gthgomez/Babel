@@ -24,12 +24,18 @@ export function updateCostTotals(ctx: ReplContext): void {
     totalCostUSD: summary.totalCostUSD,
     ...(summary.knownCostUSD !== undefined ? { knownCostUSD: summary.knownCostUSD } : {}),
     ...(summary.estimatedCostUSD !== undefined ? { estimatedCostUSD: summary.estimatedCostUSD } : {}),
+    ...(summary.reportedCostUSD !== undefined ? { reportedCostUSD: summary.reportedCostUSD } : {}),
     ...(summary.costEstimates !== undefined ? { costEstimates: summary.costEstimates } : {}),
+    ...(summary.usageComplete !== undefined ? { usageComplete: summary.usageComplete } : {}),
+    ...(summary.costComplete !== undefined ? { costComplete: summary.costComplete } : {}),
     completeCostUSD: summary.completeCostUSD ?? null,
     unknownChargeCount: summary.unknownChargeCount ?? 0,
     totalInputTokens: summary.totalInputTokens,
     totalOutputTokens: summary.totalOutputTokens,
     totalTokens: summary.totalTokens,
+    ...(summary.totalCacheHitTokens !== undefined ? { totalCacheHitTokens: summary.totalCacheHitTokens } : {}),
+    ...(summary.totalCacheMissTokens !== undefined ? { totalCacheMissTokens: summary.totalCacheMissTokens } : {}),
+    ...(summary.modelBreakdown !== undefined ? { modelBreakdown: summary.modelBreakdown } : {}),
     projectSessionId: globalCostTracker.getProjectSessionId(),
     ...(globalCostTracker.isSessionProjectionComplete()
       ? {
@@ -99,6 +105,8 @@ export function restoreSessionState(ctx: ReplContext, saved: SessionState): void
   const costText = [
     `$${(summary.knownCostUSD ?? summary.totalCostUSD).toFixed(4)} known subtotal`,
     ...(summary.estimatedCostUSD ? [`$${summary.estimatedCostUSD.toFixed(4)} usage estimate`] : []),
+    ...(summary.reportedCostUSD !== undefined
+      ? [`$${summary.reportedCostUSD.toFixed(4)} provider-reported subtotal`] : []),
     ...(summary.unknownChargeCount ? [`${summary.unknownChargeCount} unpriced charge(s)`] : []),
     ...(summary.completeCostUSD === null ? ['cost incomplete'] : []),
   ].join('; ');

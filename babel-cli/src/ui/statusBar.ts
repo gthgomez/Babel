@@ -26,6 +26,9 @@ export interface StatusBarState {
   hasUnknownCost?: boolean;
   unknownChargeCount?: number | undefined;
   estimatedCost?: number | undefined;
+  reportedCostUSD?: number | undefined;
+  /** Provider-reported billing is complete (distinct from allowance estimates). */
+  costComplete?: boolean | undefined;
   /** Active model name (e.g. "DeepSeek v4 Flash") */
   model: string;
   /** Active model ID for context limit lookup (e.g. "deepseek-v4-flash") */
@@ -365,13 +368,34 @@ export function renderStatusBar(state: StatusBarState): string {
     });
   }
   if (policy.showCost) {
+    const unknown = state.unknownChargeCount ?? 0;
+    const reported = Number.isFinite(state.reportedCostUSD);
+    const billingComplete = state.costComplete === true && reported && unknown === 0;
+    const estimateSuffix = Number.isFinite(state.estimatedCost) && (state.estimatedCost ?? 0) > 0
+      ? `; $${state.estimatedCost!.toFixed(4)} usage estimate`
+      : '';
+    const reportedSuffix = reported && !billingComplete
+      ? `; $${state.reportedCostUSD!.toFixed(4)} provider-reported`
+      : '';
+    let costLine: string;
+    if (billingComplete) {
+      costLine = `session $${state.totalCost.toFixed(4)} reported`;
+    } else if (state.hasUnknownCost) {
+      costLine = state.totalCost > 0
+        ? `session known $${state.totalCost.toFixed(4)}; ${unknown > 0 ? `${unknown} unresolved` : 'cost incomplete'}`
+        : (state.estimatedCost ?? 0) > 0
+          ? `session est. $${state.estimatedCost!.toFixed(4)}; cost incomplete`
+          : `session cost unavailable${unknown > 0 ? `; ${unknown} unresolved` : ''}`;
+    } else if (!reported) {
+      const estAmount = (state.estimatedCost ?? 0) > 0 ? state.estimatedCost! : state.totalCost;
+      costLine = `session est. $${estAmount.toFixed(4)}`;
+    } else {
+      costLine = `session known $${state.totalCost.toFixed(4)}`;
+    }
     rightParts.push({
       slot: "cost",
-      text: muted(state.hasUnknownCost
-        ? state.totalCost > 0
-          ? `session known $${state.totalCost.toFixed(4)}; ${(state.unknownChargeCount ?? 0) > 0 ? `${state.unknownChargeCount} unresolved` : 'cost incomplete'}`
-          : `session cost unavailable${(state.unknownChargeCount ?? 0) > 0 ? `; ${state.unknownChargeCount} unresolved` : ''}`
-        : `session est. $${state.totalCost.toFixed(4)}`) + muted(Number.isFinite(state.estimatedCost) && (state.estimatedCost ?? 0) > 0 ? `; $${state.estimatedCost!.toFixed(4)} usage estimate` : ''),
+      text: muted(costLine) +
+        (billingComplete ? '' : muted(estimateSuffix) + muted(reportedSuffix)),
     });
   }
   if (policy.showTurn) {

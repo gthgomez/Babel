@@ -127,7 +127,7 @@ export function checkCostWallBudgets(input: {
   criticRepairCostCapUsd?: number | null;
   nowMs?: number;
 }): { ok: boolean; reason?: string; limiter?: ChatRunLimiter } {
-  if (input.totalCostUsd >= input.maxCostUsd) {
+  if (Number.isFinite(input.maxCostUsd) && input.totalCostUsd >= input.maxCostUsd) {
     const isRepair =
       input.criticRepairCostCapUsd != null &&
       input.maxCostUsd < (input.declaredCostUsd ?? Infinity);
@@ -177,6 +177,9 @@ export function computeCriticRepairCostCap(input: {
   criticStrikes?: number;
   limits?: Partial<ChatEngineLimits>;
 }): { capUsd: number; repairWindowUsd: number } {
+  if (!Number.isFinite(input.sessionMaxCostUsd)) {
+    return { capUsd: input.sessionMaxCostUsd, repairWindowUsd: Infinity };
+  }
   const remaining = Math.max(0, input.sessionMaxCostUsd - input.spentUsd);
   if (remaining <= 0) {
     return { capUsd: input.sessionMaxCostUsd, repairWindowUsd: 0 };

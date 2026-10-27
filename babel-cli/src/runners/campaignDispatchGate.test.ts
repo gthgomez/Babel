@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { closeSync, existsSync, mkdtempSync, openSync, readFileSync, rmSync, unlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
@@ -12,6 +12,374 @@ import { PILOT_CAMPAIGN_LIMIT_MICRO_USD } from '../eval/campaign-budget.js'
 import { CAMPAIGN_QUALIFIED_OPENROUTER_MODEL_ID } from '../eval/campaign-qualified-routes.js'
 import { CommandCodeApiRunner } from './commandCodeApi.js'
 import { CampaignRouteUnsupportedError } from './campaignDispatchGate.js'
+import type { RunControl } from '../runtime/run-control.js'
+import { createRunControl, RunStoppedError } from '../runtime/run-control.js'
+import { CampaignPhysicalFetchSession } from './providerCampaignPhysicalFetch.js'
+import { prepareCampaignOpenRouterProviderRequest } from '../eval/campaign-openrouter-wire.js'
+
+function committedMicroUsdFromSnapshot(snapshot: {
+  operations: readonly { actualMicroUsd: number | null; upperBoundMicroUsd: number }[]
+}): number {
+  return snapshot.operations.reduce((sum, operation) => {
+    if (operation.actualMicroUsd !== null) return sum + operation.actualMicroUsd
+    return sum + operation.upperBoundMicroUsd
+  }, 0)
+}
+
+function committedMicroUsd(store: CampaignBudgetStore): number {
+  return committedMicroUsdFromSnapshot(store.readSnapshot())
+}
+
+function readPersistedSnapshot(statePath: string) {
+  return JSON.parse(readFileSync(statePath, 'utf8')) as {
+    operations: { actualMicroUsd: number | null; upperBoundMicroUsd: number; settledUnknown: boolean }[]
+  }
+}
+
+function blockStoreTransactOnNthCall(store: CampaignBudgetStore, n: number, lockPath: string): void {
+  let transactCalls = 0
+  const originalTransact = store.transact.bind(store)
+  store.transact = (mutate) => {
+    transactCalls += 1
+    if (transactCalls === n) {
+      closeSync(openSync(lockPath, 'wx', 0o600))
+    }
+    return originalTransact(mutate)
+  }
+}
+
+function qualifiedPreparedRequest() {
+  return prepareCampaignOpenRouterProviderRequest({
+    bodyObject: {
+      model: CAMPAIGN_QUALIFIED_OPENROUTER_MODEL_ID,
+      messages: [{ role: 'user', content: 'hi' }],
+      max_tokens: 16,
+    },
+    mode: 'text',
+    provider: 'openrouter',
+    requestedModelId: CAMPAIGN_QUALIFIED_OPENROUTER_MODEL_ID,
+    reservedCompletionTokens: 16,
+  })
+}
+
+test('gate pre-wire stop after reserve zero-settles without physical fetch', async (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-campaign-gate-prewire-stop-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const owner = randomUUID()
+  const store = new CampaignBudgetStore({
+    statePath: join(root, 'campaign-budget.json'),
+    campaignId: 'pilot',
+    limitMicroUsd: PILOT_CAMPAIGN_LIMIT_MICRO_USD,
+  })
+  const gate = new CampaignDispatchGate({ campaignId: 'pilot', store, taskOwnerId: owner })
+  const prepared = qualifiedPreparedRequest()
+  const control = createRunControl({ runId: 'run-1', turnId: 'turn-1', generation: 1 })
+  control.requestStop({
+    owner: control.owner,
+    kind: 'cancelled',
+    reasonCode: 'cancelled',
+    source: 'user',
+  })
+  let physicalFetch = 0
+  const saved = globalThis.fetch
+  globalThis.fetch = async () => {
+    physicalFetch += 1
+    return new Response('{}', { status: 200 })
+  }
+  t.after(() => { globalThis.fetch = saved })
+
+  await assert.rejects(
+    () => gate.admitBeforeDispatch({
+      executionStage: 'chat',
+      preparedRequest: prepared,
+      runControl: control,
+    }),
+    (error: unknown) => error instanceof RunStoppedError,
+  )
+  assert.equal(physicalFetch, 0)
+  assert.equal(store.readSnapshot().operations.length, 1)
+  const operation = store.readSnapshot().operations[0]!
+  assert.equal(operation.actualMicroUsd, 0)
+  assert.equal(operation.settledUnknown, false)
+  assert.equal(committedMicroUsd(store), 0)
+
+  const reloaded = new CampaignBudgetStore({
+    statePath: join(root, 'campaign-budget.json'),
+    campaignId: 'pilot',
+    limitMicroUsd: PILOT_CAMPAIGN_LIMIT_MICRO_USD,
+  })
+  assert.equal(reloaded.readSnapshot().operations[0]?.actualMicroUsd, 0)
+  gate.settleZeroForProvableNoWire({
+    executionStage: 'chat',
+    requestId: prepared.request_id,
+    attemptId: prepared.attempt_id,
+  })
+  gate.settleZeroForProvableNoWire({
+    executionStage: 'chat',
+    requestId: prepared.request_id,
+    attemptId: prepared.attempt_id,
+  })
+  assert.equal(reloaded.readSnapshot().operations[0]?.actualMicroUsd, 0)
+  assert.equal(committedMicroUsd(reloaded), 0)
+})
+
+function gateThatStopsBeforeWireCheck(
+  gate: CampaignDispatchGate,
+  control: RunControl,
+): CampaignDispatchGate {
+  const original = gate.repeatRunControlBeforeFetch.bind(gate)
+  return Object.assign(gate, {
+    repeatRunControlBeforeFetch(runControl?: RunControl): void {
+      control.requestStop({
+        owner: control.owner,
+        kind: 'cancelled',
+        reasonCode: 'cancelled',
+        source: 'user',
+      })
+      original(runControl)
+    },
+  })
+}
+
+test('dispatchAdmittedFetch zero-settles post-handoff stop before fetch callback', async (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-campaign-physical-prewire-stop-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const owner = randomUUID()
+  const statePath = join(root, 'campaign-budget.json')
+  const store = new CampaignBudgetStore({
+    statePath,
+    campaignId: 'pilot',
+    limitMicroUsd: PILOT_CAMPAIGN_LIMIT_MICRO_USD,
+  })
+  const control = createRunControl({ runId: 'run-2', turnId: 'turn-2', generation: 1 })
+  const gate = gateThatStopsBeforeWireCheck(
+    new CampaignDispatchGate({ campaignId: 'pilot', store, taskOwnerId: owner }),
+    control,
+  )
+  const prepared = qualifiedPreparedRequest()
+  const session = new CampaignPhysicalFetchSession({
+    campaignMeter: { executionStage: 'chat', gate },
+  })
+  let physicalFetch = 0
+  await assert.rejects(
+    () => session.dispatchAdmittedFetch({
+      basePrepared: prepared,
+      physicalAttemptId: prepared.attempt_id,
+      operationId: 'provider_fetch',
+      runControl: control,
+      fetch: async () => {
+        physicalFetch += 1
+        return new Response('{}', { status: 200 })
+      },
+    }),
+    (error: unknown) => error instanceof RunStoppedError,
+  )
+  assert.equal(physicalFetch, 0)
+  const operation = store.readSnapshot().operations[0]!
+  assert.equal(operation.actualMicroUsd, 0)
+  assert.equal(operation.settledUnknown, false)
+  assert.equal(committedMicroUsd(store), 0)
+
+  const failedCompleted = {
+    inference_id: prepared.request_id,
+    provider: 'openrouter' as const,
+    model: CAMPAIGN_QUALIFIED_OPENROUTER_MODEL_ID,
+    status: 'failed' as const,
+    usage_metadata: null,
+  }
+  session.finalizeInvocation('failed', failedCompleted)
+  session.finalizeInvocation('failed', failedCompleted)
+  const reloaded = new CampaignBudgetStore({
+    statePath,
+    campaignId: 'pilot',
+    limitMicroUsd: PILOT_CAMPAIGN_LIMIT_MICRO_USD,
+  })
+  const reloadedGate = new CampaignDispatchGate({ campaignId: 'pilot', store: reloaded, taskOwnerId: owner })
+  assert.equal(reloaded.readSnapshot().operations[0]?.actualMicroUsd, 0)
+  assert.equal(committedMicroUsd(reloaded), 0)
+  reloadedGate.settleZeroForProvableNoWire({
+    executionStage: 'chat',
+    requestId: prepared.request_id,
+    attemptId: prepared.attempt_id,
+  })
+  assert.equal(committedMicroUsd(reloaded), 0)
+})
+
+test('gate window pre-wire zero-settle persistence failure poisons without releasing hold', async (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-campaign-gate-zero-poison-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const statePath = join(root, 'campaign-budget.json')
+  const lockPath = `${statePath}.lock`
+  const store = new CampaignBudgetStore({
+    statePath,
+    campaignId: 'pilot',
+    limitMicroUsd: PILOT_CAMPAIGN_LIMIT_MICRO_USD,
+  })
+  blockStoreTransactOnNthCall(store, 2, lockPath)
+  const gate = new CampaignDispatchGate({ campaignId: 'pilot', store, taskOwnerId: randomUUID() })
+  const prepared = qualifiedPreparedRequest()
+  const control = createRunControl({ runId: 'run-poison-1', turnId: 'turn-poison-1', generation: 1 })
+  control.requestStop({
+    owner: control.owner,
+    kind: 'cancelled',
+    reasonCode: 'cancelled',
+    source: 'user',
+  })
+  await assert.rejects(
+    () => gate.admitBeforeDispatch({
+      executionStage: 'chat',
+      preparedRequest: prepared,
+      runControl: control,
+    }),
+    (error: unknown) => error instanceof CampaignBudgetDeniedError,
+  )
+  assert.equal(gate.isLedgerPoisoned(), true)
+  assert.equal(existsSync(`${statePath}.poison`), true)
+  const persisted = readPersistedSnapshot(statePath)
+  const operation = persisted.operations[0]!
+  assert.equal(operation.actualMicroUsd, null)
+  assert.equal(committedMicroUsdFromSnapshot(persisted), operation.upperBoundMicroUsd)
+  try { unlinkSync(lockPath) } catch { /* empty */ }
+  const restarted = new CampaignDispatchGate({
+    campaignId: 'pilot',
+    store: new CampaignBudgetStore({
+      statePath,
+      campaignId: 'pilot',
+      limitMicroUsd: PILOT_CAMPAIGN_LIMIT_MICRO_USD,
+    }),
+    taskOwnerId: randomUUID(),
+  })
+  await assert.rejects(
+    () => restarted.admitBeforeDispatch({ executionStage: 'chat', preparedRequest: qualifiedPreparedRequest() }),
+    (error: unknown) => error instanceof CampaignBudgetDeniedError,
+  )
+})
+
+test('physical session zero-settle persistence failure poisons without releasing hold', async (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-campaign-physical-zero-poison-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const statePath = join(root, 'campaign-budget.json')
+  const lockPath = `${statePath}.lock`
+  const owner = randomUUID()
+  const store = new CampaignBudgetStore({
+    statePath,
+    campaignId: 'pilot',
+    limitMicroUsd: PILOT_CAMPAIGN_LIMIT_MICRO_USD,
+  })
+  blockStoreTransactOnNthCall(store, 2, lockPath)
+  const control = createRunControl({ runId: 'run-poison-2', turnId: 'turn-poison-2', generation: 1 })
+  const gate = gateThatStopsBeforeWireCheck(
+    new CampaignDispatchGate({ campaignId: 'pilot', store, taskOwnerId: owner }),
+    control,
+  )
+  const prepared = qualifiedPreparedRequest()
+  const session = new CampaignPhysicalFetchSession({
+    campaignMeter: { executionStage: 'chat', gate },
+  })
+  let physicalFetch = 0
+  await assert.rejects(
+    () => session.dispatchAdmittedFetch({
+      basePrepared: prepared,
+      physicalAttemptId: prepared.attempt_id,
+      operationId: 'provider_fetch',
+      runControl: control,
+      fetch: async () => {
+        physicalFetch += 1
+        return new Response('{}', { status: 200 })
+      },
+    }),
+    (error: unknown) => error instanceof CampaignBudgetDeniedError,
+  )
+  assert.equal(physicalFetch, 0)
+  assert.equal(gate.isLedgerPoisoned(), true)
+  assert.equal(existsSync(`${statePath}.poison`), true)
+  const persisted = readPersistedSnapshot(statePath)
+  const operation = persisted.operations[0]!
+  assert.equal(operation.actualMicroUsd, null)
+  assert.equal(committedMicroUsdFromSnapshot(persisted), operation.upperBoundMicroUsd)
+  try { unlinkSync(lockPath) } catch { /* empty */ }
+  const restarted = new CampaignDispatchGate({
+    campaignId: 'pilot',
+    store: new CampaignBudgetStore({
+      statePath,
+      campaignId: 'pilot',
+      limitMicroUsd: PILOT_CAMPAIGN_LIMIT_MICRO_USD,
+    }),
+    taskOwnerId: randomUUID(),
+  })
+  await assert.rejects(
+    () => restarted.admitBeforeDispatch({ executionStage: 'chat', preparedRequest: qualifiedPreparedRequest() }),
+    (error: unknown) => error instanceof CampaignBudgetDeniedError,
+  )
+})
+
+test('physical session stop after fetch callback entered keeps unknown exposure', async (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-campaign-physical-callback-stop-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const owner = randomUUID()
+  const store = new CampaignBudgetStore({
+    statePath: join(root, 'campaign-budget.json'),
+    campaignId: 'pilot',
+    limitMicroUsd: PILOT_CAMPAIGN_LIMIT_MICRO_USD,
+  })
+  const gate = new CampaignDispatchGate({ campaignId: 'pilot', store, taskOwnerId: owner })
+  const prepared = qualifiedPreparedRequest()
+  const session = new CampaignPhysicalFetchSession({
+    campaignMeter: { executionStage: 'chat', gate },
+  })
+  const control = createRunControl({ runId: 'run-3', turnId: 'turn-3', generation: 1 })
+  const stop = {
+    owner: control.owner,
+    kind: 'cancelled' as const,
+    reasonCode: 'cancelled',
+    source: 'user' as const,
+  }
+  let physicalFetch = 0
+  await assert.rejects(
+    () => session.dispatchAdmittedFetch({
+      basePrepared: prepared,
+      physicalAttemptId: prepared.attempt_id,
+      operationId: 'provider_fetch',
+      runControl: control,
+      fetch: async () => {
+        physicalFetch += 1
+        throw new RunStoppedError(stop)
+      },
+    }),
+    (error: unknown) => error instanceof RunStoppedError,
+  )
+  assert.equal(physicalFetch, 1)
+  const operation = store.readSnapshot().operations[0]!
+  assert.equal(operation.actualMicroUsd, null)
+  assert.equal(operation.settledUnknown, true)
+  assert.equal(committedMicroUsd(store), operation.upperBoundMicroUsd)
+
+  const failedCompleted = {
+    inference_id: prepared.request_id,
+    provider: 'openrouter' as const,
+    model: CAMPAIGN_QUALIFIED_OPENROUTER_MODEL_ID,
+    status: 'failed' as const,
+    usage_metadata: null,
+  }
+  session.finalizeInvocation('failed', failedCompleted)
+  session.finalizeInvocation('failed', failedCompleted)
+  const statePath = join(root, 'campaign-budget.json')
+  const reloaded = new CampaignBudgetStore({
+    statePath,
+    campaignId: 'pilot',
+    limitMicroUsd: PILOT_CAMPAIGN_LIMIT_MICRO_USD,
+  })
+  const reloadedGate = new CampaignDispatchGate({ campaignId: 'pilot', store: reloaded, taskOwnerId: owner })
+  const reloadedOp = reloaded.readSnapshot().operations[0]!
+  assert.equal(reloadedOp.settledUnknown, true)
+  assert.equal(committedMicroUsd(reloaded), reloadedOp.upperBoundMicroUsd)
+  reloadedGate.settleUnknownOnTransportFailure({
+    executionStage: 'chat',
+    requestId: prepared.request_id,
+    attemptId: prepared.attempt_id,
+  })
+  assert.equal(committedMicroUsd(reloaded), reloadedOp.upperBoundMicroUsd)
+})
 
 test('rejected campaign reservation never reaches physical fetch on runner path', async (t) => {
   const root = mkdtempSync(join(tmpdir(), 'babel-campaign-gate-'))
@@ -158,6 +526,11 @@ test('campaign gate admits Command Code qualified deepseek route only', async (t
     campaignMeter: { executionStage: 'chat', gate },
   })
   assert.equal(physicalFetch, 1)
+  assert.equal(store.readSnapshot().operations.length, 1)
+  const operation = store.readSnapshot().operations[0]!
+  assert.equal(operation.actualMicroUsd, null)
+  assert.equal(operation.settledUnknown, true)
+  assert.ok(operation.upperBoundMicroUsd > 0)
 })
 
 test('non-qualified OpenRouter models reject before physical fetch', async (t) => {

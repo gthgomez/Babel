@@ -416,7 +416,9 @@ export type ChatEvent =
       }>
       blockedAttempts?: import('./blockedAttemptLedger.js').BlockedAttempt[]
       turnTelemetry?: ChatTurnTelemetryRecord
-      costBudget?: ChatEngineLimits['costBudget']
+      /** Financial journal uncertainty; never an execution-authority grant. */
+  accountingWarnings?: string[]
+  costBudget?: ChatEngineLimits['costBudget']
       runAllowance?: ChatEngineRunAllowanceReport
       /** Test-owned acceptance bridge marks fixture execution (not production verified). */
       fixture_execution?: boolean
@@ -430,6 +432,7 @@ export type ChatEvent =
         | 'harness'
         | 'verification'
         | null
+      gatePolicy?: VerificationPolicy
     }
   | {
       type: 'failed'
@@ -451,7 +454,9 @@ export type ChatEvent =
       /** Preserve INFRA_FAILURE vs AGENT_FAILURE when the engine already classified. */
       outcome?: import('../schemas/agentContracts.js').TerminalOutcome
       turnTelemetry?: ChatTurnTelemetryRecord
-      costBudget?: ChatEngineLimits['costBudget']
+      /** Financial journal uncertainty; never an execution-authority grant. */
+  accountingWarnings?: string[]
+  costBudget?: ChatEngineLimits['costBudget']
       runAllowance?: ChatEngineRunAllowanceReport
       /** D03: structured terminal reason code. */
       reason_code?: TerminalReasonCode
@@ -548,6 +553,8 @@ export interface ChatResult {
     source: 'provider_prompt_tokens' | 'estimated' | 'unknown'
   } | null
   turnTelemetry?: ChatTurnTelemetryRecord
+  /** Financial journal uncertainty; never an execution-authority grant. */
+  accountingWarnings?: string[]
   /** Enumerable cost-budget provenance — survives JSON / spreads / manifests. */
   costBudget?: ChatEngineLimits['costBudget']
   /** Enumerable declared vs effective run allowance + terminating limiter. */
@@ -771,7 +778,11 @@ export interface ChatEngineStreamingLoopHost {
     answer: string,
     extra?: ChatStreamDoneExtra,
   ) => ChatEvent
-  readonly streamFailed: (error: string, reason?: import('./chatTerminalReason.js').TerminalReason) => ChatEvent
+  readonly streamFailed: (
+    error: string,
+    reason?: import('./chatTerminalReason.js').TerminalReason,
+    presentationError?: string,
+  ) => ChatEvent
   readonly synthesizeAnswer: (
     toolObservations: string,
     callbacks: ChatCallbacks,

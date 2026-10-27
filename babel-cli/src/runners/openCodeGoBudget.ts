@@ -4,6 +4,16 @@ import { closeSync, existsSync, lstatSync, openSync, readFileSync, realpathSync,
 import { dirname, isAbsolute, join, basename } from 'node:path'
 import type { DatabaseSync as SqliteDatabase } from 'node:sqlite'
 
+function finiteReservationLimitNanoUsd(limitUsd: number): number {
+  const invalidLimit = 'Invalid OpenCode Go cost limit: use a positive finite amount exactly representable in safe integer nanodollars.'
+  if (!Number.isFinite(limitUsd) || limitUsd <= 0) throw new OpenCodeGoBudgetError(invalidLimit)
+  const nano = Math.round(limitUsd * 1e9)
+  if (!Number.isSafeInteger(nano) || nano <= 0 || nano / 1e9 !== limitUsd) {
+    throw new OpenCodeGoBudgetError(invalidLimit)
+  }
+  return nano
+}
+
 /** Caller-owned persistent reservation state; never contains request data or credentials. */
 export interface OpenCodeGoBudgetOptions {
   statePath: string
@@ -13,7 +23,7 @@ export interface OpenCodeGoBudgetOptions {
   requireExistingState?: boolean
   /** Trusted current effective task ceiling, bounded by the current grant. */
   currentLimitUsd?: () => number
-  /** Existing owner-authorized grant renewal; the native USD 2 ceiling remains unchanged. */
+  /** Existing owner-authorized grant renewal bounded by the current grant. */
   currentGrant?: () => { grantId: string; revision: number; limitUsd: number }
 }
 
@@ -30,8 +40,8 @@ interface ReservationState {
 /** Content-free, fail-closed budget error; callers must not select another provider. */
 export class OpenCodeGoBudgetError extends Error {
   readonly code = 'GO_BUDGET_DENIED'
-  constructor() {
-    super('OpenCode Go budget denied the request.')
+  constructor(message = 'OpenCode Go budget denied the request.') {
+    super(message)
   }
 }
 
@@ -41,45 +51,84 @@ export class OpenCodeGoBudget {
   private lastReservedNanoUsd = 0
   private lastGrant: { grantId: string; revision: number; limitNanoUsd: number } | null = null
   private readonly options: Readonly<OpenCodeGoBudgetOptions>
+  /** Null when the task grant has no finite monetary reservation ledger. */
+  private readonly monetaryReservationUsd: number | null
   constructor(options: OpenCodeGoBudgetOptions) {
-    if (!isAbsolute(options.statePath) || !options.jobId.trim() ||
-      !Number.isFinite(options.limitUsd) || options.limitUsd <= 0 || options.limitUsd > 2) {
+    if (!isAbsolute(options.statePath) || !options.jobId.trim()) {
       throw new OpenCodeGoBudgetError()
     }
+    if (options.limitUsd === Infinity) {
+      this.monetaryReservationUsd = null
+    } else {
+      this.monetaryReservationUsd = finiteReservationLimitNanoUsd(options.limitUsd) / 1e9
+    }
     this.options = Object.freeze({ ...options })
+  }
+
+  hasMonetaryReservationLedger(): boolean {
+    return this.monetaryReservationUsd !== null
   }
 
   private currentGrant(): { grantId: string; revision: number; limitNanoUsd: number } | null {
     const grant = this.options.currentGrant?.()
     if (!grant) return null
-    if (!grant.grantId.trim() || !Number.isSafeInteger(grant.revision) || grant.revision < 0 ||
-      !Number.isFinite(grant.limitUsd) || grant.limitUsd <= 0 || grant.limitUsd > 2) throw new OpenCodeGoBudgetError()
-    const current = { grantId: grant.grantId, revision: grant.revision, limitNanoUsd: Math.floor(grant.limitUsd * 1e9) }
-    if (this.lastGrant && (current.revision < this.lastGrant.revision ||
-      (current.revision === this.lastGrant.revision && (current.grantId !== this.lastGrant.grantId || current.limitNanoUsd !== this.lastGrant.limitNanoUsd)) ||
-      current.limitNanoUsd < this.lastGrant.limitNanoUsd)) throw new OpenCodeGoBudgetError()
+    if (!grant.grantId.trim() || !Number.isSafeInteger(grant.revision) || grant.revision < 0) {
+      throw new OpenCodeGoBudgetError()
+    }
+    const grantMonetaryUsd =
+      grant.limitUsd === Infinity ? null : finiteReservationLimitNanoUsd(grant.limitUsd) / 1e9
+    if (this.monetaryReservationUsd === null) {
+      if (grantMonetaryUsd !== null) throw new OpenCodeGoBudgetError()
+      const current = { grantId: grant.grantId, revision: grant.revision, limitNanoUsd: 0 }
+      this.validateGrantMonotonic(current)
+      return current
+    }
+    if (grantMonetaryUsd === null) throw new OpenCodeGoBudgetError()
+    const current = {
+      grantId: grant.grantId,
+      revision: grant.revision,
+      limitNanoUsd: finiteReservationLimitNanoUsd(grantMonetaryUsd),
+    }
+    this.validateGrantMonotonic(current)
     return current
   }
 
+  private validateGrantMonotonic(current: {
+    grantId: string
+    revision: number
+    limitNanoUsd: number
+  }): void {
+    if (this.lastGrant && (current.revision < this.lastGrant.revision ||
+      (current.revision === this.lastGrant.revision && (current.grantId !== this.lastGrant.grantId || current.limitNanoUsd !== this.lastGrant.limitNanoUsd)) ||
+      current.limitNanoUsd < this.lastGrant.limitNanoUsd)) throw new OpenCodeGoBudgetError()
+  }
+
   private currentLimitNanoUsd(): number {
-    const grantLimitNanoUsd = this.currentGrant()?.limitNanoUsd ?? Math.floor(this.options.limitUsd * 1e9)
+    if (this.monetaryReservationUsd === null) throw new OpenCodeGoBudgetError()
+    const grantLimitNanoUsd = this.currentGrant()?.limitNanoUsd ??
+      finiteReservationLimitNanoUsd(this.monetaryReservationUsd)
     const currentLimitUsd = this.options.currentLimitUsd?.() ?? grantLimitNanoUsd / 1e9
-    if (!Number.isFinite(currentLimitUsd) || currentLimitUsd <= 0 || Math.floor(currentLimitUsd * 1e9) > grantLimitNanoUsd) {
-      throw new OpenCodeGoBudgetError()
-    }
-    return Math.floor(currentLimitUsd * 1e9)
+    if (!Number.isFinite(currentLimitUsd) || currentLimitUsd <= 0) throw new OpenCodeGoBudgetError()
+    const currentNano = finiteReservationLimitNanoUsd(currentLimitUsd)
+    if (currentNano > grantLimitNanoUsd) throw new OpenCodeGoBudgetError()
+    return currentNano
   }
 
   /** Recheck the trusted task owner immediately before dispatch after asynchronous reservation. */
   assertCurrentAuthority(): void {
+    if (this.monetaryReservationUsd === null) {
+      this.lastGrant = this.currentGrant()
+      return
+    }
     if (this.lastReservedNanoUsd > this.currentLimitNanoUsd()) throw new OpenCodeGoBudgetError()
   }
 
   private reserveState(state: ReservationState, amount: number): ReservationState {
     const grant = this.currentGrant()
-    const limitNanoUsd = grant?.limitNanoUsd ?? Math.floor(this.options.limitUsd * 1e9)
+    const limitNanoUsd = grant?.limitNanoUsd ?? finiteReservationLimitNanoUsd(this.monetaryReservationUsd!)
     if (state.schema !== 1 || state.jobId !== this.options.jobId ||
-      !Number.isSafeInteger(state.limitNanoUsd) || state.limitNanoUsd <= 0 || state.limitNanoUsd > 2e9 ||
+      !Number.isSafeInteger(state.limitNanoUsd) || state.limitNanoUsd <= 0 ||
+      state.limitNanoUsd > limitNanoUsd ||
       (!grant && (state.limitNanoUsd !== limitNanoUsd || state.grantId !== undefined || state.grantRevision !== undefined)) ||
       (grant && (state.limitNanoUsd > grant.limitNanoUsd ||
         ((state.grantId !== undefined || state.grantRevision !== undefined) &&
@@ -91,7 +140,7 @@ export class OpenCodeGoBudget {
       !Number.isSafeInteger(state.attempts + 1) || state.reservedNanoUsd + amount > this.currentLimitNanoUsd()) throw new OpenCodeGoBudgetError()
     return { ...state, limitNanoUsd, reservedNanoUsd: state.reservedNanoUsd + amount,
       attempts: state.attempts + (amount === 0 ? 0 : 1),
-      ...(grant ? { grantId: grant.grantId, grantRevision: grant.revision } : {}) }
+      ...(grant && grant.limitNanoUsd > 0 ? { grantId: grant.grantId, grantRevision: grant.revision } : {}) }
   }
 
   /** One Windows ledger, using Node's native SQLite VFS. Legacy bytes are retained as evidence only. */
@@ -102,15 +151,13 @@ export class OpenCodeGoBudget {
     const legacyPath = `${statePath}.legacy.json`
     const migrationLock = `${statePath}.migration.lock`
     const initial = (): ReservationState => ({ schema: 1, jobId: this.options.jobId,
-      limitNanoUsd: this.currentGrant()?.limitNanoUsd ?? Math.floor(this.options.limitUsd * 1e9),
+      limitNanoUsd: this.currentGrant()?.limitNanoUsd ?? finiteReservationLimitNanoUsd(this.monetaryReservationUsd!),
       reservedNanoUsd: 0, attempts: 0 })
     const transact = (path: string, seed?: ReservationState, legacyHash: string | null = null, debit = amount): ReservationState => {
       let db: SqliteDatabase | undefined
       let committed = false
       try {
         db = new DatabaseSync(path)
-        // Exclusive access avoids concurrent WAL writers/checkpointers, including
-        // SQLite <= 3.51.2's WAL-reset race: https://sqlite.org/wal.html#walreset
         if (db.prepare('PRAGMA locking_mode=EXCLUSIVE').get()?.locking_mode !== 'exclusive' ||
           db.prepare('PRAGMA journal_mode=WAL').get()?.journal_mode !== 'wal') throw new OpenCodeGoBudgetError()
         db.exec('PRAGMA synchronous=FULL')
@@ -131,7 +178,6 @@ export class OpenCodeGoBudget {
         db.prepare('UPDATE go_reservation SET payload=? WHERE id=1').run(JSON.stringify(next))
         db.exec('COMMIT')
         committed = true
-        // Closing checkpoints the exclusive WAL; failure still prevents dispatch.
         db.close()
         db = undefined
         return next
@@ -147,8 +193,6 @@ export class OpenCodeGoBudget {
       if (!existsSync(statePath)) {
         if (this.options.requireExistingState || this.stateEstablished || existsSync(legacyPath) ||
           existsSync(`${statePath}-wal`) || existsSync(`${statePath}-shm`)) throw new OpenCodeGoBudgetError()
-        // Exclusive creation makes an interrupted initial store fail closed, even
-        // for another fresh caller without a resume marker.
         closeSync(openSync(statePath, 'wx', 0o600))
         seed = initial()
       } else {
@@ -156,7 +200,6 @@ export class OpenCodeGoBudget {
         if (!stat.isFile() || stat.isSymbolicLink()) throw new OpenCodeGoBudgetError()
         const bytes = readFileSync(statePath)
         if (!bytes.subarray(0, 16).equals(Buffer.from('SQLite format 3\0'))) {
-          // An empty/corrupt interrupted SQLite store is never a fresh initializer.
           const legacy = this.reserveState(JSON.parse(bytes.toString('utf8')) as ReservationState, 0)
           if (existsSync(legacyPath)) throw new OpenCodeGoBudgetError()
           const lock = openSync(migrationLock, 'wx', 0o600)
@@ -165,8 +208,6 @@ export class OpenCodeGoBudget {
           try {
             closeSync(openSync(temporary, 'wx', 0o600))
             transact(temporary, legacy, createHash('sha256').update(bytes).digest('hex'), 0)
-            // Never overwrite the only original bytes or import the retained
-            // backup automatically. Interrupted promotion stays blocked.
             renameSync(statePath, legacyPath)
             renameSync(temporary, statePath)
             migrated = true
@@ -187,6 +228,10 @@ export class OpenCodeGoBudget {
   async reserve(inputBytes: number, maxOutputTokens: number): Promise<void> {
     if (!Number.isSafeInteger(inputBytes) || inputBytes < 0 ||
       !Number.isSafeInteger(maxOutputTokens) || maxOutputTokens <= 0) throw new OpenCodeGoBudgetError()
+    if (this.monetaryReservationUsd === null) {
+      this.lastGrant = this.currentGrant()
+      return
+    }
     const amount = inputBytes * 300 + maxOutputTokens * 1200
     const currentLimitNanoUsd = this.currentLimitNanoUsd()
     if (!Number.isSafeInteger(amount) || amount > currentLimitNanoUsd) throw new OpenCodeGoBudgetError()
@@ -197,7 +242,7 @@ export class OpenCodeGoBudget {
     const tempPath = `${this.options.statePath}.${randomUUID()}.tmp`
     try {
       const grant = this.currentGrant()
-      const limitNanoUsd = grant?.limitNanoUsd ?? Math.floor(this.options.limitUsd * 1e9)
+      const limitNanoUsd = grant?.limitNanoUsd ?? finiteReservationLimitNanoUsd(this.monetaryReservationUsd)
       let state: ReservationState = { schema: 1, jobId: this.options.jobId, limitNanoUsd, reservedNanoUsd: 0, attempts: 0 }
       try {
         const bytes = await readFile(this.options.statePath, 'utf8')
@@ -212,7 +257,6 @@ export class OpenCodeGoBudget {
       try { await file.writeFile(JSON.stringify(state)); await file.sync() } finally { await file.close() }
       await rename(tempPath, this.options.statePath)
       this.stateEstablished = true
-      // Persist the rename before the caller is allowed to dispatch.
       const directory = await open(dirname(this.options.statePath), 'r')
       try { await directory.sync() } finally { await directory.close() }
       this.lastReservedNanoUsd = state.reservedNanoUsd

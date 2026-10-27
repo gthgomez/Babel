@@ -200,6 +200,19 @@ export function terminalReasonFromFailureText(
   if (isPolicyErrorText(error)) {
     return { code: 'unknown', cause_class: null, detail: 'policy_block' };
   }
+  if (/^COST_ACCOUNTING_INCOMPLETE:/.test(error)) {
+    return { code: 'cost_accounting_incomplete', cause_class: 'harness' };
+  }
+  if (/^Provider retry blocked by task allowance:/.test(error)) {
+    const nested = error.replace(/^Provider retry blocked by task allowance:\s*/, '');
+    if (nested.startsWith('COST_ACCOUNTING_INCOMPLETE:')) {
+      return {
+        code: 'cost_accounting_incomplete',
+        cause_class: 'harness',
+        detail: 'provider_retry_blocked',
+      };
+    }
+  }
   if (isLocalEnvironmentErrorText(error)) {
     return { code: 'external_dependency', cause_class: 'environment', detail: 'local_environment' };
   }

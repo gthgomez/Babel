@@ -7,6 +7,45 @@ import { join } from 'node:path';
 import { CostTracker, usageDelta } from './costTracker.js';
 import { resetGlobalTokenHistoryDb, TokenHistoryDb } from './tokenHistoryDb.js';
 
+test('unjournaled checkpoint retains a cost floor and IDs once without inventing receipts', () => {
+  const tracker = new CostTracker();
+  tracker.settleUsage('deepseek-v4.1-flash', 30, 5, null, null,
+    { taskOwnerId: 'owner', chargeId: 'first' }, true, 'opencode-go');
+  const before = tracker.getTaskSummary('owner');
+  const session = tracker.getSessionSummary();
+  const checkpoint = { totalCostUSD: before.totalCostUSD * 2, chargeIds: ['first', 'missing'] };
+  tracker.retainUnjournaledTaskCheckpoint('owner', checkpoint);
+  const retained = tracker.getTaskSummary('owner');
+  assert.equal(retained.totalCostUSD, checkpoint.totalCostUSD);
+  assert.equal(retained.unknownChargeCount, 1);
+  assert.equal(retained.estimateComplete, false);
+  assert.equal(retained.costComplete, false);
+  assert.equal(tracker.getTaskChargeObservations('owner').length, 1);
+  assert.deepEqual(tracker.getTaskChargeIds('owner'), checkpoint.chargeIds);
+  tracker.retainUnjournaledTaskCheckpoint('owner', checkpoint);
+  assert.deepEqual(tracker.getTaskSummary('owner'), retained);
+  assert.equal(tracker.settleUsage('deepseek-v4.1-flash', 30, 5, null, null,
+    { taskOwnerId: 'owner', chargeId: 'missing' }, true, 'opencode-go').kind, 'duplicate');
+  assert.deepEqual(tracker.getTaskSummary('owner'), retained);
+  assert.deepEqual(tracker.getSessionSummary(), session);
+});
+
+test('unjournaled checkpoint cannot lower newer known usage or steal another owner charge', () => {
+  const tracker = new CostTracker();
+  tracker.settleUsage('deepseek-v4.1-flash', 30, 5, null, null,
+    { taskOwnerId: 'owner', chargeId: 'first' }, true, 'opencode-go');
+  tracker.settleUsage('deepseek-v4.1-flash', 30, 5, null, null,
+    { taskOwnerId: 'other', chargeId: 'foreign' }, true, 'opencode-go');
+  const before = tracker.getTaskSummary('owner');
+  tracker.retainUnjournaledTaskCheckpoint('owner', { totalCostUSD: 0, chargeIds: ['first'] });
+  assert.deepEqual(tracker.getTaskSummary('owner'), before);
+  assert.throws(() => tracker.retainUnjournaledTaskCheckpoint('owner', {
+    totalCostUSD: 1, chargeIds: ['first', 'foreign'],
+  }), /identity conflict/);
+  assert.deepEqual(tracker.getTaskSummary('owner'), before);
+  assert.deepEqual(tracker.getTaskChargeIds('owner'), ['first']);
+});
+
 // Historical totals require an owned SQLite store, independent of ambient user state.
 let historyRoot = '';
 let priorHistoryPath: string | undefined;
@@ -67,6 +106,32 @@ test('Go estimate evidence survives cold owner/session restore and project persi
     assert.deepEqual(stats.costEstimates, [receipts[0]!.costEstimate]);
     assert.equal(resumed.getProjectHistoricalCost(root), null);
   } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('explicit provider-reported charges keep billing totals and numeric project history', () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-provider-reported-history-'));
+  try {
+    const tracker = new CostTracker(root);
+    const attribution = { taskOwnerId: 'invoice', chargeId: 'reported-1', projectRoot: root };
+    tracker.settleUsage('deepseek-v4-flash', 100, 10, null, null, attribution, true, undefined, 0.02);
+    const task = tracker.getTaskSummary('invoice');
+    assert.equal(task.totalCostUSD, 0.02);
+    assert.equal(task.unknownChargeCount, 0);
+    assert.equal(task.actualCostUSD, 0.02);
+    assert.equal(task.reportedCostUSD, 0.02);
+    assert.equal(task.costComplete, true);
+    assert.equal(task.completeCostUSD, 0.02);
+    const receipt = tracker.getTaskChargeObservations('invoice')[0]!;
+    assert.equal(receipt.costBasis, 'provider_reported');
+    assert.equal(receipt.costEstimate, undefined);
+    tracker.saveToProjectStats(tracker.getProjectSessionId(), undefined, root);
+    const stats = JSON.parse(readFileSync(join(root, 'project_stats.json'), 'utf8'));
+    assert.equal(stats.actualCostUSD, 0.02);
+    assert.equal(stats.completeCostUSD, 0.02);
+    assert.ok(Math.abs(tracker.getProjectHistoricalCost(root)! - 0.02) < 1e-12);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test('Go unknown usage and legacy numeric receipts cannot become an observed invoice', () => {
@@ -188,9 +253,10 @@ test('proven unstarted Go dispatch clears the unknown attempt without a fictitio
   const attribution = { taskOwnerId: 'go', chargeId: 'unstarted' };
   tracker.settleUsage('deepseek-v4.1-flash', 0, 0, null, null, attribution, false, 'opencode-go');
   assert.equal(tracker.clearUnstartedCharge(attribution), true);
-  assert.equal(tracker.getTaskSummary('go').completeCostUSD, 0);
-  assert.equal(tracker.getSessionSummary().completeCostUSD, 0);
-  assert.equal(tracker.getSessionSummary().costComplete, true);
+  assert.equal(tracker.getTaskSummary('go').completeCostUSD, null);
+  assert.equal(tracker.getSessionSummary().completeCostUSD, null);
+  assert.equal(tracker.getSessionSummary().costComplete, false);
+  assert.equal(tracker.getTaskSummary('go').unknownChargeCount, 0);
 });
 
 test('CostTracker prices direct DeepSeek v4 Flash with conservative cache-miss input', () => {
@@ -251,7 +317,11 @@ test('unknown model pricing stays nullable and does not become a free or fallbac
   assert.equal(tracker.trackUsage('deepseek-v4-flash', 0, 0, null, null, {
     taskOwnerId: 'owner-B', chargeId: 'known-zero',
   }), 0);
-  assert.equal(tracker.getTaskSummary('owner-B').completeCostUSD, 0);
+  const ownerB = tracker.getTaskSummary('owner-B');
+  assert.equal(ownerB.totalCostUSD, 0);
+  assert.equal(ownerB.unknownChargeCount, 0);
+  assert.equal(ownerB.completeCostUSD, null);
+  assert.equal(ownerB.costComplete, false);
   assert.equal(tracker.getSessionSummary().completeCostUSD, null);
   assert.equal(tracker.trackUsage('unlisted-provider-model', 1000, 1000, null, null, {
     taskOwnerId: 'owner-A', chargeId: 'unknown-1',
@@ -339,7 +409,11 @@ test('resume projects a known refinement once against restored session totals', 
   assert.equal(update.kind, 'refined');
   assert.equal(resumed.getSessionSummary().totalTokens, 120);
   assert.equal(resumed.getSessionSummary().unknownChargeCount, 0);
-  assert.equal(resumed.getSessionSummary().completeCostUSD, resumed.getTaskSummary('A').totalCostUSD);
+  const allowance = resumed.getTaskSummary('A').totalCostUSD;
+  assert.ok(allowance > 0);
+  assert.equal(resumed.getSessionSummary().totalCostUSD, allowance);
+  assert.equal(resumed.getSessionSummary().completeCostUSD, null);
+  assert.equal(resumed.getSessionSummary().costComplete, false);
   assert.deepEqual(resumed.getSessionChargeIds(), ['pending-1']);
 });
 
@@ -359,7 +433,9 @@ test('a pending dispatch survives cold restore and can clear only on proven refu
   assert.equal(resumed.getTaskSummary('A').unknownChargeCount, 1);
   assert.equal(resumed.clearUnstartedCharge({ ...attribution, chargeId: 'wrong' }), false);
   assert.equal(resumed.clearUnstartedCharge(attribution), true);
-  assert.equal(resumed.getTaskSummary('A').costComplete, true);
+  assert.equal(resumed.getTaskSummary('A').costComplete, false);
+  assert.equal(resumed.getTaskSummary('A').completeCostUSD, null);
+  assert.equal(resumed.getTaskSummary('A').unknownChargeCount, 0);
   assert.deepEqual(resumed.getTaskChargeIds('A'), []);
 });
 
@@ -422,7 +498,9 @@ test('an unknown charge refines to one known charge without duplicating tokens o
   assert.equal(tracker.getTaskSummary('child').totalTokens, 120);
   assert.equal(tracker.getTaskSummary('parent').totalCostUSD, tracker.getTaskSummary('child').totalCostUSD);
   assert.equal(tracker.getSessionSummary().totalTokens, 120);
-  assert.equal(tracker.getSessionSummary().costComplete, true);
+  assert.equal(tracker.getSessionSummary().completeCostUSD, null);
+  assert.equal(tracker.getSessionSummary().costComplete, false);
+  assert.equal(tracker.getSessionSummary().estimateComplete, true);
   assert.deepEqual(tracker.settleUsage('deepseek-v4-flash', 100, 20, null, null, attribution), { kind: 'duplicate' });
   assert.equal(tracker.getSessionSummary().totalTokens, 120);
 });
@@ -515,7 +593,9 @@ test('owner receipt newer than session snapshot reconciles on cold resume', () =
   resumed.restoreTaskUsage('A', latestOwner);
   assert.equal(resumed.getSessionSummary().unknownChargeCount, 0);
   assert.equal(resumed.getSessionSummary().totalTokens, 1100);
-  assert.equal(resumed.getSessionSummary().completeCostUSD, latestOwner.totalCostUSD);
+  assert.equal(resumed.getSessionSummary().totalCostUSD, latestOwner.totalCostUSD);
+  assert.equal(resumed.getSessionSummary().completeCostUSD, null);
+  assert.equal(resumed.getSessionSummary().costComplete, false);
   assert.equal(resumed.settleUsage('deepseek-v4-flash', 1000, 100, null, null, attribution).kind, 'duplicate');
   assert.equal(resumed.getSessionSummary().totalTokens, 1100);
 });
@@ -594,7 +674,9 @@ test('charge identity conflict is explicit and cannot move a receipt to another 
   assert.equal(tracker.getTaskSummary('B').totalCostUSD, 0);
   assert.equal(tracker.getTaskSummary('A').totalTokens, 120);
   assert.equal(tracker.settleUsage('deepseek-v4-flash', 0, 0, null, null, attribution, false).kind, 'duplicate');
-  assert.equal(tracker.getTaskSummary('A').costComplete, true);
+  assert.equal(tracker.getTaskSummary('A').costComplete, false);
+  assert.equal(tracker.getTaskSummary('A').completeCostUSD, null);
+  assert.equal(tracker.getTaskSummary('A').unknownChargeCount, 0);
 });
 
 test('restoring a stale snapshot preserves a live unknown-only charge', () => {
@@ -646,7 +728,8 @@ test('project history upserts changing sessions and retains unknown completeness
     assert.ok(Math.abs(stats.totalCostUSD - aCost - bCost) < 1e-12);
     assert.ok(Math.abs(stats.modelBreakdown['deepseek-v4-flash'].costUSD - aCost) < 1e-12);
     assert.ok(Math.abs(stats.modelBreakdown['deepseek-v4-pro'].costUSD - bCost) < 1e-12);
-    assert.ok(Math.abs(a.getProjectHistoricalCost(root)! - aCost - bCost) < 1e-12);
+    assert.equal(stats.completeCostUSD, null);
+    assert.equal(a.getProjectHistoricalCost(root), null);
 
     b.recordUnknownCharge('unlisted-provider-model', { taskOwnerId: 'B', chargeId: 'unknown-B' });
     b.saveToProjectStats('B');
@@ -679,7 +762,8 @@ test('project stats sum per-run deltas from one cumulative tracker', () => {
     assert.ok(Math.abs(stats.totalCostUSD - tracker.getSessionSummary().totalCostUSD) < 1e-12);
     assert.equal(stats.totalInputTokens, 3000);
     assert.equal(stats.totalOutputTokens, 300);
-    assert.ok(Math.abs(tracker.getProjectHistoricalCost(root)! - tracker.getSessionSummary().totalCostUSD) < 1e-12);
+    assert.equal(stats.completeCostUSD, null);
+    assert.equal(tracker.getProjectHistoricalCost(root), null);
   } finally {
     resetGlobalTokenHistoryDb();
     if (oldDb === undefined) delete process.env['BABEL_TOKEN_DB_PATH'];
@@ -704,7 +788,13 @@ test('a later run refines an earlier unknown in one session snapshot', () => {
     assert.equal(stats.unknownChargeCount, 0);
     assert.equal(stats.totalInputTokens, 1000);
     assert.equal(stats.totalOutputTokens, 100);
-    assert.equal(stats.completeCostUSD, tracker.getSessionSummary().totalCostUSD);
+    const session = tracker.getSessionSummary();
+    assert.ok(Math.abs(stats.totalCostUSD - session.totalCostUSD) < 1e-12);
+    assert.equal(session.completeCostUSD, null);
+    assert.equal(session.costComplete, false);
+    assert.equal(session.estimateComplete, true);
+    assert.equal(stats.completeCostUSD, null);
+    assert.equal(tracker.getProjectHistoricalCost(root), null);
     assert.deepEqual(Object.keys(stats.sessionSnapshots), [sessionId]);
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -769,8 +859,9 @@ test('a newer saved session cannot certify an older project snapshot after resum
     const stats = JSON.parse(readFileSync(join(root, 'project_stats.json'), 'utf8'));
     assert.equal(stats.projectionComplete, true);
     assert.equal(stats.unknownChargeCount, 0);
-    assert.equal(stats.completeCostUSD, original.getSessionSummary().totalCostUSD);
-    assert.equal(resumed.getProjectHistoricalCost(root), original.getSessionSummary().totalCostUSD);
+    assert.ok(Math.abs(stats.totalCostUSD - original.getSessionSummary().totalCostUSD) < 1e-12);
+    assert.equal(stats.completeCostUSD, null);
+    assert.equal(resumed.getProjectHistoricalCost(root), null);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -791,8 +882,13 @@ test('project snapshots use each target root run delta', () => {
     const b = JSON.parse(readFileSync(join(rootB, 'project_stats.json'), 'utf8'));
     assert.equal(a.totalInputTokens, 100);
     assert.equal(b.totalInputTokens, 200);
-    assert.ok(Math.abs(tracker.getProjectHistoricalCost(rootA)! - a.totalCostUSD) < 1e-12);
-    assert.ok(Math.abs(tracker.getProjectHistoricalCost(rootB)! - b.totalCostUSD) < 1e-12);
+    assert.ok(a.totalCostUSD > 0);
+    assert.ok(b.totalCostUSD > 0);
+    assert.ok(b.totalCostUSD > a.totalCostUSD);
+    assert.equal(a.completeCostUSD, null);
+    assert.equal(b.completeCostUSD, null);
+    assert.equal(tracker.getProjectHistoricalCost(rootA), null);
+    assert.equal(tracker.getProjectHistoricalCost(rootB), null);
   } finally {
     rmSync(rootA, { recursive: true, force: true });
     rmSync(rootB, { recursive: true, force: true });
@@ -835,8 +931,12 @@ test('rooted restored receipts repair one project without poisoning another', ()
     assert.equal(statsA.unknownChargeCount, 0);
     assert.equal(statsA.totalInputTokens, 1000);
     assert.equal(statsB.totalInputTokens, 200);
-    assert.ok(Math.abs(resumed.getProjectHistoricalCost(rootA)! - original.getTaskSummary('A').totalCostUSD) < 1e-12);
-    assert.ok(Math.abs(resumed.getProjectHistoricalCost(rootB)! - original.getTaskSummary('B').totalCostUSD) < 1e-12);
+    assert.ok(Math.abs(statsA.totalCostUSD - original.getTaskSummary('A').totalCostUSD) < 1e-12);
+    assert.ok(Math.abs(statsB.totalCostUSD - original.getTaskSummary('B').totalCostUSD) < 1e-12);
+    assert.equal(statsA.completeCostUSD, null);
+    assert.equal(statsB.completeCostUSD, null);
+    assert.equal(resumed.getProjectHistoricalCost(rootA), null);
+    assert.equal(resumed.getProjectHistoricalCost(rootB), null);
   } finally {
     rmSync(rootA, { recursive: true, force: true });
     rmSync(rootB, { recursive: true, force: true });
@@ -1129,7 +1229,9 @@ test('a new pending receipt after resume does not permanently poison project com
     stats = JSON.parse(readFileSync(join(root, 'project_stats.json'), 'utf8'));
     assert.equal(stats.projectionComplete, true);
     assert.equal(stats.unknownChargeCount, 0);
-    assert.equal(stats.completeCostUSD, resumed.getSessionSummary().totalCostUSD);
+    assert.ok(Math.abs(stats.totalCostUSD - resumed.getSessionSummary().totalCostUSD) < 1e-12);
+    assert.equal(stats.completeCostUSD, null);
+    assert.equal(resumed.getProjectHistoricalCost(root), null);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

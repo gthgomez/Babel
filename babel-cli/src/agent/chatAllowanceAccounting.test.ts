@@ -229,6 +229,44 @@ test('late provider usage remains billed to the cancelled owner after a new task
   }
 })
 
+const CC_MODEL = 'deepseek/deepseek-v4.1-flash'
+const CC_PROVIDER = 'command-code'
+
+test('finite Command Code grant blocks after absent usage leaves an unknown charge', () => {
+  const runsRoot = mkdtempSync(join(tmpdir(), 'babel-cc-absent-runs-'))
+  const projectRoot = mkdtempSync(join(tmpdir(), 'babel-cc-absent-project-'))
+  const previousRunsDir = process.env['BABEL_RUNS_DIR']
+  const previousUsage = globalCostTracker.getSessionSummary()
+  process.env['BABEL_RUNS_DIR'] = runsRoot
+  globalCostTracker.resetSession()
+  try {
+    const engine = new ChatEngine({ task: 'finite cc absent usage', projectRoot, model: 'command-code/deepseek-v4.1-flash', maxCostUsd: 2 })
+    engine.applyUserSubmission({ userInput: 'start finite cc task' })
+    const owner = allowanceAccess(engine).getTaskAllowanceSnapshot()!.taskOwnerId
+    globalCostTracker.settleUsage(CC_MODEL, 0, 0, null, null,
+      { taskOwnerId: owner, chargeId: 'cc-absent-usage' }, false, CC_PROVIDER, undefined)
+    const summary = globalCostTracker.getTaskSummary(owner)
+    assert.equal(summary.unknownChargeCount, 1)
+    assert.equal(summary.completeCostUSD, null)
+    const budget = allowanceAccess(engine).checkBudgets()
+    assert.equal(budget.ok, false)
+    assert.equal(budget.limiter, 'cost')
+    assert.match(budget.reason ?? '', /unknown pricing/)
+  } finally {
+    globalCostTracker.resetSession()
+    globalCostTracker.restoreSessionCost({
+      totalCostUSD: previousUsage.totalCostUSD,
+      totalInputTokens: previousUsage.totalInputTokens,
+      totalOutputTokens: previousUsage.totalOutputTokens,
+      totalTokens: previousUsage.totalTokens,
+    })
+    if (previousRunsDir === undefined) delete process.env['BABEL_RUNS_DIR']
+    else process.env['BABEL_RUNS_DIR'] = previousRunsDir
+    rmSync(runsRoot, { recursive: true, force: true })
+    rmSync(projectRoot, { recursive: true, force: true })
+  }
+})
+
 test('finite task dollar cap refuses another request after unknown-price usage', () => {
   const runsRoot = mkdtempSync(join(tmpdir(), 'babel-chat-unknown-cost-'))
   const projectRoot = mkdtempSync(join(tmpdir(), 'babel-chat-unknown-project-'))
@@ -237,7 +275,7 @@ test('finite task dollar cap refuses another request after unknown-price usage',
   process.env['BABEL_RUNS_DIR'] = runsRoot
   globalCostTracker.resetSession()
   try {
-    const engine = new ChatEngine({ task: 'finite cap task', projectRoot, model: 'deepseek-v4-flash' })
+    const engine = new ChatEngine({ task: 'finite cap task', projectRoot, model: 'deepseek-v4-flash', maxCostUsd: 2 })
     engine.applyUserSubmission({ userInput: 'start finite cap task' })
     const owner = allowanceAccess(engine).getTaskAllowanceSnapshot()!.taskOwnerId
     globalCostTracker.recordUnknownCharge('unlisted-provider-model', { taskOwnerId: owner, chargeId: 'unknown-priced-request' })
@@ -271,7 +309,7 @@ test('finite task cap uses the Go usage estimate while the actual invoice remain
   process.env['BABEL_RUNS_DIR'] = runsRoot
   globalCostTracker.resetSession()
   try {
-    const engine = new ChatEngine({ task: 'finite cap task', projectRoot, model: 'deepseek-v4-flash' })
+    const engine = new ChatEngine({ task: 'finite cap task', projectRoot, model: 'deepseek-v4-flash', maxCostUsd: 2 })
     engine.applyUserSubmission({ userInput: 'start finite cap task' })
     const owner = allowanceAccess(engine).getTaskAllowanceSnapshot()!.taskOwnerId
     globalCostTracker.settleUsage('deepseek-v4.1-flash', 1000, 100, null, null,
@@ -287,6 +325,60 @@ test('finite task cap uses the Go usage estimate while the actual invoice remain
     else process.env['BABEL_RUNS_DIR'] = previousRunsDir
     rmSync(runsRoot, { recursive: true, force: true })
     rmSync(projectRoot, { recursive: true, force: true })
+  }
+})
+
+test('priced-estimate parent exposes finite child remaining allowance while billing stays incomplete', () => {
+  globalCostTracker.resetSession()
+  try {
+    const parentId = 'parent-priced-estimate'
+    globalCostTracker.settleUsage('deepseek-v4-flash', 100, 10, null, null, {
+      taskOwnerId: parentId,
+      chargeId: 'registry-priced',
+    })
+    const parentSummary = globalCostTracker.getTaskSummary(parentId)
+    assert.equal(parentSummary.costComplete, false)
+    assert.equal(parentSummary.estimateComplete, true)
+    assert.ok(parentSummary.totalCostUSD > 0)
+    const allowance = deriveChildAllowance({
+      parentTaskOwnerId: parentId,
+      parentTaskBaselineUsd: 0,
+      parentEffectiveCostCapUsd: 1,
+      parentDeadlineAtMs: null,
+      childMaxRounds: 3,
+    })
+    assert.equal(allowance.accountingComplete, true)
+    assert.ok((allowance.remainingCostUsd ?? 0) > 0)
+    assert.equal(inheritedChildBudgetLimiter(allowance), null)
+  } finally {
+    globalCostTracker.resetSession()
+  }
+})
+
+test('unknown parent accounting blocks finite child remaining allowance and stops immediately', () => {
+  globalCostTracker.resetSession()
+  try {
+    const parentId = 'parent-unknown-accounting'
+    globalCostTracker.recordUnknownCharge('unlisted-provider-model', {
+      taskOwnerId: parentId,
+      chargeId: 'unknown-priced',
+    })
+    const parentSummary = globalCostTracker.getTaskSummary(parentId)
+    assert.equal(parentSummary.estimateComplete, false)
+    assert.equal(parentSummary.costComplete, false)
+    assert.equal(parentSummary.unknownChargeCount, 1)
+    const allowance = deriveChildAllowance({
+      parentTaskOwnerId: parentId,
+      parentTaskBaselineUsd: 0,
+      parentEffectiveCostCapUsd: 1,
+      parentDeadlineAtMs: null,
+      childMaxRounds: 3,
+    })
+    assert.equal(allowance.accountingComplete, false)
+    assert.equal(allowance.remainingCostUsd, 0)
+    assert.equal(inheritedChildBudgetLimiter(allowance), 'cost')
+  } finally {
+    globalCostTracker.resetSession()
   }
 })
 

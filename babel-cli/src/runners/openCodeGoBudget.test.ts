@@ -9,6 +9,7 @@ import { spawn } from 'node:child_process'
 import { DatabaseSync } from 'node:sqlite'
 import { OpenCodeGoBudget } from './openCodeGoBudget.js'
 import { OpenCodeGoApiRunner } from './openCodeGoApi.js'
+import { resolveChatEngineLimits } from '../config/chatEngineLimits.js'
 
 const windows = { skip: process.platform !== 'win32' ? 'Native Windows SQLite boundary' : false }
 const moduleUrl = new URL('./openCodeGoBudget.ts', import.meta.url).href
@@ -22,10 +23,43 @@ function fixture(t: test.TestContext) {
   return { root, statePath: join(root, 'budget.json'), jobId: 'owner', limitUsd: 0.00001 }
 }
 
+test('selected finite Go caps preserve representable amounts and reject unsupported precision clearly', t => {
+  const options = fixture(t)
+  for (const amount of [0.001, 0.00000001, 1.000000001, 101, 1_000_000.25]) {
+    const limits = resolveChatEngineLimits({ maxCostUsd: amount })
+    assert.equal(limits.maxCostUsd, amount)
+    assert.equal(new OpenCodeGoBudget({ ...options, limitUsd: limits.maxCostUsd }).hasMonetaryReservationLedger(), true)
+  }
+  for (const amount of [10_000_000, 0.0000000001, 0.0000000015]) {
+    const limits = resolveChatEngineLimits({ maxCostUsd: amount })
+    assert.equal(limits.maxCostUsd, amount, 'other routes retain the selected numeric amount')
+    assert.throws(() => new OpenCodeGoBudget({ ...options, limitUsd: limits.maxCostUsd }),
+      { code: 'GO_BUDGET_DENIED', message: /Invalid OpenCode Go cost limit.*representable/ })
+    assert.equal(existsSync(options.statePath), false)
+  }
+})
+
+test('a representable fractional Go cap permits its exact reservation without rounding down', async t => {
+  const options = fixture(t)
+  const limitUsd = resolveChatEngineLimits({ maxCostUsd: 0.0000633 }).maxCostUsd
+  const budget = new OpenCodeGoBudget({ ...options, limitUsd })
+  await budget.reserve(207, 1) // 207 * 300 + 1 * 1200 = exactly 63300 nanodollars.
+  assert.equal(ledgerLimitNanoUsd(options.statePath), 63300)
+  budget.assertCurrentAuthority()
+  await assert.rejects(budget.reserve(0, 1), { code: 'GO_BUDGET_DENIED' })
+})
+
 function state(path: string): { reservedNanoUsd: number; attempts: number; limitNanoUsd: number; grantRevision?: number } {
   const db = new DatabaseSync(path, { readOnly: true })
   try { return JSON.parse(String(db.prepare('SELECT payload FROM go_reservation WHERE id = 1').get()!.payload)) }
   finally { db.close() }
+}
+
+function ledgerLimitNanoUsd(statePath: string): number {
+  if (process.platform === 'win32') {
+    return state(statePath).limitNanoUsd
+  }
+  return (JSON.parse(readFileSync(statePath, 'utf8')) as { limitNanoUsd: number }).limitNanoUsd
 }
 
 async function child(script: string, barrier = false) {
@@ -199,4 +233,48 @@ test('Windows Go death during first-store creation cannot become an empty resume
   assert.equal(existsSync(options.statePath), true)
   await assert.rejects(new OpenCodeGoBudget({ ...options, requireExistingState: true }).reserve(1, 1), /budget denied/i)
   await assert.rejects(new OpenCodeGoBudget(options).reserve(1, 1), /budget denied/i)
+})
+
+test('Go budget honors finite grants above the legacy two-dollar ceiling', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-go-grant-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const statePath = join(root, 'budget.json')
+  const budget = new OpenCodeGoBudget({ statePath, jobId: 'owner', limitUsd: 5 })
+  await budget.reserve(1, 1)
+  assert.equal(ledgerLimitNanoUsd(statePath), 5_000_000_000)
+})
+
+test('Go budget rejects non-finite currentLimitUsd', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-go-invalid-limit-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const statePath = join(root, 'budget.json')
+  const budget = new OpenCodeGoBudget({
+    statePath,
+    jobId: 'owner',
+    limitUsd: 5,
+    currentLimitUsd: () => Number.NaN,
+  })
+  await assert.rejects(() => budget.reserve(1, 1), /budget denied/i)
+})
+
+test('finite Go grant enforces monetary exhaustion on supported ledger', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-go-exhaust-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const statePath = join(root, 'budget.json')
+  const limitUsd = 0.00001
+  const budget = new OpenCodeGoBudget({ statePath, jobId: 'owner', limitUsd })
+  await budget.reserve(1, 1)
+  await assert.rejects(() => budget.reserve(9000, 9000), /budget denied/i)
+  assert.equal(ledgerLimitNanoUsd(statePath), 10_000)
+})
+
+test('unlimited Go grant dispatches without a monetary reservation ledger file', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-go-unlimited-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const statePath = join(root, 'budget.json')
+  const budget = new OpenCodeGoBudget({ statePath, jobId: 'owner', limitUsd: Infinity })
+  assert.equal(budget.hasMonetaryReservationLedger(), false)
+  await budget.reserve(1_000, 16)
+  assert.equal(existsSync(statePath), false)
+  budget.assertCurrentAuthority()
 })

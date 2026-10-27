@@ -17,7 +17,7 @@ import {
 } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import {normalizeChatExecutionScope} from './chatExecutionScope.js';
-import {inferTaskAcceptance} from './taskAcceptanceMeaning.js';
+import {inferTaskAcceptanceV2} from './taskAcceptanceMeaning.js';
 import {
   bindExecutableVerifiersToTaskAcceptance,
   mergeTrustedVerifierCommands,
@@ -333,12 +333,12 @@ export function resolveLiveSessionAuthority(input: {
   });
 
   const meaning = bindExecutableVerifiersToTaskAcceptance({
-    meaning: inferTaskAcceptance(input.task),
+    meaning: inferTaskAcceptanceV2(input.task),
     trustedVerifierCommands: mergeTrustedVerifierCommands({
       requiredVerifierCommands: input.verifierRequirements ?? [],
       projectTestCommands: input.projectTestCommands ?? [],
     }),
-      ...(input.projectRoot ? { defaultWorkingDirectory: '.' } : {}),
+    ...(input.projectRoot ? { defaultWorkingDirectory: '.' } : {}),
   });
   // A designated regression witness makes the already-present tests and their
   // script definitions protected inputs, enforced by the execution gate from

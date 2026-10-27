@@ -547,6 +547,96 @@ export function resolveVerificationPolicy(opts: {
   return opts.policy;
 }
 
+/** Single effective verification view for gate, recovery, kernel, and terminal metadata. */
+export interface CompletionVerificationContext {
+  tunePolicy: VerificationPolicy;
+  resolvedPolicy: VerificationPolicy;
+  requiredVerifierCommands: string[];
+  honestyPolicy: VerificationPolicy;
+  mandatoryVerifierContract: boolean;
+  effectiveGatePolicy: VerificationPolicy;
+}
+
+export function resolveCompletionVerificationContext(opts: {
+  taskClass: ChatTaskClass;
+  task: string;
+  projectTestCommands?: readonly string[] | null;
+  requiredVerifierCommands?: readonly string[] | null;
+  toolCallLog?: GateToolLogEntry[];
+}): CompletionVerificationContext {
+  const tune = getChatTaskTune(opts.taskClass);
+  const tunePolicy = tune.verificationPolicy;
+  const resolvedPolicy = resolveVerificationPolicy({
+    policy: tunePolicy,
+    task: opts.task,
+  });
+  const requiredVerifierCommands = resolveHonestyRequiredVerifiers({
+    task: opts.task,
+    ...(opts.projectTestCommands !== undefined
+      ? { projectTestCommands: opts.projectTestCommands }
+      : {}),
+    ...(opts.requiredVerifierCommands !== undefined
+      ? { requiredVerifierCommands: opts.requiredVerifierCommands }
+      : {}),
+  });
+  const noChange =
+    opts.toolCallLog !== undefined && hasInspectedNoChangeEvidence(opts.toolCallLog);
+  const noChangeNeedsVerification =
+    requiredVerifierCommands.length > 0 ||
+    taskAsksForVerifier(opts.task) ||
+    resolvedPolicy === 'strict';
+  const honestyPolicy =
+    noChange && !noChangeNeedsVerification
+      ? 'none'
+      : noChangeNeedsVerification && resolvedPolicy === 'none'
+        ? 'required'
+        : resolvedPolicy;
+  const mandatoryVerifierContract = requiredVerifierCommands.length > 0;
+  return {
+    tunePolicy,
+    resolvedPolicy,
+    requiredVerifierCommands,
+    honestyPolicy,
+    mandatoryVerifierContract,
+    effectiveGatePolicy: honestyPolicy,
+  };
+}
+
+/** Engine completion-gate path: effective policy from class, task, and live tool log. */
+export function resolveEffectiveGatePolicyForEngineGate(opts: {
+  taskClass: ChatTaskClass;
+  task: string;
+  projectTestCommands: readonly string[];
+  requiredVerifierCommands?: readonly string[] | null;
+  toolCallLog: GateToolLogEntry[];
+}): VerificationPolicy {
+  return resolveCompletionVerificationContext({
+    taskClass: opts.taskClass,
+    task: opts.task,
+    projectTestCommands: opts.projectTestCommands,
+    ...(opts.requiredVerifierCommands !== undefined
+      ? { requiredVerifierCommands: opts.requiredVerifierCommands }
+      : {}),
+    toolCallLog: opts.toolCallLog,
+  }).effectiveGatePolicy;
+}
+
+export function syncEffectiveGatePolicyAtCompletion(opts: {
+  taskClass: ChatTaskClass;
+  task: string;
+  /** Host-resolved verifier list (includes discovered project tests when applicable). */
+  requiredVerifierCommands: readonly string[];
+  toolCallLog: GateToolLogEntry[];
+}): VerificationPolicy {
+  return resolveEffectiveGatePolicyForEngineGate({
+    taskClass: opts.taskClass,
+    task: opts.task,
+    projectTestCommands: [],
+    requiredVerifierCommands: opts.requiredVerifierCommands,
+    toolCallLog: opts.toolCallLog,
+  });
+}
+
 export type CompletionGateRejectReason =
   | 'no_writes'
   | 'verifier_missing'
@@ -1204,11 +1294,16 @@ export function planCompletionGateReject(opts: {
   hadToolCallsThisTurn: boolean;
   gateStrikes: number;
   maxGateStrikes: number;
+  /** Host/frozen required verifier list — missing receipt must never soft-allow. */
+  mandatoryVerifierContract?: boolean;
 }): GateRejectPlan {
-  const enforceHard = shouldHardBlockVerifierHonesty({
+  let enforceHard = shouldHardBlockVerifierHonesty({
     policy: opts.policy,
     hardGate: opts.hardGate,
   });
+  if (opts.mandatoryVerifierContract) {
+    enforceHard = true;
+  }
 
   if (!opts.hasWrites && !opts.hasInspectedNoChange) {
     const next = opts.gateStrikes + 1;
@@ -1294,12 +1389,8 @@ export function evaluateCompletionGateForEngine(opts: {
 
   const log = opts.toolCallLog;
   const hasWrite = hasLoggedWrites(log);
-  const tune = getChatTaskTune(opts.taskClass);
-  const policy = resolveVerificationPolicy({
-    policy: tune.verificationPolicy,
-    task: opts.task,
-  });
-  const requiredVerifierCommands = resolveHonestyRequiredVerifiers({
+  const verification = resolveCompletionVerificationContext({
+    taskClass: opts.taskClass,
     task: opts.task,
     ...(opts.projectTestCommands !== undefined
       ? { projectTestCommands: opts.projectTestCommands }
@@ -1307,15 +1398,15 @@ export function evaluateCompletionGateForEngine(opts: {
     ...(opts.requiredVerifierCommands !== undefined
       ? { requiredVerifierCommands: opts.requiredVerifierCommands }
       : {}),
+    toolCallLog: log,
   });
+  const policy = verification.resolvedPolicy;
+  const requiredVerifierCommands = verification.requiredVerifierCommands;
   const noChange = hasInspectedNoChangeEvidence(log);
-  const noChangeNeedsVerification = requiredVerifierCommands.length > 0
-    || taskAsksForVerifier(opts.task) || policy === 'strict';
   const honesty = evaluateExecuteCompletionHonesty({
     hasWrite,
     allowInspectedNoChange: noChange,
-    policy: noChange && !noChangeNeedsVerification ? 'none'
-      : noChangeNeedsVerification && policy === 'none' ? 'required' : policy,
+    policy: verification.honestyPolicy,
     lastVerifierReceipt: opts.lastVerifierReceipt ?? null,
     toolCallLog: log,
     requiredVerifierCommands,
@@ -1482,16 +1573,12 @@ export function buildGateRejectUserMessageForEngine(opts: {
   /** Adaptation errors from chat receipt \u2192 canonical receipt conversion. */
   verifierEvidenceErrors?: readonly string[] | null;
 }): string {
-  const tune = getChatTaskTune(opts.taskClass);
-  const policy = resolveVerificationPolicy({
-    policy: tune.verificationPolicy,
-    task: opts.task,
-  });
   const log = opts.toolCallLog;
   if (!opts.hasAnyWrites && !hasInspectedNoChangeEvidence(log)) {
     return buildGateRejectionMessage(log);
   }
-  const requiredVerifierCommands = resolveHonestyRequiredVerifiers({
+  const verification = resolveCompletionVerificationContext({
+    taskClass: opts.taskClass,
     task: opts.task,
     ...(opts.projectTestCommands !== undefined
       ? { projectTestCommands: opts.projectTestCommands }
@@ -1499,14 +1586,15 @@ export function buildGateRejectUserMessageForEngine(opts: {
     ...(opts.requiredVerifierCommands !== undefined
       ? { requiredVerifierCommands: opts.requiredVerifierCommands }
       : {}),
+    toolCallLog: log,
   });
   const honesty = evaluateExecuteCompletionHonesty({
     hasWrite: opts.hasAnyWrites,
     allowInspectedNoChange: hasInspectedNoChangeEvidence(log),
-    policy,
+    policy: verification.honestyPolicy,
     lastVerifierReceipt: opts.lastVerifierReceipt ?? null,
     toolCallLog: log,
-    requiredVerifierCommands,
+    requiredVerifierCommands: verification.requiredVerifierCommands,
     executedVerifierLedger: opts.executedVerifierLedger ?? null,
     verifierEvidenceErrors: opts.verifierEvidenceErrors ?? null,
   });

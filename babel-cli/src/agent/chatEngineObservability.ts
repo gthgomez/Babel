@@ -173,12 +173,15 @@ export type StreamDoneEvent = {
   blockedAttempts?: BlockedAttempt[];
   turnSummaries?: TurnSummary[];
   turnTelemetry?: import('./chatTurnTelemetry.js').ChatTurnTelemetryRecord;
+  accountingWarnings?: string[];
   costBudget?: ChatEngineLimits['costBudget'];
   runAllowance?: ChatEngineRunAllowanceReport;
   /** D03: structured terminal reason code (UI authority; prose stays diagnostic). */
   reason_code?: TerminalReasonCode;
   /** D03: separate model-vs-harness cause axis; null = not established. */
   cause_class?: 'model' | 'provider' | 'environment' | 'harness' | 'verification' | null;
+  /** Effective completion verification policy for this turn (includes host overrides). */
+  gatePolicy?: import('../config/chatTaskClass.js').VerificationPolicy;
 };
 
 export type StreamFailedEvent = {
@@ -190,6 +193,7 @@ export type StreamFailedEvent = {
   turnTelemetry?: import('./chatTurnTelemetry.js').ChatTurnTelemetryRecord;
   /** Present only when the cause is established. Unknown stays omitted. */
   outcome?: TerminalOutcome;
+  accountingWarnings?: string[];
   costBudget?: ChatEngineLimits['costBudget'];
   runAllowance?: ChatEngineRunAllowanceReport;
   /** D03: structured terminal reason code. */
@@ -293,10 +297,12 @@ export function buildStreamDone(
     verifierTampered?: boolean;
     criticReceipt?: DiffCriticVerdict | null;
     turnTelemetry?: import('./chatTurnTelemetry.js').ChatTurnTelemetryRecord;
+    accountingWarnings?: string[];
     costBudget?: ChatEngineLimits['costBudget'];
     runAllowance?: ChatEngineRunAllowanceReport;
     /** D03: structured terminal reason. */
     reason?: import('./chatTerminalReason.js').TerminalReason;
+    gatePolicy?: import('../config/chatTaskClass.js').VerificationPolicy;
   },
 ): StreamDoneEvent {
   if (!extra?.outcome) {
@@ -328,10 +334,14 @@ export function buildStreamDone(
   if (extra.planOutcome) event.planOutcome = extra.planOutcome;
   if (extra.turnTelemetry) event.turnTelemetry = extra.turnTelemetry;
   if (extra.costBudget) event.costBudget = extra.costBudget;
+  if (extra.accountingWarnings?.length) event.accountingWarnings = extra.accountingWarnings;
   if (extra.runAllowance) event.runAllowance = extra.runAllowance;
   if (extra.reason) {
     event.reason_code = extra.reason.code;
     event.cause_class = extra.reason.cause_class;
+  }
+  if (extra.gatePolicy != null) {
+    event.gatePolicy = extra.gatePolicy;
   }
   return event;
 }
@@ -343,6 +353,7 @@ export function buildStreamFailed(
     turnTelemetry?: import('./chatTurnTelemetry.js').ChatTurnTelemetryRecord;
     outcome?: TerminalOutcome;
     status?: ChatStatus;
+    accountingWarnings?: string[];
     costBudget?: ChatEngineLimits['costBudget'];
     runAllowance?: ChatEngineRunAllowanceReport;
     /** D03: structured terminal reason. */
@@ -363,6 +374,7 @@ export function buildStreamFailed(
   if (extra?.turnTelemetry) event.turnTelemetry = extra.turnTelemetry;
   if (extra?.outcome) event.outcome = extra.outcome;
   if (extra?.costBudget) event.costBudget = extra.costBudget;
+  if (extra?.accountingWarnings?.length) event.accountingWarnings = extra.accountingWarnings;
   if (extra?.runAllowance) event.runAllowance = extra.runAllowance;
   if (extra?.reason) {
     event.reason_code = extra.reason.code;

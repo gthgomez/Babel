@@ -26,6 +26,71 @@ import {
   paritySettleProviderRetry,
   type ParityRuntime,
 } from './chatEngineParityBridge.js';
+import { handleOwnerChargePersistFailure } from './ownerChargePersistPolicy.js';
+import {
+  type TerminalReason,
+  terminalReasonFromFailureText,
+} from './chatTerminalReason.js';
+
+/** Authoritative harness stop when finite task accounting refuses retry or dispatch. */
+export function taskAllowanceStopReasonFromError(error: unknown): TerminalReason | undefined {
+  const message = error instanceof Error ? error.message : String(error ?? '');
+  if (message.startsWith('Provider retry blocked by task allowance:')) {
+    const detail = message.slice('Provider retry blocked by task allowance: '.length).trim();
+    if (detail.startsWith('COST_ACCOUNTING_INCOMPLETE:')) {
+      return {
+        code: 'cost_accounting_incomplete',
+        cause_class: 'harness',
+        detail: 'provider_retry_blocked',
+      };
+    }
+  }
+  if (message.startsWith('COST_ACCOUNTING_INCOMPLETE:')) {
+    return { code: 'cost_accounting_incomplete', cause_class: 'harness' };
+  }
+  return undefined;
+}
+
+export function isAuthoritativeTaskAllowanceStopError(error: unknown): boolean {
+  if (taskAllowanceStopReasonFromError(error) !== undefined) return true;
+  const message = error instanceof Error ? error.message : String(error ?? '');
+  if (message.startsWith('Provider retry blocked by task allowance:')) return true;
+  return message.startsWith('Provider retry blocked by retired task owner');
+}
+
+const authoritativeAllowanceStopFallbackReason: TerminalReason = {
+  code: 'unknown',
+  cause_class: 'harness',
+  detail: 'provider_retry_blocked',
+};
+
+/** Terminal reason for stream/fallback stop after {@link isAuthoritativeTaskAllowanceStopError}. */
+export function terminalReasonForAuthoritativeTaskAllowanceStop(
+  error: unknown,
+): TerminalReason | undefined {
+  const direct = taskAllowanceStopReasonFromError(error);
+  if (direct) return direct;
+  const message = error instanceof Error ? error.message : String(error ?? '');
+  if (message.startsWith('Provider retry blocked by task allowance:')) {
+    return terminalReasonFromFailureText(
+      message.slice('Provider retry blocked by task allowance: '.length).trim(),
+    );
+  }
+  if (message.startsWith('Provider retry blocked by retired task owner')) {
+    return terminalReasonFromFailureText(message);
+  }
+  return undefined;
+}
+
+/** Always returns a terminal reason once {@link isAuthoritativeTaskAllowanceStopError} is true. */
+export function terminalReasonForAuthoritativeTaskAllowanceStopRequired(
+  error: unknown,
+): TerminalReason {
+  return (
+    terminalReasonForAuthoritativeTaskAllowanceStop(error) ??
+    authoritativeAllowanceStopFallbackReason
+  );
+}
 
 export type ChatUsageScope = {
   runControl?: import('../runtime/run-control.js').RunControl;
@@ -69,6 +134,8 @@ export interface ChatProviderRetryHost {
     kind: 'settlement-conflict' | 'persistence-failure',
     reason: string,
     appliesToCurrent: boolean,
+    blocksRuntimeAuthority?: boolean,
+    persistenceFailureClass?: import('./chatEngineOwnerAccounting.js').OwnerAccountingPersistenceFailureClass,
   ): void;
 }
 
@@ -160,10 +227,10 @@ export function buildProviderRetryCallbacks(host: ChatProviderRetryHost, context
         });
       } catch (error) {
         if (context.usageScope?.taskOwnerId) {
-          host.recordOwnerAccountingFault(
+          handleOwnerChargePersistFailure(
+            host,
             context.usageScope,
-            'persistence-failure',
-            error instanceof Error ? error.message : String(error),
+            error,
             context.usageScope.taskOwnerId === host.taskAllowance?.taskOwnerId && isOwnerCurrent(),
           );
         }
@@ -206,10 +273,7 @@ export function buildProviderRetryCallbacks(host: ChatProviderRetryHost, context
               try {
                 host.persistOwnerCharges(ownerId, ownerRunDir);
               } catch (error) {
-                host.recordOwnerAccountingFault(
-                  scope, 'persistence-failure', error instanceof Error ? error.message : String(error),
-                  appliesToCurrent,
-                );
+                handleOwnerChargePersistFailure(host, scope, error, appliesToCurrent);
               }
               throw new Error(`Provider dispatch blocked by charge conflict: ${update.reason}`);
             }
@@ -217,11 +281,14 @@ export function buildProviderRetryCallbacks(host: ChatProviderRetryHost, context
               try {
                 host.persistOwnerCharges(ownerId, ownerRunDir);
               } catch (error) {
-                host.recordOwnerAccountingFault(
-                  scope, 'persistence-failure', error instanceof Error ? error.message : String(error),
+                if (handleOwnerChargePersistFailure(
+                  host,
+                  scope,
+                  error,
                   ownerId === host.taskAllowance?.taskOwnerId && isOwnerCurrent(),
-                );
-                throw new Error('Provider dispatch blocked because its charge receipt could not be saved');
+                )) {
+                  throw new Error('Provider dispatch blocked because its charge receipt could not be saved');
+                }
               }
             }
           }
@@ -351,8 +418,10 @@ export function buildProviderRetryCallbacks(host: ChatProviderRetryHost, context
               try {
                 host.persistOwnerCharges(scope.taskOwnerId, ownerRunDir);
               } catch (error) {
-                host.recordOwnerAccountingFault(
-                  scope, 'persistence-failure', error instanceof Error ? error.message : String(error),
+                handleOwnerChargePersistFailure(
+                  host,
+                  scope,
+                  error,
                   scope.taskOwnerId === host.taskAllowance?.taskOwnerId && isOwnerCurrent(),
                 );
               }
@@ -395,18 +464,17 @@ export function buildProviderRetryCallbacks(host: ChatProviderRetryHost, context
               try {
                 host.persistOwnerCharges(scope.taskOwnerId!, ownerRunDir);
               } catch (error) {
-                host.recordOwnerAccountingFault(
-                  scope, 'persistence-failure', error instanceof Error ? error.message : String(error),
-                  appliesToCurrent,
-                );
+                handleOwnerChargePersistFailure(host, scope, error, appliesToCurrent);
               }
             }
             if (update.kind === 'inserted' || update.kind === 'refined') {
               try {
                 host.persistOwnerCharges(context.usageScope.taskOwnerId, ownerRunDir);
               } catch (error) {
-                host.recordOwnerAccountingFault(
-                  context.usageScope, 'persistence-failure', error instanceof Error ? error.message : String(error),
+                handleOwnerChargePersistFailure(
+                  host,
+                  context.usageScope,
+                  error,
                   context.usageScope.taskOwnerId === host.taskAllowance?.taskOwnerId && isOwnerCurrent(),
                 );
               }
@@ -432,18 +500,17 @@ export function buildProviderRetryCallbacks(host: ChatProviderRetryHost, context
             try {
               host.persistOwnerCharges(scope.taskOwnerId!, ownerRunDir);
             } catch (error) {
-              host.recordOwnerAccountingFault(
-                scope, 'persistence-failure', error instanceof Error ? error.message : String(error),
-                appliesToCurrent,
-              );
+              handleOwnerChargePersistFailure(host, scope, error, appliesToCurrent);
             }
           }
           if (update.kind === 'inserted' || update.kind === 'refined') {
             try {
               host.persistOwnerCharges(scope.taskOwnerId!, ownerRunDir);
             } catch (error) {
-              host.recordOwnerAccountingFault(
-                scope, 'persistence-failure', error instanceof Error ? error.message : String(error),
+              handleOwnerChargePersistFailure(
+                host,
+                scope,
+                error,
                 scope.taskOwnerId === host.taskAllowance?.taskOwnerId && isOwnerCurrent(),
               );
             }
@@ -547,21 +614,21 @@ export function buildProviderRetryCallbacks(host: ChatProviderRetryHost, context
               try {
                 host.persistOwnerCharges(ownerId, ownerRunDir);
               } catch (error) {
-                host.recordOwnerAccountingFault(
-                  scope, 'persistence-failure', error instanceof Error ? error.message : String(error),
-                  appliesToCurrent,
-                );
+                handleOwnerChargePersistFailure(host, scope, error, appliesToCurrent);
               }
               throw new Error('Provider dispatch blocked by a pending charge conflict');
             }
             try {
               host.persistOwnerCharges(ownerId, ownerRunDir);
             } catch (error) {
-              host.recordOwnerAccountingFault(
-                scope, 'persistence-failure', error instanceof Error ? error.message : String(error),
+              if (handleOwnerChargePersistFailure(
+                host,
+                scope,
+                error,
                 ownerId === host.taskAllowance?.taskOwnerId && isOwnerCurrent(),
-              );
-              throw new Error('Provider dispatch blocked because its charge receipt could not be saved');
+              )) {
+                throw new Error('Provider dispatch blocked because its charge receipt could not be saved');
+              }
             }
           }
         }
@@ -606,18 +673,17 @@ export function buildProviderRetryCallbacks(host: ChatProviderRetryHost, context
             try {
               host.persistOwnerCharges(scope.taskOwnerId, ownerRunDir);
             } catch (error) {
-              host.recordOwnerAccountingFault(
-                priorAttemptScope, 'persistence-failure', error instanceof Error ? error.message : String(error),
-                appliesToCurrent,
-              );
+              handleOwnerChargePersistFailure(host, priorAttemptScope, error, appliesToCurrent);
             }
           }
           if (update.kind === 'inserted' || update.kind === 'refined') {
             try {
               host.persistOwnerCharges(scope.taskOwnerId, ownerRunDir);
             } catch (error) {
-              host.recordOwnerAccountingFault(
-                priorAttemptScope, 'persistence-failure', error instanceof Error ? error.message : String(error),
+              handleOwnerChargePersistFailure(
+                host,
+                priorAttemptScope,
+                error,
                 scope.taskOwnerId === host.taskAllowance?.taskOwnerId && isOwnerCurrent(),
               );
             }
@@ -638,8 +704,10 @@ export function buildProviderRetryCallbacks(host: ChatProviderRetryHost, context
             try {
               host.persistOwnerCharges(scope.taskOwnerId, ownerRunDir);
             } catch (error) {
-              host.recordOwnerAccountingFault(
-                scope, 'persistence-failure', error instanceof Error ? error.message : String(error),
+              handleOwnerChargePersistFailure(
+                host,
+                scope,
+                error,
                 scope.taskOwnerId === host.taskAllowance?.taskOwnerId && isOwnerCurrent(),
               );
             }
@@ -690,6 +758,21 @@ export function buildProviderRetryCallbacks(host: ChatProviderRetryHost, context
         );
       },
     };
+}
+
+/** Token-history cost for one runner settlement (explicit report or priced delta only). */
+export function runnerTokenHistoryCostUsd(
+  reportedTurnCost: number | null | undefined,
+  chargeUpdate: { kind: string; knownCostDelta?: number },
+): number | undefined {
+  if (reportedTurnCost !== null && reportedTurnCost !== undefined && Number.isFinite(reportedTurnCost)) {
+    return reportedTurnCost;
+  }
+  if (chargeUpdate.kind === 'inserted' || chargeUpdate.kind === 'refined') {
+    const delta = chargeUpdate.knownCostDelta ?? 0;
+    if (delta > 0) return delta;
+  }
+  return undefined;
 }
 
 export function trackRunnerUsage(
@@ -745,10 +828,7 @@ export function trackRunnerUsage(
           try {
             host.persistOwnerCharges(faultScope.taskOwnerId, usageScope?.runDir);
           } catch (error) {
-            host.recordOwnerAccountingFault(
-              faultScope, 'persistence-failure', error instanceof Error ? error.message : String(error),
-              appliesToCurrent,
-            );
+            handleOwnerChargePersistFailure(host, faultScope, error, appliesToCurrent);
           }
         }
         return;
@@ -757,11 +837,9 @@ export function trackRunnerUsage(
         try {
           host.persistOwnerCharges(usageScope.taskOwnerId, usageScope.runDir);
         } catch (error) {
-          host.recordOwnerAccountingFault(
-            usageScope, 'persistence-failure', error instanceof Error ? error.message : String(error),
-            appliesToCurrent,
-          );
-          return;
+          if (handleOwnerChargePersistFailure(host, usageScope, error, appliesToCurrent)) {
+            return;
+          }
         }
       }
       if (!usageScope || (appliesToCurrent && host.pendingUsageChargeId === usageScope.chargeId)) {
@@ -774,14 +852,17 @@ export function trackRunnerUsage(
         host.persistTaskCostBaseline();
       }
 
-      // Feed token history tracker
       const tokenTracker = getGlobalTokenTracker();
-      if (metadata.estimated_cost_usd !== null) tokenTracker.record({
-        inputTokens: metadata.prompt_tokens,
-        outputTokens: metadata.completion_tokens,
-        cost: metadata.estimated_cost_usd,
-        modelId: metadata.provider_model_id,
-      });
+      const reportedTurnCost = settlementReportedCostUsd(metadata);
+      const turnCost = runnerTokenHistoryCostUsd(reportedTurnCost, chargeUpdate);
+      if (turnCost !== undefined && Number.isFinite(turnCost)) {
+        tokenTracker.record({
+          inputTokens: metadata.prompt_tokens,
+          outputTokens: metadata.completion_tokens,
+          cost: turnCost,
+          modelId: metadata.provider_model_id,
+        });
+      }
 
       if (!appliesToCurrent) return;
       host.lastRequestPromptTokens = metadata.prompt_tokens;
@@ -813,6 +894,7 @@ export function trackRunnerUsage(
         const update = globalCostTracker.settleUsage(
           usageScope?.modelId ?? metadata?.provider_model_id ?? 'unknown-provider-model',
           0, 0, null, null, attribution, false, usageScope?.provider ?? metadata?.provider ?? null,
+          metadata ? settlementReportedCostUsd(metadata) : undefined,
         );
         if (update.kind === 'conflict') {
           const faultScope: ChatUsageScope = usageScope ?? {
@@ -827,20 +909,14 @@ export function trackRunnerUsage(
           try {
             host.persistOwnerCharges(ownerId, usageScope?.runDir);
           } catch (error) {
-            host.recordOwnerAccountingFault(
-              faultScope, 'persistence-failure', error instanceof Error ? error.message : String(error),
-              appliesToCurrent,
-            );
+            handleOwnerChargePersistFailure(host, faultScope, error, appliesToCurrent);
           }
         }
         if (usageScope && update.kind !== 'duplicate' && update.kind !== 'conflict') {
           try {
             host.persistOwnerCharges(ownerId, usageScope.runDir);
           } catch (error) {
-            host.recordOwnerAccountingFault(
-              usageScope, 'persistence-failure', error instanceof Error ? error.message : String(error),
-              appliesToCurrent,
-            );
+            handleOwnerChargePersistFailure(host, usageScope, error, appliesToCurrent);
           }
         }
         if (appliesToCurrent) host.persistTaskCostBaseline();

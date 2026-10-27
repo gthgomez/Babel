@@ -16,6 +16,7 @@ import {
   stripAnsi,
   truncate,
 } from './theme.js';
+import { formatHudCostDisplay, formatSessionCostHud } from '../cli/usageCost.js';
 import { globalCostTracker } from '../services/costTracker.js';
 import { renderMarkdown } from './highlight.js';
 import { RawModeManager } from './rawMode.js';
@@ -47,6 +48,17 @@ import {
   type RendererContext,
   type RuntimeEvent,
 } from './rendererSupport.js';
+
+function dispatchSessionCostHud(
+  store: StateStore<TuiState, TuiMutation>,
+): void {
+  const stats = globalCostTracker.getSessionSummary();
+  store.dispatch({
+    type: 'cost:update',
+    costUSD: stats.knownCostUSD ?? stats.totalCostUSD,
+    costHudLabel: formatSessionCostHud(stats),
+  });
+}
 
 /**
  * Professional live HUD for governed pipeline execution.
@@ -140,8 +152,7 @@ export class WaterfallRenderer extends BaseRenderer {
       this.stageStartTimes[index] = Date.now();
       this.thinking = false;
       this.recordActivity(stageAction(index));
-      const stats = globalCostTracker.getSessionSummary();
-      this._store.dispatch({ type: 'cost:update', costUSD: stats.totalCostUSD });
+      dispatchSessionCostHud(this._store);
       this.lastCostUpdateTime = Date.now();
       FrameScheduler.getInstance().markComponentDirty('waterfall-hud');
       if (isA11yMode()) {
@@ -194,8 +205,7 @@ export class WaterfallRenderer extends BaseRenderer {
       }
       if (event?.event_type === 'tool.completed') {
         this._store.dispatch({ type: 'tools:increment' });
-        const stats = globalCostTracker.getSessionSummary();
-        this._store.dispatch({ type: 'cost:update', costUSD: stats.totalCostUSD });
+        dispatchSessionCostHud(this._store);
         this.lastCostUpdateTime = Date.now();
       }
       if (event?.event_type === 'verification.decision') {
@@ -446,7 +456,7 @@ export class WaterfallRenderer extends BaseRenderer {
 
     const lines: string[] = [
       sectionLabel('── Run Complete ──'),
-      `${muted('Duration')} ${elapsed}  ${muted('Cost')} ${muted('$' + s.cachedCostStr)}  ${muted('Tools')} ${String(s.completedToolCalls)}`,
+      `${muted('Duration')} ${elapsed}  ${muted('Cost')} ${muted(formatHudCostDisplay(s.cachedCostStr))}  ${muted('Tools')} ${String(s.completedToolCalls)}`,
       '',
       sectionLabel('Stages:'),
       `  ${stageSummary}`,
@@ -514,8 +524,7 @@ export class WaterfallRenderer extends BaseRenderer {
       const elapsed = formatElapsed(Date.now() - this.startTime);
       if (!this.lastCostUpdateTime) this.lastCostUpdateTime = Date.now();
       if (Date.now() - this.lastCostUpdateTime > 30000) {
-        const stats = globalCostTracker.getSessionSummary();
-        this._store.dispatch({ type: 'cost:update', costUSD: stats.totalCostUSD });
+        dispatchSessionCostHud(this._store);
         this.lastCostUpdateTime = Date.now();
       }
 
@@ -543,7 +552,7 @@ export class WaterfallRenderer extends BaseRenderer {
           sectionLabel('Error:'),
           `  ${error(s.errorMessage)}`,
           '',
-          `${muted('Time')} ${elapsed}   ${muted('Cost')} ${muted(`$${s.cachedCostStr}`)}`,
+          `${muted('Time')} ${elapsed}   ${muted('Cost')} ${muted(formatHudCostDisplay(s.cachedCostStr))}`,
           border('─'.repeat(width)),
           dim('  [Enter] dismiss  [/inspect] details'),
         ].join('\n');
@@ -670,7 +679,7 @@ export class WaterfallRenderer extends BaseRenderer {
             ]
           : []),
         '',
-        `${muted('Time')} ${elapsed}   ${muted('Cost')} ${muted(`$${s.cachedCostStr}`)}`,
+        `${muted('Time')} ${elapsed}   ${muted('Cost')} ${muted(formatHudCostDisplay(s.cachedCostStr))}`,
         border('─'.repeat(width)),
         dim('  [T] thought  [P] pause  [Esc] cancel  [Ctrl+R] history'),
       ].join('\n');

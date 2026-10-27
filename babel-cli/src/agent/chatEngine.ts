@@ -13,7 +13,8 @@ import { buildChatEngineExecutionContext, type ChatExecutionContextHost } from '
 import {
   completeChatStream,
   failChatStream,
-  cancelChatStream,
+  stoppedChatStream,
+  cancelledChatStream,
   assembleChatResult,
   type ChatTerminalInput,
   type ChatStreamDoneExtra,
@@ -773,20 +774,6 @@ export class ChatEngine {
 
   private ownerChargePath(ownerId: string, runDir = this.engineRunDir): string {
     return this.ownerAccounting.ownerChargePath(ownerId, runDir);
-  }
-
-  private recordOwnerAccountingFault(
-    scope: ChatUsageScope,
-    kind: OwnerAccountingFault["kind"],
-    reason: string,
-    appliesToCurrent: boolean,
-  ): void {
-    this.ownerAccounting.recordOwnerAccountingFault(
-      scope,
-      kind,
-      reason,
-      appliesToCurrent,
-    );
   }
 
   private persistOwnerAccountingFaultCheckpoint(): void {
@@ -2770,21 +2757,22 @@ export class ChatEngine {
     this.runControl?.requestStop({ owner: this.runControl.owner, kind: 'completed', reasonCode: 'completed', source: 'completion' });
     return completeChatStream(this.terminalRuntimeInput(), answer, extra);
   }
-  private streamFailed(error: string, reason?: import('./chatTerminalReason.js').TerminalReason): ChatEvent {
+  private streamFailed(
+    error: string,
+    reason?: import('./chatTerminalReason.js').TerminalReason,
+    presentationError?: string,
+  ): ChatEvent {
     this.runControl?.requestStop({ owner: this.runControl.owner, kind: 'failed', reasonCode: reason?.code ?? 'unknown', source: 'runtime' });
-    return failChatStream(this.terminalRuntimeInput(), error, reason);
+    return failChatStream(this.terminalRuntimeInput(), error, reason, presentationError);
   }
   private streamCancelled(): ChatEvent {
-    const prior = this.runControl?.stop();
-    if (prior && prior.kind !== 'cancelled' && prior.kind !== 'superseded') return this.streamStopped(prior);
-    this.runControl?.requestStop({ owner: this.runControl.owner, kind: 'cancelled', reasonCode: 'cancelled', source: 'user' });
-    return cancelChatStream(this.terminalRuntimeInput());
+    return cancelledChatStream(
+      () => this.terminalRuntimeInput(),
+      this.runControl,
+    );
   }
-  /** Render the recorded winner through the existing single finalizer, without inference. */
   private streamStopped(stop: StopRequest): ChatEvent {
-    if (stop.kind === 'cancelled' || stop.kind === 'superseded') return cancelChatStream(this.terminalRuntimeInput());
-    if (stop.kind === 'failed') return failChatStream(this.terminalRuntimeInput(), `Execution stopped: ${stop.reasonCode}.`);
-    return completeChatStream(this.terminalRuntimeInput(), `Execution stopped: ${stop.reasonCode}.`, { stopRequest: stop });
+    return stoppedChatStream(() => this.terminalRuntimeInput(), stop);
   }
 
   getConversation(): ChatMessage[] {
@@ -2937,6 +2925,7 @@ export class ChatEngine {
       userInput: input.userInput,
       projectRoot: this.options.projectRoot,
       ...(this.options.executionScope?{executionScope:this.options.executionScope}:{}),
+      requiredVerifierCommands: this.options.requiredVerifierCommands ?? null,
       operation: input.operation ?? this.options.operation,
       ...(this.options.model !== undefined
         ? { model: this.options.model }
@@ -4142,13 +4131,8 @@ export class ChatEngine {
       persistOwnerCharges: (ownerId, runDir) =>
         engine.persistOwnerCharges(ownerId, runDir),
       persistTaskCostBaseline: () => engine.persistTaskCostBaseline(),
-      recordOwnerAccountingFault: (scope, kind, reason, appliesToCurrent) =>
-        engine.recordOwnerAccountingFault(
-          scope,
-          kind,
-          reason,
-          appliesToCurrent,
-        ),
+      recordOwnerAccountingFault:
+        engine.ownerAccounting.recordOwnerAccountingFault.bind(engine.ownerAccounting),
     };
   }
 
@@ -4210,14 +4194,13 @@ export class ChatEngine {
     hooks: { onStreamedChunks?: (text: string) => void } = {},
   ): Promise<ChatTurn> {
     resetOneShotSnapshot(this.logicalTurnToolPolicy);
-    const usageScope = this.captureProviderUsageScope();
     return deliberateChatTurn({
       runner,
       promptOrMessages,
       useNativeTools,
       callbacks,
       hooks,
-      usageScope,
+      usageScope: this.captureProviderUsageScope(),
       tools: this.services.tools,
       takeToolPolicy: () => this.nextTurnToolPolicy(),
       acceptedOperation: this.getTurnRuntimeSnapshot()?.effectiveOperation,
@@ -4246,7 +4229,7 @@ export class ChatEngine {
       modelPolicy: this.modelPolicy,
       isSubmissionCurrent: (generation) => this.isSubmissionCurrent(generation),
       cancelled: (error) => this.emitCancelledIfOperatorAbort(error),
-      failed: (error) => this.streamFailed(error),
+      failed: (error, reason) => this.streamFailed(error, reason),
       tryFailover: (modelId, error) =>
         parityTryFailover(this.parity, modelId, error),
       resolveFallback: () => this.resolveFallbackRunner(),
@@ -4649,6 +4632,7 @@ export class ChatEngine {
           writeCount: this.writeCount,
         },
         presentation: {
+          accountingWarnings: this.ownerAccounting.getAccountingWarnings(),
           conversation: this.conversation,
           cachedSystemPromptNative: this.cachedSystemPromptNative,
           playbookId: this.activePlaybook?.id ?? null,

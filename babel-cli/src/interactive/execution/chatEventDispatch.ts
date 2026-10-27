@@ -170,6 +170,7 @@ export function dispatchChatEvent(
     return {
       status: terminal.status,
       ...(terminal.outcome !== undefined ? { outcome: terminal.outcome } : {}),
+      ...(event.accountingWarnings?.length ? { accountingWarnings: event.accountingWarnings } : {}),
       answer: event.error,
       usage: globalCostTracker.getSessionSummary(),
       conversation: [],
@@ -229,6 +230,7 @@ export function terminalResultFromDoneEvent(
     verifierTampered?: boolean;
     turnRouting?: TurnRoutingReceipt[];
     turnTelemetry?: import('../../agent/chatTurnTelemetry.js').ChatTurnTelemetryRecord;
+    accountingWarnings?: string[];
     costBudget?: ChatResult['costBudget'];
     runAllowance?: ChatResult['runAllowance'];
     policyEvents?: ChatResult['policyEvents'];
@@ -236,6 +238,7 @@ export function terminalResultFromDoneEvent(
     /** D03: structured terminal reason code. */
     reason_code?: ChatResult['reason_code'];
     cause_class?: ChatResult['cause_class'];
+    gatePolicy?: ChatResult['gatePolicy'];
   },
 ): ChatResult {
   // Prefer the engine's authoritative TerminalOutcome. Only recompute when
@@ -279,10 +282,12 @@ export function terminalResultFromDoneEvent(
     ...(opts?.verifierTampered ? { verifierTampered: true as const } : {}),
     ...(opts?.turnRouting ? { turnRouting: opts.turnRouting } : {}),
     ...(opts?.turnTelemetry !== undefined ? { turnTelemetry: opts.turnTelemetry } : {}),
+    ...(opts?.accountingWarnings?.length ? { accountingWarnings: opts.accountingWarnings } : {}),
     ...(opts?.costBudget ? { costBudget: opts.costBudget } : {}),
     ...(opts?.runAllowance ? { runAllowance: opts.runAllowance } : {}),
     ...(opts?.policyEvents ? { policyEvents: opts.policyEvents } : {}),
     ...(opts?.reason_code !== undefined ? { reason_code: opts.reason_code } : {}),
     ...(opts?.cause_class !== undefined ? { cause_class: opts.cause_class } : {}),
+    ...(opts?.gatePolicy != null ? { gatePolicy: opts.gatePolicy } : {}),
   };
 }

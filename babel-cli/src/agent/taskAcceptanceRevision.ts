@@ -5,7 +5,15 @@ import {
   buildTaskContractV1, freezeTaskContract, validateTaskContractV1,
   type TaskContractV1, type AcceptanceRequirementV1,
 } from './taskContract.js'
-import { ACCEPTANCE_MEANING_REF, inferTaskAcceptance, type AcceptanceMeaningSource } from './taskAcceptanceMeaning.js'
+import {
+  acceptanceMeaningRefForVersion,
+  inferTaskAcceptance,
+  inferTaskAcceptanceForVersion,
+  isAcceptanceMeaningDerivedRef,
+  isLegacyAcceptancePlaceholderContract,
+  requireAcceptanceMeaningVersion,
+  type AcceptanceMeaningSource,
+} from './taskAcceptanceMeaning.js'
 import { bindExecutableVerifiersToTaskAcceptance } from './taskAcceptanceExecutableBinding.js'
 import { isAmendmentPrompt, isStatusPrompt } from './turnRuntime.js'
 
@@ -66,8 +74,9 @@ export function createTaskAcceptanceRevision(
     if (!isLegacyAcceptancePlaceholder(current) || source.userInput !== current.user_request)
       throw new Error('TASK_ACCEPTANCE_INITIALIZATION_UNAVAILABLE')
   } else if (!isAcceptanceAddition(source.userInput)) return null
+  const interpretationVersion = requireAcceptanceMeaningVersion(current.provenance.records, current)
   const meaning = bindExecutableVerifiersToTaskAcceptance({
-    meaning: inferTaskAcceptance(source.userInput),
+    meaning: inferTaskAcceptanceForVersion(source.userInput, interpretationVersion),
     trustedVerifierCommands: current.verifier_requirements,
     defaultWorkingDirectory: '.',
   })
@@ -107,15 +116,7 @@ export function createTaskAcceptanceRevision(
 
 /** Recognize only the exact historical generated placeholder, never a real check. */
 export function isLegacyAcceptancePlaceholder(contract: TaskContractV1): boolean {
-  const description = 'Task acceptance criteria as stated in the user request'
-  const placeholder: AcceptanceRequirementV1 = {
-    id: 'acceptance:1', description, type: 'custom', required: true,
-    verification_strategy: 'independent evidence bound to the candidate revision',
-    verification: { kind: 'custom', verifier_id: 'verifier:custom:1', command_hash: sha256Canonical(description) },
-  }
-  return sha256Canonical(contract.acceptance) === sha256Canonical([placeholder]) &&
-    sha256Canonical(contract.acceptance_criteria) === sha256Canonical([description]) &&
-    !contract.provenance.records.some(record => record.ref.startsWith('task-acceptance-meaning:v1:'))
+  return isLegacyAcceptancePlaceholderContract(contract)
 }
 
 function stableAuthority(contract: TaskContractV1): string {
@@ -156,12 +157,21 @@ export function validateTaskAcceptanceRevision(
   const retained = descriptor.kind === 'initialize' ? [] : previous.acceptance
   if (sha256Canonical(current.acceptance) !== sha256Canonical([...retained, ...descriptor.added_acceptance]) ||
     sha256Canonical(current.acceptance_criteria) !== sha256Canonical(current.acceptance.map(item => item.description))) errors.push('delta')
+  const predecessorVersion = requireAcceptanceMeaningVersion(previous.provenance.records, previous)
+  try {
+    if (requireAcceptanceMeaningVersion(current.provenance.records, current) !== predecessorVersion) {
+      errors.push('interpretation_version')
+    }
+  } catch {
+    errors.push('interpretation_version')
+  }
+  const meaningRef = acceptanceMeaningRefForVersion(predecessorVersion)
   const expectedRecords = [
     { kind: 'user_goal', ref: 'user_request' },
     { kind: 'derived_acceptance', ref: 'acceptance_criteria' },
     ...previous.provenance.records,
     ...descriptor.meaning_sources.map(source => ({ kind: 'derived_acceptance',
-      ref: `${ACCEPTANCE_MEANING_REF}:${source.status}:${source.input_digest}:${source.start}:${source.end}:${source.criterion_id}` })),
+      ref: `${meaningRef}:${source.status}:${source.input_digest}:${source.start}:${source.end}:${source.criterion_id}` })),
     { kind: 'explicit_user_authority', ref: `${ACCEPTANCE_AMENDMENT_REF}:${sha256Canonical(descriptor)}` },
   ]
   if (current.provenance.source !== 'taskAcceptanceRevision' ||

@@ -27,6 +27,7 @@ import type { ChatUsageScope } from './chatEngineProviderAccounting.js';
 import { trace, SpanStatusCode, type Span } from "@opentelemetry/api";
 import { endSpan } from "../telemetry/tracing.js";
 import { globalCostTracker } from "../services/costTracker.js";
+import { allowanceCostCapUsd } from "./chatEngineTaskAllowance.js";
 
 import {
   extractToolEnvBlockedSignal,
@@ -597,11 +598,20 @@ export class ChatEngineStreamingLoop {
         let visibleNativeAnswerLength = 0;
         let nativeFinishReason: string | undefined;
         const canRepairNativeProtocol = (finishReason: string): boolean => {
-          const owner = this.host.taskAllowance?.taskOwnerId, metadata = usageScope.usageMetadata;
-          if (!owner || metadata?.prompt_tokens == null || metadata.completion_tokens == null) return false;
+          const owner = this.host.taskAllowance?.taskOwnerId;
+          if (!owner) return false;
+          const grantCap = this.host.taskAllowance
+            ? allowanceCostCapUsd(this.host.taskAllowance.grant.costCap)
+            : Infinity;
+          if (Number.isFinite(grantCap)) {
+            const metadata = usageScope.usageMetadata;
+            if (metadata?.prompt_tokens == null || metadata.completion_tokens == null) return false;
+            const costSummary = globalCostTracker.getTaskSummary(owner);
+            if ((costSummary.estimateComplete ?? costSummary.costComplete) !== true) return false;
+          }
           return nativeStreamExhausted && !nativeIdentityNormalized && !nativeProtocolRepairUsed &&
             nativeFinishReason === finishReason && !this.host.abortController.signal.aborted &&
-            globalCostTracker.getTaskSummary(owner).costComplete === true && this.host.checkBudgets(true).ok;
+            this.host.checkBudgets(true).ok;
         };
         const systemPrompt = this.host.getOrBuildSystemPrompt("native");
 

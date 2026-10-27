@@ -32,12 +32,18 @@ export interface SessionState {
     totalCostUSD: number;
     knownCostUSD?: number;
     estimatedCostUSD?: number;
+    reportedCostUSD?: number;
     costEstimates?: import('../services/costTracker.js').CostEstimateSource[];
+    usageComplete?: boolean;
+    costComplete?: boolean;
     completeCostUSD?: number | null;
     unknownChargeCount?: number;
     totalInputTokens: number;
     totalOutputTokens: number;
     totalTokens: number;
+    totalCacheHitTokens?: number;
+    totalCacheMissTokens?: number;
+    modelBreakdown?: Record<string, import('../services/costTracker.js').ModelUsage>;
     projectSessionId?: string;
     accountedChargeIds?: string[];
     chargeObservations?: import('../services/costTracker.js').ChargeReceipt[];

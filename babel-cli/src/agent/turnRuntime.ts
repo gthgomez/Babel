@@ -15,7 +15,6 @@
  */
 
 import {
-  getChatTaskTune,
   resolveChatTaskClass,
   resolveTaskShape,
   type ChatTaskClass,
@@ -24,6 +23,7 @@ import {
   type TaskShape,
   type RequestedTaskOperation,
 } from '../config/chatTaskClass.js';
+import { resolveCompletionVerificationContext } from './completionGatePolicy.js';
 
 export type TurnTaskIntent = 'execute' | 'explain';
 
@@ -84,6 +84,8 @@ export interface BeginUserSubmissionInput {
   projectRoot: string | null;
   executionScope?: import('./chatExecutionScope.js').ChatExecutionScope;
   model?: string;
+  /** Frozen/host required verifier commands for effective gate policy at turn start. */
+  requiredVerifierCommands?: readonly string[] | null;
   /** Explicit intent override from the caller. */
   taskIntent?: TurnTaskIntent;
   operation?: RequestedTaskOperation | undefined;
@@ -207,7 +209,13 @@ export function beginUserSubmission(input: BeginUserSubmissionInput): TurnRuntim
         operation: input.operation,
       });
 
-  const gatePolicy = getChatTaskTune(taskClass).verificationPolicy;
+  const gatePolicy = resolveCompletionVerificationContext({
+    taskClass,
+    task: taskText,
+    ...(input.requiredVerifierCommands !== undefined
+      ? { requiredVerifierCommands: input.requiredVerifierCommands }
+      : {}),
+  }).effectiveGatePolicy;
   const counters = (continueTask || statusPresentation) && prev
     ? {
         writeCount: prev.writeCount,

@@ -17,6 +17,8 @@ import {
 } from "./tables.js";
 import { renderProgressLabel, type ProgressLabelOptions } from "./progress.js";
 import { renderBadge } from "./badges.js";
+import { formatUsageCost } from '../cli/usageCost.js';
+import type { SessionUsageSummary } from '../services/costTracker.js';
 import {
   accentBright,
   border,
@@ -80,7 +82,9 @@ export interface ResultData {
     totalOutputTokens: number;
     totalTokens: number;
     modelBreakdown?: Record<string, unknown>;
-  };
+  } & Partial<Pick<SessionUsageSummary,
+    'knownCostUSD' | 'estimatedCostUSD' | 'reportedCostUSD' | 'unknownChargeCount' |
+    'costComplete' | 'completeCostUSD' | 'estimateComplete' | 'usageComplete'>>;
 }
 
 export interface DoctorCheck {
@@ -330,7 +334,7 @@ export function renderResultSummary(result: ResultData, mode?: string): string {
             ]
           : []),
         { label: "Tokens", value: formatInteger(usageSummary.totalTokens) },
-        { label: "Cost", value: formatUsd(usageSummary.totalCostUSD) },
+        { label: "Cost", value: formatUsageCost(usageSummary, { fractionDigits: 4 }) },
       ]),
       "",
       renderStatusRows([

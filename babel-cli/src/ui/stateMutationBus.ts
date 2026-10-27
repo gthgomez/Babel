@@ -298,6 +298,8 @@ export interface CostUpdateMutation extends Mutation {
   type: 'cost:update';
   costUSD: number;
   perRunCost?: number;
+  /** Full HUD cost fragment (may include estimate/incomplete labels). */
+  costHudLabel?: string;
 }
 
 /** Plan step count (for progress bar). */
@@ -491,7 +493,7 @@ export function tuiStateReducer(state: TuiState, mutation: TuiMutation): TuiStat
       return { ...state, activeFiles: files };
     }
     case 'cost:update': {
-      const costStr = mutation.costUSD.toFixed(4);
+      const costStr = mutation.costHudLabel ?? mutation.costUSD.toFixed(4);
       if (state.cachedCostStr === costStr) return state;
       return { ...state, cachedCostStr: costStr };
     }

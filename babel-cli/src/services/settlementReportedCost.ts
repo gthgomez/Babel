@@ -10,12 +10,21 @@ import type { RunnerInvocationMetadata } from '../runners/base.js'
 export function settlementReportedCostUsd(
   metadata: RunnerInvocationMetadata | null | undefined,
 ): number | null | undefined {
-  const reported = metadata?.provider_reported_total_charge_usd
-  if (typeof reported === 'number' && Number.isFinite(reported) && reported >= 0) {
-    return reported
+  if (metadata === null || metadata === undefined) {
+    return undefined
+  }
+  if (!('provider_reported_total_charge_usd' in metadata)) {
+    return undefined
+  }
+  const reported = metadata.provider_reported_total_charge_usd
+  if (reported === undefined) {
+    return undefined
   }
   if (reported === null) {
     return null
   }
-  return undefined
+  if (typeof reported === 'number' && Number.isFinite(reported) && reported >= 0) {
+    return reported
+  }
+  return null
 }

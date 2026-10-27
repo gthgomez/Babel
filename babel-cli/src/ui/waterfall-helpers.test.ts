@@ -1234,6 +1234,28 @@ describe('Integration — WaterfallRenderer', () => {
     renderer.stop();
   });
 
+  it('snapshot accessibility cost line leaves preformatted HUD labels unchanged', () => {
+    const bus = new EventEmitter();
+    const renderer = new WaterfallRenderer(bus);
+    const store = (renderer as unknown as { _store: { dispatch: (m: unknown) => void } })._store;
+
+    store.dispatch({ type: 'cost:update', costUSD: 0, costHudLabel: '1 unresolved' });
+    let plain = stripAnsi(renderer.snapshot());
+    assert.match(plain, /Cost 1 unresolved/);
+    assert.doesNotMatch(plain, /\$1 unresolved/);
+
+    store.dispatch({ type: 'cost:update', costUSD: 0.02, costHudLabel: '$0.0200 reported' });
+    plain = stripAnsi(renderer.snapshot());
+    assert.match(plain, /Cost \$0\.0200 reported/);
+    assert.doesNotMatch(plain, /\$\$0\.0200/);
+
+    store.dispatch({ type: 'cost:update', costUSD: 0.0027 });
+    plain = stripAnsi(renderer.snapshot());
+    assert.match(plain, /Cost \$0\.0027/);
+
+    renderer.stop();
+  });
+
   it('deduplicates log lines via activityKey', () => {
     const bus = new EventEmitter();
     const renderer = new WaterfallRenderer(bus);

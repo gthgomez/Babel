@@ -1,9 +1,14 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { globalCostTracker, type ChargeReceipt } from '../services/costTracker.js';
+import { chargeReceiptsMatchTotals, globalCostTracker, type ChargeReceipt } from '../services/costTracker.js';
 import type { ChatTaskAllowanceSnapshot } from './chatEngine.js';
 import type { ChatUsageScope } from './chatEngineProviderAccounting.js';
+import { OWNER_CHARGE_JOURNAL_UNAVAILABLE_REASON } from './ownerChargePersistPolicy.js';
+
+export type OwnerAccountingPersistenceFailureClass =
+  | 'financial-journal-io'
+  | 'authority';
 
 export interface OwnerAccountingFault {
   taskOwnerId: string;
@@ -13,6 +18,8 @@ export interface OwnerAccountingFault {
   persistenceScope: 'owner-charge-receipt';
   kind: 'settlement-conflict' | 'persistence-failure';
   reason: string;
+  /** Classifies persistence-failure for restore/runtime policy; absent means legacy conservative. */
+  persistenceFailureClass?: OwnerAccountingPersistenceFailureClass;
 }
 
 export interface ChatEngineOwnerAccountingHost {
@@ -24,6 +31,13 @@ export interface ChatEngineOwnerAccountingHost {
 
 export class ChatEngineOwnerAccounting {
   constructor(private readonly host: ChatEngineOwnerAccountingHost) {}
+
+  /** Keep financial uncertainty visible without changing execution authority. */
+  getAccountingWarnings(): string[] {
+    return [...this.host.ownerAccountingFaults.values()].flat().some(
+      fault => fault.kind === 'persistence-failure' && fault.persistenceFailureClass === 'financial-journal-io',
+    ) ? [OWNER_CHARGE_JOURNAL_UNAVAILABLE_REASON] : [];
+  }
 
   /** A task can be retired while its provider still reports a billable result. */
   ownerChargeDir(runDir = this.host.engineRunDir): string {
@@ -40,6 +54,8 @@ export class ChatEngineOwnerAccounting {
     kind: OwnerAccountingFault['kind'],
     reason: string,
     appliesToCurrent: boolean,
+    blocksRuntimeAuthority?: boolean,
+    persistenceFailureClass?: OwnerAccountingPersistenceFailureClass,
   ): void {
     const ownerId = scope.taskOwnerId;
     if (!ownerId) {
@@ -54,13 +70,17 @@ export class ChatEngineOwnerAccounting {
       persistenceScope: 'owner-charge-receipt',
       kind,
       reason,
+      ...(kind === 'persistence-failure' && persistenceFailureClass !== undefined
+        ? { persistenceFailureClass }
+        : {}),
     };
     const faults = this.host.ownerAccountingFaults.get(ownerId) ?? [];
     if (!faults.some((existing) => JSON.stringify(existing) === JSON.stringify(fault))) {
       faults.push(fault);
       this.host.ownerAccountingFaults.set(ownerId, faults);
     }
-    if (appliesToCurrent && ownerId === this.host.taskAllowance?.taskOwnerId) {
+    const blocks = blocksRuntimeAuthority ?? appliesToCurrent;
+    if (blocks && appliesToCurrent && ownerId === this.host.taskAllowance?.taskOwnerId) {
       this.host.taskCostScopeUnavailable = true;
     }
     this.persistOwnerAccountingFaultCheckpoint();
@@ -92,9 +112,18 @@ export class ChatEngineOwnerAccounting {
     const summary = globalCostTracker.getTaskSummary(ownerId);
     const chargeIds = globalCostTracker.getTaskChargeIds(ownerId);
     const chargeObservations = globalCostTracker.getTaskChargeObservations(ownerId);
-    // An old ID-only snapshot cannot safely be rewritten as a complete
-    // receipt ledger. Keep its task budget conservative on this path.
-    if (chargeObservations.length !== chargeIds.length) {
+    // Missing receipts and checkpoint cost floors cannot safely be rewritten
+    // as a complete receipt ledger. Preserve the conservative task budget.
+    if (chargeObservations.length !== chargeIds.length ||
+        !chargeReceiptsMatchTotals(chargeObservations, summary.totalCostUSD, summary.unknownChargeCount ?? 0)) {
+      const allowance = this.host.taskAllowance;
+      const faults = this.host.ownerAccountingFaults.get(ownerId) ?? [];
+      // A valid unlimited runtime checkpoint can outlive a failed first journal
+      // write. Keep the warning and its IDs; do not invent or overwrite receipts.
+      if (!this.host.taskCostScopeUnavailable && allowance?.taskOwnerId === ownerId &&
+          allowance.grant.costCap.kind === 'unlimited' && allowance.lastTurnRuntime &&
+          faults.length > 0 && faults.every(fault => fault.kind === 'persistence-failure' &&
+            fault.persistenceFailureClass === 'financial-journal-io')) return;
       throw new Error('Owner charge receipts are incomplete');
     }
     const dir = this.ownerChargeDir(runDir);
@@ -166,7 +195,9 @@ export function parseOwnerAccountingFaults(value: unknown): OwnerAccountingFault
       !(entry['chargeId'] === null || typeof entry['chargeId'] === 'string') ||
       entry['persistenceScope'] !== 'owner-charge-receipt' ||
       !['settlement-conflict', 'persistence-failure'].includes(String(entry['kind'])) ||
-      typeof entry['reason'] !== 'string';
+      typeof entry['reason'] !== 'string' ||
+      (entry['persistenceFailureClass'] !== undefined &&
+        !['financial-journal-io', 'authority'].includes(String(entry['persistenceFailureClass'])));
   })) return null;
   return value as OwnerAccountingFault[];
 }

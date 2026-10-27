@@ -44,6 +44,8 @@ export interface ReviewCardInput {
   costUsd?: number | undefined;
   unknownChargeCount?: number | undefined;
   costComplete?: boolean | undefined;
+  reportedCostUsd?: number | undefined;
+  usageComplete?: boolean | undefined;
   estimatedCostUsd?: number | undefined;
   usageScope?: 'turn' | 'task' | undefined;
   inspectionCoverage?: ChatInspectionCoverage | undefined;
@@ -259,9 +261,11 @@ export function buildReviewCard(input: ReviewCardInput): ReviewCard {
   const kind = classifyReviewCard(input);
   const files = input.changedFiles ?? [];
   const v = input.verification;
+  const hasDeliveryMutations = files.length > 0 || input.mutated === true;
   const isVerificationNotApplicable =
     !v?.ran &&
     v?.status !== 'blocked' &&
+    !hasDeliveryMutations &&
     (input.verificationApplicability === 'not_applicable' ||
       input.verificationPolicy === 'none' ||
       input.verificationPolicy === 'not_applicable' ||
@@ -335,14 +339,26 @@ export function buildReviewCard(input: ReviewCardInput): ReviewCard {
   const unknownCharges = input.unknownChargeCount ?? 0;
   const usageScope = input.usageScope ?? 'turn';
   const hasEstimate = Number.isFinite(input.estimatedCostUsd) && (input.estimatedCostUsd ?? 0) > 0;
-  const costIncomplete = unknownCharges > 0 || input.costComplete === false || hasEstimate;
-  if (hasRealCost || hasRealTokens || costIncomplete) {
+  const hasReported = Number.isFinite(input.reportedCostUsd);
+  const usageUnconfirmed = input.usageComplete === false;
+  const fullyReportedBill = hasReported && input.costComplete === true && unknownCharges === 0;
+  const costIncomplete = !fullyReportedBill &&
+    (unknownCharges > 0 || input.costComplete === false);
+  const hasUsageUncertainty = usageUnconfirmed || unknownCharges > 0;
+  const showCostSection = hasRealCost || hasRealTokens || costIncomplete || hasEstimate || hasReported ||
+    hasUsageUncertainty;
+  if (showCostSection) {
     const bits: string[] = [];
-    if (costAvailable && (hasRealCost || costIncomplete)) bits.push(`$${input.costUsd!.toFixed(4)}${costIncomplete ? ` known subtotal this ${usageScope}` : ` this ${usageScope}`}`);
-    else if (costIncomplete) bits.push('cost unavailable');
+    const showKnownSubtotal = costAvailable && (hasRealCost || costIncomplete ||
+      (hasReported && input.reportedCostUsd === 0));
+    if (showKnownSubtotal) {
+      bits.push(`$${input.costUsd!.toFixed(4)}${costIncomplete ? ` known subtotal this ${usageScope}` : ` this ${usageScope}`}`);
+    } else if (costIncomplete) bits.push('cost unavailable');
     if (hasEstimate) bits.push(`$${input.estimatedCostUsd!.toFixed(4)} usage estimate this ${usageScope}`);
+    if (hasReported) bits.push(`$${input.reportedCostUsd!.toFixed(4)} provider-reported this ${usageScope}`);
     if (unknownCharges > 0) bits.push(`${unknownCharges} unresolved charge${unknownCharges === 1 ? '' : 's'}`);
     else if (costIncomplete) bits.push('cost incomplete');
+    if (usageUnconfirmed) bits.push('usage unconfirmed');
     if (hasRealTokens) bits.push(`${input.tokens!.toLocaleString('en-US')} cumulative tokens this ${usageScope}`);
     const sessionTokens = input.sessionTokens;
     if (

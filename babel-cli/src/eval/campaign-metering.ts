@@ -1,9 +1,5 @@
 import type { PreparedProviderRequest } from '../runners/preparedProviderRequest.js'
-import {
-  estimateProviderUsageCost,
-  getModelPricing,
-  type CostPrecision,
-} from '../services/modelPricingRegistry.js'
+import { estimateProviderUsageCost, type CostPrecision } from '../services/modelPricingRegistry.js'
 import type { ModelRouteStage } from '../agent/modelRouteReceipt.js'
 import type { ProviderId } from '../runners/providerRegistry.js'
 import {
@@ -12,6 +8,10 @@ import {
   isCampaignQualifiedModelRoute,
 } from './campaign-qualified-routes.js'
 import { campaignQualifiedMaxInputContextTokens } from './campaign-qualified-context.js'
+import {
+  legacyReservationUpperBoundMicroUsd,
+  resolveCampaignLegacyReservationRates,
+} from './campaign-legacy-reservation-rates.js'
 
 export const CAMPAIGN_METERED_PROVIDER_IDS: readonly ProviderId[] = [
   'openrouter',
@@ -51,29 +51,26 @@ function verifiedMaxInputContextTokens(prepared: PreparedProviderRequest): numbe
   return pinned
 }
 
-/** Reservation ceiling from verified max input context and enforced max output (separate bounds). */
+/** Legacy non-certifying reservation ceiling (configured ceiling table, not usage estimates). */
 export function reservationUpperBoundMicroUsd(prepared: PreparedProviderRequest): number {
   assertCampaignQualifiedPreparedRequest(prepared)
   const reservedCompletion = prepared.accounting.reserved_completion_tokens
   if (reservedCompletion === null || reservedCompletion <= 0) {
     throw new Error('campaign route missing reserved completion bound')
   }
-  if (!getModelPricing(prepared.provider, prepared.sent_model_id)) {
-    throw new Error('campaign route pricing unknown')
+  const legacyRates = resolveCampaignLegacyReservationRates(
+    prepared.provider,
+    prepared.sent_model_id,
+  )
+  if (!legacyRates) {
+    throw new Error('campaign legacy reservation rates unknown')
   }
   const promptTokens = verifiedMaxInputContextTokens(prepared)
-  const estimate = estimateProviderUsageCost({
-    provider: prepared.provider,
-    modelId: prepared.sent_model_id,
+  return legacyReservationUpperBoundMicroUsd(
+    legacyRates,
     promptTokens,
-    completionTokens: reservedCompletion,
-    promptCacheHitTokens: 0,
-    promptCacheMissTokens: promptTokens,
-  })
-  if (estimate.estimatedCostUsd === null) {
-    throw new Error('campaign route pricing unknown')
-  }
-  return Math.max(1, Math.ceil(estimate.estimatedCostUsd * 1_000_000))
+    reservedCompletion,
+  )
 }
 
 export function actualMicroUsdFromUsage(input: {

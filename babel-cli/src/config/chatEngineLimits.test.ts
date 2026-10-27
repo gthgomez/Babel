@@ -7,7 +7,9 @@ import {
   isChatStreamingEnabled,
   isSweChatProfileEnabled,
   resolveChatEngineLimits,
+  ChatEngineLimitsConfigurationError,
   createRunAllowanceReport,
+  evaluateTimelineLimiter,
   shouldShrinkWallForPostWriteRepair,
 } from './chatEngineLimits.js';
 
@@ -70,7 +72,7 @@ test('resolveChatEngineLimits uses defaults when env unset', () => {
     const costBudgetFor = (maxCostUsd: number) => ({
       effectiveCostUsd: maxCostUsd,
       requestedCostUsd: maxCostUsd,
-      ceilingCostUsd: 100.00,
+      ceilingCostUsd: maxCostUsd,
       explicitCostCeiling: false,
       longTaskProfile: false,
     });
@@ -80,11 +82,9 @@ test('resolveChatEngineLimits uses defaults when env unset', () => {
     assert.deepEqual(expectedBase.costBudget, costBudgetFor(DEFAULT_CHAT_ENGINE_LIMITS.maxCostUsd));
     assert.ok(expectedBase.runAllowance);
     assert.equal(expectedBase.runAllowance?.declaredWallMs, DEFAULT_CHAT_ENGINE_LIMITS.maxWallMs);
-    assert.equal(expectedBase.runAllowance?.declaredCostUsd, DEFAULT_CHAT_ENGINE_LIMITS.maxCostUsd);
-    assert.deepEqual(expectedBase.runAllowance?.costAllowance, {
-      kind: 'finite',
-      usd: DEFAULT_CHAT_ENGINE_LIMITS.maxCostUsd,
-    });
+    assert.equal(expectedBase.runAllowance?.declaredCostUsd, Infinity);
+    assert.deepEqual(expectedBase.runAllowance?.costAllowance, { kind: 'unlimited' });
+    assert.equal(expectedBase.maxCostUsd, Infinity);
     const withTurns = resolveChatEngineLimits({ maxTurns: 12 });
     assert.equal(withTurns.maxTurns, 12);
     assert.deepEqual(withTurns.wallBudget, wallBudgetFor(DEFAULT_CHAT_ENGINE_LIMITS.maxWallMs));
@@ -159,6 +159,144 @@ test('resolveChatEngineLimits reads bounded env overrides', () => {
   }
 });
 
+test('explicit unlimited override wins over finite env cost', () => {
+  const previous = process.env['BABEL_CHAT_MAX_COST'];
+  process.env['BABEL_CHAT_MAX_COST'] = '100';
+  try {
+    const resolved = resolveChatEngineLimits({ maxCostUsd: Infinity });
+    assert.equal(resolved.maxCostUsd, Infinity);
+  } finally {
+    if (previous === undefined) delete process.env['BABEL_CHAT_MAX_COST'];
+    else process.env['BABEL_CHAT_MAX_COST'] = previous;
+  }
+});
+
+test('caller finite cost limits retain the selected amount and nonfinancial controls', () => {
+  const previous = process.env['BABEL_CHAT_MAX_COST'];
+  delete process.env['BABEL_CHAT_MAX_COST'];
+  try {
+    const baseline = resolveChatEngineLimits();
+    for (const amount of [0.001, 0.00000001, 101, 101.125, 1_000_000.25]) {
+      const limits = resolveChatEngineLimits({ maxCostUsd: amount });
+      assert.equal(limits.maxCostUsd, amount);
+      assert.equal(limits.costBudget?.requestedCostUsd, amount);
+      assert.equal(limits.costBudget?.effectiveCostUsd, amount);
+      assert.equal(limits.costBudget?.ceilingCostUsd, amount);
+      assert.equal(limits.costBudget?.explicitCostCeiling, true);
+      assert.deepEqual(limits.runAllowance?.costAllowance, { kind: 'finite', usd: amount });
+      assert.equal(limits.maxTurns, baseline.maxTurns);
+      assert.equal(limits.maxWallMs, baseline.maxWallMs);
+      assert.equal(limits.maxEstimatedTokens, baseline.maxEstimatedTokens);
+      assert.equal(limits.maxTokensPerRound, baseline.maxTokensPerRound);
+      assert.equal(limits.stallTurns, baseline.stallTurns);
+      const runtime = { limits, elapsedMs: 0, turns: 0, consecutiveStallTurns: 0 };
+      assert.equal(evaluateTimelineLimiter({ ...runtime, spentUsd: amount / 2 }).limiter, 'none');
+      assert.equal(evaluateTimelineLimiter({ ...runtime, spentUsd: amount }).limiter, 'cost');
+    }
+    assert.equal(baseline.maxCostUsd, Infinity);
+  } finally {
+    if (previous === undefined) delete process.env['BABEL_CHAT_MAX_COST'];
+    else process.env['BABEL_CHAT_MAX_COST'] = previous;
+  }
+});
+
+test('environment finite cost limits retain decimal precision and the selected ceiling', () => {
+  const previous = process.env['BABEL_CHAT_MAX_COST'];
+  try {
+    for (const raw of ['0.001', '0.00000001', '101', '101.125', '1000000.25']) {
+      process.env['BABEL_CHAT_MAX_COST'] = raw;
+      const amount = Number(raw);
+      const limits = resolveChatEngineLimits();
+      assert.equal(limits.maxCostUsd, amount);
+      assert.equal(limits.costBudget?.requestedCostUsd, amount);
+      assert.equal(limits.costBudget?.effectiveCostUsd, amount);
+      assert.equal(limits.costBudget?.ceilingCostUsd, amount);
+      assert.deepEqual(limits.runAllowance?.costAllowance, { kind: 'finite', usd: amount });
+    }
+  } finally {
+    if (previous === undefined) delete process.env['BABEL_CHAT_MAX_COST'];
+    else process.env['BABEL_CHAT_MAX_COST'] = previous;
+  }
+});
+
+test('new explicit cost limits reject zero, negative and unrepresentable amounts', () => {
+  const previous = process.env['BABEL_CHAT_MAX_COST'];
+  delete process.env['BABEL_CHAT_MAX_COST'];
+  try {
+    for (const amount of [0, -0, -1, Number.NaN, Number.NEGATIVE_INFINITY]) {
+      assert.throws(() => resolveChatEngineLimits({ maxCostUsd: amount }),
+        { name: 'ChatEngineLimitsConfigurationError', code: 'CHAT_LIMITS_CONFIG' });
+    }
+    for (const raw of ['0', '0.000', '-1', 'Infinity', 'NaN', '9'.repeat(400), `0.${'0'.repeat(400)}1`]) {
+      process.env['BABEL_CHAT_MAX_COST'] = raw;
+      assert.throws(() => resolveChatEngineLimits(),
+        { name: 'ChatEngineLimitsConfigurationError', code: 'CHAT_LIMITS_CONFIG' });
+    }
+  } finally {
+    if (previous === undefined) delete process.env['BABEL_CHAT_MAX_COST'];
+    else process.env['BABEL_CHAT_MAX_COST'] = previous;
+  }
+});
+
+test('an already granted zero cost allowance remains finite and exhausted', () => {
+  // Restored grants can contain zero even though new explicit configuration rejects it.
+  const limits = { ...resolveChatEngineLimits({ maxCostUsd: 1 }), maxCostUsd: 0 };
+  delete limits.costBudget;
+  assert.deepEqual(createRunAllowanceReport(limits).costAllowance, { kind: 'finite', usd: 0 });
+  const result = evaluateTimelineLimiter({ limits, elapsedMs: 0, spentUsd: 0, turns: 0, consecutiveStallTurns: 0 });
+  assert.equal(result.limiter, 'cost');
+  assert.equal(result.classification, 'limit_cost');
+});
+
+test('explicit invalid cost overrides fail closed with configuration errors', () => {
+  const previous = process.env['BABEL_CHAT_MAX_COST'];
+  delete process.env['BABEL_CHAT_MAX_COST'];
+  try {
+    assert.throws(
+      () => resolveChatEngineLimits({ maxCostUsd: Number.NaN }),
+      ChatEngineLimitsConfigurationError,
+    );
+    assert.throws(
+      () => resolveChatEngineLimits({ maxCostUsd: Number.NEGATIVE_INFINITY }),
+      ChatEngineLimitsConfigurationError,
+    );
+    assert.throws(
+      () => resolveChatEngineLimits({ maxCostUsd: 0 }),
+      ChatEngineLimitsConfigurationError,
+    );
+  } finally {
+    if (previous === undefined) delete process.env['BABEL_CHAT_MAX_COST'];
+    else process.env['BABEL_CHAT_MAX_COST'] = previous;
+  }
+});
+
+test('malformed explicit env cost strings reject configuration', () => {
+  const previous = process.env['BABEL_CHAT_MAX_COST'];
+  delete process.env['BABEL_CHAT_MAX_COST'];
+  try {
+    for (const raw of ['not-a-number', '1junk', '   ']) {
+      process.env['BABEL_CHAT_MAX_COST'] = raw;
+      assert.throws(() => resolveChatEngineLimits(), ChatEngineLimitsConfigurationError);
+    }
+  } finally {
+    if (previous === undefined) delete process.env['BABEL_CHAT_MAX_COST'];
+    else process.env['BABEL_CHAT_MAX_COST'] = previous;
+  }
+});
+
+test('evaluateTimelineLimiter ignores critic repair cap when parent cost is unlimited', () => {
+  const limits = resolveChatEngineLimits({ maxCostUsd: Infinity });
+  const result = evaluateTimelineLimiter({
+    limits,
+    elapsedMs: 0,
+    spentUsd: 50,
+    turns: 0,
+    consecutiveStallTurns: 0,
+    criticRepairCostCapUsd: 1,
+  });
+  assert.equal(result.limiter, 'none');
+});
+
 test('budget fields are clamped to valid ranges', () => {
   const previous = {
     cost: process.env['BABEL_CHAT_MAX_COST'],
@@ -171,9 +309,10 @@ test('budget fields are clamped to valid ranges', () => {
   delete process.env['BABEL_CHAT_STALL_TURNS'];
   delete process.env['BABEL_CHAT_LONG_TASK'];
   try {
-    // Below-min cost should clamp to floor
-    const low = resolveChatEngineLimits({ maxCostUsd: 0 });
-    assert.ok(low.maxCostUsd >= 0.01);
+    assert.throws(
+      () => resolveChatEngineLimits({ maxCostUsd: 0 }),
+      ChatEngineLimitsConfigurationError,
+    );
     // Negative wall clock should clamp to floor
     const neg = resolveChatEngineLimits({ maxWallMs: -1 });
     assert.ok(neg.maxWallMs >= 10_000);
