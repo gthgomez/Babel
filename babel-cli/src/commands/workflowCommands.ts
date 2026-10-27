@@ -124,7 +124,7 @@ import { registerDogfoodCommands } from './dogfoodCommands.js';
 import { loadPlanHandoff } from '../agent/planHandoff.js';
 import { runPlanReviewLane } from '../agent/lanes/planReviewLane.js';
 import { resolveFuzzyWorkspaceDirectory } from '../services/pathScanner.js';
-import { preflightRequestedModelPolicy } from './workflowModelPolicy.js';
+import { isCommandCodeChatSelection, preflightRequestedModelPolicy } from './workflowModelPolicy.js';
 import { registerIndependentReviewCommands } from './independentReviewCommands.js';
 
 export { buildSmallFixLitePayload, normalizeSmallFixProvider, resolveSmallFixProviderForCommand };
@@ -2246,8 +2246,11 @@ Notes:
           process.exit(1);
         }
 
+        const useNativeReadOnlyChat = shouldUseReadOnlyQuestionPath && options.useChatPipeline !== true &&
+          isCommandCodeChatSelection(normalizedModel);
         const useChatEnginePath =
-          (mode === 'chat' || mode === 'chat-headless') && !shouldUseReadOnlyQuestionPath && options.useChatPipeline !== true;
+          (mode === 'chat' || mode === 'chat-headless') && (!shouldUseReadOnlyQuestionPath || useNativeReadOnlyChat) && options.useChatPipeline !== true;
+        if (useNativeReadOnlyChat) applyRunCommandEnvFlags({ readOnly: true });
 
         const effectiveAllowExpensive = resolveEffectiveAllowExpensive({
           task,
@@ -2366,7 +2369,7 @@ Notes:
           });
         }
 
-        if (shouldUseReadOnlyQuestionPath) {
+        if (shouldUseReadOnlyQuestionPath && !useNativeReadOnlyChat) {
           if (outputFormat === 'stream-json') {
             writeNdjson(
               makeRunStreamEvent('run_start', {
