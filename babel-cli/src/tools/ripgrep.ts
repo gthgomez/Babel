@@ -275,7 +275,7 @@ export function rgGlobFiles(
     throw new Error('ripgrep (rg) is not available');
   }
 
-  const args: string[] = ['--files', '--glob', globPattern, '--no-ignore-vcs'];
+  const args: string[] = ['--files', '--null', '--glob', globPattern, '--no-ignore-vcs'];
 
   const result = spawnSync('rg', args, {
     cwd: projectRoot,
@@ -291,8 +291,7 @@ export function rgGlobFiles(
 
   const stdout = result.stdout ?? '';
   const allLines = stdout
-    .split('\n')
-    .map((l) => l.trim())
+    .split('\0')
     .filter((l) => l.length > 0)
     .map((p) => p.replace(/\\/g, '/'));
 

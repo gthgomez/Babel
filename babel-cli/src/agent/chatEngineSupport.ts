@@ -160,7 +160,7 @@ export function describeDirectMutationEffect(
 /** Compact one-line detail for tool result logging / UI. */
 export function formatResultDetail(
   action: ChatToolAction,
-  result: { stdout?: string; stderr?: string; exit_code?: number },
+  result: { stdout?: string; stderr?: string; exit_code?: number; glob_result?: import('../sandbox.js').ToolResult['glob_result'] },
   effect?: { status: MutationEffectStatus; reason: string } | null,
 ): string {
   const stdout = result.stdout ?? '';
@@ -169,8 +169,12 @@ export function formatResultDetail(
       return `${stdout.length} B`;
     case 'list_dir':
       return `${stdout.split('\n').filter(Boolean).length} entries`;
-    case 'grep':
     case 'glob':
+      if (result.glob_result && result.exit_code === 0) {
+        return `${result.glob_result.returned_count} matches${result.glob_result.truncated ? ' (truncated)' : ''}`;
+      }
+      return result.exit_code !== 0 ? `exit ${result.exit_code ?? -1}` : 'match count unavailable';
+    case 'grep':
       return `${stdout.split('\n').filter(Boolean).length} matches`;
     case 'run_command':
     case 'await_command':

@@ -150,6 +150,8 @@ export interface HostLaunchFailure {
 }
 
 export interface ToolResult {
+  /** Successful glob data: count is returned paths, not display lines or total matches. */
+  glob_result?: { paths: string[]; returned_count: number; truncated: boolean };
   exit_code: number;
   stdout: string;
   stderr: string;

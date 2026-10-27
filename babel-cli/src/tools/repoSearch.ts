@@ -246,14 +246,25 @@ export async function globPaths(
   maxPaths = DEFAULT_MAX_GLOB_PATHS,
   approvedReadRoots?: string[],
 ): Promise<string[]> {
+  return (await globPathResult(projectRoot, pattern, maxPaths, approvedReadRoots)).paths;
+}
+
+/** Bounded glob data; returned paths are distinct from human-readable display rows. */
+async function globPathResult(
+  projectRoot: string,
+  pattern: string,
+  maxPaths = DEFAULT_MAX_GLOB_PATHS,
+  approvedReadRoots?: string[],
+): Promise<{ paths: string[]; truncated: boolean }> {
   const root = resolve(projectRoot);
+  if (!statSync(root).isDirectory()) throw new Error('Glob root must be a directory');
   const limit = Math.max(1, maxPaths);
 
   // Try ripgrep --files --glob when available (much faster)
   if (detectRipgrep()) {
     try {
       // rgGlobFiles already sorts by depth then alpha before truncation
-      return rgGlobFiles(root, pattern, limit).paths;
+      return rgGlobFiles(root, pattern, limit);
     } catch {
       // Fall through to pure-JS fallback
     }
@@ -285,7 +296,7 @@ export async function globPaths(
   }
   // Sort by depth first so root-level matches survive truncation
   sortPathsByDepth(paths);
-  return paths.slice(0, limit);
+  return { paths: paths.slice(0, limit), truncated: paths.length > limit };
 }
 
 export function formatGrepMatches(matches: GrepMatch[], truncated: boolean): string {
@@ -376,18 +387,19 @@ export async function handleGlobTool(
     output_format?: 'text' | 'json';
   },
   approvedReadRoots?: string[],
-): Promise<{ exit_code: number; stdout: string; stderr: string }> {
+): Promise<import('../sandbox.js').ToolResult> {
   const projectRoot = process.env['BABEL_PROJECT_ROOT'] ?? process.cwd();
   try {
-    const paths = await globPaths(projectRoot, input.pattern, input.max_paths, approvedReadRoots);
+    const { paths, truncated } = await globPathResult(projectRoot, input.pattern, input.max_paths, approvedReadRoots);
     const output =
       input.output_format === 'json'
-        ? JSON.stringify({ matches: paths, truncated: false })
+        ? JSON.stringify({ matches: paths, truncated })
         : formatGlobPaths(paths);
     return {
       exit_code: 0,
       stdout: output,
       stderr: '',
+      glob_result: { paths, returned_count: paths.length, truncated },
     };
   } catch (error: unknown) {
     return {
