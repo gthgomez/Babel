@@ -45,6 +45,7 @@ import {
   parseTextToolTurn,
   isUnresolvedTextToolAttempt,
   buildTextToolProtocolRejectMessage,
+  TEXT_TOOL_NAMES,
 } from "./textToolParser.js";
 import {
   chatActionToolName,
@@ -99,7 +100,7 @@ import {
 } from "./chatEngineObservability.js";
 import { nativeToolUseToChatAction } from "./chatEngineSupport.js";
 import { isReadOnlyChat } from "./chatReadOnly.js";
-import { availableChatTools } from "./chatToolAvailability.js";
+import { availableChatTools, availableChatToolNames } from "./chatToolAvailability.js";
 import {PROJECT_REQUIRED_MESSAGE,conversationProjectRequiredReport} from './chatToolScopeAdmission.js';
 
 import type { ChatEngineStreamingLoopHost } from "./chatEngineContracts.js";
@@ -1541,7 +1542,7 @@ export class ChatEngineStreamingLoop {
           const tamperAnswer = await this.host
             .synthesizeAnswer(allToolObservations, {
               onAnswerChunk: (_chunk: string) => {},
-            })
+            }, userInput)
             .catch(() => "");
           // R0-8: synthesis is a suspension point; a superseded generator must
           // not append to the new task's conversation.
@@ -1764,6 +1765,7 @@ export class ChatEngineStreamingLoop {
                 {
                   onAnswerChunk: (_chunk: string) => {},
                 },
+                userInput,
               );
             } catch (err: any) {
               synthError = err instanceof Error ? err : new Error(String(err));
@@ -1773,6 +1775,10 @@ export class ChatEngineStreamingLoop {
             if (!this.host.isSubmissionCurrent(submissionGeneration)) return;
 
             if (synthError || !synthAnswer?.trim()) {
+              if (synthError?.message.startsWith('RESPONSE_EVIDENCE_INVALID:')) {
+                yield this.host.streamFailed(synthError.message);
+                return;
+              }
               const failMsg = `Answer synthesis failed after inspection completed: ${synthError?.message ?? "no answer generated"}`;
               this.host.conversation.push({
                 role: "assistant",
@@ -1830,7 +1836,7 @@ export class ChatEngineStreamingLoop {
             const killAnswer = await this.host
               .synthesizeAnswer(allToolObservations, {
                 onAnswerChunk: (_chunk: string) => {},
-              })
+              }, userInput)
               .catch(() => "");
             // R0-8: synthesis is a suspension point; a superseded generator must
             // not append to the new task's conversation.
@@ -2001,7 +2007,15 @@ export class ChatEngineStreamingLoop {
           this.host.conversation.push({ role: "assistant", content: answer });
           recordChatHarnessFeedback(
             this.host,
-            buildTextToolProtocolRejectMessage(),
+            buildTextToolProtocolRejectMessage(
+              availableChatToolNames([...TEXT_TOOL_NAMES], {
+                executionScope: this.host.options.executionScope,
+                operation: effectiveOperation,
+                requiredVerifiers: isReadOnlyInspection ? this.host.getResolvedRequiredVerifiers() : [],
+                hostFallbackAllowed: this.host.isolationBrokerFlags().hostFallbackAllowed,
+              }),
+              isReadOnlyInspection ? this.host.getResolvedRequiredVerifiers() : [],
+            ),
           );
           _turnSpan?.setAttribute("babel.chat.text_tool_protocol_repair", true);
           endSpan(_turnSpan, SpanStatusCode.OK);
@@ -2035,6 +2049,7 @@ export class ChatEngineStreamingLoop {
 
     yield* finalizeStreamingTurnLimit({
       host: this.host,
+      currentRequest: userInput,
       submissionGeneration,
       allToolObservations,
       effectiveExecutePolicy,

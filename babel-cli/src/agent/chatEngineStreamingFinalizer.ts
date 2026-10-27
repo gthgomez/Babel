@@ -17,6 +17,7 @@ export async function* finalizeStreamingTurnLimit(input: {
   effectiveExecutePolicy: boolean;
   effectiveIntent: TaskIntent;
   maxTurns: number;
+  currentRequest?: string;
 }): AsyncGenerator<ChatEvent, void, undefined> {
   const {
     host,
@@ -69,7 +70,7 @@ export async function* finalizeStreamingTurnLimit(input: {
   const maxTurnAnswer = await host
     .synthesizeAnswer(allToolObservations, {
       onAnswerChunk: (_chunk) => {},
-    })
+    }, input.currentRequest)
     .catch(() => "");
   // R0-8: synthesis is a suspension point; a superseded generator must not
   // append to the new task's conversation.

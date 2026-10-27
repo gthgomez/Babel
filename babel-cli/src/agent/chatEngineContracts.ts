@@ -786,6 +786,7 @@ export interface ChatEngineStreamingLoopHost {
   readonly synthesizeAnswer: (
     toolObservations: string,
     callbacks: ChatCallbacks,
+    currentRequest?: string,
   ) => Promise<string>
   readonly tamperCount: number
   tamperedThisTurn: boolean

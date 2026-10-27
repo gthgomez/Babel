@@ -65,6 +65,8 @@ const paths = [
   "babel-cli/src/authority/integrity.ts",
   "babel-cli/src/authority/lease.ts",
   "babel-cli/src/authority/leaseTime.ts",
+  "babel-cli/src/authority/literalSearch.test.ts",
+  "babel-cli/src/authority/literalSearch.ts",
   "babel-cli/src/authority/ownedFileAssertion.test.ts",
   "babel-cli/src/authority/ownedFileAssertion.ts",
   "babel-cli/src/authority/ownedFileAssertion.windows.ps1",
