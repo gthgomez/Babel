@@ -84,8 +84,6 @@ export function resolveChatModelPolicy(options: ChatModelPolicyOptions): {
   // the backend key IS the opt-in (operator supplies OPENCODE_API_KEY).
   const explicitOpenCodeRequest = requestedBackendEntry?.provider === 'opencode';
   const explicitCommandCodeRequest = requestedBackendEntry?.provider === 'command-code' &&
-    requestedBackendKey === 'command-code/deepseek-v4.1-flash' &&
-    requestedBackendEntry.model_id === 'deepseek/deepseek-v4.1-flash' &&
     getProviderSpec('command-code').authorityConformance === 'certified' &&
     providerSupportsOperation('command-code', 'native_tool_stream');
   const explicitGoRequest = requestedBackendEntry !== undefined && isChatOpenCodeGoRoute({
@@ -98,12 +96,19 @@ export function resolveChatModelPolicy(options: ChatModelPolicyOptions): {
     Boolean(desktopProvider && desktopModel && requestedBackendKey) &&
     requestedBackendKey === desktopModel &&
     requestedBackendEntry?.provider === desktopProvider;
+  const explicitSavedManualRoute = requestedBackendEntry !== undefined &&
+    'desktop_manual' in requestedBackendEntry && requestedBackendEntry.desktop_manual === true &&
+    (requestedBackendEntry.provider === 'openrouter' || requestedBackendEntry.provider === 'command-code') &&
+    requestedBackendKey === `${requestedBackendEntry.provider}/${requestedBackendEntry.model_id}` &&
+    getProviderSpec(requestedBackendEntry.provider).authorityConformance === 'certified' &&
+    providerSupportsOperation(requestedBackendEntry.provider, 'native_tool_stream');
   const policy = requestedModelIsBackendKey
     ? resolveModelByKey({
         key: requestedBackendKey!,
         bindStagesToSelectedModel: true,
         ...(explicitOpenCodeRequest ||
         explicitCommandCodeRequest ||
+        explicitSavedManualRoute ||
         explicitGoRequest ||
         desktopProvider === 'deepseek' ||
         desktopProvider === 'deepinfra' ||

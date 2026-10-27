@@ -23,6 +23,7 @@ export interface OpenRouterRoutingPolicy extends ProviderRoutingPolicy {}
 
 export class OpenRouterApiRunner extends DeepInfraApiRunner {
   private readonly environment: NodeJS.ProcessEnv;
+  private readonly requireExactModelId: boolean;
 
   protected override get apiUrl(): string {
     return 'https://openrouter.ai/api/v1/chat/completions';
@@ -36,6 +37,7 @@ export class OpenRouterApiRunner extends DeepInfraApiRunner {
       explicitCredential?: string;
       env?: NodeJS.ProcessEnv;
       executionEnvelope?: ResolvedExecutionEnvelope;
+      requireExactModelId?: boolean;
     } = {},
   ) {
     super(model, credential.apiKeyEnvVar ?? 'OPENROUTER_API_KEY', sampling, {
@@ -47,6 +49,7 @@ export class OpenRouterApiRunner extends DeepInfraApiRunner {
       ...(credential.executionEnvelope ? { executionEnvelope: credential.executionEnvelope } : {}),
     });
     this.environment = credential.env ?? process.env;
+    this.requireExactModelId = credential.requireExactModelId === true;
   }
 
   protected override getRequestBodyExtras(): Record<string, unknown> {
@@ -81,7 +84,12 @@ export class OpenRouterApiRunner extends DeepInfraApiRunner {
     return metadata ? { ...metadata, provider: 'openrouter' } : null;
   }
 
+  getPinnedModelId(): string { return this.model; }
+
   protected override validateObservedModelId(observedModelId: string | null): void {
+    if (this.requireExactModelId && observedModelId !== this.model) {
+      throw new Error('[LIVE_MODEL_POLICY] OpenRouter response model mismatch: expected the requested exact model.');
+    }
     if (this.executionEnvelope?.mode === 'benchmark_strict') {
       if (observedModelId === null) {
         throw new Error('[LIVE_MODEL_POLICY] Strict OpenRouter execution omitted observed model identity.')

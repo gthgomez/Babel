@@ -11,7 +11,7 @@ test('actual Electron safeStorage protects synthetic private data in an isolated
  const root=mkdtempSync(join(tmpdir(),'babel-electron-credential-'));
  try{
   const env={};
-  for(const name of ['PATH','SystemRoot','WINDIR','COMSPEC','PATHEXT','TEMP','TMP'])if(process.env[name])env[name]=process.env[name];
+  for(const name of ['PATH','SystemRoot','WINDIR','COMSPEC','PATHEXT','TEMP','TMP','DISPLAY','XAUTHORITY'])if(process.env[name])env[name]=process.env[name];
   Object.assign(env,{HOME:root,USERPROFILE:root,APPDATA:root,LOCALAPPDATA:root,BABEL_CREDENTIAL_FIXTURE_ROOT:root});
   const result=spawnSync(executable,[fileURLToPath(new URL('./credential-electron-fixture.mjs',import.meta.url))],{cwd:root,env,windowsHide:true,encoding:'utf8',timeout:20000,maxBuffer:8192});
   assert.equal(result.status,0,'Synthetic Electron fixture failed; raw child output withheld');

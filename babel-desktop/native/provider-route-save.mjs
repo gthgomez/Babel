@@ -23,7 +23,7 @@ export async function saveDesktopProviderRoute({options, configDirectory, prefer
   if (apiKey) saveProviderCredential({
     provider: route.provider, apiKey, scope, configDirectory, projectRoot: preferences.projectRoot, operation:options.credentialOperation??'add',
   });
-  saveProviderRoute({configDirectory, ...route,enabledModels:options.enabledModels});
+  saveProviderRoute({configDirectory, ...route,enabledModels:options.enabledModels,manualModelId:options.manualModelId});
   const previousRoot = preferences.projectCredentialRoot;
   preferences.projectCredentialRoot = scope === 'project' ? preferences.projectRoot : null;
   try { await savePreferences(); }

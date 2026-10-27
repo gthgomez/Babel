@@ -23,7 +23,7 @@ test('Desktop supports certified Go and rejects stale unqualified Zen selections
 test('qualified providers lists certified providers', () => {
   const providers = qualifiedProviders();
   const ids = providers.map(p => p.id);
-  assert.deepEqual(ids.sort(), ['deepinfra', 'deepseek', 'ollama', 'opencode-go', 'openrouter']);
+  assert.deepEqual(ids.sort(), ['command-code', 'deepinfra', 'deepseek', 'ollama', 'opencode-go', 'openrouter']);
 });
 
 test('provider route is persisted and applied to child env for all supported providers', () => {

@@ -430,7 +430,7 @@ async function start(){
     }
     if(options.apiKey || options.scope==='project')await credentialRequestContext(options,Boolean(options.apiKey));
     const configDirectory=runtimeEnvironment().BABEL_CONFIG_DIR;
-    const route=validateProviderRoute({provider:options.provider, model:options.model},configDirectory);
+    const route=validateProviderRoute(options,configDirectory);
     const descriptor=qualifiedProviders().find(entry=>entry.id===route.provider);
     const requiresKey=Boolean(descriptor?.requiresApiKey);
     const apiKey=typeof options.apiKey==='string'?options.apiKey:'';
@@ -446,7 +446,7 @@ async function start(){
         configDirectory, projectRoot:preferences.projectRoot,operation:options.credentialOperation??'add',
       });
     }
-    saveProviderRoute({configDirectory, ...route});
+    saveProviderRoute({configDirectory, ...route,manualModelId:options.manualModelId,enabledModels:options.enabledModels});
     const previousRoot=preferences.projectCredentialRoot;
     preferences.projectCredentialRoot=options.scope==='project'?preferences.projectRoot:null;
     try{await savePreferences();}
