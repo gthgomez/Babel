@@ -3,6 +3,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, readdi
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
+import { pathToFileURL } from 'node:url'
 import test from 'node:test'
 import { extractRunDirectory } from './adapter.js'
 import { RunIntelligenceCatalog } from './catalog.js'
@@ -25,7 +26,7 @@ net.Socket.prototype.connect=function(...args) {
 };
 globalThis.fetch=deny;
 http.request=deny; http.get=deny; https.request=deny; https.get=deny; syncBuiltinESMExports();`)
-  return { networkGuard, networkMarker }
+  return { networkGuard: pathToFileURL(networkGuard).href, networkMarker }
 }
 
 const end = '2026-10-27T16:00:00.000Z'
