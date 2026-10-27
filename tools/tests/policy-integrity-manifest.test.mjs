@@ -76,6 +76,7 @@ const paths = [
   "babel-cli/src/authority/pdp.ts",
   "babel-cli/src/authority/privilegedTargetBinding.test.ts",
   "babel-cli/src/authority/protectedPath.ts",
+  "babel-cli/src/authority/publicationProhibition.cli.test.ts",
   "babel-cli/src/authority/reasonCodes.ts",
   "babel-cli/src/authority/remoteClarification.test.ts",
   "babel-cli/src/authority/scriptPrivilegeEscape.test.ts",

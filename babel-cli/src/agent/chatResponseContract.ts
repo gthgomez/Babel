@@ -20,12 +20,19 @@ export function normalizeChatAnswer(answer: string, userInput: string): string {
   } catch { return answer }
 }
 
-/** A mandatory product choice is a valid deferral, not an execution-completion claim. */
+/** An assistant's blocking choice question is a deferral, not proof of task completion. */
 export function requestsRequiredUserDecision(answer: string): boolean {
   const prose = answer.replace(/```[\s\S]*?```/g, '')
     .replace(/\b(?:says?|said|claims?|claimed|wrote)\s*[: ,]*["“][^"”]*["”]/gi, '')
+  // A reply consisting entirely of a product-choice question already asks the
+  // user to decide. Do not require a second, stock "I need your choice" sentence.
+  // This recognizes a deferral only: no authority or completion evidence is minted.
+  const question = prose.trim().replace(/^>\s*/, '').replace(/^\*\*([\s\S]*)\*\*$/, '$1')
+  const asksChoice = /\b(?:or|versus)\b/i.test(question)
+    || /^(?:which|what)\b[^?\n]*\b(?:should|must)\b/i.test(question)
+  if (asksChoice && /^(?:which|what|should|do you want|would you prefer)\b[^?\n]{1,300}\?$/i.test(question)) return true
   const deferral = /\b(?:I(?:'m| am) not (?:editing|implementing|changing)(?: anything)? yet|before I (?:can )?(?:edit|implement|proceed)|I (?:need|require) (?:your|a) (?:decision|choice|clarification)|what I need from you)\b/i.test(prose)
   if (!deferral || /\b(?:if|suppose|imagine)\b[^.!?\n]*\b(?:not editing|before I|I need|what I need)\b/i.test(prose)) return false
   // A blockquoted question can be the assistant's own prominently displayed request.
-  return /(?:^|[.!\n])\s*(?:>\s*)?(?:\*\*)?(?:which|what|how|should I|do you want|would you like|can you (?:choose|clarify|specify)|sort by|choose|specify|pick)\b[^?\n]{1,300}\?/im.test(prose)
+  return /(?:^|[.!\n])\s*(?:>\s*)?(?:\*\*)?(?:which|what|how|should|do you want|would you like|can you (?:choose|clarify|specify)|sort by|choose|specify|pick)\b[^?\n]{1,300}\?/im.test(prose)
 }
