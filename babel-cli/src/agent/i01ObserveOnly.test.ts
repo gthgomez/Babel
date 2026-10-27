@@ -28,6 +28,7 @@ interface I01Harness {
   root: string;
   source: string;
   roundsServed: { value: number };
+  synthesisRequests: { value: number };
   requestedPaths: string[];
   run(task: string): Promise<{ payload: Record<string, unknown>; engine: ChatEngine }>;
   dispose(): void;
@@ -58,13 +59,25 @@ function makeI01Harness(readMode: 'novel' | 'unchanged' = 'novel'): I01Harness {
   delete process.env['BABEL_POLICY_I01_OBSERVE_ONLY'];
 
   const roundsServed = { value: 0 };
+  const synthesisRequests = { value: 0 };
   const requestedPaths: string[] = [];
   let activeEngine: ChatEngine | undefined;
   const originalFetch = globalThis.fetch;
   // Novel targets yield real localization without relying on the age text in
   // deduplicated read_file observations. read_range repeats stable evidence for
   // the negative control, while retaining the real engine's progress policy.
-  globalThis.fetch = async () => {
+  globalThis.fetch = async (_url, init) => {
+    const body = JSON.parse(String(init?.body)) as { stream?: boolean; tools?: unknown };
+    if (body.tools === undefined) {
+      // Bounded read-only recovery uses the provider's raw-text stream,
+      // rather than the native tool-call delta used by the inspection loop.
+      assert.equal(body.stream, true);
+      synthesisRequests.value += 1;
+      return new Response(`data: ${JSON.stringify({ model: 'mimo-v2.5',
+        choices: [{ delta: { content: 'Unchanged fixture reads provide no new evidence.' }, finish_reason: 'stop' }],
+        usage: { prompt_tokens: 15, completion_tokens: 5, total_tokens: 20 },
+      })}\n\ndata: [DONE]\n\n`, { status: 200, headers: { 'content-type': 'text/event-stream' } });
+    }
     roundsServed.value += 1;
     const path = join(source, `fixture-${readMode === 'novel' ? roundsServed.value : 1}.txt`);
     requestedPaths.push(path);
@@ -109,6 +122,7 @@ function makeI01Harness(readMode: 'novel' | 'unchanged' = 'novel'): I01Harness {
     root,
     source,
     roundsServed,
+    synthesisRequests,
     requestedPaths,
     run,
     dispose() {
@@ -185,7 +199,9 @@ test('I01 observe-only preserves the real unchanged-read no-progress terminal', 
       `unchanged reads must stop before I01, served ${harness.roundsServed.value} rounds`);
     assert.equal(payload['reason_code'], 'recovery_exhausted');
     assert.equal(payload['cause_class'], 'model');
-    assert.match(answerText(payload), /Repeated no-progress after recovery/i);
+    assert.equal(engine.getTurnRuntimeSnapshot()?.effectiveOperation, 'READ_ONLY');
+    assert.equal(harness.synthesisRequests.value, 1, 'no-progress terminal must synthesize once, without another tool loop');
+    assert.match(answerText(payload), /Unchanged fixture reads provide no new evidence/i);
     assert.doesNotMatch(answerText(payload), /hard cap 12/i);
     const events = (engine as unknown as {
       parity: { sessionEvents: { events: Array<{ kind: string; action?: string }> } };

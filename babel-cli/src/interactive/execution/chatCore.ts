@@ -1,3 +1,4 @@
+import { isReadOnlyChat } from '../../agent/chatReadOnly.js';
 import { chatInspectionCoverage } from '../../agent/chatInspectionCoverage.js';
 import { terminalReasonGuidance } from '../../agent/chatTerminalReason.js';
 // ─── Chat Core ──────────────────────────────────────────────────────────────
@@ -708,9 +709,10 @@ export async function runChatEngineOnce(input: {
   // S01/#211: resolve the effective contract ONCE from the existing TaskShape
   // machinery. Preparation, prompt compilation and limits all consume this
   // resolution; there is no second (autoClassify:false) classifier.
-  const taskShape = resolveTaskShape(input.task, input.operation);
+  const requestedOperation = isReadOnlyChat() ? 'READ_ONLY' : input.operation;
+  const taskShape = resolveTaskShape(input.task, requestedOperation);
   const effectiveOperation: TaskOperation = taskShape.operation;
-  const resolvedTaskClass = resolveChatTaskClass({ taskText: input.task, autoClassify: true, operation: input.operation });
+  const resolvedTaskClass = resolveChatTaskClass({ taskText: input.task, autoClassify: true, operation: requestedOperation });
   const limits = resolveChatEngineLimits(
     {},
     input.model,
@@ -742,7 +744,7 @@ export async function runChatEngineOnce(input: {
     input.engine ??
     factory({
       task: input.task,
-      ...(input.operation ? { operation: input.operation } : {}),
+      ...(requestedOperation ? { operation: requestedOperation } : {}),
       compiledChatStack: chatStack,
       ...(input.instructionRoot ? { instructionRoot: input.instructionRoot } : {}),
       projectRoot,
@@ -765,7 +767,7 @@ export async function runChatEngineOnce(input: {
   if (input.engine) {
     applyEngineTurnPreparation(input.engine, {
       task: input.task,
-      ...(input.operation ? { operation: input.operation } : {}),
+      ...(requestedOperation ? { operation: requestedOperation } : {}),
       compiledChatStack: chatStack,
       projectRoot,
       executionScope:scope,
