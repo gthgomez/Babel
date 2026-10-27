@@ -18,7 +18,7 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import { ChatEngine } from '../../agent/chatEngine.js';
 import { resolveChatEngineLimits } from '../../config/chatEngineLimits.js';
-import { analyzeTaskShape, resolveChatTaskClass } from '../../config/chatTaskClass.js';
+import { resolveChatTaskClass } from '../../config/chatTaskClass.js';
 import { OpenCodeGoApiRunner } from '../../runners/openCodeGoApi.js';
 import { babelReviewModelPolicy } from '../../services/babelChatReview.js';
 import type { AgentTargetContext } from '../../services/targetResolver.js';
@@ -252,8 +252,11 @@ describe('chat preparation parity (actual provider-bound request)', () => {
         /Runtime mode: tui\./,
       );
 
-      const intentClass = resolveChatTaskClass({ taskText: task, autoClassify: true });
-      const limitsClass = resolveChatTaskClass({ taskText: task, autoClassify: true });
+      // All three paths share the fixture's explicit read-only contract, even
+      // though its task text describes a repair.
+      const operation = 'READ_ONLY' as const;
+      const intentClass = resolveChatTaskClass({ taskText: task, autoClassify: true, operation });
+      const limitsClass = resolveChatTaskClass({ taskText: task, autoClassify: true, operation });
       const limits = resolveChatEngineLimits({}, undefined, {
         taskClass: limitsClass,
         taskText: task,
@@ -262,10 +265,11 @@ describe('chat preparation parity (actual provider-bound request)', () => {
       const intentPlanUserMessage = compileIntentPlanUserMessage(
         task,
         intentClass,
-        analyzeTaskShape(task).operation,
+        operation,
       );
       const directEngine = new ChatEngine({
         task,
+        operation,
         projectRoot: source,
         systemContext,
         compiledChatStack: chatStack,
