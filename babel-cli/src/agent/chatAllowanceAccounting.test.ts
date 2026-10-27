@@ -184,6 +184,52 @@ test('historical finite wall evidence expires honestly after cold resume under u
   }
 })
 
+test('fresh objectives use current wall environment without promoting it to a constructor override', () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-wall-precedence-'))
+  const previousRuns = process.env['BABEL_RUNS_DIR']
+  const previousWall = process.env['BABEL_CHAT_MAX_WALL_MS']
+  const originalNow = Date.now
+  let now = 1_800_000_000_000
+  Date.now = () => now
+  process.env['BABEL_RUNS_DIR'] = join(root, 'runs')
+  process.env['BABEL_CHAT_MAX_WALL_MS'] = '40000'
+  try {
+    const engine = new ChatEngine({ task: 'first task', projectRoot: root })
+    const prepare = (task: string) => engine.applyTurnPreparation({ task, projectRoot: root, limits: resolveChatEngineLimits() })
+    prepare('first task')
+    engine.applyUserSubmission({ userInput: 'first task' })
+    const originalOwner = engine.getTaskAllowanceSnapshot()!.taskOwnerId
+    assert.equal(engine.getTaskAllowanceSnapshot()!.grant.wallCapMs, 40_000)
+    process.env['BABEL_CHAT_MAX_WALL_MS'] = '12000'
+    prepare('a different unrelated task')
+    assert.equal(engine.getTaskAllowanceSnapshot()!.grant.wallCapMs, 40_000, 'preparation cannot shrink a retained grant')
+    engine.applyUserSubmission({ userInput: 'a different unrelated task' })
+    assert.notEqual(engine.getTaskAllowanceSnapshot()!.taskOwnerId, originalOwner)
+    assert.equal(engine.getTaskAllowanceSnapshot()!.grant.wallCapMs, 12_000)
+    allowanceAccess(engine).beginActiveExecution()
+    now += 13_000
+    assert.equal(allowanceAccess(engine).checkBudgets().limiter, 'wall')
+    allowanceAccess(engine).pauseActiveExecution()
+
+    const constructor = new ChatEngine({ task: 'explicit constructor task', projectRoot: root, maxWallMs: 30_000 })
+    constructor.applyTurnPreparation({ task: 'explicit constructor task', projectRoot: root, limits: resolveChatEngineLimits() })
+    constructor.applyUserSubmission({ userInput: 'explicit constructor task' })
+    assert.equal(constructor.getTaskAllowanceSnapshot()!.grant.wallCapMs, 30_000)
+
+    delete process.env['BABEL_CHAT_MAX_WALL_MS']
+    prepare('another wholly unrelated task')
+    engine.applyUserSubmission({ userInput: 'another wholly unrelated task' })
+    assert.deepEqual(engine.getTaskAllowanceSnapshot()!.grant.wallAllowance, { kind: 'unlimited' })
+  } finally {
+    Date.now = originalNow
+    if (previousRuns === undefined) delete process.env['BABEL_RUNS_DIR']
+    else process.env['BABEL_RUNS_DIR'] = previousRuns
+    if (previousWall === undefined) delete process.env['BABEL_CHAT_MAX_WALL_MS']
+    else process.env['BABEL_CHAT_MAX_WALL_MS'] = previousWall
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
 test('user cancellation still stops a real owned background process under the default wall allowance', { timeout: 10_000 }, async () => {
   const root = mkdtempSync(join(tmpdir(), 'babel-wall-cancel-'))
   const engine = new ChatEngine({ task: 'cancel controlled work', projectRoot: root })

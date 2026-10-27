@@ -3154,7 +3154,6 @@ export class ChatEngine {
         preparation.limits.maxConversationMessages;
       this.options.maxEstimatedTokens = preparation.limits.maxEstimatedTokens;
       this.options.maxTokensPerRound = preparation.limits.maxTokensPerRound;
-      if (this.options.maxWallMs === undefined && Number.isFinite(preparation.limits.maxWallMs)) this.options.maxWallMs = preparation.limits.maxWallMs;
       const explicitCost = explicitFiniteCostOverride(preparation.limits);
       if (explicitCost !== undefined) {
         this.options.maxCostUsd = explicitCost;
