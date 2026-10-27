@@ -219,6 +219,8 @@ export function projectTurnViewState(
   if (isTerminal) {
     if (terminalReasonCode === 'context_preparation_failed') {
       cardTitle = 'Context preparation blocked';
+    } else if (terminalReasonCode === 'cost_accounting_incomplete') {
+      cardTitle = 'Cost accounting incomplete';
     } else if (terminalOutcome === 'CANCELLED') {
       cardTitle = 'Cancelled';
     } else if (terminalOutcome === 'VERIFIED_COMPLETE') {

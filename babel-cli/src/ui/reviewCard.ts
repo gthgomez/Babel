@@ -277,7 +277,9 @@ export function buildReviewCard(input: ReviewCardInput): ReviewCard {
 
   const title = input.reasonCode === 'context_preparation_failed'
     ? 'Context preparation blocked'
-    : isVerificationNotApplicable &&
+    : input.reasonCode === 'cost_accounting_incomplete'
+      ? 'Cost accounting incomplete'
+      : isVerificationNotApplicable &&
     (kind === 'COMPLETE_UNVERIFIED' || kind === 'VERIFIED_COMPLETE')
       ? 'Response complete'
       : TITLES[kind];
