@@ -37,3 +37,14 @@ export function preflightRequestedModelPolicy(
     babelRoot: BABEL_ROOT,
   });
 }
+
+/** Registered Command Code inspection selectors use their native Chat controller. */
+export function isCommandCodeChatSelection(model: string | undefined): boolean {
+  if (model === undefined) return false;
+  try {
+    return resolveChatModelPolicy({ model, babelRoot: BABEL_ROOT }).policy.provider === 'command-code';
+  } catch {
+    // Invalid or restricted selectors still fail through ordinary admission.
+    return false;
+  }
+}
