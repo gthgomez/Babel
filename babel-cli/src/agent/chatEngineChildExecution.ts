@@ -100,6 +100,7 @@ export interface ChatEngineChildExecutionHost {
   ) => void;
   readonly modelPolicy: ResolvedModelPolicy | undefined;
   readonly options: ChatEngineOptions;
+  readonly runControl?: import('../runtime/run-control.js').RunControl | null;
   readonly parity: ParityRuntime;
   persistOwnerCharges: (ownerId: string, runDir?: string) => void;
   persistTaskCostBaseline: () => void;
@@ -265,6 +266,12 @@ export async function executeSubAgentAction(
   } = input;
   if (action.type !== "sub_agent")
     throw new Error("executeSubAgentAction requires a sub_agent action");
+  const campaignGate = host.options.campaignDispatchGate;
+  const campaignControl = host.runControl;
+  if (campaignGate && (!campaignControl || campaignControl.owner.generation !== ownerGeneration ||
+      !host.isSubmissionCurrent(ownerGeneration) || campaignControl.stop())) {
+    throw new Error('Campaign delegation requires a current parent run control');
+  }
 
   let childModel = (action as { model?: string }).model ?? null;
   if (host.modelPolicy) {
@@ -374,6 +381,10 @@ export async function executeSubAgentAction(
   assertChildApprovalWithinParent(childApproval, parentApproval);
   const childContext: ExecutionContext = {
     ...parentContext,
+    campaignMeter: campaignGate ? {
+      gate: campaignGate, executionStage: 'chat' as const,
+    } : undefined,
+    campaignRunControl: campaignGate ? campaignControl ?? undefined : undefined,
     approvalSession: childApproval,
     parentTrace: {
       threadId: parentContext.threadId,

@@ -35,6 +35,9 @@ export interface ExecutionContext {
   readonly taskOwnerId?: string;
   readonly mutationOwnership?: import('./taskMutationOwnership.js').TaskMutationOwnership;
   readonly parentTaskOwnerId?: string;
+  /** Trusted external campaign boundary inherited by in-process delegated inference. */
+  readonly campaignMeter?: import('../runners/base.js').RunnerCallbacks['campaignMeter'];
+  readonly campaignRunControl?: import('../runtime/run-control.js').RunControl | undefined;
   /** Owning parent of a derived child scope, for no-widening / audit. */
   readonly parentTrace?: { threadId: string; turnId: string | null };
 }
