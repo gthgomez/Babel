@@ -3,7 +3,7 @@
   "algorithm": "sha256",
   "purpose": "drift_detection_not_authorization",
   "normalization": "utf8_crlf_to_lf",
-  "policy_bundle_id": "06b4fc9bcbf112ce00373f809a6adc5ad5957d1e92e5887fa8c13b07656263b8",
+  "policy_bundle_id": "203ea8aa796c806d8a7eb028fd819bde9c9243391d9b40d879662bac4ed7300f",
   "files": {
     ".github/workflows/public-pr-metadata.yml": "67e630d700055533ee77157ed05fc347161c7c041e35151f2652ffd9b9973023",
     ".github/workflows/publish-npm.yml": "54036b704d59e513cbbb981efa00e82121e40871d6dfe789c8636bd0159f8c9e",
@@ -18,9 +18,9 @@
     "babel-cli/src/authority/capabilities.ts": "746d740d626c08a18257956aabf66c5b6ed5c0b44f2c548ea8e8c71845a869e4",
     "babel-cli/src/authority/ciRepair.ts": "61a946b6de150809b6ab60ff75f63c6611651997434a66b83e0fa9f631e6065a",
     "babel-cli/src/authority/commandDecoder.nodeTest.test.ts": "f01dba0c8f56fcf1f579a0a7d59fe6326efddcf43f7cc36816b6557f6b54a3e5",
-    "babel-cli/src/authority/commandDecoder.ts": "f9a08039be8392403666659e9afb166c319300c119280380c5132d1606acdee7",
+    "babel-cli/src/authority/commandDecoder.ts": "c545d45ba764274e026cada097af7bfa33d8c8cd29859d9f390d9a3a8870e5ac",
     "babel-cli/src/authority/commandSpec.test.ts": "57ce96e46efc7062e867f652a572add965a0e2e2d274affb083bddbe54fcc0fc",
-    "babel-cli/src/authority/commandSpec.ts": "74852c8619236b4eaabdee49f9d75a32ca1e20500b6714d10a40568c505b3877",
+    "babel-cli/src/authority/commandSpec.ts": "778d5479cdaa249332dc6b47a62934384bb3c0e03cd4424847102937751b20fe",
     "babel-cli/src/authority/convergence-integrity.regression-gate.test.ts": "7c80ed633d94f05c006d18fe3195fe21caf863d97c0b6fef33eeeb6e1e4c06d4",
     "babel-cli/src/authority/convergence-parser.regression-gate.test.ts": "57bfd75d9255634883d02f951e50fea01717c2b9dd4a3293e88921158bb51ead",
     "babel-cli/src/authority/criterionCompletion.test.ts": "eb629c096081c502b131e576c19d14ee353d5fa9c0aa57df6f201aa7b259ac14",
@@ -37,6 +37,8 @@
     "babel-cli/src/authority/integrity.ts": "ee60e0f66645e9afe7d75d8079742fd5a75b69e6f5db515155f48c353429f503",
     "babel-cli/src/authority/lease.ts": "f925ef398ff8ae7ce0304aaeedc9a8071be6aa8ae76a4268915cf2f30e6eeed3",
     "babel-cli/src/authority/leaseTime.ts": "aec6290bbd1081ec782b45b676a1fed8ae605a647571bad4d4c612af24b21bc8",
+    "babel-cli/src/authority/literalSearch.test.ts": "e6aaa10c1b5ecaae4f3721734dfc4436eb2217fc69d095e56cea8518c4cc5df2",
+    "babel-cli/src/authority/literalSearch.ts": "2f9281c18c6138d731d8639264271565825f5d426a7b2be906a56c737cc63947",
     "babel-cli/src/authority/nativeChildExpectations.test.ts": "d3985791a3522409c33feb049ebc1086318ed745686972e9abd90a78652f123e",
     "babel-cli/src/authority/nativeChildExpectations.ts": "4fcd01cb58fef5d9bdd35689edf9334952981c0477870481d78712ca729ca2e1",
     "babel-cli/src/authority/ownedFileAssertion.test.ts": "a6f989f04a75416ec0e6ec4da806f2e40f6f34d2cd43d0df1404198cc82f0cb2",
@@ -149,7 +151,7 @@
     "tools/babel-pr-orchestrate-opencode.mts": "52b030c4ada9940ad8290872d453ef518bc5989475095787cc21ee579b62cf29",
     "tools/babel-pr-orchestrate.mts": "e2b8f541f807e5e7544534a3eb5804ec14395b05a6fc97a813c82269f7fc32a0",
     "tools/host-review-worker.mts": "751b80e69888ec098ff2e190bf487f1962bbb104ea87d7494b68e654009b336a",
-    "tools/policy-integrity-manifest.mjs": "486120cf28be4cd0b5e34ace9dd0cf3fd05b1aaee899e55572e12146f885cf0b",
+    "tools/policy-integrity-manifest.mjs": "e9b7f87e32ca3a730f3c0d174359cca370d3c96146b8c8e0023b0b40974a0c56",
     "tools/resolve-release-tag.mjs": "9b5f769ed1b49c3f829c9a4e4b9a982803ead642180a3941559967bd0f4347e2"
   }
 }
