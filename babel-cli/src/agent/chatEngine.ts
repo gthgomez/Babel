@@ -265,6 +265,9 @@ import type { AdmissionStore } from "../runtime/admission.js";
 
 import { captureSessionEventAppendFailure } from "./sessionEventDiagnostics.js";
 import { buildChatEngineRepoMapPreamble } from "./repoMapPreamble.js";
+import { normalizeChatAnswer } from './chatResponseContract.js';
+import { unsupportedTestClaim } from './chatResponseEvidence.js';
+import { refreshChatVerifierReceiptStalenessSync } from '../evidence/chatRevisionBinding.js';
 import { ContextPreparationError } from './chatContextFailure.js';
 import { runChatEngineCompactionFor } from "./chatEngineCompactionHost.js";
 import {
@@ -3889,11 +3892,13 @@ export class ChatEngine {
   private async synthesizeAnswer(
     toolObservations: string,
     callbacks: ChatCallbacks,
+    currentRequest: string = this.options.task,
   ): Promise<string> {
     const ownerGeneration = this.activeSubmissionGeneration;
+    const retained = this.getProviderConversation();
     const prompt = buildAnswerSynthesisPrompt({
-      conversation: this.conversation,
-      task: this.options.task,
+      conversation: retained.length ? providerMessagesToChatMessages(retained) : this.conversation,
+      task: currentRequest,
       toolObservations,
     });
     this.synthesisRunner = resolveChatSynthesisRunner(
@@ -3903,13 +3908,25 @@ export class ChatEngine {
         ? this.taskAllowanceOwner.resolveGoRunnerOptions() : undefined,
     );
     const usageScope = this.captureProviderUsageScope(ownerGeneration);
-    return synthesizeChatAnswer(
+    const answer = await synthesizeChatAnswer(
       this.synthesisRunner,
       prompt,
       callbacks,
       usageScope,
       this.providerUsageEffects(),
+      this.getOrBuildSystemPrompt('native'),
     );
+    // A successor owns its own mutable evidence. Callers separately suppress
+    // terminal publication from this retired submission.
+    if (!this.isSubmissionCurrent(ownerGeneration)) return answer;
+    if (this.options.projectRoot) {
+      refreshChatVerifierReceiptStalenessSync(this.options.projectRoot, this.lastVerifierReceipt);
+      for (const receipt of this.executedVerifierLedger) refreshChatVerifierReceiptStalenessSync(this.options.projectRoot, receipt);
+    }
+    if (unsupportedTestClaim(answer, this.lastVerifierReceipt, this.executedVerifierLedger)) {
+      throw new Error('RESPONSE_EVIDENCE_INVALID: terminal synthesis claimed test results without corresponding execution evidence.');
+    }
+    return normalizeChatAnswer(answer, currentRequest);
   }
 
   /** Record token usage from a runner invocation into the global cost tracker.

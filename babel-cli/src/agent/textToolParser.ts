@@ -138,13 +138,15 @@ export function isUnresolvedTextToolAttempt(rawText: string): boolean {
 }
 
 /** Controller feedback shown to a small model that emitted an unrecognized text tool call. */
-export function buildTextToolProtocolRejectMessage(): string {
+export function buildTextToolProtocolRejectMessage(
+  availableToolNames?: readonly string[],
+  verifierCommands?: readonly string[],
+): string {
   return [
     '## Your last reply was not a valid tool call',
     '',
     'It contained a `[TOOL:...]` marker but no recognized tool, so nothing was executed.',
-    `Use only these tools: ${[...TEXT_TOOL_NAMES].join(', ')}.`,
-    'Write a call as `[TOOL:name]` followed by `key: value` lines, or answer in plain text.',
+    buildTextToolProtocolSection(availableToolNames, verifierCommands),
   ].join('\n');
 }
 

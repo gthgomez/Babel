@@ -372,11 +372,13 @@ export async function synthesizeChatAnswer(
   callbacks: ChatCallbacks,
   usageScope: ChatUsageScope,
   effects: ChatProviderUsageEffects,
+  systemPrompt?: string,
 ): Promise<string> {
   const context: ChatProviderRetryContext = {
     deliveryMode: 'text',
     conversationState: prompt,
     executionStage: 'synthesis',
+    ...(systemPrompt ? { systemPolicyPrompt: systemPrompt } : {}),
     usageScope,
     ...(usageScope.isOwnerCurrent
       ? { isOwnerCurrent: usageScope.isOwnerCurrent }
@@ -394,6 +396,7 @@ export async function synthesizeChatAnswer(
     prompt,
     runnerCallbacks,
     effects.getAbortController,
+    systemPrompt,
   )
   effects.settleUsage(runner, usageScope)
   return answer
