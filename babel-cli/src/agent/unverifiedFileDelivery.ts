@@ -12,7 +12,7 @@ export function unverifiedFileDeliveryPaths(input: {
   verifierTampered: boolean
   toolCallLog: readonly GateToolLogEntry[]
 }): string[] | null {
-  if (input.taskClass !== 'default' || !input.shellUnavailable || input.verifierTampered ||
+  if (!['default', 'general_swe'].includes(input.taskClass) || !input.shellUnavailable || input.verifierTampered ||
       input.verifierEvidencePresent || input.verification.resolvedPolicy !== 'required' ||
       input.verification.mandatoryVerifierContract) return null
   const normalize = (path: string): string | null => {
@@ -24,7 +24,7 @@ export function unverifiedFileDeliveryPaths(input: {
   for (const [index, entry] of input.toolCallLog.entries()) {
     if (entry.effect_status === 'indeterminate') return null
     if (entry.effect_status !== 'confirmed_change') continue
-    if (!['write_file', 'apply_patch'].includes(entry.tool) || entry.error || entry.exit_code !== 0 ||
+    if (!['write_file', 'str_replace', 'apply_patch'].includes(entry.tool) || entry.error || entry.exit_code !== 0 ||
         !entry.mutation_paths?.length) return null
     for (const path of entry.mutation_paths) {
       const normalized = normalize(path)
@@ -34,7 +34,7 @@ export function unverifiedFileDeliveryPaths(input: {
   }
   if (!mutations.size) return null
   for (const [path, index] of mutations) {
-    if (!input.toolCallLog.slice(index + 1).some(entry => entry.tool === 'read_file' &&
+    if (!input.toolCallLog.slice(index + 1).some(entry => ['read_file', 'read_range'].includes(entry.tool) &&
       !entry.error && entry.exit_code === 0 && normalize(entry.target) === path)) return null
   }
   return [...mutations.keys()].sort()

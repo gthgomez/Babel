@@ -24,7 +24,7 @@ test('explicit verification contracts and unavailable or failed evidence retain 
     resolveCompletionVerificationContext({ taskClass: 'default', task: 'Update map.md', requiredVerifierCommands: ['npm test'] }),
     resolveCompletionVerificationContext({ taskClass: 'governance', task: 'Update map.md' }),
   ]) assert.equal(unverifiedFileDeliveryPaths({ ...base(), verification }), null)
-  for (const change of [{ shellUnavailable: false }, { verifierEvidencePresent: true }, { verifierTampered: true }, { taskClass: 'general_swe' as const }]) {
+  for (const change of [{ shellUnavailable: false }, { verifierEvidencePresent: true }, { verifierTampered: true }, { taskClass: 'governance' as const }]) {
     assert.equal(unverifiedFileDeliveryPaths({ ...base(), ...change }), null)
   }
 })
