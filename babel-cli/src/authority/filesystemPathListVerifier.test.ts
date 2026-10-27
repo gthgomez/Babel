@@ -95,6 +95,49 @@ test('parseMarkdownBulletPaths rejects empty and malformed documents', () => {
   assert.equal(normalizeDeclarationRepoRelativePath('\\apps\\web'), null)
 })
 
+test('trusted-host declaration rejects invalid explicit limits rather than broadening them', () => {
+  const original = declaration()
+  for (const field of ['max_document_bytes', 'max_entries'] as const) {
+    for (const value of [0, -1, 1.5, '1', null, Number.NaN, Number.POSITIVE_INFINITY, 1_048_577]) {
+      assert.throws(
+        () => parseTrustedHostFilesystemPathListDeclaration({
+          ...original,
+          limits: { ...original.limits, [field]: value },
+        }),
+        new RegExp(`limits\\.${field}`),
+      )
+    }
+  }
+  for (const limits of [null, 0, '1', []]) {
+    assert.throws(
+      () => parseTrustedHostFilesystemPathListDeclaration({ ...original, limits }),
+      /INVALID: limits/,
+    )
+  }
+  const defaults = { max_document_bytes: 256_000, max_entries: 4_096 }
+  assert.deepEqual(parseTrustedHostFilesystemPathListDeclaration({ ...original, limits: undefined }).limits, defaults)
+  assert.deepEqual(parseTrustedHostFilesystemPathListDeclaration({ ...original, limits: { max_entries: 1 } }).limits,
+    { ...defaults, max_entries: 1 })
+  assert.deepEqual(parseTrustedHostFilesystemPathListDeclaration({ ...original, limits: {
+    max_document_bytes: 1_048_576, max_entries: 16_384,
+  } }).limits, { max_document_bytes: 1_048_576, max_entries: 16_384 })
+})
+
+test('complete inventory accepts consecutive dots inside ordinary filenames and still rejects traversal', t => {
+  const root = mkdtempSync(join(tmpdir(), 'fs-path-list-dots-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const paths = seedTree(root)
+  writeFileSync(join(root, 'apps', 'web', 'foo..bar'), 'ordinary filename\n', 'utf8')
+  const decl = declaration()
+  writeMap(root, decl.target_document, [...paths, 'apps/web/foo..bar'])
+  const baseline = captureFilesystemSourceBaseline(root, decl)
+  assert.equal(verifyFilesystemPathList(root, decl, baseline).status, 'passed')
+  for (const path of ['../escape', 'apps/../escape', 'apps\\..\\escape', './apps/web/entry.mjs']) {
+    assert.equal(normalizeDeclarationRepoRelativePath(path), null)
+    assert.equal(parseMarkdownBulletPaths(`- ${path}\n`, decl.limits).ok, false)
+  }
+})
+
 test('valid complete inventory passes with arbitrary target layout', t => {
   const root = mkdtempSync(join(tmpdir(), 'fs-path-list-ok-'))
   t.after(() => rmSync(root, { recursive: true, force: true }))

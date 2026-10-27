@@ -15,7 +15,7 @@ export function normalizeRepoRelativePath(raw: string): string | null {
   if (!trimmed) return null
   const norm = trimmed.replace(/\\/g, '/')
   if (norm.startsWith('/') || /^[a-zA-Z]:/.test(norm)) return null
-  if (norm.includes('..') || norm.includes('\0')) return null
+  if (norm.includes('\0')) return null
   const parts = norm.split('/').filter(Boolean)
   if (parts.some(part => part === '.' || part === '..')) return null
   const joined = parts.join('/')
@@ -88,22 +88,19 @@ function hasGlobSyntax(path: string): boolean {
 }
 
 function parseLimits(raw: unknown): DeclarationLimitsV1 {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return DEFAULT_LIMITS
+  if (raw === undefined) return DEFAULT_LIMITS
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) invalid('limits')
   const input = raw as Record<string, unknown>
-  const max_document_bytes =
-    typeof input['max_document_bytes'] === 'number' &&
-    Number.isInteger(input['max_document_bytes']) &&
-    input['max_document_bytes'] > 0 &&
-    input['max_document_bytes'] <= 1_048_576
-      ? input['max_document_bytes']
-      : DEFAULT_LIMITS.max_document_bytes
-  const max_entries =
-    typeof input['max_entries'] === 'number' &&
-    Number.isInteger(input['max_entries']) &&
-    input['max_entries'] > 0 &&
-    input['max_entries'] <= 16_384
-      ? input['max_entries']
-      : DEFAULT_LIMITS.max_entries
+  const parseLimit = (field: keyof DeclarationLimitsV1, maximum: number): number => {
+    if (!Object.hasOwn(input, field)) return DEFAULT_LIMITS[field]
+    const value = input[field]
+    if (typeof value !== 'number' || !Number.isInteger(value) || value <= 0 || value > maximum) {
+      invalid(`limits.${field}`)
+    }
+    return value
+  }
+  const max_document_bytes = parseLimit('max_document_bytes', 1_048_576)
+  const max_entries = parseLimit('max_entries', 16_384)
   return { max_document_bytes, max_entries }
 }
 
