@@ -107,6 +107,11 @@ export interface ExtractedArtifact {
 }
 
 export interface ExtractedRun {
+  reviewContext?: {
+    taskToken: string | null;
+    retries: number;
+    completionBlocks: number;
+  };
   sourceNamespace: string;
   sourceRole: string;
   sourceLocator: string;
