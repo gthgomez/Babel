@@ -98,7 +98,8 @@ if (!isSyntheticProviderFixtureReady()) {
     assert.equal(budget.lastTurnRuntime.effectiveOperation, 'READ_ONLY')
     assert.equal(budget.lastTurnRuntime.taskClass, 'investigate')
     assert.equal(budget.grant.turnCap, 120)
-    assert.equal(budget.grant.wallCapMs, 720_000)
+    assert.deepEqual(budget.grant.wallAllowance, { kind: 'unlimited' })
+    assert.equal(budget.grant.wallCapMs, null)
     assert.equal(typeof budget.taskOwnerId, 'string')
     return budget
   }
@@ -312,7 +313,7 @@ if (!isSyntheticProviderFixtureReady()) {
       const restored = engine.getTaskAllowanceSnapshot();
       assert.ok(restored);
       assert.equal(restored.taskOwnerId, ${JSON.stringify(saved.taskOwnerId)});
-      assert.deepEqual(restored.grant, ${JSON.stringify(saved.grant)});
+      assert.deepEqual(JSON.parse(JSON.stringify(restored.grant)), ${JSON.stringify(saved.grant)});
       const assertIds = () => assert.deepEqual(globalCostTracker.getTaskChargeIds(restored.taskOwnerId).sort(), ${JSON.stringify(saved.accountedChargeIds)}.slice().sort(), 'newer checkpoint charge IDs must survive');
       const assertCost = () => assert.equal(restored.consumed.costUsd, ${JSON.stringify(saved.consumed.costUsd)}, 'newer checkpoint consumed cost must survive');
       if (${JSON.stringify(journal === 'complete-ids')}) { assertIds(); assertCost(); }

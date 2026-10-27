@@ -53,6 +53,7 @@ import type {
 import type {
   ChatEngineLimits,
   ChatEngineRunAllowanceReport,
+  ChatWallAllowance,
 } from '../config/chatEngineLimits.js'
 import type { ChatStatus } from './chatFailureClassification.js'
 import type { VerificationPolicy } from '../config/chatTaskClass.js'
@@ -110,6 +111,8 @@ export interface ChatTaskAllowanceSnapshot {
     provenance: string
     costCap: ChatAllowanceCostCap
     wallCapMs: number
+    /** Explicit wire meaning when unlimited arithmetic serializes as null. Absent on historical finite records. */
+    wallAllowance?: ChatWallAllowance
     turnCap: number
   }
   consumed: {

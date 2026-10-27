@@ -98,7 +98,8 @@ if (!isSyntheticProviderFixtureReady()) {
     assert.equal(budget.lastTurnRuntime.effectiveOperation, 'READ_ONLY')
     assert.equal(budget.lastTurnRuntime.taskClass, 'investigate')
     assert.equal(budget.grant.turnCap, 120)
-    assert.equal(budget.grant.wallCapMs, 720_000)
+    assert.deepEqual(budget.grant.wallAllowance, { kind: 'unlimited' })
+    assert.equal(budget.grant.wallCapMs, null)
     assert.equal(typeof budget.taskOwnerId, 'string')
     return budget
   }
@@ -629,9 +630,10 @@ if (!isSyntheticProviderFixtureReady()) {
   })
 
   test('on-disk session task-budget restores unlimited and finite grants', async t => {
-    const { ChatEngineTaskAllowance } = await import('./chatEngineTaskAllowance.js')
+    const { ChatEngineTaskAllowance, parseTaskAllowance } = await import('./chatEngineTaskAllowance.js')
     const restoreFromRunDir = (runDir: string, limits: { maxCostUsd: number; maxWallMs: number; maxTurns: number }) => {
-      const persisted = JSON.parse(readFileSync(join(runDir, 'task-budget.json'), 'utf8'))
+      const persisted = parseTaskAllowance(JSON.parse(readFileSync(join(runDir, 'task-budget.json'), 'utf8')))
+      assert.ok(persisted)
       const reloadHost = {
         engineRunDir: runDir,
         limits,

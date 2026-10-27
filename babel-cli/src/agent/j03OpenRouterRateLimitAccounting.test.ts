@@ -113,7 +113,8 @@ test('fresh finite Chat: OpenRouter 429 cannot dispatch a fallback after account
   assert.ok(initial)
   assert.deepEqual(initial.grant.costCap, { kind: 'finite', usd: 2 })
   assert.equal(initial.grant.turnCap, 120)
-  assert.equal(initial.grant.wallCapMs, 720_000)
+  assert.deepEqual(initial.grant.wallAllowance, { kind: 'unlimited' })
+  assert.equal(initial.grant.wallCapMs, Infinity)
   assert.deepEqual(globalCostTracker.getTaskChargeIds(initial.taskOwnerId), [])
   assert.equal(existsSync(join(root, 'campaign-budget.json')), false, 'fresh campaign has no prior admission file')
 

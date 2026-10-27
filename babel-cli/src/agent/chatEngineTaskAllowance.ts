@@ -9,6 +9,7 @@ import type {
   ChatEngineLimits,
   ChatRunLimiter,
 } from "../config/chatEngineLimits.js";
+import { CHAT_WALL_CEILING_MS, describeWallAllowance } from "../config/chatEngineLimits.js";
 import {
   deriveChildAllowance,
   taskOwnerAllowanceAccountingComplete,
@@ -189,6 +190,7 @@ export class ChatEngineTaskAllowance {
         provenance: "chat-engine-initial",
         costCap: allowanceCostCap(limits.maxCostUsd),
         wallCapMs: limits.maxWallMs,
+        wallAllowance: describeWallAllowance(limits.maxWallMs),
         turnCap: limits.maxTurns,
       },
       consumed: {
@@ -306,6 +308,13 @@ export class ChatEngineTaskAllowance {
       maxCostUsd: allowanceCostCapUsd(persisted.grant.costCap),
       maxWallMs: persisted.grant.wallCapMs,
       maxTurns: persisted.grant.turnCap,
+      wallBudget: {
+        requestedMs: persisted.grant.wallCapMs,
+        effectiveMs: persisted.grant.wallCapMs,
+        ceilingMs: this.host.limits.wallBudget?.ceilingMs ?? CHAT_WALL_CEILING_MS,
+        longTaskProfile: this.host.limits.wallBudget?.longTaskProfile ?? false,
+        allowance: describeWallAllowance(persisted.grant.wallCapMs),
+      },
     };
   }
 
@@ -357,10 +366,16 @@ export class ChatEngineTaskAllowance {
       provenance: grant.provenance,
       costCap: allowanceCostCap(grant.costCapUsd),
       wallCapMs: grant.wallCapMs,
+      wallAllowance: describeWallAllowance(grant.wallCapMs),
       turnCap: grant.turnCap,
     };
     this.host.limits.maxCostUsd = grant.costCapUsd;
     this.host.limits.maxWallMs = grant.wallCapMs;
+    if (this.host.limits.wallBudget) {
+      this.host.limits.wallBudget.requestedMs = grant.wallCapMs;
+      this.host.limits.wallBudget.effectiveMs = grant.wallCapMs;
+      this.host.limits.wallBudget.allowance = describeWallAllowance(grant.wallCapMs);
+    }
     this.host.limits.maxTurns = grant.turnCap;
     this.persistTaskAllowance();
   }
@@ -401,10 +416,11 @@ export class ChatEngineTaskAllowance {
   }
 
   effectiveWallCapMs(): number {
+    const granted = this.host.taskAllowance?.grant.wallCapMs ?? this.host.limits.maxWallMs;
     return this.host.postWriteRepairWallCapMs == null
-      ? this.host.limits.maxWallMs
+      ? granted
       : Math.min(
-          this.host.limits.maxWallMs,
+          granted,
           this.host.postWriteRepairWallCapMs,
         );
   }
@@ -413,9 +429,10 @@ export class ChatEngineTaskAllowance {
     const allowance = this.host.taskAllowance;
     if (!allowance)
       throw new Error("Cannot delegate without a durable task allowance");
-    const parentDeadlineAtMs =
-      Date.now() +
-      Math.max(0, this.effectiveWallCapMs() - this.currentTaskActiveWallMs());
+    const capMs = this.effectiveWallCapMs();
+    const parentDeadlineAtMs = Number.isFinite(capMs)
+      ? Date.now() + Math.max(0, capMs - this.currentTaskActiveWallMs())
+      : null;
     return deriveChildAllowance({
       parentTaskOwnerId: allowance.taskOwnerId,
       parentTaskBaselineUsd: this.host.taskCostBaselineUsd,
@@ -518,6 +535,16 @@ export function parseTaskAllowance(
   )
     return null;
   const grantRecord = grant as Record<string, unknown>;
+  const rawWall = grantRecord['wallAllowance'];
+  const wall = rawWall !== null && typeof rawWall === 'object' ? rawWall as Record<string, unknown> : null;
+  const unlimitedWall = wall?.['kind'] === 'unlimited';
+  if (unlimitedWall) {
+    if (wall && Object.hasOwn(wall, 'ms')) return null;
+    if (grantRecord['wallCapMs'] !== null && grantRecord['wallCapMs'] !== Infinity) return null;
+  } else {
+    if (!isNonNegativeFinite(grantRecord['wallCapMs'])) return null;
+    if (rawWall !== undefined && (wall?.['kind'] !== 'finite' || wall['ms'] !== grantRecord['wallCapMs'])) return null;
+  }
   const consumedRecord = consumed as Record<string, unknown>;
   const repairRecord = repair as Record<string, unknown>;
   const rawCostCap = grantRecord["costCap"];
@@ -537,7 +564,6 @@ export function parseTaskAllowance(
     (grantRecord["revision"] !== undefined && (!Number.isSafeInteger(grantRecord["revision"]) || (grantRecord["revision"] as number) < 0)) ||
     typeof grantRecord["provenance"] !== "string" ||
     grantRecord["provenance"].length === 0 ||
-    !isNonNegativeFinite(grantRecord["wallCapMs"]) ||
     !Number.isInteger(grantRecord["turnCap"]) ||
     (grantRecord["turnCap"] as number) < 1 ||
     !isNonNegativeFinite(consumedRecord["costUsd"]) ||
@@ -573,7 +599,8 @@ export function parseTaskAllowance(
       ...(grantRecord["revision"] !== undefined ? { revision: grantRecord["revision"] as number } : {}),
       provenance: grantRecord["provenance"],
       costCap,
-      wallCapMs: grantRecord["wallCapMs"],
+      wallCapMs: unlimitedWall ? Infinity : grantRecord["wallCapMs"] as number,
+      wallAllowance: describeWallAllowance(unlimitedWall ? Infinity : grantRecord['wallCapMs'] as number),
       turnCap: grantRecord["turnCap"] as number,
     },
     consumed: {

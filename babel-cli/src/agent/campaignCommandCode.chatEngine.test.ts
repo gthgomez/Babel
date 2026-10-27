@@ -91,7 +91,8 @@ if (!isSyntheticProviderFixtureReady()) {
     assert.equal(budget.lastTurnRuntime.taskClass, 'investigate')
     assert.deepEqual(budget.grant.costCap, { kind: 'unlimited' })
     assert.equal(budget.grant.turnCap, 120)
-    assert.equal(budget.grant.wallCapMs, 720_000)
+    assert.deepEqual(budget.grant.wallAllowance, { kind: 'unlimited' })
+    assert.equal(budget.grant.wallCapMs, null)
     assert.equal(typeof budget.taskOwnerId, 'string')
     return budget.taskOwnerId
   }

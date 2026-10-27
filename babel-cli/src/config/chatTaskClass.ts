@@ -163,7 +163,6 @@ const TUNES: Record<ChatTaskClass, ChatTaskTune> = {
   quick_inspect: {
     class: 'quick_inspect',
     limits: {
-      maxWallMs: 10 * 1000, // 10s fast initial target
       maxTurns: 12,
       stallTurns: 4,
     },
@@ -184,7 +183,6 @@ const TUNES: Record<ChatTaskClass, ChatTaskTune> = {
   quick_fix: {
     class: 'quick_fix',
     limits: {
-      maxWallMs: 8 * 60 * 1000, // 8 min
       maxTurns: 80,
       stallTurns: 10,
     },
@@ -200,12 +198,11 @@ const TUNES: Record<ChatTaskClass, ChatTaskTune> = {
     zeroWriteHardStopTurns: 8,
     restrictToolsOnPolicyFire: false,
     stallShadowMode: true,
-    description: 'Small localized fixes — shorter wall, soft-nudge policies.',
+    description: 'Small localized fixes — bounded turns, soft-nudge policies.',
   },
   general_swe: {
     class: 'general_swe',
     limits: {
-      maxWallMs: 10 * 60 * 1000, // 600s
       maxTurns: 250,
       stallTurns: 25,
       maxTokensPerRound: 200_000,
@@ -225,12 +222,11 @@ const TUNES: Record<ChatTaskClass, ChatTaskTune> = {
     restrictToolsOnPolicyFire: false,
     stallShadowMode: true,
     description:
-      'Multi-file / hard software engineering — long wall, strict critic, soft-nudge policies.',
+      'Multi-file / hard software engineering — strict critic, soft-nudge policies.',
   },
   investigate: {
     class: 'investigate',
     limits: {
-      maxWallMs: 12 * 60 * 1000,
       maxTurns: 120,
       stallTurns: 15,
     },
@@ -251,7 +247,6 @@ const TUNES: Record<ChatTaskClass, ChatTaskTune> = {
   governance: {
     class: 'governance',
     limits: {
-      maxWallMs: 12 * 60 * 1000,
       maxTurns: 100,
       stallTurns: 12,
     },
