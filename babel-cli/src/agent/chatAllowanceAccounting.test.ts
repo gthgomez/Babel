@@ -8,7 +8,10 @@ import type { RunnerInvocationMetadata } from '../runners/base.js'
 import { CostTracker, globalCostTracker } from '../services/costTracker.js'
 import { chatSessionDir } from '../cli/runsLayout.js'
 import { ChatEngine } from './chatEngine.js'
-import { deriveChildAllowance, inheritedChildBudgetLimiter } from './childBudget.js'
+import { createChildBudgetController, deriveChildAllowance, inheritedChildBudgetLimiter } from './childBudget.js'
+import { parseTaskAllowance } from './chatEngineTaskAllowance.js'
+import { startBackgroundShell, killAllBackgroundShells } from './backgroundShell.js'
+import { resolveChatEngineLimits } from '../config/chatEngineLimits.js'
 
 function usageMetadata(inputTokens: number, outputTokens: number): RunnerInvocationMetadata {
   return {
@@ -92,6 +95,159 @@ function allowanceAccess(engine: ChatEngine): {
     persistTaskAllowance: () => void
   }
 }
+
+test('unlimited wall survives active work, JSON roundtrip and cold resume without an inherited child timer', () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-wall-unlimited-'))
+  const keys = ['BABEL_RUNS_DIR', 'BABEL_CHAT_MAX_WALL_MS', 'BABEL_CHAT_TASK_CLASS']
+  const previous = keys.map(key => process.env[key])
+  process.env['BABEL_RUNS_DIR'] = join(root, 'runs')
+  delete process.env['BABEL_CHAT_MAX_WALL_MS']
+  process.env['BABEL_CHAT_TASK_CLASS'] = 'quick_inspect'
+  const originalNow = Date.now
+  let now = 1_800_000_000_000
+  Date.now = () => now
+  try {
+    const engine = new ChatEngine({ task: 'Count repository files', projectRoot: root })
+    engine.applyUserSubmission({ userInput: 'Count repository files' })
+    const access = allowanceAccess(engine)
+    access.beginActiveExecution()
+    now += 1_200_000
+    access.consumeTaskTurn()
+    assert.equal(access.checkBudgets().ok, true)
+    access.pauseActiveExecution()
+    const snapshot = JSON.parse(JSON.stringify(access.getTaskAllowanceSnapshot()))
+    assert.deepEqual(snapshot.grant.wallAllowance, { kind: 'unlimited' })
+    assert.ok(parseTaskAllowance(snapshot))
+    const resumed = new ChatEngine({ task: 'Count repository files', projectRoot: root,
+      runId: engine.getEngineRunId(), resumeExisting: true })
+    assert.equal(allowanceAccess(resumed).checkBudgets().ok, true)
+    assert.equal(allowanceAccess(resumed).getTaskAllowanceSnapshot()!.consumed.activeWallMs, 1_200_000)
+    const owner = (resumed as unknown as { taskAllowanceOwner: { deriveChildAllowance: (rounds: number) => ReturnType<typeof deriveChildAllowance> } }).taskAllowanceOwner
+    const child = owner.deriveChildAllowance(2)
+    assert.equal(child.deadlineAtMs, null)
+    const parent = new AbortController()
+    const control = createChildBudgetController(child, parent.signal)
+    assert.equal(control.signal.aborted, false)
+    parent.abort()
+    assert.equal(control.signal.aborted, true)
+    assert.equal(control.limiter(), null)
+    control.dispose()
+    const malformed = structuredClone(snapshot)
+    delete malformed.grant.wallAllowance
+    assert.equal(parseTaskAllowance(malformed), null, 'unmarked null wall evidence must fail closed')
+    malformed.grant.wallAllowance = { kind: 'unlimited' }
+    malformed.grant.wallCapMs = 60_000
+    assert.equal(parseTaskAllowance(malformed), null, 'a marker cannot upgrade finite evidence')
+  } finally {
+    Date.now = originalNow
+    keys.forEach((key, i) => previous[i] === undefined ? delete process.env[key] : process.env[key] = previous[i])
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('historical finite wall evidence expires honestly after cold resume under unlimited defaults', () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-wall-finite-'))
+  const previous = process.env['BABEL_RUNS_DIR']
+  process.env['BABEL_RUNS_DIR'] = join(root, 'runs')
+  const originalNow = Date.now
+  let now = 1_800_000_000_000
+  Date.now = () => now
+  try {
+    const engine = new ChatEngine({ task: 'finite task', projectRoot: root, maxWallMs: 600_000 })
+    engine.applyTurnPreparation({ task: 'finite task', projectRoot: root, limits: resolveChatEngineLimits() })
+    engine.applyUserSubmission({ userInput: 'finite task' })
+    assert.equal(engine.getTaskAllowanceSnapshot()!.grant.wallCapMs, 600_000)
+    const access = allowanceAccess(engine)
+    access.beginActiveExecution()
+    now += 600_000
+    access.pauseActiveExecution()
+    const file = join(chatSessionDir(engine.getEngineRunId()), 'task-budget.json')
+    const historical = JSON.parse(readFileSync(file, 'utf8'))
+    delete historical.grant.wallAllowance
+    writeFileSync(file, JSON.stringify(historical))
+    const resumed = new ChatEngine({ task: 'finite task', projectRoot: root,
+      runId: engine.getEngineRunId(), resumeExisting: true })
+    const result = allowanceAccess(resumed).checkBudgets()
+    assert.equal(result.ok, false)
+    assert.equal(result.limiter, 'wall')
+    assert.match(result.reason!, /600s of 600s/)
+    // Normal preparation may select the new default; it cannot expand a retained grant.
+    const preparedLimits = resolveChatEngineLimits()
+    resumed.applyTurnPreparation({ task: 'finite task', projectRoot: root, limits: preparedLimits })
+    const owner = (resumed as unknown as { taskAllowanceOwner: { deriveChildAllowance: (rounds: number) => ReturnType<typeof deriveChildAllowance> } }).taskAllowanceOwner
+    assert.equal(owner.deriveChildAllowance(2).deadlineAtMs, now)
+  } finally {
+    Date.now = originalNow
+    if (previous === undefined) delete process.env['BABEL_RUNS_DIR']
+    else process.env['BABEL_RUNS_DIR'] = previous
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('fresh objectives use current wall environment without promoting it to a constructor override', () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-wall-precedence-'))
+  const previousRuns = process.env['BABEL_RUNS_DIR']
+  const previousWall = process.env['BABEL_CHAT_MAX_WALL_MS']
+  const originalNow = Date.now
+  let now = 1_800_000_000_000
+  Date.now = () => now
+  process.env['BABEL_RUNS_DIR'] = join(root, 'runs')
+  process.env['BABEL_CHAT_MAX_WALL_MS'] = '40000'
+  try {
+    const engine = new ChatEngine({ task: 'first task', projectRoot: root })
+    const prepare = (task: string) => engine.applyTurnPreparation({ task, projectRoot: root, limits: resolveChatEngineLimits() })
+    prepare('first task')
+    engine.applyUserSubmission({ userInput: 'first task' })
+    const originalOwner = engine.getTaskAllowanceSnapshot()!.taskOwnerId
+    assert.equal(engine.getTaskAllowanceSnapshot()!.grant.wallCapMs, 40_000)
+    process.env['BABEL_CHAT_MAX_WALL_MS'] = '12000'
+    prepare('a different unrelated task')
+    assert.equal(engine.getTaskAllowanceSnapshot()!.grant.wallCapMs, 40_000, 'preparation cannot shrink a retained grant')
+    engine.applyUserSubmission({ userInput: 'a different unrelated task' })
+    assert.notEqual(engine.getTaskAllowanceSnapshot()!.taskOwnerId, originalOwner)
+    assert.equal(engine.getTaskAllowanceSnapshot()!.grant.wallCapMs, 12_000)
+    allowanceAccess(engine).beginActiveExecution()
+    now += 13_000
+    assert.equal(allowanceAccess(engine).checkBudgets().limiter, 'wall')
+    allowanceAccess(engine).pauseActiveExecution()
+
+    const constructor = new ChatEngine({ task: 'explicit constructor task', projectRoot: root, maxWallMs: 30_000 })
+    constructor.applyTurnPreparation({ task: 'explicit constructor task', projectRoot: root, limits: resolveChatEngineLimits() })
+    constructor.applyUserSubmission({ userInput: 'explicit constructor task' })
+    assert.equal(constructor.getTaskAllowanceSnapshot()!.grant.wallCapMs, 30_000)
+
+    delete process.env['BABEL_CHAT_MAX_WALL_MS']
+    prepare('another wholly unrelated task')
+    engine.applyUserSubmission({ userInput: 'another wholly unrelated task' })
+    assert.deepEqual(engine.getTaskAllowanceSnapshot()!.grant.wallAllowance, { kind: 'unlimited' })
+  } finally {
+    Date.now = originalNow
+    if (previousRuns === undefined) delete process.env['BABEL_RUNS_DIR']
+    else process.env['BABEL_RUNS_DIR'] = previousRuns
+    if (previousWall === undefined) delete process.env['BABEL_CHAT_MAX_WALL_MS']
+    else process.env['BABEL_CHAT_MAX_WALL_MS'] = previousWall
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('user cancellation still stops a real owned background process under the default wall allowance', { timeout: 10_000 }, async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-wall-cancel-'))
+  const engine = new ChatEngine({ task: 'cancel controlled work', projectRoot: root })
+  const ownerId = engine.getEngineRunId()
+  const script = join(root, 'wait.cjs')
+  writeFileSync(script, 'setInterval(function () {}, 1000)')
+  const job = startBackgroundShell({ cwd: root, ownerId,
+    command: `"${process.execPath.replace(/\\/g, '/')}" "${script.replace(/\\/g, '/')}"` })
+  try {
+    engine.cancel()
+    assert.equal(job.status, 'killed')
+    await job.done
+    assert.notEqual(job.status, 'running')
+  } finally {
+    killAllBackgroundShells({ ownerId, includeDetached: true })
+    rmSync(root, { recursive: true, force: true })
+  }
+})
 
 test('A-1: overlapping ChatEngine tasks account provider usage only to their owner', () => {
   const runsRoot = mkdtempSync(join(tmpdir(), 'babel-chat-allowance-a1-'))

@@ -11,7 +11,72 @@ import {
   createRunAllowanceReport,
   evaluateTimelineLimiter,
   shouldShrinkWallForPostWriteRepair,
+  retainTaskWallAllowance,
 } from './chatEngineLimits.js';
+
+test('preparation retains requested versus effective wall evidence for a clamped finite grant', () => {
+  const configured = resolveChatEngineLimits({ maxWallMs: 7_200_000 });
+  const prepared = retainTaskWallAllowance(resolveChatEngineLimits(), configured.maxWallMs, configured.wallBudget);
+  assert.equal(prepared.maxWallMs, 3_600_000);
+  assert.equal(prepared.wallBudget?.requestedMs, 7_200_000);
+  assert.deepEqual(prepared.runAllowance?.wallAllowance, { kind: 'finite', ms: 7_200_000 });
+  assert.deepEqual(prepared.runAllowance?.effectiveWallAllowance, { kind: 'finite', ms: 3_600_000 });
+});
+
+test('ordinary task classes remain active beyond their old implicit wall deadlines', () => {
+  const previous = process.env['BABEL_CHAT_MAX_WALL_MS'];
+  delete process.env['BABEL_CHAT_MAX_WALL_MS'];
+  try {
+    for (const taskClass of ['default', 'quick_inspect', 'quick_fix', 'general_swe', 'investigate', 'governance', 'ordinary_delivery'] as const) {
+      const limits = resolveChatEngineLimits({}, undefined, { taskClass });
+      assert.equal(evaluateTimelineLimiter({ limits, elapsedMs: 1_200_000,
+        spentUsd: 0, turns: 1, consecutiveStallTurns: 0 }).limiter, 'none', taskClass);
+      const record = JSON.parse(JSON.stringify(limits));
+      assert.deepEqual(record.wallBudget.allowance, { kind: 'unlimited' });
+      assert.deepEqual(record.runAllowance.wallAllowance, { kind: 'unlimited' });
+      assert.ok(Number.isFinite(limits.maxTurns));
+      assert.ok(Number.isFinite(limits.stallTurns));
+      assert.equal(evaluateTimelineLimiter({ limits, elapsedMs: 1_200_000, spentUsd: 0,
+        turns: limits.maxTurns, consecutiveStallTurns: 0 }).classification, 'limit_turns');
+      assert.equal(evaluateTimelineLimiter({ limits, elapsedMs: 1_200_000, spentUsd: 0,
+        turns: 1, consecutiveStallTurns: limits.stallTurns }).classification, 'limit_stall');
+    }
+  } finally {
+    if (previous === undefined) delete process.env['BABEL_CHAT_MAX_WALL_MS'];
+    else process.env['BABEL_CHAT_MAX_WALL_MS'] = previous;
+  }
+});
+
+test('explicit finite wall limits retain expiry and constructor precedence', () => {
+  const previous = process.env['BABEL_CHAT_MAX_WALL_MS'];
+  process.env['BABEL_CHAT_MAX_WALL_MS'] = '20000';
+  try {
+    const limits = resolveChatEngineLimits({ maxWallMs: 30_000 });
+    assert.equal(limits.maxWallMs, 30_000);
+    assert.equal(evaluateTimelineLimiter({ limits, elapsedMs: 30_000,
+      spentUsd: 0, turns: 1, consecutiveStallTurns: 0 }).classification, 'limit_wall');
+    assert.equal(resolveChatEngineLimits().maxWallMs, 20_000);
+  } finally {
+    if (previous === undefined) delete process.env['BABEL_CHAT_MAX_WALL_MS'];
+    else process.env['BABEL_CHAT_MAX_WALL_MS'] = previous;
+  }
+});
+
+test('malformed explicit wall settings cannot become an unlimited default', () => {
+  const previous = process.env['BABEL_CHAT_MAX_WALL_MS'];
+  try {
+    for (const raw of ['', ' ', 'NaN', 'Infinity', '-1', '0', '10000ms', '1.5', 'unlimited']) {
+      process.env['BABEL_CHAT_MAX_WALL_MS'] = raw;
+      assert.throws(() => resolveChatEngineLimits(), { code: 'CHAT_LIMITS_CONFIG' });
+    }
+    delete process.env['BABEL_CHAT_MAX_WALL_MS'];
+    for (const maxWallMs of [NaN, Infinity, -Infinity, -1, 0, 1.5])
+      assert.throws(() => resolveChatEngineLimits({ maxWallMs }), { code: 'CHAT_LIMITS_CONFIG' });
+  } finally {
+    if (previous === undefined) delete process.env['BABEL_CHAT_MAX_WALL_MS'];
+    else process.env['BABEL_CHAT_MAX_WALL_MS'] = previous;
+  }
+});
 
 test('post-write repair wall shrink is disabled only under the long-task profile', () => {
   assert.equal(shouldShrinkWallForPostWriteRepair(undefined), true);
@@ -25,11 +90,11 @@ test('post-write repair wall shrink is disabled only under the long-task profile
   );
 });
 
-test('explicit unlimited monetary policy retains wall, turn and stall controls', () => {
+test('explicit unlimited monetary policy retains explicit wall, turn and stall controls', () => {
   const previous = process.env['BABEL_CHAT_MAX_COST'];
   try {
     process.env['BABEL_CHAT_MAX_COST'] = 'unlimited';
-    const limits = resolveChatEngineLimits();
+    const limits = resolveChatEngineLimits({ maxWallMs: 60_000 });
     assert.equal(limits.maxCostUsd, Infinity);
     assert.ok(Number.isFinite(limits.maxWallMs) && limits.maxWallMs > 0);
     assert.ok(Number.isFinite(limits.maxTurns) && limits.maxTurns > 0);
@@ -68,6 +133,7 @@ test('resolveChatEngineLimits uses defaults when env unset', () => {
       requestedMs: maxWallMs,
       ceilingMs: 3_600_000,
       longTaskProfile: false,
+      allowance: { kind: 'unlimited' },
     });
     const costBudgetFor = (maxCostUsd: number) => ({
       effectiveCostUsd: maxCostUsd,
@@ -313,13 +379,8 @@ test('budget fields are clamped to valid ranges', () => {
       () => resolveChatEngineLimits({ maxCostUsd: 0 }),
       ChatEngineLimitsConfigurationError,
     );
-    // Negative wall clock should clamp to floor
-    const neg = resolveChatEngineLimits({ maxWallMs: -1 });
-    assert.ok(neg.maxWallMs >= 10_000);
-    // NaN would otherwise survive Math.min/Math.max and disable wall checks.
-    const nonFinite = resolveChatEngineLimits({ maxWallMs: Number.NaN });
-    assert.ok(Number.isFinite(nonFinite.maxWallMs));
-    assert.ok(Number.isFinite(nonFinite.wallBudget?.requestedMs));
+    assert.throws(() => resolveChatEngineLimits({ maxWallMs: -1 }), { code: 'CHAT_LIMITS_CONFIG' });
+    assert.throws(() => resolveChatEngineLimits({ maxWallMs: Number.NaN }), { code: 'CHAT_LIMITS_CONFIG' });
     // Below-min stall turns should clamp
     const stall = resolveChatEngineLimits({ stallTurns: 0 });
     assert.ok(stall.stallTurns >= 2);
@@ -350,7 +411,7 @@ test('isChatStreamingEnabled defaults on and respects opt-out', () => {
   }
 });
 
-test('SWE profile raises wall budget into general_swe band (600s+)', () => {
+test('SWE profile retains turn tuning without an implicit wall deadline', () => {
   const previous = {
     profile: process.env['BABEL_CHAT_SWE_PROFILE'],
     taskClass: process.env['BABEL_CHAT_TASK_CLASS'],
@@ -363,15 +424,9 @@ test('SWE profile raises wall budget into general_swe band (600s+)', () => {
     process.env['BABEL_CHAT_SWE_PROFILE'] = '1';
     assert.equal(isSweChatProfileEnabled(), true);
     const resolved = resolveChatEngineLimits();
-    assert.ok(
-      resolved.maxWallMs >= 600_000,
-      `expected SWE wall >= 600s, got ${resolved.maxWallMs}`,
-    );
-    assert.ok(
-      resolved.maxWallMs <= 3_600_000,
-      `wall should stay bounded, got ${resolved.maxWallMs}`,
-    );
-    assert.equal(resolved.maxWallMs, SWE_CHAT_ENGINE_LIMITS.maxWallMs);
+    assert.equal(resolved.maxWallMs, Infinity);
+    assert.deepEqual(resolved.runAllowance?.wallAllowance, { kind: 'unlimited' });
+    assert.equal(SWE_CHAT_ENGINE_LIMITS.maxWallMs, undefined);
     assert.ok((resolved.maxTurns ?? 0) >= (DEFAULT_CHAT_ENGINE_LIMITS.maxTurns));
   } finally {
     if (previous.profile === undefined) delete process.env['BABEL_CHAT_SWE_PROFILE'];

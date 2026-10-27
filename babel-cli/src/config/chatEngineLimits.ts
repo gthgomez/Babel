@@ -9,13 +9,22 @@ import {
   type ChatTaskClass,
 } from './chatTaskClass.js';
 
+/** JSON-safe wall evidence; only the runtime arithmetic uses Infinity. */
+export type ChatWallAllowance = { kind: 'finite'; ms: number } | { kind: 'unlimited' };
+
+export function describeWallAllowance(ms: number): ChatWallAllowance {
+  if (ms === Infinity) return { kind: 'unlimited' };
+  if (!Number.isFinite(ms) || ms < 0) throw new ChatEngineLimitsConfigurationError('Invalid wall allowance');
+  return { kind: 'finite', ms };
+}
+
 export interface ChatEngineLimits {
   maxTurns: number;
   maxConversationMessages: number;
   maxEstimatedTokens: number;
   /** Max cost in USD before forced abort (P1 budget controller). */
   maxCostUsd: number;
-  /** Max wall-clock time in ms before forced abort (P1 budget controller). */
+  /** Active task wall limit; Infinity means the default has no whole-task deadline. */
   maxWallMs: number;
   /** Consecutive turns without progress before stall is declared. */
   stallTurns: number;
@@ -35,6 +44,7 @@ export interface ChatEngineLimits {
     requestedMs: number;
     ceilingMs: number;
     longTaskProfile: boolean;
+    allowance?: ChatWallAllowance;
   };
   /**
    * Observable cost-budget provenance. Enumerable so JSON / spreads / manifests
@@ -51,7 +61,7 @@ export interface ChatEngineLimits {
   runAllowance?: ChatEngineRunAllowanceReport;
 }
 
-/** Ordinary sessions never allow wall requests beyond one hour. */
+/** Explicit ordinary wall requests are capped at one hour. */
 export const CHAT_WALL_CEILING_MS = 3_600_000;
 /**
  * Ceiling when the explicitly authorized long-task profile is active
@@ -160,6 +170,8 @@ export const DEFAULT_CHILD_LIMITS: ChatEngineChildLimits = {
 export interface ChatEngineRunAllowanceReport {
   declaredWallMs: number;
   effectiveWallMs: number;
+  wallAllowance: ChatWallAllowance;
+  effectiveWallAllowance: ChatWallAllowance;
   declaredCostUsd: number;
   effectiveCostCapUsd: number;
   /** JSON-safe cost truth; numeric Infinity otherwise becomes indistinguishable from null. */
@@ -214,6 +226,8 @@ export function createRunAllowanceReport(
   return {
     declaredWallMs,
     effectiveWallMs,
+    wallAllowance: describeWallAllowance(declaredWallMs),
+    effectiveWallAllowance: describeWallAllowance(effectiveWallMs),
     declaredCostUsd,
     effectiveCostCapUsd,
     costAllowance,
@@ -232,6 +246,25 @@ export function createRunAllowanceReport(
       ? { taskCostSpentUsd: state.taskCostSpentUsd }
       : {}),
   };
+}
+
+/** Preparation cannot enlarge or erase a retained task's wall grant. Fresh tasks resolve their own limits. */
+export function retainTaskWallAllowance(prepared: ChatEngineLimits, grantedWallMs?: number,
+  recordedWallBudget?: ChatEngineLimits['wallBudget']): ChatEngineLimits {
+  if (grantedWallMs === undefined) return prepared;
+  const limits: ChatEngineLimits = {
+    ...prepared,
+    maxWallMs: grantedWallMs,
+    wallBudget: recordedWallBudget?.effectiveMs === grantedWallMs ? { ...recordedWallBudget } : {
+      requestedMs: grantedWallMs,
+      effectiveMs: grantedWallMs,
+      ceilingMs: prepared.wallBudget?.ceilingMs ?? CHAT_WALL_CEILING_MS,
+      longTaskProfile: prepared.wallBudget?.longTaskProfile ?? false,
+      allowance: describeWallAllowance(grantedWallMs),
+    },
+  };
+  limits.runAllowance = createRunAllowanceReport(limits);
+  return limits;
 }
 
 /**
@@ -420,7 +453,7 @@ export const DEFAULT_CHAT_ENGINE_LIMITS: ChatEngineLimits = {
   maxConversationMessages: 20,
   maxEstimatedTokens: 128_000,         // prevent compaction thrash on real repos
   maxCostUsd: Infinity,
-  maxWallMs: 10 * 60 * 1000,           // 10 minutes
+  maxWallMs: Infinity,                 // no implicit whole-task deadline
   stallTurns: 8,
   investigateModel: undefined,
   mutateModel: undefined,
@@ -428,9 +461,9 @@ export const DEFAULT_CHAT_ENGINE_LIMITS: ChatEngineLimits = {
 };
 
 /**
- * SWE / multi-file engineering profile — longer wall so critic repair strikes can fire.
+ * SWE / multi-file engineering profile — task-specific turn and stall limits.
  * Applied when task class resolves to general_swe (BABEL_CHAT_TASK_CLASS=swe|general_swe|…
- * or BABEL_CHAT_SWE_PROFILE=1). Target band follows general_swe tune (default 600s / 10 min).
+ * or BABEL_CHAT_SWE_PROFILE=1). Whole-task wall deadlines are opt-in.
  * @deprecated Prefer getChatTaskTune('general_swe').limits — kept for call-site stability.
  */
 export const SWE_CHAT_ENGINE_LIMITS: Partial<ChatEngineLimits> = {
@@ -458,18 +491,6 @@ function parseBoundedInt(
     return fallback;
   }
   return Math.min(max, Math.max(min, parsed));
-}
-
-/** Raw pre-clamp integer for observability: NaN/absent resolves to fallback. */
-function parseRawInt(
-  raw: string | undefined,
-  fallback: number,
-): number {
-  if (raw === undefined || raw.trim() === '') {
-    return fallback;
-  }
-  const parsed = Number.parseInt(raw.trim(), 10);
-  return Number.isFinite(parsed) ? parsed : fallback;
 }
 
 function parseBoundedFloat(
@@ -508,7 +529,7 @@ function parseRawFloat(
  * - BABEL_CHAT_MAX_MESSAGES (default 20)
  * - BABEL_CHAT_MAX_TOKENS (default 128000)
  * - BABEL_CHAT_MAX_COST (default unlimited; explicit finite USD or 'unlimited' opt-in/out)
- * - BABEL_CHAT_MAX_WALL_MS (default 600000, 10 minutes)
+ * - BABEL_CHAT_MAX_WALL_MS (unset by default; explicit positive integer milliseconds)
  * - BABEL_CHAT_LONG_TASK=1 → explicitly authorized long-task profile: wall
  *   requests may go up to LONG_TASK_WALL_CEILING_MS (4h) instead of one hour.
  *   Defaults are unchanged; this only widens the clamp for explicit requests.
@@ -519,7 +540,7 @@ function parseRawFloat(
  * - BABEL_CHAT_MUTATE_MODEL (optional, default undefined — use primary for all phases)
  * - BABEL_CHAT_STALL_DEEPSEEK_MULTIPLIER (default 1.25, range 1.0-3.0)
  * - BABEL_CHAT_SWE_PROFILE=1 or BABEL_CHAT_TASK_CLASS=swe|general_swe|…
- *   → apply task-class base limits (general_swe wall 1200s) before env overrides
+ *   → apply task-class turn/context limits before env overrides
  * - Other classes: quick_fix, investigate, governance, default (see chatTaskClass.ts)
  *
  * @param overrides  Per-engine overrides from the caller.
@@ -555,13 +576,16 @@ export function resolveChatEngineLimits(
     overrides.costBudget?.longTaskProfile === true ||
     isLongTaskWallProfileEnabled();
   const wallCeiling = longTaskProfile ? LONG_TASK_WALL_CEILING_MS : CHAT_WALL_CEILING_MS;
-  // Public callers can provide a number directly. Treat non-finite values as
-  // absent so NaN cannot disable the elapsed-time comparison downstream.
-  const requestedOverrideMaxWallMs = Number.isFinite(overrides.maxWallMs)
-    ? overrides.maxWallMs
-    : undefined;
-  const requestedMaxWallMs = requestedOverrideMaxWallMs ??
-    parseRawInt(process.env['BABEL_CHAT_MAX_WALL_MS'], baseDefaults.maxWallMs);
+  // Absence alone selects unlimited. Malformed explicit settings fail closed.
+  const rawWallMs = process.env['BABEL_CHAT_MAX_WALL_MS'];
+  const requestedOverrideMaxWallMs = overrides.maxWallMs;
+  if (requestedOverrideMaxWallMs !== undefined && typeof requestedOverrideMaxWallMs !== 'number')
+    throw new ChatEngineLimitsConfigurationError('Explicit chat wall limit must be positive integer milliseconds');
+  const explicitWallMs = requestedOverrideMaxWallMs ??
+    (rawWallMs === undefined ? undefined : /^\d+$/.test(rawWallMs.trim()) ? Number(rawWallMs) : NaN);
+  if (explicitWallMs !== undefined && (!Number.isSafeInteger(explicitWallMs) || explicitWallMs <= 0))
+    throw new ChatEngineLimitsConfigurationError('Explicit chat wall limit must be positive integer milliseconds');
+  const requestedMaxWallMs = explicitWallMs ?? Infinity;
 
   const fromEnv: ChatEngineLimits = {
     maxTurns: parseBoundedInt(
@@ -586,12 +610,7 @@ export function resolveChatEngineLimits(
       process.env['BABEL_CHAT_MAX_COST'],
       baseDefaults.maxCostUsd,
     ),
-    maxWallMs: parseBoundedInt(
-      process.env['BABEL_CHAT_MAX_WALL_MS'],
-      baseDefaults.maxWallMs,
-      10_000,
-      wallCeiling,
-    ),
+    maxWallMs: explicitWallMs === undefined ? Infinity : Math.min(wallCeiling, Math.max(10_000, explicitWallMs)),
     stallTurns: parseBoundedInt(
       process.env['BABEL_CHAT_STALL_TURNS'],
       baseDefaults.stallTurns,
@@ -640,10 +659,7 @@ export function resolveChatEngineLimits(
   }
   stallTurns = Math.max(stallTurns, surfaceMinStall);
 
-  const resolvedMaxWallMs = Math.min(
-    wallCeiling,
-    Math.max(10_000, requestedOverrideMaxWallMs ?? fromEnv.maxWallMs),
-  );
+  const resolvedMaxWallMs = fromEnv.maxWallMs;
 
   const requestedOverrideMaxCostUsd = parseExplicitCostOverrideUsd(
     overrides.maxCostUsd,
@@ -682,6 +698,7 @@ export function resolveChatEngineLimits(
       requestedMs: requestedMaxWallMs,
       ceilingMs: wallCeiling,
       longTaskProfile,
+      allowance: describeWallAllowance(resolvedMaxWallMs),
     },
     costBudget: {
       effectiveCostUsd: resolvedMaxCostUsd,

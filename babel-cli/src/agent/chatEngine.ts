@@ -137,7 +137,7 @@ import {
 
 import {
   explicitFiniteCostOverride,
-  resolveChatEngineLimits,
+  resolveChatEngineLimits, retainTaskWallAllowance,
   shouldShrinkWallForPostWriteRepair,
   type ChatEngineLimits,
   type ChatRunLimiter,
@@ -1655,7 +1655,7 @@ export class ChatEngine {
    * Idempotent.
    */
   private applyPostWriteRepairBudget(): void {
-    if (this.postWriteRepairWallCapMs != null) return;
+    if (this.postWriteRepairWallCapMs != null || this.postWriteRepairRestrict) return;
     // Only for execute-style classes that must verify (not pure investigate).
     if (this.taskClass === "investigate") return;
     // Finding 1: enter the bounded repair window only on evidence of repair or
@@ -1690,7 +1690,7 @@ export class ChatEngine {
           repairWindowMs: Math.max(0, this.limits.maxWallMs - elapsedMs),
         };
     const { capMs, repairWindowMs } = repairWall;
-    this.postWriteRepairWallCapMs = capMs;
+    this.postWriteRepairWallCapMs = Number.isFinite(capMs) ? capMs : null;
     this.postWriteRepairRestrict = true;
 
     // Also shrink cost if critic repair cap not already tighter.
@@ -3148,13 +3148,12 @@ export class ChatEngine {
     // systemContext is replaced by preparation above. Do not append a second
     // memory or playbook document here.
     if (preparation.limits) {
-      this.limits = preparation.limits;
+      this.limits = retainTaskWallAllowance(preparation.limits, this.taskAllowance?.grant.wallCapMs, this.limits.wallBudget);
       this.options.maxTurns = preparation.limits.maxTurns;
       this.options.maxConversationMessages =
         preparation.limits.maxConversationMessages;
       this.options.maxEstimatedTokens = preparation.limits.maxEstimatedTokens;
       this.options.maxTokensPerRound = preparation.limits.maxTokensPerRound;
-      this.options.maxWallMs = preparation.limits.maxWallMs;
       const explicitCost = explicitFiniteCostOverride(preparation.limits);
       if (explicitCost !== undefined) {
         this.options.maxCostUsd = explicitCost;

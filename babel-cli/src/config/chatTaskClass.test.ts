@@ -250,9 +250,9 @@ describe('chatTaskClass', () => {
     );
   });
 
-  test('general_swe tune has long wall, strict critic, soft-nudge policies', () => {
+  test('general_swe tune retains strict critic and soft-nudge policies without a wall deadline', () => {
     const t = getChatTaskTune('general_swe');
-    assert.ok((t.limits.maxWallMs ?? 0) >= 600_000);
+    assert.equal(t.limits.maxWallMs, undefined);
     assert.equal(t.strictCritic, true);
     assert.equal(t.phaseGatedToolsDefault, false);
     assert.equal(t.forceMutateTurns, 3);
@@ -400,10 +400,10 @@ describe('chatTaskClass', () => {
   test('listCodingProfileSummaries budget caps — quick_fix vs general_swe', () => {
     const quick = listCodingProfileSummaries().find((s) => s.class === 'quick_fix')!;
     const swe = listCodingProfileSummaries().find((s) => s.class === 'general_swe')!;
-    assert.equal(quick.maxWallMs, 8 * 60 * 1000);
+    assert.equal(quick.maxWallMs, null);
     assert.equal(quick.maxTurns, 80);
     assert.equal(quick.maxCostUsd, null);
-    assert.equal(swe.maxWallMs, 10 * 60 * 1000);
+    assert.equal(swe.maxWallMs, null);
     assert.equal(swe.maxTurns, 250);
     assert.equal(swe.maxCostUsd, null);
   });
@@ -427,10 +427,10 @@ describe('chatTaskClass', () => {
     try {
       process.env['BABEL_CHAT_TASK_CLASS'] = 'quick_fix';
       const quick = resolveChatEngineLimits({}, undefined, { taskClass: 'quick_fix' });
-      assert.ok(quick.maxWallMs <= 8 * 60 * 1000);
+      assert.deepEqual(quick.runAllowance?.wallAllowance, { kind: 'unlimited' });
 
       const swe = resolveChatEngineLimits({}, undefined, { taskClass: 'general_swe' });
-      assert.ok(swe.maxWallMs >= 600_000);
+      assert.deepEqual(swe.runAllowance?.wallAllowance, { kind: 'unlimited' });
     } finally {
       if (previous.wall === undefined) delete process.env['BABEL_CHAT_MAX_WALL_MS'];
       else process.env['BABEL_CHAT_MAX_WALL_MS'] = previous.wall;
@@ -508,7 +508,8 @@ describe('chatTaskClass', () => {
     assert.equal(taskClass, 'quick_inspect');
 
     const tune = getChatTaskTune(taskClass);
-    assert.ok((tune.limits.maxWallMs ?? 0) <= 60_000, 'quick_inspect maxWallMs must be <= 60s');
+    assert.equal(tune.limits.maxWallMs, undefined);
+    assert.equal(tune.limits.maxTurns, 12);
     assert.ok(tune.investigateToolBudget <= 4, 'quick_inspect tool budget must be <= 4');
     assert.equal(tune.verificationPolicy, 'none', 'quick_inspect should have verificationPolicy: none');
   });
