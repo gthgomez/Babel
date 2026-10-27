@@ -18,9 +18,11 @@ import {
 import { recordProgressRecovery } from "./sessionEvents.js";
 import { reconcileStreamedAnswer } from "./chatEngineStreamingProtocol.js";
 import { recordChatHarnessFeedback } from "./chatHarnessFeedback.js";
-import { captureGateRejectedCompletionAttempt } from "./preservedUnverifiedTerminal.js";
+import { captureGateRejectedCompletionAttempt, formatPreservedUnverifiedTerminalAnswer } from "./preservedUnverifiedTerminal.js";
 import { PROJECT_REQUIRED_MESSAGE, conversationScopeRequiredReport } from './chatToolScopeAdmission.js';
 import { requestsRequiredUserDecision } from './chatResponseContract.js';
+import { unverifiedFileDeliveryPaths } from './unverifiedFileDelivery.js';
+import { shellBlockedByIsolation } from './capabilityRecoveryScope.js';
 
 /** Resolve completion gates and settle one completed streaming turn. */
 export async function* settleStreamingCompletion(input: {
@@ -87,13 +89,22 @@ export async function* settleStreamingCompletion(input: {
   );
   const hardGate = isBabelHeadlessEnv() || !process.stdout.isTTY;
 
-  if (gateResult === "reject") {
-    const verification = resolveCompletionVerificationContext({
-      taskClass: host.taskClass,
-      task: host.options.task,
-      requiredVerifierCommands: host.getResolvedRequiredVerifiers(),
-      toolCallLog: host.toolCallLog,
-    });
+  const verification = resolveCompletionVerificationContext({
+    taskClass: host.taskClass,
+    task: host.options.task,
+    requiredVerifierCommands: host.getResolvedRequiredVerifiers(),
+    toolCallLog: host.toolCallLog,
+  });
+  const retainedPaths = gateResult === "reject" && host.options.projectRoot ? unverifiedFileDeliveryPaths({
+    projectRoot: host.options.projectRoot,
+    taskClass: host.taskClass,
+    verification,
+    shellUnavailable: shellBlockedByIsolation(host.isolationBrokerFlags()),
+    verifierEvidencePresent: Boolean(host.lastVerifierReceipt || host.executedVerifierLedger.length),
+    verifierTampered: host.verifierTampered,
+    toolCallLog: host.toolCallLog,
+  }) : null;
+  if (gateResult === "reject" && !retainedPaths) {
     host.gatePolicy = verification.effectiveGatePolicy;
     const plan = planCompletionGateReject({
       hasWrites: host.hasAnyWrites(),
@@ -260,6 +271,26 @@ export async function* settleStreamingCompletion(input: {
         : {}),
     });
     return "done";
+  }
+
+  if (retainedPaths) {
+    // The critic is a suspension point. Do not retain stale mutation/readback metadata.
+    const currentPaths = host.options.projectRoot ? unverifiedFileDeliveryPaths({
+      projectRoot: host.options.projectRoot, taskClass: host.taskClass, verification,
+      shellUnavailable: shellBlockedByIsolation(host.isolationBrokerFlags()),
+      verifierEvidencePresent: Boolean(host.lastVerifierReceipt || host.executedVerifierLedger.length),
+      verifierTampered: host.verifierTampered, toolCallLog: host.toolCallLog,
+    }) : null;
+    if (!currentPaths) { endSpan(turnSpan, SpanStatusCode.OK); return 'continue'; }
+    const delivery = formatPreservedUnverifiedTerminalAnswer({
+      authorityReason: 'UNVERIFIED: File changes were read back, but shell isolation is unavailable. Required authoritative verification was not performed; task fulfillment is not certified.',
+      retainedCandidate: answer, artifactRefs: currentPaths,
+    });
+    endSpan(turnSpan, SpanStatusCode.OK);
+    if (!host.isSubmissionCurrent(submissionGeneration)) return 'done';
+    host.conversation.push({ role: 'assistant', content: delivery });
+    yield host.streamDone(delivery, { ...(host.lastCriticReceipt ? { criticReceipt: host.lastCriticReceipt } : {}) });
+    return 'done';
   }
 
   // Emit only the not-yet-streamed remainder of the final answer —
