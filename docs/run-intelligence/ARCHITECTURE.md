@@ -21,3 +21,7 @@ Normal BRI output exposes random logical IDs and safe structured operational met
 ## Evaluation, lineage, recovery, archive
 
 The schema has additive seams for immutable CaseVersion definitions, frozen DatasetVersion membership, Evaluation/Rubric identity, Experiment, Annotation, ExposureRecord, and typed lineage edges. These are intentionally unpopulated by historical adapters until reviewed source evidence supports them. Checkpoint artifacts are cataloged as occurrences, not proof of recoverability. Archive and hydration remain future adapter interfaces; no cloud archive, eviction, deduplication, encryption, or object-lock behavior is active.
+
+## Local batch review
+
+`babel runs review` and its `runs show` reference lookups open existing checkpointed catalogs with SQLite immutable read-only mode, avoiding WAL/shared-memory sidecars. Nonempty WAL or catalog changes during a read fail explicitly. It reads receipt-bound metadata annotations and existing cluster/review/lineage records; it creates no second issue database. Explicit versioned evaluator corrections append to existing annotations and leave original observations/grades intact. Review assertions cannot certify product completion. See [batch review](BATCH_REVIEW.md) for attribution, window, privacy and coverage limits.

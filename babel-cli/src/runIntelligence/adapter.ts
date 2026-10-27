@@ -18,7 +18,7 @@ import {
 // typed verifier authority source, deterministic-verifier receipt fields) and
 // streaming JSONL/digest ingestion for large runs. Catalog uniqueness keys on
 // adapter_version, so rows extracted by v1 are preserved, never rewritten.
-export const RUN_INTELLIGENCE_ADAPTER_VERSION = "2.0.0";
+export const RUN_INTELLIGENCE_ADAPTER_VERSION = "2.1.0";
 const MAX_JSON_BYTES = 2 * 1024 * 1024;
 // Bounded total budget for one session-events.jsonl extraction. Long runs are
 // streamed line-by-line within this budget instead of being dropped wholesale.
@@ -195,7 +195,12 @@ function sessionEvents(
   routing: ModelRoutingObservation[];
   verifiers: VerifierObservation[];
   outcomes: OutcomeObservation[];
+  reviewContext: NonNullable<ExtractedRun["reviewContext"]>;
 } {
+  const taskTokens = new Set<string>();
+  let hasUnattributedTask = false;
+  let retries = 0;
+  let completionBlocks = 0;
   let sessionId: string | null = null;
   let model: string | null = null;
   const failures: FailureCandidate[] = [];
@@ -206,6 +211,14 @@ function sessionEvents(
     try {
       const value: unknown = JSON.parse(line);
       if (!isRecord(value)) throw new Error("not record");
+      if (value["kind"] === "user_submitted") {
+        const taskId = value["task_id"];
+        if (typeof taskId === "string" && taskId.length > 0 && taskId.length <= 512)
+          taskTokens.add(opaqueId("task", "babel.local", taskId));
+        else hasUnattributedTask = true;
+      }
+      if (value["kind"] === "provider_retry_scheduled") retries++;
+      if (value["kind"] === "completion_decision" && value["allowed"] === false) completionBlocks++;
       if (!sessionId && typeof value["session_id"] === "string")
         sessionId = value["session_id"];
       if (!model && typeof value["model"] === "string")
@@ -387,6 +400,7 @@ function sessionEvents(
   }
   if (process.env['BRI_DEBUG']) console.error('DEBUG routing', JSON.stringify([...routing.values()]))
   return {
+    reviewContext: { taskToken: !hasUnattributedTask && !warnings.some(w => w.availability === "TRUNCATED" || w.availability === "INVALID" || w.availability === "UNAVAILABLE") && taskTokens.size === 1 ? [...taskTokens][0]! : null, retries, completionBlocks },
     sessionId,
     model,
     failures,
@@ -533,6 +547,7 @@ export function extractRunDirectory(runDirectory: string): ExtractedRun {
   const usage: UsageObservation[] = [];
   let sourceSchema: string | null = null;
   let capturedAt: string | null = null;
+  let reviewContext: ExtractedRun["reviewContext"];
 
   for (const name of entries) {
     const path = join(runDir, name);
@@ -585,6 +600,7 @@ export function extractRunDirectory(runDirectory: string): ExtractedRun {
         });
         continue;
       }
+      reviewContext = extracted.reviewContext;
       sessionLegacyId = extracted.sessionId;
       model = extracted.model;
       failures.push(...extracted.failures);
@@ -641,6 +657,7 @@ export function extractRunDirectory(runDirectory: string): ExtractedRun {
     });
   }
   return {
+    ...(reviewContext ? { reviewContext } : {}),
     sourceNamespace: "babel.local",
     sourceRole: "evidence_bundle",
     sourceLocator: runDir,

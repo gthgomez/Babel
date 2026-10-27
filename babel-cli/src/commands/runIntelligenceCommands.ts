@@ -10,6 +10,7 @@ import {
   savedQueryDefinition,
   type SavedQueryName,
 } from "../runIntelligence/contracts.js";
+import { reviewCatalog, formatRunReview, showCatalogEntity } from "../runIntelligence/review.js";
 import { printJsonOrHuman } from "./output.js";
 
 function catalogPath(option?: string): string {
@@ -104,6 +105,19 @@ export function registerRunIntelligenceCommands(program: Command): void {
       },
     );
   runs
+    .command("review")
+    .description("Review a local evidence window without replay, execution or network calls")
+    .option("--catalog <path>", "Existing derived SQLite catalog")
+    .option("--last-hours <hours>", "Window size, default 24", "24")
+    .option("--until <timestamp>", "Window end (ISO timestamp; default now)")
+    .option("--json", "Emit minimized structured review")
+    .action((options: { catalog?: string; lastHours: string; until?: string; json?: boolean }) => {
+      const report = reviewCatalog(catalogPath(options.catalog), {
+        lastHours: Number(options.lastHours), ...(options.until !== undefined ? { until: options.until } : {}),
+      });
+      printJsonOrHuman(report, formatRunReview(report), options.json === true);
+    });
+  runs
     .command("coverage")
     .description("Show catalog extraction coverage")
     .option("--catalog <path>", "Local derived SQLite catalog path")
@@ -144,18 +158,11 @@ export function registerRunIntelligenceCommands(program: Command): void {
     .option("--json", "Emit structured JSON")
     .action(
       (entityId: string, options: { catalog?: string; json?: boolean }) => {
-        const catalog = new RunIntelligenceCatalog(
-          catalogPath(options.catalog),
-        );
-        try {
-          const report = catalog.show(entityId) ?? {
-            status: "missing",
-            entityId,
-          };
-          printJsonOrHuman(report, human(report), options.json === true);
-        } finally {
-          catalog.close();
-        }
+        const report = showCatalogEntity(catalogPath(options.catalog), entityId) ?? {
+          status: "missing",
+          entityId,
+        };
+        printJsonOrHuman(report, human(report), options.json === true);
       },
     );
   runs

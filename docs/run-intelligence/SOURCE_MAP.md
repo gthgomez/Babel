@@ -17,3 +17,5 @@ Status labels are deliberately narrow: **VERIFIED_CURRENT_SOURCE** means directl
 | Benchmark / review / regression ledger | benchmark modules, review surfaces, `REGRESSION_LEDGER.md`                                                                 | Human-led, version-specific evidence.                                                             | **NOT_ESTABLISHED** for automatic normalization; no prose relationships are inferred.                                                                          |
 
 The adapter never copies, rewrites, or opens a historical SQLite/FTS database. It uses bounded reads of immediate files and persists derived facts only in the selected local BRI catalog.
+
+Batch-review metadata (adapter 2.1): `user_submitted.task_id` is hashed only for singleton, complete task attribution; `provider_retry_scheduled` and denied `completion_decision` events supply observed counts. Receipt-bound derived annotations use the existing catalog. Clarification and general friction coverage remain unsupported. See [local batch review](BATCH_REVIEW.md).

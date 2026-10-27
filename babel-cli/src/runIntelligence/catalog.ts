@@ -1,3 +1,6 @@
+import { lookupReviewEntity } from "./reviewLookup.js";
+import { buildRunReview, type ReviewOptions, type RunReview } from "./review.js";
+
 import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
@@ -267,6 +270,9 @@ export class RunIntelligenceCatalog {
           run.capturedAt,
           receiptId,
         );
+      if (run.reviewContext) this.db.prepare(
+        "INSERT OR IGNORE INTO annotations(annotation_id,entity_id,annotation_type,value_json,created_at) VALUES (?, ?, 'bri.review-context.v1', ?, ?)"
+      ).run(opaqueId("review_context", receiptId), runId, toJson({ ...run.reviewContext, receiptId }), now());
       const sessionToken = run.sessionLegacyId
         ? opaqueId("session_locator", run.sessionLegacyId)
         : null;
@@ -882,19 +888,7 @@ export class RunIntelligenceCatalog {
   }
 
   show(entityId: string): Record<string, unknown> | null {
-    const run = this.db
-      .prepare(
-        "SELECT logical_id,source_namespace,source_schema,captured_at,source_digest IS NOT NULL AS digest_available FROM run_containers WHERE logical_id=?",
-      )
-      .get(entityId) as Record<string, unknown> | undefined;
-    if (run) return run;
-    return (
-      (this.db
-        .prepare(
-          "SELECT signature_id,algorithm_version,subsystem,category,stable_detail FROM failure_signatures WHERE signature_id=?",
-        )
-        .get(entityId) as Record<string, unknown> | undefined) ?? null
-    );
+    return lookupReviewEntity(this.db, entityId);
   }
 
   /** Create an immutable, content-minimized evaluation case definition. */
@@ -1052,6 +1046,31 @@ export class RunIntelligenceCatalog {
         clusterId,
       );
     return clusterId;
+  }
+
+  /** Read a minimized local batch review; no source replay or execution. */
+  review(options: ReviewOptions = {}): RunReview {
+    return buildRunReview(this.db, options);
+  }
+
+  /** Append a review-only evaluator correction; original observations remain intact. */
+  recordAssessmentCorrection(input: {
+    trialId: string;
+    evaluationVersion: string;
+    verdict: "PASS" | "FAIL" | "UNKNOWN";
+    correctionKind: "EVALUATOR_ERROR" | "EVIDENCE_UPDATE";
+    evidenceRef: string;
+  }): string {
+    if (!this.db.prepare("SELECT logical_id FROM trials WHERE logical_id=?").get(input.trialId))
+      throw new Error("Correction requires an existing trial");
+    if (!input.evaluationVersion || !input.evidenceRef || !["PASS", "FAIL", "UNKNOWN"].includes(input.verdict) || !["EVALUATOR_ERROR", "EVIDENCE_UPDATE"].includes(input.correctionKind))
+      throw new Error("Invalid assessment correction");
+    const id = opaqueId("correction", input.trialId, input.evaluationVersion);
+    const value = toJson({ evaluationVersionRef: opaqueId("evaluation_version", input.evaluationVersion), verdict: input.verdict, correctionKind: input.correctionKind, evidenceRef: opaqueId("evidence", input.evidenceRef) });
+    const prior = this.db.prepare("SELECT value_json FROM annotations WHERE annotation_id=?").get(id);
+    if (prior && prior["value_json"] !== value) throw new Error("Correction version is immutable; use a new version");
+    this.db.prepare("INSERT OR IGNORE INTO annotations VALUES (?, ?, 'bri.assessment-correction.v1', ?, ?)").run(id, input.trialId, value, now());
+    return id;
   }
 
   verify(): {
