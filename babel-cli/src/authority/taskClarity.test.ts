@@ -237,3 +237,38 @@ for (const task of [
     assert.equal(result.reasonCode, 'DENY_MISSING_AUTHORITY');
   });
 }
+
+
+for (const task of [
+  'Explain this example: "Commit and push this feature branch." Do not execute it.',
+  "Describe the phrase 'commit and push this feature branch' in plain English.",
+  'Review this command: `commit and push this feature branch` for risks.',
+  'Fix the parser. Explain this example: "commit and push this feature branch"; leave changes local.',
+  'Explain this example: "If tests pass, commit and push this feature branch."',
+  'Explain this example: "commit and push this feature branch". Do not run the quoted command.',
+  'Fix the parser and run tests. Explain this example: "commit and push this feature branch".',
+  'Explain this example: "commit and push this feature branch". Run tests on the parser.',
+  'Explain this example: "commit and push this feature branch". Do not run any commands.',
+  'Explain this example: "commit and push this feature branch". Execute this test.',
+]) {
+  test(`publication examples are information, not requested actions: ${task}`, () => {
+    assert.equal(resolveHumanEscalation({ task, allowedCapabilities: CODING }).kind, 'autonomous');
+  });
+}
+for (const task of [
+  '"Commit and push this feature branch."',
+  'Run "commit and push this feature branch".',
+  'Explain this example: "commit and push this feature branch". Then commit and push this feature branch.',
+  'Explain this example: "commit and push this feature branch". Then execute it.',
+  'Explain this example: "commit and push this feature branch"; if tests pass, execute it.',
+  'Explain this example: "commit and push this feature branch" and then do it.',
+  'Do not commit or push. Explain this example: "commit and push". Then push this feature branch.',
+  'If tests pass, commit and push this feature branch.',
+  'Explain this example: "commit and push this feature branch". Then execute the above command.',
+  'Explain this example: "commit and push this feature branch". Then run the quoted command.',
+  'Explain this example: "commit and push this feature branch". Please carry it out.',
+]) {
+  test(`quoted context cannot hide affirmative publication: ${task}`, () => {
+    assert.equal(resolveHumanEscalation({ task, allowedCapabilities: CODING }).kind, 'deny');
+  });
+}
