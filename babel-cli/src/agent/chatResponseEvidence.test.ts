@@ -7,7 +7,7 @@ import { ChatEngine } from './chatEngine.js'
 import { DeepInfraApiRunner } from '../runners/deepInfraApi.js'
 import type { ToolStreamEvent } from '../runners/base.js'
 import { SafeExecutor } from '../sandbox.js'
-import { unsupportedTestClaim } from './chatResponseEvidence.js'
+import { unsupportedTestClaim, unsupportedMutationClaim, responseEvidenceCorrection } from './chatResponseEvidence.js'
 
 test('test claims distinguish execution, freshness, result and scope', () => {
   const green = { command: 'npm test', exit_code: 0, authority: true, stale: false, scope: 'full_suite', tests_total: 1, tests_skipped: 0 }
@@ -79,7 +79,7 @@ test('bare targeted reports preserve selectors and separate prose success from f
   assert.equal(unsupportedTestClaim('I ran npm test and it failed.',{...receipt,command:'npm test',exit_code:1}),false);
 })
 
-for (const scenario of ['correction', 'repeated', 'exact_json'] as const)
+for (const scenario of ['correction', 'repeated', 'exact_json', 'mutation-correction', 'mutation-repeated', 'mixed-repeated'] as const)
 test(`response evidence ${scenario}: preserve useful answers without requiring effects`, async t => {
   const root = mkdtempSync(join(tmpdir(), 'chat-response-evidence-'))
   const prior = process.env['BABEL_NATIVE_TOOLS']
@@ -95,7 +95,9 @@ test(`response evidence ${scenario}: preserve useful answers without requiring e
   t.mock.method(SafeExecutor.prototype, 'shellExecAsync', async () => forbidden())
   t.mock.method(SafeExecutor.prototype, 'fileWrite', forbidden)
   const corrected = 'I inspected the implementation; I have not run tests. Which ordering do you want: price, name, or popularity?'
-  const unsupported = 'The baseline test passes. Which ordering do you want: price, name, or popularity?'
+  const unsupported = scenario.startsWith('mutation-')
+    ? 'The repository map was updated. Which ordering do you want: price, name, or popularity?'
+    : 'The baseline test passes. Which ordering do you want: price, name, or popularity?'
   const exact = '{"flow":"catalog returns an input copy","testCommand":"npm test"}'
   class Runner extends DeepInfraApiRunner {
     turns = 0
@@ -106,8 +108,8 @@ test(`response evidence ${scenario}: preserve useful answers without requiring e
         yield { type: 'tool_use', id: 'inspect-catalog', name: 'read_file', input: { path: 'catalog.js' } }
         yield { type: 'done', finishReason: 'tool_calls' }
       } else {
-        yield { type: 'text_delta', text: scenario === 'exact_json' ? exact :
-          scenario === 'repeated' || this.turns === 2 ? unsupported : corrected }
+        yield { type: 'text_delta', text: scenario === 'mixed-repeated' && this.turns > 2 ? 'I updated files.' : scenario === 'exact_json' ? exact :
+          scenario.endsWith('repeated') || this.turns === 2 ? unsupported : corrected }
         yield { type: 'done', finishReason: 'stop' }
       }
     }
@@ -121,7 +123,7 @@ test(`response evidence ${scenario}: preserve useful answers without requiring e
     if (event.type === 'done') answer = event.answer
     if (event.type === 'failed') failure = event
   }
-  if (scenario === 'repeated') {
+  if (scenario.endsWith('repeated')) {
     assert.equal(failure?.reason_code, 'response_evidence_invalid')
     assert.equal(failure?.outcome, 'AGENT_FAILURE')
   } else assert.equal(answer, scenario === 'exact_json' ? exact : corrected)
@@ -160,4 +162,26 @@ test('command literals do not become whole-suite scope claims', () => {
     assert.equal(unsupportedTestClaim(`I ran ${command}: 1 test passed.`, receipt), false)
     assert.equal(unsupportedTestClaim(`I ran ${command}: 1 test passed across the entire suite.`, receipt), true)
   }
+})
+
+
+test('completed file-work claims require confirmed mutations, while inspected no-change remains truthful', () => {
+  const claims = ['The repository map was updated.', 'I updated REPO_MAP.md.', 'I created proof.cjs.', 'I created a file.',
+    'We have changed the code.', 'Updated the module.', 'I updated `REPO_MAP.md`.', '`REPO_MAP.md` was updated.', 'The file has been saved.']
+  for (const answer of claims) {
+    assert.equal(unsupportedMutationClaim(answer, false), true, answer)
+    assert.equal(unsupportedMutationClaim(answer, true), false, answer)
+  }
+  for (const answer of ['The requested implementation was already correct; no changes were needed.',
+    'I inspected the repository map. It already matches the current tree.', 'I have not updated files.',
+    'I never updated the file.', 'No file was updated.', 'If I updated files, I would rerun tests.',
+    'Have I updated files?', 'The file was updated?', 'Do you think the file was updated?',
+    'I wrote code below.\n```js\nconsole.log(1)\n```', 'I created a patch in this answer.', 'Check whether the file was updated.', 'Please verify that the file was updated.',
+    'The file was updated by another agent.', 'The file was updated before this task.',
+    'The README says "I updated files".', '> The repository map was updated.',
+    '```text\nI updated files.\n```', 'I updated my answer.', 'I changed my mind.'])
+    assert.equal(unsupportedMutationClaim(answer, false), false, answer)
+  assert.match(responseEvidenceCorrection(null, true), /No confirmed file mutation/)
+  assert.doesNotMatch(responseEvidenceCorrection(null, true), /claims tests ran/)
+  assert.match(responseEvidenceCorrection(null), /claims tests ran/)
 })

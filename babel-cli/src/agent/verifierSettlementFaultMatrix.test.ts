@@ -49,7 +49,6 @@ import {
   restorePersistedVerifierEvidence,
 } from './chatEngineVerifierAdapter.js';
 import {
-  invalidateVerifierLedger,
   noteChatWorkspaceMutation,
 } from './chatEngineSupport.js';
 import { RevisionManager } from '../evidence/revisionBoundReceipt.js';
@@ -320,7 +319,7 @@ describe('verifier settlement fault matrix', { concurrency: false }, () => {
     }
   });
 
-  test('receipt persistence rejects: adapter rejects and ledger entry is invalidated, not authoritative', async () => {
+  test('receipt persistence rejects before ledger or cache promotion', async () => {
     const root = makeFixture();
     try {
       const base = createSessionEventLog('matrix-persist-reject');
@@ -357,19 +356,12 @@ describe('verifier settlement fault matrix', { concurrency: false }, () => {
         /session event persistence failed/,
       );
 
-      // The adapter upserts the ledger before persistence; the engine's catch
-      // invalidates it. Assert the entry cannot carry authority afterwards.
-      assert.equal(ledger.length, 1, 'ledger upsert happened before the persistence reject');
-      invalidateVerifierLedger(
-        { lastVerifierReceipt: null, executedVerifierLedger: ledger },
-        'verifier receipt persistence failed',
-      );
-      assert.equal(ledger[0]!.stale, true, 'rejected persistence leaves the receipt stale');
-      assert.ok(revisionBindingProofErrors(ledger[0]).length > 0);
-
+      // Durable persistence precedes projection into live proof or cache.
+      // An unrecorded execution cannot acquire authority, even transiently.
+      assert.deepEqual(ledger, []);
       const prepared = prepareKernelVerifierInput(null, ledger);
       assert.equal(prepared.lastVerifierReceipt, null);
-      assert.equal(prepared.executedVerifierLedger?.[0]?.stale, true);
+      assert.deepEqual(prepared.executedVerifierLedger, []);
       assert.equal(cache.size, 0, 'no cache entry is minted on persistence reject');
     } finally {
       rmSync(root, { recursive: true, force: true });

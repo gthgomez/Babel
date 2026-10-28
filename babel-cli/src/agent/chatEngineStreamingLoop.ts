@@ -20,7 +20,7 @@ import { recordChatHarnessFeedback } from "./chatHarnessFeedback.js";
 import { writeFileSync } from "node:fs";
 import { join } from 'node:path';
 import { describeNativeToolRejection, nativeSchemaRepairFeedback } from './nativeToolRejection.js';
-import { unsupportedTestClaim, responseEvidenceCorrection, responseVerifierFacts } from './chatResponseEvidence.js';
+import { unsupportedTestClaim, unsupportedMutationClaim, responseEvidenceCorrection, responseVerifierFacts } from './chatResponseEvidence.js';
 import { refreshChatVerifierReceiptStalenessSync } from '../evidence/chatRevisionBinding.js';
 import type { ChatUsageScope } from './chatEngineProviderAccounting.js';
 
@@ -1960,17 +1960,18 @@ export class ChatEngineStreamingLoop {
             refreshChatVerifierReceiptStalenessSync(this.host.options.projectRoot, receipt);
           }
         }
-        if (unsupportedTestClaim(answer, this.host.lastVerifierReceipt, this.host.executedVerifierLedger)) {
+        const missingMutationClaim = unsupportedMutationClaim(answer, this.host.hasAnyWrites());
+        if (missingMutationClaim || unsupportedTestClaim(answer, this.host.lastVerifierReceipt, this.host.executedVerifierLedger)) {
           this.host.conversation.push({ role: 'assistant', content: answer });
           endSpan(_turnSpan, SpanStatusCode.ERROR);
           _turnSpan = null;
           if (responseEvidenceRepairUsed) {
-            yield this.host.streamFailed('RESPONSE_EVIDENCE_INVALID: repeated test claims lack corresponding execution evidence.');
+            yield this.host.streamFailed('RESPONSE_EVIDENCE_INVALID: repeated completion claims lack corresponding execution or mutation evidence.');
             return;
           }
           responseEvidenceRepairUsed = true;
-          recordChatHarnessFeedback(this.host, responseEvidenceCorrection(this.host.lastVerifierReceipt));
-          yield { type: 'thought', text: '[Correcting an unsupported test-result claim]' };
+          recordChatHarnessFeedback(this.host, responseEvidenceCorrection(this.host.lastVerifierReceipt, missingMutationClaim));
+          yield { type: 'thought', text: '[Correcting an unsupported completion-evidence claim]' };
           continue;
         }
 

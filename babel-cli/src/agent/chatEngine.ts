@@ -270,7 +270,7 @@ import type { AdmissionStore } from "../runtime/admission.js";
 import { captureSessionEventAppendFailure } from "./sessionEventDiagnostics.js";
 import { buildChatEngineRepoMapPreamble } from "./repoMapPreamble.js";
 import { normalizeChatAnswer } from './chatResponseContract.js';
-import { unsupportedTestClaim } from './chatResponseEvidence.js';
+import { unsupportedTestClaim, unsupportedMutationClaim } from './chatResponseEvidence.js';
 import { refreshChatVerifierReceiptStalenessSync } from '../evidence/chatRevisionBinding.js';
 import { ContextPreparationError } from './chatContextFailure.js';
 import { runChatEngineCompactionFor } from "./chatEngineCompactionHost.js";
@@ -3893,8 +3893,8 @@ export class ChatEngine {
       refreshChatVerifierReceiptStalenessSync(this.options.projectRoot, this.lastVerifierReceipt);
       for (const receipt of this.executedVerifierLedger) refreshChatVerifierReceiptStalenessSync(this.options.projectRoot, receipt);
     }
-    if (unsupportedTestClaim(answer, this.lastVerifierReceipt, this.executedVerifierLedger)) {
-      throw new Error('RESPONSE_EVIDENCE_INVALID: terminal synthesis claimed test results without corresponding execution evidence.');
+    if (unsupportedMutationClaim(answer, this.hasAnyWrites()) || unsupportedTestClaim(answer, this.lastVerifierReceipt, this.executedVerifierLedger)) {
+      throw new Error('RESPONSE_EVIDENCE_INVALID: terminal synthesis claimed completed work without corresponding execution or mutation evidence.');
     }
     return normalizeChatAnswer(answer, currentRequest);
   }

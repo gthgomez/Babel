@@ -6,7 +6,7 @@ import { chatVerifierOwner, chatVerifierRequirements } from './chatVerifierConte
 
 test('requirements bind host owner, exact targeted selectors and current environment independently from receipts', () => {
   const owner = chatVerifierOwner({ projectRoot: tmpdir(), sessionId: 'session', taskId: 'task', contractHash: 'contract' })!
-  assert.equal(owner.workspaceRoot, realpathSync(tmpdir()))
+  assert.equal(owner.workspaceRoot, realpathSync.native(tmpdir()))
   const [record] = chatVerifierRequirements(owner, ['node --test "test/Alpha  beta.test.js"'], 'Fix the parser and run its targeted tests')
   assert.equal(record!.executionContext.taskId, 'task')
   assert.equal(record!.requiredScope, 'targeted')

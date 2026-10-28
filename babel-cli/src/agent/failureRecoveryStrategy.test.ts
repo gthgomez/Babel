@@ -12,6 +12,9 @@ import {
 } from './codingLoop/workingState.js';
 import { buildChatTurnPrompt } from './chatToolDefinitions.js';
 
+// These reducer fixtures represent one completely delivered source line.
+const READ_WINDOW = { startLine: 1, endLine: 1, totalLines: 1, completeFile: true, byteTruncated: false };
+
 const TEST_BINDING = {
   schemaVersion: 1 as const,
   taskId: 'task-1', contractHash: 'contract-1',
@@ -63,7 +66,7 @@ test('repeated repair evidence gate changes the next strategy before mutation', 
       target: 'src/parser.ts',
       failureSignature,
       binding: TEST_BINDING,
-      observationDigest: 'parser-and-caller-content',
+      observationDigest: 'parser-and-caller-content', window: READ_WINDOW,
     },
   });
   assert.equal(state.recoveryGate?.satisfied, true);
@@ -153,7 +156,7 @@ test('a new hypothesis alone does not admit a post-red mutation', () => {
       target: 'src/parser.ts',
       failureSignature: state.recoveryGate!.failureSignature,
       binding: TEST_BINDING,
-      observationDigest: 'parser-and-caller-content',
+      observationDigest: 'parser-and-caller-content', window: READ_WINDOW,
     },
   });
   assert.equal(state.recoveryGate?.strategyChanged, false);
@@ -193,7 +196,7 @@ test('accepted evidence proposes investigation without admitting a repair plan',
       target: 'src/parser.ts',
       failureSignature: state.recoveryGate!.failureSignature,
       binding: TEST_BINDING,
-      observationDigest: 'parser-content',
+      observationDigest: 'parser-content', window: READ_WINDOW,
     },
   });
   state = recordControllerRecoveryStrategy(state, {
@@ -240,11 +243,13 @@ test('equivalent target spellings cannot defeat failure-scoped dedup', () => {
     type: 'add_evidence',
     evidence: 'read_file:src/parser.ts',
     discriminating: true,
-    provenance: { tool: 'read_file', target: 'src/parser.ts', failureSignature: signature, binding: TEST_BINDING, observationDigest: 'same-content' },
+    provenance: { tool: 'read_file', target: 'src/parser.ts', failureSignature: signature, binding: TEST_BINDING, observationDigest: 'same-content', window: READ_WINDOW },
   });
   assert.equal(state.recoveryGate?.satisfied, true);
 
-  // Re-arm for the same failure, then re-read through an equivalent spelling.
+  // Consume the repair opportunity, then reread through an equivalent spelling.
+  state = applyWorkingStateEvent(state, { type: 'mutation', path: 'src/parser.ts' });
+  const consumed = [...state.consumedRecoveryEvidence];
   state = applyWorkingStateEvent(state, {
     type: 'recovery_gate',
     failureSignature: signature,
@@ -256,9 +261,12 @@ test('equivalent target spellings cannot defeat failure-scoped dedup', () => {
     type: 'add_evidence',
     evidence: 'read_file:./src/parser.ts',
     discriminating: true,
-    provenance: { tool: 'read_file', target: './src/parser.ts', failureSignature: signature, binding: TEST_BINDING, observationDigest: 'same-content' },
+    provenance: { tool: 'read_file', target: './src/parser.ts', failureSignature: signature, binding: TEST_BINDING, observationDigest: 'same-content', window: READ_WINDOW },
   });
   assert.equal(state.recoveryGate?.satisfied, false);
+  assert.equal(state.recoveryGate?.permitConsumed, true);
+  assert.deepEqual(state.consumedRecoveryEvidence, consumed);
+  assert.equal(state.recoveryGate?.readRecords?.length, 0, 'uncanonical provenance cannot publish an observation');
 });
 
 test('an ancestor directory does not localize a failing file', () => {
@@ -305,7 +313,7 @@ test('an observation from revision A cannot clear the same failure gate at revis
     discriminating: true,
     provenance: {
       tool: 'read_file', target: 'src/parser.ts', failureSignature: 'same-red-verifier',
-      binding: candidateA, observationDigest: 'payload-A',
+      binding: candidateA, observationDigest: 'payload-A', window: READ_WINDOW,
     },
   });
   assert.equal(state.recoveryGate?.satisfied, true);
@@ -323,7 +331,7 @@ test('an observation from revision A cannot clear the same failure gate at revis
     discriminating: true,
     provenance: {
       tool: 'read_file', target: 'src/parser.ts', failureSignature: 'same-red-verifier',
-      binding: candidateA, observationDigest: 'payload-B',
+      binding: candidateA, observationDigest: 'payload-B', window: READ_WINDOW,
     },
   });
   assert.equal(state.recoveryGate?.satisfied, false, 'stale revision cannot authorize a new repair');
@@ -343,6 +351,7 @@ test('a new tool call with the same observation payload does not mint another re
   });
   for (const callId of ['call-1', 'call-2']) {
     if (callId === 'call-2') {
+      state = applyWorkingStateEvent(state, { type: 'mutation', path: 'src/parser.ts' });
       state = applyWorkingStateEvent(state, {
         type: 'recovery_gate', failureSignature: 'same-red-verifier', requiredEvidence: 'inspect parser',
         failingTargets: ['src/parser.ts'], binding,
@@ -352,10 +361,13 @@ test('a new tool call with the same observation payload does not mint another re
       type: 'add_evidence', evidence: `read_file:src/parser.ts#${callId}`, discriminating: true,
       provenance: {
         tool: 'read_file', target: 'src/parser.ts', failureSignature: 'same-red-verifier',
-        binding, observationDigest: 'same-payload',
+        binding, observationDigest: 'same-payload', window: READ_WINDOW,
       },
     });
     assert.equal(state.recoveryGate?.satisfied, callId === 'call-1');
+    assert.equal(state.consumedRecoveryEvidence.length, 1);
+    assert.equal(state.recoveryGate?.planAdmitted, false);
+    assert.equal(state.recoveryGate?.permitConsumed, callId === 'call-2');
   }
 });
 
@@ -381,7 +393,7 @@ test('recovery provenance binds task, contract, repository, revision, and failur
       type: 'add_evidence', evidence: 'read_file:src/parser.ts', discriminating: true,
       provenance: {
         tool: 'read_file', target: 'src/parser.ts', failureSignature: 'red',
-        binding: { ...TEST_BINDING, ...mismatch }, observationDigest: 'content',
+        binding: { ...TEST_BINDING, ...mismatch }, observationDigest: 'content', window: READ_WINDOW,
       },
     });
     assert.equal(state.recoveryGate?.satisfied, false, JSON.stringify(mismatch));
@@ -398,18 +410,22 @@ test('serialized recovery evidence stays consumed and legacy permits downgrade',
     type: 'add_evidence' as const, evidence: 'read_file:src/parser.ts#call-1', discriminating: true,
     provenance: {
       tool: 'read_file', target: 'src/parser.ts', failureSignature: 'red',
-      binding: TEST_BINDING, observationDigest: 'content',
+      binding: TEST_BINDING, observationDigest: 'content', window: READ_WINDOW,
     },
   };
   state = applyWorkingStateEvent(state, observation);
   assert.equal(state.recoveryGate?.satisfied, true);
+  state = applyWorkingStateEvent(state, { type: 'mutation', path: 'src/parser.ts' });
   state = JSON.parse(JSON.stringify(state));
+  const consumed = [...state.consumedRecoveryEvidence];
   state = applyWorkingStateEvent(state, {
     type: 'recovery_gate', failureSignature: 'red', requiredEvidence: 'inspect again',
     failingTargets: ['src/parser.ts'], binding: TEST_BINDING,
   });
   state = applyWorkingStateEvent(state, { ...observation, evidence: 'read_file:src/parser.ts#call-2' });
   assert.equal(state.recoveryGate?.satisfied, false);
+  assert.equal(state.recoveryGate?.permitConsumed, true);
+  assert.deepEqual(state.consumedRecoveryEvidence, consumed);
 
   const legacy = JSON.parse(JSON.stringify(state));
   delete legacy.recoveryGate.binding;
@@ -429,7 +445,7 @@ test('a mutation invalidates a previously satisfied recovery permit', () => {
     type: 'add_evidence', evidence: 'read_file:src/parser.ts', discriminating: true,
     provenance: {
       tool: 'read_file', target: 'src/parser.ts', failureSignature: 'red',
-      binding: TEST_BINDING, observationDigest: 'content',
+      binding: TEST_BINDING, observationDigest: 'content', window: READ_WINDOW,
     },
   });
   assert.equal(state.recoveryGate?.satisfied, true);
@@ -500,4 +516,19 @@ test('baseline causality is only asserted from a controller-captured pre-mutatio
   });
   assert.equal(repeated.state.failureSurface?.kind, 'BASELINE_FAILURE');
   assert.equal(repeated.state.failureSurface?.causality, 'pre_existing');
+});
+
+
+test('legacy read provenance without delivered window cannot satisfy recovery', () => {
+  const state = applyWorkingStateEvent(createWorkingState('repair'), {
+    type: 'recovery_gate', failureSignature: 'red', requiredEvidence: 'inspect',
+    failingTargets: ['src/parser.ts'], binding: TEST_BINDING,
+  });
+  const next = applyWorkingStateEvent(state, {
+    type: 'add_evidence', evidence: 'read_file:src/parser.ts', discriminating: true,
+    provenance: { tool: 'read_file', target: 'src/parser.ts', failureSignature: 'red',
+      binding: TEST_BINDING, observationDigest: 'content' },
+  });
+  assert.equal(next.recoveryGate?.satisfied, false);
+  assert.deepEqual(next.recoveryGate?.readRecords ?? [], []);
 });

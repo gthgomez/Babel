@@ -348,7 +348,7 @@ export async function captureAndRecordVerifierReceipt(input: {
     } } : {}),
     execution: {
       working_directory: relativeCwd,
-      environment_policy: identity.envKey,
+      environment_policy: 'host-process',
       ...(commandIdentity?.scope === 'targeted' && commandIdentity.targetSelectors.length > 0
         ? { target: commandIdentity.targetSelectors.join(',') }
         : {}),

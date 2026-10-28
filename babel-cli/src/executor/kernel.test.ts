@@ -1,3 +1,4 @@
+import { kernelVerifierFixture } from '../testinfra/kernelVerifierFixture.js'
 import assert from "node:assert/strict";
 import test from "node:test";
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -109,6 +110,7 @@ test("executor kernel downgrades verified completion until proof is complete", (
 for (const mode of ['chat', 'deep'] as const) {
   test(`${mode} cannot certify coarse proof without trusted criterion evidence`, () => {
     const decision = createExecutorKernel(mode).completion.decide({
+      ...kernelVerifierFixture(),
       mode,
       requestedOutcome: 'VERIFIED_COMPLETE',
       hasWrite: true,

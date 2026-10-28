@@ -105,6 +105,36 @@ export function unsupportedTestClaim(answer: string, receipt: ResponseVerifierEv
   return false
 }
 
-export function responseEvidenceCorrection(receipt: ResponseVerifierEvidence): string {
+/** Detect explicit completed file-work claims when this submission has no confirmed mutation.
+ * This is a narrow delivery-honesty check, not an assessment of task correctness.
+ */
+export function unsupportedMutationClaim(answer: string, hasConfirmedMutation: boolean): boolean {
+  if (hasConfirmedMutation) return false
+  const prose = answer.replace(/```[\s\S]*?```/g, '')
+    .replace(/^\s*>.*$/gm, '')
+    .replace(/\b(?:says?|said|claims?|claimed|wrote)\s*[: ,]*["“][^"”]*["”]/gi, '')
+  const verbs = String.raw`(?:updated|modified|changed|edited|created|wrote|saved|fixed|implemented|added|removed|deleted|renamed|patched)`
+  const artifact = String.raw`(?:(?:(?:the|a|an)\s+)?(?:repository\s+map|repo(?:sitory)?|files?|code|implementation|source|patch|scripts?|modules?|bug|defect|[\w./\\-]+\.(?:[cm]?[jt]sx?|md|json|py|txt|html|css|csv))\b|\x60[^\x60\n]+\x60)`
+  const claims = new RegExp(String.raw`\b(?:I|we)\s+(?:(?:have|just|now|already|successfully)\s+)*${verbs}\s+${artifact}|(?:^|[.!?\n])\s*(?:[-*]\s*)?${verbs}\s+${artifact}|${artifact}\s+(?:was|were|has been|have been)\s+(?:(?:just|now|successfully)\s+)*${verbs}\b`, 'gi')
+  for (const claim of prose.matchAll(claims)) {
+    const prefix = prose.slice(0, claim.index).split(/[.!?\n;]/).at(-1) ?? ''
+    const remainder = prose.slice(claim.index! + claim[0].length)
+    const tail = remainder.split(/[.!?\n;]/)[0] ?? ''
+    if ((/\b(?:code|implementation|patch)\b/i.test(claim[0]) &&
+          /^\s+(?:below|inline|in this (?:answer|response)|in the (?:example|code block))\b/i.test(tail)) ||
+        /^\s*\?/.test(remainder) ||
+        /\b(?:if|whether|unless|when|suppose|imagine)\b/i.test(prefix) ||
+        /^\s+(?:if|when|unless|provided)\b/i.test(tail) ||
+        /\b(?:no|not|never|cannot|can't|don't|didn't|haven't)\s+(?:\w+\s+){0,3}$/i.test(prefix) ||
+        (/^\s*(?:do|does|did|have|has|was|were|can|could|would)\b/i.test(prefix) && /^[^.!;\n]*\?/.test(remainder)) ||
+        /(?:^|\b)(?:check|verify|ensure|make sure)\s+(?:that\s+)?$/i.test(prefix) ||
+        /\b(?:yesterday|previously|before this (?:task|session)|by (?:another|the previous))\b/i.test(tail)) continue
+    return true
+  }
+  return false
+}
+
+export function responseEvidenceCorrection(receipt: ResponseVerifierEvidence, missingMutation = false): string {
+  if (missingMutation) return 'Response evidence correction: No confirmed file mutation is recorded for this submission. Your proposed answer claims a file change was completed. Correct the answer once: remove or qualify that claim, retain useful inspection findings and the requested output format. An already-correct file can be reported as needing no change. You may answer truthfully without running tools or making changes.'
   return `Response evidence correction: ${responseVerifierFacts(receipt)} Your proposed answer claims tests ran or passed without matching evidence. Correct the answer once: remove or qualify that claim, retain any useful clarification and the requested output format. Reading test source is not running tests. You may answer truthfully without running tools or making changes.`
 }

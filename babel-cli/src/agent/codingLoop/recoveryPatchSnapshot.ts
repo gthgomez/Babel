@@ -1,4 +1,4 @@
-import {execFileSync} from 'node:child_process'
+import {runGitCommandBytes} from '../../utils/gitExec.js'
 import {createHash} from 'node:crypto'
 import {lstatSync,readlinkSync,openSync,closeSync,fstatSync,readFileSync,constants,type BigIntStats} from 'node:fs'
 import {resolve,relative,win32,posix} from 'node:path'
@@ -38,7 +38,11 @@ export function recoveryPatchSnapshotKey(root:string,path:string,known:Iterable<
 }
 
 export function captureRecoveryPatchSnapshot(root:string,extraPaths:readonly string[]=[]):RecoveryPatchSnapshot {
-  const git=(args:string[])=>execFileSync('git',args,{cwd:root,encoding:'utf8',stdio:['ignore','pipe','ignore'],windowsHide:true,timeout:10000,maxBuffer:16*1024*1024})
+  const git=(args:string[])=>{
+    const result=runGitCommandBytes(args,root,{timeoutMs:10000,maxBuffer:16*1024*1024})
+    if(result.status!==0)throw Error('Recovery snapshot Git inspection failed')
+    return result.stdout.toString('utf8')
+  }
   const index=hash(JSON.stringify([git(['rev-parse','HEAD']),git(['ls-files','--stage','-z'])]))
   const paths=[...new Set(git(['ls-files','--cached','--others','--exclude-standard','-z']).split('\0').filter(Boolean))].sort()
   for(const raw of extraPaths){const path=recoveryPatchSnapshotKey(root,raw,paths);if(!paths.some(key=>process.platform==='win32'?key.toLowerCase()===path.toLowerCase():key===path))paths.push(path)}

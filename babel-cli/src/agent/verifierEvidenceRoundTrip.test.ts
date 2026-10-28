@@ -23,8 +23,19 @@ test('capture publishes durable order and actual environment through adaptation 
       cacheIdentity: { key: 'cache', cwd: root, envKey: 'frozen-real-environment' }, verifierOwner: boundOwner,
     })
     assert.ok(receipt)
-    assert.equal(receipt.environment_policy, 'frozen-real-environment')
+    assert.equal(receipt.environment_policy, 'host-process')
     assert.equal(receipt.executionContext?.environmentFingerprint, 'frozen-real-environment')
+    const { chatReceiptDispatchesToRequirement } = await import('../authority/criterionVerifierDispatch.js')
+    const { sha256Canonical } = await import('../acceptance/canonical.js')
+    const requirement = { id: 'native-test', description: 'The native tests pass.', type: 'unit_test' as const,
+      required: true, verification_strategy: 'Run the frozen native check.', verification: {
+        kind: 'unit_test' as const, verifier_id: 'verifier:node', executable_id: 'node', argv: ['--test'],
+        command_hash: sha256Canonical({ executable_id: 'node', argv: ['--test'] }),
+        working_directory: '.', environment_policy: 'host-process',
+      } }
+    assert.equal(chatReceiptDispatchesToRequirement(receipt, requirement), true)
+    assert.equal(chatReceiptDispatchesToRequirement({ ...receipt, environment_policy: 'other-policy' }, requirement), false)
+
     assert.deepEqual(receipt.order, { sessionId: 'session', seq: 0 })
     assert.strictEqual(ledger[0], receipt)
     assert.strictEqual(cache.get('cache').receipt, receipt)
