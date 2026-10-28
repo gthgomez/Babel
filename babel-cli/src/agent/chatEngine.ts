@@ -2620,7 +2620,7 @@ export class ChatEngine {
   private buildVerifierInput() {
     const verifierOwner = this.currentVerifierOwner();
     const requiredVerifierCommands = this.getResolvedRequiredVerifiers();
-    const requiredVerifiers = chatVerifierRequirements(verifierOwner, requiredVerifierCommands, this.options.task);
+    const requiredVerifiers = chatVerifierRequirements(verifierOwner, requiredVerifierCommands, this.options.task, this.options.projectRoot ?? undefined);
     const canonical = prepareKernelVerifierInput(this.lastVerifierReceipt, this.executedVerifierLedger);
     const currentOwnerReceipts = this.executedVerifierLedger.filter(receipt => receipt.executionContext?.taskId === verifierOwner?.taskId &&
       receipt.executionContext?.contractHash === verifierOwner?.contractHash && receipt.executionContext?.workspaceRoot === verifierOwner?.workspaceRoot);

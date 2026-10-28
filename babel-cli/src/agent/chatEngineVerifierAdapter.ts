@@ -5,6 +5,7 @@ import { nativeNodeResultCounts } from './nativeTestResultCounts.js';
 import { createHash } from 'node:crypto';
 import { realpathSync } from 'node:fs';
 import path from 'node:path';
+import { canonicalizeContained } from '../bridge/workspaceBound.js';
 import { isCredentialTargetPath } from './autonomyEnforcement.js';
 import { requireProjectRoot, type ChatScopeInput } from './chatExecutionScope.js';
 
@@ -46,6 +47,10 @@ export function captureCompletionWorkspaceRevisionHash(
   receipt: BoundChatVerifierReceipt | null,
 ): string | undefined {
   const root = requireProjectRoot(scope);
+  if (receipt?.executionContext) {
+    try { if (receipt.executionContext.workspaceRoot !== realpathSync.native(root)) return undefined; }
+    catch { return undefined; }
+  }
   const bound = receipt?.boundRevision;
   if (!bound?.scope || (bound.gitBinding !== 'required' && bound.gitBinding !== 'optional')) return undefined;
   const relativePaths = toRepositoryRelativePaths(root, mutationPaths);
@@ -112,6 +117,10 @@ export async function captureChatVerifierReceipt(input: {
     authoritySource: 'built_in_runner',
   });
   if (!parsed || !isVerifierAuthoritySource(parsed.authoritySource)) return null;
+  if (input.executionContext) {
+    try { if (input.executionContext.workspaceRoot !== realpathSync.native(input.projectRoot)) return null; }
+    catch { return null; }
+  }
   // The revision binding requires repository-relative scope paths, but the
   // governed mutation path reports absolute paths. Canonicalize here so a
   // successful write + authoritative verifier can bind its revision instead
@@ -193,7 +202,9 @@ function toRepositoryRelativePaths(
   projectRoot: string,
   values: readonly string[],
 ): string[] | null {
-  const root = path.resolve(projectRoot).replaceAll('\\', '/').replace(/\/+$/, '');
+  let root: string;
+  try { root = realpathSync.native(projectRoot).replaceAll('\\', '/').replace(/\/+$/, ''); }
+  catch { return null; }
   const out: string[] = [];
   for (const value of values) {
     if (typeof value !== 'string') continue;
@@ -203,7 +214,11 @@ function toRepositoryRelativePaths(
       out.push(slash);
       continue;
     }
-    const absolute = path.resolve(value).replaceAll('\\', '/');
+    // Foreign-platform drive spellings must not be rejoined to this cwd.
+    if (!path.isAbsolute(value)) return null;
+    let absolute: string;
+    try { absolute = canonicalizeContained(value).replaceAll('\\', '/'); }
+    catch { return null; }
     if (absolute === root) continue;
     if (!absolute.startsWith(`${root}/`)) return null;
     out.push(absolute.slice(root.length + 1));
@@ -321,7 +336,7 @@ export async function captureAndRecordVerifierReceipt(input: {
       command: input.command,
     });
   const relativeCwd =
-    path.relative(input.projectRoot, identity.cwd).replaceAll('\\', '/') || '.';
+    path.relative(realpathSync.native(input.projectRoot), identity.cwd).replaceAll('\\', '/') || '.';
   const commandIdentity = analyzeVerifierIdentity(input.command);
   const receipt = await captureChatVerifierReceipt({
     projectRoot: input.projectRoot,
@@ -401,7 +416,7 @@ export function resolveVerifierCacheIdentity(input: {
   cwd?: string;
   envKey?: string;
 }): { key: string; cwd: string; envKey: string } {
-  const cwd = path.resolve(input.projectRoot, input.cwd ?? '.');
+  const cwd = canonicalizeContained(path.resolve(input.projectRoot, input.cwd ?? '.'));
   const envKey = input.envKey ?? verifierEnvironmentKey({ ...process.env, BABEL_PROJECT_ROOT: path.resolve(input.projectRoot) });
   return {
     key: `${verifierReceiptIdentityKey(input.command)}::cwd=${cwd}::env=${envKey}`,

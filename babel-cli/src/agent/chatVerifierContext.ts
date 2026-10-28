@@ -13,12 +13,18 @@ export function chatVerifierOwner(input: {
   catch { return undefined }
 }
 
-export function chatVerifierRequirements(owner: VerifierEvidenceOwner | undefined, commands: readonly string[], task: string): RequiredVerifierRecord[] {
+export function chatVerifierRequirements(owner: VerifierEvidenceOwner | undefined, commands: readonly string[], task: string, governedProjectRoot?: string): RequiredVerifierRecord[] {
   if (!owner) return []
+  // Ownership is physical; the actual execution environment retains the host's
+  // chosen root spelling. Never derive either from a receipt or recanonicalize
+  // the frozen owner after an alias has been retargeted.
+  const executionRoot = governedProjectRoot ?? owner.workspaceRoot
+  try { if (canonicalizeContained(executionRoot) !== owner.workspaceRoot) return [] }
+  catch { return [] }
   const explicitBroad = /\b(?:full[ -]suite|all (?:the )?tests|entire test suite|high[ -]assurance)\b/i.test(task)
   return commands.map(command => {
     const identity = analyzeVerifierIdentity(command)
-    const context = resolveVerifierCacheIdentity({ projectRoot: owner.workspaceRoot, command })
+    const context = resolveVerifierCacheIdentity({ projectRoot: executionRoot, command })
     return { command, executionContext: { workspaceRoot: owner.workspaceRoot, taskId: owner.taskId, contractHash: owner.contractHash,
       workingDirectory: context.cwd, environmentFingerprint: context.envKey, targetSelectors: identity?.targetSelectors ?? [] },
       requiredScope: explicitBroad || identity?.scope !== 'targeted' ? 'full_suite' : 'targeted', greenRequired: true }

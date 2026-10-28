@@ -352,7 +352,7 @@ describe('Completion gate logic', () => {
 
 function setTestVerifierReceipt(engine: ChatEngine, command: string, exit_code = 0) {
   const owner = (engine as any).currentVerifierOwner();
-  const executionContext = chatVerifierRequirements(owner, [command], '')[0]!.executionContext;
+  const executionContext = chatVerifierRequirements(owner, [command], '', (engine as any).options.projectRoot)[0]!.executionContext;
   const receipt = {
     executionContext, order: { sessionId: owner.sessionId, seq: 0 },
     argv: parseCommandArgv(command), stale: false,

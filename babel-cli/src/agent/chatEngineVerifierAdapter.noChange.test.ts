@@ -56,7 +56,7 @@ test('completion refresh checks each receipt object once per invocation and obse
 function project(): string {
   const root = mkdtempSync(join(tmpdir(), 'babel-green-nochange-verifier-'))
   temporaryRoots.push(root)
-  return root
+  return realpathSync.native(root)
 }
 
 for (const repositoryScope of [false, true]) {

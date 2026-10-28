@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
@@ -13,14 +13,14 @@ test('capture publishes durable order and actual environment through adaptation 
   const root = mkdtempSync(join(tmpdir(), 'babel-verifier-roundtrip-'))
   try {
     writeFileSync(join(root, 'value.ts'), 'export const value = 1\n')
-    const boundOwner = { ...owner, workspaceRoot: root }
+    const boundOwner = { ...owner, workspaceRoot: realpathSync.native(root) }
     const log = createSessionEventLog('session')
     const ledger: BoundChatVerifierReceipt[] = []
     const cache = new Map()
     const receipt = await captureAndRecordVerifierReceipt({
       projectRoot: root, command: 'node --test', exitCode: 0, summary: 'executed', stdout: '# tests 1\n# skipped 0',
       mutationPaths: ['value.ts'], sessionEvents: log, turnId: 'turn', ledger, cache, writeCount: 1,
-      cacheIdentity: { key: 'cache', cwd: root, envKey: 'frozen-real-environment' }, verifierOwner: boundOwner,
+      cacheIdentity: { key: 'cache', cwd: realpathSync.native(root), envKey: 'frozen-real-environment' }, verifierOwner: boundOwner,
     })
     assert.ok(receipt)
     assert.equal(receipt.environment_policy, 'host-process')
@@ -126,7 +126,7 @@ test('canonical adaptation preserves independent historical integrity evidence',
     writeFileSync(join(root, 'value.ts'), 'v1')
     const log = createSessionEventLog('session')
     const ledger: BoundChatVerifierReceipt[] = []
-    const boundOwner = { ...owner, workspaceRoot: root }
+    const boundOwner = { ...owner, workspaceRoot: realpathSync.native(root) }
     const input = { projectRoot: root, command: 'node --test', exitCode: 0, summary: 'green', stdout: '# tests 1\n# skipped 0', mutationPaths: ['value.ts'], sessionEvents: log, turnId: 'turn', ledger, cache: new Map(), writeCount: 1, verifierOwner: boundOwner }
     const old = await captureAndRecordVerifierReceipt({ ...input, exitCode: 1, summary: 'VERIFIER_DEF_TAMPERED' })
     const current = await captureAndRecordVerifierReceipt(input)

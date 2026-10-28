@@ -195,6 +195,13 @@ export function evaluateChatVerifierReceiptCurrencySync(
   receipt: BoundChatVerifierReceipt | null | undefined,
 ): { stale: boolean; reason?: string } | null {
   if (!receipt) return null;
+  if (receipt.executionContext) {
+    try {
+      if (receipt.executionContext.workspaceRoot !== realpathSync.native(projectRoot)) {
+        return { stale: true, reason: 'Verifier physical workspace owner changed' };
+      }
+    } catch { return { stale: true, reason: 'Verifier physical workspace owner is unavailable' }; }
+  }
   if (receipt.inputClosure?.mode === 'unsupported') {
     return { stale: true, reason: receipt.inputClosure.reason || 'Verifier input closure is unsupported' };
   }

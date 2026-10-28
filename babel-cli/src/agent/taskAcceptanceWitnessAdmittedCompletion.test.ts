@@ -238,7 +238,7 @@ async function publishDualWitnessEvidence(input: {
   const verifierOwner = chatVerifierOwner({ projectRoot: input.root, sessionId: sessionEvents.session_id,
     taskId: contract.task_id, contractHash: contract.contract_hash })!
   const requiredVerifierCommands = [...contract.verifier_requirements]
-  const requiredVerifiers = chatVerifierRequirements(verifierOwner, requiredVerifierCommands, contract.user_request).map(requirement => ({
+  const requiredVerifiers = chatVerifierRequirements(verifierOwner, requiredVerifierCommands, contract.user_request, input.root).map(requirement => ({
     ...requirement, executionContext: { ...requirement.executionContext,
       environmentFingerprint: verifierEnvironmentKey(witnessExecutionEnvironment(input.root)) },
   }))
