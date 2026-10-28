@@ -1971,7 +1971,7 @@ export class ChatEngineStreamingLoop {
           }
           responseEvidenceRepairUsed = true;
           recordChatHarnessFeedback(this.host, responseEvidenceCorrection(this.host.lastVerifierReceipt, missingMutationClaim));
-          yield { type: 'thought', text: '[Correcting an unsupported completion-evidence claim]' };
+          yield { type: 'thought', text: missingMutationClaim ? '[Correcting an unsupported mutation claim]' : '[Correcting an unsupported test-result claim]' };
           continue;
         }
 
