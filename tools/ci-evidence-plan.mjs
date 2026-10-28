@@ -14,6 +14,7 @@ const list = value => Array.isArray(value) ? value : []
 const nameOk = name => typeof name === 'string' && /^[A-Za-z0-9][A-Za-z0-9 ()_,.:/-]{0,159}$/.test(name)
 const pathOk = path => typeof path === 'string' && /^src\/[A-Za-z0-9_./-]+\.test\.ts$/.test(path) && !path.split('/').includes('..')
 const INPUTS = ['headSha', 'treeSha', 'workflowSha', 'policySha', 'commandDigest', 'lockDigest', 'environmentDigest', 'selectionDigest', 'compiledDigest', 'packageDigest']
+const PORTABILITY_CONTROLS = ['wrong-path-delivery', 'missing-glob-metadata']
 
 function execution(job) {
   const unknown = { classification: 'unknown', executedSeconds: 0 }
@@ -61,7 +62,8 @@ function changeReasons(evidence, context) {
     for (const key of ['headSha', 'treeSha']) {
       if (!isSha(context.baseline?.[key], 40) || !same(evidence.baseline?.[key], context.baseline[key])) reasons.push(`baseline_mismatch:${key}`)
     }
-    if (!list(context.controls).length) reasons.push('frozen_negative_controls_missing')
+    const ids = list(context.controls).map(control => control?.id)
+    if (ids.length !== PORTABILITY_CONTROLS.length || new Set(ids).size !== ids.length || PORTABILITY_CONTROLS.some(id => !ids.includes(id))) reasons.push('frozen_negative_controls_missing_or_duplicate')
     for (const expected of list(context.controls)) {
       const id = nameOk(expected?.id) ? expected.id : 'invalid-control'
       const records = list(evidence.controls).filter(control => control?.id === id)
@@ -119,6 +121,8 @@ export function planEvidence(evidence, contextPin = {}) {
       !Number.isInteger(producer.appId) || producer.appId <= 0 || !nameOk(producer.workflow)) reasons.push('producer_mismatch')
     if (!/^[1-9][0-9]*$/.test(String(job.source?.runId)) || !/^[1-9][0-9]*$/.test(String(job.source?.jobId)) || !Number.isInteger(job.source?.attempt) || job.source.attempt < 1) missingEvidence.push('source.run_job_attempt')
     reasons.push(...changed)
+    if (evidence.change?.kind === 'native-path-portability' && expected?.kind === 'unit' &&
+      !list(context.controls).every(control => control?.environmentDigest === expected.identity?.environmentDigest)) reasons.push('negative_control_environment_mismatch')
     const observedExecution = execution(job)
     if (observedExecution.classification === 'unknown') reasons.push('execution_timestamps_unproven')
     if (globalReasons.length === 0) {

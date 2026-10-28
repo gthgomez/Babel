@@ -94,6 +94,21 @@ test('frozen mutation evidence requires real digest-shaped identifiers', () => {
   assert.equal(plan(refresh(f)).jobs[0].recommendation, 'ESCALATE')
 })
 
+test('portability requires distinct wrong-path and glob controls even if context omits or duplicates them', () => {
+  const missing = portabilityFixture(); missing.context.controls.pop(); missing.evidence.controls.pop()
+  assert.equal(plan(refresh(missing)).jobs[0].recommendation, 'ESCALATE')
+  const duplicate = portabilityFixture()
+  duplicate.context.controls[1] = structuredClone(duplicate.context.controls[0])
+  duplicate.evidence.controls[1] = structuredClone(duplicate.evidence.controls[0])
+  assert.equal(plan(refresh(duplicate)).jobs[0].recommendation, 'ESCALATE')
+})
+
+test('negative controls from another environment cannot qualify the affected unit recommendation', () => {
+  const f = portabilityFixture()
+  for (const control of [...f.context.controls, ...f.evidence.controls]) control.environmentDigest = '9'.repeat(64)
+  assert.equal(plan(refresh(f)).jobs[0].recommendation, 'ESCALATE')
+})
+
 test('recognized path portability edit recommends fresh affected tests, never cross-head reuse', () => {
   const result = plan(portabilityFixture())
   assert.equal(result.jobs[0].recommendation, 'RERUN')

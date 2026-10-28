@@ -77,6 +77,9 @@ recommend fresh affected unit qualification, with frozen negative-control
 receipts bound to candidate/test/mutation/environment identities. A mutant must
 fail its named assertion; loader crashes do not count. Non-unit obligations and
 unsupported changes escalate. No cross-head reuse follows from this recognition.
+The distinct `wrong-path-delivery` and `missing-glob-metadata` controls are both
+required, in the affected unit job's environment. Use separate context/evidence
+pairs for platforms with different environment identities.
 
 ## Demonstration and limits
 
