@@ -2645,7 +2645,7 @@ export class ChatEngine {
       }
     }
     const unplannedAttemptEnvironmentFingerprint = verifierOwner
-      ? resolveVerifierCacheIdentity({projectRoot:verifierOwner.workspaceRoot,command:''}).envKey : undefined;
+      ? resolveVerifierCacheIdentity({projectRoot:requireProjectRoot(this.options),command:''}).envKey : undefined;
     const proofSelection = selectCompletionProof({ requiredVerifiers, ...(verifierOwner ? { owner: verifierOwner } : {}),
       currentRevisionHash: currentWorkspaceRevisionHash ?? '', currentReceiptRevisionHashes, receipts: canonical.executedVerifierLedger ?? [] });
     const attemptSelection = requiredVerifiers.length || !unplannedAttemptEnvironmentFingerprint ? proofSelection : selectCompletionProof({

@@ -236,3 +236,102 @@ test('POSIX case distinctions and Windows cross-drive paths never turn siblings 
   const outside = `${otherDrive}:\\outside\\source.mjs`
   assert.equal(await f.capture(f.alias, [outside]), null)
 })
+
+for (const outcome of ['green', 'red'] as const) {
+  test(`engine retains an owned unplanned native ${outcome} attempt through a raw root alias without certifying completion`, async t => {
+    const { ChatEngine } = await import('./chatEngine.js')
+    const f = fixture(t)
+    const previousRuns = process.env['BABEL_RUNS_DIR']
+    process.env['BABEL_RUNS_DIR'] = join(f.base, 'engine-runs')
+    t.after(() => {
+      if (previousRuns === undefined) delete process.env['BABEL_RUNS_DIR']
+      else process.env['BABEL_RUNS_DIR'] = previousRuns
+    })
+    if (outcome === 'red') {
+      fs.writeFileSync(join(f.root, 'source.mjs'), 'export const value = 5\n')
+    }
+    const task = 'Inspect the parser implementation and explain its behavior.'
+    const engine = new ChatEngine({ task, projectRoot: f.alias })
+    engine.applyUserSubmission({ userInput: task })
+    const host = engine as unknown as {
+      currentVerifierOwner(): import('../executor/contracts.js').VerifierEvidenceOwner
+      parity: import('./chatEngineParityBridge.js').ParityRuntime
+      executedVerifierLedger: BoundChatVerifierReceipt[]
+      verifierReceiptCache: Map<string, import('./chatEngineVerifierAdapter.js').VerifierReceiptCacheEntry>
+      lastVerifierReceipt: BoundChatVerifierReceipt | null
+      buildVerifierInput(): {
+        requiredVerifierCommands: string[]
+        requiredVerifiers: import('../executor/contracts.js').RequiredVerifierRecord[]
+        verifierOwner?: import('../executor/contracts.js').VerifierEvidenceOwner
+        currentWorkspaceRevisionHash?: string
+        currentReceiptRevisionHashes: Record<string, string>
+        unplannedAttemptEnvironmentFingerprint?: string
+        executedVerifierLedger?: import('../executor/contracts.js').ExecutorVerifierReceipt[]
+      }
+      decideCompletion(outcome: 'VERIFIED_COMPLETE', hasMutation: boolean): { finalOutcome: string }
+    }
+    const owner = host.currentVerifierOwner()
+    const session = host.parity.sessionEvents
+    const dispatch = { turn_id: `unplanned-${outcome}`, tool_call_id: `unplanned-native-${outcome}`, tool_name: 'test_run' }
+    const env: NodeJS.ProcessEnv = { ...process.env, BABEL_PROJECT_ROOT: resolve(f.alias) }
+    assert.equal(env['NODE_TEST_CONTEXT'], undefined)
+    const actualEnvironment = verifierEnvironmentKey(env)
+    recordToolProposed(session, dispatch)
+    recordToolStarted(session, dispatch)
+    const actual = spawnSync(process.execPath, ['--test', '--test-reporter=tap', 'test/native.test.mjs'], {
+      cwd: f.alias, env, encoding: 'utf8', timeout: 30_000, windowsHide: true,
+    })
+    recordToolTerminal(session, { ...dispatch, exit_code: actual.status ?? 1, content: actual.stdout })
+    assert.equal(actual.error, undefined)
+    assert.equal(actual.signal, null)
+    assert.equal(actual.status, outcome === 'green' ? 0 : 1, actual.stderr)
+    assert.match(actual.stdout, /# tests 1\b/)
+    assert.match(actual.stdout, outcome === 'green' ? /# pass 1\b/ : /# fail 1\b/)
+    const receipt = await captureAndRecordVerifierReceipt({
+      projectRoot: f.alias, command, exitCode: actual.status!, summary: `Actual unplanned native ${outcome}`,
+      stdout: actual.stdout, stderr: actual.stderr, mutationPaths: [join(f.root, 'source.mjs')],
+      sessionEvents: session, turnId: dispatch.turn_id, toolCallId: dispatch.tool_call_id,
+      ledger: host.executedVerifierLedger, cache: host.verifierReceiptCache,
+      writeCount: 0, verifierOwner: owner,
+    })
+    assert.ok(receipt)
+    host.lastVerifierReceipt = receipt
+    assert.equal(receipt.executionContext?.workspaceRoot, owner.workspaceRoot)
+    assert.equal(receipt.executionContext?.environmentFingerprint, actualEnvironment)
+    const input = host.buildVerifierInput()
+    assert.deepEqual(input.requiredVerifierCommands, [])
+    assert.deepEqual(input.requiredVerifiers, [])
+    assert.equal(input.unplannedAttemptEnvironmentFingerprint, actualEnvironment,
+      'the engine must freeze the actual governed raw-root environment, independently of receipt metadata')
+    assert.ok(input.currentWorkspaceRevisionHash)
+    assert.ok(input.unplannedAttemptEnvironmentFingerprint)
+    assert.deepEqual(input.verifierOwner, owner)
+    const selection = selectCompletionProof({
+      requiredVerifiers: input.requiredVerifiers, owner,
+      currentRevisionHash: input.currentWorkspaceRevisionHash,
+      currentReceiptRevisionHashes: input.currentReceiptRevisionHashes,
+      unplannedAttemptEnvironmentFingerprint: input.unplannedAttemptEnvironmentFingerprint,
+      receipts: input.executedVerifierLedger ?? [],
+    })
+    assert.deepEqual(selection.evidenceErrors, [])
+    assert.equal(selection.currentAttempts.length, 1)
+    assert.equal(selection.currentAttempts[0]?.receiptId, receipt.receiptId)
+    const attempt = selection.currentAttempts[0]!
+    assert.equal('exitCode' in attempt ? attempt.exitCode : attempt.exit_code, actual.status)
+    assert.deepEqual(selection.selectedCoveringReceipts, [], 'an unplanned execution creates no host verifier obligation')
+    const rejected = selectCompletionProof({
+      requiredVerifiers: [], owner,
+      currentRevisionHash: input.currentWorkspaceRevisionHash,
+      currentReceiptRevisionHashes: input.currentReceiptRevisionHashes,
+      unplannedAttemptEnvironmentFingerprint: verifierEnvironmentKey({ ...env, UNRELATED_TEST_CONTEXT: 'different' }),
+      receipts: input.executedVerifierLedger ?? [],
+    })
+    assert.equal(rejected.currentAttempts.length, 0)
+    assert.match(rejected.evidenceErrors.join(' '), /Unplanned verifier context differs/)
+    const flushed = flushSessionEventLogStrict(join(f.base, 'unplanned-events'), session)
+    assert.ok(flushed.wrote >= 4)
+    const persisted = parseSessionEventLog(fs.readFileSync(flushed.path, 'utf8'))
+    assert.ok(persisted.events.some(event => event.kind === 'verifier_attempt' && event.seq === receipt.order?.seq))
+    assert.notEqual(host.decideCompletion('VERIFIED_COMPLETE', false).finalOutcome, 'VERIFIED_COMPLETE')
+  })
+}
