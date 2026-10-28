@@ -1,6 +1,7 @@
 /**
  * Verifier preparation and required-command resolution helper for ChatEngine.
  */
+import { nativeNodeResultCounts } from './nativeTestResultCounts.js';
 import { createHash } from 'node:crypto';
 import { realpathSync } from 'node:fs';
 import path from 'node:path';
@@ -170,6 +171,8 @@ export async function captureChatVerifierReceipt(input: {
     if (counts) {
       receipt.tests_total = counts.tests_total;
       receipt.tests_skipped = counts.tests_skipped;
+      const native = nativeNodeResultCounts(input.command, `${input.stdout ?? ''}\n${input.stderr ?? ''}`);
+      if (native && native.tests_total === counts.tests_total && native.tests_skipped === counts.tests_skipped) Object.assign(receipt, native);
     }
     return receipt;
   } catch (error) {

@@ -25,6 +25,7 @@
  * tool surface from mutating its own policy.
  */
 
+import { assertGovernanceAncestors, linkedGitGovernancePaths, resolveGovernancePath } from './gitGovernance.js';
 import { createHash } from 'node:crypto';
 import { lstatSync, readdirSync, readFileSync, readlinkSync } from 'node:fs';
 import { isAbsolute, join, relative, normalize, sep } from 'node:path';
@@ -67,7 +68,7 @@ const normalizedGovernance = GOVERNANCE_PATHS.map((p) => normalize(p).replace(/\
 /** Is this repo-relative path governance-sensitive? */
 export function isGovernancePath(repoRelativePath: string): boolean {
   const norm = normalize(repoRelativePath).replace(/\\/g, '/');
-  if (isAuthorityStatePath(norm)) return true;
+  if (norm === '.git' || isAuthorityStatePath(norm)) return true;
   return normalizedGovernance.some((g) => {
     if (g.endsWith('/')) return norm.startsWith(g) || norm === g.slice(0, -1);
     return norm === g || norm.startsWith(`${g}/`);
@@ -99,6 +100,8 @@ export interface ManifestEntry {
 
 export interface BaselineManifest {
   schemaVersion: 1;
+  /** Host-supplied exact Git common directory, never inferred from candidate metadata. */
+  trustedGitCommonDir?: string;
   /** Deterministically sorted (path ascending). */
   entries: ManifestEntry[];
   /** Captured when. */
@@ -117,7 +120,7 @@ export function hashFile(path: string): string {
  * creation is detected. Non-file/dir/symlink entries (sockets, FIFOs) are
  * skipped — they are not hashed (readFileSync on a FIFO can block).
  */
-export function buildBaseline(repoRoot: string): BaselineManifest {
+export function buildBaseline(repoRoot: string, trustedGitCommonDir?: string): BaselineManifest {
   const entries: ManifestEntry[] = [];
   const seen = new Set<string>();
 
@@ -129,7 +132,7 @@ export function buildBaseline(repoRoot: string): BaselineManifest {
   };
 
   const walkDir = (rel: string) => {
-    const abs = join(repoRoot, rel);
+    const abs = resolveGovernancePath(repoRoot, rel);
     let dirents;
     try {
       dirents = readdirSync(abs, { withFileTypes: true });
@@ -163,8 +166,11 @@ export function buildBaseline(repoRoot: string): BaselineManifest {
     }
   };
 
-  for (const g of GOVERNANCE_PATHS) {
-    const abs = join(repoRoot, g);
+  const linkedPaths = linkedGitGovernancePaths(repoRoot, trustedGitCommonDir);
+  const paths = linkedPaths ? [...GOVERNANCE_PATHS.filter((p) => !p.startsWith('.git/')), ...linkedPaths] : GOVERNANCE_PATHS;
+  for (const g of paths) {
+    const abs = resolveGovernancePath(repoRoot, g);
+    assertGovernanceAncestors(abs);
     let st;
     try {
       st = lstatSync(abs);
@@ -193,7 +199,7 @@ export function buildBaseline(repoRoot: string): BaselineManifest {
   }
 
   entries.sort((a, b) => a.path.localeCompare(b.path));
-  return { schemaVersion: 1, entries, capturedAt: new Date().toISOString() };
+  return { schemaVersion: 1, entries, capturedAt: new Date().toISOString(), ...(trustedGitCommonDir ? { trustedGitCommonDir } : {}) };
 }
 
 export interface BaselineCheckResult {
@@ -206,7 +212,10 @@ export interface BaselineCheckResult {
 
 /** Compare current governance state against the (immutable) baseline manifest. */
 export function checkBaseline(repoRoot: string, manifest: BaselineManifest): BaselineCheckResult {
-  const current = buildBaseline(repoRoot);
+  let current: BaselineManifest;
+  try { current = buildBaseline(repoRoot, manifest.trustedGitCommonDir); } catch {
+    return { ok: false, changed: ['.git'], current: { schemaVersion: 1, entries: [], capturedAt: new Date().toISOString() } };
+  }
   const expected = new Map(manifest.entries.map((e) => [e.path, e]));
   const seen = new Set<string>();
   const changed = new Set<string>();

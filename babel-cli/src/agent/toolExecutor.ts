@@ -1030,7 +1030,7 @@ export async function executeActionWithPolicy(
     });
     return {
       action,
-      terminal: isTerminalAgentAction(action),
+      terminal: ['DENY_POLICY_INTEGRITY_DRIFT'].includes(lastReasonCode) || isTerminalAgentAction(action),
       results: [
         policyBlockedToolResult(
           action,
@@ -1214,7 +1214,8 @@ export async function executeActionWithPolicy(
       governanceSnapshot = snapshotGovernanceBytes(
         governanceRepoRoot,
         session?.persistPath ? [session.persistPath] : [],
-        ...(deps.governanceFs ? [deps.governanceFs] : []),
+        deps.governanceFs,
+        session?.baseline?.trustedGitCommonDir,
       );
     } catch (err) {
       if (err instanceof ProtectedInspectError) {
@@ -1223,7 +1224,7 @@ export async function executeActionWithPolicy(
         if (session?.lease) invalidateLease(session.lease.leaseId);
         return {
           action,
-          terminal: false,
+          terminal: true,
           results: [
             {
               exit_code: 1,
@@ -1329,7 +1330,7 @@ export async function executeActionWithPolicy(
           if (session?.lease) invalidateLease(session.lease.leaseId);
           return {
             action,
-            terminal: false,
+            terminal: true,
             results: [
               {
                 exit_code: 1,

@@ -1921,6 +1921,7 @@ Notes:
       'Attach this run to a specific Local Mode learning root',
     )
     .option('--project-root <path>', 'Explicit project root for arbitrary approved workspace repos')
+    .option('--trusted-git-common-dir <path>', 'Host-authorized absolute Git common directory for Chat worktree governance restoration')
     .option('--execution-scope <scope>', 'Explicit project or conversation scope; conversation grants no project tools')
     .option(
       '--orchestrator <version>',
@@ -2011,6 +2012,7 @@ Notes:
           sessionStartPath?: string;
           localLearningRoot?: string;
           projectRoot?: string;
+          trustedGitCommonDir?: string;
           orchestrator?: string;
           logFile?: string;
           autoLog?: boolean;
@@ -2499,6 +2501,7 @@ Notes:
                       task,
                       ...(resolvedProject !== undefined ? { project: resolvedProject } : {}),
                       projectRoot: conversationOnly?null:resolvedProjectRoot!,
+                      ...(options.trustedGitCommonDir ? { trustedGitCommonDir: options.trustedGitCommonDir } : {}),
                       ...(conversationOnly?{executionScope:{kind:'conversation' as const}}:{}),
                       ...(resolvedWorkspaceRoot !== null
                         ? { workspaceRoot: resolvedWorkspaceRoot }

@@ -1,4 +1,4 @@
-import {normalizeChatExecutionScope,requireProjectRoot,assertConversationRestoreScope} from './chatExecutionScope.js';
+import {normalizeChatExecutionScope,requireProjectRoot,assertConversationRestoreScope,assertBoundGitProjectScope} from './chatExecutionScope.js';
 import type { RunControl, StopRequest } from '../runtime/run-control.js';
 import { initializeChatSubmissionControl, activateChatSubmissionGeneration, type ChatSubmissionControlHost } from './chatEngineRunControl.js';
 import {providerMessagesToChatMessages,legacyArchiveToChatMessages} from './providerMessagesToChatMessages.js';
@@ -988,7 +988,7 @@ export class ChatEngine {
         this.executorKernel=createExecutorKernel(this.executionProfile,this.services);
       }
       if(options.projectRoot)this.parity.authoritySession = restoreAuthoritySession({
-        repoRoot: requireProjectRoot(options),
+        repoRoot: requireProjectRoot(options), trustedGitCommonDir: options.trustedGitCommonDir,
         persistPath: join(this.engineRunDir, AUTHORITY_SESSION_FILENAME),
       });
       if(this.parity.liveAuthority.taskContract.mode!==this.executionProfile)refreshRestoredEngineMode({
@@ -3128,6 +3128,7 @@ export class ChatEngine {
     }
     const preparedScope=normalizeChatExecutionScope(nextOptions);
     if(preparedScope.kind!==normalizeChatExecutionScope(this.options).kind)throw new Error('SESSION_REBIND_REQUIRED: Execution scope changes require an explicit verified rebind');
+    assertBoundGitProjectScope(this.options, preparedScope);
     nextOptions.executionScope=preparedScope;
     const preparedOptions = { ...nextOptions, compiledChatStack: resolveChatInstructionContext(nextOptions) };
     if(preparation.executionProfile!==undefined&&this.parity.liveAuthority?.taskContract.mode!==preparation.executionProfile)refreshEngineInstructionManifest({

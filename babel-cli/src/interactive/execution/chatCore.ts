@@ -676,6 +676,7 @@ export async function runChatEngineOnce(input: {
   operation?: RequestedTaskOperation;
   /** Trusted instructions may come from outside the reviewed source snapshot. */
   instructionRoot?: string;
+  trustedGitCommonDir?: string;
   target: AgentTargetContext | null;
   executionScope?: ChatExecutionScope;
   systemContext?: string;
@@ -748,6 +749,7 @@ export async function runChatEngineOnce(input: {
       compiledChatStack: chatStack,
       ...(input.instructionRoot ? { instructionRoot: input.instructionRoot } : {}),
       projectRoot,
+      ...(input.trustedGitCommonDir ? { trustedGitCommonDir: input.trustedGitCommonDir } : {}),
       executionScope:scope,
       ...(input.systemContext ? { systemContext: input.systemContext } : {}),
       ...(input.appendSystemPrompt ? { appendSystemPrompt: input.appendSystemPrompt } : {}),
@@ -1621,6 +1623,7 @@ export function scanSessionCheckpoints(convRenderer: ConversationalRenderer): vo
 export async function runCliChatTask(input: {
   task: string;
   instructionRoot?: string;
+  trustedGitCommonDir?: string;
   project?: string;
   projectRoot: string | null;
   executionScope?: ChatExecutionScope;
@@ -1662,6 +1665,7 @@ export async function runCliChatTask(input: {
     ? await openResumedChatEngine(input.sessionId, {
         task: input.task,
         projectRoot: input.projectRoot,
+        ...(input.trustedGitCommonDir ? { trustedGitCommonDir: input.trustedGitCommonDir } : {}),
         executionScope:scope,
         ...(input.workspaceRoot ? { workspaceRoot: input.workspaceRoot } : {}),
         ...(input.model !== undefined ? { model: input.model } : {}),
@@ -1673,6 +1677,7 @@ export async function runCliChatTask(input: {
     task: input.task,
     ...(input.instructionRoot ? { instructionRoot: input.instructionRoot } : {}),
     target,
+    ...(input.trustedGitCommonDir ? { trustedGitCommonDir: input.trustedGitCommonDir } : {}),
     executionScope:scope,
     ...(systemContext?{systemContext}:{}),
     taskIntent: resolvedIntent,

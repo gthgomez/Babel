@@ -38,6 +38,7 @@ import type {ChatExecutionScope} from './chatExecutionScope.js';
 /** Minimal options slice — avoids circular import with chatEngine.ts. */
 export interface LiveAuthorityOptionsSlice {
   projectRoot: string | null;
+  trustedGitCommonDir?: string;
   executionScope?: ChatExecutionScope;
   task: string;
   resumeExisting?: boolean;
@@ -147,6 +148,7 @@ export function refreshEngineInstructionManifest(input:RefreshableAuthorityInput
 export function initLiveAuthorityOnEngine(input: RefreshableAuthorityInput): void {
     if(input.options.projectRoot)input.parity.authoritySession = establishAuthoritySession({
       repoRoot: input.options.projectRoot,
+      ...(input.options.trustedGitCommonDir ? { trustedGitCommonDir: input.options.trustedGitCommonDir } : {}),
       persistPath: join(input.engineRunDir, AUTHORITY_SESSION_FILENAME),
     });
     else delete input.parity.authoritySession;

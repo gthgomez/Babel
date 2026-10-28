@@ -428,3 +428,46 @@ describe('governance object restore', () => {
     assert.ok(recon.failed.length > 0);
   });
 });
+
+test('deterministic inspection failure stops a lease-free session before another dispatch', async () => {
+  const root = tempRoot();
+  try {
+    const { establishAuthoritySession } = await import('./sessionContext.js');
+    const { createToolExecutor, executeActionWithPolicy } = await import('../agent/toolExecutor.js');
+    const { acceptToolStop } = await import('../agent/chatEngineRunControl.js');
+    const { createRunControl } = await import('../runtime/run-control.js');
+    const session = establishAuthoritySession({ repoRoot: root, lease: null });
+    writeFileSync(join(root, '.git'), 'gitdir: ../unrelated\n');
+    let executions = 0;
+    const executor = createToolExecutor({ executeTool: async () => { executions++; return { exit_code: 0, stdout: '', stderr: '' }; } });
+    const context = { agentId: 'fixture', runId: 'worktree-stop', babelRoot: root };
+    const first = await executeActionWithPolicy({ type: 'run_command', command: 'git status' }, 'workspace_write', context, { authoritySession: session, executor });
+    assert.equal(first.reasonCode, 'DENY_POLICY_INTEGRITY_DRIFT');
+    assert.equal(first.terminal, true);
+    assert.equal(session.invalidated, true);
+    const second = await executeActionWithPolicy({ type: 'write_file', path: 'source.txt', content: 'blocked' }, 'workspace_write', context, { authoritySession: session, executor });
+    assert.equal(second.reasonCode, 'DENY_POLICY_INTEGRITY_DRIFT');
+    assert.equal(second.terminal, true);
+    assert.equal(executions, 0);
+    const control = createRunControl({ runId: 'worktree-stop', turnId: 'turn', generation: 1 });
+    acceptToolStop(control, first);
+    assert.equal(control.stop()?.kind, 'blocked');
+    const nextModel = await control.dispatchIfRunning({ owner: control.owner, kind: 'model', operationId: 'retry' }, async () => { executions++; });
+    assert.equal(nextModel.kind, 'not_started');
+    assert.equal(executions, 0);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('lease-free decisions bind the session-start governance baseline', async () => {
+  const root = tempRoot();
+  writeFileSync(join(root, 'AGENTS.md'), 'original');
+  const session = establishAuthoritySession({ repoRoot: root, lease: null });
+  writeFileSync(join(root, 'AGENTS.md'), 'changed');
+  const { decideWithLease } = await import('./wire.js');
+  assert.ok(session.baseline);
+  const result = decideWithLease({ type: 'run_command', command: 'git status' }, 'workspace_write', {
+    lease: null, authoritySession: session, baseline: { repoRoot: root, manifest: session.baseline },
+  });
+  assert.equal(result.reasonCode, 'DENY_POLICY_INTEGRITY_DRIFT');
+  assert.equal(session.invalidated, true);
+});

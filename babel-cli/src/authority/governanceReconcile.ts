@@ -12,11 +12,13 @@ import {
   lstatSync,
   mkdirSync,
   readFileSync,
+  readdirSync,
   readlinkSync,
   rmSync,
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
+import { assertGovernanceAncestors, resolveGovernancePath } from './gitGovernance.js';
 import { dirname, isAbsolute, join, relative, sep } from 'node:path';
 import { buildBaseline, isAuthorityStatePath, isGovernancePath } from './integrity.js';
 import { markSessionInvalidated, type AuthoritySessionContext } from './sessionContext.js';
@@ -82,6 +84,7 @@ export class ProtectedInspectError extends Error {
 
 export function inspectProtectedPath(abs: string, key: string, fs: ReconcileFs = defaultFs): ProtectedSnapshot {
   try {
+    if (fs === defaultFs) assertGovernanceAncestors(abs);
     const st = fs.lstatSync(abs);
     if (st.isSymbolicLink()) {
       return { kind: 'symlink', key, abs, target: fs.readlinkSync(abs) };
@@ -117,6 +120,7 @@ export function snapshotGovernanceBytes(
   repoRoot: string,
   extraAbsPaths: readonly string[] = [],
   fs: ReconcileFs = defaultFs,
+  trustedGitCommonDir?: string,
 ): ProtectedSnapshot[] {
   const out: ProtectedSnapshot[] = [];
   const seen = new Set<string>();
@@ -128,14 +132,14 @@ export function snapshotGovernanceBytes(
   };
 
   try {
-    const manifest = buildBaseline(repoRoot);
+    const manifest = buildBaseline(repoRoot, trustedGitCommonDir);
     for (const entry of manifest.entries) {
-      if (entry.kind !== 'file' && entry.kind !== 'missing' && entry.kind !== 'symlink') continue;
-      addAbs(join(repoRoot, entry.path), entry.path);
+
+      addAbs(resolveGovernancePath(repoRoot, entry.path), entry.path);
     }
   } catch (err) {
     if (err instanceof ProtectedInspectError) throw err;
-    /* baseline walk can fail on a temp tree — still snapshot extras */
+    throw new ProtectedInspectError(repoRoot, err);
   }
 
   for (const extra of extraAbsPaths) {
@@ -147,6 +151,7 @@ export function snapshotGovernanceBytes(
 
 function removeWithoutFollowing(abs: string, fs: ReconcileFs): void {
   try {
+    if (fs === defaultFs) assertGovernanceAncestors(abs);
     const st = fs.lstatSync(abs);
     if (st.isDirectory() && !st.isSymbolicLink()) {
       fs.rmSync(abs, { recursive: true, force: true });
@@ -169,6 +174,7 @@ function pathAbsent(abs: string, fs: ReconcileFs): boolean {
 
 function recreateExpected(expected: ProtectedSnapshot, fs: ReconcileFs): void {
   if (expected.kind === 'missing') return;
+  if (fs === defaultFs) assertGovernanceAncestors(expected.abs);
   fs.mkdirSync(dirname(expected.abs), { recursive: true });
   if (expected.kind === 'file') {
     fs.writeFileSync(expected.abs, expected.bytes, expected.mode !== undefined ? { mode: expected.mode } : undefined);
@@ -219,11 +225,37 @@ export function restoreOne(
   }
 }
 
+/** Find additions under pinned protected directories, without following occupants. */
+function addedProtectedPaths(before: readonly ProtectedSnapshot[], fs: ReconcileFs): ProtectedSnapshot[] {
+  if (fs !== defaultFs) return [];
+  const known = new Map(before.map((entry) => [entry.abs, entry]));
+  const visited = new Set<string>();
+  const added: ProtectedSnapshot[] = [];
+  const walk = (entry: ProtectedSnapshot): void => {
+    if (visited.has(entry.abs)) return;
+    visited.add(entry.abs);
+    const current = inspectProtectedPath(entry.abs, entry.key, fs);
+    if (current.kind !== 'directory') return;
+    let names: string[];
+    try { names = readdirSync(entry.abs).sort(); } catch (error) {
+      throw new ProtectedInspectError(entry.abs, error);
+    }
+    for (const name of names) {
+      const abs = join(entry.abs, name);
+      const key = `${entry.key}/${name}`;
+      if (!known.has(abs)) added.push({ kind: 'missing', abs, key });
+      else if (known.get(abs)?.kind === 'directory') walk(known.get(abs)!);
+    }
+  };
+  for (const entry of before) if (entry.kind === 'directory') walk(entry);
+  return added;
+}
+
 export function governanceBytesChanged(
   before: readonly ProtectedSnapshot[],
   fs: ReconcileFs = defaultFs,
 ): string[] {
-  const changed: string[] = [];
+  const changed: string[] = addedProtectedPaths(before, fs).map((entry) => entry.key);
   for (const snap of before) {
     const current = inspectProtectedPath(snap.abs, snap.key, fs);
     if (!snapshotsEqual(snap, current)) changed.push(snap.key);
@@ -236,7 +268,7 @@ export function restoreGovernanceBytes(
   fs: ReconcileFs = defaultFs,
 ): RestoreResult {
   const result: RestoreResult = { changed: [], restored: [], verified: [], failed: [] };
-  for (const snap of before) {
+  for (const snap of [...before, ...addedProtectedPaths(before, fs)]) {
     const current = inspectProtectedPath(snap.abs, snap.key, fs);
     if (snapshotsEqual(snap, current)) {
       result.verified.push(snap.key);

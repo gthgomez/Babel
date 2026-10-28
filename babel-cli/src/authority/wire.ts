@@ -23,6 +23,7 @@
  * decideAction.
  */
 
+import { isProtectedGovernanceAlias } from './gitGovernance.js';
 import type { AgentAction } from '../agent/actions.js';
 import { emitAgentEvent } from '../agent/events.js';
 import { decideAction, type PermissionDecision, type PermissionPreset } from '../agent/policy.js';
@@ -126,8 +127,7 @@ export function decideWithLease(
   // Permanent drift lock: an invalidated lease denies every subsequent
   // decision, before anything else is evaluated.
   if (
-    ctx.lease &&
-    (isLeaseInvalidated(ctx.lease.leaseId) || ctx.authoritySession?.invalidated === true)
+    (ctx.lease && isLeaseInvalidated(ctx.lease.leaseId)) || ctx.authoritySession?.invalidated === true
   ) {
     if (ctx.authoritySession && !ctx.authoritySession.invalidated) {
       markSessionInvalidated(ctx.authoritySession);
@@ -165,10 +165,10 @@ export function decideWithLease(
 
   // Baseline drift evaluation before ANY privileged decision (fail-closed).
   // The baseline is the immutable session-start snapshot — never recaptured.
-  if (ctx.lease && ctx.baseline) {
+  if (ctx.baseline) {
     const drift = checkBaseline(ctx.baseline.repoRoot, ctx.baseline.manifest);
     if (!drift.ok) {
-      invalidateLease(ctx.lease.leaseId);
+      if (ctx.lease) invalidateLease(ctx.lease.leaseId);
       if (ctx.authoritySession) markSessionInvalidated(ctx.authoritySession);
       emitAgentEvent({
         type: 'policy_decision',
@@ -193,7 +193,12 @@ export function decideWithLease(
       repoRoot && cwd
         ? rawTargets.map((t) => repoRelativeFromCwd(cwd, repoRoot, t))
         : rawTargets;
-    const governanceTarget = targets.find((t) => t && (isGovernancePath(t) || isAuthorityStatePath(t)));
+    let governanceTarget = targets.find((t) => t && (isGovernancePath(t) || isAuthorityStatePath(t) ||
+      ctx.baseline?.manifest.entries.some((entry) => entry.path === t || t.startsWith(`${entry.path}/`))));
+    if (!governanceTarget && repoRoot && cwd && ctx.baseline) {
+      try { governanceTarget = rawTargets.find(target => isProtectedGovernanceAlias(repoRoot, cwd, target, ctx.baseline!.manifest.entries)); }
+      catch { governanceTarget = '<uninspectable-target>'; }
+    }
     if (governanceTarget) {
       emitAgentEvent({
         type: 'policy_decision',
