@@ -292,8 +292,8 @@ function parseTsc(text: string): CompiledFailure[] {
 }
 
 function parseNodeTrace(text: string): CompiledFailure[] {
-  const loc = /^\s*(?:at\s+)?[^\s()]+\s+\(([^\r\n]+\.[cm]?[jt]sx?):(\d+):(\d+)\)/m.exec(text)
-    ?? /^\s*at\s+([^\r\n]+\.[cm]?[jt]sx?):(\d+):(\d+)\s*$/m.exec(text)
+  const loc = /^\s*(?:at\s+)?(?:async\s+)?[^\s()]+\s+\(([^\r\n]+\.[cm]?[jt]sx?):(\d+):(\d+)\)/m.exec(text)
+    ?? /^\s*at\s+(?:async\s+)?([^\r\n]+\.[cm]?[jt]sx?):(\d+):(\d+)\s*$/m.exec(text)
   const err = /^\s*(?:error:\s*['"]?)?(?:Error|TypeError|ReferenceError|AssertionError)(?:\s+\[[A-Z_]+\])?:\s*(.+)$/m.exec(text)
   const testName = /^\s*(?:✖|not ok\s+\d+\s*[-:]?)\s+(.+?)(?:\s+\([\d.]+m?s\))?\s*$/m.exec(text)?.[1]
   if (!loc && !err) return []

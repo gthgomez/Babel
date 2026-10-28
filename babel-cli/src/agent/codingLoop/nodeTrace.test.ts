@@ -61,3 +61,15 @@ test('Node TAP TypeScript assertion yields a contained candidate requiring fresh
     }
   } finally { rmSync(root, { recursive: true, force: true }) }
 })
+
+test('async Node TAP and runtime frames retain the source path rather than the async prefix', () => {
+  for (const prefix of ['async TestContext.<anonymous> (', 'at async TestContext.<anonymous> (', 'at async ']) {
+    const file = 'file:///app/async result.test.ts'
+    const frame = `${prefix}${file}:8:3${prefix.endsWith('(') ? ')' : ''}`
+    const parsed = parseStructuredFailures(`not ok 1 - async result\n    ${frame}`, '', 'test_run', 'node --test')
+    assert.equal(parsed.parserName, 'node_trace')
+    assert.equal(parsed.failures[0]?.file, file)
+    assert.equal(parsed.failures[0]?.line, 8)
+    assert.equal(parsed.failures[0]?.test, 'async result')
+  }
+})
