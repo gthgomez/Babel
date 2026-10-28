@@ -4,7 +4,8 @@ import type { BabelEventBus, PipelineResult } from '../pipeline.js';
 import type { ValidMode } from './constants.js';
 import type { BabelRuntimeEvent } from '../runtime/protocol.js';
 import { isAbsolute, join, relative } from 'node:path';
-import { existsSync, readFileSync, writeFileSync, writeSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { writeStdout } from './stdout.js';
 import type { AskAnswer, TerminalOutcome } from '../schemas/agentContracts.js';
 import type { SessionUsageSummary } from '../services/costTracker.js';
 import { getUserFacingStatus, userFacingStatusFromOutcome } from './userFacingStatus.js';
@@ -78,54 +79,6 @@ export function parseApiVersionFlag(value?: string): string | undefined {
   }
   return trimmed;
 }
-const BROKEN_STDOUT_CODES = new Set(['EPIPE', 'ERR_STREAM_DESTROYED', 'ENOTCONN']);
-let stdoutBroken = false;
-let stdoutGuardInstalled = false;
-
-function isBrokenStdoutError(error: unknown): boolean {
-  return (
-    error !== null &&
-    typeof error === 'object' &&
-    BROKEN_STDOUT_CODES.has(String((error as { code?: unknown }).code ?? ''))
-  );
-}
-
-function ensureStdoutErrorGuard(): void {
-  if (stdoutGuardInstalled) {
-    return;
-  }
-  stdoutGuardInstalled = true;
-  process.stdout.on('error', (error) => {
-    if (isBrokenStdoutError(error)) {
-      stdoutBroken = true;
-      return;
-    }
-    throw error;
-  });
-}
-
-function writeStdout(text: string): void {
-  if (stdoutBroken) {
-    return;
-  }
-  ensureStdoutErrorGuard();
-  try {
-    // Use synchronous fd-level write to avoid buffered Writable stream
-    // data loss when process.exit() follows immediately after writeJson().
-    if (process.stdout.fd !== undefined) {
-      writeSync(process.stdout.fd, text);
-    } else {
-      process.stdout.write(text);
-    }
-  } catch (error) {
-    if (isBrokenStdoutError(error)) {
-      stdoutBroken = true;
-      return;
-    }
-    throw error;
-  }
-}
-
 const RUN_OUTPUT_FORMAT_ALIASES: Record<string, RunOutputFormat> = {
   terminal: 'text',
   pretty: 'text',
