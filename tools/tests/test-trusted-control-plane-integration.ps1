@@ -198,7 +198,7 @@ if ($text -match 'rulesets\?per_page') { Emit '[{"name":"protect-main","enforcem
 if ($text -match 'rulesets/19597161') { Emit (Get-Content -Raw (Join-Path $root 'ruleset.json')) }
 if ($text -match 'check-runs\?filter=all&per_page') { Emit (Get-Content -Raw (Join-Path $root 'check-runs.json')) }
 if ($text -match 'actions/runs\?head_sha') { Emit '{"total_count":0,"workflow_runs":[]}' }
-if ($text -match 'git/ref/heads/main') { Emit ('{"object":{"sha":"' + $env:TCP_TEST_BASE + '"}}') }
+if ($text -match 'git/ref/heads/main') { Emit ('{"ref":"refs/heads/main","url":"https://api.github.com/repos/gthgomez/Babel/git/refs/heads/main","object":{"type":"commit","sha":"' + $env:TCP_TEST_LIVE_TARGET + '"}}') }
 if ($text -match 'actions/runs/(\d+)') {
   $id = $Matches[1]
   $runs = Get-Content -Raw (Join-Path $root 'run-metadata.json') | ConvertFrom-Json
@@ -247,16 +247,22 @@ exit 0
   & $git -C $seedPath worktree add --detach $candidatePath $headSha 2>&1 | Out-Null
 
   function Invoke-Gate {
-    param([string]$Label, [hashtable]$Extra, [string]$EventName = 'pull_request_target', [string]$OriginMainSha = $baseSha)
+    param([string]$Label, [hashtable]$Extra, [string]$EventName = 'pull_request_target', [string]$OriginMainSha = $baseSha,
+      [string]$LiveTargetSha = '', [string]$EvaluatorSha = '')
+    if (-not $LiveTargetSha) { $LiveTargetSha = $OriginMainSha }
+    if (-not $EvaluatorSha) { $EvaluatorSha = $LiveTargetSha }
+    $previousOriginMain = (& $git -C $seedPath rev-parse refs/remotes/origin/main).Trim()
+    & $git -C $seedPath update-ref refs/remotes/origin/main $OriginMainSha
+    if ($LASTEXITCODE -ne 0) { throw 'Unable to set fixture fetched target.' }
     $outputPath = Join-Path $root ("result-{0}.json" -f $Label)
     $argumentList = @(
       '-NoProfile', '-NonInteractive', '-File', (Join-Path $seedPath 'scripts/trusted-merge-gate.ps1'),
-      '-PR', '4242', '-BaseSha', $baseSha, '-RepoRoot', $candidatePath, '-ReviewedHeadSha', $headSha,
+      '-PR', '4242', '-BaseSha', $EvaluatorSha, '-RepoRoot', $candidatePath, '-ReviewedHeadSha', $headSha,
       '-AuditOnly', '-RequireIsolatedWorktree', '-OutputFormat', 'json'
     )
     foreach ($key in $Extra.Keys) { $argumentList += $key; $argumentList += $Extra[$key] }
     $env:TCP_TEST_ROOT = $root
-    $env:TCP_TEST_BASE = $OriginMainSha
+    $env:TCP_TEST_LIVE_TARGET = $LiveTargetSha
     $previousPath = $env:PATH
     $env:PATH = "$shimDir$([IO.Path]::PathSeparator)$previousPath"
     # Mirror the trusted workflow environment so the gate's self-check
@@ -271,7 +277,8 @@ exit 0
     } finally {
       $env:PATH = $previousPath
       Remove-Item Env:TCP_TEST_ROOT -ErrorAction SilentlyContinue
-      Remove-Item Env:TCP_TEST_BASE -ErrorAction SilentlyContinue
+      Remove-Item Env:TCP_TEST_LIVE_TARGET -ErrorAction SilentlyContinue
+      & $git -C $seedPath update-ref refs/remotes/origin/main $previousOriginMain
       Remove-Item Env:GITHUB_ACTIONS -ErrorAction SilentlyContinue
       Remove-Item Env:GITHUB_EVENT_NAME -ErrorAction SilentlyContinue
       Remove-Item Env:GITHUB_WORKFLOW -ErrorAction SilentlyContinue
@@ -407,8 +414,14 @@ exit 0
   }
 
   Invoke-Step 'non-strict-required-check-policy-allows-stale-base' {
+    # Advance trusted main from its own previous tip, never from the candidate
+    # whose gate intentionally throws. R stays old; B/F/P advance together.
+    $previousSeedHead = (& $git -C $seedPath rev-parse HEAD).Trim()
+    & $git -C $seedPath checkout --detach $baseSha 2>&1 | Out-Null
     & $git -C $seedPath commit --allow-empty -m 'advance main after candidate opened' 2>&1 | Out-Null
     $advancedMain = (& $git -C $seedPath rev-parse HEAD).Trim()
+    & $git -C $seedPath push origin HEAD:refs/heads/main 2>&1 | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'Unable to advance fixture trusted main.' }
     $rulesetDetail.rules[1].parameters.strict_required_status_checks_policy = $false
     $rulesetDetail | ConvertTo-Json -Depth 10 -Compress | Set-Content -LiteralPath (Join-Path $root 'ruleset.json') -Encoding utf8NoBOM
     $stalePrView = $prView | ConvertTo-Json -Depth 10 -Compress | ConvertFrom-Json
@@ -416,16 +429,31 @@ exit 0
     $stalePrView | ConvertTo-Json -Depth 10 -Compress | Set-Content -LiteralPath (Join-Path $root 'pr-view.json') -Encoding utf8NoBOM
     try {
       $run = Invoke-Gate -Label 'non-strict-policy' -Extra @{ '-AutonomousReviewEvidencePath' = $evidencePath } -OriginMainSha $advancedMain
+      if ($run.exitCode -ne 0 -or @($run.result.blockers) -contains 'pr_base_sha_is_stale') {
+        throw "Non-strict freshness must not block solely on stale base: $($run.result.blockers -join ',')"
+      }
+      if (-not [bool]$run.result.checks.STALE_BASE_INTEGRATION_CLEAR) { throw 'Stale-base integration clearance must be evaluated.' }
+      if ($run.result.sha.baseHead -ne $baseSha -or $run.result.sha.liveTargetHead -ne $advancedMain -or
+          $run.result.sha.fetchedTargetHead -ne $advancedMain -or $run.result.sha.trustedPolicySha -ne $advancedMain) {
+        throw 'Recorded provenance and actual live/fetched/evaluator identities must remain distinct.'
+      }
+      $staleFetch = Invoke-Gate -Label 'stale-fetched-target' -Extra @{} -LiveTargetSha $advancedMain
+      if ($staleFetch.exitCode -eq 0 -or $staleFetch.result.blockers -notcontains 'remote_base_stale_fetch_required') { throw 'A genuinely stale fetch must still block.' }
+      $oldEvaluator = Invoke-Gate -Label 'old-evaluator' -Extra @{} -OriginMainSha $advancedMain -EvaluatorSha $baseSha
+      if ($oldEvaluator.exitCode -eq 0 -or $oldEvaluator.result.blockers -notcontains 'execution_base_superseded') { throw 'An older evaluator must not certify the new target.' }
+      $rulesetDetail.rules[1].parameters.strict_required_status_checks_policy = $true
+      $rulesetDetail | ConvertTo-Json -Depth 10 -Compress | Set-Content -LiteralPath (Join-Path $root 'ruleset.json') -Encoding utf8NoBOM
+      $strictStale = Invoke-Gate -Label 'strict-stale-ancestry' -Extra @{} -OriginMainSha $advancedMain
+      if ($strictStale.exitCode -eq 0 -or $strictStale.result.blockers -notcontains 'pr_base_sha_is_stale') { throw 'Strict policy must reject actual stale ancestry.' }
     } finally {
+      & $git -C $barePath update-ref refs/heads/main $baseSha
+      & $git -C $seedPath checkout --detach $previousSeedHead 2>&1 | Out-Null
+      & $git -C $seedPath update-ref refs/remotes/origin/main $baseSha
       $rulesetDetail.rules[1].parameters.strict_required_status_checks_policy = $true
       $rulesetDetail | ConvertTo-Json -Depth 10 -Compress | Set-Content -LiteralPath (Join-Path $root 'ruleset.json') -Encoding utf8NoBOM
       $prView | ConvertTo-Json -Depth 10 -Compress | Set-Content -LiteralPath (Join-Path $root 'pr-view.json') -Encoding utf8NoBOM
-      Remove-Item Env:TCP_TEST_BASE -ErrorAction SilentlyContinue
+      Remove-Item Env:TCP_TEST_LIVE_TARGET -ErrorAction SilentlyContinue
     }
-    if ($run.exitCode -ne 0 -or @($run.result.blockers) -contains 'pr_base_sha_is_stale') {
-      throw "Non-strict freshness must not block solely on stale base: $($run.result.blockers -join ',')"
-    }
-    if (-not [bool]$run.result.checks.STALE_BASE_INTEGRATION_CLEAR) { throw 'Stale-base integration clearance must be evaluated.' }
   }
 
   # A comment event cannot represent the required PR check. The separate
