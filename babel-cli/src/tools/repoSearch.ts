@@ -280,23 +280,27 @@ async function globPathResult(
   const scanDirs =
     approvedReadRoots && approvedReadRoots.length > 0 ? [root, ...approvedReadRoots] : root;
 
-  const collectOptions: {
-    projectRoot: string;
-    maxDepth?: number;
-    taskTokens?: string[];
-  } = {
+  let incomplete = false;
+  const scanLimit = 50_000;
+  const collectOptions = {
+    includeNonTextPaths: true,
+    maxFiles: scanLimit,
+    onDepthLimit: () => { incomplete = true; },
+    onUnreadableDirectory: () => { incomplete = true; },
     projectRoot,
     ...(taskTokens ? { taskTokens } : {}),
   };
 
-  for (const filePath of await collectTextFiles(scanDirs, [], collectOptions)) {
+  const files = await collectTextFiles(scanDirs, [], collectOptions);
+  if (files.length >= scanLimit) incomplete = true;
+  for (const filePath of files) {
     const relativePath = relative(root, filePath).replace(/\\/g, '/');
     if (!regex.test(relativePath)) continue;
     paths.push(relativePath);
   }
   // Sort by depth first so root-level matches survive truncation
   sortPathsByDepth(paths);
-  return { paths: paths.slice(0, limit), truncated: paths.length > limit };
+  return { paths: paths.slice(0, limit), truncated: incomplete || paths.length > limit };
 }
 
 export function formatGrepMatches(matches: GrepMatch[], truncated: boolean): string {

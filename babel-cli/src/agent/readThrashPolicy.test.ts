@@ -20,6 +20,13 @@ describe('readThrashPolicy', () => {
     assert.equal(b, c);
   });
 
+  test('POSIX workspace paths retain case while Windows drive paths still unify', () => {
+    assert.notEqual(normalizeReadCacheKey('src/Foo.ts', '/workspace/project'),
+      normalizeReadCacheKey('src/foo.ts', '/workspace/project'));
+    assert.equal(normalizeReadCacheKey('src/Foo.ts', 'C:/fixture/project'),
+      normalizeReadCacheKey('c:/fixture/project/src/foo.ts'));
+  });
+
   test('read thrash fuse fires at budget', () => {
     assert.equal(
       shouldFireReadThrashFuse({

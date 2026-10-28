@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict'
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 import { handleGlobTool } from './repoSearch.js'
+import { collectTextFiles } from '../services/indexer.js'
 import { resetRipgrepDetection } from './ripgrep.js'
 import { formatResultDetail } from '../agent/chatEngineSupport.js'
 import { formatRegisteredToolObservation } from '../agent/codingLoop/readArtifactExecutor.js'
@@ -22,18 +23,17 @@ for (const fallback of [false, true]) {
       assert.equal(empty.stdout, 'No paths matched.')
       assert.equal(formatResultDetail(action, empty), '0 matches')
       assert.deepEqual(empty.glob_result, { paths: [], returned_count: 0, truncated: false })
-      // The legacy pure-JS fallback enumerates recognized text extensions only.
-      const sentinel = 'No paths matched..txt'
+      const sentinel = process.platform === 'win32' ? 'No paths matched..txt' : 'No paths matched.'
       writeFileSync(join(root, sentinel), 'synthetic')
       const one = await run()
       assert.equal(one.stdout, sentinel, 'legacy display remains compatible')
       assert.equal(formatResultDetail(action, one), '1 matches')
       assert.deepEqual(one.glob_result, { paths: [sentinel], returned_count: 1, truncated: false })
-      for (const name of ['a.ts', '数据.txt', ...(process.platform === 'win32' ? [] : ['line\nbreak.txt'])]) writeFileSync(join(root, name), 'synthetic')
+      for (const name of ['a.ts', '数据.txt', 'Dockerfile', 'LICENSE', 'image.bin', ...(process.platform === 'win32' ? [] : ['line\nbreak.txt'])]) writeFileSync(join(root, name), 'synthetic')
       const all = await run()
       const data = all.glob_result
       assert.ok(data)
-      assert.equal(data.returned_count, process.platform === 'win32' ? 3 : 4)
+      assert.equal(data.returned_count, process.platform === 'win32' ? 6 : 7)
       assert.equal(data.paths.length, data.returned_count)
       assert.ok(data.paths.includes('数据.txt'))
       if (process.platform !== 'win32') assert.ok(data.paths.includes('line\nbreak.txt'))
@@ -75,4 +75,36 @@ test('model glob metadata stays bounded without splitting filenames or hiding om
   assert.ok(data.paths.length > 0 && data.paths.length < paths.length)
   assert.equal(data.paths_omitted, paths.length - data.paths.length)
   assert.deepEqual(data.paths, paths.slice(0, data.paths.length), 'complete filenames remain intact')
+})
+
+
+test('fallback glob keeps traversal exclusions and discloses incomplete depth scans', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-glob-fallback-boundary-'))
+  const oldRoot = process.env.BABEL_PROJECT_ROOT
+  const oldPath = process.env.PATH
+  process.env.BABEL_PROJECT_ROOT = root
+  process.env.PATH = ''
+  resetRipgrepDetection()
+  try {
+    writeFileSync(join(root, 'LICENSE'), 'license fixture')
+    writeFileSync(join(root, 'source.ts'), 'source fixture')
+    for (const dir of ['.git', 'node_modules']) {
+      mkdirSync(join(root, dir))
+      writeFileSync(join(root, dir, 'hidden.ts'), 'excluded')
+    }
+    const indexed = await collectTextFiles(root, [], { projectRoot: root })
+    assert.deepEqual(indexed, [join(root, 'source.ts')], 'text indexing does not inherit glob enumeration semantics')
+    const complete = await handleGlobTool({ pattern: '**/*' })
+    assert.deepEqual(complete.glob_result, { paths: ['LICENSE', 'source.ts'], returned_count: 2, truncated: false })
+    const deep = join(root, ...Array.from({ length: 17 }, () => 'nested'))
+    mkdirSync(deep, { recursive: true })
+    writeFileSync(join(deep, 'unseen'), 'unseen')
+    const partial = await handleGlobTool({ pattern: '**/unseen' })
+    assert.deepEqual(partial.glob_result, { paths: [], returned_count: 0, truncated: true })
+  } finally {
+    if (oldRoot === undefined) delete process.env.BABEL_PROJECT_ROOT; else process.env.BABEL_PROJECT_ROOT = oldRoot
+    if (oldPath === undefined) delete process.env.PATH; else process.env.PATH = oldPath
+    resetRipgrepDetection()
+    rmSync(root, { recursive: true, force: true })
+  }
 })

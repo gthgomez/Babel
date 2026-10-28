@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { prepareSyntheticProviderFixture, removeSyntheticProviderFixture } from '../testinfra/synthetic-provider-fixture.mjs'
 
-for (const variant of ['default', 'general_swe', 'partial-readback', 'strict', 'critic-reject'] as const) {
+for (const variant of ['default', 'general_swe', 'partial-readback', 'conditional', 'quoted', 'combined-quoted', 'strict', 'critic-reject'] as const) {
 test(`ordinary CLI ${variant} retains only eligible unverified delivery`, (t) => {
   const fixture = prepareSyntheticProviderFixture()
   try {
@@ -15,7 +15,10 @@ test(`ordinary CLI ${variant} retains only eligible unverified delivery`, (t) =>
     execFileSync('git', ['add', 'src/feedback.ts'], { cwd: fixture.cwd, env: fixture.env })
     execFileSync('git', ['commit', '-qm', 'source-owned baseline'], { cwd: fixture.cwd, env: fixture.env })
     const baseTask = "When glob finds no paths, tool feedback says '1 matches' even though the body says 'No paths matched.' Fix src/feedback.ts so an empty result reports zero matches and real matches retain accurate counts. Inspect the code, make the smallest change, and run existing tests if available. Explain exactly what verification ran or was unavailable. Do not commit or push, change credentials/security settings, or make unrelated edits."
-    const task = variant === 'strict' ? baseTask + ' Run npm test successfully before completing.' : baseTask
+    const task = baseTask + (variant === 'strict' ? ' Run npm test successfully before completing.'
+      : variant === 'conditional' ? ' Run npm test if available; otherwise explain why it could not run.'
+        : variant === 'combined-quoted' ? ' Run npm test if available. The README says \"Run npm test before completing\".'
+        : variant === 'quoted' ? ' The old README says: \"Run npm test before completing\".' : '')
     const env = fixture.env
     const evidence = join(fixture.root, 'observed.json')
     const preload = join(fixture.root, 'response.mjs')
