@@ -167,11 +167,23 @@ function Get-AgentCIState {
   return [pscustomobject]@{ state = $state; ready = $state -eq 'complete'; terminal = $state -in @('complete', 'failed'); results = @($results); reason = $state }
 }
 
+function Resolve-AgentTargetRef {
+  param([AllowNull()][object]$Ref, [string]$Repository, [string]$Branch)
+  $object = Get-CIProperty $Ref 'object'
+  $sha = Get-CIProperty $object 'sha'
+  $valid = (Get-CIProperty $Ref 'ref') -ceq "refs/heads/$Branch" -and
+    (Get-CIProperty $Ref 'url') -ceq "https://api.github.com/repos/$Repository/git/refs/heads/$Branch" -and
+    (Get-CIProperty $object 'type') -ceq 'commit' -and
+    $sha -is [string] -and $sha -cmatch '^[a-f0-9]{40}$'
+  return [pscustomobject]@{ valid = $valid; sha = $(if ($valid) { $sha } else { '' }); reason = $(if ($valid) { '' } else { 'base_source_unavailable' }) }
+}
+
 function Test-AgentCandidateIdentity {
-  param([AllowNull()][object]$Candidate, [string]$HeadSha, [string]$BaseSha, [bool]$StrictBaseFreshness = $true)
+  param([AllowNull()][object]$Candidate, [string]$HeadSha, [string]$BaseSha, [bool]$StrictBaseFreshness = $true, [string]$BaseBranch = '')
   $reason = if ($null -eq $Candidate) { 'candidate_source_unavailable' }
     elseif ([string]$Candidate.headRefOid -ne $HeadSha) { 'candidate_head_superseded' }
     elseif ($StrictBaseFreshness -and [string]$Candidate.baseRefOid -ne $BaseSha) { 'execution_base_superseded' }
+    elseif ($BaseBranch -and [string](Get-CIProperty $Candidate 'baseRefName') -cne $BaseBranch) { 'unexpected_pr_base_branch' }
     elseif ([string]$Candidate.state -ne 'OPEN') { 'pr_not_open' }
     elseif ([bool]$Candidate.isDraft) { 'pr_is_draft' }
     elseif ([bool]$Candidate.isCrossRepository) { 'cross_repository_pr' }
@@ -205,4 +217,4 @@ function Wait-AgentCIState {
   return [pscustomobject]@{ ready = $false; attempts = $attempts; reason = $(if ($null -ne $last -and $last.state -eq 'source_unavailable') { $last.reason } else { 'required_check_wait_timeout' }); last = $last }
 }
 
-Export-ModuleMember -Function Get-AgentCISnapshot, Get-AgentCIState, Test-AgentCandidateIdentity, Wait-AgentCIState
+Export-ModuleMember -Function Get-AgentCISnapshot, Get-AgentCIState, Resolve-AgentTargetRef, Test-AgentCandidateIdentity, Wait-AgentCIState

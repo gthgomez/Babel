@@ -25,15 +25,30 @@ jobs:
       cancel-in-progress: true
     env:
       PR_NUMBER: ${{ github.event.pull_request.number }}
-      BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      RECORDED_BASE_SHA: ${{ github.event.pull_request.base.sha }}
       HEAD_SHA: ${{ github.event.pull_request.head.sha }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
-      - name: Checkout immutable base
+      - name: Resolve authenticated target
+        id: trusted_target
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:GITHUB_REPOSITORY -cne 'gthgomez/Babel') { throw 'Unexpected target repository.' }
+          $raw = gh api 'repos/gthgomez/Babel/git/ref/heads/main'
+          if ($LASTEXITCODE -ne 0) { throw 'Authenticated target unavailable.' }
+          $target = $raw | ConvertFrom-Json
+          if ($target -isnot [pscustomobject] -or $target.object.sha -isnot [string] -or $target.ref -cne 'refs/heads/main' -or
+              $target.url -cne 'https://api.github.com/repos/gthgomez/Babel/git/refs/heads/main' -or
+              $target.object.type -cne 'commit' -or $target.object.sha -cnotmatch '^[a-f0-9]{40}$') { throw 'Invalid authenticated target.' }
+          Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "sha=$($target.object.sha)"
+      - name: Checkout trusted evaluator ${{ steps.trusted_target.outputs.sha }}
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
-          ref: ${{ env.BASE_SHA }}
+          ref: ${{ steps.trusted_target.outputs.sha }}
           fetch-depth: 0
           persist-credentials: false
       - name: Keep non-candidates out of the merge audit
@@ -42,6 +57,7 @@ jobs:
         env:
           BASE_REF: ${{ github.event.pull_request.base.ref }}
           IS_DRAFT: ${{ github.event.pull_request.draft }}
+          EVALUATOR_SHA: ${{ steps.trusted_target.outputs.sha }}
           GH_TOKEN: ${{ github.token }}
         run: |
           $ErrorActionPreference = 'Stop'
@@ -61,26 +77,7 @@ jobs:
           git fetch --no-tags origin main
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $main = (git rev-parse origin/main).Trim()
-          $strictFreshness = $true
-          $rulesets = gh api "repos/$env:GITHUB_REPOSITORY/rulesets?per_page=100" | ConvertFrom-Json
-          if ($LASTEXITCODE -eq 0) {
-            $protect = @($rulesets | Where-Object { $_.name -eq 'protect-main' -and $_.enforcement -eq 'active' })
-            if ($protect.Count -eq 1) {
-              $detail = gh api "repos/$env:GITHUB_REPOSITORY/rulesets/$($protect[0].id)" | ConvertFrom-Json
-              if ($LASTEXITCODE -eq 0) {
-                $status = @($detail.rules | Where-Object { $_.type -eq 'required_status_checks' })
-                if ($status.Count -eq 1) { $strictFreshness = [bool]$status[0].parameters.strict_required_status_checks_policy }
-              }
-            }
-          }
-          if ($strictFreshness -and $env:BASE_SHA -ne $main) {
-            Set-Eligibility $false 'Base SHA is behind current main while strict freshness is enabled; this is not a failed test.'
-            exit 0
-          }
-          if (-not $strictFreshness -and $env:BASE_SHA -ne $main) {
-            Set-Eligibility $true 'Stale main base with non-strict freshness: merge audit may proceed when mergeable.'
-            exit 0
-          }
+          if ($env:EVALUATOR_SHA -cne $main) { throw 'Target changed before audit; requalify with current trusted source.' }
           Set-Eligibility $true 'Head is a main merge candidate. The audit runs after Public Release Gate completes.'
       - name: Fetch exact candidate object
         if: steps.eligibility.outputs.eligible == 'true'
@@ -125,6 +122,7 @@ jobs:
         env:
           # Only the trusted base-rooted audit receives the GitHub token.
           GH_TOKEN: ${{ github.token }}
+          BASE_SHA: ${{ steps.trusted_target.outputs.sha }}
         run: |
           $log = Join-Path $env:RUNNER_TEMP 'merge-audit.json'
           pwsh -NoProfile -NonInteractive -File scripts/trusted-merge-gate.ps1 `
@@ -202,10 +200,25 @@ jobs:
           Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "number=$($pr.number)"
           Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "base_sha=$($pr.base.sha)"
           Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "head_sha=$env:HEAD_SHA"
-      - name: Checkout immutable base
+      - name: Resolve authenticated target
+        id: trusted_target
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:GITHUB_REPOSITORY -cne 'gthgomez/Babel') { throw 'Unexpected target repository.' }
+          $raw = gh api 'repos/gthgomez/Babel/git/ref/heads/main'
+          if ($LASTEXITCODE -ne 0) { throw 'Authenticated target unavailable.' }
+          $target = $raw | ConvertFrom-Json
+          if ($target -isnot [pscustomobject] -or $target.object.sha -isnot [string] -or $target.ref -cne 'refs/heads/main' -or
+              $target.url -cne 'https://api.github.com/repos/gthgomez/Babel/git/refs/heads/main' -or
+              $target.object.type -cne 'commit' -or $target.object.sha -cnotmatch '^[a-f0-9]{40}$') { throw 'Invalid authenticated target.' }
+          Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "sha=$($target.object.sha)"
+      - name: Checkout trusted evaluator ${{ steps.trusted_target.outputs.sha }}
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
-          ref: ${{ steps.pr.outputs.base_sha }}
+          ref: ${{ steps.trusted_target.outputs.sha }}
           fetch-depth: 0
           persist-credentials: false
       - name: Fetch exact candidate object
@@ -228,6 +241,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
+          EVALUATOR_SHA: ${{ steps.trusted_target.outputs.sha }}
         run: |
           $ErrorActionPreference = 'Stop'
           # A fast-completing release gate lets the pull_request_target run audit
@@ -241,7 +255,8 @@ jobs:
             $jobs = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$($run.id)/jobs?per_page=100" | ConvertFrom-Json
             if ($LASTEXITCODE -ne 0) { throw "Unable to read jobs of inline audit run $($run.id)." }
             $audited = @($jobs.jobs | ForEach-Object { $_ } | Where-Object {
-              @($_.steps | ForEach-Object { $_ } | Where-Object { $_.name -eq 'Run base-rooted merge audit' -and $_.conclusion -eq 'success' }).Count -gt 0
+              @($_.steps | ForEach-Object { $_ } | Where-Object { $_.name -eq 'Run base-rooted merge audit' -and $_.conclusion -eq 'success' }).Count -gt 0 -and
+              @($_.steps | ForEach-Object { $_ } | Where-Object { $_.name -ceq "Checkout trusted evaluator $env:EVALUATOR_SHA" -and $_.conclusion -eq 'success' }).Count -eq 1
             })
             if ($audited.Count -gt 0) {
               Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value 'skip=true'
@@ -256,7 +271,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ steps.pr.outputs.number }}
-          BASE_SHA: ${{ steps.pr.outputs.base_sha }}
+          BASE_SHA: ${{ steps.trusted_target.outputs.sha }}
           HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
         run: |
           $log = Join-Path $env:RUNNER_TEMP 'merge-audit.json'

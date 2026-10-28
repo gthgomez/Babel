@@ -126,7 +126,8 @@ try {
   Invoke-TestGit -WorkingDirectory $fixture -Arguments @('config', '--local', '--add', 'credential.helper', '') | Out-Null
   Invoke-TestGit -WorkingDirectory $fixture -Arguments @('config', '--local', '--add', 'credential.helper', '!gh auth git-credential') | Out-Null
 
-  $mainRefJson = '{"object":{"sha":"' + $mainSha + '"}}'
+  $mainRefJson = '{"ref":"refs/heads/main","url":"https://api.github.com/repos/gthgomez/Babel/git/refs/heads/main","object":{"type":"commit","sha":"' + $mainSha + '"}}'
+  $movedMainRefJson = $mainRefJson.Replace($mainSha, $headSha)
   @(
     'param([Parameter(ValueFromRemainingArguments=$true)][string[]]$Arguments)',
     'if ($Arguments.Count -gt 0 -and $Arguments[0] -eq "--version") { Write-Output "gh version 2.97.0"; exit 0 }',
@@ -368,7 +369,8 @@ try {
     Write-Output ("draft-audit elapsed: {0:N3}s; peer check reads: 0" -f $clock.Elapsed.TotalSeconds)
     foreach ($case in @(
       @{ Text = $draftGh.Replace('"headRefOid":"' + $headSha + '"', '"headRefOid":"' + $mainSha + '"'); Blocker = 'reviewed_head_does_not_match_pr_head' },
-      @{ Text = $draftGh.Replace('"baseRefOid":"' + $mainSha + '"', '"baseRefOid":"' + $headSha + '"'); Blocker = 'pr_base_sha_is_stale' },
+      # Mutate the authenticated target, not recorded review provenance: F is now stale.
+      @{ Text = $draftGh.Replace("Write-Output '$mainRefJson'", "Write-Output '$movedMainRefJson'"); Blocker = 'remote_base_stale_fetch_required' },
       @{ Text = $draftGh.Replace('"state":"OPEN"', '"state":"CLOSED"'); Blocker = 'pr_not_open' }
     )) {
       $case.Text | Set-Content -LiteralPath $fakeGh -Encoding utf8
@@ -392,7 +394,7 @@ try {
       @{ Text = $fakeGhHealthy.Replace('"id":15368', '"id":99999'); Blocker = 'required_checks_not_green' },
       @{ Text = $fakeGhHealthy.Replace('"state":"OPEN"', '"state":"CLOSED"'); Blocker = 'pr_not_open' },
       @{ Text = $fakeGhHealthy.Replace('"mergeable":"MERGEABLE"', '"mergeable":"CONFLICTING"'); Blocker = 'pr_not_mergeable' },
-      @{ Text = $fakeGhHealthy.Replace('"baseRefOid":"' + $mainSha + '"', '"baseRefOid":"' + $headSha + '"'); Blocker = 'pr_base_sha_is_stale' }
+      @{ Text = $fakeGhHealthy.Replace("Write-Output '$mainRefJson'", "Write-Output '$movedMainRefJson'"); Blocker = 'remote_base_stale_fetch_required' }
     )) {
       try {
         $case.Text | Set-Content -LiteralPath $fakeGh -Encoding utf8

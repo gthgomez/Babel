@@ -37,6 +37,7 @@ $originMain = $null
 $prView = $null
 $rulesetPolicy = $null
 $executionBase = ''
+$liveBaseSha = ''
 $ciSnapshot = [pscustomobject]@{ available = $false; observations = @(); workflows = @(); error = 'not_checked'; apiCalls = 0 }
 $ciEvaluation = [pscustomobject]@{ state = 'not_checked'; results = @() }
 $requiredChecksReady = [pscustomobject]@{ ready = $false; attempts = 0; reason = 'not_checked' }
@@ -128,21 +129,18 @@ function Get-AgentRulesetPolicy {
 
 function Get-AgentCurrentCandidateIdentity {
   param(
-    [DateTimeOffset]$Deadline = ([DateTimeOffset]::UtcNow.AddSeconds(30)),
-    [bool]$StrictBaseFreshness = $true
+    [DateTimeOffset]$Deadline = ([DateTimeOffset]::UtcNow.AddSeconds(30))
   )
   $current = Get-AgentJsonFromGh -Deadline $Deadline -Arguments @('pr', 'view', [string]$PR, '--repo', $ExpectedRepository, '--json', $prFields)
   if (-not $current.available) { return [pscustomobject]@{ valid = $false; reason = 'candidate_source_unavailable' } }
-  $identity = Test-AgentCandidateIdentity -Candidate $current.value -HeadSha $prHead -BaseSha $executionBase -StrictBaseFreshness $StrictBaseFreshness
+  # Recorded base remains provenance; target freshness is a separate live read.
+  $identity = Test-AgentCandidateIdentity -Candidate $current.value -HeadSha $prHead -BaseSha $prBase -BaseBranch $ExpectedBaseBranch
   if (-not $identity.valid) { return $identity }
-  if ($StrictBaseFreshness) {
-    $main = Get-AgentJsonFromGh -Deadline $Deadline -Arguments @('api', "repos/$ExpectedRepository/git/ref/heads/$ExpectedBaseBranch")
-    if (-not $main.available) { return [pscustomobject]@{ valid = $false; reason = 'base_source_unavailable' } }
-    $mainObject = Get-AgentLocalValue -Object $main.value -Name 'object'
-    $mainSha = Get-AgentLocalValue -Object $mainObject -Name 'sha'
-    if ($mainSha -isnot [string] -or $mainSha -notmatch '^[a-f0-9]{40}$') { return [pscustomobject]@{ valid = $false; reason = 'base_source_unavailable' } }
-    if ($mainSha -ne $executionBase) { return [pscustomobject]@{ valid = $false; reason = 'execution_base_superseded' } }
-  }
+  $main = Get-AgentJsonFromGh -Deadline $Deadline -Arguments @('api', "repos/$ExpectedRepository/git/ref/heads/$ExpectedBaseBranch")
+  if (-not $main.available) { return [pscustomobject]@{ valid = $false; reason = 'base_source_unavailable' } }
+  $target = Resolve-AgentTargetRef -Ref $main.value -Repository $ExpectedRepository -Branch $ExpectedBaseBranch
+  if (-not $target.valid) { return $target }
+  if ($target.sha -cne $liveBaseSha) { return [pscustomobject]@{ valid = $false; reason = 'live_target_changed' } }
   return $identity
 }
 
@@ -158,7 +156,7 @@ function Get-AgentCurrentCISnapshot {
 function Wait-AgentRequiredChecksReady {
   $peers = @($requiredCheckPolicies | Where-Object { $_.context -ine 'trusted-control-plane' })
   if ($peers.Count -eq 0) { return [pscustomobject]@{ ready = $true; attempts = 0; reason = 'no_peer_checks_to_wait_for' } }
-  Wait-AgentCIState -ReadCandidate { param($Deadline) Get-AgentCurrentCandidateIdentity -Deadline $Deadline -StrictBaseFreshness $strictBaseFreshness } -ReadState {
+  Wait-AgentCIState -ReadCandidate { param($Deadline) Get-AgentCurrentCandidateIdentity -Deadline $Deadline } -ReadState {
     param($Deadline)
     $snapshot = Get-AgentCurrentCISnapshot -Deadline $Deadline
     Get-AgentCIState -Snapshot $snapshot -Policies $peers -TargetSha $prHead
@@ -335,23 +333,20 @@ try {
   $prBase = if ($prAvailable) { [string]$prView.baseRefOid } else { '' }
   # Read-only helpers never mutate shared refs. The caller fetches once in a
   # separate operation when live base evidence actually differs.
-  Add-AgentCheck -Name 'REMOTE_BASE_CURRENT' -Passed ((Test-AgentShaValue $prBase) -and $prBase -eq $originMain) -Blocker 'remote_base_stale_fetch_required'
+  $liveRead = if ($authOk) { Get-AgentJsonFromGh -Arguments @('api', "repos/$ExpectedRepository/git/ref/heads/$ExpectedBaseBranch") } else { [pscustomobject]@{ available = $false } }
+  $liveTarget = if ($liveRead.available) { Resolve-AgentTargetRef -Ref $liveRead.value -Repository $ExpectedRepository -Branch $ExpectedBaseBranch } else { [pscustomobject]@{ valid = $false; sha = '' } }
+  $liveBaseSha = $liveTarget.sha
+  Add-AgentCheck -Name 'LIVE_TARGET_READABLE' -Passed ([bool]$liveTarget.valid) -Blocker 'base_source_unavailable'
+  Add-AgentCheck -Name 'REMOTE_BASE_CURRENT' -Passed ($liveTarget.valid -and (Test-AgentShaValue $originMain) -and $liveBaseSha -ceq $originMain) -Blocker 'remote_base_stale_fetch_required'
   $executionBase = if ([string]::IsNullOrWhiteSpace($ExpectedExecutionBaseSha)) { $originMain } else { $ExpectedExecutionBaseSha }
   $rulesetPolicy = if ($ghAvailable -and $authOk) { Get-AgentRulesetPolicy } else {
     [pscustomobject]@{ available = $false; error = 'active_ruleset_unreadable'; required_review_thread_resolution = $false; required_approving_review_count = -1; required_status_checks = @(); required_status_check_policies = @(); strict_required_status_checks_policy = $null; id = $null; name = $null; enforcement = $null }
   }
   $strictBaseFreshness = $rulesetPolicy.available -and [bool]$rulesetPolicy.strict_required_status_checks_policy
   $executionBaseValid = (Test-AgentShaValue $executionBase)
-  $trustedExecutionBaseBound = $executionBaseValid -and (
-    (-not $strictBaseFreshness) -or
-    ((Test-AgentShaValue $prBase) -and [string]::Equals($executionBase, $prBase, [StringComparison]::OrdinalIgnoreCase))
-  )
-  $executionBaseCurrent = $executionBaseValid -and (
-    (-not $strictBaseFreshness) -or
-    ((Test-AgentShaValue $prBase) -and (Test-AgentShaValue $originMain) -and
-      [string]::Equals($executionBase, $prBase, [StringComparison]::OrdinalIgnoreCase) -and
-      [string]::Equals($executionBase, $originMain, [StringComparison]::OrdinalIgnoreCase))
-  )
+  # P is the actual materialized evaluator source, never the recorded PR base.
+  $trustedExecutionBaseBound = $executionBaseValid -and $liveTarget.valid -and $executionBase -ceq $liveBaseSha
+  $executionBaseCurrent = $trustedExecutionBaseBound -and $executionBase -ceq $originMain
   Add-AgentCheck -Name 'TRUSTED_EXECUTION_BASE_BOUND' -Passed $trustedExecutionBaseBound -Blocker 'execution_base_superseded'
   Add-AgentCheck -Name 'EXECUTION_BASE_CURRENT' -Passed $executionBaseCurrent -Blocker 'execution_base_superseded'
   $prHeadBranch = if ($prAvailable) { [string]$prView.headRefName } else { '' }
@@ -361,11 +356,7 @@ try {
   Add-AgentCheck -Name 'EXPECTED_BASE_BRANCH' -Passed ($prAvailable -and [string]::Equals($prBaseBranch, $ExpectedBaseBranch, [StringComparison]::OrdinalIgnoreCase)) -Blocker 'unexpected_pr_base_branch'
   $integrationOverlap = Get-AgentBaseIntegrationState -GitPath $GitPath -RepoRoot $resolvedRepoRoot -OriginMain $originMain -ReviewedHead $reviewedHead -Strict $strictBaseFreshness
   $baseFresh = $integrationOverlap.baseFresh
-  $baseMetadataCurrent = (-not $strictBaseFreshness) -or (
-    (Test-AgentShaValue $prBase) -and (Test-AgentShaValue $originMain) -and
-    [string]::Equals($prBase, $originMain, [StringComparison]::OrdinalIgnoreCase)
-  )
-  Add-AgentCheck -Name 'BASE_NOT_INVALIDATED' -Passed ($integrationOverlap.baseAllowed -and $baseMetadataCurrent) -Blocker 'pr_base_sha_is_stale'
+  Add-AgentCheck -Name 'BASE_NOT_INVALIDATED' -Passed ($integrationOverlap.baseAllowed) -Blocker 'pr_base_sha_is_stale'
   Add-AgentCheck -Name 'STALE_BASE_INTEGRATION_CLEAR' -Passed $integrationOverlap.integrationClear -Blocker 'merge_integration_overlap_requires_qualification'
   if (-not $integrationOverlap.available) { $warnings += ('stale_base_overlap:' + $integrationOverlap.error) }
   Add-AgentCheck -Name 'NO_CROSS_REPO' -Passed ($prAvailable -and (-not [bool]$prView.isCrossRepository)) -Blocker 'cross_repository_pr'
@@ -386,7 +377,7 @@ try {
       schemaVersion = 4; ciEvidence = [ordered]@{ available = $ciSnapshot.available; state = $ciEvaluation.state; error = $ciSnapshot.error; apiCalls = $ciSnapshot.apiCalls; wait = $requiredChecksReady }; kind = 'babel_agent_pr_gate'; status = 'BLOCKED'; mergeReady = $false
       repository = $ExpectedRepository; remote = $ExpectedRemote
       pr = [ordered]@{ number = $PR; url = [string]$prView.url }
-      sha = [ordered]@{ reviewedHead = $reviewedHead; prHead = $prHead; remoteHead = $remotePrHead; ciHead = $null; baseHead = $prBase; currentOriginMain = $originMain; trustedPolicySha = $executionBase }
+      sha = [ordered]@{ reviewedHead = $reviewedHead; prHead = $prHead; remoteHead = $remotePrHead; ciHead = $null; baseHead = $prBase; liveTargetHead = $liveBaseSha; fetchedTargetHead = $originMain; currentOriginMain = $originMain; trustedPolicySha = $executionBase }
       branch = [ordered]@{ local = $localBranch; prHead = $prHeadBranch; prBase = $prBaseBranch }
       worktree = [ordered]@{ clean = $status.clean; dirtyPaths = @($status.dirtyPaths); isolated = $topology.isolated }
       reviewPolicy = [ordered]@{ auditOnly = $true }
@@ -490,7 +481,7 @@ try {
   if ($requiredChecksReady.ready -and $requiredChecksReady.attempts -gt 0) {
     # A wait cannot freeze approvals, threads, base policy or remote identity.
     $freshPR = Get-AgentJsonFromGh -Arguments @('pr', 'view', [string]$PR, '--repo', $ExpectedRepository, '--json', $prFields)
-    $freshIdentity = if ($freshPR.available) { Test-AgentCandidateIdentity -Candidate $freshPR.value -HeadSha $prHead -BaseSha $prBase -StrictBaseFreshness $true }
+    $freshIdentity = if ($freshPR.available) { Get-AgentCurrentCandidateIdentity }
       else { [pscustomobject]@{ valid = $false } }
     Add-AgentCheck -Name 'POST_WAIT_CANDIDATE_CURRENT' -Passed ([bool]$freshIdentity.valid) -Blocker 'candidate_or_base_changed_during_wait'
     Add-AgentCheck -Name 'POST_WAIT_MERGE_STATE_CLEAN' -Passed ($freshPR.available -and
@@ -583,14 +574,14 @@ try {
     try { Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value $independentReviewSummary -ErrorAction Stop }
     catch { $warnings += 'gate_step_summary_write_failed' }
   }
-  $finalIdentity = if ($prAvailable -and $authOk) { Get-AgentCurrentCandidateIdentity -StrictBaseFreshness $strictBaseFreshness } else { [pscustomobject]@{ valid = $false; reason = 'candidate_source_unavailable' } }
+  $finalIdentity = if ($prAvailable -and $authOk) { Get-AgentCurrentCandidateIdentity } else { [pscustomobject]@{ valid = $false; reason = 'candidate_source_unavailable' } }
   Add-AgentCheck -Name 'FINAL_CANDIDATE_CURRENT' -Passed ([bool]$finalIdentity.valid) -Blocker $finalIdentity.reason
   $auditPassed = $blockers.Count -eq 0
   $mergeReady = $auditPassed
   $result = [ordered]@{
     schemaVersion = 4; ciEvidence = [ordered]@{ available = $ciSnapshot.available; state = $ciEvaluation.state; error = $ciSnapshot.error; apiCalls = $ciSnapshot.apiCalls; wait = $requiredChecksReady }; kind = 'babel_agent_pr_gate'; status = if ($mergeReady) { 'MERGE_READY' } else { 'BLOCKED' }; mergeReady = $mergeReady; summary = $independentReviewSummary
     repository = $ExpectedRepository; remote = $ExpectedRemote; pr = [ordered]@{ number = $PR; url = if ($prAvailable) { [string]$prView.url } else { $null } }
-    sha = [ordered]@{ reviewedHead = $reviewedHead; prHead = $prHead; remoteHead = $remotePrHead; ciHead = if ($ciHeadMatch) { $prHead } else { $null }; baseHead = $prBase; currentOriginMain = $originMain; trustedPolicySha = $executionBase }
+    sha = [ordered]@{ reviewedHead = $reviewedHead; prHead = $prHead; remoteHead = $remotePrHead; ciHead = if ($ciHeadMatch) { $prHead } else { $null }; baseHead = $prBase; liveTargetHead = $liveBaseSha; fetchedTargetHead = $originMain; currentOriginMain = $originMain; trustedPolicySha = $executionBase }
     branch = [ordered]@{ local = $localBranch; prHead = $prHeadBranch; prBase = $prBaseBranch }
     worktree = [ordered]@{ clean = $status.clean; dirtyPaths = @($status.dirtyPaths); isolated = $topology.isolated }
     repositoryPolicy = [ordered]@{ source = 'github_ruleset'; rulesetId = if ($rulesetPolicy.available) { $rulesetPolicy.id } else { $null }; name = if ($rulesetPolicy.available) { $rulesetPolicy.name } else { $null }; enforcement = if ($rulesetPolicy.available) { $rulesetPolicy.enforcement } else { $null }; githubRequiredApprovalCount = $githubApprovalCount; requiredReviewThreadResolution = if ($rulesetPolicy.available) { $rulesetPolicy.required_review_thread_resolution } else { $null }; requiredStatusChecks = @($requiredChecks); requiredStatusCheckProducers = @($requiredCheckPolicies); requiredStatusCheckProducersBound = [bool]$producerBindingsComplete; strictRequiredStatusChecksPolicy = if ($rulesetPolicy.available) { $rulesetPolicy.strict_required_status_checks_policy } else { $null }; staleBaseIntegrationOverlap = if ($integrationOverlap.available) { @($integrationOverlap.overlap) } else { @() }; staleBaseIntegrationOverlapEvaluated = [bool]$integrationOverlap.available; staleBaseIntegrationOverlapError = if ($integrationOverlap.available) { '' } else { [string]$integrationOverlap.error } }

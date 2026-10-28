@@ -43,6 +43,16 @@ throw 'Candidate-controlled launcher must never execute.'
 $ghScript = @'
 param([Parameter(ValueFromRemainingArguments = $true)][string[]]$GhArguments)
 Add-Content -LiteralPath $env:BABEL_MERGE_TEST_GH_LOG -Value ($GhArguments -join ' ')
+if ($GhArguments[0] -eq 'api' -and $GhArguments[1] -eq 'repos/gthgomez/Babel/git/ref/heads/main') {
+  $reads = ([regex]::Matches((Get-Content -Raw -LiteralPath $env:BABEL_MERGE_TEST_GH_LOG), 'git/ref/heads/main')).Count
+  $tip = if ($reads -gt 1 -and $env:BABEL_MERGE_TEST_NEXT_TIP) { $env:BABEL_MERGE_TEST_NEXT_TIP } else { $env:BABEL_MERGE_TEST_LIVE_TIP }
+  if ($env:BABEL_MERGE_TEST_REF_FAILURE -eq 'missing') { exit 1 }
+  $ref = 'refs/heads/main'; $url = 'https://api.github.com/repos/gthgomez/Babel/git/refs/heads/main'
+  if ($env:BABEL_MERGE_TEST_REF_FAILURE -eq 'branch') { $ref = 'refs/heads/other' }
+  if ($env:BABEL_MERGE_TEST_REF_FAILURE -eq 'repository') { $url = 'https://api.github.com/repos/other/repo/git/refs/heads/main' }
+  @{ ref = $ref; url = $url; object = @{ type = 'commit'; sha = $tip } } | ConvertTo-Json -Compress
+  exit 0
+}
 if ($GhArguments[0] -eq 'api' -and $env:BABEL_MERGE_TEST_NONSTRICT -eq '1') {
   if ($GhArguments[1] -like '*rulesets?*') { Write-Output '[{"id":1,"name":"protect-main","enforcement":"active"}]' }
   else { Write-Output '{"rules":[{"type":"required_status_checks","parameters":{"strict_required_status_checks_policy":false}}]}' }
@@ -50,8 +60,8 @@ if ($GhArguments[0] -eq 'api' -and $env:BABEL_MERGE_TEST_NONSTRICT -eq '1') {
 }
 if ($GhArguments.Count -lt 3 -or $GhArguments -notcontains '--repo' -or $GhArguments -notcontains 'gthgomez/Babel') { exit 9 }
 if ($GhArguments[0] -eq 'pr' -and $GhArguments[1] -eq 'view') {
-  if ($GhArguments -contains 'baseRefOid' -and $GhArguments -notcontains 'state,headRefOid,baseRefOid,isDraft,mergeable,mergeStateStatus') {
-    Write-Output ('{"baseRefOid":"' + $env:BABEL_MERGE_TEST_BASE + '"}')
+  if ($GhArguments -contains 'baseRefOid' -or $GhArguments -contains 'baseRefOid,baseRefName') {
+    @{ baseRefOid = $env:BABEL_MERGE_TEST_RECORDED; baseRefName = 'main' } | ConvertTo-Json -Compress
   } else {
     Write-Output $env:BABEL_MERGE_TEST_PR_VIEW
   }
@@ -71,11 +81,19 @@ function Invoke-MergeFixture {
     [int]$GateExit = 0,
     [int]$MergeExit = 0,
     [string]$MergeMethod = 'squash',
+    [string]$RecordedBase = '',
+    [string]$LiveTip = '',
+    [string]$NextLiveTip = '',
+    [string]$RefFailure = '',
     [switch]$CleanupFailure
   )
   Set-Content -LiteralPath $ghLog -Value '' -Encoding utf8NoBOM
   Set-Content -LiteralPath $launcherLog -Value '' -Encoding utf8NoBOM
   $env:BABEL_MERGE_TEST_BASE = $base
+  $env:BABEL_MERGE_TEST_RECORDED = if ($RecordedBase) { $RecordedBase } else { $base }
+  $env:BABEL_MERGE_TEST_LIVE_TIP = if ($LiveTip) { $LiveTip } else { $base }
+  $env:BABEL_MERGE_TEST_NEXT_TIP = $NextLiveTip
+  $env:BABEL_MERGE_TEST_REF_FAILURE = $RefFailure
   $env:BABEL_MERGE_TEST_GATE_JSON = $GateJson
   $env:BABEL_MERGE_TEST_PR_VIEW = $ViewJson
   $env:BABEL_MERGE_TEST_GATE_EXIT = [string]$GateExit
@@ -139,16 +157,33 @@ try {
   $base = (& git -C $repoRoot rev-parse HEAD).Trim()
   Assert-MergeTest ($base -match '^[0-9a-f]{40}$') 'fixture base commit must exist'
   Set-Content -LiteralPath (Join-Path $scriptsDir 'trusted-merge-gate.ps1') -Value $candidateGate -Encoding utf8NoBOM
-  $ready = @{ status = 'MERGE_READY'; mergeReady = $true; repository = 'gthgomez/Babel';
+  $ready = @{ status = 'MERGE_READY'; mergeReady = $true; repository = 'gthgomez/Babel'; repositoryPolicy = @{ strictRequiredStatusChecksPolicy = $true };
     pr = @{ number = 42 }; sha = @{ baseHead = $base; reviewedHead = $head; prHead = $head;
-      remoteHead = $head; ciHead = $head } } | ConvertTo-Json -Compress -Depth 6
-  $view = @{ state = 'OPEN'; baseRefOid = $base; headRefOid = $head; isDraft = $false;
+    remoteHead = $head; ciHead = $head; liveTargetHead = $base; fetchedTargetHead = $base; trustedPolicySha = $base } } | ConvertTo-Json -Compress -Depth 6
+  $view = @{ state = 'OPEN'; baseRefOid = $base; baseRefName = 'main'; headRefOid = $head; isDraft = $false;
     mergeable = 'MERGEABLE'; mergeStateStatus = 'CLEAN' } | ConvertTo-Json -Compress
 
   $happy = Invoke-MergeFixture -GateJson $ready -ViewJson $view -SuppliedBase $base
   Assert-MergeTest ($happy.exitCode -eq 0 -and $happy.json.status -eq 'MERGED') "exact-head merge must succeed: $($happy.text); gh: $($happy.gh)"
   Assert-MergeTest ($happy.launcher.Contains("trusted_base=$base")) 'gate launcher must come from trusted base commit'
   Assert-MergeTest ($happy.gh.Contains("pr merge 42 --repo gthgomez/Babel --match-head-commit $head --squash")) 'merge must bind repository and exact head'
+
+  $oldRecorded = $ready | ConvertFrom-Json; $oldRecorded.sha.baseHead = $otherHead
+  $oldView = $view | ConvertFrom-Json; $oldView.baseRefOid = $otherHead
+  try {
+    $env:BABEL_MERGE_TEST_NONSTRICT = '1'
+    $disjoint = Invoke-MergeFixture -GateJson ($oldRecorded | ConvertTo-Json -Compress -Depth 6) -ViewJson ($oldView | ConvertTo-Json -Compress) -RecordedBase $otherHead
+    Assert-MergeTest ($disjoint.exitCode -eq 0 -and $disjoint.launcher.Contains("trusted_base=$base")) 'old recorded provenance must not select the evaluator or block qualified live-base merge'
+    $movedTarget = Invoke-MergeFixture -GateJson $ready -ViewJson $view -NextLiveTip $otherHead
+    Assert-MergeTest ($movedTarget.exitCode -ne 0 -and @($movedTarget.json.blockers) -contains 'live_target_changed') 'target advancement after nonstrict qualification must block'
+    Assert-MergeTest (-not $movedTarget.gh.Contains('pr merge')) 'target advancement must never reach merge'
+  } finally { Remove-Item Env:BABEL_MERGE_TEST_NONSTRICT -ErrorAction SilentlyContinue }
+  foreach ($failure in @('missing', 'branch', 'repository')) {
+    $badRef = Invoke-MergeFixture -GateJson $ready -ViewJson $view -RefFailure $failure
+    Assert-MergeTest ($badRef.exitCode -ne 0 -and -not $badRef.gh.Contains('pr merge')) "invalid target $failure must stop before merge"
+  }
+  $badRef = Invoke-MergeFixture -GateJson $ready -ViewJson $view -LiveTip 'short'
+  Assert-MergeTest ($badRef.exitCode -ne 0 -and -not $badRef.gh.Contains('pr merge')) 'malformed target SHA must stop before merge'
 
   $cleanupAfterSuccess = Invoke-MergeFixture -GateJson $ready -ViewJson $view -CleanupFailure
   Assert-MergeTest ($cleanupAfterSuccess.exitCode -eq 0 -and $cleanupAfterSuccess.json.status -eq 'MERGED') "cleanup failure must not turn a successful merge into failure: exit=$($cleanupAfterSuccess.exitCode); $($cleanupAfterSuccess.text)"
@@ -178,6 +213,17 @@ try {
   Assert-MergeTest ($wrongBase.exitCode -ne 0 -and @($wrongBase.json.blockers) -contains 'merge_base_sha_mismatch') 'candidate supplied as base must block'
   Assert-MergeTest (-not $wrongBase.gh.Contains('pr merge')) 'wrong base must never merge'
 
+  foreach ($field in @('liveTargetHead', 'fetchedTargetHead', 'trustedPolicySha')) {
+    $wrongBinding = $ready | ConvertFrom-Json
+    $wrongBinding.sha.$field = $otherHead
+    $wrong = Invoke-MergeFixture -GateJson ($wrongBinding | ConvertTo-Json -Compress -Depth 6) -ViewJson $view
+    Assert-MergeTest ($wrong.exitCode -ne 0 -and @($wrong.json.blockers) -contains 'merge_gate_base_mismatch' -and -not $wrong.gh.Contains('pr merge')) "wrong $field must not reach merge"
+  }
+  $oldPolicy = $ready | ConvertFrom-Json
+  $oldPolicy.repositoryPolicy.strictRequiredStatusChecksPolicy = $false
+  $tightened = Invoke-MergeFixture -GateJson ($oldPolicy | ConvertTo-Json -Compress -Depth 6) -ViewJson $view
+  Assert-MergeTest ($tightened.exitCode -ne 0 -and @($tightened.json.blockers) -contains 'merge_gate_freshness_policy_changed') 'strict policy tightening after gate must require requalification'
+
   $wrongGate = $ready | ConvertFrom-Json
   $wrongGate.sha.ciHead = $otherHead
   $wrong = Invoke-MergeFixture -GateJson ($wrongGate | ConvertTo-Json -Compress -Depth 6) -ViewJson $view
@@ -203,6 +249,8 @@ try {
       @{ Name = 'draft'; Change = @{ isDraft = $true }; Blocker = 'pr_is_draft' },
       @{ Name = 'conflict'; Change = @{ mergeable = 'CONFLICTING' }; Blocker = 'pr_not_mergeable' },
       @{ Name = 'blocked state'; Change = @{ mergeStateStatus = 'BLOCKED' }; Blocker = 'pr_merge_state_not_clean' }
+      @{ Name = 'unstable state'; Change = @{ mergeStateStatus = 'UNSTABLE' }; Blocker = 'pr_merge_state_not_clean' },
+      @{ Name = 'retargeted'; Change = @{ baseRefName = 'other' }; Blocker = 'unexpected_pr_base_branch' }
     )) {
     $scenarioView = $view | ConvertFrom-Json
     foreach ($property in $scenario.Change.Keys) { $scenarioView.$property = $scenario.Change[$property] }
@@ -223,7 +271,8 @@ try {
   $env:PATH = $priorPath
   foreach ($name in @('BABEL_MERGE_TEST_BASE', 'BABEL_MERGE_TEST_GATE_JSON', 'BABEL_MERGE_TEST_PR_VIEW',
       'BABEL_MERGE_TEST_GATE_EXIT', 'BABEL_MERGE_TEST_MERGE_EXIT', 'BABEL_MERGE_TEST_GH_LOG',
-      'BABEL_MERGE_TEST_LAUNCHER_LOG', 'BABEL_MERGE_TEST_SCRIPT')) { Remove-Item "Env:$name" -ErrorAction SilentlyContinue }
+      'BABEL_MERGE_TEST_LAUNCHER_LOG', 'BABEL_MERGE_TEST_SCRIPT', 'BABEL_MERGE_TEST_RECORDED',
+      'BABEL_MERGE_TEST_LIVE_TIP', 'BABEL_MERGE_TEST_NEXT_TIP', 'BABEL_MERGE_TEST_REF_FAILURE')) { Remove-Item "Env:$name" -ErrorAction SilentlyContinue }
   Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
 }
 

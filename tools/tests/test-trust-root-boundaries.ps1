@@ -106,6 +106,43 @@ if ($workflow -match 'BABEL_REVIEW_CONTROLLER_(LOGIN|APP_ID)') { throw 'Trusted 
 if ($workflow -notmatch [regex]::Escape('github.event.repository.owner.id')) { throw 'Trusted workflow is missing owner-controller provenance binding.' }
 if ($workflow -match [regex]::Escape('persist-credentials: true')) { throw 'Trusted workflow must not persist credentials.' }
 
+# Execute both pre-checkout target resolvers. They must authenticate the exact
+# repository/ref without reading candidate code, then pin checkout to that SHA.
+$targetResolvers = [regex]::Matches($workflow, '(?ms)^      - name: Resolve authenticated target\r?\n(?:(?!^      - name:).)*?^        run: \|\r?\n(?<script>(?:          [^\r\n]*(?:\r?\n|$)|\r?\n)+)')
+if ($targetResolvers.Count -ne 2) { throw 'Both audit paths must resolve the authenticated live target before checkout.' }
+if ([regex]::Matches($workflow, [regex]::Escape('ref: ${{ steps.trusted_target.outputs.sha }}')).Count -ne 2) { throw 'Both audit checkouts must pin the authenticated evaluator SHA.' }
+if ([regex]::Matches($workflow, [regex]::Escape('BASE_SHA: ${{ steps.trusted_target.outputs.sha }}')).Count -ne 2) { throw 'Both launchers must receive their actual evaluator source.' }
+foreach ($resolver in $targetResolvers) {
+  $body = $resolver.Groups['script'].Value -replace '(?m)^ {10}', ''
+  if ($body -match 'git |Get-Content|Import-Module|HEAD_SHA|BASE_SHA') { throw 'Pre-checkout trust selection must not read candidate or recorded-base content.' }
+  $resolveTarget = [scriptblock]::Create($body)
+  foreach ($scenario in @('valid', 'wrong-repository', 'wrong-ref', 'wrong-url', 'deleted', 'malformed-sha', 'wrong-type')) {
+    & {
+      $priorRepo = $env:GITHUB_REPOSITORY
+      $priorOutput = $env:GITHUB_OUTPUT
+      try {
+        $env:GITHUB_REPOSITORY = if ($scenario -eq 'wrong-repository') { 'other/repo' } else { 'gthgomez/Babel' }
+        $env:GITHUB_OUTPUT = 'fixture-output'
+        $observed = @{ output = '' }
+        function Add-Content { param($LiteralPath, $Value) $observed.output += $Value }
+        function gh {
+          param($Api, $Endpoint)
+          if ($Endpoint -cne 'repos/gthgomez/Babel/git/ref/heads/main') { throw 'Unexpected target endpoint.' }
+          $global:LASTEXITCODE = if ($scenario -eq 'deleted') { 1 } else { 0 }
+          @{ ref = $(if ($scenario -eq 'wrong-ref') { 'refs/heads/other' } else { 'refs/heads/main' });
+             url = $(if ($scenario -eq 'wrong-url') { 'https://api.github.com/repos/other/repo/git/refs/heads/main' } else { 'https://api.github.com/repos/gthgomez/Babel/git/refs/heads/main' });
+             object = @{ type = $(if ($scenario -eq 'wrong-type') { 'tag' } else { 'commit' }); sha = $(if ($scenario -eq 'malformed-sha') { 'short' } else { 'b' * 40 }) } } | ConvertTo-Json -Compress
+        }
+        $failed = $false
+        try { & $resolveTarget } catch { $failed = $true }
+        if ($scenario -eq 'valid') {
+          if ($failed -or $observed.output -cne ('sha=' + ('b' * 40))) { throw 'Valid authenticated target must be selected exactly.' }
+        } elseif (-not $failed -or $observed.output) { throw "Invalid target $scenario selected executable source." }
+      } finally { $env:GITHUB_REPOSITORY = $priorRepo; $env:GITHUB_OUTPUT = $priorOutput }
+    }
+  }
+}
+
 # Benign audit blockers are registered in config/review-risk-policy.json and
 # read from there by every audit step. The workflow must hold no inline copy:
 # additions to the allowlist require a policy-file change plus this reviewed
