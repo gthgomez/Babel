@@ -5,6 +5,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { snapshotGovernanceBytes } from './governanceReconcile.js';
+import { sameGovernancePath } from './gitGovernance.js';
 import { buildBaseline, checkBaseline } from './integrity.js';
 
 function fixture(): { root: string; worktree: string; common: string } {
@@ -22,7 +23,7 @@ test('actual linked worktree snapshots shared Git governance and detects config 
   try {
     const baseline = buildBaseline(f.worktree, f.common);
     const snapshots = snapshotGovernanceBytes(f.worktree, [], undefined, f.common);
-    assert.ok(snapshots.some((s) => s.abs === join(f.common, 'config') && s.kind === 'file'));
+    assert.ok(snapshots.some((s) => s.kind === 'file' && s.abs.endsWith('config') && sameGovernancePath(s.abs, join(f.common, 'config'))));
     writeFileSync(join(f.common, 'config'), '[core]\n bare = false\n');
     assert.equal(checkBaseline(f.worktree, baseline).ok, false);
   } finally { rmSync(f.root, { recursive: true, force: true }); }
@@ -164,4 +165,21 @@ test('a bound Chat engine cannot carry Git governance authority into another pro
     if (prior === undefined) delete process.env['BABEL_RUNS_DIR']; else process.env['BABEL_RUNS_DIR'] = prior;
     rmSync(f.root, { recursive: true, force: true });
   }
+});
+
+test('physical Git targets remain protected for direct writes and patches', async () => {
+  const f = fixture();
+  try {
+    const { realpathSync } = await import('node:fs');
+    const { establishAuthoritySession } = await import('./sessionContext.js');
+    const { decideWithLease } = await import('./wire.js');
+    const session = establishAuthoritySession({ repoRoot: f.worktree, trustedGitCommonDir: f.common, lease: null });
+    assert.ok(session.baseline);
+    const context = { lease: null, authoritySession: session, baseline: { repoRoot: session.repoRoot, manifest: session.baseline }, cwd: f.worktree };
+    for (const path of [realpathSync.native(join(f.worktree, '.git')), realpathSync.native(join(f.common, 'config')), join(realpathSync.native(join(f.common, 'hooks')), 'new-hook')]) {
+      assert.equal(decideWithLease({ type: 'write_file', path, content: 'denied' }, 'workspace_write', context).reasonCode, 'DENY_POLICY_SELF_MUTATION');
+      assert.equal(decideWithLease({ type: 'apply_patch', patch: `--- ${path}\n+++ ${path}\n@@ -1 +1 @@\n-old\n+new\n` }, 'workspace_write', context).reasonCode, 'DENY_POLICY_SELF_MUTATION');
+    }
+    assert.equal(decideWithLease({ type: 'write_file', path: 'new-source.ts', content: 'allowed' }, 'workspace_write', context).decision, 'allow');
+  } finally { rmSync(f.root, { recursive: true, force: true }); }
 });

@@ -1,5 +1,5 @@
 /** Resolve linked-worktree governance without executing Git or following symlinks. */
-import { lstatSync, readFileSync } from 'node:fs';
+import { lstatSync, readFileSync, realpathSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve, win32, posix } from 'node:path';
 
 /** Reject traversed symlinks; missing descendants remain valid snapshot targets. */
@@ -22,8 +22,44 @@ function regularText(path: string): string {
   return readFileSync(path, 'utf8').trim();
 }
 
-function samePath(left: string, right: string): boolean {
-  return process.platform === 'win32' ? left.toLowerCase() === right.toLowerCase() : left === right;
+type IdentityFs = { lstatSync(path: string): Pick<import('node:fs').Stats, 'isDirectory' | 'isSymbolicLink'>; realpathSync(path: string): string };
+
+/** Canonicalize validated existing ancestors; retain only missing ordinary suffixes. */
+export function canonicalGovernanceTarget(path: string, fs: IdentityFs = { lstatSync, realpathSync: realpathSync.native }, platform = process.platform, allowMissing = true): string {
+  const paths = platform === 'win32' ? win32 : posix;
+  let existing = paths.resolve(path);
+  const suffix: string[] = [];
+  while (allowMissing) {
+    try { fs.lstatSync(existing); break; } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT' || paths.dirname(existing) === existing) throw error;
+      suffix.unshift(paths.basename(existing));
+      existing = paths.dirname(existing);
+    }
+  }
+  const chain = [existing];
+  for (let p = paths.dirname(existing); paths.dirname(p) !== p; p = paths.dirname(p)) chain.unshift(p);
+  for (const item of chain) {
+    const stat = fs.lstatSync(item);
+    if (stat.isSymbolicLink() || ((item !== existing || suffix.length > 0) && !stat.isDirectory())) throw new Error('Invalid governance ancestor');
+  }
+  const canonical = paths.join(fs.realpathSync(existing), ...suffix);
+  return platform === 'win32' ? canonical.toLowerCase() : canonical;
+}
+
+/** Compare existing objects after rejecting links, including every ancestor and leaf. */
+export function sameGovernancePath(left: string, right: string, fs: IdentityFs = { lstatSync, realpathSync: realpathSync.native }, platform = process.platform): boolean {
+  return canonicalGovernanceTarget(left, fs, platform, false) === canonicalGovernanceTarget(right, fs, platform, false);
+}
+
+/** Physical aliases cannot evade direct-write or patch governance admission. */
+export function isProtectedGovernanceAlias(root: string, cwd: string, target: string, entries: readonly { path: string }[], fs: IdentityFs = { lstatSync, realpathSync: realpathSync.native }, platform = process.platform): boolean {
+  const paths = platform === 'win32' ? win32 : posix;
+  const actual = canonicalGovernanceTarget(paths.resolve(cwd, target), fs, platform);
+  return entries.some(entry => {
+    const protectedPath = canonicalGovernanceTarget(paths.resolve(root, entry.path), fs, platform);
+    const rel = paths.relative(protectedPath, actual);
+    return rel === '' || (rel !== '..' && !rel.startsWith(`..${paths.sep}`) && !paths.isAbsolute(rel));
+  });
 }
 
 /** null denotes a normal repository (or no Git metadata). */
@@ -41,16 +77,16 @@ export function linkedGitGovernancePaths(repoRoot: string, trustedGitCommonDir?:
   // Authorization precedes every read outside the selected project.
   if (!trustedGitCommonDir || !isAbsolute(trustedGitCommonDir)) throw new Error('Missing absolute trusted Git common directory');
   const trusted = resolve(trustedGitCommonDir);
-  if (!samePath(dirname(admin), join(trusted, 'worktrees'))) throw new Error('Git admin path is outside trusted Git common directory');
+  if (!sameGovernancePath(dirname(admin), join(trusted, 'worktrees'))) throw new Error('Git admin path is outside trusted Git common directory');
   assertGovernanceAncestors(join(trusted, 'config'));
   const commonText = regularText(join(admin, 'commondir'));
   if (!commonText || /[\r\n]/.test(commonText)) throw new Error('Invalid Git common directory');
   const common = resolve(admin, commonText);
-  if (!samePath(common, trusted) || !samePath(dirname(dirname(admin)), common) || !samePath(dirname(admin), join(common, 'worktrees'))) {
+  if (!sameGovernancePath(common, trusted) || !sameGovernancePath(dirname(dirname(admin)), common) || !sameGovernancePath(dirname(admin), join(common, 'worktrees'))) {
     throw new Error('Git worktree admin directory is outside common worktrees');
   }
   const backlink = regularText(join(admin, 'gitdir'));
-  if (!backlink || /[\r\n]/.test(backlink) || !samePath(resolve(admin, backlink), pointer)) {
+  if (!backlink || /[\r\n]/.test(backlink) || !sameGovernancePath(resolve(admin, backlink), pointer)) {
     throw new Error('Git worktree backlink mismatch');
   }
   const paths = [pointer, join(admin, 'commondir'), join(admin, 'gitdir')];
