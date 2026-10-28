@@ -283,7 +283,7 @@ export async function* settleStreamingCompletion(input: {
     }) : null;
     if (!currentPaths) { endSpan(turnSpan, SpanStatusCode.OK); return 'continue'; }
     const delivery = formatPreservedUnverifiedTerminalAnswer({
-      authorityReason: 'UNVERIFIED: File changes were read back, but shell isolation is unavailable. Required authoritative verification was not performed; task fulfillment is not certified.',
+      authorityReason: 'UNVERIFIED: A file change was confirmed and the path was read afterward, but shell isolation is unavailable. Required authoritative verification was not performed; task fulfillment is not certified.',
       retainedCandidate: answer, artifactRefs: currentPaths,
     });
     endSpan(turnSpan, SpanStatusCode.OK);
