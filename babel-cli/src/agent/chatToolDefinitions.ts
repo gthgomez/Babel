@@ -591,9 +591,26 @@ const OBSERVATION_COMPILER_TOOLS = new Set([
   'shell_exec',
 ]);
 
+/** Keep structured glob metadata valid and bounded; omitted paths are not source truncation. */
+function globMetadataForPrompt(data: NonNullable<import('../sandbox.js').ToolResult['glob_result']>): string {
+  const complete = JSON.stringify(data);
+  if (complete.length <= 4000) return complete;
+  const projected = { ...data, paths: [] as string[], paths_omitted: data.paths.length };
+  for (const path of data.paths) {
+    projected.paths.push(path);
+    projected.paths_omitted--;
+    if (JSON.stringify(projected).length > 4000) {
+      projected.paths.pop();
+      projected.paths_omitted++;
+      break;
+    }
+  }
+  return JSON.stringify(projected);
+}
+
 export function formatChatToolObservation(
   action: ChatToolAction,
-  result: { stdout?: string; stderr?: string; exitCode?: number | null },
+  result: { stdout?: string; stderr?: string; exitCode?: number | null; glob_result?: import('../sandbox.js').ToolResult['glob_result'] },
   opts?: { spillDir?: string; toolCallId?: string; writeSpill?: (name: string, content: string) => string },
 ): string {
   const tool = chatActionToolName(action);
@@ -625,6 +642,8 @@ export function formatChatToolObservation(
   return [
     `### ${tool} ${target}`,
     `exit_code: ${exitCode}`,
+    ...(action.type === 'glob' && exitCode === 0 && result.glob_result
+      ? [`glob_result: ${globMetadataForPrompt(result.glob_result)}`] : []),
     '```',
     trimForPrompt(body, 4000),
     '```',

@@ -22,7 +22,7 @@ export function formatRegisteredToolObservation(
     observationExitCode !== undefined ? observationExitCode : result.exit_code
   return formatChatToolObservation(
     action,
-    { stdout: result.stdout, stderr: result.stderr, exitCode },
+    { stdout: result.stdout, stderr: result.stderr, exitCode, ...(result.glob_result ? { glob_result: result.glob_result } : {}) },
     { toolCallId, writeSpill: access.writeSpill },
   )
 }

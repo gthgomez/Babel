@@ -20,7 +20,8 @@ import {
   rgGlobFiles,
   rgListFiles,
 } from './ripgrep.js';
-import { buildWorkspaceMap, grepContent, globPaths } from './repoSearch.js';
+import { buildWorkspaceMap, grepContent, globPaths, handleGlobTool } from './repoSearch.js';
+import { formatResultDetail } from '../agent/chatEngineSupport.js';
 
 // ─── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -105,12 +106,33 @@ describe('ripgrep wrapper (when available)', () => {
 
     resetRipgrepDetection();
     const fixture = makeTempFixture();
+    const previousRoot = process.env.BABEL_PROJECT_ROOT;
+    process.env.BABEL_PROJECT_ROOT = fixture.root;
     try {
       const result = await ripgrep(fixture.root, { pattern: 'XYZZYX_NONEXISTENT_12345' });
 
       assert.equal(result.matches.length, 0);
       assert.equal(result.truncated, false);
+      // This existing case is required to execute under pinned native rg on both CI OSes.
+      const empty = await handleGlobTool({ pattern: 'missing-sentinel-*' });
+      assert.equal(formatResultDetail({ type: 'glob', pattern: 'missing-sentinel-*' }, empty), '0 matches');
+      // Win32 normal filenames cannot retain a trailing dot or a newline.
+      const sentinel = process.platform === 'win32' ? 'No paths matched..txt' : 'No paths matched.';
+      writeFileSync(path.join(fixture.root, sentinel), 'public native glob fixture');
+      const one = await handleGlobTool({ pattern: sentinel });
+      assert.equal(one.stdout, sentinel);
+      assert.deepEqual(one.glob_result, { paths: [sentinel], returned_count: 1, truncated: false });
+      assert.equal(formatResultDetail({ type: 'glob', pattern: sentinel }, one), '1 matches');
+      if (process.platform !== 'win32') {
+        assert.equal(one.stdout, empty.stdout, 'display collision must not collapse the structured count');
+        writeFileSync(path.join(fixture.root, 'line\nbreak.txt'), 'public newline filename');
+        assert.deepEqual(rgGlobFiles(fixture.root, 'line*break.txt', 10).paths, ['line\nbreak.txt']);
+      }
+      writeFileSync(path.join(fixture.root, '数据.txt'), 'public Unicode filename');
+      assert.deepEqual(rgGlobFiles(fixture.root, '数据.txt', 10).paths, ['数据.txt']);
+
     } finally {
+      if (previousRoot === undefined) delete process.env.BABEL_PROJECT_ROOT; else process.env.BABEL_PROJECT_ROOT = previousRoot;
       fixture.cleanup();
     }
   });
