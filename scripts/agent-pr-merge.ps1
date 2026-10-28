@@ -119,6 +119,22 @@ function Write-BabelBlocked {
   exit 1
 }
 
+function Get-BabelLiveTarget {
+  # Resolve only the authenticated target repository/ref; never a candidate SHA.
+  $captured = & $ghCommand api 'repos/gthgomez/Babel/git/ref/heads/main' 2>&1
+  if ((Get-BabelLastExitCode) -ne 0) { Write-BabelBlocked @('base_source_unavailable') }
+  $json = Get-BabelLastJsonObject -Text ((@($captured) | ForEach-Object { [string]$_ }) -join "`n")
+  $target = $null
+  try { $target = $json | ConvertFrom-Json -ErrorAction Stop } catch { Write-BabelBlocked @('base_source_unavailable') }
+  $object = Get-BabelJsonProperty -Object $target -Name 'object'
+  $sha = Get-BabelJsonProperty -Object $object -Name 'sha'
+  if ((Get-BabelJsonProperty -Object $target -Name 'ref') -cne 'refs/heads/main' -or
+      (Get-BabelJsonProperty -Object $target -Name 'url') -cne 'https://api.github.com/repos/gthgomez/Babel/git/refs/heads/main' -or
+      (Get-BabelJsonProperty -Object $object -Name 'type') -cne 'commit' -or
+      $sha -isnot [string] -or $sha -cnotmatch '^[a-f0-9]{40}$') { Write-BabelBlocked @('base_source_unavailable') }
+  return $sha
+}
+
 $priorNoReplaceObjects = [Environment]::GetEnvironmentVariable('GIT_NO_REPLACE_OBJECTS', 'Process')
 try {
   # The base launcher uses git show internally. Keep local replace refs out of
@@ -130,14 +146,14 @@ try {
   $resolvedRepo = $null
   try { $resolvedRepo = (Resolve-Path -LiteralPath $RepoRoot -ErrorAction Stop).Path } catch { Write-BabelBlocked @('repo_root_invalid') }
 
-  # Bind the controller source to the live PR base, even when the caller supplied
-  # a base SHA. A syntactically valid candidate SHA is not a trusted base.
+  # R is recorded provenance; B is the authenticated target; P is frozen to B.
+  # A caller-selected candidate SHA can never select the evaluator source.
   if (-not [string]::IsNullOrWhiteSpace($BaseSha) -and $BaseSha -notmatch '^[0-9a-fA-F]{40}$') { Write-BabelBlocked @('merge_base_sha_invalid') }
   $resolvedBaseSha = ''
     $baseViewText = ''
     $baseViewExit = 0
     try {
-      $baseViewCaptured = & $ghCommand pr view ([string]$PR) --repo 'gthgomez/Babel' --json 'baseRefOid' 2>&1
+      $baseViewCaptured = & $ghCommand pr view ([string]$PR) --repo 'gthgomez/Babel' --json 'baseRefOid,baseRefName' 2>&1
       $baseViewExit = Get-BabelLastExitCode
       $baseViewText = (@($baseViewCaptured) | ForEach-Object { [string]$_ }) -join "`n"
     } catch {
@@ -148,11 +164,13 @@ try {
     if ([string]::IsNullOrWhiteSpace($baseViewJsonText)) { Write-BabelBlocked @('merge_base_sha_unavailable') }
     $baseView = $null
     try { $baseView = $baseViewJsonText | ConvertFrom-Json -ErrorAction Stop } catch { Write-BabelBlocked @('merge_base_sha_unavailable') }
-    $resolvedBaseSha = [string](Get-BabelJsonProperty -Object $baseView -Name 'baseRefOid')
-    if ($resolvedBaseSha -notmatch '^[0-9a-fA-F]{40}$') { Write-BabelBlocked @('merge_base_sha_unavailable') }
+    $recordedBaseSha = [string](Get-BabelJsonProperty -Object $baseView -Name 'baseRefOid')
+    if ($recordedBaseSha -notmatch '^[0-9a-fA-F]{40}$') { Write-BabelBlocked @('merge_base_sha_unavailable') }
+    if ((Get-BabelJsonProperty -Object $baseView -Name 'baseRefName') -cne 'main') { Write-BabelBlocked @('unexpected_pr_base_branch') }
+  $resolvedBaseSha = Get-BabelLiveTarget
   if (-not [string]::IsNullOrWhiteSpace($BaseSha) -and -not [string]::Equals($BaseSha, $resolvedBaseSha, [StringComparison]::OrdinalIgnoreCase)) { Write-BabelBlocked @('merge_base_sha_mismatch') }
 
-  # The launcher itself must come from the previously trusted base. Never run
+  # The launcher itself must come from the authenticated trusted target. Never run
   # a candidate checkout's launcher or a caller-selected script.
   $gitPath = (Get-Command git -ErrorAction Stop).Source
   $trustedLauncher = Join-Path ([IO.Path]::GetTempPath()) ('babel-merge-launcher-' + [guid]::NewGuid().ToString('N') + '.ps1')
@@ -209,7 +227,12 @@ try {
   # flip between gate run and merge must be honored at the moment of merge.
   # The gate's own repositoryPolicy remains in the evidence JSON for audit.
   $strictFreshness = Get-BabelStrictFreshness -Repository 'gthgomez/Babel'
-  if ($strictFreshness -and -not [string]::Equals([string](Get-BabelJsonProperty -Object $sha -Name 'baseHead'), $resolvedBaseSha, [StringComparison]::OrdinalIgnoreCase)) { $gateBlockers += 'merge_gate_base_mismatch' }
+  if (-not [string]::Equals([string](Get-BabelJsonProperty -Object $sha -Name 'baseHead'), $recordedBaseSha, [StringComparison]::OrdinalIgnoreCase)) { $gateBlockers += 'merge_gate_base_mismatch' }
+  foreach ($binding in @('liveTargetHead', 'fetchedTargetHead', 'trustedPolicySha')) {
+    if ([string](Get-BabelJsonProperty -Object $sha -Name $binding) -cne $resolvedBaseSha) { $gateBlockers += 'merge_gate_base_mismatch' }
+  }
+  $gatePolicy = Get-BabelJsonProperty -Object $gate -Name 'repositoryPolicy'
+  if ($strictFreshness -and (Get-BabelJsonProperty -Object $gatePolicy -Name 'strictRequiredStatusChecksPolicy') -ne $true) { $gateBlockers += 'merge_gate_freshness_policy_changed' }
   foreach ($gateSha in @(
       (Get-BabelJsonProperty -Object $sha -Name 'reviewedHead'),
       (Get-BabelJsonProperty -Object $sha -Name 'prHead'),
@@ -228,7 +251,7 @@ try {
   $viewExit = 0
   $viewText = ''
   try {
-    $viewCaptured = & $ghCommand pr view ([string]$PR) --repo 'gthgomez/Babel' --json 'state,headRefOid,baseRefOid,isDraft,mergeable,mergeStateStatus' 2>&1
+    $viewCaptured = & $ghCommand pr view ([string]$PR) --repo 'gthgomez/Babel' --json 'state,headRefOid,baseRefOid,baseRefName,isDraft,mergeable,mergeStateStatus' 2>&1
     $viewExit = Get-BabelLastExitCode
     $viewText = (@($viewCaptured) | ForEach-Object { [string]$_ }) -join "`n"
   } catch {
@@ -247,13 +270,16 @@ try {
   $mergeState = [string](Get-BabelJsonProperty -Object $view -Name 'mergeStateStatus')
   if ($liveState -ne 'OPEN') { $viewBlockers += 'pr_not_open' }
   if (-not [string]::Equals($liveHead, [string]$ReviewedHeadSha, [StringComparison]::OrdinalIgnoreCase)) { $viewBlockers += 'pr_head_mismatch' }
-  # Even nonstrict/disjoint qualification binds the base observed by the
-  # audit. A later base advance requires a new integration check.
-  if (-not [string]::Equals([string](Get-BabelJsonProperty -Object $view -Name 'baseRefOid'), $resolvedBaseSha, [StringComparison]::OrdinalIgnoreCase)) { $viewBlockers += 'pr_base_mismatch' }
+  if (-not [string]::Equals([string](Get-BabelJsonProperty -Object $view -Name 'baseRefOid'), $recordedBaseSha, [StringComparison]::OrdinalIgnoreCase)) { $viewBlockers += 'pr_base_mismatch' }
+  if ((Get-BabelJsonProperty -Object $view -Name 'baseRefName') -cne 'main') { $viewBlockers += 'unexpected_pr_base_branch' }
   if ($isDraft -ne $false) { $viewBlockers += 'pr_is_draft' }
   if ($mergeable -ne 'MERGEABLE') { $viewBlockers += 'pr_not_mergeable' }
   if ($mergeState -ne 'CLEAN') { $viewBlockers += 'pr_merge_state_not_clean' }
   if ($viewBlockers.Count -gt 0) { Write-BabelBlocked @($viewBlockers | Select-Object -Unique) }
+  # Requalify any target movement, including nonstrict/disjoint merges. GitHub
+  # provides a head CAS but no target CAS here: a residual race remains between
+  # this final authenticated read and the merge request; post-merge CI is required.
+  if ((Get-BabelLiveTarget) -cne $resolvedBaseSha) { Write-BabelBlocked @('live_target_changed') }
 
   $mergeExit = 0
   try {

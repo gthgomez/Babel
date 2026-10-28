@@ -29,7 +29,7 @@ $waiting.id = 8; $waiting.run_attempt = 2; $waiting.created_at = '2026-10-07T11:
 Assert-CI ((State @((Observation '1')) $true @($waiting)).state -eq 'queued') 'Later attempt of the same workflow must block old success even before jobs appear'
 $waiting.run_attempt = 1
 Assert-CI ((State @((Observation '1')) $true @($waiting)).state -eq 'complete') 'An older workflow must not hide newer successful checks'
-$candidate = [pscustomobject]@{ state = 'OPEN'; isDraft = $false; headRefOid = $head; baseRefOid = $base; mergeable = 'MERGEABLE'; isCrossRepository = $false }
+$candidate = [pscustomobject]@{ state = 'OPEN'; isDraft = $false; headRefOid = $head; baseRefOid = $base; baseRefName = 'main'; mergeable = 'MERGEABLE'; isCrossRepository = $false }
 Assert-CI ((Test-AgentCandidateIdentity -Candidate $candidate -HeadSha $head -BaseSha $base).valid) 'Current candidate should validate'
 foreach ($change in @('base', 'head', 'closed', 'draft', 'conflict')) {
   $copy = $candidate.PSObject.Copy()
@@ -163,4 +163,64 @@ Test-GateWaitCase 30 MERGEABLE BLOCKED CLEAN $true $true 0 $false
 Test-GateWaitCase 30 MERGEABLE BLOCKED CLEAN $false $false 1 $false
 Test-GateWaitCase 0 MERGEABLE BLOCKED CLEAN $false $true 0 $false
 Test-GateWaitCase 30 MERGEABLE CLEAN BLOCKED $false $true 1 $false
+
+# Exercise the actual freshness predicate: recorded PR provenance is not the
+# authenticated target, and cannot establish whether a fetch is current.
+Import-Module (Join-Path $PSScriptRoot '../../scripts/agent-pr-gate-common.psm1') -Force
+$baseCheck = Gate-Statement "^Add-AgentCheck -Name 'REMOTE_BASE_CURRENT'"
+$prBase = 'b' * 40; $liveBaseSha = 'c' * 40; $originMain = $liveBaseSha
+$liveTarget = [pscustomobject]@{ valid = $true; sha = $liveBaseSha }
+$observedBase = @{ passed = $false }
+function Add-AgentCheck($Name, $Passed, $Blocker) { $observedBase.passed = $Passed }
+. $baseCheck
+Assert-CI $observedBase.passed 'Old recorded base with fetched/live target equality must pass freshness'
+$originMain = $prBase
+. $baseCheck
+Assert-CI (-not $observedBase.passed) 'A genuinely stale fetch must fail even when it equals recorded provenance'
+$originMain = $liveBaseSha; $liveTarget.valid = $false
+. $baseCheck
+Assert-CI (-not $observedBase.passed) 'Unavailable authenticated ref must fail closed'
+$liveTarget.valid = $true; $originMain = $liveBaseSha; $executionBaseValid = $true; $executionBase = $liveBaseSha
+$trustedBinding = Gate-Statement '^\$trustedExecutionBaseBound ='
+. $trustedBinding
+Assert-CI $trustedExecutionBaseBound 'The actual evaluator must be pinned to the authenticated target'
+$executionBase = $prBase
+. $trustedBinding
+Assert-CI (-not $trustedExecutionBaseBound) 'Old or candidate-selected evaluator source cannot qualify even under nonstrict policy'
+
+$ref = [pscustomobject]@{ ref = 'refs/heads/main'; url = 'https://api.github.com/repos/test/repo/git/refs/heads/main'; object = [pscustomobject]@{ type = 'commit'; sha = $liveBaseSha } }
+Assert-CI ((Resolve-AgentTargetRef -Ref $ref -Repository 'test/repo' -Branch 'main').valid) 'Authenticated repository/ref/commit identity must validate'
+foreach ($bad in @(
+    $null,
+    [pscustomobject]@{ ref = 'refs/heads/other'; url = $ref.url; object = $ref.object },
+    [pscustomobject]@{ ref = $ref.ref; url = 'https://api.github.com/repos/other/repo/git/refs/heads/main'; object = $ref.object },
+    [pscustomobject]@{ ref = $ref.ref; url = $ref.url; object = [pscustomobject]@{ type = 'tag'; sha = $liveBaseSha } },
+    [pscustomobject]@{ ref = $ref.ref; url = $ref.url; object = [pscustomobject]@{ type = 'commit'; sha = 'short' } }
+  )) {
+  Assert-CI (-not (Resolve-AgentTargetRef -Ref $bad -Repository 'test/repo' -Branch 'main').valid) 'Missing, wrong or malformed authenticated refs must reject'
+}
+
+# Run the real final-identity function with API reads replaced, including a
+# live-target advance under nonstrict policy. No admission logic is copied.
+$identityFunction = @($gateAst.FindAll({ param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Get-AgentCurrentCandidateIdentity' }, $true))
+Assert-CI ($identityFunction.Count -eq 1) 'Final identity function must exist'
+. ([scriptblock]::Create($identityFunction[0].Extent.Text))
+$PR = 42; $ExpectedRepository = 'test/repo'; $ExpectedBaseBranch = 'main'; $prFields = 'fixture'
+$prHead = $head; $prBase = $base; $executionBase = $liveBaseSha
+$api = @{ candidate = $candidate; target = $ref; available = $true }
+function Get-AgentJsonFromGh {
+  param($Deadline, $Arguments)
+  if ($Arguments[0] -eq 'pr') { return [pscustomobject]@{ available = $true; value = $api.candidate } }
+  Assert-CI ($Arguments[1] -eq 'repos/test/repo/git/ref/heads/main') 'Target read must use the exact authenticated repository/branch'
+  return [pscustomobject]@{ available = $api.available; value = $api.target }
+}
+Assert-CI ((Get-AgentCurrentCandidateIdentity).valid) 'Unchanged recorded provenance and live tip must validate'
+$api.target = [pscustomobject]@{ ref = $ref.ref; url = $ref.url; object = [pscustomobject]@{ type = 'commit'; sha = ('d' * 40) } }
+Assert-CI (-not (Get-AgentCurrentCandidateIdentity).valid) 'Target advancement must reject even without strict ancestry policy'
+$api.target = $ref; $api.available = $false
+Assert-CI (-not (Get-AgentCurrentCandidateIdentity).valid) 'Deleted or unreadable target must reject final settlement'
+$api.available = $true; $api.candidate = $candidate.PSObject.Copy(); $api.candidate.baseRefName = 'other'
+Assert-CI (-not (Get-AgentCurrentCandidateIdentity).valid) 'Retargeting the PR must reject'
+$api.candidate.baseRefName = 'main'; $api.candidate.headRefOid = 'd' * 40
+Assert-CI (-not (Get-AgentCurrentCandidateIdentity).valid) 'Changed head must reject final settlement'
 Write-Output 'AGENT_CI_EVIDENCE_TEST_PASS'
