@@ -1433,3 +1433,28 @@ test('sandbox rejects credential-class shadow directories', { skip: process.plat
     fixture.cleanup();
   }
 });
+
+test('shell results distinguish a started process from denial and pre-abort', async () => {
+  const fixture = makeFixture();
+  try {
+    const executor = new SafeExecutor(fixture.projectRoot);
+    writeFileSync(join(fixture.projectRoot, 'verify.test.cjs'), "require('node:test').test('red control',()=>{throw Error('intentional red')})\n");
+    const failed = await executor.testRunAsync('node --test verify.test.cjs', '.', 15000);
+    assert.equal(failed.exit_code, 1);
+    assert.equal(failed.process_started, true);
+    writeFileSync(join(fixture.projectRoot, 'verify.test.cjs'), "require('node:test').test('green control',()=>{})\n");
+    const passed = await executor.testRunAsync('node --test verify.test.cjs', '.', 15000);
+    assert.equal(passed.exit_code, 0);
+    assert.equal(passed.process_started, true);
+    writeFileSync(join(fixture.projectRoot, 'verify.test.cjs'), "require('node:test').test('timeout control',async()=>{console.log('timeout-test-started');await new Promise(r=>setTimeout(r,10000))})\n");
+    const timedOut = await executor.testRunAsync('node --test --experimental-test-isolation=none verify.test.cjs', '.', 500);
+    assert.notEqual(timedOut.exit_code, 0);
+    assert.match(timedOut.stdout, /timeout-test-started/);
+    assert.equal(timedOut.process_started, true);
+    const controller = new AbortController(); controller.abort();
+    const aborted = await executor.testRunAsync('node --test verify.test.cjs', '.', 15000, controller.signal);
+    assert.notEqual(aborted.process_started, true);
+    const denied = await executor.testRunAsync('node --test ../outside.test.cjs', '..', 15000);
+    assert.notEqual(denied.process_started, true);
+  } finally { fixture.cleanup(); }
+});

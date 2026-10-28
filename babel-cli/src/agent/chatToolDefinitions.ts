@@ -976,7 +976,7 @@ function buildAllChatToolDefinitions(): ToolDefinition[] {
       type: 'function',
       function: {
         name: 'test_run',
-        description: 'Run a test command with extended timeout (preferred for test suites).',
+        description: 'Run a test command with extended timeout (preferred for test suites). Uses the same authority policy as run_command; selecting this tool does not authorize arbitrary code. Recognized Node forms include node --test <test-file> and node --import tsx --test <test-file>. Preserve required imports and test scope. Commands still require isolation and all policy checks.',
         parameters: {
           type: 'object',
           properties: {

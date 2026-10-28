@@ -343,7 +343,7 @@ describe('D01/D02 effective-operation policy', () => {
         results: Array<{ tool_name: string; content?: string; exit_code?: number }>,
       ) => boolean;
     };
-    const run = { tool_name: 'run_command', content: 'FAIL 1 test', exit_code: 1 };
+    const run = { tool_name: 'run_command', content: 'FAIL 1 test', exit_code: 1, target: 'npm test', verifierExecuted: true };
     assert.equal(anyEngine.computeVerifierChanged([run]), true, 'first verifier run counts');
     assert.equal(
       anyEngine.computeVerifierChanged([{ ...run }]),
@@ -366,6 +366,25 @@ describe('D01/D02 effective-operation policy', () => {
       'output change counts',
     );
     assert.equal(anyEngine.computeVerifierChanged([]), false, 'no verifier tool is not progress');
+  });
+
+  test('only executed authoritative verifiers earn progress, including real failures', () => {
+    const engine = new ChatEngine({ task: 'run tests', projectRoot: PROJECT_ROOT, model: MODEL });
+    const check = (rows: unknown[]) => (engine as any).computeVerifierChanged(rows);
+    for (const tool_name of ['run_command', 'test_run']) {
+      assert.equal(check([{ tool_name, target: 'npm test', content: 'FAIL 1 test', exit_code: 1 }]), false);
+      assert.equal(check([{ tool_name, target: 'npm test', verifierExecuted: false,
+        content: 'Policy denied: DENY_MISSING_AUTHORITY', exit_code: 1 }]), false);
+      assert.equal(check([{ tool_name, target: 'node --version', verifierExecuted: true,
+        content: 'v22.0.0', exit_code: 0 }]), false);
+    }
+    const failed = { tool_name: 'test_run', target: 'npm test', verifierExecuted: true,
+      content: 'FAIL 1 test', exit_code: 1 };
+    assert.equal(check([failed]), true);
+    assert.equal(check([{ tool_name: 'run_command', target: 'node --version', verifierExecuted: true,
+      content: 'v22.0.1', exit_code: 0 }]), false);
+    assert.equal(check([failed]), false, 'a probe must not reset the last real verifier signature');
+    assert.equal(check([{ ...failed, content: 'PASS 1 test', exit_code: 0 }]), true);
   });
 
   test('I3 bare continuation gestures carry the prior operation policy', () => {

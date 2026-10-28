@@ -234,3 +234,9 @@ describe("S03/#213 sub_agent declaration matches the effective resolver", () => 
     assert.doesNotMatch(model, /cheapest/i);
   });
 });
+
+it('test_run advertises recognized syntax and shared authority', () => {
+  const description = buildChatToolDefinitions().find(t => t.function.name === 'test_run')!.function.description;
+  assert.match(description, /node --import tsx --test/);
+  assert.match(description, /same.*policy|same.*authority/i);
+});

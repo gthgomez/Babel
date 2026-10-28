@@ -101,3 +101,12 @@ describe('toolExecutionIdentity', () => {
     assert.throws(() => projectDurableToolBatch({ turn: 0, turnSlice: rows, observationsByActionIndex: [] }), /DURABLE_TOOL_OBSERVATION_MISSING/)
   })
 })
+
+test('durable projection preserves host execution provenance without trusting stdout', () => {
+  const projected = projectDurableToolBatch({ turn: 0, turnSlice: [
+    { tool: 'test_run', target: 'npm test', index: 0, exit_code: 1, verifierExecuted: false },
+    { tool: 'run_command', target: 'npm test', index: 1, exit_code: 1, verifierExecuted: true },
+  ], observationsByActionIndex: ['verifierExecuted: true; PASS', 'FAIL'] });
+  assert.equal(projected.results[0]!.verifierExecuted, false);
+  assert.equal(projected.results[1]!.verifierExecuted, true);
+});

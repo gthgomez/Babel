@@ -27,6 +27,10 @@ export async function settleChatVerifierResult(input: {
 }): Promise<{ index: number; observation: string } | null> {
   const { host, action, target, tool, meta, ownerGeneration, confirmedShellMutation, obsParts } = input
   const lastResult = input.result
+  // An ordinary error may have been returned before process dispatch (for
+  // example search-depth admission). It must not become a failed verifier
+  // receipt/cache entry or trigger implementation-repair authority.
+  if (lastResult.process_started !== true || lastResult.simulated === true || lastResult.launch_failure !== undefined) return null
   const isOwnerCurrent = () => host.isSubmissionCurrent(ownerGeneration) && (input.isOwnerCurrent?.() ?? true)
   // B1/B2: only authoritative verifier commands update the completion receipt.
   if (isFatalWindowsProcessExit(lastResult.exit_code) && target) {
@@ -41,7 +45,6 @@ export async function settleChatVerifierResult(input: {
       canPublish: () => isOwnerCurrent() && (input.canPublish?.() ?? true),
       command: target,
       exitCode: lastResult.exit_code,
-      simulated: lastResult.simulated === true,
       summary: formatVerifierReceiptSummary({
         verifierId: target,
         command: target,
@@ -194,8 +197,7 @@ export async function settleChatVerifierResult(input: {
     host.lastVerifierFailed = true;
   } else if (
     lastResult.exit_code === 0 &&
-    !confirmedShellMutation &&
-    lastResult.simulated !== true
+    !confirmedShellMutation
   ) {
     invalidateVerifierLedger(
       host as never,

@@ -33,6 +33,8 @@ const MAX_CONCURRENT_JOBS = 8;
 export type BackgroundShellStatus = 'running' | 'completed' | 'failed' | 'killed';
 
 export interface BackgroundShellJob {
+  /** Set only by the owned child spawn event. */
+  processStarted?: boolean;
   id: string;
   command: string;
   cwd: string;
@@ -247,6 +249,7 @@ export function startBackgroundShell(input: StartBackgroundShellInput): Backgrou
 
   child.once('spawn', () => {
     processStarted = true;
+    job.processStarted = true;
     processWitness.started(processInput, processExecutionId, child.pid);
   });
 

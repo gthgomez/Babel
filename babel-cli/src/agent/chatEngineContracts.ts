@@ -810,6 +810,7 @@ export interface ChatEngineStreamingLoopHost {
     stdout?: string
     stderr?: string
     verified?: boolean
+    verifierExecuted?: boolean
     mutation_paths?: string[]
     effect_status?: MutationEffectStatus
     effect_scope?: import('./mutationTools.js').MutationEffectScope
@@ -926,6 +927,7 @@ export interface ChatEngineActionExecutorHost {
     stdout?: string
     stderr?: string
     verified?: boolean
+    verifierExecuted?: boolean
     mutation_paths?: string[]
     effect_status?: MutationEffectStatus
     effect_scope?: import('./mutationTools.js').MutationEffectScope
