@@ -82,6 +82,7 @@ const VALUE_OPTIONS = new Set([
   '--execution-scope',
   '--resume-chat',
   '--project-root',
+  '--trusted-git-common-dir',
   '--log-file',
   '--lock',
   '--allowed-tools',

@@ -115,6 +115,7 @@ export function markSessionInvalidated(ctx: AuthoritySessionContext): void {
 /** Capture lease + baseline once at a trusted session start (not resume). */
 export function establishAuthoritySession(input: {
   repoRoot: string;
+  trustedGitCommonDir?: string | undefined;
   lease?: AutonomyLease | null;
   persistPath?: string;
 }): AuthoritySessionContext {
@@ -122,7 +123,7 @@ export function establishAuthoritySession(input: {
   const lease = input.lease !== undefined ? input.lease : loadLeaseFromEnv();
   let baseline: BaselineManifest | null = null;
   try {
-    baseline = buildBaseline(repoRoot);
+    baseline = buildBaseline(repoRoot, input.trustedGitCommonDir);
   } catch {
     baseline = null;
   }
@@ -130,7 +131,7 @@ export function establishAuthoritySession(input: {
     lease,
     repoRoot,
     baseline,
-    invalidated: false,
+    invalidated: baseline === null,
     ...(input.persistPath ? { persistPath: input.persistPath } : {}),
   };
   persistAuthoritySession(ctx);
@@ -145,6 +146,7 @@ export function establishAuthoritySession(input: {
 export function restoreAuthoritySession(input: {
   repoRoot: string;
   persistPath: string;
+  trustedGitCommonDir?: string | undefined;
   lease?: AutonomyLease | null;
 }): AuthoritySessionContext {
   const lease = input.lease !== undefined ? input.lease : loadLeaseFromEnv();
@@ -169,6 +171,9 @@ export function restoreAuthoritySession(input: {
   }
   if (!isUsableBaseline(parsed.baseline)) {
     return failClosedResume(input.persistPath, requestedRoot, lease, 'malformed');
+  }
+  if (parsed.baseline?.trustedGitCommonDir !== input.trustedGitCommonDir) {
+    return failClosedResume(input.persistPath, requestedRoot, lease, 'repo_mismatch');
   }
   const persistedRoot = typeof parsed.repoRoot === 'string' ? canonicalizeRepoRoot(parsed.repoRoot) : '';
   if (!persistedRoot || persistedRoot !== requestedRoot) {

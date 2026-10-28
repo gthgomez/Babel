@@ -45,6 +45,7 @@ import { projectDurableToolBatch } from './toolExecutionIdentity.js';
 import { resolveLiveSessionAuthority } from './liveSessionBridge.js';
 import { openAdmissionStore, type AdmissionStore } from '../runtime/admission.js';
 import { resetDockerAvailabilityCache, setDockerAvailableForTest } from '../config/benchmarkContainer.js';
+import { unsupportedTestClaim } from './chatResponseEvidence.js';
 import { normalizeReadCacheKey } from './readThrashPolicy.js';
 import { ProgressController } from './progressController.js';
 
@@ -112,6 +113,7 @@ function makeHost(
   projectRoot: string,
   runDir: string,
   controls: HostControls,
+  trustedGitCommonDir?: string,
 ): { host: ChatEngineActionExecutorHost; close: () => void } {
   const engineRunId = `contract-${randomUUID()}`;
   writeFileSync(join(projectRoot, '.gitignore'), 'node_modules\n');
@@ -126,6 +128,7 @@ function makeHost(
   });
   parity.authoritySession = establishAuthoritySession({
     repoRoot: projectRoot,
+    ...(trustedGitCommonDir ? { trustedGitCommonDir } : {}),
     lease: loadLeaseFromEnv(),
     persistPath: join(runDir, AUTHORITY_SESSION_FILENAME),
   });
@@ -330,6 +333,34 @@ describe('Chat coding output contracts (executor dispatch)', { concurrency: fals
     };
     return { host, close, controls, projectRoot, run, start };
   }
+
+  test('linked worktree supports governed Chat edit and native verification', async () => {
+    const storage = mkdtempSync(join(tmpdir(), 'babel-chat-worktree-'));
+    cleanup.push(storage);
+    const main = join(storage, 'main');
+    const projectRoot = join(storage, 'linked');
+    const runDir = join(storage, 'run');
+    mkdirSync(main);
+    mkdirSync(runDir);
+    for (const args of [['init', '-q'], ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.test', 'commit', '--allow-empty', '-qm', 'fixture'], ['worktree', 'add', '--detach', projectRoot]]) {
+      execFileSync('git', args, { cwd: main, stdio: 'pipe', windowsHide: true });
+    }
+    const { host, close } = makeHost(storage, projectRoot, runDir, { ownerGeneration: 1, taskAllowance: allowance('owner', 'task') }, join(main, '.git'));
+    try {
+      const executor = new ChatEngineActionExecutor(host);
+      const edited = await dispatch(executor, projectRoot, runDir, { type: 'write_file', path: 'proof.cjs', content: "require('node:test').test('proof', () => { require('node:assert/strict').equal(2 + 2, 4); console.log('worktree-test-executed'); });\n" }, 1);
+      assert.equal(readFileSync(join(projectRoot, 'proof.cjs'), 'utf8').includes('worktree-test-executed'), true, edited.observation);
+      const verified = await dispatch(executor, projectRoot, runDir, { type: 'test_run', command: 'node --test proof.cjs' }, 1);
+      assert.match(verified.observation, /worktree-test-executed/);
+      assert.doesNotMatch(verified.observation, /DENY_|ENOTDIR/);
+      assert.equal(host.parity.authoritySession?.invalidated, false);
+      assert.equal(host.lastVerifierReceipt?.tests_passed, 1);
+      assert.equal(host.lastVerifierReceipt?.tests_failed, 0);
+      const answer = 'I ran node --test proof.cjs: 1 test passed.';
+      assert.equal(unsupportedTestClaim(answer, host.lastVerifierReceipt), false);
+      assert.equal(unsupportedTestClaim(answer.replace('1 test', '2 tests'), host.lastVerifierReceipt), true);
+    } finally { close(); }
+  });
 
   test('real cached file observations never turn elapsed time into discovery progress', async () => {
     const f = verifierFixture();

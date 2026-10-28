@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { spawnSync, execFileSync } from 'node:child_process'
-import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { prepareSyntheticProviderFixture, removeSyntheticProviderFixture } from '../testinfra/synthetic-provider-fixture.mjs'
@@ -40,15 +40,21 @@ test('hypothetical advice and money-saving are not file mutation authority', () 
   assert.equal(resolveTaskShape('Save money by comparing the options.').operation, 'READ_ONLY')
 })
 
-for (const variant of ['save', 'explicit-read-only', 'inspect-only', 'advice'] as const) {
+for (const variant of ['save', 'worktree', 'explicit-read-only', 'inspect-only', 'advice'] as const) {
   test(`ordinary CLI ${variant} advertises effective tools and preserves actual artifacts`, () => {
     const fixture = prepareSyntheticProviderFixture()
     try {
+      const trustedGitCommonDir = variant === 'worktree' ? join(fixture.root, 'main', '.git') : undefined
+      if (trustedGitCommonDir) {
+        const main = join(fixture.root, 'main')
+        renameSync(fixture.cwd, main)
+        execFileSync('git', ['worktree', 'add', '--detach', fixture.cwd], { cwd: main, env: fixture.env })
+      }
       writeFileSync(join(fixture.cwd, 'meeting-notes.txt'), notes)
       execFileSync('git', ['add', 'meeting-notes.txt'], { cwd: fixture.cwd, env: fixture.env })
       execFileSync('git', ['commit', '-qm', 'source-owned notes baseline'], { cwd: fixture.cwd, env: fixture.env })
       const task = variant === 'advice' ? 'Should I save an HTML file from these notes?' : variant === 'inspect-only' ? 'Inspect meeting-notes.txt only. Do not save or write any files.' : prompt
-      const writable = variant === 'save'
+      const writable = variant === 'save' || variant === 'worktree'
       const evidence = join(fixture.root, 'provider-observation.json')
       const preload = join(fixture.root, 'response.mjs')
       writeFileSync(preload, `import assert from 'node:assert/strict';
@@ -80,6 +86,7 @@ for (const variant of ['save', 'explicit-read-only', 'inspect-only', 'advice'] a
         '--import', import.meta.resolve('tsx'), '--import', pathToFileURL(preload).href,
         fileURLToPath(new URL('../index.ts', import.meta.url)), 'run', '--mode', 'chat', task,
         '--model', 'command-code/deepseek-v4.1-flash', '--project-root', fixture.cwd, '--json',
+        ...(trustedGitCommonDir ? ['--trusted-git-common-dir', trustedGitCommonDir] : []),
         ...(variant === 'explicit-read-only' ? ['--read-only'] : []),
       ]
       const child = spawnSync(process.execPath, args, { cwd: fixture.cwd, env: fixture.env, encoding: 'utf8', timeout: 120_000, windowsHide: true })

@@ -172,6 +172,8 @@ export interface ChatEngineOptions {
   providerPolicy?: ResolvedModelPolicy
   task: string
   projectRoot: string | null
+  /** Host-selected Git metadata restoration scope; never sourced from task or repository config. */
+  trustedGitCommonDir?: string
   executionScope?: ChatExecutionScope
   runId?: string
   /** Existing P05 durable owner/fencing authority supplied by the host. */

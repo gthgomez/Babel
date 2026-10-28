@@ -4,7 +4,7 @@ import { verifierEvidenceCaveats } from './chatEngineVerifierAdapter.js'
 import { strictCountPolicy } from './completionGatePolicy.js'
 export type ResponseVerifierEvidence = {
   command: string; exit_code: number; authority?: boolean; stale?: boolean; scope?: string
-  tests_total?: number; tests_skipped?: number
+  tests_total?: number; tests_skipped?: number; tests_passed?: number | undefined; tests_failed?: number
   capturedAt?: number
 } | null
 
@@ -30,14 +30,14 @@ function commandAt(text: string, start: number): {command: string; end: number} 
     end += token[0].length
     if (/[.:]$/.test(token[1]!)) break
   }
-  const command = text.slice(start,end).replace(/(?<=[\w"'])\.$/, '')
+  const command = text.slice(start,end).replace(/(?<=[\w"'])[.:]$/, '')
   return {command,end}
 }
 
 function* explicitClaims(prose: string) {
-  const claims = new RegExp(String.raw`\b(?:tests?|test suite|suite)\s+(?:(?:all|already|now)\s+)*(?:pass(?:es|ed)?|(?:is|are|was|were)\s+(?:passing|green|successful))\b|(?<execution>\b(?:I\s+|we\s+)?(?:have\s+)?(?:ran|executed)\s+)(?=\x60?${commandFamily}\b)|\x60?${commandFamily}\b`, 'gi')
+  const claims = new RegExp(String.raw`\b(?:(?<count>\d+)\s+)?(?<unit>tests?|test suite|suite)\s+(?:(?:all|already|now)\s+)*(?:pass(?:es|ed)?|(?:is|are|was|were)\s+(?:passing|green|successful))\b|(?<execution>\b(?:I\s+|we\s+)?(?:have\s+)?(?:ran|executed)\s+)(?=\x60?${commandFamily}\b)|\x60?${commandFamily}\b`, 'gi')
   for (let match; (match = claims.exec(prose));) {
-    const generic = /^(?:tests?|test suite|suite)\s/i.test(match[0])
+    const generic = /^(?:\d+\s+)?(?:tests?|test suite|suite)\s/i.test(match[0])
     const parsed = generic ? null : commandAt(prose,match.groups?.execution ? claims.lastIndex : match.index)
     if (!generic && !parsed) continue
     const end = parsed?.end ?? claims.lastIndex
@@ -45,6 +45,8 @@ function* explicitClaims(prose: string) {
     const result = /^\s*(?:[→:—-]\s*)?(?:passed|succeeded|exit(?:\s+code)?\s*[:=]?\s*0)\b/i.exec(tail)
     if (!generic && !match.groups?.execution && !result) { claims.lastIndex = end; continue }
     yield {index:match.index,text:prose.slice(match.index,end + (result?.[0].length ?? 0)),
+      unit: match.groups?.unit,
+      count: match.groups?.count === undefined ? undefined : Number(match.groups.count),
       command:parsed?.command,tail,execution:!!match.groups?.execution}
     claims.lastIndex = end + (result?.[0].length ?? 0)
   }
@@ -64,6 +66,7 @@ export function unsupportedTestClaim(answer: string, receipt: ResponseVerifierEv
   const prose = answer.replace(/```[\s\S]*?```/g, '')
     .replace(/^\s*>.*$/gm, '')
     .replace(/\b(?:says?|said|claims?|claimed|wrote)\s*[: ,]*["“][^"”]*["”]/gi, '')
+  let priorCommand: { command: string; end: number } | undefined
   for (const match of explicitClaims(prose)) {
     const prefix = prose.slice(0, match.index).split(/[.!?\n;]/).at(-1) ?? ''
     const tail = match.tail
@@ -73,18 +76,25 @@ export function unsupportedTestClaim(answer: string, receipt: ResponseVerifierEv
         /\b(?:no|not|never|cannot|can't|don't|didn't|haven't)\s+(?:\w+\s+){0,3}$/i.test(prefix) ||
         (/^\s*(?:do|does|did|have|has|are|were|was|can|could|would)\b/i.test(prefix) && /^[^.!\n]*\?/.test(tail)) ||
         /^\s*(?:(?:you(?: can| should)?|please|next,?|then|to)\s+)?(?:check|verify|ensure|make sure)\s+(?:that\s+)?$/i.test(prefix)) continue
-    const command = match.command
+    const numeric = match.count !== undefined
+    if (numeric && !/^tests?$/i.test(match.unit ?? '')) return true
+    const command = match.command ?? (numeric && priorCommand && !/[.!?\n;]/.test(prose.slice(priorCommand.end, match.index)) ? priorCommand.command : undefined)
+    if (match.command) priorCommand = { command: match.command, end: match.index + match.text.length }
     const candidates = [...current.values()].filter(entry => entry.authority === true &&
       (command ? satisfiesVerifierRequirement(command, entry.command) :
         (analyzeVerifierIdentity(entry.command)?.family ?? 'unknown') !== 'unknown' &&
         strictCountPolicy(entry.command) === 'requires_executed_count'))
     if (!candidates.length) return true
+    if (numeric && (candidates.length !== 1 || !Number.isSafeInteger(match.count) ||
+      candidates[0]!.tests_passed !== match.count || candidates[0]!.tests_failed !== 0 ||
+      (candidates[0]!.tests_passed ?? 0) > (candidates[0]!.tests_total ?? -1))) return true
+    const scopePrefix = numeric && command && priorCommand ? prose.slice(priorCommand.end, match.index) : prefix
     // A red/stale receipt supports an execution report, not a passing/current result.
     const executionOnly = match.execution &&
       !/\b(?:successfully|passed|green|exit(?:\s+code)?\s*0)\b/i.test(suffix)
     const assertsPassingTests = !/\bexit(?:\s+code)?\s*[:=]?\s*0\b/i.test(match.text)
     if (!executionOnly && candidates.some(entry => entry.exit_code !== 0 || entry.stale !== false ||
-        (!command && entry.scope !== 'full_suite') ||
+        (((!command) || (numeric && /\b(?:all|(?:entire|whole|full)\s+(?:test\s+)?suite)\b/i.test(`${scopePrefix} ${match.text} ${suffix}`))) && entry.scope !== 'full_suite') ||
         (assertsPassingTests && (!Number.isFinite(entry.tests_total) ||
           (entry.tests_total ?? 0) <= (entry.tests_skipped ?? 0) ||
           verifierEvidenceCaveats({ exit_code: entry.exit_code,

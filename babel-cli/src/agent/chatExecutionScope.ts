@@ -40,3 +40,12 @@ export function assertConversationRestoreScope(log:{events:readonly unknown[]}|n
   const turns=log?.events.filter((event):event is Record<string,unknown>=>typeof event==='object'&&event!==null&&'kind' in event&&event.kind==='turn_started')??[]
   if(turns.length===0||turns.some(turn=>turn.projectRoot!==null||typeof turn.executionScope!=='object'||turn.executionScope===null||!('kind' in turn.executionScope)||turn.executionScope.kind!=='conversation'))throw new Error('SESSION_SCOPE_UNKNOWN: This archive is not proven conversation-only; explicit project rebind is required')
 }
+
+/** An external Git restoration binding belongs to one host-selected project. */
+export function assertBoundGitProjectScope(current: ChatScopeInput & { trustedGitCommonDir?: string }, next: ChatExecutionScope): void {
+  if (!current.trustedGitCommonDir || next.kind !== 'project') return;
+  const prior = resolve(requireProjectRoot(current));
+  const prepared = resolve(next.projectRoot);
+  const changed = process.platform === 'win32' ? prior.toLowerCase() !== prepared.toLowerCase() : prior !== prepared;
+  if (changed) throw new Error('SESSION_REBIND_REQUIRED: Git governance binding requires a new engine for a different project');
+}

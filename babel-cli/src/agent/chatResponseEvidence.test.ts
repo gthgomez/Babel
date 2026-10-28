@@ -129,3 +129,35 @@ test(`response evidence ${scenario}: preserve useful answers without requiring e
   assert.equal(effects, 0)
   assert.equal(readFileSync(join(root, 'catalog.js'), 'utf8'), 'export const orderCatalog = items => [...items]\n')
 })
+
+test('native numeric pass claims bind exact counts and targeted command identity', () => {
+  const receipt = { command: 'node --test proof.cjs', exit_code: 0, authority: true, stale: false, scope: 'targeted', tests_total: 1, tests_skipped: 0, tests_passed: 1, tests_failed: 0 }
+  const text = 'Created proof.cjs, read it, and ran node --test proof.cjs: 1 test passed in the configured sandbox.'
+  assert.equal(unsupportedTestClaim(text, receipt), false)
+  for (const bad of [null, { ...receipt, tests_passed: undefined }, { ...receipt, tests_passed: 2 }, { ...receipt, exit_code: 1 }, { ...receipt, stale: true }, { ...receipt, authority: false }])
+    assert.equal(unsupportedTestClaim(text, bad), true)
+  assert.equal(unsupportedTestClaim(text.replace('1 test', '2 tests'), { ...receipt, scope: 'full_suite' }), true)
+  assert.equal(unsupportedTestClaim(text.replace('proof.cjs:', 'other.cjs:'), receipt), true)
+  assert.equal(unsupportedTestClaim('All tests passed.', receipt), true)
+})
+
+test('numeric pass claims do not promote scope or substitute unrelated receipts', () => {
+  const receipt = { command: 'node --test proof.cjs', exit_code: 0, authority: true, stale: false, scope: 'targeted', tests_total: 2, tests_skipped: 1, tests_passed: 1, tests_failed: 0 }
+  assert.equal(unsupportedTestClaim('1 test passed.', receipt), true)
+  for (const text of ['All 1 test passed.', 'The entire suite of 1 test passed.', 'The whole suite of 1 test passed.', 'All of the 1 tests passed.', '1 suite passed.', '1 test suite passed.', 'I ran node --test proof.cjs: 1 test passed across the entire suite.', 'I ran node --test proof.cjs: 1 test all passed.']) assert.equal(unsupportedTestClaim(text, receipt), true)
+  assert.equal(unsupportedTestClaim('2 tests passed.', receipt), true)
+  assert.equal(unsupportedTestClaim('1 test passed.', { ...receipt, tests_total: 0 }), true)
+  assert.equal(unsupportedTestClaim('1 test passed.', { ...receipt, tests_failed: 1 }), true)
+  assert.equal(unsupportedTestClaim('1 test passed.', receipt, [{ ...receipt, command: 'node --test other.cjs' }]), true)
+  assert.equal(unsupportedTestClaim('No tests passed.', null), false)
+  assert.equal(unsupportedTestClaim('If 1 test passed, continue.', null), false)
+})
+
+test('command literals do not become whole-suite scope claims', () => {
+  for (const command of ['node --test all.test.cjs', 'node --test all']) {
+    const receipt = { command, exit_code: 0, authority: true, stale: false, scope: 'targeted', tests_total: 1, tests_skipped: 0, tests_passed: 1, tests_failed: 0 }
+    assert.equal(unsupportedTestClaim(`${command} passed.`, receipt), false)
+    assert.equal(unsupportedTestClaim(`I ran ${command}: 1 test passed.`, receipt), false)
+    assert.equal(unsupportedTestClaim(`I ran ${command}: 1 test passed across the entire suite.`, receipt), true)
+  }
+})
