@@ -192,6 +192,14 @@ describe('computeCriticRepairCostCap', () => {
 });
 
 describe('computePostWriteRepairWallMs', () => {
+  test('unlimited wall does not acquire the finite 180-second repair cap', () => {
+    assert.deepEqual(computePostWriteRepairWallMs({ elapsedMs: 10_000, sessionMaxWallMs: Infinity }),
+      { capMs: Infinity, repairWindowMs: Infinity });
+    const message = buildPostWriteRepairMessage({ repairWindowSec: Infinity, remainingWallSec: Infinity });
+    assert.match(message, /no task wall deadline/i);
+    assert.doesNotMatch(message, /Infinity|hard wall/i);
+  });
+
   test('caps remaining wall to repair window under session max', () => {
     // elapsed 300s of 600s → remaining 300s → window clamp to [90s, 180s] of 40% = 120s
     const r = computePostWriteRepairWallMs({

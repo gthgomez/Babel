@@ -193,6 +193,13 @@ export interface ChatEngineRunAllowanceReport {
   taskCostSpentUsd?: number;
 }
 
+/** Apply derived repair deadlines only to finite task wall grants. */
+export function effectiveTaskWallCapMs(grantedMs: number, repairCapMs?: number | null): number {
+  return grantedMs === Infinity || repairCapMs == null
+    ? grantedMs
+    : Math.min(grantedMs, repairCapMs);
+}
+
 export function createRunAllowanceReport(
   limits: ChatEngineLimits,
   state?: {
@@ -207,10 +214,7 @@ export function createRunAllowanceReport(
   },
 ): ChatEngineRunAllowanceReport {
   const declaredWallMs = limits.wallBudget?.requestedMs ?? limits.maxWallMs;
-  const effectiveWallMs =
-    state?.postWriteRepairWallCapMs != null
-      ? Math.min(limits.maxWallMs, state.postWriteRepairWallCapMs)
-      : limits.maxWallMs;
+  const effectiveWallMs = effectiveTaskWallCapMs(limits.maxWallMs, state?.postWriteRepairWallCapMs);
 
   const declaredCostUsd = limits.costBudget?.requestedCostUsd ?? limits.maxCostUsd;
   const effectiveCostCapUsd =
@@ -234,7 +238,7 @@ export function createRunAllowanceReport(
     turnCap: limits.maxTurns,
     stallLimit: limits.stallTurns,
     childLimits: state?.childLimits ?? DEFAULT_CHILD_LIMITS,
-    postWriteRepairWallCapMs: state?.postWriteRepairWallCapMs ?? null,
+    postWriteRepairWallCapMs: limits.maxWallMs === Infinity ? null : state?.postWriteRepairWallCapMs ?? null,
     criticRepairCostCapUsd: state?.criticRepairCostCapUsd ?? null,
     terminatingLimiter: state?.terminatingLimiter ?? null,
     terminalClassification: state?.terminalClassification ?? null,
@@ -327,10 +331,7 @@ export function evaluateTimelineLimiter(input: {
   classification: ChatTerminalClassification;
 } {
   const { limits, elapsedMs, spentUsd, turns, consecutiveStallTurns } = input;
-  const effectiveWall =
-    input.postWriteRepairWallCapMs != null
-      ? Math.min(limits.maxWallMs, input.postWriteRepairWallCapMs)
-      : limits.maxWallMs;
+  const effectiveWall = effectiveTaskWallCapMs(limits.maxWallMs, input.postWriteRepairWallCapMs);
   const effectiveCost =
     input.criticRepairCostCapUsd != null && Number.isFinite(limits.maxCostUsd)
       ? Math.min(limits.maxCostUsd, input.criticRepairCostCapUsd)

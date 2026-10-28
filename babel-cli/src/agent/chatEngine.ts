@@ -1597,14 +1597,7 @@ export class ChatEngine {
       this.terminalLimiterReason = reason;
       return { ok: false, reason, limiter: "cost" };
     }
-    // After first write: absolute wall cap from session start (repair window).
-    const maxWallMs =
-      this.postWriteRepairWallCapMs != null
-        ? Math.min(
-            this.taskAllowance.grant.wallCapMs,
-            this.postWriteRepairWallCapMs,
-          )
-        : this.taskAllowance.grant.wallCapMs;
+    const maxWallMs = this.effectiveWallCapMs();
     const result = checkCostWallBudgets({
       totalCostUsd: taskCost,
       maxCostUsd,
