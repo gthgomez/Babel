@@ -82,6 +82,11 @@ publisher runs them. Do **not** replace or chain-swap a host-managed hook
 dispatcher; run the explicit CLI validators above when execution is unverified.
 Never print host-specific absolute paths in public output.
 
+The tracked POSIX entrypoints are executable. The installer checks that property
+and preserves an existing dispatcher; Windows activation remains unverified.
+Executable bits and `hooksPath` are prerequisites, not proof that checks ran.
+Record the actual hook output or execute the explicit validators before publication.
+
 ## Pre-push hook
 
 Install with `pwsh tools/install-hooks.ps1` (or

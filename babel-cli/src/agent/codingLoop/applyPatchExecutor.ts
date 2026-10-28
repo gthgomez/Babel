@@ -10,12 +10,12 @@ import { acceptToolStop, settlePreventedChatAction } from '../chatEngineRunContr
  */
 import {
   governedApplyPatch,
+  assessGovernedApplyPatchEffect,
   type GovernedApplyPatchResult,
 } from "../governedMutations.js";
 import { defaultToolExecutor } from "../toolExecutor.js";
 import { resolveClassCGateDecision } from "../autonomyEnforcement.js";
 import { recordMutationBatch, operationFingerprint } from "../sessionEvents.js";
-import { assessMutationEffect } from "../mutationTools.js";
 import { applyWorkingStateEvent } from "./workingState.js";
 import { actualRecoveryEdit } from "./recoveryPlan.js";
 import {
@@ -50,6 +50,7 @@ export interface ApplyPatchActionContext {
   ownerGeneration: number;
   dispatchTurnId: string | null;
   recoveredAuthorization: { allowed: boolean; message?: string };
+  recoveryDispatchAuthorization?: () => { allowed: boolean; message?: string };
   admittedThisAction: boolean;
   proposedEdit: { exactFingerprint: string } | null;
   callbacks: ChatCallbacks;
@@ -75,7 +76,12 @@ export async function executeGovernedApplyPatchAction(
       context: toolContext,
       preset: "workspace_write",
       executor: defaultToolExecutor,
-      onDispatchAuthorized: () => ctx.recoveredAuthorization,
+      onDispatchAuthorized: () => {
+        const normal = host.recoveredOperationDispatchAuthorization(action);
+        if (!host.isSubmissionCurrent(ctx.ownerGeneration) || toolContext.signal?.aborted) return { allowed:false,message:'Patch owner retired or cancelled before dispatch.' };
+        return normal;
+      },
+      ...(ctx.admittedThisAction && ctx.recoveryDispatchAuthorization ? { onRecoveryBatchAuthorized: ctx.recoveryDispatchAuthorization } : {}),
       onBeforeExecutorExecute: () => host.persistToolStartedAtExecutorDispatch(action, ctx.meta),
       ...(host.parity.authoritySession
         ? { authoritySession: host.parity.authoritySession }
@@ -100,41 +106,35 @@ export async function executeGovernedApplyPatchAction(
   }
   const prevented = settlePreventedChatAction({ host, control: toolContext.runControl, notStarted: gov.notStarted, tool, target, toolId, meta, callbacks: ctx.callbacks });
   if (prevented) return prevented;
-  if (gov.mutationPaths && gov.mutationPaths.length > 0) {
+  for (const evidence of gov.fileMutationEvidence ?? [{ mutationReceipt: gov.mutationReceipt }]) {
+    const receipt = evidence.mutationReceipt;
+    const paths = gov.fileMutationEvidence ? receipt?.affectedFiles ?? [] : gov.mutationPaths ?? [];
+    if (paths.length === 0) continue;
     recordMutationBatch(
       host.parity.sessionEvents,
       ctx.dispatchTurnId ?? "unknown",
       {
-        paths: gov.mutationPaths,
-        pre_hash: Object.values(gov.preBatchHash ?? {}).join(","),
-        post_hash: Object.values(gov.postBatchHash ?? {}).join(","),
-        ...(gov.mutationReceipt
+        paths,
+        pre_hash: Object.values(receipt?.preImageHashes ?? gov.preBatchHash ?? {}).join(","),
+        post_hash: Object.values(receipt?.postImageHashes ?? gov.postBatchHash ?? {}).join(","),
+        ...(receipt
           ? {
-              batch_id: gov.mutationReceipt.batchId,
-              starting_revision: gov.mutationReceipt.startingRevision,
-              ...(gov.mutationReceipt.endingRevision
-                ? { ending_revision: gov.mutationReceipt.endingRevision }
+              batch_id: receipt.batchId,
+              starting_revision: receipt.startingRevision,
+              ...(receipt.endingRevision
+                ? { ending_revision: receipt.endingRevision }
                 : {}),
-              changed_bytes: gov.mutationReceipt.changedBytes,
-              status: gov.mutationReceipt.status,
-              pre_image_hashes: gov.mutationReceipt.preImageHashes,
-              post_image_hashes: gov.mutationReceipt.postImageHashes,
+              changed_bytes: receipt.changedBytes,
+              status: receipt.status,
+              pre_image_hashes: receipt.preImageHashes,
+              post_image_hashes: receipt.postImageHashes,
             }
           : {}),
       },
     );
   }
 
-  const patchEffect = assessMutationEffect({
-    tool: "apply_patch",
-    error: gov.error,
-    exitCode: gov.exit_code,
-    policyBlocked: gov.policyBlocked,
-    mutationPaths: gov.mutationPaths,
-    mutationReceipt: gov.mutationReceipt,
-    effectTransaction: gov.effectTransaction,
-    preDispatchNoEffect: gov.preDispatchNoEffect,
-  });
+  const patchEffect = assessGovernedApplyPatchEffect(gov);
 
   const effectPaths =
     gov.absolutePaths.length > 0 ? gov.absolutePaths : [primaryPatchPath(patchText)];
@@ -209,6 +209,7 @@ export async function executeGovernedApplyPatchAction(
     index: meta.index,
     exit_code: gov.exit_code,
     effect_status: patchEffect.status,
+    ...(gov.preDispatchNoEffect === true ? { preDispatchNoEffect: true as const } : {}),
     ...(gov.mutationPaths && gov.mutationPaths.length > 0
       ? { mutation_paths: [...gov.mutationPaths] }
       : {}),

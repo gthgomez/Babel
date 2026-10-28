@@ -69,6 +69,7 @@ export {
   preserveWorkingStateMessages,
   recordControllerRecoveryStrategy,
   recoveryEvidenceKey,
+  formatRecoveryReadReference,
   restoreWorkingStateSnapshot,
   sameRecoveryBinding,
   RECOVERY_EVIDENCE_TOOLS,
@@ -77,6 +78,8 @@ export {
   WORKING_STATE_MARKER,
   WORKING_STATE_NAME,
   type RecoveryEvidenceProvenance,
+  type RecoveryReadEvidence,
+  type RecoveryReadRecord,
   type RecoveryCandidateBinding,
   type WorkingState,
 } from './workingState.js'

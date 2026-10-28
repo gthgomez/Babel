@@ -62,15 +62,15 @@ test('verifier command path variants normalize to canonical command keys', () =>
   assert.equal(summary.completionBlockingStatus, null);
 });
 
-test('required verifier command-path matrix supports common path-encoded executables', () => {
+test('required verifier command-path matrix supports parsed aliases and exact unknown-option commands', () => {
   const plan = buildVerifierPlan(
     'Verifier commands: npm run build && npm test && node --test && tsc -b && vitest run && jest',
   );
   const reconciled = reconcileVerifierPlan(plan, [
-    command('.\\node_modules\\.bin\\npm run build', 0),
+    command('./node_modules/.bin/npm run build', 0),
     command('"/usr/bin/npm" test', 0),
     command('"/usr/bin/node" --test', 0),
-    command('/opt/homebrew/bin/tsc -b', 0),
+    command('tsc -b', 0),
     command('"C:/tmp/vitest" run', 0),
     command('/usr/local/bin/jest', 0),
   ]);
@@ -242,4 +242,13 @@ test('buildVerifierContractArtifacts honors additional required verifiers', () =
   });
   assert.equal(artifacts.summary.verifierCompletionSatisfied, true);
   assert.equal(artifacts.summary.requiredVerifierCount, 1);
+});
+
+// Execution argv parsing is platform-specific; unknown flags need exact identity.
+test('platform paths and unknown-option aliases retain strict execution identity', () => {
+  const summarize = (required: string, actual: string) => summarizeVerifierContract(
+    reconcileVerifierPlan(buildVerifierPlan(`Verifier commands: ${required}`), [command(actual, 0)]),
+  ).verifierCompletionSatisfied;
+  assert.equal(summarize('npm run build', '.\\node_modules\\.bin\\npm run build'), process.platform === 'win32');
+  assert.equal(summarize('tsc -b', '/opt/homebrew/bin/tsc -b'), false);
 });

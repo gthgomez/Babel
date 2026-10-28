@@ -1,3 +1,4 @@
+import { kernelVerifierFixture } from '../testinfra/kernelVerifierFixture.js'
 /**
  * Harness architecture conformance — executable invariants for harness-v1.
  *
@@ -586,20 +587,11 @@ test("live kernel rejects coarse golden proof without owned criterion evidence",
     requestedOutcome: "VERIFIED_COMPLETE",
     hasWrite: true,
     verificationPolicy: "required",
-    lastVerifierReceipt: {
-      receiptId: "golden-r1",
-      command: "npm test",
-      exitCode: 0,
-      authority: true,
-      authoritySource: "built_in_runner",
-      boundRevision: { fileHashes: {} } as any,
-      capturedAt: Date.now(),
-      stale: false,
-    },
     toolCallLog: [
       { tool: "write_file", target: "src/add.ts" },
       { tool: "run_command", target: "npm test", exit_code: 0 },
     ],
+    ...kernelVerifierFixture(),
     proof: { compliant: true },
     evidenceRefs: ["golden-receipt-final", "mutation-batch-2"],
   });

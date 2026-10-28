@@ -1,8 +1,10 @@
+import { validFailedVerifierExecution, type SettledFailedVerifierExecution } from './failedVerifierExecution.js'
 /**
  * Compact, invalidatable WorkingState injected each turn. Compaction must
  * preserve this block; stale failures are not authoritative after new evidence.
  */
 
+import { isReadDeliveryWindow, type ReadDeliveryWindow } from '../../services/readDelivery.js'
 import type { ChatMessage } from '../chatToolDefinitions.js'
 import { createHash } from 'node:crypto'
 import type { FailureSurface, RepairDiagnosis, RepairDiagnosisKind } from './failureSurface.js'
@@ -41,6 +43,9 @@ export interface WorkingState {
    * failure is not new discriminating evidence, even across gate recreation.
    */
   consumedRecoveryEvidence: string[]
+  failedVerifierHistory?: SettledFailedVerifierExecution[]
+  failedVerifierHistoryOverflow?: true
+  settledFailedVerifier?: SettledFailedVerifierExecution
   lastAdmittedPlan?: AdmittedRecoveryPlanV1
   localization?: FailureLocalization
   /** Controller-owned gate after a red verifier; model prose cannot clear it. */
@@ -60,6 +65,8 @@ export interface WorkingState {
      * resurrect an already-consumed observation.
      */
     observedKeys?: string[]
+    /** Current-episode delivered reads, bounded independently from progress history. */
+    readRecords?: RecoveryReadRecord[]
     hypothesisAtFailure: string
     strategyAtFailure?: string
     satisfied: boolean
@@ -94,8 +101,6 @@ export function createWorkingState(goal = ''): WorkingState {
 export const RECOVERY_EVIDENCE_TOOLS = [
   'read_file',
   'read_range',
-  'grep',
-  'semantic_search',
 ] as const
 
 /**
@@ -117,6 +122,19 @@ export interface RecoveryEvidenceProvenance {
   binding?: RecoveryCandidateBinding
   /** Digest of the actual inspected content, independent of tool-call ID. */
   observationDigest?: string
+  window?: ReadDeliveryWindow
+}
+
+export interface RecoveryReadEvidence extends RecoveryEvidenceProvenance {
+  tool: 'read_file' | 'read_range'
+  binding: RecoveryCandidateBinding
+  observationDigest: string
+  window: ReadDeliveryWindow
+}
+
+export interface RecoveryReadRecord extends RecoveryReadEvidence {
+  key: string
+  id: string
 }
 
 export type WorkingStateEvent =
@@ -207,46 +225,24 @@ export function applyWorkingStateEvent(state: WorkingState, event: WorkingStateE
         next.lastVerifier = { ...next.lastVerifier, fresh: false }
       }
       const gate = next.recoveryGate
-      if (gate && !gate.satisfied && event.discriminating === true) {
-        // A boolean claim is not authority. The observation must carry
-        // provenance that agrees with the gate's frozen failure signature and
-        // must not already have been consumed for this gate.
-        const provenance = event.provenance
-        const observationKey = provenance?.binding && provenance.observationDigest
-          ? recoveryEvidenceKey(provenance, gate.failureSignature)
-          : ''
-        const alreadyObserved =
-          (observationKey !== '' && (gate.observedKeys ?? []).includes(observationKey)) ||
-          (observationKey !== '' && next.consumedRecoveryEvidence.includes(observationKey))
-        const bound =
-          gate.binding !== undefined &&
-          provenance !== undefined &&
-          provenance.binding !== undefined &&
-          sameRecoveryBinding(gate.binding, provenance.binding) &&
-          typeof provenance.observationDigest === 'string' &&
-          provenance.observationDigest.length > 0 &&
-          provenance.failureSignature === gate.failureSignature &&
-          provenance.failureSignature.length > 0 &&
-          (RECOVERY_EVIDENCE_TOOLS as readonly string[]).includes(provenance.tool) &&
-          provenance.target.trim().length > 0 &&
-          targetMatchesGate(provenance.target, gate.failingTargets) &&
-          !alreadyObserved
-        if (bound) {
-          next.recoveryGate = {
-            ...gate,
-            satisfied: true,
-            observedKeys: [...(gate.observedKeys ?? []), observationKey].slice(-64),
-          }
-          next.consumedRecoveryEvidence = next.consumedRecoveryEvidence.includes(observationKey)
-            ? next.consumedRecoveryEvidence
-            : [...next.consumedRecoveryEvidence, observationKey]
-        }
+      const provenance = event.provenance
+      const key = gate && provenance ? recoveryEvidenceKey(provenance, gate.failureSignature) : ''
+      if (gate?.binding && provenance?.binding && key && provenance.failureSignature === gate.failureSignature &&
+          sameRecoveryBinding(gate.binding, provenance.binding)) {
+        const read = provenance as RecoveryReadEvidence
+        const record: RecoveryReadRecord = { ...structuredClone(read), key, id: recoveryReadObservationId(key) }
+        const records = [...(gate.readRecords ?? []).filter(old => old.key !== key), record].slice(-64)
+        // Retention is not a progress grant. A typed current reread can re-publish
+        // an evicted record without renewing an edit permit or consumed identity.
+        next.recoveryGate = { ...gate, readRecords: records, observedKeys: records.map(item => item.key),
+          satisfied: gate.satisfied || (!gate.permitConsumed && !gate.planAdmitted) }
+        if (!next.consumedRecoveryEvidence.includes(key)) next.consumedRecoveryEvidence = [...next.consumedRecoveryEvidence, key]
       }
       break
     }
     case 'mutation':
       if (next.recoveryGate) {
-        next.recoveryGate = { ...next.recoveryGate, satisfied: false, strategyChanged: false, planAdmitted: false, permitConsumed: true }
+        next.recoveryGate = { ...next.recoveryGate, satisfied: false, strategyChanged: false, planAdmitted: false, permitConsumed: true, readRecords: [], observedKeys: [] }
       }
       next.lastMutation = {
         path: event.path,
@@ -261,7 +257,7 @@ export function applyWorkingStateEvent(state: WorkingState, event: WorkingStateE
       break
     case 'recovery_candidate_drift':
       if (next.recoveryGate) {
-        next.recoveryGate = { ...next.recoveryGate, satisfied: false, strategyChanged: false, planAdmitted: false, permitConsumed: true }
+        next.recoveryGate = { ...next.recoveryGate, satisfied: false, strategyChanged: false, planAdmitted: false, permitConsumed: true, readRecords: [], observedKeys: [] }
         next.nextExperiment = 'The failed candidate changed. Rerun the verifier before acquiring recovery evidence.'
       }
       break
@@ -288,28 +284,10 @@ export function applyWorkingStateEvent(state: WorkingState, event: WorkingStateE
         }
       }
       break
-    case 'localization_import_evidence': {
-      const gate = next.recoveryGate
-      const loc = next.localization
-      const p = event.provenance
-      const candidate = loc?.candidates.find(c => c.path === p.target && (c.source === 'import_call' || c.source === 'file_read'))
-      const key = gate ? recoveryEvidenceKey(p, gate.failureSignature) : ''
-      if (gate?.binding && gate.satisfied && !gate.planAdmitted && !gate.permitConsumed &&
-          loc?.phase === 'localized' && loc.acceptedPath === p.target && loc.calls <= 4 && loc.rounds <= 2 &&
-          candidate?.fromTestPath && gate.failingTargets?.includes(candidate.fromTestPath) &&
-          p.binding && sameRecoveryBinding(gate.binding, p.binding) && sameRecoveryBinding(loc.binding, p.binding) &&
-          p.failureSignature === gate.failureSignature && loc.failureSignature === gate.failureSignature &&
-          p.observationDigest === loc.observationDigest && p.observationDigest &&
-          p.tool === 'read_file' && key && !next.consumedRecoveryEvidence.includes(key)) {
-        next.recoveryGate = { ...gate,
-          failingTargets: pushUnique(gate.failingTargets ?? [], p.target),
-          observedKeys: pushUnique(gate.observedKeys ?? [], key),
-        }
-        next.consumedRecoveryEvidence = pushUnique(next.consumedRecoveryEvidence, key)
-        next.evidence = pushUnique(next.evidence, `${p.tool}:${p.target}`)
-      }
+    case 'localization_import_evidence':
+      // Import/AST relationships are hints. Only actual typed read deliveries
+      // enter the evidence map through add_evidence above.
       break
-    }
     case 'localization_begin':
     case 'localization_update':
       next.localization = structuredClone(event.localization)
@@ -364,6 +342,11 @@ export function applyWorkingStateEvent(state: WorkingState, event: WorkingStateE
       next.nextExperiment = event.experiment
       break
     case 'recovery_gate':
+      if (state.recoveryGate?.binding && event.binding && state.recoveryGate.failureSignature === event.failureSignature &&
+          sameRecoveryBinding(state.recoveryGate.binding, event.binding)) {
+        next.recoveryGate = { ...state.recoveryGate, requiredEvidence: event.requiredEvidence }
+        break
+      }
       next.recoveryGate = {
         failureSignature: event.failureSignature,
         ...(event.binding ? { binding: event.binding } : {}),
@@ -373,6 +356,7 @@ export function applyWorkingStateEvent(state: WorkingState, event: WorkingStateE
           ? { failingTargets: [...event.failingTargets] }
           : {}),
         observedKeys: [],
+        readRecords: [],
         hypothesisAtFailure: event.hypothesisAtFailure ?? next.currentHypothesis,
         strategyAtFailure: next.currentHypothesis,
         satisfied: false,
@@ -432,15 +416,17 @@ export function formatWorkingStateBlock(state: WorkingState): string {
     `  next_experiment: ${yamlScalar(state.nextExperiment)}`,
   ]
   if (state.recoveryGate) {
-    const observationIds = (state.recoveryGate.observedKeys ?? [])
-      .map((key) => createHash('sha256').update(key).digest('hex').slice(0, 16))
+    const records = state.recoveryGate.readRecords ?? []
+    const observationIds = records.map(record => record.id)
     lines.push(
       `  recovery_gate: ${state.recoveryGate.satisfied ? 'evidence_satisfied' : 'evidence_required'}`,
       `  recovery_failure: ${yamlIdentity(state.recoveryGate.failureSignature)}`,
       `  recovery_revision: ${yamlIdentity(state.recoveryGate.binding?.workspaceRevision ?? '')}`,
       `  recovery_criterion_id: ${yamlIdentity(state.lastVerifier?.identity ?? '')}`,
       `  recovery_evidence: ${yamlScalar(state.recoveryGate.requiredEvidence)}`,
-      `  recovery_observation_keys: ${yamlList(observationIds, 4)}`,
+      `  recovery_observation_keys: ${yamlList(observationIds.slice(-8), 8)}`,
+      `  recovery_read_records: ${JSON.stringify(records.slice(-8).map(record => ({ id: record.id, target: record.target, window: record.window })))}`,
+      '  recovery_read_guidance: References name delivered windows, not permission or full-file verification. Older records can be re-published by rereading their concrete target/window.',
       `  recovery_plan: ${state.recoveryGate.planAdmitted ? 'admitted' : 'required'}`,
     )
     if (observationIds.length === 0) lines.push('  recovery_guidance: No admissible observation IDs exist yet; reread the failing assertion and relevant source after the failed verifier. Never invent observation IDs.')
@@ -448,12 +434,12 @@ export function formatWorkingStateBlock(state: WorkingState): string {
   if (state.localization) {
     lines.push(
       `  localization_phase: ${state.localization.phase}`,
-      `  localization_calls: ${state.localization.calls}/4`,
-      `  localization_rounds: ${state.localization.rounds}/2`,
+      `  localization_calls: ${state.localization.calls}`,
+      `  localization_rounds: ${state.localization.rounds}`,
       `  localization_candidates: ${yamlList(state.localization.candidates.map((candidate) => candidate.path), 4)}`,
       `  localization_test_hints: ${yamlList(state.localization.testHints, 4)}`,
       `  localization_import_candidates: ${yamlList((state.localization.importCandidates ?? []).map(candidate => `${candidate.path}:${candidate.relation}`), 4)}`,
-      '  localization_guidance: Read the diagnostic test candidate first, then only the implementation or data-file dependency established by its failing assertion. Unrelated reads consume the two-scope allowance. Repair that target and rerun the verifier before investigating another failure.',
+      '  localization_guidance: Diagnostic and import candidates rank useful inspections; they do not restrict authorized source reads. Follow relevant implementation dependencies and use delivered read handles for each existing edit target. Inspect additional ranges when needed; then propose a concrete repair and rerun the verifier.',
     )
   }
   if (state.lastVerifier && !state.lastVerifier.fresh) {
@@ -564,6 +550,11 @@ function normalizeTarget(value: string): string {
 
 /** Restore a controller snapshot without promoting legacy permits to authority. */
 export function restoreWorkingStateSnapshot(value: unknown): WorkingState | null {
+  if (value && typeof value === 'object' && 'failedVerifierHistory' in value && value.failedVerifierHistory !== undefined &&
+      (!Array.isArray(value.failedVerifierHistory) || value.failedVerifierHistory.length > 64 || !value.failedVerifierHistory.every(validFailedVerifierExecution))) return null
+  if (value && typeof value === 'object' && 'failedVerifierHistoryOverflow' in value && value.failedVerifierHistoryOverflow !== true && value.failedVerifierHistoryOverflow !== undefined) return null
+  if (value && typeof value === 'object' && 'settledFailedVerifier' in value &&
+      value.settledFailedVerifier !== undefined && !validFailedVerifierExecution(value.settledFailedVerifier)) return null
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
   const candidate = value as Partial<WorkingState>
   const strings = (list: unknown): list is string[] =>
@@ -579,8 +570,8 @@ export function restoreWorkingStateSnapshot(value: unknown): WorkingState | null
   if (restored.localization) {
     const loc = restored.localization
     if (!['LOCALIZE_FAILURE', 'localized', 'exhausted'].includes(loc.phase) ||
-        !Number.isSafeInteger(loc.calls) || loc.calls < 0 || loc.calls > 4 ||
-        !Number.isSafeInteger(loc.rounds) || loc.rounds < 0 || loc.rounds > 2 ||
+        !Number.isSafeInteger(loc.calls) || loc.calls < 0 ||
+        !Number.isSafeInteger(loc.rounds) || loc.rounds < 0 ||
         !strings(loc.inspected) || !strings(loc.testHints) || loc.testHints.length > 4 ||
         !Array.isArray(loc.candidates) || loc.candidates.length > 8 ||
         loc.candidates.some((item) => !item || typeof item.path !== 'string' || typeof item.relation !== 'string') ||
@@ -591,8 +582,7 @@ export function restoreWorkingStateSnapshot(value: unknown): WorkingState | null
         typeof loc.binding.workspaceRevision !== 'string' || !loc.binding.workspaceRevision ||
         loc.failureSignature !== gate?.failureSignature ||
         (loc.phase === 'localized' && (!loc.acceptedPath || !loc.observationDigest ||
-          !loc.candidates.some((item) => item.path === loc.acceptedPath) ||
-          !gate?.failingTargets?.includes(loc.acceptedPath)))) return null
+          !loc.candidates.some((item) => item.path === loc.acceptedPath)))) return null
   }
   if (gate) {
     if (typeof gate.failureSignature !== 'string' || typeof gate.requiredEvidence !== 'string' ||
@@ -604,9 +594,17 @@ export function restoreWorkingStateSnapshot(value: unknown): WorkingState | null
       typeof binding.contractHash === 'string' && binding.contractHash.length > 0 &&
       typeof binding.repositoryIdentity === 'string' && binding.repositoryIdentity.length > 0 &&
       typeof binding.workspaceRevision === 'string' && binding.workspaceRevision.length > 0
+    const records = gate.readRecords ?? []
+    if (!Array.isArray(records) || records.length > 64 || records.some(record =>
+        !record || !record.binding || !validBinding || !sameRecoveryBinding(binding!, record.binding) ||
+        record.failureSignature !== gate.failureSignature || !record.key ||
+        recoveryEvidenceKey(record, gate.failureSignature) !== record.key ||
+        recoveryReadObservationId(record.key) !== record.id)) return null
     restored.recoveryGate = {
       ...gate,
-      satisfied: validBinding === true && gate.satisfied === true && (gate.observedKeys ?? []).length > 0,
+      readRecords: records,
+      observedKeys: records.map(record => record.key),
+      satisfied: validBinding === true && gate.satisfied === true && records.length > 0,
       strategyChanged: false,
       planAdmitted: false,
       permitConsumed: gate.permitConsumed === true,
@@ -616,11 +614,11 @@ export function restoreWorkingStateSnapshot(value: unknown): WorkingState | null
 }
 
 export function sameRecoveryBinding(a: RecoveryCandidateBinding, b: RecoveryCandidateBinding): boolean {
-  return a.schemaVersion === 1 && b.schemaVersion === 1 &&
-    a.taskId.length > 0 && a.taskId === b.taskId &&
-    a.contractHash.length > 0 && a.contractHash === b.contractHash &&
-    a.repositoryIdentity.length > 0 && a.repositoryIdentity === b.repositoryIdentity &&
-    a.workspaceRevision.length > 0 && a.workspaceRevision === b.workspaceRevision
+  return [a, b].every(value => value && value.schemaVersion === 1 &&
+    ['taskId', 'contractHash', 'repositoryIdentity', 'workspaceRevision'].every(key =>
+      typeof value[key as keyof RecoveryCandidateBinding] === 'string' && String(value[key as keyof RecoveryCandidateBinding]).length > 0)) &&
+    a.taskId === b.taskId && a.contractHash === b.contractHash &&
+    a.repositoryIdentity === b.repositoryIdentity && a.workspaceRevision === b.workspaceRevision
 }
 
 /**
@@ -629,14 +627,33 @@ export function sameRecoveryBinding(a: RecoveryCandidateBinding, b: RecoveryCand
  * repeated reads of the same target for the same failure.
  */
 export function recoveryEvidenceKey(provenance: RecoveryEvidenceProvenance, failureSignature: string): string {
+  if (!provenance || typeof provenance.target !== 'string' ||
+      typeof provenance.tool !== 'string' || typeof provenance.observationDigest !== 'string' ||
+      typeof failureSignature !== 'string' || !failureSignature) return ''
   const binding = provenance.binding
   const target = normalizeTarget(provenance.target)
-  if (!binding || !target || !provenance.observationDigest) return ''
+  if (!binding || !sameRecoveryBinding(binding, binding) || !target || target !== provenance.target || !provenance.observationDigest ||
+      !['read_file', 'read_range'].includes(provenance.tool) || !isReadDeliveryWindow(provenance.window)) return ''
+  const w = provenance.window
   return JSON.stringify([
-    1, failureSignature, binding.taskId, binding.contractHash,
+    2, failureSignature, binding.taskId, binding.contractHash,
     binding.repositoryIdentity, binding.workspaceRevision, provenance.tool,
-    target, provenance.observationDigest,
+    target, provenance.observationDigest, w.startLine, w.endLine, w.totalLines, w.completeFile, w.byteTruncated,
   ])
+}
+
+/** Expose a retained host record together with its exact delivered coverage. */
+export function formatRecoveryReadReference(state: WorkingState, provenance: RecoveryEvidenceProvenance): string {
+  const gate = state.recoveryGate
+  if (!gate) return ''
+  const key = recoveryEvidenceKey(provenance, gate.failureSignature)
+  const record = gate.readRecords?.find(item => item.key === key)
+  return record ? `### recovery_read_reference\n${JSON.stringify({ id: record.id, target: record.target, window: record.window })}` : ''
+}
+
+/** Stable model handle; input proposals are never truncated into handles. */
+export function recoveryReadObservationId(key: string): string {
+  return createHash('sha256').update(key).digest('hex').slice(0, 16)
 }
 
 /**

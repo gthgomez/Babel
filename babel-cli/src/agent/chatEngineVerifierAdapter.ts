@@ -5,6 +5,7 @@ import { nativeNodeResultCounts } from './nativeTestResultCounts.js';
 import { createHash } from 'node:crypto';
 import { realpathSync } from 'node:fs';
 import path from 'node:path';
+import { canonicalizeContained } from '../bridge/workspaceBound.js';
 import { isCredentialTargetPath } from './autonomyEnforcement.js';
 import { requireProjectRoot, type ChatScopeInput } from './chatExecutionScope.js';
 
@@ -18,6 +19,8 @@ import {
 import {
   isVerifierAuthoritySource,
   type ExecutorVerifierReceipt,
+  type VerifierExecutionContext,
+  type VerifierEvidenceOwner,
 } from '../executor/contracts.js';
 import {
   recordVerifierAttempt,
@@ -43,17 +46,20 @@ export function captureCompletionWorkspaceRevisionHash(
   mutationPaths: string[],
   receipt: BoundChatVerifierReceipt | null,
 ): string | undefined {
-  if (mutationPaths.length === 0) return undefined;
   const root = requireProjectRoot(scope);
+  if (receipt?.executionContext) {
+    try { if (receipt.executionContext.workspaceRoot !== realpathSync.native(root)) return undefined; }
+    catch { return undefined; }
+  }
   const bound = receipt?.boundRevision;
   if (!bound?.scope || (bound.gitBinding !== 'required' && bound.gitBinding !== 'optional')) return undefined;
   const relativePaths = toRepositoryRelativePaths(root, mutationPaths);
-  if (!relativePaths?.length) return undefined;
+  if (!relativePaths || (mutationPaths.length > 0 && !relativePaths.length)) return undefined;
   const verifierScope = bound.scope;
-  const mutations = RevisionManager.computeRevisionSync(root, relativePaths);
+  const mutations = relativePaths.length ? RevisionManager.computeRevisionSync(root, relativePaths) : null;
   if (verifierScope.kind === 'files') {
-    if (mutations.scope?.kind !== 'files' ||
-      mutations.scope.paths.some(file => !verifierScope.paths.includes(file))) return undefined;
+    if (mutations && (mutations.scope?.kind !== 'files' ||
+      mutations.scope.paths.some(file => !verifierScope.paths.includes(file)))) return undefined;
   } else if (verifierScope.kind !== 'repository' || bound.gitBinding !== 'required') return undefined;
   return RevisionManager.computeRevisionSync(root,
     verifierScope.kind === 'files' ? verifierScope.paths : [],
@@ -99,6 +105,7 @@ export async function captureChatVerifierReceipt(input: {
   allowRepositoryScopeForRedRecovery?: boolean;
   /** Explicit no-patch route for a successful verifier after inspected no-change. */
   allowRepositoryScopeForGreenNoChange?: boolean;
+  executionContext?: VerifierExecutionContext;
   execution?: {
     working_directory?: string;
     environment_policy?: string;
@@ -110,6 +117,10 @@ export async function captureChatVerifierReceipt(input: {
     authoritySource: 'built_in_runner',
   });
   if (!parsed || !isVerifierAuthoritySource(parsed.authoritySource)) return null;
+  if (input.executionContext) {
+    try { if (input.executionContext.workspaceRoot !== realpathSync.native(input.projectRoot)) return null; }
+    catch { return null; }
+  }
   // The revision binding requires repository-relative scope paths, but the
   // governed mutation path reports absolute paths. Canonicalize here so a
   // successful write + authoritative verifier can bind its revision instead
@@ -162,6 +173,7 @@ export async function captureChatVerifierReceipt(input: {
         args: parsed.args,
       },
       ...(input.execution ? { execution: input.execution } : {}),
+      ...(input.executionContext ? { executionContext: input.executionContext } : {}),
     });
     receipt.inputClosure = inputClosure;
     const counts = parseExecutedTestCounts(
@@ -190,7 +202,9 @@ function toRepositoryRelativePaths(
   projectRoot: string,
   values: readonly string[],
 ): string[] | null {
-  const root = path.resolve(projectRoot).replaceAll('\\', '/').replace(/\/+$/, '');
+  let root: string;
+  try { root = realpathSync.native(projectRoot).replaceAll('\\', '/').replace(/\/+$/, ''); }
+  catch { return null; }
   const out: string[] = [];
   for (const value of values) {
     if (typeof value !== 'string') continue;
@@ -200,7 +214,11 @@ function toRepositoryRelativePaths(
       out.push(slash);
       continue;
     }
-    const absolute = path.resolve(value).replaceAll('\\', '/');
+    // Foreign-platform drive spellings must not be rejoined to this cwd.
+    if (!path.isAbsolute(value)) return null;
+    let absolute: string;
+    try { absolute = canonicalizeContained(value).replaceAll('\\', '/'); }
+    catch { return null; }
     if (absolute === root) continue;
     if (!absolute.startsWith(`${root}/`)) return null;
     out.push(absolute.slice(root.length + 1));
@@ -210,22 +228,19 @@ function toRepositoryRelativePaths(
 
 /** Ledger slot identity: command fingerprint plus governed execution context. */
 export function verifierReceiptLedgerKey(receipt: BoundChatVerifierReceipt): string {
-  const commandKey = verifierReceiptIdentityKey(receipt.command);
-  const cwd = receipt.working_directory ?? '@unset';
-  const env = receipt.environment_policy ?? '@unset';
-  const target = receipt.target ?? '';
-  return `${commandKey}::cwd=${cwd}::env=${env}::target=${target}`;
+  const commandKey = typeof receipt.command === 'string' ? verifierReceiptIdentityKey(receipt.command) : '@invalid-command';
+  return JSON.stringify([commandKey, receipt.executionContext ?? null,
+    receipt.working_directory ?? null, receipt.environment_policy ?? null, receipt.target ?? null]);
 }
 
-/** Replace the latest ledger entry for one execution-context identity. */
+/** Preserve physical attempt history; replace only another projection of the same event. */
 export function upsertVerifierReceipt(
   ledger: BoundChatVerifierReceipt[],
   receipt: BoundChatVerifierReceipt,
 ): void {
   const receiptKey = verifierReceiptLedgerKey(receipt);
-  const existingIndex = ledger.findIndex(
-    (entry) => verifierReceiptLedgerKey(entry) === receiptKey,
-  );
+  const existingIndex = ledger.findIndex(entry => verifierReceiptLedgerKey(entry) === receiptKey
+    && (receipt.order ? entry.order?.sessionId === receipt.order.sessionId && entry.order.seq === receipt.order.seq : !entry.order));
   if (existingIndex >= 0) ledger[existingIndex] = receipt;
   else ledger.push(receipt);
 }
@@ -234,13 +249,22 @@ export function upsertVerifierReceipt(
 export function restorePersistedVerifierEvidence(
   log: SessionEventLog,
   ledger: BoundChatVerifierReceipt[],
+  owner?: VerifierEvidenceOwner,
 ): BoundChatVerifierReceipt | null {
   let latest: BoundChatVerifierReceipt | null = null;
   for (const event of log.events) {
-    if (event.kind !== 'verifier_attempt' || !event.receipt) continue;
-    if (!toExecutorVerifierReceipt(event.receipt).ok) continue;
-    latest = event.receipt;
-    upsertVerifierReceipt(ledger, event.receipt);
+    if (event.kind !== 'verifier_attempt' || !event.receipt || event.authoritative !== true) continue;
+    if (event.session_id !== log.session_id || !Number.isSafeInteger(event.seq) || event.seq < 0) continue;
+    const context = event.receipt.executionContext;
+    const knownOwner = context && [context.workspaceRoot, context.taskId, context.contractHash]
+      .every(value => typeof value === 'string' && value.trim().length > 0);
+    if (owner && (event.session_id !== owner.sessionId || (knownOwner
+      && (context.workspaceRoot !== owner.workspaceRoot || context.taskId !== owner.taskId || context.contractHash !== owner.contractHash)))) continue;
+    const restored = { ...event.receipt, order: { sessionId: event.session_id, seq: event.seq } };
+    // Preserve malformed same-owner packets too: adaptation must report their
+    // errors rather than silently deleting a possibly later failed attempt.
+    if (!latest || restored.order.seq > latest.order!.seq) latest = restored;
+    upsertVerifierReceipt(ledger, restored);
   }
   return latest;
 }
@@ -296,6 +320,9 @@ export async function captureAndRecordVerifierReceipt(input: {
   toolCallId?: string;
   /** Composite cache slot identity; derived from command+cwd+env when omitted. */
   cacheIdentity?: { key: string; cwd: string; envKey: string };
+  /** Host acceptance owner captured before dispatch, never supplied by the model. */
+  verifierOwner?: VerifierEvidenceOwner;
+  resolvedExecutable?: string;
   /** The command was not started. A synthetic exit must not enter the ledger. */
   simulated?: boolean;
   /** Recheck suspended execution ownership/candidate immediately before publishing evidence. */
@@ -309,7 +336,7 @@ export async function captureAndRecordVerifierReceipt(input: {
       command: input.command,
     });
   const relativeCwd =
-    path.relative(input.projectRoot, identity.cwd).replaceAll('\\', '/') || '.';
+    path.relative(realpathSync.native(input.projectRoot), identity.cwd).replaceAll('\\', '/') || '.';
   const commandIdentity = analyzeVerifierIdentity(input.command);
   const receipt = await captureChatVerifierReceipt({
     projectRoot: input.projectRoot,
@@ -325,6 +352,15 @@ export async function captureAndRecordVerifierReceipt(input: {
     ...(input.allowRepositoryScopeForGreenNoChange !== undefined
       ? { allowRepositoryScopeForGreenNoChange: input.allowRepositoryScopeForGreenNoChange }
       : {}),
+    ...(input.verifierOwner ? { executionContext: {
+      workspaceRoot: input.verifierOwner.workspaceRoot,
+      taskId: input.verifierOwner.taskId,
+      contractHash: input.verifierOwner.contractHash,
+      workingDirectory: identity.cwd,
+      environmentFingerprint: identity.envKey,
+      targetSelectors: commandIdentity?.targetSelectors ?? [],
+      ...(input.resolvedExecutable ? { resolvedExecutable: input.resolvedExecutable } : {}),
+    } } : {}),
     execution: {
       working_directory: relativeCwd,
       environment_policy: 'host-process',
@@ -339,8 +375,7 @@ export async function captureAndRecordVerifierReceipt(input: {
   if (caveats.length > 0 && !receipt.summary.includes(caveats[0]!)) {
     receipt.summary = [receipt.summary, ...caveats].join('\n');
   }
-  upsertVerifierReceipt(input.ledger, receipt);
-  recordVerifierAttempt(input.sessionEvents, {
+  const event = recordVerifierAttempt(input.sessionEvents, {
     turn_id: input.turnId,
     command_preview: input.command,
     authoritative: true,
@@ -348,13 +383,17 @@ export async function captureAndRecordVerifierReceipt(input: {
     ...(input.toolCallId !== undefined ? { tool_call_id: input.toolCallId } : {}),
     receipt,
   });
+  // The event wrapper is already serialized. Project its order onto a new
+  // live receipt; restore reconstructs this same projection from the wrapper.
+  const orderedReceipt = { ...receipt, order: { sessionId: event.session_id, seq: event.seq } };
+  upsertVerifierReceipt(input.ledger, orderedReceipt);
   input.cache.set(identity.key, {
-    receipt,
+    receipt: orderedReceipt,
     writeCountAtCache: input.writeCount,
     cwd: identity.cwd,
     envKey: identity.envKey,
   });
-  return receipt;
+  return orderedReceipt;
 }
 
 /** Cache entry contract for verifier-run dedup (see chatEngineContracts). */
@@ -377,8 +416,8 @@ export function resolveVerifierCacheIdentity(input: {
   cwd?: string;
   envKey?: string;
 }): { key: string; cwd: string; envKey: string } {
-  const cwd = path.resolve(input.projectRoot, input.cwd ?? '.');
-  const envKey = input.envKey ?? verifierEnvironmentKey();
+  const cwd = canonicalizeContained(path.resolve(input.projectRoot, input.cwd ?? '.'));
+  const envKey = input.envKey ?? verifierEnvironmentKey({ ...process.env, BABEL_PROJECT_ROOT: path.resolve(input.projectRoot) });
   return {
     key: `${verifierReceiptIdentityKey(input.command)}::cwd=${cwd}::env=${envKey}`,
     cwd,
@@ -388,17 +427,12 @@ export function resolveVerifierCacheIdentity(input: {
 
 /**
  * Stable fingerprint of the execution environment a verifier would run in.
- * Bounded to the variables that plausibly change verifier behavior (PATH,
- * NODE_ENV, BABEL_* overrides); it is a reuse-narrowing heuristic, not a
- * sandbox guarantee — unknown stays covered by the write-count and
- * workspace-byte checks.
+ * Every supplied variable contributes: the host cannot infer whether a custom
+ * variable affects a project verifier. Only the aggregate digest is persisted;
+ * variable names and values never appear in receipts.
  */
 export function verifierEnvironmentKey(env: NodeJS.ProcessEnv = process.env): string {
-  const relevant = Object.keys(env)
-    .filter((key) => key === 'PATH' || key === 'NODE_ENV' || key.startsWith('BABEL_'))
-    .sort()
-    .map((key) => `${key}=${env[key] ?? ''}`)
-    .join('\n');
+  const relevant = JSON.stringify(Object.keys(env).sort().map(key => [key, env[key] ?? null]));
   return createHash('sha256').update(`${process.platform}\n${relevant}`).digest('hex');
 }
 

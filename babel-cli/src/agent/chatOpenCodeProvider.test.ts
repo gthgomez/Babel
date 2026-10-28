@@ -476,15 +476,16 @@ test('exact GLM ChatEngine path performs a bounded mutation and authoritative ve
     join(projectRoot, 'package.json'),
     JSON.stringify({
       type: 'module',
-      scripts: { test: 'node verify.mjs' },
+      scripts: { test: 'node --test verify.test.mjs' },
     }),
     'utf8',
   );
   writeFileSync(
-    join(projectRoot, 'verify.mjs'),
+    join(projectRoot, 'verify.test.mjs'),
     [
       "import { readFileSync } from 'node:fs';",
-      "if (readFileSync('fixture.txt', 'utf8') !== 'updated fixture\\n') process.exit(1);",
+      "import { test } from 'node:test'; import assert from 'node:assert/strict';",
+      "test('fixture content', () => assert.equal(readFileSync('fixture.txt', 'utf8'), 'updated fixture\\n'));",
     ].join('\n'),
     'utf8',
   );

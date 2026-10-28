@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 /**
  * Chat-path revision binding for verifier receipts (H7/H8).
  *
@@ -9,6 +10,8 @@
 import {
   isVerifierAuthoritySource,
   type ExecutorVerifierReceipt,
+  type VerifierExecutionContext,
+  type VerifierEventOrder,
   type VerifierAuthoritySource,
   type WorkspaceRevisionIdentity,
 } from '../executor/contracts.js';
@@ -34,6 +37,8 @@ export const CHAT_EVIDENCE_CLAIM_ID = 'chat-claim' as const;
 
 /** Chat verifier receipt with optional durable workspace binding. */
 export type BoundChatVerifierReceipt = {
+  executionContext?: VerifierExecutionContext;
+  order?: VerifierEventOrder;
   command: string;
   exit_code: number;
   exitCode?: number;
@@ -97,6 +102,7 @@ export async function bindChatVerifierReceipt(input: {
     executable: string;
     args: string[];
   } | null;
+  executionContext?: VerifierExecutionContext;
   execution?: {
     working_directory?: string;
     environment_policy?: string;
@@ -119,12 +125,13 @@ export async function bindChatVerifierReceipt(input: {
       ? 'targeted' as const
       : undefined;
   return {
+    ...(input.executionContext ? { executionContext: structuredClone(input.executionContext) } : {}),
     command: input.command,
     exit_code: input.exit_code,
     exitCode: input.exit_code,
     summary: input.summary,
     stale: false,
-    receiptId: `receipt-${now}`,
+    receiptId: `receipt-${randomUUID()}`,
     capturedAt: now,
     ...(executionScope ? { scope: executionScope } : {}),
     authority: input.structured !== undefined && input.structured !== null,
@@ -188,6 +195,13 @@ export function evaluateChatVerifierReceiptCurrencySync(
   receipt: BoundChatVerifierReceipt | null | undefined,
 ): { stale: boolean; reason?: string } | null {
   if (!receipt) return null;
+  if (receipt.executionContext) {
+    try {
+      if (receipt.executionContext.workspaceRoot !== realpathSync.native(projectRoot)) {
+        return { stale: true, reason: 'Verifier physical workspace owner changed' };
+      }
+    } catch { return { stale: true, reason: 'Verifier physical workspace owner is unavailable' }; }
+  }
   if (receipt.inputClosure?.mode === 'unsupported') {
     return { stale: true, reason: receipt.inputClosure.reason || 'Verifier input closure is unsupported' };
   }
@@ -342,6 +356,24 @@ export function toExecutorVerifierReceipt(
     errors.push('Repository-scoped verifier evidence requires a content-bound Git tree');
   }
   const boundRevision = validateWorkspaceRevisionIdentity(revision, errors);
+  if (chatReceipt.executionContext !== undefined) {
+    const context = chatReceipt.executionContext;
+    if (!context || typeof context !== 'object'
+      || !['workspaceRoot', 'taskId', 'contractHash', 'workingDirectory', 'environmentFingerprint'].every(key =>
+        typeof context[key as keyof VerifierExecutionContext] === 'string'
+        && (context[key as keyof VerifierExecutionContext] as string).trim().length > 0)
+      || !Array.isArray(context.targetSelectors) || !context.targetSelectors.every(value => typeof value === 'string')
+      || (context.resolvedExecutable !== undefined && (typeof context.resolvedExecutable !== 'string' || !context.resolvedExecutable))) {
+      errors.push('Invalid verifier executionContext');
+    }
+  }
+  if (chatReceipt.order !== undefined && (!chatReceipt.order || typeof chatReceipt.order.sessionId !== 'string'
+    || !chatReceipt.order.sessionId || !Number.isSafeInteger(chatReceipt.order.seq) || chatReceipt.order.seq < 0)) {
+    errors.push('Invalid verifier durable event order');
+  }
+  if (chatReceipt.exitCode !== undefined && chatReceipt.exit_code !== undefined && chatReceipt.exitCode !== chatReceipt.exit_code) {
+    errors.push('Conflicting verifier exit codes');
+  }
   const counts: Pick<ExecutorVerifierReceipt, 'tests_total' | 'tests_passed' | 'tests_failed' | 'tests_skipped'> = {};
   for (const key of ['tests_total', 'tests_passed', 'tests_failed', 'tests_skipped'] as const) {
     const count = chatReceipt[key];
@@ -361,6 +393,7 @@ export function toExecutorVerifierReceipt(
       receiptId: receiptId as string,
       verifierId: verifierId as string,
       command: command as string,
+      summary: chatReceipt.summary,
       exitCode: exitCode!,
       authority: true,
       authoritySource: authoritySource as VerifierAuthoritySource,
@@ -369,6 +402,12 @@ export function toExecutorVerifierReceipt(
       stale: chatReceipt.stale === true,
       ...(chatReceipt.staleReason ? { staleReason: chatReceipt.staleReason } : {}),
       ...(chatReceipt.scope ? { scope: chatReceipt.scope } : {}),
+      ...(chatReceipt.executionContext ? { executionContext: structuredClone(chatReceipt.executionContext) } : {}),
+      ...(chatReceipt.order ? { order: { ...chatReceipt.order } } : {}),
+      ...(chatReceipt.argv ? { argv: [...chatReceipt.argv] } : {}),
+      ...(chatReceipt.working_directory !== undefined ? { working_directory: chatReceipt.working_directory } : {}),
+      ...(chatReceipt.environment_policy !== undefined ? { environment_policy: chatReceipt.environment_policy } : {}),
+      ...(chatReceipt.target !== undefined ? { target: chatReceipt.target } : {}),
       ...counts,
     },
   };
@@ -476,28 +515,17 @@ export function revisionBindingProofErrors(
 
 /** ExactOptionalPropertyTypes-safe gate log projection (shared by streamDone/buildResult). */
 export function toGateToolLog(
-  log: readonly {
-    tool: string;
-    target?: string;
-    detail?: string;
-    error?: string;
-    exit_code?: number;
-    mutation_paths?: string[];
-  }[],
-): {
-  tool: string;
-  target: string;
-  detail?: string;
-  error?: string;
-  exit_code?: number;
-  mutation_paths?: string[];
-}[] {
+  log: readonly (Omit<import('../agent/completionGatePolicy.js').GateToolLogEntry, 'target'> & { target?: string })[],
+): import('../agent/completionGatePolicy.js').GateToolLogEntry[] {
   return log.map((entry) => ({
     tool: entry.tool,
     target: entry.target ?? '',
     ...(entry.detail !== undefined ? { detail: entry.detail } : {}),
     ...(entry.error !== undefined ? { error: entry.error } : {}),
     ...(entry.exit_code !== undefined ? { exit_code: entry.exit_code } : {}),
+    ...(entry.preDispatchNoEffect === true ? { preDispatchNoEffect: true as const } : {}),
+    ...(entry.effect_status !== undefined ? { effect_status: entry.effect_status } : {}),
+    ...(entry.effect_scope !== undefined ? { effect_scope: entry.effect_scope } : {}),
     ...(entry.mutation_paths !== undefined ? { mutation_paths: [...entry.mutation_paths] } : {}),
   }));
 }

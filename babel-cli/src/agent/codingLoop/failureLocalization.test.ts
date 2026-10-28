@@ -53,21 +53,21 @@ test('import bridge evidence cannot reopen consumed permits or accept stale, rep
       {path:'math.test.js',relation:'addition',source:'test_identity' as const},
       {path:'math.js',relation:'add',source:'import_call' as const,fromTestPath:'math.test.js'},
     ]),
-    phase:'localized' as const, calls:2,rounds:2,acceptedPath:'math.js',observationDigest:'fresh-source',
+    phase:'localized' as const, calls:2,rounds:2,acceptedPath:'math.js',observationDigest:'fresh-source',window:{startLine:1,endLine:1,totalLines:1,completeFile:true,byteTruncated:false},
   }
   let state = applyWorkingStateEvent(createWorkingState('repair'), {
     type:'recovery_gate',failureSignature:'red',binding,requiredEvidence:'inspect',failingTargets:['math.test.js'],
   })
   state = applyWorkingStateEvent(state,{type:'add_evidence',evidence:'read test',discriminating:true,
-    provenance:{tool:'read_file',target:'math.test.js',failureSignature:'red',binding,observationDigest:'fresh-test'}})
+    provenance:{tool:'read_file',target:'math.test.js',failureSignature:'red',binding,observationDigest:'fresh-test',window:{startLine:1,endLine:1,totalLines:1,completeFile:true,byteTruncated:false}}})
   state = applyWorkingStateEvent(state,{type:'localization_update',localization:localized})
-  const provenance:RecoveryEvidenceProvenance = {tool:'read_file',target:'math.js',failureSignature:'red',binding,observationDigest:'fresh-source'}
+  const provenance:RecoveryEvidenceProvenance = {tool:'read_file',target:'math.js',failureSignature:'red',binding,observationDigest:'fresh-source',window:{startLine:1,endLine:1,totalLines:1,completeFile:true,byteTruncated:false}}
   const accepted = applyWorkingStateEvent(state,{type:'localization_import_evidence',provenance})
-  assert.deepEqual(accepted.recoveryGate?.failingTargets,['math.test.js','math.js'])
-  assert.equal(accepted.recoveryGate?.observedKeys?.length,2)
-  assert.equal(applyWorkingStateEvent(accepted,{type:'localization_import_evidence',provenance}).recoveryGate?.observedKeys?.length,2)
+  assert.deepEqual(accepted.recoveryGate?.failingTargets,['math.test.js'], 'AST hints do not grant scope or read authority')
+  assert.equal(accepted.recoveryGate?.observedKeys?.length,1)
+  assert.equal(applyWorkingStateEvent(accepted,{type:'localization_import_evidence',provenance}).recoveryGate?.observedKeys?.length,1)
   for (const alteration of [
-    {tool:'read_range'}, {failureSignature:'other'}, {target:'unrelated.js'}, {observationDigest:'old'},
+    {tool:'read_range'}, {failureSignature:'other'}, {target:'unrelated.js'}, {observationDigest:'old',window:{startLine:1,endLine:1,totalLines:1,completeFile:true,byteTruncated:false}},
     {binding:{...binding,workspaceRevision:'stale'}},
   ]) {
     const rejected=applyWorkingStateEvent(state,{type:'localization_import_evidence',provenance:{...provenance,...alteration}})
@@ -97,11 +97,11 @@ test('a failed stylesheet assertion requires both fresh full reads before admitt
     assert.equal(loc.acceptedPath,'styles.css');assert.equal(loc.rounds,2)
     let state=applyWorkingStateEvent(createWorkingState('repair'),{type:'recovery_gate',failureSignature:'red',binding,requiredEvidence:'inspect',failingTargets:['render.test.js']})
     state=applyWorkingStateEvent(state,{type:'add_evidence',evidence:'fresh test',discriminating:true,
-      provenance:{tool:'read_file',target:'render.test.js',failureSignature:'red',binding,observationDigest:'test'}})
+      provenance:{tool:'read_file',target:'render.test.js',failureSignature:'red',binding,observationDigest:'test',window:{startLine:1,endLine:1,totalLines:1,completeFile:true,byteTruncated:false}}})
     state=applyWorkingStateEvent(state,{type:'localization_update',localization:loc})
     const admitted=applyWorkingStateEvent(state,{type:'localization_import_evidence',provenance:{tool:'read_file',target:'styles.css',failureSignature:'red',binding,observationDigest:loc.observationDigest!}})
-    assert.deepEqual(admitted.recoveryGate?.failingTargets,['render.test.js','styles.css'])
-    assert.equal(admitted.recoveryGate?.observedKeys?.length,2)
+    assert.deepEqual(admitted.recoveryGate?.failingTargets,['render.test.js'])
+    assert.equal(admitted.recoveryGate?.observedKeys?.length,1)
   } finally {rmSync(root,{recursive:true,force:true})}
 })
 
@@ -225,14 +225,14 @@ test('an existing but unrelated stack path cannot establish localization scope',
   } finally { rmSync(root, { recursive: true, force: true }) }
 })
 
-test('search and listing calls consume a durable four-call allowance', () => {
+test('search and listing calls retain durable counts without an arbitrary four-call veto', () => {
   let state = startFailureLocalization('red', binding, [])
   for (let i = 0; i < 4; i += 1) {
     state = advanceFailureLocalization(state, { type: 'glob', target: '**/*', content: 'src/parser.ts', succeeded: true })
   }
-  assert.equal(state.phase, 'exhausted')
+  assert.equal(state.phase, 'LOCALIZE_FAILURE')
   assert.equal(state.calls, 4)
-  assert.equal(advanceFailureLocalization(state, { type: 'read_file', target: 'src/parser.ts', content: 'parser', succeeded: true }).calls, 4)
+  assert.equal(advanceFailureLocalization(state, { type: 'read_file', target: 'src/parser.ts', content: 'parser', succeeded: true }).calls, 5)
 })
 
 test('captured test identity can seed a bounded glob but a read must confirm it', () => {
@@ -313,7 +313,7 @@ test('cold resume retains spent localization calls and cannot reset the allowanc
   const restored = restoreWorkingStateSnapshot(event.state)
   assert.equal(restored?.localization?.calls, 3)
   const fourth = advanceFailureLocalization(restored!.localization!, { type: 'glob', target: '**/*', succeeded: true })
-  assert.equal(fourth.phase, 'exhausted')
+  assert.equal(fourth.phase, 'LOCALIZE_FAILURE')
   assert.equal(fourth.calls, 4)
 })
 
@@ -331,11 +331,11 @@ test('identical red verifier re-observation cannot reset spent localization allo
     for (let i = 0; i < 4; i += 1) {
       loc = advanceFailureLocalization(loc, { type: 'glob', target: '**/*', succeeded: true })
     }
-    assert.equal(loc.phase, 'exhausted')
+    assert.equal(loc.phase, 'LOCALIZE_FAILURE')
     state = applyWorkingStateEvent(state, { type: 'localization_update', localization: loc })
     const repeated = red(state)
     assert.equal(repeated.failureSurface?.errorSignature, state.failureSurface?.errorSignature)
     assert.equal(repeated.localization?.calls, 4)
-    assert.equal(repeated.localization?.phase, 'exhausted')
+    assert.equal(repeated.localization?.phase, 'LOCALIZE_FAILURE')
   } finally { rmSync(root, { recursive: true, force: true }) }
 })

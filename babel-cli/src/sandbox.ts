@@ -1,3 +1,4 @@
+import { formatFileReadContent, type ReadDeliveryWindow, type ReadByteCompleteness } from './services/readDelivery.js';
 /**
  * sandbox.ts — SafeExecutor: sandboxed tool execution for the CLI Executor stage
  *
@@ -152,18 +153,17 @@ export interface HostLaunchFailure {
 export interface ToolResult {
   /** Host-origin child start evidence; does not assert that tests ran or passed. */
   process_started?: boolean;
+  /** Host supervisor outcome; a started cancellation is never a natural test exit. */
+  process_termination?: 'exited' | 'cancelled' | 'timed_out' | 'terminated';
   /** Successful glob data: count is returned paths, not display lines or total matches. */
   glob_result?: { paths: string[]; returned_count: number; truncated: boolean };
   exit_code: number;
   stdout: string;
   stderr: string;
   /** Source completeness for capped file reads; absent for other tools. */
-  output_completeness?: {
-    complete: boolean;
-    original_bytes: number;
-    returned_bytes: number;
-    reason?: 'byte_limit';
-  };
+  output_completeness?: ReadByteCompleteness;
+  /** Exact host-delivered coverage, independent of byte completeness. */
+  read_window?: ReadDeliveryWindow;
   /**
    * Present only when the sandbox itself failed to launch the process. Absent
    * for every child-produced result, including a child that prints a
@@ -1559,111 +1559,7 @@ export class SafeExecutor {
     content: string,
     options?: { offset?: number; limit?: number; raw?: boolean },
   ): ToolResult {
-    const MAX_BYTES = 100 * 1024;
-    const totalBytes = Buffer.byteLength(content, 'utf-8');
-
-    // Safety cap: truncate to 100 KB at the nearest newline boundary
-    let truncatedContent = content;
-    let capMessage = '';
-    let capped = false;
-    if (totalBytes > MAX_BYTES) {
-      const buf = Buffer.from(content, 'utf-8');
-      truncatedContent = buf.subarray(0, MAX_BYTES).toString('utf-8');
-      // Find the last newline within the first 100 KB to avoid cutting mid-line
-      const lastNewline = truncatedContent.lastIndexOf('\n');
-      if (lastNewline > 0) {
-        truncatedContent = truncatedContent.substring(0, lastNewline);
-      }
-      capped = true;
-      capMessage = ` [truncated at ${MAX_BYTES / 1024} KB]`;
-    }
-
-    if (options?.raw) {
-      const bytes = Buffer.byteLength(truncatedContent, 'utf8');
-      return {
-        exit_code: 0,
-        stdout: truncatedContent,
-        stderr: '',
-        output_completeness: {
-          complete: !capped,
-          original_bytes: totalBytes,
-          returned_bytes: bytes,
-          ...(capped ? { reason: 'byte_limit' as const } : {}),
-        },
-      };
-    }
-
-    // Split into lines; remove the trailing empty element from a final \n
-    const allLines = truncatedContent.split('\n');
-    if (allLines.length > 0 && allLines[allLines.length - 1] === '') {
-      allLines.pop();
-    }
-
-    const totalLines = allLines.length;
-    const startLine = options?.offset ?? 1;
-    const maxLines = options?.limit ?? 200;
-
-    const startIndex = Math.max(0, Math.min(startLine - 1, totalLines));
-    const selectedLines = allLines.slice(startIndex, startIndex + maxLines);
-    const endLine = startIndex + selectedLines.length;
-
-    if (selectedLines.length === 0) {
-      if (totalLines === 0) {
-        return {
-          exit_code: 0,
-          stdout: '',
-          stderr: '',
-          output_completeness: {
-            complete: !capped,
-            original_bytes: totalBytes,
-            returned_bytes: Buffer.byteLength(truncatedContent, 'utf8'),
-            ...(capped ? { reason: 'byte_limit' as const } : {}),
-          },
-        };
-      }
-      return {
-        exit_code: 0,
-        stdout: `[File has ${totalLines} lines; lines ${startLine}–${startLine + maxLines - 1} are out of range]`,
-        stderr: '',
-        output_completeness: {
-          complete: !capped,
-          original_bytes: totalBytes,
-          returned_bytes: Buffer.byteLength(truncatedContent, 'utf8'),
-          ...(capped ? { reason: 'byte_limit' as const } : {}),
-        },
-      };
-    }
-
-    // Build line-numbered output
-    const lineNumberWidth = String(endLine).length;
-    const resultLines = selectedLines.map((line, i) => {
-      const lineNum = String(startIndex + i + 1).padStart(lineNumberWidth);
-      return `${lineNum}│${line}`;
-    });
-
-    // Build header when the view is truncated
-    const headerParts: string[] = [];
-    if (endLine < totalLines || startLine > 1) {
-      headerParts.push(
-        `[Showing lines ${startLine}-${endLine} of ${totalLines}${capMessage} — use offset/limit to see more]`,
-      );
-    } else if (capMessage) {
-      headerParts.push(
-        `[Showing lines 1-${totalLines}${capMessage} — use offset/limit to see more]`,
-      );
-    }
-
-    return {
-      exit_code: 0,
-      stdout: [...headerParts, ...resultLines].join('\n'),
-      stderr: '',
-      output_completeness: {
-        complete: !capped,
-        original_bytes: totalBytes,
-        returned_bytes: Buffer.byteLength(truncatedContent, 'utf8'),
-        ...(capped ? { reason: 'byte_limit' as const } : {}),
-      },
-    };
+    return formatFileReadContent(content, options);
   }
 
   listDirectory(inputPath: string): ToolResult {
@@ -2029,7 +1925,7 @@ export class SafeExecutor {
 
     if (prepared.ownedContainerName && (result.error || result.status !== 0)) {
       try { removeOwnedContainerSync(prepared.ownedContainerName, prepared.env, Boolean(result.error && result.pid > 0)); }
-      catch (error) { return { exit_code: 1, stdout: result.stdout ?? '', stderr: String(error), process_started: result.pid > 0 }; }
+      catch (error) { return { exit_code: 1, stdout: result.stdout ?? '', stderr: String(error), process_started: result.pid > 0, process_termination: 'terminated' }; }
     }
     if (result.error) {
       if (isSpawnSyncRuntimeSupervisorError(result.error)) {
@@ -2037,7 +1933,7 @@ export class SafeExecutor {
           result.status,
           result.stdout ?? '',
           result.stderr ?? '',
-        ), process_started: result.pid > 0 };
+        ), process_started: result.pid > 0, process_termination: 'terminated' };
       }
       const isTransient = transientRetryCount > 0 && isTransientSpawnError(result.error.message);
       const prefix = isTransient
@@ -2052,7 +1948,8 @@ export class SafeExecutor {
       };
     }
 
-    return { ...normalizeShellOutput(result.status, result.stdout ?? '', result.stderr ?? ''), process_started: result.pid > 0 };
+    return { ...normalizeShellOutput(result.status, result.stdout ?? '', result.stderr ?? ''), process_started: result.pid > 0,
+      process_termination: result.status === null ? 'terminated' : 'exited' };
   }
 
   /**
@@ -2112,7 +2009,7 @@ export class SafeExecutor {
       })();
       registerPendingProcessTermination(cleanup, sessionId ?? 'unscoped', prepared.ownedContainerName);
       try { await cleanup; }
-      catch (error) { return { exit_code: 1, stdout: result.stdout, stderr: String(error), process_started: result.processStarted }; }
+      catch (error) { return { exit_code: 1, stdout: result.stdout, stderr: String(error), process_started: result.processStarted, process_termination: result.aborted ? 'cancelled' : result.timedOut ? 'timed_out' : 'terminated' }; }
     }
     if (result.error) {
       if (result.aborted) {
@@ -2120,7 +2017,7 @@ export class SafeExecutor {
           exit_code: 1,
           stdout: '',
           stderr: `[sandbox] Spawn error: ${result.error.message}`,
-          process_started: result.processStarted,
+          process_started: result.processStarted, process_termination: 'cancelled',
         };
       }
       if (isChildRuntimeSupervisorError(result.error, result.processStarted, result.timedOut)) {
@@ -2130,7 +2027,7 @@ export class SafeExecutor {
           result.stderr,
           result.stdoutTruncated,
           result.stderrTruncated,
-        ), process_started: result.processStarted };
+        ), process_started: result.processStarted, process_termination: result.timedOut ? 'timed_out' : 'terminated' };
       }
       const transient =
         transientRetryCount > 0 && isTransientSpawnError(result.error.message);
@@ -2150,7 +2047,8 @@ export class SafeExecutor {
       result.stderr,
       result.stdoutTruncated,
       result.stderrTruncated,
-    ), process_started: result.processStarted };
+    ), process_started: result.processStarted,
+      process_termination: result.aborted ? 'cancelled' : result.timedOut ? 'timed_out' : result.status === null ? 'terminated' : 'exited' };
   }
 
   /** Sugar over shellExec with a default timeout suitable for test runners. */

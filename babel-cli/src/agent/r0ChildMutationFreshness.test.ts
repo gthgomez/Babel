@@ -213,7 +213,9 @@ describe('R0-11 child mutation vs parent verifier freshness', () => {
       const internals = engine as unknown as EngineInternals;
       assert.equal(hasAnyWrites(internals.toolCallLog as never), false);
       assert.equal(internals.lastVerifierReceipt?.stale, false);
-      const context = { agentId: 'parent', runId: 'parent-promotion', runDir: root, babelRoot: root, projectRoot: root, signal: internals.abortController.signal };
+      const runDir = join(runsRoot, 'parent-promotion');
+      mkdirSync(runDir, { recursive: true });
+      const context = { agentId: 'parent', runId: 'parent-promotion', runDir, babelRoot: root, projectRoot: root, signal: internals.abortController.signal };
       await internals.executeOneAction({ type: 'write_file', path: 'src/result.txt', content }, context, {}, { index: 1, idempotencyKey: 'parent-apply' });
       assert.equal(readFileSync(join(root, 'src/result.txt'), 'utf8'), content);
       assert.equal(internals.lastVerifierReceipt?.stale, true);

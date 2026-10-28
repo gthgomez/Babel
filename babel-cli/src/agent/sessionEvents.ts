@@ -685,6 +685,7 @@ export function recordToolTerminal(
     tool_name: string;
     idempotency_key?: string;
     exit_code?: number;
+    preDispatchNoEffect?: true;
     content?: string;
     failed?: boolean;
     cancelled?: boolean;
@@ -712,6 +713,7 @@ export function recordToolTerminal(
       ...(input.effect_class !== undefined ? { effect_class: input.effect_class } : {}),
       ...(input.reconciliation !== undefined ? { reconciliation: input.reconciliation } : {}),
       ...(input.args_digest !== undefined ? { args_digest: input.args_digest } : {}),
+      ...(input.preDispatchNoEffect === true ? { preDispatchNoEffect: true as const } : {}),
       ...correlation,
     });
   }
@@ -728,6 +730,7 @@ export function recordToolTerminal(
       ...(input.content !== undefined
         ? { error_preview: input.content.slice(0, 240) }
         : {}),
+      ...(input.preDispatchNoEffect === true ? { preDispatchNoEffect: true as const } : {}),
       ...correlation,
     });
   }
@@ -739,6 +742,7 @@ export function recordToolTerminal(
     idempotency_key: key,
     ...(input.exit_code !== undefined ? { exit_code: input.exit_code } : {}),
     ...(digest !== undefined ? { output_digest: digest } : {}),
+    ...(input.preDispatchNoEffect === true ? { preDispatchNoEffect: true as const } : {}),
     ...correlation,
   });
 }
@@ -752,6 +756,7 @@ export function recordVerifierAttempt(
     exit_code?: number;
     tool_call_id?: string;
     receipt?: BoundChatVerifierReceipt;
+    failed_execution?: import('./codingLoop/failedVerifierExecution.js').SettledFailedVerifierExecution;
   },
 ): SessionEvent {
   return appendSessionEvent(log, {
@@ -762,6 +767,7 @@ export function recordVerifierAttempt(
     ...(input.exit_code !== undefined ? { exit_code: input.exit_code } : {}),
     ...(input.tool_call_id !== undefined ? { tool_call_id: input.tool_call_id } : {}),
     ...(input.receipt !== undefined ? { receipt: structuredClone(input.receipt) } : {}),
+    ...(input.failed_execution !== undefined ? { failed_execution: structuredClone(input.failed_execution) } : {}),
   });
 }
 

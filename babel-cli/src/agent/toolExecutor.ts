@@ -202,6 +202,8 @@ export interface ToolExecutionResult {
 }
 
 export interface PolicyGatedExecutionResult extends ToolExecutionResult {
+  /** Host proves its executor was never dispatched; absence means unknown. */
+  preDispatchNoEffect?: true;
   policyDecision: PermissionDecision;
   policyBlocked: boolean;
   /** Authority reason when decideWithLease influenced the decision. */
@@ -784,6 +786,7 @@ export async function executeActionWithPolicy(
     lockContext?: FileLockContext | undefined;
   } = {},
 ): Promise<PolicyGatedExecutionResult> {
+  let executionStarted = false;
   const dispatchId = deps.idempotencyKey ?? context.toolCallId ?? defaultIdempotencyKeyForAction(action) ?? action.type;
   const stoppedBeforeDispatch = (decision: PermissionDecision = 'deny'): PolicyGatedExecutionResult | null => {
     const control = context.runControl;
@@ -791,13 +794,13 @@ export async function executeActionWithPolicy(
     return control && stopRequest ? { action, terminal: false, stopRequest,
       notStarted: { owner: control.owner, operationId: dispatchId, kind: 'tool' },
       results: [{ exit_code: 1, stdout: '', stderr: 'Operation was not started because its submission stopped.' }],
-      policyDecision: decision, policyBlocked: false,
+      policyDecision: decision, policyBlocked: false, ...(!executionStarted ? { preDispatchNoEffect: true as const } : {}),
     } : null;
   };
   const alreadyStopped = stoppedBeforeDispatch();
   if (alreadyStopped) return alreadyStopped;
   if(getExecutionContext()?.executionScope?.kind==='conversation'||getExecutionContext()?.root===null){
-    return {action,terminal:true,results:[policyBlockedToolResult(action,'deny','PROJECT_REQUIRED: Conversation scope grants no tool effects')],policyDecision:'deny',policyBlocked:true};
+    return {action,terminal:true,results:[policyBlockedToolResult(action,'deny','PROJECT_REQUIRED: Conversation scope grants no tool effects')],policyDecision:'deny',policyBlocked:true,preDispatchNoEffect:true};
   }
   // Capture task identity before any asynchronous policy/approval/executor
   // suspension. A completion from a retired task cannot hand certification
@@ -807,7 +810,7 @@ export async function executeActionWithPolicy(
   const ownedRoot = mutationWorkspaceRoot(context, deps.mutationRoot);
   if (mutationOwnership && !mutationOwnership.matchesRoot(ownedRoot)) {
     return {
-      action, terminal: false, policyDecision: 'deny', policyBlocked: true,
+      action, terminal: false, policyDecision: 'deny', policyBlocked: true, preDispatchNoEffect: true,
       results: [policyBlockedToolResult(action, 'deny', 'Task mutation owner was retired or its project changed')],
     };
   }
@@ -928,7 +931,7 @@ export async function executeActionWithPolicy(
           },
         ],
         policyDecision: 'deny',
-        policyBlocked: true,
+        policyBlocked: true, preDispatchNoEffect: true,
       };
     }
   }
@@ -957,7 +960,7 @@ export async function executeActionWithPolicy(
         },
       ],
       policyDecision: 'deny',
-      policyBlocked: true,
+      policyBlocked: true, preDispatchNoEffect: true,
     };
   }
 
@@ -1007,7 +1010,7 @@ export async function executeActionWithPolicy(
           },
         ],
         policyDecision: 'deny',
-        policyBlocked: true,
+        policyBlocked: true, preDispatchNoEffect: true,
       };
     }
     // Privileged (Class C) actions fall through to decideWithLease.
@@ -1054,7 +1057,7 @@ export async function executeActionWithPolicy(
         ),
       ],
       policyDecision,
-      policyBlocked: true,
+      policyBlocked: true, preDispatchNoEffect: true,
       ...(lastReasonCode ? { reasonCode: lastReasonCode } : {}),
     };
   }
@@ -1075,7 +1078,7 @@ export async function executeActionWithPolicy(
       terminal: isTerminalAgentAction(action),
       results: [policyBlockedToolResult(action, 'deny', scopeViolation ?? effectViolation ?? undefined)],
       policyDecision: 'deny',
-      policyBlocked: true,
+      policyBlocked: true, preDispatchNoEffect: true,
     };
   }
 
@@ -1098,7 +1101,7 @@ export async function executeActionWithPolicy(
         terminal: false,
         results: [policyBlockedToolResult(action, 'deny', `Patch rejected: ${detail}`)],
         policyDecision: 'deny',
-        policyBlocked: true,
+        policyBlocked: true, preDispatchNoEffect: true,
       };
     }
   }
@@ -1117,7 +1120,7 @@ export async function executeActionWithPolicy(
         stderr: `[RECOVERY_RECONCILIATION_REQUIRED] ${dispatchAuthorization.message ?? 'Reconcile the prior unknown effect before retrying'}`,
       }],
       policyDecision: 'deny',
-      policyBlocked: true,
+      policyBlocked: true, preDispatchNoEffect: true,
     };
   }
 
@@ -1142,7 +1145,7 @@ export async function executeActionWithPolicy(
     if (mutationOwnership && (!mutationOwnership.matchesRoot(workspaceRoot)
       || resolveIsolationBrokerFlags(workspaceRoot).dirtyTree)) {
       return {
-        action, terminal: false, policyDecision: 'deny', policyBlocked: true,
+        action, terminal: false, policyDecision: 'deny', policyBlocked: true, preDispatchNoEffect: true,
         results: [policyBlockedToolResult(action, 'deny',
           'Workspace changed unexpectedly or task owner retired before mutation dispatch')],
       };
@@ -1244,7 +1247,7 @@ export async function executeActionWithPolicy(
             },
           ],
           policyDecision: 'deny',
-          policyBlocked: true,
+          policyBlocked: true, preDispatchNoEffect: true,
           reasonCode: 'DENY_POLICY_INTEGRITY_DRIFT',
         };
       }
@@ -1252,7 +1255,6 @@ export async function executeActionWithPolicy(
     }
   }
 
-  let executionStarted = false;
   const physicalDispatch = { started: false };
   try {
     deps.onBeforeExecutorExecute?.();
@@ -1282,7 +1284,7 @@ export async function executeActionWithPolicy(
           },
         ],
         policyDecision: 'deny',
-        policyBlocked: true,
+        policyBlocked: true, preDispatchNoEffect: true,
         reasonCode: 'DENY_CAPABILITY_CONSTRAINT',
       };
     }

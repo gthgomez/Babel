@@ -14,6 +14,18 @@ import {
   retainTaskWallAllowance,
 } from './chatEngineLimits.js';
 
+test('unlimited wall reports and timeline ignore a stale derived repair deadline', () => {
+  const limits = { ...resolveChatEngineLimits(), maxWallMs: Infinity };
+  delete limits.wallBudget;
+  const report = createRunAllowanceReport(limits, { postWriteRepairWallCapMs: 180_000 });
+  assert.equal(report.effectiveWallMs, Infinity);
+  assert.deepEqual(report.effectiveWallAllowance, { kind: 'unlimited' });
+  assert.equal(report.postWriteRepairWallCapMs, null);
+  assert.doesNotMatch(JSON.stringify(report), /Infinity/);
+  assert.equal(evaluateTimelineLimiter({ limits, elapsedMs: 200_000, spentUsd: 0,
+    turns: 1, consecutiveStallTurns: 0, postWriteRepairWallCapMs: 180_000 }).limiter, 'none');
+});
+
 test('preparation retains requested versus effective wall evidence for a clamped finite grant', () => {
   const configured = resolveChatEngineLimits({ maxWallMs: 7_200_000 });
   const prepared = retainTaskWallAllowance(resolveChatEngineLimits(), configured.maxWallMs, configured.wallBudget);

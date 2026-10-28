@@ -1,3 +1,4 @@
+import path from 'node:path';
 import { mandatoryVerifierProse } from '../config/verifierIntent.js';
 /**
  * Completion honesty policy — when execute work is "done enough" to finish.
@@ -11,10 +12,10 @@ import {
   hasAnyWrites as hasLoggedWrites,
   hasSubAgentWrites,
 } from './chatEngineCriticBudget.js';
-import type { StructuredVerifierCommand, VerifierAuthoritySource } from '../executor/contracts.js';
+import { isVerifierAuthoritySource, type StructuredVerifierCommand, type VerifierAuthoritySource, type VerifierExecutionContext, type VerifierEventOrder, type VerifierEvidenceOwner, type RequiredVerifierRecord } from '../executor/contracts.js';
 import { extractRequiredVerifierCommandsFromTask } from '../pipeline/planVerifierInjection.js';
 import { extractVerifierCommand } from './chatEngineVerifierSession.js';
-import { analyzeVerifierIdentity, satisfiesVerifierRequirement } from '../services/verifierIdentity.js';
+import { analyzeVerifierIdentity, satisfiesVerifierRequirement, verifierExecutionFingerprint } from '../services/verifierIdentity.js';
 import {
   buildVerifierReceiptV2,
   evaluateVerifierPromotion,
@@ -394,9 +395,12 @@ export function parseStructuredVerifierCommand(
 ): StructuredVerifierCommand | null {
   const trimmed = command.trim();
   if (!trimmed || hasVerifierShellComposition(trimmed)) return null;
-  const tokens = trimmed.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g)?.map((token) =>
-    token.replace(/^("|')|("|')$/g, ''),
-  );
+  let tokens: string[];
+  try {
+    tokens = parseCommandArgv(trimmed);
+  } catch {
+    return null;
+  }
   if (!tokens || tokens.length === 0) return null;
   return {
     verifierId: options?.verifierId ?? `verifier:${tokens[0]!.toLowerCase()}`,
@@ -449,6 +453,13 @@ export function isAuthoritativeVerifierCommand(
 }
 
 export type VerifierReceipt = {
+  executionContext?: VerifierExecutionContext;
+  order?: VerifierEventOrder;
+  working_directory?: string;
+  environment_policy?: string;
+  target?: string;
+  scope?: VerifierScope;
+  tests_failed?: number;
   command: string;
   exit_code: number;
   exitCode?: number;
@@ -476,6 +487,7 @@ export type VerifierReceipt = {
 };
 
 export type GateToolLogEntry = {
+  preDispatchNoEffect?: true;
   tool: string;
   target: string;
   detail?: string;
@@ -488,7 +500,7 @@ export type GateToolLogEntry = {
 
 /** Recorded inspection can support a no-change conclusion, never patch certification. */
 export function hasInspectedNoChangeEvidence(log: GateToolLogEntry[]): boolean {
-  const unresolvedMutation = log.some(entry => entry.effect_status === 'indeterminate'
+  const unresolvedMutation = log.filter(entry => entry.preDispatchNoEffect !== true).some(entry => entry.effect_status === 'indeterminate'
     // Process success describes its exit, not its filesystem effects. In
     // particular, background starts and awaits cannot prove an unchanged tree.
     || ((isVerifierAttemptTool(entry.tool) || entry.tool === 'await_command')
@@ -551,6 +563,8 @@ export function resolveVerificationPolicy(opts: {
 
 /** Single effective verification view for gate, recovery, kernel, and terminal metadata. */
 export interface CompletionVerificationContext {
+  requiredVerifiers: readonly RequiredVerifierRecord[];
+  verifierOwner?: VerifierEvidenceOwner;
   tunePolicy: VerificationPolicy;
   resolvedPolicy: VerificationPolicy;
   requiredVerifierCommands: string[];
@@ -564,6 +578,8 @@ export function resolveCompletionVerificationContext(opts: {
   task: string;
   projectTestCommands?: readonly string[] | null;
   requiredVerifierCommands?: readonly string[] | null;
+  requiredVerifiers?: readonly RequiredVerifierRecord[];
+  verifierOwner?: VerifierEvidenceOwner;
   toolCallLog?: GateToolLogEntry[];
 }): CompletionVerificationContext {
   const tune = getChatTaskTune(opts.taskClass);
@@ -572,15 +588,17 @@ export function resolveCompletionVerificationContext(opts: {
     policy: tunePolicy,
     task: opts.task,
   });
-  const requiredVerifierCommands = resolveHonestyRequiredVerifiers({
+  // Explicit user/host commands stay stronger than discovery. A supplied
+  // host-bound record list also wins over heuristic project-wide defaults.
+  const explicitCommands = resolveHonestyRequiredVerifiers({
     task: opts.task,
-    ...(opts.projectTestCommands !== undefined
-      ? { projectTestCommands: opts.projectTestCommands }
-      : {}),
-    ...(opts.requiredVerifierCommands !== undefined
-      ? { requiredVerifierCommands: opts.requiredVerifierCommands }
-      : {}),
+    ...(opts.requiredVerifierCommands !== undefined ? { requiredVerifierCommands: opts.requiredVerifierCommands } : {}),
   });
+  const requiredVerifierCommands = explicitCommands.length > 0 ? explicitCommands
+    : opts.requiredVerifiers !== undefined ? opts.requiredVerifiers.map(requirement => requirement.command)
+      : resolveHonestyRequiredVerifiers({ task: opts.task,
+        ...(opts.projectTestCommands !== undefined ? { projectTestCommands: opts.projectTestCommands } : {}),
+      });
   const noChange =
     opts.toolCallLog !== undefined && hasInspectedNoChangeEvidence(opts.toolCallLog);
   const noChangeNeedsVerification =
@@ -595,6 +613,8 @@ export function resolveCompletionVerificationContext(opts: {
         : resolvedPolicy;
   const mandatoryVerifierContract = requiredVerifierCommands.length > 0;
   return {
+    requiredVerifiers: opts.requiredVerifiers ?? [],
+    ...(opts.verifierOwner ? { verifierOwner: opts.verifierOwner } : {}),
     tunePolicy,
     resolvedPolicy,
     requiredVerifierCommands,
@@ -610,6 +630,8 @@ export function resolveEffectiveGatePolicyForEngineGate(opts: {
   task: string;
   projectTestCommands: readonly string[];
   requiredVerifierCommands?: readonly string[] | null;
+  requiredVerifiers?: readonly RequiredVerifierRecord[];
+  verifierOwner?: VerifierEvidenceOwner;
   toolCallLog: GateToolLogEntry[];
 }): VerificationPolicy {
   return resolveCompletionVerificationContext({
@@ -619,6 +641,8 @@ export function resolveEffectiveGatePolicyForEngineGate(opts: {
     ...(opts.requiredVerifierCommands !== undefined
       ? { requiredVerifierCommands: opts.requiredVerifierCommands }
       : {}),
+    ...(opts.requiredVerifiers !== undefined ? { requiredVerifiers: opts.requiredVerifiers } : {}),
+    ...(opts.verifierOwner ? { verifierOwner: opts.verifierOwner } : {}),
     toolCallLog: opts.toolCallLog,
   }).effectiveGatePolicy;
 }
@@ -719,10 +743,18 @@ export function evaluateExecuteCompletionHonesty(opts: {
   toolCallLog: GateToolLogEntry[];
   /** Required full/targeted commands for structural scope (optional). */
   requiredVerifierCommands?: readonly string[] | null;
+  requiredVerifiers?: readonly RequiredVerifierRecord[];
+  verifierOwner?: VerifierEvidenceOwner;
   /** Ledger of executed verifier receipts (optional). */
   executedVerifierLedger?: readonly VerifierReceipt[] | readonly import('../executor/contracts.js').ExecutorVerifierReceipt[] | null;
   /** Errors produced during evidence adaptation (optional). */
   verifierEvidenceErrors?: readonly string[] | null;
+  currentWorkspaceRevisionHash?: string | null;
+  /** Independently host-rechecked currency for each receipt's bound scope. */
+  currentReceiptRevisionHashes?: Readonly<Record<string, string>>;
+  /** Host dispatch environment for truthful unplanned-attempt delivery only. */
+  unplannedAttemptEnvironmentFingerprint?: string;
+  proofSelection?: CompletionProofSelection;
 }): { allow: boolean; reason: CompletionGateRejectReason } {
   // Precedence 1: Receipt adaptation failures deterministically reject completion.
   if (opts.verifierEvidenceErrors && opts.verifierEvidenceErrors.length > 0) {
@@ -737,6 +769,31 @@ export function evaluateExecuteCompletionHonesty(opts: {
   }
 
   const required = opts.requiredVerifierCommands ?? [];
+  const unplannedDelivery=opts.policy === 'required' && required.length === 0 && (opts.requiredVerifiers?.length ?? 0) === 0 && !!opts.unplannedAttemptEnvironmentFingerprint;
+  if (opts.requiredVerifiers !== undefined || opts.verifierOwner !== undefined) {
+    const selection = opts.proofSelection ?? selectCompletionProof({
+      requiredVerifiers: opts.requiredVerifiers ?? [],
+      ...(unplannedDelivery ? {unplannedAttemptEnvironmentFingerprint:opts.unplannedAttemptEnvironmentFingerprint!} : {}),
+      ...(opts.verifierOwner ? { owner: opts.verifierOwner } : {}),
+      currentRevisionHash: opts.currentWorkspaceRevisionHash ?? '',
+      ...(opts.currentReceiptRevisionHashes !== undefined ? { currentReceiptRevisionHashes: opts.currentReceiptRevisionHashes } : {}),
+      receipts: opts.executedVerifierLedger ?? (opts.lastVerifierReceipt ? [opts.lastVerifierReceipt] : []),
+    });
+    if (required.some(command => !(opts.requiredVerifiers ?? []).some(record =>
+      satisfiesVerifierRequirement(command, record.command)))) return { allow: false, reason: 'verifier_scope' };
+    if (selection.evidenceErrors.length || (opts.policy === 'strict' && selection.integrityFindings.length)) return { allow: false, reason: 'verifier_receipt_invalid' };
+    if (unplannedDelivery) return {allow:selection.currentAttempts.length > 0,reason:selection.currentAttempts.length ? null : 'verifier_missing'};
+    if (selection.unresolvedRelevantFailures.length && opts.policy === 'strict') return { allow: false, reason: 'verifier_red' };
+    if (selection.missingRequirements.length) {
+      // Red evidence supports truthful partial delivery under required policy,
+      // while promotion to VERIFIED_COMPLETE always requires green proof.
+      const attemptedAll = selection.missingRequirements.every(requirement =>
+        selection.currentAttempts.some(receipt => receiptCoversRequirement(requirement, receipt)));
+      if (opts.policy === 'required' && attemptedAll) return { allow: true, reason: null };
+      return { allow: false, reason: 'verifier_missing' };
+    }
+    return { allow: true, reason: null };
+  }
   // Explicit presence, including [], selects canonical mode. In that mode the
   // tool log is never an authorization source.
   const hasExplicitLedger = opts.executedVerifierLedger !== undefined && opts.executedVerifierLedger !== null;
@@ -834,12 +891,174 @@ export function evaluateExecuteCompletionHonesty(opts: {
 
 type VerifierEvidence = VerifierReceipt | import('../executor/contracts.js').ExecutorVerifierReceipt;
 
+/** One proof selection shared by honesty, promotion and executor completion. */
+export interface CompletionProofSelection {
+  selectedCoveringReceipts: VerifierEvidence[];
+  unresolvedRelevantFailures: VerifierEvidence[];
+  missingRequirements: RequiredVerifierRecord[];
+  evidenceErrors: string[];
+  /** Valid current attempts, including red attempts for truthful partial delivery. */
+  currentAttempts: VerifierEvidence[];
+  integrityFindings: string[];
+}
+
+function sameOwner(context: VerifierExecutionContext, owner: VerifierEvidenceOwner): boolean {
+  return context.workspaceRoot === owner.workspaceRoot && context.taskId === owner.taskId
+    && context.contractHash === owner.contractHash;
+}
+
+function validExecutionContext(context: VerifierExecutionContext | undefined): context is VerifierExecutionContext {
+  return context !== undefined && context !== null && typeof context === 'object' && ['workspaceRoot', 'taskId', 'contractHash', 'workingDirectory', 'environmentFingerprint']
+    .every(key => typeof context[key as keyof VerifierExecutionContext] === 'string'
+      && (context[key as keyof VerifierExecutionContext] as string).trim().length > 0)
+    && Array.isArray(context.targetSelectors) && context.targetSelectors.every(selector => typeof selector === 'string')
+    && (context.resolvedExecutable === undefined || (typeof context.resolvedExecutable === 'string' && context.resolvedExecutable.length > 0));
+}
+
+function sameExecutionContext(expected: VerifierExecutionContext, actual: VerifierExecutionContext): boolean {
+  return expected.workspaceRoot === actual.workspaceRoot && expected.taskId === actual.taskId
+    && expected.contractHash === actual.contractHash && expected.workingDirectory === actual.workingDirectory
+    && expected.environmentFingerprint === actual.environmentFingerprint
+    && (expected.resolvedExecutable === undefined || expected.resolvedExecutable === actual.resolvedExecutable);
+}
+
+function receiptCoversRequirement(requirement: RequiredVerifierRecord, receipt: VerifierEvidence): boolean {
+  return receipt.executionContext !== undefined
+    && sameExecutionContext(requirement.executionContext, receipt.executionContext)
+    && (requirement.requiredScope !== 'full_suite' || receiptScopeFromLedgerEntry(receipt) === 'full_suite')
+    && satisfiesVerifierRequirement(requirement.command, receipt.command);
+}
+
+export function greenProof(receipt: VerifierEvidence): boolean {
+  return verifierExitCode(receipt) === 0 && (receipt.tests_failed ?? 0) === 0 && receiptProvesExecutedTests(receipt);
+}
+
+/**
+ * Select covering proof from exact host attempts. No timestamps, ledger positions,
+ * receipt-derived cwd defaults or guessed owner values establish provenance.
+ * Historical receipts remain in the ledger but never veto a current covering proof.
+ */
+export function selectCompletionProof(input: {
+  requiredVerifiers: readonly RequiredVerifierRecord[];
+  owner?: VerifierEvidenceOwner;
+  currentRevisionHash: string;
+  currentReceiptRevisionHashes?: Readonly<Record<string, string>>;
+  /** Host dispatch environment for truthful unplanned-attempt delivery only. */
+  unplannedAttemptEnvironmentFingerprint?: string;
+  receipts: readonly VerifierEvidence[];
+}): CompletionProofSelection {
+  const result: CompletionProofSelection = {
+    selectedCoveringReceipts: [], unresolvedRelevantFailures: [], missingRequirements: [], evidenceErrors: [], currentAttempts: [], integrityFindings: [],
+  };
+  const independentSignals = deriveAdversarialSignals({
+    hasWrite: false, toolCallLog: [], receipts: input.receipts.map(receipt => ({
+      exit_code: verifierExitCode(receipt),
+      ...('summary' in receipt && receipt.summary !== undefined ? { summary: receipt.summary } : {}),
+      ...(receipt.tests_total !== undefined ? { tests_total: receipt.tests_total } : {}),
+      ...(receipt.tests_skipped !== undefined ? { tests_skipped: receipt.tests_skipped } : {}),
+      ...(receipt.tests_failed !== undefined ? { tests_failed: receipt.tests_failed } : {}),
+    })),
+  });
+  result.integrityFindings = Object.entries(independentSignals).filter(([, found]) => found).map(([finding]) => finding);
+  const owner = input.owner;
+  if (!owner || ![owner.workspaceRoot, owner.taskId, owner.contractHash, owner.sessionId]
+    .every(value => typeof value === 'string' && value.trim().length > 0)) {
+    result.evidenceErrors.push('Missing current host verifier owner; rerun with host-bound evidence');
+  }
+  if (!input.currentRevisionHash) result.evidenceErrors.push('Missing live workspace revision currency');
+  const unplanned = input.requiredVerifiers.length === 0 && !!input.unplannedAttemptEnvironmentFingerprint;
+  if (!input.requiredVerifiers.length && !unplanned) result.evidenceErrors.push('Missing host-bound required verifiers');
+  for (const requirement of input.requiredVerifiers) {
+    const identity = analyzeVerifierIdentity(requirement.command);
+    if (!validExecutionContext(requirement.executionContext) || !owner || !sameOwner(requirement.executionContext, owner)
+      || (requirement.requiredScope !== 'full_suite' && requirement.requiredScope !== 'targeted')
+      || typeof requirement.greenRequired !== 'boolean'
+      || !identity || identity.scope === 'unknown'
+      || JSON.stringify(requirement.executionContext.targetSelectors) !== JSON.stringify(identity.targetSelectors)) {
+      result.evidenceErrors.push('Required verifier context does not belong to the current host owner');
+    }
+  }
+  if (result.evidenceErrors.length || !owner) {
+    result.missingRequirements = [...input.requiredVerifiers];
+    return result;
+  }
+  const relevant = (receipt: VerifierEvidence): boolean => unplanned || input.requiredVerifiers.some(requirement =>
+    satisfiesVerifierRequirement(requirement.command, receipt.command)
+    || satisfiesVerifierRequirement(receipt.command, requirement.command));
+  const seenOrders = new Map<number, VerifierEvidence>();
+  for (const receipt of input.receipts) {
+    const context = receipt.executionContext;
+    const order = receipt.order;
+    if (!isAuthoritativeReceipt(receipt) || !isVerifierAuthoritySource(receipt.authoritySource ?? ('authority_source' in receipt ? receipt.authority_source : undefined))) continue;
+    const liveHash = input.currentReceiptRevisionHashes !== undefined
+      ? input.currentReceiptRevisionHashes[receipt.receiptId ?? ''] : input.currentRevisionHash;
+    if (receipt.stale !== true && !liveHash && relevant(receipt) &&
+        (!validExecutionContext(context) || sameOwner(context, owner))) {
+      result.evidenceErrors.push('Verifier scope currency is unavailable; rerun or reconcile required');
+    }
+    if (receipt.stale === true || !liveHash || (receipt.boundRevision?.compositeTreeHash
+      && receipt.boundRevision.compositeTreeHash !== liveHash)) continue;
+    // Known other owners/contexts are history. Unknown current evidence in a
+    // relevant family cannot silently disappear, especially an unordered red.
+    if (validExecutionContext(context) && !sameOwner(context, owner)) continue;
+    if (!validExecutionContext(context)) {
+      if (relevant(receipt)) result.evidenceErrors.push('Verifier execution context is unknown; rerun required');
+      continue;
+    }
+    if (unplanned) {
+      const within=path.relative(owner.workspaceRoot,context.workingDirectory);
+      if (context.environmentFingerprint !== input.unplannedAttemptEnvironmentFingerprint || within === '..' || within.startsWith(`..${path.sep}`) || path.isAbsolute(within)) {
+        result.evidenceErrors.push('Unplanned verifier context differs from the governed host context');
+        continue;
+      }
+    } else if (!input.requiredVerifiers.some(requirement => sameExecutionContext(requirement.executionContext, context))) continue;
+    const knownSession = order && typeof order.sessionId === 'string' && order.sessionId.trim().length > 0;
+    if (knownSession && order.sessionId !== owner.sessionId) continue;
+    if (!order || !knownSession || !Number.isSafeInteger(order.seq) || order.seq < 0
+      || receipt.stale !== false || !receipt.boundRevision?.compositeTreeHash) {
+      if (relevant(receipt)) result.evidenceErrors.push('Verifier durable order or live currency is unknown; rerun required');
+      continue;
+    }
+    const identity = analyzeVerifierIdentity(receipt.command);
+    const parsed = parseStructuredVerifierCommand(receipt.command);
+    if (!identity || identity.scope === 'unknown' || JSON.stringify(context.targetSelectors) !== JSON.stringify(identity.targetSelectors)
+      || receiptScopeFromLedgerEntry(receipt) !== (identity.scope === 'full' ? 'full_suite' : 'targeted')
+      || !parsed || !receipt.argv || JSON.stringify(receipt.argv) !== JSON.stringify([parsed.executable, ...parsed.args])) {
+      if (relevant(receipt)) result.evidenceErrors.push('Verifier command, argv or target projection disagrees');
+      continue;
+    }
+    const previous = seenOrders.get(order.seq);
+    if (previous) {
+      // Repeated projections of one event are harmless. Conflicting claims to
+      // the same durable host sequence cannot establish an execution order.
+      if (JSON.stringify(previous) !== JSON.stringify(receipt)) result.evidenceErrors.push(`Conflicting verifier event sequence ${order.seq}`);
+      continue;
+    }
+    seenOrders.set(order.seq, receipt);
+    result.currentAttempts.push(receipt);
+  }
+  result.currentAttempts.sort((a, b) => a.order!.seq - b.order!.seq);
+  const greens = result.currentAttempts.filter(greenProof);
+  for (const failed of result.currentAttempts.filter(receipt => !greenProof(receipt) && relevant(receipt))) {
+    if (!greens.some(green => green.order!.seq > failed.order!.seq
+      && sameExecutionContext(failed.executionContext!, green.executionContext!)
+      && satisfiesVerifierRequirement(failed.command, green.command))) result.unresolvedRelevantFailures.push(failed);
+  }
+  for (const requirement of input.requiredVerifiers) {
+    const covering = greens.filter(receipt => receiptCoversRequirement(requirement, receipt)).at(-1);
+    if (!covering) result.missingRequirements.push(requirement);
+    else if (!result.selectedCoveringReceipts.includes(covering)) result.selectedCoveringReceipts.push(covering);
+  }
+  return result;
+}
+
 function deduplicateVerifierReceipts(
   receipts: readonly VerifierEvidence[],
 ): VerifierEvidence[] {
   const byIdentity = new Map<string, VerifierEvidence>();
   for (const receipt of receipts) {
-    const key = verifierIdentityKey(receipt.command);
+    const key = JSON.stringify([verifierExecutionFingerprint(receipt.command), receipt.executionContext ?? null,
+      receipt.working_directory ?? null, receipt.environment_policy ?? null, receipt.target ?? null]);
     // Map insertion order is retained while assignment makes the latest
     // attempt authoritative for a structural identity.
     byIdentity.set(key, receipt);
@@ -847,13 +1066,8 @@ function deduplicateVerifierReceipts(
   return [...byIdentity.values()];
 }
 
-function verifierIdentityKey(command: string): string {
-  const identity = analyzeVerifierIdentity(command);
-  return identity?.identityKey ?? command.trim().replace(/\s+/g, ' ');
-}
-
 function isAuthoritativeReceipt(entry: VerifierEvidence): boolean {
-  return entry.authority === true && isAuthoritativeVerifierCommand(entry.command);
+  return entry.authority === true && typeof entry.command === 'string' && isAuthoritativeVerifierCommand(entry.command);
 }
 
 /**
@@ -1364,6 +1578,8 @@ export function evaluateCompletionGateForEngine(opts: {
   lastVerifierReceipt: VerifierReceipt | null | undefined;
   projectTestCommands?: readonly string[] | null;
   requiredVerifierCommands?: readonly string[] | null;
+  requiredVerifiers?: readonly RequiredVerifierRecord[];
+  verifierOwner?: VerifierEvidenceOwner;
   /** Canonical executed verifier ledger — when supplied, toolCallLog is not used for requirement satisfaction. */
   executedVerifierLedger?: readonly VerifierReceipt[] | readonly import('../executor/contracts.js').ExecutorVerifierReceipt[] | null;
   /** Adaptation errors from chat receipt → canonical receipt conversion. */
@@ -1373,6 +1589,10 @@ export function evaluateCompletionGateForEngine(opts: {
    * Must NOT be taken from the receipt itself (that makes wrong_revision tautological).
    */
   currentWorkspaceRevisionHash?: string | null;
+  /** Independently host-rechecked currency for each receipt's bound scope. */
+  currentReceiptRevisionHashes?: Readonly<Record<string, string>>;
+  /** Host dispatch environment for truthful unplanned-attempt delivery only. */
+  unplannedAttemptEnvironmentFingerprint?: string;
   /**
    * Optional explicit adversarial signals (specialized detectors / tests).
    * Live path also derives mechanical signals via deriveAdversarialSignals.
@@ -1400,11 +1620,22 @@ export function evaluateCompletionGateForEngine(opts: {
     ...(opts.requiredVerifierCommands !== undefined
       ? { requiredVerifierCommands: opts.requiredVerifierCommands }
       : {}),
+    ...(opts.requiredVerifiers !== undefined ? { requiredVerifiers: opts.requiredVerifiers } : {}),
+    ...(opts.verifierOwner ? { verifierOwner: opts.verifierOwner } : {}),
     toolCallLog: log,
   });
   const policy = verification.resolvedPolicy;
   const requiredVerifierCommands = verification.requiredVerifierCommands;
   const noChange = hasInspectedNoChangeEvidence(log);
+  const rawReceipts = opts.executedVerifierLedger ?? (opts.lastVerifierReceipt ? [opts.lastVerifierReceipt] : []);
+  const selection = selectCompletionProof({
+    requiredVerifiers: verification.requiredVerifiers,
+    ...(opts.verifierOwner ? { owner: opts.verifierOwner } : {}),
+    currentRevisionHash: opts.currentWorkspaceRevisionHash ?? '', receipts: rawReceipts,
+    ...(verification.honestyPolicy === 'required' && verification.requiredVerifiers.length === 0 && opts.unplannedAttemptEnvironmentFingerprint
+      ? {unplannedAttemptEnvironmentFingerprint:opts.unplannedAttemptEnvironmentFingerprint} : {}),
+    ...(opts.currentReceiptRevisionHashes !== undefined ? { currentReceiptRevisionHashes: opts.currentReceiptRevisionHashes } : {}),
+  });
   const honesty = evaluateExecuteCompletionHonesty({
     hasWrite,
     allowInspectedNoChange: noChange,
@@ -1412,14 +1643,20 @@ export function evaluateCompletionGateForEngine(opts: {
     lastVerifierReceipt: opts.lastVerifierReceipt ?? null,
     toolCallLog: log,
     requiredVerifierCommands,
+    ...(opts.requiredVerifiers !== undefined ? { requiredVerifiers: opts.requiredVerifiers } : {}),
+    ...(opts.verifierOwner ? { verifierOwner: opts.verifierOwner } : {}),
+    currentWorkspaceRevisionHash: opts.currentWorkspaceRevisionHash ?? null,
+    ...(opts.unplannedAttemptEnvironmentFingerprint ? {unplannedAttemptEnvironmentFingerprint:opts.unplannedAttemptEnvironmentFingerprint} : {}),
+    ...(opts.currentReceiptRevisionHashes !== undefined ? { currentReceiptRevisionHashes: opts.currentReceiptRevisionHashes } : {}),
+    proofSelection: selection,
     executedVerifierLedger: opts.executedVerifierLedger ?? null,
     verifierEvidenceErrors: opts.verifierEvidenceErrors ?? null,
   });
   if (!honesty.allow) return 'reject';
-  if (opts.lastVerifierReceipt && isCatOrTypeCommand(opts.lastVerifierReceipt.command)) {
+  if (opts.executedVerifierLedger == null && opts.lastVerifierReceipt && isCatOrTypeCommand(opts.lastVerifierReceipt.command)) {
     return 'reject';
   }
-  if (opts.lastVerifierReceipt && opts.lastVerifierReceipt.stale === true) {
+  if (opts.executedVerifierLedger == null && opts.lastVerifierReceipt && opts.lastVerifierReceipt.stale === true) {
     return 'reject';
   }
   // For 'required' policy: also check that when task asks for verifier,
@@ -1437,73 +1674,28 @@ export function evaluateCompletionGateForEngine(opts: {
   if (hasWrite && requiredVerifierCommands.length === 0 && policy === 'strict') {
     return 'reject';
   }
-  if (hasWrite && requiredVerifierCommands.length > 0 && policy === 'strict') {
-    const rawReceipts =
-      opts.executedVerifierLedger !== undefined && opts.executedVerifierLedger !== null
-        ? opts.executedVerifierLedger
-        : opts.lastVerifierReceipt
-          ? [opts.lastVerifierReceipt]
-          : [];
-    const receipts = rawReceipts.map((r, i) => {
-      const cmd = 'command' in r ? String((r as { command?: string }).command ?? '') : '';
-      const exit =
-        'exitCode' in r
-          ? Number((r as { exitCode?: number }).exitCode ?? 1)
-          : 'exit_code' in r
-            ? Number((r as { exit_code?: number }).exit_code ?? 1)
-            : 1;
-      const rev =
-        'boundRevision' in r && (r as { boundRevision?: { compositeTreeHash?: string } }).boundRevision
-          ? (r as { boundRevision: { compositeTreeHash?: string } }).boundRevision
-          : { compositeTreeHash: '' };
-      const stale = 'stale' in r ? Boolean((r as { stale?: boolean }).stale) : false;
-      const scope = receiptScopeFromLedgerEntry(r);
-      const summary = 'summary' in r ? String((r as { summary?: string }).summary ?? '') : '';
-      const optCounts: {
-        tests_total?: number;
-        tests_skipped?: number;
-        tests_failed?: number;
-      } = {};
-      if ('tests_total' in r && typeof (r as { tests_total?: unknown }).tests_total === 'number') {
-        optCounts.tests_total = (r as { tests_total: number }).tests_total;
-      }
-      if (
-        'tests_skipped' in r &&
-        typeof (r as { tests_skipped?: unknown }).tests_skipped === 'number'
-      ) {
-        optCounts.tests_skipped = (r as { tests_skipped: number }).tests_skipped;
-      }
-      if (
-        'tests_failed' in r &&
-        typeof (r as { tests_failed?: unknown }).tests_failed === 'number'
-      ) {
-        optCounts.tests_failed = (r as { tests_failed: number }).tests_failed;
-      }
-      return buildVerifierReceiptV2({
-        receipt_id: `gate-${i}`,
-        verifier_id: cmd || `v-${i}`,
-        argv: (() => {
-          try {
-            return parseCommandArgv(cmd);
-          } catch {
-            return [];
-          }
-        })(),
-        cwd: '.',
-        env_profile_hash: 'gate',
-        started_at: new Date().toISOString(),
-        ended_at: new Date().toISOString(),
-        exit_code: exit,
-        stdout: summary,
-        stderr: '',
-        workspace_revision: { compositeTreeHash: rev.compositeTreeHash ?? '' },
-        scope,
-        command: cmd,
-        authoritative: isAuthoritativeReceipt(r as VerifierReceipt),
-        freshness: stale ? 'stale' : 'fresh',
-        ...optCounts,
-      });
-    });
+  // Host-bound obligations require identical proof selection regardless of
+  // natural-language phrasing or the task class's heuristic default policy.
+  const needsPromotion = hasWrite && requiredVerifierCommands.length > 0
+    && (policy === 'strict' || verification.requiredVerifiers.some(requirement => requirement.greenRequired));
+  if (needsPromotion) {
+    if (selection.evidenceErrors.length || selection.integrityFindings.length || selection.missingRequirements.length || selection.unresolvedRelevantFailures.length) return 'reject';
+    const receipts = selection.selectedCoveringReceipts.map((r) => buildVerifierReceiptV2({
+      receipt_id: r.receiptId ?? '', verifier_id: r.verifierId ?? ('verifier_id' in r ? r.verifier_id : undefined) ?? '',
+      argv: r.argv ? [...r.argv] : [], cwd: r.executionContext!.workingDirectory,
+      env_profile_hash: r.executionContext!.environmentFingerprint,
+      // This is the captured event's wall time for display only. Ordering uses seq.
+      started_at: r.capturedAt !== undefined ? new Date(r.capturedAt).toISOString() : '',
+      ended_at: r.capturedAt !== undefined ? new Date(r.capturedAt).toISOString() : '',
+      exit_code: verifierExitCode(r) ?? 1,
+      stdout: 'summary' in r ? r.summary ?? '' : '', stderr: '',
+      workspace_revision: { compositeTreeHash: r.boundRevision?.compositeTreeHash ?? '' },
+      scope: receiptScopeFromLedgerEntry(r), command: r.command,
+      authoritative: isAuthoritativeReceipt(r), freshness: r.stale === false ? 'fresh' : 'unknown',
+      ...(r.tests_total !== undefined ? { tests_total: r.tests_total } : {}),
+      ...(r.tests_skipped !== undefined ? { tests_skipped: r.tests_skipped } : {}),
+      ...(r.tests_failed !== undefined ? { tests_failed: r.tests_failed } : {}),
+    }));
     // Live workspace revision must come from the workspace, not the receipt self-hash.
     // If not provided, missing_revision will be enforced by the verifier kernel.
     const liveRevision = opts.currentWorkspaceRevisionHash ?? '';
@@ -1540,20 +1732,19 @@ export function evaluateCompletionGateForEngine(opts: {
       }
       return entry;
     });
-    const adversarial = {
-      ...deriveAdversarialSignals({
-        toolCallLog: log,
-        receipts: adversarialReceipts,
-        hasWrite,
-      }),
-      ...(opts.adversarial ?? {}),
-    };
+    const derivedAdversarial = deriveAdversarialSignals({ toolCallLog: log, receipts: adversarialReceipts, hasWrite });
+    const adversarial = { ...derivedAdversarial };
+    for (const key of ['tests_deleted', 'shortcut_noop', 'hardcoded_fixture', 'flaky_green', 'baseline_failing', 'verifier_def_tampered'] as const) {
+      if (opts.adversarial?.[key] === true) adversarial[key] = true;
+    }
     const promo = evaluateVerifierPromotion({
       mutating: true,
       task_class: opts.taskClass,
       required_verifier_commands: requiredVerifierCommands,
       receipts,
       current_revision_hash: liveRevision,
+      ...(opts.currentReceiptRevisionHashes !== undefined ? { current_revision_hashes: opts.currentReceiptRevisionHashes } : {}),
+      required_verifiers: verification.requiredVerifiers,
       adversarial,
     });
     if (!promo.authorize_verified_complete) return 'reject';
@@ -1569,6 +1760,13 @@ export function buildGateRejectUserMessageForEngine(opts: {
   hasAnyWrites: boolean;
   projectTestCommands?: string[];
   requiredVerifierCommands?: readonly string[] | null;
+  requiredVerifiers?: readonly RequiredVerifierRecord[];
+  verifierOwner?: VerifierEvidenceOwner;
+  currentWorkspaceRevisionHash?: string | null;
+  /** Independently host-rechecked currency for each receipt's bound scope. */
+  currentReceiptRevisionHashes?: Readonly<Record<string, string>>;
+  /** Host dispatch environment for truthful unplanned-attempt delivery only. */
+  unplannedAttemptEnvironmentFingerprint?: string;
   gateStrikes?: number;
   /** Canonical executed verifier ledger \u2014 when supplied, toolCallLog is not used for requirement satisfaction. */
   executedVerifierLedger?: readonly VerifierReceipt[] | readonly import('../executor/contracts.js').ExecutorVerifierReceipt[] | null;
@@ -1588,6 +1786,8 @@ export function buildGateRejectUserMessageForEngine(opts: {
     ...(opts.requiredVerifierCommands !== undefined
       ? { requiredVerifierCommands: opts.requiredVerifierCommands }
       : {}),
+    ...(opts.requiredVerifiers !== undefined ? { requiredVerifiers: opts.requiredVerifiers } : {}),
+    ...(opts.verifierOwner ? { verifierOwner: opts.verifierOwner } : {}),
     toolCallLog: log,
   });
   const honesty = evaluateExecuteCompletionHonesty({
@@ -1597,6 +1797,11 @@ export function buildGateRejectUserMessageForEngine(opts: {
     lastVerifierReceipt: opts.lastVerifierReceipt ?? null,
     toolCallLog: log,
     requiredVerifierCommands: verification.requiredVerifierCommands,
+    ...(opts.requiredVerifiers !== undefined ? { requiredVerifiers: opts.requiredVerifiers } : {}),
+    ...(opts.verifierOwner ? { verifierOwner: opts.verifierOwner } : {}),
+    currentWorkspaceRevisionHash: opts.currentWorkspaceRevisionHash ?? null,
+    ...(opts.unplannedAttemptEnvironmentFingerprint ? {unplannedAttemptEnvironmentFingerprint:opts.unplannedAttemptEnvironmentFingerprint} : {}),
+    ...(opts.currentReceiptRevisionHashes !== undefined ? { currentReceiptRevisionHashes: opts.currentReceiptRevisionHashes } : {}),
     executedVerifierLedger: opts.executedVerifierLedger ?? null,
     verifierEvidenceErrors: opts.verifierEvidenceErrors ?? null,
   });

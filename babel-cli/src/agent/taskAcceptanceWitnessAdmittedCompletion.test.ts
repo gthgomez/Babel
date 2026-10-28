@@ -12,11 +12,12 @@ import {
   createCriterionCompletionServiceV1,
   evaluateCriterionCompletionV1,
 } from '../authority/criterionCompletion.js'
-import { captureChatVerifierReceipt } from './chatEngineVerifierAdapter.js'
+import { captureChatVerifierReceipt, captureAndRecordVerifierReceipt, captureCompletionWorkspaceRevisionHash, prepareKernelVerifierInput, resolveVerifierCacheIdentity, verifierEnvironmentKey } from './chatEngineVerifierAdapter.js'
+import { chatVerifierOwner, chatVerifierRequirements } from './chatVerifierContext.js'
+import { createSessionEventLog } from './sessionEvents.js'
 import { createExecutorKernel } from '../executor/kernel.js'
 import {
   resolveGovernedCriterionCandidateRevisionSha,
-  toExecutorVerifierReceipt,
 } from '../evidence/chatRevisionBinding.js'
 import type { ToolContext } from '../localTools.js'
 import {
@@ -68,6 +69,7 @@ function witnessBoundContract() {
       mode: 'chat',
       user_request: DUAL_WITNESS_TASK,
       acceptance: bound.criteria,
+      verifier_requirements: ['npm run test:alpha', 'npm run test:beta'],
     }),
   )
 }
@@ -110,6 +112,13 @@ function npmRunHostInvocation(script: string): { executable: string; args: strin
   return { executable: 'npm', args: ['run', script] }
 }
 
+function witnessExecutionEnvironment(root: string): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env, BABEL_PROJECT_ROOT: root }
+  // The witness is an independent native run, not a child of the test harness.
+  delete env.NODE_TEST_CONTEXT
+  return env
+}
+
 function createRealNpmRunExecutor(root: string) {
   return createToolExecutor({
     executeTool: async (request) => {
@@ -121,7 +130,7 @@ function createRealNpmRunExecutor(root: string) {
       const child = spawnSync(executable, args, {
         cwd: root,
         encoding: 'utf8',
-        env: { ...process.env },
+        env: witnessExecutionEnvironment(root),
         timeout: 30_000,
         windowsHide: true,
       })
@@ -160,8 +169,10 @@ async function runDesignatedWitnessViaPolicy(
   runId: string,
   script: 'test:alpha' | 'test:beta',
   mutationPath: string,
+  recording?: Pick<Parameters<typeof captureAndRecordVerifierReceipt>[0], 'sessionEvents' | 'ledger' | 'cache' | 'verifierOwner'>,
 ) {
   const command = `npm run ${script}`
+  const cacheIdentity = resolveVerifierCacheIdentity({ projectRoot: root, command, envKey: verifierEnvironmentKey(witnessExecutionEnvironment(root)) })
   const policy = await executeActionWithPolicy(
     { type: 'test_run', command },
     'workspace_write',
@@ -178,7 +189,7 @@ async function runDesignatedWitnessViaPolicy(
   const exitCode = policy.results[0]?.exit_code ?? 1
   const stdout = policy.results[0]?.stdout ?? ''
   const stderr = policy.results[0]?.stderr ?? ''
-  const receipt = await captureChatVerifierReceipt({
+  const capture = {
     projectRoot: root,
     command,
     exitCode,
@@ -190,7 +201,10 @@ async function runDesignatedWitnessViaPolicy(
       working_directory: '.',
       environment_policy: 'host-process',
     },
-  })
+  }
+  const receipt = recording
+    ? await captureAndRecordVerifierReceipt({ ...capture, ...recording, cacheIdentity, turnId: runId, writeCount: 1 })
+    : await captureChatVerifierReceipt(capture)
   return { policy, exitCode, receipt }
 }
 
@@ -219,6 +233,18 @@ async function publishDualWitnessEvidence(input: {
   mutationPath: string
   scripts: Array<'test:alpha' | 'test:beta'>
 }) {
+  const contract = input.service.currentRequest()!.contract
+  const sessionEvents = createSessionEventLog(input.runId)
+  const verifierOwner = chatVerifierOwner({ projectRoot: input.root, sessionId: sessionEvents.session_id,
+    taskId: contract.task_id, contractHash: contract.contract_hash })!
+  const requiredVerifierCommands = [...contract.verifier_requirements]
+  const requiredVerifiers = chatVerifierRequirements(verifierOwner, requiredVerifierCommands, contract.user_request, input.root).map(requirement => ({
+    ...requirement, executionContext: { ...requirement.executionContext,
+      environmentFingerprint: verifierEnvironmentKey(witnessExecutionEnvironment(input.root)) },
+  }))
+  const recording: Pick<Parameters<typeof captureAndRecordVerifierReceipt>[0], 'sessionEvents' | 'ledger' | 'cache' | 'verifierOwner'> = {
+    sessionEvents, verifierOwner, ledger: [], cache: new Map(),
+  }
   const receipts = []
   for (const script of input.scripts) {
     const run = await runDesignatedWitnessViaPolicy(
@@ -226,8 +252,10 @@ async function publishDualWitnessEvidence(input: {
       input.runId,
       script,
       input.mutationPath,
+      recording,
     )
     assert.ok(run.receipt, JSON.stringify({ script, exit: run.exitCode }))
+    assert.ok((run.receipt.tests_total ?? 0) > 0, JSON.stringify({ exit: run.exitCode, total: run.receipt.tests_total, skipped: run.receipt.tests_skipped }))
     receipts.push(run.receipt)
   }
   const candidate = candidateShaFromReceipt(input.root, receipts[0]!)
@@ -240,7 +268,17 @@ async function publishDualWitnessEvidence(input: {
     candidate_sha: candidate,
     has_mutation: true,
   })
-  return { receipts, candidate }
+  const currentReceiptRevisionHashes: Record<string, string> = {}
+  for (const receipt of receipts) {
+    const current = captureCompletionWorkspaceRevisionHash({ projectRoot: input.root }, [input.mutationPath], receipt)
+    assert.ok(current && receipt.receiptId)
+    currentReceiptRevisionHashes[receipt.receiptId] = current
+  }
+  return { receipts, candidate, kernelEvidence: {
+    ...prepareKernelVerifierInput(receipts.at(-1)!, recording.ledger),
+    verifierOwner, requiredVerifierCommands, requiredVerifiers, currentReceiptRevisionHashes,
+    currentWorkspaceRevisionHash: currentReceiptRevisionHashes[receipts.at(-1)!.receiptId!]!,
+  } }
 }
 
 test('executor → receipt → criterion: paired policy witness runs satisfy both frozen argv bindings', async t => {
@@ -310,7 +348,7 @@ test('kernel negative: no refresh leaves VERIFIED_COMPLETE blocked', async t => 
 test('kernel positive: paired executor receipts refresh criterion evidence for VERIFIED_COMPLETE', async t => {
   const { root, service, request, runId } = await dualWitnessFixture(t)
   const mutationPath = await governedMutateSrcFix(root, runId)
-  const { receipts } = await publishDualWitnessEvidence({
+  const { kernelEvidence } = await publishDualWitnessEvidence({
     root,
     service,
     runId,
@@ -318,17 +356,13 @@ test('kernel positive: paired executor receipts refresh criterion evidence for V
     scripts: ['test:alpha', 'test:beta'],
   })
   assert.equal(evaluateCriterionCompletionV1(request).verified, true)
-  const last = receipts.at(-1)!
-  const adapted = toExecutorVerifierReceipt(last)
-  assert.ok(adapted.ok, adapted.ok ? '' : adapted.errors.join('; '))
   const kernel = createExecutorKernel('chat')
   const decision = kernel.completion.decide({
     mode: 'chat',
     requestedOutcome: 'VERIFIED_COMPLETE',
     hasWrite: true,
-    // Criterion graph is the authority under test; coarse honesty gate is not the subject here.
-    verificationPolicy: 'none',
-    lastVerifierReceipt: adapted.receipt,
+    verificationPolicy: 'strict',
+    ...kernelEvidence,
     toolCallLog: [{ tool: 'write_file', target: mutationPath }],
     proof: { compliant: true },
     acceptance: request,
@@ -340,29 +374,28 @@ test('kernel positive: paired executor receipts refresh criterion evidence for V
 test('kernel negative: single executor witness run keeps VERIFIED_COMPLETE downgraded', async t => {
   const { root, service, request, runId } = await dualWitnessFixture(t)
   const mutationPath = await governedMutateSrcFix(root, runId)
-  const { receipts } = await publishDualWitnessEvidence({
+  const { kernelEvidence } = await publishDualWitnessEvidence({
     root,
     service,
     runId,
     mutationPath,
     scripts: ['test:alpha'],
   })
-  const adapted = toExecutorVerifierReceipt(receipts[0]!)
-  assert.ok(adapted.ok, adapted.ok ? '' : adapted.errors.join('; '))
   const kernel = createExecutorKernel('chat')
   const decision = kernel.completion.decide({
     mode: 'chat',
     requestedOutcome: 'VERIFIED_COMPLETE',
     hasWrite: true,
-    verificationPolicy: 'none',
-    lastVerifierReceipt: adapted.receipt,
+    verificationPolicy: 'strict',
+    ...kernelEvidence,
     toolCallLog: [{ tool: 'write_file', target: mutationPath }],
     proof: { compliant: true },
     acceptance: request,
   })
   assert.equal(decision.allowed, false)
   assert.equal(decision.finalOutcome, 'UNVERIFIED_PATCH')
-  assert.match(decision.reason, /acceptance_unverified/i)
+  assert.equal(evaluateCriterionCompletionV1(request).verified, false)
+  assert.equal(decision.reason, 'completion_downgraded:verifier_missing')
 })
 
 test('verifier integrity: designated npm script rewrite detected from dependency hashes at promotion', () => {

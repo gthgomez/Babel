@@ -1,3 +1,4 @@
+import { verifierSemanticProgress } from './verifierSemanticProgress.js';
 /**
  * D01/D02 critical path — one coherent effective-operation policy.
  *
@@ -340,10 +341,12 @@ describe('D01/D02 effective-operation policy', () => {
     const engine = new ChatEngine({ task: 'run the tests', projectRoot: PROJECT_ROOT, model: MODEL });
     const anyEngine = engine as unknown as {
       computeVerifierChanged: (
-        results: Array<{ tool_name: string; content?: string; exit_code?: number }>,
+        results: Array<{ tool_name: string; content?: string; exit_code?: number; verifierSemanticSignature?: string }>,
       ) => boolean;
     };
-    const run = { tool_name: 'run_command', content: 'FAIL 1 test', exit_code: 1, target: 'npm test', verifierExecuted: true };
+    const red = verifierSemanticProgress({ executionContextKey: 'host-context', candidateRevision: 'candidate', command: 'npm test', exitCode: 1, stdout: 'FAIL 1 test', stderr: '' });
+    const green = verifierSemanticProgress({ executionContextKey: 'host-context', candidateRevision: 'candidate', command: 'npm test', exitCode: 0, stdout: 'PASS', stderr: '' });
+    const run = { tool_name: 'run_command', content: 'FAIL 1 test', exit_code: 1, target: 'npm test', verifierExecuted: true, verifierSemanticSignature: red };
     assert.equal(anyEngine.computeVerifierChanged([run]), true, 'first verifier run counts');
     assert.equal(
       anyEngine.computeVerifierChanged([{ ...run }]),
@@ -351,19 +354,19 @@ describe('D01/D02 effective-operation policy', () => {
       'identical repeat is not progress',
     );
     assert.equal(
-      anyEngine.computeVerifierChanged([{ ...run, exit_code: 0 }]),
+      anyEngine.computeVerifierChanged([{ ...run, exit_code: 0, verifierSemanticSignature: green }]),
       true,
       'exit-code change counts',
     );
     assert.equal(
-      anyEngine.computeVerifierChanged([{ ...run, exit_code: 0 }]),
+      anyEngine.computeVerifierChanged([{ ...run, exit_code: 0, verifierSemanticSignature: green }]),
       false,
       'same verdict again is not progress',
     );
     assert.equal(
-      anyEngine.computeVerifierChanged([{ ...run, content: 'PASS', exit_code: 0 }]),
-      true,
-      'output change counts',
+      anyEngine.computeVerifierChanged([{ ...run, content: 'PASS', exit_code: 0, verifierSemanticSignature: green }]),
+      false,
+      'display text alone is not semantic progress',
     );
     assert.equal(anyEngine.computeVerifierChanged([]), false, 'no verifier tool is not progress');
   });
@@ -379,12 +382,12 @@ describe('D01/D02 effective-operation policy', () => {
         content: 'v22.0.0', exit_code: 0 }]), false);
     }
     const failed = { tool_name: 'test_run', target: 'npm test', verifierExecuted: true,
-      content: 'FAIL 1 test', exit_code: 1 };
+      content: 'FAIL 1 test', exit_code: 1, verifierSemanticSignature: 'host-red-semantic-tuple' };
     assert.equal(check([failed]), true);
     assert.equal(check([{ tool_name: 'run_command', target: 'node --version', verifierExecuted: true,
       content: 'v22.0.1', exit_code: 0 }]), false);
     assert.equal(check([failed]), false, 'a probe must not reset the last real verifier signature');
-    assert.equal(check([{ ...failed, content: 'PASS 1 test', exit_code: 0 }]), true);
+    assert.equal(check([{ ...failed, content: 'PASS 1 test', exit_code: 0, verifierSemanticSignature: 'host-green-semantic-tuple' }]), true);
   });
 
   test('I3 bare continuation gestures carry the prior operation policy', () => {

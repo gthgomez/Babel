@@ -78,7 +78,8 @@ if (!process.env['BABEL_SYNTHETIC_PROVIDER_FIXTURE_ROOT']) {
         assert.notEqual(result.payload['reason_code'], 'verification_failed', 'unavailable verification is not a failed verifier run')
       } else {
         assert.equal(result.exitCode, 1)
-        assert.equal(outcome, 'BLOCKED_POLICY')
+        assert.equal(outcome, variant === 'no-op' ? 'AGENT_FAILURE' : 'BLOCKED_POLICY')
+        if (variant === 'no-op') assert.match(JSON.stringify(result.payload), /response_evidence_invalid|RESPONSE_EVIDENCE_INVALID/)
       }
       if (variant === 'critic-reject') assert.ok(criticCalls > 0, 'default headless critic must execute before retained delivery')
       const map = readFileSync(join(dir, 'REPO_MAP.md'), 'utf8')

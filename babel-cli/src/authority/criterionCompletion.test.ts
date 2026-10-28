@@ -1,3 +1,4 @@
+import { kernelVerifierFixture } from '../testinfra/kernelVerifierFixture.js'
 import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -62,6 +63,7 @@ test('caller-made pass callbacks are never invoked by the kernel', t => {
 test('a current owned context cannot turn coarse proof into criterion evidence', t => {
   const { request } = fixture(t)
   const result = createExecutorKernel('deep').completion.decide({
+    ...kernelVerifierFixture(),
     mode: 'deep', requestedOutcome: 'VERIFIED_COMPLETE', hasWrite: true,
     verificationPolicy: 'none', toolCallLog: [], proof: { compliant: true }, acceptance: request,
   })

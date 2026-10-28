@@ -31,7 +31,7 @@ function readyState() {
     type: 'add_evidence', evidence: 'read_file:src/parser.ts#call-1', discriminating: true,
     provenance: {
       tool: 'read_file', target: 'src/parser.ts', failureSignature: 'parser-red',
-      binding, observationDigest: 'parser-content',
+      binding, observationDigest: 'parser-content', window: { startLine: 1, endLine: 1, totalLines: 1, completeFile: true, byteTruncated: false },
     },
   })
   return state
@@ -120,7 +120,7 @@ test('rendered recovery identities round-trip without truncation while prose sta
     type: 'add_evidence', evidence: 'read_file:src/parser.ts#call-1', discriminating: true,
     provenance: {
       tool: 'read_file', target: 'src/parser.ts', failureSignature: longFailure,
-      binding: longBinding, observationDigest: 'parser-content',
+      binding: longBinding, observationDigest: 'parser-content', window: { startLine: 1, endLine: 1, totalLines: 1, completeFile: true, byteTruncated: false },
     },
   })
 
@@ -269,7 +269,7 @@ test('a new bound observation admits a distinct second repair in the same class,
     type: 'add_evidence', evidence: 'read_file:src/parser.ts#call-2', discriminating: true,
     provenance: {
       tool: 'read_file', target: 'src/parser.ts', failureSignature: 'parser-still-red',
-      binding: nextBinding, observationDigest: 'new-discriminating-content',
+      binding: nextBinding, observationDigest: 'new-discriminating-content', window: { startLine: 1, endLine: 1, totalLines: 1, completeFile: true, byteTruncated: false },
     },
   })
   const secondProposal = {
@@ -341,6 +341,7 @@ test('versioned session snapshot preserves the consumed ledger and downgrades le
   assert.equal(restored?.recoveryGate?.planAdmitted, false)
 
   const legacy = structuredClone(state)
+  delete legacy.recoveryGate!.readRecords
   delete legacy.recoveryGate!.binding
   legacy.recoveryGate!.satisfied = true
   legacy.recoveryGate!.planAdmitted = true

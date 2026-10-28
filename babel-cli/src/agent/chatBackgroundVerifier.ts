@@ -19,6 +19,7 @@ interface BackgroundDispatch {
   identity: ReturnType<typeof resolveVerifierCacheIdentity>
   candidate: WorkspaceRevision | null
   signal: AbortSignal | undefined
+  owner: ReturnType<ChatEngineActionExecutorHost['currentVerifierOwner']>
   settled: boolean
 }
 
@@ -67,6 +68,7 @@ export function prepareChatBackgroundDispatch(
   const projectRoot = requireProjectRoot(host.options)
   const dispatch: BackgroundDispatch = {
     engineRunId: host.engineRunId,
+    owner: host.currentVerifierOwner(),
     generation,
     taskOwnerId: host.taskAllowance?.taskOwnerId,
     acceptedTaskId: host.taskAllowance?.acceptedTaskId,
@@ -132,6 +134,7 @@ export async function settleChatBackgroundVerifier(input: {
     confirmedShellMutation: false,
     obsParts: notes,
     cacheIdentity: dispatch.identity,
+    verifierOwner: dispatch.owner,
     canPublish: candidateIsCurrent,
     isOwnerCurrent: ownsDispatch,
   })

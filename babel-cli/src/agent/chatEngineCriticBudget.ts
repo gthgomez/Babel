@@ -267,6 +267,9 @@ export function computePostWriteRepairWallMs(input: {
   minMs?: number;
   maxMs?: number;
 }): { capMs: number; repairWindowMs: number } {
+  if (input.sessionMaxWallMs === Infinity) {
+    return { capMs: Infinity, repairWindowMs: Infinity };
+  }
   const remaining = Math.max(0, input.sessionMaxWallMs - input.elapsedMs);
   if (remaining <= 0) {
     return { capMs: input.sessionMaxWallMs, repairWindowMs: 0 };
@@ -292,10 +295,12 @@ export function buildPostWriteRepairMessage(input: {
 }): string {
   return [
     '[Implementor: post-write repair window]',
-    `A file mutation exists. Remaining wall for this session is ~${input.repairWindowSec}s`,
-    `(of ~${input.remainingWallSec}s left before the hard wall).`,
+    ...(input.repairWindowSec === Infinity && input.remainingWallSec === Infinity
+      ? ['A file mutation exists. No task wall deadline is configured.']
+      : [`A file mutation exists. Remaining wall for this session is ~${input.repairWindowSec}s`,
+        `(of ~${input.remainingWallSec}s left before the hard wall).`]),
     'Do not re-explore the tree. Run project tests (pytest/npm test — not python -c probes),',
-    'read only failing paths, and fix with str_replace until tests pass or env_blocked.',
+    'inspect failing paths and their relevant implementation dependencies, and fix with str_replace until tests pass or env_blocked.',
     'Investigation tools (read/search/LSP/git) stay available — especially after a red verifier.',
     'Prefer mutate + verify, but gather new evidence before repeating the same failing patch.',
   ].join(' ');

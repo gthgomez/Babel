@@ -1,3 +1,4 @@
+import { chatVerifierOwner } from './chatVerifierContext.js';
 /**
  * Independent qualification of Chat dispatch wiring for background output and
  * read_file contracts (#411). Exercises ChatEngineActionExecutor.executeOneAction
@@ -172,6 +173,8 @@ function makeHost(
     beginRecoveryLocalizationInspection: () => true,
     checkVerifierTamper: () => null,
     consumeFailureBudget: () => true,
+    currentVerifierOwner: () => chatVerifierOwner({ projectRoot, sessionId: parity.sessionEvents.session_id,
+      taskId: parity.liveAuthority!.taskContract.task_id, contractHash: parity.liveAuthority!.taskContract.contract_hash }),
     currentRecoveryBinding: () => null,
     finishRecoveryLocalizationInspection: () => {},
     getResolvedRequiredVerifiers: () => [],

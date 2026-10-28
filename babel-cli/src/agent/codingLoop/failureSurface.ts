@@ -129,6 +129,11 @@ function surfaceFromObservation(
     return 'BASELINE_FAILURE'
   }
 
+  // A native assertion label/message may discuss the sandbox itself. Its
+  // parsed assertion is a test failure; an incidental word is not host denial.
+  if (parser === 'node_trace' && obs.failures.length > 0 && /\bERR_ASSERTION\b/i.test(blob)) {
+    return 'TEST_FAILURE'
+  }
   if (/policy blocked|permission denied|not allowed|sandbox/i.test(blob)) {
     return 'POLICY_FAILURE'
   }

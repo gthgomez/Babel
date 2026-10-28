@@ -92,7 +92,7 @@ export async function evaluateParserModule(modulePath: string): Promise<ParserOr
 }
 
 /** `package.json` test script for parser.ts behavioral fixtures (Node type stripping). */
-export const PARSER_FIXTURE_NPM_TEST = 'node --experimental-strip-types verify.mjs';
+export const PARSER_FIXTURE_NPM_TEST = 'node --experimental-strip-types --test --test-reporter=tap verify.mjs';
 
 /** argv for spawning `verify.mjs` directly in process tests. */
 export const PARSER_FIXTURE_VERIFY_NODE_ARGS = [

@@ -144,7 +144,7 @@ test('R1 production path blocks arbitrary shell mutation before execution', asyn
   }
 });
 
-test('R1 production path rejects unrelated reads and accepts implicated-file evidence', async () => {
+test('R1 production path retains authorized dependency reads and implicated-file evidence', async () => {
   const fixture = recoveryInspectionFixture();
   const { engine, context, root, target } = fixture;
   try {
@@ -155,7 +155,8 @@ test('R1 production path rejects unrelated reads and accepts implicated-file evi
       {},
       { index: 0, ownerGeneration: 0 },
     );
-    assert.equal((engine as any).workingState.recoveryGate.satisfied, false);
+    assert.equal((engine as any).workingState.recoveryGate.satisfied, true);
+    assert.equal((engine as any).workingState.recoveryGate.readRecords[0].target, 'package.json');
 
     await (engine as any).executeOneAction(
       { type: 'read_file', path: target },
@@ -191,14 +192,14 @@ test('R1 production path rejects content-free inspections as recovery evidence',
       );
     }
 
-    // A search scoped to the implicated file is content-bearing and localizes the failure.
+    // Search snippets remain hints, even when scoped to an implicated file.
     await (engine as any).executeOneAction(
       { type: 'grep', pattern: 'recoveryGate', path: 'src/agent/codingLoop/workingState.ts' },
       context,
       {},
       { index: index++, ownerGeneration: 0 },
     );
-    assert.equal((engine as any).workingState.recoveryGate.satisfied, true);
+    assert.equal((engine as any).workingState.recoveryGate.satisfied, false);
     fixture.assertUnchanged();
   } finally { fixture.cleanup(); }
 });
@@ -235,7 +236,9 @@ test('R1 production path does not accept a repeated read as new evidence for the
       {},
       { index: 1, ownerGeneration: 0 },
     );
-    assert.equal((engine as any).workingState.recoveryGate.satisfied, false);
+    assert.equal((engine as any).workingState.recoveryGate.satisfied, true);
+    assert.deepEqual((engine as any).workingState.consumedRecoveryEvidence, state.consumedRecoveryEvidence);
+    assert.equal((engine as any).workingState.recoveryGate.observedKeys.length, 1);
     fixture.assertUnchanged();
   } finally { fixture.cleanup(); }
 });
@@ -363,7 +366,7 @@ test('R1 resume restores bound evidence and refuses a newer unbound red verifier
     type: 'add_evidence', evidence: 'read_file:workingState.ts', discriminating: true,
     provenance: {
       tool: 'read_file', target: 'src/agent/codingLoop/workingState.ts',
-      failureSignature: 'parser-red', binding, observationDigest: 'content',
+      failureSignature: 'parser-red', binding, observationDigest: 'content', window: { startLine: 1, endLine: 1, totalLines: 1, completeFile: true, byteTruncated: false },
     },
   });
   assert.equal(state.recoveryGate?.satisfied, true);
@@ -394,7 +397,7 @@ test('R1 cold resume respects fresh and continued task boundaries without an ear
     type: 'add_evidence', evidence: 'inspection', discriminating: true,
     provenance: {
       tool: 'read_file', target: 'src/agent/codingLoop/workingState.ts',
-      failureSignature: 'red', binding, observationDigest: 'content',
+      failureSignature: 'red', binding, observationDigest: 'content', window: { startLine: 1, endLine: 1, totalLines: 1, completeFile: true, byteTruncated: false },
     },
   });
   const continued = createSessionEventLog('continued-boundary');
@@ -505,7 +508,7 @@ test('R1 no-target red localizes through a related read before admitting a plan'
     );
     const state = (engine as any).workingState;
     assert.equal(state.localization.phase, 'localized');
-    assert.deepEqual(state.recoveryGate.failingTargets, ['src/parser.js']);
+    assert.equal(state.recoveryGate.readRecords[0].target, 'src/parser.js');
     assert.equal(state.recoveryGate.satisfied, true);
     const repairPlan = {
       schemaVersion: 1, failureSignature: state.recoveryGate.failureSignature,
@@ -601,7 +604,7 @@ test('R1 no-target test name needs a bounded glob followed by a corroborating re
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
-test('R1 exhausted localization blocks another search and reports a typed reason', async () => {
+test('R1 legacy exhausted localization resumes governed inspection with counters retained', async () => {
   const fixture = recoveryInspectionFixture();
   const { engine, context } = fixture;
   const binding = (engine as any).currentRecoveryBinding();
@@ -616,10 +619,11 @@ test('R1 exhausted localization blocks another search and reports a typed reason
     context,
     {}, { index: 0, ownerGeneration: 0 },
   );
-  assert.match(result.observation, /LOCALIZATION_EXHAUSTED/);
+  assert.doesNotMatch(result.observation, /LOCALIZATION_EXHAUSTED/);
+  assert.equal((engine as any).workingState.localization.calls, 5);
   const report = (engine as any).buildVerifierBlockedReport('not localized');
-  assert.equal(report.reason_code, 'localization_exhausted');
-  assert.match(report.checked[0].finding, /4 inspection call/);
+  assert.notEqual(report.reason_code, 'localization_exhausted');
+  assert.ok(report.checked.length > 0);
   } finally {
     fixture.cleanup();
   }

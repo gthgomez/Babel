@@ -811,6 +811,8 @@ export interface ChatEngineStreamingLoopHost {
     stderr?: string
     verified?: boolean
     verifierExecuted?: boolean
+    verifierSemanticSignature?: string
+    preDispatchNoEffect?: true
     mutation_paths?: string[]
     effect_status?: MutationEffectStatus
     effect_scope?: import('./mutationTools.js').MutationEffectScope
@@ -879,6 +881,7 @@ export interface ChatEngineActionExecutorHost {
   hashFilePath: (filePath: string) => Promise<string>
   isSubmissionCurrent: (ownerGeneration: number) => boolean
   isolationBrokerFlags: () => IsolationBrokerFlags
+  currentVerifierOwner: () => import('../executor/contracts.js').VerifierEvidenceOwner | undefined
   lastVerifierFailed: boolean
   lastVerifierReceipt: BoundChatVerifierReceipt | null
   noteToolForReadThrash: (
@@ -928,6 +931,8 @@ export interface ChatEngineActionExecutorHost {
     stderr?: string
     verified?: boolean
     verifierExecuted?: boolean
+    verifierSemanticSignature?: string
+    preDispatchNoEffect?: true
     mutation_paths?: string[]
     effect_status?: MutationEffectStatus
     effect_scope?: import('./mutationTools.js').MutationEffectScope

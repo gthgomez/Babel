@@ -1,8 +1,9 @@
+import { recordToolProposed, recordToolTerminal } from './sessionEvents.js'
 import assert from 'node:assert/strict'
 import {test} from 'node:test'
 import {mkdtempSync,mkdirSync,readFileSync,writeFileSync,rmSync} from 'node:fs'
 import {tmpdir} from 'node:os'
-import {join} from 'node:path'
+import {join,dirname} from 'node:path'
 import {execFileSync} from 'node:child_process'
 import {ChatEngine} from './chatEngine.js'
 import type {ChatToolAction} from './chatToolDefinitions.js'
@@ -18,6 +19,8 @@ const fixtures = [
     testSource:"import test from 'node:test'; import assert from 'node:assert/strict'; import {add} from './math.js'; test('addition',()=>{assert.equal(add(2,3),5);assert.equal(add(0,7),7)});\n"},
   {name:'TypeScript named import',path:'math.js',testPath:'math.test.ts',label:'addition',source:'export function add(a,b) { return a-b; }\n',old:'return a-b;',replacement:'return a+b;',
     testSource:"import test from 'node:test'; import assert from 'node:assert/strict'; import {add} from './math.js'; test('addition',()=>{assert.equal(add(2,3),5);assert.equal(add(0,7),7)});\n"},
+  {name:'TypeScript local const and parent import',path:'src/math.ts',testPath:'tests/math.test.ts',label:'addition',source:'export function add(a: number,b: number) { return a-b; }\n',old:'return a-b;',replacement:'return a+b;',
+    testSource:"import test from 'node:test'; import assert from 'node:assert/strict'; import {add} from '../src/math.ts'; test('addition',()=>{const actual = add(2,3);assert.equal(actual,5)});\n"},
   {name:'static stylesheet read',path:'styles.css',testPath:'style.test.js',label:'busy style',source:'.status { display: inline-flex; }\n',old:'.status { display: inline-flex; }',replacement:'.status { display: inline-flex; }\n.status-busy { opacity: 0.6; }',
     testSource:"import test from 'node:test'; import assert from 'node:assert/strict'; import {readFileSync} from 'node:fs'; test('busy style',()=>assert.match(readFileSync(new URL('./styles.css',import.meta.url),'utf8'),/\\.status-busy\\s*\\{[^}]*opacity\\s*:\\s*0?\\.6/s));\n"},
 ]
@@ -48,10 +51,13 @@ for (const fixture of fixtures) for (const priorMutation of [false,true]) test(`
   delete process.env['BABEL_DOCKER_DISABLE'];delete process.env['BABEL_ALLOW_HOST_FALLBACK'];delete process.env['BABEL_BENCHMARK_DOCKER_EXTRA_ARGS']
   setDockerAvailableForTest(true)
   const {source,testSource}=fixture
+  mkdirSync(dirname(join(root,fixture.path)),{recursive:true});mkdirSync(dirname(join(root,fixture.testPath)),{recursive:true})
   writeFileSync(join(root,fixture.path),source);writeFileSync(join(root,fixture.testPath),testSource)
+  writeFileSync(join(root,'README.md'),'Inspect the project and implementation before repairing.\n')
+  for(let i=0;i<3;i++)writeFileSync(join(root,`discovery${i}.ts`),`export const value${i} = ${i};\n`)
   writeFileSync(join(root,'package.json'),'{"type":"module","scripts":{"test":"node --test"}}\n')
   if(priorMutation)writeFileSync(join(root,'preparation.js'),'export const prepared = false;\n')
-  for(const args of [['init','-q'],['add','--',fixture.path,fixture.testPath,'package.json',...(priorMutation?['preparation.js']:[])],['-c','user.name=Fixture','-c','user.email=fixture@example.test','commit','-qm','fixture']])
+  for(const args of [['init','-q'],['add','--',fixture.path,fixture.testPath,'package.json','README.md','discovery0.ts','discovery1.ts','discovery2.ts',...(priorMutation?['preparation.js']:[])],['-c','user.name=Fixture','-c','user.email=fixture@example.test','commit','-qm','fixture']])
     execFileSync('git',args,{cwd:root,windowsHide:true}) // disposable fixture; every failure throws
   let verifiers=0
   const childEnv={...process.env};delete childEnv['NODE_TEST_CONTEXT']
@@ -59,7 +65,7 @@ for (const fixture of fixtures) for (const priorMutation of [false,true]) test(`
     verifiers++
     // This test-owned adapter really executes Node outside the mocked Docker
     // transport; retain factual start evidence only after native completion.
-    try{return {exit_code:0,stdout:execFileSync(process.execPath,['--test','--test-reporter=tap',fixture.testPath],{cwd:root,env:childEnv,encoding:'utf8',windowsHide:true}),stderr:'',process_started:true}}
+    try{return {exit_code:0,stdout:execFileSync(process.execPath,['--test','--test-reporter=tap',fixture.testPath],{cwd:root,env:childEnv,encoding:'utf8',windowsHide:true}),stderr:'',process_started:true,process_termination:'exited' as const}}
     catch(error){const e=error as {status:number|null;stdout:string;stderr:string};return {exit_code:e.status??1,stdout:String(e.stdout),stderr:String(e.stderr),process_started:Number.isInteger(e.status)}}
   })
   const engine=new ChatEngine({task:'Fix the failing tests. Preserve tests and package metadata.',projectRoot:root})
@@ -76,25 +82,19 @@ for (const fixture of fixtures) for (const priorMutation of [false,true]) test(`
   await run({type:'read_file',path:fixture.path})
   await run({type:'test_run',command:'npm test'})
   assert.equal(probe.lastVerifierReceipt?.exit_code,1)
-  if (fixture.name === 'TypeScript named import') {
-    // TS diagnostics can identify the assertion without extending the separate
-    // JavaScript-only static import bridge's admitted evidence language.
-    assert.ok(probe.workingState.localization?.candidates.some(candidate => candidate.path === fixture.testPath))
-    await run({type:'read_file',path:fixture.testPath})
-    assert.equal(probe.workingState.localization?.acceptedPath,fixture.testPath)
-    assert.ok(!probe.workingState.recoveryGate?.failingTargets?.includes(fixture.path))
-    assert.equal(readFileSync(join(root,fixture.path),'utf8'),source)
-    assert.equal(verifiers,1)
-    return
-  }
-  // Three ordinary reads in one model turn must not poison the first two
-  // recovery observations when the third exceeds the localization scope cap.
-  await probe.executeActions([{type:'read_file',path:fixture.testPath},{type:'read_file',path:fixture.path},{type:'read_file',path:'package.json'}],{})
+  // Authorized discovery is not vetoed by AST candidates or a two-scope cap.
+  // Each delivered read retains a current target/window-specific handle.
+  const delivered = await probe.executeActions([{type:'read_file',path:'README.md'},{type:'read_file',path:fixture.testPath},{type:'read_file',path:'discovery0.ts'},{type:'read_file',path:'discovery1.ts'},{type:'read_file',path:fixture.path}],{}) as { observationList: string[] }
   const gate=probe.workingState.recoveryGate!
-  assert.ok(gate.failingTargets?.includes(fixture.path))
+  assert.ok(gate.readRecords?.some(record => record.target === fixture.path))
   assert.ok(!gate.failingTargets?.includes('package.json'),'an unrelated read cannot broaden repair scope')
   if(priorMutation)assert.ok(gate.failingTargets?.includes('preparation.js'),'retain the previously implicated edit target')
-  assert.equal(gate.observedKeys?.length,2)
+  assert.equal(gate.observedKeys?.length,5)
+  const sourceRecord=gate.readRecords?.find(record=>record.target===fixture.path)
+  assert.ok(sourceRecord)
+  assert.ok(delivered.observationList[4]?.includes(sourceRecord.id),'the fifth read exposes its own current handle')
+  assert.equal(sourceRecord.window.completeFile,true)
+  assert.equal(probe.workingState.localization?.calls,5,'the fifth authorized read is not refused')
   const plan={schemaVersion:1 as const,failureSignature:gate.failureSignature,workspaceRevision:gate.binding!.workspaceRevision,
     hypothesisClass:'logic' as const,targetIdentities:[fixture.path],actionFamily:'str_replace' as const,criterionId:'npm test',supportingObservationIds:gate.observedKeys!.map(recoveryObservationId)}
   const wrongCriterion=await run({type:'str_replace',file_path:fixture.path,old_str:fixture.old,new_str:fixture.replacement,repair_plan:{...plan,criterionId:fixture.label}})
@@ -116,4 +116,61 @@ for (const fixture of fixtures) for (const priorMutation of [false,true]) test(`
   assert.equal(probe.lastVerifierReceipt?.exit_code,0)
   assert.equal(probe.lastVerifierReceipt?.stale,false)
   assert.equal(probe.workingState.recoveryGate,undefined)
+})
+
+test('an actually started red without a receipt can rerun through normal governed dispatch', async t => {
+  const storage = mkdtempSync(join(tmpdir(), 'babel-unbound-red-')); const root = join(storage, 'project'); mkdirSync(root)
+  const names = ['BABEL_LIVE','BABEL_RUNS_DIR','BABEL_EXECUTION_PROFILE','BABEL_BENCHMARK_DOCKER_IMAGE','BABEL_DOCKER_DISABLE','BABEL_ALLOW_HOST_FALLBACK'] as const
+  const old = names.map(name => [name, process.env[name]] as const)
+  t.after(() => { for (const [name,value] of old) { if (value === undefined) delete process.env[name]; else process.env[name] = value }; resetDockerAvailabilityCache(); rmSync(storage, { recursive:true, force:true }) })
+  process.env['BABEL_LIVE'] = 'true'; process.env['BABEL_RUNS_DIR'] = join(storage, 'runs'); process.env['BABEL_EXECUTION_PROFILE'] = 'safe_repo'
+  process.env['BABEL_BENCHMARK_DOCKER_IMAGE'] = 'synthetic/recovery-import:unit'; delete process.env['BABEL_DOCKER_DISABLE']; delete process.env['BABEL_ALLOW_HOST_FALLBACK']; setDockerAvailableForTest(true)
+  writeFileSync(join(root,'source.cjs'),'module.exports = 1;\n')
+  writeFileSync(join(root,'proof.test.cjs'),"const test=require('node:test');const assert=require('node:assert/strict');test('value',()=>assert.equal(require('./source.cjs'),2));\n")
+  writeFileSync(join(root,'package.json'),'{"scripts":{"test":"node --test proof.test.cjs"}}\n')
+  for (const args of [['init','-q'],['add','--all'],['-c','user.name=Fixture','-c','user.email=fixture@example.test','commit','-qm','fixture']]) execFileSync('git',args,{cwd:root,windowsHide:true})
+  let executed = 0; const childEnv = {...process.env}; delete childEnv['NODE_TEST_CONTEXT']
+  t.mock.method(SafeExecutor.prototype,'testRunAsync',async () => {
+    executed++
+    try { return { exit_code:0, stdout:execFileSync(process.execPath,['--test','--test-reporter=tap','proof.test.cjs'],{cwd:root,env:childEnv,encoding:'utf8',windowsHide:true}),stderr:'',process_started:true,process_termination:'exited' as const } }
+    catch (error) { const e=error as {status:number;stdout:string;stderr:string}; return {exit_code:e.status,stdout:String(e.stdout),stderr:String(e.stderr),process_started:true,process_termination:'exited' as const} }
+  })
+  const { RevisionManager } = await import('../evidence/revisionBoundReceipt.js')
+  const compute = RevisionManager.computeRevision.bind(RevisionManager)
+  let captureFails = true
+  t.mock.method(RevisionManager,'computeRevision',async (...args: Parameters<typeof compute>) => {
+    if (captureFails) throw new Error('fixture receipt capture unavailable after actual execution')
+    return compute(...args)
+  })
+  const task = 'Fix the implementation and run npm test. Preserve the test.'
+  const engine = new ChatEngine({task,projectRoot:root,requiredVerifierCommands:['npm test']})
+  engine.admitUserSubmission({userInput:task},{model:'fixture-model',provider:'ollama'})
+  const host = engine as unknown as { _turnIndex:number; workingState:WorkingState; parity: import('./chatEngineParityBridge.js').ParityRuntime;
+    toolCallLog:Array<{exit_code?:number;error?:string}>; executeOneAction:(action:ChatToolAction,context:ToolContext,callbacks:object,meta:object)=>Promise<{observation:string}>;
+    lastVerifierReceipt:{exit_code:number}|null }
+  const run = async (action:ChatToolAction) => {
+    const id = `native-replay-${++host._turnIndex}`; const turn = host.parity.turnId!;
+    recordToolProposed(host.parity.sessionEvents,{turn_id:turn,tool_call_id:id,tool_name:action.type})
+    const result = await host.executeOneAction(action,{agentId:'test',runId:'test',runDir:join(storage,'runtime'),babelRoot:root,projectRoot:root},{},{index:host._turnIndex, idempotencyKey:id})
+    const row = host.toolCallLog.at(-1)!
+    const started = host.parity.sessionEvents.events.some(event => event.kind === 'tool_started' && event.tool_call_id === id)
+    recordToolTerminal(host.parity.sessionEvents,{turn_id:turn,tool_call_id:id,tool_name:action.type,
+      ...(started ? { ...(row.exit_code !== undefined ? {exit_code:row.exit_code} : {}), content:result.observation, failed:!!row.error }
+        : { cancelled:true, reason:'pre_dispatch_denied_or_invalid', recovery_state:'TOOL_NOT_STARTED' as const }) })
+    return {observationList:[result.observation]}
+  }
+  const preparation = await run({type:'write_file',path:'preparation.cjs',content:'module.exports = true;\n'})
+  const firstRed = await run({type:'test_run',command:'npm test'})
+  assert.equal(executed,1,JSON.stringify({preparation,firstRed}))
+  assert.equal(host.lastVerifierReceipt,null)
+  assert.equal(host.workingState.recoveryGate?.failureSignature,'unbound-red-verifier')
+  assert.ok(host.workingState.settledFailedVerifier, 'actual dispatch/settlement survives receipt capture failure')
+  captureFails = false
+  const rerun = await run({type:'test_run',command:'npm test'})
+  assert.equal(executed,2,JSON.stringify(rerun.observationList))
+  assert.equal((host.lastVerifierReceipt as {exit_code:number}|null)?.exit_code,1)
+  assert.notEqual(host.workingState.recoveryGate?.failureSignature,'unbound-red-verifier')
+  const denied = await run({type:'run_command',command:'node -e "process.exit(0)"'})
+  assert.equal(executed,2)
+  assert.match(denied.observationList.join('\n'), /RECOVERY_|DENY|denied/i)
 })

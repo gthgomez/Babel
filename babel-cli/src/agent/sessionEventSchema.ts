@@ -255,6 +255,7 @@ export type SessionEvent =
     })
   | (SessionEventBase & {
       kind: 'tool_completed';
+      preDispatchNoEffect?: true;
       tool_call_id: string;
       tool_name: string;
       idempotency_key: string;
@@ -266,6 +267,7 @@ export type SessionEvent =
     })
   | (SessionEventBase & {
       kind: 'tool_failed';
+      preDispatchNoEffect?: true;
       tool_call_id: string;
       tool_name: string;
       idempotency_key: string;
@@ -277,6 +279,7 @@ export type SessionEvent =
     })
   | (SessionEventBase & {
       kind: 'tool_cancelled';
+      preDispatchNoEffect?: true;
       tool_call_id: string;
       tool_name: string;
       idempotency_key: string;
@@ -319,6 +322,7 @@ export type SessionEvent =
       tool_call_id?: string;
       /** Durable revision-bound receipt used to reconstruct verifier state. */
       receipt?: BoundChatVerifierReceipt;
+      failed_execution?: import('./codingLoop/failedVerifierExecution.js').SettledFailedVerifierExecution;
     })
   | (SessionEventBase & {
       kind: 'gate_decision';

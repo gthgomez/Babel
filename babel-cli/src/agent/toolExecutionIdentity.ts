@@ -26,6 +26,8 @@ export interface DurableToolLogRow {
   exit_code?: number
   /** Host-origin execution provenance; never inferred from observation text. */
   verifierExecuted?: boolean
+  verifierSemanticSignature?: string
+  preDispatchNoEffect?: true
   stdout?: string
   stderr?: string
 }
@@ -45,6 +47,8 @@ export interface DurableToolResultProjection {
   exit_code?: number
   /** Host-origin execution provenance; never inferred from observation text. */
   verifierExecuted?: boolean
+  verifierSemanticSignature?: string
+  preDispatchNoEffect?: true
   contentHash?: string
   /** A cached/read-limit notice injected no new discovery evidence. */
   discoverySuppressed?: boolean
@@ -149,6 +153,8 @@ export function projectDurableToolBatch(input: {
       content,
       target: row.target,
       ...(row.verifierExecuted !== undefined ? { verifierExecuted: row.verifierExecuted } : {}),
+      ...(row.verifierSemanticSignature ? { verifierSemanticSignature: row.verifierSemanticSignature } : {}),
+      ...(row.preDispatchNoEffect === true ? { preDispatchNoEffect: true as const } : {}),
       ...(row.exit_code !== undefined ? { exit_code: row.exit_code } : {}),
       ...(hashed !== undefined ? { contentHash: hashed } : {}),
       ...(discoverySuppressed ? { discoverySuppressed: true } : {}),
@@ -190,11 +196,9 @@ export function projectDurableToolBatchBySlicePosition(input: {
 
 /** Progress requires host execution provenance and a recognized verifier identity. */
 export function executedVerifierProgressSignature(results: ReadonlyArray<{
-  tool_name: string; target?: string; content?: string; exit_code?: number; verifierExecuted?: boolean
+  tool_name: string; target?: string; content?: string; exit_code?: number; verifierExecuted?: boolean; verifierSemanticSignature?: string
 }>): string | null {
   const relevant = results.filter(r => ['run_command', 'test_run', 'shell_exec'].includes(r.tool_name) &&
-    r.verifierExecuted === true && isAuthoritativeVerifierCommand(r.target))
-  return relevant.length === 0 ? null : relevant.map(r =>
-    `${r.tool_name}:${r.target}:${r.exit_code ?? ''}:` +
-    createHash('sha256').update(r.content ?? '').digest('hex').slice(0, 16)).join('|')
+    r.verifierExecuted === true && isAuthoritativeVerifierCommand(r.target) && typeof r.verifierSemanticSignature === 'string' && r.verifierSemanticSignature.length > 0)
+  return relevant.length === 0 ? null : relevant.map(r => r.verifierSemanticSignature).join('|')
 }

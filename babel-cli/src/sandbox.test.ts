@@ -1062,6 +1062,7 @@ setTimeout(() => {}, 60_000);
       result,
       'async supervisor timeout (SIGTERM exit 0)',
     );
+    assert.equal(result.process_termination, 'timed_out');
   } finally {
     fixture.cleanup();
   }
@@ -1304,6 +1305,7 @@ test('shellExecAsync pre-aborted signal returns immediately without spawning lon
     );
     assert.equal(result.exit_code, 1);
     assert.match(result.stderr, /aborted/i);
+    assert.equal(result.process_termination, 'cancelled');
     assert.ok(Date.now() - startedAt < 250, 'pre-aborted path must be near-instant');
     assert.doesNotMatch(result.stdout, /should-not-run/);
   } finally {

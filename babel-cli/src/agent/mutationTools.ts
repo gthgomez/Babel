@@ -94,11 +94,11 @@ export function assessMutationEffect(input: {
   if (!mutationCandidate) {
     return { status: 'not_applicable', reason: 'tool is not a mutation candidate' };
   }
-  if (input.policyBlocked || input.error === 'blocked') {
-    return { status: 'not_applicable', reason: 'mutation was denied by policy' };
-  }
   if (input.preDispatchNoEffect === true) {
-    return { status: 'confirmed_no_change', reason: 'edit validation stopped before executor dispatch' };
+    return { status: 'confirmed_no_change', reason: 'host stopped before executor dispatch' };
+  }
+  if (input.policyBlocked || input.error === 'blocked') {
+    return { status: 'not_applicable', reason: 'mutation was denied by policy; dispatch effect is unknown' };
   }
 
   const transaction = input.effectTransaction;

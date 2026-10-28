@@ -1,3 +1,5 @@
+import { parseCommandArgv } from '../utils/commandArgv.js';
+import { chatVerifierRequirements } from './chatVerifierContext.js';
 /**
  * Tests for TaskIntent classification and completion gate logic.
  */
@@ -349,7 +351,11 @@ describe('Completion gate logic', () => {
 // the tool name mismatch bug (file_write vs write_file) and sub-agent writes.
 
 function setTestVerifierReceipt(engine: ChatEngine, command: string, exit_code = 0) {
+  const owner = (engine as any).currentVerifierOwner();
+  const executionContext = chatVerifierRequirements(owner, [command], '', (engine as any).options.projectRoot)[0]!.executionContext;
   const receipt = {
+    executionContext, order: { sessionId: owner.sessionId, seq: 0 },
+    argv: parseCommandArgv(command), stale: false,
     command,
     exit_code,
     exitCode: exit_code,
@@ -401,6 +407,7 @@ describe('Completion gate — positive paths', () => {
     engine = new ChatEngine({
       task: 'fix the failing test in src/math.js',
       projectRoot: '/tmp/test-project',
+      requiredVerifierCommands: ['npm test'],
     });
   });
 
@@ -577,6 +584,7 @@ describe('Completion gate — positive paths', () => {
     try {
       const eng = new ChatEngine({
         task: 'fix the multi-file regression',
+        requiredVerifierCommands: ['pytest -q'],
         projectRoot: '/tmp/test-project',
       });
       pushToolLog(eng, {
@@ -600,6 +608,7 @@ describe('Completion gate — positive paths', () => {
     try {
       const eng = new ChatEngine({
         task: 'fix the multi-file regression',
+        requiredVerifierCommands: ['pytest -q'],
         projectRoot: '/tmp/test-project',
       });
       pushToolLog(eng, {
@@ -964,7 +973,7 @@ describe('post-edit static check', () => {
 
 describe('PR-76: Adversarial Verifier Freshness & Promotion Gate', () => {
   const baseReceipt = (overrides?: Record<string, unknown>): any => ({
-    command: 'npm test',
+    command: 'npm test', argv: ['npm', 'test'], stale: false,
     exit_code: 0,
     exitCode: 0,
     summary: 'all tests passed',
@@ -1047,6 +1056,8 @@ describe('PR-76: Adversarial Verifier Freshness & Promotion Gate', () => {
   });
 
   test('4. current green receipt + matching live revision => allow only when requirements pass', () => {
+    const owner = { workspaceRoot: process.cwd(), taskId: 'fixture', contractHash: 'contract', sessionId: 'session' };
+    const requiredVerifiers = chatVerifierRequirements(owner, ['npm test'], '');
     const decision = evaluateCompletionGateForEngine({
       turnType: 'completion',
       taskIntent: 'execute',
@@ -1057,7 +1068,8 @@ describe('PR-76: Adversarial Verifier Freshness & Promotion Gate', () => {
         target: 'src/app.ts',
         effect_status: 'confirmed_change',
       }],
-      lastVerifierReceipt: baseReceipt({
+      verifierOwner: owner, requiredVerifiers,
+      lastVerifierReceipt: baseReceipt({ executionContext: requiredVerifiers[0]!.executionContext, order: { sessionId: owner.sessionId, seq: 1 },
         boundRevision: {
           gitCommitHash: null,
           compositeTreeHash: 'rev-match-333',

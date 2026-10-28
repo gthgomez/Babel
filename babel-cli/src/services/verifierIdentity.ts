@@ -28,9 +28,6 @@ export interface VerifierIdentity {
   displayCommand: string;
 }
 
-const PATH_LIKE_RE =
-  /[\\/]|\.(?:test|spec)\.[cm]?[jt]sx?$|\.py$|\.go$|(?:^|[/\\])(?:tests?|__tests__)(?:[/\\]|$)/i;
-
 const FILTER_FLAGS_WITH_VALUE = new Set([
   '-t',
   '--testnamepattern',
@@ -47,11 +44,9 @@ const FILTER_FLAGS_WITH_VALUE = new Set([
 ]);
 
 const BOOLEAN_RUNNER_FLAGS = new Set([
-  'run',
-  'test',
   '--run',
   '--watch=false',
-  '--watchAll=false',
+  '--watchall=false',
   '--coverage',
   '--ci',
   '--passwithnodiff',
@@ -122,7 +117,7 @@ export function verifierExecutionFingerprint(command: string): string {
     return `unparsed\u0000${trimmed}`;
   }
   return argv
-    .map((token, index) => (index === 0 ? normalizeExecutable(token) : token))
+    .map((token, index) => (index === 0 && !/[\\/]/.test(token) ? normalizeExecutable(token) : token))
     .join('\u0000');
 }
 
@@ -176,7 +171,7 @@ export function satisfiesVerifierRequirement(required: string, actual: string): 
   const req = analyzeVerifierIdentity(required);
   const act = analyzeVerifierIdentity(actual);
   if (!req || !act) {
-    return cleanCommand(required).toLowerCase() === cleanCommand(actual).toLowerCase();
+    return verifierExecutionFingerprint(required) === verifierExecutionFingerprint(actual);
   }
 
   if (req.family === 'unknown' || act.family === 'unknown') {
@@ -219,7 +214,7 @@ export function sameVerifierIdentity(left: string, right: string): boolean {
   const a = analyzeVerifierIdentity(left);
   const b = analyzeVerifierIdentity(right);
   if (!a || !b) {
-    return cleanCommand(left).toLowerCase() === cleanCommand(right).toLowerCase();
+    return verifierExecutionFingerprint(left) === verifierExecutionFingerprint(right);
   }
   return a.identityKey === b.identityKey;
 }
@@ -230,11 +225,11 @@ function identityOf(
   targetSelectors: string[],
   displayCommand: string,
 ): VerifierIdentity {
-  const selectors = [...new Set(targetSelectors.map((s) => s.toLowerCase()))].sort();
+  const selectors = [...new Set(targetSelectors)].sort();
   const identityKey = family === 'unknown'
     ? `unknown#${verifierExecutionFingerprint(displayCommand)}`
     : scope === 'targeted'
-      ? `${family}#targeted:${selectors.join(',')}`
+      ? `${family}#targeted:${JSON.stringify(selectors)}`
       : `${family}#${scope}`;
   return {
     family,
@@ -302,7 +297,7 @@ function extractTargetSelectors(
     if (FILTER_FLAGS_WITH_VALUE.has(token)) {
       const value = runnerArgs[i + 1];
       if (value && !value.startsWith('-')) {
-        selectors.push(value);
+        selectors.push(`${token}=${JSON.stringify(value)}`);
         i += 1;
       }
       continue;
@@ -312,7 +307,7 @@ function extractTargetSelectors(
       const flag = token.slice(0, eqIndex);
       const val = token.slice(eqIndex + 1);
       if (FILTER_FLAGS_WITH_VALUE.has(flag)) {
-        if (val) selectors.push(val);
+        if (val) selectors.push(`${flag}=${JSON.stringify(val)}`);
         continue;
       }
     }
@@ -320,9 +315,7 @@ function extractTargetSelectors(
       continue;
     }
     // Positional: path, package, or test id
-    if (PATH_LIKE_RE.test(token) || looksLikeTestSelector(token, family)) {
-      selectors.push(normalizeSelector(token));
-    }
+    selectors.push(normalizeSelector(token));
   }
 
   return selectors;
@@ -345,8 +338,8 @@ function argsAfterRunner(
   }
   if (executable === 'npx') {
     const body = skipLeadingOptions(args);
-    // drop tool name (vitest/jest)
-    return body.slice(1);
+    const runnerArgs = body.slice(1);
+    return family === 'vitest' && runnerArgs[0] === 'run' ? runnerArgs.slice(1) : runnerArgs;
   }
   if (family === 'node-test') {
     return args.filter((a) => a !== '--test');
@@ -373,23 +366,10 @@ function argsAfterRunner(
   return [...args];
 }
 
-function looksLikeTestSelector(token: string, family: string): boolean {
-  if (!token || token.startsWith('-')) return false;
-  // node: package paths like ./pkg or github.com/...
-  if (family === 'go-test' && (/^\.\//.test(token) || token.includes('...'))) return true;
-  // cargo test filter names (no path) — treat bare identifiers after cargo test as targeted
-  if (family === 'cargo-test' && /^[a-zA-Z_][\w:]*$/.test(token)) return true;
-  // pytest node ids
-  if (family === 'pytest' && token.includes('::')) return true;
-  // generic: file-ish or nested path without leading dash
-  if (/\.[a-z0-9]+$/i.test(token) && !token.startsWith('-')) return true;
-  return false;
-}
-
 function selectorsEqual(required: readonly string[], actual: readonly string[]): boolean {
   if (required.length !== actual.length) return false;
-  const actualSet = new Set(actual.map((s) => s.toLowerCase()));
-  return required.every((sel) => actualSet.has(sel.toLowerCase()));
+  const actualSet = new Set(actual);
+  return required.every((sel) => actualSet.has(sel));
 }
 
 const COVERAGE_FLAGS = ['--coverage', '--collectcoverage', '--coverage=true'];
@@ -434,7 +414,7 @@ function hasUnknownRunnerOption(command: string): boolean {
 }
 
 function normalizeSelector(token: string): string {
-  return token.replace(/\\/g, '/').replace(/^\.\//, '').toLowerCase();
+  return token.replace(/\\/g, '/').replace(/^\.\//, '');
 }
 
 function stripLauncher(tokens: readonly string[]): string[] {
@@ -451,31 +431,11 @@ function skipLeadingOptions(args: readonly string[]): string[] {
 }
 
 function tokenizeCommand(command: string): string[] {
-  const tokens: string[] = [];
-  let current = '';
-  let inSingle = false;
-  let inDouble = false;
-  for (let i = 0; i < command.length; i += 1) {
-    const char = command.charAt(i);
-    if (char === "'" && !inDouble) {
-      inSingle = !inSingle;
-      continue;
-    }
-    if (char === '"' && !inSingle) {
-      inDouble = !inDouble;
-      continue;
-    }
-    if (!inSingle && !inDouble && /\s/.test(char)) {
-      if (current.length > 0) {
-        tokens.push(current);
-        current = '';
-      }
-      continue;
-    }
-    current += char;
+  try {
+    return parseCommandArgv(command);
+  } catch {
+    return [];
   }
-  if (current.length > 0) tokens.push(current);
-  return tokens;
 }
 
 function normalizeExecutable(token: string): string {
@@ -487,16 +447,19 @@ function normalizeExecutable(token: string): string {
 }
 
 function normalizeArg(token: string): string {
-  return token.replace(/^['"]|['"]$/g, '').trim().toLowerCase();
+  // Normalize known flag names only. Values are runtime arguments, not prose.
+  const eq = token.indexOf('=');
+  const flag = eq > 0 ? token.slice(0, eq) : token;
+  const lower = flag.toLowerCase();
+  const known = FILTER_FLAGS_WITH_VALUE.has(lower) || BOOLEAN_RUNNER_FLAGS.has(lower)
+    || NON_EXECUTING_FLAGS.has(lower) || NON_EXECUTING_FLAG_PREFIXES.includes(lower);
+  return known && flag.startsWith('--')
+    ? lower + (eq > 0 ? token.slice(eq) : '')
+    : token;
 }
 
 function cleanCommand(raw: string): string {
-  return raw
-    .replace(/\s+/g, ' ')
-    .replace(
-      /\s+from\s+(?:the\s+)?[A-Za-z0-9_.\\/-]+(?:\s+(?:directory|folder|subdirectory))?$/i,
-      '',
-    )
-    .replace(/[.。]\s*$/, '')
-    .trim();
+  // Commands reach this boundary as commands. Presentation/prose cleanup must
+  // happen before extraction, never inside execution identity.
+  return raw.trim();
 }

@@ -31,7 +31,7 @@ test('Chat supplies the current frozen head and private context to the shared ke
     assert.equal(captured.acceptance.run_id, engine.getEngineRunId())
     assert.equal(captured.acceptance.project_root, root)
     assert.equal(result.finalOutcome, 'UNVERIFIED_PATCH')
-    assert.equal(result.reason, 'completion_downgraded:acceptance_unverified')
+    assert.equal(result.reason, 'completion_downgraded:verifier_receipt_invalid')
   } finally {
     if (previous === undefined) delete process.env['BABEL_RUNS_DIR']
     else process.env['BABEL_RUNS_DIR'] = previous

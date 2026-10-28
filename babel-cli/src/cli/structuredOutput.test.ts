@@ -1118,6 +1118,49 @@ describe('Babel Lite result output', () => {
 });
 
 describe('makeRunStreamEvent', () => {
+  it('writes complete UTF-8 JSON and NDJSON through short stdout writes before exit', () => {
+    const script = `
+      import fs from 'node:fs';
+      import { syncBuiltinESMExports } from 'node:module';
+      const originalWrite = fs.writeSync;
+      let retry = true;
+      fs.writeSync = (fd, data, ...args) => {
+        if (fd !== 1) return originalWrite(fd, data, ...args);
+        if (retry) { retry = false; throw Object.assign(new Error('retry'), { code: 'EAGAIN' }); }
+        const bytes = typeof data === 'string' ? Buffer.from(data) : data;
+        const offset = typeof data === 'string' ? 0 : (args[0] ?? 0);
+        const length = typeof data === 'string' ? bytes.length : (args[1] ?? bytes.length - offset);
+        return originalWrite(fd, bytes, offset, Math.min(length, 7));
+      };
+      syncBuiltinESMExports();
+      const { writeJson, writeNdjson } = await import('./src/cli/structuredOutput.ts');
+      writeJson({ text: '漢字🙂'.repeat(50) });
+      writeNdjson({ type: 'log', ts: 'fixed', line: 'é🙂'.repeat(50) });
+      process.exit(0);
+    `;
+    const result = spawnSync(process.execPath, ['--import', 'tsx', '-e', script], {
+      cwd: process.cwd(), encoding: 'utf8', timeout: 15_000,
+    });
+    assert.equal(result.status, 0, result.stderr);
+    const boundary = result.stdout.indexOf('\n{', 1);
+    assert.ok(boundary > 0, 'both output records must be complete');
+    assert.deepEqual(JSON.parse(result.stdout.slice(0, boundary)), { text: '漢字🙂'.repeat(50) });
+    assert.deepEqual(JSON.parse(result.stdout.slice(boundary)), { type: 'log', ts: 'fixed', line: 'é🙂'.repeat(50) });
+  });
+
+  it('delivers a large JSON payload completely over a real stdout pipe', () => {
+    const script = `
+      import { writeJson } from './src/cli/structuredOutput.ts';
+      writeJson({ text: '漢字🙂'.repeat(100_000) });
+      process.exit(0);
+    `;
+    const result = spawnSync(process.execPath, ['--import', 'tsx', '-e', script], {
+      cwd: process.cwd(), encoding: 'utf8', timeout: 15_000, maxBuffer: 4 * 1024 * 1024,
+    });
+    assert.equal(result.status, 0, result.error?.message ?? result.stderr);
+    assert.deepEqual(JSON.parse(result.stdout), { text: '漢字🙂'.repeat(100_000) });
+  });
+
   it('adds timestamps without dropping event fields', () => {
     const event = makeRunStreamEvent('stage', {
       stage_index: 2,

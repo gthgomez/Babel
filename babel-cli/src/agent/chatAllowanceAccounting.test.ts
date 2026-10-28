@@ -138,6 +138,78 @@ test('unlimited wall survives active work, JSON roundtrip and cold resume withou
     malformed.grant.wallAllowance = { kind: 'unlimited' }
     malformed.grant.wallCapMs = 60_000
     assert.equal(parseTaskAllowance(malformed), null, 'a marker cannot upgrade finite evidence')
+    malformed.grant.wallCapMs = NaN
+    assert.equal(parseTaskAllowance(malformed), null, 'NaN cannot become unlimited')
+    malformed.grant.wallCapMs = null
+    malformed.grant.wallAllowance = { kind: 'unknown' }
+    assert.equal(parseTaskAllowance(malformed), null, 'unknown wall evidence cannot become unlimited')
+    malformed.grant.wallAllowance = { kind: 'unlimited' }
+    malformed.repair.postWriteRepairWallCapMs = -1
+    assert.equal(parseTaskAllowance(malformed), null, 'invalid repair state cannot be discarded before validation')
+  } finally {
+    Date.now = originalNow
+    keys.forEach((key, i) => previous[i] === undefined ? delete process.env[key] : process.env[key] = previous[i])
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('unlimited repair survives the old 180-second cap and cold resume with stale derived state', () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-wall-repair-'))
+  const keys = ['BABEL_RUNS_DIR', 'BABEL_CHAT_MAX_WALL_MS', 'BABEL_CHAT_TASK_CLASS']
+  const previous = keys.map(key => process.env[key])
+  process.env['BABEL_RUNS_DIR'] = join(root, 'runs')
+  delete process.env['BABEL_CHAT_MAX_WALL_MS']
+  process.env['BABEL_CHAT_TASK_CLASS'] = 'quick_fix'
+  const originalNow = Date.now
+  let now = 1_800_000_000_000
+  Date.now = () => now
+  try {
+    const engine = new ChatEngine({ task: 'fix the failing implementation', projectRoot: root })
+    engine.applyUserSubmission({ userInput: 'fix the failing implementation' })
+    const access = allowanceAccess(engine)
+    const internals = engine as unknown as {
+      lastVerifierFailed: boolean
+      toolCallLog: Array<{ tool: string; target: string; effect_status: string; mutation_paths: string[] }>
+      conversation: Array<{ content: string }>
+      postWriteRepairWallCapMs: number | null
+      taskAllowanceOwner: { deriveChildAllowance: (rounds: number) => ReturnType<typeof deriveChildAllowance> }
+    }
+    access.beginActiveExecution()
+    now += 10_000
+    accountingAccess(engine).trackRunnerUsage({ getLastInvocationMetadata: () => ({
+      provider: 'openrouter', provider_model_id: 'z-ai/glm-5.3-flash', latency_ms: 0,
+      prompt_tokens: 1000, completion_tokens: 100, total_tokens: 1100, estimated_cost_usd: 1.25,
+    }) })
+    internals.lastVerifierFailed = true
+    writeFileSync(join(root, 'implementation.ts'), 'export const fixed = true\n')
+    internals.toolCallLog.push({ tool: 'str_replace', target: 'implementation.ts',
+      effect_status: 'confirmed_change', mutation_paths: ['implementation.ts'] })
+    access.applyPostWriteRepairBudget()
+    const entered = access.getTaskAllowanceSnapshot()!
+    assert.equal(entered.repair.postWriteRepairRestrict, true)
+    assert.equal(entered.repair.postWriteRepairWallCapMs, null)
+    assert.doesNotMatch(internals.conversation.at(-1)!.content, /Infinity/)
+    access.consumeTaskTurn()
+    now += 200_000
+    assert.equal(access.checkBudgets().ok, true, access.checkBudgets().reason)
+    // Old checkpoints can contain a finite cap derived from an unlimited grant.
+    internals.postWriteRepairWallCapMs = 190_000
+    assert.equal(access.checkBudgets().ok, true)
+    assert.equal(internals.taskAllowanceOwner.deriveChildAllowance(2).deadlineAtMs, null)
+    access.pauseActiveExecution()
+    const before = access.getTaskAllowanceSnapshot()!
+    const resumed = new ChatEngine({ task: 'fix the failing implementation', projectRoot: root,
+      runId: engine.getEngineRunId(), resumeExisting: true })
+    const restored = allowanceAccess(resumed).getTaskAllowanceSnapshot()!
+    assert.equal(allowanceAccess(resumed).checkBudgets().ok, true)
+    assert.equal(restored.repair.postWriteRepairWallCapMs, null)
+    assert.equal(restored.repair.postWriteRepairRestrict, true)
+    assert.equal(restored.taskOwnerId, before.taskOwnerId)
+    assert.deepEqual(restored.grant, before.grant)
+    assert.deepEqual(restored.consumed, before.consumed)
+    assert.equal(restored.consumed.activeWallMs, 210_000)
+    assert.equal(restored.consumed.turns, 1)
+    assert.ok(restored.consumed.costUsd > 0)
   } finally {
     Date.now = originalNow
     keys.forEach((key, i) => previous[i] === undefined ? delete process.env[key] : process.env[key] = previous[i])
@@ -180,6 +252,31 @@ test('historical finite wall evidence expires honestly after cold resume under u
     Date.now = originalNow
     if (previous === undefined) delete process.env['BABEL_RUNS_DIR']
     else process.env['BABEL_RUNS_DIR'] = previous
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('historical finite repair caps survive cold resume under unlimited defaults', () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-wall-finite-repair-'))
+  const previousRuns = process.env['BABEL_RUNS_DIR']
+  process.env['BABEL_RUNS_DIR'] = join(root, 'runs')
+  try {
+    const engine = new ChatEngine({ task: 'finite repair', projectRoot: root, maxWallMs: 600_000 })
+    engine.applyUserSubmission({ userInput: 'finite repair' })
+    const internals = engine as unknown as {
+      postWriteRepairWallCapMs: number | null
+      taskAllowance: { consumed: { activeWallMs: number } }
+    }
+    internals.postWriteRepairWallCapMs = 180_000
+    internals.taskAllowance.consumed.activeWallMs = 200_000
+    allowanceAccess(engine).persistTaskAllowance()
+    const resumed = new ChatEngine({ task: 'finite repair', projectRoot: root,
+      runId: engine.getEngineRunId(), resumeExisting: true })
+    assert.equal(allowanceAccess(resumed).getTaskAllowanceSnapshot()!.repair.postWriteRepairWallCapMs, 180_000)
+    assert.equal(allowanceAccess(resumed).checkBudgets().limiter, 'wall_repair')
+  } finally {
+    if (previousRuns === undefined) delete process.env['BABEL_RUNS_DIR']
+    else process.env['BABEL_RUNS_DIR'] = previousRuns
     rmSync(root, { recursive: true, force: true })
   }
 })

@@ -3,7 +3,7 @@
   "algorithm": "sha256",
   "purpose": "drift_detection_not_authorization",
   "normalization": "utf8_crlf_to_lf",
-  "policy_bundle_id": "a7ed1644fdb90bc7d26fc1d40f086e9edd5b62888ee65e7724ff1103ad1d696b",
+  "policy_bundle_id": "ae3877fd38690cef982d369cb15e7e3471565eeed1efca6bde6eace5c24f7118",
   "files": {
     ".github/workflows/public-pr-metadata.yml": "67e630d700055533ee77157ed05fc347161c7c041e35151f2652ffd9b9973023",
     ".github/workflows/publish-npm.yml": "54036b704d59e513cbbb981efa00e82121e40871d6dfe789c8636bd0159f8c9e",
@@ -23,7 +23,7 @@
     "babel-cli/src/authority/commandSpec.ts": "778d5479cdaa249332dc6b47a62934384bb3c0e03cd4424847102937751b20fe",
     "babel-cli/src/authority/convergence-integrity.regression-gate.test.ts": "7c80ed633d94f05c006d18fe3195fe21caf863d97c0b6fef33eeeb6e1e4c06d4",
     "babel-cli/src/authority/convergence-parser.regression-gate.test.ts": "57bfd75d9255634883d02f951e50fea01717c2b9dd4a3293e88921158bb51ead",
-    "babel-cli/src/authority/criterionCompletion.test.ts": "eb629c096081c502b131e576c19d14ee353d5fa9c0aa57df6f201aa7b259ac14",
+    "babel-cli/src/authority/criterionCompletion.test.ts": "9c63e8bbc9efe05cd4cdc85c510bde55aa08f8e8f244ba20a3a342e0e57b833c",
     "babel-cli/src/authority/criterionCompletion.ts": "000aa6bbd930d3322adbbaef46e610fe5ced723b8488c3395b264348f8e7ac86",
     "babel-cli/src/authority/criterionExecutionPublisher.test.ts": "acfb4aca09649f2a4d52a462209277e01407854a143df33e529e2b33bca2ea2e",
     "babel-cli/src/authority/criterionExecutionPublisher.ts": "b492d49c7c4e4cb067706a9ccd15893795c1c11c740f532a33e824db4d478632",

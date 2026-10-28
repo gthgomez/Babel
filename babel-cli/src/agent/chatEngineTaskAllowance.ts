@@ -9,7 +9,7 @@ import type {
   ChatEngineLimits,
   ChatRunLimiter,
 } from "../config/chatEngineLimits.js";
-import { CHAT_WALL_CEILING_MS, describeWallAllowance } from "../config/chatEngineLimits.js";
+import { CHAT_WALL_CEILING_MS, describeWallAllowance, effectiveTaskWallCapMs } from "../config/chatEngineLimits.js";
 import {
   deriveChildAllowance,
   taskOwnerAllowanceAccountingComplete,
@@ -285,6 +285,11 @@ export class ChatEngineTaskAllowance {
     this.host.taskCostBaselineUsd = persisted.taskCostBaselineUsd;
     this.host.lastTurnRuntime = persisted.lastTurnRuntime ?? null;
     this.host.criticRepairCostCapUsd = persisted.repair.criticRepairCostCapUsd;
+    // Parsing has validated the explicit unlimited marker. Older checkpoints
+    // may still carry a finite deadline derived by the repair-window policy.
+    if (persisted.grant.wallCapMs === Infinity) {
+      persisted.repair.postWriteRepairWallCapMs = null;
+    }
     this.host.postWriteRepairWallCapMs =
       persisted.repair.postWriteRepairWallCapMs;
     this.host.postWriteRepairRestrict =
@@ -417,12 +422,7 @@ export class ChatEngineTaskAllowance {
 
   effectiveWallCapMs(): number {
     const granted = this.host.taskAllowance?.grant.wallCapMs ?? this.host.limits.maxWallMs;
-    return this.host.postWriteRepairWallCapMs == null
-      ? granted
-      : Math.min(
-          granted,
-          this.host.postWriteRepairWallCapMs,
-        );
+    return effectiveTaskWallCapMs(granted, this.host.postWriteRepairWallCapMs);
   }
 
   deriveChildAllowance(maxRounds: number): InheritedChildAllowance {

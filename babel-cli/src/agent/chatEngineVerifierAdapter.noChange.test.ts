@@ -56,7 +56,7 @@ test('completion refresh checks each receipt object once per invocation and obse
 function project(): string {
   const root = mkdtempSync(join(tmpdir(), 'babel-green-nochange-verifier-'))
   temporaryRoots.push(root)
-  return root
+  return realpathSync.native(root)
 }
 
 for (const repositoryScope of [false, true]) {
@@ -71,6 +71,10 @@ for (const repositoryScope of [false, true]) {
     })
     assert.ok(receipt)
     assert.equal(receipt.boundRevision?.scope?.kind, repositoryScope ? 'repository' : 'files')
+    const executionContext = { workspaceRoot: root, taskId: 'task', contractHash: 'contract',
+      workingDirectory: root, environmentFingerprint: 'frozen-test-environment', targetSelectors: [] }
+    receipt.executionContext = executionContext
+    receipt.order = { sessionId: 'session', seq: 0 }
     const captured = captureCompletionWorkspaceRevisionHash({ projectRoot: root }, ['changed.txt'], receipt)
     assert.equal(captured, receipt.boundRevision?.compositeTreeHash)
     assert.equal(
@@ -83,6 +87,8 @@ for (const repositoryScope of [false, true]) {
       taskClass: 'general_swe', lastVerifierReceipt: receipt,
       executedVerifierLedger: kernel.executedVerifierLedger, verifierEvidenceErrors: kernel.verifierEvidenceErrors,
       requiredVerifierCommands: ['npm test'], projectTestCommands: ['npm test'],
+      requiredVerifiers: [{ command: 'npm test', executionContext, requiredScope: 'full_suite', greenRequired: true }],
+      verifierOwner: { workspaceRoot: root, taskId: 'task', contractHash: 'contract', sessionId: 'session' },
       toolCallLog: [
         { tool: 'write_file', target: 'changed.txt', exit_code: 0, effect_status: 'confirmed_change' },
         { tool: 'test_run', target: 'npm test', exit_code: 0 },

@@ -65,8 +65,8 @@ describe('verifier cache identity', () => {
       verifierEnvironmentKey({ PATH: '/usr/bin', NODE_ENV: 'test', BABEL_EXECUTION_PROFILE: 'deep' }),
       base,
     );
-    // Unrelated variables do not change the fingerprint.
-    assert.equal(verifierEnvironmentKey({ PATH: '/usr/bin', NODE_ENV: 'test', UNRELATED: 'x' }), base);
+    // Unknown relevance must narrow reuse rather than assuming irrelevance.
+    assert.notEqual(verifierEnvironmentKey({ PATH: '/usr/bin', NODE_ENV: 'test', UNRELATED: 'x' }), base);
   });
 });
 
@@ -436,3 +436,13 @@ describe('verifier cache executions follow argv identity', { concurrency: false 
     assert.equal(cachedLog?.effect_status, 'confirmed_no_change', 'cache reuse executes no process');
   });
 });
+
+test('host-selected project root is pinned consistently before dispatch and completion', () => {
+  const prior=process.env['BABEL_PROJECT_ROOT']
+  try {
+    delete process.env['BABEL_PROJECT_ROOT']
+    const before=resolveVerifierCacheIdentity({projectRoot:process.cwd(),command:'npm test'})
+    process.env['BABEL_PROJECT_ROOT']=process.cwd()
+    assert.deepEqual(resolveVerifierCacheIdentity({projectRoot:process.cwd(),command:'npm test'}),before)
+  } finally {if(prior===undefined)delete process.env['BABEL_PROJECT_ROOT'];else process.env['BABEL_PROJECT_ROOT']=prior}
+})

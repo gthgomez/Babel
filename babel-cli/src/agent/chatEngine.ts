@@ -1,3 +1,6 @@
+import { restoreFailedVerifierHistory, unresolvedFailedVerifierHistory, attestedFailedVerifierExecution } from './codingLoop/failedVerifierExecution.js';
+import { chatVerifierOwner, chatVerifierRequirements } from './chatVerifierContext.js';
+import { greenProof, selectCompletionProof } from './completionGatePolicy.js';
 import { executedVerifierProgressSignature } from './toolExecutionIdentity.js';
 import {normalizeChatExecutionScope,requireProjectRoot,assertConversationRestoreScope,assertBoundGitProjectScope} from './chatExecutionScope.js';
 import type { RunControl, StopRequest } from '../runtime/run-control.js';
@@ -267,7 +270,7 @@ import type { AdmissionStore } from "../runtime/admission.js";
 import { captureSessionEventAppendFailure } from "./sessionEventDiagnostics.js";
 import { buildChatEngineRepoMapPreamble } from "./repoMapPreamble.js";
 import { normalizeChatAnswer } from './chatResponseContract.js';
-import { unsupportedTestClaim } from './chatResponseEvidence.js';
+import { unsupportedTestClaim, unsupportedMutationClaim } from './chatResponseEvidence.js';
 import { refreshChatVerifierReceiptStalenessSync } from '../evidence/chatRevisionBinding.js';
 import { ContextPreparationError } from './chatContextFailure.js';
 import { runChatEngineCompactionFor } from "./chatEngineCompactionHost.js";
@@ -420,6 +423,7 @@ import { persistPreambleBudget } from "./preambleBudgetDiagnostics.js";
 import {
   captureCompletionWorkspaceRevisionHash,
   prepareKernelVerifierInput,
+  resolveVerifierCacheIdentity,
   resolveEngineRequiredVerifiers,
   restorePersistedVerifierEvidence,
   refreshChatCompletionVerifierCurrency,
@@ -503,6 +507,8 @@ export class ChatEngine {
     stderr?: string;
     verified?: boolean;
     verifierExecuted?: boolean;
+    verifierSemanticSignature?: string;
+    preDispatchNoEffect?: true;
     mutation_paths?: string[];
     effect_status?: MutationEffectStatus;
     effect_scope?: import('./mutationTools.js').MutationEffectScope;
@@ -1123,23 +1129,6 @@ export class ChatEngine {
         .map((entry) => entry.command)
         .filter((command) => command.trim().length > 0);
       const verifierInput = this.buildVerifierInput();
-      // H5: live workspace revision at gate time (not the receipt's own bound hash).
-      let currentWorkspaceRevisionHash: string | undefined =
-        this.testWorkspaceRevisionHash !== null
-          ? (this.testWorkspaceRevisionHash ?? undefined)
-          : undefined;
-      try {
-        const paths = mutationPathsFromSessionEvents(
-          this.parity.sessionEvents.events,
-        );
-        if (paths.length > 0) {
-          currentWorkspaceRevisionHash = captureCompletionWorkspaceRevisionHash(
-            this.options, paths, this.lastVerifierReceipt,
-          );
-        }
-      } catch {
-        /* best-effort */
-      }
       return evaluateCompletionGateForEngine({
         turnType: turnResult.type,
         taskIntent,
@@ -1150,10 +1139,13 @@ export class ChatEngine {
         executedVerifierLedger: verifierInput.executedVerifierLedger ?? null,
         verifierEvidenceErrors: verifierInput.verifierEvidenceErrors ?? null,
         requiredVerifierCommands: verifierInput.requiredVerifierCommands,
+        requiredVerifiers: verifierInput.requiredVerifiers,
+        currentReceiptRevisionHashes: verifierInput.currentReceiptRevisionHashes,
+        ...(verifierInput.unplannedAttemptEnvironmentFingerprint ? {unplannedAttemptEnvironmentFingerprint:verifierInput.unplannedAttemptEnvironmentFingerprint} : {}),
+        ...(verifierInput.verifierOwner ? { verifierOwner: verifierInput.verifierOwner } : {}),
+        ...(verifierInput.currentWorkspaceRevisionHash ? { currentWorkspaceRevisionHash: verifierInput.currentWorkspaceRevisionHash } : {}),
         projectTestCommands,
-        ...(currentWorkspaceRevisionHash
-          ? { currentWorkspaceRevisionHash }
-          : {}),
+
       });
     } finally {
       const verifEnd = performance.now();
@@ -1178,6 +1170,11 @@ export class ChatEngine {
       executedVerifierLedger: verifierInput.executedVerifierLedger ?? null,
       verifierEvidenceErrors: verifierInput.verifierEvidenceErrors ?? null,
       requiredVerifierCommands: verifierInput.requiredVerifierCommands,
+        requiredVerifiers: verifierInput.requiredVerifiers,
+        currentReceiptRevisionHashes: verifierInput.currentReceiptRevisionHashes,
+        ...(verifierInput.unplannedAttemptEnvironmentFingerprint ? {unplannedAttemptEnvironmentFingerprint:verifierInput.unplannedAttemptEnvironmentFingerprint} : {}),
+        ...(verifierInput.verifierOwner ? { verifierOwner: verifierInput.verifierOwner } : {}),
+        ...(verifierInput.currentWorkspaceRevisionHash ? { currentWorkspaceRevisionHash: verifierInput.currentWorkspaceRevisionHash } : {}),
       ...(testCommands
         ? { projectTestCommands: testCommands.split(", ") }
         : {}),
@@ -1419,14 +1416,19 @@ export class ChatEngine {
     compliant: boolean;
     errors?: string[];
   } {
-    return evaluateChatCompletionProof({
+    const selected = this.buildVerifierInput();
+    const proofs = selected.selectedChatReceipts.map(receipt => evaluateChatCompletionProof({
       projectRoot: requireProjectRoot(this.options),
       hasMutation,
       verifierTampered: this.verifierTampered,
-      receipt: this.lastVerifierReceipt,
+      receipt,
       events: this.parity.sessionEvents.events,
       isAuthoritativeCommand: isAuthoritativeVerifierCommand,
-    });
+    }));
+    const errors = [...selected.proofSelection.evidenceErrors, ...selected.proofSelection.integrityFindings,
+      ...proofs.flatMap(proof => proof.errors ?? [])];
+    if (!proofs.length || selected.proofSelection.missingRequirements.length || selected.proofSelection.unresolvedRelevantFailures.length) errors.push('missing current covering green proof');
+    return { compliant: errors.length === 0, ...(errors.length ? { errors } : {}) };
   }
 
   private readCacheKey(filePath: string): string {
@@ -1597,14 +1599,7 @@ export class ChatEngine {
       this.terminalLimiterReason = reason;
       return { ok: false, reason, limiter: "cost" };
     }
-    // After first write: absolute wall cap from session start (repair window).
-    const maxWallMs =
-      this.postWriteRepairWallCapMs != null
-        ? Math.min(
-            this.taskAllowance.grant.wallCapMs,
-            this.postWriteRepairWallCapMs,
-          )
-        : this.taskAllowance.grant.wallCapMs;
+    const maxWallMs = this.effectiveWallCapMs();
     const result = checkCostWallBudgets({
       totalCostUsd: taskCost,
       maxCostUsd,
@@ -2399,6 +2394,10 @@ export class ChatEngine {
     const taskLog=activeObjectiveSessionLog(log,this.parity.liveAuthority?.taskObjectiveLifecycle);
     this.restorePersistedVerifierEvidence(activeAcceptanceSessionLog(log,this.parity.liveAuthority?.taskObjectiveLifecycle));
     this.restoreRecoveryWorkingState(taskLog,activeAcceptanceSessionLog(log,this.parity.liveAuthority?.taskObjectiveLifecycle));
+    const failedHistory = restoreFailedVerifierHistory(taskLog, this.currentVerifierOwner());
+    this.workingState.failedVerifierHistory = failedHistory.history;
+    if (failedHistory.overflow) this.workingState.failedVerifierHistoryOverflow = true;
+    else delete this.workingState.failedVerifierHistoryOverflow;
     const repairGuidance = resumedToolRecoveryGuidance(
       this.parity.sessionEvents,
     );
@@ -2431,119 +2430,33 @@ export class ChatEngine {
     rawTarget: string,
   ): boolean {
     const localization = this.workingState.localization;
-    if (!localization || (localization.phase === "localized" && !localization.importCandidates?.length)) return true;
-    if (
-      localization.phase === "exhausted" ||
-      localization.calls >= 4 ||
-      localization.rounds >= 2
-    ) {
+    if (localization) {
+      const target = recoveryTargetIdentity(requireProjectRoot(this.options), rawTarget) ?? undefined;
       this.workingState = applyWorkingStateEvent(this.workingState, {
-        type: "localization_update",
-        localization: { ...localization, phase: "exhausted" },
+        type: "localization_update", localization: beginLocalizationCall(localization, target),
       });
       this.persistRecoveryWorkingState();
-      return false;
     }
-    const current = this.currentRecoveryBinding();
-    if (!current || !sameRecoveryBinding(localization.binding, current)) {
-      this.workingState = applyWorkingStateEvent(this.workingState, {
-        type: "recovery_candidate_drift",
-      });
-      this.persistRecoveryWorkingState();
-      return false;
-    }
-    const target =
-      recoveryTargetIdentity(requireProjectRoot(this.options), rawTarget) ?? undefined;
-    this.workingState = applyWorkingStateEvent(this.workingState, {
-      type: "localization_update",
-      localization: beginLocalizationCall(localization, target),
-    });
-    this.persistRecoveryWorkingState();
+    // Candidate hints and their counters never deny an otherwise governed read.
     return true;
   }
 
   private finishRecoveryLocalizationInspection(input: {
-    tool: string;
-    rawTarget: string;
-    content?: string;
-    succeeded: boolean;
-    startLine?: number;
-    pattern?: string;
+    tool: string; rawTarget: string; content?: string; succeeded: boolean; startLine?: number; pattern?: string;
   }): void {
     const localization = this.workingState.localization;
-    if (!localization || (localization.phase !== "LOCALIZE_FAILURE" &&
-        !(localization.phase === "localized" && localization.importCandidates?.length))) return;
-    const current = this.currentRecoveryBinding();
-    if (!current || !sameRecoveryBinding(localization.binding, current)) {
-      this.workingState = applyWorkingStateEvent(this.workingState, { type: 'recovery_candidate_drift' });
-      this.persistRecoveryWorkingState();
-      return;
-    }
-    const target =
-      recoveryTargetIdentity(requireProjectRoot(this.options), input.rawTarget) ??
-      undefined;
-    const withCandidates =
-      input.tool === "glob" && input.succeeded && input.pattern && input.content
-        ? discoverTestCandidates(
-            localization,
-            requireProjectRoot(this.options),
-            input.pattern,
-            input.content,
-          )
-        : localization;
-    const updated = finishLocalizationCall(withCandidates, {
-      type: input.tool,
-      succeeded: input.succeeded,
-      projectRoot: requireProjectRoot(this.options),
-      ...(target ? { target } : {}),
-      ...(input.content !== undefined ? { content: input.content } : {}),
-      ...(input.startLine !== undefined ? { startLine: input.startLine } : {}),
-    });
+    const current = localization ? this.currentRecoveryBinding() : null;
+    if (!localization || !current || !sameRecoveryBinding(localization.binding, current)) return;
+    const target = recoveryTargetIdentity(requireProjectRoot(this.options), input.rawTarget) ?? undefined;
+    const withCandidates = input.tool === "glob" && input.succeeded && input.pattern && input.content
+      ? discoverTestCandidates(localization, requireProjectRoot(this.options), input.pattern, input.content) : localization;
     this.workingState = applyWorkingStateEvent(this.workingState, {
-      type: "localization_update",
-      localization: updated,
+      type: "localization_update", localization: finishLocalizationCall(withCandidates, {
+        type: input.tool, succeeded: input.succeeded, projectRoot: requireProjectRoot(this.options),
+        ...(target ? { target } : {}), ...(input.content !== undefined ? { content: input.content } : {}),
+        ...(input.startLine !== undefined ? { startLine: input.startLine } : {}),
+      }),
     });
-    if (
-      updated.phase === "localized" &&
-      updated.acceptedPath &&
-      updated.acceptedPath === target && input.succeeded &&
-      (input.tool === 'read_file' || input.tool === 'read_range') &&
-      input.content !== undefined &&
-      updated.observationDigest === createHash('sha256').update(input.content).digest('hex') &&
-      updated.observationDigest &&
-      this.workingState.recoveryGate
-    ) {
-      const imported = updated.candidates.some(candidate => candidate.path === updated.acceptedPath && (candidate.source === 'import_call' || candidate.source === 'file_read'));
-      if (imported) {
-        this.workingState = applyWorkingStateEvent(this.workingState, {
-          type: 'localization_import_evidence',
-          provenance: { tool: input.tool, target: updated.acceptedPath,
-            failureSignature: updated.failureSignature, binding: updated.binding,
-            observationDigest: updated.observationDigest },
-        });
-        this.persistRecoveryWorkingState();
-        return;
-      }
-      this.workingState = {
-        ...this.workingState,
-        recoveryGate: {
-          ...this.workingState.recoveryGate,
-          failingTargets: [...new Set([...(this.workingState.recoveryGate.failingTargets ?? []), updated.acceptedPath])],
-        },
-      };
-      this.workingState = applyWorkingStateEvent(this.workingState, {
-        type: "add_evidence",
-        evidence: `${input.tool}:${updated.acceptedPath}`,
-        discriminating: true,
-        provenance: {
-          tool: input.tool,
-          target: updated.acceptedPath,
-          failureSignature: updated.failureSignature,
-          binding: updated.binding,
-          observationDigest: updated.observationDigest,
-        },
-      });
-    }
     this.persistRecoveryWorkingState();
   }
 
@@ -2595,6 +2508,22 @@ export class ChatEngine {
       if (restored) {
         if (restored.lastVerifier && !certificationLog.events.some(event=>event.event_id===latestSnapshot.event_id))
           restored.lastVerifier.fresh=false;
+        const current = this.currentRecoveryBinding();
+        const previous = restored.recoveryGate?.binding;
+        if (previous && current && (previous.taskId !== current.taskId || previous.contractHash !== current.contractHash ||
+            previous.repositoryIdentity !== current.repositoryIdentity)) {
+          this.workingState = createWorkingState(this.options.task);
+          return;
+        }
+        if (restored.recoveryGate && (!previous || !current || !sameRecoveryBinding(previous, current))) {
+          restored.recoveryGate = { ...restored.recoveryGate, satisfied: false, planAdmitted: false,
+            readRecords: [], observedKeys: [], strategyChanged: false };
+          restored.nextExperiment = 'The restored read records do not bind the current candidate. Rerun the verifier and acquire fresh reads.';
+        }
+        if (restored.settledFailedVerifier && (!attestedFailedVerifierExecution(log, restored.settledFailedVerifier) ||
+            restored.settledFailedVerifier.owner.taskId !== this.currentVerifierOwner()?.taskId ||
+            restored.settledFailedVerifier.owner.contractHash !== this.currentVerifierOwner()?.contractHash ||
+            restored.settledFailedVerifier.owner.workspaceRoot !== this.currentVerifierOwner()?.workspaceRoot)) delete restored.settledFailedVerifier;
         this.workingState = restored;
         return;
       }
@@ -2661,6 +2590,8 @@ export class ChatEngine {
       exit_code?: number;
       target?: string;
       verifierExecuted?: boolean;
+    verifierSemanticSignature?: string;
+    preDispatchNoEffect?: true;
     }>,
   ): boolean {
     const signature = executedVerifierProgressSignature(results);
@@ -2674,22 +2605,64 @@ export class ChatEngine {
     this.lastVerifierReceipt = restorePersistedVerifierEvidence(
       log,
       this.executedVerifierLedger,
+      this.currentVerifierOwner(),
     );
   }
 
   /** Build the single canonical verifier input shared by every completion gate. */
-  private buildVerifierInput(): ReturnType<
-    typeof prepareKernelVerifierInput
-  > & {
-    requiredVerifierCommands: string[];
-  } {
-    return {
-      ...prepareKernelVerifierInput(
-        this.lastVerifierReceipt,
-        this.executedVerifierLedger,
-      ),
-      requiredVerifierCommands: this.getResolvedRequiredVerifiers(),
-    };
+  private currentVerifierOwner() {
+    const taskOwner = this.taskAllowance?.taskOwnerId ?? this.engineRunId;
+    return chatVerifierOwner({ projectRoot: this.options.projectRoot, sessionId: this.parity.sessionEvents.session_id,
+      taskId: this.parity.liveAuthority?.taskContract.task_id ?? taskOwner,
+      contractHash: this.parity.liveAuthority?.taskContract.contract_hash ?? `uncontracted:${taskOwner}` });
+  }
+
+  private buildVerifierInput() {
+    const verifierOwner = this.currentVerifierOwner();
+    const requiredVerifierCommands = this.getResolvedRequiredVerifiers();
+    const requiredVerifiers = chatVerifierRequirements(verifierOwner, requiredVerifierCommands, this.options.task, this.options.projectRoot ?? undefined);
+    const canonical = prepareKernelVerifierInput(this.lastVerifierReceipt, this.executedVerifierLedger);
+    const currentOwnerReceipts = this.executedVerifierLedger.filter(receipt => receipt.executionContext?.taskId === verifierOwner?.taskId &&
+      receipt.executionContext?.contractHash === verifierOwner?.contractHash && receipt.executionContext?.workspaceRoot === verifierOwner?.workspaceRoot);
+    const currentReceiptRevisionHashes: Record<string,string> = {};
+    for (const receipt of currentOwnerReceipts) {
+      try {
+        const live = captureCompletionWorkspaceRevisionHash(this.options, mutationPathsFromSessionEvents(this.parity.sessionEvents.events), receipt);
+        if (live && receipt.receiptId) currentReceiptRevisionHashes[receipt.receiptId] = live;
+      } catch { /* This receipt cannot establish live currency. */ }
+    }
+    let currentWorkspaceRevisionHash: string | undefined;
+    try {
+      currentWorkspaceRevisionHash = captureCompletionWorkspaceRevisionHash(this.options,
+        mutationPathsFromSessionEvents(this.parity.sessionEvents.events), currentOwnerReceipts.at(-1) ?? null);
+    } catch { /* Missing live evidence remains missing, never copied from a receipt. */ }
+    if (this.testWorkspaceRevisionHash !== undefined) {
+      currentWorkspaceRevisionHash = this.testWorkspaceRevisionHash ?? undefined;
+      for (const receipt of currentOwnerReceipts) {
+        if (!receipt.receiptId) continue;
+        if (this.testWorkspaceRevisionHash) currentReceiptRevisionHashes[receipt.receiptId] = this.testWorkspaceRevisionHash;
+        else delete currentReceiptRevisionHashes[receipt.receiptId];
+      }
+    }
+    const unplannedAttemptEnvironmentFingerprint = verifierOwner
+      ? resolveVerifierCacheIdentity({projectRoot:requireProjectRoot(this.options),command:''}).envKey : undefined;
+    const proofSelection = selectCompletionProof({ requiredVerifiers, ...(verifierOwner ? { owner: verifierOwner } : {}),
+      currentRevisionHash: currentWorkspaceRevisionHash ?? '', currentReceiptRevisionHashes, receipts: canonical.executedVerifierLedger ?? [] });
+    const attemptSelection = requiredVerifiers.length || !unplannedAttemptEnvironmentFingerprint ? proofSelection : selectCompletionProof({
+      requiredVerifiers:[], ...(verifierOwner ? {owner:verifierOwner} : {}), currentRevisionHash:currentWorkspaceRevisionHash ?? '',currentReceiptRevisionHashes,
+      unplannedAttemptEnvironmentFingerprint,receipts:canonical.executedVerifierLedger ?? [],
+    });
+    const currentGreens = (canonical.executedVerifierLedger ?? []).filter(receipt => attemptSelection.currentAttempts.includes(receipt) && greenProof(receipt));
+    const history = (this.workingState.failedVerifierHistory ?? []).filter(descriptor =>
+      attestedFailedVerifierExecution(this.parity.sessionEvents, descriptor) && descriptor.owner.taskId === verifierOwner?.taskId &&
+      descriptor.owner.contractHash === verifierOwner?.contractHash && descriptor.owner.workspaceRoot === verifierOwner?.workspaceRoot);
+    const unresolvedHistory = unresolvedFailedVerifierHistory(history, currentGreens);
+    const historyErrors = this.workingState.failedVerifierHistoryOverflow || unresolvedHistory.length > 0
+      ? ['Settled failed verifier execution requires newer covering current green evidence'] : [];
+    proofSelection.evidenceErrors.push(...historyErrors);
+    const selectedIds = new Set(proofSelection.selectedCoveringReceipts.map(receipt => receipt.receiptId));
+    const selectedChatReceipts = this.executedVerifierLedger.filter(receipt => selectedIds.has(receipt.receiptId));
+    return { ...canonical, verifierEvidenceErrors: canonical.verifierEvidenceErrors, requiredVerifierCommands, requiredVerifiers, verifierOwner, currentWorkspaceRevisionHash, currentReceiptRevisionHashes, unplannedAttemptEnvironmentFingerprint, proofSelection, selectedChatReceipts };
   }
 
   /**
@@ -2723,8 +2696,8 @@ export class ChatEngine {
     if (requestedOutcome === 'VERIFIED_COMPLETE') {
       this.criterionCompletion?.refreshPrivateEvidence({
         proof,
-        receipt: this.lastVerifierReceipt,
-        receipts: this.executedVerifierLedger,
+        receipt: verifierInput.selectedChatReceipts.at(-1) ?? null,
+        receipts: verifierInput.selectedChatReceipts,
         candidate_sha: this.criterionCandidateRevisionSha(),
         has_mutation: hasMutation,
       })
@@ -2739,6 +2712,10 @@ export class ChatEngine {
       executedVerifierLedger: verifierInput.executedVerifierLedger,
       verifierEvidenceErrors: verifierInput.verifierEvidenceErrors,
       requiredVerifierCommands: verifierInput.requiredVerifierCommands,
+        requiredVerifiers: verifierInput.requiredVerifiers,
+        currentReceiptRevisionHashes: verifierInput.currentReceiptRevisionHashes,
+        ...(verifierInput.verifierOwner ? { verifierOwner: verifierInput.verifierOwner } : {}),
+        ...(verifierInput.currentWorkspaceRevisionHash ? { currentWorkspaceRevisionHash: verifierInput.currentWorkspaceRevisionHash } : {}),
       toolCallLog: toGateToolLog(this.toolCallLog),
       acceptance: this.criterionCompletion?.currentRequest(),
       ...(this.lastVerifierReceipt?.boundRevision
@@ -3441,8 +3418,8 @@ export class ChatEngine {
         const containsSubAgent = batch.indices.some(
           (index) => actions[index]?.type === "sub_agent",
         );
-        // Recovery reads share a bounded, ordered evidence state. A later
-        // admission cannot exhaust it before earlier reads have settled.
+        // Keep related discovery observations ordered while hints are being
+        // updated. These counters no longer refuse authorized reads.
         const recoveryLocalization = this.workingState.localization;
         if (containsSubAgent || (recoveryLocalization &&
             (recoveryLocalization.phase !== "localized" || recoveryLocalization.importCandidates?.length))) {
@@ -3916,8 +3893,8 @@ export class ChatEngine {
       refreshChatVerifierReceiptStalenessSync(this.options.projectRoot, this.lastVerifierReceipt);
       for (const receipt of this.executedVerifierLedger) refreshChatVerifierReceiptStalenessSync(this.options.projectRoot, receipt);
     }
-    if (unsupportedTestClaim(answer, this.lastVerifierReceipt, this.executedVerifierLedger)) {
-      throw new Error('RESPONSE_EVIDENCE_INVALID: terminal synthesis claimed test results without corresponding execution evidence.');
+    if (unsupportedMutationClaim(answer, this.hasAnyWrites()) || unsupportedTestClaim(answer, this.lastVerifierReceipt, this.executedVerifierLedger)) {
+      throw new Error('RESPONSE_EVIDENCE_INVALID: terminal synthesis claimed completed work without corresponding execution or mutation evidence.');
     }
     return normalizeChatAnswer(answer, currentRequest);
   }
@@ -4418,30 +4395,25 @@ export class ChatEngine {
   }
 
   private buildVerifierBlockedReport(reason: string): BlockedReport {
-    if (this.workingState.localization?.phase === "exhausted") {
-      const localization = this.workingState.localization;
-      return {
-        schema_version: 1,
-        status: "BLOCKED",
-        reason_code: "localization_exhausted",
-        cause_class: "harness",
-        reason:
-          "LOCALIZATION_EXHAUSTED: no diagnostic candidate was corroborated within the bounded allowance.",
-        missing:
-          "A source or test location supported by a content-bearing read and the failure diagnostic.",
-        checked: [
-          {
-            action: "localize_failure",
-            target: localization.failureSignature.slice(0, 180),
-            finding: `${localization.calls} inspection call(s), ${localization.rounds} candidate scope(s); no accepted target`,
-          },
-        ],
-      };
-    }
     // R0-A: a harness-origin block must carry REAL checked evidence, never an
     // empty `checked` array (BlockedReportSchema requires >=1) and never a fake
     // placeholder. Prefer the actual verifier attempt when one ran red; else the
     // completion gate's own rejection is the evidence of record.
+    const gate = this.workingState.recoveryGate;
+    if (gate) {
+      const records = gate.readRecords ?? [];
+      const failed = this.workingState.settledFailedVerifier;
+      return { schema_version: 1, status: "BLOCKED", reason, reason_code: "verification_failed", cause_class: "verification",
+        missing: gate.failureSignature === "unbound-red-verifier" || !gate.binding
+          ? "Re-observe the exact failed verifier through its governed execution context to bind the current failure."
+          : records.length ? "A concrete repair plan referencing current delivered reads for every existing edit target, followed by verification."
+            : "Fresh delivered reads of the failure and relevant implementation; diagnostic candidates are inspection hints.",
+        checked: records.length ? records.slice(-4).map(record => ({ action: record.tool, target: record.target,
+          finding: `Retained read ${record.id}: lines ${record.window.startLine}-${record.window.endLine} of ${record.window.totalLines}; full file=${record.window.completeFile}.` }))
+          : [{ action: failed ? "test_run" : "recovery_gate", target: failed?.command ?? this.workingState.lastVerifier?.identity ?? "failure",
+            finding: failed ? `Started verifier settled with exit ${failed.exitCode}; this execution history is not a completion receipt.` : gate.requiredEvidence }],
+      };
+    }
     const receipt = this.lastVerifierReceipt;
     const redReceipt =
       receipt && receipt.exit_code !== 0 && receipt.stale !== true

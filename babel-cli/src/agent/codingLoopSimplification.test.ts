@@ -391,7 +391,7 @@ describe('ordinary coding-loop behaviors', () => {
       ].join('\n') + '\n');
       writeFileSync(join(root, 'package.json'), JSON.stringify({
         name: 'coding-loop-current-information-fixture', private: true,
-        scripts: { test: 'node verify.mjs' },
+        scripts: { test: 'node --test verify.mjs' },
       }));
       const task = 'Use current external release information to update version.txt. Run `npm test`.';
       const engine = new ChatEngine({ task, projectRoot: root, operation: 'CHANGE', maxTurns: 6 });
