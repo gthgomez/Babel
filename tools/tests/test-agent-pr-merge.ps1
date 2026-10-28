@@ -29,9 +29,9 @@ $trustedGate = @'
 param(
   [int]$PR, [string]$BaseSha, [string]$RepoRoot, [string]$ReviewedHeadSha,
   [string]$RiskTier, [string]$AutonomousReviewEvidencePath,
-  [string]$BuilderIdentity, [string]$OutputFormat
+  [string]$BuilderIdentity, [string]$OutputFormat, [int]$CheckWaitSeconds = 0
 )
-Add-Content -LiteralPath $env:BABEL_MERGE_TEST_LAUNCHER_LOG -Value ("trusted_base=$BaseSha")
+Add-Content -LiteralPath $env:BABEL_MERGE_TEST_LAUNCHER_LOG -Value ("trusted_base=$BaseSha; check_wait_seconds=$CheckWaitSeconds")
 $innerGate = & git -C $RepoRoot show ("{0}:scripts/trusted-merge-gate.ps1" -f $BaseSha)
 if (($innerGate -join "`n") -notmatch 'trusted_base=') { throw 'replace ref influenced the inner base gate' }
 Write-Output $env:BABEL_MERGE_TEST_GATE_JSON
@@ -85,6 +85,7 @@ function Invoke-MergeFixture {
     [string]$LiveTip = '',
     [string]$NextLiveTip = '',
     [string]$RefFailure = '',
+    [int]$WaitSeconds = 0,
     [switch]$CleanupFailure
   )
   Set-Content -LiteralPath $ghLog -Value '' -Encoding utf8NoBOM
@@ -104,6 +105,7 @@ function Invoke-MergeFixture {
     '-ReviewedHeadSha', $head, '-RepoRoot', $repoRoot,
     '-MergeMethod', $MergeMethod)
   if ($SuppliedBase) { $arguments += @('-BaseSha', $SuppliedBase) }
+  if ($PSBoundParameters.ContainsKey('WaitSeconds')) { $arguments += @('-CheckWaitSeconds', [string]$WaitSeconds) }
   if ($CleanupFailure) {
     # Inject failure only in this test process, without changing production
     # environment/configuration or adding a cleanup bypass to the executor.
@@ -167,6 +169,20 @@ try {
   Assert-MergeTest ($happy.exitCode -eq 0 -and $happy.json.status -eq 'MERGED') "exact-head merge must succeed: $($happy.text); gh: $($happy.gh)"
   Assert-MergeTest ($happy.launcher.Contains("trusted_base=$base")) 'gate launcher must come from trusted base commit'
   Assert-MergeTest ($happy.gh.Contains("pr merge 42 --repo gthgomez/Babel --match-head-commit $head --squash")) 'merge must bind repository and exact head'
+
+  Assert-MergeTest ($happy.launcher.Contains('check_wait_seconds=0')) 'omitted wait must preserve zero default'
+  $waited = Invoke-MergeFixture -GateJson $ready -ViewJson $view -WaitSeconds 180
+  Assert-MergeTest ($waited.exitCode -eq 0 -and $waited.launcher.Contains('check_wait_seconds=180')) "explicit wait must reach trusted base launcher: $($waited.text)"
+  Assert-MergeTest ($waited.gh.Contains("--match-head-commit $head")) 'waiting must retain exact-head merge binding'
+  foreach ($invalidWait in @(-1, 1801)) {
+    $invalid = Invoke-MergeFixture -GateJson $ready -ViewJson $view -WaitSeconds $invalidWait
+    Assert-MergeTest ($invalid.exitCode -ne 0 -and -not $invalid.launcher.Trim() -and -not $invalid.gh.Trim()) 'invalid wait must reject before gate or GitHub commands'
+  }
+  $wrongWaitBase = Invoke-MergeFixture -GateJson $ready -ViewJson $view -SuppliedBase $otherHead -WaitSeconds 180
+  Assert-MergeTest ($wrongWaitBase.exitCode -ne 0 -and @($wrongWaitBase.json.blockers) -contains 'merge_base_sha_mismatch' -and -not $wrongWaitBase.gh.Contains('pr merge')) 'wait must not bypass a wrong supplied base'
+  $waitWrongGate = $ready | ConvertFrom-Json; $waitWrongGate.sha.ciHead = $otherHead
+  $wrongWaitHead = Invoke-MergeFixture -GateJson ($waitWrongGate | ConvertTo-Json -Depth 6 -Compress) -ViewJson $view -WaitSeconds 180
+  Assert-MergeTest ($wrongWaitHead.exitCode -ne 0 -and @($wrongWaitHead.json.blockers) -contains 'merge_gate_sha_mismatch' -and -not $wrongWaitHead.gh.Contains('pr merge')) 'wait must not bypass wrong qualified head'
 
   $oldRecorded = $ready | ConvertFrom-Json; $oldRecorded.sha.baseHead = $otherHead
   $oldView = $view | ConvertFrom-Json; $oldView.baseRefOid = $otherHead
@@ -265,6 +281,26 @@ try {
   $mergeFailed = Invoke-MergeFixture -GateJson $ready -ViewJson $view -MergeExit 1
   Assert-MergeTest ($mergeFailed.exitCode -ne 0 -and ([regex]::Matches($mergeFailed.gh, 'pr merge')).Count -eq 1) 'merge failure must never retry'
 
+  # The candidate wrapper may run before this option exists in the immutable
+  # base launcher. Zero/default remains compatible; nonzero never falls back.
+  $originalBase = $base
+  $oldGate = "[CmdletBinding()]`n" + $trustedGate.Replace(', [int]$CheckWaitSeconds = 0', '').Replace('; check_wait_seconds=$CheckWaitSeconds', '')
+  Set-Content -LiteralPath (Join-Path $scriptsDir 'trusted-merge-gate.ps1') -Value $oldGate -Encoding utf8NoBOM
+  & git -C $repoRoot add scripts/trusted-merge-gate.ps1
+  & git -C $repoRoot commit --quiet -m 'legacy advanced launcher fixture'
+  $base = (& git -C $repoRoot rev-parse HEAD).Trim()
+  $legacyReady = $ready | ConvertFrom-Json
+  foreach ($field in @('baseHead', 'liveTargetHead', 'fetchedTargetHead', 'trustedPolicySha')) { $legacyReady.sha.$field = $base }
+  $legacyView = $view | ConvertFrom-Json; $legacyView.baseRefOid = $base
+  try {
+    $legacy = Invoke-MergeFixture -GateJson ($legacyReady | ConvertTo-Json -Depth 6 -Compress) -ViewJson ($legacyView | ConvertTo-Json -Compress)
+    Assert-MergeTest ($legacy.exitCode -eq 0 -and $legacy.json.status -eq 'MERGED') "default must remain compatible with an old immutable advanced launcher: $($legacy.text)"
+    $legacyZero = Invoke-MergeFixture -GateJson ($legacyReady | ConvertTo-Json -Depth 6 -Compress) -ViewJson ($legacyView | ConvertTo-Json -Compress) -WaitSeconds 0
+    Assert-MergeTest ($legacyZero.exitCode -eq 0 -and $legacyZero.json.status -eq 'MERGED') 'explicit zero must preserve old-base default semantics'
+    $legacyWait = Invoke-MergeFixture -GateJson ($legacyReady | ConvertTo-Json -Depth 6 -Compress) -ViewJson ($legacyView | ConvertTo-Json -Compress) -WaitSeconds 180
+    Assert-MergeTest ($legacyWait.exitCode -ne 0 -and -not $legacyWait.gh.Contains('pr merge')) 'unsupported nonzero wait must fail closed without a silent default fallback'
+  } finally { $base = $originalBase }
+
   $badMethod = Invoke-MergeFixture -GateJson $ready -ViewJson $view -MergeMethod 'invalid'
   Assert-MergeTest ($badMethod.exitCode -ne 0 -and @($badMethod.json.blockers) -contains 'merge_method_invalid') 'invalid merge method must block'
 } finally {
@@ -275,5 +311,9 @@ try {
       'BABEL_MERGE_TEST_LIVE_TIP', 'BABEL_MERGE_TEST_NEXT_TIP', 'BABEL_MERGE_TEST_REF_FAILURE')) { Remove-Item "Env:$name" -ErrorAction SilentlyContinue }
   Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
 }
+
+# Keep both forwarding seams in the existing mandatory CI fixture entrypoint.
+& $pwshPath -NoProfile -NonInteractive -File (Join-Path $PSScriptRoot 'test-trusted-merge-gate-forwarding.ps1')
+Assert-MergeTest ($LASTEXITCODE -eq 0) 'trusted launcher forwarding fixture must pass'
 
 Write-Output 'AGENT_PR_MERGE_TEST_PASS'

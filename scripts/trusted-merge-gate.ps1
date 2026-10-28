@@ -7,6 +7,7 @@ param(
   [ValidateSet('GREEN', 'YELLOW', 'RED', 'BLACK', 'LOW', 'MEDIUM', 'HIGH', 'CRITICAL')][string]$RiskTier = 'GREEN',
   [string]$AutonomousReviewEvidencePath = '',
   [string]$BuilderIdentity = 'codex-implementation',
+  [ValidateRange(0, 1800)][int]$CheckWaitSeconds = 0,
   [switch]$AuditOnly,
   [switch]$RequireIsolatedWorktree,
   [ValidateSet('json', 'text')][string]$OutputFormat = 'json'
@@ -43,7 +44,8 @@ try {
     '-NoProfile', '-NonInteractive', '-File', (Join-Path $materialized 'scripts/agent-pr-gate.ps1'),
     '-ExpectedExecutionBaseSha', $BaseSha, '-PR', $PR, '-RepoRoot', $resolvedRepo, '-ReviewedHeadSha', $ReviewedHeadSha, '-RiskTier', $RiskTier,
     '-AutonomousReviewEvidencePath', $AutonomousReviewEvidencePath,
-    '-BuilderIdentity', $BuilderIdentity, '-OutputFormat', $OutputFormat
+    '-BuilderIdentity', $BuilderIdentity, '-OutputFormat', $OutputFormat,
+    '-CheckWaitSeconds', [string]$CheckWaitSeconds
   )
   if ($AuditOnly) { $args += '-AuditOnly' }
   if ($RequireIsolatedWorktree) { $args += '-RequireIsolatedWorktree' }
