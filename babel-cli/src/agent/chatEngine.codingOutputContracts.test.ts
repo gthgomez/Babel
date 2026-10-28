@@ -846,7 +846,7 @@ describe('Chat coding output contracts (executor dispatch)', { concurrency: fals
     } finally { close(); }
   });
 
-  test('case-distinct POSIX workspace files receive independent read observations', { skip: process.platform === 'win32' }, async () => {
+  test('workspace file read observations respect platform path identity', async () => {
     const storage = mkdtempSync(join(tmpdir(), 'babel-case-read-'));
     cleanup.push(storage);
     const projectRoot = join(storage, 'workspace', 'project');
@@ -860,10 +860,16 @@ describe('Chat coding output contracts (executor dispatch)', { concurrency: fals
     host.readCacheKey = (path: string) => normalizeReadCacheKey(path, projectRoot);
     try {
       const executor = new ChatEngineActionExecutor(host);
+      const caseAliases = process.platform === 'win32';
+      assert.equal(host.readCacheKey('Foo.ts') === host.readCacheKey('foo.ts'), caseAliases);
       for (const path of ['Foo.ts', 'foo.ts']) {
         const result = await dispatch(executor, projectRoot, runDir, { type: 'read_file', path }, 1, path);
-        assert.match(result.observation, /export const value = 1/);
-        assert.doesNotMatch(result.observation, /Skipping re-injection|READ_LIMIT/);
+        if (caseAliases && path === 'foo.ts') {
+          assert.match(result.observation, /Skipping re-injection/, 'Windows case aliases reuse unchanged content');
+        } else {
+          assert.match(result.observation, /export const value = 1/);
+          assert.doesNotMatch(result.observation, /Skipping re-injection|READ_LIMIT/);
+        }
       }
       const repeated = await dispatch(executor, projectRoot, runDir, { type: 'read_file', path: 'foo.ts' }, 1, 'repeat');
       assert.match(repeated.observation, /Skipping re-injection/, 'same-path unchanged bytes still deduplicate');
