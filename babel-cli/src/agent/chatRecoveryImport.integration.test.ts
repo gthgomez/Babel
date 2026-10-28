@@ -54,8 +54,10 @@ for (const fixture of fixtures) for (const priorMutation of [false,true]) test(`
   const childEnv={...process.env};delete childEnv['NODE_TEST_CONTEXT']
   t.mock.method(SafeExecutor.prototype,'testRunAsync',async()=>{
     verifiers++
-    try{return {exit_code:0,stdout:execFileSync(process.execPath,['--test','--test-reporter=tap',fixture.testPath],{cwd:root,env:childEnv,encoding:'utf8',windowsHide:true}),stderr:''}}
-    catch(error){const e=error as {status:number;stdout:string;stderr:string};return {exit_code:e.status,stdout:String(e.stdout),stderr:String(e.stderr)}}
+    // This test-owned adapter really executes Node outside the mocked Docker
+    // transport; retain factual start evidence only after native completion.
+    try{return {exit_code:0,stdout:execFileSync(process.execPath,['--test','--test-reporter=tap',fixture.testPath],{cwd:root,env:childEnv,encoding:'utf8',windowsHide:true}),stderr:'',process_started:true}}
+    catch(error){const e=error as {status:number|null;stdout:string;stderr:string};return {exit_code:e.status??1,stdout:String(e.stdout),stderr:String(e.stderr),process_started:Number.isInteger(e.status)}}
   })
   const engine=new ChatEngine({task:'Fix the failing tests. Preserve tests and package metadata.',projectRoot:root})
   const probe=engine as unknown as {workingState:WorkingState;lastVerifierReceipt:{exit_code:number;stale:boolean}|null;executeActions:(actions:ChatToolAction[],callbacks:object)=>Promise<unknown>;executeOneAction:(action:ChatToolAction,context:ToolContext,callbacks:object,meta:{index:number;ownerGeneration:number})=>Promise<{observation:string}>}
