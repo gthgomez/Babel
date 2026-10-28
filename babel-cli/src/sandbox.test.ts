@@ -1447,7 +1447,7 @@ test('shell results distinguish a started process from denial and pre-abort', as
     assert.equal(passed.exit_code, 0);
     assert.equal(passed.process_started, true);
     writeFileSync(join(fixture.projectRoot, 'verify.test.cjs'), "require('node:test').test('timeout control',async()=>{console.log('timeout-test-started');await new Promise(r=>setTimeout(r,10000))})\n");
-    const timedOut = await executor.testRunAsync('node --test --test-isolation=none verify.test.cjs', '.', 500);
+    const timedOut = await executor.testRunAsync('node --test --experimental-test-isolation=none verify.test.cjs', '.', 500);
     assert.notEqual(timedOut.exit_code, 0);
     assert.match(timedOut.stdout, /timeout-test-started/);
     assert.equal(timedOut.process_started, true);
