@@ -9,7 +9,7 @@ import type {ToolStreamEvent} from '../runners/base.js'
 import {validateProviderMessageProtocol,type WireProviderMessage} from '../runners/providerMessages.js'
 import {globalCostTracker} from '../services/costTracker.js'
 
-for(const scenario of ['corrected','repeated','unknown_usage','late_duplicate','raw_missing_id','raw_duplicate_id','truncated','transport_after_done','wrong_model','cancelled','valid_unknown_usage','unknown_pricing'] as const)
+for(const scenario of ['corrected','oversized_reference','repeated','unknown_usage','late_duplicate','raw_missing_id','raw_duplicate_id','truncated','transport_after_done','wrong_model','cancelled','valid_unknown_usage','unknown_pricing'] as const)
 test(`native schema recovery: ${scenario} preserves whole-batch denial and settled accounting`,async t=>{
   const root=mkdtempSync(join(tmpdir(),'babel-native-schema-'))
   writeFileSync(join(root,'fixture.txt'),'ORIGINAL_FIXTURE\n')
@@ -33,7 +33,7 @@ test(`native schema recovery: ${scenario} preserves whole-batch denial and settl
       const malformed=!accountingOnly&&(attempt===1 || scenario==='repeated')
       const calls=accountingOnly ? [{id:'valid-only-call',name:'read_file',arguments:JSON.stringify({path:'fixture.txt'})}] : malformed ? [
         {id:'valid-before-rejection',name:'read_file',arguments:JSON.stringify({path:'fixture.txt'})},
-        {id:scenario==='raw_missing_id'?'':scenario==='raw_duplicate_id'?'valid-before-rejection':'rejected-call',name:'str_replace',arguments:JSON.stringify({file_path:'fixture.txt',new_str:'PRIVATE_REJECTED_VALUE'})},
+        {id:scenario==='raw_missing_id'?'':scenario==='raw_duplicate_id'?'valid-before-rejection':'rejected-call',name:'str_replace',arguments:JSON.stringify(scenario==='oversized_reference' ? {file_path:'fixture.txt',old_str:'ORIGINAL_FIXTURE',new_str:'PRIVATE_REJECTED_VALUE',repair_plan:{schemaVersion:1,failureSignature:'red',workspaceRevision:'rev',hypothesisClass:'logic',targetIdentities:['fixture.txt'],actionFamily:'str_replace',criterionId:'npm test',supportingObservationIds:['PRIVATE_REJECTED_VALUE'.repeat(8)]}} : {file_path:'fixture.txt',new_str:'PRIVATE_REJECTED_VALUE'})},
       ] : attempt===2 ? [{id:'corrected-call',name:'read_file',arguments:JSON.stringify({path:'fixture.txt'})}] : []
       const delta=calls.length ? {tool_calls:calls.map((call,index)=>({index,id:call.id,type:'function',function:{name:call.name,arguments:call.arguments}}))} : {content:'The fixture contains ORIGINAL_FIXTURE. No file was changed.'}
       const payload={model:scenario==='wrong_model'?'different-model':model,choices:[{delta,finish_reason:scenario==='truncated'?'length':calls.length?'tool_calls':'stop'}],
@@ -75,20 +75,25 @@ test(`native schema recovery: ${scenario} preserves whole-batch denial and settl
     assert.doesNotMatch(JSON.stringify(terminal),/BUDGET_EXCEEDED|budget_exhausted/)
     assert.equal(summary.costComplete,false)
     assert.ok((summary.unknownChargeCount ?? 0)>0)
-  } else if(scenario==='corrected'){
+  } else if(scenario==='corrected'||scenario==='oversized_reference'){
     assert.equal(runner.bodies.length,3,JSON.stringify(events))
     assert.equal(completed.length,1,'only the corrected batch may execute')
     assert.ok(events.some(event=>event.type==='done'))
     const correction=JSON.stringify(runner.bodies[1]!.messages)
     assert.match(correction,/Native tool schema correction/)
     assert.match(correction,/old_str/)
+    if(scenario==='oversized_reference'){
+      assert.match(correction,/exact 16-character IDs/)
+      assert.match(correction,/recovery_observation_keys/)
+      assert.match(correction,/no admissible IDs/)
+    }
     assert.doesNotMatch(correction,/PRIVATE_REJECTED_VALUE/)
   } else {
     assert.equal(runner.bodies.length,scenario==='repeated'?2:1,JSON.stringify(events))
     assert.equal(completed.length,0)
     assert.ok(events.some(event=>event.type===(scenario==='cancelled'?'cancelled':'failed')))
   }
-  if(['corrected','repeated','late_duplicate','raw_missing_id','raw_duplicate_id'].includes(scenario)){
+  if(['corrected','oversized_reference','repeated','late_duplicate','raw_missing_id','raw_duplicate_id'].includes(scenario)){
     assert.equal(summary.estimateComplete,true,JSON.stringify(summary))
     assert.equal(summary.costComplete,false,JSON.stringify(summary))
   }

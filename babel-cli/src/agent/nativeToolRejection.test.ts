@@ -14,3 +14,15 @@ test('rejected native arguments never persist arbitrary command or source values
   assert.match(String(record.input_sha256), /^[a-f0-9]{64}$/)
   assert.deepEqual(record.issues, [{ code: 'invalid_type', path: ['path'] }])
 })
+
+test('oversized recovery IDs get bounded corrective guidance without echoing rejected data', async () => {
+  const { nativeSchemaRepairFeedback } = await import('./nativeToolRejection.js')
+  const rejected = describeNativeToolRejection({ turn: 1, id: 'call', name: 'str_replace',
+    input: { repair_plan: { supportingObservationIds: ['private-value'.repeat(20)] } },
+    reason: 'arguments_schema_invalid', issues: [{ code: 'too_big', path: ['repair_plan', 'supportingObservationIds', '0'] }] })
+  const feedback = nativeSchemaRepairFeedback(rejected)
+  assert.match(feedback, /exact 16-character IDs/)
+  assert.match(feedback, /recovery_observation_keys/)
+  assert.match(feedback, /no admissible IDs/)
+  assert.doesNotMatch(feedback, /private-value/)
+})

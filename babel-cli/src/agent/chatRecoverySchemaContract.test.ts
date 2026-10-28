@@ -46,3 +46,8 @@ test('recovery context names the exact verifier criterion separately from its as
   state=applyWorkingStateEvent(state,{type:'recovery_gate',failureSignature:'addition',requiredEvidence:'inspect'})
   assert.match(formatWorkingStateBlock(state),/recovery_criterion_id: "npm test"/)
 })
+
+test('recovery observation schema explains controller-owned bounded references', () => {
+  assert.match(RecoveryPlanProposalSchema.shape.supportingObservationIds.description ?? '', /exact 16-character/)
+  assert.match(RecoveryPlanProposalSchema.shape.supportingObservationIds.description ?? '', /recovery_observation_keys/)
+})

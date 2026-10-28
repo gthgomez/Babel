@@ -16,6 +16,8 @@ import {resetDockerAvailabilityCache,setDockerAvailableForTest} from '../config/
 const fixtures = [
   {name:'named import',path:'math.js',testPath:'math.test.js',label:'addition',source:'export function add(a,b) { return a-b; }\n',old:'return a-b;',replacement:'return a+b;',
     testSource:"import test from 'node:test'; import assert from 'node:assert/strict'; import {add} from './math.js'; test('addition',()=>{assert.equal(add(2,3),5);assert.equal(add(0,7),7)});\n"},
+  {name:'TypeScript named import',path:'math.js',testPath:'math.test.ts',label:'addition',source:'export function add(a,b) { return a-b; }\n',old:'return a-b;',replacement:'return a+b;',
+    testSource:"import test from 'node:test'; import assert from 'node:assert/strict'; import {add} from './math.js'; test('addition',()=>{assert.equal(add(2,3),5);assert.equal(add(0,7),7)});\n"},
   {name:'static stylesheet read',path:'styles.css',testPath:'style.test.js',label:'busy style',source:'.status { display: inline-flex; }\n',old:'.status { display: inline-flex; }',replacement:'.status { display: inline-flex; }\n.status-busy { opacity: 0.6; }',
     testSource:"import test from 'node:test'; import assert from 'node:assert/strict'; import {readFileSync} from 'node:fs'; test('busy style',()=>assert.match(readFileSync(new URL('./styles.css',import.meta.url),'utf8'),/\\.status-busy\\s*\\{[^}]*opacity\\s*:\\s*0?\\.6/s));\n"},
 ]
@@ -34,13 +36,14 @@ test('an earlier mutation preserves direct non-test recovery without assertion l
   assert.equal(result.state.localization,undefined,'preserve direct recovery for an already implicated non-test target')
 })
 
-for (const fixture of fixtures) for (const priorMutation of [false,true]) test(`real recovery dispatch links the failed assertion through its ${fixture.name}${priorMutation ? ' after an earlier mutation' : ''} and verifies the scoped repair`, async t => {
+for (const fixture of fixtures) for (const priorMutation of [false,true]) test(`real recovery dispatch links the failed assertion through its ${fixture.name}${priorMutation ? ' after an earlier mutation' : ''} with fresh evidence`, async t => {
   const storage=mkdtempSync(join(tmpdir(),'babel-recovery-import-'))
   const root=join(storage,'project'), runDir=join(storage,'runtime')
   mkdirSync(root);mkdirSync(runDir)
-  const names=['BABEL_EXECUTION_PROFILE','BABEL_BENCHMARK_DOCKER_IMAGE','BABEL_DOCKER_DISABLE','BABEL_ALLOW_HOST_FALLBACK','BABEL_BENCHMARK_DOCKER_EXTRA_ARGS'] as const
+  const names=['BABEL_LIVE','BABEL_EXECUTION_PROFILE','BABEL_BENCHMARK_DOCKER_IMAGE','BABEL_DOCKER_DISABLE','BABEL_ALLOW_HOST_FALLBACK','BABEL_BENCHMARK_DOCKER_EXTRA_ARGS'] as const
   const old=names.map(name=>[name,process.env[name]] as const)
   t.after(()=>{for(const [name,value] of old){if(value===undefined)delete process.env[name];else process.env[name]=value}resetDockerAvailabilityCache();rmSync(storage,{recursive:true,force:true})})
+  process.env['BABEL_LIVE']='true' // opt in to the test-owned native adapter, never ambient provider inference
   process.env['BABEL_EXECUTION_PROFILE']='safe_repo';process.env['BABEL_BENCHMARK_DOCKER_IMAGE']='synthetic/recovery-import:unit'
   delete process.env['BABEL_DOCKER_DISABLE'];delete process.env['BABEL_ALLOW_HOST_FALLBACK'];delete process.env['BABEL_BENCHMARK_DOCKER_EXTRA_ARGS']
   setDockerAvailableForTest(true)
@@ -73,6 +76,17 @@ for (const fixture of fixtures) for (const priorMutation of [false,true]) test(`
   await run({type:'read_file',path:fixture.path})
   await run({type:'test_run',command:'npm test'})
   assert.equal(probe.lastVerifierReceipt?.exit_code,1)
+  if (fixture.name === 'TypeScript named import') {
+    // TS diagnostics can identify the assertion without extending the separate
+    // JavaScript-only static import bridge's admitted evidence language.
+    assert.ok(probe.workingState.localization?.candidates.some(candidate => candidate.path === fixture.testPath))
+    await run({type:'read_file',path:fixture.testPath})
+    assert.equal(probe.workingState.localization?.acceptedPath,fixture.testPath)
+    assert.ok(!probe.workingState.recoveryGate?.failingTargets?.includes(fixture.path))
+    assert.equal(readFileSync(join(root,fixture.path),'utf8'),source)
+    assert.equal(verifiers,1)
+    return
+  }
   // Three ordinary reads in one model turn must not poison the first two
   // recovery observations when the third exceeds the localization scope cap.
   await probe.executeActions([{type:'read_file',path:fixture.testPath},{type:'read_file',path:fixture.path},{type:'read_file',path:'package.json'}],{})

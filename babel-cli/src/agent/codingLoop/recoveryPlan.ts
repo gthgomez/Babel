@@ -19,7 +19,7 @@ export const RecoveryPlanProposalSchema = z.object({
   targetIdentities: z.array(z.string().min(1)).min(1).max(4).describe('Exact repository-relative file paths changed by this edit, without :symbol suffixes. Every path must be a current failing target.'),
   actionFamily: z.enum(['write_file', 'str_replace', 'apply_patch']).describe('Must equal the concrete edit tool used by this call.'),
   criterionId: z.string().min(1).describe('Copy the exact verifier command/identity from working_state.recovery_criterion_id (also last_verifier_identity). Do not use the test name, assertion label, or failure parser name.'),
-  supportingObservationIds: z.array(z.string().length(16)).min(1).max(8),
+  supportingObservationIds: z.array(z.string().length(16)).min(1).max(8).describe('Copy only exact 16-character IDs from working_state.recovery_observation_keys. Never use evidence prose, paths or invented IDs. If no admissible IDs exist, obtain fresh recovery evidence before proposing an edit.'),
 })
 
 export type RecoveryPlanProposalV1 = z.infer<typeof RecoveryPlanProposalSchema>

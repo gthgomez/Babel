@@ -68,8 +68,7 @@ export function captureLocalizationCandidates(input: {
       source: testLocation && failure.test ? 'test_identity' : 'structured_location',
     })
   }
-  // Node's parser currently recognizes JavaScript frames. Keep TypeScript and
-  // Windows drive frames as bounded candidates here; they still need a read.
+  // Additional named frames are bounded candidates; they still need a read.
   const frames = /^\s*(?:at\s+)?([A-Za-z_$][\w.$]*)\s+\(([^()\r\n]+\.[cm]?[jt]sx?):(\d+):(\d+)\)/gm
   let frameMatch: RegExpExecArray | null
   while ((frameMatch = frames.exec(raw)) !== null && candidates.length < 8) {
