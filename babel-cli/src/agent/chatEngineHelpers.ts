@@ -1,11 +1,10 @@
+import { isReadDeliveryWindow, type ReadDeliveryWindow } from '../services/readDelivery.js'
 /** Bounded observations, presentation safety, and protocol parsing helpers. */
 
 import { extractJson } from '../utils/extractJson.js'
 import {
   recoveryEvidenceKey,
   sameRecoveryBinding,
-  RECOVERY_EVIDENCE_TOOLS,
-  targetMatchesGate,
   type RecoveryEvidenceProvenance,
   type RecoveryCandidateBinding,
   type WorkingState,
@@ -28,11 +27,6 @@ const PRESENTATION_CALLBACK_KEYS = [
   'onSubAgentComplete',
   'onSubAgentFailed',
 ] as const
-
-/** Only these tools carry inspectable content that can localize a failure. */
-const CONTENT_BEARING_INSPECTION_TOOLS = new Set<string>(
-  RECOVERY_EVIDENCE_TOOLS,
-)
 
 // Prevent exhausting connection pools
 /**
@@ -149,10 +143,10 @@ export function formatTextToolResults(
 
 /**
  * A discriminating observation is not a boolean claim. It must be
- * content-bearing, must localize a target already implicated by the failure
- * (or by the mutation that preceded it), and must not repeat an observation the
- * gate has already consumed. A directory listing or a pattern-only search can
- * never clear the gate.
+ * a host-delivered window from a concrete authorized read bound before and
+ * after delivery. Diagnostic membership is a hint, not another permission
+ * boundary. Rereads can republish retained facts without renewing progress or
+ * consumed edit permits. Listings and search snippets do not clear the gate.
  */
 export function isDiscriminatingInspectionEvidence(
   state: WorkingState,
@@ -165,42 +159,18 @@ export function isDiscriminatingInspectionEvidence(
   physicalTarget: string | null,
   binding: RecoveryCandidateBinding | null,
   observationDigest: string,
+  window?: ReadDeliveryWindow,
+  bindingBefore?: RecoveryCandidateBinding | null,
 ): { discriminating: boolean; provenance?: RecoveryEvidenceProvenance } {
   const gate = state.recoveryGate
-  if (!gate || gate.satisfied) return { discriminating: false }
-  if (!gate.binding || !binding || !sameRecoveryBinding(gate.binding, binding))
-    return { discriminating: false }
-  if (!CONTENT_BEARING_INSPECTION_TOOLS.has(action.type))
-    return { discriminating: false }
-  if (!physicalTarget || !observationDigest) return { discriminating: false }
-  // Require a concrete inspected path. A `grep` without an explicit path is a
-  // repository-wide search and cannot localize the failure.
-  const candidate =
-    action.type === 'read_range' ? action.file_path : action.path
-  if (!candidate) return { discriminating: false }
-  const failingTargets =
-    gate.failingTargets ?? state.failureSurface?.failingFiles ?? []
-  if (!targetMatchesGate(physicalTarget, failingTargets))
-    return { discriminating: false }
-  const provenance: RecoveryEvidenceProvenance = {
-    tool: action.type,
-    target: physicalTarget,
-    failureSignature: gate.failureSignature,
-    binding,
-    observationDigest,
-  }
+  if (!gate?.binding || !binding || !bindingBefore || !sameRecoveryBinding(gate.binding, binding) ||
+      !sameRecoveryBinding(bindingBefore, binding) || !['read_file', 'read_range'].includes(action.type) ||
+      !physicalTarget || !observationDigest || !isReadDeliveryWindow(window)) return { discriminating: false }
+  const provenance: RecoveryEvidenceProvenance = { tool: action.type, target: physicalTarget,
+    failureSignature: gate.failureSignature, binding, observationDigest, window }
   const key = recoveryEvidenceKey(provenance, gate.failureSignature)
-  if (
-    !key ||
-    (gate.observedKeys ?? []).includes(key) ||
-    state.consumedRecoveryEvidence.includes(key)
-  ) {
-    return { discriminating: false }
-  }
-  return {
-    discriminating: true,
-    provenance,
-  }
+  if (!key) return { discriminating: false }
+  return { discriminating: !gate.permitConsumed && !state.consumedRecoveryEvidence.includes(key), provenance }
 }
 
 export function wrapPresentationCallbacks(

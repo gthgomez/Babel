@@ -50,6 +50,7 @@ export interface ApplyPatchActionContext {
   ownerGeneration: number;
   dispatchTurnId: string | null;
   recoveredAuthorization: { allowed: boolean; message?: string };
+  recoveryDispatchAuthorization?: () => { allowed: boolean; message?: string };
   admittedThisAction: boolean;
   proposedEdit: { exactFingerprint: string } | null;
   callbacks: ChatCallbacks;
@@ -75,7 +76,12 @@ export async function executeGovernedApplyPatchAction(
       context: toolContext,
       preset: "workspace_write",
       executor: defaultToolExecutor,
-      onDispatchAuthorized: () => ctx.recoveredAuthorization,
+      onDispatchAuthorized: () => {
+        const normal = host.recoveredOperationDispatchAuthorization(action);
+        if (!host.isSubmissionCurrent(ctx.ownerGeneration) || toolContext.signal?.aborted) return { allowed:false,message:'Patch owner retired or cancelled before dispatch.' };
+        return normal;
+      },
+      ...(ctx.admittedThisAction && ctx.recoveryDispatchAuthorization ? { onRecoveryBatchAuthorized: ctx.recoveryDispatchAuthorization } : {}),
       onBeforeExecutorExecute: () => host.persistToolStartedAtExecutorDispatch(action, ctx.meta),
       ...(host.parity.authoritySession
         ? { authoritySession: host.parity.authoritySession }
@@ -209,6 +215,7 @@ export async function executeGovernedApplyPatchAction(
     index: meta.index,
     exit_code: gov.exit_code,
     effect_status: patchEffect.status,
+    ...(gov.preDispatchNoEffect === true ? { preDispatchNoEffect: true as const } : {}),
     ...(gov.mutationPaths && gov.mutationPaths.length > 0
       ? { mutation_paths: [...gov.mutationPaths] }
       : {}),

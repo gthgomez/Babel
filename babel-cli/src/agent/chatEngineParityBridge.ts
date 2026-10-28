@@ -596,6 +596,7 @@ export function parityRecordToolBatch(
       exit_code?: number;
       target?: string;
       contentHash?: string;
+      preDispatchNoEffect?: true;
       discoverySuppressed?: boolean;
       action_index?: number;
       batch_id?: string;
@@ -711,6 +712,7 @@ export function parityRecordToolBatch(
           turn_id: rt.turnId,
           tool_call_id: r.tool_call_id,
           tool_name: r.tool_name,
+          ...(r.preDispatchNoEffect === true ? { preDispatchNoEffect: true as const } : {}),
           idempotency_key: r.tool_call_id,
           ...(r.action_index !== undefined ? { action_index: r.action_index } : {}),
           ...(r.batch_id !== undefined ? { batch_id: r.batch_id } : {}),

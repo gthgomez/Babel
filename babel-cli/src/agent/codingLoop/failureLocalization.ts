@@ -31,8 +31,6 @@ export interface FailureLocalization {
   importCandidates?: TestImportCandidate[]
 }
 
-const MAX_CALLS = 4
-const MAX_ROUNDS = 2
 
 function diagnosticToken(message: string): string | null {
   const quoted = /['"`]([A-Za-z_$][\w$]{2,})['"`]/.exec(message)?.[1]
@@ -135,12 +133,11 @@ export function discoverTestCandidates(
 
 /** Count the attempt before dispatch, so failed/cancelled calls retain budget. */
 export function beginLocalizationCall(state: FailureLocalization, target?: string): FailureLocalization {
-  if (state.phase !== 'LOCALIZE_FAILURE' && !(state.phase === 'localized' && state.importCandidates?.length)) return state
-  if (state.calls >= MAX_CALLS || state.rounds >= MAX_ROUNDS) return state
-  const calls = state.calls + 1
-  const inspected = target && !state.inspected.includes(target) ? [...state.inspected, target] : state.inspected
-  const rounds = inspected.length
-  return { ...state, calls, rounds, inspected }
+  const calls = Math.min(Number.MAX_SAFE_INTEGER, state.calls + 1)
+  const newTarget = target && !state.inspected.includes(target)
+  const inspected = newTarget ? [...state.inspected, target].slice(-96) : state.inspected
+  const rounds = Math.min(Number.MAX_SAFE_INTEGER, state.rounds + (newTarget ? 1 : 0))
+  return { ...state, calls, rounds, inspected, phase: state.phase === 'exhausted' ? 'LOCALIZE_FAILURE' : state.phase }
 }
 
 /** Only a successful, related file read promotes a diagnostic candidate. */
@@ -176,7 +173,7 @@ export function finishLocalizationCall(
       (action.startLine ?? 1) <= candidate.line &&
       (action.startLine ?? 1) + content.split(/\r?\n/).length - 1 >= candidate.line
     ))
-  if (related && state.calls <= MAX_CALLS && state.rounds <= MAX_ROUNDS) {
+  if (related) {
     return {
       ...state, phase: 'localized',
       candidates: candidate && !state.candidates.some((item) => item.path === candidate.path)
@@ -190,7 +187,7 @@ export function finishLocalizationCall(
   }
   return {
     ...state,
-    phase: state.calls >= MAX_CALLS || state.rounds >= MAX_ROUNDS ? 'exhausted' : state.phase,
+    phase: state.phase,
   }
 }
 

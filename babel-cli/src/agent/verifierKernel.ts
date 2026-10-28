@@ -7,7 +7,8 @@
  */
 
 import { createHash } from 'node:crypto';
-import type { WorkspaceRevisionIdentity } from '../executor/contracts.js';
+import { satisfiesVerifierRequirement } from '../services/verifierIdentity.js';
+import type { RequiredVerifierRecord, WorkspaceRevisionIdentity } from '../executor/contracts.js';
 
 export const VERIFIER_RECEIPT_V2 = 2 as const;
 
@@ -198,8 +199,11 @@ export interface VerifierPromotionInput {
   mutating: boolean;
   task_class: string;
   required_verifier_commands: readonly string[];
+  /** Explicit host obligations override ordinary-task heuristic scope. */
+  required_verifiers?: readonly RequiredVerifierRecord[];
   receipts: readonly VerifierReceiptV2[];
   current_revision_hash: string;
+  current_revision_hashes?: Readonly<Record<string, string>>;
   /** Detected adversarial signals from fixtures / review. */
   adversarial?: {
     tests_deleted?: boolean;
@@ -224,7 +228,11 @@ export interface VerifierPromotionResult {
 export function evaluateVerifierPromotion(
   input: VerifierPromotionInput,
 ): VerifierPromotionResult {
-  const profile = profileForTaskClass(input.task_class);
+  const baseProfile = profileForTaskClass(input.task_class);
+  const explicitTargetedContract = ['general_swe', 'default'].includes(input.task_class)
+    && (input.required_verifiers?.length ?? 0) > 0
+    && input.required_verifiers!.every(requirement => requirement.requiredScope === 'targeted');
+  const profile = explicitTargetedContract ? { ...baseProfile, min_scope: 'targeted' as const } : baseProfile;
   const denials: VerifierGateDenial[] = [];
 
   if (!input.mutating) {
@@ -252,7 +260,7 @@ export function evaluateVerifierPromotion(
     if (r.exit_code !== 0 || r.timed_out || r.signal !== null || (r.tests_failed ?? 0) > 0) {
       denials.push('failed_verifier_receipt');
     }
-    if (r.freshness === 'stale') {
+    if (r.freshness !== 'fresh') {
       denials.push('stale_receipt');
     }
     const revHash =
@@ -260,9 +268,10 @@ export function evaluateVerifierPromotion(
         ? r.workspace_revision.compositeTreeHash
         : '';
     if (profile.require_revision_bind) {
-      if (!revHash || !input.current_revision_hash) {
+      const liveHash = input.current_revision_hashes !== undefined ? input.current_revision_hashes[r.receipt_id] : input.current_revision_hash;
+      if (!revHash || !liveHash) {
         denials.push('missing_revision');
-      } else if (revHash !== input.current_revision_hash) {
+      } else if (revHash !== liveHash) {
         denials.push('wrong_revision');
       }
     }
@@ -290,7 +299,7 @@ export function evaluateVerifierPromotion(
   // All required commands must have a green authoritative receipt
   for (const cmd of input.required_verifier_commands) {
     const match = input.receipts.find(
-      (r) => r.command === cmd || r.argv.join(' ') === cmd,
+      (r) => satisfiesVerifierRequirement(cmd, r.command),
     );
     if (!match || match.exit_code !== 0) {
       if (!denials.includes('empty_verifier_plan')) {

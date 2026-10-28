@@ -1,3 +1,7 @@
+import { failedVerifierContextKey, validFailedVerifierExecution, type SettledFailedVerifierExecution } from './codingLoop/failedVerifierExecution.js'
+import { parseCommandArgv } from '../utils/commandArgv.js'
+import { recordVerifierAttempt } from './sessionEvents.js'
+import type { VerifierEvidenceOwner } from '../executor/contracts.js'
 import type { ChatEngineActionExecutorHost } from './chatEngineContracts.js'
 import type { ChatToolAction } from './chatToolDefinitions.js'
 import type { ToolResult } from '../sandbox.js'
@@ -22,6 +26,8 @@ export async function settleChatVerifierResult(input: {
   confirmedShellMutation: boolean
   obsParts: string[]
   cacheIdentity?: { key: string; cwd: string; envKey: string }
+  verifierOwner?: VerifierEvidenceOwner | undefined
+  foregroundDispatch?: { owner?: VerifierEvidenceOwner | undefined; candidate: import('./codingLoop/workingState.js').RecoveryCandidateBinding | null; identity: { cwd: string; envKey: string }; signal?: AbortSignal | undefined } | undefined
   canPublish?: () => boolean
   isOwnerCurrent?: () => boolean
 }): Promise<{ index: number; observation: string } | null> {
@@ -30,8 +36,32 @@ export async function settleChatVerifierResult(input: {
   // An ordinary error may have been returned before process dispatch (for
   // example search-depth admission). It must not become a failed verifier
   // receipt/cache entry or trigger implementation-repair authority.
-  if (lastResult.process_started !== true || lastResult.simulated === true || lastResult.launch_failure !== undefined) return null
+  if (input.foregroundDispatch?.signal?.aborted || lastResult.process_started !== true || lastResult.simulated === true || lastResult.launch_failure !== undefined ||
+      (lastResult.process_termination !== undefined && lastResult.process_termination !== 'exited')) return null
   const isOwnerCurrent = () => host.isSubmissionCurrent(ownerGeneration) && (input.isOwnerCurrent?.() ?? true)
+  const dispatch = input.foregroundDispatch;
+  const toolCallId = meta.idempotencyKey ?? host._streamNativeToolCallIds[meta.index] ?? `tool_call_${host._turnIndex}_${meta.index}`;
+  const started = host.parity.sessionEvents.events.some(event => event.kind === 'tool_started' && event.tool_call_id === toolCallId);
+  if (isOwnerCurrent() && !dispatch?.signal?.aborted && lastResult.process_termination === 'exited' && lastResult.exit_code !== 0 && lastResult.denial === undefined && dispatch?.owner && dispatch.candidate && started) {
+    const pending = { schemaVersion: 1 as const, command: target, argv: parseCommandArgv(target),
+      executionFingerprint: failedVerifierContextKey(target, dispatch.owner, dispatch.identity.cwd, dispatch.identity.envKey),
+      owner: dispatch.owner, cwd: dispatch.identity.cwd, environmentFingerprint: dispatch.identity.envKey, candidate: dispatch.candidate,
+      toolCallId, processStarted: true as const, exitCode: lastResult.exit_code, termination: 'exited' as const };
+    // An actual append supplies event order; no predicted sequence grants replay.
+    const candidate = { ...pending, order: { sessionId: host.parity.sessionEvents.session_id, seq: host.parity.sessionEvents.nextSeq } };
+    if (validFailedVerifierExecution(candidate)) {
+      const event = recordVerifierAttempt(host.parity.sessionEvents, { turn_id: String(host.parity.turnId ?? host._turnIndex),
+        command_preview: target, authoritative: false, exit_code: lastResult.exit_code, tool_call_id: toolCallId });
+      const descriptor: SettledFailedVerifierExecution = { ...pending, order: { sessionId: event.session_id, seq: event.seq } };
+      if (event.kind === 'verifier_attempt') event.failed_execution = structuredClone(descriptor);
+      const history = (host.workingState.failedVerifierHistory ?? []).filter(item => item.executionFingerprint !== descriptor.executionFingerprint);
+      const overflow = history.length >= 64 || host.workingState.failedVerifierHistoryOverflow === true;
+      if (history.length < 64) history.push(descriptor);
+      host.workingState = { ...host.workingState, settledFailedVerifier: descriptor, failedVerifierHistory: history,
+        ...(overflow ? { failedVerifierHistoryOverflow: true as const } : {}) };
+      host.persistRecoveryWorkingState();
+    }
+  }
   // B1/B2: only authoritative verifier commands update the completion receipt.
   if (isFatalWindowsProcessExit(lastResult.exit_code) && target) {
     host.platformUnusableVerifiers.add(target);
@@ -44,6 +74,7 @@ export async function settleChatVerifierResult(input: {
       projectRoot: requireProjectRoot(host.options),
       canPublish: () => isOwnerCurrent() && (input.canPublish?.() ?? true),
       command: target,
+      ...(input.verifierOwner ? { verifierOwner: input.verifierOwner } : {}),
       exitCode: lastResult.exit_code,
       summary: formatVerifierReceiptSummary({
         verifierId: target,

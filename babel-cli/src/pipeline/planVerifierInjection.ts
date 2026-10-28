@@ -1,3 +1,4 @@
+import { verifierExecutionFingerprint } from '../services/verifierIdentity.js';
 import { mandatoryVerifierProse } from '../config/verifierIntent.js';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -6,11 +7,46 @@ import type { ActionStep, SwePlan } from '../schemas/agentContracts.js';
 import { isVerifierCommand } from '../services/terminalStatus.js';
 import { shouldUseDockerSandbox } from '../config/benchmarkContainer.js';
 
+/** Split prose/list separators only outside literal command arguments. */
+function splitCommandText(raw: string, prose: boolean): string[] {
+  const parts: string[] = [];
+  let start = 0; let quote = ''; let escaped = false;
+  for (let index = 0; index < raw.length; index++) {
+    const char = raw[index]!;
+    if (escaped) { escaped = false; continue; }
+    if (char === '\\' && quote !== "'") { escaped = true; continue; }
+    if (quote) { if (char === quote) quote = ''; continue; }
+    if (char === '"' || char === "'" || char === '`') { quote = char; continue; }
+    const compound = !prose && raw.slice(index, index + 2) === '&&';
+    const sentence = prose && /[.!?]/.test(char) && (index + 1 === raw.length || /\s/.test(raw[index + 1]!));
+    if (char === '\n' || char === ';' || compound || sentence) {
+      parts.push(raw.slice(start, index));
+      if (compound) index++;
+      start = index + 1;
+    }
+  }
+  parts.push(raw.slice(start));
+  return parts;
+}
+
+/** Keep offsets while making quoted atoms opaque to prose delimiter matching. */
+function maskQuotedCommandAtoms(raw: string): string {
+  let quote = ''; let escaped = false; let masked = '';
+  for (let index = 0; index < raw.length; index++) {
+    const char = raw[index]!;
+    if (escaped) { masked += 'X'; escaped = false; continue; }
+    if (quote) {
+      masked += 'X';
+      if (char === quote) quote = '';
+      else if (char === '\\' && quote !== "'") escaped = true;
+    } else if (char === '"' || char === "'" || char === '`') { quote = char; masked += 'X'; }
+    else masked += char;
+  }
+  return masked;
+}
+
 function splitCommandList(raw: string): string[] {
-  return raw
-    .split(/\s+&&\s+|;\s+/)
-    .map(cleanCommand)
-    .filter(Boolean);
+  return splitCommandText(raw, false).map(cleanCommand).filter(Boolean);
 }
 
 function trimTrailingTaskLabels(raw: string): string {
@@ -22,7 +58,6 @@ function trimTrailingTaskLabels(raw: string): string {
 
 function cleanCommand(raw: string): string {
   return raw
-    .replace(/\s+/g, ' ')
     .replace(
       /\s+from\s+(?:the\s+)?[A-Za-z0-9_.\\/-]+(?:\s+(?:directory|folder|subdirectory))?$/i,
       '',
@@ -35,7 +70,7 @@ function uniqueCommands(commands: readonly string[]): string[] {
   const seen = new Set<string>();
   const output: string[] = [];
   for (const command of commands.map(cleanCommand).filter(Boolean)) {
-    const normalized = command.toLowerCase();
+    const normalized = verifierExecutionFingerprint(command) || command;
     if (!seen.has(normalized)) {
       seen.add(normalized);
       output.push(command);
@@ -53,16 +88,17 @@ export function extractRequiredVerifierCommandsFromTask(task: string): string[] 
       commands.push(...splitCommandList(trimTrailingTaskLabels(match[1])));
     }
   }
-  const runBeforePattern = /\bRun\s+([^\n.;]+?)\s+before\s+completing\b/gi;
-  for (const match of task.matchAll(runBeforePattern)) {
-    if (match[1]) {
-      commands.push(cleanCommand(match[1]));
+  for (const clause of splitCommandText(task, true)) {
+    const runBeforePattern = /\bRun\s+(.+?)\s+before\s+completing\b/gi;
+    const masked = maskQuotedCommandAtoms(clause);
+    for (const match of masked.matchAll(runBeforePattern)) {
+      const offset = match.index! + /^Run\s+/i.exec(match[0])![0].length;
+      if (match[1]) commands.push(cleanCommand(clause.slice(offset, offset + match[1].length)));
     }
-  }
-  const verifierIsPattern = /\bverifier\s+(?:is|:)\s*([^\n.;]+)/gi;
-  for (const match of task.matchAll(verifierIsPattern)) {
-    if (match[1]) {
-      commands.push(cleanCommand(match[1]));
+    const verifierIsPattern = /\bverifier\s+(?:is|:)\s*(.+)/gi;
+    for (const match of masked.matchAll(verifierIsPattern)) {
+      const offset = match.index! + /^verifier\s+(?:is|:)\s*/i.exec(match[0])![0].length;
+      if (match[1]) commands.push(cleanCommand(clause.slice(offset, offset + match[1].length)));
     }
   }
   return uniqueCommands(commands.filter((command) => isVerifierCommand(command)));

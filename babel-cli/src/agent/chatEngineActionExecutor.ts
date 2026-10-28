@@ -1,3 +1,8 @@
+import { freezeChatVerifierCandidate, chatVerifierCandidateCurrent } from './chatVerifierContext.js';
+import { verifierSemanticProgress } from './verifierSemanticProgress.js';
+import { failedVerifierContextKey } from './codingLoop/failedVerifierExecution.js';
+import { attestedFailedVerifierExecution, matchesFailedVerifierReplay } from './codingLoop/failedVerifierExecution.js';
+import { formatRecoveryReadReference } from './codingLoop/workingState.js';
 import { resolveClassCGateDecision } from "./autonomyEnforcement.js";
 import {requireProjectRoot,denyConversationAction} from './chatToolScopeAdmission.js';
 import { evaluatePlanThenExecuteGate } from "./planThenExecute.js";
@@ -189,6 +194,18 @@ export class ChatEngineActionExecutor {
     const toolStart = performance.now();
 
     try {
+    const frozenVerifierDispatch = action.type === 'run_command' || action.type === 'test_run' ? {
+      owner: this.host.currentVerifierOwner(), candidate: this.host.currentRecoveryBinding(),
+      proofCandidate: freezeChatVerifierCandidate(requireProjectRoot(this.host.options)),
+      identity: resolveVerifierCacheIdentity({ projectRoot: requireProjectRoot(this.host.options), command: target,
+        ...(action.cwd !== undefined ? { cwd: action.cwd } : {}) }),
+      foreground: action.type === 'test_run' || action.background !== true, signal: toolContext.signal,
+    } : undefined;
+    const failedReplay = frozenVerifierDispatch?.foreground === true && !!frozenVerifierDispatch.candidate &&
+      attestedFailedVerifierExecution(this.host.parity.sessionEvents, this.host.workingState.settledFailedVerifier) &&
+      matchesFailedVerifierReplay(this.host.workingState.settledFailedVerifier, { command: target,
+        owner: frozenVerifierDispatch.owner, cwd: frozenVerifierDispatch.identity.cwd, environmentFingerprint: frozenVerifierDispatch.identity.envKey });
+
       // Plan-then-execute + optional phase tool gates (before side effects)
       const isMutationSubAgent =
         action.type === "sub_agent" &&
@@ -359,7 +376,7 @@ export class ChatEngineActionExecutor {
         recoveryGate.satisfied === true &&
         !admittedThisAction;
       if (
-        recoveryGate &&
+        recoveryGate && !failedReplay &&
         (((mutationAttempt || shellMutationAttempt) &&
           !recoveryGate.satisfied) ||
           ((mutationAttempt || shellMutationAttempt) && planRequired) ||
@@ -401,6 +418,25 @@ export class ChatEngineActionExecutor {
           observation: `### ${tool} ${target}\nexit_code: 1\n${detail}`,
         };
       }
+      // Revalidate the host admission at the last policy dispatch boundary. An
+      // absent target may have appeared while governance/approval suspended.
+      const recoveryDispatchAuthorization = () => {
+        const recovered = this.host.recoveredOperationDispatchAuthorization(action);
+        if (!recovered.allowed || !admittedThisAction || !proposedEdit) return recovered;
+        const binding = this.host.currentRecoveryBinding();
+        const actual = (action.type === "write_file" || action.type === "str_replace" || action.type === "apply_patch")
+          ? actualRecoveryEdit(action, requireProjectRoot(this.host.options)) : null;
+        if (!binding || !currentBinding || !sameRecoveryBinding(binding, currentBinding) || !actual ||
+            JSON.stringify(actual.targetIdentities) !== JSON.stringify(proposedEdit.targetIdentities) ||
+            JSON.stringify(actual.existingTargetIdentities) !== JSON.stringify(proposedEdit.existingTargetIdentities)) {
+          if (this.host.isSubmissionCurrent(ownerGeneration)) {
+            this.host.workingState = applyWorkingStateEvent(this.host.workingState, { type: "recovery_candidate_drift" });
+            this.host.persistRecoveryWorkingState();
+          }
+          return { allowed: false, message: "[RECOVERY_CANDIDATE_DRIFT] Edit targets changed before dispatch; rerun the verifier and obtain fresh reads." };
+        }
+        return recovered;
+      };
       if (admittedThisAction) {
         this.host.workingState = applyWorkingStateEvent(
           this.host.workingState,
@@ -450,35 +486,7 @@ export class ChatEngineActionExecutor {
             : "path" in action && typeof action.path === "string"
               ? action.path
               : "";
-        if (
-          !this.host.beginRecoveryLocalizationInspection(
-            action.type,
-            inspectionTarget,
-          )
-        ) {
-          const detail =
-            this.host.workingState.localization?.phase === "exhausted"
-              ? "[LOCALIZATION_EXHAUSTED] The four-call or two-scope localization allowance is spent."
-              : "[RECOVERY_CANDIDATE_DRIFT] Rerun the verifier before localization.";
-          this.host.toolCallLog.push({
-            tool,
-            target,
-            detail,
-            error: "blocked",
-            index: meta.index,
-            exit_code: 1,
-          });
-          callbacks?.onToolComplete?.(
-            toolId,
-            "localization-blocked",
-            "blocked",
-            1,
-          );
-          return {
-            index: meta.index,
-            observation: `### ${tool} ${target}\nexit_code: 1\n${detail}`,
-          };
-        }
+        this.host.beginRecoveryLocalizationInspection(action.type, inspectionTarget);
       }
 
       const recoveredAuthorization =
@@ -662,6 +670,12 @@ export class ChatEngineActionExecutor {
       // ── B2: Read dedupe cache — skip read_file if file unchanged ─────
       // Path-normalized keys so absolute/relative variants share one slot.
       // Admission runs before the cache hash so a denied path is never opened.
+      const recoveryReadBindingBefore = action.type === 'read_file' && this.host.workingState.recoveryGate
+        ? this.host.currentRecoveryBinding() : null;
+      const recoveryReadTarget = action.type === 'read_file' ? recoveryTargetIdentity(requireProjectRoot(this.host.options), action.path) : null;
+      const refreshRecoveryRead = action.type === 'read_file' && recoveryReadBindingBefore &&
+        this.host.workingState.recoveryGate?.binding && sameRecoveryBinding(recoveryReadBindingBefore, this.host.workingState.recoveryGate.binding) &&
+        !this.host.workingState.recoveryGate.readRecords?.slice(-8).some(record => record.tool === 'read_file' && record.target === recoveryReadTarget);
       let fileReadCacheHash: string | undefined;
       if (action.type === "read_file" || action.type === "read_range") {
         const requestedPath =
@@ -696,7 +710,7 @@ export class ChatEngineActionExecutor {
         ).maxFullReadsPerFile;
         const priorFull = this.host.fullReadCounts.get(pathKey) ?? 0;
         if (
-          shouldSkipFullReread({
+          !refreshRecoveryRead && shouldSkipFullReread({
             fullReadCount: priorFull,
             maxFullReads: maxFull,
           })
@@ -739,7 +753,7 @@ export class ChatEngineActionExecutor {
           cache: this.host.readCache,
           contextEpoch: this.host.readContextEpoch,
         });
-        if (fullDecision.skip) {
+        if (fullDecision.skip && !refreshRecoveryRead) {
           const cached = this.host.readCache.get(fullDecision.cacheKey);
           const secs = cached
             ? Math.round((Date.now() - cached.timestamp) / 1000)
@@ -780,7 +794,7 @@ export class ChatEngineActionExecutor {
             context: toolContext,
             preset: "workspace_write",
             executor: this.host.options.toolExecutorForTesting ?? defaultToolExecutor,
-            onDispatchAuthorized: () => recoveredAuthorization,
+            onDispatchAuthorized: recoveryDispatchAuthorization,
             onBeforeExecutorExecute: () =>
               this.host.persistToolStartedAtExecutorDispatch(action, meta),
             ...(this.host.parity.authoritySession
@@ -956,6 +970,7 @@ export class ChatEngineActionExecutor {
             index: meta.index,
             exit_code: gov.exit_code,
             effect_status: strReplaceEffect.status,
+            ...(gov.preDispatchNoEffect === true ? { preDispatchNoEffect: true as const } : {}),
             ...(gov.mutationPaths
               ? { mutation_paths: [...gov.mutationPaths] }
               : {}),
@@ -1001,6 +1016,7 @@ export class ChatEngineActionExecutor {
             index: meta.index,
             exit_code: 0,
             effect_status: strReplaceEffect.status,
+            ...(gov.preDispatchNoEffect === true ? { preDispatchNoEffect: true as const } : {}),
           });
           callbacks?.onToolComplete?.(
             toolId,
@@ -1041,6 +1057,7 @@ export class ChatEngineActionExecutor {
           index: meta.index,
           exit_code: 0,
           effect_status: strReplaceEffect.status,
+          ...(gov.preDispatchNoEffect === true ? { preDispatchNoEffect: true as const } : {}),
           ...(gov.mutationPaths && gov.mutationPaths.length > 0
             ? { mutation_paths: [...gov.mutationPaths] }
             : {}),
@@ -1104,6 +1121,7 @@ export class ChatEngineActionExecutor {
           ownerGeneration,
           dispatchTurnId,
           recoveredAuthorization,
+          recoveryDispatchAuthorization,
           admittedThisAction,
           proposedEdit,
           callbacks,
@@ -1236,7 +1254,7 @@ export class ChatEngineActionExecutor {
         });
         const cachedVerifier = this.host.verifierReceiptCache.get(cacheIdentity.key);
         if (
-          cachedVerifier &&
+          cachedVerifier && !(failedReplay && (recoveryGate?.failureSignature === 'unbound-red-verifier' || driftedCandidate || !recoveryGate?.binding)) &&
           cachedVerifier.cwd === cacheIdentity.cwd &&
           cachedVerifier.envKey === cacheIdentity.envKey &&
           cachedVerifier.writeCountAtCache === this.host.writeCount &&
@@ -1366,8 +1384,7 @@ export class ChatEngineActionExecutor {
           ...(this.host.parity.authoritySession
             ? { authoritySession: this.host.parity.authoritySession }
             : {}),
-          onDispatchAuthorized: () =>
-            this.host.recoveredOperationDispatchAuthorization(action),
+          onDispatchAuthorized: recoveryDispatchAuthorization,
           onBeforeExecutorExecute: () =>
             this.host.persistToolStartedAtExecutorDispatch(action, meta),
           // Privileged ops: lease/PDP decides. Benchmark pair is the only
@@ -1500,6 +1517,7 @@ export class ChatEngineActionExecutor {
         mutationPaths: result.mutationPaths,
         mutationReceipt: result.mutationReceipt,
         effectTransaction: result.effectTransaction,
+        preDispatchNoEffect: result.preDispatchNoEffect,
       });
       // Packet D2: outcome feeds per-model format demotion/promotion.
       if (directMutationAction) {
@@ -1579,10 +1597,17 @@ export class ChatEngineActionExecutor {
           ? result.mutationPaths[0]
           : target;
 
+      const verifierSemanticSignature = frozenVerifierDispatch?.owner && frozenVerifierDispatch.candidate &&
+        !result.policyBlocked && !result.notStarted && lastResult?.process_started === true && lastResult.simulated !== true && lastResult.launch_failure === undefined
+        ? verifierSemanticProgress({ command: target, exitCode: lastResult.exit_code, stdout: lastResult.stdout, stderr: lastResult.stderr,
+          executionContextKey: failedVerifierContextKey(target, frozenVerifierDispatch.owner, frozenVerifierDispatch.identity.cwd, frozenVerifierDispatch.identity.envKey),
+          candidateRevision: frozenVerifierDispatch.candidate.workspaceRevision }) : undefined;
       // Log tool call for structured result metadata
       this.host.toolCallLog.push({
         tool,
+        ...(result.preDispatchNoEffect === true ? { preDispatchNoEffect: true as const } : {}),
         target: projectedTarget,
+        ...(verifierSemanticSignature ? { verifierSemanticSignature } : {}),
         detail,
         index: meta.index,
         ...((action.type === 'run_command' || action.type === 'test_run') ? {
@@ -1707,6 +1732,10 @@ export class ChatEngineActionExecutor {
           const staleSettlement = await settleChatVerifierResult({
             host: this.host, action, result: lastResult, target, tool, meta,
             ownerGeneration, confirmedShellMutation, obsParts,
+            ...(frozenVerifierDispatch ? { cacheIdentity: frozenVerifierDispatch.identity,
+              verifierOwner: frozenVerifierDispatch.owner, foregroundDispatch: frozenVerifierDispatch.foreground ? frozenVerifierDispatch : undefined,
+              canPublish: () => chatVerifierCandidateCurrent(requireProjectRoot(this.host.options), frozenVerifierDispatch.proofCandidate),
+            } : {}),
           });
           if (staleSettlement) return staleSettlement;
 
@@ -1761,7 +1790,8 @@ export class ChatEngineActionExecutor {
           action.type === "semantic_search";
         if (
           inspectionAction &&
-          lastResult &&
+          !result.policyBlocked &&
+          lastResult && !lastResult.denial && lastResult.simulated !== true &&
           lastResult.exit_code === 0 &&
           this.host.isSubmissionCurrent(ownerGeneration)
         ) {
@@ -1769,18 +1799,13 @@ export class ChatEngineActionExecutor {
           const discrimination = isDiscriminatingInspectionEvidence(
             this.host.workingState,
             action,
-            recoveryTargetIdentity(
-              requireProjectRoot(this.host.options),
-              "path" in action && typeof action.path === "string"
-                ? action.path
-                : "",
-            ),
+            recoveryReadTarget === recoveryTargetIdentity(requireProjectRoot(this.host.options), action.type === 'read_file' ? action.path : '') ? recoveryReadTarget : null,
             this.host.workingState.recoveryGate
               ? this.host.currentRecoveryBinding()
               : null,
-            lastResult.stdout.trim()
-              ? createHash("sha256").update(lastResult.stdout).digest("hex")
-              : "",
+            createHash("sha256").update(lastResult.stdout).digest("hex"),
+            lastResult.read_window,
+            recoveryReadBindingBefore,
           );
           this.host.workingState = applyWorkingStateEvent(
             this.host.workingState,
@@ -1794,6 +1819,11 @@ export class ChatEngineActionExecutor {
               ...(action.type === "read_file" ? { file: action.path } : {}),
             },
           );
+          if (discrimination.provenance) {
+            const reference = formatRecoveryReadReference(this.host.workingState, discrimination.provenance);
+            if (reference) obsParts.push(reference);
+            this.host.persistRecoveryWorkingState();
+          }
           if (discrimination.discriminating) {
             this.host.workingState = recordControllerRecoveryStrategy(
               this.host.workingState,

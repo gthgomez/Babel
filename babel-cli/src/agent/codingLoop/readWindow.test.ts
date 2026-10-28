@@ -206,3 +206,16 @@ describe('read window + injection keys (shipped)', () => {
     assert.equal(decideReadInjection({ ...input, contextEpoch: 1 }).skip, false)
   })
 })
+
+test('line windows count delivered lines consistently for terminal newlines and empty files', () => {
+  for (const content of ['a\nb\n', 'a\r\nb\r\n']) {
+    const window = selectReadWindow(content, { kind: 'full' })
+    assert.equal(window.totalLines, 2)
+    assert.equal(window.endLine, 2)
+    assert.deepEqual(window.lines, ['a', 'b'])
+  }
+  const empty = selectReadWindow('', { kind: 'full' })
+  assert.equal(empty.totalLines, 0)
+  assert.equal(empty.endLine, 0)
+  assert.deepEqual(empty.lines, [])
+})

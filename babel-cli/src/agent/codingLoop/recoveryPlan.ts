@@ -1,4 +1,6 @@
 import { createHash } from 'node:crypto'
+import { lstatSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { z } from 'zod'
 import { extractPatchRawTargets } from '../../authority/patchTargets.js'
 import { operationFingerprint } from '../sessionEvents.js'
@@ -6,7 +8,9 @@ import { recoveryTargetIdentity } from './recoveryIdentity.js'
 import {
   applyWorkingStateEvent,
   sameRecoveryBinding,
-  targetMatchesGate,
+  recoveryReadObservationId,
+  recoveryEvidenceKey,
+  type RecoveryReadRecord,
   type RecoveryCandidateBinding,
   type WorkingState,
 } from './workingState.js'
@@ -16,10 +20,10 @@ export const RecoveryPlanProposalSchema = z.object({
   failureSignature: z.string().min(1).describe('Copy working_state.recovery_failure exactly.'),
   workspaceRevision: z.string().min(1).describe('Copy working_state.recovery_revision exactly.'),
   hypothesisClass: z.enum(['logic', 'data_flow', 'interface', 'test_expectation', 'configuration']),
-  targetIdentities: z.array(z.string().min(1)).min(1).max(4).describe('Exact repository-relative file paths changed by this edit, without :symbol suffixes. Every path must be a current failing target.'),
+  targetIdentities: z.array(z.string().min(1)).min(1).max(4).describe('Exact repository-relative file paths changed by this edit, without :symbol suffixes. Existing targets need referenced current delivered read evidence. Reads are inspection support, never write authority.'),
   actionFamily: z.enum(['write_file', 'str_replace', 'apply_patch']).describe('Must equal the concrete edit tool used by this call.'),
   criterionId: z.string().min(1).describe('Copy the exact verifier command/identity from working_state.recovery_criterion_id (also last_verifier_identity). Do not use the test name, assertion label, or failure parser name.'),
-  supportingObservationIds: z.array(z.string().length(16)).min(1).max(8).describe('Copy only exact 16-character IDs from working_state.recovery_observation_keys. Never use evidence prose, paths or invented IDs. If no admissible IDs exist, obtain fresh recovery evidence before proposing an edit.'),
+  supportingObservationIds: z.array(z.string().length(16)).min(1).max(8).describe('Copy only exact 16-character IDs from the delivered recovery_read_reference or working_state.recovery_read_records/recovery_observation_keys. Never use evidence prose, paths or invented IDs. If no admissible IDs exist, obtain fresh recovery evidence before proposing an edit.'),
 })
 
 export type RecoveryPlanProposalV1 = z.infer<typeof RecoveryPlanProposalSchema>
@@ -34,6 +38,8 @@ export interface AdmittedRecoveryPlanV1 extends RecoveryPlanProposalV1 {
 export interface ActualRecoveryEdit {
   actionFamily: RecoveryPlanProposalV1['actionFamily']
   targetIdentities: string[]
+  /** Host-derived existing targets; absent means all targets require inspection. */
+  existingTargetIdentities?: string[]
   editFingerprint: string
   exactFingerprint: string
 }
@@ -56,9 +62,15 @@ export function actualRecoveryEdit(action: RecoveryEditAction, root: string): Ac
   const payload = action.type === 'write_file' ? action.content
     : action.type === 'str_replace' ? [action.old_str, action.new_str]
       : action.patch
+  const existingTargetIdentities: string[] = []
+  for (const target of targetIdentities) {
+    try { lstatSync(resolve(root, target)); existingTargetIdentities.push(target) }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return null }
+  }
   return {
     actionFamily: action.type,
     targetIdentities,
+    existingTargetIdentities,
     editFingerprint: `v2:${createHash('sha256').update(JSON.stringify([action.type, targetIdentities, payload])).digest('hex')}`,
     exactFingerprint: operationFingerprint(action.type, action.type === 'write_file'
       ? { type: action.type, path: action.path, content: action.content }
@@ -69,7 +81,7 @@ export function actualRecoveryEdit(action: RecoveryEditAction, root: string): Ac
 }
 
 export function recoveryObservationId(observationKey: string): string {
-  return createHash('sha256').update(observationKey).digest('hex').slice(0, 16)
+  return recoveryReadObservationId(observationKey)
 }
 
 function sameTargets(a: readonly string[], b: readonly string[]): boolean {
@@ -99,14 +111,22 @@ export function admitRecoveryPlan(
   if (plan.workspaceRevision !== gate.binding.workspaceRevision) return { admitted: false, state, reason: 'workspace_revision_mismatch' }
   if (plan.actionFamily !== actual.actionFamily) return { admitted: false, state, reason: 'action_family_mismatch' }
   if (!sameTargets(plan.targetIdentities, actual.targetIdentities)) return { admitted: false, state, reason: 'target_identity_mismatch' }
-  if (plan.targetIdentities.some((target) => !targetMatchesGate(target, gate.failingTargets))) {
-    return { admitted: false, state, reason: 'target_outside_failure_scope' }
+  const records = gate.readRecords ?? []
+  const referenced: RecoveryReadRecord[] = []
+  for (const id of plan.supportingObservationIds) {
+    const matching = records.filter(record => record.id === id)
+    if (new Set(matching.map(record => record.key)).size > 1) return { admitted: false, state, reason: 'ambiguous_observation' }
+    const record = matching[0]
+    if (!record || recoveryReadObservationId(record.key) !== id || recoveryEvidenceKey(record, gate.failureSignature) !== record.key ||
+        !sameRecoveryBinding(record.binding, current) || record.failureSignature !== gate.failureSignature) {
+      return { admitted: false, state, reason: 'unsupported_observation' }
+    }
+    referenced.push(record)
   }
-  const known = new Set((gate.observedKeys ?? []).map(recoveryObservationId))
-  if (plan.supportingObservationIds.some((id) => !known.has(id)) ||
-      new Set(plan.supportingObservationIds).size !== plan.supportingObservationIds.length) {
-    return { admitted: false, state, reason: 'unsupported_observation' }
-  }
+  if (new Set(plan.supportingObservationIds).size !== plan.supportingObservationIds.length) return { admitted: false, state, reason: 'unsupported_observation' }
+  const existing = actual.existingTargetIdentities ?? actual.targetIdentities
+  if (existing.some(target => !referenced.some(record => record.target === target))) return { admitted: false, state, reason: 'missing_target_read' }
+  if (referenced.length === 0) return { admitted: false, state, reason: 'unsupported_observation' }
   if (!actual.editFingerprint || !actual.exactFingerprint ||
       actual.editFingerprint === state.lastMutation?.canonicalFingerprint ||
       actual.exactFingerprint === gate.mutationFingerprint) {
@@ -142,6 +162,8 @@ export function formatRecoveryPlanRejection(state: WorkingState, reason?: string
   if (reason === 'failure_signature_mismatch') return 'failure_signature_mismatch: copy recovery_failure exactly into repair_plan.failureSignature.'
   if (reason === 'workspace_revision_mismatch') return 'workspace_revision_mismatch: copy recovery_revision exactly into repair_plan.workspaceRevision.'
   if (reason === 'action_family_mismatch') return `action_family_mismatch: repair_plan.actionFamily must equal the actual edit tool ${actual?.actionFamily ?? '(write_file, str_replace or apply_patch)'}.`
+  if (reason === 'missing_target_read') return 'missing_target_read: inspect each existing concrete edit target through a current authorized read_file/read_range, then reference its exact delivered-window handle. A read does not grant write permission.'
+  if (reason === 'ambiguous_observation') return 'ambiguous_observation: this short handle names multiple records; it cannot authorize either reference.'
   if (reason === 'target_outside_failure_scope') return 'target_outside_failure_scope: repair only a target corroborated by the current failing assertion and fresh source read. Rerun the verifier before investigating another failure.'
   if (reason === 'unsupported_observation') return 'unsupported_observation: copy only the exact current recovery_observation_keys into supportingObservationIds, without duplicates or invented IDs.'
   if (reason === 'repeated_failed_edit' || reason === 'repeated_plan_or_edit') return `${reason}: repeating the same edit or changing hypothesis text does not establish a different repair.`

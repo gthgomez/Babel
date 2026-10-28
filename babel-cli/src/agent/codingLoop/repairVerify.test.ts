@@ -200,3 +200,9 @@ describe('failure surface + working state + V0-V3 (shipped)', () => {
     assert.match(decision.message ?? '', /Same error signature/)
   })
 })
+
+test('a real Node assertion mentioning sandbox remains a test failure, not a policy denial', () => {
+  const stdout="TAP version 13\n# Subtest: addition and sandbox\nnot ok 1 - addition and sandbox\n  code: 'ERR_ASSERTION'\n  stack: |-\n    TestContext.<anonymous> (file:///app/test.ts:1:3)\n"
+  assert.equal(surfaceFrom(stdout,'','node --test test.ts').kind,'TEST_FAILURE')
+  assert.equal(surfaceFrom('','[policy] sandbox execution is not allowed','node --test test.ts').kind,'POLICY_FAILURE')
+})

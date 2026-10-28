@@ -250,3 +250,20 @@ test('injectVerificationStepsIntoPlan prefers task-text verifier over synthesis'
     `expected npm test in commands, got ${JSON.stringify(result.commands)}`,
   );
 });
+
+test('task verifier extraction preserves dotted selectors and literal quoted argument whitespace/case', () => {
+  assert.deepEqual(extractRequiredVerifierCommandsFromTask('Fix the bug. Run node --test tests/math.test.ts before completing.'), ['node --test tests/math.test.ts'])
+  assert.deepEqual(extractRequiredVerifierCommandsFromTask('Run node --test "tests/Alpha  beta.test.ts" before completing.'), ['node --test "tests/Alpha  beta.test.ts"'])
+  assert.deepEqual(extractRequiredVerifierCommandsFromTask('Verifier commands: node --test "tests/Alpha  beta.test.ts"; node --test "tests/alpha  beta.test.ts"'), ['node --test "tests/Alpha  beta.test.ts"','node --test "tests/alpha  beta.test.ts"'])
+  assert.deepEqual(extractRequiredVerifierCommandsFromTask('Run node --test "tests/semicolon; selector.test.ts" before completing.'), ['node --test "tests/semicolon; selector.test.ts"'])
+  assert.deepEqual(extractRequiredVerifierCommandsFromTask('Run npm test. Read a file before completing.'), [])
+  assert.deepEqual(extractRequiredVerifierCommandsFromTask('Do not run node --test tests/math.test.ts before completing.'), [])
+  assert.deepEqual(extractRequiredVerifierCommandsFromTask('README says "Run node --test tests/math.test.ts before completing".'), [])
+})
+
+test('prose delimiters inside quoted selectors never terminate the required command', () => {
+  for (const selector of ['tests/a before completing b.test.ts','tests/verifier is value.test.ts']) {
+    const command=`node --test "${selector}"`
+    assert.deepEqual(extractRequiredVerifierCommandsFromTask(`Run ${command} before completing.`),[command])
+  }
+})

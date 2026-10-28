@@ -251,3 +251,8 @@ describe('isVerifierAttemptTool', () => {
     assert.equal(isVerifierAttemptTool('str_replace'), false);
   });
 });
+
+test('explicit host predispatch rejection is harmless before generic policy blocked classification', () => {
+  assert.equal(assessMutationEffect({ tool: 'run_command', policyBlocked: true, error: 'blocked', preDispatchNoEffect: true }).status, 'confirmed_no_change');
+  assert.notEqual(assessMutationEffect({ tool: 'run_command', policyBlocked: true, error: 'blocked' }).status, 'confirmed_no_change');
+});

@@ -112,8 +112,49 @@ export interface StructuredVerifierCommand {
   displayCommand: string
 }
 
+/** Frozen host execution facts. Environment values themselves must never be persisted. */
+export interface VerifierExecutionContext {
+  workspaceRoot: string
+  taskId: string
+  contractHash: string
+  workingDirectory: string
+  environmentFingerprint: string
+  targetSelectors: readonly string[]
+  resolvedExecutable?: string
+}
+
+/** Durable host event order, independent of wall time and ledger position. */
+export interface VerifierEventOrder {
+  sessionId: string
+  seq: number
+}
+
+/** Current host owner of completion evidence. */
+export interface VerifierEvidenceOwner {
+  workspaceRoot: string
+  taskId: string
+  contractHash: string
+  sessionId: string
+}
+
+/** An explicit verifier obligation, bound by the host rather than its receipt. */
+export interface RequiredVerifierRecord {
+  command: string
+  executionContext: VerifierExecutionContext
+  requiredScope: 'full_suite' | 'targeted'
+  greenRequired: boolean
+}
+
 /** Revision-bound verifier evidence used by completion decisions. */
 export interface ExecutorVerifierReceipt {
+  /** Captured evidence retained independently of selected green proof. */
+  summary?: string
+  executionContext?: VerifierExecutionContext
+  order?: VerifierEventOrder
+  argv?: string[]
+  working_directory?: string
+  environment_policy?: string
+  target?: string
   receiptId: string
   verifierId?: string
   command: string
@@ -137,6 +178,11 @@ export interface ExecutorCompletionInput {
   requestedOutcome: TerminalOutcome | 'PLAN_COMPLETE'
   hasWrite: boolean
   verificationPolicy: 'none' | 'required' | 'strict'
+  requiredVerifiers?: readonly RequiredVerifierRecord[]
+  verifierOwner?: VerifierEvidenceOwner
+  /** Live host recheck, distinct from historical workspaceRevision metadata. */
+  currentReceiptRevisionHashes?: Readonly<Record<string, string>>
+  currentWorkspaceRevisionHash?: string
   lastVerifierReceipt?: ExecutorVerifierReceipt | null
   requiredVerifierCommands?: readonly string[] | null
   executedVerifierLedger?: readonly ExecutorVerifierReceipt[] | null
@@ -148,6 +194,7 @@ export interface ExecutorCompletionInput {
     exit_code?: number
     stale?: boolean
     mutation_paths?: string[]
+    preDispatchNoEffect?: true
   }[]
   proof?: { compliant: boolean; errors?: string[] }
   /** Opaque per-engine authority plus the current accepted task/run/project. */

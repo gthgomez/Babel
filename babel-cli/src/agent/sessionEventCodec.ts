@@ -1,3 +1,4 @@
+import { validFailedVerifierExecution } from './codingLoop/failedVerifierExecution.js';
 import { join } from 'node:path';
 import {assertTaskAttemptBinding} from './taskObjectiveLifecycle.js';
 import { type ToolEffectClass } from '../executor/contracts.js';
@@ -458,6 +459,11 @@ export function parseSessionEventLog(
     if (ev.kind === 'recovery_reconciled' &&
       (typeof ev.reconciliation_ref !== 'string' || !/^[A-Za-z0-9._:/#-]{1,160}$/.test(ev.reconciliation_ref))) {
       throw new Error(`Invalid session event at line ${index + 1}: reconciliation_ref is invalid`)
+    }
+    if (ev.kind === 'verifier_attempt' && ev.failed_execution !== undefined &&
+        (!validFailedVerifierExecution(ev.failed_execution) || ev.failed_execution.order.sessionId !== ev.session_id ||
+          ev.failed_execution.order.seq !== ev.seq || ev.failed_execution.toolCallId !== ev.tool_call_id || ev.failed_execution.exitCode !== ev.exit_code)) {
+      throw new Error(`Invalid session event at line ${index + 1}: failed execution descriptor is invalid`)
     }
     if (ev.kind === 'verifier_attempt' && ev.tool_call_id !== undefined &&
       (typeof ev.tool_call_id !== 'string' || ev.tool_call_id.length === 0)) {

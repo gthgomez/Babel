@@ -14,6 +14,7 @@ import {
 } from "./readWindow.js";
 import {
   applyWorkingStateEvent,
+  formatRecoveryReadReference,
   recordControllerRecoveryStrategy,
 } from "./workingState.js";
 import { isDiscriminatingInspectionEvidence } from "../chatEngineHelpers.js";
@@ -40,6 +41,8 @@ export async function executeReadRangeAction(
   const { host, action, tool, target, toolId, meta } = ctx;
   const rPath = resolveChatRangePath(requireProjectRoot(host.options), action.file_path);
   host.persistToolStartedAtExecutorDispatch(action, meta);
+  const bindingBefore = host.workingState.recoveryGate ? host.currentRecoveryBinding() : null;
+  const targetBefore = recoveryTargetIdentity(requireProjectRoot(host.options), action.file_path);
   const rContent = await readFile(rPath, "utf-8");
   // R0-8: the read is a suspension point; a superseded submission must not
   // append its result for the new task.
@@ -69,7 +72,7 @@ export async function executeReadRangeAction(
   });
   if (
     evaluated.window.lines.length === 0 &&
-    action.start_line > evaluated.window.totalLines
+    (action.start_line > Math.max(1, evaluated.window.totalLines))
   ) {
     host.toolCallLog.push({
       tool,
@@ -98,16 +101,19 @@ export async function executeReadRangeAction(
     undefined,
     0,
   );
+  let reference = "";
   if (host.isSubmissionCurrent(ctx.ownerGeneration)) {
     const evidence = `${action.type}:${target}`;
     const discrimination = isDiscriminatingInspectionEvidence(
       host.workingState,
       action,
-      recoveryTargetIdentity(requireProjectRoot(host.options), action.file_path),
+      targetBefore === recoveryTargetIdentity(requireProjectRoot(host.options), action.file_path) ? targetBefore : null,
       host.workingState.recoveryGate ? host.currentRecoveryBinding() : null,
-      evaluated.window.lines.join("\n").trim()
-        ? createHash("sha256").update(evaluated.window.lines.join("\n")).digest("hex")
-        : "",
+      createHash("sha256").update(evaluated.window.lines.join("\n")).digest("hex"),
+      { startLine: evaluated.window.startLine, endLine: evaluated.window.endLine, totalLines: evaluated.window.totalLines,
+        completeFile: !evaluated.window.truncated && evaluated.window.startLine === 1 && evaluated.window.endLine === evaluated.window.totalLines,
+        byteTruncated: false },
+      bindingBefore,
     );
     host.workingState = applyWorkingStateEvent(host.workingState, {
       type: "add_evidence",
@@ -116,6 +122,10 @@ export async function executeReadRangeAction(
       discriminating: discrimination.discriminating,
       ...(discrimination.provenance ? { provenance: discrimination.provenance } : {}),
     });
+    if (discrimination.provenance) {
+      reference = formatRecoveryReadReference(host.workingState, discrimination.provenance);
+      host.persistRecoveryWorkingState();
+    }
     if (discrimination.discriminating) {
       host.workingState = recordControllerRecoveryStrategy(host.workingState, {
         target,
@@ -133,7 +143,7 @@ export async function executeReadRangeAction(
   }
   return {
     index: meta.index,
-    observation: formatReadObservation("read_range", target, evaluated.window),
+    observation: [formatReadObservation("read_range", target, evaluated.window), reference].filter(Boolean).join("\n"),
     admittedProjectRead: true,
   };
 }

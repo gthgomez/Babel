@@ -172,7 +172,12 @@ function decideCompletion(input: ExecutorCompletionInput): CompletionDecision {
 
   const gate = evaluateExecuteCompletionHonesty({
     hasWrite: input.hasWrite,
-    policy: input.verificationPolicy,
+    policy: input.requestedOutcome === 'VERIFIED_COMPLETE' ? 'strict' : input.verificationPolicy,
+    ...(input.requestedOutcome === 'VERIFIED_COMPLETE' || input.requiredVerifiers !== undefined
+      ? { requiredVerifiers: input.requiredVerifiers ?? [] } : {}),
+    ...(input.verifierOwner ? { verifierOwner: input.verifierOwner } : {}),
+    currentWorkspaceRevisionHash: input.currentWorkspaceRevisionHash ?? null,
+    ...(input.currentReceiptRevisionHashes !== undefined ? { currentReceiptRevisionHashes: input.currentReceiptRevisionHashes } : {}),
     lastVerifierReceipt: input.lastVerifierReceipt ?? null,
     toolCallLog: input.toolCallLog,
     requiredVerifierCommands: input.requiredVerifierCommands ?? null,

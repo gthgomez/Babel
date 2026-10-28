@@ -1,3 +1,4 @@
+import { captureRecoveryPatchSnapshot, recoveryPatchSnapshotMatches, recoveryPatchFileFact, captureCompletedRecoveryPatchFact, recoveryPatchSnapshotKey } from './codingLoop/recoveryPatchSnapshot.js';
 /**
  * Every file mutation, including exact string replace, uses one
  * governed policy / checkpoint / integrity / cache path.
@@ -345,6 +346,7 @@ export async function governedApplyPatch(
     budget?: ToolExecutionBudget;
     onAskApproval?: (action: AgentAction) => Promise<boolean>;
     onDispatchAuthorized?: () => { allowed: boolean; message?: string };
+    onRecoveryBatchAuthorized?: () => { allowed: boolean; message?: string };
     onBeforeExecutorExecute?: () => void;
     authoritySession?: AuthoritySessionContext;
     lease?: AutonomyLease | null;
@@ -471,6 +473,9 @@ export async function governedApplyPatch(
     ...(options.protectedPaths?.length ? { protectedPaths: options.protectedPaths } : {}),
   };
 
+  const recoverySnapshot = options.onRecoveryBatchAuthorized ? captureRecoveryPatchSnapshot(options.projectRoot,targets) : null;
+  const completedRecoveryFacts = new Map<string,ReturnType<typeof recoveryPatchFileFact>>();
+  let recoveryBatchAuthorized = false;
   const observations: string[] = [];
   const dispatchState: {
     lastPolicyDecision?: string;
@@ -542,6 +547,19 @@ export async function governedApplyPatch(
           writtenParents.set(absolutePath, captureEffectParentIdentity(absolutePath));
           dispatch = await executeActionWithPolicy(action, preset, options.context, {
             ...dispatchOptions,
+            onDispatchAuthorized: () => {
+              const normal = options.onDispatchAuthorized?.() ?? { allowed:true };
+              if (!normal.allowed) return normal;
+              if (!recoveryBatchAuthorized && options.onRecoveryBatchAuthorized) {
+                const admitted = options.onRecoveryBatchAuthorized();
+                if (!admitted.allowed) return admitted;
+                recoveryBatchAuthorized = true;
+              }
+              if (recoverySnapshot && !recoveryPatchSnapshotMatches(options.projectRoot,recoverySnapshot,completedRecoveryFacts)) {
+                return {allowed:false,message:'[RECOVERY_CANDIDATE_DRIFT] Patch inputs changed before dispatch.'};
+              }
+              return normal;
+            },
             lockContext: lockHandles,
           });
         } catch (dispatchError) {
@@ -650,6 +668,20 @@ export async function governedApplyPatch(
         }
         if (dispatch.effectLedgerRecord) writtenEffects.set(absolutePath, dispatch.effectLedgerRecord);
         writtenPaths.push(absolutePath);
+        if (recoverySnapshot) {
+          try {
+            const provedHash=dispatch.effectLedgerRecord?.postImageHashes?.[absolutePath] ?? dispatch.mutationReceipt?.postImageHashes?.[absolutePath];
+            const fact=captureCompletedRecoveryPatchFact(options.projectRoot,result.path,result.content,provedHash);
+            const key=recoveryPatchSnapshotKey(options.projectRoot,result.path,recoverySnapshot.files.keys());
+            completedRecoveryFacts.set(key,fact);
+          } catch {
+            const rollback=await rollbackWrittenPaths(writtenPaths,contents,createdPaths,writtenContents);
+            throw Object.assign(new Error('Recovery patch postimage capture failed'),{governedPatchFailure:{
+              observation:`### apply_patch ${result.path}\nError: recovery postimage was unavailable or changed.`+formatRollbackOutcome(rollback),
+              exit_code:1,error:'Recovery patch postimage capture failed',policyBlocked:false,terminal:false,absolutePaths,preDispatchNoEffect:false,
+            } satisfies GovernedApplyPatchResult});
+          }
+        }
         observations.push(
           `### apply_patch ${result.path}\nApplied ${hunkCount} hunk${hunkCount === 1 ? '' : 's'} (${result.strategies.join(' → ') || 'none'}).`,
         );

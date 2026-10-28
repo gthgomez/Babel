@@ -335,6 +335,7 @@ export function evaluateReadRequest(input: {
 }
 
 function splitFileLines(content: string): string[] {
-  if (content.length === 0) return ['']
-  return content.split(/\r?\n/)
+  const lines = content.split(/\r?\n/)
+  if (lines.at(-1) === '') lines.pop()
+  return lines
 }

@@ -118,3 +118,33 @@ test('legitimate runner flags still classify as executions', () => {
   assert.equal(satisfiesVerifierRequirement('npm test', 'npm test -- --coverage'), true);
   assert.equal(satisfiesVerifierRequirement('npm test', 'npm run test --silent'), true);
 });
+
+test('selector arguments preserve case, Unicode and quoted whitespace', () => {
+  for (const [required, actual] of [
+    ['node --test --test-name-pattern=Alpha', 'node --test --test-name-pattern=alpha'],
+    ['pytest -k "A  B"', 'pytest -k "A B"'],
+    ['pytest -k "Étage"', 'pytest -k "étage"'],
+    ['node --test Src/Value.test.js', 'node --test src/Value.test.js'],
+    ['node --test "C:/Tests/Value.test.js"', 'node --test "C:/tests/Value.test.js"'],
+    ['pytest -k "final."', 'pytest -k final'],
+  ]) {
+    assert.equal(satisfiesVerifierRequirement(required!, actual!), false, required);
+    assert.equal(satisfiesVerifierRequirement(required!, required!), true, required);
+  }
+});
+
+test('distinct argv token boundaries cannot alias structural selectors', () => {
+  assert.notEqual(analyzeVerifierIdentity('pytest -k "a,b"')?.identityKey,
+    analyzeVerifierIdentity('pytest -k a -m b')?.identityKey);
+});
+
+test('bare positional runner selectors are conservative and case-sensitive', () => {
+  assert.equal(satisfiesVerifierRequirement('pytest Alpha', 'pytest alpha'), false);
+  assert.equal(satisfiesVerifierRequirement('pytest', 'pytest Alpha'), false);
+  assert.equal(satisfiesVerifierRequirement('pytest -k Alpha', 'pytest -m Alpha'), false);
+});
+
+test('runner-looking positional names remain targeted after the runner is stripped', () => {
+  assert.equal(satisfiesVerifierRequirement('node --test', 'node --test test'), false);
+  assert.equal(satisfiesVerifierRequirement('cargo test', 'cargo test run'), false);
+});
