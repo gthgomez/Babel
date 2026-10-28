@@ -5,6 +5,8 @@
  * Completion order of parallel reads must never rewrite that identity.
  */
 
+import { createHash } from 'node:crypto'
+import { isAuthoritativeVerifierCommand } from './completionGatePolicy.js'
 import { hashDiscoveryContent, isDiscoveryTool } from './discoveryProgress.js'
 
 export interface ToolExecutionIdentity {
@@ -22,6 +24,8 @@ export interface DurableToolLogRow {
   detail?: string
   error?: string
   exit_code?: number
+  /** Host-origin execution provenance; never inferred from observation text. */
+  verifierExecuted?: boolean
   stdout?: string
   stderr?: string
 }
@@ -39,6 +43,8 @@ export interface DurableToolResultProjection {
   content: string
   target: string
   exit_code?: number
+  /** Host-origin execution provenance; never inferred from observation text. */
+  verifierExecuted?: boolean
   contentHash?: string
   /** A cached/read-limit notice injected no new discovery evidence. */
   discoverySuppressed?: boolean
@@ -142,6 +148,7 @@ export function projectDurableToolBatch(input: {
       tool_name: row.tool,
       content,
       target: row.target,
+      ...(row.verifierExecuted !== undefined ? { verifierExecuted: row.verifierExecuted } : {}),
       ...(row.exit_code !== undefined ? { exit_code: row.exit_code } : {}),
       ...(hashed !== undefined ? { contentHash: hashed } : {}),
       ...(discoverySuppressed ? { discoverySuppressed: true } : {}),
@@ -179,4 +186,15 @@ export function projectDurableToolBatchBySlicePosition(input: {
       ? { streamNativeToolCallIds: input.streamNativeToolCallIds }
       : {}),
   })
+}
+
+/** Progress requires host execution provenance and a recognized verifier identity. */
+export function executedVerifierProgressSignature(results: ReadonlyArray<{
+  tool_name: string; target?: string; content?: string; exit_code?: number; verifierExecuted?: boolean
+}>): string | null {
+  const relevant = results.filter(r => ['run_command', 'test_run', 'shell_exec'].includes(r.tool_name) &&
+    r.verifierExecuted === true && isAuthoritativeVerifierCommand(r.target))
+  return relevant.length === 0 ? null : relevant.map(r =>
+    `${r.tool_name}:${r.target}:${r.exit_code ?? ''}:` +
+    createHash('sha256').update(r.content ?? '').digest('hex').slice(0, 16)).join('|')
 }

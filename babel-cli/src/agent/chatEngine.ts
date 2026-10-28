@@ -1,3 +1,4 @@
+import { executedVerifierProgressSignature } from './toolExecutionIdentity.js';
 import {normalizeChatExecutionScope,requireProjectRoot,assertConversationRestoreScope,assertBoundGitProjectScope} from './chatExecutionScope.js';
 import type { RunControl, StopRequest } from '../runtime/run-control.js';
 import { initializeChatSubmissionControl, activateChatSubmissionGeneration, type ChatSubmissionControlHost } from './chatEngineRunControl.js';
@@ -501,6 +502,7 @@ export class ChatEngine {
     stdout?: string;
     stderr?: string;
     verified?: boolean;
+    verifierExecuted?: boolean;
     mutation_paths?: string[];
     effect_status?: MutationEffectStatus;
     effect_scope?: import('./mutationTools.js').MutationEffectScope;
@@ -2657,21 +2659,12 @@ export class ChatEngine {
       tool_name: string;
       content?: string;
       exit_code?: number;
+      target?: string;
+      verifierExecuted?: boolean;
     }>,
   ): boolean {
-    const verifierTools = new Set(["run_command", "test_run", "shell_exec"]);
-    const relevant = results.filter((r) => verifierTools.has(r.tool_name));
-    if (relevant.length === 0) return false;
-    const signature = relevant
-      .map(
-        (r) =>
-          `${r.tool_name}:${r.exit_code ?? ""}:` +
-          createHash("sha256")
-            .update(r.content ?? "")
-            .digest("hex")
-            .slice(0, 16),
-      )
-      .join("|");
+    const signature = executedVerifierProgressSignature(results);
+    if (signature === null) return false;
     const changed = signature !== this.lastVerifierSignalSignature;
     this.lastVerifierSignalSignature = signature;
     return changed;

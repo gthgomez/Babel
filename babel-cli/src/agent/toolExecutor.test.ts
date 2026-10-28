@@ -6,6 +6,8 @@ import { describe, it } from 'node:test';
 
 import type { ToolCallRequest, ToolContext, ToolResult } from '../localTools.js';
 import type { AgentAction } from './actions.js';
+import { decodeCommand } from '../authority/commandDecoder.js';
+import { decideWithLease } from '../authority/wire.js';
 import {
   createToolExecutor,
   executeActionWithPolicy,
@@ -808,4 +810,38 @@ describe('circuit breaker (S1)', () => {
     assert.equal(seen?.toolCallId, 'tool-call-9')
     assert.equal(seen?.sessionId, context.runId)
   });
+});
+
+describe('test command denial guidance preserves authority', () => {
+  for (const type of ['run_command', 'test_run'] as const) {
+    it(`${type} explains unsupported test syntax without executing it`, async () => {
+      let executed = false;
+      const result = await executeActionWithPolicy({ type,
+        command: 'node_modules/.bin/tsx --no-warnings=ExperimentalWarning --import ./src/testinfra/register-no-ambient-inference.mjs --test src/agent/chatEngineSupportFeedback.test.ts',
+      }, 'workspace_write', context, { lease: null, isolationAvailable: true,
+        executor: { mapAction: mapAgentActionToToolCalls, execute: async () => { executed = true; throw new Error('must not execute'); } } });
+      assert.equal(executed, false);
+      assert.equal(result.policyBlocked, true);
+      assert.equal(result.reasonCode, 'DENY_MISSING_AUTHORITY');
+      assert.match(result.results[0]!.stderr, /[Nn]ot executed/);
+      assert.match(result.results[0]!.stderr, /node --import tsx --test/);
+      assert.match(result.results[0]!.stderr, /same.*authority|same.*policy/i);
+    });
+  }
+});
+
+it('supported test alternatives retain isolation and arbitrary-code boundaries', () => {
+  const supported = 'node --import ./src/testinfra/register-no-ambient-inference.mjs --import tsx --test --test-reporter=tap src/agent/chatEngineSupportFeedback.test.ts';
+  for (const type of ['run_command', 'test_run'] as const) {
+    assert.equal(decodeCommand(supported).capability, 'run_tests');
+    assert.equal(decideWithLease({ type, command: supported }, 'workspace_write',
+      { lease: null, isolationAvailable: true, hostFallbackAllowed: false }).decision, 'allow');
+    assert.equal(decideWithLease({ type, command: supported }, 'workspace_write',
+      { lease: null, isolationAvailable: false, hostFallbackAllowed: false }).reasonCode, 'DENY_CAPABILITY_CONSTRAINT');
+    for (const command of ['node -e "console.log(1)"', 'tsx -e "console.log(1)"',
+      'node --no-warnings=ExperimentalWarning --import tsx --test a.test.ts']) {
+      assert.equal(decideWithLease({ type, command }, 'workspace_write',
+        { lease: null, isolationAvailable: true, hostFallbackAllowed: false }).reasonCode, 'DENY_MISSING_AUTHORITY');
+    }
+  }
 });

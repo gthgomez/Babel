@@ -124,7 +124,7 @@ export async function settleChatBackgroundVerifier(input: {
   await settleChatVerifierResult({
     host,
     action: { type: 'run_command', command: dispatch.command, cwd: job.cwd },
-    result: { exit_code: result.exit_code, stdout: result.stdout, stderr: result.stderr },
+    result: { exit_code: result.exit_code, stdout: result.stdout, stderr: result.stderr, process_started: job.processStarted === true },
     target: dispatch.command,
     tool: 'run_command',
     meta: { index: input.index, idempotencyKey: dispatch.toolCallId },

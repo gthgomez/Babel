@@ -150,6 +150,8 @@ export interface HostLaunchFailure {
 }
 
 export interface ToolResult {
+  /** Host-origin child start evidence; does not assert that tests ran or passed. */
+  process_started?: boolean;
   /** Successful glob data: count is returned paths, not display lines or total matches. */
   glob_result?: { paths: string[]; returned_count: number; truncated: boolean };
   exit_code: number;
@@ -2027,15 +2029,15 @@ export class SafeExecutor {
 
     if (prepared.ownedContainerName && (result.error || result.status !== 0)) {
       try { removeOwnedContainerSync(prepared.ownedContainerName, prepared.env, Boolean(result.error && result.pid > 0)); }
-      catch (error) { return { exit_code: 1, stdout: result.stdout ?? '', stderr: String(error) }; }
+      catch (error) { return { exit_code: 1, stdout: result.stdout ?? '', stderr: String(error), process_started: result.pid > 0 }; }
     }
     if (result.error) {
       if (isSpawnSyncRuntimeSupervisorError(result.error)) {
-        return normalizeSupervisorTerminatedShellOutput(
+        return { ...normalizeSupervisorTerminatedShellOutput(
           result.status,
           result.stdout ?? '',
           result.stderr ?? '',
-        );
+        ), process_started: result.pid > 0 };
       }
       const isTransient = transientRetryCount > 0 && isTransientSpawnError(result.error.message);
       const prefix = isTransient
@@ -2046,10 +2048,11 @@ export class SafeExecutor {
         stdout: '',
         stderr: `${prefix} ${result.error.message}`,
         launch_failure: { code: isTransient ? 'transient_spawn_error' : 'spawn_error' },
+        process_started: result.pid > 0,
       };
     }
 
-    return normalizeShellOutput(result.status, result.stdout ?? '', result.stderr ?? '');
+    return { ...normalizeShellOutput(result.status, result.stdout ?? '', result.stderr ?? ''), process_started: result.pid > 0 };
   }
 
   /**
@@ -2109,7 +2112,7 @@ export class SafeExecutor {
       })();
       registerPendingProcessTermination(cleanup, sessionId ?? 'unscoped', prepared.ownedContainerName);
       try { await cleanup; }
-      catch (error) { return { exit_code: 1, stdout: result.stdout, stderr: String(error) }; }
+      catch (error) { return { exit_code: 1, stdout: result.stdout, stderr: String(error), process_started: result.processStarted }; }
     }
     if (result.error) {
       if (result.aborted) {
@@ -2117,16 +2120,17 @@ export class SafeExecutor {
           exit_code: 1,
           stdout: '',
           stderr: `[sandbox] Spawn error: ${result.error.message}`,
+          process_started: result.processStarted,
         };
       }
       if (isChildRuntimeSupervisorError(result.error, result.processStarted, result.timedOut)) {
-        return normalizeSupervisorTerminatedShellOutput(
+        return { ...normalizeSupervisorTerminatedShellOutput(
           result.status,
           result.stdout,
           result.stderr,
           result.stdoutTruncated,
           result.stderrTruncated,
-        );
+        ), process_started: result.processStarted };
       }
       const transient =
         transientRetryCount > 0 && isTransientSpawnError(result.error.message);
@@ -2137,15 +2141,16 @@ export class SafeExecutor {
         launch_failure: {
           code: transient ? ('transient_spawn_error' as const) : ('spawn_error' as const),
         },
+        process_started: result.processStarted,
       };
     }
-    return normalizeShellOutput(
+    return { ...normalizeShellOutput(
       result.status,
       result.stdout,
       result.stderr,
       result.stdoutTruncated,
       result.stderrTruncated,
-    );
+    ), process_started: result.processStarted };
   }
 
   /** Sugar over shellExec with a default timeout suitable for test runners. */

@@ -1585,6 +1585,11 @@ export class ChatEngineActionExecutor {
         target: projectedTarget,
         detail,
         index: meta.index,
+        ...((action.type === 'run_command' || action.type === 'test_run') ? {
+          verifierExecuted: !result.policyBlocked && !result.notStarted &&
+            lastResult?.process_started === true && lastResult.simulated !== true &&
+            lastResult.launch_failure === undefined,
+        } : {}),
         ...(lastResult
           ? {
               exit_code: lastResult.exit_code,

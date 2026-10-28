@@ -70,6 +70,7 @@ import {
 } from '../authority/governanceReconcile.js';
 import { runWithUnprivilegedChildEnv } from '../authority/unprivilegedChildEnv.js';
 import { classifyAutonomyAction } from '../config/autonomyPolicy.js';
+import { decodeCommand } from '../authority/commandDecoder.js';
 
 /**
  * Active lease, cached for the process lifetime. A broken lease env fails
@@ -571,10 +572,20 @@ function policyBlockedToolResult(
     (decision === 'deny'
       ? `Policy denied ${action.type}`
       : `Policy requires approval before ${action.type}`);
+  const testSyntaxDenied = reason?.includes('DENY_MISSING_AUTHORITY') &&
+    (action.type === 'run_command' || action.type === 'test_run') &&
+    /(?:^|\s)--test(?:\s|$)/.test(action.command) &&
+    decodeCommand(action.command).capability === 'run_arbitrary_code';
+  const guidance = testSyntaxDenied
+    ? '\nNot executed: this command form is classified as arbitrary code and requires authority. ' +
+      'run_command and test_run use the same authority policy. Do not retry the unchanged command under another tool name. ' +
+      'Recognized Node test forms include node --test <test-file> and node --import tsx --test <test-file>. ' +
+      'Preserve the intended test files and required imports; these forms still require isolation and all policy checks.'
+    : '';
   return {
     exit_code: 1,
     stdout: '',
-    stderr: message,
+    stderr: message + guidance,
   };
 }
 

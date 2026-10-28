@@ -48,6 +48,7 @@ import { resetDockerAvailabilityCache, setDockerAvailableForTest } from '../conf
 import { unsupportedTestClaim } from './chatResponseEvidence.js';
 import { normalizeReadCacheKey } from './readThrashPolicy.js';
 import { ProgressController } from './progressController.js';
+import { resetSessionGate } from '../services/searchDepthGate.js';
 
 function shellArg(value: string): string {
   if (process.platform === 'win32') return `"${value.replaceAll('"', '\\"')}"`;
@@ -333,6 +334,34 @@ describe('Chat coding output contracts (executor dispatch)', { concurrency: fals
     };
     return { host, close, controls, projectRoot, run, start };
   }
+
+  test('foreground verifier provenance excludes search-depth denial and records real red/green execution', async () => {
+    const f = verifierFixture('2');
+    const prior = process.env['BABEL_ENFORCE_SEARCH_GATE'];
+    try {
+      process.env['BABEL_ENFORCE_SEARCH_GATE'] = 'true'; resetSessionGate();
+      const denied = await f.run({ type: 'test_run', command: 'node --test verify.test.mjs' });
+      assert.match(denied.observation, /SEARCH_DEPTH_GATE/);
+      assert.equal(f.host.toolCallLog.at(-1)?.verifierExecuted, false);
+      assert.equal(f.host.executedVerifierLedger.length, 0);
+      if (prior === undefined) delete process.env['BABEL_ENFORCE_SEARCH_GATE'];
+      else process.env['BABEL_ENFORCE_SEARCH_GATE'] = prior;
+      resetSessionGate();
+      const red = await f.run({ type: 'test_run', command: 'node --test verify.test.mjs' });
+      assert.match(red.observation, /exit_code: 1/);
+      assert.equal(f.host.toolCallLog.at(-1)?.verifierExecuted, true);
+      const greenFixture = verifierFixture('1');
+      try {
+        const green = await greenFixture.run({ type: 'run_command', command: 'node --test verify.test.mjs' });
+        assert.match(green.observation, /exit_code: 0/);
+        assert.equal(greenFixture.host.toolCallLog.at(-1)?.verifierExecuted, true);
+      } finally { greenFixture.close(); }
+    } finally {
+      if (prior === undefined) delete process.env['BABEL_ENFORCE_SEARCH_GATE'];
+      else process.env['BABEL_ENFORCE_SEARCH_GATE'] = prior;
+      resetSessionGate(); f.close();
+    }
+  });
 
   test('linked worktree supports governed Chat edit and native verification', async () => {
     const storage = mkdtempSync(join(tmpdir(), 'babel-chat-worktree-'));
