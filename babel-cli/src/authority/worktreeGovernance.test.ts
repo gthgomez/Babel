@@ -82,13 +82,20 @@ for (const target of ['.git', 'commondir', 'gitdir']) {
   test(`redirected ${target} fails closed and does not retarget snapshots`, async () => {
     const f = fixture();
     try {
-      const { readFileSync } = await import('node:fs');
+      const { closeSync, ftruncateSync, openSync, readFileSync } = await import('node:fs');
       const { reconcileGovernanceAfterEffect } = await import('./governanceReconcile.js');
       const before = snapshotGovernanceBytes(f.worktree, [], undefined, f.common);
       const baseline = buildBaseline(f.worktree, f.common);
       const path = target === '.git' ? join(f.worktree, target) : join(f.common, 'worktrees', 'linked', target);
       const original = readFileSync(path, 'utf8');
-      writeFileSync(path, target === '.git' ? 'gitdir: ../unrelated\n' : '../unrelated\n');
+      const redirected = target === '.git' ? 'gitdir: ../unrelated\n' : '../unrelated\n';
+      // Windows hidden Git files reject create/truncate opens; mutate the existing file.
+      const fd = openSync(path, 'r+');
+      try {
+        ftruncateSync(fd, 0);
+        writeFileSync(fd, redirected);
+      } finally { closeSync(fd); }
+      assert.equal(readFileSync(path, 'utf8'), redirected, 'the intended tamper must occur before testing policy');
       assert.equal(checkBaseline(f.worktree, baseline).ok, false);
       assert.throws(() => snapshotGovernanceBytes(f.worktree, [], undefined, f.common), /governance inspect failed/);
       assert.equal(reconcileGovernanceAfterEffect({ repoRoot: f.worktree, before }).mutated, true);

@@ -3,7 +3,7 @@
   "algorithm": "sha256",
   "purpose": "drift_detection_not_authorization",
   "normalization": "utf8_crlf_to_lf",
-  "policy_bundle_id": "e5defb6dff268afd6184489c276b237a80dfaa92005a9849ad6f83a610a6978d",
+  "policy_bundle_id": "cd0430f093691c8ade266696521e880c980b16157de88603314928ef7aba7e8b",
   "files": {
     ".github/workflows/public-pr-metadata.yml": "67e630d700055533ee77157ed05fc347161c7c041e35151f2652ffd9b9973023",
     ".github/workflows/publish-npm.yml": "54036b704d59e513cbbb981efa00e82121e40871d6dfe789c8636bd0159f8c9e",
@@ -68,7 +68,7 @@
     "babel-cli/src/authority/trustedHostFilesystemPathList.ts": "69d86d3724a2b212b32f253dbaa8f320a8b60a5ba213b08cc04ae67f0a78e232",
     "babel-cli/src/authority/unprivilegedChildEnv.ts": "c066cc06f9464d1e01ef2c026c07969de84266af388c406f0d129cf2e11fdcf4",
     "babel-cli/src/authority/wire.ts": "becba631906259bb27dd08ef48fe1845bd357d24795d2106d15658b5d0de8db3",
-    "babel-cli/src/authority/worktreeGovernance.test.ts": "767384a297a0f5308f293340612c0a7ffbc9785333d77802014f6192573909f9",
+    "babel-cli/src/authority/worktreeGovernance.test.ts": "068f2372fb2be18dbd888effd7e6a2bd8d300462d468b50d9df6fd897911034a",
     "babel-cli/src/config/autonomyPolicy.test.ts": "a8af7f04051d88798aa2c0dc8ff14c74b97dc3ac8101cb8412ecf9b966d774d7",
     "babel-cli/src/config/autonomyPolicy.ts": "2570340cf00f6403a23d4edf6f36d44f341b6da990ed526d317b2219ddde6f01",
     "babel-cli/src/services/babelChatReview.test.ts": "679cf6a823a8c18281de0ef52d7dfe22fd0195e725f1d4ab3909d63f451d085c",
