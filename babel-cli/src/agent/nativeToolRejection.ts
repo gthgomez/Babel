@@ -32,5 +32,8 @@ export function describeNativeToolRejection(input: {
 
 /** Only sanitized controller diagnostics enter the next provider request. */
 export function nativeSchemaRepairFeedback(rejection: Record<string, unknown>): string {
-  return `Native tool schema correction: the entire previous batch was rejected without execution. ${JSON.stringify({tool:rejection.tool,issues:rejection.issues})}. Submit valid arguments using the advertised tool schema; do not repeat the malformed call. For str_replace, provide file_path, the exact existing old_str and new_str; use write_file with complete content when appropriate. No missing argument was inferred and no action was dispatched.`
+  const recoveryHint = JSON.stringify(rejection.issues).includes('supportingObservationIds')
+    ? ' For repair_plan.supportingObservationIds, copy only exact 16-character IDs from working_state.recovery_observation_keys. If no admissible IDs exist, obtain fresh recovery evidence before proposing an edit; never invent IDs or substitute evidence prose.'
+    : ''
+  return `Native tool schema correction: the entire previous batch was rejected without execution. ${JSON.stringify({tool:rejection.tool,issues:rejection.issues})}. Submit valid arguments using the advertised tool schema; do not repeat the malformed call. For str_replace, provide file_path, the exact existing old_str and new_str; use write_file with complete content when appropriate. No missing argument was inferred and no action was dispatched.${recoveryHint}`
 }
