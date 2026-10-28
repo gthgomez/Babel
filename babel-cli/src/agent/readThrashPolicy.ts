@@ -52,7 +52,7 @@ export function normalizeReadCacheKey(filePath: string, projectRoot?: string): s
   // Collapse /./ segments lightly
   p = p.replace(/\/\.\//g, '/');
   // Case-fold for Windows-ish absolute paths
-  if (/^[A-Za-z]:\//.test(p) || p.includes('/Workspace/') || p.includes('/workspace/')) {
+  if (/^[A-Za-z]:\//.test(p)) {
     p = p.toLowerCase();
   }
   return p;

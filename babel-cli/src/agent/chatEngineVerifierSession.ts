@@ -1,3 +1,4 @@
+import { mandatoryVerifierProse } from '../config/verifierIntent.js';
 /**
  * Verifier command extraction + R9 tamper guard helpers (from ChatEngine).
  */
@@ -11,6 +12,7 @@ import type { StallState } from './stallDetector.js';
 /** R3b: Extract a verifier command pattern from the task string. */
 export function extractVerifierCommand(task: string | undefined): string | null {
   if (!task) return null;
+  task = mandatoryVerifierProse(task);
 
   const patterns = [
     /run\s+(npm test|pytest|go test\s+\S+|cargo test|make test|npx jest|npx mocha)/i,

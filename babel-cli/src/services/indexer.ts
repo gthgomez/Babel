@@ -774,6 +774,8 @@ export async function collectTextFiles(
     maxFiles?: number;
     onDepthLimit?: () => void;
     onUnreadableDirectory?: () => void;
+    /** Enumerate names for glob without restricting to indexable text extensions. */
+    includeNonTextPaths?: boolean;
   } = {},
 ): Promise<string[]> {
   const projectRoot = options.projectRoot ? resolve(options.projectRoot) : undefined;
@@ -856,7 +858,7 @@ export async function collectTextFiles(
         maxFiles,
         currentDepth: currentDepth + 1,
       });
-    } else if (entry.isFile() && TEXT_EXTENSIONS.has(extname(entry.name).toLowerCase())) {
+    } else if (entry.isFile() && (options.includeNonTextPaths || TEXT_EXTENSIONS.has(extname(entry.name).toLowerCase()))) {
       allFiles.push(fullPath);
     }
   }

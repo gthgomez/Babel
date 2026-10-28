@@ -1,3 +1,4 @@
+import { mandatoryVerifierProse } from '../config/verifierIntent.js';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -44,6 +45,7 @@ function uniqueCommands(commands: readonly string[]): string[] {
 }
 
 export function extractRequiredVerifierCommandsFromTask(task: string): string[] {
+  task = mandatoryVerifierProse(task);
   const commands: string[] = [];
   for (const line of task.split(/\r?\n/)) {
     const match = line.match(/\bVerifier commands?\s*:\s*(.+)$/i);

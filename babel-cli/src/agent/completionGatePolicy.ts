@@ -1,3 +1,4 @@
+import { mandatoryVerifierProse } from '../config/verifierIntent.js';
 /**
  * Completion honesty policy — when execute work is "done enough" to finish.
  * Pure helpers; no I/O.
@@ -506,6 +507,7 @@ export function hasInspectedNoChangeEvidence(log: GateToolLogEntry[]): boolean {
  * Task text explicitly asks to run tests / verify before complete.
  */
 export function taskAsksForVerifier(task: string): boolean {
+  task = mandatoryVerifierProse(task);
   return /\b(run|execute)\s+(npm\s+test|pytest|tests?|the\s+test)\s+(before|after|when|to\s+verify)/i.test(
     task,
   ) || /\b(run\s+tests?|verify\s+(with|via)\s+tests?|before\s+completing)\b/i.test(task);

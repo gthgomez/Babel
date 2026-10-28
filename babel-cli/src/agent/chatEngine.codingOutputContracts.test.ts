@@ -45,6 +45,7 @@ import { projectDurableToolBatch } from './toolExecutionIdentity.js';
 import { resolveLiveSessionAuthority } from './liveSessionBridge.js';
 import { openAdmissionStore, type AdmissionStore } from '../runtime/admission.js';
 import { resetDockerAvailabilityCache, setDockerAvailableForTest } from '../config/benchmarkContainer.js';
+import { normalizeReadCacheKey } from './readThrashPolicy.js';
 import { ProgressController } from './progressController.js';
 
 function shellArg(value: string): string {
@@ -842,6 +843,36 @@ describe('Chat coding output contracts (executor dispatch)', { concurrency: fals
       'owner-b-read',
     );
     assert.match(denied.observation, /ARTIFACT_DENIED|denied/i);
+    } finally { close(); }
+  });
+
+  test('workspace file read observations respect platform path identity', async () => {
+    const storage = mkdtempSync(join(tmpdir(), 'babel-case-read-'));
+    cleanup.push(storage);
+    const projectRoot = join(storage, 'workspace', 'project');
+    const runDir = join(storage, 'run');
+    mkdirSync(projectRoot, { recursive: true });
+    mkdirSync(runDir);
+    writeFileSync(join(projectRoot, 'Foo.ts'), 'export const value = 1;');
+    writeFileSync(join(projectRoot, 'foo.ts'), 'export const value = 1;');
+    const controls: HostControls = { ownerGeneration: 1, taskAllowance: allowance('owner', 'task') };
+    const { host, close } = makeHost(storage, projectRoot, runDir, controls);
+    host.readCacheKey = (path: string) => normalizeReadCacheKey(path, projectRoot);
+    try {
+      const executor = new ChatEngineActionExecutor(host);
+      const caseAliases = process.platform === 'win32';
+      assert.equal(host.readCacheKey('Foo.ts') === host.readCacheKey('foo.ts'), caseAliases);
+      for (const path of ['Foo.ts', 'foo.ts']) {
+        const result = await dispatch(executor, projectRoot, runDir, { type: 'read_file', path }, 1, path);
+        if (caseAliases && path === 'foo.ts') {
+          assert.match(result.observation, /Skipping re-injection/, 'Windows case aliases reuse unchanged content');
+        } else {
+          assert.match(result.observation, /export const value = 1/);
+          assert.doesNotMatch(result.observation, /Skipping re-injection|READ_LIMIT/);
+        }
+      }
+      const repeated = await dispatch(executor, projectRoot, runDir, { type: 'read_file', path: 'foo.ts' }, 1, 'repeat');
+      assert.match(repeated.observation, /Skipping re-injection/, 'same-path unchanged bytes still deduplicate');
     } finally { close(); }
   });
 
