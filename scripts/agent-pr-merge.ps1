@@ -7,7 +7,8 @@ param(
   [string]$MergeMethod = 'squash',
   [string]$RiskTier = 'GREEN',
   [string]$AutonomousReviewEvidencePath = '',
-  [string]$BuilderIdentity = ''
+  [string]$BuilderIdentity = '',
+  [ValidateRange(0, 1800)][int]$CheckWaitSeconds = 0
 )
 
 # Bounded exact-head merge executor. It never decides merge readiness itself:
@@ -197,6 +198,9 @@ try {
     BuilderIdentity             = $BuilderIdentity
     OutputFormat                = 'json'
   }
+  # Zero preserves the legacy immutable launcher's documented default. A
+  # requested nonzero wait must be supported by that trusted base or fail closed.
+  if ($CheckWaitSeconds -ne 0) { $gateParameters.CheckWaitSeconds = $CheckWaitSeconds }
   $gateOutput = ''
   $gateExit = 0
   try {
