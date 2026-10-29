@@ -60,7 +60,7 @@ describe('observation compiler (shipped formatChatToolObservation path)', () => 
     try {
       const env: NodeJS.ProcessEnv = { ...process.env, NODE_OPTIONS: '', NODE_PATH: '' }
       delete env.NODE_TEST_CONTEXT
-      const result = spawnSync(process.execPath, ['--import', 'tsx', '--test', testFile], {
+      const result = spawnSync(process.execPath, ['--import', 'tsx', '--test', '--test-reporter=tap', testFile], {
         cwd: root,
         encoding: 'utf8',
         env,
@@ -78,6 +78,8 @@ describe('observation compiler (shipped formatChatToolObservation path)', () => 
       const delivered = formatCompiledObservation(observation)
       assert.notEqual(result.status, 0, `${result.stdout}\n${result.stderr}`)
       assert.match(`${result.stderr}\n${result.stdout}`, /ERR_MODULE_NOT_FOUND[^\n]*Cannot find package ['"]tsx['"]/)
+      assert.match(result.stdout, /^TAP version 13/m)
+      assert.match(result.stdout, /^# node:internal\/modules\/package_json_reader:\d+/m)
       assert.equal(observation.parserName, 'test_loader')
       assert.match(observation.summary, /no project test files executed/i)
       assert.match(delivered, /set test_run\.cwd to that package directory/i)
@@ -89,10 +91,11 @@ describe('observation compiler (shipped formatChatToolObservation path)', () => 
   test('a missing tsx import reported after TAP tests start remains a test failure', () => {
     const output = [
       'TAP version 13',
+      '# node:internal/modules/package_json_reader:314',
       '# Subtest: loads helper module',
       'not ok 1 - loads helper module',
       '  ---',
-      "  error: \"Error [ERR_MODULE_NOT_FOUND]: Cannot find package 'tsx' imported from /app/helper.test.mjs\"",
+      "  error: \"Error [ERR_MODULE_NOT_FOUND]: Cannot find package 'tsx' imported from /app/helper-module.mjs\"",
       '  code: ERR_MODULE_NOT_FOUND',
       '  ...',
       '1..1',
@@ -102,8 +105,8 @@ describe('observation compiler (shipped formatChatToolObservation path)', () => 
     ].join('\n')
     const observation = compileObservation({
       tool: 'test_run',
-      target: 'node --test helper.test.mjs',
-      command: 'node --test helper.test.mjs',
+      target: 'node --import tsx --test helper.test.mjs',
+      command: 'node --import tsx --test helper.test.mjs',
       exitCode: 1,
       stdout: output,
       stderr: '',

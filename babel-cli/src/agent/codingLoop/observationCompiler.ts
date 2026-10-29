@@ -231,9 +231,9 @@ export function parseStructuredFailures(
 function isMissingTsxTestLoader(text: string, tool?: string, command?: string): boolean {
   const isNodeTestCommand = /^(?:node|node\.exe)\s+--import(?:=|\s+)tsx\s+--test\b/i.test(command?.trim() ?? '')
   const missingPackage = /ERR_MODULE_NOT_FOUND[^\r\n]*Cannot find package ['"]tsx['"] imported from ([^\r\n]+)/i.exec(text)
-  const loaderResolutionStack = /(?:^|\n)node:internal\/modules\/package_json_reader:\d+/m.test(text)
+  const loaderResolutionStack = /(?:^|\n)(?:#\s*)?node:internal\/modules\/package_json_reader:\d+/m.test(text)
   const importerIsTestFile = /\.(?:test|spec)\.[cm]?[jt]sx?$/i.test(missingPackage?.[1]?.trim() ?? '')
-  const testBodyStarted = /(?:^|\n)\s*(?:#\s*Subtest:|not ok \d+ - (?![^\n]*\.(?:test|spec)\.[cm]?[jt]sx?\s*$))/m.test(text)
+  const testBodyStarted = hasStartedTapTest(text)
 
   // Node wraps a preload failure in a file-level test failure under --test.
   // Require the concrete `node --import tsx --test` invocation plus Node's
@@ -241,6 +241,17 @@ function isMissingTsxTestLoader(text: string, tool?: string, command?: string): 
   // A matching error printed by a project test is not evidence that no tests ran.
   return isNodeTestCommand && Boolean(missingPackage) && loaderResolutionStack &&
     !importerIsTestFile && !testBodyStarted
+}
+
+function hasStartedTapTest(text: string): boolean {
+  const markers = /(?:^|\n)\s*(?:#\s*Subtest:\s*([^\r\n]+)|(?:not\s+)?ok\s+\d+\s+-\s+([^\r\n]+))/gm
+  let match: RegExpExecArray | null
+  while ((match = markers.exec(text)) !== null) {
+    const label = (match[1] ?? match[2] ?? '').trim()
+    const isFileLevelFailure = /[\\/][^\\/]+\.(?:test|spec)\.[cm]?[jt]sx?$/i.test(label)
+    if (!isFileLevelFailure) return true
+  }
+  return false
 }
 
 function parseJestVitest(text: string): CompiledFailure[] {
