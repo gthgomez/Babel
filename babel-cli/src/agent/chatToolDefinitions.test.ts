@@ -239,4 +239,6 @@ it('test_run advertises recognized syntax and shared authority', () => {
   const description = buildChatToolDefinitions().find(t => t.function.name === 'test_run')!.function.description;
   assert.match(description, /node --import tsx --test/);
   assert.match(description, /same.*policy|same.*authority/i);
+  assert.match(description, /nested package.*set cwd/i);
+  assert.match(description, /test-file path relative to that cwd/i);
 });

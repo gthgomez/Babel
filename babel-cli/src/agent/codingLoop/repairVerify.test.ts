@@ -3,6 +3,7 @@ import { describe, test } from 'node:test'
 
 import { compileObservation } from './observationCompiler.js'
 import { classifyFailureSurface, isRepeatedSameError } from './failureSurface.js'
+import { ingestVerifierResult } from './chatBindings.js'
 import {
   applyWorkingStateEvent,
   createWorkingState,
@@ -34,6 +35,29 @@ function surfaceFrom(stdout: string, stderr: string, command: string, exit = 1) 
 }
 
 describe('failure surface + working state + V0-V3 (shipped)', () => {
+  test('missing tsx loader is a dependency failure and does not open an assertion-repair gate', () => {
+    const command = 'node --import tsx --test src/agent/chatEngineSupportFeedback.test.ts'
+    const stdout = [
+      'node:internal/modules/package_json_reader:314',
+      "Error [ERR_MODULE_NOT_FOUND]: Cannot find package 'tsx' imported from /app/",
+      '    at Object.getPackageJSONURL (node:internal/modules/package_json_reader:255:9)',
+      'Node.js v24.19.0',
+    ].join('\n')
+    const observation = compileObservation({ tool: 'test_run', target: command, command, exitCode: 1, stdout, stderr: '' })
+    assert.equal(observation.parserName, 'test_loader')
+    assert.deepEqual(observation.failures, [])
+    assert.match(observation.summary, /no project test files executed/i)
+    assert.equal(classifyFailureSurface({ observation }).kind, 'DEPENDENCY_FAILURE')
+
+    const ingested = ingestVerifierResult({
+      state: createWorkingState('fix the failing tests'),
+      tool: 'test_run', target: command, exitCode: 1, stdout, stderr: '', summary: observation.summary,
+    })
+    assert.equal(ingested.state.failureSurface?.kind, 'DEPENDENCY_FAILURE')
+    assert.equal(ingested.state.recoveryGate, undefined)
+    assert.equal(ingested.lastVerifierFailed, true, 'a failed launch remains unverified')
+  })
+
   test('Jest / Pytest / tsc / build classify to matching surfaces', () => {
     const jestS = surfaceFrom(
       'FAIL src/a.test.ts\n  ● handles cache\n    Expected: 1\nTests: 1 failed',

@@ -622,6 +622,7 @@ export function formatChatToolObservation(
         tool,
         target,
         ...(command !== undefined ? { command } : {}),
+        ...('cwd' in action && action.cwd !== undefined ? { cwd: action.cwd } : {}),
         exitCode: result.exitCode === undefined ? -1 : result.exitCode,
         stdout: result.stdout ?? '',
         stderr: result.stderr ?? '',
@@ -976,7 +977,7 @@ function buildAllChatToolDefinitions(): ToolDefinition[] {
       type: 'function',
       function: {
         name: 'test_run',
-        description: 'Run a test command with extended timeout (preferred for test suites). Uses the same authority policy as run_command; selecting this tool does not authorize arbitrary code. Recognized Node forms include node --test <test-file> and node --import tsx --test <test-file>. Preserve required imports and test scope. Commands still require isolation and all policy checks.',
+        description: 'Run a test command with extended timeout (preferred for test suites). Uses the same authority policy as run_command; selecting this tool does not authorize arbitrary code. Recognized Node forms include node --test <test-file> and node --import tsx --test <test-file>. For tests inside a nested package, set cwd to the package directory and use a test-file path relative to that cwd. Preserve required imports and test scope. Commands still require isolation and all policy checks.',
         parameters: {
           type: 'object',
           properties: {

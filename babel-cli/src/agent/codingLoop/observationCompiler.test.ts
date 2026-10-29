@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
-import { mkdtempSync, readFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { spawnSync } from 'node:child_process'
 import { describe, test } from 'node:test'
 
 import { formatChatToolObservation } from '../chatToolDefinitions.js'
@@ -18,6 +19,9 @@ describe('observation compiler (shipped formatChatToolObservation path)', () => 
       { stdout: `TAP version 13\n# ${error}\n# tests 1\n# fail 1`, exitCode: 1 })
     assert.match(bare, /node --import tsx --test/)
     assert.match(bare, /if.*tsx.*installed/i)
+    assert.match(bare, /use read_file to inspect.*package\.json/i)
+    assert.match(bare, /set test_run\.cwd to the package directory/i)
+    assert.match(bare, /test-file path relative to cwd/i)
     for (const command of ['node --import tsx --test src/helper.test.ts', 'node --test src/helper.test.mjs']) {
       const observation = formatChatToolObservation({ type: 'test_run', command }, { stdout: error, exitCode: 1 })
       assert.doesNotMatch(observation, /node --import tsx --test <test-file>/)
@@ -25,14 +29,89 @@ describe('observation compiler (shipped formatChatToolObservation path)', () => 
   })
 
   test('tsx package resolution failure suggests checking the package cwd without changing authority', () => {
-    const error = "Error [ERR_MODULE_NOT_FOUND]: Cannot find package 'tsx' imported from /app/babel-cli/src/agent/helper.test.ts"
-    const failed = formatChatToolObservation({ type: 'test_run', command: 'node --import tsx --test babel-cli/src/agent/helper.test.ts' },
-      { stdout: error, exitCode: 1 })
+    const error = [
+      'node:internal/modules/package_json_reader:314',
+      "Error [ERR_MODULE_NOT_FOUND]: Cannot find package 'tsx' imported from /app/",
+      '    at Object.getPackageJSONURL (node:internal/modules/package_json_reader:255:9)',
+      'Node.js v24.19.0',
+    ].join('\n')
+    const failed = formatChatToolObservation({
+      type: 'test_run',
+      command: 'node --import tsx --test src/agent/helper.test.ts',
+      cwd: 'babel-cli',
+    }, { stdout: error, exitCode: 1 })
+    assert.match(failed, /cwd: babel-cli/)
     assert.match(failed, /if tsx is installed in a nested package/i)
-    assert.match(failed, /same test from that package directory/i)
+    assert.match(failed, /set test_run\.cwd to that package directory/i)
+    assert.match(failed, /no project test files executed/i)
+    assert.match(failed, /read_file.*package\.json/i)
+    assert.match(failed, /test-file path relative to cwd/i)
+    assert.match(failed, /summary: test loader unavailable/i)
+    assert.doesNotMatch(failed, /structured failure\(s\)/)
     const unrelated = formatChatToolObservation({ type: 'test_run', command: 'node --import tsx --test helper.test.ts' },
       { stdout: "Error [ERR_MODULE_NOT_FOUND]: Cannot find module '/app/helper.js'", exitCode: 1 })
     assert.doesNotMatch(unrelated, /nested package/)
+  })
+
+  test('actual Node preload failure is reported as a loader launch failure', () => {
+    const root = mkdtempSync(join(tmpdir(), 'babel-missing-tsx-'))
+    const testFile = join(root, 'loader.test.mjs')
+    writeFileSync(testFile, "import test from 'node:test'; test('must not execute', () => { throw new Error('unexpected execution') })\n")
+    try {
+      const env: NodeJS.ProcessEnv = { ...process.env, NODE_OPTIONS: '', NODE_PATH: '' }
+      delete env.NODE_TEST_CONTEXT
+      const result = spawnSync(process.execPath, ['--import', 'tsx', '--test', testFile], {
+        cwd: root,
+        encoding: 'utf8',
+        env,
+      })
+      const command = 'node --import tsx --test loader.test.mjs'
+      const observation = compileObservation({
+        tool: 'test_run',
+        target: command,
+        command,
+        cwd: root,
+        exitCode: result.status,
+        stdout: result.stdout,
+        stderr: result.stderr,
+      })
+      const delivered = formatCompiledObservation(observation)
+      assert.notEqual(result.status, 0, `${result.stdout}\n${result.stderr}`)
+      assert.match(`${result.stderr}\n${result.stdout}`, /ERR_MODULE_NOT_FOUND[^\n]*Cannot find package ['"]tsx['"]/)
+      assert.equal(observation.parserName, 'test_loader')
+      assert.match(observation.summary, /no project test files executed/i)
+      assert.match(delivered, /set test_run\.cwd to that package directory/i)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('a missing tsx import reported after TAP tests start remains a test failure', () => {
+    const output = [
+      'TAP version 13',
+      '# Subtest: loads helper module',
+      'not ok 1 - loads helper module',
+      '  ---',
+      "  error: \"Error [ERR_MODULE_NOT_FOUND]: Cannot find package 'tsx' imported from /app/helper.test.mjs\"",
+      '  code: ERR_MODULE_NOT_FOUND',
+      '  ...',
+      '1..1',
+      '# tests 1',
+      '# pass 0',
+      '# fail 1',
+    ].join('\n')
+    const observation = compileObservation({
+      tool: 'test_run',
+      target: 'node --test helper.test.mjs',
+      command: 'node --test helper.test.mjs',
+      exitCode: 1,
+      stdout: output,
+      stderr: '',
+    })
+    assert.notEqual(observation.parserName, 'test_loader')
+    assert.doesNotMatch(observation.summary, /no project test files executed/i)
+    assert.ok(observation.failures.length > 0, 'the started test retains a localized failure')
+    assert.equal(observation.failures[0]?.test, 'loads helper module')
   })
   test('stderr-only failure keeps stderr when stdout is empty', () => {
     const compiled = compileObservation({

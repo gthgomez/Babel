@@ -135,6 +135,9 @@ function surfaceFromObservation(
   if (parser === 'node_trace' && obs.failures.length > 0 && /\bERR_ASSERTION\b/i.test(blob)) {
     return 'TEST_FAILURE'
   }
+  if (parser === 'test_loader') {
+    return 'DEPENDENCY_FAILURE'
+  }
   if (/policy blocked|permission denied|not allowed|sandbox/i.test(blob)) {
     return 'POLICY_FAILURE'
   }
