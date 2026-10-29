@@ -27,7 +27,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import path from 'node:path';
 import { z } from 'zod';
-import { SafeExecutor } from './sandbox.js';
+import { preserveTrustedShellExecutionBackend, SafeExecutor } from './sandbox.js';
 import { getDefaultProcessWitness } from './diagnostics/bdns/processWitness.js';
 import type { ToolResult, ExecutorMode } from './sandbox.js';
 import { isDryRunEnabled } from './config/dryRun.js';
@@ -1982,10 +1982,10 @@ export async function executeTool(req: ToolCallRequest, context: ToolContext): P
     return result;
   }
 
-  return {
+  return preserveTrustedShellExecutionBackend(result, {
     ...result,
     checkpoint_ids: [...(result.checkpoint_ids ?? []), finalized.id],
-  };
+  });
 }
 
 /**

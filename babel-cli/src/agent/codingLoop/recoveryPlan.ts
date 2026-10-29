@@ -16,8 +16,8 @@ import {
 } from './workingState.js'
 
 export const RecoveryPlanProposalSchema = z.object({
-  schemaVersion: z.literal(1),
-  failureSignature: z.string().min(1).describe('Copy working_state.recovery_failure exactly.'),
+  schemaVersion: z.literal(2),
+  recoveryGateRef: z.string().regex(/^[0-9a-f]{32}$/).describe('Copy the current 32-character working_state.recovery_gate_ref exactly. This identifies the active host gate but grants no permission.'),
   workspaceRevision: z.string().min(1).describe('Copy working_state.recovery_revision exactly.'),
   hypothesisClass: z.enum(['logic', 'data_flow', 'interface', 'test_expectation', 'configuration']),
   targetIdentities: z.array(z.string().min(1)).min(1).max(4).describe('Exact repository-relative file paths changed by this edit, without :symbol suffixes. Existing targets need referenced current delivered read evidence. Reads are inspection support, never write authority.'),
@@ -26,17 +26,21 @@ export const RecoveryPlanProposalSchema = z.object({
   supportingObservationIds: z.array(z.string().length(16)).min(1).max(8).describe('Copy only exact 16-character IDs from the delivered recovery_read_reference or working_state.recovery_read_records/recovery_observation_keys. Never use evidence prose, paths or invented IDs. If no admissible IDs exist, obtain fresh recovery evidence before proposing an edit.'),
 })
 
-export type RecoveryPlanProposalV1 = z.infer<typeof RecoveryPlanProposalSchema>
+export type RecoveryPlanProposalV2 = z.infer<typeof RecoveryPlanProposalSchema>
 
-export interface AdmittedRecoveryPlanV1 extends RecoveryPlanProposalV1 {
+export interface AdmittedRecoveryPlanV2 extends RecoveryPlanProposalV2 {
   binding: RecoveryCandidateBinding
+  /** Host facts retained for audit; never copied from the model proposal. */
+  failureSignature: string
+  criterionId: string
+  workspaceRevision: string
   editFingerprint: string
   exactFingerprint: string
   intentDigest: string
 }
 
 export interface ActualRecoveryEdit {
-  actionFamily: RecoveryPlanProposalV1['actionFamily']
+  actionFamily: RecoveryPlanProposalV2['actionFamily']
   targetIdentities: string[]
   /** Host-derived existing targets; absent means all targets require inspection. */
   existingTargetIdentities?: string[]
@@ -104,10 +108,10 @@ export function admitRecoveryPlan(
     return { admitted: false, state, reason: 'unbound_or_missing_plan' }
   }
   const plan = parsed.data
+  if (plan.recoveryGateRef !== gate.recoveryGateRef) return { admitted: false, state, reason: 'recovery_gate_ref_mismatch' }
   if (plan.criterionId !== state.lastVerifier?.identity) {
     return { admitted: false, state, reason: 'criterion_identity_mismatch' }
   }
-  if (plan.failureSignature !== gate.failureSignature) return { admitted: false, state, reason: 'failure_signature_mismatch' }
   if (plan.workspaceRevision !== gate.binding.workspaceRevision) return { admitted: false, state, reason: 'workspace_revision_mismatch' }
   if (plan.actionFamily !== actual.actionFamily) return { admitted: false, state, reason: 'action_family_mismatch' }
   if (!sameTargets(plan.targetIdentities, actual.targetIdentities)) return { admitted: false, state, reason: 'target_identity_mismatch' }
@@ -138,8 +142,11 @@ export function admitRecoveryPlan(
   if (state.lastAdmittedPlan?.editFingerprint === actual.editFingerprint) {
     return { admitted: false, state, reason: 'repeated_plan_or_edit' }
   }
-  const admittedPlan: AdmittedRecoveryPlanV1 = {
+  const admittedPlan: AdmittedRecoveryPlanV2 = {
     ...plan, binding: current,
+    failureSignature: gate.failureSignature,
+    criterionId: state.lastVerifier!.identity,
+    workspaceRevision: gate.binding!.workspaceRevision,
     editFingerprint: actual.editFingerprint,
     exactFingerprint: actual.exactFingerprint,
     intentDigest,
@@ -159,7 +166,7 @@ export function formatRecoveryPlanRejection(state: WorkingState, reason?: string
     return `criterion_identity_mismatch criterion_id_expected=${JSON.stringify(expected)}. Copy that exact verifier command into repair_plan.criterionId, not the test label. Changing edit tools or delegating cannot bypass this gate.`
   }
   if (reason === 'target_identity_mismatch' && actual) return `target_identity_mismatch target_identities_expected=${JSON.stringify(actual.targetIdentities)}. Copy the exact repository-relative file paths into repair_plan.targetIdentities, without :symbol suffixes. This does not admit a path outside the failing scope.`
-  if (reason === 'failure_signature_mismatch') return 'failure_signature_mismatch: copy recovery_failure exactly into repair_plan.failureSignature.'
+  if (reason === 'recovery_gate_ref_mismatch') return 'recovery_gate_ref_mismatch: copy the current recovery_gate_ref into repair_plan.recoveryGateRef. This is a correlation reference only; current reads and normal edit authority are still required.'
   if (reason === 'workspace_revision_mismatch') return 'workspace_revision_mismatch: copy recovery_revision exactly into repair_plan.workspaceRevision.'
   if (reason === 'action_family_mismatch') return `action_family_mismatch: repair_plan.actionFamily must equal the actual edit tool ${actual?.actionFamily ?? '(write_file, str_replace or apply_patch)'}.`
   if (reason === 'missing_target_read') return 'missing_target_read: inspect each existing concrete edit target through a current authorized read_file/read_range, then reference its exact delivered-window handle. A read does not grant write permission.'
@@ -167,5 +174,5 @@ export function formatRecoveryPlanRejection(state: WorkingState, reason?: string
   if (reason === 'target_outside_failure_scope') return 'target_outside_failure_scope: repair only a target corroborated by the current failing assertion and fresh source read. Rerun the verifier before investigating another failure.'
   if (reason === 'unsupported_observation') return 'unsupported_observation: copy only the exact current recovery_observation_keys into supportingObservationIds, without duplicates or invented IDs.'
   if (reason === 'repeated_failed_edit' || reason === 'repeated_plan_or_edit') return `${reason}: repeating the same edit or changing hypothesis text does not establish a different repair.`
-  return 'Submit a concrete write_file, str_replace or apply_patch with a scoped repair_plan supported by current observation IDs and the actual edit. Copy recovery_criterion_id exactly; shell commands and delegation cannot bypass this gate.'
+  return 'Submit a concrete write_file, str_replace or apply_patch with a scoped repair_plan supported by the current recovery_gate_ref and delivered observation IDs. Copy recovery_criterion_id exactly; shell commands and delegation cannot bypass this gate.'
 }

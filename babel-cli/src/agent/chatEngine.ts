@@ -193,7 +193,7 @@ import {
   type WorkingState,
 } from "./codingLoop/index.js";
 
-import { recoveryTargetIdentity } from "./codingLoop/recoveryIdentity.js";
+import { recoveryBindingUnavailableReason, recoveryTargetIdentity } from "./codingLoop/recoveryIdentity.js";
 
 import {
   beginLocalizationCall,
@@ -4291,6 +4291,11 @@ export class ChatEngine {
         "\n\nRead-only capability boundary: only read_file, read_range, list_dir, grep and glob are available. Do not request shell commands, writes, subagents or shared memory. If a read/search fails, use another available reading tool or report the missing evidence; unavailable tools cannot work around this boundary.";
     }
 
+    if (this.options.projectRoot && this.discoveredTestCommands.length === 0) {
+      systemContent +=
+        '\n\nTest discovery: the host found no project test command from repository metadata or conventional test files. Do not invent a test filename or choose a runtime from habit. Inspect the repository language and available test configuration first; if no project tests or compatible runner are available, report that verification was not performed. A command denied before dispatch did not run; distinguish that from a command that started and failed.';
+    }
+
     // Packet D2: the active edit format is visible in the preamble — format
     // selection is deterministic given model + telemetry state, never silent.
     if (this.editFormatSession) {
@@ -4405,10 +4410,10 @@ export class ChatEngine {
       const records = gate.readRecords ?? [];
       const failed = this.workingState.settledFailedVerifier;
       return { schema_version: 1, status: "BLOCKED", reason, reason_code: "verification_failed", cause_class: "verification",
-        missing: gate.failureSignature === "unbound-red-verifier" || !gate.binding
+        missing: recoveryBindingUnavailableReason() ?? (gate.failureSignature === "unbound-red-verifier" || !gate.binding
           ? "Re-observe the exact failed verifier through its governed execution context to bind the current failure."
           : records.length ? "A concrete repair plan referencing current delivered reads for every existing edit target, followed by verification."
-            : "Fresh delivered reads of the failure and relevant implementation; diagnostic candidates are inspection hints.",
+            : "Fresh delivered reads of the failure and relevant implementation; diagnostic candidates are inspection hints."),
         checked: records.length ? records.slice(-4).map(record => ({ action: record.tool, target: record.target,
           finding: `Retained read ${record.id}: lines ${record.window.startLine}-${record.window.endLine} of ${record.window.totalLines}; full file=${record.window.completeFile}.` }))
           : [{ action: failed ? "test_run" : "recovery_gate", target: failed?.command ?? this.workingState.lastVerifier?.identity ?? "failure",

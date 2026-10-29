@@ -31,8 +31,6 @@ import { buildVerifierReceiptV2, evaluateVerifierPromotion } from './verifierKer
 import { createToolExecutor, executeActionWithPolicy } from './toolExecutor.js'
 
 const DUAL_WITNESS_TASK = [
-  'Preserve alpha. Tests are already present. Run both tests using: npm run test:alpha.',
-  'Preserve beta. Tests are already present. Run both tests using: npm run test:beta.',
   'Acceptance criteria:',
   '- `npm run test:alpha` must pass.',
   '- `npm run test:beta` must pass.',
@@ -56,6 +54,7 @@ function witnessBoundContract() {
     trustedVerifierCommands: ['npm run test:alpha', 'npm run test:beta'],
     defaultWorkingDirectory: '.',
   })
+  assert.equal(bound.criteria.length, 2, 'the witness fixture contains only its two explicit requirements')
   const alpha = bound.criteria.find(item => item.description.includes('alpha'))!
   const beta = bound.criteria.find(item => item.description.includes('beta'))!
   assert.ok(alpha && beta)
@@ -203,7 +202,14 @@ async function runDesignatedWitnessViaPolicy(
     },
   }
   const receipt = recording
-    ? await captureAndRecordVerifierReceipt({ ...capture, ...recording, cacheIdentity, turnId: runId, writeCount: 1 })
+    ? await captureAndRecordVerifierReceipt({
+      ...capture,
+      ...recording,
+      cacheIdentity,
+      turnId: runId,
+      writeCount: 1,
+      executionBackend: 'host-process',
+    })
     : await captureChatVerifierReceipt(capture)
   return { policy, exitCode, receipt }
 }

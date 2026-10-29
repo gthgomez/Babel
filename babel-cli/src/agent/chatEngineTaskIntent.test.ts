@@ -28,6 +28,14 @@ test('recognizes actionable work attached to a greeting or review request', () =
   }
 })
 
+test('implementation with a third-party dependency constraint retains mutation intent', () => {
+  const task = 'Implement the requested function. Create solution.py. Do not add third-party dependencies.'
+  assert.equal(classifyChatTaskIntent(task), 'execute')
+  assert.equal(resolveTaskShape(task).operation, 'HYBRID')
+  assert.equal(classifyChatTaskIntent('Do not add third-party dependencies.'), 'explain')
+  assert.equal(classifyChatTaskIntent('Implement the function. Do not edit files.'), 'explain')
+})
+
 test('scoped regression and safety preservation clauses retain explicit repair intent', () => {
   for (const objects of ['regression tests or unrelated code',
     'the regression tests, permissions, verification gates, dependencies, or unrelated code',

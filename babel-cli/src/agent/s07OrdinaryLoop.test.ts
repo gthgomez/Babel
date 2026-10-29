@@ -1138,6 +1138,7 @@ describe('S07 ordinary-loop qualification', { concurrency: false }, () => {
             lastVerifier?: { identity: string };
             recoveryGate?: {
               failureSignature: string;
+              recoveryGateRef?: string;
               binding?: { workspaceRevision: string };
               observedKeys?: string[];
               satisfied: boolean;
@@ -1146,11 +1147,12 @@ describe('S07 ordinary-loop qualification', { concurrency: false }, () => {
           const gate = state.recoveryGate;
           assert.ok(gate?.satisfied, `repair ${call}: ${JSON.stringify({ gate, localization: (engine as unknown as { workingState: { localization?: unknown } }).workingState.localization })}`);
           assert.ok(gate.binding);
+          assert.ok(gate.recoveryGateRef);
           const target = recoveryTargetIdentity(fixture.root, 'parser.ts');
           assert.ok(target);
           const repairPlan = {
-            schemaVersion: 1,
-            failureSignature: gate.failureSignature,
+            schemaVersion: 2,
+            recoveryGateRef: gate.recoveryGateRef,
             workspaceRevision: gate.binding.workspaceRevision,
             hypothesisClass: 'logic',
             targetIdentities: [target],

@@ -102,11 +102,13 @@ function childInput(
 }
 
 const BINDING: RecoveryCandidateBinding = {
-  schemaVersion: 1,
+  schemaVersion: 2,
   taskId: 'task-1',
   contractHash: 'contract',
+  sessionId: 'session',
   repositoryIdentity: 'repo',
   workspaceRevision: 'rev-1',
+  executionContextHash: 'context',
 };
 
 function openRecovery() {

@@ -312,7 +312,7 @@ test('R1 repair plan rejects a repeated edit and admits one changed scoped edit'
     assert.equal((engine as any).workingState.recoveryGate.satisfied, true);
     const gate = (engine as any).workingState.recoveryGate;
     const repairPlan = {
-      schemaVersion: 1, failureSignature: gate.failureSignature,
+      schemaVersion: 2, recoveryGateRef: gate.recoveryGateRef,
       workspaceRevision: gate.binding.workspaceRevision,
       hypothesisClass: 'logic', targetIdentities: ['src/parser.ts'],
       actionFamily: 'str_replace', criterionId: 'npm test',
@@ -432,44 +432,41 @@ test('R1 snapshot persistence failure blocks mutation without running the shell'
   }
 });
 
-test('R1 red command without verifier receipt closes recovery until a bound rerun', async () => {
+test('R1 arbitrary interpreter failure is not authoritative verifier evidence', async () => {
   const root = mkdtempSync(join(tmpdir(), 'babel-r1-unbound-red-'));
-  const marker = join(root, 'blocked.txt');
-  writeFileSync(join(root, 'red.cjs'), 'process.exit(1)\n');
-  writeFileSync(join(root, 'write-marker.cjs'), "require('node:fs').writeFileSync('blocked.txt', 'executed')\n");
+  const marker = join(root, 'interpreter-started.txt');
   const envKeys = ['BABEL_BENCHMARK_AUTO_APPROVE', 'BABEL_BENCHMARK_MODE', 'BABEL_AUTONOMY_LEASE', 'BABEL_EXECUTION_PROFILE', 'BABEL_ALLOW_HOST_FALLBACK', 'BABEL_DRY_RUN', 'BABEL_DRY_RUN_SOURCE'] as const;
   const prior = Object.fromEntries(envKeys.map((key) => [key, process.env[key]]));
   try {
+    writeFileSync(join(root, 'red.cjs'), `require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'started'); process.exit(1)\n`);
     process.env['BABEL_BENCHMARK_AUTO_APPROVE'] = '1';
     process.env['BABEL_BENCHMARK_MODE'] = '1';
     process.env['BABEL_AUTONOMY_LEASE'] = JSON.stringify({
-      version: 2, leaseId: 'recovery-unbound-red-test',
-      scope: { repository: 'fixture', objective: 'verify fail-closed recovery' },
-      allowedCapabilities: ['inspect_repository', 'run_arbitrary_code', 'run_local_command', 'run_tests', 'edit_task_files'],
+      version: 2, leaseId: 'recovery-non-verifier-red-test',
+      scope: { repository: 'fixture', objective: 'ensure arbitrary code is not verifier evidence' },
+      allowedCapabilities: ['inspect_repository', 'run_arbitrary_code'],
     });
     process.env['BABEL_EXECUTION_PROFILE'] = 'dev_local';
     process.env['BABEL_ALLOW_HOST_FALLBACK'] = '1';
     const engine = new ChatEngine({ task: 'repair parser', projectRoot: root });
     process.env['BABEL_DRY_RUN'] = 'false';
     process.env['BABEL_DRY_RUN_SOURCE'] = 'session';
-    (engine as any).workingState = applyWorkingStateEvent(createWorkingState('repair parser'), {
+    const state = applyWorkingStateEvent(createWorkingState('repair parser'), {
       type: 'mutation', path: 'src/parser.ts', fingerprint: 'first-edit',
     });
-    const context = { agentId: 'test', runId: 'test', runDir: root, babelRoot: root };
-    const red = await (engine as any).executeOneAction(
+    (engine as any).workingState = state;
+    const result = await (engine as any).executeOneAction(
       { type: 'run_command', command: 'node red.cjs' },
-      context, {}, { index: 0, ownerGeneration: 0 },
+      { agentId: 'test', runId: 'test', runDir: root, babelRoot: root },
+      {}, { index: 0, ownerGeneration: 0 },
     );
-    assert.match(red.observation, /exit_code: 1/);
-    assert.doesNotMatch(red.observation, /\[sandbox\] Command rejected/);
-    assert.equal((engine as any).workingState.recoveryGate?.satisfied, false, red.observation);
-    assert.equal((engine as any).workingState.recoveryGate?.binding, undefined);
-    const blocked = await (engine as any).executeOneAction(
-      { type: 'run_command', command: 'node write-marker.cjs' },
-      context, {}, { index: 1, ownerGeneration: 0 },
-    );
-    assert.match(blocked.observation, /RECOVERY_CANDIDATE_DRIFT|RECOVERY_EVIDENCE_REQUIRED/);
-    assert.equal(existsSync(marker), false);
+    assert.match(result.observation, /exit_code: 1/);
+    assert.doesNotMatch(result.observation, /\[sandbox\] Command rejected/);
+    assert.equal(readFileSync(marker, 'utf8'), 'started',
+      'the arbitrary interpreter must actually execute before its exit can be classified');
+    assert.equal((engine as any).workingState.recoveryGate, undefined,
+      'a permitted arbitrary script is not a verifier and cannot create red-test recovery evidence');
+    assert.equal((engine as any).workingState.settledFailedVerifier, undefined);
   } finally {
     for (const key of envKeys) {
       if (prior[key] === undefined) delete process.env[key];
@@ -511,7 +508,7 @@ test('R1 no-target red localizes through a related read before admitting a plan'
     assert.equal(state.recoveryGate.readRecords[0].target, 'src/parser.js');
     assert.equal(state.recoveryGate.satisfied, true);
     const repairPlan = {
-      schemaVersion: 1, failureSignature: state.recoveryGate.failureSignature,
+      schemaVersion: 2, recoveryGateRef: state.recoveryGate.recoveryGateRef,
       workspaceRevision: state.recoveryGate.binding.workspaceRevision,
       hypothesisClass: 'logic', targetIdentities: ['src/parser.js'], actionFamily: 'str_replace',
       criterionId: 'npm test', supportingObservationIds: state.recoveryGate.observedKeys.map(recoveryObservationId),
@@ -523,6 +520,96 @@ test('R1 no-target red localizes through a related read before admitting a plan'
     assert.doesNotMatch(changed.observation, /RECOVERY_PLAN_REQUIRED|RECOVERY_EVIDENCE_REQUIRED/);
     assert.match(readFileSync(file, 'utf8'), /return 2/);
   } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('recovery evidence cannot authorize an edit after switching from the project tree to shadow content', async () => {
+  const storage = mkdtempSync(join(tmpdir(), 'babel-recovery-shadow-switch-'));
+  const root = join(storage, 'project');
+  const firstShadow = join(storage, 'shadow-one');
+  const secondShadow = join(storage, 'shadow-two');
+  const file = 'src/parser.js';
+  const baseBytes = 'export function parseToken() { return 1; }\n';
+  const overlayBytes = '// overlay-only context changed after the project read\nexport function parseToken() { return 1; }\n';
+  const priorShadow = process.env['BABEL_SHADOW_ROOT'];
+  const priorDryRun = process.env['BABEL_DRY_RUN'];
+  const priorLive = process.env['BABEL_LIVE'];
+  const priorDryRunSource = process.env['BABEL_DRY_RUN_SOURCE'];
+  mkdirSync(join(root, 'src'), { recursive: true });
+  mkdirSync(join(firstShadow, 'src'), { recursive: true });
+  mkdirSync(join(secondShadow, 'src'), { recursive: true });
+  writeFileSync(join(root, file), baseBytes);
+  writeFileSync(join(firstShadow, file), overlayBytes);
+  writeFileSync(join(secondShadow, file), overlayBytes);
+  execFileSync('git', ['init', '-q'], { cwd: root, windowsHide: true });
+  execFileSync('git', ['add', file], { cwd: root, windowsHide: true });
+  commitFixture(root);
+  delete process.env['BABEL_SHADOW_ROOT'];
+  process.env['BABEL_DRY_RUN'] = 'true';
+  delete process.env['BABEL_LIVE'];
+  delete process.env['BABEL_DRY_RUN_SOURCE'];
+  try {
+    const engine = new ChatEngine({ task: 'repair the parser failure', projectRoot: root });
+    const context = { agentId: 'test', runId: 'test', runDir: storage, babelRoot: root, projectRoot: root };
+    const binding = (engine as any).currentRecoveryBinding();
+    assert.ok(binding, 'the ordinary project tree supports recovery binding');
+    (engine as any).workingState = ingestVerifierResult({
+      state: createWorkingState('repair the parser failure'),
+      recoveryBinding: binding,
+      recoveryProjectRoot: root,
+      tool: 'test_run',
+      target: 'npm test -- parser',
+      exitCode: 1,
+      stdout: 'FAIL tests failed: parser adds values',
+      stderr: '',
+      summary: 'same assertion remains red',
+    }).state;
+    const read = await (engine as any).executeOneAction(
+      { type: 'read_file', path: file }, context, {}, { index: 0, ownerGeneration: 0 },
+    );
+    assert.match(read.observation, /return 1/);
+    const gate = (engine as any).workingState.recoveryGate;
+    assert.equal(gate.satisfied, true, 'a delivered project-tree read satisfies the bound candidate');
+    const plan = {
+      schemaVersion: 2, recoveryGateRef: gate.recoveryGateRef,
+      workspaceRevision: gate.binding.workspaceRevision,
+      hypothesisClass: 'logic', targetIdentities: [file], actionFamily: 'str_replace',
+      criterionId: 'npm test -- parser',
+      supportingObservationIds: gate.observedKeys.map(recoveryObservationId),
+    };
+
+    writeFileSync(join(firstShadow, file), overlayBytes);
+    process.env['BABEL_SHADOW_ROOT'] = firstShadow;
+    assert.equal((engine as any).currentRecoveryBinding(), null,
+      'recovery binding fails closed when reads/writes select a shadow overlay');
+    process.env['BABEL_SHADOW_ROOT'] = secondShadow;
+    assert.equal((engine as any).currentRecoveryBinding(), null,
+      'a second overlay root cannot reuse project-tree recovery evidence');
+    const changed = await (engine as any).executeOneAction(
+      { type: 'str_replace', file_path: file, old_str: 'return 1', new_str: 'return 2', repair_plan: plan },
+      context, {}, { index: 1, ownerGeneration: 0 },
+    );
+    assert.match(changed.observation, /RECOVERY_SHADOW_CONTEXT_UNSUPPORTED/);
+    assert.match(changed.observation, /reads and writes use the shadow overlay.*verifier commands execute against the project workspace/);
+    assert.equal(readFileSync(join(secondShadow, file), 'utf8'), overlayBytes,
+      'the stale plan cannot overwrite content in the newly selected shadow candidate');
+    assert.equal(readFileSync(join(root, file), 'utf8'), baseBytes,
+      'the configured shadow write does not escape into the project workspace');
+    assert.equal(readFileSync(join(firstShadow, file), 'utf8'), overlayBytes,
+      'the write does not escape into the previous overlay');
+    const report = (engine as any).buildVerifierBlockedReport('verification remains incomplete');
+    assert.match(report.missing, /shadow overlay.*verifier commands execute against the project workspace/,
+      'terminal guidance explains why recovery stopped instead of asking for an impossible reread');
+  } finally {
+    if (priorShadow === undefined) delete process.env['BABEL_SHADOW_ROOT'];
+    else process.env['BABEL_SHADOW_ROOT'] = priorShadow;
+    if (priorDryRun === undefined) delete process.env['BABEL_DRY_RUN'];
+    else process.env['BABEL_DRY_RUN'] = priorDryRun;
+    if (priorLive === undefined) delete process.env['BABEL_LIVE'];
+    else process.env['BABEL_LIVE'] = priorLive;
+    if (priorDryRunSource === undefined) delete process.env['BABEL_DRY_RUN_SOURCE'];
+    else process.env['BABEL_DRY_RUN_SOURCE'] = priorDryRunSource;
+    rmSync(storage, { recursive: true, force: true });
+  }
 });
 
 test('PR242: proven old_str mismatch permits one fresh corrected repair through the native executor', async () => {
@@ -548,7 +635,7 @@ test('PR242: proven old_str mismatch permits one fresh corrected repair through 
     const plan = () => {
       const gate = (engine as any).workingState.recoveryGate;
       return {
-        schemaVersion: 1, failureSignature: gate.failureSignature,
+        schemaVersion: 2, recoveryGateRef: gate.recoveryGateRef,
         workspaceRevision: gate.binding.workspaceRevision,
         hypothesisClass: 'logic', targetIdentities: ['src/parser.js'],
         actionFamily: 'str_replace', criterionId: 'npm test',

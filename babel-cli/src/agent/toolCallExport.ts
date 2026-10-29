@@ -30,7 +30,10 @@ export interface ToolCallRecord {
 export interface ToolCallAggregates {
   tool_call_count: number;
   write_count: number;
+  /** Legacy metric: verifier-participation tool calls, including denied probes. */
   verifier_attempt_count: number;
+  /** Host-attested authoritative verifier processes that actually started. */
+  verifier_execution_count: number;
 }
 
 // ─── Constants ───────────────────────────────────────────────────────────
@@ -85,6 +88,8 @@ export function computeToolCallAggregates(
     tool: string;
     error?: string;
     verified?: boolean;
+    verifierExecuted?: boolean;
+    preDispatchNoEffect?: true;
     effect_status?: MutationEffectStatus;
     effect_scope?: import('./mutationTools.js').MutationEffectScope;
     mutation_paths?: string[];
@@ -98,10 +103,12 @@ export function computeToolCallAggregates(
     mutationPaths: e.mutation_paths,
   })).length;
   const verifierCount = rawLog.filter((e) => VERIFIER_TOOLS.has(e.tool)).length;
+  const executedVerifierCount = rawLog.filter((e) => VERIFIER_TOOLS.has(e.tool) && e.verifierExecuted === true && e.preDispatchNoEffect !== true).length;
   return {
     tool_call_count: rawLog.length,
     write_count: writeCount,
     verifier_attempt_count: verifierCount,
+    verifier_execution_count: executedVerifierCount,
   };
 }
 

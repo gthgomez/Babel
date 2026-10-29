@@ -8,6 +8,7 @@ import { FailureDomainSchema, TerminalReasonCodeSchema, type TerminalOutcome } f
 import { classifyPolicySource, type TerminalReason } from './chatTerminalReason.js';
 import { projectChatTerminal, type ChatStatus } from './chatFailureClassification.js';
 import { classifyToolEffect } from '../executor/contracts.js';
+import type { ChatTurn } from './chatToolDefinitions.js';
 import { discoveryObservationKey, hashDiscoveryContent, isDiscoveryTool } from './discoveryProgress.js';
 import type { ProviderMessage, ProviderToolCall } from '../runners/base.js';
 import type { ProviderId } from '../runners/providerRegistry.js';
@@ -48,6 +49,7 @@ import {
   createSessionEventLog,
   recordUserSubmitted,
   recordModelStarted,
+  operationFingerprint,
   recordProviderRetryScheduled,
   recordProviderRetrySettled,
   recordToolProposed,
@@ -605,6 +607,8 @@ export function parityRecordToolBatch(
     patchFailed?: boolean;
     verifierChanged?: boolean;
     localizedPaths?: string[];
+    /** Stable payload hash when this cycle contains one child delegation. */
+    delegationFingerprint?: string;
     /** Read-injection context epoch; advancing it invalidates retained reads. */
     contextEpoch?: number;
     /** When true, skip propose (already done via paritySettleProposeTools). */
@@ -777,6 +781,10 @@ export function parityRecordToolBatch(
     ...(input.patchFailed ? { patchFailed: true } : {}),
     ...(input.verifierChanged ? { verifierChanged: true } : {}),
     ...(input.contextEpoch !== undefined ? { contextEpoch: input.contextEpoch } : {}),
+    ...(input.delegationFingerprint !== undefined && acceptedToolCalls.length === 1 &&
+        acceptedToolCalls[0]?.function.name === 'sub_agent'
+      ? { delegationFingerprint: input.delegationFingerprint }
+      : {}),
     reads: acceptedResults
       .filter(
         (r) =>
@@ -792,6 +800,18 @@ export function parityRecordToolBatch(
   });
   parityReduce(rt, { type: 'progress', hasDelta: receipt.hasDelta });
   return receipt;
+}
+
+/** Keep progress attribution outside the streaming loop's architecture budget. */
+export function progressCycleContext(
+  contextEpoch: number,
+  turnResult: ChatTurn,
+): { contextEpoch: number; delegationFingerprint?: string } {
+  const action = turnResult.type === 'tool_calls' && turnResult.actions.length === 1
+    ? turnResult.actions[0]
+    : undefined
+  if (action?.type !== 'sub_agent') return { contextEpoch }
+  return { contextEpoch, delegationFingerprint: operationFingerprint('sub_agent', action) }
 }
 
 function isMutatingToolName(name: string): boolean {

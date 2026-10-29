@@ -20,6 +20,7 @@ import { recordChatHarnessFeedback } from "./chatHarnessFeedback.js";
 import { writeFileSync } from "node:fs";
 import { join } from 'node:path';
 import { describeNativeToolRejection, nativeSchemaRepairFeedback } from './nativeToolRejection.js';
+import { buildProgressTerminalStreamDoneExtra } from './chatEngineProgressTerminal.js'
 import {
   beginResponseEvidenceSession,
   inspectResponseEvidence,
@@ -67,6 +68,7 @@ import {
   parityArbitrateCycle,
   finalizeParityCancel,
   checkpointParityEventLog,
+  progressCycleContext,
 } from "./chatEngineParityBridge.js";
 
 import {
@@ -93,7 +95,6 @@ import { isConfirmedMutation, isConfirmedParentChildMutation } from "./mutationT
 import { settleStreamingTokenExplosion } from "./chatEngineStreamingTokenLimit.js";
 import {
   attachTerminalReason,
-  buildPolicyTerminalBlockedReport,
   resolveInvestigateHardCapObserveOnly,
 } from "./chatZeroWritePolicy.js";
 import { evaluateZeroWriteWithShadow } from "./policyShadow.js";
@@ -1444,8 +1445,7 @@ export class ChatEngineStreamingLoop {
             verifierChanged: this.host.computeVerifierChanged(
               projected.results,
             ),
-            // Context epoch: advancing it makes necessary re-reads count again.
-            contextEpoch: this.host.readContextEpoch,
+            ...progressCycleContext(this.host.readContextEpoch, turnResult),
             // W2.2: propose+start already flushed before executeActions.
             settleAlreadyProposed: turnResult.actions.length > 0,
             // Do NOT pass every read as localizedPaths — re-reads use contentHash only.
@@ -1880,16 +1880,16 @@ export class ChatEngineStreamingLoop {
             content: arb.terminalAnswer,
           });
           if (!this.host.isSubmissionCurrent(submissionGeneration)) return;
-          yield this.host.streamDone(arb.terminalAnswer, {
-            blockedReport: buildPolicyTerminalBlockedReport(
-              arb.policySource ?? "progress_terminal",
-              arb.terminalAnswer,
-              arb.terminalReason,
-            ),
+          yield this.host.streamDone(arb.terminalAnswer, buildProgressTerminalStreamDoneExtra({
+            host: this.host,
+            submissionGeneration,
+            policySource: arb.policySource,
+            terminalAnswer: arb.terminalAnswer,
             ...(arb.terminalReason !== undefined
-              ? { reason: arb.terminalReason }
+              ? { terminalReason: arb.terminalReason }
               : {}),
-          });
+            effectiveExecutePolicy,
+          }));
           return;
         }
         if (arb.policyMessage) {

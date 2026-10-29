@@ -523,6 +523,7 @@ export function toGateToolLog(
     ...(entry.detail !== undefined ? { detail: entry.detail } : {}),
     ...(entry.error !== undefined ? { error: entry.error } : {}),
     ...(entry.exit_code !== undefined ? { exit_code: entry.exit_code } : {}),
+    ...(entry.verifierExecuted !== undefined ? { verifierExecuted: entry.verifierExecuted } : {}),
     ...(entry.preDispatchNoEffect === true ? { preDispatchNoEffect: true as const } : {}),
     ...(entry.effect_status !== undefined ? { effect_status: entry.effect_status } : {}),
     ...(entry.effect_scope !== undefined ? { effect_scope: entry.effect_scope } : {}),

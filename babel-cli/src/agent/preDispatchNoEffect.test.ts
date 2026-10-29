@@ -24,6 +24,7 @@ test('durable and gate projections preserve explicit host no-effect facts withou
   const project = projectDurableToolBatch({ turnSlice: [row], turn: 1 })
   assert.equal(project.results[0]?.preDispatchNoEffect, true)
   assert.equal(toGateToolLog([row])[0]?.preDispatchNoEffect, true)
+  assert.equal(toGateToolLog([{ tool: 'run_command', target: 'node --version', verifierExecuted: false }])[0]?.verifierExecuted, false)
   assert.equal(projectDurableToolBatch({ turnSlice: [{ tool: row.tool, target: row.target, index: row.index, error: row.error }], turn: 1 }).results[0]?.preDispatchNoEffect, undefined)
 })
 

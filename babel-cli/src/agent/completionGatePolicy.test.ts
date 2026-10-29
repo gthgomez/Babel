@@ -173,6 +173,33 @@ describe('completionGatePolicy', () => {
     );
     assert.match(msg, /npm test, npx jest/);
   });
+
+  test('invalid verifier feedback does not demand an invented test when no project test command was found', () => {
+    const msg = buildGreenVerifierRejectionMessage('verifier_receipt_invalid', null, [], 2)
+    assert.match(msg, /No project test command was identified/i)
+    assert.match(msg, /denied before dispatch did not run/i)
+    assert.match(msg, /Do not repeat denied probes or invent/i)
+    assert.match(msg, /does not certify completion/i)
+    assert.doesNotMatch(msg, /MUST run and pass|re-run an authoritative project test command/i)
+  })
+
+  test('invalid verifier feedback still names available project tests and preserves the gate', () => {
+    const msg = buildGreenVerifierRejectionMessage('verifier_receipt_invalid', null, ['npm test'], 2)
+    assert.match(msg, /Re-run a listed authoritative project test command/i)
+    assert.match(msg, /npm test/)
+    assert.match(msg, /MUST run and pass one of the listed project verifiers/i)
+    assert.doesNotMatch(msg, /No project test command was identified/i)
+  })
+
+  test('invalid verifier feedback names an explicitly required verifier when project discovery is empty', () => {
+    const msg = buildGreenVerifierRejectionMessage(
+      'verifier_receipt_invalid', null, [], 2, ['python -m doctest solution.py'],
+    )
+    assert.match(msg, /required verifier command/i)
+    assert.match(msg, /python -m doctest solution\.py/)
+    assert.match(msg, /current accepted receipt/i)
+    assert.doesNotMatch(msg, /No project test command was identified/i)
+  })
 });
 
 describe('isLikelyVerifierCommand', () => {
@@ -457,6 +484,27 @@ describe('buildGateRejectUserMessageForEngine (P2.3 gate feedback)', () => {
     assert.match(msg, /verifier_missing|COMPLETION_GATE_REJECTED/i);
     assert.match(msg, /pytest tests\/test_foo\.py/);
     assert.match(msg, /_verify\*\.py/);
+  });
+
+  test('no-discovered-tests feedback retains task-required verifier commands on the engine path', async () => {
+    const { buildGateRejectUserMessageForEngine } = await import('./completionGatePolicy.js');
+    const msg = buildGateRejectUserMessageForEngine({
+      task: 'Implement solution.py and run the specified verifier.',
+      taskClass: 'general_swe',
+      toolCallLog: [
+        { tool: 'write_file', target: 'solution.py', detail: 'ok', exit_code: 0 },
+      ],
+      lastVerifierReceipt: null,
+      hasAnyWrites: true,
+      projectTestCommands: [],
+      requiredVerifierCommands: ['python -m doctest solution.py'],
+      verifierEvidenceErrors: ['receipt binding unavailable'],
+      gateStrikes: 1,
+    });
+    assert.match(msg, /required verifier command\(s\) are configured/i);
+    assert.match(msg, /python -m doctest solution\.py/);
+    assert.match(msg, /denied before dispatch did not run/i);
+    assert.doesNotMatch(msg, /No project test command was identified/i);
   });
 });
 

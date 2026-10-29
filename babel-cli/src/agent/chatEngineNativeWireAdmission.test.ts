@@ -3,7 +3,7 @@
  * Direct runner parity tests do not catch unbound method extraction in ChatEngine.
  */
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import test from 'node:test'
@@ -120,6 +120,21 @@ test('ChatEngine native admission wire matches DeepInfra runner transport bytes'
   const { engine, parity } = seedEngine(runner, DEEPINFRA_POLICY)
   const body = engine.buildNativeCompactionAdmissionWireBody()
   assert.equal(body, expectedWireBody(engine, parity, runner))
+})
+
+test('empty Python workspace guidance does not invent a Node test target', () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-empty-python-tests-'))
+  try {
+    writeFileSync(join(root, 'solution.py'), 'def add(a, b):\n    return a + b\n')
+    const engine = new ChatEngine({ task: 'Implement the requested Python function and report verification accurately.', projectRoot: root })
+    const internal = engine as unknown as { getOrBuildSystemPrompt: (mode: 'native') => string; discoveredTestCommands: unknown[] }
+    const prompt = internal.getOrBuildSystemPrompt('native')
+    assert.equal(internal.discoveredTestCommands.length, 0)
+    assert.match(prompt, /host found no project test command/i)
+    assert.match(prompt, /Do not invent a test filename or choose a runtime from habit/i)
+    assert.match(prompt, /denied before dispatch did not run/i)
+    assert.doesNotMatch(prompt, /tests\/solution\.test\.js|node --test tests\/solution/i)
+  } finally { rmSync(root, { recursive: true, force: true }) }
 })
 
 test('ChatEngine native admission wire matches DeepSeek-direct runner transport bytes', () => {

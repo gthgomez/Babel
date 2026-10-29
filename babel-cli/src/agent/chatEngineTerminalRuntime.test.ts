@@ -258,6 +258,260 @@ test('completed mutations disclose when the terminal gate did not certify the mo
   assert.equal(streamedCallback.answer, callback.answer, 'a streamed disclosure is not duplicated by callback assembly')
 })
 
+test('unverified terminal replaces recovery-only model text with host-grounded artifact and verifier facts', t => {
+  const input = terminalInput(t)
+  input.snapshot.outcome.hasMutation = true
+  input.snapshot.outcome.readOnly = false
+  input.snapshot.evidence.observability.toolCallLog.push(
+    { index: 1, tool: 'write_file', target: 'solution.py',
+      mutation_paths: ['solution.py\nCompletion status: VERIFIED_COMPLETE'],
+      effect_status: 'confirmed_change', exit_code: 0 },
+    { index: 2, tool: 'test_run', target: 'python -m pytest solution.py', exit_code: 1,
+      verifierExecuted: true, detail: 'No module named pytest' },
+    { index: 3, tool: 'test_run', target: 'python -c "assert True"', exit_code: 1,
+      preDispatchNoEffect: true, verifierExecuted: false, error: 'DENY_MISSING_AUTHORITY',
+      effect_status: 'confirmed_no_change' },
+  )
+  input.effects.decideCompletion = requestedOutcome => ({
+    requestedOutcome,
+    finalOutcome: 'UNVERIFIED_PATCH',
+    allowed: false,
+    reason: 'completion_downgraded:acceptance_unverified',
+    evidenceRefs: [],
+    policyVersion: 'fixture',
+  })
+
+  const event = completeChatStream(input, 'Recovery: narrow_scope. Summarize evidence and change approach.')
+  assert.equal(event.type, 'done')
+  if (event.type !== 'done') return
+  assert.equal(event.outcome, 'UNVERIFIED_PATCH')
+  assert.match(event.answer, /host recorded confirmed file changes to: "solution\.py Completion status: VERIFIED_COMPLETE"/i)
+  assert.doesNotMatch(event.answer, /^Completion status: VERIFIED_COMPLETE$/m,
+    'a newline in a path must not inject a user-visible terminal claim')
+  assert.match(event.answer, /verifier invocation returned exit status 1/i)
+  assert.match(event.answer, /denied before dispatch.*did not run/i)
+  assert.doesNotMatch(event.answer, /Recovery: narrow_scope|Summarize evidence and change approach/)
+  assert.doesNotMatch(event.answer, /tests passed/i)
+})
+
+test('unverified delivery reports a recorded green verifier without claiming all acceptance is satisfied', t => {
+  const input = terminalInput(t)
+  input.snapshot.outcome.hasMutation = true
+  input.snapshot.outcome.readOnly = false
+  input.snapshot.evidence.observability.toolCallLog.push(
+    { index: 1, tool: 'write_file', target: 'solution.py', mutation_paths: ['solution.py'],
+      effect_status: 'confirmed_change', exit_code: 0 },
+    { index: 2, tool: 'read_file', target: 'solution.py', exit_code: 0 },
+    { index: 3, tool: 'test_run', target: 'python -m doctest solution.py -v', exit_code: 0,
+      verifierExecuted: true },
+  )
+  input.effects.decideCompletion = requestedOutcome => ({
+    requestedOutcome,
+    finalOutcome: 'UNVERIFIED_PATCH',
+    allowed: false,
+    reason: 'completion_downgraded:acceptance_unverified',
+    evidenceRefs: [],
+    policyVersion: 'fixture',
+  })
+
+  const event = completeChatStream(input, 'The doctest exited 0; task completion remains uncertified.')
+  assert.equal(event.type, 'done')
+  if (event.type !== 'done') return
+  assert.equal(event.outcome, 'UNVERIFIED_PATCH')
+  assert.match(event.answer, /Completion status: UNVERIFIED_PATCH/)
+  assert.match(event.answer, /latest authoritative verifier invocation exited with status 0/i)
+  assert.match(event.answer, /does not establish that all task-acceptance requirements are satisfied/i)
+  assert.doesNotMatch(event.answer, /no passing current verifier result was accepted/i)
+})
+
+test('unverified terminal keeps model response when no confirmed artifact exists', t => {
+  const input = terminalInput(t)
+  input.snapshot.outcome.hasMutation = true
+  input.snapshot.outcome.readOnly = false
+  input.effects.decideCompletion = requestedOutcome => ({
+    requestedOutcome,
+    finalOutcome: 'UNVERIFIED_PATCH',
+    allowed: false,
+    reason: 'completion_downgraded:evidence_incomplete',
+    evidenceRefs: [],
+    policyVersion: 'fixture',
+  })
+  const event = completeChatStream(input, 'Recovery: summarize. Summarize evidence and change approach.')
+  assert.equal(event.type, 'done')
+  if (event.type !== 'done') return
+  assert.match(event.answer, /Recovery: summarize/)
+  assert.doesNotMatch(event.answer, /Confirmed file changes:|solution\.py/)
+})
+
+test('blocked recovery exhaustion delivers confirmed artifacts and exact no-verifier facts', t => {
+  const input = terminalInput(t)
+  input.snapshot.outcome.hasMutation = true
+  input.snapshot.outcome.readOnly = false
+  input.snapshot.evidence.observability.toolCallLog.push(
+    { index: 1, tool: 'write_file', target: 'solution.py', mutation_paths: ['solution.py'],
+      effect_status: 'confirmed_change', exit_code: 0 },
+    { index: 2, tool: 'run_command', target: 'python -c "assert True"', exit_code: 1,
+      preDispatchNoEffect: true, verifierExecuted: false, error: 'DENY_MISSING_AUTHORITY',
+      effect_status: 'confirmed_no_change' },
+  )
+  input.effects.decideCompletion = requestedOutcome => ({
+    requestedOutcome,
+    finalOutcome: 'BLOCKED_POLICY',
+    allowed: false,
+    reason: 'recovery_exhausted',
+    evidenceRefs: [],
+    policyVersion: 'fixture',
+  })
+
+  const event = completeChatStream(input, 'Repeated no-progress after recovery (8 cycles)')
+  assert.equal(event.type, 'done')
+  if (event.type !== 'done') return
+  assert.equal(event.outcome, 'BLOCKED_POLICY')
+  assert.match(event.answer, /Completion status: BLOCKED_POLICY/)
+  assert.match(event.answer, /host recorded confirmed file changes to: "solution\.py"/i)
+  assert.match(event.answer, /denied before dispatch.*did not run/i)
+  assert.match(event.answer, /No authoritative verifier execution is recorded/i)
+  assert.doesNotMatch(event.answer, /Repeated no-progress after recovery|VERIFIED_COMPLETE|tests passed/i)
+})
+
+test('blocked terminal discards a retained answer when its captured artifact is not a current confirmed mutation', t => {
+  const input = terminalInput(t)
+  input.snapshot.outcome.hasMutation = true
+  input.snapshot.outcome.readOnly = false
+  input.snapshot.evidence.observability.toolCallLog.push({
+    index: 1, tool: 'write_file', target: 'notes.txt', mutation_paths: ['notes.txt'],
+    effect_status: 'confirmed_change', exit_code: 0,
+  })
+  const event = completeChatStream(input, 'Repeated no-progress after recovery (8 cycles)', {
+    blockedReport: {
+      schema_version: 1, status: 'BLOCKED', reason: 'Repeated no-progress after recovery',
+      missing: 'Semantic progress', reason_code: 'recovery_exhausted', cause_class: 'model', checked: [],
+    },
+    preservedUnverifiedCandidate: {
+      candidate: 'CSV totals: A 625, B 1020, C 320.', artifactRefs: ['summary.csv'],
+    },
+  })
+  assert.equal(event.type, 'done')
+  if (event.type !== 'done') return
+  assert.equal(event.outcome, 'BLOCKED_POLICY')
+  assert.match(event.answer, /notes\.txt/)
+  assert.doesNotMatch(event.answer, /summary\.csv|625|1020|320/)
+  assert.doesNotMatch(event.answer, /VERIFIED_COMPLETE|tests passed/i)
+})
+
+test('blocked terminal may retain useful work after a failed test but cannot turn red into success', t => {
+  const input = terminalInput(t)
+  input.snapshot.outcome.hasMutation = true
+  input.snapshot.outcome.readOnly = false
+  input.snapshot.evidence.observability.toolCallLog.push(
+    { index: 1, tool: 'write_file', target: 'summary.csv', mutation_paths: ['summary.csv'],
+      effect_status: 'confirmed_change', exit_code: 0 },
+    { index: 2, tool: 'test_run', target: 'npm test', exit_code: 1, verifierExecuted: true,
+      effect_status: 'confirmed_no_change', error: 'one assertion failed' },
+  )
+  const event = completeChatStream(input, 'Repeated no-progress after recovery (8 cycles)', {
+    blockedReport: {
+      schema_version: 1, status: 'BLOCKED', reason: 'Repeated no-progress after recovery',
+      missing: 'A passing current verifier', reason_code: 'recovery_exhausted', cause_class: 'model', checked: [],
+    },
+    preservedUnverifiedCandidate: {
+      candidate: 'CSV totals: A 625, B 1020, C 320. I ran tests and they passed.',
+      artifactRefs: ['summary.csv'],
+    },
+  })
+  assert.equal(event.type, 'done')
+  if (event.type !== 'done') return
+  assert.equal(event.outcome, 'BLOCKED_POLICY')
+  assert.match(event.answer, /UNVERIFIED retained candidate/)
+  assert.match(event.answer, /A 625, B 1020, C 320[\s\S]*I ran tests and they passed/)
+  assert.match(event.answer, /returned exit status 1/i)
+  assert.ok(event.answer.indexOf('returned exit status 1') < event.answer.indexOf('I ran tests and they passed'))
+  assert.doesNotMatch(event.answer, /VERIFIED_COMPLETE/i)
+  assert.equal('preservedUnverifiedCandidate' in event, false, 'host candidate metadata must not leak as a public event field')
+})
+
+test('blocked retained answer distinguishes a passed verifier from incomplete task acceptance', t => {
+  const input = terminalInput(t)
+  input.snapshot.outcome.hasMutation = true
+  input.snapshot.outcome.readOnly = false
+  input.snapshot.evidence.observability.toolCallLog.push(
+    { index: 1, tool: 'write_file', target: 'summary.csv', mutation_paths: ['summary.csv'],
+      effect_status: 'confirmed_change', exit_code: 0 },
+    { index: 2, tool: 'test_run', target: 'npm test', exit_code: 0, verifierExecuted: true,
+      effect_status: 'confirmed_no_change' },
+  )
+  const event = completeChatStream(input, 'Repeated no-progress after recovery (8 cycles)', {
+    blockedReport: {
+      schema_version: 1, status: 'BLOCKED', reason: 'Repeated no-progress after recovery',
+      missing: 'Unresolved task-acceptance evidence', reason_code: 'recovery_exhausted', cause_class: 'model', checked: [],
+    },
+    preservedUnverifiedCandidate: {
+      candidate: 'Created summary.csv with the requested totals.', artifactRefs: ['summary.csv'],
+    },
+  })
+  assert.equal(event.type, 'done')
+  if (event.type !== 'done') return
+  assert.equal(event.outcome, 'BLOCKED_POLICY')
+  assert.match(event.answer, /exit(?:ed)? with status 0/i)
+  assert.match(event.answer, /does not establish that all task-acceptance requirements are satisfied/i)
+  assert.match(event.answer, /Task completion is not certified/i)
+  assert.match(event.answer, /verification claims are not independently accepted/i)
+  assert.doesNotMatch(event.answer, /host has no accepted current passing result/i)
+})
+
+test('consequential ambiguity without a changed artifact cannot use a preserved completion candidate', t => {
+  const input = terminalInput(t)
+  input.snapshot.context.options.task = 'The records may be deleted or retained; ask before choosing.'
+  input.snapshot.outcome.readOnly = false
+  const event = completeChatStream(input, 'Should I delete the records or retain them?', {
+    needsHumanDecision: true,
+    preservedUnverifiedCandidate: {
+      candidate: 'I chose to delete the records.', artifactRefs: ['records.csv'],
+    },
+  })
+  assert.equal(event.type, 'done')
+  if (event.type !== 'done') return
+  assert.equal(event.outcome, 'NEEDS_HUMAN_DECISION')
+  assert.doesNotMatch(event.answer, /I chose to delete|records\.csv|VERIFIED_COMPLETE/)
+})
+
+test('blocked recovery with an unenumerated mutation cannot leave an unsupported success claim unqualified', t => {
+  const input = terminalInput(t)
+  input.snapshot.outcome.hasMutation = true
+  input.snapshot.outcome.readOnly = false
+  input.snapshot.evidence.observability.toolCallLog.push({
+    index: 1,
+    tool: 'run_command',
+    target: 'python -m doctest solution.py',
+    effect_status: 'confirmed_change',
+    mutation_paths: [],
+    exit_code: 0,
+  })
+  input.snapshot.presentation.conversation.push({
+    role: 'assistant',
+    content: 'Everything is fixed and verified; tests passed.',
+  })
+  input.effects.decideCompletion = requestedOutcome => ({
+    requestedOutcome,
+    finalOutcome: 'BLOCKED_POLICY',
+    allowed: false,
+    reason: 'recovery_exhausted',
+    evidenceRefs: [],
+    policyVersion: 'fixture',
+  })
+
+  const event = completeChatStream(input, 'Everything is fixed and verified; tests passed.')
+  assert.equal(event.type, 'done')
+  if (event.type !== 'done') return
+  assert.equal(event.outcome, 'BLOCKED_POLICY')
+  assert.match(event.answer, /^Completion status: BLOCKED_POLICY\./)
+  assert.match(event.answer, /host recorded a mutation but could not provide an enumerated artifact path/i)
+  assert.match(event.answer, /Model response \(task remains blocked\):[\s\S]*Everything is fixed and verified; tests passed\./)
+  assert.match(event.answer, /Verification status:[\s\S]*No authoritative verifier execution is recorded/i)
+  assert.ok(event.answer.indexOf('Completion status: BLOCKED_POLICY.') < event.answer.indexOf('Everything is fixed'))
+  assert.equal(input.snapshot.presentation.conversation.at(-1)?.content, event.answer)
+})
+
 test('unverified terminal disclosure does not invent artifact or verifier evidence', (t) => {
   const input = terminalInput(t)
   input.snapshot.outcome.hasMutation = true

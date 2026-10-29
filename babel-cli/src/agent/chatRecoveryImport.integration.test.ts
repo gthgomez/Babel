@@ -1,7 +1,7 @@
 import { recordToolProposed, recordToolTerminal } from './sessionEvents.js'
 import assert from 'node:assert/strict'
 import {test} from 'node:test'
-import {mkdtempSync,mkdirSync,readFileSync,writeFileSync,rmSync} from 'node:fs'
+import {existsSync,mkdtempSync,mkdirSync,readFileSync,writeFileSync,rmSync} from 'node:fs'
 import {tmpdir} from 'node:os'
 import {join,dirname} from 'node:path'
 import {execFileSync} from 'node:child_process'
@@ -12,7 +12,7 @@ import {createWorkingState,type WorkingState} from './codingLoop/workingState.js
 import {ingestVerifierResult} from './codingLoop/chatBindings.js'
 import {recoveryObservationId} from './codingLoop/recoveryPlan.js'
 import {SafeExecutor} from '../sandbox.js'
-import {resetDockerAvailabilityCache,setDockerAvailableForTest} from '../config/benchmarkContainer.js'
+import {buildBenchmarkContainerCommand,resetDockerAvailabilityCache,setDockerAvailableForTest} from '../config/benchmarkContainer.js'
 
 const fixtures = [
   {name:'named import',path:'math.js',testPath:'math.test.js',label:'addition',source:'export function add(a,b) { return a-b; }\n',old:'return a-b;',replacement:'return a+b;',
@@ -33,7 +33,7 @@ test('an earlier mutation preserves direct non-test recovery without assertion l
   state.lastMutation={path:'source.ts',at:1,fingerprint:'fixture-prior-edit'}
   const result=ingestVerifierResult({state,tool:'test_run',target:'npm run typecheck',exitCode:1,
     stdout:'',stderr:"source.ts(1,14): error TS2322: Type 'number' is not assignable to type 'string'.",
-    summary:'typecheck failed',recoveryProjectRoot:root,recoveryBinding:{schemaVersion:1,taskId:'fixture-task',contractHash:'fixture-contract',repositoryIdentity:'fixture-repo',workspaceRevision:'fixture-revision'}})
+    summary:'typecheck failed',recoveryProjectRoot:root,recoveryBinding:{schemaVersion:2,taskId:'fixture-task',contractHash:'fixture-contract',sessionId:'fixture-session',repositoryIdentity:'fixture-repo',workspaceRevision:'fixture-revision',executionContextHash:'fixture-context'}})
   assert.ok(result.state.recoveryGate?.failingTargets?.includes('source.ts'))
   assert.equal(result.state.recoveryGate?.satisfied,false,'the prior edit alone is not fresh recovery evidence')
   assert.equal(result.state.localization,undefined,'preserve direct recovery for an already implicated non-test target')
@@ -95,7 +95,7 @@ for (const fixture of fixtures) for (const priorMutation of [false,true]) test(`
   assert.ok(delivered.observationList[4]?.includes(sourceRecord.id),'the fifth read exposes its own current handle')
   assert.equal(sourceRecord.window.completeFile,true)
   assert.equal(probe.workingState.localization?.calls,5,'the fifth authorized read is not refused')
-  const plan={schemaVersion:1 as const,failureSignature:gate.failureSignature,workspaceRevision:gate.binding!.workspaceRevision,
+  const plan={schemaVersion:2 as const,recoveryGateRef:gate.recoveryGateRef!,workspaceRevision:gate.binding!.workspaceRevision,
     hypothesisClass:'logic' as const,targetIdentities:[fixture.path],actionFamily:'str_replace' as const,criterionId:'npm test',supportingObservationIds:gate.observedKeys!.map(recoveryObservationId)}
   const wrongCriterion=await run({type:'str_replace',file_path:fixture.path,old_str:fixture.old,new_str:fixture.replacement,repair_plan:{...plan,criterionId:fixture.label}})
   assert.match(wrongCriterion.observation,/criterion_identity_mismatch/)
@@ -173,4 +173,108 @@ test('an actually started red without a receipt can rerun through normal governe
   const denied = await run({type:'run_command',command:'node -e "process.exit(0)"'})
   assert.equal(executed,2)
   assert.match(denied.observationList.join('\n'), /RECOVERY_|DENY|denied/i)
+})
+
+test('governed Python write/check/read/repair path avoids host bytecode drift', async t => {
+  const storage = mkdtempSync(join(tmpdir(), 'babel-python-recovery-cache-'))
+  const root = join(storage, 'project'), runDir = join(storage, 'runtime')
+  mkdirSync(root); mkdirSync(runDir)
+  const names = ['BABEL_LIVE','BABEL_RUNS_DIR','BABEL_EXECUTION_PROFILE','BABEL_BENCHMARK_DOCKER_IMAGE','BABEL_DOCKER_DISABLE','BABEL_ALLOW_HOST_FALLBACK','BABEL_BENCHMARK_DOCKER_EXTRA_ARGS'] as const
+  const old = names.map(name => [name, process.env[name]] as const)
+  t.after(() => { for (const [name,value] of old) { if (value === undefined) delete process.env[name]; else process.env[name] = value }; resetDockerAvailabilityCache(); rmSync(storage, { recursive:true, force:true }) })
+  process.env['BABEL_LIVE'] = 'true'; process.env['BABEL_RUNS_DIR'] = join(storage, 'runs'); process.env['BABEL_EXECUTION_PROFILE'] = 'safe_repo'
+  process.env['BABEL_BENCHMARK_DOCKER_IMAGE'] = 'synthetic/python:unit'; delete process.env['BABEL_DOCKER_DISABLE']; delete process.env['BABEL_ALLOW_HOST_FALLBACK']; delete process.env['BABEL_BENCHMARK_DOCKER_EXTRA_ARGS']; setDockerAvailableForTest(true)
+
+  const command = 'python -m doctest solution.py -v'
+  const source = 'def answer():\n    """Return the expected value.\n    >>> answer()\n    1\n    """\n    return 0\n'
+  const baselineSource = source.replace('    return 0\n', '    return -1\n')
+  writeFileSync(join(root, 'solution.py'), baselineSource)
+  execFileSync('git', ['init', '-q'], { cwd:root, windowsHide:true })
+  execFileSync('git', ['add', 'solution.py'], { cwd:root, windowsHide:true })
+  execFileSync('git', ['-c','user.name=Fixture','-c','user.email=fixture@example.test','commit','-qm','fixture'], { cwd:root, windowsHide:true })
+
+  let verifierRuns = 0
+  // This adapter supplies a started red then green result so the production
+  // recovery controller and settlement path are exercised. It does not run
+  // Docker or claim that the doctest itself executed.
+  t.mock.method(SafeExecutor.prototype, 'testRunAsync', async (actualCommand: string) => {
+    assert.equal(actualCommand, command)
+    const prepared = buildBenchmarkContainerCommand({
+      dockerImage: process.env['BABEL_BENCHMARK_DOCKER_IMAGE']!, projectRoot:root, cwd:root, command:actualCommand,
+    })
+    const containerEnv = new Map<string,string>()
+    for (let index = 0; index < prepared.args.length - 1; index++) {
+      if (prepared.args[index] !== '-e') continue
+      const pair = prepared.args[index + 1] ?? '', eq = pair.indexOf('=')
+      if (eq > 0) containerEnv.set(pair.slice(0,eq),pair.slice(eq + 1))
+    }
+    assert.equal(containerEnv.get('PYTHONDONTWRITEBYTECODE'), '1', 'container imports must also avoid workspace bytecode')
+    verifierRuns++
+    const red = verifierRuns === 1
+    return {
+      exit_code:red ? 1 : 0,
+      stdout:red ? '*** Failed example:\n    answer()\nExpected: 1\nGot: 0\nFile "/app/solution.py", line 4, in answer\n' : '1 passed, 0 failed\n',
+      stderr:'', process_started:true, process_termination:'exited' as const,
+    }
+  })
+
+  const task = 'Fix the failing doctest in solution.py. Run `python -m doctest solution.py -v` before completion. Preserve the examples.'
+  const engine = new ChatEngine({ task, projectRoot:root, requiredVerifierCommands:[command] })
+  engine.admitUserSubmission({ userInput:task }, { model:'fixture-model', provider:'ollama' })
+  const host = engine as unknown as {
+    _turnIndex:number; parity:{turnId:string;sessionEvents:import('./sessionEvents.js').SessionEventLog};
+    workingState:WorkingState; toolCallLog:Array<{error?:string;exit_code?:number}>;
+    lastVerifierReceipt:{exit_code:number;stale:boolean}|null;
+    currentRecoveryBinding:()=>{workspaceRevision:string}|null;
+    executeOneAction:(action:ChatToolAction,context:ToolContext,callbacks:object,meta:{index:number;idempotencyKey:string;ownerGeneration:number})=>Promise<{observation:string}>;
+  }
+  const context:ToolContext = { agentId:'test', runId:'test', runDir, babelRoot:root, projectRoot:root }
+  const run = async (action:ChatToolAction) => {
+    const id = `python-cache-${++host._turnIndex}`, turn = host.parity.turnId
+    recordToolProposed(host.parity.sessionEvents, { turn_id:turn, tool_call_id:id, tool_name:action.type })
+    const result = await host.executeOneAction(action, context, {}, { index:host._turnIndex, idempotencyKey:id, ownerGeneration:0 })
+    const row = host.toolCallLog.at(-1)!
+    const started = host.parity.sessionEvents.events.some(event => event.kind === 'tool_started' && event.tool_call_id === id)
+    recordToolTerminal(host.parity.sessionEvents, { turn_id:turn, tool_call_id:id, tool_name:action.type,
+      ...(started ? { ...(row.exit_code !== undefined ? {exit_code:row.exit_code} : {}), content:result.observation, failed:!!row.error }
+        : { cancelled:true, reason:'pre_dispatch_denied_or_invalid', recovery_state:'TOOL_NOT_STARTED' as const }) })
+    return result
+  }
+
+  const firstEdit = await run({ type:'write_file', path:'solution.py', content:source })
+  assert.doesNotMatch(firstEdit.observation, /CAPABILITY_DENIED|DENY_MISSING_AUTHORITY/)
+  assert.match(firstEdit.observation, /static_check solution\.py\nexit_code: 0/)
+  assert.equal(existsSync(join(root, '__pycache__')), false, 'the automatic host syntax check must not alter the project')
+  assert.equal(readFileSync(join(root, 'solution.py'), 'utf8'), source)
+  const initial = host.currentRecoveryBinding()
+  assert.ok(initial?.workspaceRevision)
+  const red = await run({ type:'test_run', command })
+  assert.match(red.observation, /exit_code: 1/)
+  assert.equal(host.lastVerifierReceipt?.exit_code, 1, 'the governed settlement path captures the adapter result')
+  assert.equal(host.workingState.lastVerifier?.exitCode, 1, 'the governed settlement path records the red verifier result')
+  assert.ok(host.workingState.settledFailedVerifier, 'the started adapter result is retained for recovery')
+  assert.equal(host.currentRecoveryBinding()?.workspaceRevision, initial.workspaceRevision,
+    'a settled red verifier must remain bound to the exact post-write candidate')
+  assert.ok(host.parity.sessionEvents.events.some(event => event.kind === 'verifier_attempt'),
+    'the test action must traverse durable verifier event settlement')
+
+  const sourceRead = await run({ type:'read_file', path:'solution.py' })
+  assert.match(sourceRead.observation, /return 0/)
+  const gate = host.workingState.recoveryGate!
+  assert.ok(gate?.satisfied, 'the fresh source read should satisfy the red-verifier recovery gate')
+  const plan = {
+    schemaVersion:2 as const, recoveryGateRef:gate.recoveryGateRef!, workspaceRevision:gate.binding!.workspaceRevision,
+    hypothesisClass:'logic' as const, targetIdentities:['solution.py'], actionFamily:'str_replace' as const,
+    criterionId:host.workingState.lastVerifier!.identity,
+    supportingObservationIds:gate.observedKeys!.map(recoveryObservationId),
+  }
+  const repair = await run({ type:'str_replace', file_path:'solution.py', old_str:'    return 0', new_str:'    return 1', repair_plan:plan })
+  assert.doesNotMatch(repair.observation, /RECOVERY_CANDIDATE_DRIFT|RECOVERY_EVIDENCE_REQUIRED|RECOVERY_PLAN_REQUIRED/)
+  assert.equal(readFileSync(join(root,'solution.py'),'utf8'), source.replace('    return 0','    return 1'))
+  assert.equal(existsSync(join(root, '__pycache__')), false, 'subsequent governed Python edits must not create workspace artifacts')
+  const green = await run({ type:'test_run', command })
+  assert.match(green.observation, /exit_code: 0/)
+  assert.equal(verifierRuns, 2)
+  assert.equal(host.lastVerifierReceipt?.exit_code, 0)
+  assert.equal(host.workingState.recoveryGate, undefined)
 })

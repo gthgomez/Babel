@@ -16,9 +16,9 @@ import { buildChatTurnPrompt } from './chatToolDefinitions.js';
 const READ_WINDOW = { startLine: 1, endLine: 1, totalLines: 1, completeFile: true, byteTruncated: false };
 
 const TEST_BINDING = {
-  schemaVersion: 1 as const,
+  schemaVersion: 2 as const,
   taskId: 'task-1', contractHash: 'contract-1',
-  repositoryIdentity: '/repo', workspaceRevision: 'revision-A',
+  sessionId: 'session', repositoryIdentity: '/repo', workspaceRevision: 'revision-A', executionContextHash: 'context',
 };
 
 test('repeated repair evidence gate changes the next strategy before mutation', () => {
@@ -293,11 +293,13 @@ test('an ancestor directory does not localize a failing file', () => {
 
 test('an observation from revision A cannot clear the same failure gate at revision B', () => {
   const candidateA = {
-    schemaVersion: 1 as const,
+    schemaVersion: 2 as const,
     taskId: 'task-1',
     contractHash: 'contract-1',
+    sessionId: 'session',
     repositoryIdentity: '/repo',
     workspaceRevision: 'revision-A',
+    executionContextHash: 'context',
   };
   const candidateB = { ...candidateA, workspaceRevision: 'revision-B' };
   let state = applyWorkingStateEvent(createWorkingState('fix parser'), {
@@ -339,11 +341,13 @@ test('an observation from revision A cannot clear the same failure gate at revis
 
 test('a new tool call with the same observation payload does not mint another recovery permit', () => {
   const binding = {
-    schemaVersion: 1 as const,
+    schemaVersion: 2 as const,
     taskId: 'task-1',
     contractHash: 'contract-1',
+    sessionId: 'session',
     repositoryIdentity: '/repo',
     workspaceRevision: 'revision-A',
+    executionContextHash: 'context',
   };
   let state = applyWorkingStateEvent(createWorkingState('fix parser'), {
     type: 'recovery_gate', failureSignature: 'same-red-verifier', requiredEvidence: 'inspect parser',

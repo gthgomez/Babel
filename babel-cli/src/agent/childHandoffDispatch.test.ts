@@ -10,7 +10,7 @@
 
 import assert from 'node:assert/strict';
 import { after, before, describe, test } from 'node:test';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -50,7 +50,13 @@ async function dispatchSubAgent(
   action: Partial<ChatToolAction> | ((engine: ChatEngine) => Partial<ChatToolAction>) = {},
   capturePrompt?: (prompt: string) => void,
   childLane?: ChatEngineOptions['testChildLaneOverrides'],
-): Promise<{ engine: ChatEngine; observation: string; entry: SubAgentToolLogEntry }> {
+): Promise<{
+  engine: ChatEngine;
+  root: string;
+  observation: string;
+  entry: SubAgentToolLogEntry;
+  runParentAction: (action: ChatToolAction) => Promise<{ index: number; observation: string; stop?: boolean }>;
+}> {
   const root = mkdtempSync(join(tmpdir(), 'babel-child-dispatch-'));
   roots.push(root);
   writeFileSync(join(root, 'AGENTS.md'), 'REPOSITORY_RULE_SENTINEL\n');
@@ -75,25 +81,60 @@ async function dispatchSubAgent(
     abortController: AbortController;
     toolCallLog: SubAgentToolLogEntry[];
   };
+  const toolContext = {
+    agentId: 'test-parent',
+    runId: 'test-parent',
+    runDir: root,
+    babelRoot: root,
+    projectRoot: root,
+    signal: internals.abortController.signal,
+  };
+  const runParentAction = (nextAction: ChatToolAction) => internals.executeOneAction(
+    nextAction,
+    toolContext,
+    {},
+    { index: 1, idempotencyKey: 'call-parent-followup' },
+  );
   const result = await internals.executeOneAction(
     { type: 'sub_agent', task, mutation: false, ...(typeof action === 'function' ? action(engine) : action) } as ChatToolAction,
-    {
-      agentId: 'test-parent',
-      runId: 'test-parent',
-      runDir: root,
-      babelRoot: root,
-      projectRoot: root,
-      signal: internals.abortController.signal,
-    },
+    toolContext,
     {},
     { index: 0, idempotencyKey: 'call-0' },
   );
   const entry = [...internals.toolCallLog].reverse().find((row) => row.tool === 'sub_agent');
   assert.ok(entry, 'sub_agent tool log entry must exist');
-  return { engine, observation: result.observation, entry: entry! };
+  return { engine, root, observation: result.observation, entry: entry!, runParentAction };
 }
 
 describe('S02/#212 production dispatch — child conclusion reaches the parent tool message', () => {
+  test('an ask child can hand off a needed write to the parent’s normal governed write path', async () => {
+    const offline = process.env['BABEL_LITE_OFFLINE'];
+    delete process.env['BABEL_LITE_OFFLINE'];
+    const task = 'Improve the navigation for new analysts. Do not change scripts or data.';
+    const content = '# Northstar Analytics\n\n## Documentation\n\n- Follow docs/dashboard-refresh.md.\n';
+    try {
+      const { engine, root, observation, runParentAction } = await dispatchSubAgent(task, {}, undefined, {
+        useDeterministicMock: false,
+        actionResolver: async () => [{
+          type: 'finish',
+          summary: 'This ask lane is read-only. The parent must write the requested README.md section.',
+          verification: [],
+        }],
+      });
+
+      assert.match(observation, /lane: ask/);
+      assert.match(observation, /parent must write the requested README\.md section/);
+      const writeResult = await runParentAction({ type: 'write_file', path: 'README.md', content });
+      assert.match(writeResult.observation, /write_file/);
+      assert.equal(readFileSync(join(root, 'README.md'), 'utf-8'), content);
+      const toolCalls = (engine as unknown as { toolCallLog: Array<{ tool: string }> }).toolCallLog;
+      assert.equal(toolCalls.filter((row) => row.tool === 'sub_agent').length, 1, 'no duplicate ask child is needed');
+    } finally {
+      if (offline === undefined) delete process.env['BABEL_LITE_OFFLINE'];
+      else process.env['BABEL_LITE_OFFLINE'] = offline;
+    }
+  });
+
   test('empty, partial and policy denied child results stay distinct at actual dispatch', async () => {
     const offline = process.env['BABEL_LITE_OFFLINE'];
     delete process.env['BABEL_LITE_OFFLINE'];

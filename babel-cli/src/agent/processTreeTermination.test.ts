@@ -28,11 +28,28 @@ import {
 } from './backgroundShell.js';
 import { ChatEngine } from './chatEngine.js';
 import { terminateChildTree } from '../processTree.js';
+import { quoteWindowsCommandArg } from '../utils/commandArgv.js';
 
 const DELAY_WRITE_MS = 2_500;
+const TIMEOUT_TEST_DELAY_WRITE_MS = 30_000;
+const TIMEOUT_TEST_PROCESS_TIMEOUT_MS = 25_000;
+const TIMEOUT_TEST_READY_WAIT_MS = 12_000;
+const TIMEOUT_TEST_ARM_WAIT_MS = 8_000;
 const POST_KILL_WAIT_MS = DELAY_WRITE_MS + 1_200;
 
 function isProcessAlive(pid: number): boolean {
+  // Linux containers may leave an orphaned zombie visible to kill(pid, 0)
+  // until their namespace init reaps it. A zombie cannot execute the delayed
+  // write this fixture is intended to detect.
+  if (process.platform === 'linux') {
+    try {
+      const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
+      const commandEnd = stat.lastIndexOf(')');
+      if (commandEnd >= 0 && stat[commandEnd + 2] === 'Z') return false;
+    } catch {
+      // Fall through to the portable signal probe.
+    }
+  }
   try {
     process.kill(pid, 0);
     return true;
@@ -51,6 +68,7 @@ async function waitUntilDead(pid: number, timeoutMs = 5_000): Promise<boolean> {
 }
 
 const OWNERSHIP_READY_RE = /OWNERSHIP_READY\t(\d+)/;
+const DELAY_WRITE_ARMED_RE = /DELAY_WRITE_ARMED\t(\d+)/;
 
 function readOwnedPidsOrThrow(ownershipPath: string): { parent?: number; grandchild?: number } {
   const raw = readFileSync(ownershipPath, 'utf8').trim();
@@ -82,9 +100,34 @@ async function waitForOwnershipReady(
       assert.equal(pids.grandchild, grandchildPid, 'handshake pid must match atomically published ownership');
       return grandchildPid;
     }
+    if (snap.status !== 'running') {
+      throw new Error(
+        `Background job ended before ownership handshake: id=${jobId} status=${snap.status} exit=${snap.exit_code} stderr=${JSON.stringify(snap.stderr)}`,
+      );
+    }
     await new Promise((resolve) => setTimeout(resolve, 40));
   }
   throw new Error(`Timed out waiting for ownership ready handshake for ${jobId}`);
+}
+
+/** Wait until the descendant has observed the release and armed its timer. */
+async function waitForDelayedWriteArmed(jobId: string, expectedPid: number, timeoutMs: number): Promise<void> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const snap = await awaitBackgroundShell(jobId, 50);
+    const match = snap.stdout.match(DELAY_WRITE_ARMED_RE);
+    if (match) {
+      assert.equal(Number(match[1]), expectedPid, 'armed timer must belong to the owned descendant');
+      return;
+    }
+    if (snap.status !== 'running') {
+      throw new Error(
+        `Background job ended before delayed-write timer armed: id=${jobId} status=${snap.status} exit=${snap.exit_code} stderr=${JSON.stringify(snap.stderr)}`,
+      );
+    }
+    await new Promise((resolve) => setTimeout(resolve, 40));
+  }
+  throw new Error(`Timed out waiting for delayed-write timer to arm for ${jobId}`);
 }
 
 async function withOwnedFixtureTeardown<T>(
@@ -115,15 +158,27 @@ async function withOwnedFixtureTeardown<T>(
   throw new Error('withOwnedFixtureTeardown: unreachable');
 }
 
-function writeTreeScripts(dir: string, markerPath: string): { parent: string; grandchild: string } {
+function writeTreeScripts(
+  dir: string,
+  markerPath: string,
+  delayedWriteMs = DELAY_WRITE_MS,
+): { parent: string; grandchild: string; release: string } {
   const grandchild = join(dir, 'grandchild.js');
   const parent = join(dir, 'parent.js');
+  const release = join(dir, 'start-delayed-write');
   writeFileSync(
     grandchild,
     [
       "const fs = require('fs');",
       `const marker = ${JSON.stringify(markerPath)};`,
-      `setTimeout(() => { try { fs.writeFileSync(marker, 'late-write'); } catch (e) {} }, ${DELAY_WRITE_MS});`,
+      `const release = ${JSON.stringify(release)};`,
+      `const delay = ${delayedWriteMs};`,
+      'const poll = setInterval(() => {',
+      '  if (!fs.existsSync(release)) return;',
+      '  clearInterval(poll);',
+      "  setTimeout(() => { try { fs.writeFileSync(marker, 'late-write'); } catch (e) {} }, delay);",
+      "  process.stdout.write('DELAY_WRITE_ARMED\\t' + String(process.pid) + '\\n');",
+      '}, 10);',
       'setInterval(() => {}, 1000);',
     ].join('\n'),
     'utf8',
@@ -141,7 +196,8 @@ function writeTreeScripts(dir: string, markerPath: string): { parent: string; gr
       '  fs.writeFileSync(ownershipTmp, JSON.stringify(record));',
       '  fs.renameSync(ownershipTmp, ownership);',
       '}',
-      'const gc = cp.spawn(process.execPath, [process.argv[2]], { stdio: "ignore", windowsHide: true });',
+      'const gc = cp.spawn(process.execPath, [process.argv[2]], { stdio: ["ignore", "pipe", "ignore"], windowsHide: true });',
+      "gc.stdout.on('data', chunk => process.stdout.write(chunk));",
       'if (!gc.pid) process.exit(1);',
       'publishOwnership({ parent: process.pid, grandchild: gc.pid });',
       "process.stdout.write('OWNERSHIP_READY\\t' + String(gc.pid) + '\\n');",
@@ -149,7 +205,7 @@ function writeTreeScripts(dir: string, markerPath: string): { parent: string; gr
     ].join('\n'),
     'utf8',
   );
-  return { parent, grandchild };
+  return { parent, grandchild, release };
 }
 
 async function cleanupOwnedTree(dir: string, job?: BackgroundShellJob): Promise<void> {
@@ -188,19 +244,24 @@ describe('real process-tree termination (qualifying)', () => {
     const dir = mkdtempSync(join(tmpdir(), 'babel-ptree-timeout-'));
     const marker = join(dir, 'post-terminal.txt');
     const ownership = join(dir, 'owned-pids.json');
-    const scripts = writeTreeScripts(dir, marker);
+    const scripts = writeTreeScripts(dir, marker, TIMEOUT_TEST_DELAY_WRITE_MS);
     const jobRef: { job?: BackgroundShellJob } = {};
     await withOwnedFixtureTeardown(dir, jobRef, async () => {
       jobRef.job = startBackgroundShell({
-        command: `node ${scripts.parent} ${scripts.grandchild}`,
+        command: [process.execPath, scripts.parent, scripts.grandchild].map(quoteWindowsCommandArg).join(' '),
         cwd: dir,
-        timeoutMs: 400,
+        // Leave time for slow Windows startup and child-ready handshakes. The
+        // descendant's longer timer still guarantees timeout occurs first.
+        timeoutMs: TIMEOUT_TEST_PROCESS_TIMEOUT_MS,
       });
-      const grandchildPid = await waitForOwnershipReady(jobRef.job.id, ownership);
-      const result = await awaitBackgroundShell(jobRef.job.id, 8_000);
+      const grandchildPid = await waitForOwnershipReady(jobRef.job.id, ownership, TIMEOUT_TEST_READY_WAIT_MS);
+      writeFileSync(scripts.release, 'start', 'utf8');
+      // Readiness and child-arm waits total 20s, leaving 5s before timeout.
+      await waitForDelayedWriteArmed(jobRef.job.id, grandchildPid, TIMEOUT_TEST_ARM_WAIT_MS);
+      const result = await awaitBackgroundShell(jobRef.job.id, TIMEOUT_TEST_PROCESS_TIMEOUT_MS + 5_000);
       assert.equal(result.status, 'killed');
       assert.ok(await waitUntilDead(grandchildPid), 'grandchild should die after tree kill');
-      await new Promise((resolve) => setTimeout(resolve, POST_KILL_WAIT_MS));
+      await new Promise((resolve) => setTimeout(resolve, TIMEOUT_TEST_DELAY_WRITE_MS + 1_200));
       assert.equal(
         existsSync(marker),
         false,
@@ -223,12 +284,14 @@ describe('real process-tree termination (qualifying)', () => {
     const jobRef: { job?: BackgroundShellJob } = {};
     await withOwnedFixtureTeardown(dir, jobRef, async () => {
       jobRef.job = startBackgroundShell({
-        command: `node ${scripts.parent} ${scripts.grandchild}`,
+        command: [process.execPath, scripts.parent, scripts.grandchild].map(quoteWindowsCommandArg).join(' '),
         cwd: dir,
         timeoutMs: 60_000,
         ownerId: runId,
       });
       const grandchildPid = await waitForOwnershipReady(jobRef.job.id, ownership);
+      writeFileSync(scripts.release, 'start', 'utf8');
+      await waitForDelayedWriteArmed(jobRef.job.id, grandchildPid, 8_000);
       assert.ok(isProcessAlive(grandchildPid), 'grandchild should be running before cancel');
       // Cancel while the tree is live — not an already-aborted signal.
       engine.abortTurn();
@@ -252,11 +315,13 @@ describe('real process-tree termination (qualifying)', () => {
     const jobRef: { job?: BackgroundShellJob } = {};
     await withOwnedFixtureTeardown(dir, jobRef, async () => {
       jobRef.job = startBackgroundShell({
-        command: `node ${scripts.parent} ${scripts.grandchild}`,
+        command: [process.execPath, scripts.parent, scripts.grandchild].map(quoteWindowsCommandArg).join(' '),
         cwd: dir,
         timeoutMs: 60_000,
       });
       const grandchildPid = await waitForOwnershipReady(jobRef.job.id, ownership);
+      writeFileSync(scripts.release, 'start', 'utf8');
+      await waitForDelayedWriteArmed(jobRef.job.id, grandchildPid, 8_000);
       killBackgroundShell(jobRef.job.id);
       await awaitBackgroundShell(jobRef.job.id, 8_000);
       assert.ok(await waitUntilDead(grandchildPid));

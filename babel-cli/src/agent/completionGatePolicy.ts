@@ -23,7 +23,7 @@ import {
 } from './verifierKernel.js';
 import { isCatOrTypeCommand } from './codingLoop/verificationStages.js';
 import { parseCommandArgv } from '../utils/commandArgv.js';
-import { isNodeTestCommand } from '../authority/commandDecoder.js';
+import { isNodeTestCommand, isPythonTestCommand } from '../authority/commandDecoder.js';
 
 /** Preserve ledger scope; never force targeted → full_suite (H5 live gate). */
 export function receiptScopeFromLedgerEntry(r: unknown): VerifierScope {
@@ -132,12 +132,6 @@ const AUTHORITATIVE_VERIFIER_PREFIXES = [
   'node --test',
   'npx jest',
   'npx vitest',
-  'python -m pytest',
-  'python -m unittest',
-  'python3 -m pytest',
-  'python3 -m unittest',
-  'py -m pytest',
-  'py -m unittest',
   'pytest',
   'cargo test',
   'go test',
@@ -255,6 +249,7 @@ export function matchesAuthoritativeVerifierAllowlist(
 
   const trimmed = command.trim();
   if (isNodeTestCommand(trimmed, trimmed)) return true;
+  if (isPythonTestCommand(trimmed)) return true;
 
   for (const prefix of AUTHORITATIVE_VERIFIER_PREFIXES) {
     if (lower.startsWith(prefix)) return true;
@@ -488,6 +483,7 @@ export type VerifierReceipt = {
 
 export type GateToolLogEntry = {
   preDispatchNoEffect?: true;
+  verifierExecuted?: boolean;
   tool: string;
   target: string;
   detail?: string;
@@ -1291,21 +1287,33 @@ export function buildGreenVerifierRejectionMessage(
   receipt: VerifierReceipt | null | undefined,
   projectTestCommands?: string[],
   strikeCount?: number,
+  requiredVerifierCommands?: readonly string[] | null,
 ): string {
-  const cmdHint =
-    projectTestCommands && projectTestCommands.length > 0
-      ? `\nProject test commands: ${projectTestCommands.join(', ')}.`
-      : '';
+  const hasProjectTestCommands = Boolean(projectTestCommands?.length)
+  const requiredCommands = requiredVerifierCommands?.filter(Boolean) ?? []
+  const hasRequiredVerifierCommands = requiredCommands.length > 0
+  const hasAvailableVerifierCommands = hasProjectTestCommands || hasRequiredVerifierCommands
+  const cmdHint = hasProjectTestCommands
+    ? `\nProject test commands: ${projectTestCommands!.join(', ')}.`
+    : hasRequiredVerifierCommands
+      ? `\nRequired verifier commands: ${requiredCommands.join(', ')}.`
+      : ''
 
   const isStrike = strikeCount != null && strikeCount >= 2;
   const preamble = isStrike
-    ? `This is rejection #${strikeCount}. Your previous verification attempts were not valid test runs.${
+    ? `This is rejection #${strikeCount}. ${hasAvailableVerifierCommands
+      ? 'Your previous verification attempts were not valid test runs.'
+      : 'No accepted verifier evidence is available.'}${
         strikeCount >= 3 ? ' FINAL ATTEMPT before the task is blocked.' : ''
       } `
     : '';
 
   const strikeEscalation = isStrike
-    ? `After ${strikeCount} gate rejections, your next completion attempt will be auto-blocked. You MUST run and pass the verifier before completing.`
+    ? hasProjectTestCommands
+      ? `After ${strikeCount} gate rejections, your next completion attempt will be auto-blocked. You MUST run and pass one of the listed project verifiers before completing.`
+      : hasRequiredVerifierCommands
+        ? `After ${strikeCount} gate rejections, your next completion attempt will be auto-blocked. Run the configured required verifier command(s) in the authorized execution environment; a command denied before dispatch remains not run.`
+      : `After ${strikeCount} gate rejections, your next completion attempt will be auto-blocked. Do not repeat denied probes or invent tests; state the deliverable and verification limitation honestly.`
     : '';
 
   if (reason === 'verifier_receipt_invalid') {
@@ -1313,7 +1321,11 @@ export function buildGreenVerifierRejectionMessage(
       preamble,
       `COMPLETION_GATE_REJECTED: verifier_receipt_invalid`,
       `Verifier receipt evidence is missing required bound revision or authority metadata.`,
-      `You must re-run an authoritative project test command before completing.`,
+      hasProjectTestCommands
+        ? `Re-run a listed authoritative project test command and complete only with a current accepted receipt.${cmdHint}`
+        : hasRequiredVerifierCommands
+          ? `No project test command was discovered, but required verifier command(s) are configured: ${requiredCommands.join(', ')}. Run each required command in the authorized execution environment and complete only with current accepted receipt evidence. A command denied before dispatch did not run; report if the required verifier is unavailable.${cmdHint}`
+          : `No project test command was identified. A command denied before dispatch did not run and is not test evidence. Do not repeat denied probes or invent a version probe or one-off script. State the artifact and observed result accurately, and say when authoritative testing was unavailable; this does not certify completion.`,
       strikeEscalation,
     ].filter(Boolean).join(' ');
   }
@@ -1817,6 +1829,7 @@ export function buildGateRejectUserMessageForEngine(opts: {
       opts.lastVerifierReceipt,
       opts.projectTestCommands,
       opts.gateStrikes, // strikeCount
+      verification.requiredVerifierCommands,
     );
   }
   return buildGateRejectionMessage(log);

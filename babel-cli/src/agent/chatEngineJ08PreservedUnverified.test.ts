@@ -68,6 +68,7 @@ const MANAGED_ENV = [
   'BABEL_DRY_RUN_SOURCE',
   'BABEL_NATIVE_TOOLS',
   'BABEL_TOOL_PROFILE',
+  'BABEL_CHAT_TASK_CLASS',
   'OPENROUTER_API_KEY',
 ] as const
 
@@ -313,6 +314,184 @@ class J08RecoveryChatterRunner extends OpenRouterApiRunner {
   }
 }
 
+class J08PartialArtifactRunner extends OpenRouterApiRunner {
+  private providerCalls = 0
+  onFinal?: (() => void) | undefined
+
+  constructor() {
+    super(LIVE_OPENROUTER_MODEL_ID, { maxTokens: 4_096 }, {
+      explicitCredential: 'synthetic-fixture', env: { OPENROUTER_API_KEY: 'synthetic-fixture' },
+    })
+  }
+
+  protected override async dispatchFetch(_url: string, _init: RequestInit): Promise<Response> {
+    const phase = this.providerCalls++
+    if (phase === 0) return makeToolCallSse('write_file', {
+      path: 'solution.py', content: 'def add(a, b):\n    return a + b\n',
+    }, `call_partial_${phase}`)
+    if (phase === 1) return makeToolCallSse('read_file', { path: 'solution.py' }, `call_partial_${phase}`)
+    this.onFinal?.()
+    return makeTextCompletionSse('I ran pytest and all tests passed. The helper is saved in solution.py.')
+  }
+}
+
+class J08DeniedInlineVerifierRunner extends OpenRouterApiRunner {
+  calls = 0
+  denialGuidanceObserved = false
+
+  constructor() {
+    super(LIVE_OPENROUTER_MODEL_ID, { maxTokens: 4_096 }, {
+      explicitCredential: 'synthetic-fixture', env: { OPENROUTER_API_KEY: 'synthetic-fixture' },
+    })
+  }
+
+  protected override async dispatchFetch(_url: string, init: RequestInit): Promise<Response> {
+    const phase = this.calls++
+    if (phase === 0) return makeToolCallSse('write_file', {
+      path: 'solution.py', content: 'def add(a, b):\n    return a + b\n',
+    }, 'call_denied_python_write')
+    if (phase === 1) return makeToolCallSse('test_run', {
+      command: 'python -c "import solution; assert solution.add(2, 2) == 4"',
+    }, 'call_denied_python_test')
+    if (phase === 2) {
+      const request = JSON.parse(String(init.body)) as { messages?: Array<{ role?: string; content?: unknown }> }
+      const denial = request.messages?.find(message => message.role === 'tool' &&
+        typeof message.content === 'string' && message.content.includes('DENY_MISSING_AUTHORITY'))
+      assert.ok(denial, 'the provider must receive the actual pre-dispatch denial')
+      assert.match(String(denial.content), /Do not retry the unchanged command/i)
+      assert.match(String(denial.content), /read back the changed file and state that no tests ran/i)
+      this.denialGuidanceObserved = true
+      return makeToolCallSse('read_file', { path: 'solution.py' }, 'call_denied_python_readback')
+    }
+    return makeTextCompletionSse('I ran pytest and all tests passed. The helper is saved in solution.py.')
+  }
+}
+
+const CSV_TOTALS = [
+  'sku,total_quantity,total_value_cents',
+  'A,5,625',
+  'B,3,1020',
+  'C,4,320',
+  '',
+].join('\n')
+
+class J08CsvTotalsAfterDeniedProbeRunner extends OpenRouterApiRunner {
+  calls = 0
+  engine?: ChatEngine
+
+  constructor() {
+    super(LIVE_OPENROUTER_MODEL_ID, { maxTokens: 4_096 }, {
+      explicitCredential: 'synthetic-fixture', env: { OPENROUTER_API_KEY: 'synthetic-fixture' },
+    })
+  }
+
+  protected override async dispatchFetch(_url: string, init: RequestInit): Promise<Response> {
+    const phase = this.calls++
+    if (phase === 0) return makeToolCallSse('write_file', {
+      path: 'summary.csv', content: CSV_TOTALS.trimEnd(),
+    }, 'call_csv_write')
+    if (phase === 1) return makeToolCallSse('read_file', { path: 'summary.csv' }, 'call_csv_readback')
+    if (phase === 2) return makeTextCompletionSse([
+      'Done. Output path: summary.csv.',
+      'Totals grouped by ascending SKU: A quantity 5, total value 625 cents; B quantity 3, total value 1020 cents; C quantity 4, total value 320 cents.',
+      'I read summary.csv back and confirmed the rows and required header. No test suite was found; no tests ran.',
+    ].join('\n'))
+    if (phase === 3) {
+      const request = JSON.parse(String(init.body)) as { messages?: Array<{ role?: string; content?: unknown }> }
+      assert.ok(request.messages?.some(message => message.role === 'assistant' &&
+        typeof message.content === 'string' && message.content.includes('COMPLETION_GATE_REJECTED')),
+      'the actual completion gate rejection should be delivered before the optional probe')
+      assert.ok(this.engine, 'test fixture attaches the actual ChatEngine before the probe')
+      const internal = this.engine as unknown as {
+        parity: { progress: { consecutiveNoProgress: number }; recoveryTried: boolean }
+      }
+      // Isolate the production terminal seam without spending eight synthetic turns.
+      internal.parity.progress.consecutiveNoProgress = 7
+      internal.parity.recoveryTried = true
+      return makeToolCallSse('run_command', { command: 'python3 --version' }, 'call_csv_optional_probe')
+    }
+    const request = JSON.parse(String(init.body)) as { messages?: Array<{ role?: string; content?: unknown }> }
+    const denial = request.messages?.find(message => message.role === 'tool' &&
+      typeof message.content === 'string' && message.content.includes('DENY_MISSING_AUTHORITY'))
+    assert.ok(denial, 'subsequent model context must identify the pre-dispatch denial')
+    return makeTextCompletionSse('This scripted response must not be requested after the blocked terminal.')
+  }
+}
+
+test('governed CSV completion preserves requested totals after an optional probe is denied', async t => {
+  const prior = Object.fromEntries(MANAGED_ENV.map(key => [key, process.env[key]]))
+  const projectRoot = mkdtempSync(join(tmpdir(), 'babel-csv-preserved-answer-'))
+  t.after(() => {
+    for (const key of MANAGED_ENV) {
+      if (prior[key] === undefined) delete process.env[key]
+      else process.env[key] = prior[key]
+    }
+    refreshDryRunState()
+    rmSync(projectRoot, { recursive: true, force: true })
+  })
+  for (const key of MANAGED_ENV) delete process.env[key]
+  process.env['BABEL_DRY_RUN'] = '0'
+  process.env['BABEL_DRY_RUN_SOURCE'] = 'session'
+  process.env['BABEL_NATIVE_TOOLS'] = 'enabled'
+  process.env['BABEL_TOOL_PROFILE'] = 'legacy'
+  process.env['BABEL_CHAT_TASK_CLASS'] = 'quick_fix'
+  process.env['OPENROUTER_API_KEY'] = 'synthetic-fixture'
+  refreshDryRunState()
+  mkdirSync(projectRoot, { recursive: true })
+  git(projectRoot, ['init', '-q', '--initial-branch=main'])
+  git(projectRoot, ['config', 'user.email', 'fixture@example.invalid'])
+  git(projectRoot, ['config', 'user.name', 'Fixture'])
+  writeFileSync(join(projectRoot, 'orders.csv'), [
+    'sku,quantity,unit_price_cents',
+    'B,1,340', 'A,2,125', 'C,4,80', 'B,2,340', 'A,3,125', '',
+  ].join('\n'))
+  git(projectRoot, ['add', 'orders.csv'])
+  git(projectRoot, ['commit', '-qm', 'CSV input fixture'])
+
+  const task = 'Using orders.csv, create summary.csv grouped by SKU and sorted ascending. The columns must be exactly sku,total_quantity,total_value_cents; total value is quantity times unit_price_cents summed by SKU. Keep orders.csv unchanged, create no extra files, and report the output path and totals.'
+  const runner = new J08CsvTotalsAfterDeniedProbeRunner()
+  const { runCliChatTask } = await import('../interactive/execution/chatCore.js')
+  const result = await runCliChatTask({
+    task, projectRoot, model: LIVE_OPENROUTER_MODEL_ID, outputFormat: 'json',
+    engineFactory(options) {
+      runner.engine = new ChatEngine({
+        ...options, runId: `csv-preserved-${randomUUID()}`, maxTurns: 12, maxCostUsd: 1,
+        runtimeMode: 'direct', providerRunner: runner, providerPolicy: OPENROUTER_POLICY,
+      })
+      return runner.engine
+    },
+  })
+
+  const answerValue = result.payload['answer']
+  const answer = typeof answerValue === 'string'
+    ? answerValue
+    : String((answerValue as { answer?: unknown } | null)?.answer ?? JSON.stringify(answerValue ?? ''))
+  const toolCallLog = (runner.engine as unknown as { toolCallLog: Array<{
+    target?: string; preDispatchNoEffect?: boolean; error?: string | null; verifierExecuted?: boolean;
+    effect_status?: string
+  }> }).toolCallLog
+  assert.equal(result.payload['terminal_outcome'], 'BLOCKED_POLICY')
+  assert.equal(result.exitCode, 1)
+  assert.equal(runner.calls, 4, 'the production no-progress terminal should stop before another provider attempt')
+  assert.ok(toolCallLog.some(entry => entry.target === 'python3 --version' &&
+    entry.preDispatchNoEffect === true && entry.verifierExecuted === false &&
+    entry.effect_status === 'confirmed_no_change'),
+  'the optional probe must be recorded as denied before dispatch, never as executed verification')
+  assert.match(answer, /Completion status: BLOCKED_POLICY/)
+  assert.match(answer, /summary\.csv/)
+  assert.match(answer, /A\s+quantity\s+5[\s\S]*?625/i)
+  assert.match(answer, /B\s+quantity\s+3[\s\S]*?1020/i)
+  assert.match(answer, /C\s+quantity\s+4[\s\S]*?320/i)
+  assert.match(answer, /denied before dispatch.*did not run/i)
+  assert.match(answer, /No authoritative verifier execution is recorded/)
+  assert.doesNotMatch(answer, /VERIFIED_COMPLETE|tests passed/i)
+  assert.equal(readFileSync(join(projectRoot, 'summary.csv'), 'utf8'), CSV_TOTALS.trimEnd())
+  assert.equal(readFileSync(join(projectRoot, 'orders.csv'), 'utf8'), [
+    'sku,quantity,unit_price_cents',
+    'B,1,340', 'A,2,125', 'C,4,80', 'B,2,340', 'A,3,125', '',
+  ].join('\n'))
+})
+
 test('J08: gate-captured completion survives later recovery chatter at turn cap', async t => {
   const prior = Object.fromEntries(MANAGED_ENV.map(key => [key, process.env[key]]))
   const projectRoot = mkdtempSync(join(tmpdir(), 'babel-j08-recovery-'))
@@ -355,4 +534,153 @@ test('J08: gate-captured completion survives later recovery chatter at turn cap'
   assert.match(error, new RegExp(J08_MARKER))
   assert.doesNotMatch(error, new RegExp(RECOVERY_CHATTER_MARKER))
   assert.match(error, J08_RETAINED_SUMMARY_ARTIFACT)
+})
+
+test('CLI chat payload delivers a read-back artifact with truthful status after correction is exhausted', async t => {
+  const prior = Object.fromEntries(MANAGED_ENV.map(key => [key, process.env[key]]))
+  const projectRoot = mkdtempSync(join(tmpdir(), 'babel-unverified-python-artifact-'))
+  t.after(() => {
+    for (const key of MANAGED_ENV) {
+      if (prior[key] === undefined) delete process.env[key]
+      else process.env[key] = prior[key]
+    }
+    refreshDryRunState()
+    rmSync(projectRoot, { recursive: true, force: true })
+  })
+
+  for (const key of MANAGED_ENV) delete process.env[key]
+  process.env['BABEL_DRY_RUN'] = '0'
+  process.env['BABEL_DRY_RUN_SOURCE'] = 'session'
+  process.env['BABEL_NATIVE_TOOLS'] = 'enabled'
+  process.env['BABEL_TOOL_PROFILE'] = 'legacy'
+  process.env['OPENROUTER_API_KEY'] = 'synthetic-fixture'
+  refreshDryRunState()
+  git(projectRoot, ['init', '-q', '--initial-branch=main'])
+  git(projectRoot, ['config', 'user.email', 'fixture@example.invalid'])
+  git(projectRoot, ['config', 'user.name', 'Fixture'])
+  writeFileSync(join(projectRoot, 'README.md'), 'Empty Python helper fixture; no test suite is declared.\n')
+  git(projectRoot, ['add', 'README.md'])
+  git(projectRoot, ['commit', '-qm', 'empty Python fixture'])
+
+  const task = 'Create a small Python helper in solution.py that adds two numbers.'
+  const { runCliChatTask } = await import('../interactive/execution/chatCore.js')
+  let engine: ChatEngine | undefined
+  const result = await runCliChatTask({
+    task,
+    projectRoot,
+    model: LIVE_OPENROUTER_MODEL_ID,
+    outputFormat: 'json',
+    engineFactory(options) {
+      engine = new ChatEngine({
+        ...options,
+        runId: `partial-python-${randomUUID()}`,
+        maxTurns: 4,
+        maxCostUsd: 1,
+        runtimeMode: 'direct',
+        providerRunner: new J08PartialArtifactRunner(),
+        providerPolicy: OPENROUTER_POLICY,
+      })
+      return engine
+    },
+  })
+  assert.ok(engine)
+  assert.equal(result.payload['terminal_outcome'], 'AGENT_FAILURE')
+  assert.equal(result.exitCode, 1, 'failed response correction must remain an unsuccessful terminal')
+  const presented = JSON.stringify(result.payload['answer'])
+  assert.match(presented, /UNVERIFIED retained candidate/i)
+  assert.match(presented, /solution\.py/)
+  assert.match(presented, /No authoritative verifier execution is recorded/)
+  assert.match(presented, /verification claims are not independently accepted/i)
+  assert.doesNotMatch(presented, /I ran pytest and all tests passed/i)
+  assert.doesNotMatch(presented, /VERIFIED_COMPLETE/)
+  assert.equal(readFileSync(join(projectRoot, 'solution.py'), 'utf8'), 'def add(a, b):\n    return a + b\n')
+  assert.match(presented, /No authoritative verifier execution is recorded/)
+})
+
+test('CLI chat recovers from a denied inline verifier and reports the actual no-test result', async t => {
+  const prior = Object.fromEntries(MANAGED_ENV.map(key => [key, process.env[key]]))
+  const projectRoot = mkdtempSync(join(tmpdir(), 'babel-denied-python-artifact-'))
+  t.after(() => {
+    for (const key of MANAGED_ENV) {
+      if (prior[key] === undefined) delete process.env[key]
+      else process.env[key] = prior[key]
+    }
+    refreshDryRunState()
+    rmSync(projectRoot, { recursive: true, force: true })
+  })
+  for (const key of MANAGED_ENV) delete process.env[key]
+  process.env['BABEL_DRY_RUN'] = '0'
+  process.env['BABEL_DRY_RUN_SOURCE'] = 'session'
+  process.env['BABEL_NATIVE_TOOLS'] = 'enabled'
+  process.env['BABEL_TOOL_PROFILE'] = 'legacy'
+  process.env['OPENROUTER_API_KEY'] = 'synthetic-fixture'
+  refreshDryRunState()
+  git(projectRoot, ['init', '-q', '--initial-branch=main'])
+  git(projectRoot, ['config', 'user.email', 'fixture@example.invalid'])
+  git(projectRoot, ['config', 'user.name', 'Fixture'])
+  writeFileSync(join(projectRoot, 'README.md'), 'No test suite is declared for this empty Python fixture.\n')
+  git(projectRoot, ['add', 'README.md'])
+  git(projectRoot, ['commit', '-qm', 'empty Python fixture'])
+
+  const task = 'Create a small Python helper in solution.py that adds two numbers.'
+  const runner = new J08DeniedInlineVerifierRunner()
+  let engine: ChatEngine | undefined
+  const { runCliChatTask } = await import('../interactive/execution/chatCore.js')
+  const result = await runCliChatTask({
+    task, projectRoot, model: LIVE_OPENROUTER_MODEL_ID, outputFormat: 'json',
+    engineFactory(options) {
+      engine = new ChatEngine({
+        ...options, maxTurns: 8, maxCostUsd: 1, runtimeMode: 'direct',
+        providerRunner: runner, providerPolicy: OPENROUTER_POLICY,
+      })
+      return engine
+    },
+  })
+  assert.ok(engine)
+  assert.equal(runner.denialGuidanceObserved, true)
+  assert.equal(runner.calls, 5, 'the model should stop repeating the denied command and finish after one correction')
+  const presented = JSON.stringify(result.payload['answer'])
+  assert.equal(result.payload['terminal_outcome'], 'AGENT_FAILURE')
+  assert.equal(result.exitCode, 1)
+  assert.notEqual(result.payload['terminal_outcome'], 'VERIFIED_COMPLETE')
+  assert.match(presented, /UNVERIFIED retained candidate/i)
+  assert.match(presented, /solution\.py/)
+  assert.match(presented, /denied before dispatch.*did not run/i)
+  assert.match(presented, /No authoritative verifier execution is recorded/)
+  assert.doesNotMatch(presented, /I ran pytest and all tests passed/i)
+  assert.equal(readFileSync(join(projectRoot, 'solution.py'), 'utf8'), 'def add(a, b):\n    return a + b\n')
+})
+
+test('ChatEngine cancellation during evidence correction cannot emit retained artifact delivery', async t => {
+  const prior = Object.fromEntries(MANAGED_ENV.map(key => [key, process.env[key]]))
+  const projectRoot = mkdtempSync(join(tmpdir(), 'babel-cancelled-python-artifact-'))
+  t.after(() => {
+    for (const key of MANAGED_ENV) {
+      if (prior[key] === undefined) delete process.env[key]
+      else process.env[key] = prior[key]
+    }
+    refreshDryRunState()
+    rmSync(projectRoot, { recursive: true, force: true })
+  })
+  for (const key of MANAGED_ENV) delete process.env[key]
+  process.env['BABEL_DRY_RUN'] = '0'
+  process.env['BABEL_DRY_RUN_SOURCE'] = 'session'
+  process.env['BABEL_NATIVE_TOOLS'] = 'enabled'
+  process.env['BABEL_TOOL_PROFILE'] = 'legacy'
+  process.env['OPENROUTER_API_KEY'] = 'synthetic-fixture'
+  refreshDryRunState()
+  git(projectRoot, ['init', '-q', '--initial-branch=main'])
+  git(projectRoot, ['config', 'user.email', 'fixture@example.invalid'])
+  git(projectRoot, ['config', 'user.name', 'Fixture'])
+  writeFileSync(join(projectRoot, 'README.md'), 'Cancellation fixture.\n')
+  git(projectRoot, ['add', 'README.md'])
+  git(projectRoot, ['commit', '-qm', 'cancellation fixture'])
+  const task = 'Create a small Python helper in solution.py that adds two numbers.'
+  const runner = new J08PartialArtifactRunner()
+  const engine = new ChatEngine({ task, projectRoot, runId: `cancel-partial-python-${randomUUID()}`,
+    operation: 'CHANGE', model: LIVE_OPENROUTER_MODEL_ID, maxTurns: 4, maxCostUsd: 1, runtimeMode: 'direct',
+    providerRunner: runner, providerPolicy: OPENROUTER_POLICY })
+  runner.onFinal = () => engine.cancel()
+  const terminal = terminalEvent(await collectStream(engine.submitMessageStream(task)))
+  assert.equal(terminal.type, 'cancelled')
 })

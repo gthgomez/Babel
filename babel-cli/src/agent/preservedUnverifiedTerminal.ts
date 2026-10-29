@@ -66,7 +66,7 @@ export function captureGateRejectedCompletionAttempt(
   )
 }
 
-export function resolvePreservedUnverifiedAtTurnLimit(
+export function resolvePreservedUnverifiedCompletion(
   host: GateRejectedCompletionCaptureHost,
   submissionGeneration: number,
 ): PreservedUnverifiedTurnLimitResolution {
@@ -76,6 +76,9 @@ export function resolvePreservedUnverifiedAtTurnLimit(
     submissionGeneration,
   )
 }
+
+/** @deprecated Kept as a source-compatible alias for the original turn-limit caller. */
+export const resolvePreservedUnverifiedAtTurnLimit = resolvePreservedUnverifiedCompletion
 
 export type RetainedCandidateScope = {
   /** First conversation index owned by the current admitted submission. */
@@ -291,6 +294,8 @@ export function formatPreservedUnverifiedTerminalAnswer(input: {
   const candidate = input.retainedCandidate.trim()
   const lines = [
     authority,
+    '',
+    'Task completion is not certified. The retained candidate’s verification claims are not independently accepted; read the host-recorded verifier status below. A verifier exit status 0 does not by itself establish that all task-acceptance requirements were met.',
     '',
     '---',
     'UNVERIFIED retained candidate (required authoritative checks were not satisfied):',

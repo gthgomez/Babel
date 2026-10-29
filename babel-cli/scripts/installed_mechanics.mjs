@@ -161,7 +161,7 @@ export async function runInstalledMechanics(packageRoot, projectRoot) {
       return tool('fix-write', 'str_replace', {
         file_path: 'parser.mjs', old_str: 'a - b', new_str: 'a + b',
         repair_plan: {
-          schemaVersion: 1, failureSignature: field('recovery_failure'),
+          schemaVersion: 2, recoveryGateRef: field('recovery_gate_ref'),
           workspaceRevision: field('recovery_revision'), hypothesisClass: 'logic',
           targetIdentities: ['parser.mjs'], actionFamily: 'str_replace',
           criterionId: field('last_verifier').split(' exit=')[0],

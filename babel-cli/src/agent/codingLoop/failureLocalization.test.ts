@@ -11,8 +11,8 @@ import { createSessionEventLog, parseSessionEventLog, recordWorkingStateSnapshot
 import { ingestVerifierResult } from './chatBindings.js'
 
 const binding = {
-  schemaVersion: 1 as const, taskId: 'task', contractHash: 'contract',
-  repositoryIdentity: '/repo', workspaceRevision: 'rev',
+  schemaVersion: 2 as const, taskId: 'task', contractHash: 'contract', sessionId: 'session',
+  repositoryIdentity: '/repo', workspaceRevision: 'rev', executionContextHash: 'context',
 }
 
 test('a named failing test can localize its called relative import after both content reads', () => {

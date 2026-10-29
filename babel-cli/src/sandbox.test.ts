@@ -18,6 +18,8 @@ import { PassThrough } from 'node:stream';
 
 import {
   SafeExecutor,
+  getTrustedShellExecutionBackend,
+  validateHighRiskToolResult,
   awaitPendingProcessTerminations,
   spawnCommandAsync,
   isTransientSpawnError,
@@ -289,6 +291,35 @@ test('plan mode rejects shell execution', () => {
     const executor = new SafeExecutor(fixture.projectRoot, null, 'plan');
     expectPolicyDenial(executor.shellExec('node -v', '.', 5_000), 'planning_restricted');
   } finally {
+    fixture.cleanup();
+  }
+});
+
+test('started shell results identify the selected host backend and denials identify none', () => {
+  const fixture = makeFixture();
+  const names = ['BABEL_EXECUTION_PROFILE', 'BABEL_BENCHMARK_DOCKER_IMAGE', 'BABEL_DOCKER_DISABLE', 'BABEL_ALLOW_HOST_FALLBACK'] as const;
+  const previous = names.map(name => [name, process.env[name]] as const);
+  try {
+    process.env['BABEL_EXECUTION_PROFILE'] = 'dev_local';
+    process.env['BABEL_DOCKER_DISABLE'] = 'true';
+    process.env['BABEL_ALLOW_HOST_FALLBACK'] = '1';
+    delete process.env['BABEL_BENCHMARK_DOCKER_IMAGE'];
+    const started = new SafeExecutor(fixture.projectRoot).shellExec('node --version', fixture.projectRoot, 5_000);
+    assert.equal(started.process_started, true, started.stderr);
+    assert.equal(getTrustedShellExecutionBackend(started), 'host-process');
+    const validated = validateHighRiskToolResult('test_run', started);
+    assert.equal(getTrustedShellExecutionBackend(validated), 'host-process', 'the trusted fact survives the output contract copy');
+    const forged = { ...started, execution_backend: 'docker-container' as const };
+    assert.equal(getTrustedShellExecutionBackend(forged), undefined, 'a result property cannot forge host provenance');
+    const denied = new SafeExecutor(fixture.projectRoot, null, 'plan').shellExec('node --version', fixture.projectRoot, 5_000);
+    assert.equal(denied.process_started, undefined);
+    assert.equal(getTrustedShellExecutionBackend(denied), undefined);
+  } finally {
+    for (const [name, value] of previous) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+    resetDockerAvailabilityCache();
     fixture.cleanup();
   }
 });

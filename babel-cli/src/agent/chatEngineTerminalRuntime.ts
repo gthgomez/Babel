@@ -85,8 +85,12 @@ import { classifyChatTaskIntent } from './chatEngineTaskIntent.js'
 import { isSessionEventPersistenceFailure } from './sessionEventDiagnostics.js'
 import { hasInspectedNoChangeEvidence } from './completionGatePolicy.js'
 import { refreshChatVerifierReceiptStalenessSync } from '../evidence/chatRevisionBinding.js'
-import { collectConfirmedMutationArtifactPaths } from './preservedUnverifiedTerminal.js'
+import {
+  collectConfirmedMutationArtifactPaths,
+  formatPreservedUnverifiedTerminalAnswer,
+} from './preservedUnverifiedTerminal.js'
 import { requestedChatJsonKind } from './chatResponseContract.js'
+import { describeUnverifiedVerifierStatus } from './unverifiedFileDelivery.js'
 
 export const SESSION_EVENT_PERSISTENCE_FINALIZE_MESSAGE =
   'session event persistence failed before terminal evidence could be durably recorded'
@@ -95,6 +99,11 @@ const UNVERIFIED_COMPLETION_MARKER = 'Completion status: UNVERIFIED_PATCH.'
 
 function singleLineEvidence(value: string, maxLength = 240): string {
   return value.replace(/[\r\n\t]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, maxLength)
+}
+
+/** A recovery controller instruction is not a user-facing completion answer. */
+function isRecoveryOnlyPlaceholder(answer: string): boolean {
+  return /^\s*(?:Recovery:\s*[a-z][a-z0-9_-]{0,40}[.!]?\s*(?:Summarize(?:\s+evidence)?(?:\s+and\s+change\s+approach)?[.!]?)?|Repeated no-progress after recovery\s*\(\d+\s+cycles?\))\s*$/i.test(answer)
 }
 
 /** Preserve an explicit machine-readable answer; clients must use the structured outcome, not JSON model claims. */
@@ -117,25 +126,77 @@ function formatTerminalAnswerForOutcome(input: {
   hasMutation: boolean
   task: string
   toolCallLog: ChatTerminalSnapshot['evidence']['observability']['toolCallLog']
+  preservedUnverifiedCandidate?: {
+    candidate: string
+    artifactRefs: readonly string[]
+  }
 }): string {
-  if (
-    input.status !== 'completed' ||
-    input.outcome !== 'UNVERIFIED_PATCH' ||
-    !input.hasMutation ||
-    !input.answer.trim() ||
-    satisfiesRequestedBareJsonAnswer(input.answer, input.task)
-  ) return input.answer
+  const unverifiedTerminal = input.status === 'completed' && input.outcome === 'UNVERIFIED_PATCH'
+  const blockedRecovery = input.status === 'blocked' && input.outcome === 'BLOCKED_POLICY'
+  if ((!unverifiedTerminal && !blockedRecovery) || !input.hasMutation || !input.answer.trim() ||
+      satisfiesRequestedBareJsonAnswer(input.answer, input.task)) return input.answer
 
-  const lines = [
-    UNVERIFIED_COMPLETION_MARKER,
-    'The required task-acceptance evidence was not established. The model response below is retained as an unverified report and does not certify completion.',
-  ]
   const artifactRefs = collectConfirmedMutationArtifactPaths(input.toolCallLog)
+  if (blockedRecovery && input.preservedUnverifiedCandidate) {
+    const confirmedRefs = new Set(artifactRefs)
+    const retainedRefs = input.preservedUnverifiedCandidate.artifactRefs
+      .filter(ref => confirmedRefs.has(ref))
+    if (retainedRefs.length > 0 && input.preservedUnverifiedCandidate.candidate.trim()) {
+      return formatPreservedUnverifiedTerminalAnswer({
+        authorityReason: [
+          'Completion status: BLOCKED_POLICY.',
+          `A policy or recovery boundary stopped this attempt: ${singleLineEvidence(input.answer)}`,
+          describeUnverifiedVerifierStatus(input.toolCallLog),
+        ].join('\n'),
+        retainedCandidate: input.preservedUnverifiedCandidate.candidate,
+        artifactRefs: retainedRefs,
+      })
+    }
+  }
+  if (artifactRefs.length === 0) {
+    if (blockedRecovery) {
+      return [
+        'Completion status: BLOCKED_POLICY.',
+        'A policy or recovery boundary stopped this attempt; task completion is not certified.',
+        'The host recorded a mutation but could not provide an enumerated artifact path.',
+        '',
+        'Model response (task remains blocked):',
+        '---',
+        input.answer,
+        '',
+        'Verification status:',
+        describeUnverifiedVerifierStatus(input.toolCallLog),
+      ].join('\n')
+    }
+    return [
+      UNVERIFIED_COMPLETION_MARKER,
+      'The required task-acceptance evidence was not established. The model response below is retained as an unverified report and does not certify completion.',
+      '',
+      'Unverified model response:',
+      '---',
+      input.answer,
+    ].join('\n')
+  }
+  const recoveryOnly = isRecoveryOnlyPlaceholder(input.answer)
+  const lines = [
+    unverifiedTerminal ? UNVERIFIED_COMPLETION_MARKER : 'Completion status: BLOCKED_POLICY.',
+    unverifiedTerminal
+      ? 'The required task-acceptance evidence was not established; task completion is not certified.'
+      : 'A policy or recovery boundary stopped this attempt; task completion is not certified.',
+  ]
   if (artifactRefs.length > 0) {
     const shown = artifactRefs.slice(0, 20)
     lines.push('', `Paths with recorded confirmed mutations (final workspace state not re-checked): ${shown.map(path => JSON.stringify(singleLineEvidence(path))).join(', ')}${artifactRefs.length > shown.length ? `, and ${artifactRefs.length - shown.length} more` : ''}`)
   }
-  lines.push('', 'Unverified model response:', '---', input.answer)
+  if (recoveryOnly) {
+    lines.push('', 'Host-grounded delivery summary:',
+      `The host recorded confirmed file changes to: ${artifactRefs.map(path => JSON.stringify(singleLineEvidence(path))).join(', ')}.`,
+      describeUnverifiedVerifierStatus(input.toolCallLog))
+  } else {
+    if (unverifiedTerminal) lines.push('', 'Unverified model response:', '---', input.answer)
+    else lines.push('', 'Model response (task remains blocked):', '---', input.answer)
+    lines.push('', 'Verification status:', describeUnverifiedVerifierStatus(input.toolCallLog))
+  }
   return lines.join('\n')
 }
 
@@ -232,6 +293,11 @@ export type ChatStreamDoneExtra = {
   verifierTampered?: boolean
   criticReceipt?: import('./diffCritic.js').DiffCriticVerdict | null
   reason?: TerminalReason
+  /** Host-captured, revision-bound answer preserved only for an honest blocked terminal. */
+  preservedUnverifiedCandidate?: {
+    candidate: string
+    artifactRefs: readonly string[]
+  }
 }
 
 /** Inspection can prove no change is needed; zero writes alone cannot. */
@@ -259,7 +325,12 @@ export function completeChatStream(
   const hasMutation = snapshot.outcome.hasMutation
   const needsHumanDecision = extra?.needsHumanDecision === true && !hasMutation &&
     !snapshot.outcome.budgetExceeded && !snapshot.outcome.verifierTampered && !extra?.blockedReport && !extra?.verifierTampered
-  const { needsHumanDecision: _privateDecision, stopRequest: stop, ...publicExtra } = extra ?? {}
+  const {
+    needsHumanDecision: _privateDecision,
+    stopRequest: stop,
+    preservedUnverifiedCandidate,
+    ...publicExtra
+  } = extra ?? {}
   const stoppedOutcome: TerminalOutcome | undefined = stop?.kind === 'blocked' ? stop.reasonCode === 'permission_denied' ? 'BLOCKED_POLICY' : 'BLOCKED_EXTERNAL'
     : stop?.kind === 'budget_exhausted' ? 'BUDGET_EXHAUSTED' : stop?.kind === 'failed' ? 'AGENT_FAILURE'
     : stop?.kind === 'cancelled' || stop?.kind === 'superseded' ? 'CANCELLED' : undefined
@@ -370,6 +441,9 @@ export function completeChatStream(
     hasMutation,
     task: snapshot.context.options.task,
     toolCallLog: snapshot.evidence.observability.toolCallLog,
+    ...(preservedUnverifiedCandidate !== undefined
+      ? { preservedUnverifiedCandidate }
+      : {}),
   })
   replaceLastMatchingAssistantAnswer(
     snapshot.presentation.conversation,

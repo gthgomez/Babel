@@ -227,6 +227,26 @@ test('benchmark docker command injects Git host overlay into the container', () 
   );
 });
 
+test('benchmark containers suppress Python bytecode writes into the mounted workspace', () => {
+  const command = buildBenchmarkContainerCommand({
+    dockerImage: 'example/python:latest',
+    projectRoot: '/workspace/test/python-app',
+    cwd: '/workspace/test/python-app',
+    command: 'python -m doctest solution.py -v',
+  });
+  const envPairs = new Map<string, string>();
+  for (let i = 0; i < command.args.length - 1; i++) {
+    if (command.args[i] !== '-e') continue;
+    const pair = command.args[i + 1] ?? '';
+    const eq = pair.indexOf('=');
+    if (eq > 0) envPairs.set(pair.slice(0, eq), pair.slice(eq + 1));
+  }
+  assert.equal(envPairs.get('PYTHONDONTWRITEBYTECODE'), '1');
+  assert.ok(command.args.includes('--network') && command.args.includes('none'));
+  assert.ok(command.args.includes('--cap-drop=ALL'));
+  assert.ok(command.args.includes('--security-opt=no-new-privileges'));
+});
+
 test('benchmark docker command runs shell syntax inside the container shell', () => {
   const projectRoot = '/workspace/test/app';
   const command = buildBenchmarkContainerCommand({

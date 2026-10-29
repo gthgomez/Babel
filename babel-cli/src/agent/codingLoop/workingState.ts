@@ -8,7 +8,7 @@ import { isReadDeliveryWindow, type ReadDeliveryWindow } from '../../services/re
 import type { ChatMessage } from '../chatToolDefinitions.js'
 import { createHash } from 'node:crypto'
 import type { FailureSurface, RepairDiagnosis, RepairDiagnosisKind } from './failureSurface.js'
-import type { AdmittedRecoveryPlanV1 } from './recoveryPlan.js'
+import type { AdmittedRecoveryPlanV2 } from './recoveryPlan.js'
 import type { FailureLocalization } from './failureLocalization.js'
 
 export const WORKING_STATE_NAME = 'working_state'
@@ -16,11 +16,14 @@ export const WORKING_STATE_MARKER = '<!-- BABEL_WORKING_STATE -->'
 
 /** Frozen identity of the failed candidate, supplied by the controller. */
 export interface RecoveryCandidateBinding {
-  schemaVersion: 1
+  schemaVersion: 2
   taskId: string
   contractHash: string
+  sessionId: string
   repositoryIdentity: string
   workspaceRevision: string
+  /** Hash of host-owned execution policy/runtime identity; never raw env values. */
+  executionContextHash: string
 }
 
 export interface WorkingState {
@@ -46,11 +49,13 @@ export interface WorkingState {
   failedVerifierHistory?: SettledFailedVerifierExecution[]
   failedVerifierHistoryOverflow?: true
   settledFailedVerifier?: SettledFailedVerifierExecution
-  lastAdmittedPlan?: AdmittedRecoveryPlanV1
+  lastAdmittedPlan?: AdmittedRecoveryPlanV2
   localization?: FailureLocalization
   /** Controller-owned gate after a red verifier; model prose cannot clear it. */
   recoveryGate?: {
     failureSignature: string
+    /** Controller-derived correlation for the active failure episode. */
+    recoveryGateRef?: string
     binding?: RecoveryCandidateBinding
     requiredEvidence: string
     mutationFingerprint?: string
@@ -75,7 +80,7 @@ export interface WorkingState {
     permitConsumed?: boolean
     /** At most one fresh admission follows a controller-proven no-effect edit. */
     noEffectReplans?: number
-    admittedPlan?: AdmittedRecoveryPlanV1
+    admittedPlan?: AdmittedRecoveryPlanV2
   }
   revision: number
 }
@@ -155,7 +160,7 @@ export type WorkingStateEvent =
   | { type: 'invalidate'; assumption: string }
   | { type: 'next_experiment'; experiment: string }
   | { type: 'recovery_candidate_drift' }
-  | { type: 'recovery_plan_admitted'; plan: AdmittedRecoveryPlanV1 }
+  | { type: 'recovery_plan_admitted'; plan: AdmittedRecoveryPlanV2 }
   | { type: 'recovery_plan_consumed' }
   | { type: 'recovery_proven_no_effect'; fingerprint: string }
   | { type: 'localization_begin'; localization: FailureLocalization }
@@ -184,6 +189,20 @@ export const ZERO_TEST_GREEN_NON_EVIDENCE =
  */
 export function greenVerifierClearsRecoveryGate(exitCode: number, summary: string): boolean {
   return exitCode === 0 && !summary.includes(ZERO_TEST_GREEN_NON_EVIDENCE)
+}
+
+function validRecoveryGateRef(value: unknown): value is string {
+  return typeof value === 'string' && /^[0-9a-f]{32}$/.test(value)
+}
+
+function createRecoveryGateRef(
+  stateRevision: number,
+  failureSignature: string,
+  binding?: RecoveryCandidateBinding,
+): string {
+  return createHash('sha256').update(JSON.stringify([
+    'recovery-gate-v2', stateRevision, failureSignature, binding ?? null,
+  ])).digest('hex').slice(0, 32)
 }
 
 /**
@@ -343,12 +362,13 @@ export function applyWorkingStateEvent(state: WorkingState, event: WorkingStateE
       break
     case 'recovery_gate':
       if (state.recoveryGate?.binding && event.binding && state.recoveryGate.failureSignature === event.failureSignature &&
-          sameRecoveryBinding(state.recoveryGate.binding, event.binding)) {
+          validRecoveryGateRef(state.recoveryGate.recoveryGateRef) && sameRecoveryBinding(state.recoveryGate.binding, event.binding)) {
         next.recoveryGate = { ...state.recoveryGate, requiredEvidence: event.requiredEvidence }
         break
       }
       next.recoveryGate = {
         failureSignature: event.failureSignature,
+        recoveryGateRef: createRecoveryGateRef(state.revision, event.failureSignature, event.binding),
         ...(event.binding ? { binding: event.binding } : {}),
         requiredEvidence: event.requiredEvidence,
         ...(event.mutationFingerprint ? { mutationFingerprint: event.mutationFingerprint } : {}),
@@ -421,6 +441,7 @@ export function formatWorkingStateBlock(state: WorkingState): string {
     lines.push(
       `  recovery_gate: ${state.recoveryGate.satisfied ? 'evidence_satisfied' : 'evidence_required'}`,
       `  recovery_failure: ${yamlIdentity(state.recoveryGate.failureSignature)}`,
+      `  recovery_gate_ref: ${yamlIdentity(state.recoveryGate.recoveryGateRef ?? '')}`,
       `  recovery_revision: ${yamlIdentity(state.recoveryGate.binding?.workspaceRevision ?? '')}`,
       `  recovery_criterion_id: ${yamlIdentity(state.lastVerifier?.identity ?? '')}`,
       `  recovery_evidence: ${yamlScalar(state.recoveryGate.requiredEvidence)}`,
@@ -550,13 +571,33 @@ function normalizeTarget(value: string): string {
 
 /** Restore a controller snapshot without promoting legacy permits to authority. */
 export function restoreWorkingStateSnapshot(value: unknown): WorkingState | null {
-  if (value && typeof value === 'object' && 'failedVerifierHistory' in value && value.failedVerifierHistory !== undefined &&
-      (!Array.isArray(value.failedVerifierHistory) || value.failedVerifierHistory.length > 64 || !value.failedVerifierHistory.every(validFailedVerifierExecution))) return null
-  if (value && typeof value === 'object' && 'failedVerifierHistoryOverflow' in value && value.failedVerifierHistoryOverflow !== true && value.failedVerifierHistoryOverflow !== undefined) return null
-  if (value && typeof value === 'object' && 'settledFailedVerifier' in value &&
-      value.settledFailedVerifier !== undefined && !validFailedVerifierExecution(value.settledFailedVerifier)) return null
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
-  const candidate = value as Partial<WorkingState>
+  const raw = structuredClone(value) as Partial<WorkingState>
+  // Older snapshots may contain v1 failure/read records without an explicit
+  // session and execution-context binding. Keep their diagnostic state, but
+  // discard those obsolete records rather than restoring edit/replay authority.
+  const legacyCandidate = (item: unknown): boolean => {
+    if (!item || typeof item !== 'object') return false
+    const candidate = (item as { candidate?: unknown }).candidate
+    return !!candidate && typeof candidate === 'object' &&
+      (candidate as { schemaVersion?: unknown }).schemaVersion === 1 &&
+      typeof (candidate as { taskId?: unknown }).taskId === 'string' &&
+      typeof (candidate as { contractHash?: unknown }).contractHash === 'string' &&
+      typeof (candidate as { repositoryIdentity?: unknown }).repositoryIdentity === 'string' &&
+      typeof (candidate as { workspaceRevision?: unknown }).workspaceRevision === 'string' &&
+      !('sessionId' in candidate) && !('executionContextHash' in candidate)
+  }
+  if (raw.failedVerifierHistory !== undefined) {
+    if (!Array.isArray(raw.failedVerifierHistory) || raw.failedVerifierHistory.length > 64) return null
+    raw.failedVerifierHistory = raw.failedVerifierHistory.filter(item => !legacyCandidate(item))
+    if (!raw.failedVerifierHistory.every(validFailedVerifierExecution)) return null
+  }
+  if (raw.failedVerifierHistoryOverflow !== undefined && raw.failedVerifierHistoryOverflow !== true) return null
+  if (raw.settledFailedVerifier !== undefined) {
+    if (legacyCandidate(raw.settledFailedVerifier)) delete raw.settledFailedVerifier
+    else if (!validFailedVerifierExecution(raw.settledFailedVerifier)) return null
+  }
+  const candidate = raw
   const strings = (list: unknown): list is string[] =>
     Array.isArray(list) && list.every((item) => typeof item === 'string')
   if (typeof candidate.goal !== 'string' || typeof candidate.currentHypothesis !== 'string' ||
@@ -566,6 +607,20 @@ export function restoreWorkingStateSnapshot(value: unknown): WorkingState | null
       !strings(candidate.consumedRecoveryEvidence) ||
       typeof candidate.revision !== 'number' || !Number.isSafeInteger(candidate.revision)) return null
   const restored = structuredClone(candidate) as WorkingState
+  if (restored.recoveryGate?.binding && !sameRecoveryBinding(restored.recoveryGate.binding, restored.recoveryGate.binding)) {
+    const gate = { ...restored.recoveryGate }
+    delete gate.binding
+    delete gate.admittedPlan
+    delete restored.localization
+    restored.recoveryGate = {
+      ...gate,
+      readRecords: [],
+      observedKeys: [],
+      satisfied: false,
+      strategyChanged: false,
+      planAdmitted: false,
+    }
+  }
   const gate = restored.recoveryGate
   if (restored.localization) {
     const loc = restored.localization
@@ -578,7 +633,7 @@ export function restoreWorkingStateSnapshot(value: unknown): WorkingState | null
         (loc.importCandidates !== undefined && (!Array.isArray(loc.importCandidates) || loc.importCandidates.length > 4 ||
           loc.importCandidates.some(item => !item || !['import_call', 'file_read'].includes(item.source) || typeof item.path !== 'string' ||
             typeof item.relation !== 'string' || typeof item.fromTestPath !== 'string'))) ||
-        !loc.binding || loc.binding.schemaVersion !== 1 ||
+        !loc.binding || !sameRecoveryBinding(loc.binding, loc.binding) ||
         typeof loc.binding.workspaceRevision !== 'string' || !loc.binding.workspaceRevision ||
         loc.failureSignature !== gate?.failureSignature ||
         (loc.phase === 'localized' && (!loc.acceptedPath || !loc.observationDigest ||
@@ -589,36 +644,43 @@ export function restoreWorkingStateSnapshot(value: unknown): WorkingState | null
         !strings(gate.observedKeys ?? []) || !strings(gate.failingTargets ?? []) ||
         (gate.noEffectReplans !== undefined && gate.noEffectReplans !== 0 && gate.noEffectReplans !== 1)) return null
     const binding = gate.binding
-    const validBinding = binding && binding.schemaVersion === 1 &&
-      typeof binding.taskId === 'string' && binding.taskId.length > 0 &&
-      typeof binding.contractHash === 'string' && binding.contractHash.length > 0 &&
-      typeof binding.repositoryIdentity === 'string' && binding.repositoryIdentity.length > 0 &&
-      typeof binding.workspaceRevision === 'string' && binding.workspaceRevision.length > 0
+    const validBinding = binding && sameRecoveryBinding(binding, binding)
     const records = gate.readRecords ?? []
     if (!Array.isArray(records) || records.length > 64 || records.some(record =>
         !record || !record.binding || !validBinding || !sameRecoveryBinding(binding!, record.binding) ||
         record.failureSignature !== gate.failureSignature || !record.key ||
         recoveryEvidenceKey(record, gate.failureSignature) !== record.key ||
         recoveryReadObservationId(record.key) !== record.id)) return null
+    const savedRecoveryGateRef = gate.recoveryGateRef
+    const gateRefValid = validRecoveryGateRef(savedRecoveryGateRef)
+    const recoveryGateRef = gateRefValid
+      ? savedRecoveryGateRef
+      : createRecoveryGateRef(restored.revision, gate.failureSignature, binding)
+    const { admittedPlan: _discardedPlan, ...restoredGate } = gate
     restored.recoveryGate = {
-      ...gate,
-      readRecords: records,
-      observedKeys: records.map(record => record.key),
-      satisfied: validBinding === true && gate.satisfied === true && records.length > 0,
+      ...restoredGate,
+      recoveryGateRef,
+      readRecords: gateRefValid ? records : [],
+      observedKeys: gateRefValid ? records.map(record => record.key) : [],
+      satisfied: gateRefValid && validBinding === true && gate.satisfied === true && records.length > 0,
       strategyChanged: false,
       planAdmitted: false,
       permitConsumed: gate.permitConsumed === true,
+    }
+    if (!gateRefValid) {
+      restored.nextExperiment = 'The saved recovery gate lacks a current host reference. Reread the relevant target before proposing a repair.'
     }
   }
   return restored
 }
 
 export function sameRecoveryBinding(a: RecoveryCandidateBinding, b: RecoveryCandidateBinding): boolean {
-  return [a, b].every(value => value && value.schemaVersion === 1 &&
-    ['taskId', 'contractHash', 'repositoryIdentity', 'workspaceRevision'].every(key =>
+  return [a, b].every(value => value && value.schemaVersion === 2 &&
+    ['taskId', 'contractHash', 'sessionId', 'repositoryIdentity', 'workspaceRevision', 'executionContextHash'].every(key =>
       typeof value[key as keyof RecoveryCandidateBinding] === 'string' && String(value[key as keyof RecoveryCandidateBinding]).length > 0)) &&
-    a.taskId === b.taskId && a.contractHash === b.contractHash &&
-    a.repositoryIdentity === b.repositoryIdentity && a.workspaceRevision === b.workspaceRevision
+    a.taskId === b.taskId && a.contractHash === b.contractHash && a.sessionId === b.sessionId &&
+    a.repositoryIdentity === b.repositoryIdentity && a.workspaceRevision === b.workspaceRevision &&
+    a.executionContextHash === b.executionContextHash
 }
 
 /**
@@ -636,8 +698,8 @@ export function recoveryEvidenceKey(provenance: RecoveryEvidenceProvenance, fail
       !['read_file', 'read_range'].includes(provenance.tool) || !isReadDeliveryWindow(provenance.window)) return ''
   const w = provenance.window
   return JSON.stringify([
-    2, failureSignature, binding.taskId, binding.contractHash,
-    binding.repositoryIdentity, binding.workspaceRevision, provenance.tool,
+    3, failureSignature, binding.taskId, binding.contractHash, binding.sessionId,
+    binding.repositoryIdentity, binding.workspaceRevision, binding.executionContextHash, provenance.tool,
     target, provenance.observationDigest, w.startLine, w.endLine, w.totalLines, w.completeFile, w.byteTruncated,
   ])
 }

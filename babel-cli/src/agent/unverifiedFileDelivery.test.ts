@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { resolve } from 'node:path'
 import { resolveCompletionVerificationContext, type GateToolLogEntry } from './completionGatePolicy.js'
-import { unverifiedFileDeliveryPaths } from './unverifiedFileDelivery.js'
+import { describeUnverifiedVerifierStatus, unverifiedFileDeliveryPaths } from './unverifiedFileDelivery.js'
 import { formatPreservedUnverifiedTerminalAnswer } from './preservedUnverifiedTerminal.js'
 import { ResponseEvidenceRetry } from './chatResponseEvidence.js'
 
@@ -31,6 +31,59 @@ test('explicit verification contracts and unavailable or failed evidence retain 
   }
 })
 
+test('exhausted optional verification may deliver a read-back artifact without certifying it', () => {
+  const attempts = [
+    { tool: 'test_run', target: 'python3 -m pytest test_solution.py', exit_code: 1,
+      verifierExecuted: true },
+  ]
+  assert.deepEqual(unverifiedFileDeliveryPaths({ ...base(), shellUnavailable: false,
+    verifierEvidencePresent: true, allowAfterExhaustion: true, toolCallLog: [write, read, ...attempts] }), ['map.md'])
+  assert.equal(unverifiedFileDeliveryPaths({ ...base(), shellUnavailable: false, verifierEvidencePresent: true,
+    allowAfterExhaustion: false, toolCallLog: [write, read, ...attempts] }), null)
+  assert.equal(unverifiedFileDeliveryPaths({ ...base(), shellUnavailable: false, verifierEvidencePresent: true,
+    allowAfterExhaustion: true, verification: { ...base().verification, mandatoryVerifierContract: true },
+    toolCallLog: [write, read, ...attempts] }), null)
+  assert.match(describeUnverifiedVerifierStatus([attempts[0]!]), /verifier invocation returned exit status 1/)
+})
+
+test('host distinguishes a pre-dispatch verifier denial from an executed failure', () => {
+  assert.match(describeUnverifiedVerifierStatus([
+    { tool: 'test_run', target: 'python3 -m pytest test_solution.py', preDispatchNoEffect: true, verifierExecuted: false },
+  ]), /denied before dispatch.*did not run/i)
+  assert.match(describeUnverifiedVerifierStatus([
+    { tool: 'test_run', target: 'python -c "import solution; assert solution.add(2, 2) == 4"', preDispatchNoEffect: true, verifierExecuted: false },
+  ]), /denied before dispatch.*did not run/i)
+  const versionProbe = describeUnverifiedVerifierStatus([
+    { tool: 'run_command', target: 'python -m pytest --version', exit_code: 1, verifierExecuted: false },
+  ])
+  assert.match(versionProbe, /version\/availability probe returned exit status 1.*not a test/i)
+  assert.match(versionProbe, /No authoritative verifier execution is recorded/)
+  assert.doesNotMatch(versionProbe, /verifier invocation returned/)
+  for (const command of [
+    'python script.py -v',
+    'python -c "print(\'--version\')"',
+    'npm --version && npm test',
+    'npm --version; npm test',
+  ]) {
+    assert.doesNotMatch(describeUnverifiedVerifierStatus([
+      { tool: 'run_command', target: command, exit_code: 1, verifierExecuted: false },
+    ]), /version\/availability probe/)
+  }
+  assert.match(describeUnverifiedVerifierStatus([
+    { tool: 'test_run', target: 'python -m unittest test_solution -v', exit_code: 1, verifierExecuted: true },
+  ]), /verifier invocation returned exit status 1/)
+  const greenButIncomplete = describeUnverifiedVerifierStatus([
+    { tool: 'test_run', target: 'python -m doctest solution.py -v', exit_code: 0, verifierExecuted: true },
+  ])
+  assert.match(greenButIncomplete, /verifier invocation exited with status 0/i)
+  assert.match(greenButIncomplete, /does not establish that all task-acceptance requirements are satisfied/i)
+  assert.doesNotMatch(greenButIncomplete, /no passing current verifier result was accepted/i)
+  assert.match(describeUnverifiedVerifierStatus([
+    { tool: 'run_command', target: 'python -c "assert True"', preDispatchNoEffect: true, verifierExecuted: false },
+    { tool: 'test_run', target: 'python -m pytest solution.py', exit_code: 1, verifierExecuted: true },
+  ]), /denied before dispatch.*did not run.*verifier invocation returned exit status 1/i)
+})
+
 test('retained artifacts cannot acquire outside-root or non-file mutation authority', () => {
   for (const change of [{ mutation_paths: ['../escape'] }, { mutation_paths: [resolve(root, '..', 'escape')] }, { mutation_paths: [] }, { tool: 'run_command' }, { tool: 'sub_agent' }, { error: 'blocked' }]) {
     assert.equal(unverifiedFileDeliveryPaths({ ...base(), toolCallLog: [{ ...write, ...change }, read] }), null)
@@ -53,6 +106,7 @@ test('failed evidence correction retains a read-back artifact with explicit unve
   assert.match(answer, /UNVERIFIED/)
   assert.match(answer, /map\.md/)
   assert.match(answer, /No authoritative test result is recorded/)
+  assert.match(answer, /verification claims are not independently accepted/i)
   assert.doesNotMatch(answer, /All tests passed/)
   assert.equal(unverifiedFileDeliveryPaths({ ...base(), toolCallLog: [write] }), null)
 })

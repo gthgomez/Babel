@@ -5,6 +5,13 @@ import { createHash } from 'node:crypto'
 import { RevisionManager } from '../../evidence/revisionBoundReceipt.js'
 import { fileURLToPath } from 'node:url'
 
+export const SHADOW_RECOVERY_UNSUPPORTED_MESSAGE =
+  'Recovery is unavailable while BABEL_SHADOW_ROOT is configured: file reads and writes use the shadow overlay, but verifier commands execute against the project workspace. Rerun in a non-shadow workspace to bind the same candidate bytes.'
+
+export function recoveryBindingUnavailableReason(): string | null {
+  return process.env['BABEL_SHADOW_ROOT']?.trim() ? SHADOW_RECOVERY_UNSUPPORTED_MESSAGE : null
+}
+
 /** Resolve through the existing path-containment primitive before reduction. */
 export function recoveryTargetIdentity(projectRoot: string, target: string): string | null {
   if (!target.trim() || target.includes('\0')) return null
@@ -35,9 +42,12 @@ export function recoveryWorkspaceRevision(projectRoot: string): string | null {
     }).split('\0').filter(Boolean)
     const capture = RevisionManager.computeRevisionSync(projectRoot, [], {
       scope_kind: 'repository', git_binding: 'optional',
+      require_physical_capture: true,
     })
-    // Unknown physical capture cannot establish a candidate recovery identity.
-    if (!capture.gitCommitHash) return null
+    // A null HEAD is valid in a newly initialized repository only after the
+    // revision manager has proven a stable physical tree. Never accept its
+    // random unverified fallback as candidate identity.
+    if (!Object.hasOwn(capture.fileHashes, '<repository>')) return null
     const indexed = capture.compositeTreeHash
     const paths = [...new Set([
       ...gitPaths(['diff', '--name-only', '--no-ext-diff', '-z']),
@@ -47,7 +57,9 @@ export function recoveryWorkspaceRevision(projectRoot: string): string | null {
     const live = paths.length > 0
       ? RevisionManager.computeRevisionSync(projectRoot, paths).compositeTreeHash
       : ''
-    return createHash('sha256').update(JSON.stringify([indexed, live])).digest('hex')
+    // Preserve commit binding when it exists; content-only Git identity is
+    // limited to repositories whose unborn tree was physically captured.
+    return createHash('sha256').update(JSON.stringify([capture.gitCommitHash, indexed, live])).digest('hex')
   } catch {
     return null
   }

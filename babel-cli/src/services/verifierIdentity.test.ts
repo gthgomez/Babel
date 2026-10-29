@@ -13,6 +13,29 @@ test('classifies full-suite npm test', () => {
   assert.equal(analyzeVerifierIdentity('npm test')?.family, 'npm-test');
 });
 
+test('Python test-module families retain meaningful full and targeted scope', () => {
+  const pythonFull = analyzeVerifierIdentity('python -m unittest');
+  assert.equal(pythonFull?.family, 'unittest');
+  assert.equal(pythonFull?.scope, 'full');
+
+  const versionedUnittest = analyzeVerifierIdentity('python3.11 -m unittest tests.test_math');
+  assert.equal(versionedUnittest?.family, 'unittest');
+  assert.equal(versionedUnittest?.scope, 'targeted');
+  assert.deepEqual(versionedUnittest?.targetSelectors, ['tests.test_math']);
+
+  const windowsLauncher = analyzeVerifierIdentity('py -3.11 -m unittest tests.test_math');
+  assert.equal(windowsLauncher?.family, 'unittest');
+  assert.equal(windowsLauncher?.scope, 'targeted');
+  assert.deepEqual(windowsLauncher?.targetSelectors, ['tests.test_math']);
+
+  const doctest = analyzeVerifierIdentity('python.exe -m doctest solution.py');
+  assert.equal(doctest?.family, 'doctest');
+  assert.equal(doctest?.scope, 'targeted');
+  assert.deepEqual(doctest?.targetSelectors, ['solution.py']);
+
+  assert.equal(analyzeVerifierIdentity('python3.11 -m unittest --version')?.scope, 'unknown');
+});
+
 test('classifies targeted npm test with path after --', () => {
   assert.equal(classifyVerifierScope('npm test -- src/add.test.ts'), 'targeted');
   assert.deepEqual(analyzeVerifierIdentity('npm test -- src/add.test.ts')?.targetSelectors, [

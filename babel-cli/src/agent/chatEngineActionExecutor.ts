@@ -32,7 +32,7 @@ import {
   formatEditReflectionNote,
 } from "./codingLoop/reflection.js";
 import type { EditFormatId } from "./codingLoop/editFormatPolicy.js";
-import { recoveryTargetIdentity } from "./codingLoop/recoveryIdentity.js";
+import { recoveryBindingUnavailableReason, recoveryTargetIdentity } from "./codingLoop/recoveryIdentity.js";
 import {
   bindCapabilityRecoveryScope,
   bindIsolationPrerequisiteScope,
@@ -59,6 +59,7 @@ import {
   type PolicyGatedExecutionResult,
 } from "./toolExecutor.js";
 import { settleChatVerifierResult } from "./chatVerifierSettlement.js";
+import { isAuthoritativeVerifierCommand } from "./completionGatePolicy.js";
 import { acceptToolStop, settlePreventedChatAction } from './chatEngineRunControl.js';
 import { RunStoppedError } from '../runtime/run-control.js';
 import { chatReadToolExecutor } from "./chatReadExecutor.js";
@@ -382,9 +383,12 @@ export class ChatEngineActionExecutor {
           ((mutationAttempt || shellMutationAttempt) && planRequired) ||
           equivalentRedMutation)
       ) {
+        const unavailableBindingReason = recoveryBindingUnavailableReason();
         const detail = [
           driftedCandidate
-            ? "[RECOVERY_CANDIDATE_DRIFT]"
+            ? unavailableBindingReason
+              ? "[RECOVERY_SHADOW_CONTEXT_UNSUPPORTED]"
+              : "[RECOVERY_CANDIDATE_DRIFT]"
             : equivalentRedMutation
               ? "[RECOVERY_STRATEGY_CHANGE_REQUIRED]"
               : planRequired
@@ -392,7 +396,7 @@ export class ChatEngineActionExecutor {
                 : "[RECOVERY_EVIDENCE_REQUIRED]",
           `failure_signature=${recoveryGate.failureSignature}`,
           driftedCandidate
-            ? "The workspace differs from the failed candidate; rerun the verifier before repairing."
+            ? unavailableBindingReason ?? "The workspace differs from the failed candidate; rerun the verifier before repairing."
             : equivalentRedMutation
               ? "The proposed edit repeats the failed operation."
               : planRequired
@@ -1599,6 +1603,7 @@ export class ChatEngineActionExecutor {
 
       const verifierSemanticSignature = frozenVerifierDispatch?.owner && frozenVerifierDispatch.candidate &&
         !result.policyBlocked && !result.notStarted && lastResult?.process_started === true && lastResult.simulated !== true && lastResult.launch_failure === undefined
+        && isAuthoritativeVerifierCommand(target)
         ? verifierSemanticProgress({ command: target, exitCode: lastResult.exit_code, stdout: lastResult.stdout, stderr: lastResult.stderr,
           executionContextKey: failedVerifierContextKey(target, frozenVerifierDispatch.owner, frozenVerifierDispatch.identity.cwd, frozenVerifierDispatch.identity.envKey),
           candidateRevision: frozenVerifierDispatch.candidate.workspaceRevision }) : undefined;
@@ -1613,7 +1618,7 @@ export class ChatEngineActionExecutor {
         ...((action.type === 'run_command' || action.type === 'test_run') ? {
           verifierExecuted: !result.policyBlocked && !result.notStarted &&
             lastResult?.process_started === true && lastResult.simulated !== true &&
-            lastResult.launch_failure === undefined,
+            lastResult.launch_failure === undefined && isAuthoritativeVerifierCommand(target),
         } : {}),
         ...(lastResult
           ? {

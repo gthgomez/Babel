@@ -7,7 +7,7 @@
 
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { stripVTControlCharacters } from 'node:util'
-import { isAbsolute, join, normalize, relative, resolve, sep } from 'node:path'
+import { basename, isAbsolute, join, normalize, relative, resolve, sep } from 'node:path'
 
 export const OBSERVATION_HEAD_CHARS = 1800
 export const OBSERVATION_TAIL_CHARS = 1800
@@ -196,6 +196,9 @@ export function parseStructuredFailures(
   const text = stripVTControlCharacters(`${stdout}\n${stderr}`)
   const cmd = `${tool ?? ''} ${command ?? ''}`
 
+  const doctest = parsePythonDoctest(text, tool, command)
+  if (doctest.length > 0) return { failures: doctest, parserName: 'doctest' }
+
   if (isMissingTsxTestLoader(text, tool, command)) {
     return { failures: [], parserName: 'test_loader' }
   }
@@ -226,6 +229,38 @@ export function parseStructuredFailures(
   if (generic.length > 0) return { failures: generic, parserName: 'generic_file_line' }
 
   return { failures: [] }
+}
+
+/** Parse only Python's explicit `python -m doctest` verbose failure blocks. */
+function parsePythonDoctest(text: string, tool?: string, command?: string): CompiledFailure[] {
+  if ((tool !== 'test_run' && tool !== 'run_command') || !command) return []
+  const invocation = /^\s*(?:"([^"]+)"|'([^']+)'|(\S+))\s+-m\s+doctest(?:\s|$)/i.exec(command)
+  const executable = invocation?.[1] ?? invocation?.[2] ?? invocation?.[3]
+  if (!executable || !/^python(?:3(?:\.\d+)?)?(?:\.exe)?$/i.test(basename(executable))) return []
+
+  const headers = [...text.matchAll(/(?:^|\n)File ["']([^"'\r\n]+)["'], line (\d+), in ([^\r\n]+)\r?\n/g)]
+  const failures: CompiledFailure[] = []
+  for (let index = 0; index < headers.length; index += 1) {
+    const header = headers[index]!
+    const blockStart = header.index! + header[0].length
+    const nextHeader = headers[index + 1]
+    let blockEnd = nextHeader ? nextHeader.index! : text.length
+    const closing = /\n(?:\*{5,}|\d+ items? had failures:|\*{3}Test Failed\*{3})/.exec(text.slice(blockStart, blockEnd))
+    if (closing) blockEnd = blockStart + closing.index!
+    const block = text.slice(blockStart, blockEnd)
+    const failed = /(?:^|\n)Failed example:\s*\r?\n([\s\S]*?)(?:\r?\n)(?:Expected:\s*\r?\n([\s\S]*?)|Expected nothing\s*\r?\n)Got:\s*\r?\n([\s\S]*?)(?=\r?\n\*{5,}|$)/.exec(block)
+    if (!failed) continue
+    const clean = (value: string): string => value.split(/\r?\n/).map(line => line.replace(/^\s{4}/, '')).join('\n').trim().slice(0, 1000)
+    const example = clean(failed[1]!)
+    const expected = clean(failed[2] ?? '') || 'nothing'
+    const actual = clean(failed[3]!)
+    if (!example) continue
+    failures.push({
+      file: header[1]!, line: Number(header[2]), test: header[3]!.trim(),
+      message: `${example} expected ${expected}, got ${actual}`.slice(0, 2048), parser: 'doctest',
+    })
+  }
+  return failures.slice(0, 8)
 }
 
 function isMissingTsxTestLoader(text: string, tool?: string, command?: string): boolean {

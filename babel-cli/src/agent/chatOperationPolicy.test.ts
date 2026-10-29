@@ -26,6 +26,9 @@ import {
   type TaskOperation,
 } from '../config/chatTaskClass.js';
 import { beginUserSubmission, type TurnRuntimeSnapshot } from './turnRuntime.js';
+import { filterReadOnlyTaskTools } from './chatReadOnly.js';
+import { buildChatToolDefinitions } from './chatToolDefinitions.js';
+import { buildDelegatedChildEnvelope } from './chatEngineChildExecution.js';
 import { applyExploreFuses } from './chatZeroWritePolicy.js';
 import { consumeChatStream } from '../interactive/execution/chatCore.js';
 import { ProgressController } from './progressController.js';
@@ -134,6 +137,99 @@ async function drain(
 const RESTRICTING_LABELS = new Set(['restricted_tools', 'last_chance_repair', 'terminal_blocked']);
 
 describe('D01/D02 effective-operation policy', () => {
+  test('saved live maintenance request retains its accepted documentation-edit authority', () => {
+    const prompt = 'I am onboarding a new analyst who needs to refresh the monthly dashboard safely. The instructions are hard to find. Improve the navigation so a newcomer can reach the current procedure and understand what not to overwrite. Use your judgment for a small, reversible documentation change; keep all existing pages, and do not change scripts or data. Ask only if a choice is genuinely necessary. Explain what changed and what you checked. Do not commit or push.';
+    const runtime = runtimeFor(prompt);
+
+    assert.equal(runtime.effectiveOperation, 'HYBRID');
+    assert.equal(runtime.taskIntent, 'execute');
+    const tools = filterReadOnlyTaskTools(buildChatToolDefinitions(), runtime.effectiveOperation, []);
+    assert.ok(tools.some((tool) => tool.function.name === 'write_file'));
+  });
+
+  test('scoped preservation clauses keep documentation edits writable through Chat delegation', () => {
+    const prompt = 'Improve the navigation for new analysts. Keep all existing pages, and do not change scripts or data. Explain what changed and what you checked.';
+    const runtime = runtimeFor(prompt);
+    const parentReadOnly = runtime.effectiveOperation === 'READ_ONLY';
+
+    assert.equal(runtime.effectiveOperation, 'HYBRID');
+    assert.equal(parentReadOnly, false);
+    assert.equal(runtime.taskIntent, 'execute');
+
+    const tools = filterReadOnlyTaskTools(buildChatToolDefinitions(), runtime.effectiveOperation, []);
+    assert.ok(tools.some((tool) => tool.function.name === 'write_file'));
+
+    const delegated = buildDelegatedChildEnvelope({
+      task: prompt,
+      projectRoot: PROJECT_ROOT,
+      parentReadOnly,
+      requestedMutation: true,
+      requestedWriteScope: ['README.md'],
+      instructions: 'Make the scoped documentation change.',
+      parentModel: null,
+    });
+    assert.equal(delegated.mutationEnabled, true);
+    assert.deepEqual(delegated.writeScope, ['README.md']);
+
+    const inspection = runtimeFor('Review the documentation and suggest improvements. Do not edit files.');
+    assert.equal(inspection.effectiveOperation, 'READ_ONLY');
+    const readOnlyTools = filterReadOnlyTaskTools(buildChatToolDefinitions(), inspection.effectiveOperation, []);
+    assert.ok(!readOnlyTools.some((tool) => tool.function.name === 'write_file'));
+    const readOnlyChild = buildDelegatedChildEnvelope({
+      task: 'Review the documentation and suggest improvements. Do not edit files.',
+      projectRoot: PROJECT_ROOT,
+      parentReadOnly: inspection.effectiveOperation === 'READ_ONLY',
+      requestedMutation: true,
+      requestedWriteScope: ['README.md'],
+      instructions: 'Make a change.',
+      parentModel: null,
+    });
+    assert.equal(readOnlyChild.mutationEnabled, false);
+    assert.deepEqual(readOnlyChild.writeScope, []);
+
+    const preservedScriptsInspection = runtimeFor('Review docs. Do not change scripts or data.');
+    assert.equal(preservedScriptsInspection.effectiveOperation, 'READ_ONLY');
+    const preservedScriptsTools = filterReadOnlyTaskTools(
+      buildChatToolDefinitions(), preservedScriptsInspection.effectiveOperation, [],
+    );
+    assert.ok(!preservedScriptsTools.some((tool) => tool.function.name === 'write_file'));
+  });
+
+  test('a dependency constraint preserves only the parent task’s existing scoped child-write authority', () => {
+    const prompt = 'Implement the requested function and create solution.py. Do not add third-party dependencies.';
+    const runtime = runtimeFor(prompt);
+    const parentReadOnly = runtime.effectiveOperation === 'READ_ONLY';
+    assert.equal(runtime.effectiveOperation, 'HYBRID');
+    assert.equal(parentReadOnly, false);
+
+    const delegated = buildDelegatedChildEnvelope({
+      task: prompt,
+      projectRoot: PROJECT_ROOT,
+      parentReadOnly,
+      requestedMutation: true,
+      requestedWriteScope: ['solution.py'],
+      instructions: 'Implement the requested function in the scoped solution file.',
+      parentModel: null,
+    });
+    assert.equal(delegated.mutationEnabled, true);
+    assert.deepEqual(delegated.writeScope, ['solution.py']);
+
+    const readOnlyPrompt = 'Do not add third-party dependencies.';
+    const readOnly = runtimeFor(readOnlyPrompt);
+    assert.equal(readOnly.effectiveOperation, 'READ_ONLY');
+    const deniedDelegation = buildDelegatedChildEnvelope({
+      task: readOnlyPrompt,
+      projectRoot: PROJECT_ROOT,
+      parentReadOnly: readOnly.effectiveOperation === 'READ_ONLY',
+      requestedMutation: true,
+      requestedWriteScope: ['solution.py'],
+      instructions: 'Create solution.py.',
+      parentModel: null,
+    });
+    assert.equal(deniedDelegation.mutationEnabled, false);
+    assert.deepEqual(deniedDelegation.writeScope, []);
+  });
+
   test('D-T01 exact prompt resolves to investigate/READ_ONLY with no mutation pressure', () => {
     const shape = analyzeTaskShape(D_T01_PROMPT);
     assert.equal(shape.operation, 'READ_ONLY');

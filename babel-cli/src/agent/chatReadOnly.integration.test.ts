@@ -64,6 +64,9 @@ test('actual chat dispatch denies adversarial tools and out-of-snapshot reads', 
     assert.ok(tools.some(t => t.target === join(root, 'outside.txt') && t.error));
     assert.ok(tools.some(t => t.target === join(source, 'fixture.txt') && t.exit_code === 0));
     assert.equal(result.payload['write_count'], 0);
+    assert.equal(result.payload['verifier_attempt_count'], 1, 'legacy metric counts the denied verifier-tool invocation');
+    assert.equal(result.payload['verifier_tool_call_count'], 1);
+    assert.equal(result.payload['verifier_execution_count'], 0, 'a pre-dispatch denial did not start a verifier process');
     assert.equal(result.payload['terminal_outcome'], 'NO_CHANGE_REQUIRED');
     assert.equal(result.payload['env_blocked'], false);
     assert.ok(tools.some(t => t.tool === 'read_range' && t.target === join(source, 'fixture.txt') && t.exit_code === 0));

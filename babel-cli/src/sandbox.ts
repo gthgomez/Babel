@@ -182,6 +182,28 @@ export interface ToolResult {
   simulated?: boolean;
 }
 
+export type ShellExecutionBackend = 'docker-container' | 'host-process';
+const trustedShellExecutionBackend = new WeakMap<object, ShellExecutionBackend>();
+
+/** Return only backend provenance attached by this module to a real SafeExecutor result. */
+export function getTrustedShellExecutionBackend(result: ToolResult): ShellExecutionBackend | undefined {
+  return trustedShellExecutionBackend.get(result);
+}
+
+/** Copy an existing trusted backend fact across a host-created result projection. */
+export function preserveTrustedShellExecutionBackend<T extends object>(source: object, destination: T): T {
+  const backend = trustedShellExecutionBackend.get(source);
+  if (backend) trustedShellExecutionBackend.set(destination, backend);
+  return destination;
+}
+
+function attachExecutionBackend(result: ToolResult, prepared: PreparedShellInvocation): ToolResult {
+  if (result.process_started !== true) return result
+  const backend = prepared.ownedContainerName ? 'docker-container' : 'host-process'
+  trustedShellExecutionBackend.set(result, backend)
+  return result
+}
+
 /**
  * Validate the small set of results that can be mistaken for execution evidence.
  * This runs at the executor registry boundary, where a handler can still be
@@ -247,7 +269,8 @@ export function validateHighRiskToolResult(
       : isMutation
         ? 'mutation_receipt'
         : 'shell_output';
-  return { ...(result as ToolResult), render_intent };
+  const validated = { ...(result as ToolResult), render_intent };
+  return preserveTrustedShellExecutionBackend(result as object, validated);
 }
 
 export interface ShellCommandValidationIssue {
@@ -1925,31 +1948,31 @@ export class SafeExecutor {
 
     if (prepared.ownedContainerName && (result.error || result.status !== 0)) {
       try { removeOwnedContainerSync(prepared.ownedContainerName, prepared.env, Boolean(result.error && result.pid > 0)); }
-      catch (error) { return { exit_code: 1, stdout: result.stdout ?? '', stderr: String(error), process_started: result.pid > 0, process_termination: 'terminated' }; }
+      catch (error) { return attachExecutionBackend({ exit_code: 1, stdout: result.stdout ?? '', stderr: String(error), process_started: result.pid > 0, process_termination: 'terminated' }, prepared); }
     }
     if (result.error) {
       if (isSpawnSyncRuntimeSupervisorError(result.error)) {
-        return { ...normalizeSupervisorTerminatedShellOutput(
+        return attachExecutionBackend({ ...normalizeSupervisorTerminatedShellOutput(
           result.status,
           result.stdout ?? '',
           result.stderr ?? '',
-        ), process_started: result.pid > 0, process_termination: 'terminated' };
+        ), process_started: result.pid > 0, process_termination: 'terminated' }, prepared);
       }
       const isTransient = transientRetryCount > 0 && isTransientSpawnError(result.error.message);
       const prefix = isTransient
         ? '[sandbox] Transient spawn error (retries exhausted):'
         : '[sandbox] Spawn error:';
-      return {
+      return attachExecutionBackend({
         exit_code: 1,
         stdout: '',
         stderr: `${prefix} ${result.error.message}`,
         launch_failure: { code: isTransient ? 'transient_spawn_error' : 'spawn_error' },
         process_started: result.pid > 0,
-      };
+      }, prepared);
     }
 
-    return { ...normalizeShellOutput(result.status, result.stdout ?? '', result.stderr ?? ''), process_started: result.pid > 0,
-      process_termination: result.status === null ? 'terminated' : 'exited' };
+    return attachExecutionBackend({ ...normalizeShellOutput(result.status, result.stdout ?? '', result.stderr ?? ''), process_started: result.pid > 0,
+      process_termination: result.status === null ? 'terminated' : 'exited' }, prepared);
   }
 
   /**
@@ -2009,29 +2032,29 @@ export class SafeExecutor {
       })();
       registerPendingProcessTermination(cleanup, sessionId ?? 'unscoped', prepared.ownedContainerName);
       try { await cleanup; }
-      catch (error) { return { exit_code: 1, stdout: result.stdout, stderr: String(error), process_started: result.processStarted, process_termination: result.aborted ? 'cancelled' : result.timedOut ? 'timed_out' : 'terminated' }; }
+      catch (error) { return attachExecutionBackend({ exit_code: 1, stdout: result.stdout, stderr: String(error), process_started: result.processStarted, process_termination: result.aborted ? 'cancelled' : result.timedOut ? 'timed_out' : 'terminated' }, prepared); }
     }
     if (result.error) {
       if (result.aborted) {
-        return {
+        return attachExecutionBackend({
           exit_code: 1,
           stdout: '',
           stderr: `[sandbox] Spawn error: ${result.error.message}`,
           process_started: result.processStarted, process_termination: 'cancelled',
-        };
+        }, prepared);
       }
       if (isChildRuntimeSupervisorError(result.error, result.processStarted, result.timedOut)) {
-        return { ...normalizeSupervisorTerminatedShellOutput(
+        return attachExecutionBackend({ ...normalizeSupervisorTerminatedShellOutput(
           result.status,
           result.stdout,
           result.stderr,
           result.stdoutTruncated,
           result.stderrTruncated,
-        ), process_started: result.processStarted, process_termination: result.timedOut ? 'timed_out' : 'terminated' };
+        ), process_started: result.processStarted, process_termination: result.timedOut ? 'timed_out' : 'terminated' }, prepared);
       }
       const transient =
         transientRetryCount > 0 && isTransientSpawnError(result.error.message);
-      return {
+      return attachExecutionBackend({
         exit_code: 1,
         stdout: '',
         stderr: `${transient ? '[sandbox] Transient spawn error (retries exhausted):' : '[sandbox] Spawn error:'} ${result.error.message}`,
@@ -2039,16 +2062,16 @@ export class SafeExecutor {
           code: transient ? ('transient_spawn_error' as const) : ('spawn_error' as const),
         },
         process_started: result.processStarted,
-      };
+      }, prepared);
     }
-    return { ...normalizeShellOutput(
+    return attachExecutionBackend({ ...normalizeShellOutput(
       result.status,
       result.stdout,
       result.stderr,
       result.stdoutTruncated,
       result.stderrTruncated,
     ), process_started: result.processStarted,
-      process_termination: result.aborted ? 'cancelled' : result.timedOut ? 'timed_out' : result.status === null ? 'terminated' : 'exited' };
+      process_termination: result.aborted ? 'cancelled' : result.timedOut ? 'timed_out' : result.status === null ? 'terminated' : 'exited' }, prepared);
   }
 
   /** Sugar over shellExec with a default timeout suitable for test runners. */

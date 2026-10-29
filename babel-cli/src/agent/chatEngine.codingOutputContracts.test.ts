@@ -358,12 +358,26 @@ describe('Chat coding output contracts (executor dispatch)', { concurrency: fals
         const green = await greenFixture.run({ type: 'run_command', command: 'node --test verify.test.mjs' });
         assert.match(green.observation, /exit_code: 0/);
         assert.equal(greenFixture.host.toolCallLog.at(-1)?.verifierExecuted, true);
+        assert.equal(greenFixture.host.lastVerifierReceipt?.environment_policy, 'host-process');
       } finally { greenFixture.close(); }
     } finally {
       if (prior === undefined) delete process.env['BABEL_ENFORCE_SEARCH_GATE'];
       else process.env['BABEL_ENFORCE_SEARCH_GATE'] = prior;
       resetSessionGate(); f.close();
     }
+  });
+
+  test('executed version or option probes are not recorded as verifier failures', async () => {
+    const f = verifierFixture();
+    try {
+      const probe = await f.run({ type: 'test_run', command: 'node --not-a-real-version-option' });
+      assert.match(probe.observation, /exit_code: [1-9]\d*/);
+      assert.equal(f.host.toolCallLog.at(-1)?.verifierExecuted, false);
+      assert.equal(f.host.toolCallLog.at(-1)?.verifierSemanticSignature, undefined);
+      assert.equal(f.host.workingState.settledFailedVerifier, undefined);
+      assert.notEqual(f.host.workingState.recoveryGate?.failureSignature, 'unbound-red-verifier');
+      assert.notEqual(f.host.lastVerifierFailed, true);
+    } finally { f.close(); }
   });
 
   test('linked worktree supports governed Chat edit and native verification', async () => {
@@ -429,6 +443,7 @@ describe('Chat coding output contracts (executor dispatch)', { concurrency: fals
       assert.equal(f.host.lastVerifierReceipt?.command, 'npm test');
       assert.equal(f.host.lastVerifierReceipt?.exit_code, 0);
       assert.equal(f.host.lastVerifierReceipt?.working_directory, '.');
+      assert.equal(f.host.lastVerifierReceipt?.environment_policy, 'host-process');
       assert.equal(f.host.lastVerifierFailed, false);
       assert.equal(evaluateExecuteCompletionHonesty({
         hasWrite: f.host.writeCount > 0, policy: 'strict',

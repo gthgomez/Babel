@@ -408,6 +408,8 @@ function computeRevision(
   options: {
     scope_kind?: "files" | "repository";
     git_binding?: GitBindingModeV1;
+    /** Require a physically captured repository tree, even when Git HEAD is unborn. */
+    require_physical_capture?: boolean;
     onCaptureFailure?: (reason: string) => void;
   } = {},
 ): WorkspaceRevision {
@@ -446,6 +448,8 @@ function computeRevision(
     }
   } else {
     const treeHash = readGitTree(projectRoot, options.onCaptureFailure);
+    if (!treeHash && options.require_physical_capture)
+      throw new Error("Required physical repository capture cannot be established.");
     if (!treeHash && gitBinding === "required")
       throw new Error("Required Git tree cannot be established.");
     // Optional callers retain an explicitly unknown revision, never a reusable
@@ -552,6 +556,7 @@ export class RevisionManager {
     options?: {
       scope_kind?: "files" | "repository";
       git_binding?: GitBindingModeV1;
+      require_physical_capture?: boolean;
       onCaptureFailure?: (reason: string) => void;
     },
   ): WorkspaceRevision {
@@ -564,6 +569,7 @@ export class RevisionManager {
     options?: {
       scope_kind?: "files" | "repository";
       git_binding?: GitBindingModeV1;
+      require_physical_capture?: boolean;
       onCaptureFailure?: (reason: string) => void;
     },
   ): Promise<WorkspaceRevision> {

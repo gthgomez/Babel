@@ -6,7 +6,7 @@ import { parseCommandArgv } from '../../utils/commandArgv.js'
 const owner = { workspaceRoot: '/repo', taskId: 'task', contractHash: 'contract', sessionId: 'session' }
 const command = 'node --test "test/Alpha  beta.test.js"'
 const descriptor = { schemaVersion: 1 as const, command, argv: parseCommandArgv(command), owner, cwd: '/repo', environmentFingerprint: 'env',
-  candidate: { schemaVersion: 1 as const, taskId: 'task', contractHash: 'contract', repositoryIdentity: '/repo', workspaceRevision: 'revision' },
+  candidate: { schemaVersion: 2 as const, taskId: 'task', contractHash: 'contract', sessionId: 'session', repositoryIdentity: '/repo', workspaceRevision: 'revision', executionContextHash: 'context' },
   toolCallId: 'physical-call', order: { sessionId: 'session', seq: 4 }, processStarted: true as const, exitCode: 1, termination: 'exited' as const,
   executionFingerprint: failedVerifierContextKey(command, owner, '/repo', 'env') }
 
