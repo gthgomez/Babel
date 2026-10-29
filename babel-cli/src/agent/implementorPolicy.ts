@@ -178,8 +178,8 @@ export function detectHostToolchainEnvBlockedFromText(text: string): boolean {
   // Require a shell or spawn diagnostic line. Package-resolution stacks and
   // quoted assertions are ordinary verifier data, not host launch failures.
   const executable = '(?:pytest|npm|npx|node|python3?|pip|tsc)(?:\\.exe)?';
-  const spawned = new RegExp(`^spawn(?:sync)?[ \\t]+(?:[^\\r\\n]*[\\\\/])?${executable}['"]?[ \\t]+enoent\\b`);
-  const shell = new RegExp(`^(?:(?:sh|bash|zsh|/bin/sh|/bin/bash):[ \\t]*(?:(?:line[ \\t]+)?[0-9]+:[ \\t]*)?|/usr/bin/env:[ \\t]*)?['"‘’]?${executable}['"‘’]?(?::|[ \\t])+(?:(?:command |was )?not found|is not recognized|no such file or directory)\\b`);
+  const spawned = new RegExp(`^(?:error: )?sp(?:awn)(?:sync)?[ \\t]+(?:[^\\r\\n]*[\\\\/])?${executable}['"]?[ \\t]+enoent\\b`);
+  const shell = new RegExp(`^(?:(?:sh|bash|zsh|/bin/sh|/bin/bash):[ \\t]*(?:(?:line[ \\t]+)?[0-9]+:[ \\t]*)?|/usr/bin/env:[ \\t]*)?['"‘’]?(?:[^\\s:]+[\\\\/])*${executable}['"‘’]?(?::|[ \\t])+(?:(?:command |was )?not found|is not recognized|no such file or directory)\\b`);
   return t.split(/\r?\n/).some(line => spawned.test(line.trim()) || shell.test(line.trim()));
 }
 

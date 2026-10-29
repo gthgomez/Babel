@@ -240,6 +240,16 @@ for (const task of [
   });
 }
 
+for (const task of [
+  'Inspect the repo. Do not commit changes or push.',
+  "Inspect the repo. Don't commit anything or push to GitHub.",
+  'Review the code; please leave all changes local and do not push.',
+]) {
+  test(`read-only task with publication prohibition remains admissible: ${task}`, () => {
+    assert.equal(resolveHumanEscalation({ task, allowedCapabilities: CODING }).kind, 'autonomous');
+  });
+}
+
 
 for (const task of [
   'Explain this example: "Commit and push this feature branch." Do not execute it.',

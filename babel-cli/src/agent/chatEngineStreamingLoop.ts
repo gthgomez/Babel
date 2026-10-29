@@ -21,6 +21,10 @@ import { writeFileSync } from "node:fs";
 import { join } from 'node:path';
 import { describeNativeToolRejection, nativeSchemaRepairFeedback } from './nativeToolRejection.js';
 import { ResponseEvidenceRetry, responseVerifierFacts } from './chatResponseEvidence.js';
+import { resolveCompletionVerificationContext } from './completionGatePolicy.js';
+import { unverifiedFileDeliveryPaths } from './unverifiedFileDelivery.js';
+import { formatPreservedUnverifiedTerminalAnswer } from './preservedUnverifiedTerminal.js';
+import { shellBlockedByIsolation } from './capabilityRecoveryScope.js';
 import { refreshChatVerifierReceiptStalenessSync } from '../evidence/chatRevisionBinding.js';
 import type { ChatUsageScope } from './chatEngineProviderAccounting.js';
 
@@ -1982,7 +1986,46 @@ export class ChatEngineStreamingLoop {
           this.host.conversation.push({ role: 'assistant', content: answer });
           endSpan(_turnSpan, SpanStatusCode.ERROR);
           _turnSpan = null;
-          if (correction.kind === 'fail') { yield this.host.streamFailed(correction.message); return; }
+          if (correction.kind === 'fail') {
+            if (this.host._cancelled || this.host.abortController.signal.aborted) {
+              yield this.host.streamCancelled();
+              return;
+            }
+            const stop = this.host.runControl?.owner.generation === submissionGeneration
+              ? this.host.runControl.stop()
+              : null;
+            if (stop) { yield this.host.streamStopped(stop); return; }
+            const verification = resolveCompletionVerificationContext({
+              taskClass: this.host.taskClass,
+              task: this.host.options.task,
+              requiredVerifierCommands: this.host.getResolvedRequiredVerifiers(),
+              toolCallLog: this.host.toolCallLog,
+            });
+            const artifactRefs = this.host.options.projectRoot ? unverifiedFileDeliveryPaths({
+              projectRoot: this.host.options.projectRoot,
+              taskClass: this.host.taskClass,
+              verification,
+              shellUnavailable: shellBlockedByIsolation(this.host.isolationBrokerFlags()),
+              verifierEvidencePresent: Boolean(this.host.lastVerifierReceipt || this.host.executedVerifierLedger.length),
+              verifierTampered: this.host.verifierTampered,
+              toolCallLog: this.host.toolCallLog,
+            }) : null;
+            if (artifactRefs?.length) {
+              const delivery = formatPreservedUnverifiedTerminalAnswer({
+                authorityReason: 'UNVERIFIED: The response could not be corrected to match recorded evidence. Confirmed file changes were read back, but required verification was unavailable; task fulfillment is not certified.',
+                retainedCandidate: 'The host recorded confirmed changes to: ' + artifactRefs.join(', ') + '. No authoritative test result is recorded.',
+                artifactRefs,
+              });
+              this.host.conversation.push({ role: 'assistant', content: delivery });
+              endSpan(_turnSpan, SpanStatusCode.ERROR);
+              _turnSpan = null;
+              if (!this.host.isSubmissionCurrent(submissionGeneration)) return;
+              yield this.host.streamFailed(correction.message, undefined, delivery);
+              return;
+            }
+            yield this.host.streamFailed(correction.message);
+            return;
+          }
           recordChatHarnessFeedback(this.host, correction.feedback);
           yield { type: 'thought', text: correction.thought };
           continue;

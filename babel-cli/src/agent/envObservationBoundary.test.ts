@@ -27,7 +27,7 @@ test('Docker startup disk exhaustion is a permanent verifier environment block a
 test('Node package-resolution failures do not prove the Node executable is absent', () => {
   const text = "node:internal/modules/package_json_reader:314\nError [ERR_MODULE_NOT_FOUND]: Cannot find package 'tsx' imported from /app/\n    at packageResolve (node:internal/modules/esm/resolve:767:81)";
   assert.equal(extractToolEnvBlockedSignal({ tool: 'test_run', stderr: text, exit_code: 1 }, { hasAnyWrites: true }), null);
-  for (const missing of ['sh: 1: node: not found', 'bash: line 1: node: command not found', '/bin/bash: line 1: npm: command not found', "'npm' is not recognized as an internal or external command", 'spawn python3 ENOENT', 'spawn C:\\Program Files\\nodejs\\node.exe ENOENT']) {
+  for (const missing of ['sh: 1: node: not found', 'bash: line 1: node: command not found', '/bin/bash: line 1: npm: command not found', 'bash: line 1: /usr/bin/node: No such file or directory', 'Error: spawn node ENOENT', "'npm' is not recognized as an internal or external command", 'spawn python3 ENOENT', 'spawn C:\\Program Files\\nodejs\\node.exe ENOENT']) {
     assert.ok(extractToolEnvBlockedSignal({ tool: 'test_run', stderr: missing, exit_code: 127 }, { hasAnyWrites: true }), missing);
   }
   for (const quoted of ["AssertionError: expected 'node: not found'", 'README says node: command not found', 'Error: expected spawn node ENOENT']) {

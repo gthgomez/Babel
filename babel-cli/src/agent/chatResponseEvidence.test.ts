@@ -3,7 +3,7 @@ import { test } from 'node:test'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { ChatEngine } from './chatEngine.js'
+import { ChatEngine, type ChatEvent } from './chatEngine.js'
 import { DeepInfraApiRunner } from '../runners/deepInfraApi.js'
 import type { ToolStreamEvent } from '../runners/base.js'
 import { SafeExecutor } from '../sandbox.js'
@@ -139,6 +139,63 @@ test(`response evidence ${scenario}: preserve useful answers without requiring e
   assert.equal(effects, 0)
   assert.equal(readFileSync(join(root, 'catalog.js'), 'utf8'), 'export const orderCatalog = items => [...items]\n')
 })
+
+for (const cancelAtFinalCorrection of [false, true]) {
+test(`ChatEngine preserves read-back artifact after failed evidence correction (cancel=${cancelAtFinalCorrection})`, async t => {
+  const root = mkdtempSync(join(tmpdir(), 'chat-response-artifact-fallback-'))
+  const previous = process.env['BABEL_NATIVE_TOOLS']
+  process.env['BABEL_NATIVE_TOOLS'] = 'enabled'
+  t.after(() => {
+    if (previous === undefined) delete process.env['BABEL_NATIVE_TOOLS']
+    else process.env['BABEL_NATIVE_TOOLS'] = previous
+    rmSync(root, { recursive: true, force: true })
+  })
+  let engine: ChatEngine
+  class Runner extends DeepInfraApiRunner {
+    private turn = 0
+    constructor() { super('fixture-model', 'UNUSED_FIXTURE_KEY', {}, { explicitCredential: '', env: {} }) }
+    override async *executeWithToolsStream(): AsyncGenerator<ToolStreamEvent, void, undefined> {
+      this.turn++
+      if (this.turn === 1) {
+        yield { type: 'tool_use', id: 'create-artifact', name: 'write_file', input: { path: 'result.txt', content: 'calculated result\n' } }
+        yield { type: 'done', finishReason: 'tool_calls' }
+      } else if (this.turn === 2) {
+        yield { type: 'tool_use', id: 'read-artifact', name: 'read_file', input: { path: 'result.txt' } }
+        yield { type: 'done', finishReason: 'tool_calls' }
+      } else if (this.turn === 3) {
+        yield { type: 'tool_use', id: 'run-tests', name: 'test_run', input: { command: 'npm test' } }
+        yield { type: 'done', finishReason: 'tool_calls' }
+      } else {
+        if (cancelAtFinalCorrection && this.turn === 5) engine.cancel()
+        yield { type: 'text_delta', text: 'All tests passed.' }
+        yield { type: 'done', finishReason: 'stop' }
+      }
+    }
+  }
+  const runner = new Runner()
+  engine = new ChatEngine({ task: 'Fix the result formatting.', projectRoot: root,
+    model: 'deepseek-v4-flash', providerRunner: runner, maxTurns: 7 })
+  const internal = engine as unknown as { isolationBrokerFlags: () => unknown }
+  internal.isolationBrokerFlags = () => ({ isolationRequired: true, isolationAvailable: false, hostFallbackAllowed: false, dirtyTree: false })
+  const events: ChatEvent[] = []
+  for await (const event of engine.submitMessageStream('Fix the result formatting.', 'execute')) events.push(event)
+  const terminal = events.filter(event => event.type === 'failed' || event.type === 'cancelled' || event.type === 'done')
+  assert.equal(terminal.length, 1)
+  if (cancelAtFinalCorrection) {
+    assert.equal(terminal[0]?.type, 'cancelled')
+    assert.equal(events.some(event => event.type === 'failed' && /result\.txt/.test(event.error)), false)
+  } else {
+    assert.equal(readFileSync(join(root, 'result.txt'), 'utf8'), 'calculated result\n')
+    assert.equal(terminal[0]?.type, 'failed')
+    const failure = terminal[0] as Extract<ChatEvent, { type: 'failed' }>
+    assert.equal(failure.outcome, 'AGENT_FAILURE')
+    assert.match(failure.error, /UNVERIFIED/)
+    assert.match(failure.error, /result\.txt/)
+    assert.match(failure.error, /not certified/)
+    assert.doesNotMatch(failure.error, /All tests passed/)
+  }
+})
+}
 
 test('native numeric pass claims bind exact counts and targeted command identity', () => {
   const receipt = { command: 'node --test proof.cjs', exit_code: 0, authority: true, stale: false, scope: 'targeted', tests_total: 1, tests_skipped: 0, tests_passed: 1, tests_failed: 0 }
