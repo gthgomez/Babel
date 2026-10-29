@@ -200,4 +200,11 @@ test('completed file-work claims require confirmed mutations, while inspected no
   assert.match(correction, /retain.*file-change summary/i)
   assert.match(responseEvidenceCorrection(countedOnly, false, 'I ran pytest: 1 test passed.'), /Claims about other commands need their own matching evidence/)
   assert.match(responseEvidenceCorrection(countedOnly, false, 'I ran pytest: all tests passed.'), /claims tests ran or passed/)
+  const zeroTests = { command: 'node --test', exit_code: 0, authority: true, stale: false,
+    scope: 'full_suite', tests_total: 0, tests_skipped: 0 }
+  const zeroCorrection = responseEvidenceCorrection(zeroTests, false, 'I ran npm test and all tests passed.')
+  assert.match(zeroCorrection, /node --test/)
+  assert.match(zeroCorrection, /zero tests/)
+  assert.match(zeroCorrection, /other commands need their own matching evidence/)
+  assert.match(zeroCorrection, /retain.*artifact summary/i)
 })

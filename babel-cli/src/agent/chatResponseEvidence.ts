@@ -136,6 +136,9 @@ export function unsupportedMutationClaim(answer: string, hasConfirmedMutation: b
 
 export function responseEvidenceCorrection(receipt: ResponseVerifierEvidence, missingMutation = false, proposedAnswer = ''): string {
   if (missingMutation) return 'Response evidence correction: No confirmed file mutation is recorded for this submission. Your proposed answer claims a file change was completed. Correct the answer once: remove or qualify that claim, retain useful inspection findings and the requested output format. An already-correct file can be reported as needing no change. You may answer truthfully without running tools or making changes.'
+  if (receipt?.authority === true && receipt.exit_code === 0 && receipt.stale === false && receipt.tests_total === 0) {
+    return `Response evidence correction: ${responseVerifierFacts(receipt)} This receipt confirms ${receipt.command} executed and exited 0, but the runner reported zero tests. It is not evidence that a test suite passed. Claims about other commands need their own matching evidence; remove or qualify unsupported command claims. Retain the artifact summary, computation, and useful inspection findings. State the zero-test limitation plainly and provide a substantive answer in the requested format.`
+  }
   if (/\b\d+\s+tests?\s+pass(?:es|ed)?\b/i.test(proposedAnswer) &&
       receipt?.authority === true && receipt.exit_code === 0 && receipt.stale === false &&
       (receipt.tests_total ?? 0) > (receipt.tests_skipped ?? 0) && receipt.tests_passed === undefined) {
