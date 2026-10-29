@@ -434,10 +434,11 @@ test('R1 snapshot persistence failure blocks mutation without running the shell'
 
 test('R1 arbitrary interpreter failure is not authoritative verifier evidence', async () => {
   const root = mkdtempSync(join(tmpdir(), 'babel-r1-unbound-red-'));
+  const marker = join(root, 'interpreter-started.txt');
   const envKeys = ['BABEL_BENCHMARK_AUTO_APPROVE', 'BABEL_BENCHMARK_MODE', 'BABEL_AUTONOMY_LEASE', 'BABEL_EXECUTION_PROFILE', 'BABEL_ALLOW_HOST_FALLBACK', 'BABEL_DRY_RUN', 'BABEL_DRY_RUN_SOURCE'] as const;
   const prior = Object.fromEntries(envKeys.map((key) => [key, process.env[key]]));
   try {
-    writeFileSync(join(root, 'red.cjs'), 'process.exit(1)\n');
+    writeFileSync(join(root, 'red.cjs'), `require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'started'); process.exit(1)\n`);
     process.env['BABEL_BENCHMARK_AUTO_APPROVE'] = '1';
     process.env['BABEL_BENCHMARK_MODE'] = '1';
     process.env['BABEL_AUTONOMY_LEASE'] = JSON.stringify({
@@ -461,6 +462,8 @@ test('R1 arbitrary interpreter failure is not authoritative verifier evidence', 
     );
     assert.match(result.observation, /exit_code: 1/);
     assert.doesNotMatch(result.observation, /\[sandbox\] Command rejected/);
+    assert.equal(readFileSync(marker, 'utf8'), 'started',
+      'the arbitrary interpreter must actually execute before its exit can be classified');
     assert.equal((engine as any).workingState.recoveryGate, undefined,
       'a permitted arbitrary script is not a verifier and cannot create red-test recovery evidence');
     assert.equal((engine as any).workingState.settledFailedVerifier, undefined);
