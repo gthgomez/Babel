@@ -116,6 +116,13 @@ export function formatCompiledObservation(compiled: CompiledObservation): string
   }
   appendStream(lines, 'stdout', compiled.stdoutPresent, compiled.stdoutHead, compiled.stdoutTail)
   appendStream(lines, 'stderr', compiled.stderrPresent, compiled.stderrHead, compiled.stderrTail)
+  const command = compiled.command ?? compiled.target
+  const output = `${compiled.stdoutHead}\n${compiled.stdoutTail}\n${compiled.stderrHead}\n${compiled.stderrTail}`
+  if (compiled.exitCode !== null && compiled.exitCode !== 0 &&
+      /^(?:node|node\.exe)\s+--test\s+[^\n]*\.test\.[cm]?tsx?(?:\s|$)/i.test(command) &&
+      /ERR_MODULE_NOT_FOUND|ERR_UNKNOWN_FILE_EXTENSION/.test(output)) {
+    lines.push('test_loader_hint: A missing TypeScript loader may explain this module-resolution failure. Inspect the project test script; if tsx is installed, try node --import tsx --test <test-file> with the same target. The failed command did not verify the tests.')
+  }
   if (compiled.rawSpillPath) {
     if (compiled.rawSpillPath === 'babel-artifact-unavailable') {
       lines.push('raw_output_unavailable: artifact registration failed or resource bound exceeded; head/tail are partial output')

@@ -1970,7 +1970,7 @@ export class ChatEngineStreamingLoop {
             return;
           }
           responseEvidenceRepairUsed = true;
-          recordChatHarnessFeedback(this.host, responseEvidenceCorrection(this.host.lastVerifierReceipt, missingMutationClaim));
+          recordChatHarnessFeedback(this.host, responseEvidenceCorrection(this.host.lastVerifierReceipt, missingMutationClaim, answer));
           yield { type: 'thought', text: missingMutationClaim ? '[Correcting an unsupported mutation claim]' : '[Correcting an unsupported test-result claim]' };
           continue;
         }

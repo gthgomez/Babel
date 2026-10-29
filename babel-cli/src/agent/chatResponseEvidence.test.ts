@@ -184,4 +184,12 @@ test('completed file-work claims require confirmed mutations, while inspected no
   assert.match(responseEvidenceCorrection(null, true), /No confirmed file mutation/)
   assert.doesNotMatch(responseEvidenceCorrection(null, true), /claims tests ran/)
   assert.match(responseEvidenceCorrection(null), /claims tests ran/)
+  const countedOnly = { command: 'npm test', exit_code: 0, authority: true, stale: false,
+    scope: 'full_suite', tests_total: 1, tests_skipped: 0 }
+  const correction = responseEvidenceCorrection(countedOnly, false, 'I ran npm test: 1 test passed.')
+  assert.match(correction, /confirms npm test executed/)
+  assert.match(correction, /exact pass count is not recorded/)
+  assert.match(correction, /retain.*file-change summary/i)
+  assert.match(responseEvidenceCorrection(countedOnly, false, 'I ran pytest: 1 test passed.'), /Claims about other commands need their own matching evidence/)
+  assert.match(responseEvidenceCorrection(countedOnly, false, 'I ran pytest: all tests passed.'), /claims tests ran or passed/)
 })

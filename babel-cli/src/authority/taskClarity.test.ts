@@ -210,6 +210,8 @@ test('evaluateSessionTaskGate: merge it with #88/#90 → clarification; producti
 
 
 for (const prohibition of [
+  'Do not modify files, commit, or push.',
+  'Do not commit, push, or make unrelated edits.',
   'Do not commit, push, change credentials/security settings, or make unrelated edits.',
   'Do not commit or push.',
   "Don't commit and push.",

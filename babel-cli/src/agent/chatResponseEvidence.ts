@@ -134,7 +134,12 @@ export function unsupportedMutationClaim(answer: string, hasConfirmedMutation: b
   return false
 }
 
-export function responseEvidenceCorrection(receipt: ResponseVerifierEvidence, missingMutation = false): string {
+export function responseEvidenceCorrection(receipt: ResponseVerifierEvidence, missingMutation = false, proposedAnswer = ''): string {
   if (missingMutation) return 'Response evidence correction: No confirmed file mutation is recorded for this submission. Your proposed answer claims a file change was completed. Correct the answer once: remove or qualify that claim, retain useful inspection findings and the requested output format. An already-correct file can be reported as needing no change. You may answer truthfully without running tools or making changes.'
+  if (/\b\d+\s+tests?\s+pass(?:es|ed)?\b/i.test(proposedAnswer) &&
+      receipt?.authority === true && receipt.exit_code === 0 && receipt.stale === false &&
+      (receipt.tests_total ?? 0) > (receipt.tests_skipped ?? 0) && receipt.tests_passed === undefined) {
+    return `Response evidence correction: ${responseVerifierFacts(receipt)} This receipt confirms ${receipt.command} executed and exited 0; an exact pass count is not recorded. Remove numeric pass/fail claims. Claims about other commands need their own matching evidence; remove or qualify any unsupported ones. Report the recorded command, exit status, and count uncertainty. Retain the file-change summary, useful inspection findings, and requested output format. Do not replace the answer with a placeholder.`
+  }
   return `Response evidence correction: ${responseVerifierFacts(receipt)} Your proposed answer claims tests ran or passed without matching evidence. Correct the answer once: remove or qualify that claim, retain any useful clarification and the requested output format. Reading test source is not running tests. You may answer truthfully without running tools or making changes.`
 }

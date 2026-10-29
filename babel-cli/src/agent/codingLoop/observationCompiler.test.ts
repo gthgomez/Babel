@@ -12,6 +12,17 @@ import {
 } from './observationCompiler.js'
 
 describe('observation compiler (shipped formatChatToolObservation path)', () => {
+  test('bare Node TS test module-resolution failure suggests the configured loader without claiming environment failure', () => {
+    const error = "Error [ERR_MODULE_NOT_FOUND]: Cannot find module '/app/src/helper.js' imported from /app/src/helper.test.ts"
+    const bare = formatChatToolObservation({ type: 'run_command', command: 'node --test src/helper.test.ts' },
+      { stdout: `TAP version 13\n# ${error}\n# tests 1\n# fail 1`, exitCode: 1 })
+    assert.match(bare, /node --import tsx --test/)
+    assert.match(bare, /if.*tsx.*installed/i)
+    for (const command of ['node --import tsx --test src/helper.test.ts', 'node --test src/helper.test.mjs']) {
+      const observation = formatChatToolObservation({ type: 'test_run', command }, { stdout: error, exitCode: 1 })
+      assert.doesNotMatch(observation, /node --import tsx --test <test-file>/)
+    }
+  })
   test('stderr-only failure keeps stderr when stdout is empty', () => {
     const compiled = compileObservation({
       tool: 'run_command',
