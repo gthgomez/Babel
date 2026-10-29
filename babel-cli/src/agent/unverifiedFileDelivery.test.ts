@@ -43,7 +43,7 @@ test('exhausted optional verification may deliver a read-back artifact without c
   assert.equal(unverifiedFileDeliveryPaths({ ...base(), shellUnavailable: false, verifierEvidencePresent: true,
     allowAfterExhaustion: true, verification: { ...base().verification, mandatoryVerifierContract: true },
     toolCallLog: [write, read, ...attempts] }), null)
-  assert.match(describeUnverifiedVerifierStatus([attempts[0]!]), /started and exited with status 1/)
+  assert.match(describeUnverifiedVerifierStatus([attempts[0]!]), /verifier invocation returned exit status 1/)
 })
 
 test('host distinguishes a pre-dispatch verifier denial from an executed failure', () => {
@@ -58,7 +58,7 @@ test('host distinguishes a pre-dispatch verifier denial from an executed failure
   ])
   assert.match(versionProbe, /version\/availability probe returned exit status 1.*not a test/i)
   assert.match(versionProbe, /No authoritative verifier execution is recorded/)
-  assert.doesNotMatch(versionProbe, /verifier process started and exited/)
+  assert.doesNotMatch(versionProbe, /verifier invocation returned/)
   for (const command of [
     'python script.py -v',
     'python -c "print(\'--version\')"',
@@ -71,7 +71,11 @@ test('host distinguishes a pre-dispatch verifier denial from an executed failure
   }
   assert.match(describeUnverifiedVerifierStatus([
     { tool: 'test_run', target: 'python -m unittest test_solution -v', exit_code: 1, verifierExecuted: true },
-  ]), /verifier process started and exited with status 1/)
+  ]), /verifier invocation returned exit status 1/)
+  assert.match(describeUnverifiedVerifierStatus([
+    { tool: 'run_command', target: 'python -c "assert True"', preDispatchNoEffect: true, verifierExecuted: false },
+    { tool: 'test_run', target: 'python -m pytest solution.py', exit_code: 1, verifierExecuted: true },
+  ]), /denied before dispatch.*did not run.*verifier invocation returned exit status 1/i)
 })
 
 test('retained artifacts cannot acquire outside-root or non-file mutation authority', () => {

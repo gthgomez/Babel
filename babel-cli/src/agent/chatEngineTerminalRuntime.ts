@@ -87,6 +87,7 @@ import { hasInspectedNoChangeEvidence } from './completionGatePolicy.js'
 import { refreshChatVerifierReceiptStalenessSync } from '../evidence/chatRevisionBinding.js'
 import { collectConfirmedMutationArtifactPaths } from './preservedUnverifiedTerminal.js'
 import { requestedChatJsonKind } from './chatResponseContract.js'
+import { describeUnverifiedVerifierStatus } from './unverifiedFileDelivery.js'
 
 export const SESSION_EVENT_PERSISTENCE_FINALIZE_MESSAGE =
   'session event persistence failed before terminal evidence could be durably recorded'
@@ -95,6 +96,11 @@ const UNVERIFIED_COMPLETION_MARKER = 'Completion status: UNVERIFIED_PATCH.'
 
 function singleLineEvidence(value: string, maxLength = 240): string {
   return value.replace(/[\r\n\t]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, maxLength)
+}
+
+/** A recovery controller instruction is not a user-facing completion answer. */
+function isRecoveryOnlyPlaceholder(answer: string): boolean {
+  return /^\s*Recovery:\s*[a-z][a-z0-9_-]{0,40}[.!]?\s*(?:Summarize(?:\s+evidence)?(?:\s+and\s+change\s+approach)?[.!]?)?\s*$/i.test(answer)
 }
 
 /** Preserve an explicit machine-readable answer; clients must use the structured outcome, not JSON model claims. */
@@ -128,14 +134,21 @@ function formatTerminalAnswerForOutcome(input: {
 
   const lines = [
     UNVERIFIED_COMPLETION_MARKER,
-    'The required task-acceptance evidence was not established. The model response below is retained as an unverified report and does not certify completion.',
+    'The required task-acceptance evidence was not established; task completion is not certified.',
   ]
   const artifactRefs = collectConfirmedMutationArtifactPaths(input.toolCallLog)
+  const recoveryOnly = isRecoveryOnlyPlaceholder(input.answer)
   if (artifactRefs.length > 0) {
     const shown = artifactRefs.slice(0, 20)
     lines.push('', `Paths with recorded confirmed mutations (final workspace state not re-checked): ${shown.map(path => JSON.stringify(singleLineEvidence(path))).join(', ')}${artifactRefs.length > shown.length ? `, and ${artifactRefs.length - shown.length} more` : ''}`)
   }
-  lines.push('', 'Unverified model response:', '---', input.answer)
+  if (recoveryOnly && artifactRefs.length > 0) {
+    lines.push('', 'Host-grounded delivery summary:',
+      `The host recorded confirmed file changes to: ${artifactRefs.map(path => JSON.stringify(singleLineEvidence(path))).join(', ')}.`,
+      describeUnverifiedVerifierStatus(input.toolCallLog))
+  } else {
+    lines.push('', 'Unverified model response:', '---', input.answer)
+  }
   return lines.join('\n')
 }
 

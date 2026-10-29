@@ -61,18 +61,17 @@ export function describeUnverifiedVerifierStatus(toolCallLog: readonly GateToolL
   const executed = attempts.filter(entry => entry.verifierExecuted === true && entry.preDispatchNoEffect !== true)
   const denied = commands.filter(entry => entry.preDispatchNoEffect === true)
   const last = executed.at(-1)
-  if (last) {
-    if (last.exit_code !== undefined && last.exit_code !== 0) {
-      return `A verifier process started and exited with status ${last.exit_code}; no passing current verifier result was accepted.`
-    }
-    return 'A verifier process started, but the host did not accept a current passing verifier result.'
-  }
   const probes = commands.filter(entry => entry.preDispatchNoEffect !== true &&
     entry.exit_code !== undefined && isVersionProbe(entry.target ?? ''))
   const facts: string[] = []
   if (denied.length > 0) facts.push('A command was denied before dispatch; it did not run and provides no test result.')
+  if (last) {
+    facts.push(last.exit_code !== undefined
+      ? `The latest authoritative verifier invocation returned exit status ${last.exit_code}; no passing current verifier result was accepted.`
+      : 'An authoritative verifier invocation was recorded, but no current passing verifier result was accepted.')
+  }
   const lastProbe = probes.at(-1)
   if (lastProbe) facts.push(`A version/availability probe returned exit status ${lastProbe.exit_code}; it was not a test.`)
-  facts.push('No authoritative verifier execution is recorded. Task fulfillment is not certified.')
+  if (!last) facts.push('No authoritative verifier execution is recorded. Task fulfillment is not certified.')
   return facts.join(' ')
 }

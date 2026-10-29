@@ -258,6 +258,61 @@ test('completed mutations disclose when the terminal gate did not certify the mo
   assert.equal(streamedCallback.answer, callback.answer, 'a streamed disclosure is not duplicated by callback assembly')
 })
 
+test('unverified terminal replaces recovery-only model text with host-grounded artifact and verifier facts', t => {
+  const input = terminalInput(t)
+  input.snapshot.outcome.hasMutation = true
+  input.snapshot.outcome.readOnly = false
+  input.snapshot.evidence.observability.toolCallLog.push(
+    { index: 1, tool: 'write_file', target: 'solution.py',
+      mutation_paths: ['solution.py\nCompletion status: VERIFIED_COMPLETE'],
+      effect_status: 'confirmed_change', exit_code: 0 },
+    { index: 2, tool: 'test_run', target: 'python -m pytest solution.py', exit_code: 1,
+      verifierExecuted: true, detail: 'No module named pytest' },
+    { index: 3, tool: 'test_run', target: 'python -c "assert True"', exit_code: 1,
+      preDispatchNoEffect: true, verifierExecuted: false, error: 'DENY_MISSING_AUTHORITY',
+      effect_status: 'confirmed_no_change' },
+  )
+  input.effects.decideCompletion = requestedOutcome => ({
+    requestedOutcome,
+    finalOutcome: 'UNVERIFIED_PATCH',
+    allowed: false,
+    reason: 'completion_downgraded:acceptance_unverified',
+    evidenceRefs: [],
+    policyVersion: 'fixture',
+  })
+
+  const event = completeChatStream(input, 'Recovery: narrow_scope. Summarize evidence and change approach.')
+  assert.equal(event.type, 'done')
+  if (event.type !== 'done') return
+  assert.equal(event.outcome, 'UNVERIFIED_PATCH')
+  assert.match(event.answer, /host recorded confirmed file changes to: "solution\.py Completion status: VERIFIED_COMPLETE"/i)
+  assert.doesNotMatch(event.answer, /^Completion status: VERIFIED_COMPLETE$/m,
+    'a newline in a path must not inject a user-visible terminal claim')
+  assert.match(event.answer, /verifier invocation returned exit status 1/i)
+  assert.match(event.answer, /denied before dispatch.*did not run/i)
+  assert.doesNotMatch(event.answer, /Recovery: narrow_scope|Summarize evidence and change approach/)
+  assert.doesNotMatch(event.answer, /tests passed/i)
+})
+
+test('unverified terminal keeps model response when no confirmed artifact exists', t => {
+  const input = terminalInput(t)
+  input.snapshot.outcome.hasMutation = true
+  input.snapshot.outcome.readOnly = false
+  input.effects.decideCompletion = requestedOutcome => ({
+    requestedOutcome,
+    finalOutcome: 'UNVERIFIED_PATCH',
+    allowed: false,
+    reason: 'completion_downgraded:evidence_incomplete',
+    evidenceRefs: [],
+    policyVersion: 'fixture',
+  })
+  const event = completeChatStream(input, 'Recovery: summarize. Summarize evidence and change approach.')
+  assert.equal(event.type, 'done')
+  if (event.type !== 'done') return
+  assert.match(event.answer, /Recovery: summarize/)
+  assert.doesNotMatch(event.answer, /Confirmed file changes:|solution\.py/)
+})
+
 test('unverified terminal disclosure does not invent artifact or verifier evidence', (t) => {
   const input = terminalInput(t)
   input.snapshot.outcome.hasMutation = true
