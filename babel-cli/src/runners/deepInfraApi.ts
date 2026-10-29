@@ -1350,7 +1350,8 @@ export class DeepInfraApiRunner implements LlmRunner {
         provider: this.providerId,
         model: this.model,
         status,
-        ...(status === 'delivered' ? { usage_metadata: this.getLastInvocationMetadata() } : {}),
+        ...((status === 'delivered' || options.failureStage === 'response_normalization')
+          ? { usage_metadata: this.getLastInvocationMetadata() } : {}),
         observed_model_id: observedModelId,
         upstream_provider: upstreamProvider,
         output_digest: createHash('sha256').update(outputText).digest('hex'),
@@ -2004,6 +2005,12 @@ export class DeepInfraApiRunner implements LlmRunner {
             input = parsed as Record<string, unknown>;
           } catch (error) {
             invocationFailed = true;
+            this.lastInvocationMetadata = buildInvocationMetadata(
+              this.providerId, this.model, Date.now() - startedAt,
+              streamState.usage ?? undefined, streamState.ttftMs, streamState.generationMs,
+              undefined, streamState.observedModelId, streamState.upstreamProvider,
+              streamState.routerMetadata, streamState.finishReason, this.maxTokens,
+            );
             notifyPhase('response_normalization_failed', undefined, 'tool_arguments');
             notifyCompleted('failed', streamState.observedModelId, outputReceipt, streamState.upstreamProvider, streamState.routerMetadata, streamState.finishReason, this.maxTokens, {
               actualAttempt: lastAttempt,
@@ -2016,6 +2023,10 @@ export class DeepInfraApiRunner implements LlmRunner {
             yield {
               type: 'error',
               message: `[deepInfraApi] Malformed arguments for tool ${acc.name || '<unknown>'}: ${error instanceof Error ? error.message : String(error)}`,
+              malformedToolArguments: {
+                callId, name: acc.name, finishReason: streamState.finishReason,
+                idWasNormalized,
+              },
             };
             return;
           }

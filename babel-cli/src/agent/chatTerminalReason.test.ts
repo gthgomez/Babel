@@ -245,6 +245,15 @@ describe('D03 terminalReasonGuidance', () => {
 });
 
 describe('D03 origin attribution — local environment is not provider blame', () => {
+  test('Docker daemon disk exhaustion without an errno is a local environment failure', () => {
+    const text = 'docker: Error response from daemon: no space left on device';
+    const reason = terminalReasonFromFailureText(text);
+    assert.equal(reason?.code, 'external_dependency');
+    assert.equal(reason?.cause_class, 'environment');
+    assert.equal(classifyFailureText(text), 'BLOCKED_EXTERNAL');
+    assert.equal(classifyFailureText('AssertionError: expected message "no space left on device"'), undefined,
+      'a test assertion quoting the phrase is not host disk evidence');
+  });
   // Local OS resource errnos: disk full, read-only fs, io error, fd exhaustion.
   const LOCAL_ERRNOS = ['ENOSPC', 'EROFS', 'EIO', 'EMFILE', 'ENFILE', 'EBUSY'];
   for (const code of LOCAL_ERRNOS) {

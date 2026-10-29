@@ -26,7 +26,8 @@ const NETWORK_CODE_RE = /\b(?:ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|ENOTFO
  */
 export function isLocalEnvironmentErrorText(error: string): boolean {
   if (!error) return false;
-  return LOCAL_ENV_CODE_RE.test(error);
+  return LOCAL_ENV_CODE_RE.test(error) ||
+    /\bdocker:\s*error response from daemon:\s*no space left on device\b/i.test(error);
 }
 
 /** Detect provider/network/transport failure text without inventing agent blame. */

@@ -16,6 +16,14 @@ test('environment classification requires failed execution, not source or succes
   assert.equal(resolveImplementorHarnessFields({ answer: `The parser misclassifies ${text}`, readOnly: true, hasAnyWrites: false, emptyPatch: true, legacyAnswerStatus: 'ANSWER_READY' }).env_blocked, false);
 });
 
+test('Docker startup disk exhaustion is a permanent verifier environment block after an edit', () => {
+  const text = 'docker: Error response from daemon: no space left on device';
+  assert.ok(extractToolEnvBlockedSignal({ tool: 'test_run', stderr: text, exit_code: 125 }, { hasAnyWrites: true }));
+  assert.equal(extractToolEnvBlockedSignal({ tool: 'read_file', error: text, exit_code: 1 }, { hasAnyWrites: true }), null);
+  assert.equal(extractToolEnvBlockedSignal({ tool: 'test_run', stdout: text, exit_code: 0 }, { hasAnyWrites: true }), null);
+  assert.equal(extractToolEnvBlockedSignal({ tool: 'test_run', stderr: 'AssertionError: expected "no space left on device"', exit_code: 1 }, { hasAnyWrites: true }), null);
+});
+
 test('range path cannot escape through relative, absolute or directory junction paths', () => {
   const root = mkdtempSync(join(tmpdir(), 'babel-range-boundary-'));
   const source = join(root, 'source'); mkdirSync(source);

@@ -682,6 +682,20 @@ export class ChatEngineStreamingLoop {
                 break;
               }
               case "error":
+                if (event.malformedToolArguments) {
+                  const malformed = event.malformedToolArguments;
+                  nativeProtocolInvalid = true;
+                  nativeRejectionCode = 'arguments_schema_invalid';
+                  nativeIdentityNormalized ||= malformed.idWasNormalized;
+                  nativeFinishReason = malformed.finishReason;
+                  nativeRejectionState.current = describeNativeToolRejection({
+                    turn: this.host._turnIndex, id: malformed.callId, name: malformed.name,
+                    input: {}, reason: nativeRejectionCode,
+                    issues: [{code:'invalid_json', path:['arguments']}],
+                  });
+                  writeFileSync(join(this.host.engineRunDir, 'native-tool-rejection.json'), JSON.stringify(nativeRejectionState.current, null, 2));
+                  break;
+                }
                 throw new Error(event.message);
               case "done":
                 nativeFinishReason = event.finishReason;

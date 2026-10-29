@@ -169,6 +169,7 @@ export type EnvBlockedDetectOptions = {
  */
 export function detectHostToolchainEnvBlockedFromText(text: string): boolean {
   const t = text.toLowerCase();
+  if (/\bdocker:\s*error response from daemon:\s*no space left on device\b/.test(t)) return true;
   if (/\benv_blocked\b/.test(t)) return true;
   if (/\benvironment (is )?(not |un)(available|ready|configured)\b/.test(t)) {
     return true;

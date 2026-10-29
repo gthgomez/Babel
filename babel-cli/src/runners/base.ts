@@ -409,7 +409,9 @@ export type ToolStreamEvent =
   | { type: 'thought_delta'; text: string }
   | { type: 'tool_use'; id: string; name: string; input: Record<string, unknown>; idWasNormalized?: true }
   | { type: 'done'; finishReason: string }
-  | { type: 'error'; message: string };
+  | { type: 'error'; message: string; malformedToolArguments?: {
+      callId: string; name: string; finishReason: string; idWasNormalized: boolean;
+    } };
 
 export interface LlmRunner {
   /**
