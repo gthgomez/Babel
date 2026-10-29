@@ -179,6 +179,271 @@ test('terminal owner persists the exact displayed response before finalization',
   assert.deepEqual(response, {kind:'error',content:'Safe typed transport error'})
 })
 
+test('completed mutations disclose when the terminal gate did not certify the model answer', (t) => {
+  const answer = 'Fixed and verified. `npm test` passed.'
+  const input = terminalInput(t)
+  input.snapshot.outcome.hasMutation = true
+  input.snapshot.outcome.readOnly = false
+  input.snapshot.outcome.lastVerifierReceipt = {
+    command: 'npm test', exit_code: 0, summary: 'one test passed', stale: false,
+  }
+  input.snapshot.evidence.observability.toolCallLog.push({
+    index: 1,
+    tool: 'write_file', target: 'src/output.csv',
+    mutation_paths: ['src/output.csv'], effect_status: 'confirmed_change',
+  })
+  input.snapshot.presentation.conversation.push({ role: 'assistant', content: answer })
+  let persistedResponse: unknown
+  input.effects.decideCompletion = (requestedOutcome) => ({
+    requestedOutcome,
+    finalOutcome: 'UNVERIFIED_PATCH',
+    allowed: false,
+    reason: 'completion_downgraded:acceptance_unverified',
+    evidenceRefs: [],
+    policyVersion: 'fixture',
+  })
+  input.effects.finalizeTurn = (_outcome, _status, _reason, response) => {
+    persistedResponse = response
+    return { committed: true }
+  }
+
+  assert.equal(existsSync(join(input.snapshot.context.engineRunDir, 'src/output.csv')), false,
+    'the recorded path is not asserted to remain present as a final artifact')
+  const event = completeChatStream(input, answer)
+  assert.equal(event.type, 'done')
+  assert.equal(event.outcome, 'UNVERIFIED_PATCH')
+  if (event.type !== 'done') return
+  assert.ok(event.answer.indexOf('Completion status: UNVERIFIED_PATCH.') < event.answer.indexOf('Fixed and verified.'),
+    'host status must precede the model response')
+  assert.match(event.answer, /Unverified model response:[\s\S]*Fixed and verified\./)
+  assert.match(event.answer, /Completion status: UNVERIFIED_PATCH/)
+  assert.match(event.answer, /required task-acceptance evidence was not established/i)
+  assert.doesNotMatch(event.answer, /Recorded verifier:|one test passed/,
+    'the presentation must not summarize the last-display receipt as canonical gate evidence')
+  assert.match(event.answer, /Paths with recorded confirmed mutations[^\n]*src\/output\.csv/)
+  assert.doesNotMatch(event.answer, /Confirmed changed paths:/)
+  assert.deepEqual(persistedResponse, { kind: 'answer', content: event.answer })
+  assert.equal(input.snapshot.presentation.conversation.at(-1)?.content, event.answer)
+
+  const callbackInput = terminalInput(t)
+  callbackInput.snapshot.outcome.hasMutation = true
+  callbackInput.snapshot.outcome.readOnly = false
+  callbackInput.snapshot.outcome.lastVerifierReceipt = {
+    command: 'npm test', exit_code: 0, summary: 'one test passed', stale: false,
+  }
+  callbackInput.snapshot.evidence.observability.toolCallLog.push({
+    index: 1,
+    tool: 'write_file', target: 'src/output.csv',
+    mutation_paths: ['src/output.csv'], effect_status: 'confirmed_change',
+  })
+  callbackInput.snapshot.presentation.conversation.push({ role: 'assistant', content: answer })
+  callbackInput.effects.decideCompletion = (requestedOutcome) => ({
+    requestedOutcome,
+    finalOutcome: 'UNVERIFIED_PATCH',
+    allowed: false,
+    reason: 'completion_downgraded:acceptance_unverified',
+    evidenceRefs: [],
+    policyVersion: 'fixture',
+  })
+  const callback = assembleChatResult(callbackInput, 'completed', {}, answer)
+  assert.equal(callback.outcome, 'UNVERIFIED_PATCH')
+  assert.match(callback.answer, /Completion status: UNVERIFIED_PATCH/)
+  assert.match(callback.answer, /required task-acceptance evidence was not established/i)
+  assert.match(callback.answer, /Paths with recorded confirmed mutations[^\n]*src\/output\.csv/)
+  assert.equal(callback.conversation.at(-1)?.content, callback.answer)
+  const streamedCallback = assembleChatResult(
+    callbackInput, 'completed', {}, callback.answer, null, callback.outcome,
+    undefined, undefined, true,
+  )
+  assert.equal(streamedCallback.answer, callback.answer, 'a streamed disclosure is not duplicated by callback assembly')
+})
+
+test('unverified terminal disclosure does not invent artifact or verifier evidence', (t) => {
+  const input = terminalInput(t)
+  input.snapshot.outcome.hasMutation = true
+  input.snapshot.outcome.readOnly = false
+  input.effects.decideCompletion = (requestedOutcome) => ({
+    requestedOutcome,
+    finalOutcome: 'UNVERIFIED_PATCH',
+    allowed: false,
+    reason: 'completion_downgraded:evidence_incomplete',
+    evidenceRefs: [],
+    policyVersion: 'fixture',
+  })
+
+  const event = completeChatStream(input, 'The file is updated.')
+  assert.equal(event.type, 'done')
+  if (event.type !== 'done') return
+  assert.match(event.answer, /Completion status: UNVERIFIED_PATCH/)
+  assert.match(event.answer, /Unverified model response:[\s\S]*The file is updated\./)
+  assert.doesNotMatch(event.answer, /Paths with recorded confirmed mutations|Recorded verifier:|No authoritative verifier result/)
+})
+
+test('model text cannot suppress the host unverified completion disclosure', (t) => {
+  const input = terminalInput(t)
+  input.snapshot.outcome.hasMutation = true
+  input.snapshot.outcome.readOnly = false
+  input.effects.decideCompletion = (requestedOutcome) => ({
+    requestedOutcome,
+    finalOutcome: 'UNVERIFIED_PATCH',
+    allowed: false,
+    reason: 'completion_downgraded:evidence_incomplete',
+    evidenceRefs: [],
+    policyVersion: 'fixture',
+  })
+
+  const event = completeChatStream(input, 'I understand. Completion status: UNVERIFIED_PATCH.')
+  assert.equal(event.type, 'done')
+  if (event.type !== 'done') return
+  assert.equal(event.answer.match(/Completion status: UNVERIFIED_PATCH\./g)?.length, 2)
+  assert.ok(event.answer.indexOf('Completion status: UNVERIFIED_PATCH.') < event.answer.indexOf('Unverified model response:'))
+  assert.match(event.answer, /Unverified model response:[\s\S]*Completion status: UNVERIFIED_PATCH\./)
+})
+
+test('unverified terminal does not project the display-last receipt as gate evidence', (t) => {
+  const input = terminalInput(t)
+  input.snapshot.outcome.hasMutation = true
+  input.snapshot.outcome.readOnly = false
+  input.snapshot.outcome.lastVerifierReceipt = {
+    command: 'old-red-check', exit_code: 1, summary: 'old failed output', stale: true,
+  }
+  input.effects.decideCompletion = (requestedOutcome) => ({
+    requestedOutcome,
+    finalOutcome: 'UNVERIFIED_PATCH',
+    allowed: false,
+    reason: 'completion_downgraded:acceptance_unverified',
+    evidenceRefs: [],
+    policyVersion: 'fixture',
+  })
+
+  const event = completeChatStream(input, 'The requested output is ready.')
+  assert.equal(event.type, 'done')
+  if (event.type !== 'done') return
+  assert.match(event.answer, /^Completion status: UNVERIFIED_PATCH\./)
+  assert.doesNotMatch(event.answer, /old-red-check|old failed output|Recorded verifier:|No authoritative verifier result/)
+  assert.match(event.answer, /Unverified model response:/)
+})
+
+for (const [kind, answer] of [['object', '{"value":1}'], ['array', '[1,2]']] as const) {
+  test(`unverified terminal preserves a valid JSON-only ${kind} response`, (t) => {
+    const input = terminalInput(t)
+    input.snapshot.context.options.task = `Return only a valid JSON ${kind}.`
+    input.snapshot.outcome.hasMutation = true
+    input.snapshot.outcome.readOnly = false
+    input.effects.decideCompletion = (requestedOutcome) => ({
+      requestedOutcome,
+      finalOutcome: 'UNVERIFIED_PATCH',
+      allowed: false,
+      reason: 'completion_downgraded:acceptance_unverified',
+      evidenceRefs: [],
+      policyVersion: 'fixture',
+    })
+
+    const event = completeChatStream(input, answer)
+    assert.equal(event.type, 'done')
+    assert.equal(event.outcome, 'UNVERIFIED_PATCH')
+    if (event.type === 'done') assert.equal(event.answer, answer)
+  })
+}
+
+test('structured unverified outcome outranks a false claim inside a JSON-only answer', (t) => {
+  const input = terminalInput(t)
+  input.snapshot.context.options.task = 'Return only a valid JSON object.'
+  input.snapshot.outcome.hasMutation = true
+  input.snapshot.outcome.readOnly = false
+  input.effects.decideCompletion = (requestedOutcome) => ({
+    requestedOutcome,
+    finalOutcome: 'UNVERIFIED_PATCH',
+    allowed: false,
+    reason: 'completion_downgraded:acceptance_unverified',
+    evidenceRefs: [],
+    policyVersion: 'fixture',
+  })
+
+  const answer = '{"verified":true}'
+  const event = completeChatStream(input, answer)
+  assert.equal(event.type, 'done')
+  if (event.type !== 'done') return
+  assert.equal(event.answer, answer, 'the explicit JSON schema remains intact')
+  assert.equal(event.outcome, 'UNVERIFIED_PATCH', 'the host terminal envelope is authoritative over model-supplied fields')
+  assert.equal(event.status, 'completed')
+})
+
+test('verified completion and cancellation do not receive an unverified completion disclosure', (t) => {
+  const input = terminalInput(t)
+  input.snapshot.outcome.hasMutation = true
+  input.snapshot.outcome.readOnly = false
+  input.snapshot.outcome.lastVerifierReceipt = {
+    command: 'npm test', exit_code: 0, summary: 'one test passed', stale: false,
+  }
+  input.effects.decideCompletion = (requestedOutcome) => ({
+    requestedOutcome,
+    finalOutcome: 'VERIFIED_COMPLETE',
+    allowed: true,
+    reason: 'proof_carrying_completion_accepted',
+    evidenceRefs: [],
+    policyVersion: 'fixture',
+  })
+  const verified = completeChatStream(input, 'Fixed and verified.')
+  assert.equal(verified.type, 'done')
+  assert.equal(verified.outcome, 'VERIFIED_COMPLETE')
+  if (verified.type === 'done') assert.equal(verified.answer, 'Fixed and verified.')
+
+  const cancelled = cancelChatStream(terminalInput(t))
+  assert.equal(cancelled.type, 'cancelled')
+})
+
+test('a superseded callback does not rewrite the current task answer with stale terminal evidence', (t) => {
+  const input = terminalInput(t)
+  const answer = 'The old task updated result.txt.'
+  input.snapshot.outcome.hasMutation = true
+  input.snapshot.outcome.readOnly = false
+  input.snapshot.evidence.observability.toolCallLog.push({
+    index: 1,
+    tool: 'write_file', target: 'result.txt',
+    mutation_paths: ['result.txt'], effect_status: 'confirmed_change',
+  })
+  input.snapshot.presentation.conversation.push({ role: 'assistant', content: answer })
+  input.effects.isSubmissionCurrent = () => false
+  let finalized = false
+  input.effects.finalizeTurn = () => {
+    finalized = true
+    return { committed: true }
+  }
+
+  const result = assembleChatResult(
+    input, 'completed', {}, answer, null, 'UNVERIFIED_PATCH', undefined, 2,
+  )
+  assert.equal(result.answer, answer)
+  assert.equal(input.snapshot.presentation.conversation.at(-1)?.content, answer)
+  assert.equal(finalized, false)
+})
+
+test('a current callback without a final conversation entry does not rewrite an older identical answer', (t) => {
+  const input = terminalInput(t)
+  const previousAnswer = 'The task is complete.'
+  input.snapshot.outcome.hasMutation = true
+  input.snapshot.outcome.readOnly = false
+  input.snapshot.presentation.conversation.push(
+    { role: 'assistant', content: previousAnswer },
+    { role: 'user', content: 'Now inspect a different file.' },
+  )
+  input.effects.decideCompletion = (requestedOutcome) => ({
+    requestedOutcome,
+    finalOutcome: 'UNVERIFIED_PATCH',
+    allowed: false,
+    reason: 'completion_downgraded:acceptance_unverified',
+    evidenceRefs: [],
+    policyVersion: 'fixture',
+  })
+
+  const result = assembleChatResult(input, 'completed', {}, previousAnswer)
+  assert.equal(result.outcome, 'UNVERIFIED_PATCH')
+  assert.match(result.answer, /^Completion status: UNVERIFIED_PATCH\./)
+  assert.equal(input.snapshot.presentation.conversation[0]?.content, previousAnswer)
+  assert.equal(input.snapshot.presentation.conversation.at(-1)?.content, 'Now inspect a different file.')
+})
+
 test('the terminal owner cannot certify a generic green hint without criterion evidence', t => {
   const input = terminalInput(t)
   const root = input.snapshot.context.options.projectRoot!

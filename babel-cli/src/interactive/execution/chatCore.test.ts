@@ -189,6 +189,19 @@ test('buildChatRunPayload prefers TerminalOutcome for user_status and terminal_o
   assert.equal(unverified['user_status'], 'not_verified');
   assert.equal(unverified['terminal_outcome'], 'UNVERIFIED_PATCH');
 
+  const machineReadableUnverified = buildChatRunPayload(
+    {
+      ...completedResult('{"verified":true}'),
+      outcome: 'UNVERIFIED_PATCH',
+    },
+    { task: 'Return only a valid JSON object.', projectRoot: '/tmp/p' },
+  );
+  const answer = machineReadableUnverified['answer'] as { answer: string };
+  assert.equal(answer.answer, '{"verified":true}', 'preserve the exact JSON answer contract');
+  assert.equal(machineReadableUnverified['terminal_outcome'], 'UNVERIFIED_PATCH');
+  assert.equal(machineReadableUnverified['user_status'], 'not_verified',
+    'machine clients must trust the host outcome instead of model-supplied JSON claims');
+
   const policy = buildChatRunPayload(
     {
       status: 'blocked',

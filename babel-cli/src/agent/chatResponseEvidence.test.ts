@@ -197,6 +197,64 @@ test(`ChatEngine preserves read-back artifact after failed evidence correction (
 })
 }
 
+test('ChatEngine final answer matches an unverified mutation terminal', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'chat-unverified-terminal-answer-'))
+  const previous = {
+    native: process.env['BABEL_NATIVE_TOOLS'],
+    runs: process.env['BABEL_RUNS_DIR'],
+    taskClass: process.env['BABEL_CHAT_TASK_CLASS'],
+  }
+  process.env['BABEL_NATIVE_TOOLS'] = 'enabled'
+  process.env['BABEL_RUNS_DIR'] = join(root, 'runs')
+  process.env['BABEL_CHAT_TASK_CLASS'] = 'ordinary_delivery'
+  t.after(() => {
+    if (previous.native === undefined) delete process.env['BABEL_NATIVE_TOOLS']
+    else process.env['BABEL_NATIVE_TOOLS'] = previous.native
+    if (previous.runs === undefined) delete process.env['BABEL_RUNS_DIR']
+    else process.env['BABEL_RUNS_DIR'] = previous.runs
+    if (previous.taskClass === undefined) delete process.env['BABEL_CHAT_TASK_CLASS']
+    else process.env['BABEL_CHAT_TASK_CLASS'] = previous.taskClass
+    rmSync(root, { recursive: true, force: true })
+  })
+
+  const task = 'Create result.txt with exactly "calculated result" and report what verification you actually ran.'
+  const modelAnswer = 'Fixed and verified.'
+  class Runner extends DeepInfraApiRunner {
+    private turn = 0
+    constructor() { super('fixture-model', 'UNUSED_FIXTURE_KEY', {}, { explicitCredential: '', env: {} }) }
+    override async *executeWithToolsStream(): AsyncGenerator<ToolStreamEvent, void, undefined> {
+      this.turn++
+      if (this.turn === 1) {
+        yield { type: 'tool_use', id: 'create-result', name: 'write_file', input: { path: 'result.txt', content: 'calculated result' } }
+        yield { type: 'done', finishReason: 'tool_calls' }
+      } else {
+        yield { type: 'text_delta', text: modelAnswer }
+        yield { type: 'done', finishReason: 'stop' }
+      }
+    }
+  }
+  const runner = new Runner()
+  const engine = new ChatEngine({ task, projectRoot: root, model: 'deepseek-v4-flash', providerRunner: runner,
+    maxTurns: 4 })
+  const events: ChatEvent[] = []
+  for await (const event of engine.submitMessageStream(task, 'execute')) events.push(event)
+  const terminal = events.find(event => event.type === 'done')
+
+  assert.equal(terminal?.type, 'done', JSON.stringify(events))
+  if (terminal?.type !== 'done') return
+  assert.equal(readFileSync(join(root, 'result.txt'), 'utf8'), 'calculated result')
+  assert.equal(terminal.outcome, 'UNVERIFIED_PATCH')
+  assert.match(terminal.answer, /^Completion status: UNVERIFIED_PATCH\./)
+  assert.match(terminal.answer, /Completion status: UNVERIFIED_PATCH/)
+  assert.match(terminal.answer, /required task-acceptance evidence was not established/i)
+  assert.match(terminal.answer, /Paths with recorded confirmed mutations[^\n]*result\.txt/)
+  assert.match(terminal.answer, /Unverified model response:[\s\S]*Fixed and verified\./)
+  assert.doesNotMatch(terminal.answer, /No authoritative verifier result was recorded/i)
+  assert.equal(engine.getConversation().at(-1)?.content, terminal.answer)
+  const decisions = engine.getParityRuntime().sessionEvents.events.filter(event => event.kind === 'completion_decision')
+  assert.equal(decisions.at(-1)?.final_outcome, 'UNVERIFIED_PATCH')
+})
+
 test('native numeric pass claims bind exact counts and targeted command identity', () => {
   const receipt = { command: 'node --test proof.cjs', exit_code: 0, authority: true, stale: false, scope: 'targeted', tests_total: 1, tests_skipped: 0, tests_passed: 1, tests_failed: 0 }
   const text = 'Created proof.cjs, read it, and ran node --test proof.cjs: 1 test passed in the configured sandbox.'

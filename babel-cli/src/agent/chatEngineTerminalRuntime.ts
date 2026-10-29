@@ -85,9 +85,69 @@ import { classifyChatTaskIntent } from './chatEngineTaskIntent.js'
 import { isSessionEventPersistenceFailure } from './sessionEventDiagnostics.js'
 import { hasInspectedNoChangeEvidence } from './completionGatePolicy.js'
 import { refreshChatVerifierReceiptStalenessSync } from '../evidence/chatRevisionBinding.js'
+import { collectConfirmedMutationArtifactPaths } from './preservedUnverifiedTerminal.js'
+import { requestedChatJsonKind } from './chatResponseContract.js'
 
 export const SESSION_EVENT_PERSISTENCE_FINALIZE_MESSAGE =
   'session event persistence failed before terminal evidence could be durably recorded'
+
+const UNVERIFIED_COMPLETION_MARKER = 'Completion status: UNVERIFIED_PATCH.'
+
+function singleLineEvidence(value: string, maxLength = 240): string {
+  return value.replace(/[\r\n\t]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, maxLength)
+}
+
+/** Preserve an explicit machine-readable answer; clients must use the structured outcome, not JSON model claims. */
+function satisfiesRequestedBareJsonAnswer(answer: string, task: string): boolean {
+  const kind = requestedChatJsonKind(task)
+  if (!kind) return false
+  try {
+    const parsed: unknown = JSON.parse(answer)
+    return parsed !== null && typeof parsed === 'object' && Array.isArray(parsed) === (kind === 'array')
+  } catch {
+    return false
+  }
+}
+
+/** Make the terminal answer agree with the host completion decision without changing that decision. */
+function formatTerminalAnswerForOutcome(input: {
+  answer: string
+  outcome: TerminalOutcome
+  status: ChatResult['status']
+  hasMutation: boolean
+  task: string
+  toolCallLog: ChatTerminalSnapshot['evidence']['observability']['toolCallLog']
+}): string {
+  if (
+    input.status !== 'completed' ||
+    input.outcome !== 'UNVERIFIED_PATCH' ||
+    !input.hasMutation ||
+    !input.answer.trim() ||
+    satisfiesRequestedBareJsonAnswer(input.answer, input.task)
+  ) return input.answer
+
+  const lines = [
+    UNVERIFIED_COMPLETION_MARKER,
+    'The required task-acceptance evidence was not established. The model response below is retained as an unverified report and does not certify completion.',
+  ]
+  const artifactRefs = collectConfirmedMutationArtifactPaths(input.toolCallLog)
+  if (artifactRefs.length > 0) {
+    const shown = artifactRefs.slice(0, 20)
+    lines.push('', `Paths with recorded confirmed mutations (final workspace state not re-checked): ${shown.map(path => JSON.stringify(singleLineEvidence(path))).join(', ')}${artifactRefs.length > shown.length ? `, and ${artifactRefs.length - shown.length} more` : ''}`)
+  }
+  lines.push('', 'Unverified model response:', '---', input.answer)
+  return lines.join('\n')
+}
+
+function replaceLastMatchingAssistantAnswer(
+  conversation: ChatTerminalSnapshot['presentation']['conversation'],
+  original: string,
+  replacement: string,
+): void {
+  if (original === replacement) return
+  const message = conversation.at(-1)
+  if (message?.role === 'assistant' && message.content === original) message.content = replacement
+}
 
 /** Immutable terminal inputs plus the mutable evidence objects used by existing finalizers. */
 export interface ChatTerminalSnapshot {
@@ -303,13 +363,26 @@ export function completeChatStream(
         ? 'budget_exhausted'
         : 'completed',
   })
+  const deliveredAnswer = formatTerminalAnswerForOutcome({
+    answer,
+    outcome: terminal.outcome!,
+    status: terminal.status,
+    hasMutation,
+    task: snapshot.context.options.task,
+    toolCallLog: snapshot.evidence.observability.toolCallLog,
+  })
+  replaceLastMatchingAssistantAnswer(
+    snapshot.presentation.conversation,
+    answer,
+    deliveredAnswer,
+  )
   const finalizeResult = effects.finalizeTurn(
     terminal.outcome,
     terminal.status,
     terminalReason,
     {
       kind: 'answer',
-      content: answer,
+      content: deliveredAnswer,
     },
     { completionDecision: completionDecisionPayload },
   )
@@ -328,7 +401,7 @@ export function completeChatStream(
     })
   effects.storeTelemetry(finalizedTelemetry ?? null)
   const runAllowance = assembleChatRunAllowance(input, terminal.status)
-  return buildStreamDone(snapshot.evidence.observability, answer, {
+  return buildStreamDone(snapshot.evidence.observability, deliveredAnswer, {
     outcome: terminal.outcome!,
     status: terminal.status,
     ...(decision.finalOutcome === 'PLAN_COMPLETE'
@@ -646,6 +719,7 @@ export function assembleChatResult(
   knownOutcome?: TerminalOutcome,
   knownReason?: TerminalReason,
   ownerGeneration?: number,
+  answerAlreadyFormattedByStream = false,
 ): ChatResult {
   const { snapshot, effects } = input
   // R0-8: a superseded caller must not finalize the task that now owns the
@@ -795,6 +869,25 @@ export function assembleChatResult(
     ...(projectedOutcome !== undefined ? { outcome: projectedOutcome } : {}),
     status: finalStatus,
   })
+  const deliveredAnswer = answer === undefined
+    ? undefined
+    : answerAlreadyFormattedByStream || superseded
+      ? answer
+      : formatTerminalAnswerForOutcome({
+        answer,
+        outcome: terminal.outcome ?? outcome ?? 'AGENT_FAILURE',
+        status: terminal.status,
+        hasMutation,
+        task: snapshot.context.options.task,
+        toolCallLog: snapshot.evidence.observability.toolCallLog,
+      })
+  if (!superseded && answer !== undefined && deliveredAnswer !== undefined) {
+    replaceLastMatchingAssistantAnswer(
+      snapshot.presentation.conversation,
+      answer,
+      deliveredAnswer,
+    )
+  }
 
   let finalizeResult: FinalizeParityTurnResult = { committed: true }
   if (!superseded) {
@@ -804,11 +897,11 @@ export function assembleChatResult(
       terminal.outcome,
       terminal.status,
       terminalReason,
-      answer === undefined
+      deliveredAnswer === undefined
         ? undefined
         : {
             kind: finalStatus === 'failed' ? 'error' : 'answer',
-            content: answer,
+            content: deliveredAnswer,
           },
       completionDecisionPayload
         ? { completionDecision: completionDecisionPayload }
@@ -832,7 +925,7 @@ export function assembleChatResult(
     ...(kernelDecision?.finalOutcome === 'PLAN_COMPLETE'
       ? { planOutcome: 'PLAN_COMPLETE' as const }
       : {}),
-    answer: answer ?? '',
+    answer: deliveredAnswer ?? '',
     usage: globalCostTracker.getSessionSummary(),
     lastRequestPromptTokens: snapshot.presentation.lastRequestPromptTokens,
     lastRequestCompletionTokens:
