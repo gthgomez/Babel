@@ -13,6 +13,8 @@ export type TaskAcceptanceMeaningVersion = 1 | 2
 const MAX_INPUT_CHARS = 65_536
 const MAX_CRITERIA = 128
 const MAX_CRITERION_CHARS = 4096
+const RAW_PYTHON_FUNCTION_DEFINITION = /^\s{0,3}(?:async\s+)?def\s+[A-Za-z_]\w*\s*\(/
+const RAW_PYTHON_TOP_LEVEL_CODE = /^\s{0,3}(?:async\s+)?(?:def|class)\s+[A-Za-z_]\w*\b|^\s{0,3}@\w/
 export type AcceptanceMeaningStatus = 'explicit' | 'inferred' | 'unresolved'
 export interface AcceptanceMeaningSource {
   criterion_id: string
@@ -42,6 +44,10 @@ function sortCriteriaBySourceSpan(
   const startFor = (id: string) => sources.find(source => source.criterion_id === id)?.start ?? order.get(id)!
   criteria.sort((left, right) => startFor(left.id) - startFor(right.id) || order.get(left.id)! - order.get(right.id)!)
   sources.sort((left, right) => left.start - right.start || left.end - right.end)
+}
+
+function hasRawPythonFunctionDefinition(request: string): boolean {
+  return request.split(/\r?\n/).some(line => RAW_PYTHON_FUNCTION_DEFINITION.test(line))
 }
 
 type InterpretOptions = {
@@ -82,6 +88,7 @@ function interpretTaskAcceptance(request: string, opts: InterpretOptions): TaskA
   }
   if (!incomplete) {
     let offset = 0, fence = '', fenceLength = 0, example = false, requirementRegion = false
+    let rawPythonFunctionBody = false
     let sectionDepth = 1, exampleDepth = 1
     let exclusionDepth: number | undefined
     let plainExample = false, plainExclusion = false
@@ -99,6 +106,17 @@ function interpretTaskAcceptance(request: string, opts: InterpretOptions): TaskA
         continue
       }
       if (fence || /^\s*>/.test(line)) continue
+      if (opts.version === 2) {
+        if (!rawPythonFunctionBody && RAW_PYTHON_FUNCTION_DEFINITION.test(line)) {
+          rawPythonFunctionBody = true
+          continue
+        }
+        if (rawPythonFunctionBody) {
+          const indentation = line.match(/^[ \t]*/)?.[0].length ?? 0
+          if (!line.trim() || indentation > 0 || RAW_PYTHON_TOP_LEVEL_CODE.test(line)) continue
+          rawPythonFunctionBody = false
+        }
+      }
       const headingDepth = line.match(/^\s{0,3}(#{1,6})\s+/)?.[1]?.length
       const heading = line.replace(/^\s{0,3}#{1,6}\s+/, '').replace(/\s+#+\s*$/, '').trim()
         .replace(/^(\*\*|__)(.+?)\1(?=\s*:|\s*$)/, '$2')
@@ -238,6 +256,18 @@ function promoteV1ProjectionToV2Admission(legacy: TaskAcceptanceMeaning): TaskAc
  */
 export function inferTaskAcceptanceV2(request: string): TaskAcceptanceMeaning {
   const legacy = inferTaskAcceptanceV1(request)
+  if (hasRawPythonFunctionDefinition(request)) {
+    const rawFunctionMeaning = interpretTaskAcceptance(request, {
+      version: 2,
+      meaningRef: ACCEPTANCE_MEANING_REF_V2,
+      admitActiveProseSpans: true,
+      unresolvedWhenEmpty: false,
+    })
+    // Raw Python function examples are task data, not malformed acceptance prose.
+    // Override the frozen v1 structural fallback only when v2 can account for
+    // the rest of the request without losing an ambiguous requirement.
+    if (rawFunctionMeaning.structurallyComplete) return rawFunctionMeaning
+  }
   const hasRealCriterion = legacy.sources.some((source) => source.status !== 'unresolved')
   if (hasRealCriterion || !legacy.structurallyComplete) {
     return promoteV1ProjectionToV2Admission(legacy)

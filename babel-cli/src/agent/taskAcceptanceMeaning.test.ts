@@ -345,6 +345,41 @@ test('v2 fresh admission matches direct v2 interpretation for journey prompts', 
   }
 })
 
+test('v2 does not mark an explicit function task unresolved because its raw Python example has indented doctests', () => {
+  const request = [
+    'Implement the function, create solution.py, preserve the signature, and explain what verification ran.',
+    '',
+    'def monotonic(l: list):',
+    '    """Return True if the list is monotonically increasing or decreasing.',
+    '    >>> monotonic([1, 2, 4, 20])',
+    '    True',
+    '    """',
+  ].join('\n')
+
+  const meaning = inferTaskAcceptanceV2(request)
+  assert.equal(meaning.unresolved, false)
+  assert.deepEqual(meaning.criteria.map(criterion => criterion.description), [
+    'Implement the function, create solution.py, preserve the signature, and explain what verification ran.',
+  ])
+  assert.ok(meaning.sources.every(source => source.status === 'inferred'))
+})
+
+test('v2 keeps genuinely incomplete requirement lists unresolved after an explicit criterion', () => {
+  const meaning = inferTaskAcceptanceV2([
+    'Implement the function in solution.py.',
+    '',
+    'def solve(values):',
+    '    """Solve the request using the inputs."""',
+    '',
+    'Requirements:',
+    '- Preserve the public signature.',
+    '  The remaining behavior is not specified',
+  ].join('\n'))
+  assert.equal(meaning.unresolved, true)
+  assert.ok(meaning.criteria.some(criterion => criterion.description === 'Clarify the observable acceptance requirements for this request.'))
+  assert.ok(meaning.sources.some(source => source.status === 'unresolved'))
+})
+
 test('v2 captures both short clear and long vague list-style requests without verified satisfaction', () => {
   const short = inferTaskAcceptanceV2('List files')
   assert.equal(short.unresolved, false)

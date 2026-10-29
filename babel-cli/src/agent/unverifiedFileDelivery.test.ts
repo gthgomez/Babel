@@ -106,7 +106,7 @@ test('failed evidence correction retains a read-back artifact with explicit unve
   assert.match(answer, /UNVERIFIED/)
   assert.match(answer, /map\.md/)
   assert.match(answer, /No authoritative test result is recorded/)
-  assert.match(answer, /final status corrects that claim/i)
+  assert.match(answer, /verification claims are not independently accepted/i)
   assert.doesNotMatch(answer, /All tests passed/)
   assert.equal(unverifiedFileDeliveryPaths({ ...base(), toolCallLog: [write] }), null)
 })

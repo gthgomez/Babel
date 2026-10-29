@@ -85,7 +85,10 @@ import { classifyChatTaskIntent } from './chatEngineTaskIntent.js'
 import { isSessionEventPersistenceFailure } from './sessionEventDiagnostics.js'
 import { hasInspectedNoChangeEvidence } from './completionGatePolicy.js'
 import { refreshChatVerifierReceiptStalenessSync } from '../evidence/chatRevisionBinding.js'
-import { collectConfirmedMutationArtifactPaths } from './preservedUnverifiedTerminal.js'
+import {
+  collectConfirmedMutationArtifactPaths,
+  formatPreservedUnverifiedTerminalAnswer,
+} from './preservedUnverifiedTerminal.js'
 import { requestedChatJsonKind } from './chatResponseContract.js'
 import { describeUnverifiedVerifierStatus } from './unverifiedFileDelivery.js'
 
@@ -123,6 +126,10 @@ function formatTerminalAnswerForOutcome(input: {
   hasMutation: boolean
   task: string
   toolCallLog: ChatTerminalSnapshot['evidence']['observability']['toolCallLog']
+  preservedUnverifiedCandidate?: {
+    candidate: string
+    artifactRefs: readonly string[]
+  }
 }): string {
   const unverifiedTerminal = input.status === 'completed' && input.outcome === 'UNVERIFIED_PATCH'
   const blockedRecovery = input.status === 'blocked' && input.outcome === 'BLOCKED_POLICY'
@@ -130,6 +137,22 @@ function formatTerminalAnswerForOutcome(input: {
       satisfiesRequestedBareJsonAnswer(input.answer, input.task)) return input.answer
 
   const artifactRefs = collectConfirmedMutationArtifactPaths(input.toolCallLog)
+  if (blockedRecovery && input.preservedUnverifiedCandidate) {
+    const confirmedRefs = new Set(artifactRefs)
+    const retainedRefs = input.preservedUnverifiedCandidate.artifactRefs
+      .filter(ref => confirmedRefs.has(ref))
+    if (retainedRefs.length > 0 && input.preservedUnverifiedCandidate.candidate.trim()) {
+      return formatPreservedUnverifiedTerminalAnswer({
+        authorityReason: [
+          'Completion status: BLOCKED_POLICY.',
+          `A policy or recovery boundary stopped this attempt: ${singleLineEvidence(input.answer)}`,
+          describeUnverifiedVerifierStatus(input.toolCallLog),
+        ].join('\n'),
+        retainedCandidate: input.preservedUnverifiedCandidate.candidate,
+        artifactRefs: retainedRefs,
+      })
+    }
+  }
   if (artifactRefs.length === 0) {
     if (blockedRecovery) {
       return [
@@ -270,6 +293,11 @@ export type ChatStreamDoneExtra = {
   verifierTampered?: boolean
   criticReceipt?: import('./diffCritic.js').DiffCriticVerdict | null
   reason?: TerminalReason
+  /** Host-captured, revision-bound answer preserved only for an honest blocked terminal. */
+  preservedUnverifiedCandidate?: {
+    candidate: string
+    artifactRefs: readonly string[]
+  }
 }
 
 /** Inspection can prove no change is needed; zero writes alone cannot. */
@@ -297,7 +325,12 @@ export function completeChatStream(
   const hasMutation = snapshot.outcome.hasMutation
   const needsHumanDecision = extra?.needsHumanDecision === true && !hasMutation &&
     !snapshot.outcome.budgetExceeded && !snapshot.outcome.verifierTampered && !extra?.blockedReport && !extra?.verifierTampered
-  const { needsHumanDecision: _privateDecision, stopRequest: stop, ...publicExtra } = extra ?? {}
+  const {
+    needsHumanDecision: _privateDecision,
+    stopRequest: stop,
+    preservedUnverifiedCandidate,
+    ...publicExtra
+  } = extra ?? {}
   const stoppedOutcome: TerminalOutcome | undefined = stop?.kind === 'blocked' ? stop.reasonCode === 'permission_denied' ? 'BLOCKED_POLICY' : 'BLOCKED_EXTERNAL'
     : stop?.kind === 'budget_exhausted' ? 'BUDGET_EXHAUSTED' : stop?.kind === 'failed' ? 'AGENT_FAILURE'
     : stop?.kind === 'cancelled' || stop?.kind === 'superseded' ? 'CANCELLED' : undefined
@@ -408,6 +441,9 @@ export function completeChatStream(
     hasMutation,
     task: snapshot.context.options.task,
     toolCallLog: snapshot.evidence.observability.toolCallLog,
+    ...(preservedUnverifiedCandidate !== undefined
+      ? { preservedUnverifiedCandidate }
+      : {}),
   })
   replaceLastMatchingAssistantAnswer(
     snapshot.presentation.conversation,

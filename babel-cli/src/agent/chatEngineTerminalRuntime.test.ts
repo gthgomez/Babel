@@ -374,6 +374,107 @@ test('blocked recovery exhaustion delivers confirmed artifacts and exact no-veri
   assert.doesNotMatch(event.answer, /Repeated no-progress after recovery|VERIFIED_COMPLETE|tests passed/i)
 })
 
+test('blocked terminal discards a retained answer when its captured artifact is not a current confirmed mutation', t => {
+  const input = terminalInput(t)
+  input.snapshot.outcome.hasMutation = true
+  input.snapshot.outcome.readOnly = false
+  input.snapshot.evidence.observability.toolCallLog.push({
+    index: 1, tool: 'write_file', target: 'notes.txt', mutation_paths: ['notes.txt'],
+    effect_status: 'confirmed_change', exit_code: 0,
+  })
+  const event = completeChatStream(input, 'Repeated no-progress after recovery (8 cycles)', {
+    blockedReport: {
+      schema_version: 1, status: 'BLOCKED', reason: 'Repeated no-progress after recovery',
+      missing: 'Semantic progress', reason_code: 'recovery_exhausted', cause_class: 'model', checked: [],
+    },
+    preservedUnverifiedCandidate: {
+      candidate: 'CSV totals: A 625, B 1020, C 320.', artifactRefs: ['summary.csv'],
+    },
+  })
+  assert.equal(event.type, 'done')
+  if (event.type !== 'done') return
+  assert.equal(event.outcome, 'BLOCKED_POLICY')
+  assert.match(event.answer, /notes\.txt/)
+  assert.doesNotMatch(event.answer, /summary\.csv|625|1020|320/)
+  assert.doesNotMatch(event.answer, /VERIFIED_COMPLETE|tests passed/i)
+})
+
+test('blocked terminal may retain useful work after a failed test but cannot turn red into success', t => {
+  const input = terminalInput(t)
+  input.snapshot.outcome.hasMutation = true
+  input.snapshot.outcome.readOnly = false
+  input.snapshot.evidence.observability.toolCallLog.push(
+    { index: 1, tool: 'write_file', target: 'summary.csv', mutation_paths: ['summary.csv'],
+      effect_status: 'confirmed_change', exit_code: 0 },
+    { index: 2, tool: 'test_run', target: 'npm test', exit_code: 1, verifierExecuted: true,
+      effect_status: 'confirmed_no_change', error: 'one assertion failed' },
+  )
+  const event = completeChatStream(input, 'Repeated no-progress after recovery (8 cycles)', {
+    blockedReport: {
+      schema_version: 1, status: 'BLOCKED', reason: 'Repeated no-progress after recovery',
+      missing: 'A passing current verifier', reason_code: 'recovery_exhausted', cause_class: 'model', checked: [],
+    },
+    preservedUnverifiedCandidate: {
+      candidate: 'CSV totals: A 625, B 1020, C 320. I ran tests and they passed.',
+      artifactRefs: ['summary.csv'],
+    },
+  })
+  assert.equal(event.type, 'done')
+  if (event.type !== 'done') return
+  assert.equal(event.outcome, 'BLOCKED_POLICY')
+  assert.match(event.answer, /UNVERIFIED retained candidate/)
+  assert.match(event.answer, /A 625, B 1020, C 320[\s\S]*I ran tests and they passed/)
+  assert.match(event.answer, /returned exit status 1/i)
+  assert.ok(event.answer.indexOf('returned exit status 1') < event.answer.indexOf('I ran tests and they passed'))
+  assert.doesNotMatch(event.answer, /VERIFIED_COMPLETE/i)
+  assert.equal('preservedUnverifiedCandidate' in event, false, 'host candidate metadata must not leak as a public event field')
+})
+
+test('blocked retained answer distinguishes a passed verifier from incomplete task acceptance', t => {
+  const input = terminalInput(t)
+  input.snapshot.outcome.hasMutation = true
+  input.snapshot.outcome.readOnly = false
+  input.snapshot.evidence.observability.toolCallLog.push(
+    { index: 1, tool: 'write_file', target: 'summary.csv', mutation_paths: ['summary.csv'],
+      effect_status: 'confirmed_change', exit_code: 0 },
+    { index: 2, tool: 'test_run', target: 'npm test', exit_code: 0, verifierExecuted: true,
+      effect_status: 'confirmed_no_change' },
+  )
+  const event = completeChatStream(input, 'Repeated no-progress after recovery (8 cycles)', {
+    blockedReport: {
+      schema_version: 1, status: 'BLOCKED', reason: 'Repeated no-progress after recovery',
+      missing: 'Unresolved task-acceptance evidence', reason_code: 'recovery_exhausted', cause_class: 'model', checked: [],
+    },
+    preservedUnverifiedCandidate: {
+      candidate: 'Created summary.csv with the requested totals.', artifactRefs: ['summary.csv'],
+    },
+  })
+  assert.equal(event.type, 'done')
+  if (event.type !== 'done') return
+  assert.equal(event.outcome, 'BLOCKED_POLICY')
+  assert.match(event.answer, /exit(?:ed)? with status 0/i)
+  assert.match(event.answer, /does not establish that all task-acceptance requirements are satisfied/i)
+  assert.match(event.answer, /Task completion is not certified/i)
+  assert.match(event.answer, /verification claims are not independently accepted/i)
+  assert.doesNotMatch(event.answer, /host has no accepted current passing result/i)
+})
+
+test('consequential ambiguity without a changed artifact cannot use a preserved completion candidate', t => {
+  const input = terminalInput(t)
+  input.snapshot.context.options.task = 'The records may be deleted or retained; ask before choosing.'
+  input.snapshot.outcome.readOnly = false
+  const event = completeChatStream(input, 'Should I delete the records or retain them?', {
+    needsHumanDecision: true,
+    preservedUnverifiedCandidate: {
+      candidate: 'I chose to delete the records.', artifactRefs: ['records.csv'],
+    },
+  })
+  assert.equal(event.type, 'done')
+  if (event.type !== 'done') return
+  assert.equal(event.outcome, 'NEEDS_HUMAN_DECISION')
+  assert.doesNotMatch(event.answer, /I chose to delete|records\.csv|VERIFIED_COMPLETE/)
+})
+
 test('blocked recovery with an unenumerated mutation cannot leave an unsupported success claim unqualified', t => {
   const input = terminalInput(t)
   input.snapshot.outcome.hasMutation = true
