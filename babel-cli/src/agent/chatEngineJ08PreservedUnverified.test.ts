@@ -313,6 +313,27 @@ class J08RecoveryChatterRunner extends OpenRouterApiRunner {
   }
 }
 
+class J08PartialArtifactRunner extends OpenRouterApiRunner {
+  private providerCalls = 0
+  onFinal?: (() => void) | undefined
+
+  constructor() {
+    super(LIVE_OPENROUTER_MODEL_ID, { maxTokens: 4_096 }, {
+      explicitCredential: 'synthetic-fixture', env: { OPENROUTER_API_KEY: 'synthetic-fixture' },
+    })
+  }
+
+  protected override async dispatchFetch(_url: string, _init: RequestInit): Promise<Response> {
+    const phase = this.providerCalls++
+    if (phase === 0) return makeToolCallSse('write_file', {
+      path: 'solution.py', content: 'def add(a, b):\n    return a + b\n',
+    }, `call_partial_${phase}`)
+    if (phase === 1) return makeToolCallSse('read_file', { path: 'solution.py' }, `call_partial_${phase}`)
+    this.onFinal?.()
+    return makeTextCompletionSse('I ran pytest and all tests passed. The helper is saved in solution.py.')
+  }
+}
+
 test('J08: gate-captured completion survives later recovery chatter at turn cap', async t => {
   const prior = Object.fromEntries(MANAGED_ENV.map(key => [key, process.env[key]]))
   const projectRoot = mkdtempSync(join(tmpdir(), 'babel-j08-recovery-'))
@@ -355,4 +376,84 @@ test('J08: gate-captured completion survives later recovery chatter at turn cap'
   assert.match(error, new RegExp(J08_MARKER))
   assert.doesNotMatch(error, new RegExp(RECOVERY_CHATTER_MARKER))
   assert.match(error, J08_RETAINED_SUMMARY_ARTIFACT)
+})
+
+test('ChatEngine terminal delivers a read-back artifact with truthful status after correction is exhausted', async t => {
+  const prior = Object.fromEntries(MANAGED_ENV.map(key => [key, process.env[key]]))
+  const projectRoot = mkdtempSync(join(tmpdir(), 'babel-unverified-python-artifact-'))
+  t.after(() => {
+    for (const key of MANAGED_ENV) {
+      if (prior[key] === undefined) delete process.env[key]
+      else process.env[key] = prior[key]
+    }
+    refreshDryRunState()
+    rmSync(projectRoot, { recursive: true, force: true })
+  })
+
+  for (const key of MANAGED_ENV) delete process.env[key]
+  process.env['BABEL_DRY_RUN'] = '0'
+  process.env['BABEL_DRY_RUN_SOURCE'] = 'session'
+  process.env['BABEL_NATIVE_TOOLS'] = 'enabled'
+  process.env['BABEL_TOOL_PROFILE'] = 'legacy'
+  process.env['OPENROUTER_API_KEY'] = 'synthetic-fixture'
+  refreshDryRunState()
+  git(projectRoot, ['init', '-q', '--initial-branch=main'])
+  git(projectRoot, ['config', 'user.email', 'fixture@example.invalid'])
+  git(projectRoot, ['config', 'user.name', 'Fixture'])
+  writeFileSync(join(projectRoot, 'README.md'), 'Empty Python helper fixture; no test suite is declared.\n')
+  git(projectRoot, ['add', 'README.md'])
+  git(projectRoot, ['commit', '-qm', 'empty Python fixture'])
+
+  const task = 'Create a small Python helper in solution.py that adds two numbers.'
+  const engine = new ChatEngine({
+    task, projectRoot, runId: `partial-python-${randomUUID()}`, operation: 'CHANGE',
+    model: LIVE_OPENROUTER_MODEL_ID, maxTurns: 4, maxCostUsd: 1, runtimeMode: 'direct',
+    providerRunner: new J08PartialArtifactRunner(), providerPolicy: OPENROUTER_POLICY,
+  })
+  const terminal = terminalEvent(await collectStream(engine.submitMessageStream(task)))
+  assert.equal(terminal.type, 'failed')
+  const presented = terminal.type === 'failed' ? terminal.error : ''
+  assert.match(presented, /UNVERIFIED retained candidate/i)
+  assert.match(presented, /solution\.py/)
+  assert.match(presented, /No authoritative verifier execution is recorded/)
+  assert.match(presented, /final status corrects that claim/i)
+  assert.doesNotMatch(presented, /I ran pytest and all tests passed/i)
+  assert.doesNotMatch(presented, /VERIFIED_COMPLETE/)
+  assert.equal(readFileSync(join(projectRoot, 'solution.py'), 'utf8'), 'def add(a, b):\n    return a + b\n')
+  const conversation = engine.getConversation()
+  assert.match(conversation.at(-1)?.content ?? '', /No authoritative verifier execution is recorded/)
+})
+
+test('ChatEngine cancellation during evidence correction cannot emit retained artifact delivery', async t => {
+  const prior = Object.fromEntries(MANAGED_ENV.map(key => [key, process.env[key]]))
+  const projectRoot = mkdtempSync(join(tmpdir(), 'babel-cancelled-python-artifact-'))
+  t.after(() => {
+    for (const key of MANAGED_ENV) {
+      if (prior[key] === undefined) delete process.env[key]
+      else process.env[key] = prior[key]
+    }
+    refreshDryRunState()
+    rmSync(projectRoot, { recursive: true, force: true })
+  })
+  for (const key of MANAGED_ENV) delete process.env[key]
+  process.env['BABEL_DRY_RUN'] = '0'
+  process.env['BABEL_DRY_RUN_SOURCE'] = 'session'
+  process.env['BABEL_NATIVE_TOOLS'] = 'enabled'
+  process.env['BABEL_TOOL_PROFILE'] = 'legacy'
+  process.env['OPENROUTER_API_KEY'] = 'synthetic-fixture'
+  refreshDryRunState()
+  git(projectRoot, ['init', '-q', '--initial-branch=main'])
+  git(projectRoot, ['config', 'user.email', 'fixture@example.invalid'])
+  git(projectRoot, ['config', 'user.name', 'Fixture'])
+  writeFileSync(join(projectRoot, 'README.md'), 'Cancellation fixture.\n')
+  git(projectRoot, ['add', 'README.md'])
+  git(projectRoot, ['commit', '-qm', 'cancellation fixture'])
+  const task = 'Create a small Python helper in solution.py that adds two numbers.'
+  const runner = new J08PartialArtifactRunner()
+  const engine = new ChatEngine({ task, projectRoot, runId: `cancel-partial-python-${randomUUID()}`,
+    operation: 'CHANGE', model: LIVE_OPENROUTER_MODEL_ID, maxTurns: 4, maxCostUsd: 1, runtimeMode: 'direct',
+    providerRunner: runner, providerPolicy: OPENROUTER_POLICY })
+  runner.onFinal = () => engine.cancel()
+  const terminal = terminalEvent(await collectStream(engine.submitMessageStream(task)))
+  assert.equal(terminal.type, 'cancelled')
 })

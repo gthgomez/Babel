@@ -1,7 +1,7 @@
 import type { ChatEngineStreamingLoopHost, ChatEvent } from './chatEngineContracts.js'
 import { ResponseEvidenceRetry, responseVerifierFacts } from './chatResponseEvidence.js'
 import { resolveCompletionVerificationContext } from './completionGatePolicy.js'
-import { unverifiedFileDeliveryPaths } from './unverifiedFileDelivery.js'
+import { describeUnverifiedVerifierStatus, unverifiedFileDeliveryPaths } from './unverifiedFileDelivery.js'
 import { formatPreservedUnverifiedTerminalAnswer } from './preservedUnverifiedTerminal.js'
 import { shellBlockedByIsolation } from './capabilityRecoveryScope.js'
 import { refreshChatVerifierReceiptStalenessSync } from '../evidence/chatRevisionBinding.js'
@@ -87,6 +87,7 @@ export function* settleFailedResponseEvidence(
     taskClass: host.taskClass,
     verification,
     shellUnavailable: shellBlockedByIsolation(host.isolationBrokerFlags()),
+    allowAfterExhaustion: true,
     verifierEvidencePresent: Boolean(host.lastVerifierReceipt || host.executedVerifierLedger.length),
     verifierTampered: host.verifierTampered,
     toolCallLog: host.toolCallLog,
@@ -97,8 +98,8 @@ export function* settleFailedResponseEvidence(
   }
 
   const delivery = formatPreservedUnverifiedTerminalAnswer({
-    authorityReason: 'UNVERIFIED: The response could not be corrected to match recorded evidence. Confirmed file changes were read back, but required verification was unavailable; task fulfillment is not certified.',
-    retainedCandidate: 'The host recorded confirmed changes to: ' + artifactRefs.join(', ') + '. No authoritative test result is recorded.',
+    authorityReason: `UNVERIFIED: The response could not be corrected to match recorded evidence. ${describeUnverifiedVerifierStatus(host.toolCallLog)} Confirmed file changes were read back; task fulfillment is not certified.`,
+    retainedCandidate: 'The host recorded confirmed changes to: ' + artifactRefs.join(', ') + '.',
     artifactRefs,
   })
   host.conversation.push({ role: 'assistant', content: delivery })

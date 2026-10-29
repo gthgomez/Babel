@@ -17,6 +17,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { resolve as pathResolve } from 'node:path';
 
 import { terminateChildTree } from '../sandbox.js';
+import type { ShellExecutionBackend } from '../sandbox.js';
 import { buildWindowsCommandShellArgs, parseCommandArgv } from '../utils/commandArgv.js';
 import { childEnvForSandbox } from '../authority/unprivilegedChildEnv.js';
 import { getDefaultProcessWitness, type ProcessWitness } from '../diagnostics/bdns/processWitness.js';
@@ -29,6 +30,12 @@ const DEFAULT_AWAIT_TIMEOUT_MS = 120_000;
 /** Hard wall-clock kill for background children when caller omits timeoutMs. */
 export const DEFAULT_BACKGROUND_JOB_TIMEOUT_MS = 600_000;
 const MAX_CONCURRENT_JOBS = 8;
+const trustedBackgroundExecutionBackend = new WeakMap<Promise<void>, ShellExecutionBackend>();
+
+/** Return backend provenance only for a background job whose host spawn event was observed. */
+export function getTrustedBackgroundExecutionBackend(job: BackgroundShellJob): ShellExecutionBackend | undefined {
+  return trustedBackgroundExecutionBackend.get(job.done);
+}
 
 export type BackgroundShellStatus = 'running' | 'completed' | 'failed' | 'killed';
 
@@ -250,6 +257,7 @@ export function startBackgroundShell(input: StartBackgroundShellInput): Backgrou
   child.once('spawn', () => {
     processStarted = true;
     job.processStarted = true;
+    trustedBackgroundExecutionBackend.set(job.done, 'host-process');
     processWitness.started(processInput, processExecutionId, child.pid);
   });
 

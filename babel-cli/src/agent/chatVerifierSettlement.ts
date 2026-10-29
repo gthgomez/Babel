@@ -4,7 +4,8 @@ import { recordVerifierAttempt } from './sessionEvents.js'
 import type { VerifierEvidenceOwner } from '../executor/contracts.js'
 import type { ChatEngineActionExecutorHost } from './chatEngineContracts.js'
 import type { ChatToolAction } from './chatToolDefinitions.js'
-import type { ToolResult } from '../sandbox.js'
+import { getTrustedShellExecutionBackend, type ToolResult } from '../sandbox.js'
+import type { ShellExecutionBackend } from '../sandbox.js'
 import { requireProjectRoot } from './chatExecutionScope.js'
 import { captureAndRecordVerifierReceipt, resolveVerifierCacheIdentity } from './chatEngineVerifierAdapter.js'
 import { mutationPathsFromSessionEvents } from '../evidence/chatRevisionBinding.js'
@@ -13,6 +14,7 @@ import { ingestVerifierResult } from './codingLoop/chatBindings.js'
 import { invalidateVerifierLedger } from './chatEngineSupport.js'
 import { isFatalWindowsProcessExit } from './verifierFailFast.js'
 import { makeFailureCapsule } from './taskContract.js'
+import { isAuthoritativeVerifierCommand } from './completionGatePolicy.js'
 
 /** One receipt and repair-state settlement path for foreground and completed background verifiers. */
 export async function settleChatVerifierResult(input: {
@@ -27,6 +29,8 @@ export async function settleChatVerifierResult(input: {
   obsParts: string[]
   cacheIdentity?: { key: string; cwd: string; envKey: string }
   verifierOwner?: VerifierEvidenceOwner | undefined
+  /** Trusted backend recovered from a host-owned background job record. */
+  executionBackend?: ShellExecutionBackend | undefined
   foregroundDispatch?: { owner?: VerifierEvidenceOwner | undefined; candidate: import('./codingLoop/workingState.js').RecoveryCandidateBinding | null; identity: { cwd: string; envKey: string }; signal?: AbortSignal | undefined } | undefined
   canPublish?: () => boolean
   isOwnerCurrent?: () => boolean
@@ -36,13 +40,14 @@ export async function settleChatVerifierResult(input: {
   // An ordinary error may have been returned before process dispatch (for
   // example search-depth admission). It must not become a failed verifier
   // receipt/cache entry or trigger implementation-repair authority.
-  if (input.foregroundDispatch?.signal?.aborted || lastResult.process_started !== true || lastResult.simulated === true || lastResult.launch_failure !== undefined ||
+  if (input.foregroundDispatch?.signal?.aborted || lastResult.denial !== undefined || lastResult.process_started !== true || lastResult.simulated === true || lastResult.launch_failure !== undefined ||
       (lastResult.process_termination !== undefined && lastResult.process_termination !== 'exited')) return null
   const isOwnerCurrent = () => host.isSubmissionCurrent(ownerGeneration) && (input.isOwnerCurrent?.() ?? true)
   const dispatch = input.foregroundDispatch;
   const toolCallId = meta.idempotencyKey ?? host._streamNativeToolCallIds[meta.index] ?? `tool_call_${host._turnIndex}_${meta.index}`;
   const started = host.parity.sessionEvents.events.some(event => event.kind === 'tool_started' && event.tool_call_id === toolCallId);
-  if (isOwnerCurrent() && !dispatch?.signal?.aborted && lastResult.process_termination === 'exited' && lastResult.exit_code !== 0 && lastResult.denial === undefined && dispatch?.owner && dispatch.candidate && started) {
+  if (isOwnerCurrent() && !dispatch?.signal?.aborted && lastResult.process_termination === 'exited' && lastResult.exit_code !== 0 && lastResult.denial === undefined &&
+      isAuthoritativeVerifierCommand(target) && dispatch?.owner && dispatch.candidate && started) {
     const pending = { schemaVersion: 1 as const, command: target, argv: parseCommandArgv(target),
       executionFingerprint: failedVerifierContextKey(target, dispatch.owner, dispatch.identity.cwd, dispatch.identity.envKey),
       owner: dispatch.owner, cwd: dispatch.identity.cwd, environmentFingerprint: dispatch.identity.envKey, candidate: dispatch.candidate,
@@ -69,6 +74,10 @@ export async function settleChatVerifierResult(input: {
   let receipt: Awaited<
     ReturnType<typeof captureAndRecordVerifierReceipt>
   > = null;
+  const resultBackend = getTrustedShellExecutionBackend(lastResult);
+  const executionBackend = input.executionBackend && resultBackend && input.executionBackend !== resultBackend
+    ? undefined
+    : input.executionBackend ?? resultBackend
   try {
     receipt = await captureAndRecordVerifierReceipt({
       projectRoot: requireProjectRoot(host.options),
@@ -85,6 +94,7 @@ export async function settleChatVerifierResult(input: {
       }),
       ...(lastResult.stdout !== undefined ? { stdout: lastResult.stdout } : {}),
       ...(lastResult.stderr !== undefined ? { stderr: lastResult.stderr } : {}),
+      ...(executionBackend ? { executionBackend } : {}),
       mutationPaths: mutationPathsFromSessionEvents(
         host.parity.sessionEvents.events,
       ),
@@ -210,7 +220,8 @@ export async function settleChatVerifierResult(input: {
     }
   } else if (
     lastResult.exit_code !== 0 &&
-    host.workingState.lastMutation
+    host.workingState.lastMutation &&
+    isAuthoritativeVerifierCommand(target)
   ) {
     // A red command without a durable verifier receipt cannot grant
     // recovery authority. Keep the failed candidate closed until an

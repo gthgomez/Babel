@@ -4291,6 +4291,11 @@ export class ChatEngine {
         "\n\nRead-only capability boundary: only read_file, read_range, list_dir, grep and glob are available. Do not request shell commands, writes, subagents or shared memory. If a read/search fails, use another available reading tool or report the missing evidence; unavailable tools cannot work around this boundary.";
     }
 
+    if (this.options.projectRoot && this.discoveredTestCommands.length === 0) {
+      systemContent +=
+        '\n\nTest discovery: the host found no project test command from repository metadata or conventional test files. Do not invent a test filename or choose a runtime from habit. Inspect the repository language and available test configuration first; if no project tests or compatible runner are available, report that verification was not performed. A command denied before dispatch did not run; distinguish that from a command that started and failed.';
+    }
+
     // Packet D2: the active edit format is visible in the preamble — format
     // selection is deterministic given model + telemetry state, never silent.
     if (this.editFormatSession) {

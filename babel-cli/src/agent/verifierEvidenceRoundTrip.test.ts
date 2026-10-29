@@ -21,9 +21,10 @@ test('capture publishes durable order and actual environment through adaptation 
       projectRoot: root, command: 'node --test', exitCode: 0, summary: 'executed', stdout: '# tests 1\n# skipped 0',
       mutationPaths: ['value.ts'], sessionEvents: log, turnId: 'turn', ledger, cache, writeCount: 1,
       cacheIdentity: { key: 'cache', cwd: realpathSync.native(root), envKey: 'frozen-real-environment' }, verifierOwner: boundOwner,
+      executionBackend: 'docker-container',
     })
     assert.ok(receipt)
-    assert.equal(receipt.environment_policy, 'host-process')
+    assert.equal(receipt.environment_policy, 'docker-container')
     assert.equal(receipt.executionContext?.environmentFingerprint, 'frozen-real-environment')
     const { chatReceiptDispatchesToRequirement } = await import('../authority/criterionVerifierDispatch.js')
     const { sha256Canonical } = await import('../acceptance/canonical.js')
@@ -31,10 +32,10 @@ test('capture publishes durable order and actual environment through adaptation 
       required: true, verification_strategy: 'Run the frozen native check.', verification: {
         kind: 'unit_test' as const, verifier_id: 'verifier:node', executable_id: 'node', argv: ['--test'],
         command_hash: sha256Canonical({ executable_id: 'node', argv: ['--test'] }),
-        working_directory: '.', environment_policy: 'host-process',
+        working_directory: '.', environment_policy: 'docker-container',
       } }
     assert.equal(chatReceiptDispatchesToRequirement(receipt, requirement), true)
-    assert.equal(chatReceiptDispatchesToRequirement({ ...receipt, environment_policy: 'other-policy' }, requirement), false)
+    assert.equal(chatReceiptDispatchesToRequirement({ ...receipt, environment_policy: 'host-process' }, requirement), false)
 
     assert.deepEqual(receipt.order, { sessionId: 'session', seq: 0 })
     assert.strictEqual(ledger[0], receipt)
@@ -55,6 +56,20 @@ test('capture publishes durable order and actual environment through adaptation 
     const restored = restorePersistedVerifierEvidence(parseSessionEventLog(serializeSessionEventLog(log)), restoredLedger, boundOwner)
     assert.deepEqual(restored, JSON.parse(JSON.stringify(receipt)))
     assert.equal(restorePersistedVerifierEvidence(log, [], { ...boundOwner, taskId: 'other' }), null)
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
+
+test('receipt omits execution environment when no host-owned backend fact is available', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-verifier-backend-unknown-'))
+  try {
+    writeFileSync(join(root, 'value.ts'), 'export const value = 1\n')
+    const receipt = await captureAndRecordVerifierReceipt({
+      projectRoot: root, command: 'node --test', exitCode: 0, summary: 'executed', stdout: '# tests 1\n# skipped 0',
+      mutationPaths: ['value.ts'], sessionEvents: createSessionEventLog('session'), turnId: 'turn', ledger: [],
+      cache: new Map(), writeCount: 1,
+    })
+    assert.ok(receipt)
+    assert.equal(receipt.environment_policy, undefined, 'unknown backend must not be mislabeled as host process')
   } finally { rmSync(root, { recursive: true, force: true }) }
 })
 

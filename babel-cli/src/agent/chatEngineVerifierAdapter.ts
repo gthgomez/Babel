@@ -323,6 +323,8 @@ export async function captureAndRecordVerifierReceipt(input: {
   /** Host acceptance owner captured before dispatch, never supplied by the model. */
   verifierOwner?: VerifierEvidenceOwner;
   resolvedExecutable?: string;
+  /** Host-owned shell executor selected for the actual invocation. */
+  executionBackend?: 'docker-container' | 'host-process';
   /** The command was not started. A synthetic exit must not enter the ledger. */
   simulated?: boolean;
   /** Recheck suspended execution ownership/candidate immediately before publishing evidence. */
@@ -363,7 +365,7 @@ export async function captureAndRecordVerifierReceipt(input: {
     } } : {}),
     execution: {
       working_directory: relativeCwd,
-      environment_policy: 'host-process',
+      ...(input.executionBackend ? { environment_policy: input.executionBackend } : {}),
       ...(commandIdentity?.scope === 'targeted' && commandIdentity.targetSelectors.length > 0
         ? { target: commandIdentity.targetSelectors.join(',') }
         : {}),

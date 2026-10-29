@@ -292,6 +292,8 @@ export function formatPreservedUnverifiedTerminalAnswer(input: {
   const lines = [
     authority,
     '',
+    'If an earlier streamed message claimed verification passed, this final status corrects that claim: the host has no accepted current passing result.',
+    '',
     '---',
     'UNVERIFIED retained candidate (required authoritative checks were not satisfied):',
     candidate,

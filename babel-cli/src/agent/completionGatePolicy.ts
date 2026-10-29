@@ -488,6 +488,7 @@ export type VerifierReceipt = {
 
 export type GateToolLogEntry = {
   preDispatchNoEffect?: true;
+  verifierExecuted?: boolean;
   tool: string;
   target: string;
   detail?: string;

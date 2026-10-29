@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { resolve } from 'node:path'
 import { resolveCompletionVerificationContext, type GateToolLogEntry } from './completionGatePolicy.js'
-import { unverifiedFileDeliveryPaths } from './unverifiedFileDelivery.js'
+import { describeUnverifiedVerifierStatus, unverifiedFileDeliveryPaths } from './unverifiedFileDelivery.js'
 import { formatPreservedUnverifiedTerminalAnswer } from './preservedUnverifiedTerminal.js'
 import { ResponseEvidenceRetry } from './chatResponseEvidence.js'
 
@@ -31,6 +31,30 @@ test('explicit verification contracts and unavailable or failed evidence retain 
   }
 })
 
+test('exhausted optional verification may deliver a read-back artifact without certifying it', () => {
+  const attempts = [
+    { tool: 'test_run', target: 'python3 -m pytest test_solution.py', exit_code: 1,
+      verifierExecuted: true },
+  ]
+  assert.deepEqual(unverifiedFileDeliveryPaths({ ...base(), shellUnavailable: false,
+    verifierEvidencePresent: true, allowAfterExhaustion: true, toolCallLog: [write, read, ...attempts] }), ['map.md'])
+  assert.equal(unverifiedFileDeliveryPaths({ ...base(), shellUnavailable: false, verifierEvidencePresent: true,
+    allowAfterExhaustion: false, toolCallLog: [write, read, ...attempts] }), null)
+  assert.equal(unverifiedFileDeliveryPaths({ ...base(), shellUnavailable: false, verifierEvidencePresent: true,
+    allowAfterExhaustion: true, verification: { ...base().verification, mandatoryVerifierContract: true },
+    toolCallLog: [write, read, ...attempts] }), null)
+  assert.match(describeUnverifiedVerifierStatus([attempts[0]!]), /started and exited with status 1/)
+})
+
+test('host distinguishes a pre-dispatch verifier denial from an executed failure', () => {
+  assert.match(describeUnverifiedVerifierStatus([
+    { tool: 'test_run', target: 'python3 -m pytest test_solution.py', preDispatchNoEffect: true, verifierExecuted: false },
+  ]), /denied before dispatch.*did not run/i)
+  assert.match(describeUnverifiedVerifierStatus([
+    { tool: 'test_run', target: 'python3 -m pytest --version', preDispatchNoEffect: true, verifierExecuted: false },
+  ]), /No authoritative verifier execution is recorded/)
+})
+
 test('retained artifacts cannot acquire outside-root or non-file mutation authority', () => {
   for (const change of [{ mutation_paths: ['../escape'] }, { mutation_paths: [resolve(root, '..', 'escape')] }, { mutation_paths: [] }, { tool: 'run_command' }, { tool: 'sub_agent' }, { error: 'blocked' }]) {
     assert.equal(unverifiedFileDeliveryPaths({ ...base(), toolCallLog: [{ ...write, ...change }, read] }), null)
@@ -53,6 +77,7 @@ test('failed evidence correction retains a read-back artifact with explicit unve
   assert.match(answer, /UNVERIFIED/)
   assert.match(answer, /map\.md/)
   assert.match(answer, /No authoritative test result is recorded/)
+  assert.match(answer, /final status corrects that claim/i)
   assert.doesNotMatch(answer, /All tests passed/)
   assert.equal(unverifiedFileDeliveryPaths({ ...base(), toolCallLog: [write] }), null)
 })

@@ -1,4 +1,4 @@
-import type { BackgroundShellJob, AwaitBackgroundShellResult } from './backgroundShell.js'
+import { getTrustedBackgroundExecutionBackend, type BackgroundShellJob, type AwaitBackgroundShellResult } from './backgroundShell.js'
 import type { ChatEngineActionExecutorHost } from './chatEngineContracts.js'
 import { requireProjectRoot } from './chatExecutionScope.js'
 import { isAuthoritativeVerifierCommand } from './completionGatePolicy.js'
@@ -123,10 +123,12 @@ export async function settleChatBackgroundVerifier(input: {
     const current = candidateRevision(projectRoot)
     return current !== null && !compareRevisions(dispatch.candidate, current).stale
   }
+  const executionBackend = getTrustedBackgroundExecutionBackend(job)
   await settleChatVerifierResult({
     host,
     action: { type: 'run_command', command: dispatch.command, cwd: job.cwd },
     result: { exit_code: result.exit_code, stdout: result.stdout, stderr: result.stderr, process_started: job.processStarted === true },
+    ...(executionBackend ? { executionBackend } : {}),
     target: dispatch.command,
     tool: 'run_command',
     meta: { index: input.index, idempotencyKey: dispatch.toolCallId },

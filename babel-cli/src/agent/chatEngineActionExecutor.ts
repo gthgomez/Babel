@@ -59,6 +59,7 @@ import {
   type PolicyGatedExecutionResult,
 } from "./toolExecutor.js";
 import { settleChatVerifierResult } from "./chatVerifierSettlement.js";
+import { isAuthoritativeVerifierCommand } from "./completionGatePolicy.js";
 import { acceptToolStop, settlePreventedChatAction } from './chatEngineRunControl.js';
 import { RunStoppedError } from '../runtime/run-control.js';
 import { chatReadToolExecutor } from "./chatReadExecutor.js";
@@ -1599,6 +1600,7 @@ export class ChatEngineActionExecutor {
 
       const verifierSemanticSignature = frozenVerifierDispatch?.owner && frozenVerifierDispatch.candidate &&
         !result.policyBlocked && !result.notStarted && lastResult?.process_started === true && lastResult.simulated !== true && lastResult.launch_failure === undefined
+        && isAuthoritativeVerifierCommand(target)
         ? verifierSemanticProgress({ command: target, exitCode: lastResult.exit_code, stdout: lastResult.stdout, stderr: lastResult.stderr,
           executionContextKey: failedVerifierContextKey(target, frozenVerifierDispatch.owner, frozenVerifierDispatch.identity.cwd, frozenVerifierDispatch.identity.envKey),
           candidateRevision: frozenVerifierDispatch.candidate.workspaceRevision }) : undefined;
@@ -1613,7 +1615,7 @@ export class ChatEngineActionExecutor {
         ...((action.type === 'run_command' || action.type === 'test_run') ? {
           verifierExecuted: !result.policyBlocked && !result.notStarted &&
             lastResult?.process_started === true && lastResult.simulated !== true &&
-            lastResult.launch_failure === undefined,
+            lastResult.launch_failure === undefined && isAuthoritativeVerifierCommand(target),
         } : {}),
         ...(lastResult
           ? {
