@@ -334,6 +334,38 @@ class J08PartialArtifactRunner extends OpenRouterApiRunner {
   }
 }
 
+class J08DeniedInlineVerifierRunner extends OpenRouterApiRunner {
+  calls = 0
+  denialGuidanceObserved = false
+
+  constructor() {
+    super(LIVE_OPENROUTER_MODEL_ID, { maxTokens: 4_096 }, {
+      explicitCredential: 'synthetic-fixture', env: { OPENROUTER_API_KEY: 'synthetic-fixture' },
+    })
+  }
+
+  protected override async dispatchFetch(_url: string, init: RequestInit): Promise<Response> {
+    const phase = this.calls++
+    if (phase === 0) return makeToolCallSse('write_file', {
+      path: 'solution.py', content: 'def add(a, b):\n    return a + b\n',
+    }, 'call_denied_python_write')
+    if (phase === 1) return makeToolCallSse('test_run', {
+      command: 'python -c "import solution; assert solution.add(2, 2) == 4"',
+    }, 'call_denied_python_test')
+    if (phase === 2) {
+      const request = JSON.parse(String(init.body)) as { messages?: Array<{ role?: string; content?: unknown }> }
+      const denial = request.messages?.find(message => message.role === 'tool' &&
+        typeof message.content === 'string' && message.content.includes('DENY_MISSING_AUTHORITY'))
+      assert.ok(denial, 'the provider must receive the actual pre-dispatch denial')
+      assert.match(String(denial.content), /Do not retry the unchanged command/i)
+      assert.match(String(denial.content), /read back the changed file and state that no tests ran/i)
+      this.denialGuidanceObserved = true
+      return makeToolCallSse('read_file', { path: 'solution.py' }, 'call_denied_python_readback')
+    }
+    return makeTextCompletionSse('I ran pytest and all tests passed. The helper is saved in solution.py.')
+  }
+}
+
 test('J08: gate-captured completion survives later recovery chatter at turn cap', async t => {
   const prior = Object.fromEntries(MANAGED_ENV.map(key => [key, process.env[key]]))
   const projectRoot = mkdtempSync(join(tmpdir(), 'babel-j08-recovery-'))
@@ -437,6 +469,60 @@ test('CLI chat payload delivers a read-back artifact with truthful status after 
   assert.doesNotMatch(presented, /VERIFIED_COMPLETE/)
   assert.equal(readFileSync(join(projectRoot, 'solution.py'), 'utf8'), 'def add(a, b):\n    return a + b\n')
   assert.match(presented, /No authoritative verifier execution is recorded/)
+})
+
+test('CLI chat recovers from a denied inline verifier and reports the actual no-test result', async t => {
+  const prior = Object.fromEntries(MANAGED_ENV.map(key => [key, process.env[key]]))
+  const projectRoot = mkdtempSync(join(tmpdir(), 'babel-denied-python-artifact-'))
+  t.after(() => {
+    for (const key of MANAGED_ENV) {
+      if (prior[key] === undefined) delete process.env[key]
+      else process.env[key] = prior[key]
+    }
+    refreshDryRunState()
+    rmSync(projectRoot, { recursive: true, force: true })
+  })
+  for (const key of MANAGED_ENV) delete process.env[key]
+  process.env['BABEL_DRY_RUN'] = '0'
+  process.env['BABEL_DRY_RUN_SOURCE'] = 'session'
+  process.env['BABEL_NATIVE_TOOLS'] = 'enabled'
+  process.env['BABEL_TOOL_PROFILE'] = 'legacy'
+  process.env['OPENROUTER_API_KEY'] = 'synthetic-fixture'
+  refreshDryRunState()
+  git(projectRoot, ['init', '-q', '--initial-branch=main'])
+  git(projectRoot, ['config', 'user.email', 'fixture@example.invalid'])
+  git(projectRoot, ['config', 'user.name', 'Fixture'])
+  writeFileSync(join(projectRoot, 'README.md'), 'No test suite is declared for this empty Python fixture.\n')
+  git(projectRoot, ['add', 'README.md'])
+  git(projectRoot, ['commit', '-qm', 'empty Python fixture'])
+
+  const task = 'Create a small Python helper in solution.py that adds two numbers.'
+  const runner = new J08DeniedInlineVerifierRunner()
+  let engine: ChatEngine | undefined
+  const { runCliChatTask } = await import('../interactive/execution/chatCore.js')
+  const result = await runCliChatTask({
+    task, projectRoot, model: LIVE_OPENROUTER_MODEL_ID, outputFormat: 'json',
+    engineFactory(options) {
+      engine = new ChatEngine({
+        ...options, maxTurns: 8, maxCostUsd: 1, runtimeMode: 'direct',
+        providerRunner: runner, providerPolicy: OPENROUTER_POLICY,
+      })
+      return engine
+    },
+  })
+  assert.ok(engine)
+  assert.equal(runner.denialGuidanceObserved, true)
+  assert.equal(runner.calls, 5, 'the model should stop repeating the denied command and finish after one correction')
+  const presented = JSON.stringify(result.payload['answer'])
+  assert.equal(result.payload['terminal_outcome'], 'AGENT_FAILURE')
+  assert.equal(result.exitCode, 1)
+  assert.notEqual(result.payload['terminal_outcome'], 'VERIFIED_COMPLETE')
+  assert.match(presented, /UNVERIFIED retained candidate/i)
+  assert.match(presented, /solution\.py/)
+  assert.match(presented, /denied before dispatch.*did not run/i)
+  assert.match(presented, /No authoritative verifier execution is recorded/)
+  assert.doesNotMatch(presented, /I ran pytest and all tests passed/i)
+  assert.equal(readFileSync(join(projectRoot, 'solution.py'), 'utf8'), 'def add(a, b):\n    return a + b\n')
 })
 
 test('ChatEngine cancellation during evidence correction cannot emit retained artifact delivery', async t => {

@@ -828,6 +828,23 @@ describe('test command denial guidance preserves authority', () => {
       assert.match(result.results[0]!.stderr, /same.*authority|same.*policy/i);
     });
   }
+
+  for (const type of ['run_command', 'test_run'] as const) {
+    it(`${type} explains that denied inline Python did not run and must not be retried`, async () => {
+      let executed = false;
+      const result = await executeActionWithPolicy({ type,
+        command: "python -c \"import solution; assert solution.add(2, 2) == 4\"",
+      }, 'workspace_write', context, { lease: null, isolationAvailable: true,
+        executor: { mapAction: mapAgentActionToToolCalls, execute: async () => { executed = true; throw new Error('must not execute'); } } });
+      assert.equal(executed, false);
+      assert.equal(result.policyBlocked, true);
+      assert.equal(result.reasonCode, 'DENY_MISSING_AUTHORITY');
+      assert.match(result.results[0]!.stderr, /Not executed.*classified as arbitrary code/i);
+      assert.match(result.results[0]!.stderr, /same.*authority|same.*policy/i);
+      assert.match(result.results[0]!.stderr, /Do not retry the unchanged command/i);
+      assert.match(result.results[0]!.stderr, /If no project test suite is available.*read back.*state that no tests ran/i);
+    });
+  }
 });
 
 it('supported test alternatives retain isolation and arbitrary-code boundaries', () => {

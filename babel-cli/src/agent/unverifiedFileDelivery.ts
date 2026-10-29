@@ -2,6 +2,14 @@ import { isAbsolute, relative, resolve, sep } from 'node:path'
 import type { GateToolLogEntry, CompletionVerificationContext } from './completionGatePolicy.js'
 import type { ChatTaskClass } from '../config/chatTaskClass.js'
 import { isAuthoritativeVerifierCommand } from './completionGatePolicy.js'
+import { splitChains, tokenize } from '../authority/commandDecoder.js'
+
+function isVersionProbe(command: string): boolean {
+  const commands = splitChains(command)
+  if (commands.length !== 1) return false
+  const args = tokenize(commands[0]!)
+  return args.some(arg => arg === '--version' || arg === '-V')
+}
 
 /** Retained file delivery only: these observations never certify task fulfillment. */
 export function unverifiedFileDeliveryPaths(input: {
@@ -46,10 +54,12 @@ export function unverifiedFileDeliveryPaths(input: {
 
 /** Explain verification state from host execution records without echoing command output. */
 export function describeUnverifiedVerifierStatus(toolCallLog: readonly GateToolLogEntry[]): string {
-  const attempts = toolCallLog.filter(entry =>
+  const commands = toolCallLog.filter(entry =>
+    (entry.tool === 'run_command' || entry.tool === 'test_run') && typeof entry.target === 'string')
+  const attempts = commands.filter(entry =>
     (entry.tool === 'run_command' || entry.tool === 'test_run') && isAuthoritativeVerifierCommand(entry.target))
   const executed = attempts.filter(entry => entry.verifierExecuted === true && entry.preDispatchNoEffect !== true)
-  const denied = attempts.filter(entry => entry.preDispatchNoEffect === true)
+  const denied = commands.filter(entry => entry.preDispatchNoEffect === true)
   const last = executed.at(-1)
   if (last) {
     if (last.exit_code !== undefined && last.exit_code !== 0) {
@@ -57,8 +67,12 @@ export function describeUnverifiedVerifierStatus(toolCallLog: readonly GateToolL
     }
     return 'A verifier process started, but the host did not accept a current passing verifier result.'
   }
-  if (denied.length > 0) {
-    return 'The verifier command was denied before dispatch. It did not run and provides no test result.'
-  }
-  return 'No authoritative verifier execution is recorded. Task fulfillment is not certified.'
+  const probes = commands.filter(entry => entry.preDispatchNoEffect !== true &&
+    entry.exit_code !== undefined && isVersionProbe(entry.target ?? ''))
+  const facts: string[] = []
+  if (denied.length > 0) facts.push('A command was denied before dispatch; it did not run and provides no test result.')
+  const lastProbe = probes.at(-1)
+  if (lastProbe) facts.push(`A version/availability probe returned exit status ${lastProbe.exit_code}; it was not a test.`)
+  facts.push('No authoritative verifier execution is recorded. Task fulfillment is not certified.')
+  return facts.join(' ')
 }

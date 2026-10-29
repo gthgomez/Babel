@@ -578,11 +578,19 @@ function policyBlockedToolResult(
     (action.type === 'run_command' || action.type === 'test_run') &&
     /(?:^|\s)--test(?:\s|$)/.test(action.command) &&
     decodeCommand(action.command).capability === 'run_arbitrary_code';
+  const arbitraryCodeSyntaxDenied = reason?.includes('DENY_MISSING_AUTHORITY') &&
+    (action.type === 'run_command' || action.type === 'test_run') &&
+    decodeCommand(action.command).capability === 'run_arbitrary_code';
   const guidance = testSyntaxDenied
     ? '\nNot executed: this command form is classified as arbitrary code and requires authority. ' +
       'run_command and test_run use the same authority policy. Do not retry the unchanged command under another tool name. ' +
       'Recognized Node test forms include node --test <test-file> and node --import tsx --test <test-file>. ' +
       'Preserve the intended test files and required imports; these forms still require isolation and all policy checks.'
+    : arbitraryCodeSyntaxDenied
+      ? '\nNot executed: this command form is classified as arbitrary code and requires authority. ' +
+        'run_command and test_run use the same authority policy. Do not retry the unchanged command or move it to the other tool. ' +
+        'Use an existing test command declared by project metadata or an existing test file only if isolation and policy allow it; do not use a version probe as a test. ' +
+        'If no project test suite is available, read back the changed file and state that no tests ran; do not report this denial as a test failure.'
     : '';
   return {
     exit_code: 1,

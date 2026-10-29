@@ -51,8 +51,27 @@ test('host distinguishes a pre-dispatch verifier denial from an executed failure
     { tool: 'test_run', target: 'python3 -m pytest test_solution.py', preDispatchNoEffect: true, verifierExecuted: false },
   ]), /denied before dispatch.*did not run/i)
   assert.match(describeUnverifiedVerifierStatus([
-    { tool: 'test_run', target: 'python3 -m pytest --version', preDispatchNoEffect: true, verifierExecuted: false },
-  ]), /No authoritative verifier execution is recorded/)
+    { tool: 'test_run', target: 'python -c "import solution; assert solution.add(2, 2) == 4"', preDispatchNoEffect: true, verifierExecuted: false },
+  ]), /denied before dispatch.*did not run/i)
+  const versionProbe = describeUnverifiedVerifierStatus([
+    { tool: 'run_command', target: 'python -m pytest --version', exit_code: 1, verifierExecuted: false },
+  ])
+  assert.match(versionProbe, /version\/availability probe returned exit status 1.*not a test/i)
+  assert.match(versionProbe, /No authoritative verifier execution is recorded/)
+  assert.doesNotMatch(versionProbe, /verifier process started and exited/)
+  for (const command of [
+    'python script.py -v',
+    'python -c "print(\'--version\')"',
+    'npm --version && npm test',
+    'npm --version; npm test',
+  ]) {
+    assert.doesNotMatch(describeUnverifiedVerifierStatus([
+      { tool: 'run_command', target: command, exit_code: 1, verifierExecuted: false },
+    ]), /version\/availability probe/)
+  }
+  assert.match(describeUnverifiedVerifierStatus([
+    { tool: 'test_run', target: 'python -m unittest test_solution -v', exit_code: 1, verifierExecuted: true },
+  ]), /verifier process started and exited with status 1/)
 })
 
 test('retained artifacts cannot acquire outside-root or non-file mutation authority', () => {
