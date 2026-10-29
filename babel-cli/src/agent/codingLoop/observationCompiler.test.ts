@@ -23,6 +23,17 @@ describe('observation compiler (shipped formatChatToolObservation path)', () => 
       assert.doesNotMatch(observation, /node --import tsx --test <test-file>/)
     }
   })
+
+  test('tsx package resolution failure suggests checking the package cwd without changing authority', () => {
+    const error = "Error [ERR_MODULE_NOT_FOUND]: Cannot find package 'tsx' imported from /app/babel-cli/src/agent/helper.test.ts"
+    const failed = formatChatToolObservation({ type: 'test_run', command: 'node --import tsx --test babel-cli/src/agent/helper.test.ts' },
+      { stdout: error, exitCode: 1 })
+    assert.match(failed, /if tsx is installed in a nested package/i)
+    assert.match(failed, /same test from that package directory/i)
+    const unrelated = formatChatToolObservation({ type: 'test_run', command: 'node --import tsx --test helper.test.ts' },
+      { stdout: "Error [ERR_MODULE_NOT_FOUND]: Cannot find module '/app/helper.js'", exitCode: 1 })
+    assert.doesNotMatch(unrelated, /nested package/)
+  })
   test('stderr-only failure keeps stderr when stdout is empty', () => {
     const compiled = compileObservation({
       tool: 'run_command',

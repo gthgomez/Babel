@@ -123,6 +123,11 @@ export function formatCompiledObservation(compiled: CompiledObservation): string
       /ERR_MODULE_NOT_FOUND|ERR_UNKNOWN_FILE_EXTENSION/.test(output)) {
     lines.push('test_loader_hint: A missing TypeScript loader may explain this module-resolution failure. Inspect the project test script; if tsx is installed, try node --import tsx --test <test-file> with the same target. The failed command did not verify the tests.')
   }
+  if (compiled.exitCode !== null && compiled.exitCode !== 0 &&
+      /^(?:node|node\.exe)\s+--import(?:=|\s+)tsx\s+--test\b/i.test(command) &&
+      /ERR_MODULE_NOT_FOUND[^\n]*Cannot find package ['"]tsx['"]/.test(output)) {
+    lines.push('test_loader_location_hint: tsx did not resolve from this command cwd. Inspect the project test script and node_modules; if tsx is installed in a nested package, rerun the same test from that package directory. This failed invocation alone does not prove that project verification is unavailable.')
+  }
   if (compiled.rawSpillPath) {
     if (compiled.rawSpillPath === 'babel-artifact-unavailable') {
       lines.push('raw_output_unavailable: artifact registration failed or resource bound exceeded; head/tail are partial output')
