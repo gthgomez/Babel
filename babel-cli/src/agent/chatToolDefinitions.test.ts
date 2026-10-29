@@ -240,5 +240,16 @@ it('test_run advertises recognized syntax and shared authority', () => {
   assert.match(description, /node --import tsx --test/);
   assert.match(description, /same.*policy|same.*authority/i);
   assert.match(description, /nested package.*set cwd/i);
-  assert.match(description, /test-file path relative to that cwd/i);
+  assert.match(description, /cwd.*relative to (?:the )?project root/i);
+  assert.match(description, /test-file path relative to cwd/i);
+  assert.match(description, /host[- ]absolute.*command/i);
+});
+
+it('run_command keeps host paths out of isolated command arguments', () => {
+  const commandTool = buildChatToolDefinitions().find(t => t.function.name === 'run_command')!.function;
+  assert.match(commandTool.description ?? '', /isolated project mount/i);
+  assert.match(commandTool.description ?? '', /host[- ]absolute.*command/i);
+  const params = commandTool.parameters as { properties: Record<string, { description?: string }> };
+  assert.match(params.properties.cwd?.description ?? '', /within project root/i);
+  assert.match(params.properties.cwd?.description ?? '', /project-relative/i);
 });

@@ -42,10 +42,12 @@ describe('observation compiler (shipped formatChatToolObservation path)', () => 
     }, { stdout: error, exitCode: 1 })
     assert.match(failed, /cwd: babel-cli/)
     assert.match(failed, /if tsx is installed in a nested package/i)
-    assert.match(failed, /set test_run\.cwd to that package directory/i)
+    assert.match(failed, /set test_run\.cwd to that package path relative to project root/i)
+    assert.match(failed, /relative to (?:the )?project root/i)
     assert.match(failed, /no project test files executed/i)
     assert.match(failed, /read_file.*package\.json/i)
     assert.match(failed, /test-file path relative to cwd/i)
+    assert.match(failed, /host[- ]absolute.*command/i)
     assert.match(failed, /summary: test loader unavailable/i)
     assert.doesNotMatch(failed, /structured failure\(s\)/)
     const unrelated = formatChatToolObservation({ type: 'test_run', command: 'node --import tsx --test helper.test.ts' },
@@ -82,7 +84,7 @@ describe('observation compiler (shipped formatChatToolObservation path)', () => 
       assert.match(result.stdout, /^# node:internal\/modules\/package_json_reader:\d+/m)
       assert.equal(observation.parserName, 'test_loader')
       assert.match(observation.summary, /no project test files executed/i)
-      assert.match(delivered, /set test_run\.cwd to that package directory/i)
+      assert.match(delivered, /set test_run\.cwd to that package path relative to project root/i)
     } finally {
       rmSync(root, { recursive: true, force: true })
     }

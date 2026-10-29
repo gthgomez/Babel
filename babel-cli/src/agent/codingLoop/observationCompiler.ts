@@ -124,7 +124,7 @@ export function formatCompiledObservation(compiled: CompiledObservation): string
     lines.push('test_loader_hint: A missing TypeScript loader may explain this module-resolution failure. Use read_file to inspect the relevant package.json and test script; if tsx is installed, retry with node --import tsx --test and the same test scope. If dependencies are nested, set test_run.cwd to the package directory and use a test-file path relative to cwd. The failed command did not verify the tests.')
   }
   if (compiled.parserName === 'test_loader' && compiled.exitCode !== null && compiled.exitCode !== 0) {
-    lines.push('test_loader_location_hint: Node could not resolve the tsx test loader; no project test files executed. Use read_file to inspect the relevant package.json and test script. If tsx is installed in a nested package, set test_run.cwd to that package directory and use a test-file path relative to cwd, or use the package test script. This failed launch is not a test assertion and does not make arbitrary shell commands authorized.')
+    lines.push('test_loader_location_hint: Node could not resolve the tsx test loader from the current working directory; no project test files executed. Use read_file to inspect the relevant package.json and test script. If tsx is installed in a nested package, set test_run.cwd to that package path relative to project root and keep the test-file path relative to cwd. Do not put host-absolute workspace paths in command arguments; use the cwd field for package selection. You may use the package test script. This failed launch is not a test assertion and does not make arbitrary shell commands authorized.')
   }
   if (compiled.rawSpillPath) {
     if (compiled.rawSpillPath === 'babel-artifact-unavailable') {

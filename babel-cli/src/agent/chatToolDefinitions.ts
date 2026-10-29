@@ -927,14 +927,14 @@ function buildAllChatToolDefinitions(): ToolDefinition[] {
       function: {
         name: 'run_command',
         description:
-          'Run an allowlisted command through the governed, shell-free executor. Quoted arguments are grouped; this is not a general shell. Set background=true for long-running jobs, then collect results with await_command. Background jobs use the same project scope and policy checks as foreground commands.',
+          'Run an allowlisted command through the governed, shell-free executor. Quoted arguments are grouped; this is not a general shell. Commands run against the isolated project mount; use cwd to select a project subdirectory and do not embed host-absolute checkout paths in command arguments. Set background=true for long-running jobs, then collect results with await_command. Background jobs use the same project scope and policy checks as foreground commands.',
         parameters: {
           type: 'object',
           properties: {
             command: { type: 'string', description: 'Executable and quote-aware arguments; no shell evaluation' },
             cwd: {
               type: 'string',
-              description: 'Working directory (must resolve within project root)',
+              description: 'Working directory within project root; prefer a project-relative path for subdirectories',
             },
             background: {
               type: 'boolean',
@@ -977,12 +977,12 @@ function buildAllChatToolDefinitions(): ToolDefinition[] {
       type: 'function',
       function: {
         name: 'test_run',
-        description: 'Run a test command with extended timeout (preferred for test suites). Uses the same authority policy as run_command; selecting this tool does not authorize arbitrary code. Recognized Node forms include node --test <test-file> and node --import tsx --test <test-file>. For tests inside a nested package, set cwd to the package directory and use a test-file path relative to that cwd. Preserve required imports and test scope. Commands still require isolation and all policy checks.',
+        description: 'Run a test command with extended timeout (preferred for test suites). Uses the same authority policy as run_command; selecting this tool does not authorize arbitrary code. Recognized Node forms include node --test <test-file> and node --import tsx --test <test-file>. For tests inside a nested package, set cwd to that package path relative to project root and use a test-file path relative to cwd. Keep command paths relative to cwd; do not put host-absolute workspace paths in command arguments. Preserve required imports and test scope. Commands still require isolation and all policy checks.',
         parameters: {
           type: 'object',
           properties: {
             command: { type: 'string', description: 'Test command to run' },
-            cwd: { type: 'string', description: 'Working directory' },
+            cwd: { type: 'string', description: 'Working directory within project root; use a project-relative package path for nested tests' },
             timeout_seconds: { type: 'number', description: 'Timeout in seconds' },
           },
           required: ['command'],
