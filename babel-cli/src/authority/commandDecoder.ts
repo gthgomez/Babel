@@ -348,8 +348,86 @@ const DANGEROUS_TOOL_PATTERNS: Array<{ re: RegExp; capability: CapabilityId; sem
   { re: /\bdelete\s+from\b/i, capability: 'destructive_data_delete', semantic: 'infrastructure_mutation' },
 ];
 
+const NON_EXECUTING_PYTHON_TEST_FLAGS = new Set(['-h', '--help', '--usage', '--version', '-V']);
+const NON_EXECUTING_PYTHON_TEST_PREFIXES = [
+  '--list', '--collect-only', '--show-config', '--print-config', '--dry-run', '--dryrun',
+];
+
 const TEST_RUNNER_RE =
-  /^(?:pytest|python3?\s+-m\s+pytest|npx\s+jest|npx\s+vitest|npx\s+mocha|jest\b|vitest\b|mocha\b|cargo\s+test|go\s+test|dotnet\s+test|tsx\s+--test|npm\s+test|npm\s+run\s+test|pnpm\s+(?:run\s+)?test|yarn\s+(?:run\s+)?test)/i;
+  /^(?:pytest(?:[ \t]|$)|npx\s+jest|npx\s+vitest|npx\s+mocha|jest\b|vitest\b|mocha\b|cargo\s+test|go\s+test|dotnet\s+test|tsx\s+--test|npm\s+test|npm\s+run\s+test|pnpm\s+(?:run\s+)?test|yarn\s+(?:run\s+)?test)/i;
+
+/** Keep this fast path out of shell constructs with cross-platform quote rules. */
+function hasPythonTestShellSyntax(command: string): boolean {
+  if (/%[^%\r\n]+%|![^!\r\n]+!/.test(command) || command.includes('^')) return true;
+  let quote: "'" | '"' | null = null;
+  for (let i = 0; i < command.length; i++) {
+    const ch = command[i]!;
+    const next = command[i + 1];
+    if (quote === "'") {
+      if (ch === '"') return true;
+      if ('&|;<>()\r\n'.includes(ch)) return true;
+      if (ch === "'") quote = null;
+      continue;
+    }
+    if (quote === '"') {
+      if (ch === '\\' && next !== undefined && ['$', '`', '"', '\n', '\r'].includes(next)) {
+        return true;
+      }
+      if (ch === '\\' && next !== undefined && next === '\\') {
+        i++;
+        continue;
+      }
+      if (ch === '"') {
+        quote = null;
+        continue;
+      }
+      if (ch === '`' || (ch === '$' && next === '(')) return true;
+      continue;
+    }
+    if (ch === '\\') {
+      if (next !== undefined && '$`&|;<>()\r\n'.includes(next)) return true;
+      i++;
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      quote = ch;
+      continue;
+    }
+    if (ch === '`' || (ch === '$' && next === '(') || '&|;<>()\r\n'.includes(ch)) return true;
+  }
+  return false;
+}
+
+/** Recognize only a direct Python test-module invocation, shared with receipt policy. */
+export function isPythonTestCommand(
+  command: string,
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  if (hasPythonTestShellSyntax(command)) return false;
+  const rawExecutableMatch = command.trim().match(/^(?:"([^"]+)"|'([^']+)'|(\S+))/);
+  const rawExecutable = rawExecutableMatch?.[1] ?? rawExecutableMatch?.[2] ?? rawExecutableMatch?.[3];
+  // Absolute or relative executable paths stay outside this narrow built-in
+  // route, even when a platform tokenizer would normalize them to python.exe.
+  if (!rawExecutable || /[\\/]/.test(rawExecutable)) return false;
+  try {
+    const tokens = parseCommandArgv(command, platform);
+    const executable = (tokens[0] ?? '').replace(/\.(?:exe|cmd|bat)$/i, '').toLowerCase();
+    if (!/^python(?:3(?:\.\d+)?)?$/.test(executable) && executable !== 'py') return false;
+    let moduleFlagIndex = 1;
+    if (executable === 'py' && /^-\d+(?:\.\d+)?$/.test(tokens[moduleFlagIndex] ?? '')) moduleFlagIndex++;
+    const moduleIndex = moduleFlagIndex + 1;
+    if (tokens[moduleFlagIndex] !== '-m'
+      || !['pytest', 'unittest', 'doctest'].includes(tokens[moduleIndex] ?? '')) return false;
+    const runnerArgs = tokens.slice(moduleIndex + 1);
+    return !runnerArgs.some(argument => {
+      const flag = argument.split('=', 1)[0] ?? argument;
+      return NON_EXECUTING_PYTHON_TEST_FLAGS.has(flag)
+        || NON_EXECUTING_PYTHON_TEST_PREFIXES.some(prefix => flag.startsWith(prefix));
+    });
+  } catch {
+    return false;
+  }
+}
 
 const NODE_TEST_VALUE_OPTIONS = new Set([
   '--test-concurrency', '--test-reporter', '--test-reporter-destination',
@@ -807,7 +885,8 @@ function decodeNonGit(tokens: string[], raw: string, original: string): DecodedC
 
   // Test / build / lint / typecheck runners execute repository-controlled
   // code. Capability stays local for lease usability; execution is isolated.
-  if ((base === 'node' && isNodeTestCommand(raw, original)) || TEST_RUNNER_RE.test(raw)) return cmd('run_tests', 'test_local', { requiresIsolation: true });
+  const pythonTestRunner = isPythonTestCommand(raw);
+  if ((base === 'node' && isNodeTestCommand(raw, original)) || pythonTestRunner || TEST_RUNNER_RE.test(raw)) return cmd('run_tests', 'test_local', { requiresIsolation: true });
   if (TYPECHECK_RE.test(raw)) return cmd('run_typecheck', 'test_local', { requiresIsolation: true });
   if (LINT_RE.test(raw)) return cmd('run_lint', 'test_local', { requiresIsolation: true });
   if (BUILD_RE.test(raw)) return cmd('run_build', 'test_local', { requiresIsolation: true });

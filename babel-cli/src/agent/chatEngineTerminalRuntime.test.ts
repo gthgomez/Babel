@@ -344,6 +344,43 @@ test('blocked recovery exhaustion delivers confirmed artifacts and exact no-veri
   assert.doesNotMatch(event.answer, /Repeated no-progress after recovery|VERIFIED_COMPLETE|tests passed/i)
 })
 
+test('blocked recovery with an unenumerated mutation cannot leave an unsupported success claim unqualified', t => {
+  const input = terminalInput(t)
+  input.snapshot.outcome.hasMutation = true
+  input.snapshot.outcome.readOnly = false
+  input.snapshot.evidence.observability.toolCallLog.push({
+    index: 1,
+    tool: 'run_command',
+    target: 'python -m doctest solution.py',
+    effect_status: 'confirmed_change',
+    mutation_paths: [],
+    exit_code: 0,
+  })
+  input.snapshot.presentation.conversation.push({
+    role: 'assistant',
+    content: 'Everything is fixed and verified; tests passed.',
+  })
+  input.effects.decideCompletion = requestedOutcome => ({
+    requestedOutcome,
+    finalOutcome: 'BLOCKED_POLICY',
+    allowed: false,
+    reason: 'recovery_exhausted',
+    evidenceRefs: [],
+    policyVersion: 'fixture',
+  })
+
+  const event = completeChatStream(input, 'Everything is fixed and verified; tests passed.')
+  assert.equal(event.type, 'done')
+  if (event.type !== 'done') return
+  assert.equal(event.outcome, 'BLOCKED_POLICY')
+  assert.match(event.answer, /^Completion status: BLOCKED_POLICY\./)
+  assert.match(event.answer, /host recorded a mutation but could not provide an enumerated artifact path/i)
+  assert.match(event.answer, /Model response \(task remains blocked\):[\s\S]*Everything is fixed and verified; tests passed\./)
+  assert.match(event.answer, /Verification status:[\s\S]*No authoritative verifier execution is recorded/i)
+  assert.ok(event.answer.indexOf('Completion status: BLOCKED_POLICY.') < event.answer.indexOf('Everything is fixed'))
+  assert.equal(input.snapshot.presentation.conversation.at(-1)?.content, event.answer)
+})
+
 test('unverified terminal disclosure does not invent artifact or verifier evidence', (t) => {
   const input = terminalInput(t)
   input.snapshot.outcome.hasMutation = true

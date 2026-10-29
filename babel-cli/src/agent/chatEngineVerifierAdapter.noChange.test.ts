@@ -59,6 +59,53 @@ function project(): string {
   return realpathSync.native(root)
 }
 
+test('Python test-module execution captures a bound authoritative receipt, but probes do not', async () => {
+  const root = project()
+  writeFileSync(join(root, 'solution.py'), '"""\n>>> 2 + 2\n4\n"""\n')
+  const executionContext = {
+    workspaceRoot: root,
+    taskId: 'python-doctest-fixture',
+    contractHash: 'fixture-contract',
+    workingDirectory: root,
+    environmentFingerprint: 'pinned-isolated-python',
+    targetSelectors: ['solution.py'],
+  }
+  const receipt = await captureChatVerifierReceipt({
+    projectRoot: root,
+    command: 'python3.11 -m doctest solution.py',
+    exitCode: 0,
+    summary: 'doctest passed',
+    stdout: '1 items passed all tests',
+    mutationPaths: ['solution.py'],
+    executionContext,
+    execution: { working_directory: root, environment_policy: 'pinned-isolated-python' },
+  })
+  assert.ok(receipt)
+  assert.equal(receipt.authority, true)
+  assert.equal(receipt.authoritySource, 'built_in_runner')
+  assert.equal(receipt.scope, 'targeted')
+  assert.deepEqual(receipt.argv, ['python3.11', '-m', 'doctest', 'solution.py'])
+  assert.deepEqual(receipt.executionContext, executionContext)
+  assert.equal(receipt.inputClosure?.mode, 'bound')
+
+  for (const command of [
+    'python3.11 -m unittest --version',
+    'python3.11 -m doctest --help',
+    'python -m unittest_extra test_solution',
+    'python -c "print(1)"',
+    'python -m unittest test_solution && echo passed',
+  ]) {
+    assert.equal(await captureChatVerifierReceipt({
+      projectRoot: root,
+      command,
+      exitCode: 0,
+      summary: 'synthetic green',
+      mutationPaths: ['solution.py'],
+      executionContext,
+    }), null, command)
+  }
+})
+
 for (const repositoryScope of [false, true]) {
   test(`live completion hash uses the verifier's ${repositoryScope ? 'repository' : 'file-set'} scope`, async () => {
     const root = repositoryScope ? largeProject() : project()

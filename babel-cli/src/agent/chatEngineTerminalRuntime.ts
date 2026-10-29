@@ -131,7 +131,20 @@ function formatTerminalAnswerForOutcome(input: {
 
   const artifactRefs = collectConfirmedMutationArtifactPaths(input.toolCallLog)
   if (artifactRefs.length === 0) {
-    if (blockedRecovery) return input.answer
+    if (blockedRecovery) {
+      return [
+        'Completion status: BLOCKED_POLICY.',
+        'A policy or recovery boundary stopped this attempt; task completion is not certified.',
+        'The host recorded a mutation but could not provide an enumerated artifact path.',
+        '',
+        'Model response (task remains blocked):',
+        '---',
+        input.answer,
+        '',
+        'Verification status:',
+        describeUnverifiedVerifierStatus(input.toolCallLog),
+      ].join('\n')
+    }
     return [
       UNVERIFIED_COMPLETION_MARKER,
       'The required task-acceptance evidence was not established. The model response below is retained as an unverified report and does not certify completion.',

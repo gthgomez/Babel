@@ -23,7 +23,7 @@ import {
 } from './verifierKernel.js';
 import { isCatOrTypeCommand } from './codingLoop/verificationStages.js';
 import { parseCommandArgv } from '../utils/commandArgv.js';
-import { isNodeTestCommand } from '../authority/commandDecoder.js';
+import { isNodeTestCommand, isPythonTestCommand } from '../authority/commandDecoder.js';
 
 /** Preserve ledger scope; never force targeted → full_suite (H5 live gate). */
 export function receiptScopeFromLedgerEntry(r: unknown): VerifierScope {
@@ -132,12 +132,6 @@ const AUTHORITATIVE_VERIFIER_PREFIXES = [
   'node --test',
   'npx jest',
   'npx vitest',
-  'python -m pytest',
-  'python -m unittest',
-  'python3 -m pytest',
-  'python3 -m unittest',
-  'py -m pytest',
-  'py -m unittest',
   'pytest',
   'cargo test',
   'go test',
@@ -255,6 +249,7 @@ export function matchesAuthoritativeVerifierAllowlist(
 
   const trimmed = command.trim();
   if (isNodeTestCommand(trimmed, trimmed)) return true;
+  if (isPythonTestCommand(trimmed)) return true;
 
   for (const prefix of AUTHORITATIVE_VERIFIER_PREFIXES) {
     if (lower.startsWith(prefix)) return true;

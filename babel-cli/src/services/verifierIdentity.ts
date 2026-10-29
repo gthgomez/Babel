@@ -270,14 +270,20 @@ function resolveFamily(executable: string, args: readonly string[]): string | nu
   if (executable === 'gradlew' && skipLeadingOptions(args)[0] === 'test') return 'gradle-test';
   if (executable === 'deno' && skipLeadingOptions(args)[0] === 'test') return 'deno-test';
   if (executable === 'dotnet' && skipLeadingOptions(args)[0] === 'test') return 'dotnet-test';
-  if (
-    (executable === 'python' || executable === 'python3' || executable === 'py') &&
-    args[0] === '-m' &&
-    (args[1] === 'pytest' || args[1] === 'unittest')
-  ) {
-    return args[1] === 'pytest' ? 'pytest' : 'unittest';
+  const pythonModuleIndex = pythonTestModuleIndex(executable, args);
+  if (pythonModuleIndex !== undefined) {
+    const module = args[pythonModuleIndex];
+    if (module === 'pytest' || module === 'unittest' || module === 'doctest') return module;
   }
   return null;
+}
+
+function pythonTestModuleIndex(executable: string, args: readonly string[]): number | undefined {
+  if (!/^python(?:3(?:\.\d+)?)?$/.test(executable) && executable !== 'py') return undefined;
+  let moduleFlagIndex = 0;
+  if (executable === 'py' && /^-\d+(?:\.\d+)?$/.test(args[0] ?? '')) moduleFlagIndex++;
+  if (args[moduleFlagIndex] !== '-m') return undefined;
+  return moduleFlagIndex + 1;
 }
 
 function extractTargetSelectors(
@@ -344,10 +350,9 @@ function argsAfterRunner(
   if (family === 'node-test') {
     return args.filter((a) => a !== '--test');
   }
-  if (family === 'pytest' && (executable === 'python' || executable === 'python3' || executable === 'py')) {
-    // python -m pytest ...
-    const mIdx = args.indexOf('-m');
-    if (mIdx >= 0) return args.slice(mIdx + 2);
+  if (family === 'pytest' || family === 'unittest' || family === 'doctest') {
+    const moduleIndex = pythonTestModuleIndex(executable, args);
+    if (moduleIndex !== undefined) return args.slice(moduleIndex + 1);
   }
   if (family === 'go-test' || family === 'cargo-test' || family === 'gradle-test' || family === 'deno-test' || family === 'dotnet-test') {
     const body = skipLeadingOptions(args);

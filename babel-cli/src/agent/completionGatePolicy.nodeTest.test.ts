@@ -40,3 +40,39 @@ test('recognized Node test preloads still reject non-executing and agent-owned p
     'node --import tsx --test src/example.test.ts || echo passed',
   ]) assert.equal(isAuthoritativeVerifierCommand(command), false, command);
 });
+
+test('Python test modules share isolated dispatch and authoritative receipt recognition', () => {
+  for (const command of [
+    'python -m doctest solution.py',
+    'python3.11 -m doctest solution.py -v',
+    'python -m unittest test_solution -v',
+    'python3.12 -m unittest discover -s tests',
+    'python -m pytest tests/',
+    'python.exe -m unittest test_solution',
+    'py -3.11 -m unittest test_solution',
+  ]) {
+    assert.equal(decodeCommand(command).capability, 'run_tests', command);
+    assert.equal(decodeCommand(command).requiresIsolation, true, command);
+    assert.equal(matchesAuthoritativeVerifierAllowlist(command), true, command);
+    assert.equal(isAuthoritativeVerifierCommand(command), true, command);
+  }
+});
+
+test('Python inline, unrelated, and shell-expanded commands cannot mint verifier authority', () => {
+  for (const command of [
+    'python -c "print(1)"',
+    'python -m doctestx solution.py',
+    'python -m unittest_extra test_solution',
+    'python -m doctest solution.py && python -c "print(1)"',
+    'python -m unittest %TEST_ARGS%',
+    'python3.11 -m doctest !TEST_ARGS!',
+    'python3.11 -m unittest --version',
+    'python3.11 -m unittest --version=true',
+    'python3.11 -m unittest --help',
+    'python3.11 -m doctest --usage',
+    'python3.11 -m pytest --collect-only',
+    String.raw`C:\Python311\python.exe -m doctest solution.py`,
+  ]) {
+    assert.equal(isAuthoritativeVerifierCommand(command), false, command);
+  }
+});

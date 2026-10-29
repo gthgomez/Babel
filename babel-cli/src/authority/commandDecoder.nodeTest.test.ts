@@ -4,7 +4,9 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { decodeCommand } from './commandDecoder.js';
+import { parseCommandArgv } from '../utils/commandArgv.js';
+import { decodeCommand, isPythonTestCommand } from './commandDecoder.js';
+import { actionRequestFromAction } from './actionRequest.js';
 import { decideWithLease } from './wire.js';
 import { createToolExecutor, executeActionWithPolicy } from '../agent/toolExecutor.js';
 
@@ -26,6 +28,75 @@ test('Node test classification accepts module preloads before the exact test fla
     assert.equal(decoded.semantic, 'test_local', command);
     assert.equal(decoded.requiresIsolation, true, command);
   }
+});
+
+test('Python standard-library test modules use the isolated run_tests capability', () => {
+  for (const command of [
+    'python -m doctest solution.py',
+    'python3 -m doctest solution.py -v',
+    'python3.11 -m doctest solution.py',
+    'python3.12 -m unittest test_solution -v',
+    'python.exe -m unittest test_solution -v',
+    'py -3.11 -m unittest test_solution -v',
+    'python -m pytest tests/',
+    'PYTHON3.11 -m doctest solution.py',
+    'python -m doctest "file&with;chars.py"',
+    "python -m doctest 'file with spaces.py'",
+    String.raw`python -m doctest C:\temp\solution.py`,
+  ]) {
+    const decoded = decodeCommand(command);
+    assert.equal(decoded.capability, 'run_tests', command);
+    assert.equal(decoded.semantic, 'test_local', command);
+    assert.equal(decoded.requiresIsolation, true, command);
+    assert.equal(actionRequestFromAction({ type: 'test_run', command })?.capability, 'run_tests', command);
+    const action = { type: 'test_run' as const, command };
+    assert.equal(decideWithLease(action, 'workspace_write', { lease: null }).decision, 'deny', command);
+    assert.equal(decideWithLease(action, 'workspace_write', { lease: null, isolationAvailable: true }).decision, 'allow', command);
+  }
+});
+
+test('Python eval and unrelated modules remain arbitrary code', () => {
+  for (const command of [
+    'python -c "print(1)"',
+    'python3.11 -c "import os; print(os.getcwd())"',
+    'python -m http.server',
+    'python3.11 -m pip install package',
+    'python -m doctestx solution.py',
+    'python3.11 -m unittest_extra test_solution',
+    'python -m pytest_extra tests/',
+    'python -m Unittest test_solution',
+    'python -m Doctest solution.py',
+    'python -m Pytest tests/',
+    'pytest_extra tests/',
+    'pytest\npython -c "print(1)"',
+    'python -m unittest\npython -c "print(1)"',
+    'python -m unittest \npython -c "print(1)"',
+    'python -m unittest $(git push origin main)',
+    'python -m unittest "$(git push origin main)"',
+    String.raw`python -m unittest "\$(git push origin main)"`,
+    'python -m unittest `git push origin main`',
+    'python -m unittest & git push origin main',
+    'python -m unittest | git push origin main',
+    String.raw`python -m unittest \& git push origin main`,
+    'python -m unittest %X%',
+    'python -m unittest "%X%"',
+    'python -m doctest !X!',
+    "python -m unittest 'file & git push origin main'",
+    String.raw`python -m unittest 'foo " bar' "baz & git push origin main"`,
+    String.raw`python -m unittest ^"foo & git push origin main"`,
+    'python -m doctest solution.py && python -c "import os; print(os.getcwd())"',
+    String.raw`C:\Python311\python.exe -m doctest solution.py`,
+  ]) {
+    const decoded = decodeCommand(command);
+    assert.notEqual(decoded.capability, 'run_tests', command);
+    assert.notEqual(actionRequestFromAction({ type: 'test_run', command })?.capability, 'run_tests', command);
+  }
+});
+
+test('absolute Windows interpreter paths stay outside the Python test fast path', () => {
+  const command = String.raw`C:\Python311\python.exe -m doctest solution.py`;
+  assert.equal(parseCommandArgv(command, 'win32')[0], String.raw`C:\Python311\python.exe`);
+  assert.equal(isPythonTestCommand(command, 'win32'), false);
 });
 
 test('Node test classification refuses wrapper quote loss, escaped quotes and mode overrides', () => {
