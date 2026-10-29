@@ -711,6 +711,8 @@ const HOST_PROCESS_SURFACE = new Set([
   'agent/breakerContract.ts',
   // Recovery identity binds the live worktree using fixed-argument Git queries.
   'agent/codingLoop/recoveryIdentity.ts',
+  // Verifier receipt capture uses bounded fixed-argument Git queries for unborn worktrees.
+  'agent/chatEngineVerifierAdapter.ts',
   // Process-tree termination uses the fixed System32 taskkill executable on Windows.
   'processTree.ts',
   // Compensation pins Windows directories with a fixed helper and encoded path data.

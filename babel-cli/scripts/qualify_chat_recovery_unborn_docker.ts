@@ -15,6 +15,8 @@ import type { ToolContext } from '../src/localTools.js'
 import { recordToolProposed, recordToolTerminal } from '../src/agent/sessionEvents.js'
 import type { WorkingState } from '../src/agent/codingLoop/workingState.js'
 import { recoveryObservationId } from '../src/agent/codingLoop/recoveryPlan.js'
+import { resolveExecutorDryRun } from '../src/config/dryRun.js'
+import { readRuntimeMode } from '../src/config/runtimeMode.js'
 
 const IMAGE = 'docker.io/library/python@sha256:061c190f3d5815b341a18dfe8a45771f8ba68c15a607ea56997fde3009ac4eec'
 const names = [
@@ -25,6 +27,9 @@ const names = [
 
 async function qualify(): Promise<void> {
   assert.equal(process.env['BABEL_RUN_DOCKER_RECOVERY_QUALIFICATION'], '1', 'explicit local qualification opt-in is required')
+  assert.equal(process.env['BABEL_SHADOW_ROOT']?.trim() ?? '', '',
+    'qualification cannot validate shadow writes because verifier commands run against the project workspace')
+  assert.equal(readRuntimeMode(), 'act', 'qualification requires Act Mode')
   const image = spawnSync('docker', ['image', 'inspect', IMAGE, '--format', '{{.Id}}'], { encoding: 'utf8' })
   assert.equal(image.status, 0, `pinned image must already exist locally: ${image.stderr}`)
   assert.match(image.stdout.trim(), /^sha256:/)
@@ -43,6 +48,8 @@ async function qualify(): Promise<void> {
     delete process.env['BABEL_DOCKER_DISABLE']
     delete process.env['BABEL_ALLOW_HOST_FALLBACK']
     delete process.env['BABEL_DOCKER_HOST_NETWORK']
+    assert.equal(resolveExecutorDryRun().dryRun, false,
+      'qualification must have an effective live mutation opt-in after BABEL_LIVE is set')
 
     execFileSync('git', ['init', '--quiet'], { cwd: root })
     const original = 'def answer():\n    """Return the expected value.\n\n    >>> answer()\n    1\n    """\n    return 0\n'

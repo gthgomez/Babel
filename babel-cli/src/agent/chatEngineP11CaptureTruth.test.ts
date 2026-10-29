@@ -161,6 +161,43 @@ test('recovery binding changes with validated Docker execution arguments and fai
   }
 })
 
+test('recovery binding changes when effective dry-run or runtime mode changes', t => {
+  const { authority } = fixture(t)
+  const keys = ['BABEL_DRY_RUN', 'BABEL_DRY_RUN_SOURCE', 'BABEL_LIVE', 'BABEL_RUNTIME_MODE', 'BABEL_SHADOW_ROOT']
+  const previous = keys.map(key => process.env[key])
+  try {
+    delete process.env['BABEL_SHADOW_ROOT']
+    delete process.env['BABEL_LIVE']
+    process.env['BABEL_DRY_RUN'] = 'false'
+    process.env['BABEL_DRY_RUN_SOURCE'] = 'session'
+    process.env['BABEL_RUNTIME_MODE'] = 'act'
+    const liveAct = authority.currentRecoveryBinding()
+    assert.ok(liveAct)
+
+    process.env['BABEL_DRY_RUN'] = 'true'
+    const dryRunAct = authority.currentRecoveryBinding()
+    assert.ok(dryRunAct)
+    assert.notEqual(dryRunAct.executionContextHash, liveAct.executionContextHash,
+      'a dry-run toggle cannot reuse recovery evidence from an executing candidate')
+
+    process.env['BABEL_DRY_RUN'] = 'false'
+    process.env['BABEL_RUNTIME_MODE'] = 'plan'
+    const livePlan = authority.currentRecoveryBinding()
+    assert.ok(livePlan)
+    assert.notEqual(livePlan.executionContextHash, liveAct.executionContextHash,
+      'Plan Mode and Act Mode cannot share recovery evidence')
+
+    process.env['BABEL_SHADOW_ROOT'] = join(tmpdir(), 'unsupported-shadow-root')
+    assert.equal(authority.currentRecoveryBinding(), null,
+      'shadow candidates cannot receive a recovery binding')
+  } finally {
+    keys.forEach((key, index) => {
+      if (previous[index] === undefined) delete process.env[key]
+      else process.env[key] = previous[index]
+    })
+  }
+})
+
 for (const failure of ['oversized input', 'credential metadata', 'unreadable input'] as const) {
   test(`${failure}: conversation continues while physical recovery proof stays unavailable`, async t => {
     const { projectRoot, authority, host, parity } = fixture(t)

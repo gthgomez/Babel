@@ -522,6 +522,96 @@ test('R1 no-target red localizes through a related read before admitting a plan'
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+test('recovery evidence cannot authorize an edit after switching from the project tree to shadow content', async () => {
+  const storage = mkdtempSync(join(tmpdir(), 'babel-recovery-shadow-switch-'));
+  const root = join(storage, 'project');
+  const firstShadow = join(storage, 'shadow-one');
+  const secondShadow = join(storage, 'shadow-two');
+  const file = 'src/parser.js';
+  const baseBytes = 'export function parseToken() { return 1; }\n';
+  const overlayBytes = '// overlay-only context changed after the project read\nexport function parseToken() { return 1; }\n';
+  const priorShadow = process.env['BABEL_SHADOW_ROOT'];
+  const priorDryRun = process.env['BABEL_DRY_RUN'];
+  const priorLive = process.env['BABEL_LIVE'];
+  const priorDryRunSource = process.env['BABEL_DRY_RUN_SOURCE'];
+  mkdirSync(join(root, 'src'), { recursive: true });
+  mkdirSync(join(firstShadow, 'src'), { recursive: true });
+  mkdirSync(join(secondShadow, 'src'), { recursive: true });
+  writeFileSync(join(root, file), baseBytes);
+  writeFileSync(join(firstShadow, file), overlayBytes);
+  writeFileSync(join(secondShadow, file), overlayBytes);
+  execFileSync('git', ['init', '-q'], { cwd: root, windowsHide: true });
+  execFileSync('git', ['add', file], { cwd: root, windowsHide: true });
+  commitFixture(root);
+  delete process.env['BABEL_SHADOW_ROOT'];
+  process.env['BABEL_DRY_RUN'] = 'true';
+  delete process.env['BABEL_LIVE'];
+  delete process.env['BABEL_DRY_RUN_SOURCE'];
+  try {
+    const engine = new ChatEngine({ task: 'repair the parser failure', projectRoot: root });
+    const context = { agentId: 'test', runId: 'test', runDir: storage, babelRoot: root, projectRoot: root };
+    const binding = (engine as any).currentRecoveryBinding();
+    assert.ok(binding, 'the ordinary project tree supports recovery binding');
+    (engine as any).workingState = ingestVerifierResult({
+      state: createWorkingState('repair the parser failure'),
+      recoveryBinding: binding,
+      recoveryProjectRoot: root,
+      tool: 'test_run',
+      target: 'npm test -- parser',
+      exitCode: 1,
+      stdout: 'FAIL tests failed: parser adds values',
+      stderr: '',
+      summary: 'same assertion remains red',
+    }).state;
+    const read = await (engine as any).executeOneAction(
+      { type: 'read_file', path: file }, context, {}, { index: 0, ownerGeneration: 0 },
+    );
+    assert.match(read.observation, /return 1/);
+    const gate = (engine as any).workingState.recoveryGate;
+    assert.equal(gate.satisfied, true, 'a delivered project-tree read satisfies the bound candidate');
+    const plan = {
+      schemaVersion: 1, failureSignature: gate.failureSignature,
+      workspaceRevision: gate.binding.workspaceRevision,
+      hypothesisClass: 'logic', targetIdentities: [file], actionFamily: 'str_replace',
+      criterionId: 'npm test -- parser',
+      supportingObservationIds: gate.observedKeys.map(recoveryObservationId),
+    };
+
+    writeFileSync(join(firstShadow, file), overlayBytes);
+    process.env['BABEL_SHADOW_ROOT'] = firstShadow;
+    assert.equal((engine as any).currentRecoveryBinding(), null,
+      'recovery binding fails closed when reads/writes select a shadow overlay');
+    process.env['BABEL_SHADOW_ROOT'] = secondShadow;
+    assert.equal((engine as any).currentRecoveryBinding(), null,
+      'a second overlay root cannot reuse project-tree recovery evidence');
+    const changed = await (engine as any).executeOneAction(
+      { type: 'str_replace', file_path: file, old_str: 'return 1', new_str: 'return 2', repair_plan: plan },
+      context, {}, { index: 1, ownerGeneration: 0 },
+    );
+    assert.match(changed.observation, /RECOVERY_SHADOW_CONTEXT_UNSUPPORTED/);
+    assert.match(changed.observation, /reads and writes use the shadow overlay.*verifier commands execute against the project workspace/);
+    assert.equal(readFileSync(join(secondShadow, file), 'utf8'), overlayBytes,
+      'the stale plan cannot overwrite content in the newly selected shadow candidate');
+    assert.equal(readFileSync(join(root, file), 'utf8'), baseBytes,
+      'the configured shadow write does not escape into the project workspace');
+    assert.equal(readFileSync(join(firstShadow, file), 'utf8'), overlayBytes,
+      'the write does not escape into the previous overlay');
+    const report = (engine as any).buildVerifierBlockedReport('verification remains incomplete');
+    assert.match(report.missing, /shadow overlay.*verifier commands execute against the project workspace/,
+      'terminal guidance explains why recovery stopped instead of asking for an impossible reread');
+  } finally {
+    if (priorShadow === undefined) delete process.env['BABEL_SHADOW_ROOT'];
+    else process.env['BABEL_SHADOW_ROOT'] = priorShadow;
+    if (priorDryRun === undefined) delete process.env['BABEL_DRY_RUN'];
+    else process.env['BABEL_DRY_RUN'] = priorDryRun;
+    if (priorLive === undefined) delete process.env['BABEL_LIVE'];
+    else process.env['BABEL_LIVE'] = priorLive;
+    if (priorDryRunSource === undefined) delete process.env['BABEL_DRY_RUN_SOURCE'];
+    else process.env['BABEL_DRY_RUN_SOURCE'] = priorDryRunSource;
+    rmSync(storage, { recursive: true, force: true });
+  }
+});
+
 test('PR242: proven old_str mismatch permits one fresh corrected repair through the native executor', async () => {
   const root = mkdtempSync(join(tmpdir(), 'babel-pr242-no-effect-'));
   try {

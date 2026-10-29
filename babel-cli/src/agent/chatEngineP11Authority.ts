@@ -38,8 +38,10 @@ import { recordWorkingStateSnapshot } from './sessionEvents.js';
 import type { WorkingState } from './codingLoop/workingState.js';
 import type { RecoveryCandidateBinding } from './codingLoop/index.js';
 import { repoRootFingerprint } from './threadEventLog.js';
-import { recoveryWorkspaceRevision } from './codingLoop/recoveryIdentity.js';
+import { recoveryBindingUnavailableReason, recoveryWorkspaceRevision } from './codingLoop/recoveryIdentity.js';
 import { validateDockerIsolationArgs } from '../config/dockerIsolationArgs.js';
+import { resolveExecutorDryRun } from '../config/dryRun.js';
+import { readRuntimeMode } from '../config/runtimeMode.js';
 
 const CHAT_ADMISSION_TOOL_SCHEMA_VERSION = 'chat-tools-v1';
 const PENDING_COMPILED_REQUEST_IDENTITY = 'pending-compiled-request-identity';
@@ -406,7 +408,7 @@ export class ChatEngineP11Authority {
   }
 
   currentRecoveryBinding(): RecoveryCandidateBinding | null {
-    if(!this.host.options.projectRoot)return null;
+    if(!this.host.options.projectRoot || recoveryBindingUnavailableReason())return null;
     try {
       const root = canonicalizeContained(this.host.options.projectRoot);
       const revision = recoveryWorkspaceRevision(root);
@@ -416,10 +418,14 @@ export class ChatEngineP11Authority {
       const sessionId = this.host.parity.sessionEvents.session_id;
       const dockerExtraArgs = validateDockerIsolationArgs();
       if (!dockerExtraArgs.ok) return null;
+      const dryRun = resolveExecutorDryRun();
       const executionContextHash = createHash('sha256').update(JSON.stringify({
         kind: 'recovery-execution-context-v1',
         sessionId,
         executionProfile: this.host.executionProfile,
+        runtimeMode: readRuntimeMode(),
+        effectiveDryRun: dryRun.dryRun,
+        dryRunSource: dryRun.source,
         configuredExecutionProfile: process.env['BABEL_EXECUTION_PROFILE'] ?? null,
         benchmarkImage: process.env['BABEL_BENCHMARK_DOCKER_IMAGE'] ?? null,
         dockerExtraArgs: dockerExtraArgs.args,

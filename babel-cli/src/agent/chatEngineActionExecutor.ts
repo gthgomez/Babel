@@ -32,7 +32,7 @@ import {
   formatEditReflectionNote,
 } from "./codingLoop/reflection.js";
 import type { EditFormatId } from "./codingLoop/editFormatPolicy.js";
-import { recoveryTargetIdentity } from "./codingLoop/recoveryIdentity.js";
+import { recoveryBindingUnavailableReason, recoveryTargetIdentity } from "./codingLoop/recoveryIdentity.js";
 import {
   bindCapabilityRecoveryScope,
   bindIsolationPrerequisiteScope,
@@ -383,9 +383,12 @@ export class ChatEngineActionExecutor {
           ((mutationAttempt || shellMutationAttempt) && planRequired) ||
           equivalentRedMutation)
       ) {
+        const unavailableBindingReason = recoveryBindingUnavailableReason();
         const detail = [
           driftedCandidate
-            ? "[RECOVERY_CANDIDATE_DRIFT]"
+            ? unavailableBindingReason
+              ? "[RECOVERY_SHADOW_CONTEXT_UNSUPPORTED]"
+              : "[RECOVERY_CANDIDATE_DRIFT]"
             : equivalentRedMutation
               ? "[RECOVERY_STRATEGY_CHANGE_REQUIRED]"
               : planRequired
@@ -393,7 +396,7 @@ export class ChatEngineActionExecutor {
                 : "[RECOVERY_EVIDENCE_REQUIRED]",
           `failure_signature=${recoveryGate.failureSignature}`,
           driftedCandidate
-            ? "The workspace differs from the failed candidate; rerun the verifier before repairing."
+            ? unavailableBindingReason ?? "The workspace differs from the failed candidate; rerun the verifier before repairing."
             : equivalentRedMutation
               ? "The proposed edit repeats the failed operation."
               : planRequired

@@ -193,7 +193,7 @@ import {
   type WorkingState,
 } from "./codingLoop/index.js";
 
-import { recoveryTargetIdentity } from "./codingLoop/recoveryIdentity.js";
+import { recoveryBindingUnavailableReason, recoveryTargetIdentity } from "./codingLoop/recoveryIdentity.js";
 
 import {
   beginLocalizationCall,
@@ -4410,10 +4410,10 @@ export class ChatEngine {
       const records = gate.readRecords ?? [];
       const failed = this.workingState.settledFailedVerifier;
       return { schema_version: 1, status: "BLOCKED", reason, reason_code: "verification_failed", cause_class: "verification",
-        missing: gate.failureSignature === "unbound-red-verifier" || !gate.binding
+        missing: recoveryBindingUnavailableReason() ?? (gate.failureSignature === "unbound-red-verifier" || !gate.binding
           ? "Re-observe the exact failed verifier through its governed execution context to bind the current failure."
           : records.length ? "A concrete repair plan referencing current delivered reads for every existing edit target, followed by verification."
-            : "Fresh delivered reads of the failure and relevant implementation; diagnostic candidates are inspection hints.",
+            : "Fresh delivered reads of the failure and relevant implementation; diagnostic candidates are inspection hints."),
         checked: records.length ? records.slice(-4).map(record => ({ action: record.tool, target: record.target,
           finding: `Retained read ${record.id}: lines ${record.window.startLine}-${record.window.endLine} of ${record.window.totalLines}; full file=${record.window.completeFile}.` }))
           : [{ action: failed ? "test_run" : "recovery_gate", target: failed?.command ?? this.workingState.lastVerifier?.identity ?? "failure",
