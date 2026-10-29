@@ -33,7 +33,7 @@ test('an earlier mutation preserves direct non-test recovery without assertion l
   state.lastMutation={path:'source.ts',at:1,fingerprint:'fixture-prior-edit'}
   const result=ingestVerifierResult({state,tool:'test_run',target:'npm run typecheck',exitCode:1,
     stdout:'',stderr:"source.ts(1,14): error TS2322: Type 'number' is not assignable to type 'string'.",
-    summary:'typecheck failed',recoveryProjectRoot:root,recoveryBinding:{schemaVersion:1,taskId:'fixture-task',contractHash:'fixture-contract',repositoryIdentity:'fixture-repo',workspaceRevision:'fixture-revision'}})
+    summary:'typecheck failed',recoveryProjectRoot:root,recoveryBinding:{schemaVersion:2,taskId:'fixture-task',contractHash:'fixture-contract',sessionId:'fixture-session',repositoryIdentity:'fixture-repo',workspaceRevision:'fixture-revision',executionContextHash:'fixture-context'}})
   assert.ok(result.state.recoveryGate?.failingTargets?.includes('source.ts'))
   assert.equal(result.state.recoveryGate?.satisfied,false,'the prior edit alone is not fresh recovery evidence')
   assert.equal(result.state.localization,undefined,'preserve direct recovery for an already implicated non-test target')

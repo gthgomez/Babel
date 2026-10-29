@@ -175,6 +175,7 @@ export function dispatchChatEvent(
       usage: globalCostTracker.getSessionSummary(),
       conversation: [],
       ...(event.toolCalls !== undefined ? { toolCalls: event.toolCalls } : {}),
+      ...(event.toolCallAggregates !== undefined ? { toolCallAggregates: event.toolCallAggregates } : {}),
       ...(event.runDir !== undefined ? { runDir: event.runDir } : {}),
       ...(event.turnTelemetry !== undefined ? { turnTelemetry: event.turnTelemetry } : {}),
       ...(event.costBudget !== undefined ? { costBudget: event.costBudget } : {}),
@@ -239,6 +240,7 @@ export function terminalResultFromDoneEvent(
     reason_code?: ChatResult['reason_code'];
     cause_class?: ChatResult['cause_class'];
     gatePolicy?: ChatResult['gatePolicy'];
+    toolCallAggregates?: ChatResult['toolCallAggregates'];
   },
 ): ChatResult {
   // Prefer the engine's authoritative TerminalOutcome. Only recompute when
@@ -289,5 +291,6 @@ export function terminalResultFromDoneEvent(
     ...(opts?.reason_code !== undefined ? { reason_code: opts.reason_code } : {}),
     ...(opts?.cause_class !== undefined ? { cause_class: opts.cause_class } : {}),
     ...(opts?.gatePolicy != null ? { gatePolicy: opts.gatePolicy } : {}),
+    ...(opts?.toolCallAggregates !== undefined ? { toolCallAggregates: opts.toolCallAggregates } : {}),
   };
 }

@@ -138,6 +138,29 @@ test('physical recovery proof stays separate from a conversation checkpoint', as
   }).status, 'valid')
 })
 
+test('recovery binding changes with validated Docker execution arguments and fails closed on invalid arguments', t => {
+  const { authority } = fixture(t)
+  const previous = process.env['BABEL_BENCHMARK_DOCKER_EXTRA_ARGS']
+  try {
+    process.env['BABEL_BENCHMARK_DOCKER_EXTRA_ARGS'] = '--user 1000:1000'
+    const userBound = authority.currentRecoveryBinding()
+    assert.ok(userBound)
+
+    process.env['BABEL_BENCHMARK_DOCKER_EXTRA_ARGS'] = '--read-only'
+    const readOnlyBound = authority.currentRecoveryBinding()
+    assert.ok(readOnlyBound)
+    assert.notEqual(readOnlyBound.executionContextHash, userBound.executionContextHash,
+      'a different validated runner configuration must not reuse recovery evidence')
+
+    process.env['BABEL_BENCHMARK_DOCKER_EXTRA_ARGS'] = '--privileged'
+    assert.equal(authority.currentRecoveryBinding(), null,
+      'unsafe runner arguments cannot mint a recovery binding')
+  } finally {
+    if (previous === undefined) delete process.env['BABEL_BENCHMARK_DOCKER_EXTRA_ARGS']
+    else process.env['BABEL_BENCHMARK_DOCKER_EXTRA_ARGS'] = previous
+  }
+})
+
 for (const failure of ['oversized input', 'credential metadata', 'unreadable input'] as const) {
   test(`${failure}: conversation continues while physical recovery proof stays unavailable`, async t => {
     const { projectRoot, authority, host, parity } = fixture(t)
@@ -189,7 +212,7 @@ for (const failure of ['oversized input', 'credential metadata', 'unreadable inp
 test('unborn Git HEAD supports conversation without complete workspace authority', async t => {
   const { authority, host, parity } = fixture(t, false)
   assert.equal(authority.buildP11Sources(route)?.workspace, null)
-  assert.equal(authority.currentRecoveryBinding() === null, true)
+  assert.ok(authority.currentRecoveryBinding(), 'a physically captured unborn Git worktree can bind recovery evidence')
   assert.equal(await authority.installP11ContextCheckpoint(route), true)
   assert.equal(host.p11InstallBlock, null)
   assert.equal(parity.contextCheckpoint?.population.workspace_revision_current, false)

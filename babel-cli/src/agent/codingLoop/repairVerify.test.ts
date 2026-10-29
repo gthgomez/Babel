@@ -84,6 +84,21 @@ describe('failure surface + working state + V0-V3 (shipped)', () => {
     assert.ok(build.kind === 'BUILD_FAILURE' || build.kind === 'UNKNOWN_FAILURE' || build.kind === 'TYPECHECK_FAILURE')
   })
 
+  test('a localized Python doctest red stays a test failure and preserves the example mismatch', () => {
+    const observation = compileObservation({
+      tool: 'test_run', target: 'python -m doctest solution.py -v', command: 'python -m doctest solution.py -v',
+      exitCode: 1, stdout: [
+        'File "solution.py", line 4, in answer', 'Failed example:', '    answer()', 'Expected:', '    1', 'Got:', '    0',
+      ].join('\n'), stderr: '',
+    })
+    const surface = classifyFailureSurface({ observation })
+    assert.equal(observation.parserName, 'doctest')
+    assert.equal(surface.kind, 'TEST_FAILURE')
+    assert.deepEqual(surface.failingFiles, ['solution.py'])
+    assert.deepEqual(surface.failingTests, ['answer'])
+    assert.match(surface.errorSignature, /expected 1, got 0/)
+  })
+
   test('diagnosis/hypothesis can change after new evidence; same error with no evidence is detected', () => {
     let state = createWorkingState('fix add')
     const first = surfaceFrom('FAIL a.test.ts\n  ● add\n    Expected: 3', '', 'npm test')

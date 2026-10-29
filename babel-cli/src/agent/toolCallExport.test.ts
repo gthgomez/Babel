@@ -24,6 +24,7 @@ void describe('computeToolCallAggregates', () => {
       tool_call_count: 0,
       write_count: 0,
       verifier_attempt_count: 0,
+      verifier_execution_count: 0,
     });
   });
 
@@ -62,6 +63,18 @@ void describe('computeToolCallAggregates', () => {
     assert.equal(result.tool_call_count, 4);
     assert.equal(result.write_count, 0);
     assert.equal(result.verifier_attempt_count, 3);
+    assert.equal(result.verifier_execution_count, 0, 'tool names alone do not prove a process started');
+  });
+
+  void it('separates verifier tool invocations from host-attested executions', () => {
+    const result = computeToolCallAggregates([
+      { tool: 'run_command', error: 'DENY_MISSING_AUTHORITY', preDispatchNoEffect: true },
+      { tool: 'test_run', verifierExecuted: false },
+      { tool: 'test_run', verifierExecuted: true },
+      { tool: 'read_file', verifierExecuted: true },
+    ]);
+    assert.equal(result.verifier_attempt_count, 3, 'legacy field counts verifier-tool invocation attempts');
+    assert.equal(result.verifier_execution_count, 1, 'only a host-attested started verifier counts as execution');
   });
 
   void it('counts str_replace as a write tool', () => {

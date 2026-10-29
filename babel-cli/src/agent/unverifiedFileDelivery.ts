@@ -66,8 +66,10 @@ export function describeUnverifiedVerifierStatus(toolCallLog: readonly GateToolL
   const facts: string[] = []
   if (denied.length > 0) facts.push('A command was denied before dispatch; it did not run and provides no test result.')
   if (last) {
-    facts.push(last.exit_code !== undefined
-      ? `The latest authoritative verifier invocation returned exit status ${last.exit_code}; no passing current verifier result was accepted.`
+    facts.push(last.exit_code === 0
+      ? 'The latest authoritative verifier invocation exited with status 0; this result alone does not establish that all task-acceptance requirements are satisfied.'
+      : last.exit_code !== undefined
+        ? `The latest authoritative verifier invocation returned exit status ${last.exit_code}; no passing current verifier result was accepted.`
       : 'An authoritative verifier invocation was recorded, but no current passing verifier result was accepted.')
   }
   const lastProbe = probes.at(-1)

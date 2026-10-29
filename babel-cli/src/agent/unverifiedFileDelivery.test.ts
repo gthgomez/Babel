@@ -72,6 +72,12 @@ test('host distinguishes a pre-dispatch verifier denial from an executed failure
   assert.match(describeUnverifiedVerifierStatus([
     { tool: 'test_run', target: 'python -m unittest test_solution -v', exit_code: 1, verifierExecuted: true },
   ]), /verifier invocation returned exit status 1/)
+  const greenButIncomplete = describeUnverifiedVerifierStatus([
+    { tool: 'test_run', target: 'python -m doctest solution.py -v', exit_code: 0, verifierExecuted: true },
+  ])
+  assert.match(greenButIncomplete, /verifier invocation exited with status 0/i)
+  assert.match(greenButIncomplete, /does not establish that all task-acceptance requirements are satisfied/i)
+  assert.doesNotMatch(greenButIncomplete, /no passing current verifier result was accepted/i)
   assert.match(describeUnverifiedVerifierStatus([
     { tool: 'run_command', target: 'python -c "assert True"', preDispatchNoEffect: true, verifierExecuted: false },
     { tool: 'test_run', target: 'python -m pytest solution.py', exit_code: 1, verifierExecuted: true },

@@ -4,7 +4,7 @@ import { decodeCommand } from '../../authority/commandDecoder.js'
 import type { VerifierEvidenceOwner } from '../../executor/contracts.js'
 import { parseCommandArgv } from '../../utils/commandArgv.js'
 import { satisfiesVerifierRequirement, verifierExecutionFingerprint } from '../../services/verifierIdentity.js'
-import type { RecoveryCandidateBinding } from './workingState.js'
+import { sameRecoveryBinding, type RecoveryCandidateBinding } from './workingState.js'
 
 /** Host execution history only: never a completion receipt or edit permit. */
 export interface SettledFailedVerifierExecution {
@@ -37,8 +37,8 @@ export function validFailedVerifierExecution(value: unknown): value is SettledFa
     Array.isArray(d.argv) && d.argv.every(arg => typeof arg === 'string') && JSON.stringify(d.argv) === JSON.stringify(parseCommandArgv(d.command)) &&
     !!d.owner && ['workspaceRoot', 'taskId', 'contractHash', 'sessionId'].every(key => typeof d.owner[key as keyof VerifierEvidenceOwner] === 'string' && d.owner[key as keyof VerifierEvidenceOwner].length > 0) &&
     typeof d.cwd === 'string' && d.cwd.length > 0 && typeof d.environmentFingerprint === 'string' && d.environmentFingerprint.length > 0 &&
-    !!d.candidate && d.candidate.schemaVersion === 1 && ['taskId', 'contractHash', 'repositoryIdentity', 'workspaceRevision'].every(key => typeof d.candidate[key as keyof RecoveryCandidateBinding] === 'string' && String(d.candidate[key as keyof RecoveryCandidateBinding]).length > 0) &&
-    d.candidate.taskId === d.owner.taskId && d.candidate.contractHash === d.owner.contractHash &&
+    !!d.candidate && sameRecoveryBinding(d.candidate, d.candidate) &&
+    d.candidate.taskId === d.owner.taskId && d.candidate.contractHash === d.owner.contractHash && d.candidate.sessionId === d.owner.sessionId &&
     typeof d.toolCallId === 'string' && d.toolCallId.length > 0 && !!d.order && d.order.sessionId === d.owner.sessionId && Number.isSafeInteger(d.order.seq) && d.order.seq >= 0 &&
     d.executionFingerprint === failedVerifierContextKey(d.command, d.owner, d.cwd, d.environmentFingerprint) &&
     decodeCommand(d.command).capability === 'run_tests'

@@ -294,6 +294,36 @@ test('unverified terminal replaces recovery-only model text with host-grounded a
   assert.doesNotMatch(event.answer, /tests passed/i)
 })
 
+test('unverified delivery reports a recorded green verifier without claiming all acceptance is satisfied', t => {
+  const input = terminalInput(t)
+  input.snapshot.outcome.hasMutation = true
+  input.snapshot.outcome.readOnly = false
+  input.snapshot.evidence.observability.toolCallLog.push(
+    { index: 1, tool: 'write_file', target: 'solution.py', mutation_paths: ['solution.py'],
+      effect_status: 'confirmed_change', exit_code: 0 },
+    { index: 2, tool: 'read_file', target: 'solution.py', exit_code: 0 },
+    { index: 3, tool: 'test_run', target: 'python -m doctest solution.py -v', exit_code: 0,
+      verifierExecuted: true },
+  )
+  input.effects.decideCompletion = requestedOutcome => ({
+    requestedOutcome,
+    finalOutcome: 'UNVERIFIED_PATCH',
+    allowed: false,
+    reason: 'completion_downgraded:acceptance_unverified',
+    evidenceRefs: [],
+    policyVersion: 'fixture',
+  })
+
+  const event = completeChatStream(input, 'The doctest exited 0; task completion remains uncertified.')
+  assert.equal(event.type, 'done')
+  if (event.type !== 'done') return
+  assert.equal(event.outcome, 'UNVERIFIED_PATCH')
+  assert.match(event.answer, /Completion status: UNVERIFIED_PATCH/)
+  assert.match(event.answer, /latest authoritative verifier invocation exited with status 0/i)
+  assert.match(event.answer, /does not establish that all task-acceptance requirements are satisfied/i)
+  assert.doesNotMatch(event.answer, /no passing current verifier result was accepted/i)
+})
+
 test('unverified terminal keeps model response when no confirmed artifact exists', t => {
   const input = terminalInput(t)
   input.snapshot.outcome.hasMutation = true

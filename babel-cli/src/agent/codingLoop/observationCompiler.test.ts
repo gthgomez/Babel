@@ -197,6 +197,54 @@ describe('observation compiler (shipped formatChatToolObservation path)', () => 
     assert.match(text, /handles stale cache|cache\.test/)
   })
 
+  test('Python doctest failures retain the located example and expected/actual mismatch', () => {
+    const output = [
+      '**********************************************************************',
+      'File "solution.py", line 4, in answer',
+      'Failed example:',
+      '    answer()',
+      'Expected:',
+      '    1',
+      'Got:',
+      '    0',
+      '**********************************************************************',
+    ].join('\n')
+    const command = 'python -m doctest solution.py -v'
+    const compiled = compileObservation({ tool: 'test_run', target: command, command, exitCode: 1, stdout: output, stderr: '' })
+    assert.equal(compiled.parserName, 'doctest')
+    assert.deepEqual(compiled.failures, [{
+      file: 'solution.py', line: 4, test: 'answer', message: 'answer() expected 1, got 0', parser: 'doctest',
+    }])
+    assert.match(formatCompiledObservation(compiled), /solution\.py:4 answer: answer\(\) expected 1, got 0/)
+  })
+
+  test('Python doctest localizes unexpected output when the expected result is empty', () => {
+    const output = [
+      '**********************************************************************',
+      'File "solution.py", line 5, in answer',
+      'Failed example:',
+      '    answer()',
+      'Expected nothing',
+      'Got:',
+      '    unexpected output',
+      '**********************************************************************',
+    ].join('\n')
+    const command = 'python -m doctest solution.py -v'
+    const compiled = compileObservation({ tool: 'test_run', target: command, command, exitCode: 1, stdout: output, stderr: '' })
+    assert.equal(compiled.parserName, 'doctest')
+    assert.deepEqual(compiled.failures, [{
+      file: 'solution.py', line: 5, test: 'answer', message: 'answer() expected nothing, got unexpected output', parser: 'doctest',
+    }])
+    assert.match(formatCompiledObservation(compiled), /solution\.py:5 answer: answer\(\) expected nothing, got unexpected output/)
+  })
+
+  test('doctest-looking output from another command does not acquire Python localization', () => {
+    const output = 'File "solution.py", line 4, in answer\\nFailed example:\\n    answer()\\nExpected:\\n    1\\nGot:\\n    0'
+    const compiled = compileObservation({ tool: 'run_command', target: 'cat solution.py', command: 'cat solution.py', exitCode: 1, stdout: output, stderr: '' })
+    assert.equal(compiled.parserName, undefined)
+    assert.deepEqual(compiled.failures, [])
+  })
+
   test('parser failure still yields head+tail+spill', () => {
     const dir = mkdtempSync(join(tmpdir(), 'babel-obs-'))
     const stdout = `${'banner\n'.repeat(400)}UNPARSEABLE_BUT_REAL_FAILURE at the end`

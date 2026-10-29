@@ -400,6 +400,7 @@ export type ChatEvent =
         effect_scope?: import('./mutationTools.js').MutationEffectScope
         mutation_paths?: string[]
       }>
+      toolCallAggregates?: import('./toolCallExport.js').ToolCallAggregates
       runDir?: string
       verifierReceipt?: {
         command: string
@@ -455,6 +456,7 @@ export type ChatEvent =
         effect_scope?: import('./mutationTools.js').MutationEffectScope
         mutation_paths?: string[]
       }>
+      toolCallAggregates?: import('./toolCallExport.js').ToolCallAggregates
       runDir?: string
       /** Preserve INFRA_FAILURE vs AGENT_FAILURE when the engine already classified. */
       outcome?: import('../schemas/agentContracts.js').TerminalOutcome
@@ -544,7 +546,10 @@ export interface ChatResult {
   toolCallAggregates?: {
     tool_call_count: number
     write_count: number
+    /** Backward-compatible verifier-tool invocation count; includes pre-dispatch denials. */
     verifier_attempt_count: number
+    /** Host-attested authoritative verifier processes that actually started. */
+    verifier_execution_count: number
   }
   promptFingerprint?: PromptFingerprint
   /** Active input prompt tokens from latest single model invocation */

@@ -106,6 +106,43 @@ test('Python test-module execution captures a bound authoritative receipt, but p
   }
 })
 
+test('red and green verifier receipts in an unborn Git worktree use complete content-only scope', async () => {
+  const root = project()
+  writeFileSync(join(root, 'solution.py'), 'def answer(): return 1\n')
+  const init = git(root, ['init', '--quiet'])
+  assert.equal(init.status, 0, String(init.stderr))
+  const add = git(root, ['add', '--', 'solution.py'])
+  assert.equal(add.status, 0, String(add.stderr))
+  assert.notEqual(git(root, ['rev-parse', '--verify', 'HEAD']).status, 0, 'fixture must remain unborn')
+  const redInput = {
+    projectRoot: root, command: 'python -m doctest solution.py -v', exitCode: 1,
+    summary: '1 failed doctest example', stdout: '1 items had failures:\n  1 of 1 in answer',
+    mutationPaths: [], allowRepositoryScopeForRedRecovery: true,
+  }
+  const red = await captureChatVerifierReceipt(redInput)
+  assert.ok(red, 'a physically bound red can seed recovery without a commit')
+  assert.equal(red.boundRevision?.gitCommitHash, null)
+  assert.equal(red.boundRevision?.scope?.kind, 'files')
+  assert.deepEqual(red.boundRevision?.scope?.kind === 'files' ? red.boundRevision.scope.paths : [], ['solution.py'])
+  assert.equal(red.inputClosure?.mode, 'bound')
+  writeFileSync(join(root, 'solution.py'), 'def answer(): return 2\n')
+  assert.equal(refreshChatVerifierReceiptStalenessSync(root, red)?.stale, true,
+    'a concurrent or subsequent source edit invalidates the red content binding')
+
+  const green = await captureChatVerifierReceipt({ ...redInput, exitCode: 0,
+    summary: 'doctest passed', stdout: '1 tests in 1 items.\n1 passed and 0 failed.',
+    allowRepositoryScopeForRedRecovery: false, allowRepositoryScopeForGreenNoChange: true })
+  assert.ok(green, 'the repaired unborn workspace can be content-bound after verification')
+  assert.equal(green.boundRevision?.gitCommitHash, null)
+  assert.equal(green.boundRevision?.scope?.kind, 'files')
+  assert.equal(refreshChatVerifierReceiptStalenessSync(root, green)?.stale, false)
+
+  const nonGit = project()
+  writeFileSync(join(nonGit, 'solution.py'), 'def answer(): return 1\n')
+  assert.equal(await captureChatVerifierReceipt({ ...redInput, projectRoot: nonGit }), null,
+    'a non-Git workspace cannot turn fallback content into recovery authority')
+})
+
 for (const repositoryScope of [false, true]) {
   test(`live completion hash uses the verifier's ${repositoryScope ? 'repository' : 'file-set'} scope`, async () => {
     const root = repositoryScope ? largeProject() : project()

@@ -9,6 +9,7 @@
     "scripts/analyze_chat_calibration.ts",
     "scripts/build_historical_calibration.ts",
     "scripts/run_chat_calibration.ts",
+    "scripts/qualify_chat_recovery_unborn_docker.ts",
     "scripts/run-harness-journeys.ts",
     "../tools/babel-pr-review.mts",
     "../tools/babel-pr-repair.mts",

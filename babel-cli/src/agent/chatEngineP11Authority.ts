@@ -39,6 +39,7 @@ import type { WorkingState } from './codingLoop/workingState.js';
 import type { RecoveryCandidateBinding } from './codingLoop/index.js';
 import { repoRootFingerprint } from './threadEventLog.js';
 import { recoveryWorkspaceRevision } from './codingLoop/recoveryIdentity.js';
+import { validateDockerIsolationArgs } from '../config/dockerIsolationArgs.js';
 
 const CHAT_ADMISSION_TOOL_SCHEMA_VERSION = 'chat-tools-v1';
 const PENDING_COMPILED_REQUEST_IDENTITY = 'pending-compiled-request-identity';
@@ -412,12 +413,31 @@ export class ChatEngineP11Authority {
       if (!revision) return null;
       const fingerprint = repoRootFingerprint(root);
       const ownerId = this.host.taskAllowance?.taskOwnerId ?? this.host.engineRunId;
+      const sessionId = this.host.parity.sessionEvents.session_id;
+      const dockerExtraArgs = validateDockerIsolationArgs();
+      if (!dockerExtraArgs.ok) return null;
+      const executionContextHash = createHash('sha256').update(JSON.stringify({
+        kind: 'recovery-execution-context-v1',
+        sessionId,
+        executionProfile: this.host.executionProfile,
+        configuredExecutionProfile: process.env['BABEL_EXECUTION_PROFILE'] ?? null,
+        benchmarkImage: process.env['BABEL_BENCHMARK_DOCKER_IMAGE'] ?? null,
+        dockerExtraArgs: dockerExtraArgs.args,
+        dockerDisabled: process.env['BABEL_DOCKER_DISABLE'] === 'true',
+        hostFallbackEnabled: process.env['BABEL_ALLOW_HOST_FALLBACK'] === 'true',
+        platform: process.platform,
+        architecture: process.arch,
+        node: process.versions.node,
+        executionScope: this.host.options.executionScope ?? null,
+      })).digest('hex');
       return {
-        schemaVersion: 1,
+        schemaVersion: 2,
         taskId: this.host.parity.liveAuthority?.taskContract.task_id ?? ownerId,
         contractHash: this.host.parity.liveAuthority?.taskContract.contract_hash ?? `uncontracted:${ownerId}`,
+        sessionId,
         repositoryIdentity: JSON.stringify([root, fingerprint]),
         workspaceRevision: revision,
+        executionContextHash,
       };
     } catch {
       return null;

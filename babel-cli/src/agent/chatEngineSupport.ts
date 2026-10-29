@@ -303,6 +303,9 @@ export async function runPostEditStaticCheck(
         const out = execFileSync(
           'python',
           [
+            // Do not let project or user Python startup hooks run in the Babel host process.
+            '-I',
+            '-S',
             '-c',
             'import sys\nwith open(sys.argv[1], "rb") as source:\n    compile(source.read(), sys.argv[1], "exec")',
             filePath,

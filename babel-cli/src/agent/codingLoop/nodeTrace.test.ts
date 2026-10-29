@@ -50,7 +50,7 @@ test('Node TAP TypeScript assertion yields a contained candidate requiring fresh
     const candidates = captureLocalizationCandidates({ projectRoot: root, stdout: tap('/app/count.test.ts'),
       stderr: '', tool: 'test_run', command: 'node --import tsx --test' })
     assert.deepEqual(candidates, [{ path: 'count.test.ts', line: 108, column: 10, relation: name, source: 'test_identity' }])
-    const binding = { schemaVersion: 1 as const, taskId: 'task', contractHash: 'contract', repositoryIdentity: root, workspaceRevision: 'rev' }
+    const binding = { schemaVersion: 2 as const, taskId: 'task', contractHash: 'contract', sessionId: 'session', repositoryIdentity: root, workspaceRevision: 'rev', executionContextHash: 'context' }
     const initial = startFailureLocalization('red', binding, candidates)
     assert.equal(initial.acceptedPath, undefined)
     assert.equal(advanceFailureLocalization(initial, { type: 'read_file', target: 'count.test.ts', content: source,

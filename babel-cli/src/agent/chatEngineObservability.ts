@@ -160,6 +160,7 @@ export type StreamDoneEvent = {
   answer: string;
   usage: SessionUsageSummary;
   toolCalls: ExportedToolCall[];
+  toolCallAggregates: ToolCallAggregates;
   runDir: string;
   /** Authoritative terminal outcome from the engine (P0-D lossless). */
   outcome: TerminalOutcome;
@@ -192,6 +193,7 @@ export type StreamFailedEvent = {
   status: ChatStatus;
   error: string;
   toolCalls: ExportedToolCall[];
+  toolCallAggregates: ToolCallAggregates;
   runDir?: string;
   turnTelemetry?: import('./chatTurnTelemetry.js').ChatTurnTelemetryRecord;
   /** Present only when the cause is established. Unknown stays omitted. */
@@ -321,6 +323,7 @@ export function buildStreamDone(
     answer,
     usage: globalCostTracker.getSessionSummary(),
     toolCalls: exportToolCalls(h.toolCallLog, h.logIndexToTurn),
+    toolCallAggregates: computeToolCallAggregates(h.toolCallLog),
     runDir: h.engineRunDir,
     outcome: extra.outcome,
     verifierReceipt: h.lastVerifierReceipt ?? null,
@@ -372,6 +375,7 @@ export function buildStreamFailed(
     status: terminal.status,
     error,
     toolCalls: exportToolCalls(h.toolCallLog),
+    toolCallAggregates: computeToolCallAggregates(h.toolCallLog),
   };
   if (h.engineRunDir) event.runDir = h.engineRunDir;
   if (extra?.turnTelemetry) event.turnTelemetry = extra.turnTelemetry;

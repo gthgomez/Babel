@@ -35,9 +35,12 @@ export function recoveryWorkspaceRevision(projectRoot: string): string | null {
     }).split('\0').filter(Boolean)
     const capture = RevisionManager.computeRevisionSync(projectRoot, [], {
       scope_kind: 'repository', git_binding: 'optional',
+      require_physical_capture: true,
     })
-    // Unknown physical capture cannot establish a candidate recovery identity.
-    if (!capture.gitCommitHash) return null
+    // A null HEAD is valid in a newly initialized repository only after the
+    // revision manager has proven a stable physical tree. Never accept its
+    // random unverified fallback as candidate identity.
+    if (!Object.hasOwn(capture.fileHashes, '<repository>')) return null
     const indexed = capture.compositeTreeHash
     const paths = [...new Set([
       ...gitPaths(['diff', '--name-only', '--no-ext-diff', '-z']),
@@ -47,7 +50,9 @@ export function recoveryWorkspaceRevision(projectRoot: string): string | null {
     const live = paths.length > 0
       ? RevisionManager.computeRevisionSync(projectRoot, paths).compositeTreeHash
       : ''
-    return createHash('sha256').update(JSON.stringify([indexed, live])).digest('hex')
+    // Preserve commit binding when it exists; content-only Git identity is
+    // limited to repositories whose unborn tree was physically captured.
+    return createHash('sha256').update(JSON.stringify([capture.gitCommitHash, indexed, live])).digest('hex')
   } catch {
     return null
   }

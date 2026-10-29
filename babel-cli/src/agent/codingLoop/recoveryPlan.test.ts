@@ -10,8 +10,8 @@ import { ChatToolActionSchema, buildChatToolDefinitions } from '../chatToolDefin
 import { parseTextToolTurn } from '../textToolParser.js'
 
 const binding = {
-  schemaVersion: 1 as const, taskId: 'task', contractHash: 'contract',
-  repositoryIdentity: '/repo', workspaceRevision: 'revision-A',
+  schemaVersion: 2 as const, taskId: 'task', contractHash: 'contract', sessionId: 'session',
+  repositoryIdentity: '/repo', workspaceRevision: 'revision-A', executionContextHash: 'context',
 }
 
 function readyState() {

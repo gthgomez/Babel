@@ -583,6 +583,33 @@ test('consumeChatStream aggregates answer_chunk events and returns completed res
   assert.equal(result.answer, 'Hello world');
 });
 
+test('consumeChatStream preserves host-attested verifier execution counts for the CLI payload', async () => {
+  const aggregate = {
+    tool_call_count: 3,
+    write_count: 0,
+    verifier_attempt_count: 3,
+    verifier_execution_count: 1,
+  }
+  async function* mockStream(): AsyncGenerator<ChatEvent, void, undefined> {
+    yield {
+      type: 'done', answer: 'A test process started.', usage: EMPTY_USAGE,
+      toolCalls: [
+        { tool: 'run_command', target: 'python -c', error: 'DENY_MISSING_AUTHORITY' },
+        { tool: 'test_run', target: 'python -m pytest --version' },
+        { tool: 'test_run', target: 'python -m doctest solution.py', exit_code: 1 },
+      ],
+      toolCallAggregates: aggregate,
+    }
+  }
+
+  const result = await consumeChatStream(mockStream(), null)
+  assert.deepEqual(result.toolCallAggregates, aggregate)
+  const payload = buildChatRunPayload(result, { task: 'Check solution', projectRoot: '/fixture' })
+  assert.equal(payload['verifier_attempt_count'], 3)
+  assert.equal(payload['verifier_tool_call_count'], 3)
+  assert.equal(payload['verifier_execution_count'], 1)
+})
+
 test('consumeChatStream returns failed result on failed event', async () => {
   async function* mockStream(): AsyncGenerator<ChatEvent, void, undefined> {
     yield { type: 'answer_chunk', text: 'partial' };

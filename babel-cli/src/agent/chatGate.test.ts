@@ -1008,6 +1008,29 @@ describe('post-edit static check', () => {
       rmSync(tmpDir, { recursive: true, force: true });
     }
   });
+
+  test('Python syntax checking ignores ambient sitecustomize startup hooks', async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), 'babel-python-isolated-check-'));
+    const previousPythonPath = process.env.PYTHONPATH;
+    try {
+      const marker = join(tmpDir, 'startup-hook-ran.txt');
+      const startup = join(tmpDir, 'sitecustomize.py');
+      const target = join(tmpDir, 'valid.py');
+      writeFileSync(startup, `from pathlib import Path\nPath(${JSON.stringify(marker)}).write_text('ran')\n`);
+      writeFileSync(target, 'def answer(): return 42\n');
+      process.env.PYTHONPATH = tmpDir;
+
+      const engine = new ChatEngine({ task: 'fix the bug', projectRoot: tmpDir });
+      const result = await (engine as any).runPostEditStaticCheck(target);
+      assert.match(result, /^exit_code: 0/);
+      assert.equal(existsSync(marker), false, 'interpreter startup must not execute project or ambient hooks');
+      assert.equal(existsSync(join(tmpDir, '__pycache__')), false);
+    } finally {
+      if (previousPythonPath === undefined) delete process.env.PYTHONPATH;
+      else process.env.PYTHONPATH = previousPythonPath;
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('PR-76: Adversarial Verifier Freshness & Promotion Gate', () => {

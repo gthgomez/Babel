@@ -3,6 +3,7 @@
  */
 import { nativeNodeResultCounts } from './nativeTestResultCounts.js';
 import { createHash } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 import { realpathSync } from 'node:fs';
 import path from 'node:path';
 import { canonicalizeContained } from '../bridge/workspaceBound.js';
@@ -39,6 +40,31 @@ import {
 } from './completionGatePolicy.js';
 
 export { parseExecutedTestCounts };
+
+/** True only for a real Git worktree with an unborn symbolic HEAD and no refs. */
+function isUnbornGitWorktree(projectRoot: string): boolean {
+  try {
+    const top = realpathSync.native(execFileSync('git', ['rev-parse', '--show-toplevel'], {
+      cwd: projectRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5_000, windowsHide: true,
+    }).trim());
+    const root = realpathSync.native(projectRoot);
+    const rel = path.relative(top, root);
+    if (path.isAbsolute(rel) || rel === '..' || rel.startsWith(`..${path.sep}`)) return false;
+    try {
+      execFileSync('git', ['rev-parse', '--verify', 'HEAD'], {
+        cwd: projectRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5_000, windowsHide: true,
+      });
+      return false;
+    } catch { /* A missing HEAD is only valid for a new, empty symbolic ref. */ }
+    const headRef = execFileSync('git', ['symbolic-ref', '--quiet', 'HEAD'], {
+      cwd: projectRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5_000, windowsHide: true,
+    }).trim();
+    const refs = execFileSync('git', ['for-each-ref', '--format=%(refname)'], {
+      cwd: projectRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5_000, windowsHide: true,
+    }).trim();
+    return headRef.length > 0 && refs.length === 0;
+  } catch { return false; }
+}
 
 /** Capture the live revision used by the streaming completion gate. */
 export function captureCompletionWorkspaceRevisionHash(
@@ -153,18 +179,25 @@ export async function captureChatVerifierReceipt(input: {
     input.exitCode !== 0 && mutationPaths.length === 0;
   const repositoryScopedGreenNoChange = input.allowRepositoryScopeForGreenNoChange === true &&
     input.exitCode === 0 && mutationPaths.length === 0;
-  if (freshProof && mutationPaths.length === 0 && !repositoryScopedRed && !repositoryScopedGreenNoChange) return null;
-  const repositoryScoped = repositoryScopedRed || repositoryScopedGreenNoChange || freshProof;
+  const requestedRepositoryScope = repositoryScopedRed || repositoryScopedGreenNoChange || freshProof;
+  const contentOnlyScope = (repositoryScopedRed || repositoryScopedGreenNoChange) && isUnbornGitWorktree(input.projectRoot);
+  const repositoryScoped = requestedRepositoryScope && !contentOnlyScope;
+  const contentPaths = contentOnlyScope ? inputClosure.paths : [];
+  if (contentOnlyScope && contentPaths.length === 0) return null;
+  if (freshProof && mutationPaths.length === 0 && !requestedRepositoryScope) return null;
   try {
     const receipt = await bindChatVerifierReceipt({
       projectRoot: input.projectRoot,
       command: input.command,
       exit_code: input.exitCode,
       summary: input.summary,
-      mutationPaths: repositoryScoped ? [] : boundMutationPaths,
+      mutationPaths: repositoryScoped ? [] : contentOnlyScope ? contentPaths : boundMutationPaths,
       ...(repositoryScoped ? {
         scopeKind: 'repository' as const,
         gitBinding: 'required' as const,
+      } : contentOnlyScope ? {
+        scopeKind: 'files' as const,
+        gitBinding: 'optional' as const,
       } : {}),
       structured: {
         verifierId: parsed.verifierId,
@@ -188,7 +221,7 @@ export async function captureChatVerifierReceipt(input: {
     }
     return receipt;
   } catch (error) {
-    if (repositoryScoped) return null;
+    if (requestedRepositoryScope) return null;
     throw error;
   }
 }

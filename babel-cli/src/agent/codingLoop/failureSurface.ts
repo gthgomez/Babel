@@ -161,7 +161,7 @@ function surfaceFromObservation(
   if (parser === 'tsc' || /error ts\d+/i.test(blob)) {
     return 'TYPECHECK_FAILURE'
   }
-  if (parser === 'jest_vitest' || parser === 'pytest' || parser === 'go' || /failing|tests failed|failed \d+/i.test(blob)) {
+  if (parser === 'jest_vitest' || parser === 'pytest' || parser === 'doctest' || parser === 'go' || /failing|tests failed|failed \d+/i.test(blob)) {
     if (/eslint|lint error|ruff_|clippy/i.test(blob)) return 'LINT_FAILURE'
     return 'TEST_FAILURE'
   }

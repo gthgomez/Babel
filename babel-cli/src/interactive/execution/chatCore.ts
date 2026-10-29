@@ -374,6 +374,7 @@ function evidenceFields(input: {
   turnRouting?: ChatResult['turnRouting'] | undefined;
   turnTelemetry?: ChatResult['turnTelemetry'] | undefined;
   verifierReceipt?: ChatResult['verifierReceipt'] | undefined;
+  toolCallAggregates?: ChatResult['toolCallAggregates'] | undefined;
   blockedReport?: ChatResult['blockedReport'] | undefined;
   criticReceipt?: ChatResult['criticReceipt'] | undefined;
 }): Partial<ChatResult> {
@@ -383,6 +384,7 @@ function evidenceFields(input: {
   if (input.turnRouting !== undefined) out.turnRouting = input.turnRouting;
   if (input.turnTelemetry !== undefined) out.turnTelemetry = input.turnTelemetry;
   if (input.verifierReceipt !== undefined) out.verifierReceipt = input.verifierReceipt;
+  if (input.toolCallAggregates !== undefined) out.toolCallAggregates = input.toolCallAggregates;
   if (input.blockedReport !== undefined) out.blockedReport = input.blockedReport;
   if (input.criticReceipt !== undefined) out.criticReceipt = input.criticReceipt;
   return out;
@@ -418,6 +420,7 @@ export async function consumeChatStream(
   let doneReasonCode: ChatResult['reason_code'];
   let doneCauseClass: ChatResult['cause_class'];
   let doneGatePolicy: ChatResult['gatePolicy'];
+  let doneToolCallAggregates: ChatResult['toolCallAggregates'];
   const toolIdQueue: number[] = [];
   const toolIdsByCallId = new Map<string, number>();
   let doneStatus: ChatResult['status'] | undefined;
@@ -481,6 +484,7 @@ export async function consumeChatStream(
             ...(mergedVerifier !== undefined ? { verifierReceipt: mergedVerifier } : {}),
             ...(mergedBlocked !== undefined ? { blockedReport: mergedBlocked } : {}),
             ...(mergedCritic !== undefined ? { criticReceipt: mergedCritic } : {}),
+            ...(terminalFromDispatch.toolCallAggregates !== undefined ? { toolCallAggregates: terminalFromDispatch.toolCallAggregates } : {}),
           }),
         };
       }
@@ -506,6 +510,7 @@ export async function consumeChatStream(
         doneReasonCode = event.reason_code ?? doneReasonCode;
         doneCauseClass = event.cause_class ?? doneCauseClass;
         doneGatePolicy = event.gatePolicy ?? doneGatePolicy;
+        doneToolCallAggregates = event.toolCallAggregates ?? doneToolCallAggregates;
         receivedTerminalEvent = true;
       }
 
@@ -563,6 +568,7 @@ export async function consumeChatStream(
     ...(doneReasonCode !== undefined ? { reason_code: doneReasonCode } : {}),
     ...(doneCauseClass !== undefined ? { cause_class: doneCauseClass } : {}),
     ...(doneGatePolicy != null ? { gatePolicy: doneGatePolicy } : {}),
+    ...(doneToolCallAggregates !== undefined ? { toolCallAggregates: doneToolCallAggregates } : {}),
   });
 }
 
@@ -1282,7 +1288,7 @@ export function buildChatRunPayload(
 
   // A1: Aggregate tool call counts derived from toolCalls
   if (result.toolCalls && result.toolCalls.length > 0) {
-    const aggregates = computeToolCallAggregates(
+    const aggregates = result.toolCallAggregates ?? computeToolCallAggregates(
       result.toolCalls.map(tc => ({
         tool: tc.tool,
         ...(tc.error !== undefined ? { error: tc.error } : {}),
@@ -1292,7 +1298,10 @@ export function buildChatRunPayload(
     );
     payload['tool_call_count'] = aggregates.tool_call_count;
     payload['write_count'] = aggregates.write_count;
+    // Keep the historical field for consumers; the explicit alias clarifies it is an invocation count.
     payload['verifier_attempt_count'] = aggregates.verifier_attempt_count;
+    payload['verifier_tool_call_count'] = aggregates.verifier_attempt_count;
+    payload['verifier_execution_count'] = result.toolCallAggregates?.verifier_execution_count ?? null;
     // C2: Count tools before first successful mutation
     payload['tools_before_first_write'] = computeToolsBeforeFirstWrite(
       result.toolCalls.map(tc => ({
@@ -1305,7 +1314,9 @@ export function buildChatRunPayload(
   } else {
     payload['tool_call_count'] = 0;
     payload['write_count'] = 0;
-    payload['verifier_attempt_count'] = 0;
+    payload['verifier_attempt_count'] = result.toolCallAggregates?.verifier_attempt_count ?? 0;
+    payload['verifier_tool_call_count'] = result.toolCallAggregates?.verifier_attempt_count ?? 0;
+    payload['verifier_execution_count'] = result.toolCallAggregates?.verifier_execution_count ?? null;
     payload['tools_before_first_write'] = 0;
   }
 

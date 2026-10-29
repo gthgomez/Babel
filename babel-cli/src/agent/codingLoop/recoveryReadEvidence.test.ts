@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { applyWorkingStateEvent, createWorkingState, formatWorkingStateBlock, recoveryEvidenceKey, restoreWorkingStateSnapshot, type RecoveryCandidateBinding, type RecoveryReadEvidence, type WorkingState } from './workingState.js'
 import { admitRecoveryPlan, recoveryObservationId, type ActualRecoveryEdit } from './recoveryPlan.js'
-const binding: RecoveryCandidateBinding = { schemaVersion: 1, taskId: 'task', contractHash: 'contract', repositoryIdentity: 'root', workspaceRevision: 'revision' }
+const binding: RecoveryCandidateBinding = { schemaVersion: 2, taskId: 'task', contractHash: 'contract', sessionId: 'session', repositoryIdentity: 'root', workspaceRevision: 'revision', executionContextHash: 'context' }
 function fresh(target = 'src/implementation.ts', startLine = 1, endLine = 1, totalLines = 1): RecoveryReadEvidence {
   return { tool: 'read_range', target, failureSignature: 'red', binding, observationDigest: 'same-delivered-bytes', window: { startLine, endLine, totalLines, completeFile: startLine === 1 && endLine === totalLines, byteTruncated: false } }
 }
@@ -13,6 +13,10 @@ function initial(): WorkingState {
 const add = (state: WorkingState, provenance: RecoveryReadEvidence): WorkingState => applyWorkingStateEvent(state, { type: 'add_evidence', evidence: provenance.target, discriminating: true, provenance })
 test('equal delivered bytes at different windows have different host evidence keys', () => {
   assert.notEqual(recoveryEvidenceKey(fresh('large.ts', 1, 5, 300), 'red'), recoveryEvidenceKey(fresh('large.ts', 201, 205, 300), 'red'))
+})
+test('read evidence is tied to the host session and execution context', () => {
+  assert.notEqual(recoveryEvidenceKey(fresh(), 'red'), recoveryEvidenceKey({ ...fresh(), binding: { ...binding, sessionId: 'other-session' } }, 'red'))
+  assert.notEqual(recoveryEvidenceKey(fresh(), 'red'), recoveryEvidenceKey({ ...fresh(), binding: { ...binding, executionContextHash: 'other-context' } }, 'red'))
 })
 test('fresh source reads are retained after satisfaction without AST or failing-path membership', () => {
   let state = add(initial(), fresh('test.test.ts')); state = add(state, fresh('src/implementation.ts'))
@@ -43,6 +47,32 @@ test('legacy bare keys cannot restore satisfied edit authority', () => {
   assert.equal(restored.recoveryGate?.satisfied, false); assert.match(formatWorkingStateBlock(restored), /fresh.*read|reread/i)
 })
 
+test('legacy recovery bindings retain failure history but cannot restore old read or edit authority', () => {
+  let state = add(initial(), fresh())
+  const gate = state.recoveryGate!
+  const legacyBinding = {
+    schemaVersion: 1,
+    taskId: binding.taskId,
+    contractHash: binding.contractHash,
+    repositoryIdentity: binding.repositoryIdentity,
+    workspaceRevision: binding.workspaceRevision,
+  }
+  const legacy = {
+    ...state,
+    recoveryGate: { ...gate, binding: legacyBinding, satisfied: true, planAdmitted: true,
+      readRecords: gate.readRecords!.map(record => ({ ...record, binding: legacyBinding })) },
+    localization: { ...state.localization, binding: legacyBinding },
+  }
+  const restored = restoreWorkingStateSnapshot(legacy)
+  assert.ok(restored)
+  assert.equal(restored.failureSurface?.errorSignature, state.failureSurface?.errorSignature)
+  assert.equal(restored.recoveryGate?.binding, undefined)
+  assert.equal(restored.recoveryGate?.satisfied, false)
+  assert.equal(restored.recoveryGate?.planAdmitted, false)
+  assert.equal(restored.recoveryGate?.readRecords?.length, 0)
+  assert.equal(restored.localization, undefined)
+})
+
 test('search snippets, untyped records, malformed windows and other owners grant no record', () => {
   for (const altered of [
     { tool: 'grep' }, { window: undefined }, { target: '../outside.ts' },
@@ -50,6 +80,8 @@ test('search snippets, untyped records, malformed windows and other owners grant
     { binding: { ...binding, taskId: 'other-task' } },
     { binding: { ...binding, repositoryIdentity: 'other-root' } },
     { binding: { ...binding, workspaceRevision: 'other-revision' } },
+    { binding: { ...binding, sessionId: 'other-session' } },
+    { binding: { ...binding, executionContextHash: 'other-context' } },
   ]) {
     const state = add(initial(), { ...fresh(), ...altered } as RecoveryReadEvidence)
     assert.equal(state.recoveryGate?.satisfied, false)
