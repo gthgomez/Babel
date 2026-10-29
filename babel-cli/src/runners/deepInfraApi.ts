@@ -80,6 +80,7 @@ import {
   readStreamWithLimits,
   readStreamingResponse,
   recordStreamingOutput,
+  buildStreamingInvocationMetadata,
   type StreamingState,
 } from './providerResponseStream.js';
 import {
@@ -1914,19 +1915,8 @@ export class DeepInfraApiRunner implements LlmRunner {
           return;
         }
         invocationFailed = true;
-        this.lastInvocationMetadata = buildInvocationMetadata(
-          this.providerId,
-          this.model,
-          Date.now() - startedAt,
-          streamState.usage ?? undefined,
-          streamState.ttftMs,
-          streamState.generationMs,
-          undefined,
-          streamState.observedModelId,
-          streamState.upstreamProvider,
-          streamState.routerMetadata,
-          finishReason,
-          this.maxTokens,
+        this.lastInvocationMetadata = buildStreamingInvocationMetadata(
+          this.providerId, this.model, Date.now() - startedAt, streamState, this.maxTokens,
         );
         notifyPhase('response_normalization_failed', undefined, 'output_budget_exhausted');
         notifyCompleted(
@@ -2005,11 +1995,8 @@ export class DeepInfraApiRunner implements LlmRunner {
             input = parsed as Record<string, unknown>;
           } catch (error) {
             invocationFailed = true;
-            this.lastInvocationMetadata = buildInvocationMetadata(
-              this.providerId, this.model, Date.now() - startedAt,
-              streamState.usage ?? undefined, streamState.ttftMs, streamState.generationMs,
-              undefined, streamState.observedModelId, streamState.upstreamProvider,
-              streamState.routerMetadata, streamState.finishReason, this.maxTokens,
+            this.lastInvocationMetadata = buildStreamingInvocationMetadata(
+              this.providerId, this.model, Date.now() - startedAt, streamState, this.maxTokens,
             );
             notifyPhase('response_normalization_failed', undefined, 'tool_arguments');
             notifyCompleted('failed', streamState.observedModelId, outputReceipt, streamState.upstreamProvider, streamState.routerMetadata, streamState.finishReason, this.maxTokens, {
@@ -2053,19 +2040,8 @@ export class DeepInfraApiRunner implements LlmRunner {
       yield { type: 'error', message: err instanceof Error ? err.message : String(err) };
     }
 
-    this.lastInvocationMetadata = buildInvocationMetadata(
-      this.providerId,
-      this.model,
-      Date.now() - startedAt,
-      streamState.usage ?? undefined,
-      streamState.ttftMs,
-      streamState.generationMs,
-      undefined,
-      streamState.observedModelId,
-      streamState.upstreamProvider,
-      streamState.routerMetadata,
-      streamState.finishReason,
-      this.maxTokens,
+    this.lastInvocationMetadata = buildStreamingInvocationMetadata(
+      this.providerId, this.model, Date.now() - startedAt, streamState, this.maxTokens,
     );
     if (!invocationFailed) {
       notifyPhase('stream_completed');

@@ -20,12 +20,12 @@ import { recordChatHarnessFeedback } from "./chatHarnessFeedback.js";
 import { writeFileSync } from "node:fs";
 import { join } from 'node:path';
 import { describeNativeToolRejection, nativeSchemaRepairFeedback } from './nativeToolRejection.js';
-import { ResponseEvidenceRetry, responseVerifierFacts } from './chatResponseEvidence.js';
-import { resolveCompletionVerificationContext } from './completionGatePolicy.js';
-import { unverifiedFileDeliveryPaths } from './unverifiedFileDelivery.js';
-import { formatPreservedUnverifiedTerminalAnswer } from './preservedUnverifiedTerminal.js';
-import { shellBlockedByIsolation } from './capabilityRecoveryScope.js';
-import { refreshChatVerifierReceiptStalenessSync } from '../evidence/chatRevisionBinding.js';
+import {
+  beginResponseEvidenceSession,
+  inspectResponseEvidence,
+  responseEvidenceRetryThought,
+  settleFailedResponseEvidence,
+} from './chatResponseEvidenceSettlement.js';
 import type { ChatUsageScope } from './chatEngineProviderAccounting.js';
 
 import { trace, SpanStatusCode, type Span } from "@opentelemetry/api";
@@ -152,14 +152,9 @@ export class ChatEngineStreamingLoop {
     let sameRouteTransportRetryUsed = false;
     // Bounded once-per-submission repair for an unrecognized text tool call.
     let textToolProtocolRepairUsed = false;
-    const responseEvidenceRetry = new ResponseEvidenceRetry();
+    const responseEvidenceRetry = beginResponseEvidenceSession(this.host);
     let nativeProtocolRepairUsed = false;
     const bufferContractAnswer = requestedChatJsonKind(userInput) !== null;
-    if (this.host.options.projectRoot) {
-      refreshChatVerifierReceiptStalenessSync(this.host.options.projectRoot, this.host.lastVerifierReceipt);
-    }
-    recordChatHarnessFeedback(this.host, `Verification evidence at submission start: ${responseVerifierFacts(this.host.lastVerifierReceipt)} Never infer test execution from reading source. Preserve the requested answer format.`);
-
     for (let turn = 0; turn < maxTurns; turn++) {
       // R0-8: a superseded generator must stop before it executes another
       // turn, settles execution, or emits a terminal for the new owner.
@@ -1969,70 +1964,19 @@ export class ChatEngineStreamingLoop {
           return;
         }
 
-        // Clarifications and BLOCKED replies must obey the same evidence rules.
-        if (this.host.options.projectRoot) {
-      refreshChatVerifierReceiptStalenessSync(this.host.options.projectRoot, this.host.lastVerifierReceipt);
-    }
-        if (this.host.options.projectRoot) {
-          for (const receipt of this.host.executedVerifierLedger) {
-            refreshChatVerifierReceiptStalenessSync(this.host.options.projectRoot, receipt);
-          }
-        }
-        const correction = responseEvidenceRetry.inspect({
-          answer, receipt: this.host.lastVerifierReceipt, ledger: this.host.executedVerifierLedger,
-          hasConfirmedMutation: this.host.hasAnyWrites(), turn, maxTurns,
-        });
+        const correction = inspectResponseEvidence({ host: this.host, retry: responseEvidenceRetry, answer, turn, maxTurns });
         if (correction) {
-          this.host.conversation.push({ role: 'assistant', content: answer });
           endSpan(_turnSpan, SpanStatusCode.ERROR);
           _turnSpan = null;
           if (correction.kind === 'fail') {
-            if (this.host._cancelled || this.host.abortController.signal.aborted) {
-              yield this.host.streamCancelled();
-              return;
-            }
-            const stop = this.host.runControl?.owner.generation === submissionGeneration
-              ? this.host.runControl.stop()
-              : null;
-            if (stop) { yield this.host.streamStopped(stop); return; }
-            const verification = resolveCompletionVerificationContext({
-              taskClass: this.host.taskClass,
-              task: this.host.options.task,
-              requiredVerifierCommands: this.host.getResolvedRequiredVerifiers(),
-              toolCallLog: this.host.toolCallLog,
-            });
-            const artifactRefs = this.host.options.projectRoot ? unverifiedFileDeliveryPaths({
-              projectRoot: this.host.options.projectRoot,
-              taskClass: this.host.taskClass,
-              verification,
-              shellUnavailable: shellBlockedByIsolation(this.host.isolationBrokerFlags()),
-              verifierEvidencePresent: Boolean(this.host.lastVerifierReceipt || this.host.executedVerifierLedger.length),
-              verifierTampered: this.host.verifierTampered,
-              toolCallLog: this.host.toolCallLog,
-            }) : null;
-            if (artifactRefs?.length) {
-              const delivery = formatPreservedUnverifiedTerminalAnswer({
-                authorityReason: 'UNVERIFIED: The response could not be corrected to match recorded evidence. Confirmed file changes were read back, but required verification was unavailable; task fulfillment is not certified.',
-                retainedCandidate: 'The host recorded confirmed changes to: ' + artifactRefs.join(', ') + '. No authoritative test result is recorded.',
-                artifactRefs,
-              });
-              this.host.conversation.push({ role: 'assistant', content: delivery });
-              endSpan(_turnSpan, SpanStatusCode.ERROR);
-              _turnSpan = null;
-              if (!this.host.isSubmissionCurrent(submissionGeneration)) return;
-              yield this.host.streamFailed(correction.message, undefined, delivery);
-              return;
-            }
-            yield this.host.streamFailed(correction.message);
+            yield* settleFailedResponseEvidence(this.host, correction, submissionGeneration);
             return;
           }
-          recordChatHarnessFeedback(this.host, correction.feedback);
-          yield { type: 'thought', text: correction.thought };
+          yield responseEvidenceRetryThought(this.host, correction);
           continue;
         }
 
-        // R1: Check for BLOCKED declaration before the gate — the agent may
-        // declare BLOCKED even though no writes were made.
+        // R1: Check BLOCKED before the gate even when no writes were made.
         const blockedReport = this.host.detectAndBuildBlockedReport(answer);
         if (blockedReport) {
           const blockedDelta = reconcileStreamedAnswer(

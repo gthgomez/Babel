@@ -1,10 +1,12 @@
-import { type ProviderMessage, type RunnerCallbacks } from './base.js';
+import { type ProviderMessage, type RunnerCallbacks, type RunnerInvocationMetadata } from './base.js';
 import { mapProviderMessagesToWire } from './providerMessages.js';
 import { type VcrRecorder } from '../services/streamingVcr.js';
 import { readPositiveIntEnv } from './providerResponsePolicy.js';
+import type { ProviderId } from './providerRegistry.js';
 import {
   type ChatResponse,
   type OpenRouterResponseMetadata,
+  buildInvocationMetadata,
   upstreamProviderFromResponse,
 } from './providerResponseMetadata.js';
 
@@ -137,6 +139,22 @@ export interface StreamingState {
   /** Local, non-durable material used to produce a truthful failure digest. */
   outputReceipt: string;
   sawDone: boolean;
+}
+
+/** Build accounting metadata from the state shared by compatible stream adapters. */
+export function buildStreamingInvocationMetadata(
+  provider: ProviderId,
+  model: string,
+  latencyMs: number,
+  state: StreamingState,
+  configuredOutputBudget?: number | null,
+): RunnerInvocationMetadata {
+  return buildInvocationMetadata(
+    provider, model, latencyMs, state.usage ?? undefined, state.ttftMs, state.generationMs,
+    undefined, state.observedModelId, state.upstreamProvider,
+    state.routerMetadata, state.finishReason,
+    configuredOutputBudget,
+  );
 }
 
 
