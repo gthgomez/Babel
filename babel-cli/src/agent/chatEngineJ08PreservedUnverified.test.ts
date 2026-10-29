@@ -378,7 +378,7 @@ test('J08: gate-captured completion survives later recovery chatter at turn cap'
   assert.match(error, J08_RETAINED_SUMMARY_ARTIFACT)
 })
 
-test('ChatEngine terminal delivers a read-back artifact with truthful status after correction is exhausted', async t => {
+test('CLI chat payload delivers a read-back artifact with truthful status after correction is exhausted', async t => {
   const prior = Object.fromEntries(MANAGED_ENV.map(key => [key, process.env[key]]))
   const projectRoot = mkdtempSync(join(tmpdir(), 'babel-unverified-python-artifact-'))
   t.after(() => {
@@ -405,14 +405,30 @@ test('ChatEngine terminal delivers a read-back artifact with truthful status aft
   git(projectRoot, ['commit', '-qm', 'empty Python fixture'])
 
   const task = 'Create a small Python helper in solution.py that adds two numbers.'
-  const engine = new ChatEngine({
-    task, projectRoot, runId: `partial-python-${randomUUID()}`, operation: 'CHANGE',
-    model: LIVE_OPENROUTER_MODEL_ID, maxTurns: 4, maxCostUsd: 1, runtimeMode: 'direct',
-    providerRunner: new J08PartialArtifactRunner(), providerPolicy: OPENROUTER_POLICY,
+  const { runCliChatTask } = await import('../interactive/execution/chatCore.js')
+  let engine: ChatEngine | undefined
+  const result = await runCliChatTask({
+    task,
+    projectRoot,
+    model: LIVE_OPENROUTER_MODEL_ID,
+    outputFormat: 'json',
+    engineFactory(options) {
+      engine = new ChatEngine({
+        ...options,
+        runId: `partial-python-${randomUUID()}`,
+        maxTurns: 4,
+        maxCostUsd: 1,
+        runtimeMode: 'direct',
+        providerRunner: new J08PartialArtifactRunner(),
+        providerPolicy: OPENROUTER_POLICY,
+      })
+      return engine
+    },
   })
-  const terminal = terminalEvent(await collectStream(engine.submitMessageStream(task)))
-  assert.equal(terminal.type, 'failed')
-  const presented = terminal.type === 'failed' ? terminal.error : ''
+  assert.ok(engine)
+  assert.equal(result.payload['terminal_outcome'], 'AGENT_FAILURE')
+  assert.equal(result.exitCode, 1, 'failed response correction must remain an unsuccessful terminal')
+  const presented = JSON.stringify(result.payload['answer'])
   assert.match(presented, /UNVERIFIED retained candidate/i)
   assert.match(presented, /solution\.py/)
   assert.match(presented, /No authoritative verifier execution is recorded/)
@@ -420,8 +436,7 @@ test('ChatEngine terminal delivers a read-back artifact with truthful status aft
   assert.doesNotMatch(presented, /I ran pytest and all tests passed/i)
   assert.doesNotMatch(presented, /VERIFIED_COMPLETE/)
   assert.equal(readFileSync(join(projectRoot, 'solution.py'), 'utf8'), 'def add(a, b):\n    return a + b\n')
-  const conversation = engine.getConversation()
-  assert.match(conversation.at(-1)?.content ?? '', /No authoritative verifier execution is recorded/)
+  assert.match(presented, /No authoritative verifier execution is recorded/)
 })
 
 test('ChatEngine cancellation during evidence correction cannot emit retained artifact delivery', async t => {
