@@ -151,3 +151,37 @@ export function responseEvidenceCorrection(receipt: ResponseVerifierEvidence, mi
 export function isPunctuationOnlyAnswer(answer: string): boolean {
   return !/[\p{L}\p{N}]/u.test(answer)
 }
+
+/** Bounded answer correction after the host validates execution and mutation facts. */
+export class ResponseEvidenceRetry {
+  private evidenceRepairUsed = false
+  private punctuationRepairUsed = false
+  private priorGuidance = ''
+
+  inspect(input: {
+    answer: string
+    receipt: ResponseVerifierEvidence
+    ledger: readonly NonNullable<ResponseVerifierEvidence>[]
+    hasConfirmedMutation: boolean
+    turn: number
+    maxTurns: number
+  }): { kind: 'retry'; feedback: string; thought: string } | { kind: 'fail'; message: string } | null {
+    const { answer, receipt, ledger, hasConfirmedMutation, turn, maxTurns } = input
+    if (this.evidenceRepairUsed && isPunctuationOnlyAnswer(answer)) {
+      if (this.punctuationRepairUsed || turn + 1 >= maxTurns)
+        return { kind: 'fail', message: 'RESPONSE_EVIDENCE_INVALID: evidence correction produced no usable answer.' }
+      this.punctuationRepairUsed = true
+      return { kind: 'retry',
+        feedback: `Your evidence correction contained only punctuation. Provide a substantive task answer now; do not return a placeholder. Follow the prior evidence correction and retain useful findings and accurate change/verification details. ${this.priorGuidance}`,
+        thought: '[Requesting a substantive evidence-matched answer]' }
+    }
+    const missingMutation = unsupportedMutationClaim(answer, hasConfirmedMutation)
+    if (!missingMutation && !unsupportedTestClaim(answer, receipt, ledger)) return null
+    if (this.evidenceRepairUsed || turn + 1 >= maxTurns)
+      return { kind: 'fail', message: 'RESPONSE_EVIDENCE_INVALID: repeated completion claims lack corresponding execution or mutation evidence.' }
+    this.evidenceRepairUsed = true
+    this.priorGuidance = responseEvidenceCorrection(receipt, missingMutation, answer)
+    return { kind: 'retry', feedback: this.priorGuidance,
+      thought: missingMutation ? '[Correcting an unsupported mutation claim]' : '[Correcting an unsupported test-result claim]' }
+  }
+}
