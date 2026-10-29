@@ -432,44 +432,38 @@ test('R1 snapshot persistence failure blocks mutation without running the shell'
   }
 });
 
-test('R1 red command without verifier receipt closes recovery until a bound rerun', async () => {
+test('R1 arbitrary interpreter failure is not authoritative verifier evidence', async () => {
   const root = mkdtempSync(join(tmpdir(), 'babel-r1-unbound-red-'));
-  const marker = join(root, 'blocked.txt');
-  writeFileSync(join(root, 'red.cjs'), 'process.exit(1)\n');
-  writeFileSync(join(root, 'write-marker.cjs'), "require('node:fs').writeFileSync('blocked.txt', 'executed')\n");
   const envKeys = ['BABEL_BENCHMARK_AUTO_APPROVE', 'BABEL_BENCHMARK_MODE', 'BABEL_AUTONOMY_LEASE', 'BABEL_EXECUTION_PROFILE', 'BABEL_ALLOW_HOST_FALLBACK', 'BABEL_DRY_RUN', 'BABEL_DRY_RUN_SOURCE'] as const;
   const prior = Object.fromEntries(envKeys.map((key) => [key, process.env[key]]));
   try {
+    writeFileSync(join(root, 'red.cjs'), 'process.exit(1)\n');
     process.env['BABEL_BENCHMARK_AUTO_APPROVE'] = '1';
     process.env['BABEL_BENCHMARK_MODE'] = '1';
     process.env['BABEL_AUTONOMY_LEASE'] = JSON.stringify({
-      version: 2, leaseId: 'recovery-unbound-red-test',
-      scope: { repository: 'fixture', objective: 'verify fail-closed recovery' },
-      allowedCapabilities: ['inspect_repository', 'run_arbitrary_code', 'run_local_command', 'run_tests', 'edit_task_files'],
+      version: 2, leaseId: 'recovery-non-verifier-red-test',
+      scope: { repository: 'fixture', objective: 'ensure arbitrary code is not verifier evidence' },
+      allowedCapabilities: ['inspect_repository', 'run_arbitrary_code'],
     });
     process.env['BABEL_EXECUTION_PROFILE'] = 'dev_local';
     process.env['BABEL_ALLOW_HOST_FALLBACK'] = '1';
     const engine = new ChatEngine({ task: 'repair parser', projectRoot: root });
     process.env['BABEL_DRY_RUN'] = 'false';
     process.env['BABEL_DRY_RUN_SOURCE'] = 'session';
-    (engine as any).workingState = applyWorkingStateEvent(createWorkingState('repair parser'), {
+    const state = applyWorkingStateEvent(createWorkingState('repair parser'), {
       type: 'mutation', path: 'src/parser.ts', fingerprint: 'first-edit',
     });
-    const context = { agentId: 'test', runId: 'test', runDir: root, babelRoot: root };
-    const red = await (engine as any).executeOneAction(
+    (engine as any).workingState = state;
+    const result = await (engine as any).executeOneAction(
       { type: 'run_command', command: 'node red.cjs' },
-      context, {}, { index: 0, ownerGeneration: 0 },
+      { agentId: 'test', runId: 'test', runDir: root, babelRoot: root },
+      {}, { index: 0, ownerGeneration: 0 },
     );
-    assert.match(red.observation, /exit_code: 1/);
-    assert.doesNotMatch(red.observation, /\[sandbox\] Command rejected/);
-    assert.equal((engine as any).workingState.recoveryGate?.satisfied, false, red.observation);
-    assert.equal((engine as any).workingState.recoveryGate?.binding, undefined);
-    const blocked = await (engine as any).executeOneAction(
-      { type: 'run_command', command: 'node write-marker.cjs' },
-      context, {}, { index: 1, ownerGeneration: 0 },
-    );
-    assert.match(blocked.observation, /RECOVERY_CANDIDATE_DRIFT|RECOVERY_EVIDENCE_REQUIRED/);
-    assert.equal(existsSync(marker), false);
+    assert.match(result.observation, /exit_code: 1/);
+    assert.doesNotMatch(result.observation, /\[sandbox\] Command rejected/);
+    assert.equal((engine as any).workingState.recoveryGate, undefined,
+      'a permitted arbitrary script is not a verifier and cannot create red-test recovery evidence');
+    assert.equal((engine as any).workingState.settledFailedVerifier, undefined);
   } finally {
     for (const key of envKeys) {
       if (prior[key] === undefined) delete process.env[key];

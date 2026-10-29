@@ -12,7 +12,7 @@ import {createWorkingState,type WorkingState} from './codingLoop/workingState.js
 import {ingestVerifierResult} from './codingLoop/chatBindings.js'
 import {recoveryObservationId} from './codingLoop/recoveryPlan.js'
 import {SafeExecutor} from '../sandbox.js'
-import {resetDockerAvailabilityCache,setDockerAvailableForTest} from '../config/benchmarkContainer.js'
+import {buildBenchmarkContainerCommand,resetDockerAvailabilityCache,setDockerAvailableForTest} from '../config/benchmarkContainer.js'
 
 const fixtures = [
   {name:'named import',path:'math.js',testPath:'math.test.js',label:'addition',source:'export function add(a,b) { return a-b; }\n',old:'return a-b;',replacement:'return a+b;',
@@ -173,4 +173,97 @@ test('an actually started red without a receipt can rerun through normal governe
   const denied = await run({type:'run_command',command:'node -e "process.exit(0)"'})
   assert.equal(executed,2)
   assert.match(denied.observationList.join('\n'), /RECOVERY_|DENY|denied/i)
+})
+
+test('a Python verifier does not invalidate the current recovery candidate with container bytecode', async t => {
+  const storage = mkdtempSync(join(tmpdir(), 'babel-python-recovery-cache-'))
+  const root = join(storage, 'project'), runDir = join(storage, 'runtime')
+  mkdirSync(root); mkdirSync(runDir)
+  const names = ['BABEL_LIVE','BABEL_RUNS_DIR','BABEL_EXECUTION_PROFILE','BABEL_BENCHMARK_DOCKER_IMAGE','BABEL_DOCKER_DISABLE','BABEL_ALLOW_HOST_FALLBACK','BABEL_BENCHMARK_DOCKER_EXTRA_ARGS'] as const
+  const old = names.map(name => [name, process.env[name]] as const)
+  t.after(() => { for (const [name,value] of old) { if (value === undefined) delete process.env[name]; else process.env[name] = value }; resetDockerAvailabilityCache(); rmSync(storage, { recursive:true, force:true }) })
+  process.env['BABEL_LIVE'] = 'true'; process.env['BABEL_RUNS_DIR'] = join(storage, 'runs'); process.env['BABEL_EXECUTION_PROFILE'] = 'safe_repo'
+  process.env['BABEL_BENCHMARK_DOCKER_IMAGE'] = 'synthetic/python:unit'; delete process.env['BABEL_DOCKER_DISABLE']; delete process.env['BABEL_ALLOW_HOST_FALLBACK']; delete process.env['BABEL_BENCHMARK_DOCKER_EXTRA_ARGS']; setDockerAvailableForTest(true)
+
+  const command = 'python -m doctest solution.py -v'
+  const source = 'def answer():\n    """Return the expected value.\n    >>> answer()\n    1\n    """\n    return -1\n'
+  writeFileSync(join(root, 'solution.py'), source)
+  execFileSync('git', ['init', '-q'], { cwd:root, windowsHide:true })
+  execFileSync('git', ['add', 'solution.py'], { cwd:root, windowsHide:true })
+  execFileSync('git', ['-c','user.name=Fixture','-c','user.email=fixture@example.test','commit','-qm','fixture'], { cwd:root, windowsHide:true })
+
+  t.mock.method(SafeExecutor.prototype, 'testRunAsync', async (actualCommand: string) => {
+    assert.equal(actualCommand, command)
+    const prepared = buildBenchmarkContainerCommand({
+      dockerImage: process.env['BABEL_BENCHMARK_DOCKER_IMAGE']!, projectRoot:root, cwd:root, command:actualCommand,
+    })
+    const containerEnv = new Map<string,string>()
+    for (let index = 0; index < prepared.args.length - 1; index++) {
+      if (prepared.args[index] !== '-e') continue
+      const pair = prepared.args[index + 1] ?? '', eq = pair.indexOf('=')
+      if (eq > 0) containerEnv.set(pair.slice(0,eq),pair.slice(eq + 1))
+    }
+    // Model Python's normal import cache side effect at the Docker transport
+    // seam. Before the runtime fix, the untracked .pyc changes the candidate
+    // between the red receipt and the controller's next recovery action.
+    if (containerEnv.get('PYTHONDONTWRITEBYTECODE') !== '1') {
+      mkdirSync(join(root,'__pycache__'), { recursive:true })
+      writeFileSync(join(root,'__pycache__','solution.cpython-311.pyc'), 'container-generated cache')
+    }
+    return {
+      exit_code:1,
+      stdout:'*** Failed example:\n    answer()\nExpected: 1\nGot: 0\nFile "/app/solution.py", line 4, in answer\n',
+      stderr:'', process_started:true, process_termination:'exited' as const,
+    }
+  })
+
+  const task = 'Fix the failing doctest in solution.py. Run `python -m doctest solution.py -v` before completion. Preserve the examples.'
+  const engine = new ChatEngine({ task, projectRoot:root, requiredVerifierCommands:[command] })
+  engine.admitUserSubmission({ userInput:task }, { model:'fixture-model', provider:'ollama' })
+  const host = engine as unknown as {
+    _turnIndex:number; parity:{turnId:string;sessionEvents:import('./sessionEvents.js').SessionEventLog};
+    workingState:WorkingState; toolCallLog:Array<{error?:string;exit_code?:number}>;
+    lastVerifierReceipt:{exit_code:number;stale:boolean}|null;
+    currentRecoveryBinding:()=>{workspaceRevision:string}|null;
+    executeOneAction:(action:ChatToolAction,context:ToolContext,callbacks:object,meta:{index:number;idempotencyKey:string;ownerGeneration:number})=>Promise<{observation:string}>;
+  }
+  const context:ToolContext = { agentId:'test', runId:'test', runDir, babelRoot:root, projectRoot:root }
+  const run = async (action:ChatToolAction) => {
+    const id = `python-cache-${++host._turnIndex}`, turn = host.parity.turnId
+    recordToolProposed(host.parity.sessionEvents, { turn_id:turn, tool_call_id:id, tool_name:action.type })
+    const result = await host.executeOneAction(action, context, {}, { index:host._turnIndex, idempotencyKey:id, ownerGeneration:0 })
+    const row = host.toolCallLog.at(-1)!
+    const started = host.parity.sessionEvents.events.some(event => event.kind === 'tool_started' && event.tool_call_id === id)
+    recordToolTerminal(host.parity.sessionEvents, { turn_id:turn, tool_call_id:id, tool_name:action.type,
+      ...(started ? { ...(row.exit_code !== undefined ? {exit_code:row.exit_code} : {}), content:result.observation, failed:!!row.error }
+        : { cancelled:true, reason:'pre_dispatch_denied_or_invalid', recovery_state:'TOOL_NOT_STARTED' as const }) })
+    return result
+  }
+
+  const firstEdit = await run({ type:'str_replace', file_path:'solution.py', old_str:'    return -1', new_str:'    return 0' })
+  assert.doesNotMatch(firstEdit.observation, /CAPABILITY_DENIED|DENY_MISSING_AUTHORITY/)
+  const initial = host.currentRecoveryBinding()
+  assert.ok(initial?.workspaceRevision)
+  const red = await run({ type:'test_run', command })
+  assert.match(red.observation, /exit_code: 1/)
+  assert.equal(host.lastVerifierReceipt?.exit_code, 1, 'the actual tool settlement path captures the red receipt')
+  assert.equal(host.workingState.lastVerifier?.exitCode, 1, 'the actual tool settlement path records the red verifier result')
+  assert.ok(host.workingState.settledFailedVerifier, 'actual process execution is retained as a failed-verifier descriptor')
+  assert.equal(host.currentRecoveryBinding()?.workspaceRevision, initial.workspaceRevision,
+    'container-generated bytecode must not change the failed candidate identity')
+  assert.ok(host.parity.sessionEvents.events.some(event => event.kind === 'verifier_attempt'),
+    'the test action must traverse durable verifier event settlement')
+
+  await run({ type:'read_file', path:'solution.py' })
+  const gate = host.workingState.recoveryGate!
+  assert.ok(gate?.satisfied, 'the fresh source read should satisfy the red-verifier recovery gate')
+  const plan = {
+    schemaVersion:1 as const, failureSignature:gate.failureSignature, workspaceRevision:gate.binding!.workspaceRevision,
+    hypothesisClass:'logic' as const, targetIdentities:['solution.py'], actionFamily:'str_replace' as const,
+    criterionId:host.workingState.lastVerifier!.identity,
+    supportingObservationIds:gate.observedKeys!.map(recoveryObservationId),
+  }
+  const repair = await run({ type:'str_replace', file_path:'solution.py', old_str:'    return 0', new_str:'    return 1', repair_plan:plan })
+  assert.doesNotMatch(repair.observation, /RECOVERY_CANDIDATE_DRIFT|RECOVERY_EVIDENCE_REQUIRED|RECOVERY_PLAN_REQUIRED/)
+  assert.equal(readFileSync(join(root,'solution.py'),'utf8'), source.replace('    return -1','    return 1'))
 })

@@ -411,6 +411,10 @@ function buildDockerRunCommonArgs(options: BenchmarkContainerCommandOptions): st
   for (const [key, value] of Object.entries(gitEnv)) {
     if (value !== undefined) args.push('-e', `${key}=${value}`);
   }
+  // A Python verifier otherwise leaves __pycache__ in the mounted project.
+  // Recovery revisions intentionally bind all untracked files, so generated
+  // interpreter cache files can masquerade as external candidate drift.
+  args.push('-e', 'PYTHONDONTWRITEBYTECODE=1');
   args.push(options.dockerImage);
 
   return args;
