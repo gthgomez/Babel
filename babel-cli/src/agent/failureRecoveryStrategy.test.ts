@@ -456,6 +456,18 @@ test('a mutation invalidates a previously satisfied recovery permit', () => {
 test('environment and provider failures stay outside implementation recovery gate', () => {
   let state = createWorkingState('fix bug X');
   state = applyWorkingStateEvent(state, { type: 'mutation', path: 'src/parser.ts' });
+  const dockerDisk = ingestVerifierResult({
+    state,
+    tool: 'test_run',
+    target: 'npm test',
+    exitCode: 125,
+    stdout: '',
+    stderr: 'docker: Error response from daemon: no space left on device',
+    summary: 'exit 125; stdout=no; stderr=yes',
+  });
+  assert.equal(dockerDisk.state.failureSurface?.kind, 'ENVIRONMENT_FAILURE');
+  assert.equal(dockerDisk.state.recoveryGate, undefined);
+
   const environment = ingestVerifierResult({
     state,
     tool: 'run_command',

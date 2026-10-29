@@ -134,7 +134,54 @@ export function unsupportedMutationClaim(answer: string, hasConfirmedMutation: b
   return false
 }
 
-export function responseEvidenceCorrection(receipt: ResponseVerifierEvidence, missingMutation = false): string {
+export function responseEvidenceCorrection(receipt: ResponseVerifierEvidence, missingMutation = false, proposedAnswer = ''): string {
   if (missingMutation) return 'Response evidence correction: No confirmed file mutation is recorded for this submission. Your proposed answer claims a file change was completed. Correct the answer once: remove or qualify that claim, retain useful inspection findings and the requested output format. An already-correct file can be reported as needing no change. You may answer truthfully without running tools or making changes.'
+  if (receipt?.authority === true && receipt.exit_code === 0 && receipt.stale === false && receipt.tests_total === 0) {
+    return `Response evidence correction: ${responseVerifierFacts(receipt)} This receipt confirms ${receipt.command} executed and exited 0, but the runner reported zero tests. It is not evidence that a test suite passed. Claims about other commands need their own matching evidence; remove or qualify unsupported command claims. Retain the artifact summary, computation, and useful inspection findings. State the zero-test limitation plainly and provide a substantive answer in the requested format.`
+  }
+  if (/\b\d+\s+tests?\s+pass(?:es|ed)?\b/i.test(proposedAnswer) &&
+      receipt?.authority === true && receipt.exit_code === 0 && receipt.stale === false &&
+      (receipt.tests_total ?? 0) > (receipt.tests_skipped ?? 0) && receipt.tests_passed === undefined) {
+    return `Response evidence correction: ${responseVerifierFacts(receipt)} This receipt confirms ${receipt.command} executed and exited 0; an exact pass count is not recorded. Remove numeric pass/fail claims. Claims about other commands need their own matching evidence; remove or qualify any unsupported ones. Report the recorded command, exit status, and count uncertainty. Retain the file-change summary, useful inspection findings, and requested output format. Do not replace the answer with a placeholder.`
+  }
   return `Response evidence correction: ${responseVerifierFacts(receipt)} Your proposed answer claims tests ran or passed without matching evidence. Correct the answer once: remove or qualify that claim, retain any useful clarification and the requested output format. Reading test source is not running tests. You may answer truthfully without running tools or making changes.`
+}
+
+/** A punctuation-only reply after an evidence correction carries no usable task answer. */
+export function isPunctuationOnlyAnswer(answer: string): boolean {
+  return !/[\p{L}\p{N}]/u.test(answer)
+}
+
+/** Bounded answer correction after the host validates execution and mutation facts. */
+export class ResponseEvidenceRetry {
+  private evidenceRepairUsed = false
+  private punctuationRepairUsed = false
+  private priorGuidance = ''
+
+  inspect(input: {
+    answer: string
+    receipt: ResponseVerifierEvidence
+    ledger: readonly NonNullable<ResponseVerifierEvidence>[]
+    hasConfirmedMutation: boolean
+    turn: number
+    maxTurns: number
+  }): { kind: 'retry'; feedback: string; thought: string } | { kind: 'fail'; message: string } | null {
+    const { answer, receipt, ledger, hasConfirmedMutation, turn, maxTurns } = input
+    if (this.evidenceRepairUsed && isPunctuationOnlyAnswer(answer)) {
+      if (this.punctuationRepairUsed || turn + 1 >= maxTurns)
+        return { kind: 'fail', message: 'RESPONSE_EVIDENCE_INVALID: evidence correction produced no usable answer.' }
+      this.punctuationRepairUsed = true
+      return { kind: 'retry',
+        feedback: `Your evidence correction contained only punctuation. Provide a substantive task answer now; do not return a placeholder. Follow the prior evidence correction and retain useful findings and accurate change/verification details. ${this.priorGuidance}`,
+        thought: '[Requesting a substantive evidence-matched answer]' }
+    }
+    const missingMutation = unsupportedMutationClaim(answer, hasConfirmedMutation)
+    if (!missingMutation && !unsupportedTestClaim(answer, receipt, ledger)) return null
+    if (this.evidenceRepairUsed || turn + 1 >= maxTurns)
+      return { kind: 'fail', message: 'RESPONSE_EVIDENCE_INVALID: repeated completion claims lack corresponding execution or mutation evidence.' }
+    this.evidenceRepairUsed = true
+    this.priorGuidance = responseEvidenceCorrection(receipt, missingMutation, answer)
+    return { kind: 'retry', feedback: this.priorGuidance,
+      thought: missingMutation ? '[Correcting an unsupported mutation claim]' : '[Correcting an unsupported test-result claim]' }
+  }
 }

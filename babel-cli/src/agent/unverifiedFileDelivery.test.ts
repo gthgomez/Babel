@@ -3,6 +3,8 @@ import test from 'node:test'
 import { resolve } from 'node:path'
 import { resolveCompletionVerificationContext, type GateToolLogEntry } from './completionGatePolicy.js'
 import { unverifiedFileDeliveryPaths } from './unverifiedFileDelivery.js'
+import { formatPreservedUnverifiedTerminalAnswer } from './preservedUnverifiedTerminal.js'
+import { ResponseEvidenceRetry } from './chatResponseEvidence.js'
 
 const root = resolve('fixture-project')
 const write: GateToolLogEntry = { tool: 'write_file', target: 'map.md', exit_code: 0, mutation_paths: ['map.md'], effect_status: 'confirmed_change' }
@@ -33,4 +35,24 @@ test('retained artifacts cannot acquire outside-root or non-file mutation author
   for (const change of [{ mutation_paths: ['../escape'] }, { mutation_paths: [resolve(root, '..', 'escape')] }, { mutation_paths: [] }, { tool: 'run_command' }, { tool: 'sub_agent' }, { error: 'blocked' }]) {
     assert.equal(unverifiedFileDeliveryPaths({ ...base(), toolCallLog: [{ ...write, ...change }, read] }), null)
   }
+})
+
+test('failed evidence correction retains a read-back artifact with explicit unverified status', () => {
+  const retry = new ResponseEvidenceRetry()
+  const unsupported = 'All tests passed.'
+  assert.equal(retry.inspect({ answer: unsupported, receipt: null, ledger: [], hasConfirmedMutation: true, turn: 0, maxTurns: 4 })?.kind, 'retry')
+  const exhausted = retry.inspect({ answer: unsupported, receipt: null, ledger: [], hasConfirmedMutation: true, turn: 1, maxTurns: 4 })
+  assert.equal(exhausted?.kind, 'fail')
+  const refs = unverifiedFileDeliveryPaths(base())
+  assert.deepEqual(refs, ['map.md'])
+  const answer = formatPreservedUnverifiedTerminalAnswer({
+    authorityReason: 'UNVERIFIED: required verification was unavailable; task fulfillment is not certified.',
+    retainedCandidate: 'The host recorded confirmed changes to: map.md. No authoritative test result is recorded.',
+    artifactRefs: refs!,
+  })
+  assert.match(answer, /UNVERIFIED/)
+  assert.match(answer, /map\.md/)
+  assert.match(answer, /No authoritative test result is recorded/)
+  assert.doesNotMatch(answer, /All tests passed/)
+  assert.equal(unverifiedFileDeliveryPaths({ ...base(), toolCallLog: [write] }), null)
 })

@@ -404,7 +404,13 @@ export function buildProviderRetryCallbacks(host: ChatProviderRetryHost, context
       },
       onInvocationCompleted: (event) => {
         if (event.status === 'failed' && context.usageScope?.chargeId === event.inference_id) {
-          context.usageScope.usageMetadata = null;
+          // A fully received response can fail argument normalization after the
+          // provider has supplied usage. Keep that charge's observed tokens;
+          // transport failures without a usage receipt remain unknown.
+          context.usageScope.usageMetadata = event.failure_stage === 'response_normalization'
+            && event.usage_metadata?.prompt_tokens != null
+            && event.usage_metadata.completion_tokens != null
+              ? { ...event.usage_metadata } : null;
           context.usageScope.modelId = event.model;
           if (event.inference_started === false) {
             const scope = context.usageScope;
@@ -489,10 +495,17 @@ export function buildProviderRetryCallbacks(host: ChatProviderRetryHost, context
             globalCostTracker.getTaskChargeIds(context.usageScope.taskOwnerId).includes(event.inference_id)) {
           const scope = context.usageScope;
           const attribution = captureUsageAttribution(scope, event.inference_id, scope.requestId, scope.attemptId);
+          const metadata = scope.usageMetadata;
+          const known = metadata?.prompt_tokens != null && metadata.completion_tokens != null;
           const update = globalCostTracker.settleUsage(
-            event.model, 0, 0, null, null, attribution,
-            false,
-            scope.provider ?? event.provider,
+            metadata?.provider_model_id ?? event.model,
+            known ? metadata.prompt_tokens! : 0,
+            known ? metadata.completion_tokens! : 0,
+            metadata?.prompt_cache_hit_tokens ?? null,
+            metadata?.prompt_cache_miss_tokens ?? null, attribution,
+            known,
+            metadata?.provider ?? scope.provider ?? event.provider,
+            settlementReportedCostUsd(metadata),
           );
           if (update.kind === 'conflict') {
             const appliesToCurrent = scope.taskOwnerId === host.taskAllowance?.taskOwnerId && isOwnerCurrent();

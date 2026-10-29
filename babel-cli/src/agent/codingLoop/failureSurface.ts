@@ -4,6 +4,7 @@
  */
 
 import type { CompiledObservation } from './observationCompiler.js'
+import { isLocalEnvironmentErrorText } from '../chatFailureClassification.js'
 
 export const FAILURE_SURFACES = [
   'TEST_FAILURE',
@@ -134,10 +135,13 @@ function surfaceFromObservation(
   if (parser === 'node_trace' && obs.failures.length > 0 && /\bERR_ASSERTION\b/i.test(blob)) {
     return 'TEST_FAILURE'
   }
+  if (parser === 'test_loader') {
+    return 'DEPENDENCY_FAILURE'
+  }
   if (/policy blocked|permission denied|not allowed|sandbox/i.test(blob)) {
     return 'POLICY_FAILURE'
   }
-  if (/\b(?:ENOSPC|EROFS|EIO|EBUSY|EMFILE|ENFILE)\b/i.test(blob)) {
+  if (isLocalEnvironmentErrorText(blob)) {
     return 'ENVIRONMENT_FAILURE'
   }
   if (

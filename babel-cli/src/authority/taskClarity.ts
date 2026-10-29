@@ -70,10 +70,10 @@ const MERGE_IT = /\bmerge\s+it\b/i;
 const DEPLOY_IT = /\bdeploy\s+it\b/i;
 const PR_MERGE_SIGNAL = /\b(pr|pull request|#\d+)\b/i;
 const CI_OR_TESTS = /\b(fix\s+(the\s+)?(failing\s+)?(ci|tests)|implement|refactor|choose the best)\b/i;
-// Remove only an unconditional coordinated publication prohibition. Mixed or
-// conditional directives remain subject to the existing authority check. This
-// intent projection never adds capabilities to the concrete-action lease.
-const NO_COMMIT_PUSH = /\b(?:do\s+not|don't|never)\s+commit\s*(?:,\s*(?:(?:and|or)\s+)?|\s+(?:and|or)\s+)(?:(?:do\s+not|don't|never)\s+)?push\b(?=\s*(?:$|[.;!?\n]|,\s*(?:change|modify|make|touch)\b))/gi;
+// Remove only an unconditional coordinated publication prohibition. This is
+// retained for intent classification; concrete publication actions still pass
+// through the lease and PDP at dispatch time.
+const NO_COMMIT_PUSH = /\b(?:do\s+not|don't|never)\s+(?:(?:modify|change|edit|touch)\s+(?:files?|code)\s*,\s*)?commit(?:\s+(?:anything(?:\s+else)?|changes?|code|files?))?\s*(?:,\s*(?:(?:and|or)\s+)?|\s+(?:and|or)\s+)(?:(?:do\s+not|don't|never)\s+)?push(?:\s+(?:to|into)\s+(?:github|origin|remote|the\s+remote|the\s+feature\s+branch))?\b(?=\s*(?:$|[.;!?\n]|,\s*(?:(?:and|or)\s+)?(?:change|modify|make|touch|edit)\b))/gi;
 const COMMIT_PUSH = /\bcommit\b.*\bpush\b|\bpush\b.*\bfeature branch\b/i;
 
 /** Publication examples are data only when explicitly introduced as explanation.

@@ -3,11 +3,16 @@ import { test } from 'node:test'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { ChatEngine } from './chatEngine.js'
+import { ChatEngine, type ChatEvent } from './chatEngine.js'
 import { DeepInfraApiRunner } from '../runners/deepInfraApi.js'
 import type { ToolStreamEvent } from '../runners/base.js'
 import { SafeExecutor } from '../sandbox.js'
-import { unsupportedTestClaim, unsupportedMutationClaim, responseEvidenceCorrection } from './chatResponseEvidence.js'
+import { unsupportedTestClaim, unsupportedMutationClaim, responseEvidenceCorrection, isPunctuationOnlyAnswer } from './chatResponseEvidence.js'
+
+test('punctuation-only evidence correction cannot masquerade as a delivered answer', () => {
+  for (const answer of ['.', '...', ' — ', '  !  ']) assert.equal(isPunctuationOnlyAnswer(answer), true)
+  for (const answer of ['No.', 'Updated README.md.', '0 tests ran.']) assert.equal(isPunctuationOnlyAnswer(answer), false)
+})
 
 test('test claims distinguish execution, freshness, result and scope', () => {
   const green = { command: 'npm test', exit_code: 0, authority: true, stale: false, scope: 'full_suite', tests_total: 1, tests_skipped: 0 }
@@ -79,7 +84,7 @@ test('bare targeted reports preserve selectors and separate prose success from f
   assert.equal(unsupportedTestClaim('I ran npm test and it failed.',{...receipt,command:'npm test',exit_code:1}),false);
 })
 
-for (const scenario of ['correction', 'repeated', 'exact_json', 'mutation-correction', 'mutation-repeated', 'mixed-repeated'] as const)
+for (const scenario of ['correction', 'repeated', 'exact_json', 'mutation-correction', 'mutation-repeated', 'mixed-repeated', 'punctuation-correction', 'punctuation-repeated', 'punctuation-final', 'evidence-final'] as const)
 test(`response evidence ${scenario}: preserve useful answers without requiring effects`, async t => {
   const root = mkdtempSync(join(tmpdir(), 'chat-response-evidence-'))
   const prior = process.env['BABEL_NATIVE_TOOLS']
@@ -108,28 +113,146 @@ test(`response evidence ${scenario}: preserve useful answers without requiring e
         yield { type: 'tool_use', id: 'inspect-catalog', name: 'read_file', input: { path: 'catalog.js' } }
         yield { type: 'done', finishReason: 'tool_calls' }
       } else {
-        yield { type: 'text_delta', text: scenario === 'mixed-repeated' && this.turns > 2 ? 'I updated files.' : scenario === 'exact_json' ? exact :
-          scenario.endsWith('repeated') || this.turns === 2 ? unsupported : corrected }
+        const text = scenario.startsWith('punctuation-')
+          ? this.turns === 2 ? unsupported : this.turns === 3 || scenario === 'punctuation-repeated' ? '.' : corrected
+          : scenario === 'mixed-repeated' && this.turns > 2 ? 'I updated files.' : scenario === 'exact_json' ? exact :
+            scenario.endsWith('repeated') || this.turns === 2 ? unsupported : corrected
+        yield { type: 'text_delta', text }
         yield { type: 'done', finishReason: 'stop' }
       }
     }
   }
   const runner = new Runner()
   const engine = new ChatEngine({ task: 'Make this better.', projectRoot: root,
-    model: 'deepseek-v4-flash', providerRunner: runner, maxTurns: 6 })
+    model: 'deepseek-v4-flash', providerRunner: runner, maxTurns: scenario === 'punctuation-final' ? 3 : scenario === 'evidence-final' ? 2 : 6 })
   let answer = ''
   let failure: { reason_code?: string; outcome?: string } | undefined
   for await (const event of engine.submitMessageStream('Make this better.', 'execute')) {
     if (event.type === 'done') answer = event.answer
     if (event.type === 'failed') failure = event
   }
-  if (scenario.endsWith('repeated')) {
+  if (scenario.endsWith('repeated') || scenario === 'punctuation-final' || scenario === 'evidence-final') {
     assert.equal(failure?.reason_code, 'response_evidence_invalid')
     assert.equal(failure?.outcome, 'AGENT_FAILURE')
   } else assert.equal(answer, scenario === 'exact_json' ? exact : corrected)
-  assert.equal(runner.turns, scenario === 'exact_json' ? 2 : 3)
+  assert.equal(runner.turns, scenario === 'exact_json' ? 2 : scenario === 'evidence-final' ? 2 : scenario === 'punctuation-final' ? 3 : scenario.startsWith('punctuation-') ? 4 : 3)
   assert.equal(effects, 0)
   assert.equal(readFileSync(join(root, 'catalog.js'), 'utf8'), 'export const orderCatalog = items => [...items]\n')
+})
+
+for (const cancelAtFinalCorrection of [false, true]) {
+test(`ChatEngine preserves read-back artifact after failed evidence correction (cancel=${cancelAtFinalCorrection})`, async t => {
+  const root = mkdtempSync(join(tmpdir(), 'chat-response-artifact-fallback-'))
+  const previous = process.env['BABEL_NATIVE_TOOLS']
+  process.env['BABEL_NATIVE_TOOLS'] = 'enabled'
+  t.after(() => {
+    if (previous === undefined) delete process.env['BABEL_NATIVE_TOOLS']
+    else process.env['BABEL_NATIVE_TOOLS'] = previous
+    rmSync(root, { recursive: true, force: true })
+  })
+  let engine: ChatEngine
+  class Runner extends DeepInfraApiRunner {
+    private turn = 0
+    constructor() { super('fixture-model', 'UNUSED_FIXTURE_KEY', {}, { explicitCredential: '', env: {} }) }
+    override async *executeWithToolsStream(): AsyncGenerator<ToolStreamEvent, void, undefined> {
+      this.turn++
+      if (this.turn === 1) {
+        yield { type: 'tool_use', id: 'create-artifact', name: 'write_file', input: { path: 'result.txt', content: 'calculated result\n' } }
+        yield { type: 'done', finishReason: 'tool_calls' }
+      } else if (this.turn === 2) {
+        yield { type: 'tool_use', id: 'read-artifact', name: 'read_file', input: { path: 'result.txt' } }
+        yield { type: 'done', finishReason: 'tool_calls' }
+      } else if (this.turn === 3) {
+        yield { type: 'tool_use', id: 'run-tests', name: 'test_run', input: { command: 'npm test' } }
+        yield { type: 'done', finishReason: 'tool_calls' }
+      } else {
+        if (cancelAtFinalCorrection && this.turn === 5) engine.cancel()
+        yield { type: 'text_delta', text: 'All tests passed.' }
+        yield { type: 'done', finishReason: 'stop' }
+      }
+    }
+  }
+  const runner = new Runner()
+  engine = new ChatEngine({ task: 'Fix the result formatting.', projectRoot: root,
+    model: 'deepseek-v4-flash', providerRunner: runner, maxTurns: 7 })
+  const internal = engine as unknown as { isolationBrokerFlags: () => unknown }
+  internal.isolationBrokerFlags = () => ({ isolationRequired: true, isolationAvailable: false, hostFallbackAllowed: false, dirtyTree: false })
+  const events: ChatEvent[] = []
+  for await (const event of engine.submitMessageStream('Fix the result formatting.', 'execute')) events.push(event)
+  const terminal = events.filter(event => event.type === 'failed' || event.type === 'cancelled' || event.type === 'done')
+  assert.equal(terminal.length, 1)
+  if (cancelAtFinalCorrection) {
+    assert.equal(terminal[0]?.type, 'cancelled')
+    assert.equal(events.some(event => event.type === 'failed' && /result\.txt/.test(event.error)), false)
+  } else {
+    assert.equal(readFileSync(join(root, 'result.txt'), 'utf8'), 'calculated result\n')
+    assert.equal(terminal[0]?.type, 'failed')
+    const failure = terminal[0] as Extract<ChatEvent, { type: 'failed' }>
+    assert.equal(failure.outcome, 'AGENT_FAILURE')
+    assert.match(failure.error, /UNVERIFIED/)
+    assert.match(failure.error, /result\.txt/)
+    assert.match(failure.error, /not certified/)
+    assert.doesNotMatch(failure.error, /All tests passed/)
+  }
+})
+}
+
+test('ChatEngine final answer matches an unverified mutation terminal', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'chat-unverified-terminal-answer-'))
+  const previous = {
+    native: process.env['BABEL_NATIVE_TOOLS'],
+    runs: process.env['BABEL_RUNS_DIR'],
+    taskClass: process.env['BABEL_CHAT_TASK_CLASS'],
+  }
+  process.env['BABEL_NATIVE_TOOLS'] = 'enabled'
+  process.env['BABEL_RUNS_DIR'] = join(root, 'runs')
+  process.env['BABEL_CHAT_TASK_CLASS'] = 'ordinary_delivery'
+  t.after(() => {
+    if (previous.native === undefined) delete process.env['BABEL_NATIVE_TOOLS']
+    else process.env['BABEL_NATIVE_TOOLS'] = previous.native
+    if (previous.runs === undefined) delete process.env['BABEL_RUNS_DIR']
+    else process.env['BABEL_RUNS_DIR'] = previous.runs
+    if (previous.taskClass === undefined) delete process.env['BABEL_CHAT_TASK_CLASS']
+    else process.env['BABEL_CHAT_TASK_CLASS'] = previous.taskClass
+    rmSync(root, { recursive: true, force: true })
+  })
+
+  const task = 'Create result.txt with exactly "calculated result" and report what verification you actually ran.'
+  const modelAnswer = 'Fixed and verified.'
+  class Runner extends DeepInfraApiRunner {
+    private turn = 0
+    constructor() { super('fixture-model', 'UNUSED_FIXTURE_KEY', {}, { explicitCredential: '', env: {} }) }
+    override async *executeWithToolsStream(): AsyncGenerator<ToolStreamEvent, void, undefined> {
+      this.turn++
+      if (this.turn === 1) {
+        yield { type: 'tool_use', id: 'create-result', name: 'write_file', input: { path: 'result.txt', content: 'calculated result' } }
+        yield { type: 'done', finishReason: 'tool_calls' }
+      } else {
+        yield { type: 'text_delta', text: modelAnswer }
+        yield { type: 'done', finishReason: 'stop' }
+      }
+    }
+  }
+  const runner = new Runner()
+  const engine = new ChatEngine({ task, projectRoot: root, model: 'deepseek-v4-flash', providerRunner: runner,
+    maxTurns: 4 })
+  const events: ChatEvent[] = []
+  for await (const event of engine.submitMessageStream(task, 'execute')) events.push(event)
+  const terminal = events.find(event => event.type === 'done')
+
+  assert.equal(terminal?.type, 'done', JSON.stringify(events))
+  if (terminal?.type !== 'done') return
+  assert.equal(readFileSync(join(root, 'result.txt'), 'utf8'), 'calculated result')
+  assert.equal(terminal.outcome, 'UNVERIFIED_PATCH')
+  assert.match(terminal.answer, /^Completion status: UNVERIFIED_PATCH\./)
+  assert.match(terminal.answer, /Completion status: UNVERIFIED_PATCH/)
+  assert.match(terminal.answer, /required task-acceptance evidence was not established/i)
+  assert.match(terminal.answer, /Paths with recorded confirmed mutations[^\n]*result\.txt/)
+  assert.match(terminal.answer, /Unverified model response:[\s\S]*Fixed and verified\./)
+  assert.doesNotMatch(terminal.answer, /No authoritative verifier result was recorded/i)
+  assert.equal(engine.getConversation().at(-1)?.content, terminal.answer)
+  const decisions = engine.getParityRuntime().sessionEvents.events.filter(event => event.kind === 'completion_decision')
+  assert.equal(decisions.at(-1)?.final_outcome, 'UNVERIFIED_PATCH')
 })
 
 test('native numeric pass claims bind exact counts and targeted command identity', () => {
@@ -184,4 +307,19 @@ test('completed file-work claims require confirmed mutations, while inspected no
   assert.match(responseEvidenceCorrection(null, true), /No confirmed file mutation/)
   assert.doesNotMatch(responseEvidenceCorrection(null, true), /claims tests ran/)
   assert.match(responseEvidenceCorrection(null), /claims tests ran/)
+  const countedOnly = { command: 'npm test', exit_code: 0, authority: true, stale: false,
+    scope: 'full_suite', tests_total: 1, tests_skipped: 0 }
+  const correction = responseEvidenceCorrection(countedOnly, false, 'I ran npm test: 1 test passed.')
+  assert.match(correction, /confirms npm test executed/)
+  assert.match(correction, /exact pass count is not recorded/)
+  assert.match(correction, /retain.*file-change summary/i)
+  assert.match(responseEvidenceCorrection(countedOnly, false, 'I ran pytest: 1 test passed.'), /Claims about other commands need their own matching evidence/)
+  assert.match(responseEvidenceCorrection(countedOnly, false, 'I ran pytest: all tests passed.'), /claims tests ran or passed/)
+  const zeroTests = { command: 'node --test', exit_code: 0, authority: true, stale: false,
+    scope: 'full_suite', tests_total: 0, tests_skipped: 0 }
+  const zeroCorrection = responseEvidenceCorrection(zeroTests, false, 'I ran npm test and all tests passed.')
+  assert.match(zeroCorrection, /node --test/)
+  assert.match(zeroCorrection, /zero tests/)
+  assert.match(zeroCorrection, /other commands need their own matching evidence/)
+  assert.match(zeroCorrection, /retain.*artifact summary/i)
 })

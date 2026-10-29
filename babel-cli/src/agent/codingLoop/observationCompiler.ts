@@ -72,7 +72,7 @@ export function compileObservation(input: CompileObservationInput): CompiledObse
 
   const stdoutParts = splitHeadTail(stdout)
   const stderrParts = splitHeadTail(stderr)
-  const summary = buildSummary(exitCode, parsed.failures, stdoutPresent, stderrPresent)
+  const summary = buildSummary(exitCode, parsed.failures, stdoutPresent, stderrPresent, parsed.parserName)
 
   return {
     tool: input.tool,
@@ -116,6 +116,16 @@ export function formatCompiledObservation(compiled: CompiledObservation): string
   }
   appendStream(lines, 'stdout', compiled.stdoutPresent, compiled.stdoutHead, compiled.stdoutTail)
   appendStream(lines, 'stderr', compiled.stderrPresent, compiled.stderrHead, compiled.stderrTail)
+  const command = compiled.command ?? compiled.target
+  const output = `${compiled.stdoutHead}\n${compiled.stdoutTail}\n${compiled.stderrHead}\n${compiled.stderrTail}`
+  if (compiled.exitCode !== null && compiled.exitCode !== 0 &&
+      /^(?:node|node\.exe)\s+--test\s+[^\n]*\.test\.[cm]?tsx?(?:\s|$)/i.test(command) &&
+      /ERR_MODULE_NOT_FOUND|ERR_UNKNOWN_FILE_EXTENSION/.test(output)) {
+    lines.push('test_loader_hint: A missing TypeScript loader may explain this module-resolution failure. Use read_file to inspect the relevant package.json and test script; if tsx is installed, retry with node --import tsx --test and the same test scope. If dependencies are nested, set test_run.cwd to the package directory and use a test-file path relative to cwd. The failed command did not verify the tests.')
+  }
+  if (compiled.parserName === 'test_loader' && compiled.exitCode !== null && compiled.exitCode !== 0) {
+    lines.push('test_loader_location_hint: Node could not resolve the tsx test loader from the current working directory; no project test files executed. Use read_file to inspect the relevant package.json and test script. If tsx is installed in a nested package, set test_run.cwd to that package path relative to project root and keep the test-file path relative to cwd. Do not put host-absolute workspace paths in command arguments; use the cwd field for package selection. You may use the package test script. This failed launch is not a test assertion and does not make arbitrary shell commands authorized.')
+  }
   if (compiled.rawSpillPath) {
     if (compiled.rawSpillPath === 'babel-artifact-unavailable') {
       lines.push('raw_output_unavailable: artifact registration failed or resource bound exceeded; head/tail are partial output')
@@ -186,6 +196,10 @@ export function parseStructuredFailures(
   const text = stripVTControlCharacters(`${stdout}\n${stderr}`)
   const cmd = `${tool ?? ''} ${command ?? ''}`
 
+  if (isMissingTsxTestLoader(text, tool, command)) {
+    return { failures: [], parserName: 'test_loader' }
+  }
+
   const jest = parseJestVitest(text)
   if (jest.length > 0) return { failures: jest, parserName: 'jest_vitest' }
 
@@ -212,6 +226,32 @@ export function parseStructuredFailures(
   if (generic.length > 0) return { failures: generic, parserName: 'generic_file_line' }
 
   return { failures: [] }
+}
+
+function isMissingTsxTestLoader(text: string, tool?: string, command?: string): boolean {
+  const isNodeTestCommand = /^(?:node|node\.exe)\s+--import(?:=|\s+)tsx\s+--test\b/i.test(command?.trim() ?? '')
+  const missingPackage = /ERR_MODULE_NOT_FOUND[^\r\n]*Cannot find package ['"]tsx['"] imported from ([^\r\n]+)/i.exec(text)
+  const loaderResolutionStack = /(?:^|\n)(?:#\s*)?node:internal\/modules\/package_json_reader:\d+/m.test(text)
+  const importerIsTestFile = /\.(?:test|spec)\.[cm]?[jt]sx?$/i.test(missingPackage?.[1]?.trim() ?? '')
+  const testBodyStarted = hasStartedTapTest(text)
+
+  // Node wraps a preload failure in a file-level test failure under --test.
+  // Require the concrete `node --import tsx --test` invocation plus Node's
+  // package-resolution stack, and reject output showing a test body started.
+  // A matching error printed by a project test is not evidence that no tests ran.
+  return isNodeTestCommand && Boolean(missingPackage) && loaderResolutionStack &&
+    !importerIsTestFile && !testBodyStarted
+}
+
+function hasStartedTapTest(text: string): boolean {
+  const markers = /(?:^|\n)\s*(?:#\s*Subtest:\s*([^\r\n]+)|(?:not\s+)?ok\s+\d+\s+-\s+([^\r\n]+))/gm
+  let match: RegExpExecArray | null
+  while ((match = markers.exec(text)) !== null) {
+    const label = (match[1] ?? match[2] ?? '').trim()
+    const isFileLevelFailure = /[\\/][^\\/]+\.(?:test|spec)\.[cm]?[jt]sx?$/i.test(label)
+    if (!isFileLevelFailure) return true
+  }
+  return false
 }
 
 function parseJestVitest(text: string): CompiledFailure[] {
@@ -446,12 +486,16 @@ function buildSummary(
   failures: CompiledFailure[],
   stdoutPresent: boolean,
   stderrPresent: boolean,
+  parserName?: string,
 ): string {
   if (exitCode === null) {
     return 'timed_out (still running; process exit code not available yet)'
   }
   if (exitCode === 0) {
     return `ok (stdout=${stdoutPresent ? 'yes' : 'no'}, stderr=${stderrPresent ? 'yes' : 'no'})`
+  }
+  if (parserName === 'test_loader') {
+    return `test loader unavailable; no project test files executed; exit ${exitCode}`
   }
   if (failures.length > 0) {
     return `${failures.length} structured failure(s); exit ${exitCode}`

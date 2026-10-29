@@ -20,8 +20,12 @@ import { recordChatHarnessFeedback } from "./chatHarnessFeedback.js";
 import { writeFileSync } from "node:fs";
 import { join } from 'node:path';
 import { describeNativeToolRejection, nativeSchemaRepairFeedback } from './nativeToolRejection.js';
-import { unsupportedTestClaim, unsupportedMutationClaim, responseEvidenceCorrection, responseVerifierFacts } from './chatResponseEvidence.js';
-import { refreshChatVerifierReceiptStalenessSync } from '../evidence/chatRevisionBinding.js';
+import {
+  beginResponseEvidenceSession,
+  inspectResponseEvidence,
+  responseEvidenceRetryThought,
+  settleFailedResponseEvidence,
+} from './chatResponseEvidenceSettlement.js';
 import type { ChatUsageScope } from './chatEngineProviderAccounting.js';
 
 import { trace, SpanStatusCode, type Span } from "@opentelemetry/api";
@@ -148,14 +152,9 @@ export class ChatEngineStreamingLoop {
     let sameRouteTransportRetryUsed = false;
     // Bounded once-per-submission repair for an unrecognized text tool call.
     let textToolProtocolRepairUsed = false;
-    let responseEvidenceRepairUsed = false;
+    const responseEvidenceRetry = beginResponseEvidenceSession(this.host);
     let nativeProtocolRepairUsed = false;
     const bufferContractAnswer = requestedChatJsonKind(userInput) !== null;
-    if (this.host.options.projectRoot) {
-      refreshChatVerifierReceiptStalenessSync(this.host.options.projectRoot, this.host.lastVerifierReceipt);
-    }
-    recordChatHarnessFeedback(this.host, `Verification evidence at submission start: ${responseVerifierFacts(this.host.lastVerifierReceipt)} Never infer test execution from reading source. Preserve the requested answer format.`);
-
     for (let turn = 0; turn < maxTurns; turn++) {
       // R0-8: a superseded generator must stop before it executes another
       // turn, settles execution, or emits a terminal for the new owner.
@@ -682,6 +681,20 @@ export class ChatEngineStreamingLoop {
                 break;
               }
               case "error":
+                if (event.malformedToolArguments) {
+                  const malformed = event.malformedToolArguments;
+                  nativeProtocolInvalid = true;
+                  nativeRejectionCode = 'arguments_schema_invalid';
+                  nativeIdentityNormalized ||= malformed.idWasNormalized;
+                  nativeFinishReason = malformed.finishReason;
+                  nativeRejectionState.current = describeNativeToolRejection({
+                    turn: this.host._turnIndex, id: malformed.callId, name: malformed.name,
+                    input: {}, reason: nativeRejectionCode,
+                    issues: [{code:'invalid_json', path:['arguments']}],
+                  });
+                  writeFileSync(join(this.host.engineRunDir, 'native-tool-rejection.json'), JSON.stringify(nativeRejectionState.current, null, 2));
+                  break;
+                }
                 throw new Error(event.message);
               case "done":
                 nativeFinishReason = event.finishReason;
@@ -1951,32 +1964,19 @@ export class ChatEngineStreamingLoop {
           return;
         }
 
-        // Clarifications and BLOCKED replies must obey the same evidence rules.
-        if (this.host.options.projectRoot) {
-      refreshChatVerifierReceiptStalenessSync(this.host.options.projectRoot, this.host.lastVerifierReceipt);
-    }
-        if (this.host.options.projectRoot) {
-          for (const receipt of this.host.executedVerifierLedger) {
-            refreshChatVerifierReceiptStalenessSync(this.host.options.projectRoot, receipt);
-          }
-        }
-        const missingMutationClaim = unsupportedMutationClaim(answer, this.host.hasAnyWrites());
-        if (missingMutationClaim || unsupportedTestClaim(answer, this.host.lastVerifierReceipt, this.host.executedVerifierLedger)) {
-          this.host.conversation.push({ role: 'assistant', content: answer });
+        const correction = inspectResponseEvidence({ host: this.host, retry: responseEvidenceRetry, answer, turn, maxTurns });
+        if (correction) {
           endSpan(_turnSpan, SpanStatusCode.ERROR);
           _turnSpan = null;
-          if (responseEvidenceRepairUsed) {
-            yield this.host.streamFailed('RESPONSE_EVIDENCE_INVALID: repeated completion claims lack corresponding execution or mutation evidence.');
+          if (correction.kind === 'fail') {
+            yield* settleFailedResponseEvidence(this.host, correction, submissionGeneration);
             return;
           }
-          responseEvidenceRepairUsed = true;
-          recordChatHarnessFeedback(this.host, responseEvidenceCorrection(this.host.lastVerifierReceipt, missingMutationClaim));
-          yield { type: 'thought', text: missingMutationClaim ? '[Correcting an unsupported mutation claim]' : '[Correcting an unsupported test-result claim]' };
+          yield responseEvidenceRetryThought(this.host, correction);
           continue;
         }
 
-        // R1: Check for BLOCKED declaration before the gate — the agent may
-        // declare BLOCKED even though no writes were made.
+        // R1: Check BLOCKED before the gate even when no writes were made.
         const blockedReport = this.host.detectAndBuildBlockedReport(answer);
         if (blockedReport) {
           const blockedDelta = reconcileStreamedAnswer(

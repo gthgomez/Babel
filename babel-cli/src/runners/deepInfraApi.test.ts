@@ -260,7 +260,7 @@ test('DeepInfra native stream rejects malformed tool arguments with a terminal r
   globalThis.fetch = (async () =>
     makeSseResponse([
       'data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"bad_call","type":"function","function":{"name":"read_file","arguments":"{\\"path\\":"}}]}}]}',
-      'data: {"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}',
+      'data: {"model":"deepseek-ai/DeepSeek-V3-0324","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":4,"completion_tokens":3,"total_tokens":7}}',
       'data: [DONE]',
     ])) as typeof fetch;
 
@@ -286,6 +286,47 @@ test('DeepInfra native stream rejects malformed tool arguments with a terminal r
   assert.match(events[0]!.message, /Malformed arguments/);
   assert.ok(phases.includes('response_normalization_failed'));
   assert.deepEqual(completions, ['failed']);
+  const metadata = runner.getLastInvocationMetadata();
+  assert.equal(metadata?.provider, 'deepinfra');
+  assert.equal(metadata?.provider_model_id, 'deepseek-ai/DeepSeek-V3-0324');
+  assert.equal(metadata?.observed_model_id, 'deepseek-ai/DeepSeek-V3-0324');
+  assert.equal(metadata?.normalized_finish_reason, 'TOOL_CALL');
+  assert.equal(metadata?.prompt_tokens, 4);
+  assert.equal(metadata?.completion_tokens, 3);
+  assert.equal(metadata?.total_tokens, 7);
+  assert.equal(metadata?.cost_precision, 'conservative');
+  assert.equal(metadata?.provider_reported_total_charge_usd, undefined);
+});
+
+test('DeepInfra stream preserves accounting metadata when the output budget is exhausted', async () => {
+  process.env['DEEPINFRA_API_KEY'] = 'test-key';
+  const { DeepInfraApiRunner } = await import('./deepInfraApi.js');
+
+  globalThis.fetch = (async () => makeSseResponse([
+    'data: {"model":"deepseek-ai/DeepSeek-V3-0324","choices":[{"index":0,"delta":{"role":"assistant","content":"partial"}}]}',
+    'data: {"model":"deepseek-ai/DeepSeek-V3-0324","choices":[{"index":0,"delta":{},"finish_reason":"length"}],"usage":{"prompt_tokens":8,"completion_tokens":3,"total_tokens":11}}',
+    'data: [DONE]',
+  ])) as typeof fetch;
+
+  const runner = new DeepInfraApiRunner('deepseek-ai/DeepSeek-V3-0324', 'DEEPINFRA_API_KEY', { maxTokens: 3 });
+  const events = [];
+  for await (const event of runner.executeWithToolsStream([{ role: 'user', content: 'summarize' }], [])) {
+    events.push(event);
+  }
+
+  assert.deepEqual(events.map((event) => event.type), ['text_delta', 'done']);
+  const terminal = events[1];
+  assert.equal(terminal?.type === 'done' ? terminal.finishReason : undefined, 'length');
+  const metadata = runner.getLastInvocationMetadata();
+  assert.equal(metadata?.provider, 'deepinfra');
+  assert.equal(metadata?.provider_model_id, 'deepseek-ai/DeepSeek-V3-0324');
+  assert.equal(metadata?.observed_model_id, 'deepseek-ai/DeepSeek-V3-0324');
+  assert.equal(metadata?.normalized_finish_reason, 'OUTPUT_BUDGET_EXHAUSTED');
+  assert.equal(metadata?.prompt_tokens, 8);
+  assert.equal(metadata?.completion_tokens, 3);
+  assert.equal(metadata?.total_tokens, 11);
+  assert.equal(metadata?.cost_precision, 'conservative');
+  assert.equal(metadata?.provider_reported_total_charge_usd, undefined);
 });
 
 test('DeepInfra API runner executeWithToolsStream yields text_delta for completion', async () => {

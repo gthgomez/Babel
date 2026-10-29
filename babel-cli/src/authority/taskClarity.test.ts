@@ -210,6 +210,8 @@ test('evaluateSessionTaskGate: merge it with #88/#90 → clarification; producti
 
 
 for (const prohibition of [
+  'Do not modify files, commit, or push.',
+  'Do not commit, push, or make unrelated edits.',
   'Do not commit, push, change credentials/security settings, or make unrelated edits.',
   'Do not commit or push.',
   "Don't commit and push.",
@@ -235,6 +237,16 @@ for (const task of [
     const result = resolveHumanEscalation({ task, allowedCapabilities: CODING });
     assert.equal(result.kind, 'deny');
     assert.equal(result.reasonCode, 'DENY_MISSING_AUTHORITY');
+  });
+}
+
+for (const task of [
+  'Inspect the repo. Do not commit changes or push.',
+  "Inspect the repo. Don't commit anything or push to GitHub.",
+  'Review the code; please leave all changes local and do not push.',
+]) {
+  test(`read-only task with publication prohibition remains admissible: ${task}`, () => {
+    assert.equal(resolveHumanEscalation({ task, allowedCapabilities: CODING }).kind, 'autonomous');
   });
 }
 

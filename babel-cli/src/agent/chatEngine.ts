@@ -2153,6 +2153,7 @@ export class ChatEngine {
       doneTerminal.outcome,
       reasonFromTerminal,
       generation,
+      true,
     );
   }
 
@@ -4556,6 +4557,7 @@ export class ChatEngine {
     knownOutcome?: TerminalOutcome,
     knownReason?: TerminalReason,
     ownerGeneration?: number,
+    answerAlreadyFormattedByStream = false,
   ): ChatResult {
     return assembleChatResult(
       this.terminalRuntimeInput(),
@@ -4566,6 +4568,7 @@ export class ChatEngine {
       knownOutcome,
       knownReason,
       ownerGeneration,
+      answerAlreadyFormattedByStream,
     );
   }
 
