@@ -195,6 +195,41 @@ describe('D01/D02 effective-operation policy', () => {
     assert.ok(!preservedScriptsTools.some((tool) => tool.function.name === 'write_file'));
   });
 
+  test('a dependency constraint preserves only the parent task’s existing scoped child-write authority', () => {
+    const prompt = 'Implement the requested function and create solution.py. Do not add third-party dependencies.';
+    const runtime = runtimeFor(prompt);
+    const parentReadOnly = runtime.effectiveOperation === 'READ_ONLY';
+    assert.equal(runtime.effectiveOperation, 'HYBRID');
+    assert.equal(parentReadOnly, false);
+
+    const delegated = buildDelegatedChildEnvelope({
+      task: prompt,
+      projectRoot: PROJECT_ROOT,
+      parentReadOnly,
+      requestedMutation: true,
+      requestedWriteScope: ['solution.py'],
+      instructions: 'Implement the requested function in the scoped solution file.',
+      parentModel: null,
+    });
+    assert.equal(delegated.mutationEnabled, true);
+    assert.deepEqual(delegated.writeScope, ['solution.py']);
+
+    const readOnlyPrompt = 'Do not add third-party dependencies.';
+    const readOnly = runtimeFor(readOnlyPrompt);
+    assert.equal(readOnly.effectiveOperation, 'READ_ONLY');
+    const deniedDelegation = buildDelegatedChildEnvelope({
+      task: readOnlyPrompt,
+      projectRoot: PROJECT_ROOT,
+      parentReadOnly: readOnly.effectiveOperation === 'READ_ONLY',
+      requestedMutation: true,
+      requestedWriteScope: ['solution.py'],
+      instructions: 'Create solution.py.',
+      parentModel: null,
+    });
+    assert.equal(deniedDelegation.mutationEnabled, false);
+    assert.deepEqual(deniedDelegation.writeScope, []);
+  });
+
   test('D-T01 exact prompt resolves to investigate/READ_ONLY with no mutation pressure', () => {
     const shape = analyzeTaskShape(D_T01_PROMPT);
     assert.equal(shape.operation, 'READ_ONLY');

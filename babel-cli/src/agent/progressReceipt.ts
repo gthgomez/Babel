@@ -31,6 +31,8 @@ export interface ProgressReceipt {
   targetsRead: string[];
   /** Hypothesis fingerprint after this cycle (empty if unknown). */
   hypothesisKey: string;
+  /** Stable task/tool payload hash for a single child delegation, without call IDs. */
+  delegationFingerprint?: string;
   hasDelta: boolean;
 }
 
@@ -85,6 +87,8 @@ export interface CycleObservation {
   externalBlocker?: string;
   /** Read targets this cycle with optional content hash. */
   reads?: Array<{ path: string; contentHash?: string; observationKey?: string }>;
+  /** Stable action fingerprint for a single delegated child request. */
+  delegationFingerprint?: string;
   /**
    * Context epoch for this cycle (read-injection epoch). When it advances,
    * prior read fingerprints/localization are invalidated so necessary
@@ -205,6 +209,11 @@ export function recordProgressCycle(
   }
 
   const hasDelta = deltas.length > 0;
+  const previousReceipt = ledger.receipts.at(-1);
+  const repeatedNoProgressDelegation = !hasDelta &&
+    observation.delegationFingerprint !== undefined &&
+    previousReceipt?.hasDelta === false &&
+    previousReceipt.delegationFingerprint === observation.delegationFingerprint;
   if (!hasDelta) {
     deltas.push('no_progress');
   }
@@ -216,12 +225,16 @@ export function recordProgressCycle(
     evidence: evidence.slice(0, 12),
     targetsRead,
     hypothesisKey: ledger.lastHypothesisKey,
+    ...(observation.delegationFingerprint !== undefined
+      ? { delegationFingerprint: observation.delegationFingerprint }
+      : {}),
     hasDelta,
     ...(hasDelta
       ? {}
       : {
-          noProgressReason:
-            targetsRead.length > 0
+          noProgressReason: repeatedNoProgressDelegation
+            ? 'repeated_identical_delegation_without_change'
+            : targetsRead.length > 0
               ? 'repeated_unchanged_reads'
               : 'no_semantic_delta',
         }),
@@ -314,6 +327,13 @@ export function scoreProgressIntervention(
   }
 
   const n = ledger.consecutiveNoProgress;
+  if (ledger.receipts.at(-1)?.noProgressReason === 'repeated_identical_delegation_without_change') {
+    return {
+      action: 'nudge',
+      message:
+        'The same child delegation returned without a confirmed change. Do not repeat it. If the accepted task authorizes editing, use an in-scope parent tool under the normal checks; otherwise stay read-only and report the blocker.',
+    };
+  }
   const nudgeAfter = options.nudgeAfter ?? 3;
   const recoverAfter = options.recoverAfter ?? 5;
   const terminalAfter = options.terminalAfter ?? 8;

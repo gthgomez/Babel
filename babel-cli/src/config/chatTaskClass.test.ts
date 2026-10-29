@@ -36,6 +36,26 @@ describe('chatTaskClass', () => {
     }
   });
 
+  test('third-party dependency constraint stays scoped during an explicit artifact implementation', () => {
+    const task = 'Implement the requested function. Create solution.py. Do not add third-party dependencies.';
+    assert.equal(hasExplicitEditDenial(task), false);
+    assert.equal(resolveTaskShape(task).operation, 'HYBRID');
+    assert.equal(resolveTaskShape(task, 'CHANGE').operation, 'MUTATING');
+
+    for (const denial of [
+      'Do not add third-party dependencies.',
+      'Do not add third party dependencies.',
+    ]) {
+      assert.equal(hasExplicitEditDenial(denial), false, denial);
+      assert.equal(resolveTaskShape(denial).operation, 'READ_ONLY', denial);
+    }
+
+    for (const denial of ['Do not edit files.', 'Do not add third-party dependencies or edit files.']) {
+      assert.equal(hasExplicitEditDenial(`Implement the function. ${denial}`), true, denial);
+      assert.equal(resolveTaskShape(`Implement the function. ${denial}`).operation, 'READ_ONLY', denial);
+    }
+  });
+
   test('global or ambiguous edit denials still narrow explicit change intent', () => {
     for (const denial of ['Do not edit', 'Do not change files', 'Do not change the code',
       'Do not change anything', 'Without editing', 'Without modifying code', 'Read-only', 'Dry-run',

@@ -605,6 +605,8 @@ export function parityRecordToolBatch(
     patchFailed?: boolean;
     verifierChanged?: boolean;
     localizedPaths?: string[];
+    /** Stable payload hash when this cycle contains one child delegation. */
+    delegationFingerprint?: string;
     /** Read-injection context epoch; advancing it invalidates retained reads. */
     contextEpoch?: number;
     /** When true, skip propose (already done via paritySettleProposeTools). */
@@ -777,6 +779,10 @@ export function parityRecordToolBatch(
     ...(input.patchFailed ? { patchFailed: true } : {}),
     ...(input.verifierChanged ? { verifierChanged: true } : {}),
     ...(input.contextEpoch !== undefined ? { contextEpoch: input.contextEpoch } : {}),
+    ...(input.delegationFingerprint !== undefined && acceptedToolCalls.length === 1 &&
+        acceptedToolCalls[0]?.function.name === 'sub_agent'
+      ? { delegationFingerprint: input.delegationFingerprint }
+      : {}),
     reads: acceptedResults
       .filter(
         (r) =>

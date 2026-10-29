@@ -18,7 +18,8 @@ import {
   recordProgressCycle,
   scoreProgressIntervention,
 } from './progressReceipt.js';
-import { createParityRuntime, parityArbitrateCycle } from './chatEngineParityBridge.js';
+import { createParityRuntime, parityArbitrateCycle, parityOnUserTurn, parityRecordToolBatch } from './chatEngineParityBridge.js';
+import { projectDurableToolBatch } from './toolExecutionIdentity.js';
 
 const RESTRICTING_LABELS = new Set(['restricted_tools', 'last_chance_repair', 'terminal_blocked']);
 
@@ -138,6 +139,65 @@ describe('D02 progress evidence alignment', () => {
     });
     assert.equal(newEpoch.hasDelta, true);
     assert.ok(newEpoch.deltas.includes('localization'));
+  });
+
+  test('an identical no-change child delegation nudges toward a different authorized parent strategy', () => {
+    const rt = createParityRuntime('repeated-child-no-progress');
+    parityOnUserTurn(rt, {
+      task: 'Create solution.py with the requested function.',
+      model: 'mock',
+      provider: 'mock',
+      projectRoot: process.cwd(),
+    });
+    const action = { type: 'sub_agent', task: 'Implement the function in solution.py.', mutation: true, write_scope: ['solution.py'] };
+    const fingerprint = 'stable-semantic-delegation-payload';
+    const observe = (turn: number, effectStatus = 'confirmed_no_change') => {
+      const batch = projectDurableToolBatch({
+        turn,
+        actions: [action],
+        turnSlice: [{ tool: 'sub_agent', target: action.task, index: 0, exit_code: 0 }],
+        observationsByActionIndex: ['child completed without a confirmed workspace change'],
+      });
+      return parityRecordToolBatch(rt, {
+        at_turn: turn,
+        toolCalls: batch.toolCalls,
+        results: batch.results,
+        delegationFingerprint: fingerprint,
+        patchAttempted: effectStatus === 'confirmed_change',
+      });
+    };
+
+    assert.equal(observe(0).hasDelta, false);
+    const repeated = observe(1);
+    assert.equal(repeated.hasDelta, false);
+    assert.equal(repeated.noProgressReason, 'repeated_identical_delegation_without_change');
+    const nudge = parityArbitrateCycle({ rt, fuseLabels: [], isReadOnlyInspection: false });
+    assert.equal(nudge.intervention.action, 'nudge');
+    assert.match(nudge.policyMessage ?? '', /Do not repeat it/i);
+    assert.match(nudge.policyMessage ?? '', /in-scope parent tool/i);
+    assert.match(nudge.policyMessage ?? '', /normal checks/i);
+
+    const changed = createParityRuntime('changed-child-progress');
+    parityOnUserTurn(changed, {
+      task: 'Create solution.py with the requested function.',
+      model: 'mock',
+      provider: 'mock',
+      projectRoot: process.cwd(),
+    });
+    const successfulBatch = projectDurableToolBatch({
+      turn: 0,
+      actions: [action],
+      turnSlice: [{ tool: 'sub_agent', target: action.task, index: 0, exit_code: 0 }],
+      observationsByActionIndex: ['child changed solution.py'],
+    });
+    const childMutation = parityRecordToolBatch(changed, {
+      at_turn: 0,
+      toolCalls: successfulBatch.toolCalls,
+      results: successfulBatch.results,
+      delegationFingerprint: fingerprint,
+      patchAttempted: true,
+    });
+    assert.equal(childMutation.hasDelta, true, 'a confirmed child change is progress, not a repeated no-op');
   });
 
   test('git status style reads alone are not patch progress', () => {

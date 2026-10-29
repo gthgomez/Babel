@@ -109,6 +109,16 @@ test('P0-C: continueTask keeps limits class sticky with prior taskClass', () => 
   assert.equal(cont.taskClass, first.taskClass);
 });
 
+test('explicit artifact work with a scoped dependency constraint enters the mutating operation', () => {
+  const task = 'Implement the requested function. Create solution.py. Do not add third-party dependencies.';
+  const engine = new ChatEngine({ task, projectRoot: process.cwd() });
+  const runtime = engine.applyUserSubmission({ userInput: task });
+
+  assert.equal(runtime.effectiveOperation, 'HYBRID');
+  assert.equal(runtime.taskIntent, 'execute');
+  assert.notEqual(runtime.taskClass, 'investigate');
+});
+
 test('status? after a mutation submission is a read-only presentation, not execute', () => {
   const engine = new ChatEngine({
     task: 'fix the failing authentication test',

@@ -1435,7 +1435,7 @@ export class ChatEngineStreamingLoop {
                 effectStatus: t.effect_status,
                 effectScope: t.effect_scope,
                 mutationPaths: t.mutation_paths,
-              }),
+              }) || isConfirmedParentChildMutation(t),
             ),
             patchFailed: turnSlice.some(
               (t) =>
@@ -1446,6 +1446,10 @@ export class ChatEngineStreamingLoop {
             ),
             // Context epoch: advancing it makes necessary re-reads count again.
             contextEpoch: this.host.readContextEpoch,
+            ...(turnResult.type === "tool_calls" && turnResult.actions.length === 1 &&
+                turnResult.actions[0]?.type === "sub_agent"
+              ? { delegationFingerprint: operationFingerprint("sub_agent", turnResult.actions[0]) }
+              : {}),
             // W2.2: propose+start already flushed before executeActions.
             settleAlreadyProposed: turnResult.actions.length > 0,
             // Do NOT pass every read as localizedPaths — re-reads use contentHash only.

@@ -503,8 +503,8 @@ const SEQUENCED_MUTATION_SOURCE =
 // a complete known object list: unknown objects or trailing qualifications
 // remain global denials. This never supplies positive mutation intent.
 const PROTECTED_EDIT_OBJECT = '(?:(?:the|any|our|your|this|that)\\s+)?(?:' +
-  '(?:regression\\s+)?tests?(?:\\s+file)?|test\\s+suite|package\\s+scripts?|dependencies|' +
-  'scripts?(?:\\s+or\\s+data)?|data|' +
+  '(?:regression\\s+)?tests?(?:\\s+file)?|test\\s+suite|package\\s+scripts?|' +
+  'scripts?(?:\\s+or\\s+data)?|data|(?:third[- ]party\\s+)?dependencies|' +
   'permissions?|verification\\s+gates?|provider\\s+accounting|unrelated\\s+(?:files?|code)|' +
   '[`"\\\']?[\\w./\\\\-]+\\.[A-Za-z0-9_-]{1,12}[`"\\\']?)';
 const PROTECTED_EDIT_OBJECT_LIST = new RegExp(

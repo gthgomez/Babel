@@ -276,6 +276,139 @@ test('H4: path containment helper rejects parent escape (win32 paths)', () => {
   assert.equal(isPathContainedInRootWin32(root, '..\\outside\\escaped.html'), false)
 })
 
+test('H4: promised file creation without a confirmed mutation cannot complete successfully', async t => {
+  const prior = Object.fromEntries(MANAGED_ENV.map(key => [key, process.env[key]]))
+  const workspace = mkdtempSync(join(tmpdir(), 'babel-h4-promised-file-'))
+  t.after(() => {
+    for (const key of MANAGED_ENV) {
+      if (prior[key] === undefined) delete process.env[key]
+      else process.env[key] = prior[key]
+    }
+    refreshDryRunState()
+    rmSync(workspace, { recursive: true, force: true })
+  })
+
+  const task = 'Implement a small Python function and create solution.py. Do not add third-party dependencies.'
+  applyBenchmarkFixtureEnv(task)
+  const { runner } = buildRunner([[
+    { type: 'text_delta', text: "I'll create solution.py now." },
+    { type: 'done', finishReason: 'stop' },
+  ]])
+  const engine = new ChatEngine({
+    task,
+    projectRoot: workspace,
+    executionScope: { kind: 'project', projectRoot: workspace },
+    runId: `h4-promised-file-${randomUUID()}`,
+    model: 'deepseek-v4-flash',
+    maxTurns: 4,
+    providerRunner: runner as never,
+    providerPolicy: FIXTURE_POLICY,
+  })
+
+  const events = await collectStream(engine.submitMessageStream(task))
+  const terminal = events.find(event => event.type === 'done' || event.type === 'failed')
+  assert.ok(terminal, 'the ChatEngine must emit a terminal event')
+  assert.equal(existsSync(join(workspace, 'solution.py')), false)
+  assert.equal(engine.getWriteCount(), 0)
+  if (terminal?.type === 'done') {
+    assert.notEqual(terminal.outcome, 'NO_CHANGE_REQUIRED')
+    assert.notEqual(terminal.outcome, 'VERIFIED_COMPLETE')
+    assert.match(terminal.answer, /no confirmed (?:file )?mutation|not confirmed|unverified|no completed change/i)
+  } else if (terminal?.type === 'failed') {
+    assert.match(terminal.error, /not verified|no mutation|no file/i)
+  }
+})
+
+test('H4: a genuine answer-only task remains complete without file mutation', async t => {
+  const prior = Object.fromEntries(MANAGED_ENV.map(key => [key, process.env[key]]))
+  const workspace = mkdtempSync(join(tmpdir(), 'babel-h4-answer-only-'))
+  t.after(() => {
+    for (const key of MANAGED_ENV) {
+      if (prior[key] === undefined) delete process.env[key]
+      else process.env[key] = prior[key]
+    }
+    refreshDryRunState()
+    rmSync(workspace, { recursive: true, force: true })
+  })
+
+  const task = 'Explain why Python lists preserve insertion order.'
+  applyBenchmarkFixtureEnv(task)
+  const { runner } = buildRunner([[
+    { type: 'text_delta', text: 'Python lists preserve the order in which elements are inserted.' },
+    { type: 'done', finishReason: 'stop' },
+  ]])
+  const engine = new ChatEngine({
+    task,
+    projectRoot: workspace,
+    executionScope: { kind: 'project', projectRoot: workspace },
+    runId: `h4-answer-only-${randomUUID()}`,
+    model: 'deepseek-v4-flash',
+    maxTurns: 4,
+    providerRunner: runner as never,
+    providerPolicy: FIXTURE_POLICY,
+  })
+
+  const events = await collectStream(engine.submitMessageStream(task))
+  const terminal = events.find(event => event.type === 'done' || event.type === 'failed')
+  assert.ok(terminal?.type === 'done', 'an answer-only task should finish normally')
+  assert.equal(terminal.outcome, 'NO_CHANGE_REQUIRED')
+  assert.match(terminal.answer, /preserve the order/i)
+  assert.equal(engine.getWriteCount(), 0)
+})
+
+test('H4: requested file is written and read back without being mislabeled verified', async t => {
+  const prior = Object.fromEntries(MANAGED_ENV.map(key => [key, process.env[key]]))
+  const workspace = mkdtempSync(join(tmpdir(), 'babel-h4-file-readback-'))
+  t.after(() => {
+    for (const key of MANAGED_ENV) {
+      if (prior[key] === undefined) delete process.env[key]
+      else process.env[key] = prior[key]
+    }
+    refreshDryRunState()
+    rmSync(workspace, { recursive: true, force: true })
+  })
+
+  const task = 'Implement a small Python function and create solution.py. Do not add third-party dependencies.'
+  const source = 'def answer():\n    return 42\n'
+  applyBenchmarkFixtureEnv(task)
+  const { runner } = buildRunner([
+    [
+      { type: 'tool_use', id: 'write-solution', name: 'write_file', input: { path: 'solution.py', content: source } },
+      { type: 'done', finishReason: 'tool_calls' },
+    ],
+    [
+      { type: 'tool_use', id: 'read-solution', name: 'read_file', input: { path: 'solution.py' } },
+      { type: 'done', finishReason: 'tool_calls' },
+    ],
+    [
+      { type: 'text_delta', text: 'Created solution.py and read it back. I did not run a test suite.' },
+      { type: 'done', finishReason: 'stop' },
+    ],
+  ])
+  const engine = new ChatEngine({
+    task,
+    projectRoot: workspace,
+    executionScope: { kind: 'project', projectRoot: workspace },
+    runId: `h4-file-readback-${randomUUID()}`,
+    model: 'deepseek-v4-flash',
+    maxTurns: 6,
+    providerRunner: runner as never,
+    providerPolicy: FIXTURE_POLICY,
+  })
+
+  const events = await collectStream(engine.submitMessageStream(task))
+  const terminal = events.find(event => event.type === 'done' || event.type === 'failed')
+  assert.ok(terminal, 'the ChatEngine must emit a terminal event')
+  assert.equal(existsSync(join(workspace, 'solution.py')), true)
+  assert.equal(readFileSync(join(workspace, 'solution.py'), 'utf8'), source)
+  const log = (engine as unknown as { toolCallLog: Array<{ tool: string; target?: string; exit_code?: number }> }).toolCallLog
+  assert.equal(log.some(item => item.tool === 'write_file' && item.target === 'solution.py' && item.exit_code === 0), true)
+  assert.equal(log.some(item => item.tool === 'read_file' && item.target === 'solution.py' && item.exit_code === 0), true)
+  assert.ok(terminal?.type === 'done')
+  assert.notEqual(terminal.outcome, 'VERIFIED_COMPLETE', 'file existence and readback do not certify tests')
+  assert.match(terminal.answer, /solution\.py/i)
+})
+
 test('H4: ephemeral non-Git project workspace writes sourced artifacts; headless completion blocks without verifier', async t => {
   const prior = Object.fromEntries(MANAGED_ENV.map(key => [key, process.env[key]]))
   const workspace = mkdtempSync(join(tmpdir(), 'babel-h4-artifact-'))
