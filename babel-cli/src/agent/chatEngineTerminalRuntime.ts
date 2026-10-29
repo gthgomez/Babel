@@ -100,7 +100,7 @@ function singleLineEvidence(value: string, maxLength = 240): string {
 
 /** A recovery controller instruction is not a user-facing completion answer. */
 function isRecoveryOnlyPlaceholder(answer: string): boolean {
-  return /^\s*Recovery:\s*[a-z][a-z0-9_-]{0,40}[.!]?\s*(?:Summarize(?:\s+evidence)?(?:\s+and\s+change\s+approach)?[.!]?)?\s*$/i.test(answer)
+  return /^\s*(?:Recovery:\s*[a-z][a-z0-9_-]{0,40}[.!]?\s*(?:Summarize(?:\s+evidence)?(?:\s+and\s+change\s+approach)?[.!]?)?|Repeated no-progress after recovery\s*\(\d+\s+cycles?\))\s*$/i.test(answer)
 }
 
 /** Preserve an explicit machine-readable answer; clients must use the structured outcome, not JSON model claims. */
@@ -124,30 +124,42 @@ function formatTerminalAnswerForOutcome(input: {
   task: string
   toolCallLog: ChatTerminalSnapshot['evidence']['observability']['toolCallLog']
 }): string {
-  if (
-    input.status !== 'completed' ||
-    input.outcome !== 'UNVERIFIED_PATCH' ||
-    !input.hasMutation ||
-    !input.answer.trim() ||
-    satisfiesRequestedBareJsonAnswer(input.answer, input.task)
-  ) return input.answer
+  const unverifiedTerminal = input.status === 'completed' && input.outcome === 'UNVERIFIED_PATCH'
+  const blockedRecovery = input.status === 'blocked' && input.outcome === 'BLOCKED_POLICY'
+  if ((!unverifiedTerminal && !blockedRecovery) || !input.hasMutation || !input.answer.trim() ||
+      satisfiesRequestedBareJsonAnswer(input.answer, input.task)) return input.answer
 
-  const lines = [
-    UNVERIFIED_COMPLETION_MARKER,
-    'The required task-acceptance evidence was not established; task completion is not certified.',
-  ]
   const artifactRefs = collectConfirmedMutationArtifactPaths(input.toolCallLog)
+  if (artifactRefs.length === 0) {
+    if (blockedRecovery) return input.answer
+    return [
+      UNVERIFIED_COMPLETION_MARKER,
+      'The required task-acceptance evidence was not established. The model response below is retained as an unverified report and does not certify completion.',
+      '',
+      'Unverified model response:',
+      '---',
+      input.answer,
+    ].join('\n')
+  }
   const recoveryOnly = isRecoveryOnlyPlaceholder(input.answer)
+  const lines = [
+    unverifiedTerminal ? UNVERIFIED_COMPLETION_MARKER : 'Completion status: BLOCKED_POLICY.',
+    unverifiedTerminal
+      ? 'The required task-acceptance evidence was not established; task completion is not certified.'
+      : 'A policy or recovery boundary stopped this attempt; task completion is not certified.',
+  ]
   if (artifactRefs.length > 0) {
     const shown = artifactRefs.slice(0, 20)
     lines.push('', `Paths with recorded confirmed mutations (final workspace state not re-checked): ${shown.map(path => JSON.stringify(singleLineEvidence(path))).join(', ')}${artifactRefs.length > shown.length ? `, and ${artifactRefs.length - shown.length} more` : ''}`)
   }
-  if (recoveryOnly && artifactRefs.length > 0) {
+  if (recoveryOnly) {
     lines.push('', 'Host-grounded delivery summary:',
       `The host recorded confirmed file changes to: ${artifactRefs.map(path => JSON.stringify(singleLineEvidence(path))).join(', ')}.`,
       describeUnverifiedVerifierStatus(input.toolCallLog))
   } else {
-    lines.push('', 'Unverified model response:', '---', input.answer)
+    if (unverifiedTerminal) lines.push('', 'Unverified model response:', '---', input.answer)
+    else lines.push('', 'Model response (task remains blocked):', '---', input.answer)
+    lines.push('', 'Verification status:', describeUnverifiedVerifierStatus(input.toolCallLog))
   }
   return lines.join('\n')
 }

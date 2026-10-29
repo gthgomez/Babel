@@ -313,6 +313,37 @@ test('unverified terminal keeps model response when no confirmed artifact exists
   assert.doesNotMatch(event.answer, /Confirmed file changes:|solution\.py/)
 })
 
+test('blocked recovery exhaustion delivers confirmed artifacts and exact no-verifier facts', t => {
+  const input = terminalInput(t)
+  input.snapshot.outcome.hasMutation = true
+  input.snapshot.outcome.readOnly = false
+  input.snapshot.evidence.observability.toolCallLog.push(
+    { index: 1, tool: 'write_file', target: 'solution.py', mutation_paths: ['solution.py'],
+      effect_status: 'confirmed_change', exit_code: 0 },
+    { index: 2, tool: 'run_command', target: 'python -c "assert True"', exit_code: 1,
+      preDispatchNoEffect: true, verifierExecuted: false, error: 'DENY_MISSING_AUTHORITY',
+      effect_status: 'confirmed_no_change' },
+  )
+  input.effects.decideCompletion = requestedOutcome => ({
+    requestedOutcome,
+    finalOutcome: 'BLOCKED_POLICY',
+    allowed: false,
+    reason: 'recovery_exhausted',
+    evidenceRefs: [],
+    policyVersion: 'fixture',
+  })
+
+  const event = completeChatStream(input, 'Repeated no-progress after recovery (8 cycles)')
+  assert.equal(event.type, 'done')
+  if (event.type !== 'done') return
+  assert.equal(event.outcome, 'BLOCKED_POLICY')
+  assert.match(event.answer, /Completion status: BLOCKED_POLICY/)
+  assert.match(event.answer, /host recorded confirmed file changes to: "solution\.py"/i)
+  assert.match(event.answer, /denied before dispatch.*did not run/i)
+  assert.match(event.answer, /No authoritative verifier execution is recorded/i)
+  assert.doesNotMatch(event.answer, /Repeated no-progress after recovery|VERIFIED_COMPLETE|tests passed/i)
+})
+
 test('unverified terminal disclosure does not invent artifact or verifier evidence', (t) => {
   const input = terminalInput(t)
   input.snapshot.outcome.hasMutation = true
