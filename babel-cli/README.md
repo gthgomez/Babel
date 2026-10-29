@@ -19,33 +19,24 @@ Deeper references:
 - [Harness architecture](../docs/architecture/HARNESS_ARCHITECTURE_V1.md)
 - [CLI command contract](../docs/CLI_COMMAND_CONTRACT.md)
 
-## Installed preview package
+## Install from npm
 
-The local preview package is `babel-harness`, version `0.1.1` (as declared in `package.json`; public registry availability is owner-controlled and may still return E404 until an authorized publish succeeds).
-It provides the preferred `babel-harness` command and the compatible
-`babel-agent` command. The package is not currently installable from the public
-npm registry; the registry returned E404 for this name on 2026-10-04. The
-Windows Desktop bundle includes the same CLI and also retains `Babel CLI.cmd` as
-a launcher alias. These names avoid the unrelated BabelJS `babel` executable.
-Source-checkout wrappers remain available; retired Lite wrappers retain their
-deprecation behavior and are omitted from the tarball. The July `v0.1.0`
-release/tag is not reused.
-
-Build or obtain the private candidate tarball `babel-harness-0.1.1.tgz`,
-verify it against its accompanying `SHA256SUMS`, then install it from a local
-path and run from any target project:
+The public npm package is [`babel-harness`](https://www.npmjs.com/package/babel-harness).
+Install the current stable release globally, or use `--prefix` to keep it in a
+separate directory:
 
 ```sh
-npm install --prefix ./babel-preview --omit=dev ./babel-harness-0.1.1.tgz
-./babel-preview/node_modules/.bin/babel-harness --version
-./babel-preview/node_modules/.bin/babel-harness setup --json
-./babel-preview/node_modules/.bin/babel-harness doctor --json
+npm install --global babel-harness@latest
+babel-harness --version
+babel-harness setup --json
+babel-harness doctor --json
 ```
 
-On Windows use `babel-preview\node_modules\.bin\babel-harness.cmd`. The
-`babel-agent` alias remains available on all platforms. For a separate
-installation location use an absolute `--prefix` path; target files resolve from
-the current directory or explicit project arguments. Node **22.19.0+ in the 22.x line, or 24.13.1+ in the 24.x line**, is
+The package also provides the compatible `babel-agent` command. These names
+avoid the unrelated BabelJS `babel` executable. With a local prefix, run
+`<prefix>/node_modules/.bin/babel-harness` on macOS/Linux or
+`<prefix>\node_modules\.bin\babel-harness.cmd` on Windows. Target files resolve
+from the current directory or explicit project arguments. Node **22.19.0+ in the 22.x line, or 24.13.1+ in the 24.x line**, is
 required for unflagged WebAssembly module imports as well as `node:sqlite` and its extension API.
 The Node 24 floor includes the [upstream non-ASCII path deletion fix](https://github.com/nodejs/node/pull/61108),
 released in [24.13.1](https://nodejs.org/en/blog/release/v24.13.1). Other Node release lines and older Node 24 releases are unsupported.
@@ -70,7 +61,7 @@ Read-only help, context preview, and stack resolution need no provider. The
 **default `safe_repo` profile requires a running Docker server** for execution;
 doctor reports missing Docker and never enables host fallback. Contributor
 `learn`, `skill`, `benchmark`, `smoke`, `test`, and `audit` utilities require a source
-checkout in this preview because they manage source-library artifacts. Use
+checkout because they manage source-library artifacts. Use
 `setup --contributor` and `doctor --contributor` for contributor diagnostics.
 
 From a clone, `npm run test:consumer-artifact` in `babel-cli/` builds, packs, installs
@@ -83,12 +74,12 @@ fixture lease for actual local tests and blocks external inference; this is
 mechanics evidence, not live-model quality. Its UI start/exit check uses pipes;
 separate PTY evidence and platform-specific skipped coverage belong in the PR.
 
-Before a future release: choose an owned package scope/name, approve release
-version/platform qualifications, resolve PR review and required checks, verify a
-fresh artifact and license/security contents, then obtain explicit authorization
-for npm publication and any tag/release or publishing credentials. Live evaluations
-require separately approved exact provider/model routing, credentials, quota,
-billing fallback settings and budget. No such steps are performed by this preview.
+Releases use the repository's [release guide](../docs/guides/RELEASE.md): source
+and package provenance are checked, and an immutable consumer artifact is
+qualified before a version tag is cut. Publishing that qualified artifact to
+npm is a separate release operation. Do not add registry credentials to a
+checkout; the publish workflow uses the repository's configured trusted
+publisher.
 
 
 ## Known Limitations
