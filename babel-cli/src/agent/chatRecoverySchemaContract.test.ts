@@ -6,7 +6,7 @@ import { applyWorkingStateEvent, createWorkingState, formatWorkingStateBlock } f
 
 test('native recovery proposals advertise the same evidence and scope boundaries the controller validates', () => {
   const proposal = {
-    schemaVersion: 1, failureSignature: 'failure', workspaceRevision: 'revision',
+    schemaVersion: 2, recoveryGateRef: 'a'.repeat(32), workspaceRevision: 'revision',
     hypothesisClass: 'logic', targetIdentities: ['example.js'], actionFamily: 'str_replace',
     criterionId: 'npm test', supportingObservationIds: ['0123456789abcdef'],
   }
@@ -19,6 +19,10 @@ test('native recovery proposals advertise the same evidence and scope boundaries
     }>
     const plan = properties.repair_plan?.properties
     assert.ok(plan)
+    assert.match(plan.recoveryGateRef?.description ?? '', /working_state\.recovery_gate_ref/)
+    assert.equal(plan.failureSignature, undefined)
+    assert.match(plan.workspaceRevision?.description ?? '', /recovery_revision/)
+    assert.match(plan.criterionId?.description ?? '', /exact verifier command/)
     assert.deepEqual([plan.supportingObservationIds?.minItems, plan.supportingObservationIds?.maxItems], [1, 8])
     assert.deepEqual([plan.supportingObservationIds?.items?.minLength, plan.supportingObservationIds?.items?.maxLength], [16, 16])
     assert.deepEqual([plan.targetIdentities?.minItems, plan.targetIdentities?.maxItems], [1, 4])
@@ -26,8 +30,11 @@ test('native recovery proposals advertise the same evidence and scope boundaries
   }
   for (const length of [0, 15, 17])
     assert.equal(RecoveryPlanProposalSchema.safeParse({ ...proposal, supportingObservationIds: ['a'.repeat(length)] }).success, false)
+  for (const recoveryGateRef of ['a'.repeat(31), 'a'.repeat(33), 'A'.repeat(32)])
+    assert.equal(RecoveryPlanProposalSchema.safeParse({ ...proposal, recoveryGateRef }).success, false)
   for (const count of [0, 9])
     assert.equal(RecoveryPlanProposalSchema.safeParse({ ...proposal, supportingObservationIds: Array(count).fill('0123456789abcdef') }).success, false)
+  assert.equal(RecoveryPlanProposalSchema.safeParse({ ...proposal, schemaVersion: 1, failureSignature: 'legacy' }).success, false)
 })
 
 test('empty recovery evidence directs inspection instead of inventing observation references', () => {

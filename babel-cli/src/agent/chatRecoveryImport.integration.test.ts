@@ -95,7 +95,7 @@ for (const fixture of fixtures) for (const priorMutation of [false,true]) test(`
   assert.ok(delivered.observationList[4]?.includes(sourceRecord.id),'the fifth read exposes its own current handle')
   assert.equal(sourceRecord.window.completeFile,true)
   assert.equal(probe.workingState.localization?.calls,5,'the fifth authorized read is not refused')
-  const plan={schemaVersion:1 as const,failureSignature:gate.failureSignature,workspaceRevision:gate.binding!.workspaceRevision,
+  const plan={schemaVersion:2 as const,recoveryGateRef:gate.recoveryGateRef!,workspaceRevision:gate.binding!.workspaceRevision,
     hypothesisClass:'logic' as const,targetIdentities:[fixture.path],actionFamily:'str_replace' as const,criterionId:'npm test',supportingObservationIds:gate.observedKeys!.map(recoveryObservationId)}
   const wrongCriterion=await run({type:'str_replace',file_path:fixture.path,old_str:fixture.old,new_str:fixture.replacement,repair_plan:{...plan,criterionId:fixture.label}})
   assert.match(wrongCriterion.observation,/criterion_identity_mismatch/)
@@ -263,7 +263,7 @@ test('governed Python write/check/read/repair path avoids host bytecode drift', 
   const gate = host.workingState.recoveryGate!
   assert.ok(gate?.satisfied, 'the fresh source read should satisfy the red-verifier recovery gate')
   const plan = {
-    schemaVersion:1 as const, failureSignature:gate.failureSignature, workspaceRevision:gate.binding!.workspaceRevision,
+    schemaVersion:2 as const, recoveryGateRef:gate.recoveryGateRef!, workspaceRevision:gate.binding!.workspaceRevision,
     hypothesisClass:'logic' as const, targetIdentities:['solution.py'], actionFamily:'str_replace' as const,
     criterionId:host.workingState.lastVerifier!.identity,
     supportingObservationIds:gate.observedKeys!.map(recoveryObservationId),

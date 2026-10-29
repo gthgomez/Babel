@@ -8,7 +8,7 @@ import { isReadDeliveryWindow, type ReadDeliveryWindow } from '../../services/re
 import type { ChatMessage } from '../chatToolDefinitions.js'
 import { createHash } from 'node:crypto'
 import type { FailureSurface, RepairDiagnosis, RepairDiagnosisKind } from './failureSurface.js'
-import type { AdmittedRecoveryPlanV1 } from './recoveryPlan.js'
+import type { AdmittedRecoveryPlanV2 } from './recoveryPlan.js'
 import type { FailureLocalization } from './failureLocalization.js'
 
 export const WORKING_STATE_NAME = 'working_state'
@@ -49,11 +49,13 @@ export interface WorkingState {
   failedVerifierHistory?: SettledFailedVerifierExecution[]
   failedVerifierHistoryOverflow?: true
   settledFailedVerifier?: SettledFailedVerifierExecution
-  lastAdmittedPlan?: AdmittedRecoveryPlanV1
+  lastAdmittedPlan?: AdmittedRecoveryPlanV2
   localization?: FailureLocalization
   /** Controller-owned gate after a red verifier; model prose cannot clear it. */
   recoveryGate?: {
     failureSignature: string
+    /** Controller-derived correlation for the active failure episode. */
+    recoveryGateRef?: string
     binding?: RecoveryCandidateBinding
     requiredEvidence: string
     mutationFingerprint?: string
@@ -78,7 +80,7 @@ export interface WorkingState {
     permitConsumed?: boolean
     /** At most one fresh admission follows a controller-proven no-effect edit. */
     noEffectReplans?: number
-    admittedPlan?: AdmittedRecoveryPlanV1
+    admittedPlan?: AdmittedRecoveryPlanV2
   }
   revision: number
 }
@@ -158,7 +160,7 @@ export type WorkingStateEvent =
   | { type: 'invalidate'; assumption: string }
   | { type: 'next_experiment'; experiment: string }
   | { type: 'recovery_candidate_drift' }
-  | { type: 'recovery_plan_admitted'; plan: AdmittedRecoveryPlanV1 }
+  | { type: 'recovery_plan_admitted'; plan: AdmittedRecoveryPlanV2 }
   | { type: 'recovery_plan_consumed' }
   | { type: 'recovery_proven_no_effect'; fingerprint: string }
   | { type: 'localization_begin'; localization: FailureLocalization }
@@ -187,6 +189,20 @@ export const ZERO_TEST_GREEN_NON_EVIDENCE =
  */
 export function greenVerifierClearsRecoveryGate(exitCode: number, summary: string): boolean {
   return exitCode === 0 && !summary.includes(ZERO_TEST_GREEN_NON_EVIDENCE)
+}
+
+function validRecoveryGateRef(value: unknown): value is string {
+  return typeof value === 'string' && /^[0-9a-f]{32}$/.test(value)
+}
+
+function createRecoveryGateRef(
+  stateRevision: number,
+  failureSignature: string,
+  binding?: RecoveryCandidateBinding,
+): string {
+  return createHash('sha256').update(JSON.stringify([
+    'recovery-gate-v2', stateRevision, failureSignature, binding ?? null,
+  ])).digest('hex').slice(0, 32)
 }
 
 /**
@@ -346,12 +362,13 @@ export function applyWorkingStateEvent(state: WorkingState, event: WorkingStateE
       break
     case 'recovery_gate':
       if (state.recoveryGate?.binding && event.binding && state.recoveryGate.failureSignature === event.failureSignature &&
-          sameRecoveryBinding(state.recoveryGate.binding, event.binding)) {
+          validRecoveryGateRef(state.recoveryGate.recoveryGateRef) && sameRecoveryBinding(state.recoveryGate.binding, event.binding)) {
         next.recoveryGate = { ...state.recoveryGate, requiredEvidence: event.requiredEvidence }
         break
       }
       next.recoveryGate = {
         failureSignature: event.failureSignature,
+        recoveryGateRef: createRecoveryGateRef(state.revision, event.failureSignature, event.binding),
         ...(event.binding ? { binding: event.binding } : {}),
         requiredEvidence: event.requiredEvidence,
         ...(event.mutationFingerprint ? { mutationFingerprint: event.mutationFingerprint } : {}),
@@ -424,6 +441,7 @@ export function formatWorkingStateBlock(state: WorkingState): string {
     lines.push(
       `  recovery_gate: ${state.recoveryGate.satisfied ? 'evidence_satisfied' : 'evidence_required'}`,
       `  recovery_failure: ${yamlIdentity(state.recoveryGate.failureSignature)}`,
+      `  recovery_gate_ref: ${yamlIdentity(state.recoveryGate.recoveryGateRef ?? '')}`,
       `  recovery_revision: ${yamlIdentity(state.recoveryGate.binding?.workspaceRevision ?? '')}`,
       `  recovery_criterion_id: ${yamlIdentity(state.lastVerifier?.identity ?? '')}`,
       `  recovery_evidence: ${yamlScalar(state.recoveryGate.requiredEvidence)}`,
@@ -633,14 +651,24 @@ export function restoreWorkingStateSnapshot(value: unknown): WorkingState | null
         record.failureSignature !== gate.failureSignature || !record.key ||
         recoveryEvidenceKey(record, gate.failureSignature) !== record.key ||
         recoveryReadObservationId(record.key) !== record.id)) return null
+    const savedRecoveryGateRef = gate.recoveryGateRef
+    const gateRefValid = validRecoveryGateRef(savedRecoveryGateRef)
+    const recoveryGateRef = gateRefValid
+      ? savedRecoveryGateRef
+      : createRecoveryGateRef(restored.revision, gate.failureSignature, binding)
+    const { admittedPlan: _discardedPlan, ...restoredGate } = gate
     restored.recoveryGate = {
-      ...gate,
-      readRecords: records,
-      observedKeys: records.map(record => record.key),
-      satisfied: validBinding === true && gate.satisfied === true && records.length > 0,
+      ...restoredGate,
+      recoveryGateRef,
+      readRecords: gateRefValid ? records : [],
+      observedKeys: gateRefValid ? records.map(record => record.key) : [],
+      satisfied: gateRefValid && validBinding === true && gate.satisfied === true && records.length > 0,
       strategyChanged: false,
       planAdmitted: false,
       permitConsumed: gate.permitConsumed === true,
+    }
+    if (!gateRefValid) {
+      restored.nextExperiment = 'The saved recovery gate lacks a current host reference. Reread the relevant target before proposing a repair.'
     }
   }
   return restored

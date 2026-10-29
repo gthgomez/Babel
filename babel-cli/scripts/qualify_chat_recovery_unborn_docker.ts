@@ -113,8 +113,9 @@ async function qualify(): Promise<void> {
     assert.match(read.observation, /return 0/)
     const gate = host.workingState.recoveryGate!
     assert.ok(gate.satisfied, 'a fresh governed source read satisfies the failed-verifier evidence gate')
+    assert.match(gate.recoveryGateRef ?? '', /^[a-f0-9]{32}$/, 'the active host gate exposes its compact correlation reference')
     const repairPlan = {
-      schemaVersion: 1 as const, failureSignature: gate.failureSignature, workspaceRevision: gate.binding!.workspaceRevision,
+      schemaVersion: 2 as const, recoveryGateRef: gate.recoveryGateRef!, workspaceRevision: gate.binding!.workspaceRevision,
       hypothesisClass: 'logic' as const, targetIdentities: ['solution.py'], actionFamily: 'str_replace' as const,
       criterionId: host.workingState.lastVerifier!.identity,
       supportingObservationIds: gate.observedKeys!.map(recoveryObservationId),

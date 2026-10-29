@@ -312,7 +312,7 @@ test('R1 repair plan rejects a repeated edit and admits one changed scoped edit'
     assert.equal((engine as any).workingState.recoveryGate.satisfied, true);
     const gate = (engine as any).workingState.recoveryGate;
     const repairPlan = {
-      schemaVersion: 1, failureSignature: gate.failureSignature,
+      schemaVersion: 2, recoveryGateRef: gate.recoveryGateRef,
       workspaceRevision: gate.binding.workspaceRevision,
       hypothesisClass: 'logic', targetIdentities: ['src/parser.ts'],
       actionFamily: 'str_replace', criterionId: 'npm test',
@@ -508,7 +508,7 @@ test('R1 no-target red localizes through a related read before admitting a plan'
     assert.equal(state.recoveryGate.readRecords[0].target, 'src/parser.js');
     assert.equal(state.recoveryGate.satisfied, true);
     const repairPlan = {
-      schemaVersion: 1, failureSignature: state.recoveryGate.failureSignature,
+      schemaVersion: 2, recoveryGateRef: state.recoveryGate.recoveryGateRef,
       workspaceRevision: state.recoveryGate.binding.workspaceRevision,
       hypothesisClass: 'logic', targetIdentities: ['src/parser.js'], actionFamily: 'str_replace',
       criterionId: 'npm test', supportingObservationIds: state.recoveryGate.observedKeys.map(recoveryObservationId),
@@ -570,7 +570,7 @@ test('recovery evidence cannot authorize an edit after switching from the projec
     const gate = (engine as any).workingState.recoveryGate;
     assert.equal(gate.satisfied, true, 'a delivered project-tree read satisfies the bound candidate');
     const plan = {
-      schemaVersion: 1, failureSignature: gate.failureSignature,
+      schemaVersion: 2, recoveryGateRef: gate.recoveryGateRef,
       workspaceRevision: gate.binding.workspaceRevision,
       hypothesisClass: 'logic', targetIdentities: [file], actionFamily: 'str_replace',
       criterionId: 'npm test -- parser',
@@ -635,7 +635,7 @@ test('PR242: proven old_str mismatch permits one fresh corrected repair through 
     const plan = () => {
       const gate = (engine as any).workingState.recoveryGate;
       return {
-        schemaVersion: 1, failureSignature: gate.failureSignature,
+        schemaVersion: 2, recoveryGateRef: gate.recoveryGateRef,
         workspaceRevision: gate.binding.workspaceRevision,
         hypothesisClass: 'logic', targetIdentities: ['src/parser.js'],
         actionFamily: 'str_replace', criterionId: 'npm test',

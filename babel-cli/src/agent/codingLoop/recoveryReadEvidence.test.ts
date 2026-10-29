@@ -28,7 +28,7 @@ test('each existing mutation target requires its own referenced delivered read',
   let state = add(initial(), fresh('src/a.ts')); state = add(state, fresh('src/b.ts', 201, 205, 300))
   const keys = state.recoveryGate!.observedKeys!
   const actual: ActualRecoveryEdit = { actionFamily: 'apply_patch', targetIdentities: ['src/a.ts', 'src/b.ts'], existingTargetIdentities: ['src/a.ts', 'src/b.ts'], editFingerprint: 'new-edit', exactFingerprint: 'new-exact' }
-  const plan = { schemaVersion: 1, failureSignature: 'red', workspaceRevision: 'revision', hypothesisClass: 'logic', targetIdentities: actual.targetIdentities, actionFamily: 'apply_patch', criterionId: 'npm test', supportingObservationIds: keys.map(recoveryObservationId) }
+  const plan = { schemaVersion: 2, recoveryGateRef: state.recoveryGate!.recoveryGateRef, workspaceRevision: 'revision', hypothesisClass: 'logic', targetIdentities: actual.targetIdentities, actionFamily: 'apply_patch', criterionId: 'npm test', supportingObservationIds: keys.map(recoveryObservationId) }
   assert.equal(admitRecoveryPlan(state, { ...plan, supportingObservationIds: [recoveryObservationId(keys[0]!)] }, actual, binding).reason, 'missing_target_read')
   assert.equal(admitRecoveryPlan(state, plan, actual, binding).admitted, true)
 })
@@ -101,7 +101,7 @@ test('same-episode gate events cannot replenish a consumed edit permit', () => {
 test('fabricated record contents and ambiguous short handles do not support edits', () => {
   const state = add(add(initial(), fresh('src/a.ts')), fresh('src/b.ts'))
   const records = state.recoveryGate!.readRecords!
-  const plan = { schemaVersion: 1, failureSignature: 'red', workspaceRevision: 'revision', hypothesisClass: 'logic',
+  const plan = { schemaVersion: 2, recoveryGateRef: state.recoveryGate!.recoveryGateRef, workspaceRevision: 'revision', hypothesisClass: 'logic',
     targetIdentities: ['src/a.ts'], actionFamily: 'str_replace', criterionId: 'npm test', supportingObservationIds: [records[0]!.id] }
   const actual: ActualRecoveryEdit = { actionFamily: 'str_replace', targetIdentities: ['src/a.ts'], editFingerprint: 'new-edit', exactFingerprint: 'new-exact' }
   const forged = { ...state, recoveryGate: { ...state.recoveryGate!, readRecords: [{ ...records[0]!, target: 'src/elsewhere.ts' }] } }
@@ -115,7 +115,7 @@ test('a host-confirmed absent target needs current source evidence, not an impos
   const state = add(initial(), fresh('src/current.ts'))
   const id = state.recoveryGate!.readRecords![0]!.id
   const actual: ActualRecoveryEdit = { actionFamily: 'write_file', targetIdentities: ['src/new.ts'], existingTargetIdentities: [], editFingerprint: 'new-edit', exactFingerprint: 'new-exact' }
-  const plan = { schemaVersion: 1, failureSignature: 'red', workspaceRevision: 'revision', hypothesisClass: 'logic',
+  const plan = { schemaVersion: 2, recoveryGateRef: state.recoveryGate!.recoveryGateRef, workspaceRevision: 'revision', hypothesisClass: 'logic',
     targetIdentities: actual.targetIdentities, actionFamily: 'write_file', criterionId: 'npm test', supportingObservationIds: [id] }
   assert.equal(admitRecoveryPlan(state, plan, actual, binding).admitted, true)
   assert.equal(admitRecoveryPlan(state, { ...plan, supportingObservationIds: [] }, actual, binding).admitted, false)

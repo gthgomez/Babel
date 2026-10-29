@@ -38,7 +38,10 @@ test('a >200-line target is repaired through its delivered range with ordinary g
   const record = gate.readRecords![0]!; assert.ok(record, observation.observation)
   assert.deepEqual(record.window, { startLine: 201, endLine: 220, totalLines: 300, completeFile: false, byteTruncated: false })
   assert.ok(observation.observation.includes(record.id))
-  const repair_plan = { schemaVersion: 1 as const, failureSignature: gate.failureSignature, workspaceRevision: gate.binding!.workspaceRevision,
+  const repair_plan = { schemaVersion: 2 as const, recoveryGateRef: gate.recoveryGateRef!, workspaceRevision: gate.binding!.workspaceRevision,
+    // This mirrors the live model's normalized echo. It is diagnostic payload,
+    // not the host's source of truth for the active failure.
+    failureSignature: gate.failureSignature.replaceAll('\n', ' ').replaceAll('"', "'"),
     hypothesisClass: 'logic' as const, targetIdentities: ['large.ts'], actionFamily: 'str_replace' as const, criterionId: 'npm test', supportingObservationIds: [record.id] }
   await run({ type: 'str_replace', file_path: 'large.ts', old_str: 'export const bug = 1;', new_str: 'export const bug = 2;', repair_plan })
   assert.match(readFileSync(join(root, 'large.ts'), 'utf8'), /export const bug = 2;/)
@@ -95,7 +98,7 @@ test('an absent target appearing after admission is not overwritten at dispatch'
     return original(action)
   }
   const result = await run({ type: 'write_file', path: 'created.ts', content: 'replacement\n', repair_plan: {
-    schemaVersion: 1, failureSignature: gate.failureSignature, workspaceRevision: gate.binding!.workspaceRevision,
+    schemaVersion: 2, recoveryGateRef: gate.recoveryGateRef!, workspaceRevision: gate.binding!.workspaceRevision,
     hypothesisClass: 'logic', targetIdentities: ['created.ts'], actionFamily: 'write_file', criterionId: 'npm test', supportingObservationIds: [record.id],
   } })
   assert.equal(checks, 2, result.observation)
@@ -122,7 +125,7 @@ async function twoTargetPlan(host:ReturnType<typeof fixture>['host'],run:ReturnT
   await run({type:'read_file',path:'source.ts'})
   if(targets.includes('discovery0.ts'))await run({type:'read_file',path:'discovery0.ts'})
   const gate=host.workingState.recoveryGate!
-  return {schemaVersion:1 as const,failureSignature:gate.failureSignature,workspaceRevision:gate.binding!.workspaceRevision,hypothesisClass:'logic' as const,targetIdentities:targets,actionFamily:'apply_patch' as const,criterionId:'npm test',supportingObservationIds:gate.readRecords!.map(r=>r.id)}
+  return {schemaVersion:2 as const,recoveryGateRef:gate.recoveryGateRef!,workspaceRevision:gate.binding!.workspaceRevision,hypothesisClass:'logic' as const,targetIdentities:targets,actionFamily:'apply_patch' as const,criterionId:'npm test',supportingObservationIds:gate.readRecords!.map(r=>r.id)}
 }
 
 test('one recovery plan supports two existing file writes without treating its first write as drift',async t=>{

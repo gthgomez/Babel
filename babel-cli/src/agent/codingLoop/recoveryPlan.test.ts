@@ -39,8 +39,9 @@ function readyState() {
 
 function proposal(state = readyState()) {
   return {
-    schemaVersion: 1 as const,
-    failureSignature: 'parser-red', workspaceRevision: 'revision-A',
+    schemaVersion: 2 as const,
+    recoveryGateRef: state.recoveryGate!.recoveryGateRef,
+    workspaceRevision: 'revision-A',
     hypothesisClass: 'logic' as const,
     targetIdentities: ['src/parser.ts'], actionFamily: 'str_replace' as const,
     criterionId: 'npm test',
@@ -65,9 +66,14 @@ test('controller admits only a scoped plan backed by the observed candidate', ()
   assert.equal(valid.admitted, true)
   assert.equal(valid.state.recoveryGate?.planAdmitted, true)
   assert.equal(valid.state.recoveryGate?.admittedPlan?.editFingerprint, 'changed-canonical')
+  for (const field of ['taskId', 'contractHash', 'sessionId', 'repositoryIdentity', 'workspaceRevision', 'executionContextHash'] as const) {
+    const denied = admitRecoveryPlan(state, proposal(state), changedEdit, { ...binding, [field]: `wrong-${field}` })
+    assert.equal(denied.admitted, false, `changed ${field} cannot reuse this gate`)
+    assert.equal(denied.state, state)
+  }
   for (const altered of [
     { workspaceRevision: 'revision-B' },
-    { failureSignature: 'other-red' },
+    { recoveryGateRef: '0'.repeat(32) },
     { targetIdentities: ['src/other.ts'] },
     { criterionId: 'different test' },
     { supportingObservationIds: ['invented'] },
@@ -91,7 +97,7 @@ test('a test label cannot replace the exact verifier criterion and the rejection
 test('rejected recovery fields identify their exact mismatch without consuming the permit', () => {
   const state=readyState()
   for(const [alteration,reason] of [
-    [{failureSignature:'wrong'},'failure_signature_mismatch'],
+    [{recoveryGateRef:'0'.repeat(32)},'recovery_gate_ref_mismatch'],
     [{workspaceRevision:'wrong'},'workspace_revision_mismatch'],
     [{targetIdentities:['src/parser.ts:parse']},'target_identity_mismatch'],
     [{actionFamily:'write_file'},'action_family_mismatch'],
@@ -105,7 +111,7 @@ test('rejected recovery fields identify their exact mismatch without consuming t
 })
 
 test('rendered recovery identities round-trip without truncation while prose stays bounded', () => {
-  const longFailure = `failure-${'f'.repeat(280)}`
+  const longFailure = `1 failing doctest; expected "['first',\n 'second']" but received a wrapped representation\n${'diagnostic context '.repeat(14)}`
   const longRevision = `revision-${'r'.repeat(280)}`
   const longVerifier = `verifier-${'v'.repeat(280)}`
   const longBinding = { ...binding, workspaceRevision: longRevision }
@@ -133,9 +139,11 @@ test('rendered recovery identities round-trip without truncation while prose sta
   const parsedFailure = field('recovery_failure')
   const parsedRevision = field('recovery_revision')
   const parsedVerifier = field('last_verifier_identity')
+  const parsedRecoveryGateRef = field('recovery_gate_ref')
   assert.equal(parsedFailure, longFailure)
   assert.equal(parsedRevision, longRevision)
   assert.equal(parsedVerifier, longVerifier)
+  assert.equal(parsedRecoveryGateRef, state.recoveryGate!.recoveryGateRef)
   assert.ok(rendered.includes(JSON.stringify('x'.repeat(240))))
   assert.ok(!rendered.includes('x'.repeat(241)))
 
@@ -149,17 +157,83 @@ test('rendered recovery identities round-trip without truncation while prose sta
 
   const actual = { ...changedEdit }
   const proposalFromRendered = {
-    ...proposal(state), failureSignature: parsedFailure, workspaceRevision: parsedRevision,
+    ...proposal(state), recoveryGateRef: parsedRecoveryGateRef, workspaceRevision: parsedRevision,
     criterionId: parsedVerifier,
   }
   assert.equal(admitRecoveryPlan(state, proposalFromRendered, actual, longBinding).admitted, true)
+  assert.equal(admitRecoveryPlan(state, {
+    ...proposalFromRendered,
+    // A normalized diagnostic echo is not authority; the active host gate and
+    // its read records remain the source of truth.
+    failureSignature: parsedFailure.replaceAll('f', 'F').replaceAll('\n', ' '),
+  }, actual, longBinding).admitted, true)
   for (const altered of [
-    { ...proposalFromRendered, failureSignature: `${parsedFailure}x` },
+    { ...proposalFromRendered, recoveryGateRef: `${parsedRecoveryGateRef}x` },
     { ...proposalFromRendered, workspaceRevision: `${parsedRevision}x` },
     { ...proposalFromRendered, criterionId: `${parsedVerifier}x` },
   ]) {
     assert.equal(admitRecoveryPlan(state, altered, actual, longBinding).admitted, false)
   }
+})
+
+test('recovery gate references persist for the same red and rotate on a new failure episode', () => {
+  const state = readyState()
+  const previousRef = state.recoveryGate!.recoveryGateRef
+  const sameRed = applyWorkingStateEvent(state, {
+    type: 'recovery_gate', failureSignature: 'parser-red', binding,
+    requiredEvidence: 'inspect again',
+  })
+  assert.equal(sameRed.recoveryGate?.recoveryGateRef, previousRef)
+  let newFailure = applyWorkingStateEvent(state, {
+    type: 'recovery_gate', failureSignature: 'parser-red with different output', binding,
+    requiredEvidence: 'inspect the new failure',
+  })
+  assert.match(newFailure.recoveryGate?.recoveryGateRef ?? '', /^[0-9a-f]{32}$/)
+  assert.notEqual(newFailure.recoveryGate?.recoveryGateRef, previousRef)
+  assert.equal(newFailure.recoveryGate?.satisfied, false)
+  newFailure = applyWorkingStateEvent(newFailure, {
+    type: 'add_evidence', evidence: 'read_file:src/parser.ts#new-call', discriminating: true,
+    provenance: {
+      tool: 'read_file', target: 'src/parser.ts', failureSignature: 'parser-red with different output',
+      binding, observationDigest: 'new-parser-content',
+      window: { startLine: 1, endLine: 1, totalLines: 1, completeFile: true, byteTruncated: false },
+    },
+  })
+  assert.equal(newFailure.recoveryGate?.satisfied, true)
+  assert.equal(admitRecoveryPlan(state, proposal(state), changedEdit, binding).admitted, true)
+  assert.equal(admitRecoveryPlan(newFailure, proposal(state), changedEdit, binding).reason, 'recovery_gate_ref_mismatch')
+  assert.equal(admitRecoveryPlan(newFailure, proposal(newFailure), changedEdit, binding).admitted, true)
+
+  const changedCandidateBinding = { ...binding, workspaceRevision: 'revision-B' }
+  let changedCandidate = applyWorkingStateEvent(state, {
+    type: 'recovery_gate', failureSignature: 'parser-red', binding: changedCandidateBinding,
+    requiredEvidence: 'inspect the new candidate',
+  })
+  changedCandidate = applyWorkingStateEvent(changedCandidate, {
+    type: 'add_evidence', evidence: 'read_file:src/parser.ts#candidate-B', discriminating: true,
+    provenance: {
+      tool: 'read_file', target: 'src/parser.ts', failureSignature: 'parser-red',
+      binding: changedCandidateBinding, observationDigest: 'candidate-B-content',
+      window: { startLine: 1, endLine: 1, totalLines: 1, completeFile: true, byteTruncated: false },
+    },
+  })
+  assert.notEqual(changedCandidate.recoveryGate?.recoveryGateRef, previousRef)
+  assert.equal(changedCandidate.recoveryGate?.satisfied, true)
+  assert.equal(admitRecoveryPlan(changedCandidate, proposal(state), changedEdit, changedCandidateBinding).reason,
+    'recovery_gate_ref_mismatch')
+})
+
+test('an unbound recovery gate never admits a plan even when its display reference is copied', () => {
+  const unbound = applyWorkingStateEvent(createWorkingState('repair'), {
+    type: 'recovery_gate', failureSignature: 'red', requiredEvidence: 'inspect',
+  })
+  const copied = {
+    ...proposal(readyState()), recoveryGateRef: unbound.recoveryGate!.recoveryGateRef!,
+  }
+  const denied = admitRecoveryPlan(unbound, copied, changedEdit, null)
+  assert.equal(denied.admitted, false)
+  assert.equal(denied.reason, 'unbound_or_missing_plan')
+  assert.equal(denied.state, unbound)
 })
 
 test('same edit and changed prose cannot reopen the failed strategy', () => {
@@ -273,7 +347,7 @@ test('a new bound observation admits a distinct second repair in the same class,
     },
   })
   const secondProposal = {
-    ...proposal(state), failureSignature: 'parser-still-red', workspaceRevision: 'revision-B',
+    ...proposal(state), workspaceRevision: 'revision-B',
   }
   const secondEdit = { ...changedEdit, editFingerprint: 'second-canonical', exactFingerprint: 'second-exact' }
   assert.equal(admitRecoveryPlan(state, secondProposal, changedEdit, nextBinding).admitted, false, 'same edit remains blocked')
@@ -343,9 +417,12 @@ test('versioned session snapshot preserves the consumed ledger and downgrades le
   const legacy = structuredClone(state)
   delete legacy.recoveryGate!.readRecords
   delete legacy.recoveryGate!.binding
+  delete legacy.recoveryGate!.recoveryGateRef
   legacy.recoveryGate!.satisfied = true
   legacy.recoveryGate!.planAdmitted = true
   const downgraded = restoreWorkingStateSnapshot(legacy)
   assert.equal(downgraded?.recoveryGate?.satisfied, false)
   assert.equal(downgraded?.recoveryGate?.planAdmitted, false)
+  assert.equal(downgraded?.recoveryGate?.readRecords?.length, 0)
+  assert.match(downgraded?.recoveryGate?.recoveryGateRef ?? '', /^[0-9a-f]{32}$/)
 })
