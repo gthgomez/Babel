@@ -473,9 +473,9 @@ function stripInformationalFrames(text: string): string {
 // request. A keyword still grants nothing by itself — execution authority
 // remains with the policy/lease gates.
 // Determiner-preceded nouns ("this patch", "the fix", "that update") are topics.
-// Ordinary edit verbs that are not in the historical list (optimize, bump,
-// convert, migrate) are still mutation intent. A keyword grants nothing by
-// itself — execution authority remains with the policy/lease gates.
+// Ordinary edit verbs that are not in the historical list (improve, optimize,
+// bump, convert, migrate) are still mutation intent. A keyword grants nothing
+// by itself — execution authority remains with the policy/lease gates.
 const NOUN_GUARD_PREFIX =
   '(?<!\\b(?:this|that|the|these|those|a|an|any|your|my|our|their|its|said|such|same|net)\\s)';
 // File-saving is an explicit artifact request, not a request to publish or fetch.
@@ -485,11 +485,11 @@ const FILE_ARTIFACT_VERB_SOURCE = String.raw`save(?=\s+(?:${ARTIFACT_OBJECT_SOUR
 const GUARDED_MUTATION_VERBS =
   `${NOUN_GUARD_PREFIX}(?:change|patch|fix|update|repair|resolve|optimize|bump|convert|migrate)`;
 const MUTATION_VERB_SOURCE =
-  `implement|create|write|refactor|apply|modify|edit|add|replace|rename|${FILE_ARTIFACT_VERB_SOURCE}|${GUARDED_MUTATION_VERBS}`;
+  `implement|create|write|refactor|apply|modify|edit|add|replace|rename|improve|${FILE_ARTIFACT_VERB_SOURCE}|${GUARDED_MUTATION_VERBS}`;
 const DESTRUCTIVE_VERB_SOURCE = 'delete|remove|rm|drop|erase|unlink';
 const READ_ONLY_VERB_SOURCE = `(?:${MUTATION_VERB_SOURCE}|${DESTRUCTIVE_VERB_SOURCE}|save|turn|change|touch|alter|clean)`;
 const READ_ONLY_VERB_GERUND_SOURCE =
-  '(?:saving|turning|editing|modifying|changing|writing|deleting|removing|fixing|patching|repairing|refactoring|touching|altering|creating|updating|adding|replacing|renaming|implementing|applying|dropping|erasing|unlinking|cleaning)';
+  '(?:saving|turning|editing|modifying|changing|writing|deleting|removing|fixing|patching|repairing|refactoring|touching|altering|creating|updating|adding|replacing|renaming|improving|implementing|applying|dropping|erasing|unlinking|cleaning)';
 // Coordinates verb lists including the Oxford comma form (", or" / ", and"):
 // a serial-comma list must be consumed in full or its trailing verb survives
 // stripping and is misread as positive mutation authority.
@@ -504,6 +504,7 @@ const SEQUENCED_MUTATION_SOURCE =
 // remain global denials. This never supplies positive mutation intent.
 const PROTECTED_EDIT_OBJECT = '(?:(?:the|any|our|your|this|that)\\s+)?(?:' +
   '(?:regression\\s+)?tests?(?:\\s+file)?|test\\s+suite|package\\s+scripts?|dependencies|' +
+  'scripts?(?:\\s+or\\s+data)?|data|' +
   'permissions?|verification\\s+gates?|provider\\s+accounting|unrelated\\s+(?:files?|code)|' +
   '[`"\\\']?[\\w./\\\\-]+\\.[A-Za-z0-9_-]{1,12}[`"\\\']?)';
 const PROTECTED_EDIT_OBJECT_LIST = new RegExp(
