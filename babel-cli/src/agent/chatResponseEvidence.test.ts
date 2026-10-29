@@ -7,7 +7,12 @@ import { ChatEngine } from './chatEngine.js'
 import { DeepInfraApiRunner } from '../runners/deepInfraApi.js'
 import type { ToolStreamEvent } from '../runners/base.js'
 import { SafeExecutor } from '../sandbox.js'
-import { unsupportedTestClaim, unsupportedMutationClaim, responseEvidenceCorrection } from './chatResponseEvidence.js'
+import { unsupportedTestClaim, unsupportedMutationClaim, responseEvidenceCorrection, isPunctuationOnlyAnswer } from './chatResponseEvidence.js'
+
+test('punctuation-only evidence correction cannot masquerade as a delivered answer', () => {
+  for (const answer of ['.', '...', ' — ', '  !  ']) assert.equal(isPunctuationOnlyAnswer(answer), true)
+  for (const answer of ['No.', 'Updated README.md.', '0 tests ran.']) assert.equal(isPunctuationOnlyAnswer(answer), false)
+})
 
 test('test claims distinguish execution, freshness, result and scope', () => {
   const green = { command: 'npm test', exit_code: 0, authority: true, stale: false, scope: 'full_suite', tests_total: 1, tests_skipped: 0 }
@@ -79,7 +84,7 @@ test('bare targeted reports preserve selectors and separate prose success from f
   assert.equal(unsupportedTestClaim('I ran npm test and it failed.',{...receipt,command:'npm test',exit_code:1}),false);
 })
 
-for (const scenario of ['correction', 'repeated', 'exact_json', 'mutation-correction', 'mutation-repeated', 'mixed-repeated'] as const)
+for (const scenario of ['correction', 'repeated', 'exact_json', 'mutation-correction', 'mutation-repeated', 'mixed-repeated', 'punctuation-correction', 'punctuation-repeated', 'punctuation-final', 'evidence-final'] as const)
 test(`response evidence ${scenario}: preserve useful answers without requiring effects`, async t => {
   const root = mkdtempSync(join(tmpdir(), 'chat-response-evidence-'))
   const prior = process.env['BABEL_NATIVE_TOOLS']
@@ -108,26 +113,29 @@ test(`response evidence ${scenario}: preserve useful answers without requiring e
         yield { type: 'tool_use', id: 'inspect-catalog', name: 'read_file', input: { path: 'catalog.js' } }
         yield { type: 'done', finishReason: 'tool_calls' }
       } else {
-        yield { type: 'text_delta', text: scenario === 'mixed-repeated' && this.turns > 2 ? 'I updated files.' : scenario === 'exact_json' ? exact :
-          scenario.endsWith('repeated') || this.turns === 2 ? unsupported : corrected }
+        const text = scenario.startsWith('punctuation-')
+          ? this.turns === 2 ? unsupported : this.turns === 3 || scenario === 'punctuation-repeated' ? '.' : corrected
+          : scenario === 'mixed-repeated' && this.turns > 2 ? 'I updated files.' : scenario === 'exact_json' ? exact :
+            scenario.endsWith('repeated') || this.turns === 2 ? unsupported : corrected
+        yield { type: 'text_delta', text }
         yield { type: 'done', finishReason: 'stop' }
       }
     }
   }
   const runner = new Runner()
   const engine = new ChatEngine({ task: 'Make this better.', projectRoot: root,
-    model: 'deepseek-v4-flash', providerRunner: runner, maxTurns: 6 })
+    model: 'deepseek-v4-flash', providerRunner: runner, maxTurns: scenario === 'punctuation-final' ? 3 : scenario === 'evidence-final' ? 2 : 6 })
   let answer = ''
   let failure: { reason_code?: string; outcome?: string } | undefined
   for await (const event of engine.submitMessageStream('Make this better.', 'execute')) {
     if (event.type === 'done') answer = event.answer
     if (event.type === 'failed') failure = event
   }
-  if (scenario.endsWith('repeated')) {
+  if (scenario.endsWith('repeated') || scenario === 'punctuation-final' || scenario === 'evidence-final') {
     assert.equal(failure?.reason_code, 'response_evidence_invalid')
     assert.equal(failure?.outcome, 'AGENT_FAILURE')
   } else assert.equal(answer, scenario === 'exact_json' ? exact : corrected)
-  assert.equal(runner.turns, scenario === 'exact_json' ? 2 : 3)
+  assert.equal(runner.turns, scenario === 'exact_json' ? 2 : scenario === 'evidence-final' ? 2 : scenario === 'punctuation-final' ? 3 : scenario.startsWith('punctuation-') ? 4 : 3)
   assert.equal(effects, 0)
   assert.equal(readFileSync(join(root, 'catalog.js'), 'utf8'), 'export const orderCatalog = items => [...items]\n')
 })

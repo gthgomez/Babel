@@ -143,3 +143,8 @@ export function responseEvidenceCorrection(receipt: ResponseVerifierEvidence, mi
   }
   return `Response evidence correction: ${responseVerifierFacts(receipt)} Your proposed answer claims tests ran or passed without matching evidence. Correct the answer once: remove or qualify that claim, retain any useful clarification and the requested output format. Reading test source is not running tests. You may answer truthfully without running tools or making changes.`
 }
+
+/** A punctuation-only reply after an evidence correction carries no usable task answer. */
+export function isPunctuationOnlyAnswer(answer: string): boolean {
+  return !/[\p{L}\p{N}]/u.test(answer)
+}

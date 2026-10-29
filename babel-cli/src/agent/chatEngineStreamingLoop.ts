@@ -20,7 +20,7 @@ import { recordChatHarnessFeedback } from "./chatHarnessFeedback.js";
 import { writeFileSync } from "node:fs";
 import { join } from 'node:path';
 import { describeNativeToolRejection, nativeSchemaRepairFeedback } from './nativeToolRejection.js';
-import { unsupportedTestClaim, unsupportedMutationClaim, responseEvidenceCorrection, responseVerifierFacts } from './chatResponseEvidence.js';
+import { unsupportedTestClaim, unsupportedMutationClaim, responseEvidenceCorrection, responseVerifierFacts, isPunctuationOnlyAnswer } from './chatResponseEvidence.js';
 import { refreshChatVerifierReceiptStalenessSync } from '../evidence/chatRevisionBinding.js';
 import type { ChatUsageScope } from './chatEngineProviderAccounting.js';
 
@@ -149,6 +149,8 @@ export class ChatEngineStreamingLoop {
     // Bounded once-per-submission repair for an unrecognized text tool call.
     let textToolProtocolRepairUsed = false;
     let responseEvidenceRepairUsed = false;
+    let punctuationAnswerRepairUsed = false;
+    let evidenceCorrectionGuidance = '';
     let nativeProtocolRepairUsed = false;
     const bufferContractAnswer = requestedChatJsonKind(userInput) !== null;
     if (this.host.options.projectRoot) {
@@ -1951,6 +1953,21 @@ export class ChatEngineStreamingLoop {
           return;
         }
 
+        if (responseEvidenceRepairUsed && isPunctuationOnlyAnswer(answer)) {
+          this.host.conversation.push({ role: 'assistant', content: answer });
+          endSpan(_turnSpan, SpanStatusCode.ERROR);
+          _turnSpan = null;
+          if (punctuationAnswerRepairUsed || turn + 1 >= maxTurns) {
+            yield this.host.streamFailed('RESPONSE_EVIDENCE_INVALID: evidence correction produced no usable answer.');
+            return;
+          }
+          punctuationAnswerRepairUsed = true;
+          recordChatHarnessFeedback(this.host,
+            `Your evidence correction contained only punctuation. Provide a substantive task answer now; do not return a placeholder. Follow the prior evidence correction and retain useful findings and accurate change/verification details. ${evidenceCorrectionGuidance}`);
+          yield { type: 'thought', text: '[Requesting a substantive evidence-matched answer]' };
+          continue;
+        }
+
         // Clarifications and BLOCKED replies must obey the same evidence rules.
         if (this.host.options.projectRoot) {
       refreshChatVerifierReceiptStalenessSync(this.host.options.projectRoot, this.host.lastVerifierReceipt);
@@ -1965,12 +1982,13 @@ export class ChatEngineStreamingLoop {
           this.host.conversation.push({ role: 'assistant', content: answer });
           endSpan(_turnSpan, SpanStatusCode.ERROR);
           _turnSpan = null;
-          if (responseEvidenceRepairUsed) {
+          if (responseEvidenceRepairUsed || turn + 1 >= maxTurns) {
             yield this.host.streamFailed('RESPONSE_EVIDENCE_INVALID: repeated completion claims lack corresponding execution or mutation evidence.');
             return;
           }
           responseEvidenceRepairUsed = true;
-          recordChatHarnessFeedback(this.host, responseEvidenceCorrection(this.host.lastVerifierReceipt, missingMutationClaim, answer));
+          evidenceCorrectionGuidance = responseEvidenceCorrection(this.host.lastVerifierReceipt, missingMutationClaim, answer);
+          recordChatHarnessFeedback(this.host, evidenceCorrectionGuidance);
           yield { type: 'thought', text: missingMutationClaim ? '[Correcting an unsupported mutation claim]' : '[Correcting an unsupported test-result claim]' };
           continue;
         }
