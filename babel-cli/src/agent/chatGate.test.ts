@@ -10,7 +10,7 @@ import { hasSubAgentWrites } from './chatEngineCriticBudget.js';
 import { extractVerifierCommand } from './chatEngineVerifierSession.js';
 import { evaluateCompletionGateForEngine, type VerifierReceipt } from './completionGatePolicy.js';
 import type { ChatTurn } from './chatToolDefinitions.js';
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -965,6 +965,45 @@ describe('post-edit static check', () => {
       const result = await (engine as any).runPostEditStaticCheck(badFile);
       assert.notEqual(result, null);
       assert.ok((result as string).startsWith('exit_code: 1'));
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test('checks Python source without writing bytecode or executing it, preserving source encodings', async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), 'babel-python-edit-check-'));
+    try {
+      const validRoot = join(tmpDir, 'valid');
+      const encodedRoot = join(tmpDir, 'encoded');
+      const invalidRoot = join(tmpDir, 'invalid');
+      for (const root of [validRoot, encodedRoot, invalidRoot]) mkdirSync(root, { recursive: true });
+
+      const marker = join(validRoot, 'target-executed.txt');
+      const validFile = join(validRoot, 'valid.py');
+      writeFileSync(
+        validFile,
+        `\uFEFF# coding: utf-8\nfrom pathlib import Path\nPath(${JSON.stringify(marker)}).write_text('ran', encoding='utf-8')\n`,
+      );
+      const validEngine = new ChatEngine({ task: 'fix the bug', projectRoot: validRoot });
+      const validResult = await (validEngine as any).runPostEditStaticCheck(validFile);
+      assert.match(validResult, /^exit_code: 0/);
+      assert.equal(existsSync(marker), false, 'syntax checking must not execute the target module');
+      assert.equal(existsSync(join(validRoot, '__pycache__')), false);
+
+      const encodedFile = join(encodedRoot, 'latin1.py');
+      writeFileSync(encodedFile, Buffer.from('# coding: latin-1\nvalue = "caf\u00e9"\n', 'latin1'));
+      const encodedEngine = new ChatEngine({ task: 'fix the bug', projectRoot: encodedRoot });
+      const encodedResult = await (encodedEngine as any).runPostEditStaticCheck(encodedFile);
+      assert.match(encodedResult, /^exit_code: 0/);
+      assert.equal(existsSync(join(encodedRoot, '__pycache__')), false);
+
+      const invalidFile = join(invalidRoot, 'invalid.py');
+      writeFileSync(invalidFile, '# coding: utf-8\ndef broken(:\n');
+      const invalidEngine = new ChatEngine({ task: 'fix the bug', projectRoot: invalidRoot });
+      const invalidResult = await (invalidEngine as any).runPostEditStaticCheck(invalidFile);
+      assert.match(invalidResult, /^exit_code: 1/);
+      assert.match(invalidResult, /SyntaxError/);
+      assert.equal(existsSync(join(invalidRoot, '__pycache__')), false);
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });
     }

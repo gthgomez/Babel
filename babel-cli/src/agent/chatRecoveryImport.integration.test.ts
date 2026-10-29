@@ -1,7 +1,7 @@
 import { recordToolProposed, recordToolTerminal } from './sessionEvents.js'
 import assert from 'node:assert/strict'
 import {test} from 'node:test'
-import {mkdtempSync,mkdirSync,readFileSync,writeFileSync,rmSync} from 'node:fs'
+import {existsSync,mkdtempSync,mkdirSync,readFileSync,writeFileSync,rmSync} from 'node:fs'
 import {tmpdir} from 'node:os'
 import {join,dirname} from 'node:path'
 import {execFileSync} from 'node:child_process'
@@ -175,7 +175,7 @@ test('an actually started red without a receipt can rerun through normal governe
   assert.match(denied.observationList.join('\n'), /RECOVERY_|DENY|denied/i)
 })
 
-test('a Python verifier does not invalidate the current recovery candidate with container bytecode', async t => {
+test('governed Python write/check/read/repair path avoids host bytecode drift', async t => {
   const storage = mkdtempSync(join(tmpdir(), 'babel-python-recovery-cache-'))
   const root = join(storage, 'project'), runDir = join(storage, 'runtime')
   mkdirSync(root); mkdirSync(runDir)
@@ -186,12 +186,17 @@ test('a Python verifier does not invalidate the current recovery candidate with 
   process.env['BABEL_BENCHMARK_DOCKER_IMAGE'] = 'synthetic/python:unit'; delete process.env['BABEL_DOCKER_DISABLE']; delete process.env['BABEL_ALLOW_HOST_FALLBACK']; delete process.env['BABEL_BENCHMARK_DOCKER_EXTRA_ARGS']; setDockerAvailableForTest(true)
 
   const command = 'python -m doctest solution.py -v'
-  const source = 'def answer():\n    """Return the expected value.\n    >>> answer()\n    1\n    """\n    return -1\n'
-  writeFileSync(join(root, 'solution.py'), source)
+  const source = 'def answer():\n    """Return the expected value.\n    >>> answer()\n    1\n    """\n    return 0\n'
+  const baselineSource = source.replace('    return 0\n', '    return -1\n')
+  writeFileSync(join(root, 'solution.py'), baselineSource)
   execFileSync('git', ['init', '-q'], { cwd:root, windowsHide:true })
   execFileSync('git', ['add', 'solution.py'], { cwd:root, windowsHide:true })
   execFileSync('git', ['-c','user.name=Fixture','-c','user.email=fixture@example.test','commit','-qm','fixture'], { cwd:root, windowsHide:true })
 
+  let verifierRuns = 0
+  // This adapter supplies a started red then green result so the production
+  // recovery controller and settlement path are exercised. It does not run
+  // Docker or claim that the doctest itself executed.
   t.mock.method(SafeExecutor.prototype, 'testRunAsync', async (actualCommand: string) => {
     assert.equal(actualCommand, command)
     const prepared = buildBenchmarkContainerCommand({
@@ -203,16 +208,12 @@ test('a Python verifier does not invalidate the current recovery candidate with 
       const pair = prepared.args[index + 1] ?? '', eq = pair.indexOf('=')
       if (eq > 0) containerEnv.set(pair.slice(0,eq),pair.slice(eq + 1))
     }
-    // Model Python's normal import cache side effect at the Docker transport
-    // seam. Before the runtime fix, the untracked .pyc changes the candidate
-    // between the red receipt and the controller's next recovery action.
-    if (containerEnv.get('PYTHONDONTWRITEBYTECODE') !== '1') {
-      mkdirSync(join(root,'__pycache__'), { recursive:true })
-      writeFileSync(join(root,'__pycache__','solution.cpython-311.pyc'), 'container-generated cache')
-    }
+    assert.equal(containerEnv.get('PYTHONDONTWRITEBYTECODE'), '1', 'container imports must also avoid workspace bytecode')
+    verifierRuns++
+    const red = verifierRuns === 1
     return {
-      exit_code:1,
-      stdout:'*** Failed example:\n    answer()\nExpected: 1\nGot: 0\nFile "/app/solution.py", line 4, in answer\n',
+      exit_code:red ? 1 : 0,
+      stdout:red ? '*** Failed example:\n    answer()\nExpected: 1\nGot: 0\nFile "/app/solution.py", line 4, in answer\n' : '1 passed, 0 failed\n',
       stderr:'', process_started:true, process_termination:'exited' as const,
     }
   })
@@ -240,21 +241,25 @@ test('a Python verifier does not invalidate the current recovery candidate with 
     return result
   }
 
-  const firstEdit = await run({ type:'str_replace', file_path:'solution.py', old_str:'    return -1', new_str:'    return 0' })
+  const firstEdit = await run({ type:'write_file', path:'solution.py', content:source })
   assert.doesNotMatch(firstEdit.observation, /CAPABILITY_DENIED|DENY_MISSING_AUTHORITY/)
+  assert.match(firstEdit.observation, /static_check solution\.py\nexit_code: 0/)
+  assert.equal(existsSync(join(root, '__pycache__')), false, 'the automatic host syntax check must not alter the project')
+  assert.equal(readFileSync(join(root, 'solution.py'), 'utf8'), source)
   const initial = host.currentRecoveryBinding()
   assert.ok(initial?.workspaceRevision)
   const red = await run({ type:'test_run', command })
   assert.match(red.observation, /exit_code: 1/)
-  assert.equal(host.lastVerifierReceipt?.exit_code, 1, 'the actual tool settlement path captures the red receipt')
-  assert.equal(host.workingState.lastVerifier?.exitCode, 1, 'the actual tool settlement path records the red verifier result')
-  assert.ok(host.workingState.settledFailedVerifier, 'actual process execution is retained as a failed-verifier descriptor')
+  assert.equal(host.lastVerifierReceipt?.exit_code, 1, 'the governed settlement path captures the adapter result')
+  assert.equal(host.workingState.lastVerifier?.exitCode, 1, 'the governed settlement path records the red verifier result')
+  assert.ok(host.workingState.settledFailedVerifier, 'the started adapter result is retained for recovery')
   assert.equal(host.currentRecoveryBinding()?.workspaceRevision, initial.workspaceRevision,
-    'container-generated bytecode must not change the failed candidate identity')
+    'a settled red verifier must remain bound to the exact post-write candidate')
   assert.ok(host.parity.sessionEvents.events.some(event => event.kind === 'verifier_attempt'),
     'the test action must traverse durable verifier event settlement')
 
-  await run({ type:'read_file', path:'solution.py' })
+  const sourceRead = await run({ type:'read_file', path:'solution.py' })
+  assert.match(sourceRead.observation, /return 0/)
   const gate = host.workingState.recoveryGate!
   assert.ok(gate?.satisfied, 'the fresh source read should satisfy the red-verifier recovery gate')
   const plan = {
@@ -265,5 +270,11 @@ test('a Python verifier does not invalidate the current recovery candidate with 
   }
   const repair = await run({ type:'str_replace', file_path:'solution.py', old_str:'    return 0', new_str:'    return 1', repair_plan:plan })
   assert.doesNotMatch(repair.observation, /RECOVERY_CANDIDATE_DRIFT|RECOVERY_EVIDENCE_REQUIRED|RECOVERY_PLAN_REQUIRED/)
-  assert.equal(readFileSync(join(root,'solution.py'),'utf8'), source.replace('    return -1','    return 1'))
+  assert.equal(readFileSync(join(root,'solution.py'),'utf8'), source.replace('    return 0','    return 1'))
+  assert.equal(existsSync(join(root, '__pycache__')), false, 'subsequent governed Python edits must not create workspace artifacts')
+  const green = await run({ type:'test_run', command })
+  assert.match(green.observation, /exit_code: 0/)
+  assert.equal(verifierRuns, 2)
+  assert.equal(host.lastVerifierReceipt?.exit_code, 0)
+  assert.equal(host.workingState.recoveryGate, undefined)
 })

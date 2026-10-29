@@ -242,7 +242,7 @@ export function primaryPatchPath(patch: string): string {
 }
 
 /**
- * R3a: Fast post-edit static check (tsc / node --check / py_compile).
+ * R3a: Fast post-edit static check (tsc / node --check / Python compile).
  * Returns null when no checker applies. Never throws.
  */
 export async function runPostEditStaticCheck(
@@ -295,12 +295,25 @@ export async function runPostEditStaticCheck(
 
     if (ext === 'py') {
       try {
-        const out = execFileSync('python', ['-m', 'py_compile', filePath], {
-          cwd: projectRoot,
-          timeout: fastCheckTimeout,
-          encoding: 'utf-8',
-          maxBuffer: 1024 * 32,
-        });
+        // Compile source bytes to an in-memory code object. `py_compile`
+        // writes `__pycache__` beside the edited project file, which makes a
+        // host-owned syntax check look like external workspace drift. Passing
+        // bytes preserves Python's BOM/encoding-cookie handling; compile()
+        // validates syntax without importing or executing the target module.
+        const out = execFileSync(
+          'python',
+          [
+            '-c',
+            'import sys\nwith open(sys.argv[1], "rb") as source:\n    compile(source.read(), sys.argv[1], "exec")',
+            filePath,
+          ],
+          {
+            cwd: projectRoot,
+            timeout: fastCheckTimeout,
+            encoding: 'utf-8',
+            maxBuffer: 1024 * 32,
+          },
+        );
         return `exit_code: 0\n${out}`;
       } catch (e: unknown) {
         const msg = e instanceof Error ? e.message : String(e);
