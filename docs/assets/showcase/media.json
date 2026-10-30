@@ -1,6 +1,6 @@
 {
   "sourceCaptureSha256": "13cbfbc65c7dd44ed42b55603c71abbc36b23bf0095ab18c9a4667f70ce1a2ed",
-  "method": "Chromium recording/screenshots of the local stdout viewer; GIF encoded from the same video",
+  "method": "Chromium recording/screenshots of the local stdout viewer; GIF encoded from the same video; desktop interface preview captured separately without a native bridge",
   "mobileCheck": "all three scenes fit 390px without horizontal overflow",
   "video": {
     "programs": [],
@@ -40,6 +40,34 @@
       "path": "viewer.html",
       "bytes": 3816,
       "sha256": "0574071a4738d0ee6f843dadf9a110a3ce971ef2e4a9cbd5ebe28e091d9816b2"
+    },
+    {
+      "path": "desktop-renderer-preview.png",
+      "bytes": 408743,
+      "sha256": "d2314f72738e903dc4ed8b27322cf8591e4ba53be9332217e3fd7fc4986d8ab7"
+    },
+    {
+      "path": "desktop-setup-preview.png",
+      "bytes": 183470,
+      "sha256": "43a9ecdf0eb9ad50133afa83d8e4e5d98e643294c6bfd0853d16b0c632cea925"
+    },
+    {
+      "path": "desktop-renderer-preview.mp4",
+      "bytes": 423486,
+      "sha256": "ce7ab59a1c34f2002c3ea2351938eedba84cb71a645074a6623a47f97dfcf69c"
     }
-  ]
+  ],
+  "desktopPreview": {
+    "captureMetadata": "desktop-capture.json",
+    "nativeBridge": false,
+    "modelRequests": 0,
+    "conversationOrToolFixtures": 0,
+    "video": {
+      "width": 1280,
+      "height": 800,
+      "durationSeconds": 9.1,
+      "audio": false
+    },
+    "desktopSourceCommit": "9f70c0abf384e21f6755a72c0524c35403155060"
+  }
 }

@@ -1,0 +1,39 @@
+{
+  "capture": "Browser rendering of the current Babel Desktop source renderer; native Desktop APIs are absent.",
+  "desktopSourceCommit": "9f70c0abf384e21f6755a72c0524c35403155060",
+  "desktopPackageVersion": "0.2.0",
+  "viewport": {
+    "width": 1440,
+    "height": 900
+  },
+  "videoViewport": {
+    "width": 1280,
+    "height": 800
+  },
+  "clock": "Fixed at 2026-10-30 12:00 UTC for repeatable screenshots.",
+  "scenes": [
+    "empty setup-required interface",
+    "provider and project setup dialog"
+  ],
+  "nativeBridge": false,
+  "modelRequests": 0,
+  "conversationOrToolFixtures": 0,
+  "externalRequests": 0,
+  "assets": [
+    {
+      "path": "desktop-renderer-preview.png",
+      "bytes": 408743,
+      "sha256": "d2314f72738e903dc4ed8b27322cf8591e4ba53be9332217e3fd7fc4986d8ab7"
+    },
+    {
+      "path": "desktop-setup-preview.png",
+      "bytes": 183470,
+      "sha256": "43a9ecdf0eb9ad50133afa83d8e4e5d98e643294c6bfd0853d16b0c632cea925"
+    },
+    {
+      "path": "desktop-renderer-preview.mp4",
+      "bytes": 423486,
+      "sha256": "ce7ab59a1c34f2002c3ea2351938eedba84cb71a645074a6623a47f97dfcf69c"
+    }
+  ]
+}

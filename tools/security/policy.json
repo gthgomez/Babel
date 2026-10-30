@@ -38,6 +38,21 @@
       "path": "docs/assets/showcase/offline-cli.gif",
       "sha256": "6563b0379bb9adcbbb1a54f0a758646c76af35c381a4f553c5563671a1c4dbbf",
       "rationale": "Animated preview derived from the reviewed offline CLI recording; no model-backed task. Source and privacy-normalization provenance: docs/assets/showcase/capture.json and media.json."
+    },
+    {
+      "path": "docs/assets/showcase/desktop-renderer-preview.png",
+      "sha256": "d2314f72738e903dc4ed8b27322cf8591e4ba53be9332217e3fd7fc4986d8ab7",
+      "rationale": "Screenshot of the actual Babel Desktop source renderer in browser preview; native bridge absent. Provenance: docs/assets/showcase/desktop-capture.json and media.json."
+    },
+    {
+      "path": "docs/assets/showcase/desktop-setup-preview.png",
+      "sha256": "43a9ecdf0eb9ad50133afa83d8e4e5d98e643294c6bfd0853d16b0c632cea925",
+      "rationale": "Screenshot of the actual Babel Desktop source setup dialog in browser preview; no provider or project configured. Provenance: docs/assets/showcase/desktop-capture.json and media.json."
+    },
+    {
+      "path": "docs/assets/showcase/desktop-renderer-preview.mp4",
+      "sha256": "ce7ab59a1c34f2002c3ea2351938eedba84cb71a645074a6623a47f97dfcf69c",
+      "rationale": "Headless Chromium recording of the Babel Desktop source renderer and setup dialog; no native bridge, task execution, or model response. Provenance: docs/assets/showcase/desktop-capture.json and media.json."
     }
   ],
   "identifier_exceptions": [],
