@@ -1,6 +1,6 @@
 {
   "name": "babel-harness",
-  "version": "0.1.4",
+  "version": "0.2.0",
   "description": "Local coding agent runtime for Babel — chat, plan, and deep modes with TUI/REPL",
   "license": "Apache-2.0",
   "author": "Jonathan Gomez Aguilar",
