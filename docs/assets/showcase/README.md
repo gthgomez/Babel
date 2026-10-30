@@ -32,4 +32,21 @@ python docs/assets/showcase/capture-media.py
 
 This script builds a self-contained HTML viewer from the saved stdout, serves it on loopback, and records the actual browser viewport. The help panel is an explicitly labeled excerpt; the complete help remains linked above. Screenshots capture that viewer, and the GIF is encoded from the same MP4. The recording is paced playback, not real-time typing, the interactive Babel TUI, or a simulated successful agent conversation. The viewer loads no external resources. All three panels were checked at a 390px viewport without horizontal overflow.
 
-This source capture does not represent the published Desktop 0.1.3 application or assert npm package/release parity. Ordinary coding-loop qualification remains documented in [project status](../../STATUS.md). No provider inference, deployment, or release is needed for this walkthrough. Code, text, and captures use the repository's [Apache-2.0 license](../../../LICENSE).
+The CLI capture is a source build and does not assert npm package or Desktop release parity. Ordinary coding-loop qualification remains documented in [project status](../../STATUS.md). No provider inference, deployment, or release is needed for this walkthrough. Code, text, and captures use the repository's [Apache-2.0 license](../../../LICENSE).
+
+## Desktop renderer preview
+
+The root README also shows a current-source preview of the Desktop renderer:
+
+- [Empty setup-required screen](desktop-renderer-preview.png)
+- [Setup dialog](desktop-setup-preview.png)
+- [Interface preview video](desktop-renderer-preview.mp4)
+- [Capture metadata and file hashes](desktop-capture.json)
+
+Rebuild and capture it with:
+
+```sh
+python docs/assets/showcase/capture-desktop-preview.py
+```
+
+The capture uses the source renderer in headless Chromium. It has no Electron native bridge, project, conversation, provider, or model response; setup details are unconfigured. External requests are blocked. This is an interface preview, not a recording of the installed Windows app or evidence of task execution. The downloaded Windows x64 release remains 0.1.3 and is described by its [release-pinned setup guide](https://github.com/gthgomez/Babel/blob/v0.1.3/babel-desktop/docs/INSTALL-WINDOWS.md). Reproduction requires Python Playwright, Chromium, the Playwright FFmpeg component, and system FFmpeg.
