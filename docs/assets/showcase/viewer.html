@@ -1,0 +1,36 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Babel — offline CLI stdout</title><style>
+*{box-sizing:border-box}body{margin:0;padding:36px;background:#10131c;color:#e8ebf5;font-family:system-ui,sans-serif}.wrap{max-width:1200px;margin:auto}header{display:flex;align-items:center;justify-content:space-between;gap:16px;border-bottom:1px solid #3c4258;padding-bottom:22px}h1{font-size:28px;margin:0}header p{color:#bcc1d3;font-size:16px;margin:8px 0 0}.badge{padding:10px 12px;border:1px solid #50698e;background:#202e45;border-radius:5px;font-size:14px;white-space:nowrap}h2{font-size:21px;color:#adbdff;margin:24px 0 16px}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#1a2030;border:1px solid #3c4258;border-radius:7px;padding:24px;font:18px/1.5 "DejaVu Sans Mono",monospace;margin:0}.scene{display:none}.scene.active{display:block}footer{color:#b6bed3;font-size:15px;margin-top:21px;line-height:1.5}nav{margin-top:16px}button{background:#28334c;border:1px solid #66789e;border-radius:5px;color:#edf1ff;padding:7px 12px;margin:0 6px 6px 0;cursor:pointer}button:focus{outline:2px solid #adbdff}@media(max-width:600px){body{padding:16px}header{display:block}header p{font-size:14px}.badge{display:inline-block;margin-top:12px}pre{font-size:13px;padding:14px}h1{font-size:24px}}
+</style><div class="wrap"><header><div><h1>Babel · real CLI stdout</h1><p>Paced playback of local commands · source 9f70c0abf384</p></div><span class="badge">OFFLINE · CLI 0.2.0</span></header><section class="scene active"><h2>1/3 · Version and entrypoint</h2><pre>$ node babel-cli/dist/index.js --version
+0.2.0
+
+$ node babel-cli/dist/index.js --help
+Usage: babel [options] [command]
+
+Babel Multi-Agent OS — local runtime harness for multi-repo workspaces
+
+Options:
+  -V, --version                    output the version number
+  --experimental                   Enable experimental features (daemon, goal
+                                   loop)
+  -h, --help                       display help for command</pre></section><section class="scene "><h2>2/3 · Choose an entrypoint</h2><pre>$ node babel-cli/dist/index.js --help
+[Command Guide excerpt from the recorded stdout]
+
+Command Guide:
+  Interactive:  babel                  (or babel interactive / babel app)
+  Default:      babel &quot;&lt;task...&gt;&quot;
+  Plan:         babel plan &quot;&lt;task...&gt;&quot;
+  Deep:         babel deep &quot;&lt;task...&gt;&quot;
+  Recovery:     babel resume, babel undo
+  Health:       babel doctor, babel inspect
+  Advanced:     babel advanced</pre></section><section class="scene "><h2>3/3 · Read the environment diagnosis</h2><pre>$ node babel-cli/dist/index.js doctor --scope env
+Babel Doctor
+Workspace: &lt;WORKSPACE&gt;
+Mode: standard
+Scope: env
+
+[Environment]
+PASS  Environment shell can spawn commands — Environment shell probe passed
+PASS  PowerShell runtime available — PowerShell probe passed (7.6.9)
+WARN  Provider environment key present — No provider API key detected; live provider-backed governance tests will be unavailable.
+
+Overall: WARN</pre></section><footer>CLI orientation · temporary empty provider profile · network denied<br>No model session, code edits, or verified coding result. Runtime warnings and full stdout are recorded alongside this viewer.</footer><nav aria-label="Playback controls"><button onclick="pick(0)">Version</button><button onclick="pick(1)">Command guide</button><button onclick="pick(2)">Doctor</button><button onclick="clearInterval(timer)">Pause</button></nav></div><script>let current=0;function pick(index){current=index;document.querySelectorAll('.scene').forEach((s,i)=>s.classList.toggle('active',i===index))}const timer=setInterval(()=>pick((current+1)%3),6000);</script></html>

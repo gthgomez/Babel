@@ -1,0 +1,11 @@
+Babel Doctor
+Workspace: <WORKSPACE>
+Mode: standard
+Scope: env
+
+[Environment]
+PASS  Environment shell can spawn commands — Environment shell probe passed
+PASS  PowerShell runtime available — PowerShell probe passed (7.6.9)
+WARN  Provider environment key present — No provider API key detected; live provider-backed governance tests will be unavailable.
+
+Overall: WARN

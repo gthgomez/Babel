@@ -1,0 +1,45 @@
+{
+  "sourceCaptureSha256": "13cbfbc65c7dd44ed42b55603c71abbc36b23bf0095ab18c9a4667f70ce1a2ed",
+  "method": "Chromium recording/screenshots of the local stdout viewer; GIF encoded from the same video",
+  "mobileCheck": "all three scenes fit 390px without horizontal overflow",
+  "video": {
+    "programs": [],
+    "stream_groups": [],
+    "streams": [
+      {
+        "width": 1280,
+        "height": 900
+      }
+    ],
+    "format": {
+      "duration": "18.000000"
+    }
+  },
+  "assets": [
+    {
+      "path": "cli-help.png",
+      "bytes": 81249,
+      "sha256": "8493a8f986d3d63e875ea6a29db1f94f7b67f4e69907bdc1124d459827fb824c"
+    },
+    {
+      "path": "cli-doctor.png",
+      "bytes": 92072,
+      "sha256": "1a9199baa1132ff374912be682c2fc00e7f06621f686d0d1985ceff8cc01759f"
+    },
+    {
+      "path": "offline-cli.mp4",
+      "bytes": 320957,
+      "sha256": "fc2b037dd22e52282507a9f1ed4f8acc517bebbfbaa12c4ba7ff10c001d0ebc3"
+    },
+    {
+      "path": "offline-cli.gif",
+      "bytes": 1342610,
+      "sha256": "6563b0379bb9adcbbb1a54f0a758646c76af35c381a4f553c5563671a1c4dbbf"
+    },
+    {
+      "path": "viewer.html",
+      "bytes": 3816,
+      "sha256": "0574071a4738d0ee6f843dadf9a110a3ce971ef2e4a9cbd5ebe28e091d9816b2"
+    }
+  ]
+}

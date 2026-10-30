@@ -12,35 +12,13 @@ Babel runs locally in your terminal. Chat is the default. Plan and Deep are addi
 
 ## See Babel in action
 
-<!-- Maintainer: replace this block with a real capture at docs/assets/tui-chat.png (or .webm). Capture steps live in docs/assets/README.md (maintainer-only). Do not fabricate imagery. -->
+![Real Babel CLI command guide from an offline source build](docs/assets/showcase/cli-help.png)
 
-*Illustrative transcript (not a live capture) of a chat turn in the Babel TUI:*
+**[Watch the 18-second CLI walkthrough (MP4)](docs/assets/showcase/offline-cli.mp4)** · [Animated preview](docs/assets/showcase/offline-cli.gif) · [Commands and capture provenance](docs/assets/showcase/README.md)
 
-```text
-BABEL · READY · CHAT · MyProject · deepseek
-──────────────────────────────────────────────────
+This real offline capture uses source revision [`9f70c0abf384`](https://github.com/gthgomez/Babel/commit/9f70c0abf384e21f6755a72c0524c35403155060), reporting CLI **0.2.0**. It shows version, help, and environment diagnostics in a temporary empty provider profile. The viewer plays actual command output at a reading pace; the missing-provider warning is intentional.
 
-You
-  Fix the failing webhook retry test and make sure
-  duplicate deliveries can't double-process payments.
-
-Babel
-  I'll inspect the webhook handler and its tests first.
-
-  ▸ Read src/webhooks/stripe.ts
-  ▸ Read tests/webhooks/stripe.test.ts
-  ▸ Search idempotency handling
-
-  Found it: retries re-run the handler without a delivery key...
-
-  ▸ Edited src/webhooks/stripe.ts
-  ▸ Edited tests/webhooks/stripe.test.ts
-  ▸ npm test -- stripe
-
-  ✓ 18 passed
-
-  Completed · 2 files changed · verified
-```
+This walkthrough demonstrates local inspection commands. Model-backed coding requires provider setup and execution prerequisites below; the capture does not establish coding-loop reliability or show a completed coding task. See [project status](./docs/STATUS.md) for qualification limits.
 
 ## Choose an install path
 

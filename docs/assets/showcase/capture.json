@@ -1,0 +1,94 @@
+{
+  "schemaVersion": 1,
+  "capturedAt": "2026-10-30T13:31:05.216Z",
+  "sourceRepository": "https://github.com/gthgomez/Babel",
+  "sourceRevision": "9f70c0abf384e21f6755a72c0524c35403155060",
+  "packageName": "babel-harness",
+  "packageVersion": "0.2.0",
+  "reportedVersion": "0.2.0",
+  "nodeVersion": "v24.19.0",
+  "platform": "linux",
+  "captureKind": "paced playback of real offline CLI stdout; no model session",
+  "isolation": "Temporary home, project, config, state, cache, and runs; allowlisted environment without credentials; network-denying preload",
+  "pathNormalization": [
+    "source checkout => <BABEL_SOURCE>",
+    "parent workspace => <WORKSPACE>",
+    "temporary profile => <TEMPORARY_PROFILE>",
+    "Node executable => node",
+    "Node warning process ID => <PID>",
+    "trailing blank lines => one final newline"
+  ],
+  "sourceEntrySha256": "981e1318e624340e3d3f8c5c816cbd827eec29f689a3024b1d2fb98a41de0970",
+  "networkGuardSha256": "2e9bbe8b28346bd8422439ead1e2bd1d46a87ca4d83b0ee847666a777b5a08a5",
+  "captureScriptSha256": "757f8c955ec57d4552b5066a0aaad61ba5e241651ea3f089ca71face140e0c3e",
+  "commands": [
+    {
+      "argv": [
+        "node",
+        "--import",
+        "<BABEL_SOURCE>/docs/assets/showcase/offline-guard.mjs",
+        "<BABEL_SOURCE>/babel-cli/dist/index.js",
+        "--version"
+      ],
+      "cwd": "<TEMPORARY_PROFILE>/project",
+      "exitCode": 0,
+      "stdout": "version.txt",
+      "sha256": "1f930dd1f133c1f97a94fe3acb8db34372cf4c01ffdb2b3ff4ca72f9494121e9"
+    },
+    {
+      "argv": [
+        "node",
+        "--import",
+        "<BABEL_SOURCE>/docs/assets/showcase/offline-guard.mjs",
+        "<BABEL_SOURCE>/babel-cli/dist/index.js",
+        "--help"
+      ],
+      "cwd": "<TEMPORARY_PROFILE>/project",
+      "exitCode": 0,
+      "stdout": "help.txt",
+      "sha256": "887537792eafa228a0917fff342d87ab397bd00771be8c97c5830fc6e26ce701"
+    },
+    {
+      "argv": [
+        "node",
+        "--import",
+        "<BABEL_SOURCE>/docs/assets/showcase/offline-guard.mjs",
+        "<BABEL_SOURCE>/babel-cli/dist/index.js",
+        "doctor",
+        "--scope",
+        "env"
+      ],
+      "cwd": "<TEMPORARY_PROFILE>/project",
+      "exitCode": 0,
+      "stdout": "doctor.txt",
+      "sha256": "9c8c30bcd69ff8a0ca3b9c1cd9ae09a4e8c05c0666a7797ce7d436d82d0f5530",
+      "stderr": "doctor.txt.stderr.txt",
+      "stderrSha256": "ccdfce7dff4fa2fb4e126df315299f4ffeb41a64329faf187f593493d8d09693"
+    },
+    {
+      "argv": [
+        "node",
+        "--import",
+        "<BABEL_SOURCE>/docs/assets/showcase/offline-guard.mjs",
+        "<BABEL_SOURCE>/babel-cli/dist/index.js",
+        "doctor",
+        "--scope",
+        "env",
+        "--json"
+      ],
+      "cwd": "<TEMPORARY_PROFILE>/project",
+      "exitCode": 0,
+      "stdout": "doctor.json",
+      "sha256": "767a7ec675c04124fc3f8f89d4bbf7570a6f9862994eb778beaaf761b62e84ed",
+      "stderr": "doctor.json.stderr.txt",
+      "stderrSha256": "ccdfce7dff4fa2fb4e126df315299f4ffeb41a64329faf187f593493d8d09693"
+    }
+  ],
+  "doctorStatus": "warn",
+  "doctorSummary": {
+    "pass": 2,
+    "warn": 1,
+    "fail": 0,
+    "skip": 0
+  }
+}

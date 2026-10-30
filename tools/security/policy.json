@@ -18,6 +18,26 @@
       "path": "babel-desktop/references/BabelTuiNorthStar.png",
       "sha256": "fd4250031448b6b0a448f2fbe57177b56fbcdab93609db4ea9f4ba970bf796f0",
       "rationale": "Visual source image for the desktop shell screenshot harness."
+    },
+    {
+      "path": "docs/assets/showcase/cli-help.png",
+      "sha256": "8493a8f986d3d63e875ea6a29db1f94f7b67f4e69907bdc1124d459827fb824c",
+      "rationale": "Screenshot of the real offline CLI command-guide excerpt; no model-backed task. Source and privacy-normalization provenance: docs/assets/showcase/capture.json and media.json."
+    },
+    {
+      "path": "docs/assets/showcase/cli-doctor.png",
+      "sha256": "1a9199baa1132ff374912be682c2fc00e7f06621f686d0d1985ceff8cc01759f",
+      "rationale": "Screenshot of real environment diagnostics; empty provider profile and WARN preserved. Source and privacy-normalization provenance: docs/assets/showcase/capture.json and media.json."
+    },
+    {
+      "path": "docs/assets/showcase/offline-cli.mp4",
+      "sha256": "fc2b037dd22e52282507a9f1ed4f8acc517bebbfbaa12c4ba7ff10c001d0ebc3",
+      "rationale": "Paced browser recording of real offline CLI stdout; no model-backed coding success claimed. Source and privacy-normalization provenance: docs/assets/showcase/capture.json and media.json."
+    },
+    {
+      "path": "docs/assets/showcase/offline-cli.gif",
+      "sha256": "6563b0379bb9adcbbb1a54f0a758646c76af35c381a4f553c5563671a1c4dbbf",
+      "rationale": "Animated preview derived from the reviewed offline CLI recording; no model-backed task. Source and privacy-normalization provenance: docs/assets/showcase/capture.json and media.json."
     }
   ],
   "identifier_exceptions": [],
