@@ -100,7 +100,7 @@ test("buildSweAgentChatEnv maps legacy DeepSeek live routes and rejects unknown 
     {},
     "deepseek-v4-pro",
   );
-  assert.equal(env["BABEL_CHAT_INVESTIGATE_MODEL"], "deepseek/deepseek-v4-flash-0731");
+  assert.equal(env["BABEL_CHAT_INVESTIGATE_MODEL"], "deepseek/deepseek-v4.1-flash-1017");
   assert.equal(env["BABEL_CHAT_MUTATE_MODEL"], "deepseek/deepseek-v4-pro");
   assert.equal(env["DEEPINFRA_API_KEY"], undefined);
   assert.equal(env["DEEPSEEK_API_KEY"], undefined);

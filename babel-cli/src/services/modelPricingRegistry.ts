@@ -161,6 +161,19 @@ export const MODEL_PRICING_REGISTRY: Record<string, ModelPricingEntry> = {
     verifiedAt: MODEL_PRICING_VERIFIED_AT,
     cacheInputDiscountAvailable: true,
   },
+  'openrouter:deepseek/deepseek-v4.1-flash-1017': {
+    provider: 'openrouter',
+    modelId: 'deepseek/deepseek-v4.1-flash-1017',
+    // OpenRouter's displayed model rate is the cheapest route. Use the highest
+    // provider rates listed on the model page as a dated conservative ceiling;
+    // the selected endpoint and invoice may differ as routing/prices change.
+    inputCostPer1M: 0.33,
+    outputCostPer1M: 1.32,
+    cacheInputDiscountAvailable: true,
+    sourceUrl: 'https://openrouter.ai/deepseek/deepseek-v4.1-flash-1017',
+    verifiedAt: '2026-10-30',
+    conservativeWarning: 'Uses the highest listed OpenRouter endpoint rates observed on 2026-10-30; routing and prices may change, and this is not an invoice charge.',
+  },
 };
 
 function registryKey(
@@ -238,14 +251,34 @@ export function estimateProviderUsageCost(input: UsageCostInput): UsageCostEstim
   let outputCostUsd: number | null = null;
   let precision: CostPrecision = 'exact';
   let warning: string | null = null;
+  let inputCoverageUnknown = false;
 
   if (cacheHitTokens !== null || cacheMissTokens !== null) {
-    const hitTokens = cacheHitTokens ?? 0;
-    const missTokens =
-      cacheMissTokens ?? (promptTokens !== null ? Math.max(promptTokens - hitTokens, 0) : 0);
-    const hitRate = pricing.inputCacheHitCostPer1M ?? pricing.inputCostPer1M;
-    const missRate = pricing.inputCacheMissCostPer1M ?? pricing.inputCostPer1M;
-    inputCostUsd = (hitTokens / 1_000_000) * hitRate + (missTokens / 1_000_000) * missRate;
+    if (promptTokens === null) {
+      inputCoverageUnknown = true;
+      precision = 'unknown';
+      warning = 'Cache token counts were reported without a total prompt token count; total input cost is unknown.';
+    } else {
+      const splitTotal = (cacheHitTokens ?? 0) + (cacheMissTokens ?? 0);
+      const splitComplete = splitTotal === promptTokens;
+      const hitTokens = cacheHitTokens ?? (splitComplete ? promptTokens - (cacheMissTokens ?? 0) : 0);
+      const missTokens = cacheMissTokens ?? (splitComplete ? promptTokens - hitTokens : 0);
+      if (!splitComplete) {
+        // Incomplete or contradictory splits cannot justify a discounted rate.
+        // Price the complete prompt at the undiscounted input rate instead.
+        inputCostUsd = (promptTokens / 1_000_000) * pricing.inputCostPer1M;
+        precision = 'conservative';
+        warning = 'Cache token counts do not cover the total prompt; the full prompt is priced at the undiscounted input rate.';
+      } else {
+        const hitRate = pricing.inputCacheHitCostPer1M ?? pricing.inputCostPer1M;
+        const missRate = pricing.inputCacheMissCostPer1M ?? pricing.inputCostPer1M;
+        inputCostUsd = (hitTokens / 1_000_000) * hitRate + (missTokens / 1_000_000) * missRate;
+        if (pricing.cacheInputDiscountAvailable && hitTokens > 0 && pricing.inputCacheHitCostPer1M === undefined) {
+          precision = 'conservative';
+          warning = 'Input cache discounts may apply, but no verified cache-hit price is available.';
+        }
+      }
+    }
   } else if (promptTokens !== null) {
     inputCostUsd = (promptTokens / 1_000_000) * pricing.inputCostPer1M;
     if (pricing.cacheInputDiscountAvailable) {
@@ -260,7 +293,7 @@ export function estimateProviderUsageCost(input: UsageCostInput): UsageCostEstim
   }
 
   const estimatedCostUsd =
-    inputCostUsd !== null || outputCostUsd !== null
+    !inputCoverageUnknown && (inputCostUsd !== null || outputCostUsd !== null)
       ? (inputCostUsd ?? 0) + (outputCostUsd ?? 0)
       : null;
 

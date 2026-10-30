@@ -171,14 +171,15 @@
       "tier": "standard",
       "enabled": true,
       "context_window": 1000000,
-      "estimated_cost_per_1m_input": 0.031,
-      "estimated_cost_per_1m_output": 0.27,
+      "estimated_cost_per_1m_input": 0.33,
+      "estimated_cost_per_1m_output": 1.32,
       "source_url": "https://openrouter.ai/deepseek/deepseek-v4.1-flash-1017",
       "verified_at": "2026-10-30",
       "expires_at": "2027-01-28",
-      "selection_reason": "Current OpenRouter DeepSeek Flash snapshot selected for the default DeepSeek standard route.",
+      "selection_reason": "Current OpenRouter DeepSeek Flash snapshot selected for the default DeepSeek standard route; displayed rates use the highest endpoint prices listed on 2026-10-30 as a conservative estimate.",
       "notes": [
         "Exact snapshot currently resolved by OpenRouter's DeepSeek Flash Latest alias.",
+        "Provider routing and prices can change; these listed endpoint rates are not an invoice guarantee.",
         "Explicit Pro and legacy V4 Flash 0731 selectors remain separate routes."
       ]
     },

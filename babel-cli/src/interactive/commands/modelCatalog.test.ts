@@ -14,6 +14,7 @@ test('catalog labels active identity, provider, credential prerequisite and both
   assert.match(text, /requires OPENROUTER_API_KEY/);
   assert.match(text, /Input \$0\/M.*Output \$0.25\/M/);
   assert.doesNotMatch(text, /durable budget|campaign internals/);
+  assert.match(text, /OpenRouter may route across endpoints with different prices/);
   assert.match(text, /not a billing guarantee/);
   const { estimated_cost_per_1m_output: _output, ...unknown } = entry;
   assert.match(formatModelPricing(unknown), /Output unknown/);

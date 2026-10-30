@@ -9,6 +9,7 @@ import {
   CAMPAIGN_QUALIFIED_COMMAND_CODE_MODEL_ID,
   CAMPAIGN_QUALIFIED_OPENROUTER_MODEL_ID,
 } from './campaign-qualified-routes.js'
+import { resolveOpenRouterDeepSeekModelId } from '../modelPolicy.js'
 import { CAMPAIGN_QUALIFIED_OPENROUTER_MAX_INPUT_CONTEXT_TOKENS } from './campaign-qualified-context.js'
 import { reservationUpperBoundMicroUsd } from './campaign-metering.js'
 import { campaignOpenRouterRegistryMaxPriceUsdPerMillion } from './campaign-openrouter-wire.js'
@@ -19,6 +20,11 @@ import {
   legacyReservationUpperBoundMicroUsd,
   resolveCampaignLegacyReservationRates,
 } from './campaign-legacy-reservation-rates.js'
+
+test('campaign OpenRouter metering stays pinned when the generic DeepSeek default changes', () => {
+  assert.equal(CAMPAIGN_QUALIFIED_OPENROUTER_MODEL_ID, 'deepseek/deepseek-v4-flash-0731')
+  assert.equal(resolveOpenRouterDeepSeekModelId('deepseek'), 'deepseek/deepseek-v4.1-flash-1017')
+})
 
 test('usage estimate registry drift does not move legacy wire or campaign hold', () => {
   const registryKey = `openrouter:${CAMPAIGN_QUALIFIED_OPENROUTER_MODEL_ID}`

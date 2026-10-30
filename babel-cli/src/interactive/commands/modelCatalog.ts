@@ -30,7 +30,7 @@ export function formatModelCatalog(
     const details = `${entry.provider}${entry.experimental ? ' · experimental' : ''}${tags ? ` · ${tags}` : ''} · ${availability}\n${formatModelPricing(entry)}`;
     lines.push(...wrapPrefixedBlock(details, { firstPrefix: '    ', continuationPrefix: '    ', width: Math.max(12, width - 1) }));
   }
-  lines.push(...wrapPrefixedBlock('Prices are policy estimates per million tokens; $0 is a configured rate, not a billing guarantee.',
+  lines.push(...wrapPrefixedBlock('Prices are policy estimates per million tokens; OpenRouter may route across endpoints with different prices. Rates can change; $0 is a configured rate, not a billing guarantee.',
     { firstPrefix: '  ', continuationPrefix: '  ', width: Math.max(12, width - 1) }));
   return lines.join('\n');
 }

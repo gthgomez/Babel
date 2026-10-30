@@ -1,12 +1,14 @@
 import type { PreparedProviderRequest } from '../runners/preparedProviderRequest.js'
-import { LIVE_OPENROUTER_DEEPSEEK_MODEL_IDS } from '../modelPolicy.js'
 import type { ProviderId } from '../runners/providerRegistry.js'
 
 /** Exact Command Code native route qualified for campaign metering. */
 export const CAMPAIGN_QUALIFIED_COMMAND_CODE_MODEL_ID = 'deepseek/deepseek-v4.1-flash' as const
 
-/** OpenRouter campaign lane: exact DeepSeek v4 flash control model only. */
-export const CAMPAIGN_QUALIFIED_OPENROUTER_MODEL_ID = LIVE_OPENROUTER_DEEPSEEK_MODEL_IDS[0]
+/**
+ * OpenRouter campaign lane remains pinned to the v4 flash control model;
+ * generic DeepSeek default ordering must not silently retarget campaign metering.
+ */
+export const CAMPAIGN_QUALIFIED_OPENROUTER_MODEL_ID = 'deepseek/deepseek-v4-flash-0731' as const
 
 const CAMPAIGN_QUALIFIED_OPENROUTER_MODEL_IDS: ReadonlySet<string> = new Set([
   CAMPAIGN_QUALIFIED_OPENROUTER_MODEL_ID,

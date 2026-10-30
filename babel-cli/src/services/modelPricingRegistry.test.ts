@@ -38,6 +38,69 @@ test('prices direct DeepSeek usage exactly when cache split tokens are reported'
   assert.ok(Math.abs((estimate.estimatedCostUsd ?? 0) - 0.00064512) < 1e-12);
 });
 
+test('prices an incomplete cache split at the full prompt rate instead of omitting prompt tokens', () => {
+  const estimate = estimateProviderUsageCost({
+    provider: 'deepseek',
+    modelId: 'deepseek-v4-flash',
+    promptTokens: 1000,
+    completionTokens: 0,
+    promptCacheMissTokens: 600,
+  });
+
+  assert.equal(estimate.precision, 'conservative');
+  assert.match(estimate.warning ?? '', /do not cover the total prompt/i);
+  assert.ok(Math.abs((estimate.inputCostUsd ?? -1) - 0.00014) < 1e-12);
+  assert.ok(Math.abs((estimate.estimatedCostUsd ?? -1) - 0.00014) < 1e-12);
+});
+
+test('keeps total cost unknown when cache counts have no prompt total', () => {
+  const estimate = estimateProviderUsageCost({
+    provider: 'deepseek',
+    modelId: 'deepseek-v4-flash',
+    completionTokens: 2000,
+    promptCacheHitTokens: 400,
+    promptCacheMissTokens: 600,
+  });
+
+  assert.equal(estimate.precision, 'unknown');
+  assert.equal(estimate.inputCostUsd, null);
+  assert.ok(Math.abs((estimate.outputCostUsd ?? -1) - 0.00056) < 1e-12);
+  assert.equal(estimate.estimatedCostUsd, null);
+  assert.match(estimate.warning ?? '', /total prompt token count/i);
+});
+
+test('estimates current OpenRouter DeepSeek Flash conservatively when cache billing is unknown', () => {
+  const estimate = estimateProviderUsageCost({
+    provider: 'openrouter',
+    modelId: 'deepseek/deepseek-v4.1-flash-1017',
+    promptTokens: 1000,
+    completionTokens: 2000,
+  });
+
+  assert.equal(estimate.precision, 'conservative');
+  assert.match(estimate.warning ?? '', /highest listed OpenRouter endpoint rates/i);
+  assert.equal(estimate.inputCostPer1M, 0.33);
+  assert.equal(estimate.outputCostPer1M, 1.32);
+  assert.equal(estimate.pricingSourceUrl, 'https://openrouter.ai/deepseek/deepseek-v4.1-flash-1017');
+  assert.equal(estimate.pricingVerifiedAt, '2026-10-30');
+  assert.ok(Math.abs((estimate.estimatedCostUsd ?? -1) - 0.00297) < 1e-12);
+});
+
+test('keeps cached-input OpenRouter estimates conservative without a pinned cache rate', () => {
+  const estimate = estimateProviderUsageCost({
+    provider: 'openrouter',
+    modelId: 'deepseek/deepseek-v4.1-flash-1017',
+    promptTokens: 1000,
+    completionTokens: 2000,
+    promptCacheHitTokens: 400,
+    promptCacheMissTokens: 600,
+  });
+
+  assert.equal(estimate.precision, 'conservative');
+  assert.match(estimate.warning ?? '', /cache.*rate|cache.*discount/i);
+  assert.ok(Math.abs((estimate.estimatedCostUsd ?? -1) - 0.00297) < 1e-12);
+});
+
 test('marks cache-discounted models conservative when cache split tokens are absent', () => {
   const estimate = estimateProviderUsageCost({
     provider: 'deepinfra',
