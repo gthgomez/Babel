@@ -1,0 +1,61 @@
+Usage: babel [options] [command]
+
+Babel Multi-Agent OS — local runtime harness for multi-repo workspaces
+
+Options:
+  -V, --version                    output the version number
+  --experimental                   Enable experimental features (daemon, goal
+                                   loop)
+  -h, --help                       display help for command
+
+Commands:
+  setup [options]                  Show the read-only first-five-minutes setup
+                                   checklist
+  doctor [options]                 Everyday diagnostic: run Babel workspace
+                                   health and integrity checks
+  dry                              Everyday safety toggle: control persisted
+                                   dry-run mode for the local CLI
+  permissions [options] [profile]  View or set approval/autonomy profile
+                                   (suggest | auto-edit | full-auto)
+  inspect [options]                Read-only run inspection surfaces for
+                                   existing Babel evidence bundles
+  interactive|app [options]        Default: enter persistent interactive Babel
+                                   session (REPL)
+  deep [options] <task...>         Run the governed apply-and-verify path for
+                                   harder or higher-risk work
+  undo [options]                   Restore the latest checkpoint from the most
+                                   recent recoverable run
+  plan [options] <intent...>       Prepare a plan, ask for approval, then apply
+                                   it in the same terminal flow
+  resume [options] [run]           Resume a retryable run and take the next
+                                   action
+  advanced                         Show advanced Babel command groups
+  help [command]                   display help for command
+
+Examples:
+  $ babel                  # Launches interactive TUI session
+  $ babel "Fix failing tests"
+  $ babel plan "Split this safely"
+  $ babel deep "Harden the migration path"
+  $ babel doctor
+  $ babel resume latest
+  $ babel undo
+  $ babel advanced
+
+Command Guide:
+  Interactive:  babel                  (or babel interactive / babel app)
+  Default:      babel "<task...>"
+  Plan:         babel plan "<task...>"
+  Deep:         babel deep "<task...>"
+  Recovery:     babel resume, babel undo
+  Health:       babel doctor, babel inspect
+  Advanced:     babel advanced
+
+Notes:
+  - Bare babel with no arguments launches the interactive TUI (REPL) session.
+  - babel "<task...>" is the default one-shot action path — runs the task and exits.
+  - babel plan prepares a plan, asks for approval in the terminal, then applies the approved task.
+  - babel deep uses the heavier governed path when you want extra critique and execution rigor.
+  - Daily work uses babel "<task>"; babel plan and babel deep cover planning and governed execution.
+  - Shorthand is supported: babel <Project> "<task...>" maps to babel run --project <Project> "<task...>"
+  - Use "babel advanced" for babel run, audit, benchmark, git, MCP, and inspection surfaces.

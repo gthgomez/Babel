@@ -1,0 +1,37 @@
+{
+  "status": "warn",
+  "workspaceRoot": "<WORKSPACE>",
+  "mode": "standard",
+  "scope": "env",
+  "checks": [
+    {
+      "id": "env.shell.available",
+      "section": "Environment",
+      "title": "Environment shell can spawn commands",
+      "status": "pass",
+      "message": "Environment shell probe passed"
+    },
+    {
+      "id": "env.powershell.available",
+      "section": "Environment",
+      "title": "PowerShell runtime available",
+      "status": "pass",
+      "message": "PowerShell probe passed (7.6.9)"
+    },
+    {
+      "id": "env.provider.any_key_present",
+      "section": "Environment",
+      "title": "Provider environment key present",
+      "status": "warn",
+      "message": "No provider API key detected; live provider-backed governance tests will be unavailable.",
+      "diagnostic_code": "PROVIDER_ENV_MISSING",
+      "fixHint": "Set a provider API key or use recorded-provider replay fixtures for governance proof."
+    }
+  ],
+  "summary": {
+    "pass": 2,
+    "warn": 1,
+    "fail": 0,
+    "skip": 0
+  }
+}

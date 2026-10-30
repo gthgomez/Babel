@@ -1,6 +1,6 @@
 # Product visuals (screenshots & recordings)
 
-**Maintainer runbook.** The README “See Babel in action” section should eventually show a **real** Babel TUI capture. Until one exists, the README keeps an **illustrative** transcript and must not embed fake imagery.
+**Maintainer runbook.** The README “See Babel in action” section now shows a real offline CLI inspection capture, with stdout, source metadata, and reproduction scripts under `docs/assets/showcase/`. It is paced transcript playback, not an interactive TUI session or completed coding task. A real model-backed TUI capture remains future work.
 
 This file is for maintainers producing assets. Do not link it from the product front door as a user-facing invite.
 
@@ -25,8 +25,9 @@ Suggested image width: ~1200–1600px. Prefer a readable font and cropped termin
    - **Recording (optional):** asciinema, VHS, or OS screen recorder → `docs/assets/tui-chat.webm`
 7. Open a docs PR that:
    - adds the asset file(s);
-   - replaces the illustrative transcript in `README.md` with an image/video embed from the repo root;
-   - removes the “illustrative” wording once the asset is authentic.
+   - updates the README media with an image/video embed from the repo root;
+   - states the captured revision, runtime, provider/fixture scope, and limitations;
+   - preserves the offline inspection capture's provenance when replacing its front-door preview.
 
 ## README embed (after capture)
 
