@@ -14,6 +14,14 @@ import { resolveAskModelPolicyWithLiveGate } from '../services/askAnswer.js';
 import { BABEL_RUNS_DIR } from '../cli/constants.js';
 import { hashRouteReference } from './modelRouteReceipt.js';
 
+const MODEL_SELECTION_ENV_KEYS = [
+  'BABEL_DESKTOP_PROVIDER',
+  'BABEL_DESKTOP_MODEL_ROUTE',
+  'BABEL_MODEL_POLICY_PATH',
+  'BABEL_CONFIG_DIR',
+  'BABEL_ROOT',
+] as const;
+
 /**
  * OpenCode Zen routing invariants.
  *
@@ -26,9 +34,11 @@ function withTestEnv(fn: () => void): void {
   const previousOffline = process.env['BABEL_OFFLINE'];
   const previousKey = process.env['OPENCODE_API_KEY'];
   const previousRouterKey = process.env['OPENROUTER_API_KEY'];
+  const previousSelectionEnv = MODEL_SELECTION_ENV_KEYS.map((key) => process.env[key]);
   delete process.env['BABEL_OFFLINE'];
   process.env['OPENCODE_API_KEY'] = 'synthetic-opencode-key';
   process.env['OPENROUTER_API_KEY'] = 'fixture-router-key';
+  for (const key of MODEL_SELECTION_ENV_KEYS) delete process.env[key];
   try {
     fn();
   } finally {
@@ -38,8 +48,56 @@ function withTestEnv(fn: () => void): void {
     else process.env['OPENCODE_API_KEY'] = previousKey;
     if (previousRouterKey === undefined) delete process.env['OPENROUTER_API_KEY'];
     else process.env['OPENROUTER_API_KEY'] = previousRouterKey;
+    MODEL_SELECTION_ENV_KEYS.forEach((key, index) => {
+      const value = previousSelectionEnv[index];
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    });
   }
 }
+
+test('default and generic DeepSeek standard Chat use current OpenRouter Flash without changing explicit selections', () => {
+  const previousSelectionEnv = MODEL_SELECTION_ENV_KEYS.map((key) => process.env[key]);
+  process.env['BABEL_DESKTOP_PROVIDER'] = 'deepseek';
+  process.env['BABEL_DESKTOP_MODEL_ROUTE'] = 'deepseek-v4-pro';
+  process.env['BABEL_MODEL_POLICY_PATH'] = '/tmp/babel-model-default-test-missing-policy.json';
+  process.env['BABEL_CONFIG_DIR'] = '/tmp/babel-model-default-test-config';
+  process.env['BABEL_ROOT'] = '/tmp/babel-model-default-test-root';
+  try {
+    withTestEnv(() => {
+      const defaultPolicy = resolveChatModelPolicy({}).policy;
+      assert.equal(defaultPolicy.provider, 'openrouter');
+      assert.equal(defaultPolicy.selectedTier, 'standard');
+      assert.equal(defaultPolicy.providerModelId, 'deepseek/deepseek-v4.1-flash-1017');
+
+      const genericStandard = resolveChatModelPolicy({ model: 'deepseek', modelTier: 'standard' }).policy;
+      assert.equal(genericStandard.provider, 'openrouter');
+      assert.equal(genericStandard.selectedTier, 'standard');
+      assert.equal(genericStandard.providerModelId, 'deepseek/deepseek-v4.1-flash-1017');
+
+      assert.equal(
+        resolveChatModelPolicy({ model: 'deepseek-v4-pro' }).policy.providerModelId,
+        'deepseek/deepseek-v4-pro',
+      );
+      assert.equal(
+        resolveChatModelPolicy({ model: 'deepseek/deepseek-v4-flash-0731' }).policy.providerModelId,
+        'deepseek/deepseek-v4-flash-0731',
+      );
+      assert.equal(
+        resolveChatModelPolicy({ model: 'command-code/deepseek-v4.1-flash' }).policy.provider,
+        'command-code',
+      );
+    });
+    assert.equal(process.env['BABEL_DESKTOP_PROVIDER'], 'deepseek');
+    assert.equal(process.env['BABEL_DESKTOP_MODEL_ROUTE'], 'deepseek-v4-pro');
+  } finally {
+    MODEL_SELECTION_ENV_KEYS.forEach((key, index) => {
+      const value = previousSelectionEnv[index];
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    });
+  }
+});
 
 test('live chat policy resolves an explicit opencode backend key without the DeepSeek gate', () => {
   withTestEnv(() => {

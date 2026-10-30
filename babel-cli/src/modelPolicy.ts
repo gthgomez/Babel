@@ -30,12 +30,15 @@ export const LIVE_OPENROUTER_MODEL_ID = 'z-ai/glm-5.3-flash' as const;
 /** OpenRouter-only DeepSeek control routes. Direct DeepSeek credentials are
  * intentionally not used by live benchmark/canary entrypoints. */
 export const LIVE_OPENROUTER_DEEPSEEK_BACKEND_KEYS = [
-  'deepseek-v4-flash-openrouter',
+  'deepseek-v4.1-flash-openrouter',
   'deepseek-v4-pro-openrouter',
+  // Keep the retired 0731 snapshot available only when explicitly selected.
+  'deepseek-v4-flash-openrouter',
 ] as const;
 export const LIVE_OPENROUTER_DEEPSEEK_MODEL_IDS = [
-  'deepseek/deepseek-v4-flash-0731',
+  'deepseek/deepseek-v4.1-flash-1017',
   'deepseek/deepseek-v4-pro',
+  'deepseek/deepseek-v4-flash-0731',
 ] as const;
 export const LIVE_OPENROUTER_API_BASE = 'https://openrouter.ai/api/v1/chat/completions' as const;
 
@@ -45,14 +48,19 @@ export function resolveOpenRouterDeepSeekBackendKey(modelId: string):
   | null {
   switch (modelId.trim()) {
     case 'deepseek':
+    case 'deepseek/deepseek-v4.1-flash':
+    case 'deepseek/deepseek-v4.1-flash-1017':
+    case 'deepseek-v4.1-flash-openrouter':
+      return 'deepseek-v4.1-flash-openrouter';
     case 'deepseek-v4-pro':
     case 'deepseek/deepseek-v4-pro':
     case 'deepseek-v4-pro-openrouter':
       return 'deepseek-v4-pro-openrouter';
+    case 'deepseek-v4-flash-openrouter':
+    case 'deepseek/deepseek-v4-flash-0731':
+      return 'deepseek-v4-flash-openrouter';
     case 'deepseek-v4-flash':
     case 'deepseek/deepseek-v4-flash':
-    case 'deepseek/deepseek-v4-flash-0731':
-    case 'deepseek-v4-flash-openrouter':
       return 'deepseek-v4-flash-openrouter';
     default:
       return null;
@@ -62,9 +70,14 @@ export function resolveOpenRouterDeepSeekBackendKey(modelId: string):
 export function resolveOpenRouterDeepSeekModelId(modelId: string): string | null {
   const backendKey = resolveOpenRouterDeepSeekBackendKey(modelId);
   if (!backendKey) return null;
-  return backendKey === 'deepseek-v4-pro-openrouter'
-    ? LIVE_OPENROUTER_DEEPSEEK_MODEL_IDS[1]
-    : LIVE_OPENROUTER_DEEPSEEK_MODEL_IDS[0];
+  switch (backendKey) {
+    case 'deepseek-v4-pro-openrouter':
+      return LIVE_OPENROUTER_DEEPSEEK_MODEL_IDS[1];
+    case 'deepseek-v4-flash-openrouter':
+      return LIVE_OPENROUTER_DEEPSEEK_MODEL_IDS[2];
+    case 'deepseek-v4.1-flash-openrouter':
+      return LIVE_OPENROUTER_DEEPSEEK_MODEL_IDS[0];
+  }
 }
 
 /**

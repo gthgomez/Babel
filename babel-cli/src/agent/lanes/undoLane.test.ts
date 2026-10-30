@@ -61,7 +61,7 @@ function mockSmallFixResponse(replacementContent: string): void {
   globalThis.fetch = (async () =>
     new Response(
       JSON.stringify({
-        model: 'deepseek/deepseek-v4-pro',
+        model: 'deepseek/deepseek-v4.1-flash-1017',
         choices: [
           {
             message: {

@@ -5,7 +5,7 @@ import { validateRuntimeEnv } from "../config/runtimeEnv.js";
 import { resolveInspectRunDir } from "../inspect/loaders.js";
 import { type ApprovalProfileStatus } from "../config/approvalProfiles.js";
 import { BABEL_ROOT, BABEL_RUNS_DIR } from "../cli/constants.js";
-import { LIVE_OPENROUTER_DEEPSEEK_MODEL_IDS, LIVE_OPENROUTER_MODEL_ID, resolveOpenRouterDeepSeekBackendKey } from "../modelPolicy.js";
+import { LIVE_OPENROUTER_MODEL_ID, resolveOpenRouterDeepSeekBackendKey, resolveOpenRouterDeepSeekModelId } from "../modelPolicy.js";
 import { resolveProviderCredential } from "../runners/credentialHub.js";
 import type { ProviderId } from "../runners/providerRegistry.js";
 import { formatProofStatusHuman, writeProofArtifacts } from "../services/proof.js";
@@ -220,13 +220,14 @@ export function resolveBenchmarkProvider(
   const deepSeekBackend = requestedModel
     ? resolveOpenRouterDeepSeekBackendKey(requestedModel)
     : providerInput === "deepseek"
-      ? "deepseek-v4-flash-openrouter"
+      ? resolveOpenRouterDeepSeekBackendKey("deepseek")
       : null;
   const isDeepSeekControl = providerInput === "deepseek" || deepSeekBackend !== null;
+  const selectedDeepSeekModel = deepSeekBackend
+    ? resolveOpenRouterDeepSeekModelId(deepSeekBackend)
+    : null;
   const defaultModel = isDeepSeekControl
-    ? deepSeekBackend === "deepseek-v4-pro-openrouter"
-      ? LIVE_OPENROUTER_DEEPSEEK_MODEL_IDS[1]
-      : LIVE_OPENROUTER_DEEPSEEK_MODEL_IDS[0]
+    ? selectedDeepSeekModel ?? LIVE_OPENROUTER_MODEL_ID
     : LIVE_OPENROUTER_MODEL_ID;
   if (requestedModel && !isDeepSeekControl) {
     const isGlm = requestedModel === LIVE_OPENROUTER_MODEL_ID || requestedModel === "glm-5.3-flash";

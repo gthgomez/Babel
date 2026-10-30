@@ -14,7 +14,9 @@ test('catalog labels active identity, provider, credential prerequisite and both
   assert.match(text, /requires OPENROUTER_API_KEY/);
   assert.match(text, /Input \$0\/M.*Output \$0.25\/M/);
   assert.doesNotMatch(text, /durable budget|campaign internals/);
-  assert.match(text, /not a billing guarantee/);
+  const normalizedText = text.replace(/\s+/g, ' ');
+  assert.match(normalizedText, /OpenRouter may route across endpoints with different prices/);
+  assert.match(normalizedText, /not a billing guarantee/);
   const { estimated_cost_per_1m_output: _output, ...unknown } = entry;
   assert.match(formatModelPricing(unknown), /Output unknown/);
   for (const line of text.split('\n').filter((s) => s.startsWith('    '))) assert.ok(measureDisplayWidth(line) < 60);

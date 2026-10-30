@@ -31,7 +31,11 @@ describe('Babel CLI command registration', () => {
     try {
       const deepseek = resolveBenchmarkProvider('deepseek');
       assert.equal(deepseek.provider, 'openrouter');
-      assert.equal(deepseek.defaultModel, 'deepseek/deepseek-v4-flash-0731');
+      assert.equal(deepseek.defaultModel, 'deepseek/deepseek-v4.1-flash-1017');
+      assert.equal(
+        resolveBenchmarkProvider('deepseek', 'deepseek-v4-flash-openrouter').defaultModel,
+        'deepseek/deepseek-v4-flash-0731',
+      );
       assert.equal(
         resolveBenchmarkProvider('openrouter', 'deepseek-v4-pro').defaultModel,
         'deepseek/deepseek-v4-pro',
