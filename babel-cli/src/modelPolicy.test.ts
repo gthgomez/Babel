@@ -14,6 +14,8 @@ import {
   assertLiveModelId,
   buildOpenRouterDeepSeekLiveEnv,
   getNormalizedModelCapabilities,
+  resolveOpenRouterDeepSeekBackendKey,
+  resolveOpenRouterDeepSeekModelId,
 } from './modelPolicy.js';
 
 function createModelPolicyRoot(): string {
@@ -428,9 +430,26 @@ test('DeepSeek live policy accepts Flash/Pro and rejects legacy providers', () =
 test('generic live DeepSeek family resolution uses OpenRouter-only backends', () => {
   const policy = resolveFamilyModelPolicy({ family: 'DeepSeek', liveOnly: true });
   assert.equal(policy.provider, 'openrouter');
-  assert.equal(policy.resolvedBackendKey, 'deepseek-v4-pro-openrouter');
-  assert.equal(policy.providerModelId, 'deepseek/deepseek-v4-pro');
+  assert.equal(policy.selectedTier, 'standard');
+  assert.equal(policy.resolvedBackendKey, 'deepseek-v4.1-flash-openrouter');
+  assert.equal(policy.providerModelId, 'deepseek/deepseek-v4.1-flash-1017');
   assert.ok(policy.waterfall.every((entry) => entry.provider === 'openrouter'));
+
+  const explicitPro = resolveModelByKey({ key: 'deepseek-v4-pro-openrouter', liveOnly: true });
+  assert.equal(explicitPro.providerModelId, 'deepseek/deepseek-v4-pro');
+  const explicitOldFlash = resolveModelByKey({ key: 'deepseek-v4-flash-openrouter', liveOnly: true });
+  assert.equal(explicitOldFlash.providerModelId, 'deepseek/deepseek-v4-flash-0731');
+});
+
+test('OpenRouter DeepSeek defaults select the current Flash snapshot while explicit model IDs stay pinned', () => {
+  assert.equal(resolveOpenRouterDeepSeekBackendKey('deepseek'), 'deepseek-v4.1-flash-openrouter');
+  assert.equal(resolveOpenRouterDeepSeekModelId('deepseek'), 'deepseek/deepseek-v4.1-flash-1017');
+  assert.equal(
+    resolveOpenRouterDeepSeekBackendKey('deepseek/deepseek-v4.1-flash-1017'),
+    'deepseek-v4.1-flash-openrouter',
+  );
+  assert.equal(resolveOpenRouterDeepSeekModelId('deepseek-v4-pro'), 'deepseek/deepseek-v4-pro');
+  assert.equal(resolveOpenRouterDeepSeekModelId('deepseek-v4-flash'), 'deepseek/deepseek-v4-flash-0731');
 });
 
 test('OpenRouter DeepSeek live environment removes direct credentials and pins auxiliary calls', () => {

@@ -28,6 +28,16 @@ test('workflow preflight preserves configured backend-key resolution', () => {
   assert.equal(policy.providerModelId, 'deepseek/deepseek-v4-flash-0731');
 });
 
+test('workflow preflight resolves the standard DeepSeek Flash default through OpenRouter', () => {
+  const policy = preflightRequestedModelPolicy('deepseek-v4.1-flash-openrouter', {
+    liveOnly: true,
+  });
+
+  assert.equal(policy.resolvedBackendKey, 'deepseek-v4.1-flash-openrouter');
+  assert.equal(policy.provider, 'openrouter');
+  assert.equal(policy.providerModelId, 'deepseek/deepseek-v4.1-flash-1017');
+});
+
 for (const scenario of [
   { name: 'Chat backend selector', args: ['--mode', 'chat', '--model', 'opencode-go/deepseek-v4.1-flash'], admitted: true },
   { name: 'headless Chat provider model id', args: ['--mode', 'chat-headless', '--model', 'deepseek-v4.1-flash'], admitted: true },

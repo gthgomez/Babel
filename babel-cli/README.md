@@ -163,6 +163,14 @@ zero rate does not establish that billing is free. Credential presence does not
 establish service availability. Use `/model show`, `/model why`, or `/model health`
 for routing and operational details.
 
+An unspecified Chat model and the generic `deepseek` selector use the OpenRouter
+DeepSeek Flash standard route. As of October 30, 2026, the pinned snapshot is
+[`deepseek/deepseek-v4.1-flash-1017`](https://openrouter.ai/deepseek/deepseek-v4.1-flash-1017),
+which OpenRouter's [DeepSeek Flash Latest](https://openrouter.ai/~deepseek/deepseek-flash-latest)
+currently resolves to. The explicit Pro route and the older V4 Flash 0731 route
+remain available when selected by name; updating the default snapshot does not
+rewrite those selections.
+
 Preamble-budget diagnostics are retained as `preamble-budget.json` in the run
 bundle. Interactive daemon diagnostics go to `diagnostics/interactive-<pid>.jsonl`
 under the user state directory (`~/.babel`, or `BABEL_STATE_DIR`). The installed

@@ -23,6 +23,18 @@ test('ModelRouter maps legacy DeepSeek selectors to OpenRouter in live mode', ()
   process.env['OPENROUTER_API_KEY'] = 'fixture-router-key'
   process.env['DEEPSEEK_API_KEY'] = 'synthetic-direct-key'
   try {
+    const defaultRoute = new ModelRouter({ liveOnly: true }).resolve()
+    assert.equal(defaultRoute.provider, 'openrouter')
+    assert.equal(defaultRoute.modelId, 'deepseek/deepseek-v4.1-flash-1017')
+
+    const genericRoute = new ModelRouter({ liveOnly: true }).resolve('deepseek')
+    assert.equal(genericRoute.provider, 'openrouter')
+    assert.equal(genericRoute.modelId, 'deepseek/deepseek-v4.1-flash-1017')
+
+    const explicitProRoute = new ModelRouter({ liveOnly: true }).resolve('deepseek-v4-pro')
+    assert.equal(explicitProRoute.provider, 'openrouter')
+    assert.equal(explicitProRoute.modelId, 'deepseek/deepseek-v4-pro')
+
     const route = new ModelRouter({ liveOnly: true }).resolve('deepseek-v4-flash')
     assert.equal(route.provider, 'openrouter')
     assert.equal(route.modelId, 'deepseek/deepseek-v4-flash-0731')
