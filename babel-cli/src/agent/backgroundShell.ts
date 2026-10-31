@@ -172,7 +172,7 @@ export function startBackgroundShell(input: StartBackgroundShellInput): Backgrou
     throw new Error(`background shell denied: executable identity is unresolved (${rawCmd})`);
   }
   const identityPolicy = classifyResolvedCommand(resolvedExecutable, argv.slice(1),
-    input.projectRoot ? { repoRoot: input.projectRoot } : {});
+    { ...(input.projectRoot ? { repoRoot: input.projectRoot } : {}), invokedBase: rawCmd });
   if (identityPolicy.reason === 'indirect_executable_dispatch') {
     throw new Error('background shell denied: indirect executable dispatch cannot be pinned');
   }

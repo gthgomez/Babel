@@ -150,7 +150,7 @@ test('the active Node executable is trusted exactly by canonical identity', () =
   assert.equal(resolution?.trusted, true);
 });
 
-test('the active Node executable is not trusted if its canonical path chain is writable', () => {
+test('a host-selected active Node runtime stays project code even when its identity is pinned', () => {
   const canonicalNode = realpathSync(process.execPath);
   const resolution = resolveCommandExecutable(process.execPath, {
     platform: process.platform,
@@ -161,7 +161,12 @@ test('the active Node executable is not trusted if its canonical path chain is w
     fileIdentity: () => 'active-node-runtime',
     isWritableByCurrentUser: () => true,
   });
-  assert.equal(resolution?.trusted, false);
+  if (process.platform === 'win32') {
+    assert.equal(resolution?.trusted, true, 'captured host PATH identity may pin the active runtime without DACL proof');
+    assert.equal(classifyResolvedCommand(resolution!, ['-e', 'process.exit(0)']).executionRisk, 'project_code');
+  } else {
+    assert.equal(resolution?.trusted, false, 'POSIX current-user writable path remains untrusted');
+  }
 });
 
 test('Windows resolution checks cwd before PATH and honors PATHEXT', () => {
@@ -283,6 +288,20 @@ test('host PATH identity never makes a project lookalike or symlink target trust
   });
   assert.equal(symlinkedTool?.path, '/workspace/repo/.tools/rg');
   assert.equal(symlinkedTool?.trusted, false);
+
+  const projectSymlinkToHostTool = resolveCommandExecutable('git', {
+    platform: 'linux', cwd: '/workspace/repo',
+    env: { PATH: '/workspace/repo/.tools' }, hostPath: '/opt/host/bin',
+    controlledRoots: ['/workspace/repo'], effectiveUid: 1000,
+    isFile: (path) => path === '/workspace/repo/.tools/git' || path === '/opt/host/bin/git',
+    realpath: (path) => path === '/workspace/repo/.tools/git' ? '/opt/host/bin/git' : path,
+    fileIdentity: () => 'project-symlink-to-host-git',
+    isWritableByCurrentUser: () => false,
+    isWritableByOtherPrincipal: () => false,
+    ownerUid: () => 1000,
+  });
+  assert.equal(projectSymlinkToHostTool?.path, '/opt/host/bin/git');
+  assert.equal(projectSymlinkToHostTool?.trusted, false, 'the searched path remains controlled despite its host target');
 });
 
 test('custom Node identity stays project code even when resolved through host PATH', () => {

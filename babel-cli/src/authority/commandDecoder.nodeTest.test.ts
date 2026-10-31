@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -9,6 +9,7 @@ import { decodeCommand, isPythonTestCommand } from './commandDecoder.js';
 import { actionRequestFromAction } from './actionRequest.js';
 import { decideWithLease } from './wire.js';
 import { createToolExecutor, executeActionWithPolicy } from '../agent/toolExecutor.js';
+import { prependProcessPath } from '../stages/runtimePreflight.js';
 
 const testCommand = 'node --import ./src/testinfra/register-no-ambient-inference.mjs --import tsx --test --test-concurrency=1 src/agent/harnessParityLivePath.test.ts';
 
@@ -64,6 +65,65 @@ test('transparent env git status stays inspect-only; env mutation and shadowed G
       else process.env['PATH'] = previousPath;
       rmSync(root, { recursive: true, force: true });
     }
+  }
+});
+
+test('startup Git stays inspectable while late PATH Git is semantic-only and denied', () => {
+  const startup = decodeCommand('git status');
+  assert.equal(startup.capability, 'inspect_repository');
+
+  const root = mkdtempSync(join(tmpdir(), 'babel-late-path-tools-'));
+  const pathKey = Object.keys(process.env).find((key) => key.toLowerCase() === 'path') ?? 'PATH';
+  const prior = process.env[pathKey];
+  const suffix = process.platform === 'win32' ? '.cmd' : '';
+  try {
+    for (const name of ['git', 'gradle', 'gradlew']) {
+      const path = join(root, `${name}${suffix}`);
+      writeFileSync(path, process.platform === 'win32' ? '@echo off\r\n' : '#!/bin/sh\nexit 0\n');
+      if (process.platform !== 'win32') chmodSync(path, 0o755);
+    }
+    prependProcessPath(root);
+
+    const lateGit = decodeCommand('git push origin feature', { repoRoot: root });
+    assert.equal(lateGit.capability, 'unknown');
+    assert.equal(lateGit.semantic, 'git_push');
+    assert.equal(lateGit.requiresIsolation, true);
+
+    const lateGradleTest = decodeCommand('gradle test', { repoRoot: root });
+    assert.equal(lateGradleTest.capability, 'run_tests');
+    assert.equal(lateGradleTest.requiresIsolation, true);
+
+    const lateGradleBuild = decodeCommand('gradle build', { repoRoot: root });
+    assert.equal(lateGradleBuild.capability, 'run_build');
+    assert.equal(lateGradleBuild.requiresIsolation, true);
+
+    const projectWrapperTest = decodeCommand('./gradlew test', { repoRoot: root, cwd: root });
+    assert.equal(projectWrapperTest.capability, 'run_tests');
+    assert.equal(projectWrapperTest.requiresIsolation, true);
+  } finally {
+    if (prior === undefined) delete process.env[pathKey];
+    else process.env[pathKey] = prior;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('npm alias parses by invoked name while dispatch retains the canonical host identity', { skip: process.platform === 'win32' }, () => {
+  const hostNpmDir = (process.env['PATH'] ?? '').split(':').find((directory) => existsSync(join(directory, 'npm')));
+  assert.ok(hostNpmDir, 'CI/runtime provides its configured npm command');
+  const canonicalNpm = realpathSync(join(hostNpmDir!, 'npm'));
+  const root = mkdtempSync(join(tmpdir(), 'babel-npm-alias-'));
+  const prior = process.env['PATH'];
+  try {
+    symlinkSync(canonicalNpm, join(root, 'npm'));
+    process.env['PATH'] = `${root}:${prior ?? ''}`;
+    const decoded = decodeCommand('npm test', { repoRoot: process.cwd() });
+    assert.equal(decoded.capability, 'run_tests');
+    assert.equal(decoded.semantic, 'test_local');
+    assert.equal(decoded.requiresIsolation, true);
+  } finally {
+    if (prior === undefined) delete process.env['PATH'];
+    else process.env['PATH'] = prior;
+    rmSync(root, { recursive: true, force: true });
   }
 });
 

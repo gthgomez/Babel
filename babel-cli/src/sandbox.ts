@@ -1850,7 +1850,7 @@ export class SafeExecutor {
     }
     const classified = useDockerSandbox
       ? classifyExecutionRisk(command, { repoRoot: this.projectRoot })
-      : classifyResolvedCommand(resolvedExecutable!, argv.slice(1), { repoRoot: this.projectRoot });
+      : classifyResolvedCommand(resolvedExecutable!, argv.slice(1), { repoRoot: this.projectRoot, invokedBase: rawCmd });
     // H13: isolation-required profiles fail closed unless Docker is active or
     // the operator explicitly escalates to host (BABEL_ALLOW_HOST_FALLBACK /
     // BABEL_DOCKER_DISABLE). Profiles with dockerSandbox:false stay on host.

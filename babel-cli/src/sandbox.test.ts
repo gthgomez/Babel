@@ -1023,7 +1023,11 @@ test('shellExecAsync correlates process witness observations with toolCallId', a
     assert.ok(kinds.includes('process_requested'));
     assert.ok(kinds.includes('process_exited'));
     assert.notEqual(dispatchedExecutables[0], 'echo');
-    assert.match(dispatchedExecutables[0] ?? '', /(?:^|[\\/])echo(?:\.exe)?$/i);
+    if (process.platform === 'win32') {
+      assert.match(dispatchedExecutables[0] ?? '', /[\\/]System32[\\/]cmd\.exe$/i);
+    } else {
+      assert.match(dispatchedExecutables[0] ?? '', /(?:^|[\\/])echo(?:\.exe)?$/i);
+    }
     assert.ok(ids.includes('tool-shell-1'));
   } finally {
     await witness.close();

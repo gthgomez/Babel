@@ -329,6 +329,7 @@ export function resolveCommandExecutable(
   const canonicalRoots = roots.map((root) => {
     try { return (options.realpath ?? canonicalPath)(root); } catch { return api.resolve(options.cwd, root); }
   });
+  const resolvedControlledRoots = (options.controlledRoots ?? []).map((root) => api.resolve(options.cwd, root));
   const canonicalControlledRoots = (options.controlledRoots ?? []).map((root) => {
     try { return (options.realpath ?? canonicalPath)(root); } catch { return api.resolve(options.cwd, root); }
   });
@@ -342,7 +343,8 @@ export function resolveCommandExecutable(
     try { canonical = realpath(candidate); } catch { continue; }
     const trustedRoot = canonicalRoots.find((root) => isInsideRoot(root, canonical, platform));
     const isHostPathIdentity = canonicalHostCandidates.has(canonicalPathKey(canonical, platform));
-    const isControlled = canonicalControlledRoots.some((root) => isInsideRoot(root, canonical, platform));
+    const isControlled = canonicalControlledRoots.some((root) => isInsideRoot(root, canonical, platform)) ||
+      resolvedControlledRoots.some((root) => isInsideRoot(root, candidate, platform));
     const sharedWritablePath = isPathChainWritableByOtherPrincipal(
       canonical,
       platform,
@@ -382,7 +384,11 @@ export function resolveCommandExecutable(
     const identity = fileIdentity(canonical);
     const trustedWindowsSystemShell = platform === 'win32' && hostSystem32 !== undefined
       && isCanonicalWindowsSystemShell(canonical, hostSystem32) && !isControlled && identity !== undefined;
-    const knownCommand = COMMAND_SPECS[normalizeExecutionBase(api.basename(canonical))] !== undefined;
+    // Trust is tied to the caller's invoked command name plus an exact
+    // canonical startup-PATH match. A host alias such as `npm` may resolve to
+    // `npm-cli.js`; the target's basename is identity data, not syntax.
+    const invokedBase = normalizeExecutionBase(command);
+    const knownCommand = COMMAND_SPECS[invokedBase] !== undefined;
     // Host PATH is an operator-selected source of tools, including user-installed
     // toolchains. Pin the canonical file identity; never infer trust from a name
     // alone, and never trust a project/shadow lookalike even if it is on PATH.
@@ -422,11 +428,12 @@ export function isResolvedCommandCurrent(
 export function classifyResolvedCommand(
   executable: ResolvedCommandExecutable,
   args: readonly string[],
-  options: { repoRoot?: string } = {},
+  options: { repoRoot?: string; invokedBase?: string } = {},
 ): ClassifiedInvocation {
+  const base = normalizeExecutionBase(options.invokedBase ?? executable.base);
   if (!executable.trusted) {
     return {
-      base: executable.base,
+      base,
       executionRisk: 'project_code',
       effectFamily: 'compiler_or_build',
       reason: 'untrusted_executable_identity',
@@ -434,16 +441,16 @@ export function classifyResolvedCommand(
   }
   // `env` and similar launchers resolve another executable internally. Their
   // nested dispatch cannot be pinned by replacing only the outer executable.
-  if (executable.base === 'env') {
+  if (base === 'env') {
     return {
-      base: executable.base,
+      base,
       executionRisk: 'project_code',
       effectFamily: 'compiler_or_build',
       reason: 'indirect_executable_dispatch',
     };
   }
   const quote = (value: string): string => `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
-  const invocation = [executable.base, ...args].map(quote).join(' ');
+  const invocation = [base, ...args].map(quote).join(' ');
   return classifyExecutionRisk(invocation, options);
 }
 
@@ -467,6 +474,9 @@ export function resolveAndClassifyCommand(
   }
   return {
     executable,
-    classification: classifyResolvedCommand(executable, args, options.repoRoot === undefined ? {} : { repoRoot: options.repoRoot }),
+    classification: classifyResolvedCommand(executable, args, {
+      ...(options.repoRoot !== undefined ? { repoRoot: options.repoRoot } : {}),
+      invokedBase: command,
+    }),
   };
 }

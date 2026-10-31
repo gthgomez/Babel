@@ -338,6 +338,7 @@ export function isCredentialExposureCommand(command: string): boolean {
 // ─── High-consequence tool patterns ─────────────────────────────────────────
 
 const DANGEROUS_TOOL_PATTERNS: Array<{ re: RegExp; capability: CapabilityId; semantic: CommandSemanticClass }> = [
+  { re: /\bpsql\b(?:(?![;\n]).)*\s(?:-c|--command)(?:=|\s)["']?\s*(?:drop|truncate)\s+(?:table|database|schema)\b/i, capability: 'destructive_data_delete', semantic: 'infrastructure_mutation' },
   { re: /\bterraform\s+(apply|destroy)\b/i, capability: 'production_deploy', semantic: 'infrastructure_mutation' },
   { re: /\b(kubectl|helm)\s+(apply|delete|create|scale|rollout)\b/i, capability: 'production_deploy', semantic: 'infrastructure_mutation' },
   { re: /\b(aws|gcloud|az)\s+(iam|organizations?)\b/i, capability: 'security_policy_change', semantic: 'infrastructure_mutation' },
@@ -824,7 +825,7 @@ function decodeHostDevice(tokens: string[]): DecodedCommand | null {
 }
 
 function decodeNonGit(tokens: string[], raw: string, original: string): DecodedCommand {
-  const base = tokens[0]?.toLowerCase() ?? '';
+  const base = normalizeExecutionBase(tokens[0] ?? '');
 
   // Only a direct, bounded rg invocation may treat its patterns as data.
   // Actual file operands retain the credential boundary; wrappers never use
@@ -887,6 +888,15 @@ function decodeNonGit(tokens: string[], raw: string, original: string): DecodedC
   // Test / build / lint / typecheck runners execute repository-controlled
   // code. Capability stays local for lease usability; execution is isolated.
   const pythonTestRunner = isPythonTestCommand(raw);
+  if (base === 'gradle' || base === 'gradlew') {
+    const tasks = tokens.slice(1).filter((token) => !token.startsWith('-'));
+    if (tasks.some((task) => /^(?:[^:]+:)*test(?:[A-Z][A-Za-z0-9]*)?$/.test(task))) {
+      return cmd('run_tests', 'test_local', { requiresIsolation: true });
+    }
+    if (tasks.some((task) => /^(?:[^:]+:)*(?:build|assemble|check)$/.test(task))) {
+      return cmd('run_build', 'test_local', { requiresIsolation: true });
+    }
+  }
   if ((base === 'node' && isNodeTestCommand(raw, original)) || pythonTestRunner || TEST_RUNNER_RE.test(raw)) return cmd('run_tests', 'test_local', { requiresIsolation: true });
   if (TYPECHECK_RE.test(raw)) return cmd('run_typecheck', 'test_local', { requiresIsolation: true });
   if (LINT_RE.test(raw)) return cmd('run_lint', 'test_local', { requiresIsolation: true });
@@ -1115,13 +1125,7 @@ export function decodeCommand(command: string, opts: { repoRoot?: string; cwd?: 
         controlledRoots: [opts.repoRoot ?? opts.cwd ?? process.cwd()],
         ...(opts.repoRoot !== undefined ? { repoRoot: opts.repoRoot } : {}),
       });
-      const actualTokens = resolution.executable
-        ? [resolution.executable.base, ...tokens.slice(1)]
-        : tokens;
-      // First-token normalization: strip path prefixes and .exe (Windows
-      // forms like `C:\tools\git.exe push` resolve to base `git`).
-      const firstBase =
-        actualTokens.length === 0 ? '' : normalizeExecutionBase(actualTokens[0]!);
+      const actualTokens = tokens;
       const invokedBase = tokens.length === 0 ? '' : normalizeExecutionBase(tokens[0]!);
       const outerBase = normalizeExecutionBase(tokenize(segment)[0] ?? '');
       const decodedCandidate =
@@ -1130,24 +1134,23 @@ export function decodeCommand(command: string, opts: { repoRoot?: string; cwd?: 
           outerTokens.length >= 3 &&
           normalizeExecutionBase(outerTokens[1]!) === 'git' &&
           outerTokens[2]!.toLowerCase() === 'status' &&
-          resolution.executable?.base === 'git' &&
-          resolution.executable.trusted
+          resolution.executable?.trusted === true
           ? applyIsolationFloor(decodeGit(actualTokens, opts.repoRoot), inner, opts.repoRoot, opts.cwd)
           : cmd('unknown', 'unrecognized', { ambiguous: true })
         : invokedBase === 'git' &&
-          (firstBase !== 'git' || !resolution.executable || !resolution.executable.trusted)
+          (!resolution.executable || !resolution.executable.trusted)
         ? cmd('unknown', decodeGit(tokens, opts.repoRoot).semantic, { ambiguous: true, requiresIsolation: true })
         : invokedBase === 'gh' &&
-          (firstBase !== 'gh' || !resolution.executable || !resolution.executable.trusted)
-        ? cmd('unknown', 'unrecognized', { ambiguous: true })
+          (!resolution.executable || !resolution.executable.trusted)
+        ? ({ ...decodeGh(tokens), capability: 'unknown', ambiguous: true, requiresIsolation: true } as DecodedCommand)
         : (outerBase === 'env' || invokedBase === 'git') && outerRisk.executionRisk === 'forbidden'
         ? cmd('unknown', 'unrecognized', { ambiguous: true })
         : applyIsolationFloor(
         actualTokens.length === 0
           ? cmd('unknown', 'unrecognized', { ambiguous: true })
-          : invokedBase === 'git' && firstBase === 'git'
+          : invokedBase === 'git'
             ? decodeGit(actualTokens, opts.repoRoot)
-            : invokedBase === 'gh' && firstBase === 'gh'
+            : invokedBase === 'gh'
               ? decodeGh(tokens)
               : decodeNonGit(tokens, inner, segment),
         inner,
@@ -1156,7 +1159,11 @@ export function decodeCommand(command: string, opts: { repoRoot?: string; cwd?: 
       );
       const gatedWithoutTrustedIdentity = decodedCandidate.capability !== 'unknown'
         && CAPABILITY_KINDS[decodedCandidate.capability] === 'gated'
-        && (!resolution.executable?.trusted || resolution.executable.base !== invokedBase);
+        // This is a risk label, not host authority: the PDP still requires an
+        // explicit run_arbitrary_code lease and isolation, and the executor
+        // independently rejects unresolved/untrusted host dispatch.
+        && decodedCandidate.capability !== 'run_arbitrary_code'
+        && !resolution.executable?.trusted;
       const decoded = gatedWithoutTrustedIdentity
         ? cmd('unknown', decodedCandidate.semantic, {
           ambiguous: true,

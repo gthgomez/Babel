@@ -89,8 +89,13 @@ export function detectGradleInstallCandidate(): string | null {
 }
 
 export function prependProcessPath(pathEntry: string): void {
-  const currentPath = process.env.PATH ?? '';
   const delimiter = process.platform === 'win32' ? ';' : ':';
+  const pathKeys = Object.keys(process.env).filter((key) => key.toLowerCase() === 'path');
+  const pathKey = process.platform === 'win32' ? pathKeys[0] ?? 'Path' : 'PATH';
+  const currentPath = pathKeys
+    .map((key) => process.env[key] ?? '')
+    .filter(Boolean)
+    .join(delimiter);
   const normalizedEntry = resolve(pathEntry);
   const existing = currentPath
     .split(delimiter)
@@ -106,7 +111,12 @@ export function prependProcessPath(pathEntry: string): void {
     return;
   }
 
-  process.env.PATH = [normalizedEntry, ...existing].join(delimiter);
+  if (process.platform === 'win32') {
+    for (const key of pathKeys) {
+      if (key !== pathKey) delete process.env[key];
+    }
+  }
+  process.env[pathKey] = [normalizedEntry, ...existing].join(delimiter);
 }
 
 export function parseGradleDistributionUrl(propertiesContent: string): string | null {

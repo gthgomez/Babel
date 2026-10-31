@@ -88,7 +88,11 @@ describe('backgroundShell', () => {
       processWitness,
     });
     assert.notEqual(witnessedExecutable, 'node');
-    assert.ok(witnessedExecutable.startsWith('/'), witnessedExecutable);
+    if (process.platform === 'win32') {
+      assert.match(witnessedExecutable, /[\\/]System32[\\/]cmd\.exe$/i, witnessedExecutable);
+    } else {
+      assert.ok(witnessedExecutable.startsWith('/'), witnessedExecutable);
+    }
     const result = await awaitBackgroundShell(job.id, 15_000);
     assert.equal(result.exit_code, 0, result.stderr);
     assert.equal(result.stdout, 'pinned');
