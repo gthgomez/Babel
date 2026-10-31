@@ -74,7 +74,7 @@ function matchesCreatedTargetPath(evidencePath: string, targetPath: string): boo
   try {
     // Windows temporary roots may be supplied in 8.3 form while SafeExecutor
     // canonicalizes its project root to the long path before writing.
-    return realpathSync(evidencePath).toLowerCase() === realpathSync(targetPath).toLowerCase();
+    return realpathSync.native(evidencePath).toLowerCase() === realpathSync.native(targetPath).toLowerCase();
   } catch {
     return false;
   }
