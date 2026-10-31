@@ -101,24 +101,33 @@ export function reportPerformance(runsDoc, jobsDoc) {
     if (!attemptsByRun.has(key)) attemptsByRun.set(key, [])
     attemptsByRun.get(key).push(attempt)
     const declared = attempt.total_count
-    const jobs = Array.isArray(attempt.jobs) ? attempt.jobs : []
-    rawJobRecordCount += jobs.length
-    const collected = jobs.length
-    const pagesOk = Number.isInteger(attempt.pages_fetched) && Number.isInteger(attempt.pages_expected) && attempt.pages_fetched === attempt.pages_expected && attempt.pages_expected >= 1
-    if (!pagesOk || !Number.isInteger(declared) || collected !== declared || attempt.read_error) {
+    if (!Array.isArray(attempt.jobs)) {
       addGap(gaps, {
-        reason: attempt.read_error ? String(attempt.read_error) : 'jobs_page_incomplete',
+        reason: 'attempt_jobs_not_array',
         runId: attempt.run_id,
         attempt: attempt.run_attempt,
         declaredJobCount: Number.isInteger(declared) ? declared : null,
-        collectedJobCount: collected,
       })
-    }
-    const jobIdSet = new Set()
-    for (const job of jobs) {
-      if (!job || typeof job !== 'object' || !Number.isInteger(job.id)) continue
-      if (jobIdSet.has(job.id)) addGap(gaps, { reason: 'duplicate_job_identity', runId: attempt.run_id, attempt: attempt.run_attempt, jobId: job.id })
-      jobIdSet.add(job.id)
+    } else {
+      const jobs = attempt.jobs
+      rawJobRecordCount += jobs.length
+      const collected = jobs.length
+      const pagesOk = Number.isInteger(attempt.pages_fetched) && Number.isInteger(attempt.pages_expected) && attempt.pages_fetched === attempt.pages_expected && attempt.pages_expected >= 1
+      if (!pagesOk || !Number.isInteger(declared) || collected !== declared || attempt.read_error) {
+        addGap(gaps, {
+          reason: attempt.read_error ? String(attempt.read_error) : 'jobs_page_incomplete',
+          runId: attempt.run_id,
+          attempt: attempt.run_attempt,
+          declaredJobCount: Number.isInteger(declared) ? declared : null,
+          collectedJobCount: collected,
+        })
+      }
+      const jobIdSet = new Set()
+      for (const job of jobs) {
+        if (!job || typeof job !== 'object' || !Number.isInteger(job.id)) continue
+        if (jobIdSet.has(job.id)) addGap(gaps, { reason: 'duplicate_job_identity', runId: attempt.run_id, attempt: attempt.run_attempt, jobId: job.id })
+        jobIdSet.add(job.id)
+      }
     }
   }
 
@@ -137,7 +146,8 @@ export function reportPerformance(runsDoc, jobsDoc) {
       }
     }
     for (const attempt of recorded) {
-      const jobs = Array.isArray(attempt.jobs) ? attempt.jobs : []
+      if (!Array.isArray(attempt.jobs)) continue
+      const jobs = attempt.jobs
       for (const job of jobs) {
         if (!job || typeof job !== 'object' || !Number.isInteger(job.id)) {
           unknowns.push({ reason: 'job_identity_missing', runId: attempt.run_id, attempt: attempt.run_attempt })
@@ -220,17 +230,19 @@ export function reportPerformance(runsDoc, jobsDoc) {
 
   const reconciliation = {
     rawRunRows: rawRunRows.length,
-    uniqueRunIds: rawRunIds.length,
+    uniqueRunIds: runIdSet.size,
     rawAttemptRows: rawAttemptCount,
     uniqueAttemptKeys: attemptKeySet.size,
     rawJobRows: rawJobRecordCount,
     observationRows: observations.length,
     declaredSampleRequested: requested,
     declaredRepositoryTotal: Number.isInteger(runsDoc.repositoryTotal) ? runsDoc.repositoryTotal : null,
-    matchesSelectedRuns: selectedRunCount === rawRunIds.length && rawRunIds.length === runIdSet.size,
+    matchesSelectedRuns: selectedRunCount === runIdSet.size && rawRunIds.length === runIdSet.size,
     attemptRowsMatchSelectedRuns: jobsDoc.attempts.every(row => row && runIdSet.has(row.run_id)),
   }
-  if (reconciliation.rawRunRows !== reconciliation.uniqueRunIds) addGap(gaps, { reason: 'run_row_count_mismatch', rawRunRows: reconciliation.rawRunRows, uniqueRunIds: reconciliation.uniqueRunIds })
+  if (reconciliation.rawRunRows !== reconciliation.uniqueRunIds) {
+    addGap(gaps, { reason: 'run_row_count_mismatch', rawRunRows: reconciliation.rawRunRows, uniqueRunIds: reconciliation.uniqueRunIds })
+  }
   if (observations.length !== rawJobRecordCount) addGap(gaps, { reason: 'job_observation_count_mismatch', rawJobRows: rawJobRecordCount, observationRows: observations.length })
 
   const collectionCompleteFinal = gaps.length === 0

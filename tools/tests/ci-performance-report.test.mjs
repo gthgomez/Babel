@@ -177,6 +177,38 @@ test('orphan attempt records fail collection completeness', () => {
   assert.ok(report.gaps.some(gap => gap.reason === 'orphan_attempt_record' && gap.runId === 999))
 })
 
+test('a valid empty jobs array with zero declared jobs stays collection-complete', () => {
+  const input = docs({ attempts: [attempt({ total_count: 0, jobs: [] })] })
+  const report = reportPerformance(input.runs, input.jobs)
+  assert.equal(report.completeness, true)
+  assert.equal(report.reconciliation.rawJobRows, 0)
+})
+
+test('non-array attempt jobs inventories fail collection completeness', () => {
+  for (const jobs of [null, {}]) {
+    const input = docs({ attempts: [attempt({ total_count: 0, jobs })] })
+    const report = reportPerformance(input.runs, input.jobs)
+    assert.equal(report.completeness, false, String(jobs))
+    assert.ok(report.gaps.some(gap => gap.reason === 'attempt_jobs_not_array'))
+  }
+  const missing = attempt({ total_count: 0 })
+  delete missing.jobs
+  const missingInput = docs({ attempts: [missing] })
+  const missingReport = reportPerformance(missingInput.runs, missingInput.jobs)
+  assert.equal(missingReport.completeness, false)
+  assert.ok(missingReport.gaps.some(gap => gap.reason === 'attempt_jobs_not_array'))
+})
+
+test('duplicate run rows with one unique id fail collection completeness', () => {
+  const input = docs({ runs: [run({ id: 100 }), run({ id: 100 })], sampleRequested: 2 })
+  const report = reportPerformance(input.runs, input.jobs)
+  assert.equal(report.completeness, false)
+  assert.equal(report.reconciliation.rawRunRows, 2)
+  assert.equal(report.reconciliation.uniqueRunIds, 1)
+  assert.ok(report.gaps.some(gap => gap.reason === 'duplicate_run_id'))
+  assert.ok(report.gaps.some(gap => gap.reason === 'run_row_count_mismatch'))
+})
+
 test('malformed documents fail explicitly instead of inventing a complete report', () => {
   assert.throws(() => reportPerformance(null, { attempts: [] }), /runs_malformed/)
   assert.throws(() => reportPerformance({ workflow_runs: [] }, null), /jobs_malformed/)
