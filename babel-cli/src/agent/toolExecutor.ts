@@ -1419,6 +1419,7 @@ export async function executeActionWithPolicy(
     const toolFailed = toolDenied || execution.results.some((result) => result.exit_code !== 0);
 
     if (toolFailed) {
+      let rollbackConflicts: string[] = [];
       if (effectIntent && context.runDir) {
         recordEffectTerminal(context.runDir, effectIntent, {
           status: 'failed',
@@ -1433,6 +1434,7 @@ export async function executeActionWithPolicy(
               lockContext: deps.lockContext,
             });
             rollbackResult = undo.verification ? 'success' : 'partial';
+            rollbackConflicts = undo.conflicts;
           } catch {
             rollbackResult = 'failed';
           }
@@ -1454,6 +1456,11 @@ export async function executeActionWithPolicy(
       }
       return {
         ...execution,
+        ...(rollbackConflicts.length > 0 ? {
+          results: execution.results.map((result, index) => index === 0
+            ? { ...result, stderr: `${result.stderr}\n[ROLLBACK_CONFLICT] ${rollbackConflicts.join('; ')}` }
+            : result),
+        } : {}),
         policyDecision: toolDenied ? 'deny' : policyDecision,
         policyBlocked: toolDenied,
         ...(effectTx ? { effectTransaction: effectTx } : {}),

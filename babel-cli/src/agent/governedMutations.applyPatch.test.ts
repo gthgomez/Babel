@@ -275,6 +275,7 @@ describe('governedApplyPatch multi-file transactional atomicity', () => {
         assert.equal(injected, true);
         assert.equal(result.exit_code, 1, result.observation);
         assert.equal(readFileSync(target, 'utf8'), competitorContent);
+        assert.match(result.observation, /\[ROLLBACK_CONFLICT\]/);
         assert.match(result.observation, /not applied|concurrent|conflict|rollback/i);
       } finally {
         rmSync(root, { recursive: true, force: true });
