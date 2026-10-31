@@ -696,6 +696,7 @@ test('a superseded Task A fallback completion cannot spend Task B budget', async
   const fallbackGate = deferred();
   const bSecondStarted = deferred();
   const bSecondGate = deferred();
+  let fallbackResolutions = 0;
 
   // Primary provider: A's first call fails (generic, non-abort); B succeeds.
   let primaryCall = 0;
@@ -773,15 +774,22 @@ test('a superseded Task A fallback completion cannot spend Task B budget', async
       runId: `r0-fb-sibling-${Math.random().toString(36).slice(2, 10)}`,
       model: MODEL,
       maxTokensPerRound: 100,
-      providerRunner: fallback as never,
+      providerRunner: primary as never,
     });
     installRunner(engine, primary);
     const box = engine as unknown as {
       runAsymmetricDiffCritic: () => Promise<'allow' | 'reject' | 'block'>;
+      resolveFallbackRunner: () => typeof fallback;
       apiTokenCount: number;
       lastRequestModelId: string | null;
     };
     box.runAsymmetricDiffCritic = async () => 'allow';
+    // The admitted runner owns primary inference. Inject only this test's
+    // fallback selection; production fallback execution and ownership stay real.
+    box.resolveFallbackRunner = () => {
+      fallbackResolutions += 1;
+      return fallback;
+    };
 
     // Task A: primary fails, the fallback stream suspends.
     const aEvents: ChatEvent[] = [];
@@ -791,6 +799,7 @@ test('a superseded Task A fallback completion cannot spend Task B budget', async
       }
     })();
     await fallbackStarted.promise;
+    assert.equal(fallbackResolutions, 1, 'Task A entered production fallback execution once');
 
     // Task B: one read turn, then blocks inside its second provider call.
     const bEvents: ChatEvent[] = [];
