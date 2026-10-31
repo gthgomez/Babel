@@ -39,6 +39,7 @@ const MANAGED_ENV = [
   'BABEL_AUTONOMY_LEASE',
   'BABEL_EXECUTION_PROFILE',
   'BABEL_ALLOW_HOST_FALLBACK',
+  'BABEL_DIFF_CRITIC',
 ] as const;
 
 const FIXTURE_POLICY: ResolvedModelPolicy = {
@@ -87,6 +88,10 @@ before(() => {
   // second dispatch on 'unknown pricing' before the scenario can play out.
   process.env['BABEL_CHAT_MAX_COST'] = 'unlimited';
   process.env['BABEL_ALLOW_HOST_FALLBACK'] = '1';
+  // This suite verifies host-bound verifier receipt semantics, not the
+  // network-backed diff critic. CI enables the critic by default; keep the
+  // fixture deterministic without weakening the completion gate itself.
+  process.env['BABEL_DIFF_CRITIC'] = '0';
 });
 
 after(() => {

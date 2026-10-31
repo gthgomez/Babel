@@ -7,7 +7,7 @@ import { captureRecoveryPatchSnapshot, recoveryPatchSnapshotMatches, recoveryPat
  * Callers must not bypass this with direct writeFile.
  */
 
-import { existsSync } from 'node:fs';
+import { existsSync, realpathSync } from 'node:fs';
 import { assessMutationEffect, type MutationEffectAssessment } from './mutationTools.js';
 import { pinProjectRootEnv } from './projectRootPin.js';
 import { getExecutionContext } from './executionContext.js';
@@ -67,6 +67,17 @@ export interface GovernedStrReplaceResult extends Pick<PolicyGatedExecutionResul
 function resolveProjectPath(projectRoot: string, filePath: string): string {
   if (isAbsolute(filePath)) return filePath;
   return resolve(projectRoot, filePath);
+}
+
+function matchesCreatedTargetPath(evidencePath: string, targetPath: string): boolean {
+  if (process.platform !== 'win32') return evidencePath === targetPath;
+  try {
+    // Windows temporary roots may be supplied in 8.3 form while SafeExecutor
+    // canonicalizes its project root to the long path before writing.
+    return realpathSync(evidencePath).toLowerCase() === realpathSync(targetPath).toLowerCase();
+  } catch {
+    return false;
+  }
 }
 
 function governedControl(result: PolicyGatedExecutionResult | null | undefined, whollyUnstarted = true): Pick<PolicyGatedExecutionResult, 'stopRequest' | 'notStarted'> {
@@ -731,7 +742,7 @@ export async function governedApplyPatch(
         });
         if (fileSection?.createsFile && last) {
           const creation = getTrustedFileCreationEvidence(last);
-          if (creation?.path === absolutePath) {
+          if (creation && matchesCreatedTargetPath(creation.path, absolutePath)) {
             createdFileOwnership.set(absolutePath, {
               device: creation.device,
               inode: creation.inode,
