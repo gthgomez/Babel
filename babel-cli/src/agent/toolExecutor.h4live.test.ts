@@ -689,36 +689,29 @@ describe('H5 evaluateCompletionGateForEngine live revision', () => {
     );
   });
 
-  it('evaluateCompletionGateForEngine rejects shortcut_noop adversarial signal on live path', async () => {
-    const { evaluateCompletionGateForEngine } = await import('./completionGatePolicy.js');
-    const decision = evaluateCompletionGateForEngine({
-      turnType: 'completion',
-      taskIntent: 'execute',
-      task: 'policy review; run npm test after edits',
-      taskClass: 'governance',
-      toolCallLog: [{ tool: 'write_file', target: 'fix.noop', exit_code: 0 }],
-      lastVerifierReceipt: null,
-      executedVerifierLedger: [
-        {
-          command: 'npm test',
-          exit_code: 0,
-          exitCode: 0,
-          summary: 'ok',
-          authority: true,
-          authoritySource: 'project_discovery',
-          scope: 'full_suite',
-          boundRevision: {
-            compositeTreeHash: 'live-hash',
-            fileHashes: {},
-            gitCommitHash: null,
-            capturedAt: Date.now(),
-          },
-        } as never,
-      ],
-      requiredVerifierCommands: ['npm test'],
-      currentWorkspaceRevisionHash: 'live-hash',
+  it('free-text names do not trigger adversarial flags; trusted shortcut signals still block promotion', async () => {
+    const { deriveAdversarialSignals } = await import('./completionGatePolicy.js');
+    const { evaluateVerifierPromotion, buildVerifierReceiptV2 } = await import('./verifierKernel.js');
+    const derived = deriveAdversarialSignals({
+      hasWrite: true,
+      toolCallLog: [{ tool: 'write_file', target: 'src/noop.ts', exit_code: 0 }],
+      receipts: [{ exit_code: 0, summary: 'fixture green; VERIFIER_DEF_TAMPERED' }],
     });
-    assert.strictEqual(decision, 'reject', 'shortcut_noop write target must reject');
+    assert.deepEqual(derived, {}, 'filename and verifier prose are not trusted detector output');
+
+    const receipt = buildVerifierReceiptV2({
+      receipt_id: 'shortcut-signal', verifier_id: 'npm-test', argv: ['npm', 'test'], cwd: '.',
+      env_profile_hash: 'env', started_at: new Date(0).toISOString(), ended_at: new Date(0).toISOString(),
+      exit_code: 0, stdout: '# tests 2\n# pass 2\n', stderr: '',
+      workspace_revision: { compositeTreeHash: 'live-hash' }, scope: 'full_suite', command: 'npm test',
+      authoritative: true, freshness: 'fresh', tests_total: 2, tests_failed: 0, tests_skipped: 0,
+    });
+    const promo = evaluateVerifierPromotion({
+      mutating: true, task_class: 'general_swe', required_verifier_commands: ['npm test'],
+      receipts: [receipt], current_revision_hash: 'live-hash', adversarial: { shortcut_noop: true },
+    });
+    assert.strictEqual(promo.authorize_verified_complete, false);
+    assert.ok(promo.denials.includes('shortcut_noop'));
   });
 });
 
