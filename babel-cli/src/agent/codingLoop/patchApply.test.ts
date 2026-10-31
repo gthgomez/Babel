@@ -61,6 +61,15 @@ describe('parseUnifiedDiff', () => {
     if (parsed.ok) return
     assert.equal(parsed.reason, 'bad_hunk_body')
   })
+
+  test('rejects unsafe hunk coordinates and file operations', () => {
+    for (const patch of [
+      '--- a/f\n+++ /dev/null\n@@ -1 +0,0 @@\n-x\n',
+      '--- a/old\n+++ b/new\n@@ -1 +1 @@\n-x\n+y\n',
+      '--- a/f\n+++ b/f\n@@ -9007199254740992 +1 @@\n-x\n+y\n',
+      '--- a/f\n+++ b/f\n@@ -1 +1 @@\n-x\n+y\n--- a/f\n+++ b/f\n@@ -1 +1 @@\n-x\n+y\n',
+    ]) assert.equal(parseUnifiedDiff(patch).ok, false, patch)
+  })
 })
 
 describe('applyHunk fallback ladder', () => {
@@ -160,6 +169,73 @@ describe('applyHunk fallback ladder', () => {
     assert.equal(outcome.ok, false)
     if (outcome.ok) return
     assert.equal(outcome.reason, 'ambiguous')
+  })
+
+  test('context-free insertions preserve content at beginning, middle, and end', () => {
+    const apply = (start: number, text: string) => {
+      const parsed = parseUnifiedDiff(`--- a/f\n+++ b/f\n@@ -${start},0 +${start + 1} @@\n+${text}\n`)
+      assert.ok(parsed.ok)
+      if (!parsed.ok) return ''
+      const outcome = applyHunk('alpha\nbeta\n', parsed.files[0]!.hunks[0]!)
+      assert.ok(outcome.ok)
+      return outcome.ok ? outcome.content : ''
+    }
+    assert.equal(apply(0, 'head'), 'head\nalpha\nbeta\n')
+    assert.equal(apply(1, 'middle'), 'alpha\nmiddle\nbeta\n')
+    assert.equal(apply(2, 'tail'), 'alpha\nbeta\ntail\n')
+  })
+
+  test('applies multiple context-free insertions using adjusted coordinates', () => {
+    const parsed = parseUnifiedDiff('--- a/f\n+++ b/f\n@@ -0,0 +1 @@\n+head\n@@ -2,0 +4 @@\n+tail\n')
+    assert.ok(parsed.ok)
+    if (!parsed.ok) return
+    const result = applyPatchInMemory(parsed.files, () => 'alpha\nbeta\n')
+    assert.ok(result.ok)
+    if (result.ok) assert.equal(result.results[0]!.content, 'head\nalpha\nbeta\ntail\n')
+  })
+
+  test('preserves CRLF, BOM, and existing no-final-newline state', () => {
+    const crlf = parseUnifiedDiff('--- a/f\n+++ b/f\n@@ -1 +1 @@\n-alpha\n+ALPHA\n')
+    assert.ok(crlf.ok)
+    if (!crlf.ok) return
+    assert.equal(applyHunk('\uFEFFalpha\r\nbeta\r\n', crlf.files[0]!.hunks[0]!).ok, true)
+    const crlfResult = applyHunk('\uFEFFalpha\r\nbeta\r\n', crlf.files[0]!.hunks[0]!)
+    assert.ok(crlfResult.ok)
+    if (crlfResult.ok) assert.equal(crlfResult.content, '\uFEFFALPHA\r\nbeta\r\n')
+    const noEol = applyHunk('alpha', crlf.files[0]!.hunks[0]!)
+    assert.ok(noEol.ok)
+    if (noEol.ok) assert.equal(noEol.content, 'ALPHA')
+    const nonEof = applyHunk('alpha\nbeta', crlf.files[0]!.hunks[0]!)
+    assert.ok(nonEof.ok)
+    if (nonEof.ok) assert.equal(nonEof.content, 'ALPHA\nbeta')
+    assert.equal(applyHunk('alpha\r\nbeta\n', crlf.files[0]!.hunks[0]!).ok, false)
+  })
+
+  test('tracks old and new EOF newline markers independently and reverses them', () => {
+    const oldOnly = parseUnifiedDiff('--- a/f\n+++ b/f\n@@ -1 +1 @@\n-old\n\\ No newline at end of file\n+new\n')
+    assert.ok(oldOnly.ok)
+    if (!oldOnly.ok) return
+    const oldResult = applyHunk('old', oldOnly.files[0]!.hunks[0]!)
+    assert.ok(oldResult.ok)
+    if (oldResult.ok) assert.equal(oldResult.content, 'new\n')
+
+    const newOnly = parseUnifiedDiff('--- a/f\n+++ b/f\n@@ -1 +1 @@\n-old\n+new\n\\ No newline at end of file\n')
+    assert.ok(newOnly.ok)
+    if (!newOnly.ok) return
+    const newResult = applyHunk('old\n', newOnly.files[0]!.hunks[0]!)
+    assert.ok(newResult.ok)
+    if (!newResult.ok) return
+    assert.equal(newResult.content, 'new')
+    const reversed = applyHunk(newResult.content, reverseParsedPatch(newOnly.files)[0]!.hunks[0]!)
+    assert.ok(reversed.ok)
+    if (reversed.ok) assert.equal(reversed.content, 'old\n')
+  })
+
+  test('rejects insertion positions outside the current file', () => {
+    const parsed = parseUnifiedDiff('--- a/f\n+++ b/f\n@@ -20,0 +21 @@\n+bad\n')
+    assert.ok(parsed.ok)
+    if (!parsed.ok) return
+    assert.equal(applyHunk('one\ntwo\n', parsed.files[0]!.hunks[0]!).ok, false)
   })
 })
 

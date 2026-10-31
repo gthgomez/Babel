@@ -402,6 +402,18 @@ export async function governedApplyPatch(
     if (!file || !absolutePath) continue;
     if (contents.has(absolutePath)) continue; // same file addressed twice
     if (file.createsFile) {
+      if (existsSync(absolutePath)) {
+        const observation = `### apply_patch ${targets[i] ?? ''}\nError: creation target already exists`;
+        return {
+          observation,
+          exit_code: 1,
+          error: observation,
+          policyBlocked: false,
+          terminal: false,
+          absolutePaths,
+          preDispatchNoEffect: true,
+        };
+      }
       createdPaths.add(absolutePath);
       contents.set(absolutePath, '');
       continue;
@@ -516,6 +528,26 @@ export async function governedApplyPatch(
         const hunkCount = fileSection?.hunks.length ?? 0;
 
         let current: string;
+        if (fileSection?.createsFile && existsSync(absolutePath)) {
+          const conflictObservation = `### apply_patch ${result.path}\nError: creation target already exists — not applying this file`;
+          if (writtenPaths.length > 0) {
+            const rollback = await rollbackWrittenPaths(writtenPaths, contents, createdPaths, writtenContents);
+            throw Object.assign(new Error('patch creation target appeared concurrently'), {
+              governedPatchFailure: {
+                observation: conflictObservation + formatRollbackOutcome(rollback),
+                exit_code: 1, error: 'patch creation target appeared concurrently',
+                policyBlocked: false, terminal: false, absolutePaths, preDispatchNoEffect: false,
+              } satisfies GovernedApplyPatchResult,
+            });
+          }
+          throw Object.assign(new Error('patch creation target appeared concurrently'), {
+            governedPatchFailure: {
+              observation: conflictObservation,
+              exit_code: 1, error: 'patch creation target appeared concurrently',
+              policyBlocked: false, terminal: false, absolutePaths, preDispatchNoEffect: true,
+            } satisfies GovernedApplyPatchResult,
+          });
+        }
         try {
           current = await readFile(absolutePath, 'utf-8');
         } catch {
