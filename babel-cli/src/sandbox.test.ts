@@ -18,6 +18,7 @@ import { PassThrough } from 'node:stream';
 
 import {
   SafeExecutor,
+  getTrustedFileCreationEvidence,
   getTrustedShellExecutionBackend,
   validateHighRiskToolResult,
   awaitPendingProcessTerminations,
@@ -116,6 +117,27 @@ test('sandbox file operations stay usable for in-root paths', () => {
       readFileSync(join(fixture.projectRoot, 'nested', 'output.txt'), 'utf-8'),
       'created\n',
     );
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('create-only file writes refuse existing empty files and preserve contents', () => {
+  const fixture = makeFixture();
+  try {
+    const executor = new SafeExecutor(fixture.projectRoot);
+    writeFileSync(join(fixture.projectRoot, 'existing-empty.txt'), '');
+    writeFileSync(join(fixture.projectRoot, 'existing.txt'), 'outside bytes\n');
+    for (const name of ['existing-empty.txt', 'existing.txt']) {
+      const before = readFileSync(join(fixture.projectRoot, name), 'utf-8');
+      const result = executor.fileWrite(name, 'new bytes\n', { createOnly: true });
+      assert.equal(result.exit_code, 1);
+      assert.equal(readFileSync(join(fixture.projectRoot, name), 'utf-8'), before);
+    }
+    const result = executor.fileWrite('new.txt', 'created\n', { createOnly: true });
+    assert.equal(result.exit_code, 0);
+    assert.equal(readFileSync(join(fixture.projectRoot, 'new.txt'), 'utf-8'), 'created\n');
+    assert.ok(getTrustedFileCreationEvidence(result));
   } finally {
     fixture.cleanup();
   }

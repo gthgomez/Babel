@@ -16,12 +16,13 @@ import { compensatePatchWrites, type PatchRollbackOutcome } from './patchCompens
 import type { EffectLedgerRecord } from '../executor/effectLedger.js';
 import { captureEffectParentIdentity, type EffectParentIdentity } from '../executor/effectPathIdentity.js';
 import { isAbsolute, resolve } from 'node:path';
+import { getTrustedFileCreationEvidence } from '../sandbox.js';
 
 import { FileWriteMutex, canonicalizeLockPath, type FileLockHandle } from '../services/editReliability.js';
 import { applyUniqueEdit, formatEditObservation } from './codingLoop/editApply.js';
 import { applyPatchInMemory, parseUnifiedDiff } from './codingLoop/patchApply.js';
 import type { ToolContext, ToolResult } from '../localTools.js';
-import type { MutationBatchReceipt } from '../services/workspaceTransactions.js';
+import type { CreatedFileOwnership, MutationBatchReceipt } from '../services/workspaceTransactions.js';
 import type { AgentAction } from './actions.js';
 import {
   executeActionWithPolicy,
@@ -402,6 +403,18 @@ export async function governedApplyPatch(
     if (!file || !absolutePath) continue;
     if (contents.has(absolutePath)) continue; // same file addressed twice
     if (file.createsFile) {
+      if (existsSync(absolutePath)) {
+        const observation = `### apply_patch ${targets[i] ?? ''}\nError: creation target already exists`;
+        return {
+          observation,
+          exit_code: 1,
+          error: observation,
+          policyBlocked: false,
+          terminal: false,
+          absolutePaths,
+          preDispatchNoEffect: true,
+        };
+      }
       createdPaths.add(absolutePath);
       contents.set(absolutePath, '');
       continue;
@@ -466,6 +479,9 @@ export async function governedApplyPatch(
       current = null;
     }
     if (current === preImage) return '';
+    if (createdPaths.has(target) && current !== null) {
+      return `\n\nCreation conflict: ${target} appeared after the transaction snapshot and was preserved`;
+    }
     if (current === writtenContents.get(target)) {
       return `\n\nNot restored: ${target}: the failing dispatch's write is still on disk`;
     }
@@ -505,8 +521,9 @@ export async function governedApplyPatch(
   const fileMutationEvidence: NonNullable<GovernedApplyPatchResult['fileMutationEvidence']> = [];
   const writtenEffects = new Map<string, EffectLedgerRecord>();
   const writtenParents = new Map<string, EffectParentIdentity>();
+  const createdFileOwnership = new Map<string, CreatedFileOwnership>();
   const rollbackWrittenPaths = (paths: string[], originals: Map<string, string>, created: Set<string>, written: Map<string, string>) =>
-    compensatePatchWrites(paths, originals, created, written, writtenEffects, options.context, writtenParents);
+    compensatePatchWrites(paths, originals, created, written, writtenEffects, options.context, writtenParents, createdFileOwnership);
 
   try {
     await runExclusivePaths(absolutePaths, async (lockHandles) => {
@@ -516,6 +533,26 @@ export async function governedApplyPatch(
         const hunkCount = fileSection?.hunks.length ?? 0;
 
         let current: string;
+        if (fileSection?.createsFile && existsSync(absolutePath)) {
+          const conflictObservation = `### apply_patch ${result.path}\nError: creation target already exists — not applying this file`;
+          if (writtenPaths.length > 0) {
+            const rollback = await rollbackWrittenPaths(writtenPaths, contents, createdPaths, writtenContents);
+            throw Object.assign(new Error('patch creation target appeared concurrently'), {
+              governedPatchFailure: {
+                observation: conflictObservation + formatRollbackOutcome(rollback),
+                exit_code: 1, error: 'patch creation target appeared concurrently',
+                policyBlocked: false, terminal: false, absolutePaths, preDispatchNoEffect: false,
+              } satisfies GovernedApplyPatchResult,
+            });
+          }
+          throw Object.assign(new Error('patch creation target appeared concurrently'), {
+            governedPatchFailure: {
+              observation: conflictObservation,
+              exit_code: 1, error: 'patch creation target appeared concurrently',
+              policyBlocked: false, terminal: false, absolutePaths, preDispatchNoEffect: true,
+            } satisfies GovernedApplyPatchResult,
+          });
+        }
         try {
           current = await readFile(absolutePath, 'utf-8');
         } catch {
@@ -562,6 +599,7 @@ export async function governedApplyPatch(
           type: 'write_file',
           path: result.path,
           content: result.content,
+          ...(fileSection?.createsFile ? { createOnly: true } : {}),
         };
         let dispatch: PolicyGatedExecutionResult;
         try {
@@ -691,6 +729,16 @@ export async function governedApplyPatch(
           ...(dispatch.mutationReceipt ? { mutationReceipt: dispatch.mutationReceipt } : {}),
           ...(dispatch.effectTransaction ? { effectTransaction: dispatch.effectTransaction } : {}),
         });
+        if (fileSection?.createsFile && last) {
+          const creation = getTrustedFileCreationEvidence(last);
+          if (creation?.path === absolutePath) {
+            createdFileOwnership.set(absolutePath, {
+              device: creation.device,
+              inode: creation.inode,
+              expectedContent: result.content,
+            });
+          }
+        }
         if (assessMutationEffect({
           tool: 'write_file', exitCode: last?.exit_code,
           mutationReceipt: dispatch.mutationReceipt, effectTransaction: dispatch.effectTransaction,

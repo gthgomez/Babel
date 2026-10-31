@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, test } from 'node:test';
@@ -222,6 +222,64 @@ describe('governedApplyPatch multi-file transactional atomicity', () => {
       assert.equal(readFileSync(file1, 'utf8'), 'hello world\n');
     } finally {
       rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('rejects deleting, renaming, duplicate targets, and creating over an empty file before dispatch', async () => {
+    const root = tmpRoot('babel-patch-invalid-')
+    try {
+      writeFileSync(join(root, 'empty.txt'), '')
+      const invalidPatches = [
+        '--- a/empty.txt\n+++ /dev/null\n@@ -0,0 +0,0 @@\n',
+        '--- a/empty.txt\n+++ b/renamed.txt\n@@ -0,0 +0,0 @@\n',
+        '--- a/empty.txt\n+++ b/empty.txt\n@@ -0,0 +0,0 @@\n--- a/empty.txt\n+++ b/empty.txt\n@@ -0,0 +0,0 @@\n',
+        '--- /dev/null\n+++ b/empty.txt\n@@ -0,0 +1 @@\n+created\n',
+      ]
+      for (const patch of invalidPatches) {
+        let dispatched = false
+        const result = await governedApplyPatch({ patch }, {
+          projectRoot: root,
+          context: ctx(root),
+          executor: createToolExecutor(),
+          onBeforeExecutorExecute: () => { dispatched = true },
+        })
+        assert.equal(result.exit_code, 1, patch)
+        assert.equal(result.preDispatchNoEffect, true, patch)
+        assert.equal(dispatched, false, patch)
+        assert.equal(readFileSync(join(root, 'empty.txt'), 'utf8'), '')
+        assert.equal(existsSync(join(root, 'renamed.txt')), false)
+      }
+    } finally { rmSync(root, { recursive: true, force: true }) }
+  })
+  test('creation refuses targets that appear after the transaction snapshot and preserves their bytes', async () => {
+    for (const competitorContent of ['concurrent bytes\n', '']) {
+      const root = tmpRoot('babel-patch-create-race-');
+      try {
+        const target = join(root, 'created.txt');
+        const patch = [
+          '--- /dev/null',
+          '+++ b/created.txt',
+          '@@ -0,0 +1 @@',
+          '+patch content',
+        ].join('\n');
+        let injected = false;
+        const context = ctx(root);
+        context.onBeforeDispatch = () => {
+          if (injected) return;
+          injected = true;
+          writeFileSync(target, competitorContent);
+        };
+        const result = await governedApplyPatch({ patch }, {
+          projectRoot: root, context, executor: createToolExecutor(),
+        });
+        assert.equal(injected, true);
+        assert.equal(result.exit_code, 1, result.observation);
+        assert.equal(readFileSync(target, 'utf8'), competitorContent);
+        assert.match(result.observation, /\[ROLLBACK_CONFLICT\]/);
+        assert.match(result.observation, /not applied|concurrent|conflict|rollback/i);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
     }
   });
 });

@@ -46,6 +46,7 @@ import {
   type ToolResult,
 } from '../localTools.js';
 import { resolveExecutorDryRun } from '../config/dryRun.js';
+import { getTrustedFileCreationEvidence } from '../sandbox.js';
 import { isAuthoritativeVerifierCommand } from './completionGatePolicy.js';
 import { isPathInside } from '../services/targetResolver.js';
 import type { AgentAction } from './actions.js';
@@ -232,7 +233,7 @@ export function targetPathFromAction(action: AgentAction): string | undefined {
 export function defaultIdempotencyKeyForAction(action: AgentAction): string | undefined {
   const digest = (value: string) => createHash('sha256').update(value).digest('hex');
   if (action.type === 'write_file') {
-    return `write_file:v2:${digest(JSON.stringify([action.path, action.content]))}`;
+    return `write_file:v3:${digest(JSON.stringify([action.path, action.content, action.createOnly === true]))}`;
   }
   if (action.type === 'apply_patch') return `apply_patch:v2:${digest(action.patch)}`;
   if (action.type === 'run_command') return `run_command:v2:${digest(action.command)}`;
@@ -392,7 +393,12 @@ export function mapAgentActionToToolCalls(action: AgentAction): MappedToolCall[]
       return [
         {
           kind: 'execute',
-          request: { tool: (executorName ?? 'file_write') as 'file_write', path: action.path, content: action.content },
+          request: {
+            tool: (executorName ?? 'file_write') as 'file_write',
+            path: action.path,
+            content: action.content,
+            ...(action.createOnly ? { createOnly: true as const } : {}),
+          },
         },
       ];
     case 'apply_patch':
@@ -1334,6 +1340,20 @@ export async function executeActionWithPolicy(
         )
       : await (invocationLive ? runWithLiveExecution(executeInvocation) : executeInvocation());
     if (execution.stopRequest) context.runControl?.requestStop(execution.stopRequest);
+    if (batchTx && action.type === 'write_file' && action.createOnly) {
+      const target = resolveWriteFileMutationPath(action.path, workspaceRoot);
+      for (const result of execution.results) {
+        const evidence = getTrustedFileCreationEvidence(result);
+        if (evidence?.path === target) {
+          WorkspaceTransactionManager.recordCreatedFileOwnership(batchTx, target, {
+            device: evidence.device,
+            inode: evidence.inode,
+            expectedContent: action.content,
+          });
+          break;
+        }
+      }
+    }
 
     if (governanceSnapshot && governanceRepoRoot) {
       let recon: ReturnType<typeof reconcileGovernanceAfterEffect>;
@@ -1399,6 +1419,7 @@ export async function executeActionWithPolicy(
     const toolFailed = toolDenied || execution.results.some((result) => result.exit_code !== 0);
 
     if (toolFailed) {
+      let rollbackConflicts: string[] = [];
       if (effectIntent && context.runDir) {
         recordEffectTerminal(context.runDir, effectIntent, {
           status: 'failed',
@@ -1413,6 +1434,7 @@ export async function executeActionWithPolicy(
               lockContext: deps.lockContext,
             });
             rollbackResult = undo.verification ? 'success' : 'partial';
+            rollbackConflicts = undo.conflicts;
           } catch {
             rollbackResult = 'failed';
           }
@@ -1434,6 +1456,11 @@ export async function executeActionWithPolicy(
       }
       return {
         ...execution,
+        ...(rollbackConflicts.length > 0 ? {
+          results: execution.results.map((result, index) => index === 0
+            ? { ...result, stderr: `${result.stderr}\n[ROLLBACK_CONFLICT] ${rollbackConflicts.join('; ')}` }
+            : result),
+        } : {}),
         policyDecision: toolDenied ? 'deny' : policyDecision,
         policyBlocked: toolDenied,
         ...(effectTx ? { effectTransaction: effectTx } : {}),
@@ -1621,6 +1648,8 @@ export async function executeActionWithPolicy(
       } : {})
     };
   } catch (error) {
+    let errorToThrow: unknown = error;
+    let rollbackConflicts: string[] = [];
     if (effectIntent && context.runDir) {
       recordEffectTerminal(context.runDir, effectIntent, {
         status: context.signal?.aborted || error instanceof RunStoppedError ? 'cancelled' : 'failed',
@@ -1640,6 +1669,7 @@ export async function executeActionWithPolicy(
             lockContext: deps.lockContext,
           });
           rollbackResult = undo.verification ? 'success' : 'partial';
+          rollbackConflicts = undo.conflicts;
         } catch {
           rollbackResult = 'failed';
         }
@@ -1652,6 +1682,14 @@ export async function executeActionWithPolicy(
             : captureWorkspaceRevisionIdentity(workspaceRoot),
       };
     }
-    throw error;
+    if (rollbackConflicts.length > 0) {
+      const conflictDetail = `[ROLLBACK_CONFLICT] ${rollbackConflicts.join('; ')}`;
+      if (error instanceof Error) {
+        error.message = `${error.message}\n${conflictDetail}`;
+      } else {
+        errorToThrow = new Error(`${String(error)}\n${conflictDetail}`, { cause: error });
+      }
+    }
+    throw errorToThrow;
   }
 }

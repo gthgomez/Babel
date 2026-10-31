@@ -3,7 +3,7 @@ import { dirname, join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { createHash } from 'node:crypto'
 import type { ToolContext } from '../localTools.js'
-import { WorkspaceTransactionManager } from '../services/workspaceTransactions.js'
+import { WorkspaceTransactionManager, type CreatedFileOwnership } from '../services/workspaceTransactions.js'
 import { recordEffectIntent, recordEffectTerminal, type EffectLedgerRecord } from '../executor/effectLedger.js'
 import { captureEffectParentIdentity, resolveOwnedEffectPath, type EffectParentIdentity } from '../executor/effectPathIdentity.js'
 import { acquireEffectDirectoryAnchors, type EffectDirectoryAnchors } from '../executor/effectDirectoryAnchors.js'
@@ -22,6 +22,7 @@ export async function compensatePatchWrites(
   paths: string[], originals: Map<string, string>, created: Set<string>,
   written: Map<string, string>, effects: Map<string, EffectLedgerRecord>, context: ToolContext,
   ephemeralParents?: Map<string, EffectParentIdentity>,
+  createdFileOwnership?: Map<string, CreatedFileOwnership>,
 ): Promise<PatchRollbackOutcome> {
   const rolledBack: string[] = []
   const failures: string[] = []
@@ -84,8 +85,13 @@ export async function compensatePatchWrites(
       if (!before && created.has(path)) {
         restored = true
       } else {
+        const creationOwnership = created.has(path) ? createdFileOwnership?.get(path) : undefined
         if (!before?.isFile() || before.isSymbolicLink() || (before.mode & 0o222) === 0) {
           throw new Error('not restored — target is not a writable owned regular file')
+        }
+        if (created.has(path) && (!creationOwnership || creationOwnership.expectedContent !== expected
+          || before.dev.toString() !== creationOwnership.device || before.ino.toString() !== creationOwnership.inode)) {
+          throw new Error('not restored — target identity does not match the host-attested creation')
         }
         await rename(anchors.path(ownedTarget()), anchors.path(resolveOwnedEffectPath(capture, captureParent)))
         captured = true
@@ -95,7 +101,11 @@ export async function compensatePatchWrites(
         try {
           const info = await source.stat()
           if (info.ino !== capturedInfo.ino || info.dev !== capturedInfo.dev || expected === undefined
-            || await source.readFile('utf8') !== expected) throw new Error('not restored — the file no longer holds the bytes this patch wrote')
+            || await source.readFile('utf8') !== expected
+            || (created.has(path) && (info.dev.toString() !== creationOwnership?.device
+              || info.ino.toString() !== creationOwnership?.inode))) {
+            throw new Error('not restored — target identity or bytes no longer match this patch creation')
+          }
         } finally { await source.close() }
         if (created.has(path)) {
           try { await lstat(anchors.path(ownedTarget())); throw new Error('created path replaced during compensation') }

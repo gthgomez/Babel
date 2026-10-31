@@ -23,6 +23,7 @@ import {
   existsSync,
   mkdtempSync,
   readFileSync,
+  renameSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -32,6 +33,7 @@ import { join, resolve } from 'node:path';
 import { describe, test } from 'node:test';
 
 import type { ToolContext } from '../localTools.js';
+import { SafeExecutor } from '../sandbox.js';
 import { loadEffectLedger } from '../executor/effectLedger.js';
 import type { AgentAction } from './actions.js';
 import { governedApplyPatch, type GovernedApplyPatchResult } from './governedMutations.js';
@@ -239,9 +241,11 @@ interface BarrierState {
 }
 
 function scriptedExecutor(projectRoot: string, script: FaultScript) {
+  const safe = new SafeExecutor(projectRoot);
   const base = createToolExecutor({
     executeTool: async (req) => {
       if (req.tool === 'file_write') {
+        if (req.createOnly) return safe.fileWrite(req.path, req.content, { createOnly: true });
         writeFileSync(resolve(projectRoot, req.path), req.content, 'utf8');
         return { exit_code: 0, stdout: `wrote ${req.path}`, stderr: '' };
       }
@@ -556,6 +560,55 @@ describe('governedApplyPatch multi-file failure and rollback integrity', { concu
       assert.equal(result.preDispatchNoEffect, false);
       assert.match(result.observation, /Rolled back 1 file\(s\)/);
       assert.equal(snapshot(file1).kind, 'missing', 'created file must be removed, not emptied');
+      assert.equal(snapshot(file2).bytes, FILE2_ORIGINAL);
+      assert.equal(classifyAsCaller(result).status, 'indeterminate');
+      assertNoDanglingEffectIntent(root);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('6b. preserves an identical-byte replacement of the created file during later-file rollback', async () => {
+    resetCircuitBreaker();
+    const root = tmpRoot('babel-m1-created-replacement-');
+    try {
+      const file1 = join(root, 'file1.txt');
+      const file2 = join(root, 'file2.txt');
+      writeFileSync(file2, FILE2_ORIGINAL, 'utf8');
+      let replacementIdentity: { dev: number; ino: number } | undefined;
+      const script = scriptedExecutor(root, {
+        faultAt: 2,
+        fault: 'reject',
+        onAfterWrite: (writeIndex, absolutePath) => {
+          assert.equal(writeIndex, 1);
+          assert.equal(absolutePath, file1);
+          assert.equal(snapshot(file1).bytes, FILE1_CREATED);
+          const replaced = statSync(file1);
+          const replacement = join(root, 'same-byte-replacement.txt');
+          writeFileSync(replacement, FILE1_CREATED, 'utf8');
+          replacementIdentity = statSync(replacement);
+          assert.notEqual(replacementIdentity.ino, replaced.ino);
+          rmSync(file1);
+          renameSync(replacement, file1);
+          const installed = statSync(file1);
+          assert.equal(installed.dev, replacementIdentity.dev);
+          assert.equal(installed.ino, replacementIdentity.ino);
+        },
+      });
+
+      const result = await governedApplyPatch(
+        { patch: CREATE_THEN_MODIFY_PATCH },
+        { projectRoot: root, context: ctx(root), executor: script.executor },
+      );
+
+      assert.equal(result.exit_code, 1);
+      assert.equal(result.preDispatchNoEffect, false);
+      assert.equal(snapshot(file1).bytes, FILE1_CREATED);
+      const installed = statSync(file1);
+      assert.equal(installed.dev, replacementIdentity!.dev);
+      assert.equal(installed.ino, replacementIdentity!.ino);
+      assert.match(result.observation, /identity|ownership|not restored|restore failed/i);
+      assert.doesNotMatch(result.observation, /Rolled back 1 file\(s\)/);
       assert.equal(snapshot(file2).bytes, FILE2_ORIGINAL);
       assert.equal(classifyAsCaller(result).status, 'indeterminate');
       assertNoDanglingEffectIntent(root);

@@ -44,6 +44,7 @@ import {
   readdirSync,
   statSync,
   lstatSync,
+  fstatSync,
   writeFileSync,
   existsSync,
   realpathSync,
@@ -180,6 +181,34 @@ export interface ToolResult {
    * never ran, and it must not be recorded as verifier evidence.
    */
   simulated?: boolean;
+}
+
+export interface TrustedFileCreationEvidence {
+  path: string;
+  device: string;
+  inode: string;
+}
+
+const trustedFileCreationEvidence = new WeakMap<object, TrustedFileCreationEvidence>();
+
+export function getTrustedFileCreationEvidence(
+  result: object,
+): TrustedFileCreationEvidence | undefined {
+  return trustedFileCreationEvidence.get(result);
+}
+
+export function preserveTrustedFileCreationEvidence<T extends object>(source: object, target: T): T {
+  const evidence = trustedFileCreationEvidence.get(source);
+  if (evidence) trustedFileCreationEvidence.set(target, evidence);
+  return target;
+}
+
+function attachTrustedFileCreationEvidence<T extends object>(
+  target: T,
+  evidence: TrustedFileCreationEvidence | undefined,
+): T {
+  if (evidence) trustedFileCreationEvidence.set(target, evidence);
+  return target;
 }
 
 export type ShellExecutionBackend = 'docker-container' | 'host-process';
@@ -1391,11 +1420,13 @@ export class SafeExecutor {
     targetPath: string,
     content: string,
     enforceProjectRoot: boolean,
+    options?: { createOnly?: true; onCreated?: (evidence: TrustedFileCreationEvidence) => void },
   ): void {
     this.assertSafeWritableTarget(inputPath, targetPath, enforceProjectRoot);
 
     const noFollowFlag = typeof fsConstants.O_NOFOLLOW === 'number' ? fsConstants.O_NOFOLLOW : 0;
-    const baseFlags = fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_TRUNC;
+    const baseFlags = fsConstants.O_WRONLY | fsConstants.O_CREAT |
+      (options?.createOnly ? fsConstants.O_EXCL : fsConstants.O_TRUNC);
 
     let fd: number;
     try {
@@ -1410,6 +1441,10 @@ export class SafeExecutor {
     }
 
     try {
+      if (options?.createOnly) {
+        const stat = fstatSync(fd, { bigint: true });
+        options.onCreated?.({ path: targetPath, device: stat.dev.toString(), inode: stat.ino.toString() });
+      }
       this.assertSafeWritableTarget(inputPath, targetPath, enforceProjectRoot);
       writeFileSync(fd, content, 'utf-8');
     } finally {
@@ -1637,12 +1672,13 @@ export class SafeExecutor {
     }
   }
 
-  fileWrite(inputPath: string, content: string): ToolResult {
+  fileWrite(inputPath: string, content: string, options?: { createOnly?: true }): ToolResult {
     const planDenial = this.checkPlanModeDenial('file_write');
     if (planDenial) return planDenial;
     const profileDenial = this.checkExecutionProfileToolDenial('file_write');
     if (profileDenial) return profileDenial;
 
+    let creationEvidence: TrustedFileCreationEvidence | undefined;
     try {
       const requestedPath = this.resolveProjectPath(inputPath);
       this.ensureWithinProjectRoot(inputPath, requestedPath);
@@ -1657,16 +1693,19 @@ export class SafeExecutor {
       }
 
       mkdirSync(dirname(targetPath), { recursive: true });
-      this.writeUtf8FileSafely(inputPath, targetPath, content, targetPath === safePath);
-      return {
+      this.writeUtf8FileSafely(inputPath, targetPath, content, targetPath === safePath, {
+        ...(options?.createOnly ? { createOnly: true as const } : {}),
+        onCreated: evidence => { creationEvidence = evidence; },
+      });
+      return attachTrustedFileCreationEvidence({
         exit_code: 0,
         stdout: `Written: ${inputPath}${targetPath === safePath ? '' : ' (shadowed)'}`,
         stderr: '',
-      };
+      }, creationEvidence);
     } catch (err) {
       const denied = maybePolicyDeniedResult(err, 'file_write', [inputPath]);
-      if (denied) return denied;
-      return { exit_code: 1, stdout: '', stderr: String(err) };
+      if (denied) return attachTrustedFileCreationEvidence(denied, creationEvidence);
+      return attachTrustedFileCreationEvidence({ exit_code: 1, stdout: '', stderr: String(err) }, creationEvidence);
     }
   }
 

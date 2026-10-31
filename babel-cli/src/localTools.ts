@@ -27,7 +27,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import path from 'node:path';
 import { z } from 'zod';
-import { preserveTrustedShellExecutionBackend, SafeExecutor } from './sandbox.js';
+import { preserveTrustedFileCreationEvidence, preserveTrustedShellExecutionBackend, SafeExecutor } from './sandbox.js';
 import { getDefaultProcessWitness } from './diagnostics/bdns/processWitness.js';
 import type { ToolResult, ExecutorMode } from './sandbox.js';
 import { isDryRunEnabled } from './config/dryRun.js';
@@ -349,6 +349,8 @@ export const ToolCallRequestSchema = z.discriminatedUnion('tool', [
     tool: z.literal('file_write'),
     path: z.string().min(1),
     content: z.string(),
+    /** Host-only create mode; not exposed in model tool definitions. */
+    createOnly: z.literal(true).optional(),
   }),
   z.object({
     tool: z.literal('shell_exec'),
@@ -602,7 +604,7 @@ function handleFileWrite(req: Extract<ToolCallRequest, { tool: 'file_write' }>, 
 
   if (!isInvocationLive()) {
     if (process.env['BABEL_SHADOW_ROOT']) {
-      const result = getExecutor(context.projectRoot).fileWrite(req.path, req.content);
+      const result = getExecutor(context.projectRoot).fileWrite(req.path, req.content, req.createOnly ? { createOnly: true } : undefined);
       console.log(`  [DRY RUN] file_write → ${req.path} (${result.stdout})`);
       return {
         ...result,
@@ -620,7 +622,7 @@ function handleFileWrite(req: Extract<ToolCallRequest, { tool: 'file_write' }>, 
     };
   }
 
-  return getExecutor(context.projectRoot).fileWrite(req.path, req.content);
+  return getExecutor(context.projectRoot).fileWrite(req.path, req.content, req.createOnly ? { createOnly: true } : undefined);
 }
 
 function handleFileDelete(req: Extract<ToolCallRequest, { tool: 'file_delete' }>, context: ToolContext): ToolResult {
@@ -1982,10 +1984,11 @@ export async function executeTool(req: ToolCallRequest, context: ToolContext): P
     return result;
   }
 
-  return preserveTrustedShellExecutionBackend(result, {
+  const finalizedResult = preserveTrustedShellExecutionBackend(result, {
     ...result,
     checkpoint_ids: [...(result.checkpoint_ids ?? []), finalized.id],
   });
+  return preserveTrustedFileCreationEvidence(result, finalizedResult);
 }
 
 /**
