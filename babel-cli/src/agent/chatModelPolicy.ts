@@ -55,7 +55,7 @@ export function resolveChatModelPolicy(options: ChatModelPolicyOptions): {
   const connectionPolicy = resolveConnectionModelPolicy(connectionSelector, { models: configuredModels });
   if (connectionPolicy) return { policy: connectionPolicy, offline };
   if (!explicitModel && !desktopProvider && !offline) {
-    throw new Error('SETUP_REQUIRED: Select your provider and exact model with babel-agent setup. No cloud provider is selected.');
+    throw new Error('SETUP_REQUIRED: No model connection is selected. Choose a provider and exact model with babel-agent setup.');
   }
 
   const selectedModel = !offline

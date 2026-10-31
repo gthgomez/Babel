@@ -14,6 +14,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { ChatEngine } from './chatEngine.js'
+import { resolveModelByKey } from '../modelPolicy.js'
+import type { ChatLlmRunner } from '../runners/base.js'
 
 const MANAGED_ENV = ['BABEL_OFFLINE', 'BABEL_DIFF_CRITIC', 'BABEL_DIFF_CRITIC_PRO', 'BABEL_CHAT_MAX_COST'] as const
 let envSnapshot: Record<string, string | undefined> = {}
@@ -141,12 +143,21 @@ test('stale critic inference cannot mutate the current task owner', async () => 
       return usageMetadata()
     },
   }
+  let activeCriticRunner: {
+    executeRaw: (prompt: string, callbacks?: CriticProviderCallbacks) => Promise<string>
+    getLastInvocationMetadata: typeof criticRunner.getLastInvocationMetadata
+  } = criticRunner
+  const providerRunner = {
+    executeRaw: (prompt: string, callbacks?: CriticProviderCallbacks) => activeCriticRunner.executeRaw(prompt, callbacks),
+    getLastInvocationMetadata: () => activeCriticRunner.getLastInvocationMetadata(),
+  } as unknown as ChatLlmRunner
 
   try {
     const engine = new ChatEngine({
       task: 'Task A: mutate the project',
       projectRoot: root,
-      model: 'deepseek-v4-flash',
+      providerPolicy: resolveModelByKey({ key: 'deepseek-v4-flash' }),
+      providerRunner,
       runId: 'r0-critic-' + Math.random().toString(36).slice(2, 10),
     })
     const box = internals(engine)
@@ -275,7 +286,7 @@ test('stale critic inference cannot mutate the current task owner', async () => 
       effect_status: 'confirmed_change',
       mutation_paths: ['main.ts'],
     })
-    box.criticRunner = {
+    activeCriticRunner = {
       async executeRaw(_prompt: string, callbacks?: CriticProviderCallbacks) {
         callbacks?.onInvocationStarted?.({
           inference_id: 'current-critic-inference',
@@ -298,6 +309,7 @@ test('stale critic inference cannot mutate the current task owner', async () => 
         return usageMetadata()
       },
     }
+    box.criticRunner = activeCriticRunner
     const currentDecision = await box.runAsymmetricDiffCritic(
       'Task B final answer',
       {},

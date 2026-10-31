@@ -102,6 +102,7 @@ test('I02: OpenCode Go adapter preserves PreparedRequestAdmissionError before tr
   }
   try {
     const runner = new OpenCodeGoApiRunner('deepseek-v4-flash', {}, {
+      contextWindowTokens: 128_000,
       credentialSource: 'explicit-test',
       explicitCredential: 'fixture-only',
     })

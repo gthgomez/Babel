@@ -138,6 +138,8 @@ export function createShellCommandOperations(
       handleClear(ctx, [])
       if (!ctx.shellHost) {
         resetHostedConversation(ctx)
+        ctx.chatEngine?.closeAdmissionStore?.()
+        ctx.chatEngine = undefined
         host.onSessionChanged(undefined)
       }
     },

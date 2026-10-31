@@ -1033,32 +1033,50 @@ export class ChatEngine {
       this.hardPlanMode = this.executionProfile === "plan";
     }
 
-    // Resolve model policy for provider selection.
-    // Always resolve — when no model is specified, use the policy default tier.
-    const { policy: modelPolicy, offline: isOffline } =
-      options.providerPolicy && options.providerRunner
-        ? { policy: options.providerPolicy, offline: false }
-        : resolveChatModelPolicy({
-            ...(options.model !== undefined ? { model: options.model } : {}),
-            ...(options.modelTier !== undefined
-              ? { modelTier: options.modelTier }
-              : {}),
-            ...(options.allowExpensive === true
-              ? { allowExpensive: true }
-              : {}),
-            ...(process.env["BABEL_ROOT"]
-              ? { babelRoot: process.env["BABEL_ROOT"] }
-              : {}),
-          });
+    // Resolve model policy for provider selection. A missing selection is
+    // deferred until inference so model-free inspection and restore paths work.
+    let modelPolicy: ResolvedModelPolicy | undefined;
+    let isOffline = false;
+    if (options.providerPolicy && options.providerRunner) {
+      modelPolicy = options.providerPolicy;
+    } else {
+      try {
+        const resolved = resolveChatModelPolicy({
+          ...(options.model !== undefined ? { model: options.model } : {}),
+          ...(options.modelTier !== undefined
+            ? { modelTier: options.modelTier }
+            : {}),
+          ...(options.allowExpensive === true
+            ? { allowExpensive: true }
+            : {}),
+          ...(process.env["BABEL_ROOT"]
+            ? { babelRoot: process.env["BABEL_ROOT"] }
+            : {}),
+        });
+        modelPolicy = resolved.policy;
+        isOffline = resolved.offline;
+      } catch (error) {
+        // Engine construction is also used for model-free inspection, restore,
+        // and Plan paths. Require a selection when inference is first requested.
+        if (
+          !(error instanceof Error) ||
+          !error.message.startsWith("SETUP_REQUIRED: No model connection is selected.")
+        ) {
+          throw error;
+        }
+      }
+    }
     this.modelPolicy = modelPolicy;
     // Packet D2: resolve the per-model edit-format session deterministically
     // from model identity; outcomes later adjust it within this session only.
     this.editFormatSession = createEditFormatSession({
-      family: resolveEditFormatFamily({
-        policyFamily: modelPolicy.family,
-        provider: modelPolicy.provider,
-        modelId: modelPolicy.providerModelId,
-      }),
+      family: resolveEditFormatFamily(modelPolicy
+        ? {
+            policyFamily: modelPolicy.family,
+            provider: modelPolicy.provider,
+            modelId: modelPolicy.providerModelId,
+          }
+        : {}),
     });
     if (options.providerRunner) {
       this.deliberationRunner =
@@ -1069,7 +1087,7 @@ export class ChatEngine {
     // Exact experimental routes are campaign boundaries: phase-specific
     // environment overrides must not recruit another provider/model.
     if (
-      this.modelPolicy.provider === "openrouter" &&
+      this.modelPolicy?.provider === "openrouter" &&
       this.modelPolicy.providerModelId === LIVE_OPENROUTER_MODEL_ID
     ) {
       this.limits = {
