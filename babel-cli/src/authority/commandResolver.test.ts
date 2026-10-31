@@ -44,6 +44,21 @@ test('trusted resolved Git keeps its ordinary command policy', () => {
   assert.equal(isResolvedCommandCurrent(resolution!, { realpath: (path) => path, fileIdentity: () => 'file-v2' }), false);
 });
 
+test('trusted system roots cannot lend Git semantics to a canonical Node target', () => {
+  const resolution = resolveCommandExecutable('git', {
+    platform: 'linux', cwd: '/workspace/repo', env: { PATH: '/opt/protected-tools' },
+    trustedRoots: ['/opt/protected-tools'], controlledRoots: ['/workspace/repo'],
+    isFile: (path) => path === '/opt/protected-tools/git',
+    realpath: (path) => path === '/opt/protected-tools/git' ? '/opt/protected-tools/node' : path,
+    fileIdentity: () => 'protected-node-v1',
+    isWritableByCurrentUser: () => false,
+    isWritableByOtherPrincipal: () => false,
+  });
+  assert.equal(resolution?.path, '/opt/protected-tools/node');
+  assert.equal(resolution?.trusted, false);
+  assert.equal(classifyResolvedCommand(resolution!, ['status'], { invokedBase: 'git' }).executionRisk, 'project_code');
+});
+
 test('common protected absolute system paths keep trusted command policy', () => {
   const resolution = resolveCommandExecutable('/usr/local/bin/git', {
     platform: 'linux',
@@ -318,6 +333,37 @@ test('custom Node identity stays project code even when resolved through host PA
   });
   assert.equal(resolution?.trusted, true);
   assert.equal(classifyResolvedCommand(resolution!, ['script.js']).executionRisk, 'project_code');
+});
+
+test('host PATH aliases must resolve to a compatible executable identity', () => {
+  const common = {
+    platform: 'linux' as const,
+    cwd: '/workspace/repo',
+    env: { PATH: '/opt/operator-tools/bin' },
+    hostPath: '/opt/operator-tools/bin',
+    controlledRoots: ['/workspace/repo'],
+    isFile: (path: string) => path === '/opt/operator-tools/bin/git' || path === '/opt/operator-tools/bin/npm',
+    realpath: (path: string) => path === '/opt/operator-tools/bin/git'
+      ? '/opt/operator-tools/bin/node'
+      : path === '/opt/operator-tools/bin/npm'
+        ? '/opt/operator-tools/lib/node_modules/npm/bin/npm-cli.js'
+        : path,
+    fileIdentity: () => 'host-tool-v1',
+    isWritableByCurrentUser: () => false,
+    isWritableByOtherPrincipal: () => false,
+    effectiveUid: 1000,
+    ownerUid: () => 1000,
+  };
+
+  const misleadingGit = resolveCommandExecutable('git', common);
+  assert.equal(misleadingGit?.path, '/opt/operator-tools/bin/node');
+  assert.equal(misleadingGit?.trusted, false, 'a Git spelling cannot lend Git authority to Node');
+  assert.equal(classifyResolvedCommand(misleadingGit!, ['status'], { invokedBase: 'git' }).executionRisk, 'project_code');
+
+  const npmAlias = resolveCommandExecutable('npm', common);
+  assert.equal(npmAlias?.path, '/opt/operator-tools/lib/node_modules/npm/bin/npm-cli.js');
+  assert.equal(npmAlias?.trusted, true, 'the known npm entry point remains a compatible alias');
+  assert.equal(classifyResolvedCommand(npmAlias!, ['test'], { invokedBase: 'npm' }).executionRisk, 'project_code');
 });
 
 test('host PATH identity is rejected when an external path chain is group or world writable', () => {

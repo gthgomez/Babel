@@ -78,6 +78,19 @@ const HOST_SYSTEM_ROOT = process.platform === 'win32'
 const HOST_PROGRAM_FILES = process.platform === 'win32' ? envValue(process.env, 'ProgramFiles', 'win32') : undefined;
 const HOST_WINDOWS_SYSTEM32 = HOST_SYSTEM_ROOT ? canonicalPath(join(HOST_SYSTEM_ROOT, 'System32')) : undefined;
 
+// Explicitly approved package-manager entry-point aliases. Do not infer that
+// an arbitrary startup-PATH file is the tool named by its symlink/spelling.
+const HOST_EXECUTABLE_ALIASES: Readonly<Record<string, ReadonlySet<string>>> = {
+  npm: new Set(['npm-cli.js']),
+  npx: new Set(['npx-cli.js']),
+};
+
+function hostExecutableNameMatches(invokedBase: string, canonicalBase: string): boolean {
+  const invoked = normalizeExecutionBase(invokedBase);
+  const canonical = normalizeExecutionBase(canonicalBase);
+  return canonical === invoked || HOST_EXECUTABLE_ALIASES[invoked]?.has(canonical) === true;
+}
+
 /** Exact canonical cmd.exe identity under the independently captured host System32 directory. */
 export function isCanonicalWindowsSystemShell(path: string, system32: string): boolean {
   const normalizedPath = win32.resolve(path).toLowerCase();
@@ -376,23 +389,24 @@ export function resolveCommandExecutable(
     );
     const rootOwnedSystemPath = platform !== 'win32' && (options.effectiveUid ?? process.geteuid?.()) === 0 &&
       trustedRoot !== undefined && isPathChainOwnedByUid(canonical, platform, 0, ownerUid) && !sharedWritablePath;
-    const trustedSystemIdentity = !isControlled && (protectedPath || rootOwnedSystemPath) && (
+    const invokedBase = normalizeExecutionBase(command);
+    const compatibleHostIdentity = hostExecutableNameMatches(invokedBase, api.basename(canonical));
+    const trustedSystemIdentity = compatibleHostIdentity && !isControlled && (protectedPath || rootOwnedSystemPath) && (
       trustedRoot !== undefined ||
       (options.trustedRoots === undefined && defaultTrustedExecutables(platform).includes(canonical))
     );
     const hostSystem32 = options.hostWindowsSystem32 ?? (platform === process.platform ? HOST_WINDOWS_SYSTEM32 : undefined);
     const identity = fileIdentity(canonical);
-    const trustedWindowsSystemShell = platform === 'win32' && hostSystem32 !== undefined
+    const trustedWindowsSystemShell = invokedBase === 'cmd' && platform === 'win32' && hostSystem32 !== undefined
       && isCanonicalWindowsSystemShell(canonical, hostSystem32) && !isControlled && identity !== undefined;
-    // Trust is tied to the caller's invoked command name plus an exact
-    // canonical startup-PATH match. A host alias such as `npm` may resolve to
-    // `npm-cli.js`; the target's basename is identity data, not syntax.
-    const invokedBase = normalizeExecutionBase(command);
+    // Trust is tied to the invoked command name plus a compatible canonical
+    // executable identity. Explicit host aliases are enumerated above.
     const knownCommand = COMMAND_SPECS[invokedBase] !== undefined;
     // Host PATH is an operator-selected source of tools, including user-installed
     // toolchains. Pin the canonical file identity; never infer trust from a name
     // alone, and never trust a project/shadow lookalike even if it is on PATH.
-    const trustedHostPathIdentity = knownCommand && (platform === 'win32' || trustedRoot === undefined) && isHostPathIdentity &&
+    const trustedHostPathIdentity = knownCommand && compatibleHostIdentity &&
+      (platform === 'win32' || trustedRoot === undefined) && isHostPathIdentity &&
       (platform === 'win32' || trustedHostOwnership) &&
       !isControlled && !sharedWritablePath && identity !== undefined;
     const trusted = identity !== undefined && (trustedWindowsSystemShell || trustedSystemIdentity || trustedHostPathIdentity);
