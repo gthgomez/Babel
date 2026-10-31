@@ -56,6 +56,8 @@ test('project-relative executables are project_code', () => {
   assert.equal(classifyExecutionRisk('./cli_tool').executionRisk, 'project_code');
   assert.equal(classifyExecutionRisk('/app/bin/tool').executionRisk, 'project_code');
   assert.equal(classifyExecutionRisk('/project/bin/tool').executionRisk, 'project_code');
+  assert.equal(classifyExecutionRisk('/usr/bin/git status').executionRisk, 'project_code');
+  assert.equal(classifyExecutionRisk('C:\\Windows\\System32\\where.exe node').executionRisk, 'project_code');
 });
 
 test('jvm and language run/build carriers require isolation', () => {

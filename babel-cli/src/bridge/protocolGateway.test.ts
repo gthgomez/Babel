@@ -8,7 +8,6 @@ import { after, before, describe, it } from 'node:test';
 
 import { ChatEngine } from '../agent/chatEngine.js';
 import { hashUserMessage } from '../protocol/messageIntegrity.js';
-import { BridgeServer } from './sessionServer.js';
 import { originAllowed } from './protocolGateway.js';
 
 function httpRequest(
@@ -70,19 +69,26 @@ function buildIntegrityFixture(): string {
 describe('ADR-010 bridge gateway', () => {
   const PORT = 14546;
   const TOKEN = 'spike-bridge-token-not-a-secret';
-  let server: BridgeServer;
+  let server: import('./sessionServer.js').BridgeServer;
+  let BridgeServerClass: typeof import('./sessionServer.js').BridgeServer;
   let capturedMessage = '';
   let tmp: string;
+  let tmpHome: string;
   let prevRuns: string | undefined;
   let prevInstance: string | undefined;
+  let prevHome: string | undefined;
 
   before(async () => {
     tmp = mkdtempSync(join(tmpdir(), 'babel-remote-'));
     prevRuns = process.env['BABEL_RUNS_DIR'];
     process.env['BABEL_RUNS_DIR'] = tmp;
+    prevHome = process.env['HOME'];
+    tmpHome = mkdtempSync(join(tmpdir(), 'babel-remote-home-'));
+    process.env['HOME'] = tmpHome;
+    ({ BridgeServer: BridgeServerClass } = await import('./sessionServer.js'));
     prevInstance = process.env['BABEL_BRIDGE_INSTANCE'];
     process.env['BABEL_BRIDGE_INSTANCE'] = 'gateway-test-instance';
-    server = new BridgeServer({
+    server = new BridgeServerClass({
       port: PORT,
       authToken: TOKEN,
       allowedWorkspaceRoot: tmp,
@@ -119,6 +125,9 @@ describe('ADR-010 bridge gateway', () => {
     await server.stop();
     if (prevRuns === undefined) delete process.env['BABEL_RUNS_DIR'];
     else process.env['BABEL_RUNS_DIR'] = prevRuns;
+    if (prevHome === undefined) delete process.env['HOME'];
+    else process.env['HOME'] = prevHome;
+    rmSync(tmpHome, { recursive: true, force: true });
     if (prevInstance === undefined) delete process.env['BABEL_BRIDGE_INSTANCE'];
     else process.env['BABEL_BRIDGE_INSTANCE'] = prevInstance;
     rmSync(tmp, { recursive: true, force: true });
@@ -233,7 +242,7 @@ describe('ADR-010 bridge gateway', () => {
 
   it('cancels an in-progress turn using existing ChatEngine.cancel', async () => {
     let cancelled = false;
-    const local = new BridgeServer({
+    const local = new BridgeServerClass({
       port: 14547,
       authToken: TOKEN,
       allowedWorkspaceRoot: tmp,

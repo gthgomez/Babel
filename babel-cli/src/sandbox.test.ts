@@ -955,9 +955,11 @@ test('shellExecAsync correlates process witness observations with toolCallId', a
   try {
     const kinds: string[] = [];
     const ids: Array<string | undefined> = [];
+    const dispatchedExecutables: string[] = [];
     witness.subscribe((observation) => {
       kinds.push(observation.kind);
       ids.push(observation.correlation.toolCallId);
+      if (observation.kind === 'process_requested') dispatchedExecutables.push(observation.payload.executable);
     }, { id: 'sandbox-toolcall' });
     const executor = new SafeExecutor(fixture.projectRoot, null, 'act', witness);
     const result = await executor.shellExecAsync(
@@ -972,6 +974,8 @@ test('shellExecAsync correlates process witness observations with toolCallId', a
     await witness.bus.flush();
     assert.ok(kinds.includes('process_requested'));
     assert.ok(kinds.includes('process_exited'));
+    assert.notEqual(dispatchedExecutables[0], 'echo');
+    assert.match(dispatchedExecutables[0] ?? '', /(?:^|[\\/])echo(?:\.exe)?$/i);
     assert.ok(ids.includes('tool-shell-1'));
   } finally {
     await witness.close();

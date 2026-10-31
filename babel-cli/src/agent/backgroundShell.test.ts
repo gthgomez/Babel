@@ -15,6 +15,7 @@ import {
 } from './backgroundShell.js';
 import { getSafeEnv } from '../utils/safeEnv.js';
 import { ChatEngine } from './chatEngine.js';
+import type { ProcessWitness } from '../diagnostics/bdns/processWitness.js';
 
 function isProcessAlive(pid: number): boolean {
   try {
@@ -68,6 +69,29 @@ describe('backgroundShell', () => {
     assert.equal(result.exit_code, 0, result.stderr);
     assert.match(result.stdout, /hello-bg/);
     assert.equal(result.status, 'completed');
+  });
+
+  it('pins a trusted bare command to the resolved executable path', async () => {
+    let witnessedExecutable = '';
+    const processWitness = {
+      requested: (input: { executable: string }) => {
+        witnessedExecutable = input.executable;
+        return 'test-execution';
+      },
+      started: () => {},
+      failedToStart: () => {},
+      exited: () => {},
+    } as unknown as ProcessWitness;
+    const job = startBackgroundShell({
+      command: 'node -e "process.stdout.write(\'pinned\')"',
+      cwd: process.cwd(),
+      processWitness,
+    });
+    assert.notEqual(witnessedExecutable, 'node');
+    assert.ok(witnessedExecutable.startsWith('/'), witnessedExecutable);
+    const result = await awaitBackgroundShell(job.id, 15_000);
+    assert.equal(result.exit_code, 0, result.stderr);
+    assert.equal(result.stdout, 'pinned');
   });
 
   it('passes quoted arguments as one argv item', async () => {

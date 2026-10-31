@@ -21,6 +21,7 @@ import { CAPABILITY_KINDS, type CapabilityId } from './capabilities.js';
 import { parseCommandArgv } from '../utils/commandArgv.js';
 import { literalSearchFileOperands } from './literalSearch.js';
 import { isCredentialTargetPath } from './protectedPath.js';
+import { resolveAndClassifyCommand } from './commandResolver.js';
 import {
   classifyExecutionRisk,
   classifyGitExecutionRisk,
@@ -1058,9 +1059,15 @@ const INSPECT_CAPABILITIES = new Set<CapabilityId | 'unknown'>([
   'ci_inspect',
 ]);
 
-function applyIsolationFloor(decoded: DecodedCommand, raw: string, repoRoot?: string): DecodedCommand {
+function applyIsolationFloor(decoded: DecodedCommand, raw: string, repoRoot?: string, cwd?: string): DecodedCommand {
   if (decoded.requiresIsolation === true) return decoded;
-  const classified = classifyExecutionRisk(raw, repoRoot !== undefined ? { repoRoot } : {});
+  const tokens = tokenize(raw);
+  const classified = resolveAndClassifyCommand(tokens[0] ?? '', tokens.slice(1), {
+    cwd: cwd ?? repoRoot ?? process.cwd(),
+    env: process.env,
+    platform: process.platform,
+    ...(repoRoot !== undefined ? { repoRoot } : {}),
+  }).classification;
   if (requiresDockerIsolation(classified.executionRisk)) {
     return { ...decoded, requiresIsolation: true };
   }
@@ -1077,7 +1084,7 @@ function isEffectfulCapability(decoded: DecodedCommand): boolean {
   return true;
 }
 
-export function decodeCommand(command: string, opts: { repoRoot?: string } = {}): DecodedCommand {
+export function decodeCommand(command: string, opts: { repoRoot?: string; cwd?: string } = {}): DecodedCommand {
   const segments = splitChains(command);
   if (segments.length === 0) {
     return cmd('unknown', 'unrecognized', { ambiguous: true });
@@ -1085,34 +1092,51 @@ export function decodeCommand(command: string, opts: { repoRoot?: string } = {})
   let best: DecodedCommand | null = null;
   const effectful = new Set<string>();
   for (const segment of segments) {
-    const outerRisk = classifyExecutionRisk(
-      segment,
-      opts.repoRoot !== undefined ? { repoRoot: opts.repoRoot } : {},
-    );
+    const outerTokens = tokenize(segment);
+    const outerRisk = resolveAndClassifyCommand(outerTokens[0] ?? '', outerTokens.slice(1), {
+      cwd: opts.cwd ?? opts.repoRoot ?? process.cwd(),
+      env: process.env,
+      platform: process.platform,
+      ...(opts.repoRoot !== undefined ? { repoRoot: opts.repoRoot } : {}),
+    }).classification;
     const normalized = unwrapCommandWrappers(segment);
     // Wrapper unwrap can expose an inner chain (`sh -c "a && b"` → `a && b`);
     // re-split so every segment is decoded, not just the first.
     const innerSegments = splitChains(normalized);
     for (const inner of innerSegments) {
       const tokens = tokenize(inner);
+      const resolution = resolveAndClassifyCommand(tokens[0] ?? '', tokens.slice(1), {
+        cwd: opts.cwd ?? opts.repoRoot ?? process.cwd(),
+        env: process.env,
+        platform: process.platform,
+        ...(opts.repoRoot !== undefined ? { repoRoot: opts.repoRoot } : {}),
+      });
+      const actualTokens = resolution.executable
+        ? [resolution.executable.base, ...tokens.slice(1)]
+        : tokens;
       // First-token normalization: strip path prefixes and .exe (Windows
       // forms like `C:\tools\git.exe push` resolve to base `git`).
       const firstBase =
-        tokens.length === 0 ? '' : normalizeExecutionBase(tokens[0]!);
+        actualTokens.length === 0 ? '' : normalizeExecutionBase(actualTokens[0]!);
       const outerBase = normalizeExecutionBase(tokenize(segment)[0] ?? '');
       const decoded =
-        (outerBase === 'env' || outerBase === 'git') && outerRisk.executionRisk === 'forbidden'
+        outerBase === 'env' && outerRisk.reason === 'indirect_executable_dispatch'
+        ? cmd('unknown', 'unrecognized', { ambiguous: true })
+        : firstBase === 'git' && (!resolution.executable || !resolution.executable.trusted)
+        ? cmd('unknown', 'unrecognized', { ambiguous: true })
+        : (outerBase === 'env' || outerBase === 'git') && outerRisk.executionRisk === 'forbidden'
         ? cmd('unknown', 'unrecognized', { ambiguous: true })
         : applyIsolationFloor(
-        tokens.length === 0
+        actualTokens.length === 0
           ? cmd('unknown', 'unrecognized', { ambiguous: true })
           : firstBase === 'git'
-            ? decodeGit(tokens, opts.repoRoot)
+            ? decodeGit(actualTokens, opts.repoRoot)
             : firstBase === 'gh'
-              ? decodeGh(tokens)
-              : decodeNonGit(tokens, inner, segment),
+              ? decodeGh(actualTokens)
+              : decodeNonGit(actualTokens, inner, segment),
         inner,
         opts.repoRoot,
+        opts.cwd,
       );
       if (isEffectfulCapability(decoded)) {
         effectful.add(decoded.capability);

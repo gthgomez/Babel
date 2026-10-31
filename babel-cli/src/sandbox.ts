@@ -79,6 +79,7 @@ import {
   parseCommandArgv,
 } from './utils/commandArgv.js';
 import { classifyExecutionRisk, requiresDockerIsolation } from './authority/commandSpec.js';
+import { classifyResolvedCommand, isResolvedCommandCurrent, resolveCommandExecutable, type ResolvedCommandExecutable } from './authority/commandResolver.js';
 import { sanitizePath } from './cli/constants.js';
 import { isCanonicalMcpSuccessResult } from './tools/mcpTransport.js';
 import { OutputBuffer } from './ui/outputBuffer.js';
@@ -827,17 +828,6 @@ function isDependencyInstallCommand(command: string): boolean {
     /^dotnet\s+add\s+package\b/.test(normalized) ||
     /^(?:apt|apt-get|winget|brew|choco)\s+(?:install|upgrade|add)\b/.test(normalized)
   );
-}
-
-function resolveWindowsCommandShell(): string {
-  const comspec = process.env['ComSpec'] ?? process.env['COMSPEC'];
-  if (comspec && existsSync(comspec)) {
-    return comspec;
-  }
-
-  const systemRoot = process.env['SystemRoot'] ?? process.env['SYSTEMROOT'] ?? 'C:\\Windows';
-  const systemCmd = `${systemRoot}\\System32\\cmd.exe`;
-  return existsSync(systemCmd) ? systemCmd : 'cmd.exe';
 }
 
 export function getAllowedShellCommands(
@@ -1786,16 +1776,30 @@ export class SafeExecutor {
       resolvedCwd = safeCwd;
     }
     const isWin = process.platform === 'win32';
-    const spawnCmd = isWin ? resolveWindowsCommandShell() : normalizedRawCmd;
-    const spawnArgs = isWin
-      ? buildWindowsCommandShellArgs([normalizedRawCmd, ...argv.slice(1)])
-      : argv.slice(1);
 
     const benchmarkDockerImage = process.env['BABEL_BENCHMARK_DOCKER_IMAGE']?.trim();
     const isolation = evaluateGovernedIsolation(
       process.env['BABEL_EXECUTION_PROFILE'],
       benchmarkDockerImage,
     );
+    const useDockerSandbox =
+      isolation.kind === 'docker' &&
+      shouldUseDockerSandbox(process.env['BABEL_EXECUTION_PROFILE']);
+    let env = childEnvForSandbox();
+    const resolvedExecutable = useDockerSandbox
+      ? null
+      : resolveCommandExecutable(rawCmd, { cwd: resolvedCwd, env, platform: process.platform });
+    if (!useDockerSandbox && !resolvedExecutable) {
+      return policyDeniedResult(
+        'executable_resolution_failed',
+        `[sandbox] Command rejected — executable could not be resolved in the child environment: "${rawCmd}"`,
+        toolName,
+        [rawCmd],
+      );
+    }
+    const classified = useDockerSandbox
+      ? classifyExecutionRisk(command, { repoRoot: this.projectRoot })
+      : classifyResolvedCommand(resolvedExecutable!, argv.slice(1), { repoRoot: this.projectRoot });
     // H13: isolation-required profiles fail closed unless Docker is active or
     // the operator explicitly escalates to host (BABEL_ALLOW_HOST_FALLBACK /
     // BABEL_DOCKER_DISABLE). Profiles with dockerSandbox:false stay on host.
@@ -1807,7 +1811,6 @@ export class SafeExecutor {
         [command],
       );
     }
-    const classified = classifyExecutionRisk(command, { repoRoot: this.projectRoot });
     // Project-or-container-only commands stay denied on host profiles even
     // when the governed isolation decision resolved to a host kind — unless
     // the operator explicitly authorized a host fallback for this run. The
@@ -1846,9 +1849,6 @@ export class SafeExecutor {
       );
     }
 
-    const useDockerSandbox =
-      isolation.kind === 'docker' &&
-      shouldUseDockerSandbox(process.env['BABEL_EXECUTION_PROFILE']);
     // Legacy one-time warning path (host_escalated already logged above).
     if (
       isolation.kind === 'host_escalated' &&
@@ -1893,14 +1893,45 @@ export class SafeExecutor {
       }
     }
 
-    let env = childEnvForSandbox();
     if (classified.effectFamily === 'git') {
       env = hardenGitHostEnvironment(env);
     }
 
+    let hostExecutable = resolvedExecutable?.path ?? normalizedRawCmd;
+    let hostArgs = argv.slice(1);
+    let commandShell: ResolvedCommandExecutable | undefined;
+    if (isWin && !useDockerSandbox) {
+      const systemRoot = env['SystemRoot'] ?? env['SYSTEMROOT'] ?? 'C:\\Windows';
+      const resolvedShell = resolveCommandExecutable(`${systemRoot}\\System32\\cmd.exe`, {
+        cwd: resolvedCwd,
+        env,
+        platform: process.platform,
+        trustedRoots: [`${systemRoot}\\System32`],
+      });
+      if (!resolvedShell?.trusted) {
+        return policyDeniedResult(
+          'executable_resolution_failed',
+          '[sandbox] Command rejected — trusted Windows command shell could not be resolved.',
+          toolName,
+          ['cmd.exe'],
+        );
+      }
+      commandShell = resolvedShell;
+      hostExecutable = commandShell.path;
+      hostArgs = buildWindowsCommandShellArgs([resolvedExecutable!.path, ...argv.slice(1)]);
+    }
+
     return useDockerSandbox
       ? prepareOwnedContainerInvocation({ dockerImage: benchmarkDockerImage!, projectRoot: this.projectRoot, cwd: safeCwd, command }, env)
-      : { executable: spawnCmd, args: spawnArgs, cwd: resolvedCwd, env };
+      : {
+          executable: hostExecutable,
+          args: hostArgs,
+          cwd: resolvedCwd,
+          env,
+          validateExecutable: () =>
+            isResolvedCommandCurrent(resolvedExecutable!) &&
+            (commandShell === undefined || isResolvedCommandCurrent(commandShell)),
+        };
   }
 
   /**
@@ -1915,6 +1946,9 @@ export class SafeExecutor {
     let transientRetryCount = 0;
     let result: SpawnSyncReturns<string>;
     while (true) {
+      if (prepared.validateExecutable && !prepared.validateExecutable()) {
+        return policyDeniedResult('executable_identity_changed', '[sandbox] Command rejected — executable identity changed before spawn.', toolName, [prepared.executable]);
+      }
       result = spawnSync(prepared.executable, prepared.args, {
         cwd: prepared.cwd,
         timeout: timeoutMs,
@@ -1994,6 +2028,9 @@ export class SafeExecutor {
     let result: AsyncSpawnResult;
     const sessionId = processContext?.sessionId ?? process.env['BABEL_SESSION_ID'];
     while (true) {
+      if (prepared.validateExecutable && !prepared.validateExecutable()) {
+        return policyDeniedResult('executable_identity_changed', '[sandbox] Command rejected — executable identity changed before spawn.', toolName, [prepared.executable]);
+      }
       result = await spawnCommandAsync(prepared.executable, prepared.args, {
         cwd: prepared.cwd,
         timeoutMs,
