@@ -226,6 +226,19 @@ describe('BridgeServer', () => {
     assert.ok(typeof body['error'] === 'string');
   });
 
+  it('contains a malformed pairing cookie and continues serving healthy requests', async () => {
+    const malformed = await httpRequest(`http://127.0.0.1:${TEST_PORT}/auth/session`, {
+      headers: { Cookie: 'babel_remote_session=%E0%A4%A' },
+    });
+    assert.equal(malformed.statusCode, 200);
+    assert.deepEqual(JSON.parse(malformed.body), { ok: false, auth: 'none' });
+
+    const healthy = await httpRequest(`http://127.0.0.1:${TEST_PORT}/sessions`, {
+      headers: { Authorization: `Bearer ${TEST_TOKEN}` },
+    });
+    assert.equal(healthy.statusCode, 200);
+  });
+
   it('accepts requests with valid Bearer token', async () => {
     const res = await httpRequest(`http://127.0.0.1:${TEST_PORT}/sessions`, {
       headers: { Authorization: `Bearer ${TEST_TOKEN}` },
@@ -256,6 +269,52 @@ describe('BridgeServer', () => {
     assert.ok(body['sessionId'] !== '');
     assert.ok(typeof body['wsUrl'] === 'string');
     assert.equal(body['status'], 'idle');
+  });
+
+  it('rejects an oversized session request body without creating a session', async () => {
+    const res = await httpRequest(`http://127.0.0.1:${TEST_PORT}/sessions`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${TEST_TOKEN}` },
+      body: JSON.stringify({ projectRoot: 'x'.repeat(17 * 1024) }),
+    });
+
+    assert.equal(res.statusCode, 413);
+    assert.match(res.body, /too large/i);
+  });
+
+  it('contains rejected async RPC and ticket handlers with generic errors', async () => {
+    const rejectingServer = new BridgeServer({
+      port: 0,
+      authToken: TEST_TOKEN,
+      allowedOrigins: ['http://localhost:*'],
+      httpPrincipalTestHooks: {
+        afterInitialPrincipalAuthenticated: () => { throw new Error('synthetic hook rejection'); },
+      },
+      devicePairing: {
+        requestPairing: () => { throw new Error('synthetic pairing route rejection'); },
+      } as never,
+    });
+    await rejectingServer.start(0);
+    const port = rejectingServer.port;
+    try {
+      for (const path of ['/rpc', '/ws/ticket', '/pair/request']) {
+        const res = await httpRequest(`http://127.0.0.1:${port}${path}`, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${TEST_TOKEN}`,
+            Origin: 'http://localhost:14546',
+          },
+          body: path === '/pair/request'
+            ? JSON.stringify({ challenge_id: 'fixture', device_label: 'test device' })
+            : '{}',
+        });
+        assert.equal(res.statusCode, 500, `unexpected status for ${path}: ${res.body}`);
+        assert.equal(res.body, '{"error":"Request could not be completed"}');
+        assert.doesNotMatch(res.body, /synthetic|token/i);
+      }
+    } finally {
+      await rejectingServer.stop();
+    }
   });
 
   it('lists sessions via GET /sessions', async () => {

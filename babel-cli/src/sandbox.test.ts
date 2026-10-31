@@ -143,6 +143,32 @@ test('create-only file writes refuse existing empty files and preserve contents'
   }
 });
 
+test('sandbox file reads reject oversized sources before loading them', () => {
+  const fixture = makeFixture();
+  try {
+    writeFileSync(join(fixture.projectRoot, 'oversized.txt'), 'x'.repeat(1024 * 1024 + 1));
+    const result = new SafeExecutor(fixture.projectRoot).fileRead('oversized.txt');
+    assert.equal(result.exit_code, 1);
+    assert.match(result.stderr, /too large.*use read_range/i);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('sandbox shadow reads reject oversized sources before loading them', () => {
+  const fixture = makeFixture();
+  const shadowRoot = mkdtempSync(join(tmpdir(), 'babel-sandbox-shadow-size-'));
+  try {
+    writeFileSync(join(shadowRoot, 'oversized-shadow.txt'), 'x'.repeat(1024 * 1024 + 1));
+    const result = new SafeExecutor(fixture.projectRoot, shadowRoot).fileRead('oversized-shadow.txt');
+    assert.equal(result.exit_code, 1);
+    assert.match(result.stderr, /too large.*use read_range/i);
+  } finally {
+    rmSync(shadowRoot, { recursive: true, force: true });
+    fixture.cleanup();
+  }
+});
+
 const traversalCases = [
   '../outside.txt',
   '..\\outside.txt',
