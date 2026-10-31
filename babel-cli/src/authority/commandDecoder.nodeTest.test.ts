@@ -67,6 +67,35 @@ test('transparent env git status stays inspect-only; env mutation and shadowed G
   }
 });
 
+test('project lookalikes retain semantic risk classification without receiving gated authority', () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-command-lookalikes-'));
+  const pathKey = Object.keys(process.env).find((key) => key.toLowerCase() === 'path') ?? 'PATH';
+  const previousPath = process.env[pathKey];
+  const extension = process.platform === 'win32' ? '.cmd' : '';
+  try {
+    for (const name of ['git', 'vercel']) {
+      const executable = join(root, `${name}${extension}`);
+      writeFileSync(executable, process.platform === 'win32' ? '@echo off\r\n' : '#!/bin/sh\nexit 0\n');
+      if (process.platform !== 'win32') chmodSync(executable, 0o755);
+    }
+    process.env[pathKey] = `${root}${process.platform === 'win32' ? ';' : ':'}${previousPath ?? ''}`;
+
+    const gitPush = decodeCommand('git push origin feature', { repoRoot: root, cwd: root });
+    assert.equal(gitPush.capability, 'unknown');
+    assert.equal(gitPush.semantic, 'git_push');
+    assert.equal(gitPush.requiresIsolation, true);
+
+    const deploy = decodeCommand('vercel deploy --prod', { repoRoot: root, cwd: root });
+    assert.equal(deploy.capability, 'unknown');
+    assert.equal(deploy.semantic, 'infrastructure_mutation');
+    assert.equal(deploy.requiresIsolation, true);
+  } finally {
+    if (previousPath === undefined) delete process.env[pathKey];
+    else process.env[pathKey] = previousPath;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('Python standard-library test modules use the isolated run_tests capability', () => {
   for (const command of [
     'python -m doctest solution.py',

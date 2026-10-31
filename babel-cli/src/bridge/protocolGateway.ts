@@ -139,7 +139,7 @@ export class ProtocolGateway {
   }
 
   private savedThreadIsAllowed(threadId: string, resumeRoot?: string): boolean {
-    const descriptor = loadSessionDescriptor(threadId);
+    const descriptor = loadSessionDescriptor(threadId) ?? this.host.descriptors.get(threadId) ?? null;
     if (!descriptor?.projectRoot) return false;
     try {
       assertAllowedProjectRoot(descriptor.projectRoot, this.registeredWorkspaceRoot);
@@ -628,11 +628,12 @@ export class ProtocolGateway {
     sessionId: string;
     threadId: string;
   }): { ok: true } | { ok: false; error: ThreadOwnershipError } {
-    if (!this.savedThreadIsAllowed(input.threadId)) return { ok: false, error: 'unowned_thread' };
     const threadExists =
       this.host.descriptors.has(input.threadId) ||
       threadStoreExists(input.threadId) ||
       this.threadOwnership.ownerOf(input.threadId) !== undefined;
+    if (!threadExists) return { ok: false, error: 'unknown_thread' };
+    if (!this.savedThreadIsAllowed(input.threadId)) return { ok: false, error: 'unowned_thread' };
     return this.threadOwnership.authorizeMint({
       threadId: input.threadId,
       sessionId: input.sessionId,

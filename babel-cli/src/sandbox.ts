@@ -80,13 +80,14 @@ import {
   parseCommandArgv,
 } from './utils/commandArgv.js';
 import { classifyExecutionRisk, requiresDockerIsolation } from './authority/commandSpec.js';
-import { classifyResolvedCommand, isResolvedCommandCurrent, resolveCommandExecutable, type ResolvedCommandExecutable } from './authority/commandResolver.js';
+import { classifyResolvedCommand, commandControlledRoots, hostWindowsSystem32Directory, isCanonicalWindowsSystemShell, isResolvedCommandCurrent, resolveCommandExecutable, type ResolvedCommandExecutable } from './authority/commandResolver.js';
 import { sanitizePath } from './cli/constants.js';
 import { isCanonicalMcpSuccessResult } from './tools/mcpTransport.js';
 import { OutputBuffer } from './ui/outputBuffer.js';
 import type { ProcessWitness, ProcessWitnessInput } from './diagnostics/bdns/processWitness.js';
 import { MAX_SHELL_OUTPUT_BYTES, normalizeShellOutput } from './shellOutputNormalize.js';
 import {
+  cancelledBeforeSpawnShellResult,
   isChildRuntimeSupervisorError,
   isSpawnSyncRuntimeSupervisorError,
   normalizeSupervisorTerminatedShellOutput,
@@ -1833,14 +1834,12 @@ export class SafeExecutor {
       isolation.kind === 'docker' &&
       shouldUseDockerSandbox(process.env['BABEL_EXECUTION_PROFILE']);
     let env = childEnvForSandbox();
-    const resolvedExecutable = useDockerSandbox
-      ? null
-      : resolveCommandExecutable(rawCmd, {
-        cwd: resolvedCwd,
-        env,
-        platform: process.platform,
-        controlledRoots: [this.projectRoot, ...(process.env['BABEL_SHADOW_ROOT'] ? [process.env['BABEL_SHADOW_ROOT']] : [])],
-      });
+    const resolvedExecutable = useDockerSandbox ? null : resolveCommandExecutable(rawCmd, {
+      cwd: resolvedCwd,
+      env,
+      platform: process.platform,
+      controlledRoots: commandControlledRoots(this.projectRoot, process.env['BABEL_SHADOW_ROOT']),
+    });
     if (!useDockerSandbox && !resolvedExecutable) {
       return policyDeniedResult(
         'executable_resolution_failed',
@@ -1953,14 +1952,15 @@ export class SafeExecutor {
     let hostArgs = argv.slice(1);
     let commandShell: ResolvedCommandExecutable | undefined;
     if (isWin && !useDockerSandbox) {
-      const systemRoot = env['SystemRoot'] ?? env['SYSTEMROOT'] ?? 'C:\\Windows';
-      const resolvedShell = resolveCommandExecutable(`${systemRoot}\\System32\\cmd.exe`, {
+      const hostSystem32 = hostWindowsSystem32Directory();
+      const expectedShell = hostSystem32 ? resolve(hostSystem32, 'cmd.exe') : undefined;
+      const resolvedShell = expectedShell ? resolveCommandExecutable(expectedShell, {
         cwd: resolvedCwd,
         env,
         platform: process.platform,
-        trustedRoots: [`${systemRoot}\\System32`],
-      });
-      if (!resolvedShell?.trusted) {
+        controlledRoots: commandControlledRoots(this.projectRoot, env['BABEL_SHADOW_ROOT']),
+      }) : null;
+      if (!resolvedShell?.trusted || !hostSystem32 || !isCanonicalWindowsSystemShell(resolvedShell.path, hostSystem32)) {
         return policyDeniedResult(
           'executable_resolution_failed',
           '[sandbox] Command rejected — trusted Windows command shell could not be resolved.',
@@ -2073,18 +2073,8 @@ export class SafeExecutor {
     signal?: AbortSignal,
     processContext?: Pick<ProcessWitnessInput, 'sessionId' | 'turnId' | 'toolCallId'>,
   ): Promise<ToolResult> {
-    // Settle an already-cancelled request before executable resolution. In
-    // particular, Windows PATH may not resolve shell built-ins such as `echo`,
-    // but a request cancelled before launch must not depend on that lookup.
-    if (signal?.aborted) {
-      return {
-        exit_code: 1,
-        stdout: '',
-        stderr: '[sandbox] Command aborted before execution.',
-        process_started: false,
-        process_termination: 'cancelled',
-      };
-    }
+    // Settle cancellation before lookup; Windows shell built-ins may be unresolvable.
+    if (signal?.aborted) return cancelledBeforeSpawnShellResult();
     const prepared = this.prepareShellExecution(command, cwd, toolName);
     if ('exit_code' in prepared) return prepared;
 

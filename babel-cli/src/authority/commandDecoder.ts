@@ -1124,7 +1124,7 @@ export function decodeCommand(command: string, opts: { repoRoot?: string; cwd?: 
         actualTokens.length === 0 ? '' : normalizeExecutionBase(actualTokens[0]!);
       const invokedBase = tokens.length === 0 ? '' : normalizeExecutionBase(tokens[0]!);
       const outerBase = normalizeExecutionBase(tokenize(segment)[0] ?? '');
-      const decoded =
+      const decodedCandidate =
         outerBase === 'env' && outerRisk.reason === 'indirect_executable_dispatch'
         ? outerResolution.executable?.trusted === true &&
           outerTokens.length >= 3 &&
@@ -1136,7 +1136,7 @@ export function decodeCommand(command: string, opts: { repoRoot?: string; cwd?: 
           : cmd('unknown', 'unrecognized', { ambiguous: true })
         : invokedBase === 'git' &&
           (firstBase !== 'git' || !resolution.executable || !resolution.executable.trusted)
-        ? cmd('unknown', 'unrecognized', { ambiguous: true })
+        ? cmd('unknown', decodeGit(tokens, opts.repoRoot).semantic, { ambiguous: true, requiresIsolation: true })
         : invokedBase === 'gh' &&
           (firstBase !== 'gh' || !resolution.executable || !resolution.executable.trusted)
         ? cmd('unknown', 'unrecognized', { ambiguous: true })
@@ -1154,6 +1154,17 @@ export function decodeCommand(command: string, opts: { repoRoot?: string; cwd?: 
         opts.repoRoot,
         opts.cwd,
       );
+      const gatedWithoutTrustedIdentity = decodedCandidate.capability !== 'unknown'
+        && CAPABILITY_KINDS[decodedCandidate.capability] === 'gated'
+        && (!resolution.executable?.trusted || resolution.executable.base !== invokedBase);
+      const decoded = gatedWithoutTrustedIdentity
+        ? cmd('unknown', decodedCandidate.semantic, {
+          ambiguous: true,
+          requiresIsolation: true,
+          force: decodedCandidate.force,
+          delete: decodedCandidate.delete,
+        })
+        : decodedCandidate;
       if (isEffectfulCapability(decoded)) {
         effectful.add(decoded.capability);
       }

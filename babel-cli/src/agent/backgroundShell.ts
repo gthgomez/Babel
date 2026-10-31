@@ -20,7 +20,7 @@ import { terminateChildTree } from '../sandbox.js';
 import type { ShellExecutionBackend } from '../sandbox.js';
 import { buildWindowsCommandShellArgs, parseCommandArgv } from '../utils/commandArgv.js';
 import { childEnvForSandbox } from '../authority/unprivilegedChildEnv.js';
-import { classifyResolvedCommand, isResolvedCommandCurrent, resolveCommandExecutable, type ResolvedCommandExecutable } from '../authority/commandResolver.js';
+import { classifyResolvedCommand, commandControlledRoots, hostWindowsSystem32Directory, isCanonicalWindowsSystemShell, isResolvedCommandCurrent, resolveCommandExecutable, type ResolvedCommandExecutable } from '../authority/commandResolver.js';
 import { getDefaultProcessWitness, type ProcessWitness } from '../diagnostics/bdns/processWitness.js';
 
 /** Cap retained on the job record (same ballpark as SafeExecutor maxBuffer). */
@@ -166,10 +166,7 @@ export function startBackgroundShell(input: StartBackgroundShellInput): Backgrou
     cwd,
     env: childEnvironment,
     platform: process.platform,
-    controlledRoots: [
-      ...(input.projectRoot ? [input.projectRoot] : []),
-      ...(process.env['BABEL_SHADOW_ROOT'] ? [process.env['BABEL_SHADOW_ROOT']!] : []),
-    ],
+    controlledRoots: commandControlledRoots(input.projectRoot, process.env['BABEL_SHADOW_ROOT']),
   });
   if (!resolvedExecutable) {
     throw new Error(`background shell denied: executable identity is unresolved (${rawCmd})`);
@@ -183,14 +180,17 @@ export function startBackgroundShell(input: StartBackgroundShellInput): Backgrou
   let spawnArgs = argv.slice(1);
   let commandShell: ResolvedCommandExecutable | undefined;
   if (isWin) {
-    const systemRoot = childEnvironment['SystemRoot'] ?? childEnvironment['SYSTEMROOT'] ?? 'C:\\Windows';
-    const resolvedShell = resolveCommandExecutable(`${systemRoot}\\System32\\cmd.exe`, {
+    const hostSystem32 = hostWindowsSystem32Directory();
+    const expectedShell = hostSystem32 ? pathResolve(hostSystem32, 'cmd.exe') : undefined;
+    const resolvedShell = expectedShell ? resolveCommandExecutable(expectedShell, {
       cwd,
       env: childEnvironment,
       platform: process.platform,
-      trustedRoots: [`${systemRoot}\\System32`],
-    });
-    if (!resolvedShell?.trusted) throw new Error('background shell denied: trusted Windows command shell could not be resolved');
+      controlledRoots: commandControlledRoots(input.projectRoot, process.env['BABEL_SHADOW_ROOT']),
+    }) : null;
+    if (!resolvedShell?.trusted || !hostSystem32 || !isCanonicalWindowsSystemShell(resolvedShell.path, hostSystem32)) {
+      throw new Error('background shell denied: trusted Windows command shell could not be resolved');
+    }
     commandShell = resolvedShell;
     spawnCmd = commandShell.path;
     spawnArgs = buildWindowsCommandShellArgs([resolvedExecutable.path, ...argv.slice(1)]);

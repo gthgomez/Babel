@@ -21,7 +21,7 @@ import { readRuntimeMode } from '../config/runtimeMode.js';
 import { isToolAllowedForExecutionProfile } from '../config/executionProfiles.js';
 import { evaluateGovernedIsolation, shouldUseDockerSandbox } from '../config/benchmarkContainer.js';
 import { requiresDockerIsolation } from '../authority/commandSpec.js';
-import { resolveAndClassifyCommand } from '../authority/commandResolver.js';
+import { commandControlledRoots, resolveAndClassifyCommand } from '../authority/commandResolver.js';
 import { childEnvForSandbox } from '../authority/unprivilegedChildEnv.js';
 import { parseCommandArgv } from '../utils/commandArgv.js';
 import {
@@ -357,7 +357,7 @@ export function executeBackgroundRunCommandAction(
       env: childEnvForSandbox(),
       platform: process.platform,
       repoRoot: ctx.projectRoot,
-      controlledRoots: [ctx.projectRoot, ...(process.env['BABEL_SHADOW_ROOT'] ? [process.env['BABEL_SHADOW_ROOT']] : [])],
+      controlledRoots: commandControlledRoots(ctx.projectRoot, process.env['BABEL_SHADOW_ROOT']),
     });
   } catch (err) {
     return denyBg(err instanceof Error ? err.message : String(err), 'command_policy_denied');

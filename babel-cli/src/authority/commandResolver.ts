@@ -1,6 +1,6 @@
 /** Resolve and pin the executable identity used for host process dispatch. */
 import { accessSync, constants, realpathSync, statSync } from 'node:fs';
-import { basename, dirname, extname, isAbsolute, relative, resolve, sep, win32 } from 'node:path';
+import { join, posix, resolve, win32 } from 'node:path';
 import { classifyExecutionRisk, COMMAND_SPECS, normalizeExecutionBase, type ClassifiedInvocation } from './commandSpec.js';
 
 export interface ResolvedCommandExecutable {
@@ -19,6 +19,8 @@ export interface CommandResolverOptions {
   hostPath?: string;
   /** Host-configured Windows extension search order, paired with hostPath. */
   hostPathExt?: string;
+  /** Test seam for canonical host System32 identity; production uses startup-captured host state. */
+  hostWindowsSystem32?: string;
   /** Test seam for the expected host owner when running a privileged fixture. */
   hostPathOwnerUid?: number;
   /** Repository/shadow/task-controlled roots that can contain mutable lookalikes. */
@@ -42,8 +44,17 @@ export interface ResolvedCommandPolicy {
   classification: ClassifiedInvocation;
 }
 
+/** Build repository/shadow roots that must never be treated as external tools. */
+export function commandControlledRoots(projectRoot?: string, shadowRoot?: string): string[] {
+  return [projectRoot, shadowRoot].filter((root): root is string => Boolean(root));
+}
+
 function pathApi(platform: NodeJS.Platform) {
-  return platform === 'win32' ? win32 : { basename, resolve, dirname, extname, isAbsolute, relative, sep };
+  return platform === 'win32' ? win32 : posix;
+}
+
+function canonicalPathKey(path: string, platform: NodeJS.Platform): string {
+  return platform === 'win32' ? win32.resolve(path).toLowerCase() : path;
 }
 
 function envValue(env: NodeJS.ProcessEnv, key: string, platform: NodeJS.Platform): string | undefined {
@@ -61,16 +72,40 @@ function envValue(env: NodeJS.ProcessEnv, key: string, platform: NodeJS.Platform
 // test fixture environment can modify process.env.
 const HOST_CONFIGURED_PATH = envValue(process.env, 'PATH', process.platform);
 const HOST_CONFIGURED_PATHEXT = envValue(process.env, 'PATHEXT', process.platform);
+const HOST_SYSTEM_ROOT = process.platform === 'win32'
+  ? envValue(process.env, 'SystemRoot', 'win32') ?? envValue(process.env, 'WINDIR', 'win32')
+  : undefined;
+const HOST_PROGRAM_FILES = process.platform === 'win32' ? envValue(process.env, 'ProgramFiles', 'win32') : undefined;
+const HOST_WINDOWS_SYSTEM32 = HOST_SYSTEM_ROOT ? canonicalPath(join(HOST_SYSTEM_ROOT, 'System32')) : undefined;
 
+/** Exact canonical cmd.exe identity under the independently captured host System32 directory. */
+export function isCanonicalWindowsSystemShell(path: string, system32: string): boolean {
+  const normalizedPath = win32.resolve(path).toLowerCase();
+  const normalizedShell = win32.resolve(system32, 'cmd.exe').toLowerCase();
+  return normalizedPath === normalizedShell;
+}
+
+/** Captured host System32 directory used by Windows shell dispatch. */
+export function hostWindowsSystem32Directory(): string | undefined {
+  return HOST_WINDOWS_SYSTEM32;
+}
 function defaultTrustedRoots(platform: NodeJS.Platform, env: NodeJS.ProcessEnv): string[] {
   if (platform === 'win32') {
-    const systemRoot = envValue(env, 'SystemRoot', platform) ?? 'C:\\Windows';
+    const useStartupHost = platform === process.platform && HOST_WINDOWS_SYSTEM32 !== undefined;
+    const systemRoot = useStartupHost
+      ? HOST_SYSTEM_ROOT!
+      : platform === process.platform
+        ? undefined
+        : envValue(env, 'SystemRoot', platform) ?? 'C:\\Windows';
+    const programFiles = platform === process.platform
+      ? HOST_PROGRAM_FILES ?? 'C:\\Program Files'
+      : envValue(env, 'ProgramFiles', platform) ?? 'C:\\Program Files';
     const roots = [
-      `${systemRoot}\\System32`,
-      `${systemRoot}\\SysWOW64`,
-      `${envValue(env, 'ProgramFiles', platform) ?? 'C:\\Program Files'}\\Git\\cmd`,
-      `${envValue(env, 'ProgramFiles', platform) ?? 'C:\\Program Files'}\\Git\\bin`,
-    ];
+      useStartupHost ? HOST_WINDOWS_SYSTEM32 : systemRoot ? `${systemRoot}\\System32` : undefined,
+      systemRoot ? `${systemRoot}\\SysWOW64` : undefined,
+      `${programFiles}\\Git\\cmd`,
+      `${programFiles}\\Git\\bin`,
+    ].filter((root): root is string => root !== undefined);
     return roots.map((root) => platform === process.platform ? canonicalPath(root) : root);
   }
   const roots = [
@@ -98,7 +133,7 @@ function isInsideRoot(root: string, target: string, platform: NodeJS.Platform): 
   const api = pathApi(platform);
   const rel = api.relative(root, target);
   const normalized = platform === 'win32' ? rel.toLowerCase() : rel;
-  const parent = platform === 'win32' ? '..\\' : `..${sep}`;
+  const parent = platform === 'win32' ? '..\\' : `..${posix.sep}`;
   return normalized === '' || (normalized !== '..' && !normalized.startsWith(parent) && !api.isAbsolute(rel));
 }
 
@@ -298,7 +333,7 @@ export function resolveCommandExecutable(
     try { return (options.realpath ?? canonicalPath)(root); } catch { return api.resolve(options.cwd, root); }
   });
   const canonicalHostCandidates = new Set(hostPathCandidates.flatMap((candidate) => {
-    try { return [(options.realpath ?? realpathSync)(candidate)]; } catch { return []; }
+    try { return [canonicalPathKey((options.realpath ?? realpathSync)(candidate), platform)]; } catch { return []; }
   }));
 
   for (const candidate of candidates) {
@@ -306,7 +341,7 @@ export function resolveCommandExecutable(
     let canonical: string;
     try { canonical = realpath(candidate); } catch { continue; }
     const trustedRoot = canonicalRoots.find((root) => isInsideRoot(root, canonical, platform));
-    const isHostPathIdentity = canonicalHostCandidates.has(canonical);
+    const isHostPathIdentity = canonicalHostCandidates.has(canonicalPathKey(canonical, platform));
     const isControlled = canonicalControlledRoots.some((root) => isInsideRoot(root, canonical, platform));
     const sharedWritablePath = isPathChainWritableByOtherPrincipal(
       canonical,
@@ -339,19 +374,22 @@ export function resolveCommandExecutable(
     );
     const rootOwnedSystemPath = platform !== 'win32' && (options.effectiveUid ?? process.geteuid?.()) === 0 &&
       trustedRoot !== undefined && isPathChainOwnedByUid(canonical, platform, 0, ownerUid) && !sharedWritablePath;
-    const trustedSystemIdentity = (protectedPath || rootOwnedSystemPath) && (
+    const trustedSystemIdentity = !isControlled && (protectedPath || rootOwnedSystemPath) && (
       trustedRoot !== undefined ||
       (options.trustedRoots === undefined && defaultTrustedExecutables(platform).includes(canonical))
     );
+    const hostSystem32 = options.hostWindowsSystem32 ?? (platform === process.platform ? HOST_WINDOWS_SYSTEM32 : undefined);
     const identity = fileIdentity(canonical);
+    const trustedWindowsSystemShell = platform === 'win32' && hostSystem32 !== undefined
+      && isCanonicalWindowsSystemShell(canonical, hostSystem32) && !isControlled && identity !== undefined;
     const knownCommand = COMMAND_SPECS[normalizeExecutionBase(api.basename(canonical))] !== undefined;
     // Host PATH is an operator-selected source of tools, including user-installed
     // toolchains. Pin the canonical file identity; never infer trust from a name
     // alone, and never trust a project/shadow lookalike even if it is on PATH.
-    const trustedHostPathIdentity = platform !== 'win32' && knownCommand && trustedRoot === undefined && isHostPathIdentity &&
-      trustedHostOwnership &&
+    const trustedHostPathIdentity = knownCommand && (platform === 'win32' || trustedRoot === undefined) && isHostPathIdentity &&
+      (platform === 'win32' || trustedHostOwnership) &&
       !isControlled && !sharedWritablePath && identity !== undefined;
-    const trusted = trustedSystemIdentity || trustedHostPathIdentity;
+    const trusted = identity !== undefined && (trustedWindowsSystemShell || trustedSystemIdentity || trustedHostPathIdentity);
     return {
       path: canonical,
       base: normalizeExecutionBase(api.basename(canonical)),
@@ -365,11 +403,12 @@ export function resolveCommandExecutable(
 /** Recheck canonical path and file identity immediately before process creation. */
 export function isResolvedCommandCurrent(
   executable: ResolvedCommandExecutable,
-  options: { realpath?: (path: string) => string; fileIdentity?: (path: string) => string | undefined } = {},
+  options: { realpath?: (path: string) => string; fileIdentity?: (path: string) => string | undefined; platform?: NodeJS.Platform } = {},
 ): boolean {
   try {
     const realpath = options.realpath ?? ((path: string) => realpathSync(path));
-    if (realpath(executable.path) !== executable.path) return false;
+    const platform = options.platform ?? process.platform;
+    if (canonicalPathKey(realpath(executable.path), platform) !== canonicalPathKey(executable.path, platform)) return false;
     if (executable.identity === undefined) return true;
     const fileIdentity = options.fileIdentity ?? ((path: string) => {
       const stats = statSync(path);

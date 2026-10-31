@@ -1,5 +1,22 @@
 import { normalizeShellOutput, type NormalizedShellOutput } from './shellOutputNormalize.js';
 
+/** Shell result for a request cancelled before executable resolution or spawn. */
+export function cancelledBeforeSpawnShellResult(): {
+  exit_code: number;
+  stdout: string;
+  stderr: string;
+  process_started: false;
+  process_termination: 'cancelled';
+} {
+  return {
+    exit_code: 1,
+    stdout: '',
+    stderr: '[sandbox] Command aborted before execution.',
+    process_started: false,
+    process_termination: 'cancelled',
+  };
+}
+
 /** spawnSync child ran but the supervisor ended it (timeout or output cap). */
 export function isSpawnSyncRuntimeSupervisorError(error: Error): boolean {
   const code = (error as NodeJS.ErrnoException).code;

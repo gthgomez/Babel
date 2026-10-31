@@ -3,7 +3,14 @@ import { chmodSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
-import { classifyResolvedCommand, isResolvedCommandCurrent, resolveCommandExecutable } from './commandResolver.js';
+import { classifyResolvedCommand, commandControlledRoots, isCanonicalWindowsSystemShell, isResolvedCommandCurrent, resolveCommandExecutable } from './commandResolver.js';
+
+test('controlled roots include configured repository and shadow paths only', () => {
+  assert.deepEqual(commandControlledRoots('/workspace/repo', '/tmp/shadow'), ['/workspace/repo', '/tmp/shadow']);
+  assert.deepEqual(commandControlledRoots('/workspace/repo'), ['/workspace/repo']);
+  assert.deepEqual(commandControlledRoots(undefined, '/tmp/shadow'), ['/tmp/shadow']);
+  assert.deepEqual(commandControlledRoots(), []);
+});
 
 test('PATH shadow is resolved and classified as project code without executing it', () => {
   const resolution = resolveCommandExecutable('git', {
@@ -339,18 +346,120 @@ test('privileged host PATH trust requires runtime or designated host ownership t
   assert.equal(otherUserInstall?.trusted, false);
 });
 
-test('Windows host PATH resolves user-installed tools but stays untrusted without DACL proof', () => {
+test('Windows captured host PATH can identify known tools without trusting child-only paths', () => {
   const resolution = resolveCommandExecutable('git', {
     platform: 'win32', cwd: 'C:\\repo',
-    env: { Path: 'C:\\Toolchain\\shims', PathExt: '.EXE;.CMD' },
+    env: { Path: 'c:\\toolchain\\shims', PathExt: '.EXE;.CMD' },
     hostPath: 'C:\\Toolchain\\shims',
     controlledRoots: ['C:\\repo'],
     isFile: (path) => path.toLowerCase() === 'c:\\toolchain\\shims\\git.exe',
     realpath: (path) => path,
     fileIdentity: () => 'windows-user-git-v1',
   });
-  assert.equal(resolution?.trusted, false);
-  assert.equal(classifyResolvedCommand(resolution!, ['status']).executionRisk, 'project_code');
+  assert.equal(resolution?.trusted, true);
+  assert.equal(classifyResolvedCommand(resolution!, ['status']).executionRisk, 'intrinsic');
+  assert.equal(isResolvedCommandCurrent(resolution!, {
+    platform: 'win32',
+    realpath: (path) => path.toUpperCase(),
+    fileIdentity: () => 'windows-user-git-v1',
+  }), true, 'Windows canonical path aliases are compared without case sensitivity');
+  const childOnly = resolveCommandExecutable('git', {
+    platform: 'win32', cwd: 'C:\\repo',
+    env: { Path: 'C:\\ProjectTools\\bin', PathExt: '.EXE' },
+    hostPath: 'C:\\Toolchain\\shims', hostPathExt: '.EXE',
+    controlledRoots: ['C:\\repo', 'C:\\ProjectTools'],
+    isFile: (path) => path.toLowerCase() === 'c:\\projecttools\\bin\\git.exe',
+    realpath: (path) => path,
+    fileIdentity: () => 'windows-child-only-git-v1',
+  });
+  assert.equal(childOnly?.trusted, false);
+
+  const node = resolveCommandExecutable('node', {
+    platform: 'win32', cwd: 'C:\\repo',
+    env: { Path: 'C:\\Toolchain\\node', PathExt: '.EXE' },
+    hostPath: 'C:\\Toolchain\\node', hostPathExt: '.EXE',
+    controlledRoots: ['C:\\repo'],
+    isFile: (path) => path.toLowerCase() === 'c:\\toolchain\\node\\node.exe',
+    realpath: (path) => path,
+    fileIdentity: () => 'windows-user-node-v1',
+  });
+  assert.equal(node?.trusted, true, 'startup-captured host PATH may identify the selected runtime');
+  assert.equal(classifyResolvedCommand(node!, ['-e', 'process.exit(0)']).executionRisk, 'project_code',
+    'runtime identity does not make Node scripts intrinsic');
+
+  const programFilesGit = resolveCommandExecutable('git', {
+    platform: 'win32', cwd: 'C:\\repo',
+    env: { Path: 'C:\\Program Files\\Git\\cmd' },
+    hostPath: 'C:\\Program Files\\Git\\cmd',
+    trustedRoots: ['C:\\Program Files\\Git\\cmd'],
+    controlledRoots: ['C:\\repo'],
+    isFile: (path) => path.toLowerCase() === 'c:\\program files\\git\\cmd\\git.exe',
+    realpath: (path) => path,
+    fileIdentity: () => 'program-files-git-v1',
+    isWritableByCurrentUser: () => true,
+  });
+  assert.equal(programFilesGit?.trusted, true,
+    'the exact known tool selected by captured host PATH remains resolvable despite Windows W_OK reporting writable');
+  assert.equal(classifyResolvedCommand(programFilesGit!, ['status']).executionRisk, 'intrinsic');
+});
+
+test('canonical System32 cmd identity stays trusted when W_OK reports writable', () => {
+  assert.equal(isCanonicalWindowsSystemShell('c:\\windows\\system32\\CMD.EXE', 'C:\\Windows\\System32'), true);
+  assert.equal(isCanonicalWindowsSystemShell('C:\\repo\\cmd.exe', 'C:\\Windows\\System32'), false);
+  const resolution = resolveCommandExecutable('C:\\Windows\\System32\\cmd.exe', {
+    platform: 'win32', cwd: 'C:\\repo', env: { SystemRoot: 'C:\\Windows', Path: 'C:\\Windows\\System32' },
+    trustedRoots: ['C:\\Windows\\System32'], hostWindowsSystem32: 'C:\\Windows\\System32',
+    isFile: (path) => path.toLowerCase() === 'c:\\windows\\system32\\cmd.exe',
+    realpath: (path) => path,
+    fileIdentity: () => 'system-cmd-v1',
+    isWritableByCurrentUser: () => true,
+  });
+  assert.equal(resolution?.trusted, true);
+  assert.equal(isResolvedCommandCurrent(resolution!, { realpath: (path) => path, fileIdentity: () => 'system-cmd-v2' }), false);
+  const withoutIdentity = resolveCommandExecutable('C:\\Windows\\System32\\cmd.exe', {
+    platform: 'win32', cwd: 'C:\\repo', env: { SystemRoot: 'C:\\Windows' },
+    trustedRoots: ['C:\\Windows\\System32'], hostWindowsSystem32: 'C:\\Windows\\System32',
+    isFile: (path) => path.toLowerCase() === 'c:\\windows\\system32\\cmd.exe',
+    realpath: (path) => path,
+    fileIdentity: () => undefined,
+    isWritableByCurrentUser: () => true,
+  });
+  assert.equal(withoutIdentity?.trusted, false, 'System32 shell trust requires a pinned file identity');
+
+  const controlledSystemRoot = resolveCommandExecutable('C:\\Task\\System32\\cmd.exe', {
+    platform: 'win32', cwd: 'C:\\Task', env: { SystemRoot: 'C:\\Task' },
+    trustedRoots: ['C:\\Task\\System32'], hostWindowsSystem32: 'C:\\Task\\System32',
+    controlledRoots: ['C:\\Task'],
+    isFile: (path) => path.toLowerCase() === 'c:\\task\\system32\\cmd.exe',
+    realpath: (path) => path,
+    fileIdentity: () => 'controlled-system-cmd-v1',
+    isWritableByCurrentUser: () => false,
+  });
+  assert.equal(controlledSystemRoot?.trusted, false, 'captured SystemRoot under a task-controlled root is never accepted');
+});
+
+test('child SystemRoot and reparse targets cannot establish the host cmd identity', () => {
+  const childSystemRoot = resolveCommandExecutable('C:\\Project\\System32\\cmd.exe', {
+    platform: 'win32', cwd: 'C:\\repo', env: { SystemRoot: 'C:\\Project', Path: 'C:\\Project\\System32' },
+    trustedRoots: ['C:\\Windows\\System32'], hostWindowsSystem32: 'C:\\Windows\\System32',
+    controlledRoots: ['C:\\Project', 'C:\\repo'],
+    isFile: (path) => path.toLowerCase() === 'c:\\project\\system32\\cmd.exe',
+    realpath: (path) => path,
+    fileIdentity: () => 'project-cmd-v1',
+  });
+  assert.equal(childSystemRoot?.trusted, false);
+
+  const reparseTarget = resolveCommandExecutable('C:\\Windows\\System32\\cmd.exe', {
+    platform: 'win32', cwd: 'C:\\repo', env: { SystemRoot: 'C:\\Windows' },
+    trustedRoots: ['C:\\Windows\\System32'], hostWindowsSystem32: 'C:\\Windows\\System32',
+    controlledRoots: ['C:\\repo'],
+    isFile: (path) => path.toLowerCase() === 'c:\\windows\\system32\\cmd.exe',
+    realpath: (path) => path.toLowerCase() === 'c:\\windows\\system32\\cmd.exe'
+      ? 'C:\\repo\\cmd.exe'
+      : path,
+    fileIdentity: () => 'project-reparse-cmd-v1',
+  });
+  assert.equal(reparseTarget?.trusted, false);
 });
 
 test('Windows child PATHEXT changes cannot manufacture a trusted host PATH identity', () => {
