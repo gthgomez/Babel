@@ -478,6 +478,9 @@ export async function governedApplyPatch(
       current = null;
     }
     if (current === preImage) return '';
+    if (createdPaths.has(target) && current !== null) {
+      return `\n\nCreation conflict: ${target} appeared after the transaction snapshot and was preserved`;
+    }
     if (current === writtenContents.get(target)) {
       return `\n\nNot restored: ${target}: the failing dispatch's write is still on disk`;
     }
@@ -594,6 +597,7 @@ export async function governedApplyPatch(
           type: 'write_file',
           path: result.path,
           content: result.content,
+          ...(fileSection?.createsFile ? { createOnly: true } : {}),
         };
         let dispatch: PolicyGatedExecutionResult;
         try {

@@ -251,4 +251,34 @@ describe('governedApplyPatch multi-file transactional atomicity', () => {
       }
     } finally { rmSync(root, { recursive: true, force: true }) }
   })
+  test('creation refuses targets that appear after the transaction snapshot and preserves their bytes', async () => {
+    for (const competitorContent of ['concurrent bytes\n', '']) {
+      const root = tmpRoot('babel-patch-create-race-');
+      try {
+        const target = join(root, 'created.txt');
+        const patch = [
+          '--- /dev/null',
+          '+++ b/created.txt',
+          '@@ -0,0 +1 @@',
+          '+patch content',
+        ].join('\n');
+        let injected = false;
+        const context = ctx(root);
+        context.onBeforeDispatch = () => {
+          if (injected) return;
+          injected = true;
+          writeFileSync(target, competitorContent);
+        };
+        const result = await governedApplyPatch({ patch }, {
+          projectRoot: root, context, executor: createToolExecutor(),
+        });
+        assert.equal(injected, true);
+        assert.equal(result.exit_code, 1, result.observation);
+        assert.equal(readFileSync(target, 'utf8'), competitorContent);
+        assert.match(result.observation, /not applied|concurrent|conflict|rollback/i);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    }
+  });
 });

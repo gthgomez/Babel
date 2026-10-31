@@ -6,10 +6,11 @@
 
 import * as assert from 'node:assert';
 import { describe, it, beforeEach } from 'node:test';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
+  createToolExecutor,
   executeActionWithPolicy,
   resetCircuitBreaker,
   resetCircuitBreakerForRun,
@@ -23,6 +24,7 @@ import type { AgentAction } from './actions.js';
 import type { ToolContext } from '../localTools.js';
 import { isInvocationLive, refreshDryRunState } from '../localTools.js';
 import { resolveExecutorDryRun } from '../config/dryRun.js';
+import { SafeExecutor } from '../sandbox.js';
 
 function ctx(runId: string, projectRoot: string): ToolContext {
   return {
@@ -54,7 +56,10 @@ describe('H4 targetPathFromAction / defaultIdempotencyKey', () => {
       '.env',
     );
     const key = defaultIdempotencyKeyForAction({ type: 'write_file', path: 'a.ts', content: 'x' });
-    assert.match(key!, /^write_file:v2:[0-9a-f]{64}$/);
+    assert.match(key!, /^write_file:v3:[0-9a-f]{64}$/);
+    assert.notStrictEqual(key, defaultIdempotencyKeyForAction({
+      type: 'write_file', path: 'a.ts', content: 'x', createOnly: true,
+    }));
     assert.notStrictEqual(key, defaultIdempotencyKeyForAction({
       type: 'write_file', path: 'a.ts', content: 'y',
     }));
@@ -236,6 +241,31 @@ describe('H4 executeActionWithPolicy live capability gates', () => {
     assert.ok(result.effectTransaction!.pre_revision);
     assert.ok(result.effectTransaction!.post_revision);
     assert.ok(result.mutationPaths?.length);
+  });
+
+  it('removes a failed create only when trusted executor identity proves ownership', async () => {
+    const file = join(tmp, 'created-failed.ts');
+    const safe = new SafeExecutor(tmp);
+    const action: AgentAction = {
+      type: 'write_file', path: file, content: 'created bytes\n', createOnly: true,
+    };
+    const executor = createToolExecutor({
+      executeTool: async request => {
+        assert.equal(request.tool, 'file_write');
+        if (request.tool !== 'file_write') throw new Error('expected file_write');
+        const result = safe.fileWrite(request.path, request.content, { createOnly: true });
+        result.exit_code = 1;
+        result.stdout = '';
+        result.stderr = 'injected post-write failure';
+        return result;
+      },
+    });
+    const result = await executeActionWithPolicy(action, 'workspace_write', ctx('r-create-failure', tmp), {
+      executor, mode: 'chat', mutationRoot: tmp,
+    });
+    assert.equal(result.results[0]?.exit_code, 1);
+    assert.equal(existsSync(file), false);
+    assert.equal(result.effectTransaction?.status, 'rollback');
   });
 
   it('records successful rollback evidence when a tool returns a nonzero exit code', async () => {

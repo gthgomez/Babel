@@ -13,12 +13,20 @@ export interface MutationBatchTransaction {
   postRevisionHash?: string;
   changedBytes: number;
   status: 'open' | 'committed' | 'rolled_back' | 'conflicted';
+  /** Host-attested creations that may be removed during compensation. */
+  createdFileOwnership?: Record<string, CreatedFileOwnership>;
   /**
    * True when observed post-images matched caller-supplied expected post-images.
    * Undefined when no expectation was supplied; commitBatch alone never proves
    * the requested write happened — it only records observed bytes.
    */
   verified?: boolean;
+}
+
+export interface CreatedFileOwnership {
+  device: string;
+  inode: string;
+  expectedContent: string;
 }
 
 export interface MutationBatchReceipt {
@@ -135,6 +143,21 @@ export class WorkspaceTransactionManager {
     return tx;
   }
 
+  static recordCreatedFileOwnership(
+    tx: MutationBatchTransaction,
+    path: string,
+    ownership: CreatedFileOwnership,
+  ): void {
+    if (!(path in tx.preImages) || tx.preImages[path] !== null) {
+      throw new Error('created-file ownership requires an absent transaction pre-image');
+    }
+    if (!ownership.device || !ownership.inode) {
+      throw new Error('created-file ownership requires a supported device and inode identity');
+    }
+    tx.createdFileOwnership ??= {};
+    tx.createdFileOwnership[path] = { ...ownership };
+  }
+
   static async undoLastMutationBatch(
     txOrSessionId: MutationBatchTransaction | string,
     options: { lockContext?: FileLockContext | undefined } = {},
@@ -150,13 +173,31 @@ export class WorkspaceTransactionManager {
         async () => {
           const preImage = tx.preImages[p];
           if (preImage === null || preImage === undefined) {
+            const ownership = tx.createdFileOwnership?.[p];
+            let currentStat;
             try {
+              currentStat = await fsPromises.lstat(p);
+            } catch (e: any) {
+              if (e.code !== 'ENOENT') verification = false;
+              return;
+            }
+            if (!ownership || !currentStat.isFile() || currentStat.isSymbolicLink() ||
+              currentStat.dev.toString() !== ownership.device || currentStat.ino.toString() !== ownership.inode) {
+              verification = false;
+              return;
+            }
+            try {
+              const content = await fsPromises.readFile(p, 'utf8');
+              const rechecked = await fsPromises.lstat(p);
+              if (content !== ownership.expectedContent || !rechecked.isFile() || rechecked.isSymbolicLink() ||
+                rechecked.dev.toString() !== ownership.device || rechecked.ino.toString() !== ownership.inode) {
+                verification = false;
+                return;
+              }
               await fsPromises.unlink(p);
               restoredPaths.push(p);
             } catch (e: any) {
-              if (e.code !== 'ENOENT') {
-                verification = false;
-              }
+              if (e.code !== 'ENOENT') verification = false;
             }
           } else {
             await fsPromises.writeFile(p, preImage, 'utf8');
