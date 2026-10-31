@@ -721,8 +721,8 @@ const HOST_PROCESS_SURFACE = new Set([
   'executor/effectDirectoryAnchors.ts',
   // Fixed Docker removal arguments require a validated Babel-owned UUID name.
   'sandboxContainerLifecycle.ts',
-  // Admission state applies and verifies owner-only Windows DACLs via System32 tools.
-  'runtime/admission.ts',
+  // Extracted admission ACL helper uses only fixed System32 identity/ACL executables and a fixed PowerShell verifier script.
+  'runtime/windowsOwnerAcl.ts',
   // Review workers are contained by the watchdog / Windows Job Object helper.
   'services/reviewProcessContainment.ts',
   // Command Code ACP managed child: argv from registry launch seam only; stdio JSON-RPC; bounded line framing.
