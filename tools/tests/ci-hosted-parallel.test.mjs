@@ -41,6 +41,26 @@ test('combined qualification preserves emitting compiler and scripts checks with
   assert.throws(() => assertCombinedQualification(skipped, cliPackage, 'ubuntu-latest'));
 });
 
+test('platform-core reports compiler failures before long merge-control fixtures', () => {
+  const names = workflow.jobs['platform-core'].steps.map(step => step.name);
+  const install = names.indexOf('Install dependencies');
+  const qualify = names.indexOf('Build and typecheck CLI and scripts once');
+  assert.ok(install >= 0 && qualify > install, 'qualify:build must follow dependency installation');
+  for (const longStep of [
+    'Test merge control and Git readiness',
+    'Run required review control-plane PowerShell contract',
+    'Run required review control-plane TypeScript contract',
+  ]) {
+    const index = names.indexOf(longStep);
+    if (index >= 0) assert.ok(qualify < index, `${longStep} must stay after combined qualification`);
+  }
+  assert.equal(
+    workflow.jobs['platform-core'].steps.filter(step => step.run === 'npm run qualify:build').length,
+    1,
+    'platform-core must not duplicate qualify:build',
+  );
+});
+
 test('the final combined stack enforces all real architecture budgets on Linux and Windows', () => {
   const job = workflow.jobs['architecture-regressions'];
   assert.deepEqual(job.strategy.matrix.os, ['ubuntu-latest', 'windows-latest']);
