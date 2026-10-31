@@ -370,7 +370,7 @@ export function formatReadObservation(
 ): string {
   const banner =
     window.byteTruncated
-      ? `returned lines ${window.startLine}-${window.endLine} of ${window.totalLines} (content byte-capped: ${window.returnedBytes ?? 0} of ${window.sourceBytes ?? 0} source bytes returned; one or more selected lines were clipped or omitted)`
+      ? `returned lines ${window.startLine}-${window.endLine} of ${window.totalLines} (retained selected content: ${window.returnedBytes ?? 0} bytes; total source scanned: ${window.sourceBytes ?? 0} bytes; one or more selected lines were clipped or omitted)`
       : completeness && !completeness.complete
         ? `returned lines ${window.startLine}-${window.endLine} of at least ${window.totalLines} (source byte-capped: ${completeness.returned_bytes} of ${completeness.original_bytes} bytes; use read_range to inspect more)`
       : formatReadWindowBanner(target, window)

@@ -71,7 +71,8 @@ describe('streaming read range windows', () => {
       assert.equal(result.window.endLine, 1)
       assert.equal(result.window.remainingAfter, 3)
       assert.equal(result.window.byteTruncated, true)
-      assert.match(formatReadObservation('read_range', 'many-lines.txt', result.window), /byte-capped/)
+      const observation = formatReadObservation('read_range', 'many-lines.txt', result.window)
+      assert.match(observation, /retained selected content: \d+ bytes; total source scanned: \d+ bytes/)
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

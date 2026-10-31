@@ -27,6 +27,13 @@ import {
   WebSocketTransport,
 } from './transport.js';
 
+function maskedClientFrame(opcode: number, fin: boolean, payload: Buffer): Buffer {
+  if (payload.length > 125) throw new Error('test helper supports short payloads only');
+  const key = Buffer.from([5, 9, 13, 17]);
+  const masked = Buffer.from(payload.map((byte, index) => byte ^ key[index % 4]!));
+  return Buffer.concat([Buffer.from([(fin ? 0x80 : 0) | opcode, 0x80 | payload.length]), key, masked]);
+}
+
 // ─── NDJSON framing tests ──────────────────────────────────────────────────────
 
 describe('NDJSON framing', () => {
@@ -117,6 +124,67 @@ describe('WebSocket framing', () => {
     transport.close();
   });
 
+  it('limits fragment count even when continuation payloads are empty', () => {
+    class MemorySocket extends EventEmitter {
+      destroyed = false;
+      writableLength = 0;
+      writes: Buffer[] = [];
+      write(frame: Buffer): boolean { this.writes.push(Buffer.from(frame)); return true; }
+      end(): void { this.destroyed = true; }
+      destroy(): void { this.destroyed = true; }
+    }
+    const socket = new MemorySocket();
+    const transport = new WebSocketTransport(socket as unknown as Socket);
+    socket.emit('data', Buffer.concat([
+      maskedClientFrame(0x01, false, Buffer.alloc(0)),
+      ...Array.from({ length: 34 }, () => maskedClientFrame(0x00, false, Buffer.alloc(0))),
+    ]));
+    assert.equal(transport.closed, true);
+    const close = tryParseWsFrame(socket.writes[0]!);
+    assert.equal(close?.opcode, 0x08);
+    assert.equal(close?.payloadData.readUInt16BE(0), 1009);
+  });
+
+  it('sends exactly one close response to a valid peer close frame', () => {
+    class MemorySocket extends EventEmitter {
+      destroyed = false;
+      writableLength = 0;
+      writes: Buffer[] = [];
+      write(frame: Buffer): boolean { this.writes.push(Buffer.from(frame)); return true; }
+      end(): void { this.destroyed = true; }
+      destroy(): void { this.destroyed = true; }
+    }
+    const socket = new MemorySocket();
+    const transport = new WebSocketTransport(socket as unknown as Socket);
+    const closePayload = Buffer.from([0x03, 0xe9]);
+    socket.emit('data', maskedClientFrame(0x08, true, closePayload));
+    assert.equal(transport.closed, true);
+    assert.equal(socket.writes.length, 1);
+    const close = tryParseWsFrame(socket.writes[0]!);
+    assert.deepEqual(close?.payloadData, closePayload);
+  });
+
+  it('uses invalid-data close status for a malformed UTF-8 close reason', () => {
+    class MemorySocket extends EventEmitter {
+      destroyed = false;
+      writableLength = 0;
+      writes: Buffer[] = [];
+      write(frame: Buffer): boolean { this.writes.push(Buffer.from(frame)); return true; }
+      end(): void { this.destroyed = true; }
+      destroy(): void { this.destroyed = true; }
+    }
+    const socket = new MemorySocket();
+    new WebSocketTransport(socket as unknown as Socket);
+    socket.emit('data', maskedClientFrame(0x08, true, Buffer.from([0x03, 0xe8, 0xff])));
+    const close = tryParseWsFrame(socket.writes[0]!);
+    assert.equal(close?.payloadData.readUInt16BE(0), 1007);
+  });
+
+  it('rejects an oversized outgoing payload before framing it', () => {
+    const payload = 'x'.repeat(2 * 1024 * 1024 + 1);
+    assert.throws(() => buildWsTextFrame(payload), /too large/i);
+  });
+
   it('closes a socket whose pending writes exceed the bounded budget', () => {
     class PausedSocket extends EventEmitter {
       destroyed = false;
@@ -127,12 +195,17 @@ describe('WebSocket framing', () => {
     }
     const socket = new PausedSocket();
     const transport = new WebSocketTransport(socket as unknown as Socket);
+    const delivered: string[] = [];
+    transport.onText((payload) => delivered.push(payload));
     let closeReason: string | undefined;
     transport.onClose((reason) => { closeReason = reason; });
     transport.sendText('slow client');
     assert.equal(transport.closed, true);
     assert.equal(socket.destroyed, true);
     assert.match(closeReason ?? '', /backpressure/i);
+    assert.equal(socket.listenerCount('data'), 0);
+    socket.emit('data', maskedClientFrame(0x01, true, Buffer.from('ignored')));
+    assert.deepEqual(delivered, []);
   });
 
   it('processes a large burst of individually bounded frames without unbounded buffering', () => {
@@ -219,6 +292,15 @@ describe('WebSocket framing', () => {
     oversizedPing[1] = 126;
     oversizedPing.writeUInt16BE(126, 2);
     assert.throws(() => tryParseWsFrame(oversizedPing), /control/i);
+  });
+
+  it('validates close payload length, status code, and UTF-8 reason', () => {
+    const validClose = tryParseWsFrame(Buffer.from([0x88, 0x04, 0x03, 0xe8, 0x6f, 0x6b]));
+    assert.equal(validClose?.opcode, 0x08);
+    assert.deepEqual(validClose?.payloadData, Buffer.from([0x03, 0xe8, 0x6f, 0x6b]));
+    assert.throws(() => tryParseWsFrame(Buffer.from([0x88, 0x01, 0x00])), /close payload/i);
+    assert.throws(() => tryParseWsFrame(Buffer.from([0x88, 0x02, 0x03, 0xed])), /close code/i);
+    assert.throws(() => tryParseWsFrame(Buffer.from([0x88, 0x03, 0x03, 0xe8, 0xff])), /UTF-8/i);
   });
 
   it('rejects declared lengths outside the supported frame budget', () => {

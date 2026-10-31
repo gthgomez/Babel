@@ -13,6 +13,7 @@
 import { once } from 'node:events';
 import type { Socket } from 'node:net';
 import { createHash } from 'node:crypto';
+import { TextDecoder } from 'node:util';
 
 import type { BridgeMessage, BridgeTransport } from './types.js';
 
@@ -45,6 +46,7 @@ const PAYLOAD_LENGTH_16 = 126;
 const PAYLOAD_LENGTH_64 = 127;
 const MAX_WS_MESSAGE_BYTES = 2 * 1024 * 1024;
 const MAX_WS_FRAME_BYTES = MAX_WS_MESSAGE_BYTES;
+const MAX_WS_FRAGMENTS = 32;
 
 // ─── NDJSON framing ────────────────────────────────────────────────────────────
 
@@ -105,8 +107,9 @@ interface FrameHeader {
  * @returns A Buffer containing the complete WebSocket frame.
  */
 export function buildWsTextFrame(payload: string): Buffer {
+  const length = Buffer.byteLength(payload, 'utf8');
+  if (length > MAX_WS_FRAME_BYTES) throw new RangeError('WebSocket text payload is too large');
   const data = Buffer.from(payload, 'utf8');
-  const length = data.length;
 
   // Header: FIN=1 (0x80) | opcode=text (0x01) = 0x81
   const headerParts: Buffer[] = [];
@@ -200,6 +203,8 @@ export function tryParseWsFrame(
     payloadData = unmasked;
   }
 
+  if (opcode === OPCODE_CLOSE) validateWsClosePayload(payloadData);
+
   const remainder = buffer.subarray(frameEnd);
 
   // For text frames, decode as UTF-8
@@ -209,6 +214,21 @@ export function tryParseWsFrame(
 
   // For control frames (close, ping, pong), return empty string payload
   return { payload: '', opcode, remainder, fin, payloadData };
+}
+
+function validateWsClosePayload(payload: Buffer): void {
+  if (payload.length === 1) throw new Error('Invalid WebSocket close payload length');
+  if (payload.length < 2) return;
+  const code = payload.readUInt16BE(0);
+  const validCode = (code >= 3000 && code <= 4999) ||
+    code === 1000 || code === 1001 || code === 1002 || code === 1003 ||
+    (code >= 1007 && code <= 1014);
+  if (!validCode) throw new Error('Invalid WebSocket close code');
+  try {
+    new TextDecoder('utf-8', { fatal: true }).decode(payload.subarray(2));
+  } catch {
+    throw new Error('Invalid UTF-8 in WebSocket close reason');
+  }
 }
 
 /**
@@ -223,6 +243,10 @@ function buildWsCloseFrame(code?: number): Buffer {
   }
   const header = Buffer.from([0x88, codeBytes.length]);
   return codeBytes.length > 0 ? Buffer.concat([header, codeBytes]) : header;
+}
+
+function buildWsCloseEchoFrame(payload: Buffer): Buffer {
+  return Buffer.concat([Buffer.from([0x88, payload.length]), payload]);
 }
 
 /**
@@ -250,6 +274,7 @@ class FrameBuffer {
   private buffer: Buffer = Buffer.alloc(0);
   private fragmentedText: Buffer[] | null = null;
   private fragmentedBytes = 0;
+  private fragmentCount = 0;
 
   /**
    * Whether a close frame has been received.
@@ -292,7 +317,8 @@ class FrameBuffer {
           result = tryParseWsFrame(this.buffer, { requireMask: true });
         } catch (error) {
           this.closeRequested = true;
-          this.closeCode = /too large/i.test(String(error)) ? 1009 : 1002;
+          const detail = String(error);
+          this.closeCode = /too large/i.test(detail) ? 1009 : /UTF-8/i.test(detail) ? 1007 : 1002;
           sendFrame(buildWsCloseFrame(this.closeCode));
           this.buffer = Buffer.alloc(0);
           return frames;
@@ -311,6 +337,7 @@ class FrameBuffer {
             } else {
               this.fragmentedText = [result.payloadData];
               this.fragmentedBytes = result.payloadData.length;
+              this.fragmentCount = 1;
             }
             break;
           case OPCODE_CONTINUATION:
@@ -320,12 +347,14 @@ class FrameBuffer {
               sendFrame(buildWsCloseFrame(1002));
               break;
             }
+            this.fragmentCount += 1;
             this.fragmentedBytes += result.payloadData.length;
-            if (this.fragmentedBytes > MAX_WS_MESSAGE_BYTES) {
+            if (this.fragmentedBytes > MAX_WS_MESSAGE_BYTES || this.fragmentCount > MAX_WS_FRAGMENTS) {
               this.closeRequested = true;
               this.closeCode = 1009;
               sendFrame(buildWsCloseFrame(1009));
               this.fragmentedText = null;
+              this.fragmentCount = 0;
               break;
             }
             this.fragmentedText.push(result.payloadData);
@@ -333,6 +362,7 @@ class FrameBuffer {
               frames.push(Buffer.concat(this.fragmentedText).toString('utf8'));
               this.fragmentedText = null;
               this.fragmentedBytes = 0;
+              this.fragmentCount = 0;
             }
             break;
           case OPCODE_BINARY:
@@ -342,7 +372,10 @@ class FrameBuffer {
             break;
           case OPCODE_CLOSE:
             this.closeRequested = true;
-            sendFrame(buildWsCloseFrame(1000));
+            this.closeCode = result.payloadData.length >= 2
+              ? result.payloadData.readUInt16BE(0)
+              : 1000;
+            sendFrame(buildWsCloseEchoFrame(result.payloadData));
             break;
           case OPCODE_PING:
             sendFrame(buildWsPongFrame(result.payloadData));
@@ -486,22 +519,16 @@ export class WebSocketTransport implements BridgeTransport {
       }
       // If close frame received, begin tear-down
       if (this.frameBuffer.closeRequested && !this._closed) {
-        this.close(this.frameBuffer.closeCode);
+        this.close(this.frameBuffer.closeCode, false);
       }
     };
 
     const onClose = () => {
-      if (!this._closed) {
-        this._closed = true;
-        this.closeCb?.('socket closed');
-      }
+      this.finalizeClose('socket closed', false);
     };
 
     const onError = () => {
-      if (!this._closed) {
-        this._closed = true;
-        this.closeCb?.('socket error');
-      }
+      this.finalizeClose('socket error', true);
     };
 
     this.socket.on('data', onData);
@@ -525,8 +552,12 @@ export class WebSocketTransport implements BridgeTransport {
 
   sendText(payload: string): void {
     if (this._closed) return;
-    const frame = buildWsTextFrame(payload);
-    this.writeRaw(frame);
+    try {
+      const frame = buildWsTextFrame(payload);
+      this.writeRaw(frame);
+    } catch {
+      this.close(1009);
+    }
   }
 
   onMessage(handler: (msg: BridgeMessage) => void): () => void {
@@ -547,37 +578,17 @@ export class WebSocketTransport implements BridgeTransport {
     this.closeCb = handler;
   }
 
-  close(code = 1000): void {
+  close(code = 1000, sendCloseFrame = true): void {
     if (this._closed) return;
-    this._closed = true;
-
-    // Send close frame
-    try {
-      this.writeRaw(buildWsCloseFrame(code));
-    } catch {
-      // Socket may already be destroyed
-    }
-
-    // Clean up event listeners
-    for (const fn of this.cleanupFns) {
+    if (sendCloseFrame) {
       try {
-        fn();
+        this.writeRaw(buildWsCloseFrame(code));
       } catch {
-        // Ignore cleanup errors
+        // Socket may already be destroyed
       }
+      if (this._closed) return;
     }
-    this.cleanupFns = [];
-
-    // Destroy the socket
-    try {
-      this.socket.end();
-      this.socket.destroy();
-    } catch {
-      // Already destroyed
-    }
-
-    this.closeCb?.();
-    this.handler = null;
+    this.finalizeClose(undefined, true);
   }
 
   /**
@@ -602,10 +613,7 @@ export class WebSocketTransport implements BridgeTransport {
   private writeRaw(frame: Buffer): void {
     if (this.socket.destroyed) return;
     if (this.socket.writableLength + frame.length > MAX_WS_MESSAGE_BYTES) {
-      this._closed = true;
-      this.socket.destroy();
-      this.closeCb?.('socket backpressure limit exceeded');
-      this.handler = null;
+      this.finalizeClose('socket backpressure limit exceeded', true);
       return;
     }
     try {
@@ -613,6 +621,32 @@ export class WebSocketTransport implements BridgeTransport {
     } catch {
       // Socket write error — ignore, onClose will fire
     }
+  }
+
+  private finalizeClose(reason: string | undefined, destroySocket: boolean): void {
+    if (this._closed) return;
+    this._closed = true;
+    for (const cleanup of this.cleanupFns) {
+      try {
+        cleanup();
+      } catch {
+        // Ignore cleanup errors.
+      }
+    }
+    this.cleanupFns = [];
+    this.handler = null;
+    this.textHandler = null;
+    const onClose = this.closeCb;
+    this.closeCb = null;
+    if (destroySocket) {
+      try {
+        this.socket.end();
+        this.socket.destroy();
+      } catch {
+        // Already destroyed.
+      }
+    }
+    onClose?.(reason);
   }
 }
 
