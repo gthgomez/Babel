@@ -230,6 +230,39 @@ describe('executeTool policy enforcement', () => {
 });
 
 describe('read-only search tools', () => {
+  it('binds search and AST tools to the invocation project root', async () => {
+    const rootA = mkdtempSync(join(tmpdir(), 'babel-local-tools-root-a-'));
+    const rootB = mkdtempSync(join(tmpdir(), 'babel-local-tools-root-b-'));
+    const previousProjectRoot = process.env['BABEL_PROJECT_ROOT'];
+    try {
+      mkdirSync(join(rootA, 'src'), { recursive: true });
+      mkdirSync(join(rootB, 'src'), { recursive: true });
+      writeFileSync(join(rootA, 'src', 'marker.ts'), 'export class InvocationA {}\n');
+      writeFileSync(join(rootB, 'src', 'marker.ts'), 'export class AmbientB {}\n');
+      process.env['BABEL_PROJECT_ROOT'] = rootB;
+      const invocation = { ...context, projectRoot: rootA };
+
+      for (const [request, marker] of [
+        [{ tool: 'grep', pattern: 'InvocationA' }, 'InvocationA'],
+        [{ tool: 'glob', pattern: 'src/marker.ts' }, 'marker.ts'],
+        [{ tool: 'workspace_symbol_search', query: 'InvocationA' }, 'InvocationA'],
+        [{ tool: 'workspace_map' }, 'marker.ts'],
+        [{ tool: 'get_code_outline', path: 'src/marker.ts' }, 'InvocationA'],
+        [{ tool: 'find_code_definition', symbol: 'InvocationA' }, 'InvocationA'],
+      ] as const) {
+        const result = await executeTool(request as never, invocation);
+        assert.equal(result.exit_code, 0, result.stderr);
+        assert.match(result.stdout, new RegExp(marker));
+        assert.doesNotMatch(result.stdout, /AmbientB/);
+      }
+    } finally {
+      if (previousProjectRoot === undefined) delete process.env['BABEL_PROJECT_ROOT'];
+      else process.env['BABEL_PROJECT_ROOT'] = previousProjectRoot;
+      rmSync(rootA, { recursive: true, force: true });
+      rmSync(rootB, { recursive: true, force: true });
+    }
+  });
+
   it('executes grep and glob within the configured project root', async () => {
     const root = mkdtempSync(join(tmpdir(), 'babel-local-tools-search-'));
     const previousProjectRoot = process.env['BABEL_PROJECT_ROOT'];

@@ -122,11 +122,8 @@ export function normalizeExecutionBase(raw: string): string {
 
 export function isProjectRelativeExecutable(rawCommand: string): boolean {
   const normalized = rawCommand.trim().replace(/\\/g, '/');
-  return (
-    normalized.startsWith('./') ||
-    normalized.startsWith('/project/') ||
-    normalized.startsWith('/app/')
-  );
+  const executable = firstToken(normalized);
+  return /[\\/]/.test(executable) || /^[A-Za-z]:/.test(executable);
 }
 
 function firstToken(command: string): string {

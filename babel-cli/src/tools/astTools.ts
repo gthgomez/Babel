@@ -1,4 +1,4 @@
-import { readFileSync, existsSync, statSync, readdirSync } from 'node:fs';
+import { readFileSync, existsSync, statSync, readdirSync, realpathSync } from 'node:fs';
 import { resolve, extname, join, sep } from 'node:path';
 import { RULES_BY_EXT } from './repoSearch.js';
 import { isPathInside } from '../services/targetResolver.js';
@@ -8,23 +8,25 @@ import type { ToolResult } from '../localTools.js';
 const SUPPORTED_EXTENSIONS = new Set(['ts', 'js', 'py', 'go', 'rs', 'java', 'tsx', 'jsx', 'mjs', 'cjs']);
 
 /** Helper to check if a resolved file path is allowed to be read. */
-function isPathAllowed(filePath: string, approvedReadRoots?: string[]): boolean {
-  if (!approvedReadRoots || approvedReadRoots.length === 0) {
-    return true;
-  }
-  const resolved = resolve(filePath);
-  return approvedReadRoots.some((root) => isPathInside(resolve(root), resolved));
+function isPathAllowed(filePath: string, projectRoot: string, approvedReadRoots?: string[]): boolean {
+  const canonical = (path: string): string => {
+    const absolute = resolve(path);
+    try { return realpathSync(absolute); } catch { return absolute; }
+  };
+  const resolved = canonical(filePath);
+  const allowedRoots = approvedReadRoots === undefined ? [projectRoot] : approvedReadRoots;
+  return allowedRoots.some((root) => isPathInside(canonical(root), resolved));
 }
 
 /** Outline scanner for get_code_outline. */
 export async function handleGetCodeOutline(
   filePath: string,
+  projectRoot: string,
   approvedReadRoots?: string[],
 ): Promise<ToolResult> {
-  const projectRoot = process.env['BABEL_PROJECT_ROOT'] ?? process.cwd();
   const absPath = resolve(projectRoot, filePath);
 
-  if (!isPathAllowed(absPath, approvedReadRoots)) {
+  if (!isPathAllowed(absPath, projectRoot, approvedReadRoots)) {
     return {
       exit_code: 1,
       stdout: '',
@@ -82,7 +84,7 @@ export async function handleGetCodeOutline(
 }
 
 /** Recursively lists supported files in the workspace. */
-function getFilesRecursive(dir: string, approvedReadRoots?: string[]): string[] {
+function getFilesRecursive(dir: string, projectRoot: string, approvedReadRoots?: string[]): string[] {
   let results: string[] = [];
   try {
     const list = readdirSync(dir, { withFileTypes: true });
@@ -97,10 +99,10 @@ function getFilesRecursive(dir: string, approvedReadRoots?: string[]): string[] 
         continue;
       }
       if (dirent.isDirectory()) {
-        results = results.concat(getFilesRecursive(res, approvedReadRoots));
+        results = results.concat(getFilesRecursive(res, projectRoot, approvedReadRoots));
       } else {
         const ext = extname(dirent.name).slice(1).toLowerCase();
-        if (SUPPORTED_EXTENSIONS.has(ext) && isPathAllowed(res, approvedReadRoots)) {
+        if (SUPPORTED_EXTENSIONS.has(ext) && isPathAllowed(res, projectRoot, approvedReadRoots)) {
           results.push(res);
         }
       }
@@ -114,10 +116,10 @@ function getFilesRecursive(dir: string, approvedReadRoots?: string[]): string[] 
 /** Definition extractor helper for find_code_definition. */
 export async function handleFindCodeDefinition(
   symbolName: string,
+  projectRoot: string,
   approvedReadRoots?: string[],
 ): Promise<ToolResult> {
-  const projectRoot = process.env['BABEL_PROJECT_ROOT'] ?? process.cwd();
-  const files = getFilesRecursive(projectRoot, approvedReadRoots);
+  const files = getFilesRecursive(projectRoot, projectRoot, approvedReadRoots);
 
   let foundFile: string | null = null;
   let foundLineIndex = -1;
@@ -299,11 +301,11 @@ export async function handleFindCodeDefinition(
 /** Reference locator for find_code_references. */
 export async function handleFindCodeReferences(
   symbolName: string,
+  projectRoot: string,
   approvedReadRoots?: string[],
   maxMatches = 100,
 ): Promise<ToolResult> {
-  const projectRoot = process.env['BABEL_PROJECT_ROOT'] ?? process.cwd();
-  const files = getFilesRecursive(projectRoot, approvedReadRoots);
+  const files = getFilesRecursive(projectRoot, projectRoot, approvedReadRoots);
   const refRegex = new RegExp(`\\b${symbolName}\\b`);
   const matches: Array<{ file: string; line: number; content: string }> = [];
 
