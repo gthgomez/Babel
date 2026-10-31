@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -27,6 +27,43 @@ test('Node test classification accepts module preloads before the exact test fla
     assert.equal(decoded.capability, 'run_tests', command);
     assert.equal(decoded.semantic, 'test_local', command);
     assert.equal(decoded.requiresIsolation, true, command);
+  }
+});
+
+test('transparent env git status stays inspect-only; env mutation and shadowed Git stay unknown', () => {
+  const decoded = decodeCommand('env git status');
+  assert.equal(decoded.capability, 'inspect_repository');
+  assert.equal(decoded.semantic, 'read_local');
+  assert.equal(decoded.requiresIsolation, undefined);
+
+  for (const command of [
+    'env PATH=/tmp git status',
+    'env GIT_DIR=/tmp/repo.git git status',
+    'env -i git status',
+    'env -u PATH git status',
+    'env -- git status',
+  ]) {
+    const result = decodeCommand(command);
+    assert.equal(result.capability, 'unknown', command);
+    assert.equal(result.ambiguous, true, command);
+  }
+
+  if (process.platform !== 'win32') {
+    const root = mkdtempSync(join(tmpdir(), 'babel-shadow-git-'));
+    const fakeGit = join(root, 'git');
+    const previousPath = process.env['PATH'];
+    try {
+      writeFileSync(fakeGit, '#!/bin/sh\nexit 0\n');
+      chmodSync(fakeGit, 0o755);
+      process.env['PATH'] = `${root}:${previousPath ?? ''}`;
+      const shadowed = decodeCommand('env git status');
+      assert.equal(shadowed.capability, 'unknown');
+      assert.equal(shadowed.ambiguous, true);
+    } finally {
+      if (previousPath === undefined) delete process.env['PATH'];
+      else process.env['PATH'] = previousPath;
+      rmSync(root, { recursive: true, force: true });
+    }
   }
 });
 

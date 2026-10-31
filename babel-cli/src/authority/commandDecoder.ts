@@ -1093,12 +1093,13 @@ export function decodeCommand(command: string, opts: { repoRoot?: string; cwd?: 
   const effectful = new Set<string>();
   for (const segment of segments) {
     const outerTokens = tokenize(segment);
-    const outerRisk = resolveAndClassifyCommand(outerTokens[0] ?? '', outerTokens.slice(1), {
+    const outerResolution = resolveAndClassifyCommand(outerTokens[0] ?? '', outerTokens.slice(1), {
       cwd: opts.cwd ?? opts.repoRoot ?? process.cwd(),
       env: process.env,
       platform: process.platform,
       ...(opts.repoRoot !== undefined ? { repoRoot: opts.repoRoot } : {}),
-    }).classification;
+    });
+    const outerRisk = outerResolution.classification;
     const normalized = unwrapCommandWrappers(segment);
     // Wrapper unwrap can expose an inner chain (`sh -c "a && b"` → `a && b`);
     // re-split so every segment is decoded, not just the first.
@@ -1118,22 +1119,34 @@ export function decodeCommand(command: string, opts: { repoRoot?: string; cwd?: 
       // forms like `C:\tools\git.exe push` resolve to base `git`).
       const firstBase =
         actualTokens.length === 0 ? '' : normalizeExecutionBase(actualTokens[0]!);
+      const invokedBase = tokens.length === 0 ? '' : normalizeExecutionBase(tokens[0]!);
       const outerBase = normalizeExecutionBase(tokenize(segment)[0] ?? '');
       const decoded =
         outerBase === 'env' && outerRisk.reason === 'indirect_executable_dispatch'
+        ? outerResolution.executable?.trusted === true &&
+          outerTokens.length >= 3 &&
+          normalizeExecutionBase(outerTokens[1]!) === 'git' &&
+          outerTokens[2]!.toLowerCase() === 'status' &&
+          resolution.executable?.base === 'git' &&
+          resolution.executable.trusted
+          ? applyIsolationFloor(decodeGit(actualTokens, opts.repoRoot), inner, opts.repoRoot, opts.cwd)
+          : cmd('unknown', 'unrecognized', { ambiguous: true })
+        : invokedBase === 'git' &&
+          (firstBase !== 'git' || !resolution.executable || !resolution.executable.trusted)
         ? cmd('unknown', 'unrecognized', { ambiguous: true })
-        : firstBase === 'git' && (!resolution.executable || !resolution.executable.trusted)
+        : invokedBase === 'gh' &&
+          (firstBase !== 'gh' || !resolution.executable || !resolution.executable.trusted)
         ? cmd('unknown', 'unrecognized', { ambiguous: true })
-        : (outerBase === 'env' || outerBase === 'git') && outerRisk.executionRisk === 'forbidden'
+        : (outerBase === 'env' || invokedBase === 'git') && outerRisk.executionRisk === 'forbidden'
         ? cmd('unknown', 'unrecognized', { ambiguous: true })
         : applyIsolationFloor(
         actualTokens.length === 0
           ? cmd('unknown', 'unrecognized', { ambiguous: true })
-          : firstBase === 'git'
+          : invokedBase === 'git' && firstBase === 'git'
             ? decodeGit(actualTokens, opts.repoRoot)
-            : firstBase === 'gh'
-              ? decodeGh(actualTokens)
-              : decodeNonGit(actualTokens, inner, segment),
+            : invokedBase === 'gh' && firstBase === 'gh'
+              ? decodeGh(tokens)
+              : decodeNonGit(tokens, inner, segment),
         inner,
         opts.repoRoot,
         opts.cwd,

@@ -25,6 +25,8 @@ export const coveredPaths = [
   "babel-cli/src/authority/ciRepair.ts",
   "babel-cli/src/authority/commandDecoder.nodeTest.test.ts",
   "babel-cli/src/authority/commandDecoder.ts",
+  "babel-cli/src/authority/commandResolver.test.ts",
+  "babel-cli/src/authority/commandResolver.ts",
   "babel-cli/src/authority/commandSpec.test.ts",
   "babel-cli/src/authority/commandSpec.ts",
   "babel-cli/src/authority/convergence-integrity.regression-gate.test.ts",
