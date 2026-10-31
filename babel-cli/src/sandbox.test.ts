@@ -121,6 +121,18 @@ test('sandbox file operations stay usable for in-root paths', () => {
   }
 });
 
+test('sandbox file reads reject oversized sources before loading them', () => {
+  const fixture = makeFixture();
+  try {
+    writeFileSync(join(fixture.projectRoot, 'oversized.txt'), 'x'.repeat(1024 * 1024 + 1));
+    const result = new SafeExecutor(fixture.projectRoot).fileRead('oversized.txt');
+    assert.equal(result.exit_code, 1);
+    assert.match(result.stderr, /too large.*use read_range/i);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
 const traversalCases = [
   '../outside.txt',
   '..\\outside.txt',

@@ -23,6 +23,8 @@ const WS_MAGIC_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
 
 /** Opcode for a text frame. */
 const OPCODE_TEXT = 0x01;
+const OPCODE_CONTINUATION = 0x00;
+const OPCODE_BINARY = 0x02;
 
 /** Opcode for a close frame. */
 const OPCODE_CLOSE = 0x08;
@@ -41,6 +43,8 @@ const PAYLOAD_LENGTH_16 = 126;
 
 /** Marker for 64-bit extended length. */
 const PAYLOAD_LENGTH_64 = 127;
+const MAX_WS_MESSAGE_BYTES = 2 * 1024 * 1024;
+const MAX_WS_FRAME_BYTES = MAX_WS_MESSAGE_BYTES;
 
 // ─── NDJSON framing ────────────────────────────────────────────────────────────
 
@@ -132,13 +136,20 @@ export function buildWsTextFrame(payload: string): Buffer {
  */
 export function tryParseWsFrame(
   buffer: Buffer,
-): { payload: string; opcode: number; remainder: Buffer } | null {
+  options: { requireMask?: boolean } = {},
+): { payload: string; opcode: number; remainder: Buffer; fin: boolean; payloadData: Buffer } | null {
   if (buffer.length < 2) return null;
 
   const firstByte = buffer[0]!;
   const secondByte = buffer[1]!;
   const opcode = firstByte & 0x0f;
+  const fin = (firstByte & 0x80) !== 0;
+  if ((firstByte & 0x70) !== 0) throw new Error('WebSocket reserved bits must be zero');
+  if (![OPCODE_CONTINUATION, OPCODE_TEXT, OPCODE_BINARY, OPCODE_CLOSE, OPCODE_PING, OPCODE_PONG].includes(opcode)) {
+    throw new Error('Invalid WebSocket opcode');
+  }
   const mask = (secondByte & 0x80) !== 0;
+  if (options.requireMask && !mask) throw new Error('Client WebSocket frames must be masked');
 
   let payloadLength = secondByte & 0x7f;
   let offset = 2;
@@ -150,8 +161,22 @@ export function tryParseWsFrame(
   } else if (payloadLength === PAYLOAD_LENGTH_64) {
     if (buffer.length < 10) return null;
     const bigLen = buffer.readBigUInt64BE(offset);
+    if ((bigLen & (1n << 63n)) !== 0n || bigLen > BigInt(MAX_WS_FRAME_BYTES)) {
+      throw new Error('WebSocket frame is too large');
+    }
     payloadLength = Number(bigLen);
     offset += 8;
+  }
+  if (payloadLength > MAX_WS_FRAME_BYTES) throw new Error('WebSocket frame is too large');
+  if (payloadLength === PAYLOAD_LENGTH_16 && buffer.readUInt16BE(2) < 126) {
+    throw new Error('Non-canonical WebSocket frame length');
+  }
+  if (payloadLength === PAYLOAD_LENGTH_64 && buffer.readBigUInt64BE(2) <= 0xffffn) {
+    throw new Error('Non-canonical WebSocket frame length');
+  }
+  const isControl = opcode >= OPCODE_CLOSE;
+  if (isControl && (!fin || payloadLength > PAYLOAD_LENGTH_7)) {
+    throw new Error('Invalid WebSocket control frame');
   }
 
   let maskingKey: Buffer | undefined;
@@ -179,11 +204,11 @@ export function tryParseWsFrame(
 
   // For text frames, decode as UTF-8
   if (opcode === OPCODE_TEXT) {
-    return { payload: payloadData.toString('utf8'), opcode, remainder };
+    return { payload: payloadData.toString('utf8'), opcode, remainder, fin, payloadData };
   }
 
   // For control frames (close, ping, pong), return empty string payload
-  return { payload: '', opcode, remainder };
+  return { payload: '', opcode, remainder, fin, payloadData };
 }
 
 /**
@@ -223,11 +248,14 @@ function buildWsPongFrame(payload: Buffer): Buffer {
  */
 class FrameBuffer {
   private buffer: Buffer = Buffer.alloc(0);
+  private fragmentedText: Buffer[] | null = null;
+  private fragmentedBytes = 0;
 
   /**
    * Whether a close frame has been received.
    */
   closeRequested = false;
+  closeCode = 1002;
 
   /**
    * Append incoming data and extract any complete frames.
@@ -241,18 +269,70 @@ class FrameBuffer {
     data: Buffer,
     sendFrame: (frame: Buffer) => void,
   ): string[] {
-    this.buffer = Buffer.concat([this.buffer, data]);
     const frames: string[] = [];
 
+    if (this.buffer.length + data.length > MAX_WS_FRAME_BYTES + 14) {
+      this.closeRequested = true;
+      this.closeCode = 1009;
+      sendFrame(buildWsCloseFrame(1009));
+      return frames;
+    }
+    this.buffer = Buffer.concat([this.buffer, data]);
+
     while (true) {
-      const result = tryParseWsFrame(this.buffer);
+      let result: ReturnType<typeof tryParseWsFrame>;
+      try {
+        result = tryParseWsFrame(this.buffer, { requireMask: true });
+      } catch (error) {
+        this.closeRequested = true;
+        this.closeCode = /too large/i.test(String(error)) ? 1009 : 1002;
+        sendFrame(buildWsCloseFrame(this.closeCode));
+        this.buffer = Buffer.alloc(0);
+        break;
+      }
       if (!result) break; // Need more data
 
       this.buffer = result.remainder;
 
       switch (result.opcode) {
         case OPCODE_TEXT:
-          frames.push(result.payload);
+          if (this.fragmentedText) {
+            this.closeRequested = true;
+            this.closeCode = 1002;
+            sendFrame(buildWsCloseFrame(1002));
+          } else if (result.fin) {
+            frames.push(result.payload);
+          } else {
+            this.fragmentedText = [result.payloadData];
+            this.fragmentedBytes = result.payloadData.length;
+          }
+          break;
+        case OPCODE_CONTINUATION:
+          if (!this.fragmentedText) {
+            this.closeRequested = true;
+            this.closeCode = 1002;
+            sendFrame(buildWsCloseFrame(1002));
+            break;
+          }
+          this.fragmentedBytes += result.payloadData.length;
+          if (this.fragmentedBytes > MAX_WS_MESSAGE_BYTES) {
+            this.closeRequested = true;
+            this.closeCode = 1009;
+            sendFrame(buildWsCloseFrame(1009));
+            this.fragmentedText = null;
+            break;
+          }
+          this.fragmentedText.push(result.payloadData);
+          if (result.fin) {
+            frames.push(Buffer.concat(this.fragmentedText).toString('utf8'));
+            this.fragmentedText = null;
+            this.fragmentedBytes = 0;
+          }
+          break;
+        case OPCODE_BINARY:
+          this.closeRequested = true;
+          this.closeCode = 1003;
+          sendFrame(buildWsCloseFrame(1003));
           break;
         case OPCODE_CLOSE:
           this.closeRequested = true;
@@ -260,7 +340,7 @@ class FrameBuffer {
           sendFrame(buildWsCloseFrame(1000));
           break;
         case OPCODE_PING:
-          sendFrame(buildWsPongFrame(Buffer.from(result.payload, 'utf8')));
+          sendFrame(buildWsPongFrame(result.payloadData));
           break;
         case OPCODE_PONG:
           // Ignore unsolicited pongs
@@ -390,7 +470,7 @@ export class WebSocketTransport implements BridgeTransport {
       }
       // If close frame received, begin tear-down
       if (this.frameBuffer.closeRequested && !this._closed) {
-        this.close();
+        this.close(this.frameBuffer.closeCode);
       }
     };
 
@@ -451,13 +531,13 @@ export class WebSocketTransport implements BridgeTransport {
     this.closeCb = handler;
   }
 
-  close(): void {
+  close(code = 1000): void {
     if (this._closed) return;
     this._closed = true;
 
     // Send close frame
     try {
-      this.writeRaw(buildWsCloseFrame(1000));
+      this.writeRaw(buildWsCloseFrame(code));
     } catch {
       // Socket may already be destroyed
     }
@@ -505,6 +585,13 @@ export class WebSocketTransport implements BridgeTransport {
    */
   private writeRaw(frame: Buffer): void {
     if (this.socket.destroyed) return;
+    if (this.socket.writableLength + frame.length > MAX_WS_MESSAGE_BYTES) {
+      this._closed = true;
+      this.socket.destroy();
+      this.closeCb?.('socket backpressure limit exceeded');
+      this.handler = null;
+      return;
+    }
     try {
       this.socket.write(frame);
     } catch {

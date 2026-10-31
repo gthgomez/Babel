@@ -258,6 +258,17 @@ describe('BridgeServer', () => {
     assert.equal(body['status'], 'idle');
   });
 
+  it('rejects an oversized session request body without creating a session', async () => {
+    const res = await httpRequest(`http://127.0.0.1:${TEST_PORT}/sessions`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${TEST_TOKEN}` },
+      body: JSON.stringify({ projectRoot: 'x'.repeat(17 * 1024) }),
+    });
+
+    assert.equal(res.statusCode, 413);
+    assert.match(res.body, /too large/i);
+  });
+
   it('lists sessions via GET /sessions', async () => {
     // Create a session first
     const createRes = await httpRequest(`http://127.0.0.1:${TEST_PORT}/sessions`, {

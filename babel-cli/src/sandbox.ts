@@ -1145,6 +1145,8 @@ function maybePolicyDeniedResult(
 
 export type ExecutorMode = 'plan' | 'act';
 
+const MAX_FILE_READ_SOURCE_BYTES = 1024 * 1024;
+
 export class SafeExecutor {
   private readonly projectRoot: string;
   private readonly shadowRoot: string | null;
@@ -1550,6 +1552,9 @@ export class SafeExecutor {
           }
           const stats = statSync(effectiveShadowPath);
           if (!stats.isDirectory()) {
+            if (stats.size > MAX_FILE_READ_SOURCE_BYTES) {
+              throw new Error('File is too large for file_read; use read_range to inspect it.');
+            }
             const content = readFileSync(effectiveShadowPath, 'utf-8');
             return this.formatFileContent(content, options);
           }
@@ -1563,6 +1568,9 @@ export class SafeExecutor {
           .map((entry) => `${entry.isDirectory() ? 'dir ' : 'file'} ${entry.name}`);
         const listing = [`Directory: ${safePath}`, ...entries].join('\n');
         return { exit_code: 0, stdout: listing, stderr: '' };
+      }
+      if (stats.size > MAX_FILE_READ_SOURCE_BYTES) {
+        throw new Error('File is too large for file_read; use read_range to inspect it.');
       }
       const content = readFileSync(safePath, 'utf-8');
       return this.formatFileContent(content, options);

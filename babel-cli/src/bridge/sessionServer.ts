@@ -362,7 +362,13 @@ export class BridgeServer {
     this.devicePairing =
       this.options.devicePairing ?? new DevicePairingService(this.authToken);
 
-    this.server = createServer((req, res) => this.handleRequest(req, res));
+    this.server = createServer((req, res) => {
+      try {
+        this.handleRequest(req, res);
+      } catch {
+        this.respondToRequestFailure(res);
+      }
+    });
 
     // Handle WebSocket upgrades
     this.server.on('upgrade', (req, socket, head) =>
@@ -563,7 +569,7 @@ export class BridgeServer {
     }
 
     if (pathname.startsWith('/pair')) {
-      void this.handlePairingRoute(req, res, parsedUrl);
+      void this.handlePairingRoute(req, res, parsedUrl).catch(() => this.respondToRequestFailure(res));
       return;
     }
 
@@ -609,7 +615,7 @@ export class BridgeServer {
         errorResponse(res, 405, 'Method not allowed');
         return;
       }
-      void this.handleMintTicket(req, res);
+      void this.handleMintTicket(req, res).catch(() => this.respondToRequestFailure(res));
       return;
     }
 
@@ -623,7 +629,7 @@ export class BridgeServer {
         errorResponse(res, 403, 'Origin not allowed');
         return;
       }
-      void this.handleRpc(req, res);
+      void this.handleRpc(req, res).catch(() => this.respondToRequestFailure(res));
       return;
     }
 
@@ -631,7 +637,7 @@ export class BridgeServer {
     switch (pathname) {
       case '/sessions':
         if (req.method === 'POST') {
-          this.handleCreateSession(req, res);
+          void this.handleCreateSession(req, res).catch(() => this.respondToRequestFailure(res));
         } else if (req.method === 'GET') {
           this.handleListSessions(req, res);
         } else {
@@ -656,6 +662,14 @@ export class BridgeServer {
         break;
       }
     }
+  }
+
+  private respondToRequestFailure(res: ServerResponse): void {
+    if (res.headersSent) {
+      res.destroy();
+      return;
+    }
+    errorResponse(res, 500, 'Request could not be completed');
   }
 
   // ── Pairing endpoints ─────────────────────────────────────────────────────
@@ -946,38 +960,36 @@ export class BridgeServer {
     jsonResponse(res, 200, response);
   }
 
-  private handleCreateSession(req: IncomingMessage, res: ServerResponse): void {
-    // Read body
-    let body = '';
-    req.on('data', (chunk: Buffer) => {
-      body += chunk.toString('utf8');
-    });
-
-    req.on('end', () => {
-      let projectRoot = '';
-      try {
-        if (body) {
-          const parsed = JSON.parse(body) as Record<string, unknown>;
-          if (typeof parsed['projectRoot'] === 'string') {
-            projectRoot = parsed['projectRoot'];
-          }
+  private async handleCreateSession(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const result = await readLimitedBody(req, 16 * 1024);
+    if (!result.ok) {
+      errorResponse(res, 413, 'Request body is too large');
+      return;
+    }
+    const body = result.body;
+    let projectRoot = '';
+    try {
+      if (body) {
+        const parsed = JSON.parse(body) as Record<string, unknown>;
+        if (typeof parsed['projectRoot'] === 'string') {
+          projectRoot = parsed['projectRoot'];
         }
-      } catch {
-        // Use empty projectRoot
       }
+    } catch {
+      // Use empty projectRoot
+    }
 
-      const session = sessionRunner.createSession(projectRoot || process.cwd());
+    const session = sessionRunner.createSession(projectRoot || process.cwd());
 
-      const wsUrl = `ws://127.0.0.1:${this._port}/ws?sessionId=${session.sessionId}`;
+    const wsUrl = `ws://127.0.0.1:${this._port}/ws?sessionId=${session.sessionId}`;
 
-      this.options.onSessionCreated?.(session);
+    this.options.onSessionCreated?.(session);
 
-      jsonResponse(res, 201, {
-        sessionId: session.sessionId,
-        wsUrl,
-        status: session.status,
-        createdAt: session.createdAt.toISOString(),
-      });
+    jsonResponse(res, 201, {
+      sessionId: session.sessionId,
+      wsUrl,
+      status: session.status,
+      createdAt: session.createdAt.toISOString(),
     });
   }
 

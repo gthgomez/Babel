@@ -10,7 +10,9 @@
  */
 
 import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
 import { describe, it } from 'node:test';
+import type { Socket } from 'node:net';
 
 import type { BridgeMessage } from './types.js';
 import {
@@ -22,6 +24,7 @@ import {
   InProcessTransport,
   createLinkedTransports,
   createTransport,
+  WebSocketTransport,
 } from './transport.js';
 
 // ─── NDJSON framing tests ──────────────────────────────────────────────────────
@@ -84,6 +87,36 @@ describe('NDJSON framing', () => {
 // ─── WebSocket framing tests ────────────────────────────────────────────────────
 
 describe('WebSocket framing', () => {
+  it('assembles fragmented text and echoes ping payload bytes', () => {
+    class MemorySocket extends EventEmitter {
+      destroyed = false;
+      writableLength = 0;
+      writes: Buffer[] = [];
+      write(frame: Buffer): boolean { this.writes.push(Buffer.from(frame)); return true; }
+      end(): void { this.destroyed = true; }
+      destroy(): void { this.destroyed = true; }
+    }
+    const socket = new MemorySocket();
+    const transport = new WebSocketTransport(socket as unknown as Socket);
+    const delivered: string[] = [];
+    transport.onText((payload) => delivered.push(payload));
+    const maskFrame = (opcode: number, fin: boolean, payload: Buffer): Buffer => {
+      const key = Buffer.from([3, 7, 11, 13]);
+      const masked = Buffer.from(payload.map((byte, index) => byte ^ key[index % 4]!));
+      return Buffer.concat([Buffer.from([(fin ? 0x80 : 0) | opcode, 0x80 | payload.length]), key, masked]);
+    };
+
+    socket.emit('data', maskFrame(0x01, false, Buffer.from('hello ')));
+    socket.emit('data', maskFrame(0x09, true, Buffer.from([0, 255, 32])));
+    socket.emit('data', maskFrame(0x00, true, Buffer.from('world')));
+
+    assert.deepEqual(delivered, ['hello world']);
+    const pong = tryParseWsFrame(socket.writes[0]!);
+    assert.equal(pong?.opcode, 0x0a);
+    assert.deepEqual(pong?.payloadData, Buffer.from([0, 255, 32]));
+    transport.close();
+  });
+
   it('computes the accept key correctly', () => {
     // RFC 6455 §1.3 example — derive key from plain text (avoid hardcoded base64 literals).
     const key = Buffer.from('the sample nonce', 'utf8').toString('base64');
@@ -133,6 +166,23 @@ describe('WebSocket framing', () => {
     assert.equal(result, null);
   });
 
+  it('rejects reserved bits and oversized control frames', () => {
+    assert.throws(() => tryParseWsFrame(Buffer.from([0xc1, 0x00])), /reserved/i);
+    const oversizedPing = Buffer.alloc(4);
+    oversizedPing[0] = 0x89;
+    oversizedPing[1] = 126;
+    oversizedPing.writeUInt16BE(126, 2);
+    assert.throws(() => tryParseWsFrame(oversizedPing), /control/i);
+  });
+
+  it('rejects declared lengths outside the supported frame budget', () => {
+    const oversized = Buffer.alloc(10);
+    oversized[0] = 0x81;
+    oversized[1] = 127;
+    oversized.writeBigUInt64BE(BigInt(2 * 1024 * 1024 + 1), 2);
+    assert.throws(() => tryParseWsFrame(oversized), /too large/i);
+  });
+
   it('properly unmask client-to-server frames', () => {
     // Build a masked frame manually (simulating a client)
     const payload = Buffer.from('Hello, Server!', 'utf8');
@@ -151,6 +201,7 @@ describe('WebSocket framing', () => {
     if (result) {
       assert.equal(result.payload, 'Hello, Server!');
     }
+    assert.throws(() => tryParseWsFrame(buildWsTextFrame('server'), { requireMask: true }), /masked/i);
   });
 
   it('delivers remainder after parsing a frame from concatenated data', () => {

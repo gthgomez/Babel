@@ -32,6 +32,7 @@ export interface ReadRangeActionContext {
   meta: { index: number; idempotencyKey?: string };
   ownerGeneration: number;
   callbacks: ChatCallbacks;
+  signal?: AbortSignal;
 }
 
 /** Execute a read_range action: windowed read with cache + recovery evidence. */
@@ -43,7 +44,7 @@ export async function executeReadRangeAction(
   host.persistToolStartedAtExecutorDispatch(action, meta);
   const bindingBefore = host.workingState.recoveryGate ? host.currentRecoveryBinding() : null;
   const targetBefore = recoveryTargetIdentity(requireProjectRoot(host.options), action.file_path);
-  const rContent = await readFile(rPath, "utf-8");
+  const rContent = await readFile(rPath, { encoding: "utf-8", signal: ctx.signal });
   // R0-8: the read is a suspension point; a superseded submission must not
   // append its result for the new task.
   if (!host.isSubmissionCurrent(ctx.ownerGeneration)) {
