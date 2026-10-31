@@ -23,6 +23,7 @@ import {
   existsSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   renameSync,
   rmSync,
   statSync,
@@ -537,6 +538,18 @@ describe('governedApplyPatch multi-file failure and rollback integrity', { concu
     resetCircuitBreaker();
     const root = tmpRoot('babel-m1-created-rollback-');
     try {
+      const shortPathComponent = /(?:^|[\\/])[A-Z0-9]{1,6}~\d+(?:\.[A-Z0-9]{1,3})?(?=[\\/]|$)/i;
+      if (process.platform === 'win32' && shortPathComponent.test(root)) {
+        const ordinaryPath = realpathSync(root);
+        const nativePath = realpathSync.native(root);
+        if (!shortPathComponent.test(nativePath)) {
+          assert.notEqual(
+            ordinaryPath.toLowerCase(),
+            nativePath.toLowerCase(),
+            'fixture must prove native expansion of its Windows 8.3 temporary path',
+          );
+        }
+      }
       const file1 = join(root, 'file1.txt');
       const file2 = join(root, 'file2.txt');
       writeFileSync(file2, FILE2_ORIGINAL, 'utf8');
