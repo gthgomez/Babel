@@ -322,4 +322,56 @@ describe('proven no-op writes keep verifier receipts current', { concurrency: fa
       rmSync(runtimeRoot, { recursive: true, force: true });
     }
   });
+
+  test('benign verifier prose and keyboardShortcuts.ts allow host-bound verified completion', async () => {
+    const { root } = makeFixture();
+    const runtimeRoot = mkdtempSync(join(tmpdir(), 'babel-completion-runtime-'));
+    process.env['BABEL_RUNS_DIR'] = runtimeRoot;
+    const fixedContent = 'export function shortcutKey(key) { return key.toLowerCase(); }\n';
+    writeFileSync(join(root, 'package.json'), `${JSON.stringify({
+      name: 'fixture',
+      private: true,
+      scripts: { test: 'node verify.mjs' },
+    })}\n`, 'utf8');
+    writeFileSync(join(root, 'verify.mjs'), [
+      "import { readFileSync } from 'node:fs';",
+      "if (!readFileSync('keyboardShortcuts.ts', 'utf8').includes('toLowerCase')) process.exit(1);",
+      "console.log('# tests 1\\n# pass 1\\n# fail 0\\n# skipped 0\\nfixture green; historical note VERIFIER_DEF_TAMPERED');",
+      '',
+    ].join('\n'), 'utf8');
+    const restore = installTurns([
+      { kind: 'tools', toolCalls: [{ id: 'call-fix-shortcut', name: 'write_file', args: { path: 'keyboardShortcuts.ts', content: fixedContent } }] },
+      { kind: 'tools', toolCalls: [{ id: 'call-verify-shortcut', name: 'run_command', args: { command: 'npm test' } }] },
+      { kind: 'text', text: 'Updated keyboard shortcut handling to lowercase keys, and the test passed.' },
+    ]);
+    try {
+      const task = [
+        'Fix keyboard shortcut handling so keys are normalized to lowercase.',
+        'Requirements:',
+        '- `npm test` passes.',
+      ].join('\n');
+      const engine = makeEngine(root, 'completion-keyboard-shortcuts', task);
+      const events = await drain(engine, task);
+      const terminal = events.at(-1);
+      assert.equal(terminal?.type, 'done', 'a valid host-bound receipt reaches terminal completion');
+      assert.equal(terminal?.type === 'done' ? terminal.outcome : undefined, 'VERIFIED_COMPLETE');
+      assert.match(terminal?.type === 'done' ? terminal.answer : '', /keyboard shortcut handling.*lowercase/i,
+        'the final answer reports the completed change in usable terms');
+      assert.equal(
+        (engine as unknown as { gateStrikes: number }).gateStrikes,
+        0,
+        'benign filename and verifier prose cause no false recovery strike',
+      );
+      const receipt = (
+        engine as unknown as { lastVerifierReceipt: { stale?: boolean } | null }
+      ).lastVerifierReceipt;
+      assert.ok(receipt, 'the passing verifier produced a host-bound receipt');
+      assert.equal(receipt.stale, false, 'the receipt remains current for the final revision');
+      assert.equal(readFileSync(join(root, 'keyboardShortcuts.ts'), 'utf8'), fixedContent);
+    } finally {
+      restore();
+      rmSync(root, { recursive: true, force: true });
+      rmSync(runtimeRoot, { recursive: true, force: true });
+    }
+  });
 });
