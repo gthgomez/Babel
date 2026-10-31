@@ -16,12 +16,13 @@ import { compensatePatchWrites, type PatchRollbackOutcome } from './patchCompens
 import type { EffectLedgerRecord } from '../executor/effectLedger.js';
 import { captureEffectParentIdentity, type EffectParentIdentity } from '../executor/effectPathIdentity.js';
 import { isAbsolute, resolve } from 'node:path';
+import { getTrustedFileCreationEvidence } from '../sandbox.js';
 
 import { FileWriteMutex, canonicalizeLockPath, type FileLockHandle } from '../services/editReliability.js';
 import { applyUniqueEdit, formatEditObservation } from './codingLoop/editApply.js';
 import { applyPatchInMemory, parseUnifiedDiff } from './codingLoop/patchApply.js';
 import type { ToolContext, ToolResult } from '../localTools.js';
-import type { MutationBatchReceipt } from '../services/workspaceTransactions.js';
+import type { CreatedFileOwnership, MutationBatchReceipt } from '../services/workspaceTransactions.js';
 import type { AgentAction } from './actions.js';
 import {
   executeActionWithPolicy,
@@ -520,8 +521,9 @@ export async function governedApplyPatch(
   const fileMutationEvidence: NonNullable<GovernedApplyPatchResult['fileMutationEvidence']> = [];
   const writtenEffects = new Map<string, EffectLedgerRecord>();
   const writtenParents = new Map<string, EffectParentIdentity>();
+  const createdFileOwnership = new Map<string, CreatedFileOwnership>();
   const rollbackWrittenPaths = (paths: string[], originals: Map<string, string>, created: Set<string>, written: Map<string, string>) =>
-    compensatePatchWrites(paths, originals, created, written, writtenEffects, options.context, writtenParents);
+    compensatePatchWrites(paths, originals, created, written, writtenEffects, options.context, writtenParents, createdFileOwnership);
 
   try {
     await runExclusivePaths(absolutePaths, async (lockHandles) => {
@@ -727,6 +729,16 @@ export async function governedApplyPatch(
           ...(dispatch.mutationReceipt ? { mutationReceipt: dispatch.mutationReceipt } : {}),
           ...(dispatch.effectTransaction ? { effectTransaction: dispatch.effectTransaction } : {}),
         });
+        if (fileSection?.createsFile && last) {
+          const creation = getTrustedFileCreationEvidence(last);
+          if (creation?.path === absolutePath) {
+            createdFileOwnership.set(absolutePath, {
+              device: creation.device,
+              inode: creation.inode,
+              expectedContent: result.content,
+            });
+          }
+        }
         if (assessMutationEffect({
           tool: 'write_file', exitCode: last?.exit_code,
           mutationReceipt: dispatch.mutationReceipt, effectTransaction: dispatch.effectTransaction,
