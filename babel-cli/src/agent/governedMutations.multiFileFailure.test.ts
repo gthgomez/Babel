@@ -21,6 +21,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import {
   chmodSync,
   existsSync,
+  lstatSync,
   mkdtempSync,
   readFileSync,
   realpathSync,
@@ -34,7 +35,7 @@ import { join, resolve } from 'node:path';
 import { describe, test } from 'node:test';
 
 import type { ToolContext } from '../localTools.js';
-import { SafeExecutor } from '../sandbox.js';
+import { getTrustedFileCreationEvidence, SafeExecutor } from '../sandbox.js';
 import { loadEffectLedger } from '../executor/effectLedger.js';
 import type { AgentAction } from './actions.js';
 import { governedApplyPatch, type GovernedApplyPatchResult } from './governedMutations.js';
@@ -227,7 +228,7 @@ interface FaultScript {
   /** For `throw`: perform the file write before raising. */
   writeBeforeFault?: boolean;
   /** Runs after each successful write (external interference hook). */
-  onAfterWrite?: (writeIndex: number, absolutePath: string) => void;
+  onAfterWrite?: (writeIndex: number, absolutePath: string, result: ToolExecutionResult) => void;
   /**
    * Runs at the start of the faulting dispatch, after every earlier dispatch
    * has fully settled (external interference hook).
@@ -275,7 +276,7 @@ function scriptedExecutor(projectRoot: string, script: FaultScript) {
       if (writes !== script.faultAt) {
         const settled = await base.execute(action, context, budget);
         writtenPaths.push(action.path);
-        script.onAfterWrite?.(writes, resolve(projectRoot, action.path));
+        script.onAfterWrite?.(writes, resolve(projectRoot, action.path), settled);
         return settled;
       }
       barrier.faultPath = action.path;
@@ -289,8 +290,8 @@ function scriptedExecutor(projectRoot: string, script: FaultScript) {
         };
       }
       if (script.fault === 'fail_after_write' || script.writeBeforeFault) {
-        await base.execute(action, context, budget);
-        script.onAfterWrite?.(writes, resolve(projectRoot, action.path));
+        const settled = await base.execute(action, context, budget);
+        script.onAfterWrite?.(writes, resolve(projectRoot, action.path), settled);
       }
       captureAtFault(action.path);
       if (script.fault === 'fail_after_write') {
@@ -558,9 +559,32 @@ describe('governedApplyPatch multi-file failure and rollback integrity', { concu
       const script = scriptedExecutor(root, {
         faultAt: 2,
         fault: 'reject',
-        onAfterWrite: (writeIndex, absolutePath) => {
+        onAfterWrite: (writeIndex, absolutePath, result) => {
           assert.equal(writeIndex, 1);
           assert.equal(snapshot(absolutePath).bytes, FILE1_CREATED, 'creation must land before the fault');
+          const creation = getTrustedFileCreationEvidence(result.results[0]!);
+          assert.ok(creation, 'SafeExecutor must attest the created file');
+          const exactIdentity = lstatSync(absolutePath, { bigint: true });
+          assert.equal(creation.device, exactIdentity.dev.toString());
+          assert.equal(creation.inode, exactIdentity.ino.toString());
+          assert.ok(exactIdentity.isFile());
+          const evidencePath = realpathSync.native(creation.path);
+          const targetPath = realpathSync.native(absolutePath);
+          assert.equal(
+            process.platform === 'win32' ? evidencePath.toLowerCase() : evidencePath,
+            process.platform === 'win32' ? targetPath.toLowerCase() : targetPath,
+            'host-attested creation path must identify the exact patch target',
+          );
+          if (process.platform === 'win32') {
+            const numericIdentity = lstatSync(absolutePath);
+            const exactInode = exactIdentity.ino;
+            const roundedInode = BigInt(Number(exactInode));
+            if (exactInode > BigInt(Number.MAX_SAFE_INTEGER) && roundedInode !== exactInode) {
+              const numericInode = BigInt(numericIdentity.ino);
+              assert.equal(numericInode, roundedInode, 'ordinary Windows Stats should report its rounded inode');
+              assert.notEqual(numericInode, exactInode, 'fixture should expose numeric inode precision loss');
+            }
+          }
         },
       });
 

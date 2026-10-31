@@ -45,7 +45,7 @@ export interface MutationBatchReceipt {
 async function removeOwnedCreation(path: string, ownership: CreatedFileOwnership): Promise<string | null> {
   let initial;
   try {
-    initial = await fsPromises.lstat(path);
+    initial = await fsPromises.lstat(path, { bigint: true });
   } catch (error: any) {
     return error.code === 'ENOENT' ? null : `could not inspect created path: ${error.message}`;
   }
@@ -68,7 +68,7 @@ async function removeOwnedCreation(path: string, ownership: CreatedFileOwnership
     capturePath = join(captureDirectory, 'entry');
     await fsPromises.rename(path, capturePath);
 
-    const captured = await fsPromises.lstat(capturePath);
+    const captured = await fsPromises.lstat(capturePath, { bigint: true });
     const capturedContent = await fsPromises.readFile(capturePath, 'utf8');
     const stillOwned = captured.isFile() && !captured.isSymbolicLink()
       && captured.dev.toString() === ownership.device && captured.ino.toString() === ownership.inode
