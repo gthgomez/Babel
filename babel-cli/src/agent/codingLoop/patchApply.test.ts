@@ -171,6 +171,15 @@ describe('applyHunk fallback ladder', () => {
     assert.equal(outcome.reason, 'ambiguous')
   })
 
+  test('resolves a unique hunk displaced from its declared position', () => {
+    const parsed = parseUnifiedDiff(CLEAN_DIFF)
+    assert.ok(parsed.ok)
+    if (!parsed.ok) return
+    const outcome = applyHunk(`prefix\n${ORIGINAL}`, parsed.files[0]!.hunks[0]!)
+    assert.ok(outcome.ok)
+    if (outcome.ok) assert.equal(outcome.content, 'prefix\nfunction add(a, b) {\n  return a + b\n}\n')
+  })
+
   test('context-free insertions preserve content at beginning, middle, and end', () => {
     const apply = (start: number, text: string) => {
       const parsed = parseUnifiedDiff(`--- a/f\n+++ b/f\n@@ -${start},0 +${start + 1} @@\n+${text}\n`)

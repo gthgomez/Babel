@@ -334,11 +334,18 @@ function locateSequence(
 ): LocateResult | LocateMiss | LocateAmbiguous {
   if (seq.length === 0) return { kind: 'found', index: hintIndex, strategy }
   const cmp = makeComparator(strategy)
-  const matches: number[] = []
+  let firstMatch: number | null = null
+  let matchCount = 0
   const maxStart = contentLines.length - seq.length
-  const starts = Array.from({ length: Math.max(0, maxStart + 1) }, (_, index) => index)
-    .sort((a, b) => Math.abs(a - hintIndex) - Math.abs(b - hintIndex) || a - b)
-  for (const start of starts) {
+  const nearestStart = Math.min(maxStart, Math.max(0, Math.trunc(hintIndex)))
+  let left = nearestStart
+  let right = nearestStart + 1
+  while (left >= 0 || right <= maxStart) {
+    let start: number
+    if (left < 0) start = right++
+    else if (right > maxStart) start = left--
+    else if (Math.abs(left - hintIndex) <= Math.abs(right - hintIndex)) start = left--
+    else start = right++
     let ok = true
     for (let i = 0; i < seq.length; i++) {
       if (!cmp(contentLines[start + i] ?? '', seq[i] ?? '')) {
@@ -346,10 +353,13 @@ function locateSequence(
         break
       }
     }
-    if (ok) matches.push(start)
+    if (ok) {
+      firstMatch ??= start
+      matchCount++
+    }
   }
-  if (matches.length === 1) return { kind: 'found', index: matches[0] ?? 0, strategy }
-  if (matches.length > 1) return { kind: 'ambiguous', count: matches.length, strategy }
+  if (matchCount === 1) return { kind: 'found', index: firstMatch ?? 0, strategy }
+  if (matchCount > 1) return { kind: 'ambiguous', count: matchCount, strategy }
   return { kind: 'not_found', strategy }
 }
 
